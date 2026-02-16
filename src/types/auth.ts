@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'operator' | 'manager' | 'owner' | 'agency';
+export type UserRole = 'administrador' | 'operador_analista' | 'gerencia_consulta' | 'propietario' | 'inmobiliaria';
 
 export interface AuthUser {
   id: string;

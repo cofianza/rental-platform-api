@@ -11,8 +11,10 @@
 
 CREATE TYPE rol_usuario AS ENUM (
   'administrador',
-  'operador',
-  'gerencia'
+  'operador_analista',
+  'gerencia_consulta',
+  'propietario',
+  'inmobiliaria'
 );
 
 CREATE TYPE estado_usuario AS ENUM (
@@ -198,7 +200,7 @@ CREATE TABLE perfiles (
   telefono    VARCHAR(20),
   tipo_documento tipo_documento_id,
   numero_documento VARCHAR(20),
-  rol         rol_usuario NOT NULL DEFAULT 'operador',
+  rol         rol_usuario NOT NULL DEFAULT 'operador_analista',
   estado      estado_usuario NOT NULL DEFAULT 'activo',
   avatar_url  TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -218,7 +220,7 @@ BEGIN
     NEW.id,
     COALESCE(NEW.raw_user_meta_data->>'nombre', ''),
     COALESCE(NEW.raw_user_meta_data->>'apellido', ''),
-    COALESCE((NEW.raw_user_meta_data->>'rol')::rol_usuario, 'operador')
+    COALESCE((NEW.raw_user_meta_data->>'rol')::rol_usuario, 'operador_analista')
   );
   RETURN NEW;
 END;

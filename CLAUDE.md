@@ -36,7 +36,7 @@ REST API for **Habitar Propiedades 2.0**, a rental guarantee platform in Colombi
 - `src/middleware/errorHandler.ts` — centralized error handler. Handles `AppError` (dynamic status codes) and generic `Error` (500). Hides stack traces in production.
 - `src/middleware/rateLimiter.ts` — `generalLimiter` (100 req/min) and `authLimiter` (10 req/min, for auth routes).
 - `src/modules/` — business domain modules following the pattern: `*.routes.ts` → `*.controller.ts` → `*.service.ts`.
-- `src/types/auth.ts` — `UserRole` type (`admin | operator | manager | owner | agency`) and `AuthUser` interface.
+- `src/types/auth.ts` — `UserRole` type (`administrador | operador_analista | gerencia_consulta | propietario | inmobiliaria`) and `AuthUser` interface.
 - `src/types/database.types.ts` — auto-generated Supabase DB types (regenerate with `npm run db:types`).
 - `src/types/express.d.ts` — augments `Express.Request` with `user?: AuthUser`.
 - `src/utils/errors.ts` — `AppError` class (statusCode, errorCode, message, details) and `fromSupabaseError()` mapper (PG 23505→409, PGRST116→404, etc.).
@@ -51,7 +51,7 @@ REST API for **Habitar Propiedades 2.0**, a rental guarantee platform in Colombi
 
 **Authentication:** JWT tokens verified via Supabase Auth (`supabase.auth.getUser(token)`). User role read from `app_metadata.role`. No manual bcrypt/jsonwebtoken — everything through Supabase.
 
-**Roles:** admin (Administrador), operator (Operador/Analista), manager (Gerencia/Consulta), owner (Propietario), agency (Inmobiliaria).
+**Roles:** administrador (Administrador), operador_analista (Operador/Analista), gerencia_consulta (Gerencia/Consulta), propietario (Propietario), inmobiliaria (Inmobiliaria).
 
 ## Module Pattern
 

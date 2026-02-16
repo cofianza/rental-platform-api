@@ -13,9 +13,12 @@ export async function getHealthStatus(): Promise<HealthStatus> {
   let database: 'connected' | 'disconnected' = 'disconnected';
 
   try {
-    const { error } = await supabase.from('_health_check').select('*').limit(0);
-    // Any response from PostgREST (even table-not-found 42P01) means DB is reachable
-    if (!error || error.code === '42P01') {
+    // supabase-js never throws on API errors — it returns { data, error }.
+    // Getting any response (even an error like "table not found") proves connectivity.
+    // Only a network failure (fetch throws) means truly disconnected.
+    const { error } = await supabase.from('_health_check').select('count', { count: 'exact', head: true });
+    // If error exists but we got a response, connection is still alive
+    if (!error || error.code) {
       database = 'connected';
     }
   } catch {
