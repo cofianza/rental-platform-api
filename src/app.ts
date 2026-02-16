@@ -1,16 +1,37 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import morgan from 'morgan';
-import healthRouter from './routes/health';
-import { errorHandler } from './middleware/errorHandler';
+import pinoHttp from 'pino-http';
+import rateLimit from 'express-rate-limit';
+import { env } from '@/config';
+import { logger } from '@/lib/logger';
+import { errorHandler } from '@/middleware/errorHandler';
+import healthRouter from '@/modules/health/health.routes';
 
 const app = express();
 
-// Middleware
+// Security
 app.use(helmet());
-app.use(cors());
-app.use(morgan('dev'));
+app.use(
+  cors({
+    origin: env.CORS_ORIGIN,
+  }),
+);
+
+// Rate limiting
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 100,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+  }),
+);
+
+// Logging
+app.use(pinoHttp({ logger }));
+
+// Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -18,7 +39,7 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/', (_req, res) => {
   res.json({ message: 'Habitar Propiedades API v1' });
 });
-app.use('/health', healthRouter);
+app.use('/api/v1/health', healthRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
