@@ -3,5 +3,6 @@ export type UserRole = 'administrador' | 'operador_analista' | 'gerencia_consult
 export interface AuthUser {
   id: string;
   email: string;
-  role: UserRole;
+  rol: UserRole;
+  activo: boolean;
 }

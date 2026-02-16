@@ -14,46 +14,37 @@ export class AppError extends Error {
     Object.setPrototypeOf(this, AppError.prototype);
   }
 
-  // Factory methods for common HTTP errors
-  static badRequest(message: string, details?: unknown): AppError {
-    return new AppError(400, 'BAD_REQUEST', message, details);
+  static badRequest(message: string, errorCode = 'BAD_REQUEST', details?: unknown) {
+    return new AppError(400, errorCode, message, details);
   }
 
-  static unauthorized(message: string = 'Unauthorized', details?: unknown): AppError {
-    return new AppError(401, 'UNAUTHORIZED', message, details);
+  static unauthorized(message = 'No autenticado', errorCode = 'UNAUTHORIZED') {
+    return new AppError(401, errorCode, message);
   }
 
-  static forbidden(message: string = 'Forbidden', details?: unknown): AppError {
-    return new AppError(403, 'FORBIDDEN', message, details);
+  static forbidden(message = 'Sin permisos', errorCode = 'FORBIDDEN') {
+    return new AppError(403, errorCode, message);
   }
 
-  static notFound(message: string = 'Resource not found', details?: unknown): AppError {
-    return new AppError(404, 'NOT_FOUND', message, details);
+  static notFound(message = 'Recurso no encontrado', errorCode = 'NOT_FOUND') {
+    return new AppError(404, errorCode, message);
   }
 
-  static conflict(message: string, details?: unknown): AppError {
-    return new AppError(409, 'CONFLICT', message, details);
+  static conflict(message: string, errorCode = 'CONFLICT') {
+    return new AppError(409, errorCode, message);
+  }
+
+  static tooMany(message = 'Demasiadas solicitudes', errorCode = 'TOO_MANY_REQUESTS') {
+    return new AppError(429, errorCode, message);
   }
 }
 
 const PG_ERROR_MAP: Record<string, { statusCode: number; errorCode: string; message: string }> = {
-  '23505': { statusCode: 409, errorCode: 'DUPLICATE_ENTRY', message: 'Resource already exists' },
-  '23503': {
-    statusCode: 400,
-    errorCode: 'FK_VIOLATION',
-    message: 'Referenced resource does not exist',
-  },
-  '23502': {
-    statusCode: 400,
-    errorCode: 'NOT_NULL_VIOLATION',
-    message: 'Required field is missing',
-  },
-  PGRST116: { statusCode: 404, errorCode: 'NOT_FOUND', message: 'Resource not found' },
-  '42501': {
-    statusCode: 403,
-    errorCode: 'INSUFFICIENT_PRIVILEGE',
-    message: 'Insufficient database privileges',
-  },
+  '23505': { statusCode: 409, errorCode: 'DUPLICATE_ENTRY', message: 'El registro ya existe' },
+  '23503': { statusCode: 400, errorCode: 'FK_VIOLATION', message: 'Referencia a registro inexistente' },
+  '23502': { statusCode: 400, errorCode: 'NOT_NULL_VIOLATION', message: 'Campo requerido faltante' },
+  PGRST116: { statusCode: 404, errorCode: 'NOT_FOUND', message: 'Recurso no encontrado' },
+  '42501': { statusCode: 403, errorCode: 'INSUFFICIENT_PRIVILEGE', message: 'Privilegios insuficientes' },
 };
 
 export function fromSupabaseError(error: PostgrestError): AppError {

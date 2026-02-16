@@ -73,7 +73,7 @@ export function validate(schemas: ValidationSchemas) {
     }
 
     if (errors.length > 0) {
-      throw new AppError(400, 'VALIDATION_ERROR', 'Validation failed', errors);
+      throw AppError.badRequest('Datos de entrada invalidos', 'VALIDATION_ERROR', errors);
     }
 
     next();

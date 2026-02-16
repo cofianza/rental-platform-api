@@ -4,69 +4,74 @@ import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
 import type { UserRole } from '@/types/auth';
 
-export async function authenticate(
-  req: Request,
-  _res: Response,
-  next: NextFunction,
-): Promise<void> {
-  const header = req.headers.authorization;
+/**
+ * Middleware que verifica el JWT de Supabase Auth.
+ * Extrae el token del header Authorization: Bearer <token>,
+ * consulta la tabla perfiles para verificar rol y estado activo,
+ * y adjunta la info del usuario a req.user.
+ */
+export async function authMiddleware(req: Request, _res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
 
-  if (!header?.startsWith('Bearer ')) {
-    throw new AppError(401, 'AUTH_MISSING', 'Authorization header with Bearer token is required');
+  if (!authHeader?.startsWith('Bearer ')) {
+    throw AppError.unauthorized('Token de acceso requerido');
   }
 
-  const token = header.slice(7);
+  const token = authHeader.slice(7);
 
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser(token);
+  const { data: { user }, error } = await supabase.auth.getUser(token);
 
   if (error || !user) {
-    logger.debug({ error }, 'Auth token verification failed');
-    throw new AppError(401, 'AUTH_INVALID', 'Invalid or expired authentication token');
+    logger.warn({ error }, 'Token invalido o expirado');
+    throw AppError.unauthorized('Token invalido o expirado');
   }
 
-  // Query perfiles table to get role and verify active status
+  // Consultar tabla perfiles para verificar estado activo y rol
   const { data: perfil, error: perfilError } = await supabase
     .from('perfiles')
-    .select('rol, estado')
+    .select('id, email, rol, estado')
     .eq('id', user.id)
     .single();
 
   if (perfilError || !perfil) {
-    logger.debug({ error: perfilError, userId: user.id }, 'Failed to fetch user profile');
-    throw new AppError(403, 'AUTH_NO_PROFILE', 'User profile not found');
+    logger.warn({ userId: user.id }, 'Perfil no encontrado para usuario autenticado');
+    throw AppError.unauthorized('Perfil de usuario no encontrado');
   }
 
-  const perfilData = perfil as { rol: UserRole; estado: 'activo' | 'inactivo' };
+  const perfilData = perfil as { id: string; email: string; rol: UserRole; estado: 'activo' | 'inactivo' };
 
   if (perfilData.estado !== 'activo') {
-    logger.debug({ userId: user.id, estado: perfilData.estado }, 'Inactive user attempted authentication');
-    throw new AppError(403, 'AUTH_INACTIVE', 'User account is inactive');
-  }
-
-  if (!perfilData.rol) {
-    throw new AppError(403, 'AUTH_NO_ROLE', 'User has no assigned role');
+    throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
 
   req.user = {
-    id: user.id,
-    email: user.email ?? '',
-    role: perfilData.rol,
+    id: perfilData.id,
+    email: perfilData.email,
+    rol: perfilData.rol,
+    activo: perfilData.estado === 'activo',
   };
 
   next();
 }
 
-export function authorize(...roles: UserRole[]) {
-  return (req: Request, _res: Response, next: NextFunction): void => {
+/**
+ * Middleware factory que verifica que el usuario tenga uno de los roles permitidos.
+ * Debe usarse DESPUES de authMiddleware.
+ */
+export function roleGuard(rolesPermitidos: string[]) {
+  return (req: Request, _res: Response, next: NextFunction) => {
     if (!req.user) {
-      throw new AppError(401, 'AUTH_REQUIRED', 'Authentication is required');
+      throw AppError.unauthorized('Autenticacion requerida');
     }
 
-    if (!roles.includes(req.user.role)) {
-      throw new AppError(403, 'FORBIDDEN', 'You do not have permission to perform this action');
+    if (!rolesPermitidos.includes(req.user.rol)) {
+      logger.warn(
+        { userId: req.user.id, rol: req.user.rol, rolesPermitidos },
+        'Acceso denegado por rol',
+      );
+      throw AppError.forbidden(
+        `Rol '${req.user.rol}' no tiene permisos para esta accion. Roles permitidos: ${rolesPermitidos.join(', ')}`,
+      );
     }
 
     next();
