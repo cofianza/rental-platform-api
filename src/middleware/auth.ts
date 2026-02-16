@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
-import { AppError } from '@/utils/errors';
+import { AppError } from '@/lib/errors';
 import type { UserRole } from '@/types/auth';
 
 export async function authenticate(
@@ -27,16 +27,33 @@ export async function authenticate(
     throw new AppError(401, 'AUTH_INVALID', 'Invalid or expired authentication token');
   }
 
-  const role = user.app_metadata?.role as UserRole | undefined;
+  // Query perfiles table to get role and verify active status
+  const { data: perfil, error: perfilError } = await supabase
+    .from('perfiles')
+    .select('rol, estado')
+    .eq('id', user.id)
+    .single();
 
-  if (!role) {
+  if (perfilError || !perfil) {
+    logger.debug({ error: perfilError, userId: user.id }, 'Failed to fetch user profile');
+    throw new AppError(403, 'AUTH_NO_PROFILE', 'User profile not found');
+  }
+
+  const perfilData = perfil as { rol: UserRole; estado: 'activo' | 'inactivo' };
+
+  if (perfilData.estado !== 'activo') {
+    logger.debug({ userId: user.id, estado: perfilData.estado }, 'Inactive user attempted authentication');
+    throw new AppError(403, 'AUTH_INACTIVE', 'User account is inactive');
+  }
+
+  if (!perfilData.rol) {
     throw new AppError(403, 'AUTH_NO_ROLE', 'User has no assigned role');
   }
 
   req.user = {
     id: user.id,
     email: user.email ?? '',
-    role,
+    role: perfilData.rol,
   };
 
   next();

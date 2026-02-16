@@ -13,12 +13,33 @@ export class AppError extends Error {
     this.details = details;
     Object.setPrototypeOf(this, AppError.prototype);
   }
+
+  // Factory methods for common HTTP errors
+  static badRequest(message: string, details?: unknown): AppError {
+    return new AppError(400, 'BAD_REQUEST', message, details);
+  }
+
+  static unauthorized(message: string = 'Unauthorized', details?: unknown): AppError {
+    return new AppError(401, 'UNAUTHORIZED', message, details);
+  }
+
+  static forbidden(message: string = 'Forbidden', details?: unknown): AppError {
+    return new AppError(403, 'FORBIDDEN', message, details);
+  }
+
+  static notFound(message: string = 'Resource not found', details?: unknown): AppError {
+    return new AppError(404, 'NOT_FOUND', message, details);
+  }
+
+  static conflict(message: string, details?: unknown): AppError {
+    return new AppError(409, 'CONFLICT', message, details);
+  }
 }
 
 const PG_ERROR_MAP: Record<string, { statusCode: number; errorCode: string; message: string }> = {
   '23505': { statusCode: 409, errorCode: 'DUPLICATE_ENTRY', message: 'Resource already exists' },
   '23503': {
-    statusCode: 409,
+    statusCode: 400,
     errorCode: 'FK_VIOLATION',
     message: 'Referenced resource does not exist',
   },

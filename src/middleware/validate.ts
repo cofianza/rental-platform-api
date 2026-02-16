@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { AppError } from '@/utils/errors';
+import { AppError } from '@/lib/errors';
 
 interface ValidationSchemas {
   body?: z.ZodType;
@@ -52,6 +52,8 @@ export function validate(schemas: ValidationSchemas) {
             received: getValueAtPath(req.params, issue.path as (string | number)[]),
           });
         }
+      } else {
+        req.params = result.data as typeof req.params;
       }
     }
 
@@ -65,6 +67,8 @@ export function validate(schemas: ValidationSchemas) {
             received: getValueAtPath(req.query, issue.path as (string | number)[]),
           });
         }
+      } else {
+        req.query = result.data as typeof req.query;
       }
     }
 

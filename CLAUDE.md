@@ -31,7 +31,7 @@ REST API for **Habitar Propiedades 2.0**, a rental guarantee platform in Colombi
 - `src/config/` — Zod-validated env config (`env.ts` schema, `index.ts` loads `.env.local` and re-exports). App crashes on startup if required env vars are missing.
 - `src/lib/supabase.ts` — typed Supabase client singleton (uses service role key for server-side access).
 - `src/lib/logger.ts` — pino logger instance (pino-pretty in dev, JSON in production).
-- `src/middleware/auth.ts` — `authenticate` (JWT verification via `supabase.auth.getUser(token)`, attaches `req.user`) and `authorize(...roles)` (role-based access control, returns 403).
+- `src/middleware/auth.ts` — `authenticate` (JWT verification via `supabase.auth.getUser(token)`, queries `perfiles` table for role and active status, attaches `req.user`) and `authorize(...roles)` (role-based access control, returns 403).
 - `src/middleware/validate.ts` — `validate({ body?, params?, query? })` middleware factory using Zod 4 schemas. Returns 400 with `{ field, message, received }` errors.
 - `src/middleware/errorHandler.ts` — centralized error handler. Handles `AppError` (dynamic status codes) and generic `Error` (500). Hides stack traces in production.
 - `src/middleware/rateLimiter.ts` — `generalLimiter` (100 req/min) and `authLimiter` (10 req/min, for auth routes).
@@ -39,7 +39,7 @@ REST API for **Habitar Propiedades 2.0**, a rental guarantee platform in Colombi
 - `src/types/auth.ts` — `UserRole` type (`administrador | operador_analista | gerencia_consulta | propietario | inmobiliaria`) and `AuthUser` interface.
 - `src/types/database.types.ts` — auto-generated Supabase DB types (regenerate with `npm run db:types`).
 - `src/types/express.d.ts` — augments `Express.Request` with `user?: AuthUser`.
-- `src/utils/errors.ts` — `AppError` class (statusCode, errorCode, message, details) and `fromSupabaseError()` mapper (PG 23505→409, PGRST116→404, etc.).
+- `src/lib/errors.ts` — `AppError` class (statusCode, errorCode, message, details) with factory methods (.badRequest(), .unauthorized(), .forbidden(), .notFound(), .conflict()) and `fromSupabaseError()` mapper (PG 23505→409, 23503→400, PGRST116→404, etc.).
 - `src/utils/response.ts` — `sendSuccess(res, data, meta?, statusCode?)` and `sendError(res, statusCode, errorCode, message, details?)`.
 - `src/utils/pagination.ts` — `parsePagination(req)` (extracts page, limit, offset, sortBy, sortDir) and `buildPaginationMeta(total, page, limit)`. Defaults: page=1, limit=10, sortBy=created_at, sortDir=desc.
 
