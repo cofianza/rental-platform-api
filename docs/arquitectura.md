@@ -97,8 +97,9 @@ Habitar Propiedades 2.0 es una plataforma web de operación inmobiliaria colombi
 │  │  │  (Supabase   │  │  expediente  │  │  ExpedienteService       ││  │
 │  │  │  JWT verify) │  │  solicitante │  │  SolicitanteService      ││  │
 │  │  │              │  │  documento   │  │  DocumentoService        ││  │
-│  │  │  Validation  │  │  estudio     │  │  EstudioService          ││  │
-│  │  │  (Zod)       │  │  contrato    │  │  ContratoService         ││  │
+│  │  │  Validation  │  │  autorizacion│  │  AutorizacionService     ││  │
+│  │  │  (Zod)       │  │  estudio     │  │  EstudioService          ││  │
+│  │  │              │  │  contrato    │  │  ContratoService         ││  │
 │  │  │              │  │  firma       │  │  FirmaService            ││  │
 │  │  │  RoleGuard   │  │  pago        │  │  PagoService             ││  │
 │  │  │  (permisos)  │  │  factura     │  │  FacturaService          ││  │
@@ -157,13 +158,13 @@ Supabase (PostgreSQL + Storage + Auth)                   │
 ## 5. Flujo Principal del Negocio
 
 ```
-┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────┐
-│ INMUEBLE │───▶│  EXPEDIENTE  │───▶│   ESTUDIO    │───▶│ CONTRATO │
-│          │    │              │    │  DE RIESGO   │    │          │
-│ Crear/   │    │ Crear caso   │    │              │    │ Generar  │
-│ Registrar│    │ + Solicitante│    │ Solicitar    │    │ desde    │
-│ propiedad│    │              │    │ evaluación   │    │ plantilla│
-└──────────┘    └──────────────┘    └──────────────┘    └────┬─────┘
+┌──────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────┐
+│ INMUEBLE │───▶│  EXPEDIENTE  │───▶│ AUTORIZACIÓN │───▶│   ESTUDIO    │───▶│ CONTRATO │
+│          │    │              │    │ HABEAS DATA  │    │  DE RIESGO   │    │          │
+│ Crear/   │    │ Crear caso   │    │              │    │              │    │ Generar  │
+│ Registrar│    │ + Solicitante│    │ Web o enlace │    │ Solicitar    │    │ desde    │
+│ propiedad│    │              │    │ presencial   │    │ evaluación   │    │ plantilla│
+└──────────┘    └──────────────┘    └──────────────┘    └──────────────┘    └────┬─────┘
                                                               │
                                                               ▼
                 ┌──────────────┐    ┌──────────────┐    ┌──────────┐
@@ -175,6 +176,16 @@ Supabase (PostgreSQL + Storage + Auth)                   │
                 │              │    │              │    │ validar  │
                 └──────────────┘    └──────────────┘    └──────────┘
 ```
+
+### Autorización Habeas Data (paso obligatorio)
+
+Antes de iniciar un estudio de riesgo, el sistema requiere la autorización de tratamiento de datos personales (Habeas Data) por parte del solicitante, en cumplimiento de la Ley 1581/2012 (Protección de Datos Personales) y la Ley 1266/2008 (Habeas Data financiero).
+
+Existen dos canales de autorización:
+- **Web (autoservicio):** El solicitante acepta durante el registro o al completar el formulario del expediente.
+- **Enlace presencial:** El administrador genera un enlace único (`/autorizacion/[token]`) para clientes que realizan el trámite de forma presencial. El solicitante firma desde su dispositivo.
+
+Una vez registrada la autorización, el sistema permite proceder con la solicitud del estudio de riesgo.
 
 ### Estados del Expediente (Workflow)
 
@@ -308,7 +319,7 @@ Usuario          Frontend           Supabase Auth       Backend API
 |---------|----------|--------|
 | Pagos | Stripe | Por integrar |
 | Emails transaccionales | Resend | Por integrar |
-| Centrales de riesgo | TransUnion + SIFIN + Datacrédito | Esperando credenciales del cliente |
+| Centrales de riesgo | TransUnion + SIFIN + Datacrédito | Esperando credenciales del cliente (requiere autorización Habeas Data previa) |
 | Firma electrónica | Proveedor del cliente (ya contratado) | Esperando coordinación |
 
 ---

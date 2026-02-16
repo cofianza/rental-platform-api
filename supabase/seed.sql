@@ -486,73 +486,151 @@ INSERT INTO documentos (id, expediente_id, tipo, archivo_url, nombre_original, t
    'aprobado', NULL, 1, 'a5555555-5555-5555-5555-555555555555');
 
 -- ============================================================
+-- 15. AUTORIZACIONES HABEAS DATA (8)
+-- Deben existir ANTES de los estudios que las referencian.
+-- ============================================================
+
+INSERT INTO autorizaciones_habeas_data (id, solicitante_id, canal, estado, token, token_expiracion, generado_por, autorizado_en, ip_autorizacion, user_agent, texto_autorizado, version_terminos) VALUES
+  -- Solicitantes con autorización vía web (registro)
+  ('h1111111-1111-1111-1111-111111111111',
+   'c1111111-1111-1111-1111-111111111111',
+   'web', 'autorizado', NULL, NULL, NULL,
+   '2026-01-15 10:30:00-05', '181.53.12.45', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120',
+   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'v1.0'),
+
+  ('h2222222-2222-2222-2222-222222222222',
+   'c2222222-2222-2222-2222-222222222222',
+   'web', 'autorizado', NULL, NULL, NULL,
+   '2026-01-16 14:15:00-05', '190.25.67.89', 'Mozilla/5.0 (Macintosh; Intel Mac OS X) Safari/17',
+   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'v1.0'),
+
+  ('h3333333-3333-3333-3333-333333333333',
+   'c3333333-3333-3333-3333-333333333333',
+   'web', 'autorizado', NULL, NULL, NULL,
+   '2026-01-18 09:00:00-05', '181.128.45.12', 'Mozilla/5.0 (Linux; Android 14) Chrome/120',
+   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'v1.0'),
+
+  -- Solicitantes con autorización vía enlace presencial
+  ('h4444444-4444-4444-4444-444444444444',
+   'c4444444-4444-4444-4444-444444444444',
+   'enlace', 'autorizado',
+   'aut_tk_a1b2c3d4e5f6', '2026-01-22 17:00:00-05',
+   'a2222222-2222-2222-2222-222222222222',
+   '2026-01-20 16:45:00-05', '190.85.33.21', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17) Safari/17',
+   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'v1.0'),
+
+  ('h5555555-5555-5555-5555-555555555555',
+   'c5555555-5555-5555-5555-555555555555',
+   'enlace', 'autorizado',
+   'aut_tk_g7h8i9j0k1l2', '2026-01-25 17:00:00-05',
+   'a3333333-3333-3333-3333-333333333333',
+   '2026-01-23 11:20:00-05', '181.49.78.56', 'Mozilla/5.0 (Windows NT 10.0) Edge/120',
+   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'v1.0'),
+
+  ('h6666666-6666-6666-6666-666666666666',
+   'c6666666-6666-6666-6666-666666666666',
+   'web', 'autorizado', NULL, NULL, NULL,
+   '2026-01-25 08:30:00-05', '190.60.12.88', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/121',
+   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'v1.0'),
+
+  -- Enlace pendiente (no firmado aún)
+  ('h7777777-7777-7777-7777-777777777777',
+   'c7777777-7777-7777-7777-777777777777',
+   'enlace', 'pendiente',
+   'aut_tk_m3n4o5p6q7r8', '2026-02-20 17:00:00-05',
+   'a5555555-5555-5555-5555-555555555555',
+   NULL, NULL, NULL, NULL, NULL),
+
+  -- Autorización revocada
+  ('h8888888-8888-8888-8888-888888888888',
+   'c8888888-8888-8888-8888-888888888888',
+   'web', 'revocado', NULL, NULL, NULL,
+   '2026-01-10 15:00:00-05', '181.33.22.11', 'Mozilla/5.0 (Macintosh) Chrome/120',
+   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'v1.0');
+
+-- ============================================================
 -- 6. ESTUDIOS DE RIESGO (8)
 -- ============================================================
 
-INSERT INTO estudios (id, expediente_id, tipo, proveedor, resultado, score, observaciones, certificado_url, duracion_contrato_meses, solicitado_por) VALUES
-  -- Expediente d4444444 (en_revision)
+INSERT INTO estudios (id, expediente_id, tipo, proveedor, resultado, score, observaciones, certificado_url, duracion_contrato_meses, solicitado_por, autorizacion_habeas_data_id) VALUES
+  -- Expediente d4444444 (en_revision) - solicitante c8888888 (Felipe Ríos)
   ('f1111111-1111-1111-1111-111111111111',
    'd4444444-4444-4444-4444-444444444444',
    'individual', 'transunion', 'pendiente',
    NULL, 'Estudio solicitado. Pendiente respuesta del proveedor.',
    NULL, 12,
-   'a2222222-2222-2222-2222-222222222222'),
+   'a2222222-2222-2222-2222-222222222222',
+   'h8888888-8888-8888-8888-888888888888'),
 
-  -- Expediente d5555555 (en_revision)
+  -- Expediente d5555555 (en_revision) - solicitante c2222222 (María Fernanda)
   ('f2222222-2222-2222-2222-222222222222',
    'd5555555-5555-5555-5555-555555555555',
    'individual', 'sifin', 'pendiente',
    NULL, 'Estudio en proceso. Se espera resultado en 24 horas hábiles.',
    NULL, 12,
-   'a3333333-3333-3333-3333-333333333333'),
+   'a3333333-3333-3333-3333-333333333333',
+   'h2222222-2222-2222-2222-222222222222'),
 
-  -- Expediente da000001 (aprobado - El Corral)
+  -- Expediente da000001 (aprobado - El Corral) - solicitante c5555555
   ('f3333333-3333-3333-3333-333333333333',
    'da000000-0000-0000-0000-000000000001',
    'con_coarrendatario', 'transunion', 'aprobado',
    780, 'Empresa con excelente historial crediticio. Representante legal sin reportes negativos.',
    'estudios/certificado-f3333333.pdf', 24,
-   'a2222222-2222-2222-2222-222222222222'),
+   'a2222222-2222-2222-2222-222222222222',
+   'h5555555-5555-5555-5555-555555555555'),
 
-  -- Expediente da000002 (aprobado - Carlos Andrés)
+  -- Expediente da000002 (aprobado - Carlos Andrés) - solicitante c3333333
   ('f4444444-4444-4444-4444-444444444444',
    'da000000-0000-0000-0000-000000000002',
    'individual', 'datacredito', 'aprobado',
    720, 'Buen historial crediticio. Sin reportes negativos en centrales de riesgo. Capacidad de pago verificada.',
    'estudios/certificado-f4444444.pdf', 12,
-   'a5555555-5555-5555-5555-555555555555'),
+   'a5555555-5555-5555-5555-555555555555',
+   'h3333333-3333-3333-3333-333333333333'),
 
-  -- Expediente da000003 (aprobado - María Fernanda)
+  -- Expediente da000003 (aprobado - María Fernanda) - solicitante c2222222
   ('f5555555-5555-5555-5555-555555555555',
    'da000000-0000-0000-0000-000000000003',
    'individual', 'transunion', 'aprobado',
    750, 'Solicitante con perfil crediticio sólido. Ingresos estables verificados.',
    'estudios/certificado-f5555555.pdf', 12,
-   'a3333333-3333-3333-3333-333333333333'),
+   'a3333333-3333-3333-3333-333333333333',
+   'h2222222-2222-2222-2222-222222222222'),
 
-  -- Expediente da000004 (rechazado - Sebastián Mejía para Chicó)
+  -- Expediente da000004 (rechazado - Sebastián Mejía para Chicó) - solicitante c6666666
   ('f6666666-6666-6666-6666-666666666666',
    'da000000-0000-0000-0000-000000000004',
    'individual', 'datacredito', 'rechazado',
    380, 'Ingresos insuficientes para el canon solicitado. Relación ingreso/arriendo inferior al 30% requerido. Reportes en mora con entidad financiera.',
    'estudios/certificado-f6666666.pdf', 12,
-   'a2222222-2222-2222-2222-222222222222'),
+   'a2222222-2222-2222-2222-222222222222',
+   'h6666666-6666-6666-6666-666666666666'),
 
-  -- Expediente da000005 (condicionado - Felipe Ríos)
+  -- Expediente da000005 (condicionado - Felipe Ríos) - solicitante c8888888
   ('f7777777-7777-7777-7777-777777777777',
    'da000000-0000-0000-0000-000000000005',
    'individual', 'sifin', 'condicionado',
    580, 'Capacidad de pago ajustada. Se recomienda codeudor con ingresos mínimos de $4.000.000. Historial crediticio aceptable con un reporte cancelado.',
    'estudios/certificado-f7777777.pdf', 6,
-   'a5555555-5555-5555-5555-555555555555'),
+   'a5555555-5555-5555-5555-555555555555',
+   'h8888888-8888-8888-8888-888888888888'),
 
-  -- Expediente da000006 (cerrado)
+  -- Expediente da000006 (cerrado) - solicitante c4444444 (Laura Sánchez)
   ('f8888888-8888-8888-8888-888888888888',
    'da000000-0000-0000-0000-000000000006',
    'individual', 'manual', 'aprobado',
    700, 'Verificación manual completada. Documentos en orden. Solicitante desistió del proceso.',
    NULL, 12,
-   'a2222222-2222-2222-2222-222222222222');
+   'a2222222-2222-2222-2222-222222222222',
+   'h4444444-4444-4444-4444-444444444444');
 
 -- ============================================================
 -- 7. PLANTILLAS DE CONTRATO (2)

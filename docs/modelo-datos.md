@@ -2,7 +2,7 @@
 
 ## 1. Resumen
 
-El modelo de datos de Habitar Propiedades 2.0 consta de **14 tablas** alojadas en **Supabase PostgreSQL**. Todas las claves primarias son **UUID** generados con `gen_random_uuid()`. La nomenclatura sigue la convención **snake_case en español**, y los nombres de tablas están en plural. Se utilizan 18 tipos enumerados (`ENUM`) para garantizar la integridad de los datos.
+El modelo de datos de Habitar Propiedades 2.0 consta de **15 tablas** alojadas en **Supabase PostgreSQL**. Todas las claves primarias son **UUID** generados con `gen_random_uuid()`. La nomenclatura sigue la convención **snake_case en español**, y los nombres de tablas están en plural. Se utilizan 20 tipos enumerados (`ENUM`) para garantizar la integridad de los datos.
 
 ### Listado de tablas
 
@@ -22,6 +22,7 @@ El modelo de datos de Habitar Propiedades 2.0 consta de **14 tablas** alojadas e
 | 12 | `bitacora` | Registro de auditoria de todas las acciones del sistema |
 | 13 | `comentarios` | Notas y comentarios internos sobre un expediente |
 | 14 | `eventos_timeline` | Linea de tiempo de eventos relevantes de un expediente |
+| 15 | `autorizaciones_habeas_data` | Autorizaciones de consulta crediticia (Habeas Data, Ley 1581/2012 + Ley 1266/2008) |
 
 ---
 
@@ -46,7 +47,12 @@ El modelo de datos de Habitar Propiedades 2.0 consta de **14 tablas** alojadas e
          │                    ┌────────────┴─────┐     N:1    ┌───────────────────┐
          │                    │   expedientes     │◀──────────│   solicitantes     │
          │                    │  (casos arrend.)  │           │  (arrendatarios)   │
-         │                    └──┬──┬──┬──┬──┬──┬─┘           └───────────────────┘
+         │                    └──┬──┬──┬──┬──┬──┬─┘           └────────┬──────────┘
+         │                       │  │  │  │  │  │                      │ 1:N
+         │                       │  │  │  │  │  │             ┌────────┴──────────┐
+         │                       │  │  │  │  │  │             │ autorizaciones_    │
+         │                       │  │  │  │  │  │             │ habeas_data        │
+         │                       │  │  │  │  │  │             └───────────────────┘
          │                       │  │  │  │  │  │
          │            ┌──────────┘  │  │  │  │  └──────────┐
          │            │             │  │  │  │             │
@@ -99,6 +105,9 @@ El modelo de datos de Habitar Propiedades 2.0 consta de **14 tablas** alojadas e
 | plantillas_contrato → contratos | 1:N (plantilla_id) |
 | contratos → firmas | 1:N (contrato_id) |
 | pagos → facturas | 1:N (pago_id) |
+| solicitantes → autorizaciones_habeas_data | 1:N (solicitante_id) |
+| autorizaciones_habeas_data → estudios | 1:N (autorizacion_habeas_data_id) |
+| perfiles → autorizaciones_habeas_data | 1:N (generado_por) |
 
 ---
 
@@ -281,13 +290,14 @@ Estudios de riesgo crediticio realizados al solicitante a traves de centrales de
 | codigo_qr | TEXT | SI | NULL | Codigo QR de verificacion |
 | duracion_contrato_meses | SMALLINT | SI | NULL | Duracion recomendada del contrato |
 | solicitado_por | UUID | SI | NULL | Perfil que solicito el estudio |
+| autorizacion_habeas_data_id | UUID | SI | NULL | Autorizacion Habeas Data que habilita este estudio (agregado por migracion 20260216000002) |
 | created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
 
-**Foreign Keys:** `expediente_id` → `expedientes(id)`, `solicitado_por` → `perfiles(id)`
+**Foreign Keys:** `expediente_id` → `expedientes(id)`, `solicitado_por` → `perfiles(id)`, `autorizacion_habeas_data_id` → `autorizaciones_habeas_data(id)`
 
-**Indices:** `idx_estudios_expediente`
+**Indices:** `idx_estudios_expediente`, `idx_estudios_autorizacion`
 
-**Tablas relacionadas:** expedientes, perfiles (solicitante del estudio)
+**Tablas relacionadas:** expedientes, perfiles (solicitante del estudio), autorizaciones_habeas_data
 
 ---
 
@@ -489,6 +499,34 @@ Linea de tiempo de eventos relevantes que ocurren durante el ciclo de vida de un
 
 ---
 
+### 3.15 autorizaciones_habeas_data
+
+Autorizaciones de consulta crediticia otorgadas por los solicitantes conforme a la Ley 1581 de 2012 (Habeas Data) y la Ley 1266 de 2008. Soporta dos canales: registro web (el solicitante acepta al registrarse) y enlace presencial (un administrador genera un enlace unico para firma en oficina).
+
+| Campo | Tipo | Nullable | Default | Descripcion |
+|-------|------|----------|---------|-------------|
+| id | UUID | NO | gen_random_uuid() | Identificador unico |
+| solicitante_id | UUID | NO | - | Solicitante que otorga la autorizacion |
+| canal | canal_autorizacion_habeas | NO | - | Canal: 'web' o 'enlace' |
+| estado | estado_autorizacion_habeas | NO | 'pendiente' | Estado de la autorizacion |
+| token | VARCHAR(255) | SI | NULL | Token unico para flujo presencial (enlace) |
+| token_expiracion | TIMESTAMPTZ | SI | NULL | Expiracion del enlace |
+| generado_por | UUID | SI | NULL | Usuario que genero el enlace (para canal 'enlace') |
+| autorizado_en | TIMESTAMPTZ | SI | NULL | Fecha/hora de aceptacion |
+| ip_autorizacion | VARCHAR(45) | SI | NULL | IP del solicitante al autorizar |
+| user_agent | TEXT | SI | NULL | Navegador del solicitante al autorizar |
+| texto_autorizado | TEXT | SI | NULL | Texto legal exacto que fue aceptado |
+| version_terminos | VARCHAR(50) | SI | NULL | Version de los terminos aceptados |
+| created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
+
+**Foreign Keys:** `solicitante_id` → `solicitantes(id)`, `generado_por` → `perfiles(id)`
+
+**Indices:** `idx_autorizaciones_solicitante`, `idx_autorizaciones_token`, `idx_autorizaciones_estado`
+
+**Tablas relacionadas:** solicitantes, perfiles (generador del enlace), estudios (via estudios.autorizacion_habeas_data_id)
+
+---
+
 ## 4. Tipos Enumerados
 
 ### rol_usuario
@@ -667,6 +705,24 @@ Estado del proceso de facturacion.
 | `emitida` | Factura emitida y disponible |
 | `cancelada` | Factura anulada |
 
+### canal_autorizacion_habeas
+Canal por el cual el solicitante otorga la autorizacion de consulta Habeas Data.
+
+| Valor | Descripcion |
+|-------|-------------|
+| `web` | Autorizacion aceptada durante el registro por la plataforma web |
+| `enlace` | Autorizacion via enlace unico generado por un administrador para firma presencial |
+
+### estado_autorizacion_habeas
+Estado del ciclo de vida de una autorizacion de consulta Habeas Data.
+
+| Valor | Descripcion |
+|-------|-------------|
+| `pendiente` | Enlace generado, aun no firmado por el solicitante |
+| `autorizado` | Autorizacion aceptada por el solicitante |
+| `expirado` | El enlace presencial vencio sin ser utilizado |
+| `revocado` | Autorizacion revocada por el solicitante |
+
 ### tipo_evento_timeline
 Tipos de eventos que se registran en la linea de tiempo de un expediente.
 
@@ -681,6 +737,7 @@ Tipos de eventos que se registran en la linea de tiempo de un expediente.
 | `contrato` | Generacion o cambio de estado del contrato |
 | `firma` | Evento de firma electronica |
 | `pago` | Registro o confirmacion de pago |
+| `autorizacion` | Evento relacionado con autorizacion Habeas Data |
 
 ---
 
@@ -710,7 +767,7 @@ Tipos de eventos que se registran en la linea de tiempo de un expediente.
 - Moneda implicitamente COP (pesos colombianos).
 
 ### Row Level Security (RLS)
-- **Habilitado** en las 14 tablas.
+- **Habilitado** en las 15 tablas.
 - Politica temporal: acceso completo con `USING (TRUE) WITH CHECK (TRUE)` para el service_role del backend.
 - Las politicas granulares por rol se implementaran en la tarea HP-30.
 
@@ -755,6 +812,8 @@ El expediente es la entidad central del modelo. Desde el se derivan:
 - **Pago → Facturas:** Un pago puede tener una o mas facturas asociadas.
 - **Plantilla → Contratos:** Una plantilla de contrato se usa para generar multiples contratos.
 - **Perfil → Bitacora:** Todas las acciones de un usuario se registran en la bitacora de auditoria.
+- **Autorizaciones Habeas Data → Solicitantes:** Cada autorizacion pertenece a un solicitante (N:1).
+- **Autorizaciones Habeas Data → Estudios:** Un estudio puede referenciar la autorizacion que lo habilita (via `estudios.autorizacion_habeas_data_id`, 1:N).
 
 ---
 
@@ -787,6 +846,10 @@ El expediente es la entidad central del modelo. Desde el se derivan:
 | `idx_comentarios_expediente` | comentarios | expediente_id | Listar comentarios de un expediente |
 | `idx_eventos_timeline_expediente` | eventos_timeline | expediente_id | Listar eventos de un expediente |
 | `idx_eventos_timeline_created` | eventos_timeline | created_at DESC | Ordenar timeline cronologicamente |
+| `idx_autorizaciones_solicitante` | autorizaciones_habeas_data | solicitante_id | Buscar autorizaciones de un solicitante |
+| `idx_autorizaciones_token` | autorizaciones_habeas_data | token | Buscar autorizacion por token (flujo enlace) |
+| `idx_autorizaciones_estado` | autorizaciones_habeas_data | estado | Filtrar autorizaciones por estado |
+| `idx_estudios_autorizacion` | estudios | autorizacion_habeas_data_id | Buscar estudios por autorizacion Habeas Data |
 
 ### Indices implicitos (UNIQUE constraints)
 
@@ -805,7 +868,7 @@ El expediente es la entidad central del modelo. Desde el se derivan:
 - El email del usuario se gestiona exclusivamente en `auth.users`, no se duplica en `perfiles`.
 
 ### Row Level Security (RLS)
-- RLS esta **habilitado** en las 14 tablas desde la migracion inicial.
+- RLS esta **habilitado** en las 15 tablas desde la migracion inicial.
 - Las politicas actuales son **temporales** y permiten acceso completo (`USING (TRUE)`). Esto es seguro porque el backend usa la clave `service_role` que omite RLS.
 - Las politicas granulares por rol de usuario se implementaran en la tarea **HP-30** (Setup backend con permisos).
 

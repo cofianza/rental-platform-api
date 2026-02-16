@@ -17,7 +17,7 @@
 | **Propietario** | Persona física que registra inmuebles | Registro con datos personales |
 | **Inmobiliaria** | Persona jurídica con representante legal | Registro con datos fiscales de empresa |
 
-Ambos requieren aceptación de términos y condiciones + autorización de tratamiento de datos (Ley 1581/2012).
+Ambos requieren aceptación de términos y condiciones + autorización de tratamiento de datos (Ley 1581/2012, Ley 1266/2008).
 
 ---
 
@@ -35,7 +35,7 @@ Ambos requieren aceptación de términos y condiciones + autorización de tratam
 | **Expedientes** | CRUD | CRUD | R |
 | **Solicitantes** | CRUD | CRUD | R |
 | **Documentos** | CRUD + Validar | CRUD + Validar | R + Descargar |
-| **Estudios** | CRUD + Solicitar | CRUD + Solicitar | R |
+| **Estudios** | CRUD + Solicitar | CRUD + Solicitar | R + Solicitar |
 | **Contratos** | CRUD + Generar | CR + Generar | R + Descargar |
 | **Firma OTP** | Enviar + Ver | Enviar + Ver | Ver |
 | **Pagos** | CRUD + Link pago | CR + Link pago | R |
@@ -91,6 +91,7 @@ Ambos requieren aceptación de términos y condiciones + autorización de tratam
 - Descargar documentos y contratos firmados
 - Exportar reportes (CSV/Excel)
 - Ver historial/timeline de expedientes
+- Solicitar estudios de riesgo
 - NO puede crear, editar ni eliminar nada
 - NO puede cambiar estados
 
@@ -130,3 +131,31 @@ Request → authMiddleware (verifica JWT) → roleGuard(['administrador', 'opera
 
 ### Campo rol en el JWT
 El rol del usuario se almacena en los metadatos de Supabase Auth (`user_metadata.rol`) y se verifica en cada request.
+
+---
+
+## Autorización Habeas Data (Consulta Crediticia)
+
+Para consultar el historial crediticio de un solicitante en centrales de riesgo (TransUnion, Datacrédito, SIFIN), se requiere autorización previa del solicitante conforme a la legislación colombiana:
+- **Ley 1581 de 2012**: Protección de datos personales
+- **Ley 1266 de 2008**: Habeas data financiero
+
+### Escenarios de autorización
+
+1. **Usuario llega por la web**: La autorización se solicita durante el registro, con checkbox de aceptación de términos, políticas de privacidad y autorización de consulta crediticia.
+2. **Usuario llega presencialmente**: El administrador u operador genera un enlace único desde el sistema. El enlace se envía al cliente, quien firma digitalmente la autorización. Queda registrado en el sistema con evidencia (IP, timestamp, texto autorizado).
+
+### Permisos por rol
+
+| Acción | Administrador | Operador/Analista | Gerencia/Consulta |
+|--------|:---:|:---:|:---:|
+| Generar enlace de autorización | Si | Si | Si |
+| Ver estado de autorización | Si | Si | Si |
+| Revocar autorización | Si | No | No |
+
+### Reglas
+
+- No se puede iniciar un estudio de riesgo sin autorización Habeas Data vigente del solicitante
+- La autorización queda vinculada al solicitante (no al expediente), pudiendo cubrir múltiples estudios
+- El sistema almacena el texto exacto autorizado, IP, user agent y timestamp como evidencia legal
+- El solicitante tiene derecho a revocar su autorización en cualquier momento (solo Admin puede ejecutar)

@@ -20,6 +20,7 @@ rental-platform-api/
 │   ├── routes/
 │   │   ├── index.ts                 # Router principal (/api/v1/...)
 │   │   ├── health.ts               # GET /health
+│   │   ├── autorizacion.routes.ts   # /api/v1/autorizaciones
 │   │   ├── inmueble.routes.ts       # /api/v1/inmuebles
 │   │   ├── expediente.routes.ts     # /api/v1/expedientes
 │   │   ├── solicitante.routes.ts    # /api/v1/solicitantes
@@ -36,6 +37,7 @@ rental-platform-api/
 │   │   ├── expediente.controller.ts
 │   │   ├── solicitante.controller.ts
 │   │   ├── documento.controller.ts
+│   │   ├── autorizacion.controller.ts
 │   │   ├── estudio.controller.ts
 │   │   ├── contrato.controller.ts
 │   │   ├── firma.controller.ts
@@ -48,6 +50,7 @@ rental-platform-api/
 │   │   ├── expediente.service.ts
 │   │   ├── solicitante.service.ts
 │   │   ├── documento.service.ts
+│   │   ├── autorizacion.service.ts
 │   │   ├── estudio.service.ts
 │   │   ├── contrato.service.ts
 │   │   ├── firma.service.ts
@@ -62,6 +65,7 @@ rental-platform-api/
 │   │   ├── expediente.schema.ts
 │   │   ├── solicitante.schema.ts
 │   │   ├── documento.schema.ts
+│   │   ├── autorizacion.schema.ts
 │   │   ├── estudio.schema.ts
 │   │   ├── contrato.schema.ts
 │   │   ├── pago.schema.ts
@@ -103,7 +107,8 @@ rental-platform-web/
 │   │   ├── inmuebles/[id]/page.tsx    # Detalle público
 │   │   ├── firma/[token]/page.tsx     # Página de firma OTP
 │   │   ├── pago/[token]/page.tsx      # Página de pago
-│   │   └── estudio/[token]/page.tsx   # Formulario self-service
+│   │   ├── estudio/[token]/page.tsx   # Formulario self-service
+│   │   └── autorizacion/[token]/page.tsx  # Autorización Habeas Data
 │   └── (dashboard)/                   # Grupo: panel privado
 │       ├── layout.tsx                 # Layout con sidebar
 │       ├── dashboard/page.tsx         # Home del dashboard

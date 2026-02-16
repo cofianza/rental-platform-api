@@ -268,3 +268,40 @@ main ─────────────────────────
 // Función: function formatCurrency(value) (inglés)
 // Variable: const isLoading = true (inglés)
 ```
+
+---
+
+## ADR-012: Cumplimiento Habeas Data para consultas crediticias
+
+**Estado:** Aceptada
+**Fecha:** 2026-02-16
+**Contexto:** Minuta 11 Feb 2026, seccion 5.1
+
+### Contexto
+
+El sistema debe consultar centrales de riesgo colombianas (TransUnion, Datacredito, SIFIN) para evaluar solicitantes. La legislacion colombiana requiere autorizacion explicita del titular de los datos antes de cualquier consulta:
+
+- **Ley 1581 de 2012**: Regimen general de proteccion de datos personales
+- **Ley 1266 de 2008**: Habeas data financiero - regula el manejo de informacion crediticia
+
+### Decision
+
+Implementar un modulo de autorizacion Habeas Data con dos flujos:
+
+1. **Canal web**: Autorizacion durante el registro del solicitante mediante checkbox de aceptacion de terminos, politicas de privacidad y autorizacion de consulta crediticia.
+2. **Canal presencial (enlace)**: El administrador u operador genera un enlace unico con token. Se envia al solicitante, quien firma digitalmente la autorizacion a traves de ese enlace.
+
+Se crea la tabla `autorizaciones_habeas_data` vinculada al solicitante (no al expediente) para que una autorizacion cubra multiples estudios. Se almacena evidencia legal completa: IP, user agent, timestamp, texto exacto autorizado y version de terminos.
+
+### Alternativas consideradas
+
+1. **Guardar autorizacion como campo booleano en solicitantes** - Rechazada: pierde trazabilidad, no cumple requisitos de evidencia legal.
+2. **Usar la tabla de firmas existente** - Rechazada: la autorizacion Habeas Data es un prerequisito legal distinto a la firma de contrato, con ciclo de vida propio (revocacion, expiracion).
+3. **Tabla independiente con evidencia completa** - Aceptada: maxima trazabilidad, cumplimiento legal robusto, separacion de responsabilidades.
+
+### Consecuencias
+
+- Se agrega una tabla y dos enums nuevos al schema
+- Los estudios de riesgo requieren una autorizacion vigente antes de poder crearse
+- Se debe implementar un flujo publico para firma de autorizacion via enlace
+- Vision a futuro: una vez autorizado, el sistema podra consultar automaticamente las centrales de riesgo
