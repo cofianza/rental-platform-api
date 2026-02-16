@@ -1,11 +1,8 @@
 import { Request, Response } from 'express';
-import { env } from '@/config/env';
+import { getHealthStatus } from './health.service';
+import { sendSuccess } from '@/utils/response';
 
-export function getHealth(_req: Request, res: Response): void {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    version: process.env.npm_package_version ?? '1.0.0',
-    environment: env.NODE_ENV,
-  });
+export async function getHealth(_req: Request, res: Response): Promise<void> {
+  const health = await getHealthStatus();
+  sendSuccess(res, health);
 }
