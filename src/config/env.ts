@@ -10,6 +10,10 @@ const envSchema = z.object({
   SUPABASE_JWT_SECRET: z.string().min(1),
 
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
+  FRONTEND_URL: z.string().url().default('http://localhost:3000'),
+
+  RESEND_API_KEY: z.string().min(1),
+  RESEND_FROM_EMAIL: z.string().min(1).default('hola@knowmeapp.com'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });

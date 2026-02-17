@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
 import { authMiddleware } from '@/middleware/auth';
-import { loginSchema, refreshSchema } from './auth.schema';
+import { passwordResetLimiter } from '@/middleware/rateLimiter';
+import { loginSchema, refreshSchema, forgotPasswordSchema, resetPasswordSchema, resetTokenParamsSchema } from './auth.schema';
 import * as authController from './auth.controller';
 
 const router = Router();
@@ -10,6 +11,11 @@ const router = Router();
 router.post('/login', validate({ body: loginSchema }), authController.login);
 router.post('/login/google', authController.googleOAuth);
 router.post('/refresh', validate({ body: refreshSchema }), authController.refresh);
+
+// Recuperacion de contrasena
+router.post('/forgot-password', passwordResetLimiter, validate({ body: forgotPasswordSchema }), authController.forgotPassword);
+router.get('/reset-password/:token', validate({ params: resetTokenParamsSchema }), authController.validateResetToken);
+router.post('/reset-password', validate({ body: resetPasswordSchema }), authController.resetPassword);
 
 // Rutas protegidas (requieren autenticacion)
 router.post('/logout', authMiddleware, authController.logout);
