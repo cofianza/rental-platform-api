@@ -10,6 +10,7 @@ import { generalLimiter, authLimiter } from '@/middleware/rateLimiter';
 import healthRouter from '@/modules/health/health.routes';
 import authRouter from '@/modules/auth/auth.routes';
 import expedienteWorkflowRouter from '@/modules/expedientes/expediente-workflow.routes';
+import usersRouter from '@/modules/users/users.routes';
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/v1/health', healthRouter);
 app.use('/api/v1/auth', authLimiter, authRouter);
 app.use('/api/v1/expedientes', expedienteWorkflowRouter);
+app.use('/api/v1/users', usersRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
