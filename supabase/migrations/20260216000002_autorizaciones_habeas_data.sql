@@ -58,8 +58,9 @@ CREATE INDEX idx_autorizaciones_estado ON autorizaciones_habeas_data(estado);
 
 ALTER TABLE autorizaciones_habeas_data ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Service role full access" ON autorizaciones_habeas_data
-  FOR ALL USING (TRUE) WITH CHECK (TRUE);
+-- Sin políticas temporales: con RLS habilitado y sin políticas,
+-- solo service_role (que omite RLS) puede acceder a los datos.
+-- Las políticas granulares por rol se implementan en HP-30.
 
 -- ============================================================
 -- 5. MODIFICAR TABLA estudios: agregar FK a autorización
