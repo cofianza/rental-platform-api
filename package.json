@@ -16,7 +16,9 @@
     "db:push": "supabase db push",
     "db:reset": "supabase db reset",
     "db:seed": "ts-node -r tsconfig-paths/register src/lib/seed.ts",
-    "db:studio": "supabase studio"
+    "db:studio": "supabase studio",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "habitar",
@@ -53,6 +55,7 @@
     "tsc-alias": "^1.8.16",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.55.0"
+    "typescript-eslint": "^8.55.0",
+    "vitest": "^4.0.18"
   }
 }

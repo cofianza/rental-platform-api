@@ -9,6 +9,7 @@ import { errorHandler } from '@/middleware/errorHandler';
 import { generalLimiter, authLimiter } from '@/middleware/rateLimiter';
 import healthRouter from '@/modules/health/health.routes';
 import authRouter from '@/modules/auth/auth.routes';
+import expedienteWorkflowRouter from '@/modules/expedientes/expediente-workflow.routes';
 
 const app = express();
 
@@ -41,6 +42,7 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.use('/api/v1/health', healthRouter);
 app.use('/api/v1/auth', authLimiter, authRouter);
+app.use('/api/v1/expedientes', expedienteWorkflowRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
