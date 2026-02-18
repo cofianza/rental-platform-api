@@ -13,12 +13,16 @@ export const AUDIT_ACTIONS = {
   USER_ACTIVATED: 'user_activated',
   USER_ROLE_CHANGED: 'user_role_changed',
   CONFIG_CHANGED: 'config_changed',
+  INMUEBLE_CREATED: 'inmueble_created',
+  INMUEBLE_UPDATED: 'inmueble_updated',
+  INMUEBLE_DELETED: 'inmueble_deleted',
 } as const;
 
 export const AUDIT_ENTITIES = {
   USER: 'user',
   SESSION: 'session',
   CONFIG: 'config',
+  INMUEBLE: 'inmueble',
 } as const;
 
 interface AuditLogParams {

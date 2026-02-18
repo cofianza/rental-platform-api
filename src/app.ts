@@ -13,6 +13,7 @@ import expedienteWorkflowRouter from '@/modules/expedientes/expediente-workflow.
 import usersRouter from '@/modules/users/users.routes';
 import registrationRouter from '@/modules/registration/registration.routes';
 import { bitacoraRouter } from '@/modules/bitacora/bitacora.routes';
+import inmueblesRouter from '@/modules/inmuebles/inmuebles.routes';
 
 const app = express();
 
@@ -49,6 +50,7 @@ app.use('/api/v1/auth/register', registrationRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/expedientes', expedienteWorkflowRouter);
 app.use('/api/v1/users', usersRouter);
+app.use('/api/v1/inmuebles', inmueblesRouter);
 app.use('/api/v1/audit-logs', bitacoraRouter);
 
 // Error handler (must be last)
