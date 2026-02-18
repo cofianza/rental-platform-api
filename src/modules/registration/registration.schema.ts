@@ -8,6 +8,31 @@ const passwordSchema = z
     'La contrasena debe contener al menos 1 mayuscula, 1 minuscula y 1 numero',
   );
 
+/**
+ * Valida el digito de verificacion del NIT colombiano con algoritmo modulo-11.
+ * Formato esperado: "XXXXXXXXX-D" donde D es el digito de verificacion.
+ */
+function validateNitModulo11(nit: string): boolean {
+  const match = nit.match(/^(\d{1,15})-(\d)$/);
+  if (!match) return false;
+
+  const digits = match[1];
+  const expectedCheck = parseInt(match[2], 10);
+
+  const weights = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71];
+
+  let sum = 0;
+  const reversed = digits.split('').reverse();
+  for (let i = 0; i < reversed.length; i++) {
+    sum += parseInt(reversed[i], 10) * weights[i];
+  }
+
+  const remainder = sum % 11;
+  const checkDigit = remainder >= 2 ? 11 - remainder : remainder;
+
+  return checkDigit === expectedCheck;
+}
+
 const colombianPhoneSchema = z
   .string()
   .regex(/^\+57\s?3\d{9}$/, 'Telefono invalido. Formato: +57 3XXXXXXXXX');
@@ -41,7 +66,8 @@ export const registerInmobiliariaSchema = z.object({
     .string()
     .min(1, 'NIT requerido')
     .max(20, 'NIT muy largo')
-    .regex(/^\d{1,15}-\d$/, 'NIT invalido. Formato: digitos-digito verificacion'),
+    .regex(/^\d{1,15}-\d$/, 'NIT invalido. Formato: digitos-digito verificacion')
+    .refine(validateNitModulo11, 'Digito de verificacion del NIT invalido'),
   direccion_comercial: z.string().min(1, 'Direccion comercial requerida').max(300, 'Direccion muy larga'),
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga'),
   nombre_representante_nombre: z.string().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
