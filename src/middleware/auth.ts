@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
+import { hasPermission, type Resource, type Action } from '@/config/permissions';
 import type { UserRole } from '@/types/auth';
 
 /**
@@ -72,6 +73,34 @@ export function roleGuard(rolesPermitidos: string[]) {
       );
       throw AppError.forbidden(
         `Rol '${req.user.rol}' no tiene permisos para esta accion. Roles permitidos: ${rolesPermitidos.join(', ')}`,
+      );
+    }
+
+    next();
+  };
+}
+
+/**
+ * Middleware factory que verifica permisos granulares por recurso y accion.
+ * Debe usarse DESPUES de authMiddleware.
+ *
+ * @param resource - El recurso al que se accede (e.g. 'expedientes', 'usuarios')
+ * @param action - La accion a realizar (e.g. 'create', 'read', 'update', 'delete')
+ */
+export function authorize(resource: Resource, action: Action) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) {
+      throw AppError.unauthorized('Autenticacion requerida');
+    }
+
+    if (!hasPermission(req.user.rol, resource, action)) {
+      logger.warn(
+        { userId: req.user.id, rol: req.user.rol, resource, action },
+        'Acceso denegado por permisos insuficientes',
+      );
+      throw AppError.forbidden(
+        `Sin permisos para '${action}' en '${resource}'`,
+        'INSUFFICIENT_PERMISSIONS',
       );
     }
 

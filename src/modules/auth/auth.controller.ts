@@ -1,5 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/lib/response';
+import { AppError } from '@/lib/errors';
+import { getPermissionsForRole, INTERNAL_ROLES, type InternalRole } from '@/config/permissions';
 import * as authService from './auth.service';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, ResetTokenParams } from './auth.schema';
 
@@ -45,4 +47,15 @@ export async function validateResetToken(req: Request, res: Response) {
 export async function resetPassword(req: Request, res: Response) {
   const result = await authService.resetPassword(req.body as ResetPasswordInput);
   sendSuccess(res, result);
+}
+
+export async function permissions(req: Request, res: Response) {
+  const userRole = req.user!.rol as InternalRole;
+
+  if (!INTERNAL_ROLES.includes(userRole)) {
+    throw AppError.forbidden('Rol sin permisos definidos en el sistema');
+  }
+
+  const rolePermissions = getPermissionsForRole(userRole);
+  sendSuccess(res, { rol: userRole, permissions: rolePermissions });
 }

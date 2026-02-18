@@ -6,11 +6,12 @@ import pinoHttp from 'pino-http';
 import { env } from '@/config';
 import { logger } from '@/lib/logger';
 import { errorHandler } from '@/middleware/errorHandler';
-import { generalLimiter, authLimiter } from '@/middleware/rateLimiter';
+import { generalLimiter } from '@/middleware/rateLimiter';
 import healthRouter from '@/modules/health/health.routes';
 import authRouter from '@/modules/auth/auth.routes';
 import expedienteWorkflowRouter from '@/modules/expedientes/expediente-workflow.routes';
 import usersRouter from '@/modules/users/users.routes';
+import registrationRouter from '@/modules/registration/registration.routes';
 
 const app = express();
 
@@ -43,7 +44,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 app.use('/api/v1/health', healthRouter);
-app.use('/api/v1/auth', authLimiter, authRouter);
+app.use('/api/v1/auth/register', registrationRouter);
+app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/expedientes', expedienteWorkflowRouter);
 app.use('/api/v1/users', usersRouter);
 

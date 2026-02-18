@@ -24,6 +24,30 @@ export const authLimiter = rateLimit({
   },
 });
 
+export const registrationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Too many registration attempts, please try again later',
+  },
+});
+
+export const resendVerificationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 3,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Too many verification email requests, please try again later',
+  },
+});
+
 export const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 3,

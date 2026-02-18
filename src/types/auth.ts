@@ -6,3 +6,5 @@ export interface AuthUser {
   rol: UserRole;
   activo: boolean;
 }
+
+export type { Resource, Action, InternalRole } from '@/config/permissions';
