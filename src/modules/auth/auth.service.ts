@@ -3,14 +3,22 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendPasswordResetEmail } from '@/lib/email';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput } from './auth.schema';
 
-export async function loginWithEmail({ email, password }: LoginInput) {
+export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
     logger.warn({ email, error: error.message }, 'Login fallido');
+    logAudit({
+      usuarioId: null,
+      accion: AUDIT_ACTIONS.LOGIN_FAILED,
+      entidad: AUDIT_ENTITIES.SESSION,
+      detalle: { email },
+      ip,
+    });
     throw AppError.unauthorized('Credenciales invalidas', 'INVALID_CREDENTIALS');
   }
 
@@ -33,6 +41,14 @@ export async function loginWithEmail({ email, password }: LoginInput) {
 
   const userRol = perfil?.rol ?? 'operador_analista';
   logger.info({ userId: data.user.id, rol: userRol, perfilRol: perfil?.rol }, 'Login exitoso');
+
+  logAudit({
+    usuarioId: data.user.id,
+    accion: AUDIT_ACTIONS.LOGIN_SUCCESS,
+    entidad: AUDIT_ENTITIES.SESSION,
+    detalle: { email: data.user.email, rol: userRol },
+    ip,
+  });
 
   return {
     user: {
@@ -76,12 +92,21 @@ export async function refreshSession({ refresh_token }: RefreshInput) {
   };
 }
 
-export async function logout(accessToken: string) {
+export async function logout(accessToken: string, userId?: string, ip?: string) {
   const { error } = await supabase.auth.admin.signOut(accessToken);
 
   if (error) {
     logger.warn({ error: error.message }, 'Error al cerrar sesion');
     // No lanzar error - el token puede haber expirado naturalmente
+  }
+
+  if (userId) {
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.LOGOUT,
+      entidad: AUDIT_ENTITIES.SESSION,
+      ip,
+    });
   }
 }
 
@@ -120,7 +145,7 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-export async function forgotPassword({ email }: ForgotPasswordInput) {
+export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string) {
   // Buscar usuario por email en auth.users via RPC (perfiles no tiene columna email)
   const { data: userResult, error: rpcError } = await supabase
     .rpc('find_user_by_email' as never, { user_email: email } as never)
@@ -180,6 +205,15 @@ export async function forgotPassword({ email }: ForgotPasswordInput) {
   const resetUrl = `${env.FRONTEND_URL}/restablecer-contrasena?token=${rawToken}`;
   await sendPasswordResetEmail(email, resetUrl);
 
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.PASSWORD_RESET_REQUEST,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    detalle: { email },
+    ip,
+  });
+
   logger.info({ email, userId }, 'Token de reset generado y email enviado');
 }
 
@@ -204,7 +238,7 @@ export async function validateResetToken(token: string) {
   return { valid: true };
 }
 
-export async function resetPassword({ token, password }: ResetPasswordInput) {
+export async function resetPassword({ token, password }: ResetPasswordInput, ip?: string) {
   const tokenHash = hashToken(token);
 
   // Buscar y validar token
@@ -241,6 +275,14 @@ export async function resetPassword({ token, password }: ResetPasswordInput) {
 
   // Revocar todas las sesiones del usuario
   await supabase.auth.admin.signOut(tokenData.user_id, 'global');
+
+  logAudit({
+    usuarioId: tokenData.user_id,
+    accion: AUDIT_ACTIONS.PASSWORD_RESET_COMPLETE,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: tokenData.user_id,
+    ip,
+  });
 
   logger.info({ userId: tokenData.user_id }, 'Contrasena restablecida exitosamente');
 

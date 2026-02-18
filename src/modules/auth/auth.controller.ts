@@ -6,7 +6,7 @@ import * as authService from './auth.service';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, ResetTokenParams } from './auth.schema';
 
 export async function login(req: Request, res: Response) {
-  const result = await authService.loginWithEmail(req.body as LoginInput);
+  const result = await authService.loginWithEmail(req.body as LoginInput, req.ip);
   sendSuccess(res, result);
 }
 
@@ -22,7 +22,7 @@ export async function refresh(req: Request, res: Response) {
 
 export async function logout(req: Request, res: Response) {
   const token = req.headers.authorization?.slice(7) ?? '';
-  await authService.logout(token);
+  await authService.logout(token, req.user!.id, req.ip);
   sendSuccess(res, { message: 'Sesion cerrada correctamente' });
 }
 
@@ -32,7 +32,7 @@ export async function me(req: Request, res: Response) {
 }
 
 export async function forgotPassword(req: Request, res: Response) {
-  await authService.forgotPassword(req.body as ForgotPasswordInput);
+  await authService.forgotPassword(req.body as ForgotPasswordInput, req.ip);
   sendSuccess(res, {
     message: 'Si el email existe en nuestro sistema, recibiras un enlace de recuperacion',
   });
@@ -45,7 +45,7 @@ export async function validateResetToken(req: Request, res: Response) {
 }
 
 export async function resetPassword(req: Request, res: Response) {
-  const result = await authService.resetPassword(req.body as ResetPasswordInput);
+  const result = await authService.resetPassword(req.body as ResetPasswordInput, req.ip);
   sendSuccess(res, result);
 }
 

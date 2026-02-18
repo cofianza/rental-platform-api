@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendWelcomeEmail } from '@/lib/email';
 import type { CreateUserInput, UpdateUserInput, ListUsersQuery } from './users.schema';
 
@@ -76,7 +77,7 @@ export async function getUserById(userId: string) {
   return rows[0];
 }
 
-export async function createUser(input: CreateUserInput, createdBy: string) {
+export async function createUser(input: CreateUserInput, createdBy: string, ip?: string) {
   const { email, nombre, apellido, telefono, rol } = input;
 
   // Verificar que el email no exista
@@ -123,7 +124,14 @@ export async function createUser(input: CreateUserInput, createdBy: string) {
   }
 
   // Registrar en bitacora
-  await logBitacora(createdBy, 'crear_usuario', 'perfiles', userId, { email, nombre, apellido, rol });
+  logAudit({
+    usuarioId: createdBy,
+    accion: AUDIT_ACTIONS.USER_CREATED,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    detalle: { email, nombre, apellido, rol },
+    ip,
+  });
 
   // Enviar email de bienvenida con contrasena temporal
   try {
@@ -137,7 +145,7 @@ export async function createUser(input: CreateUserInput, createdBy: string) {
   return getUserById(userId);
 }
 
-export async function updateUser(userId: string, input: UpdateUserInput, updatedBy: string) {
+export async function updateUser(userId: string, input: UpdateUserInput, updatedBy: string, ip?: string) {
   // Verificar que el usuario existe
   await getUserById(userId);
 
@@ -162,12 +170,19 @@ export async function updateUser(userId: string, input: UpdateUserInput, updated
   }
 
   // Registrar en bitacora
-  await logBitacora(updatedBy, 'editar_usuario', 'perfiles', userId, updateData);
+  logAudit({
+    usuarioId: updatedBy,
+    accion: AUDIT_ACTIONS.USER_UPDATED,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    detalle: updateData,
+    ip,
+  });
 
   return getUserById(userId);
 }
 
-export async function deactivateUser(userId: string, requestingUserId: string) {
+export async function deactivateUser(userId: string, requestingUserId: string, ip?: string) {
   if (userId === requestingUserId) {
     throw AppError.badRequest('No puedes desactivar tu propia cuenta', 'SELF_DEACTIVATION');
   }
@@ -194,12 +209,18 @@ export async function deactivateUser(userId: string, requestingUserId: string) {
   }
 
   // Registrar en bitacora
-  await logBitacora(requestingUserId, 'desactivar_usuario', 'perfiles', userId);
+  logAudit({
+    usuarioId: requestingUserId,
+    accion: AUDIT_ACTIONS.USER_DEACTIVATED,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    ip,
+  });
 
   return getUserById(userId);
 }
 
-export async function activateUser(userId: string, requestingUserId: string) {
+export async function activateUser(userId: string, requestingUserId: string, ip?: string) {
   // Verificar que el usuario existe
   await getUserById(userId);
 
@@ -214,7 +235,13 @@ export async function activateUser(userId: string, requestingUserId: string) {
   }
 
   // Registrar en bitacora
-  await logBitacora(requestingUserId, 'activar_usuario', 'perfiles', userId);
+  logAudit({
+    usuarioId: requestingUserId,
+    accion: AUDIT_ACTIONS.USER_ACTIVATED,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    ip,
+  });
 
   return getUserById(userId);
 }
@@ -240,26 +267,4 @@ function generateTempPassword(): string {
 
   // Mezclar
   return password.split('').sort(() => crypto.randomInt(3) - 1).join('');
-}
-
-async function logBitacora(
-  usuarioId: string,
-  accion: string,
-  entidad: string,
-  entidadId: string,
-  detalle?: Record<string, unknown>,
-) {
-  try {
-    await (supabase
-      .from('bitacora' as string) as ReturnType<typeof supabase.from>)
-      .insert({
-        usuario_id: usuarioId,
-        accion,
-        entidad,
-        entidad_id: entidadId,
-        detalle: detalle || null,
-      } as never);
-  } catch (error) {
-    logger.warn({ error, accion, entidad, entidadId }, 'Error al registrar en bitacora');
-  }
 }
