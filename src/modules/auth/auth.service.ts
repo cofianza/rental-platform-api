@@ -14,24 +14,31 @@ export async function loginWithEmail({ email, password }: LoginInput) {
     throw AppError.unauthorized('Credenciales invalidas', 'INVALID_CREDENTIALS');
   }
 
-  // Verificar que el perfil este activo
-  const { data: perfil } = await supabase
-    .from('perfiles' as string)
-    .select('activo')
+  // Verificar que el perfil este activo y obtener el rol
+  const { data: perfil, error: perfilError } = await supabase
+    .from('perfiles')
+    .select('estado, rol')
     .eq('id', data.user.id)
-    .single<{ activo: boolean }>();
+    .single<{ estado: string; rol: string }>();
 
-  if (perfil && !perfil.activo) {
+  if (perfilError) {
+    logger.warn({ userId: data.user.id, error: perfilError }, 'Error al obtener perfil en login');
+  }
+
+  if (perfil && perfil.estado !== 'activo') {
     // Cerrar la sesion recien creada
     await supabase.auth.admin.signOut(data.session.access_token);
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
 
+  const userRol = perfil?.rol ?? 'operador_analista';
+  logger.info({ userId: data.user.id, rol: userRol, perfilRol: perfil?.rol }, 'Login exitoso');
+
   return {
     user: {
       id: data.user.id,
       email: data.user.email,
-      rol: data.user.user_metadata?.rol ?? 'sin_rol',
+      rol: userRol,
     },
     session: {
       access_token: data.session.access_token,
@@ -79,17 +86,34 @@ export async function logout(accessToken: string) {
 }
 
 export async function getProfile(userId: string) {
-  const { data, error } = await supabase
+  // Obtener perfil de la tabla perfiles
+  const { data: perfil, error: perfilError } = await supabase
     .from('perfiles' as string)
-    .select('id, email, nombre_completo, rol, activo, created_at, updated_at')
+    .select('id, nombre, apellido, rol, estado, created_at, updated_at')
     .eq('id', userId)
-    .single<{ id: string; email: string; nombre_completo: string; rol: string; activo: boolean; created_at: string; updated_at: string }>();
+    .single<{ id: string; nombre: string; apellido: string; rol: string; estado: string; created_at: string; updated_at: string }>();
 
-  if (error || !data) {
+  if (perfilError || !perfil) {
     throw AppError.notFound('Perfil no encontrado');
   }
 
-  return data;
+  // Obtener email de auth.users
+  const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(userId);
+
+  if (userError || !user) {
+    throw AppError.notFound('Usuario no encontrado');
+  }
+
+  // Construir respuesta con datos combinados
+  return {
+    id: perfil.id,
+    email: user.email || '',
+    nombre_completo: `${perfil.nombre} ${perfil.apellido}`.trim(),
+    rol: perfil.rol,
+    activo: perfil.estado === 'activo',
+    created_at: perfil.created_at,
+    updated_at: perfil.updated_at,
+  };
 }
 
 function hashToken(token: string): string {

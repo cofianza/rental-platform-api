@@ -29,24 +29,25 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
   // Consultar tabla perfiles para verificar estado activo y rol
   const { data: perfil, error: perfilError } = await supabase
     .from('perfiles')
-    .select('id, email, rol, estado')
+    .select('id, rol, estado')
     .eq('id', user.id)
     .single();
 
   if (perfilError || !perfil) {
-    logger.warn({ userId: user.id }, 'Perfil no encontrado para usuario autenticado');
+    logger.warn({ userId: user.id, error: perfilError }, 'Perfil no encontrado para usuario autenticado');
     throw AppError.unauthorized('Perfil de usuario no encontrado');
   }
 
-  const perfilData = perfil as { id: string; email: string; rol: UserRole; estado: 'activo' | 'inactivo' };
+  const perfilData = perfil as { id: string; rol: UserRole; estado: 'activo' | 'inactivo' };
 
   if (perfilData.estado !== 'activo') {
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
 
+  // El email viene de auth.users (del token JWT), no de perfiles
   req.user = {
     id: perfilData.id,
-    email: perfilData.email,
+    email: user.email || '',
     rol: perfilData.rol,
     activo: perfilData.estado === 'activo',
   };

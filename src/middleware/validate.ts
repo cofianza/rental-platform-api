@@ -52,9 +52,8 @@ export function validate(schemas: ValidationSchemas) {
             received: getValueAtPath(req.params, issue.path as (string | number)[]),
           });
         }
-      } else {
-        req.params = result.data as typeof req.params;
       }
+      // En Express 5, req.params puede ser de solo lectura - la validación ya verificó los datos
     }
 
     if (schemas.query) {
@@ -67,9 +66,9 @@ export function validate(schemas: ValidationSchemas) {
             received: getValueAtPath(req.query, issue.path as (string | number)[]),
           });
         }
-      } else {
-        req.query = result.data as typeof req.query;
       }
+      // En Express 5, req.query es de solo lectura - la validación ya verificó los datos
+      // Los controladores deben usar req.query directamente (ya está validado)
     }
 
     if (errors.length > 0) {
