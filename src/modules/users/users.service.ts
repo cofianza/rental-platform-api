@@ -146,8 +146,8 @@ export async function createUser(input: CreateUserInput, createdBy: string, ip?:
 }
 
 export async function updateUser(userId: string, input: UpdateUserInput, updatedBy: string, ip?: string) {
-  // Verificar que el usuario existe
-  await getUserById(userId);
+  // Obtener estado anterior para diff en bitacora
+  const previousUser = await getUserById(userId);
 
   const updateData: Record<string, unknown> = {};
   if (input.nombre !== undefined) updateData.nombre = input.nombre;
@@ -169,13 +169,19 @@ export async function updateUser(userId: string, input: UpdateUserInput, updated
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el usuario');
   }
 
-  // Registrar en bitacora
+  // Construir diff before/after solo con campos modificados
+  const before: Record<string, unknown> = {};
+  for (const key of Object.keys(updateData)) {
+    before[key] = (previousUser as unknown as Record<string, unknown>)[key];
+  }
+
+  // Registrar en bitacora con before/after
   logAudit({
     usuarioId: updatedBy,
     accion: AUDIT_ACTIONS.USER_UPDATED,
     entidad: AUDIT_ENTITIES.USER,
     entidadId: userId,
-    detalle: updateData,
+    detalle: { before, after: updateData },
     ip,
   });
 
