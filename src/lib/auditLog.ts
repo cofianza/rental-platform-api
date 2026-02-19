@@ -16,6 +16,12 @@ export const AUDIT_ACTIONS = {
   INMUEBLE_CREATED: 'inmueble_created',
   INMUEBLE_UPDATED: 'inmueble_updated',
   INMUEBLE_DELETED: 'inmueble_deleted',
+  // Fotos de inmuebles (HP-203)
+  FOTO_CREATED: 'foto_created',
+  FOTO_UPDATED: 'foto_updated',
+  FOTO_DELETED: 'foto_deleted',
+  FOTO_SET_FACHADA: 'foto_set_fachada',
+  FOTOS_REORDERED: 'fotos_reordered',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -23,6 +29,7 @@ export const AUDIT_ENTITIES = {
   SESSION: 'session',
   CONFIG: 'config',
   INMUEBLE: 'inmueble',
+  FOTO_INMUEBLE: 'foto_inmueble',
 } as const;
 
 interface AuditLogParams {

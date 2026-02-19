@@ -9,7 +9,15 @@ import {
   searchInmueblesQuerySchema,
   listCambiosQuerySchema,
 } from './inmuebles.schema';
+import {
+  inmuebleIdOnlyParamsSchema,
+  fotoIdParamsSchema,
+  createFotoSchema,
+  updateFotoSchema,
+  reordenarFotosSchema,
+} from './inmuebles-fotos.schema';
 import * as inmueblesController from './inmuebles.controller';
+import * as fotosController from './inmuebles-fotos.controller';
 
 const router = Router();
 
@@ -76,6 +84,49 @@ router.delete(
   roleGuard(['administrador']),
   validate({ params: inmuebleIdParamsSchema }),
   inmueblesController.remove,
+);
+
+// --- Rutas de fotos (HP-203) ---
+router.get(
+  '/:id/fotos',
+  authorize('inmuebles', 'read'),
+  validate({ params: inmuebleIdOnlyParamsSchema }),
+  fotosController.list,
+);
+
+router.post(
+  '/:id/fotos',
+  authorize('inmuebles', 'update'),
+  validate({ params: inmuebleIdOnlyParamsSchema, body: createFotoSchema }),
+  fotosController.create,
+);
+
+router.patch(
+  '/:id/fotos/reordenar',
+  authorize('inmuebles', 'update'),
+  validate({ params: inmuebleIdOnlyParamsSchema, body: reordenarFotosSchema }),
+  fotosController.reordenar,
+);
+
+router.patch(
+  '/:id/fotos/:fotoId',
+  authorize('inmuebles', 'update'),
+  validate({ params: fotoIdParamsSchema, body: updateFotoSchema }),
+  fotosController.update,
+);
+
+router.patch(
+  '/:id/fotos/:fotoId/fachada',
+  authorize('inmuebles', 'update'),
+  validate({ params: fotoIdParamsSchema }),
+  fotosController.setFachada,
+);
+
+router.delete(
+  '/:id/fotos/:fotoId',
+  authorize('inmuebles', 'update'),
+  validate({ params: fotoIdParamsSchema }),
+  fotosController.remove,
 );
 
 export default router;
