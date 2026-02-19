@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
@@ -93,7 +93,7 @@ export async function createUser(input: CreateUserInput, createdBy: string, ip?:
   const tempPassword = generateTempPassword();
 
   // Crear usuario en Supabase Auth
-  const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+  const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
     password: tempPassword,
     email_confirm: true,
@@ -209,7 +209,7 @@ export async function deactivateUser(userId: string, requestingUserId: string, i
 
   // Revocar todas las sesiones del usuario
   try {
-    await supabase.auth.admin.signOut(userId, 'global');
+    await supabaseAuth.auth.admin.signOut(userId, 'global');
   } catch (signOutError) {
     logger.warn({ error: signOutError, userId }, 'Error al revocar sesiones del usuario');
   }

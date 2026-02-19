@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
@@ -22,7 +22,7 @@ export async function registerPropietario(
   const { email, password, nombre, apellido, telefono, tipo_documento,
           numero_documento, direccion } = input;
 
-  const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+  const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
     password,
     email_confirm: false,
@@ -73,7 +73,7 @@ export async function registerInmobiliaria(
   const { email, password, razon_social, nit, direccion_comercial, ciudad,
           nombre_representante_nombre, nombre_representante_apellido, telefono } = input;
 
-  const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+  const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
     password,
     email_confirm: false,
@@ -154,7 +154,7 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
     .eq('id', tokenData.user_id);
 
   // Confirmar email en Supabase Auth
-  await supabase.auth.admin.updateUserById(tokenData.user_id, {
+  await supabaseAuth.auth.admin.updateUserById(tokenData.user_id, {
     email_confirm: true,
   });
 

@@ -7,6 +7,7 @@ import {
   createInmuebleSchema,
   updateInmuebleSchema,
   searchInmueblesQuerySchema,
+  listCambiosQuerySchema,
 } from './inmuebles.schema';
 import * as inmueblesController from './inmuebles.controller';
 
@@ -39,6 +40,20 @@ router.get(
   authorize('inmuebles', 'read'),
   validate({ params: inmuebleIdParamsSchema }),
   inmueblesController.getById,
+);
+
+router.get(
+  '/:id/cambios',
+  authorize('inmuebles', 'read'),
+  validate({ params: inmuebleIdParamsSchema, query: listCambiosQuerySchema }),
+  inmueblesController.listCambios,
+);
+
+router.get(
+  '/:id/cambios/resumen',
+  authorize('inmuebles', 'read'),
+  validate({ params: inmuebleIdParamsSchema }),
+  inmueblesController.getCambiosResumen,
 );
 
 router.post(

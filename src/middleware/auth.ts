@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAuth } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
 import { hasPermission, type Resource, type Action } from '@/config/permissions';
@@ -20,7 +20,7 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
 
   const token = authHeader.slice(7);
 
-  const { data: { user }, error } = await supabase.auth.getUser(token);
+  const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
 
   if (error || !user) {
     logger.warn({ error }, 'Token invalido o expirado');

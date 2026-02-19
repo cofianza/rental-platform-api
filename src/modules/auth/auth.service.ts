@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
@@ -8,7 +8,7 @@ import { sendPasswordResetEmail } from '@/lib/email';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput } from './auth.schema';
 
 export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
 
   if (error) {
     logger.warn({ email, error: error.message }, 'Login fallido');
@@ -35,7 +35,7 @@ export async function loginWithEmail({ email, password }: LoginInput, ip?: strin
 
   if (perfil && perfil.estado !== 'activo') {
     // Cerrar la sesion recien creada
-    await supabase.auth.admin.signOut(data.session.access_token);
+    await supabaseAuth.auth.admin.signOut(data.session.access_token);
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
 
@@ -79,7 +79,7 @@ export function getGoogleOAuthUrl() {
 }
 
 export async function refreshSession({ refresh_token }: RefreshInput) {
-  const { data, error } = await supabase.auth.refreshSession({ refresh_token });
+  const { data, error } = await supabaseAuth.auth.refreshSession({ refresh_token });
 
   if (error || !data.session) {
     throw AppError.unauthorized('Refresh token invalido o expirado', 'INVALID_REFRESH_TOKEN');
@@ -93,7 +93,7 @@ export async function refreshSession({ refresh_token }: RefreshInput) {
 }
 
 export async function logout(accessToken: string, userId?: string, ip?: string) {
-  const { error } = await supabase.auth.admin.signOut(accessToken);
+  const { error } = await supabaseAuth.auth.admin.signOut(accessToken);
 
   if (error) {
     logger.warn({ error: error.message }, 'Error al cerrar sesion');
@@ -123,7 +123,7 @@ export async function getProfile(userId: string) {
   }
 
   // Obtener email de auth.users
-  const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(userId);
+  const { data: { user }, error: userError } = await supabaseAuth.auth.admin.getUserById(userId);
 
   if (userError || !user) {
     throw AppError.notFound('Usuario no encontrado');
@@ -159,7 +159,7 @@ export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string
   const userId = userResult.id;
 
   // Verificar si es cuenta Google-only (sin password)
-  const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
+  const { data: userData, error: userError } = await supabaseAuth.auth.admin.getUserById(userId);
 
   if (userError || !userData?.user) {
     logger.error({ userId, error: userError?.message }, 'Error al obtener usuario');
@@ -258,7 +258,7 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
   }
 
   // Actualizar contrasena en Supabase Auth
-  const { error: updateError } = await supabase.auth.admin.updateUserById(tokenData.user_id, {
+  const { error: updateError } = await supabaseAuth.auth.admin.updateUserById(tokenData.user_id, {
     password,
   });
 
@@ -274,7 +274,7 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
     .eq('id', tokenData.id);
 
   // Revocar todas las sesiones del usuario
-  await supabase.auth.admin.signOut(tokenData.user_id, 'global');
+  await supabaseAuth.auth.admin.signOut(tokenData.user_id, 'global');
 
   logAudit({
     usuarioId: tokenData.user_id,

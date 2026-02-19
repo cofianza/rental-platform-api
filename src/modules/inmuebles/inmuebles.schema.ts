@@ -119,8 +119,20 @@ export const searchInmueblesQuerySchema = z.object({
   { message: 'El area minima no puede ser mayor al area maxima', path: ['area_min'] },
 );
 
+// --- Historial de cambios ---
+export const listCambiosQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  campo: z.string().max(100).optional(),
+  usuario_id: z.string().uuid('ID de usuario invalido').optional(),
+  date_from: z.string().optional(),
+  date_to: z.string().optional(),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+
 export type InmuebleIdParams = z.infer<typeof inmuebleIdParamsSchema>;
 export type CreateInmuebleInput = z.infer<typeof createInmuebleSchema>;
 export type UpdateInmuebleInput = z.infer<typeof updateInmuebleSchema>;
 export type ListInmueblesQuery = z.infer<typeof listInmueblesQuerySchema>;
 export type SearchInmueblesQuery = z.infer<typeof searchInmueblesQuerySchema>;
+export type ListCambiosQuery = z.infer<typeof listCambiosQuerySchema>;

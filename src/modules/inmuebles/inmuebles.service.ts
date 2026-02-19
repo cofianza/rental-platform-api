@@ -215,17 +215,23 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
     throw AppError.badRequest('No se proporcionaron campos para actualizar');
   }
 
-  const { error } = await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .update(updateData as never)
-    .eq('id', id);
+  // Update atomico via RPC: actualiza inmueble + registra cambios por campo en una transaccion
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: rpcResult, error: rpcError } = await (supabase as any).rpc('update_inmueble_con_cambios', {
+    p_id: id,
+    p_data: updateData,
+    p_user_id: updatedBy,
+  });
 
-  if (error) {
-    logger.error({ error: error.message, id }, 'Error al actualizar inmueble');
+  if (rpcError) {
+    logger.error({ error: rpcError, id }, 'Error al actualizar inmueble con cambios');
+    if (rpcError.message?.includes('no encontrado')) {
+      throw AppError.notFound('Inmueble no encontrado');
+    }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el inmueble');
   }
 
-  // Diff before/after para auditoria
+  // Diff before/after para bitacora general (mantener log general)
   const before: Record<string, unknown> = {};
   for (const key of Object.keys(updateData)) {
     before[key] = (previous as unknown as Record<string, unknown>)[key];
@@ -236,7 +242,7 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
     accion: AUDIT_ACTIONS.INMUEBLE_UPDATED,
     entidad: AUDIT_ENTITIES.INMUEBLE,
     entidadId: id,
-    detalle: { before, after: updateData },
+    detalle: { before, after: updateData, changes_count: rpcResult?.changes_count },
     ip,
   });
 
