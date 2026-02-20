@@ -50,12 +50,20 @@ const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, ti
 
 const INMUEBLE_WITH_OWNER = `${INMUEBLE_FIELDS}, perfiles!inmuebles_propietario_id_fkey(id, nombre, apellido, telefono)`;
 
+interface PropietarioWithEmail {
+  id: string;
+  nombre: string;
+  apellido: string;
+  telefono: string | null;
+  email?: string;
+}
+
 function mapWithOwner(row: InmuebleWithOwnerRow) {
   const { perfiles, ...inmueble } = row;
   return {
     ...inmueble,
     propietario: perfiles
-      ? { id: perfiles.id, nombre: perfiles.nombre, apellido: perfiles.apellido, telefono: perfiles.telefono }
+      ? { id: perfiles.id, nombre: perfiles.nombre, apellido: perfiles.apellido, telefono: perfiles.telefono } as PropietarioWithEmail
       : null,
   };
 }
@@ -131,7 +139,26 @@ export async function getInmuebleById(id: string) {
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el inmueble');
   }
 
-  return mapWithOwner(data as unknown as InmuebleWithOwnerRow);
+  const inmueble = mapWithOwner(data as unknown as InmuebleWithOwnerRow);
+
+  // Obtener email del propietario desde auth.users usando RPC
+  if (inmueble.propietario) {
+    const propietarioId = inmueble.propietario.id;
+    try {
+      const { data: userData } = await supabase
+        .rpc('get_user_with_email' as never, { user_id: propietarioId } as never);
+
+      const userRows = userData as unknown as Array<{ email: string }> | null;
+      if (userRows && userRows.length > 0) {
+        inmueble.propietario.email = userRows[0].email;
+      }
+    } catch (err) {
+      // Si falla obtener email, continuar sin él
+      logger.warn({ propietarioId }, 'No se pudo obtener email del propietario');
+    }
+  }
+
+  return inmueble;
 }
 
 export async function createInmueble(input: CreateInmuebleInput, createdBy: string, ip?: string) {
