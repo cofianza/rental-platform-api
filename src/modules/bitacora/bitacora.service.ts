@@ -85,7 +85,7 @@ export async function listAuditLogs(query: ListAuditLogsQuery) {
     pagination: {
       total,
       page,
-      size: limit,
+      limit,
       totalPages: Math.ceil(total / limit),
     },
   };

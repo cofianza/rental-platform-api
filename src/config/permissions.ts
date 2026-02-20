@@ -65,7 +65,7 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     estudios: ['create', 'read', 'update'],
     contratos: ['create', 'read', 'update'],
     plantillas: ['read'],
-    inmuebles: ['create', 'read', 'update', 'delete'],
+    inmuebles: ['create', 'read', 'update'],
     reportes: ['read', 'export'],
     configuracion: [],
     bitacora: [],

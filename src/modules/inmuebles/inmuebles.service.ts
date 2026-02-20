@@ -110,7 +110,7 @@ export async function listInmuebles(query: ListInmueblesQuery) {
     pagination: {
       total,
       page,
-      size: limit,
+      limit,
       totalPages: Math.ceil(total / limit),
     },
   };
@@ -350,10 +350,30 @@ export async function searchInmuebles(query: SearchInmueblesQuery) {
     pagination: {
       total,
       page,
-      size: limit,
+      limit,
       totalPages: Math.ceil(total / limit),
     },
   };
+}
+
+/**
+ * Valida que un inmueble no esté en estado 'en_estudio'.
+ * Invocable desde el módulo de estudios antes de iniciar uno nuevo (AC 10).
+ * @throws 409 si el inmueble ya tiene un estudio en curso.
+ */
+export async function validateDisponibleParaEstudio(inmuebleId: string) {
+  const inmueble = await getInmuebleById(inmuebleId);
+  const estado = (inmueble as unknown as Record<string, unknown>).estado;
+
+  if (estado === 'en_estudio') {
+    throw new AppError(
+      409,
+      'INMUEBLE_EN_ESTUDIO',
+      'El inmueble ya tiene un estudio en curso. No se permite iniciar otro estudio mientras esté en estado "En Estudio"',
+    );
+  }
+
+  return inmueble;
 }
 
 export async function getFilterOptions() {

@@ -54,7 +54,7 @@ export async function listUsers(query: ListUsersQuery) {
     pagination: {
       total,
       page,
-      size: limit,
+      limit,
       totalPages: Math.ceil(total / limit),
     },
   };

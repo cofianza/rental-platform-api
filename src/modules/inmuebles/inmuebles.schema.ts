@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const TIPOS_INMUEBLE = ['apartamento', 'casa', 'oficina', 'local', 'bodega'] as const;
-const USOS_INMUEBLE = ['vivienda', 'comercial'] as const;
+const USOS_INMUEBLE = ['vivienda', 'local_comercial'] as const;
 const ESTADOS_INMUEBLE = ['disponible', 'en_estudio', 'ocupado', 'inactivo'] as const;
 
 export const inmuebleIdParamsSchema = z.object({

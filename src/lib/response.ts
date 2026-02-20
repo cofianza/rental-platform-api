@@ -2,7 +2,7 @@ import { Response } from 'express';
 
 interface PaginationMeta {
   page: number;
-  size: number;
+  limit: number;
   total: number;
   totalPages: number;
 }

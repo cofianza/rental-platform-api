@@ -89,7 +89,7 @@ export async function listCambios(inmuebleId: string, query: ListCambiosQuery) {
     pagination: {
       total,
       page,
-      size: limit,
+      limit,
       totalPages: Math.ceil(total / limit),
     },
   };
