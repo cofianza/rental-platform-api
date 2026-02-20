@@ -77,7 +77,7 @@ export const listInmueblesQuerySchema = z.object({
   propietario_id: z.string().uuid().optional(),
   visible_vitrina: z.enum(['true', 'false']).optional(),
   include_inactive: z.enum(['true', 'false']).optional(),
-  sortBy: z.enum(['created_at', 'valor_arriendo', 'ciudad', 'codigo', 'area_m2']).default('created_at'),
+  sortBy: z.enum(['created_at', 'valor_arriendo', 'ciudad', 'codigo', 'area_m2', 'tipo', 'estrato', 'estado']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
