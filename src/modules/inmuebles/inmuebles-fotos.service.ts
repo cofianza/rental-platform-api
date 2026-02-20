@@ -99,9 +99,9 @@ export async function createFoto(
       .eq('es_fachada', true);
   }
 
-  // Calcular orden si no se proporciona
+  // Calcular orden si no se proporciona (undefined/null, no 0)
   let orden = input.orden;
-  if (orden === 0) {
+  if (orden === undefined || orden === null) {
     const { data: lastFoto } = await (supabase
       .from('fotos_inmueble' as string) as ReturnType<typeof supabase.from>)
       .select('orden')
@@ -238,6 +238,19 @@ export async function updateFoto(
 }
 
 /**
+ * Extrae el path de storage desde una URL pública de Supabase
+ */
+function extractStoragePath(url: string): string | null {
+  try {
+    // URL format: https://<project>.supabase.co/storage/v1/object/public/inmuebles/<path>
+    const match = url.match(/\/storage\/v1\/object\/public\/inmuebles\/(.+)$/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Eliminar una foto
  */
 export async function deleteFoto(
@@ -260,6 +273,22 @@ export async function deleteFoto(
 
   const foto = existing as unknown as FotoRow;
 
+  // Eliminar del storage de Supabase antes de eliminar de BD
+  const storagePath = extractStoragePath(foto.url);
+  if (storagePath) {
+    const { error: storageError } = await supabase.storage
+      .from('inmuebles')
+      .remove([storagePath]);
+
+    if (storageError) {
+      logger.warn({ error: storageError.message, path: storagePath, fotoId }, 'Error al eliminar archivo del storage');
+      // No lanzar error, continuar con eliminación de BD
+    } else {
+      logger.info({ path: storagePath, fotoId }, 'Archivo eliminado del storage');
+    }
+  }
+
+  // Eliminar de la base de datos
   const { error } = await (supabase
     .from('fotos_inmueble' as string) as ReturnType<typeof supabase.from>)
     .delete()

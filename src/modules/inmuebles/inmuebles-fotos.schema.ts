@@ -25,11 +25,27 @@ export const createFotoSchema = z.object({
   url: z.string().url('URL de imagen inválida'),
   url_thumbnail: z.string().url('URL de thumbnail inválida').optional().nullable(),
   descripcion: z.string().max(500, 'Descripción muy larga').optional().nullable(),
-  orden: z.coerce.number().int().min(0, 'Orden no puede ser negativo').default(0),
+  orden: z.coerce.number().int().min(0, 'Orden no puede ser negativo').optional(),
   es_fachada: z.boolean().default(false),
   tamaño_archivo: z.coerce.number().int().min(0).optional().nullable(),
   tipo_archivo: z.string().max(50).optional().nullable(),
-});
+}).refine(
+  (data) => {
+    if (data.tamaño_archivo && data.tamaño_archivo > FOTO_LIMITS.MAX_FILE_SIZE) {
+      return false;
+    }
+    return true;
+  },
+  { message: `El archivo excede el tamaño máximo de ${FOTO_LIMITS.MAX_FILE_SIZE / (1024 * 1024)}MB`, path: ['tamaño_archivo'] }
+).refine(
+  (data) => {
+    if (data.tipo_archivo && !FOTO_LIMITS.ALLOWED_TYPES.includes(data.tipo_archivo as typeof FOTO_LIMITS.ALLOWED_TYPES[number])) {
+      return false;
+    }
+    return true;
+  },
+  { message: `Tipo de archivo no permitido. Solo: ${FOTO_LIMITS.ALLOWED_TYPES.join(', ')}`, path: ['tipo_archivo'] }
+);
 
 export const updateFotoSchema = z.object({
   descripcion: z.string().max(500, 'Descripción muy larga').optional().nullable(),
