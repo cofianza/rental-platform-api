@@ -5,7 +5,7 @@ const USOS_INMUEBLE = ['vivienda', 'local_comercial'] as const;
 const ESTADOS_INMUEBLE = ['disponible', 'en_estudio', 'ocupado', 'inactivo'] as const;
 
 export const inmuebleIdParamsSchema = z.object({
-  id: z.string().uuid('ID de inmueble invalido'),
+  id: z.uuid({ error: 'ID de inmueble invalido' }),
 });
 
 export const createInmuebleSchema = z.object({
@@ -13,8 +13,8 @@ export const createInmuebleSchema = z.object({
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga'),
   barrio: z.string().max(100, 'Barrio muy largo').optional(),
   departamento: z.string().min(1, 'Departamento requerido').max(100, 'Departamento muy largo'),
-  tipo: z.enum(TIPOS_INMUEBLE, { message: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}` }),
-  uso: z.enum(USOS_INMUEBLE, { message: `Uso invalido. Valores permitidos: ${USOS_INMUEBLE.join(', ')}` }).default('vivienda'),
+  tipo: z.enum(TIPOS_INMUEBLE, { error: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}` }),
+  uso: z.enum(USOS_INMUEBLE, { error: `Uso invalido. Valores permitidos: ${USOS_INMUEBLE.join(', ')}` }).default('vivienda'),
   destinacion: z.string().max(500, 'Destinacion muy larga').optional(),
   estrato: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6'),
   valor_arriendo: z.coerce.number().positive('Valor de arriendo debe ser mayor a 0'),
@@ -31,9 +31,9 @@ export const createInmuebleSchema = z.object({
   longitud: z.coerce.number().min(-180, 'Longitud invalida').max(180, 'Longitud invalida').optional(),
   descripcion: z.string().max(2000, 'Descripcion muy larga').optional(),
   notas_internas: z.string().max(2000, 'Notas muy largas').optional(),
-  propietario_id: z.string().uuid('ID de propietario invalido'),
+  propietario_id: z.uuid({ error: 'ID de propietario invalido' }),
   visible_vitrina: z.boolean().default(false),
-  foto_fachada_url: z.string().url('URL de foto de fachada invalida'),
+  foto_fachada_url: z.url({ error: 'URL de foto de fachada invalida' }),
 });
 
 export const updateInmuebleSchema = z.object({
@@ -41,8 +41,8 @@ export const updateInmuebleSchema = z.object({
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga').optional(),
   barrio: z.string().max(100, 'Barrio muy largo').nullable().optional(),
   departamento: z.string().min(1, 'Departamento requerido').max(100, 'Departamento muy largo').optional(),
-  tipo: z.enum(TIPOS_INMUEBLE, { message: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}` }).optional(),
-  uso: z.enum(USOS_INMUEBLE, { message: `Uso invalido. Valores permitidos: ${USOS_INMUEBLE.join(', ')}` }).optional(),
+  tipo: z.enum(TIPOS_INMUEBLE, { error: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}` }).optional(),
+  uso: z.enum(USOS_INMUEBLE, { error: `Uso invalido. Valores permitidos: ${USOS_INMUEBLE.join(', ')}` }).optional(),
   destinacion: z.string().max(500, 'Destinacion muy larga').nullable().optional(),
   estrato: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6').optional(),
   valor_arriendo: z.coerce.number().positive('Valor de arriendo debe ser mayor a 0').optional(),
@@ -59,10 +59,10 @@ export const updateInmuebleSchema = z.object({
   longitud: z.coerce.number().min(-180, 'Longitud invalida').max(180, 'Longitud invalida').nullable().optional(),
   descripcion: z.string().max(2000, 'Descripcion muy larga').nullable().optional(),
   notas_internas: z.string().max(2000, 'Notas muy largas').nullable().optional(),
-  propietario_id: z.string().uuid('ID de propietario invalido').optional(),
+  propietario_id: z.uuid({ error: 'ID de propietario invalido' }).optional(),
   visible_vitrina: z.boolean().optional(),
-  foto_fachada_url: z.string().url('URL de foto de fachada invalida').optional(),
-  estado: z.enum(ESTADOS_INMUEBLE, { message: `Estado invalido. Valores permitidos: ${ESTADOS_INMUEBLE.join(', ')}` }).optional(),
+  foto_fachada_url: z.url({ error: 'URL de foto de fachada invalida' }).optional(),
+  estado: z.enum(ESTADOS_INMUEBLE, { error: `Estado invalido. Valores permitidos: ${ESTADOS_INMUEBLE.join(', ')}` }).optional(),
 });
 
 export const listInmueblesQuerySchema = z.object({
@@ -74,7 +74,7 @@ export const listInmueblesQuerySchema = z.object({
   estado: z.enum(ESTADOS_INMUEBLE).optional(),
   ciudad: z.string().optional(),
   estrato: z.coerce.number().int().min(1).max(6).optional(),
-  propietario_id: z.string().uuid().optional(),
+  propietario_id: z.uuid().optional(),
   visible_vitrina: z.enum(['true', 'false']).optional(),
   include_inactive: z.enum(['true', 'false']).optional(),
   sortBy: z.enum(['created_at', 'valor_arriendo', 'ciudad', 'codigo', 'area_m2', 'tipo', 'estrato', 'estado']).default('created_at'),
@@ -90,7 +90,7 @@ export const searchInmueblesQuerySchema = z.object({
   city: z.string().optional(),
   state: z.string().optional(),
   property_type: z.enum(TIPOS_INMUEBLE, {
-    message: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}`,
+    error: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}`,
   }).optional(),
   stratum_min: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6').optional(),
   stratum_max: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6').optional(),
@@ -102,7 +102,7 @@ export const searchInmueblesQuerySchema = z.object({
   bathrooms_min: z.coerce.number().int().min(0, 'Banos no puede ser negativo').optional(),
   neighborhood: z.string().optional(),
   status: z.enum(ESTADOS_BUSQUEDA, {
-    message: `Estado invalido. Valores permitidos: ${ESTADOS_BUSQUEDA.join(', ')}`,
+    error: `Estado invalido. Valores permitidos: ${ESTADOS_BUSQUEDA.join(', ')}`,
   }).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -110,13 +110,13 @@ export const searchInmueblesQuerySchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 }).refine(
   (data) => !(data.stratum_min && data.stratum_max && data.stratum_min > data.stratum_max),
-  { message: 'El estrato minimo no puede ser mayor al maximo', path: ['stratum_min'] },
+  { error: 'El estrato minimo no puede ser mayor al maximo', path: ['stratum_min'] },
 ).refine(
   (data) => !(data.rent_min && data.rent_max && data.rent_min > data.rent_max),
-  { message: 'El valor minimo de arriendo no puede ser mayor al maximo', path: ['rent_min'] },
+  { error: 'El valor minimo de arriendo no puede ser mayor al maximo', path: ['rent_min'] },
 ).refine(
   (data) => !(data.area_min && data.area_max && data.area_min > data.area_max),
-  { message: 'El area minima no puede ser mayor al area maxima', path: ['area_min'] },
+  { error: 'El area minima no puede ser mayor al area maxima', path: ['area_min'] },
 );
 
 // --- Historial de cambios ---
@@ -124,7 +124,7 @@ export const listCambiosQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   campo: z.string().max(100).optional(),
-  usuario_id: z.string().uuid('ID de usuario invalido').optional(),
+  usuario_id: z.uuid({ error: 'ID de usuario invalido' }).optional(),
   date_from: z.string().optional(),
   date_to: z.string().optional(),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),

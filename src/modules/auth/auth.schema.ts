@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const loginSchema = z.object({
-  email: z.string().email('Email invalido'),
+  email: z.email({ error: 'Email invalido' }),
   password: z.string().min(1, 'Contrasena requerida'),
 });
 
@@ -10,7 +10,7 @@ export const refreshSchema = z.object({
 });
 
 export const forgotPasswordSchema = z.object({
-  email: z.string().email('Email invalido'),
+  email: z.email({ error: 'Email invalido' }),
 });
 
 export const resetPasswordSchema = z.object({

@@ -40,23 +40,23 @@ const colombianPhoneSchema = z
 export const registerPropietarioSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
   apellido: z.string().min(1, 'Apellido requerido').max(100, 'Apellido muy largo'),
-  email: z.string().email('Email invalido'),
+  email: z.email({ error: 'Email invalido' }),
   telefono: colombianPhoneSchema,
   tipo_documento: z.enum(['cc', 'ce', 'pasaporte'], {
-    message: 'Tipo de documento invalido',
+    error: 'Tipo de documento invalido',
   }),
   numero_documento: z.string().min(1, 'Numero de documento requerido').max(20, 'Numero muy largo'),
   direccion: z.string().min(1, 'Direccion requerida').max(300, 'Direccion muy larga'),
   password: passwordSchema,
   confirm_password: z.string().min(1, 'Confirmacion de contrasena requerida'),
   accept_terms: z.literal(true, {
-    message: 'Debes aceptar los terminos y condiciones',
+    error: 'Debes aceptar los terminos y condiciones',
   }),
   accept_data_treatment: z.literal(true, {
-    message: 'Debes autorizar el tratamiento de datos personales',
+    error: 'Debes autorizar el tratamiento de datos personales',
   }),
 }).refine((data) => data.password === data.confirm_password, {
-  message: 'Las contrasenas no coinciden',
+  error: 'Las contrasenas no coinciden',
   path: ['confirm_password'],
 });
 
@@ -72,18 +72,18 @@ export const registerInmobiliariaSchema = z.object({
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga'),
   nombre_representante_nombre: z.string().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
   nombre_representante_apellido: z.string().min(1, 'Apellido del representante requerido').max(100, 'Apellido muy largo'),
-  email: z.string().email('Email invalido'),
+  email: z.email({ error: 'Email invalido' }),
   telefono: colombianPhoneSchema,
   password: passwordSchema,
   confirm_password: z.string().min(1, 'Confirmacion de contrasena requerida'),
   accept_terms: z.literal(true, {
-    message: 'Debes aceptar los terminos y condiciones',
+    error: 'Debes aceptar los terminos y condiciones',
   }),
   accept_data_treatment: z.literal(true, {
-    message: 'Debes autorizar el tratamiento de datos personales',
+    error: 'Debes autorizar el tratamiento de datos personales',
   }),
 }).refine((data) => data.password === data.confirm_password, {
-  message: 'Las contrasenas no coinciden',
+  error: 'Las contrasenas no coinciden',
   path: ['confirm_password'],
 });
 
@@ -92,7 +92,7 @@ export const verifyEmailParamsSchema = z.object({
 });
 
 export const resendVerificationSchema = z.object({
-  email: z.string().email('Email invalido'),
+  email: z.email({ error: 'Email invalido' }),
 });
 
 export type RegisterPropietarioInput = z.infer<typeof registerPropietarioSchema>;

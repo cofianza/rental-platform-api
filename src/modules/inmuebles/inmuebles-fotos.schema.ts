@@ -12,18 +12,18 @@ export const FOTO_LIMITS = {
 
 // Params
 export const fotoIdParamsSchema = z.object({
-  id: z.string().uuid('ID de inmueble inválido'),
-  fotoId: z.string().uuid('ID de foto inválido'),
+  id: z.uuid({ error: 'ID de inmueble inválido' }),
+  fotoId: z.uuid({ error: 'ID de foto inválido' }),
 });
 
 export const inmuebleIdOnlyParamsSchema = z.object({
-  id: z.string().uuid('ID de inmueble inválido'),
+  id: z.uuid({ error: 'ID de inmueble inválido' }),
 });
 
 // Body schemas
 export const createFotoSchema = z.object({
-  url: z.string().url('URL de imagen inválida'),
-  url_thumbnail: z.string().url('URL de thumbnail inválida').optional().nullable(),
+  url: z.url({ error: 'URL de imagen inválida' }),
+  url_thumbnail: z.url({ error: 'URL de thumbnail inválida' }).optional().nullable(),
   descripcion: z.string().max(500, 'Descripción muy larga').optional().nullable(),
   orden: z.coerce.number().int().min(0, 'Orden no puede ser negativo').optional(),
   es_fachada: z.boolean().default(false),
@@ -36,7 +36,7 @@ export const createFotoSchema = z.object({
     }
     return true;
   },
-  { message: `El archivo excede el tamaño máximo de ${FOTO_LIMITS.MAX_FILE_SIZE / (1024 * 1024)}MB`, path: ['tamaño_archivo'] }
+  { error: `El archivo excede el tamaño máximo de ${FOTO_LIMITS.MAX_FILE_SIZE / (1024 * 1024)}MB`, path: ['tamaño_archivo'] }
 ).refine(
   (data) => {
     if (data.tipo_archivo && !FOTO_LIMITS.ALLOWED_TYPES.includes(data.tipo_archivo as typeof FOTO_LIMITS.ALLOWED_TYPES[number])) {
@@ -44,7 +44,7 @@ export const createFotoSchema = z.object({
     }
     return true;
   },
-  { message: `Tipo de archivo no permitido. Solo: ${FOTO_LIMITS.ALLOWED_TYPES.join(', ')}`, path: ['tipo_archivo'] }
+  { error: `Tipo de archivo no permitido. Solo: ${FOTO_LIMITS.ALLOWED_TYPES.join(', ')}`, path: ['tipo_archivo'] }
 );
 
 export const updateFotoSchema = z.object({
@@ -54,11 +54,11 @@ export const updateFotoSchema = z.object({
 });
 
 export const reordenarFotosSchema = z.object({
-  foto_ids: z.array(z.string().uuid('ID de foto inválido')).min(1, 'Se requiere al menos un ID de foto'),
+  foto_ids: z.array(z.uuid({ error: 'ID de foto inválido' })).min(1, 'Se requiere al menos un ID de foto'),
 });
 
 export const setFachadaSchema = z.object({
-  foto_id: z.string().uuid('ID de foto inválido'),
+  foto_id: z.uuid({ error: 'ID de foto inválido' }),
 });
 
 // Types
