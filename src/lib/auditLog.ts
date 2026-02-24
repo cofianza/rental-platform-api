@@ -22,6 +22,10 @@ export const AUDIT_ACTIONS = {
   FOTO_DELETED: 'foto_deleted',
   FOTO_SET_FACHADA: 'foto_set_fachada',
   FOTOS_REORDERED: 'fotos_reordered',
+  // Solicitantes
+  SOLICITANTE_CREATED: 'solicitante_created',
+  SOLICITANTE_UPDATED: 'solicitante_updated',
+  SOLICITANTE_DEACTIVATED: 'solicitante_deactivated',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -30,6 +34,7 @@ export const AUDIT_ENTITIES = {
   CONFIG: 'config',
   INMUEBLE: 'inmueble',
   FOTO_INMUEBLE: 'foto_inmueble',
+  SOLICITANTE: 'solicitante',
 } as const;
 
 interface AuditLogParams {
