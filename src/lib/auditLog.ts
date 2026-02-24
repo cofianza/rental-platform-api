@@ -29,6 +29,10 @@ export const AUDIT_ACTIONS = {
   // Expedientes
   EXPEDIENTE_CREATED: 'expediente_created',
   EXPEDIENTE_UPDATED: 'expediente_updated',
+  // Comentarios
+  COMMENT_CREATED: 'comment_created',
+  COMMENT_UPDATED: 'comment_updated',
+  COMMENT_DELETED: 'comment_deleted',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -39,6 +43,7 @@ export const AUDIT_ENTITIES = {
   FOTO_INMUEBLE: 'foto_inmueble',
   SOLICITANTE: 'solicitante',
   EXPEDIENTE: 'expediente',
+  COMENTARIO: 'comentario',
 } as const;
 
 interface AuditLogParams {
