@@ -39,3 +39,8 @@ export async function activate(req: Request, res: Response) {
   const user = await usersService.activateUser(id, req.user!.id, req.ip);
   sendSuccess(res, user);
 }
+
+export async function listOperators(_req: Request, res: Response) {
+  const operators = await usersService.listOperators();
+  sendSuccess(res, operators);
+}

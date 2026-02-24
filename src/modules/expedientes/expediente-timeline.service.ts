@@ -29,6 +29,7 @@ interface EventoTimelineRow {
   estado_anterior: string | null;
   estado_nuevo: string | null;
   comentario: string | null;
+  metadata: Record<string, unknown> | null;
   usuario_id: string;
   created_at: string;
   usuario: { id: string; nombre: string; apellido: string } | null;
@@ -129,7 +130,7 @@ async function queryEventosTimeline(
   const { data, error } = await (supabase
     .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, expediente_id, tipo, descripcion, estado_anterior, estado_nuevo, comentario,
+      id, expediente_id, tipo, descripcion, estado_anterior, estado_nuevo, comentario, metadata,
       usuario_id, created_at,
       usuario:perfiles!eventos_timeline_usuario_id_fkey(id, nombre, apellido)
     `)
@@ -154,7 +155,14 @@ async function queryEventosTimeline(
       descripcion: row.descripcion,
       detalle: isTransition
         ? { estado_anterior: row.estado_anterior, estado_nuevo: row.estado_nuevo, comentario: row.comentario }
-        : null,
+        : row.metadata
+          ? {
+              analista_anterior: row.metadata.analista_anterior || null,
+              analista_nuevo: row.metadata.analista_nuevo || null,
+              analista_anterior_id: row.metadata.analista_anterior_id || null,
+              analista_nuevo_id: row.metadata.analista_nuevo_id || null,
+            }
+          : null,
       usuario_id: row.usuario_id,
       usuario: row.usuario || { id: row.usuario_id, nombre: 'Usuario', apellido: '' },
       created_at: row.created_at,

@@ -252,6 +252,26 @@ export async function activateUser(userId: string, requestingUserId: string, ip?
   return getUserById(userId);
 }
 
+// ============================================================
+// Operators (HP-285)
+// ============================================================
+
+export async function listOperators() {
+  const { data, error } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('id, nombre, apellido, rol')
+    .in('rol', ['administrador', 'operador_analista'])
+    .eq('estado', 'activo')
+    .order('nombre', { ascending: true });
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al listar operadores');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener la lista de operadores');
+  }
+
+  return (data as unknown as Array<{ id: string; nombre: string; apellido: string; rol: string }>) || [];
+}
+
 // Helpers
 
 function generateTempPassword(): string {

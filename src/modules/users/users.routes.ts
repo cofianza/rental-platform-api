@@ -6,8 +6,14 @@ import * as usersController from './users.controller';
 
 const router = Router();
 
-// Todas las rutas requieren autenticacion + rol administrador
-router.use(authMiddleware, roleGuard(['administrador']));
+// All routes require authentication
+router.use(authMiddleware);
+
+// GET /users/operators — accessible to admin + operador_analista (HP-285)
+router.get('/operators', roleGuard(['administrador', 'operador_analista']), usersController.listOperators);
+
+// All remaining routes require administrador role
+router.use(roleGuard(['administrador']));
 
 router.get('/', validate({ query: listUsersQuerySchema }), usersController.list);
 router.get('/:id', validate({ params: userIdParamsSchema }), usersController.getById);
