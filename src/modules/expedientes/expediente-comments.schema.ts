@@ -14,7 +14,7 @@ export const createCommentSchema = z.object({
   texto: z
     .string()
     .min(1, { error: 'El comentario no puede estar vacio' })
-    .max(5000, 'El comentario no debe exceder 5000 caracteres'),
+    .max(5000, { error: 'El comentario no debe exceder 5000 caracteres' }),
   is_internal: z.boolean().default(true).optional(),
 });
 
@@ -23,7 +23,7 @@ export const updateCommentSchema = z.object({
   texto: z
     .string()
     .min(1, { error: 'El comentario no puede estar vacio' })
-    .max(5000, 'El comentario no debe exceder 5000 caracteres'),
+    .max(5000, { error: 'El comentario no debe exceder 5000 caracteres' }),
 });
 
 export type CommentParams = z.infer<typeof commentParamsSchema>;

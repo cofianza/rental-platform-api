@@ -14,14 +14,14 @@ export const createExpedienteSchema = z.object({
   inmueble_id: z.uuid({ error: 'ID de inmueble invalido' }),
   solicitante_id: z.uuid({ error: 'ID de solicitante invalido' }),
   analista_id: z.uuid({ error: 'ID de analista invalido' }).optional(),
-  notas: z.string().max(5000, 'Notas no deben exceder 5000 caracteres').optional(),
+  notas: z.string().max(5000, { error: 'Notas no deben exceder 5000 caracteres' }).optional(),
   // Codeudor (opcional)
-  codeudor_nombre: z.string().max(200, 'Nombre del codeudor no debe exceder 200 caracteres').optional(),
+  codeudor_nombre: z.string().max(200, { error: 'Nombre del codeudor no debe exceder 200 caracteres' }).optional(),
   codeudor_tipo_documento: z.enum(TIPOS_DOCUMENTO, {
     error: `Tipo de documento del codeudor invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
   }).optional(),
-  codeudor_documento: z.string().max(20, 'Documento del codeudor no debe exceder 20 caracteres').optional(),
-  codeudor_parentesco: z.string().max(50, 'Parentesco del codeudor no debe exceder 50 caracteres').optional(),
+  codeudor_documento: z.string().max(20, { error: 'Documento del codeudor no debe exceder 20 caracteres' }).optional(),
+  codeudor_parentesco: z.string().max(50, { error: 'Parentesco del codeudor no debe exceder 50 caracteres' }).optional(),
 });
 
 // ============================================================
@@ -30,7 +30,7 @@ export const createExpedienteSchema = z.object({
 
 export const updateExpedienteSchema = z.object({
   analista_id: z.uuid({ error: 'ID de analista invalido' }).nullable().optional(),
-  notas: z.string().max(5000, 'Notas no deben exceder 5000 caracteres').nullable().optional(),
+  notas: z.string().max(5000, { error: 'Notas no deben exceder 5000 caracteres' }).nullable().optional(),
   // Codeudor editable tambien
   codeudor_nombre: z.string().max(200).nullable().optional(),
   codeudor_tipo_documento: z.enum(TIPOS_DOCUMENTO, {
