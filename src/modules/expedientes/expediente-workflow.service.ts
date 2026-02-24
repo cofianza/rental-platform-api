@@ -8,6 +8,7 @@ import {
   type EstadoExpediente,
   type PreconditionId,
 } from './expediente-state-machine';
+import { getExpedienteById } from './expedientes.service';
 import type { AuthUser } from '@/types/auth';
 import type { TransitionInput } from './expediente-workflow.schema';
 
@@ -31,7 +32,7 @@ interface TransitionRpcResult {
 }
 
 // ============================================================
-// Ejecutar transicion (AC #5, #6, #7, #8, #9, #10)
+// Ejecutar transicion
 // ============================================================
 
 export async function executeTransition(
@@ -70,6 +71,7 @@ export async function executeTransition(
     p_nuevo_estado: targetState,
     p_descripcion: descripcion,
     p_usuario_id: user.id,
+    p_comentario: input.comentario,
   });
 
   if (error) {
@@ -84,24 +86,22 @@ export async function executeTransition(
     'Transicion de expediente ejecutada',
   );
 
+  // Retornar expediente actualizado completo con relaciones
+  const expedienteActualizado = await getExpedienteById(expedienteId);
+
   return {
-    expediente_id: result.expediente_id,
-    numero: expediente.numero,
+    ...expedienteActualizado,
     estado_anterior: result.estado_anterior,
-    estado_nuevo: result.estado_nuevo,
     evento_timeline_id: result.evento_timeline_id,
-    updated_at: result.updated_at,
   };
 }
 
 // ============================================================
-// Obtener transiciones disponibles (AC #12)
+// Obtener transiciones disponibles
 // ============================================================
 
-export async function getTransitionsForExpediente(expedienteId: string, user: AuthUser) {
+export async function getTransitionsForExpediente(expedienteId: string) {
   const expediente = await fetchExpediente(expedienteId);
-  checkPermissions(expediente, user);
-
   const transiciones = getAvailableTransitions(expediente.estado);
 
   return {
@@ -112,21 +112,61 @@ export async function getTransitionsForExpediente(expedienteId: string, user: Au
 }
 
 // ============================================================
+// Historial de transiciones
+// ============================================================
+
+export async function getTransitionHistory(expedienteId: string) {
+  // Verificar que el expediente existe
+  const expediente = await fetchExpediente(expedienteId);
+
+  const { data, error } = await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, estado_anterior, estado_nuevo, comentario, descripcion, created_at,
+      usuario:perfiles!eventos_timeline_usuario_id_fkey(id, nombre, apellido)
+    `)
+    .eq('expediente_id', expedienteId)
+    .eq('tipo', 'estado')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    logger.error({ error: error.message, expedienteId }, 'Error al obtener historial de transiciones');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el historial de transiciones');
+  }
+
+  const rows = (data as unknown as Array<{
+    id: string;
+    estado_anterior: string | null;
+    estado_nuevo: string | null;
+    comentario: string | null;
+    descripcion: string;
+    created_at: string;
+    usuario: { id: string; nombre: string; apellido: string } | null;
+  }>) || [];
+
+  return {
+    expediente_id: expedienteId,
+    estado_actual: expediente.estado,
+    historial: rows,
+  };
+}
+
+// ============================================================
 // Helpers privados
 // ============================================================
 
 async function fetchExpediente(id: string): Promise<ExpedienteRow> {
-  const { data, error } = await supabase
-    .from('expedientes')
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('id, numero, estado, analista_id')
     .eq('id', id)
-    .single<ExpedienteRow>();
+    .single();
 
   if (error || !data) {
     throw AppError.notFound('Expediente no encontrado');
   }
 
-  return data;
+  return data as unknown as ExpedienteRow;
 }
 
 function checkPermissions(expediente: ExpedienteRow, user: AuthUser): void {
@@ -169,8 +209,8 @@ async function checkSinglePrecondition(
     }
 
     case 'DOCUMENTOS_EXISTENTES': {
-      const { count, error } = await supabase
-        .from('documentos')
+      const { count, error } = await (supabase
+        .from('documentos' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('expediente_id', expediente.id);
 
@@ -185,8 +225,8 @@ async function checkSinglePrecondition(
     }
 
     case 'ESTUDIO_APROBADO': {
-      const { count, error } = await supabase
-        .from('estudios')
+      const { count, error } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('expediente_id', expediente.id)
         .eq('resultado', 'aprobado');
@@ -202,8 +242,8 @@ async function checkSinglePrecondition(
     }
 
     case 'ESTUDIO_RECHAZADO': {
-      const { count, error } = await supabase
-        .from('estudios')
+      const { count, error } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('expediente_id', expediente.id)
         .eq('resultado', 'rechazado');
@@ -219,8 +259,8 @@ async function checkSinglePrecondition(
     }
 
     case 'ESTUDIO_CONDICIONADO': {
-      const { count, error } = await supabase
-        .from('estudios')
+      const { count, error } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('expediente_id', expediente.id)
         .eq('resultado', 'condicionado');
@@ -236,21 +276,22 @@ async function checkSinglePrecondition(
     }
 
     case 'DOCUMENTOS_NUEVOS_DESDE_ULTIMA_TRANSICION': {
-      const { data: lastEvent } = await supabase
-        .from('eventos_timeline')
+      const { data: lastEvent } = await (supabase
+        .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
         .select('created_at')
         .eq('expediente_id', expediente.id)
         .eq('tipo', 'estado')
         .order('created_at', { ascending: false })
         .limit(1)
-        .single<{ created_at: string }>();
+        .single();
 
       if (lastEvent) {
-        const { count, error } = await supabase
-          .from('documentos')
+        const evt = lastEvent as unknown as { created_at: string };
+        const { count, error } = await (supabase
+          .from('documentos' as string) as ReturnType<typeof supabase.from>)
           .select('id', { count: 'exact', head: true })
           .eq('expediente_id', expediente.id)
-          .gt('created_at', lastEvent.created_at);
+          .gt('created_at', evt.created_at);
 
         if (error || !count || count === 0) {
           throw AppError.badRequest(
@@ -268,8 +309,8 @@ async function checkSinglePrecondition(
         break;
       }
 
-      const { count, error } = await supabase
-        .from('contratos')
+      const { count, error } = await (supabase
+        .from('contratos' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('expediente_id', expediente.id)
         .eq('estado', 'firmado');

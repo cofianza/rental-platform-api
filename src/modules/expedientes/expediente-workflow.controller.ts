@@ -10,8 +10,14 @@ export async function transition(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
-export async function getTransitions(req: Request, res: Response) {
+export async function getAvailableTransitions(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const result = await workflowService.getTransitionsForExpediente(id, req.user!);
+  const result = await workflowService.getTransitionsForExpediente(id);
+  sendSuccess(res, result);
+}
+
+export async function getHistory(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const result = await workflowService.getTransitionHistory(id);
   sendSuccess(res, result);
 }

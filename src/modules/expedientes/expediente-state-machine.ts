@@ -31,6 +31,7 @@ export type PreconditionId =
 export interface TransitionDef {
   from: EstadoExpediente;
   to: EstadoExpediente;
+  label: string;
   preconditions: PreconditionId[];
 }
 
@@ -42,51 +43,61 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   {
     from: 'borrador',
     to: 'en_revision',
+    label: 'Enviar a revision',
     preconditions: ['ANALISTA_ASIGNADO', 'DOCUMENTOS_EXISTENTES'],
   },
   {
     from: 'en_revision',
     to: 'informacion_incompleta',
+    label: 'Solicitar informacion',
     preconditions: [],
   },
   {
     from: 'en_revision',
     to: 'aprobado',
+    label: 'Aprobar expediente',
     preconditions: ['ESTUDIO_APROBADO'],
   },
   {
     from: 'en_revision',
     to: 'rechazado',
+    label: 'Rechazar expediente',
     preconditions: ['ESTUDIO_RECHAZADO'],
   },
   {
     from: 'en_revision',
     to: 'condicionado',
+    label: 'Condicionar expediente',
     preconditions: ['ESTUDIO_CONDICIONADO'],
   },
   {
     from: 'informacion_incompleta',
     to: 'en_revision',
+    label: 'Reenviar a revision',
     preconditions: ['DOCUMENTOS_NUEVOS_DESDE_ULTIMA_TRANSICION'],
   },
   {
     from: 'condicionado',
     to: 'aprobado',
+    label: 'Aprobar expediente',
     preconditions: [],
   },
   {
     from: 'condicionado',
     to: 'rechazado',
+    label: 'Rechazar expediente',
     preconditions: [],
   },
   {
     from: 'aprobado',
     to: 'cerrado',
+    label: 'Cerrar expediente',
     preconditions: ['CONTRATO_FIRMADO_O_MOTIVO'],
   },
   {
     from: 'rechazado',
     to: 'cerrado',
+    label: 'Cerrar expediente',
     preconditions: [],
   },
 ];
@@ -95,8 +106,13 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
 // Funciones puras
 // ============================================================
 
-export function getAvailableTransitions(currentState: EstadoExpediente): EstadoExpediente[] {
-  return TRANSITION_MAP.filter((t) => t.from === currentState).map((t) => t.to);
+export interface AvailableTransition {
+  estado: EstadoExpediente;
+  label: string;
+}
+
+export function getAvailableTransitions(currentState: EstadoExpediente): AvailableTransition[] {
+  return TRANSITION_MAP.filter((t) => t.from === currentState).map((t) => ({ estado: t.to, label: t.label }));
 }
 
 export function isTransitionValid(from: EstadoExpediente, to: EstadoExpediente): boolean {

@@ -35,7 +35,17 @@ vi.mock('@/lib/logger', () => ({
   },
 }));
 
-import { executeTransition, getTransitionsForExpediente } from '../expediente-workflow.service';
+// Mock getExpedienteById from expedientes.service
+const mockGetExpedienteById = vi.fn();
+vi.mock('../expedientes.service', () => ({
+  getExpedienteById: (...args: unknown[]) => mockGetExpedienteById(...args),
+}));
+
+import {
+  executeTransition,
+  getTransitionsForExpediente,
+  getTransitionHistory,
+} from '../expediente-workflow.service';
 
 // Helpers
 const adminUser: AuthUser = { id: 'admin-uuid', email: 'admin@test.com', rol: 'administrador', activo: true };
@@ -49,6 +59,15 @@ const mockExpediente = {
   analista_id: 'analista-uuid',
 };
 
+const mockFullExpediente = {
+  id: 'exp-uuid',
+  numero: 'EXP-2026-0001',
+  estado: 'en_revision',
+  analista_id: 'analista-uuid',
+  propiedad: { id: 'prop-uuid', direccion: 'Calle 1' },
+  solicitante: { id: 'sol-uuid', nombre: 'Juan' },
+};
+
 function setupFetchExpediente(expediente: Record<string, unknown> | null) {
   mockFrom.mockReturnValueOnce({
     select: vi.fn().mockReturnValue({
@@ -60,15 +79,6 @@ function setupFetchExpediente(expediente: Record<string, unknown> | null) {
 }
 
 function setupPreconditionCount(count: number | null, error: Record<string, unknown> | null = null) {
-  const resolvedValue = Promise.resolve({ count, error });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const eqFn: any = vi.fn(() => ({
-    eq: eqFn,
-    then: resolvedValue.then.bind(resolvedValue),
-  }));
-  // Make the eq result thenable so await works on it
-  Object.assign(eqFn(), { then: resolvedValue.then.bind(resolvedValue) });
-
   mockFrom.mockReturnValueOnce({
     select: vi.fn().mockReturnValue({
       eq: vi.fn().mockReturnValue(Object.assign(
@@ -82,33 +92,34 @@ function setupPreconditionCount(count: number | null, error: Record<string, unkn
 describe('expediente-workflow.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetExpedienteById.mockResolvedValue(mockFullExpediente);
   });
 
-  // AC #6: Transiciones invalidas retornan 400 INVALID_TRANSITION
+  // ================================================================
+  // executeTransition - transicion invalida
+  // ================================================================
   describe('executeTransition - transicion invalida', () => {
     it('debe retornar error INVALID_TRANSITION con transiciones validas', async () => {
       setupFetchExpediente(mockExpediente);
 
       await expect(
-        executeTransition('exp-uuid', { nuevo_estado: 'aprobado' }, adminUser),
+        executeTransition('exp-uuid', { nuevo_estado: 'aprobado', comentario: 'Test' }, adminUser),
       ).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'INVALID_TRANSITION',
-        details: {
-          estado_actual: 'borrador',
-          transiciones_validas: ['en_revision'],
-        },
       });
     });
   });
 
-  // AC #8: Usuario sin permisos recibe 403 FORBIDDEN
+  // ================================================================
+  // executeTransition - permisos
+  // ================================================================
   describe('executeTransition - permisos', () => {
     it('debe retornar 403 si el usuario no es analista asignado ni admin', async () => {
       setupFetchExpediente(mockExpediente);
 
       await expect(
-        executeTransition('exp-uuid', { nuevo_estado: 'en_revision' }, otherUser),
+        executeTransition('exp-uuid', { nuevo_estado: 'en_revision', comentario: 'Test' }, otherUser),
       ).rejects.toMatchObject({
         statusCode: 403,
         errorCode: 'FORBIDDEN',
@@ -116,36 +127,33 @@ describe('expediente-workflow.service', () => {
     });
 
     it('debe permitir al administrador transicionar cualquier expediente', async () => {
-      // Fetch expediente
       setupFetchExpediente(mockExpediente);
-      // Precondition: ANALISTA_ASIGNADO (pasa porque analista_id existe)
-      // Precondition: DOCUMENTOS_EXISTENTES
-      setupPreconditionCount(3);
-      // RPC call
+      setupPreconditionCount(3); // DOCUMENTOS_EXISTENTES
       mockRpc.mockResolvedValueOnce({
         data: {
           expediente_id: 'exp-uuid',
           estado_anterior: 'borrador',
           estado_nuevo: 'en_revision',
           evento_timeline_id: 'evt-uuid',
-          updated_at: '2026-02-17T10:00:00Z',
+          updated_at: '2026-02-24T10:00:00Z',
         },
         error: null,
       });
 
       const result = await executeTransition(
         'exp-uuid',
-        { nuevo_estado: 'en_revision' },
+        { nuevo_estado: 'en_revision', comentario: 'Listo para revision' },
         adminUser,
       );
 
-      expect(result.estado_nuevo).toBe('en_revision');
+      expect(result.estado_anterior).toBe('borrador');
       expect(mockRpc).toHaveBeenCalledWith(
         'transicionar_expediente',
         expect.objectContaining({
           p_expediente_id: 'exp-uuid',
           p_nuevo_estado: 'en_revision',
           p_usuario_id: 'admin-uuid',
+          p_comentario: 'Listo para revision',
         }),
       );
     });
@@ -159,29 +167,31 @@ describe('expediente-workflow.service', () => {
           estado_anterior: 'borrador',
           estado_nuevo: 'en_revision',
           evento_timeline_id: 'evt-uuid',
-          updated_at: '2026-02-17T10:00:00Z',
+          updated_at: '2026-02-24T10:00:00Z',
         },
         error: null,
       });
 
       const result = await executeTransition(
         'exp-uuid',
-        { nuevo_estado: 'en_revision' },
+        { nuevo_estado: 'en_revision', comentario: 'Revisando' },
         analistaUser,
       );
 
-      expect(result.estado_nuevo).toBe('en_revision');
+      expect(result.estado_anterior).toBe('borrador');
     });
   });
 
-  // AC #9: borrador -> en_revision falla sin analista asignado
+  // ================================================================
+  // executeTransition - precondiciones
+  // ================================================================
   describe('executeTransition - precondiciones', () => {
     it('debe fallar si no hay analista asignado (PRECONDITION_FAILED)', async () => {
       const expSinAnalista = { ...mockExpediente, analista_id: null };
       setupFetchExpediente(expSinAnalista);
 
       await expect(
-        executeTransition('exp-uuid', { nuevo_estado: 'en_revision' }, adminUser),
+        executeTransition('exp-uuid', { nuevo_estado: 'en_revision', comentario: 'Test' }, adminUser),
       ).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'PRECONDITION_FAILED',
@@ -194,7 +204,7 @@ describe('expediente-workflow.service', () => {
       setupPreconditionCount(0);
 
       await expect(
-        executeTransition('exp-uuid', { nuevo_estado: 'en_revision' }, adminUser),
+        executeTransition('exp-uuid', { nuevo_estado: 'en_revision', comentario: 'Test' }, adminUser),
       ).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'PRECONDITION_FAILED',
@@ -203,9 +213,11 @@ describe('expediente-workflow.service', () => {
     });
   });
 
-  // AC #5: PATCH cambia el estado correctamente
+  // ================================================================
+  // executeTransition - exito (retorna expediente completo)
+  // ================================================================
   describe('executeTransition - exito', () => {
-    it('debe retornar resultado exitoso con estado anterior y nuevo', async () => {
+    it('debe retornar expediente actualizado con estado_anterior y evento_timeline_id', async () => {
       setupFetchExpediente(mockExpediente);
       setupPreconditionCount(2); // documentos
       mockRpc.mockResolvedValueOnce({
@@ -214,29 +226,56 @@ describe('expediente-workflow.service', () => {
           estado_anterior: 'borrador',
           estado_nuevo: 'en_revision',
           evento_timeline_id: 'evt-uuid',
-          updated_at: '2026-02-17T10:00:00Z',
+          updated_at: '2026-02-24T10:00:00Z',
         },
         error: null,
       });
 
       const result = await executeTransition(
         'exp-uuid',
-        { nuevo_estado: 'en_revision', motivo: 'Listo para revision' },
+        { nuevo_estado: 'en_revision', comentario: 'Listo', motivo: 'Revision inicial' },
         adminUser,
       );
 
-      expect(result).toEqual({
-        expediente_id: 'exp-uuid',
-        numero: 'EXP-2026-0001',
-        estado_anterior: 'borrador',
-        estado_nuevo: 'en_revision',
-        evento_timeline_id: 'evt-uuid',
-        updated_at: '2026-02-17T10:00:00Z',
+      // Debe incluir datos del expediente completo + estado_anterior + evento_timeline_id
+      expect(result.estado_anterior).toBe('borrador');
+      expect(result.evento_timeline_id).toBe('evt-uuid');
+      expect(result.id).toBe('exp-uuid');
+      expect(mockGetExpedienteById).toHaveBeenCalledWith('exp-uuid');
+    });
+
+    it('debe pasar comentario al RPC', async () => {
+      setupFetchExpediente(mockExpediente);
+      setupPreconditionCount(2);
+      mockRpc.mockResolvedValueOnce({
+        data: {
+          expediente_id: 'exp-uuid',
+          estado_anterior: 'borrador',
+          estado_nuevo: 'en_revision',
+          evento_timeline_id: 'evt-uuid',
+          updated_at: '2026-02-24T10:00:00Z',
+        },
+        error: null,
       });
+
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'en_revision', comentario: 'Mi comentario' },
+        adminUser,
+      );
+
+      expect(mockRpc).toHaveBeenCalledWith(
+        'transicionar_expediente',
+        expect.objectContaining({
+          p_comentario: 'Mi comentario',
+        }),
+      );
     });
   });
 
-  // Expediente no encontrado
+  // ================================================================
+  // executeTransition - expediente no encontrado
+  // ================================================================
   describe('executeTransition - expediente no encontrado', () => {
     it('debe retornar 404 si el expediente no existe', async () => {
       mockFrom.mockReturnValueOnce({
@@ -248,7 +287,7 @@ describe('expediente-workflow.service', () => {
       });
 
       await expect(
-        executeTransition('no-existe', { nuevo_estado: 'en_revision' }, adminUser),
+        executeTransition('no-existe', { nuevo_estado: 'en_revision', comentario: 'Test' }, adminUser),
       ).rejects.toMatchObject({
         statusCode: 404,
         errorCode: 'NOT_FOUND',
@@ -256,36 +295,121 @@ describe('expediente-workflow.service', () => {
     });
   });
 
-  // AC #12: GET retorna transiciones disponibles
+  // ================================================================
+  // getTransitionsForExpediente - retorna { estado, label }[]
+  // ================================================================
   describe('getTransitionsForExpediente', () => {
-    it('debe retornar transiciones disponibles desde borrador', async () => {
+    it('debe retornar transiciones disponibles con labels desde borrador', async () => {
       setupFetchExpediente(mockExpediente);
 
-      const result = await getTransitionsForExpediente('exp-uuid', adminUser);
+      const result = await getTransitionsForExpediente('exp-uuid');
 
       expect(result).toEqual({
         expediente_id: 'exp-uuid',
         estado_actual: 'borrador',
-        transiciones_disponibles: ['en_revision'],
+        transiciones_disponibles: [
+          { estado: 'en_revision', label: 'Enviar a revision' },
+        ],
       });
     });
 
-    it('debe retornar 4 transiciones desde en_revision', async () => {
+    it('debe retornar 4 transiciones con labels desde en_revision', async () => {
       setupFetchExpediente({ ...mockExpediente, estado: 'en_revision' });
 
-      const result = await getTransitionsForExpediente('exp-uuid', analistaUser);
+      const result = await getTransitionsForExpediente('exp-uuid');
 
       expect(result.transiciones_disponibles).toHaveLength(4);
+      for (const t of result.transiciones_disponibles) {
+        expect(t).toHaveProperty('estado');
+        expect(t).toHaveProperty('label');
+        expect(t.label.length).toBeGreaterThan(0);
+      }
     });
 
-    it('debe retornar 403 si usuario no tiene permisos', async () => {
+    it('no requiere permisos de analista (cualquier usuario autenticado)', async () => {
       setupFetchExpediente(mockExpediente);
 
+      // Should not throw - no user parameter needed
+      const result = await getTransitionsForExpediente('exp-uuid');
+      expect(result.estado_actual).toBe('borrador');
+    });
+  });
+
+  // ================================================================
+  // getTransitionHistory
+  // ================================================================
+  describe('getTransitionHistory', () => {
+    it('debe retornar historial de transiciones', async () => {
+      // fetchExpediente
+      setupFetchExpediente(mockExpediente);
+
+      // Query eventos_timeline
+      const mockHistorial = [
+        {
+          id: 'evt-1',
+          estado_anterior: 'borrador',
+          estado_nuevo: 'en_revision',
+          comentario: 'Enviado a revision',
+          descripcion: "Estado cambiado de 'borrador' a 'en_revision'",
+          created_at: '2026-02-24T10:00:00Z',
+          usuario: { id: 'admin-uuid', nombre: 'Admin', apellido: 'User' },
+        },
+      ];
+
+      mockFrom.mockReturnValueOnce({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              order: vi.fn().mockResolvedValue({ data: mockHistorial, error: null }),
+            }),
+          }),
+        }),
+      });
+
+      const result = await getTransitionHistory('exp-uuid');
+
+      expect(result).toEqual({
+        expediente_id: 'exp-uuid',
+        estado_actual: 'borrador',
+        historial: mockHistorial,
+      });
+    });
+
+    it('debe retornar 404 si el expediente no existe', async () => {
+      mockFrom.mockReturnValueOnce({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: null, error: { code: 'PGRST116' } }),
+          }),
+        }),
+      });
+
       await expect(
-        getTransitionsForExpediente('exp-uuid', otherUser),
+        getTransitionHistory('no-existe'),
       ).rejects.toMatchObject({
-        statusCode: 403,
-        errorCode: 'FORBIDDEN',
+        statusCode: 404,
+        errorCode: 'NOT_FOUND',
+      });
+    });
+
+    it('debe retornar 500 si hay error en la query', async () => {
+      setupFetchExpediente(mockExpediente);
+
+      mockFrom.mockReturnValueOnce({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              order: vi.fn().mockResolvedValue({ data: null, error: { message: 'DB error' } }),
+            }),
+          }),
+        }),
+      });
+
+      await expect(
+        getTransitionHistory('exp-uuid'),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        errorCode: 'INTERNAL_ERROR',
       });
     });
   });
