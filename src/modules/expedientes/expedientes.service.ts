@@ -105,6 +105,31 @@ export async function listExpedientes(query: ListExpedientesQuery) {
 }
 
 // ============================================================
+// Check Active Expediente by Inmueble - HP-247
+// ============================================================
+
+export async function checkActiveExpedienteByInmueble(inmuebleId: string) {
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, estado')
+    .eq('inmueble_id', inmuebleId)
+    .not('estado', 'in', `(${ESTADOS_TERMINALES.join(',')})`)
+    .limit(1);
+
+  if (error) {
+    logger.error({ error: error.message, inmuebleId }, 'Error al verificar expediente activo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar expediente activo');
+  }
+
+  const activeExpediente = data && data.length > 0 ? data[0] : null;
+
+  return {
+    hasActiveExpediente: !!activeExpediente,
+    expediente: activeExpediente,
+  };
+}
+
+// ============================================================
 // Get by ID
 // ============================================================
 

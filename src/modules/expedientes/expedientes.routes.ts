@@ -29,6 +29,13 @@ router.get(
   expedientesController.list,
 );
 
+// GET /check-inmueble/:inmuebleId — HP-247: Verificar si inmueble tiene expediente activo
+router.get(
+  '/check-inmueble/:inmuebleId',
+  authorize('expedientes', 'read'),
+  expedientesController.checkByInmueble,
+);
+
 // GET /:id — Detalle con relaciones
 router.get(
   '/:id',
