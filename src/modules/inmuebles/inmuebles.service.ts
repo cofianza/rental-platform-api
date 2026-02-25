@@ -92,7 +92,17 @@ export async function listInmuebles(query: ListInmueblesQuery) {
   }
 
   if (search) {
-    qb = qb.or(`direccion.ilike.%${search}%,ciudad.ilike.%${search}%,barrio.ilike.%${search}%,codigo.ilike.%${search}%`);
+    // Usar RPC con unaccent() para búsqueda insensible a diacríticos
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: matchIds } = await (supabase as any).rpc('search_inmueble_ids', { p_search: search });
+    if (matchIds && matchIds.length > 0) {
+      qb = qb.in('id', matchIds.map((r: { id: string }) => r.id));
+    } else {
+      return {
+        inmuebles: [],
+        pagination: { total: 0, page, limit, totalPages: 0 },
+      };
+    }
   }
   if (tipo) qb = qb.eq('tipo', tipo);
   if (uso) qb = qb.eq('uso', uso);
@@ -340,11 +350,18 @@ export async function searchInmuebles(query: SearchInmueblesQuery) {
     qb = qb.neq('estado', 'inactivo');
   }
 
-  // Keyword: busca en codigo, direccion, ciudad, barrio, descripcion
+  // Keyword: busca con unaccent() para ignorar diacríticos
   if (keyword) {
-    qb = qb.or(
-      `codigo.ilike.%${keyword}%,direccion.ilike.%${keyword}%,ciudad.ilike.%${keyword}%,barrio.ilike.%${keyword}%,descripcion.ilike.%${keyword}%`,
-    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: matchIds } = await (supabase as any).rpc('search_inmueble_ids', { p_search: keyword });
+    if (matchIds && matchIds.length > 0) {
+      qb = qb.in('id', matchIds.map((r: { id: string }) => r.id));
+    } else {
+      return {
+        inmuebles: [],
+        pagination: { total: 0, page, limit, totalPages: 0 },
+      };
+    }
   }
 
   if (city) qb = qb.ilike('ciudad', `%${city}%`);
