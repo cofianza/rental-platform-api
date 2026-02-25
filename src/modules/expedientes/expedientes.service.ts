@@ -61,7 +61,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
 // ============================================================
 
 export async function listExpedientes(query: ListExpedientesQuery) {
-  const { search, estado, analista_id, fecha_desde, fecha_hasta } = query;
+  const { search, estado, analista_id, inmueble_id, fecha_desde, fecha_hasta } = query;
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
   const sortBy = query.sortBy || 'created_at';
@@ -76,6 +76,7 @@ export async function listExpedientes(query: ListExpedientesQuery) {
     p_search: search || null,
     p_estados: estados,
     p_analista_id: analista_id || null,
+    p_inmueble_id: inmueble_id || null,
     p_fecha_desde: fecha_desde || null,
     p_fecha_hasta: fecha_hasta || null,
     p_sort_field: sortBy,
