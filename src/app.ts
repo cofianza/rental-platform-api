@@ -19,6 +19,9 @@ import registrationRouter from '@/modules/registration/registration.routes';
 import { bitacoraRouter } from '@/modules/bitacora/bitacora.routes';
 import inmueblesRouter from '@/modules/inmuebles/inmuebles.routes';
 import applicantsRouter from '@/modules/solicitantes/solicitantes.routes';
+import documentosRouter from '@/modules/documentos/documentos.routes';
+import expedienteDocumentosRouter from '@/modules/documentos/expediente-documentos.routes';
+import tiposDocumentoRouter from '@/modules/documentos/tipos-documento.routes';
 
 const app = express();
 
@@ -62,6 +65,9 @@ app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/inmuebles', inmueblesRouter);
 app.use('/api/v1/audit-logs', bitacoraRouter);
 app.use('/api/v1/applicants', applicantsRouter);
+app.use('/api/v1/documentos', documentosRouter);
+app.use('/api/v1/expedientes', expedienteDocumentosRouter);
+app.use('/api/v1/tipos-documento', tiposDocumentoRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

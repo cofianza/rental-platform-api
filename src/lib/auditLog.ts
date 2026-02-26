@@ -35,6 +35,9 @@ export const AUDIT_ACTIONS = {
   COMMENT_DELETED: 'comment_deleted',
   // Asignaciones
   ASSIGNMENT_CREATED: 'assignment_created',
+  // Documentos
+  DOCUMENTO_UPLOADED: 'documento_uploaded',
+  DOCUMENTO_DELETED: 'documento_deleted',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -47,6 +50,7 @@ export const AUDIT_ENTITIES = {
   EXPEDIENTE: 'expediente',
   COMENTARIO: 'comentario',
   ASIGNACION: 'asignacion',
+  DOCUMENTO: 'documento',
 } as const;
 
 interface AuditLogParams {
