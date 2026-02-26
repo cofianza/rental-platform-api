@@ -15,6 +15,7 @@ import type {
 
 const BUCKET_NAME = 'documentos-expedientes';
 const PRESIGNED_URL_EXPIRY_SECONDS = 900; // 15 minutes
+const SIGNED_URL_VIEW_EXPIRY_SECONDS = 3600; // 1 hour for viewing
 const ESTADOS_TERMINALES = ['cerrado', 'rechazado'];
 
 const DOCUMENTO_FIELDS = `
@@ -61,6 +62,43 @@ interface TipoDocumentoRow {
   activo: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// ============================================================
+// Helper: Generate signed URL for viewing
+// ============================================================
+
+async function generateViewUrl(storageKey: string | null): Promise<string | null> {
+  if (!storageKey) return null;
+
+  try {
+    const { data, error } = await supabase.storage
+      .from(BUCKET_NAME)
+      .createSignedUrl(storageKey, SIGNED_URL_VIEW_EXPIRY_SECONDS);
+
+    if (error || !data) {
+      logger.warn({ error: error?.message, storageKey }, 'Error generating signed URL');
+      return null;
+    }
+
+    return data.signedUrl;
+  } catch (err) {
+    logger.warn({ error: (err as Error).message, storageKey }, 'Exception generating signed URL');
+    return null;
+  }
+}
+
+/**
+ * Adds archivo_url to documents by generating signed URLs
+ */
+async function addSignedUrls<T extends DocumentoRow>(docs: T[]): Promise<T[]> {
+  const results = await Promise.all(
+    docs.map(async (doc) => {
+      const archivo_url = await generateViewUrl(doc.storage_key);
+      return { ...doc, archivo_url };
+    })
+  );
+  return results;
 }
 
 // ============================================================
@@ -280,7 +318,10 @@ export async function confirmarSubida(
     ip,
   });
 
-  return created;
+  // Add signed URL for immediate viewing
+  const archivo_url = await generateViewUrl(created.storage_key);
+
+  return { ...created, archivo_url };
 }
 
 // ============================================================
@@ -339,9 +380,13 @@ export async function listDocumentosByExpediente(
   }
 
   const total = count ?? 0;
+  const rawDocs = (data as unknown as DocumentoRow[]) || [];
+
+  // Generate signed URLs for viewing
+  const documentos = await addSignedUrls(rawDocs);
 
   return {
-    documentos: (data as unknown as DocumentoRow[]) || [],
+    documentos,
     pagination: {
       total,
       page,
@@ -375,7 +420,11 @@ export async function getDocumentoById(id: string) {
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el documento');
   }
 
-  return data;
+  // Add signed URL for viewing
+  const doc = data as unknown as DocumentoRow;
+  const archivo_url = await generateViewUrl(doc.storage_key);
+
+  return { ...data, archivo_url };
 }
 
 // ============================================================
