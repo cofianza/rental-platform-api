@@ -16,6 +16,14 @@ const router = Router();
 
 router.use(authMiddleware);
 
+// GET /:expedienteId/documentos/pendientes-revision - Documentos pendientes de revision
+router.get(
+  '/:expedienteId/documentos/pendientes-revision',
+  authorize('documentos', 'validar'),
+  validate({ params: expedienteIdParamsSchema }),
+  documentosController.pendientesRevision,
+);
+
 // GET /:expedienteId/documentos - Listar documentos de un expediente
 router.get(
   '/:expedienteId/documentos',

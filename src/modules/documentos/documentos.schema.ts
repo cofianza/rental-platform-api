@@ -64,6 +64,38 @@ export const listDocumentosQuerySchema = z.object({
 });
 
 // ============================================================
+// PATCH /:id/rechazar
+// ============================================================
+
+export const rechazarDocumentoSchema = z.object({
+  motivo_rechazo: z.string()
+    .min(10, 'El motivo debe tener al menos 10 caracteres')
+    .max(500, 'El motivo no debe exceder 500 caracteres'),
+});
+
+// ============================================================
+// POST /:id/reemplazar
+// ============================================================
+
+export const reemplazarDocumentoSchema = z.object({
+  nombre_original: z.string().min(1, 'Nombre del archivo requerido').max(255),
+  tipo_mime: z.string().min(1, 'Tipo MIME requerido').max(100),
+  tamano_bytes: z.coerce.number().int().positive('Tamano debe ser positivo'),
+});
+
+// ============================================================
+// POST /:id/confirmar-reemplazo
+// ============================================================
+
+export const confirmarReemplazoSchema = z.object({
+  nombre_original: z.string().min(1, 'Nombre original requerido').max(255),
+  nombre_archivo: z.string().min(1, 'Nombre de archivo requerido').max(255),
+  storage_key: z.string().min(1, 'Storage key requerido').max(500),
+  tipo_mime: z.string().min(1, 'Tipo MIME requerido').max(100),
+  tamano_bytes: z.coerce.number().int().positive('Tamano debe ser positivo'),
+});
+
+// ============================================================
 // Type exports
 // ============================================================
 
@@ -72,3 +104,6 @@ export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type PresignedUrlInput = z.infer<typeof presignedUrlSchema>;
 export type ConfirmarSubidaInput = z.infer<typeof confirmarSubidaSchema>;
 export type ListDocumentosQuery = z.infer<typeof listDocumentosQuerySchema>;
+export type RechazarDocumentoInput = z.infer<typeof rechazarDocumentoSchema>;
+export type ReemplazarDocumentoInput = z.infer<typeof reemplazarDocumentoSchema>;
+export type ConfirmarReemplazoInput = z.infer<typeof confirmarReemplazoSchema>;

@@ -38,6 +38,15 @@ export const AUDIT_ACTIONS = {
   // Documentos
   DOCUMENTO_UPLOADED: 'documento_uploaded',
   DOCUMENTO_DELETED: 'documento_deleted',
+  DOCUMENTO_APROBADO: 'documento_aprobado',
+  DOCUMENTO_RECHAZADO: 'documento_rechazado',
+  DOCUMENTO_DESCARGADO: 'documento_descargado',
+  DOCUMENTO_REEMPLAZADO: 'documento_reemplazado',
+  // Tipos de documento (admin)
+  TIPO_DOCUMENTO_CREATED: 'tipo_documento_created',
+  TIPO_DOCUMENTO_UPDATED: 'tipo_documento_updated',
+  TIPO_DOCUMENTO_TOGGLED: 'tipo_documento_toggled',
+  TIPO_DOCUMENTO_REORDERED: 'tipo_documento_reordered',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -51,6 +60,7 @@ export const AUDIT_ENTITIES = {
   COMENTARIO: 'comentario',
   ASIGNACION: 'asignacion',
   DOCUMENTO: 'documento',
+  TIPO_DOCUMENTO: 'tipo_documento',
 } as const;
 
 interface AuditLogParams {

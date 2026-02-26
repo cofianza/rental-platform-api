@@ -7,6 +7,9 @@ import type {
   ListDocumentosQuery,
   DocumentoIdParams,
   ExpedienteIdParams,
+  RechazarDocumentoInput,
+  ReemplazarDocumentoInput,
+  ConfirmarReemplazoInput,
 } from './documentos.schema';
 
 // POST /api/v1/documentos/presigned-url
@@ -49,4 +52,70 @@ export async function remove(req: Request, res: Response) {
 export async function listTipos(_req: Request, res: Response) {
   const tipos = await documentosService.listTiposDocumento();
   sendSuccess(res, tipos);
+}
+
+// PATCH /api/v1/documentos/:id/aprobar
+export async function aprobar(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const documento = await documentosService.aprobarDocumento(id, req.user!.id, req.ip);
+  sendSuccess(res, documento);
+}
+
+// PATCH /api/v1/documentos/:id/rechazar
+export async function rechazar(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const { motivo_rechazo } = req.body as RechazarDocumentoInput;
+  const documento = await documentosService.rechazarDocumento(id, motivo_rechazo, req.user!.id, req.ip);
+  sendSuccess(res, documento);
+}
+
+// GET /api/v1/expedientes/:expedienteId/documentos/pendientes-revision
+export async function pendientesRevision(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as ExpedienteIdParams;
+  const result = await documentosService.getPendientesRevision(expedienteId);
+  sendSuccess(res, result);
+}
+
+// GET /api/v1/documentos/:id/historial-revision
+export async function historialRevision(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const historial = await documentosService.getHistorialRevision(id);
+  sendSuccess(res, historial);
+}
+
+// GET /api/v1/documentos/:id/url-visualizacion
+export async function urlVisualizacion(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const result = await documentosService.generateViewUrlForViewer(id, req.user!.id);
+  sendSuccess(res, result);
+}
+
+// GET /api/v1/documentos/:id/url-descarga
+export async function urlDescarga(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const result = await documentosService.generateDownloadUrl(id, req.user!.id, req.ip);
+  sendSuccess(res, result);
+}
+
+// POST /api/v1/documentos/:id/reemplazar
+export async function reemplazar(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const input = req.body as ReemplazarDocumentoInput;
+  const result = await documentosService.iniciarReemplazo(id, input, req.user!.id, req.user!.rol);
+  sendSuccess(res, result);
+}
+
+// POST /api/v1/documentos/:id/confirmar-reemplazo
+export async function confirmarReemplazo(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const input = req.body as ConfirmarReemplazoInput;
+  const doc = await documentosService.confirmarReemplazo(id, input, req.user!.id, req.ip);
+  sendCreated(res, doc);
+}
+
+// GET /api/v1/documentos/:id/versiones
+export async function versiones(req: Request, res: Response) {
+  const { id } = req.params as unknown as DocumentoIdParams;
+  const result = await documentosService.getVersiones(id);
+  sendSuccess(res, result);
 }

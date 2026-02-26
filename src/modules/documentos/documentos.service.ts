@@ -7,6 +7,8 @@ import type {
   PresignedUrlInput,
   ConfirmarSubidaInput,
   ListDocumentosQuery,
+  ReemplazarDocumentoInput,
+  ConfirmarReemplazoInput,
 } from './documentos.schema';
 
 // ============================================================
@@ -16,6 +18,7 @@ import type {
 const BUCKET_NAME = 'documentos-expedientes';
 const PRESIGNED_URL_EXPIRY_SECONDS = 900; // 15 minutes
 const SIGNED_URL_VIEW_EXPIRY_SECONDS = 3600; // 1 hour for viewing
+const VIEWER_URL_EXPIRY_SECONDS = 900; // 15 minutes for viewer
 const ESTADOS_TERMINALES = ['cerrado', 'rechazado'];
 
 const DOCUMENTO_FIELDS = `
@@ -525,4 +528,629 @@ export async function listTiposDocumento() {
   }
 
   return (data as unknown as TipoDocumentoRow[]) || [];
+}
+
+// ============================================================
+// aprobarDocumento
+// ============================================================
+
+const ESTADOS_NO_VALIDABLES = ['aprobado', 'reemplazado'];
+
+export async function aprobarDocumento(id: string, userId: string, ip?: string) {
+  // 1. Fetch document
+  const { data: existing, error: existError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select(DOCUMENTO_FIELDS)
+    .eq('id', id)
+    .single();
+
+  if (existError || !existing) {
+    if (existError?.code === 'PGRST116') {
+      throw AppError.notFound('Documento no encontrado');
+    }
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const doc = existing as unknown as DocumentoRow;
+
+  // 2. Validate estado
+  if (ESTADOS_NO_VALIDABLES.includes(doc.estado)) {
+    throw AppError.conflict(
+      `No se puede aprobar un documento con estado '${doc.estado}'`,
+      'DOCUMENTO_ALREADY_VALIDATED',
+    );
+  }
+
+  // 3. Update
+  const { data: updated, error: updateError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estado: 'aprobado',
+      validado_por: userId,
+      fecha_revision: new Date().toISOString(),
+      motivo_rechazo: null,
+    } as never)
+    .eq('id', id)
+    .select(DOCUMENTO_FIELDS)
+    .single();
+
+  if (updateError) {
+    logger.error({ error: updateError.message, id }, 'Error al aprobar documento');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al aprobar el documento');
+  }
+
+  const result = updated as unknown as DocumentoRow;
+
+  // 4. Audit
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.DOCUMENTO_APROBADO,
+    entidad: AUDIT_ENTITIES.DOCUMENTO,
+    entidadId: id,
+    detalle: {
+      expediente_id: doc.expediente_id,
+      nombre_original: doc.nombre_original,
+      estado_anterior: doc.estado,
+    },
+    ip,
+  });
+
+  // 5. Return with signed URL
+  const archivo_url = await generateViewUrl(result.storage_key);
+  return { ...result, archivo_url };
+}
+
+// ============================================================
+// rechazarDocumento
+// ============================================================
+
+export async function rechazarDocumento(
+  id: string,
+  motivoRechazo: string,
+  userId: string,
+  ip?: string,
+) {
+  // 1. Fetch document
+  const { data: existing, error: existError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select(DOCUMENTO_FIELDS)
+    .eq('id', id)
+    .single();
+
+  if (existError || !existing) {
+    if (existError?.code === 'PGRST116') {
+      throw AppError.notFound('Documento no encontrado');
+    }
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const doc = existing as unknown as DocumentoRow;
+
+  // 2. Validate estado
+  if (ESTADOS_NO_VALIDABLES.includes(doc.estado)) {
+    throw AppError.conflict(
+      `No se puede rechazar un documento con estado '${doc.estado}'`,
+      'DOCUMENTO_ALREADY_VALIDATED',
+    );
+  }
+
+  // 3. Update
+  const { data: updated, error: updateError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estado: 'rechazado',
+      motivo_rechazo: motivoRechazo,
+      validado_por: userId,
+      fecha_revision: new Date().toISOString(),
+    } as never)
+    .eq('id', id)
+    .select(DOCUMENTO_FIELDS)
+    .single();
+
+  if (updateError) {
+    logger.error({ error: updateError.message, id }, 'Error al rechazar documento');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al rechazar el documento');
+  }
+
+  const result = updated as unknown as DocumentoRow;
+
+  // 4. Audit
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.DOCUMENTO_RECHAZADO,
+    entidad: AUDIT_ENTITIES.DOCUMENTO,
+    entidadId: id,
+    detalle: {
+      expediente_id: doc.expediente_id,
+      nombre_original: doc.nombre_original,
+      estado_anterior: doc.estado,
+      motivo_rechazo: motivoRechazo,
+    },
+    ip,
+  });
+
+  // 5. Return with signed URL
+  const archivo_url = await generateViewUrl(result.storage_key);
+  return { ...result, archivo_url };
+}
+
+// ============================================================
+// getPendientesRevision
+// ============================================================
+
+export async function getPendientesRevision(expedienteId: string) {
+  // Validate expediente
+  const { data: expediente, error: expError } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('id', expedienteId)
+    .single();
+
+  if (expError || !expediente) {
+    throw AppError.notFound('Expediente no encontrado');
+  }
+
+  // Get total docs count (excluding reemplazado)
+  const { count: totalCount } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .eq('expediente_id', expedienteId)
+    .neq('estado', 'reemplazado');
+
+  // Get pending docs with tipo_documento join
+  const { data, error } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select(
+      `${DOCUMENTO_FIELDS}, tipo_documento:tipos_documento!documentos_tipo_documento_id_fkey(id, codigo, nombre)`,
+    )
+    .eq('expediente_id', expedienteId)
+    .eq('estado', 'pendiente')
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    logger.error({ error: error.message, expedienteId }, 'Error al obtener pendientes');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener documentos pendientes');
+  }
+
+  const rawDocs = (data as unknown as DocumentoRow[]) || [];
+  const documentos = await addSignedUrls(rawDocs);
+
+  return {
+    documentos,
+    total_documentos: totalCount ?? 0,
+    pendientes: rawDocs.length,
+  };
+}
+
+// ============================================================
+// getHistorialRevision
+// ============================================================
+
+export async function getHistorialRevision(docId: string) {
+  // Get the document to find its expediente_id and tipo_documento_id
+  const { data: doc, error: docError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, expediente_id, tipo_documento_id')
+    .eq('id', docId)
+    .single();
+
+  if (docError || !doc) {
+    if (docError?.code === 'PGRST116') {
+      throw AppError.notFound('Documento no encontrado');
+    }
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const { expediente_id, tipo_documento_id } = doc as unknown as {
+    expediente_id: string;
+    tipo_documento_id: string;
+  };
+
+  // Get all versions of this document type for this expediente
+  const { data, error } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, estado, motivo_rechazo, validado_por, fecha_revision, version, created_at,
+      validador:perfiles!documentos_validado_por_fkey(id, nombre, apellido)
+    `)
+    .eq('expediente_id', expediente_id)
+    .eq('tipo_documento_id', tipo_documento_id)
+    .order('version', { ascending: false });
+
+  if (error) {
+    logger.error({ error: error.message, docId }, 'Error al obtener historial');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener historial de revision');
+  }
+
+  return (data as unknown as Array<{
+    id: string;
+    estado: string;
+    motivo_rechazo: string | null;
+    validado_por: string | null;
+    fecha_revision: string | null;
+    version: number;
+    created_at: string;
+    validador: { id: string; nombre: string; apellido: string } | null;
+  }>) || [];
+}
+
+// ============================================================
+// generateViewUrlForViewer (15-min signed URL for inline viewing)
+// ============================================================
+
+export async function generateViewUrlForViewer(id: string, userId: string) {
+  // 1. Fetch document
+  const { data, error } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, storage_key, nombre_original, tipo_mime')
+    .eq('id', id)
+    .single();
+
+  if (error || !data) {
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const doc = data as unknown as {
+    id: string;
+    storage_key: string | null;
+    nombre_original: string;
+    tipo_mime: string | null;
+  };
+
+  if (!doc.storage_key) {
+    throw AppError.badRequest('El documento no tiene archivo asociado', 'NO_STORAGE_KEY');
+  }
+
+  // 2. Generate signed URL for inline viewing
+  const { data: urlData, error: urlError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(doc.storage_key, VIEWER_URL_EXPIRY_SECONDS);
+
+  if (urlError || !urlData) {
+    logger.error({ error: urlError?.message, id }, 'Error al generar URL de visualizacion');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al generar URL de visualizacion');
+  }
+
+  return {
+    url: urlData.signedUrl,
+    nombre_original: doc.nombre_original,
+    tipo_mime: doc.tipo_mime,
+    expires_in: VIEWER_URL_EXPIRY_SECONDS,
+  };
+}
+
+// ============================================================
+// generateDownloadUrl (signed URL with Content-Disposition: attachment)
+// ============================================================
+
+export async function generateDownloadUrl(id: string, userId: string, ip?: string) {
+  // 1. Fetch document
+  const { data, error } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, storage_key, nombre_original, tipo_mime')
+    .eq('id', id)
+    .single();
+
+  if (error || !data) {
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const doc = data as unknown as {
+    id: string;
+    storage_key: string | null;
+    nombre_original: string;
+    tipo_mime: string | null;
+  };
+
+  if (!doc.storage_key) {
+    throw AppError.badRequest('El documento no tiene archivo asociado', 'NO_STORAGE_KEY');
+  }
+
+  // 2. Generate signed URL with download disposition
+  const { data: urlData, error: urlError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(doc.storage_key, VIEWER_URL_EXPIRY_SECONDS, {
+      download: doc.nombre_original,
+    });
+
+  if (urlError || !urlData) {
+    logger.error({ error: urlError?.message, id }, 'Error al generar URL de descarga');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al generar URL de descarga');
+  }
+
+  // 3. Audit log
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.DOCUMENTO_DESCARGADO,
+    entidad: AUDIT_ENTITIES.DOCUMENTO,
+    entidadId: id,
+    detalle: { nombre_original: doc.nombre_original },
+    ip,
+  });
+
+  return {
+    url: urlData.signedUrl,
+    nombre_original: doc.nombre_original,
+    tipo_mime: doc.tipo_mime,
+    expires_in: VIEWER_URL_EXPIRY_SECONDS,
+  };
+}
+
+// ============================================================
+// iniciarReemplazo — presigned URL for replacing a rejected doc
+// ============================================================
+
+export async function iniciarReemplazo(
+  docId: string,
+  input: ReemplazarDocumentoInput,
+  userId: string,
+  userRole: string,
+) {
+  // 1. Fetch documento
+  const { data: existing, error: existError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select(DOCUMENTO_FIELDS)
+    .eq('id', docId)
+    .single();
+
+  if (existError || !existing) {
+    if (existError?.code === 'PGRST116') {
+      throw AppError.notFound('Documento no encontrado');
+    }
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const doc = existing as unknown as DocumentoRow;
+
+  // 2. Validate estado === 'rechazado'
+  if (doc.estado !== 'rechazado') {
+    throw AppError.conflict(
+      'Solo se pueden reemplazar documentos con estado rechazado',
+      'DOCUMENTO_NOT_RECHAZADO',
+    );
+  }
+
+  // 3. Validate ownership
+  if (doc.subido_por !== userId && userRole !== 'administrador') {
+    throw AppError.forbidden(
+      'Solo el propietario del documento o un administrador puede reemplazarlo',
+    );
+  }
+
+  // 4. Validate expediente not terminal
+  const { data: expediente, error: expError } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('id', doc.expediente_id)
+    .single();
+
+  if (expError || !expediente) {
+    throw AppError.notFound('Expediente no encontrado');
+  }
+
+  const exp = expediente as unknown as { id: string; estado: string };
+  if (ESTADOS_TERMINALES.includes(exp.estado)) {
+    throw AppError.badRequest(
+      'No se pueden subir documentos a un expediente en estado terminal',
+      'EXPEDIENTE_TERMINAL',
+    );
+  }
+
+  // 5. Validate tipo_documento activo + MIME + size
+  const { data: tipoDoc, error: tipoError } = await (supabase
+    .from('tipos_documento' as string) as ReturnType<typeof supabase.from>)
+    .select('*')
+    .eq('id', doc.tipo_documento_id)
+    .eq('activo', true)
+    .single();
+
+  if (tipoError || !tipoDoc) {
+    throw AppError.badRequest(
+      'Tipo de documento no encontrado o inactivo',
+      'TIPO_DOCUMENTO_NOT_FOUND',
+    );
+  }
+
+  const tipo = tipoDoc as unknown as TipoDocumentoRow;
+
+  if (!tipo.formatos_aceptados.includes(input.tipo_mime)) {
+    throw AppError.badRequest(
+      `Tipo de archivo '${input.tipo_mime}' no permitido. Formatos aceptados: ${tipo.formatos_aceptados.join(', ')}`,
+      'MIME_TYPE_NOT_ALLOWED',
+    );
+  }
+
+  const maxBytes = tipo.tamano_maximo_mb * 1024 * 1024;
+  if (input.tamano_bytes > maxBytes) {
+    throw new AppError(
+      413,
+      'FILE_TOO_LARGE',
+      `El archivo excede el tamano maximo de ${tipo.tamano_maximo_mb}MB`,
+    );
+  }
+
+  // 6. Generate storage key
+  const ext = input.nombre_original.includes('.')
+    ? input.nombre_original.split('.').pop()!.toLowerCase()
+    : 'bin';
+  const nombreArchivo = `${crypto.randomUUID()}.${ext}`;
+  const storageKey = `expedientes/${doc.expediente_id}/documents/${nombreArchivo}`;
+
+  // 7. Create signed upload URL
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUploadUrl(storageKey);
+
+  if (uploadError || !uploadData) {
+    logger.error({ error: uploadError?.message, storageKey }, 'Error al crear URL de subida para reemplazo');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al generar URL de subida');
+  }
+
+  return {
+    signedUrl: uploadData.signedUrl,
+    storage_key: storageKey,
+    nombre_archivo: nombreArchivo,
+    token: uploadData.token,
+    expires_in: PRESIGNED_URL_EXPIRY_SECONDS,
+    documento_original_id: doc.id,
+    expediente_id: doc.expediente_id,
+    tipo_documento_id: doc.tipo_documento_id,
+  };
+}
+
+// ============================================================
+// confirmarReemplazo — atomically create new doc + mark old as replaced
+// ============================================================
+
+export async function confirmarReemplazo(
+  docId: string,
+  input: ConfirmarReemplazoInput,
+  userId: string,
+  ip?: string,
+) {
+  // 1. Re-fetch and re-validate estado (race condition protection)
+  const { data: existing, error: existError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select(DOCUMENTO_FIELDS)
+    .eq('id', docId)
+    .single();
+
+  if (existError || !existing) {
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const doc = existing as unknown as DocumentoRow;
+
+  if (doc.estado !== 'rechazado') {
+    throw AppError.conflict(
+      'El documento ya no esta en estado rechazado. Posible operacion duplicada.',
+      'DOCUMENTO_NOT_RECHAZADO',
+    );
+  }
+
+  // 2. Verify file exists in storage
+  const { error: verifyError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(input.storage_key, 60);
+
+  if (verifyError) {
+    logger.warn(
+      { error: verifyError.message, storage_key: input.storage_key },
+      'Archivo de reemplazo no encontrado en storage',
+    );
+    throw AppError.badRequest(
+      'El archivo no fue encontrado en el storage. Verifique que la subida se completo correctamente.',
+      'FILE_NOT_FOUND_IN_STORAGE',
+    );
+  }
+
+  // 3. Calculate version
+  const { count } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .eq('expediente_id', doc.expediente_id)
+    .eq('tipo_documento_id', doc.tipo_documento_id);
+
+  const version = (count ?? 0) + 1;
+
+  // 4. INSERT new document
+  const { data: newDoc, error: insertError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: doc.expediente_id,
+      tipo_documento_id: doc.tipo_documento_id,
+      nombre_original: input.nombre_original,
+      nombre_archivo: input.nombre_archivo,
+      storage_key: input.storage_key,
+      tipo_mime: input.tipo_mime,
+      tamano_bytes: input.tamano_bytes,
+      estado: 'pendiente',
+      version,
+      subido_por: userId,
+    } as never)
+    .select(DOCUMENTO_FIELDS)
+    .single();
+
+  if (insertError) {
+    logger.error({ error: insertError.message }, 'Error al registrar documento de reemplazo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al registrar el documento de reemplazo');
+  }
+
+  const created = newDoc as unknown as DocumentoRow;
+
+  // 5. UPDATE original document → reemplazado
+  await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'reemplazado', reemplazado_por: created.id } as never)
+    .eq('id', docId);
+
+  // 6. Audit log
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.DOCUMENTO_REEMPLAZADO,
+    entidad: AUDIT_ENTITIES.DOCUMENTO,
+    entidadId: created.id,
+    detalle: {
+      documento_original_id: docId,
+      expediente_id: doc.expediente_id,
+      tipo_documento_id: doc.tipo_documento_id,
+      nombre_original: input.nombre_original,
+      version,
+    },
+    ip,
+  });
+
+  // 7. Return with signed URL
+  const archivo_url = await generateViewUrl(created.storage_key);
+  return { ...created, archivo_url };
+}
+
+// ============================================================
+// getVersiones — version history for a document type in an expediente
+// ============================================================
+
+export async function getVersiones(docId: string) {
+  // 1. Fetch doc to get expediente_id, tipo_documento_id
+  const { data: doc, error: docError } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, expediente_id, tipo_documento_id')
+    .eq('id', docId)
+    .single();
+
+  if (docError || !doc) {
+    if (docError?.code === 'PGRST116') {
+      throw AppError.notFound('Documento no encontrado');
+    }
+    throw AppError.notFound('Documento no encontrado');
+  }
+
+  const { expediente_id, tipo_documento_id } = doc as unknown as {
+    expediente_id: string;
+    tipo_documento_id: string;
+  };
+
+  // 2. Get all versions
+  const { data, error } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, estado, motivo_rechazo, validado_por, fecha_revision, version,
+      nombre_original, created_at, subido_por,
+      validador:perfiles!documentos_validado_por_fkey(id, nombre, apellido),
+      subidor:perfiles!documentos_subido_por_fkey(id, nombre, apellido)
+    `)
+    .eq('expediente_id', expediente_id)
+    .eq('tipo_documento_id', tipo_documento_id)
+    .order('version', { ascending: false });
+
+  if (error) {
+    logger.error({ error: error.message, docId }, 'Error al obtener versiones');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener versiones del documento');
+  }
+
+  return {
+    documento_id: docId,
+    expediente_id,
+    tipo_documento_id,
+    versiones: data || [],
+  };
 }
