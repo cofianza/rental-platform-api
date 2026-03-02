@@ -40,6 +40,13 @@ export const presignedUrlSchema = z.object({
 // POST /confirmar-subida
 // ============================================================
 
+// HP-327: Schema para metadatos de captura (selfie, etc.)
+const metadatosSchema = z.object({
+  metodo_captura: z.enum(['camara', 'archivo']).optional(),
+  timestamp_captura: z.string().optional(),
+  user_agent: z.string().max(500).optional(),
+}).optional();
+
 export const confirmarSubidaSchema = z.object({
   expediente_id: z.uuid({ error: 'ID de expediente invalido' }),
   tipo_documento_id: z.uuid({ error: 'ID de tipo de documento invalido' }),
@@ -48,6 +55,7 @@ export const confirmarSubidaSchema = z.object({
   storage_key: z.string().min(1, 'Storage key requerido').max(500, 'Storage key muy largo'),
   tipo_mime: z.string().min(1, 'Tipo MIME requerido').max(100, 'Tipo MIME muy largo'),
   tamano_bytes: z.coerce.number().int().positive('Tamano debe ser positivo'),
+  metadatos: metadatosSchema,
 });
 
 // ============================================================

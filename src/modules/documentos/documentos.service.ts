@@ -25,12 +25,19 @@ const DOCUMENTO_FIELDS = `
   id, expediente_id, tipo_documento_id, archivo_url, nombre_original,
   nombre_archivo, storage_key, tipo_mime, tamano_bytes, estado,
   motivo_rechazo, version, validado_por, subido_por, fecha_revision,
-  reemplazado_por, created_at, updated_at
+  reemplazado_por, metadatos, created_at, updated_at
 `;
 
 // ============================================================
 // Interfaces
 // ============================================================
+
+// HP-327: Metadatos para selfie y captura de documentos
+interface DocumentoMetadatos {
+  metodo_captura?: 'camara' | 'archivo';
+  timestamp_captura?: string;
+  user_agent?: string;
+}
 
 interface DocumentoRow {
   id: string;
@@ -49,6 +56,7 @@ interface DocumentoRow {
   subido_por: string | null;
   fecha_revision: string | null;
   reemplazado_por: string | null;
+  metadatos: DocumentoMetadatos | null;
   created_at: string;
   updated_at: string;
 }
@@ -257,7 +265,7 @@ export async function confirmarSubida(
 
   const version = (count ?? 0) + 1;
 
-  // 5. Insert document record
+  // 5. Insert document record (HP-327: include metadatos for selfie capture)
   const { data: doc, error: insertError } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
     .insert({
@@ -271,6 +279,7 @@ export async function confirmarSubida(
       estado: 'pendiente',
       version,
       subido_por: userId,
+      metadatos: input.metadatos || {},
     } as never)
     .select(DOCUMENTO_FIELDS)
     .single();
@@ -305,7 +314,7 @@ export async function confirmarSubida(
       .in('id', prevIds);
   }
 
-  // 7. Audit log
+  // 7. Audit log (HP-327: include metadatos for traceability)
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.DOCUMENTO_UPLOADED,
@@ -317,6 +326,7 @@ export async function confirmarSubida(
       nombre_original: input.nombre_original,
       storage_key: input.storage_key,
       version,
+      metadatos: input.metadatos,
     },
     ip,
   });
