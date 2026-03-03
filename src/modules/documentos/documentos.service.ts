@@ -1079,9 +1079,23 @@ export async function confirmarReemplazo(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al confirmar el reemplazo del documento');
   }
 
-  const created = rpcResult as unknown as DocumentoRow;
+  let created = rpcResult as unknown as DocumentoRow;
 
-  // 4. Audit log
+  // D1 CR: Update metadatos if provided (RPC doesn't support metadatos parameter)
+  if (input.metadatos && Object.keys(input.metadatos).length > 0) {
+    const { data: updatedDoc } = await (supabase
+      .from('documentos' as string) as ReturnType<typeof supabase.from>)
+      .update({ metadatos: input.metadatos } as never)
+      .eq('id', created.id)
+      .select(DOCUMENTO_FIELDS)
+      .single();
+
+    if (updatedDoc) {
+      created = updatedDoc as unknown as DocumentoRow;
+    }
+  }
+
+  // 4. Audit log (D1 CR: include metadatos)
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.DOCUMENTO_REEMPLAZADO,
@@ -1093,6 +1107,7 @@ export async function confirmarReemplazo(
       tipo_documento_id: doc.tipo_documento_id,
       nombre_original: input.nombre_original,
       version: created.version,
+      metadatos: input.metadatos,
     },
     ip,
   });

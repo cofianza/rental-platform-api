@@ -101,6 +101,7 @@ export const confirmarReemplazoSchema = z.object({
   storage_key: z.string().min(1, 'Storage key requerido').max(500),
   tipo_mime: z.string().min(1, 'Tipo MIME requerido').max(100),
   tamano_bytes: z.coerce.number().int().positive('Tamano debe ser positivo'),
+  metadatos: metadatosSchema, // D1 CR: metadatos para reemplazo de selfie
 });
 
 // ============================================================
