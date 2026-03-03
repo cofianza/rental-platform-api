@@ -214,13 +214,22 @@ CREATE TRIGGER perfiles_updated_at
 -- Trigger: crear perfil automáticamente cuando se registra un usuario en Supabase Auth
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
+DECLARE
+  v_rol rol_usuario;
 BEGIN
+  -- Cast seguro del rol: si el valor es inválido o NULL, usa el default
+  BEGIN
+    v_rol := (NEW.raw_user_meta_data->>'rol')::rol_usuario;
+  EXCEPTION WHEN invalid_text_representation THEN
+    v_rol := NULL;
+  END;
+
   INSERT INTO public.perfiles (id, nombre, apellido, rol)
   VALUES (
     NEW.id,
     COALESCE(NEW.raw_user_meta_data->>'nombre', ''),
     COALESCE(NEW.raw_user_meta_data->>'apellido', ''),
-    COALESCE((NEW.raw_user_meta_data->>'rol')::rol_usuario, 'operador_analista')
+    COALESCE(v_rol, 'operador_analista')
   );
   RETURN NEW;
 END;
@@ -394,7 +403,10 @@ CREATE TABLE contratos (
   duracion_meses      SMALLINT,
   valor_arriendo      NUMERIC(12,2),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_contratos_fechas CHECK (
+    fecha_fin IS NULL OR fecha_inicio IS NULL OR fecha_fin > fecha_inicio
+  )
 );
 
 CREATE TRIGGER contratos_updated_at
@@ -417,7 +429,8 @@ CREATE TABLE firmas (
   ip_firmante     VARCHAR(45),
   user_agent      TEXT,
   evidencia_url   TEXT,
-  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_firmas_contrato_tipo UNIQUE (contrato_id, tipo_firmante)
 );
 
 -- -------------------------------------------------------
@@ -504,6 +517,9 @@ CREATE TABLE eventos_timeline (
 -- expedientes.numero: UNIQUE constraint
 
 -- Índices de búsqueda por relación
+CREATE INDEX idx_solicitantes_email ON solicitantes(email);
+CREATE INDEX idx_solicitantes_documento ON solicitantes(tipo_documento, numero_documento);
+
 CREATE INDEX idx_inmuebles_propietario ON inmuebles(propietario_id);
 CREATE INDEX idx_inmuebles_estado ON inmuebles(estado);
 CREATE INDEX idx_inmuebles_ciudad ON inmuebles(ciudad);
@@ -557,19 +573,7 @@ ALTER TABLE bitacora ENABLE ROW LEVEL SECURITY;
 ALTER TABLE comentarios ENABLE ROW LEVEL SECURITY;
 ALTER TABLE eventos_timeline ENABLE ROW LEVEL SECURITY;
 
--- Política temporal: permitir acceso completo al service_role (backend)
--- Las políticas granulares por rol se implementan en HP-30 (Setup backend)
-CREATE POLICY "Service role full access" ON perfiles FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON inmuebles FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON solicitantes FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON expedientes FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON documentos FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON estudios FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON plantillas_contrato FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON contratos FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON firmas FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON pagos FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON facturas FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON bitacora FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON comentarios FOR ALL USING (TRUE) WITH CHECK (TRUE);
-CREATE POLICY "Service role full access" ON eventos_timeline FOR ALL USING (TRUE) WITH CHECK (TRUE);
+-- Sin políticas temporales: con RLS habilitado y sin políticas,
+-- solo service_role (que omite RLS) puede acceder a los datos.
+-- Esto es seguro porque el backend usa exclusivamente la clave service_role.
+-- Las políticas granulares por rol se implementan en HP-30 (Setup backend).

@@ -1,35 +1,60 @@
-import { supabase } from '@/lib/supabase';
+import crypto from 'node:crypto';
+import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
-import type { LoginInput, RefreshInput } from './auth.schema';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { sendPasswordResetEmail } from '@/lib/email';
+import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput } from './auth.schema';
 
-export async function loginWithEmail({ email, password }: LoginInput) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
+  const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
 
   if (error) {
     logger.warn({ email, error: error.message }, 'Login fallido');
+    logAudit({
+      usuarioId: null,
+      accion: AUDIT_ACTIONS.LOGIN_FAILED,
+      entidad: AUDIT_ENTITIES.SESSION,
+      detalle: { email },
+      ip,
+    });
     throw AppError.unauthorized('Credenciales invalidas', 'INVALID_CREDENTIALS');
   }
 
-  // Verificar que el perfil este activo
-  const { data: perfil } = await supabase
-    .from('perfiles' as string)
-    .select('activo')
+  // Verificar que el perfil este activo y obtener el rol
+  const { data: perfil, error: perfilError } = await supabase
+    .from('perfiles')
+    .select('estado, rol')
     .eq('id', data.user.id)
-    .single<{ activo: boolean }>();
+    .single<{ estado: string; rol: string }>();
 
-  if (perfil && !perfil.activo) {
+  if (perfilError) {
+    logger.warn({ userId: data.user.id, error: perfilError }, 'Error al obtener perfil en login');
+  }
+
+  if (perfil && perfil.estado !== 'activo') {
     // Cerrar la sesion recien creada
-    await supabase.auth.admin.signOut(data.session.access_token);
+    await supabaseAuth.auth.admin.signOut(data.session.access_token);
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
+
+  const userRol = perfil?.rol ?? 'operador_analista';
+  logger.info({ userId: data.user.id, rol: userRol, perfilRol: perfil?.rol }, 'Login exitoso');
+
+  logAudit({
+    usuarioId: data.user.id,
+    accion: AUDIT_ACTIONS.LOGIN_SUCCESS,
+    entidad: AUDIT_ENTITIES.SESSION,
+    detalle: { email: data.user.email, rol: userRol },
+    ip,
+  });
 
   return {
     user: {
       id: data.user.id,
       email: data.user.email,
-      rol: data.user.user_metadata?.rol ?? 'sin_rol',
+      rol: userRol,
     },
     session: {
       access_token: data.session.access_token,
@@ -54,7 +79,7 @@ export function getGoogleOAuthUrl() {
 }
 
 export async function refreshSession({ refresh_token }: RefreshInput) {
-  const { data, error } = await supabase.auth.refreshSession({ refresh_token });
+  const { data, error } = await supabaseAuth.auth.refreshSession({ refresh_token });
 
   if (error || !data.session) {
     throw AppError.unauthorized('Refresh token invalido o expirado', 'INVALID_REFRESH_TOKEN');
@@ -67,25 +92,199 @@ export async function refreshSession({ refresh_token }: RefreshInput) {
   };
 }
 
-export async function logout(accessToken: string) {
-  const { error } = await supabase.auth.admin.signOut(accessToken);
+export async function logout(accessToken: string, userId?: string, ip?: string) {
+  const { error } = await supabaseAuth.auth.admin.signOut(accessToken);
 
   if (error) {
     logger.warn({ error: error.message }, 'Error al cerrar sesion');
     // No lanzar error - el token puede haber expirado naturalmente
   }
+
+  if (userId) {
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.LOGOUT,
+      entidad: AUDIT_ENTITIES.SESSION,
+      ip,
+    });
+  }
 }
 
 export async function getProfile(userId: string) {
-  const { data, error } = await supabase
+  // Obtener perfil de la tabla perfiles
+  const { data: perfil, error: perfilError } = await supabase
     .from('perfiles' as string)
-    .select('id, email, nombre_completo, rol, activo, created_at, updated_at')
+    .select('id, nombre, apellido, rol, estado, created_at, updated_at')
     .eq('id', userId)
-    .single<{ id: string; email: string; nombre_completo: string; rol: string; activo: boolean; created_at: string; updated_at: string }>();
+    .single<{ id: string; nombre: string; apellido: string; rol: string; estado: string; created_at: string; updated_at: string }>();
 
-  if (error || !data) {
+  if (perfilError || !perfil) {
     throw AppError.notFound('Perfil no encontrado');
   }
 
-  return data;
+  // Obtener email de auth.users
+  const { data: { user }, error: userError } = await supabaseAuth.auth.admin.getUserById(userId);
+
+  if (userError || !user) {
+    throw AppError.notFound('Usuario no encontrado');
+  }
+
+  // Construir respuesta con datos combinados
+  return {
+    id: perfil.id,
+    email: user.email || '',
+    nombre_completo: `${perfil.nombre} ${perfil.apellido}`.trim(),
+    rol: perfil.rol,
+    activo: perfil.estado === 'activo',
+    created_at: perfil.created_at,
+    updated_at: perfil.updated_at,
+  };
+}
+
+function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string) {
+  // Buscar usuario por email en auth.users via RPC (perfiles no tiene columna email)
+  const { data: userResult, error: rpcError } = await supabase
+    .rpc('find_user_by_email' as never, { user_email: email } as never)
+    .single<{ id: string; email: string }>();
+
+  if (rpcError || !userResult) {
+    logger.info({ email }, 'Solicitud de reset para email no registrado');
+    return; // No revelar que el email no existe
+  }
+
+  const userId = userResult.id;
+
+  // Verificar si es cuenta Google-only (sin password)
+  const { data: userData, error: userError } = await supabaseAuth.auth.admin.getUserById(userId);
+
+  if (userError || !userData?.user) {
+    logger.error({ userId, error: userError?.message }, 'Error al obtener usuario');
+    return;
+  }
+
+  const identities = userData.user.identities ?? [];
+  const hasEmailIdentity = identities.some((i) => i.provider === 'email');
+
+  if (!hasEmailIdentity && identities.length > 0) {
+    // Usuario registrado solo con Google, no tiene contrasena
+    logger.info({ email }, 'Solicitud de reset para cuenta Google-only');
+    return; // No revelar informacion sobre el tipo de cuenta
+  }
+
+  // Invalidar todos los tokens previos del usuario
+  await (supabase
+    .from('password_reset_tokens' as string) as ReturnType<typeof supabase.from>)
+    .update({ used_at: new Date().toISOString() } as never)
+    .eq('user_id', userId)
+    .is('used_at', null);
+
+  // Generar token seguro
+  const rawToken = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashToken(rawToken);
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hora
+
+  // Guardar en base de datos
+  const { error: insertError } = await (supabase
+    .from('password_reset_tokens' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      user_id: userId,
+      token_hash: tokenHash,
+      expires_at: expiresAt,
+    } as never);
+
+  if (insertError) {
+    logger.error({ error: insertError.message }, 'Error al guardar token de reset');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error interno del servidor');
+  }
+
+  // Enviar email
+  const resetUrl = `${env.FRONTEND_URL}/restablecer-contrasena?token=${rawToken}`;
+  await sendPasswordResetEmail(email, resetUrl);
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.PASSWORD_RESET_REQUEST,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    detalle: { email },
+    ip,
+  });
+
+  logger.info({ email, userId }, 'Token de reset generado y email enviado');
+}
+
+export async function validateResetToken(token: string) {
+  const tokenHash = hashToken(token);
+
+  const { data, error } = await supabase
+    .from('password_reset_tokens' as string)
+    .select('id, expires_at, used_at')
+    .eq('token_hash', tokenHash)
+    .is('used_at', null)
+    .single<{ id: string; expires_at: string; used_at: string | null }>();
+
+  if (error || !data) {
+    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+  }
+
+  if (new Date(data.expires_at) < new Date()) {
+    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+  }
+
+  return { valid: true };
+}
+
+export async function resetPassword({ token, password }: ResetPasswordInput, ip?: string) {
+  const tokenHash = hashToken(token);
+
+  // Buscar y validar token
+  const { data: tokenData, error: tokenError } = await supabase
+    .from('password_reset_tokens' as string)
+    .select('id, user_id, expires_at, used_at')
+    .eq('token_hash', tokenHash)
+    .is('used_at', null)
+    .single<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
+
+  if (tokenError || !tokenData) {
+    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+  }
+
+  if (new Date(tokenData.expires_at) < new Date()) {
+    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+  }
+
+  // Actualizar contrasena en Supabase Auth
+  const { error: updateError } = await supabaseAuth.auth.admin.updateUserById(tokenData.user_id, {
+    password,
+  });
+
+  if (updateError) {
+    logger.error({ error: updateError.message }, 'Error al actualizar contrasena');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al restablecer la contrasena');
+  }
+
+  // Marcar token como usado
+  await (supabase
+    .from('password_reset_tokens' as string) as ReturnType<typeof supabase.from>)
+    .update({ used_at: new Date().toISOString() } as never)
+    .eq('id', tokenData.id);
+
+  // Revocar todas las sesiones del usuario
+  await supabaseAuth.auth.admin.signOut(tokenData.user_id, 'global');
+
+  logAudit({
+    usuarioId: tokenData.user_id,
+    accion: AUDIT_ACTIONS.PASSWORD_RESET_COMPLETE,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: tokenData.user_id,
+    ip,
+  });
+
+  logger.info({ userId: tokenData.user_id }, 'Contrasena restablecida exitosamente');
+
+  return { message: 'Contrasena restablecida exitosamente' };
 }

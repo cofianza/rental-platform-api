@@ -1,0 +1,274 @@
+{
+  "info": {
+    "name": "Habitar Propiedades API",
+    "description": "API para la plataforma de gestion de arriendos - Habitar Propiedades",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001/api/v1"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health",
+            "auth": { "type": "noauth" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.access_token) {",
+                  "  pm.collectionVariables.set('accessToken', res.data.access_token);",
+                  "  pm.collectionVariables.set('refreshToken', res.data.refresh_token);",
+                  "  console.log('Tokens guardados automaticamente');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/login",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@email.com\",\n  \"password\": \"Password123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Login Google (Get OAuth URL)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/login/google",
+            "auth": { "type": "noauth" }
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.data && res.data.access_token) {",
+                  "  pm.collectionVariables.set('accessToken', res.data.access_token);",
+                  "  pm.collectionVariables.set('refreshToken', res.data.refresh_token);",
+                  "  console.log('Tokens actualizados automaticamente');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/refresh",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/forgot-password",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"usuario@email.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Validate Reset Token",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/auth/reset-password/TOKEN_AQUI",
+            "auth": { "type": "noauth" }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/reset-password",
+            "auth": { "type": "noauth" },
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"TOKEN_AQUI\",\n  \"password\": \"NuevaPassword1\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/auth/logout"
+          }
+        },
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/auth/me"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "description": "Requiere rol administrador",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/users?page=1&limit=10&sortBy=created_at&sortOrder=desc",
+              "host": ["{{baseUrl}}"],
+              "path": ["users"],
+              "query": [
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" },
+                { "key": "search", "value": "", "disabled": true },
+                { "key": "role", "value": "administrador", "disabled": true },
+                { "key": "is_active", "value": "true", "disabled": true },
+                { "key": "sortBy", "value": "created_at" },
+                { "key": "sortOrder", "value": "desc" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get User by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/users/USER_UUID_AQUI"
+          }
+        },
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/users",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nuevo@email.com\",\n  \"nombre\": \"Juan\",\n  \"apellido\": \"Perez\",\n  \"telefono\": \"+56912345678\",\n  \"rol\": \"operador_analista\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PUT",
+            "url": "{{baseUrl}}/users/USER_UUID_AQUI",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Juan Carlos\",\n  \"apellido\": \"Perez Lopez\",\n  \"telefono\": \"+56987654321\",\n  \"rol\": \"administrador\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Deactivate User",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/users/USER_UUID_AQUI/deactivate"
+          }
+        },
+        {
+          "name": "Activate User",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/users/USER_UUID_AQUI/activate"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Expedientes",
+      "item": [
+        {
+          "name": "Transition Expediente",
+          "request": {
+            "method": "PATCH",
+            "url": "{{baseUrl}}/expedientes/EXPEDIENTE_UUID_AQUI/transition",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nuevo_estado\": \"en_revision\",\n  \"motivo\": \"Documentacion completa\",\n  \"comentario\": \"Listo para revision\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Get Available Transitions",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/expedientes/EXPEDIENTE_UUID_AQUI/transitions"
+          }
+        }
+      ]
+    }
+  ]
+}

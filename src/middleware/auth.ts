@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseAuth } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
+import { hasPermission, type Resource, type Action } from '@/config/permissions';
 import type { UserRole } from '@/types/auth';
 
 /**
@@ -19,7 +20,7 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
 
   const token = authHeader.slice(7);
 
-  const { data: { user }, error } = await supabase.auth.getUser(token);
+  const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
 
   if (error || !user) {
     logger.warn({ error }, 'Token invalido o expirado');
@@ -29,24 +30,25 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
   // Consultar tabla perfiles para verificar estado activo y rol
   const { data: perfil, error: perfilError } = await supabase
     .from('perfiles')
-    .select('id, email, rol, estado')
+    .select('id, rol, estado')
     .eq('id', user.id)
     .single();
 
   if (perfilError || !perfil) {
-    logger.warn({ userId: user.id }, 'Perfil no encontrado para usuario autenticado');
+    logger.warn({ userId: user.id, error: perfilError }, 'Perfil no encontrado para usuario autenticado');
     throw AppError.unauthorized('Perfil de usuario no encontrado');
   }
 
-  const perfilData = perfil as { id: string; email: string; rol: UserRole; estado: 'activo' | 'inactivo' };
+  const perfilData = perfil as { id: string; rol: UserRole; estado: 'activo' | 'inactivo' };
 
   if (perfilData.estado !== 'activo') {
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
 
+  // El email viene de auth.users (del token JWT), no de perfiles
   req.user = {
     id: perfilData.id,
-    email: perfilData.email,
+    email: user.email || '',
     rol: perfilData.rol,
     activo: perfilData.estado === 'activo',
   };
@@ -71,6 +73,34 @@ export function roleGuard(rolesPermitidos: string[]) {
       );
       throw AppError.forbidden(
         `Rol '${req.user.rol}' no tiene permisos para esta accion. Roles permitidos: ${rolesPermitidos.join(', ')}`,
+      );
+    }
+
+    next();
+  };
+}
+
+/**
+ * Middleware factory que verifica permisos granulares por recurso y accion.
+ * Debe usarse DESPUES de authMiddleware.
+ *
+ * @param resource - El recurso al que se accede (e.g. 'expedientes', 'usuarios')
+ * @param action - La accion a realizar (e.g. 'create', 'read', 'update', 'delete')
+ */
+export function authorize(resource: Resource, action: Action) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    if (!req.user) {
+      throw AppError.unauthorized('Autenticacion requerida');
+    }
+
+    if (!hasPermission(req.user.rol, resource, action)) {
+      logger.warn(
+        { userId: req.user.id, rol: req.user.rol, resource, action },
+        'Acceso denegado por permisos insuficientes',
+      );
+      throw AppError.forbidden(
+        `Sin permisos para '${action}' en '${resource}'`,
+        'INSUFFICIENT_PERMISSIONS',
       );
     }
 

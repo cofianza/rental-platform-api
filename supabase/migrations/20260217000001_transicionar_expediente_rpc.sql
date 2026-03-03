@@ -14,6 +14,7 @@ DECLARE
   v_estado_anterior estado_expediente;
   v_expediente RECORD;
   v_evento_id UUID;
+  v_transicion_valida BOOLEAN;
 BEGIN
   -- Bloquear la fila para prevenir transiciones concurrentes
   SELECT estado INTO v_estado_anterior
@@ -23,6 +24,22 @@ BEGIN
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Expediente no encontrado: %', p_expediente_id;
+  END IF;
+
+  -- Validar transición de estado permitida
+  v_transicion_valida := CASE v_estado_anterior
+    WHEN 'borrador'                THEN p_nuevo_estado IN ('en_revision', 'cerrado')
+    WHEN 'en_revision'             THEN p_nuevo_estado IN ('informacion_incompleta', 'aprobado', 'rechazado', 'condicionado')
+    WHEN 'informacion_incompleta'  THEN p_nuevo_estado IN ('en_revision', 'cerrado')
+    WHEN 'aprobado'                THEN p_nuevo_estado IN ('cerrado')
+    WHEN 'rechazado'               THEN p_nuevo_estado IN ('cerrado')
+    WHEN 'condicionado'            THEN p_nuevo_estado IN ('en_revision', 'cerrado')
+    WHEN 'cerrado'                 THEN FALSE
+    ELSE FALSE
+  END;
+
+  IF NOT v_transicion_valida THEN
+    RAISE EXCEPTION 'Transición no permitida: % → %', v_estado_anterior, p_nuevo_estado;
   END IF;
 
   -- Actualizar estado del expediente

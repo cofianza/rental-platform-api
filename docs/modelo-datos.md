@@ -125,7 +125,7 @@ Usuarios internos del sistema. Extiende la tabla `auth.users` de Supabase Auth. 
 | telefono | VARCHAR(20) | SI | NULL | Telefono de contacto |
 | tipo_documento | tipo_documento_id | SI | NULL | Tipo de documento de identidad |
 | numero_documento | VARCHAR(20) | SI | NULL | Numero de documento |
-| rol | rol_usuario | NO | 'operador' | Rol dentro del sistema |
+| rol | rol_usuario | NO | 'operador_analista' | Rol dentro del sistema |
 | estado | estado_usuario | NO | 'activo' | Estado del usuario |
 | avatar_url | TEXT | SI | NULL | URL de la foto de perfil |
 | created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
@@ -209,9 +209,11 @@ Personas (naturales o juridicas) que solicitan arrendar un inmueble. Un solicita
 | created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
 | updated_at | TIMESTAMPTZ | NO | NOW() | Fecha de ultima modificacion |
 
+**Indices:** `idx_solicitantes_email`, `idx_solicitantes_documento` (compuesto: tipo_documento + numero_documento)
+
 **Triggers:** `solicitantes_updated_at`
 
-**Tablas relacionadas:** expedientes
+**Tablas relacionadas:** expedientes, autorizaciones_habeas_data
 
 ---
 
@@ -344,6 +346,8 @@ Contratos de arrendamiento generados a partir de un expediente aprobado. Pueden 
 
 **Foreign Keys:** `expediente_id` → `expedientes(id)`, `plantilla_id` → `plantillas_contrato(id)`
 
+**Constraints:** `chk_contratos_fechas` CHECK (fecha_fin IS NULL OR fecha_inicio IS NULL OR fecha_fin > fecha_inicio)
+
 **Indices:** `idx_contratos_expediente`
 
 **Triggers:** `contratos_updated_at`
@@ -373,6 +377,8 @@ Registros de firma electronica para cada parte del contrato (arrendatario, propi
 | created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
 
 **Foreign Keys:** `contrato_id` → `contratos(id)` ON DELETE CASCADE
+
+**Constraints:** `uq_firmas_contrato_tipo` UNIQUE (contrato_id, tipo_firmante)
 
 **Indices:** `idx_firmas_contrato`
 
@@ -530,13 +536,15 @@ Autorizaciones de consulta crediticia otorgadas por los solicitantes conforme a 
 ## 4. Tipos Enumerados
 
 ### rol_usuario
-Roles de acceso al sistema interno.
+Roles de acceso al sistema.
 
 | Valor | Descripcion |
 |-------|-------------|
 | `administrador` | Acceso total al sistema, gestion de usuarios y configuracion |
-| `operador` | Gestion de expedientes, documentos, estudios y contratos |
-| `gerencia` | Acceso de consulta, reportes y aprobaciones de alto nivel |
+| `operador_analista` | Gestion de expedientes, documentos, estudios y contratos |
+| `gerencia_consulta` | Acceso de consulta, reportes y aprobaciones de alto nivel |
+| `propietario` | Propietario de inmuebles, acceso a sus propiedades y expedientes |
+| `inmobiliaria` | Inmobiliaria asociada, gestion de sus inmuebles |
 
 ### estado_usuario
 Estado de actividad de un usuario.
@@ -768,7 +776,7 @@ Tipos de eventos que se registran en la linea de tiempo de un expediente.
 
 ### Row Level Security (RLS)
 - **Habilitado** en las 15 tablas.
-- Politica temporal: acceso completo con `USING (TRUE) WITH CHECK (TRUE)` para el service_role del backend.
+- **Sin politicas temporales**: con RLS habilitado y sin politicas definidas, solo `service_role` (que omite RLS) puede acceder. Esto evita exponer datos a los roles `anon` y `authenticated`.
 - Las politicas granulares por rol se implementaran en la tarea HP-30.
 
 ### Triggers
@@ -823,6 +831,8 @@ El expediente es la entidad central del modelo. Desde el se derivan:
 
 | Indice | Tabla | Columna(s) | Proposito |
 |--------|-------|-----------|-----------|
+| `idx_solicitantes_email` | solicitantes | email | Buscar solicitante por email |
+| `idx_solicitantes_documento` | solicitantes | tipo_documento, numero_documento | Buscar solicitante por documento de identidad |
 | `idx_inmuebles_propietario` | inmuebles | propietario_id | Buscar inmuebles de un propietario |
 | `idx_inmuebles_estado` | inmuebles | estado | Filtrar inmuebles por estado |
 | `idx_inmuebles_ciudad` | inmuebles | ciudad | Buscar inmuebles por ciudad |
@@ -869,7 +879,7 @@ El expediente es la entidad central del modelo. Desde el se derivan:
 
 ### Row Level Security (RLS)
 - RLS esta **habilitado** en las 15 tablas desde la migracion inicial.
-- Las politicas actuales son **temporales** y permiten acceso completo (`USING (TRUE)`). Esto es seguro porque el backend usa la clave `service_role` que omite RLS.
+- **Sin politicas temporales**: con RLS habilitado y sin politicas definidas, solo `service_role` (que omite RLS) puede acceder a los datos. Esto evita exponer datos a los roles `anon` y `authenticated` accidentalmente.
 - Las politicas granulares por rol de usuario se implementaran en la tarea **HP-30** (Setup backend con permisos).
 
 ### Uso de JSONB
