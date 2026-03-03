@@ -50,6 +50,7 @@ export const listExpedientesQuerySchema = z.object({
   search: z.string().optional(),
   estado: z.string().optional(), // Comma-separated: "borrador,en_revision"
   analista_id: z.uuid({ error: 'ID de analista invalido' }).optional(),
+  inmueble_id: z.uuid({ error: 'ID de inmueble invalido' }).optional(), // HP-247: filtrar por inmueble
   fecha_desde: z.string().optional(),
   fecha_hasta: z.string().optional(),
   sortBy: z.enum(['created_at', 'numero', 'estado']).default('created_at'),
