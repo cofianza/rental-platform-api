@@ -37,3 +37,10 @@ export async function stats(_req: Request, res: Response) {
   const result = await expedientesService.getExpedienteStats();
   sendSuccess(res, result);
 }
+
+// HP-247: Verificar si un inmueble tiene expediente activo
+export async function checkByInmueble(req: Request, res: Response) {
+  const { inmuebleId } = req.params as { inmuebleId: string };
+  const result = await expedientesService.checkActiveExpedienteByInmueble(inmuebleId);
+  sendSuccess(res, result);
+}

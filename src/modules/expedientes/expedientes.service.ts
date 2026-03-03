@@ -61,7 +61,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
 // ============================================================
 
 export async function listExpedientes(query: ListExpedientesQuery) {
-  const { search, estado, analista_id, fecha_desde, fecha_hasta } = query;
+  const { search, estado, analista_id, inmueble_id, fecha_desde, fecha_hasta } = query;
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
   const sortBy = query.sortBy || 'created_at';
@@ -76,6 +76,7 @@ export async function listExpedientes(query: ListExpedientesQuery) {
     p_search: search || null,
     p_estados: estados,
     p_analista_id: analista_id || null,
+    p_inmueble_id: inmueble_id || null,
     p_fecha_desde: fecha_desde || null,
     p_fecha_hasta: fecha_hasta || null,
     p_sort_field: sortBy,
@@ -101,6 +102,31 @@ export async function listExpedientes(query: ListExpedientesQuery) {
       limit,
       totalPages: Math.ceil(total / limit),
     },
+  };
+}
+
+// ============================================================
+// Check Active Expediente by Inmueble - HP-247
+// ============================================================
+
+export async function checkActiveExpedienteByInmueble(inmuebleId: string) {
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, estado')
+    .eq('inmueble_id', inmuebleId)
+    .not('estado', 'in', `(${ESTADOS_TERMINALES.join(',')})`)
+    .limit(1);
+
+  if (error) {
+    logger.error({ error: error.message, inmuebleId }, 'Error al verificar expediente activo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar expediente activo');
+  }
+
+  const activeExpediente = data && data.length > 0 ? data[0] : null;
+
+  return {
+    hasActiveExpediente: !!activeExpediente,
+    expediente: activeExpediente,
   };
 }
 
