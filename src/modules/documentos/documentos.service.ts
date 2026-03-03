@@ -1054,47 +1054,34 @@ export async function confirmarReemplazo(
     );
   }
 
-  // 3. Calculate version
-  const { count } = await (supabase
-    .from('documentos' as string) as ReturnType<typeof supabase.from>)
-    .select('id', { count: 'exact', head: true })
-    .eq('expediente_id', doc.expediente_id)
-    .eq('tipo_documento_id', doc.tipo_documento_id);
+  // 3. Atomic: INSERT new doc + UPDATE original in a single transaction (RPC)
+  const { data: rpcResult, error: rpcError } = await (supabase as any).rpc(
+    'confirmar_reemplazo_documento',
+    {
+      p_doc_id: docId,
+      p_nombre_original: input.nombre_original,
+      p_nombre_archivo: input.nombre_archivo,
+      p_storage_key: input.storage_key,
+      p_tipo_mime: input.tipo_mime,
+      p_tamano_bytes: input.tamano_bytes,
+      p_usuario_id: userId,
+    },
+  );
 
-  const version = (count ?? 0) + 1;
-
-  // 4. INSERT new document
-  const { data: newDoc, error: insertError } = await (supabase
-    .from('documentos' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      expediente_id: doc.expediente_id,
-      tipo_documento_id: doc.tipo_documento_id,
-      nombre_original: input.nombre_original,
-      nombre_archivo: input.nombre_archivo,
-      storage_key: input.storage_key,
-      tipo_mime: input.tipo_mime,
-      tamano_bytes: input.tamano_bytes,
-      estado: 'pendiente',
-      version,
-      subido_por: userId,
-    } as never)
-    .select(DOCUMENTO_FIELDS)
-    .single();
-
-  if (insertError) {
-    logger.error({ error: insertError.message }, 'Error al registrar documento de reemplazo');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al registrar el documento de reemplazo');
+  if (rpcError) {
+    logger.error({ error: rpcError.message }, 'Error en RPC confirmar_reemplazo_documento');
+    if (rpcError.message?.includes('no esta en estado rechazado')) {
+      throw AppError.conflict(
+        'El documento ya no esta en estado rechazado. Posible operacion duplicada.',
+        'DOCUMENTO_NOT_RECHAZADO',
+      );
+    }
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al confirmar el reemplazo del documento');
   }
 
-  const created = newDoc as unknown as DocumentoRow;
+  const created = rpcResult as unknown as DocumentoRow;
 
-  // 5. UPDATE original document → reemplazado
-  await (supabase
-    .from('documentos' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: 'reemplazado', reemplazado_por: created.id } as never)
-    .eq('id', docId);
-
-  // 6. Audit log
+  // 4. Audit log
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.DOCUMENTO_REEMPLAZADO,
@@ -1105,12 +1092,12 @@ export async function confirmarReemplazo(
       expediente_id: doc.expediente_id,
       tipo_documento_id: doc.tipo_documento_id,
       nombre_original: input.nombre_original,
-      version,
+      version: created.version,
     },
     ip,
   });
 
-  // 7. Return with signed URL
+  // 5. Return with signed URL
   const archivo_url = await generateViewUrl(created.storage_key);
   return { ...created, archivo_url };
 }
