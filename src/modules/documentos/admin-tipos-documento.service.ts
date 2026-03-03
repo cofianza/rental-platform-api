@@ -19,11 +19,12 @@ interface TipoDocumentoRow {
   tamano_maximo_mb: number;
   orden: number;
   activo: boolean;
+  es_protegido: boolean;
   created_at: string;
   updated_at: string;
 }
 
-const TIPO_FIELDS = 'id, codigo, nombre, descripcion, es_obligatorio, formatos_aceptados, tamano_maximo_mb, orden, activo, created_at, updated_at';
+const TIPO_FIELDS = 'id, codigo, nombre, descripcion, es_obligatorio, formatos_aceptados, tamano_maximo_mb, orden, activo, es_protegido, created_at, updated_at';
 
 function tiposTable() {
   return supabase.from('tipos_documento' as string) as ReturnType<typeof supabase.from>;
@@ -201,6 +202,14 @@ export async function updateTipoDocumento(
 export async function toggleActivo(id: string, userId: string, ip?: string) {
   const existing = await getTipoDocumentoById(id);
 
+  // Proteger tipos seed
+  if (existing.es_protegido && existing.activo) {
+    throw AppError.badRequest(
+      'No se puede desactivar un tipo de documento protegido (tipo base del sistema)',
+      'TIPO_PROTEGIDO',
+    );
+  }
+
   // Si va a desactivar, verificar que no haya documentos pendientes/aprobados
   if (existing.activo) {
     const { count, error: countError } = await (supabase
@@ -254,27 +263,16 @@ export async function toggleActivo(id: string, userId: string, ip?: string) {
 // ============================================================
 
 export async function reordenarTipos(input: ReordenarTiposInput, userId: string, ip?: string) {
-  const ids = input.items.map((i) => i.id);
+  const { data, error } = await (supabase as any).rpc('reordenar_tipos_documento', {
+    p_items: input.items,
+  });
 
-  // Verificar que todos los IDs existen
-  const { count, error: countError } = await tiposTable()
-    .select('id', { count: 'exact', head: true })
-    .in('id', ids);
-
-  if (countError) {
-    logger.error({ error: countError.message }, 'Error al verificar tipos para reordenar');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar tipos de documento');
-  }
-
-  if ((count ?? 0) !== ids.length) {
-    throw AppError.badRequest('Algunos tipos de documento no existen', 'INVALID_TIPO_IDS');
-  }
-
-  // Actualizar orden de cada tipo
-  for (const item of input.items) {
-    await tiposTable()
-      .update({ orden: item.orden } as never)
-      .eq('id', item.id);
+  if (error) {
+    logger.error({ error: error.message }, 'Error al reordenar tipos de documento (RPC)');
+    if (error.message?.includes('no existen')) {
+      throw AppError.badRequest('Algunos tipos de documento no existen', 'INVALID_TIPO_IDS');
+    }
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al reordenar tipos de documento');
   }
 
   logAudit({
@@ -285,15 +283,28 @@ export async function reordenarTipos(input: ReordenarTiposInput, userId: string,
     ip,
   });
 
-  // Retornar lista actualizada
-  const { data, error } = await tiposTable()
-    .select(TIPO_FIELDS)
-    .order('orden', { ascending: true });
+  return (data as unknown as TipoDocumentoRow[]) || [];
+}
 
-  if (error) {
-    logger.error({ error: error.message }, 'Error al obtener tipos reordenados');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener tipos reordenados');
+// ============================================================
+// checkCodigoDisponible
+// ============================================================
+
+export async function checkCodigoDisponible(codigo: string, excludeId?: string) {
+  let qb = tiposTable()
+    .select('id', { count: 'exact', head: true })
+    .eq('codigo', codigo);
+
+  if (excludeId) {
+    qb = qb.neq('id', excludeId);
   }
 
-  return (data as unknown as TipoDocumentoRow[]) || [];
+  const { count, error } = await qb;
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al verificar codigo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar codigo');
+  }
+
+  return { disponible: (count ?? 0) === 0 };
 }

@@ -56,3 +56,14 @@ export type TipoDocumentoIdParams = z.infer<typeof tipoDocumentoIdSchema>;
 export type CreateTipoDocumentoInput = z.infer<typeof createTipoDocumentoSchema>;
 export type UpdateTipoDocumentoInput = z.infer<typeof updateTipoDocumentoSchema>;
 export type ReordenarTiposInput = z.infer<typeof reordenarTiposSchema>;
+
+export const checkCodigoQuerySchema = z.object({
+  codigo: z
+    .string()
+    .min(2)
+    .max(50)
+    .regex(/^[a-z0-9_]+$/),
+  excludeId: z.string().uuid().optional(),
+});
+
+export type CheckCodigoQuery = z.infer<typeof checkCodigoQuerySchema>;

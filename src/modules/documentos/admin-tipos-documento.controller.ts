@@ -7,6 +7,7 @@ import type {
   CreateTipoDocumentoInput,
   UpdateTipoDocumentoInput,
   ReordenarTiposInput,
+  CheckCodigoQuery,
 } from './admin-tipos-documento.schema';
 
 export async function list(req: Request, res: Response) {
@@ -44,4 +45,10 @@ export async function reordenar(req: Request, res: Response) {
   const input = req.body as ReordenarTiposInput;
   const tipos = await adminTiposService.reordenarTipos(input, req.user!.id, req.ip);
   sendSuccess(res, tipos);
+}
+
+export async function checkCodigo(req: Request, res: Response) {
+  const { codigo, excludeId } = req.query as unknown as CheckCodigoQuery;
+  const result = await adminTiposService.checkCodigoDisponible(codigo, excludeId);
+  sendSuccess(res, result);
 }
