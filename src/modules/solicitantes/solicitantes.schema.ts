@@ -76,9 +76,8 @@ export const createApplicantSchema = z.object({
   }),
   numero_documento: z.string().min(1, 'Numero de documento es requerido').max(20, 'Numero de documento no debe exceder 20 caracteres'),
   email: z.email({ error: 'Email invalido' }),
-  telefono: z.string().min(1, 'Telefono es requerido').max(20, 'Telefono no debe exceder 20 caracteres'),
-
   // Opcionales
+  telefono: z.string().max(20, 'Telefono no debe exceder 20 caracteres').optional(),
   direccion: z.string().max(300, 'Direccion no debe exceder 300 caracteres').optional(),
   departamento: z.enum(DEPARTAMENTOS_COLOMBIA, {
     error: `Departamento invalido. Debe ser un departamento colombiano valido`,
@@ -110,7 +109,7 @@ export const updateApplicantSchema = z.object({
   }).optional(),
   numero_documento: z.string().min(1, 'Numero de documento es requerido').max(20, 'Numero de documento no debe exceder 20 caracteres').optional(),
   email: z.email({ error: 'Email invalido' }).optional(),
-  telefono: z.string().min(1).max(20, 'Telefono no debe exceder 20 caracteres').optional(),
+  telefono: z.string().max(20, 'Telefono no debe exceder 20 caracteres').nullable().optional(),
   direccion: z.string().max(300, 'Direccion no debe exceder 300 caracteres').nullable().optional(),
   departamento: z.enum(DEPARTAMENTOS_COLOMBIA, {
     error: `Departamento invalido. Debe ser un departamento colombiano valido`,
