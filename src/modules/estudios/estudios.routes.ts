@@ -94,6 +94,37 @@ estudiosRouter.get(
   estudiosController.getCertificadoUrl,
 );
 
+// POST /estudios/:estudioId/ejecutar (execute via provider)
+estudiosRouter.post(
+  '/:estudioId/ejecutar',
+  authorize('estudios', 'update'),
+  validate({ params: estudioIdParamsSchema }),
+  estudiosController.ejecutarEstudio,
+);
+
+// GET /estudios/:estudioId/estado-proveedor (check provider status)
+estudiosRouter.get(
+  '/:estudioId/estado-proveedor',
+  authorize('estudios', 'read'),
+  validate({ params: estudioIdParamsSchema }),
+  estudiosController.getEstadoProveedor,
+);
+
+// ============================================================
+// Router 4: /proveedores-riesgo (admin health check)
+// ============================================================
+
+export const proveedoresRiesgoRouter = Router();
+
+proveedoresRiesgoRouter.use(authMiddleware);
+
+// GET /proveedores-riesgo/salud
+proveedoresRiesgoRouter.get(
+  '/salud',
+  authorize('configuracion', 'read'),
+  estudiosController.getProviderHealth,
+);
+
 // ============================================================
 // Router 3: Public /public/estudios/:token/formulario
 // ============================================================

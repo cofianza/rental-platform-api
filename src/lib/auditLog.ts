@@ -53,6 +53,10 @@ export const AUDIT_ACTIONS = {
   ESTUDIO_LINK_SENT: 'estudio_link_sent',
   ESTUDIO_FORM_SUBMITTED: 'estudio_form_submitted',
   ESTUDIO_RESULTADO_REGISTERED: 'estudio_resultado_registered',
+  // Proveedores de riesgo crediticio
+  ESTUDIO_PROVIDER_EXECUTED: 'estudio_provider_executed',
+  ESTUDIO_PROVIDER_FAILED: 'estudio_provider_failed',
+  ESTUDIO_PROVIDER_RESULT_RECEIVED: 'estudio_provider_result_received',
 } as const;
 
 export const AUDIT_ENTITIES = {

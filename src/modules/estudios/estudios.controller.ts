@@ -66,6 +66,27 @@ export async function getCertificadoUrl(req: Request, res: Response) {
 }
 
 // ============================================================
+// Provider endpoints
+// ============================================================
+
+export async function ejecutarEstudio(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const result = await estudiosService.ejecutarEstudio(estudioId, req.user!.id, req.ip);
+  sendSuccess(res, result);
+}
+
+export async function getEstadoProveedor(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const result = await estudiosService.consultarEstadoProveedor(estudioId);
+  sendSuccess(res, result);
+}
+
+export async function getProviderHealth(_req: Request, res: Response) {
+  const result = await estudiosService.getProviderHealth();
+  sendSuccess(res, result);
+}
+
+// ============================================================
 // Public endpoints (no auth)
 // ============================================================
 

@@ -6,6 +6,9 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
 import type { CreateEstudioInput, ListEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput } from './estudios.schema';
+import { getProvider, getAllProviderIds } from './providers/factory';
+import { maskDocumento } from './providers/mock.provider';
+import type { ProviderSolicitudInput, ProviderHealthInfo } from './providers/types';
 
 // ============================================================
 // Constants
@@ -15,6 +18,7 @@ const TOKEN_EXPIRY_HOURS = 72;
 const ESTADOS_TERMINALES_EXPEDIENTE = ['cerrado', 'rechazado'];
 const ESTADOS_ESTUDIO_FINALIZADOS = ['completado', 'fallido', 'cancelado'];
 const ESTADOS_PERMITIDOS_RESULTADO = ['solicitado', 'en_proceso'];
+const ESTADOS_PERMITIDOS_EJECUCION = ['formulario_completado', 'documentos_cargados'];
 const BUCKET_NAME = 'documentos-expedientes';
 
 // ============================================================
@@ -680,4 +684,262 @@ export async function getCertificadoViewUrl(estudioId: string) {
     url: urlData.signedUrl,
     expires_in: 3600,
   };
+}
+
+// ============================================================
+// Execute estudio via provider
+// ============================================================
+
+export async function ejecutarEstudio(estudioId: string, userId: string, ip?: string) {
+  // 1. Get estudio
+  const { data: estudio, error: getError } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, resultado, proveedor, tipo, datos_formulario, expediente_id')
+    .eq('id', estudioId)
+    .single();
+
+  if (getError || !estudio) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  const est = estudio as unknown as {
+    id: string;
+    estado: string;
+    resultado: string;
+    proveedor: string;
+    tipo: string;
+    datos_formulario: Record<string, unknown> | null;
+    expediente_id: string;
+  };
+
+  // 2. Validate estado
+  if (!ESTADOS_PERMITIDOS_EJECUCION.includes(est.estado)) {
+    throw AppError.badRequest(
+      `Solo se puede ejecutar via proveedor en estados: ${ESTADOS_PERMITIDOS_EJECUCION.join(', ')}. Estado actual: ${est.estado}`,
+      'ESTUDIO_ESTADO_INVALIDO',
+    );
+  }
+
+  // 3. Validate datos_formulario exists
+  if (!est.datos_formulario) {
+    throw AppError.badRequest(
+      'El estudio no tiene datos de formulario. El solicitante debe completar el formulario primero.',
+      'FORMULARIO_NO_COMPLETADO',
+    );
+  }
+
+  const datos = est.datos_formulario as Record<string, string>;
+
+  // 4. Build provider input
+  const providerInput: ProviderSolicitudInput = {
+    estudio_id: est.id,
+    tipo: est.tipo as 'individual' | 'con_coarrendatario',
+    nombre_completo: datos.nombre_completo || '',
+    tipo_documento: datos.tipo_documento || '',
+    numero_documento: datos.numero_documento || '',
+    email: datos.email || '',
+    telefono: datos.telefono || '',
+    ingresos_mensuales: datos.ingresos_mensuales ? Number(datos.ingresos_mensuales) : undefined,
+    ocupacion: (datos.ocupacion as string) || undefined,
+    empresa: (datos.empresa as string) || undefined,
+    direccion_residencia: (datos.direccion_residencia as string) || undefined,
+  };
+
+  // 5. Call provider
+  const provider = getProvider(est.proveedor as 'transunion' | 'sifin' | 'datacredito');
+
+  logger.info(
+    { estudioId, provider: est.proveedor, documento: maskDocumento(providerInput.numero_documento) },
+    'Executing credit risk study via provider',
+  );
+
+  try {
+    const response = await provider.solicitar(providerInput);
+
+    // 6. Update estudio on success
+    await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        estado: 'en_proceso',
+        referencia_proveedor: response.referencia_proveedor,
+      } as never)
+      .eq('id', estudioId);
+
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.ESTUDIO_PROVIDER_EXECUTED,
+      entidad: AUDIT_ENTITIES.ESTUDIO,
+      entidadId: estudioId,
+      detalle: {
+        proveedor: est.proveedor,
+        referencia_proveedor: response.referencia_proveedor,
+        expediente_id: est.expediente_id,
+      },
+      ip,
+    });
+
+    return getEstudioById(estudioId);
+  } catch (err) {
+    // 7. On failure: mark as fallido
+    const errorMsg = err instanceof Error ? err.message : 'Error desconocido del proveedor';
+
+    await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        estado: 'fallido',
+        observaciones: `Error de proveedor (${est.proveedor}): ${errorMsg}. Puede registrar el resultado manualmente.`,
+      } as never)
+      .eq('id', estudioId);
+
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.ESTUDIO_PROVIDER_FAILED,
+      entidad: AUDIT_ENTITIES.ESTUDIO,
+      entidadId: estudioId,
+      detalle: {
+        proveedor: est.proveedor,
+        error: errorMsg,
+        expediente_id: est.expediente_id,
+      },
+      ip,
+    });
+
+    logger.error(
+      { estudioId, provider: est.proveedor, error: errorMsg },
+      'Provider execution failed',
+    );
+
+    throw AppError.badRequest(
+      `El proveedor ${est.proveedor} fallo al ejecutar el estudio: ${errorMsg}. El estudio fue marcado como fallido. Puede registrar el resultado manualmente.`,
+      'PROVIDER_EXECUTION_FAILED',
+    );
+  }
+}
+
+// ============================================================
+// Check provider status and auto-register result if completed
+// ============================================================
+
+export async function consultarEstadoProveedor(estudioId: string) {
+  // 1. Get estudio
+  const { data: estudio, error: getError } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, proveedor, referencia_proveedor, expediente_id')
+    .eq('id', estudioId)
+    .single();
+
+  if (getError || !estudio) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  const est = estudio as unknown as {
+    id: string;
+    estado: string;
+    proveedor: string;
+    referencia_proveedor: string | null;
+    expediente_id: string;
+  };
+
+  if (!est.referencia_proveedor) {
+    throw AppError.badRequest(
+      'Este estudio no ha sido enviado a un proveedor. No tiene referencia de proveedor.',
+      'SIN_REFERENCIA_PROVEEDOR',
+    );
+  }
+
+  // 2. Query provider
+  const provider = getProvider(est.proveedor as 'transunion' | 'sifin' | 'datacredito');
+  const statusResponse = await provider.consultarEstado(est.referencia_proveedor);
+
+  // 3. If completed, auto-register result
+  if (statusResponse.status === 'completed' && est.estado !== 'completado') {
+    const result = await provider.obtenerResultado(est.referencia_proveedor);
+
+    const updatePayload: Record<string, unknown> = {
+      estado: 'completado',
+      resultado: result.resultado,
+      score: result.score,
+      observaciones: result.observaciones,
+      fecha_completado: new Date().toISOString(),
+    };
+
+    await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update(updatePayload as never)
+      .eq('id', estudioId);
+
+    // Revert inmueble to disponible
+    const { data: expediente } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('inmueble_id')
+      .eq('id', est.expediente_id)
+      .single();
+
+    if (expediente) {
+      const exp = expediente as unknown as { inmueble_id: string };
+      await (supabase
+        .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: 'disponible' } as never)
+        .eq('id', exp.inmueble_id);
+    }
+
+    logAudit({
+      usuarioId: null,
+      accion: AUDIT_ACTIONS.ESTUDIO_PROVIDER_RESULT_RECEIVED,
+      entidad: AUDIT_ENTITIES.ESTUDIO,
+      entidadId: estudioId,
+      detalle: {
+        proveedor: est.proveedor,
+        resultado: result.resultado,
+        score: result.score,
+        referencia_proveedor: est.referencia_proveedor,
+      },
+    });
+
+    return {
+      provider_status: statusResponse,
+      estudio: await getEstudioById(estudioId),
+    };
+  }
+
+  // 4. If failed, mark as fallido
+  if (statusResponse.status === 'failed' && est.estado !== 'fallido') {
+    await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        estado: 'fallido',
+        observaciones: `Proveedor reporto fallo: ${statusResponse.mensaje || 'Sin detalle'}. Puede registrar el resultado manualmente.`,
+      } as never)
+      .eq('id', estudioId);
+  }
+
+  return {
+    provider_status: statusResponse,
+    estudio: await getEstudioById(estudioId),
+  };
+}
+
+// ============================================================
+// Provider health check
+// ============================================================
+
+export async function getProviderHealth(): Promise<ProviderHealthInfo[]> {
+  const providerIds = getAllProviderIds();
+
+  const results = await Promise.allSettled(
+    providerIds.map((id) => getProvider(id).verificarDisponibilidad()),
+  );
+
+  return results.map((result, index) => {
+    if (result.status === 'fulfilled') {
+      return result.value;
+    }
+    return {
+      proveedor: providerIds[index],
+      disponible: false,
+      latencia_ms: null,
+      ultimo_error: result.reason instanceof Error ? result.reason.message : 'Error desconocido',
+      timestamp: new Date().toISOString(),
+    };
+  });
 }
