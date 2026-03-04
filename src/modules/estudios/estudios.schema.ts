@@ -122,6 +122,23 @@ export const certificadoPresignedUrlSchema = z.object({
 });
 
 // ============================================================
+// GET /estudios (global listing)
+// ============================================================
+
+export const listAllEstudiosQuerySchema = z.object({
+  search: z.string().max(200).optional(),
+  estado: z.string().max(200).optional(),
+  resultado: z.string().max(50).optional(),
+  proveedor: z.string().max(50).optional(),
+  fecha_desde: z.string().optional(),
+  fecha_hasta: z.string().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+  sortBy: z.enum(['created_at', 'estado', 'resultado', 'score']).default('created_at'),
+  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+});
+
+// ============================================================
 // Type exports
 // ============================================================
 
@@ -130,6 +147,7 @@ export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type TokenParams = z.infer<typeof tokenParamsSchema>;
 export type CreateEstudioInput = z.infer<typeof createEstudioSchema>;
 export type ListEstudiosQuery = z.infer<typeof listEstudiosQuerySchema>;
+export type ListAllEstudiosQuery = z.infer<typeof listAllEstudiosQuerySchema>;
 export type SubmitFormularioInput = z.infer<typeof submitFormularioSchema>;
 export type RegistrarResultadoInput = z.infer<typeof registrarResultadoSchema>;
 export type CertificadoPresignedUrlInput = z.infer<typeof certificadoPresignedUrlSchema>;

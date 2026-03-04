@@ -8,6 +8,7 @@ import {
   tokenParamsSchema,
   createEstudioSchema,
   listEstudiosQuerySchema,
+  listAllEstudiosQuerySchema,
   submitFormularioSchema,
   registrarResultadoSchema,
   certificadoPresignedUrlSchema,
@@ -45,6 +46,14 @@ expedienteEstudiosRouter.post(
 export const estudiosRouter = Router();
 
 estudiosRouter.use(authMiddleware);
+
+// GET /estudios (global listing)
+estudiosRouter.get(
+  '/',
+  authorize('estudios', 'read'),
+  validate({ query: listAllEstudiosQuerySchema }),
+  estudiosController.listAll,
+);
 
 // GET /estudios/:estudioId
 estudiosRouter.get(

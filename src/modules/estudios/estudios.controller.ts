@@ -4,6 +4,7 @@ import * as estudiosService from './estudios.service';
 import type {
   CreateEstudioInput,
   ListEstudiosQuery,
+  ListAllEstudiosQuery,
   SubmitFormularioInput,
   RegistrarResultadoInput,
   CertificadoPresignedUrlInput,
@@ -12,6 +13,12 @@ import type {
 // ============================================================
 // Authenticated endpoints
 // ============================================================
+
+export async function listAll(req: Request, res: Response) {
+  const query = req.query as unknown as ListAllEstudiosQuery;
+  const result = await estudiosService.listAllEstudios(query);
+  sendSuccess(res, result.estudios, 200, result.pagination);
+}
 
 export async function listByExpediente(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };

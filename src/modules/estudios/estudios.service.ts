@@ -5,7 +5,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
-import type { CreateEstudioInput, ListEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput } from './estudios.schema';
+import type { CreateEstudioInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo } from './providers/types';
@@ -75,6 +75,109 @@ export async function listEstudios(expedienteId: string, query: ListEstudiosQuer
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+    },
+  };
+}
+
+// ============================================================
+// List all estudios (global)
+// ============================================================
+
+export async function listAllEstudios(query: ListAllEstudiosQuery) {
+  const page = query.page;
+  const limit = query.limit;
+  const offset = (page - 1) * limit;
+
+  // Build base query for count
+  let countQuery = (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true });
+
+  // Build base query for data
+  let dataQuery = (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, tipo, proveedor, estado, resultado, score, observaciones,
+      motivo_rechazo, condiciones,
+      duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
+      referencia_proveedor, certificado_url, created_at, updated_at,
+      expediente_id,
+      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido),
+      expedientes!estudios_expediente_id_fkey(
+        numero,
+        solicitantes!expedientes_solicitante_id_fkey(nombre, apellido)
+      )
+    `);
+
+  // Apply filters to both queries
+  if (query.estado) {
+    const estados = query.estado.split(',').map((s) => s.trim()).filter(Boolean);
+    if (estados.length > 0) {
+      countQuery = countQuery.in('estado', estados);
+      dataQuery = dataQuery.in('estado', estados);
+    }
+  }
+
+  if (query.resultado) {
+    countQuery = countQuery.eq('resultado', query.resultado);
+    dataQuery = dataQuery.eq('resultado', query.resultado);
+  }
+
+  if (query.proveedor) {
+    countQuery = countQuery.eq('proveedor', query.proveedor);
+    dataQuery = dataQuery.eq('proveedor', query.proveedor);
+  }
+
+  if (query.fecha_desde) {
+    countQuery = countQuery.gte('created_at', `${query.fecha_desde}T00:00:00`);
+    dataQuery = dataQuery.gte('created_at', `${query.fecha_desde}T00:00:00`);
+  }
+
+  if (query.fecha_hasta) {
+    countQuery = countQuery.lte('created_at', `${query.fecha_hasta}T23:59:59`);
+    dataQuery = dataQuery.lte('created_at', `${query.fecha_hasta}T23:59:59`);
+  }
+
+  // Count
+  const { count } = await countQuery;
+  const total = count || 0;
+
+  // Apply sort and pagination
+  const ascending = query.sortOrder === 'asc';
+  dataQuery = dataQuery.order(query.sortBy, { ascending }).range(offset, offset + limit - 1);
+
+  const { data, error } = await dataQuery;
+
+  if (error) {
+    logger.error({ error }, 'Error al listar todos los estudios');
+    throw AppError.badRequest('Error al obtener estudios', 'ESTUDIOS_LIST_ERROR');
+  }
+
+  // If search filter, do in-memory filtering on joined data
+  let filteredData = data || [];
+  if (query.search) {
+    const searchLower = query.search.toLowerCase();
+    filteredData = filteredData.filter((item: Record<string, unknown>) => {
+      const exp = item.expedientes as { numero?: string; solicitantes?: { nombre?: string; apellido?: string } } | null;
+      const numero = exp?.numero || '';
+      const nombre = exp?.solicitantes?.nombre || '';
+      const apellido = exp?.solicitantes?.apellido || '';
+      const proveedor = (item.proveedor as string) || '';
+      return (
+        numero.toLowerCase().includes(searchLower) ||
+        `${nombre} ${apellido}`.toLowerCase().includes(searchLower) ||
+        proveedor.toLowerCase().includes(searchLower)
+      );
+    });
+  }
+
+  return {
+    estudios: filteredData,
+    pagination: {
+      total: query.search ? filteredData.length : total,
+      page,
+      limit,
+      totalPages: Math.ceil((query.search ? filteredData.length : total) / limit),
     },
   };
 }
