@@ -8,6 +8,9 @@ import type {
   SubmitFormularioInput,
   RegistrarResultadoInput,
   CertificadoPresignedUrlInput,
+  SoportePresignedUrlInput,
+  ConfirmarSoporteInput,
+  ReEvaluarInput,
 } from './estudios.schema';
 
 // ============================================================
@@ -69,6 +72,37 @@ export async function getCertificadoPresignedUrl(req: Request, res: Response) {
 export async function getCertificadoUrl(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const result = await estudiosService.getCertificadoViewUrl(estudioId);
+  sendSuccess(res, result);
+}
+
+// ============================================================
+// Re-evaluacion endpoints
+// ============================================================
+
+export async function getSoportePresignedUrl(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const input = req.body as SoportePresignedUrlInput;
+  const result = await estudiosService.getSoportePresignedUrl(estudioId, input);
+  sendSuccess(res, result);
+}
+
+export async function confirmarSoporte(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const input = req.body as ConfirmarSoporteInput;
+  const result = await estudiosService.confirmarSoporteUpload(estudioId, input, req.user!.id, req.ip);
+  sendCreated(res, result);
+}
+
+export async function reEvaluar(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const input = req.body as ReEvaluarInput;
+  const result = await estudiosService.solicitarReEvaluacion(estudioId, input, req.user!.id, req.ip);
+  sendCreated(res, result);
+}
+
+export async function getHistorial(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const result = await estudiosService.getHistorialReEvaluacion(estudioId);
   sendSuccess(res, result);
 }
 

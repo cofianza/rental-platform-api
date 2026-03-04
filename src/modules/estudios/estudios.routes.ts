@@ -12,6 +12,9 @@ import {
   submitFormularioSchema,
   registrarResultadoSchema,
   certificadoPresignedUrlSchema,
+  soportePresignedUrlSchema,
+  confirmarSoporteSchema,
+  reEvaluarSchema,
 } from './estudios.schema';
 import * as estudiosController from './estudios.controller';
 
@@ -117,6 +120,38 @@ estudiosRouter.get(
   authorize('estudios', 'read'),
   validate({ params: estudioIdParamsSchema }),
   estudiosController.getEstadoProveedor,
+);
+
+// POST /estudios/:estudioId/documentos-soporte/presigned-url
+estudiosRouter.post(
+  '/:estudioId/documentos-soporte/presigned-url',
+  authorize('expedientes', 'update'),
+  validate({ params: estudioIdParamsSchema, body: soportePresignedUrlSchema }),
+  estudiosController.getSoportePresignedUrl,
+);
+
+// POST /estudios/:estudioId/documentos-soporte/confirmar
+estudiosRouter.post(
+  '/:estudioId/documentos-soporte/confirmar',
+  authorize('expedientes', 'update'),
+  validate({ params: estudioIdParamsSchema, body: confirmarSoporteSchema }),
+  estudiosController.confirmarSoporte,
+);
+
+// POST /estudios/:estudioId/re-evaluar
+estudiosRouter.post(
+  '/:estudioId/re-evaluar',
+  authorize('expedientes', 'update'),
+  validate({ params: estudioIdParamsSchema, body: reEvaluarSchema }),
+  estudiosController.reEvaluar,
+);
+
+// GET /estudios/:estudioId/historial
+estudiosRouter.get(
+  '/:estudioId/historial',
+  authorize('expedientes', 'read'),
+  validate({ params: estudioIdParamsSchema }),
+  estudiosController.getHistorial,
 );
 
 // ============================================================

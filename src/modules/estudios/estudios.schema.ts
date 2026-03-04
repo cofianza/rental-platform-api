@@ -139,6 +139,47 @@ export const listAllEstudiosQuerySchema = z.object({
 });
 
 // ============================================================
+// Re-evaluacion: documentos soporte
+// ============================================================
+
+const PROPOSITOS_SOPORTE = [
+  'certificacion_laboral',
+  'extractos_bancarios',
+  'declaracion_renta',
+  'carta_referencia',
+  'otros_soportes',
+] as const;
+
+const MIME_TYPES_SOPORTE = ['application/pdf', 'image/jpeg', 'image/png'] as const;
+
+export const soportePresignedUrlSchema = z.object({
+  nombre_original: z.string().min(1, 'Nombre es requerido').max(255),
+  tipo_mime: z.enum(MIME_TYPES_SOPORTE, {
+    message: `Tipo de archivo invalido. Valores permitidos: ${MIME_TYPES_SOPORTE.join(', ')}`,
+  }),
+  tamano_bytes: z.coerce.number().int().positive().max(10 * 1024 * 1024, 'Maximo 10MB'),
+  proposito: z.enum(PROPOSITOS_SOPORTE, {
+    message: `Proposito invalido. Valores permitidos: ${PROPOSITOS_SOPORTE.join(', ')}`,
+  }),
+});
+
+export const confirmarSoporteSchema = z.object({
+  storage_key: z.string().min(1, 'Storage key es requerido').max(500),
+  nombre_original: z.string().min(1, 'Nombre es requerido').max(255),
+  tipo_mime: z.enum(MIME_TYPES_SOPORTE, {
+    message: `Tipo de archivo invalido. Valores permitidos: ${MIME_TYPES_SOPORTE.join(', ')}`,
+  }),
+  tamano_bytes: z.coerce.number().int().positive().max(10 * 1024 * 1024, 'Maximo 10MB'),
+  proposito: z.enum(PROPOSITOS_SOPORTE, {
+    message: `Proposito invalido. Valores permitidos: ${PROPOSITOS_SOPORTE.join(', ')}`,
+  }),
+});
+
+export const reEvaluarSchema = z.object({
+  observaciones: z.string().max(2000, 'Observaciones no deben exceder 2000 caracteres').optional(),
+});
+
+// ============================================================
 // Type exports
 // ============================================================
 
@@ -151,3 +192,6 @@ export type ListAllEstudiosQuery = z.infer<typeof listAllEstudiosQuerySchema>;
 export type SubmitFormularioInput = z.infer<typeof submitFormularioSchema>;
 export type RegistrarResultadoInput = z.infer<typeof registrarResultadoSchema>;
 export type CertificadoPresignedUrlInput = z.infer<typeof certificadoPresignedUrlSchema>;
+export type SoportePresignedUrlInput = z.infer<typeof soportePresignedUrlSchema>;
+export type ConfirmarSoporteInput = z.infer<typeof confirmarSoporteSchema>;
+export type ReEvaluarInput = z.infer<typeof reEvaluarSchema>;

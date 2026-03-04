@@ -5,7 +5,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
-import type { CreateEstudioInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput } from './estudios.schema';
+import type { CreateEstudioInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo } from './providers/types';
@@ -917,6 +917,400 @@ export async function ejecutarEstudio(estudioId: string, userId: string, ip?: st
       'PROVIDER_EXECUTION_FAILED',
     );
   }
+}
+
+// ============================================================
+// Re-evaluacion: get presigned URL for soporte upload
+// ============================================================
+
+const RESULTADOS_REEVALUABLES = ['rechazado', 'condicionado'];
+const MAX_REEVALUACIONES = 2;
+
+function getExtensionFromMime(mimeType: string): string {
+  const map: Record<string, string> = {
+    'application/pdf': 'pdf',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+  };
+  return map[mimeType] || 'bin';
+}
+
+export async function getSoportePresignedUrl(
+  estudioId: string,
+  input: SoportePresignedUrlInput,
+) {
+  // 1. Validate estudio exists and is eligible for re-evaluation
+  const { data: estudio, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, resultado')
+    .eq('id', estudioId)
+    .single();
+
+  if (error || !estudio) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  const est = estudio as unknown as { id: string; estado: string; resultado: string };
+
+  if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
+    throw AppError.badRequest(
+      'Solo se pueden subir documentos soporte para estudios completados con resultado rechazado o condicionado',
+      'ESTUDIO_NO_REEVALUABLE',
+    );
+  }
+
+  // 2. Generate storage key
+  const ext = getExtensionFromMime(input.tipo_mime);
+  const nombreArchivo = `${crypto.randomUUID()}.${ext}`;
+  const storageKey = `estudios/${estudioId}/soporte/${nombreArchivo}`;
+
+  // 3. Create signed upload URL
+  const { data: uploadData, error: uploadError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUploadUrl(storageKey);
+
+  if (uploadError || !uploadData) {
+    logger.error({ error: uploadError?.message, storageKey }, 'Error al crear URL de subida para soporte');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al generar URL de subida');
+  }
+
+  return {
+    signedUrl: uploadData.signedUrl,
+    storage_key: storageKey,
+    nombre_archivo: nombreArchivo,
+    expires_in: 900,
+  };
+}
+
+// ============================================================
+// Re-evaluacion: confirm soporte upload
+// ============================================================
+
+export async function confirmarSoporteUpload(
+  estudioId: string,
+  input: ConfirmarSoporteInput,
+  userId: string,
+  ip?: string,
+) {
+  // 1. Re-validate eligibility (race-condition guard)
+  const { data: estudio, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, resultado')
+    .eq('id', estudioId)
+    .single();
+
+  if (error || !estudio) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  const est = estudio as unknown as { id: string; estado: string; resultado: string };
+
+  if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
+    throw AppError.badRequest(
+      'Solo se pueden subir documentos soporte para estudios rechazados o condicionados',
+      'ESTUDIO_NO_REEVALUABLE',
+    );
+  }
+
+  // 2. Verify file exists in storage
+  const { error: storageError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(input.storage_key, 60);
+
+  if (storageError) {
+    throw AppError.badRequest(
+      'El archivo no se encontro en el almacenamiento. Suba el archivo primero.',
+      'ARCHIVO_NOT_FOUND',
+    );
+  }
+
+  // 3. Insert record
+  const { data: doc, error: insertError } = await (supabase
+    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      estudio_id: estudioId,
+      storage_key: input.storage_key,
+      nombre_original: input.nombre_original,
+      tipo_mime: input.tipo_mime,
+      tamano_bytes: input.tamano_bytes,
+      proposito: input.proposito,
+      subido_por: userId,
+    } as never)
+    .select('*')
+    .single();
+
+  if (insertError || !doc) {
+    logger.error({ error: insertError, estudioId }, 'Error al confirmar soporte');
+    throw AppError.badRequest('Error al registrar el documento soporte', 'SOPORTE_CONFIRM_ERROR');
+  }
+
+  // 4. Generate view URL (1h)
+  const { data: urlData } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(input.storage_key, 3600);
+
+  // 5. Audit
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.ESTUDIO_SOPORTE_UPLOADED,
+    entidad: AUDIT_ENTITIES.DOCUMENTO_SOPORTE,
+    entidadId: (doc as unknown as { id: string }).id,
+    detalle: {
+      estudio_id: estudioId,
+      nombre_original: input.nombre_original,
+      proposito: input.proposito,
+    },
+    ip,
+  });
+
+  return {
+    ...(doc as unknown as Record<string, unknown>),
+    archivo_url: urlData?.signedUrl || null,
+  };
+}
+
+// ============================================================
+// Re-evaluacion: solicitar re-evaluacion
+// ============================================================
+
+export async function solicitarReEvaluacion(
+  estudioId: string,
+  input: ReEvaluarInput,
+  userId: string,
+  ip?: string,
+) {
+  // 1. Validate estudio completado + rechazado/condicionado
+  const { data: estudio, error: getError } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, resultado, tipo, proveedor, expediente_id, duracion_contrato_meses, pago_por, estudio_padre_id')
+    .eq('id', estudioId)
+    .single();
+
+  if (getError || !estudio) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  const est = estudio as unknown as {
+    id: string; estado: string; resultado: string;
+    tipo: string; proveedor: string; expediente_id: string;
+    duracion_contrato_meses: number; pago_por: string;
+    estudio_padre_id: string | null;
+  };
+
+  if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
+    throw AppError.badRequest(
+      'Solo se puede solicitar re-evaluacion para estudios completados con resultado rechazado o condicionado',
+      'ESTUDIO_NO_REEVALUABLE',
+    );
+  }
+
+  // 2. Verify at least 1 soporte doc exists
+  const { count: soporteCount } = await (supabase
+    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .eq('estudio_id', estudioId);
+
+  if (!soporteCount || soporteCount === 0) {
+    throw AppError.badRequest(
+      'Debe subir al menos un documento soporte antes de solicitar re-evaluacion',
+      'SOPORTE_REQUERIDO',
+    );
+  }
+
+  // 3. Determine depth in chain (walk up via estudio_padre_id) — max 2
+  let depth = 0;
+  let currentId: string | null = est.estudio_padre_id;
+  while (currentId) {
+    depth++;
+    const { data: parent } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('estudio_padre_id')
+      .eq('id', currentId)
+      .single();
+    currentId = parent ? (parent as unknown as { estudio_padre_id: string | null }).estudio_padre_id : null;
+  }
+
+  // depth is how many ancestors exist. Total chain = depth + 1 (original) + 1 (this new one)
+  // We allow max MAX_REEVALUACIONES re-evaluations total, meaning depth + 1 <= MAX_REEVALUACIONES
+  if (depth + 1 > MAX_REEVALUACIONES) {
+    throw AppError.badRequest(
+      `Se ha alcanzado el maximo de ${MAX_REEVALUACIONES} re-evaluaciones permitidas`,
+      'MAX_REEVALUACIONES',
+    );
+  }
+
+  // 4. Verify no child re-evaluation already exists for this estudio
+  const { data: existingChild } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('estudio_padre_id', estudioId)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingChild) {
+    throw AppError.conflict(
+      'Ya existe una re-evaluacion para este estudio',
+      'REEVALUACION_YA_EXISTENTE',
+    );
+  }
+
+  // 5. Insert new estudio inheriting key fields
+  const { data: newEstudio, error: insertError } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: est.expediente_id,
+      tipo: est.tipo,
+      proveedor: est.proveedor,
+      estado: 'solicitado',
+      resultado: 'pendiente',
+      duracion_contrato_meses: est.duracion_contrato_meses,
+      pago_por: est.pago_por,
+      observaciones: input.observaciones || null,
+      solicitado_por: userId,
+      estudio_padre_id: estudioId,
+    } as never)
+    .select('id')
+    .single();
+
+  if (insertError || !newEstudio) {
+    logger.error({ error: insertError, estudioId }, 'Error al crear re-evaluacion');
+    throw AppError.badRequest('Error al solicitar re-evaluacion', 'REEVALUACION_CREATE_ERROR');
+  }
+
+  const newId = (newEstudio as unknown as { id: string }).id;
+
+  // 6. Audit
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.ESTUDIO_REEVALUACION_SOLICITADA,
+    entidad: AUDIT_ENTITIES.ESTUDIO,
+    entidadId: newId,
+    detalle: {
+      estudio_padre_id: estudioId,
+      expediente_id: est.expediente_id,
+      numero_reevaluacion: depth + 1,
+    },
+    ip,
+  });
+
+  return getEstudioById(newId);
+}
+
+// ============================================================
+// Re-evaluacion: get historial
+// ============================================================
+
+export async function getHistorialReEvaluacion(estudioId: string) {
+  // 1. Walk up to find root (the one without estudio_padre_id)
+  let rootId = estudioId;
+  let currentId: string | null = estudioId;
+
+  while (currentId) {
+    const { data: estudio } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estudio_padre_id')
+      .eq('id', currentId)
+      .single();
+
+    if (!estudio) break;
+
+    const est = estudio as unknown as { id: string; estudio_padre_id: string | null };
+    if (!est.estudio_padre_id) {
+      rootId = est.id;
+      break;
+    }
+    rootId = est.estudio_padre_id;
+    currentId = est.estudio_padre_id;
+  }
+
+  // 2. Get all estudios in chain: root + all descendants
+  const { data: allEstudios, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, expediente_id, tipo, proveedor, estado, resultado, score,
+      observaciones, motivo_rechazo, condiciones,
+      duracion_contrato_meses, pago_por, fecha_solicitud,
+      fecha_completado, referencia_proveedor, certificado_url,
+      estudio_padre_id, created_at, updated_at,
+      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
+    `)
+    .or(`id.eq.${rootId},estudio_padre_id.eq.${rootId}`)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    logger.error({ error, estudioId }, 'Error al obtener historial de re-evaluacion');
+    throw AppError.badRequest('Error al obtener historial', 'HISTORIAL_ERROR');
+  }
+
+  // For deeper chains (> 2 levels), also fetch grandchildren
+  let estudiosChain = allEstudios || [];
+  const childIds = estudiosChain
+    .filter((e: Record<string, unknown>) => (e as unknown as { estudio_padre_id: string | null }).estudio_padre_id === rootId)
+    .map((e: Record<string, unknown>) => (e as unknown as { id: string }).id);
+
+  if (childIds.length > 0) {
+    const { data: grandchildren } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select(`
+        id, expediente_id, tipo, proveedor, estado, resultado, score,
+        observaciones, motivo_rechazo, condiciones,
+        duracion_contrato_meses, pago_por, fecha_solicitud,
+        fecha_completado, referencia_proveedor, certificado_url,
+        estudio_padre_id, created_at, updated_at,
+        solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
+      `)
+      .in('estudio_padre_id', childIds)
+      .order('created_at', { ascending: true });
+
+    if (grandchildren && grandchildren.length > 0) {
+      estudiosChain = [...estudiosChain, ...grandchildren];
+    }
+  }
+
+  // 3. Fetch docs soporte for each estudio
+  const estudioIds = estudiosChain.map((e: Record<string, unknown>) => (e as unknown as { id: string }).id);
+
+  const { data: allDocs } = await (supabase
+    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
+    .select('*')
+    .in('estudio_id', estudioIds)
+    .order('created_at', { ascending: true });
+
+  const docsByEstudio = new Map<string, Array<Record<string, unknown>>>();
+  if (allDocs) {
+    for (const doc of allDocs) {
+      const d = doc as unknown as { estudio_id: string };
+      if (!docsByEstudio.has(d.estudio_id)) {
+        docsByEstudio.set(d.estudio_id, []);
+      }
+      docsByEstudio.get(d.estudio_id)!.push(doc as Record<string, unknown>);
+    }
+  }
+
+  // 4. Build ordered historial
+  const historial = estudiosChain.map((e: Record<string, unknown>, index: number) => {
+    const est = e as unknown as { id: string; estudio_padre_id: string | null };
+    return {
+      ...e,
+      numero_en_cadena: index + 1,
+      es_reevaluacion: est.estudio_padre_id !== null,
+      documentos_soporte: docsByEstudio.get(est.id) || [],
+    };
+  });
+
+  // 5. Determine if can re-evaluate
+  const lastEstudio = estudiosChain[estudiosChain.length - 1] as unknown as { estado: string; resultado: string } | undefined;
+  const totalEnCadena = estudiosChain.length;
+  const puedeReevaluar =
+    totalEnCadena <= MAX_REEVALUACIONES &&
+    lastEstudio?.estado === 'completado' &&
+    RESULTADOS_REEVALUABLES.includes(lastEstudio.resultado);
+
+  return {
+    total_en_cadena: totalEnCadena,
+    puede_reevaluar: puedeReevaluar,
+    historial,
+  };
 }
 
 // ============================================================

@@ -57,6 +57,9 @@ export const AUDIT_ACTIONS = {
   ESTUDIO_PROVIDER_EXECUTED: 'estudio_provider_executed',
   ESTUDIO_PROVIDER_FAILED: 'estudio_provider_failed',
   ESTUDIO_PROVIDER_RESULT_RECEIVED: 'estudio_provider_result_received',
+  // Re-evaluacion de estudios
+  ESTUDIO_SOPORTE_UPLOADED: 'estudio_soporte_uploaded',
+  ESTUDIO_REEVALUACION_SOLICITADA: 'estudio_reevaluacion_solicitada',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -72,6 +75,7 @@ export const AUDIT_ENTITIES = {
   DOCUMENTO: 'documento',
   TIPO_DOCUMENTO: 'tipo_documento',
   ESTUDIO: 'estudio',
+  DOCUMENTO_SOPORTE: 'documento_soporte',
 } as const;
 
 interface AuditLogParams {
