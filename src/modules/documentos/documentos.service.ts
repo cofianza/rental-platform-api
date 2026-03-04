@@ -481,7 +481,14 @@ export async function deleteDocumento(
     );
   }
 
-  // 4. Delete from storage
+  // 4. If this doc is a replacement, revert the original back to 'rechazado'
+  //    (clears the FK reference so the delete doesn't violate the constraint)
+  await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'rechazado', reemplazado_por: null } as never)
+    .eq('reemplazado_por', id);
+
+  // 5. Delete from storage
   if (doc.storage_key) {
     const { error: storageError } = await supabase.storage
       .from(BUCKET_NAME)
