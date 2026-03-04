@@ -274,6 +274,25 @@ export async function createEstudio(
     );
   }
 
+  // 3.5. Verify autorizacion habeas data exists and is active
+  const { data: autorizacion } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .eq('estado', 'autorizado')
+    .is('fecha_revocacion', null)
+    .limit(1)
+    .maybeSingle();
+
+  if (!autorizacion) {
+    throw AppError.badRequest(
+      'Se requiere autorizacion habeas data firmada antes de crear un estudio',
+      'AUTORIZACION_HABEAS_REQUERIDA',
+    );
+  }
+
+  const autorizacionId = (autorizacion as unknown as { id: string }).id;
+
   // 4. Insert estudio
   const { data: estudio, error: insertError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -287,6 +306,7 @@ export async function createEstudio(
       pago_por: input.pago_por,
       observaciones: input.observaciones || null,
       solicitado_por: userId,
+      autorizacion_habeas_data_id: autorizacionId,
     } as never)
     .select('id')
     .single();

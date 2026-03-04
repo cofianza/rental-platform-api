@@ -62,6 +62,10 @@ export const AUDIT_ACTIONS = {
   ESTUDIO_REEVALUACION_SOLICITADA: 'estudio_reevaluacion_solicitada',
   // Certificados
   CERTIFICADO_GENERATED: 'certificado_generated',
+  // Autorizacion habeas data
+  AUTORIZACION_ENLACE_SENT: 'autorizacion_enlace_sent',
+  AUTORIZACION_FIRMADA: 'autorizacion_firmada',
+  AUTORIZACION_REVOCADA: 'autorizacion_revocada',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -79,6 +83,7 @@ export const AUDIT_ENTITIES = {
   ESTUDIO: 'estudio',
   DOCUMENTO_SOPORTE: 'documento_soporte',
   CERTIFICADO: 'certificado',
+  AUTORIZACION: 'autorizacion',
 } as const;
 
 interface AuditLogParams {
