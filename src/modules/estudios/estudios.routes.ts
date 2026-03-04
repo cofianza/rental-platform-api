@@ -15,6 +15,7 @@ import {
   soportePresignedUrlSchema,
   confirmarSoporteSchema,
   reEvaluarSchema,
+  codigoParamsSchema,
 } from './estudios.schema';
 import * as estudiosController from './estudios.controller';
 
@@ -122,6 +123,22 @@ estudiosRouter.get(
   estudiosController.getEstadoProveedor,
 );
 
+// POST /estudios/:estudioId/certificado/generar
+estudiosRouter.post(
+  '/:estudioId/certificado/generar',
+  authorize('expedientes', 'update'),
+  validate({ params: estudioIdParamsSchema }),
+  estudiosController.generarCertificado,
+);
+
+// GET /estudios/:estudioId/certificado/descargar
+estudiosRouter.get(
+  '/:estudioId/certificado/descargar',
+  authorize('expedientes', 'read'),
+  validate({ params: estudioIdParamsSchema }),
+  estudiosController.descargarCertificado,
+);
+
 // POST /estudios/:estudioId/documentos-soporte/presigned-url
 estudiosRouter.post(
   '/:estudioId/documentos-soporte/presigned-url',
@@ -189,4 +206,18 @@ publicEstudiosRouter.post(
   publicFormLimiter,
   validate({ params: tokenParamsSchema, body: submitFormularioSchema }),
   estudiosController.submitFormulario,
+);
+
+// ============================================================
+// Router 5: Public /public/verificar/:codigo
+// ============================================================
+
+export const publicVerificarRouter = Router();
+
+// GET /public/verificar/:codigo
+publicVerificarRouter.get(
+  '/:codigo',
+  publicFormLimiter,
+  validate({ params: codigoParamsSchema }),
+  estudiosController.verificarCertificadoPublic,
 );

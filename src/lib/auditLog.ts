@@ -60,6 +60,8 @@ export const AUDIT_ACTIONS = {
   // Re-evaluacion de estudios
   ESTUDIO_SOPORTE_UPLOADED: 'estudio_soporte_uploaded',
   ESTUDIO_REEVALUACION_SOLICITADA: 'estudio_reevaluacion_solicitada',
+  // Certificados
+  CERTIFICADO_GENERATED: 'certificado_generated',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -76,6 +78,7 @@ export const AUDIT_ENTITIES = {
   TIPO_DOCUMENTO: 'tipo_documento',
   ESTUDIO: 'estudio',
   DOCUMENTO_SOPORTE: 'documento_soporte',
+  CERTIFICADO: 'certificado',
 } as const;
 
 interface AuditLogParams {

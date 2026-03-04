@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as estudiosService from './estudios.service';
+import * as certificadoService from './certificado.service';
 import type {
   CreateEstudioInput,
   ListEstudiosQuery,
@@ -103,6 +104,28 @@ export async function reEvaluar(req: Request, res: Response) {
 export async function getHistorial(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const result = await estudiosService.getHistorialReEvaluacion(estudioId);
+  sendSuccess(res, result);
+}
+
+// ============================================================
+// Certificado PDF endpoints
+// ============================================================
+
+export async function generarCertificado(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const result = await certificadoService.generarCertificado(estudioId, req.user!.id, req.ip);
+  sendCreated(res, result);
+}
+
+export async function descargarCertificado(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const result = await certificadoService.descargarCertificado(estudioId);
+  sendSuccess(res, result);
+}
+
+export async function verificarCertificadoPublic(req: Request, res: Response) {
+  const { codigo } = req.params as unknown as { codigo: string };
+  const result = await certificadoService.verificarCertificado(codigo);
   sendSuccess(res, result);
 }
 

@@ -139,6 +139,14 @@ export const listAllEstudiosQuerySchema = z.object({
 });
 
 // ============================================================
+// Verificacion publica de certificado
+// ============================================================
+
+export const codigoParamsSchema = z.object({
+  codigo: z.string().min(10, 'Codigo invalido').max(20, 'Codigo invalido'),
+});
+
+// ============================================================
 // Re-evaluacion: documentos soporte
 // ============================================================
 
@@ -195,3 +203,4 @@ export type CertificadoPresignedUrlInput = z.infer<typeof certificadoPresignedUr
 export type SoportePresignedUrlInput = z.infer<typeof soportePresignedUrlSchema>;
 export type ConfirmarSoporteInput = z.infer<typeof confirmarSoporteSchema>;
 export type ReEvaluarInput = z.infer<typeof reEvaluarSchema>;
+export type CodigoParams = z.infer<typeof codigoParamsSchema>;
