@@ -27,6 +27,7 @@ import { expedienteEstudiosRouter, estudiosRouter, publicEstudiosRouter, proveed
 import { expedienteAutorizacionRouter, publicAutorizacionRouter } from '@/modules/autorizaciones/autorizaciones.routes';
 import plantillasRouter from '@/modules/plantillas/plantillas.routes';
 import { expedienteContratosRouter, contratosRouter } from '@/modules/contratos/contratos.routes';
+import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes';
 
 const app = express();
 
@@ -83,6 +84,7 @@ app.use('/api/v1/expedientes/:expedienteId/autorizacion-riesgo', expedienteAutor
 app.use('/api/v1/public/autorizar', publicAutorizacionRouter);
 app.use('/api/v1/plantillas-contrato', plantillasRouter);
 app.use('/api/v1/expedientes/:expedienteId/contratos', expedienteContratosRouter);
+app.use('/api/v1/contratos', contratoWorkflowRouter);
 app.use('/api/v1/contratos', contratosRouter);
 
 // Error handler (must be last)

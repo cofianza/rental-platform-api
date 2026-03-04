@@ -75,6 +75,7 @@ export const AUDIT_ACTIONS = {
   CONTRATO_REGENERATED: 'contrato_regenerated',
   CONTRATO_DOWNLOADED: 'contrato_downloaded',
   CONTRATO_VERSION_DOWNLOADED: 'contrato_version_downloaded',
+  CONTRATO_TRANSITIONED: 'contrato_transitioned',
 } as const;
 
 export const AUDIT_ENTITIES = {
