@@ -66,6 +66,10 @@ export const AUDIT_ACTIONS = {
   AUTORIZACION_ENLACE_SENT: 'autorizacion_enlace_sent',
   AUTORIZACION_FIRMADA: 'autorizacion_firmada',
   AUTORIZACION_REVOCADA: 'autorizacion_revocada',
+  // Plantillas de contrato
+  PLANTILLA_CREATED: 'plantilla_created',
+  PLANTILLA_UPDATED: 'plantilla_updated',
+  PLANTILLA_DELETED: 'plantilla_deleted',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -84,6 +88,7 @@ export const AUDIT_ENTITIES = {
   DOCUMENTO_SOPORTE: 'documento_soporte',
   CERTIFICADO: 'certificado',
   AUTORIZACION: 'autorizacion',
+  PLANTILLA: 'plantilla',
 } as const;
 
 interface AuditLogParams {
