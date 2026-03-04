@@ -7,6 +7,7 @@ import type {
   GenerarContratoInput,
   ReGenerarContratoInput,
   ListContratosQuery,
+  ListAllContratosQuery,
 } from './contratos.schema';
 
 // ============================================================
@@ -226,6 +227,65 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       solicitante: exp.solicitantes,
       propietario: prop,
     },
+  };
+}
+
+// ============================================================
+// List all contratos (global)
+// ============================================================
+
+const CONTRATO_LIST_WITH_RELATIONS = `
+  ${CONTRATO_LIST_SELECT},
+  expedientes(numero, inmuebles(direccion, ciudad))
+`;
+
+export async function listAllContratos(query: ListAllContratosQuery) {
+  const page = Number(query.page) || 1;
+  const limit = Number(query.limit) || 10;
+  const offset = (page - 1) * limit;
+
+  // Build filters helper
+  function applyFilters(qb: ReturnType<typeof supabase.from>) {
+    let q = qb as any;
+    if (query.estado) {
+      const estados = query.estado.split(',').map((s) => s.trim()).filter(Boolean);
+      if (estados.length > 0) q = q.in('estado', estados);
+    }
+    if (query.search) {
+      q = q.ilike('nombre_archivo', `%${query.search}%`);
+    }
+    if (query.fecha_desde) {
+      q = q.gte('fecha_generacion', query.fecha_desde);
+    }
+    if (query.fecha_hasta) {
+      q = q.lte('fecha_generacion', `${query.fecha_hasta}T23:59:59`);
+    }
+    return q;
+  }
+
+  // Count
+  const countQb = (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true });
+  const { count } = await applyFilters(countQb);
+  const total = count || 0;
+
+  // Data
+  const dataQb = (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select(CONTRATO_LIST_WITH_RELATIONS)
+    .order(query.sortBy, { ascending: query.sortDir === 'asc' })
+    .range(offset, offset + limit - 1);
+  const { data, error } = await applyFilters(dataQb);
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al listar contratos (global)');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener contratos');
+  }
+
+  return {
+    contratos: data ?? [],
+    pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
   };
 }
 

@@ -32,7 +32,7 @@ export const regenerarContratoSchema = z.object({
 });
 
 // ============================================================
-// List query
+// List query (per-expediente)
 // ============================================================
 
 export const listContratosQuerySchema = z.object({
@@ -40,6 +40,21 @@ export const listContratosQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(10),
   sortBy: z.enum(['created_at']).default('created_at'),
   sortDir: z.enum(['asc', 'desc']).default('desc'),
+});
+
+// ============================================================
+// List query (global)
+// ============================================================
+
+export const listAllContratosQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(10),
+  sortBy: z.enum(['created_at', 'fecha_generacion', 'estado']).default('created_at'),
+  sortDir: z.enum(['asc', 'desc']).default('desc'),
+  estado: z.string().max(200).optional(),
+  search: z.string().max(200).optional(),
+  fecha_desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  fecha_hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 // ============================================================
@@ -65,5 +80,6 @@ export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type GenerarContratoInput = z.infer<typeof generarContratoSchema>;
 export type ReGenerarContratoInput = z.infer<typeof regenerarContratoSchema>;
 export type ListContratosQuery = z.infer<typeof listContratosQuerySchema>;
+export type ListAllContratosQuery = z.infer<typeof listAllContratosQuerySchema>;
 export type VersionDescargarParams = z.infer<typeof versionDescargarParamsSchema>;
 export type CompararVersionesQuery = z.infer<typeof compararVersionesQuerySchema>;

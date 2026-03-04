@@ -5,9 +5,16 @@ import type {
   GenerarContratoInput,
   ReGenerarContratoInput,
   ListContratosQuery,
+  ListAllContratosQuery,
   VersionDescargarParams,
   CompararVersionesQuery,
 } from './contratos.schema';
+
+export async function listAll(req: Request, res: Response) {
+  const query = req.query as unknown as ListAllContratosQuery;
+  const result = await contratosService.listAllContratos(query);
+  sendSuccess(res, result.contratos, 200, result.pagination);
+}
 
 export async function listByExpediente(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };

@@ -7,6 +7,7 @@ import {
   generarContratoSchema,
   regenerarContratoSchema,
   listContratosQuerySchema,
+  listAllContratosQuerySchema,
   versionDescargarParamsSchema,
   compararVersionesQuerySchema,
 } from './contratos.schema';
@@ -41,6 +42,14 @@ expedienteContratosRouter.post(
 
 export const contratosRouter = Router();
 contratosRouter.use(authMiddleware);
+
+// GET / — List all contratos (global)
+contratosRouter.get(
+  '/',
+  authorize('contratos', 'read'),
+  validate({ query: listAllContratosQuerySchema }),
+  contratosController.listAll,
+);
 
 // GET /:id — Get contract detail
 contratosRouter.get(
