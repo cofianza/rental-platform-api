@@ -23,6 +23,7 @@ import documentosRouter from '@/modules/documentos/documentos.routes';
 import expedienteDocumentosRouter from '@/modules/documentos/expediente-documentos.routes';
 import tiposDocumentoRouter from '@/modules/documentos/tipos-documento.routes';
 import adminTiposDocumentoRouter from '@/modules/documentos/admin-tipos-documento.routes';
+import { expedienteEstudiosRouter, estudiosRouter, publicEstudiosRouter } from '@/modules/estudios/estudios.routes';
 
 const app = express();
 
@@ -70,6 +71,9 @@ app.use('/api/v1/documentos', documentosRouter);
 app.use('/api/v1/expedientes', expedienteDocumentosRouter);
 app.use('/api/v1/tipos-documento', tiposDocumentoRouter);
 app.use('/api/v1/admin/tipos-documento', adminTiposDocumentoRouter);
+app.use('/api/v1/expedientes/:expedienteId/estudios', expedienteEstudiosRouter);
+app.use('/api/v1/estudios', estudiosRouter);
+app.use('/api/v1/public/estudios', publicEstudiosRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

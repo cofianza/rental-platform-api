@@ -47,6 +47,12 @@ export const AUDIT_ACTIONS = {
   TIPO_DOCUMENTO_UPDATED: 'tipo_documento_updated',
   TIPO_DOCUMENTO_TOGGLED: 'tipo_documento_toggled',
   TIPO_DOCUMENTO_REORDERED: 'tipo_documento_reordered',
+  // Estudios de riesgo crediticio
+  ESTUDIO_CREATED: 'estudio_created',
+  ESTUDIO_CANCELLED: 'estudio_cancelled',
+  ESTUDIO_LINK_SENT: 'estudio_link_sent',
+  ESTUDIO_FORM_SUBMITTED: 'estudio_form_submitted',
+  ESTUDIO_RESULTADO_REGISTERED: 'estudio_resultado_registered',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -61,6 +67,7 @@ export const AUDIT_ENTITIES = {
   ASIGNACION: 'asignacion',
   DOCUMENTO: 'documento',
   TIPO_DOCUMENTO: 'tipo_documento',
+  ESTUDIO: 'estudio',
 } as const;
 
 interface AuditLogParams {
