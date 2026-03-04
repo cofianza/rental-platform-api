@@ -70,6 +70,10 @@ export const AUDIT_ACTIONS = {
   PLANTILLA_CREATED: 'plantilla_created',
   PLANTILLA_UPDATED: 'plantilla_updated',
   PLANTILLA_DELETED: 'plantilla_deleted',
+  // Contratos
+  CONTRATO_GENERATED: 'contrato_generated',
+  CONTRATO_REGENERATED: 'contrato_regenerated',
+  CONTRATO_DOWNLOADED: 'contrato_downloaded',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -89,6 +93,7 @@ export const AUDIT_ENTITIES = {
   CERTIFICADO: 'certificado',
   AUTORIZACION: 'autorizacion',
   PLANTILLA: 'plantilla',
+  CONTRATO: 'contrato',
 } as const;
 
 interface AuditLogParams {
