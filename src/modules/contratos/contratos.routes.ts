@@ -7,6 +7,8 @@ import {
   generarContratoSchema,
   regenerarContratoSchema,
   listContratosQuerySchema,
+  versionDescargarParamsSchema,
+  compararVersionesQuerySchema,
 } from './contratos.schema';
 import * as contratosController from './contratos.controller';
 
@@ -56,7 +58,31 @@ contratosRouter.post(
   contratosController.regenerar,
 );
 
-// GET /:id/descargar — Download PDF (signed URL)
+// GET /:id/versiones — List archived versions
+contratosRouter.get(
+  '/:id/versiones',
+  authorize('contratos', 'read'),
+  validate({ params: contratoIdParamsSchema }),
+  contratosController.listVersiones,
+);
+
+// GET /:id/versiones/comparar — Compare two versions (BEFORE :versionNum catch-all)
+contratosRouter.get(
+  '/:id/versiones/comparar',
+  authorize('contratos', 'read'),
+  validate({ params: contratoIdParamsSchema, query: compararVersionesQuerySchema }),
+  contratosController.compararVersiones,
+);
+
+// GET /:id/versiones/:versionNum/descargar — Download specific version PDF
+contratosRouter.get(
+  '/:id/versiones/:versionNum/descargar',
+  authorize('contratos', 'read'),
+  validate({ params: versionDescargarParamsSchema }),
+  contratosController.descargarVersion,
+);
+
+// GET /:id/descargar — Download current PDF (signed URL)
 contratosRouter.get(
   '/:id/descargar',
   authorize('contratos', 'read'),

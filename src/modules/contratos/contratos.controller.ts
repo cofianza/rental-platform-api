@@ -5,6 +5,8 @@ import type {
   GenerarContratoInput,
   ReGenerarContratoInput,
   ListContratosQuery,
+  VersionDescargarParams,
+  CompararVersionesQuery,
 } from './contratos.schema';
 
 export async function listByExpediente(req: Request, res: Response) {
@@ -42,5 +44,24 @@ export async function regenerar(req: Request, res: Response) {
 export async function descargar(req: Request, res: Response) {
   const { id } = req.params as unknown as { id: string };
   const result = await contratosService.descargarContrato(id, req.user!.id, req.ip);
+  sendSuccess(res, result);
+}
+
+export async function listVersiones(req: Request, res: Response) {
+  const { id } = req.params as unknown as { id: string };
+  const versiones = await contratosService.listVersionesByContrato(id);
+  sendSuccess(res, versiones);
+}
+
+export async function descargarVersion(req: Request, res: Response) {
+  const { id, versionNum } = req.params as unknown as VersionDescargarParams;
+  const result = await contratosService.descargarVersion(id, versionNum, req.user!.id, req.ip);
+  sendSuccess(res, result);
+}
+
+export async function compararVersiones(req: Request, res: Response) {
+  const { id } = req.params as unknown as { id: string };
+  const { v1, v2 } = req.query as unknown as CompararVersionesQuery;
+  const result = await contratosService.compararVersiones(id, v1, v2);
   sendSuccess(res, result);
 }

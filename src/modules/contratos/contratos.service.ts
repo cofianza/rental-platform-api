@@ -29,7 +29,13 @@ const CONTRATO_LIST_SELECT = `
   id, expediente_id, plantilla_id, version, estado,
   fecha_inicio, duracion_meses, valor_arriendo,
   nombre_archivo, fecha_generacion, plantilla_version,
-  created_at, updated_at
+  storage_key, created_at, updated_at
+`;
+
+const VERSION_SELECT = `
+  id, contrato_id, version, datos_variables, storage_key,
+  nombre_archivo, plantilla_version, generado_por,
+  fecha_generacion, resumen_cambios, created_at
 `;
 
 // ============================================================
@@ -61,6 +67,64 @@ function addMonths(date: Date, months: number): Date {
   const result = new Date(date);
   result.setMonth(result.getMonth() + months);
   return result;
+}
+
+function generateResumenCambios(
+  oldVars: Record<string, string>,
+  newVars: Record<string, string>,
+): string {
+  const changes: string[] = [];
+  const allKeys = new Set([...Object.keys(oldVars), ...Object.keys(newVars)]);
+
+  for (const key of allKeys) {
+    const oldVal = oldVars[key];
+    const newVal = newVars[key];
+
+    if (oldVal === undefined && newVal !== undefined) {
+      changes.push(`"${key}" agregada: "${newVal}"`);
+    } else if (oldVal !== undefined && newVal === undefined) {
+      changes.push(`"${key}" eliminada (era: "${oldVal}")`);
+    } else if (oldVal !== newVal) {
+      changes.push(`"${key}" cambio de "${oldVal}" a "${newVal}"`);
+    }
+  }
+
+  return changes.length === 0
+    ? 'Sin cambios en variables'
+    : changes.join('; ');
+}
+
+async function archiveCurrentVersion(
+  contrato: {
+    id: string;
+    version: number;
+    datos_variables: Record<string, string> | null;
+    storage_key: string;
+    nombre_archivo: string | null;
+    plantilla_version: number | null;
+    generado_por: string | null;
+    fecha_generacion: string | null;
+  },
+  resumenCambios: string,
+): Promise<void> {
+  const { error } = await (supabase
+    .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      contrato_id: contrato.id,
+      version: contrato.version,
+      datos_variables: contrato.datos_variables,
+      storage_key: contrato.storage_key,
+      nombre_archivo: contrato.nombre_archivo,
+      plantilla_version: contrato.plantilla_version,
+      generado_por: contrato.generado_por,
+      fecha_generacion: contrato.fecha_generacion,
+      resumen_cambios: resumenCambios,
+    } as never);
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al archivar version de contrato');
+    throw new AppError(500, 'ARCHIVE_ERROR', 'Error al archivar la version anterior del contrato');
+  }
 }
 
 interface ExpedienteData {
@@ -362,7 +426,9 @@ export async function regenerarContrato(
   const row = existing as unknown as {
     id: string; expediente_id: string; plantilla_id: string;
     version: number; estado: string; storage_key: string;
-    datos_variables: Record<string, string>;
+    datos_variables: Record<string, string> | null;
+    nombre_archivo: string | null; plantilla_version: number | null;
+    generado_por: string | null; fecha_generacion: string | null;
   };
 
   if (row.estado !== 'borrador') {
@@ -401,6 +467,10 @@ export async function regenerarContrato(
     ...(input.variables ?? {}),
   };
 
+  // 4b. Archive current version before regenerating
+  const resumenCambios = generateResumenCambios(row.datos_variables ?? {}, finalVariables);
+  await archiveCurrentVersion(row, resumenCambios);
+
   // 5. Compile HTML + generate PDF
   const compiledHtml = compileTemplate(pl.contenido, finalVariables);
   const newVersion = row.version + 1;
@@ -427,12 +497,7 @@ export async function regenerarContrato(
     throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF regenerado');
   }
 
-  // 7. Delete old storage file if exists
-  if (row.storage_key) {
-    await supabase.storage.from(BUCKET_NAME).remove([row.storage_key]);
-  }
-
-  // 8. Update contrato
+  // 7. Update contrato (old PDF preserved in contrato_versiones)
   const { error: updateError } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .update({
@@ -456,7 +521,7 @@ export async function regenerarContrato(
     accion: AUDIT_ACTIONS.CONTRATO_REGENERATED,
     entidad: AUDIT_ENTITIES.CONTRATO,
     entidadId: id,
-    detalle: { version: newVersion },
+    detalle: { version: newVersion, version_anterior: row.version, resumen_cambios: resumenCambios },
     ip,
   });
 
@@ -502,5 +567,169 @@ export async function descargarContrato(id: string, userId: string, ip?: string)
     nombre_archivo: row.nombre_archivo || 'contrato.pdf',
     tipo_mime: 'application/pdf',
     expires_in: DOWNLOAD_URL_EXPIRY_SECONDS,
+  };
+}
+
+// ============================================================
+// List versiones by contrato
+// ============================================================
+
+export async function listVersionesByContrato(contratoId: string) {
+  // Verify contrato exists
+  await getContratoById(contratoId);
+
+  const { data, error } = await (supabase
+    .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
+    .select(VERSION_SELECT)
+    .eq('contrato_id', contratoId)
+    .order('version', { ascending: false });
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al listar versiones');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener versiones');
+  }
+
+  return data ?? [];
+}
+
+// ============================================================
+// Descargar version archivada (signed URL)
+// ============================================================
+
+export async function descargarVersion(
+  contratoId: string,
+  versionNum: number,
+  userId: string,
+  ip?: string,
+) {
+  const { data, error } = await (supabase
+    .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
+    .select('id, storage_key, nombre_archivo')
+    .eq('contrato_id', contratoId)
+    .eq('version', versionNum)
+    .single();
+
+  if (error || !data) {
+    throw AppError.notFound('Version no encontrada', 'VERSION_NOT_FOUND');
+  }
+
+  const row = data as unknown as { id: string; storage_key: string; nombre_archivo: string };
+
+  const { data: urlData, error: urlError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(row.storage_key, DOWNLOAD_URL_EXPIRY_SECONDS, {
+      download: row.nombre_archivo || 'contrato.pdf',
+    });
+
+  if (urlError || !urlData) {
+    logger.error({ error: urlError?.message }, 'Error al generar URL de descarga de version');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al generar URL de descarga');
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.CONTRATO_VERSION_DOWNLOADED,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: contratoId,
+    detalle: { version: versionNum, nombre_archivo: row.nombre_archivo },
+    ip,
+  });
+
+  return {
+    url: urlData.signedUrl,
+    nombre_archivo: row.nombre_archivo || 'contrato.pdf',
+    tipo_mime: 'application/pdf',
+    expires_in: DOWNLOAD_URL_EXPIRY_SECONDS,
+  };
+}
+
+// ============================================================
+// Comparar variables entre dos versiones
+// ============================================================
+
+export async function compararVersiones(
+  contratoId: string,
+  v1: number,
+  v2: number,
+) {
+  const contrato = await getContratoById(contratoId);
+  const currentRow = contrato as unknown as {
+    version: number; datos_variables: Record<string, string> | null;
+    fecha_generacion: string | null; plantilla_version: number | null;
+  };
+
+  async function getVariablesForVersion(versionNum: number) {
+    // If requesting the current version, use the contrato row
+    if (versionNum === currentRow.version) {
+      return {
+        version: currentRow.version,
+        datos_variables: currentRow.datos_variables ?? {},
+        fecha_generacion: currentRow.fecha_generacion,
+        plantilla_version: currentRow.plantilla_version,
+      };
+    }
+
+    // Otherwise look in the archive
+    const { data, error } = await (supabase
+      .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
+      .select('version, datos_variables, fecha_generacion, plantilla_version')
+      .eq('contrato_id', contratoId)
+      .eq('version', versionNum)
+      .single();
+
+    if (error || !data) {
+      throw AppError.notFound(`Version ${versionNum} no encontrada`, 'VERSION_NOT_FOUND');
+    }
+
+    const row = data as unknown as {
+      version: number; datos_variables: Record<string, string> | null;
+      fecha_generacion: string | null; plantilla_version: number | null;
+    };
+
+    return {
+      version: row.version,
+      datos_variables: row.datos_variables ?? {},
+      fecha_generacion: row.fecha_generacion,
+      plantilla_version: row.plantilla_version,
+    };
+  }
+
+  const [version1, version2] = await Promise.all([
+    getVariablesForVersion(v1),
+    getVariablesForVersion(v2),
+  ]);
+
+  // Build diff
+  const allKeys = new Set([
+    ...Object.keys(version1.datos_variables),
+    ...Object.keys(version2.datos_variables),
+  ]);
+
+  const diferencias: Array<{
+    variable: string;
+    valor_v1: string | null;
+    valor_v2: string | null;
+    cambio: 'agregada' | 'eliminada' | 'modificada' | 'sin_cambio';
+  }> = [];
+
+  for (const key of allKeys) {
+    const val1 = version1.datos_variables[key] ?? null;
+    const val2 = version2.datos_variables[key] ?? null;
+
+    let cambio: 'agregada' | 'eliminada' | 'modificada' | 'sin_cambio';
+    if (val1 === null) cambio = 'agregada';
+    else if (val2 === null) cambio = 'eliminada';
+    else if (val1 !== val2) cambio = 'modificada';
+    else cambio = 'sin_cambio';
+
+    diferencias.push({ variable: key, valor_v1: val1, valor_v2: val2, cambio });
+  }
+
+  return {
+    contrato_id: contratoId,
+    v1: { version: version1.version, fecha_generacion: version1.fecha_generacion, plantilla_version: version1.plantilla_version },
+    v2: { version: version2.version, fecha_generacion: version2.fecha_generacion, plantilla_version: version2.plantilla_version },
+    diferencias,
+    total_cambios: diferencias.filter(d => d.cambio !== 'sin_cambio').length,
   };
 }

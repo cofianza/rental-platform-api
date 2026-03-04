@@ -43,6 +43,20 @@ export const listContratosQuerySchema = z.object({
 });
 
 // ============================================================
+// Version endpoints
+// ============================================================
+
+export const versionDescargarParamsSchema = z.object({
+  id: z.string().uuid('ID de contrato invalido'),
+  versionNum: z.coerce.number().int().min(1, 'Numero de version invalido'),
+});
+
+export const compararVersionesQuerySchema = z.object({
+  v1: z.coerce.number().int().min(1, 'Version v1 invalida'),
+  v2: z.coerce.number().int().min(1, 'Version v2 invalida'),
+});
+
+// ============================================================
 // Type exports
 // ============================================================
 
@@ -51,3 +65,5 @@ export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type GenerarContratoInput = z.infer<typeof generarContratoSchema>;
 export type ReGenerarContratoInput = z.infer<typeof regenerarContratoSchema>;
 export type ListContratosQuery = z.infer<typeof listContratosQuerySchema>;
+export type VersionDescargarParams = z.infer<typeof versionDescargarParamsSchema>;
+export type CompararVersionesQuery = z.infer<typeof compararVersionesQuerySchema>;
