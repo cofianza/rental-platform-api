@@ -117,6 +117,11 @@ export async function completarFirma(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+export async function expirarCron(req: Request, res: Response) {
+  const result = await firmaService.expirarSolicitudesVencidas();
+  sendSuccess(res, result);
+}
+
 export async function getEvidencia(req: Request, res: Response) {
   const id = req.params.id as string;
   const result = await evidenciaService.getEvidencia(id);

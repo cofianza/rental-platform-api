@@ -542,6 +542,7 @@ export async function validarToken(token: string) {
     nombre_firmante: row.nombre_firmante,
     email_firmante: row.email_firmante,
     estado: row.estado === 'enviado' ? 'abierto' : row.estado,
+    token_expiracion: row.token_expiracion,
     contrato_nombre: cc?.nombre_archivo || 'Contrato',
     expediente_numero: cc?.expedientes?.numero_expediente || '',
     inmueble_direccion: cc?.expedientes?.inmuebles?.direccion || '',
@@ -649,4 +650,46 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
       });
     }
   }
+}
+
+// ============================================================
+// Bulk token expiration (cron)
+// ============================================================
+
+export async function expirarSolicitudesVencidas(): Promise<{ expiradas: number }> {
+  const now = new Date().toISOString();
+
+  // Find all solicitudes with expired tokens that are still in active states
+  const { data, error } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, contrato_id')
+    .in('estado', ['pendiente', 'enviado', 'abierto', 'otp_validado'])
+    .lt('token_expiracion', now);
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al buscar solicitudes expiradas');
+    return { expiradas: 0 };
+  }
+
+  const rows = (data as unknown as { id: string; contrato_id: string }[]) || [];
+
+  if (rows.length === 0) {
+    return { expiradas: 0 };
+  }
+
+  const ids = rows.map((r) => r.id);
+
+  const { error: updateError } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'expirado', updated_at: new Date().toISOString() } as never)
+    .in('id', ids);
+
+  if (updateError) {
+    logger.error({ error: updateError.message }, 'Error al expirar solicitudes en bulk');
+    return { expiradas: 0 };
+  }
+
+  logger.info({ count: rows.length, ids }, 'Solicitudes de firma expiradas por cron');
+
+  return { expiradas: rows.length };
 }

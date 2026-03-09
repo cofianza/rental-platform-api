@@ -120,6 +120,23 @@ publicFirmaRouter.post(
 );
 
 // ============================================================
+// Cron route: /api/v1/cron/firma/expirar
+// ============================================================
+
+export const firmaCronRouter = Router();
+
+// POST / — Bulk expire solicitudes with expired tokens (protected by CRON_SECRET)
+firmaCronRouter.post('/', (req, res, next) => {
+  const secret = req.headers['x-cron-secret'] || req.headers.authorization;
+  const expectedSecret = process.env.CRON_SECRET;
+  if (!expectedSecret || secret !== expectedSecret) {
+    res.status(401).json({ success: false, message: 'Unauthorized' });
+    return;
+  }
+  next();
+}, firmaController.expirarCron);
+
+// ============================================================
 // Auco webhook: /api/v1/webhooks/auco/firma
 // ============================================================
 

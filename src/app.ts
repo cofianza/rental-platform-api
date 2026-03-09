@@ -30,7 +30,7 @@ import { expedienteContratosRouter, contratosRouter } from '@/modules/contratos/
 import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes';
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
 import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
-import { firmaRouter, contratoFirmaSolicitudesRouter, publicFirmaRouter, aucoWebhookRouter } from '@/modules/firma/firma.routes';
+import { firmaRouter, contratoFirmaSolicitudesRouter, publicFirmaRouter, aucoWebhookRouter, firmaCronRouter } from '@/modules/firma/firma.routes';
 
 const app = express();
 
@@ -96,6 +96,7 @@ app.use('/api/v1/firma/solicitudes', firmaRouter);
 app.use('/api/v1/contratos/:contratoId/firma/solicitudes', contratoFirmaSolicitudesRouter);
 app.use('/api/v1/public/firma', publicFirmaRouter);
 app.use('/api/v1/webhooks/auco/firma', aucoWebhookRouter);
+app.use('/api/v1/cron/firma/expirar', firmaCronRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
