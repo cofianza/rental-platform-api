@@ -58,6 +58,8 @@ const PLANTILLA_SELECT = 'id, nombre, descripcion, contenido, variables, activa,
 export async function listPlantillas(query: ListPlantillasQuery) {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
+  const sortBy = query.sortBy || 'created_at';
+  const sortDir = query.sortDir || 'desc';
   const offset = (page - 1) * limit;
 
   // Count
@@ -88,7 +90,7 @@ export async function listPlantillas(query: ListPlantillasQuery) {
   }
 
   dataQ = dataQ
-    .order(query.sortBy, { ascending: query.sortDir === 'asc' })
+    .order(sortBy, { ascending: sortDir === 'asc' })
     .range(offset, offset + limit - 1);
 
   const { data, error } = await dataQ;

@@ -205,13 +205,13 @@ export async function descargarContratoFirmado(
   // Admin y operador_analista siempre pueden descargar
   // Para propietario/inmobiliaria: verificar vinculacion con expediente
   if (userRol !== 'administrador' && userRol !== 'operador_analista') {
-    const { data: expediente } = await (supabase
+    const { data: expediente, error: expError } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('id, solicitante_id, inmuebles(propietario_id)')
       .eq('id', contrato.expediente_id)
       .single();
 
-    if (!expediente) {
+    if (expError || !expediente) {
       throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
     }
 

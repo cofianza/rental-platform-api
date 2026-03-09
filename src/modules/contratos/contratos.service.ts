@@ -242,6 +242,8 @@ const CONTRATO_LIST_WITH_RELATIONS = `
 export async function listAllContratos(query: ListAllContratosQuery) {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
+  const sortBy = query.sortBy || 'created_at';
+  const sortDir = query.sortDir || 'desc';
   const offset = (page - 1) * limit;
 
   // Build filters helper
@@ -274,7 +276,7 @@ export async function listAllContratos(query: ListAllContratosQuery) {
   const dataQb = (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select(CONTRATO_LIST_WITH_RELATIONS)
-    .order(query.sortBy, { ascending: query.sortDir === 'asc' })
+    .order(sortBy, { ascending: sortDir === 'asc' })
     .range(offset, offset + limit - 1);
   const { data, error } = await applyFilters(dataQb);
 
@@ -299,6 +301,8 @@ export async function listContratosByExpediente(
 ) {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
+  const sortBy = query.sortBy || 'created_at';
+  const sortDir = query.sortDir || 'desc';
   const offset = (page - 1) * limit;
 
   // Count
@@ -314,7 +318,7 @@ export async function listContratosByExpediente(
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select(CONTRATO_LIST_SELECT)
     .eq('expediente_id', expedienteId)
-    .order(query.sortBy, { ascending: query.sortDir === 'asc' })
+    .order(sortBy, { ascending: sortDir === 'asc' })
     .range(offset, offset + limit - 1);
 
   if (error) {

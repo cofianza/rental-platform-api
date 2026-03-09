@@ -5,8 +5,10 @@ import { publicFormLimiter } from '@/middleware/rateLimiter';
 import {
   expedienteIdParamsSchema,
   estudioIdParamsSchema,
+  inmuebleIdParamsSchema,
   tokenParamsSchema,
   createEstudioSchema,
+  createEstudioFromInmuebleSchema,
   listEstudiosQuerySchema,
   listAllEstudiosQuerySchema,
   submitFormularioSchema,
@@ -184,6 +186,22 @@ proveedoresRiesgoRouter.get(
   '/salud',
   authorize('configuracion', 'read'),
   estudiosController.getProviderHealth,
+);
+
+// ============================================================
+// Router 5: Nested under /inmuebles/:inmuebleId/estudios
+// ============================================================
+
+export const inmuebleEstudiosRouter = Router({ mergeParams: true });
+
+inmuebleEstudiosRouter.use(authMiddleware);
+
+// POST /inmuebles/:inmuebleId/estudios — Create estudio from inmueble (auto-creates expediente)
+inmuebleEstudiosRouter.post(
+  '/',
+  authorize('expedientes', 'update'),
+  validate({ params: inmuebleIdParamsSchema, body: createEstudioFromInmuebleSchema }),
+  estudiosController.createFromInmueble,
 );
 
 // ============================================================

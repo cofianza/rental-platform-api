@@ -5,7 +5,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
-import type { CreateEstudioInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
+import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo } from './providers/types';
@@ -143,8 +143,9 @@ export async function listAllEstudios(query: ListAllEstudiosQuery) {
   const total = count || 0;
 
   // Apply sort and pagination
-  const ascending = query.sortOrder === 'asc';
-  dataQuery = dataQuery.order(query.sortBy, { ascending }).range(offset, offset + limit - 1);
+  const sortBy = query.sortBy || 'created_at';
+  const ascending = (query.sortOrder || 'desc') === 'asc';
+  dataQuery = dataQuery.order(sortBy, { ascending }).range(offset, offset + limit - 1);
 
   const { data, error } = await dataQuery;
 
@@ -196,7 +197,8 @@ export async function getEstudioById(estudioId: string) {
       fecha_completado, fecha_completado_self_service, referencia_proveedor,
       certificado_url, codigo_qr, datos_formulario, token_self_service,
       expiracion_token, created_at, updated_at,
-      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
+      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido),
+      documentos(id, tipo, nombre_original, tipo_mime, tamano_bytes, estado, created_at)
     `)
     .eq('id', estudioId)
     .single();
@@ -211,6 +213,9 @@ export async function getEstudioById(estudioId: string) {
 // ============================================================
 // Create estudio
 // ============================================================
+
+// Documentos minimos requeridos para crear un estudio
+const DOCUMENTOS_MINIMOS_REQUERIDOS = ['cedula_frontal', 'comprobante_ingresos'];
 
 export async function createEstudio(
   expedienteId: string,
@@ -238,27 +243,7 @@ export async function createEstudio(
     );
   }
 
-  // 2. Verify inmueble is not already "en_estudio"
-  const { data: inmueble, error: inmError } = await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado')
-    .eq('id', exp.inmueble_id)
-    .single();
-
-  if (inmError || !inmueble) {
-    throw AppError.badRequest('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
-  }
-
-  const inm = inmueble as unknown as { id: string; estado: string };
-
-  if (inm.estado === 'en_estudio') {
-    throw AppError.conflict(
-      'El inmueble ya tiene un estudio en proceso. Debe finalizar o cancelar el estudio actual.',
-      'INMUEBLE_EN_ESTUDIO',
-    );
-  }
-
-  // 3. Verify no active estudio exists for this expediente
+  // 2. Verify no active estudio exists for this expediente
   const { data: activeEstudio } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado')
@@ -274,7 +259,7 @@ export async function createEstudio(
     );
   }
 
-  // 3.5. Verify autorizacion habeas data exists and is active
+  // 3. Verify autorizacion habeas data exists and is active
   const { data: autorizacion } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado')
@@ -293,36 +278,46 @@ export async function createEstudio(
 
   const autorizacionId = (autorizacion as unknown as { id: string }).id;
 
-  // 4. Insert estudio
-  const { data: estudio, error: insertError } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      expediente_id: expedienteId,
-      tipo: input.tipo,
-      proveedor: input.proveedor,
-      estado: 'solicitado',
-      resultado: 'pendiente',
-      duracion_contrato_meses: input.duracion_contrato_meses,
-      pago_por: input.pago_por,
-      observaciones: input.observaciones || null,
-      solicitado_por: userId,
-      autorizacion_habeas_data_id: autorizacionId,
-    } as never)
-    .select('id')
-    .single();
+  // 4. Verify documentos minimos (cedula + comprobante de ingresos)
+  const { data: documentos } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('tipo')
+    .eq('expediente_id', expedienteId)
+    .in('tipo', DOCUMENTOS_MINIMOS_REQUERIDOS);
 
-  if (insertError || !estudio) {
-    logger.error({ error: insertError, expedienteId }, 'Error al crear estudio');
-    throw AppError.badRequest('Error al crear el estudio', 'ESTUDIO_CREATE_ERROR');
+  const tiposPresentes = (documentos ?? []).map((d: unknown) => (d as { tipo: string }).tipo);
+  const tiposFaltantes = DOCUMENTOS_MINIMOS_REQUERIDOS.filter((t) => !tiposPresentes.includes(t));
+
+  if (tiposFaltantes.length > 0) {
+    throw AppError.badRequest(
+      `Documentos minimos faltantes: ${tiposFaltantes.join(', ')}. Se requiere al menos cedula y comprobante de ingresos.`,
+      'DOCUMENTOS_MINIMOS_FALTANTES',
+    );
   }
 
-  const estudioId = (estudio as unknown as { id: string }).id;
+  // 5. Atomic: insert estudio + update inmueble via RPC
+  const { data: estudioId, error: rpcError } = await (supabase as any).rpc('fn_crear_estudio', {
+    p_expediente_id: expedienteId,
+    p_inmueble_id: exp.inmueble_id,
+    p_tipo: input.tipo,
+    p_proveedor: input.proveedor,
+    p_duracion_contrato_meses: input.duracion_contrato_meses,
+    p_pago_por: input.pago_por,
+    p_observaciones: input.observaciones || null,
+    p_solicitado_por: userId,
+    p_autorizacion_habeas_data_id: autorizacionId,
+  });
 
-  // 5. Update inmueble estado to 'en_estudio'
-  await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: 'en_estudio' } as never)
-    .eq('id', exp.inmueble_id);
+  if (rpcError) {
+    logger.error({ error: rpcError.message, expedienteId }, 'Error al crear estudio (RPC)');
+    if (rpcError.message?.includes('en_estudio')) {
+      throw AppError.conflict(
+        'El inmueble ya tiene un estudio en proceso. Debe finalizar o cancelar el estudio actual.',
+        'INMUEBLE_EN_ESTUDIO',
+      );
+    }
+    throw AppError.badRequest('Error al crear el estudio', 'ESTUDIO_CREATE_ERROR');
+  }
 
   // 6. Audit
   logAudit({
@@ -344,63 +339,97 @@ export async function createEstudio(
 }
 
 // ============================================================
+// Create estudio from inmueble (auto-creates expediente)
+// ============================================================
+
+export async function createEstudioFromInmueble(
+  inmuebleId: string,
+  input: CreateEstudioFromInmuebleInput,
+  userId: string,
+  ip?: string,
+) {
+  // Atomic: create expediente + estudio + update inmueble via RPC
+  const { data, error: rpcError } = await (supabase as any).rpc('fn_crear_estudio_desde_inmueble', {
+    p_inmueble_id: inmuebleId,
+    p_solicitante_id: input.solicitante_id,
+    p_tipo: input.tipo,
+    p_proveedor: input.proveedor,
+    p_duracion_contrato_meses: input.duracion_contrato_meses,
+    p_pago_por: input.pago_por,
+    p_observaciones: input.observaciones || null,
+    p_solicitado_por: userId,
+  });
+
+  if (rpcError) {
+    logger.error({ error: rpcError.message, inmuebleId }, 'Error al crear estudio desde inmueble (RPC)');
+    if (rpcError.message?.includes('no encontrado')) {
+      const entity = rpcError.message.includes('Inmueble') ? 'Inmueble' : 'Solicitante';
+      throw AppError.notFound(`${entity} no encontrado`, `${entity.toUpperCase()}_NOT_FOUND`);
+    }
+    if (rpcError.message?.includes('en_estudio')) {
+      throw AppError.conflict(
+        'El inmueble ya tiene un estudio en proceso. Debe finalizar o cancelar el estudio actual.',
+        'INMUEBLE_EN_ESTUDIO',
+      );
+    }
+    throw AppError.badRequest('Error al crear el estudio', 'ESTUDIO_CREATE_ERROR');
+  }
+
+  const result = data as { expediente_id: string; estudio_id: string };
+
+  // Audit
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.ESTUDIO_CREATED,
+    entidad: AUDIT_ENTITIES.ESTUDIO,
+    entidadId: result.estudio_id,
+    detalle: {
+      inmueble_id: inmuebleId,
+      expediente_id: result.expediente_id,
+      tipo: input.tipo,
+      proveedor: input.proveedor,
+      duracion_contrato_meses: input.duracion_contrato_meses,
+      pago_por: input.pago_por,
+      auto_expediente: true,
+    },
+    ip,
+  });
+
+  return getEstudioById(result.estudio_id);
+}
+
+// ============================================================
 // Cancel estudio
 // ============================================================
 
 export async function cancelEstudio(estudioId: string, userId: string, ip?: string) {
-  // 1. Get estudio
-  const { data: estudio, error: getError } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, expediente_id')
-    .eq('id', estudioId)
-    .single();
+  // Atomic: cancel estudio + revert inmueble via RPC
+  // RPC validates estado === 'solicitado' and handles row locking
+  const { error: rpcError } = await (supabase as any).rpc('fn_cancelar_estudio', {
+    p_estudio_id: estudioId,
+  });
 
-  if (getError || !estudio) {
-    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
-  }
-
-  const est = estudio as unknown as { id: string; estado: string; expediente_id: string };
-
-  if (ESTADOS_ESTUDIO_FINALIZADOS.includes(est.estado)) {
-    throw AppError.badRequest(
-      'Este estudio ya fue finalizado y no se puede cancelar',
-      'ESTUDIO_YA_FINALIZADO',
-    );
-  }
-
-  // 2. Update estado to cancelado
-  const { error: updateError } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: 'cancelado' } as never)
-    .eq('id', estudioId);
-
-  if (updateError) {
-    logger.error({ error: updateError, estudioId }, 'Error al cancelar estudio');
+  if (rpcError) {
+    logger.error({ error: rpcError.message, estudioId }, 'Error al cancelar estudio (RPC)');
+    if (rpcError.message?.includes('no encontrado')) {
+      throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+    }
+    if (rpcError.message?.includes('solicitado')) {
+      throw AppError.badRequest(
+        'Solo se pueden cancelar estudios en estado solicitado',
+        'ESTUDIO_ESTADO_INVALIDO',
+      );
+    }
     throw AppError.badRequest('Error al cancelar el estudio', 'ESTUDIO_CANCEL_ERROR');
   }
 
-  // 3. Revert inmueble to 'disponible'
-  const { data: expediente } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('inmueble_id')
-    .eq('id', est.expediente_id)
-    .single();
-
-  if (expediente) {
-    const exp = expediente as unknown as { inmueble_id: string };
-    await (supabase
-      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .update({ estado: 'disponible' } as never)
-      .eq('id', exp.inmueble_id);
-  }
-
-  // 4. Audit
+  // Audit
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.ESTUDIO_CANCELLED,
     entidad: AUDIT_ENTITIES.ESTUDIO,
     entidadId: estudioId,
-    detalle: { expediente_id: est.expediente_id },
+    detalle: {},
     ip,
   });
 

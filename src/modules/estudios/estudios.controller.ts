@@ -4,6 +4,7 @@ import * as estudiosService from './estudios.service';
 import * as certificadoService from './certificado.service';
 import type {
   CreateEstudioInput,
+  CreateEstudioFromInmuebleInput,
   ListEstudiosQuery,
   ListAllEstudiosQuery,
   SubmitFormularioInput,
@@ -41,6 +42,13 @@ export async function create(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };
   const input = req.body as CreateEstudioInput;
   const estudio = await estudiosService.createEstudio(expedienteId, input, req.user!.id, req.ip);
+  sendCreated(res, estudio);
+}
+
+export async function createFromInmueble(req: Request, res: Response) {
+  const { inmuebleId } = req.params as unknown as { inmuebleId: string };
+  const input = req.body as CreateEstudioFromInmuebleInput;
+  const estudio = await estudiosService.createEstudioFromInmueble(inmuebleId, input, req.user!.id, req.ip);
   sendCreated(res, estudio);
 }
 

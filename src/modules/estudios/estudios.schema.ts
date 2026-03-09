@@ -20,15 +20,19 @@ export const expedienteIdParamsSchema = z.object({
   expedienteId: z.string().uuid('ID de expediente invalido'),
 });
 
+export const inmuebleIdParamsSchema = z.object({
+  inmuebleId: z.string().uuid('ID de inmueble invalido'),
+});
+
 export const tokenParamsSchema = z.object({
   token: z.string().min(32, 'Token invalido').max(64, 'Token invalido'),
 });
 
 // ============================================================
-// POST /expedientes/:expedienteId/estudios
+// Base fields for estudio creation
 // ============================================================
 
-export const createEstudioSchema = z.object({
+const estudioBaseFields = {
   tipo: z.enum(TIPOS_ESTUDIO, {
     message: `Tipo de estudio invalido. Valores permitidos: ${TIPOS_ESTUDIO.join(', ')}`,
   }),
@@ -44,6 +48,21 @@ export const createEstudioSchema = z.object({
     message: `Pago por invalido. Valores permitidos: ${PAGO_POR_OPTIONS.join(', ')}`,
   }),
   observaciones: z.string().max(2000, 'Observaciones no deben exceder 2000 caracteres').optional(),
+};
+
+// ============================================================
+// POST /expedientes/:expedienteId/estudios
+// ============================================================
+
+export const createEstudioSchema = z.object(estudioBaseFields);
+
+// ============================================================
+// POST /inmuebles/:inmuebleId/estudios
+// ============================================================
+
+export const createEstudioFromInmuebleSchema = z.object({
+  ...estudioBaseFields,
+  solicitante_id: z.string().uuid('ID de solicitante invalido'),
 });
 
 // ============================================================
@@ -195,6 +214,8 @@ export type EstudioIdParams = z.infer<typeof estudioIdParamsSchema>;
 export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type TokenParams = z.infer<typeof tokenParamsSchema>;
 export type CreateEstudioInput = z.infer<typeof createEstudioSchema>;
+export type CreateEstudioFromInmuebleInput = z.infer<typeof createEstudioFromInmuebleSchema>;
+export type InmuebleIdParams = z.infer<typeof inmuebleIdParamsSchema>;
 export type ListEstudiosQuery = z.infer<typeof listEstudiosQuerySchema>;
 export type ListAllEstudiosQuery = z.infer<typeof listAllEstudiosQuerySchema>;
 export type SubmitFormularioInput = z.infer<typeof submitFormularioSchema>;
