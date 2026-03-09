@@ -1,0 +1,87 @@
+import { Request, Response } from 'express';
+import { sendSuccess } from '@/lib/response';
+import { logger } from '@/lib/logger';
+import { env } from '@/config';
+import * as firmaService from './firma.service';
+import type { AucoWebhookPayload } from '@/lib/auco';
+import type { CrearSolicitudFirmaInput } from './firma.schema';
+
+export async function crear(req: Request, res: Response) {
+  const input = req.body as CrearSolicitudFirmaInput;
+  const result = await firmaService.crearSolicitudFirma(
+    input,
+    req.user!.id,
+    req.ip as string | undefined,
+  );
+  sendSuccess(res, result, 201);
+}
+
+export async function reenviar(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const result = await firmaService.reenviarSolicitudFirma(
+    id,
+    req.user!.id,
+    req.ip as string | undefined,
+  );
+  sendSuccess(res, result);
+}
+
+export async function getById(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const result = await firmaService.getSolicitud(id);
+  sendSuccess(res, result);
+}
+
+export async function listarPorContrato(req: Request, res: Response) {
+  const contratoId = req.params.contratoId as string;
+  const result = await firmaService.listarSolicitudes(contratoId);
+  sendSuccess(res, result);
+}
+
+export async function cancelar(req: Request, res: Response) {
+  const id = req.params.id as string;
+  await firmaService.cancelarSolicitud(
+    id,
+    req.user!.id,
+    req.ip as string | undefined,
+  );
+  sendSuccess(res, { cancelled: true });
+}
+
+export async function validarToken(req: Request, res: Response) {
+  const token = req.params.token as string;
+  const result = await firmaService.validarToken(token);
+  sendSuccess(res, result);
+}
+
+/**
+ * Auco webhook handler — receives signature status updates.
+ * Validates webhook secret if configured.
+ */
+export async function aucoWebhook(req: Request, res: Response) {
+  // Validate webhook secret if configured
+  const webhookSecret = env.AUCO_WEBHOOK_SECRET;
+  if (webhookSecret) {
+    const authHeader = req.headers.authorization || req.headers['x-webhook-secret'];
+    if (authHeader !== webhookSecret) {
+      logger.warn({ ip: req.ip }, 'Auco webhook: invalid secret');
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+  }
+
+  const payload = req.body as AucoWebhookPayload;
+
+  if (!payload.code || !payload.status) {
+    res.status(400).json({ error: 'Missing code or status' });
+    return;
+  }
+
+  try {
+    await firmaService.handleAucoWebhook(payload);
+    res.status(200).json({ received: true });
+  } catch (error) {
+    logger.error({ error, code: payload.code }, 'Error processing Auco webhook');
+    res.status(500).json({ error: 'Internal error' });
+  }
+}

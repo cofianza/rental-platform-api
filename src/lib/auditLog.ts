@@ -84,6 +84,11 @@ export const AUDIT_ACTIONS = {
   CONTRATO_ARCHIVO_UPLOADED: 'contrato_archivo_uploaded',
   CONTRATO_ARCHIVO_DOWNLOADED: 'contrato_archivo_downloaded',
   CONTRATO_ARCHIVO_DELETED: 'contrato_archivo_deleted',
+  // Solicitudes de firma
+  FIRMA_SOLICITUD_CREATED: 'firma_solicitud_created',
+  FIRMA_SOLICITUD_RESENT: 'firma_solicitud_resent',
+  FIRMA_SOLICITUD_CANCELLED: 'firma_solicitud_cancelled',
+  FIRMA_AUCO_SIGNED: 'firma_auco_signed',
 } as const;
 
 export const AUDIT_ENTITIES = {

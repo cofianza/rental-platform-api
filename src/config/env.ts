@@ -17,6 +17,13 @@ const envSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
+  // Auco.ai (electronic signature provider)
+  AUCO_API_URL: z.string().url().default('https://dev.auco.ai/v1.5/ext'),
+  AUCO_PUBLIC_KEY: z.string().default('puk_placeholder'),
+  AUCO_PRIVATE_KEY: z.string().default('prk_placeholder'),
+  AUCO_WEBHOOK_SECRET: z.string().optional(),
+  AUCO_SENDER_EMAIL: z.string().default('hola@knowmeapp.com'),
+
   // Credit risk providers
   CREDIT_PROVIDER_USE_MOCK: z.string().default('true').transform((v) => v === 'true'),
   TRANSUNION_API_URL: z.string().url().optional(),
