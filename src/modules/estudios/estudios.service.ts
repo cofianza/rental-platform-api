@@ -692,46 +692,30 @@ export async function registrarResultado(
     }
   }
 
-  // 3. Build update payload
-  const updatePayload: Record<string, unknown> = {
-    resultado: input.resultado,
-    observaciones: input.observaciones,
-    estado: 'completado',
-    fecha_completado: new Date().toISOString(),
-  };
+  // 3. Atomic RPC: update estudio + revert inmueble + insert timeline event
+  const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
+    p_estudio_id: estudioId,
+    p_resultado: input.resultado,
+    p_observaciones: input.observaciones,
+    p_score: input.score ?? null,
+    p_motivo_rechazo: input.motivo_rechazo ?? null,
+    p_condiciones: input.condiciones ?? null,
+    p_certificado_url: input.certificado_storage_key ?? null,
+    p_usuario_id: userId,
+  });
 
-  if (input.score !== undefined) updatePayload.score = input.score;
-  if (input.motivo_rechazo) updatePayload.motivo_rechazo = input.motivo_rechazo;
-  if (input.condiciones) updatePayload.condiciones = input.condiciones;
-  if (input.certificado_storage_key) updatePayload.certificado_url = input.certificado_storage_key;
-
-  // 4. Update estudio
-  const { error: updateError } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .update(updatePayload as never)
-    .eq('id', estudioId);
-
-  if (updateError) {
-    logger.error({ error: updateError, estudioId }, 'Error al registrar resultado del estudio');
+  if (rpcError) {
+    logger.error({ error: rpcError, estudioId }, 'Error al registrar resultado del estudio');
+    if (rpcError.message?.includes('ya tiene un resultado')) {
+      throw AppError.conflict(rpcError.message, 'RESULTADO_YA_REGISTRADO');
+    }
+    if (rpcError.message?.includes('Solo se puede registrar')) {
+      throw AppError.badRequest(rpcError.message, 'ESTUDIO_ESTADO_INVALIDO');
+    }
     throw AppError.badRequest('Error al registrar el resultado', 'RESULTADO_UPDATE_ERROR');
   }
 
-  // 5. Revert inmueble to 'disponible' (study is done)
-  const { data: expediente } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('inmueble_id')
-    .eq('id', est.expediente_id)
-    .single();
-
-  if (expediente) {
-    const exp = expediente as unknown as { inmueble_id: string };
-    await (supabase
-      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .update({ estado: 'disponible' } as never)
-      .eq('id', exp.inmueble_id);
-  }
-
-  // 6. Audit
+  // 4. Audit
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.ESTUDIO_RESULTADO_REGISTERED,
