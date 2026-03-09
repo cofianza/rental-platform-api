@@ -3,8 +3,9 @@ import { sendSuccess } from '@/lib/response';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import * as firmaService from './firma.service';
+import * as otpService from './otp.service';
 import type { AucoWebhookPayload } from '@/lib/auco';
-import type { CrearSolicitudFirmaInput } from './firma.schema';
+import type { CrearSolicitudFirmaInput, OtpVerificarInput } from './firma.schema';
 
 export async function crear(req: Request, res: Response) {
   const input = req.body as CrearSolicitudFirmaInput;
@@ -84,4 +85,21 @@ export async function aucoWebhook(req: Request, res: Response) {
     logger.error({ error, code: payload.code }, 'Error processing Auco webhook');
     res.status(500).json({ error: 'Internal error' });
   }
+}
+
+// ============================================================
+// OTP endpoints (public, protected by firma token)
+// ============================================================
+
+export async function solicitarOtp(req: Request, res: Response) {
+  const token = req.params.token as string;
+  const result = await otpService.solicitarOtp(token);
+  sendSuccess(res, result);
+}
+
+export async function verificarOtp(req: Request, res: Response) {
+  const token = req.params.token as string;
+  const { codigo } = req.body as OtpVerificarInput;
+  const result = await otpService.verificarOtp(token, codigo);
+  sendSuccess(res, result);
 }

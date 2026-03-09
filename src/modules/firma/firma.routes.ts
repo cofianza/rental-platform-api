@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { authMiddleware, roleGuard, authorize } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
+import { otpLimiter, otpVerifyLimiter } from '@/middleware/rateLimiter';
 import {
   crearSolicitudFirmaSchema,
   solicitudIdParamsSchema,
   contratoIdParamsSchema,
   tokenParamsSchema,
+  otpVerificarSchema,
 } from './firma.schema';
 import * as firmaController from './firma.controller';
 
@@ -74,6 +76,22 @@ publicFirmaRouter.get(
   '/:token',
   validate({ params: tokenParamsSchema }),
   firmaController.validarToken,
+);
+
+// POST /:token/otp/solicitar — Request OTP code (public, rate-limited)
+publicFirmaRouter.post(
+  '/:token/otp/solicitar',
+  otpLimiter,
+  validate({ params: tokenParamsSchema }),
+  firmaController.solicitarOtp,
+);
+
+// POST /:token/otp/verificar — Verify OTP code (public, rate-limited)
+publicFirmaRouter.post(
+  '/:token/otp/verificar',
+  otpVerifyLimiter,
+  validate({ params: tokenParamsSchema, body: otpVerificarSchema }),
+  firmaController.verificarOtp,
 );
 
 // ============================================================

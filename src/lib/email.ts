@@ -498,7 +498,7 @@ function buildOtpHtml(nombre: string, codigo: string): string {
                 Código de verificación
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, tu código de verificación para firmar la autorización de consulta en centrales de riesgo es:
+                Hola ${nombre}, tu código de verificación para el proceso de firma electrónica es:
               </p>
 
               <!-- Code box -->
@@ -513,7 +513,7 @@ function buildOtpHtml(nombre: string, codigo: string): string {
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #ef4444; font-weight: 500;">
-                Este código expira en 5 minutos. No compartas este código con nadie.
+                Este código expira en 10 minutos. No compartas este código con nadie.
               </p>
 
               <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #6b7280;">

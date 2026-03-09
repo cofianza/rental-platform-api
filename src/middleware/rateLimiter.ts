@@ -64,6 +64,30 @@ export const passwordResetLimiter = rateLimit({
   },
 });
 
+export const otpLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Demasiadas solicitudes de OTP, por favor intenta mas tarde',
+  },
+});
+
+export const otpVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 15,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Demasiados intentos de verificacion, por favor intenta mas tarde',
+  },
+});
+
 export const publicFormLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 10,

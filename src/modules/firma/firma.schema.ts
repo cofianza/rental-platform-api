@@ -20,6 +20,11 @@ export const tokenParamsSchema = z.object({
   token: z.string().length(64, 'Token invalido'),
 });
 
+export const otpVerificarSchema = z.object({
+  codigo: z.string().length(6, 'El codigo debe ser de 6 digitos').regex(/^\d+$/, 'El codigo debe ser numerico'),
+});
+
 export type CrearSolicitudFirmaInput = z.infer<typeof crearSolicitudFirmaSchema>;
 export type SolicitudIdParams = z.infer<typeof solicitudIdParamsSchema>;
 export type ContratoIdParams = z.infer<typeof contratoIdParamsSchema>;
+export type OtpVerificarInput = z.infer<typeof otpVerificarSchema>;
