@@ -1221,7 +1221,26 @@ export async function solicitarReEvaluacion(
 
   const newId = (newEstudio as unknown as { id: string }).id;
 
-  // 6. Audit
+  // 6. Insert timeline event
+  const { error: timelineError } = await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: est.expediente_id,
+      tipo: 'estudio',
+      descripcion: `Re-evaluación de estudio solicitada (${depth + 1} de ${MAX_REEVALUACIONES})`,
+      usuario_id: userId,
+      metadata: {
+        estudio_id: newId,
+        estudio_padre_id: estudioId,
+        numero_reevaluacion: depth + 1,
+      },
+    } as never);
+
+  if (timelineError) {
+    logger.error({ error: timelineError, estudioId: newId }, 'Error al insertar evento timeline de re-evaluacion');
+  }
+
+  // 7. Audit
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.ESTUDIO_REEVALUACION_SOLICITADA,
