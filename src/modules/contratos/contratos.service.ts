@@ -5,6 +5,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { generateContractPdf } from './contratos.pdf';
 import type {
   GenerarContratoInput,
+  RenovarContratoInput,
   ReGenerarContratoInput,
   ListContratosQuery,
   ListAllContratosQuery,
@@ -468,6 +469,168 @@ export async function generarContrato(
       plantilla_id: input.plantilla_id,
       plantilla_nombre: pl.nombre,
       variables_count: Object.keys(finalVariables).length,
+    },
+    ip,
+  });
+
+  return getContratoById(created.id);
+}
+
+// ============================================================
+// Renovar contrato (desde vigente)
+// ============================================================
+
+export async function renovarContrato(
+  contratoId: string,
+  input: RenovarContratoInput,
+  userId: string,
+  ip?: string,
+) {
+  // 1. Fetch parent contract
+  const { data: parent, error: parentError } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, expediente_id, plantilla_id, estado, duracion_meses, datos_variables, plantilla_version')
+    .eq('id', contratoId)
+    .single();
+
+  if (parentError || !parent) {
+    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  }
+
+  const p = parent as unknown as {
+    id: string;
+    expediente_id: string;
+    plantilla_id: string;
+    estado: string;
+    duracion_meses: number;
+    datos_variables: Record<string, string> | null;
+    plantilla_version: number;
+  };
+
+  if (p.estado !== 'vigente') {
+    throw AppError.badRequest(
+      'Solo se puede renovar un contrato en estado vigente',
+      'CONTRATO_NO_RENOVABLE',
+    );
+  }
+
+  // 2. Check no existing renewal already exists
+  const { data: existingRenewal } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('contrato_padre_id', contratoId)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingRenewal) {
+    throw AppError.conflict(
+      'Ya existe una renovacion para este contrato',
+      'RENOVACION_YA_EXISTENTE',
+    );
+  }
+
+  // 3. Fetch expediente data and plantilla (reuse generarContrato pattern)
+  const { data: expData } = await fetchExpedienteData(p.expediente_id);
+
+  const { data: plantilla, error: plantillaError } = await (supabase
+    .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
+    .select('id, nombre, contenido, variables, activa, version')
+    .eq('id', p.plantilla_id)
+    .single();
+
+  if (plantillaError || !plantilla) {
+    throw AppError.notFound('Plantilla del contrato original no encontrada', 'PLANTILLA_NOT_FOUND');
+  }
+
+  const pl = plantilla as unknown as {
+    id: string; nombre: string; contenido: string;
+    variables: string[]; activa: boolean; version: number;
+  };
+
+  // 4. Build variables — start from parent variables, override with new ones
+  const duracionMeses = input.duracion_meses || p.duracion_meses || 12;
+  const fechaInicio = input.fecha_inicio
+    ? new Date(input.fecha_inicio + 'T00:00:00')
+    : new Date();
+
+  const autoVariables = buildVariablesFromExpediente(expData, fechaInicio, duracionMeses);
+  const parentVars = p.datos_variables || {};
+  const finalVariables = { ...parentVars, ...autoVariables, ...(input.variables ?? {}) };
+
+  // 5. Compile HTML and generate PDF
+  const compiledHtml = compileTemplate(pl.contenido, finalVariables);
+  const now = new Date();
+  const pdfBuffer = await generateContractPdf(compiledHtml, {
+    titulo: pl.nombre,
+    fecha: formatDateCO(now),
+    version: 1,
+  });
+
+  // 6. Insert new contract with contrato_padre_id
+  const { data: newContrato, error: insertError } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: p.expediente_id,
+      plantilla_id: p.plantilla_id,
+      version: 1,
+      estado: 'borrador',
+      fecha_inicio: input.fecha_inicio || now.toISOString().split('T')[0],
+      fecha_fin: addMonths(fechaInicio, duracionMeses).toISOString().split('T')[0],
+      duracion_meses: duracionMeses,
+      valor_arriendo: expData.inmueble.valor_arriendo || 0,
+      datos_variables: finalVariables,
+      generado_por: userId,
+      fecha_generacion: now.toISOString(),
+      plantilla_version: pl.version,
+      nombre_archivo: `contrato-renovacion-${pl.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`,
+      contrato_padre_id: contratoId,
+    } as never)
+    .select('id')
+    .single();
+
+  if (insertError || !newContrato) {
+    logger.error({ error: insertError?.message }, 'Error al crear contrato de renovacion');
+    throw AppError.badRequest('Error al crear el contrato de renovacion', 'RENOVACION_CREATE_ERROR');
+  }
+
+  const created = newContrato as unknown as { id: string };
+
+  // 7. Upload PDF
+  const storageKey = `contratos/${p.expediente_id}/${created.id}/v1.pdf`;
+
+  const { error: uploadError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .upload(storageKey, pdfBuffer, {
+      contentType: 'application/pdf',
+      upsert: false,
+    });
+
+  if (uploadError) {
+    logger.error({ error: uploadError.message }, 'Error al subir PDF de renovacion');
+    await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', created.id);
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF de renovacion');
+  }
+
+  // 8. Update contrato with storage_key
+  await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .update({ storage_key: storageKey } as never)
+    .eq('id', created.id);
+
+  // 9. Audit
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.CONTRATO_RENEWED,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: created.id,
+    detalle: {
+      contrato_padre_id: contratoId,
+      expediente_id: p.expediente_id,
+      plantilla_id: p.plantilla_id,
+      duracion_meses: duracionMeses,
     },
     ip,
   });

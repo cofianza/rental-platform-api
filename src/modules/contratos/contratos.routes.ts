@@ -5,6 +5,7 @@ import {
   contratoIdParamsSchema,
   expedienteIdParamsSchema,
   generarContratoSchema,
+  renovarContratoSchema,
   regenerarContratoSchema,
   listContratosQuerySchema,
   listAllContratosQuerySchema,
@@ -57,6 +58,14 @@ contratosRouter.get(
   authorize('contratos', 'read'),
   validate({ params: contratoIdParamsSchema }),
   contratosController.getDetalle,
+);
+
+// POST /:id/renovar — Create renewal contract (vigente only)
+contratosRouter.post(
+  '/:id/renovar',
+  authorize('contratos', 'create'),
+  validate({ params: contratoIdParamsSchema, body: renovarContratoSchema }),
+  contratosController.renovar,
 );
 
 // POST /:id/regenerar — Regenerate PDF (draft only)

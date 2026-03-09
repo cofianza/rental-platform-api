@@ -3,6 +3,7 @@ import { sendSuccess, sendCreated } from '@/lib/response';
 import * as contratosService from './contratos.service';
 import type {
   GenerarContratoInput,
+  RenovarContratoInput,
   ReGenerarContratoInput,
   ListContratosQuery,
   ListAllContratosQuery,
@@ -71,4 +72,11 @@ export async function compararVersiones(req: Request, res: Response) {
   const { v1, v2 } = req.query as unknown as CompararVersionesQuery;
   const result = await contratosService.compararVersiones(id, v1, v2);
   sendSuccess(res, result);
+}
+
+export async function renovar(req: Request, res: Response) {
+  const { id } = req.params as unknown as { id: string };
+  const input = req.body as RenovarContratoInput;
+  const contrato = await contratosService.renovarContrato(id, input, req.user!.id, req.ip);
+  sendCreated(res, contrato);
 }

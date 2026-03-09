@@ -24,6 +24,16 @@ export const generarContratoSchema = z.object({
 });
 
 // ============================================================
+// Renovar contrato (desde vigente)
+// ============================================================
+
+export const renovarContratoSchema = z.object({
+  fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha invalido (YYYY-MM-DD)').optional(),
+  duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
+  variables: z.record(z.string(), z.string()).optional(),
+});
+
+// ============================================================
 // Regenerar contrato
 // ============================================================
 
@@ -78,6 +88,7 @@ export const compararVersionesQuerySchema = z.object({
 export type ContratoIdParams = z.infer<typeof contratoIdParamsSchema>;
 export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type GenerarContratoInput = z.infer<typeof generarContratoSchema>;
+export type RenovarContratoInput = z.infer<typeof renovarContratoSchema>;
 export type ReGenerarContratoInput = z.infer<typeof regenerarContratoSchema>;
 export type ListContratosQuery = z.infer<typeof listContratosQuerySchema>;
 export type ListAllContratosQuery = z.infer<typeof listAllContratosQuerySchema>;
