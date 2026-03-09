@@ -178,24 +178,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     throw AppError.badRequest('Inmueble no encontrado. Verifique el ID proporcionado', 'INMUEBLE_NOT_FOUND');
   }
 
-  // 2. Validar que el inmueble NO tiene un expediente activo
-  const { data: expedienteActivo } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado')
-    .eq('inmueble_id', input.inmueble_id)
-    .not('estado', 'in', `(${ESTADOS_TERMINALES.join(',')})`)
-    .limit(1)
-    .maybeSingle();
-
-  if (expedienteActivo) {
-    const exp = expedienteActivo as unknown as { numero: string; estado: string };
-    throw AppError.conflict(
-      `El inmueble ya tiene un expediente activo: ${exp.numero} (estado: ${exp.estado})`,
-      'INMUEBLE_CON_EXPEDIENTE_ACTIVO',
-    );
-  }
-
-  // 3. Validar que el solicitante existe
+  // 2. Validar que el solicitante existe
   const { data: solicitante, error: solicitanteError } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
     .select('id')

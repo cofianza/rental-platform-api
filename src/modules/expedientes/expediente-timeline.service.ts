@@ -7,7 +7,7 @@ import type { TimelineQuery } from './expediente-timeline.schema';
 // Types
 // ============================================================
 
-type TimelineTipo = 'creacion' | 'transicion' | 'comentario' | 'asignacion';
+type TimelineTipo = 'creacion' | 'transicion' | 'comentario' | 'asignacion' | 'estudio';
 
 interface TimelineEvent {
   id: string;
@@ -64,15 +64,16 @@ export async function getUnifiedTimeline(expedienteId: string, query: TimelineQu
   // Determine which sources to query based on tipo filter
   const fetchTransitions = !tipo || tipo === 'transicion';
   const fetchAsignaciones = !tipo || tipo === 'asignacion';
+  const fetchEstudios = !tipo || tipo === 'estudio';
   const fetchComments = !tipo || tipo === 'comentario';
   const fetchCreation = !tipo || tipo === 'creacion';
 
   // Query all sources in parallel
   const promises: Promise<void>[] = [];
 
-  if (fetchTransitions || fetchAsignaciones) {
+  if (fetchTransitions || fetchAsignaciones || fetchEstudios) {
     promises.push(
-      queryEventosTimeline(expedienteId, fetchTransitions, fetchAsignaciones).then((events) => {
+      queryEventosTimeline(expedienteId, fetchTransitions, fetchAsignaciones, fetchEstudios).then((events) => {
         allEvents.push(...events);
       }),
     );
@@ -119,11 +120,13 @@ async function queryEventosTimeline(
   expedienteId: string,
   includeTransitions: boolean,
   includeAsignaciones: boolean,
+  includeEstudios: boolean = false,
 ): Promise<TimelineEvent[]> {
   // Build tipo filter
   const tipos: string[] = [];
   if (includeTransitions) tipos.push('estado');
   if (includeAsignaciones) tipos.push('asignacion');
+  if (includeEstudios) tipos.push('estudio');
 
   if (tipos.length === 0) return [];
 
@@ -146,23 +149,33 @@ async function queryEventosTimeline(
   const rows = (data as unknown as EventoTimelineRow[]) || [];
 
   return rows.map((row) => {
-    const isTransition = row.tipo === 'estado';
+    let tipo: TimelineTipo;
+    let detalle: Record<string, unknown> | null;
+
+    if (row.tipo === 'estado') {
+      tipo = 'transicion';
+      detalle = { estado_anterior: row.estado_anterior, estado_nuevo: row.estado_nuevo, comentario: row.comentario };
+    } else if (row.tipo === 'estudio') {
+      tipo = 'estudio';
+      detalle = row.metadata || null;
+    } else {
+      tipo = 'asignacion';
+      detalle = row.metadata
+        ? {
+            analista_anterior: row.metadata.analista_anterior || null,
+            analista_nuevo: row.metadata.analista_nuevo || null,
+            analista_anterior_id: row.metadata.analista_anterior_id || null,
+            analista_nuevo_id: row.metadata.analista_nuevo_id || null,
+          }
+        : null;
+    }
 
     return {
       id: row.id,
       expediente_id: row.expediente_id,
-      tipo: isTransition ? ('transicion' as const) : ('asignacion' as const),
+      tipo,
       descripcion: row.descripcion,
-      detalle: isTransition
-        ? { estado_anterior: row.estado_anterior, estado_nuevo: row.estado_nuevo, comentario: row.comentario }
-        : row.metadata
-          ? {
-              analista_anterior: row.metadata.analista_anterior || null,
-              analista_nuevo: row.metadata.analista_nuevo || null,
-              analista_anterior_id: row.metadata.analista_anterior_id || null,
-              analista_nuevo_id: row.metadata.analista_nuevo_id || null,
-            }
-          : null,
+      detalle,
       usuario_id: row.usuario_id,
       usuario: row.usuario || { id: row.usuario_id, nombre: 'Usuario', apellido: '' },
       created_at: row.created_at,
