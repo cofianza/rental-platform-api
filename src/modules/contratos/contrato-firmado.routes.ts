@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import { uploadPdf } from '@/middleware/upload';
-import { contratoFirmadoParamsSchema } from './contrato-firmado.schema';
+import { contratoFirmadoParamsSchema, subirFirmadoBodySchema } from './contrato-firmado.schema';
 import * as firmadoController from './contrato-firmado.controller';
 
 const router = Router();
@@ -14,7 +14,7 @@ router.post(
   '/:id/subir-firmado',
   roleGuard(['administrador', 'operador_analista']),
   uploadPdf,
-  validate({ params: contratoFirmadoParamsSchema }),
+  validate({ params: contratoFirmadoParamsSchema, body: subirFirmadoBodySchema }),
   firmadoController.subir,
 );
 

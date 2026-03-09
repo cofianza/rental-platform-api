@@ -27,7 +27,7 @@ const FIRMADO_SELECT = `
 async function registrarAcceso(
   contratoId: string,
   usuarioId: string,
-  tipoAccion: 'descarga' | 'visualizacion' | 'verificacion',
+  tipoAccion: 'descarga' | 'visualizacion' | 'verificacion' | 'subida',
   ip?: string,
   userAgent?: string,
 ): Promise<void> {
@@ -157,7 +157,7 @@ export async function subirContratoFirmado(
   }
 
   // Registrar acceso
-  await registrarAcceso(contratoId, userId, 'visualizacion', ip, userAgent);
+  await registrarAcceso(contratoId, userId, 'subida', ip, userAgent);
 
   // Audit log
   logAudit({

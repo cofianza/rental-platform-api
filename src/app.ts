@@ -29,6 +29,7 @@ import plantillasRouter from '@/modules/plantillas/plantillas.routes';
 import { expedienteContratosRouter, contratosRouter } from '@/modules/contratos/contratos.routes';
 import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes';
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
+import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
 
 const app = express();
 
@@ -88,6 +89,7 @@ app.use('/api/v1/plantillas-contrato', plantillasRouter);
 app.use('/api/v1/expedientes/:expedienteId/contratos', expedienteContratosRouter);
 app.use('/api/v1/contratos', contratoWorkflowRouter);
 app.use('/api/v1/contratos', contratoFirmadoRouter);
+app.use('/api/v1/contratos', contratoArchivosRouter);
 app.use('/api/v1/contratos', contratosRouter);
 
 // Error handler (must be last)
