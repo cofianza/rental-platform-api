@@ -8,6 +8,7 @@ import {
   contratoIdParamsSchema,
   tokenParamsSchema,
   otpVerificarSchema,
+  completarFirmaSchema,
 } from './firma.schema';
 import * as firmaController from './firma.controller';
 
@@ -48,6 +49,22 @@ firmaRouter.post(
   roleGuard(['administrador', 'operador_analista']),
   validate({ params: solicitudIdParamsSchema }),
   firmaController.cancelar,
+);
+
+// GET /:id/evidencia — Get firma evidence (admin, operador, gerencia)
+firmaRouter.get(
+  '/:id/evidencia',
+  authorize('contratos', 'read'),
+  validate({ params: solicitudIdParamsSchema }),
+  firmaController.getEvidencia,
+);
+
+// GET /:id/evidencia/pdf — Download acuse PDF (admin, operador)
+firmaRouter.get(
+  '/:id/evidencia/pdf',
+  roleGuard(['administrador', 'operador_analista']),
+  validate({ params: solicitudIdParamsSchema }),
+  firmaController.downloadAcuse,
 );
 
 // ============================================================
@@ -92,6 +109,14 @@ publicFirmaRouter.post(
   otpVerifyLimiter,
   validate({ params: tokenParamsSchema, body: otpVerificarSchema }),
   firmaController.verificarOtp,
+);
+
+// POST /:token/completar — Complete signature with evidence (public, rate-limited)
+publicFirmaRouter.post(
+  '/:token/completar',
+  otpVerifyLimiter,
+  validate({ params: tokenParamsSchema, body: completarFirmaSchema }),
+  firmaController.completarFirma,
 );
 
 // ============================================================

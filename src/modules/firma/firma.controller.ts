@@ -4,8 +4,9 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import * as firmaService from './firma.service';
 import * as otpService from './otp.service';
+import * as evidenciaService from './evidencia.service';
 import type { AucoWebhookPayload } from '@/lib/auco';
-import type { CrearSolicitudFirmaInput, OtpVerificarInput } from './firma.schema';
+import type { CrearSolicitudFirmaInput, OtpVerificarInput, CompletarFirmaInput } from './firma.schema';
 
 export async function crear(req: Request, res: Response) {
   const input = req.body as CrearSolicitudFirmaInput;
@@ -101,5 +102,29 @@ export async function verificarOtp(req: Request, res: Response) {
   const token = req.params.token as string;
   const { codigo } = req.body as OtpVerificarInput;
   const result = await otpService.verificarOtp(token, codigo);
+  sendSuccess(res, result);
+}
+
+// ============================================================
+// Evidencia endpoints
+// ============================================================
+
+export async function completarFirma(req: Request, res: Response) {
+  const token = req.params.token as string;
+  const input = req.body as CompletarFirmaInput;
+  const ip = req.headers['x-forwarded-for'] as string || req.ip || '0.0.0.0';
+  const result = await evidenciaService.completarFirma(token, input, ip);
+  sendSuccess(res, result);
+}
+
+export async function getEvidencia(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const result = await evidenciaService.getEvidencia(id);
+  sendSuccess(res, result);
+}
+
+export async function downloadAcuse(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const result = await evidenciaService.downloadAcuse(id);
   sendSuccess(res, result);
 }

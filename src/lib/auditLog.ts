@@ -89,6 +89,9 @@ export const AUDIT_ACTIONS = {
   FIRMA_SOLICITUD_RESENT: 'firma_solicitud_resent',
   FIRMA_SOLICITUD_CANCELLED: 'firma_solicitud_cancelled',
   FIRMA_AUCO_SIGNED: 'firma_auco_signed',
+  FIRMA_COMPLETADA: 'firma_completada',
+  FIRMA_EVIDENCIA_CONSULTED: 'firma_evidencia_consulted',
+  FIRMA_ACUSE_DOWNLOADED: 'firma_acuse_downloaded',
 } as const;
 
 export const AUDIT_ENTITIES = {
