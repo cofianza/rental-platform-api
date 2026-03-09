@@ -47,6 +47,43 @@ export const AUDIT_ACTIONS = {
   TIPO_DOCUMENTO_UPDATED: 'tipo_documento_updated',
   TIPO_DOCUMENTO_TOGGLED: 'tipo_documento_toggled',
   TIPO_DOCUMENTO_REORDERED: 'tipo_documento_reordered',
+  // Estudios de riesgo crediticio
+  ESTUDIO_CREATED: 'estudio_created',
+  ESTUDIO_CANCELLED: 'estudio_cancelled',
+  ESTUDIO_LINK_SENT: 'estudio_link_sent',
+  ESTUDIO_FORM_SUBMITTED: 'estudio_form_submitted',
+  ESTUDIO_RESULTADO_REGISTERED: 'estudio_resultado_registered',
+  // Proveedores de riesgo crediticio
+  ESTUDIO_PROVIDER_EXECUTED: 'estudio_provider_executed',
+  ESTUDIO_PROVIDER_FAILED: 'estudio_provider_failed',
+  ESTUDIO_PROVIDER_RESULT_RECEIVED: 'estudio_provider_result_received',
+  // Re-evaluacion de estudios
+  ESTUDIO_SOPORTE_UPLOADED: 'estudio_soporte_uploaded',
+  ESTUDIO_REEVALUACION_SOLICITADA: 'estudio_reevaluacion_solicitada',
+  // Certificados
+  CERTIFICADO_GENERATED: 'certificado_generated',
+  // Autorizacion habeas data
+  AUTORIZACION_ENLACE_SENT: 'autorizacion_enlace_sent',
+  AUTORIZACION_FIRMADA: 'autorizacion_firmada',
+  AUTORIZACION_REVOCADA: 'autorizacion_revocada',
+  // Plantillas de contrato
+  PLANTILLA_CREATED: 'plantilla_created',
+  PLANTILLA_UPDATED: 'plantilla_updated',
+  PLANTILLA_DELETED: 'plantilla_deleted',
+  // Contratos
+  CONTRATO_GENERATED: 'contrato_generated',
+  CONTRATO_REGENERATED: 'contrato_regenerated',
+  CONTRATO_DOWNLOADED: 'contrato_downloaded',
+  CONTRATO_VERSION_DOWNLOADED: 'contrato_version_downloaded',
+  CONTRATO_TRANSITIONED: 'contrato_transitioned',
+  CONTRATO_FIRMADO_UPLOADED: 'contrato_firmado_uploaded',
+  CONTRATO_FIRMADO_DOWNLOADED: 'contrato_firmado_downloaded',
+  CONTRATO_FIRMADO_VERIFIED: 'contrato_firmado_verified',
+  CONTRATO_RENEWED: 'contrato_renewed',
+  // Archivos asociados al contrato
+  CONTRATO_ARCHIVO_UPLOADED: 'contrato_archivo_uploaded',
+  CONTRATO_ARCHIVO_DOWNLOADED: 'contrato_archivo_downloaded',
+  CONTRATO_ARCHIVO_DELETED: 'contrato_archivo_deleted',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -61,6 +98,12 @@ export const AUDIT_ENTITIES = {
   ASIGNACION: 'asignacion',
   DOCUMENTO: 'documento',
   TIPO_DOCUMENTO: 'tipo_documento',
+  ESTUDIO: 'estudio',
+  DOCUMENTO_SOPORTE: 'documento_soporte',
+  CERTIFICADO: 'certificado',
+  AUTORIZACION: 'autorizacion',
+  PLANTILLA: 'plantilla',
+  CONTRATO: 'contrato',
 } as const;
 
 interface AuditLogParams {

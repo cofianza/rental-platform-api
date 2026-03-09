@@ -16,6 +16,15 @@ const envSchema = z.object({
   RESEND_FROM_EMAIL: z.string().min(1).default('hola@knowmeapp.com'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+
+  // Credit risk providers
+  CREDIT_PROVIDER_USE_MOCK: z.string().default('true').transform((v) => v === 'true'),
+  TRANSUNION_API_URL: z.string().url().optional(),
+  TRANSUNION_API_KEY: z.string().optional(),
+  SIFIN_API_URL: z.string().url().optional(),
+  SIFIN_API_KEY: z.string().optional(),
+  DATACREDITO_API_URL: z.string().url().optional(),
+  DATACREDITO_API_KEY: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
