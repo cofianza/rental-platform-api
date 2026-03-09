@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { executePostFirma } from './post-firma.service';
 
 // ============================================================
 // Constants
@@ -233,6 +234,18 @@ export async function completarFirma(
       hash_documento: hashDocumento,
     },
     ip,
+  });
+
+  // 9. Post-firma orchestration (fire-and-forget)
+  // Transitions contrato, inserts timeline event, sends emails
+  executePostFirma({
+    solicitudId: solicitud.id,
+    contratoId: solicitud.contrato_id,
+    nombreFirmante: solicitud.nombre_firmante,
+    emailFirmante: solicitud.email_firmante,
+    firmadoEn,
+  }).catch((err) => {
+    logger.error({ error: err, solicitudId: solicitud.id }, 'Error in post-firma orchestration');
   });
 
   return {

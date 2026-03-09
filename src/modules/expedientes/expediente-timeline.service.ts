@@ -7,7 +7,7 @@ import type { TimelineQuery } from './expediente-timeline.schema';
 // Types
 // ============================================================
 
-type TimelineTipo = 'creacion' | 'transicion' | 'comentario' | 'asignacion' | 'estudio';
+type TimelineTipo = 'creacion' | 'transicion' | 'comentario' | 'asignacion' | 'estudio' | 'firma';
 
 interface TimelineEvent {
   id: string;
@@ -65,15 +65,16 @@ export async function getUnifiedTimeline(expedienteId: string, query: TimelineQu
   const fetchTransitions = !tipo || tipo === 'transicion';
   const fetchAsignaciones = !tipo || tipo === 'asignacion';
   const fetchEstudios = !tipo || tipo === 'estudio';
+  const fetchFirma = !tipo || tipo === 'firma';
   const fetchComments = !tipo || tipo === 'comentario';
   const fetchCreation = !tipo || tipo === 'creacion';
 
   // Query all sources in parallel
   const promises: Promise<void>[] = [];
 
-  if (fetchTransitions || fetchAsignaciones || fetchEstudios) {
+  if (fetchTransitions || fetchAsignaciones || fetchEstudios || fetchFirma) {
     promises.push(
-      queryEventosTimeline(expedienteId, fetchTransitions, fetchAsignaciones, fetchEstudios).then((events) => {
+      queryEventosTimeline(expedienteId, fetchTransitions, fetchAsignaciones, fetchEstudios, fetchFirma).then((events) => {
         allEvents.push(...events);
       }),
     );
@@ -121,12 +122,14 @@ async function queryEventosTimeline(
   includeTransitions: boolean,
   includeAsignaciones: boolean,
   includeEstudios: boolean = false,
+  includeFirma: boolean = false,
 ): Promise<TimelineEvent[]> {
   // Build tipo filter
   const tipos: string[] = [];
   if (includeTransitions) tipos.push('estado');
   if (includeAsignaciones) tipos.push('asignacion');
   if (includeEstudios) tipos.push('estudio');
+  if (includeFirma) tipos.push('firma');
 
   if (tipos.length === 0) return [];
 
@@ -157,6 +160,9 @@ async function queryEventosTimeline(
       detalle = { estado_anterior: row.estado_anterior, estado_nuevo: row.estado_nuevo, comentario: row.comentario };
     } else if (row.tipo === 'estudio') {
       tipo = 'estudio';
+      detalle = row.metadata || null;
+    } else if (row.tipo === 'firma') {
+      tipo = 'firma';
       detalle = row.metadata || null;
     } else {
       tipo = 'asignacion';

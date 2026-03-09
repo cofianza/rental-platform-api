@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export { expedienteIdParamsSchema } from './expediente-workflow.schema';
 
-const TIMELINE_TIPOS = ['transicion', 'comentario', 'asignacion', 'creacion', 'estudio'] as const;
+const TIMELINE_TIPOS = ['transicion', 'comentario', 'asignacion', 'creacion', 'estudio', 'firma'] as const;
 
 export const timelineQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
