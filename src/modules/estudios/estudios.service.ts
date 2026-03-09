@@ -893,13 +893,18 @@ export async function ejecutarEstudio(estudioId: string, userId: string, ip?: st
     const response = await provider.solicitar(providerInput);
 
     // 6. Update estudio on success
-    await (supabase
+    const { error: updateError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({
         estado: 'en_proceso',
         referencia_proveedor: response.referencia_proveedor,
       } as never)
       .eq('id', estudioId);
+
+    if (updateError) {
+      logger.error({ error: updateError, estudioId }, 'Error al actualizar estudio tras solicitud a proveedor');
+      throw AppError.badRequest('Error al actualizar el estudio tras enviar al proveedor', 'ESTUDIO_UPDATE_ERROR');
+    }
 
     logAudit({
       usuarioId: userId,
@@ -919,13 +924,17 @@ export async function ejecutarEstudio(estudioId: string, userId: string, ip?: st
     // 7. On failure: mark as fallido
     const errorMsg = err instanceof Error ? err.message : 'Error desconocido del proveedor';
 
-    await (supabase
+    const { error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({
         estado: 'fallido',
         observaciones: `Error de proveedor (${est.proveedor}): ${errorMsg}. Puede registrar el resultado manualmente.`,
       } as never)
       .eq('id', estudioId);
+
+    if (failError) {
+      logger.error({ error: failError, estudioId }, 'Error al marcar estudio como fallido');
+    }
 
     logAudit({
       usuarioId: userId,
@@ -1381,36 +1390,24 @@ export async function consultarEstadoProveedor(estudioId: string) {
   const provider = getProvider(est.proveedor as 'transunion' | 'sifin' | 'datacredito');
   const statusResponse = await provider.consultarEstado(est.referencia_proveedor);
 
-  // 3. If completed, auto-register result
+  // 3. If completed, auto-register result atomically via RPC
   if (statusResponse.status === 'completed' && est.estado !== 'completado') {
     const result = await provider.obtenerResultado(est.referencia_proveedor);
 
-    const updatePayload: Record<string, unknown> = {
-      estado: 'completado',
-      resultado: result.resultado,
-      score: result.score,
-      observaciones: result.observaciones,
-      fecha_completado: new Date().toISOString(),
-    };
+    const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
+      p_estudio_id: estudioId,
+      p_resultado: result.resultado,
+      p_observaciones: result.observaciones || 'Resultado recibido del proveedor',
+      p_score: result.score ?? null,
+      p_motivo_rechazo: null,
+      p_condiciones: null,
+      p_certificado_url: null,
+      p_usuario_id: null,
+    });
 
-    await (supabase
-      .from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .update(updatePayload as never)
-      .eq('id', estudioId);
-
-    // Revert inmueble to disponible
-    const { data: expediente } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('inmueble_id')
-      .eq('id', est.expediente_id)
-      .single();
-
-    if (expediente) {
-      const exp = expediente as unknown as { inmueble_id: string };
-      await (supabase
-        .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-        .update({ estado: 'disponible' } as never)
-        .eq('id', exp.inmueble_id);
+    if (rpcError) {
+      logger.error({ error: rpcError, estudioId }, 'Error al registrar resultado del proveedor via RPC');
+      throw AppError.badRequest('Error al registrar el resultado del proveedor', 'PROVIDER_RESULT_ERROR');
     }
 
     logAudit({
@@ -1434,13 +1431,17 @@ export async function consultarEstadoProveedor(estudioId: string) {
 
   // 4. If failed, mark as fallido
   if (statusResponse.status === 'failed' && est.estado !== 'fallido') {
-    await (supabase
+    const { error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({
         estado: 'fallido',
         observaciones: `Proveedor reporto fallo: ${statusResponse.mensaje || 'Sin detalle'}. Puede registrar el resultado manualmente.`,
       } as never)
       .eq('id', estudioId);
+
+    if (failError) {
+      logger.error({ error: failError, estudioId }, 'Error al marcar estudio como fallido tras consulta a proveedor');
+    }
   }
 
   return {
