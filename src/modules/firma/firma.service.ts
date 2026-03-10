@@ -96,12 +96,12 @@ export async function crearSolicitudFirma(
   // 2. Fetch expediente + inmueble data for the email
   const { data: expediente } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero_expediente, inmuebles(direccion, ciudad)')
+    .select('numero, inmuebles(direccion, ciudad)')
     .eq('id', c.expediente_id)
     .single();
 
   const exp = expediente as unknown as {
-    numero_expediente: string;
+    numero: string;
     inmuebles: { direccion: string; ciudad: string } | null;
   } | null;
 
@@ -126,7 +126,7 @@ export async function crearSolicitudFirma(
     const buffer = Buffer.from(await pdfData.arrayBuffer());
     const pdfBase64 = aucoClient.bufferToBase64(buffer);
 
-    const processName = `Contrato - ${exp?.numero_expediente || c.id}`;
+    const processName = `Contrato - ${exp?.numero || c.id}`;
 
     aucoDocumentCode = await aucoClient.uploadDocumentForSignature({
       email: env.AUCO_SENDER_EMAIL,
@@ -226,7 +226,7 @@ export async function reenviarSolicitudFirma(
 ) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, expedientes(numero_expediente, inmuebles(direccion, ciudad)))`)
+    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, expedientes(numero, inmuebles(direccion, ciudad)))`)
     .eq('id', solicitudId)
     .single();
 
@@ -238,7 +238,7 @@ export async function reenviarSolicitudFirma(
     contratos: {
       expediente_id: string;
       expedientes: {
-        numero_expediente: string;
+        numero: string;
         inmuebles: { direccion: string; ciudad: string } | null;
       } | null;
     } | null;
@@ -524,7 +524,7 @@ export async function validarToken(token: string) {
   // Fetch contrato + expediente info for display
   const { data: contratoData } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, nombre_archivo, expedientes(numero_expediente, inmuebles(direccion, ciudad))')
+    .select('id, expediente_id, nombre_archivo, expedientes(numero, inmuebles(direccion, ciudad))')
     .eq('id', row.contrato_id)
     .single();
 
@@ -532,7 +532,7 @@ export async function validarToken(token: string) {
     id: string;
     nombre_archivo: string | null;
     expedientes: {
-      numero_expediente: string;
+      numero: string;
       inmuebles: { direccion: string; ciudad: string } | null;
     } | null;
   } | null;
@@ -544,7 +544,7 @@ export async function validarToken(token: string) {
     estado: row.estado === 'enviado' ? 'abierto' : row.estado,
     token_expiracion: row.token_expiracion,
     contrato_nombre: cc?.nombre_archivo || 'Contrato',
-    expediente_numero: cc?.expedientes?.numero_expediente || '',
+    expediente_numero: cc?.expedientes?.numero || '',
     inmueble_direccion: cc?.expedientes?.inmuebles?.direccion || '',
     inmueble_ciudad: cc?.expedientes?.inmuebles?.ciudad || '',
   };

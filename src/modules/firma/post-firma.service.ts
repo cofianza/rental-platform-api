@@ -32,7 +32,7 @@ interface ContratoForPostFirma {
   expediente_id: string;
   nombre_archivo: string | null;
   expedientes: {
-    numero_expediente: string;
+    numero: string;
     analista_id: string | null;
     inmuebles: { direccion: string; ciudad: string } | null;
     analista: { id: string; nombre: string; apellido: string; email: string } | null;
@@ -57,7 +57,7 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
     .select(`
       id, estado, expediente_id, nombre_archivo,
       expedientes(
-        numero_expediente, analista_id,
+        numero, analista_id,
         inmuebles(direccion, ciudad),
         analista:perfiles!expedientes_analista_id_fkey(id, nombre, apellido, email)
       )
@@ -93,7 +93,7 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
 
   // 5. Send emails (async, non-blocking — failures logged but don't throw)
   const inmueble = contrato.expedientes?.inmuebles;
-  const expedienteNum = contrato.expedientes?.numero_expediente || '';
+  const expedienteNum = contrato.expedientes?.numero || '';
 
   // Try to fetch acuse PDF for email attachment (may not be ready yet due to race condition)
   const acusePdf = await fetchAcusePdf(solicitudId, contrato.expediente_id);

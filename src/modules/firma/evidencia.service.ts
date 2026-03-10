@@ -115,7 +115,7 @@ export async function completarFirma(
   // 3. Get contrato PDF and compute SHA-256 hash
   const { data: contrato } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, storage_key, nombre_archivo, expediente_id, expedientes(numero_expediente, inmuebles(direccion, ciudad))')
+    .select('id, storage_key, nombre_archivo, expediente_id, expedientes(numero, inmuebles(direccion, ciudad))')
     .eq('id', solicitud.contrato_id)
     .single();
 
@@ -129,7 +129,7 @@ export async function completarFirma(
     nombre_archivo: string | null;
     expediente_id: string;
     expedientes: {
-      numero_expediente: string;
+      numero: string;
       inmuebles: { direccion: string; ciudad: string } | null;
     } | null;
   };
@@ -362,7 +362,7 @@ async function generateAndStoreAcuse(
     nombre_archivo: string | null;
     expediente_id: string;
     expedientes: {
-      numero_expediente: string;
+      numero: string;
       inmuebles: { direccion: string; ciudad: string } | null;
     } | null;
   },
@@ -399,7 +399,7 @@ function buildAcusePdf(
     id: string;
     nombre_archivo: string | null;
     expedientes: {
-      numero_expediente: string;
+      numero: string;
       inmuebles: { direccion: string; ciudad: string } | null;
     } | null;
   },
@@ -430,7 +430,7 @@ function buildAcusePdf(
     doc.moveDown(0.5);
     doc.fontSize(10).font('Helvetica');
     addField(doc, 'Contrato', contrato.nombre_archivo || 'N/A');
-    addField(doc, 'Expediente', contrato.expedientes?.numero_expediente || 'N/A');
+    addField(doc, 'Expediente', contrato.expedientes?.numero || 'N/A');
     addField(doc, 'Inmueble', formatInmueble(contrato.expedientes?.inmuebles));
     doc.moveDown(1);
 
