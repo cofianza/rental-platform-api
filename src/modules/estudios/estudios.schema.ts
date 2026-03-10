@@ -5,7 +5,7 @@ import { z } from 'zod';
 // ============================================================
 
 const TIPOS_ESTUDIO = ['individual', 'con_coarrendatario'] as const;
-const PROVEEDORES_ESTUDIO = ['transunion', 'sifin', 'datacredito'] as const;
+const PROVEEDORES_ESTUDIO = ['manual', 'transunion', 'sifin', 'datacredito'] as const;
 const PAGO_POR_OPTIONS = ['inmobiliaria', 'arrendatario'] as const;
 
 // ============================================================

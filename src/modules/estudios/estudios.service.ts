@@ -197,8 +197,7 @@ export async function getEstudioById(estudioId: string) {
       fecha_completado, fecha_completado_self_service, referencia_proveedor,
       certificado_url, codigo_qr, datos_formulario, token_self_service,
       expiracion_token, created_at, updated_at,
-      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido),
-      documentos(id, tipo, nombre_original, tipo_mime, tamano_bytes, estado, created_at)
+      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('id', estudioId)
     .single();
@@ -214,8 +213,8 @@ export async function getEstudioById(estudioId: string) {
 // Create estudio
 // ============================================================
 
-// Documentos minimos requeridos para crear un estudio
-const DOCUMENTOS_MINIMOS_REQUERIDOS = ['cedula_frontal', 'comprobante_ingresos'];
+// Documentos minimos requeridos para crear un estudio (codigos de tipos_documento)
+const DOCUMENTOS_MINIMOS_REQUERIDOS = ['id_frontal', 'comprobante_ingresos'];
 
 export async function createEstudio(
   expedienteId: string,
@@ -279,18 +278,21 @@ export async function createEstudio(
   const autorizacionId = (autorizacion as unknown as { id: string }).id;
 
   // 4. Verify documentos minimos (cedula + comprobante de ingresos)
+  // Join tipos_documento to check by codigo (the old `tipo` enum column is deprecated)
   const { data: documentos } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
-    .select('tipo')
+    .select('tipo_documento:tipos_documento!documentos_tipo_documento_id_fkey(codigo)')
     .eq('expediente_id', expedienteId)
-    .in('tipo', DOCUMENTOS_MINIMOS_REQUERIDOS);
+    .eq('estado', 'aprobado');
 
-  const tiposPresentes = (documentos ?? []).map((d: unknown) => (d as { tipo: string }).tipo);
+  const tiposPresentes = (documentos ?? []).map(
+    (d: unknown) => ((d as { tipo_documento: { codigo: string } }).tipo_documento?.codigo),
+  ).filter(Boolean);
   const tiposFaltantes = DOCUMENTOS_MINIMOS_REQUERIDOS.filter((t) => !tiposPresentes.includes(t));
 
   if (tiposFaltantes.length > 0) {
     throw AppError.badRequest(
-      `Documentos minimos faltantes: ${tiposFaltantes.join(', ')}. Se requiere al menos cedula y comprobante de ingresos.`,
+      `Documentos minimos faltantes: ${tiposFaltantes.join(', ')}. Se requiere al menos ID frontal aprobado y comprobante de ingresos aprobado.`,
       'DOCUMENTOS_MINIMOS_FALTANTES',
     );
   }
@@ -310,7 +312,7 @@ export async function createEstudio(
 
   if (rpcError) {
     logger.error({ error: rpcError.message, expedienteId }, 'Error al crear estudio (RPC)');
-    if (rpcError.message?.includes('en_estudio')) {
+    if (rpcError.message?.includes('en_estudio') || rpcError.message?.includes('estudio en proceso')) {
       throw AppError.conflict(
         'El inmueble ya tiene un estudio en proceso. Debe finalizar o cancelar el estudio actual.',
         'INMUEBLE_EN_ESTUDIO',
@@ -366,7 +368,7 @@ export async function createEstudioFromInmueble(
       const entity = rpcError.message.includes('Inmueble') ? 'Inmueble' : 'Solicitante';
       throw AppError.notFound(`${entity} no encontrado`, `${entity.toUpperCase()}_NOT_FOUND`);
     }
-    if (rpcError.message?.includes('en_estudio')) {
+    if (rpcError.message?.includes('en_estudio') || rpcError.message?.includes('estudio en proceso')) {
       throw AppError.conflict(
         'El inmueble ya tiene un estudio en proceso. Debe finalizar o cancelar el estudio actual.',
         'INMUEBLE_EN_ESTUDIO',
@@ -414,9 +416,9 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
     if (rpcError.message?.includes('no encontrado')) {
       throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
     }
-    if (rpcError.message?.includes('solicitado')) {
+    if (rpcError.message?.includes('No se puede cancelar')) {
       throw AppError.badRequest(
-        'Solo se pueden cancelar estudios en estado solicitado',
+        'No se puede cancelar un estudio que ya fue completado, cancelado o fallido',
         'ESTUDIO_ESTADO_INVALIDO',
       );
     }
@@ -458,6 +460,14 @@ export async function sendSelfServiceLink(estudioId: string, userId: string, ip?
     throw AppError.badRequest(
       'No se puede enviar enlace para un estudio finalizado',
       'ESTUDIO_YA_FINALIZADO',
+    );
+  }
+
+  // Don't allow resending if form was already completed
+  if (est.estado === 'formulario_completado') {
+    throw AppError.badRequest(
+      'El formulario ya fue completado por el solicitante. No se puede reenviar el enlace.',
+      'FORMULARIO_YA_COMPLETADO',
     );
   }
 
@@ -574,13 +584,10 @@ export async function getFormularioByToken(token: string) {
     );
   }
 
-  // Verify estado allows form submission
-  if (estudio.estado === 'formulario_completado' || ESTADOS_ESTUDIO_FINALIZADOS.includes(estudio.estado)) {
-    throw AppError.badRequest(
-      'Este formulario ya fue completado o el estudio fue finalizado.',
-      'FORMULARIO_YA_COMPLETADO',
-    );
-  }
+  const yaCompletado =
+    estudio.estado === 'formulario_completado' ||
+    ESTADOS_ESTUDIO_FINALIZADOS.includes(estudio.estado) ||
+    estudio.datos_formulario !== null;
 
   return {
     estudio_id: estudio.id,
@@ -590,7 +597,8 @@ export async function getFormularioByToken(token: string) {
     inmueble_direccion: estudio.expedientes.inmuebles?.direccion || '',
     inmueble_ciudad: estudio.expedientes.inmuebles?.ciudad || '',
     solicitante_nombre: `${estudio.expedientes.solicitantes?.nombre || ''} ${estudio.expedientes.solicitantes?.apellido || ''}`.trim(),
-    ya_completado: estudio.datos_formulario !== null,
+    ya_completado: yaCompletado,
+    datos_formulario: yaCompletado ? estudio.datos_formulario : null,
   };
 }
 

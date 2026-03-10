@@ -60,7 +60,7 @@ interface AutorizacionRow {
 
 interface ExpedienteInfo {
   id: string;
-  numero_expediente: string;
+  numero: string;
   estado: string;
   solicitante_id: string;
   solicitantes: {
@@ -128,7 +128,7 @@ export async function enviarEnlaceAutorizacion(
   // 1. Get expediente with solicitante + inmueble
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero_expediente, estado, solicitante_id, solicitantes(id, nombre, apellido, email, tipo_documento, numero_documento), inmuebles(id, direccion, ciudad, barrio)')
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, tipo_documento, numero_documento), inmuebles(id, direccion, ciudad, barrio)')
     .eq('id', expedienteId)
     .single();
 
@@ -214,7 +214,7 @@ export async function getAutorizacionByToken(token: string) {
     .select(`
       id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma,
       solicitantes(nombre, apellido, email),
-      expedientes(numero_expediente, inmuebles(direccion, ciudad, barrio))
+      expedientes(numero, inmuebles(direccion, ciudad, barrio))
     `)
     .eq('token', token)
     .single();
@@ -231,7 +231,7 @@ export async function getAutorizacionByToken(token: string) {
     version_terminos: string;
     metodo_firma: string | null;
     solicitantes: { nombre: string; apellido: string; email: string };
-    expedientes: { numero_expediente: string; inmuebles: { direccion: string; ciudad: string; barrio: string | null } };
+    expedientes: { numero: string; inmuebles: { direccion: string; ciudad: string; barrio: string | null } };
   };
 
   // Check if expired
@@ -266,7 +266,7 @@ export async function getAutorizacionByToken(token: string) {
       email: auth.solicitantes.email,
     },
     expediente: {
-      numero_expediente: auth.expedientes.numero_expediente,
+      numero_expediente: auth.expedientes.numero,
       inmueble: {
         direccion: auth.expedientes.inmuebles.direccion,
         ciudad: auth.expedientes.inmuebles.ciudad,
