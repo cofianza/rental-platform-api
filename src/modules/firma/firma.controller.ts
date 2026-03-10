@@ -56,6 +56,13 @@ export async function validarToken(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+// HP-342: Get contract PDF for public signing page
+export async function getContratoPdf(req: Request, res: Response) {
+  const token = req.params.token as string;
+  const result = await firmaService.getContratoPdf(token);
+  sendSuccess(res, result);
+}
+
 /**
  * Auco webhook handler — receives signature status updates.
  * Validates webhook secret if configured.

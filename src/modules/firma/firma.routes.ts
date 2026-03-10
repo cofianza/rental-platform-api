@@ -95,6 +95,13 @@ publicFirmaRouter.get(
   firmaController.validarToken,
 );
 
+// GET /:token/pdf — Get signed URL for contract PDF (HP-342, read-only)
+publicFirmaRouter.get(
+  '/:token/pdf',
+  validate({ params: tokenParamsSchema }),
+  firmaController.getContratoPdf,
+);
+
 // POST /:token/otp/solicitar — Request OTP code (public, rate-limited)
 publicFirmaRouter.post(
   '/:token/otp/solicitar',

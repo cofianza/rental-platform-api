@@ -551,6 +551,79 @@ export async function validarToken(token: string) {
 }
 
 // ============================================================
+// Get contract PDF for public signing page (HP-342)
+// ============================================================
+
+const PDF_URL_EXPIRY_SECONDS = 600; // 10 minutes
+
+export async function getContratoPdf(token: string) {
+  // Validate token first
+  const { data, error } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, contrato_id, estado, token_expiracion')
+    .eq('token', token)
+    .single();
+
+  if (error || !data) {
+    throw AppError.notFound('Enlace de firma no válido', 'INVALID_TOKEN');
+  }
+
+  const row = data as unknown as {
+    id: string;
+    contrato_id: string;
+    estado: string;
+    token_expiracion: string;
+  };
+
+  // Check expiration
+  if (new Date(row.token_expiracion) < new Date()) {
+    throw AppError.badRequest('El enlace de firma ha expirado', 'TOKEN_EXPIRED');
+  }
+
+  // Check state
+  if (['firmado', 'cancelado', 'expirado'].includes(row.estado)) {
+    throw AppError.badRequest('Este enlace ya no es válido', 'INVALID_TOKEN_STATE');
+  }
+
+  // Get contract storage_key
+  const { data: contratoData, error: contratoError } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, storage_key, nombre_archivo')
+    .eq('id', row.contrato_id)
+    .single();
+
+  if (contratoError || !contratoData) {
+    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  }
+
+  const contrato = contratoData as unknown as {
+    id: string;
+    storage_key: string | null;
+    nombre_archivo: string | null;
+  };
+
+  if (!contrato.storage_key) {
+    throw AppError.badRequest('El contrato no tiene PDF generado', 'NO_PDF');
+  }
+
+  // Generate signed URL (read-only, no download header)
+  const { data: urlData, error: urlError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(contrato.storage_key, PDF_URL_EXPIRY_SECONDS);
+
+  if (urlError || !urlData?.signedUrl) {
+    logger.error({ error: urlError, storageKey: contrato.storage_key }, 'Error creating signed URL for PDF');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el PDF');
+  }
+
+  return {
+    pdf_url: urlData.signedUrl,
+    nombre_archivo: contrato.nombre_archivo || 'contrato.pdf',
+    expira_en_segundos: PDF_URL_EXPIRY_SECONDS,
+  };
+}
+
+// ============================================================
 // Auco Webhook Handler
 // ============================================================
 
