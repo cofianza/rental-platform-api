@@ -24,10 +24,11 @@ interface AcuseEmailParams {
   contratoNombre: string;
   inmuebleDireccion: string;
   inmuebleCiudad: string;
+  acusePdf?: Buffer;
 }
 
 export async function sendFirmaAcuseEmail(params: AcuseEmailParams): Promise<void> {
-  const { to, nombreFirmante, firmadoEn, contratoNombre, inmuebleDireccion, inmuebleCiudad } = params;
+  const { to, nombreFirmante, firmadoEn, contratoNombre, inmuebleDireccion, inmuebleCiudad, acusePdf } = params;
 
   const fechaFormateada = new Date(firmadoEn).toLocaleString('es-CO', {
     dateStyle: 'long',
@@ -40,14 +41,25 @@ export async function sendFirmaAcuseEmail(params: AcuseEmailParams): Promise<voi
     : inmuebleDireccion;
 
   try {
-    await resend.emails.send({
+    const emailPayload: Parameters<typeof resend.emails.send>[0] = {
       from: FROM_EMAIL,
       to,
       subject: 'Confirmacion de firma electronica - Habitar Propiedades',
       html: buildAcuseHtml(nombreFirmante, fechaFormateada, contratoNombre, inmuebleDisplay),
-    });
+    };
 
-    logger.info({ to }, 'Post-firma: acuse email sent to firmante');
+    if (acusePdf) {
+      emailPayload.attachments = [
+        {
+          filename: 'acuse-firma.pdf',
+          content: acusePdf,
+        },
+      ];
+    }
+
+    await resend.emails.send(emailPayload);
+
+    logger.info({ to, hasAttachment: !!acusePdf }, 'Post-firma: acuse email sent to firmante');
   } catch (error) {
     logger.error({ to, error }, 'Post-firma: error sending acuse email');
     throw error;

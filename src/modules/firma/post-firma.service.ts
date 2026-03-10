@@ -95,7 +95,10 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
   const inmueble = contrato.expedientes?.inmuebles;
   const expedienteNum = contrato.expedientes?.numero_expediente || '';
 
-  // Email to firmante
+  // Try to fetch acuse PDF for email attachment (may not be ready yet due to race condition)
+  const acusePdf = await fetchAcusePdf(solicitudId, contrato.expediente_id);
+
+  // Email to firmante (with PDF attachment if available)
   sendFirmaAcuseEmail({
     to: emailFirmante,
     nombreFirmante,
@@ -103,6 +106,7 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
     contratoNombre: contrato.nombre_archivo || 'Contrato de arrendamiento',
     inmuebleDireccion: inmueble?.direccion || '',
     inmuebleCiudad: inmueble?.ciudad || '',
+    acusePdf: acusePdf || undefined,
   }).catch((err) => {
     logger.error({ error: err, email: emailFirmante }, 'Post-firma: error sending acuse email to firmante');
   });
@@ -210,4 +214,40 @@ async function insertTimelineEvent(
   if (error) {
     logger.error({ error: error.message, expedienteId }, 'Post-firma: error inserting timeline event');
   }
+}
+
+// ============================================================
+// Fetch acuse PDF from storage (with retry for race condition)
+// ============================================================
+
+const BUCKET_NAME = 'documentos-expedientes';
+
+async function fetchAcusePdf(solicitudId: string, expedienteId: string): Promise<Buffer | null> {
+  const acuseKey = `firmas/${expedienteId}/${solicitudId}/acuse-firma.pdf`;
+
+  // Try immediately first
+  let pdf = await tryDownloadAcuse(acuseKey);
+  if (pdf) return pdf;
+
+  // Wait 3 seconds and retry (acuse generation may still be in progress)
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  pdf = await tryDownloadAcuse(acuseKey);
+
+  if (!pdf) {
+    logger.warn({ solicitudId, acuseKey }, 'Post-firma: acuse PDF not available for email attachment');
+  }
+
+  return pdf;
+}
+
+async function tryDownloadAcuse(key: string): Promise<Buffer | null> {
+  try {
+    const { data } = await supabase.storage.from(BUCKET_NAME).download(key);
+    if (data) {
+      return Buffer.from(await data.arrayBuffer());
+    }
+  } catch {
+    // Not available yet
+  }
+  return null;
 }
