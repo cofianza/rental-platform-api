@@ -1,5 +1,5 @@
 -- ============================================================
--- Habitar Propiedades 2.0 - Migración: Autorizaciones Habeas Data
+-- Cofianza 2.0 - Migración: Autorizaciones Habeas Data
 -- Fecha: 2026-02-16
 -- Contexto: Minuta 11 Feb 2026 - Sección 5.1
 -- Cumplimiento: Ley 1581/2012 (Protección de datos personales)

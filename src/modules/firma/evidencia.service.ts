@@ -418,7 +418,7 @@ function buildAcusePdf(
       .text('ACUSE DE FIRMA ELECTRONICA', { align: 'center' });
     doc.moveDown(0.5);
     doc.fontSize(10).font('Helvetica')
-      .text('Habitar Propiedades — Ley 527 de 1999', { align: 'center' });
+      .text('Cofianza — Ley 527 de 1999', { align: 'center' });
     doc.moveDown(1.5);
 
     // Horizontal rule
@@ -481,7 +481,7 @@ function buildAcusePdf(
       );
     doc.moveDown(0.5);
     doc.text(
-      `Documento generado automaticamente por Habitar Propiedades el ${new Date().toISOString()}`,
+      `Documento generado automaticamente por Cofianza el ${new Date().toISOString()}`,
       { align: 'center' },
     );
 

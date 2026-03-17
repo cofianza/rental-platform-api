@@ -1,5 +1,5 @@
 -- ============================================================
--- Habitar Propiedades 2.0 - Migración Inicial
+-- Cofianza 2.0 - Migración Inicial
 -- Base de datos: Supabase PostgreSQL
 -- Fecha: 2026-02-16
 -- Tarea: HP-23 - Diseño de base de datos v1

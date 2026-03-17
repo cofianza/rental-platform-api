@@ -1,6 +1,6 @@
 # rental-platform-api
 
-API REST para **Habitar Propiedades 2.0**, una plataforma de garantias de arrendamiento en Colombia. Este servicio maneja toda la logica de negocio: autenticacion, gestion de usuarios y roles, expedientes, inmuebles, documentos, evaluacion de arrendatarios, contratos, firma electronica, pagos, facturacion y reportes.
+API REST para **Cofianza 2.0**, una plataforma de garantias de arrendamiento en Colombia. Este servicio maneja toda la logica de negocio: autenticacion, gestion de usuarios y roles, expedientes, inmuebles, documentos, evaluacion de arrendatarios, contratos, firma electronica, pagos, facturacion y reportes.
 
 ## Stack
 

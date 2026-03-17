@@ -4,14 +4,14 @@ import { logger } from '@/lib/logger';
 
 const resend = new Resend(env.RESEND_API_KEY);
 
-const FROM_EMAIL = `Habitar Propiedades <${env.RESEND_FROM_EMAIL}>`;
+const FROM_EMAIL = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 
 export async function sendPasswordResetEmail(to: string, resetUrl: string): Promise<void> {
   try {
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Recupera tu contraseña - Habitar Propiedades',
+      subject: 'Recupera tu contraseña - Cofianza',
       html: buildPasswordResetHtml(resetUrl),
     });
 
@@ -29,7 +29,7 @@ export async function sendWelcomeEmail(to: string, nombre: string, tempPassword:
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Bienvenido a Habitar Propiedades',
+      subject: 'Bienvenido a Cofianza',
       html: buildWelcomeHtml(nombre, to, tempPassword, loginUrl),
     });
 
@@ -63,7 +63,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -77,7 +77,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
                 Bienvenido, ${nombre}
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Se ha creado tu cuenta en Habitar Propiedades. A continuación encontrarás tus credenciales de acceso:
+                Se ha creado tu cuenta en Cofianza. A continuación encontrarás tus credenciales de acceso:
               </p>
 
               <!-- Credentials box -->
@@ -113,7 +113,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                © ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                © ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automático, por favor no respondas a este mensaje.
@@ -133,7 +133,7 @@ export async function sendVerificationEmail(to: string, nombre: string, verifyUr
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Verifica tu correo - Habitar Propiedades',
+      subject: 'Verifica tu correo - Cofianza',
       html: buildVerificationHtml(nombre, verifyUrl),
     });
 
@@ -167,7 +167,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -181,7 +181,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
                 Verifica tu correo electronico
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, gracias por registrarte en Habitar Propiedades. Para completar tu registro, verifica tu correo electronico haciendo clic en el siguiente boton:
+                Hola ${nombre}, gracias por registrarte en Cofianza. Para completar tu registro, verifica tu correo electronico haciendo clic en el siguiente boton:
               </p>
 
               <!-- Button -->
@@ -214,7 +214,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automatico, por favor no respondas a este mensaje.
@@ -239,7 +239,7 @@ export async function sendEstudioFormEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Completa tu estudio de riesgo crediticio - Habitar Propiedades',
+      subject: 'Completa tu estudio de riesgo crediticio - Cofianza',
       html: buildEstudioFormHtml(nombre, formUrl, expiryHours),
     });
 
@@ -273,7 +273,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -320,7 +320,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automatico, por favor no respondas a este mensaje.
@@ -345,7 +345,7 @@ export async function sendAutorizacionEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Autorización consulta centrales de riesgo - Habitar Propiedades',
+      subject: 'Autorización consulta centrales de riesgo - Cofianza',
       html: buildAutorizacionHtml(nombre, autorizacionUrl, expiryHours),
     });
 
@@ -361,7 +361,7 @@ export async function sendOtpEmail(to: string, nombre: string, codigo: string): 
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Código de verificación - Habitar Propiedades',
+      subject: 'Código de verificación - Cofianza',
       html: buildOtpHtml(nombre, codigo),
     });
 
@@ -395,7 +395,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -446,7 +446,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automático, por favor no respondas a este mensaje.
@@ -484,7 +484,7 @@ function buildOtpHtml(nombre: string, codigo: string): string {
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -526,7 +526,7 @@ function buildOtpHtml(nombre: string, codigo: string): string {
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automático, por favor no respondas a este mensaje.
@@ -552,7 +552,7 @@ export async function sendFirmaEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Firma de contrato de arrendamiento - Habitar Propiedades',
+      subject: 'Firma de contrato de arrendamiento - Cofianza',
       html: buildFirmaHtml(nombre, firmaUrl, expiryHours, context),
     });
 
@@ -591,7 +591,7 @@ function buildFirmaHtml(
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -650,7 +650,7 @@ function buildFirmaHtml(
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automático, por favor no respondas a este mensaje.
@@ -675,7 +675,7 @@ export async function sendPaymentLinkEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: `Link de pago - ${context.concepto} - Habitar Propiedades`,
+      subject: `Link de pago - ${context.concepto} - Cofianza`,
       html: buildPaymentLinkHtml(nombre, paymentUrl, context),
     });
 
@@ -713,7 +713,7 @@ function buildPaymentLinkHtml(
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -774,7 +774,7 @@ function buildPaymentLinkHtml(
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automatico, por favor no respondas a este mensaje.
@@ -812,7 +812,7 @@ function buildPasswordResetHtml(resetUrl: string): string {
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -859,7 +859,7 @@ function buildPasswordResetHtml(resetUrl: string): string {
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                © ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                © ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automático, por favor no respondas a este mensaje.

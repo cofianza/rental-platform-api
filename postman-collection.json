@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "Habitar Propiedades API",
-    "description": "API para la plataforma de gestion de arriendos - Habitar Propiedades",
+    "name": "Cofianza API",
+    "description": "API para la plataforma de gestion de arriendos - Cofianza",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [

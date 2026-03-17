@@ -1,8 +1,8 @@
-# Arquitectura del Sistema - Habitar Propiedades 2.0
+# Arquitectura del Sistema - Cofianza 2.0
 
 ## 1. Visión General
 
-Habitar Propiedades 2.0 es una plataforma web de operación inmobiliaria colombiana que permite: gestión de inmuebles, administración de expedientes de arrendamiento, carga y validación de documentos, evaluación de arrendatarios, generación y firma de contratos (OTP), pagos y facturación básica.
+Cofianza 2.0 es una plataforma web de operación inmobiliaria colombiana que permite: gestión de inmuebles, administración de expedientes de arrendamiento, carga y validación de documentos, evaluación de arrendatarios, generación y firma de contratos (OTP), pagos y facturación básica.
 
 **Referencia funcional:** Fianly (plataforma colombiana de afianzamiento de arrendamientos).
 
@@ -30,7 +30,7 @@ Habitar Propiedades 2.0 es una plataforma web de operación inmobiliaria colombi
                            │                                 │
                     ┌──────▼─────────────────────────────────▼──────┐
                     │                                               │
-                    │          HABITAR PROPIEDADES 2.0              │
+                    │          COFIANZA 2.0              │
                     │                                               │
                     │  ┌────────────────┐  ┌─────────────────────┐ │
                     │  │   Frontend     │  │     Backend API      │ │

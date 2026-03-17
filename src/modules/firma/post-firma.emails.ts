@@ -11,7 +11,7 @@ import { env } from '@/config';
 import { logger } from '@/lib/logger';
 
 const resend = new Resend(env.RESEND_API_KEY);
-const FROM_EMAIL = `Habitar Propiedades <${env.RESEND_FROM_EMAIL}>`;
+const FROM_EMAIL = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 
 // ============================================================
 // 1. Acuse de firma al firmante
@@ -44,7 +44,7 @@ export async function sendFirmaAcuseEmail(params: AcuseEmailParams): Promise<voi
     const emailPayload: Parameters<typeof resend.emails.send>[0] = {
       from: FROM_EMAIL,
       to,
-      subject: 'Confirmacion de firma electronica - Habitar Propiedades',
+      subject: 'Confirmacion de firma electronica - Cofianza',
       html: buildAcuseHtml(nombreFirmante, fechaFormateada, contratoNombre, inmuebleDisplay),
     };
 
@@ -94,7 +94,7 @@ function buildAcuseHtml(
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -148,7 +148,7 @@ function buildAcuseHtml(
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automatico, por favor no respondas a este mensaje.
@@ -240,7 +240,7 @@ function buildOperadorHtml(
                     <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
                   </td>
                   <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
                   </td>
                 </tr>
               </table>
@@ -289,7 +289,7 @@ function buildOperadorHtml(
           <tr>
             <td align="center" style="padding-top: 32px;">
               <p style="margin: 0; font-size: 13px; color: #9ca3af;">
-                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
                 Este es un correo automatico, por favor no respondas a este mensaje.

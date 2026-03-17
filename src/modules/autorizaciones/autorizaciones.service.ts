@@ -18,7 +18,7 @@ const VERSION_TERMINOS = '1.0';
 
 const TEXTO_LEGAL = `AUTORIZACION PARA CONSULTA Y REPORTE EN CENTRALES DE RIESGO
 
-En cumplimiento de la Ley 1581 de 2012 (Proteccion de Datos Personales) y la Ley 1266 de 2008 (Habeas Data), autorizo de manera libre, expresa, voluntaria e informada a HABITAR PROPIEDADES y/o a quien esta designe, para que:
+En cumplimiento de la Ley 1581 de 2012 (Proteccion de Datos Personales) y la Ley 1266 de 2008 (Habeas Data), autorizo de manera libre, expresa, voluntaria e informada a COFIANZA y/o a quien esta designe, para que:
 
 1. Consulte, solicite, recopile, almacene, use, circule y trate mi informacion personal, financiera y crediticia ante cualquier central de riesgo o base de datos, incluyendo pero no limitado a TransUnion (CIFIN), Datacredito (Experian) y SIFIN.
 
@@ -28,7 +28,7 @@ En cumplimiento de la Ley 1581 de 2012 (Proteccion de Datos Personales) y la Ley
 
 4. Declaro que conozco mis derechos como titular de datos personales, incluyendo el derecho a conocer, actualizar, rectificar y solicitar la supresion de mis datos.
 
-5. Esta autorizacion es revocable en cualquier momento, mediante solicitud escrita dirigida a HABITAR PROPIEDADES.
+5. Esta autorizacion es revocable en cualquier momento, mediante solicitud escrita dirigida a COFIANZA.
 
 Al firmar este documento, confirmo que he leido, entendido y aceptado los terminos aqui descritos.`;
 

@@ -209,7 +209,7 @@ export async function registerWebhook(
 ): Promise<void> {
   const body: Record<string, unknown> = {
     id: 'default',
-    description: 'Habitar Propiedades webhook for firma notifications',
+    description: 'Cofianza webhook for firma notifications',
     url: webhookUrl,
   };
 

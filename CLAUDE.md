@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-REST API for **Habitar Propiedades 2.0**, a rental guarantee platform in Colombia. Built with Express 5 + TypeScript (strict mode), Supabase for everything (auth, database, storage).
+REST API for **Cofianza 2.0**, a rental guarantee platform in Colombia. Built with Express 5 + TypeScript (strict mode), Supabase for everything (auth, database, storage).
 
 ## Commands
 

@@ -1,5 +1,5 @@
 -- ============================================================
--- Habitar Propiedades 2.0 - Seed Data
+-- Cofianza 2.0 - Seed Data
 -- Datos de prueba realistas para Colombia
 -- Fecha: 2026-02-16
 -- ============================================================
@@ -496,21 +496,21 @@ INSERT INTO autorizaciones_habeas_data (id, solicitante_id, canal, estado, token
    'c1111111-1111-1111-1111-111111111111',
    'web', 'autorizado', NULL, NULL, NULL,
    '2026-01-15 10:30:00-05', '181.53.12.45', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120',
-   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'Autorizo de manera libre, expresa e informada a Cofianza para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
    'v1.0'),
 
   ('h2222222-2222-2222-2222-222222222222',
    'c2222222-2222-2222-2222-222222222222',
    'web', 'autorizado', NULL, NULL, NULL,
    '2026-01-16 14:15:00-05', '190.25.67.89', 'Mozilla/5.0 (Macintosh; Intel Mac OS X) Safari/17',
-   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'Autorizo de manera libre, expresa e informada a Cofianza para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
    'v1.0'),
 
   ('h3333333-3333-3333-3333-333333333333',
    'c3333333-3333-3333-3333-333333333333',
    'web', 'autorizado', NULL, NULL, NULL,
    '2026-01-18 09:00:00-05', '181.128.45.12', 'Mozilla/5.0 (Linux; Android 14) Chrome/120',
-   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'Autorizo de manera libre, expresa e informada a Cofianza para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
    'v1.0'),
 
   -- Solicitantes con autorización vía enlace presencial
@@ -520,7 +520,7 @@ INSERT INTO autorizaciones_habeas_data (id, solicitante_id, canal, estado, token
    'aut_tk_a1b2c3d4e5f6', '2026-01-22 17:00:00-05',
    'a2222222-2222-2222-2222-222222222222',
    '2026-01-20 16:45:00-05', '190.85.33.21', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17) Safari/17',
-   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'Autorizo de manera libre, expresa e informada a Cofianza para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
    'v1.0'),
 
   ('h5555555-5555-5555-5555-555555555555',
@@ -529,14 +529,14 @@ INSERT INTO autorizaciones_habeas_data (id, solicitante_id, canal, estado, token
    'aut_tk_g7h8i9j0k1l2', '2026-01-25 17:00:00-05',
    'a3333333-3333-3333-3333-333333333333',
    '2026-01-23 11:20:00-05', '181.49.78.56', 'Mozilla/5.0 (Windows NT 10.0) Edge/120',
-   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'Autorizo de manera libre, expresa e informada a Cofianza para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
    'v1.0'),
 
   ('h6666666-6666-6666-6666-666666666666',
    'c6666666-6666-6666-6666-666666666666',
    'web', 'autorizado', NULL, NULL, NULL,
    '2026-01-25 08:30:00-05', '190.60.12.88', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/121',
-   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'Autorizo de manera libre, expresa e informada a Cofianza para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
    'v1.0'),
 
   -- Enlace pendiente (no firmado aún)
@@ -552,7 +552,7 @@ INSERT INTO autorizaciones_habeas_data (id, solicitante_id, canal, estado, token
    'c8888888-8888-8888-8888-888888888888',
    'web', 'revocado', NULL, NULL, NULL,
    '2026-01-10 15:00:00-05', '181.33.22.11', 'Mozilla/5.0 (Macintosh) Chrome/120',
-   'Autorizo de manera libre, expresa e informada a Habitar Propiedades para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
+   'Autorizo de manera libre, expresa e informada a Cofianza para consultar mi información crediticia en TransUnion, Datacrédito y SIFIN, conforme a la Ley 1581 de 2012 y Ley 1266 de 2008.',
    'v1.0');
 
 -- ============================================================
@@ -726,7 +726,7 @@ INSERT INTO firmas (id, contrato_id, tipo_firmante, nombre_firmante, email_firma
    'f0000002-0000-0000-0000-000000000001',
    'arrendatario', 'Carlos Andrés Herrera Ospina',
    'carlos.herrera@yahoo.com',
-   'https://firmas.habitarpropiedades.com/firma/f0000003-0001',
+   'https://firmas.cofianza.com/firma/f0000003-0001',
    '2026-01-10 14:30:00-05',
    '181.52.134.22', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0',
    'firmas/evidencia-f0000003-0001.pdf'),
@@ -735,7 +735,7 @@ INSERT INTO firmas (id, contrato_id, tipo_firmante, nombre_firmante, email_firma
    'f0000002-0000-0000-0000-000000000001',
    'propietario', 'Andrés Gutiérrez',
    'andres.gutierrez@habitar.com',
-   'https://firmas.habitarpropiedades.com/firma/f0000003-0002',
+   'https://firmas.cofianza.com/firma/f0000003-0002',
    '2026-01-11 09:15:00-05',
    '190.25.88.103', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1',
    'firmas/evidencia-f0000003-0002.pdf'),
@@ -745,7 +745,7 @@ INSERT INTO firmas (id, contrato_id, tipo_firmante, nombre_firmante, email_firma
    'f0000002-0000-0000-0000-000000000002',
    'arrendatario', 'Roberto Mejía Arias (Rep. Legal Restaurantes El Corral SAS)',
    'contacto@elcorral.com',
-   'https://firmas.habitarpropiedades.com/firma/f0000003-0003',
+   'https://firmas.cofianza.com/firma/f0000003-0003',
    '2026-02-12 11:00:00-05',
    '181.143.67.200', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0',
    'firmas/evidencia-f0000003-0003.pdf'),
@@ -754,7 +754,7 @@ INSERT INTO firmas (id, contrato_id, tipo_firmante, nombre_firmante, email_firma
    'f0000002-0000-0000-0000-000000000002',
    'propietario', 'Camila Moreno',
    'camila.moreno@habitar.com',
-   'https://firmas.habitarpropiedades.com/firma/f0000003-0004',
+   'https://firmas.cofianza.com/firma/f0000003-0004',
    '2026-02-13 16:45:00-05',
    '190.85.201.44', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) Safari/604.1',
    'firmas/evidencia-f0000003-0004.pdf'),
@@ -764,14 +764,14 @@ INSERT INTO firmas (id, contrato_id, tipo_firmante, nombre_firmante, email_firma
    'f0000002-0000-0000-0000-000000000003',
    'arrendatario', 'María Fernanda Torres Vargas',
    'mafe.torres@outlook.com',
-   'https://firmas.habitarpropiedades.com/firma/f0000003-0005',
+   'https://firmas.cofianza.com/firma/f0000003-0005',
    NULL, NULL, NULL, NULL),
 
   ('f0000003-0000-0000-0000-000000000006',
    'f0000002-0000-0000-0000-000000000003',
    'propietario', 'Andrés Gutiérrez',
    'andres.gutierrez@habitar.com',
-   'https://firmas.habitarpropiedades.com/firma/f0000003-0006',
+   'https://firmas.cofianza.com/firma/f0000003-0006',
    NULL, NULL, NULL, NULL);
 
 -- ============================================================
@@ -874,7 +874,7 @@ INSERT INTO facturas (id, pago_id, expediente_id, numero_factura, razon_social, 
    'f0000004-0000-0000-0000-000000000001',
    'da000000-0000-0000-0000-000000000001',
    'FAC-2026-00001',
-   'Habitar Propiedades SAS', '901234567-1',
+   'Cofianza SAS', '901234567-1',
    'Calle 93 # 14-20, Oficina 501, Bogotá D.C.',
    'emitida',
    'facturas/factura-f0000005-0001.pdf'),
@@ -883,7 +883,7 @@ INSERT INTO facturas (id, pago_id, expediente_id, numero_factura, razon_social, 
    'f0000004-0000-0000-0000-000000000002',
    'da000000-0000-0000-0000-000000000002',
    'FAC-2026-00002',
-   'Habitar Propiedades SAS', '901234567-1',
+   'Cofianza SAS', '901234567-1',
    'Calle 93 # 14-20, Oficina 501, Bogotá D.C.',
    'emitida',
    'facturas/factura-f0000005-0002.pdf'),
@@ -892,7 +892,7 @@ INSERT INTO facturas (id, pago_id, expediente_id, numero_factura, razon_social, 
    'f0000004-0000-0000-0000-000000000008',
    'da000000-0000-0000-0000-000000000002',
    'FAC-2026-00003',
-   'Habitar Propiedades SAS', '901234567-1',
+   'Cofianza SAS', '901234567-1',
    'Calle 93 # 14-20, Oficina 501, Bogotá D.C.',
    'solicitada',
    NULL);

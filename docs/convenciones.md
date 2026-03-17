@@ -1,4 +1,4 @@
-# Convenciones de Código - Habitar Propiedades 2.0
+# Convenciones de Código - Cofianza 2.0
 
 ## 1. Estructura de Carpetas
 

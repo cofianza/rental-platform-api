@@ -1,5 +1,5 @@
 -- ============================================================
--- Habitar Propiedades 2.0 - Fotos de Inmuebles
+-- Cofianza 2.0 - Fotos de Inmuebles
 -- Base de datos: Supabase PostgreSQL
 -- Fecha: 2026-02-19
 -- Tarea: HP-203 - Inventario digital del inmueble (fotos)

@@ -1,4 +1,4 @@
-# Roles y Permisos - Habitar Propiedades 2.0
+# Roles y Permisos - Cofianza 2.0
 
 ## 1. Roles del Sistema
 

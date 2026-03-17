@@ -1,6 +1,6 @@
 # Architecture Decision Records (ADR)
 
-## Habitar Propiedades 2.0
+## Cofianza 2.0
 
 ---
 

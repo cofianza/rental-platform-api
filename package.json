@@ -1,7 +1,7 @@
 {
   "name": "rental-platform-api",
   "version": "1.0.0",
-  "description": "Habitar Propiedades - Rental Platform API",
+  "description": "Cofianza - Rental Platform API",
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon --exec ts-node -r tsconfig-paths/register src/server.ts",

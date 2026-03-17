@@ -1,8 +1,8 @@
-# Modelo de Datos - Habitar Propiedades 2.0
+# Modelo de Datos - Cofianza 2.0
 
 ## 1. Resumen
 
-El modelo de datos de Habitar Propiedades 2.0 consta de **15 tablas** alojadas en **Supabase PostgreSQL**. Todas las claves primarias son **UUID** generados con `gen_random_uuid()`. La nomenclatura sigue la convención **snake_case en español**, y los nombres de tablas están en plural. Se utilizan 20 tipos enumerados (`ENUM`) para garantizar la integridad de los datos.
+El modelo de datos de Cofianza 2.0 consta de **15 tablas** alojadas en **Supabase PostgreSQL**. Todas las claves primarias son **UUID** generados con `gen_random_uuid()`. La nomenclatura sigue la convención **snake_case en español**, y los nombres de tablas están en plural. Se utilizan 20 tipos enumerados (`ENUM`) para garantizar la integridad de los datos.
 
 ### Listado de tablas
 

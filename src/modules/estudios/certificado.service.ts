@@ -265,7 +265,7 @@ export async function generateCertificatePdf(
     doc.text(`Valido hasta: ${formatDate(data.fechaVencimiento)}`, 50, y);
     y += 12;
     doc.text(
-      'Este certificado es generado electronicamente por Habitar Propiedades S.A.S. y tiene validez como documento informativo. ' +
+      'Este certificado es generado electronicamente por Cofianza S.A.S. y tiene validez como documento informativo. ' +
       'La informacion contenida proviene de centrales de riesgo crediticio autorizadas. ' +
       'Para verificar su autenticidad, escanee el codigo QR o visite la URL indicada.',
       50,

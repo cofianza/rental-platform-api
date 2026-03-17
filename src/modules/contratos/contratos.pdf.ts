@@ -178,7 +178,7 @@ export function generateContractPdf(compiledHtml: string, metadata: PdfMetadata)
       margins: { top: MARGIN + 20, bottom: MARGIN + 20, left: MARGIN, right: MARGIN },
       info: {
         Title: metadata.titulo,
-        Author: 'Habitar Propiedades',
+        Author: 'Cofianza',
         Subject: 'Contrato de Arrendamiento',
       },
       bufferPages: true,
@@ -259,7 +259,7 @@ export function generateContractPdf(compiledHtml: string, metadata: PdfMetadata)
         .font(FONTS.bold)
         .fontSize(FONT_SIZES.header)
         .fillColor('#666666')
-        .text('HABITAR PROPIEDADES', MARGIN, 30, {
+        .text('COFIANZA', MARGIN, 30, {
           width: CONTENT_WIDTH,
           align: 'center',
         });
