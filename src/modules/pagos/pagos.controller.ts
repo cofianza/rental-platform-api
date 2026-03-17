@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
+import { logger } from '@/lib/logger';
 import * as pagosService from './pagos.service';
 import type {
   CreatePaymentLinkInput,
@@ -90,11 +91,32 @@ export async function getGatewayStatus(_req: Request, res: Response) {
 }
 
 // ============================================================
-// POST /api/v1/webhooks/stripe — Stripe webhook
+// POST /api/v1/webhooks/pagos — Payment gateway webhook (HP-349)
+// Always responds 200 to avoid gateway retries, except on invalid signature (400).
 // ============================================================
 
 export async function handleWebhook(req: Request, res: Response) {
   const signature = req.headers['stripe-signature'] as string;
-  const result = await pagosService.processWebhookEvent(req.body, signature);
-  sendSuccess(res, result);
+
+  if (!signature) {
+    logger.warn({ ip: req.ip }, 'Webhook request without stripe-signature header');
+    res.status(400).json({ success: false, message: 'Missing signature' });
+    return;
+  }
+
+  try {
+    const result = await pagosService.processWebhookEvent(req.body, signature);
+    sendSuccess(res, result);
+  } catch (error) {
+    // Signature validation errors → 400 (reject invalid requests)
+    if (error && typeof error === 'object' && 'errorCode' in error && (error as { errorCode: string }).errorCode === 'WEBHOOK_SIGNATURE_INVALID') {
+      logger.warn({ ip: req.ip }, 'Webhook rejected: invalid HMAC signature');
+      res.status(400).json({ success: false, message: 'Invalid signature' });
+      return;
+    }
+
+    // Any other internal error → still respond 200 to avoid retries
+    logger.error({ error, ip: req.ip }, 'Webhook internal error — responding 200 to prevent retries');
+    sendSuccess(res, { received: true });
+  }
 }

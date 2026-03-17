@@ -31,7 +31,7 @@ import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
 import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
 import { firmaRouter, contratoFirmaSolicitudesRouter, publicFirmaRouter, aucoWebhookRouter, firmaCronRouter } from '@/modules/firma/firma.routes';
-import { expedientePagosRouter, pagosRouter, stripeWebhookRouter } from '@/modules/pagos/pagos.routes';
+import { expedientePagosRouter, pagosRouter, pagosWebhookRouter } from '@/modules/pagos/pagos.routes';
 
 const app = express();
 
@@ -58,8 +58,8 @@ app.use(
   }),
 );
 
-// Stripe webhook needs raw body BEFORE json parser
-app.use('/api/v1/webhooks/stripe', stripeWebhookRouter);
+// Payment webhook needs raw body BEFORE json parser (HMAC signature verification)
+app.use('/api/v1/webhooks/pagos', pagosWebhookRouter);
 
 // Body parsing
 app.use(express.json({ limit: '2mb' }));

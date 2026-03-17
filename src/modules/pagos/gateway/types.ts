@@ -50,6 +50,8 @@ export interface WebhookVerifyResult {
   event: Record<string, unknown>;
   /** Event type string (e.g. 'checkout.session.completed') */
   type: string;
+  /** Unique event ID from the provider (for idempotency) */
+  eventId: string;
 }
 
 export interface GatewayHealthStatus {

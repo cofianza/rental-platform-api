@@ -427,37 +427,88 @@ export async function registerManualPayment(
 }
 
 // ============================================================
-// Process webhook event
+// Process webhook event (HP-349)
+// Always returns { received: true } — never throws to the gateway.
+// Idempotent: duplicate events are silently ignored.
 // ============================================================
 
+/** Map of Stripe event types we handle → target pago estado */
+const WEBHOOK_EVENT_MAP: Record<string, string> = {
+  'checkout.session.completed': 'completado',
+  'checkout.session.expired': 'cancelado',
+  'payment_intent.payment_failed': 'fallido',
+  'charge.refunded': 'reembolsado',
+};
+
 export async function processWebhookEvent(payload: Buffer, signature: string) {
+  // 1. Verify signature (throws 400 on invalid — this is the ONLY case we reject)
   const gateway = getPaymentGateway();
-  const { event, type } = gateway.verifyWebhook(payload, signature);
+  const { event, type, eventId } = gateway.verifyWebhook(payload, signature);
 
-  logger.info({ type }, 'Stripe webhook event received');
+  logger.info({ type, eventId }, 'Webhook event received');
 
-  if (type === 'checkout.session.completed' || type === 'checkout.session.expired') {
-    const session = (event as { data?: { object?: { id?: string } } }).data?.object;
-    const externalId = session?.id;
+  // 2. Check if this is an event type we handle
+  const targetEstado = WEBHOOK_EVENT_MAP[type];
+  if (!targetEstado) {
+    logger.info({ type, eventId }, 'Webhook event type not handled — ignoring');
+    return { received: true };
+  }
 
-    if (!externalId) {
-      logger.warn({ type }, 'Webhook event missing session ID');
-      return { received: true };
-    }
+  // 3. Extract external ID from the event
+  const sessionObj = (event as { data?: { object?: { id?: string; payment_intent?: string | { id: string } } } }).data?.object;
+  const externalId = sessionObj?.id;
 
-    // Find pago by external_id
-    const { data: pago, error } = await (supabase
-      .from('pagos' as string) as ReturnType<typeof supabase.from>)
-      .select('id, estado')
-      .eq('external_id', externalId)
-      .single();
+  if (!externalId) {
+    logger.warn({ type, eventId }, 'Webhook event missing object ID');
+    return { received: true };
+  }
 
-    if (error || !pago) {
-      logger.warn({ externalId, type }, 'Pago not found for webhook event');
-      return { received: true };
-    }
+  // 4. Find pago by external_id (checkout session ID) or transaction_ref (payment intent / charge)
+  let lookupField = 'external_id';
+  let lookupValue = externalId;
 
-    if (type === 'checkout.session.completed') {
+  // For payment_intent and charge events, lookup by transaction_ref
+  if (type.startsWith('payment_intent.') || type.startsWith('charge.')) {
+    lookupField = 'transaction_ref';
+    lookupValue = externalId;
+  }
+
+  const { data: pago, error } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, expediente_id, concepto')
+    .eq(lookupField, lookupValue)
+    .single();
+
+  if (error || !pago) {
+    logger.warn({ lookupField, lookupValue, type, eventId }, 'Pago not found for webhook event');
+    return { received: true };
+  }
+
+  const pagoTyped = pago as { id: string; estado: string; expediente_id: string; concepto: string };
+
+  // 5. Idempotency check: if pago is already in the target state, skip
+  if (pagoTyped.estado === targetEstado) {
+    logger.info({ pagoId: pagoTyped.id, estado: targetEstado, eventId }, 'Webhook event already processed — idempotent skip');
+    return { received: true };
+  }
+
+  // 6. Also check if this specific eventId was already recorded
+  const { data: existingEvent } = await (supabase
+    .from('eventos_pago' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('pago_id', pagoTyped.id)
+    .eq('detalles->>stripe_event_id', eventId)
+    .limit(1);
+
+  if (existingEvent && existingEvent.length > 0) {
+    logger.info({ pagoId: pagoTyped.id, eventId }, 'Duplicate webhook eventId — idempotent skip');
+    return { received: true };
+  }
+
+  // 7. Process based on target state
+  try {
+    if (targetEstado === 'completado') {
+      // Fetch full payment status from Stripe for transaction_ref
       const status = await gateway.getPaymentStatus(externalId);
 
       await (supabase
@@ -468,29 +519,101 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
           gateway_response: status.rawResponse,
           fecha_pago: new Date().toISOString(),
         } as never)
-        .eq('id', pago.id);
+        .eq('id', pagoTyped.id);
 
-      await recordEvent(pago.id, 'completed', 'webhook', {
+      await recordEvent(pagoTyped.id, 'completed', 'webhook', {
+        stripe_event_id: eventId,
         stripe_event_type: type,
         transaction_ref: status.transactionRef,
       });
 
-      logger.info({ pagoId: pago.id, externalId }, 'Pago completed via webhook');
-    } else if (type === 'checkout.session.expired') {
+      // Internal notification: payment confirmed
+      await notifyPaymentConfirmed(pagoTyped.id, pagoTyped.expediente_id, pagoTyped.concepto);
+
+      logger.info({ pagoId: pagoTyped.id, eventId }, 'Pago completed via webhook');
+
+    } else if (targetEstado === 'cancelado') {
       await (supabase
         .from('pagos' as string) as ReturnType<typeof supabase.from>)
         .update({ estado: 'cancelado' } as never)
-        .eq('id', pago.id);
+        .eq('id', pagoTyped.id);
 
-      await recordEvent(pago.id, 'cancelled', 'webhook', {
+      await recordEvent(pagoTyped.id, 'cancelled', 'webhook', {
+        stripe_event_id: eventId,
         stripe_event_type: type,
       });
 
-      logger.info({ pagoId: pago.id, externalId }, 'Pago cancelled (session expired) via webhook');
+      logger.info({ pagoId: pagoTyped.id, eventId }, 'Pago cancelled via webhook');
+
+    } else if (targetEstado === 'fallido') {
+      await (supabase
+        .from('pagos' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: 'fallido' } as never)
+        .eq('id', pagoTyped.id);
+
+      await recordEvent(pagoTyped.id, 'failed', 'webhook', {
+        stripe_event_id: eventId,
+        stripe_event_type: type,
+      });
+
+      logger.info({ pagoId: pagoTyped.id, eventId }, 'Pago failed via webhook');
+
+    } else if (targetEstado === 'reembolsado') {
+      await (supabase
+        .from('pagos' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: 'reembolsado' } as never)
+        .eq('id', pagoTyped.id);
+
+      await recordEvent(pagoTyped.id, 'refunded', 'webhook', {
+        stripe_event_id: eventId,
+        stripe_event_type: type,
+      });
+
+      logger.info({ pagoId: pagoTyped.id, eventId }, 'Pago refunded via webhook');
     }
+
+    // Audit log (fire-and-forget, no user since it's a webhook)
+    logAudit({
+      usuarioId: null,
+      accion: AUDIT_ACTIONS.PAGO_WEBHOOK_PROCESSED,
+      entidad: AUDIT_ENTITIES.PAGO,
+      entidadId: pagoTyped.id,
+      detalle: { stripe_event_id: eventId, type, target_estado: targetEstado },
+    });
+
+  } catch (processingError) {
+    // Log but never throw — always return 200 to the gateway
+    logger.error({ processingError, pagoId: pagoTyped.id, eventId, type }, 'Error processing webhook event internally');
   }
 
   return { received: true };
+}
+
+// ============================================================
+// Internal notification: payment confirmed
+// Registers in expediente timeline and logs for other modules.
+// ============================================================
+
+async function notifyPaymentConfirmed(pagoId: string, expedienteId: string, concepto: string) {
+  try {
+    const conceptLabel = CONCEPTO_LABELS[concepto] || concepto;
+
+    // Add timeline entry to the expediente
+    await (supabase
+      .from('expediente_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: expedienteId,
+        tipo: 'pago_confirmado',
+        descripcion: `Pago de ${conceptLabel} confirmado`,
+        detalle: { pago_id: pagoId, concepto },
+        origen: 'system',
+      } as never);
+
+    logger.info({ pagoId, expedienteId, concepto }, 'Payment confirmation notified to expediente');
+  } catch (error) {
+    // Fire-and-forget — don't fail the webhook for this
+    logger.warn({ error, pagoId, expedienteId }, 'Error notifying payment confirmation');
+  }
 }
 
 // ============================================================

@@ -89,9 +89,10 @@ export class StripeAdapter implements PaymentGatewayAdapter {
       return {
         event: event as unknown as Record<string, unknown>,
         type: event.type,
+        eventId: event.id,
       };
     } catch (error) {
-      logger.warn({ error }, 'Stripe webhook signature verification failed');
+      logger.warn({ error, signature: signature?.substring(0, 20) }, 'Stripe webhook signature verification failed — possible tampering attempt');
       throw AppError.badRequest('Firma de webhook invalida', 'WEBHOOK_SIGNATURE_INVALID');
     }
   }

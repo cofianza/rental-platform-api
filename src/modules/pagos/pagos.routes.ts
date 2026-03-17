@@ -85,15 +85,15 @@ pagosRouter.post(
 );
 
 // ============================================================
-// Stripe webhook — /api/v1/webhooks/stripe
-// Needs raw body for signature verification
+// Payment webhook — /api/v1/webhooks/pagos
+// Needs raw body for HMAC signature verification. No JWT auth.
 // ============================================================
 
-const stripeWebhookRouter = Router();
-stripeWebhookRouter.post(
+const pagosWebhookRouter = Router();
+pagosWebhookRouter.post(
   '/',
   raw({ type: 'application/json' }),
   pagosController.handleWebhook,
 );
 
-export { expedientePagosRouter, pagosRouter, stripeWebhookRouter };
+export { expedientePagosRouter, pagosRouter, pagosWebhookRouter };
