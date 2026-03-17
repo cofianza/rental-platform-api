@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import { logger } from '@/lib/logger';
+import { env } from '@/config';
 import * as pagosService from './pagos.service';
 import * as stateMachine from './pago-state-machine';
 import type {
@@ -162,5 +163,60 @@ export async function handleWebhook(req: Request, res: Response) {
     // Any other internal error → still respond 200 to avoid retries
     logger.error({ error, ip: req.ip }, 'Webhook internal error — responding 200 to prevent retries');
     sendSuccess(res, { received: true });
+  }
+}
+
+// ============================================================
+// POST /api/v1/dev/webhooks/pagos/simulate — DEV ONLY
+// Simulates a Stripe webhook event to test payment flow locally
+// without needing Stripe CLI.
+// Body: { pago_id: string, event_type: 'completed' | 'failed' | 'expired' }
+// ============================================================
+
+export async function simulateWebhook(req: Request, res: Response) {
+  if (env.NODE_ENV === 'production') {
+    res.status(404).json({ success: false, message: 'Not found' });
+    return;
+  }
+
+  const { pago_id, event_type = 'completed' } = req.body as { pago_id: string; event_type?: string };
+
+  if (!pago_id) {
+    res.status(400).json({ success: false, message: 'pago_id is required' });
+    return;
+  }
+
+  const targetEstadoMap: Record<string, stateMachine.EstadoPago> = {
+    completed: 'completado',
+    failed: 'fallido',
+    expired: 'cancelado',
+  };
+
+  const targetEstado = targetEstadoMap[event_type];
+  if (!targetEstado) {
+    res.status(400).json({ success: false, message: `Invalid event_type. Use: ${Object.keys(targetEstadoMap).join(', ')}` });
+    return;
+  }
+
+  try {
+    const result = await stateMachine.transitionPagoState({
+      pagoId: pago_id,
+      targetEstado,
+      origen: 'webhook',
+      detalles: {
+        simulated: true,
+        stripe_event_id: `evt_simulated_${Date.now()}`,
+        stripe_event_type: `checkout.session.${event_type === 'completed' ? 'completed' : event_type === 'failed' ? 'async_payment_failed' : 'expired'}`,
+      },
+    });
+
+    logger.info({ pago_id, targetEstado }, '[DEV] Simulated webhook transition');
+    sendSuccess(res, result);
+  } catch (error) {
+    logger.error({ error, pago_id }, '[DEV] Simulated webhook error');
+    res.status(400).json({
+      success: false,
+      message: error instanceof Error ? error.message : 'Error in simulation',
+    });
   }
 }

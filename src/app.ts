@@ -31,7 +31,8 @@ import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
 import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
 import { firmaRouter, contratoFirmaSolicitudesRouter, publicFirmaRouter, aucoWebhookRouter, firmaCronRouter } from '@/modules/firma/firma.routes';
-import { expedientePagosRouter, pagosRouter, pagosWebhookRouter } from '@/modules/pagos/pagos.routes';
+import { expedientePagosRouter, pagosRouter, pagosWebhookRouter, devWebhookRouter } from '@/modules/pagos/pagos.routes';
+import { pagoEstudioRouter, publicPagoResultadoRouter } from '@/modules/pago-estudio/pago-estudio.routes';
 
 const app = express();
 
@@ -102,7 +103,10 @@ app.use('/api/v1/public/firma', publicFirmaRouter);
 app.use('/api/v1/webhooks/auco/firma', aucoWebhookRouter);
 app.use('/api/v1/cron/firma/expirar', firmaCronRouter);
 app.use('/api/v1/expedientes/:expedienteId/pagos', expedientePagosRouter);
+app.use('/api/v1/expedientes/:expedienteId/pago-estudio', pagoEstudioRouter);
 app.use('/api/v1/pagos', pagosRouter);
+app.use('/api/v1/publico/pago-resultado', publicPagoResultadoRouter);
+app.use('/api/v1/dev/webhooks/pagos', devWebhookRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

@@ -130,4 +130,14 @@ pagosWebhookRouter.post(
   pagosController.handleWebhook,
 );
 
-export { expedientePagosRouter, pagosRouter, pagosWebhookRouter };
+// ============================================================
+// DEV ONLY — Simulate webhook for local testing
+// ============================================================
+
+const devWebhookRouter = Router();
+devWebhookRouter.post(
+  '/simulate',
+  pagosController.simulateWebhook,
+);
+
+export { expedientePagosRouter, pagosRouter, pagosWebhookRouter, devWebhookRouter };

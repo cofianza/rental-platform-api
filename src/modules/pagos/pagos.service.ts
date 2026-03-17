@@ -512,6 +512,9 @@ export async function registerManualPayment(
 const WEBHOOK_EVENT_MAP: Record<string, EstadoPago> = {
   'checkout.session.completed': 'completado',
   'checkout.session.expired': 'cancelado',
+  'checkout.session.async_payment_succeeded': 'completado',
+  'checkout.session.async_payment_failed': 'fallido',
+  'payment_intent.succeeded': 'completado',
   'payment_intent.payment_failed': 'fallido',
   'charge.refunded': 'reembolsado',
 };
@@ -531,28 +534,62 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
   }
 
   // 3. Extract external ID from the event
-  const sessionObj = (event as { data?: { object?: { id?: string } } }).data?.object;
-  const externalId = sessionObj?.id;
+  const eventObj = (event as { data?: { object?: Record<string, unknown> } }).data?.object;
+  const externalId = eventObj?.id as string | undefined;
 
   if (!externalId) {
     logger.warn({ type, eventId }, 'Webhook event missing object ID');
     return { received: true };
   }
 
-  // 4. Find pago by external_id or transaction_ref
-  let lookupField = 'external_id';
-  if (type.startsWith('payment_intent.') || type.startsWith('charge.')) {
-    lookupField = 'transaction_ref';
+  // 4. Find pago — try external_id first, then transaction_ref as fallback.
+  //    For checkout.session.* events: external_id = session ID
+  //    For payment_intent.* events: try transaction_ref first, then check
+  //    if a checkout session stored this payment_intent via metadata.
+  let pago: Record<string, unknown> | null = null;
+
+  if (type.startsWith('checkout.session.')) {
+    // Checkout events — session ID is our external_id
+    const { data } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado')
+      .eq('external_id', externalId)
+      .single();
+    pago = data as Record<string, unknown> | null;
+  } else {
+    // payment_intent.* or charge.* — try transaction_ref first
+    const { data: byRef } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado')
+      .eq('transaction_ref', externalId)
+      .single();
+
+    if (byRef) {
+      pago = byRef as Record<string, unknown>;
+    } else {
+      // Fallback: for payment_intent events, Stripe includes the checkout session
+      // metadata. Try to find pago by matching the payment_intent's metadata.expediente_id
+      // or by fetching the checkout session that created this intent.
+      const metadata = eventObj?.metadata as Record<string, string> | undefined;
+      const expId = metadata?.expediente_id;
+      if (expId) {
+        const { data: byMeta } = await (supabase
+          .from('pagos' as string) as ReturnType<typeof supabase.from>)
+          .select('id, estado')
+          .eq('expediente_id', expId)
+          .eq('metodo', 'pasarela')
+          .in('estado', ['pendiente', 'procesando'])
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (byMeta && byMeta.length > 0) {
+          pago = byMeta[0] as Record<string, unknown>;
+        }
+      }
+    }
   }
 
-  const { data: pago, error } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado')
-    .eq(lookupField, externalId)
-    .single();
-
-  if (error || !pago) {
-    logger.warn({ lookupField, externalId, type, eventId }, 'Pago not found for webhook event');
+  if (!pago) {
+    logger.warn({ externalId, type, eventId }, 'Pago not found for webhook event');
     return { received: true };
   }
 
@@ -575,11 +612,33 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
   let extraUpdate: Record<string, unknown> | undefined;
   if (targetEstado === 'completado') {
     try {
-      const status = await gateway.getPaymentStatus(externalId);
-      extraUpdate = {
-        transaction_ref: status.transactionRef,
-        gateway_response: status.rawResponse,
-      };
+      // For checkout.session.* events, externalId is the session ID → use directly.
+      // For payment_intent.* events, externalId is the PI ID → use pago's external_id
+      // (which is the checkout session ID) to fetch full status.
+      let lookupId = externalId;
+      if (type.startsWith('payment_intent.')) {
+        // Fetch the pago's stored external_id (checkout session ID) for status lookup
+        const { data: fullPago } = await (supabase
+          .from('pagos' as string) as ReturnType<typeof supabase.from>)
+          .select('external_id')
+          .eq('id', pagoId)
+          .single();
+        const storedExternalId = (fullPago as { external_id: string } | null)?.external_id;
+        if (storedExternalId) {
+          lookupId = storedExternalId;
+        } else {
+          // No session ID available — store the PI ID as transaction_ref directly
+          extraUpdate = { transaction_ref: externalId };
+        }
+      }
+
+      if (!extraUpdate) {
+        const status = await gateway.getPaymentStatus(lookupId);
+        extraUpdate = {
+          transaction_ref: status.transactionRef,
+          gateway_response: status.rawResponse,
+        };
+      }
     } catch (err) {
       logger.warn({ err, pagoId }, 'Failed to fetch Stripe payment status — proceeding without');
     }
