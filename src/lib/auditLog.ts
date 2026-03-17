@@ -92,6 +92,12 @@ export const AUDIT_ACTIONS = {
   FIRMA_COMPLETADA: 'firma_completada',
   FIRMA_EVIDENCIA_CONSULTED: 'firma_evidencia_consulted',
   FIRMA_ACUSE_DOWNLOADED: 'firma_acuse_downloaded',
+  // Pagos
+  PAGO_CREATED: 'pago_created',
+  PAGO_MANUAL_REGISTERED: 'pago_manual_registered',
+  PAGO_COMPLETED: 'pago_completed',
+  PAGO_REFUNDED: 'pago_refunded',
+  PAGO_CANCELLED: 'pago_cancelled',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -112,6 +118,7 @@ export const AUDIT_ENTITIES = {
   AUTORIZACION: 'autorizacion',
   PLANTILLA: 'plantilla',
   CONTRATO: 'contrato',
+  PAGO: 'pago',
 } as const;
 
 interface AuditLogParams {

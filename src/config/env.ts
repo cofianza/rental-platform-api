@@ -24,6 +24,12 @@ const envSchema = z.object({
   AUCO_WEBHOOK_SECRET: z.string().optional(),
   AUCO_SENDER_EMAIL: z.string().default('hola@knowmeapp.com'),
 
+  // Payment gateway (Stripe)
+  PAYMENT_GATEWAY_PROVIDER: z.enum(['stripe']).default('stripe'),
+  STRIPE_SECRET_KEY: z.string().min(1),
+  STRIPE_PUBLISHABLE_KEY: z.string().min(1),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1),
+
   // Credit risk providers
   CREDIT_PROVIDER_USE_MOCK: z.string().default('true').transform((v) => v === 'true'),
   TRANSUNION_API_URL: z.string().url().optional(),
