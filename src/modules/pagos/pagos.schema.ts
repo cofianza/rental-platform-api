@@ -13,7 +13,7 @@ export const ESTADOS_PAGO = ['pendiente', 'procesando', 'completado', 'fallido',
 // ============================================================
 
 export const pagoIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de pago invalido' }),
+  pagoId: z.uuid({ error: 'ID de pago invalido' }),
 });
 
 export const expedienteIdParamsSchema = z.object({
@@ -21,16 +21,16 @@ export const expedienteIdParamsSchema = z.object({
 });
 
 // ============================================================
-// Create payment link (via gateway)
+// Create payment link (via gateway) — POST /expedientes/:expedienteId/pagos
 // ============================================================
 
 export const createPaymentLinkSchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de expediente invalido' }),
   concepto: z.enum(CONCEPTOS_PAGO, { error: 'Concepto invalido' }),
   monto: z.number().int().positive('Monto debe ser un entero positivo en COP'),
-  descripcion: z.string().max(500).optional(),
-  success_url: z.url({ error: 'URL de exito invalida' }),
-  cancel_url: z.url({ error: 'URL de cancelacion invalida' }),
+  descripcion: z.string().max(500).min(1, 'Descripcion es requerida'),
+  email_pagador: z.email({ error: 'Email del pagador invalido' }),
+  nombre_pagador: z.string().min(1, 'Nombre del pagador es requerido').max(200),
+  enviar_email: z.boolean().default(true),
 });
 
 // ============================================================
@@ -55,7 +55,6 @@ export const registerManualPaymentSchema = z.object({
 export const listPagosQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(10),
-  expediente_id: z.uuid().optional(),
   concepto: z.string().optional(),
   estado: z.string().optional(),
   sortBy: z.enum(['created_at', 'monto', 'fecha_pago']).default('created_at'),
@@ -67,6 +66,7 @@ export const listPagosQuerySchema = z.object({
 // ============================================================
 
 export type PagoIdParams = z.infer<typeof pagoIdParamsSchema>;
+export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type CreatePaymentLinkInput = z.infer<typeof createPaymentLinkSchema>;
 export type RegisterManualPaymentInput = z.infer<typeof registerManualPaymentSchema>;
 export type ListPagosQuery = z.infer<typeof listPagosQuerySchema>;

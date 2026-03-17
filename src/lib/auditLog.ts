@@ -98,6 +98,7 @@ export const AUDIT_ACTIONS = {
   PAGO_COMPLETED: 'pago_completed',
   PAGO_REFUNDED: 'pago_refunded',
   PAGO_CANCELLED: 'pago_cancelled',
+  PAGO_LINK_RESENT: 'pago_link_resent',
 } as const;
 
 export const AUDIT_ENTITIES = {

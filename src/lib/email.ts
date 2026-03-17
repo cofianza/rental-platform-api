@@ -665,6 +665,130 @@ function buildFirmaHtml(
 </html>`;
 }
 
+export async function sendPaymentLinkEmail(
+  to: string,
+  nombre: string,
+  paymentUrl: string,
+  context: { concepto: string; monto: string; expediente_numero: string },
+): Promise<void> {
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to,
+      subject: `Link de pago - ${context.concepto} - Habitar Propiedades`,
+      html: buildPaymentLinkHtml(nombre, paymentUrl, context),
+    });
+
+    logger.info({ to, concepto: context.concepto }, 'Email de link de pago enviado');
+  } catch (error) {
+    logger.error({ to, error }, 'Error al enviar email de link de pago');
+    throw error;
+  }
+}
+
+function buildPaymentLinkHtml(
+  nombre: string,
+  paymentUrl: string,
+  context: { concepto: string; monto: string; expediente_numero: string },
+): string {
+  return `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Link de pago</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%;">
+          <!-- Header -->
+          <tr>
+            <td align="center" style="padding-bottom: 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background-color: #0f766e; border-radius: 12px; width: 48px; height: 48px; text-align: center; vertical-align: middle;">
+                    <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
+                  </td>
+                  <td style="padding-left: 12px;">
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Habitar Propiedades</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+              <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
+                Link de pago
+              </h1>
+              <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                Hola ${nombre}, tienes un pago pendiente asociado a tu proceso de arrendamiento. A continuacion encontraras los detalles:
+              </p>
+
+              <!-- Payment details box -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Concepto:</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${context.concepto}</p>
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Monto:</p>
+                    <p style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: #0f766e;">${context.monto}</p>
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Expediente:</p>
+                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">${context.expediente_numero}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Button -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+                <tr>
+                  <td align="center">
+                    <a href="${paymentUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
+                      Realizar pago
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
+                Este link de pago expirara en <strong>48 horas</strong>. Si necesitas un nuevo link, contacta a tu agente inmobiliario.
+              </p>
+
+              <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
+
+              <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
+                Si el boton no funciona, copia y pega este enlace en tu navegador:
+              </p>
+              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
+                ${paymentUrl}
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding-top: 32px;">
+              <p style="margin: 0; font-size: 13px; color: #9ca3af;">
+                &copy; ${new Date().getFullYear()} Habitar Propiedades. Todos los derechos reservados.
+              </p>
+              <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
+                Este es un correo automatico, por favor no respondas a este mensaje.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 function buildPasswordResetHtml(resetUrl: string): string {
   return `
 <!DOCTYPE html>

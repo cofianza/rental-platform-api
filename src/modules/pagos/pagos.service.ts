@@ -2,6 +2,8 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { env } from '@/config';
+import { sendPaymentLinkEmail } from '@/lib/email';
 import { getPaymentGateway } from './gateway';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ListPagosQuery } from './pagos.schema';
 
@@ -12,7 +14,8 @@ import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ListPagosQuery
 const PAGO_SELECT = `
   id, expediente_id, concepto, descripcion, monto, moneda, metodo, estado,
   payment_link_url, external_id, transaction_ref, gateway_response,
-  comprobante_url, notas, fecha_pago, created_at, updated_at, creado_por
+  comprobante_url, notas, fecha_pago, created_at, updated_at, creado_por,
+  email_pagador, nombre_pagador
 `;
 
 async function recordEvent(
@@ -30,19 +33,31 @@ async function recordEvent(
   }
 }
 
+function formatCOP(amount: number): string {
+  return `$${amount.toLocaleString('es-CO')}`;
+}
+
+const CONCEPTO_LABELS: Record<string, string> = {
+  estudio: 'Estudio de riesgo crediticio',
+  garantia: 'Garantia de arrendamiento',
+  primer_canon: 'Primer canon de arrendamiento',
+  deposito: 'Deposito de garantia',
+  otro: 'Otro concepto',
+};
+
 // ============================================================
-// List pagos
+// List pagos by expediente
 // ============================================================
 
-export async function listPagos(query: ListPagosQuery) {
-  const { page, limit, expediente_id, concepto, estado, sortBy, sortDir } = query;
+export async function listPagosByExpediente(expedienteId: string, query: ListPagosQuery) {
+  const { page, limit, concepto, estado, sortBy, sortDir } = query;
   const offset = (page - 1) * limit;
 
   let builder = (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select(PAGO_SELECT, { count: 'exact' });
+    .select(PAGO_SELECT, { count: 'exact' })
+    .eq('expediente_id', expedienteId);
 
-  if (expediente_id) builder = builder.eq('expediente_id', expediente_id);
   if (concepto) builder = builder.eq('concepto', concepto);
   if (estado) {
     const estados = estado.split(',').map((s) => s.trim()).filter(Boolean);
@@ -71,7 +86,7 @@ export async function listPagos(query: ListPagosQuery) {
 }
 
 // ============================================================
-// Get pago by ID
+// Get pago by ID (with events)
 // ============================================================
 
 export async function getPagoById(id: string) {
@@ -90,72 +105,101 @@ export async function getPagoById(id: string) {
 }
 
 // ============================================================
-// Get eventos by pago ID
+// Get pago detail with events
 // ============================================================
 
-export async function getEventosByPagoId(pagoId: string) {
-  const { data, error } = await (supabase
+export async function getPagoDetailWithEvents(id: string) {
+  const pago = await getPagoById(id);
+
+  const { data: eventos, error } = await (supabase
     .from('eventos_pago' as string) as ReturnType<typeof supabase.from>)
     .select('id, pago_id, tipo, detalles, origen, created_at')
-    .eq('pago_id', pagoId)
+    .eq('pago_id', id)
     .order('created_at', { ascending: true });
 
   if (error) {
-    logger.error({ error: error.message, pagoId }, 'Error al obtener eventos de pago');
-    throw fromSupabaseError(error);
+    logger.error({ error: error.message, id }, 'Error al obtener eventos de pago');
   }
 
-  return data ?? [];
+  return {
+    ...pago,
+    eventos: eventos ?? [],
+  };
 }
 
 // ============================================================
-// Create payment link (via Stripe)
+// Create payment link (via Stripe) — POST /expedientes/:expedienteId/pagos
 // ============================================================
 
 export async function createPaymentLink(
+  expedienteId: string,
   input: CreatePaymentLinkInput,
   userId: string,
   ip?: string,
 ) {
-  // Verify expediente exists
+  // 1. Verify expediente exists
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero')
-    .eq('id', input.expediente_id)
+    .select('id, numero, estado')
+    .eq('id', expedienteId)
     .single();
 
   if (expError || !expediente) {
     throw AppError.notFound('Expediente no encontrado');
   }
 
-  const gateway = getPaymentGateway();
-  const conceptLabel = input.concepto.replace(/_/g, ' ');
+  // 2. Check for duplicate: no pendiente/procesando for same expediente+concepto
+  const { data: existing } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', input.concepto)
+    .in('estado', ['pendiente', 'procesando']);
 
-  // Create checkout session in Stripe
+  if (existing && existing.length > 0) {
+    throw AppError.conflict(
+      `Ya existe un pago ${input.concepto.replace(/_/g, ' ')} pendiente o en proceso para este expediente`,
+      'PAGO_DUPLICADO',
+    );
+  }
+
+  // 3. Build success/cancel URLs
+  const resultUrl = `${env.FRONTEND_URL}/pago/resultado`;
+  const successUrl = `${resultUrl}?status=success&expediente=${expedienteId}`;
+  const cancelUrl = `${resultUrl}?status=cancelled&expediente=${expedienteId}`;
+
+  // 4. Create checkout session in Stripe
+  const gateway = getPaymentGateway();
+  const conceptLabel = CONCEPTO_LABELS[input.concepto] || input.concepto;
+  const expNumero = (expediente as { numero: string }).numero;
+
   const linkResult = await gateway.createPaymentLink({
     amount: input.monto,
-    concept: `Pago ${conceptLabel} - Exp. ${(expediente as { numero: string }).numero}`,
-    description: input.descripcion || `Pago de ${conceptLabel}`,
+    concept: `${conceptLabel} - Exp. ${expNumero}`,
+    description: input.descripcion,
     metadata: {
-      expediente_id: input.expediente_id,
+      expediente_id: expedienteId,
       concepto: input.concepto,
+      email_pagador: input.email_pagador,
     },
-    successUrl: input.success_url,
-    cancelUrl: input.cancel_url,
+    successUrl,
+    cancelUrl,
   });
 
-  // Insert pago record
+  // 5. Insert pago record
   const { data: pago, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .insert({
-      expediente_id: input.expediente_id,
+      expediente_id: expedienteId,
       concepto: input.concepto,
-      descripcion: input.descripcion || null,
+      descripcion: input.descripcion,
       monto: input.monto,
       metodo: 'pasarela',
       estado: 'pendiente',
       payment_link_url: linkResult.url,
       external_id: linkResult.externalId,
+      email_pagador: input.email_pagador,
+      nombre_pagador: input.nombre_pagador,
       creado_por: userId,
     } as never)
     .select(PAGO_SELECT)
@@ -166,22 +210,161 @@ export async function createPaymentLink(
     throw fromSupabaseError(error);
   }
 
-  // Record event
+  // 6. Record event
   await recordEvent(pago.id, 'created', 'system', {
     gateway: gateway.provider,
     external_id: linkResult.externalId,
+    email_pagador: input.email_pagador,
   });
+
+  // 7. Send email if requested
+  if (input.enviar_email) {
+    try {
+      await sendPaymentLinkEmail(
+        input.email_pagador,
+        input.nombre_pagador,
+        linkResult.url,
+        {
+          concepto: conceptLabel,
+          monto: formatCOP(input.monto),
+          expediente_numero: expNumero,
+        },
+      );
+
+      await recordEvent(pago.id, 'link_sent', 'system', {
+        email: input.email_pagador,
+      });
+    } catch (emailError) {
+      logger.error({ emailError, pagoId: pago.id }, 'Error al enviar email de pago (pago creado correctamente)');
+    }
+  }
 
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.PAGO_CREATED,
     entidad: AUDIT_ENTITIES.PAGO,
     entidadId: pago.id,
-    detalle: { expediente_id: input.expediente_id, concepto: input.concepto, monto: input.monto },
+    detalle: {
+      expediente_id: expedienteId,
+      concepto: input.concepto,
+      monto: input.monto,
+      email_pagador: input.email_pagador,
+    },
     ip,
   });
 
   return pago;
+}
+
+// ============================================================
+// Cancel pago — PATCH /pagos/:pagoId/cancelar
+// ============================================================
+
+export async function cancelPago(pagoId: string, userId: string, ip?: string) {
+  const pago = await getPagoById(pagoId);
+
+  if ((pago as { estado: string }).estado !== 'pendiente') {
+    throw AppError.badRequest(
+      'Solo se pueden cancelar pagos en estado pendiente',
+      'PAGO_NO_CANCELABLE',
+    );
+  }
+
+  const { data: updated, error } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'cancelado' } as never)
+    .eq('id', pagoId)
+    .select(PAGO_SELECT)
+    .single();
+
+  if (error) {
+    logger.error({ error: error.message, pagoId }, 'Error al cancelar pago');
+    throw fromSupabaseError(error);
+  }
+
+  await recordEvent(pagoId, 'cancelled', 'manual', {
+    cancelado_por: userId,
+  });
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.PAGO_CANCELLED,
+    entidad: AUDIT_ENTITIES.PAGO,
+    entidadId: pagoId,
+    detalle: { estado_anterior: 'pendiente' },
+    ip,
+  });
+
+  return updated;
+}
+
+// ============================================================
+// Resend payment link email — POST /pagos/:pagoId/reenviar-link
+// ============================================================
+
+export async function resendPaymentLink(pagoId: string, userId: string, ip?: string) {
+  const pago = await getPagoById(pagoId) as {
+    id: string;
+    estado: string;
+    payment_link_url: string | null;
+    email_pagador: string | null;
+    nombre_pagador: string | null;
+    concepto: string;
+    monto: number;
+    expediente_id: string;
+  };
+
+  if (pago.estado !== 'pendiente') {
+    throw AppError.badRequest(
+      'Solo se puede reenviar el link de pagos en estado pendiente',
+      'PAGO_NO_REENVIABLE',
+    );
+  }
+
+  if (!pago.payment_link_url) {
+    throw AppError.badRequest('Este pago no tiene un link de pago asociado', 'NO_PAYMENT_LINK');
+  }
+
+  if (!pago.email_pagador) {
+    throw AppError.badRequest('Este pago no tiene email del pagador', 'NO_EMAIL_PAGADOR');
+  }
+
+  // Get expediente numero for email context
+  const { data: expediente } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('numero')
+    .eq('id', pago.expediente_id)
+    .single();
+
+  const conceptLabel = CONCEPTO_LABELS[pago.concepto] || pago.concepto;
+  const expNumero = (expediente as { numero: string } | null)?.numero || '';
+
+  await sendPaymentLinkEmail(
+    pago.email_pagador,
+    pago.nombre_pagador || '',
+    pago.payment_link_url,
+    {
+      concepto: conceptLabel,
+      monto: formatCOP(pago.monto),
+      expediente_numero: expNumero,
+    },
+  );
+
+  await recordEvent(pagoId, 'link_sent', 'system', {
+    email: pago.email_pagador,
+    reenviado_por: userId,
+  });
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.PAGO_LINK_RESENT,
+    entidad: AUDIT_ENTITIES.PAGO,
+    entidadId: pagoId,
+    detalle: { email: pago.email_pagador },
+    ip,
+  });
+
+  return { message: `Link de pago reenviado a ${pago.email_pagador}` };
 }
 
 // ============================================================
@@ -275,7 +458,6 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
     }
 
     if (type === 'checkout.session.completed') {
-      // Get payment status from Stripe to get transaction_ref
       const status = await gateway.getPaymentStatus(externalId);
 
       await (supabase

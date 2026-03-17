@@ -6,48 +6,59 @@ import type {
   RegisterManualPaymentInput,
   ListPagosQuery,
   PagoIdParams,
+  ExpedienteIdParams,
 } from './pagos.schema';
 
 // ============================================================
-// GET /api/v1/pagos — List pagos
+// GET /api/v1/expedientes/:expedienteId/pagos — List pagos by expediente
 // ============================================================
 
-export async function list(req: Request, res: Response) {
+export async function listByExpediente(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as ExpedienteIdParams;
   const query = req.query as unknown as ListPagosQuery;
-  const result = await pagosService.listPagos(query);
+  const result = await pagosService.listPagosByExpediente(expedienteId, query);
   sendSuccess(res, result.pagos, 200, result.pagination);
 }
 
 // ============================================================
-// GET /api/v1/pagos/:id — Get pago by ID
+// POST /api/v1/expedientes/:expedienteId/pagos — Create payment link
+// ============================================================
+
+export async function createPaymentLink(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as ExpedienteIdParams;
+  const input = req.body as CreatePaymentLinkInput;
+  const pago = await pagosService.createPaymentLink(expedienteId, input, req.user!.id, req.ip);
+  sendCreated(res, pago);
+}
+
+// ============================================================
+// GET /api/v1/pagos/:pagoId — Get pago detail with events
 // ============================================================
 
 export async function getById(req: Request, res: Response) {
-  const { id } = req.params as unknown as PagoIdParams;
-  const pago = await pagosService.getPagoById(id);
+  const { pagoId } = req.params as unknown as PagoIdParams;
+  const pago = await pagosService.getPagoDetailWithEvents(pagoId);
   sendSuccess(res, pago);
 }
 
 // ============================================================
-// GET /api/v1/pagos/:id/eventos — Get pago events
+// PATCH /api/v1/pagos/:pagoId/cancelar — Cancel pending payment
 // ============================================================
 
-export async function getEventos(req: Request, res: Response) {
-  const { id } = req.params as unknown as PagoIdParams;
-  // Verify pago exists
-  await pagosService.getPagoById(id);
-  const eventos = await pagosService.getEventosByPagoId(id);
-  sendSuccess(res, eventos);
+export async function cancel(req: Request, res: Response) {
+  const { pagoId } = req.params as unknown as PagoIdParams;
+  const pago = await pagosService.cancelPago(pagoId, req.user!.id, req.ip);
+  sendSuccess(res, pago);
 }
 
 // ============================================================
-// POST /api/v1/pagos/payment-link — Create payment link
+// POST /api/v1/pagos/:pagoId/reenviar-link — Resend payment link email
 // ============================================================
 
-export async function createPaymentLink(req: Request, res: Response) {
-  const input = req.body as CreatePaymentLinkInput;
-  const pago = await pagosService.createPaymentLink(input, req.user!.id, req.ip);
-  sendCreated(res, pago);
+export async function resendLink(req: Request, res: Response) {
+  const { pagoId } = req.params as unknown as PagoIdParams;
+  const result = await pagosService.resendPaymentLink(pagoId, req.user!.id, req.ip);
+  sendSuccess(res, result);
 }
 
 // ============================================================
