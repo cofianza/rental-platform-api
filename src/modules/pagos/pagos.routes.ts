@@ -6,6 +6,7 @@ import {
   expedienteIdParamsSchema,
   createPaymentLinkSchema,
   registerManualPaymentSchema,
+  comprobantePresignedUrlSchema,
   listPagosQuerySchema,
 } from './pagos.schema';
 import * as pagosController from './pagos.controller';
@@ -33,6 +34,14 @@ expedientePagosRouter.post(
   pagosController.createPaymentLink,
 );
 
+// POST /expedientes/:expedienteId/pagos/manual — Register manual payment (HP-350)
+expedientePagosRouter.post(
+  '/manual',
+  authorize('pagos', 'create'),
+  validate({ params: expedienteIdParamsSchema, body: registerManualPaymentSchema }),
+  pagosController.registerManualPayment,
+);
+
 // ============================================================
 // Pagos routes — /api/v1/pagos
 // ============================================================
@@ -53,11 +62,12 @@ pagosRouter.get(
   pagosController.getGatewayStatus,
 );
 
+// POST /pagos/comprobante/presigned-url — Get presigned URL for comprobante upload (HP-350)
 pagosRouter.post(
-  '/manual',
+  '/comprobante/presigned-url',
   authorize('pagos', 'create'),
-  validate({ body: registerManualPaymentSchema }),
-  pagosController.registerManualPayment,
+  validate({ body: comprobantePresignedUrlSchema }),
+  pagosController.comprobantePresignedUrl,
 );
 
 // GET /pagos/:pagoId — Detail with events
@@ -82,6 +92,14 @@ pagosRouter.post(
   authorize('pagos', 'update'),
   validate({ params: pagoIdParamsSchema }),
   pagosController.resendLink,
+);
+
+// GET /pagos/:pagoId/comprobante — Download comprobante (HP-350)
+pagosRouter.get(
+  '/:pagoId/comprobante',
+  authorize('pagos', 'read'),
+  validate({ params: pagoIdParamsSchema }),
+  pagosController.getComprobante,
 );
 
 // ============================================================

@@ -34,18 +34,35 @@ export const createPaymentLinkSchema = z.object({
 });
 
 // ============================================================
-// Register manual payment
+// Register manual payment — POST /expedientes/:expedienteId/pagos/manual
 // ============================================================
 
 export const registerManualPaymentSchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de expediente invalido' }),
   concepto: z.enum(CONCEPTOS_PAGO, { error: 'Concepto invalido' }),
   monto: z.number().int().positive('Monto debe ser un entero positivo en COP'),
   metodo: z.enum(['transferencia', 'efectivo', 'cheque'] as const, { error: 'Metodo de pago invalido' }),
   descripcion: z.string().max(500).optional(),
-  comprobante_url: z.string().max(1000).optional(),
+  referencia_bancaria: z.string().max(255).optional(),
   notas: z.string().max(2000).optional(),
-  fecha_pago: z.coerce.date().optional(),
+  fecha_pago: z.string().min(1, 'Fecha de pago es requerida'),
+  // Comprobante file metadata (from presigned URL flow)
+  comprobante_storage_key: z.string().max(500).optional(),
+  comprobante_nombre_original: z.string().max(255).optional(),
+  comprobante_tipo_mime: z.string().max(100).optional(),
+  comprobante_tamano_bytes: z.number().int().positive().optional(),
+});
+
+// ============================================================
+// Presigned URL for comprobante upload
+// ============================================================
+
+const COMPROBANTE_MIMES = ['application/pdf', 'image/jpeg', 'image/png'] as const;
+const COMPROBANTE_MAX_MB = 5;
+
+export const comprobantePresignedUrlSchema = z.object({
+  nombre_original: z.string().min(1).max(255),
+  tipo_mime: z.enum(COMPROBANTE_MIMES, { error: 'Solo se aceptan archivos PDF, JPG o PNG' }),
+  tamano_bytes: z.coerce.number().int().positive().max(COMPROBANTE_MAX_MB * 1024 * 1024, `Archivo excede el limite de ${COMPROBANTE_MAX_MB}MB`),
 });
 
 // ============================================================
@@ -69,4 +86,5 @@ export type PagoIdParams = z.infer<typeof pagoIdParamsSchema>;
 export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type CreatePaymentLinkInput = z.infer<typeof createPaymentLinkSchema>;
 export type RegisterManualPaymentInput = z.infer<typeof registerManualPaymentSchema>;
+export type ComprobantePresignedUrlInput = z.infer<typeof comprobantePresignedUrlSchema>;
 export type ListPagosQuery = z.infer<typeof listPagosQuerySchema>;

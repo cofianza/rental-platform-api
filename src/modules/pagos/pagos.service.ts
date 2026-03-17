@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -5,7 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { sendPaymentLinkEmail } from '@/lib/email';
 import { getPaymentGateway } from './gateway';
-import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ListPagosQuery } from './pagos.schema';
+import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
 
 // ============================================================
 // Helpers
@@ -14,9 +15,14 @@ import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ListPagosQuery
 const PAGO_SELECT = `
   id, expediente_id, concepto, descripcion, monto, moneda, metodo, estado,
   payment_link_url, external_id, transaction_ref, gateway_response,
-  comprobante_url, notas, fecha_pago, created_at, updated_at, creado_por,
+  comprobante_url, comprobante_storage_key, comprobante_nombre_original,
+  comprobante_tipo_mime, comprobante_tamano_bytes, referencia_bancaria,
+  notas, fecha_pago, created_at, updated_at, creado_por,
   email_pagador, nombre_pagador
 `;
+
+const COMPROBANTE_BUCKET = 'pagos-comprobantes';
+const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
 
 async function recordEvent(
   pagoId: string,
@@ -368,10 +374,71 @@ export async function resendPaymentLink(pagoId: string, userId: string, ip?: str
 }
 
 // ============================================================
-// Register manual payment
+// Presigned URL for comprobante upload (HP-350)
+// ============================================================
+
+export async function generateComprobantePresignedUrl(
+  input: ComprobantePresignedUrlInput,
+  userId: string,
+) {
+  const ext = input.nombre_original.split('.').pop()?.toLowerCase() || 'bin';
+  const storageKey = `comprobantes/${userId}/${crypto.randomUUID()}.${ext}`;
+
+  const { data, error } = await supabase.storage
+    .from(COMPROBANTE_BUCKET)
+    .createSignedUploadUrl(storageKey);
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error generating comprobante presigned URL');
+    throw AppError.badRequest('Error al generar URL de carga', 'STORAGE_ERROR');
+  }
+
+  return {
+    signedUrl: data.signedUrl,
+    storage_key: storageKey,
+    token: data.token,
+    expires_in: PRESIGNED_URL_EXPIRY,
+  };
+}
+
+// ============================================================
+// Get comprobante download URL (HP-350)
+// ============================================================
+
+export async function getComprobanteUrl(pagoId: string) {
+  const pago = await getPagoById(pagoId) as {
+    comprobante_storage_key: string | null;
+    comprobante_nombre_original: string | null;
+  };
+
+  if (!pago.comprobante_storage_key) {
+    throw AppError.notFound('Este pago no tiene comprobante adjunto');
+  }
+
+  const { data, error } = await supabase.storage
+    .from(COMPROBANTE_BUCKET)
+    .createSignedUrl(pago.comprobante_storage_key, PRESIGNED_URL_EXPIRY, {
+      download: pago.comprobante_nombre_original || 'comprobante',
+    });
+
+  if (error) {
+    logger.error({ error: error.message, pagoId }, 'Error generating comprobante download URL');
+    throw AppError.badRequest('Error al generar URL de descarga', 'STORAGE_ERROR');
+  }
+
+  return {
+    url: data.signedUrl,
+    nombre_original: pago.comprobante_nombre_original,
+    expires_in: PRESIGNED_URL_EXPIRY,
+  };
+}
+
+// ============================================================
+// Register manual payment — POST /expedientes/:expedienteId/pagos/manual (HP-350)
 // ============================================================
 
 export async function registerManualPayment(
+  expedienteId: string,
   input: RegisterManualPaymentInput,
   userId: string,
   ip?: string,
@@ -380,25 +447,46 @@ export async function registerManualPayment(
   const { error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('id')
-    .eq('id', input.expediente_id)
+    .eq('id', expedienteId)
     .single();
 
   if (expError) {
     throw AppError.notFound('Expediente no encontrado');
   }
 
+  // Validate fecha_pago is not in the future
+  const fechaPago = new Date(input.fecha_pago);
+  if (fechaPago > new Date()) {
+    throw AppError.badRequest('La fecha de pago no puede ser una fecha futura', 'FECHA_FUTURA');
+  }
+
+  // If comprobante was provided, verify file exists in storage
+  if (input.comprobante_storage_key) {
+    const { data: fileCheck } = await supabase.storage
+      .from(COMPROBANTE_BUCKET)
+      .createSignedUrl(input.comprobante_storage_key, 60);
+
+    if (!fileCheck) {
+      throw AppError.badRequest('El comprobante no se encontro en el almacenamiento', 'COMPROBANTE_NOT_FOUND');
+    }
+  }
+
   const { data: pago, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .insert({
-      expediente_id: input.expediente_id,
+      expediente_id: expedienteId,
       concepto: input.concepto,
       descripcion: input.descripcion || null,
       monto: input.monto,
       metodo: input.metodo,
       estado: 'completado',
-      comprobante_url: input.comprobante_url || null,
+      referencia_bancaria: input.referencia_bancaria || null,
+      comprobante_storage_key: input.comprobante_storage_key || null,
+      comprobante_nombre_original: input.comprobante_nombre_original || null,
+      comprobante_tipo_mime: input.comprobante_tipo_mime || null,
+      comprobante_tamano_bytes: input.comprobante_tamano_bytes || null,
       notas: input.notas || null,
-      fecha_pago: input.fecha_pago || new Date().toISOString(),
+      fecha_pago: fechaPago.toISOString(),
       creado_por: userId,
     } as never)
     .select(PAGO_SELECT)
@@ -412,6 +500,7 @@ export async function registerManualPayment(
   await recordEvent(pago.id, 'completed', 'manual', {
     metodo: input.metodo,
     registrado_por: userId,
+    tiene_comprobante: !!input.comprobante_storage_key,
   });
 
   logAudit({
@@ -419,7 +508,12 @@ export async function registerManualPayment(
     accion: AUDIT_ACTIONS.PAGO_MANUAL_REGISTERED,
     entidad: AUDIT_ENTITIES.PAGO,
     entidadId: pago.id,
-    detalle: { expediente_id: input.expediente_id, concepto: input.concepto, monto: input.monto, metodo: input.metodo },
+    detalle: {
+      expediente_id: expedienteId,
+      concepto: input.concepto,
+      monto: input.monto,
+      metodo: input.metodo,
+    },
     ip,
   });
 

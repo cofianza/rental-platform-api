@@ -5,6 +5,7 @@ import * as pagosService from './pagos.service';
 import type {
   CreatePaymentLinkInput,
   RegisterManualPaymentInput,
+  ComprobantePresignedUrlInput,
   ListPagosQuery,
   PagoIdParams,
   ExpedienteIdParams,
@@ -63,13 +64,34 @@ export async function resendLink(req: Request, res: Response) {
 }
 
 // ============================================================
-// POST /api/v1/pagos/manual — Register manual payment
+// POST /api/v1/expedientes/:expedienteId/pagos/manual — Register manual payment
 // ============================================================
 
 export async function registerManualPayment(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as ExpedienteIdParams;
   const input = req.body as RegisterManualPaymentInput;
-  const pago = await pagosService.registerManualPayment(input, req.user!.id, req.ip);
+  const pago = await pagosService.registerManualPayment(expedienteId, input, req.user!.id, req.ip);
   sendCreated(res, pago);
+}
+
+// ============================================================
+// POST /api/v1/pagos/comprobante/presigned-url — Get presigned URL for comprobante
+// ============================================================
+
+export async function comprobantePresignedUrl(req: Request, res: Response) {
+  const input = req.body as ComprobantePresignedUrlInput;
+  const result = await pagosService.generateComprobantePresignedUrl(input, req.user!.id);
+  sendSuccess(res, result);
+}
+
+// ============================================================
+// GET /api/v1/pagos/:pagoId/comprobante — Get comprobante download URL
+// ============================================================
+
+export async function getComprobante(req: Request, res: Response) {
+  const { pagoId } = req.params as unknown as PagoIdParams;
+  const result = await pagosService.getComprobanteUrl(pagoId);
+  sendSuccess(res, result);
 }
 
 // ============================================================
