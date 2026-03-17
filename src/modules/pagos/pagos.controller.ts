@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import { logger } from '@/lib/logger';
 import * as pagosService from './pagos.service';
+import * as stateMachine from './pago-state-machine';
 import type {
   CreatePaymentLinkInput,
   RegisterManualPaymentInput,
@@ -93,6 +94,26 @@ export async function getComprobante(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
   const result = await pagosService.getComprobanteUrl(pagoId);
   sendSuccess(res, result);
+}
+
+// ============================================================
+// GET /api/v1/pagos/:pagoId/eventos — Full event history (HP-352)
+// ============================================================
+
+export async function getEventos(req: Request, res: Response) {
+  const { pagoId } = req.params as unknown as PagoIdParams;
+  const eventos = await stateMachine.getPagoEventos(pagoId);
+  sendSuccess(res, eventos);
+}
+
+// ============================================================
+// GET /api/v1/pagos/:pagoId/estado — Current state + last transition (HP-352)
+// ============================================================
+
+export async function getEstado(req: Request, res: Response) {
+  const { pagoId } = req.params as unknown as PagoIdParams;
+  const estado = await stateMachine.getPagoEstado(pagoId);
+  sendSuccess(res, estado);
 }
 
 // ============================================================

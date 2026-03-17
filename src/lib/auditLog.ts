@@ -100,6 +100,7 @@ export const AUDIT_ACTIONS = {
   PAGO_CANCELLED: 'pago_cancelled',
   PAGO_LINK_RESENT: 'pago_link_resent',
   PAGO_WEBHOOK_PROCESSED: 'pago_webhook_processed',
+  PAGO_STATE_TRANSITIONED: 'pago_state_transitioned',
 } as const;
 
 export const AUDIT_ENTITIES = {

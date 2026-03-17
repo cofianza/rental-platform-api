@@ -102,6 +102,22 @@ pagosRouter.get(
   pagosController.getComprobante,
 );
 
+// GET /pagos/:pagoId/eventos — Full event history (HP-352)
+pagosRouter.get(
+  '/:pagoId/eventos',
+  authorize('pagos', 'read'),
+  validate({ params: pagoIdParamsSchema }),
+  pagosController.getEventos,
+);
+
+// GET /pagos/:pagoId/estado — Current state + last transition metadata (HP-352)
+pagosRouter.get(
+  '/:pagoId/estado',
+  authorize('pagos', 'read'),
+  validate({ params: pagoIdParamsSchema }),
+  pagosController.getEstado,
+);
+
 // ============================================================
 // Payment webhook — /api/v1/webhooks/pagos
 // Needs raw body for HMAC signature verification. No JWT auth.
