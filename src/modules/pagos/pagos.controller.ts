@@ -17,7 +17,8 @@ import type {
 
 export async function listByExpediente(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const query = req.query as unknown as ListPagosQuery;
+  // Use validatedQuery to get parsed data with defaults applied
+  const query = (req as Request & { validatedQuery: ListPagosQuery }).validatedQuery;
   const result = await pagosService.listPagosByExpediente(expedienteId, query);
   sendSuccess(res, result.pagos, 200, result.pagination);
 }

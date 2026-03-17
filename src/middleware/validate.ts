@@ -66,9 +66,11 @@ export function validate(schemas: ValidationSchemas) {
             received: getValueAtPath(req.query, issue.path as (string | number)[]),
           });
         }
+      } else {
+        // En Express 5, req.query es de solo lectura
+        // Guardamos los datos parseados (con defaults aplicados) en req.validatedQuery
+        (req as Request & { validatedQuery: unknown }).validatedQuery = result.data;
       }
-      // En Express 5, req.query es de solo lectura - la validación ya verificó los datos
-      // Los controladores deben usar req.query directamente (ya está validado)
     }
 
     if (errors.length > 0) {

@@ -56,7 +56,12 @@ const CONCEPTO_LABELS: Record<string, string> = {
 // ============================================================
 
 export async function listPagosByExpediente(expedienteId: string, query: ListPagosQuery) {
-  const { page, limit, concepto, estado, sortBy, sortDir } = query;
+  // Apply defaults defensively in case validation middleware didn't run
+  const page = query.page ?? 1;
+  const limit = query.limit ?? 10;
+  const sortBy = query.sortBy ?? 'created_at';
+  const sortDir = query.sortDir ?? 'desc';
+  const { concepto, estado } = query;
   const offset = (page - 1) * limit;
 
   let builder = (supabase
