@@ -8,6 +8,7 @@ import {
   updateInmuebleSchema,
   searchInmueblesQuerySchema,
   listCambiosQuerySchema,
+  visibilitySchema,
 } from './inmuebles.schema';
 import {
   inmuebleIdOnlyParamsSchema,
@@ -76,6 +77,15 @@ router.patch(
   authorize('inmuebles', 'update'),
   validate({ params: inmuebleIdParamsSchema, body: updateInmuebleSchema }),
   inmueblesController.update,
+);
+
+// Toggle vitrina visibility (admin only) — HP-369
+router.patch(
+  '/:id/visibility',
+  roleGuard(['administrador']),
+  authorize('inmuebles', 'update'),
+  validate({ params: inmuebleIdParamsSchema, body: visibilitySchema }),
+  inmueblesController.toggleVisibility,
 );
 
 // RN-006: Solo administrador puede ejecutar la baja logica

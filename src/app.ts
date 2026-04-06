@@ -33,6 +33,11 @@ import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes
 import { firmaRouter, contratoFirmaSolicitudesRouter, publicFirmaRouter, aucoWebhookRouter, firmaCronRouter } from '@/modules/firma/firma.routes';
 import { expedientePagosRouter, pagosRouter, pagosWebhookRouter, devWebhookRouter } from '@/modules/pagos/pagos.routes';
 import { pagoEstudioRouter, publicPagoResultadoRouter } from '@/modules/pago-estudio/pago-estudio.routes';
+import dashboardRouter from '@/modules/dashboard/dashboard.routes';
+import reportesRouter from '@/modules/reportes/reportes.routes';
+import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
+import { vitrinaRouter } from '@/modules/vitrina/vitrina.routes';
+import exportRouter from '@/modules/export/export.routes';
 
 const app = express();
 
@@ -107,6 +112,11 @@ app.use('/api/v1/expedientes/:expedienteId/pago-estudio', pagoEstudioRouter);
 app.use('/api/v1/pagos', pagosRouter);
 app.use('/api/v1/publico/pago-resultado', publicPagoResultadoRouter);
 app.use('/api/v1/dev/webhooks/pagos', devWebhookRouter);
+app.use('/api/v1/dashboard', dashboardRouter);
+app.use('/api/v1/reportes', reportesRouter);
+app.use('/api/v1/public/properties', publicPropertiesRouter);
+app.use('/api/v1/vitrina', vitrinaRouter);
+app.use('/api/v1/export', exportRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

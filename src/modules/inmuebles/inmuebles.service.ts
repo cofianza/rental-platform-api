@@ -420,6 +420,32 @@ export async function validateDisponibleParaEstudio(inmuebleId: string) {
   return inmueble;
 }
 
+// Toggle vitrina visibility — HP-369
+export async function toggleVisibility(id: string, visible_vitrina: boolean, userId: string) {
+  // Verify inmueble exists
+  const inmueble = await getInmuebleById(id);
+  const estado = (inmueble as unknown as Record<string, unknown>).estado as string;
+
+  // Only available inmuebles can be published
+  if (visible_vitrina && estado !== 'disponible') {
+    throw AppError.badRequest('Solo inmuebles disponibles pueden publicarse en la vitrina');
+  }
+
+  const { error } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .update({ visible_vitrina } as never)
+    .eq('id', id);
+
+  if (error) {
+    logger.error({ error: error.message, id }, 'Error al actualizar visibilidad de inmueble');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar la visibilidad del inmueble');
+  }
+
+  logger.info({ id, visible_vitrina, userId }, 'Visibilidad de inmueble actualizada — HP-369');
+
+  return getInmuebleById(id);
+}
+
 export async function getFilterOptions() {
   const { data, error } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)

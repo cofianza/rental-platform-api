@@ -18,7 +18,8 @@
     "db:seed": "ts-node -r tsconfig-paths/register src/lib/seed.ts",
     "db:studio": "supabase studio",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:transunion": "npx tsx src/scripts/test-transunion.ts"
   },
   "keywords": [
     "habitar",
@@ -31,6 +32,7 @@
     "@supabase/supabase-js": "^2.95.3",
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",

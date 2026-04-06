@@ -55,8 +55,9 @@ export const passwordResetLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     const email = (req.body as { email?: string })?.email;
-    return email ? email.toLowerCase() : 'unknown';
+    return email ? email.toLowerCase() : (req.ip ?? 'unknown');
   },
+  validate: false,
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',

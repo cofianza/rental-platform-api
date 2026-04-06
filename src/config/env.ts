@@ -32,10 +32,19 @@ const envSchema = z.object({
 
   // Credit risk providers
   CREDIT_PROVIDER_USE_MOCK: z.string().default('true').transform((v) => v === 'true'),
-  TRANSUNION_API_URL: z.string().url().optional(),
-  TRANSUNION_API_KEY: z.string().optional(),
+
+  // TransUnion Colombia (Basic Auth — Combo CreditVision + Info Comercial 1901)
+  TRANSUNION_API_URL: z.string().url().default('https://tucoapplicationserviceuat.transunion.co/ws/v1/rest/consultarCombo'),
+  TRANSUNION_USERNAME: z.string().optional(),
+  TRANSUNION_PASSWORD: z.string().optional(),
+  TRANSUNION_POLICY_ID: z.string().default('3176'),
+  TRANSUNION_CONSULTA_MOTIVO: z.string().default('22'),
+
+  // SIFIN
   SIFIN_API_URL: z.string().url().optional(),
   SIFIN_API_KEY: z.string().optional(),
+
+  // DataCredito
   DATACREDITO_API_URL: z.string().url().optional(),
   DATACREDITO_API_KEY: z.string().optional(),
 });

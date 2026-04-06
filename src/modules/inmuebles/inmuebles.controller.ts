@@ -9,6 +9,7 @@ import type {
   UpdateInmuebleInput,
   SearchInmueblesQuery,
   ListCambiosQuery,
+  VisibilityInput,
 } from './inmuebles.schema';
 
 export async function list(req: Request, res: Response) {
@@ -64,4 +65,12 @@ export async function getCambiosResumen(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
   const result = await cambiosService.getCambiosResumen(id);
   sendSuccess(res, result);
+}
+
+// Toggle vitrina visibility — HP-369
+export async function toggleVisibility(req: Request, res: Response) {
+  const { id } = req.params as unknown as InmuebleIdParams;
+  const { visible_vitrina } = req.body as VisibilityInput;
+  const inmueble = await inmueblesService.toggleVisibility(id, visible_vitrina, req.user!.id);
+  sendSuccess(res, inmueble);
 }

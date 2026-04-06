@@ -136,3 +136,10 @@ export type UpdateInmuebleInput = z.infer<typeof updateInmuebleSchema>;
 export type ListInmueblesQuery = z.infer<typeof listInmueblesQuerySchema>;
 export type SearchInmueblesQuery = z.infer<typeof searchInmueblesQuerySchema>;
 export type ListCambiosQuery = z.infer<typeof listCambiosQuerySchema>;
+
+// --- Visibilidad vitrina (HP-369) ---
+export const visibilitySchema = z.object({
+  visible_vitrina: z.boolean(),
+});
+
+export type VisibilityInput = z.infer<typeof visibilitySchema>;
