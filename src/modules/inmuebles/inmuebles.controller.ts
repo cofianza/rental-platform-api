@@ -30,6 +30,10 @@ export async function getById(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const input = req.body as CreateInmuebleInput;
+  // Propietario: force propietario_id to their own user ID
+  if (req.user?.rol === 'propietario') {
+    (input as Record<string, unknown>).propietario_id = req.user.id;
+  }
   const inmueble = await inmueblesService.createInmueble(input, req.user!.id, req.ip);
   sendCreated(res, inmueble);
 }
