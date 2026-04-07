@@ -72,6 +72,13 @@ router.post(
   inmueblesController.create,
 );
 
+// Upload fachada image via backend (avoids Supabase Storage auth issues on frontend)
+router.post(
+  '/upload-fachada',
+  authorize('inmuebles', 'create'),
+  inmueblesController.uploadFachada,
+);
+
 router.patch(
   '/:id',
   authorize('inmuebles', 'update'),
