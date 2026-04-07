@@ -44,6 +44,7 @@ export async function registerPropietario(
   const { error: updateError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .update({
+      rol: 'propietario',
       estado: 'inactivo',
       telefono,
       tipo_documento,
@@ -98,6 +99,7 @@ export async function registerInmobiliaria(
   const { error: updateError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .update({
+      rol: 'inmobiliaria',
       estado: 'inactivo',
       telefono,
       tipo_documento: 'nit',
