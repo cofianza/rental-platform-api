@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
+import { supabase } from '@/lib/supabase';
 import * as estudiosService from './estudios.service';
 import * as certificadoService from './certificado.service';
 import type {
@@ -22,6 +23,19 @@ import type {
 export async function listAll(req: Request, res: Response) {
   const query = req.query as unknown as ListAllEstudiosQuery;
   const result = await estudiosService.listAllEstudios(query);
+
+  // Propietario: only their inmuebles' estudios
+  if (req.user?.rol === 'propietario') {
+    const { data: myInm } = await supabase.from('inmuebles').select('id').eq('propietario_id', req.user.id);
+    const myIds = new Set((myInm || []).map((i: { id: string }) => i.id));
+    const filtered = result.estudios.filter((e: Record<string, unknown>) => {
+      const expInm = ((e as { expedientes?: { inmueble_id?: string } }).expedientes as Record<string, unknown>);
+      return expInm && myIds.has(expInm.inmueble_id as string);
+    });
+    sendSuccess(res, filtered, 200, { ...result.pagination, total: filtered.length });
+    return;
+  }
+
   sendSuccess(res, result.estudios, 200, result.pagination);
 }
 

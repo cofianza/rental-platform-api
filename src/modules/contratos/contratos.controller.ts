@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
+import { supabase } from '@/lib/supabase';
 import * as contratosService from './contratos.service';
 import type {
   GenerarContratoInput,
@@ -14,6 +15,19 @@ import type {
 export async function listAll(req: Request, res: Response) {
   const query = req.query as unknown as ListAllContratosQuery;
   const result = await contratosService.listAllContratos(query);
+
+  // Propietario: only their inmuebles' contratos
+  if (req.user?.rol === 'propietario') {
+    const { data: myInm } = await supabase.from('inmuebles').select('id').eq('propietario_id', req.user.id);
+    const myIds = new Set((myInm || []).map((i: { id: string }) => i.id));
+    const filtered = result.contratos.filter((c: Record<string, unknown>) => {
+      const inmId = ((c as { inmueble?: { id?: string } }).inmueble?.id);
+      return inmId && myIds.has(inmId);
+    });
+    sendSuccess(res, filtered, 200, { ...result.pagination, total: filtered.length });
+    return;
+  }
+
   sendSuccess(res, result.contratos, 200, result.pagination);
 }
 

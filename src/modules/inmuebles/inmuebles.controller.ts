@@ -14,6 +14,10 @@ import type {
 
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListInmueblesQuery;
+  // Propietario only sees their own inmuebles
+  if (req.user?.rol === 'propietario') {
+    (query as Record<string, unknown>).propietario_id = req.user.id;
+  }
   const result = await inmueblesService.listInmuebles(query);
   sendSuccess(res, result.inmuebles, 200, result.pagination);
 }
