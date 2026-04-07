@@ -1450,6 +1450,19 @@ export async function consultarEstadoProveedor(estudioId: string) {
       },
     });
 
+    // Orchestrator: disparar flujo automatico segun resultado
+    import('@/modules/orchestrator/orchestrator.service')
+      .then(({ onEstudioCompletado }) =>
+        onEstudioCompletado({
+          estudioId,
+          expedienteId: est.expediente_id,
+          resultado: result.resultado,
+          score: result.score,
+          solicitanteId: '', // se resuelve dentro del orquestador via expediente
+        }),
+      )
+      .catch((err) => logger.warn({ error: err }, 'Orchestrator: error en hook post-estudio'));
+
     return {
       provider_status: statusResponse,
       estudio: await getEstudioById(estudioId),

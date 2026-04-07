@@ -289,7 +289,7 @@ export async function firmarAutorizacion(
   // 1. Get autorizacion and validate
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_expiracion, texto_autorizado, solicitante_id')
+    .select('id, estado, token_expiracion, texto_autorizado, solicitante_id, expediente_id')
     .eq('token', token)
     .single();
 
@@ -297,7 +297,7 @@ export async function firmarAutorizacion(
     throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 
-  const auth = autorizacion as unknown as AutorizacionRow;
+  const auth = autorizacion as unknown as AutorizacionRow & { expediente_id?: string };
 
   if (auth.estado !== 'pendiente') {
     throw AppError.badRequest('Esta autorizacion ya fue procesada', 'AUTORIZACION_ESTADO_INVALIDO');
@@ -371,6 +371,19 @@ export async function firmarAutorizacion(
     },
     ip,
   });
+
+  // 6. Orchestrator: disparar estudio automatico si hay expediente asociado
+  if (auth.expediente_id) {
+    import('@/modules/orchestrator/orchestrator.service')
+      .then(({ onHabeasDataAutorizado }) =>
+        onHabeasDataAutorizado({
+          expedienteId: auth.expediente_id!,
+          solicitanteId: auth.solicitante_id,
+          autorizacionId: auth.id,
+        }),
+      )
+      .catch((err) => logger.warn({ error: err }, 'Orchestrator: error en hook post-autorizacion'));
+  }
 
   return {
     estado: 'autorizado',
