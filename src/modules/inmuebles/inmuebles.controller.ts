@@ -93,14 +93,6 @@ export async function toggleVisibility(req: Request, res: Response) {
 export const uploadFachadaMiddleware = upload.single('file');
 
 export async function uploadFachada(req: Request, res: Response) {
-  // Apply multer middleware manually
-  await new Promise<void>((resolve, reject) => {
-    uploadFachadaMiddleware(req, res, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-
   const file = (req as Request & { file?: Express.Multer.File }).file;
   if (!file) {
     throw AppError.badRequest('No se envio archivo', 'FILE_REQUIRED');

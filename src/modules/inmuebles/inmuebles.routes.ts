@@ -76,6 +76,7 @@ router.post(
 router.post(
   '/upload-fachada',
   authorize('inmuebles', 'create'),
+  inmueblesController.uploadFachadaMiddleware,
   inmueblesController.uploadFachada,
 );
 
