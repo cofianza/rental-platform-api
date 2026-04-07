@@ -34,7 +34,7 @@ export type Action =
   | 'descargar'
   | 'read_own';
 
-export type InternalRole = 'administrador' | 'operador_analista' | 'gerencia_consulta';
+export type InternalRole = 'administrador' | 'operador_analista' | 'gerencia_consulta' | 'propietario' | 'inmobiliaria';
 
 export type PermissionMap = Record<Resource, Action[]>;
 
@@ -91,13 +91,45 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     pagos: ['read'],
     facturas: ['read'],
   },
+  propietario: {
+    usuarios: ['read_own'],
+    expedientes: ['read'],
+    estudios: ['read'],
+    contratos: ['read'],
+    plantillas: [],
+    inmuebles: ['create', 'read', 'update'],
+    reportes: [],
+    configuracion: [],
+    bitacora: [],
+    dashboard: ['read'],
+    solicitantes: [],
+    documentos: ['read', 'descargar'],
+    pagos: ['read'],
+    facturas: ['read'],
+  },
+  inmobiliaria: {
+    usuarios: ['read_own'],
+    expedientes: ['create', 'read', 'update'],
+    estudios: ['create', 'read', 'update'],
+    contratos: ['create', 'read', 'update'],
+    plantillas: ['read'],
+    inmuebles: ['create', 'read', 'update'],
+    reportes: ['read'],
+    configuracion: [],
+    bitacora: [],
+    dashboard: ['read'],
+    solicitantes: ['create', 'read', 'update'],
+    documentos: ['create', 'read', 'update', 'descargar'],
+    pagos: ['create', 'read'],
+    facturas: ['create', 'read'],
+  },
 };
 
 // ============================================================
 // Helpers
 // ============================================================
 
-export const INTERNAL_ROLES: InternalRole[] = ['administrador', 'operador_analista', 'gerencia_consulta'];
+export const INTERNAL_ROLES: InternalRole[] = ['administrador', 'operador_analista', 'gerencia_consulta', 'propietario', 'inmobiliaria'];
 
 export function hasPermission(role: string, resource: Resource, action: Action): boolean {
   const permissions = ROLE_PERMISSIONS[role as InternalRole];
