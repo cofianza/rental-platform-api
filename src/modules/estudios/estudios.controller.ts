@@ -25,7 +25,7 @@ export async function listAll(req: Request, res: Response) {
   const result = await estudiosService.listAllEstudios(query);
 
   // Propietario: only their inmuebles' estudios
-  if (req.user?.rol === 'propietario') {
+  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
     const { data: myInm } = await supabase.from('inmuebles').select('id').eq('propietario_id', req.user.id);
     const myIds = new Set((myInm || []).map((i: { id: string }) => i.id));
     const filtered = result.estudios.filter((e: Record<string, unknown>) => {

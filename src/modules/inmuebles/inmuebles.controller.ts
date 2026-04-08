@@ -20,8 +20,8 @@ import type {
 
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListInmueblesQuery;
-  // Propietario only sees their own inmuebles
-  if (req.user?.rol === 'propietario') {
+  // Propietario/Inmobiliaria only sees their own inmuebles
+  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
     (query as Record<string, unknown>).propietario_id = req.user.id;
   }
   const result = await inmueblesService.listInmuebles(query);

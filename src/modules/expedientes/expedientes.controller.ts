@@ -13,7 +13,7 @@ export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListExpedientesQuery;
 
   // Propietario: only show expedientes for their inmuebles
-  if (req.user?.rol === 'propietario') {
+  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
     const { data: myInmuebles } = await supabase
       .from('inmuebles')
       .select('id')

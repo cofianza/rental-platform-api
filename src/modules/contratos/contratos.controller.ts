@@ -17,7 +17,7 @@ export async function listAll(req: Request, res: Response) {
   const result = await contratosService.listAllContratos(query);
 
   // Propietario: only their inmuebles' contratos
-  if (req.user?.rol === 'propietario') {
+  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
     const { data: myInm } = await supabase.from('inmuebles').select('id').eq('propietario_id', req.user.id);
     const myIds = new Set((myInm || []).map((i: { id: string }) => i.id));
     const filtered = result.contratos.filter((c: Record<string, unknown>) => {
