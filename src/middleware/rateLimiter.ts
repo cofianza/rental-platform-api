@@ -90,8 +90,8 @@ export const otpVerifyLimiter = rateLimit({
 });
 
 export const publicFormLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  limit: 10,
+  windowMs: 60 * 1000,
+  limit: 60,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: {
