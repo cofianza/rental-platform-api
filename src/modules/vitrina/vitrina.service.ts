@@ -52,6 +52,7 @@ export async function registerSolicitante(
   const { error: updateError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .update({
+      rol: 'solicitante',
       estado: 'activo',
       telefono,
       tipo_documento,

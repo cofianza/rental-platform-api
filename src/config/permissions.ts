@@ -34,7 +34,7 @@ export type Action =
   | 'descargar'
   | 'read_own';
 
-export type InternalRole = 'administrador' | 'operador_analista' | 'gerencia_consulta' | 'propietario' | 'inmobiliaria';
+export type InternalRole = 'administrador' | 'operador_analista' | 'gerencia_consulta' | 'propietario' | 'inmobiliaria' | 'solicitante';
 
 export type PermissionMap = Record<Resource, Action[]>;
 
@@ -123,13 +123,29 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     pagos: ['create', 'read'],
     facturas: ['create', 'read'],
   },
+  solicitante: {
+    usuarios: ['read_own'],
+    expedientes: ['read'],
+    estudios: ['read'],
+    contratos: ['read'],
+    plantillas: [],
+    inmuebles: [],
+    reportes: [],
+    configuracion: [],
+    bitacora: [],
+    dashboard: ['read'],
+    solicitantes: ['read_own'],
+    documentos: ['create', 'read', 'descargar'],
+    pagos: ['create', 'read'],
+    facturas: ['read'],
+  },
 };
 
 // ============================================================
 // Helpers
 // ============================================================
 
-export const INTERNAL_ROLES: InternalRole[] = ['administrador', 'operador_analista', 'gerencia_consulta', 'propietario', 'inmobiliaria'];
+export const INTERNAL_ROLES: InternalRole[] = ['administrador', 'operador_analista', 'gerencia_consulta', 'propietario', 'inmobiliaria', 'solicitante'];
 
 export function hasPermission(role: string, resource: Resource, action: Action): boolean {
   const permissions = ROLE_PERMISSIONS[role as InternalRole];
