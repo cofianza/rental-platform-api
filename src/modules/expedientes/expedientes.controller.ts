@@ -12,6 +12,28 @@ import type { ExpedienteIdParams } from './expediente-workflow.schema';
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListExpedientesQuery;
 
+  // Solicitante: only show expedientes where they are the solicitante
+  if (req.user?.rol === 'solicitante') {
+    // Find solicitante records linked to this user (by email or creado_por)
+    const { data: mySolicitantes } = await supabase
+      .from('solicitantes')
+      .select('id')
+      .eq('creado_por', req.user.id);
+    const solIds = new Set((mySolicitantes || []).map((s: { id: string }) => s.id));
+    if (solIds.size === 0) {
+      sendSuccess(res, [], 200, { total: 0, page: 1, limit: 10, totalPages: 0 });
+      return;
+    }
+    const result = await expedientesService.listExpedientes(query);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const filtered = result.expedientes.filter((exp: any) => {
+      const solId = exp.solicitante_id || exp.solicitante?.id;
+      return solId && solIds.has(solId);
+    });
+    sendSuccess(res, filtered, 200, { ...result.pagination, total: filtered.length, totalPages: Math.ceil(filtered.length / (Number(query.limit) || 20)) });
+    return;
+  }
+
   // Propietario: only show expedientes for their inmuebles
   if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
     const { data: myInmuebles } = await supabase
@@ -58,6 +80,22 @@ export async function update(req: Request, res: Response) {
 }
 
 export async function stats(req: Request, res: Response) {
+  // Solicitante: stats for their expedientes only
+  if (req.user?.rol === 'solicitante') {
+    const { data: mySol } = await supabase.from('solicitantes').select('id').eq('creado_por', req.user.id);
+    const solIds = (mySol || []).map((s: { id: string }) => s.id);
+    if (solIds.length === 0) {
+      sendSuccess(res, { total: 0, stats: [] });
+      return;
+    }
+    const { data: myExps } = await supabase.from('expedientes').select('estado').in('solicitante_id', solIds);
+    const rows = myExps || [];
+    const counts: Record<string, number> = {};
+    for (const r of rows) { const e = (r as { estado: string }).estado; counts[e] = (counts[e] || 0) + 1; }
+    sendSuccess(res, { total: rows.length, stats: Object.entries(counts).map(([estado, count]) => ({ estado, count })) });
+    return;
+  }
+
   // Propietario/Inmobiliaria: only stats for their inmuebles
   if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
     const { data: myInmuebles } = await supabase
