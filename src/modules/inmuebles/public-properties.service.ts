@@ -160,7 +160,7 @@ export async function getPublicPropertyById(id: string) {
 
   // Fetch photos for this property
   const { data: fotos } = await supabase
-    .from('inmuebles_fotos')
+    .from('fotos_inmueble')
     .select('id, url, descripcion, orden')
     .eq('inmueble_id', id)
     .order('orden', { ascending: true });
