@@ -644,7 +644,15 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
     }
   }
 
-  // 7. Execute transition via state machine
+  // 7. Capturar estado previo para guard de idempotencia del orchestrator.
+  //    Si el pago ya estaba 'completado' por un evento anterior (posible con
+  //    Stripe enviando checkout.session.completed + payment_intent.succeeded
+  //    para el mismo pago con eventIds distintos), transitionPagoState hace
+  //    idempotent-skip internamente pero NO podemos disparar onPagoConfirmado
+  //    de nuevo — ejecutarEstudio cuesta dinero real en TransUnion.
+  const estadoAntes = (pago as { estado: string }).estado;
+
+  // 8. Execute transition via state machine
   try {
     await transitionPagoState({
       pagoId,
@@ -662,6 +670,44 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
   } catch (processingError) {
     // Log but never throw — always return 200 to the gateway
     logger.error({ processingError, pagoId, eventId, type }, 'Error processing webhook event internally');
+    return { received: true };
+  }
+
+  // 9. Dispatch al orchestrator solo si la transición fue efectiva.
+  //    Guard: targetEstado='completado' + el pago NO estaba ya en 'completado'.
+  //    Mantiene 1 única ejecución de TransUnion por pago exitoso.
+  if (targetEstado === 'completado' && estadoAntes !== 'completado') {
+    try {
+      const { data: pagoFull } = await (supabase
+        .from('pagos' as string) as ReturnType<typeof supabase.from>)
+        .select('id, expediente_id, concepto')
+        .eq('id', pagoId)
+        .single();
+
+      if (!pagoFull) {
+        logger.error({ pagoId }, 'Webhook: pago no encontrado tras transición — no se puede dispatch orchestrator');
+        return { received: true };
+      }
+
+      const pagoFullTyped = pagoFull as unknown as {
+        id: string;
+        expediente_id: string;
+        concepto: string;
+      };
+
+      // Import dinámico: evita el ciclo pagos ↔ orchestrator (el orchestrator
+      // ya importa estudios via dynamic, mantiene la asimetría).
+      const { onPagoConfirmado } = await import('@/modules/orchestrator/orchestrator.service');
+      await onPagoConfirmado({
+        pagoId: pagoFullTyped.id,
+        expedienteId: pagoFullTyped.expediente_id,
+        concepto: pagoFullTyped.concepto,
+      });
+    } catch (err) {
+      // NO re-throw: ya procesamos la transición exitosa. Un 500 al webhook
+      // dispararía retry de Stripe y duplicaría el pago.
+      logger.error({ pagoId, eventId, err }, 'Webhook: onPagoConfirmado falló — requiere intervención manual');
+    }
   }
 
   return { received: true };

@@ -645,6 +645,169 @@ export async function submitFormulario(token: string, input: SubmitFormularioInp
 }
 
 // ============================================================
+// Completar formulario desde flujo de onboarding (sin OTP+canvas)
+//
+// Usado por el orchestrator tras confirmar pago en expedientes cuyo
+// `source ∈ {vitrina_publica, invitacion}`. El consentimiento legal del
+// solicitante está cubierto por terminos_aceptaciones (registrado en
+// vitrina.service.registerSolicitante). No se exige autorizaciones_habeas_data
+// (OTP+canvas) en estos flujos.
+//
+// Rellena `datos_formulario` desde la tabla `solicitantes`, avanza el
+// estudio a `formulario_completado` y NO lo ejecuta — la ejecución la
+// dispara el caller (orchestrator) para mantener separación de concerns.
+// ============================================================
+
+export async function completarFormularioDesdeOnboarding(params: {
+  estudioId: string;
+  expedienteId: string;
+  solicitanteId: string;
+  userId: string;
+}): Promise<{ estudioId: string; yaCompletado: boolean }> {
+  const { estudioId, expedienteId, solicitanteId, userId } = params;
+
+  // 1. Fetch + validar estudio.
+  const { data: estudioRow, error: estudioErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, proveedor, tipo, expediente_id')
+    .eq('id', estudioId)
+    .single();
+
+  if (estudioErr || !estudioRow) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  const estudio = estudioRow as unknown as {
+    id: string;
+    estado: string;
+    proveedor: string;
+    tipo: string;
+    expediente_id: string;
+  };
+
+  if (ESTADOS_ESTUDIO_FINALIZADOS.includes(estudio.estado)) {
+    throw AppError.badRequest(
+      `Estudio en estado terminal (${estudio.estado}); no puede recompletarse.`,
+      'ESTUDIO_ESTADO_INVALIDO',
+    );
+  }
+
+  // Idempotencia: si ya avanzó, retornamos sin error.
+  if (estudio.estado !== 'solicitado') {
+    return { estudioId, yaCompletado: true };
+  }
+
+  if (estudio.proveedor !== 'transunion') {
+    throw AppError.badRequest(
+      'Camino sin-OTP solo aplica a TransUnion',
+      'PROVEEDOR_INVALIDO',
+    );
+  }
+
+  // 2. Fetch solicitante.
+  const { data: solicitanteRow, error: solErr } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, nombre, apellido, email, telefono, tipo_documento, numero_documento, ocupacion, empresa, ingresos_mensuales, direccion')
+    .eq('id', solicitanteId)
+    .single();
+
+  if (solErr || !solicitanteRow) {
+    throw AppError.notFound('Solicitante no encontrado', 'SOLICITANTE_NOT_FOUND');
+  }
+
+  const solicitante = solicitanteRow as unknown as {
+    id: string;
+    nombre: string;
+    apellido: string;
+    email: string;
+    telefono: string | null;
+    tipo_documento: string;
+    numero_documento: string;
+    ocupacion: string | null;
+    empresa: string | null;
+    ingresos_mensuales: number | null;
+    direccion: string | null;
+  };
+
+  // Validar requeridos por ProviderSolicitudInput (defensa en profundidad:
+  // el registro vitrina ya exige estos campos en Zod).
+  const faltantes: string[] = [];
+  if (!solicitante.nombre) faltantes.push('nombre');
+  if (!solicitante.apellido) faltantes.push('apellido');
+  if (!solicitante.tipo_documento) faltantes.push('tipo_documento');
+  if (!solicitante.numero_documento) faltantes.push('numero_documento');
+  if (!solicitante.email) faltantes.push('email');
+  if (!solicitante.telefono) faltantes.push('telefono');
+
+  if (faltantes.length > 0) {
+    throw AppError.badRequest(
+      `Datos insuficientes para iniciar estudio: ${faltantes.join(', ')}`,
+      'DATOS_SOLICITANTE_INSUFICIENTES',
+    );
+  }
+
+  // 3. Construir payload con el shape del form + acepta_terminos (consentimiento
+  //    inferido de terminos_aceptaciones; el campo vive en datos_formulario por
+  //    compatibilidad con el shape existente usado por otros flujos).
+  const datosFormulario = {
+    nombre_completo: `${solicitante.nombre} ${solicitante.apellido}`.trim(),
+    tipo_documento: solicitante.tipo_documento,
+    numero_documento: solicitante.numero_documento,
+    email: solicitante.email,
+    telefono: solicitante.telefono || '',
+    ingresos_mensuales: solicitante.ingresos_mensuales ?? undefined,
+    ocupacion: solicitante.ocupacion ?? undefined,
+    empresa: solicitante.empresa ?? undefined,
+    direccion_residencia: solicitante.direccion ?? undefined,
+    acepta_terminos: true as const,
+  };
+
+  // 4. UPDATE estudios.
+  const { error: updateErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estado: 'formulario_completado',
+      datos_formulario: datosFormulario,
+      // Explícitamente null: flujo vitrina/invitación no exige autorización
+      // habeas-data formal (OTP+canvas). Consentimiento en terminos_aceptaciones.
+      autorizacion_habeas_data_id: null,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', estudioId);
+
+  if (updateErr) {
+    logger.error({ error: updateErr.message, estudioId }, 'Error al completar formulario desde onboarding');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al avanzar el estudio');
+  }
+
+  // 5. Timeline event atómico para auditar el camino sin-OTP.
+  await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'estudio',
+      descripcion: 'Formulario de estudio completado automáticamente (flujo onboarding)',
+      usuario_id: userId,
+      metadata: { via: 'onboarding_sin_otp', estudio_id: estudioId },
+    } as never);
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.ESTUDIO_FORM_SUBMITTED,
+    entidad: AUDIT_ENTITIES.ESTUDIO,
+    entidadId: estudioId,
+    detalle: { via: 'onboarding_sin_otp', expediente_id: expedienteId },
+  });
+
+  logger.info(
+    { estudioId, expedienteId, solicitanteId, userId },
+    'Estudio avanzado a formulario_completado via onboarding',
+  );
+
+  return { estudioId, yaCompletado: false };
+}
+
+// ============================================================
 // Register resultado (irreversible)
 // ============================================================
 
@@ -855,6 +1018,44 @@ export async function ejecutarEstudio(estudioId: string, userId: string, ip?: st
     datos_formulario: Record<string, unknown> | null;
     expediente_id: string;
   };
+
+  // 1.5. Guard: el expediente debe estar habilitado para estudio. Gate del
+  //      paso 3 del flujo — evita consultas a TransUnion sin autorización
+  //      explícita del propietario tras la cita realizada.
+  const { data: expedienteRow, error: expErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, estudio_habilitado')
+    .eq('id', est.expediente_id)
+    .single();
+
+  if (expErr || !expedienteRow) {
+    logger.warn(
+      { estudioId, expedienteId: est.expediente_id, err: expErr?.message },
+      'Expediente asociado al estudio no encontrado al ejecutar',
+    );
+    throw AppError.notFound(
+      'Expediente asociado al estudio no encontrado',
+      'EXPEDIENTE_NOT_FOUND',
+    );
+  }
+
+  const expediente = expedienteRow as unknown as {
+    id: string;
+    numero: string;
+    estudio_habilitado: boolean;
+  };
+
+  if (!expediente.estudio_habilitado) {
+    logger.warn(
+      { estudioId, expedienteId: expediente.id, numero: expediente.numero },
+      'Intento de ejecutar estudio sin habilitación',
+    );
+    throw AppError.badRequest(
+      'El estudio crediticio no está habilitado para este expediente. ' +
+        'Se requiere que el propietario autorice el estudio después de la cita.',
+      'ESTUDIO_NO_HABILITADO',
+    );
+  }
 
   // 2. Validate estado
   if (!ESTADOS_PERMITIDOS_EJECUCION.includes(est.estado)) {

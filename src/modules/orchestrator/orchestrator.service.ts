@@ -5,7 +5,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
-import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendContratoListoEmail } from './orchestrator.emails';
+import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendContratoListoEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
@@ -116,9 +116,9 @@ export async function onEstudioCompletado(params: {
 
     // Obtener solicitante y inmueble por separado (evita joins complejos)
     const { data: sol } = await db('solicitantes')
-      .select('nombre, apellido, email')
+      .select('nombre, apellido, email, telefono')
       .eq('id', expediente.solicitante_id)
-      .single() as { data: { nombre: string; apellido: string; email: string } | null };
+      .single() as { data: { nombre: string; apellido: string; email: string; telefono: string | null } | null };
 
     const { data: inm } = await db('inmuebles')
       .select('id, direccion, ciudad, valor_arriendo, propietario_id')
@@ -142,6 +142,34 @@ export async function onEstudioCompletado(params: {
           ciudad: inm?.ciudad || '',
           score,
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email aprobado'));
+      }
+
+      // Notificar al propietario/inmobiliaria que el arrendatario fue aprobado
+      if (inm?.propietario_id && sol) {
+        try {
+          const { data: propietario } = await db('perfiles')
+            .select('nombre, apellido, razon_social')
+            .eq('id', inm.propietario_id)
+            .single() as { data: { nombre: string; apellido: string; razon_social: string | null } | null };
+
+          // Obtener email del propietario via Supabase Auth admin
+          const { data: authUserData } = await supabase.auth.admin.getUserById(inm.propietario_id);
+          const propietarioEmail = authUserData?.user?.email;
+
+          if (propietarioEmail && propietario) {
+            sendArrendatarioAprobadoNotificacionEmail({
+              email: propietarioEmail,
+              nombre_propietario: propietario.razon_social || `${propietario.nombre} ${propietario.apellido}`,
+              nombre_arrendatario: `${sol.nombre} ${sol.apellido}`,
+              inmueble: inm.direccion || '',
+              ciudad: inm.ciudad || '',
+              email_arrendatario: sol.email,
+              telefono_arrendatario: sol.telefono || undefined,
+            }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email notificacion propietario'));
+          }
+        } catch (e) {
+          logger.warn({ error: e }, 'Orchestrator: error obteniendo datos propietario para notificacion');
+        }
       }
 
       if (contratoId) {
@@ -215,6 +243,11 @@ export async function onFirmaCompletada(params: {
 
 // ── Event: Pago Confirmado ──────────────────────────────────
 
+// Sources que reciben el camino sin-OTP: vitrina_publica e invitacion.
+// 'manual' queda fuera — el operador maneja esos expedientes con el flujo
+// tradicional de autorización habeas-data (OTP+canvas).
+const SOURCES_ONBOARDING_AUTOMATICO = new Set(['vitrina_publica', 'invitacion']);
+
 export async function onPagoConfirmado(params: {
   pagoId: string;
   expedienteId: string;
@@ -226,18 +259,89 @@ export async function onPagoConfirmado(params: {
   try {
     await registrarTimeline(expedienteId, 'pago', `Pago de ${concepto} confirmado.`);
 
-    if (concepto === 'estudio') {
-      const { data: estudio } = await db('estudios')
-        .select('id, estado')
-        .eq('expediente_id', expedienteId)
-        .eq('estado', 'pago_pendiente')
-        .single() as { data: { id: string } | null };
+    if (concepto !== 'estudio') return;
 
-      if (estudio) {
-        await db('estudios')
-          .update({ estado: 'pagado', updated_at: new Date().toISOString() } as never)
-          .eq('id', estudio.id);
+    // Cargar source + solicitante para decidir bifurcación.
+    const { data: expRow } = await db('expedientes')
+      .select('id, source, solicitante_id, creado_por')
+      .eq('id', expedienteId)
+      .single() as { data: { id: string; source: string | null; solicitante_id: string | null; creado_por: string | null } | null };
+
+    if (!expRow) {
+      logger.error({ expedienteId }, 'Orchestrator: expediente no encontrado en onPagoConfirmado');
+      return;
+    }
+
+    // Flujo manual: admin opera con OTP+canvas. Sin intervención automática.
+    if (!expRow.source || !SOURCES_ONBOARDING_AUTOMATICO.has(expRow.source)) {
+      logger.info(
+        { expedienteId, source: expRow.source },
+        'Orchestrator: pago confirmado en flujo manual — sin dispatch automático',
+      );
+      return;
+    }
+
+    // Validar que tengamos solicitante vinculado (invitación externa pudo
+    // no haber sido canjeada todavía — raro aquí pero defensivo).
+    if (!expRow.solicitante_id) {
+      logger.warn(
+        { expedienteId, source: expRow.source },
+        'Orchestrator: expediente sin solicitante vinculado — no se puede avanzar estudio',
+      );
+      return;
+    }
+
+    // Buscar estudio placeholder (creado por fn_habilitar_estudio_expediente
+    // en Prompt 4). Si otro proceso ya lo avanzó, salimos silenciosos.
+    const { data: estudioRow } = await db('estudios')
+      .select('id, estado')
+      .eq('expediente_id', expedienteId)
+      .eq('estado', 'solicitado')
+      .eq('proveedor', 'transunion')
+      .maybeSingle() as { data: { id: string; estado: string } | null };
+
+    if (!estudioRow) {
+      logger.warn(
+        { expedienteId },
+        'Orchestrator: pago confirmado pero no hay estudio en estado=solicitado para avanzar',
+      );
+      return;
+    }
+
+    // Import dinámico (evita ciclo orchestrator ↔ estudios, mismo patrón
+    // que onHabeasDataAutorizado ya usa en este archivo).
+    const estudiosModule = await import('@/modules/estudios/estudios.service');
+
+    try {
+      const result = await estudiosModule.completarFormularioDesdeOnboarding({
+        estudioId: estudioRow.id,
+        expedienteId: expRow.id,
+        solicitanteId: expRow.solicitante_id,
+        userId: expRow.creado_por ?? expRow.solicitante_id,
+      });
+
+      if (result.yaCompletado) {
+        logger.info(
+          { estudioId: estudioRow.id },
+          'Orchestrator: estudio ya estaba completado antes del pago — skip ejecución',
+        );
+        return;
       }
+
+      // Ejecutar TransUnion automáticamente. Si falla, ejecutarEstudio
+      // marca el estudio como 'fallido' y lanza AppError — aquí lo
+      // capturamos para no re-throw al caller (webhook).
+      await estudiosModule.ejecutarEstudio(estudioRow.id, expRow.solicitante_id);
+
+      logger.info(
+        { pagoId, estudioId: estudioRow.id, expedienteId: expRow.id },
+        'Orchestrator: flujo onboarding completo → pago → formulario → estudio ejecutado',
+      );
+    } catch (err) {
+      logger.error(
+        { expedienteId: expRow.id, estudioId: estudioRow.id, err },
+        'Orchestrator: error avanzando estudio tras pago — requiere intervención manual',
+      );
     }
   } catch (error) {
     logger.error({ error, pagoId }, 'Orchestrator: error en onPagoConfirmado');

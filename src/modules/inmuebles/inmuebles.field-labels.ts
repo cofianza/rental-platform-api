@@ -16,7 +16,6 @@ export const INMUEBLE_FIELD_LABELS: Record<string, string> = {
   parqueadero: 'Parqueadero',
   parqueaderos: 'Cantidad de parqueaderos',
   piso: 'Piso',
-  codigo_postal: 'Codigo postal',
   latitud: 'Latitud',
   longitud: 'Longitud',
   descripcion: 'Descripcion',

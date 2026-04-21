@@ -131,6 +131,51 @@ export async function checkActiveExpedienteByInmueble(inmuebleId: string) {
 }
 
 // ============================================================
+// Get MY expediente activo by inmueble (filtrado por solicitante)
+//
+// A diferencia de checkActiveExpedienteByInmueble (que ve cualquier expediente
+// activo del inmueble — usado por admin), esta función filtra por el usuario
+// autenticado vía solicitantes.creado_por. Sirve al frontend de vitrina para
+// decidir si renderizar "Me interesa" o "Ver mi solicitud →".
+// ============================================================
+
+export async function getMiExpedientePorInmueble(inmuebleId: string, userId: string) {
+  // Resolver solicitantes del usuario (puede tener varias filas si admin manual,
+  // pero típicamente solo 1 desde flujo vitrina).
+  const { data: misSolicitantes, error: solErr } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('creado_por', userId);
+
+  if (solErr) {
+    logger.error({ error: solErr.message, userId }, 'Error al resolver solicitantes del usuario');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar expediente activo');
+  }
+
+  const solIds = ((misSolicitantes as { id: string }[] | null) ?? []).map((s) => s.id);
+  if (solIds.length === 0) {
+    return { expediente: null };
+  }
+
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, estado')
+    .eq('inmueble_id', inmuebleId)
+    .in('solicitante_id', solIds)
+    .not('estado', 'in', `(${ESTADOS_TERMINALES.join(',')})`)
+    .limit(1);
+
+  if (error) {
+    logger.error({ error: error.message, inmuebleId, userId }, 'Error al consultar mi-expediente-por-inmueble');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar expediente activo');
+  }
+
+  return {
+    expediente: data && data.length > 0 ? data[0] : null,
+  };
+}
+
+// ============================================================
 // Get by ID
 // ============================================================
 

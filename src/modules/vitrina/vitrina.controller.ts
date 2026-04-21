@@ -9,8 +9,10 @@ import type { RegisterSolicitanteInput, InterestInput } from './vitrina.schema';
 
 export async function registerSolicitante(req: Request, res: Response) {
   const input = req.body as RegisterSolicitanteInput;
+  const ipAddress = req.ip || req.headers['x-forwarded-for']?.toString() || 'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
 
-  const result = await service.registerSolicitante(input);
+  const result = await service.registerSolicitante(input, ipAddress, userAgent);
 
   sendSuccess(res, result, undefined, 201);
 }

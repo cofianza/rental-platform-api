@@ -133,3 +133,12 @@ export async function checkByInmueble(req: Request, res: Response) {
   const result = await expedientesService.checkActiveExpedienteByInmueble(inmuebleId);
   sendSuccess(res, result);
 }
+
+// MeInteresa flow: ¿el solicitante autenticado tiene expediente activo
+// sobre este inmueble? Filtra por solicitantes.creado_por = req.user.id.
+// Devuelve siempre 200 con { expediente: null | {id,numero,estado} }.
+export async function miExpedientePorInmueble(req: Request, res: Response) {
+  const { inmuebleId } = req.params as { inmuebleId: string };
+  const result = await expedientesService.getMiExpedientePorInmueble(inmuebleId, req.user!.id);
+  sendSuccess(res, result);
+}

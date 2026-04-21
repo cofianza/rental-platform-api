@@ -22,7 +22,9 @@ export type Resource =
   | 'solicitantes'
   | 'documentos'
   | 'pagos'
-  | 'facturas';
+  | 'facturas'
+  | 'citas'
+  | 'disponibilidad';
 
 export type Action =
   | 'create'
@@ -58,6 +60,8 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     documentos: ['create', 'read', 'update', 'delete', 'validar'],
     pagos: ['create', 'read', 'update', 'delete'],
     facturas: ['create', 'read', 'update', 'delete'],
+    citas: ['create', 'read', 'update', 'delete'],
+    disponibilidad: ['read', 'read_own', 'update'],
   },
   operador_analista: {
     usuarios: ['read_own'],
@@ -74,6 +78,8 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     documentos: ['create', 'read', 'update', 'delete', 'validar'],
     pagos: ['create', 'read'],
     facturas: ['create', 'read'],
+    citas: ['create', 'read', 'update'],
+    disponibilidad: ['read'],
   },
   gerencia_consulta: {
     usuarios: [],
@@ -90,6 +96,8 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     documentos: ['read', 'descargar'],
     pagos: ['read'],
     facturas: ['read'],
+    citas: ['read'],
+    disponibilidad: ['read'],
   },
   propietario: {
     usuarios: ['read_own'],
@@ -106,6 +114,8 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     documentos: ['read', 'descargar'],
     pagos: ['read'],
     facturas: ['read'],
+    citas: ['create', 'read', 'update'],
+    disponibilidad: ['read_own', 'update'],
   },
   inmobiliaria: {
     usuarios: ['read_own'],
@@ -122,6 +132,8 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     documentos: ['create', 'read', 'update', 'descargar'],
     pagos: ['create', 'read'],
     facturas: ['create', 'read'],
+    citas: ['create', 'read', 'update'],
+    disponibilidad: ['read_own', 'update'],
   },
   solicitante: {
     usuarios: ['read_own'],
@@ -138,6 +150,8 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     documentos: ['create', 'read', 'descargar'],
     pagos: ['create', 'read'],
     facturas: ['read'],
+    citas: ['create', 'read'],
+    disponibilidad: ['read'],
   },
 };
 

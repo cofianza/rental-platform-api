@@ -33,15 +33,17 @@ function validateNitModulo11(nit: string): boolean {
   return checkDigit === expectedCheck;
 }
 
-const colombianPhoneSchema = z
+const phoneSchema = z
   .string()
-  .regex(/^\+57\s?3\d{9}$/, 'Telefono invalido. Formato: +57 3XXXXXXXXX');
+  .min(10, 'Telefono muy corto')
+  .max(20, 'Telefono muy largo')
+  .regex(/^\+\d{1,4}\s?\d{7,15}$/, 'Telefono invalido. Debe incluir lada internacional (ej: +57 3001234567)');
 
 export const registerPropietarioSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
   apellido: z.string().min(1, 'Apellido requerido').max(100, 'Apellido muy largo'),
   email: z.email({ error: 'Email invalido' }),
-  telefono: colombianPhoneSchema,
+  telefono: phoneSchema,
   tipo_documento: z.enum(['cc', 'ce', 'pasaporte'], {
     error: 'Tipo de documento invalido',
   }),
@@ -73,7 +75,7 @@ export const registerInmobiliariaSchema = z.object({
   nombre_representante_nombre: z.string().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
   nombre_representante_apellido: z.string().min(1, 'Apellido del representante requerido').max(100, 'Apellido muy largo'),
   email: z.email({ error: 'Email invalido' }),
-  telefono: colombianPhoneSchema,
+  telefono: phoneSchema,
   password: passwordSchema,
   confirm_password: z.string().min(1, 'Confirmacion de contrasena requerida'),
   accept_terms: z.literal(true, {

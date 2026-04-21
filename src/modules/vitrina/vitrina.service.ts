@@ -6,6 +6,7 @@
 import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { recordTermsAcceptance } from '../registration/registration.service';
 import type { RegisterSolicitanteInput } from './vitrina.schema';
 
 // ------------------------------------------------------------------
@@ -23,11 +24,15 @@ interface RegisterSolicitanteResult {
 
 export async function registerSolicitante(
   input: RegisterSolicitanteInput,
+  ipAddress: string,
+  userAgent: string,
 ): Promise<RegisterSolicitanteResult> {
   const {
     email, password, nombre, apellido, telefono,
-    tipo_documento, numero_documento,
+    tipo_documento, numero_documento, from_invitation,
   } = input;
+
+  const registrationSource = from_invitation ? 'invitacion_externa' : 'vitrina_publica';
 
   // 1. Create Supabase Auth user (auto-confirmed, no email verification for solicitante)
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
@@ -57,7 +62,7 @@ export async function registerSolicitante(
       telefono,
       tipo_documento,
       numero_documento,
-      registration_source: 'vitrina_publica',
+      registration_source: registrationSource,
     } as never)
     .eq('id', userId);
 
@@ -82,6 +87,11 @@ export async function registerSolicitante(
     logger.error({ error: solicitanteError.message, userId }, 'Error al crear registro de solicitante');
     // Don't throw — user is created, solicitante record is secondary
   }
+
+  // 3.5. Persistir aceptación de términos + tratamiento de datos.
+  //      Evidencia legal: user_id + timestamps + IP + user-agent. Reutiliza
+  //      la misma función que propietario/inmobiliaria. Log-only en error.
+  await recordTermsAcceptance(userId, ipAddress, userAgent);
 
   // 4. Sign in to get session tokens for auto-login
   const { data: signInData, error: signInError } = await supabaseAuth.auth.signInWithPassword({
@@ -110,21 +120,25 @@ export async function registerSolicitante(
 // createInterest
 // ------------------------------------------------------------------
 
+// Estados en los que un expediente todavía está activo (no terminal).
+// Usado para detectar duplicados por (inmueble_id, solicitante_id).
+const ESTADOS_EXPEDIENTE_ACTIVOS = [
+  'borrador',
+  'en_revision',
+  'informacion_incompleta',
+  'aprobado',
+  'condicionado',
+] as const;
+
 interface CreateInterestResult {
   expediente: {
     id: string;
-    inmueble_id: string;
-    solicitante_id: string;
-    estado: string;
-    source: string;
+    numero: string;
+    estado: 'borrador';
+    estudio_habilitado: boolean;
+    source: 'vitrina_publica';
   };
-  estudio: {
-    id: string;
-    expediente_id: string;
-    tipo: string;
-    proveedor: string;
-    estado: string;
-  };
+  siguiente_paso: 'agendar_cita';
 }
 
 export async function createInterest(
@@ -152,22 +166,7 @@ export async function createInterest(
     throw AppError.badRequest('Este inmueble no esta disponible para arriendo', 'PROPERTY_NOT_AVAILABLE');
   }
 
-  // 2. Check inmueble is not already en_estudio (prevent duplicates)
-  const { data: existingExpedientes } = await supabase
-    .from('expedientes')
-    .select('id')
-    .eq('inmueble_id', propertyId)
-    .in('estado', ['en_revision', 'en_estudio', 'aprobado'])
-    .limit(1);
-
-  if (existingExpedientes && existingExpedientes.length > 0) {
-    throw AppError.conflict(
-      'Ya existe un expediente activo para este inmueble',
-      'EXPEDIENTE_ALREADY_EXISTS',
-    );
-  }
-
-  // 3. Find solicitante record by user ID
+  // 2. Find solicitante record by user ID
   const { data: solicitante, error: solicitanteError } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
     .select('id')
@@ -180,17 +179,37 @@ export async function createInterest(
 
   const solicitanteData = solicitante as { id: string };
 
-  // 4. Create expediente with source='vitrina_publica'
+  // 3. Bloquear duplicados por (inmueble_id, solicitante_id) en estados activos.
+  //    Un solicitante puede explorar varios inmuebles distintos en paralelo,
+  //    pero no puede abrir dos expedientes simultáneos sobre el mismo.
+  const { data: existingExpedientes } = await supabase
+    .from('expedientes')
+    .select('id')
+    .eq('inmueble_id', propertyId)
+    .eq('solicitante_id', solicitanteData.id)
+    .in('estado', ESTADOS_EXPEDIENTE_ACTIVOS as unknown as string[])
+    .limit(1);
+
+  if (existingExpedientes && existingExpedientes.length > 0) {
+    throw AppError.conflict(
+      'Ya tienes un expediente activo sobre este inmueble',
+      'EXPEDIENTE_ALREADY_EXISTS',
+    );
+  }
+
+  // 4. Create expediente con estado='borrador'. El estudio NO se crea aquí:
+  //    se habilita posteriormente vía PATCH /expedientes/:id/habilitar-estudio
+  //    tras la cita (paso 3 del flujo definido en la minuta del 8-abr-2026).
   const { data: expediente, error: expedienteError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .insert({
       inmueble_id: propertyId,
       solicitante_id: solicitanteData.id,
-      estado: 'en_revision',
+      estado: 'borrador',
       source: 'vitrina_publica',
       creado_por: userId,
     } as never)
-    .select('id, inmueble_id, solicitante_id, estado, source')
+    .select('id, numero, estado, estudio_habilitado, source')
     .single();
 
   if (expedienteError || !expediente) {
@@ -200,45 +219,37 @@ export async function createInterest(
 
   const expedienteData = expediente as {
     id: string;
-    inmueble_id: string;
-    solicitante_id: string;
-    estado: string;
-    source: string;
+    numero: string;
+    estado: 'borrador';
+    estudio_habilitado: boolean;
+    source: 'vitrina_publica';
   };
 
-  // 5. Create estudio record
-  const { data: estudio, error: estudioError } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+  // 5. Evento en timeline. Errores log-only para no abortar el flujo principal.
+  const { error: timelineError } = await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
     .insert({
       expediente_id: expedienteData.id,
-      tipo: 'individual',
-      proveedor: 'transunion',
-      estado: 'solicitado',
-      solicitado_por: userId,
-    } as never)
-    .select('id, expediente_id, tipo, proveedor, estado')
-    .single();
+      tipo: 'creacion',
+      descripcion: 'Expediente creado desde vitrina pública',
+      usuario_id: userId,
+      metadata: { source: 'vitrina_publica', inmueble_id: propertyId },
+    } as never);
 
-  if (estudioError || !estudio) {
-    logger.error({ error: estudioError?.message, expedienteId: expedienteData.id }, 'Error al crear estudio desde vitrina');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el estudio');
+  if (timelineError) {
+    logger.warn(
+      { error: timelineError.message, expedienteId: expedienteData.id },
+      'Error al registrar timeline de creación desde vitrina',
+    );
   }
 
-  const estudioData = estudio as {
-    id: string;
-    expediente_id: string;
-    tipo: string;
-    proveedor: string;
-    estado: string;
-  };
-
   logger.info(
-    { userId, propertyId, expedienteId: expedienteData.id, estudioId: estudioData.id },
-    'Interes creado exitosamente desde vitrina publica',
+    { userId, propertyId, expedienteId: expedienteData.id, numero: expedienteData.numero },
+    'Expediente creado desde vitrina pública (sin estudio — pendiente de cita)',
   );
 
   return {
     expediente: expedienteData,
-    estudio: estudioData,
+    siguiente_paso: 'agendar_cita',
   };
 }

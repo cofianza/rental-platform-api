@@ -194,7 +194,16 @@ export async function resendVerification({ email }: ResendVerificationInput): Pr
 
 // --- Helpers ---
 
-async function recordTermsAcceptance(
+/**
+ * Persiste la aceptación de términos + tratamiento de datos del usuario.
+ * Exportado para reuso desde vitrina.service.registerSolicitante (el flujo
+ * público del solicitante requiere la misma evidencia legal que propietario
+ * e inmobiliaria: user_id + timestamps + IP + user-agent).
+ *
+ * Error policy: log-only. No se revierte el registro del usuario si este
+ * INSERT falla — decisión heredada del flujo propietario/inmobiliaria.
+ */
+export async function recordTermsAcceptance(
   userId: string,
   ipAddress: string,
   userAgent: string,

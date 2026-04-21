@@ -14,6 +14,7 @@ import expedienteWorkflowRouter from '@/modules/expedientes/expediente-workflow.
 import expedienteCommentsRouter from '@/modules/expedientes/expediente-comments.routes';
 import expedienteTimelineRouter from '@/modules/expedientes/expediente-timeline.routes';
 import expedienteAssignmentsRouter from '@/modules/expedientes/expediente-assignments.routes';
+import expedienteHabilitacionRouter from '@/modules/expedientes/expediente-habilitacion.routes';
 import usersRouter from '@/modules/users/users.routes';
 import registrationRouter from '@/modules/registration/registration.routes';
 import { bitacoraRouter } from '@/modules/bitacora/bitacora.routes';
@@ -38,6 +39,10 @@ import reportesRouter from '@/modules/reportes/reportes.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
 import { vitrinaRouter } from '@/modules/vitrina/vitrina.routes';
 import exportRouter from '@/modules/export/export.routes';
+import citasRouter from '@/modules/citas/citas.routes';
+import expedienteExternoRouter from '@/modules/expedientes/expediente-externo.routes';
+import { publicInvitacionRouter } from '@/modules/invitacion/invitacion.routes';
+import disponibilidadRouter from '@/modules/disponibilidad/disponibilidad.routes';
 
 const app = express();
 
@@ -80,6 +85,7 @@ app.use('/api/v1/expedientes', expedienteWorkflowRouter);
 app.use('/api/v1/expedientes', expedienteCommentsRouter);
 app.use('/api/v1/expedientes', expedienteTimelineRouter);
 app.use('/api/v1/expedientes', expedienteAssignmentsRouter);
+app.use('/api/v1/expedientes', expedienteHabilitacionRouter);
 app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/inmuebles', inmueblesRouter);
 app.use('/api/v1/audit-logs', bitacoraRouter);
@@ -96,6 +102,7 @@ app.use('/api/v1/proveedores-riesgo', proveedoresRiesgoRouter);
 app.use('/api/v1/inmuebles/:inmuebleId/estudios', inmuebleEstudiosRouter);
 app.use('/api/v1/expedientes/:expedienteId/autorizacion-riesgo', expedienteAutorizacionRouter);
 app.use('/api/v1/public/autorizar', publicAutorizacionRouter);
+app.use('/api/v1/public/invitacion', publicInvitacionRouter);
 app.use('/api/v1/plantillas-contrato', plantillasRouter);
 app.use('/api/v1/expedientes/:expedienteId/contratos', expedienteContratosRouter);
 app.use('/api/v1/contratos', contratoWorkflowRouter);
@@ -117,6 +124,9 @@ app.use('/api/v1/reportes', reportesRouter);
 app.use('/api/v1/public/properties', publicPropertiesRouter);
 app.use('/api/v1/vitrina', vitrinaRouter);
 app.use('/api/v1/export', exportRouter);
+app.use('/api/v1/citas', citasRouter);
+app.use('/api/v1/disponibilidad', disponibilidadRouter);
+app.use('/api/v1/expedientes', expedienteExternoRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

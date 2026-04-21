@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
-import { authMiddleware, authorize } from '@/middleware/auth';
+import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import {
   expedienteIdParamsSchema,
   createExpedienteSchema,
@@ -34,6 +34,15 @@ router.get(
   '/check-inmueble/:inmuebleId',
   authorize('expedientes', 'read'),
   expedientesController.checkByInmueble,
+);
+
+// GET /mi-expediente-por-inmueble/:inmuebleId — flujo "Me interesa" del solicitante.
+// Filtra por solicitantes.creado_por = req.user.id (privacy + UX correctos).
+// Solo rol solicitante: admin/operador usan check-inmueble.
+router.get(
+  '/mi-expediente-por-inmueble/:inmuebleId',
+  roleGuard(['solicitante']),
+  expedientesController.miExpedientePorInmueble,
 );
 
 // GET /:id — Detalle con relaciones

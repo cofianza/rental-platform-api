@@ -9,3 +9,5 @@ logs/
 
 # Supabase
 supabase/.temp/
+
+src/scripts/test-transunion.ts

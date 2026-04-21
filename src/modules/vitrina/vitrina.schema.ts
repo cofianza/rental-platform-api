@@ -9,7 +9,7 @@ export const registerSolicitanteSchema = z.object({
   nombre: z.string().min(1, 'Nombre es requerido').max(100),
   apellido: z.string().min(1, 'Apellido es requerido').max(100),
   email: z.string().email('Email invalido'),
-  telefono: z.string().min(10, 'Telefono debe tener al menos 10 digitos').max(15),
+  telefono: z.string().min(10, 'Telefono debe tener al menos 10 digitos').max(20, 'Telefono muy largo'),
   tipo_documento: z.enum(['cc', 'ce', 'ti', 'pasaporte', 'nit']),
   numero_documento: z.string().min(1, 'Numero de documento es requerido').max(20),
   password: z.string().min(8, 'La contrasena debe tener al menos 8 caracteres'),
@@ -21,6 +21,10 @@ export const registerSolicitanteSchema = z.object({
     message: 'Debe aceptar el tratamiento de datos',
   }),
   property_interest_id: z.string().uuid().optional(),
+  // Si true, el registro proviene del flujo de invitación externa.
+  // Setea registration_source='invitacion_externa' para distinguir estadísticas
+  // de origen (vitrina pública vs invitación directa de inmobiliaria).
+  from_invitation: z.boolean().optional(),
 }).refine((data) => data.password === data.confirm_password, {
   message: 'Las contrasenas no coinciden',
   path: ['confirm_password'],
