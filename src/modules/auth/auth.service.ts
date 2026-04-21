@@ -19,6 +19,18 @@ export async function loginWithEmail({ email, password }: LoginInput, ip?: strin
       detalle: { email },
       ip,
     });
+
+    // Detección tolerante: Supabase puede cambiar el texto exacto entre
+    // versiones del SDK. `includes('not confirmed')` cubre las variantes
+    // conocidas; si no matchea, caemos al genérico INVALID_CREDENTIALS.
+    const msg = (error.message || '').toLowerCase();
+    if (msg.includes('not confirmed') || msg.includes('not_confirmed')) {
+      throw AppError.unauthorized(
+        'Aún no has verificado tu correo. Revisa tu bandeja de entrada (y la carpeta de spam).',
+        'EMAIL_NOT_CONFIRMED',
+      );
+    }
+
     throw AppError.unauthorized('Credenciales invalidas', 'INVALID_CREDENTIALS');
   }
 
