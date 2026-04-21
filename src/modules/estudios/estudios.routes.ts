@@ -13,6 +13,7 @@ import {
   listAllEstudiosQuerySchema,
   submitFormularioSchema,
   registrarResultadoSchema,
+  ejecutarEstudioBodySchema,
   certificadoPresignedUrlSchema,
   soportePresignedUrlSchema,
   confirmarSoporteSchema,
@@ -116,7 +117,7 @@ estudiosRouter.get(
 estudiosRouter.post(
   '/:estudioId/ejecutar',
   roleGuard(['administrador', 'operador_analista', 'solicitante']),
-  validate({ params: estudioIdParamsSchema }),
+  validate({ params: estudioIdParamsSchema, body: ejecutarEstudioBodySchema }),
   estudiosController.ejecutarEstudio,
 );
 

@@ -1002,6 +1002,7 @@ export async function ejecutarEstudio(
   userId: string,
   ip?: string,
   userRol?: string,
+  documentoOverride?: { tipo_documento?: string; numero_documento?: string },
 ) {
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
@@ -1090,15 +1091,35 @@ export async function ejecutarEstudio(
     );
   }
 
-  // 3. Validate datos_formulario exists
-  if (!est.datos_formulario) {
+  // 3. Validate datos_formulario exists (o construirlo desde el override).
+  const datosBase = (est.datos_formulario as Record<string, string> | null) ?? {};
+
+  // Aplicar override del documento si viene en el body (el solicitante
+  // confirmó/corrigió su CC en la card). Persistimos el cambio para que el
+  // historial refleje qué documento se consultó.
+  const datos: Record<string, string> = { ...datosBase };
+  const overrideNumero = documentoOverride?.numero_documento?.trim();
+  const overrideTipo = documentoOverride?.tipo_documento?.trim().toLowerCase();
+  if (overrideNumero) datos.numero_documento = overrideNumero;
+  if (overrideTipo) datos.tipo_documento = overrideTipo;
+
+  if (!datos.numero_documento) {
     throw AppError.badRequest(
-      'El estudio no tiene datos de formulario. El solicitante debe completar el formulario primero.',
-      'FORMULARIO_NO_COMPLETADO',
+      'Falta el número de documento para ejecutar el estudio.',
+      'DOCUMENTO_REQUERIDO',
     );
   }
 
-  const datos = est.datos_formulario as Record<string, string>;
+  // Si el override trajo cambios, persistir en datos_formulario para auditoría.
+  if (
+    (overrideNumero && overrideNumero !== datosBase.numero_documento) ||
+    (overrideTipo && overrideTipo !== datosBase.tipo_documento)
+  ) {
+    await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({ datos_formulario: datos } as never)
+      .eq('id', est.id);
+  }
 
   // 4. Build provider input
   const providerInput: ProviderSolicitudInput = {

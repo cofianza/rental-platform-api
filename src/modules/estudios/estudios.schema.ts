@@ -206,6 +206,18 @@ export const reEvaluarSchema = z.object({
   observaciones: z.string().max(2000, 'Observaciones no deben exceder 2000 caracteres').optional(),
 });
 
+// Body opcional para POST /estudios/:id/ejecutar — permite al solicitante
+// enviar/corregir su documento justo antes de ejecutar el estudio.
+export const ejecutarEstudioBodySchema = z.object({
+  tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte']).optional(),
+  numero_documento: z
+    .string()
+    .trim()
+    .min(5, 'El número de documento debe tener al menos 5 caracteres')
+    .max(20, 'El número de documento no debe exceder 20 caracteres')
+    .optional(),
+}).optional();
+
 // ============================================================
 // Type exports
 // ============================================================
@@ -222,6 +234,7 @@ export type SubmitFormularioInput = z.infer<typeof submitFormularioSchema>;
 export type RegistrarResultadoInput = z.infer<typeof registrarResultadoSchema>;
 export type CertificadoPresignedUrlInput = z.infer<typeof certificadoPresignedUrlSchema>;
 export type SoportePresignedUrlInput = z.infer<typeof soportePresignedUrlSchema>;
+export type EjecutarEstudioBody = z.infer<typeof ejecutarEstudioBodySchema>;
 export type ConfirmarSoporteInput = z.infer<typeof confirmarSoporteSchema>;
 export type ReEvaluarInput = z.infer<typeof reEvaluarSchema>;
 export type CodigoParams = z.infer<typeof codigoParamsSchema>;
