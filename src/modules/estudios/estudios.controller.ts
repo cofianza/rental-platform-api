@@ -157,7 +157,12 @@ export async function verificarCertificadoPublic(req: Request, res: Response) {
 
 export async function ejecutarEstudio(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const result = await estudiosService.ejecutarEstudio(estudioId, req.user!.id, req.ip);
+  const result = await estudiosService.ejecutarEstudio(
+    estudioId,
+    req.user!.id,
+    req.ip,
+    req.user!.rol,
+  );
   sendSuccess(res, result);
 }
 

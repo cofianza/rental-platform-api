@@ -328,14 +328,12 @@ export async function onPagoConfirmado(params: {
         return;
       }
 
-      // Ejecutar TransUnion automáticamente. Si falla, ejecutarEstudio
-      // marca el estudio como 'fallido' y lanza AppError — aquí lo
-      // capturamos para no re-throw al caller (webhook).
-      await estudiosModule.ejecutarEstudio(estudioRow.id, expRow.solicitante_id);
-
+      // NO auto-ejecutar. Dejamos el estudio en 'formulario_completado' para que
+      // el solicitante confirme su cédula explícitamente desde el panel y recién
+      // entonces dispare la consulta a TransUnion vía POST /estudios/:id/ejecutar.
       logger.info(
         { pagoId, estudioId: estudioRow.id, expedienteId: expRow.id },
-        'Orchestrator: flujo onboarding completo → pago → formulario → estudio ejecutado',
+        'Orchestrator: pago confirmado, formulario poblado — esperando confirmación del solicitante para ejecutar TransUnion',
       );
     } catch (err) {
       logger.error(

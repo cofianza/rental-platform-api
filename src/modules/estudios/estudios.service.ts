@@ -997,7 +997,12 @@ export async function getCertificadoViewUrl(estudioId: string) {
 // Execute estudio via provider
 // ============================================================
 
-export async function ejecutarEstudio(estudioId: string, userId: string, ip?: string) {
+export async function ejecutarEstudio(
+  estudioId: string,
+  userId: string,
+  ip?: string,
+  userRol?: string,
+) {
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -1018,6 +1023,26 @@ export async function ejecutarEstudio(estudioId: string, userId: string, ip?: st
     datos_formulario: Record<string, unknown> | null;
     expediente_id: string;
   };
+
+  // 1.2. Ownership guard para solicitante: solo puede ejecutar estudios
+  //      de sus propios expedientes. Admin/operador pasan sin chequeo.
+  if (userRol === 'solicitante') {
+    const { data: solOwnRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id, solicitante:solicitantes(creado_por)')
+      .eq('id', est.expediente_id)
+      .single();
+    const solOwn = solOwnRow as unknown as {
+      id: string;
+      solicitante: { creado_por: string } | null;
+    } | null;
+    if (!solOwn?.solicitante || solOwn.solicitante.creado_por !== userId) {
+      throw AppError.forbidden(
+        'No tienes permisos para ejecutar este estudio',
+        'ESTUDIO_FORBIDDEN',
+      );
+    }
+  }
 
   // 1.5. Guard: el expediente debe estar habilitado para estudio. Gate del
   //      paso 3 del flujo — evita consultas a TransUnion sin autorización

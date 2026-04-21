@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
-import { authMiddleware, authorize } from '@/middleware/auth';
+import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { publicFormLimiter } from '@/middleware/rateLimiter';
 import {
   expedienteIdParamsSchema,
@@ -109,10 +109,13 @@ estudiosRouter.get(
   estudiosController.getCertificadoUrl,
 );
 
-// POST /estudios/:estudioId/ejecutar (execute via provider)
+// POST /estudios/:estudioId/ejecutar (execute via provider).
+// El solicitante puede dispararlo sobre SUS estudios (ownership check en
+// el service). Admin/operador pueden sobre cualquiera. Propietario/inmobiliaria
+// no — ellos ya habilitaron; la ejecución es decisión del solicitante.
 estudiosRouter.post(
   '/:estudioId/ejecutar',
-  authorize('estudios', 'update'),
+  roleGuard(['administrador', 'operador_analista', 'solicitante']),
   validate({ params: estudioIdParamsSchema }),
   estudiosController.ejecutarEstudio,
 );
