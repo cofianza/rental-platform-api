@@ -326,6 +326,54 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
   logger.info({ email, nombre_solicitante }, 'Orchestrator email: cita confirmada notificacion enviado');
 }
 
+// ── Cita Reprogramada — Propietario ajustó la fecha/hora ──
+
+export async function sendCitaReprogramadaSolicitanteEmail(params: {
+  email: string;
+  nombre_solicitante: string;
+  inmueble: string;
+  ciudad: string;
+  fecha_propuesta: string;
+  fecha_confirmada: string;
+  notas_propietario?: string;
+}) {
+  const { email, nombre_solicitante, inmueble, ciudad, fecha_propuesta, fecha_confirmada, notas_propietario } = params;
+  const fmt = (iso: string) =>
+    new Date(iso).toLocaleString('es-CO', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+  const fechaOriginal = fmt(fecha_propuesta);
+  const fechaNueva = fmt(fecha_confirmada);
+
+  await resend.emails.send({
+    from: FROM,
+    to: email,
+    subject: 'El propietario ajustó la fecha de tu visita - Cofianza',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <div style="background: #d97706; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 24px;">Visita Reprogramada</h1>
+        </div>
+        <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+          <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre_solicitante}</strong>,</p>
+          <p style="color: #6b7280;">El propietario confirmó tu visita al inmueble en <strong>${inmueble}, ${ciudad}</strong>, pero ajustó la fecha y/u hora. Revisa el nuevo horario a continuación.</p>
+          <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="color: #92400e; margin: 0; font-size: 13px;">Fecha que habías propuesto:</p>
+            <p style="color: #92400e; margin: 2px 0 12px; text-decoration: line-through;">${fechaOriginal}</p>
+            <p style="color: #92400e; margin: 0; font-weight: bold;">Nueva fecha confirmada:</p>
+            <p style="color: #92400e; margin: 4px 0 0; font-weight: bold; font-size: 16px;">${fechaNueva}</p>
+            ${notas_propietario ? `<p style="color: #92400e; margin: 12px 0 0;"><strong>Notas del propietario:</strong> ${notas_propietario}</p>` : ''}
+          </div>
+          <p style="color: #6b7280;">Si el nuevo horario no te sirve, contacta al propietario desde tu panel para reagendar.</p>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+        </div>
+      </div>
+    `,
+  });
+
+  logger.info({ email, nombre_solicitante }, 'Orchestrator email: cita reprogramada notificacion enviado');
+}
+
 // ── Estudio Habilitado — Notificación al Solicitante ───────
 
 export async function sendEstudioHabilitadoEmail(params: {

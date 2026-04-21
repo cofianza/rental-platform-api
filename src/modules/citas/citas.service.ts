@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import {
   sendCitaSolicitadaPropietarioEmail,
   sendCitaConfirmadaSolicitanteEmail,
+  sendCitaReprogramadaSolicitanteEmail,
 } from '../orchestrator/orchestrator.emails';
 import { assertCitaPermission, resolveAccessibleExpedienteIds } from './citas.permissions';
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
@@ -199,9 +200,32 @@ async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string,
   }
 }
 
-async function notificarCitaConfirmada(expedienteId: string, fechaConfirmada: string, notasPropietario?: string) {
+async function notificarCitaConfirmada(
+  expedienteId: string,
+  fechaPropuesta: string,
+  fechaConfirmada: string,
+  notasPropietario?: string,
+) {
   const ctx = await obtenerContextoExpediente(expedienteId);
   if (!ctx?.solicitanteEmail) return;
+
+  // Si el propietario confirmó cambiando la fecha/hora, usar template específico
+  // de "reprogramada" para que el solicitante note el ajuste.
+  const reprogramada =
+    new Date(fechaPropuesta).getTime() !== new Date(fechaConfirmada).getTime();
+
+  if (reprogramada) {
+    await sendCitaReprogramadaSolicitanteEmail({
+      email: ctx.solicitanteEmail,
+      nombre_solicitante: ctx.solicitanteNombre,
+      inmueble: ctx.inmuebleDireccion,
+      ciudad: ctx.inmuebleCiudad,
+      fecha_propuesta: fechaPropuesta,
+      fecha_confirmada: fechaConfirmada,
+      notas_propietario: notasPropietario,
+    });
+    return;
+  }
 
   await sendCitaConfirmadaSolicitanteEmail({
     email: ctx.solicitanteEmail,
@@ -428,6 +452,7 @@ export async function confirmarCita(id: string, input: ConfirmarCitaInput, userI
   // Notificar al solicitante que su cita fue confirmada
   notificarCitaConfirmada(
     cita.expediente_id as string,
+    cita.fecha_propuesta as string,
     (input.fecha_confirmada || cita.fecha_propuesta) as string,
     input.notas_propietario,
   ).catch((e) => logger.warn({ error: e, citaId: id }, 'Error al enviar notificacion de cita confirmada'));
