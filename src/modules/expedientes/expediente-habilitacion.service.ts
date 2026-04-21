@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
 import { sendEstudioHabilitadoEmail } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
+import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import type { UserRole } from '@/types/auth';
 
 export interface HabilitarEstudioResult {
@@ -73,26 +74,44 @@ export async function habilitarEstudio(
 
   const rpcResult = data as { expediente_id: string; numero: string; estudio_id: string };
 
-  // 3. Email al solicitante. Error log-only para no abortar la habilitación.
-  if (ctx.solicitanteEmail && ctx.solicitanteNombre) {
+  // 3. Notificación + pago.
+  //    - Propietario habilita: auto-creamos Stripe Checkout Session y dejamos
+  //      el pago pendiente para que el solicitante pague desde su panel/email.
+  //      El email con el link de pago lo envía enviarLinkPago(), así que
+  //      omitimos el email genérico de "habilitado" para no duplicar.
+  //    - Admin/inmobiliaria: mantienen el flujo manual (enviar-link / asumir),
+  //      así que solo enviamos el email informativo de habilitación.
+  const puedeAutoCrearPago =
+    userRol === 'propietario' &&
+    !!ctx.solicitanteEmail &&
+    !!ctx.solicitanteNombre;
+
+  if (puedeAutoCrearPago) {
     try {
-      // TODO(prompt-6): cambiar a `/expedientes/${id}/pagar-estudio`
-      // cuando se implemente la pantalla de pago del estudio.
-      const urlPanel = `${env.FRONTEND_URL}/expedientes/${expedienteId}`;
-      await sendEstudioHabilitadoEmail({
-        email: ctx.solicitanteEmail,
-        nombre_solicitante: ctx.solicitanteNombre,
-        expediente_numero: rpcResult.numero,
-        inmueble: ctx.inmuebleDireccion,
-        ciudad: ctx.inmuebleCiudad,
-        url_panel: urlPanel,
-      });
-    } catch (emailError) {
-      logger.warn(
-        { error: emailError, expedienteId, estudioId: rpcResult.estudio_id },
-        'Error al enviar email de habilitación de estudio',
+      await enviarLinkPago(
+        expedienteId,
+        {
+          email_pagador: ctx.solicitanteEmail!,
+          nombre_pagador: ctx.solicitanteNombre!,
+        },
+        userId,
       );
+      logger.info(
+        { expedienteId, estudioId: rpcResult.estudio_id },
+        'Pago de estudio auto-creado tras habilitación por propietario',
+      );
+    } catch (pagoError) {
+      // Si Stripe falla, caemos al email genérico para que el solicitante
+      // al menos sepa que el estudio fue habilitado y pueda intentar desde
+      // el panel (futuro: self-service).
+      logger.warn(
+        { error: pagoError, expedienteId, estudioId: rpcResult.estudio_id },
+        'Error al auto-crear pago de estudio post-habilitación',
+      );
+      await sendHabilitadoFallbackEmail(expedienteId, rpcResult.numero, ctx);
     }
+  } else if (ctx.solicitanteEmail && ctx.solicitanteNombre) {
+    await sendHabilitadoFallbackEmail(expedienteId, rpcResult.numero, ctx);
   } else {
     // Escenario borde: expediente sin solicitante vinculado (source='invitacion'
     // con estudio_habilitado=false que se habilita manualmente). No hay a quién
@@ -126,4 +145,32 @@ export async function habilitarEstudio(
       resultado: 'pendiente',
     },
   };
+}
+
+/**
+ * Email genérico "estudio habilitado" — usado cuando NO se auto-crea el pago
+ * (admin/inmobiliaria) o como fallback si la creación del link Stripe falla.
+ */
+async function sendHabilitadoFallbackEmail(
+  expedienteId: string,
+  numero: string,
+  ctx: { solicitanteEmail: string | null; solicitanteNombre: string | null; inmuebleDireccion: string; inmuebleCiudad: string },
+): Promise<void> {
+  if (!ctx.solicitanteEmail || !ctx.solicitanteNombre) return;
+  try {
+    const urlPanel = `${env.FRONTEND_URL}/expedientes/${expedienteId}`;
+    await sendEstudioHabilitadoEmail({
+      email: ctx.solicitanteEmail,
+      nombre_solicitante: ctx.solicitanteNombre,
+      expediente_numero: numero,
+      inmueble: ctx.inmuebleDireccion,
+      ciudad: ctx.inmuebleCiudad,
+      url_panel: urlPanel,
+    });
+  } catch (emailError) {
+    logger.warn(
+      { error: emailError, expedienteId },
+      'Error al enviar email de habilitación de estudio (fallback)',
+    );
+  }
 }

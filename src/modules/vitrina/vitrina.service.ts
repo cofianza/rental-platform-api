@@ -84,8 +84,16 @@ export async function registerSolicitante(
     } as never);
 
   if (solicitanteError) {
+    // Historicamente esto era log-only, pero dejaba usuarios fantasma sin
+    // registro de solicitante, rompiendo el flujo "Me interesa" después.
+    // Ahora abortamos — el usuario de auth queda, pero es preferible a
+    // permitir que siga navegando con un estado inconsistente.
     logger.error({ error: solicitanteError.message, userId }, 'Error al crear registro de solicitante');
-    // Don't throw — user is created, solicitante record is secondary
+    throw new AppError(
+      500,
+      'SOLICITANTE_INSERT_FAILED',
+      'No se pudo completar el registro del solicitante. Contacta a soporte.',
+    );
   }
 
   // 3.5. Persistir aceptación de términos + tratamiento de datos.
@@ -166,18 +174,24 @@ export async function createInterest(
     throw AppError.badRequest('Este inmueble no esta disponible para arriendo', 'PROPERTY_NOT_AVAILABLE');
   }
 
-  // 2. Find solicitante record by user ID
-  const { data: solicitante, error: solicitanteError } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('creado_por', userId)
-    .single();
-
-  if (solicitanteError || !solicitante) {
-    throw AppError.badRequest('No se encontro registro de solicitante para este usuario', 'SOLICITANTE_NOT_FOUND');
+  // 2. Find solicitante record by user ID. Si no existe (usuarios legacy
+  //    creados cuando el INSERT era log-only), auto-heal construyendo el
+  //    registro a partir de auth.users + perfiles para no bloquear el flujo.
+  let solicitanteData: { id: string } | null = null;
+  {
+    const { data: solicitante } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('creado_por', userId)
+      .single();
+    if (solicitante) {
+      solicitanteData = solicitante as { id: string };
+    }
   }
 
-  const solicitanteData = solicitante as { id: string };
+  if (!solicitanteData) {
+    solicitanteData = await selfHealSolicitante(userId);
+  }
 
   // 3. Bloquear duplicados por (inmueble_id, solicitante_id) en estados activos.
   //    Un solicitante puede explorar varios inmuebles distintos en paralelo,
@@ -252,4 +266,83 @@ export async function createInterest(
     expediente: expedienteData,
     siguiente_paso: 'agendar_cita',
   };
+}
+
+// ------------------------------------------------------------------
+// selfHealSolicitante — crea el registro faltante en `solicitantes`
+// ------------------------------------------------------------------
+
+/**
+ * Construye el registro de `solicitantes` para un usuario que se autenticó
+ * como solicitante pero cuyo INSERT original falló silenciosamente (legacy
+ * antes del fix). Lee metadata de auth.users + perfiles y crea la fila.
+ *
+ * Si falta información esencial (email, nombre), no se puede sanar y
+ * lanzamos el error original para que el frontend lo muestre.
+ */
+async function selfHealSolicitante(userId: string): Promise<{ id: string }> {
+  // Auth user → email + user_metadata.{nombre,apellido}
+  const { data: authResult, error: authError } = await supabaseAuth.auth.admin.getUserById(userId);
+  if (authError || !authResult?.user) {
+    logger.warn({ userId, error: authError?.message }, 'Self-heal: no se pudo leer auth.user');
+    throw AppError.badRequest(
+      'No se encontro registro de solicitante para este usuario',
+      'SOLICITANTE_NOT_FOUND',
+    );
+  }
+
+  const authUser = authResult.user;
+  const meta = (authUser.user_metadata || {}) as { nombre?: string; apellido?: string };
+  const nombre = meta.nombre?.trim();
+  const apellido = meta.apellido?.trim() || '';
+  const email = authUser.email;
+
+  if (!nombre || !email) {
+    logger.warn({ userId }, 'Self-heal: user_metadata incompleto');
+    throw AppError.badRequest(
+      'No se encontro registro de solicitante para este usuario',
+      'SOLICITANTE_NOT_FOUND',
+    );
+  }
+
+  // Perfiles → telefono, tipo_documento, numero_documento
+  const { data: perfil } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('telefono, tipo_documento, numero_documento')
+    .eq('id', userId)
+    .single();
+
+  const perfilData = (perfil || {}) as {
+    telefono?: string | null;
+    tipo_documento?: string | null;
+    numero_documento?: string | null;
+  };
+
+  const { data: inserted, error: insertError } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      nombre,
+      apellido,
+      email,
+      telefono: perfilData.telefono || null,
+      tipo_documento: perfilData.tipo_documento || 'CC',
+      numero_documento: perfilData.numero_documento || '',
+      creado_por: userId,
+    } as never)
+    .select('id')
+    .single();
+
+  if (insertError || !inserted) {
+    logger.error(
+      { userId, error: insertError?.message },
+      'Self-heal: falló el INSERT en solicitantes',
+    );
+    throw AppError.badRequest(
+      'No se encontro registro de solicitante para este usuario',
+      'SOLICITANTE_NOT_FOUND',
+    );
+  }
+
+  logger.info({ userId, solicitanteId: (inserted as { id: string }).id }, 'Self-heal: solicitante creado on-the-fly');
+  return inserted as { id: string };
 }
