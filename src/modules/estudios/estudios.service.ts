@@ -1174,6 +1174,21 @@ export async function ejecutarEstudio(
       ip,
     });
 
+    // 7. Proveedores sincronos (TransUnion) devuelven status='completed'
+    //    inmediatamente. No tiene sentido dejar el estudio en 'en_proceso'
+    //    — registramos el resultado cachéado en la misma request para que
+    //    el solicitante vea aprobado/condicionado/rechazado al instante.
+    if (response.status === 'completed') {
+      try {
+        await consultarEstadoProveedor(estudioId);
+      } catch (postErr) {
+        logger.warn(
+          { error: postErr, estudioId },
+          'Provider retornó completed pero falló el registro automático del resultado — el estudio queda en en_proceso',
+        );
+      }
+    }
+
     return getEstudioById(estudioId);
   } catch (err) {
     // 7. On failure: mark as fallido
