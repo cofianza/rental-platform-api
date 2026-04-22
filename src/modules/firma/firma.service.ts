@@ -128,6 +128,18 @@ export async function crearSolicitudFirma(
 
     const processName = `Contrato - ${exp?.numero || c.id}`;
 
+    // Normalizar el teléfono a formato internacional (+57...) para que Auco
+    // pueda enviar el link de firma por WhatsApp. Si no viene o no se puede
+    // normalizar, cae al envío solo-email.
+    const phoneInternational = aucoClient.normalizePhoneToInternational(input.telefono_firmante);
+    const enableWhatsapp = Boolean(phoneInternational);
+    if (input.telefono_firmante && !phoneInternational) {
+      logger.warn(
+        { telefono: input.telefono_firmante, contratoId: c.id },
+        'Teléfono no pudo normalizarse a formato internacional — WhatsApp deshabilitado',
+      );
+    }
+
     aucoDocumentCode = await aucoClient.uploadDocumentForSignature({
       email: env.AUCO_SENDER_EMAIL,
       name: processName,
@@ -137,13 +149,20 @@ export async function crearSolicitudFirma(
       signProfile: [{
         name: input.nombre_firmante,
         email: input.email_firmante,
-        phone: input.telefono_firmante || '',
+        phone: phoneInternational || '',
         role: 'SIGNER',
       }],
       otpCode: true,
       expiredDate: tokenExpiracion,
       webhooks: ['default'],
+      options: enableWhatsapp ? { whatsapp: true } : undefined,
     });
+    logger.info(
+      { contratoId: c.id, whatsapp: enableWhatsapp, documentCode: aucoDocumentCode },
+      enableWhatsapp
+        ? 'Auco: documento subido con envío por WhatsApp + email'
+        : 'Auco: documento subido con envío solo por email',
+    );
   } catch (aucoError) {
     logger.error({ error: aucoError, contratoId: c.id }, 'Error al enviar documento a Auco');
     // Continue without Auco — still create solicitud with our own email link as fallback

@@ -43,6 +43,11 @@ interface AucoUploadDocumentInput {
   remember?: number;
   /** Webhook IDs to receive notifications */
   webhooks?: string[];
+  /** Delivery options (root-level, no per-signer) */
+  options?: {
+    /** Enviar el link por WhatsApp al phone de cada signProfile (además del email). */
+    whatsapp?: boolean;
+  };
 }
 
 interface AucoUploadResponse {
@@ -226,4 +231,31 @@ export async function registerWebhook(
  */
 export function bufferToBase64(buffer: Buffer): string {
   return buffer.toString('base64');
+}
+
+/**
+ * Normaliza un teléfono a formato internacional que Auco espera (+57XXXXXXXXXX).
+ * Si ya viene con prefijo + o 00, respeta. Si son 10 dígitos colombianos sin
+ * prefijo, añade +57. Si el número es demasiado corto o contiene caracteres
+ * raros sin poder normalizarse, devuelve null para que el caller decida.
+ */
+export function normalizePhoneToInternational(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim().replace(/\s+/g, '').replace(/[()\-.]/g, '');
+  if (!trimmed) return null;
+  if (trimmed.startsWith('+')) {
+    const digits = trimmed.slice(1).replace(/\D/g, '');
+    if (digits.length >= 10 && digits.length <= 15) return `+${digits}`;
+    return null;
+  }
+  if (trimmed.startsWith('00')) {
+    const digits = trimmed.slice(2).replace(/\D/g, '');
+    if (digits.length >= 10 && digits.length <= 15) return `+${digits}`;
+    return null;
+  }
+  const digits = trimmed.replace(/\D/g, '');
+  // Colombia: 10 dígitos → +57. 12 dígitos empezando por 57 → asumimos CC incluido.
+  if (digits.length === 10) return `+57${digits}`;
+  if (digits.length === 12 && digits.startsWith('57')) return `+${digits}`;
+  return null;
 }
