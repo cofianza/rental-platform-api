@@ -1175,17 +1175,24 @@ export async function ejecutarEstudio(
     });
 
     // 7. Proveedores sincronos (TransUnion) devuelven status='completed'
-    //    inmediatamente. No tiene sentido dejar el estudio en 'en_proceso'
-    //    — registramos el resultado cachéado en la misma request para que
-    //    el solicitante vea aprobado/condicionado/rechazado al instante.
+    //    inmediatamente. Registramos el resultado cachéado en la misma
+    //    request para que el solicitante vea el resultado al instante.
     if (response.status === 'completed') {
+      logger.info(
+        { estudioId, referencia: response.referencia_proveedor },
+        'Provider retornó completed — disparando registro automático del resultado',
+      );
       try {
-        await consultarEstadoProveedor(estudioId);
+        await registrarResultadoInline(estudioId, est.proveedor, response.referencia_proveedor, est.expediente_id);
+        logger.info({ estudioId }, 'Registro automático del resultado completado exitosamente');
       } catch (postErr) {
-        logger.warn(
-          { error: postErr, estudioId },
-          'Provider retornó completed pero falló el registro automático del resultado — el estudio queda en en_proceso',
+        const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
+        logger.error(
+          { error: errMsg, stack: postErr instanceof Error ? postErr.stack : undefined, estudioId },
+          'Falló el registro automático del resultado',
         );
+        // No re-lanzamos — el estudio queda en en_proceso y el frontend
+        // puede disparar consultarEstadoProveedor vía polling como fallback.
       }
     }
 
@@ -1642,6 +1649,79 @@ export async function getHistorialReEvaluacion(estudioId: string) {
     puede_reevaluar: puedeReevaluar,
     historial,
   };
+}
+
+// ============================================================
+// Registrar resultado inline tras solicitar (proveedor síncrono).
+// Reusa la misma RPC + orchestrator que consultarEstadoProveedor,
+// pero con logging granular para diagnosticar fallos silenciosos.
+// ============================================================
+
+async function registrarResultadoInline(
+  estudioId: string,
+  proveedorId: string,
+  referenciaProveedor: string,
+  expedienteId: string,
+): Promise<void> {
+  const provider = getProvider(proveedorId as 'transunion' | 'sifin' | 'datacredito');
+
+  logger.info({ estudioId }, 'registrarResultadoInline: obteniendo resultado del provider');
+  const result = await provider.obtenerResultado(referenciaProveedor);
+  logger.info(
+    { estudioId, resultado: result.resultado, score: result.score },
+    'registrarResultadoInline: resultado obtenido, llamando RPC',
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
+    p_estudio_id: estudioId,
+    p_resultado: result.resultado,
+    p_observaciones: result.observaciones || 'Resultado recibido del proveedor',
+    p_score: result.score ?? null,
+    p_motivo_rechazo: null,
+    p_condiciones: null,
+    p_certificado_url: null,
+    p_usuario_id: null,
+  });
+
+  if (rpcError) {
+    logger.error(
+      { error: rpcError, estudioId, rpcMessage: rpcError.message, rpcDetails: rpcError.details },
+      'RPC fn_registrar_resultado_estudio falló',
+    );
+    throw AppError.badRequest(
+      `RPC falló: ${rpcError.message || 'error desconocido'}`,
+      'RPC_REGISTER_RESULT_ERROR',
+    );
+  }
+
+  logger.info({ estudioId }, 'registrarResultadoInline: RPC ejecutada, disparando orchestrator');
+
+  logAudit({
+    usuarioId: null,
+    accion: AUDIT_ACTIONS.ESTUDIO_PROVIDER_RESULT_RECEIVED,
+    entidad: AUDIT_ENTITIES.ESTUDIO,
+    entidadId: estudioId,
+    detalle: {
+      proveedor: proveedorId,
+      resultado: result.resultado,
+      score: result.score,
+      referencia_proveedor: referenciaProveedor,
+    },
+  });
+
+  // Orchestrator: fire-and-forget para no bloquear la respuesta.
+  import('@/modules/orchestrator/orchestrator.service')
+    .then(({ onEstudioCompletado }) =>
+      onEstudioCompletado({
+        estudioId,
+        expedienteId,
+        resultado: result.resultado,
+        score: result.score,
+        solicitanteId: '',
+      }),
+    )
+    .catch((err) => logger.warn({ error: err, estudioId }, 'Orchestrator hook falló'));
 }
 
 // ============================================================
