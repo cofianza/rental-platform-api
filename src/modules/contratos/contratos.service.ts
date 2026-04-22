@@ -135,6 +135,8 @@ interface ExpedienteData {
     ciudad: string;
     valor_arriendo: number;
     propietario_id: string;
+    contrato_tipo_storage_key?: string | null;
+    contrato_tipo_nombre_archivo?: string | null;
   };
   solicitante: {
     nombre: string;
@@ -181,7 +183,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, numero, estado, inmueble_id, solicitante_id,
-      inmuebles(id, direccion, ciudad, valor_arriendo, propietario_id),
+      inmuebles(id, direccion, ciudad, valor_arriendo, propietario_id, contrato_tipo_storage_key, contrato_tipo_nombre_archivo),
       solicitantes(id, nombre, apellido, tipo_documento, numero_documento)
     `)
     .eq('id', expedienteId)
@@ -197,7 +199,15 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     estado: string;
     inmueble_id: string;
     solicitante_id: string;
-    inmuebles: { id: string; direccion: string; ciudad: string; valor_arriendo: number; propietario_id: string };
+    inmuebles: {
+      id: string;
+      direccion: string;
+      ciudad: string;
+      valor_arriendo: number;
+      propietario_id: string;
+      contrato_tipo_storage_key: string | null;
+      contrato_tipo_nombre_archivo: string | null;
+    };
     solicitantes: { id: string; nombre: string; apellido: string; tipo_documento: string; numero_documento: string };
   };
 
@@ -364,52 +374,80 @@ export async function generarContrato(
   // 1. Fetch expediente data
   const { data: expData } = await fetchExpedienteData(expedienteId);
 
-  // 2. Fetch plantilla
-  const { data: plantilla, error: plantillaError } = await (supabase
-    .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
-    .select('id, nombre, contenido, variables, activa, version')
-    .eq('id', input.plantilla_id)
-    .single();
-
-  if (plantillaError || !plantilla) {
-    throw AppError.notFound('Plantilla no encontrada', 'PLANTILLA_NOT_FOUND');
-  }
-
-  const pl = plantilla as unknown as {
-    id: string; nombre: string; contenido: string;
-    variables: string[]; activa: boolean; version: number;
-  };
-
-  if (!pl.activa) {
-    throw AppError.badRequest('La plantilla no esta activa', 'PLANTILLA_INACTIVE');
-  }
-
-  // 3. Build variables
+  const now = new Date();
   const fechaInicio = input.fecha_inicio
     ? new Date(input.fecha_inicio + 'T00:00:00')
     : new Date();
   const duracionMeses = input.duracion_meses || 12;
+  const usarContratoTipoInmueble = Boolean(expData.inmueble.contrato_tipo_storage_key);
 
+  // Validación: si el inmueble NO tiene contrato tipo, se requiere plantilla.
+  if (!usarContratoTipoInmueble && !input.plantilla_id) {
+    throw AppError.badRequest(
+      'Este inmueble no tiene contrato tipo subido. Selecciona una plantilla para generar el contrato.',
+      'PLANTILLA_REQUERIDA',
+    );
+  }
+
+  // Variables calculadas (se guardan en datos_variables incluso si usamos
+  // el PDF del propietario — sirven para reporting/referencia).
   const autoVariables = buildVariablesFromExpediente(expData, fechaInicio, duracionMeses);
   const finalVariables = { ...autoVariables, ...(input.variables ?? {}) };
 
-  // 4. Compile HTML
-  const compiledHtml = compileTemplate(pl.contenido, finalVariables);
+  type PlantillaRow = {
+    id: string; nombre: string; contenido: string;
+    variables: string[]; activa: boolean; version: number;
+  };
+  let plantillaRow: PlantillaRow | null = null;
+  let nombreArchivoContrato: string;
+  let pdfBuffer: Buffer;
 
-  // 5. Generate PDF
-  const now = new Date();
-  const pdfBuffer = await generateContractPdf(compiledHtml, {
-    titulo: pl.nombre,
-    fecha: formatDateCO(now),
-    version: 1,
-  });
+  if (usarContratoTipoInmueble) {
+    // ── Rama A: contrato tipo subido por el propietario ──
+    const { data: downloaded, error: downloadError } = await supabase.storage
+      .from(BUCKET_NAME)
+      .download(expData.inmueble.contrato_tipo_storage_key!);
+    if (downloadError || !downloaded) {
+      logger.error(
+        { error: downloadError, expedienteId, key: expData.inmueble.contrato_tipo_storage_key },
+        'Error al descargar contrato tipo del inmueble',
+      );
+      throw new AppError(500, 'STORAGE_ERROR', 'No se pudo obtener el contrato tipo del inmueble');
+    }
+    pdfBuffer = Buffer.from(await downloaded.arrayBuffer());
+    nombreArchivoContrato = expData.inmueble.contrato_tipo_nombre_archivo || 'contrato-tipo.pdf';
+  } else {
+    // ── Rama B: compilar desde plantilla (flujo original) ──
+    const { data: plantilla, error: plantillaError } = await (supabase
+      .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
+      .select('id, nombre, contenido, variables, activa, version')
+      .eq('id', input.plantilla_id!)
+      .single();
 
-  // 6. Insert contrato first to get ID
+    if (plantillaError || !plantilla) {
+      throw AppError.notFound('Plantilla no encontrada', 'PLANTILLA_NOT_FOUND');
+    }
+
+    plantillaRow = plantilla as unknown as PlantillaRow;
+    if (!plantillaRow.activa) {
+      throw AppError.badRequest('La plantilla no esta activa', 'PLANTILLA_INACTIVE');
+    }
+
+    const compiledHtml = compileTemplate(plantillaRow.contenido, finalVariables);
+    pdfBuffer = await generateContractPdf(compiledHtml, {
+      titulo: plantillaRow.nombre,
+      fecha: formatDateCO(now),
+      version: 1,
+    });
+    nombreArchivoContrato = `contrato-${plantillaRow.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`;
+  }
+
+  // Insert contrato first to get ID
   const { data: contrato, error: insertError } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .insert({
       expediente_id: expedienteId,
-      plantilla_id: input.plantilla_id,
+      plantilla_id: plantillaRow?.id ?? null,
       version: 1,
       estado: 'borrador',
       fecha_inicio: input.fecha_inicio || now.toISOString().split('T')[0],
@@ -419,8 +457,8 @@ export async function generarContrato(
       datos_variables: finalVariables,
       generado_por: userId,
       fecha_generacion: now.toISOString(),
-      plantilla_version: pl.version,
-      nombre_archivo: `contrato-${pl.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`,
+      plantilla_version: plantillaRow?.version ?? null,
+      nombre_archivo: nombreArchivoContrato,
     } as never)
     .select('id')
     .single();
@@ -432,9 +470,8 @@ export async function generarContrato(
 
   const created = contrato as unknown as { id: string };
 
-  // 7. Upload PDF to storage
+  // Upload PDF to storage
   const storageKey = `contratos/${expedienteId}/${created.id}/v1.pdf`;
-
   const { error: uploadError } = await supabase.storage
     .from(BUCKET_NAME)
     .upload(storageKey, pdfBuffer, {
@@ -444,7 +481,6 @@ export async function generarContrato(
 
   if (uploadError) {
     logger.error({ error: uploadError.message }, 'Error al subir PDF');
-    // Clean up the contrato record
     await (supabase
       .from('contratos' as string) as ReturnType<typeof supabase.from>)
       .delete()
@@ -452,13 +488,11 @@ export async function generarContrato(
     throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF');
   }
 
-  // 8. Update contrato with storage_key
   await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .update({ storage_key: storageKey } as never)
     .eq('id', created.id);
 
-  // 9. Audit
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.CONTRATO_GENERATED,
@@ -466,8 +500,9 @@ export async function generarContrato(
     entidadId: created.id,
     detalle: {
       expediente_id: expedienteId,
-      plantilla_id: input.plantilla_id,
-      plantilla_nombre: pl.nombre,
+      origen: usarContratoTipoInmueble ? 'contrato_tipo_inmueble' : 'plantilla',
+      plantilla_id: plantillaRow?.id ?? null,
+      plantilla_nombre: plantillaRow?.nombre ?? null,
       variables_count: Object.keys(finalVariables).length,
     },
     ip,

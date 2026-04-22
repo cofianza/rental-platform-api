@@ -19,6 +19,8 @@ import {
 } from './inmuebles-fotos.schema';
 import * as inmueblesController from './inmuebles.controller';
 import * as fotosController from './inmuebles-fotos.controller';
+import * as contratoTipoController from './inmueble-contrato-tipo.controller';
+import { uploadPdf } from '@/middleware/upload';
 
 const router = Router();
 
@@ -145,6 +147,31 @@ router.delete(
   authorize('inmuebles', 'update'),
   validate({ params: fotoIdParamsSchema }),
   fotosController.remove,
+);
+
+// --- Contrato tipo del inmueble ---
+// El ownership lo valida el service (propietario/inmobiliaria solo sobre sus
+// inmuebles, admin/operador sin límite). roleGuard a nivel ruta es defensivo.
+router.post(
+  '/:id/contrato-tipo',
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  uploadPdf,
+  validate({ params: inmuebleIdParamsSchema }),
+  contratoTipoController.subir,
+);
+
+router.get(
+  '/:id/contrato-tipo/url',
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({ params: inmuebleIdParamsSchema }),
+  contratoTipoController.obtenerUrl,
+);
+
+router.delete(
+  '/:id/contrato-tipo',
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({ params: inmuebleIdParamsSchema }),
+  contratoTipoController.eliminar,
 );
 
 export default router;

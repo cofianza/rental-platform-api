@@ -17,7 +17,9 @@ export const expedienteIdParamsSchema = z.object({
 // ============================================================
 
 export const generarContratoSchema = z.object({
-  plantilla_id: z.string().uuid('ID de plantilla invalido'),
+  // plantilla_id es opcional: si el inmueble tiene contrato_tipo subido por
+  // el propietario, se usa ese PDF en lugar de compilar desde plantilla.
+  plantilla_id: z.string().uuid('ID de plantilla invalido').optional(),
   variables: z.record(z.string(), z.string()).optional(),
   fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha invalido (YYYY-MM-DD)').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
