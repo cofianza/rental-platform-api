@@ -11,3 +11,6 @@ logs/
 supabase/.temp/
 
 src/scripts/test-transunion.ts
+
+# Documentación interna con credenciales (Postman collections, etc.)
+docs/
