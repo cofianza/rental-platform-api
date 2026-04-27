@@ -38,10 +38,12 @@ facturasRouter.get(
 export const pagoFacturarRouter = Router({ mergeParams: true });
 pagoFacturarRouter.use(authMiddleware);
 
-// POST /pagos/:pagoId/facturar — disparar facturación manual desde un pago
+// POST /pagos/:pagoId/facturar — disparar facturación manual desde un pago.
+// Cofianza emite la factura, pero cualquier rol que gestione el expediente
+// (incluido el propietario del inmueble) puede dispararla.
 pagoFacturarRouter.post(
   '/:pagoId/facturar',
-  roleGuard(['administrador', 'operador_analista', 'inmobiliaria']),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
   validate({ params: pagoIdParamsSchema }),
   controller.facturarPago,
 );
