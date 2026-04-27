@@ -52,10 +52,12 @@ export interface FactusCustomer {
 }
 
 export interface FactusTax {
-  /** 01=IVA, 04=INC, etc. */
-  code: string;
-  /** "19.00", "5.00", "0.00" */
-  rate: string;
+  /** 01=IVA, 04=INC, etc. Omitir si is_excluded=true. */
+  code?: string;
+  /** "19.00", "5.00", "0.00". Omitir si is_excluded=true. */
+  rate?: string;
+  /** true = servicio/producto excluido de IVA (no causa el impuesto). */
+  is_excluded?: boolean;
 }
 
 export interface FactusItem {

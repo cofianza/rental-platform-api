@@ -34,9 +34,9 @@ const DEFAULTS_CLIENTE = {
 const ITEM_DEFAULTS = {
   unit_measure_code: '94', // unidad
   standard_code: '999', // Estándar adoptado contribuyente
-  // Estudio crediticio = servicio financiero, exento de IVA. taxes=[] en V2
-  // significa "sin tributos aplicables".
-  taxes: [] as { code: string; rate: string }[],
+  // Estudio crediticio = servicio financiero exento de IVA. V2 exige al menos
+  // un tax; usamos { is_excluded: true } para indicar servicio excluido.
+  taxes: [{ is_excluded: true }] as { is_excluded: boolean }[],
 };
 
 // ── Tipos para la integración ──────────────────────────────────────
@@ -184,6 +184,12 @@ export async function crearFacturaDesdePago(
   const fullName = `${sol.nombre} ${sol.apellido}`.trim();
   const priceStr = monto.toFixed(2);
 
+  // V2: code DANE = 5 dígitos. Si el solicitante tiene un valor que no
+  // matchea (legacy V1 con ID interno Factus, o vacío), caemos al default.
+  const dane = sol.municipio_id && /^\d{5}$/.test(sol.municipio_id)
+    ? sol.municipio_id
+    : DEFAULTS_CLIENTE.municipality_code;
+
   const payload: factus.CreateBillInput = {
     reference_code: referenceCode,
     document: '01', // Factura electrónica de Venta
@@ -200,15 +206,16 @@ export async function crearFacturaDesdePago(
     ],
     customer: {
       identification: sol.numero_documento,
-      // V2: para persona natural usamos 'company' como razón social.
-      company: fullName,
+      // V2: persona natural (legal_organization_code=2) usa 'names'.
+      // Jurídica (=1) usa 'company' + 'trade_name'.
+      names: fullName,
       address: sol.direccion || undefined,
       email: sol.email || undefined,
       phone: sol.telefono || undefined,
       legal_organization_code: DEFAULTS_CLIENTE.legal_organization_code,
       tribute_code: DEFAULTS_CLIENTE.tribute_code,
       identification_document_code: mapTipoDocumentoToFactus(sol.tipo_documento),
-      municipality_code: sol.municipio_id || DEFAULTS_CLIENTE.municipality_code,
+      municipality_code: dane,
     },
     items: [
       {
