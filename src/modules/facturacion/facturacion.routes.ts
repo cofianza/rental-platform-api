@@ -55,3 +55,11 @@ factusHelpersRouter.use(authMiddleware);
 
 // GET /factus/municipalities?name=bog → buscar municipios (autocompletado UI)
 factusHelpersRouter.get('/municipalities', controller.searchMunicipalities);
+
+// ============================================================
+// Public — /api/v1/public/factus/municipalities (para el wizard de registro
+// que aún no tiene token). Solo lectura, rate-limited globalmente.
+// ============================================================
+
+export const factusPublicHelpersRouter = Router();
+factusPublicHelpersRouter.get('/municipalities', controller.searchMunicipalities);

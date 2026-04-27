@@ -30,6 +30,7 @@ export async function registerSolicitante(
   const {
     email, password, nombre, apellido, telefono,
     tipo_documento, numero_documento, from_invitation,
+    municipio_id, municipio_nombre,
   } = input;
 
   const registrationSource = from_invitation ? 'invitacion_externa' : 'vitrina_publica';
@@ -80,6 +81,8 @@ export async function registerSolicitante(
       telefono,
       tipo_documento,
       numero_documento,
+      municipio_id,
+      municipio_nombre,
       creado_por: userId,
     } as never);
 

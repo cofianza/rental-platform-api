@@ -12,6 +12,9 @@ export const registerSolicitanteSchema = z.object({
   telefono: z.string().min(10, 'Telefono debe tener al menos 10 digitos').max(20, 'Telefono muy largo'),
   tipo_documento: z.enum(['cc', 'ce', 'ti', 'pasaporte', 'nit']),
   numero_documento: z.string().min(1, 'Numero de documento es requerido').max(20),
+  // Municipio de Factus — requerido para facturación electrónica DIAN.
+  municipio_id: z.coerce.number().int().positive('Debes seleccionar tu municipio'),
+  municipio_nombre: z.string().min(1).max(120),
   password: z.string().min(8, 'La contrasena debe tener al menos 8 caracteres'),
   confirm_password: z.string().min(8),
   accept_terms: z.literal(true, {

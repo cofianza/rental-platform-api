@@ -43,7 +43,7 @@ import citasRouter from '@/modules/citas/citas.routes';
 import expedienteExternoRouter from '@/modules/expedientes/expediente-externo.routes';
 import { publicInvitacionRouter } from '@/modules/invitacion/invitacion.routes';
 import disponibilidadRouter from '@/modules/disponibilidad/disponibilidad.routes';
-import { facturasRouter, pagoFacturarRouter, factusHelpersRouter } from '@/modules/facturacion/facturacion.routes';
+import { facturasRouter, pagoFacturarRouter, factusHelpersRouter, factusPublicHelpersRouter } from '@/modules/facturacion/facturacion.routes';
 
 const app = express();
 
@@ -132,7 +132,8 @@ app.use('/api/v1/expedientes', expedienteExternoRouter);
 // Facturación electrónica (Factus / DIAN)
 app.use('/api/v1/facturas', facturasRouter);
 app.use('/api/v1/pagos', pagoFacturarRouter); // POST /pagos/:pagoId/facturar
-app.use('/api/v1/factus', factusHelpersRouter); // /factus/municipalities
+app.use('/api/v1/factus', factusHelpersRouter); // /factus/municipalities (auth)
+app.use('/api/v1/public/factus', factusPublicHelpersRouter); // /public/factus/municipalities (sin auth, para wizard registro)
 
 // Error handler (must be last)
 app.use(errorHandler);
