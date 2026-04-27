@@ -20,8 +20,31 @@ const PAGO_SELECT = `
   comprobante_url, comprobante_storage_key, comprobante_nombre_original,
   comprobante_tipo_mime, comprobante_tamano_bytes, referencia_bancaria,
   notas, fecha_pago, created_at, updated_at, creado_por,
-  email_pagador, nombre_pagador
+  email_pagador, nombre_pagador,
+  facturas:facturas(id, factus_number, estado, created_at)
 `;
+
+// Reduce el array de facturas embebidas a la única emitida más reciente
+// (un pago puede tener intentos fallidos en estado 'solicitada' que no
+// queremos exponer al frontend). Devuelve null si no hay factura emitida.
+function reduceFactura(
+  pago: Record<string, unknown>,
+): Record<string, unknown> {
+  const facturas = pago.facturas as
+    | { id: string; factus_number: string | null; estado: string; created_at: string }[]
+    | null
+    | undefined;
+  const emitida = (facturas || [])
+    .filter((f) => f.estado === 'emitida')
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
+  const { facturas: _ignored, ...rest } = pago;
+  return {
+    ...rest,
+    factura: emitida
+      ? { id: emitida.id, numero: emitida.factus_number, estado: emitida.estado }
+      : null,
+  };
+}
 
 const COMPROBANTE_BUCKET = 'pagos-comprobantes';
 const PRESIGNED_URL_EXPIRY = 900; // 15 minutes
@@ -88,7 +111,7 @@ export async function listPagosByExpediente(expedienteId: string, query: ListPag
   }
 
   return {
-    pagos: data ?? [],
+    pagos: (data ?? []).map((p: Record<string, unknown>) => reduceFactura(p)),
     pagination: {
       total: count ?? 0,
       page,
@@ -114,7 +137,7 @@ export async function getPagoById(id: string) {
     throw fromSupabaseError(error);
   }
 
-  return data;
+  return reduceFactura(data as Record<string, unknown>);
 }
 
 // ============================================================
