@@ -3,6 +3,9 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { generateContractPdf } from './contratos.pdf';
+import { renderHtmlToPdf } from '@/lib/pdfRenderer';
+import { renderTemplate } from '@/lib/templateEngine';
+import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import type {
   GenerarContratoInput,
   RenovarContratoInput,
@@ -46,6 +49,46 @@ const VERSION_SELECT = `
 
 function compileTemplate(contenido: string, variables: Record<string, string>): string {
   return contenido.replace(/\{\{(\w+)\}\}/g, (full, name) => variables[name] ?? full);
+}
+
+// ── Helpers para la plantilla V2 (HTML rico + bloques #if) ──────────
+
+const MESES_ES = [
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+];
+
+function nombreMes(date: Date): string {
+  return MESES_ES[date.getMonth()];
+}
+
+function fechaCompleta(date: Date): string {
+  return `${date.getDate()} de ${nombreMes(date)} de ${date.getFullYear()}`;
+}
+
+function tipoDocumentoLabel(tipo: string | null | undefined): string {
+  if (!tipo) return 'CC';
+  const map: Record<string, string> = {
+    cc: 'CC', ce: 'CE', ti: 'TI', nit: 'NIT', pasaporte: 'PASAPORTE', pas: 'PASAPORTE',
+  };
+  return map[tipo.toLowerCase()] || tipo.toUpperCase();
+}
+
+interface ConfiguracionSistemaRow {
+  clave: string;
+  valor: string;
+}
+
+async function getConfigValores(claves: string[]): Promise<Record<string, string>> {
+  const { data } = await (supabase
+    .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
+    .select('clave, valor')
+    .in('clave', claves);
+  const out: Record<string, string> = {};
+  for (const row of (data || []) as ConfiguracionSistemaRow[]) {
+    out[row.clave] = row.valor;
+  }
+  return out;
 }
 
 function formatCurrencyCOP(value: number): string {
@@ -129,11 +172,46 @@ async function archiveCurrentVersion(
   }
 }
 
+interface ArrendadorRow {
+  id: string;
+  nombre: string;
+  apellido: string;
+  rol: string;
+  tipo_documento: string | null;
+  numero_documento: string | null;
+  razon_social: string | null;
+  representante_legal: string | null;
+  domicilio_direccion: string | null;
+  domicilio_ciudad: string | null;
+  ciudad: string | null;
+  matricula_arrendador: string | null;
+  logo_storage_key: string | null;
+  logo_url: string | null;
+  whatsapp_recaudo: string | null;
+  email_recaudo: string | null;
+  cuenta_recaudo_banco: string | null;
+  cuenta_recaudo_tipo: string | null;
+  cuenta_recaudo_numero: string | null;
+  cuenta_recaudo_titular_nombre: string | null;
+  cuenta_recaudo_titular_nit: string | null;
+}
+
+interface CodeudorData {
+  nombre: string;
+  tipo_documento: string | null;
+  numero_documento: string | null;
+  parentesco: string | null;
+}
+
 interface ExpedienteData {
   inmueble: {
     direccion: string;
     ciudad: string;
+    barrio?: string | null;
+    departamento?: string;
     valor_arriendo: number;
+    parqueadero?: boolean | null;
+    administracion?: number | null;
     propietario_id: string;
     contrato_tipo_storage_key?: string | null;
     contrato_tipo_nombre_archivo?: string | null;
@@ -143,12 +221,18 @@ interface ExpedienteData {
     apellido: string;
     tipo_documento: string;
     numero_documento: string;
+    email?: string | null;
+    telefono?: string | null;
+    direccion?: string | null;
+    ciudad?: string | null;
   };
   propietario: {
     nombre: string;
     apellido: string;
     numero_documento: string;
   };
+  arrendador?: ArrendadorRow;
+  codeudor?: CodeudorData | null;
 }
 
 function buildVariablesFromExpediente(
@@ -178,13 +262,22 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   expediente: Record<string, unknown>;
   data: ExpedienteData;
 }> {
-  // 1. Fetch expediente with inmueble + solicitante
+  // 1. Fetch expediente with inmueble + solicitante (campos completos
+  //    para alimentar la plantilla del contrato V2).
   const { data: expediente, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, numero, estado, inmueble_id, solicitante_id,
-      inmuebles(id, direccion, ciudad, valor_arriendo, propietario_id, contrato_tipo_storage_key, contrato_tipo_nombre_archivo),
-      solicitantes(id, nombre, apellido, tipo_documento, numero_documento)
+      codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco,
+      inmuebles(
+        id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero,
+        administracion, propietario_id,
+        contrato_tipo_storage_key, contrato_tipo_nombre_archivo
+      ),
+      solicitantes(
+        id, nombre, apellido, tipo_documento, numero_documento,
+        email, telefono, direccion, ciudad
+      )
     `)
     .eq('id', expedienteId)
     .single();
@@ -199,16 +292,29 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     estado: string;
     inmueble_id: string;
     solicitante_id: string;
+    codeudor_nombre: string | null;
+    codeudor_tipo_documento: string | null;
+    codeudor_documento: string | null;
+    codeudor_parentesco: string | null;
     inmuebles: {
       id: string;
       direccion: string;
       ciudad: string;
+      barrio: string | null;
+      departamento: string;
       valor_arriendo: number;
+      parqueadero: boolean | null;
+      administracion: number | null;
       propietario_id: string;
       contrato_tipo_storage_key: string | null;
       contrato_tipo_nombre_archivo: string | null;
     };
-    solicitantes: { id: string; nombre: string; apellido: string; tipo_documento: string; numero_documento: string };
+    solicitantes: {
+      id: string; nombre: string; apellido: string;
+      tipo_documento: string; numero_documento: string;
+      email: string | null; telefono: string | null;
+      direccion: string | null; ciudad: string | null;
+    };
   };
 
   if (!exp.inmuebles) {
@@ -218,25 +324,176 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     throw AppError.badRequest('El expediente no tiene solicitante asociado', 'NO_SOLICITANTE');
   }
 
-  // 2. Fetch propietario (owner) from perfiles via inmueble.propietario_id
-  const { data: propietario, error: propError } = await (supabase
+  // 2. Fetch arrendador (propietario | inmobiliaria) con todos los campos
+  //    necesarios para el contrato. perfiles.rol determina si es inmobiliaria
+  //    (lleva logo y cláusula de comisión) o propietario directo.
+  const { data: arrendadorRow, error: arrendadorError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, nombre, apellido, numero_documento')
+    .select(`
+      id, nombre, apellido, rol, tipo_documento, numero_documento,
+      razon_social, representante_legal,
+      domicilio_direccion, domicilio_ciudad, ciudad,
+      matricula_arrendador, logo_storage_key, logo_url,
+      whatsapp_recaudo, email_recaudo,
+      cuenta_recaudo_banco, cuenta_recaudo_tipo, cuenta_recaudo_numero,
+      cuenta_recaudo_titular_nombre, cuenta_recaudo_titular_nit
+    `)
     .eq('id', exp.inmuebles.propietario_id)
     .single();
 
-  if (propError || !propietario) {
-    throw AppError.badRequest('No se encontro el propietario del inmueble', 'NO_PROPIETARIO');
+  if (arrendadorError || !arrendadorRow) {
+    throw AppError.badRequest('No se encontro el arrendador del inmueble', 'NO_ARRENDADOR');
   }
 
-  const prop = propietario as unknown as { id: string; nombre: string; apellido: string; numero_documento: string };
+  const arrendador = arrendadorRow as unknown as {
+    id: string; nombre: string; apellido: string; rol: string;
+    tipo_documento: string | null; numero_documento: string | null;
+    razon_social: string | null; representante_legal: string | null;
+    domicilio_direccion: string | null; domicilio_ciudad: string | null; ciudad: string | null;
+    matricula_arrendador: string | null;
+    logo_storage_key: string | null; logo_url: string | null;
+    whatsapp_recaudo: string | null; email_recaudo: string | null;
+    cuenta_recaudo_banco: string | null; cuenta_recaudo_tipo: string | null;
+    cuenta_recaudo_numero: string | null; cuenta_recaudo_titular_nombre: string | null;
+    cuenta_recaudo_titular_nit: string | null;
+  };
 
   return {
     expediente: expediente as Record<string, unknown>,
     data: {
       inmueble: exp.inmuebles,
       solicitante: exp.solicitantes,
-      propietario: prop,
+      propietario: {
+        nombre: arrendador.nombre,
+        apellido: arrendador.apellido,
+        numero_documento: arrendador.numero_documento || '',
+      },
+      arrendador,
+      codeudor: exp.codeudor_nombre
+        ? {
+            nombre: exp.codeudor_nombre,
+            tipo_documento: exp.codeudor_tipo_documento,
+            numero_documento: exp.codeudor_documento,
+            parentesco: exp.codeudor_parentesco,
+          }
+        : null,
+    },
+  };
+}
+
+/**
+ * Construye el contexto anidado que consume la plantilla HTML V2.
+ * Resuelve: arrendador, arrendatario, coarrendatario, inmueble, contrato,
+ * canon, config — todo listo para `renderTemplate`.
+ */
+async function buildContratoContext(
+  data: ExpedienteData,
+  expedienteNumero: string,
+  fechaInicio: Date,
+  duracionMeses: number,
+): Promise<Record<string, unknown>> {
+  const { arrendador, solicitante, inmueble, codeudor } = data;
+  const fechaFin = addMonths(fechaInicio, duracionMeses);
+  const ahora = new Date();
+  const monto = Number(inmueble.valor_arriendo) || 0;
+
+  const cfg = await getConfigValores([
+    'valor_afianzamiento_mensual',
+    'comision_intermediacion_porcentaje',
+  ]);
+  const afianzamiento = Number(cfg.valor_afianzamiento_mensual) || 20000;
+  const comisionPct = Number(cfg.comision_intermediacion_porcentaje) || 20;
+
+  const esInmobiliaria = arrendador?.rol === 'inmobiliaria';
+
+  // Razón social: si es PJ con razon_social usar esa; si no, "nombre + apellido".
+  const razonSocialArrendador = arrendador?.razon_social
+    || `${arrendador?.nombre || ''} ${arrendador?.apellido || ''}`.trim();
+
+  // Resolver URL pública del logo: priorizamos logo_url si ya está
+  // cacheado. Si solo hay storage_key, asumimos el bucket de documentos
+  // (cuando agreguemos UI de subida en Fase 3 podemos cambiar de bucket
+  // — por ahora la inmobiliaria pega la URL directa o sube por aquí).
+  let logoUrl = arrendador?.logo_url || null;
+  if (!logoUrl && esInmobiliaria && arrendador?.logo_storage_key) {
+    const { data: signed } = await supabase.storage
+      .from(BUCKET_NAME)
+      .createSignedUrl(arrendador.logo_storage_key, 60 * 60);
+    logoUrl = signed?.signedUrl ?? null;
+  }
+
+  return {
+    arrendador: {
+      razon_social: razonSocialArrendador,
+      tipo_documento_label: tipoDocumentoLabel(arrendador?.tipo_documento || undefined),
+      numero_documento: arrendador?.numero_documento || '',
+      representante_legal: arrendador?.representante_legal || '',
+      domicilio_direccion: arrendador?.domicilio_direccion || '',
+      domicilio_ciudad: arrendador?.domicilio_ciudad || arrendador?.ciudad || 'Caldas',
+      matricula_arrendador: esInmobiliaria ? (arrendador?.matricula_arrendador || '') : '',
+      logo_url: esInmobiliaria ? (logoUrl || '') : '',
+      es_inmobiliaria: esInmobiliaria,
+      whatsapp_recaudo: arrendador?.whatsapp_recaudo || '',
+      email_recaudo: arrendador?.email_recaudo || '',
+      cuenta_banco: arrendador?.cuenta_recaudo_banco || '',
+      cuenta_tipo: arrendador?.cuenta_recaudo_tipo || 'ahorros',
+      cuenta_numero: arrendador?.cuenta_recaudo_numero || '',
+      cuenta_titular_nombre: arrendador?.cuenta_recaudo_titular_nombre || razonSocialArrendador,
+      cuenta_titular_nit: arrendador?.cuenta_recaudo_titular_nit || arrendador?.numero_documento || '',
+    },
+    arrendatario: {
+      nombre_completo: `${solicitante.nombre} ${solicitante.apellido}`.trim(),
+      numero_documento: solicitante.numero_documento || '',
+      direccion: solicitante.direccion || '',
+      ciudad: solicitante.ciudad || '',
+      email: solicitante.email || '',
+      celular: solicitante.telefono || '',
+    },
+    coarrendatario: codeudor
+      ? {
+          nombre_completo: codeudor.nombre,
+          numero_documento: codeudor.numero_documento || '',
+          direccion: '',
+          ciudad: '',
+          email: '',
+          celular: '',
+        }
+      : null,
+    inmueble: {
+      direccion: inmueble.direccion,
+      ciudad: inmueble.ciudad,
+      ubicacion_detallada: [
+        inmueble.direccion,
+        inmueble.barrio,
+        inmueble.ciudad,
+        inmueble.departamento,
+      ].filter(Boolean).join(', '),
+      // Heurística: si el inmueble paga administración asumimos que está
+      // en propiedad horizontal. El admin puede editar la plantilla si
+      // quiere otra lógica.
+      es_propiedad_horizontal: Number(inmueble.administracion || 0) > 0,
+      tiene_parqueadero: Boolean(inmueble.parqueadero),
+      tiene_cuarto_util: false, // TODO: agregar columna inmuebles.cuarto_util
+    },
+    contrato: {
+      fecha_dia: ahora.getDate(),
+      fecha_dia_letras: numeroALetras(ahora.getDate()),
+      fecha_mes_nombre: nombreMes(ahora),
+      fecha_anio: ahora.getFullYear(),
+      duracion_meses: duracionMeses,
+      duracion_meses_letras: numeroALetras(duracionMeses),
+      fecha_inicio_completa: fechaCompleta(fechaInicio),
+      fecha_fin_completa: fechaCompleta(fechaFin),
+      expediente_numero: expedienteNumero,
+    },
+    canon: {
+      valor_numerico: formatearPesos(monto),
+      valor_letras: numeroAPesosLetras(monto),
+    },
+    config: {
+      afianzamiento_mensual: formatearPesos(afianzamiento),
+      afianzamiento_mensual_letras: numeroAPesosLetras(afianzamiento),
+      comision_porcentaje: comisionPct,
     },
   };
 }
@@ -371,69 +628,67 @@ export async function generarContrato(
   userId: string,
   ip?: string,
 ) {
-  // 1. Fetch expediente data
-  const { data: expData } = await fetchExpedienteData(expedienteId);
+  // 1. Fetch expediente data (incluye arrendador completo + codeudor).
+  const { expediente: expRow, data: expData } = await fetchExpedienteData(expedienteId);
+  const expedienteNumero = (expRow as { numero?: string }).numero || expedienteId;
 
   const now = new Date();
   const fechaInicio = input.fecha_inicio
     ? new Date(input.fecha_inicio + 'T00:00:00')
     : new Date();
   const duracionMeses = input.duracion_meses || 12;
-  const usarContratoTipoInmueble = Boolean(expData.inmueble.contrato_tipo_storage_key);
 
-  // Validación: si el inmueble NO tiene contrato tipo, se requiere plantilla.
-  if (!usarContratoTipoInmueble && !input.plantilla_id) {
-    throw AppError.badRequest(
-      'Este inmueble no tiene contrato tipo subido. Selecciona una plantilla para generar el contrato.',
-      'PLANTILLA_REQUERIDA',
+  // 2. Resolver plantilla: si el caller pasó plantilla_id usamos esa, si
+  //    no buscamos la única activa (V2 prevé una sola plantilla maestra).
+  type PlantillaRow = {
+    id: string; nombre: string; contenido: string | null; contenido_html: string | null;
+    variables: unknown; activa: boolean; version: number;
+  };
+
+  let plantillaQuery = (supabase
+    .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
+    .select('id, nombre, contenido, contenido_html, variables, activa, version');
+
+  plantillaQuery = input.plantilla_id
+    ? plantillaQuery.eq('id', input.plantilla_id)
+    : plantillaQuery.eq('activa', true).order('created_at', { ascending: false }).limit(1);
+
+  const { data: plantillaRowRaw, error: plantillaError } = await plantillaQuery.maybeSingle();
+
+  if (plantillaError || !plantillaRowRaw) {
+    throw AppError.notFound(
+      input.plantilla_id ? 'Plantilla no encontrada' : 'No hay ninguna plantilla activa configurada',
+      'PLANTILLA_NOT_FOUND',
     );
   }
 
-  // Variables calculadas (se guardan en datos_variables incluso si usamos
-  // el PDF del propietario — sirven para reporting/referencia).
-  const autoVariables = buildVariablesFromExpediente(expData, fechaInicio, duracionMeses);
-  const finalVariables = { ...autoVariables, ...(input.variables ?? {}) };
+  const plantillaRow = plantillaRowRaw as unknown as PlantillaRow;
+  if (!plantillaRow.activa) {
+    throw AppError.badRequest('La plantilla no esta activa', 'PLANTILLA_INACTIVE');
+  }
 
-  type PlantillaRow = {
-    id: string; nombre: string; contenido: string;
-    variables: string[]; activa: boolean; version: number;
-  };
-  let plantillaRow: PlantillaRow | null = null;
-  let nombreArchivoContrato: string;
+  // 3. Construir contexto y renderizar HTML + PDF.
+  const context = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses);
+
+  // Permitir overrides explícitos desde input.variables (admin puede ajustar
+  // un valor puntual antes de generar — hoy nadie llama así, pero el shape
+  // del schema lo permite).
+  const finalVariables: Record<string, unknown> = { ...context, ...(input.variables ?? {}) };
+
   let pdfBuffer: Buffer;
+  let nombreArchivoContrato: string;
 
-  if (usarContratoTipoInmueble) {
-    // ── Rama A: contrato tipo subido por el propietario ──
-    const { data: downloaded, error: downloadError } = await supabase.storage
-      .from(BUCKET_NAME)
-      .download(expData.inmueble.contrato_tipo_storage_key!);
-    if (downloadError || !downloaded) {
-      logger.error(
-        { error: downloadError, expedienteId, key: expData.inmueble.contrato_tipo_storage_key },
-        'Error al descargar contrato tipo del inmueble',
-      );
-      throw new AppError(500, 'STORAGE_ERROR', 'No se pudo obtener el contrato tipo del inmueble');
-    }
-    pdfBuffer = Buffer.from(await downloaded.arrayBuffer());
-    nombreArchivoContrato = expData.inmueble.contrato_tipo_nombre_archivo || 'contrato-tipo.pdf';
+  if (plantillaRow.contenido_html) {
+    // Plantilla V2 (HTML rico) → Puppeteer.
+    const renderedHtml = renderTemplate(plantillaRow.contenido_html, finalVariables);
+    pdfBuffer = await renderHtmlToPdf(renderedHtml);
+    nombreArchivoContrato = `contrato-${expedienteNumero}-v1.pdf`;
   } else {
-    // ── Rama B: compilar desde plantilla (flujo original) ──
-    const { data: plantilla, error: plantillaError } = await (supabase
-      .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
-      .select('id, nombre, contenido, variables, activa, version')
-      .eq('id', input.plantilla_id!)
-      .single();
-
-    if (plantillaError || !plantilla) {
-      throw AppError.notFound('Plantilla no encontrada', 'PLANTILLA_NOT_FOUND');
-    }
-
-    plantillaRow = plantilla as unknown as PlantillaRow;
-    if (!plantillaRow.activa) {
-      throw AppError.badRequest('La plantilla no esta activa', 'PLANTILLA_INACTIVE');
-    }
-
-    const compiledHtml = compileTemplate(plantillaRow.contenido, finalVariables);
+    // Fallback: plantilla legacy con `contenido` y vars planas → pdfkit.
+    // Convertimos el contexto anidado a un map plano para que las viejas
+    // referencias `{{arrendador_nombre}}` sigan funcionando.
+    const flatVars = flattenForLegacyTemplate(context);
+    const compiledHtml = compileTemplate(plantillaRow.contenido || '', flatVars);
     pdfBuffer = await generateContractPdf(compiledHtml, {
       titulo: plantillaRow.nombre,
       fecha: formatDateCO(now),
@@ -500,15 +755,40 @@ export async function generarContrato(
     entidadId: created.id,
     detalle: {
       expediente_id: expedienteId,
-      origen: usarContratoTipoInmueble ? 'contrato_tipo_inmueble' : 'plantilla',
+      origen: 'plantilla',
       plantilla_id: plantillaRow?.id ?? null,
       plantilla_nombre: plantillaRow?.nombre ?? null,
-      variables_count: Object.keys(finalVariables).length,
+      arrendador_es_inmobiliaria: (context.arrendador as { es_inmobiliaria: boolean }).es_inmobiliaria,
     },
     ip,
   });
 
   return getContratoById(created.id);
+}
+
+/**
+ * Aplana el contexto anidado a {key: value} para que la plantilla legacy
+ * (la que usaba {{arrendador_nombre}} sin punto) siga funcionando si por
+ * algún motivo se invoca con `contenido` en vez de `contenido_html`.
+ */
+function flattenForLegacyTemplate(ctx: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  const a = (ctx.arrendador || {}) as Record<string, unknown>;
+  const t = (ctx.arrendatario || {}) as Record<string, unknown>;
+  const i = (ctx.inmueble || {}) as Record<string, unknown>;
+  const c = (ctx.contrato || {}) as Record<string, unknown>;
+  const k = (ctx.canon || {}) as Record<string, unknown>;
+  out.arrendador_nombre = String(a.razon_social ?? '');
+  out.arrendador_documento = String(a.numero_documento ?? '');
+  out.arrendatario_nombre = String(t.nombre_completo ?? '');
+  out.arrendatario_documento = String(t.numero_documento ?? '');
+  out.inmueble_direccion = String(i.direccion ?? '');
+  out.inmueble_ciudad = String(i.ciudad ?? '');
+  out.canon_mensual = `$${String(k.valor_numerico ?? '')}`;
+  out.fecha_inicio = String(c.fecha_inicio_completa ?? '');
+  out.fecha_fin = String(c.fecha_fin_completa ?? '');
+  out.duracion_meses = String(c.duracion_meses ?? '');
+  return out;
 }
 
 // ============================================================
