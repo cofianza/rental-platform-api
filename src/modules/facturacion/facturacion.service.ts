@@ -23,21 +23,20 @@ import type { UserRole } from '@/types/auth';
 
 const VALOR_ESTUDIO_DEFAULT = 80_000; // COP, sin IVA
 
-// Defaults para clientes persona natural sin todos los datos fiscales
-// configurados (edge cases). Se sobreescriben con datos reales si están.
+// Defaults V2 (códigos DIAN + DANE).
 const DEFAULTS_CLIENTE = {
-  legal_organization_id: '2', // Persona natural
-  tribute_id: '21', // No aplica (régimen ordinario)
-  identification_document_id: '3', // CC
-  municipality_id: '149', // Bogotá D.C. (Factus catalog)
+  legal_organization_code: '2', // 2=Persona natural, 1=Jurídica
+  tribute_code: 'ZZ', // No aplica (régimen ordinario)
+  identification_document_code: '13', // 13=CC en DIAN
+  municipality_code: '11001', // Bogotá D.C. (DANE)
 };
 
 const ITEM_DEFAULTS = {
-  unit_measure_id: 70, // unidad
-  standard_code_id: 1, // Estándar adoptado contribuyente
-  is_excluded: 1 as const, // Estudio crediticio NO grava IVA — servicio financiero
-  tribute_id: 1, // IVA (aún si is_excluded=1, hay que mandar el ID del tributo)
-  tax_rate: '0.00',
+  unit_measure_code: '94', // unidad
+  standard_code: '999', // Estándar adoptado contribuyente
+  // Estudio crediticio = servicio financiero, exento de IVA. taxes=[] en V2
+  // significa "sin tributos aplicables".
+  taxes: [] as { code: string; rate: string }[],
 };
 
 // ── Tipos para la integración ──────────────────────────────────────
@@ -60,7 +59,7 @@ interface PagoConContexto {
       tipo_documento: string;
       numero_documento: string;
       direccion: string | null;
-      municipio_id: number | null;
+      municipio_id: string | null; // V2: código DANE (5 dígitos, ej. "11001")
       municipio_nombre: string | null;
     } | null;
   };
@@ -69,17 +68,19 @@ interface PagoConContexto {
 // ── Helpers ────────────────────────────────────────────────────────
 
 function mapTipoDocumentoToFactus(tipo: string): string {
-  // Factus IDs tipos de documento (ver tabla referencia):
-  // 1 = RC, 2 = TI, 3 = CC, 4 = TE, 5 = CE, 6 = NIT, 7 = PAS
+  // V2 usa códigos DIAN estándar:
+  // 11=RC, 12=TI, 13=CC, 21=TE, 22=CE, 31=NIT, 41=Pasaporte, 91=NUIP
   switch (tipo.toUpperCase()) {
-    case 'CC': return '3';
-    case 'TI': return '2';
-    case 'CE': return '5';
-    case 'NIT': return '6';
+    case 'CC': return '13';
+    case 'TI': return '12';
+    case 'CE': return '22';
+    case 'TE': return '21';
+    case 'NIT': return '31';
     case 'PA':
     case 'PAS':
-    case 'PASAPORTE': return '7';
-    default: return '3';
+    case 'PASAPORTE': return '41';
+    case 'RC': return '11';
+    default: return '13';
   }
 }
 
@@ -179,34 +180,46 @@ export async function crearFacturaDesdePago(
   const conceptoLabel = inferConceptoLabel(ctx.concepto);
   const monto = Number(ctx.monto) || VALOR_ESTUDIO_DEFAULT;
 
+  // Para Factus V2 quantity y price van como string con 2 decimales.
+  const fullName = `${sol.nombre} ${sol.apellido}`.trim();
+  const priceStr = monto.toFixed(2);
+
   const payload: factus.CreateBillInput = {
-    ...(numberingRangeId !== null ? { numbering_range_id: numberingRangeId } : {}),
     reference_code: referenceCode,
-    payment_form: '1', // contado
-    payment_method_code: '10', // efectivo (genérico — Stripe procesó por fuera)
+    document: '01', // Factura electrónica de Venta
+    ...(numberingRangeId !== null ? { numbering_range_id: numberingRangeId } : {}),
+    operation_type: '10', // Estándar
     send_email: true,
+    payment_details: [
+      {
+        payment_form: 1, // contado
+        payment_method_code: '10', // efectivo (Stripe procesó por fuera)
+        reference_code: pagoId.replace(/-/g, '').slice(0, 12).toUpperCase(),
+        amount: priceStr,
+      },
+    ],
     customer: {
       identification: sol.numero_documento,
-      names: `${sol.nombre} ${sol.apellido}`.trim(),
+      // V2: para persona natural usamos 'company' como razón social.
+      company: fullName,
       address: sol.direccion || undefined,
       email: sol.email || undefined,
       phone: sol.telefono || undefined,
-      legal_organization_id: DEFAULTS_CLIENTE.legal_organization_id,
-      tribute_id: DEFAULTS_CLIENTE.tribute_id,
-      identification_document_id: mapTipoDocumentoToFactus(sol.tipo_documento),
-      municipality_id: sol.municipio_id ? String(sol.municipio_id) : DEFAULTS_CLIENTE.municipality_id,
+      legal_organization_code: DEFAULTS_CLIENTE.legal_organization_code,
+      tribute_code: DEFAULTS_CLIENTE.tribute_code,
+      identification_document_code: mapTipoDocumentoToFactus(sol.tipo_documento),
+      municipality_code: sol.municipio_id || DEFAULTS_CLIENTE.municipality_code,
     },
     items: [
       {
         code_reference: ctx.concepto,
         name: `${conceptoLabel} - ${ctx.expediente.numero}`,
-        quantity: 1,
-        price: monto,
-        tax_rate: ITEM_DEFAULTS.tax_rate,
-        unit_measure_id: ITEM_DEFAULTS.unit_measure_id,
-        standard_code_id: ITEM_DEFAULTS.standard_code_id,
-        is_excluded: ITEM_DEFAULTS.is_excluded,
-        tribute_id: ITEM_DEFAULTS.tribute_id,
+        quantity: '1.00',
+        discount_rate: '0.00',
+        price: priceStr,
+        unit_measure_code: ITEM_DEFAULTS.unit_measure_code,
+        standard_code: ITEM_DEFAULTS.standard_code,
+        taxes: ITEM_DEFAULTS.taxes,
       },
     ],
   };

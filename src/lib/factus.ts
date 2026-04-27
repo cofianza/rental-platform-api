@@ -3,7 +3,7 @@
  *
  * - Sandbox: https://api-sandbox.factus.com.co
  * - Auth: OAuth2 password grant. access_token vive 600s. Hay refresh_token.
- * - Crear factura: POST /v1/bills/validate (síncrono — DIAN valida en la
+ * - Crear factura: POST /v2/bills/validate (síncrono — DIAN valida en la
  *   misma request y devuelve CUFE + QR + PDF/XML downloadable).
  * - Sin webhooks: el resultado completo viene en la respuesta del POST.
  *
@@ -25,44 +25,73 @@ interface AuthResponse {
   refresh_token: string;
 }
 
+// ── V2: códigos DIAN y DANE ────────────────────────────────────────
+// V2 usa códigos estándar DIAN (no IDs internos de Factus) y código DANE
+// para municipios. Ver tabla referencia DIAN.
+//
+// identification_document_code: 11=RC, 12=TI, 13=CC, 21=TE, 22=CE, 31=NIT,
+//   41=Pasaporte, 50=NIT Extranjero, 91=NUIP.
+// legal_organization_code: 1=Jurídica, 2=Natural.
+// tribute_code: 01=IVA, 04=INC, ZA=IVA+INC, ZZ=No aplica.
+// municipality_code: código DANE de 5 dígitos (ej. 11001=Bogotá D.C.).
+
 export interface FactusCustomer {
   identification: string;
   dv?: string;
   company?: string;
   trade_name?: string;
-  names: string;
+  /** En V2 no hay 'names' separado — para persona natural, va en company. */
+  names?: string;
   address?: string;
   email?: string;
   phone?: string;
-  legal_organization_id: string; // 1=Jurídica, 2=Natural
-  tribute_id: string; // 21=No aplica
-  identification_document_id: string; // 3=CC, 6=NIT, 5=PA, 2=TI, 4=CE
-  municipality_id: string;
+  legal_organization_code: string;
+  tribute_code: string;
+  identification_document_code: string;
+  municipality_code: string;
+}
+
+export interface FactusTax {
+  /** 01=IVA, 04=INC, etc. */
+  code: string;
+  /** "19.00", "5.00", "0.00" */
+  rate: string;
 }
 
 export interface FactusItem {
   code_reference: string;
   name: string;
-  quantity: number;
-  discount_rate?: number;
-  price: number;
-  tax_rate: string; // "19.00", "5.00", "0.00"
-  unit_measure_id: number; // 70 = unidad
-  standard_code_id: number; // 1 = Estándar contribuyente
-  is_excluded: 0 | 1;
-  tribute_id: number; // 1 = IVA
-  withholding_taxes?: { code: string; withholding_tax_rate: string }[];
+  quantity: string; // V2: string con decimal
+  discount_rate: string; // "0.00"
+  price: string; // V2: string con decimal
+  unit_measure_code: string; // "94" = unidad
+  standard_code: string; // "999" = Estándar adoptado contribuyente
+  taxes: FactusTax[];
+}
+
+export interface FactusPaymentDetail {
+  /** 1=contado, 2=crédito */
+  payment_form: number;
+  /** Código método pago — ver tabla Factus. 10=efectivo, 42=consignación. */
+  payment_method_code: string;
+  reference_code?: string;
+  amount: string;
+  /** YYYY-MM-DD. Requerido si payment_form=2 (crédito). */
+  due_date?: string;
 }
 
 export interface CreateBillInput {
+  reference_code: string;
+  /** "01" = Factura electrónica de Venta (default V2). */
+  document?: string;
   /** Opcional. Si solo hay un rango activo Factus lo selecciona solo. */
   numbering_range_id?: number;
-  reference_code: string;
-  observation?: string;
-  payment_form?: '1' | '2'; // 1=contado, 2=crédito
-  payment_due_date?: string; // YYYY-MM-DD, requerido si payment_form=2
-  payment_method_code?: string; // 10=efectivo, ver tabla Factus
+  /** "10" = Estándar (default). */
+  operation_type?: string;
   send_email?: boolean;
+  observation?: string;
+  cash_rounding_amount?: string;
+  payment_details: FactusPaymentDetail[];
   customer: FactusCustomer;
   items: FactusItem[];
 }
@@ -281,7 +310,7 @@ export async function listNumberingRanges(opts?: {
 
   // Factus envuelve la lista en { data: [...] }
   const result = await factusRequest<{ data: NumberingRange[] }>(
-    `/v1/numbering-ranges?${params.toString()}`,
+    `/v2/numbering-ranges?${params.toString()}`,
   );
   cachedRanges = { data: result.data || [], cachedAt: now };
   return cachedRanges.data;
@@ -289,7 +318,7 @@ export async function listNumberingRanges(opts?: {
 
 /**
  * Auto-discover: devuelve el ID del primer rango activo de facturación
- * electrónica (document=21). Si la cuenta no tiene acceso a /v1/numbering-ranges
+ * electrónica (document=21). Si la cuenta no tiene acceso a /v2/numbering-ranges
  * (algunos planes de Factus), retorna null y dejamos que Factus seleccione
  * el rango automáticamente al crear la factura (válido cuando solo hay uno
  * activo, según los docs).
@@ -300,7 +329,7 @@ export async function discoverNumberingRangeId(): Promise<number | null> {
     const usable = ranges.filter((r) => !r.is_expired && r.is_active && r.current < r.to);
     if (usable.length === 0) {
       logger.warn(
-        'Factus: ningún rango activo retornado por /v1/numbering-ranges — se omitirá el ID',
+        'Factus: ningún rango activo retornado por /v2/numbering-ranges — se omitirá el ID',
       );
       return null;
     }
@@ -319,7 +348,7 @@ export async function discoverNumberingRangeId(): Promise<number | null> {
  * respuesta).
  */
 export async function createBill(input: CreateBillInput): Promise<CreateBillResponse> {
-  return factusRequest<CreateBillResponse>('/v1/bills/validate', {
+  return factusRequest<CreateBillResponse>('/v2/bills/validate', {
     method: 'POST',
     body: JSON.stringify(input),
   });
@@ -338,7 +367,7 @@ export interface FactusMunicipality {
 
 export async function searchMunicipalities(name: string): Promise<FactusMunicipality[]> {
   const result = await factusRequest<{ data: FactusMunicipality[] }>(
-    `/v1/municipalities?name=${encodeURIComponent(name)}`,
+    `/v2/municipalities?name=${encodeURIComponent(name)}`,
   );
   return result.data || [];
 }
