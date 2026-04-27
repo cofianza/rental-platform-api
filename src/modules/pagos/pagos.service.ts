@@ -20,30 +20,45 @@ const PAGO_SELECT = `
   comprobante_url, comprobante_storage_key, comprobante_nombre_original,
   comprobante_tipo_mime, comprobante_tamano_bytes, referencia_bancaria,
   notas, fecha_pago, created_at, updated_at, creado_por,
-  email_pagador, nombre_pagador,
-  facturas:facturas(id, factus_number, estado, created_at)
+  email_pagador, nombre_pagador
 `;
 
-// Reduce el array de facturas embebidas a la única emitida más reciente
-// (un pago puede tener intentos fallidos en estado 'solicitada' que no
-// queremos exponer al frontend). Devuelve null si no hay factura emitida.
-function reduceFactura(
-  pago: Record<string, unknown>,
-): Record<string, unknown> {
-  const facturas = pago.facturas as
-    | { id: string; factus_number: string | null; estado: string; created_at: string }[]
-    | null
-    | undefined;
-  const emitida = (facturas || [])
-    .filter((f) => f.estado === 'emitida')
-    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0];
-  const { facturas: _ignored, ...rest } = pago;
-  return {
-    ...rest,
-    factura: emitida
-      ? { id: emitida.id, numero: emitida.factus_number, estado: emitida.estado }
-      : null,
-  };
+/**
+ * Anexa a cada pago la última factura emitida (si existe). Usamos un
+ * segundo query en lugar de embed PostgREST porque el schema cache de
+ * Supabase a veces no detecta la FK pago_id→pagos y rompe el endpoint.
+ */
+async function attachFacturas<T extends Record<string, unknown> & { id: string }>(
+  pagos: T[],
+): Promise<(T & { factura: { id: string; numero: string | null; estado: string } | null })[]> {
+  if (pagos.length === 0) return [];
+  const ids = pagos.map((p) => p.id);
+  const { data: facturas } = await (supabase
+    .from('facturas' as string) as ReturnType<typeof supabase.from>)
+    .select('id, pago_id, factus_number, estado, created_at')
+    .in('pago_id', ids)
+    .eq('estado', 'emitida')
+    .order('created_at', { ascending: false });
+
+  const byPago = new Map<string, { id: string; factus_number: string | null; estado: string }>();
+  for (const f of (facturas || []) as {
+    id: string;
+    pago_id: string;
+    factus_number: string | null;
+    estado: string;
+  }[]) {
+    if (!byPago.has(f.pago_id)) {
+      byPago.set(f.pago_id, { id: f.id, factus_number: f.factus_number, estado: f.estado });
+    }
+  }
+
+  return pagos.map((p) => {
+    const f = byPago.get(p.id);
+    return {
+      ...p,
+      factura: f ? { id: f.id, numero: f.factus_number, estado: f.estado } : null,
+    };
+  });
 }
 
 const COMPROBANTE_BUCKET = 'pagos-comprobantes';
@@ -111,7 +126,9 @@ export async function listPagosByExpediente(expedienteId: string, query: ListPag
   }
 
   return {
-    pagos: (data ?? []).map((p: Record<string, unknown>) => reduceFactura(p)),
+    pagos: await attachFacturas(
+      (data ?? []) as unknown as (Record<string, unknown> & { id: string })[],
+    ),
     pagination: {
       total: count ?? 0,
       page,
@@ -137,7 +154,10 @@ export async function getPagoById(id: string) {
     throw fromSupabaseError(error);
   }
 
-  return reduceFactura(data as Record<string, unknown>);
+  const [withFactura] = await attachFacturas([
+    data as unknown as Record<string, unknown> & { id: string },
+  ]);
+  return withFactura;
 }
 
 // ============================================================
@@ -313,7 +333,7 @@ export async function cancelPago(pagoId: string, userId: string, ip?: string) {
 // ============================================================
 
 export async function resendPaymentLink(pagoId: string, userId: string, ip?: string) {
-  const pago = await getPagoById(pagoId) as {
+  const pago = await getPagoById(pagoId) as unknown as {
     id: string;
     estado: string;
     payment_link_url: string | null;
@@ -410,7 +430,7 @@ export async function generateComprobantePresignedUrl(
 // ============================================================
 
 export async function getComprobanteUrl(pagoId: string) {
-  const pago = await getPagoById(pagoId) as {
+  const pago = await getPagoById(pagoId) as unknown as {
     comprobante_storage_key: string | null;
     comprobante_nombre_original: string | null;
   };
