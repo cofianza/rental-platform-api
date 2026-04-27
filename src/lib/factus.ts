@@ -310,12 +310,21 @@ export async function listNumberingRanges(opts?: {
   params.set('filter[document]', opts?.document ?? '21');
   if (opts?.onlyActive !== false) params.set('filter[is_active]', '1');
 
-  // Factus envuelve la lista en { data: [...] }
-  const result = await factusRequest<{ data: NumberingRange[] }>(
-    `/v2/numbering-ranges?${params.toString()}`,
-  );
-  cachedRanges = { data: result.data || [], cachedAt: now };
-  return cachedRanges.data;
+  // Factus V2 puede envolver la lista de varias formas:
+  //   { data: [...] }                     (forma simple)
+  //   { data: { data: [...], ... } }      (paginación Laravel)
+  const result = await factusRequest<{
+    data: NumberingRange[] | { data: NumberingRange[] };
+  }>(`/v2/numbering-ranges?${params.toString()}`);
+
+  let ranges: NumberingRange[] = [];
+  if (Array.isArray(result.data)) {
+    ranges = result.data;
+  } else if (result.data && Array.isArray((result.data as { data?: NumberingRange[] }).data)) {
+    ranges = (result.data as { data: NumberingRange[] }).data;
+  }
+  cachedRanges = { data: ranges, cachedAt: now };
+  return ranges;
 }
 
 /**

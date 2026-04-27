@@ -124,6 +124,41 @@ function buildReferenceCode(pagoId: string): string {
   return `COFIANZA-PAGO-${short}`;
 }
 
+/**
+ * Extrae el bill validado de la respuesta de Factus, sin asumir estructura
+ * exacta. V2 ha mostrado al menos dos formas: { data: { bill: {...} } } y
+ * { data: {...campos del bill...} }. Devolvemos null si no encontramos
+ * número + cufe (los dos campos mínimos para considerar válida la factura).
+ */
+type FactusBillSnapshot = {
+  id?: number | null;
+  number?: string | null;
+  cufe?: string | null;
+  qr?: string | null;
+  qr_image?: string | null;
+  total?: string | number | null;
+  tax_amount?: string | number | null;
+};
+
+function extractBill(factusRes: unknown): FactusBillSnapshot | null {
+  if (!factusRes || typeof factusRes !== 'object') return null;
+  const root = factusRes as Record<string, unknown>;
+  const data = (root.data ?? root) as Record<string, unknown>;
+  // Probar primero data.bill, después data plano, después root.bill.
+  const candidates: unknown[] = [
+    (data as Record<string, unknown>)?.bill,
+    data,
+    (root as Record<string, unknown>).bill,
+  ];
+  for (const c of candidates) {
+    if (c && typeof c === 'object') {
+      const b = c as FactusBillSnapshot;
+      if (b.number && b.cufe) return b;
+    }
+  }
+  return null;
+}
+
 function inferConceptoLabel(concepto: string): string {
   switch (concepto) {
     case 'estudio': return 'Estudio crediticio de arrendamiento';
@@ -259,7 +294,39 @@ export async function crearFacturaDesdePago(
     throw err;
   }
 
-  const bill = factusRes.data.bill;
+  // Log de las claves top-level — Factus V2 puede envolver la respuesta
+  // distinto a V1 (data.bill vs data directo vs data.data, etc.). Esto nos
+  // deja diagnosticar si el extractor falla.
+  logger.info(
+    {
+      pagoId,
+      topKeys: Object.keys(factusRes || {}),
+      dataKeys: factusRes && typeof factusRes === 'object' && 'data' in factusRes
+        ? Object.keys((factusRes as { data?: object }).data || {})
+        : null,
+    },
+    'Factus: respuesta recibida',
+  );
+
+  const bill = extractBill(factusRes);
+  if (!bill) {
+    // Persistimos como intento fallido con la respuesta cruda para
+    // diagnóstico, en lugar de devolver 500 sin trazabilidad.
+    await persistFailedAttempt({
+      pagoId,
+      expedienteId: ctx.expediente_id,
+      referenceCode,
+      concepto: ctx.concepto,
+      total: monto,
+      error: 'Factus respondió 200 pero la estructura no coincide con bill esperado',
+      respuestaProveedor: factusRes,
+    });
+    throw new AppError(
+      502,
+      'FACTUS_UNEXPECTED_RESPONSE',
+      'Factus respondió 200 pero el formato es inesperado. Revisa el log y respuesta_proveedor.',
+    );
+  }
 
   // 7. Persistir factura emitida.
   const facturaPersisted = await persistFacturaEmitida({
@@ -267,6 +334,7 @@ export async function crearFacturaDesdePago(
     expedienteId: ctx.expediente_id,
     sol,
     factusRes,
+    bill,
     referenceCode,
     concepto: ctx.concepto,
   });
@@ -288,8 +356,8 @@ export async function crearFacturaDesdePago(
 
   return {
     id: facturaPersisted.id,
-    factus_number: bill.number,
-    cufe: bill.cufe,
+    factus_number: bill.number ?? null,
+    cufe: bill.cufe ?? null,
     estado: 'emitida',
   };
 }
@@ -299,11 +367,11 @@ async function persistFacturaEmitida(params: {
   expedienteId: string;
   sol: NonNullable<PagoConContexto['expediente']['solicitante']>;
   factusRes: factus.CreateBillResponse;
+  bill: FactusBillSnapshot;
   referenceCode: string;
   concepto: string;
 }) {
-  const { pagoId, expedienteId, sol, factusRes, referenceCode, concepto } = params;
-  const bill = factusRes.data.bill;
+  const { pagoId, expedienteId, sol, factusRes, bill, referenceCode, concepto } = params;
 
   // Si ya hay un intento previo (fallido), actualizamos en vez de insertar.
   const existente = await findFacturaExistente(pagoId);
@@ -324,8 +392,8 @@ async function persistFacturaEmitida(params: {
     qr_image_base64: bill.qr_image,
     respuesta_proveedor: factusRes,
     concepto,
-    total: Number(bill.total),
-    tax_amount: Number(bill.tax_amount),
+    total: bill.total != null ? Number(bill.total) : null,
+    tax_amount: bill.tax_amount != null ? Number(bill.tax_amount) : null,
     error_mensaje: null,
     validada_en: new Date().toISOString(),
   };
