@@ -5,6 +5,7 @@ import {
   facturaIdParamsSchema,
   pagoIdParamsSchema,
   listFacturasQuerySchema,
+  updateTarifasIvaSchema,
 } from './facturacion.schema';
 import * as controller from './facturacion.controller';
 
@@ -21,6 +22,23 @@ facturasRouter.get(
   authorize('facturas', 'read'),
   validate({ query: listFacturasQuerySchema }),
   controller.list,
+);
+
+// GET /facturas/configuracion-iva — listar tasas configuradas
+// (admin + operador pueden leer; solo admin escribe).
+// IMPORTANTE: declarar antes de /:id para que Express no lo capture.
+facturasRouter.get(
+  '/configuracion-iva',
+  roleGuard(['administrador', 'operador_analista']),
+  controller.getTarifasIva,
+);
+
+// PUT /facturas/configuracion-iva — actualizar tasas (solo admin)
+facturasRouter.put(
+  '/configuracion-iva',
+  roleGuard(['administrador']),
+  validate({ body: updateTarifasIvaSchema }),
+  controller.updateTarifasIva,
 );
 
 // GET /facturas/:id — detalle

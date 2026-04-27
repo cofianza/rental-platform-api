@@ -30,3 +30,14 @@ export async function searchMunicipalities(req: Request, res: Response) {
   const result = await factus.searchMunicipalities(name);
   sendSuccess(res, result);
 }
+
+export async function getTarifasIva(_req: Request, res: Response) {
+  const result = await service.listTarifasIva();
+  sendSuccess(res, result);
+}
+
+export async function updateTarifasIva(req: Request, res: Response) {
+  const body = req.body as { tarifas: { concepto: string; tasa: number }[] };
+  const result = await service.updateTarifasIva(body.tarifas, req.user!.id, req.ip);
+  sendSuccess(res, result);
+}

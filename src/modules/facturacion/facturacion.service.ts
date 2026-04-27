@@ -159,6 +159,81 @@ function extractBill(factusRes: unknown): FactusBillSnapshot | null {
   return null;
 }
 
+/**
+ * Lee la tarifa de IVA configurada para un concepto. La fila vive en
+ * configuracion_sistema con clave `iva_concepto_<concepto>`. Si no existe
+ * o el valor es inválido, devuelve 0 (exento) — fail-safe.
+ */
+async function getTarifaIvaPorConcepto(concepto: string): Promise<number> {
+  const clave = `iva_concepto_${concepto}`;
+  const { data } = await (supabase
+    .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
+    .select('valor')
+    .eq('clave', clave)
+    .maybeSingle();
+  if (!data) return 0;
+  const n = Number((data as { valor: string }).valor);
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 0;
+}
+
+export async function listTarifasIva(): Promise<{ concepto: string; tasa: number }[]> {
+  const conceptos = ['estudio', 'garantia', 'primer_canon', 'deposito', 'otro'];
+  const { data } = await (supabase
+    .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
+    .select('clave, valor')
+    .in('clave', conceptos.map((c) => `iva_concepto_${c}`));
+  const map = new Map<string, string>();
+  for (const row of (data || []) as { clave: string; valor: string }[]) {
+    map.set(row.clave, row.valor);
+  }
+  return conceptos.map((c) => {
+    const raw = map.get(`iva_concepto_${c}`) ?? '0';
+    const n = Number(raw);
+    return { concepto: c, tasa: Number.isFinite(n) ? n : 0 };
+  });
+}
+
+export async function updateTarifasIva(
+  input: { concepto: string; tasa: number }[],
+  userId: string,
+  ip?: string,
+): Promise<{ concepto: string; tasa: number }[]> {
+  const allowedConceptos = new Set(['estudio', 'garantia', 'primer_canon', 'deposito', 'otro']);
+  for (const item of input) {
+    if (!allowedConceptos.has(item.concepto)) {
+      throw AppError.badRequest(`Concepto inválido: ${item.concepto}`, 'CONCEPTO_INVALIDO');
+    }
+    if (typeof item.tasa !== 'number' || item.tasa < 0 || item.tasa > 100) {
+      throw AppError.badRequest('La tasa debe estar entre 0 y 100', 'TASA_INVALIDA');
+    }
+  }
+
+  for (const item of input) {
+    const clave = `iva_concepto_${item.concepto}`;
+    await (supabase
+      .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
+      .upsert(
+        {
+          clave,
+          valor: String(item.tasa),
+          descripcion: `Tasa de IVA (%) para ${item.concepto}. 0 = exento.`,
+        } as never,
+        { onConflict: 'clave' },
+      );
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.PAGO_CREATED, // reutilizamos hasta que añadan CONFIG_UPDATED
+    entidad: AUDIT_ENTITIES.PAGO,
+    entidadId: 'tarifas_iva',
+    detalle: { tipo: 'tarifas_iva_actualizadas', input },
+    ip,
+  });
+
+  return listTarifasIva();
+}
+
 function inferConceptoLabel(concepto: string): string {
   switch (concepto) {
     case 'estudio': return 'Estudio crediticio de arrendamiento';
@@ -217,7 +292,13 @@ export async function crearFacturaDesdePago(
 
   // Para Factus V2 quantity y price van como string con 2 decimales.
   const fullName = `${sol.nombre} ${sol.apellido}`.trim();
-  const priceStr = monto.toFixed(2);
+
+  // Lee la tasa de IVA configurada para este concepto (admin la edita en
+  // /facturacion). Si tasa>0, monto del pago es total con IVA incluido y
+  // calculamos el price (base) para Factus. Si tasa=0, price = monto.
+  const tasaIva = await getTarifaIvaPorConcepto(ctx.concepto);
+  const priceBase = tasaIva > 0 ? monto / (1 + tasaIva / 100) : monto;
+  const priceStr = priceBase.toFixed(2);
 
   // V2: code DANE = 5 dígitos. Si el solicitante tiene un valor que no
   // matchea (legacy V1 con ID interno Factus, o vacío), caemos al default.
@@ -236,7 +317,7 @@ export async function crearFacturaDesdePago(
         payment_form: 1, // contado
         payment_method_code: '10', // efectivo (Stripe procesó por fuera)
         reference_code: pagoId.replace(/-/g, '').slice(0, 12).toUpperCase(),
-        amount: priceStr,
+        amount: monto.toFixed(2), // total con IVA si aplica
       },
     ],
     customer: {
@@ -261,7 +342,10 @@ export async function crearFacturaDesdePago(
         price: priceStr,
         unit_measure_code: ITEM_DEFAULTS.unit_measure_code,
         standard_code: ITEM_DEFAULTS.standard_code,
-        taxes: ITEM_DEFAULTS.taxes,
+        taxes:
+          tasaIva > 0
+            ? [{ code: '01', rate: tasaIva.toFixed(2) }]
+            : [{ is_excluded: true }],
       },
     ],
   };
@@ -544,8 +628,14 @@ export async function getFacturaById(id: string) {
     if (pago) totalEffective = Number((pago as { monto: number }).monto) || 0;
   }
 
-  // Estudio crediticio = servicio exento. Subtotal = total cuando no hay IVA.
+  // Subtotal = total - IVA. Si no hay IVA, subtotal = total.
   const subtotal = (totalEffective ?? 0) - taxEffective;
+  // Porcentaje real de IVA en la factura (para mostrar en UI). Si subtotal
+  // es 0, evitamos NaN. Si tax=0, devolvemos 0 (mostrará "Exento" en UI).
+  const ivaPorcentaje =
+    taxEffective > 0 && subtotal > 0
+      ? Math.round((taxEffective / subtotal) * 10000) / 100
+      : 0;
 
   // Mapear a la forma esperada por el frontend (IFactura).
   return {
@@ -554,6 +644,7 @@ export async function getFacturaById(id: string) {
     fecha: f.validada_en ?? f.created_at,
     subtotal: subtotal > 0 ? subtotal : (totalEffective ?? 0),
     iva: taxEffective,
+    iva_porcentaje: ivaPorcentaje,
     total: totalEffective ?? 0,
     emisor_razon_social: 'Cofianza S.A.S.',
     emisor_nit: '901.000.000-0',
