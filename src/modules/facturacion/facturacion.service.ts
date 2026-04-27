@@ -169,7 +169,9 @@ export async function crearFacturaDesdePago(
     );
   }
 
-  // 4. Auto-discover rango de numeración (cache 1h).
+  // 4. Auto-discover rango de numeración (cache 1h). Devuelve null si la
+  //    cuenta de Factus no expone el endpoint de listado — en ese caso
+  //    omitimos el campo y Factus selecciona el rango activo automáticamente.
   const numberingRangeId = await factus.discoverNumberingRangeId();
 
   // 5. Construir payload Factus.
@@ -178,7 +180,7 @@ export async function crearFacturaDesdePago(
   const monto = Number(ctx.monto) || VALOR_ESTUDIO_DEFAULT;
 
   const payload: factus.CreateBillInput = {
-    numbering_range_id: numberingRangeId,
+    ...(numberingRangeId !== null ? { numbering_range_id: numberingRangeId } : {}),
     reference_code: referenceCode,
     payment_form: '1', // contado
     payment_method_code: '10', // efectivo (genérico — Stripe procesó por fuera)

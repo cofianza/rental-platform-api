@@ -55,7 +55,8 @@ export interface FactusItem {
 }
 
 export interface CreateBillInput {
-  numbering_range_id: number;
+  /** Opcional. Si solo hay un rango activo Factus lo selecciona solo. */
+  numbering_range_id?: number;
   reference_code: string;
   observation?: string;
   payment_form?: '1' | '2'; // 1=contado, 2=crédito
@@ -288,20 +289,29 @@ export async function listNumberingRanges(opts?: {
 
 /**
  * Auto-discover: devuelve el ID del primer rango activo de facturación
- * electrónica (document=21). Lanza si no encuentra ninguno.
+ * electrónica (document=21). Si la cuenta no tiene acceso a /v1/numbering-ranges
+ * (algunos planes de Factus), retorna null y dejamos que Factus seleccione
+ * el rango automáticamente al crear la factura (válido cuando solo hay uno
+ * activo, según los docs).
  */
-export async function discoverNumberingRangeId(): Promise<number> {
-  const ranges = await listNumberingRanges({ document: '21', onlyActive: true });
-  const usable = ranges.filter((r) => !r.is_expired && r.is_active && r.current < r.to);
-  if (usable.length === 0) {
-    throw AppError.badRequest(
-      'No hay rangos de numeración activos para facturación electrónica en Factus. Crea uno desde el panel de Factus.',
-      'FACTUS_NO_NUMBERING_RANGE',
+export async function discoverNumberingRangeId(): Promise<number | null> {
+  try {
+    const ranges = await listNumberingRanges({ document: '21', onlyActive: true });
+    const usable = ranges.filter((r) => !r.is_expired && r.is_active && r.current < r.to);
+    if (usable.length === 0) {
+      logger.warn(
+        'Factus: ningún rango activo retornado por /v1/numbering-ranges — se omitirá el ID',
+      );
+      return null;
+    }
+    return usable[0].id;
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err) },
+      'Factus: no se pudo listar rangos (¿plan limita el endpoint?) — se omitirá numbering_range_id',
     );
+    return null;
   }
-  // Primero: el de menor "current" (más cercano a su límite, "consume" en orden).
-  // Empíricamente cualquiera funciona — tomamos el primero.
-  return usable[0].id;
 }
 
 /**
