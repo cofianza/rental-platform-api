@@ -47,6 +47,14 @@ const envSchema = z.object({
   // DataCredito
   DATACREDITO_API_URL: z.string().url().optional(),
   DATACREDITO_API_KEY: z.string().optional(),
+
+  // Factus — facturación electrónica DIAN (Colombia)
+  // OAuth2 password grant. Token expira en 600s, refresh disponible.
+  FACTUS_API_URL: z.string().url().default('https://api-sandbox.factus.com.co'),
+  FACTUS_CLIENT_ID: z.string().optional(),
+  FACTUS_CLIENT_SECRET: z.string().optional(),
+  FACTUS_USERNAME: z.string().optional(),
+  FACTUS_PASSWORD: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

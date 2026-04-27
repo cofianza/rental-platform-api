@@ -259,6 +259,20 @@ export async function onPagoConfirmado(params: {
   try {
     await registrarTimeline(expedienteId, 'pago', `Pago de ${concepto} confirmado.`);
 
+    // Disparar facturación electrónica fire-and-forget. Si falla, queda
+    // un registro en 'facturas' con error_mensaje para retry manual desde
+    // el panel admin/inmobiliaria.
+    import('@/modules/facturacion/facturacion.service')
+      .then(({ crearFacturaDesdePago }) =>
+        crearFacturaDesdePago(pagoId, null).catch((err) =>
+          logger.warn(
+            { error: err instanceof Error ? err.message : String(err), pagoId, expedienteId },
+            'Orchestrator: facturación automática falló — pendiente retry manual',
+          ),
+        ),
+      )
+      .catch((err) => logger.warn({ error: err }, 'Orchestrator: no se pudo cargar facturacion.service'));
+
     if (concepto !== 'estudio') return;
 
     // Cargar source + solicitante para decidir bifurcación.
