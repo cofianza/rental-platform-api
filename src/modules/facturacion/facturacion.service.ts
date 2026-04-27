@@ -337,6 +337,7 @@ export async function crearFacturaDesdePago(
     bill,
     referenceCode,
     concepto: ctx.concepto,
+    montoFallback: monto, // si Factus no devolvió total, caemos al monto del pago
   });
 
   logAudit({
@@ -370,8 +371,9 @@ async function persistFacturaEmitida(params: {
   bill: FactusBillSnapshot;
   referenceCode: string;
   concepto: string;
+  montoFallback: number;
 }) {
-  const { pagoId, expedienteId, sol, factusRes, bill, referenceCode, concepto } = params;
+  const { pagoId, expedienteId, sol, factusRes, bill, referenceCode, concepto, montoFallback } = params;
 
   // Si ya hay un intento previo (fallido), actualizamos en vez de insertar.
   const existente = await findFacturaExistente(pagoId);
@@ -392,8 +394,8 @@ async function persistFacturaEmitida(params: {
     qr_image_base64: bill.qr_image,
     respuesta_proveedor: factusRes,
     concepto,
-    total: bill.total != null ? Number(bill.total) : null,
-    tax_amount: bill.tax_amount != null ? Number(bill.tax_amount) : null,
+    total: bill.total != null ? Number(bill.total) : montoFallback,
+    tax_amount: bill.tax_amount != null ? Number(bill.tax_amount) : 0,
     error_mensaje: null,
     validada_en: new Date().toISOString(),
   };
@@ -524,5 +526,41 @@ export async function getFacturaById(id: string) {
   if (error || !data) {
     throw AppError.notFound('Factura no encontrada', 'FACTURA_NOT_FOUND');
   }
-  return data;
+
+  const f = data as Record<string, unknown>;
+  const totalDb = f.total != null ? Number(f.total) : null;
+  const taxDb = f.tax_amount != null ? Number(f.tax_amount) : null;
+
+  // Si la fila tiene total en null/0 (caso histórico antes del fallback al
+  // monto del pago), leemos el monto del pago asociado para mostrarlo.
+  let totalEffective = totalDb;
+  let taxEffective = taxDb ?? 0;
+  if ((!totalEffective || totalEffective === 0) && f.pago_id) {
+    const { data: pago } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('monto')
+      .eq('id', f.pago_id as string)
+      .maybeSingle();
+    if (pago) totalEffective = Number((pago as { monto: number }).monto) || 0;
+  }
+
+  // Estudio crediticio = servicio exento. Subtotal = total cuando no hay IVA.
+  const subtotal = (totalEffective ?? 0) - taxEffective;
+
+  // Mapear a la forma esperada por el frontend (IFactura).
+  return {
+    ...f,
+    numero: f.factus_number ?? f.numero_factura ?? null,
+    fecha: f.validada_en ?? f.created_at,
+    subtotal: subtotal > 0 ? subtotal : (totalEffective ?? 0),
+    iva: taxEffective,
+    total: totalEffective ?? 0,
+    emisor_razon_social: 'Cofianza S.A.S.',
+    emisor_nit: '901.000.000-0',
+    emisor_direccion: 'Medellín, Colombia',
+    receptor_razon_social: f.razon_social ?? '',
+    receptor_documento: f.nit ?? '',
+    receptor_direccion: f.direccion_fiscal ?? '',
+    receptor_email: '',
+  };
 }
