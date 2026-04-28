@@ -1,17 +1,19 @@
 /**
  * Renderiza HTML a PDF usando Chromium headless.
  *
- * En desarrollo (Windows/macOS) usa el Chrome del sistema vía
- * `executablePath` que detecta puppeteer-core. En producción (Railway,
- * Linux) usa @sparticuz/chromium — un binario empaquetado pensado para
- * entornos serverless/contenedores con tamaño optimizado.
+ * Usa el paquete `puppeteer` completo (no `puppeteer-core`): trae su
+ * propio Chromium con todas las libs Linux necesarias, así funciona
+ * en cualquier entorno (local Windows/macOS/Linux, Railway, Render).
+ * Trade-off: ~170MB de binario en el bundle, pero es lo único que
+ * funciona confiablemente — `@sparticuz/chromium` está optimizado solo
+ * para AWS Lambda y rompe en imágenes Linux generales con exit 127.
  *
  * Una sola instancia de browser por proceso — se reutiliza entre
  * generaciones para evitar el costo de arranque (~1-2s en frío).
  */
 
-import type { Browser } from 'puppeteer-core';
-import puppeteer from 'puppeteer-core';
+import type { Browser } from 'puppeteer';
+import puppeteer from 'puppeteer';
 import { logger } from '@/lib/logger';
 
 let cachedBrowser: Browser | null = null;
@@ -22,42 +24,28 @@ async function getBrowser(): Promise<Browser> {
   if (inflightLaunch) return inflightLaunch;
 
   inflightLaunch = (async () => {
-    const isProduction = process.env.NODE_ENV === 'production';
+    const startLaunch = Date.now();
+    logger.info('PDF renderer: lanzando Chromium');
 
-    let executablePath: string;
-    let args: string[];
+    // Args necesarios en entornos containerizados (Railway, Docker, etc.)
+    // donde no hay /dev/shm o tiene poca capacidad.
+    const args = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--font-render-hinting=none',
+    ];
 
-    if (isProduction) {
-      // En Railway/Linux: usar @sparticuz/chromium (Chromium empaquetado).
-      // Import dinámico para que el require no se evalúe en dev.
-      const startSparticuz = Date.now();
-      const { default: chromium } = await import('@sparticuz/chromium');
-      executablePath = await chromium.executablePath();
-      args = chromium.args;
-      logger.info(
-        { ms: Date.now() - startSparticuz, executablePath, argsCount: args.length },
-        'PDF renderer: @sparticuz/chromium resuelto',
-      );
-    } else {
-      // Dev: detectar Chrome local. Si no está, fallar con mensaje claro.
-      const localPath = await detectLocalChrome();
-      if (!localPath) {
-        throw new Error(
-          'Chrome no encontrado en el sistema. Instala Google Chrome o define PUPPETEER_EXECUTABLE_PATH.',
-        );
-      }
-      executablePath = localPath;
-      args = ['--no-sandbox', '--disable-setuid-sandbox'];
-    }
-
-    logger.info({ executablePath, isProduction }, 'PDF renderer: lanzando Chromium');
     const browser = await puppeteer.launch({
       headless: true,
-      executablePath,
       args,
+      // executablePath omitido: puppeteer usa el Chromium que descargó
+      // automáticamente en la instalación.
     });
 
-    // Cuando el browser muere (p.ej. OOM), invalidamos el cache.
+    logger.info({ ms: Date.now() - startLaunch }, 'PDF renderer: Chromium lanzado');
+
     browser.on('disconnected', () => {
       logger.warn('PDF renderer: browser desconectado, se relanzará en la próxima request');
       cachedBrowser = null;
@@ -74,30 +62,6 @@ async function getBrowser(): Promise<Browser> {
   }
 }
 
-async function detectLocalChrome(): Promise<string | null> {
-  const env = process.env.PUPPETEER_EXECUTABLE_PATH;
-  if (env) return env;
-  // Paths típicos por OS — best-effort. Si nada existe, devolvemos null.
-  const candidates = [
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium',
-  ];
-  const fs = await import('node:fs/promises');
-  for (const p of candidates) {
-    try {
-      await fs.access(p);
-      return p;
-    } catch {
-      // continue
-    }
-  }
-  return null;
-}
-
 /**
  * Renderiza el HTML a un PDF tamaño Letter (estándar para Colombia).
  * El HTML debe traer su propio `<style>` con `@page { size: Letter; ... }`
@@ -108,7 +72,6 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
   let browser: Browser;
   try {
     browser = await getBrowser();
-    logger.info({ ms: Date.now() - startTotal }, 'PDF renderer: browser listo');
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? { message: err.message, stack: err.stack } : err },
