@@ -144,7 +144,7 @@ async function archiveCurrentVersion(
     id: string;
     version: number;
     datos_variables: Record<string, string> | null;
-    storage_key: string;
+    storage_key: string | null;
     nombre_archivo: string | null;
     plantilla_version: number | null;
     generado_por: string | null;
@@ -152,6 +152,18 @@ async function archiveCurrentVersion(
   },
   resumenCambios: string,
 ): Promise<void> {
+  // Si la version actual nunca tuvo PDF (caso de un contrato creado por
+  // el orchestrator con auto-generacion fallida, o por SQL manual), no
+  // hay nada que archivar. La tabla contrato_versiones exige storage_key
+  // NOT NULL — saltamos el insert.
+  if (!contrato.storage_key) {
+    logger.info(
+      { contratoId: contrato.id, version: contrato.version },
+      'Contratos: archiveCurrentVersion skipped — version actual sin storage_key',
+    );
+    return;
+  }
+
   const { error } = await (supabase
     .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
     .insert({
