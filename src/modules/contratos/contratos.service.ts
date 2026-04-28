@@ -1179,7 +1179,12 @@ export async function regenerarContrato(
 // Descargar contrato (signed URL)
 // ============================================================
 
-export async function descargarContrato(id: string, userId: string, ip?: string) {
+export async function descargarContrato(
+  id: string,
+  userId: string,
+  ip?: string,
+  options?: { inline?: boolean },
+) {
   const contrato = await getContratoById(id);
   const row = contrato as unknown as {
     id: string; storage_key: string; nombre_archivo: string;
@@ -1189,11 +1194,14 @@ export async function descargarContrato(id: string, userId: string, ip?: string)
     throw AppError.badRequest('El contrato no tiene PDF generado', 'NO_PDF');
   }
 
+  // Si inline=true, omitimos el parámetro download para que Supabase NO
+  // envíe Content-Disposition: attachment. Asi el iframe del preview puede
+  // embeberlo en lugar de forzar descarga.
+  const inline = options?.inline === true;
+  const signOpts = inline ? undefined : { download: row.nombre_archivo || 'contrato.pdf' };
   const { data: urlData, error: urlError } = await supabase.storage
     .from(BUCKET_NAME)
-    .createSignedUrl(row.storage_key, DOWNLOAD_URL_EXPIRY_SECONDS, {
-      download: row.nombre_archivo || 'contrato.pdf',
-    });
+    .createSignedUrl(row.storage_key, DOWNLOAD_URL_EXPIRY_SECONDS, signOpts);
 
   if (urlError || !urlData) {
     logger.error({ error: urlError?.message, id }, 'Error al generar URL de descarga');

@@ -78,7 +78,8 @@ export async function regenerar(req: Request, res: Response) {
 
 export async function descargar(req: Request, res: Response) {
   const { id } = req.params as unknown as { id: string };
-  const result = await contratosService.descargarContrato(id, req.user!.id, req.ip);
+  const inline = req.query.inline === 'true';
+  const result = await contratosService.descargarContrato(id, req.user!.id, req.ip, { inline });
   sendSuccess(res, result);
 }
 
