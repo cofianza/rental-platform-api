@@ -16,6 +16,7 @@ import expedienteTimelineRouter from '@/modules/expedientes/expediente-timeline.
 import expedienteAssignmentsRouter from '@/modules/expedientes/expediente-assignments.routes';
 import expedienteHabilitacionRouter from '@/modules/expedientes/expediente-habilitacion.routes';
 import usersRouter from '@/modules/users/users.routes';
+import perfilArrendadorRouter from '@/modules/perfil-arrendador/perfil-arrendador.routes';
 import registrationRouter from '@/modules/registration/registration.routes';
 import { bitacoraRouter } from '@/modules/bitacora/bitacora.routes';
 import inmueblesRouter from '@/modules/inmuebles/inmuebles.routes';
@@ -88,6 +89,7 @@ app.use('/api/v1/expedientes', expedienteTimelineRouter);
 app.use('/api/v1/expedientes', expedienteAssignmentsRouter);
 app.use('/api/v1/expedientes', expedienteHabilitacionRouter);
 app.use('/api/v1/users', usersRouter);
+app.use('/api/v1/perfil-arrendador', perfilArrendadorRouter);
 app.use('/api/v1/inmuebles', inmueblesRouter);
 app.use('/api/v1/audit-logs', bitacoraRouter);
 app.use('/api/v1/applicants', applicantsRouter);
