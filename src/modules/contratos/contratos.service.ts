@@ -224,6 +224,9 @@ interface ExpedienteData {
     valor_arriendo: number;
     parqueadero?: boolean | null;
     administracion?: number | null;
+    propiedad_horizontal?: boolean | null;
+    cuarto_util?: boolean | null;
+    ubicacion_detallada?: string | null;
     propietario_id: string;
     contrato_tipo_storage_key?: string | null;
     contrato_tipo_nombre_archivo?: string | null;
@@ -284,6 +287,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       inmuebles(
         id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero,
         administracion, propietario_id,
+        propiedad_horizontal, cuarto_util, ubicacion_detallada,
         contrato_tipo_storage_key, contrato_tipo_nombre_archivo
       ),
       solicitantes(
@@ -474,18 +478,19 @@ async function buildContratoContext(
     inmueble: {
       direccion: inmueble.direccion,
       ciudad: inmueble.ciudad,
-      ubicacion_detallada: [
-        inmueble.direccion,
-        inmueble.barrio,
-        inmueble.ciudad,
-        inmueble.departamento,
-      ].filter(Boolean).join(', '),
-      // Heurística: si el inmueble paga administración asumimos que está
-      // en propiedad horizontal. El admin puede editar la plantilla si
-      // quiere otra lógica.
-      es_propiedad_horizontal: Number(inmueble.administracion || 0) > 0,
+      // Si el propietario escribió ubicacion_detallada en el inmueble, la
+      // usamos textual. Si no, la armamos con direccion + barrio + ciudad
+      // + departamento.
+      ubicacion_detallada: inmueble.ubicacion_detallada
+        || [inmueble.direccion, inmueble.barrio, inmueble.ciudad, inmueble.departamento]
+            .filter(Boolean).join(', '),
+      // Si está explícito en el inmueble, lo respetamos. Si es null, caemos
+      // a la heurística: paga administración → propiedad horizontal.
+      es_propiedad_horizontal: inmueble.propiedad_horizontal !== null && inmueble.propiedad_horizontal !== undefined
+        ? Boolean(inmueble.propiedad_horizontal)
+        : Number(inmueble.administracion || 0) > 0,
       tiene_parqueadero: Boolean(inmueble.parqueadero),
-      tiene_cuarto_util: false, // TODO: agregar columna inmuebles.cuarto_util
+      tiene_cuarto_util: Boolean(inmueble.cuarto_util),
     },
     contrato: {
       fecha_dia: ahora.getDate(),
@@ -825,7 +830,7 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
   // 1. Cargar inmueble con datos relevantes para el contrato.
   const { data: inmuebleRow, error: inmError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, administracion, propietario_id')
+    .select('id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, administracion, propietario_id, propiedad_horizontal, cuarto_util, ubicacion_detallada')
     .eq('id', inmuebleId)
     .single();
   if (inmError || !inmuebleRow) {

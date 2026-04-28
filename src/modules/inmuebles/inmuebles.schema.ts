@@ -33,6 +33,10 @@ export const createInmuebleSchema = z.object({
   propietario_id: z.uuid({ error: 'ID de propietario invalido' }),
   visible_vitrina: z.boolean().default(false),
   foto_fachada_url: z.url({ error: 'URL de foto de fachada invalida' }),
+  // Datos para contrato (clausulas PRIMERA y SEGUNDA del contrato).
+  propiedad_horizontal: z.boolean().nullable().optional(),
+  cuarto_util: z.boolean().default(false),
+  ubicacion_detallada: z.string().max(1000, 'Ubicacion detallada muy larga').nullable().optional(),
 });
 
 export const updateInmuebleSchema = z.object({
@@ -61,6 +65,10 @@ export const updateInmuebleSchema = z.object({
   visible_vitrina: z.boolean().optional(),
   foto_fachada_url: z.url({ error: 'URL de foto de fachada invalida' }).optional(),
   estado: z.enum(ESTADOS_INMUEBLE, { error: `Estado invalido. Valores permitidos: ${ESTADOS_INMUEBLE.join(', ')}` }).optional(),
+  // Datos para contrato.
+  propiedad_horizontal: z.boolean().nullable().optional(),
+  cuarto_util: z.boolean().nullable().optional(),
+  ubicacion_detallada: z.string().max(1000, 'Ubicacion detallada muy larga').nullable().optional(),
 });
 
 export const listInmueblesQuerySchema = z.object({

@@ -51,7 +51,7 @@ interface InmuebleWithOwnerRow extends InmuebleRow {
   perfiles: { id: string; nombre: string; apellido: string; telefono: string | null } | null;
 }
 
-const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, visible_vitrina, foto_fachada_url, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
+const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
 
 const INMUEBLE_WITH_OWNER = `${INMUEBLE_FIELDS}, perfiles!inmuebles_propietario_id_fkey(id, nombre, apellido, telefono)`;
 
