@@ -1062,6 +1062,7 @@ export async function regenerarContrato(
     datos_variables: Record<string, string> | null;
     nombre_archivo: string | null; plantilla_version: number | null;
     generado_por: string | null; fecha_generacion: string | null;
+    fecha_inicio: string | null; duracion_meses: number | null;
   };
 
   if (row.estado !== 'borrador') {
@@ -1074,10 +1075,10 @@ export async function regenerarContrato(
   // 2. Fetch expediente data
   const { data: expData } = await fetchExpedienteData(row.expediente_id);
 
-  // 3. Fetch plantilla
+  // 3. Fetch plantilla (incluyendo el HTML V2 si existe).
   const { data: plantilla } = await (supabase
     .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
-    .select('id, nombre, contenido, variables, version')
+    .select('id, nombre, contenido, contenido_html, variables, version')
     .eq('id', row.plantilla_id)
     .single();
 
@@ -1086,34 +1087,47 @@ export async function regenerarContrato(
   }
 
   const pl = plantilla as unknown as {
-    id: string; nombre: string; contenido: string;
+    id: string; nombre: string; contenido: string | null; contenido_html: string | null;
     variables: string[]; version: number;
   };
 
-  // 4. Build variables (merge previous + auto + new overrides)
-  const fechaInicio = new Date();
-  const duracionMeses = 12;
-  const autoVariables = buildVariablesFromExpediente(expData, fechaInicio, duracionMeses);
-  const finalVariables = {
-    ...autoVariables,
-    ...(row.datos_variables ?? {}),
-    ...(input.variables ?? {}),
-  };
+  // 4. Construir contexto V2 anidado (igual que generarContrato).
+  const fechaInicio = row.fecha_inicio ? new Date(`${row.fecha_inicio}T00:00:00`) : new Date();
+  const duracionMeses = row.duracion_meses || 12;
+  const expedienteNumero = ((await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('numero')
+    .eq('id', row.expediente_id)
+    .single()).data as { numero?: string } | null)?.numero || row.expediente_id;
 
-  // 4b. Archive current version before regenerating
-  const resumenCambios = generateResumenCambios(row.datos_variables ?? {}, finalVariables);
+  const ctx = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses);
+  const finalVariables: Record<string, unknown> = { ...ctx, ...(input.variables ?? {}) };
+
+  // 4b. Archive current version before regenerating (skip si NULL).
+  const resumenCambios = generateResumenCambios(
+    (row.datos_variables ?? {}) as Record<string, string>,
+    finalVariables as Record<string, string>,
+  );
   await archiveCurrentVersion(row, resumenCambios);
 
-  // 5. Compile HTML + generate PDF
-  const compiledHtml = compileTemplate(pl.contenido, finalVariables);
+  // 5. Render HTML + generate PDF (V2 con Puppeteer si hay contenido_html;
+  //    fallback legacy a pdfkit + compileTemplate para plantillas viejas).
   const newVersion = row.version + 1;
   const now = new Date();
 
-  const pdfBuffer = await generateContractPdf(compiledHtml, {
-    titulo: pl.nombre,
-    fecha: formatDateCO(now),
-    version: newVersion,
-  });
+  let pdfBuffer: Buffer;
+  if (pl.contenido_html) {
+    const renderedHtml = renderTemplate(pl.contenido_html, finalVariables);
+    pdfBuffer = await renderHtmlToPdf(renderedHtml);
+  } else {
+    const flatVars = flattenForLegacyTemplate(ctx);
+    const compiledHtml = compileTemplate(pl.contenido || '', flatVars);
+    pdfBuffer = await generateContractPdf(compiledHtml, {
+      titulo: pl.nombre,
+      fecha: formatDateCO(now),
+      version: newVersion,
+    });
+  }
 
   // 6. Upload new PDF (new version key)
   const storageKey = `contratos/${row.expediente_id}/${row.id}/v${newVersion}.pdf`;
