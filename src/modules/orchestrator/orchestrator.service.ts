@@ -5,7 +5,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
-import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendContratoListoEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
+import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
@@ -172,9 +172,14 @@ export async function onEstudioCompletado(params: {
         }
       }
 
-      if (contratoId) {
-        await avanzarContratoAFirma(contratoId, sol, inm);
-      }
+      // Decision de UX (2026-04-28): el contrato queda en 'borrador'
+      // para que la inmobiliaria/propietario lo revise antes de enviar
+      // a firma. El email "contrato listo" no se envia hasta que ellos
+      // disparen "Enviar a firma" desde el panel — ahi Auco notifica al
+      // arrendatario directamente. Mantenemos la referencia a las
+      // variables sol/inm para evitar TS unused; se siguen usando en
+      // notificaciones a propietario.
+      void contratoId;
 
     } else if (resultado === 'rechazado') {
       // ── RECHAZADO ──
@@ -400,71 +405,29 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
   logger.info({ expedienteId, from: exp.estado, to: estadoDestino }, 'Orchestrator: expediente transicionado');
 }
 
-async function generarContratoAutomatico(expedienteId: string, valorArriendo?: number): Promise<string | null> {
+async function generarContratoAutomatico(expedienteId: string, _valorArriendo?: number): Promise<string | null> {
   try {
-    const { data: plantilla } = await db('plantillas_contrato')
-      .select('id, version')
-      .eq('activa', true)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single() as { data: { id: string; version: number } | null };
-
-    if (!plantilla) {
-      logger.warn('Orchestrator: no hay plantilla activa');
-      return null;
+    // Llamamos al servicio real de contratos: renderiza la plantilla V2
+    // (HTML + variables resueltas) → PDF via Puppeteer → sube a storage.
+    // El contrato queda en 'borrador' para que la inmobiliaria/propietario
+    // lo revise antes de enviar a firma manualmente.
+    const { generarContrato } = await import('@/modules/contratos/contratos.service');
+    const result = await generarContrato(
+      expedienteId,
+      { duracion_meses: DURACION_CONTRATO_DEFAULT, fecha_inicio: new Date().toISOString().slice(0, 10) },
+      'system', // userId: el orchestrator firma como sistema
+    );
+    const contratoId = (result as { id?: string } | null)?.id || null;
+    if (contratoId) {
+      logger.info({ contratoId, expedienteId }, 'Orchestrator: contrato auto-generado con PDF');
     }
-
-    const { data: contrato, error } = await db('contratos')
-      .insert({
-        expediente_id: expedienteId,
-        plantilla_id: plantilla.id,
-        plantilla_version: plantilla.version,
-        estado: 'borrador',
-        duracion_meses: DURACION_CONTRATO_DEFAULT,
-        valor_arriendo: valorArriendo || 0,
-        fecha_inicio: new Date().toISOString().slice(0, 10),
-        datos_variables: {},
-      } as never)
-      .select('id')
-      .single() as { data: { id: string } | null; error: unknown };
-
-    if (error || !contrato) {
-      logger.error({ error }, 'Orchestrator: error creando contrato');
-      return null;
-    }
-
-    logger.info({ contratoId: contrato.id, expedienteId }, 'Orchestrator: contrato generado');
-    return contrato.id;
+    return contratoId;
   } catch (error) {
-    logger.error({ error }, 'Orchestrator: error en generarContratoAutomatico');
+    logger.error({ error, expedienteId }, 'Orchestrator: error en generarContratoAutomatico');
     return null;
   }
 }
 
-async function avanzarContratoAFirma(
-  contratoId: string,
-  solicitante: { nombre: string; apellido: string; email: string } | null,
-  inmueble: { direccion: string; ciudad: string } | null,
-) {
-  try {
-    await db('contratos')
-      .update({ estado: 'pendiente_firma', updated_at: new Date().toISOString() } as never)
-      .eq('id', contratoId);
-
-    if (solicitante?.email) {
-      sendContratoListoEmail({
-        email: solicitante.email,
-        nombre: `${solicitante.nombre} ${solicitante.apellido}`,
-        inmueble: inmueble?.direccion || '',
-        ciudad: inmueble?.ciudad || '',
-      }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email contrato listo'));
-    }
-
-    logger.info({ contratoId }, 'Orchestrator: contrato avanzado a pendiente_firma');
-  } catch (error) {
-    logger.error({ error, contratoId }, 'Orchestrator: error en avanzarContratoAFirma');
-  }
-}
 
 async function registrarTimeline(expedienteId: string, tipo: string, descripcion: string) {
   await db('eventos_timeline').insert({

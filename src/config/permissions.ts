@@ -103,7 +103,9 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     usuarios: ['read_own'],
     expedientes: ['read'],
     estudios: ['read'],
-    contratos: ['read'],
+    // 'update' permite regenerar el PDF cuando cambien datos del perfil
+    // o del inmueble. La generacion inicial es automatica via orchestrator.
+    contratos: ['read', 'update'],
     plantillas: [],
     inmuebles: ['create', 'read', 'update'],
     reportes: [],

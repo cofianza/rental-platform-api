@@ -38,6 +38,20 @@ expedienteContratosRouter.post(
 );
 
 // ============================================================
+// Inmueble-scoped: /api/v1/inmuebles/:inmuebleId/contrato-preview
+// (preview HTML de la plantilla con datos del inmueble — sin PDF)
+// ============================================================
+
+export const inmuebleContratoPreviewRouter = Router({ mergeParams: true });
+inmuebleContratoPreviewRouter.use(authMiddleware);
+
+inmuebleContratoPreviewRouter.get(
+  '/contrato-preview',
+  authorize('inmuebles', 'read'),
+  contratosController.previewByInmueble,
+);
+
+// ============================================================
 // Standalone routes: /api/v1/contratos
 // ============================================================
 

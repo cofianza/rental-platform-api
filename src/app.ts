@@ -28,7 +28,7 @@ import adminTiposDocumentoRouter from '@/modules/documentos/admin-tipos-document
 import { expedienteEstudiosRouter, estudiosRouter, publicEstudiosRouter, proveedoresRiesgoRouter, publicVerificarRouter, inmuebleEstudiosRouter } from '@/modules/estudios/estudios.routes';
 import { expedienteAutorizacionRouter, publicAutorizacionRouter } from '@/modules/autorizaciones/autorizaciones.routes';
 import plantillasRouter from '@/modules/plantillas/plantillas.routes';
-import { expedienteContratosRouter, contratosRouter } from '@/modules/contratos/contratos.routes';
+import { expedienteContratosRouter, contratosRouter, inmuebleContratoPreviewRouter } from '@/modules/contratos/contratos.routes';
 import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes';
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
 import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
@@ -108,6 +108,7 @@ app.use('/api/v1/public/autorizar', publicAutorizacionRouter);
 app.use('/api/v1/public/invitacion', publicInvitacionRouter);
 app.use('/api/v1/plantillas-contrato', plantillasRouter);
 app.use('/api/v1/expedientes/:expedienteId/contratos', expedienteContratosRouter);
+app.use('/api/v1/inmuebles/:inmuebleId', inmuebleContratoPreviewRouter);
 app.use('/api/v1/contratos', contratoWorkflowRouter);
 app.use('/api/v1/contratos', contratoFirmadoRouter);
 app.use('/api/v1/contratos', contratoArchivosRouter);

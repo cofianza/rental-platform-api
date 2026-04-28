@@ -12,6 +12,19 @@ import type {
   CompararVersionesQuery,
 } from './contratos.schema';
 
+/**
+ * Devuelve el HTML de la plantilla activa renderizado con datos del
+ * inmueble + propietario, y placeholders para arrendatario/coarrendatario.
+ * Sirve para el preview en el detalle del inmueble — no genera PDF.
+ */
+export async function previewByInmueble(req: Request, res: Response) {
+  const { inmuebleId } = req.params as { inmuebleId: string };
+  const html = await contratosService.previewPlantillaParaInmueble(inmuebleId);
+  // Devolvemos texto/html directo para que el frontend lo embeba en un
+  // iframe via srcdoc o data URL.
+  res.type('html').send(html);
+}
+
 export async function listAll(req: Request, res: Response) {
   const query = req.query as unknown as ListAllContratosQuery;
   const result = await contratosService.listAllContratos(query);

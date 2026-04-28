@@ -767,6 +767,85 @@ export async function generarContrato(
 }
 
 /**
+ * Renderiza la plantilla activa con los datos del inmueble + propietario,
+ * pero con campos del arrendatario/coarrendatario como placeholders.
+ * Usado para mostrar un preview visual en el detalle del inmueble (sin
+ * generar PDF — solo HTML para embeber en un iframe).
+ */
+export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<string> {
+  // 1. Cargar inmueble con datos relevantes para el contrato.
+  const { data: inmuebleRow, error: inmError } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, administracion, propietario_id')
+    .eq('id', inmuebleId)
+    .single();
+  if (inmError || !inmuebleRow) {
+    throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
+  }
+  const inmueble = inmuebleRow as unknown as ExpedienteData['inmueble'];
+
+  // 2. Cargar arrendador (propietario o inmobiliaria) con todos los campos.
+  const { data: arrendadorRow, error: arrError } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, nombre, apellido, rol, tipo_documento, numero_documento,
+      razon_social, representante_legal,
+      domicilio_direccion, domicilio_ciudad, ciudad,
+      matricula_arrendador, logo_storage_key, logo_url,
+      whatsapp_recaudo, email_recaudo,
+      cuenta_recaudo_banco, cuenta_recaudo_tipo, cuenta_recaudo_numero,
+      cuenta_recaudo_titular_nombre, cuenta_recaudo_titular_nit
+    `)
+    .eq('id', inmueble.propietario_id)
+    .single();
+  if (arrError || !arrendadorRow) {
+    throw AppError.badRequest('No se encontro el arrendador del inmueble', 'NO_ARRENDADOR');
+  }
+
+  // 3. Construir contexto con datos del inmueble + arrendador y placeholders
+  //    para arrendatario/coarrendatario.
+  const dataForContext: ExpedienteData = {
+    inmueble,
+    solicitante: {
+      nombre: '[Nombre arrendatario]',
+      apellido: '',
+      tipo_documento: 'cc',
+      numero_documento: '[CC]',
+      email: '[email@arrendatario]',
+      telefono: '[Celular]',
+      direccion: '[Direccion arrendatario]',
+      ciudad: '[Ciudad]',
+    },
+    propietario: {
+      nombre: (arrendadorRow as { nombre: string }).nombre,
+      apellido: (arrendadorRow as { apellido: string }).apellido,
+      numero_documento: (arrendadorRow as { numero_documento: string | null }).numero_documento || '',
+    },
+    arrendador: arrendadorRow as unknown as ArrendadorRow,
+    codeudor: null,
+  };
+
+  const fechaInicio = new Date();
+  const ctx = await buildContratoContext(dataForContext, '[Numero expediente]', fechaInicio, 12);
+
+  // 4. Cargar plantilla activa.
+  const { data: plantilla } = await (supabase
+    .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
+    .select('contenido_html')
+    .eq('activa', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const html = (plantilla as { contenido_html: string | null } | null)?.contenido_html;
+  if (!html) {
+    throw AppError.notFound('No hay plantilla activa configurada', 'PLANTILLA_NOT_FOUND');
+  }
+
+  // 5. Renderizar.
+  return renderTemplate(html, ctx);
+}
+
+/**
  * Aplana el contexto anidado a {key: value} para que la plantilla legacy
  * (la que usaba {{arrendador_nombre}} sin punto) siga funcionando si por
  * algún motivo se invoca con `contenido` en vez de `contenido_html`.
