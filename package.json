@@ -29,7 +29,6 @@
   "author": "INXENIUX",
   "license": "ISC",
   "dependencies": {
-    "@sparticuz/chromium": "^148.0.0",
     "@supabase/supabase-js": "^2.95.3",
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
@@ -41,7 +40,7 @@
     "pdfkit": "^0.17.2",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
-    "puppeteer-core": "^24.42.0",
+    "puppeteer": "^24.42.0",
     "qrcode": "^1.5.4",
     "resend": "^6.9.2",
     "stripe": "^20.4.1",
