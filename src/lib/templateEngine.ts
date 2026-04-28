@@ -76,58 +76,67 @@ export function renderTemplate(template: string, context: Context): string {
 function resolveIfBlocks(template: string, context: Context): string {
   // Encuentra {{#if X}} o {{else}} o {{/if}} con sus posiciones, los empareja
   // con un stack y reemplaza el bloque resultante. Repetimos hasta que no
-  // queden #if (los #if anidados se resuelven de adentro hacia afuera porque
-  // el stack toma el último #if abierto antes de cerrar).
+  // queden #if. Guardamos las posiciones EXACTAS de cada token (start y
+  // end) porque calcular `lastIndexOf('{{')` falla con bloques consecutivos
+  // tipo `{{#if X}}…{{/if}}{{#if Y}}…` — el `{{` siguiente se confunde
+  // con el del `{{/if}}` que cerró el bloque actual.
   const tokenRe = /\{\{\s*(#if\s+([\w.]+)|else|\/if)\s*\}\}/g;
 
   // Estrategia: mientras haya pares #if/{/if}, encontrar el bloque más interno
   // (el #if más cercano al primer /if) y resolverlo. Repetir.
   for (let safety = 0; safety < 1000; safety += 1) {
-    let openIdx = -1;
+    let openStart = -1;        // posición del `{{#if`
+    let openEnd = -1;          // posición DESPUÉS del `}}` del `{{#if X}}`
     let openCond = '';
-    let elseIdx = -1;
-    let closeIdx = -1;
+    let elseStart = -1;        // posición del `{{else`
+    let elseEnd = -1;          // posición DESPUÉS del `}}` del `{{else}}`
+    let closeStart = -1;       // posición del `{{/if`
+    let closeEnd = -1;         // posición DESPUÉS del `}}` del `{{/if}}`
     tokenRe.lastIndex = 0;
     let depth = 0;
 
     let match: RegExpExecArray | null = tokenRe.exec(template);
     while (match) {
       const kind = match[1];
+      const tokStart = match.index;
+      const tokEnd = match.index + match[0].length;
+
       if (kind.startsWith('#if')) {
         if (depth === 0) {
-          openIdx = match.index;
+          openStart = tokStart;
+          openEnd = tokEnd;
           openCond = match[2];
-          elseIdx = -1;
+          elseStart = -1;
+          elseEnd = -1;
         }
         depth += 1;
       } else if (kind === 'else' && depth === 1) {
-        elseIdx = match.index;
+        elseStart = tokStart;
+        elseEnd = tokEnd;
       } else if (kind === '/if') {
         depth -= 1;
         if (depth === 0) {
-          closeIdx = match.index + match[0].length;
+          closeStart = tokStart;
+          closeEnd = tokEnd;
           break;
         }
       }
       match = tokenRe.exec(template);
     }
 
-    if (openIdx === -1 || closeIdx === -1) break; // no más bloques
+    if (openStart === -1 || closeStart === -1) break; // no más bloques
 
-    const openTagEnd = template.indexOf('}}', openIdx) + 2;
-    const closeTagStart = template.lastIndexOf('{{', closeIdx);
-
-    const ifBody = elseIdx >= 0
-      ? template.slice(openTagEnd, elseIdx)
-      : template.slice(openTagEnd, closeTagStart);
-    const elseBody = elseIdx >= 0
-      ? template.slice(template.indexOf('}}', elseIdx) + 2, closeTagStart)
+    const ifBody = elseStart >= 0
+      ? template.slice(openEnd, elseStart)
+      : template.slice(openEnd, closeStart);
+    const elseBody = elseStart >= 0
+      ? template.slice(elseEnd, closeStart)
       : '';
 
     const cond = getValue(context, openCond);
     const replacement = isTruthy(cond) ? ifBody : elseBody;
 
-    template = template.slice(0, openIdx) + replacement + template.slice(closeIdx);
+    template = template.slice(0, openStart) + replacement + template.slice(closeEnd);
   }
 
   return template;
