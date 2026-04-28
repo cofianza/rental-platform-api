@@ -24,6 +24,81 @@ function normalizeEmpty(value: string | null | undefined): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
+/**
+ * Campos obligatorios para que el perfil del arrendador sea "completo"
+ * y se puedan publicar inmuebles. Si falta cualquiera, el contrato que
+ * se genere despues va a tener datos vacios.
+ *
+ * Comunes a propietario e inmobiliaria:
+ *   domicilio (dir+ciudad), cuenta de recaudo completa, contacto recaudo.
+ *
+ * Solo inmobiliaria: matricula_arrendador (las inmobiliarias estan obligadas
+ * por ley colombiana a tener matricula. El logo NO es obligatorio.)
+ */
+const REQUIRED_FIELDS_COMUNES = [
+  'domicilio_direccion',
+  'domicilio_ciudad',
+  'cuenta_recaudo_banco',
+  'cuenta_recaudo_tipo',
+  'cuenta_recaudo_numero',
+  'cuenta_recaudo_titular_nombre',
+  'cuenta_recaudo_titular_nit',
+  'whatsapp_recaudo',
+  'email_recaudo',
+] as const;
+
+const REQUIRED_FIELDS_INMOBILIARIA = ['matricula_arrendador'] as const;
+
+const FIELD_LABELS: Record<string, string> = {
+  domicilio_direccion: 'Domicilio (direccion)',
+  domicilio_ciudad: 'Domicilio (ciudad)',
+  cuenta_recaudo_banco: 'Banco de la cuenta de recaudo',
+  cuenta_recaudo_tipo: 'Tipo de cuenta (ahorros/corriente)',
+  cuenta_recaudo_numero: 'Numero de cuenta',
+  cuenta_recaudo_titular_nombre: 'Titular de la cuenta',
+  cuenta_recaudo_titular_nit: 'NIT/CC del titular',
+  whatsapp_recaudo: 'WhatsApp de recaudo',
+  email_recaudo: 'Email de recaudo',
+  matricula_arrendador: 'Matricula de arrendador',
+};
+
+interface CompletitudResultado {
+  completo: boolean;
+  faltantes: { campo: string; etiqueta: string }[];
+  rol: string;
+}
+
+/**
+ * Verifica si el perfil del usuario tiene todos los datos necesarios para
+ * publicar inmuebles y emitir contratos. Devuelve la lista de faltantes
+ * para que el frontend muestre un mensaje claro.
+ */
+export async function checkPerfilCompletitud(userId: string): Promise<CompletitudResultado> {
+  const { data } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('rol, ' + REQUIRED_FIELDS_COMUNES.join(', ') + ', matricula_arrendador')
+    .eq('id', userId)
+    .single();
+
+  if (!data) {
+    return { completo: false, faltantes: [], rol: 'desconocido' };
+  }
+
+  const row = data as unknown as Record<string, string | null>;
+  const rol = String(row.rol || 'desconocido');
+
+  const required: string[] = [...REQUIRED_FIELDS_COMUNES];
+  if (rol === 'inmobiliaria') {
+    required.push(...REQUIRED_FIELDS_INMOBILIARIA);
+  }
+
+  const faltantes = required
+    .filter((f) => !row[f] || String(row[f]).trim().length === 0)
+    .map((campo) => ({ campo, etiqueta: FIELD_LABELS[campo] || campo }));
+
+  return { completo: faltantes.length === 0, faltantes, rol };
+}
+
 export async function getMiPerfilArrendador(userId: string) {
   const { data, error } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)

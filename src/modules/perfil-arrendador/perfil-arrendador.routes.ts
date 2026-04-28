@@ -27,6 +27,7 @@ router.use(authMiddleware);
 router.use(roleGuard(['administrador', 'inmobiliaria', 'propietario']));
 
 router.get('/me', controller.getMe);
+router.get('/me/completitud', controller.getCompletitud);
 router.put('/me', validate({ body: updatePerfilArrendadorSchema }), controller.updateMe);
 router.post('/me/logo', uploadLogoMulter.single('logo'), controller.uploadLogo);
 router.delete('/me/logo', controller.deleteLogo);

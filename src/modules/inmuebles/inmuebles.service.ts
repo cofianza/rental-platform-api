@@ -180,7 +180,7 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
   // Validar que el propietario exista
   const { data: propietario, error: propError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, rol')
     .eq('id', input.propietario_id)
     .single();
 
@@ -189,6 +189,25 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
       'Propietario no encontrado. Verifique el ID proporcionado',
       'PROPIETARIO_NOT_FOUND',
     );
+  }
+
+  // Validar que el perfil del propietario tenga los datos para contrato
+  // completos. Sin esto, los contratos que se generen luego saldrian con
+  // campos vacios. Solo aplica a roles que firman contratos (propietario,
+  // inmobiliaria); admin/operador pueden crear inmuebles para terceros
+  // sin pasar este check (asumiendo que el propietario asignado los tiene).
+  const propRol = (propietario as { rol: string }).rol;
+  if (propRol === 'propietario' || propRol === 'inmobiliaria') {
+    const { checkPerfilCompletitud } = await import('@/modules/perfil-arrendador/perfil-arrendador.service');
+    const { completo, faltantes } = await checkPerfilCompletitud(input.propietario_id);
+    if (!completo) {
+      throw new AppError(
+        400,
+        'PERFIL_INCOMPLETO',
+        'El propietario debe completar sus Datos para contrato antes de publicar inmuebles.',
+        { faltantes, redirectTo: '/configuracion/datos-contrato' },
+      );
+    }
   }
 
   const { data, error } = await (supabase

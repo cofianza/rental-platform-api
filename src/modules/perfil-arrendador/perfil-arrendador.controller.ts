@@ -8,6 +8,11 @@ export async function getMe(req: Request, res: Response) {
   sendSuccess(res, data);
 }
 
+export async function getCompletitud(req: Request, res: Response) {
+  const data = await service.checkPerfilCompletitud(req.user!.id);
+  sendSuccess(res, data);
+}
+
 export async function updateMe(req: Request, res: Response) {
   const data = await service.updateMiPerfilArrendador(
     req.user!.id,
