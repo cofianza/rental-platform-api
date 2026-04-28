@@ -1,0 +1,35 @@
+# Nixpacks config for Railway / Render.
+#
+# Instala las librerías compartidas de Chromium así Puppeteer puede
+# lanzar el browser sin error "Failed to launch browser process / Code: 127".
+# Estas libs no vienen en la imagen base por defecto y son necesarias
+# tanto para `puppeteer` (Chromium descargado por el paquete) como para
+# `@sparticuz/chromium` (binario empaquetado).
+[phases.setup]
+nixPkgs = [
+  "nodejs",
+  "nspr",         # libnspr4 (faltaba esta — error principal)
+  "nss",          # libnss3
+  "atk",
+  "at-spi2-atk",
+  "cups",         # libcups2
+  "dbus",
+  "gtk3",
+  "pango",
+  "cairo",
+  "alsa-lib",     # libasound2
+  "libdrm",
+  "libxkbcommon",
+  "libgbm",
+  "xorg.libX11",
+  "xorg.libXcomposite",
+  "xorg.libXdamage",
+  "xorg.libXext",
+  "xorg.libXfixes",
+  "xorg.libXrandr",
+  "xorg.libxcb",
+  "xorg.libXrender",
+  "xorg.libXScrnSaver",
+  "xorg.libXtst",
+  "xorg.libxshmfence",
+]
