@@ -30,9 +30,14 @@ async function getBrowser(): Promise<Browser> {
     if (isProduction) {
       // En Railway/Linux: usar @sparticuz/chromium (Chromium empaquetado).
       // Import dinámico para que el require no se evalúe en dev.
+      const startSparticuz = Date.now();
       const { default: chromium } = await import('@sparticuz/chromium');
       executablePath = await chromium.executablePath();
       args = chromium.args;
+      logger.info(
+        { ms: Date.now() - startSparticuz, executablePath, argsCount: args.length },
+        'PDF renderer: @sparticuz/chromium resuelto',
+      );
     } else {
       // Dev: detectar Chrome local. Si no está, fallar con mensaje claro.
       const localPath = await detectLocalChrome();
@@ -99,18 +104,47 @@ async function detectLocalChrome(): Promise<string | null> {
  * para controlar márgenes; el renderer respeta esos estilos.
  */
 export async function renderHtmlToPdf(html: string): Promise<Buffer> {
-  const browser = await getBrowser();
+  const startTotal = Date.now();
+  let browser: Browser;
+  try {
+    browser = await getBrowser();
+    logger.info({ ms: Date.now() - startTotal }, 'PDF renderer: browser listo');
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? { message: err.message, stack: err.stack } : err },
+      'PDF renderer: fallo al lanzar browser',
+    );
+    throw err;
+  }
+
   const page = await browser.newPage();
   try {
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const startContent = Date.now();
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
+    logger.info({ ms: Date.now() - startContent }, 'PDF renderer: setContent listo');
+
+    const startPdf = Date.now();
     const pdf = await page.pdf({
       format: 'Letter',
       printBackground: true,
-      preferCSSPageSize: true, // respeta @page del CSS si está definido
-      margin: { top: '0', right: '0', bottom: '0', left: '0' }, // dejamos al CSS
+      preferCSSPageSize: true,
+      margin: { top: '0', right: '0', bottom: '0', left: '0' },
     });
+    logger.info(
+      { ms: Date.now() - startPdf, totalMs: Date.now() - startTotal, bytes: pdf.length },
+      'PDF renderer: PDF generado',
+    );
     return Buffer.from(pdf);
+  } catch (err) {
+    logger.error(
+      {
+        err: err instanceof Error ? { message: err.message, stack: err.stack } : err,
+        totalMs: Date.now() - startTotal,
+      },
+      'PDF renderer: fallo al generar PDF',
+    );
+    throw err;
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
   }
 }
