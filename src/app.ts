@@ -48,6 +48,11 @@ import { facturasRouter, pagoFacturarRouter, factusHelpersRouter, factusPublicHe
 
 const app = express();
 
+// Trust proxy: Railway pone el request detras de su edge y añade
+// X-Forwarded-For. Confiar en 1 hop le permite a express-rate-limit
+// identificar al cliente real sin emitir el warning "ERR_ERL_UNEXPECTED_X_FORWARDED_FOR".
+app.set('trust proxy', 1);
+
 // Security
 app.use(helmet());
 app.use(
