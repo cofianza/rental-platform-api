@@ -519,16 +519,53 @@ const CONTRATO_LIST_WITH_RELATIONS = `
   expedientes(numero, inmuebles(direccion, ciudad))
 `;
 
-export async function listAllContratos(query: ListAllContratosQuery) {
+export async function listAllContratos(
+  query: ListAllContratosQuery,
+  userId?: string,
+  userRol?: string,
+) {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
   const sortBy = query.sortBy || 'created_at';
   const sortDir = query.sortDir || 'desc';
   const offset = (page - 1) * limit;
 
+  // Filtro por rol: propietario/inmobiliaria solo ven contratos cuyos
+  // inmuebles les pertenecen. Resolvemos primero los expediente_ids y luego
+  // filtramos `contratos.expediente_id IN (...)`.
+  let allowedExpedienteIds: string[] | null = null;
+  if (userId && (userRol === 'propietario' || userRol === 'inmobiliaria')) {
+    const { data: misInmuebles } = await (supabase
+      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('propietario_id', userId);
+    const inmIds = ((misInmuebles as { id: string }[] | null) || []).map((i) => i.id);
+    if (inmIds.length === 0) {
+      return {
+        contratos: [],
+        pagination: { total: 0, page, limit, totalPages: 0 },
+      };
+    }
+    const { data: expedientes } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .in('inmueble_id', inmIds);
+    allowedExpedienteIds = ((expedientes as { id: string }[] | null) || []).map((e) => e.id);
+    if (allowedExpedienteIds.length === 0) {
+      return {
+        contratos: [],
+        pagination: { total: 0, page, limit, totalPages: 0 },
+      };
+    }
+  }
+
   // Build filters helper
   function applyFilters(qb: ReturnType<typeof supabase.from>) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let q = qb as any;
+    if (allowedExpedienteIds !== null) {
+      q = q.in('expediente_id', allowedExpedienteIds);
+    }
     if (query.estado) {
       const estados = query.estado.split(',').map((s) => s.trim()).filter(Boolean);
       if (estados.length > 0) q = q.in('estado', estados);
@@ -1092,8 +1129,21 @@ export async function regenerarContrato(
   };
 
   // 4. Construir contexto V2 anidado (igual que generarContrato).
-  const fechaInicio = row.fecha_inicio ? new Date(`${row.fecha_inicio}T00:00:00`) : new Date();
-  const duracionMeses = row.duracion_meses || 12;
+  // Si el caller provee fecha_inicio/duracion_meses/valor_arriendo en el
+  // input, los usamos para regenerar con valores nuevos. Si no, usamos
+  // los del contrato actual (re-render con mismos parametros).
+  const fechaInicio = input.fecha_inicio
+    ? new Date(`${input.fecha_inicio}T00:00:00`)
+    : row.fecha_inicio
+      ? new Date(`${row.fecha_inicio}T00:00:00`)
+      : new Date();
+  const duracionMeses = input.duracion_meses ?? row.duracion_meses ?? 12;
+
+  // Override del valor_arriendo en el inmueble si el caller lo provee
+  // (caso: el canon negociado con el inquilino difiere del listado).
+  if (input.valor_arriendo && expData.inmueble) {
+    expData.inmueble.valor_arriendo = input.valor_arriendo;
+  }
   const expedienteNumero = ((await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('numero')
@@ -1144,17 +1194,29 @@ export async function regenerarContrato(
     throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF regenerado');
   }
 
-  // 7. Update contrato (old PDF preserved in contrato_versiones)
+  // 7. Update contrato (old PDF preserved in contrato_versiones).
+  // Persistimos fecha_inicio/duracion/valor si vinieron como override en
+  // el input, asi quedan reflejados en la fila para futuras regeneraciones
+  // y en el detalle del contrato.
+  const fechaFin = addMonths(fechaInicio, duracionMeses);
+  const updatePayload: Record<string, unknown> = {
+    version: newVersion,
+    datos_variables: finalVariables,
+    fecha_generacion: now.toISOString(),
+    storage_key: storageKey,
+    nombre_archivo: `contrato-${pl.nombre.toLowerCase().replace(/\s+/g, '-')}-v${newVersion}.pdf`,
+    plantilla_version: pl.version,
+    fecha_inicio: fechaInicio.toISOString().split('T')[0],
+    fecha_fin: fechaFin.toISOString().split('T')[0],
+    duracion_meses: duracionMeses,
+  };
+  if (input.valor_arriendo) {
+    updatePayload.valor_arriendo = input.valor_arriendo;
+  }
+
   const { error: updateError } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      version: newVersion,
-      datos_variables: finalVariables,
-      fecha_generacion: now.toISOString(),
-      storage_key: storageKey,
-      nombre_archivo: `contrato-${pl.nombre.toLowerCase().replace(/\s+/g, '-')}-v${newVersion}.pdf`,
-      plantilla_version: pl.version,
-    } as never)
+    .update(updatePayload as never)
     .eq('id', id);
 
   if (updateError) {

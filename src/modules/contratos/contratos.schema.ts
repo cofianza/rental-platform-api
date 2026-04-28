@@ -40,6 +40,9 @@ export const renovarContratoSchema = z.object({
 // ============================================================
 
 export const regenerarContratoSchema = z.object({
+  fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato YYYY-MM-DD').optional(),
+  duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
+  valor_arriendo: z.coerce.number().positive().optional(),
   variables: z.record(z.string(), z.string()).optional(),
 });
 
