@@ -246,10 +246,22 @@ function inferConceptoLabel(concepto: string): string {
 
 // ── crearFacturaDesdePago ──────────────────────────────────────────
 
+export interface DatosFiscalesPagoOverride {
+  numero_documento?: string;
+  tipo_documento?: string;
+  nombre_completo?: string;
+  direccion?: string;
+  email?: string;
+  telefono?: string;
+  /** Codigo DANE (5 digitos). */
+  municipio_codigo?: string;
+}
+
 export async function crearFacturaDesdePago(
   pagoId: string,
   userId: string | null,
   ip?: string,
+  override?: DatosFiscalesPagoOverride,
 ): Promise<{ id: string; factus_number: string | null; cufe: string | null; estado: string }> {
   // 1. Idempotencia: si ya existe factura emitida, devolverla.
   const existente = await findFacturaExistente(pagoId);
@@ -272,8 +284,35 @@ export async function crearFacturaDesdePago(
     );
   }
 
-  // 3. Validar datos mínimos del cliente.
-  if (!sol.numero_documento) {
+  // 3. Combinar datos del solicitante con override del body.
+  const numeroDocumento = override?.numero_documento?.trim() || sol.numero_documento;
+  const tipoDocumento = override?.tipo_documento?.trim() || sol.tipo_documento;
+  const nombreCompletoOverride = override?.nombre_completo?.trim();
+  const direccion = override?.direccion?.trim() || sol.direccion || '';
+  const email = override?.email?.trim() || sol.email || '';
+  const telefono = override?.telefono?.trim() || sol.telefono || '';
+  const municipioCodigo = override?.municipio_codigo?.trim() || sol.municipio_id || '';
+
+  // 3.5. Validacion estricta cuando viene override (modo "facturar con
+  //      datos faltantes"). Si el caller no paso override, mantenemos el
+  //      comportamiento legacy con defaults silenciosos para no romper
+  //      flows existentes (admin, propietario, inmobiliaria).
+  if (override) {
+    const faltantes: string[] = [];
+    if (!numeroDocumento) faltantes.push('numero_documento');
+    if (!email) faltantes.push('email');
+    if (!direccion) faltantes.push('direccion');
+    if (!telefono) faltantes.push('telefono');
+    if (!municipioCodigo || !/^\d{5}$/.test(municipioCodigo)) faltantes.push('municipio_codigo');
+    if (faltantes.length > 0) {
+      throw new AppError(
+        400,
+        'CLIENTE_DATOS_INCOMPLETOS',
+        'Faltan datos fiscales para emitir la factura',
+        { faltantes },
+      );
+    }
+  } else if (!numeroDocumento) {
     throw AppError.badRequest(
       'El solicitante no tiene número de documento — completa sus datos antes de facturar.',
       'CLIENTE_DATOS_INCOMPLETOS',
@@ -291,7 +330,7 @@ export async function crearFacturaDesdePago(
   const monto = Number(ctx.monto) || VALOR_ESTUDIO_DEFAULT;
 
   // Para Factus V2 quantity y price van como string con 2 decimales.
-  const fullName = `${sol.nombre} ${sol.apellido}`.trim();
+  const fullName = nombreCompletoOverride || `${sol.nombre} ${sol.apellido}`.trim();
 
   // Lee la tasa de IVA configurada para este concepto (admin la edita en
   // /facturacion). Si tasa>0, monto del pago es total con IVA incluido y
@@ -300,10 +339,10 @@ export async function crearFacturaDesdePago(
   const priceBase = tasaIva > 0 ? monto / (1 + tasaIva / 100) : monto;
   const priceStr = priceBase.toFixed(2);
 
-  // V2: code DANE = 5 dígitos. Si el solicitante tiene un valor que no
-  // matchea (legacy V1 con ID interno Factus, o vacío), caemos al default.
-  const dane = sol.municipio_id && /^\d{5}$/.test(sol.municipio_id)
-    ? sol.municipio_id
+  // V2: code DANE = 5 dígitos. Si no matchea (legacy V1 con ID interno
+  // Factus, o vacio), caemos al default.
+  const dane = municipioCodigo && /^\d{5}$/.test(municipioCodigo)
+    ? municipioCodigo
     : DEFAULTS_CLIENTE.municipality_code;
 
   const payload: factus.CreateBillInput = {
@@ -321,16 +360,16 @@ export async function crearFacturaDesdePago(
       },
     ],
     customer: {
-      identification: sol.numero_documento,
+      identification: numeroDocumento,
       // V2: persona natural (legal_organization_code=2) usa 'names'.
       // Jurídica (=1) usa 'company' + 'trade_name'.
       names: fullName,
-      address: sol.direccion || undefined,
-      email: sol.email || undefined,
-      phone: sol.telefono || undefined,
+      address: direccion || undefined,
+      email: email || undefined,
+      phone: telefono || undefined,
       legal_organization_code: DEFAULTS_CLIENTE.legal_organization_code,
       tribute_code: DEFAULTS_CLIENTE.tribute_code,
-      identification_document_code: mapTipoDocumentoToFactus(sol.tipo_documento),
+      identification_document_code: mapTipoDocumentoToFactus(tipoDocumento),
       municipality_code: dane,
     },
     items: [

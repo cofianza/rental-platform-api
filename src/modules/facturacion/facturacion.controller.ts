@@ -18,8 +18,48 @@ export async function getById(req: Request, res: Response) {
 
 export async function facturarPago(req: Request, res: Response) {
   const { pagoId } = req.params as { pagoId: string };
-  const result = await service.crearFacturaDesdePago(pagoId, req.user!.id, req.ip);
+  const body = (req.body || {}) as Record<string, string | undefined>;
+  // Si el body trae al menos un campo de override, lo pasamos al service
+  // (modo estricto: faltantes -> error CLIENTE_DATOS_INCOMPLETOS).
+  const hasOverride = Object.values(body).some((v) => v !== undefined && v !== '');
+  const override = hasOverride ? body : undefined;
+
+  // Si el caller es solicitante, validamos pertenencia: solo puede
+  // facturar pagos de SU expediente. Admin/operador/inmobiliaria/
+  // propietario operan sin este check (gestores del expediente).
+  if (req.user!.rol === 'solicitante') {
+    await assertPagoBelongsToSolicitante(pagoId, req.user!.id);
+  }
+
+  const result = await service.crearFacturaDesdePago(pagoId, req.user!.id, req.ip, override);
   sendSuccess(res, result, undefined, 201);
+}
+
+async function assertPagoBelongsToSolicitante(pagoId: string, userId: string): Promise<void> {
+  const { supabase } = await import('@/lib/supabase');
+  const { AppError } = await import('@/lib/errors');
+
+  const { data: pagoRow } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, expediente_id,
+      expediente:expedientes!pagos_expediente_id_fkey(
+        solicitante:solicitantes!expedientes_solicitante_id_fkey(creado_por)
+      )
+    `)
+    .eq('id', pagoId)
+    .single();
+
+  const owner = (pagoRow as unknown as {
+    expediente?: { solicitante?: { creado_por?: string | null } | null } | null;
+  } | null)?.expediente?.solicitante?.creado_por;
+
+  if (!owner || owner !== userId) {
+    throw AppError.forbidden(
+      'No tienes permisos para facturar este pago.',
+      'NOT_OWNER',
+    );
+  }
 }
 
 export async function searchMunicipalities(req: Request, res: Response) {

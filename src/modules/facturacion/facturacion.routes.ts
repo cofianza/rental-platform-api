@@ -6,6 +6,7 @@ import {
   pagoIdParamsSchema,
   listFacturasQuerySchema,
   updateTarifasIvaSchema,
+  facturarPagoSchema,
 } from './facturacion.schema';
 import * as controller from './facturacion.controller';
 
@@ -66,11 +67,14 @@ pagoFacturarRouter.use(authMiddleware);
 
 // POST /pagos/:pagoId/facturar — disparar facturación manual desde un pago.
 // Cofianza emite la factura, pero cualquier rol que gestione el expediente
-// (incluido el propietario del inmueble) puede dispararla.
+// (incluido el propietario del inmueble) puede dispararla. El solicitante
+// tambien puede facturar SU propio pago (controller valida pertenencia).
+// Body opcional con datos fiscales override (numero_documento, direccion,
+// telefono, municipio_codigo, etc.) — si vienen, se valida estricto.
 pagoFacturarRouter.post(
   '/:pagoId/facturar',
-  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
-  validate({ params: pagoIdParamsSchema }),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario', 'solicitante']),
+  validate({ params: pagoIdParamsSchema, body: facturarPagoSchema }),
   controller.facturarPago,
 );
 

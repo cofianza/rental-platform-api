@@ -28,7 +28,21 @@ export const updateTarifasIvaSchema = z.object({
     .min(1, 'Envia al menos una tarifa'),
 });
 
+// Override opcional al facturar un pago: si vienen estos campos, se
+// validan estricto (CLIENTE_DATOS_INCOMPLETOS si falta alguno) y se
+// usan en lugar de los del solicitante.
+export const facturarPagoSchema = z.object({
+  numero_documento: z.string().min(1).max(20).optional(),
+  tipo_documento: z.string().min(1).max(20).optional(),
+  nombre_completo: z.string().min(1).max(200).optional(),
+  direccion: z.string().min(1).max(200).optional(),
+  email: z.string().email('Email invalido').max(200).optional(),
+  telefono: z.string().min(1).max(20).optional(),
+  municipio_codigo: z.string().regex(/^\d{5}$/, 'Codigo DANE invalido (5 digitos)').optional(),
+});
+
 export type FacturaIdParams = z.infer<typeof facturaIdParamsSchema>;
 export type PagoIdParams = z.infer<typeof pagoIdParamsSchema>;
 export type ListFacturasQuery = z.infer<typeof listFacturasQuerySchema>;
 export type UpdateTarifasIvaInput = z.infer<typeof updateTarifasIvaSchema>;
+export type FacturarPagoInput = z.infer<typeof facturarPagoSchema>;
