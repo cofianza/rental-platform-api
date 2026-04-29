@@ -8,6 +8,8 @@ import {
   paqueteIdParamsSchema,
   listMovimientosQuerySchema,
   liberarEstudioCreditoSchema,
+  compraIdParamsSchema,
+  facturarCompraSchema,
 } from './creditos-estudios.schema';
 import * as controller from './creditos-estudios.controller';
 
@@ -53,6 +55,14 @@ creditosEstudiosRouter.post(
   roleGuard(['inmobiliaria']),
   validate({ body: comprarPaqueteSchema }),
   controller.comprarPaquete,
+);
+
+// Facturar compra de paquete — datos fiscales opcionales en el body
+creditosEstudiosRouter.post(
+  '/me/compras/:id/facturar',
+  roleGuard(['inmobiliaria']),
+  validate({ params: compraIdParamsSchema, body: facturarCompraSchema }),
+  controller.facturarCompra,
 );
 
 // ============================================================

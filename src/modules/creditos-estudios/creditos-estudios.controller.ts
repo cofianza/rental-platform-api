@@ -8,6 +8,8 @@ import type {
   ListMovimientosQuery,
   PaqueteIdParams,
   LiberarEstudioCreditoInput,
+  CompraIdParams,
+  FacturarCompraInput,
 } from './creditos-estudios.schema';
 
 // ============================================================
@@ -38,6 +40,29 @@ export async function getMisCompras(req: Request, res: Response) {
 export async function comprarPaquete(req: Request, res: Response) {
   const input = req.body as ComprarPaqueteInput;
   const result = await service.comprarPaquete(req.user!.id, input.paquete_id, req.user!.id, req.ip);
+  sendCreated(res, result);
+}
+
+// ============================================================
+// Facturar compra de paquete — POST /creditos-estudios/me/compras/:id/facturar
+//
+// Body opcional con datos fiscales (razon_social, nit, direccion, email,
+// telefono, municipio_codigo, etc.). Si no vienen, se leen del perfil.
+// Si faltan datos requeridos, retorna 400 con details.faltantes para que
+// el frontend muestre el modal pidiendolos.
+// ============================================================
+
+export async function facturarCompra(req: Request, res: Response) {
+  const { id } = req.params as unknown as CompraIdParams;
+  const override = (req.body || {}) as FacturarCompraInput;
+  const { crearFacturaDesdeCompraCreditos } = await import('@/modules/facturacion/facturacion.service');
+  const result = await crearFacturaDesdeCompraCreditos(
+    id,
+    req.user!.id,
+    override,
+    req.user!.id,
+    req.ip,
+  );
   sendCreated(res, result);
 }
 

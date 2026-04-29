@@ -510,6 +510,387 @@ async function persistFacturaEmitida(params: {
   return inserted as { id: string };
 }
 
+// ============================================================
+// crearFacturaDesdeCompraCreditos
+//
+// Factura una compra de paquete de creditos hecha por una inmobiliaria.
+// La compra NO esta atada a un expediente — el "cliente" Factus es la
+// inmobiliaria, no un solicitante. Datos fiscales:
+// 1. Se intenta cargar del perfil de la inmobiliaria (perfiles.razon_social,
+//    nit, direccion_comercial, ciudad, telefono, etc.).
+// 2. Si el caller proporciona `datosFiscalesOverride`, se usa eso.
+// 3. Si despues de combinar siguen faltando campos requeridos, lanza
+//    error CLIENTE_DATOS_INCOMPLETOS con la lista en details.faltantes
+//    para que el frontend muestre un form pidiendolos.
+// ============================================================
+
+export interface DatosFiscalesInmobiliaria {
+  razon_social?: string;
+  nit?: string;
+  direccion?: string;
+  email?: string;
+  telefono?: string;
+  /** Codigo DANE de 5 digitos. */
+  municipio_codigo?: string;
+  municipio_nombre?: string;
+  /** '13'=CC, '31'=NIT, etc. Si no viene, se infiere. */
+  tipo_documento?: string;
+}
+
+async function findFacturaExistentePorCompra(compraId: string) {
+  const { data } = await (supabase
+    .from('facturas' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, factus_number, cufe, factus_reference_code')
+    .eq('compra_creditos_id', compraId)
+    .maybeSingle();
+  return data as { id: string; estado: string; factus_number: string | null; cufe: string | null; factus_reference_code: string | null } | null;
+}
+
+export async function crearFacturaDesdeCompraCreditos(
+  compraId: string,
+  perfilId: string,
+  override: DatosFiscalesInmobiliaria | undefined,
+  userId: string,
+  ip?: string,
+): Promise<{ id: string; factus_number: string | null; cufe: string | null; estado: string }> {
+  // 1. Idempotencia: si ya hay factura emitida para esta compra, devolverla.
+  const existente = await findFacturaExistentePorCompra(compraId);
+  if (existente && existente.estado === 'emitida') {
+    return {
+      id: existente.id,
+      factus_number: existente.factus_number,
+      cufe: existente.cufe,
+      estado: existente.estado,
+    };
+  }
+
+  // 2. Cargar la compra y validar pertenencia + estado.
+  const { data: compraRow, error: compraErr } = await (supabase
+    .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, perfil_id, cantidad_estudios, precio_cop, estado, stripe_session_id, stripe_payment_intent_id, completed_at, paquete_id')
+    .eq('id', compraId)
+    .single();
+
+  if (compraErr || !compraRow) {
+    throw AppError.notFound('Compra no encontrada', 'COMPRA_NOT_FOUND');
+  }
+
+  const compra = compraRow as unknown as {
+    id: string;
+    perfil_id: string;
+    cantidad_estudios: number;
+    precio_cop: number;
+    estado: string;
+    stripe_session_id: string | null;
+    stripe_payment_intent_id: string | null;
+    completed_at: string | null;
+    paquete_id: string;
+  };
+
+  if (compra.perfil_id !== perfilId) {
+    throw AppError.forbidden('Esta compra no le pertenece', 'NOT_OWNER');
+  }
+  if (compra.estado !== 'completado') {
+    throw AppError.badRequest(
+      'La compra no esta en estado completado — no se puede facturar',
+      'COMPRA_NO_COMPLETADA',
+    );
+  }
+
+  // 3. Cargar perfil + email del auth.users.
+  const { data: perfilRow, error: perfErr } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, nombre, apellido, rol, tipo_documento, numero_documento,
+      razon_social, nit, direccion, direccion_comercial, ciudad,
+      nombre_representante, telefono, email_recaudo
+    `)
+    .eq('id', perfilId)
+    .single();
+  if (perfErr || !perfilRow) {
+    throw AppError.notFound('Perfil no encontrado', 'PERFIL_NOT_FOUND');
+  }
+  const perfil = perfilRow as unknown as {
+    id: string;
+    nombre: string;
+    apellido: string;
+    rol: string;
+    tipo_documento: string | null;
+    numero_documento: string | null;
+    razon_social: string | null;
+    nit: string | null;
+    direccion: string | null;
+    direccion_comercial: string | null;
+    ciudad: string | null;
+    nombre_representante: string | null;
+    telefono: string | null;
+    email_recaudo: string | null;
+  };
+
+  const { data: authUserData } = await supabase.auth.admin.getUserById(perfilId);
+  const emailAuth = authUserData?.user?.email || null;
+
+  // 4. Combinar perfil + override. El override gana (lo que el usuario
+  //    acaba de capturar en el modal de facturacion).
+  const datos: Required<DatosFiscalesInmobiliaria> = {
+    razon_social:
+      override?.razon_social?.trim() ||
+      perfil.razon_social ||
+      `${perfil.nombre} ${perfil.apellido}`.trim(),
+    nit: override?.nit?.trim() || perfil.nit || perfil.numero_documento || '',
+    direccion:
+      override?.direccion?.trim() ||
+      perfil.direccion_comercial ||
+      perfil.direccion ||
+      '',
+    email: override?.email?.trim() || perfil.email_recaudo || emailAuth || '',
+    telefono: override?.telefono?.trim() || perfil.telefono || '',
+    municipio_codigo: override?.municipio_codigo?.trim() || '',
+    municipio_nombre: override?.municipio_nombre?.trim() || perfil.ciudad || '',
+    tipo_documento:
+      override?.tipo_documento?.trim() ||
+      mapTipoDocumentoToFactus(perfil.nit ? 'NIT' : perfil.tipo_documento || 'CC'),
+  };
+
+  // 5. Validar campos requeridos. Si faltan, lanzamos error con la lista
+  //    para que el frontend abra el modal pidiendolos.
+  const faltantes: string[] = [];
+  if (!datos.razon_social) faltantes.push('razon_social');
+  if (!datos.nit) faltantes.push('nit');
+  if (!datos.direccion) faltantes.push('direccion');
+  if (!datos.email) faltantes.push('email');
+  if (!datos.telefono) faltantes.push('telefono');
+  if (!datos.municipio_codigo || !/^\d{5}$/.test(datos.municipio_codigo)) {
+    faltantes.push('municipio_codigo');
+  }
+  if (faltantes.length > 0) {
+    throw new AppError(
+      400,
+      'CLIENTE_DATOS_INCOMPLETOS',
+      'Faltan datos fiscales para emitir la factura',
+      { faltantes },
+    );
+  }
+
+  // 6. Construir payload Factus.
+  const numberingRangeId = await factus.discoverNumberingRangeId();
+  const referenceCode = existente?.factus_reference_code || `CR-${compraId.replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+  const monto = Number(compra.precio_cop);
+
+  // Para creditos de estudios consideramos el servicio exento de IVA
+  // (reuso la convencion del estudio que tambien va exento). Si en
+  // el futuro se decide cargar IVA, se configura via configuracion_sistema.
+  const tasaIva = await getTarifaIvaPorConcepto('creditos_estudios');
+  const priceBase = tasaIva > 0 ? monto / (1 + tasaIva / 100) : monto;
+  const priceStr = priceBase.toFixed(2);
+
+  // legal_organization_code: si tipo_documento es NIT (31) -> juridica (1).
+  const isJuridica = datos.tipo_documento === '31';
+
+  const payload: factus.CreateBillInput = {
+    reference_code: referenceCode,
+    document: '01',
+    ...(numberingRangeId !== null ? { numbering_range_id: numberingRangeId } : {}),
+    operation_type: '10',
+    send_email: true,
+    payment_details: [
+      {
+        payment_form: 1,
+        payment_method_code: '10',
+        reference_code: (compra.stripe_session_id || compraId).replace(/[^A-Z0-9]/gi, '').slice(0, 12).toUpperCase(),
+        amount: monto.toFixed(2),
+      },
+    ],
+    customer: {
+      identification: datos.nit,
+      ...(isJuridica
+        ? { company: datos.razon_social, trade_name: datos.razon_social }
+        : { names: datos.razon_social }),
+      address: datos.direccion,
+      email: datos.email,
+      phone: datos.telefono,
+      legal_organization_code: isJuridica ? '1' : '2',
+      tribute_code: 'ZZ',
+      identification_document_code: datos.tipo_documento,
+      municipality_code: datos.municipio_codigo,
+    },
+    items: [
+      {
+        code_reference: 'creditos_estudios',
+        name: `Paquete de ${compra.cantidad_estudios} estudios de arrendamiento`,
+        quantity: '1.00',
+        discount_rate: '0.00',
+        price: priceStr,
+        unit_measure_code: ITEM_DEFAULTS.unit_measure_code,
+        standard_code: ITEM_DEFAULTS.standard_code,
+        taxes:
+          tasaIva > 0
+            ? [{ code: '01', rate: tasaIva.toFixed(2) }]
+            : [{ is_excluded: true }],
+      },
+    ],
+  };
+
+  logger.info({ compraId, referenceCode, perfilId }, 'Factus: enviando factura de compra de creditos');
+
+  // 7. Llamar a Factus.
+  let factusRes: factus.CreateBillResponse;
+  try {
+    factusRes = await factus.createBill(payload);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ compraId, error: msg }, 'Factus: error al crear factura de compra');
+    await persistFailedAttemptCompra({
+      compraId,
+      referenceCode,
+      total: monto,
+      error: msg,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      respuestaProveedor: (err as any).factusBody ?? { error: msg },
+    });
+    throw err;
+  }
+
+  const bill = extractBill(factusRes);
+  if (!bill) {
+    await persistFailedAttemptCompra({
+      compraId,
+      referenceCode,
+      total: monto,
+      error: 'Factus respondio 200 pero la estructura no es la esperada',
+      respuestaProveedor: factusRes,
+    });
+    throw new AppError(
+      502,
+      'FACTUS_UNEXPECTED_RESPONSE',
+      'Factus respondio 200 pero el formato es inesperado.',
+    );
+  }
+
+  // 8. Persistir factura emitida.
+  const facturaPersisted = await persistFacturaCompraEmitida({
+    compraId,
+    datos,
+    factusRes,
+    bill,
+    referenceCode,
+    montoFallback: monto,
+  });
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.PAGO_CREATED, // reuso hasta tener accion FACTURA_CREATED
+    entidad: AUDIT_ENTITIES.PAGO,
+    entidadId: facturaPersisted.id,
+    detalle: {
+      tipo: 'factura_compra_creditos',
+      compra_id: compraId,
+      factus_number: bill.number,
+      cufe: bill.cufe,
+      total: bill.total,
+    },
+    ip,
+  });
+
+  return {
+    id: facturaPersisted.id,
+    factus_number: bill.number ?? null,
+    cufe: bill.cufe ?? null,
+    estado: 'emitida',
+  };
+}
+
+async function persistFacturaCompraEmitida(params: {
+  compraId: string;
+  datos: Required<DatosFiscalesInmobiliaria>;
+  factusRes: factus.CreateBillResponse;
+  bill: FactusBillSnapshot;
+  referenceCode: string;
+  montoFallback: number;
+}) {
+  const { compraId, datos, factusRes, bill, referenceCode, montoFallback } = params;
+  const existente = await findFacturaExistentePorCompra(compraId);
+
+  const data = {
+    pago_id: null,
+    compra_creditos_id: compraId,
+    expediente_id: null,
+    numero_factura: bill.number,
+    razon_social: datos.razon_social,
+    nit: datos.nit,
+    direccion_fiscal: datos.direccion,
+    estado: 'emitida' as const,
+    factus_bill_id: bill.id,
+    factus_reference_code: referenceCode,
+    factus_number: bill.number,
+    cufe: bill.cufe,
+    qr_url: bill.qr,
+    qr_image_base64: bill.qr_image,
+    respuesta_proveedor: factusRes,
+    concepto: 'creditos_estudios',
+    total: bill.total != null ? Number(bill.total) : montoFallback,
+    tax_amount: bill.tax_amount != null ? Number(bill.tax_amount) : 0,
+    error_mensaje: null,
+    validada_en: new Date().toISOString(),
+  };
+
+  if (existente) {
+    const { data: updated, error } = await (supabase
+      .from('facturas' as string) as ReturnType<typeof supabase.from>)
+      .update(data as never)
+      .eq('id', existente.id)
+      .select('id')
+      .single();
+    if (error || !updated) {
+      logger.error({ error: error?.message, compraId }, 'Error al actualizar factura de compra');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al persistir la factura');
+    }
+    return updated as { id: string };
+  }
+
+  const { data: inserted, error } = await (supabase
+    .from('facturas' as string) as ReturnType<typeof supabase.from>)
+    .insert(data as never)
+    .select('id')
+    .single();
+  if (error || !inserted) {
+    logger.error({ error: error?.message, compraId }, 'Error al insertar factura de compra');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al persistir la factura');
+  }
+  return inserted as { id: string };
+}
+
+async function persistFailedAttemptCompra(params: {
+  compraId: string;
+  referenceCode: string;
+  total: number;
+  error: string;
+  respuestaProveedor: unknown;
+}) {
+  const existente = await findFacturaExistentePorCompra(params.compraId);
+  const data = {
+    pago_id: null,
+    compra_creditos_id: params.compraId,
+    expediente_id: null,
+    estado: 'solicitada' as const,
+    factus_reference_code: params.referenceCode,
+    concepto: 'creditos_estudios',
+    total: params.total,
+    error_mensaje: params.error,
+    respuesta_proveedor: params.respuestaProveedor,
+  };
+  if (existente) {
+    await (supabase
+      .from('facturas' as string) as ReturnType<typeof supabase.from>)
+      .update(data as never)
+      .eq('id', existente.id);
+    return;
+  }
+  await (supabase
+    .from('facturas' as string) as ReturnType<typeof supabase.from>)
+    .insert(data as never);
+}
+
 async function persistFailedAttempt(params: {
   pagoId: string;
   expedienteId: string;

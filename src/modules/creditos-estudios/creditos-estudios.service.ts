@@ -167,8 +167,57 @@ export async function listMovimientos(perfilId: string, query: ListMovimientosQu
   const { data, error, count } = await q;
   if (error) throw fromSupabaseError(error);
 
+  const movimientos = (data || []) as Array<Record<string, unknown>>;
+
+  // Enriquecer con compra_id + factura_id para los movimientos tipo 'compra'.
+  // Se hace en 2 queries planos (sin embed de PostgREST que a veces rompe
+  // por schema cache):
+  //   movimiento.lote_id -> lote.compra_id -> factura.compra_creditos_id
+  const loteIds = movimientos
+    .filter((m) => m.tipo === 'compra' && m.lote_id)
+    .map((m) => m.lote_id as string);
+
+  const compraByLote = new Map<string, string>();
+  if (loteIds.length > 0) {
+    const { data: lotes } = await (supabase
+      .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id, compra_id')
+      .in('id', loteIds);
+    for (const l of (lotes || []) as Array<{ id: string; compra_id: string | null }>) {
+      if (l.compra_id) compraByLote.set(l.id, l.compra_id);
+    }
+  }
+
+  const compraIds = Array.from(new Set(compraByLote.values()));
+  const facturaByCompra = new Map<string, { id: string; factus_number: string | null; estado: string }>();
+  if (compraIds.length > 0) {
+    const { data: facturas } = await (supabase
+      .from('facturas' as string) as ReturnType<typeof supabase.from>)
+      .select('id, compra_creditos_id, factus_number, estado')
+      .in('compra_creditos_id', compraIds)
+      .eq('estado', 'emitida');
+    for (const f of (facturas || []) as Array<{ id: string; compra_creditos_id: string; factus_number: string | null; estado: string }>) {
+      facturaByCompra.set(f.compra_creditos_id, {
+        id: f.id,
+        factus_number: f.factus_number,
+        estado: f.estado,
+      });
+    }
+  }
+
+  for (const m of movimientos) {
+    if (m.tipo === 'compra' && m.lote_id) {
+      const compraId = compraByLote.get(m.lote_id as string);
+      if (compraId) {
+        m.compra_id = compraId;
+        const factura = facturaByCompra.get(compraId);
+        m.factura = factura || null;
+      }
+    }
+  }
+
   return {
-    movimientos: (data || []) as Array<Record<string, unknown>>,
+    movimientos,
     pagination: {
       page,
       limit,
