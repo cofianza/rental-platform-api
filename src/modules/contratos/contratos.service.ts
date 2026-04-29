@@ -654,25 +654,104 @@ export async function listContratosByExpediente(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener contratos');
   }
 
-  // Self-heal automatico (dos casos):
+  // Self-heal automatico (tres casos):
   // 1. Expediente aprobado pero sin contratos -> generamos + auto-firma.
   // 2. Existe un unico contrato 'borrador' con PDF y nadie lo ha movido a
-  //    firma -> auto-disparamos la firma directamente. Esto cubre los
-  //    expedientes que tienen contrato generado por un auto-heal previo
-  //    pero no se completo el dispatch a Auco (por bugs anteriores del
-  //    flujo, o porque el contrato existia desde antes del rollout del
-  //    auto-firma).
+  //    firma -> auto-disparamos la firma directamente.
+  // 3. Existe un contrato en 'pendiente_firma' pero TODAS sus solicitudes
+  //    estan ya en estado 'firmado' -> el post-firma fallo en transicionar
+  //    el contrato. Lo movemos a 'firmado' aqui para destrabar la UI.
   const lista = (data ?? []) as Array<{ id: string; estado: string; storage_key?: string | null; created_at: string }>;
   if (lista.length === 0 && total === 0) {
     void maybeAutoHealContrato(expedienteId);
   } else if (lista.length === 1 && lista[0].estado === 'borrador' && lista[0].storage_key) {
     void maybeAutoFirmaExistente(expedienteId, lista[0].id, lista[0].created_at);
+  } else {
+    // Caso 3: revisar si hay contrato pendiente_firma con todas las
+    // solicitudes firmadas. Solo necesitamos mirar el contrato mas reciente.
+    const pendienteFirma = lista.find((c) => c.estado === 'pendiente_firma');
+    if (pendienteFirma) {
+      void maybeAutoTransicionarFirmado(pendienteFirma.id);
+    }
   }
 
   return {
     contratos: data ?? [],
     pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
   };
+}
+
+/**
+ * Si el contrato esta en 'pendiente_firma' pero TODAS las solicitudes_firma
+ * asociadas ya estan en estado 'firmado', transicionamos el contrato a
+ * 'firmado'. Esto cubre el caso en el que post-firma.executePostFirma
+ * fallo silenciosamente al ejecutar el RPC transicionar_contrato (eg.
+ * por algun error transitorio o race condition con la inserción del
+ * historial). Idempotente — re-llamar es seguro porque el guard inicial
+ * verifica el estado actual.
+ */
+async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
+  if (autoGenInflight.has(contratoId)) return;
+
+  // 1. Confirmar estado actual del contrato.
+  const { data: contratoRow } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, expediente_id')
+    .eq('id', contratoId)
+    .single();
+  const c = contratoRow as { id: string; estado: string; expediente_id: string } | null;
+  if (!c || c.estado !== 'pendiente_firma') return;
+
+  // 2. Listar solicitudes de firma del contrato.
+  const { data: solicitudesRow } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('contrato_id', contratoId);
+  const solicitudes = (solicitudesRow as Array<{ id: string; estado: string }> | null) || [];
+  if (solicitudes.length === 0) return;
+
+  const todasFirmadas = solicitudes.every((s) => s.estado === 'firmado');
+  if (!todasFirmadas) return;
+
+  autoGenInflight.add(contratoId);
+  logger.info(
+    { contratoId, totalSolicitudes: solicitudes.length },
+    'Auto-heal: contrato en pendiente_firma con todas firmas completas — transicionando a firmado',
+  );
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).rpc('transicionar_contrato', {
+      p_contrato_id: contratoId,
+      p_nuevo_estado: 'firmado',
+      p_descripcion: 'Auto-heal: post-firma no transiciono el contrato — sincronizando estado',
+      p_usuario_id: null,
+      p_comentario: 'Transicion automatica detectada en list de contratos',
+      p_motivo: null,
+    });
+
+    if (error) {
+      logger.error(
+        { contratoId, err: (error as { message?: string }).message },
+        'Auto-heal: error al transicionar pendiente_firma -> firmado',
+      );
+      return;
+    }
+
+    await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .update({ fecha_firma: new Date().toISOString() } as never)
+      .eq('id', contratoId);
+
+    logger.info({ contratoId }, 'Auto-heal: contrato transicionado a firmado');
+  } catch (err) {
+    logger.error(
+      { contratoId, err: err instanceof Error ? err.message : String(err) },
+      'Auto-heal: excepcion al transicionar pendiente_firma -> firmado',
+    );
+  } finally {
+    autoGenInflight.delete(contratoId);
+  }
 }
 
 async function maybeAutoFirmaExistente(

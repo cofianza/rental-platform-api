@@ -148,10 +148,20 @@ async function aucoRequest<T>(
 export async function uploadDocumentForSignature(
   input: AucoUploadDocumentInput,
 ): Promise<string> {
+  // Auco actualizo su API: cuando se envia el bloque `options` (eg.
+  // whatsapp:true), exige que `otpCode` viva DENTRO de options en lugar
+  // de root-level. Sin options, otpCode root sigue siendo aceptado.
+  // Para evitar el 400 '"options.otpCode" is required' duplicamos otpCode
+  // dentro de options cuando este bloque viene presente.
+  const payload: Record<string, unknown> = { ...input };
+  if (payload.options && typeof payload.options === 'object') {
+    payload.options = { ...payload.options, otpCode: input.otpCode ?? false };
+  }
+
   const result = await aucoRequest<AucoUploadResponse>(
     'POST',
     '/document/upload',
-    input,
+    payload,
     true, // private key for write operations
   );
 
