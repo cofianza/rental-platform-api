@@ -149,10 +149,17 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
     .update({ used_at: new Date().toISOString() } as never)
     .eq('id', tokenData.id);
 
-  // Marcar email como verificado en perfiles (NO activa la cuenta)
+  // Marcar email como verificado y activar la cuenta. El registro arranca
+  // en estado='inactivo' como medida anti-bot/anti-spam; al verificar el
+  // email (prueba de control sobre la casilla) consideramos legitimo el
+  // alta y activamos el perfil para que pueda iniciar sesion.
+  const nowIso = new Date().toISOString();
   await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .update({ email_verified_at: new Date().toISOString() } as never)
+    .update({
+      email_verified_at: nowIso,
+      estado: 'activo',
+    } as never)
     .eq('id', tokenData.user_id);
 
   // Confirmar email en Supabase Auth
@@ -160,9 +167,9 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
     email_confirm: true,
   });
 
-  logger.info({ userId: tokenData.user_id }, 'Email verificado exitosamente');
+  logger.info({ userId: tokenData.user_id }, 'Email verificado y cuenta activada');
 
-  return { message: 'Email verificado exitosamente. Tu cuenta sera activada por un administrador.' };
+  return { message: 'Email verificado. Tu cuenta esta activa, ya puedes iniciar sesion.' };
 }
 
 export async function resendVerification({ email }: ResendVerificationInput): Promise<{ message: string }> {
