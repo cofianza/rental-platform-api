@@ -673,6 +673,13 @@ export async function listContratosByExpediente(
     if (pendienteFirma) {
       void maybeAutoTransicionarFirmado(pendienteFirma.id);
     }
+    // Caso 4: contrato en 'firmado' (post-firma exitosa) -> activar a
+    // 'vigente' y cerrar el expediente. El usuario quiere todo el
+    // pipeline automatico hasta el final, sin intervencion manual.
+    const firmado = lista.find((c) => c.estado === 'firmado');
+    if (firmado) {
+      void maybeAutoActivarVigente(firmado.id, expedienteId);
+    }
   }
 
   return {
@@ -751,6 +758,89 @@ async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
     );
   } finally {
     autoGenInflight.delete(contratoId);
+  }
+}
+
+/**
+ * Si el contrato esta en 'firmado', lo activamos automaticamente a
+ * 'vigente' y cerramos el expediente. Esto completa el pipeline
+ * auto-everything: estudio aprobado -> contrato generado -> firma
+ * electronica -> contrato vigente -> expediente cerrado, sin
+ * intervencion manual.
+ */
+async function maybeAutoActivarVigente(
+  contratoId: string,
+  expedienteId: string,
+): Promise<void> {
+  const lockKey = `activar:${contratoId}`;
+  if (autoGenInflight.has(lockKey)) return;
+
+  // 1. Confirmar estado actual.
+  const { data: contratoRow } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('id', contratoId)
+    .single();
+  const c = contratoRow as { id: string; estado: string } | null;
+  if (!c || c.estado !== 'firmado') return;
+
+  autoGenInflight.add(lockKey);
+  logger.info({ contratoId, expedienteId }, 'Auto-heal: contrato firmado — activando a vigente y cerrando expediente');
+
+  try {
+    // 2. Transicionar contrato firmado -> vigente
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: contratoErr } = await (supabase as any).rpc('transicionar_contrato', {
+      p_contrato_id: contratoId,
+      p_nuevo_estado: 'vigente',
+      p_descripcion: 'Auto-heal: activacion automatica tras firma electronica completa',
+      p_usuario_id: null,
+      p_comentario: null,
+      p_motivo: null,
+    });
+
+    if (contratoErr) {
+      logger.error(
+        { contratoId, err: (contratoErr as { message?: string }).message },
+        'Auto-heal: error transicionando firmado -> vigente',
+      );
+      return;
+    }
+
+    // 3. Cerrar el expediente (transicion aprobado/condicionado -> cerrado).
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('estado')
+      .eq('id', expedienteId)
+      .single();
+    const expEstado = (expRow as { estado?: string } | null)?.estado;
+    if (expEstado === 'aprobado' || expEstado === 'condicionado') {
+      await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: 'cerrado', updated_at: new Date().toISOString() } as never)
+        .eq('id', expedienteId);
+
+      await (supabase
+        .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+        .insert({
+          expediente_id: expedienteId,
+          tipo: 'contrato',
+          descripcion: 'Contrato firmado por todas las partes — expediente cerrado automaticamente.',
+          metadata: { automatico: true, origen: 'auto-heal-vigente' },
+        } as never);
+    }
+
+    logger.info(
+      { contratoId, expedienteId, expEstadoAnterior: expEstado },
+      'Auto-heal: contrato vigente + expediente cerrado',
+    );
+  } catch (err) {
+    logger.error(
+      { contratoId, expedienteId, err: err instanceof Error ? err.message : String(err) },
+      'Auto-heal: excepcion al activar contrato a vigente',
+    );
+  } finally {
+    autoGenInflight.delete(lockKey);
   }
 }
 

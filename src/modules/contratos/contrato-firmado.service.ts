@@ -14,7 +14,7 @@ const FIRMADO_URL_EXPIRY_SECONDS = 600; // 10 minutes
 const ESTADOS_CON_FIRMADO = ['firmado', 'vigente', 'finalizado', 'cancelado'];
 
 const FIRMADO_SELECT = `
-  id, expediente_id, estado,
+  id, expediente_id, estado, storage_key, nombre_archivo,
   firmado_storage_key, firmado_nombre_archivo, firmado_hash_integridad,
   firmado_ip, firmado_user_agent, firmado_referencia_otp, firmado_notas,
   firmado_tamano_bytes, firmado_subido_por, firmado_subido_en
@@ -65,6 +65,8 @@ async function fetchContratoFirmado(contratoId: string) {
     id: string;
     expediente_id: string;
     estado: string;
+    storage_key: string | null;
+    nombre_archivo: string | null;
     firmado_storage_key: string | null;
     firmado_nombre_archivo: string | null;
     firmado_hash_integridad: string | null;
@@ -190,7 +192,21 @@ export async function descargarContratoFirmado(
 ) {
   const contrato = await fetchContratoFirmado(contratoId);
 
-  if (!contrato.firmado_storage_key) {
+  // Determinar de donde sale el PDF:
+  //   1. firmado_storage_key (alguien subio el PDF estampado por separado)
+  //   2. fallback: storage_key (PDF original) cuando el contrato esta en
+  //      'firmado'/'vigente' tras firma electronica con OTP — el PDF
+  //      original es el documento que firmo el usuario; la prueba
+  //      probatoria vive en la tabla evidencias_firma (hash, OTP, IP).
+  const usarStorageKey =
+    contrato.firmado_storage_key ||
+    (ESTADOS_CON_FIRMADO.includes(contrato.estado) ? contrato.storage_key : null);
+  const nombreArchivo =
+    contrato.firmado_nombre_archivo ||
+    contrato.nombre_archivo ||
+    'contrato-firmado.pdf';
+
+  if (!usarStorageKey) {
     throw AppError.notFound('El contrato no tiene documento firmado', 'NO_FIRMADO');
   }
 
@@ -203,11 +219,11 @@ export async function descargarContratoFirmado(
   }
 
   // Admin y operador_analista siempre pueden descargar
-  // Para propietario/inmobiliaria: verificar vinculacion con expediente
+  // Para propietario/inmobiliaria/solicitante: verificar vinculacion
   if (userRol !== 'administrador' && userRol !== 'operador_analista') {
     const { data: expediente, error: expError } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id, solicitante_id, inmuebles(propietario_id)')
+      .select('id, solicitante_id, inmuebles(propietario_id), solicitantes(creado_por)')
       .eq('id', contrato.expediente_id)
       .single();
 
@@ -219,10 +235,14 @@ export async function descargarContratoFirmado(
       id: string;
       solicitante_id: string | null;
       inmuebles: { propietario_id: string | null } | null;
+      solicitantes: { creado_por: string | null } | null;
     };
 
-    const isArrendatario = exp.solicitante_id === userId;
     const isArrendador = exp.inmuebles?.propietario_id === userId;
+    // El solicitante.id es UUID interno; quien firmo el JWT es el
+    // perfil cuyo id == solicitantes.creado_por en flujo self-service.
+    const isArrendatario =
+      exp.solicitante_id === userId || exp.solicitantes?.creado_por === userId;
 
     if (!isArrendatario && !isArrendador) {
       throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
@@ -232,8 +252,8 @@ export async function descargarContratoFirmado(
   // Generar signed URL (10 min)
   const { data: urlData, error: urlError } = await supabase.storage
     .from(BUCKET_NAME)
-    .createSignedUrl(contrato.firmado_storage_key, FIRMADO_URL_EXPIRY_SECONDS, {
-      download: contrato.firmado_nombre_archivo || 'contrato-firmado.pdf',
+    .createSignedUrl(usarStorageKey, FIRMADO_URL_EXPIRY_SECONDS, {
+      download: nombreArchivo,
     });
 
   if (urlError || !urlData) {
