@@ -49,6 +49,14 @@ facturasRouter.get(
   controller.getById,
 );
 
+// GET /facturas/:id/factus/:tipo — descarga PDF/XML directo desde Factus
+// (tipo: pdf | xml; ?inline=true para preview en el navegador)
+facturasRouter.get(
+  '/:id/factus/:tipo',
+  authorize('facturas', 'read'),
+  controller.downloadFactusDocumento,
+);
+
 // ============================================================
 // Authenticated — /api/v1/pagos/:pagoId/facturar
 // ============================================================

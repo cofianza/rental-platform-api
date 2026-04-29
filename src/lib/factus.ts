@@ -366,6 +366,32 @@ export async function createBill(input: CreateBillInput): Promise<CreateBillResp
 }
 
 /**
+ * Descarga el PDF de una factura ya emitida en Factus.
+ * El número aquí es el `bill.number` que devuelve `createBill` (ej. "SETP990001347").
+ * La respuesta trae el archivo en base64 y el nombre original sugerido.
+ */
+export async function downloadBillPdf(
+  billNumber: string,
+): Promise<{ pdf_base_64_encoded: string; file_name: string }> {
+  const result = await factusRequest<{
+    data: { pdf_base_64_encoded: string; file_name: string };
+  }>(`/v2/bills/${encodeURIComponent(billNumber)}/download-pdf`);
+  return result.data;
+}
+
+/**
+ * Descarga el XML (representación electrónica DIAN) de una factura ya emitida.
+ */
+export async function downloadBillXml(
+  billNumber: string,
+): Promise<{ xml_base_64_encoded: string; file_name: string }> {
+  const result = await factusRequest<{
+    data: { xml_base_64_encoded: string; file_name: string };
+  }>(`/v2/bills/${encodeURIComponent(billNumber)}/download-xml/`);
+  return result.data;
+}
+
+/**
  * Busca municipios por nombre (autocomplete del wizard de registro).
  * Devuelve hasta 50 resultados. Usa el endpoint público de Factus.
  */

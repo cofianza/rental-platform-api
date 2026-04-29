@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/utils/response';
+import { AppError } from '@/lib/errors';
 import * as service from './facturacion.service';
 import * as factus from '@/lib/factus';
 
@@ -40,4 +41,61 @@ export async function updateTarifasIva(req: Request, res: Response) {
   const body = req.body as { tarifas: { concepto: string; tasa: number }[] };
   const result = await service.updateTarifasIva(body.tarifas, req.user!.id, req.ip);
   sendSuccess(res, result);
+}
+
+// ============================================================
+// Descarga PDF / XML directo desde Factus
+//
+// Factus V2 no devuelve URLs persistentes — la descarga se hace por endpoint
+// `/v2/bills/:number/download-pdf|download-xml` que retorna el archivo en
+// base64. Este controlador hace de proxy: obtiene el archivo en base64,
+// lo decodifica y lo devuelve con headers de descarga al navegador.
+// ============================================================
+
+const MIME_BY_TIPO: Record<'pdf' | 'xml', string> = {
+  pdf: 'application/pdf',
+  xml: 'application/xml',
+};
+
+export async function downloadFactusDocumento(req: Request, res: Response) {
+  const { id, tipo } = req.params as { id: string; tipo: 'pdf' | 'xml' };
+  if (tipo !== 'pdf' && tipo !== 'xml') {
+    throw AppError.badRequest('Tipo invalido — usar pdf o xml', 'TIPO_INVALIDO');
+  }
+
+  const factura = await service.getFacturaById(id);
+  if (!factura) throw AppError.notFound('Factura no encontrada');
+
+  const f = factura as unknown as { factus_number?: string | null; numero?: string | null };
+  const billNumber = f.factus_number || f.numero || null;
+  if (!billNumber) {
+    throw AppError.badRequest(
+      'La factura aun no tiene numero asignado por Factus',
+      'FACTURA_SIN_NUMERO_FACTUS',
+    );
+  }
+
+  const inline = req.query.inline === 'true';
+
+  let buffer: Buffer;
+  let fileName: string;
+
+  if (tipo === 'pdf') {
+    const r = await factus.downloadBillPdf(billNumber);
+    buffer = Buffer.from(r.pdf_base_64_encoded, 'base64');
+    fileName = r.file_name || `${billNumber}.pdf`;
+  } else {
+    const r = await factus.downloadBillXml(billNumber);
+    buffer = Buffer.from(r.xml_base_64_encoded, 'base64');
+    fileName = r.file_name || `${billNumber}.xml`;
+  }
+
+  res.setHeader('Content-Type', MIME_BY_TIPO[tipo]);
+  res.setHeader(
+    'Content-Disposition',
+    `${inline ? 'inline' : 'attachment'}; filename="${fileName.replace(/"/g, '')}"`,
+  );
+  res.setHeader('Content-Length', String(buffer.length));
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.send(buffer);
 }
