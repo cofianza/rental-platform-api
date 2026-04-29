@@ -21,21 +21,21 @@ creditosEstudiosRouter.use(authMiddleware);
 // Paquetes activos (para mostrar al comprar)
 creditosEstudiosRouter.get(
   '/paquetes',
-  roleGuard(['inmobiliaria', 'propietario', 'administrador']),
+  roleGuard(['inmobiliaria', 'administrador']),
   controller.listPaquetes,
 );
 
 // Saldo del perfil autenticado
 creditosEstudiosRouter.get(
   '/me/saldo',
-  roleGuard(['inmobiliaria', 'propietario', 'administrador']),
+  roleGuard(['inmobiliaria', 'administrador']),
   controller.getMiSaldo,
 );
 
 // Movimientos / historial
 creditosEstudiosRouter.get(
   '/me/movimientos',
-  roleGuard(['inmobiliaria', 'propietario', 'administrador']),
+  roleGuard(['inmobiliaria', 'administrador']),
   validate({ query: listMovimientosQuerySchema }),
   controller.getMisMovimientos,
 );
@@ -43,14 +43,14 @@ creditosEstudiosRouter.get(
 // Compras
 creditosEstudiosRouter.get(
   '/me/compras',
-  roleGuard(['inmobiliaria', 'propietario', 'administrador']),
+  roleGuard(['inmobiliaria', 'administrador']),
   controller.getMisCompras,
 );
 
 // Comprar paquete (crea Stripe Checkout)
 creditosEstudiosRouter.post(
   '/me/comprar',
-  roleGuard(['inmobiliaria', 'propietario']),
+  roleGuard(['inmobiliaria']),
   validate({ body: comprarPaqueteSchema }),
   controller.comprarPaquete,
 );
@@ -64,7 +64,7 @@ expedienteLiberarRouter.use(authMiddleware);
 
 expedienteLiberarRouter.post(
   '/',
-  roleGuard(['inmobiliaria', 'propietario']),
+  roleGuard(['inmobiliaria']),
   validate({ body: liberarEstudioCreditoSchema }),
   controller.liberarEstudio,
 );
