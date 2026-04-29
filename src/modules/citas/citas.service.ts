@@ -33,7 +33,7 @@ const CITA_SELECT = `
   creado_por, confirmado_por, created_at, updated_at,
   expediente:expedientes (
     id, numero, estudio_habilitado,
-    inmueble:inmuebles (direccion, ciudad),
+    inmueble:inmuebles (id, direccion, ciudad),
     solicitante:solicitantes (nombre, apellido, telefono)
   )
 `;
