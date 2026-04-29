@@ -368,6 +368,27 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
     action: 'create',
   });
 
+  // Guard: no permitir crear una nueva cita si ya existe una activa para
+  // este expediente (solicitada o confirmada). Defensa server-side aunque
+  // el frontend ya esconde el boton — protege contra clientes desincronizados,
+  // doble-click y llamadas directas a la API.
+  const { data: existentes } = await db('citas')
+    .select('id, estado')
+    .eq('expediente_id', input.expediente_id)
+    .in('estado', ['solicitada', 'confirmada'])
+    .limit(1) as unknown as { data: { id: string; estado: string }[] | null };
+
+  if (existentes && existentes.length > 0) {
+    logger.warn(
+      { userId, expedienteId: input.expediente_id, existente: existentes[0] },
+      'Intento de crear cita con una activa ya existente',
+    );
+    throw AppError.conflict(
+      `Ya existe una cita ${existentes[0].estado} para este expediente. Cancelala antes de agendar otra.`,
+      'CITA_ACTIVA_EXISTE',
+    );
+  }
+
   // Guard anti-race: el solicitante pudo haber visto el slot libre y otro
   // solicitante lo tomó antes. El backend valida contra fn_slot_esta_disponible
   // que chequea antelación mínima + ventana de disponibilidad + ocupación.
