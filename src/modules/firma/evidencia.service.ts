@@ -368,7 +368,23 @@ async function generateAndStoreAcuse(
   },
   data: AcuseData,
 ) {
-  const pdfBuffer = await buildAcusePdf(solicitud, contrato, data);
+  // Descargar la imagen de firma del storage para embedir en el acuse.
+  // Si falla, generamos el acuse sin imagen (degradacion controlada).
+  let firmaImagenBuffer: Buffer | null = null;
+  try {
+    const { data: imgBlob, error: imgErr } = await supabase.storage
+      .from(BUCKET_NAME)
+      .download(data.firmaKey);
+    if (imgErr || !imgBlob) {
+      logger.warn({ err: imgErr?.message, firmaKey: data.firmaKey }, 'Acuse: firma image no descargada');
+    } else {
+      firmaImagenBuffer = Buffer.from(await imgBlob.arrayBuffer());
+    }
+  } catch (err) {
+    logger.warn({ err, firmaKey: data.firmaKey }, 'Acuse: error al cargar firma image');
+  }
+
+  const pdfBuffer = await buildAcusePdf(solicitud, contrato, data, firmaImagenBuffer);
 
   const acuseKey = `firmas/${contrato.expediente_id}/${solicitud.id}/acuse-firma.pdf`;
 
@@ -404,6 +420,7 @@ function buildAcusePdf(
     } | null;
   },
   data: AcuseData,
+  firmaImagenBuffer: Buffer | null,
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'LETTER', margin: 50 });
@@ -441,6 +458,29 @@ function buildAcusePdf(
     addField(doc, 'Nombre', solicitud.nombre_firmante);
     addField(doc, 'Email', solicitud.email_firmante);
     doc.moveDown(1);
+
+    // Imagen de la firma manuscrita (canvas) — evidencia visual.
+    if (firmaImagenBuffer) {
+      doc.fontSize(12).font('Helvetica-Bold').text('FIRMA MANUSCRITA');
+      doc.moveDown(0.5);
+      try {
+        // El canvas guarda la firma como PNG. La encajamos en un cuadro
+        // de 280x100pt centrado al margen izquierdo. fit:[w,h] preserva
+        // la relacion de aspecto.
+        doc.image(firmaImagenBuffer, doc.x, doc.y, { fit: [280, 100] });
+        // Avanzar el cursor manualmente porque doc.image no lo hace
+        doc.moveDown(6);
+        doc.moveTo(50, doc.y).lineTo(330, doc.y).stroke('#000000');
+        doc.moveDown(0.3);
+        doc.fontSize(10).font('Helvetica-Bold').text(solicitud.nombre_firmante);
+        doc.fontSize(8).font('Helvetica').fillColor('#666666')
+          .text('Firma electronica capturada en canvas');
+        doc.fillColor('#000000');
+      } catch (err) {
+        logger.warn({ err }, 'Acuse: no se pudo embedir la imagen de firma');
+      }
+      doc.moveDown(1);
+    }
 
     // Section: Evidencia de firma
     doc.fontSize(12).font('Helvetica-Bold').text('EVIDENCIA DE FIRMA');
