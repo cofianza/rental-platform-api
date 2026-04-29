@@ -585,6 +585,22 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
     return { received: true };
   }
 
+  // 3.5. Dispatch alterno: compras de creditos de estudios (no usan tabla pagos).
+  //      La compra se identifica por metadata.concepto = 'creditos_estudios' y
+  //      se despacha a creditos-estudios.service para crear el lote.
+  const metadata = eventObj?.metadata as Record<string, string> | undefined;
+  if (metadata?.concepto === 'creditos_estudios' && type === 'checkout.session.completed') {
+    try {
+      const { acreditarCompraDesdeWebhook } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+      const paymentIntentId = (eventObj?.payment_intent as string | null) ?? null;
+      const result = await acreditarCompraDesdeWebhook(externalId, paymentIntentId, eventObj || {});
+      logger.info({ externalId, eventId, result }, 'Creditos estudios: compra acreditada via webhook');
+    } catch (err) {
+      logger.error({ err, externalId, eventId }, 'Error acreditando compra de creditos via webhook');
+    }
+    return { received: true };
+  }
+
   // 4. Find pago — try external_id first, then transaction_ref as fallback.
   //    For checkout.session.* events: external_id = session ID
   //    For payment_intent.* events: try transaction_ref first, then check
@@ -613,7 +629,6 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
       // Fallback: for payment_intent events, Stripe includes the checkout session
       // metadata. Try to find pago by matching the payment_intent's metadata.expediente_id
       // or by fetching the checkout session that created this intent.
-      const metadata = eventObj?.metadata as Record<string, string> | undefined;
       const expId = metadata?.expediente_id;
       if (expId) {
         const { data: byMeta } = await (supabase

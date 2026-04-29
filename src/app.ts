@@ -45,6 +45,7 @@ import expedienteExternoRouter from '@/modules/expedientes/expediente-externo.ro
 import { publicInvitacionRouter } from '@/modules/invitacion/invitacion.routes';
 import disponibilidadRouter from '@/modules/disponibilidad/disponibilidad.routes';
 import { facturasRouter, pagoFacturarRouter, factusHelpersRouter, factusPublicHelpersRouter } from '@/modules/facturacion/facturacion.routes';
+import { creditosEstudiosRouter, expedienteLiberarRouter, adminPaquetesRouter } from '@/modules/creditos-estudios/creditos-estudios.routes';
 
 const app = express();
 
@@ -142,6 +143,11 @@ app.use('/api/v1/facturas', facturasRouter);
 app.use('/api/v1/pagos', pagoFacturarRouter); // POST /pagos/:pagoId/facturar
 app.use('/api/v1/factus', factusHelpersRouter); // /factus/municipalities (auth)
 app.use('/api/v1/public/factus', factusPublicHelpersRouter); // /public/factus/municipalities (sin auth, para wizard registro)
+
+// Creditos de estudios (paquetes pre-comprados por inmobiliarias)
+app.use('/api/v1/creditos-estudios', creditosEstudiosRouter);
+app.use('/api/v1/expedientes/:expedienteId/liberar-estudio-credito', expedienteLiberarRouter);
+app.use('/api/v1/admin/paquetes-creditos-estudios', adminPaquetesRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
