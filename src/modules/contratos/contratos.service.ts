@@ -617,6 +617,12 @@ export async function listAllContratos(
 // List contratos by expediente
 // ============================================================
 
+// Dedup en memoria para auto-heal: cuando varios usuarios miran el
+// mismo expediente al tiempo no disparamos N veces la generacion.
+// Por replica del API — si hay multi-replica, en el peor caso 1
+// generacion duplicada que admin puede limpiar (raro y benigno).
+const autoGenInflight = new Set<string>();
+
 export async function listContratosByExpediente(
   expedienteId: string,
   query: ListContratosQuery,
@@ -648,10 +654,52 @@ export async function listContratosByExpediente(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener contratos');
   }
 
+  // Self-heal: si el expediente esta en 'aprobado' y no tiene contratos,
+  // disparamos la generacion automatica fire-and-forget. Esto cubre los
+  // expedientes que se quedaron sin contrato por bugs previos del
+  // orchestrator (eg. generado_por='system' rompiendo el FK). En el
+  // siguiente poll del frontend (10s) el contrato ya estara visible.
+  if ((data ?? []).length === 0 && total === 0) {
+    void maybeAutoHealContrato(expedienteId);
+  }
+
   return {
     contratos: data ?? [],
     pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
   };
+}
+
+async function maybeAutoHealContrato(expedienteId: string): Promise<void> {
+  if (autoGenInflight.has(expedienteId)) return;
+
+  // Solo disparamos si el expediente esta en 'aprobado' (o 'condicionado',
+  // que tambien permite contrato si se decidio asi).
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  const estado = (exp as { estado?: string } | null)?.estado;
+  if (estado !== 'aprobado' && estado !== 'condicionado') return;
+
+  autoGenInflight.add(expedienteId);
+  logger.info({ expedienteId }, 'Auto-heal: expediente aprobado sin contrato — disparando generacion');
+
+  try {
+    await generarContrato(
+      expedienteId,
+      { duracion_meses: 12, fecha_inicio: new Date().toISOString().slice(0, 10) },
+      null,
+    );
+    logger.info({ expedienteId }, 'Auto-heal: contrato generado correctamente');
+  } catch (err) {
+    logger.error(
+      { expedienteId, err: err instanceof Error ? err.message : String(err) },
+      'Auto-heal: fallo la generacion automatica del contrato',
+    );
+  } finally {
+    autoGenInflight.delete(expedienteId);
+  }
 }
 
 // ============================================================
