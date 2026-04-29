@@ -538,3 +538,139 @@ function formatInmueble(inmueble: { direccion: string; ciudad: string } | null |
   if (!inmueble) return 'N/A';
   return inmueble.ciudad ? `${inmueble.direccion}, ${inmueble.ciudad}` : inmueble.direccion;
 }
+
+// ============================================================
+// Ensure acuse exists (auto-heal de acuses faltantes/desactualizados)
+//
+// Reconstruye el acuse PDF para una solicitud_firma firmada cuando:
+// - No tiene acuse_storage_key (race con fire-and-forget original)
+// - O queremos forzar regeneracion (eg. nueva version del acuse con
+//   firma manuscrita visible que la version vieja no incluia)
+//
+// Idempotente: si el acuse ya existe y `force=false`, retorna su key.
+// Devuelve null si no se pudo (ej. solicitud no firmada todavia).
+// ============================================================
+
+export async function ensureAcuseExists(
+  solicitudId: string,
+  options: { force?: boolean } = {},
+): Promise<string | null> {
+  const { force = false } = options;
+
+  // 1. Cargar solicitud + contrato + evidencia
+  const { data: solRow } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      id, contrato_id, nombre_firmante, email_firmante, estado, token_expiracion,
+      contratos!inner(
+        id, nombre_archivo, expediente_id,
+        expedientes(numero, inmuebles(direccion, ciudad))
+      )
+    `)
+    .eq('id', solicitudId)
+    .single();
+
+  if (!solRow) return null;
+
+  const sol = solRow as unknown as {
+    id: string;
+    contrato_id: string;
+    nombre_firmante: string;
+    email_firmante: string;
+    estado: string;
+    token_expiracion: string;
+    contratos: {
+      id: string;
+      nombre_archivo: string | null;
+      expediente_id: string;
+      expedientes: {
+        numero: string;
+        inmuebles: { direccion: string; ciudad: string } | null;
+      } | null;
+    };
+  };
+
+  if (sol.estado !== 'firmado') return null;
+
+  const { data: evRow } = await (supabase
+    .from('evidencias_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, ip_firmante, user_agent, geo_latitud, geo_longitud, otp_verificado_en, firma_imagen_key, firmado_en, hash_documento, acuse_storage_key')
+    .eq('solicitud_firma_id', solicitudId)
+    .single();
+
+  if (!evRow) return null;
+
+  const ev = evRow as unknown as {
+    id: string;
+    ip_firmante: string;
+    user_agent: string;
+    geo_latitud: number | null;
+    geo_longitud: number | null;
+    otp_verificado_en: string;
+    firma_imagen_key: string;
+    firmado_en: string;
+    hash_documento: string;
+    acuse_storage_key: string | null;
+  };
+
+  // 2. Si ya existe y no se fuerza, devolverlo. Pero antes verificamos
+  //    su tamano: la version vieja del acuse no incluia la imagen de la
+  //    firma manuscrita y pesaba ~3-4KB. La version actual con la imagen
+  //    embebida pesa >8KB. Si el acuse existente es chico, lo
+  //    consideramos desactualizado y forzamos regeneracion para que el
+  //    usuario vea su firma en el PDF descargable.
+  if (ev.acuse_storage_key && !force) {
+    try {
+      const { data: blob } = await supabase.storage
+        .from(BUCKET_NAME)
+        .download(ev.acuse_storage_key);
+      if (blob) {
+        const buf = Buffer.from(await blob.arrayBuffer());
+        if (buf.length >= 8 * 1024) {
+          return ev.acuse_storage_key;
+        }
+        logger.info(
+          { evidenciaId: ev.id, sizeBytes: buf.length },
+          'Acuse desactualizado (sin imagen de firma) — regenerando',
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { evidenciaId: ev.id, err: err instanceof Error ? err.message : String(err) },
+        'No se pudo verificar tamano del acuse — regenerando por seguridad',
+      );
+    }
+  }
+
+  // 3. Regenerar.
+  await generateAndStoreAcuse(
+    ev.id,
+    {
+      id: sol.id,
+      contrato_id: sol.contrato_id,
+      nombre_firmante: sol.nombre_firmante,
+      email_firmante: sol.email_firmante,
+      estado: sol.estado,
+      token_expiracion: sol.token_expiracion,
+    },
+    sol.contratos,
+    {
+      ip: ev.ip_firmante,
+      userAgent: ev.user_agent,
+      firmadoEn: ev.firmado_en,
+      hashDocumento: ev.hash_documento,
+      otpVerificadoEn: ev.otp_verificado_en,
+      geoLatitud: ev.geo_latitud,
+      geoLongitud: ev.geo_longitud,
+      firmaKey: ev.firma_imagen_key,
+    },
+  );
+
+  // 4. Releer acuse_storage_key (lo acaba de actualizar generateAndStoreAcuse).
+  const { data: refreshed } = await (supabase
+    .from('evidencias_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('acuse_storage_key')
+    .eq('id', ev.id)
+    .single();
+  return ((refreshed as { acuse_storage_key?: string | null } | null)?.acuse_storage_key) || null;
+}

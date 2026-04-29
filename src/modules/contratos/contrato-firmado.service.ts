@@ -196,28 +196,38 @@ async function generarFirmadoCombinado(contrato: {
 }): Promise<{ storageKey: string; nombreArchivo: string } | null> {
   if (!contrato.storage_key) return null;
 
-  // 1. Acuses disponibles para este contrato (vienen de evidencias_firma
-  // joined con solicitudes_firma).
-  const { data: acuses } = await (supabase
-    .from('evidencias_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('acuse_storage_key, solicitudes_firma!inner(contrato_id, estado, firmado_en)')
-    .eq('solicitudes_firma.contrato_id', contrato.id)
-    .eq('solicitudes_firma.estado', 'firmado')
-    .not('acuse_storage_key', 'is', null);
+  // 1. Listar TODAS las solicitudes firmadas del contrato (orden temporal).
+  const { data: solicitudesRaw } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, firmado_en')
+    .eq('contrato_id', contrato.id)
+    .eq('estado', 'firmado')
+    .order('firmado_en', { ascending: true });
 
-  const acuseKeys = ((acuses || []) as Array<{ acuse_storage_key: string | null; solicitudes_firma: { firmado_en: string } | null }>)
-    .filter((a) => !!a.acuse_storage_key)
-    // Orden por fecha de firma para que los acuses queden en orden temporal.
-    .sort((a, b) => {
-      const ta = a.solicitudes_firma?.firmado_en || '';
-      const tb = b.solicitudes_firma?.firmado_en || '';
-      return ta.localeCompare(tb);
-    })
-    .map((a) => a.acuse_storage_key as string);
+  const solicitudesFirmadas =
+    (solicitudesRaw as Array<{ id: string; firmado_en: string | null }> | null) || [];
+
+  if (solicitudesFirmadas.length === 0) return null;
+
+  // 2. Para cada solicitud firmada, asegurar que existe el acuse PDF.
+  //    ensureAcuseExists regenera si falta o si hay version desactualizada
+  //    (en este flujo lo llamamos sin force — solo regenera los faltantes).
+  const { ensureAcuseExists } = await import('@/modules/firma/evidencia.service');
+  const acuseKeys: string[] = [];
+  for (const sol of solicitudesFirmadas) {
+    try {
+      const key = await ensureAcuseExists(sol.id);
+      if (key) acuseKeys.push(key);
+    } catch (err) {
+      logger.warn(
+        { contratoId: contrato.id, solicitudId: sol.id, err: err instanceof Error ? err.message : String(err) },
+        'Generar firmado: ensureAcuseExists fallo para una solicitud — se omite',
+      );
+    }
+  }
 
   if (acuseKeys.length === 0) {
-    // No hay acuses listos todavia (race con el fire-and-forget del
-    // generateAndStoreAcuse). Caller usara el PDF original.
+    // No se pudo materializar ningun acuse. Caller usara el PDF original.
     return null;
   }
 
