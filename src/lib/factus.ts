@@ -365,6 +365,81 @@ export async function createBill(input: CreateBillInput): Promise<CreateBillResp
   });
 }
 
+// ── Catalogo de municipios (tabla de referencia DIAN) ────────────────
+// Factus expone los municipios como una tabla de referencia — un solo GET
+// que devuelve TODO el catalogo bajo la clave `municipalities`. No tiene
+// filtros server-side; el filtrado por nombre lo hacemos en memoria.
+//
+// Cache 24h en memoria — es data DIAN que casi nunca cambia.
+
+let cachedMunicipalities: { data: FactusMunicipality[]; cachedAt: number } | null = null;
+const MUNICIPALITIES_TTL_MS = 24 * 60 * 60 * 1000;
+let inflightMunicipalities: Promise<FactusMunicipality[]> | null = null;
+
+async function fetchAllMunicipalities(): Promise<FactusMunicipality[]> {
+  // El endpoint puede envolver de varias formas (Laravel + variaciones):
+  //   { municipalities: [...] }      (forma documentada en developers.factus)
+  //   { data: [...] }                 (forma estandar API REST)
+  //   { data: { data: [...] } }       (paginacion Laravel)
+  const result = await factusRequest<unknown>('/v2/municipalities');
+  const r = result as Record<string, unknown>;
+
+  // 1. Probar `municipalities` (forma documentada en tablas-de-referencia)
+  if (Array.isArray(r.municipalities)) {
+    return r.municipalities as FactusMunicipality[];
+  }
+
+  // 2. data plano
+  if (Array.isArray(r.data)) {
+    return r.data as FactusMunicipality[];
+  }
+
+  // 3. data.data o data.municipalities
+  const inner = r.data as Record<string, unknown> | undefined;
+  if (inner) {
+    if (Array.isArray(inner.data)) return inner.data as FactusMunicipality[];
+    if (Array.isArray(inner.municipalities)) return inner.municipalities as FactusMunicipality[];
+  }
+
+  logger.warn(
+    { topKeys: Object.keys(r), sample: JSON.stringify(r).slice(0, 300) },
+    'Factus: shape de municipios inesperado',
+  );
+  return [];
+}
+
+async function getAllMunicipalities(): Promise<FactusMunicipality[]> {
+  const now = Date.now();
+  if (cachedMunicipalities && now - cachedMunicipalities.cachedAt < MUNICIPALITIES_TTL_MS) {
+    return cachedMunicipalities.data;
+  }
+
+  // Si ya hay un fetch en curso, reutilizamos esa promesa (evita llamadas
+  // concurrentes en arranque en frio cuando varios usuarios buscan a la vez).
+  if (inflightMunicipalities) return inflightMunicipalities;
+
+  inflightMunicipalities = fetchAllMunicipalities()
+    .then((list) => {
+      cachedMunicipalities = { data: list, cachedAt: Date.now() };
+      logger.info({ count: list.length }, 'Factus: catalogo de municipios cargado');
+      return list;
+    })
+    .finally(() => {
+      inflightMunicipalities = null;
+    });
+
+  return inflightMunicipalities;
+}
+
+/**
+ * Normaliza una cadena para busqueda: lowercase + sin tildes.
+ * "Bogota D.C." -> "bogota d.c."
+ */
+function normalize(s: string): string {
+  // ̀-ͯ = rango Unicode "Combining Diacritical Marks" (tildes, etc).
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
 /**
  * Descarga el PDF de una factura ya emitida en Factus.
  * El número aquí es el `bill.number` que devuelve `createBill` (ej. "SETP990001347").
@@ -403,29 +478,20 @@ export interface FactusMunicipality {
 }
 
 export async function searchMunicipalities(name: string): Promise<FactusMunicipality[]> {
-  // Factus V2 sigue convencion Laravel: los filtros van como filter[campo]=valor
-  // (igual que /v2/numbering-ranges?filter[document]=21). El parametro plano
-  // ?name=... no filtra y devuelve un dataset gigantico paginado.
-  const params = new URLSearchParams();
-  params.set('filter[name]', name);
+  const all = await getAllMunicipalities();
+  if (all.length === 0) return [];
 
-  const result = await factusRequest<{
-    data: FactusMunicipality[] | { data: FactusMunicipality[] };
-  }>(`/v2/municipalities?${params.toString()}`);
+  const needle = normalize(name.trim());
+  if (!needle) return [];
 
-  // Factus puede envolver la lista de dos formas (igual que numbering-ranges):
-  //   { data: [...] }                  (forma simple)
-  //   { data: { data: [...], ... } }   (paginacion Laravel)
-  let municipalities: FactusMunicipality[] = [];
-  if (Array.isArray(result.data)) {
-    municipalities = result.data;
-  } else if (result.data && Array.isArray((result.data as { data?: FactusMunicipality[] }).data)) {
-    municipalities = (result.data as { data: FactusMunicipality[] }).data;
-  }
+  const matches = all.filter((m) => {
+    if (!m?.name) return false;
+    return (
+      normalize(m.name).includes(needle) ||
+      (m.department?.name && normalize(m.department.name).includes(needle))
+    );
+  });
 
-  if (municipalities.length === 0) {
-    logger.info({ name, sample: result }, 'Factus: 0 municipios — verifica formato del endpoint');
-  }
-
-  return municipalities;
+  // Limitar a 50 para no saturar el dropdown.
+  return matches.slice(0, 50);
 }
