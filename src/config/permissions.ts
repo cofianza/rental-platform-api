@@ -109,7 +109,11 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     plantillas: [],
     inmuebles: ['create', 'read', 'update'],
     reportes: [],
-    configuracion: [],
+    // Configuracion: necesita read+update para 'Datos para contrato' (su
+    // propio perfil arrendador con domicilio, cuenta de recaudo, logo).
+    // La pagina /configuracion filtra secciones por rol — el propietario
+    // solo ve las que le corresponden, no las de admin.
+    configuracion: ['read', 'update'],
     bitacora: [],
     dashboard: ['read'],
     solicitantes: [],
@@ -127,7 +131,9 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     plantillas: ['read'],
     inmuebles: ['create', 'read', 'update'],
     reportes: ['read'],
-    configuracion: [],
+    // Igual que propietario: necesita read+update para 'Datos para contrato'
+    // y para 'Creditos de estudios' (gestion de paquetes y compras).
+    configuracion: ['read', 'update'],
     bitacora: [],
     dashboard: ['read'],
     solicitantes: ['create', 'read', 'update'],
