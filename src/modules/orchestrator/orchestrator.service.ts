@@ -415,7 +415,10 @@ async function generarContratoAutomatico(expedienteId: string, _valorArriendo?: 
     const result = await generarContrato(
       expedienteId,
       { duracion_meses: DURACION_CONTRATO_DEFAULT, fecha_inicio: new Date().toISOString().slice(0, 10) },
-      'system', // userId: el orchestrator firma como sistema
+      // userId=null: el orchestrator no es un usuario real; generado_por
+      // queda en NULL en la tabla contratos. Pasar 'system' rompia el FK
+      // a perfiles y abortaba la generacion automatica del contrato.
+      null,
     );
     const contratoId = (result as { id?: string } | null)?.id || null;
     if (contratoId) {

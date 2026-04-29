@@ -676,10 +676,16 @@ export async function getContratoById(id: string) {
 // Generar contrato
 // ============================================================
 
+/** Regex UUID v4 — para evitar que strings como 'system' rompan la FK a perfiles. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function uuidOrNull(v: string | null | undefined): string | null {
+  return v && UUID_RE.test(v) ? v : null;
+}
+
 export async function generarContrato(
   expedienteId: string,
   input: GenerarContratoInput,
-  userId: string,
+  userId: string | null,
   ip?: string,
 ) {
   // 1. Fetch expediente data (incluye arrendador completo + codeudor).
@@ -751,7 +757,11 @@ export async function generarContrato(
     nombreArchivoContrato = `contrato-${plantillaRow.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`;
   }
 
-  // Insert contrato first to get ID
+  // Insert contrato first to get ID. Si el caller no es un usuario real
+  // (ej. orchestrator pasa userId='system' o null), guardamos null en
+  // generado_por: la columna es FK a perfiles(id) y un literal no-UUID
+  // rompe el constraint y aborta la generacion automatica del contrato.
+  const generadoPor = uuidOrNull(userId);
   const { data: contrato, error: insertError } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .insert({
@@ -764,7 +774,7 @@ export async function generarContrato(
       duracion_meses: duracionMeses,
       valor_arriendo: expData.inmueble.valor_arriendo || 0,
       datos_variables: finalVariables,
-      generado_por: userId,
+      generado_por: generadoPor,
       fecha_generacion: now.toISOString(),
       plantilla_version: plantillaRow?.version ?? null,
       nombre_archivo: nombreArchivoContrato,
@@ -773,7 +783,7 @@ export async function generarContrato(
     .single();
 
   if (insertError || !contrato) {
-    logger.error({ error: insertError?.message }, 'Error al crear contrato');
+    logger.error({ error: insertError?.message, expedienteId, userId }, 'Error al crear contrato');
     throw AppError.badRequest('Error al crear el contrato', 'CONTRATO_CREATE_ERROR');
   }
 
@@ -1027,7 +1037,7 @@ export async function renovarContrato(
       duracion_meses: duracionMeses,
       valor_arriendo: expData.inmueble.valor_arriendo || 0,
       datos_variables: finalVariables,
-      generado_por: userId,
+      generado_por: uuidOrNull(userId),
       fecha_generacion: now.toISOString(),
       plantilla_version: pl.version,
       nombre_archivo: `contrato-renovacion-${pl.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`,
