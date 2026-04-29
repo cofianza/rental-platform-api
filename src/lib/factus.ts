@@ -403,8 +403,29 @@ export interface FactusMunicipality {
 }
 
 export async function searchMunicipalities(name: string): Promise<FactusMunicipality[]> {
-  const result = await factusRequest<{ data: FactusMunicipality[] }>(
-    `/v2/municipalities?name=${encodeURIComponent(name)}`,
-  );
-  return result.data || [];
+  // Factus V2 sigue convencion Laravel: los filtros van como filter[campo]=valor
+  // (igual que /v2/numbering-ranges?filter[document]=21). El parametro plano
+  // ?name=... no filtra y devuelve un dataset gigantico paginado.
+  const params = new URLSearchParams();
+  params.set('filter[name]', name);
+
+  const result = await factusRequest<{
+    data: FactusMunicipality[] | { data: FactusMunicipality[] };
+  }>(`/v2/municipalities?${params.toString()}`);
+
+  // Factus puede envolver la lista de dos formas (igual que numbering-ranges):
+  //   { data: [...] }                  (forma simple)
+  //   { data: { data: [...], ... } }   (paginacion Laravel)
+  let municipalities: FactusMunicipality[] = [];
+  if (Array.isArray(result.data)) {
+    municipalities = result.data;
+  } else if (result.data && Array.isArray((result.data as { data?: FactusMunicipality[] }).data)) {
+    municipalities = (result.data as { data: FactusMunicipality[] }).data;
+  }
+
+  if (municipalities.length === 0) {
+    logger.info({ name, sample: result }, 'Factus: 0 municipios — verifica formato del endpoint');
+  }
+
+  return municipalities;
 }
