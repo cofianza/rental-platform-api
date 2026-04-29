@@ -6,6 +6,7 @@ import { generateContractPdf } from './contratos.pdf';
 import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 import { renderTemplate } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
+import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import type {
   GenerarContratoInput,
   RenovarContratoInput,
@@ -834,6 +835,11 @@ async function maybeAutoActivarVigente(
       { contratoId, expedienteId, expEstadoAnterior: expEstado },
       'Auto-heal: contrato vigente + expediente cerrado',
     );
+
+    // Notificar a solicitante y propietario que el contrato esta vigente.
+    notificarPartesContratoVigente(contratoId, expedienteId).catch((e) =>
+      logger.warn({ error: e, contratoId }, 'Error notificando contrato vigente'),
+    );
   } catch (err) {
     logger.error(
       { contratoId, expedienteId, err: err instanceof Error ? err.message : String(err) },
@@ -841,6 +847,65 @@ async function maybeAutoActivarVigente(
     );
   } finally {
     autoGenInflight.delete(lockKey);
+  }
+}
+
+/**
+ * Notifica a solicitante y propietario cuando un contrato pasa a 'vigente'.
+ * Resolucion de userIds:
+ *   - propietario: inmueble.propietario_id (ya es perfil_id).
+ *   - solicitante: lookup por email del solicitante en auth.users.
+ * Tolera ausencia de perfil (caller usa .catch).
+ */
+async function notificarPartesContratoVigente(
+  contratoId: string,
+  expedienteId: string,
+): Promise<void> {
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, solicitante_id, inmueble_id')
+    .eq('id', expedienteId)
+    .single() as { data: { id: string; numero: string | null; solicitante_id: string | null; inmueble_id: string } | null };
+
+  if (!exp) return;
+
+  const { data: inm } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('direccion, propietario_id')
+    .eq('id', exp.inmueble_id)
+    .single() as { data: { direccion: string; propietario_id: string } | null };
+
+  const link = `/contratos/${contratoId}`;
+  const direccion = inm?.direccion ?? 'el inmueble';
+
+  if (inm?.propietario_id) {
+    await notificarUsuario({
+      userId: inm.propietario_id,
+      tipo: 'contrato.vigente',
+      titulo: 'Contrato vigente',
+      mensaje: `El contrato de ${direccion} esta firmado y activo.`,
+      link,
+      payload: { contrato_id: contratoId, expediente_id: expedienteId },
+    });
+  }
+
+  if (exp.solicitante_id) {
+    const { data: sol } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('email')
+      .eq('id', exp.solicitante_id)
+      .single() as { data: { email: string } | null };
+    const solicitanteUserId = await findPerfilIdByEmail(sol?.email);
+    if (solicitanteUserId) {
+      await notificarUsuario({
+        userId: solicitanteUserId,
+        tipo: 'contrato.vigente',
+        titulo: 'Tu contrato esta activo',
+        mensaje: `Tu contrato de ${direccion} quedo firmado y vigente.`,
+        link,
+        payload: { contrato_id: contratoId, expediente_id: expedienteId },
+      });
+    }
   }
 }
 

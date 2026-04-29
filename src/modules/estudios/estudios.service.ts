@@ -9,6 +9,7 @@ import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQu
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo } from './providers/types';
+import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 
 // ============================================================
 // Constants
@@ -901,7 +902,53 @@ export async function registrarResultado(
     ip,
   });
 
+  // 5. Notificacion in-app al solicitante (fire-and-forget). El email
+  // formal del flujo va por orchestrator en otra ruta; esto es solo
+  // para empujar al campanario y badges en tiempo real.
+  notificarSolicitanteResultadoEstudio(est.expediente_id, input.resultado).catch((e) =>
+    logger.warn({ error: e, estudioId, expedienteId: est.expediente_id }, 'Error notificando resultado de estudio'),
+  );
+
   return getEstudioById(estudioId);
+}
+
+/**
+ * Lookup ligero de email del solicitante a partir del expediente y notifica
+ * via supabase realtime. Tolera ausencia de perfil (solicitante externo aun
+ * sin cuenta) — la llamada se omite silenciosamente.
+ */
+async function notificarSolicitanteResultadoEstudio(
+  expedienteId: string,
+  resultado: string,
+): Promise<void> {
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, solicitante_id')
+    .eq('id', expedienteId)
+    .single() as { data: { id: string; numero: string | null; solicitante_id: string | null } | null };
+
+  if (!exp?.solicitante_id) return;
+
+  const { data: sol } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('email')
+    .eq('id', exp.solicitante_id)
+    .single() as { data: { email: string } | null };
+
+  const userId = await findPerfilIdByEmail(sol?.email);
+  if (!userId) return;
+
+  const aprobado = resultado === 'aprobado';
+  await notificarUsuario({
+    userId,
+    tipo: aprobado ? 'estudio.aprobado' : 'estudio.rechazado',
+    titulo: aprobado ? 'Tu estudio fue aprobado' : 'Resultado de tu estudio',
+    mensaje: aprobado
+      ? `Tu solicitud ${exp.numero ?? ''} avanzo. Ya puedes continuar con el contrato.`
+      : `Tu solicitud ${exp.numero ?? ''} no fue aprobada. Revisa los detalles.`,
+    link: `/expedientes/${expedienteId}`,
+    payload: { expediente_id: expedienteId, resultado },
+  });
 }
 
 // ============================================================

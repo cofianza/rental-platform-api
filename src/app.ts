@@ -46,6 +46,7 @@ import { publicInvitacionRouter } from '@/modules/invitacion/invitacion.routes';
 import disponibilidadRouter from '@/modules/disponibilidad/disponibilidad.routes';
 import { facturasRouter, pagoFacturarRouter, factusHelpersRouter, factusPublicHelpersRouter } from '@/modules/facturacion/facturacion.routes';
 import { creditosEstudiosRouter, expedienteLiberarRouter, adminPaquetesRouter } from '@/modules/creditos-estudios/creditos-estudios.routes';
+import notificacionesRouter from '@/modules/notificaciones/notificaciones.routes';
 
 const app = express();
 
@@ -148,6 +149,9 @@ app.use('/api/v1/public/factus', factusPublicHelpersRouter); // /public/factus/m
 app.use('/api/v1/creditos-estudios', creditosEstudiosRouter);
 app.use('/api/v1/expedientes/:expedienteId/liberar-estudio-credito', expedienteLiberarRouter);
 app.use('/api/v1/admin/paquetes-creditos-estudios', adminPaquetesRouter);
+
+// Notificaciones in-app (Realtime via Supabase)
+app.use('/api/v1/notificaciones', notificacionesRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);

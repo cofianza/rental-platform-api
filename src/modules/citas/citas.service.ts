@@ -8,6 +8,7 @@ import {
 } from '../orchestrator/orchestrator.emails';
 import { assertCitaPermission, resolveAccessibleExpedienteIds } from './citas.permissions';
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
+import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
 import type {
   CreateCitaInput,
@@ -106,10 +107,16 @@ function assertTransition(current: string, target: string) {
 // ============================================================
 
 interface ExpedienteContexto {
+  expedienteId: string;
   solicitanteEmail: string | null;
   solicitanteNombre: string;
+  // Perfil-id del solicitante. Resuelto por email — null si aun no tiene
+  // cuenta registrada (eg. solicitante externo invitado solo por email).
+  solicitanteUserId: string | null;
   propietarioEmail: string | null;
   propietarioNombre: string;
+  // Perfil-id del propietario. Sale directo de inmueble.propietario_id.
+  propietarioUserId: string;
   inmuebleDireccion: string;
   inmuebleCiudad: string;
 }
@@ -160,11 +167,19 @@ async function obtenerContextoExpediente(expedienteId: string): Promise<Expedien
 
   const propietarioNombre = perfil?.razon_social || `${perfil?.nombre || ''} ${perfil?.apellido || ''}`.trim();
 
+  // Perfil-id del solicitante: lookup por email contra auth.users. Puede no
+  // existir aun (solicitante invitado externo) — devolvemos null y los
+  // emisores de notificacion lo toleran.
+  const solicitanteUserId = solicitanteEmail ? await findPerfilIdByEmail(solicitanteEmail) : null;
+
   return {
+    expedienteId,
     solicitanteEmail,
     solicitanteNombre,
+    solicitanteUserId,
     propietarioEmail,
     propietarioNombre,
+    propietarioUserId: inm.propietario_id,
     inmuebleDireccion: inm.direccion,
     inmuebleCiudad: inm.ciudad,
   };
@@ -173,6 +188,8 @@ async function obtenerContextoExpediente(expedienteId: string): Promise<Expedien
 async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string, autoConfirm: boolean) {
   const ctx = await obtenerContextoExpediente(expedienteId);
   if (!ctx) return;
+
+  const linkExpediente = `/expedientes/${ctx.expedienteId}`;
 
   if (autoConfirm) {
     // Cita creada ya confirmada por propietario/inmobiliaria → notificar al solicitante
@@ -185,6 +202,14 @@ async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string,
         fecha_confirmada: fechaPropuesta,
       });
     }
+    notificarUsuario({
+      userId: ctx.solicitanteUserId ?? '',
+      tipo: 'cita.confirmada',
+      titulo: 'Cita confirmada',
+      mensaje: `Tu visita a ${ctx.inmuebleDireccion} fue confirmada.`,
+      link: linkExpediente,
+      payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaPropuesta },
+    });
   } else {
     // Cita solicitada → notificar al propietario
     if (ctx.propietarioEmail) {
@@ -197,6 +222,14 @@ async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string,
         fecha_propuesta: fechaPropuesta,
       });
     }
+    notificarUsuario({
+      userId: ctx.propietarioUserId,
+      tipo: 'cita.solicitada',
+      titulo: 'Nueva visita solicitada',
+      mensaje: `${ctx.solicitanteNombre || 'Un solicitante'} pidio visitar ${ctx.inmuebleDireccion}.`,
+      link: linkExpediente,
+      payload: { expediente_id: ctx.expedienteId, fecha_propuesta: fechaPropuesta },
+    });
   }
 }
 
@@ -214,6 +247,8 @@ async function notificarCitaConfirmada(
   const reprogramada =
     new Date(fechaPropuesta).getTime() !== new Date(fechaConfirmada).getTime();
 
+  const linkExpediente = `/expedientes/${ctx.expedienteId}`;
+
   if (reprogramada) {
     await sendCitaReprogramadaSolicitanteEmail({
       email: ctx.solicitanteEmail,
@@ -223,6 +258,14 @@ async function notificarCitaConfirmada(
       fecha_propuesta: fechaPropuesta,
       fecha_confirmada: fechaConfirmada,
       notas_propietario: notasPropietario,
+    });
+    notificarUsuario({
+      userId: ctx.solicitanteUserId ?? '',
+      tipo: 'cita.reprogramada',
+      titulo: 'Cita reprogramada',
+      mensaje: `El propietario ajusto la fecha de tu visita a ${ctx.inmuebleDireccion}.`,
+      link: linkExpediente,
+      payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
     });
     return;
   }
@@ -234,6 +277,14 @@ async function notificarCitaConfirmada(
     ciudad: ctx.inmuebleCiudad,
     fecha_confirmada: fechaConfirmada,
     notas_propietario: notasPropietario,
+  });
+  notificarUsuario({
+    userId: ctx.solicitanteUserId ?? '',
+    tipo: 'cita.confirmada',
+    titulo: 'Cita confirmada',
+    mensaje: `Tu visita a ${ctx.inmuebleDireccion} fue confirmada.`,
+    link: linkExpediente,
+    payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
 }
 

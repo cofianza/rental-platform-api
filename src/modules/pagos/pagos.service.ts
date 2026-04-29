@@ -9,6 +9,7 @@ import { getPaymentGateway } from './gateway';
 import { transitionPagoState } from './pago-state-machine';
 import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
+import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 
 // ============================================================
 // Helpers
@@ -761,6 +762,16 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
         expedienteId: pagoFullTyped.expediente_id,
         concepto: pagoFullTyped.concepto,
       });
+
+      // Notificacion in-app al solicitante. Fire-and-forget para no
+      // bloquear el webhook ni duplicar 500s a Stripe.
+      notificarSolicitantePagoCompletado(
+        pagoFullTyped.id,
+        pagoFullTyped.expediente_id,
+        pagoFullTyped.concepto,
+      ).catch((e) =>
+        logger.warn({ error: e, pagoId: pagoFullTyped.id }, 'Error notificando pago completado'),
+      );
     } catch (err) {
       // NO re-throw: ya procesamos la transición exitosa. Un 500 al webhook
       // dispararía retry de Stripe y duplicaría el pago.
@@ -790,4 +801,50 @@ export function getGatewayConfig() {
 export async function getGatewayStatus() {
   const gateway = getPaymentGateway();
   return gateway.healthCheck();
+}
+
+// ============================================================
+// Notificacion in-app del pago completado
+// ============================================================
+
+/**
+ * Notifica al solicitante que su pago fue confirmado. Resolucion de userId
+ * por email (perfiles no almacena email — vive en auth.users). Tolera la
+ * ausencia del perfil silenciosamente.
+ */
+async function notificarSolicitantePagoCompletado(
+  pagoId: string,
+  expedienteId: string,
+  concepto: string,
+): Promise<void> {
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, solicitante_id')
+    .eq('id', expedienteId)
+    .single() as { data: { id: string; numero: string | null; solicitante_id: string | null } | null };
+
+  if (!exp?.solicitante_id) return;
+
+  const { data: sol } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('email')
+    .eq('id', exp.solicitante_id)
+    .single() as { data: { email: string } | null };
+
+  const userId = await findPerfilIdByEmail(sol?.email);
+  if (!userId) return;
+
+  const titulo = concepto === 'estudio' ? 'Pago del estudio confirmado' : 'Pago confirmado';
+  const mensaje = concepto === 'estudio'
+    ? `Recibimos tu pago. Empezamos el estudio crediticio de la solicitud ${exp.numero ?? ''}.`
+    : `Tu pago de la solicitud ${exp.numero ?? ''} fue confirmado.`;
+
+  await notificarUsuario({
+    userId,
+    tipo: 'pago.confirmado',
+    titulo,
+    mensaje,
+    link: `/expedientes/${expedienteId}`,
+    payload: { pago_id: pagoId, expediente_id: expedienteId, concepto },
+  });
 }
