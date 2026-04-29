@@ -686,12 +686,21 @@ async function maybeAutoHealContrato(expedienteId: string): Promise<void> {
   logger.info({ expedienteId }, 'Auto-heal: expediente aprobado sin contrato — disparando generacion');
 
   try {
-    await generarContrato(
+    const result = await generarContrato(
       expedienteId,
       { duracion_meses: 12, fecha_inicio: new Date().toISOString().slice(0, 10) },
       null,
     );
-    logger.info({ expedienteId }, 'Auto-heal: contrato generado correctamente');
+    const contratoId = (result as { id?: string } | null)?.id;
+    logger.info({ expedienteId, contratoId }, 'Auto-heal: contrato generado correctamente');
+
+    // Auto-dispatch firma: pasamos directamente a 'pendiente_firma' y
+    // creamos la solicitud Auco con los datos del solicitante. Decision
+    // de UX: el flujo debe llegar al correo de firma sin intervencion
+    // del propietario (estudio aprobado -> contrato listo -> firma).
+    if (contratoId) {
+      await dispatchAutoFirma(contratoId, expedienteId);
+    }
   } catch (err) {
     logger.error(
       { expedienteId, err: err instanceof Error ? err.message : String(err) },
@@ -699,6 +708,94 @@ async function maybeAutoHealContrato(expedienteId: string): Promise<void> {
     );
   } finally {
     autoGenInflight.delete(expedienteId);
+  }
+}
+
+async function dispatchAutoFirma(contratoId: string, expedienteId: string): Promise<void> {
+  try {
+    // 1. Obtener solicitante (firmante) e inmueble para mensaje a Auco
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select(`
+        id, solicitante_id, inmueble_id,
+        solicitante:solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email, telefono),
+        inmueble:inmuebles!expedientes_inmueble_id_fkey(propietario_id)
+      `)
+      .eq('id', expedienteId)
+      .single();
+
+    const exp = expRow as unknown as {
+      id: string;
+      solicitante_id: string | null;
+      inmueble_id: string | null;
+      solicitante: { nombre: string; apellido: string; email: string; telefono: string | null } | null;
+      inmueble: { propietario_id: string } | null;
+    } | null;
+
+    if (!exp?.solicitante?.email) {
+      logger.warn(
+        { expedienteId, contratoId },
+        'Auto-firma: solicitante sin email — no se puede enviar a Auco',
+      );
+      return;
+    }
+    if (!exp.inmueble?.propietario_id) {
+      logger.warn(
+        { expedienteId, contratoId },
+        'Auto-firma: inmueble sin propietario_id — no hay enviado_por valido',
+      );
+      return;
+    }
+
+    // 2. Saltar contrato directamente a 'pendiente_firma'.
+    //    Hacemos UPDATE directo (no via RPC executeContratoTransition)
+    //    porque la state-machine exige user real con permisos. Aqui es
+    //    flujo system, registramos el cambio en contrato_historial_estados.
+    const { error: updErr } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .update({ estado: 'pendiente_firma', updated_at: new Date().toISOString() } as never)
+      .eq('id', contratoId)
+      .eq('estado', 'borrador'); // guard: si alguien ya lo movio, no pisamos
+
+    if (updErr) {
+      logger.error({ contratoId, err: updErr.message }, 'Auto-firma: error transicionando contrato a pendiente_firma');
+      return;
+    }
+
+    await (supabase
+      .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        contrato_id: contratoId,
+        estado_anterior: 'borrador',
+        estado_nuevo: 'pendiente_firma',
+        descripcion: 'Auto-envio a firma tras aprobacion de estudio (flujo system)',
+        comentario: 'Generacion y envio automatico — sin intervencion del propietario',
+        usuario_id: null,
+      } as never);
+
+    // 3. Crear solicitud Auco con los datos del solicitante
+    const { crearSolicitudFirma } = await import('@/modules/firma/firma.service');
+    const nombreFirmante = `${exp.solicitante.nombre} ${exp.solicitante.apellido}`.trim();
+
+    await crearSolicitudFirma(
+      {
+        contrato_id: contratoId,
+        nombre_firmante: nombreFirmante,
+        email_firmante: exp.solicitante.email,
+        telefono_firmante: exp.solicitante.telefono || undefined,
+        enviar_sms: false,
+      },
+      // El enviado_por es el propietario del inmueble (responsable
+      // contractual). Cumple el FK NOT NULL a perfiles.
+      exp.inmueble.propietario_id,
+    );
+
+    logger.info({ contratoId, expedienteId }, 'Auto-firma: solicitud Auco creada y email enviado al solicitante');
+  } catch (err) {
+    logger.error(
+      { contratoId, expedienteId, err: err instanceof Error ? err.message : String(err) },
+      'Auto-firma: fallo el envio automatico a firma — el propietario podra disparar manualmente',
+    );
   }
 }
 
