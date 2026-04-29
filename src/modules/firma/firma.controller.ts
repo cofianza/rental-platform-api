@@ -6,7 +6,7 @@ import * as firmaService from './firma.service';
 import * as otpService from './otp.service';
 import * as evidenciaService from './evidencia.service';
 import type { AucoWebhookPayload } from '@/lib/auco';
-import type { CrearSolicitudFirmaInput, OtpVerificarInput, CompletarFirmaInput } from './firma.schema';
+import type { CrearSolicitudFirmaInput, OtpVerificarInput, CompletarFirmaInput, ReenviarFirmaInput } from './firma.schema';
 
 export async function crear(req: Request, res: Response) {
   const input = req.body as CrearSolicitudFirmaInput;
@@ -20,10 +20,27 @@ export async function crear(req: Request, res: Response) {
 
 export async function reenviar(req: Request, res: Response) {
   const id = req.params.id as string;
+  const body = (req.body || {}) as ReenviarFirmaInput;
   const result = await firmaService.reenviarSolicitudFirma(
     id,
     req.user!.id,
     req.ip as string | undefined,
+    body.email_alternativo,
+  );
+  sendSuccess(res, result);
+}
+
+// Reenviar solicitud "self": permitido al solicitante autenticado dueno
+// del expediente del contrato. Acepta `email_alternativo` para redirigir
+// el correo de firma a otra direccion (eg. el que olvido reenviar).
+export async function reenviarSelf(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const body = (req.body || {}) as ReenviarFirmaInput;
+  const result = await firmaService.reenviarSolicitudFirmaSelf(
+    id,
+    req.user!.id,
+    req.ip as string | undefined,
+    body.email_alternativo,
   );
   sendSuccess(res, result);
 }

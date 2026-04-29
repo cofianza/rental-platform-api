@@ -32,8 +32,13 @@ export const completarFirmaSchema = z.object({
   geo_precision: z.number().min(0).optional(),
 });
 
+export const reenviarFirmaSchema = z.object({
+  email_alternativo: z.string().email('Email invalido').max(255).optional(),
+});
+
 export type CrearSolicitudFirmaInput = z.infer<typeof crearSolicitudFirmaSchema>;
 export type SolicitudIdParams = z.infer<typeof solicitudIdParamsSchema>;
 export type ContratoIdParams = z.infer<typeof contratoIdParamsSchema>;
 export type OtpVerificarInput = z.infer<typeof otpVerificarSchema>;
 export type CompletarFirmaInput = z.infer<typeof completarFirmaSchema>;
+export type ReenviarFirmaInput = z.infer<typeof reenviarFirmaSchema>;

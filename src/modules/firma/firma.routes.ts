@@ -9,6 +9,7 @@ import {
   tokenParamsSchema,
   otpVerificarSchema,
   completarFirmaSchema,
+  reenviarFirmaSchema,
 } from './firma.schema';
 import * as firmaController from './firma.controller';
 
@@ -35,12 +36,23 @@ firmaRouter.get(
   firmaController.getById,
 );
 
-// POST /:id/reenviar — Resend link (new token)
+// POST /:id/reenviar — Resend link (new token). Acepta body opcional
+// { email_alternativo } para redirigir el correo a otra direccion.
 firmaRouter.post(
   '/:id/reenviar',
-  roleGuard(['administrador', 'operador_analista']),
-  validate({ params: solicitudIdParamsSchema }),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria']),
+  validate({ params: solicitudIdParamsSchema, body: reenviarFirmaSchema }),
   firmaController.reenviar,
+);
+
+// POST /:id/reenviar-self — El solicitante dueno del expediente puede
+// reenviarse el correo de firma (al mismo o a otra direccion). El service
+// valida pertenencia.
+firmaRouter.post(
+  '/:id/reenviar-self',
+  roleGuard(['solicitante']),
+  validate({ params: solicitudIdParamsSchema, body: reenviarFirmaSchema }),
+  firmaController.reenviarSelf,
 );
 
 // POST /:id/cancelar — Cancel solicitud

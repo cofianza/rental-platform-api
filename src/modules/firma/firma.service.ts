@@ -242,10 +242,11 @@ export async function reenviarSolicitudFirma(
   solicitudId: string,
   userId: string,
   ip?: string,
+  emailAlternativo?: string,
 ) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, expedientes(numero, inmuebles(direccion, ciudad)))`)
+    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, storage_key, nombre_archivo, expedientes(numero, inmuebles(direccion, ciudad)))`)
     .eq('id', solicitudId)
     .single();
 
@@ -256,6 +257,8 @@ export async function reenviarSolicitudFirma(
   const row = data as unknown as SolicitudFirmaRow & {
     contratos: {
       expediente_id: string;
+      storage_key: string | null;
+      nombre_archivo: string | null;
       expedientes: {
         numero: string;
         inmuebles: { direccion: string; ciudad: string } | null;
@@ -279,8 +282,75 @@ export async function reenviarSolicitudFirma(
     );
   }
 
-  // Send Auco reminder if document code exists
-  if (row.auco_document_code) {
+  // Detectar si el caller pidio dirigir el correo a otra direccion. Solo
+  // consideramos "cambio" si el email viene y es distinto al actual
+  // (case-insensitive). Cambiar el email implica re-subir el documento a
+  // Auco con el nuevo firmante porque Auco no permite editar un sobre
+  // existente.
+  const emailNuevoNormalizado = emailAlternativo?.trim().toLowerCase();
+  const emailActualNormalizado = row.email_firmante.trim().toLowerCase();
+  const cambiaEmail =
+    !!emailNuevoNormalizado && emailNuevoNormalizado !== emailActualNormalizado;
+
+  let nuevoAucoDocumentCode: string | null = row.auco_document_code;
+
+  if (cambiaEmail && row.contratos?.storage_key) {
+    // Re-upload a Auco con nuevo firmante. Si el documento Auco previo
+    // sigue activo, queda obsoleto pero no lo cancelamos explicitamente
+    // (Auco lo invalida por expiracion del token y el OTP del nuevo
+    // documento es lo unico que la persona usara).
+    try {
+      const { data: pdfData, error: downloadError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .download(row.contratos.storage_key);
+
+      if (downloadError || !pdfData) {
+        throw new Error(downloadError?.message || 'No se pudo descargar el PDF para re-envio');
+      }
+
+      const buffer = Buffer.from(await pdfData.arrayBuffer());
+      const pdfBase64 = aucoClient.bufferToBase64(buffer);
+      const direccion = row.contratos?.expedientes?.inmuebles?.direccion || 'N/A';
+      const ciudad = row.contratos?.expedientes?.inmuebles?.ciudad || '';
+      const processName = `Contrato - ${row.contratos?.expedientes?.numero || row.contrato_id}`;
+
+      const phoneInternational = aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined);
+      const enableWhatsapp = Boolean(phoneInternational);
+
+      nuevoAucoDocumentCode = await aucoClient.uploadDocumentForSignature({
+        email: env.AUCO_SENDER_EMAIL,
+        name: processName,
+        subject: `Firma de contrato de arrendamiento - ${direccion}${ciudad ? `, ${ciudad}` : ''}`,
+        message: `Estimado/a ${row.nombre_firmante}, se le invita a revisar y firmar el contrato de arrendamiento del inmueble ubicado en ${direccion}${ciudad ? `, ${ciudad}` : ''}. Por favor revise el documento y proceda con la firma electrónica.`,
+        file: pdfBase64,
+        signProfile: [{
+          name: row.nombre_firmante,
+          email: emailNuevoNormalizado!,
+          phone: phoneInternational || '',
+          role: 'SIGNER',
+        }],
+        otpCode: true,
+        expiredDate: new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString(),
+        webhooks: ['default'],
+        options: enableWhatsapp ? { whatsapp: true } : undefined,
+      });
+
+      logger.info(
+        { solicitudId, oldEmail: emailActualNormalizado, newEmail: emailNuevoNormalizado, nuevoAucoDocumentCode },
+        'Auco: re-upload del documento con nuevo firmante completado',
+      );
+    } catch (aucoError) {
+      logger.error(
+        { error: aucoError, solicitudId, emailNuevo: emailNuevoNormalizado },
+        'Error al re-subir documento a Auco con nuevo email — se reenvia con el viejo documentCode',
+      );
+      // En caso de fallo, mantenemos el auco_document_code anterior;
+      // el correo de Cofianza con el token llega al nuevo email pero
+      // Auco seguira firmando para el firmante original. No es lo
+      // ideal pero es mejor que devolver error.
+    }
+  } else if (row.auco_document_code) {
+    // Caso normal (mismo email): pedirle a Auco que reenvie recordatorio.
     try {
       await aucoClient.sendReminder(row.auco_document_code);
     } catch (aucoError) {
@@ -292,15 +362,22 @@ export async function reenviarSolicitudFirma(
   const newToken = crypto.randomBytes(32).toString('hex');
   const newExpiration = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
 
+  // Update — incluye email_firmante nuevo y auco_document_code nuevo si aplica.
+  const updatePayload: Record<string, unknown> = {
+    token: newToken,
+    token_expiracion: newExpiration,
+    estado: 'enviado',
+    envios_realizados: row.envios_realizados + 1,
+    updated_at: new Date().toISOString(),
+  };
+  if (cambiaEmail) {
+    updatePayload.email_firmante = emailNuevoNormalizado;
+    updatePayload.auco_document_code = nuevoAucoDocumentCode;
+  }
+
   const { data: updated, error: updateError } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      token: newToken,
-      token_expiracion: newExpiration,
-      estado: 'enviado',
-      envios_realizados: row.envios_realizados + 1,
-      updated_at: new Date().toISOString(),
-    } as never)
+    .update(updatePayload as never)
     .eq('id', solicitudId)
     .select(SOLICITUD_SELECT)
     .single();
@@ -309,14 +386,15 @@ export async function reenviarSolicitudFirma(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al reenviar la solicitud');
   }
 
-  // Send email
+  // Send email — al destino nuevo si cambia, al original si no.
+  const emailDestino = cambiaEmail ? emailNuevoNormalizado! : row.email_firmante;
   const firmaUrl = `${env.FRONTEND_URL}/firma/${newToken}`;
   const direccion = row.contratos?.expedientes?.inmuebles?.direccion || 'N/A';
   const ciudad = row.contratos?.expedientes?.inmuebles?.ciudad || '';
 
   try {
     await sendFirmaEmail(
-      row.email_firmante,
+      emailDestino,
       row.nombre_firmante,
       firmaUrl,
       TOKEN_EXPIRY_HOURS,
@@ -335,11 +413,78 @@ export async function reenviarSolicitudFirma(
     accion: AUDIT_ACTIONS.FIRMA_SOLICITUD_RESENT,
     entidad: AUDIT_ENTITIES.CONTRATO,
     entidadId: row.contrato_id,
-    detalle: { solicitud_id: solicitudId, envio_numero: row.envios_realizados + 1 },
+    detalle: {
+      solicitud_id: solicitudId,
+      envio_numero: row.envios_realizados + 1,
+      email_destino: emailDestino,
+      cambio_email: cambiaEmail,
+    },
     ip,
   });
 
   return updated as unknown as SolicitudFirmaRow;
+}
+
+/**
+ * Reenvio "self": el solicitante autenticado dueno del expediente puede
+ * pedir reenvio del correo de firma (al mismo email o a otro alternativo).
+ * Verifica pertenencia: la solicitud debe ser de un contrato cuyo
+ * expediente.solicitante_id == perfil del usuario autenticado.
+ */
+export async function reenviarSolicitudFirmaSelf(
+  solicitudId: string,
+  userId: string,
+  ip?: string,
+  emailAlternativo?: string,
+) {
+  // 1. Verificar que la solicitud existe y traer la cadena hasta solicitante.
+  const { data: solRow, error: solError } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, contrato_id, contratos!inner(expediente_id, expedientes!inner(solicitante_id))')
+    .eq('id', solicitudId)
+    .single();
+
+  if (solError || !solRow) {
+    throw AppError.notFound('Solicitud de firma no encontrada', 'SOLICITUD_NOT_FOUND');
+  }
+
+  const sol = solRow as unknown as {
+    id: string;
+    contrato_id: string;
+    contratos: {
+      expediente_id: string;
+      expedientes: { solicitante_id: string | null };
+    };
+  };
+
+  const solicitanteId = sol.contratos?.expedientes?.solicitante_id;
+  if (!solicitanteId) {
+    throw AppError.forbidden('Solicitud sin solicitante asociado', 'NO_SOLICITANTE');
+  }
+
+  // 2. El usuario autenticado debe ser el solicitante. La tabla
+  //    solicitantes tiene una columna 'creado_por' que apunta al
+  //    perfil que creo el solicitante (en flujo self-service es el
+  //    propio user.id), pero el id real del solicitante es otro UUID.
+  //    Para resolver: el JWT del solicitante autenticado tiene user.id
+  //    igual a perfiles.id; el solicitantes.creado_por es ese mismo id
+  //    cuando el solicitante creo el perfil via wizard.
+  const { data: solicitante } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, creado_por')
+    .eq('id', solicitanteId)
+    .maybeSingle();
+
+  const owner = (solicitante as { creado_por?: string | null } | null)?.creado_por;
+  if (owner !== userId) {
+    throw AppError.forbidden(
+      'No tienes permisos para reenviar esta solicitud de firma',
+      'NOT_OWNER',
+    );
+  }
+
+  // 3. Reusar el flujo principal con el email alternativo opcional.
+  return reenviarSolicitudFirma(solicitudId, userId, ip, emailAlternativo);
 }
 
 // ============================================================
