@@ -5,6 +5,7 @@ import {
   sendCitaSolicitadaPropietarioEmail,
   sendCitaConfirmadaSolicitanteEmail,
   sendCitaReprogramadaSolicitanteEmail,
+  sendCitaCanceladaEmail,
 } from '../orchestrator/orchestrator.emails';
 import { assertCitaPermission, resolveAccessibleExpedienteIds } from './citas.permissions';
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
@@ -286,6 +287,72 @@ async function notificarCitaConfirmada(
     link: linkExpediente,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
+}
+
+/**
+ * Avisa a la contraparte que la cita fue cancelada (email + in-app).
+ * Si lo cancela el propietario/inmobiliaria/admin -> notifica al solicitante.
+ * Si lo cancela el solicitante -> notifica al propietario.
+ * El rol del actor decide la direccion del aviso.
+ */
+async function notificarCitaCancelada(
+  expedienteId: string,
+  fechaCita: string,
+  motivo: string,
+  canceladoPorRol: string,
+) {
+  const ctx = await obtenerContextoExpediente(expedienteId);
+  if (!ctx) return;
+
+  const linkExpediente = `/expedientes/${ctx.expedienteId}`;
+  const canceladoPorPropietario = canceladoPorRol === 'propietario'
+    || canceladoPorRol === 'inmobiliaria'
+    || canceladoPorRol === 'administrador'
+    || canceladoPorRol === 'operador_analista';
+
+  if (canceladoPorPropietario) {
+    // Avisar al solicitante
+    if (ctx.solicitanteEmail) {
+      await sendCitaCanceladaEmail({
+        email: ctx.solicitanteEmail,
+        nombre_destinatario: ctx.solicitanteNombre || 'Solicitante',
+        inmueble: ctx.inmuebleDireccion,
+        ciudad: ctx.inmuebleCiudad,
+        fecha_cita: fechaCita,
+        motivo,
+        cancelado_por: 'propietario',
+      });
+    }
+    notificarUsuario({
+      userId: ctx.solicitanteUserId ?? '',
+      tipo: 'cita.cancelada',
+      titulo: 'Visita cancelada',
+      mensaje: `El propietario cancelo tu visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
+      link: linkExpediente,
+      payload: { expediente_id: ctx.expedienteId, motivo },
+    });
+  } else {
+    // Solicitante cancelo -> avisar al propietario
+    if (ctx.propietarioEmail) {
+      await sendCitaCanceladaEmail({
+        email: ctx.propietarioEmail,
+        nombre_destinatario: ctx.propietarioNombre || 'Propietario',
+        inmueble: ctx.inmuebleDireccion,
+        ciudad: ctx.inmuebleCiudad,
+        fecha_cita: fechaCita,
+        motivo,
+        cancelado_por: 'solicitante',
+      });
+    }
+    notificarUsuario({
+      userId: ctx.propietarioUserId,
+      tipo: 'cita.cancelada',
+      titulo: 'Visita cancelada por el solicitante',
+      mensaje: `${ctx.solicitanteNombre || 'El solicitante'} cancelo la visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
+      link: linkExpediente,
+      payload: { expediente_id: ctx.expedienteId, motivo },
+    });
+  }
 }
 
 // ============================================================
@@ -592,6 +659,18 @@ export async function cancelarCita(id: string, input: CancelarCitaInput, userId:
     `Cita cancelada: ${input.motivo_cancelacion}`,
     userId,
     { cita_id: id, motivo: input.motivo_cancelacion },
+  );
+
+  // Avisar a la contraparte (email + notificacion in-app). Fire-and-forget
+  // para no bloquear la respuesta — los errores van al logger.
+  const fechaCita = (cita.fecha_confirmada || cita.fecha_propuesta) as string;
+  notificarCitaCancelada(
+    cita.expediente_id as string,
+    fechaCita,
+    input.motivo_cancelacion,
+    userRol,
+  ).catch((e) =>
+    logger.warn({ error: e, citaId: id }, 'Error al enviar notificacion de cita cancelada'),
   );
 
   logger.info({ citaId: id }, 'Cita cancelada');

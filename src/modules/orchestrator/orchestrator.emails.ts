@@ -374,6 +374,57 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
   logger.info({ email, nombre_solicitante }, 'Orchestrator email: cita reprogramada notificacion enviado');
 }
 
+// ── Cita Cancelada — Notificación a la contraparte ─────────
+
+/**
+ * Notifica que la cita fue cancelada. Lo dispara cualquiera de los dos
+ * lados (propietario o solicitante) — el caller decide a quien le manda.
+ * El subject y el saludo se ajustan segun quien recibe.
+ */
+export async function sendCitaCanceladaEmail(params: {
+  email: string;
+  nombre_destinatario: string;
+  inmueble: string;
+  ciudad: string;
+  fecha_cita: string;
+  motivo: string;
+  cancelado_por: 'propietario' | 'solicitante';
+}) {
+  const { email, nombre_destinatario, inmueble, ciudad, fecha_cita, motivo, cancelado_por } = params;
+  const fechaFormateada = new Date(fecha_cita).toLocaleString('es-CO', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+
+  const quienCancelo = cancelado_por === 'propietario' ? 'El propietario' : 'El solicitante';
+
+  await resend.emails.send({
+    from: FROM,
+    to: email,
+    subject: 'Visita cancelada - Cofianza',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <div style="background: #dc2626; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 24px;">Visita Cancelada</h1>
+        </div>
+        <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+          <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre_destinatario}</strong>,</p>
+          <p style="color: #6b7280;">${quienCancelo} cancelo la visita al inmueble en <strong>${inmueble}, ${ciudad}</strong>.</p>
+          <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="color: #991b1b; margin: 0; font-size: 13px;">Fecha que estaba agendada:</p>
+            <p style="color: #991b1b; margin: 2px 0 12px;">${fechaFormateada}</p>
+            <p style="color: #991b1b; margin: 0; font-weight: bold;">Motivo:</p>
+            <p style="color: #991b1b; margin: 4px 0 0;">${motivo}</p>
+          </div>
+          <p style="color: #6b7280;">Puedes coordinar una nueva fecha desde tu panel en Cofianza.</p>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+        </div>
+      </div>
+    `,
+  });
+
+  logger.info({ email, cancelado_por }, 'Orchestrator email: cita cancelada notificacion enviado');
+}
+
 // ── Estudio Habilitado — Notificación al Solicitante ───────
 
 export async function sendEstudioHabilitadoEmail(params: {
