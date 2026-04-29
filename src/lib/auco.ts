@@ -14,12 +14,48 @@ import { logger } from '@/lib/logger';
 // Types
 // ============================================================
 
+/**
+ * Bloque de validaciones de identidad. Puede ir a nivel raiz (globales) o
+ * dentro de cada signProfile (individuales — sobreescriben las globales).
+ *
+ * Reglas (https://docs.auco.ai/api/manager/validations):
+ *   - Si declaras `options` debes activar tambien `camera` u `otpCode`
+ *     boolean en el mismo nivel — sin eso el proceso es invalido.
+ *   - `options.video=true` requiere `options.whatsapp=true`.
+ *   - `options.camera='identification'` exige tambien identification +
+ *     identificationType + country en el firmante.
+ */
+export interface AucoValidationOptions {
+  /** 'identification' = cotejo biometrico contra ID. 'photo' = solo selfie. */
+  camera?: 'identification' | 'photo';
+  /** Por donde llega el OTP. */
+  otpCode?: 'phone' | 'email';
+  /** Flow del firmante por WhatsApp (en lugar de email). */
+  whatsapp?: boolean;
+  /** Notifica via WhatsApp Y email simultaneamente. Requiere whatsapp=true. */
+  both?: boolean;
+  /** Validacion por video (solo cuando whatsapp=true). */
+  video?: boolean;
+  /** Pedir tambien la parte posterior del documento (solo WhatsApp). */
+  identificationCardback?: boolean;
+  /** Validacion via WhatsApp Flow (solo WhatsApp + camera). */
+  flow?: boolean;
+}
+
 interface AucoSignProfile {
   name: string;
   email: string;
-  phone: string;
+  phone?: string;
   role?: 'SIGNER' | 'APPROVER';
   order?: string;
+  /** Identificacion del firmante (necesaria para camera=identification). */
+  identification?: string;
+  identificationType?: string;
+  country?: string;
+  /** Validaciones individuales — tienen prioridad sobre las globales. */
+  camera?: boolean;
+  otpCode?: boolean;
+  options?: AucoValidationOptions;
 }
 
 interface AucoUploadDocumentInput {
@@ -35,19 +71,19 @@ interface AucoUploadDocumentInput {
   file: string;
   /** Signer details */
   signProfile: AucoSignProfile[];
-  /** Require OTP code for identity validation */
+  /** Require OTP code (boolean global). Si declaras `options` global con
+   *  algun campo, este flag debe ir true para activar la validacion. */
   otpCode?: boolean;
+  /** Pedir foto del firmante (boolean global). Mismo principio que otpCode. */
+  camera?: boolean;
   /** Expiration date ISO string */
   expiredDate?: string;
   /** Reminder interval in hours (multiples of 3) */
   remember?: number;
   /** Webhook IDs to receive notifications */
   webhooks?: string[];
-  /** Delivery options (root-level, no per-signer) */
-  options?: {
-    /** Enviar el link por WhatsApp al phone de cada signProfile (además del email). */
-    whatsapp?: boolean;
-  };
+  /** Validaciones globales — aplican a todos los firmantes salvo override. */
+  options?: AucoValidationOptions;
 }
 
 interface AucoUploadResponse {
@@ -144,24 +180,24 @@ async function aucoRequest<T>(
 /**
  * Upload a PDF document for electronic signature.
  * Returns the Auco document code for tracking.
+ *
+ * El caller construye el payload siguiendo las reglas de Auco:
+ * https://docs.auco.ai/api/manager/validations
+ *
+ * Resumen rapido:
+ *   - Para flow por email: otpCode:true + options:{otpCode:'email'}
+ *   - Para flow por WhatsApp: pone individuales en signProfile[i] con
+ *     {phone, otpCode:true, options:{whatsapp:true, otpCode:'phone'}}
+ *   - Si declaras options sin activar tambien camera u otpCode boolean
+ *     en el mismo nivel, Auco rechaza con 400.
  */
 export async function uploadDocumentForSignature(
   input: AucoUploadDocumentInput,
 ): Promise<string> {
-  // Auco actualizo su API: cuando se envia el bloque `options` (eg.
-  // whatsapp:true), exige que `otpCode` viva DENTRO de options en lugar
-  // de root-level. Sin options, otpCode root sigue siendo aceptado.
-  // Para evitar el 400 '"options.otpCode" is required' duplicamos otpCode
-  // dentro de options cuando este bloque viene presente.
-  const payload: Record<string, unknown> = { ...input };
-  if (payload.options && typeof payload.options === 'object') {
-    payload.options = { ...payload.options, otpCode: input.otpCode ?? false };
-  }
-
   const result = await aucoRequest<AucoUploadResponse>(
     'POST',
     '/document/upload',
-    payload,
+    input,
     true, // private key for write operations
   );
 

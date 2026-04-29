@@ -17,6 +17,47 @@ const TOKEN_EXPIRY_HOURS = 72;
 const MAX_ENVIOS_DEFAULT = 5;
 const BUCKET_NAME = 'documentos-expedientes';
 
+// ============================================================
+// Helper: construye un signProfile para Auco siguiendo las reglas de
+// validacion de identidad (https://docs.auco.ai/api/manager/validations).
+//
+// - Si el firmante tiene telefono internacional (+57XXXXXXXXXX),
+//   activamos el flow por WhatsApp con OTP por phone (todo el proceso
+//   sucede en WhatsApp, incluyendo el OTP). Auco usa su propia linea
+//   de WhatsApp Business — el costo de la conversacion lo asume Auco
+//   en su plan, no Cofianza (acuerdo del 2026-04-29 con A. Diaz).
+// - Si no hay telefono valido, usamos solo email — el OTP llega al
+//   correo y el firmante completa la firma desde nuestra UI publica.
+// ============================================================
+
+function buildSignProfile(params: {
+  name: string;
+  email: string;
+  phoneInternational: string | null;
+}): {
+  name: string;
+  email: string;
+  phone?: string;
+  role: 'SIGNER';
+  otpCode?: boolean;
+  options?: { whatsapp: boolean; otpCode: 'phone' };
+} {
+  const { name, email, phoneInternational } = params;
+  if (phoneInternational) {
+    return {
+      name,
+      email,
+      phone: phoneInternational,
+      role: 'SIGNER',
+      // Validaciones individuales: tienen prioridad sobre las globales.
+      // Activan el flow del firmante por WhatsApp con OTP por phone.
+      otpCode: true,
+      options: { whatsapp: true, otpCode: 'phone' },
+    };
+  }
+  return { name, email, role: 'SIGNER' };
+}
+
 // Estados validos del contrato para crear solicitudes de firma
 const ESTADOS_VALIDOS_FIRMA = ['pendiente_firma'];
 
@@ -146,22 +187,24 @@ export async function crearSolicitudFirma(
       subject: `Firma de contrato de arrendamiento - ${direccionInmueble}${ciudadInmueble ? `, ${ciudadInmueble}` : ''}`,
       message: `Estimado/a ${input.nombre_firmante}, se le invita a revisar y firmar el contrato de arrendamiento del inmueble ubicado en ${direccionInmueble}${ciudadInmueble ? `, ${ciudadInmueble}` : ''}. Por favor revise el documento y proceda con la firma electrónica.`,
       file: pdfBase64,
-      signProfile: [{
-        name: input.nombre_firmante,
-        email: input.email_firmante,
-        phone: phoneInternational || '',
-        role: 'SIGNER',
-      }],
+      // Globales: OTP por email como default cuando no hay phone.
       otpCode: true,
+      options: { otpCode: 'email' },
+      signProfile: [
+        buildSignProfile({
+          name: input.nombre_firmante,
+          email: input.email_firmante,
+          phoneInternational,
+        }),
+      ],
       expiredDate: tokenExpiracion,
       webhooks: ['default'],
-      options: enableWhatsapp ? { whatsapp: true } : undefined,
     });
     logger.info(
       { contratoId: c.id, whatsapp: enableWhatsapp, documentCode: aucoDocumentCode },
       enableWhatsapp
-        ? 'Auco: documento subido con envío por WhatsApp + email'
-        : 'Auco: documento subido con envío solo por email',
+        ? 'Auco: documento subido — flow del firmante por WhatsApp (OTP por phone)'
+        : 'Auco: documento subido — flow del firmante por email (OTP por email)',
     );
   } catch (aucoError) {
     logger.error({ error: aucoError, contratoId: c.id }, 'Error al enviar documento a Auco');
@@ -323,16 +366,18 @@ export async function reenviarSolicitudFirma(
         subject: `Firma de contrato de arrendamiento - ${direccion}${ciudad ? `, ${ciudad}` : ''}`,
         message: `Estimado/a ${row.nombre_firmante}, se le invita a revisar y firmar el contrato de arrendamiento del inmueble ubicado en ${direccion}${ciudad ? `, ${ciudad}` : ''}. Por favor revise el documento y proceda con la firma electrónica.`,
         file: pdfBase64,
-        signProfile: [{
-          name: row.nombre_firmante,
-          email: emailNuevoNormalizado!,
-          phone: phoneInternational || '',
-          role: 'SIGNER',
-        }],
+        // Globales: OTP por email como default cuando no hay phone.
         otpCode: true,
+        options: { otpCode: 'email' },
+        signProfile: [
+          buildSignProfile({
+            name: row.nombre_firmante,
+            email: emailNuevoNormalizado!,
+            phoneInternational,
+          }),
+        ],
         expiredDate: new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString(),
         webhooks: ['default'],
-        options: enableWhatsapp ? { whatsapp: true } : undefined,
       });
 
       logger.info(
