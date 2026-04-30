@@ -19,7 +19,11 @@ const TOKEN_EXPIRY_HOURS = 72;
 const ESTADOS_TERMINALES_EXPEDIENTE = ['cerrado', 'rechazado'];
 const ESTADOS_ESTUDIO_FINALIZADOS = ['completado', 'fallido', 'cancelado'];
 const ESTADOS_PERMITIDOS_RESULTADO = ['solicitado', 'en_proceso'];
-const ESTADOS_PERMITIDOS_EJECUCION = ['formulario_completado', 'documentos_cargados'];
+// 'fallido' tambien se permite para que el solicitante pueda reintentar tras
+// un error transitorio del proveedor (caida de TransUnion, doc invalido en el
+// primer intento, etc). El estudio sigue siendo el mismo registro — no se
+// crea uno nuevo — solo se vuelve a ejecutar la consulta.
+const ESTADOS_PERMITIDOS_EJECUCION = ['formulario_completado', 'documentos_cargados', 'fallido'];
 const BUCKET_NAME = 'documentos-expedientes';
 
 // ============================================================
