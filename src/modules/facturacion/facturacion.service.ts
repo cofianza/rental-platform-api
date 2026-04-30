@@ -257,6 +257,94 @@ export interface DatosFiscalesPagoOverride {
   municipio_codigo?: string;
 }
 
+/**
+ * Devuelve los datos fiscales que se usarian para emitir la factura, sin
+ * tocar Factus. Sirve al frontend para mostrar un modal de confirmacion
+ * "vamos a facturar a estos datos — confirma o ajusta" antes de emitir.
+ *
+ * Si ya hay factura emitida, devuelve { ya_emitida: true, factura_id }.
+ * Si faltan datos requeridos, devuelve la lista de faltantes para que el
+ * frontend abra el form de captura — mismo shape que el error real.
+ */
+export async function previewFacturaPago(pagoId: string): Promise<{
+  ya_emitida: boolean;
+  factura_id?: string;
+  factura_numero?: string | null;
+  datos_actuales: {
+    nombre_completo: string;
+    tipo_documento: string;
+    numero_documento: string;
+    email: string;
+    telefono: string;
+    direccion: string;
+    municipio_codigo: string;
+    municipio_nombre: string;
+  };
+  faltantes: string[];
+  monto: number;
+  concepto: string;
+}> {
+  const existente = await findFacturaExistente(pagoId);
+  if (existente && existente.estado === 'emitida') {
+    return {
+      ya_emitida: true,
+      factura_id: existente.id,
+      factura_numero: existente.factus_number,
+      datos_actuales: {
+        nombre_completo: '',
+        tipo_documento: '',
+        numero_documento: '',
+        email: '',
+        telefono: '',
+        direccion: '',
+        municipio_codigo: '',
+        municipio_nombre: '',
+      },
+      faltantes: [],
+      monto: 0,
+      concepto: '',
+    };
+  }
+
+  const ctx = await fetchPagoContext(pagoId);
+  const sol = ctx.expediente?.solicitante;
+  if (!sol) {
+    throw AppError.badRequest(
+      'El expediente del pago no tiene solicitante asociado — no se puede facturar.',
+      'NO_SOLICITANTE',
+    );
+  }
+
+  const datos = {
+    nombre_completo: `${sol.nombre} ${sol.apellido}`.trim(),
+    tipo_documento: sol.tipo_documento || '',
+    numero_documento: sol.numero_documento || '',
+    email: sol.email || '',
+    telefono: sol.telefono || '',
+    direccion: sol.direccion || '',
+    municipio_codigo: sol.municipio_id || '',
+    municipio_nombre: sol.municipio_nombre || '',
+  };
+
+  // Mismas validaciones que aplica el modo override en crearFacturaDesdePago.
+  const faltantes: string[] = [];
+  if (!datos.numero_documento) faltantes.push('numero_documento');
+  if (!datos.email) faltantes.push('email');
+  if (!datos.direccion) faltantes.push('direccion');
+  if (!datos.telefono) faltantes.push('telefono');
+  if (!datos.municipio_codigo || !/^\d{5}$/.test(datos.municipio_codigo)) {
+    faltantes.push('municipio_codigo');
+  }
+
+  return {
+    ya_emitida: false,
+    datos_actuales: datos,
+    faltantes,
+    monto: Number(ctx.monto) || 0,
+    concepto: ctx.concepto,
+  };
+}
+
 export async function crearFacturaDesdePago(
   pagoId: string,
   userId: string | null,

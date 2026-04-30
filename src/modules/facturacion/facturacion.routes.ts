@@ -65,6 +65,16 @@ facturasRouter.get(
 export const pagoFacturarRouter = Router({ mergeParams: true });
 pagoFacturarRouter.use(authMiddleware);
 
+// GET /pagos/:pagoId/factura/preview — devuelve los datos que se usarian
+// para emitir la factura (sin tocar Factus). Permite al frontend mostrar
+// un modal de confirmacion antes de la emision real.
+pagoFacturarRouter.get(
+  '/:pagoId/factura/preview',
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario', 'solicitante']),
+  validate({ params: pagoIdParamsSchema }),
+  controller.previewFacturaPago,
+);
+
 // POST /pagos/:pagoId/facturar — disparar facturación manual desde un pago.
 // Cofianza emite la factura, pero cualquier rol que gestione el expediente
 // (incluido el propietario del inmueble) puede dispararla. El solicitante

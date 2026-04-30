@@ -16,6 +16,19 @@ export async function getById(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+export async function previewFacturaPago(req: Request, res: Response) {
+  const { pagoId } = req.params as { pagoId: string };
+
+  // Mismo guard de pertenencia que facturarPago — evita que un solicitante
+  // espie datos fiscales de otros pagos.
+  if (req.user!.rol === 'solicitante') {
+    await assertPagoBelongsToSolicitante(pagoId, req.user!.id);
+  }
+
+  const result = await service.previewFacturaPago(pagoId);
+  sendSuccess(res, result);
+}
+
 export async function facturarPago(req: Request, res: Response) {
   const { pagoId } = req.params as { pagoId: string };
   const body = (req.body || {}) as Record<string, string | undefined>;
