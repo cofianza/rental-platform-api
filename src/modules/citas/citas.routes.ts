@@ -4,6 +4,7 @@ import { authMiddleware, authorize } from '@/middleware/auth';
 import {
   createCitaSchema,
   confirmarCitaSchema,
+  reprogramarCitaSchema,
   realizarCitaSchema,
   cancelarCitaSchema,
   citaIdParamsSchema,
@@ -46,6 +47,14 @@ router.post(
   authorize('citas', 'update'),
   validate({ params: citaIdParamsSchema, body: confirmarCitaSchema }),
   citasController.confirmar,
+);
+
+// POST /:id/reprogramar — Proponer otra fecha (solicitada o confirmada)
+router.post(
+  '/:id/reprogramar',
+  authorize('citas', 'update'),
+  validate({ params: citaIdParamsSchema, body: reprogramarCitaSchema }),
+  citasController.reprogramar,
 );
 
 // POST /:id/realizar — Marcar como realizada

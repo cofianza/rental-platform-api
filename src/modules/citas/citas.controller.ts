@@ -4,6 +4,7 @@ import * as citasService from './citas.service';
 import type {
   CreateCitaInput,
   ConfirmarCitaInput,
+  ReprogramarCitaInput,
   RealizarCitaInput,
   CancelarCitaInput,
   CitaIdParams,
@@ -32,6 +33,13 @@ export async function confirmar(req: Request, res: Response) {
   const { id } = req.params as unknown as CitaIdParams;
   const input = req.body as ConfirmarCitaInput;
   const cita = await citasService.confirmarCita(id, input, req.user!.id, req.user!.rol);
+  sendSuccess(res, cita);
+}
+
+export async function reprogramar(req: Request, res: Response) {
+  const { id } = req.params as unknown as CitaIdParams;
+  const input = req.body as ReprogramarCitaInput;
+  const cita = await citasService.reprogramarCita(id, input, req.user!.id, req.user!.rol);
   sendSuccess(res, cita);
 }
 

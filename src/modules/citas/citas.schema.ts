@@ -29,6 +29,15 @@ export const confirmarCitaSchema = z.object({
 });
 
 // ============================================================
+// Reprogramar — propietario propone otra fecha aun en confirmada
+// ============================================================
+
+export const reprogramarCitaSchema = z.object({
+  fecha_confirmada: z.string().datetime({ offset: true, message: 'Fecha confirmada debe ser una fecha/hora valida en formato ISO 8601' }),
+  notas_propietario: z.string().max(2000, { error: 'Notas no deben exceder 2000 caracteres' }).optional(),
+});
+
+// ============================================================
 // Realizar
 // ============================================================
 
@@ -69,6 +78,7 @@ export const listCitasQuerySchema = z.object({
 
 export type CreateCitaInput = z.infer<typeof createCitaSchema>;
 export type ConfirmarCitaInput = z.infer<typeof confirmarCitaSchema>;
+export type ReprogramarCitaInput = z.infer<typeof reprogramarCitaSchema>;
 export type RealizarCitaInput = z.infer<typeof realizarCitaSchema>;
 export type CancelarCitaInput = z.infer<typeof cancelarCitaSchema>;
 export type CitaIdParams = z.infer<typeof citaIdParamsSchema>;

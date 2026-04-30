@@ -14,6 +14,7 @@ import type { UserRole } from '@/types/auth';
 import type {
   CreateCitaInput,
   ConfirmarCitaInput,
+  ReprogramarCitaInput,
   RealizarCitaInput,
   CancelarCitaInput,
   ListCitasQuery,
@@ -597,6 +598,93 @@ export async function confirmarCita(id: string, input: ConfirmarCitaInput, userI
   ).catch((e) => logger.warn({ error: e, citaId: id }, 'Error al enviar notificacion de cita confirmada'));
 
   logger.info({ citaId: id }, 'Cita confirmada');
+  return data;
+}
+
+// ============================================================
+// Reprogramar (solicitada|confirmada → confirmada con nueva fecha)
+//
+// Distinto de confirmarCita: este permite el self-loop confirmada -> confirmada
+// para que el propietario pueda mover el horario despues de haber confirmado
+// (caso "se me cruzo otra cosa, propongo otro dia"). Dispara siempre el aviso
+// 'reprogramada' al solicitante (email + in-app).
+// ============================================================
+
+export async function reprogramarCita(
+  id: string,
+  input: ReprogramarCitaInput,
+  userId: string,
+  userRol: string,
+) {
+  const cita = await fetchCita(id);
+  const expediente = await assertCitaPermission({
+    userId,
+    userRol: userRol as UserRole,
+    expedienteId: cita.expediente_id as string,
+    action: 'confirmar',
+    citaCreadoPor: cita.creado_por as string | undefined,
+  });
+
+  // Solo aplica a citas que estan vivas (solicitada o confirmada). Cualquier
+  // otro estado (realizada/cancelada/no_asistio) no debe reprogramarse — el
+  // flujo correcto es crear una nueva cita.
+  const estadoActual = cita.estado as string;
+  if (estadoActual !== 'solicitada' && estadoActual !== 'confirmada') {
+    throw AppError.badRequest(
+      `No se puede reprogramar una cita en estado "${estadoActual}"`,
+      'INVALID_STATE_TRANSITION',
+    );
+  }
+
+  // Validar que el slot pertenezca a la disponibilidad del propietario.
+  if (expediente.inmueblePropietarioId) {
+    const disponible = await slotEstaDisponible(
+      expediente.inmueblePropietarioId,
+      input.fecha_confirmada,
+    );
+    if (!disponible) {
+      throw AppError.badRequest(
+        'El horario seleccionado no esta dentro de tu disponibilidad. Refresca y elige otro.',
+        'SLOT_NO_DISPONIBLE',
+      );
+    }
+  }
+
+  const updateData: Record<string, unknown> = {
+    estado: 'confirmada',
+    fecha_confirmada: input.fecha_confirmada,
+    confirmado_por: userId,
+    updated_at: new Date().toISOString(),
+  };
+  if (input.notas_propietario) updateData.notas_propietario = input.notas_propietario;
+
+  const { data, error } = await db('citas')
+    .update(updateData as never)
+    .eq('id', id)
+    .select(CITA_SELECT)
+    .single();
+
+  if (error) {
+    logger.error({ error: error.message, id }, 'Error al reprogramar cita');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al reprogramar la cita');
+  }
+
+  await registrarTimelineCita(
+    cita.expediente_id as string,
+    'Cita reprogramada',
+    userId,
+    { cita_id: id, fecha_anterior: cita.fecha_confirmada || cita.fecha_propuesta, fecha_nueva: input.fecha_confirmada },
+  );
+
+  // Aviso 'reprogramada' al solicitante (siempre, porque la fecha se movio).
+  notificarCitaConfirmada(
+    cita.expediente_id as string,
+    (cita.fecha_confirmada || cita.fecha_propuesta) as string,
+    input.fecha_confirmada,
+    input.notas_propietario,
+  ).catch((e) => logger.warn({ error: e, citaId: id }, 'Error al notificar reprogramacion de cita'));
+
+  logger.info({ citaId: id }, 'Cita reprogramada');
   return data;
 }
 
