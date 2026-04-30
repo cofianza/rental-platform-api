@@ -35,7 +35,7 @@ const CITA_SELECT = `
   creado_por, confirmado_por, acuse_solicitante_at,
   created_at, updated_at,
   expediente:expedientes (
-    id, numero, estudio_habilitado,
+    id, numero, estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
     inmueble:inmuebles (id, direccion, ciudad),
     solicitante:solicitantes (nombre, apellido, telefono)
   )

@@ -465,3 +465,43 @@ export async function sendEstudioHabilitadoEmail(params: {
 
   logger.info({ email, expediente_numero }, 'Orchestrator email: estudio habilitado enviado');
 }
+
+// ── Propietario decidio no habilitar estudio tras la visita ────
+
+export async function sendEstudioNoHabilitadoEmail(params: {
+  email: string;
+  nombre_solicitante: string;
+  expediente_numero: string;
+  inmueble: string;
+  ciudad: string;
+  motivo: string | null;
+}) {
+  const { email, nombre_solicitante, expediente_numero, inmueble, ciudad, motivo } = params;
+
+  await resend.emails.send({
+    from: FROM,
+    to: email,
+    subject: `Actualizacion sobre tu solicitud — ${expediente_numero}`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <div style="background: #6b7280; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 24px;">Solicitud no continuara</h1>
+        </div>
+        <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+          <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre_solicitante}</strong>,</p>
+          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${inmueble}, ${ciudad}</strong>, el propietario decidio no continuar con el proceso de estudio crediticio para tu solicitud (<strong>${expediente_numero}</strong>).</p>
+          ${motivo ? `
+          <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="color: #374151; margin: 0; font-weight: bold;">Motivo del propietario:</p>
+            <p style="color: #4b5563; margin: 8px 0 0;">${motivo}</p>
+          </div>
+          ` : ''}
+          <p style="color: #6b7280;">Puedes seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar fianza para el que prefieras.</p>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+        </div>
+      </div>
+    `,
+  });
+
+  logger.info({ email, expediente_numero }, 'Orchestrator email: estudio no habilitado enviado');
+}

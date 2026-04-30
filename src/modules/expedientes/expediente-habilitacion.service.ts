@@ -2,9 +2,10 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
-import { sendEstudioHabilitadoEmail } from '../orchestrator/orchestrator.emails';
+import { sendEstudioHabilitadoEmail, sendEstudioNoHabilitadoEmail } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
+import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
 
 export interface HabilitarEstudioResult {
@@ -143,6 +144,126 @@ export async function habilitarEstudio(
       id: rpcResult.estudio_id,
       estado: 'solicitado',
       resultado: 'pendiente',
+    },
+  };
+}
+
+/**
+ * Caso opuesto a habilitarEstudio: el propietario, tras la visita, decide
+ * NO proceder con este candidato. Marca el expediente como rechazado para
+ * el flujo de estudio y notifica al solicitante por email + in-app.
+ *
+ * Validaciones:
+ *   - El expediente debe existir y ser accesible para el propietario.
+ *   - No debe haber un estudio ya habilitado (no se puede revertir).
+ *   - Idempotente: si ya estaba rechazado, devuelve el estado actual sin error.
+ */
+export async function rechazarEstudio(
+  expedienteId: string,
+  motivo: string | undefined,
+  userId: string,
+  userRol: string,
+): Promise<{ expediente: { id: string; numero: string; estudio_rechazado: true; motivo: string | null } }> {
+  // 1. Verificar permisos (mismo guard que habilitar — solo propietario/inmobiliaria/admin/operador).
+  const ctx = await assertHabilitacionPermission({
+    userId,
+    userRol: userRol as UserRole,
+    expedienteId,
+  });
+
+  // 2. Releer estado actual: si ya fue habilitado o rechazado, decide.
+  const { data: current } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, estudio_habilitado, estudio_rechazado')
+    .eq('id', expedienteId)
+    .single() as { data: { id: string; numero: string; estudio_habilitado: boolean; estudio_rechazado: boolean } | null };
+
+  if (!current) {
+    throw AppError.notFound('Expediente no encontrado');
+  }
+  if (current.estudio_habilitado) {
+    throw AppError.conflict(
+      'No se puede rechazar el estudio porque ya fue habilitado',
+      'ESTUDIO_YA_HABILITADO',
+    );
+  }
+  if (current.estudio_rechazado) {
+    // Idempotente — devolvemos lo que ya esta.
+    return {
+      expediente: {
+        id: current.id,
+        numero: current.numero,
+        estudio_rechazado: true,
+        motivo: motivo ?? null,
+      },
+    };
+  }
+
+  // 3. Update + timeline.
+  const motivoNorm = motivo?.trim() ? motivo.trim() : null;
+  const { error: updErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estudio_rechazado: true,
+      motivo_estudio_rechazado: motivoNorm,
+      estudio_rechazado_at: new Date().toISOString(),
+      estudio_rechazado_por: userId,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', expedienteId);
+
+  if (updErr) {
+    logger.error({ error: updErr.message, expedienteId }, 'Error al marcar estudio rechazado');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al rechazar el estudio');
+  }
+
+  await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'estudio',
+      descripcion: motivoNorm
+        ? `Propietario decidio no habilitar estudio. Motivo: ${motivoNorm}`
+        : 'Propietario decidio no habilitar estudio tras la visita.',
+      metadata: { motivo: motivoNorm },
+    } as never);
+
+  // 4. Notificar al solicitante (email + in-app). Fire-and-forget.
+  if (ctx.solicitanteEmail && ctx.solicitanteNombre) {
+    sendEstudioNoHabilitadoEmail({
+      email: ctx.solicitanteEmail,
+      nombre_solicitante: ctx.solicitanteNombre,
+      expediente_numero: current.numero,
+      inmueble: ctx.inmuebleDireccion,
+      ciudad: ctx.inmuebleCiudad,
+      motivo: motivoNorm,
+    }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error enviando email estudio no habilitado'));
+  }
+
+  if (ctx.solicitanteEmail) {
+    findPerfilIdByEmail(ctx.solicitanteEmail).then((solicitanteUserId) => {
+      if (!solicitanteUserId) return;
+      return notificarUsuario({
+        userId: solicitanteUserId,
+        tipo: 'estudio.rechazado',
+        titulo: 'El propietario no continuara con tu solicitud',
+        mensaje: motivoNorm
+          ? `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidio no habilitar el estudio. Motivo: ${motivoNorm}`
+          : `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidio no habilitar el estudio.`,
+        link: `/expedientes/${expedienteId}`,
+        payload: { expediente_id: expedienteId, motivo: motivoNorm },
+      });
+    }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error notificando estudio rechazado'));
+  }
+
+  logger.info({ expedienteId, userId, motivo: motivoNorm }, 'Estudio rechazado por propietario');
+
+  return {
+    expediente: {
+      id: current.id,
+      numero: current.numero,
+      estudio_rechazado: true,
+      motivo: motivoNorm,
     },
   };
 }

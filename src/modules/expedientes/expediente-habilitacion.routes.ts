@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from './expedientes.schema';
@@ -15,6 +16,20 @@ router.patch(
   roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
   validate({ params: expedienteIdParamsSchema }),
   controller.habilitarEstudio,
+);
+
+// POST /api/v1/expedientes/:id/rechazar-estudio — Caso opuesto: el propietario
+// decide tras la visita no proceder con el candidato. body.motivo es opcional
+// y aparece en el aviso al solicitante.
+router.post(
+  '/:id/rechazar-estudio',
+  authMiddleware,
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({
+    params: expedienteIdParamsSchema,
+    body: z.object({ motivo: z.string().max(2000).optional() }),
+  }),
+  controller.rechazarEstudio,
 );
 
 export default router;

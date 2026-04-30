@@ -8,3 +8,10 @@ export async function habilitarEstudio(req: Request, res: Response) {
   const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
+
+export async function rechazarEstudio(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const motivo = (req.body as { motivo?: string } | undefined)?.motivo;
+  const result = await service.rechazarEstudio(id, motivo, req.user!.id, req.user!.rol);
+  sendSuccess(res, result);
+}
