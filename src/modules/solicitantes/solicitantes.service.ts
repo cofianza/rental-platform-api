@@ -363,7 +363,14 @@ export interface UpdateDatosFiscalesInput {
   municipio_nombre?: string;
 }
 
+/** Tipos de documento que Colombia acepta para facturacion electronica.
+ *  Pasaporte y otros documentos extranjeros NO son tributarios — se usan
+ *  solo para identidad. Para Factus el solicitante debe registrar su CC,
+ *  CE, TI o NIT real. */
+const TIPOS_DOCUMENTO_FISCAL = ['cc', 'ce', 'ti', 'nit'] as const;
+
 function computeFaltantes(row: {
+  tipo_documento?: string | null;
   numero_documento?: string | null;
   email?: string | null;
   telefono?: string | null;
@@ -371,6 +378,13 @@ function computeFaltantes(row: {
   municipio_id?: string | null;
 }): string[] {
   const faltantes: string[] = [];
+  // tipo_documento debe ser uno de los aceptados por Factus. Si es pasaporte
+  // (registrado durante el wizard), lo marcamos como faltante para forzar al
+  // solicitante a entrar a Facturacion -> Datos Fiscales y elegir su CC real.
+  const tipo = row.tipo_documento?.toLowerCase();
+  if (!tipo || !TIPOS_DOCUMENTO_FISCAL.includes(tipo as (typeof TIPOS_DOCUMENTO_FISCAL)[number])) {
+    faltantes.push('tipo_documento');
+  }
   if (!row.numero_documento) faltantes.push('numero_documento');
   if (!row.email) faltantes.push('email');
   if (!row.telefono) faltantes.push('telefono');
@@ -408,7 +422,7 @@ export async function getMisDatosFiscales(userId: string): Promise<DatosFiscales
       direccion: null,
       municipio_id: null,
       municipio_nombre: null,
-      faltantes: ['numero_documento', 'email', 'telefono', 'direccion', 'municipio_id'],
+      faltantes: ['tipo_documento', 'numero_documento', 'email', 'telefono', 'direccion', 'municipio_id'],
     };
   }
 

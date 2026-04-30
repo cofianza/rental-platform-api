@@ -326,8 +326,13 @@ export async function previewFacturaPago(pagoId: string): Promise<{
     municipio_nombre: sol.municipio_nombre || '',
   };
 
-  // Mismas validaciones que aplica el modo override en crearFacturaDesdePago.
+  // Mismas validaciones que crearFacturaDesdePago. tipo_documento debe ser
+  // tributario colombiano (CC/CE/TI/NIT) — pasaporte y otros extranjeros
+  // van en 'identidad' del registro pero NO sirven para Factus.
+  const TIPOS_FISCALES = ['cc', 'ce', 'ti', 'nit'];
   const faltantes: string[] = [];
+  const tipoLower = (datos.tipo_documento || '').toLowerCase();
+  if (!tipoLower || !TIPOS_FISCALES.includes(tipoLower)) faltantes.push('tipo_documento');
   if (!datos.numero_documento) faltantes.push('numero_documento');
   if (!datos.email) faltantes.push('email');
   if (!datos.direccion) faltantes.push('direccion');
@@ -382,10 +387,13 @@ export async function crearFacturaDesdePago(
   const municipioCodigo = override?.municipio_codigo?.trim() || sol.municipio_id || '';
 
   // 3.5. Validacion estricta SIEMPRE — mismo set de faltantes que el preview.
-  // Antes solo se validaba si venia override; ahora bloqueamos cualquier
-  // emision con datos incompletos (defense in depth contra clientes que
-  // saltaron la pantalla de Datos Fiscales).
+  // Bloquea cualquier emision con datos incompletos. Defense in depth contra
+  // clientes que saltaron la pantalla de Datos Fiscales o que tienen un
+  // tipo_documento no tributario (eg. pasaporte del wizard de registro).
+  const TIPOS_FISCALES = ['cc', 'ce', 'ti', 'nit'];
   const faltantes: string[] = [];
+  const tipoLower = (tipoDocumento || '').toLowerCase();
+  if (!tipoLower || !TIPOS_FISCALES.includes(tipoLower)) faltantes.push('tipo_documento');
   if (!numeroDocumento) faltantes.push('numero_documento');
   if (!email) faltantes.push('email');
   if (!direccion) faltantes.push('direccion');
