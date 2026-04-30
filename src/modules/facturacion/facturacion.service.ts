@@ -381,29 +381,22 @@ export async function crearFacturaDesdePago(
   const telefono = override?.telefono?.trim() || sol.telefono || '';
   const municipioCodigo = override?.municipio_codigo?.trim() || sol.municipio_id || '';
 
-  // 3.5. Validacion estricta cuando viene override (modo "facturar con
-  //      datos faltantes"). Si el caller no paso override, mantenemos el
-  //      comportamiento legacy con defaults silenciosos para no romper
-  //      flows existentes (admin, propietario, inmobiliaria).
-  if (override) {
-    const faltantes: string[] = [];
-    if (!numeroDocumento) faltantes.push('numero_documento');
-    if (!email) faltantes.push('email');
-    if (!direccion) faltantes.push('direccion');
-    if (!telefono) faltantes.push('telefono');
-    if (!municipioCodigo || !/^\d{5}$/.test(municipioCodigo)) faltantes.push('municipio_codigo');
-    if (faltantes.length > 0) {
-      throw new AppError(
-        400,
-        'CLIENTE_DATOS_INCOMPLETOS',
-        'Faltan datos fiscales para emitir la factura',
-        { faltantes },
-      );
-    }
-  } else if (!numeroDocumento) {
-    throw AppError.badRequest(
-      'El solicitante no tiene número de documento — completa sus datos antes de facturar.',
+  // 3.5. Validacion estricta SIEMPRE — mismo set de faltantes que el preview.
+  // Antes solo se validaba si venia override; ahora bloqueamos cualquier
+  // emision con datos incompletos (defense in depth contra clientes que
+  // saltaron la pantalla de Datos Fiscales).
+  const faltantes: string[] = [];
+  if (!numeroDocumento) faltantes.push('numero_documento');
+  if (!email) faltantes.push('email');
+  if (!direccion) faltantes.push('direccion');
+  if (!telefono) faltantes.push('telefono');
+  if (!municipioCodigo || !/^\d{5}$/.test(municipioCodigo)) faltantes.push('municipio_codigo');
+  if (faltantes.length > 0) {
+    throw new AppError(
+      400,
       'CLIENTE_DATOS_INCOMPLETOS',
+      'Faltan datos fiscales para emitir la factura. Completalos en Facturacion → Datos Fiscales.',
+      { faltantes },
     );
   }
 

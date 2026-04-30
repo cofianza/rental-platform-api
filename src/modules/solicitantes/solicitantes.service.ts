@@ -327,3 +327,178 @@ export async function searchByDocument(query: SearchByDocumentQuery) {
 
   return (data as unknown as ApplicantRow) || null;
 }
+
+// ============================================================
+// Datos fiscales del solicitante autenticado
+//
+// El solicitante puede ver y actualizar SUS propios datos fiscales (tipo +
+// numero documento, direccion, telefono, email, municipio_id) sin pasar por
+// los endpoints admin de /:id. Lo identificamos por solicitantes.creado_por
+// que apunta al perfil del usuario.
+// ============================================================
+
+export interface DatosFiscalesSolicitante {
+  id: string | null;
+  nombre: string;
+  apellido: string;
+  tipo_documento: string;
+  numero_documento: string;
+  email: string;
+  telefono: string | null;
+  direccion: string | null;
+  municipio_id: string | null;
+  municipio_nombre: string | null;
+  /** Lista de campos requeridos para emitir factura electronica que estan
+   *  vacios o invalidos. Si len > 0 el frontend bloquea el boton de Facturar. */
+  faltantes: string[];
+}
+
+export interface UpdateDatosFiscalesInput {
+  tipo_documento?: string;
+  numero_documento?: string;
+  email?: string;
+  telefono?: string;
+  direccion?: string;
+  municipio_id?: string;
+  municipio_nombre?: string;
+}
+
+function computeFaltantes(row: {
+  numero_documento?: string | null;
+  email?: string | null;
+  telefono?: string | null;
+  direccion?: string | null;
+  municipio_id?: string | null;
+}): string[] {
+  const faltantes: string[] = [];
+  if (!row.numero_documento) faltantes.push('numero_documento');
+  if (!row.email) faltantes.push('email');
+  if (!row.telefono) faltantes.push('telefono');
+  if (!row.direccion) faltantes.push('direccion');
+  if (!row.municipio_id || !/^\d{5}$/.test(row.municipio_id)) faltantes.push('municipio_id');
+  return faltantes;
+}
+
+export async function getMisDatosFiscales(userId: string): Promise<DatosFiscalesSolicitante> {
+  // Tomamos el solicitante mas reciente del usuario (caso normal: solo 1).
+  const { data, error } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, nombre, apellido, tipo_documento, numero_documento, email, telefono, direccion, municipio_id, municipio_nombre')
+    .eq('creado_por', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    logger.error({ error: error.message, userId }, 'Error al cargar datos fiscales del solicitante');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos cargar tus datos fiscales');
+  }
+
+  if (!data) {
+    // Sin solicitante asociado — devolvemos shell vacio para que el form
+    // pueda renderizar igual.
+    return {
+      id: null,
+      nombre: '',
+      apellido: '',
+      tipo_documento: '',
+      numero_documento: '',
+      email: '',
+      telefono: null,
+      direccion: null,
+      municipio_id: null,
+      municipio_nombre: null,
+      faltantes: ['numero_documento', 'email', 'telefono', 'direccion', 'municipio_id'],
+    };
+  }
+
+  const row = data as unknown as {
+    id: string;
+    nombre: string;
+    apellido: string;
+    tipo_documento: string;
+    numero_documento: string;
+    email: string;
+    telefono: string | null;
+    direccion: string | null;
+    municipio_id: string | null;
+    municipio_nombre: string | null;
+  };
+
+  return {
+    id: row.id,
+    nombre: row.nombre,
+    apellido: row.apellido,
+    tipo_documento: row.tipo_documento,
+    numero_documento: row.numero_documento,
+    email: row.email,
+    telefono: row.telefono,
+    direccion: row.direccion,
+    municipio_id: row.municipio_id,
+    municipio_nombre: row.municipio_nombre,
+    faltantes: computeFaltantes(row),
+  };
+}
+
+export async function updateMisDatosFiscales(
+  userId: string,
+  input: UpdateDatosFiscalesInput,
+  ip?: string,
+): Promise<DatosFiscalesSolicitante> {
+  // Encontrar el solicitante del usuario (validacion de pertenencia implicita).
+  const { data: existente, error: findErr } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('creado_por', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (findErr) {
+    logger.error({ error: findErr.message, userId }, 'Error al localizar solicitante para update fiscal');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar tus datos fiscales');
+  }
+  if (!existente) {
+    throw AppError.notFound(
+      'No encontramos un solicitante asociado a tu cuenta',
+      'SOLICITANTE_NOT_FOUND',
+    );
+  }
+
+  const id = (existente as { id: string }).id;
+
+  // Whitelist de campos: el solicitante NO puede cambiar nombre/apellido
+  // (vienen de auth.users) ni el tipo_persona, ocupacion, etc. Solo los
+  // datos fiscales relevantes para la factura.
+  const update: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+  if (input.tipo_documento !== undefined) update.tipo_documento = input.tipo_documento;
+  if (input.numero_documento !== undefined) update.numero_documento = input.numero_documento.trim();
+  if (input.email !== undefined) update.email = input.email.trim();
+  if (input.telefono !== undefined) update.telefono = input.telefono.trim() || null;
+  if (input.direccion !== undefined) update.direccion = input.direccion.trim() || null;
+  if (input.municipio_id !== undefined) update.municipio_id = input.municipio_id.trim() || null;
+  if (input.municipio_nombre !== undefined) update.municipio_nombre = input.municipio_nombre.trim() || null;
+
+  const { error: updErr } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .update(update as never)
+    .eq('id', id);
+
+  if (updErr) {
+    logger.error({ error: updErr.message, id, userId }, 'Error al actualizar datos fiscales');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos guardar tus datos fiscales');
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.SOLICITANTE_UPDATED,
+    entidad: AUDIT_ENTITIES.SOLICITANTE,
+    entidadId: id,
+    detalle: { fields: Object.keys(input), origen: 'self_update_fiscal' },
+    ip,
+  });
+
+  return getMisDatosFiscales(userId);
+}

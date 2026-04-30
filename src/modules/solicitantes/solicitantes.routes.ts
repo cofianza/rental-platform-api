@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { validate } from '@/middleware/validate';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import {
@@ -14,6 +15,33 @@ const router = Router();
 
 // Todas las rutas requieren autenticacion JWT
 router.use(authMiddleware);
+
+// GET /me/datos-fiscales — datos fiscales del solicitante autenticado.
+// Sirve a la pantalla de Facturacion -> Datos Fiscales del solicitante para
+// que vea/edite lo que se usara al emitir su factura electronica. Va antes
+// de /:id para que Express no capture 'me' como UUID.
+router.get(
+  '/me/datos-fiscales',
+  roleGuard(['solicitante']),
+  solicitantesController.getMisDatosFiscales,
+);
+
+router.patch(
+  '/me/datos-fiscales',
+  roleGuard(['solicitante']),
+  validate({
+    body: z.object({
+      tipo_documento: z.string().min(1).max(20).optional(),
+      numero_documento: z.string().min(3).max(40).optional(),
+      email: z.string().email().optional(),
+      telefono: z.string().min(0).max(40).optional(),
+      direccion: z.string().min(0).max(300).optional(),
+      municipio_id: z.string().regex(/^\d{5}$/).or(z.literal('')).optional(),
+      municipio_nombre: z.string().min(0).max(120).optional(),
+    }),
+  }),
+  solicitantesController.updateMisDatosFiscales,
+);
 
 // GET /search — Buscar por tipo + numero de documento (ANTES de /:id)
 router.get(

@@ -45,3 +45,16 @@ export async function searchByDocument(req: Request, res: Response) {
   const applicant = await solicitantesService.searchByDocument(query);
   sendSuccess(res, applicant);
 }
+
+// ── Datos fiscales del solicitante autenticado ─────────────
+
+export async function getMisDatosFiscales(req: Request, res: Response) {
+  const result = await solicitantesService.getMisDatosFiscales(req.user!.id);
+  sendSuccess(res, result);
+}
+
+export async function updateMisDatosFiscales(req: Request, res: Response) {
+  const input = req.body as solicitantesService.UpdateDatosFiscalesInput;
+  const result = await solicitantesService.updateMisDatosFiscales(req.user!.id, input, req.ip);
+  sendSuccess(res, result);
+}
