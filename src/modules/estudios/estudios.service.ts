@@ -1278,6 +1278,20 @@ export async function ejecutarEstudio(
       'Provider execution failed',
     );
 
+    // Mensajes amigables para errores comunes que el solicitante puede
+    // resolver. Para otros errores, usamos el tecnico (lo ven admin/operador).
+    const lowerErr = errorMsg.toLowerCase();
+    const documentoNoEncontrado = lowerErr.includes('tercero consultado no existe')
+      || lowerErr.includes('no existe en centrales')
+      || lowerErr.includes('numero de identificacion invalido');
+
+    if (documentoNoEncontrado) {
+      throw AppError.badRequest(
+        'No encontramos antecedentes con este documento en las centrales de riesgo colombianas. Cofianza solo puede consultar documentos colombianos: Cedula de Ciudadania (CC), Cedula de Extranjeria (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu numero y tipo de documento sean correctos. Si eres extranjero residente, usa tu CE.',
+        'DOCUMENTO_NO_ENCONTRADO',
+      );
+    }
+
     throw AppError.badRequest(
       `El proveedor ${est.proveedor} fallo al ejecutar el estudio: ${errorMsg}. El estudio fue marcado como fallido. Puede registrar el resultado manualmente.`,
       'PROVIDER_EXECUTION_FAILED',
