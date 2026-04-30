@@ -43,6 +43,12 @@ export async function reprogramar(req: Request, res: Response) {
   sendSuccess(res, cita);
 }
 
+export async function acusarReprogramacion(req: Request, res: Response) {
+  const { id } = req.params as unknown as CitaIdParams;
+  const cita = await citasService.acusarReprogramacion(id, req.user!.id, req.user!.rol);
+  sendSuccess(res, cita);
+}
+
 export async function realizar(req: Request, res: Response) {
   const { id } = req.params as unknown as CitaIdParams;
   const input = req.body as RealizarCitaInput;

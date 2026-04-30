@@ -57,6 +57,17 @@ router.post(
   citasController.reprogramar,
 );
 
+// POST /:id/acusar-reprogramacion — Solicitante acepta la fecha reprogramada.
+// Usa 'read' (no 'update') porque solo el solicitante tiene este permiso, y
+// la accion semanticamente es "leer y aceptar". El service hace el check fino
+// de pertenencia al expediente.
+router.post(
+  '/:id/acusar-reprogramacion',
+  authorize('citas', 'read'),
+  validate({ params: citaIdParamsSchema }),
+  citasController.acusarReprogramacion,
+);
+
 // POST /:id/realizar — Marcar como realizada
 router.post(
   '/:id/realizar',

@@ -32,7 +32,8 @@ const db = (table: string) => (supabase.from(table as string) as ReturnType<type
 const CITA_SELECT = `
   id, expediente_id, estado, fecha_propuesta, fecha_confirmada,
   notas_solicitante, notas_propietario, motivo_cancelacion,
-  creado_por, confirmado_por, created_at, updated_at,
+  creado_por, confirmado_por, acuse_solicitante_at,
+  created_at, updated_at,
   expediente:expedientes (
     id, numero, estudio_habilitado,
     inmueble:inmuebles (id, direccion, ciudad),
@@ -654,6 +655,9 @@ export async function reprogramarCita(
     estado: 'confirmada',
     fecha_confirmada: input.fecha_confirmada,
     confirmado_por: userId,
+    // Reset del acuse: el solicitante debe volver a aceptar/rechazar la nueva
+    // fecha. Si lo dejabamos NOT NULL, el banner no volveria a aparecer.
+    acuse_solicitante_at: null,
     updated_at: new Date().toISOString(),
   };
   if (input.notas_propietario) updateData.notas_propietario = input.notas_propietario;
@@ -686,6 +690,81 @@ export async function reprogramarCita(
 
   logger.info({ citaId: id }, 'Cita reprogramada');
   return data;
+}
+
+// ============================================================
+// Acusar reprogramacion (solicitante acepta la nueva fecha)
+//
+// No cambia el estado (sigue 'confirmada'); solo registra el acuse para que
+// el banner del frontend desaparezca. Notifica al propietario que el
+// solicitante ya esta al tanto del nuevo horario.
+// ============================================================
+
+export async function acusarReprogramacion(id: string, userId: string, userRol: string) {
+  const cita = await fetchCita(id);
+
+  // Solo el solicitante (creador del expediente) puede acusar. assertCitaPermission
+  // con action='read' valida pertenencia + admin/operador como fallback.
+  await assertCitaPermission({
+    userId,
+    userRol: userRol as UserRole,
+    expedienteId: cita.expediente_id as string,
+    action: 'read',
+    citaCreadoPor: cita.creado_por as string | undefined,
+  });
+
+  // Solo aplicable a citas confirmadas con reprogramacion pendiente.
+  if (cita.estado !== 'confirmada') {
+    throw AppError.badRequest(
+      `Solo se puede acusar una cita en estado 'confirmada' (actual: ${cita.estado})`,
+      'INVALID_STATE',
+    );
+  }
+  if (cita.acuse_solicitante_at) {
+    // Idempotente: no es un error, solo devolvemos el estado actual.
+    return cita;
+  }
+
+  const { data, error } = await db('citas')
+    .update({ acuse_solicitante_at: new Date().toISOString() } as never)
+    .eq('id', id)
+    .select(CITA_SELECT)
+    .single();
+
+  if (error) {
+    logger.error({ error: error.message, id }, 'Error al acusar reprogramacion');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al confirmar el nuevo horario');
+  }
+
+  await registrarTimelineCita(
+    cita.expediente_id as string,
+    'Solicitante acepto el horario reprogramado',
+    userId,
+    { cita_id: id },
+  );
+
+  // Notificar al propietario in-app que el solicitante esta al tanto.
+  notificarPropietarioAcuse(cita.expediente_id as string, cita.fecha_confirmada as string)
+    .catch((e) => logger.warn({ error: e, citaId: id }, 'Error notificando acuse al propietario'));
+
+  logger.info({ citaId: id, userId }, 'Solicitante acuso reprogramacion');
+  return data;
+}
+
+async function notificarPropietarioAcuse(expedienteId: string, fechaConfirmada: string) {
+  const ctx = await obtenerContextoExpediente(expedienteId);
+  if (!ctx) return;
+  const fechaStr = new Date(fechaConfirmada).toLocaleString('es-CO', {
+    weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+  });
+  notificarUsuario({
+    userId: ctx.propietarioUserId,
+    tipo: 'cita.acuse_solicitante',
+    titulo: 'Solicitante acepto el horario',
+    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} confirmo la visita reprogramada para ${fechaStr}.`,
+    link: `/expedientes/${ctx.expedienteId}`,
+    payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
+  });
 }
 
 // ============================================================
