@@ -22,7 +22,10 @@ const envSchema = z.object({
   AUCO_PUBLIC_KEY: z.string().default('puk_placeholder'),
   AUCO_PRIVATE_KEY: z.string().default('prk_placeholder'),
   AUCO_WEBHOOK_SECRET: z.string().optional(),
-  AUCO_SENDER_EMAIL: z.string().default('hola@knowmeapp.com'),
+  // Email del Manager registrado en la cuenta Auco. Auco rechaza el upload
+  // con USER_NOTFOUND si este email no esta enrolled. Sin default — debe venir
+  // del .env real (ver Stage panel: Settings → Team).
+  AUCO_SENDER_EMAIL: z.string().email().min(1),
 
   // Payment gateway (Stripe)
   PAYMENT_GATEWAY_PROVIDER: z.enum(['stripe']).default('stripe'),

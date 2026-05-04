@@ -48,6 +48,10 @@ interface AucoSignProfile {
   phone?: string;
   role?: 'SIGNER' | 'APPROVER';
   order?: string;
+  /** Auco exige al menos uno de [type, label, position] por firmante. 'signature'
+   *  = firma libre que el firmante coloca durante el flujo. Sin esto, el upload
+   *  falla con 400 ("must contain at least one of [type, label, position]"). */
+  type?: 'signature' | 'name' | 'date';
   /** Identificacion del firmante (necesaria para camera=identification). */
   identification?: string;
   identificationType?: string;
@@ -80,8 +84,6 @@ interface AucoUploadDocumentInput {
   expiredDate?: string;
   /** Reminder interval in hours (multiples of 3) */
   remember?: number;
-  /** Webhook IDs to receive notifications */
-  webhooks?: string[];
   /** Validaciones globales — aplican a todos los firmantes salvo override. */
   options?: AucoValidationOptions;
 }

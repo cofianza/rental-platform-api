@@ -39,6 +39,9 @@ function buildSignProfile(params: {
   email: string;
   phone?: string;
   role: 'SIGNER';
+  // Auco exige al menos uno de [type, label, position] por firmante. Usamos
+  // 'signature' = firma libre que el firmante coloca durante el flujo.
+  type: 'signature';
   otpCode?: boolean;
   options?: { whatsapp: boolean; otpCode: 'phone' };
 } {
@@ -49,13 +52,14 @@ function buildSignProfile(params: {
       email,
       phone: phoneInternational,
       role: 'SIGNER',
+      type: 'signature',
       // Validaciones individuales: tienen prioridad sobre las globales.
       // Activan el flow del firmante por WhatsApp con OTP por phone.
       otpCode: true,
       options: { whatsapp: true, otpCode: 'phone' },
     };
   }
-  return { name, email, role: 'SIGNER' };
+  return { name, email, role: 'SIGNER', type: 'signature' };
 }
 
 // Estados validos del contrato para crear solicitudes de firma
@@ -152,6 +156,9 @@ export async function crearSolicitudFirma(
 
   // 4. Download PDF from storage and upload to Auco
   let aucoDocumentCode: string | null = null;
+  // Lo levantamos al scope externo para decidir despues si enviamos el
+  // email custom de fallback o no.
+  let enableWhatsapp = false;
   const direccionInmueble = exp?.inmuebles?.direccion || 'N/A';
   const ciudadInmueble = exp?.inmuebles?.ciudad || '';
 
@@ -171,9 +178,9 @@ export async function crearSolicitudFirma(
 
     // Normalizar el teléfono a formato internacional (+57...) para que Auco
     // pueda enviar el link de firma por WhatsApp. Si no viene o no se puede
-    // normalizar, cae al envío solo-email.
+    // normalizar, cae al envío solo-email (fallback).
     const phoneInternational = aucoClient.normalizePhoneToInternational(input.telefono_firmante);
-    const enableWhatsapp = Boolean(phoneInternational);
+    enableWhatsapp = Boolean(phoneInternational);
     if (input.telefono_firmante && !phoneInternational) {
       logger.warn(
         { telefono: input.telefono_firmante, contratoId: c.id },
@@ -198,7 +205,8 @@ export async function crearSolicitudFirma(
         }),
       ],
       expiredDate: tokenExpiracion,
-      webhooks: ['default'],
+      // Auco rechaza el campo `webhooks` con 400 — los webhooks se configuran
+      // a nivel de cuenta en el panel y se aplican automaticamente.
     });
     logger.info(
       { contratoId: c.id, whatsapp: enableWhatsapp, documentCode: aucoDocumentCode },
@@ -237,23 +245,36 @@ export async function crearSolicitudFirma(
 
   const row = solicitud as unknown as SolicitudFirmaRow;
 
-  // 6. Send our own notification email (as backup/complement to Auco's email)
+  // 6. Email custom de fallback. Solo se envia cuando Auco con WhatsApp no
+  // pudo activarse (sin telefono valido o el upload a Auco fallo). Cuando
+  // Auco WhatsApp si esta activo, el flujo es 100% por WhatsApp y este
+  // email seria redundante (Auco ya notifico por WhatsApp y maneja la
+  // firma en su propio dominio).
   const firmaUrl = `${env.FRONTEND_URL}/firma/${token}`;
+  const aucoWhatsappActivo = enableWhatsapp && Boolean(aucoDocumentCode);
 
-  try {
-    await sendFirmaEmail(
-      input.email_firmante,
-      input.nombre_firmante,
-      firmaUrl,
-      TOKEN_EXPIRY_HOURS,
-      {
-        direccion_inmueble: direccionInmueble,
-        ciudad_inmueble: ciudadInmueble,
-        nombre_arrendatario: input.nombre_firmante,
-      },
+  if (!aucoWhatsappActivo) {
+    try {
+      await sendFirmaEmail(
+        input.email_firmante,
+        input.nombre_firmante,
+        firmaUrl,
+        TOKEN_EXPIRY_HOURS,
+        {
+          direccion_inmueble: direccionInmueble,
+          ciudad_inmueble: ciudadInmueble,
+          nombre_arrendatario: input.nombre_firmante,
+        },
+      );
+      logger.info({ solicitudId: row.id }, 'Email custom de firma enviado (fallback — WhatsApp no disponible)');
+    } catch (emailError) {
+      logger.error({ error: emailError, solicitudId: row.id }, 'Error al enviar email de firma (fallback)');
+    }
+  } else {
+    logger.info(
+      { solicitudId: row.id, aucoDocumentCode },
+      'Email custom omitido — Auco maneja la notificacion por WhatsApp',
     );
-  } catch (emailError) {
-    logger.error({ error: emailError, solicitudId: row.id }, 'Error al enviar email de firma');
   }
 
   // 7. Audit log
@@ -336,6 +357,13 @@ export async function reenviarSolicitudFirma(
     !!emailNuevoNormalizado && emailNuevoNormalizado !== emailActualNormalizado;
 
   let nuevoAucoDocumentCode: string | null = row.auco_document_code;
+  // Para decidir si enviar email de fallback al final: si Auco WhatsApp
+  // sigue activo, no enviamos. Por defecto asumimos activo si la solicitud
+  // tenia auco_document_code (creacion previa exitosa) Y el telefono se
+  // puede normalizar.
+  let aucoWhatsappActivo =
+    Boolean(row.auco_document_code)
+    && Boolean(aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined));
 
   if (cambiaEmail && row.contratos?.storage_key) {
     // Re-upload a Auco con nuevo firmante. Si el documento Auco previo
@@ -377,14 +405,23 @@ export async function reenviarSolicitudFirma(
           }),
         ],
         expiredDate: new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString(),
-        webhooks: ['default'],
+        // webhooks se configuran a nivel de cuenta en el panel de Auco.
       });
+
+      // Recalcular el flag despues del re-upload exitoso. Si el cambio de
+      // email implica diferente telefono, el caller deberia setear esa
+      // info en row.telefono_firmante antes de llegar aqui (no es el caso
+      // actual; mantenemos el telefono original).
+      aucoWhatsappActivo = enableWhatsapp && Boolean(nuevoAucoDocumentCode);
 
       logger.info(
         { solicitudId, oldEmail: emailActualNormalizado, newEmail: emailNuevoNormalizado, nuevoAucoDocumentCode },
         'Auco: re-upload del documento con nuevo firmante completado',
       );
     } catch (aucoError) {
+      // Si el re-upload fallo, perdimos el flow WhatsApp para el nuevo email
+      // (Auco quedaria firmando para el viejo email). Caemos a email custom.
+      aucoWhatsappActivo = false;
       logger.error(
         { error: aucoError, solicitudId, emailNuevo: emailNuevoNormalizado },
         'Error al re-subir documento a Auco con nuevo email — se reenvia con el viejo documentCode',
@@ -431,26 +468,37 @@ export async function reenviarSolicitudFirma(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al reenviar la solicitud');
   }
 
-  // Send email — al destino nuevo si cambia, al original si no.
+  // Email de fallback. Solo se envia cuando Auco WhatsApp NO esta activo.
+  // Cuando WhatsApp esta activo, el reenvio ya disparo aucoClient.sendReminder
+  // (linea ~422), que reenvia el WhatsApp original. No queremos duplicar con
+  // un correo custom adicional.
   const emailDestino = cambiaEmail ? emailNuevoNormalizado! : row.email_firmante;
   const firmaUrl = `${env.FRONTEND_URL}/firma/${newToken}`;
   const direccion = row.contratos?.expedientes?.inmuebles?.direccion || 'N/A';
   const ciudad = row.contratos?.expedientes?.inmuebles?.ciudad || '';
 
-  try {
-    await sendFirmaEmail(
-      emailDestino,
-      row.nombre_firmante,
-      firmaUrl,
-      TOKEN_EXPIRY_HOURS,
-      {
-        direccion_inmueble: direccion,
-        ciudad_inmueble: ciudad,
-        nombre_arrendatario: row.nombre_firmante,
-      },
+  if (!aucoWhatsappActivo) {
+    try {
+      await sendFirmaEmail(
+        emailDestino,
+        row.nombre_firmante,
+        firmaUrl,
+        TOKEN_EXPIRY_HOURS,
+        {
+          direccion_inmueble: direccion,
+          ciudad_inmueble: ciudad,
+          nombre_arrendatario: row.nombre_firmante,
+        },
+      );
+      logger.info({ solicitudId }, 'Email custom de firma reenviado (fallback — WhatsApp no disponible)');
+    } catch (emailError) {
+      logger.error({ error: emailError, solicitudId }, 'Error al reenviar email de firma (fallback)');
+    }
+  } else {
+    logger.info(
+      { solicitudId },
+      'Email custom omitido en reenvio — Auco maneja la notificacion por WhatsApp',
     );
-  } catch (emailError) {
-    logger.error({ error: emailError, solicitudId }, 'Error al reenviar email de firma');
   }
 
   logAudit({
