@@ -103,6 +103,7 @@ function formatCurrencyCOP(value: number): string {
 
 function formatDateCO(date: Date): string {
   return new Intl.DateTimeFormat('es-CO', {
+    timeZone: 'America/Bogota',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',

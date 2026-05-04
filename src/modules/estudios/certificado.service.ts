@@ -32,6 +32,7 @@ function formatCurrency(value: number): string {
 
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('es-CO', {
+    timeZone: 'America/Bogota',
     year: 'numeric',
     month: 'long',
     day: 'numeric',

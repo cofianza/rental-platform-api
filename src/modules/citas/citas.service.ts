@@ -797,6 +797,7 @@ async function notificarPropietarioAcuse(expedienteId: string, fechaConfirmada: 
   const ctx = await obtenerContextoExpediente(expedienteId);
   if (!ctx) return;
   const fechaStr = new Date(fechaConfirmada).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
     weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
   });
   notificarUsuario({

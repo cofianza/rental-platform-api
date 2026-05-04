@@ -10,6 +10,17 @@ import { logger } from '@/lib/logger';
 const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 
+// Todos los emails que muestran fechas de citas usan hora Colombia (UTC-5),
+// sin importar la timezone del servidor. Antes de fijar `timeZone` aquí,
+// los correos enviados desde Railway (UTC) mostraban la hora 5 horas
+// adelantada (4 PM Bogotá → 9 PM en el correo).
+const formatFechaColombia = (iso: string): string =>
+  new Date(iso).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+
 // ── Estudio Aprobado ────────────────────────────────────────
 
 export async function sendEstudioAprobadoEmail(params: {
@@ -254,9 +265,7 @@ export async function sendCitaSolicitadaPropietarioEmail(params: {
   fecha_propuesta: string;
 }) {
   const { email, nombre_propietario, nombre_solicitante, inmueble, ciudad, fecha_propuesta } = params;
-  const fechaFormateada = new Date(fecha_propuesta).toLocaleString('es-CO', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  const fechaFormateada = formatFechaColombia(fecha_propuesta);
 
   await resend.emails.send({
     from: FROM,
@@ -295,9 +304,7 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
   notas_propietario?: string;
 }) {
   const { email, nombre_solicitante, inmueble, ciudad, fecha_confirmada, notas_propietario } = params;
-  const fechaFormateada = new Date(fecha_confirmada).toLocaleString('es-CO', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  const fechaFormateada = formatFechaColombia(fecha_confirmada);
 
   await resend.emails.send({
     from: FROM,
@@ -338,12 +345,8 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
   notas_propietario?: string;
 }) {
   const { email, nombre_solicitante, inmueble, ciudad, fecha_propuesta, fecha_confirmada, notas_propietario } = params;
-  const fmt = (iso: string) =>
-    new Date(iso).toLocaleString('es-CO', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  const fechaOriginal = fmt(fecha_propuesta);
-  const fechaNueva = fmt(fecha_confirmada);
+  const fechaOriginal = formatFechaColombia(fecha_propuesta);
+  const fechaNueva = formatFechaColombia(fecha_confirmada);
 
   await resend.emails.send({
     from: FROM,
@@ -391,9 +394,7 @@ export async function sendCitaCanceladaEmail(params: {
   cancelado_por: 'propietario' | 'solicitante';
 }) {
   const { email, nombre_destinatario, inmueble, ciudad, fecha_cita, motivo, cancelado_por } = params;
-  const fechaFormateada = new Date(fecha_cita).toLocaleString('es-CO', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  });
+  const fechaFormateada = formatFechaColombia(fecha_cita);
 
   const quienCancelo = cancelado_por === 'propietario' ? 'El propietario' : 'El solicitante';
 
