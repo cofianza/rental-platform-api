@@ -5,7 +5,11 @@ import type { ExpedienteIdParams } from './expedientes.schema';
 
 export async function habilitarEstudio(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol);
+  const body = req.body as {
+    duracion_contrato_meses: number;
+    fecha_inicio_contrato: string;
+  };
+  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol, body);
   sendSuccess(res, result);
 }
 

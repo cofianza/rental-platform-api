@@ -26,11 +26,16 @@ export interface HabilitarEstudioResult {
  * expediente tras la cita realizada. Crea el registro placeholder en
  * `estudios` y notifica al solicitante. La mutación DB es atómica vía
  * RPC fn_habilitar_estudio_expediente.
+ *
+ * El propietario captura aqui los datos del contrato (duracion + fecha
+ * inicio) que se persisten en el expediente y alimentan la generacion
+ * del contrato mas adelante. Ambos requeridos.
  */
 export async function habilitarEstudio(
   expedienteId: string,
   userId: string,
   userRol: string,
+  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string },
 ): Promise<HabilitarEstudioResult> {
   // 1. Ownership + datos del expediente para el email posterior.
   const ctx = await assertHabilitacionPermission({
@@ -39,7 +44,26 @@ export async function habilitarEstudio(
     expedienteId,
   });
 
-  // 2. RPC atómico: UPDATE expediente + INSERT estudio + INSERT timeline.
+  // 2. Persistir datos del contrato en el expediente. Lo hacemos antes del
+  //    RPC para que aunque falle la habilitacion del estudio, los datos del
+  //    contrato queden guardados (el usuario puede reintentar habilitar
+  //    sin volver a pedirlos). Si ya estuvieran habilitados (idempotencia
+  //    del RPC), ese update queda como no-op semantico.
+  const { error: updErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      duracion_contrato_meses: datosContrato.duracion_contrato_meses,
+      fecha_inicio_contrato: datosContrato.fecha_inicio_contrato,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', expedienteId);
+
+  if (updErr) {
+    logger.error({ error: updErr.message, expedienteId }, 'Error al guardar datos del contrato');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al guardar los datos del contrato');
+  }
+
+  // 3. RPC atómico: UPDATE expediente + INSERT estudio + INSERT timeline.
   //    Las validaciones (existencia, idempotencia, estado, cita realizada)
   //    viven en el RPC y vienen como mensajes de RAISE EXCEPTION que aquí
   //    se mapean a códigos HTTP específicos.

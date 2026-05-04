@@ -285,6 +285,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     .select(`
       id, numero, estado, inmueble_id, solicitante_id,
       codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco,
+      duracion_contrato_meses, fecha_inicio_contrato,
       inmuebles(
         id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero,
         administracion, propietario_id,
@@ -1131,10 +1132,19 @@ export async function generarContrato(
   const expedienteNumero = (expRow as { numero?: string }).numero || expedienteId;
 
   const now = new Date();
+  // Prioridad: input del caller > datos persistidos en el expediente al
+  // habilitar estudio > defaults (hoy + 12 meses). Asi el operador no tiene
+  // que volver a digitarlos cuando el propietario ya los capturo.
+  const expRecord = expRow as Record<string, unknown>;
+  const fechaInicioExp = (expRecord.fecha_inicio_contrato as string | null) || null;
+  const duracionMesesExp = (expRecord.duracion_contrato_meses as number | null) || null;
+
   const fechaInicio = input.fecha_inicio
     ? new Date(input.fecha_inicio + 'T00:00:00')
-    : new Date();
-  const duracionMeses = input.duracion_meses || 12;
+    : fechaInicioExp
+      ? new Date(fechaInicioExp + 'T00:00:00')
+      : new Date();
+  const duracionMeses = input.duracion_meses || duracionMesesExp || 12;
 
   // 2. Resolver plantilla: si el caller pasó plantilla_id usamos esa, si
   //    no buscamos la única activa (V2 prevé una sola plantilla maestra).
