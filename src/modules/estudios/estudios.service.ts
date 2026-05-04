@@ -200,7 +200,8 @@ export async function getEstudioById(estudioId: string) {
       observaciones, motivo_rechazo, condiciones,
       duracion_contrato_meses, pago_por, fecha_solicitud,
       fecha_completado, fecha_completado_self_service, referencia_proveedor,
-      certificado_url, codigo_qr, datos_formulario, token_self_service,
+      certificado_url, codigo_qr, datos_formulario, respuesta_proveedor,
+      token_self_service,
       expiracion_token, created_at, updated_at,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
@@ -1760,6 +1761,24 @@ async function registrarResultadoInline(
     );
   }
 
+  // Persistir la respuesta cruda del buró. Sin esto el modal "Detalle del
+  // Estudio" queda vacío en cuanto Railway recicla el contenedor (el cache
+  // en memoria del provider se borra). La RPC fn_registrar_resultado_estudio
+  // no toca este campo — log-only en error para no abortar el flujo, pero
+  // logueamos para que se note en monitoring.
+  if (result.datos_crudos) {
+    const { error: rawErr } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({ respuesta_proveedor: result.datos_crudos as never } as never)
+      .eq('id', estudioId);
+    if (rawErr) {
+      logger.warn(
+        { estudioId, error: rawErr.message },
+        'No se pudo persistir respuesta_proveedor — el modal del estudio mostrará el reporte vacío',
+      );
+    }
+  }
+
   logger.info({ estudioId }, 'registrarResultadoInline: RPC ejecutada, disparando orchestrator');
 
   logAudit({
@@ -1842,6 +1861,21 @@ export async function consultarEstadoProveedor(estudioId: string) {
     if (rpcError) {
       logger.error({ error: rpcError, estudioId }, 'Error al registrar resultado del proveedor via RPC');
       throw AppError.badRequest('Error al registrar el resultado del proveedor', 'PROVIDER_RESULT_ERROR');
+    }
+
+    // Persistir respuesta cruda del buró para que el modal de detalle pueda
+    // reconstruir el reporte aún si el cache en memoria del provider se perdió.
+    if (result.datos_crudos) {
+      const { error: rawErr } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update({ respuesta_proveedor: result.datos_crudos as never } as never)
+        .eq('id', estudioId);
+      if (rawErr) {
+        logger.warn(
+          { estudioId, error: rawErr.message },
+          'No se pudo persistir respuesta_proveedor (consultarEstado) — el modal del estudio mostrará el reporte vacío',
+        );
+      }
     }
 
     logAudit({
