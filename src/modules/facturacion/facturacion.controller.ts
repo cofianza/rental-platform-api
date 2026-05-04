@@ -10,6 +10,11 @@ export async function list(req: Request, res: Response) {
   sendSuccess(res, result.facturas, { pagination: result.pagination } as never);
 }
 
+export async function listPendientesFacturar(req: Request, res: Response) {
+  const result = await service.listPendientesFacturar(req.user!.id, req.user!.rol);
+  sendSuccess(res, result);
+}
+
 export async function getById(req: Request, res: Response) {
   const { id } = req.params as { id: string };
   const result = await service.getFacturaById(id);

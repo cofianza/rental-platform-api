@@ -1159,6 +1159,131 @@ export async function listFacturas(query: ListFacturasQuery, userId: string, use
   };
 }
 
+// ── Pendientes de facturar ────────────────────────────────────────
+// Lista pagos en estado 'completado' que aun NO tienen factura emitida.
+// Filtrado por rol:
+// - admin/operador: todos los pagos completados sin factura.
+// - inmobiliaria/propietario: pagos de expedientes asociados a sus inmuebles.
+// - solicitante: pagos de sus propios expedientes.
+
+export interface PagoPendienteFacturar {
+  pago_id: string;
+  expediente_id: string;
+  expediente_numero: string;
+  concepto: string;
+  monto: number;
+  fecha_pago: string | null;
+  // Estado de la factura (si hay un intento previo): null si no existe,
+  // 'pendiente'/'fallida'/etc si hubo intento que no quedo emitida.
+  factura_estado: string | null;
+  factura_error: string | null;
+}
+
+export async function listPendientesFacturar(
+  userId: string,
+  userRol: string,
+): Promise<PagoPendienteFacturar[]> {
+  // 1. Resolver alcance: que expediente_ids puede ver este usuario.
+  let expedienteIdsScope: string[] | null = null; // null = sin filtro (admin/operador)
+
+  if (userRol === 'solicitante') {
+    const { data: solRows } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('creado_por', userId);
+    const solIds = ((solRows as { id: string }[] | null) || []).map((s) => s.id);
+    if (solIds.length === 0) return [];
+
+    const { data: expRows } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .in('solicitante_id', solIds);
+    expedienteIdsScope = ((expRows as { id: string }[] | null) || []).map((e) => e.id);
+    if (expedienteIdsScope.length === 0) return [];
+  } else if (userRol === 'propietario' || userRol === 'inmobiliaria') {
+    // Filtrar expedientes cuyo inmueble pertenece al usuario.
+    const { data: inmuebles } = await (supabase
+      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('propietario_id', userId);
+    const inmuebleIds = ((inmuebles as { id: string }[] | null) || []).map((i) => i.id);
+    if (inmuebleIds.length === 0) return [];
+
+    const { data: expRows } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .in('inmueble_id', inmuebleIds);
+    expedienteIdsScope = ((expRows as { id: string }[] | null) || []).map((e) => e.id);
+    if (expedienteIdsScope.length === 0) return [];
+  }
+
+  // 2. Pagos completados en el alcance.
+  let qb = (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select(
+      'id, expediente_id, concepto, monto, fecha_pago, expediente:expedientes(numero)',
+    )
+    .eq('estado', 'completado')
+    .order('fecha_pago', { ascending: false, nullsFirst: false });
+
+  if (expedienteIdsScope !== null) {
+    qb = qb.in('expediente_id', expedienteIdsScope);
+  }
+
+  const { data: pagos, error: pagosErr } = await qb;
+  if (pagosErr) {
+    logger.error({ error: pagosErr.message, userId, userRol }, 'Error listando pagos pendientes facturar');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar pagos pendientes de facturacion');
+  }
+
+  const pagosTyped =
+    (pagos as unknown as Array<{
+      id: string;
+      expediente_id: string;
+      concepto: string;
+      monto: number | string;
+      fecha_pago: string | null;
+      expediente: { numero: string } | null;
+    }>) || [];
+
+  if (pagosTyped.length === 0) return [];
+
+  // 3. Cruzar con facturas para excluir las que ya estan emitidas.
+  const pagoIds = pagosTyped.map((p) => p.id);
+  const { data: facturasRows } = await (supabase
+    .from('facturas' as string) as ReturnType<typeof supabase.from>)
+    .select('pago_id, estado, error_mensaje')
+    .in('pago_id', pagoIds);
+
+  const facturasByPago = new Map<string, { estado: string; error_mensaje: string | null }>();
+  for (const f of (facturasRows as Array<{ pago_id: string; estado: string; error_mensaje: string | null }> | null) || []) {
+    // Si hay multiples filas (caso reintento), nos quedamos con la mas
+    // "fuerte": emitida > pendiente > fallida. Aqui basta con guardarla,
+    // un pago con factura emitida lo excluimos de todas formas.
+    facturasByPago.set(f.pago_id, { estado: f.estado, error_mensaje: f.error_mensaje });
+  }
+
+  return pagosTyped
+    .filter((p) => {
+      const f = facturasByPago.get(p.id);
+      // Excluir si ya hay factura emitida.
+      return !f || f.estado !== 'emitida';
+    })
+    .map((p) => {
+      const f = facturasByPago.get(p.id);
+      return {
+        pago_id: p.id,
+        expediente_id: p.expediente_id,
+        expediente_numero: p.expediente?.numero || '',
+        concepto: p.concepto,
+        monto: Number(p.monto) || 0,
+        fecha_pago: p.fecha_pago,
+        factura_estado: f?.estado ?? null,
+        factura_error: f?.error_mensaje ?? null,
+      };
+    });
+}
+
 export async function getFacturaById(id: string) {
   const { data, error } = await (supabase
     .from('facturas' as string) as ReturnType<typeof supabase.from>)

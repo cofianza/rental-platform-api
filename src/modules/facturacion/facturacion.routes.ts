@@ -34,6 +34,16 @@ facturasRouter.get(
   controller.getTarifasIva,
 );
 
+// GET /facturas/pendientes-facturar — pagos completados sin factura emitida.
+// El service filtra por rol: solicitante ve solo sus propios pagos,
+// propietario/inmobiliaria los de sus inmuebles, admin/operador todo.
+// Declarar antes de /:id por la misma razon que configuracion-iva.
+facturasRouter.get(
+  '/pendientes-facturar',
+  authorize('facturas', 'read'),
+  controller.listPendientesFacturar,
+);
+
 // PUT /facturas/configuracion-iva — actualizar tasas (solo admin)
 facturasRouter.put(
   '/configuracion-iva',
