@@ -28,8 +28,12 @@ const PAGO_SELECT = `
  * Anexa a cada pago la última factura emitida (si existe). Usamos un
  * segundo query en lugar de embed PostgREST porque el schema cache de
  * Supabase a veces no detecta la FK pago_id→pagos y rompe el endpoint.
+ *
+ * Exportado para que otros modulos (pago-estudio, etc.) puedan reutilizar
+ * la misma logica al devolver pagos al frontend — asi el flag
+ * facturaExistente en la UI sigue siendo confiable tras refresh.
  */
-async function attachFacturas<T extends Record<string, unknown> & { id: string }>(
+export async function attachFacturas<T extends Record<string, unknown> & { id: string }>(
   pagos: T[],
 ): Promise<(T & { factura: { id: string; numero: string | null; estado: string } | null })[]> {
   if (pagos.length === 0) return [];

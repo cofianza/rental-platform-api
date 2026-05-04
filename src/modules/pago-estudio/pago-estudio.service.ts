@@ -14,6 +14,7 @@ import { env } from '@/config';
 import { sendPaymentLinkEmail } from '@/lib/email';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
 import { transitionPagoState } from '@/modules/pagos/pago-state-machine';
+import { attachFacturas } from '@/modules/pagos/pagos.service';
 import type { EnviarLinkInput } from './pago-estudio.schema';
 
 // ============================================================
@@ -108,13 +109,19 @@ export async function getEstadoPagoEstudio(expedienteId: string) {
   const estado = pago.estado as string;
   const metodo = pago.metodo as string;
 
+  // Adjuntar la factura emitida al pago para que el frontend pueda decidir
+  // si mostrar "Facturar" vs "Ver factura" tras un refresh. Sin esto, el
+  // boton "Facturar" reaparecia despues de emitir porque el local state
+  // (facturaIdEmitida) se pierde al re-montar el componente.
+  const [pagoConFactura] = await attachFacturas([pago as Record<string, unknown> & { id: string }]);
+
   return {
     estado: estado === 'completado' && metodo !== 'pasarela' ? 'asumido_inmobiliaria' : estado,
     puede_avanzar: estado === 'completado',
     monto: pago.monto as number,
     moneda: 'COP',
     monto_formateado: formatCOP(pago.monto as number),
-    pago,
+    pago: pagoConFactura,
   };
 }
 
