@@ -52,6 +52,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
   id, numero, estado, notas,
   codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco,
   analista_id, inmueble_id, solicitante_id, creado_por,
+  estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
   created_at, updated_at,
   inmuebles(id, codigo, direccion, ciudad, departamento, tipo, estado, valor_arriendo),
   solicitantes(id, nombre, apellido, tipo_documento, numero_documento, email, telefono),
