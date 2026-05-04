@@ -339,28 +339,40 @@ export async function searchByDocument(query: SearchByDocumentQuery) {
 
 export interface DatosFiscalesSolicitante {
   id: string | null;
+  // Para persona natural: nombre/apellido aplican y razon_social=null.
+  // Para persona juridica: razon_social aplica y nombre/apellido son secundarios.
+  tipo_persona: 'natural' | 'juridica';
   nombre: string;
   apellido: string;
+  razon_social: string | null;
   tipo_documento: string;
   numero_documento: string;
+  /** Solo aplica cuando tipo_documento='nit' (tipicamente persona juridica). */
+  digito_verificacion: string | null;
   email: string;
   telefono: string | null;
   direccion: string | null;
   municipio_id: string | null;
   municipio_nombre: string | null;
+  /** Codigo DIAN de responsabilidad fiscal. ZZ=No aplica (default). */
+  tribute_code: string;
   /** Lista de campos requeridos para emitir factura electronica que estan
    *  vacios o invalidos. Si len > 0 el frontend bloquea el boton de Facturar. */
   faltantes: string[];
 }
 
 export interface UpdateDatosFiscalesInput {
+  tipo_persona?: 'natural' | 'juridica';
+  razon_social?: string;
   tipo_documento?: string;
   numero_documento?: string;
+  digito_verificacion?: string;
   email?: string;
   telefono?: string;
   direccion?: string;
   municipio_id?: string;
   municipio_nombre?: string;
+  tribute_code?: string;
 }
 
 /** Tipos de documento que Colombia acepta para facturacion electronica.
@@ -370,8 +382,11 @@ export interface UpdateDatosFiscalesInput {
 const TIPOS_DOCUMENTO_FISCAL = ['cc', 'ce', 'ti', 'nit'] as const;
 
 function computeFaltantes(row: {
+  tipo_persona?: string | null;
+  razon_social?: string | null;
   tipo_documento?: string | null;
   numero_documento?: string | null;
+  digito_verificacion?: string | null;
   email?: string | null;
   telefono?: string | null;
   direccion?: string | null;
@@ -386,6 +401,17 @@ function computeFaltantes(row: {
     faltantes.push('tipo_documento');
   }
   if (!row.numero_documento) faltantes.push('numero_documento');
+
+  // Persona juridica → razon_social obligatoria + DV requerido (NIT).
+  if (row.tipo_persona === 'juridica') {
+    if (!row.razon_social || row.razon_social.trim() === '') {
+      faltantes.push('razon_social');
+    }
+    if (!row.digito_verificacion || !/^\d$/.test(row.digito_verificacion)) {
+      faltantes.push('digito_verificacion');
+    }
+  }
+
   if (!row.email) faltantes.push('email');
   if (!row.telefono) faltantes.push('telefono');
   if (!row.direccion) faltantes.push('direccion');
@@ -397,7 +423,9 @@ export async function getMisDatosFiscales(userId: string): Promise<DatosFiscales
   // Tomamos el solicitante mas reciente del usuario (caso normal: solo 1).
   const { data, error } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, nombre, apellido, tipo_documento, numero_documento, email, telefono, direccion, municipio_id, municipio_nombre')
+    .select(
+      'id, tipo_persona, nombre, apellido, razon_social, tipo_documento, numero_documento, digito_verificacion, email, telefono, direccion, municipio_id, municipio_nombre, tribute_code',
+    )
     .eq('creado_por', userId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -413,43 +441,55 @@ export async function getMisDatosFiscales(userId: string): Promise<DatosFiscales
     // pueda renderizar igual.
     return {
       id: null,
+      tipo_persona: 'natural',
       nombre: '',
       apellido: '',
+      razon_social: null,
       tipo_documento: '',
       numero_documento: '',
+      digito_verificacion: null,
       email: '',
       telefono: null,
       direccion: null,
       municipio_id: null,
       municipio_nombre: null,
+      tribute_code: 'ZZ',
       faltantes: ['tipo_documento', 'numero_documento', 'email', 'telefono', 'direccion', 'municipio_id'],
     };
   }
 
   const row = data as unknown as {
     id: string;
+    tipo_persona: 'natural' | 'juridica' | null;
     nombre: string;
     apellido: string;
+    razon_social: string | null;
     tipo_documento: string;
     numero_documento: string;
+    digito_verificacion: string | null;
     email: string;
     telefono: string | null;
     direccion: string | null;
     municipio_id: string | null;
     municipio_nombre: string | null;
+    tribute_code: string | null;
   };
 
   return {
     id: row.id,
+    tipo_persona: row.tipo_persona ?? 'natural',
     nombre: row.nombre,
     apellido: row.apellido,
+    razon_social: row.razon_social,
     tipo_documento: row.tipo_documento,
     numero_documento: row.numero_documento,
+    digito_verificacion: row.digito_verificacion,
     email: row.email,
     telefono: row.telefono,
     direccion: row.direccion,
     municipio_id: row.municipio_id,
     municipio_nombre: row.municipio_nombre,
+    tribute_code: row.tribute_code ?? 'ZZ',
     faltantes: computeFaltantes(row),
   };
 }
@@ -482,18 +522,23 @@ export async function updateMisDatosFiscales(
   const id = (existente as { id: string }).id;
 
   // Whitelist de campos: el solicitante NO puede cambiar nombre/apellido
-  // (vienen de auth.users) ni el tipo_persona, ocupacion, etc. Solo los
-  // datos fiscales relevantes para la factura.
+  // (vienen de auth.users) ni ocupacion. SI puede cambiar tipo_persona y
+  // los datos fiscales — necesarios para soportar facturacion como persona
+  // juridica (empresa que arrienda).
   const update: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
+  if (input.tipo_persona !== undefined) update.tipo_persona = input.tipo_persona;
+  if (input.razon_social !== undefined) update.razon_social = input.razon_social.trim() || null;
   if (input.tipo_documento !== undefined) update.tipo_documento = input.tipo_documento;
   if (input.numero_documento !== undefined) update.numero_documento = input.numero_documento.trim();
+  if (input.digito_verificacion !== undefined) update.digito_verificacion = input.digito_verificacion.trim() || null;
   if (input.email !== undefined) update.email = input.email.trim();
   if (input.telefono !== undefined) update.telefono = input.telefono.trim() || null;
   if (input.direccion !== undefined) update.direccion = input.direccion.trim() || null;
   if (input.municipio_id !== undefined) update.municipio_id = input.municipio_id.trim() || null;
   if (input.municipio_nombre !== undefined) update.municipio_nombre = input.municipio_nombre.trim() || null;
+  if (input.tribute_code !== undefined) update.tribute_code = input.tribute_code.trim() || 'ZZ';
 
   const { error: updErr } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)

@@ -52,15 +52,19 @@ interface PagoConContexto {
     numero: string;
     solicitante: {
       id: string;
+      tipo_persona: 'natural' | 'juridica' | null;
       nombre: string;
       apellido: string;
+      razon_social: string | null;
       email: string;
       telefono: string | null;
       tipo_documento: string;
       numero_documento: string;
+      digito_verificacion: string | null;
       direccion: string | null;
       municipio_id: string | null; // V2: código DANE (5 dígitos, ej. "11001")
       municipio_nombre: string | null;
+      tribute_code: string | null;
     } | null;
   };
 }
@@ -92,9 +96,10 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
       expediente:expedientes(
         numero,
         solicitante:solicitantes(
-          id, nombre, apellido, email, telefono,
-          tipo_documento, numero_documento, direccion,
-          municipio_id, municipio_nombre
+          id, tipo_persona, nombre, apellido, razon_social,
+          email, telefono,
+          tipo_documento, numero_documento, digito_verificacion, direccion,
+          municipio_id, municipio_nombre, tribute_code
         )
       )
     `)
@@ -271,9 +276,12 @@ export async function previewFacturaPago(pagoId: string): Promise<{
   factura_id?: string;
   factura_numero?: string | null;
   datos_actuales: {
+    tipo_persona: 'natural' | 'juridica';
     nombre_completo: string;
+    razon_social: string;
     tipo_documento: string;
     numero_documento: string;
+    digito_verificacion: string;
     email: string;
     telefono: string;
     direccion: string;
@@ -291,9 +299,12 @@ export async function previewFacturaPago(pagoId: string): Promise<{
       factura_id: existente.id,
       factura_numero: existente.factus_number,
       datos_actuales: {
+        tipo_persona: 'natural',
         nombre_completo: '',
+        razon_social: '',
         tipo_documento: '',
         numero_documento: '',
+        digito_verificacion: '',
         email: '',
         telefono: '',
         direccion: '',
@@ -315,10 +326,14 @@ export async function previewFacturaPago(pagoId: string): Promise<{
     );
   }
 
+  const tipoPersona: 'natural' | 'juridica' = sol.tipo_persona ?? 'natural';
   const datos = {
+    tipo_persona: tipoPersona,
     nombre_completo: `${sol.nombre} ${sol.apellido}`.trim(),
+    razon_social: sol.razon_social ?? '',
     tipo_documento: sol.tipo_documento || '',
     numero_documento: sol.numero_documento || '',
+    digito_verificacion: sol.digito_verificacion ?? '',
     email: sol.email || '',
     telefono: sol.telefono || '',
     direccion: sol.direccion || '',
@@ -339,6 +354,10 @@ export async function previewFacturaPago(pagoId: string): Promise<{
   if (!datos.telefono) faltantes.push('telefono');
   if (!datos.municipio_codigo || !/^\d{5}$/.test(datos.municipio_codigo)) {
     faltantes.push('municipio_codigo');
+  }
+  if (tipoPersona === 'juridica') {
+    if (!datos.razon_social.trim()) faltantes.push('razon_social');
+    if (!/^\d$/.test(datos.digito_verificacion)) faltantes.push('digito_verificacion');
   }
 
   return {
@@ -385,6 +404,10 @@ export async function crearFacturaDesdePago(
   const email = override?.email?.trim() || sol.email || '';
   const telefono = override?.telefono?.trim() || sol.telefono || '';
   const municipioCodigo = override?.municipio_codigo?.trim() || sol.municipio_id || '';
+  const tipoPersona: 'natural' | 'juridica' = sol.tipo_persona ?? 'natural';
+  const razonSocial = sol.razon_social?.trim() || '';
+  const digitoVerificacion = sol.digito_verificacion?.trim() || '';
+  const tributeCode = sol.tribute_code?.trim() || 'ZZ';
 
   // 3.5. Validacion estricta SIEMPRE — mismo set de faltantes que el preview.
   // Bloquea cualquier emision con datos incompletos. Defense in depth contra
@@ -399,6 +422,11 @@ export async function crearFacturaDesdePago(
   if (!direccion) faltantes.push('direccion');
   if (!telefono) faltantes.push('telefono');
   if (!municipioCodigo || !/^\d{5}$/.test(municipioCodigo)) faltantes.push('municipio_codigo');
+  // Persona juridica: razon_social y DV son obligatorios para Factus/DIAN.
+  if (tipoPersona === 'juridica') {
+    if (!razonSocial) faltantes.push('razon_social');
+    if (!/^\d$/.test(digitoVerificacion)) faltantes.push('digito_verificacion');
+  }
   if (faltantes.length > 0) {
     throw new AppError(
       400,
@@ -450,14 +478,20 @@ export async function crearFacturaDesdePago(
     ],
     customer: {
       identification: numeroDocumento,
-      // V2: persona natural (legal_organization_code=2) usa 'names'.
-      // Jurídica (=1) usa 'company' + 'trade_name'.
-      names: fullName,
+      // Persona juridica: company + trade_name + dv (DV del NIT). Persona
+      // natural: names. legal_organization_code 1=Jurídica, 2=Natural.
+      ...(tipoPersona === 'juridica'
+        ? {
+            company: razonSocial,
+            trade_name: razonSocial,
+            ...(digitoVerificacion ? { dv: digitoVerificacion } : {}),
+          }
+        : { names: fullName }),
       address: direccion || undefined,
       email: email || undefined,
       phone: telefono || undefined,
-      legal_organization_code: DEFAULTS_CLIENTE.legal_organization_code,
-      tribute_code: DEFAULTS_CLIENTE.tribute_code,
+      legal_organization_code: tipoPersona === 'juridica' ? '1' : '2',
+      tribute_code: tributeCode,
       identification_document_code: mapTipoDocumentoToFactus(tipoDocumento),
       municipality_code: dane,
     },
@@ -590,12 +624,27 @@ async function persistFacturaEmitida(params: {
   // Si ya hay un intento previo (fallido), actualizamos en vez de insertar.
   const existente = await findFacturaExistente(pagoId);
 
+  // Para persona juridica el campo razon_social en `facturas` guarda la
+  // razon social real (no el nombre del representante). Para natural usa
+  // nombre completo.
+  const facturaRazonSocial =
+    sol.tipo_persona === 'juridica' && sol.razon_social
+      ? sol.razon_social.trim()
+      : `${sol.nombre} ${sol.apellido}`.trim();
+
+  // Si es NIT con DV, lo persistimos con el sufijo (eg. "900123456-7") para
+  // que el listado de facturas y el PDF muestren el documento completo.
+  const facturaNit =
+    sol.digito_verificacion && sol.tipo_documento.toLowerCase() === 'nit'
+      ? `${sol.numero_documento}-${sol.digito_verificacion}`
+      : sol.numero_documento;
+
   const data = {
     pago_id: pagoId,
     expediente_id: expedienteId,
     numero_factura: bill.number,
-    razon_social: `${sol.nombre} ${sol.apellido}`.trim(),
-    nit: sol.numero_documento,
+    razon_social: facturaRazonSocial,
+    nit: facturaNit,
     direccion_fiscal: sol.direccion,
     estado: 'emitida' as const,
     factus_bill_id: bill.id,

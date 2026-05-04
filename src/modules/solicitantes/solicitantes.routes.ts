@@ -31,13 +31,19 @@ router.patch(
   roleGuard(['solicitante']),
   validate({
     body: z.object({
+      tipo_persona: z.enum(['natural', 'juridica']).optional(),
+      razon_social: z.string().min(0).max(300).optional(),
       tipo_documento: z.string().min(1).max(20).optional(),
       numero_documento: z.string().min(3).max(40).optional(),
+      // DV del NIT colombiano: 1 digito (0-9). Vacio borra el valor.
+      digito_verificacion: z.string().regex(/^\d?$/).optional(),
       email: z.string().email().optional(),
       telefono: z.string().min(0).max(40).optional(),
       direccion: z.string().min(0).max(300).optional(),
       municipio_id: z.string().regex(/^\d{5}$/).or(z.literal('')).optional(),
       municipio_nombre: z.string().min(0).max(120).optional(),
+      // Codigo DIAN de responsabilidad fiscal. ZZ=No aplica (default).
+      tribute_code: z.string().min(1).max(2).optional(),
     }),
   }),
   solicitantesController.updateMisDatosFiscales,
