@@ -35,6 +35,39 @@ export async function registerSolicitante(
 
   const registrationSource = from_invitation ? 'invitacion_externa' : 'vitrina_publica';
 
+  // 0. Pre-flight: validar duplicados ANTES de crear el auth.user. Sin esto,
+  //    si el INSERT en `solicitantes` falla por unique violation (documento
+  //    ya registrado por otro solicitante), nos queda un auth.user huérfano
+  //    que bloquea reintentos con "EMAIL_ALREADY_EXISTS".
+  //    UNIQUE (tipo_documento, numero_documento) — definido en la migración
+  //    20260224000001_solicitantes_crud_columns.
+  const { data: solicitantesByDoc } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, email')
+    .eq('tipo_documento', tipo_documento)
+    .eq('numero_documento', numero_documento)
+    .limit(1);
+
+  if (solicitantesByDoc && solicitantesByDoc.length > 0) {
+    throw AppError.conflict(
+      'Ya existe un solicitante registrado con este documento. Si es tu cuenta, inicia sesión.',
+      'DOCUMENT_ALREADY_EXISTS',
+    );
+  }
+
+  const { data: solicitantesByEmail } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('email', email)
+    .limit(1);
+
+  if (solicitantesByEmail && solicitantesByEmail.length > 0) {
+    throw AppError.conflict(
+      'Ya existe una cuenta de solicitante con este email. Inicia sesión.',
+      'EMAIL_ALREADY_EXISTS',
+    );
+  }
+
   // 1. Create Supabase Auth user (auto-confirmed, no email verification for solicitante)
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
@@ -87,11 +120,35 @@ export async function registerSolicitante(
     } as never);
 
   if (solicitanteError) {
-    // Historicamente esto era log-only, pero dejaba usuarios fantasma sin
-    // registro de solicitante, rompiendo el flujo "Me interesa" después.
-    // Ahora abortamos — el usuario de auth queda, pero es preferible a
-    // permitir que siga navegando con un estado inconsistente.
-    logger.error({ error: solicitanteError.message, userId }, 'Error al crear registro de solicitante');
+    // Si llegamos aquí (la pre-flight no detectó duplicado pero el INSERT
+    // sí — race condition o columna NOT NULL faltante en una migración
+    // reciente), borramos el auth.user para no dejar un usuario huérfano
+    // que bloquee el siguiente intento con EMAIL_ALREADY_EXISTS.
+    logger.error(
+      { error: solicitanteError.message, code: (solicitanteError as { code?: string }).code, userId },
+      'Error al crear registro de solicitante — rolling back auth.user',
+    );
+    const { error: deleteAuthError } = await supabaseAuth.auth.admin.deleteUser(userId);
+    if (deleteAuthError) {
+      logger.error(
+        { userId, error: deleteAuthError.message },
+        'Rollback fallido: auth.user huérfano — requiere limpieza manual',
+      );
+    }
+
+    const code = (solicitanteError as { code?: string }).code;
+    if (code === '23505') {
+      throw AppError.conflict(
+        'Ya existe un solicitante registrado con este documento o email.',
+        'SOLICITANTE_DUPLICATE',
+      );
+    }
+    if (code === '23502') {
+      throw AppError.badRequest(
+        'Faltan datos obligatorios para completar el registro.',
+        'SOLICITANTE_MISSING_FIELDS',
+      );
+    }
     throw new AppError(
       500,
       'SOLICITANTE_INSERT_FAILED',
