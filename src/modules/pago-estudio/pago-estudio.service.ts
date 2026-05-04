@@ -15,6 +15,7 @@ import { sendPaymentLinkEmail } from '@/lib/email';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
 import { transitionPagoState } from '@/modules/pagos/pago-state-machine';
 import { attachFacturas } from '@/modules/pagos/pagos.service';
+import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import type { EnviarLinkInput } from './pago-estudio.schema';
 
 // ============================================================
@@ -304,6 +305,21 @@ export async function enviarLinkPago(
     detalle: { expediente_id: expedienteId, concepto: 'estudio', monto, email: input.email_pagador },
     ip,
   });
+
+  // Notificacion in-app al solicitante: el link de pago esta listo. Si su
+  // email matchea un perfil registrado, le aparece en la campana del panel.
+  // Fire-and-forget — el email ya salio antes; esta es solo redundancia util.
+  findPerfilIdByEmail(input.email_pagador).then((solicitanteUserId) => {
+    if (!solicitanteUserId) return;
+    return notificarUsuario({
+      userId: solicitanteUserId,
+      tipo: 'pago.disponible',
+      titulo: 'Listo para pagar tu estudio',
+      mensaje: `Ya puedes pagar el estudio crediticio (${formatCOP(monto)}). El pago habilita la consulta a TransUnion automaticamente.`,
+      link: `/expedientes/${expedienteId}`,
+      payload: { expediente_id: expedienteId, pago_id: pago.id },
+    });
+  }).catch((e) => logger.warn({ error: e, pagoId: pago.id }, 'Error notificando link de pago disponible'));
 
   return pago;
 }

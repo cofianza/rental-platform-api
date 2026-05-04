@@ -7,6 +7,7 @@ import { env } from '@/config';
 import { sendFirmaEmail } from '@/lib/email';
 import * as aucoClient from '@/lib/auco';
 import type { AucoWebhookPayload } from '@/lib/auco';
+import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import type { CrearSolicitudFirmaInput } from './firma.schema';
 
 // ============================================================
@@ -291,6 +292,21 @@ export async function crearSolicitudFirma(
     },
     ip,
   });
+
+  // Notificacion in-app al firmante: ya hay contrato listo para firmar.
+  // Auco mando WhatsApp/email a su lado, pero si entra al panel queremos
+  // que tambien aparezca en la campana. Fire-and-forget.
+  findPerfilIdByEmail(input.email_firmante).then((firmanteUserId) => {
+    if (!firmanteUserId) return;
+    return notificarUsuario({
+      userId: firmanteUserId,
+      tipo: 'contrato.pendiente_firma',
+      titulo: 'Contrato listo para firmar',
+      mensaje: `El contrato del inmueble en ${direccionInmueble || 'tu inmueble'} esta listo. Recibiste el link por WhatsApp o correo.`,
+      link: `/expedientes/${c.expediente_id}`,
+      payload: { contrato_id: input.contrato_id, expediente_id: c.expediente_id, solicitud_id: row.id },
+    });
+  }).catch((e) => logger.warn({ error: e, solicitudId: row.id }, 'Error notificando contrato pendiente de firma'));
 
   return {
     ...row,

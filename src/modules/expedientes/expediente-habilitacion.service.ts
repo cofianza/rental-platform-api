@@ -123,6 +123,24 @@ export async function habilitarEstudio(
     );
   }
 
+  // Notificacion in-app al solicitante. Independiente del email — el solicitante
+  // entra al panel y ve la campana con "Tu estudio fue habilitado". Fire-and-forget.
+  if (ctx.solicitanteEmail) {
+    findPerfilIdByEmail(ctx.solicitanteEmail).then((solicitanteUserId) => {
+      if (!solicitanteUserId) return;
+      return notificarUsuario({
+        userId: solicitanteUserId,
+        tipo: 'estudio.habilitado',
+        titulo: '¡Tu estudio fue habilitado!',
+        mensaje: puedeAutoCrearPago
+          ? `El propietario habilitó tu estudio crediticio. Realiza el pago para continuar con la evaluación.`
+          : `El propietario habilitó tu estudio crediticio. Recibirás el link de pago en breve.`,
+        link: `/expedientes/${expedienteId}`,
+        payload: { expediente_id: expedienteId, estudio_id: rpcResult.estudio_id },
+      });
+    }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error notificando estudio habilitado'));
+  }
+
   logger.info(
     {
       userId,
