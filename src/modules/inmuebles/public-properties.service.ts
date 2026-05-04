@@ -158,11 +158,16 @@ export async function getPublicPropertyById(id: string) {
     throw fromSupabaseError(error);
   }
 
-  // Fetch photos for this property
+  // Fetch photos for this property. Ordenamos primero por es_fachada DESC
+  // para que la foto marcada como fachada siempre aparezca en posicion 1
+  // (independientemente de su 'orden'), y como tiebreaker el orden manual.
+  // Sin este sort, el frontend caia a comparar URLs para reordenar — fragil
+  // con signed URLs que tienen timestamps cambiantes.
   const { data: fotos } = await supabase
     .from('fotos_inmueble')
-    .select('id, url, descripcion, orden')
+    .select('id, url, descripcion, orden, es_fachada')
     .eq('inmueble_id', id)
+    .order('es_fachada', { ascending: false })
     .order('orden', { ascending: true });
 
   const result = data as Record<string, unknown>;
