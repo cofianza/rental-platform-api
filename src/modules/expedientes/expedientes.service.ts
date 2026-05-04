@@ -31,6 +31,9 @@ interface ExpedienteListRow {
   solicitante: { id: string; nombre: string; apellido: string; tipo_documento: string; numero_documento: string; email: string } | null;
   analista: { id: string; nombre: string; apellido: string } | null;
   creador: { id: string; nombre: string; apellido: string } | null;
+  // Computed por el RPC (EXISTS sobre citas con estado='realizada'). Lo usa el
+  // frontend para distinguir "Cita previa" vs "Estudio" cuando estado='borrador'.
+  cita_realizada: boolean;
 }
 
 interface RpcListResult {

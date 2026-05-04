@@ -3,7 +3,14 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { UserRole } from '@/types/auth';
 
-export type CitaAction = 'create' | 'confirmar' | 'realizar' | 'cancelar' | 'no_asistio' | 'read';
+export type CitaAction =
+  | 'create'
+  | 'confirmar'
+  | 'reprogramar'
+  | 'realizar'
+  | 'cancelar'
+  | 'no_asistio'
+  | 'read';
 
 export interface CitaPermissionContext {
   expedienteId: string;
@@ -16,7 +23,15 @@ export interface CitaPermissionContext {
 const FULL_ACCESS_ROLES: ReadonlyArray<UserRole> = ['administrador', 'operador_analista'];
 const READ_ONLY_ROLES: ReadonlyArray<UserRole> = ['gerencia_consulta'];
 const PROPIETARIO_LIKE_ROLES: ReadonlyArray<UserRole> = ['propietario', 'inmobiliaria'];
-const SOLICITANTE_ALLOWED_ACTIONS: ReadonlyArray<CitaAction> = ['create', 'read', 'cancelar'];
+// El solicitante puede reprogramar su cita (la deja en 'solicitada' pendiente
+// de re-confirmacion del propietario) y cancelarla. Confirmar/realizar/no_asistio
+// siguen siendo exclusivos del propietario o admin.
+const SOLICITANTE_ALLOWED_ACTIONS: ReadonlyArray<CitaAction> = [
+  'create',
+  'read',
+  'cancelar',
+  'reprogramar',
+];
 
 interface ExpedienteOwnershipRow {
   id: string;
@@ -132,6 +147,9 @@ export async function assertCitaPermission(params: {
     }
     if (action === 'cancelar' && citaCreadoPor !== userId) {
       denyAndThrow(userId, userRol, expedienteId, action, 'solicitante solo puede cancelar citas propias');
+    }
+    if (action === 'reprogramar' && citaCreadoPor !== userId) {
+      denyAndThrow(userId, userRol, expedienteId, action, 'solicitante solo puede reprogramar citas propias');
     }
     logger.debug({ userId, userRol, expedienteId, action }, 'Cita autorizada (solicitante)');
     return toContext(row);

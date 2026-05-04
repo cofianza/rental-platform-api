@@ -121,7 +121,7 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     pagos: ['read'],
     facturas: ['read'],
     citas: ['create', 'read', 'update'],
-    disponibilidad: ['read_own', 'update'],
+    disponibilidad: ['read', 'read_own', 'update'],
   },
   inmobiliaria: {
     usuarios: ['read_own'],
@@ -141,7 +141,7 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     pagos: ['create', 'read'],
     facturas: ['create', 'read'],
     citas: ['create', 'read', 'update'],
-    disponibilidad: ['read_own', 'update'],
+    disponibilidad: ['read', 'read_own', 'update'],
   },
   solicitante: {
     usuarios: ['read_own'],
@@ -158,7 +158,9 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     documentos: ['create', 'read', 'descargar'],
     pagos: ['create', 'read'],
     facturas: ['read'],
-    citas: ['create', 'read'],
+    // 'update' habilita /reprogramar y /cancelar; el guard fino en
+    // citas.permissions.ts limita las acciones a las propias del solicitante.
+    citas: ['create', 'read', 'update'],
     disponibilidad: ['read'],
   },
 };

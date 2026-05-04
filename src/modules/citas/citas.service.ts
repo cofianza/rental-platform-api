@@ -603,12 +603,23 @@ export async function confirmarCita(id: string, input: ConfirmarCitaInput, userI
 }
 
 // ============================================================
-// Reprogramar (solicitada|confirmada → confirmada con nueva fecha)
+// Reprogramar (solicitada|confirmada → ... segun rol)
 //
-// Distinto de confirmarCita: este permite el self-loop confirmada -> confirmada
-// para que el propietario pueda mover el horario despues de haber confirmado
-// (caso "se me cruzo otra cosa, propongo otro dia"). Dispara siempre el aviso
-// 'reprogramada' al solicitante (email + in-app).
+// El comportamiento depende de quien lo dispara:
+//
+//   • Propietario / inmobiliaria / admin:
+//       confirmada -> confirmada con nueva fecha. Self-loop intencional para
+//       que el propietario pueda mover el horario despues de haber confirmado
+//       (caso "se me cruzo otra cosa, propongo otro dia"). Avisa al
+//       solicitante con el template 'reprogramada' y resetea el acuse para
+//       que vuelva a aceptar/rechazar.
+//
+//   • Solicitante:
+//       confirmada|solicitada -> 'solicitada' con la nueva fecha como
+//       fecha_propuesta. Limpia fecha_confirmada/confirmado_por para que el
+//       propietario tenga que volver a confirmar (es una nueva propuesta de
+//       fecha, no una confirmacion). Avisa al propietario igual que cuando
+//       crea la cita inicial.
 // ============================================================
 
 export async function reprogramarCita(
@@ -622,7 +633,7 @@ export async function reprogramarCita(
     userId,
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
-    action: 'confirmar',
+    action: 'reprogramar',
     citaCreadoPor: cita.creado_por as string | undefined,
   });
 
@@ -645,22 +656,38 @@ export async function reprogramarCita(
     );
     if (!disponible) {
       throw AppError.badRequest(
-        'El horario seleccionado no esta dentro de tu disponibilidad. Refresca y elige otro.',
+        'El horario seleccionado no esta dentro de la disponibilidad del propietario. Refresca y elige otro.',
         'SLOT_NO_DISPONIBLE',
       );
     }
   }
 
+  const isSolicitante = userRol === 'solicitante';
+  const fechaAnterior = (cita.fecha_confirmada || cita.fecha_propuesta) as string;
+
   const updateData: Record<string, unknown> = {
-    estado: 'confirmada',
-    fecha_confirmada: input.fecha_confirmada,
-    confirmado_por: userId,
-    // Reset del acuse: el solicitante debe volver a aceptar/rechazar la nueva
-    // fecha. Si lo dejabamos NOT NULL, el banner no volveria a aparecer.
-    acuse_solicitante_at: null,
     updated_at: new Date().toISOString(),
   };
-  if (input.notas_propietario) updateData.notas_propietario = input.notas_propietario;
+
+  if (isSolicitante) {
+    // Solicitante propone una nueva fecha → vuelve a 'solicitada' y queda
+    // pendiente de confirmacion del propietario. La nueva fecha es la
+    // propuesta, no la confirmada.
+    updateData.estado = 'solicitada';
+    updateData.fecha_propuesta = input.fecha_confirmada;
+    updateData.fecha_confirmada = null;
+    updateData.confirmado_por = null;
+    updateData.acuse_solicitante_at = null;
+    if (input.notas_propietario) updateData.notas_solicitante = input.notas_propietario;
+  } else {
+    updateData.estado = 'confirmada';
+    updateData.fecha_confirmada = input.fecha_confirmada;
+    updateData.confirmado_por = userId;
+    // Reset del acuse: el solicitante debe volver a aceptar/rechazar la nueva
+    // fecha. Si lo dejabamos NOT NULL, el banner no volveria a aparecer.
+    updateData.acuse_solicitante_at = null;
+    if (input.notas_propietario) updateData.notas_propietario = input.notas_propietario;
+  }
 
   const { data, error } = await db('citas')
     .update(updateData as never)
@@ -673,22 +700,37 @@ export async function reprogramarCita(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al reprogramar la cita');
   }
 
+  const descTimeline = isSolicitante
+    ? 'Solicitante propuso una nueva fecha de visita'
+    : 'Cita reprogramada';
+
   await registrarTimelineCita(
     cita.expediente_id as string,
-    'Cita reprogramada',
+    descTimeline,
     userId,
-    { cita_id: id, fecha_anterior: cita.fecha_confirmada || cita.fecha_propuesta, fecha_nueva: input.fecha_confirmada },
+    { cita_id: id, fecha_anterior: fechaAnterior, fecha_nueva: input.fecha_confirmada },
   );
 
-  // Aviso 'reprogramada' al solicitante (siempre, porque la fecha se movio).
-  notificarCitaConfirmada(
-    cita.expediente_id as string,
-    (cita.fecha_confirmada || cita.fecha_propuesta) as string,
-    input.fecha_confirmada,
-    input.notas_propietario,
-  ).catch((e) => logger.warn({ error: e, citaId: id }, 'Error al notificar reprogramacion de cita'));
+  if (isSolicitante) {
+    // Aviso al propietario igual que cita recien solicitada.
+    notificarCitaCreada(
+      cita.expediente_id as string,
+      input.fecha_confirmada,
+      false,
+    ).catch((e) =>
+      logger.warn({ error: e, citaId: id }, 'Error al notificar reprogramacion del solicitante'),
+    );
+  } else {
+    // Aviso 'reprogramada' al solicitante (siempre, porque la fecha se movio).
+    notificarCitaConfirmada(
+      cita.expediente_id as string,
+      fechaAnterior,
+      input.fecha_confirmada,
+      input.notas_propietario,
+    ).catch((e) => logger.warn({ error: e, citaId: id }, 'Error al notificar reprogramacion de cita'));
+  }
 
-  logger.info({ citaId: id }, 'Cita reprogramada');
+  logger.info({ citaId: id, userRol, isSolicitante }, 'Cita reprogramada');
   return data;
 }
 

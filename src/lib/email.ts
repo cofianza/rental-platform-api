@@ -92,13 +92,19 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
                 </tr>
               </table>
 
-              <!-- Button -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+              <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <a href="${loginUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Iniciar sesión
-                    </a>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${loginUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Iniciar sesión
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -184,13 +190,19 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
                 Hola ${nombre}, gracias por registrarte en Cofianza. Para completar tu registro, verifica tu correo electronico haciendo clic en el siguiente boton:
               </p>
 
-              <!-- Button -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+              <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <a href="${verifyUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Verificar correo
-                    </a>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${verifyUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Verificar correo
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -290,13 +302,19 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                 Hola ${nombre}, como parte del proceso de arrendamiento necesitamos que completes un formulario con tu informacion personal para realizar el estudio de riesgo crediticio.
               </p>
 
-              <!-- Button -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+              <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <a href="${formUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Completar formulario
-                    </a>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${formUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Completar formulario
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -416,13 +434,19 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
                 Haz clic en el siguiente botón para revisar y firmar la autorización:
               </p>
 
-              <!-- Button -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+              <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <a href="${autorizacionUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Firmar autorización
-                    </a>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${autorizacionUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Firmar autorización
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -620,13 +644,21 @@ function buildFirmaHtml(
                 </tr>
               </table>
 
-              <!-- Button -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+              <!-- Button (bulletproof pattern: bgcolor en <td>, padding en <a>,
+                   mso-padding-alt para Outlook. Gmail iOS a veces pierde el
+                   click cuando el bg+padding van solo en el <a>). -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <a href="${firmaUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Firmar contrato
-                    </a>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${firmaUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Firmar contrato
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -744,13 +776,19 @@ function buildPaymentLinkHtml(
                 </tr>
               </table>
 
-              <!-- Button -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+              <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <a href="${paymentUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Realizar pago
-                    </a>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${paymentUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Realizar pago
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -829,13 +867,19 @@ function buildPasswordResetHtml(resetUrl: string): string {
                 Recibimos una solicitud para restablecer la contraseña de tu cuenta. Haz clic en el siguiente botón para crear una nueva contraseña:
               </p>
 
-              <!-- Button -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+              <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <a href="${resetUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Restablecer contraseña
-                    </a>
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${resetUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Restablecer contraseña
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
