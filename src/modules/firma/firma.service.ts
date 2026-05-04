@@ -189,15 +189,16 @@ export async function crearSolicitudFirma(
       );
     }
 
-    aucoDocumentCode = await aucoClient.uploadDocumentForSignature({
+    // Globales OTP por email solo cuando NO hay flow por WhatsApp. Cuando
+    // enableWhatsapp=true, el signProfile individual ya define otpCode:'phone'
+    // y mezclar globales puede causar el error generico de Auco "Se ha
+    // producido un error inesperado" al iniciar el flujo en WhatsApp.
+    const baseUploadInput = {
       email: env.AUCO_SENDER_EMAIL,
       name: processName,
       subject: `Firma de contrato de arrendamiento - ${direccionInmueble}${ciudadInmueble ? `, ${ciudadInmueble}` : ''}`,
       message: `Estimado/a ${input.nombre_firmante}, se le invita a revisar y firmar el contrato de arrendamiento del inmueble ubicado en ${direccionInmueble}${ciudadInmueble ? `, ${ciudadInmueble}` : ''}. Por favor revise el documento y proceda con la firma electrónica.`,
       file: pdfBase64,
-      // Globales: OTP por email como default cuando no hay phone.
-      otpCode: true,
-      options: { otpCode: 'email' },
       signProfile: [
         buildSignProfile({
           name: input.nombre_firmante,
@@ -208,7 +209,19 @@ export async function crearSolicitudFirma(
       expiredDate: tokenExpiracion,
       // Auco rechaza el campo `webhooks` con 400 — los webhooks se configuran
       // a nivel de cuenta en el panel y se aplican automaticamente.
-    });
+    };
+
+    aucoDocumentCode = await aucoClient.uploadDocumentForSignature(
+      enableWhatsapp
+        ? baseUploadInput
+        : {
+            ...baseUploadInput,
+            // Sin WhatsApp: globales OTP-email para que Auco mande el flujo
+            // por correo con el codigo OTP en el mismo email.
+            otpCode: true,
+            options: { otpCode: 'email' },
+          },
+    );
     logger.info(
       { contratoId: c.id, whatsapp: enableWhatsapp, documentCode: aucoDocumentCode },
       enableWhatsapp
@@ -404,15 +417,16 @@ export async function reenviarSolicitudFirma(
       const phoneInternational = aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined);
       const enableWhatsapp = Boolean(phoneInternational);
 
-      nuevoAucoDocumentCode = await aucoClient.uploadDocumentForSignature({
+      // Mismo patron que crearSolicitudFirma: globales OTP-email solo cuando
+      // NO hay flow por WhatsApp. Mezclar globales y individuales con tipos
+      // de OTP distintos genera "Se ha producido un error inesperado" en
+      // el WhatsApp del firmante al iniciar el proceso.
+      const baseReuploadInput = {
         email: env.AUCO_SENDER_EMAIL,
         name: processName,
         subject: `Firma de contrato de arrendamiento - ${direccion}${ciudad ? `, ${ciudad}` : ''}`,
         message: `Estimado/a ${row.nombre_firmante}, se le invita a revisar y firmar el contrato de arrendamiento del inmueble ubicado en ${direccion}${ciudad ? `, ${ciudad}` : ''}. Por favor revise el documento y proceda con la firma electrónica.`,
         file: pdfBase64,
-        // Globales: OTP por email como default cuando no hay phone.
-        otpCode: true,
-        options: { otpCode: 'email' },
         signProfile: [
           buildSignProfile({
             name: row.nombre_firmante,
@@ -422,7 +436,17 @@ export async function reenviarSolicitudFirma(
         ],
         expiredDate: new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString(),
         // webhooks se configuran a nivel de cuenta en el panel de Auco.
-      });
+      };
+
+      nuevoAucoDocumentCode = await aucoClient.uploadDocumentForSignature(
+        enableWhatsapp
+          ? baseReuploadInput
+          : {
+              ...baseReuploadInput,
+              otpCode: true,
+              options: { otpCode: 'email' },
+            },
+      );
 
       // Recalcular el flag despues del re-upload exitoso. Si el cambio de
       // email implica diferente telefono, el caller deberia setear esa
