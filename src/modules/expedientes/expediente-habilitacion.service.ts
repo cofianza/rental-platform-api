@@ -2,7 +2,11 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
-import { sendEstudioHabilitadoEmail, sendEstudioNoHabilitadoEmail } from '../orchestrator/orchestrator.emails';
+import {
+  sendEstudioHabilitadoEmail,
+  sendEstudioNoHabilitadoEmail,
+  sendEstudioAprobadoEmail,
+} from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
@@ -307,6 +311,133 @@ export async function rechazarEstudio(
       estudio_rechazado: true,
       motivo: motivoNorm,
     },
+  };
+}
+
+/**
+ * Aprobar manualmente un expediente que el buró dejó condicionado.
+ *
+ * Flujo: cuando TransUnion devuelve resultado='condicionado', el orchestrator
+ * NO genera contrato automáticamente — espera a que el propietario revise la
+ * documentación adicional y decida si procede. Este endpoint es la salida:
+ * el propietario, tras revisar lo que pidió (codeudor, póliza, etc.),
+ * confirma que sí quiere proceder. Aquí transicionamos expediente a
+ * 'aprobado' y disparamos la generación del contrato — exactamente la misma
+ * ruta que toma el flujo automático cuando el estudio sale 'aprobado'.
+ *
+ * Ownership: solo propietario/inmobiliaria del inmueble (más admin/operador
+ * por defecto). El estudio.resultado se queda en 'condicionado' como reflejo
+ * de lo que el buró dijo — solo cambia el estado del expediente.
+ */
+export async function aprobarCondicionado(
+  expedienteId: string,
+  userId: string,
+  userRol: string,
+): Promise<{
+  expediente: { id: string; numero: string; estado: 'aprobado' };
+  contrato_id: string | null;
+}> {
+  // 1. Ownership + datos para emails / contrato.
+  const ctx = await assertHabilitacionPermission({
+    userId,
+    userRol: userRol as UserRole,
+    expedienteId,
+  });
+
+  if (ctx.estado !== 'condicionado') {
+    throw AppError.badRequest(
+      `Solo se puede aprobar manualmente un expediente en estado "condicionado". Estado actual: ${ctx.estado}.`,
+      'INVALID_STATE',
+    );
+  }
+
+  // 2. Transición de estado expediente: condicionado → aprobado.
+  const nowIso = new Date().toISOString();
+  const { error: updErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'aprobado', updated_at: nowIso } as never)
+    .eq('id', expedienteId)
+    .eq('estado', 'condicionado'); // doble check anti-race
+
+  if (updErr) {
+    logger.error({ error: updErr.message, expedienteId }, 'Error al aprobar expediente condicionado');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al aprobar el expediente');
+  }
+
+  // 3. Timeline.
+  await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'transicion',
+      descripcion: 'Propietario aprobó manualmente el expediente condicionado tras revisar la documentación adicional.',
+      estado_anterior: 'condicionado',
+      estado_nuevo: 'aprobado',
+      usuario_id: userId,
+      metadata: { manual: true, origen: 'propietario_aprobar_condicionado' },
+    } as never);
+
+  // 4. Generar el contrato. Lee duracion + fecha_inicio que el propietario
+  //    capturó al habilitar el estudio — son los mismos datos que usaría el
+  //    flujo automático.
+  let contratoId: string | null = null;
+  try {
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('duracion_contrato_meses, fecha_inicio_contrato')
+      .eq('id', expedienteId)
+      .single();
+    const expData = (expRow ?? {}) as {
+      duracion_contrato_meses: number | null;
+      fecha_inicio_contrato: string | null;
+    };
+
+    const { generarContrato } = await import('@/modules/contratos/contratos.service');
+    const result = await generarContrato(
+      expedienteId,
+      {
+        duracion_meses: expData.duracion_contrato_meses ?? 12,
+        fecha_inicio: expData.fecha_inicio_contrato ?? new Date().toISOString().slice(0, 10),
+      },
+      userId,
+    );
+    contratoId = (result as { id?: string } | null)?.id || null;
+    logger.info({ expedienteId, contratoId }, 'Contrato generado tras aprobación manual de condicionado');
+  } catch (err) {
+    logger.error(
+      { error: err, expedienteId },
+      'Error al generar contrato tras aprobar condicionado — el expediente quedó aprobado, hay que generar manual desde la pestaña Contratos',
+    );
+  }
+
+  // 5. Notificaciones al solicitante.
+  if (ctx.solicitanteEmail && ctx.solicitanteNombre) {
+    sendEstudioAprobadoEmail({
+      email: ctx.solicitanteEmail,
+      nombre: ctx.solicitanteNombre,
+      inmueble: ctx.inmuebleDireccion,
+      ciudad: ctx.inmuebleCiudad,
+      score: null,
+    }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error email aprobado tras condicionado'));
+  }
+
+  if (ctx.solicitanteEmail) {
+    findPerfilIdByEmail(ctx.solicitanteEmail).then((solicitanteUserId) => {
+      if (!solicitanteUserId) return;
+      return notificarUsuario({
+        userId: solicitanteUserId,
+        tipo: 'estudio.aprobado',
+        titulo: '¡Tu solicitud fue aprobada!',
+        mensaje: 'El propietario revisó tu documentación y aprobó tu solicitud. Estamos preparando el contrato — te avisaremos cuando esté listo para firmar.',
+        link: `/expedientes/${expedienteId}`,
+        payload: { expediente_id: expedienteId, contrato_id: contratoId, via: 'aprobacion_condicionado' },
+      });
+    }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error notificando aprobación condicionado'));
+  }
+
+  return {
+    expediente: { id: ctx.expedienteId, numero: ctx.numero, estado: 'aprobado' },
+    contrato_id: contratoId,
   };
 }
 

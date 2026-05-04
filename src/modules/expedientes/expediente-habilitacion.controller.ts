@@ -19,3 +19,9 @@ export async function rechazarEstudio(req: Request, res: Response) {
   const result = await service.rechazarEstudio(id, motivo, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
+
+export async function aprobarCondicionado(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol);
+  sendSuccess(res, result);
+}

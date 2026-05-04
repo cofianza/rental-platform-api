@@ -42,4 +42,16 @@ router.post(
   controller.rechazarEstudio,
 );
 
+// POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la
+// documentación adicional pedida (codeudor, póliza, etc.) el propietario
+// decide proceder. Transicionamos expediente a 'aprobado' y disparamos la
+// generación del contrato. No requiere body — todo se infiere del expediente.
+router.post(
+  '/:id/aprobar-condicionado',
+  authMiddleware,
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({ params: expedienteIdParamsSchema }),
+  controller.aprobarCondicionado,
+);
+
 export default router;
