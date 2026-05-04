@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 
 // ============================================================
 // State machine definition
@@ -301,9 +302,63 @@ async function notifyPaymentCompleted(pagoId: string, expedienteId: string, conc
       logger.info({ pagoId, expedienteId }, 'Estudio flow unlocked after payment confirmation');
     }
 
+    // Resolver al propietario (via inmuebles.propietario_id) y al solicitante
+    // (via solicitantes.creado_por) para notificarlos por separado en su panel.
+    await notifyPagoConfirmado(pagoId, expedienteId, conceptLabel);
+
     logger.info({ pagoId, expedienteId, concepto }, 'Payment completed notification sent');
   } catch (error) {
     logger.warn({ error, pagoId, expedienteId }, 'Error in notifyPaymentCompleted');
+  }
+}
+
+async function notifyPagoConfirmado(pagoId: string, expedienteId: string, conceptLabel: string) {
+  // Cargar expediente con sus FKs hacia propietario y solicitante.
+  const { data } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('numero, inmuebles(direccion, propietario_id), solicitantes(email, nombre, apellido)')
+    .eq('id', expedienteId)
+    .single() as {
+      data: {
+        numero: string;
+        inmuebles: { direccion: string; propietario_id: string | null } | null;
+        solicitantes: { email: string; nombre: string; apellido: string } | null;
+      } | null;
+    };
+
+  if (!data) return;
+
+  const direccion = data.inmuebles?.direccion ?? 'el inmueble';
+  const link = `/expedientes/${expedienteId}`;
+  const payload = { pago_id: pagoId, expediente_id: expedienteId };
+
+  // Propietario: aviso "tu solicitante pago".
+  if (data.inmuebles?.propietario_id) {
+    await notificarUsuario({
+      userId: data.inmuebles.propietario_id,
+      tipo: 'pago.confirmado',
+      titulo: 'Pago confirmado',
+      mensaje: data.solicitantes
+        ? `${data.solicitantes.nombre} ${data.solicitantes.apellido} pago el ${conceptLabel.toLowerCase()} de ${direccion}.`
+        : `Se confirmo el pago del ${conceptLabel.toLowerCase()} de ${direccion}.`,
+      link,
+      payload,
+    });
+  }
+
+  // Solicitante: confirmacion "tu pago se proceso".
+  if (data.solicitantes?.email) {
+    const solicitanteUserId = await findPerfilIdByEmail(data.solicitantes.email);
+    if (solicitanteUserId) {
+      await notificarUsuario({
+        userId: solicitanteUserId,
+        tipo: 'pago.confirmado',
+        titulo: 'Pago procesado correctamente',
+        mensaje: `Recibimos tu pago del ${conceptLabel.toLowerCase()}. ¡Listo para continuar!`,
+        link,
+        payload,
+      });
+    }
   }
 }
 
