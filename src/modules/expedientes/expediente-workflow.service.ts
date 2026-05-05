@@ -27,10 +27,15 @@ interface ExpedienteRow {
 }
 
 // Transiciones que el propietario / inmobiliaria pueden ejecutar sobre los
-// expedientes de SUS propios inmuebles. Son las terminales: una vez aprobado
-// o rechazado el flujo, el dueño puede cerrar el caso desde su panel sin
-// necesidad de pedir a un admin.
+// expedientes de SUS propios inmuebles. El dueño puede CERRAR / CANCELAR
+// el expediente en cualquier estado dando un motivo — no necesita pedir
+// permiso a un admin para abandonar un flujo. Las transiciones intermedias
+// (aprobar, rechazar, condicionar) siguen siendo del analista.
 const PROPIETARIO_TRANSITIONS: ReadonlyArray<{ from: EstadoExpediente; to: EstadoExpediente }> = [
+  { from: 'borrador', to: 'cerrado' },
+  { from: 'en_revision', to: 'cerrado' },
+  { from: 'informacion_incompleta', to: 'cerrado' },
+  { from: 'condicionado', to: 'cerrado' },
   { from: 'aprobado', to: 'cerrado' },
   { from: 'rechazado', to: 'cerrado' },
 ];
@@ -359,7 +364,9 @@ async function checkSinglePrecondition(
     }
 
     case 'CONTRATO_FIRMADO_O_MOTIVO': {
-      if (input.motivo) {
+      // Aceptamos motivo o comentario indistintamente — el modal del frontend
+      // tiene un solo campo "Comentario / Motivo" y lo manda como `comentario`.
+      if (input.motivo?.trim() || input.comentario?.trim()) {
         break;
       }
 
@@ -371,9 +378,23 @@ async function checkSinglePrecondition(
 
       if (error || !count || count === 0) {
         throw AppError.badRequest(
-          'Se requiere un contrato firmado o un motivo de cierre',
+          'Se requiere un contrato firmado o un motivo/comentario de cierre',
           'PRECONDITION_FAILED',
           { precondition: 'CONTRATO_FIRMADO_O_MOTIVO' },
+        );
+      }
+      break;
+    }
+
+    case 'MOTIVO_CIERRE': {
+      // Para cancelaciones desde estados activos: motivo o comentario obligatorio.
+      // El modal manda `comentario` (campo único "Comentario / Motivo"), pero
+      // aceptamos cualquiera para no acoplar la regla al naming del UI.
+      if (!input.motivo?.trim() && !input.comentario?.trim()) {
+        throw AppError.badRequest(
+          'Se requiere un motivo/comentario para cerrar el expediente',
+          'PRECONDITION_FAILED',
+          { precondition: 'MOTIVO_CIERRE' },
         );
       }
       break;

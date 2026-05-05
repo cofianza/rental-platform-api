@@ -26,7 +26,8 @@ export type PreconditionId =
   | 'ESTUDIO_RECHAZADO'
   | 'ESTUDIO_CONDICIONADO'
   | 'DOCUMENTOS_NUEVOS_DESDE_ULTIMA_TRANSICION'
-  | 'CONTRATO_FIRMADO_O_MOTIVO';
+  | 'CONTRATO_FIRMADO_O_MOTIVO'
+  | 'MOTIVO_CIERRE';
 
 export interface TransitionDef {
   from: EstadoExpediente;
@@ -99,6 +100,33 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
     to: 'cerrado',
     label: 'Cerrar expediente',
     preconditions: [],
+  },
+  // Cancelaciones: cualquier estado activo puede cerrarse cuando el dueño
+  // / analista decide abandonar el flujo (Mario, 5-may-2026). Requiere un
+  // motivo o comentario que queda en el timeline para auditoría.
+  {
+    from: 'borrador',
+    to: 'cerrado',
+    label: 'Cancelar expediente',
+    preconditions: ['MOTIVO_CIERRE'],
+  },
+  {
+    from: 'en_revision',
+    to: 'cerrado',
+    label: 'Cancelar expediente',
+    preconditions: ['MOTIVO_CIERRE'],
+  },
+  {
+    from: 'informacion_incompleta',
+    to: 'cerrado',
+    label: 'Cancelar expediente',
+    preconditions: ['MOTIVO_CIERRE'],
+  },
+  {
+    from: 'condicionado',
+    to: 'cerrado',
+    label: 'Cancelar expediente',
+    preconditions: ['MOTIVO_CIERRE'],
   },
 ];
 
