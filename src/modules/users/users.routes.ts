@@ -15,6 +15,11 @@ router.get('/operators', roleGuard(['administrador', 'operador_analista']), user
 // All remaining routes require administrador role
 router.use(roleGuard(['administrador']));
 
+// GET /users/orphans — auth.users sin entrada en perfiles. Para el panel
+// super-admin de limpieza de cuentas huérfanas (registros fallidos).
+// IMPORTANTE: registrarla antes de /:id, si no Express la matchea como :id.
+router.get('/orphans', usersController.listOrphans);
+
 router.get('/', validate({ query: listUsersQuerySchema }), usersController.list);
 router.get('/:id', validate({ params: userIdParamsSchema }), usersController.getById);
 router.post('/', validate({ body: createUserSchema }), usersController.create);

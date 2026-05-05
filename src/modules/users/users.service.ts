@@ -253,6 +253,78 @@ export async function activateUser(userId: string, requestingUserId: string, ip?
 }
 
 // ============================================================
+// Listar usuarios huérfanos en auth.users (sin perfil) — super-admin.
+//
+// Estos quedan cuando un registro falla a mitad de camino: el auth.user
+// se crea, pero el INSERT en `perfiles` o `solicitantes` aborta. Quedan
+// invisibles en el panel normal y bloquean reintentos del mismo email.
+//
+// Iteramos `auth.admin.listUsers` paginando (Supabase devuelve hasta 1000
+// por llamada) y restamos los IDs que sí tienen perfil. El resultado es
+// pequeño en la práctica — solo los rotos.
+// ============================================================
+
+export interface OrphanAuthUser {
+  id: string;
+  email: string | null;
+  created_at: string;
+  last_sign_in_at: string | null;
+  user_metadata: Record<string, unknown>;
+}
+
+export async function listOrphanAuthUsers(): Promise<OrphanAuthUser[]> {
+  // 1. Traer todos los IDs en perfiles (un solo query — escala fino mientras
+  //    seamos < ~50k usuarios; cuando crezca, mover a una RPC con LEFT JOIN).
+  const { data: perfilesData, error: perfilesErr } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('id');
+
+  if (perfilesErr) {
+    logger.error({ error: perfilesErr.message }, 'Error al listar perfiles para detectar huérfanos');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar perfiles');
+  }
+
+  const perfilIds = new Set(
+    (perfilesData as unknown as Array<{ id: string }>).map((r) => r.id),
+  );
+
+  // 2. Iterar auth.users paginando.
+  const PAGE_SIZE = 200;
+  const orphans: OrphanAuthUser[] = [];
+  let page = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { data, error } = await supabaseAuth.auth.admin.listUsers({
+      page,
+      perPage: PAGE_SIZE,
+    });
+    if (error) {
+      logger.error({ error: error.message, page }, 'Error al iterar auth.users');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al iterar auth.users');
+    }
+    const batch = data?.users ?? [];
+    for (const u of batch) {
+      if (!perfilIds.has(u.id)) {
+        orphans.push({
+          id: u.id,
+          email: u.email ?? null,
+          created_at: u.created_at,
+          last_sign_in_at: u.last_sign_in_at ?? null,
+          user_metadata: (u.user_metadata as Record<string, unknown>) || {},
+        });
+      }
+    }
+    if (batch.length < PAGE_SIZE) break;
+    page += 1;
+    // Hard stop como salvavidas — > 100k usuarios indica un problema serio
+    // independiente de huérfanos.
+    if (page > 500) break;
+  }
+
+  return orphans;
+}
+
+// ============================================================
 // Hard delete (super-admin) — Mario, 5-may-2026
 //
 // Borra el usuario por completo: auth.users + perfiles (CASCADE) y todo lo
@@ -344,12 +416,33 @@ export async function deleteUser(
     throw AppError.badRequest('No puedes eliminar tu propia cuenta', 'SELF_DELETION');
   }
 
-  // 1. Verificar que existe + capturar email para audit / response.
-  const user = await getUserById(userId);
-  const email = (user as unknown as { email?: string }).email ?? null;
+  // 1. Capturar email para audit / response. Soportamos dos casos:
+  //    (a) usuario "normal" con entrada en perfiles → getUserById.
+  //    (b) huérfano en auth.users sin perfil (registro fallido a medias) →
+  //        leer email directo de auth.admin.getUserById, sin pre-flight de
+  //        FKs porque no hay nada que pueda apuntarle (perfiles está vacío).
+  let email: string | null = null;
+  let esHuerfano = false;
+  try {
+    const user = await getUserById(userId);
+    email = (user as unknown as { email?: string }).email ?? null;
+  } catch (err) {
+    const isNotFound = err instanceof AppError && err.statusCode === 404;
+    if (!isNotFound) throw err;
+    // Sin perfil — verificar que sí exista en auth.users.
+    const { data: authResult, error: authErr } = await supabaseAuth.auth.admin.getUserById(userId);
+    if (authErr || !authResult?.user) {
+      throw AppError.notFound('Usuario no encontrado en auth.users');
+    }
+    email = authResult.user.email ?? null;
+    esHuerfano = true;
+  }
 
-  // 2. Pre-flight check de relaciones bloqueantes.
-  const check = await checkDeleteBlockers(userId);
+  // 2. Pre-flight check de relaciones bloqueantes — solo aplica si tiene
+  //    perfil, porque las FKs son a perfiles(id). Para huérfanos saltamos.
+  const check = esHuerfano
+    ? { blockers: {}, safe: true }
+    : await checkDeleteBlockers(userId);
   if (!check.safe && !options.force) {
     throw AppError.badRequest(
       'El usuario tiene datos asociados que bloquean el borrado. Usa force=true para intentar de todos modos.',
@@ -380,11 +473,11 @@ export async function deleteUser(
     accion: AUDIT_ACTIONS.USER_DELETED,
     entidad: AUDIT_ENTITIES.USER,
     entidadId: userId,
-    detalle: { email, force: !!options.force, blockers: check.blockers },
+    detalle: { email, force: !!options.force, blockers: check.blockers, huerfano: esHuerfano },
     ip,
   });
 
-  logger.info({ userId, email, requestingUserId }, 'Usuario eliminado completamente');
+  logger.info({ userId, email, requestingUserId, huerfano: esHuerfano }, 'Usuario eliminado completamente');
 
   return { deleted: true, user_id: userId, email };
 }

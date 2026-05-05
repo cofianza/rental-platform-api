@@ -47,6 +47,11 @@ export async function remove(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+export async function listOrphans(_req: Request, res: Response) {
+  const orphans = await usersService.listOrphanAuthUsers();
+  sendSuccess(res, orphans);
+}
+
 export async function listOperators(_req: Request, res: Response) {
   const operators = await usersService.listOperators();
   sendSuccess(res, operators);
