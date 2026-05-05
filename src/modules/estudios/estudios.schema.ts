@@ -174,6 +174,11 @@ const PROPOSITOS_SOPORTE = [
   'extractos_bancarios',
   'declaracion_renta',
   'carta_referencia',
+  // Propositos del flujo condicionado (Mario, 5-may-2026):
+  // codeudor = ficha + documentos del avalista; poliza = póliza de
+  // arrendamiento. Comparten tabla con los soportes de re-evaluacion.
+  'codeudor',
+  'poliza',
   'otros_soportes',
 ] as const;
 
