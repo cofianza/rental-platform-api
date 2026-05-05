@@ -10,8 +10,6 @@ import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequ
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
 
-const DURACION_CONTRATO_DEFAULT = 12;
-
 // ── Event: Habeas Data Autorizado ───────────────────────────
 
 export async function onHabeasDataAutorizado(params: {
@@ -130,9 +128,12 @@ export async function onEstudioCompletado(params: {
       await transicionarExpediente(expedienteId, 'en_revision');
       await transicionarExpediente(expedienteId, 'aprobado');
 
-      const contratoId = await generarContratoAutomatico(expedienteId, inm?.valor_arriendo);
-
-      await registrarTimeline(expedienteId, 'estudio', `Estudio crediticio aprobado (Score: ${score}). Contrato generado automaticamente.`);
+      // Decisión Mario (2026-05-05): NO auto-generar el contrato. La duración
+      // del contrato y la fecha de inicio las decide el propietario justo
+      // antes de generar — no antes del estudio. El expediente queda en
+      // 'aprobado' y el panel del propietario muestra el card "Generar
+      // contrato" que pide los datos y dispara la generación.
+      await registrarTimeline(expedienteId, 'estudio', `Estudio crediticio aprobado (Score: ${score}). El propietario debe generar el contrato desde el panel.`);
 
       if (sol?.email) {
         sendEstudioAprobadoEmail({
@@ -171,15 +172,6 @@ export async function onEstudioCompletado(params: {
           logger.warn({ error: e }, 'Orchestrator: error obteniendo datos propietario para notificacion');
         }
       }
-
-      // Decision de UX (2026-04-28): el contrato queda en 'borrador'
-      // para que la inmobiliaria/propietario lo revise antes de enviar
-      // a firma. El email "contrato listo" no se envia hasta que ellos
-      // disparen "Enviar a firma" desde el panel — ahi Auco notifica al
-      // arrendatario directamente. Mantenemos la referencia a las
-      // variables sol/inm para evitar TS unused; se siguen usando en
-      // notificaciones a propietario.
-      void contratoId;
 
     } else if (resultado === 'rechazado') {
       // ── RECHAZADO ──
@@ -404,33 +396,6 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
 
   logger.info({ expedienteId, from: exp.estado, to: estadoDestino }, 'Orchestrator: expediente transicionado');
 }
-
-async function generarContratoAutomatico(expedienteId: string, _valorArriendo?: number): Promise<string | null> {
-  try {
-    // Llamamos al servicio real de contratos: renderiza la plantilla V2
-    // (HTML + variables resueltas) → PDF via Puppeteer → sube a storage.
-    // El contrato queda en 'borrador' para que la inmobiliaria/propietario
-    // lo revise antes de enviar a firma manualmente.
-    const { generarContrato } = await import('@/modules/contratos/contratos.service');
-    const result = await generarContrato(
-      expedienteId,
-      { duracion_meses: DURACION_CONTRATO_DEFAULT, fecha_inicio: new Date().toISOString().slice(0, 10) },
-      // userId=null: el orchestrator no es un usuario real; generado_por
-      // queda en NULL en la tabla contratos. Pasar 'system' rompia el FK
-      // a perfiles y abortaba la generacion automatica del contrato.
-      null,
-    );
-    const contratoId = (result as { id?: string } | null)?.id || null;
-    if (contratoId) {
-      logger.info({ contratoId, expedienteId }, 'Orchestrator: contrato auto-generado con PDF');
-    }
-    return contratoId;
-  } catch (error) {
-    logger.error({ error, expedienteId }, 'Orchestrator: error en generarContratoAutomatico');
-    return null;
-  }
-}
-
 
 async function registrarTimeline(expedienteId: string, tipo: string, descripcion: string) {
   await db('eventos_timeline').insert({

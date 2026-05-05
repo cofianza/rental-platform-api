@@ -31,15 +31,15 @@ export interface HabilitarEstudioResult {
  * `estudios` y notifica al solicitante. La mutación DB es atómica vía
  * RPC fn_habilitar_estudio_expediente.
  *
- * El propietario captura aqui los datos del contrato (duracion + fecha
- * inicio) que se persisten en el expediente y alimentan la generacion
- * del contrato mas adelante. Ambos requeridos.
+ * No recibe datos del contrato (duracion + fecha): esos no son necesarios
+ * para correr el estudio crediticio. Se piden solo cuando se va a generar
+ * el contrato — post-aprobacion — via aprobarCondicionado() o
+ * generarContratoExpediente().
  */
 export async function habilitarEstudio(
   expedienteId: string,
   userId: string,
   userRol: string,
-  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string },
 ): Promise<HabilitarEstudioResult> {
   // 1. Ownership + datos del expediente para el email posterior.
   const ctx = await assertHabilitacionPermission({
@@ -48,26 +48,7 @@ export async function habilitarEstudio(
     expedienteId,
   });
 
-  // 2. Persistir datos del contrato en el expediente. Lo hacemos antes del
-  //    RPC para que aunque falle la habilitacion del estudio, los datos del
-  //    contrato queden guardados (el usuario puede reintentar habilitar
-  //    sin volver a pedirlos). Si ya estuvieran habilitados (idempotencia
-  //    del RPC), ese update queda como no-op semantico.
-  const { error: updErr } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      duracion_contrato_meses: datosContrato.duracion_contrato_meses,
-      fecha_inicio_contrato: datosContrato.fecha_inicio_contrato,
-      updated_at: new Date().toISOString(),
-    } as never)
-    .eq('id', expedienteId);
-
-  if (updErr) {
-    logger.error({ error: updErr.message, expedienteId }, 'Error al guardar datos del contrato');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al guardar los datos del contrato');
-  }
-
-  // 3. RPC atómico: UPDATE expediente + INSERT estudio + INSERT timeline.
+  // 2. RPC atómico: UPDATE expediente + INSERT estudio + INSERT timeline.
   //    Las validaciones (existencia, idempotencia, estado, cita realizada)
   //    viven en el RPC y vienen como mensajes de RAISE EXCEPTION que aquí
   //    se mapean a códigos HTTP específicos.
@@ -321,9 +302,9 @@ export async function rechazarEstudio(
  * NO genera contrato automáticamente — espera a que el propietario revise la
  * documentación adicional y decida si procede. Este endpoint es la salida:
  * el propietario, tras revisar lo que pidió (codeudor, póliza, etc.),
- * confirma que sí quiere proceder. Aquí transicionamos expediente a
- * 'aprobado' y disparamos la generación del contrato — exactamente la misma
- * ruta que toma el flujo automático cuando el estudio sale 'aprobado'.
+ * confirma que sí quiere proceder y captura los datos del contrato (duración
+ * + fecha de inicio). Transicionamos expediente a 'aprobado' y disparamos la
+ * generación del contrato.
  *
  * Ownership: solo propietario/inmobiliaria del inmueble (más admin/operador
  * por defecto). El estudio.resultado se queda en 'condicionado' como reflejo
@@ -333,10 +314,68 @@ export async function aprobarCondicionado(
   expedienteId: string,
   userId: string,
   userRol: string,
+  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string },
 ): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
   contrato_id: string | null;
 }> {
+  return await aprobarYGenerarContrato({
+    expedienteId,
+    userId,
+    userRol,
+    datosContrato,
+    fromState: 'condicionado',
+  });
+}
+
+/**
+ * Para el flujo "estudio aprobado por el buró": antes el orchestrator
+ * auto-generaba el contrato con defaults (12 meses + hoy). Mario pidió
+ * (5-may-2026) que la duración + fecha la decida el propietario justo
+ * antes de generar el contrato, no antes del estudio. Por eso ahora el
+ * orchestrator solo deja el expediente en 'aprobado' SIN contrato y este
+ * endpoint es el que dispara la generación con los datos elegidos.
+ *
+ * Idempotente parcial: si ya existe un contrato activo para el expediente,
+ * el service de contratos lo detecta y aborta — el caller debe revisar
+ * antes de llamar.
+ */
+export async function generarContratoExpediente(
+  expedienteId: string,
+  userId: string,
+  userRol: string,
+  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string },
+): Promise<{
+  expediente: { id: string; numero: string; estado: 'aprobado' };
+  contrato_id: string | null;
+}> {
+  return await aprobarYGenerarContrato({
+    expedienteId,
+    userId,
+    userRol,
+    datosContrato,
+    fromState: 'aprobado', // el expediente ya está aprobado, solo generamos el contrato
+  });
+}
+
+/**
+ * Implementación común de "aprobar (si hace falta) y generar contrato".
+ * Centraliza el chequeo de ownership, la transición de estado opcional,
+ * el persistence de duración/fecha en expedientes y la llamada a
+ * generarContrato — para no repetir lógica entre los dos flujos.
+ */
+async function aprobarYGenerarContrato(params: {
+  expedienteId: string;
+  userId: string;
+  userRol: string;
+  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string };
+  fromState: 'condicionado' | 'aprobado';
+}): Promise<{
+  expediente: { id: string; numero: string; estado: 'aprobado' };
+  contrato_id: string | null;
+}> {
+  const { expedienteId, userId, userRol, datosContrato, fromState } = params;
+
   // 1. Ownership + datos para emails / contrato.
   const ctx = await assertHabilitacionPermission({
     userId,
@@ -344,74 +383,85 @@ export async function aprobarCondicionado(
     expedienteId,
   });
 
-  if (ctx.estado !== 'condicionado') {
+  if (ctx.estado !== fromState) {
+    const expected = fromState === 'condicionado'
+      ? 'condicionado'
+      : 'aprobado (sin contrato generado)';
     throw AppError.badRequest(
-      `Solo se puede aprobar manualmente un expediente en estado "condicionado". Estado actual: ${ctx.estado}.`,
+      `Estado de expediente invalido para esta accion. Esperado: ${expected}. Actual: ${ctx.estado}.`,
       'INVALID_STATE',
     );
   }
 
-  // 2. Transición de estado expediente: condicionado → aprobado.
   const nowIso = new Date().toISOString();
-  const { error: updErr } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: 'aprobado', updated_at: nowIso } as never)
-    .eq('id', expedienteId)
-    .eq('estado', 'condicionado'); // doble check anti-race
 
-  if (updErr) {
-    logger.error({ error: updErr.message, expedienteId }, 'Error al aprobar expediente condicionado');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al aprobar el expediente');
+  // 2. Persistir datos del contrato en el expediente (para auditoría +
+  //    re-generación). Aún no transicionamos estado — eso depende del flujo.
+  const { error: persistErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      duracion_contrato_meses: datosContrato.duracion_contrato_meses,
+      fecha_inicio_contrato: datosContrato.fecha_inicio_contrato,
+      updated_at: nowIso,
+    } as never)
+    .eq('id', expedienteId);
+
+  if (persistErr) {
+    logger.error({ error: persistErr.message, expedienteId }, 'Error al guardar datos del contrato en expediente');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al guardar los datos del contrato');
   }
 
-  // 3. Timeline.
-  await (supabase
-    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      expediente_id: expedienteId,
-      tipo: 'transicion',
-      descripcion: 'Propietario aprobó manualmente el expediente condicionado tras revisar la documentación adicional.',
-      estado_anterior: 'condicionado',
-      estado_nuevo: 'aprobado',
-      usuario_id: userId,
-      metadata: { manual: true, origen: 'propietario_aprobar_condicionado' },
-    } as never);
+  // 3. Transición condicionado → aprobado (solo si venía de condicionado).
+  if (fromState === 'condicionado') {
+    const { error: updErr } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update({ estado: 'aprobado', updated_at: nowIso } as never)
+      .eq('id', expedienteId)
+      .eq('estado', 'condicionado'); // doble check anti-race
 
-  // 4. Generar el contrato. Lee duracion + fecha_inicio que el propietario
-  //    capturó al habilitar el estudio — son los mismos datos que usaría el
-  //    flujo automático.
+    if (updErr) {
+      logger.error({ error: updErr.message, expedienteId }, 'Error al aprobar expediente condicionado');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al aprobar el expediente');
+    }
+
+    await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: expedienteId,
+        tipo: 'transicion',
+        descripcion: 'Propietario aprobó manualmente el expediente condicionado tras revisar la documentación adicional.',
+        estado_anterior: 'condicionado',
+        estado_nuevo: 'aprobado',
+        usuario_id: userId,
+        metadata: { manual: true, origen: 'propietario_aprobar_condicionado' },
+      } as never);
+  }
+
+  // 4. Generar el contrato con los datos enviados.
   let contratoId: string | null = null;
   try {
-    const { data: expRow } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('duracion_contrato_meses, fecha_inicio_contrato')
-      .eq('id', expedienteId)
-      .single();
-    const expData = (expRow ?? {}) as {
-      duracion_contrato_meses: number | null;
-      fecha_inicio_contrato: string | null;
-    };
-
     const { generarContrato } = await import('@/modules/contratos/contratos.service');
     const result = await generarContrato(
       expedienteId,
       {
-        duracion_meses: expData.duracion_contrato_meses ?? 12,
-        fecha_inicio: expData.fecha_inicio_contrato ?? new Date().toISOString().slice(0, 10),
+        duracion_meses: datosContrato.duracion_contrato_meses,
+        fecha_inicio: datosContrato.fecha_inicio_contrato,
       },
       userId,
     );
     contratoId = (result as { id?: string } | null)?.id || null;
-    logger.info({ expedienteId, contratoId }, 'Contrato generado tras aprobación manual de condicionado');
+    logger.info({ expedienteId, contratoId, fromState }, 'Contrato generado por el propietario');
   } catch (err) {
     logger.error(
-      { error: err, expedienteId },
-      'Error al generar contrato tras aprobar condicionado — el expediente quedó aprobado, hay que generar manual desde la pestaña Contratos',
+      { error: err, expedienteId, fromState },
+      'Error al generar contrato — el expediente quedó aprobado, hay que reintentar desde la pestaña Contratos',
     );
   }
 
-  // 5. Notificaciones al solicitante.
-  if (ctx.solicitanteEmail && ctx.solicitanteNombre) {
+  // 5. Notificaciones al solicitante (solo si transicionamos desde
+  //    condicionado — en el flujo aprobado-auto el orchestrator ya envió
+  //    el email "estudio aprobado" cuando bajó el resultado del buró).
+  if (fromState === 'condicionado' && ctx.solicitanteEmail && ctx.solicitanteNombre) {
     sendEstudioAprobadoEmail({
       email: ctx.solicitanteEmail,
       nombre: ctx.solicitanteNombre,
@@ -419,9 +469,7 @@ export async function aprobarCondicionado(
       ciudad: ctx.inmuebleCiudad,
       score: null,
     }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error email aprobado tras condicionado'));
-  }
 
-  if (ctx.solicitanteEmail) {
     findPerfilIdByEmail(ctx.solicitanteEmail).then((solicitanteUserId) => {
       if (!solicitanteUserId) return;
       return notificarUsuario({

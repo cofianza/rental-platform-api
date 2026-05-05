@@ -10,21 +10,14 @@ const router = Router();
 // PATCH /api/v1/expedientes/:id/habilitar-estudio — Paso 3 del flujo.
 // roleGuard filtra solicitante/gerencia_consulta a nivel coarse-grained;
 // el service aplica ownership fine-grained para propietario/inmobiliaria.
-// El body recibe los datos del contrato que se persisten en el expediente
-// para alimentar la generacion del contrato mas adelante (duracion + fecha
-// de inicio). Ambos requeridos al habilitar.
+// Antes este endpoint pedia duracion + fecha del contrato, pero esos datos
+// no son necesarios para correr el estudio crediticio — se piden solo cuando
+// se va a generar el contrato (post-aprobacion). Por eso ahora no requiere body.
 router.patch(
   '/:id/habilitar-estudio',
   authMiddleware,
   roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
-  validate({
-    params: expedienteIdParamsSchema,
-    body: z.object({
-      duracion_contrato_meses: z.coerce.number().int().min(1).max(120),
-      // YYYY-MM-DD; el frontend manda esto desde un <input type="date">.
-      fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)'),
-    }),
-  }),
+  validate({ params: expedienteIdParamsSchema }),
   controller.habilitarEstudio,
 );
 
@@ -42,16 +35,35 @@ router.post(
   controller.rechazarEstudio,
 );
 
+// Body común para el momento de generar el contrato: duración + fecha de inicio.
+// Antes vivía en `habilitar-estudio` pero la regla de negocio (Mario, 5-may-2026)
+// es pedirlos justo antes de generar el contrato — no del estudio.
+const datosContratoBody = z.object({
+  duracion_contrato_meses: z.coerce.number().int().min(1).max(120),
+  fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)'),
+});
+
 // POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la
 // documentación adicional pedida (codeudor, póliza, etc.) el propietario
 // decide proceder. Transicionamos expediente a 'aprobado' y disparamos la
-// generación del contrato. No requiere body — todo se infiere del expediente.
+// generación del contrato con los datos enviados.
 router.post(
   '/:id/aprobar-condicionado',
   authMiddleware,
   roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
-  validate({ params: expedienteIdParamsSchema }),
+  validate({ params: expedienteIdParamsSchema, body: datosContratoBody }),
   controller.aprobarCondicionado,
+);
+
+// POST /api/v1/expedientes/:id/generar-contrato — Para el flujo "estudio
+// aprobado por el buró": el orchestrator ya no auto-genera, deja que el
+// propietario decida los datos del contrato y lo dispare desde el panel.
+router.post(
+  '/:id/generar-contrato',
+  authMiddleware,
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({ params: expedienteIdParamsSchema, body: datosContratoBody }),
+  controller.generarContratoExpediente,
 );
 
 export default router;

@@ -5,11 +5,7 @@ import type { ExpedienteIdParams } from './expedientes.schema';
 
 export async function habilitarEstudio(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const body = req.body as {
-    duracion_contrato_meses: number;
-    fecha_inicio_contrato: string;
-  };
-  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol, body);
+  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
 
@@ -22,6 +18,20 @@ export async function rechazarEstudio(req: Request, res: Response) {
 
 export async function aprobarCondicionado(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol);
+  const body = req.body as {
+    duracion_contrato_meses: number;
+    fecha_inicio_contrato: string;
+  };
+  const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol, body);
+  sendSuccess(res, result);
+}
+
+export async function generarContratoExpediente(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const body = req.body as {
+    duracion_contrato_meses: number;
+    fecha_inicio_contrato: string;
+  };
+  const result = await service.generarContratoExpediente(id, req.user!.id, req.user!.rol, body);
   sendSuccess(res, result);
 }
