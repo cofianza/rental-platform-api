@@ -9,10 +9,13 @@ const router = Router();
 // Todas las rutas de workflow requieren autenticacion
 router.use(authMiddleware);
 
-// POST /api/v1/expedientes/:id/transitions — Ejecutar transicion
+// POST /api/v1/expedientes/:id/transitions — Ejecutar transicion.
+// Admin/operador pueden hacer cualquier transicion. Propietario/inmobiliaria
+// pueden hacer solo las transiciones terminales (aprobado/rechazado → cerrado)
+// sobre expedientes de SUS inmuebles — el service hace el filtro fine-grained.
 router.post(
   '/:id/transitions',
-  roleGuard(['administrador', 'operador_analista']),
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
   validate({ params: expedienteIdParamsSchema, body: transitionBodySchema }),
   workflowController.transition,
 );

@@ -21,7 +21,19 @@ interface ExpedienteRow {
   numero: string;
   estado: EstadoExpediente;
   analista_id: string | null;
+  /** Propietario del inmueble — necesario para validar ownership cuando el
+   *  caller es propietario/inmobiliaria. */
+  propietario_id: string | null;
 }
+
+// Transiciones que el propietario / inmobiliaria pueden ejecutar sobre los
+// expedientes de SUS propios inmuebles. Son las terminales: una vez aprobado
+// o rechazado el flujo, el dueño puede cerrar el caso desde su panel sin
+// necesidad de pedir a un admin.
+const PROPIETARIO_TRANSITIONS: ReadonlyArray<{ from: EstadoExpediente; to: EstadoExpediente }> = [
+  { from: 'aprobado', to: 'cerrado' },
+  { from: 'rechazado', to: 'cerrado' },
+];
 
 interface TransitionRpcResult {
   expediente_id: string;
@@ -54,8 +66,9 @@ export async function executeTransition(
     );
   }
 
-  // Verificar permisos
-  checkPermissions(expediente, user);
+  // Verificar permisos (incluye ownership para propietario/inmobiliaria
+  // y filtra qué transiciones puede hacer cada rol).
+  checkPermissions(expediente, user, currentState, targetState);
 
   // Verificar precondiciones
   const transitionDef = getTransitionDef(currentState, targetState)!;
@@ -158,7 +171,7 @@ export async function getTransitionHistory(expedienteId: string) {
 async function fetchExpediente(id: string): Promise<ExpedienteRow> {
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, analista_id')
+    .select('id, numero, estado, analista_id, inmuebles(propietario_id)')
     .eq('id', id)
     .single();
 
@@ -166,19 +179,60 @@ async function fetchExpediente(id: string): Promise<ExpedienteRow> {
     throw AppError.notFound('Expediente no encontrado');
   }
 
-  return data as unknown as ExpedienteRow;
+  const row = data as unknown as {
+    id: string;
+    numero: string;
+    estado: EstadoExpediente;
+    analista_id: string | null;
+    inmuebles: { propietario_id: string } | null;
+  };
+
+  return {
+    id: row.id,
+    numero: row.numero,
+    estado: row.estado,
+    analista_id: row.analista_id,
+    propietario_id: row.inmuebles?.propietario_id ?? null,
+  };
 }
 
-function checkPermissions(expediente: ExpedienteRow, user: AuthUser): void {
-  const isAdmin = user.rol === 'administrador';
+function checkPermissions(
+  expediente: ExpedienteRow,
+  user: AuthUser,
+  fromState: EstadoExpediente,
+  toState: EstadoExpediente,
+): void {
+  const isAdmin = user.rol === 'administrador' || user.rol === 'operador_analista';
   const isAssignedAnalyst = expediente.analista_id === user.id;
 
-  if (!isAdmin && !isAssignedAnalyst) {
-    throw AppError.forbidden(
-      'Solo el analista asignado o un administrador pueden transicionar este expediente',
-      'FORBIDDEN',
+  if (isAdmin || isAssignedAnalyst) return;
+
+  // Propietario / inmobiliaria pueden cerrar SUS expedientes terminales.
+  // No tienen permiso para hacer transiciones intermedias (las del analista).
+  const isPropietarioRol = user.rol === 'propietario' || user.rol === 'inmobiliaria';
+  if (isPropietarioRol) {
+    if (expediente.propietario_id !== user.id) {
+      throw AppError.forbidden(
+        'Solo el dueño del inmueble puede cambiar el estado de este expediente',
+        'EXPEDIENTE_FORBIDDEN',
+      );
+    }
+    const allowed = PROPIETARIO_TRANSITIONS.some(
+      (t) => t.from === fromState && t.to === toState,
     );
+    if (!allowed) {
+      throw AppError.forbidden(
+        `Como ${user.rol} solo puedes cerrar expedientes ya aprobados o rechazados. La transicion ${fromState} → ${toState} requiere un administrador.`,
+        'TRANSITION_NOT_ALLOWED_FOR_ROLE',
+      );
+    }
+    return;
   }
+
+  throw AppError.forbidden(
+    'Solo el analista asignado, un administrador o el dueño del inmueble pueden transicionar este expediente',
+    'FORBIDDEN',
+  );
 }
 
 async function checkPreconditions(
