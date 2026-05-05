@@ -40,6 +40,13 @@ export async function activate(req: Request, res: Response) {
   sendSuccess(res, user);
 }
 
+export async function remove(req: Request, res: Response) {
+  const { id } = req.params as unknown as UserIdParams;
+  const force = req.query.force === 'true' || req.query.force === '1';
+  const result = await usersService.deleteUser(id, req.user!.id, { force }, req.ip);
+  sendSuccess(res, result);
+}
+
 export async function listOperators(_req: Request, res: Response) {
   const operators = await usersService.listOperators();
   sendSuccess(res, operators);

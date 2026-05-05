@@ -22,4 +22,10 @@ router.put('/:id', validate({ params: userIdParamsSchema, body: updateUserSchema
 router.patch('/:id/deactivate', validate({ params: userIdParamsSchema }), usersController.deactivate);
 router.patch('/:id/activate', validate({ params: userIdParamsSchema }), usersController.activate);
 
+// DELETE /users/:id?force=true — Borrado completo (super-admin).
+// Pre-flight check: si tiene relaciones bloqueantes responde 400 con detalle.
+// El admin puede reintentar con ?force=true para que el RDBMS resuelva las
+// FKs según ON DELETE policy de cada tabla.
+router.delete('/:id', validate({ params: userIdParamsSchema }), usersController.remove);
+
 export default router;

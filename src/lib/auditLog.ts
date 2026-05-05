@@ -11,6 +11,7 @@ export const AUDIT_ACTIONS = {
   USER_UPDATED: 'user_updated',
   USER_DEACTIVATED: 'user_deactivated',
   USER_ACTIVATED: 'user_activated',
+  USER_DELETED: 'user_deleted',
   USER_ROLE_CHANGED: 'user_role_changed',
   CONFIG_CHANGED: 'config_changed',
   INMUEBLE_CREATED: 'inmueble_created',
