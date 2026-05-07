@@ -47,7 +47,11 @@ const TU_ERROR_MESSAGES: Record<number, string> = {
   37: 'Numero de identificacion invalido',
 };
 
-const REQUEST_TIMEOUT_MS = 30_000;
+// 60s para tolerar la flakiness del UAT de TransUnion (puede tardar 35-50s
+// legitimamente bajo carga, sin estar caido). En PROD las consultas tardan
+// 8-25s, asi que 60s sobra y deja margen para picos. La cedula 1026130143
+// fallo con timeout de 30s aunque previamente devolvia 'aprobado' rapido.
+const REQUEST_TIMEOUT_MS = 60_000;
 
 // ── Interfaces de respuesta TransUnion ──────────────────────
 
