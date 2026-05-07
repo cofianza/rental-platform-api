@@ -16,6 +16,10 @@ import expedienteTimelineRouter from '@/modules/expedientes/expediente-timeline.
 import expedienteAssignmentsRouter from '@/modules/expedientes/expediente-assignments.routes';
 import expedienteHabilitacionRouter from '@/modules/expedientes/expediente-habilitacion.routes';
 import expedienteSoportesRouter from '@/modules/expedientes/expediente-soportes.routes';
+import {
+  expedienteCoarrendatariosRouter,
+  publicCoarrendatarioRouter,
+} from '@/modules/coarrendatarios/coarrendatarios.routes';
 import usersRouter from '@/modules/users/users.routes';
 import perfilArrendadorRouter from '@/modules/perfil-arrendador/perfil-arrendador.routes';
 import registrationRouter from '@/modules/registration/registration.routes';
@@ -97,6 +101,8 @@ app.use('/api/v1/expedientes', expedienteTimelineRouter);
 app.use('/api/v1/expedientes', expedienteAssignmentsRouter);
 app.use('/api/v1/expedientes', expedienteHabilitacionRouter);
 app.use('/api/v1/expedientes', expedienteSoportesRouter);
+app.use('/api/v1/expedientes', expedienteCoarrendatariosRouter);
+app.use('/api/v1/public/coarrendatario', publicCoarrendatarioRouter);
 app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/perfil-arrendador', perfilArrendadorRouter);
 app.use('/api/v1/inmuebles', inmueblesRouter);

@@ -1794,18 +1794,40 @@ async function registrarResultadoInline(
     },
   });
 
-  // Orchestrator: fire-and-forget para no bloquear la respuesta.
-  import('@/modules/orchestrator/orchestrator.service')
-    .then(({ onEstudioCompletado }) =>
-      onEstudioCompletado({
-        estudioId,
-        expedienteId,
-        resultado: result.resultado,
-        score: result.score,
-        solicitanteId: '',
-      }),
-    )
-    .catch((err) => logger.warn({ error: err, estudioId }, 'Orchestrator hook falló'));
+  // Hook post-resultado. Distinguimos según el tipo de estudio:
+  //   - 'individual' (titular): orchestrator normal — transiciona expediente
+  //     a aprobado/condicionado/rechazado y dispara emails.
+  //   - 'con_coarrendatario': lógica de ponderación que combina con el del
+  //     titular. NO disparamos orchestrator porque ya el titular pasó por él
+  //     (ahora estamos cerrando el ciclo del par).
+  // Fire-and-forget: el resultado del estudio ya quedó persistido vía RPC.
+  const tipoEstudio = (await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('tipo')
+    .eq('id', estudioId)
+    .maybeSingle()).data as { tipo?: string } | null;
+
+  if (tipoEstudio?.tipo === 'con_coarrendatario') {
+    import('@/modules/coarrendatarios/coarrendatarios.service')
+      .then(({ onCoarrendatarioEstudioCompletado }) =>
+        onCoarrendatarioEstudioCompletado(estudioId),
+      )
+      .catch((err) =>
+        logger.warn({ error: err, estudioId }, 'Hook ponderación coarrendatario falló'),
+      );
+  } else {
+    import('@/modules/orchestrator/orchestrator.service')
+      .then(({ onEstudioCompletado }) =>
+        onEstudioCompletado({
+          estudioId,
+          expedienteId,
+          resultado: result.resultado,
+          score: result.score,
+          solicitanteId: '',
+        }),
+      )
+      .catch((err) => logger.warn({ error: err, estudioId }, 'Orchestrator hook falló'));
+  }
 }
 
 // ============================================================
