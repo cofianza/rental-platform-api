@@ -61,7 +61,8 @@ export async function listEstudios(expedienteId: string, query: ListEstudiosQuer
       id, tipo, proveedor, estado, resultado, score, observaciones,
       motivo_rechazo, condiciones,
       duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
-      referencia_proveedor, certificado_url, created_at, updated_at,
+      referencia_proveedor, certificado_url, datos_formulario,
+      created_at, updated_at,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('expediente_id', expedienteId)
