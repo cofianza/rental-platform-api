@@ -75,11 +75,36 @@ const BUCKET_NAME = 'documentos-expedientes';
 //   correo y el firmante completa la firma desde nuestra UI publica.
 // ============================================================
 
-function buildSignProfile(params: {
+// Mapea tipo_documento de nuestro DB al formato Auco. Auco usa codigos
+// estandar colombianos en mayusculas (CC, CE, TI, NIT, PASAPORTE).
+function mapTipoDocumentoToAuco(tipoDocumento: string | null | undefined): string | null {
+  if (!tipoDocumento) return null;
+  const tipo = tipoDocumento.trim().toLowerCase();
+  switch (tipo) {
+    case 'cc': return 'CC';
+    case 'ce': return 'CE';
+    case 'ti': return 'TI';
+    case 'nit': return 'NIT';
+    case 'pasaporte': return 'PASAPORTE';
+    default: return tipo.toUpperCase();
+  }
+}
+
+interface SignProfileInput {
   name: string;
   email: string;
   phoneInternational: string | null;
-}): {
+  /** Numero de documento del firmante. Necesario para validacion biometrica
+   *  via cotejo (options.camera = 'identification'). Si no esta, caemos a
+   *  options.camera = 'photo' (solo selfie, sin cotejo de ID). */
+  identification?: string | null;
+  /** Tipo de documento — Auco espera codigos en mayusculas (CC, CE, TI, ...) */
+  identificationType?: string | null;
+  /** Codigo ISO del pais. Para Cofianza en Colombia → 'CO'. */
+  country?: string | null;
+}
+
+interface SignProfileOutput {
   name: string;
   email: string;
   phone?: string;
@@ -87,24 +112,81 @@ function buildSignProfile(params: {
   // Auco exige al menos uno de [type, label, position] por firmante. Usamos
   // 'signature' = firma libre que el firmante coloca durante el flujo.
   type: 'signature';
+  // Validaciones de identidad — segun la doc de Auco, declarar `options`
+  // requiere activar `camera` u `otpCode` boolean en el mismo nivel; ambos
+  // los activamos para WhatsApp.
+  camera?: boolean;
   otpCode?: boolean;
-  options?: { whatsapp: boolean; otpCode: 'phone' };
-} {
-  const { name, email, phoneInternational } = params;
+  identification?: string;
+  identificationType?: string;
+  country?: string;
+  options?: {
+    whatsapp?: boolean;
+    otpCode?: 'phone' | 'email';
+    camera?: 'identification' | 'photo';
+  };
+}
+
+function buildSignProfile(params: SignProfileInput): SignProfileOutput {
+  const { name, email, phoneInternational, identification, identificationType, country } = params;
+
+  const tipoAuco = mapTipoDocumentoToAuco(identificationType);
+  const idNumero = identification?.trim() || null;
+  const countryCode = country?.trim().toUpperCase() || null;
+
+  // Solo activamos cotejo biometrico (options.camera = 'identification') si
+  // tenemos los 3 campos: identification, identificationType, country. Si
+  // falta alguno, usamos camera: 'photo' (solo selfie).
+  const tieneIdentidadCompleta = !!(idNumero && tipoAuco && countryCode);
+  const cameraOption: 'identification' | 'photo' = tieneIdentidadCompleta ? 'identification' : 'photo';
+
   if (phoneInternational) {
-    return {
+    // Flow por WhatsApp: incluye camera + otpCode + identidad cuando esta.
+    const profile: SignProfileOutput = {
       name,
       email,
       phone: phoneInternational,
       role: 'SIGNER',
       type: 'signature',
-      // Validaciones individuales: tienen prioridad sobre las globales.
-      // Activan el flow del firmante por WhatsApp con OTP por phone.
+      // Validaciones obligatorias segun doc Auco — sin estos, options no es
+      // valido y el flow falla silencioso con "Se ha producido un error
+      // inesperado" al hacer click "Comenzar" en WhatsApp.
+      camera: true,
       otpCode: true,
-      options: { whatsapp: true, otpCode: 'phone' },
+      options: {
+        whatsapp: true,
+        otpCode: 'phone',
+        camera: cameraOption,
+      },
     };
+    if (tieneIdentidadCompleta) {
+      profile.identification = idNumero!;
+      profile.identificationType = tipoAuco!;
+      profile.country = countryCode!;
+    }
+    return profile;
   }
-  return { name, email, role: 'SIGNER', type: 'signature' };
+
+  // Sin telefono → flow email-only. Igual incluimos camera para mantener la
+  // validacion de identidad consistente.
+  const profile: SignProfileOutput = {
+    name,
+    email,
+    role: 'SIGNER',
+    type: 'signature',
+    camera: true,
+    otpCode: true,
+    options: {
+      otpCode: 'email',
+      camera: cameraOption,
+    },
+  };
+  if (tieneIdentidadCompleta) {
+    profile.identification = idNumero!;
+    profile.identificationType = tipoAuco!;
+    profile.country = countryCode!;
+  }
+  return profile;
 }
 
 // Estados validos del contrato para crear solicitudes de firma
@@ -183,16 +265,20 @@ export async function crearSolicitudFirma(
     );
   }
 
-  // 2. Fetch expediente + inmueble data for the email
+  // 2. Fetch expediente + inmueble + solicitante data
+  // El solicitante es necesario para Auco: identification, identificationType
+  // y country son requeridos para activar la validacion biometrica
+  // (options.camera = 'identification') segun la doc de Auco.
   const { data: expediente } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero, inmuebles(direccion, ciudad)')
+    .select('numero, inmuebles(direccion, ciudad), solicitantes(tipo_documento, numero_documento)')
     .eq('id', c.expediente_id)
     .single();
 
   const exp = expediente as unknown as {
     numero: string;
     inmuebles: { direccion: string; ciudad: string } | null;
+    solicitantes: { tipo_documento: string | null; numero_documento: string | null } | null;
   } | null;
 
   // 3. Generate secure token
@@ -206,6 +292,11 @@ export async function crearSolicitudFirma(
   let enableWhatsapp = false;
   const direccionInmueble = exp?.inmuebles?.direccion || 'N/A';
   const ciudadInmueble = exp?.inmuebles?.ciudad || '';
+  // Datos del solicitante para validacion de identidad en Auco. Cofianza
+  // opera en Colombia, asi que asumimos country='CO' por defecto.
+  const solicitanteIdentification = exp?.solicitantes?.numero_documento || null;
+  const solicitanteIdentificationType = exp?.solicitantes?.tipo_documento || null;
+  const solicitanteCountry = 'CO';
 
   try {
     let buffer: Buffer;
@@ -266,6 +357,9 @@ export async function crearSolicitudFirma(
           name: input.nombre_firmante,
           email: input.email_firmante,
           phoneInternational,
+          identification: solicitanteIdentification,
+          identificationType: solicitanteIdentificationType,
+          country: solicitanteCountry,
         }),
       ],
       expiredDate: tokenExpiracion,
@@ -421,7 +515,7 @@ export async function reenviarSolicitudFirma(
 ) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, storage_key, nombre_archivo, expedientes(numero, inmuebles(direccion, ciudad)))`)
+    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, storage_key, nombre_archivo, expedientes(numero, inmuebles(direccion, ciudad), solicitantes(tipo_documento, numero_documento)))`)
     .eq('id', solicitudId)
     .single();
 
@@ -437,6 +531,7 @@ export async function reenviarSolicitudFirma(
       expedientes: {
         numero: string;
         inmuebles: { direccion: string; ciudad: string } | null;
+        solicitantes: { tipo_documento: string | null; numero_documento: string | null } | null;
       } | null;
     } | null;
   };
@@ -522,6 +617,9 @@ export async function reenviarSolicitudFirma(
             name: row.nombre_firmante,
             email: emailNuevoNormalizado!,
             phoneInternational,
+            identification: row.contratos?.expedientes?.solicitantes?.numero_documento ?? null,
+            identificationType: row.contratos?.expedientes?.solicitantes?.tipo_documento ?? null,
+            country: 'CO',
           }),
         ],
         expiredDate: new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString(),
