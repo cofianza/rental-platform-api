@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -9,6 +10,49 @@ import * as aucoClient from '@/lib/auco';
 import type { AucoWebhookPayload } from '@/lib/auco';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import type { CrearSolicitudFirmaInput } from './firma.schema';
+
+// ============================================================
+// DEBUG: PDF de 1 pagina con pdf-lib para aislar si el problema con Auco
+// es el PDF Puppeteer del contrato real (fuentes embebidas, tamano,
+// estructura) vs la integracion en si. Activa con AUCO_DEBUG_SIMPLE_PDF=true
+// en Railway. Quitar esto cuando estabilicemos.
+// ============================================================
+async function buildDebugPdf(params: {
+  firmanteName: string;
+  direccionInmueble: string;
+  expedienteNumero: string;
+}): Promise<Buffer> {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([595, 842]); // A4
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  page.drawText('Cofianza — Contrato de Arrendamiento (DEBUG)', {
+    x: 50, y: 780, size: 16, font: bold, color: rgb(0.06, 0.46, 0.43),
+  });
+  page.drawText('Este es un PDF de prueba simplificado generado con pdf-lib', {
+    x: 50, y: 740, size: 11, font,
+  });
+  page.drawText('para aislar fallos del flow de firma con Auco.', {
+    x: 50, y: 725, size: 11, font,
+  });
+  page.drawText(`Expediente: ${params.expedienteNumero}`, {
+    x: 50, y: 680, size: 12, font,
+  });
+  page.drawText(`Firmante: ${params.firmanteName}`, {
+    x: 50, y: 660, size: 12, font,
+  });
+  page.drawText(`Inmueble: ${params.direccionInmueble}`, {
+    x: 50, y: 640, size: 12, font,
+  });
+  page.drawText(`Fecha: ${new Date().toISOString()}`, {
+    x: 50, y: 620, size: 11, font,
+  });
+  page.drawText('Al firmar, declaras que aceptas los terminos del arrendamiento.', {
+    x: 50, y: 580, size: 11, font,
+  });
+  const bytes = await pdf.save();
+  return Buffer.from(bytes);
+}
 
 // ============================================================
 // Constants
@@ -164,15 +208,33 @@ export async function crearSolicitudFirma(
   const ciudadInmueble = exp?.inmuebles?.ciudad || '';
 
   try {
-    const { data: pdfData, error: downloadError } = await supabase.storage
-      .from(BUCKET_NAME)
-      .download(c.storage_key);
+    let buffer: Buffer;
 
-    if (downloadError || !pdfData) {
-      throw new Error(downloadError?.message || 'No se pudo descargar el PDF');
+    // DEBUG: si la env AUCO_DEBUG_SIMPLE_PDF=true, en lugar del contrato real
+    // (Puppeteer, ~150 KB con fuentes embebidas) subimos un PDF simple de 1
+    // pagina con pdf-lib (~5 KB, fuentes estandar). Aisla la variable PDF
+    // para diagnosticar fallos de Auco al iniciar el flow de firma.
+    if (process.env.AUCO_DEBUG_SIMPLE_PDF === 'true') {
+      buffer = await buildDebugPdf({
+        firmanteName: input.nombre_firmante,
+        direccionInmueble,
+        expedienteNumero: exp?.numero || c.id,
+      });
+      logger.warn(
+        { contratoId: c.id, sizeBytes: buffer.length },
+        'AUCO_DEBUG_SIMPLE_PDF=true — usando PDF simple en lugar del contrato real',
+      );
+    } else {
+      const { data: pdfData, error: downloadError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .download(c.storage_key);
+
+      if (downloadError || !pdfData) {
+        throw new Error(downloadError?.message || 'No se pudo descargar el PDF');
+      }
+
+      buffer = Buffer.from(await pdfData.arrayBuffer());
     }
-
-    const buffer = Buffer.from(await pdfData.arrayBuffer());
     const pdfBase64 = aucoClient.bufferToBase64(buffer);
 
     const processName = `Contrato - ${exp?.numero || c.id}`;
