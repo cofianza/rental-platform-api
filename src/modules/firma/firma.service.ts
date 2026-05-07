@@ -211,6 +211,26 @@ export async function crearSolicitudFirma(
       // a nivel de cuenta en el panel y se aplican automaticamente.
     };
 
+    // Logging defensivo del payload Auco — sin el `file` para no inflar logs
+    // ni filtrar contenido. Util para diagnosticar fallos del flow WhatsApp
+    // donde Auco recibe el doc pero no lo asocia al numero correctamente.
+    const pdfSizeBytes = buffer.length;
+    const pdfSizeBase64Bytes = pdfBase64.length;
+    logger.info(
+      {
+        contratoId: c.id,
+        pdfSizeBytes,
+        pdfSizeBase64Bytes,
+        pdfSizeKB: (pdfSizeBytes / 1024).toFixed(1),
+        senderEmail: baseUploadInput.email,
+        processName,
+        signProfile: baseUploadInput.signProfile,
+        expiredDate: baseUploadInput.expiredDate,
+        whatsappFlow: enableWhatsapp,
+      },
+      'Auco upload: payload preparado (sin file)',
+    );
+
     aucoDocumentCode = await aucoClient.uploadDocumentForSignature(
       enableWhatsapp
         ? baseUploadInput
@@ -223,7 +243,7 @@ export async function crearSolicitudFirma(
           },
     );
     logger.info(
-      { contratoId: c.id, whatsapp: enableWhatsapp, documentCode: aucoDocumentCode },
+      { contratoId: c.id, whatsapp: enableWhatsapp, documentCode: aucoDocumentCode, pdfSizeKB: (pdfSizeBytes / 1024).toFixed(1) },
       enableWhatsapp
         ? 'Auco: documento subido — flow del firmante por WhatsApp (OTP por phone)'
         : 'Auco: documento subido — flow del firmante por email (OTP por email)',
