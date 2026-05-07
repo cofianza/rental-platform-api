@@ -17,9 +17,9 @@
 -- ============================================================
 
 ALTER TABLE expedientes
-  ADD COLUMN cancelado_at TIMESTAMPTZ,
-  ADD COLUMN motivo_cancelacion TEXT,
-  ADD COLUMN estado_pre_cancelacion estado_expediente;
+  ADD COLUMN IF NOT EXISTS cancelado_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS motivo_cancelacion TEXT,
+  ADD COLUMN IF NOT EXISTS estado_pre_cancelacion estado_expediente;
 
 COMMENT ON COLUMN expedientes.cancelado_at IS
   'Timestamp cuando el expediente se cancelo (vs cierre natural). NULL = no fue cancelado.';
