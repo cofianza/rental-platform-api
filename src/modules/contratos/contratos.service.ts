@@ -670,6 +670,14 @@ export async function listContratosByExpediente(
   // - Contrato 'firmado' -> activar a 'vigente' y cerrar el expediente.
   const lista = (data ?? []) as Array<{ id: string; estado: string; storage_key?: string | null; created_at: string }>;
   if (lista.length === 1 && lista[0].estado === 'borrador' && lista[0].storage_key) {
+    logger.info(
+      {
+        expedienteId,
+        contratoId: lista[0].id,
+        trigger: 'listContratosByExpediente',
+      },
+      'Auto-firma trigger: contrato borrador detectado en listado',
+    );
     void maybeAutoFirmaExistente(expedienteId, lista[0].id, lista[0].created_at);
   } else if (lista.length > 0) {
     // Caso 3: revisar si hay contrato pendiente_firma con todas las
@@ -918,14 +926,30 @@ async function maybeAutoFirmaExistente(
   contratoId: string,
   _contratoCreatedAt: string,
 ): Promise<void> {
+  // ID unico de invocacion para correlacionar logs entre disparos concurrentes.
+  // Si vemos dos invocaciones casi simultaneas con distintos invocationId, sabemos
+  // exactamente cuantos hilos pasaron y cual gano la carrera del lock.
+  const invocationId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const startedAt = Date.now();
+
   // Lock ANTES del SELECT — si no, dos requests simultaneos hacen check (ambos
   // ven el lock libre) → SELECT (~100ms) → ambos llegan al `add()` → ambos
   // suben a Auco. Lo vimos en EXP-2026-0009: 2 docs Auco para el mismo
   // contrato (5DTIYSH0FO + MC7VV38CGB en 322ms de diferencia). El lock
   // memoriza por expedienteId, asi que la 2da llamada concurrente exit-early
   // mientras la 1ra termina el dispatch.
-  if (autoGenInflight.has(expedienteId)) return;
+  if (autoGenInflight.has(expedienteId)) {
+    logger.info(
+      { expedienteId, contratoId, invocationId },
+      'Auto-firma: skip — lock ya tomado por otra invocacion concurrente',
+    );
+    return;
+  }
   autoGenInflight.add(expedienteId);
+  logger.info(
+    { expedienteId, contratoId, invocationId },
+    'Auto-firma: lock adquirido, comenzando',
+  );
 
   try {
     // Guard: solo expedientes 'aprobado'/'condicionado' (mismo que generacion).
@@ -935,17 +959,28 @@ async function maybeAutoFirmaExistente(
       .eq('id', expedienteId)
       .maybeSingle();
     const estado = (exp as { estado?: string } | null)?.estado;
-    if (estado !== 'aprobado' && estado !== 'condicionado') return;
+    if (estado !== 'aprobado' && estado !== 'condicionado') {
+      logger.info(
+        { expedienteId, contratoId, invocationId, estado },
+        'Auto-firma: skip — expediente no esta en estado terminal pre-firma',
+      );
+      return;
+    }
 
     logger.info(
-      { expedienteId, contratoId },
+      { expedienteId, contratoId, invocationId },
       'Auto-firma: contrato en borrador detectado — disparando envio a Auco',
     );
 
-    await dispatchAutoFirma(contratoId, expedienteId);
+    await dispatchAutoFirma(contratoId, expedienteId, invocationId);
+
+    logger.info(
+      { expedienteId, contratoId, invocationId, duracionMs: Date.now() - startedAt },
+      'Auto-firma: dispatch completado',
+    );
   } catch (err) {
     logger.error(
-      { contratoId, expedienteId, err: err instanceof Error ? err.message : String(err) },
+      { contratoId, expedienteId, invocationId, err: err instanceof Error ? err.message : String(err) },
       'Auto-firma: error en dispatch para contrato existente',
     );
   } finally {
@@ -953,7 +988,8 @@ async function maybeAutoFirmaExistente(
   }
 }
 
-async function dispatchAutoFirma(contratoId: string, expedienteId: string): Promise<void> {
+async function dispatchAutoFirma(contratoId: string, expedienteId: string, invocationId?: string): Promise<void> {
+  const dispatchStartedAt = Date.now();
   try {
     // Guard de idempotencia: si ya existe una solicitud de firma activa
     // para este contrato, no creamos una segunda. Solo cuenta como
@@ -961,16 +997,20 @@ async function dispatchAutoFirma(contratoId: string, expedienteId: string): Prom
     // firmado/expirado) si permiten re-intento.
     const { data: existingSol } = await (supabase
       .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-      .select('id, estado')
+      .select('id, estado, auco_document_code, created_at')
       .eq('contrato_id', contratoId)
       .in('estado', ['enviado', 'abierto']);
     if (existingSol && existingSol.length > 0) {
       logger.info(
-        { contratoId, expedienteId, count: existingSol.length },
+        { contratoId, expedienteId, invocationId, count: existingSol.length, existing: existingSol },
         'Auto-firma: ya existe solicitud_firma activa para este contrato — skip',
       );
       return;
     }
+    logger.info(
+      { contratoId, expedienteId, invocationId },
+      'Auto-firma: idempotency check passed (0 solicitudes activas), procediendo a Auco',
+    );
 
     // 1. Obtener solicitante (firmante) e inmueble para mensaje a Auco
     const { data: expRow } = await (supabase
@@ -1049,7 +1089,10 @@ async function dispatchAutoFirma(contratoId: string, expedienteId: string): Prom
       exp.inmueble.propietario_id,
     );
 
-    logger.info({ contratoId, expedienteId }, 'Auto-firma: solicitud Auco creada y email enviado al solicitante');
+    logger.info(
+      { contratoId, expedienteId, invocationId, duracionMs: Date.now() - dispatchStartedAt },
+      'Auto-firma: solicitud Auco creada y email enviado al solicitante',
+    );
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     // Si la BD rechazo el INSERT por violacion del unique partial index
@@ -1057,16 +1100,16 @@ async function dispatchAutoFirma(contratoId: string, expedienteId: string): Prom
     // carrera y ya creo la solicitud — no es error real, downgrade a info.
     const esRaceCondition =
       errMsg.includes('solicitudes_firma_contrato_activa_unique') ||
-      errMsg.includes('duplicate key') && errMsg.includes('contrato_id');
+      (errMsg.includes('duplicate key') && errMsg.includes('contrato_id'));
     if (esRaceCondition) {
       logger.info(
-        { contratoId, expedienteId, errMsg },
+        { contratoId, expedienteId, invocationId, errMsg },
         'Auto-firma: race detectado — otra request ya creo la solicitud, skip',
       );
       return;
     }
     logger.error(
-      { contratoId, expedienteId, err: errMsg },
+      { contratoId, expedienteId, invocationId, err: errMsg, duracionMs: Date.now() - dispatchStartedAt },
       'Auto-firma: fallo el envio automatico a firma — el propietario podra disparar manualmente',
     );
   }
