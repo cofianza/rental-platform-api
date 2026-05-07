@@ -215,6 +215,8 @@ interface CodeudorData {
   tipo_documento: string | null;
   numero_documento: string | null;
   parentesco: string | null;
+  email?: string | null;
+  telefono?: string | null;
 }
 
 interface ExpedienteData {
@@ -266,6 +268,8 @@ function buildVariablesFromExpediente(
     arrendador_documento: data.propietario.numero_documento || '',
     arrendatario_nombre: `${data.solicitante.nombre} ${data.solicitante.apellido}`,
     arrendatario_documento: data.solicitante.numero_documento || '',
+    coarrendatario_nombre: data.coarrendatario?.nombre || '',
+    coarrendatario_documento: data.coarrendatario?.numero_documento || '',
     inmueble_direccion: data.inmueble.direccion,
     inmueble_ciudad: data.inmueble.ciudad,
     canon_mensual: formatCurrencyCOP(data.inmueble.valor_arriendo || 0),
@@ -379,6 +383,23 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     cuenta_recaudo_titular_nit: string | null;
   };
 
+  // 3. Co-arrendatario del flujo nuevo (Mario, 5-may-2026): si el solicitante
+  //    invitó a alguien y su estudio quedó APROBADO, ese par es el que
+  //    apalancó la aprobación del expediente — el contrato debe llevar sus
+  //    datos como co-arrendatario. Cae al campo legacy (codeudor renombrado)
+  //    solo si no hay coa nuevo válido.
+  const coarrendatarioNuevo = await fetchCoarrendatarioParaContrato(expedienteId);
+
+  const coarrendatarioFinal: CodeudorData | null = coarrendatarioNuevo
+    ?? (exp.coarrendatario_nombre
+      ? {
+          nombre: exp.coarrendatario_nombre,
+          tipo_documento: exp.coarrendatario_tipo_documento,
+          numero_documento: exp.coarrendatario_documento,
+          parentesco: exp.coarrendatario_parentesco,
+        }
+      : null);
+
   return {
     expediente: expediente as Record<string, unknown>,
     data: {
@@ -390,15 +411,58 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
         numero_documento: arrendador.numero_documento || '',
       },
       arrendador,
-      coarrendatario: exp.coarrendatario_nombre
-        ? {
-            nombre: exp.coarrendatario_nombre,
-            tipo_documento: exp.coarrendatario_tipo_documento,
-            numero_documento: exp.coarrendatario_documento,
-            parentesco: exp.coarrendatario_parentesco,
-          }
-        : null,
+      coarrendatario: coarrendatarioFinal,
     },
+  };
+}
+
+/**
+ * Carga el co-arrendatario del flujo nuevo (tabla expediente_coarrendatarios)
+ * solo si su estudio TransUnion quedó APROBADO. Esa es la condición que
+ * justifica incluirlo en el contrato — si declinó, está pendiente, o salió
+ * condicionado/rechazado, no participa del contrato.
+ */
+async function fetchCoarrendatarioParaContrato(
+  expedienteId: string,
+): Promise<CodeudorData | null> {
+  const { data: coaRow } = await (supabase
+    .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .select('nombre, apellido, tipo_documento, numero_documento, email, telefono, estudio_id, estado')
+    .eq('expediente_id', expedienteId)
+    .eq('estado', 'estudio_completado')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const coa = coaRow as unknown as {
+    nombre: string;
+    apellido: string;
+    tipo_documento: string;
+    numero_documento: string;
+    email: string;
+    telefono: string | null;
+    estudio_id: string | null;
+    estado: string;
+  } | null;
+
+  if (!coa || !coa.estudio_id) return null;
+
+  const { data: estudioRow } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('resultado')
+    .eq('id', coa.estudio_id)
+    .maybeSingle();
+
+  const resultado = (estudioRow as { resultado?: string } | null)?.resultado;
+  if (resultado !== 'aprobado') return null;
+
+  return {
+    nombre: `${coa.nombre} ${coa.apellido}`.trim(),
+    tipo_documento: coa.tipo_documento,
+    numero_documento: coa.numero_documento,
+    parentesco: 'Co-arrendatario',
+    email: coa.email,
+    telefono: coa.telefono,
   };
 }
 
@@ -474,10 +538,12 @@ async function buildContratoContext(
       ? {
           nombre_completo: coarrendatario.nombre,
           numero_documento: coarrendatario.numero_documento || '',
+          tipo_documento_label: tipoDocumentoLabel(coarrendatario.tipo_documento || undefined),
+          parentesco: coarrendatario.parentesco || '',
           direccion: '',
           ciudad: '',
-          email: '',
-          celular: '',
+          email: coarrendatario.email || '',
+          celular: coarrendatario.telefono || '',
         }
       : null,
     inmueble: {
