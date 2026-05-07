@@ -90,6 +90,26 @@ function mapTipoDocumentoToAuco(tipoDocumento: string | null | undefined): strin
   }
 }
 
+// Deriva el codigo ISO de pais a partir del prefijo internacional del telefono.
+// Auco usa este `country` para anclar la validacion biometrica al pais correcto;
+// si lo dejamos hardcodeado en 'CO' pero el phone es +52 (Mexico), Auco rechaza
+// el flow al hacer click "Comenzar" en WhatsApp porque hay incoherencia.
+function deriveCountryFromPhone(phoneInternational: string | null): string | null {
+  if (!phoneInternational) return null;
+  const trimmed = phoneInternational.trim();
+  // Mapeo prefijo → ISO. Solo paises de America de habla hispana / mas comunes
+  // de testing por ahora; ampliar segun se requiera.
+  if (trimmed.startsWith('+57')) return 'CO'; // Colombia
+  if (trimmed.startsWith('+52')) return 'MX'; // Mexico
+  if (trimmed.startsWith('+593')) return 'EC'; // Ecuador
+  if (trimmed.startsWith('+51')) return 'PE'; // Peru
+  if (trimmed.startsWith('+58')) return 'VE'; // Venezuela
+  if (trimmed.startsWith('+506')) return 'CR'; // Costa Rica
+  if (trimmed.startsWith('+507')) return 'PA'; // Panama
+  if (trimmed.startsWith('+1')) return 'US'; // US/Canada (no podemos distinguir aqui)
+  return null;
+}
+
 interface SignProfileInput {
   name: string;
   email: string;
@@ -136,12 +156,28 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
 
   const tipoAuco = mapTipoDocumentoToAuco(identificationType);
   const idNumero = identification?.trim() || null;
-  const countryCode = country?.trim().toUpperCase() || null;
 
-  // Solo activamos cotejo biometrico (options.camera = 'identification') si
-  // tenemos los 3 campos: identification, identificationType, country. Si
-  // falta alguno, usamos camera: 'photo' (solo selfie).
-  const tieneIdentidadCompleta = !!(idNumero && tipoAuco && countryCode);
+  // El country tiene que ser COHERENTE con el phone — si pasamos country='CO'
+  // pero phone='+52' (Mexico), Auco rechaza al iniciar el flow WhatsApp con
+  // "Se ha producido un error inesperado". Derivamos siempre del phone, e
+  // ignoramos el `country` que venga en params (queda como override solo si
+  // el phone no se puede mapear).
+  const countryFromPhone = deriveCountryFromPhone(phoneInternational);
+  const countryCode = countryFromPhone || (country?.trim().toUpperCase() || null);
+
+  // El tipo de documento tiene que ser coherente con el country. Si el
+  // documento es CC/CE/TI/NIT (colombiano) pero el country derivado es MX,
+  // hay incoherencia → fallback a `cameraMode: 'photo'` (solo selfie, sin
+  // cotejo). Cuando el solicitante tiene phone +57 + CC, todo alinea y
+  // podemos hacer biometrico.
+  const tipoEsColombiano = tipoAuco && ['CC', 'CE', 'TI', 'NIT'].includes(tipoAuco);
+  const documentoCoherente = !!(
+    countryCode === 'CO' && tipoEsColombiano
+  ) || !!(countryCode && tipoAuco === 'PASAPORTE');
+
+  // Activamos cotejo biometrico ('identification') solo si tenemos los 3
+  // campos Y son coherentes entre si. De lo contrario, 'photo' (solo selfie).
+  const tieneIdentidadCompleta = !!(idNumero && tipoAuco && countryCode && documentoCoherente);
   const cameraOption: 'identification' | 'photo' = tieneIdentidadCompleta ? 'identification' : 'photo';
 
   if (phoneInternational) {
