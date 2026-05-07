@@ -1176,84 +1176,16 @@ export async function ejecutarEstudio(
   }
 
   // Sincronizar `solicitantes.numero_documento` + tipo_documento con el
-  // documento que realmente se va a consultar en TransUnion. Esto es
-  // independiente de si datos_formulario cambio o no — la condicion para
-  // sincronizar es que solicitantes este DESALINEADO con datos.
-  //
-  // Bug previo: solo sincronizabamos si el override era distinto de
-  // datos_formulario. Pero si el form ya venia pre-poblado con el CC
-  // correcto y solicitantes seguia con el viejo (CC del registro inicial),
-  // no se sincronizaba y la UI seguia mostrando el viejo.
-  if (expediente.solicitante_id) {
-    const { data: solRow, error: solReadErr } = await (supabase
-      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-      .select('numero_documento, tipo_documento')
-      .eq('id', expediente.solicitante_id)
-      .maybeSingle();
-    const sol = solRow as { numero_documento: string | null; tipo_documento: string | null } | null;
-
-    if (solReadErr) {
-      logger.warn(
-        { estudioId, solicitanteId: expediente.solicitante_id, err: solReadErr.message },
-        'Sync documento: no se pudo leer solicitante actual',
-      );
-    }
-
-    // Logging defensivo: registramos siempre los valores comparados, asi en
-    // Railway podemos verificar si el sync esta operando correctamente sin
-    // tener que reproducir el caso. Util mientras estabilizamos este path.
-    logger.info(
-      {
-        estudioId,
-        solicitanteId: expediente.solicitante_id,
-        datos_numero: datos.numero_documento,
-        datos_tipo: datos.tipo_documento,
-        sol_numero: sol?.numero_documento,
-        sol_tipo: sol?.tipo_documento,
-      },
-      'Sync documento solicitante: comparando',
-    );
-
-    const solUpdates: Record<string, string> = {};
-    if (datos.numero_documento && datos.numero_documento !== sol?.numero_documento) {
-      solUpdates.numero_documento = datos.numero_documento;
-    }
-    if (datos.tipo_documento && datos.tipo_documento !== sol?.tipo_documento) {
-      solUpdates.tipo_documento = datos.tipo_documento;
-    }
-
-    if (Object.keys(solUpdates).length > 0) {
-      const { error: solUpdErr, data: updatedRow } = await (supabase
-        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-        .update(solUpdates as never)
-        .eq('id', expediente.solicitante_id)
-        .select('id, numero_documento, tipo_documento')
-        .single();
-      if (solUpdErr) {
-        // No abortamos la ejecucion del estudio por esto — el provider call
-        // sigue siendo lo importante. Pero dejamos rastro para investigar.
-        logger.warn(
-          { estudioId, solicitanteId: expediente.solicitante_id, err: solUpdErr.message },
-          'No se pudo sincronizar documento del solicitante con el form',
-        );
-      } else {
-        logger.info(
-          { estudioId, solicitanteId: expediente.solicitante_id, cambios: solUpdates, updatedRow },
-          'Documento del solicitante sincronizado con el del estudio',
-        );
-      }
-    } else {
-      logger.info(
-        { estudioId, solicitanteId: expediente.solicitante_id },
-        'Sync documento solicitante: ya estaba alineado, no se actualizo',
-      );
-    }
-  } else {
-    logger.warn(
-      { estudioId },
-      'Sync documento solicitante: expediente sin solicitante_id, se omite',
-    );
-  }
+  // documento que realmente se va a consultar en TransUnion. Helper
+  // extraido para llamarse ademas desde registrarResultadoInline (red de
+  // seguridad post-completado).
+  await sincronizarDocumentoSolicitante({
+    estudioId,
+    solicitanteId: expediente.solicitante_id,
+    targetNumero: datos.numero_documento,
+    targetTipo: datos.tipo_documento,
+    origen: 'ejecutarEstudio',
+  });
 
   // 4. Build provider input
   const providerInput: ProviderSolicitudInput = {
@@ -1817,6 +1749,116 @@ export async function getHistorialReEvaluacion(estudioId: string) {
 }
 
 // ============================================================
+// Helper: sincronizar documento del solicitante con el del estudio.
+//
+// Se llama desde dos puntos para defenderse de fallos silenciosos:
+// 1. ejecutarEstudio (antes de disparar TransUnion) — primer intento.
+// 2. registrarResultadoInline (despues de TransUnion responder) —
+//    red de seguridad. Si el primero fallo, este alinea la BD.
+//
+// Idempotente: si solicitantes ya tiene los valores correctos, no UPDATE.
+// Tolerante a errores: nunca lanza excepcion, solo logguea para no
+// abortar el flujo principal del estudio.
+// ============================================================
+async function sincronizarDocumentoSolicitante(args: {
+  estudioId: string;
+  solicitanteId: string | null;
+  targetNumero: string | null | undefined;
+  targetTipo: string | null | undefined;
+  origen: string;
+}): Promise<void> {
+  const { estudioId, solicitanteId, targetNumero, targetTipo, origen } = args;
+
+  if (!solicitanteId) {
+    logger.warn(
+      { estudioId, origen },
+      'syncDocSolicitante: skip — expediente sin solicitante_id',
+    );
+    return;
+  }
+
+  if (!targetNumero) {
+    logger.warn(
+      { estudioId, solicitanteId, origen },
+      'syncDocSolicitante: skip — datos sin numero_documento',
+    );
+    return;
+  }
+
+  try {
+    const { data: solRow, error: solReadErr } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('numero_documento, tipo_documento')
+      .eq('id', solicitanteId)
+      .maybeSingle();
+
+    if (solReadErr) {
+      logger.warn(
+        { estudioId, solicitanteId, origen, err: solReadErr.message },
+        'syncDocSolicitante: error leyendo solicitante actual',
+      );
+      return;
+    }
+
+    const sol = solRow as { numero_documento: string | null; tipo_documento: string | null } | null;
+
+    logger.info(
+      {
+        estudioId,
+        solicitanteId,
+        origen,
+        target_numero: targetNumero,
+        target_tipo: targetTipo,
+        sol_numero: sol?.numero_documento,
+        sol_tipo: sol?.tipo_documento,
+      },
+      'syncDocSolicitante: comparando',
+    );
+
+    const solUpdates: Record<string, string> = {};
+    if (targetNumero && targetNumero !== sol?.numero_documento) {
+      solUpdates.numero_documento = targetNumero;
+    }
+    if (targetTipo && targetTipo !== sol?.tipo_documento) {
+      solUpdates.tipo_documento = targetTipo;
+    }
+
+    if (Object.keys(solUpdates).length === 0) {
+      logger.info(
+        { estudioId, solicitanteId, origen },
+        'syncDocSolicitante: ya estaba alineado, no se actualizo',
+      );
+      return;
+    }
+
+    const { error: solUpdErr, data: updatedRow } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .update(solUpdates as never)
+      .eq('id', solicitanteId)
+      .select('id, numero_documento, tipo_documento')
+      .single();
+
+    if (solUpdErr) {
+      logger.warn(
+        { estudioId, solicitanteId, origen, err: solUpdErr.message, intento: solUpdates },
+        'syncDocSolicitante: UPDATE fallo',
+      );
+    } else {
+      logger.info(
+        { estudioId, solicitanteId, origen, cambios: solUpdates, updatedRow },
+        'syncDocSolicitante: documento actualizado en BD',
+      );
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(
+      { estudioId, solicitanteId, origen, err: msg },
+      'syncDocSolicitante: excepcion inesperada',
+    );
+  }
+}
+
+// ============================================================
 // Registrar resultado inline tras solicitar (proveedor síncrono).
 // Reusa la misma RPC + orchestrator que consultarEstadoProveedor,
 // pero con logging granular para diagnosticar fallos silenciosos.
@@ -1892,6 +1934,41 @@ async function registrarResultadoInline(
       referencia_proveedor: referenciaProveedor,
     },
   });
+
+  // Red de seguridad: si el sync de ejecutarEstudio no quedó (por timing
+  // del deploy, error transitorio, etc), aqui aseguramos que solicitantes
+  // tenga el documento que de verdad fue consultado. Leemos datos_formulario
+  // del estudio recien completado y lo comparamos con solicitantes.
+  try {
+    const { data: estRow } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('datos_formulario, expediente_id')
+      .eq('id', estudioId)
+      .maybeSingle();
+    const estData = estRow as { datos_formulario: Record<string, string> | null; expediente_id: string } | null;
+
+    if (estData?.expediente_id && estData?.datos_formulario) {
+      const { data: expRow } = await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('solicitante_id')
+        .eq('id', estData.expediente_id)
+        .maybeSingle();
+      const expData = expRow as { solicitante_id: string | null } | null;
+
+      await sincronizarDocumentoSolicitante({
+        estudioId,
+        solicitanteId: expData?.solicitante_id ?? null,
+        targetNumero: estData.datos_formulario.numero_documento,
+        targetTipo: estData.datos_formulario.tipo_documento,
+        origen: 'registrarResultadoInline',
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      { estudioId, err: err instanceof Error ? err.message : String(err) },
+      'syncDocSolicitante (red de seguridad): excepcion preparando inputs',
+    );
+  }
 
   // Hook post-resultado. Distinguimos según el tipo de estudio:
   //   - 'individual' (titular): orchestrator normal — transiciona expediente
