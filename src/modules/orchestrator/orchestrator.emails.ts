@@ -92,45 +92,50 @@ export async function sendEstudioRechazadoEmail(params: {
   logger.info({ email }, 'Orchestrator email: estudio rechazado enviado');
 }
 
-// ── Documentos Requeridos (Condicionado) ────────────────────
+// ── Estudio Condicionado — Invitar co-arrendatario ──────────
+//
+// Mario (5-may-2026): cambio de paradigma. La promesa de Cofianza es
+// "rentar sin fiador". Cuando el estudio queda condicionado ya NO le
+// pedimos al solicitante que suba documentación — le pedimos que invite
+// a un co-arrendatario y respaldamos a los dos como un solo arrendatario.
+// Este email reemplaza el viejo "Documentos Requeridos".
 
 export async function sendDocumentosRequeridosEmail(params: {
   email: string;
   nombre: string;
   score: number | null;
 }) {
-  const { email, nombre, score } = params;
+  const { email, nombre } = params;
 
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Se requieren documentos adicionales - Cofianza',
+    subject: 'Tu solicitud necesita un co-arrendatario - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #d97706; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Documentos Adicionales</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Sigamos juntos</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-          <p style="color: #6b7280;">Tu estudio crediticio requiere documentacion adicional para completar la evaluacion.</p>
-          ${score ? `<p style="color: #6b7280;">Score crediticio: <strong>${score}</strong></p>` : ''}
+          <p style="color: #6b7280;">Tu perfil crediticio quedó marginal. En Cofianza <strong>no pedimos fiador</strong> — para continuar, invita a la persona con quien vas a vivir como tu co-arrendatario.</p>
           <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #92400e; margin: 0; font-weight: bold;">Documentos que puedes subir:</p>
+            <p style="color: #92400e; margin: 0; font-weight: bold;">¿Cómo funciona?</p>
             <ul style="color: #92400e; margin: 8px 0 0; padding-left: 20px;">
-              <li>Certificacion laboral reciente</li>
-              <li>Extractos bancarios (ultimos 3 meses)</li>
-              <li>Declaracion de renta</li>
-              <li>Carta de referencia</li>
+              <li>Ingresa a tu panel y captura los datos de tu co-arrendatario.</li>
+              <li>Le enviamos una invitación por correo.</li>
+              <li>Cuando acepte, evaluamos su perfil y lo combinamos con el tuyo.</li>
+              <li>Si juntos cumplen, los respaldamos como un solo arrendatario.</li>
             </ul>
           </div>
-          <p style="color: #6b7280;">Ingresa a tu panel en Cofianza para subir los documentos y continuar con el proceso.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza.</p>
+          <p style="color: #6b7280;">No es un fiador ni codeudor — es la persona con quien vas a compartir el arriendo.</p>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automático de Cofianza.</p>
         </div>
       </div>
     `,
   });
 
-  logger.info({ email }, 'Orchestrator email: documentos requeridos enviado');
+  logger.info({ email }, 'Orchestrator email: condicionado/co-arrendatario enviado');
 }
 
 // ── Contrato Listo para Firma ───────────────────────────────
