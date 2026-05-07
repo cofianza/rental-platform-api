@@ -1185,12 +1185,34 @@ export async function ejecutarEstudio(
   // correcto y solicitantes seguia con el viejo (CC del registro inicial),
   // no se sincronizaba y la UI seguia mostrando el viejo.
   if (expediente.solicitante_id) {
-    const { data: solRow } = await (supabase
+    const { data: solRow, error: solReadErr } = await (supabase
       .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
       .select('numero_documento, tipo_documento')
       .eq('id', expediente.solicitante_id)
       .maybeSingle();
     const sol = solRow as { numero_documento: string | null; tipo_documento: string | null } | null;
+
+    if (solReadErr) {
+      logger.warn(
+        { estudioId, solicitanteId: expediente.solicitante_id, err: solReadErr.message },
+        'Sync documento: no se pudo leer solicitante actual',
+      );
+    }
+
+    // Logging defensivo: registramos siempre los valores comparados, asi en
+    // Railway podemos verificar si el sync esta operando correctamente sin
+    // tener que reproducir el caso. Util mientras estabilizamos este path.
+    logger.info(
+      {
+        estudioId,
+        solicitanteId: expediente.solicitante_id,
+        datos_numero: datos.numero_documento,
+        datos_tipo: datos.tipo_documento,
+        sol_numero: sol?.numero_documento,
+        sol_tipo: sol?.tipo_documento,
+      },
+      'Sync documento solicitante: comparando',
+    );
 
     const solUpdates: Record<string, string> = {};
     if (datos.numero_documento && datos.numero_documento !== sol?.numero_documento) {
@@ -1201,10 +1223,12 @@ export async function ejecutarEstudio(
     }
 
     if (Object.keys(solUpdates).length > 0) {
-      const { error: solUpdErr } = await (supabase
+      const { error: solUpdErr, data: updatedRow } = await (supabase
         .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
         .update(solUpdates as never)
-        .eq('id', expediente.solicitante_id);
+        .eq('id', expediente.solicitante_id)
+        .select('id, numero_documento, tipo_documento')
+        .single();
       if (solUpdErr) {
         // No abortamos la ejecucion del estudio por esto — el provider call
         // sigue siendo lo importante. Pero dejamos rastro para investigar.
@@ -1214,11 +1238,21 @@ export async function ejecutarEstudio(
         );
       } else {
         logger.info(
-          { estudioId, solicitanteId: expediente.solicitante_id, cambios: solUpdates },
+          { estudioId, solicitanteId: expediente.solicitante_id, cambios: solUpdates, updatedRow },
           'Documento del solicitante sincronizado con el del estudio',
         );
       }
+    } else {
+      logger.info(
+        { estudioId, solicitanteId: expediente.solicitante_id },
+        'Sync documento solicitante: ya estaba alineado, no se actualizo',
+      );
     }
+  } else {
+    logger.warn(
+      { estudioId },
+      'Sync documento solicitante: expediente sin solicitante_id, se omite',
+    );
   }
 
   // 4. Build provider input
