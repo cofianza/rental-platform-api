@@ -117,11 +117,15 @@ interface SignProfileOutput {
   // los activamos para WhatsApp.
   camera?: boolean;
   otpCode?: boolean;
+  /** Notificacion por WhatsApp + email simultaneamente. */
+  both?: boolean;
   identification?: string;
   identificationType?: string;
   country?: string;
   options?: {
     whatsapp?: boolean;
+    /** Mismo `both` pero dentro de options — la doc lo pide en ambos lados. */
+    both?: boolean;
     otpCode?: 'phone' | 'email';
     camera?: 'identification' | 'photo';
   };
@@ -141,7 +145,10 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
   const cameraOption: 'identification' | 'photo' = tieneIdentidadCompleta ? 'identification' : 'photo';
 
   if (phoneInternational) {
-    // Flow por WhatsApp: incluye camera + otpCode + identidad cuando esta.
+    // Flow por WhatsApp + email simultaneo: el firmante recibe el link por
+    // ambos canales (decision Cofianza). Util como fallback si WhatsApp falla
+    // — siempre puede caer al correo. La doc Auco lo pide en ambos niveles
+    // (root del firmante + dentro de options) y exige options.whatsapp=true.
     const profile: SignProfileOutput = {
       name,
       email,
@@ -153,8 +160,10 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
       // inesperado" al hacer click "Comenzar" en WhatsApp.
       camera: true,
       otpCode: true,
+      both: true,
       options: {
         whatsapp: true,
+        both: true,
         otpCode: 'phone',
         camera: cameraOption,
       },
