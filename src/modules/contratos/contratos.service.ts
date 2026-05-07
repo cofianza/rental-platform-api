@@ -249,7 +249,9 @@ interface ExpedienteData {
     numero_documento: string;
   };
   arrendador?: ArrendadorRow;
-  codeudor?: CodeudorData | null;
+  // `coarrendatario` reemplazó a `codeudor` (5-may-2026). Misma estructura
+  // de datos — solo cambió el nombre del rol contractual.
+  coarrendatario?: CodeudorData | null;
 }
 
 function buildVariablesFromExpediente(
@@ -285,7 +287,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, numero, estado, inmueble_id, solicitante_id,
-      codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco,
+      coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco,
       duracion_contrato_meses, fecha_inicio_contrato,
       inmuebles(
         id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero,
@@ -311,10 +313,10 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     estado: string;
     inmueble_id: string;
     solicitante_id: string;
-    codeudor_nombre: string | null;
-    codeudor_tipo_documento: string | null;
-    codeudor_documento: string | null;
-    codeudor_parentesco: string | null;
+    coarrendatario_nombre: string | null;
+    coarrendatario_tipo_documento: string | null;
+    coarrendatario_documento: string | null;
+    coarrendatario_parentesco: string | null;
     inmuebles: {
       id: string;
       direccion: string;
@@ -388,12 +390,12 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
         numero_documento: arrendador.numero_documento || '',
       },
       arrendador,
-      codeudor: exp.codeudor_nombre
+      coarrendatario: exp.coarrendatario_nombre
         ? {
-            nombre: exp.codeudor_nombre,
-            tipo_documento: exp.codeudor_tipo_documento,
-            numero_documento: exp.codeudor_documento,
-            parentesco: exp.codeudor_parentesco,
+            nombre: exp.coarrendatario_nombre,
+            tipo_documento: exp.coarrendatario_tipo_documento,
+            numero_documento: exp.coarrendatario_documento,
+            parentesco: exp.coarrendatario_parentesco,
           }
         : null,
     },
@@ -411,7 +413,7 @@ async function buildContratoContext(
   fechaInicio: Date,
   duracionMeses: number,
 ): Promise<Record<string, unknown>> {
-  const { arrendador, solicitante, inmueble, codeudor } = data;
+  const { arrendador, solicitante, inmueble, coarrendatario } = data;
   const fechaFin = addMonths(fechaInicio, duracionMeses);
   const ahora = new Date();
   const monto = Number(inmueble.valor_arriendo) || 0;
@@ -468,10 +470,10 @@ async function buildContratoContext(
       email: solicitante.email || '',
       celular: solicitante.telefono || '',
     },
-    coarrendatario: codeudor
+    coarrendatario: coarrendatario
       ? {
-          nombre_completo: codeudor.nombre,
-          numero_documento: codeudor.numero_documento || '',
+          nombre_completo: coarrendatario.nombre,
+          numero_documento: coarrendatario.numero_documento || '',
           direccion: '',
           ciudad: '',
           email: '',
@@ -1128,7 +1130,7 @@ export async function generarContrato(
   userId: string | null,
   ip?: string,
 ) {
-  // 1. Fetch expediente data (incluye arrendador completo + codeudor).
+  // 1. Fetch expediente data (incluye arrendador completo + coarrendatario).
   const { expediente: expRow, data: expData } = await fetchExpedienteData(expedienteId);
   const expedienteNumero = (expRow as { numero?: string }).numero || expedienteId;
 
@@ -1335,7 +1337,7 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
       numero_documento: (arrendadorRow as { numero_documento: string | null }).numero_documento || '',
     },
     arrendador: arrendadorRow as unknown as ArrendadorRow,
-    codeudor: null,
+    coarrendatario: null,
   };
 
   const fechaInicio = new Date();

@@ -15,13 +15,16 @@ export const createExpedienteSchema = z.object({
   solicitante_id: z.uuid({ error: 'ID de solicitante invalido' }),
   analista_id: z.uuid({ error: 'ID de analista invalido' }).optional(),
   notas: z.string().max(5000, { error: 'Notas no deben exceder 5000 caracteres' }).optional(),
-  // Codeudor (opcional)
-  codeudor_nombre: z.string().max(200, { error: 'Nombre del codeudor no debe exceder 200 caracteres' }).optional(),
-  codeudor_tipo_documento: z.enum(TIPOS_DOCUMENTO, {
-    error: `Tipo de documento del codeudor invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
+  // Coarrendatario (opcional). Se llenan automáticamente cuando un
+  // coarrendatario invitado acepta y termina su estudio (ver coarrendatarios
+  // service); admin/operador también puede llenarlas a mano para flujos
+  // manuales.
+  coarrendatario_nombre: z.string().max(200, { error: 'Nombre del coarrendatario no debe exceder 200 caracteres' }).optional(),
+  coarrendatario_tipo_documento: z.enum(TIPOS_DOCUMENTO, {
+    error: `Tipo de documento del coarrendatario invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
   }).optional(),
-  codeudor_documento: z.string().max(20, { error: 'Documento del codeudor no debe exceder 20 caracteres' }).optional(),
-  codeudor_parentesco: z.string().max(50, { error: 'Parentesco del codeudor no debe exceder 50 caracteres' }).optional(),
+  coarrendatario_documento: z.string().max(20, { error: 'Documento del coarrendatario no debe exceder 20 caracteres' }).optional(),
+  coarrendatario_parentesco: z.string().max(50, { error: 'Parentesco del coarrendatario no debe exceder 50 caracteres' }).optional(),
 });
 
 // ============================================================
@@ -31,13 +34,13 @@ export const createExpedienteSchema = z.object({
 export const updateExpedienteSchema = z.object({
   analista_id: z.uuid({ error: 'ID de analista invalido' }).nullable().optional(),
   notas: z.string().max(5000, { error: 'Notas no deben exceder 5000 caracteres' }).nullable().optional(),
-  // Codeudor editable tambien
-  codeudor_nombre: z.string().max(200).nullable().optional(),
-  codeudor_tipo_documento: z.enum(TIPOS_DOCUMENTO, {
-    error: `Tipo de documento del codeudor invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
+  // Coarrendatario editable tambien.
+  coarrendatario_nombre: z.string().max(200).nullable().optional(),
+  coarrendatario_tipo_documento: z.enum(TIPOS_DOCUMENTO, {
+    error: `Tipo de documento del coarrendatario invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
   }).nullable().optional(),
-  codeudor_documento: z.string().max(20).nullable().optional(),
-  codeudor_parentesco: z.string().max(50).nullable().optional(),
+  coarrendatario_documento: z.string().max(20).nullable().optional(),
+  coarrendatario_parentesco: z.string().max(50).nullable().optional(),
 });
 
 // ============================================================

@@ -17,10 +17,10 @@ interface ExpedienteListRow {
   numero: string;
   estado: string;
   notas: string | null;
-  codeudor_nombre: string | null;
-  codeudor_tipo_documento: string | null;
-  codeudor_documento: string | null;
-  codeudor_parentesco: string | null;
+  coarrendatario_nombre: string | null;
+  coarrendatario_tipo_documento: string | null;
+  coarrendatario_documento: string | null;
+  coarrendatario_parentesco: string | null;
   analista_id: string | null;
   inmueble_id: string;
   solicitante_id: string;
@@ -50,7 +50,7 @@ const ESTADOS_TERMINALES = ['cerrado', 'rechazado'];
 
 const EXPEDIENTE_DETAIL_SELECT = `
   id, numero, estado, notas,
-  codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco,
+  coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco,
   analista_id, inmueble_id, solicitante_id, creado_por,
   estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
   duracion_contrato_meses, fecha_inicio_contrato,
@@ -265,10 +265,10 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
   };
   if (input.analista_id) insertData.analista_id = input.analista_id;
   if (input.notas) insertData.notas = input.notas;
-  if (input.codeudor_nombre) insertData.codeudor_nombre = input.codeudor_nombre;
-  if (input.codeudor_tipo_documento) insertData.codeudor_tipo_documento = input.codeudor_tipo_documento;
-  if (input.codeudor_documento) insertData.codeudor_documento = input.codeudor_documento;
-  if (input.codeudor_parentesco) insertData.codeudor_parentesco = input.codeudor_parentesco;
+  if (input.coarrendatario_nombre) insertData.coarrendatario_nombre = input.coarrendatario_nombre;
+  if (input.coarrendatario_tipo_documento) insertData.coarrendatario_tipo_documento = input.coarrendatario_tipo_documento;
+  if (input.coarrendatario_documento) insertData.coarrendatario_documento = input.coarrendatario_documento;
+  if (input.coarrendatario_parentesco) insertData.coarrendatario_parentesco = input.coarrendatario_parentesco;
 
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)

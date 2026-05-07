@@ -418,6 +418,23 @@ export async function aceptarInvitacion(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al registrar la aceptación');
   }
 
+  // 3.5 Persistir los datos del coarrendatario en expedientes.coarrendatario_*
+  //     para que la plantilla del contrato los pueda leer sin necesidad de
+  //     joinear con la tabla de invitaciones. Las columnas se renombraron
+  //     de codeudor_* a coarrendatario_* en la migración 20260505000005.
+  await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      coarrendatario_nombre: `${coa.nombre} ${coa.apellido}`.trim(),
+      coarrendatario_tipo_documento: coa.tipo_documento,
+      coarrendatario_documento: coa.numero_documento,
+      // Sin parentesco — en el flujo nuevo es "co-arrendatario", no codeudor.
+      // Lo dejamos null explícitamente para no arrastrar valores legacy.
+      coarrendatario_parentesco: null,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', coa.expediente_id);
+
   // 4. Disparar el estudio TransUnion async — el co-arrendatario no espera.
   //    El hook post-estudio (registrarResultadoInline) detectará tipo='con_coarrendatario'
   //    y disparará la ponderación cuando termine.

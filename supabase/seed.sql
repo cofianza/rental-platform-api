@@ -263,7 +263,7 @@ INSERT INTO expedientes (id, inmueble_id, solicitante_id, estado, analista_id) V
    'informacion_incompleta',
    'a2222222-2222-2222-2222-222222222222'); -- Camila
 
-INSERT INTO expedientes (id, inmueble_id, solicitante_id, codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco, estado, analista_id) VALUES
+INSERT INTO expedientes (id, inmueble_id, solicitante_id, coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco, estado, analista_id) VALUES
   ('d9999999-9999-9999-9999-999999999999',
    'b6666666-6666-6666-6666-666666666666',  -- Oficina Centro, Medellín
    'c5555555-5555-5555-5555-555555555555',  -- El Corral SAS
@@ -272,7 +272,7 @@ INSERT INTO expedientes (id, inmueble_id, solicitante_id, codeudor_nombre, codeu
    'a3333333-3333-3333-3333-333333333333'); -- Andrés
 
 -- 3 aprobados
-INSERT INTO expedientes (id, inmueble_id, solicitante_id, codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco, estado, analista_id) VALUES
+INSERT INTO expedientes (id, inmueble_id, solicitante_id, coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco, estado, analista_id) VALUES
   ('da000000-0000-0000-0000-000000000001',
    'b3333333-3333-3333-3333-333333333333',  -- Local Teusaquillo, Bogotá
    'c5555555-5555-5555-5555-555555555555',  -- El Corral SAS
@@ -303,7 +303,7 @@ INSERT INTO expedientes (id, inmueble_id, solicitante_id, estado, analista_id) V
    'a2222222-2222-2222-2222-222222222222'); -- Camila
 
 -- 1 condicionado
-INSERT INTO expedientes (id, inmueble_id, solicitante_id, codeudor_nombre, codeudor_tipo_documento, codeudor_documento, codeudor_parentesco, estado, analista_id) VALUES
+INSERT INTO expedientes (id, inmueble_id, solicitante_id, coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco, estado, analista_id) VALUES
   ('da000000-0000-0000-0000-000000000005',
    'b9999999-9999-9999-9999-999999999999',  -- Apto Barranquilla
    'c8888888-8888-8888-8888-888888888888',  -- Felipe Ríos
