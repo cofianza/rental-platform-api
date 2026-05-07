@@ -1165,25 +1165,42 @@ export async function ejecutarEstudio(
     );
   }
 
-  // Si el override trajo cambios, persistir en datos_formulario (auditoría)
-  // Y sincronizar el documento del solicitante para que cards/modales que
-  // leen de `solicitantes.numero_documento` muestren el CC realmente usado
-  // — antes la UI mostraba el documento del registro original (eg. el del
-  // formulario de signup) aunque el solicitante haya escrito otro al
-  // confirmar el estudio.
-  const cambioNumero = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
-  const cambioTipo = !!(overrideTipo && overrideTipo !== datosBase.tipo_documento);
-
-  if (cambioNumero || cambioTipo) {
+  // Si el override trajo cambios respecto a datos_formulario, persistir.
+  const cambioNumeroDatos = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
+  const cambioTipoDatos = !!(overrideTipo && overrideTipo !== datosBase.tipo_documento);
+  if (cambioNumeroDatos || cambioTipoDatos) {
     await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({ datos_formulario: datos } as never)
       .eq('id', est.id);
+  }
 
-    if (expediente.solicitante_id) {
-      const solUpdates: Record<string, string> = {};
-      if (cambioNumero) solUpdates.numero_documento = overrideNumero!;
-      if (cambioTipo) solUpdates.tipo_documento = overrideTipo!;
+  // Sincronizar `solicitantes.numero_documento` + tipo_documento con el
+  // documento que realmente se va a consultar en TransUnion. Esto es
+  // independiente de si datos_formulario cambio o no — la condicion para
+  // sincronizar es que solicitantes este DESALINEADO con datos.
+  //
+  // Bug previo: solo sincronizabamos si el override era distinto de
+  // datos_formulario. Pero si el form ya venia pre-poblado con el CC
+  // correcto y solicitantes seguia con el viejo (CC del registro inicial),
+  // no se sincronizaba y la UI seguia mostrando el viejo.
+  if (expediente.solicitante_id) {
+    const { data: solRow } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('numero_documento, tipo_documento')
+      .eq('id', expediente.solicitante_id)
+      .maybeSingle();
+    const sol = solRow as { numero_documento: string | null; tipo_documento: string | null } | null;
+
+    const solUpdates: Record<string, string> = {};
+    if (datos.numero_documento && datos.numero_documento !== sol?.numero_documento) {
+      solUpdates.numero_documento = datos.numero_documento;
+    }
+    if (datos.tipo_documento && datos.tipo_documento !== sol?.tipo_documento) {
+      solUpdates.tipo_documento = datos.tipo_documento;
+    }
+
+    if (Object.keys(solUpdates).length > 0) {
       const { error: solUpdErr } = await (supabase
         .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
         .update(solUpdates as never)
@@ -1198,7 +1215,7 @@ export async function ejecutarEstudio(
       } else {
         logger.info(
           { estudioId, solicitanteId: expediente.solicitante_id, cambios: solUpdates },
-          'Documento del solicitante sincronizado con el form de estudio',
+          'Documento del solicitante sincronizado con el del estudio',
         );
       }
     }
