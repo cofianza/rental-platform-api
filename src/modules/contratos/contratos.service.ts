@@ -659,19 +659,19 @@ export async function listContratosByExpediente(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener contratos');
   }
 
-  // Self-heal automatico (tres casos):
-  // 1. Expediente aprobado pero sin contratos -> generamos + auto-firma.
-  // 2. Existe un unico contrato 'borrador' con PDF y nadie lo ha movido a
-  //    firma -> auto-disparamos la firma directamente.
-  // 3. Existe un contrato en 'pendiente_firma' pero TODAS sus solicitudes
-  //    estan ya en estado 'firmado' -> el post-firma fallo en transicionar
-  //    el contrato. Lo movemos a 'firmado' aqui para destrabar la UI.
+  // Self-heal automatico (decision Mario 5-may-2026: NO auto-generar el
+  // contrato cuando hay 0; el propietario decide duracion + fecha desde
+  // AccionContratoPendienteCard). Casos restantes:
+  // - 1 contrato 'borrador' con PDF -> auto-disparamos la firma. La generacion
+  //   fue explicita del propietario; aqui solo encadenamos al envio a Auco.
+  //   dispatchAutoFirma es idempotente (chequea solicitudes_firma existentes).
+  // - Contrato en 'pendiente_firma' pero todas las solicitudes ya estan
+  //   firmadas -> destrabar la UI moviendo el contrato a 'firmado'.
+  // - Contrato 'firmado' -> activar a 'vigente' y cerrar el expediente.
   const lista = (data ?? []) as Array<{ id: string; estado: string; storage_key?: string | null; created_at: string }>;
-  if (lista.length === 0 && total === 0) {
-    void maybeAutoHealContrato(expedienteId);
-  } else if (lista.length === 1 && lista[0].estado === 'borrador' && lista[0].storage_key) {
+  if (lista.length === 1 && lista[0].estado === 'borrador' && lista[0].storage_key) {
     void maybeAutoFirmaExistente(expedienteId, lista[0].id, lista[0].created_at);
-  } else {
+  } else if (lista.length > 0) {
     // Caso 3: revisar si hay contrato pendiente_firma con todas las
     // solicitudes firmadas. Solo necesitamos mirar el contrato mas reciente.
     const pendienteFirma = lista.find((c) => c.estado === 'pendiente_firma');
@@ -944,48 +944,6 @@ async function maybeAutoFirmaExistente(
     logger.error(
       { contratoId, expedienteId, err: err instanceof Error ? err.message : String(err) },
       'Auto-firma: error en dispatch para contrato existente',
-    );
-  } finally {
-    autoGenInflight.delete(expedienteId);
-  }
-}
-
-async function maybeAutoHealContrato(expedienteId: string): Promise<void> {
-  if (autoGenInflight.has(expedienteId)) return;
-
-  // Solo disparamos si el expediente esta en 'aprobado' (o 'condicionado',
-  // que tambien permite contrato si se decidio asi).
-  const { data: exp } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado')
-    .eq('id', expedienteId)
-    .maybeSingle();
-  const estado = (exp as { estado?: string } | null)?.estado;
-  if (estado !== 'aprobado' && estado !== 'condicionado') return;
-
-  autoGenInflight.add(expedienteId);
-  logger.info({ expedienteId }, 'Auto-heal: expediente aprobado sin contrato — disparando generacion');
-
-  try {
-    const result = await generarContrato(
-      expedienteId,
-      { duracion_meses: 12, fecha_inicio: new Date().toISOString().slice(0, 10) },
-      null,
-    );
-    const contratoId = (result as { id?: string } | null)?.id;
-    logger.info({ expedienteId, contratoId }, 'Auto-heal: contrato generado correctamente');
-
-    // Auto-dispatch firma: pasamos directamente a 'pendiente_firma' y
-    // creamos la solicitud Auco con los datos del solicitante. Decision
-    // de UX: el flujo debe llegar al correo de firma sin intervencion
-    // del propietario (estudio aprobado -> contrato listo -> firma).
-    if (contratoId) {
-      await dispatchAutoFirma(contratoId, expedienteId);
-    }
-  } catch (err) {
-    logger.error(
-      { expedienteId, err: err instanceof Error ? err.message : String(err) },
-      'Auto-heal: fallo la generacion automatica del contrato',
     );
   } finally {
     autoGenInflight.delete(expedienteId);
