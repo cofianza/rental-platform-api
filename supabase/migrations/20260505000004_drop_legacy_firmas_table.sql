@@ -1,0 +1,21 @@
+-- ============================================================
+-- Drop tabla legacy `firmas`.
+--
+-- Esta tabla quedó del primer diseño de firma electrónica (con OTP propio
+-- de Cofianza). El flujo actual usa `solicitudes_firma` (Auco como proveedor)
+-- + `evidencias_firma` (auditoría) + `codigos_otp` (OTP del proveedor).
+--
+-- Verificación previa (5-may-2026):
+--   - 0 referencias en queries del backend (`from('firmas')` / `firmas(`).
+--   - 0 FKs entrantes desde otras tablas.
+--   - Las pocas menciones a "firmas" en el código son storage keys
+--     (`firmas/{expedienteId}/...`) y texto de UI/legal — no apuntan a
+--     la tabla.
+--
+-- Si por alguna razón hay registros aquí en producción que el cliente
+-- considere relevantes, esto es un drop irreversible — comentar y
+-- migrar a `solicitudes_firma` antes de aplicar. Hoy en staging la
+-- tabla no debería tener filas relevantes.
+-- ============================================================
+
+DROP TABLE IF EXISTS public.firmas;
