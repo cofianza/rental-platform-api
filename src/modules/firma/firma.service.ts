@@ -145,10 +145,9 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
   const cameraOption: 'identification' | 'photo' = tieneIdentidadCompleta ? 'identification' : 'photo';
 
   if (phoneInternational) {
-    // Flow por WhatsApp + email simultaneo: el firmante recibe el link por
-    // ambos canales (decision Cofianza). Util como fallback si WhatsApp falla
-    // — siempre puede caer al correo. La doc Auco lo pide en ambos niveles
-    // (root del firmante + dentro de options) y exige options.whatsapp=true.
+    // Flow EXCLUSIVO por WhatsApp (decision Cofianza). El firmante recibe el
+    // link y el OTP solo por WhatsApp; nunca email. options.whatsapp=true
+    // activa el flow; options.otpCode='phone' rutea el codigo por WhatsApp.
     const profile: SignProfileOutput = {
       name,
       email,
@@ -160,10 +159,8 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
       // inesperado" al hacer click "Comenzar" en WhatsApp.
       camera: true,
       otpCode: true,
-      both: true,
       options: {
         whatsapp: true,
-        both: true,
         otpCode: 'phone',
         camera: cameraOption,
       },
