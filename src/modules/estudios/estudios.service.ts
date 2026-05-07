@@ -1188,30 +1188,69 @@ export async function ejecutarEstudio(
     direccion_residencia: (datos.direccion_residencia as string) || undefined,
   };
 
-  // 5. Call provider
-  const provider = getProvider(est.proveedor as 'transunion' | 'sifin' | 'datacredito');
+  // 5. Marcar estudio como `en_proceso` de inmediato. Esto:
+  //    (a) Permite responder al cliente HTTP rápido, sin esperar TransUnion
+  //        (que puede tardar 30-60s con retries y dejar al solicitante con
+  //        un spinner colgado).
+  //    (b) Bloquea ejecuciones concurrentes (la siguiente call cae en el
+  //        check de ESTADOS_PERMITIDOS_EJECUCION arriba).
+  await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'en_proceso' } as never)
+    .eq('id', estudioId);
+
+  // 6. Disparar el provider en background. El frontend hace polling sobre
+  //    el estudio (cada 5s) y detecta cuando pase a 'completado' o
+  //    'fallido'. Si el async crash sin manejar, el estudio queda en
+  //    'en_proceso' indefinido — el catch global cubre eso marcándolo
+  //    como fallido para que el solicitante pueda reintentar.
+  procesarEstudioAsync({
+    estudioId,
+    proveedor: est.proveedor,
+    expedienteId: est.expediente_id,
+    providerInput,
+    userId,
+    ip,
+  }).catch((err) => {
+    logger.error(
+      { error: err, estudioId },
+      'procesarEstudioAsync rejected unexpectedly — el estudio puede haber quedado en en_proceso',
+    );
+  });
+
+  // 7. Responder inmediatamente con el estudio actualizado (estado=en_proceso).
+  return getEstudioById(estudioId);
+}
+
+/**
+ * Ejecuta el provider en background y resuelve el estudio (completado /
+ * fallido) en BD. Llamado fire-and-forget desde ejecutarEstudio. NO debe
+ * lanzar — todos los errores se traducen a estudio.estado='fallido' con
+ * observaciones legibles para el solicitante.
+ */
+async function procesarEstudioAsync(args: {
+  estudioId: string;
+  proveedor: string;
+  expedienteId: string;
+  providerInput: ProviderSolicitudInput;
+  userId: string;
+  ip?: string;
+}): Promise<void> {
+  const { estudioId, proveedor, expedienteId, providerInput, userId, ip } = args;
+  const provider = getProvider(proveedor as 'transunion' | 'sifin' | 'datacredito');
 
   logger.info(
-    { estudioId, provider: est.proveedor, documento: maskDocumento(providerInput.numero_documento) },
-    'Executing credit risk study via provider',
+    { estudioId, provider: proveedor, documento: maskDocumento(providerInput.numero_documento) },
+    'procesarEstudioAsync: solicitando al proveedor',
   );
 
   try {
     const response = await provider.solicitar(providerInput);
 
-    // 6. Update estudio on success
-    const { error: updateError } = await (supabase
+    await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .update({
-        estado: 'en_proceso',
-        referencia_proveedor: response.referencia_proveedor,
-      } as never)
+      .update({ referencia_proveedor: response.referencia_proveedor } as never)
       .eq('id', estudioId);
-
-    if (updateError) {
-      logger.error({ error: updateError, estudioId }, 'Error al actualizar estudio tras solicitud a proveedor');
-      throw AppError.badRequest('Error al actualizar el estudio tras enviar al proveedor', 'ESTUDIO_UPDATE_ERROR');
-    }
 
     logAudit({
       usuarioId: userId,
@@ -1219,46 +1258,42 @@ export async function ejecutarEstudio(
       entidad: AUDIT_ENTITIES.ESTUDIO,
       entidadId: estudioId,
       detalle: {
-        proveedor: est.proveedor,
+        proveedor,
         referencia_proveedor: response.referencia_proveedor,
-        expediente_id: est.expediente_id,
+        expediente_id: expedienteId,
       },
       ip,
     });
 
-    // 7. Proveedores sincronos (TransUnion) devuelven status='completed'
-    //    inmediatamente. Registramos el resultado cachéado en la misma
-    //    request para que el solicitante vea el resultado al instante.
+    // Proveedores síncronos (TransUnion) devuelven status='completed'.
     if (response.status === 'completed') {
-      logger.info(
-        { estudioId, referencia: response.referencia_proveedor },
-        'Provider retornó completed — disparando registro automático del resultado',
-      );
       try {
-        await registrarResultadoInline(estudioId, est.proveedor, response.referencia_proveedor, est.expediente_id);
-        logger.info({ estudioId }, 'Registro automático del resultado completado exitosamente');
+        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId);
+        logger.info({ estudioId }, 'Estudio completado exitosamente (async)');
       } catch (postErr) {
         const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
         logger.error(
-          { error: errMsg, stack: postErr instanceof Error ? postErr.stack : undefined, estudioId },
-          'Falló el registro automático del resultado',
+          { error: errMsg, estudioId },
+          'Falló el registro automático del resultado — el estudio queda en en_proceso, el frontend puede disparar consultarEstadoProveedor',
         );
-        // No re-lanzamos — el estudio queda en en_proceso y el frontend
-        // puede disparar consultarEstadoProveedor vía polling como fallback.
       }
     }
-
-    return getEstudioById(estudioId);
   } catch (err) {
-    // 7. On failure: mark as fallido
     const errorMsg = err instanceof Error ? err.message : 'Error desconocido del proveedor';
+
+    const lowerErr = errorMsg.toLowerCase();
+    const documentoNoEncontrado = lowerErr.includes('tercero consultado no existe')
+      || lowerErr.includes('no existe en centrales')
+      || lowerErr.includes('numero de identificacion invalido')
+      || lowerErr.includes('tercero no encontrado');
+
+    const observaciones = documentoNoEncontrado
+      ? 'No encontramos antecedentes con este documento en las centrales de riesgo colombianas. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos.'
+      : `Error de proveedor (${proveedor}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
 
     const { error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .update({
-        estado: 'fallido',
-        observaciones: `Error de proveedor (${est.proveedor}): ${errorMsg}. Puede registrar el resultado manualmente.`,
-      } as never)
+      .update({ estado: 'fallido', observaciones } as never)
       .eq('id', estudioId);
 
     if (failError) {
@@ -1271,35 +1306,17 @@ export async function ejecutarEstudio(
       entidad: AUDIT_ENTITIES.ESTUDIO,
       entidadId: estudioId,
       detalle: {
-        proveedor: est.proveedor,
+        proveedor,
         error: errorMsg,
-        expediente_id: est.expediente_id,
+        documento_no_encontrado: documentoNoEncontrado,
+        expediente_id: expedienteId,
       },
       ip,
     });
 
     logger.error(
-      { estudioId, provider: est.proveedor, error: errorMsg },
-      'Provider execution failed',
-    );
-
-    // Mensajes amigables para errores comunes que el solicitante puede
-    // resolver. Para otros errores, usamos el tecnico (lo ven admin/operador).
-    const lowerErr = errorMsg.toLowerCase();
-    const documentoNoEncontrado = lowerErr.includes('tercero consultado no existe')
-      || lowerErr.includes('no existe en centrales')
-      || lowerErr.includes('numero de identificacion invalido');
-
-    if (documentoNoEncontrado) {
-      throw AppError.badRequest(
-        'No encontramos antecedentes con este documento en las centrales de riesgo colombianas. Cofianza solo puede consultar documentos colombianos: Cedula de Ciudadania (CC), Cedula de Extranjeria (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu numero y tipo de documento sean correctos. Si eres extranjero residente, usa tu CE.',
-        'DOCUMENTO_NO_ENCONTRADO',
-      );
-    }
-
-    throw AppError.badRequest(
-      `El proveedor ${est.proveedor} fallo al ejecutar el estudio: ${errorMsg}. El estudio fue marcado como fallido. Puede registrar el resultado manualmente.`,
-      'PROVIDER_EXECUTION_FAILED',
+      { estudioId, provider: proveedor, error: errorMsg, documentoNoEncontrado },
+      'procesarEstudioAsync: provider falló — estudio marcado como fallido',
     );
   }
 }
