@@ -414,8 +414,16 @@ export async function reenviarSolicitudFirma(
       const ciudad = row.contratos?.expedientes?.inmuebles?.ciudad || '';
       const processName = `Contrato - ${row.contratos?.expedientes?.numero || row.contrato_id}`;
 
-      const phoneInternational = aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined);
-      const enableWhatsapp = Boolean(phoneInternational);
+      // Reenvio a otro correo = email-only flow. No reusamos el telefono
+      // del solicitante porque el motivo tipico de pedir el reenvio es que
+      // el flow original (WhatsApp) no le sirvio — telefono fuera de
+      // Colombia, equivocado, sin acceso a WhatsApp, etc. Si reusaramos
+      // el telefono, Auco volveria a intentar WhatsApp y probablemente
+      // fallaria de nuevo. Forzamos phoneInternational = null para que
+      // buildSignProfile arme un signer email-only y el global OTP por
+      // email haga el resto.
+      const phoneInternational: string | null = null;
+      const enableWhatsapp = false;
 
       // Mismo patron que crearSolicitudFirma: globales OTP-email solo cuando
       // NO hay flow por WhatsApp. Mezclar globales y individuales con tipos
