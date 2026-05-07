@@ -54,7 +54,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
   analista_id, inmueble_id, solicitante_id, creado_por,
   estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
   duracion_contrato_meses, fecha_inicio_contrato,
-  cancelado_at, motivo_cancelacion, estado_pre_cancelacion,
+  cancelado_at, motivo_cancelacion, estado_pre_cancelacion, motivo_rechazo,
   created_at, updated_at,
   inmuebles(id, codigo, direccion, ciudad, departamento, tipo, estado, valor_arriendo),
   solicitantes(id, nombre, apellido, tipo_documento, numero_documento, email, telefono),

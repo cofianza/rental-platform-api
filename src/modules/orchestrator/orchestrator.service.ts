@@ -191,6 +191,16 @@ export async function onEstudioCompletado(params: {
       await transicionarExpediente(expedienteId, 'rechazado');
       await registrarTimeline(expedienteId, 'estudio', `Estudio crediticio rechazado (Score: ${score}).`);
 
+      // Persistir motivo legible para el banner de cierre. Si la transición
+      // anterior no ocurrió (estado no era 'condicionado'), el .eq lo dejará
+      // sin cambios — no rompe.
+      await db('expedientes')
+        .update({
+          motivo_rechazo: 'El estudio crediticio del titular fue rechazado. La solicitud no procede.',
+        } as never)
+        .eq('id', expedienteId)
+        .eq('estado', 'rechazado');
+
       // Liberar inmueble
       if (inm) {
         await db('inmuebles')

@@ -40,6 +40,20 @@ export interface Coarrendatario {
   rechazado_at: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Datos del estudio TransUnion del coarrendatario, embebidos para que la UI
+   * del propietario pueda mostrar resultado + score sin un fetch extra.
+   * Se llena tras el dispatch (estado 'aceptado' o 'estudio_completado'); null
+   * si todavía no hay estudio.
+   */
+  estudio?: {
+    id: string;
+    estado: string;
+    resultado: string | null;
+    score: number | null;
+    observaciones: string | null;
+    fecha_completado: string | null;
+  } | null;
 }
 
 interface ExpedienteCtx {
@@ -102,6 +116,27 @@ function generateToken(): string {
 
 function tokenExpiracion(): string {
   return new Date(Date.now() + TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * Mensaje legible que persistimos en `expedientes.motivo_rechazo` cuando la
+ * ponderación titular+coarrendatario rechaza el expediente. Lo lee el banner
+ * de cierre del expediente en la web.
+ */
+function buildMotivoRechazoCoarrendatario(
+  titularResultado: string,
+  coarrendatarioResultado: string,
+): string {
+  if (titularResultado === 'condicionado' && coarrendatarioResultado === 'condicionado') {
+    return 'Tanto el estudio del titular como el del co-arrendatario quedaron en perfil marginal. La solicitud no procede.';
+  }
+  if (coarrendatarioResultado === 'rechazado') {
+    return 'El estudio crediticio del co-arrendatario invitado fue rechazado. La solicitud no procede.';
+  }
+  if (titularResultado === 'rechazado') {
+    return 'El estudio crediticio del titular fue rechazado. La solicitud no procede.';
+  }
+  return 'La ponderación de los estudios crediticios del titular y el co-arrendatario no permite respaldar este arrendamiento.';
 }
 
 // ============================================================
@@ -261,7 +296,23 @@ export async function getCoarrendatarioPorExpediente(
     .limit(1)
     .maybeSingle();
 
-  return (data as unknown as Coarrendatario) ?? null;
+  const coa = (data as unknown as Coarrendatario) ?? null;
+  if (!coa) return null;
+
+  // Embebemos el estudio asociado (si ya existe) para que el card del
+  // propietario muestre resultado/score sin un round-trip adicional.
+  if (coa.estudio_id) {
+    const { data: estudioRow } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, resultado, score, observaciones, fecha_completado')
+      .eq('id', coa.estudio_id)
+      .maybeSingle();
+    coa.estudio = (estudioRow as Coarrendatario['estudio']) ?? null;
+  } else {
+    coa.estudio = null;
+  }
+
+  return coa;
 }
 
 // ============================================================
@@ -571,9 +622,22 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
   const nowIso = new Date().toISOString();
   const nuevoEstadoExpediente = resultadoCombinado === 'aprobado' ? 'aprobado' : 'rechazado';
 
+  // Si rechazamos, dejamos un motivo legible que el banner del expediente lee
+  // para explicar al solicitante y al propietario por qué cerró así. Si
+  // aprobamos, no tocamos ese campo.
+  const motivoRechazo = resultadoCombinado === 'rechazado'
+    ? buildMotivoRechazoCoarrendatario(titular.resultado, est.resultado)
+    : null;
+
+  const expedienteUpdate: Record<string, unknown> = {
+    estado: nuevoEstadoExpediente,
+    updated_at: nowIso,
+  };
+  if (motivoRechazo) expedienteUpdate.motivo_rechazo = motivoRechazo;
+
   await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: nuevoEstadoExpediente, updated_at: nowIso } as never)
+    .update(expedienteUpdate as never)
     .eq('id', est.expediente_id)
     .eq('estado', 'condicionado'); // race-safe: solo si sigue condicionado
 
