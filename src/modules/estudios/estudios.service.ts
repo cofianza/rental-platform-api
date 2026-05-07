@@ -1099,10 +1099,12 @@ export async function ejecutarEstudio(
 
   // 1.5. Guard: el expediente debe estar habilitado para estudio. Gate del
   //      paso 3 del flujo — evita consultas a TransUnion sin autorización
-  //      explícita del propietario tras la cita realizada.
+  //      explícita del propietario tras la cita realizada. Tambien traemos
+  //      solicitante_id para sincronizar el documento del solicitante con
+  //      el que se usa en el form (ver paso 3).
   const { data: expedienteRow, error: expErr } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estudio_habilitado')
+    .select('id, numero, estudio_habilitado, solicitante_id')
     .eq('id', est.expediente_id)
     .single();
 
@@ -1121,6 +1123,7 @@ export async function ejecutarEstudio(
     id: string;
     numero: string;
     estudio_habilitado: boolean;
+    solicitante_id: string | null;
   };
 
   if (!expediente.estudio_habilitado) {
@@ -1162,15 +1165,43 @@ export async function ejecutarEstudio(
     );
   }
 
-  // Si el override trajo cambios, persistir en datos_formulario para auditoría.
-  if (
-    (overrideNumero && overrideNumero !== datosBase.numero_documento) ||
-    (overrideTipo && overrideTipo !== datosBase.tipo_documento)
-  ) {
+  // Si el override trajo cambios, persistir en datos_formulario (auditoría)
+  // Y sincronizar el documento del solicitante para que cards/modales que
+  // leen de `solicitantes.numero_documento` muestren el CC realmente usado
+  // — antes la UI mostraba el documento del registro original (eg. el del
+  // formulario de signup) aunque el solicitante haya escrito otro al
+  // confirmar el estudio.
+  const cambioNumero = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
+  const cambioTipo = !!(overrideTipo && overrideTipo !== datosBase.tipo_documento);
+
+  if (cambioNumero || cambioTipo) {
     await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({ datos_formulario: datos } as never)
       .eq('id', est.id);
+
+    if (expediente.solicitante_id) {
+      const solUpdates: Record<string, string> = {};
+      if (cambioNumero) solUpdates.numero_documento = overrideNumero!;
+      if (cambioTipo) solUpdates.tipo_documento = overrideTipo!;
+      const { error: solUpdErr } = await (supabase
+        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+        .update(solUpdates as never)
+        .eq('id', expediente.solicitante_id);
+      if (solUpdErr) {
+        // No abortamos la ejecucion del estudio por esto — el provider call
+        // sigue siendo lo importante. Pero dejamos rastro para investigar.
+        logger.warn(
+          { estudioId, solicitanteId: expediente.solicitante_id, err: solUpdErr.message },
+          'No se pudo sincronizar documento del solicitante con el form',
+        );
+      } else {
+        logger.info(
+          { estudioId, solicitanteId: expediente.solicitante_id, cambios: solUpdates },
+          'Documento del solicitante sincronizado con el form de estudio',
+        );
+      }
+    }
   }
 
   // 4. Build provider input
