@@ -99,8 +99,48 @@ export async function executeTransition(
 
   const result = data as TransitionRpcResult;
 
+  // Si la transicion fue "Cancelar expediente" (cualquier estado activo →
+  // cerrado con esa etiqueta), persistimos las columnas de cancelacion para
+  // que el UI distinga entre cierre natural y abandono mid-flow. Si la
+  // etiqueta no llega (clientes viejos o el caller no la mando), inferimos
+  // por estado_anterior: aprobado/borrador/en_revision/info_incompleta/
+  // condicionado → cerrado siempre fue cancelacion (rechazado→cerrado es la
+  // unica transicion al cerrado que no es abandono).
+  const ESTADOS_CANCELABLES: EstadoExpediente[] = [
+    'borrador',
+    'en_revision',
+    'informacion_incompleta',
+    'condicionado',
+    'aprobado',
+  ];
+  const fueCancelacion =
+    targetState === 'cerrado' &&
+    (input.etiqueta === 'Cancelar expediente' ||
+      (ESTADOS_CANCELABLES.includes(currentState) && !!input.comentario));
+
+  if (fueCancelacion) {
+    const { error: updErr } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        cancelado_at: new Date().toISOString(),
+        motivo_cancelacion: input.comentario,
+        estado_pre_cancelacion: currentState,
+      } as never)
+      .eq('id', expedienteId);
+    if (updErr) {
+      // No abortamos — la transicion ya quedo. Solo dejamos rastro: el
+      // expediente quedara como cerrado-sin-marcar-cancelacion y la UI
+      // lo mostrara como "finalizado" (mismo bug que veniamos solucionando)
+      // pero al menos el cierre quedo bien.
+      logger.warn(
+        { expedienteId, err: updErr.message },
+        'No se pudo persistir info de cancelacion — el expediente quedo cerrado pero sin marca de cancelacion',
+      );
+    }
+  }
+
   logger.info(
-    { expedienteId, from: currentState, to: targetState, userId: user.id },
+    { expedienteId, from: currentState, to: targetState, userId: user.id, cancelacion: fueCancelacion },
     'Transicion de expediente ejecutada',
   );
 
