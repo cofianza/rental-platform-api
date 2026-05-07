@@ -104,6 +104,12 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   // Cancelaciones: cualquier estado activo puede cerrarse cuando el dueño
   // / analista decide abandonar el flujo (Mario, 5-may-2026). Requiere un
   // motivo o comentario que queda en el timeline para auditoría.
+  // Tambien aplica desde 'aprobado' — el propietario puede decidir no
+  // proceder con el contrato aunque el estudio haya pasado (eg. encontro
+  // otro candidato, cambio de planes). Diferente etiqueta a "Cerrar
+  // expediente" para que el UX no fuerce a usar la misma palabra para
+  // dos intenciones distintas (cerrar = flujo natural completado;
+  // cancelar = abandonar antes del contrato).
   {
     from: 'borrador',
     to: 'cerrado',
@@ -124,6 +130,12 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   },
   {
     from: 'condicionado',
+    to: 'cerrado',
+    label: 'Cancelar expediente',
+    preconditions: ['MOTIVO_CIERRE'],
+  },
+  {
+    from: 'aprobado',
     to: 'cerrado',
     label: 'Cancelar expediente',
     preconditions: ['MOTIVO_CIERRE'],

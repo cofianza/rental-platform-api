@@ -143,9 +143,12 @@ describe('expediente-state-machine', () => {
       expect(transitions).toEqual([{ estado: 'en_revision', label: 'Reenviar a revision' }]);
     });
 
-    it('aprobado debe retornar solo cerrado', () => {
+    it('aprobado debe retornar dos opciones a cerrado: cerrar y cancelar', () => {
       const transitions = getAvailableTransitions('aprobado');
-      expect(transitions).toEqual([{ estado: 'cerrado', label: 'Cerrar expediente' }]);
+      expect(transitions).toEqual([
+        { estado: 'cerrado', label: 'Cerrar expediente' },
+        { estado: 'cerrado', label: 'Cancelar expediente' },
+      ]);
     });
 
     it('rechazado debe retornar solo cerrado', () => {
