@@ -128,10 +128,11 @@ interface SignProfileOutput {
   name: string;
   email: string;
   phone?: string;
-  role: 'SIGNER';
   // Auco exige al menos uno de [type, label, position] por firmante. Usamos
-  // 'signature' = firma libre que el firmante coloca durante el flujo.
-  type: 'signature';
+  // `position` (default abajo a la derecha) para alinear con el payload del
+  // proyecto Temporal/Nest que SI funciona end-to-end. `role` y `type` no
+  // estan en la doc oficial de Auco y agregarlos no aporta — los quitamos.
+  position?: Array<{ page: number; x: number; y: number; w: number; h: number }>;
   // Validaciones de identidad — segun la doc de Auco, declarar `options`
   // requiere activar `camera` u `otpCode` boolean en el mismo nivel; ambos
   // los activamos para WhatsApp.
@@ -151,34 +152,29 @@ interface SignProfileOutput {
   };
 }
 
+// Posicion default del cuadro de firma — abajo a la derecha de la primera
+// pagina. Mismo valor que usa el proyecto Temporal de prueba que funciona.
+const DEFAULT_SIGN_POSITION = [
+  { page: 1, x: 0.6, y: 0.85, w: 150, h: 50 },
+];
+
 function buildSignProfile(params: SignProfileInput): SignProfileOutput {
   const { name, email, phoneInternational, identification, identificationType, country } = params;
 
   const tipoAuco = mapTipoDocumentoToAuco(identificationType);
   const idNumero = identification?.trim() || null;
 
-  // El country tiene que ser COHERENTE con el phone — si pasamos country='CO'
-  // pero phone='+52' (Mexico), Auco rechaza al iniciar el flow WhatsApp con
-  // "Se ha producido un error inesperado". Derivamos siempre del phone, e
-  // ignoramos el `country` que venga en params (queda como override solo si
-  // el phone no se puede mapear).
+  // El country lo derivamos del prefijo del telefono — si pasamos country='CO'
+  // pero phone='+52' (Mexico), Auco rechaza con "Se ha producido un error
+  // inesperado". El `country` que venga en params solo se usa como fallback
+  // cuando el phone no se puede mapear.
   const countryFromPhone = deriveCountryFromPhone(phoneInternational);
   const countryCode = countryFromPhone || (country?.trim().toUpperCase() || null);
 
-  // El tipo de documento tiene que ser coherente con el country. Si el
-  // documento es CC/CE/TI/NIT (colombiano) pero el country derivado es MX,
-  // hay incoherencia → fallback a `cameraMode: 'photo'` (solo selfie, sin
-  // cotejo). Cuando el solicitante tiene phone +57 + CC, todo alinea y
-  // podemos hacer biometrico.
-  const tipoEsColombiano = tipoAuco && ['CC', 'CE', 'TI', 'NIT'].includes(tipoAuco);
-  const documentoCoherente = !!(
-    countryCode === 'CO' && tipoEsColombiano
-  ) || !!(countryCode && tipoAuco === 'PASAPORTE');
-
-  // Activamos cotejo biometrico ('identification') solo si tenemos los 3
-  // campos Y son coherentes entre si. De lo contrario, 'photo' (solo selfie).
-  const tieneIdentidadCompleta = !!(idNumero && tipoAuco && countryCode && documentoCoherente);
-  const cameraOption: 'identification' | 'photo' = tieneIdentidadCompleta ? 'identification' : 'photo';
+  // Mismo cameraMode que usa el proyecto Temporal de prueba que funciona
+  // end-to-end: 'photo' (solo selfie, sin cotejo de ID). Cuando estabilicemos
+  // el flow podemos mover a 'identification' si tenemos los datos.
+  const cameraOption: 'identification' | 'photo' = 'photo';
 
   if (phoneInternational) {
     // Flow EXCLUSIVO por WhatsApp (decision Cofianza). El firmante recibe el
@@ -188,11 +184,10 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
       name,
       email,
       phone: phoneInternational,
-      role: 'SIGNER',
-      type: 'signature',
-      // Validaciones obligatorias segun doc Auco — sin estos, options no es
-      // valido y el flow falla silencioso con "Se ha producido un error
-      // inesperado" al hacer click "Comenzar" en WhatsApp.
+      // position obligatorio segun la doc de Auco — sin esto, options no se
+      // valida y el flow falla silencioso al hacer click "Comenzar" en
+      // WhatsApp con "Se ha producido un error inesperado".
+      position: DEFAULT_SIGN_POSITION,
       camera: true,
       otpCode: true,
       options: {
@@ -201,11 +196,11 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
         camera: cameraOption,
       },
     };
-    if (tieneIdentidadCompleta) {
-      profile.identification = idNumero!;
-      profile.identificationType = tipoAuco!;
-      profile.country = countryCode!;
-    }
+    // Siempre incluimos identification/type/country cuando los tenemos —
+    // mismo comportamiento que el proyecto Temporal de prueba que funciona.
+    if (idNumero) profile.identification = idNumero;
+    if (tipoAuco) profile.identificationType = tipoAuco;
+    if (countryCode) profile.country = countryCode;
     return profile;
   }
 
@@ -214,8 +209,7 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
   const profile: SignProfileOutput = {
     name,
     email,
-    role: 'SIGNER',
-    type: 'signature',
+    position: DEFAULT_SIGN_POSITION,
     camera: true,
     otpCode: true,
     options: {
@@ -223,11 +217,9 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
       camera: cameraOption,
     },
   };
-  if (tieneIdentidadCompleta) {
-    profile.identification = idNumero!;
-    profile.identificationType = tipoAuco!;
-    profile.country = countryCode!;
-  }
+  if (idNumero) profile.identification = idNumero;
+  if (tipoAuco) profile.identificationType = tipoAuco;
+  if (countryCode) profile.country = countryCode;
   return profile;
 }
 
