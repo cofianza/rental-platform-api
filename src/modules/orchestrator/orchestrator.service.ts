@@ -6,6 +6,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
+import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
@@ -171,6 +172,17 @@ export async function onEstudioCompletado(params: {
         } catch (e) {
           logger.warn({ error: e }, 'Orchestrator: error obteniendo datos propietario para notificacion');
         }
+
+        // Notificacion in-app al propietario: el estudio fue aprobado y el
+        // siguiente paso es generar el contrato desde su panel. Fire-and-forget.
+        notificarUsuario({
+          userId: inm.propietario_id,
+          tipo: 'estudio.aprobado.propietario',
+          titulo: '¡El estudio del arrendatario fue aprobado!',
+          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el expediente para continuar con la firma.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
+        }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario aprobado'));
       }
 
     } else if (resultado === 'rechazado') {
@@ -191,6 +203,19 @@ export async function onEstudioCompletado(params: {
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error email rechazado'));
       }
 
+      // Notificacion in-app al propietario: el estudio fue rechazado, el flujo
+      // termina aqui (no hay accion del propietario). Fire-and-forget.
+      if (inm?.propietario_id && sol) {
+        notificarUsuario({
+          userId: inm.propietario_id,
+          tipo: 'estudio.rechazado.propietario',
+          titulo: 'Estudio del arrendatario rechazado',
+          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El expediente no avanza al contrato.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
+        }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario rechazado'));
+      }
+
     } else if (resultado === 'condicionado') {
       // ── CONDICIONADO ──
       await transicionarExpediente(expedienteId, 'en_revision');
@@ -200,6 +225,20 @@ export async function onEstudioCompletado(params: {
       if (sol?.email) {
         sendDocumentosRequeridosEmail({ email: sol.email, nombre: `${sol.nombre} ${sol.apellido}`, score })
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error email condicionado'));
+      }
+
+      // Notificacion in-app al propietario: el estudio salio condicionado.
+      // El propietario debe revisar la documentacion adicional cuando llegue
+      // y decidir si proceder con el contrato. Fire-and-forget.
+      if (inm?.propietario_id && sol) {
+        notificarUsuario({
+          userId: inm.propietario_id,
+          tipo: 'estudio.condicionado.propietario',
+          titulo: 'Estudio condicionado — requiere tu revision',
+          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue condicionado. Cuando el solicitante cargue los documentos adicionales, revisa y decide si proceder.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
+        }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
       }
     }
 
