@@ -1281,7 +1281,14 @@ export async function syncFirmaConAucoForExpediente(expedienteId: string): Promi
       try {
         const info = await aucoClient.getDocumentStatus(sol.auco_document_code);
         logger.info(
-          { solicitudId: sol.id, aucoCode: sol.auco_document_code, aucoStatus: info.status },
+          {
+            solicitudId: sol.id,
+            aucoCode: sol.auco_document_code,
+            aucoStatus: info.status,
+            aucoSignersStatuses: info.signProfile?.map((s) => ({ name: s.name, status: s.status })),
+            aucoUrlPresent: !!info.url,
+            aucoRaw: info,
+          },
           'syncFirmaConAuco: respuesta Auco',
         );
         if (info.status !== 'FINISH') continue;
