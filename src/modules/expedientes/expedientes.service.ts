@@ -186,6 +186,24 @@ export async function getMiExpedientePorInmueble(inmuebleId: string, userId: str
 // ============================================================
 
 export async function getExpedienteById(id: string) {
+  // Auto-heal de firmas: si hay un contrato en `pendiente_firma`, polleamos
+  // Auco para ver si ya completo y actualizamos local. Cubre el caso donde
+  // el webhook no llego (red, config). AWAIT con timeout corto para que el
+  // front reciba el expediente ya actualizado en la misma respuesta — sin
+  // esto, fire-and-forget hacia que el primer GET volviera con datos viejos
+  // y solo el segundo GET veria el cambio.
+  try {
+    const { syncFirmaConAucoForExpediente } = await import('@/modules/firma/firma.service');
+    // Timeout 5s — si Auco se tarda, no bloqueamos al usuario; el siguiente
+    // GET intenta de nuevo. Mejor un retraso ocasional que un cuelgue.
+    await Promise.race([
+      syncFirmaConAucoForExpediente(id),
+      new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+    ]);
+  } catch (err) {
+    logger.error({ error: err, expedienteId: id }, 'Error en syncFirmaConAucoForExpediente');
+  }
+
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(EXPEDIENTE_DETAIL_SELECT)
@@ -199,15 +217,6 @@ export async function getExpedienteById(id: string) {
     logger.error({ error: error?.message, id }, 'Error al obtener expediente');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el expediente');
   }
-
-  // Auto-heal de firmas: si hay un contrato en `pendiente_firma`, polleamos
-  // Auco para ver si ya completo y actualizamos local. Cubre el caso donde
-  // el webhook no llego (red, config). Fire-and-forget — no bloquea.
-  import('@/modules/firma/firma.service')
-    .then(({ syncFirmaConAucoForExpediente }) => syncFirmaConAucoForExpediente(id))
-    .catch((err) =>
-      logger.error({ error: err, expedienteId: id }, 'Error en syncFirmaConAucoForExpediente'),
-    );
 
   // Mapear relaciones con nombres claros
   const raw = data as unknown as Record<string, unknown>;

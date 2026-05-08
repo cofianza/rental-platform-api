@@ -1228,6 +1228,11 @@ export async function syncFirmaConAucoForExpediente(expedienteId: string): Promi
   const contratos = (contratosRow as Array<{ id: string; estado: string }> | null) || [];
   if (contratos.length === 0) return;
 
+  logger.info(
+    { expedienteId, contratos: contratos.length },
+    'syncFirmaConAuco: contratos en pendiente_firma encontrados',
+  );
+
   for (const contrato of contratos) {
     // 2. Encontrar solicitudes_firma activas con auco_document_code.
     const { data: solRow } = await (supabase
@@ -1246,9 +1251,18 @@ export async function syncFirmaConAucoForExpediente(expedienteId: string): Promi
     }> | null) || [];
     if (solicitudes.length === 0) continue;
 
+    logger.info(
+      { contratoId: contrato.id, solicitudes: solicitudes.length },
+      'syncFirmaConAuco: solicitudes activas para pollear',
+    );
+
     for (const sol of solicitudes) {
       try {
         const info = await aucoClient.getDocumentStatus(sol.auco_document_code);
+        logger.info(
+          { solicitudId: sol.id, aucoCode: sol.auco_document_code, aucoStatus: info.status },
+          'syncFirmaConAuco: respuesta Auco',
+        );
         if (info.status !== 'FINISH') continue;
 
         // 3. Actualizar la solicitud localmente — usamos la URL firmada de Auco
