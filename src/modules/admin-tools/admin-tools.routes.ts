@@ -19,4 +19,13 @@ router.post(
   controller.wipeTestData,
 );
 
+// Registra el webhook de Auco para notificaciones de firma. One-shot
+// que sobreescribe el webhook 'default' apuntando a nuestra API.
+router.post(
+  '/auco/register-webhook',
+  authMiddleware,
+  roleGuard(['administrador']),
+  controller.registerAucoWebhook,
+);
+
 export default router;

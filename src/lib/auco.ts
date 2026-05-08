@@ -268,24 +268,29 @@ export async function cancelDocument(code: string): Promise<void> {
 
 /**
  * Register a webhook endpoint in Auco.
- * Must be called once during setup to create the "default" webhook.
+ * El primer webhook debe tener id='default' — Auco lo usa por defecto
+ * para todas las notificaciones del documento (FINISH, REJECTED, etc).
+ *
+ * Body shape: PUT /company recibe { webhooks: [{...}] } — sobreescribe la
+ * lista entera de webhooks de la cuenta. Para no perder otros, traer la
+ * lista actual primero, mergear, y enviar.
  */
 export async function registerWebhook(
   webhookUrl: string,
   headerKey?: string,
   headerValue?: string,
 ): Promise<void> {
-  const body: Record<string, unknown> = {
+  const webhook: Record<string, unknown> = {
     id: 'default',
     description: 'Cofianza webhook for firma notifications',
     url: webhookUrl,
   };
 
   if (headerKey && headerValue) {
-    body.header = { key: headerKey, value: headerValue };
+    webhook.header = { key: headerKey, value: headerValue };
   }
 
-  await aucoRequest('PUT', '/company', body, true);
+  await aucoRequest('PUT', '/company', { webhooks: [webhook] }, true);
   logger.info({ url: webhookUrl }, 'Auco webhook registered');
 }
 
