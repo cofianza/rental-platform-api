@@ -266,7 +266,7 @@ async function notificarCitaConfirmada(
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.reprogramada',
       titulo: 'Cita reprogramada',
-      mensaje: `El propietario ajusto la fecha de tu visita a ${ctx.inmuebleDireccion}.`,
+      mensaje: `El propietario ajustó la fecha de tu visita a ${ctx.inmuebleDireccion}.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
     });
@@ -329,7 +329,7 @@ async function notificarCitaCancelada(
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.cancelada',
       titulo: 'Visita cancelada',
-      mensaje: `El propietario cancelo tu visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
+      mensaje: `El propietario canceló tu visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, motivo },
     });

@@ -151,7 +151,7 @@ export async function sendContratoListoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Tu contrato esta listo para firmar - Cofianza',
+    subject: 'Tu contrato está listo para firmar - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -487,7 +487,7 @@ export async function sendEstudioNoHabilitadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: `Actualizacion sobre tu solicitud — ${expediente_numero}`,
+    subject: `Actualización sobre tu solicitud — ${expediente_numero}`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #6b7280; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">

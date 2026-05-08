@@ -44,7 +44,7 @@ export async function sendFirmaAcuseEmail(params: AcuseEmailParams): Promise<voi
     const emailPayload: Parameters<typeof resend.emails.send>[0] = {
       from: FROM_EMAIL,
       to,
-      subject: 'Confirmacion de firma electronica - Cofianza',
+      subject: 'Confirmación de firma electrónica - Cofianza',
       html: buildAcuseHtml(nombreFirmante, fechaFormateada, contratoNombre, inmuebleDisplay),
     };
 

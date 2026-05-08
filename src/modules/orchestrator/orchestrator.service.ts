@@ -244,7 +244,7 @@ export async function onEstudioCompletado(params: {
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
-          titulo: 'Estudio condicionado — requiere tu revision',
+          titulo: 'Estudio condicionado — requiere tu revisión',
           mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue condicionado. Cuando el solicitante cargue los documentos adicionales, revisa y decide si proceder.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
