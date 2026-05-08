@@ -261,18 +261,22 @@ export async function updateMyProfile(userId: string, input: UpdateMyProfileInpu
 
   const wantsTipoDoc = input.tipo_documento ?? null;
   const wantsNumDoc = input.numero_documento ?? null;
-  const docCambia =
-    (wantsTipoDoc !== null && wantsTipoDoc !== actual.tipo_documento) ||
-    (wantsNumDoc !== null && wantsNumDoc !== actual.numero_documento);
 
   // Solicitantes: bloquear cambio de documento si ya hay estudios crediticios
   // activos (en_proceso o completado) — el CC consultado en TransUnion no
   // puede divergir del registrado en el sistema sin invalidar trazabilidad.
   // Los estudios de expedientes CANCELADOS no cuentan: el solicitante puede
   // arrancar de cero con otro documento si su expediente fue cancelado.
-  if (actual.rol === 'solicitante' && docCambia) {
+  // Para solicitantes, el documento autoritativo vive en `solicitantes` (no
+  // en `perfiles`), asi que comparamos contra esa tabla — sino, cualquier
+  // submit con el mismo documento se interpreta como cambio.
+  if (actual.rol === 'solicitante') {
     const sol = await getSolicitanteByUser(userId);
-    if (sol) {
+    const docCambia = sol
+      ? (wantsTipoDoc !== null && wantsTipoDoc !== sol.tipo_documento) ||
+        (wantsNumDoc !== null && wantsNumDoc !== sol.numero_documento)
+      : (wantsTipoDoc !== null || wantsNumDoc !== null);
+    if (docCambia && sol) {
       const { data: exps } = await (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
         .select('id')
