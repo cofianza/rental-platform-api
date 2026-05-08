@@ -151,7 +151,9 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     plantillas: [],
     inmuebles: [],
     reportes: [],
-    configuracion: [],
+    // Acceso a /configuracion solo para llegar a "Mi cuenta" (perfil propio).
+    // Las demas secciones del menu se filtran con `soloRoles` en el frontend.
+    configuracion: ['read'],
     bitacora: [],
     dashboard: ['read'],
     solicitantes: ['read_own'],

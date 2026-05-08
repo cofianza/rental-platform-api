@@ -5,7 +5,7 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendPasswordResetEmail } from '@/lib/email';
-import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput } from './auth.schema';
+import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
 
 export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
   const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
@@ -151,6 +151,225 @@ export async function getProfile(userId: string) {
     created_at: perfil.created_at,
     updated_at: perfil.updated_at,
   };
+}
+
+// ============================================================
+// Mi cuenta — perfil extendido (incluye telefono, documento, etc).
+// Para rol='solicitante', merge con la fila correspondiente en
+// `solicitantes` (donde vive el documento) usando creado_por = userId.
+// ============================================================
+type PerfilExtRow = {
+  id: string;
+  nombre: string;
+  apellido: string;
+  telefono: string | null;
+  tipo_documento: string | null;
+  numero_documento: string | null;
+  rol: string;
+  estado: string;
+  avatar_url: string | null;
+  nombre_representante: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type SolicitanteRow = {
+  id: string;
+  nombre: string;
+  apellido: string;
+  tipo_documento: string;
+  numero_documento: string;
+  telefono: string | null;
+};
+
+async function getSolicitanteByUser(userId: string): Promise<SolicitanteRow | null> {
+  const { data } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, nombre, apellido, tipo_documento, numero_documento, telefono')
+    .eq('creado_por', userId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as SolicitanteRow | null) ?? null;
+}
+
+export async function getMyProfile(userId: string) {
+  const { data: perfilRaw, error: perfilError } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select(
+      'id, nombre, apellido, telefono, tipo_documento, numero_documento, ' +
+      'rol, estado, avatar_url, nombre_representante, created_at, updated_at',
+    )
+    .eq('id', userId)
+    .single();
+
+  if (perfilError || !perfilRaw) {
+    throw AppError.notFound('Perfil no encontrado');
+  }
+
+  const perfil = perfilRaw as unknown as PerfilExtRow;
+
+  const { data: { user }, error: userError } = await supabaseAuth.auth.admin.getUserById(userId);
+  if (userError || !user) {
+    throw AppError.notFound('Usuario no encontrado');
+  }
+
+  // Para solicitantes, el documento autoritativo vive en `solicitantes`
+  // (porque se sincroniza con el documento consultado en TransUnion).
+  // Devolvemos esos campos por encima de los de `perfiles`.
+  const solicitante = perfil.rol === 'solicitante' ? await getSolicitanteByUser(userId) : null;
+
+  return {
+    id: perfil.id,
+    email: user.email || '',
+    nombre: solicitante?.nombre || perfil.nombre,
+    apellido: solicitante?.apellido || perfil.apellido,
+    telefono: solicitante?.telefono ?? perfil.telefono ?? null,
+    tipo_documento: solicitante?.tipo_documento ?? perfil.tipo_documento ?? null,
+    numero_documento: solicitante?.numero_documento ?? perfil.numero_documento ?? null,
+    rol: perfil.rol,
+    avatar_url: perfil.avatar_url,
+    nombre_representante: perfil.nombre_representante,
+    activo: perfil.estado === 'activo',
+    created_at: perfil.created_at,
+    updated_at: perfil.updated_at,
+  };
+}
+
+// ============================================================
+// Mi cuenta — actualizar mi propio perfil.
+// - Para todos los roles: actualiza perfiles (nombre, apellido, telefono,
+//   documento, nombre_representante).
+// - Para rol='solicitante': si el documento cambia, validamos que NO haya
+//   estudios crediticios activos (porque el documento ya fue consultado y
+//   reflejarlo aqui implicaria inconsistencia con TransUnion).
+// - Para rol='solicitante': si existe fila en `solicitantes`, la actualizamos
+//   en sincro con perfiles.
+// ============================================================
+export async function updateMyProfile(userId: string, input: UpdateMyProfileInput) {
+  const { data: actualRaw, error: actualErr } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('rol, tipo_documento, numero_documento')
+    .eq('id', userId)
+    .single();
+
+  if (actualErr || !actualRaw) {
+    throw AppError.notFound('Perfil no encontrado');
+  }
+
+  const actual = actualRaw as unknown as { rol: string; tipo_documento: string | null; numero_documento: string | null };
+
+  const wantsTipoDoc = input.tipo_documento ?? null;
+  const wantsNumDoc = input.numero_documento ?? null;
+  const docCambia =
+    (wantsTipoDoc !== null && wantsTipoDoc !== actual.tipo_documento) ||
+    (wantsNumDoc !== null && wantsNumDoc !== actual.numero_documento);
+
+  // Solicitantes: bloquear cambio de documento si ya hay estudios crediticios
+  // activos (en_proceso o completado) — el CC consultado en TransUnion no
+  // puede divergir del registrado en el sistema sin invalidar trazabilidad.
+  if (actual.rol === 'solicitante' && docCambia) {
+    const sol = await getSolicitanteByUser(userId);
+    if (sol) {
+      const { count } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .select('id', { count: 'exact', head: true })
+        .in('estado', ['en_proceso', 'completado']);
+      // Filtra por expedientes del solicitante (consulta separada para
+      // mantenerla simple y type-safe con el cliente de Supabase).
+      if ((count ?? 0) > 0) {
+        const { data: exps } = await (supabase
+          .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+          .select('id')
+          .eq('solicitante_id', sol.id);
+        const expIds = ((exps as { id: string }[] | null) ?? []).map((e) => e.id);
+        if (expIds.length > 0) {
+          const { count: estCount } = await (supabase
+            .from('estudios' as string) as ReturnType<typeof supabase.from>)
+            .select('id', { count: 'exact', head: true })
+            .in('expediente_id', expIds)
+            .in('estado', ['en_proceso', 'completado']);
+          if ((estCount ?? 0) > 0) {
+            throw AppError.badRequest(
+              'No puedes cambiar tu documento porque ya tienes un estudio crediticio en curso o completado. Contacta soporte si necesitas corregirlo.',
+              'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
+            );
+          }
+        }
+      }
+    }
+  }
+
+  const perfilPatch: Record<string, unknown> = {
+    nombre: input.nombre,
+    apellido: input.apellido,
+    telefono: input.telefono,
+    updated_at: new Date().toISOString(),
+  };
+  if (input.tipo_documento !== undefined) perfilPatch.tipo_documento = input.tipo_documento;
+  if (input.numero_documento !== undefined) perfilPatch.numero_documento = input.numero_documento;
+  // nombre_representante solo aplica a inmobiliaria; lo persistimos siempre que
+  // venga porque la columna existe en la tabla y otros roles lo dejan null.
+  if (input.nombre_representante !== undefined) perfilPatch.nombre_representante = input.nombre_representante;
+
+  const { error: updErr } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .update(perfilPatch as never)
+    .eq('id', userId);
+
+  if (updErr) {
+    // Constraint de unicidad de (tipo_documento, numero_documento) si llega
+    // a existir en perfiles → mensaje claro.
+    if ((updErr as { code?: string }).code === '23505') {
+      throw AppError.conflict(
+        'Ya existe otra cuenta con ese número de documento.',
+        'DOCUMENTO_DUPLICADO',
+      );
+    }
+    logger.error({ userId, error: updErr.message }, 'Error al actualizar perfiles');
+    throw AppError.badRequest('Error al actualizar el perfil', 'PROFILE_UPDATE_ERROR');
+  }
+
+  // Sincronizar con `solicitantes` cuando aplica.
+  if (actual.rol === 'solicitante') {
+    const sol = await getSolicitanteByUser(userId);
+    if (sol) {
+      const solPatch: Record<string, unknown> = {
+        nombre: input.nombre,
+        apellido: input.apellido,
+        telefono: input.telefono,
+        updated_at: new Date().toISOString(),
+      };
+      if (wantsTipoDoc) solPatch.tipo_documento = wantsTipoDoc;
+      if (wantsNumDoc) solPatch.numero_documento = wantsNumDoc;
+
+      const { error: solErr } = await (supabase
+        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+        .update(solPatch as never)
+        .eq('id', sol.id);
+
+      if (solErr) {
+        if ((solErr as { code?: string }).code === '23505') {
+          throw AppError.conflict(
+            'Ya existe otra persona registrada con ese número de documento.',
+            'DOCUMENTO_DUPLICADO',
+          );
+        }
+        logger.error({ userId, solicitanteId: sol.id, error: solErr.message }, 'Error al sincronizar solicitantes');
+        throw AppError.badRequest('Error al actualizar los datos del solicitante', 'SOLICITANTE_UPDATE_ERROR');
+      }
+    }
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.USER_UPDATED,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    detalle: { campos: Object.keys(perfilPatch) },
+  });
+
+  return getMyProfile(userId);
 }
 
 function hashToken(token: string): string {

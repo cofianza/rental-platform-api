@@ -3,7 +3,7 @@ import { sendSuccess } from '@/lib/response';
 import { AppError } from '@/lib/errors';
 import { getPermissionsForRole, INTERNAL_ROLES, type InternalRole } from '@/config/permissions';
 import * as authService from './auth.service';
-import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, ResetTokenParams } from './auth.schema';
+import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, ResetTokenParams, UpdateMyProfileInput } from './auth.schema';
 
 export async function login(req: Request, res: Response) {
   const result = await authService.loginWithEmail(req.body as LoginInput, req.ip);
@@ -28,6 +28,19 @@ export async function logout(req: Request, res: Response) {
 
 export async function me(req: Request, res: Response) {
   const profile = await authService.getProfile(req.user!.id);
+  sendSuccess(res, profile);
+}
+
+export async function getMyProfile(req: Request, res: Response) {
+  const profile = await authService.getMyProfile(req.user!.id);
+  sendSuccess(res, profile);
+}
+
+export async function updateMyProfile(req: Request, res: Response) {
+  const profile = await authService.updateMyProfile(
+    req.user!.id,
+    req.body as UpdateMyProfileInput,
+  );
   sendSuccess(res, profile);
 }
 

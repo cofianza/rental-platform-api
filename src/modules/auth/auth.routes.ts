@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { validate } from '@/middleware/validate';
 import { authMiddleware } from '@/middleware/auth';
 import { authLimiter, passwordResetLimiter } from '@/middleware/rateLimiter';
-import { loginSchema, refreshSchema, forgotPasswordSchema, resetPasswordSchema, resetTokenParamsSchema } from './auth.schema';
+import { loginSchema, refreshSchema, forgotPasswordSchema, resetPasswordSchema, resetTokenParamsSchema, updateMyProfileSchema } from './auth.schema';
 import * as authController from './auth.controller';
 
 const router = Router();
@@ -21,5 +21,14 @@ router.post('/reset-password', validate({ body: resetPasswordSchema }), authCont
 router.post('/logout', authMiddleware, authController.logout);
 router.get('/me', authMiddleware, authController.me);
 router.get('/permissions', authMiddleware, authController.permissions);
+
+// Mi cuenta — perfil extendido editable por el propio usuario
+router.get('/me/perfil', authMiddleware, authController.getMyProfile);
+router.patch(
+  '/me/perfil',
+  authMiddleware,
+  validate({ body: updateMyProfileSchema }),
+  authController.updateMyProfile,
+);
 
 export default router;
