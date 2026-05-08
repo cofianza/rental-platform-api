@@ -159,14 +159,22 @@ async function aucoRequest<T>(
     options.body = JSON.stringify(body);
   }
 
-  logger.debug({ method, path }, 'Auco API request');
+  // Diagnostico: confirmamos que la key tiene el prefijo correcto y la
+  // URL apunta al ambiente correcto. Solo el prefijo (5 chars) — el resto
+  // queda redactado.
+  const keyPrefix = key ? key.slice(0, 5) : 'EMPTY';
+  const keyLen = key?.length ?? 0;
+  logger.info(
+    { method, path, baseUrl: env.AUCO_API_URL, usePrivateKey, keyPrefix, keyLen },
+    'Auco API request',
+  );
 
   const response = await fetch(url, options);
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => 'Unknown error');
     logger.error(
-      { status: response.status, body: errorBody, method, path },
+      { status: response.status, body: errorBody, method, path, keyPrefix },
       'Auco API error',
     );
     throw new Error(`Auco API error (${response.status}): ${errorBody}`);
