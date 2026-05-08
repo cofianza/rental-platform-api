@@ -86,6 +86,17 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
     await transitionContratoToFirmado(contrato, nombreFirmante);
   }
 
+  // 3.5. Archivar PDF firmado en nuestro Storage. Cuando todas las partes
+  //      firmaron, descargamos de Auco la version con certificado/hash/OTP
+  //      y la guardamos local — asi "Descargar contrato" devuelve el PDF
+  //      firmado sin depender de la signed URL temporal de Auco.
+  if (allSigned) {
+    const { archivarPdfFirmadoEnStorage } = await import('./firma.service');
+    archivarPdfFirmadoEnStorage(contratoId).catch((err) => {
+      logger.error({ error: err, contratoId }, 'Post-firma: error archivando PDF firmado');
+    });
+  }
+
   // 4. Insert timeline event on expediente
   if (contrato.expedientes) {
     await insertTimelineEvent(contrato, solicitudId, nombreFirmante, firmadoEn);

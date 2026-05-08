@@ -28,6 +28,7 @@ const CONTRATO_SELECT = `
   fecha_inicio, fecha_fin, duracion_meses, valor_arriendo,
   datos_variables, generado_por, fecha_generacion,
   storage_key, nombre_archivo, plantilla_version,
+  storage_key_firmado, nombre_archivo_firmado,
   created_at, updated_at
 `;
 
@@ -1800,21 +1801,56 @@ export async function descargarContrato(
 ) {
   const contrato = await getContratoById(id);
   const row = contrato as unknown as {
-    id: string; storage_key: string; nombre_archivo: string;
+    id: string;
+    estado: string;
+    storage_key: string;
+    nombre_archivo: string;
+    storage_key_firmado: string | null;
+    nombre_archivo_firmado: string | null;
   };
 
   if (!row.storage_key) {
     throw AppError.badRequest('El contrato no tiene PDF generado', 'NO_PDF');
   }
 
+  // Si el contrato esta firmado/vigente y todavia no tenemos archivo el
+  // PDF firmado en nuestro Storage, intentamos archivarlo ahora (lazy).
+  // Esto cubre contratos firmados antes de implementar el archive
+  // automatico en post-firma.
+  let storageKey = row.storage_key;
+  let nombreArchivo = row.nombre_archivo || 'contrato.pdf';
+
+  const esFirmado = row.estado === 'firmado' || row.estado === 'vigente';
+  if (esFirmado && !row.storage_key_firmado) {
+    try {
+      const { archivarPdfFirmadoEnStorage } = await import('@/modules/firma/firma.service');
+      await archivarPdfFirmadoEnStorage(id);
+      const { data: refresh } = await (supabase
+        .from('contratos' as string) as ReturnType<typeof supabase.from>)
+        .select('storage_key_firmado, nombre_archivo_firmado')
+        .eq('id', id)
+        .single();
+      const r = refresh as { storage_key_firmado: string | null; nombre_archivo_firmado: string | null } | null;
+      if (r?.storage_key_firmado) {
+        storageKey = r.storage_key_firmado;
+        nombreArchivo = r.nombre_archivo_firmado || nombreArchivo;
+      }
+    } catch (err) {
+      logger.warn({ error: err, contratoId: id }, 'Lazy archive del firmado fallo — sirviendo el original');
+    }
+  } else if (esFirmado && row.storage_key_firmado) {
+    storageKey = row.storage_key_firmado;
+    nombreArchivo = row.nombre_archivo_firmado || nombreArchivo;
+  }
+
   // Si inline=true, omitimos el parámetro download para que Supabase NO
   // envíe Content-Disposition: attachment. Asi el iframe del preview puede
   // embeberlo en lugar de forzar descarga.
   const inline = options?.inline === true;
-  const signOpts = inline ? undefined : { download: row.nombre_archivo || 'contrato.pdf' };
+  const signOpts = inline ? undefined : { download: nombreArchivo };
   const { data: urlData, error: urlError } = await supabase.storage
     .from(BUCKET_NAME)
-    .createSignedUrl(row.storage_key, DOWNLOAD_URL_EXPIRY_SECONDS, signOpts);
+    .createSignedUrl(storageKey, DOWNLOAD_URL_EXPIRY_SECONDS, signOpts);
 
   if (urlError || !urlData) {
     logger.error({ error: urlError?.message, id }, 'Error al generar URL de descarga');
@@ -1826,13 +1862,13 @@ export async function descargarContrato(
     accion: AUDIT_ACTIONS.CONTRATO_DOWNLOADED,
     entidad: AUDIT_ENTITIES.CONTRATO,
     entidadId: id,
-    detalle: { nombre_archivo: row.nombre_archivo },
+    detalle: { nombre_archivo: nombreArchivo, firmado: storageKey !== row.storage_key },
     ip,
   });
 
   return {
     url: urlData.signedUrl,
-    nombre_archivo: row.nombre_archivo || 'contrato.pdf',
+    nombre_archivo: nombreArchivo,
     tipo_mime: 'application/pdf',
     expires_in: DOWNLOAD_URL_EXPIRY_SECONDS,
   };

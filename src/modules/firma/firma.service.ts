@@ -1350,6 +1350,128 @@ export async function syncFirmaConAucoForExpediente(expedienteId: string): Promi
 }
 
 // ============================================================
+// Archivar PDF firmado por Auco al Storage
+// ============================================================
+/**
+ * Descarga el PDF firmado desde la signed URL que Auco devuelve en el
+ * webhook FINISH y lo sube a nuestro bucket. Asi el "Descargar contrato"
+ * baja el PDF con certificado/hash/OTP en lugar del original sin firma.
+ *
+ * Idempotente: si el contrato ya tiene `storage_key_firmado`, no hace
+ * nada. Si la signed URL de Auco ya expiró, falla silenciosamente para
+ * que el contrato siga accesible (al menos en su version sin firma).
+ */
+export async function archivarPdfFirmadoEnStorage(contratoId: string): Promise<void> {
+  // 1. Verificar que el contrato no tenga ya un storage_key_firmado.
+  const { data: contratoRow } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, expediente_id, version, storage_key_firmado, expedientes(numero)')
+    .eq('id', contratoId)
+    .single();
+
+  const contrato = contratoRow as unknown as {
+    id: string;
+    expediente_id: string;
+    version: number;
+    storage_key_firmado: string | null;
+    expedientes: { numero: string } | null;
+  } | null;
+
+  if (!contrato) {
+    logger.warn({ contratoId }, 'archivarPdfFirmado: contrato no encontrado');
+    return;
+  }
+
+  if (contrato.storage_key_firmado) {
+    logger.debug({ contratoId }, 'archivarPdfFirmado: ya archivado, skip');
+    return;
+  }
+
+  // 2. Buscar la solicitud_firma con auco_signed_url.
+  const { data: solRow } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, auco_signed_url, auco_document_code')
+    .eq('contrato_id', contratoId)
+    .eq('estado', 'firmado')
+    .not('auco_signed_url', 'is', null)
+    .order('firmado_en', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const sol = solRow as unknown as {
+    id: string;
+    auco_signed_url: string;
+    auco_document_code: string;
+  } | null;
+
+  if (!sol?.auco_signed_url) {
+    logger.warn({ contratoId }, 'archivarPdfFirmado: no hay auco_signed_url disponible');
+    return;
+  }
+
+  // 3. Descargar el PDF desde Auco.
+  let pdfBuffer: Buffer;
+  try {
+    const resp = await fetch(sol.auco_signed_url);
+    if (!resp.ok) {
+      logger.warn(
+        { contratoId, status: resp.status },
+        'archivarPdfFirmado: descarga del PDF firmado fallo (URL Auco probablemente expiro)',
+      );
+      return;
+    }
+    const arrayBuf = await resp.arrayBuffer();
+    pdfBuffer = Buffer.from(arrayBuf);
+  } catch (err) {
+    logger.warn(
+      { contratoId, error: err instanceof Error ? err.message : String(err) },
+      'archivarPdfFirmado: error descargando PDF',
+    );
+    return;
+  }
+
+  // 4. Subir al bucket. Path: contratos-firmados/{expediente_id}/{contrato_id}-v{version}.pdf
+  const storageKey = `contratos-firmados/${contrato.expediente_id}/${contrato.id}-v${contrato.version}.pdf`;
+  const numeroExp = contrato.expedientes?.numero || contrato.id.slice(0, 8);
+  const nombreArchivo = `contrato-${numeroExp}-firmado-v${contrato.version}.pdf`;
+
+  const { error: uploadErr } = await supabase.storage
+    .from(BUCKET_NAME)
+    .upload(storageKey, pdfBuffer, {
+      contentType: 'application/pdf',
+      upsert: true,
+    });
+
+  if (uploadErr) {
+    logger.error(
+      { contratoId, storageKey, error: uploadErr.message },
+      'archivarPdfFirmado: error subiendo al bucket',
+    );
+    return;
+  }
+
+  // 5. Persistir storage_key_firmado y nombre.
+  const { error: updErr } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      storage_key_firmado: storageKey,
+      nombre_archivo_firmado: nombreArchivo,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', contratoId);
+
+  if (updErr) {
+    logger.error({ contratoId, error: updErr.message }, 'archivarPdfFirmado: error guardando referencia en DB');
+    return;
+  }
+
+  logger.info(
+    { contratoId, storageKey, sizeBytes: pdfBuffer.length },
+    'archivarPdfFirmado: PDF firmado archivado en Storage',
+  );
+}
+
+// ============================================================
 // Bulk token expiration (cron)
 // ============================================================
 
