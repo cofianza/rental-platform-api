@@ -170,15 +170,15 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
   const countryFromPhone = deriveCountryFromPhone(phoneInternational);
   const countryCode = countryFromPhone || (country?.trim().toUpperCase() || null);
 
-  // Mismo cameraMode que usa el proyecto Temporal de prueba que funciona
-  // end-to-end: 'photo' (solo selfie, sin cotejo de ID). Cuando estabilicemos
-  // el flow podemos mover a 'identification' si tenemos los datos.
-  const cameraOption: 'identification' | 'photo' = 'photo';
+  // Decision Mario 8-may-2026: simplificar el flow de firma — solo OTP por
+  // WhatsApp, sin paso de selfie/foto. El cotejo biometrico complicaba las
+  // pruebas y agregaba un paso que el firmante percibia como friccion. Si
+  // necesitamos endurecer la validacion de identidad mas adelante, volvemos
+  // a meter `camera: true` y `options.camera: 'photo' | 'identification'`.
 
   if (phoneInternational) {
-    // Flow EXCLUSIVO por WhatsApp (decision Cofianza). El firmante recibe el
-    // link y el OTP solo por WhatsApp; nunca email. options.whatsapp=true
-    // activa el flow; options.otpCode='phone' rutea el codigo por WhatsApp.
+    // Flow EXCLUSIVO por WhatsApp. El firmante recibe el link, el OTP y
+    // confirma todo desde WhatsApp — sin selfie.
     const profile: SignProfileOutput = {
       name,
       email,
@@ -187,33 +187,26 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
       // valida y el flow falla silencioso al hacer click "Comenzar" en
       // WhatsApp con "Se ha producido un error inesperado".
       position: DEFAULT_SIGN_POSITION,
-      camera: true,
       otpCode: true,
       options: {
         whatsapp: true,
         otpCode: 'phone',
-        camera: cameraOption,
       },
     };
-    // Siempre incluimos identification/type/country cuando los tenemos —
-    // mismo comportamiento que el proyecto Temporal de prueba que funciona.
     if (idNumero) profile.identification = idNumero;
     if (tipoAuco) profile.identificationType = tipoAuco;
     if (countryCode) profile.country = countryCode;
     return profile;
   }
 
-  // Sin telefono → flow email-only. Igual incluimos camera para mantener la
-  // validacion de identidad consistente.
+  // Sin telefono → flow email-only.
   const profile: SignProfileOutput = {
     name,
     email,
     position: DEFAULT_SIGN_POSITION,
-    camera: true,
     otpCode: true,
     options: {
       otpCode: 'email',
-      camera: cameraOption,
     },
   };
   if (idNumero) profile.identification = idNumero;
