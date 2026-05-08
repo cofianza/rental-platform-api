@@ -42,6 +42,9 @@ import { expedientePagosRouter, pagosRouter, pagosWebhookRouter, devWebhookRoute
 import { pagoEstudioRouter, publicPagoResultadoRouter } from '@/modules/pago-estudio/pago-estudio.routes';
 import dashboardRouter from '@/modules/dashboard/dashboard.routes';
 import reportesRouter from '@/modules/reportes/reportes.routes';
+// TEMPORAL (Mario 7-may-2026): herramienta de QA "Borrar datos de prueba".
+// Eliminar antes de produccion junto con la migracion 20260507000005.
+import adminToolsRouter from '@/modules/admin-tools/admin-tools.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
 import { vitrinaRouter } from '@/modules/vitrina/vitrina.routes';
 import exportRouter from '@/modules/export/export.routes';
@@ -140,6 +143,7 @@ app.use('/api/v1/publico/pago-resultado', publicPagoResultadoRouter);
 app.use('/api/v1/dev/webhooks/pagos', devWebhookRouter);
 app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/reportes', reportesRouter);
+app.use('/api/v1/admin-tools', adminToolsRouter);
 app.use('/api/v1/public/properties', publicPropertiesRouter);
 app.use('/api/v1/vitrina', vitrinaRouter);
 app.use('/api/v1/export', exportRouter);
