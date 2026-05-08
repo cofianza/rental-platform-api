@@ -5,7 +5,6 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
-import { sendFirmaEmail } from '@/lib/email';
 import * as aucoClient from '@/lib/auco';
 import type { AucoWebhookPayload } from '@/lib/auco';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
@@ -365,16 +364,20 @@ export async function crearSolicitudFirma(
     const processName = `Contrato - ${exp?.numero || c.id}`;
 
     // Normalizar el teléfono a formato internacional (+57...) para que Auco
-    // pueda enviar el link de firma por WhatsApp. Si no viene o no se puede
-    // normalizar, cae al envío solo-email (fallback).
+    // pueda enviar el link de firma por WhatsApp. Sin telefono valido NO hay
+    // firma — Mario decidió que el proceso es 100% WhatsApp (7-may-2026).
     const phoneInternational = aucoClient.normalizePhoneToInternational(input.telefono_firmante);
-    enableWhatsapp = Boolean(phoneInternational);
-    if (input.telefono_firmante && !phoneInternational) {
+    if (!phoneInternational) {
       logger.warn(
         { telefono: input.telefono_firmante, contratoId: c.id },
-        'Teléfono no pudo normalizarse a formato internacional — WhatsApp deshabilitado',
+        'Telefono ausente o no normalizable — no se puede iniciar firma por WhatsApp',
+      );
+      throw AppError.badRequest(
+        'Para enviar el contrato a firma se requiere un teléfono válido del firmante. La firma se realiza por WhatsApp.',
+        'TELEFONO_REQUERIDO_PARA_FIRMA',
       );
     }
+    enableWhatsapp = true;
 
     // Globales OTP por email solo cuando NO hay flow por WhatsApp. Cuando
     // enableWhatsapp=true, el signProfile individual ya define otpCode:'phone'
@@ -421,26 +424,21 @@ export async function crearSolicitudFirma(
       'Auco upload: payload preparado (sin file)',
     );
 
-    aucoDocumentCode = await aucoClient.uploadDocumentForSignature(
-      enableWhatsapp
-        ? baseUploadInput
-        : {
-            ...baseUploadInput,
-            // Sin WhatsApp: globales OTP-email para que Auco mande el flujo
-            // por correo con el codigo OTP en el mismo email.
-            otpCode: true,
-            options: { otpCode: 'email' },
-          },
-    );
+    aucoDocumentCode = await aucoClient.uploadDocumentForSignature(baseUploadInput);
     logger.info(
-      { contratoId: c.id, whatsapp: enableWhatsapp, documentCode: aucoDocumentCode, pdfSizeKB: (pdfSizeBytes / 1024).toFixed(1) },
-      enableWhatsapp
-        ? 'Auco: documento subido — flow del firmante por WhatsApp (OTP por phone)'
-        : 'Auco: documento subido — flow del firmante por email (OTP por email)',
+      { contratoId: c.id, documentCode: aucoDocumentCode, pdfSizeKB: (pdfSizeBytes / 1024).toFixed(1) },
+      'Auco: documento subido — flow del firmante por WhatsApp (OTP por phone)',
     );
   } catch (aucoError) {
     logger.error({ error: aucoError, contratoId: c.id }, 'Error al enviar documento a Auco');
-    // Continue without Auco — still create solicitud with our own email link as fallback
+    // Mario (7-may-2026): el flujo es WhatsApp puro. Si Auco falla (creditos
+    // agotados, plan vencido, etc.) NO creamos la solicitud con un email
+    // alterno — propagamos el error para que el propietario lo vea y decida.
+    const detalle = aucoError instanceof Error ? aucoError.message : String(aucoError);
+    throw AppError.badRequest(
+      `No fue posible enviar el contrato a firma por WhatsApp. Verifica el estado de la cuenta de Auco y reintenta. Detalle: ${detalle}`,
+      'AUCO_UPLOAD_FAILED',
+    );
   }
 
   // 5. Insert solicitud
@@ -469,37 +467,15 @@ export async function crearSolicitudFirma(
 
   const row = solicitud as unknown as SolicitudFirmaRow;
 
-  // 6. Email custom de fallback. Solo se envia cuando Auco con WhatsApp no
-  // pudo activarse (sin telefono valido o el upload a Auco fallo). Cuando
-  // Auco WhatsApp si esta activo, el flujo es 100% por WhatsApp y este
-  // email seria redundante (Auco ya notifico por WhatsApp y maneja la
-  // firma en su propio dominio).
+  // 6. La notificacion al firmante la maneja Auco por WhatsApp. Mantenemos
+  // firmaUrl solo para logs/respuesta del endpoint; el firmante NO recibe un
+  // correo de Cofianza con ese link — Mario (7-may-2026) decidio que el
+  // proceso es 100% WhatsApp.
   const firmaUrl = `${env.FRONTEND_URL}/firma/${token}`;
-  const aucoWhatsappActivo = enableWhatsapp && Boolean(aucoDocumentCode);
-
-  if (!aucoWhatsappActivo) {
-    try {
-      await sendFirmaEmail(
-        input.email_firmante,
-        input.nombre_firmante,
-        firmaUrl,
-        TOKEN_EXPIRY_HOURS,
-        {
-          direccion_inmueble: direccionInmueble,
-          ciudad_inmueble: ciudadInmueble,
-          nombre_arrendatario: input.nombre_firmante,
-        },
-      );
-      logger.info({ solicitudId: row.id }, 'Email custom de firma enviado (fallback — WhatsApp no disponible)');
-    } catch (emailError) {
-      logger.error({ error: emailError, solicitudId: row.id }, 'Error al enviar email de firma (fallback)');
-    }
-  } else {
-    logger.info(
-      { solicitudId: row.id, aucoDocumentCode },
-      'Email custom omitido — Auco maneja la notificacion por WhatsApp',
-    );
-  }
+  logger.info(
+    { solicitudId: row.id, aucoDocumentCode },
+    'Solicitud de firma creada — notificacion al firmante via Auco WhatsApp',
+  );
 
   // 7. Audit log
   logAudit({
@@ -525,7 +501,7 @@ export async function crearSolicitudFirma(
       userId: firmanteUserId,
       tipo: 'contrato.pendiente_firma',
       titulo: 'Contrato listo para firmar',
-      mensaje: `El contrato del inmueble en ${direccionInmueble || 'tu inmueble'} esta listo. Recibiste el link por WhatsApp o correo.`,
+      mensaje: `El contrato del inmueble en ${direccionInmueble || 'tu inmueble'} esta listo. Recibiste el link de firma por WhatsApp.`,
       link: `/expedientes/${c.expediente_id}`,
       payload: { contrato_id: input.contrato_id, expediente_id: c.expediente_id, solicitud_id: row.id },
     });
@@ -625,21 +601,19 @@ export async function reenviarSolicitudFirma(
       const ciudad = row.contratos?.expedientes?.inmuebles?.ciudad || '';
       const processName = `Contrato - ${row.contratos?.expedientes?.numero || row.contrato_id}`;
 
-      // Reenvio a otro correo = email-only flow. No reusamos el telefono
-      // del solicitante porque el motivo tipico de pedir el reenvio es que
-      // el flow original (WhatsApp) no le sirvio — telefono fuera de
-      // Colombia, equivocado, sin acceso a WhatsApp, etc. Si reusaramos
-      // el telefono, Auco volveria a intentar WhatsApp y probablemente
-      // fallaria de nuevo. Forzamos phoneInternational = null para que
-      // buildSignProfile arme un signer email-only y el global OTP por
-      // email haga el resto.
-      const phoneInternational: string | null = null;
-      const enableWhatsapp = false;
+      // Reenvio a otro correo: mantenemos el telefono original (el que
+      // sirvio en la creacion) para que Auco mande el WhatsApp al mismo
+      // numero pero con la nueva direccion de correo asociada al firmante.
+      // Mario (7-may-2026): el proceso es 100% WhatsApp; sin telefono valido
+      // no se puede reenviar.
+      const phoneInternational = aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined);
+      if (!phoneInternational) {
+        throw AppError.badRequest(
+          'No se puede reenviar la firma a otro correo porque la solicitud original no tiene un telefono valido. La firma se hace por WhatsApp.',
+          'TELEFONO_REQUERIDO_PARA_FIRMA',
+        );
+      }
 
-      // Mismo patron que crearSolicitudFirma: globales OTP-email solo cuando
-      // NO hay flow por WhatsApp. Mezclar globales y individuales con tipos
-      // de OTP distintos genera "Se ha producido un error inesperado" en
-      // el WhatsApp del firmante al iniciar el proceso.
       const baseReuploadInput = {
         email: env.AUCO_SENDER_EMAIL,
         name: processName,
@@ -660,38 +634,23 @@ export async function reenviarSolicitudFirma(
         // webhooks se configuran a nivel de cuenta en el panel de Auco.
       };
 
-      nuevoAucoDocumentCode = await aucoClient.uploadDocumentForSignature(
-        enableWhatsapp
-          ? baseReuploadInput
-          : {
-              ...baseReuploadInput,
-              otpCode: true,
-              options: { otpCode: 'email' },
-            },
-      );
-
-      // Recalcular el flag despues del re-upload exitoso. Si el cambio de
-      // email implica diferente telefono, el caller deberia setear esa
-      // info en row.telefono_firmante antes de llegar aqui (no es el caso
-      // actual; mantenemos el telefono original).
-      aucoWhatsappActivo = enableWhatsapp && Boolean(nuevoAucoDocumentCode);
+      nuevoAucoDocumentCode = await aucoClient.uploadDocumentForSignature(baseReuploadInput);
+      aucoWhatsappActivo = Boolean(nuevoAucoDocumentCode);
 
       logger.info(
         { solicitudId, oldEmail: emailActualNormalizado, newEmail: emailNuevoNormalizado, nuevoAucoDocumentCode },
         'Auco: re-upload del documento con nuevo firmante completado',
       );
     } catch (aucoError) {
-      // Si el re-upload fallo, perdimos el flow WhatsApp para el nuevo email
-      // (Auco quedaria firmando para el viejo email). Caemos a email custom.
-      aucoWhatsappActivo = false;
       logger.error(
         { error: aucoError, solicitudId, emailNuevo: emailNuevoNormalizado },
-        'Error al re-subir documento a Auco con nuevo email — se reenvia con el viejo documentCode',
+        'Error al re-subir documento a Auco con nuevo email',
       );
-      // En caso de fallo, mantenemos el auco_document_code anterior;
-      // el correo de Cofianza con el token llega al nuevo email pero
-      // Auco seguira firmando para el firmante original. No es lo
-      // ideal pero es mejor que devolver error.
+      const detalle = aucoError instanceof Error ? aucoError.message : String(aucoError);
+      throw AppError.badRequest(
+        `No fue posible reenviar el contrato a firma por WhatsApp con el nuevo correo. Verifica el estado de la cuenta de Auco y reintenta. Detalle: ${detalle}`,
+        'AUCO_UPLOAD_FAILED',
+      );
     }
   } else if (row.auco_document_code) {
     // Caso normal (mismo email): pedirle a Auco que reenvie recordatorio.
@@ -730,38 +689,13 @@ export async function reenviarSolicitudFirma(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al reenviar la solicitud');
   }
 
-  // Email de fallback. Solo se envia cuando Auco WhatsApp NO esta activo.
-  // Cuando WhatsApp esta activo, el reenvio ya disparo aucoClient.sendReminder
-  // (linea ~422), que reenvia el WhatsApp original. No queremos duplicar con
-  // un correo custom adicional.
+  // Reenvio: la notificacion la maneja Auco (sendReminder o re-upload). No
+  // mandamos correo custom — el flujo es WhatsApp puro (Mario, 7-may-2026).
   const emailDestino = cambiaEmail ? emailNuevoNormalizado! : row.email_firmante;
-  const firmaUrl = `${env.FRONTEND_URL}/firma/${newToken}`;
-  const direccion = row.contratos?.expedientes?.inmuebles?.direccion || 'N/A';
-  const ciudad = row.contratos?.expedientes?.inmuebles?.ciudad || '';
-
-  if (!aucoWhatsappActivo) {
-    try {
-      await sendFirmaEmail(
-        emailDestino,
-        row.nombre_firmante,
-        firmaUrl,
-        TOKEN_EXPIRY_HOURS,
-        {
-          direccion_inmueble: direccion,
-          ciudad_inmueble: ciudad,
-          nombre_arrendatario: row.nombre_firmante,
-        },
-      );
-      logger.info({ solicitudId }, 'Email custom de firma reenviado (fallback — WhatsApp no disponible)');
-    } catch (emailError) {
-      logger.error({ error: emailError, solicitudId }, 'Error al reenviar email de firma (fallback)');
-    }
-  } else {
-    logger.info(
-      { solicitudId },
-      'Email custom omitido en reenvio — Auco maneja la notificacion por WhatsApp',
-    );
-  }
+  logger.info(
+    { solicitudId, aucoWhatsappActivo },
+    'Reenvio de solicitud de firma — notificacion al firmante via Auco WhatsApp',
+  );
 
   logAudit({
     usuarioId: userId,
