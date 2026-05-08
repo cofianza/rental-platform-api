@@ -200,6 +200,15 @@ export async function getExpedienteById(id: string) {
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el expediente');
   }
 
+  // Auto-heal de firmas: si hay un contrato en `pendiente_firma`, polleamos
+  // Auco para ver si ya completo y actualizamos local. Cubre el caso donde
+  // el webhook no llego (red, config). Fire-and-forget — no bloquea.
+  import('@/modules/firma/firma.service')
+    .then(({ syncFirmaConAucoForExpediente }) => syncFirmaConAucoForExpediente(id))
+    .catch((err) =>
+      logger.error({ error: err, expedienteId: id }, 'Error en syncFirmaConAucoForExpediente'),
+    );
+
   // Mapear relaciones con nombres claros
   const raw = data as unknown as Record<string, unknown>;
   const { inmuebles, solicitantes, analista, creador, ...expediente } = raw;

@@ -1097,7 +1097,7 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
   // Find solicitud by auco_document_code
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, contrato_id, estado')
+    .select('id, contrato_id, estado, nombre_firmante, email_firmante')
     .eq('auco_document_code', code)
     .single();
 
@@ -1106,7 +1106,13 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
     return;
   }
 
-  const row = data as unknown as { id: string; contrato_id: string; estado: string };
+  const row = data as unknown as {
+    id: string;
+    contrato_id: string;
+    estado: string;
+    nombre_firmante: string;
+    email_firmante: string;
+  };
 
   // Don't update if already in terminal state
   if (['firmado', 'cancelado', 'expirado'].includes(row.estado)) {
@@ -1174,6 +1180,129 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
           signed_url: signedUrl,
         },
       });
+
+      // Cierra el bucle: transicion del contrato a firmado, evento timeline,
+      // emails de acuse al firmante y al operador. Sin esto, la firma via
+      // Auco webhook quedaba "huerfana" y dependia del auto-heal manual al
+      // entrar a la pestaña Contratos. Fire-and-forget — los errores se
+      // loggean pero no bloquean la respuesta del webhook.
+      const { executePostFirma } = await import('./post-firma.service');
+      executePostFirma({
+        solicitudId: row.id,
+        contratoId: row.contrato_id,
+        nombreFirmante: row.nombre_firmante,
+        emailFirmante: row.email_firmante,
+        firmadoEn: now,
+      }).catch((err) => {
+        logger.error(
+          { error: err, solicitudId: row.id },
+          'Auco webhook: error en executePostFirma',
+        );
+      });
+    }
+  }
+}
+
+// ============================================================
+// Sincronizar estado de firma desde Auco (fallback al webhook)
+// ============================================================
+/**
+ * Si el webhook de Auco no llega (eg. webhook no configurado en el panel,
+ * red caida, deploy timing), pollea Auco directamente para todos los
+ * contratos en `pendiente_firma` del expediente. Si Auco dice que el
+ * documento esta FINISH, actualiza la solicitud_firma local y dispara
+ * executePostFirma.
+ *
+ * Idempotente — si ya esta en estado terminal, no hace nada.
+ *
+ * Llamada fire-and-forget desde getExpedienteById para que el simple acto
+ * de abrir el expediente cierre la firma cuando el webhook no llego.
+ */
+export async function syncFirmaConAucoForExpediente(expedienteId: string): Promise<void> {
+  // 1. Encontrar contratos del expediente en pendiente_firma con auco_code.
+  const { data: contratosRow } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .eq('estado', 'pendiente_firma');
+  const contratos = (contratosRow as Array<{ id: string; estado: string }> | null) || [];
+  if (contratos.length === 0) return;
+
+  for (const contrato of contratos) {
+    // 2. Encontrar solicitudes_firma activas con auco_document_code.
+    const { data: solRow } = await (supabase
+      .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, auco_document_code, nombre_firmante, email_firmante, contrato_id')
+      .eq('contrato_id', contrato.id)
+      .not('auco_document_code', 'is', null)
+      .not('estado', 'in', '(firmado,cancelado,expirado)');
+    const solicitudes = (solRow as Array<{
+      id: string;
+      estado: string;
+      auco_document_code: string;
+      nombre_firmante: string;
+      email_firmante: string;
+      contrato_id: string;
+    }> | null) || [];
+    if (solicitudes.length === 0) continue;
+
+    for (const sol of solicitudes) {
+      try {
+        const info = await aucoClient.getDocumentStatus(sol.auco_document_code);
+        if (info.status !== 'FINISH') continue;
+
+        // 3. Actualizar la solicitud localmente — usamos la URL firmada de Auco
+        //    y registramos el momento. Idempotencia: si por race condition ya
+        //    quedo firmado, el SELECT siguiente lo va a saltar.
+        const now = new Date().toISOString();
+        await (supabase
+          .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+          .update({
+            estado: 'firmado',
+            firmado_en: now,
+            auco_signed_url: info.url ?? null,
+            updated_at: now,
+          } as never)
+          .eq('id', sol.id);
+
+        logger.info(
+          { solicitudId: sol.id, contratoId: sol.contrato_id, expedienteId, aucoCode: sol.auco_document_code },
+          'syncFirmaConAuco: solicitud sincronizada como firmada (poll, sin webhook)',
+        );
+
+        logAudit({
+          usuarioId: null,
+          accion: AUDIT_ACTIONS.FIRMA_AUCO_SIGNED,
+          entidad: AUDIT_ENTITIES.CONTRATO,
+          entidadId: sol.contrato_id,
+          detalle: {
+            solicitud_id: sol.id,
+            auco_code: sol.auco_document_code,
+            signed_url: info.url,
+            origen: 'poll',
+          },
+        });
+
+        // 4. Disparar el flow post-firma (transicion contrato + emails + timeline).
+        const { executePostFirma } = await import('./post-firma.service');
+        executePostFirma({
+          solicitudId: sol.id,
+          contratoId: sol.contrato_id,
+          nombreFirmante: sol.nombre_firmante,
+          emailFirmante: sol.email_firmante,
+          firmadoEn: now,
+        }).catch((err) => {
+          logger.error(
+            { error: err, solicitudId: sol.id },
+            'syncFirmaConAuco: error en executePostFirma',
+          );
+        });
+      } catch (err) {
+        logger.warn(
+          { error: err instanceof Error ? err.message : String(err), solicitudId: sol.id },
+          'syncFirmaConAuco: error al consultar Auco — se reintenta en la siguiente carga',
+        );
+      }
     }
   }
 }
