@@ -1212,42 +1212,70 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
  * de abrir el expediente cierre la firma cuando el webhook no llego.
  */
 export async function syncFirmaConAucoForExpediente(expedienteId: string): Promise<void> {
+  logger.info({ expedienteId }, 'syncFirmaConAuco: ENTRY');
+
   // 1. Encontrar contratos del expediente en pendiente_firma con auco_code.
-  const { data: contratosRow } = await (supabase
+  const { data: contratosRow, error: contratosErr } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado')
     .eq('expediente_id', expedienteId)
     .eq('estado', 'pendiente_firma');
+
+  if (contratosErr) {
+    logger.error({ expedienteId, error: contratosErr.message }, 'syncFirmaConAuco: error consultando contratos');
+    return;
+  }
+
   const contratos = (contratosRow as Array<{ id: string; estado: string }> | null) || [];
+  logger.info({ expedienteId, contratos: contratos.length }, 'syncFirmaConAuco: contratos pendiente_firma');
   if (contratos.length === 0) return;
 
-  logger.info(
-    { expedienteId, contratos: contratos.length },
-    'syncFirmaConAuco: contratos en pendiente_firma encontrados',
-  );
-
   for (const contrato of contratos) {
-    // 2. Encontrar solicitudes_firma activas con auco_document_code.
-    const { data: solRow } = await (supabase
+    // 2. Encontrar solicitudes_firma del contrato. Filtramos en JS para
+    //    evitar la sintaxis fragil de .not('estado','in',...) de Supabase
+    //    (que silently no matchea y nos hacia ignorar todas las solicitudes).
+    const { data: solRow, error: solErr } = await (supabase
       .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
       .select('id, estado, auco_document_code, nombre_firmante, email_firmante, contrato_id')
-      .eq('contrato_id', contrato.id)
-      .not('auco_document_code', 'is', null)
-      .not('estado', 'in', '(firmado,cancelado,expirado)');
-    const solicitudes = (solRow as Array<{
+      .eq('contrato_id', contrato.id);
+
+    if (solErr) {
+      logger.error({ contratoId: contrato.id, error: solErr.message }, 'syncFirmaConAuco: error consultando solicitudes_firma');
+      continue;
+    }
+
+    const todas = (solRow as Array<{
+      id: string;
+      estado: string;
+      auco_document_code: string | null;
+      nombre_firmante: string;
+      email_firmante: string;
+      contrato_id: string;
+    }> | null) || [];
+
+    const TERMINAL = ['firmado', 'cancelado', 'expirado'];
+    const solicitudes = todas.filter(
+      (s) => !!s.auco_document_code && !TERMINAL.includes(s.estado),
+    ) as Array<{
       id: string;
       estado: string;
       auco_document_code: string;
       nombre_firmante: string;
       email_firmante: string;
       contrato_id: string;
-    }> | null) || [];
-    if (solicitudes.length === 0) continue;
+    }>;
 
     logger.info(
-      { contratoId: contrato.id, solicitudes: solicitudes.length },
-      'syncFirmaConAuco: solicitudes activas para pollear',
+      {
+        contratoId: contrato.id,
+        totalSolicitudes: todas.length,
+        solicitudesActivas: solicitudes.length,
+        estados: todas.map((s) => s.estado),
+      },
+      'syncFirmaConAuco: solicitudes inspeccionadas',
     );
+
+    if (solicitudes.length === 0) continue;
 
     for (const sol of solicitudes) {
       try {
