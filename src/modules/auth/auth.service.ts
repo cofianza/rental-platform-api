@@ -268,33 +268,28 @@ export async function updateMyProfile(userId: string, input: UpdateMyProfileInpu
   // Solicitantes: bloquear cambio de documento si ya hay estudios crediticios
   // activos (en_proceso o completado) — el CC consultado en TransUnion no
   // puede divergir del registrado en el sistema sin invalidar trazabilidad.
+  // Los estudios de expedientes CANCELADOS no cuentan: el solicitante puede
+  // arrancar de cero con otro documento si su expediente fue cancelado.
   if (actual.rol === 'solicitante' && docCambia) {
     const sol = await getSolicitanteByUser(userId);
     if (sol) {
-      const { count } = await (supabase
-        .from('estudios' as string) as ReturnType<typeof supabase.from>)
-        .select('id', { count: 'exact', head: true })
-        .in('estado', ['en_proceso', 'completado']);
-      // Filtra por expedientes del solicitante (consulta separada para
-      // mantenerla simple y type-safe con el cliente de Supabase).
-      if ((count ?? 0) > 0) {
-        const { data: exps } = await (supabase
-          .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-          .select('id')
-          .eq('solicitante_id', sol.id);
-        const expIds = ((exps as { id: string }[] | null) ?? []).map((e) => e.id);
-        if (expIds.length > 0) {
-          const { count: estCount } = await (supabase
-            .from('estudios' as string) as ReturnType<typeof supabase.from>)
-            .select('id', { count: 'exact', head: true })
-            .in('expediente_id', expIds)
-            .in('estado', ['en_proceso', 'completado']);
-          if ((estCount ?? 0) > 0) {
-            throw AppError.badRequest(
-              'No puedes cambiar tu documento porque ya tienes un estudio crediticio en curso o completado. Contacta soporte si necesitas corregirlo.',
-              'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
-            );
-          }
+      const { data: exps } = await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('id')
+        .eq('solicitante_id', sol.id)
+        .is('cancelado_at', null);
+      const expIds = ((exps as { id: string }[] | null) ?? []).map((e) => e.id);
+      if (expIds.length > 0) {
+        const { count: estCount } = await (supabase
+          .from('estudios' as string) as ReturnType<typeof supabase.from>)
+          .select('id', { count: 'exact', head: true })
+          .in('expediente_id', expIds)
+          .in('estado', ['en_proceso', 'completado']);
+        if ((estCount ?? 0) > 0) {
+          throw AppError.badRequest(
+            'No puedes cambiar tu documento porque ya tienes un estudio crediticio en curso o completado. Contacta soporte si necesitas corregirlo.',
+            'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
+          );
         }
       }
     }
