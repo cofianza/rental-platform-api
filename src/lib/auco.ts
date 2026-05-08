@@ -213,6 +213,13 @@ export async function uploadDocumentForSignature(
 
 /**
  * Query the status and details of a document by its code.
+ *
+ * Aunque la doc de Auco indica que GET /document acepta la public key
+ * (`puk_xxx`), en nuestra cuenta esa llave devuelve 401 UNAUTHORIZED
+ * mientras que la private key (`prk_xxx`) sí responde. Probablemente
+ * tema de scopes/configuracion en el panel. Usamos private aqui para
+ * desbloquear el flow — la private key vive solo en el server, no se
+ * expone al cliente, asi que es seguro.
  */
 export async function getDocumentStatus(
   code: string,
@@ -221,7 +228,7 @@ export async function getDocumentStatus(
     'GET',
     `/document?code=${encodeURIComponent(code)}`,
     undefined,
-    false, // public key for read operations
+    true,
   );
 }
 
