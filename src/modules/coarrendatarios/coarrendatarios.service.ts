@@ -563,7 +563,7 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
   // 2. Cargar el coarrendatario asociado y marcar estudio_completado.
   const { data: coaRow } = await (supabase
     .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, nombre, apellido')
+    .select('id, expediente_id, nombre, apellido, email')
     .eq('estudio_id', estudioId)
     .maybeSingle();
 
@@ -572,6 +572,7 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
     expediente_id: string;
     nombre: string;
     apellido: string;
+    email: string;
   } | null;
 
   if (coa) {
@@ -720,6 +721,24 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
     }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion propietario'));
   }
 
+  // Email al coarrendatario con el resultado de SU estudio + qué pasó con la
+  // ponderación. El coa no tiene cuenta en Cofianza, así que la notificación
+  // en-app no aplica — solo email a la dirección que registró al aceptar.
+  if (coa?.email) {
+    sendCoarrendatarioResultadoEmail({
+      email: coa.email,
+      nombre: coa.nombre,
+      coarrendatarioResultado: est.resultado,
+      coarrendatarioScore: est.score,
+      titularNombre: ctx.solicitante_nombre,
+      inmuebleDireccion: ctx.inmueble_direccion,
+      inmuebleCiudad: ctx.inmueble_ciudad,
+      decisionExpediente: nuevoEstadoExpediente,
+    }).catch((e) =>
+      logger.warn({ error: e, coarrendatarioId: coa.id }, 'Error email resultado coarrendatario'),
+    );
+  }
+
   logger.info(
     {
       expedienteId: est.expediente_id,
@@ -728,6 +747,109 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
       nuevoEstadoExpediente,
     },
     'Ponderación coarrendatario completada',
+  );
+}
+
+// ============================================================
+// Email — resultado del estudio del coarrendatario
+// ============================================================
+
+interface SendResultadoEmailInput {
+  email: string;
+  nombre: string;
+  coarrendatarioResultado: 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente';
+  coarrendatarioScore: number | null;
+  titularNombre: string | null;
+  inmuebleDireccion: string;
+  inmuebleCiudad: string;
+  decisionExpediente: 'aprobado' | 'rechazado';
+}
+
+async function sendCoarrendatarioResultadoEmail(input: SendResultadoEmailInput): Promise<void> {
+  const inmuebleStr = `${input.inmuebleDireccion}${input.inmuebleCiudad ? `, ${input.inmuebleCiudad}` : ''}`;
+  const titular = input.titularNombre || 'el titular';
+
+  // El subject y el cuerpo dependen de la decisión final del expediente.
+  // No le mostramos el detalle de la ponderación al coa (es info entre el
+  // titular y Cofianza); le contamos qué pasó con su parte y cuál es la
+  // resolución final.
+  let subject: string;
+  let cuerpoPrincipal: string;
+  let badgeColor = '#0d9488'; // teal Cofianza por defecto
+
+  if (input.decisionExpediente === 'aprobado') {
+    subject = `Tu estudio se aprobó — arrendamiento con ${titular} (Cofianza)`;
+    cuerpoPrincipal = `
+      <p style="color: #374151; font-size: 16px;">¡Buenas noticias, <strong>${input.nombre}</strong>!</p>
+      <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong> y junto con ${titular}
+      pasaron la evaluación combinada para el inmueble en <strong>${inmuebleStr}</strong>.</p>
+      <p style="color: #6b7280;">El siguiente paso lo coordinamos con ${titular} (firma del contrato y entrega del inmueble).
+      No tienes que hacer nada más por ahora — si necesitamos un dato adicional, te escribimos a este mismo correo.</p>
+    `;
+    badgeColor = '#047857'; // green
+  } else {
+    // Rechazo definitivo del expediente. Distinguimos la causa para que el
+    // coa entienda si fue su parte o la del titular.
+    subject = `Resultado de tu estudio — ${titular} (Cofianza)`;
+    if (input.coarrendatarioResultado === 'aprobado') {
+      cuerpoPrincipal = `
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong>. Sin embargo,
+        la evaluación combinada con ${titular} no permite que respaldemos este arrendamiento en este momento.</p>
+        <p style="color: #6b7280;">El proceso queda cerrado. Si en el futuro hay otra oportunidad con Cofianza, con gusto te
+        evaluamos de nuevo.</p>
+      `;
+      badgeColor = '#b45309'; // amber
+    } else if (input.coarrendatarioResultado === 'rechazado') {
+      cuerpoPrincipal = `
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #b91c1c;">no aprobado</strong>.
+        Por esta razón no podemos respaldar el arrendamiento del inmueble en <strong>${inmuebleStr}</strong>.</p>
+        <p style="color: #6b7280;">Si tienes dudas sobre tu reporte, puedes consultarlo directamente con la central de riesgo.</p>
+      `;
+      badgeColor = '#b91c1c'; // red
+    } else {
+      // condicionado o cualquier otro estado: rechazo combinado.
+      cuerpoPrincipal = `
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #b45309;">condicionado</strong>.
+        Combinado con el de ${titular}, no alcanza el perfil que necesitamos para respaldar el arrendamiento del
+        inmueble en <strong>${inmuebleStr}</strong>.</p>
+        <p style="color: #6b7280;">El proceso queda cerrado.</p>
+      `;
+      badgeColor = '#b45309'; // amber
+    }
+  }
+
+  const scoreLine = typeof input.coarrendatarioScore === 'number' && input.coarrendatarioScore > 0
+    ? `<p style="color: #6b7280; font-size: 13px; margin: 4px 0;">Score crediticio: <strong>${input.coarrendatarioScore}</strong></p>`
+    : '';
+
+  await resend.emails.send({
+    from: FROM,
+    to: input.email,
+    subject,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <div style="background: ${badgeColor}; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 22px;">Resultado de tu estudio</h1>
+        </div>
+        <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+          ${cuerpoPrincipal}
+          ${scoreLine}
+          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
+          <p style="color: #9ca3af; font-size: 12px;">
+            Recibiste este correo porque ${titular} te invitó a ser su co-arrendatario en Cofianza y aceptaste el estudio crediticio.
+            Cofianza no almacena tu reporte de centrales de riesgo — solo usamos el resultado para esta evaluación puntual.
+          </p>
+        </div>
+      </div>
+    `,
+  });
+
+  logger.info(
+    { email: input.email, decisionExpediente: input.decisionExpediente, coaResultado: input.coarrendatarioResultado },
+    'Email de resultado enviado al coarrendatario',
   );
 }
 
