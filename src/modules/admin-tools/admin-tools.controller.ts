@@ -37,3 +37,14 @@ export async function registerAucoWebhook(req: Request, res: Response) {
   await registerWebhook(url);
   sendSuccess(res, { url, registered: true });
 }
+
+// Seed de 3 usuarios de prueba (propietario, inmobiliaria, solicitante)
+// con datos colombianos. Idempotente — si existen los borra y los recrea.
+export async function seedTestUsers(req: Request, res: Response) {
+  const user = req.user!;
+  const result = await adminToolsService.seedTestUsers({
+    id: user.id,
+    email: user.email,
+  });
+  sendSuccess(res, result);
+}

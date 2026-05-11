@@ -28,4 +28,13 @@ router.post(
   controller.registerAucoWebhook,
 );
 
+// Seed de usuarios de prueba — crea (o re-crea) carlos.propietario,
+// inmobiliaria.valle, maria.arrendataria con password Test1234*.
+router.post(
+  '/seed-test-users',
+  authMiddleware,
+  roleGuard(['administrador']),
+  controller.seedTestUsers,
+);
+
 export default router;
