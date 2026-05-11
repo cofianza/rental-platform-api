@@ -31,7 +31,21 @@ export const updateUserSchema = z.object({
   rol: z.enum(ROLES_USUARIO, { error: 'Rol invalido. Roles permitidos: administrador, operador_analista, gerencia_consulta, propietario, inmobiliaria' }).optional(),
 });
 
+// Reset de contraseña por administrador — el admin ingresa directamente
+// la nueva contraseña del usuario (no se manda link). Misma validacion
+// de fuerza que el flow de reset normal: 8+ chars, 1 mayus, 1 minus, 1 digit.
+export const resetPasswordByAdminSchema = z.object({
+  password: z
+    .string()
+    .min(8, 'La contrasena debe tener al menos 8 caracteres')
+    .regex(
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+      'La contrasena debe contener al menos 1 mayuscula, 1 minuscula y 1 numero',
+    ),
+});
+
 export type ListUsersQuery = z.infer<typeof listUsersQuerySchema>;
 export type UserIdParams = z.infer<typeof userIdParamsSchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
+export type ResetPasswordByAdminInput = z.infer<typeof resetPasswordByAdminSchema>;

@@ -4,7 +4,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendWelcomeEmail } from '@/lib/email';
-import type { CreateUserInput, UpdateUserInput, ListUsersQuery } from './users.schema';
+import type { CreateUserInput, UpdateUserInput, ListUsersQuery, ResetPasswordByAdminInput } from './users.schema';
 
 interface UserRow {
   id: string;
@@ -480,6 +480,59 @@ export async function deleteUser(
   logger.info({ userId, email, requestingUserId, huerfano: esHuerfano }, 'Usuario eliminado completamente');
 
   return { deleted: true, user_id: userId, email };
+}
+
+// ============================================================
+// Reset de contrasena por administrador
+// ============================================================
+/**
+ * Permite al admin establecer directamente una contrasena para otro
+ * usuario (sin pasar por el flujo de "olvide mi contrasena"). Util para
+ * resetear cuentas de soporte cuando el usuario no puede acceder a su
+ * email. La contrasena ya viene validada por el schema (8+ chars,
+ * mayuscula/minuscula/numero).
+ *
+ * Nota de seguridad: no cierra sesiones activas del usuario. Si esto se
+ * requiere, agregar supabaseAuth.auth.admin.signOut(userId) despues.
+ */
+export async function resetPasswordByAdmin(
+  userId: string,
+  input: ResetPasswordByAdminInput,
+  requestingUserId: string,
+  ip?: string,
+) {
+  // 1. Verificar que el usuario existe en perfiles. getUserById ya tira
+  //    404 limpio si no existe.
+  const user = await getUserById(userId);
+
+  // 2. Actualizar la contrasena via Supabase Auth admin API.
+  const { error } = await supabaseAuth.auth.admin.updateUserById(userId, {
+    password: input.password,
+  });
+
+  if (error) {
+    logger.error(
+      { userId, requestingUserId, error: error.message },
+      'Error al resetear contrasena por admin',
+    );
+    throw new AppError(500, 'PASSWORD_RESET_FAILED', `Error al actualizar la contrasena: ${error.message}`);
+  }
+
+  logger.info(
+    { userId, requestingUserId, email: user.email },
+    'Contrasena reseteada por administrador',
+  );
+
+  logAudit({
+    usuarioId: requestingUserId,
+    accion: AUDIT_ACTIONS.PASSWORD_RESET_BY_ADMIN,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: userId,
+    detalle: { email_objetivo: user.email },
+    ip,
+  });
+
+  return { id: userId, email: user.email, reset: true };
 }
 
 // ============================================================

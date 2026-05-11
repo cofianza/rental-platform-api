@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as usersService from './users.service';
-import type { ListUsersQuery, UserIdParams, CreateUserInput, UpdateUserInput } from './users.schema';
+import type { ListUsersQuery, UserIdParams, CreateUserInput, UpdateUserInput, ResetPasswordByAdminInput } from './users.schema';
 
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListUsersQuery;
@@ -55,4 +55,11 @@ export async function listOrphans(_req: Request, res: Response) {
 export async function listOperators(_req: Request, res: Response) {
   const operators = await usersService.listOperators();
   sendSuccess(res, operators);
+}
+
+export async function resetPassword(req: Request, res: Response) {
+  const { id } = req.params as unknown as UserIdParams;
+  const input = req.body as ResetPasswordByAdminInput;
+  const result = await usersService.resetPasswordByAdmin(id, input, req.user!.id, req.ip);
+  sendSuccess(res, result);
 }

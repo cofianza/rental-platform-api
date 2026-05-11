@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
-import { listUsersQuerySchema, userIdParamsSchema, createUserSchema, updateUserSchema } from './users.schema';
+import { listUsersQuerySchema, userIdParamsSchema, createUserSchema, updateUserSchema, resetPasswordByAdminSchema } from './users.schema';
 import * as usersController from './users.controller';
 
 const router = Router();
@@ -26,6 +26,15 @@ router.post('/', validate({ body: createUserSchema }), usersController.create);
 router.put('/:id', validate({ params: userIdParamsSchema, body: updateUserSchema }), usersController.update);
 router.patch('/:id/deactivate', validate({ params: userIdParamsSchema }), usersController.deactivate);
 router.patch('/:id/activate', validate({ params: userIdParamsSchema }), usersController.activate);
+
+// POST /:id/reset-password — el admin establece directamente una contrasena
+// nueva para el usuario (sin enviar link). La cuenta admin la ingresa y
+// el endpoint la setea via Supabase Auth admin API.
+router.post(
+  '/:id/reset-password',
+  validate({ params: userIdParamsSchema, body: resetPasswordByAdminSchema }),
+  usersController.resetPassword,
+);
 
 // DELETE /users/:id?force=true — Borrado completo (super-admin).
 // Pre-flight check: si tiene relaciones bloqueantes responde 400 con detalle.

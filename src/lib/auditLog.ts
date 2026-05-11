@@ -7,6 +7,7 @@ export const AUDIT_ACTIONS = {
   LOGOUT: 'logout',
   PASSWORD_RESET_REQUEST: 'password_reset_request',
   PASSWORD_RESET_COMPLETE: 'password_reset_complete',
+  PASSWORD_RESET_BY_ADMIN: 'password_reset_by_admin',
   USER_CREATED: 'user_created',
   USER_UPDATED: 'user_updated',
   USER_DEACTIVATED: 'user_deactivated',
