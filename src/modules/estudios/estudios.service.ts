@@ -10,6 +10,7 @@ import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo } from './providers/types';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 
 // ============================================================
 // Constants
@@ -1001,23 +1002,43 @@ async function notificarSolicitanteResultadoEstudio(
 
   const { data: sol } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('email')
+    .select('nombre, apellido, email, telefono')
     .eq('id', exp.solicitante_id)
-    .single() as { data: { email: string } | null };
-
-  const userId = await findPerfilIdByEmail(sol?.email);
-  if (!userId) return;
+    .single() as { data: { nombre: string; apellido: string; email: string; telefono: string | null } | null };
 
   const aprobado = resultado === 'aprobado';
-  await notificarUsuario({
-    userId,
-    tipo: aprobado ? 'estudio.aprobado' : 'estudio.rechazado',
-    titulo: aprobado ? 'Tu estudio fue aprobado' : 'Resultado de tu estudio',
-    mensaje: aprobado
-      ? `Tu solicitud ${exp.numero ?? ''} avanzo. Ya puedes continuar con el contrato.`
-      : `Tu solicitud ${exp.numero ?? ''} no fue aprobada. Revisa los detalles.`,
-    link: `/expedientes/${expedienteId}`,
-    payload: { expediente_id: expedienteId, resultado },
+  const condicionado = resultado === 'condicionado';
+  const numeroExpediente = exp.numero ?? '';
+
+  // 1) Notificacion in-app (campanario + badges en tiempo real)
+  const userId = await findPerfilIdByEmail(sol?.email);
+  if (userId) {
+    await notificarUsuario({
+      userId,
+      tipo: aprobado ? 'estudio.aprobado' : 'estudio.rechazado',
+      titulo: aprobado ? 'Tu estudio fue aprobado' : 'Resultado de tu estudio',
+      mensaje: aprobado
+        ? `Tu solicitud ${numeroExpediente} avanzo. Ya puedes continuar con el contrato.`
+        : `Tu solicitud ${numeroExpediente} no fue aprobada. Revisa los detalles.`,
+      link: `/expedientes/${expedienteId}`,
+      payload: { expediente_id: expedienteId, resultado },
+    });
+  }
+
+  // 2) WhatsApp al solicitante via Meta (Mario 12-may-2026, provider mock
+  // por ahora). Solo si tenemos telefono — fire-and-forget, no rompe el
+  // flujo del estudio si el envio falla.
+  const nombreCorto = sol?.nombre || 'Hola';
+  const templateKey = aprobado
+    ? ('ESTUDIO_APROBADO' as const)
+    : condicionado
+      ? ('ESTUDIO_CONDICIONADO' as const)
+      : ('ESTUDIO_RECHAZADO' as const);
+  await enviarTemplateWhatsApp({
+    to: sol?.telefono ?? null,
+    template: templateKey,
+    variables: [nombreCorto, numeroExpediente],
+    context: { expediente_id: expedienteId },
   });
 }
 

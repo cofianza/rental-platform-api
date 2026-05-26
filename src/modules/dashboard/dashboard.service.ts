@@ -250,3 +250,82 @@ async function queryIngresosDelPeriodo(
 
   return total;
 }
+
+// ── Portfolio Stats (propietario/inmobiliaria) ─────────────
+//
+// Resumen para el hero "Tu Oficina Virtual": 3 cards. No usa el cache
+// global porque depende del usuario.
+//   - propiedades_activas: inmuebles del propietario (cualquier estado
+//     excepto soft-delete)
+//   - inquilinos_cartera: contratos en estado firmado/vigente sobre
+//     inmuebles del propietario
+//   - canon_mensual: suma de valor_arriendo de contratos activos
+//     (equivale al "recaudado este mes" cuando todo el portafolio
+//     paga al dia)
+
+export interface PortfolioStats {
+  propiedades_activas: number;
+  inquilinos_cartera: number;
+  canon_mensual: number;
+}
+
+export async function getPortfolioStats(perfilId: string): Promise<PortfolioStats> {
+  // 1) Inmuebles del propietario
+  const { data: inmuebles, error: inmError } = await supabase
+    .from('inmuebles')
+    .select('id')
+    .eq('propietario_id', perfilId);
+
+  if (inmError) throw fromSupabaseError(inmError);
+
+  const inmuebleIds = (inmuebles ?? []).map((i) => (i as { id: string }).id);
+  const propiedades_activas = inmuebleIds.length;
+
+  if (inmuebleIds.length === 0) {
+    return { propiedades_activas: 0, inquilinos_cartera: 0, canon_mensual: 0 };
+  }
+
+  // 2) Expedientes vinculados a esos inmuebles (necesario porque
+  //    contratos no apunta directamente a inmueble — pasa por expediente).
+  const { data: expedientes, error: expError } = await supabase
+    .from('expedientes')
+    .select('id, solicitante_id, inmueble_id')
+    .in('inmueble_id', inmuebleIds);
+
+  if (expError) throw fromSupabaseError(expError);
+
+  const expedienteIds = (expedientes ?? []).map((e) => (e as { id: string }).id);
+  const expedienteSolicitante: Record<string, string | null> = {};
+  for (const e of expedientes ?? []) {
+    const row = e as { id: string; solicitante_id: string | null };
+    expedienteSolicitante[row.id] = row.solicitante_id;
+  }
+
+  if (expedienteIds.length === 0) {
+    return { propiedades_activas, inquilinos_cartera: 0, canon_mensual: 0 };
+  }
+
+  // 3) Contratos activos sobre esos expedientes
+  const { data: contratos, error: contError } = await supabase
+    .from('contratos')
+    .select('expediente_id, valor_arriendo, estado')
+    .in('expediente_id', expedienteIds)
+    .in('estado', ['firmado', 'vigente']);
+
+  if (contError) throw fromSupabaseError(contError);
+
+  const solicitantesUnicos = new Set<string>();
+  let canon_mensual = 0;
+  for (const c of contratos ?? []) {
+    const row = c as { expediente_id: string; valor_arriendo: number | null };
+    const sol = expedienteSolicitante[row.expediente_id];
+    if (sol) solicitantesUnicos.add(sol);
+    if (typeof row.valor_arriendo === 'number') canon_mensual += row.valor_arriendo;
+  }
+
+  return {
+    propiedades_activas,
+    inquilinos_cartera: solicitantesUnicos.size,
+    canon_mensual,
+  };
+}

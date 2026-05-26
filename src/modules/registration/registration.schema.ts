@@ -74,6 +74,7 @@ export const registerInmobiliariaSchema = z.object({
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga'),
   nombre_representante_nombre: z.string().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
   nombre_representante_apellido: z.string().min(1, 'Apellido del representante requerido').max(100, 'Apellido muy largo'),
+  cargo_representante: z.string().max(100, 'Cargo muy largo').optional(),
   email: z.email({ error: 'Email invalido' }),
   telefono: phoneSchema,
   password: passwordSchema,

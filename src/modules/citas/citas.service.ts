@@ -10,6 +10,7 @@ import {
 import { assertCitaPermission, resolveAccessibleExpedienteIds } from './citas.permissions';
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import type { UserRole } from '@/types/auth';
 import type {
   CreateCitaInput,
@@ -113,11 +114,13 @@ interface ExpedienteContexto {
   expedienteId: string;
   solicitanteEmail: string | null;
   solicitanteNombre: string;
+  solicitanteTelefono: string | null;
   // Perfil-id del solicitante. Resuelto por email — null si aun no tiene
   // cuenta registrada (eg. solicitante externo invitado solo por email).
   solicitanteUserId: string | null;
   propietarioEmail: string | null;
   propietarioNombre: string;
+  propietarioTelefono: string | null;
   // Perfil-id del propietario. Sale directo de inmueble.propietario_id.
   propietarioUserId: string;
   inmuebleDireccion: string;
@@ -136,14 +139,16 @@ async function obtenerContextoExpediente(expedienteId: string): Promise<Expedien
   // Solicitante (puede ser null en expedientes externos no vinculados)
   let solicitanteEmail: string | null = null;
   let solicitanteNombre = '';
+  let solicitanteTelefono: string | null = null;
   if (exp.solicitante_id) {
     const { data: sol } = await db('solicitantes')
-      .select('nombre, apellido, email')
+      .select('nombre, apellido, email, telefono')
       .eq('id', exp.solicitante_id)
-      .single() as { data: { nombre: string; apellido: string; email: string } | null };
+      .single() as { data: { nombre: string; apellido: string; email: string; telefono: string | null } | null };
     if (sol) {
       solicitanteEmail = sol.email;
       solicitanteNombre = `${sol.nombre} ${sol.apellido}`.trim();
+      solicitanteTelefono = sol.telefono;
     }
   }
 
@@ -156,9 +161,9 @@ async function obtenerContextoExpediente(expedienteId: string): Promise<Expedien
   if (!inm) return null;
 
   const { data: perfil } = await db('perfiles')
-    .select('nombre, apellido, razon_social')
+    .select('nombre, apellido, razon_social, telefono')
     .eq('id', inm.propietario_id)
-    .single() as { data: { nombre: string; apellido: string; razon_social: string | null } | null };
+    .single() as { data: { nombre: string; apellido: string; razon_social: string | null; telefono: string | null } | null };
 
   let propietarioEmail: string | null = null;
   try {
@@ -179,9 +184,11 @@ async function obtenerContextoExpediente(expedienteId: string): Promise<Expedien
     expedienteId,
     solicitanteEmail,
     solicitanteNombre,
+    solicitanteTelefono,
     solicitanteUserId,
     propietarioEmail,
     propietarioNombre,
+    propietarioTelefono: perfil?.telefono ?? null,
     propietarioUserId: inm.propietario_id,
     inmuebleDireccion: inm.direccion,
     inmuebleCiudad: inm.ciudad,
@@ -193,6 +200,16 @@ async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string,
   if (!ctx) return;
 
   const linkExpediente = `/expedientes/${ctx.expedienteId}`;
+  const fechaLegible = new Date(fechaPropuesta).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const primerNombreSol = ctx.solicitanteNombre.split(' ')[0] || 'Hola';
 
   if (autoConfirm) {
     // Cita creada ya confirmada por propietario/inmobiliaria → notificar al solicitante
@@ -212,6 +229,12 @@ async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string,
       mensaje: `Tu visita a ${ctx.inmuebleDireccion} fue confirmada.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaPropuesta },
+    });
+    await enviarTemplateWhatsApp({
+      to: ctx.solicitanteTelefono,
+      template: 'CITA_CONFIRMADA',
+      variables: [primerNombreSol, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaLegible],
+      context: { expediente_id: ctx.expedienteId },
     });
   } else {
     // Cita solicitada → notificar al propietario
@@ -251,6 +274,26 @@ async function notificarCitaConfirmada(
     new Date(fechaPropuesta).getTime() !== new Date(fechaConfirmada).getTime();
 
   const linkExpediente = `/expedientes/${ctx.expedienteId}`;
+  // Cadena legible para WhatsApp (timezone Bogota — el solicitante es CO).
+  const fechaConfirmadaLegible = new Date(fechaConfirmada).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const fechaPropuestaLegible = new Date(fechaPropuesta).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const primerNombre = ctx.solicitanteNombre.split(' ')[0] || 'Hola';
 
   if (reprogramada) {
     await sendCitaReprogramadaSolicitanteEmail({
@@ -270,6 +313,13 @@ async function notificarCitaConfirmada(
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
     });
+    // WhatsApp al solicitante via Meta (Mario 12-may-2026 — provider mock).
+    await enviarTemplateWhatsApp({
+      to: ctx.solicitanteTelefono,
+      template: 'CITA_REPROGRAMADA',
+      variables: [primerNombre, ctx.inmuebleDireccion, fechaPropuestaLegible, fechaConfirmadaLegible],
+      context: { expediente_id: ctx.expedienteId },
+    });
     return;
   }
 
@@ -288,6 +338,13 @@ async function notificarCitaConfirmada(
     mensaje: `Tu visita a ${ctx.inmuebleDireccion} fue confirmada.`,
     link: linkExpediente,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
+  });
+  // WhatsApp al solicitante via Meta.
+  await enviarTemplateWhatsApp({
+    to: ctx.solicitanteTelefono,
+    template: 'CITA_CONFIRMADA',
+    variables: [primerNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaConfirmadaLegible],
+    context: { expediente_id: ctx.expedienteId },
   });
 }
 
@@ -312,6 +369,16 @@ async function notificarCitaCancelada(
     || canceladoPorRol === 'administrador'
     || canceladoPorRol === 'operador_analista';
 
+  const fechaCitaLegible = new Date(fechaCita).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
   if (canceladoPorPropietario) {
     // Avisar al solicitante
     if (ctx.solicitanteEmail) {
@@ -333,6 +400,17 @@ async function notificarCitaCancelada(
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, motivo },
     });
+    await enviarTemplateWhatsApp({
+      to: ctx.solicitanteTelefono,
+      template: 'CITA_CANCELADA',
+      variables: [
+        ctx.solicitanteNombre.split(' ')[0] || 'Hola',
+        ctx.inmuebleDireccion,
+        fechaCitaLegible,
+        motivo,
+      ],
+      context: { expediente_id: ctx.expedienteId },
+    });
   } else {
     // Solicitante cancelo -> avisar al propietario
     if (ctx.propietarioEmail) {
@@ -353,6 +431,17 @@ async function notificarCitaCancelada(
       mensaje: `${ctx.solicitanteNombre || 'El solicitante'} cancelo la visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, motivo },
+    });
+    await enviarTemplateWhatsApp({
+      to: ctx.propietarioTelefono,
+      template: 'CITA_CANCELADA',
+      variables: [
+        ctx.propietarioNombre.split(' ')[0] || 'Hola',
+        ctx.inmuebleDireccion,
+        fechaCitaLegible,
+        motivo,
+      ],
+      context: { expediente_id: ctx.expedienteId },
     });
   }
 }

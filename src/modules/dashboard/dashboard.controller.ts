@@ -28,3 +28,14 @@ export async function getExpedientesPorEstado(req: Request, res: Response) {
   res.set('Cache-Control', CACHE_CONTROL_HEADER);
   sendSuccess(res, data);
 }
+
+// Portfolio stats para el hero "Tu Oficina Virtual" — propietario/inmobiliaria.
+// No cachea: cada usuario tiene su propio portafolio.
+export async function getPortfolioStats(req: Request, res: Response) {
+  if (!req.user) {
+    res.status(401).json({ success: false, message: 'Autenticacion requerida' });
+    return;
+  }
+  const stats = await dashboardService.getPortfolioStats(req.user.id);
+  sendSuccess(res, stats);
+}

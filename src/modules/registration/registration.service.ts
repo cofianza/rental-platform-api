@@ -72,7 +72,8 @@ export async function registerInmobiliaria(
   userAgent: string,
 ): Promise<{ message: string }> {
   const { email, password, razon_social, nit, direccion_comercial, ciudad,
-          nombre_representante_nombre, nombre_representante_apellido, telefono } = input;
+          nombre_representante_nombre, nombre_representante_apellido, telefono,
+          cargo_representante } = input;
 
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
@@ -109,6 +110,9 @@ export async function registerInmobiliaria(
       direccion_comercial,
       ciudad,
       nombre_representante,
+      // El campo es opcional y la migracion 20260512000003 lo agrega; si la
+      // BD aun no tiene la columna, ignorar el undefined sin romper el insert.
+      ...(cargo_representante ? { cargo_representante } : {}),
       registration_source: 'email',
     } as never)
     .eq('id', userId);

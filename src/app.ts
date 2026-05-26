@@ -46,6 +46,8 @@ import reportesRouter from '@/modules/reportes/reportes.routes';
 // Eliminar antes de produccion junto con la migracion 20260507000005.
 import adminToolsRouter from '@/modules/admin-tools/admin-tools.routes';
 import documentosLegalesRouter from '@/modules/documentos-legales/documentos-legales.routes';
+import whatsappRouter from '@/modules/whatsapp/whatsapp.routes';
+import morasRouter, { morasCronRouter } from '@/modules/moras/moras.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
 import { vitrinaRouter } from '@/modules/vitrina/vitrina.routes';
 import exportRouter from '@/modules/export/export.routes';
@@ -169,6 +171,14 @@ app.use('/api/v1/notificaciones', notificacionesRouter);
 // Documentos legales de la inmobiliaria/propietario (camara comercio,
 // RUT, matricula, cedula RL, poder, poliza, contrato marco).
 app.use('/api/v1/documentos-legales', documentosLegalesRouter);
+
+// WhatsApp (Meta Business Cloud) — provider mock por ahora, integracion
+// real pendiente. (Mario 12-may-2026)
+app.use('/api/v1/whatsapp', whatsappRouter);
+
+// Reportar Mora — modulo de 3 fases (Mario 12-may-2026, mockup 13_*propietario.html).
+app.use('/api/v1/moras', morasRouter);
+app.use('/api/v1/cron/moras', morasCronRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
