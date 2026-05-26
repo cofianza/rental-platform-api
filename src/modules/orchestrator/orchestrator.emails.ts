@@ -502,7 +502,7 @@ export async function sendEstudioNoHabilitadoEmail(params: {
             <p style="color: #4b5563; margin: 8px 0 0;">${motivo}</p>
           </div>
           ` : ''}
-          <p style="color: #6b7280;">Puedes seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar fianza para el que prefieras.</p>
+          <p style="color: #6b7280;">Puedes seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar tu fiador para el que prefieras.</p>
           <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
         </div>
       </div>

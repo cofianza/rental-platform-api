@@ -13,7 +13,10 @@ const envSchema = z.object({
   FRONTEND_URL: z.url().default('http://localhost:3000'),
 
   RESEND_API_KEY: z.string().min(1),
-  RESEND_FROM_EMAIL: z.string().min(1).default('hola@knowmeapp.com'),
+  // El dominio del remitente debe estar verificado en Resend antes de enviar.
+  // Setear RESEND_FROM_EMAIL en Railway con el dominio cofianza.co cuando este
+  // verificado. El default solo aplica en dev local.
+  RESEND_FROM_EMAIL: z.string().min(1).default('hola@cofianza.co'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
