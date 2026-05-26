@@ -44,6 +44,11 @@ export async function listByExpediente(req: Request, res: Response) {
   sendSuccess(res, result.contratos, 200, result.pagination);
 }
 
+export async function stats(_req: Request, res: Response) {
+  const data = await contratosService.getContratosStats();
+  sendSuccess(res, data);
+}
+
 export async function getDetalle(req: Request, res: Response) {
   const { id } = req.params as unknown as { id: string };
   const contrato = await contratosService.getContratoById(id);

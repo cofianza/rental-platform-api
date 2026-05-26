@@ -193,6 +193,70 @@ export async function listAllEstudios(query: ListAllEstudiosQuery) {
 // Get estudio by ID
 // ============================================================
 
+// ============================================================
+// Stats globales para los KPI cards del listado de estudios.
+// Devuelve counts por estado/resultado en una sola query. La pagina
+// /estudios los pinta arriba del listado (mockup Mario 12-may-2026:
+// Este mes, Aprobados, En proceso, Rechazados).
+// ============================================================
+export interface EstudiosStats {
+  total: number;
+  este_mes: number;
+  aprobados: number;
+  rechazados: number;
+  condicionados: number;
+  en_proceso: number;
+  pendientes: number;
+  completados: number;
+  // Breakdown crudo por estado/resultado por si la UI quiere mas granularidad.
+  por_estado: Record<string, number>;
+  por_resultado: Record<string, number>;
+}
+
+export async function getEstudiosStats(): Promise<EstudiosStats> {
+  const inicioMes = new Date();
+  inicioMes.setDate(1);
+  inicioMes.setHours(0, 0, 0, 0);
+
+  // Una sola query con SELECT amplio + agregacion local. La tabla
+  // estudios es pequena (~cientos en QA), no escala bien si llega a
+  // millones — en ese caso pasamos a count(*) con GROUP BY via RPC.
+  const { data, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('estado, resultado, created_at');
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al obtener stats de estudios');
+    throw AppError.badRequest('Error al obtener estadisticas de estudios', 'STATS_ERROR');
+  }
+
+  const rows = (data as Array<{ estado: string; resultado: string | null; created_at: string }>) || [];
+  const por_estado: Record<string, number> = {};
+  const por_resultado: Record<string, number> = {};
+  let este_mes = 0;
+
+  for (const r of rows) {
+    por_estado[r.estado] = (por_estado[r.estado] ?? 0) + 1;
+    if (r.resultado) {
+      por_resultado[r.resultado] = (por_resultado[r.resultado] ?? 0) + 1;
+    }
+    if (new Date(r.created_at) >= inicioMes) este_mes++;
+  }
+
+  return {
+    total: rows.length,
+    este_mes,
+    aprobados: por_resultado.aprobado ?? 0,
+    rechazados: por_resultado.rechazado ?? 0,
+    condicionados: por_resultado.condicionado ?? 0,
+    en_proceso: por_estado.en_proceso ?? 0,
+    pendientes: por_estado.solicitado ?? 0,
+    completados: por_estado.completado ?? 0,
+    por_estado,
+    por_resultado,
+  };
+}
+
 export async function getEstudioById(estudioId: string) {
   const { data, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)

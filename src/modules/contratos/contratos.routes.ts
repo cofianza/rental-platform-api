@@ -66,6 +66,14 @@ contratosRouter.get(
   contratosController.listAll,
 );
 
+// GET /stats — KPI cards del listado global. ANTES de /:id para que
+// Express no lo matchee como param.
+contratosRouter.get(
+  '/stats',
+  authorize('contratos', 'read'),
+  contratosController.stats,
+);
+
 // GET /:id — Get contract detail
 contratosRouter.get(
   '/:id',

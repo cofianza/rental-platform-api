@@ -62,6 +62,15 @@ estudiosRouter.get(
   estudiosController.listAll,
 );
 
+// GET /estudios/stats — KPI cards del listado global (counts por estado y
+// resultado, total del mes, etc). ANTES de /:estudioId para que Express
+// no lo matchee como param.
+estudiosRouter.get(
+  '/stats',
+  authorize('estudios', 'read'),
+  estudiosController.stats,
+);
+
 // GET /estudios/:estudioId
 estudiosRouter.get(
   '/:estudioId',

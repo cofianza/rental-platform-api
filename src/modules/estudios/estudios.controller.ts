@@ -46,6 +46,11 @@ export async function listByExpediente(req: Request, res: Response) {
   sendSuccess(res, result.estudios, 200, result.pagination);
 }
 
+export async function stats(_req: Request, res: Response) {
+  const data = await estudiosService.getEstudiosStats();
+  sendSuccess(res, data);
+}
+
 export async function getById(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const estudio = await estudiosService.getEstudioById(estudioId);

@@ -1186,6 +1186,49 @@ async function dispatchAutoFirma(contratoId: string, expedienteId: string, invoc
 // Get contrato by ID
 // ============================================================
 
+// ============================================================
+// Stats globales para los KPI cards del listado de contratos.
+// Devuelve counts por estado. Pedido por la nueva propuesta UI
+// (Mario 12-may-2026): Pendientes de generar / En proceso de firma /
+// Activos.
+// ============================================================
+export interface ContratosStats {
+  total: number
+  pendientes_generar: number  // estado='borrador'
+  en_proceso_firma: number    // estado='pendiente_firma'
+  activos: number              // estado IN ('firmado','vigente')
+  finalizados: number
+  cancelados: number
+  por_estado: Record<string, number>
+}
+
+export async function getContratosStats(): Promise<ContratosStats> {
+  const { data, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('estado');
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al obtener stats de contratos');
+    throw AppError.badRequest('Error al obtener estadisticas de contratos', 'STATS_ERROR');
+  }
+
+  const rows = (data as Array<{ estado: string }>) || [];
+  const por_estado: Record<string, number> = {};
+  for (const r of rows) {
+    por_estado[r.estado] = (por_estado[r.estado] ?? 0) + 1;
+  }
+
+  return {
+    total: rows.length,
+    pendientes_generar: por_estado.borrador ?? 0,
+    en_proceso_firma: por_estado.pendiente_firma ?? 0,
+    activos: (por_estado.firmado ?? 0) + (por_estado.vigente ?? 0),
+    finalizados: por_estado.finalizado ?? 0,
+    cancelados: por_estado.cancelado ?? 0,
+    por_estado,
+  };
+}
+
 export async function getContratoById(id: string) {
   const { data, error } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
