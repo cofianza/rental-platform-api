@@ -45,6 +45,7 @@ import reportesRouter from '@/modules/reportes/reportes.routes';
 // TEMPORAL (Mario 7-may-2026): herramienta de QA "Borrar datos de prueba".
 // Eliminar antes de produccion junto con la migracion 20260507000005.
 import adminToolsRouter from '@/modules/admin-tools/admin-tools.routes';
+import documentosLegalesRouter from '@/modules/documentos-legales/documentos-legales.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
 import { vitrinaRouter } from '@/modules/vitrina/vitrina.routes';
 import exportRouter from '@/modules/export/export.routes';
@@ -164,6 +165,10 @@ app.use('/api/v1/admin/paquetes-creditos-estudios', adminPaquetesRouter);
 
 // Notificaciones in-app (Realtime via Supabase)
 app.use('/api/v1/notificaciones', notificacionesRouter);
+
+// Documentos legales de la inmobiliaria/propietario (camara comercio,
+// RUT, matricula, cedula RL, poder, poliza, contrato marco).
+app.use('/api/v1/documentos-legales', documentosLegalesRouter);
 
 // Error handler (must be last)
 app.use(errorHandler);
