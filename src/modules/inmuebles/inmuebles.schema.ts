@@ -8,7 +8,18 @@ export const inmuebleIdParamsSchema = z.object({
   id: z.uuid({ error: 'ID de inmueble invalido' }),
 });
 
+// Regex del codigo: alphanumeric + guiones/underscores/espacios. Mario quiere
+// que cada inmobiliaria defina su propio sistema (APT-001, CASA-SAB, etc), asi
+// que el formato es libre pero limitado a chars seguros para reportes/CSV.
+const CODIGO_INMUEBLE_REGEX = /^[A-Za-z0-9][A-Za-z0-9 _-]*$/;
+
 export const createInmuebleSchema = z.object({
+  codigo: z
+    .string()
+    .min(1, 'Codigo requerido')
+    .max(30, 'Codigo no puede exceder 30 caracteres')
+    .regex(CODIGO_INMUEBLE_REGEX, 'Codigo invalido: solo letras, numeros, guiones, guiones bajos y espacios')
+    .transform((v) => v.trim()),
   direccion: z.string().min(1, 'Direccion requerida').max(300, 'Direccion muy larga'),
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga'),
   barrio: z.string().max(100, 'Barrio muy largo').optional(),
@@ -40,6 +51,13 @@ export const createInmuebleSchema = z.object({
 });
 
 export const updateInmuebleSchema = z.object({
+  codigo: z
+    .string()
+    .min(1, 'Codigo requerido')
+    .max(30, 'Codigo no puede exceder 30 caracteres')
+    .regex(CODIGO_INMUEBLE_REGEX, 'Codigo invalido: solo letras, numeros, guiones, guiones bajos y espacios')
+    .transform((v) => v.trim())
+    .optional(),
   direccion: z.string().min(1, 'Direccion requerida').max(300, 'Direccion muy larga').optional(),
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga').optional(),
   barrio: z.string().max(100, 'Barrio muy largo').nullable().optional(),

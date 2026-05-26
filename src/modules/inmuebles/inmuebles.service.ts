@@ -221,6 +221,14 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
     if (error.code === '23503') {
       throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
     }
+    // 23505 = unique_violation. El unico unique es (propietario_id, codigo),
+    // asi que sabemos que el codigo ya esta en uso para ese propietario.
+    if (error.code === '23505') {
+      throw AppError.conflict(
+        `Ya tienes un inmueble con el codigo "${input.codigo}". Usa un codigo diferente.`,
+        'CODIGO_DUPLICADO',
+      );
+    }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el inmueble');
   }
 
@@ -288,6 +296,14 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
     logger.error({ error: rpcError, id }, 'Error al actualizar inmueble con cambios');
     if (rpcError.message?.includes('no encontrado')) {
       throw AppError.notFound('Inmueble no encontrado');
+    }
+    // Unique violation del constraint (propietario_id, codigo) cuando el RPC
+    // intenta cambiar el codigo a uno que ya tiene el mismo propietario.
+    if (rpcError.code === '23505' || rpcError.message?.includes('codigo')) {
+      throw AppError.conflict(
+        `El codigo "${input.codigo}" ya esta en uso por otro inmueble del mismo propietario.`,
+        'CODIGO_DUPLICADO',
+      );
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el inmueble');
   }
