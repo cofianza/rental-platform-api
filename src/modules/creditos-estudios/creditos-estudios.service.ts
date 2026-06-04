@@ -620,6 +620,20 @@ export async function liberarEstudioConCredito(
     ip,
   });
 
+  // Auto-enviar el link de autorización (habeas data) al inquilino, igual que el
+  // flujo de pago por Stripe (que lo hace vía onPagoConfirmado). Best-effort y
+  // fire-and-forget: no rompe el consumo del crédito si falla — queda el botón
+  // manual "Enviar autorización" como respaldo.
+  import('@/modules/autorizaciones/autorizaciones.service')
+    .then(({ enviarEnlaceAutorizacion }) => enviarEnlaceAutorizacion(expedienteId, userId))
+    .then(() => logger.info({ expedienteId }, 'Link de autorización auto-enviado (estudio liberado con crédito)'))
+    .catch((err) =>
+      logger.warn(
+        { error: err instanceof Error ? err.message : String(err), expedienteId },
+        'No se pudo auto-enviar el link de autorización tras liberar con crédito (reenviable manualmente)',
+      ),
+    );
+
   return { pago_id: pago.id, saldo_restante, lote_id };
 }
 

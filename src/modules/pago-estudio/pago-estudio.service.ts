@@ -190,6 +190,20 @@ export async function asumirCosto(expedienteId: string, userId: string, ip?: str
     ip,
   });
 
+  // Auto-enviar el link de autorización (habeas data) al inquilino, igual que el
+  // flujo de pago por Stripe (que lo hace vía onPagoConfirmado). Best-effort y
+  // fire-and-forget: no bloquea la respuesta ni rompe el registro del pago si
+  // falla — queda el botón manual "Enviar autorización" como respaldo.
+  import('@/modules/autorizaciones/autorizaciones.service')
+    .then(({ enviarEnlaceAutorizacion }) => enviarEnlaceAutorizacion(expedienteId, userId))
+    .then(() => logger.info({ expedienteId }, 'Link de autorización auto-enviado (inmobiliaria asume costo)'))
+    .catch((err) =>
+      logger.warn(
+        { error: err instanceof Error ? err.message : String(err), expedienteId },
+        'No se pudo auto-enviar el link de autorización tras asumir el costo (reenviable manualmente)',
+      ),
+    );
+
   return pago;
 }
 
