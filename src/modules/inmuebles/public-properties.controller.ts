@@ -31,3 +31,17 @@ export async function getFilters(_req: Request, res: Response) {
   res.set('Cache-Control', 'public, max-age=300'); // 5 min cache for filter options
   sendSuccess(res, filters);
 }
+
+// Tracking de visitas — fire-and-forget. Si falla el insert no rompemos
+// la respuesta porque es analítica, no estado crítico.
+export async function trackVisit(req: Request, res: Response) {
+  const id = req.params.id as string;
+  const ip = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0]?.trim()
+    || req.socket.remoteAddress
+    || null;
+  const userAgent = (req.headers['user-agent'] as string | undefined) ?? null;
+  const referrer = (req.headers.referer as string | undefined) ?? null;
+
+  await service.trackVitrinaVisit(id, { ip, userAgent, referrer });
+  res.status(204).end();
+}

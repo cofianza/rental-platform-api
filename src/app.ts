@@ -58,6 +58,7 @@ import disponibilidadRouter from '@/modules/disponibilidad/disponibilidad.routes
 import { facturasRouter, pagoFacturarRouter, factusHelpersRouter, factusPublicHelpersRouter } from '@/modules/facturacion/facturacion.routes';
 import { creditosEstudiosRouter, expedienteLiberarRouter, adminPaquetesRouter } from '@/modules/creditos-estudios/creditos-estudios.routes';
 import notificacionesRouter from '@/modules/notificaciones/notificaciones.routes';
+import soporteRouter from '@/modules/soporte/soporte.routes';
 
 const app = express();
 
@@ -167,6 +168,9 @@ app.use('/api/v1/admin/paquetes-creditos-estudios', adminPaquetesRouter);
 
 // Notificaciones in-app (Realtime via Supabase)
 app.use('/api/v1/notificaciones', notificacionesRouter);
+
+// Soporte — tickets funcionales (separados de moras_tickets).
+app.use('/api/v1/soporte', soporteRouter);
 
 // Documentos legales de la inmobiliaria/propietario (camara comercio,
 // RUT, matricula, cedula RL, poder, poliza, contrato marco).

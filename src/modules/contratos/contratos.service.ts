@@ -593,7 +593,7 @@ async function buildContratoContext(
 
 const CONTRATO_LIST_WITH_RELATIONS = `
   ${CONTRATO_LIST_SELECT},
-  expedientes(numero, inmuebles(direccion, ciudad))
+  expedientes(numero, inmuebles(codigo, direccion, ciudad), solicitantes(nombre, apellido))
 `;
 
 export async function listAllContratos(

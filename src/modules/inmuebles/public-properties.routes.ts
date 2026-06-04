@@ -34,4 +34,11 @@ router.get(
   controller.getPropertyById,
 );
 
+// POST /api/v1/public/properties/:id/visita — track visit (anonymous, idempotent best-effort)
+router.post(
+  '/:id/visita',
+  validate({ params: propertyIdParamsSchema }),
+  controller.trackVisit,
+);
+
 export { router as publicPropertiesRouter };

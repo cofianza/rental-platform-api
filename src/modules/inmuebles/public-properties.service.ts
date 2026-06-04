@@ -6,6 +6,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 import { buildPaginationMeta } from '@/utils/pagination';
 import type { ListPublicPropertiesQuery } from './public-properties.schema';
 
@@ -209,4 +210,33 @@ export async function getPublicPropertyFilters(): Promise<PublicPropertyFilters>
     tipos: Array.from(tiposSet).sort(),
     estratos: Array.from(estratosSet).sort((a, b) => a - b),
   };
+}
+
+// ── Vitrina: tracking de visitas (analytics) ────────────────
+//
+// Se ejecuta best-effort. Si el insert falla (BD intermitente, inmueble
+// inexistente, etc.) lo logueamos pero NO propagamos el error: el endpoint
+// es público y analítico, y romperlo perjudica la experiencia del visitante.
+
+export async function trackVitrinaVisit(
+  inmuebleId: string,
+  meta: { ip: string | null; userAgent: string | null; referrer: string | null },
+): Promise<void> {
+  try {
+    const { error } = await (
+      supabase.from('vitrina_interacciones' as string) as ReturnType<typeof supabase.from>
+    ).insert({
+      inmueble_id: inmuebleId,
+      tipo: 'vista',
+      ip: meta.ip ? meta.ip.slice(0, 45) : null,
+      user_agent: meta.userAgent ? meta.userAgent.slice(0, 500) : null,
+      referrer: meta.referrer ? meta.referrer.slice(0, 500) : null,
+    });
+
+    if (error) {
+      logger.warn({ err: error.message, inmuebleId }, 'No se pudo registrar visita a vitrina');
+    }
+  } catch (err) {
+    logger.warn({ err, inmuebleId }, 'Error inesperado al registrar visita a vitrina');
+  }
 }

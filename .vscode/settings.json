@@ -1,0 +1,8 @@
+{
+  // Usa el TypeScript del repo (5.9.3) en lugar del que trae VS Code, para que
+  // los diagnósticos del editor coincidan con `npm run build` / `tsc --noEmit`.
+  // Evita el falso aviso de "baseUrl obsoleto (TS 7.0)": baseUrl sigue siendo
+  // necesario aquí para tsconfig-paths (dev) y tsc-alias (build).
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true
+}
