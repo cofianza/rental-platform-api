@@ -1,9 +1,11 @@
 import crypto from 'node:crypto';
 import { supabase } from '@/lib/supabase';
-import { AppError } from '@/lib/errors';
+import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
+import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
+import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { env } from '@/config';
 import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
 
@@ -14,23 +16,42 @@ import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
 const TOKEN_EXPIRY_HOURS = 48;
 const OTP_EXPIRY_MINUTES = 5;
 const OTP_COOLDOWN_SECONDS = 60;
-const VERSION_TERMINOS = '1.0';
+const VERSION_TERMINOS = '2.0';
 
-const TEXTO_LEGAL = `AUTORIZACION PARA CONSULTA Y REPORTE EN CENTRALES DE RIESGO
+const TEXTO_LEGAL = `AUTORIZACIÓN PARA EL TRATAMIENTO DE DATOS PERSONALES
 
-En cumplimiento de la Ley 1581 de 2012 (Proteccion de Datos Personales) y la Ley 1266 de 2008 (Habeas Data), autorizo de manera libre, expresa, voluntaria e informada a COFIANZA y/o a quien esta designe, para que:
+1. Responsable del tratamiento
+COFIANZA S.A.S., NIT 902.038.122, domicilio en Itagüí, Antioquia, Colombia. Canal de atención: hola@cofianza.co · Sitio web: www.cofianza.co · Oficial de protección de datos: datospersonales@cofianza.co
 
-1. Consulte, solicite, recopile, almacene, use, circule y trate mi informacion personal, financiera y crediticia ante cualquier central de riesgo o base de datos, incluyendo pero no limitado a TransUnion (CIFIN), Datacredito (Experian) y SIFIN.
+2. Naturaleza y alcance
+Al validar el código OTP enviado a mi celular o correo, autorizo de manera libre, previa, expresa, informada e inequívoca a COFIANZA S.A.S. y a sus encargados (proveedores tecnológicos, operadores de centrales de riesgo, firmas de cobranza, abogados y terceros necesarios) a recolectar, almacenar, usar, consultar, verificar, actualizar, circular, compartir, transmitir, transferir, suprimir y tratar mis datos personales conforme a las finalidades aquí descritas. La validación OTP constituye firma electrónica (Ley 527/1999 y Decreto 2364/2012) con la misma validez que la firma manuscrita. Se conservará como prueba: código OTP, canal, IP, fecha/hora, dispositivo y documento autorizado.
 
-2. Dicha informacion sera utilizada exclusivamente para evaluar mi capacidad de pago y solvencia financiera en el marco de un proceso de arrendamiento de inmueble.
+3. Marco normativo
+- Ley 1266 de 2008 — Habeas Data Financiero.
+- Ley 1581 de 2012 — Protección de Datos Personales.
+- Decreto 1377 de 2013 — requisitos de la autorización.
+- Ley 527 de 1999 y Decreto 2364 de 2012 — firma electrónica.
+- Circular Externa 005 de 2017 SIC — datos en cobranza.
 
-3. La presente autorizacion permanecera vigente mientras exista una relacion contractual o comercial, y por el tiempo adicional que permita la ley para el ejercicio de acciones legales.
+4. Datos objeto de tratamiento
+Identificación, contacto, financieros y crediticios (historial, score, obligaciones, cuentas, ingresos), comerciales (contratos, inmuebles, cánones, comisiones), del servicio de fianza (modalidad, siniestros, cobranza, pagos) y técnicos (IP, metadatos, logs, firma electrónica). No se recolectan datos sensibles ni de menores; el servicio es solo para mayores de 18 años.
 
-4. Declaro que conozco mis derechos como titular de datos personales, incluyendo el derecho a conocer, actualizar, rectificar y solicitar la supresion de mis datos.
+5.1. Finalidades obligatorias
+- Evaluar perfil de riesgo y capacidad de pago para aprobar o rechazar la fianza.
+- Administrar la relación contractual y el servicio de fianza.
+- Consultar, verificar, reportar y actualizar información ante centrales de riesgo (Datacrédito Experian, TransUnion), Ley 1266.
+- Contacto, notificación, requerimiento y cobranza por cualquier medio (llamada, WhatsApp, correo, SMS, voz).
+- Compartir o transferir información con encargados necesarios para la operación.
+- Prevenir fraude y suplantación conforme a SARLAFT.
+- Cumplir obligaciones legales, regulatorias y requerimientos de autoridades.
+- Construir y administrar bases de datos de comportamiento de pago en arrendamientos, para actuar como fuente y eventualmente operador de información (Art. 3, Ley 1266): recopilar historial, compartirlo con usuarios autorizados por la ley o por el titular, permitir consulta de terceros con interés legítimo, y generar calificaciones e indicadores de riesgo.
+- Análisis mediante scoring automatizado, con derecho del titular a revisión humana de decisiones que le afecten significativamente.
 
-5. Esta autorizacion es revocable en cualquier momento, mediante solicitud escrita dirigida a COFIANZA.
+5.2. Finalidades opcionales
+No son necesarias para el servicio y su no autorización no condiciona el acceso. Se gestionan en el paso "Beneficios": (i) analítica avanzada, segmentación y perfilamiento comercial; (ii) comunicaciones comerciales, ofertas y mercadeo; (iii) compartir el historial de buen pago como referencia ante terceros del ecosistema.
 
-Al firmar este documento, confirmo que he leido, entendido y aceptado los terminos aqui descritos.`;
+6. Reporte a centrales de riesgo (Ley 1266)
+En caso de mora, la información podrá reportarse negativamente con aviso previo de 20 días calendario (Art. 12). Permanencia del dato negativo: máximo el doble de la mora, sin exceder 4 años desde el pago o exigibilidad.`;
 
 // ============================================================
 // Helper types
@@ -68,6 +89,7 @@ interface ExpedienteInfo {
     nombre: string;
     apellido: string;
     email: string;
+    telefono: string | null;
     tipo_documento: string;
     numero_documento: string;
   };
@@ -128,7 +150,7 @@ export async function enviarEnlaceAutorizacion(
   // 1. Get expediente with solicitante + inmueble
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, tipo_documento, numero_documento), inmuebles(id, direccion, ciudad, barrio)')
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento), inmuebles(id, direccion, ciudad, barrio)')
     .eq('id', expedienteId)
     .single();
 
@@ -140,6 +162,26 @@ export async function enviarEnlaceAutorizacion(
 
   if (!exp.solicitantes?.email) {
     throw AppError.badRequest('El solicitante no tiene email registrado', 'SOLICITANTE_SIN_EMAIL');
+  }
+
+  // 1b. No re-crear un enlace si el inquilino YA firmó (estado autorizado, no revocado).
+  // Un nuevo enlace pendiente podría re-firmarse y re-disparar el estudio de crédito.
+  // Esto hace idempotente el auto-envío del orquestador (doble webhook de pago) y evita
+  // pisar una firma existente desde el botón manual. Para repetir, revocar primero.
+  const { data: yaAutorizada } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .eq('estado', 'autorizado')
+    .is('fecha_revocacion', null)
+    .limit(1)
+    .maybeSingle();
+
+  if (yaAutorizada) {
+    throw AppError.badRequest(
+      'Este expediente ya tiene una autorizacion firmada vigente.',
+      'AUTORIZACION_YA_FIRMADA',
+    );
   }
 
   // 2. Invalidate any existing pending autorizacion for this expediente
@@ -181,7 +223,31 @@ export async function enviarEnlaceAutorizacion(
   const autorizacionUrl = `${env.FRONTEND_URL}/autorizar/${token}`;
   const nombreCompleto = `${exp.solicitantes.nombre} ${exp.solicitantes.apellido}`;
 
-  await sendAutorizacionEmail(exp.solicitantes.email, nombreCompleto, autorizacionUrl, TOKEN_EXPIRY_HOURS);
+  // Email best-effort: si Resend falla (p.ej. dirección no verificada en dev),
+  // NO debe bloquear el envío del link por WhatsApp que viene abajo.
+  try {
+    await sendAutorizacionEmail(exp.solicitantes.email, nombreCompleto, autorizacionUrl, TOKEN_EXPIRY_HOURS);
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), expedienteId },
+      'No se pudo enviar el email de autorización (se continúa con WhatsApp)',
+    );
+  }
+
+  // 5b. Enviar también el link por WhatsApp si hay celular (best-effort; el
+  // email queda como respaldo). WhatsApp directo vía Meta (no Auco).
+  if (exp.solicitantes.telefono) {
+    const res = await enviarMensaje({
+      to: exp.solicitantes.telefono,
+      template_id: WHATSAPP_TEMPLATES.AUTORIZACION_LINK.id,
+      language: WHATSAPP_TEMPLATES.AUTORIZACION_LINK.language,
+      variables: [exp.solicitantes.nombre, autorizacionUrl],
+      context: { expediente_id: expedienteId },
+    });
+    if (res.estado === 'fallido') {
+      logger.warn({ error: res.error, expedienteId }, 'No se pudo enviar el link de autorización por WhatsApp');
+    }
+  }
 
   // 6. Audit
   logAudit({
@@ -208,18 +274,30 @@ export async function enviarEnlaceAutorizacion(
 // 3. Get autorizacion by token (public)
 // ============================================================
 
+/** Enmascara un teléfono dejando visibles solo los 2 últimos dígitos. */
+function maskTelefono(tel: string | null): string | null {
+  if (!tel) return null;
+  const digits = tel.replace(/\D/g, '');
+  if (digits.length < 2) return null;
+  return `••• ••${digits.slice(-2)}`;
+}
+
 export async function getAutorizacionByToken(token: string) {
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma,
-      solicitantes(nombre, apellido, email),
+      solicitantes(nombre, apellido, telefono),
       expedientes(numero, inmuebles(direccion, ciudad, barrio))
     `)
     .eq('token', token)
-    .single();
+    .maybeSingle();
 
-  if (error || !autorizacion) {
+  if (error) {
+    logger.error({ error }, 'Error de BD consultando autorizacion por token');
+    throw fromSupabaseError(error);
+  }
+  if (!autorizacion) {
     throw AppError.notFound('Autorizacion no encontrada o enlace invalido', 'AUTORIZACION_NOT_FOUND');
   }
 
@@ -230,7 +308,7 @@ export async function getAutorizacionByToken(token: string) {
     texto_autorizado: string;
     version_terminos: string;
     metodo_firma: string | null;
-    solicitantes: { nombre: string; apellido: string; email: string };
+    solicitantes: { nombre: string; apellido: string; telefono: string | null };
     expedientes: { numero: string; inmuebles: { direccion: string; ciudad: string; barrio: string | null } };
   };
 
@@ -263,7 +341,9 @@ export async function getAutorizacionByToken(token: string) {
     solicitante: {
       nombre: auth.solicitantes.nombre,
       apellido: auth.solicitantes.apellido,
-      email: auth.solicitantes.email,
+      // PII minimizada para el portador del token: NO se devuelve el email completo
+      // (la pantalla no lo usa) y el teléfono va enmascarado.
+      telefono_masked: maskTelefono(auth.solicitantes.telefono),
     },
     expediente: {
       numero_expediente: auth.expedientes.numero,
@@ -291,9 +371,14 @@ export async function firmarAutorizacion(
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado, token_expiracion, texto_autorizado, solicitante_id, expediente_id')
     .eq('token', token)
-    .single();
+    .maybeSingle();
 
-  if (error || !autorizacion) {
+  // Distinguir error real de BD (→ 500, reintentable) de "no existe" (→ 404).
+  if (error) {
+    logger.error({ error }, 'Error de BD consultando autorizacion para firmar');
+    throw fromSupabaseError(error);
+  }
+  if (!autorizacion) {
     throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 
@@ -324,6 +409,17 @@ export async function firmarAutorizacion(
         'OTP_NO_VERIFICADO',
       );
     }
+
+    // El OTP verificado no debe estar caducado al momento de firmar: una firma
+    // electrónica (Ley 527/1999) con un OTP viejo no es válida como prueba de
+    // posesión reciente. El frontend verifica y firma seguido, así que la
+    // ventana de 5 min basta; si expiró, hay que solicitar y verificar uno nuevo.
+    if (new Date((otp as unknown as OtpRow).expira_en) < new Date()) {
+      throw AppError.badRequest(
+        'El codigo OTP expiro. Solicite uno nuevo y verifiquelo antes de firmar.',
+        'OTP_EXPIRADO',
+      );
+    }
   }
 
   // 3. Compute SHA-256 hash of legal text + signature data
@@ -338,8 +434,12 @@ export async function firmarAutorizacion(
 
   const hashDocumento = crypto.createHash('sha256').update(hashContent).digest('hex');
 
-  // 4. Update autorizacion to autorizado
-  const { error: updateError } = await (supabase
+  // 4. Update autorizacion to autorizado.
+  // Idempotencia / anti doble-firma: el UPDATE incluye `.eq('estado','pendiente')`,
+  // así la transición es atómica. Si dos POST /firmar entran concurrentes, solo uno
+  // afecta filas; el otro recibe 0 filas y se trata como "ya procesada" SIN volver a
+  // disparar el orquestador (evita estudio de crédito duplicado).
+  const { data: updatedRows, error: updateError } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .update({
       estado: 'autorizado',
@@ -349,12 +449,23 @@ export async function firmarAutorizacion(
       autorizado_en: new Date().toISOString(),
       ip_autorizacion: ip || null,
       user_agent: userAgent || null,
+      // Consentimientos opcionales (Paso 2). No condicionan el servicio.
+      consent_analitica: input.consentimientos_opcionales?.analitica ?? false,
+      consent_comercial: input.consentimientos_opcionales?.comercial ?? false,
+      consent_historial_referencia: input.consentimientos_opcionales?.historial_referencia ?? false,
     } as never)
-    .eq('id', auth.id);
+    .eq('id', auth.id)
+    .eq('estado', 'pendiente')
+    .select('id');
 
   if (updateError) {
     logger.error({ error: updateError, autorizacionId: auth.id }, 'Error al firmar autorizacion');
     throw AppError.badRequest('Error al firmar la autorizacion', 'AUTORIZACION_FIRMA_ERROR');
+  }
+
+  if (!updatedRows || (updatedRows as unknown[]).length === 0) {
+    // Otra request ya la firmó/procesó entre la lectura y el UPDATE.
+    throw AppError.badRequest('Esta autorizacion ya fue procesada', 'AUTORIZACION_ESTADO_INVALIDO');
   }
 
   // 5. Audit
@@ -400,11 +511,15 @@ export async function enviarOtpCode(token: string) {
   // 1. Get autorizacion
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_expiracion, solicitantes(nombre, apellido, email)')
+    .select('id, estado, token_expiracion, solicitantes(nombre, apellido, email, telefono)')
     .eq('token', token)
-    .single();
+    .maybeSingle();
 
-  if (error || !autorizacion) {
+  if (error) {
+    logger.error({ error }, 'Error de BD consultando autorizacion para enviar OTP');
+    throw fromSupabaseError(error);
+  }
+  if (!autorizacion) {
     throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 
@@ -412,7 +527,7 @@ export async function enviarOtpCode(token: string) {
     id: string;
     estado: string;
     token_expiracion: string;
-    solicitantes: { nombre: string; apellido: string; email: string };
+    solicitantes: { nombre: string; apellido: string; email: string; telefono: string | null };
   };
 
   if (auth.estado !== 'pendiente') {
@@ -444,30 +559,86 @@ export async function enviarOtpCode(token: string) {
     }
   }
 
-  // 3. Generate 6-digit code
-  const codigo = String(crypto.randomInt(100000, 999999));
+  // 3. Generate 6-digit code. randomInt es [min, max) (max exclusivo), por eso 1000000.
+  const codigo = String(crypto.randomInt(100000, 1000000));
   const expiraEn = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000).toISOString();
 
-  // 4. Insert OTP record
-  const { error: insertError } = await (supabase
+  // 3b. Invalidar OTPs previos no verificados (un solo código activo a la vez):
+  // reduce la superficie de adivinación y evita códigos antiguos que confunden.
+  await (supabase
+    .from('autorizacion_otps' as string) as ReturnType<typeof supabase.from>)
+    .update({ expira_en: new Date().toISOString() } as never)
+    .eq('autorizacion_id', auth.id)
+    .eq('verificado', false);
+
+  // 4. Insert OTP record (devolvemos el id para poder limpiarlo si no se entrega).
+  const { data: nuevoOtp, error: insertError } = await (supabase
     .from('autorizacion_otps' as string) as ReturnType<typeof supabase.from>)
     .insert({
       autorizacion_id: auth.id,
       codigo,
       expira_en: expiraEn,
-    } as never);
+    } as never)
+    .select('id')
+    .maybeSingle();
 
-  if (insertError) {
+  if (insertError || !nuevoOtp) {
     logger.error({ error: insertError, autorizacionId: auth.id }, 'Error al crear OTP');
     throw AppError.badRequest('Error al generar el codigo OTP', 'OTP_CREATE_ERROR');
   }
 
-  // 5. Send OTP email
+  const otpId = (nuevoOtp as unknown as { id: string }).id;
+
+  // 5. Entregar el OTP. Email y WhatsApp son best-effort, pero rastreamos si AL
+  // MENOS UN canal lo aceptó: si ninguno entrega, no podemos reportar éxito (el
+  // usuario quedaría esperando un código que nunca llega).
   const nombreCompleto = `${auth.solicitantes.nombre} ${auth.solicitantes.apellido}`;
-  await sendOtpEmail(auth.solicitantes.email, nombreCompleto, codigo);
+  let entregado = false;
+
+  try {
+    await sendOtpEmail(auth.solicitantes.email, nombreCompleto, codigo);
+    entregado = true;
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), autorizacionId: auth.id },
+      'No se pudo enviar el OTP por email (se intenta WhatsApp)',
+    );
+  }
+
+  // 5b. Enviar el OTP por WhatsApp si hay celular (best-effort; email de respaldo).
+  if (auth.solicitantes.telefono) {
+    const res = await enviarMensaje({
+      to: auth.solicitantes.telefono,
+      template_id: WHATSAPP_TEMPLATES.AUTORIZACION_OTP.id,
+      language: WHATSAPP_TEMPLATES.AUTORIZACION_OTP.language,
+      variables: [codigo],
+      is_authentication: true,
+    });
+    if (res.estado === 'fallido') {
+      logger.warn({ error: res.error, autorizacionId: auth.id }, 'No se pudo enviar el OTP por WhatsApp');
+    } else {
+      entregado = true;
+    }
+  }
+
+  // 5c. Si ningún canal entregó, eliminamos el OTP recién creado (para no bloquear
+  // el reintento por cooldown) y devolvemos error claro para que el usuario reintente.
+  if (!entregado) {
+    await (supabase
+      .from('autorizacion_otps' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', otpId);
+    logger.error({ autorizacionId: auth.id }, 'OTP no entregado por ningún canal (email y WhatsApp fallaron)');
+    throw AppError.badRequest(
+      'No pudimos enviarte el codigo en este momento. Intenta de nuevo en unos segundos.',
+      'OTP_DELIVERY_FAILED',
+    );
+  }
 
   return {
-    mensaje: 'Codigo OTP enviado al correo del solicitante',
+    mensaje: auth.solicitantes.telefono
+      ? 'Codigo OTP enviado por WhatsApp y correo'
+      : 'Codigo OTP enviado al correo del solicitante',
     expira_en: expiraEn,
   };
 }
@@ -482,9 +653,13 @@ export async function verificarOtpCode(token: string, codigo: string) {
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado, token_expiracion')
     .eq('token', token)
-    .single();
+    .maybeSingle();
 
-  if (error || !autorizacion) {
+  if (error) {
+    logger.error({ error }, 'Error de BD consultando autorizacion para verificar OTP');
+    throw fromSupabaseError(error);
+  }
+  if (!autorizacion) {
     throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 

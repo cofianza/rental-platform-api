@@ -211,6 +211,15 @@ export async function simulateWebhook(req: Request, res: Response) {
     });
 
     logger.info({ pago_id, targetEstado }, '[DEV] Simulated webhook transition');
+
+    // Mismo dispatch que el webhook real: si el pago acaba de completarse,
+    // disparar el orquestador (estudio + auto-envío del link + facturación).
+    // transitionPagoState solo permite pendiente/procesando→completado, así que
+    // llegar aquí con 'completado' implica una primera transición efectiva.
+    if (targetEstado === 'completado') {
+      await pagosService.dispatchPagoCompletado(pago_id);
+    }
+
     sendSuccess(res, result);
   } catch (error) {
     logger.error({ error, pago_id }, '[DEV] Simulated webhook error');

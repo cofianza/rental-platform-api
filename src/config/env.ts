@@ -61,6 +61,14 @@ const envSchema = z.object({
   FACTUS_CLIENT_SECRET: z.string().optional(),
   FACTUS_USERNAME: z.string().optional(),
   FACTUS_PASSWORD: z.string().optional(),
+
+  // WhatsApp (Meta Business Cloud) — envío directo de plantillas aprobadas
+  // (link de autorización, OTP, notificaciones). Mientras WHATSAPP_PROVIDER no
+  // sea 'meta' se usa el provider mock que sólo loguea (no envía nada real).
+  WHATSAPP_PROVIDER: z.enum(['meta', 'mock']).default('mock'),
+  WHATSAPP_META_PHONE_NUMBER_ID: z.string().default(''),
+  WHATSAPP_META_ACCESS_TOKEN: z.string().default(''),
+  WHATSAPP_META_API_VERSION: z.string().default('v21.0'),
 });
 
 const parsed = envSchema.safeParse(process.env);

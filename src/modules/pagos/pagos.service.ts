@@ -740,50 +740,47 @@ export async function processWebhookEvent(payload: Buffer, signature: string) {
   //    Guard: targetEstado='completado' + el pago NO estaba ya en 'completado'.
   //    Mantiene 1 única ejecución de TransUnion por pago exitoso.
   if (targetEstado === 'completado' && estadoAntes !== 'completado') {
-    try {
-      const { data: pagoFull } = await (supabase
-        .from('pagos' as string) as ReturnType<typeof supabase.from>)
-        .select('id, expediente_id, concepto')
-        .eq('id', pagoId)
-        .single();
-
-      if (!pagoFull) {
-        logger.error({ pagoId }, 'Webhook: pago no encontrado tras transición — no se puede dispatch orchestrator');
-        return { received: true };
-      }
-
-      const pagoFullTyped = pagoFull as unknown as {
-        id: string;
-        expediente_id: string;
-        concepto: string;
-      };
-
-      // Import dinámico: evita el ciclo pagos ↔ orchestrator (el orchestrator
-      // ya importa estudios via dynamic, mantiene la asimetría).
-      const { onPagoConfirmado } = await import('@/modules/orchestrator/orchestrator.service');
-      await onPagoConfirmado({
-        pagoId: pagoFullTyped.id,
-        expedienteId: pagoFullTyped.expediente_id,
-        concepto: pagoFullTyped.concepto,
-      });
-
-      // Notificacion in-app al solicitante. Fire-and-forget para no
-      // bloquear el webhook ni duplicar 500s a Stripe.
-      notificarSolicitantePagoCompletado(
-        pagoFullTyped.id,
-        pagoFullTyped.expediente_id,
-        pagoFullTyped.concepto,
-      ).catch((e) =>
-        logger.warn({ error: e, pagoId: pagoFullTyped.id }, 'Error notificando pago completado'),
-      );
-    } catch (err) {
-      // NO re-throw: ya procesamos la transición exitosa. Un 500 al webhook
-      // dispararía retry de Stripe y duplicaría el pago.
-      logger.error({ pagoId, eventId, err }, 'Webhook: onPagoConfirmado falló — requiere intervención manual');
-    }
+    // Dispatch reutilizable (mismo camino que el endpoint dev de simulación),
+    // para que webhook real y simulación no se desincronicen.
+    await dispatchPagoCompletado(pagoId);
   }
 
   return { received: true };
+}
+
+/**
+ * Despacha el orquestador tras un pago que ACABA de transicionar a 'completado'
+ * (estudio automático + auto-envío del link de autorización + facturación) y
+ * notifica al solicitante. Best-effort: registra el error pero nunca relanza
+ * (un 500 al webhook dispararía retry de Stripe). Llamar SOLO en la primera
+ * transición a 'completado' para no duplicar el dispatch.
+ */
+export async function dispatchPagoCompletado(pagoId: string): Promise<void> {
+  try {
+    const { data: pagoFull } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, expediente_id, concepto')
+      .eq('id', pagoId)
+      .single();
+
+    if (!pagoFull) {
+      logger.error({ pagoId }, 'dispatchPagoCompletado: pago no encontrado tras transición');
+      return;
+    }
+
+    const p = pagoFull as unknown as { id: string; expediente_id: string; concepto: string };
+
+    // Import dinámico: evita el ciclo pagos ↔ orchestrator.
+    const { onPagoConfirmado } = await import('@/modules/orchestrator/orchestrator.service');
+    await onPagoConfirmado({ pagoId: p.id, expedienteId: p.expediente_id, concepto: p.concepto });
+
+    // Notificación in-app al solicitante. Fire-and-forget.
+    notificarSolicitantePagoCompletado(p.id, p.expediente_id, p.concepto).catch((e) =>
+      logger.warn({ error: e, pagoId: p.id }, 'Error notificando pago completado'),
+    );
+  } catch (err) {
+    logger.error({ pagoId, err }, 'dispatchPagoCompletado: onPagoConfirmado falló — requiere intervención manual');
+  }
 }
 
 // ============================================================

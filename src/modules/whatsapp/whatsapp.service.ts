@@ -42,6 +42,7 @@ export async function enviarMensaje(input: EnviarWhatsappInput): Promise<WhatsAp
     templateId: input.template_id,
     language: input.language ?? 'es_CO',
     variables: input.variables,
+    isAuthentication: input.is_authentication,
     context: input.context,
   };
 

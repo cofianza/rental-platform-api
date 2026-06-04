@@ -332,6 +332,55 @@ export async function onPagoConfirmado(params: {
       return;
     }
 
+    // (b) Tras confirmar el pago del estudio, enviar AUTOMÁTICAMENTE el link de
+    // autorización (habeas data) por WhatsApp/correo para que el inquilino firme
+    // con OTP. Al firmar, onHabeasDataAutorizado ejecuta el estudio. Best-effort:
+    // no bloquea el resto del flujo si falla (el botón "Enviar autorización" queda
+    // como respaldo manual).
+    if (expRow.creado_por) {
+      const generadoPor = expRow.creado_por;
+      // Idempotencia: solo auto-enviar si NO existe ya una autorización pendiente o
+      // firmada para el expediente. Evita que un doble webhook de pago (dos eventos
+      // Stripe distintos del mismo pago) genere dos links y dos WhatsApp.
+      const { data: autExistente } = (await db('autorizaciones_habeas_data')
+        .select('id, estado')
+        .eq('expediente_id', expedienteId)
+        .in('estado', ['pendiente', 'autorizado'])
+        .limit(1)
+        .maybeSingle()) as { data: { id: string; estado: string } | null };
+
+      if (autExistente) {
+        logger.info(
+          { expedienteId, estado: autExistente.estado },
+          'Orchestrator: ya existe autorización — se omite el auto-envío del link',
+        );
+      } else {
+        import('@/modules/autorizaciones/autorizaciones.service')
+          .then(({ enviarEnlaceAutorizacion }) => enviarEnlaceAutorizacion(expedienteId, generadoPor))
+          .then(() =>
+            logger.info({ expedienteId }, 'Orchestrator: link de autorización enviado automáticamente tras el pago'),
+          )
+          .catch(async (err) => {
+            logger.warn(
+              { error: err instanceof Error ? err.message : String(err), expedienteId },
+              'Orchestrator: no se pudo enviar el link de autorización automático tras el pago',
+            );
+            // No dejar el fallo en silencio: queda en el timeline del expediente
+            // para que el operador lo reenvíe manualmente (botón "Enviar autorización").
+            await registrarTimeline(
+              expedienteId,
+              'pago',
+              'No se pudo enviar automáticamente el link de autorización al inquilino. Reenvíalo manualmente desde el expediente.',
+            ).catch(() => {});
+          });
+      }
+    } else {
+      logger.warn(
+        { expedienteId },
+        'Orchestrator: expediente sin creado_por — no se pudo auto-enviar el link de autorización (requiere envío manual)',
+      );
+    }
+
     // Flujo manual: admin opera con OTP+canvas. Sin intervención automática.
     if (!expRow.source || !SOURCES_ONBOARDING_AUTOMATICO.has(expRow.source)) {
       logger.info(

@@ -1,7 +1,11 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
 import { authMiddleware, authorize } from '@/middleware/auth';
-import { publicFormLimiter } from '@/middleware/rateLimiter';
+import {
+  publicFormLimiter,
+  otpSendByTokenLimiter,
+  otpVerifyByTokenLimiter,
+} from '@/middleware/rateLimiter';
 import {
   expedienteIdParamsSchema,
   tokenParamsSchema,
@@ -66,17 +70,21 @@ publicAutorizacionRouter.post(
 );
 
 // POST /public/autorizar/:token/enviar-otp
+// publicFormLimiter (por IP) + otpSendByTokenLimiter (por token) en cascada.
 publicAutorizacionRouter.post(
   '/:token/enviar-otp',
   publicFormLimiter,
+  otpSendByTokenLimiter,
   validate({ params: tokenParamsSchema }),
   autorizacionesController.enviarOtp,
 );
 
 // POST /public/autorizar/:token/verificar-otp
+// Defensa anti fuerza bruta del OTP: límite por token (8/15min) además del de IP.
 publicAutorizacionRouter.post(
   '/:token/verificar-otp',
   publicFormLimiter,
+  otpVerifyByTokenLimiter,
   validate({ params: tokenParamsSchema, body: verificarOtpSchema }),
   autorizacionesController.verificarOtp,
 );

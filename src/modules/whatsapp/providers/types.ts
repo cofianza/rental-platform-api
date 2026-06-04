@@ -14,6 +14,11 @@ export interface WhatsAppMessage {
   language?: string;
   /** Variables del template, en orden de aparición ({{1}}, {{2}}, ...). */
   variables?: string[];
+  /**
+   * true para plantillas de categoría "Authentication" de Meta: el código
+   * (variables[0]) se manda en el cuerpo y en el botón "copiar código".
+   */
+  isAuthentication?: boolean;
   /** Metadata opcional: a qué expediente / contrato / mora se refiere. */
   context?: {
     expediente_id?: string;

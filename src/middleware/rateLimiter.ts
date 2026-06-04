@@ -100,3 +100,40 @@ export const publicFormLimiter = rateLimit({
     message: 'Too many requests, please try again later',
   },
 });
+
+// ── Limiters POR TOKEN para el flujo público de autorización (habeas data) ──
+// El brute-force del OTP no se frena con límites por IP (un atacante rota IPs),
+// así que estos limitan por el token de la URL (clave = req.params.token), que
+// identifica una autorización concreta. Defensa principal contra adivinación
+// del OTP de 6 dígitos; se combinan con publicFormLimiter (capa por IP).
+// validate:false porque usamos keyGenerator propio (mismo patrón que passwordResetLimiter).
+
+/** Solicitud de OTP: máx 5 por 15 min para un mismo enlace de autorización. */
+export const otpSendByTokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.params as { token?: string })?.token ?? req.ip ?? 'unknown',
+  validate: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Demasiadas solicitudes de codigo para este enlace, intenta mas tarde',
+  },
+});
+
+/** Verificación de OTP: máx 8 por 15 min para un mismo enlace (anti fuerza bruta). */
+export const otpVerifyByTokenLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.params as { token?: string })?.token ?? req.ip ?? 'unknown',
+  validate: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Demasiados intentos de verificacion para este enlace, solicita un codigo nuevo',
+  },
+});

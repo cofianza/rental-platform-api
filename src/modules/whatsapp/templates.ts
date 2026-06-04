@@ -73,6 +73,26 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora
     description: 'Hola {{1}}, el caso de la mora del inmueble {{2}} por ${{3}} ({{4}} días) fue escalado formalmente a Cofianza. Nuestro equipo se comunicará contigo en las próximas horas.',
   },
+  /**
+   * Link de autorización de tratamiento de datos (categoría UTILITY en Meta).
+   * Se envía al inquilino para que abra la pantalla y firme con OTP al final.
+   */
+  AUTORIZACION_LINK: {
+    id: 'cofianza_autorizacion_link',
+    language: 'es_CO',
+    // {{1}} nombre, {{2}} enlace de autorización
+    description: 'Hola {{1}}, Cofianza necesita tu autorización para estudiar tu solicitud de arriendo. Abre este enlace para revisarla y firmarla: {{2}}',
+  },
+  /**
+   * Código OTP de la autorización (categoría AUTHENTICATION en Meta). La validación
+   * del código constituye la firma electrónica de la autorización (Ley 527/1999).
+   */
+  AUTORIZACION_OTP: {
+    id: 'cofianza_otp_autorizacion',
+    language: 'es_CO',
+    // {{1}} código OTP de 6 dígitos
+    description: 'Tu código de autorización Cofianza es {{1}}. Válido por 5 minutos. No lo compartas con nadie.',
+  },
 } as const;
 
 export type WhatsappTemplateKey = keyof typeof WHATSAPP_TEMPLATES;

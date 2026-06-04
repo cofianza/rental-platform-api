@@ -13,6 +13,9 @@ export const enviarWhatsappSchema = z.object({
   template_id: z.string().min(1, 'template_id requerido').max(100),
   language: z.string().min(2).max(10).optional(),
   variables: z.array(z.string().max(500)).max(20).optional(),
+  // true para plantillas de categoría "Authentication" (Meta): el código va en
+  // el cuerpo y además en el botón "copiar código".
+  is_authentication: z.boolean().optional(),
   context: z
     .object({
       expediente_id: z.uuid().optional(),
