@@ -118,7 +118,9 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     dashboard: ['read'],
     solicitantes: [],
     documentos: ['read', 'descargar'],
-    pagos: ['read'],
+    // create/update: el propietario gestiona el pago del estudio de su
+    // candidato (enviar link al arrendatario, asumir, cancelar-y-asumir).
+    pagos: ['read', 'create', 'update'],
     facturas: ['read'],
     citas: ['create', 'read', 'update'],
     disponibilidad: ['read', 'read_own', 'update'],
