@@ -84,7 +84,10 @@ export class MercadoPagoAdapter implements PaymentGatewayAdapter {
       external_reference: externalReference,
       metadata,
       back_urls: { success: successUrl, failure: cancelUrl, pending: successUrl },
-      auto_return: 'approved',
+      // MP exige que back_url.success sea https para usar auto_return; en
+      // desarrollo (localhost http) lo omitimos para no romper la creación del
+      // link (el comprador vuelve manualmente con "Volver al sitio").
+      ...(successUrl.startsWith('https://') ? { auto_return: 'approved' } : {}),
       ...(env.API_PUBLIC_URL
         ? { notification_url: `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/webhooks/pagos` }
         : {}),
