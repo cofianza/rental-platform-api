@@ -23,6 +23,18 @@ export const generarContratoSchema = z.object({
   variables: z.record(z.string(), z.string()).optional(),
   fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha invalido (YYYY-MM-DD)').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
+  // Condiciones de fianza del contrato V4 — se persisten en el expediente.
+  modalidad_fianza: z.enum(['plena', 'compartida', 'plus']).optional(),
+  cotitular: z.object({
+    nombre: z.string().optional(),
+    tipo_documento: z.string().optional(),
+    documento: z.string().optional(),
+    celular: z.string().optional(),
+    correo: z.string().optional(),
+    direccion: z.string().optional(),
+    municipio: z.string().optional(),
+  }).optional(),
+  servicios_reparto: z.record(z.string(), z.enum(['arrendatario', 'arrendador'])).optional(),
 });
 
 // ============================================================

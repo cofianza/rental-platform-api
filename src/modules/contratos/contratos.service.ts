@@ -200,6 +200,8 @@ interface ArrendadorRow {
   domicilio_ciudad: string | null;
   ciudad: string | null;
   matricula_arrendador: string | null;
+  matricula_expedida_por: string | null;
+  matricula_fecha: string | null;
   logo_storage_key: string | null;
   logo_url: string | null;
   whatsapp_recaudo: string | null;
@@ -232,6 +234,7 @@ interface ExpedienteData {
     propiedad_horizontal?: boolean | null;
     cuarto_util?: boolean | null;
     ubicacion_detallada?: string | null;
+    matricula_inmobiliaria?: string | null;
     propietario_id: string;
     contrato_tipo_storage_key?: string | null;
     contrato_tipo_nombre_archivo?: string | null;
@@ -294,10 +297,13 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       id, numero, estado, inmueble_id, solicitante_id,
       coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco,
       duracion_contrato_meses, fecha_inicio_contrato,
+      modalidad_fianza, servicios_reparto,
+      cotitular_nombre, cotitular_tipo_documento, cotitular_documento,
+      cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio,
       inmuebles(
         id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero,
         administracion, propietario_id,
-        propiedad_horizontal, cuarto_util, ubicacion_detallada,
+        propiedad_horizontal, cuarto_util, ubicacion_detallada, matricula_inmobiliaria,
         contrato_tipo_storage_key, contrato_tipo_nombre_archivo
       ),
       solicitantes(
@@ -332,6 +338,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       parqueadero: boolean | null;
       administracion: number | null;
       propietario_id: string;
+      matricula_inmobiliaria: string | null;
       contrato_tipo_storage_key: string | null;
       contrato_tipo_nombre_archivo: string | null;
     };
@@ -359,7 +366,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       id, nombre, apellido, rol, tipo_documento, numero_documento,
       razon_social, representante_legal,
       domicilio_direccion, domicilio_ciudad, ciudad,
-      matricula_arrendador, logo_storage_key, logo_url,
+      matricula_arrendador, matricula_expedida_por, matricula_fecha, logo_storage_key, logo_url,
       whatsapp_recaudo, email_recaudo,
       cuenta_recaudo_banco, cuenta_recaudo_tipo, cuenta_recaudo_numero,
       cuenta_recaudo_titular_nombre, cuenta_recaudo_titular_nit
@@ -377,6 +384,8 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     razon_social: string | null; representante_legal: string | null;
     domicilio_direccion: string | null; domicilio_ciudad: string | null; ciudad: string | null;
     matricula_arrendador: string | null;
+    matricula_expedida_por: string | null;
+    matricula_fecha: string | null;
     logo_storage_key: string | null; logo_url: string | null;
     whatsapp_recaudo: string | null; email_recaudo: string | null;
     cuenta_recaudo_banco: string | null; cuenta_recaudo_tipo: string | null;
@@ -472,11 +481,26 @@ async function fetchCoarrendatarioParaContrato(
  * Resuelve: arrendador, arrendatario, coarrendatario, inmueble, contrato,
  * canon, config — todo listo para `renderTemplate`.
  */
+interface ModalidadFianza {
+  codigo: string;
+  nombre: string;
+  comision_texto: string;
+  prima_texto: string;
+  cubre_canones: boolean;
+  cubre_servicios: boolean;
+  cubre_admin_ph: boolean;
+  cubre_danos: boolean;
+  cubre_penal: boolean;
+}
+
 async function buildContratoContext(
   data: ExpedienteData,
   expedienteNumero: string,
   fechaInicio: Date,
   duracionMeses: number,
+  // Fase 3 (contrato V4): modalidad de fianza + el expediente (co-titular,
+  // reparto de servicios). Opcional para no romper los otros callers.
+  opts?: { modalidad?: ModalidadFianza | null; expediente?: Record<string, unknown> },
 ): Promise<Record<string, unknown>> {
   const { arrendador, solicitante, inmueble, coarrendatario } = data;
   const fechaFin = addMonths(fechaInicio, duracionMeses);
@@ -491,6 +515,12 @@ async function buildContratoContext(
   const comisionPct = Number(cfg.comision_intermediacion_porcentaje) || 20;
 
   const esInmobiliaria = arrendador?.rol === 'inmobiliaria';
+
+  // Propiedad horizontal: explícito en el inmueble, o heurística (paga admin).
+  // Se reutiliza para el booleano (plantilla V2) y para el texto Sí/No (V4).
+  const esPH = inmueble.propiedad_horizontal !== null && inmueble.propiedad_horizontal !== undefined
+    ? Boolean(inmueble.propiedad_horizontal)
+    : Number(inmueble.administracion || 0) > 0;
 
   // Razón social: si es PJ con razon_social usar esa; si no, "nombre + apellido".
   const razonSocialArrendador = arrendador?.razon_social
@@ -508,7 +538,46 @@ async function buildContratoContext(
     logoUrl = signed?.signedUrl ?? null;
   }
 
+  // ── Fase 3 (contrato V4) ──────────────────────────────────────────
+  // Cobertura (cob.*) según la modalidad; co-titular y reparto de servicios
+  // (serv.*) desde el expediente.
+  const mod = opts?.modalidad ?? null;
+  const exp = opts?.expediente ?? {};
+  const siNo = (b: boolean) => (b ? 'Sí' : 'No');
+  const cob = {
+    canones: siNo(!!mod?.cubre_canones),
+    servicios: siNo(!!mod?.cubre_servicios),
+    admin_ph: siNo(!!mod?.cubre_admin_ph),
+    danos: siNo(!!mod?.cubre_danos),
+    penal: siNo(!!mod?.cubre_penal),
+  };
+  const cotitularNombre = (exp.cotitular_nombre as string | null) || '';
+  const cotitular = cotitularNombre
+    ? {
+        nombre_completo: cotitularNombre,
+        cedula: (exp.cotitular_documento as string | null) || '',
+        celular: (exp.cotitular_celular as string | null) || '',
+        correo: (exp.cotitular_correo as string | null) || '',
+        direccion_notificacion: (exp.cotitular_direccion as string | null) || '',
+        municipio_notificacion: (exp.cotitular_municipio as string | null) || '',
+      }
+    : {};
+  const reparto = (exp.servicios_reparto as Record<string, string> | null) || {};
+  const svc = (s: string, lado: 'arrendatario' | 'arrendador') => (reparto[s] === lado ? 'X' : '');
+  const serv = {
+    agua: { arrendatario: svc('agua', 'arrendatario'), arrendador: svc('agua', 'arrendador') },
+    energia: { arrendatario: svc('energia', 'arrendatario'), arrendador: svc('energia', 'arrendador') },
+    gas: { arrendatario: svc('gas', 'arrendatario'), arrendador: svc('gas', 'arrendador') },
+    basuras: { arrendatario: svc('basuras', 'arrendatario'), arrendador: svc('basuras', 'arrendador') },
+    alumbrado: { arrendatario: svc('alumbrado', 'arrendatario'), arrendador: svc('alumbrado', 'arrendador') },
+    internet: { arrendatario: svc('internet', 'arrendatario'), arrendador: svc('internet', 'arrendador') },
+    admin_ph: { arrendatario: svc('admin_ph', 'arrendatario'), arrendador: svc('admin_ph', 'arrendador') },
+  };
+
   return {
+    cob,
+    cotitular,
+    serv,
     arrendador: {
       razon_social: razonSocialArrendador,
       tipo_documento_label: tipoDocumentoLabel(arrendador?.tipo_documento || undefined),
@@ -527,6 +596,27 @@ async function buildContratoContext(
       cuenta_titular_nombre: arrendador?.cuenta_recaudo_titular_nombre || razonSocialArrendador,
       cuenta_titular_nit: arrendador?.cuenta_recaudo_titular_nit || arrendador?.numero_documento || '',
     },
+    // Namespace del contrato V4 (mapea el arrendador/perfil → "inmobiliaria").
+    // Campos que aún no existen en el modelo (matrícula expedida/fecha) salen
+    // vacíos hasta Fase 3.
+    inmobiliaria: {
+      razon_social: razonSocialArrendador,
+      nit: arrendador?.numero_documento || '',
+      matricula_arrendador: esInmobiliaria ? (arrendador?.matricula_arrendador || '') : '',
+      matricula_expedida_por: arrendador?.matricula_expedida_por || '',
+      matricula_fecha: arrendador?.matricula_fecha || '',
+      representante_legal: arrendador?.representante_legal || '',
+      direccion: arrendador?.domicilio_direccion || '',
+      correo: arrendador?.email_recaudo || '',
+      telefono: arrendador?.whatsapp_recaudo || '',
+      banco: arrendador?.cuenta_recaudo_banco || '',
+      tipo_cuenta: arrendador?.cuenta_recaudo_tipo || 'ahorros',
+      numero_cuenta: arrendador?.cuenta_recaudo_numero || '',
+      whatsapp_cartera: arrendador?.whatsapp_recaudo || '',
+      correo_cartera: arrendador?.email_recaudo || '',
+      comision_porcentaje: `${comisionPct}%`,
+      logo_url: esInmobiliaria ? (logoUrl || '') : '',
+    },
     arrendatario: {
       nombre_completo: `${solicitante.nombre} ${solicitante.apellido}`.trim(),
       numero_documento: solicitante.numero_documento || '',
@@ -534,6 +624,11 @@ async function buildContratoContext(
       ciudad: solicitante.ciudad || '',
       email: solicitante.email || '',
       celular: solicitante.telefono || '',
+      // Alias para el contrato V4.
+      cedula: solicitante.numero_documento || '',
+      correo: solicitante.email || '',
+      direccion_notificacion: solicitante.direccion || '',
+      municipio_notificacion: solicitante.ciudad || '',
     },
     coarrendatario: coarrendatario
       ? {
@@ -558,11 +653,17 @@ async function buildContratoContext(
             .filter(Boolean).join(', '),
       // Si está explícito en el inmueble, lo respetamos. Si es null, caemos
       // a la heurística: paga administración → propiedad horizontal.
-      es_propiedad_horizontal: inmueble.propiedad_horizontal !== null && inmueble.propiedad_horizontal !== undefined
-        ? Boolean(inmueble.propiedad_horizontal)
-        : Number(inmueble.administracion || 0) > 0,
+      es_propiedad_horizontal: esPH,
       tiene_parqueadero: Boolean(inmueble.parqueadero),
       tiene_cuarto_util: Boolean(inmueble.cuarto_util),
+      // Campos del contrato V4.
+      municipio: inmueble.ciudad,
+      matricula_inmobiliaria: inmueble.matricula_inmobiliaria || '',
+      canon_numero: formatearPesos(monto),
+      canon_letras: numeroALetras(monto).toUpperCase(),
+      propiedad_horizontal: esPH ? 'Sí' : 'No',
+      parqueadero: inmueble.parqueadero ? 'Sí' : 'No',
+      cuarto_util: inmueble.cuarto_util ? 'Sí' : 'No',
     },
     contrato: {
       fecha_dia: ahora.getDate(),
@@ -574,6 +675,20 @@ async function buildContratoContext(
       fecha_inicio_completa: fechaCompleta(fechaInicio),
       fecha_fin_completa: fechaCompleta(fechaFin),
       expediente_numero: expedienteNumero,
+      // Campos del contrato V4.
+      fecha_inicio: fechaCompleta(fechaInicio),
+      fecha_vencimiento: fechaCompleta(fechaFin),
+      dia_limite_pago: 5,
+      domicilio_contractual: arrendador?.domicilio_ciudad || arrendador?.ciudad || 'Caldas',
+      fecha_firma_dia: ahora.getDate(),
+      fecha_firma_mes: nombreMes(ahora),
+      fecha_firma_ano: ahora.getFullYear(),
+      modalidad: mod?.nombre || '',
+      comision_texto: mod?.comision_texto || '',
+      prima_texto: mod?.prima_texto || '',
+      // Resumen de cargo de servicios/PH (la tabla serv.* tiene el detalle).
+      servicios_publicos_cargo: '',
+      administracion_ph_cargo: '',
     },
     canon: {
       valor_numerico: formatearPesos(monto),
@@ -1247,6 +1362,16 @@ export async function getContratoById(id: string) {
 // Generar contrato
 // ============================================================
 
+/** Carga la modalidad de fianza (lookup) para alimentar comisión/prima/cobertura. */
+async function fetchModalidadFianza(codigo: string | null | undefined): Promise<ModalidadFianza | null> {
+  const { data } = await (supabase
+    .from('modalidades_fianza' as string) as ReturnType<typeof supabase.from>)
+    .select('codigo, nombre, comision_texto, prima_texto, cubre_canones, cubre_servicios, cubre_admin_ph, cubre_danos, cubre_penal')
+    .eq('codigo', codigo || 'plena')
+    .maybeSingle();
+  return (data as ModalidadFianza | null) ?? null;
+}
+
 /** Regex UUID v4 — para evitar que strings como 'system' rompan la FK a perfiles. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function uuidOrNull(v: string | null | undefined): string | null {
@@ -1308,7 +1433,34 @@ export async function generarContrato(
   }
 
   // 3. Construir contexto y renderizar HTML + PDF.
-  const context = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses);
+  // Fase 3: si el caller (modal) envía condiciones de fianza, se persisten en el
+  // expediente para que esta generación y futuras regeneraciones las usen.
+  const condicionesUpdate: Record<string, unknown> = {};
+  if (input.modalidad_fianza) condicionesUpdate.modalidad_fianza = input.modalidad_fianza;
+  if (input.servicios_reparto) condicionesUpdate.servicios_reparto = input.servicios_reparto;
+  if (input.cotitular) {
+    const c = input.cotitular;
+    condicionesUpdate.cotitular_nombre = c.nombre ?? null;
+    condicionesUpdate.cotitular_tipo_documento = c.tipo_documento ?? null;
+    condicionesUpdate.cotitular_documento = c.documento ?? null;
+    condicionesUpdate.cotitular_celular = c.celular ?? null;
+    condicionesUpdate.cotitular_correo = c.correo ?? null;
+    condicionesUpdate.cotitular_direccion = c.direccion ?? null;
+    condicionesUpdate.cotitular_municipio = c.municipio ?? null;
+  }
+  if (Object.keys(condicionesUpdate).length > 0) {
+    await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update(condicionesUpdate as never)
+      .eq('id', expedienteId);
+    Object.assign(expRecord, condicionesUpdate); // reflejar en el contexto de esta generación
+  }
+
+  const modalidad = await fetchModalidadFianza(expRecord.modalidad_fianza as string | null | undefined);
+  const context = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses, {
+    modalidad,
+    expediente: expRecord,
+  });
 
   // Permitir overrides explícitos desde input.variables (admin puede ajustar
   // un valor puntual antes de generar — hoy nadie llama así, pero el shape
@@ -1435,7 +1587,7 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
       id, nombre, apellido, rol, tipo_documento, numero_documento,
       razon_social, representante_legal,
       domicilio_direccion, domicilio_ciudad, ciudad,
-      matricula_arrendador, logo_storage_key, logo_url,
+      matricula_arrendador, matricula_expedida_por, matricula_fecha, logo_storage_key, logo_url,
       whatsapp_recaudo, email_recaudo,
       cuenta_recaudo_banco, cuenta_recaudo_tipo, cuenta_recaudo_numero,
       cuenta_recaudo_titular_nombre, cuenta_recaudo_titular_nit
@@ -1739,13 +1891,19 @@ export async function regenerarContrato(
   if (input.valor_arriendo && expData.inmueble) {
     expData.inmueble.valor_arriendo = input.valor_arriendo;
   }
-  const expedienteNumero = ((await (supabase
+  const { data: expRowRegen } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero')
+    .select('numero, modalidad_fianza, servicios_reparto, cotitular_nombre, cotitular_tipo_documento, cotitular_documento, cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio')
     .eq('id', row.expediente_id)
-    .single()).data as { numero?: string } | null)?.numero || row.expediente_id;
+    .single();
+  const expRecordRegen = (expRowRegen as Record<string, unknown> | null) ?? {};
+  const expedienteNumero = (expRecordRegen.numero as string | undefined) || row.expediente_id;
+  const modalidadRegen = await fetchModalidadFianza(expRecordRegen.modalidad_fianza as string | null | undefined);
 
-  const ctx = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses);
+  const ctx = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses, {
+    modalidad: modalidadRegen,
+    expediente: expRecordRegen,
+  });
   const finalVariables: Record<string, unknown> = { ...ctx, ...(input.variables ?? {}) };
 
   // 4b. Archive current version before regenerating (skip si NULL).
