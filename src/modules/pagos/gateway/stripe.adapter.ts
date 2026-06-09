@@ -21,6 +21,11 @@ export class StripeAdapter implements PaymentGatewayAdapter {
   private stripe: Stripe;
 
   constructor() {
+    if (!env.STRIPE_SECRET_KEY) {
+      throw new Error(
+        'STRIPE_SECRET_KEY no está configurado (requerido cuando PAYMENT_GATEWAY_PROVIDER=stripe)',
+      );
+    }
     this.stripe = new Stripe(env.STRIPE_SECRET_KEY, {
       apiVersion: '2026-02-25.clover',
     });
@@ -78,7 +83,16 @@ export class StripeAdapter implements PaymentGatewayAdapter {
   // Verify webhook signature
   // ----------------------------------------------------------
 
-  verifyWebhook(payload: Buffer, signature: string): WebhookVerifyResult {
+  verifyWebhook(
+    payload: Buffer,
+    headers: Record<string, string | string[] | undefined>,
+    _query?: Record<string, unknown>,
+  ): WebhookVerifyResult {
+    const rawSig = headers['stripe-signature'];
+    const signature = Array.isArray(rawSig) ? rawSig[0] : rawSig;
+    if (!signature) {
+      throw AppError.badRequest('Firma de webhook invalida', 'WEBHOOK_SIGNATURE_INVALID');
+    }
     try {
       const event = this.stripe.webhooks.constructEvent(
         payload,

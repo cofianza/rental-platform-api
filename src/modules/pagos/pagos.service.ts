@@ -567,12 +567,23 @@ const WEBHOOK_EVENT_MAP: Record<string, EstadoPago> = {
   'charge.refunded': 'reembolsado',
 };
 
-export async function processWebhookEvent(payload: Buffer, signature: string) {
+export async function processWebhookEvent(
+  payload: Buffer,
+  headers: Record<string, string | string[] | undefined>,
+  query?: Record<string, unknown>,
+) {
   // 1. Verify signature (throws 400 on invalid — this is the ONLY case we reject)
   const gateway = getPaymentGateway();
-  const { event, type, eventId } = gateway.verifyWebhook(payload, signature);
+  const { event, type, eventId } = gateway.verifyWebhook(payload, headers, query);
 
-  logger.info({ type, eventId }, 'Webhook event received');
+  logger.info({ provider: gateway.provider, type, eventId }, 'Webhook event received');
+
+  // Mercado Pago usa un modelo de webhook distinto a Stripe (el evento es solo un
+  // aviso con un payment id; el estado real se consulta y el cruce va por
+  // external_reference). Se maneja en su propia ruta.
+  if (gateway.provider === 'mercadopago') {
+    return processMercadoPagoWebhook(eventId, type, gateway);
+  }
 
   // 2. Check if this is an event type we handle
   const targetEstado = WEBHOOK_EVENT_MAP[type];
@@ -781,6 +792,123 @@ export async function dispatchPagoCompletado(pagoId: string): Promise<void> {
   } catch (err) {
     logger.error({ pagoId, err }, 'dispatchPagoCompletado: onPagoConfirmado falló — requiere intervención manual');
   }
+}
+
+// ============================================================
+// Mercado Pago webhook handler
+// El webhook de MP es solo un aviso (type=payment + data.id). Consultamos el
+// pago real, mapeamos su estado y cruzamos con NUESTRO registro vía
+// external_reference = "<concepto>:<expediente_id|compra_id>".
+// Siempre responde 200 (salvo firma inválida, que se rechaza antes en verifyWebhook).
+// ============================================================
+
+async function processMercadoPagoWebhook(
+  paymentId: string,
+  type: string,
+  gateway: ReturnType<typeof getPaymentGateway>,
+): Promise<{ received: true }> {
+  // Solo nos interesan notificaciones de pagos (MP también manda merchant_order, etc.).
+  if (type !== 'payment') {
+    logger.info({ type, paymentId }, 'MP webhook: tipo no manejado — ignorado');
+    return { received: true };
+  }
+
+  // 1. Consultar el pago real (el webhook no trae el estado).
+  let status;
+  try {
+    status = await gateway.getPaymentStatus(paymentId);
+  } catch (err) {
+    logger.error({ err, paymentId }, 'MP webhook: no se pudo consultar el pago — 200 para evitar reintentos infinitos');
+    return { received: true };
+  }
+
+  const externalReference = (status.rawResponse as { external_reference?: string | null }).external_reference ?? '';
+  const sep = externalReference.indexOf(':');
+  const concepto = sep >= 0 ? externalReference.slice(0, sep) : externalReference;
+  const refId = sep >= 0 ? externalReference.slice(sep + 1) : '';
+
+  // 2. Mapear estado normalizado del adapter → estado del pago (solo terminales).
+  const estadoMap: Record<string, EstadoPago | undefined> = {
+    completed: 'completado',
+    failed: 'fallido',
+    cancelled: 'cancelado',
+    refunded: 'reembolsado',
+  };
+  const targetEstado = estadoMap[status.status];
+  if (!targetEstado) {
+    logger.info({ paymentId, status: status.status }, 'MP webhook: estado no terminal — sin transición');
+    return { received: true };
+  }
+
+  // 3a. Compra de créditos de estudios (no usa la tabla pagos).
+  if (concepto === 'creditos_estudios') {
+    if (targetEstado !== 'completado') return { received: true };
+    try {
+      const { data: compra } = await (supabase
+        .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+        .select('stripe_session_id')
+        .eq('id', refId)
+        .single();
+      const sessionId = (compra as { stripe_session_id?: string } | null)?.stripe_session_id;
+      if (!sessionId) {
+        logger.warn({ refId, paymentId }, 'MP webhook: compra de créditos no encontrada');
+        return { received: true };
+      }
+      const { acreditarCompraDesdeWebhook } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+      await acreditarCompraDesdeWebhook(sessionId, paymentId, status.rawResponse);
+    } catch (err) {
+      logger.error({ err, refId, paymentId }, 'MP webhook: error acreditando compra de créditos');
+    }
+    return { received: true };
+  }
+
+  // 3b. Pago de estudio → tabla pagos, localizado por expediente_id (refId).
+  if (!refId) {
+    logger.warn({ paymentId, externalReference }, 'MP webhook: external_reference sin expediente — ignorado');
+    return { received: true };
+  }
+
+  const { data: pagoRow } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('expediente_id', refId)
+    .eq('metodo', 'pasarela')
+    .in('estado', ['pendiente', 'procesando', 'completado'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const pago = pagoRow as { id: string; estado: string } | null;
+  if (!pago) {
+    logger.warn({ expedienteId: refId, paymentId }, 'MP webhook: pago no encontrado');
+    return { received: true };
+  }
+
+  const estadoAntes = pago.estado;
+  if (estadoAntes === targetEstado) {
+    logger.info({ pagoId: pago.id, estado: targetEstado }, 'MP webhook: pago ya en estado objetivo — idempotent skip');
+    return { received: true };
+  }
+
+  try {
+    await transitionPagoState({
+      pagoId: pago.id,
+      targetEstado,
+      origen: 'webhook',
+      detalles: { provider: 'mercadopago', mp_payment_id: paymentId, transaction_ref: status.transactionRef },
+      extraUpdate: { transaction_ref: status.transactionRef, gateway_response: status.rawResponse },
+    });
+  } catch (err) {
+    logger.error({ err, pagoId: pago.id }, 'MP webhook: error en transición de estado');
+    return { received: true };
+  }
+
+  // 4. Dispatch al orquestador en la primera transición a completado.
+  if (targetEstado === 'completado' && estadoAntes !== 'completado') {
+    await dispatchPagoCompletado(pago.id);
+  }
+
+  return { received: true };
 }
 
 // ============================================================

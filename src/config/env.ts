@@ -30,11 +30,25 @@ const envSchema = z.object({
   // del .env real (ver Stage panel: Settings → Team).
   AUCO_SENDER_EMAIL: z.string().email().min(1),
 
-  // Payment gateway (Stripe)
-  PAYMENT_GATEWAY_PROVIDER: z.enum(['stripe']).default('stripe'),
-  STRIPE_SECRET_KEY: z.string().min(1),
-  STRIPE_PUBLISHABLE_KEY: z.string().min(1),
-  STRIPE_WEBHOOK_SECRET: z.string().min(1),
+  // Payment gateway — seleccionable. Stripe NO opera en Colombia (solo vía
+  // entidad US), así que producción CO usa Mercado Pago. Las llaves de cada
+  // proveedor son opcionales a nivel schema; el adapter activo valida las suyas
+  // al construirse (así un deploy con un solo proveedor no truena por el otro).
+  PAYMENT_GATEWAY_PROVIDER: z.enum(['stripe', 'mercadopago']).default('stripe'),
+  // URL pública del API (para el notification_url de los webhooks salientes,
+  // p.ej. el de Mercado Pago). Si no se setea, se configura en el panel de MP.
+  API_PUBLIC_URL: z.string().url().optional(),
+
+  // Stripe (solo test/dev en Colombia)
+  STRIPE_SECRET_KEY: z.string().default(''),
+  STRIPE_PUBLISHABLE_KEY: z.string().default(''),
+  STRIPE_WEBHOOK_SECRET: z.string().default(''),
+
+  // Mercado Pago (producción Colombia — Checkout Pro)
+  MERCADOPAGO_ACCESS_TOKEN: z.string().default(''),
+  MERCADOPAGO_PUBLIC_KEY: z.string().default(''),
+  // Secreto de firma del webhook (panel MP → Webhooks → clave secreta).
+  MERCADOPAGO_WEBHOOK_SECRET: z.string().default(''),
 
   // Credit risk providers
   CREDIT_PROVIDER_USE_MOCK: z.string().default('true').transform((v) => v === 'true'),

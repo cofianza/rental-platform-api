@@ -1,5 +1,6 @@
 import { env } from '@/config';
 import { StripeAdapter } from './stripe.adapter';
+import { MercadoPagoAdapter } from './mercadopago.adapter';
 import type { PaymentGatewayAdapter } from './types';
 
 export type { PaymentGatewayAdapter } from './types';
@@ -23,6 +24,9 @@ export function getPaymentGateway(): PaymentGatewayAdapter {
     switch (env.PAYMENT_GATEWAY_PROVIDER) {
       case 'stripe':
         _gateway = new StripeAdapter();
+        break;
+      case 'mercadopago':
+        _gateway = new MercadoPagoAdapter();
         break;
       default:
         throw new Error(`Payment gateway provider '${env.PAYMENT_GATEWAY_PROVIDER}' not supported`);

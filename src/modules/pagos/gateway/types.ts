@@ -71,8 +71,16 @@ export interface PaymentGatewayAdapter {
   /** Create a payment link / checkout session */
   createPaymentLink(params: CreatePaymentLinkParams): Promise<PaymentLinkResult>;
 
-  /** Verify webhook signature and parse event */
-  verifyWebhook(payload: Buffer, signature: string): WebhookVerifyResult;
+  /**
+   * Verify webhook signature and parse event.
+   * Recibe los headers (cada proveedor usa los suyos: Stripe `stripe-signature`;
+   * Mercado Pago `x-signature` + `x-request-id`) y el query (MP toma `data.id` de ahí).
+   */
+  verifyWebhook(
+    payload: Buffer,
+    headers: Record<string, string | string[] | undefined>,
+    query?: Record<string, unknown>,
+  ): WebhookVerifyResult;
 
   /** Query the current status of a payment by external ID */
   getPaymentStatus(externalId: string): Promise<PaymentStatus>;

@@ -141,16 +141,15 @@ export async function getGatewayStatus(_req: Request, res: Response) {
 // ============================================================
 
 export async function handleWebhook(req: Request, res: Response) {
-  const signature = req.headers['stripe-signature'] as string;
-
-  if (!signature) {
-    logger.warn({ ip: req.ip }, 'Webhook request without stripe-signature header');
-    res.status(400).json({ success: false, message: 'Missing signature' });
-    return;
-  }
-
+  // No se hardcodea el header: cada adapter lee el suyo (Stripe `stripe-signature`,
+  // Mercado Pago `x-signature` + `x-request-id`). verifyWebhook tira
+  // WEBHOOK_SIGNATURE_INVALID (→ 400) si falta o no valida.
   try {
-    const result = await pagosService.processWebhookEvent(req.body, signature);
+    const result = await pagosService.processWebhookEvent(
+      req.body as Buffer,
+      req.headers,
+      req.query as Record<string, unknown>,
+    );
     sendSuccess(res, result);
   } catch (error) {
     // Signature validation errors → 400 (reject invalid requests)
