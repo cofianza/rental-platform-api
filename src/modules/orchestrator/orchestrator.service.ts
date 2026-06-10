@@ -23,47 +23,63 @@ export async function onHabeasDataAutorizado(params: {
   logger.info({ expedienteId, solicitanteId }, 'Orchestrator: habeas data autorizado, iniciando estudio automatico');
 
   try {
-    // 1. Buscar estudio pendiente del expediente
-    const { data: estudio } = await db('estudios')
-      .select('id, estado, proveedor, expediente_id')
+    // 1. Buscar estudio pendiente del expediente (con error leído: un fallo de
+    //    BD aquí no debe confundirse con "no hay estudio")
+    const { data: estudio, error: estudioError } = await db('estudios')
+      .select('id, estado, proveedor, expediente_id, datos_formulario')
       .eq('expediente_id', expedienteId)
       .in('estado', ['solicitado', 'formulario_completado', 'formulario_enviado', 'documentos_cargados'])
       .order('created_at', { ascending: false })
       .limit(1)
-      .single() as { data: Record<string, unknown> | null };
+      .maybeSingle() as { data: Record<string, unknown> | null; error: { message: string } | null };
 
+    if (estudioError) {
+      throw new Error(`Error consultando estudio pendiente: ${estudioError.message}`);
+    }
     if (!estudio) {
       logger.warn({ expedienteId }, 'Orchestrator: no se encontro estudio pendiente');
       return;
     }
 
     // 2. Obtener datos del solicitante
-    const { data: solicitante } = await db('solicitantes')
+    const { data: solicitante, error: solicitanteError } = await db('solicitantes')
       .select('nombre, apellido, tipo_documento, numero_documento, email, telefono')
       .eq('id', solicitanteId)
-      .single() as { data: Record<string, unknown> | null };
+      .maybeSingle() as { data: Record<string, unknown> | null; error: { message: string } | null };
 
+    if (solicitanteError) {
+      throw new Error(`Error consultando solicitante: ${solicitanteError.message}`);
+    }
     if (!solicitante) {
       logger.warn({ solicitanteId }, 'Orchestrator: solicitante no encontrado');
       return;
     }
 
-    // 3. Actualizar estudio con datos del formulario
-    await db('estudios')
+    // 3. Actualizar estudio. MERGE de datos_formulario donde lo existente GANA:
+    //    si el solicitante ya envió el formulario self-service (posiblemente
+    //    con una cédula corregida o con ingresos/ocupación), esos datos no se
+    //    pisan con el snapshot de la tabla solicitantes.
+    const datosBase = {
+      nombre_completo: `${solicitante.nombre} ${solicitante.apellido}`,
+      tipo_documento: solicitante.tipo_documento,
+      numero_documento: solicitante.numero_documento,
+      email: solicitante.email,
+      telefono: solicitante.telefono || '',
+      acepta_terminos: true,
+    };
+    const datosExistentes = (estudio.datos_formulario as Record<string, unknown> | null) ?? {};
+    const { error: updateError } = await db('estudios')
       .update({
-        datos_formulario: {
-          nombre_completo: `${solicitante.nombre} ${solicitante.apellido}`,
-          tipo_documento: solicitante.tipo_documento,
-          numero_documento: solicitante.numero_documento,
-          email: solicitante.email,
-          telefono: solicitante.telefono || '',
-          acepta_terminos: true,
-        },
+        datos_formulario: { ...datosBase, ...datosExistentes },
         estado: 'formulario_completado',
         autorizacion_habeas_data_id: autorizacionId,
         updated_at: new Date().toISOString(),
       } as never)
       .eq('id', estudio.id);
+
+    if (updateError) {
+      throw new Error(`Error preparando el estudio para ejecución: ${(updateError as { message?: string }).message}`);
+    }
 
     // 4. Ejecutar estudio via provider
     const { ejecutarEstudio, consultarEstadoProveedor } = await import('@/modules/estudios/estudios.service');
@@ -81,13 +97,25 @@ export async function onHabeasDataAutorizado(params: {
       }
     } catch (providerError) {
       // Si TransUnion no esta configurado o falla, el estudio queda como 'fallido'
-      // pero el flujo no se bloquea
+      // pero el flujo no se bloquea. Dejar rastro VISIBLE en el expediente: sin
+      // esto, el equipo no se entera de que el inicio automático falló.
       logger.warn({ error: providerError, estudioId: estudio.id }, 'Orchestrator: provider no disponible, estudio requiere atencion manual');
+      await registrarTimeline(
+        expedienteId,
+        'estudio',
+        'Falló el inicio automático del estudio tras la autorización — requiere atención (el solicitante puede reintentar desde su panel)',
+      ).catch(() => {});
     }
 
     logger.info({ estudioId: estudio.id, expedienteId }, 'Orchestrator: flujo automatico de estudio ejecutado');
   } catch (error) {
+    // Error duro (BD caída, update fallido): rastro visible en el expediente.
     logger.error({ error, expedienteId }, 'Orchestrator: error en onHabeasDataAutorizado');
+    await registrarTimeline(
+      expedienteId,
+      'estudio',
+      'Falló el inicio automático del estudio tras la autorización — iniciar manualmente o pedir al solicitante reintentar',
+    ).catch(() => {});
   }
 }
 

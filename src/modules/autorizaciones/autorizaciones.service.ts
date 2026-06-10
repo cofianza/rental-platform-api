@@ -385,7 +385,13 @@ export async function firmarAutorizacion(
   const auth = autorizacion as unknown as AutorizacionRow & { expediente_id?: string };
 
   if (auth.estado !== 'pendiente') {
-    throw AppError.badRequest('Esta autorizacion ya fue procesada', 'AUTORIZACION_ESTADO_INVALIDO');
+    // Diferenciar: 'autorizado' = ya firmada (el front puede mostrar éxito
+    // idempotente); expirado/revocado = el enlace ya NO sirve — mostrar éxito
+    // aquí haría creer al solicitante que terminó cuando nada va a correr.
+    if (auth.estado === 'autorizado') {
+      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+    }
+    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   if (new Date(auth.token_expiracion) < new Date()) {
@@ -531,7 +537,13 @@ export async function enviarOtpCode(token: string) {
   };
 
   if (auth.estado !== 'pendiente') {
-    throw AppError.badRequest('Esta autorizacion ya fue procesada', 'AUTORIZACION_ESTADO_INVALIDO');
+    // Diferenciar: 'autorizado' = ya firmada (el front puede mostrar éxito
+    // idempotente); expirado/revocado = el enlace ya NO sirve — mostrar éxito
+    // aquí haría creer al solicitante que terminó cuando nada va a correr.
+    if (auth.estado === 'autorizado') {
+      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+    }
+    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   if (new Date(auth.token_expiracion) < new Date()) {
@@ -666,7 +678,13 @@ export async function verificarOtpCode(token: string, codigo: string) {
   const auth = autorizacion as unknown as { id: string; estado: string; token_expiracion: string };
 
   if (auth.estado !== 'pendiente') {
-    throw AppError.badRequest('Esta autorizacion ya fue procesada', 'AUTORIZACION_ESTADO_INVALIDO');
+    // Diferenciar: 'autorizado' = ya firmada (el front puede mostrar éxito
+    // idempotente); expirado/revocado = el enlace ya NO sirve — mostrar éxito
+    // aquí haría creer al solicitante que terminó cuando nada va a correr.
+    if (auth.estado === 'autorizado') {
+      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+    }
+    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   // 2. Find matching OTP (not expired, not verified)
