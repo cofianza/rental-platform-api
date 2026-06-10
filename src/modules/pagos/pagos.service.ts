@@ -911,6 +911,19 @@ async function processMercadoPagoWebhook(
   return { received: true };
 }
 
+/**
+ * Reconciliación: confirma un pago consultándolo directo en la pasarela, SIN
+ * depender de que llegue el webhook. La usa la página pública de resultado tras
+ * el retorno del comprador (MP redirige con el payment_id). Así el pago se
+ * confirma aunque el webhook nunca llegue (red de seguridad). Reusa la lógica
+ * del webhook, que es idempotente (si ya está completado, no hace nada).
+ */
+export async function reconcileMercadoPagoPayment(paymentId: string): Promise<void> {
+  const gateway = getPaymentGateway();
+  if (gateway.provider !== 'mercadopago') return;
+  await processMercadoPagoWebhook(paymentId, 'payment', gateway);
+}
+
 // ============================================================
 // Gateway config (public key)
 // ============================================================

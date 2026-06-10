@@ -14,6 +14,12 @@ export const enviarLinkSchema = z.object({
   telefono: z.string().max(20).optional(),
 });
 
+// Reconciliación pública: el payment_id que la pasarela pone en la URL de retorno.
+export const reconciliarSchema = z.object({
+  payment_id: z.string().min(1, 'payment_id es requerido').max(64),
+});
+
 export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type PagoIdParams = z.infer<typeof pagoIdParamsSchema>;
 export type EnviarLinkInput = z.infer<typeof enviarLinkSchema>;
+export type ReconciliarInput = z.infer<typeof reconciliarSchema>;

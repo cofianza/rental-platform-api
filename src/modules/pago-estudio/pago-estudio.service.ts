@@ -447,3 +447,15 @@ export async function getResultadoPagoPublico(pagoId: string) {
     expediente_numero: (exp as { numero: string } | null)?.numero || null,
   };
 }
+
+/**
+ * Reconciliación pública: tras volver del checkout, confirma el pago consultando
+ * la pasarela con el payment_id (la pasarela lo pone en la URL de retorno). Es la
+ * red de seguridad por si el webhook no llega — reusa la lógica del webhook, que
+ * es idempotente. Import dinámico para evitar ciclos con pagos.service.
+ */
+export async function reconciliarPagoEstudio(paymentId: string): Promise<{ reconciliado: boolean }> {
+  const { reconcileMercadoPagoPayment } = await import('@/modules/pagos/pagos.service');
+  await reconcileMercadoPagoPayment(paymentId);
+  return { reconciliado: true };
+}

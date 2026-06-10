@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as pagoEstudioService from './pago-estudio.service';
-import type { ExpedienteIdParams, EnviarLinkInput, PagoIdParams } from './pago-estudio.schema';
+import type { ExpedienteIdParams, EnviarLinkInput, PagoIdParams, ReconciliarInput } from './pago-estudio.schema';
 
 // GET /expedientes/:expedienteId/pago-estudio/estado
 export async function getEstado(req: Request, res: Response) {
@@ -43,5 +43,14 @@ export async function cancelarYAsumir(req: Request, res: Response) {
 export async function resultadoPublico(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
   const result = await pagoEstudioService.getResultadoPagoPublico(pagoId);
+  sendSuccess(res, result);
+}
+
+// POST /publico/pago-resultado/reconciliar  — confirma el pago consultando la
+// pasarela con el payment_id que MP pone en la URL de retorno (red de seguridad
+// por si el webhook no llega). Público: el comprador puede no estar logueado.
+export async function reconciliarPublico(req: Request, res: Response) {
+  const { payment_id } = req.body as ReconciliarInput;
+  const result = await pagoEstudioService.reconciliarPagoEstudio(payment_id);
   sendSuccess(res, result);
 }

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, authorize } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { expedienteIdParamsSchema, enviarLinkSchema, pagoIdParamsSchema } from './pago-estudio.schema';
+import { expedienteIdParamsSchema, enviarLinkSchema, pagoIdParamsSchema, reconciliarSchema } from './pago-estudio.schema';
 import * as controller from './pago-estudio.controller';
 
 // ============================================================
@@ -51,6 +51,12 @@ pagoEstudioRouter.post(
 // ============================================================
 
 const publicPagoResultadoRouter = Router();
+
+publicPagoResultadoRouter.post(
+  '/reconciliar',
+  validate({ body: reconciliarSchema }),
+  controller.reconciliarPublico,
+);
 
 publicPagoResultadoRouter.get(
   '/:pagoId',
