@@ -20,10 +20,15 @@ export type EstadoPago = 'pendiente' | 'procesando' | 'completado' | 'fallido' |
 
 /** Map of current state → allowed target states */
 const VALID_TRANSITIONS: Record<EstadoPago, EstadoPago[]> = {
-  pendiente: ['procesando', 'completado', 'cancelado'],
-  procesando: ['completado', 'fallido'],
+  // 'fallido' directo: un PSE rechazado puede llegar sin pasar por 'procesando'.
+  pendiente: ['procesando', 'completado', 'cancelado', 'fallido'],
+  // 'cancelado': un PSE/efectivo abandonado (procesando) debe poder cancelarse —
+  // sin esto el expediente quedaba bloqueado para siempre (ni asumir ni nuevo link).
+  procesando: ['completado', 'fallido', 'cancelado'],
   completado: ['reembolsado'],
-  fallido: ['pendiente'], // retry
+  // 'completado': MP permite reintentar dentro del mismo checkout — un intento
+  // rechazado (fallido) seguido de uno aprobado debe poder completar el pago.
+  fallido: ['pendiente', 'completado'],
   cancelado: [],          // final state
   reembolsado: [],        // final state
 };

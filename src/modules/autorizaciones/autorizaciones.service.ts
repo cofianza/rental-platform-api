@@ -470,8 +470,19 @@ export async function firmarAutorizacion(
   }
 
   if (!updatedRows || (updatedRows as unknown[]).length === 0) {
-    // Otra request ya la firmó/procesó entre la lectura y el UPDATE.
-    throw AppError.badRequest('Esta autorizacion ya fue procesada', 'AUTORIZACION_ESTADO_INVALIDO');
+    // Otra request la procesó entre la lectura y el UPDATE. Releer para
+    // diferenciar: 'autorizado' = doble submit (éxito idempotente en el front);
+    // expirado/revocado (reenvío que invalidó este enlace) = NO mostrar éxito.
+    const { data: actual } = await (supabase
+      .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+      .select('estado')
+      .eq('id', auth.id)
+      .maybeSingle();
+    const estadoActual = (actual as { estado?: string } | null)?.estado;
+    if (estadoActual === 'autorizado') {
+      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+    }
+    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   // 5. Audit

@@ -6,7 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { sendPaymentLinkEmail } from '@/lib/email';
 import { getPaymentGateway } from './gateway';
-import { transitionPagoState, transitionPagoStateChecked } from './pago-state-machine';
+import { transitionPagoState, transitionPagoStateChecked, isValidTransition } from './pago-state-machine';
 import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
@@ -290,8 +290,9 @@ export async function createPaymentLink(
     throw gatewayError;
   }
 
-  // 5b. Persistir el link en la fila. Si esto falla, el link quedaría
-  // imposible de mostrar/casar — cancelamos ambos lados y avisamos.
+  // 5b. Persistir el link en la fila — CAS sobre 'pendiente': si el pago fue
+  // cancelado concurrentemente mientras creábamos el checkout, NO adjuntamos un
+  // link pagable a un pago cancelado (expiramos la preference y abortamos).
   const { data: pago, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .update({
@@ -299,11 +300,12 @@ export async function createPaymentLink(
       external_id: linkResult.externalId,
     } as never)
     .eq('id', pagoId)
+    .eq('estado', 'pendiente')
     .select(PAGO_SELECT)
-    .single();
+    .maybeSingle();
 
-  if (error || !pago) {
-    logger.error({ error: error?.message, pagoId }, 'Error al guardar el link en el pago — se revierte');
+  if (error) {
+    logger.error({ error: error.message, pagoId }, 'Error al guardar el link en el pago — se revierte');
     await (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
       .delete()
@@ -313,7 +315,18 @@ export async function createPaymentLink(
         logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras revertir'),
       );
     }
-    throw error ? fromSupabaseError(error) : AppError.badRequest('Error al crear el pago', 'PAGO_CREATE_ERROR');
+    throw fromSupabaseError(error);
+  }
+
+  if (!pago) {
+    // 0 filas: cancelación concurrente. La fila es historial (ya 'cancelado') —
+    // no se borra; el link recién creado se invalida para que no sea pagable.
+    if (gateway.cancelPaymentLink) {
+      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
+        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras cancelación concurrente'),
+      );
+    }
+    throw AppError.conflict('El pago fue cancelado mientras se creaba el link', 'PAGO_CANCELADO_CONCURRENTE');
   }
 
   // 6. Record event
@@ -933,13 +946,13 @@ async function processMercadoPagoWebhook(
     return { received: true };
   }
 
-  type PagoLookup = { id: string; estado: string; monto: number | string | null; expediente_id: string | null };
+  type PagoLookup = { id: string; estado: string; monto: number | string | null; expediente_id: string | null; transaction_ref: string | null };
   let pago: PagoLookup | null = null;
 
   if (pagoIdRef) {
     const { data } = await (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
-      .select('id, estado, monto, expediente_id')
+      .select('id, estado, monto, expediente_id, transaction_ref')
       .eq('id', pagoIdRef)
       .maybeSingle();
     pago = data as PagoLookup | null;
@@ -954,7 +967,7 @@ async function processMercadoPagoWebhook(
     // Legacy: preferences emitidas antes de codificar pago_id en la referencia.
     const { data: pagoRow } = await (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
-      .select('id, estado, monto, expediente_id')
+      .select('id, estado, monto, expediente_id, transaction_ref')
       .eq('expediente_id', refId)
       .eq('concepto', concepto)
       .eq('metodo', 'pasarela')
@@ -1012,7 +1025,36 @@ async function processMercadoPagoWebhook(
   }
 
   if (pago.estado === targetEstado) {
+    // Doble cobro: un SEGUNDO payment aprobado sobre un pago ya completado
+    // (reintento del comprador) no debe desaparecer en el skip — se registra
+    // para reembolso manual. El upsert idempotente absorbe los retries del
+    // MISMO payment sin duplicar.
+    if (
+      targetEstado === 'completado'
+      && status.transactionRef
+      && pago.transaction_ref
+      && status.transactionRef !== pago.transaction_ref
+    ) {
+      logger.error(
+        { pagoId: pago.id, paymentId, previo: pago.transaction_ref },
+        'MP webhook: pago duplicado (segundo payment aprobado sobre pago completado) — registrado para reembolso',
+      );
+      await registrarPagoNoConciliado(paymentId, externalReference, status, 'pago_duplicado');
+      return { received: true };
+    }
     logger.info({ pagoId: pago.id, estado: targetEstado }, 'MP webhook: pago ya en estado objetivo — idempotent skip');
+    return { received: true };
+  }
+
+  // Pre-check: dinero aprobado sobre un pago en estado sin camino a 'completado'
+  // (cancelado/reembolsado) NO debe perderse en un error de transición — queda
+  // registrado para conciliación/reembolso manual.
+  if (targetEstado === 'completado' && !isValidTransition(pago.estado as EstadoPago, 'completado')) {
+    logger.error(
+      { pagoId: pago.id, paymentId, estadoActual: pago.estado },
+      'MP webhook: payment aprobado sobre pago no completable — registrado para conciliación',
+    );
+    await registrarPagoNoConciliado(paymentId, externalReference, status, 'transicion_invalida');
     return { received: true };
   }
 
@@ -1030,6 +1072,11 @@ async function processMercadoPagoWebhook(
     transitioned = result.transitioned;
   } catch (err) {
     logger.error({ err, pagoId: pago.id }, 'MP webhook: error en transición de estado');
+    // Backstop: si era dinero aprobado (carrera TOCTOU, índice único, etc.),
+    // que no se pierda sin rastro.
+    if (status.status === 'completed') {
+      await registrarPagoNoConciliado(paymentId, externalReference, status, 'transicion_fallida');
+    }
     return { received: true };
   }
 
@@ -1087,11 +1134,14 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
   const desde = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const hasta = new Date(Date.now() - 15 * 60 * 1000).toISOString(); // deja respirar a los recién creados
 
+  // Incluye 'fallido': MP permite reintentar en el mismo checkout — si el
+  // reintento fue APROBADO y su webhook se perdió, el job lo rescata
+  // (fallido→completado es transición válida).
   const { data, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select('id, expediente_id, concepto, estado, transaction_ref, created_at')
     .eq('metodo', 'pasarela')
-    .in('estado', ['pendiente', 'procesando'])
+    .in('estado', ['pendiente', 'procesando', 'fallido'])
     .gte('created_at', desde)
     .lte('created_at', hasta)
     .limit(50);
@@ -1108,18 +1158,25 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
   let conciliados = 0;
   for (const p of pendientes) {
     try {
-      if (p.transaction_ref) {
-        // Ya conocemos el payment de MP (quedó de un webhook 'pending').
+      // SIEMPRE buscar por referencia (no solo el transaction_ref guardado): un
+      // checkout de MP admite varios intentos — el transaction_ref puede ser de
+      // un intento rechazado mientras un reintento posterior fue APROBADO.
+      const ref = `${p.concepto}:${p.expediente_id}:${p.id}`;
+      let found = await gateway.searchPaymentsByReference(ref);
+      if (found.length === 0) {
+        // Legacy: preferences sin pago_id en la referencia.
+        found = await gateway.searchPaymentsByReference(`${p.concepto}:${p.expediente_id}`);
+      }
+      if (found.length === 0 && p.transaction_ref) {
+        // Fallback: consultar el payment conocido (quedó de un webhook 'pending').
         await processMercadoPagoWebhook(p.transaction_ref, 'payment', gateway);
       } else {
-        // Nunca llegó webhook: buscar payments por nuestra referencia.
-        const ref = `${p.concepto}:${p.expediente_id}:${p.id}`;
-        let found = await gateway.searchPaymentsByReference(ref);
-        if (found.length === 0) {
-          // Legacy: preferences sin pago_id en la referencia.
-          found = await gateway.searchPaymentsByReference(`${p.concepto}:${p.expediente_id}`);
-        }
-        for (const payment of found) {
+        // Procesar primero los aprobados: así el pago llega a 'completado' antes
+        // de que un intento rechazado lo mande a 'fallido'.
+        const ordenados = [...found].sort((a, b) =>
+          (a.status === 'completed' ? -1 : 0) - (b.status === 'completed' ? -1 : 0),
+        );
+        for (const payment of ordenados) {
           if (payment.transactionRef) {
             await processMercadoPagoWebhook(payment.transactionRef, 'payment', gateway);
           }

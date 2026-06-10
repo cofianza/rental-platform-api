@@ -329,6 +329,9 @@ export async function enviarLinkPago(
     throw gatewayError;
   }
 
+  // CAS sobre 'pendiente': si el pago fue cancelado concurrentemente (p. ej.
+  // cancelar-y-asumir mientras se creaba el checkout), no se adjunta un link
+  // pagable a un pago cancelado — se expira la preference y se aborta.
   const { data: pago, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .update({
@@ -336,11 +339,12 @@ export async function enviarLinkPago(
       external_id: linkResult.externalId,
     } as never)
     .eq('id', pagoId)
+    .eq('estado', 'pendiente')
     .select(PAGO_SELECT)
-    .single();
+    .maybeSingle();
 
-  if (error || !pago) {
-    logger.error({ error: error?.message, pagoId }, 'Error guardando el link del estudio — se revierte');
+  if (error) {
+    logger.error({ error: error.message, pagoId }, 'Error guardando el link del estudio — se revierte');
     await (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
       .delete()
@@ -350,7 +354,16 @@ export async function enviarLinkPago(
         logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras revertir'),
       );
     }
-    throw error ? fromSupabaseError(error) : AppError.badRequest('Error al crear el pago del estudio', 'PAGO_CREATE_ERROR');
+    throw fromSupabaseError(error);
+  }
+
+  if (!pago) {
+    if (gateway.cancelPaymentLink) {
+      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
+        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras cancelación concurrente'),
+      );
+    }
+    throw AppError.conflict('El pago fue cancelado mientras se creaba el link', 'PAGO_CANCELADO_CONCURRENTE');
   }
 
   // Record events
@@ -471,8 +484,10 @@ export async function reenviarLink(expedienteId: string, userId: string, ip?: st
 export async function cancelarYAsumir(expedienteId: string, userId: string, ip?: string) {
   const pago = await findPagoEstudio(expedienteId);
   if (!pago) throw AppError.notFound('No existe un pago de estudio pendiente');
-  if ((pago.estado as string) !== 'pendiente') {
-    throw AppError.badRequest('Solo se puede cancelar un pago en estado pendiente', 'PAGO_NO_CANCELABLE');
+  // 'procesando' también es cancelable: un PSE abandonado deja el pago ahí y la
+  // inmobiliaria debe poder desbloquear el expediente sin esperar a MP.
+  if (!['pendiente', 'procesando'].includes(pago.estado as string)) {
+    throw AppError.badRequest('Solo se puede cancelar un pago en estado pendiente o en proceso', 'PAGO_NO_CANCELABLE');
   }
 
   // Cancel existing via state machine + expirar el link en la pasarela

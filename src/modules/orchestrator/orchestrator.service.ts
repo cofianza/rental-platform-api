@@ -68,9 +68,23 @@ export async function onHabeasDataAutorizado(params: {
       acepta_terminos: true,
     };
     const datosExistentes = (estudio.datos_formulario as Record<string, unknown> | null) ?? {};
+    // Merge: lo que el solicitante envió gana, pero los valores VACÍOS no pisan
+    // (un '' guardado bloquearía para siempre el dato bueno del snapshot), y el
+    // documento SIEMPRE viene de `solicitantes` (es el system-of-record: se
+    // sincroniza tras cada ejecución y al corregirlo con validación).
+    const limpios = Object.fromEntries(
+      Object.entries(datosExistentes).filter(([, v]) => v !== null && v !== undefined && v !== ''),
+    );
+    const datosMerged = {
+      ...datosBase,
+      ...limpios,
+      tipo_documento: datosBase.tipo_documento,
+      numero_documento: datosBase.numero_documento,
+      acepta_terminos: true,
+    };
     const { error: updateError } = await db('estudios')
       .update({
-        datos_formulario: { ...datosBase, ...datosExistentes },
+        datos_formulario: datosMerged,
         estado: 'formulario_completado',
         autorizacion_habeas_data_id: autorizacionId,
         updated_at: new Date().toISOString(),
@@ -81,20 +95,17 @@ export async function onHabeasDataAutorizado(params: {
       throw new Error(`Error preparando el estudio para ejecución: ${(updateError as { message?: string }).message}`);
     }
 
-    // 4. Ejecutar estudio via provider
-    const { ejecutarEstudio, consultarEstadoProveedor } = await import('@/modules/estudios/estudios.service');
+    // 4. Ejecutar estudio via provider. ejecutarEstudio dispara el proceso en
+    //    background y retorna de inmediato — NO consultamos el estado aquí:
+    //    la consulta inmediata siempre fallaba con SIN_REFERENCIA_PROVEEDOR
+    //    (la referencia aún no se persiste) y generaba una falsa alarma de
+    //    "falló el inicio" en el timeline en CADA arranque exitoso. El
+    //    resultado llega solo vía registrarResultadoInline + onEstudioCompletado.
+    const { ejecutarEstudio } = await import('@/modules/estudios/estudios.service');
 
     try {
       await ejecutarEstudio(estudio.id as string, solicitanteId);
-
-      // 5. Para providers sincronos (TransUnion), consultar resultado inmediato
-      const estadoResult = await consultarEstadoProveedor(estudio.id as string);
-      const est = estadoResult.estudio;
-
-      if (est?.estado === 'completado' && est?.resultado) {
-        // El hook post-estudio en estudios.service.ts ya dispara onEstudioCompletado
-        logger.info({ estudioId: estudio.id, resultado: est.resultado }, 'Orchestrator: estudio completado sincronamente');
-      }
+      logger.info({ estudioId: estudio.id }, 'Orchestrator: estudio disparado en background');
     } catch (providerError) {
       // Si TransUnion no esta configurado o falla, el estudio queda como 'fallido'
       // pero el flujo no se bloquea. Dejar rastro VISIBLE en el expediente: sin
