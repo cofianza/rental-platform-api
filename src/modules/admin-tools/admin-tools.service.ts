@@ -22,7 +22,8 @@ export interface WipeTestDataResult {
 }
 
 /**
- * Limpia los datos transaccionales y las cuentas no-administrador.
+ * Limpia los datos transaccionales de prueba. Desde 2026-06-10 CONSERVA
+ * todas las cuentas, de cualquier rol (ver migracion 20260610000002).
  * Solo callable por administradores (gateado en la ruta) y exige una
  * frase de confirmacion en el body para evitar disparos accidentales.
  */
