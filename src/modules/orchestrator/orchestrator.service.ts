@@ -27,7 +27,7 @@ export async function onHabeasDataAutorizado(params: {
     const { data: estudio } = await db('estudios')
       .select('id, estado, proveedor, expediente_id')
       .eq('expediente_id', expedienteId)
-      .in('estado', ['solicitado', 'formulario_completado', 'documentos_cargados'])
+      .in('estado', ['solicitado', 'formulario_completado', 'formulario_enviado', 'documentos_cargados'])
       .order('created_at', { ascending: false })
       .limit(1)
       .single() as { data: Record<string, unknown> | null };

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
-import { authMiddleware, authorize } from '@/middleware/auth';
+import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import {
   publicFormLimiter,
   otpSendByTokenLimiter,
@@ -32,9 +32,12 @@ expedienteAutorizacionRouter.get(
 );
 
 // POST /expedientes/:expedienteId/autorizacion-riesgo/enviar-enlace
+// roleGuard (no authorize('expedientes','update')): el propietario gestiona el
+// estudio de su candidato y su UI ofrece "Enviar/Reenviar enlace", pero darle
+// expedientes:update abriría una docena de rutas que no le corresponden.
 expedienteAutorizacionRouter.post(
   '/enviar-enlace',
-  authorize('expedientes', 'update'),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
   validate({ params: expedienteIdParamsSchema }),
   autorizacionesController.enviarEnlace,
 );
