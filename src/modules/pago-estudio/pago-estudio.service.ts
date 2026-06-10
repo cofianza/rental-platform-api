@@ -6,6 +6,7 @@
  * - Option 2: Send payment link to tenant via email
  */
 
+import crypto from 'node:crypto';
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -126,6 +127,24 @@ export async function getEstadoPagoEstudio(expedienteId: string) {
   };
 }
 
+/**
+ * Expira el link en la pasarela (best-effort, fire-and-forget): un pago
+ * cancelado en BD no debe seguir siendo pagable desde el email del arrendatario.
+ */
+function invalidarLinkPasarela(pago: { external_id?: string | null; metodo?: string | null }): void {
+  if (pago.metodo !== 'pasarela' || !pago.external_id) return;
+  const gateway = getPaymentGateway();
+  if (!gateway.cancelPaymentLink) return;
+  gateway
+    .cancelPaymentLink(pago.external_id)
+    .catch((err) =>
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err), externalId: pago.external_id },
+        'No se pudo expirar el link en la pasarela (el pago en BD ya quedó cancelado)',
+      ),
+    );
+}
+
 // ============================================================
 // Inmobiliaria asume el costo — POST /asumir
 // ============================================================
@@ -135,6 +154,21 @@ export async function asumirCosto(expedienteId: string, userId: string, ip?: str
   const existing = await findPagoEstudio(expedienteId);
   if (existing && (existing.estado as string) === 'completado') {
     throw AppError.conflict('Ya existe un pago de estudio completado para este expediente', 'PAGO_ESTUDIO_YA_COMPLETADO');
+  }
+
+  // Si hay un link de pago vivo, cancelarlo primero (BD + preference en la
+  // pasarela): sin esto coexistirían dos pagos y el arrendatario podría pagar
+  // el link viejo del email — dinero capturado sin pago casable.
+  if (existing && ['pendiente', 'procesando'].includes(existing.estado as string)) {
+    await transitionPagoState({
+      pagoId: existing.id as string,
+      targetEstado: 'cancelado',
+      origen: 'manual',
+      detalles: { cancelado_por: userId, motivo: 'inmobiliaria_asume_costo' },
+      userId,
+      ip,
+    });
+    invalidarLinkPasarela(existing as { external_id?: string | null; metodo?: string | null });
   }
 
   const exp = await getExpedienteWithInmueble(expedienteId);
@@ -156,6 +190,9 @@ export async function asumirCosto(expedienteId: string, userId: string, ip?: str
     .single();
 
   if (error) {
+    if (error.code === '23505') {
+      throw AppError.conflict('Ya existe un pago de estudio activo para este expediente', 'PAGO_ESTUDIO_PENDIENTE');
+    }
     logger.error({ error: error.message }, 'Error registering inmobiliaria-assumed estudio payment');
     throw fromSupabaseError(error);
   }
@@ -233,47 +270,87 @@ export async function enviarLinkPago(
   const monto = await getMontoEstudio();
   const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || `Exp. ${exp.numero}`}`;
 
-  // Build success/cancel URLs
+  // Build success/cancel/pending URLs (pending: PSE/efectivo no es éxito todavía)
   const successUrl = `${env.FRONTEND_URL}/pago/resultado?status=success&expediente=${expedienteId}`;
   const cancelUrl = `${env.FRONTEND_URL}/pago/resultado?status=cancelled&expediente=${expedienteId}`;
+  const pendingUrl = `${env.FRONTEND_URL}/pago/resultado?status=pending&expediente=${expedienteId}`;
 
-  // Create Stripe checkout session
+  // Insert pago ANTES de crear el checkout, con id pre-generado: la preference
+  // lleva el pago_id en external_reference y el webhook casa el pago EXACTO.
+  // El índice único uq_pagos_estudio_activo convierte la carrera de doble click
+  // en un 23505 limpio en lugar de dos links vivos.
   const gateway = getPaymentGateway();
-  const linkResult = await gateway.createPaymentLink({
-    amount: monto,
-    concept: conceptLabel,
-    description: `Pago de estudio de arrendamiento para ${input.nombre_pagador}`,
-    metadata: {
-      expediente_id: expedienteId,
-      concepto: 'estudio',
-      email_pagador: input.email_pagador,
-    },
-    successUrl,
-    cancelUrl,
-  });
-
-  // Insert pago record
-  const { data: pago, error } = await (supabase
+  const pagoId = crypto.randomUUID();
+  const { error: insertError } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .insert({
+      id: pagoId,
       expediente_id: expedienteId,
       concepto: 'estudio',
       descripcion: conceptLabel,
       monto,
       metodo: 'pasarela',
       estado: 'pendiente',
-      payment_link_url: linkResult.url,
-      external_id: linkResult.externalId,
       email_pagador: input.email_pagador,
       nombre_pagador: input.nombre_pagador,
       creado_por: userId,
+    } as never);
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      throw AppError.conflict('Ya existe un pago de estudio activo para este expediente', 'PAGO_ESTUDIO_PENDIENTE');
+    }
+    logger.error({ error: insertError.message }, 'Error creating estudio payment record');
+    throw fromSupabaseError(insertError);
+  }
+
+  let linkResult: { url: string; externalId: string };
+  try {
+    linkResult = await gateway.createPaymentLink({
+      amount: monto,
+      concept: conceptLabel,
+      description: `Pago de estudio de arrendamiento para ${input.nombre_pagador}`,
+      metadata: {
+        expediente_id: expedienteId,
+        concepto: 'estudio',
+        email_pagador: input.email_pagador,
+        pago_id: pagoId,
+      },
+      successUrl,
+      cancelUrl,
+      pendingUrl,
+    });
+  } catch (gatewayError) {
+    // No dejar la fila huérfana bloqueando el índice único.
+    await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', pagoId);
+    throw gatewayError;
+  }
+
+  const { data: pago, error } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      payment_link_url: linkResult.url,
+      external_id: linkResult.externalId,
     } as never)
+    .eq('id', pagoId)
     .select(PAGO_SELECT)
     .single();
 
-  if (error) {
-    logger.error({ error: error.message }, 'Error creating estudio payment link');
-    throw fromSupabaseError(error);
+  if (error || !pago) {
+    logger.error({ error: error?.message, pagoId }, 'Error guardando el link del estudio — se revierte');
+    await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', pagoId);
+    if (gateway.cancelPaymentLink) {
+      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
+        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras revertir'),
+      );
+    }
+    throw error ? fromSupabaseError(error) : AppError.badRequest('Error al crear el pago del estudio', 'PAGO_CREATE_ERROR');
   }
 
   // Record events
@@ -398,7 +475,7 @@ export async function cancelarYAsumir(expedienteId: string, userId: string, ip?:
     throw AppError.badRequest('Solo se puede cancelar un pago en estado pendiente', 'PAGO_NO_CANCELABLE');
   }
 
-  // Cancel existing via state machine
+  // Cancel existing via state machine + expirar el link en la pasarela
   await transitionPagoState({
     pagoId: pago.id as string,
     targetEstado: 'cancelado',
@@ -407,6 +484,7 @@ export async function cancelarYAsumir(expedienteId: string, userId: string, ip?:
     userId,
     ip,
   });
+  invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
 
   // Create new completed payment
   return asumirCosto(expedienteId, userId, ip);

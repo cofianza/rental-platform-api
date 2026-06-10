@@ -20,6 +20,8 @@ export interface CreatePaymentLinkParams {
   successUrl: string;
   /** URL to redirect on cancel */
   cancelUrl: string;
+  /** URL to redirect when the payment stays pending (PSE/efectivo). Falls back to successUrl. */
+  pendingUrl?: string;
 }
 
 export interface PaymentLinkResult {
@@ -84,6 +86,19 @@ export interface PaymentGatewayAdapter {
 
   /** Query the current status of a payment by external ID */
   getPaymentStatus(externalId: string): Promise<PaymentStatus>;
+
+  /**
+   * Invalidate a payment link so it can no longer be paid (e.g. after the pago
+   * was cancelled in our DB). Optional: providers that can't expire links may
+   * omit it. Callers must treat it as best-effort.
+   */
+  cancelPaymentLink?(externalId: string): Promise<void>;
+
+  /**
+   * Search payments by our external reference (used by the periodic
+   * reconciliation job when we never got a webhook). Optional per provider.
+   */
+  searchPaymentsByReference?(externalReference: string): Promise<PaymentStatus[]>;
 
   /** Process a full refund */
   refund(transactionRef: string, amount?: number): Promise<RefundResult>;

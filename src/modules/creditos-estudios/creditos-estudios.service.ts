@@ -322,7 +322,11 @@ export async function comprarPaquete(
       .eq('id', compra.id);
 
     if (updErr) {
-      logger.warn({ updErr, compraId: compra.id }, 'No se pudo guardar Stripe session en compra');
+      // Sin el session_id el webhook jamás podrá acreditar la compra: si
+      // dejáramos pagar, sería dinero por créditos que nunca llegan. Marcar
+      // fallida y abortar — el comprador reintenta y se crea una compra nueva.
+      logger.error({ updErr, compraId: compra.id }, 'No se pudo guardar el session de pasarela — compra abortada');
+      throw fromSupabaseError(updErr);
     }
 
     logAudit({
@@ -356,6 +360,33 @@ export async function comprarPaquete(
 // ============================================================
 // Webhook handler — acreditar lote cuando Stripe confirma pago
 // ============================================================
+
+/**
+ * Marca una compra como completada (idempotente: solo toca filas no completadas).
+ * Si `throwOnError`, propaga el fallo para que el retry del webhook lo repare.
+ */
+async function marcarCompraCompletada(
+  compraId: string,
+  paymentIntentId: string | null,
+  rawResponse: Record<string, unknown>,
+  throwOnError = false,
+): Promise<void> {
+  const { error } = await (supabase
+    .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estado: 'completado',
+      stripe_payment_intent_id: paymentIntentId,
+      gateway_response: rawResponse,
+      completed_at: new Date().toISOString(),
+    } as never)
+    .eq('id', compraId)
+    .neq('estado', 'completado');
+
+  if (error) {
+    logger.error({ error: error.message, compraId }, 'Error marcando compra de créditos como completada');
+    if (throwOnError) throw fromSupabaseError(error);
+  }
+}
 
 export async function acreditarCompraDesdeWebhook(
   stripeSessionId: string,
@@ -403,22 +434,23 @@ export async function acreditarCompraDesdeWebhook(
     .single();
 
   if (loteErr || !loteData) {
+    // 23505 = uq_lotes_creditos_compra: otro retry/concurrente ya creó el lote.
+    // Reparar la compra si quedó sin marcar y salir idempotente (sin duplicar créditos).
+    if (loteErr?.code === '23505') {
+      logger.info({ compraId: compra.id }, 'Lote ya existía (retry concurrente) — idempotent skip');
+      await marcarCompraCompletada(compra.id, paymentIntentId, rawResponse);
+      return { ok: true, ya_acreditado: true };
+    }
     logger.error({ loteErr, compraId: compra.id }, 'Error creando lote tras pago confirmado');
     throw fromSupabaseError(loteErr!);
   }
 
   const lote = loteData as LoteRow;
 
-  // 5. Actualizar compra a completado
-  await (supabase
-    .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      estado: 'completado',
-      stripe_payment_intent_id: paymentIntentId,
-      gateway_response: rawResponse,
-      completed_at: new Date().toISOString(),
-    } as never)
-    .eq('id', compra.id);
+  // 5. Actualizar compra a completado. Si falla, lanzamos para que el retry del
+  // webhook lo repare (el lote ya existe: el retry cae en el skip idempotente
+  // de arriba, que vuelve a intentar marcar la compra).
+  await marcarCompraCompletada(compra.id, paymentIntentId, rawResponse, true);
 
   // 6. Registrar movimiento
   const { data: saldoAct } = await (supabase
@@ -536,6 +568,11 @@ export async function liberarEstudioConCredito(
     .single();
 
   if (pagoErr || !pagoData) {
+    // 23505 = uq_pagos_estudio_activo: otro click/flujo concurrente ya creó el
+    // pago del estudio — sin esto se consumían DOS créditos por un estudio.
+    if (pagoErr?.code === '23505') {
+      throw AppError.conflict('Ya existe un pago de estudio activo para este expediente', 'PAGO_ESTUDIO_PENDIENTE');
+    }
     logger.error({ pagoErr }, 'Error creando pago al liberar credito');
     throw fromSupabaseError(pagoErr!);
   }
@@ -557,11 +594,18 @@ export async function liberarEstudioConCredito(
   });
 
   if (rpcErr || !rpcData || rpcData.length === 0) {
-    // Rollback: borrar el pago creado
-    await (supabase
+    // Rollback: borrar el pago creado. Si el delete falla, queda un pago
+    // completado SIN crédito consumido — hay que verlo en los logs.
+    const { error: rollbackErr } = await (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
       .delete()
       .eq('id', pago.id);
+    if (rollbackErr) {
+      logger.error(
+        { error: rollbackErr.message, pagoId: pago.id, expedienteId },
+        'CRITICO: no se pudo revertir el pago tras fallar el consumo de crédito — revisar manualmente',
+      );
+    }
 
     if (rpcErr?.message?.includes('SIN_SALDO_CREDITOS')) {
       throw AppError.badRequest('No tiene creditos disponibles. Compre un paquete primero.', 'SIN_SALDO_CREDITOS');

@@ -6,7 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { sendPaymentLinkEmail } from '@/lib/email';
 import { getPaymentGateway } from './gateway';
-import { transitionPagoState } from './pago-state-machine';
+import { transitionPagoState, transitionPagoStateChecked } from './pago-state-machine';
 import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
@@ -224,51 +224,96 @@ export async function createPaymentLink(
     );
   }
 
-  // 3. Build success/cancel URLs
+  // 3. Build success/cancel/pending URLs (pending: PSE/efectivo no debe verse como éxito)
   const resultUrl = `${env.FRONTEND_URL}/pago/resultado`;
   const successUrl = `${resultUrl}?status=success&expediente=${expedienteId}`;
   const cancelUrl = `${resultUrl}?status=cancelled&expediente=${expedienteId}`;
+  const pendingUrl = `${resultUrl}?status=pending&expediente=${expedienteId}`;
 
-  // 4. Create checkout session in Stripe
   const gateway = getPaymentGateway();
   const conceptLabel = CONCEPTO_LABELS[input.concepto] || input.concepto;
   const expNumero = (expediente as { numero: string }).numero;
 
-  const linkResult = await gateway.createPaymentLink({
-    amount: input.monto,
-    concept: `${conceptLabel} - Exp. ${expNumero}`,
-    description: input.descripcion,
-    metadata: {
-      expediente_id: expedienteId,
-      concepto: input.concepto,
-      email_pagador: input.email_pagador,
-    },
-    successUrl,
-    cancelUrl,
-  });
-
-  // 5. Insert pago record
-  const { data: pago, error } = await (supabase
+  // 4. Insert pago record ANTES de crear el checkout, con id pre-generado: así
+  // la preference lleva el pago_id en external_reference/metadata y el webhook
+  // puede casar el pago EXACTO (no "el más reciente del expediente").
+  const pagoId = crypto.randomUUID();
+  const { error: insertError } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .insert({
+      id: pagoId,
       expediente_id: expedienteId,
       concepto: input.concepto,
       descripcion: input.descripcion,
       monto: input.monto,
       metodo: 'pasarela',
       estado: 'pendiente',
-      payment_link_url: linkResult.url,
-      external_id: linkResult.externalId,
       email_pagador: input.email_pagador,
       nombre_pagador: input.nombre_pagador,
       creado_por: userId,
+    } as never);
+
+  if (insertError) {
+    // 23505 = índice único uq_pagos_estudio_activo (carrera de doble click).
+    if (insertError.code === '23505') {
+      throw AppError.conflict(
+        `Ya existe un pago ${input.concepto.replace(/_/g, ' ')} activo para este expediente`,
+        'PAGO_DUPLICADO',
+      );
+    }
+    logger.error({ error: insertError.message }, 'Error al crear registro de pago');
+    throw fromSupabaseError(insertError);
+  }
+
+  // 5. Create checkout session in the gateway; si falla, no dejamos fila huérfana.
+  let linkResult: { url: string; externalId: string };
+  try {
+    linkResult = await gateway.createPaymentLink({
+      amount: input.monto,
+      concept: `${conceptLabel} - Exp. ${expNumero}`,
+      description: input.descripcion,
+      metadata: {
+        expediente_id: expedienteId,
+        concepto: input.concepto,
+        email_pagador: input.email_pagador,
+        pago_id: pagoId,
+      },
+      successUrl,
+      cancelUrl,
+      pendingUrl,
+    });
+  } catch (gatewayError) {
+    await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', pagoId);
+    throw gatewayError;
+  }
+
+  // 5b. Persistir el link en la fila. Si esto falla, el link quedaría
+  // imposible de mostrar/casar — cancelamos ambos lados y avisamos.
+  const { data: pago, error } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      payment_link_url: linkResult.url,
+      external_id: linkResult.externalId,
     } as never)
+    .eq('id', pagoId)
     .select(PAGO_SELECT)
     .single();
 
-  if (error) {
-    logger.error({ error: error.message }, 'Error al crear registro de pago');
-    throw fromSupabaseError(error);
+  if (error || !pago) {
+    logger.error({ error: error?.message, pagoId }, 'Error al guardar el link en el pago — se revierte');
+    await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', pagoId);
+    if (gateway.cancelPaymentLink) {
+      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
+        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras revertir'),
+      );
+    }
+    throw error ? fromSupabaseError(error) : AppError.badRequest('Error al crear el pago', 'PAGO_CREATE_ERROR');
   }
 
   // 6. Record event
@@ -323,7 +368,7 @@ export async function createPaymentLink(
 // ============================================================
 
 export async function cancelPago(pagoId: string, userId: string, ip?: string) {
-  return transitionPagoState({
+  const pago = await transitionPagoState({
     pagoId,
     targetEstado: 'cancelado',
     origen: 'manual',
@@ -331,6 +376,20 @@ export async function cancelPago(pagoId: string, userId: string, ip?: string) {
     userId,
     ip,
   });
+
+  // Expirar el link en la pasarela (best-effort): un pago cancelado no debe
+  // seguir siendo pagable desde el email del arrendatario.
+  const p = pago as { external_id?: string | null; metodo?: string | null } | null;
+  if (p?.metodo === 'pasarela' && p.external_id) {
+    const gateway = getPaymentGateway();
+    if (gateway.cancelPaymentLink) {
+      gateway.cancelPaymentLink(p.external_id).catch((err) =>
+        logger.warn({ err, pagoId }, 'No se pudo expirar el link en la pasarela (pago ya cancelado en BD)'),
+      );
+    }
+  }
+
+  return pago;
 }
 
 // ============================================================
@@ -822,10 +881,13 @@ async function processMercadoPagoWebhook(
     return { received: true };
   }
 
+  // external_reference: "<concepto>:<refId>[:<pago_id>]" — el 3er segmento (si
+  // existe) identifica el pago EXACTO; el formato de 2 segmentos es legacy.
   const externalReference = (status.rawResponse as { external_reference?: string | null }).external_reference ?? '';
-  const sep = externalReference.indexOf(':');
-  const concepto = sep >= 0 ? externalReference.slice(0, sep) : externalReference;
-  const refId = sep >= 0 ? externalReference.slice(sep + 1) : '';
+  const refParts = externalReference.split(':');
+  const concepto = refParts[0] ?? '';
+  const refId = refParts[1] ?? '';
+  const pagoIdRef = refParts[2] ?? '';
 
   // 2. Mapear estado normalizado del adapter → estado del pago (solo terminales).
   const estadoMap: Record<string, EstadoPago | undefined> = {
@@ -835,7 +897,7 @@ async function processMercadoPagoWebhook(
     refunded: 'reembolsado',
   };
   const targetEstado = estadoMap[status.status];
-  if (!targetEstado) {
+  if (!targetEstado && status.status !== 'pending') {
     logger.info({ paymentId, status: status.status }, 'MP webhook: estado no terminal — sin transición');
     return { received: true };
   }
@@ -862,53 +924,222 @@ async function processMercadoPagoWebhook(
     return { received: true };
   }
 
-  // 3b. Pago de estudio → tabla pagos, localizado por expediente_id (refId).
-  if (!refId) {
+  // 3b. Localizar NUESTRO pago. Preferimos el match exacto por pago_id (3er
+  // segmento de external_reference); el fallback legacy filtra también por
+  // concepto — sin eso, pagar el estudio podía "completar" la garantía.
+  if (!refId && !pagoIdRef) {
     logger.warn({ paymentId, externalReference }, 'MP webhook: external_reference sin expediente — ignorado');
+    await registrarPagoNoConciliado(paymentId, externalReference, status, 'referencia_desconocida');
     return { received: true };
   }
 
-  const { data: pagoRow } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado')
-    .eq('expediente_id', refId)
-    .eq('metodo', 'pasarela')
-    .in('estado', ['pendiente', 'procesando', 'completado'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  type PagoLookup = { id: string; estado: string; monto: number | string | null; expediente_id: string | null };
+  let pago: PagoLookup | null = null;
 
-  const pago = pagoRow as { id: string; estado: string } | null;
+  if (pagoIdRef) {
+    const { data } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, monto, expediente_id')
+      .eq('id', pagoIdRef)
+      .maybeSingle();
+    pago = data as PagoLookup | null;
+    if (pago && refId && pago.expediente_id !== refId) {
+      logger.error({ paymentId, pagoIdRef, refId }, 'MP webhook: pago_id no corresponde al expediente de la referencia');
+      await registrarPagoNoConciliado(paymentId, externalReference, status, 'pago_id_expediente_mismatch');
+      return { received: true };
+    }
+  }
+
   if (!pago) {
-    logger.warn({ expedienteId: refId, paymentId }, 'MP webhook: pago no encontrado');
+    // Legacy: preferences emitidas antes de codificar pago_id en la referencia.
+    const { data: pagoRow } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, monto, expediente_id')
+      .eq('expediente_id', refId)
+      .eq('concepto', concepto)
+      .eq('metodo', 'pasarela')
+      .in('estado', ['pendiente', 'procesando', 'completado'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    pago = pagoRow as PagoLookup | null;
+  }
+
+  if (!pago) {
+    logger.error({ expedienteId: refId, paymentId, concepto }, 'MP webhook: pago no encontrado — dinero sin conciliar');
+    // El dinero entró a MP pero no hay pago casable (link cancelado pagado,
+    // referencia vieja). Queda registrado para reembolso/conciliación manual.
+    if (status.status === 'completed') {
+      await registrarPagoNoConciliado(paymentId, externalReference, status, 'pago_no_encontrado');
+    }
     return { received: true };
   }
 
-  const estadoAntes = pago.estado;
-  if (estadoAntes === targetEstado) {
+  // 3c. Estado no terminal 'pending' (PSE/efectivo): persistir el payment_id y
+  // pasar a 'procesando' para que la reconciliación periódica pueda seguirlo.
+  if (!targetEstado) {
+    if (pago.estado === 'pendiente') {
+      try {
+        await transitionPagoStateChecked({
+          pagoId: pago.id,
+          targetEstado: 'procesando',
+          origen: 'webhook',
+          detalles: { provider: 'mercadopago', mp_payment_id: paymentId, mp_status: 'pending' },
+          extraUpdate: { transaction_ref: status.transactionRef, gateway_response: status.rawResponse },
+        });
+      } catch (err) {
+        logger.warn({ err, pagoId: pago.id }, 'MP webhook: no se pudo marcar procesando (pending)');
+      }
+    }
+    return { received: true };
+  }
+
+  // 3d. Validar el monto antes de completar: un pago aprobado por un monto
+  // distinto al nuestro NO debe marcar el pago como completado.
+  const mpAmount = (status.rawResponse as { transaction_amount?: number }).transaction_amount;
+  if (
+    targetEstado === 'completado'
+    && typeof mpAmount === 'number'
+    && pago.monto != null
+    && Number(pago.monto) !== mpAmount
+  ) {
+    logger.error(
+      { paymentId, pagoId: pago.id, esperado: Number(pago.monto), recibido: mpAmount },
+      'MP webhook: monto del pago no coincide — NO se completa (queda para conciliación manual)',
+    );
+    await registrarPagoNoConciliado(paymentId, externalReference, status, 'amount_mismatch');
+    return { received: true };
+  }
+
+  if (pago.estado === targetEstado) {
     logger.info({ pagoId: pago.id, estado: targetEstado }, 'MP webhook: pago ya en estado objetivo — idempotent skip');
     return { received: true };
   }
 
+  // 3e. Transición atómica (CAS): si webhook y reconciliación llegan a la vez,
+  // solo UNA gana `transitioned=true` — el dispatch corre exactamente una vez.
+  let transitioned = false;
   try {
-    await transitionPagoState({
+    const result = await transitionPagoStateChecked({
       pagoId: pago.id,
       targetEstado,
       origen: 'webhook',
       detalles: { provider: 'mercadopago', mp_payment_id: paymentId, transaction_ref: status.transactionRef },
       extraUpdate: { transaction_ref: status.transactionRef, gateway_response: status.rawResponse },
     });
+    transitioned = result.transitioned;
   } catch (err) {
     logger.error({ err, pagoId: pago.id }, 'MP webhook: error en transición de estado');
     return { received: true };
   }
 
-  // 4. Dispatch al orquestador en la primera transición a completado.
-  if (targetEstado === 'completado' && estadoAntes !== 'completado') {
+  // 4. Dispatch al orquestador SOLO en la transición efectiva a completado.
+  if (targetEstado === 'completado' && transitioned) {
     await dispatchPagoCompletado(pago.id);
   }
 
   return { received: true };
+}
+
+/**
+ * Registra un pago del proveedor que no se pudo conciliar con un pago en BD
+ * (link cancelado pagado, monto distinto, referencia desconocida). Idempotente
+ * por (proveedor, provider_payment_id) — los retries del webhook no duplican.
+ */
+async function registrarPagoNoConciliado(
+  paymentId: string,
+  externalReference: string,
+  status: { status: string; rawResponse: Record<string, unknown> },
+  motivo: string,
+): Promise<void> {
+  const mpAmount = (status.rawResponse as { transaction_amount?: number }).transaction_amount;
+  const { error } = await (supabase
+    .from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
+    .upsert(
+      {
+        proveedor: 'mercadopago',
+        provider_payment_id: paymentId,
+        external_reference: externalReference || null,
+        monto: typeof mpAmount === 'number' ? mpAmount : null,
+        estado_proveedor: status.status,
+        motivo,
+        raw_response: status.rawResponse,
+      } as never,
+      { onConflict: 'proveedor,provider_payment_id', ignoreDuplicates: true } as never,
+    );
+  if (error) {
+    logger.error({ error: error.message, paymentId, motivo }, 'No se pudo registrar el pago no conciliado');
+  }
+}
+
+/**
+ * Reconciliación periódica: pagos pasarela que llevan rato en pendiente o
+ * procesando (PSE/efectivo, o webhooks que nunca llegaron). Busca en MP por
+ * external_reference y procesa cada payment encontrado por la misma vía
+ * idempotente del webhook. Pensada para correr en un setInterval del server.
+ */
+export async function reconcilePendingPagos(): Promise<{ revisados: number; conciliados: number }> {
+  const gateway = getPaymentGateway();
+  if (gateway.provider !== 'mercadopago' || !gateway.searchPaymentsByReference) {
+    return { revisados: 0, conciliados: 0 };
+  }
+
+  const desde = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const hasta = new Date(Date.now() - 15 * 60 * 1000).toISOString(); // deja respirar a los recién creados
+
+  const { data, error } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, expediente_id, concepto, estado, transaction_ref, created_at')
+    .eq('metodo', 'pasarela')
+    .in('estado', ['pendiente', 'procesando'])
+    .gte('created_at', desde)
+    .lte('created_at', hasta)
+    .limit(50);
+
+  if (error) {
+    logger.error({ error: error.message }, 'reconcilePendingPagos: error consultando pagos');
+    return { revisados: 0, conciliados: 0 };
+  }
+
+  const pendientes = (data ?? []) as Array<{
+    id: string; expediente_id: string; concepto: string; estado: string; transaction_ref: string | null;
+  }>;
+
+  let conciliados = 0;
+  for (const p of pendientes) {
+    try {
+      if (p.transaction_ref) {
+        // Ya conocemos el payment de MP (quedó de un webhook 'pending').
+        await processMercadoPagoWebhook(p.transaction_ref, 'payment', gateway);
+      } else {
+        // Nunca llegó webhook: buscar payments por nuestra referencia.
+        const ref = `${p.concepto}:${p.expediente_id}:${p.id}`;
+        let found = await gateway.searchPaymentsByReference(ref);
+        if (found.length === 0) {
+          // Legacy: preferences sin pago_id en la referencia.
+          found = await gateway.searchPaymentsByReference(`${p.concepto}:${p.expediente_id}`);
+        }
+        for (const payment of found) {
+          if (payment.transactionRef) {
+            await processMercadoPagoWebhook(payment.transactionRef, 'payment', gateway);
+          }
+        }
+      }
+      const { data: after } = await (supabase
+        .from('pagos' as string) as ReturnType<typeof supabase.from>)
+        .select('estado')
+        .eq('id', p.id)
+        .single();
+      if ((after as { estado?: string } | null)?.estado !== p.estado) conciliados += 1;
+    } catch (err) {
+      logger.warn({ err, pagoId: p.id }, 'reconcilePendingPagos: error reconciliando pago');
+    }
+  }
+
+  if (pendientes.length > 0) {
+    logger.info({ revisados: pendientes.length, conciliados }, 'reconcilePendingPagos: ciclo terminado');
+  }
+  return { revisados: pendientes.length, conciliados };
 }
 
 /**

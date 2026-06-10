@@ -75,13 +75,19 @@ const PAGO_SELECT = `
 /**
  * Execute a state transition atomically:
  * 1. Fetch current pago + validate transition
- * 2. Update estado (+ optional extra columns)
+ * 2. Update estado con CAS (compare-and-set sobre el estado leído) — dos
+ *    requests concurrentes (webhook × reconciliación) no pueden transicionar
+ *    el mismo pago dos veces: solo una gana; la otra recibe transitioned=false.
  * 3. Insert PaymentEvent
  * 4. Fire side-effects (notifications)
  *
- * Returns the updated pago record.
+ * Returns { pago, transitioned } — `transitioned` es true solo si ESTA llamada
+ * efectuó el cambio de estado (los callers que disparan efectos de negocio,
+ * como dispatchPagoCompletado, deben condicionarlos a esto).
  */
-export async function transitionPagoState(params: TransitionParams) {
+export async function transitionPagoStateChecked(
+  params: TransitionParams,
+): Promise<{ pago: unknown; transitioned: boolean }> {
   const { pagoId, targetEstado, origen, detalles, extraUpdate, userId, ip } = params;
 
   // 1. Fetch current pago
@@ -105,7 +111,7 @@ export async function transitionPagoState(params: TransitionParams) {
       .select(PAGO_SELECT)
       .eq('id', pagoId)
       .single();
-    return existing;
+    return { pago: existing, transitioned: false };
   }
 
   // 2. Validate transition
@@ -127,17 +133,39 @@ export async function transitionPagoState(params: TransitionParams) {
     updatePayload.fecha_pago = new Date().toISOString();
   }
 
-  // 4. Update pago
+  // 4. Update pago — CAS: solo si el estado sigue siendo el que leímos.
   const { data: updated, error: updateError } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .update(updatePayload as never)
     .eq('id', pagoId)
+    .eq('estado', currentEstado)
     .select(PAGO_SELECT)
-    .single();
+    .maybeSingle();
 
   if (updateError) {
     logger.error({ error: updateError.message, pagoId, targetEstado }, 'Error updating pago state');
     throw fromSupabaseError(updateError);
+  }
+
+  if (!updated) {
+    // Perdimos la carrera: otra request transicionó el pago entre el fetch y el
+    // update. Releer y decidir: si ya quedó en el estado objetivo, es el caso
+    // idempotente (sin side-effects); si quedó en otro estado, la transición ya
+    // no es válida desde aquí.
+    const { data: actual } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select(PAGO_SELECT)
+      .eq('id', pagoId)
+      .single();
+    const estadoActual = (actual as { estado?: string } | null)?.estado;
+    if (estadoActual === targetEstado) {
+      logger.info({ pagoId, estado: targetEstado }, 'Transition race lost — already transitioned by concurrent request');
+      return { pago: actual, transitioned: false };
+    }
+    throw AppError.conflict(
+      `El pago cambió de estado concurrentemente (ahora '${estadoActual}')`,
+      'TRANSICION_CONCURRENTE',
+    );
   }
 
   // 5. Insert PaymentEvent (atomic with the update via sequential calls)
@@ -188,7 +216,13 @@ export async function transitionPagoState(params: TransitionParams) {
     notifyPaymentFailed(pagoId, expedienteId, concepto).catch(() => {});
   }
 
-  return updated;
+  return { pago: updated, transitioned: true };
+}
+
+/** Compat: igual que transitionPagoStateChecked pero devuelve solo el pago. */
+export async function transitionPagoState(params: TransitionParams) {
+  const { pago } = await transitionPagoStateChecked(params);
+  return pago;
 }
 
 // ============================================================
