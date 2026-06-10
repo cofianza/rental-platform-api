@@ -9,6 +9,12 @@ interface RetryOptions {
   baseDelayMs: number;
   maxDelayMs: number;
   backoffFactor: number;
+  /**
+   * Si devuelve false para un error, NO se reintenta (se propaga de una).
+   * Útil cuando el reintento puede duplicar efectos facturables: un timeout
+   * local no implica que el proveedor no haya procesado (y cobrado) la consulta.
+   */
+  shouldRetry?: (error: unknown) => boolean;
 }
 
 const DEFAULT_OPTIONS: RetryOptions = {
@@ -33,6 +39,10 @@ export async function withRetry<T>(
       lastError = error instanceof Error ? error : new Error(String(error));
 
       if (attempt === opts.maxAttempts) break;
+      if (opts.shouldRetry && !opts.shouldRetry(error)) {
+        logger.warn({ context, error: lastError.message }, 'Provider operation failed — retry suppressed by shouldRetry');
+        break;
+      }
 
       const delay = Math.min(
         opts.baseDelayMs * Math.pow(opts.backoffFactor, attempt - 1),

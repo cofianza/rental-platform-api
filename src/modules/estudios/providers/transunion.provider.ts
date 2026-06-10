@@ -217,7 +217,16 @@ export class TransUnionProvider implements CreditRiskProvider {
     const response = await withRetry<TransUnionResponse>(
       () => this.executeRequest(body, basicAuth),
       'TransUnion consultarCombo',
-      { maxAttempts: 2, baseDelayMs: 2000, maxDelayMs: 10000, backoffFactor: 2 },
+      {
+        maxAttempts: 2,
+        baseDelayMs: 2000,
+        maxDelayMs: 10000,
+        backoffFactor: 2,
+        // NO reintentar tras timeout: el abort es solo local — TransUnion muy
+        // probablemente procesó (y facturó) la consulta; reintentar emitiría
+        // una segunda consulta billable idéntica.
+        shouldRetry: (error) => !(error instanceof AppError && error.errorCode === 'PROVIDER_TIMEOUT'),
+      },
     );
 
     const elapsed = Date.now() - start;

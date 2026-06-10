@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { supabase } from '@/lib/supabase';
-import { AppError } from '@/lib/errors';
+import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
@@ -8,7 +8,7 @@ import { env } from '@/config';
 import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
-import type { ProviderSolicitudInput, ProviderHealthInfo } from './providers/types';
+import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from './providers/types';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 
@@ -1224,6 +1224,40 @@ export async function ejecutarEstudio(
     );
   }
 
+  // 1.8. Normalizar 'formulario_enviado' → 'formulario_completado' (igual que
+  //      el orchestrator): el solicitante puede ejecutar desde su panel con el
+  //      documento confirmado aunque nunca haya llenado el formulario
+  //      self-service. Sin esto, la UI ofrecía "Enviar para estudio" y el
+  //      backend lo rechazaba — loop muerto de reintentos.
+  if (est.estado === 'formulario_enviado' && expediente.solicitante_id) {
+    const { data: solRow } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('nombre, apellido, tipo_documento, numero_documento, email, telefono')
+      .eq('id', expediente.solicitante_id)
+      .maybeSingle();
+    const sol = solRow as { nombre?: string; apellido?: string; tipo_documento?: string; numero_documento?: string; email?: string; telefono?: string } | null;
+    if (sol) {
+      const base = {
+        nombre_completo: `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim(),
+        tipo_documento: sol.tipo_documento ?? '',
+        numero_documento: sol.numero_documento ?? '',
+        email: sol.email ?? '',
+        telefono: sol.telefono ?? '',
+        acepta_terminos: true,
+      };
+      const merged = { ...base, ...(est.datos_formulario ?? {}) };
+      const { error: normError } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: 'formulario_completado', datos_formulario: merged } as never)
+        .eq('id', estudioId)
+        .eq('estado', 'formulario_enviado');
+      if (!normError) {
+        est.estado = 'formulario_completado';
+        est.datos_formulario = merged;
+      }
+    }
+  }
+
   // 2. Validate estado
   if (!ESTADOS_PERMITIDOS_EJECUCION.includes(est.estado)) {
     throw AppError.badRequest(
@@ -1292,12 +1326,28 @@ export async function ejecutarEstudio(
   //    (a) Permite responder al cliente HTTP rápido, sin esperar TransUnion
   //        (que puede tardar 30-60s con retries y dejar al solicitante con
   //        un spinner colgado).
-  //    (b) Bloquea ejecuciones concurrentes (la siguiente call cae en el
-  //        check de ESTADOS_PERMITIDOS_EJECUCION arriba).
-  await (supabase
+  //    (b) Bloquea ejecuciones concurrentes de verdad: el UPDATE es un CAS
+  //        condicionado al estado permitido — dos requests simultáneas (doble
+  //        click, o reintento contra un estudio que otro flujo ya tomó) solo
+  //        dejan pasar a UNA. Sin esto, cada ejecución duplicada consumía una
+  //        consulta TransUnion facturada.
+  const { data: lockRows, error: lockError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .update({ estado: 'en_proceso' } as never)
-    .eq('id', estudioId);
+    .eq('id', estudioId)
+    .in('estado', ESTADOS_PERMITIDOS_EJECUCION)
+    .select('id');
+
+  if (lockError) {
+    logger.error({ error: lockError.message, estudioId }, 'Error tomando el lock de ejecución del estudio');
+    throw fromSupabaseError(lockError);
+  }
+  if (!lockRows || lockRows.length === 0) {
+    throw AppError.conflict(
+      'El estudio ya está siendo procesado o cambió de estado — refresca para ver el estado actual',
+      'ESTUDIO_EN_PROCESO',
+    );
+  }
 
   // 6. Disparar el provider en background. El frontend hace polling sobre
   //    el estudio (cada 5s) y detecta cuando pase a 'completado' o
@@ -1347,10 +1397,18 @@ async function procesarEstudioAsync(args: {
   try {
     const response = await provider.solicitar(providerInput);
 
-    await (supabase
+    // Persistir la referencia con error-check: sin ella no hay forma de
+    // recuperar/consultar el estudio después (consulta facturada perdida).
+    const { error: refError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({ referencia_proveedor: response.referencia_proveedor } as never)
       .eq('id', estudioId);
+    if (refError) {
+      logger.error(
+        { error: refError.message, estudioId, referencia: response.referencia_proveedor },
+        'CRITICO: no se pudo persistir referencia_proveedor — se continúa con el registro inline',
+      );
+    }
 
     logAudit({
       usuarioId: userId,
@@ -1367,8 +1425,31 @@ async function procesarEstudioAsync(args: {
 
     // Proveedores síncronos (TransUnion) devuelven status='completed'.
     if (response.status === 'completed') {
+      // Obtener el resultado UNA vez y persistir el crudo ANTES del RPC: el
+      // resultado vive solo en el cache en memoria del provider — si el RPC
+      // falla y el proceso se reinicia, sin esta persistencia la consulta
+      // facturada se perdía y el estudio quedaba en_proceso sin salida.
+      let result: ProviderResult | undefined;
       try {
-        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId);
+        result = await provider.obtenerResultado(response.referencia_proveedor);
+        if (result.datos_crudos) {
+          const { error: rawErr } = await (supabase
+            .from('estudios' as string) as ReturnType<typeof supabase.from>)
+            .update({ respuesta_proveedor: result.datos_crudos as never } as never)
+            .eq('id', estudioId);
+          if (rawErr) {
+            logger.warn({ estudioId, error: rawErr.message }, 'No se pudo persistir respuesta_proveedor (pre-RPC)');
+          }
+        }
+      } catch (resErr) {
+        logger.warn(
+          { error: resErr instanceof Error ? resErr.message : String(resErr), estudioId },
+          'No se pudo pre-obtener el resultado — registrarResultadoInline lo intentará desde el cache',
+        );
+      }
+
+      try {
+        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result);
         logger.info({ estudioId }, 'Estudio completado exitosamente (async)');
       } catch (postErr) {
         const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
@@ -1955,11 +2036,12 @@ async function registrarResultadoInline(
   proveedorId: string,
   referenciaProveedor: string,
   expedienteId: string,
+  resultPreObtenido?: ProviderResult,
 ): Promise<void> {
   const provider = getProvider(proveedorId as 'transunion' | 'sifin' | 'datacredito');
 
   logger.info({ estudioId }, 'registrarResultadoInline: obteniendo resultado del provider');
-  const result = await provider.obtenerResultado(referenciaProveedor);
+  const result = resultPreObtenido ?? await provider.obtenerResultado(referenciaProveedor);
   logger.info(
     { estudioId, resultado: result.resultado, score: result.score },
     'registrarResultadoInline: resultado obtenido, llamando RPC',
@@ -2115,6 +2197,24 @@ export async function consultarEstadoProveedor(estudioId: string) {
     referencia_proveedor: string | null;
     expediente_id: string;
   };
+
+  // Estudios finalizados: responder desde BD SIN consultar al provider. El
+  // cache del provider vive en memoria — tras un restart respondería 'failed'
+  // y la rama 4 marcaría 'fallido' un estudio COMPLETADO (revirtiendo un
+  // aprobado y habilitando reintentos que facturan consultas de más).
+  if (ESTADOS_ESTUDIO_FINALIZADOS.includes(est.estado)) {
+    const statusFinal: 'completed' | 'cancelled' | 'failed' =
+      est.estado === 'completado' ? 'completed' : est.estado === 'cancelado' ? 'cancelled' : 'failed';
+    return {
+      provider_status: {
+        referencia_proveedor: est.referencia_proveedor ?? '',
+        status: statusFinal,
+        mensaje: null,
+        progreso_porcentaje: null,
+      },
+      estudio: await getEstudioById(estudioId),
+    };
+  }
 
   if (!est.referencia_proveedor) {
     throw AppError.badRequest(
