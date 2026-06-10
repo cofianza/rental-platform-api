@@ -1136,10 +1136,49 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
     }
   }
 
-  if (pendientes.length > 0) {
-    logger.info({ revisados: pendientes.length, conciliados }, 'reconcilePendingPagos: ciclo terminado');
+  // Compras de créditos pendientes (no viven en `pagos`): mismo rescate por
+  // external_reference — sin esto, una compra pagada sin webhook quedaba
+  // 'pendiente' para siempre y los créditos nunca se acreditaban.
+  const { data: comprasData, error: comprasError } = await (supabase
+    .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, created_at')
+    .eq('estado', 'pendiente')
+    .gte('created_at', desde)
+    .lte('created_at', hasta)
+    .limit(50);
+
+  if (comprasError) {
+    logger.error({ error: comprasError.message }, 'reconcilePendingPagos: error consultando compras de créditos');
   }
-  return { revisados: pendientes.length, conciliados };
+
+  const compras = (comprasData ?? []) as Array<{ id: string; estado: string }>;
+  let comprasConciliadas = 0;
+  for (const c of compras) {
+    try {
+      const found = await gateway.searchPaymentsByReference(`creditos_estudios:${c.id}`);
+      for (const payment of found) {
+        if (payment.transactionRef) {
+          await processMercadoPagoWebhook(payment.transactionRef, 'payment', gateway);
+        }
+      }
+      const { data: after } = await (supabase
+        .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+        .select('estado')
+        .eq('id', c.id)
+        .single();
+      if ((after as { estado?: string } | null)?.estado === 'completado') comprasConciliadas += 1;
+    } catch (err) {
+      logger.warn({ err, compraId: c.id }, 'reconcilePendingPagos: error reconciliando compra de créditos');
+    }
+  }
+
+  if (pendientes.length > 0 || compras.length > 0) {
+    logger.info(
+      { revisados: pendientes.length, conciliados, comprasRevisadas: compras.length, comprasConciliadas },
+      'reconcilePendingPagos: ciclo terminado',
+    );
+  }
+  return { revisados: pendientes.length + compras.length, conciliados: conciliados + comprasConciliadas };
 }
 
 /**
