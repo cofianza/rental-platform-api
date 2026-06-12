@@ -7,6 +7,8 @@ import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { recordTermsAcceptance } from '../registration/registration.service';
+import { notificarUsuario } from '../notificaciones/notificaciones.service';
+import { enviarTemplate } from '../whatsapp';
 import type { RegisterSolicitanteInput } from './vitrina.schema';
 
 // ------------------------------------------------------------------
@@ -322,10 +324,71 @@ export async function createInterest(
     'Expediente creado desde vitrina pública (sin estudio — pendiente de cita)',
   );
 
+  // Avisar al dueño del inmueble (propietario o inmobiliaria) que hay un nuevo
+  // lead — antes este momento no notificaba a nadie y el dueño solo se enteraba
+  // entrando al panel. Fire-and-forget: no bloquea ni rompe la creación.
+  notificarPropietarioNuevaSolicitud(expedienteData.id, propertyId, solicitanteData.id).catch((err) =>
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), expedienteId: expedienteData.id },
+      'No se pudo notificar al propietario de la nueva solicitud de vitrina',
+    ),
+  );
+
   return {
     expediente: expedienteData,
     siguiente_paso: 'agendar_cita',
   };
+}
+
+/**
+ * Notifica al dueño del inmueble (propietario/inmobiliaria — ambos viven en
+ * inmuebles.propietario_id) que entró una nueva solicitud desde la vitrina:
+ * notificación in-app siempre + WhatsApp si tiene teléfono. Best-effort.
+ */
+async function notificarPropietarioNuevaSolicitud(
+  expedienteId: string,
+  propertyId: string,
+  solicitanteId: string,
+): Promise<void> {
+  const { data: inm } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('propietario_id, direccion')
+    .eq('id', propertyId)
+    .maybeSingle();
+  const propietarioId = (inm as { propietario_id?: string | null } | null)?.propietario_id;
+  const direccion = (inm as { direccion?: string | null } | null)?.direccion || 'tu inmueble';
+  if (!propietarioId) return;
+
+  const { data: prop } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('telefono')
+    .eq('id', propietarioId)
+    .maybeSingle();
+  const telefonoPropietario = (prop as { telefono?: string | null } | null)?.telefono ?? null;
+
+  const { data: sol } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('nombre, apellido')
+    .eq('id', solicitanteId)
+    .maybeSingle();
+  const solRow = sol as { nombre?: string | null; apellido?: string | null } | null;
+  const nombreInteresado = `${solRow?.nombre ?? ''} ${solRow?.apellido ?? ''}`.trim() || 'Un interesado';
+
+  await notificarUsuario({
+    userId: propietarioId,
+    tipo: 'solicitud.vitrina',
+    titulo: 'Nueva solicitud de arriendo',
+    mensaje: `${nombreInteresado} está interesado en ${direccion}.`,
+    link: `/expedientes/${expedienteId}`,
+    payload: { expediente_id: expedienteId, inmueble_id: propertyId },
+  });
+
+  await enviarTemplate({
+    to: telefonoPropietario,
+    template: 'NUEVA_SOLICITUD_VITRINA',
+    variables: [nombreInteresado, direccion],
+    context: { expediente_id: expedienteId },
+  });
 }
 
 // ------------------------------------------------------------------

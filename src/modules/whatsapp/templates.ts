@@ -114,6 +114,13 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} nombre, {{2}} dirección del inmueble
     description: 'Hola {{1}}, tu contrato de arrendamiento del inmueble {{2}} fue firmado por todas las partes. Te llegará copia por correo. Bienvenido a tu nuevo hogar.',
   },
+  /** Nueva solicitud desde la vitrina — aviso al propietario/inmobiliaria. */
+  NUEVA_SOLICITUD_VITRINA: {
+    id: 'cofianza_nueva_solicitud_vitrina',
+    language: 'es_CO',
+    // {{1}} nombre del interesado, {{2}} dirección del inmueble
+    description: 'Hola, recibiste una nueva solicitud de arriendo: {{1}} está interesado en tu inmueble {{2}}. Ingresa a Cofianza para revisar el expediente y agendar la visita.',
+  },
 } as const;
 
 export type WhatsappTemplateKey = keyof typeof WHATSAPP_TEMPLATES;
