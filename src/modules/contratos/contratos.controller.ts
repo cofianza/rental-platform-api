@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
-import { supabase } from '@/lib/supabase';
 import * as contratosService from './contratos.service';
 import type {
   GenerarContratoInput,
@@ -44,14 +43,16 @@ export async function listByExpediente(req: Request, res: Response) {
   sendSuccess(res, result.contratos, 200, result.pagination);
 }
 
-export async function stats(_req: Request, res: Response) {
-  const data = await contratosService.getContratosStats();
+export async function stats(req: Request, res: Response) {
+  // Scopea por rol: propietario/inmobiliaria solo ven SUS contadores.
+  const data = await contratosService.getContratosStats(req.user?.id, req.user?.rol);
   sendSuccess(res, data);
 }
 
 export async function getDetalle(req: Request, res: Response) {
   const { id } = req.params as unknown as { id: string };
-  const contrato = await contratosService.getContratoById(id);
+  // Pasa identidad para el ownership check (propietario/inmobiliaria).
+  const contrato = await contratosService.getContratoById(id, req.user?.id, req.user?.rol);
   sendSuccess(res, contrato);
 }
 

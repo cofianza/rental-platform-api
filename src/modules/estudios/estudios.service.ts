@@ -90,10 +90,50 @@ export async function listEstudios(expedienteId: string, query: ListEstudiosQuer
 // List all estudios (global)
 // ============================================================
 
-export async function listAllEstudios(query: ListAllEstudiosQuery) {
+/**
+ * Scoping por rol para propietario/inmobiliaria: expediente_ids de SUS
+ * inmuebles (inmuebles.propietario_id === userId). Devuelve null para
+ * roles internos (sin filtro) y [] si no tiene inmuebles/expedientes.
+ * Mismo modelo que listAllContratos — el scoping va en SQL, no en
+ * post-filtro, para que la paginación y el total sean reales.
+ */
+async function resolveAllowedExpedienteIds(
+  userId?: string,
+  userRol?: string,
+): Promise<string[] | null> {
+  if (!userId || (userRol !== 'propietario' && userRol !== 'inmobiliaria')) return null;
+
+  const { data: inms } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('propietario_id', userId);
+  const inmIds = ((inms as Array<{ id: string }>) || []).map((i) => i.id);
+  if (inmIds.length === 0) return [];
+
+  const { data: exps } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .in('inmueble_id', inmIds);
+  return ((exps as Array<{ id: string }>) || []).map((e) => e.id);
+}
+
+export async function listAllEstudios(
+  query: ListAllEstudiosQuery,
+  userId?: string,
+  userRol?: string,
+) {
   const page = query.page;
   const limit = query.limit;
   const offset = (page - 1) * limit;
+
+  // Scoping propietario/inmobiliaria: solo estudios de sus expedientes.
+  const allowedExpedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
+  if (allowedExpedienteIds !== null && allowedExpedienteIds.length === 0) {
+    return {
+      estudios: [],
+      pagination: { total: 0, page, limit, totalPages: 0 },
+    };
+  }
 
   // Build base query for count
   let countQuery = (supabase
@@ -112,9 +152,15 @@ export async function listAllEstudios(query: ListAllEstudiosQuery) {
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido),
       expedientes!estudios_expediente_id_fkey(
         numero,
+        inmueble_id,
         solicitantes!expedientes_solicitante_id_fkey(nombre, apellido)
       )
     `);
+
+  if (allowedExpedienteIds !== null) {
+    countQuery = countQuery.in('expediente_id', allowedExpedienteIds);
+    dataQuery = dataQuery.in('expediente_id', allowedExpedienteIds);
+  }
 
   // Apply filters to both queries
   if (query.estado) {
@@ -214,17 +260,34 @@ export interface EstudiosStats {
   por_resultado: Record<string, number>;
 }
 
-export async function getEstudiosStats(): Promise<EstudiosStats> {
+export async function getEstudiosStats(
+  userId?: string,
+  userRol?: string,
+): Promise<EstudiosStats> {
   const inicioMes = new Date();
   inicioMes.setDate(1);
   inicioMes.setHours(0, 0, 0, 0);
 
+  // Scoping propietario/inmobiliaria: sin esto, los contadores mostraban
+  // datos GLOBALES de la plataforma a cuentas externas (fuga cross-tenant).
+  const allowedExpedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
+  if (allowedExpedienteIds !== null && allowedExpedienteIds.length === 0) {
+    return {
+      total: 0, este_mes: 0, aprobados: 0, rechazados: 0, condicionados: 0,
+      en_proceso: 0, pendientes: 0, completados: 0, por_estado: {}, por_resultado: {},
+    };
+  }
+
   // Una sola query con SELECT amplio + agregacion local. La tabla
   // estudios es pequena (~cientos en QA), no escala bien si llega a
   // millones — en ese caso pasamos a count(*) con GROUP BY via RPC.
-  const { data, error } = await (supabase
+  let statsQuery = (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select('estado, resultado, created_at');
+  if (allowedExpedienteIds !== null) {
+    statsQuery = statsQuery.in('expediente_id', allowedExpedienteIds);
+  }
+  const { data, error } = await statsQuery;
 
   if (error) {
     logger.error({ error: error.message }, 'Error al obtener stats de estudios');

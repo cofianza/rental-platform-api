@@ -1140,6 +1140,27 @@ export async function listFacturas(query: ListFacturasQuery, userId: string, use
       return { facturas: [], pagination: { total: 0, page: query.page, limit: query.limit, totalPages: 0 } };
     }
     qb = qb.in('expediente_id', expedienteIds);
+  } else if (userRol === 'propietario' || userRol === 'inmobiliaria') {
+    // Propietario/inmobiliaria solo ven facturas de expedientes de SUS
+    // inmuebles — sin esto veían TODAS las facturas de la plataforma
+    // (mismo scope que listPendientesFacturar).
+    const { data: inmuebles } = await (supabase
+      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('propietario_id', userId);
+    const inmuebleIds = ((inmuebles as { id: string }[] | null) || []).map((i) => i.id);
+    if (inmuebleIds.length === 0) {
+      return { facturas: [], pagination: { total: 0, page: query.page, limit: query.limit, totalPages: 0 } };
+    }
+    const { data: expRows } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .in('inmueble_id', inmuebleIds);
+    const expedienteIds = ((expRows as { id: string }[] | null) || []).map((e) => e.id);
+    if (expedienteIds.length === 0) {
+      return { facturas: [], pagination: { total: 0, page: query.page, limit: query.limit, totalPages: 0 } };
+    }
+    qb = qb.in('expediente_id', expedienteIds);
   }
 
   const { data, error, count } = await qb;

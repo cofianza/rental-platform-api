@@ -132,7 +132,10 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     contratos: ['create', 'read', 'update'],
     plantillas: ['read'],
     inmuebles: ['create', 'read', 'update'],
-    reportes: ['read'],
+    // Sin reportes operativos: son métricas internas GLOBALES de la
+    // plataforma (volumen, analistas, ingresos). Su "Analítica" usa los
+    // endpoints de dashboard scopeados a su cartera — igual que propietario.
+    reportes: [],
     // Igual que propietario: necesita read+update para 'Datos para contrato'
     // y para 'Creditos de estudios' (gestion de paquetes y compras).
     configuracion: ['read', 'update'],

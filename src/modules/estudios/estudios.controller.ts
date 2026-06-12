@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
-import { supabase } from '@/lib/supabase';
 import * as estudiosService from './estudios.service';
 import * as certificadoService from './certificado.service';
 import type {
@@ -22,20 +21,11 @@ import type {
 
 export async function listAll(req: Request, res: Response) {
   const query = req.query as unknown as ListAllEstudiosQuery;
-  const result = await estudiosService.listAllEstudios(query);
-
-  // Propietario: only their inmuebles' estudios
-  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
-    const { data: myInm } = await supabase.from('inmuebles').select('id').eq('propietario_id', req.user.id);
-    const myIds = new Set((myInm || []).map((i: { id: string }) => i.id));
-    const filtered = result.estudios.filter((e: Record<string, unknown>) => {
-      const expInm = ((e as { expedientes?: { inmueble_id?: string } }).expedientes as Record<string, unknown>);
-      return expInm && myIds.has(expInm.inmueble_id as string);
-    });
-    sendSuccess(res, filtered, 200, { ...result.pagination, total: filtered.length });
-    return;
-  }
-
+  // Scoping propietario/inmobiliaria en SQL (service). El post-filtro que
+  // vivía aquí comparaba contra expedientes.inmueble_id — columna que el
+  // select del service no traía → la tabla salía SIEMPRE vacía y además
+  // rompía la paginación.
+  const result = await estudiosService.listAllEstudios(query, req.user?.id, req.user?.rol);
   sendSuccess(res, result.estudios, 200, result.pagination);
 }
 
@@ -46,8 +36,9 @@ export async function listByExpediente(req: Request, res: Response) {
   sendSuccess(res, result.estudios, 200, result.pagination);
 }
 
-export async function stats(_req: Request, res: Response) {
-  const data = await estudiosService.getEstudiosStats();
+export async function stats(req: Request, res: Response) {
+  // Scopea por rol: propietario/inmobiliaria solo ven SUS contadores.
+  const data = await estudiosService.getEstudiosStats(req.user?.id, req.user?.rol);
   sendSuccess(res, data);
 }
 

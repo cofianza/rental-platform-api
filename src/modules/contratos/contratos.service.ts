@@ -711,6 +711,32 @@ const CONTRATO_LIST_WITH_RELATIONS = `
   expedientes(numero, inmuebles(codigo, direccion, ciudad), solicitantes(nombre, apellido))
 `;
 
+/**
+ * Scoping por rol: para propietario/inmobiliaria devuelve los expediente_ids
+ * de SUS inmuebles (inmuebles.propietario_id === userId); null para roles
+ * internos (sin filtro); [] si no tiene inmuebles/expedientes. Compartido
+ * por listado, stats y detalle para que nunca diverjan.
+ */
+async function resolveAllowedExpedienteIds(
+  userId?: string,
+  userRol?: string,
+): Promise<string[] | null> {
+  if (!userId || (userRol !== 'propietario' && userRol !== 'inmobiliaria')) return null;
+
+  const { data: misInmuebles } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('propietario_id', userId);
+  const inmIds = ((misInmuebles as { id: string }[] | null) || []).map((i) => i.id);
+  if (inmIds.length === 0) return [];
+
+  const { data: expedientes } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .in('inmueble_id', inmIds);
+  return ((expedientes as { id: string }[] | null) || []).map((e) => e.id);
+}
+
 export async function listAllContratos(
   query: ListAllContratosQuery,
   userId?: string,
@@ -723,32 +749,13 @@ export async function listAllContratos(
   const offset = (page - 1) * limit;
 
   // Filtro por rol: propietario/inmobiliaria solo ven contratos cuyos
-  // inmuebles les pertenecen. Resolvemos primero los expediente_ids y luego
-  // filtramos `contratos.expediente_id IN (...)`.
-  let allowedExpedienteIds: string[] | null = null;
-  if (userId && (userRol === 'propietario' || userRol === 'inmobiliaria')) {
-    const { data: misInmuebles } = await (supabase
-      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .eq('propietario_id', userId);
-    const inmIds = ((misInmuebles as { id: string }[] | null) || []).map((i) => i.id);
-    if (inmIds.length === 0) {
-      return {
-        contratos: [],
-        pagination: { total: 0, page, limit, totalPages: 0 },
-      };
-    }
-    const { data: expedientes } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .in('inmueble_id', inmIds);
-    allowedExpedienteIds = ((expedientes as { id: string }[] | null) || []).map((e) => e.id);
-    if (allowedExpedienteIds.length === 0) {
-      return {
-        contratos: [],
-        pagination: { total: 0, page, limit, totalPages: 0 },
-      };
-    }
+  // inmuebles les pertenecen (scoping en SQL via expediente_id IN (...)).
+  const allowedExpedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
+  if (allowedExpedienteIds !== null && allowedExpedienteIds.length === 0) {
+    return {
+      contratos: [],
+      pagination: { total: 0, page, limit, totalPages: 0 },
+    };
   }
 
   // Build filters helper
@@ -1317,10 +1324,27 @@ export interface ContratosStats {
   por_estado: Record<string, number>
 }
 
-export async function getContratosStats(): Promise<ContratosStats> {
-  const { data, error } = await (supabase
+export async function getContratosStats(
+  userId?: string,
+  userRol?: string,
+): Promise<ContratosStats> {
+  // Scoping propietario/inmobiliaria: sin esto los contadores mostraban
+  // datos GLOBALES de la plataforma a cuentas externas (fuga cross-tenant).
+  const allowedExpedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
+  if (allowedExpedienteIds !== null && allowedExpedienteIds.length === 0) {
+    return {
+      total: 0, pendientes_generar: 0, en_proceso_firma: 0,
+      activos: 0, finalizados: 0, cancelados: 0, por_estado: {},
+    };
+  }
+
+  let statsQuery = (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select('estado');
+  if (allowedExpedienteIds !== null) {
+    statsQuery = statsQuery.in('expediente_id', allowedExpedienteIds);
+  }
+  const { data, error } = await statsQuery;
 
   if (error) {
     logger.error({ error: error.message }, 'Error al obtener stats de contratos');
@@ -1344,7 +1368,7 @@ export async function getContratosStats(): Promise<ContratosStats> {
   };
 }
 
-export async function getContratoById(id: string) {
+export async function getContratoById(id: string, userId?: string, userRol?: string) {
   const { data, error } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select(CONTRATO_SELECT)
@@ -1353,6 +1377,17 @@ export async function getContratoById(id: string) {
 
   if (error || !data) {
     throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  }
+
+  // Ownership: propietario/inmobiliaria solo pueden ver contratos de sus
+  // inmuebles (cierra el IDOR del detalle — mismo scope que el listado).
+  // 404 en vez de 403 para no confirmar la existencia del recurso.
+  const allowedExpedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
+  if (allowedExpedienteIds !== null) {
+    const expId = (data as { expediente_id?: string | null }).expediente_id;
+    if (!expId || !allowedExpedienteIds.includes(expId)) {
+      throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+    }
   }
 
   return data;
