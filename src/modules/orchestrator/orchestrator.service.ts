@@ -7,9 +7,23 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
+import { enviarTemplate } from '@/modules/whatsapp';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
+
+/** Solicitante (nombre/teléfono) del expediente — para los WhatsApp de status. */
+async function getSolicitanteDelExpediente(expedienteId: string) {
+  const { data } = await db('expedientes')
+    .select('solicitante_id, inmueble_id, solicitantes(nombre, telefono)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  const row = data as {
+    inmueble_id: string | null;
+    solicitantes: { nombre: string | null; telefono: string | null } | null;
+  } | null;
+  return { sol: row?.solicitantes ?? null, inmuebleId: row?.inmueble_id ?? null };
+}
 
 // ── Event: Habeas Data Autorizado ───────────────────────────
 
@@ -320,6 +334,26 @@ export async function onFirmaCompletada(params: {
 
       await transicionarExpediente(expedienteId, 'cerrado');
       await registrarTimeline(expedienteId, 'contrato', 'Contrato firmado por todas las partes. Expediente cerrado automaticamente.');
+
+      // WhatsApp de status al solicitante: contrato firmado por todos —
+      // cierre feliz del proceso (fire-and-forget).
+      (async () => {
+        const { sol, inmuebleId } = await getSolicitanteDelExpediente(expedienteId);
+        let direccion = 'arrendado';
+        if (inmuebleId) {
+          const { data: inm } = await db('inmuebles')
+            .select('direccion')
+            .eq('id', inmuebleId)
+            .maybeSingle();
+          direccion = (inm as { direccion?: string | null } | null)?.direccion || direccion;
+        }
+        await enviarTemplate({
+          to: sol?.telefono ?? null,
+          template: 'CONTRATO_FIRMADO',
+          variables: [sol?.nombre || 'Hola', direccion],
+          context: { expediente_id: expedienteId, contrato_id: contratoId },
+        });
+      })().catch((err) => logger.warn({ err, contratoId }, 'Orchestrator: WhatsApp de contrato firmado falló'));
     }
   } catch (error) {
     logger.error({ error, contratoId }, 'Orchestrator: error en onFirmaCompletada');
@@ -343,6 +377,23 @@ export async function onPagoConfirmado(params: {
 
   try {
     await registrarTimeline(expedienteId, 'pago', `Pago de ${concepto} confirmado.`);
+
+    // WhatsApp de status al solicitante: "recibimos tu pago" (fire-and-forget;
+    // enviarTemplate traga errores y sin teléfono no envía).
+    (async () => {
+      const { data: pagoRow } = await db('pagos')
+        .select('monto')
+        .eq('id', pagoId)
+        .maybeSingle();
+      const monto = Number((pagoRow as { monto?: number | string | null } | null)?.monto ?? 0);
+      const { sol } = await getSolicitanteDelExpediente(expedienteId);
+      await enviarTemplate({
+        to: sol?.telefono ?? null,
+        template: 'PAGO_CONFIRMADO',
+        variables: [sol?.nombre || 'Hola', `$${new Intl.NumberFormat('es-CO').format(monto)}`],
+        context: { expediente_id: expedienteId },
+      });
+    })().catch((err) => logger.warn({ err, expedienteId }, 'Orchestrator: WhatsApp de pago confirmado falló'));
 
     // Disparar facturación electrónica fire-and-forget. Si falla, queda
     // un registro en 'facturas' con error_mensaje para retry manual desde

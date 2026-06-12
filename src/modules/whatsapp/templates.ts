@@ -93,6 +93,27 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} código OTP de 6 dígitos
     description: 'Tu código de autorización Cofianza es {{1}}. Válido por 5 minutos. No lo compartas con nadie.',
   },
+  /** Link de pago del estudio al arrendatario (refuerzo del correo). */
+  PAGO_ESTUDIO_LINK: {
+    id: 'cofianza_pago_estudio_link',
+    language: 'es_CO',
+    // {{1}} nombre, {{2}} monto formateado, {{3}} link de pago
+    description: 'Hola {{1}}, para avanzar con tu solicitud de arriendo debes pagar el estudio ({{2}} COP). Puedes pagar aquí: {{3}} — también te lo enviamos por correo.',
+  },
+  /** Confirmación de pago recibido (status para el solicitante). */
+  PAGO_CONFIRMADO: {
+    id: 'cofianza_pago_confirmado',
+    language: 'es_CO',
+    // {{1}} nombre, {{2}} monto formateado
+    description: 'Hola {{1}}, recibimos tu pago de {{2}} COP. En breve te llegará el enlace para autorizar tu estudio. Gracias por confiar en Cofianza.',
+  },
+  /** Contrato firmado por todas las partes — cierre feliz del proceso. */
+  CONTRATO_FIRMADO: {
+    id: 'cofianza_contrato_firmado',
+    language: 'es_CO',
+    // {{1}} nombre, {{2}} dirección del inmueble
+    description: 'Hola {{1}}, tu contrato de arrendamiento del inmueble {{2}} fue firmado por todas las partes. Te llegará copia por correo. Bienvenido a tu nuevo hogar.',
+  },
 } as const;
 
 export type WhatsappTemplateKey = keyof typeof WHATSAPP_TEMPLATES;

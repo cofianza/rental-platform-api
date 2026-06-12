@@ -17,7 +17,28 @@ import { getPaymentGateway } from '@/modules/pagos/gateway';
 import { transitionPagoState } from '@/modules/pagos/pago-state-machine';
 import { attachFacturas } from '@/modules/pagos/pagos.service';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
+import { enviarTemplate } from '@/modules/whatsapp';
 import type { EnviarLinkInput } from './pago-estudio.schema';
+
+/**
+ * WhatsApp con el link de pago al solicitante del expediente (refuerzo del
+ * correo). Fire-and-forget: enviarTemplate ya traga errores y sin teléfono
+ * simplemente no envía.
+ */
+async function enviarLinkPagoWhatsApp(expedienteId: string, montoFormateado: string, linkUrl: string) {
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('solicitante_id, solicitantes(nombre, telefono)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  const sol = (exp as { solicitantes?: { nombre?: string | null; telefono?: string | null } } | null)?.solicitantes;
+  await enviarTemplate({
+    to: sol?.telefono ?? null,
+    template: 'PAGO_ESTUDIO_LINK',
+    variables: [sol?.nombre || 'Hola', montoFormateado, linkUrl],
+    context: { expediente_id: expedienteId },
+  });
+}
 
 // ============================================================
 // Helpers
@@ -401,6 +422,11 @@ export async function enviarLinkPago(
     logger.error({ emailError, pagoId: pago.id }, 'Error sending estudio payment email');
   }
 
+  // WhatsApp con el link al solicitante (refuerzo del correo) — fire-and-forget.
+  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), linkResult.url).catch((err) =>
+    logger.warn({ err, expedienteId }, 'No se pudo enviar el WhatsApp del link de pago'),
+  );
+
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.PAGO_CREATED,
@@ -464,6 +490,11 @@ export async function reenviarLink(expedienteId: string, userId: string, ip?: st
       origen: 'system',
       detalles: { email: pago.email_pagador, reenviado_por: userId },
     } as never);
+
+  // WhatsApp con el link al solicitante (refuerzo del correo) — fire-and-forget.
+  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), pago.payment_link_url as string).catch((err) =>
+    logger.warn({ err, expedienteId }, 'No se pudo reenviar el WhatsApp del link de pago'),
+  );
 
   logAudit({
     usuarioId: userId,
