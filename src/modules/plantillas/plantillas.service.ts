@@ -14,7 +14,9 @@ import type {
 // ============================================================
 
 function extractVariables(contenido: string): string[] {
-  const regex = /\{\{(\w+)\}\}/g;
+  // Acepta variables planas ({{canon_mensual}}) y con namespace de las
+  // plantillas HTML V4 ({{inmueble.direccion}}).
+  const regex = /\{\{([\w.]+)\}\}/g;
   const found = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = regex.exec(contenido)) !== null) {
@@ -49,7 +51,18 @@ function buildSampleData(overrides?: Record<string, string>): Record<string, str
 // Select string
 // ============================================================
 
-const PLANTILLA_SELECT = 'id, nombre, descripcion, contenido, variables, activa, version, creado_por, created_at, updated_at';
+const PLANTILLA_SELECT = 'id, nombre, descripcion, contenido, contenido_html, variables, activa, version, creado_por, created_at, updated_at';
+
+/**
+ * La tabla tiene DOS columnas de contenido: `contenido` (plantillas legacy del
+ * editor) y `contenido_html` (plantillas HTML que usa el generador de PDF —
+ * V1/V4 viven SOLO ahí, con `contenido` en null). El panel trabaja siempre con
+ * el contenido EFECTIVO; sin esto, abrir la plantilla activa en el editor
+ * crasheaba con `null.trim()`.
+ */
+function conContenidoEfectivo<T extends { contenido?: string | null; contenido_html?: string | null }>(row: T): T {
+  return { ...row, contenido: row.contenido ?? row.contenido_html ?? '' };
+}
 
 // ============================================================
 // List
@@ -101,7 +114,7 @@ export async function listPlantillas(query: ListPlantillasQuery) {
   }
 
   return {
-    plantillas: data ?? [],
+    plantillas: ((data as Array<{ contenido?: string | null; contenido_html?: string | null }>) ?? []).map(conContenidoEfectivo),
     pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
   };
 }
@@ -121,7 +134,7 @@ export async function getPlantillaById(id: string) {
     throw AppError.notFound('Plantilla no encontrada', 'PLANTILLA_NOT_FOUND');
   }
 
-  return data;
+  return conContenidoEfectivo(data as { contenido?: string | null; contenido_html?: string | null });
 }
 
 // ============================================================
@@ -182,7 +195,7 @@ export async function updatePlantilla(
   ip?: string,
 ) {
   const previous = await getPlantillaById(id);
-  const prev = previous as unknown as { contenido: string; version: number; nombre: string };
+  const prev = previous as unknown as { contenido: string; contenido_html: string | null; version: number; nombre: string };
 
   const updateData: Record<string, unknown> = {};
 
@@ -191,7 +204,16 @@ export async function updatePlantilla(
   if (input.activa !== undefined) updateData.activa = input.activa;
 
   if (input.contenido !== undefined) {
-    updateData.contenido = input.contenido;
+    // Escribir en la columna FUENTE de esta plantilla: si vive en
+    // contenido_html (V1/V4 — la que lee el generador de PDF), la edición
+    // va ahí; si no, va a `contenido` (legacy). Escribir siempre en
+    // `contenido` dejaba la edición silenciosamente ignorada por el
+    // generador, que prioriza contenido_html.
+    if (prev.contenido_html) {
+      updateData.contenido_html = input.contenido;
+    } else {
+      updateData.contenido = input.contenido;
+    }
     updateData.variables = extractVariables(input.contenido);
     if (input.contenido !== prev.contenido) {
       updateData.version = prev.version + 1;
