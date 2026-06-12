@@ -12,6 +12,32 @@ import { enviarTemplate } from '@/modules/whatsapp';
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
 
+/**
+ * WhatsApp al dueño del inmueble (propietario/inmobiliaria) con un template de
+ * estudio. Resuelve nombre + teléfono del dueño desde `perfiles`. Best-effort:
+ * sin teléfono no envía y enviarTemplate traga errores.
+ */
+async function enviarWhatsAppDueno(
+  propietarioId: string,
+  template: 'ESTUDIO_APROBADO_DUENO' | 'ESTUDIO_CONDICIONADO_DUENO',
+  nombreArrendatario: string,
+  direccion: string,
+  expedienteId: string,
+) {
+  const { data: prop } = await db('perfiles')
+    .select('nombre, apellido, razon_social, telefono')
+    .eq('id', propietarioId)
+    .maybeSingle();
+  const p = prop as { nombre?: string | null; apellido?: string | null; razon_social?: string | null; telefono?: string | null } | null;
+  const nombreDueno = p?.razon_social || `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || 'Hola';
+  await enviarTemplate({
+    to: p?.telefono ?? null,
+    template,
+    variables: [nombreDueno, nombreArrendatario, direccion],
+    context: { expediente_id: expedienteId },
+  });
+}
+
 /** Solicitante (nombre/teléfono) del expediente — para los WhatsApp de status. */
 async function getSolicitanteDelExpediente(expedienteId: string) {
   const { data } = await db('expedientes')
@@ -236,6 +262,10 @@ export async function onEstudioCompletado(params: {
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario aprobado'));
+
+        // WhatsApp al dueño: "el estudio fue aprobado, genera el contrato".
+        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_APROBADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble', expedienteId)
+          .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño aprobado'));
       }
 
     } else if (resultado === 'rechazado') {
@@ -302,6 +332,10 @@ export async function onEstudioCompletado(params: {
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
+
+        // WhatsApp al dueño: "el estudio quedó condicionado, requiere tu revisión".
+        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_CONDICIONADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble', expedienteId)
+          .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño condicionado'));
       }
     }
 
