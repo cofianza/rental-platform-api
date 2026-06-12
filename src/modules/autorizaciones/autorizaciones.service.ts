@@ -126,10 +126,13 @@ export async function getAutorizacionForExpediente(expedienteId: string) {
     throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
-  // Get latest autorizacion for this expediente
+  // Get latest autorizacion for this expediente. Incluye los consentimientos
+  // opcionales que el solicitante eligió y la evidencia completa de la firma
+  // (IP, dispositivo, versión y texto literal firmado) — el panel admin los
+  // muestra como soporte legal de la autorización.
   const { data: autorizacion } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, canal, metodo_firma, autorizado_en, hash_documento, fecha_revocacion, motivo_revocacion, token_expiracion, created_at')
+    .select('id, estado, canal, metodo_firma, autorizado_en, hash_documento, fecha_revocacion, motivo_revocacion, token_expiracion, created_at, consent_analitica, consent_comercial, consent_historial_referencia, ip_autorizacion, user_agent, version_terminos, texto_autorizado')
     .eq('expediente_id', expedienteId)
     .order('created_at', { ascending: false })
     .limit(1)
