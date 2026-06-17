@@ -540,14 +540,26 @@ export async function cancelarYAsumir(expedienteId: string, userId: string, ip?:
  * Inmobiliaria: cancela el link pendiente y paga el estudio CONSUMIENDO UN
  * CRÉDITO (no "asume" gratis). Reusa liberarEstudioConCredito, que valida saldo,
  * crea el pago y auto-envía la autorización.
- * ponytail: si no hay créditos, liberar lanza tras haber cancelado el link → el
- * expediente vuelve al selector (sin pago); aceptable, no hay pérdida de datos.
  */
 export async function cancelarYLiberarCredito(expedienteId: string, userId: string, ip?: string) {
   const pago = await findPagoEstudio(expedienteId);
   if (!pago) throw AppError.notFound('No existe un pago de estudio pendiente');
   if (!['pendiente', 'procesando'].includes(pago.estado as string)) {
     throw AppError.badRequest('Solo se puede cancelar un pago en estado pendiente o en proceso', 'PAGO_NO_CANCELABLE');
+  }
+
+  // perfilId = userId: la inmobiliaria dueña del inmueble es dueña de los créditos.
+  const { liberarEstudioConCredito, getSaldoCreditos } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+
+  // Verificar saldo ANTES de cancelar el link: sin esto, una inmobiliaria sin
+  // créditos perdía el link ya enviado al arrendatario y quedaba sin pago.
+  // Mejor fallar acá y dejar el link vivo (puede comprar paquete o que pague el arrendatario).
+  const saldo = await getSaldoCreditos(userId);
+  if (saldo.saldo_total < 1) {
+    throw AppError.conflict(
+      'No tienes créditos disponibles. Compra un paquete o deja que el arrendatario pague el link actual.',
+      'SIN_CREDITOS',
+    );
   }
 
   await transitionPagoState({
@@ -560,8 +572,6 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
   });
   invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
 
-  // perfilId = userId: la inmobiliaria dueña del inmueble es dueña de los créditos.
-  const { liberarEstudioConCredito } = await import('@/modules/creditos-estudios/creditos-estudios.service');
   return liberarEstudioConCredito(expedienteId, userId, userId, ip);
 }
 
