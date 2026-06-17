@@ -39,6 +39,13 @@ export async function cancelarYAsumir(req: Request, res: Response) {
   sendCreated(res, pago);
 }
 
+// POST /expedientes/:expedienteId/pago-estudio/cancelar-y-liberar-credito
+export async function cancelarYLiberarCredito(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as ExpedienteIdParams;
+  const result = await pagoEstudioService.cancelarYLiberarCredito(expedienteId, req.user!.id, req.ip);
+  sendCreated(res, result);
+}
+
 // GET /publico/pago-resultado/:pagoId
 export async function resultadoPublico(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;

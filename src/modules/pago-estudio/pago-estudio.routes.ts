@@ -46,6 +46,13 @@ pagoEstudioRouter.post(
   controller.cancelarYAsumir,
 );
 
+pagoEstudioRouter.post(
+  '/cancelar-y-liberar-credito',
+  authorize('pagos', 'update'),
+  validate({ params: expedienteIdParamsSchema }),
+  controller.cancelarYLiberarCredito,
+);
+
 // ============================================================
 // Public — /api/v1/publico/pago-resultado/:pagoId
 // ============================================================

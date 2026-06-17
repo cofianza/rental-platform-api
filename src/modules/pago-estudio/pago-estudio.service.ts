@@ -536,6 +536,35 @@ export async function cancelarYAsumir(expedienteId: string, userId: string, ip?:
   return asumirCosto(expedienteId, userId, ip);
 }
 
+/**
+ * Inmobiliaria: cancela el link pendiente y paga el estudio CONSUMIENDO UN
+ * CRÉDITO (no "asume" gratis). Reusa liberarEstudioConCredito, que valida saldo,
+ * crea el pago y auto-envía la autorización.
+ * ponytail: si no hay créditos, liberar lanza tras haber cancelado el link → el
+ * expediente vuelve al selector (sin pago); aceptable, no hay pérdida de datos.
+ */
+export async function cancelarYLiberarCredito(expedienteId: string, userId: string, ip?: string) {
+  const pago = await findPagoEstudio(expedienteId);
+  if (!pago) throw AppError.notFound('No existe un pago de estudio pendiente');
+  if (!['pendiente', 'procesando'].includes(pago.estado as string)) {
+    throw AppError.badRequest('Solo se puede cancelar un pago en estado pendiente o en proceso', 'PAGO_NO_CANCELABLE');
+  }
+
+  await transitionPagoState({
+    pagoId: pago.id as string,
+    targetEstado: 'cancelado',
+    origen: 'manual',
+    detalles: { cancelado_por: userId, motivo: 'inmobiliaria_libera_credito' },
+    userId,
+    ip,
+  });
+  invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
+
+  // perfilId = userId: la inmobiliaria dueña del inmueble es dueña de los créditos.
+  const { liberarEstudioConCredito } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+  return liberarEstudioConCredito(expedienteId, userId, userId, ip);
+}
+
 // ============================================================
 // Public: resultado del pago
 // ============================================================
