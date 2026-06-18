@@ -296,7 +296,19 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     .single();
 
   if (error) {
-    logger.error({ error: error.message }, 'Error al crear expediente');
+    logger.error({ error: error.message, code: error.code }, 'Error al crear expediente');
+    // Índice único parcial idx_expediente_activo_solicitante_inmueble: ya hay un
+    // expediente activo (borrador/en_revision/info_incompleta/aprobado/condicionado)
+    // para ese mismo solicitante en ese mismo inmueble.
+    if (error.code === '23505') {
+      if ((error.message || '').includes('idx_expediente_activo_solicitante_inmueble')) {
+        throw AppError.conflict(
+          'Este solicitante ya tiene un expediente activo para este inmueble. Continúa con el existente o ciérralo antes de crear otro.',
+          'EXPEDIENTE_ACTIVO_DUPLICADO',
+        );
+      }
+      throw AppError.conflict('Ya existe un expediente con esos datos.', 'EXPEDIENTE_DUPLICADO');
+    }
     if (error.code === '23503') {
       throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
     }
