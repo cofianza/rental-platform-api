@@ -1,8 +1,10 @@
 import { z } from 'zod';
 
-// Token opaco hex de 32 bytes (64 chars).
+// Token opaco hex de 32 bytes (64 chars). Aceptamos que venga con prefijo
+// (Meta antepone el placeholder literal "{{1}}" al sufijo dinámico del botón);
+// el controller extrae los 64 hex reales. Por eso el regex NO va anclado.
 export const visitaTokenParamsSchema = z.object({
-  token: z.string().regex(/^[a-f0-9]{64}$/, 'token inválido'),
+  token: z.string().min(64).max(80).regex(/[a-f0-9]{64}/i, 'token inválido'),
 });
 
 export const visitaSlotsQuerySchema = z.object({
