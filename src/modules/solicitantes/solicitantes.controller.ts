@@ -11,7 +11,8 @@ import type {
 
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListApplicantsQuery;
-  const result = await solicitantesService.listApplicants(query);
+  // Scopea por rol: propietario/inmobiliaria solo ven los solicitantes que registraron.
+  const result = await solicitantesService.listApplicants(query, req.user?.id, req.user?.rol);
   sendSuccess(res, result.solicitantes, 200, result.pagination);
 }
 

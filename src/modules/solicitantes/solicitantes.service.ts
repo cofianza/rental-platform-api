@@ -48,7 +48,7 @@ const APPLICANT_FIELDS = `id, tipo_persona, nombre, apellido, tipo_documento, nu
 // List
 // ============================================================
 
-export async function listApplicants(query: ListApplicantsQuery) {
+export async function listApplicants(query: ListApplicantsQuery, userId?: string, userRol?: string) {
   const { search, include_inactive } = query;
   // Express 5 req.query es read-only: los defaults de Zod no se aplican, usar fallbacks
   const page = Number(query.page) || 1;
@@ -62,6 +62,13 @@ export async function listApplicants(query: ListApplicantsQuery) {
     .select(APPLICANT_FIELDS, { count: 'exact' })
     .order(sortBy, { ascending: sortOrder === 'asc' })
     .range(offset, offset + limit - 1);
+
+  // Scope por rol: propietario/inmobiliaria SOLO ven los solicitantes que
+  // ellos registraron (creado_por). Sin esto verían toda la base de datos
+  // personales de la plataforma (fuga). Admin/operador ven todo.
+  if (userId && (userRol === 'propietario' || userRol === 'inmobiliaria')) {
+    qb = qb.eq('creado_por', userId);
+  }
 
   // Excluir inactivos por defecto
   if (include_inactive !== 'true') {
