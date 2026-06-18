@@ -223,7 +223,7 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
   };
 }
 
-async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string, autoConfirm: boolean) {
+async function notificarCitaCreada(citaId: string, expedienteId: string, fechaPropuesta: string, autoConfirm: boolean) {
   const ctx = await obtenerContextoExpediente(expedienteId);
   if (!ctx) return;
 
@@ -258,10 +258,14 @@ async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaPropuesta },
     });
+    // Plantilla v2 con botones Reprogramar/Cancelar → inyectar el token de la
+    // cita (este es el camino de "creada ya confirmada" por inmobiliaria/dueño).
+    const token = await ensureCitaToken(citaId);
     await enviarTemplateWhatsApp({
       to: ctx.solicitanteTelefono,
       template: 'CITA_CONFIRMADA',
       variables: [primerNombreSol, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaLegible],
+      urlButtons: token ? [token, token] : undefined,
       context: { expediente_id: ctx.expedienteId },
     });
   } else {
@@ -584,7 +588,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
   );
 
   // Disparar email apropiado segun el origen
-  notificarCitaCreada(input.expediente_id, input.fecha_propuesta, autoConfirm).catch((e) =>
+  notificarCitaCreada(created.id, input.expediente_id, input.fecha_propuesta, autoConfirm).catch((e) =>
     logger.warn({ error: e, citaId: created.id }, 'Error al enviar notificacion de cita'),
   );
 
@@ -837,6 +841,7 @@ export async function reprogramarCita(
   if (isSolicitante) {
     // Aviso al propietario igual que cita recien solicitada.
     notificarCitaCreada(
+      id,
       cita.expediente_id as string,
       input.fecha_confirmada,
       false,
