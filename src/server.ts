@@ -17,3 +17,16 @@ if (env.PAYMENT_GATEWAY_PROVIDER === 'mercadopago') {
       .catch((err) => logger.warn({ err }, 'reconcilePendingPagos: ciclo fallido'));
   }, RECONCILE_INTERVAL_MS).unref();
 }
+
+// Vencimiento de contratos: finaliza automáticamente los contratos vigentes
+// cuya fecha_fin ya pasó y libera el inmueble. Corre al arrancar (atrapa los
+// que vencieron mientras el server estuvo caído) y cada 6 h.
+const VENCIMIENTO_INTERVAL_MS = 6 * 60 * 60 * 1000;
+if (env.CONTRATO_VENCIMIENTO_JOB_ENABLED) {
+  const runVencimiento = () =>
+    import('@/modules/contratos/contrato-vencimiento.service')
+      .then(({ finalizarContratosVencidos }) => finalizarContratosVencidos())
+      .catch((err) => logger.warn({ err }, 'finalizarContratosVencidos: ciclo fallido'));
+  runVencimiento();
+  setInterval(runVencimiento, VENCIMIENTO_INTERVAL_MS).unref();
+}

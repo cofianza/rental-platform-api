@@ -116,6 +116,81 @@ export async function executeContratoTransition(
 }
 
 // ============================================================
+// Transicion automatica del sistema (cron de vencimiento)
+// ============================================================
+
+const MOTIVO_VENCIMIENTO = 'Vencimiento automatico: se alcanzo la fecha de fin del contrato.';
+const COMENTARIO_VENCIMIENTO = 'Finalizacion automatica por vencimiento del plazo.';
+
+/**
+ * Finaliza un contrato VENCIDO como accion del sistema (sin usuario HTTP).
+ * Reusa el RPC atomico + efectos secundarios (libera el inmueble) que usa la
+ * transicion normal, pero con actor null — mismo patron que post-firma. No
+ * aplica checkPermissions (no hay usuario) ni precondiciones (el motivo se
+ * provee aqui). Idempotente: si el contrato ya no esta 'vigente', no hace nada.
+ * @returns true si lo finalizo, false si lo omitio.
+ */
+export async function finalizarContratoVencido(contratoId: string): Promise<boolean> {
+  const contrato = await fetchContrato(contratoId);
+  // Idempotencia: otra ejecucion/usuario pudo finalizarlo o cancelarlo ya.
+  if (contrato.estado !== 'vigente') return false;
+  // Defensa en profundidad: la transicion debe seguir siendo valida.
+  if (!isContratoTransitionValid('vigente', 'finalizado')) return false;
+
+  const input: ContratoTransitionInput = {
+    nuevo_estado: 'finalizado',
+    comentario: COMENTARIO_VENCIMIENTO,
+    motivo: MOTIVO_VENCIMIENTO,
+  };
+
+  // Evaluar las mismas precondiciones que el camino manual (hoy MOTIVO_REQUERIDO,
+  // que ya proveemos; a prueba de precondiciones futuras del state-machine).
+  const transitionDef = getContratoTransitionDef('vigente', 'finalizado')!;
+  await checkPreconditions(transitionDef.preconditions, contrato, input);
+
+  const descripcion = `Estado cambiado de 'vigente' a 'finalizado' por el sistema (vencimiento automatico). Motivo: ${MOTIVO_VENCIMIENTO}`;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('transicionar_contrato', {
+    p_contrato_id: contratoId,
+    p_nuevo_estado: 'finalizado',
+    p_descripcion: descripcion,
+    p_usuario_id: null, // system action
+    p_comentario: input.comentario,
+    p_motivo: input.motivo,
+  });
+
+  if (error) {
+    logger.error({ error, contratoId }, 'Error al finalizar contrato vencido');
+    throw AppError.badRequest('Error al finalizar el contrato vencido', 'TRANSITION_FAILED');
+  }
+
+  const result = data as TransitionRpcResult;
+
+  // Efectos secundarios: setea fecha_terminacion y libera el inmueble.
+  await applySideEffects(contratoId, contrato.expediente_id, 'finalizado', input);
+
+  logAudit({
+    usuarioId: null,
+    accion: AUDIT_ACTIONS.CONTRATO_TRANSITIONED,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: contratoId,
+    detalle: {
+      estado_anterior: result.estado_anterior,
+      estado_nuevo: result.estado_nuevo,
+      motivo: MOTIVO_VENCIMIENTO,
+      automatico: true,
+    },
+  });
+
+  logger.info(
+    { contratoId, from: result.estado_anterior, to: result.estado_nuevo },
+    'Contrato finalizado automaticamente por vencimiento',
+  );
+  return true;
+}
+
+// ============================================================
 // Obtener transiciones disponibles
 // ============================================================
 

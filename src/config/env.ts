@@ -83,6 +83,15 @@ const envSchema = z.object({
   WHATSAPP_META_PHONE_NUMBER_ID: z.string().default(''),
   WHATSAPP_META_ACCESS_TOKEN: z.string().default(''),
   WHATSAPP_META_API_VERSION: z.string().default('v21.0'),
+
+  // Job de vencimiento de contratos: finaliza automáticamente los contratos
+  // 'vigente' cuya fecha_fin ya pasó (y libera el inmueble). Activado por
+  // defecto; setear a 'false' para desactivarlo (p.ej. si se prefiere manual).
+  // Concurrencia: la operación es segura ante múltiples instancias (el RPC usa
+  // FOR UPDATE + guard estado='vigente'; no hay doble historial ni doble
+  // liberación), pero si se escala horizontalmente conviene dejarlo en 'true'
+  // en UNA sola instancia para evitar trabajo redundante.
+  CONTRATO_VENCIMIENTO_JOB_ENABLED: z.string().default('true').transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);
