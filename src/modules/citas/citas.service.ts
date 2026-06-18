@@ -137,29 +137,22 @@ interface ExpedienteContexto {
  * template entonces sigue sin botones — fire-and-forget).
  */
 export async function ensureCitaToken(citaId: string): Promise<string | null> {
-  // Atómico: solo escribe si el token está vacío (.is('token', null)). Si dos
-  // confirmaciones concurrentes corren a la vez, una gana el UPDATE y la otra
-  // no matchea — sin violar el UNIQUE. Luego se relee el token efectivo.
-  const token = randomBytes(32).toString('hex');
-  const { data } = await db('citas')
-    .update({ token } as never)
-    .eq('id', citaId)
-    .is('token', null)
-    .select('token')
-    .maybeSingle() as { data: { token: string } | null };
-
-  if (data?.token) return data.token;
-
-  // No matcheó: ya tenía token (o lo puso otra ejecución). Releer el actual.
-  const { data: existing } = await db('citas')
+  // Normalmente el token ya existe (DEFAULT de la columna lo genera al insertar
+  // la cita). Esto es la red de seguridad para citas viejas sin token.
+  const { data: row } = await db('citas')
     .select('token')
     .eq('id', citaId)
     .maybeSingle() as { data: { token: string | null } | null };
 
-  if (!existing?.token) {
-    logger.warn({ citaId }, 'No se pudo obtener el token público de la cita');
+  if (row?.token) return row.token;
+
+  const token = randomBytes(32).toString('hex');
+  const { error } = await db('citas').update({ token } as never).eq('id', citaId);
+  if (error) {
+    logger.warn({ error: error.message, citaId }, 'No se pudo generar el token público de la cita');
+    return null;
   }
-  return existing?.token ?? null;
+  return token;
 }
 
 export async function obtenerContextoExpediente(expedienteId: string): Promise<ExpedienteContexto | null> {
