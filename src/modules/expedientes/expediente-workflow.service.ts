@@ -137,6 +137,22 @@ export async function executeTransition(
         'No se pudo persistir info de cancelacion — el expediente quedo cerrado pero sin marca de cancelacion',
       );
     }
+
+    // Liberar el inmueble si estaba bloqueado temporalmente (en_estudio) por
+    // este expediente. Solo revierte el bloqueo temporal — un inmueble ocupado
+    // (contrato firmado) no se toca. Fire-and-forget.
+    (async () => {
+      const { data: expRow } = await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('inmueble_id')
+        .eq('id', expedienteId)
+        .maybeSingle();
+      const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
+      if (inmuebleId) {
+        const { liberarInmuebleEnEstudio } = await import('../inmuebles/inmuebles.service');
+        await liberarInmuebleEnEstudio(inmuebleId);
+      }
+    })().catch((e) => logger.warn({ e, expedienteId }, 'No se pudo liberar el inmueble tras cancelar'));
   }
 
   logger.info(

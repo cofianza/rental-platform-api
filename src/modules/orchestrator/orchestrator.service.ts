@@ -369,6 +369,16 @@ export async function onFirmaCompletada(params: {
       await transicionarExpediente(expedienteId, 'cerrado');
       await registrarTimeline(expedienteId, 'contrato', 'Contrato firmado por todas las partes. Expediente cerrado automaticamente.');
 
+      // Bloqueo PERMANENTE del inmueble: ya está arrendado → estado 'ocupado',
+      // sale de la vitrina y no admite nuevas solicitudes. Fire-and-forget.
+      (async () => {
+        const { inmuebleId } = await getSolicitanteDelExpediente(expedienteId);
+        if (inmuebleId) {
+          const { bloquearInmuebleOcupado } = await import('@/modules/inmuebles/inmuebles.service');
+          await bloquearInmuebleOcupado(inmuebleId);
+        }
+      })().catch((err) => logger.warn({ err, expedienteId }, 'Orchestrator: no se pudo marcar el inmueble como ocupado'));
+
       // WhatsApp de status al solicitante: contrato firmado por todos —
       // cierre feliz del proceso (fire-and-forget).
       (async () => {

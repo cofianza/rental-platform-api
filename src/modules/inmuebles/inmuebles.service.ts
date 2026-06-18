@@ -167,7 +167,7 @@ export async function getInmuebleById(id: string) {
       if (userRows && userRows.length > 0) {
         inmueble.propietario.email = userRows[0].email;
       }
-    } catch (err) {
+    } catch {
       // Si falla obtener email, continuar sin él
       logger.warn({ propietarioId }, 'No se pudo obtener email del propietario');
     }
@@ -458,6 +458,41 @@ export async function validateDisponibleParaEstudio(inmuebleId: string) {
   }
 
   return inmueble;
+}
+
+// ============================================================
+// Bloqueo automático del inmueble según el ciclo del expediente.
+// La vitrina pública filtra estado='disponible', así que cambiar el estado
+// lo esconde/expone sin tocar visible_vitrina (que se conserva).
+//   - Temporal (en_estudio): mientras un candidato está en estudio. Solo desde
+//     'disponible' (no pisa 'ocupado'/'inactivo'). Reversible.
+//   - Permanente (ocupado): al firmarse el contrato. No reversible aquí.
+// Fire-and-forget desde los flujos: no deben tumbar el flujo de negocio.
+// ============================================================
+
+async function setInmuebleEstado(inmuebleId: string, estado: string, soloDesde?: string) {
+  let qb = (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado, updated_at: new Date().toISOString() } as never)
+    .eq('id', inmuebleId);
+  if (soloDesde) qb = qb.eq('estado', soloDesde);
+  const { error } = await qb;
+  if (error) logger.warn({ error: error.message, inmuebleId, estado }, 'No se pudo actualizar el estado del inmueble');
+}
+
+/** Bloqueo TEMPORAL: el candidato entró en estudio. disponible → en_estudio. */
+export async function bloquearInmuebleEnEstudio(inmuebleId: string) {
+  await setInmuebleEstado(inmuebleId, 'en_estudio', 'disponible');
+}
+
+/** Bloqueo PERMANENTE: contrato firmado. → ocupado. */
+export async function bloquearInmuebleOcupado(inmuebleId: string) {
+  await setInmuebleEstado(inmuebleId, 'ocupado');
+}
+
+/** Liberar SOLO el bloqueo temporal (rechazo/cancelación). en_estudio → disponible. */
+export async function liberarInmuebleEnEstudio(inmuebleId: string) {
+  await setInmuebleEstado(inmuebleId, 'disponible', 'en_estudio');
 }
 
 // Toggle vitrina visibility — HP-369

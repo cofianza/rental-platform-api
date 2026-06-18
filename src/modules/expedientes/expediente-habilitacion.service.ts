@@ -8,6 +8,7 @@ import {
   sendEstudioAprobadoEmail,
 } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
+import { bloquearInmuebleEnEstudio } from '../inmuebles/inmuebles.service';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
@@ -83,6 +84,20 @@ export async function habilitarEstudio(
   }
 
   const rpcResult = data as { expediente_id: string; numero: string; estudio_id: string };
+
+  // Bloqueo temporal del inmueble: el candidato entró en estudio, así que el
+  // inmueble se reserva y desaparece de la vitrina (estado en_estudio). Si el
+  // estudio se rechaza o el expediente se cancela, se libera de nuevo.
+  // Fire-and-forget: no debe tumbar la habilitación si falla.
+  (async () => {
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('inmueble_id')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
+    if (inmuebleId) await bloquearInmuebleEnEstudio(inmuebleId);
+  })().catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo bloquear el inmueble en estudio'));
 
   // 3. Notificación + pago.
   //    - Propietario habilita: auto-creamos Stripe Checkout Session y dejamos
