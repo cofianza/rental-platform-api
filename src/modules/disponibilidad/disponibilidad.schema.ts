@@ -15,11 +15,20 @@ const horarioDiaSchema = z
     path: ['hora_fin'],
   });
 
+const fechaBloqueadaSchema = z.object({
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fecha debe ser YYYY-MM-DD'),
+  motivo: z.string().max(200).optional(),
+});
+
 export const upsertDisponibilidadSchema = z
   .object({
     slot_duracion_minutos: z.union([z.literal(30), z.literal(60), z.literal(120)]).default(60),
     antelacion_minima_horas: z.number().int().min(0).max(168).default(24),
+    // 0 = sin límite de citas por día.
+    max_citas_por_dia: z.number().int().min(0).max(50).default(0),
     horarios: z.array(horarioDiaSchema).max(7),
+    // Fechas puntuales bloqueadas (feriados/vacaciones). Reemplazo total.
+    fechas_bloqueadas: z.array(fechaBloqueadaSchema).max(366).default([]),
   })
   .refine(
     (v) => {

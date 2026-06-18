@@ -19,19 +19,27 @@ export interface HorarioDia {
 export interface ConfiguracionDisponibilidad {
   slot_duracion_minutos: 30 | 60 | 120;
   antelacion_minima_horas: number;
+  max_citas_por_dia: number;
   activa: boolean;
+}
+
+export interface FechaBloqueada {
+  fecha: string; // YYYY-MM-DD
+  motivo: string | null;
 }
 
 export interface DisponibilidadResponse {
   horarios: HorarioDia[];
   configuracion: ConfiguracionDisponibilidad;
+  fechas_bloqueadas: FechaBloqueada[];
 }
 
 // Defaults usados en el response cuando no hay filas reales en DB.
-// Coinciden con los defaults del RPC fn_slots_disponibles (L-V 9-17, 60min, 24h).
+// Coinciden con los defaults del RPC fn_slots_disponibles (L-V 9-17, 60min, 24h, sin tope).
 const DEFAULTS: ConfiguracionDisponibilidad = {
   slot_duracion_minutos: 60,
   antelacion_minima_horas: 24,
+  max_citas_por_dia: 0,
   activa: true,
 };
 
@@ -58,17 +66,29 @@ export async function getDisponibilidad(propietarioId: string): Promise<
   }
 
   const { data: configRow } = await db('configuracion_disponibilidad')
-    .select('slot_duracion_minutos, antelacion_minima_horas, activa')
+    .select('slot_duracion_minutos, antelacion_minima_horas, max_citas_por_dia, activa')
     .eq('propietario_id', propietarioId)
     .maybeSingle();
+
+  const { data: bloqueadasRows, error: bloqueadasErr } = await db('disponibilidad_fechas_bloqueadas')
+    .select('fecha, motivo')
+    .eq('propietario_id', propietarioId)
+    .order('fecha', { ascending: true });
+
+  if (bloqueadasErr) {
+    logger.error({ error: bloqueadasErr.message, propietarioId }, 'Error al cargar fechas bloqueadas');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al cargar la disponibilidad');
+  }
 
   const horarios = (horariosRows as HorarioDia[] | null) ?? [];
   const configuracion: ConfiguracionDisponibilidad =
     (configRow as ConfiguracionDisponibilidad | null) ?? DEFAULTS;
+  const fechas_bloqueadas = (bloqueadasRows as FechaBloqueada[] | null) ?? [];
 
   return {
     horarios,
     configuracion,
+    fechas_bloqueadas,
     tiene_config_explicita: horarios.length > 0,
   };
 }
@@ -101,6 +121,7 @@ export async function upsertDisponibilidad(
         propietario_id: propietarioId,
         slot_duracion_minutos: input.slot_duracion_minutos,
         antelacion_minima_horas: input.antelacion_minima_horas,
+        max_citas_por_dia: input.max_citas_por_dia,
         activa: true,
         updated_at: new Date().toISOString(),
       } as never,
@@ -154,6 +175,35 @@ export async function upsertDisponibilidad(
     }
   }
 
+  // 4. Reemplazo total de fechas bloqueadas (mismo patrón que horarios:
+  //    borrar todo lo del propietario y reinsertar lo enviado).
+  const { error: delBloqErr } = await db('disponibilidad_fechas_bloqueadas')
+    .delete()
+    .eq('propietario_id', propietarioId);
+  if (delBloqErr) {
+    logger.error({ error: delBloqErr.message, propietarioId }, 'Error al limpiar fechas bloqueadas');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar fechas bloqueadas');
+  }
+
+  if (input.fechas_bloqueadas.length > 0) {
+    // Dedupe por fecha (la tabla tiene UNIQUE(propietario_id, fecha)).
+    const vistos = new Set<string>();
+    const bloqPayload = input.fechas_bloqueadas
+      .filter((b) => (vistos.has(b.fecha) ? false : (vistos.add(b.fecha), true)))
+      .map((b) => ({
+        propietario_id: propietarioId,
+        fecha: b.fecha,
+        motivo: b.motivo?.trim() || null,
+      }));
+
+    const { error: insBloqErr } = await db('disponibilidad_fechas_bloqueadas')
+      .insert(bloqPayload as never);
+    if (insBloqErr) {
+      logger.error({ error: insBloqErr.message, propietarioId }, 'Error al guardar fechas bloqueadas');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al guardar las fechas bloqueadas');
+    }
+  }
+
   logger.info({ propietarioId, dias: diasEnviados }, 'Disponibilidad actualizada');
 
   // Devolver el estado actualizado
@@ -161,6 +211,7 @@ export async function upsertDisponibilidad(
   return {
     horarios: refreshed.horarios,
     configuracion: refreshed.configuracion,
+    fechas_bloqueadas: refreshed.fechas_bloqueadas,
   };
 }
 
