@@ -35,6 +35,7 @@ function registrarResultado(
   to: string,
   result: WhatsAppSendResult,
   context?: WhatsappContext,
+  urlButtons?: string[],
 ): void {
   const accion =
     result.estado === 'aceptado'
@@ -76,6 +77,8 @@ function registrarResultado(
       estado: result.estado,
       error: result.error ?? null,
       message_id: result.message_id,
+      // Cuántos botones URL se enviaron (diagnóstico: 0 = no se mandaron params).
+      botones: urlButtons?.length ?? 0,
     },
   });
 }
@@ -118,7 +121,7 @@ export async function enviarTemplate(args: {
       context,
     });
     // Deja rastro del resultado (enviado/fallido/mock + error) en log + bitácora.
-    registrarResultado(template, tpl.id, to, result, context);
+    registrarResultado(template, tpl.id, to, result, context, urlButtons);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     logger.warn(
@@ -126,6 +129,6 @@ export async function enviarTemplate(args: {
       'WhatsApp falló — el flujo de negocio sigue, pero la notificación no llegó',
     );
     // Registrar también el fallo inesperado (excepción) en la bitácora.
-    registrarResultado(template, tpl.id, to, { message_id: null, estado: 'fallido', error }, context);
+    registrarResultado(template, tpl.id, to, { message_id: null, estado: 'fallido', error }, context, urlButtons);
   }
 }

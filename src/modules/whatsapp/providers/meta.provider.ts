@@ -16,7 +16,14 @@ import type { WhatsAppMessage, WhatsAppProvider, WhatsAppSendResult } from './ty
 
 interface GraphResponse {
   messages?: Array<{ id: string }>;
-  error?: { message?: string; code?: number };
+  error?: {
+    message?: string;
+    code?: number;
+    type?: string;
+    // Meta suele poner el motivo concreto aquí (p.ej. qué parámetro/componente falta).
+    error_data?: { details?: string };
+    fbtrace_id?: string;
+  };
 }
 
 // Timeout duro del envío: sin esto, un Graph API colgado mantiene abierta la
@@ -163,9 +170,15 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
           { status: res.status, error: json?.error, to: msg.to, template: msg.templateId },
           '[WhatsApp Meta] Envío fallido',
         );
+        // Incluir el detalle concreto de Meta (error_data.details) en el mensaje
+        // de error, para que quede en la bitácora y se pueda diagnosticar.
+        const metaErr = json?.error;
+        const errStr =
+          [metaErr?.message, metaErr?.error_data?.details].filter(Boolean).join(' — ') ||
+          `HTTP ${res.status}`;
         return {
           ok: false,
-          error: json?.error?.message ?? `HTTP ${res.status}`,
+          error: errStr,
           retryable: res.status === 429 || res.status >= 500,
         };
       }
