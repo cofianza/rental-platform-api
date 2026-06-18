@@ -103,6 +103,10 @@ export const AUDIT_ACTIONS = {
   PAGO_LINK_RESENT: 'pago_link_resent',
   PAGO_WEBHOOK_PROCESSED: 'pago_webhook_processed',
   PAGO_STATE_TRANSITIONED: 'pago_state_transitioned',
+  // Notificaciones WhatsApp (diagnóstico de envíos)
+  WHATSAPP_ENVIADO: 'whatsapp_enviado',
+  WHATSAPP_FALLIDO: 'whatsapp_fallido',
+  WHATSAPP_MOCK: 'whatsapp_mock',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -124,6 +128,7 @@ export const AUDIT_ENTITIES = {
   PLANTILLA: 'plantilla',
   CONTRATO: 'contrato',
   PAGO: 'pago',
+  WHATSAPP: 'whatsapp',
 } as const;
 
 interface AuditLogParams {
