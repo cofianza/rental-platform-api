@@ -31,7 +31,8 @@ export async function create(req: Request, res: Response) {
 export async function update(req: Request, res: Response) {
   const { id } = req.params as unknown as ApplicantIdParams;
   const input = req.body as UpdateApplicantInput;
-  const applicant = await solicitantesService.updateApplicant(id, input, req.user!.id, req.ip);
+  // userRol: para que propietario/inmobiliaria solo editen los que registraron.
+  const applicant = await solicitantesService.updateApplicant(id, input, req.user!.id, req.ip, req.user?.rol);
   sendSuccess(res, applicant);
 }
 

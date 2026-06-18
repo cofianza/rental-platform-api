@@ -204,9 +204,17 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
 // Update
 // ============================================================
 
-export async function updateApplicant(id: string, input: UpdateApplicantInput, updatedBy: string, ip?: string) {
+export async function updateApplicant(id: string, input: UpdateApplicantInput, updatedBy: string, ip?: string, userRol?: string) {
   // Obtener estado anterior para diff
-  const previous = await getApplicantById(id);
+  const previous = await getApplicantById(id) as { creado_por?: string | null } & Record<string, unknown>;
+
+  // Ownership: propietario/inmobiliaria solo pueden editar los solicitantes que
+  // ELLOS registraron. Sin esto, con solicitantes:update podrían modificar por
+  // id el solicitante de otra inmobiliaria (IDOR de escritura). 404 para no
+  // confirmar la existencia del recurso ajeno.
+  if ((userRol === 'propietario' || userRol === 'inmobiliaria') && previous.creado_por !== updatedBy) {
+    throw AppError.notFound('Solicitante no encontrado', 'SOLICITANTE_NOT_FOUND');
+  }
 
   // Construir solo campos definidos
   const updateData: Record<string, unknown> = {};
