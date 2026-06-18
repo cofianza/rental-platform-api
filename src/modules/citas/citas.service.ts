@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -38,7 +39,10 @@ const CITA_SELECT = `
   expediente:expedientes (
     id, numero, estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
     inmueble:inmuebles (id, direccion, ciudad),
-    solicitante:solicitantes (nombre, apellido, telefono)
+    solicitante:solicitantes (
+      nombre, apellido, telefono, email,
+      tipo_documento, numero_documento, ciudad, ocupacion
+    )
   )
 `;
 
@@ -127,7 +131,38 @@ interface ExpedienteContexto {
   inmuebleCiudad: string;
 }
 
-async function obtenerContextoExpediente(expedienteId: string): Promise<ExpedienteContexto | null> {
+/**
+ * Garantiza que la cita tenga un token público (para los botones del WhatsApp).
+ * Lo genera y persiste si aún no existe. Devuelve null si falla (el envío del
+ * template entonces sigue sin botones — fire-and-forget).
+ */
+export async function ensureCitaToken(citaId: string): Promise<string | null> {
+  // Atómico: solo escribe si el token está vacío (.is('token', null)). Si dos
+  // confirmaciones concurrentes corren a la vez, una gana el UPDATE y la otra
+  // no matchea — sin violar el UNIQUE. Luego se relee el token efectivo.
+  const token = randomBytes(32).toString('hex');
+  const { data } = await db('citas')
+    .update({ token } as never)
+    .eq('id', citaId)
+    .is('token', null)
+    .select('token')
+    .maybeSingle() as { data: { token: string } | null };
+
+  if (data?.token) return data.token;
+
+  // No matcheó: ya tenía token (o lo puso otra ejecución). Releer el actual.
+  const { data: existing } = await db('citas')
+    .select('token')
+    .eq('id', citaId)
+    .maybeSingle() as { data: { token: string | null } | null };
+
+  if (!existing?.token) {
+    logger.warn({ citaId }, 'No se pudo obtener el token público de la cita');
+  }
+  return existing?.token ?? null;
+}
+
+export async function obtenerContextoExpediente(expedienteId: string): Promise<ExpedienteContexto | null> {
   // Obtener expediente con FKs
   const { data: exp } = await db('expedientes')
     .select('id, solicitante_id, inmueble_id')
@@ -260,6 +295,7 @@ async function notificarCitaCreada(expedienteId: string, fechaPropuesta: string,
 }
 
 async function notificarCitaConfirmada(
+  citaId: string,
   expedienteId: string,
   fechaPropuesta: string,
   fechaConfirmada: string,
@@ -339,11 +375,15 @@ async function notificarCitaConfirmada(
     link: linkExpediente,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
-  // WhatsApp al solicitante via Meta.
+  // WhatsApp al solicitante via Meta. La plantilla v2 lleva 2 botones URL
+  // (Reprogramar / Cancelar) que abren cofianza.co/visita/<accion>/<token>;
+  // el token de la cita se inyecta como sufijo de ambos botones.
+  const token = await ensureCitaToken(citaId);
   await enviarTemplateWhatsApp({
     to: ctx.solicitanteTelefono,
     template: 'CITA_CONFIRMADA',
     variables: [primerNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaConfirmadaLegible],
+    urlButtons: token ? [token, token] : undefined,
     context: { expediente_id: ctx.expedienteId },
   });
 }
@@ -681,6 +721,7 @@ export async function confirmarCita(id: string, input: ConfirmarCitaInput, userI
 
   // Notificar al solicitante que su cita fue confirmada
   notificarCitaConfirmada(
+    id,
     cita.expediente_id as string,
     cita.fecha_propuesta as string,
     (input.fecha_confirmada || cita.fecha_propuesta) as string,
@@ -812,6 +853,7 @@ export async function reprogramarCita(
   } else {
     // Aviso 'reprogramada' al solicitante (siempre, porque la fecha se movio).
     notificarCitaConfirmada(
+      id,
       cita.expediente_id as string,
       fechaAnterior,
       input.fecha_confirmada,

@@ -20,6 +20,8 @@ export async function enviarTemplate(args: {
   to: string | null | undefined;
   template: WhatsappTemplateKey;
   variables?: string[];
+  /** Sufijos de botones URL dinámicos (orden de índice). P.ej. token de la cita. */
+  urlButtons?: string[];
   context?: {
     expediente_id?: string;
     contrato_id?: string;
@@ -27,7 +29,7 @@ export async function enviarTemplate(args: {
     estudio_id?: string;
   };
 }): Promise<void> {
-  const { to, template, variables, context } = args;
+  const { to, template, variables, urlButtons, context } = args;
 
   if (!to) {
     logger.debug({ template }, 'WhatsApp omitido: sin telefono destinatario');
@@ -42,6 +44,7 @@ export async function enviarTemplate(args: {
       template_id: tpl.id,
       language: tpl.language,
       variables,
+      url_buttons: urlButtons,
       context,
     });
   } catch (err) {

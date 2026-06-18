@@ -19,6 +19,13 @@ export interface WhatsAppMessage {
    * (variables[0]) se manda en el cuerpo y en el botón "copiar código".
    */
   isAuthentication?: boolean;
+  /**
+   * Sufijos dinámicos de botones URL (uno por botón, en orden de índice).
+   * Para plantillas con botones "Visitar sitio web" de URL dinámica: cada
+   * string es el valor que Meta agrega al final de la URL base del botón i
+   * (p.ej. el token de la cita). Ignorado en plantillas Authentication.
+   */
+  urlButtons?: string[];
   /** Metadata opcional: a qué expediente / contrato / mora se refiere. */
   context?: {
     expediente_id?: string;

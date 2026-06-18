@@ -19,6 +19,7 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
         templateId: msg.templateId,
         language: msg.language ?? 'es',
         variables: msg.variables ?? [],
+        urlButtons: msg.urlButtons ?? [],
         context: msg.context ?? {},
       },
       '[WhatsApp MOCK] enviaría mensaje (provider real pendiente de Meta)',

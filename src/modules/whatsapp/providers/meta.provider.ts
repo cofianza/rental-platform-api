@@ -70,6 +70,19 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
       components = [
         { type: 'body', parameters: msg.variables.map((v) => ({ type: 'text', text: v })) },
       ];
+      // Botones URL dinámicos: cada sufijo se inyecta en el botón i (sub_type
+      // 'url'). Meta lo agrega al final de la URL base configurada en la
+      // plantilla (p.ej. https://cofianza.co/visita/reprogramar/<token>).
+      if (msg.urlButtons?.length) {
+        for (let i = 0; i < msg.urlButtons.length; i++) {
+          components.push({
+            type: 'button',
+            sub_type: 'url',
+            index: String(i),
+            parameters: [{ type: 'text', text: msg.urlButtons[i] }],
+          });
+        }
+      }
     }
 
     const body = {

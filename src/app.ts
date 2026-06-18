@@ -52,6 +52,7 @@ import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.ro
 import { vitrinaRouter } from '@/modules/vitrina/vitrina.routes';
 import exportRouter from '@/modules/export/export.routes';
 import citasRouter from '@/modules/citas/citas.routes';
+import { publicVisitaRouter } from '@/modules/citas/citas-publico.routes';
 import expedienteExternoRouter from '@/modules/expedientes/expediente-externo.routes';
 import { publicInvitacionRouter } from '@/modules/invitacion/invitacion.routes';
 import disponibilidadRouter from '@/modules/disponibilidad/disponibilidad.routes';
@@ -152,6 +153,7 @@ app.use('/api/v1/public/properties', publicPropertiesRouter);
 app.use('/api/v1/vitrina', vitrinaRouter);
 app.use('/api/v1/export', exportRouter);
 app.use('/api/v1/citas', citasRouter);
+app.use('/api/v1/public/visita', publicVisitaRouter);
 app.use('/api/v1/disponibilidad', disponibilidadRouter);
 app.use('/api/v1/expedientes', expedienteExternoRouter);
 

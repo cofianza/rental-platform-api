@@ -16,6 +16,9 @@ export const enviarWhatsappSchema = z.object({
   // true para plantillas de categoría "Authentication" (Meta): el código va en
   // el cuerpo y además en el botón "copiar código".
   is_authentication: z.boolean().optional(),
+  // Sufijos dinámicos de botones URL (uno por botón, en orden). Para plantillas
+  // con botones "Visitar sitio web" de URL dinámica (p.ej. token de la cita).
+  url_buttons: z.array(z.string().max(300)).max(3).optional(),
   context: z
     .object({
       expediente_id: z.uuid().optional(),
