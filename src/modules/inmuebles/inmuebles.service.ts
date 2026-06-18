@@ -470,12 +470,13 @@ export async function validateDisponibleParaEstudio(inmuebleId: string) {
 // Fire-and-forget desde los flujos: no deben tumbar el flujo de negocio.
 // ============================================================
 
-async function setInmuebleEstado(inmuebleId: string, estado: string, soloDesde?: string) {
+async function setInmuebleEstado(inmuebleId: string, estado: string, soloDesde?: string | string[]) {
   let qb = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .update({ estado, updated_at: new Date().toISOString() } as never)
     .eq('id', inmuebleId);
-  if (soloDesde) qb = qb.eq('estado', soloDesde);
+  if (Array.isArray(soloDesde)) qb = qb.in('estado', soloDesde);
+  else if (soloDesde) qb = qb.eq('estado', soloDesde);
   const { error } = await qb;
   if (error) logger.warn({ error: error.message, inmuebleId, estado }, 'No se pudo actualizar el estado del inmueble');
 }
@@ -493,6 +494,16 @@ export async function bloquearInmuebleOcupado(inmuebleId: string) {
 /** Liberar SOLO el bloqueo temporal (rechazo/cancelación). en_estudio → disponible. */
 export async function liberarInmuebleEnEstudio(inmuebleId: string) {
   await setInmuebleEstado(inmuebleId, 'disponible', 'en_estudio');
+}
+
+/**
+ * Liberar al terminar/cancelar el contrato: el inmueble vuelve a 'disponible'.
+ * Solo desde ocupado (contrato vigente terminado) o en_estudio (cancelación
+ * pre-firma); NO revive un inmueble 'inactivo' que el dueño desactivó a mano.
+ * No re-publica en vitrina: visible_vitrina se conserva (lo controla el dueño).
+ */
+export async function liberarInmuebleTrasContrato(inmuebleId: string) {
+  await setInmuebleEstado(inmuebleId, 'disponible', ['ocupado', 'en_estudio']);
 }
 
 // Toggle vitrina visibility — HP-369

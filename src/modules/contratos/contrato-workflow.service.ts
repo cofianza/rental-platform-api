@@ -285,6 +285,8 @@ async function applySideEffects(
         .from('contratos' as string) as ReturnType<typeof supabase.from>)
         .update({ fecha_terminacion: new Date().toISOString() } as never)
         .eq('id', contratoId);
+      // El arriendo terminó: el inmueble vuelve a estar disponible.
+      liberarInmuebleDelExpediente(expedienteId);
       break;
     }
 
@@ -296,9 +298,29 @@ async function applySideEffects(
           fecha_terminacion: new Date().toISOString(),
         } as never)
         .eq('id', contratoId);
+      // Contrato cancelado (vigente o pre-firma): liberar el inmueble.
+      liberarInmuebleDelExpediente(expedienteId);
       break;
     }
   }
+}
+
+/**
+ * Fire-and-forget: ocupado/en_estudio → disponible al terminar o cancelar el
+ * contrato. Nunca debe tumbar la transición de estado del contrato.
+ */
+function liberarInmuebleDelExpediente(expedienteId: string): void {
+  (async () => {
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('inmueble_id')
+      .eq('id', expedienteId)
+      .single();
+    const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
+    if (!inmuebleId) return;
+    const { liberarInmuebleTrasContrato } = await import('@/modules/inmuebles/inmuebles.service');
+    await liberarInmuebleTrasContrato(inmuebleId);
+  })().catch((err) => logger.warn({ err, expedienteId }, 'No se pudo liberar el inmueble tras fin/cancelación del contrato'));
 }
 
 function buildDescription(
