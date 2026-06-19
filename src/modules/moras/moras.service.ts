@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
+import { resolveAllowedReporterIds } from '@/lib/tenantScope';
 import type {
   ReportarMoraInput,
   ListMorasQuery,
@@ -261,9 +262,18 @@ export async function listMoras(query: ListMorasQuery, userId: string, rol: stri
   if (query.contrato_id) {
     qb = qb.eq('contrato_id', query.contrato_id);
   }
-  // Propietario/inmobiliaria solo ven las propias (las que reportaron).
-  if (rol !== 'administrador' && rol !== 'operador_analista') {
-    qb = qb.eq('reportado_por', userId);
+  // Org-aware (Fase 3): el equipo ve las moras de toda la inmobiliaria; un
+  // miembro restringido (miembros_ven_todo=false) o un propietario individual
+  // ven solo las propias; roles internos ven todas.
+  const reporterIds = await resolveAllowedReporterIds(userId, rol);
+  if (reporterIds !== null) {
+    if (reporterIds.length === 0) {
+      return {
+        data: [],
+        pagination: { page: query.page, limit: query.limit, total: 0, totalPages: 0 },
+      };
+    }
+    qb = qb.in('reportado_por', reporterIds);
   }
 
   const { data, error, count } = await qb.range(offset, offset + query.limit - 1);
@@ -594,8 +604,13 @@ export async function getStats(userId: string, rol: string): Promise<MorasStats>
   const isoMes = inicioMes.toISOString();
 
   let qb = db('moras_tickets').select('estado, monto_mora, reportado_at, reportado_por');
-  if (rol !== 'administrador' && rol !== 'operador_analista') {
-    qb = qb.eq('reportado_por', userId);
+  // Org-aware (Fase 3): mismas reglas que listMoras.
+  const reporterIds = await resolveAllowedReporterIds(userId, rol);
+  if (reporterIds !== null) {
+    if (reporterIds.length === 0) {
+      return { reportadas_mes: 0, resueltas: 0, en_gestion: 0, monto_total: 0 };
+    }
+    qb = qb.in('reportado_por', reporterIds);
   }
   const { data, error } = await qb;
   if (error) throw fromSupabaseError(error);

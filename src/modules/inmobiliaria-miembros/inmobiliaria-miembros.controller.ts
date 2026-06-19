@@ -7,6 +7,7 @@ import type {
   RegistrarMiembroInput,
   TokenParam,
   MiembroIdParam,
+  SetVenTodoInput,
 } from './inmobiliaria-miembros.schema';
 
 // ── Autenticado (owner / miembro de la inmobiliaria) ──────────
@@ -30,6 +31,12 @@ export async function reenviar(req: Request, res: Response) {
 export async function revocar(req: Request, res: Response) {
   const { id } = req.params as unknown as MiembroIdParam;
   const data = await service.revocarMiembro(req.user!.id, id);
+  sendSuccess(res, data);
+}
+
+export async function setVenTodo(req: Request, res: Response) {
+  const { miembros_ven_todo } = req.body as SetVenTodoInput;
+  const data = await service.setMiembrosVenTodo(req.user!.id, miembros_ven_todo);
   sendSuccess(res, data);
 }
 

@@ -9,6 +9,7 @@ import {
   searchInmueblesQuerySchema,
   listCambiosQuerySchema,
   visibilitySchema,
+  asignarResponsableSchema,
 } from './inmuebles.schema';
 import {
   inmuebleIdOnlyParamsSchema,
@@ -96,6 +97,16 @@ router.patch(
   authorize('inmuebles', 'update'),
   validate({ params: inmuebleIdParamsSchema, body: visibilitySchema }),
   inmueblesController.toggleVisibility,
+);
+
+// Asignar miembro responsable del inmueble (multi-tenant Fase 3). Sólo rol
+// inmobiliaria; el owner-check fino (de la org dueña) va en el service.
+router.patch(
+  '/:id/responsable',
+  roleGuard(['inmobiliaria']),
+  authorize('inmuebles', 'update'),
+  validate({ params: inmuebleIdParamsSchema, body: asignarResponsableSchema }),
+  inmueblesController.asignarResponsable,
 );
 
 // RN-006: Solo administrador puede ejecutar la baja logica

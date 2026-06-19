@@ -167,3 +167,10 @@ export const visibilitySchema = z.object({
 });
 
 export type VisibilityInput = z.infer<typeof visibilitySchema>;
+
+// --- Asignar miembro responsable (multi-tenant Fase 3) ---
+// miembro_id null = quitar la asignación.
+export const asignarResponsableSchema = z.object({
+  miembro_id: z.string().uuid({ message: 'ID de miembro inválido' }).nullable(),
+});
+export type AsignarResponsableInput = z.infer<typeof asignarResponsableSchema>;

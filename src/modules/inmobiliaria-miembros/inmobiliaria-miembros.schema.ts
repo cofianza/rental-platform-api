@@ -24,6 +24,11 @@ export type InvitarMiembroInput = z.infer<typeof invitarMiembroSchema>;
 
 // Registro de un invitado que aún NO tiene cuenta. El email NO se pide: sale
 // de la invitación (token), para que no se pueda registrar con otro correo.
+export const setVenTodoSchema = z.object({
+  miembros_ven_todo: z.boolean(),
+});
+export type SetVenTodoInput = z.infer<typeof setVenTodoSchema>;
+
 export const registrarMiembroSchema = z.object({
   nombre: z.string().trim().min(1, { message: 'El nombre es obligatorio' }).max(100),
   apellido: z.string().trim().min(1, { message: 'El apellido es obligatorio' }).max(100),

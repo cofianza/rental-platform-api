@@ -17,6 +17,7 @@ import type {
   SearchInmueblesQuery,
   ListCambiosQuery,
   VisibilityInput,
+  AsignarResponsableInput,
 } from './inmuebles.schema';
 
 export async function list(req: Request, res: Response) {
@@ -91,6 +92,13 @@ export async function toggleVisibility(req: Request, res: Response) {
   const { visible_vitrina } = req.body as VisibilityInput;
   const inmueble = await inmueblesService.toggleVisibility(id, visible_vitrina, req.user!.id);
   sendSuccess(res, inmueble);
+}
+
+export async function asignarResponsable(req: Request, res: Response) {
+  const { id } = req.params as unknown as InmuebleIdParams;
+  const { miembro_id } = req.body as AsignarResponsableInput;
+  const result = await inmueblesService.asignarMiembroResponsable(id, miembro_id, req.user!.id);
+  sendSuccess(res, result);
 }
 
 // Upload fachada image via backend Storage
