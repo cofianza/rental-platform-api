@@ -259,6 +259,43 @@ export async function sendExpedienteInvitacionEmail(params: {
   logger.info({ email, nombre_invitador }, 'Orchestrator email: expediente invitacion enviado');
 }
 
+// ── Invitacion de Miembro a Inmobiliaria ───────────────────
+
+export async function sendInvitacionMiembroEmail(params: {
+  email: string;
+  nombre_invitador: string;
+  nombre_organizacion: string;
+  token: string;
+  frontend_url: string;
+}) {
+  const { email, nombre_invitador, nombre_organizacion, token, frontend_url } = params;
+  const aceptarUrl = `${frontend_url}/invitacion-miembro/${token}`;
+
+  await resend.emails.send({
+    from: FROM,
+    to: email,
+    subject: `Te invitaron a unirte a ${nombre_organizacion} en Cofianza`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 24px;">Invitacion a tu equipo</h1>
+        </div>
+        <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+          <p style="color: #374151; font-size: 16px;">Hola,</p>
+          <p style="color: #6b7280;"><strong>${nombre_invitador}</strong> te invito a unirte a <strong>${nombre_organizacion}</strong> en la plataforma Cofianza para gestionar inmuebles y expedientes en equipo.</p>
+          <div style="text-align: center; margin: 24px 0;">
+            <a href="${aceptarUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Aceptar invitacion</a>
+          </div>
+          <p style="color: #6b7280; font-size: 14px;">Este enlace vence en 7 dias. Si no esperabas esta invitacion, puedes ignorar este correo.</p>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+        </div>
+      </div>
+    `,
+  });
+
+  logger.info({ email, nombre_organizacion }, 'Orchestrator email: invitacion de miembro enviada');
+}
+
 // ── Cita Solicitada — Notificacion al Propietario ──────────
 
 export async function sendCitaSolicitadaPropietarioEmail(params: {

@@ -11,6 +11,7 @@ import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from './providers/types';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
+import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 
 // ============================================================
 // Constants
@@ -90,32 +91,9 @@ export async function listEstudios(expedienteId: string, query: ListEstudiosQuer
 // List all estudios (global)
 // ============================================================
 
-/**
- * Scoping por rol para propietario/inmobiliaria: expediente_ids de SUS
- * inmuebles (inmuebles.propietario_id === userId). Devuelve null para
- * roles internos (sin filtro) y [] si no tiene inmuebles/expedientes.
- * Mismo modelo que listAllContratos — el scoping va en SQL, no en
- * post-filtro, para que la paginación y el total sean reales.
- */
-async function resolveAllowedExpedienteIds(
-  userId?: string,
-  userRol?: string,
-): Promise<string[] | null> {
-  if (!userId || (userRol !== 'propietario' && userRol !== 'inmobiliaria')) return null;
-
-  const { data: inms } = await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('propietario_id', userId);
-  const inmIds = ((inms as Array<{ id: string }>) || []).map((i) => i.id);
-  if (inmIds.length === 0) return [];
-
-  const { data: exps } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .in('inmueble_id', inmIds);
-  return ((exps as Array<{ id: string }>) || []).map((e) => e.id);
-}
+// Scoping por rol propietario/inmobiliaria centralizado en @/lib/tenantScope
+// (resolveAllowedExpedienteIds). El scoping va en SQL, no en post-filtro, para
+// que la paginación y el total sean reales.
 
 export async function listAllEstudios(
   query: ListAllEstudiosQuery,

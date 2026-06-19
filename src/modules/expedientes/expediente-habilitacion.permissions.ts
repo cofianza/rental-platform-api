@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { UserRole } from '@/types/auth';
+import { resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
 
 export interface HabilitacionContext {
   expedienteId: string;
@@ -41,7 +42,7 @@ export async function assertHabilitacionPermission(params: {
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
       'id, numero, estado, source, estudio_habilitado, inmueble_id, solicitante_id, ' +
-        'inmuebles(propietario_id, direccion, ciudad), ' +
+        'inmuebles(propietario_id, inmobiliaria_id, direccion, ciudad), ' +
         'solicitantes(email, nombre, apellido)',
     )
     .eq('id', expedienteId)
@@ -66,7 +67,7 @@ export async function assertHabilitacionPermission(params: {
     estudio_habilitado: boolean;
     inmueble_id: string;
     solicitante_id: string | null;
-    inmuebles: { propietario_id: string; direccion: string; ciudad: string } | null;
+    inmuebles: { propietario_id: string; inmobiliaria_id: string | null; direccion: string; ciudad: string } | null;
     solicitantes: { email: string; nombre: string; apellido: string } | null;
   };
 
@@ -91,9 +92,16 @@ export async function assertHabilitacionPermission(params: {
   }
 
   if (PROPIETARIO_LIKE_ROLES.includes(userRol)) {
-    if (ctx.inmueblePropietarioId !== userId) {
+    // Org-aware: dueño directo del inmueble, o miembro activo de la
+    // organización dueña del inmueble.
+    let pertenece = ctx.inmueblePropietarioId === userId;
+    if (!pertenece && userRol === 'inmobiliaria' && row.inmuebles?.inmobiliaria_id) {
+      const orgIds = await resolveMembershipInmobiliariaIds(userId);
+      pertenece = orgIds.includes(row.inmuebles.inmobiliaria_id);
+    }
+    if (!pertenece) {
       logger.warn(
-        { userId, userRol, expedienteId, reason: 'inmueble no pertenece al usuario' },
+        { userId, userRol, expedienteId, reason: 'inmueble no pertenece al usuario ni a su organización' },
         'Habilitación denegada',
       );
       throw AppError.forbidden(

@@ -218,7 +218,7 @@ export async function createInterest(
   // 1. Validate property exists, is public, and is available
   const { data: inmueble, error: inmuebleError } = await supabase
     .from('inmuebles')
-    .select('id, visible_vitrina, estado')
+    .select('id, visible_vitrina, estado, inmobiliaria_id')
     .eq('id', propertyId)
     .single();
 
@@ -226,7 +226,7 @@ export async function createInterest(
     throw AppError.notFound('Inmueble no encontrado');
   }
 
-  const inmuebleData = inmueble as { id: string; visible_vitrina: boolean; estado: string };
+  const inmuebleData = inmueble as { id: string; visible_vitrina: boolean; estado: string; inmobiliaria_id: string | null };
 
   if (!inmuebleData.visible_vitrina) {
     throw AppError.badRequest('Este inmueble no esta disponible en la vitrina publica', 'PROPERTY_NOT_PUBLIC');
@@ -284,6 +284,9 @@ export async function createInterest(
       estado: 'borrador',
       source: 'vitrina_publica',
       creado_por: userId,
+      // Multi-tenant: heredar la organización del inmueble (consistente con
+      // createExpediente). NULL si es de un propietario individual.
+      inmobiliaria_id: inmuebleData.inmobiliaria_id ?? null,
     } as never)
     .select('id, numero, estado, estudio_habilitado, source')
     .single();

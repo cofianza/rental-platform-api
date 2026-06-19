@@ -5,6 +5,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { fromSupabaseError } from '@/lib/errors';
+import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
 
 // ── Constantes para vista admin ─────────────────────────────
 //
@@ -290,15 +291,8 @@ export interface PortfolioStats {
 }
 
 export async function getPortfolioStats(perfilId: string): Promise<PortfolioStats> {
-  // 1) Inmuebles del propietario
-  const { data: inmuebles, error: inmError } = await supabase
-    .from('inmuebles')
-    .select('id')
-    .eq('propietario_id', perfilId);
-
-  if (inmError) throw fromSupabaseError(inmError);
-
-  const inmuebleIds = (inmuebles ?? []).map((i) => (i as { id: string }).id);
+  // 1) Inmuebles del portafolio (org-aware: incluye la cartera de la organización)
+  const inmuebleIds = await resolvePortfolioInmuebleIds(perfilId);
   const propiedades_activas = inmuebleIds.length;
 
   if (inmuebleIds.length === 0) {
@@ -392,13 +386,14 @@ export interface MisInmueblesData {
 }
 
 export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesData> {
-  // 1) Inmuebles del propietario
+  // 1) Inmuebles del portafolio (org-aware)
+  const portfolioIds = await resolvePortfolioInmuebleIds(perfilId);
   const { data: inmData, error: e1 } = await supabase
     .from('inmuebles')
     .select(
       'id, codigo, direccion, ciudad, tipo, valor_arriendo, habitaciones, banos, area_m2, estado, visible_vitrina, created_at',
     )
-    .eq('propietario_id', perfilId)
+    .in('id', portfolioIds)
     .order('created_at', { ascending: false });
   if (e1) throw fromSupabaseError(e1);
   const inms = (inmData ?? []) as Array<Record<string, unknown>>;
@@ -563,12 +558,8 @@ export async function getMisPagosCofianza(perfilId: string): Promise<MisPagosCof
   const comisionPct =
     Number(((cfgRows ?? []) as Array<{ clave: string; valor: string }>)[0]?.valor) || 20;
 
-  // Cadena perfil → inmuebles → expedientes → contratos activos (igual que getMisInmuebles).
-  const { data: inms } = await supabase
-    .from('inmuebles')
-    .select('id')
-    .eq('propietario_id', perfilId);
-  const inmuebleIds = ((inms ?? []) as Array<{ id: string }>).map((i) => i.id);
+  // Cadena portafolio (org-aware) → expedientes → contratos activos.
+  const inmuebleIds = await resolvePortfolioInmuebleIds(perfilId);
 
   const detalle: PagoCofianzaContratoRow[] = [];
   if (inmuebleIds.length > 0) {
@@ -653,8 +644,7 @@ export interface MiCarteraAnalitica {
 }
 
 export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCarteraAnalitica> {
-  const { data: inms } = await supabase.from('inmuebles').select('id').eq('propietario_id', perfilId);
-  const inmuebleIds = ((inms ?? []) as Array<{ id: string }>).map((i) => i.id);
+  const inmuebleIds = await resolvePortfolioInmuebleIds(perfilId);
 
   let expedienteIds: string[] = [];
   if (inmuebleIds.length) {

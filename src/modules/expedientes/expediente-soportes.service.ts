@@ -20,6 +20,7 @@ import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 
 const BUCKET_NAME = 'documentos-expedientes';
 const MAX_SOPORTE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -83,7 +84,7 @@ async function assertSoporteAccess(
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
       'id, estado, creado_por, ' +
-        'inmuebles(propietario_id), ' +
+        'inmuebles(propietario_id, inmobiliaria_id), ' +
         'solicitantes(creado_por), ' +
         'estudios(id, created_at)',
     )
@@ -102,7 +103,7 @@ async function assertSoporteAccess(
     id: string;
     estado: string;
     creado_por: string | null;
-    inmuebles: { propietario_id: string } | null;
+    inmuebles: { propietario_id: string; inmobiliaria_id: string | null } | null;
     solicitantes: { creado_por: string | null } | null;
     estudios: Array<{ id: string; created_at: string }> | null;
   };
@@ -125,11 +126,23 @@ async function assertSoporteAccess(
   const esSolicitanteRol = userRol === 'solicitante';
 
   const propietarioId = row.inmuebles?.propietario_id ?? null;
+  const inmobiliariaId = row.inmuebles?.inmobiliaria_id ?? null;
   const solicitanteUserId = row.solicitantes?.creado_por ?? row.creado_por ?? null;
+
+  // Org-aware: el propietario/inmobiliaria accede si es dueño directo o
+  // miembro de la organización dueña del inmueble.
+  const esDuenoOrg = esPropietarioRol
+    ? await perfilEsDuenoDeInmueble({
+        userId,
+        userRol,
+        inmueblePropietarioId: propietarioId,
+        inmuebleInmobiliariaId: inmobiliariaId,
+      })
+    : false;
 
   let allowed = false;
   if (esAdmin) allowed = true;
-  else if (esPropietarioRol) allowed = propietarioId === userId;
+  else if (esPropietarioRol) allowed = esDuenoOrg;
   else if (esSolicitanteRol) allowed = solicitanteUserId === userId;
 
   if (!allowed) {
@@ -144,7 +157,7 @@ async function assertSoporteAccess(
     estudioActivoId: estudioActivo.id,
     estado: row.estado,
     esSolicitante: esSolicitanteRol && solicitanteUserId === userId,
-    esPropietario: esPropietarioRol && propietarioId === userId,
+    esPropietario: esDuenoOrg,
     esAdmin,
     solicitanteUserId,
     propietarioId,

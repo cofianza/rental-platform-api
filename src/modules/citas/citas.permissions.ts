@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { UserRole } from '@/types/auth';
+import { resolveAllowedInmuebleIds, resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
 
 export type CitaAction =
   | 'create'
@@ -17,6 +18,7 @@ export interface CitaPermissionContext {
   expedienteNumero: string;
   expedienteEstado: string;
   inmueblePropietarioId: string | null;
+  inmuebleInmobiliariaId: string | null;
   solicitanteCreadoPor: string | null;
 }
 
@@ -39,7 +41,7 @@ interface ExpedienteOwnershipRow {
   estado: string;
   solicitante_id: string | null;
   inmueble_id: string;
-  inmuebles: { propietario_id: string } | null;
+  inmuebles: { propietario_id: string; inmobiliaria_id: string | null } | null;
   solicitantes: { creado_por: string } | null;
 }
 
@@ -47,7 +49,7 @@ async function fetchExpedienteOwnership(expedienteId: string): Promise<Expedient
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
-      'id, numero, estado, solicitante_id, inmueble_id, inmuebles(propietario_id), solicitantes(creado_por)',
+      'id, numero, estado, solicitante_id, inmueble_id, inmuebles(propietario_id, inmobiliaria_id), solicitantes(creado_por)',
     )
     .eq('id', expedienteId)
     .single();
@@ -69,6 +71,7 @@ function toContext(row: ExpedienteOwnershipRow): CitaPermissionContext {
     expedienteNumero: row.numero,
     expedienteEstado: row.estado,
     inmueblePropietarioId: row.inmuebles?.propietario_id ?? null,
+    inmuebleInmobiliariaId: row.inmuebles?.inmobiliaria_id ?? null,
     solicitanteCreadoPor: row.solicitantes?.creado_por ?? null,
   };
 }
@@ -131,8 +134,15 @@ export async function assertCitaPermission(params: {
   const row = await fetchExpedienteOwnership(expedienteId);
 
   if (PROPIETARIO_LIKE_ROLES.includes(userRol)) {
-    if (row.inmuebles?.propietario_id !== userId) {
-      denyAndThrow(userId, userRol, expedienteId, action, 'inmueble no pertenece al usuario');
+    // Dueño directo del inmueble (propietario individual o inmobiliaria de un
+    // solo usuario), o miembro activo de la organización dueña del inmueble.
+    let pertenece = row.inmuebles?.propietario_id === userId;
+    if (!pertenece && userRol === 'inmobiliaria' && row.inmuebles?.inmobiliaria_id) {
+      const orgIds = await resolveMembershipInmobiliariaIds(userId);
+      pertenece = orgIds.includes(row.inmuebles.inmobiliaria_id);
+    }
+    if (!pertenece) {
+      denyAndThrow(userId, userRol, expedienteId, action, 'inmueble no pertenece al usuario ni a su organización');
     }
     logger.debug({ userId, userRol, expedienteId, action }, 'Cita autorizada (propietario/inmobiliaria)');
     return toContext(row);
@@ -174,11 +184,9 @@ export async function resolveAccessibleExpedienteIds(
   }
 
   if (PROPIETARIO_LIKE_ROLES.includes(userRol)) {
-    const { data: inmuebles } = await (supabase
-      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .eq('propietario_id', userId);
-    const inmuebleIds = ((inmuebles as { id: string }[] | null) || []).map((i) => i.id);
+    // Org-aware: la inmobiliaria ve la cartera de toda su organización.
+    const inmuebleIds = await resolveAllowedInmuebleIds(userId, userRol);
+    if (inmuebleIds === null) return null;
     if (inmuebleIds.length === 0) return [];
 
     const { data: exps } = await (supabase

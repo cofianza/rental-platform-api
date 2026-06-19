@@ -239,7 +239,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
   // 1. Validar que el inmueble existe
   const { data: inmueble, error: inmuebleError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, codigo, estado')
+    .select('id, codigo, estado, inmobiliaria_id')
     .eq('id', input.inmueble_id)
     .single();
 
@@ -282,6 +282,11 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     solicitante_id: input.solicitante_id,
     creado_por: createdBy,
   };
+  // Multi-tenant: denormalizar la organización del inmueble al expediente
+  // (el scoping efectivo va por inmueble, pero esto habilita filtros directos
+  // y futuras fases sin re-derivar).
+  const inmuebleInmobiliariaId = (inmueble as { inmobiliaria_id?: string | null }).inmobiliaria_id;
+  if (inmuebleInmobiliariaId) insertData.inmobiliaria_id = inmuebleInmobiliariaId;
   if (input.analista_id) insertData.analista_id = input.analista_id;
   if (input.notas) insertData.notas = input.notas;
   if (input.coarrendatario_nombre) insertData.coarrendatario_nombre = input.coarrendatario_nombre;

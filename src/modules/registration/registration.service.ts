@@ -4,6 +4,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { sendVerificationEmail } from '@/lib/email';
+import { ensureOrgConOwner } from '@/lib/tenantScope';
 import type {
   RegisterPropietarioInput,
   RegisterInmobiliariaInput,
@@ -119,6 +120,15 @@ export async function registerInmobiliaria(
 
   if (updateError) {
     logger.error({ error: updateError.message, userId }, 'Error al actualizar perfil de inmobiliaria');
+  }
+
+  // Multi-tenant: crear la organización con esta inmobiliaria como owner, para
+  // que pueda invitar miembros. Idempotente. Log-only: si falla, el registro
+  // no se aborta (el scoping cae al fallback por propietario_id).
+  try {
+    await ensureOrgConOwner(userId, razon_social);
+  } catch (orgError) {
+    logger.error({ error: (orgError as Error).message, userId }, 'Error al crear organización de inmobiliaria');
   }
 
   await recordTermsAcceptance(userId, ipAddress, userAgent);

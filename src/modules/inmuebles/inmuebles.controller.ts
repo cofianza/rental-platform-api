@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import * as inmueblesService from './inmuebles.service';
 import * as cambiosService from './inmuebles-cambios.service';
+import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 import type {
@@ -20,11 +21,14 @@ import type {
 
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListInmueblesQuery;
-  // Propietario/Inmobiliaria only sees their own inmuebles
+  // Multi-tenant: propietario/inmobiliaria sólo ven su cartera. Para la
+  // inmobiliaria, "su cartera" = la de TODA su organización (org-aware), no
+  // sólo lo registrado a su propio perfil. Roles internos: sin restricción.
+  let restrictToIds: string[] | null = null;
   if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
-    (query as Record<string, unknown>).propietario_id = req.user.id;
+    restrictToIds = await resolvePortfolioInmuebleIds(req.user.id);
   }
-  const result = await inmueblesService.listInmuebles(query);
+  const result = await inmueblesService.listInmuebles(query, restrictToIds);
   sendSuccess(res, result.inmuebles, 200, result.pagination);
 }
 

@@ -4,6 +4,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { mergePdfs } from '@/lib/pdfMerger';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 
 // ============================================================
 // Constants
@@ -355,7 +356,7 @@ export async function descargarContratoFirmado(
   if (userRol !== 'administrador' && userRol !== 'operador_analista') {
     const { data: expediente, error: expError } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id, solicitante_id, inmuebles(propietario_id), solicitantes(creado_por)')
+      .select('id, solicitante_id, inmuebles(propietario_id, inmobiliaria_id), solicitantes(creado_por)')
       .eq('id', contrato.expediente_id)
       .single();
 
@@ -366,11 +367,18 @@ export async function descargarContratoFirmado(
     const exp = expediente as unknown as {
       id: string;
       solicitante_id: string | null;
-      inmuebles: { propietario_id: string | null } | null;
+      inmuebles: { propietario_id: string | null; inmobiliaria_id: string | null } | null;
       solicitantes: { creado_por: string | null } | null;
     };
 
-    const isArrendador = exp.inmuebles?.propietario_id === userId;
+    // Org-aware: dueño directo del inmueble o miembro activo de la organización
+    // dueña (consistente con los demás guards multi-tenant de Fase 2).
+    const isArrendador = await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
+      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
+    });
     // El solicitante.id es UUID interno; quien firmo el JWT es el
     // perfil cuyo id == solicitantes.creado_por en flujo self-service.
     const isArrendatario =

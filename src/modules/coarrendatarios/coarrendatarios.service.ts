@@ -15,6 +15,7 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
 import { Resend } from 'resend';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { InvitarCoarrendatarioInput, AceptarCoarrendatarioInput } from './coarrendatarios.schema';
 
 const resend = new Resend(env.RESEND_API_KEY);
@@ -62,6 +63,7 @@ interface ExpedienteCtx {
   estado: string;
   solicitante_creado_por: string | null;
   inmueble_propietario_id: string | null;
+  inmueble_inmobiliaria_id: string | null;
   inmueble_direccion: string;
   inmueble_ciudad: string;
   solicitante_email: string | null;
@@ -78,7 +80,7 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     .select(
       'id, numero, estado, ' +
         'solicitantes(creado_por, email, nombre, apellido), ' +
-        'inmuebles(propietario_id, direccion, ciudad)',
+        'inmuebles(propietario_id, inmobiliaria_id, direccion, ciudad)',
     )
     .eq('id', expedienteId)
     .single();
@@ -92,7 +94,7 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     numero: string;
     estado: string;
     solicitantes: { creado_por: string | null; email: string; nombre: string; apellido: string } | null;
-    inmuebles: { propietario_id: string; direccion: string; ciudad: string } | null;
+    inmuebles: { propietario_id: string; inmobiliaria_id: string | null; direccion: string; ciudad: string } | null;
   };
 
   return {
@@ -101,6 +103,7 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     estado: row.estado,
     solicitante_creado_por: row.solicitantes?.creado_por ?? null,
     inmueble_propietario_id: row.inmuebles?.propietario_id ?? null,
+    inmueble_inmobiliaria_id: row.inmuebles?.inmobiliaria_id ?? null,
     inmueble_direccion: row.inmuebles?.direccion ?? '',
     inmueble_ciudad: row.inmuebles?.ciudad ?? '',
     solicitante_email: row.solicitantes?.email ?? null,
@@ -156,7 +159,12 @@ export async function invitarCoarrendatario(
   const esSolicitante = userRol === 'solicitante' && ctx.solicitante_creado_por === userId;
   const esPropietario =
     (userRol === 'propietario' || userRol === 'inmobiliaria') &&
-    ctx.inmueble_propietario_id === userId;
+    (await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: ctx.inmueble_propietario_id,
+      inmuebleInmobiliariaId: ctx.inmueble_inmobiliaria_id,
+    }));
 
   if (!esAdmin && !esSolicitante && !esPropietario) {
     throw AppError.forbidden(
@@ -281,7 +289,12 @@ export async function getCoarrendatarioPorExpediente(
   const esSolicitante = userRol === 'solicitante' && ctx.solicitante_creado_por === userId;
   const esPropietario =
     (userRol === 'propietario' || userRol === 'inmobiliaria') &&
-    ctx.inmueble_propietario_id === userId;
+    (await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: ctx.inmueble_propietario_id,
+      inmuebleInmobiliariaId: ctx.inmueble_inmobiliaria_id,
+    }));
 
   if (!esAdmin && !esSolicitante && !esPropietario) {
     throw AppError.forbidden('No tienes permisos para ver este expediente', 'EXPEDIENTE_FORBIDDEN');
