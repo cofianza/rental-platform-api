@@ -141,6 +141,17 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} nombre del dueño, {{2}} nombre del arrendatario, {{3}} dirección
     description: 'Hola {{1}}, el estudio de {{2}} para tu inmueble {{3}} quedó condicionado y requiere tu revisión. Ingresa a Cofianza para revisar y decidir si continúas.',
   },
+  /**
+   * Aviso al dueño/inmobiliaria de que el solicitante propuso (o reprogramó)
+   * una visita y debe confirmarla. Cubre tanto la primera solicitud como la
+   * reprogramación desde el link público.
+   */
+  CITA_SOLICITADA_DUENO: {
+    id: 'cofianza_cita_solicitada_dueno',
+    language: 'es_CO',
+    // {{1}} nombre del dueño, {{2}} nombre del solicitante, {{3}} dirección, {{4}} fecha propuesta
+    description: 'Hola {{1}}, {{2}} propuso una visita a tu inmueble en {{3}} para el {{4}}. Ingresa a Cofianza para confirmarla o proponer otra fecha.',
+  },
 } as const;
 
 export type WhatsappTemplateKey = keyof typeof WHATSAPP_TEMPLATES;

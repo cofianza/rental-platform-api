@@ -288,6 +288,15 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_propuesta: fechaPropuesta },
     });
+    // WhatsApp al dueño/inmobiliaria: el solicitante propuso/reprogramó una
+    // visita y debe confirmarla. Cubre la 1ra solicitud y la reprogramación.
+    const primerNombreProp = ctx.propietarioNombre.split(' ')[0] || 'Hola';
+    await enviarTemplateWhatsApp({
+      to: ctx.propietarioTelefono,
+      template: 'CITA_SOLICITADA_DUENO',
+      variables: [primerNombreProp, ctx.solicitanteNombre, ctx.inmuebleDireccion, fechaLegible],
+      context: { expediente_id: ctx.expedienteId },
+    });
   }
 }
 
