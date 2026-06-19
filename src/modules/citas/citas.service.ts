@@ -356,11 +356,14 @@ async function notificarCitaConfirmada(
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
     });
-    // WhatsApp al solicitante via Meta (Mario 12-may-2026 — provider mock).
+    // WhatsApp al solicitante. La plantilla v2 lleva los mismos botones
+    // Reprogramar/Cancelar que la de confirmada → inyectar el token.
+    const tokenReprog = await ensureCitaToken(citaId);
     await enviarTemplateWhatsApp({
       to: ctx.solicitanteTelefono,
       template: 'CITA_REPROGRAMADA',
       variables: [primerNombre, ctx.inmuebleDireccion, fechaPropuestaLegible, fechaConfirmadaLegible],
+      urlButtons: tokenReprog ? [tokenReprog, tokenReprog] : undefined,
       context: { expediente_id: ctx.expedienteId },
     });
     return;
