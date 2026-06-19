@@ -356,6 +356,15 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   if (!exp.solicitantes) {
     throw AppError.badRequest('El expediente no tiene solicitante asociado', 'NO_SOLICITANTE');
   }
+  // El contrato es el paso posterior a la aprobación: solo se puede generar
+  // cuando el estudio del arrendatario fue aprobado (o condicionado). Antes
+  // (borrador/en_revision/info_incompleta/rechazado/cerrado) no corresponde.
+  if (exp.estado !== 'aprobado' && exp.estado !== 'condicionado') {
+    throw AppError.badRequest(
+      'El contrato solo puede generarse cuando el estudio del arrendatario está aprobado.',
+      'EXPEDIENTE_NO_APROBADO',
+    );
+  }
 
   // 2. Fetch arrendador (propietario | inmobiliaria) con todos los campos
   //    necesarios para el contrato. perfiles.rol determina si es inmobiliaria
