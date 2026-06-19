@@ -144,13 +144,14 @@ export const WHATSAPP_TEMPLATES = {
   /**
    * Aviso al dueño/inmobiliaria de que el solicitante propuso (o reprogramó)
    * una visita y debe confirmarla. Cubre tanto la primera solicitud como la
-   * reprogramación desde el link público.
+   * reprogramación desde el link público. Estilo pulido (encabezado + emojis +
+   * pie) como el resto; el cuerpo real vive en Meta.
    */
   CITA_SOLICITADA_DUENO: {
     id: 'cofianza_cita_solicitada_dueno',
     language: 'es_CO',
-    // {{1}} nombre del dueño, {{2}} nombre del solicitante, {{3}} dirección, {{4}} fecha propuesta
-    description: 'Hola {{1}}, {{2}} propuso una visita a tu inmueble en {{3}} para el {{4}}. Ingresa a Cofianza para confirmarla o proponer otra fecha.',
+    // {{1}} dueño, {{2}} solicitante, {{3}} dirección, {{4}} ciudad, {{5}} fecha propuesta
+    description: 'Hola {{1}}, {{2}} quiere visitar tu inmueble. 📍 Inmueble: {{3}}, {{4}} 📅 Fecha propuesta: {{5}}. Ingresa a Cofianza para confirmar la visita o proponer otra fecha.',
   },
 } as const;
 

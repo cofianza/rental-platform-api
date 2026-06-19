@@ -294,7 +294,7 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
     await enviarTemplateWhatsApp({
       to: ctx.propietarioTelefono,
       template: 'CITA_SOLICITADA_DUENO',
-      variables: [primerNombreProp, ctx.solicitanteNombre, ctx.inmuebleDireccion, fechaLegible],
+      variables: [primerNombreProp, ctx.solicitanteNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaLegible],
       context: { expediente_id: ctx.expedienteId },
     });
   }
