@@ -142,16 +142,25 @@ export const WHATSAPP_TEMPLATES = {
     description: 'Hola {{1}}, el estudio de {{2}} para tu inmueble {{3}} quedó condicionado y requiere tu revisión. Ingresa a Cofianza para revisar y decidir si continúas.',
   },
   /**
-   * Aviso al dueño/inmobiliaria de que el solicitante propuso (o reprogramó)
-   * una visita y debe confirmarla. Cubre tanto la primera solicitud como la
-   * reprogramación desde el link público. Estilo pulido (encabezado + emojis +
-   * pie) como el resto; el cuerpo real vive en Meta.
+   * Aviso al dueño/inmobiliaria de que el solicitante pidió una visita (PRIMERA
+   * vez) y debe confirmarla. Estilo pulido (encabezado + emojis + pie).
    */
   CITA_SOLICITADA_DUENO: {
     id: 'cofianza_cita_solicitada_dueno',
     language: 'es_CO',
-    // {{1}} dueño, {{2}} solicitante, {{3}} dirección, {{4}} ciudad, {{5}} fecha propuesta
+    // {{1}} dueño (nombre completo), {{2}} solicitante, {{3}} dirección, {{4}} ciudad, {{5}} fecha propuesta
     description: 'Hola {{1}}, {{2}} quiere visitar tu inmueble. 📍 Inmueble: {{3}}, {{4}} 📅 Fecha propuesta: {{5}}. Ingresa a Cofianza para confirmar la visita o proponer otra fecha.',
+  },
+  /**
+   * Aviso al dueño/inmobiliaria de que el solicitante REPROGRAMÓ su visita y
+   * propuso una nueva fecha (desde el link de WhatsApp o con login). Debe
+   * confirmarla. Mismas 5 variables que CITA_SOLICITADA_DUENO.
+   */
+  CITA_REPROGRAMADA_DUENO: {
+    id: 'cofianza_cita_reprogramada_dueno',
+    language: 'es_CO',
+    // {{1}} dueño (nombre completo), {{2}} solicitante, {{3}} dirección, {{4}} ciudad, {{5}} nueva fecha
+    description: 'Hola {{1}}, {{2}} reprogramó su visita y propuso una nueva fecha. 📍 Inmueble: {{3}}, {{4}} 📅 Nueva fecha: {{5}}. Ingresa a Cofianza para confirmarla o proponer otra fecha.',
   },
 } as const;
 

@@ -138,7 +138,7 @@ export async function reprogramarCitaPublica(token: string, fechaIso: string): P
   // Avisa al propietario/inmobiliaria (email + in-app) para que confirme la
   // nueva fecha — mismo flujo que cuando el solicitante reprograma con login
   // (queda como "nueva visita solicitada"). Fire-and-forget.
-  notificarCitaCreada(c.id, c.expediente_id, fechaIso, false).catch((e) =>
+  notificarCitaCreada(c.id, c.expediente_id, fechaIso, false, true).catch((e) =>
     logger.warn({ error: e, citaId: c.id }, 'Error al notificar reprogramación pública'),
   );
 

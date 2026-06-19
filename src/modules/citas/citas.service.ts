@@ -223,7 +223,7 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
   };
 }
 
-export async function notificarCitaCreada(citaId: string, expedienteId: string, fechaPropuesta: string, autoConfirm: boolean) {
+export async function notificarCitaCreada(citaId: string, expedienteId: string, fechaPropuesta: string, autoConfirm: boolean, esReprogramacion = false) {
   const ctx = await obtenerContextoExpediente(expedienteId);
   if (!ctx) return;
 
@@ -282,19 +282,20 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
     }
     notificarUsuario({
       userId: ctx.propietarioUserId,
-      tipo: 'cita.solicitada',
-      titulo: 'Nueva visita solicitada',
-      mensaje: `${ctx.solicitanteNombre || 'Un solicitante'} pidio visitar ${ctx.inmuebleDireccion}.`,
+      tipo: esReprogramacion ? 'cita.reprogramada' : 'cita.solicitada',
+      titulo: esReprogramacion ? 'Visita reprogramada' : 'Nueva visita solicitada',
+      mensaje: esReprogramacion
+        ? `${ctx.solicitanteNombre || 'El solicitante'} reprogramó su visita a ${ctx.inmuebleDireccion}. Confírmala.`
+        : `${ctx.solicitanteNombre || 'Un solicitante'} pidio visitar ${ctx.inmuebleDireccion}.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_propuesta: fechaPropuesta },
     });
-    // WhatsApp al dueño/inmobiliaria: el solicitante propuso/reprogramó una
-    // visita y debe confirmarla. Cubre la 1ra solicitud y la reprogramación.
-    const primerNombreProp = ctx.propietarioNombre.split(' ')[0] || 'Hola';
+    // WhatsApp al dueño/inmobiliaria: plantilla según sea primera solicitud o
+    // reprogramación. Saludo con el nombre completo (p.ej. la inmobiliaria).
     await enviarTemplateWhatsApp({
       to: ctx.propietarioTelefono,
-      template: 'CITA_SOLICITADA_DUENO',
-      variables: [primerNombreProp, ctx.solicitanteNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaLegible],
+      template: esReprogramacion ? 'CITA_REPROGRAMADA_DUENO' : 'CITA_SOLICITADA_DUENO',
+      variables: [ctx.propietarioNombre, ctx.solicitanteNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaLegible],
       context: { expediente_id: ctx.expedienteId },
     });
   }
@@ -848,12 +849,13 @@ export async function reprogramarCita(
   );
 
   if (isSolicitante) {
-    // Aviso al propietario igual que cita recien solicitada.
+    // Aviso al propietario: el solicitante reprogramó (debe re-confirmar).
     notificarCitaCreada(
       id,
       cita.expediente_id as string,
       input.fecha_confirmada,
       false,
+      true,
     ).catch((e) =>
       logger.warn({ error: e, citaId: id }, 'Error al notificar reprogramacion del solicitante'),
     );
