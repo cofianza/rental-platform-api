@@ -59,10 +59,16 @@ export const listExpedientesQuerySchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
+// Asignar miembro responsable del expediente (Fase 3.1). miembro_id null = quitar.
+export const asignarResponsableExpedienteSchema = z.object({
+  miembro_id: z.string().uuid({ message: 'ID de miembro inválido' }).nullable(),
+});
+
 // ============================================================
 // Type exports
 // ============================================================
 
+export type AsignarResponsableExpedienteInput = z.infer<typeof asignarResponsableExpedienteSchema>;
 export type CreateExpedienteInput = z.infer<typeof createExpedienteSchema>;
 export type UpdateExpedienteInput = z.infer<typeof updateExpedienteSchema>;
 export type ListExpedientesQuery = z.infer<typeof listExpedientesQuerySchema>;

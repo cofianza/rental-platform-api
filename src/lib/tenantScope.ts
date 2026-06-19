@@ -98,6 +98,19 @@ export async function esOwnerDeOrg(perfilId: string, orgId: string): Promise<boo
   return !!data;
 }
 
+/** ¿El perfil es MIEMBRO activo no-owner de la organización dada? (para auto-asignar al creador). */
+export async function esMiembroNoOwnerDeOrg(perfilId: string, orgId: string): Promise<boolean> {
+  const { data } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('perfil_id', perfilId)
+    .eq('inmobiliaria_id', orgId)
+    .eq('rol_miembro', 'miembro')
+    .eq('estado', 'activo')
+    .maybeSingle();
+  return !!data;
+}
+
 /** perfil_ids de los miembros ACTIVOS de una organización. */
 export async function resolveOrgMemberPerfilIds(orgId: string): Promise<string[]> {
   const { data } = await (supabase
@@ -224,14 +237,31 @@ export async function resolveAllowedExpedienteIds(
   userRol?: string,
 ): Promise<string[] | null> {
   const inmuebleIds = await resolveAllowedInmuebleIds(userId, userRol);
-  if (inmuebleIds === null) return null;
-  if (inmuebleIds.length === 0) return [];
+  if (inmuebleIds === null) return null; // rol interno: sin filtro
 
-  const { data } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .in('inmueble_id', inmuebleIds);
-  return ((data as Array<{ id: string }> | null) || []).map((e) => e.id);
+  const ids = new Set<string>();
+
+  // Expedientes de los inmuebles visibles (cartera de la org, o propios).
+  if (inmuebleIds.length > 0) {
+    const { data } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .in('inmueble_id', inmuebleIds);
+    ((data as Array<{ id: string }> | null) || []).forEach((e) => ids.add(e.id));
+  }
+
+  // Modo restringido (Fase 3.1): sumar los expedientes asignados directamente
+  // al miembro como responsable, aunque el inmueble no sea suyo.
+  const scope = await resolveVisibilityScope(userId, userRol);
+  if (scope.kind === 'own') {
+    const { data } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('miembro_responsable_id', scope.perfilId);
+    ((data as Array<{ id: string }> | null) || []).forEach((e) => ids.add(e.id));
+  }
+
+  return Array.from(ids);
 }
 
 /**
