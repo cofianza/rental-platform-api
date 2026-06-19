@@ -24,6 +24,7 @@ import { notificarUsuario } from '../notificaciones/notificaciones.service';
 const BUCKET_NAME = 'documentos-expedientes';
 const MAX_SOPORTE_BYTES = 10 * 1024 * 1024; // 10MB
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const PROPOSITOS_VALIDOS = [
   'certificacion_laboral',
   'extractos_bancarios',
@@ -35,6 +36,7 @@ const PROPOSITOS_VALIDOS = [
 ] as const;
 type Proposito = (typeof PROPOSITOS_VALIDOS)[number];
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const MIME_VALIDOS = ['application/pdf', 'image/jpeg', 'image/png'] as const;
 type MimeValido = (typeof MIME_VALIDOS)[number];
 

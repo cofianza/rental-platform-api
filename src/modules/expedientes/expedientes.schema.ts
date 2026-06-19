@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { ESTADOS_EXPEDIENTE } from './expediente-state-machine';
 import { TIPOS_DOCUMENTO } from '../solicitantes/solicitantes.schema';
 
 // Reusar del workflow schema

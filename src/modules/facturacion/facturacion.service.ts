@@ -1322,7 +1322,7 @@ export async function getFacturaById(id: string) {
   // Si la fila tiene total en null/0 (caso histórico antes del fallback al
   // monto del pago), leemos el monto del pago asociado para mostrarlo.
   let totalEffective = totalDb;
-  let taxEffective = taxDb ?? 0;
+  const taxEffective = taxDb ?? 0;
   if ((!totalEffective || totalEffective === 0) && f.pago_id) {
     const { data: pago } = await (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)

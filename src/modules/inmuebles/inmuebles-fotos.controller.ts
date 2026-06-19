@@ -10,7 +10,6 @@ import type {
   CreateFotoInput,
   UpdateFotoInput,
   ReordenarFotosInput,
-  SetFachadaInput,
 } from './inmuebles-fotos.schema';
 
 /**

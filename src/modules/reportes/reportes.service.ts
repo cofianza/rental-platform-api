@@ -341,7 +341,6 @@ export async function getIngresosReporte(
   const pendientesData = pendientesResult.data ?? [];
 
   // Group completed pagos by month + concepto
-  const monthKeys = generateMonthKeys(range.dateFrom, range.dateTo);
   const groupMap = new Map<string, { cantidad_pagos: number; monto_total: number }>();
 
   // Initialize all month keys (without concepto — we only create entries for actual data)

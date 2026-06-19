@@ -29,12 +29,7 @@ interface TextSegment {
 function parseInlineFormatting(html: string): TextSegment[] {
   const segments: TextSegment[] = [];
   // Remove tags we don't handle inline
-  let text = html.replace(/<br\s*\/?>/gi, ' ');
-
-  // Process strong/b, em/i, u tags
-  const regex = /<(strong|b|em|i|u)>(.*?)<\/\1>/gi;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
+  const text = html.replace(/<br\s*\/?>/gi, ' ');
 
   // Simple single-level inline parsing
   const cleaned = text.replace(/<(?!\/?(strong|b|em|i|u))[^>]+>/gi, '');
@@ -222,7 +217,7 @@ export function generateContractPdf(compiledHtml: string, metadata: PdfMetadata)
           doc.moveDown(0.4);
           break;
 
-        case 'list-item':
+        case 'list-item': {
           doc.font(FONTS.regular).fontSize(FONT_SIZES.body);
           const bulletX = MARGIN + 10;
           const textX = MARGIN + 25;
@@ -231,6 +226,7 @@ export function generateContractPdf(compiledHtml: string, metadata: PdfMetadata)
           renderSegments(doc, token.segments, FONT_SIZES.body, false, textX);
           doc.moveDown(0.2);
           break;
+        }
 
         case 'horizontal-rule':
           doc.moveDown(0.3);

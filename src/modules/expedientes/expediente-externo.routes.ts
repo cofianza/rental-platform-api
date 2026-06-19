@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware, authorize } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { sendSuccess, sendCreated } from '@/lib/response';
+import { sendCreated } from '@/lib/response';
 import {
   crearExpedienteExternoSchema,
   type CrearExpedienteExternoInput,

@@ -6,7 +6,6 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from '@/lib/supabase';
-import { logger } from '@/lib/logger';
 
 /**
  * For propietario users: adds propietario_id filter to queries
