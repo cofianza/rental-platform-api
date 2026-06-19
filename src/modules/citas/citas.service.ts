@@ -223,7 +223,7 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
   };
 }
 
-async function notificarCitaCreada(citaId: string, expedienteId: string, fechaPropuesta: string, autoConfirm: boolean) {
+export async function notificarCitaCreada(citaId: string, expedienteId: string, fechaPropuesta: string, autoConfirm: boolean) {
   const ctx = await obtenerContextoExpediente(expedienteId);
   if (!ctx) return;
 
@@ -391,7 +391,7 @@ async function notificarCitaConfirmada(
  * Si lo cancela el solicitante -> notifica al propietario.
  * El rol del actor decide la direccion del aviso.
  */
-async function notificarCitaCancelada(
+export async function notificarCitaCancelada(
   expedienteId: string,
   fechaCita: string,
   motivo: string,

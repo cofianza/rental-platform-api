@@ -16,8 +16,7 @@ import {
   getSlotsPorInmueble,
   type SlotsDia,
 } from '../disponibilidad/disponibilidad.service';
-import { notificarUsuario } from '../notificaciones/notificaciones.service';
-import { obtenerContextoExpediente } from './citas.service';
+import { notificarCitaCreada, notificarCitaCancelada } from './citas.service';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
@@ -136,10 +135,11 @@ export async function reprogramarCitaPublica(token: string, fechaIso: string): P
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo reprogramar la visita');
   }
 
-  // Avisar al propietario para que confirme la nueva fecha (fire-and-forget).
-  notificarPropietario(c.expediente_id, 'cita.reprogramada', 'Visita reprogramada por el solicitante', (nombre, dir) =>
-    `${nombre} propuso una nueva fecha para la visita a ${dir}. Confírmala en tu agenda.`,
-    { fecha_propuesta: fechaIso },
+  // Avisa al propietario/inmobiliaria (email + in-app) para que confirme la
+  // nueva fecha — mismo flujo que cuando el solicitante reprograma con login
+  // (queda como "nueva visita solicitada"). Fire-and-forget.
+  notificarCitaCreada(c.id, c.expediente_id, fechaIso, false).catch((e) =>
+    logger.warn({ error: e, citaId: c.id }, 'Error al notificar reprogramación pública'),
   );
 
   logger.info({ citaId: c.id }, 'Cita reprogramada desde link público');
@@ -166,32 +166,13 @@ export async function cancelarCitaPublica(token: string, motivo?: string): Promi
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo cancelar la visita');
   }
 
-  notificarPropietario(c.expediente_id, 'cita.cancelada', 'Visita cancelada por el solicitante', (nombre, dir) =>
-    `${nombre} canceló la visita a ${dir}.`,
+  // Avisa al propietario/inmobiliaria (email + in-app) que el solicitante canceló.
+  const fechaCita = c.fecha_confirmada || c.fecha_propuesta || new Date().toISOString();
+  const motivoFinal = motivo?.trim() || 'Cancelada por el solicitante desde WhatsApp';
+  notificarCitaCancelada(c.expediente_id, fechaCita, motivoFinal, 'solicitante').catch((e) =>
+    logger.warn({ error: e, citaId: c.id }, 'Error al notificar cancelación pública'),
   );
 
   logger.info({ citaId: c.id }, 'Cita cancelada desde link público');
   return toDTO(await fetchCitaByToken(token));
-}
-
-/** Notificación in-app al propietario (fire-and-forget). */
-function notificarPropietario(
-  expedienteId: string,
-  tipo: string,
-  titulo: string,
-  mensaje: (nombreSolicitante: string, inmueble: string) => string,
-  extraPayload: Record<string, unknown> = {},
-): void {
-  (async () => {
-    const ctx = await obtenerContextoExpediente(expedienteId);
-    if (!ctx?.propietarioUserId) return;
-    notificarUsuario({
-      userId: ctx.propietarioUserId,
-      tipo,
-      titulo,
-      mensaje: mensaje(ctx.solicitanteNombre || 'El solicitante', ctx.inmuebleDireccion),
-      link: '/citas',
-      payload: { expediente_id: expedienteId, ...extraPayload },
-    });
-  })().catch((err) => logger.warn({ err, expedienteId }, 'No se pudo notificar al propietario (cita pública)'));
 }
