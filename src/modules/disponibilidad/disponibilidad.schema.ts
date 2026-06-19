@@ -17,7 +17,9 @@ const horarioDiaSchema = z
 
 const fechaBloqueadaSchema = z.object({
   fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'fecha debe ser YYYY-MM-DD'),
-  motivo: z.string().max(200).optional(),
+  // El front manda null cuando no hay motivo (no undefined), así que aceptamos
+  // string | null | undefined.
+  motivo: z.string().max(200).nullish(),
 });
 
 export const upsertDisponibilidadSchema = z
