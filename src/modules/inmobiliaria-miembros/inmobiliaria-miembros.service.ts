@@ -94,7 +94,10 @@ export async function listMiembros(userId: string): Promise<{
   }
 
   const { data, error } = await db('inmobiliaria_miembros')
-    .select('id, email, rol_miembro, estado, perfil_id, created_at, perfiles(nombre, apellido)')
+    // FK explícito: inmobiliaria_miembros tiene 2 FKs a perfiles (perfil_id e
+    // invitado_por), así que hay que desambiguar el embed o PostgREST falla con
+    // "more than one relationship was found".
+    .select('id, email, rol_miembro, estado, perfil_id, created_at, perfiles!inmobiliaria_miembros_perfil_id_fkey(nombre, apellido)')
     .eq('inmobiliaria_id', m.inmobiliaria_id)
     .neq('estado', 'revocado')
     .order('created_at', { ascending: true });
