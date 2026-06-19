@@ -7,6 +7,7 @@ import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 import { renderTemplate } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 import type {
   GenerarContratoInput,
   RenovarContratoInput,
@@ -720,31 +721,9 @@ const CONTRATO_LIST_WITH_RELATIONS = `
   expedientes(numero, inmuebles(codigo, direccion, ciudad), solicitantes(nombre, apellido))
 `;
 
-/**
- * Scoping por rol: para propietario/inmobiliaria devuelve los expediente_ids
- * de SUS inmuebles (inmuebles.propietario_id === userId); null para roles
- * internos (sin filtro); [] si no tiene inmuebles/expedientes. Compartido
- * por listado, stats y detalle para que nunca diverjan.
- */
-async function resolveAllowedExpedienteIds(
-  userId?: string,
-  userRol?: string,
-): Promise<string[] | null> {
-  if (!userId || (userRol !== 'propietario' && userRol !== 'inmobiliaria')) return null;
-
-  const { data: misInmuebles } = await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('propietario_id', userId);
-  const inmIds = ((misInmuebles as { id: string }[] | null) || []).map((i) => i.id);
-  if (inmIds.length === 0) return [];
-
-  const { data: expedientes } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .in('inmueble_id', inmIds);
-  return ((expedientes as { id: string }[] | null) || []).map((e) => e.id);
-}
+// Scoping por rol propietario/inmobiliaria centralizado en @/lib/tenantScope
+// (resolveAllowedExpedienteIds). Compartido por listado, stats y detalle para
+// que nunca diverjan.
 
 export async function listAllContratos(
   query: ListAllContratosQuery,

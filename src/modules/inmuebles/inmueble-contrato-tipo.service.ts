@@ -10,13 +10,14 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { UserRole } from '@/types/auth';
 
 const BUCKET_NAME = 'documentos-expedientes';
 const DOWNLOAD_URL_EXPIRY_SECONDS = 600; // 10 min
 
 const INMUEBLE_SELECT = `
-  id, propietario_id,
+  id, propietario_id, inmobiliaria_id,
   contrato_tipo_storage_key, contrato_tipo_nombre_archivo,
   contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en
 `;
@@ -24,6 +25,7 @@ const INMUEBLE_SELECT = `
 interface InmuebleContratoTipoRow {
   id: string;
   propietario_id: string | null;
+  inmobiliaria_id: string | null;
   contrato_tipo_storage_key: string | null;
   contrato_tipo_nombre_archivo: string | null;
   contrato_tipo_tamano_bytes: number | null;
@@ -50,10 +52,17 @@ async function fetchInmuebleOrThrow(inmuebleId: string): Promise<InmuebleContrat
  * Ownership guard: propietario/inmobiliaria solo pueden operar sobre
  * inmuebles propios. Admin/operador pasan sin chequeo.
  */
-function assertOwnership(inmueble: InmuebleContratoTipoRow, userId: string, userRol: UserRole): void {
+async function assertOwnership(inmueble: InmuebleContratoTipoRow, userId: string, userRol: UserRole): Promise<void> {
   if (userRol === 'administrador' || userRol === 'operador_analista') return;
   if (userRol === 'propietario' || userRol === 'inmobiliaria') {
-    if (inmueble.propietario_id !== userId) {
+    // Org-aware: dueño directo o miembro de la organización dueña del inmueble.
+    const esDueno = await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: inmueble.propietario_id,
+      inmuebleInmobiliariaId: inmueble.inmobiliaria_id,
+    });
+    if (!esDueno) {
       throw AppError.forbidden(
         'No tienes permisos sobre este inmueble',
         'INMUEBLE_FORBIDDEN',
@@ -78,7 +87,7 @@ export async function subirContratoTipo(
   }
 
   const inmueble = await fetchInmuebleOrThrow(inmuebleId);
-  assertOwnership(inmueble, userId, userRol as UserRole);
+  await assertOwnership(inmueble, userId, userRol as UserRole);
 
   // Si ya había un contrato tipo, borramos el anterior del storage antes de
   // subir el nuevo (no queremos dejar archivos huérfanos).
@@ -152,7 +161,7 @@ export async function obtenerUrlContratoTipo(
   userRol: string,
 ) {
   const inmueble = await fetchInmuebleOrThrow(inmuebleId);
-  assertOwnership(inmueble, userId, userRol as UserRole);
+  await assertOwnership(inmueble, userId, userRol as UserRole);
 
   if (!inmueble.contrato_tipo_storage_key) {
     throw AppError.notFound('Este inmueble no tiene contrato tipo subido', 'CONTRATO_TIPO_NOT_FOUND');
@@ -187,7 +196,7 @@ export async function eliminarContratoTipo(
   ip?: string,
 ) {
   const inmueble = await fetchInmuebleOrThrow(inmuebleId);
-  assertOwnership(inmueble, userId, userRol as UserRole);
+  await assertOwnership(inmueble, userId, userRol as UserRole);
 
   if (!inmueble.contrato_tipo_storage_key) {
     throw AppError.notFound('Este inmueble no tiene contrato tipo subido', 'CONTRATO_TIPO_NOT_FOUND');

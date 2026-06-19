@@ -16,6 +16,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
 
 // ============================================================
@@ -513,12 +514,20 @@ export async function liberarEstudioConCredito(
   }
   const { data: inmData } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('propietario_id, direccion, ciudad')
+    .select('propietario_id, inmobiliaria_id, direccion, ciudad')
     .eq('id', exp.inmueble_id)
     .single();
-  const inm = inmData as { propietario_id: string; direccion: string; ciudad: string } | null;
+  const inm = inmData as { propietario_id: string; inmobiliaria_id: string | null; direccion: string; ciudad: string } | null;
   if (!inm) throw AppError.notFound('Inmueble no encontrado');
-  if (inm.propietario_id !== perfilId) {
+  // Org-aware: dueño directo o miembro de la organización dueña (los créditos
+  // son de la inmobiliaria; cualquier miembro activo puede liberarlos).
+  const esDueno = await perfilEsDuenoDeInmueble({
+    userId: perfilId,
+    userRol: 'inmobiliaria',
+    inmueblePropietarioId: inm.propietario_id,
+    inmuebleInmobiliariaId: inm.inmobiliaria_id,
+  });
+  if (!esDueno) {
     throw AppError.forbidden('Este inmueble no le pertenece', 'INMUEBLE_NO_PROPIO');
   }
 

@@ -18,6 +18,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import * as factus from '@/lib/factus';
 import type { ListFacturasQuery } from './facturacion.schema';
 import type { UserRole } from '@/types/auth';
+import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -1141,26 +1142,15 @@ export async function listFacturas(query: ListFacturasQuery, userId: string, use
     }
     qb = qb.in('expediente_id', expedienteIds);
   } else if (userRol === 'propietario' || userRol === 'inmobiliaria') {
-    // Propietario/inmobiliaria solo ven facturas de expedientes de SUS
-    // inmuebles — sin esto veían TODAS las facturas de la plataforma
-    // (mismo scope que listPendientesFacturar).
-    const { data: inmuebles } = await (supabase
-      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .eq('propietario_id', userId);
-    const inmuebleIds = ((inmuebles as { id: string }[] | null) || []).map((i) => i.id);
-    if (inmuebleIds.length === 0) {
+    // Org-aware: facturas de los expedientes de su cartera/organización
+    // (resolveAllowedExpedienteIds: inmuebles propios + de sus organizaciones).
+    const expedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
+    if (expedienteIds !== null && expedienteIds.length === 0) {
       return { facturas: [], pagination: { total: 0, page: query.page, limit: query.limit, totalPages: 0 } };
     }
-    const { data: expRows } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .in('inmueble_id', inmuebleIds);
-    const expedienteIds = ((expRows as { id: string }[] | null) || []).map((e) => e.id);
-    if (expedienteIds.length === 0) {
-      return { facturas: [], pagination: { total: 0, page: query.page, limit: query.limit, totalPages: 0 } };
+    if (expedienteIds !== null) {
+      qb = qb.in('expediente_id', expedienteIds);
     }
-    qb = qb.in('expediente_id', expedienteIds);
   }
 
   const { data, error, count } = await qb;
@@ -1222,20 +1212,9 @@ export async function listPendientesFacturar(
     expedienteIdsScope = ((expRows as { id: string }[] | null) || []).map((e) => e.id);
     if (expedienteIdsScope.length === 0) return [];
   } else if (userRol === 'propietario' || userRol === 'inmobiliaria') {
-    // Filtrar expedientes cuyo inmueble pertenece al usuario.
-    const { data: inmuebles } = await (supabase
-      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .eq('propietario_id', userId);
-    const inmuebleIds = ((inmuebles as { id: string }[] | null) || []).map((i) => i.id);
-    if (inmuebleIds.length === 0) return [];
-
-    const { data: expRows } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .in('inmueble_id', inmuebleIds);
-    expedienteIdsScope = ((expRows as { id: string }[] | null) || []).map((e) => e.id);
-    if (expedienteIdsScope.length === 0) return [];
+    // Org-aware: expedientes de su cartera/organización.
+    expedienteIdsScope = await resolveAllowedExpedienteIds(userId, userRol);
+    if (expedienteIdsScope !== null && expedienteIdsScope.length === 0) return [];
   }
 
   // 2. Pagos completados en el alcance.

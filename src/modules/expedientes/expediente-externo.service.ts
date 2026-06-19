@@ -19,7 +19,7 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
 
   // 1. Validar que el inmueble existe
   const { data: inmueble, error: inmuebleError } = await db('inmuebles')
-    .select('id, codigo, direccion, ciudad')
+    .select('id, codigo, direccion, ciudad, inmobiliaria_id')
     .eq('id', inmueble_id)
     .single();
 
@@ -27,7 +27,7 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
     throw AppError.badRequest('Inmueble no encontrado. Verifique el ID proporcionado', 'INMUEBLE_NOT_FOUND');
   }
 
-  const inm = inmueble as unknown as { id: string; codigo: string; direccion: string; ciudad: string };
+  const inm = inmueble as unknown as { id: string; codigo: string; direccion: string; ciudad: string; inmobiliaria_id: string | null };
 
   // 2. Obtener datos del invitador
   const { data: invitador, error: invitadorError } = await db('perfiles')
@@ -52,6 +52,9 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
     token_invitacion: token,
     email_invitacion,
   };
+  // Multi-tenant: denormalizar la organización del inmueble (consistente con
+  // createExpediente). NULL si el inmueble es de un propietario individual.
+  if (inm.inmobiliaria_id) insertData.inmobiliaria_id = inm.inmobiliaria_id;
   if (notas) insertData.notas = notas;
 
   const { data, error } = await db('expedientes')

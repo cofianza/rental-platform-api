@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
 import type {
   CreateInmuebleInput,
   UpdateInmuebleInput,
@@ -73,7 +74,7 @@ function mapWithOwner(row: InmuebleWithOwnerRow) {
   };
 }
 
-export async function listInmuebles(query: ListInmueblesQuery) {
+export async function listInmuebles(query: ListInmueblesQuery, restrictToIds?: string[] | null) {
   const { search, tipo, uso, estado, ciudad, estrato,
     propietario_id, visible_vitrina, include_inactive } = query;
   // Express 5 req.query es read-only: los defaults de Zod no se aplican, usar fallbacks
@@ -83,11 +84,21 @@ export async function listInmuebles(query: ListInmueblesQuery) {
   const sortOrder = query.sortOrder || 'desc';
   const offset = (page - 1) * limit;
 
+  // Multi-tenant: scoping org-aware. restrictToIds = inmueble IDs visibles para
+  // el usuario (su cartera / la de su organización). [] => no ve ninguno.
+  if (restrictToIds !== undefined && restrictToIds !== null && restrictToIds.length === 0) {
+    return { inmuebles: [], pagination: { total: 0, page, limit, totalPages: 0 } };
+  }
+
   let qb = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select(INMUEBLE_FIELDS, { count: 'exact' })
     .order(sortBy, { ascending: sortOrder === 'asc' })
     .range(offset, offset + limit - 1);
+
+  if (restrictToIds !== undefined && restrictToIds !== null) {
+    qb = qb.in('id', restrictToIds);
+  }
 
   // Excluir inactivos por defecto
   if (estado) {
@@ -210,9 +221,16 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
     }
   }
 
+  // Multi-tenant: si el propietario pertenece a una organización (inmobiliaria),
+  // el inmueble se etiqueta con esa organización para que toda su cartera sea
+  // visible a los miembros. Propietario individual -> NULL (scoping legacy).
+  const inmobiliariaId = await resolveInmobiliariaIdForPerfil(input.propietario_id);
+  const insertData: Record<string, unknown> = { ...input };
+  if (inmobiliariaId) insertData.inmobiliaria_id = inmobiliariaId;
+
   const { data, error } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .insert(input as never)
+    .insert(insertData as never)
     .select(INMUEBLE_FIELDS)
     .single();
 
@@ -306,6 +324,25 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
       );
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el inmueble');
+  }
+
+  // Multi-tenant: si cambió el propietario, recalcular y persistir la
+  // organización del inmueble. El RPC update_inmueble_con_cambios NO maneja
+  // inmobiliaria_id, así que se actualiza aparte — el inmueble y sus
+  // expedientes (que llevan la org denormalizada). Sin esto, un inmueble
+  // reasignado seguiría visible para la organización ANTERIOR (fuga de
+  // aislamiento entre tenants).
+  const prevPropietarioId = (previous as unknown as { propietario_id?: string }).propietario_id;
+  if (input.propietario_id && input.propietario_id !== prevPropietarioId) {
+    const nuevaInmobiliariaId = await resolveInmobiliariaIdForPerfil(input.propietario_id);
+    await (supabase
+      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .update({ inmobiliaria_id: nuevaInmobiliariaId } as never)
+      .eq('id', id);
+    await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update({ inmobiliaria_id: nuevaInmobiliariaId } as never)
+      .eq('inmueble_id', id);
   }
 
   // Diff before/after para bitacora general (mantener log general)

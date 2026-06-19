@@ -3,7 +3,7 @@
 // ============================================================
 
 import { Router } from 'express';
-import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
+import { authMiddleware, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import { dashboardQuerySchema, perfilIdParamsSchema, updateTesoreriaSchema } from './dashboard.schema';
 import * as controller from './dashboard.controller';
@@ -45,8 +45,13 @@ router.get(
   controller.getMiCarteraAnalitica,
 );
 
-// Resto: solo roles con permiso dashboard:read (admin/operador/gerencia)
-router.use(authorize('dashboard', 'read'));
+// Resto: métricas GLOBALES de la plataforma (total expedientes, tasa de
+// aprobación, recaudo del periodo). Solo roles internos. NO usar
+// authorize('dashboard','read'): los SEIS roles tienen dashboard:['read']
+// (propietario/inmobiliaria/solicitante lo necesitan para sus endpoints
+// scopeados de arriba — portfolio-stats / mis-inmuebles / mi-cartera-analitica),
+// así que authorize() dejaría pasar a externos a estas métricas globales.
+router.use(roleGuard(['administrador', 'operador_analista', 'gerencia_consulta']));
 
 router.get(
   '/summary',

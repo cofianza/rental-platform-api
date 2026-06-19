@@ -9,6 +9,7 @@ import {
   type PreconditionId,
 } from './expediente-state-machine';
 import { getExpedienteById } from './expedientes.service';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { TransitionInput } from './expediente-workflow.schema';
 
@@ -24,6 +25,8 @@ interface ExpedienteRow {
   /** Propietario del inmueble — necesario para validar ownership cuando el
    *  caller es propietario/inmobiliaria. */
   propietario_id: string | null;
+  /** Organización dueña del inmueble (multi-tenant ownership org-aware). */
+  inmobiliaria_id: string | null;
 }
 
 // Transiciones que el propietario / inmobiliaria pueden ejecutar sobre los
@@ -73,7 +76,7 @@ export async function executeTransition(
 
   // Verificar permisos (incluye ownership para propietario/inmobiliaria
   // y filtra qué transiciones puede hacer cada rol).
-  checkPermissions(expediente, user, currentState, targetState);
+  await checkPermissions(expediente, user, currentState, targetState);
 
   // Verificar precondiciones
   const transitionDef = getTransitionDef(currentState, targetState)!;
@@ -232,7 +235,7 @@ export async function getTransitionHistory(expedienteId: string) {
 async function fetchExpediente(id: string): Promise<ExpedienteRow> {
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, analista_id, inmuebles(propietario_id)')
+    .select('id, numero, estado, analista_id, inmuebles(propietario_id, inmobiliaria_id)')
     .eq('id', id)
     .single();
 
@@ -245,7 +248,7 @@ async function fetchExpediente(id: string): Promise<ExpedienteRow> {
     numero: string;
     estado: EstadoExpediente;
     analista_id: string | null;
-    inmuebles: { propietario_id: string } | null;
+    inmuebles: { propietario_id: string; inmobiliaria_id: string | null } | null;
   };
 
   return {
@@ -254,15 +257,16 @@ async function fetchExpediente(id: string): Promise<ExpedienteRow> {
     estado: row.estado,
     analista_id: row.analista_id,
     propietario_id: row.inmuebles?.propietario_id ?? null,
+    inmobiliaria_id: row.inmuebles?.inmobiliaria_id ?? null,
   };
 }
 
-function checkPermissions(
+async function checkPermissions(
   expediente: ExpedienteRow,
   user: AuthUser,
   fromState: EstadoExpediente,
   toState: EstadoExpediente,
-): void {
+): Promise<void> {
   const isAdmin = user.rol === 'administrador' || user.rol === 'operador_analista';
   const isAssignedAnalyst = expediente.analista_id === user.id;
 
@@ -272,7 +276,14 @@ function checkPermissions(
   // No tienen permiso para hacer transiciones intermedias (las del analista).
   const isPropietarioRol = user.rol === 'propietario' || user.rol === 'inmobiliaria';
   if (isPropietarioRol) {
-    if (expediente.propietario_id !== user.id) {
+    // Org-aware: dueño directo o miembro de la organización dueña del inmueble.
+    const esDueno = await perfilEsDuenoDeInmueble({
+      userId: user.id,
+      userRol: user.rol,
+      inmueblePropietarioId: expediente.propietario_id,
+      inmuebleInmobiliariaId: expediente.inmobiliaria_id,
+    });
+    if (!esDueno) {
       throw AppError.forbidden(
         'Solo el dueño del inmueble puede cambiar el estado de este expediente',
         'EXPEDIENTE_FORBIDDEN',
