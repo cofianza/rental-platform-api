@@ -7,6 +7,7 @@ import {
   miembroIdParamSchema,
   invitarMiembroSchema,
   registrarMiembroSchema,
+  setVenTodoSchema,
 } from './inmobiliaria-miembros.schema';
 import * as controller from './inmobiliaria-miembros.controller';
 
@@ -17,6 +18,14 @@ export const miembrosRouter = Router();
 miembrosRouter.use(authMiddleware, roleGuard(['inmobiliaria']));
 
 miembrosRouter.get('/', controller.list);
+
+// Config de la org (owner-only, validado en el service): ¿los miembros ven
+// toda la cartera o solo lo suyo?
+miembrosRouter.patch(
+  '/config',
+  validate({ body: setVenTodoSchema }),
+  controller.setVenTodo,
+);
 
 miembrosRouter.post(
   '/invitar',

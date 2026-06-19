@@ -30,12 +30,13 @@ interface OrgMembership {
   inmobiliaria_id: string;
   rol_miembro: 'owner' | 'miembro';
   nombre_organizacion: string;
+  miembros_ven_todo: boolean;
 }
 
 /** Org (membresía activa) del usuario, o null si no pertenece a ninguna. */
 async function resolveMembership(userId: string): Promise<OrgMembership | null> {
   const { data } = await db('inmobiliaria_miembros')
-    .select('inmobiliaria_id, rol_miembro, inmobiliarias(nombre)')
+    .select('inmobiliaria_id, rol_miembro, inmobiliarias(nombre, miembros_ven_todo)')
     .eq('perfil_id', userId)
     .eq('estado', 'activo')
     .limit(1)
@@ -45,12 +46,13 @@ async function resolveMembership(userId: string): Promise<OrgMembership | null> 
   const row = data as unknown as {
     inmobiliaria_id: string;
     rol_miembro: 'owner' | 'miembro';
-    inmobiliarias: { nombre: string } | null;
+    inmobiliarias: { nombre: string; miembros_ven_todo: boolean } | null;
   };
   return {
     inmobiliaria_id: row.inmobiliaria_id,
     rol_miembro: row.rol_miembro,
     nombre_organizacion: row.inmobiliarias?.nombre ?? 'Tu organización',
+    miembros_ven_todo: row.inmobiliarias?.miembros_ven_todo ?? true,
   };
 }
 
@@ -72,6 +74,7 @@ async function assertOwner(userId: string): Promise<OrgMembership> {
 
 export interface MiembroView {
   id: string;
+  perfil_id: string | null;
   email: string | null;
   rol_miembro: 'owner' | 'miembro';
   estado: 'activo' | 'invitado' | 'revocado';
@@ -84,13 +87,14 @@ export interface MiembroView {
 export async function listMiembros(userId: string): Promise<{
   organizacion: { id: string; nombre: string };
   soy_owner: boolean;
+  miembros_ven_todo: boolean;
   miembros: MiembroView[];
 }> {
   const m = await resolveMembership(userId);
   if (!m) {
     // Inmobiliaria sin org (no debería pasar tras ensureOrgConOwner, pero es
     // defensivo): no hay equipo que mostrar.
-    return { organizacion: { id: '', nombre: '' }, soy_owner: false, miembros: [] };
+    return { organizacion: { id: '', nombre: '' }, soy_owner: false, miembros_ven_todo: true, miembros: [] };
   }
 
   const { data, error } = await db('inmobiliaria_miembros')
@@ -120,8 +124,10 @@ export async function listMiembros(userId: string): Promise<{
   return {
     organizacion: { id: m.inmobiliaria_id, nombre: m.nombre_organizacion },
     soy_owner: m.rol_miembro === 'owner',
+    miembros_ven_todo: m.miembros_ven_todo,
     miembros: rows.map((r) => ({
       id: r.id,
+      perfil_id: r.perfil_id,
       email: r.email,
       rol_miembro: r.rol_miembro,
       estado: r.estado,
@@ -131,6 +137,27 @@ export async function listMiembros(userId: string): Promise<{
       es_yo: r.perfil_id === userId,
     })),
   };
+}
+
+// ============================================================
+// Config de la organización: miembros_ven_todo (owner-only)
+// ============================================================
+
+export async function setMiembrosVenTodo(
+  userId: string,
+  value: boolean,
+): Promise<{ miembros_ven_todo: boolean }> {
+  const org = await assertOwner(userId);
+  const { error } = await (supabase
+    .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+    .update({ miembros_ven_todo: value } as never)
+    .eq('id', org.inmobiliaria_id);
+  if (error) {
+    logger.error({ error: error.message, userId }, 'Error al actualizar miembros_ven_todo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo actualizar la configuración');
+  }
+  logger.info({ inmobiliariaId: org.inmobiliaria_id, value }, 'miembros_ven_todo actualizado');
+  return { miembros_ven_todo: value };
 }
 
 // ============================================================

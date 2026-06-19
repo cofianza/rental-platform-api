@@ -2,7 +2,8 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
+import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
+import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import type {
   CreateInmuebleInput,
   UpdateInmuebleInput,
@@ -37,6 +38,7 @@ interface InmuebleRow {
   notas_internas: string | null;
   estado: string;
   propietario_id: string;
+  miembro_responsable_id: string | null;
   visible_vitrina: boolean;
   foto_fachada_url: string | null;
   created_at: string;
@@ -52,7 +54,7 @@ interface InmuebleWithOwnerRow extends InmuebleRow {
   perfiles: { id: string; nombre: string; apellido: string; telefono: string | null } | null;
 }
 
-const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
+const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, miembro_responsable_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
 
 const INMUEBLE_WITH_OWNER = `${INMUEBLE_FIELDS}, perfiles!inmuebles_propietario_id_fkey(id, nombre, apellido, telefono)`;
 
@@ -610,4 +612,82 @@ export async function getFilterOptions() {
       max: arriendos.length > 0 ? Math.max(...arriendos) : null,
     },
   };
+}
+
+// ============================================================
+// Asignar miembro responsable (multi-tenant Fase 3) — owner-only
+// ============================================================
+
+/**
+ * Asigna (o quita, con miembroId=null) el miembro responsable de un inmueble.
+ * Sólo el TITULAR (owner) de la organización dueña del inmueble puede hacerlo,
+ * y el miembro debe ser miembro ACTIVO de esa misma organización. Relevante
+ * cuando miembros_ven_todo=false: el miembro asignado pasa a ver ese inmueble.
+ */
+export async function asignarMiembroResponsable(
+  inmuebleId: string,
+  miembroId: string | null,
+  userId: string,
+): Promise<{ inmueble_id: string; miembro_responsable_id: string | null }> {
+  const { data: inmRow, error: inmErr } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('id, inmobiliaria_id, codigo, direccion, ciudad')
+    .eq('id', inmuebleId)
+    .single();
+  if (inmErr || !inmRow) {
+    throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
+  }
+  const inm = inmRow as unknown as {
+    id: string;
+    inmobiliaria_id: string | null;
+    codigo: string | null;
+    direccion: string;
+    ciudad: string;
+  };
+  if (!inm.inmobiliaria_id) {
+    throw AppError.badRequest('El inmueble no pertenece a una organización', 'SIN_ORGANIZACION');
+  }
+
+  // Sólo el owner de la org dueña puede asignar.
+  if (!(await esOwnerDeOrg(userId, inm.inmobiliaria_id))) {
+    throw AppError.forbidden('Sólo el titular de la inmobiliaria puede asignar responsables', 'NO_ES_OWNER');
+  }
+
+  // El miembro destino debe ser miembro activo de la misma org.
+  if (miembroId) {
+    const memberIds = await resolveOrgMemberPerfilIds(inm.inmobiliaria_id);
+    if (!memberIds.includes(miembroId)) {
+      throw AppError.badRequest('La persona seleccionada no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+    }
+  }
+
+  const { error: updErr } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .update({ miembro_responsable_id: miembroId } as never)
+    .eq('id', inmuebleId);
+  if (updErr) {
+    logger.error({ error: updErr.message, inmuebleId }, 'Error al asignar miembro responsable');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo asignar el responsable');
+  }
+
+  // Notificar al miembro asignado (best-effort).
+  if (miembroId) {
+    await notificarUsuario({
+      userId: miembroId,
+      tipo: 'inmueble_asignado',
+      titulo: 'Te asignaron un inmueble',
+      mensaje: `Eres responsable del inmueble ${inm.codigo ?? ''} — ${inm.direccion}, ${inm.ciudad}.`.replace('  ', ' '),
+      link: `/inmuebles/${inmuebleId}`,
+    });
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.INMUEBLE_UPDATED,
+    entidad: AUDIT_ENTITIES.INMUEBLE,
+    entidadId: inmuebleId,
+    detalle: { accion: 'asignar_responsable', miembro_responsable_id: miembroId },
+  });
+
+  return { inmueble_id: inmuebleId, miembro_responsable_id: miembroId };
 }
