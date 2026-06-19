@@ -5,9 +5,12 @@ import type { VisitaSlotsQuery, VisitaTokenParams } from './citas-publico.schema
 
 // Meta antepone el placeholder literal "{{1}}" al sufijo dinámico del botón URL
 // (lo deja literal y le pega el token detrás), así que el token puede llegar
-// como "{{1}}<token>". Extraemos los 64 hex reales antes de usarlo.
+// como "{{1}}<token>" — o incluso URL-codificado ("%7B%7B1%7D%7D<token>") si el
+// cliente no lo decodifica. Limpiamos todo lo no-hex y tomamos los ÚLTIMOS 64
+// (el token real va al final), robusto en ambas formas.
 function extractToken(raw: string): string {
-  return raw.match(/[a-f0-9]{64}/i)?.[0] ?? raw;
+  const hex = raw.replace(/[^a-f0-9]/gi, '');
+  return hex.length >= 64 ? hex.slice(-64) : raw;
 }
 
 export async function getVisita(req: Request, res: Response) {
