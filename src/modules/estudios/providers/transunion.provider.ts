@@ -341,7 +341,7 @@ export class TransUnionProvider implements CreditRiskProvider {
         codigoEntidad: '',
       };
 
-      const response = await this.executeRequest(body, basicAuth);
+      await this.executeRequest(body, basicAuth);
       const latencia = Date.now() - start;
 
       // Cualquier respuesta (incluso error controlado) = servicio disponible

@@ -107,7 +107,7 @@ export async function stats(req: Request, res: Response) {
       sendSuccess(res, { total: 0, stats: [] });
       return;
     }
-    const result = await expedientesService.getExpedienteStats();
+    await expedientesService.getExpedienteStats();
     // Filter stats — recalculate from filtered expedientes
     const { data: myExps } = await supabase
       .from('expedientes')

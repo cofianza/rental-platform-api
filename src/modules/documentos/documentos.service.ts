@@ -116,7 +116,7 @@ async function addSignedUrls<T extends DocumentoRow>(docs: T[]): Promise<T[]> {
 // generatePresignedUrl
 // ============================================================
 
-export async function generatePresignedUrl(input: PresignedUrlInput, userId: string) {
+export async function generatePresignedUrl(input: PresignedUrlInput, _userId: string) {
   // 1. Validate tipo_documento
   const { data: tipoDoc, error: tipoError } = await (supabase
     .from('tipos_documento' as string) as ReturnType<typeof supabase.from>)
@@ -795,7 +795,7 @@ export async function getHistorialRevision(docId: string) {
 // generateViewUrlForViewer (15-min signed URL for inline viewing)
 // ============================================================
 
-export async function generateViewUrlForViewer(id: string, userId: string) {
+export async function generateViewUrlForViewer(id: string, _userId: string) {
   // 1. Fetch document
   const { data, error } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
@@ -1062,6 +1062,7 @@ export async function confirmarReemplazo(
   }
 
   // 3. Atomic: INSERT new doc + UPDATE original in a single transaction (RPC)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rpcResult, error: rpcError } = await (supabase as any).rpc(
     'confirmar_reemplazo_documento',
     {

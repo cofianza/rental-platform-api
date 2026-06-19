@@ -292,7 +292,7 @@ export async function listOrphanAuthUsers(): Promise<OrphanAuthUser[]> {
   const PAGE_SIZE = 200;
   const orphans: OrphanAuthUser[] = [];
   let page = 1;
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     const { data, error } = await supabaseAuth.auth.admin.listUsers({
       page,

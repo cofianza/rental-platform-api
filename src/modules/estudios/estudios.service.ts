@@ -433,6 +433,7 @@ export async function createEstudio(
   }
 
   // 5. Atomic: insert estudio + update inmueble via RPC
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: estudioId, error: rpcError } = await (supabase as any).rpc('fn_crear_estudio', {
     p_expediente_id: expedienteId,
     p_inmueble_id: exp.inmueble_id,
@@ -486,6 +487,7 @@ export async function createEstudioFromInmueble(
   ip?: string,
 ) {
   // Atomic: create expediente + estudio + update inmueble via RPC
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error: rpcError } = await (supabase as any).rpc('fn_crear_estudio_desde_inmueble', {
     p_inmueble_id: inmuebleId,
     p_solicitante_id: input.solicitante_id,
@@ -542,6 +544,7 @@ export async function createEstudioFromInmueble(
 export async function cancelEstudio(estudioId: string, userId: string, ip?: string) {
   // Atomic: cancel estudio + revert inmueble via RPC
   // RPC validates estado === 'solicitado' and handles row locking
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_cancelar_estudio', {
     p_estudio_id: estudioId,
   });
@@ -999,6 +1002,7 @@ export async function registrarResultado(
   }
 
   // 3. Atomic RPC: update estudio + revert inmueble + insert timeline event
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
     p_estudio_id: estudioId,
     p_resultado: input.resultado,
@@ -2294,6 +2298,7 @@ export async function consultarEstadoProveedor(estudioId: string) {
   if (statusResponse.status === 'completed' && est.estado !== 'completado') {
     const result = await provider.obtenerResultado(est.referencia_proveedor);
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
       p_estudio_id: estudioId,
       p_resultado: result.resultado,

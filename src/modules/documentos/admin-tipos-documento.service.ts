@@ -263,6 +263,7 @@ export async function toggleActivo(id: string, userId: string, ip?: string) {
 // ============================================================
 
 export async function reordenarTipos(input: ReordenarTiposInput, userId: string, ip?: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any).rpc('reordenar_tipos_documento', {
     p_items: input.items,
   });
