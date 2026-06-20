@@ -290,9 +290,18 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
   const inmuebleInmobiliariaId = (inmueble as { inmobiliaria_id?: string | null }).inmobiliaria_id;
   if (inmuebleInmobiliariaId) {
     insertData.inmobiliaria_id = inmuebleInmobiliariaId;
-    // Fase 3.1: si el creador es un MIEMBRO (no-owner) de la org, queda como
-    // responsable del expediente automáticamente (el titular reparte a mano).
-    if (await esMiembroNoOwnerDeOrg(createdBy, inmuebleInmobiliariaId)) {
+    if (input.miembro_responsable_id !== undefined) {
+      // Responsable elegido explícitamente al crear (wizard). null = sin asignar.
+      if (input.miembro_responsable_id) {
+        const memberIds = await resolveOrgMemberPerfilIds(inmuebleInmobiliariaId);
+        if (!memberIds.includes(input.miembro_responsable_id)) {
+          throw AppError.badRequest('El responsable seleccionado no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+        }
+        insertData.miembro_responsable_id = input.miembro_responsable_id;
+      }
+    } else if (await esMiembroNoOwnerDeOrg(createdBy, inmuebleInmobiliariaId)) {
+      // Fase 3.1: sin elección explícita, si el creador es MIEMBRO (no-owner)
+      // de la org, queda como responsable automáticamente.
       insertData.miembro_responsable_id = createdBy;
     }
   }
