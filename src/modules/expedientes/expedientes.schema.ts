@@ -13,6 +13,9 @@ export const createExpedienteSchema = z.object({
   inmueble_id: z.uuid({ error: 'ID de inmueble invalido' }),
   solicitante_id: z.uuid({ error: 'ID de solicitante invalido' }),
   analista_id: z.uuid({ error: 'ID de analista invalido' }).optional(),
+  // Responsable (miembro de la inmobiliaria) elegido al crear (Fase 3.1).
+  // null = sin asignar; omitir = auto-asignar al creador si es miembro.
+  miembro_responsable_id: z.uuid({ error: 'ID de miembro invalido' }).nullable().optional(),
   notas: z.string().max(5000, { error: 'Notas no deben exceder 5000 caracteres' }).optional(),
   // Coarrendatario (opcional). Se llenan automáticamente cuando un
   // coarrendatario invitado acepta y termina su estudio (ver coarrendatarios
@@ -59,10 +62,16 @@ export const listExpedientesQuerySchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
+// Asignar miembro responsable del expediente (Fase 3.1). miembro_id null = quitar.
+export const asignarResponsableExpedienteSchema = z.object({
+  miembro_id: z.string().uuid({ message: 'ID de miembro inválido' }).nullable(),
+});
+
 // ============================================================
 // Type exports
 // ============================================================
 
+export type AsignarResponsableExpedienteInput = z.infer<typeof asignarResponsableExpedienteSchema>;
 export type CreateExpedienteInput = z.infer<typeof createExpedienteSchema>;
 export type UpdateExpedienteInput = z.infer<typeof updateExpedienteSchema>;
 export type ListExpedientesQuery = z.infer<typeof listExpedientesQuerySchema>;

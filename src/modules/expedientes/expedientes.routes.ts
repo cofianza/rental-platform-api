@@ -6,6 +6,7 @@ import {
   createExpedienteSchema,
   updateExpedienteSchema,
   listExpedientesQuerySchema,
+  asignarResponsableExpedienteSchema,
 } from './expedientes.schema';
 import * as expedientesController from './expedientes.controller';
 import * as auditoriaController from './expediente-auditoria.controller';
@@ -68,6 +69,16 @@ router.patch(
   authorize('expedientes', 'update'),
   validate({ params: expedienteIdParamsSchema, body: updateExpedienteSchema }),
   expedientesController.update,
+);
+
+// Asignar miembro responsable del expediente (Fase 3.1). Sólo rol inmobiliaria;
+// el owner-check (de la org dueña del expediente) va en el service.
+router.patch(
+  '/:id/responsable',
+  roleGuard(['inmobiliaria']),
+  authorize('expedientes', 'update'),
+  validate({ params: expedienteIdParamsSchema, body: asignarResponsableExpedienteSchema }),
+  expedientesController.asignarResponsable,
 );
 
 // GET /:id/auditoria-score — reporte de cumplimiento con la politica de

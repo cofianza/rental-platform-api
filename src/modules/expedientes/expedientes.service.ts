@@ -2,6 +2,8 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { esMiembroNoOwnerDeOrg, esOwnerDeOrg, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
+import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import type {
   CreateExpedienteInput,
   UpdateExpedienteInput,
@@ -51,7 +53,7 @@ const ESTADOS_TERMINALES = ['cerrado', 'rechazado'];
 const EXPEDIENTE_DETAIL_SELECT = `
   id, numero, estado, notas,
   coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco,
-  analista_id, inmueble_id, solicitante_id, creado_por,
+  analista_id, inmueble_id, solicitante_id, creado_por, miembro_responsable_id,
   estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
   duracion_contrato_meses, fecha_inicio_contrato,
   cancelado_at, motivo_cancelacion, estado_pre_cancelacion, motivo_rechazo,
@@ -286,7 +288,23 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
   // (el scoping efectivo va por inmueble, pero esto habilita filtros directos
   // y futuras fases sin re-derivar).
   const inmuebleInmobiliariaId = (inmueble as { inmobiliaria_id?: string | null }).inmobiliaria_id;
-  if (inmuebleInmobiliariaId) insertData.inmobiliaria_id = inmuebleInmobiliariaId;
+  if (inmuebleInmobiliariaId) {
+    insertData.inmobiliaria_id = inmuebleInmobiliariaId;
+    if (input.miembro_responsable_id !== undefined) {
+      // Responsable elegido explícitamente al crear (wizard). null = sin asignar.
+      if (input.miembro_responsable_id) {
+        const memberIds = await resolveOrgMemberPerfilIds(inmuebleInmobiliariaId);
+        if (!memberIds.includes(input.miembro_responsable_id)) {
+          throw AppError.badRequest('El responsable seleccionado no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+        }
+        insertData.miembro_responsable_id = input.miembro_responsable_id;
+      }
+    } else if (await esMiembroNoOwnerDeOrg(createdBy, inmuebleInmobiliariaId)) {
+      // Fase 3.1: sin elección explícita, si el creador es MIEMBRO (no-owner)
+      // de la org, queda como responsable automáticamente.
+      insertData.miembro_responsable_id = createdBy;
+    }
+  }
   if (input.analista_id) insertData.analista_id = input.analista_id;
   if (input.notas) insertData.notas = input.notas;
   if (input.coarrendatario_nombre) insertData.coarrendatario_nombre = input.coarrendatario_nombre;
@@ -437,4 +455,75 @@ export async function getExpedienteStats() {
   const total = rows.length;
 
   return { stats, total };
+}
+
+// ============================================================
+// Asignar miembro responsable del EXPEDIENTE (Fase 3.1) — owner-only
+// ============================================================
+
+/**
+ * Asigna (o quita, con miembroId=null) el miembro responsable de un expediente.
+ * Sólo el TITULAR (owner) de la organización dueña del expediente puede hacerlo
+ * y el miembro debe ser miembro ACTIVO de esa misma organización. En modo
+ * restringido (miembros_ven_todo=false) el miembro asignado pasa a ver el
+ * expediente aunque el inmueble no sea suyo.
+ */
+export async function asignarMiembroResponsableExpediente(
+  expedienteId: string,
+  miembroId: string | null,
+  userId: string,
+): Promise<{ expediente_id: string; miembro_responsable_id: string | null }> {
+  const { data: expRow, error: expErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, inmobiliaria_id')
+    .eq('id', expedienteId)
+    .single();
+  if (expErr || !expRow) {
+    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  }
+  const exp = expRow as unknown as { id: string; numero: string; inmobiliaria_id: string | null };
+  if (!exp.inmobiliaria_id) {
+    throw AppError.badRequest('El expediente no pertenece a una organización', 'SIN_ORGANIZACION');
+  }
+  if (!(await esOwnerDeOrg(userId, exp.inmobiliaria_id))) {
+    throw AppError.forbidden(
+      'Sólo el titular de la inmobiliaria puede asignar el responsable del expediente',
+      'NO_ES_OWNER',
+    );
+  }
+  if (miembroId) {
+    const memberIds = await resolveOrgMemberPerfilIds(exp.inmobiliaria_id);
+    if (!memberIds.includes(miembroId)) {
+      throw AppError.badRequest('La persona seleccionada no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+    }
+  }
+
+  const { error: updErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({ miembro_responsable_id: miembroId } as never)
+    .eq('id', expedienteId);
+  if (updErr) {
+    logger.error({ error: updErr.message, expedienteId }, 'Error al asignar responsable de expediente');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo asignar el responsable');
+  }
+
+  if (miembroId) {
+    await notificarUsuario({
+      userId: miembroId,
+      tipo: 'expediente_asignado',
+      titulo: 'Te asignaron un expediente',
+      mensaje: `Eres responsable del expediente ${exp.numero}.`,
+      link: `/expedientes/${expedienteId}`,
+    });
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.EXPEDIENTE_UPDATED,
+    entidad: AUDIT_ENTITIES.EXPEDIENTE,
+    entidadId: expedienteId,
+    detalle: { accion: 'asignar_responsable_miembro', miembro_responsable_id: miembroId },
+  });
+
+  return { expediente_id: expedienteId, miembro_responsable_id: miembroId };
 }

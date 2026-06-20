@@ -5,6 +5,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendExpedienteInvitacionEmail } from '../orchestrator/orchestrator.emails';
+import { esMiembroNoOwnerDeOrg } from '@/lib/tenantScope';
 import type { CrearExpedienteExternoInput } from './expediente-externo.schema';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
@@ -54,7 +55,13 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
   };
   // Multi-tenant: denormalizar la organización del inmueble (consistente con
   // createExpediente). NULL si el inmueble es de un propietario individual.
-  if (inm.inmobiliaria_id) insertData.inmobiliaria_id = inm.inmobiliaria_id;
+  if (inm.inmobiliaria_id) {
+    insertData.inmobiliaria_id = inm.inmobiliaria_id;
+    // Fase 3.1: el creador miembro (no-owner) queda como responsable.
+    if (await esMiembroNoOwnerDeOrg(userId, inm.inmobiliaria_id)) {
+      insertData.miembro_responsable_id = userId;
+    }
+  }
   if (notas) insertData.notas = notas;
 
   const { data, error } = await db('expedientes')

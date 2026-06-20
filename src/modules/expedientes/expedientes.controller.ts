@@ -6,6 +6,7 @@ import type {
   ListExpedientesQuery,
   CreateExpedienteInput,
   UpdateExpedienteInput,
+  AsignarResponsableExpedienteInput,
 } from './expedientes.schema';
 import type { ExpedienteIdParams } from './expediente-workflow.schema';
 
@@ -77,6 +78,13 @@ export async function update(req: Request, res: Response) {
   const input = req.body as UpdateExpedienteInput;
   const expediente = await expedientesService.updateExpediente(id, input, req.user!.id, req.ip);
   sendSuccess(res, expediente);
+}
+
+export async function asignarResponsable(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const { miembro_id } = req.body as AsignarResponsableExpedienteInput;
+  const result = await expedientesService.asignarMiembroResponsableExpediente(id, miembro_id, req.user!.id);
+  sendSuccess(res, result);
 }
 
 export async function stats(req: Request, res: Response) {
