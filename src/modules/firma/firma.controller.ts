@@ -10,6 +10,20 @@ import type { CrearSolicitudFirmaInput, OtpVerificarInput, CompletarFirmaInput, 
 
 export async function crear(req: Request, res: Response) {
   const input = req.body as CrearSolicitudFirmaInput;
+
+  // Multi-parte (flag ON): un solo sobre con arrendatario + arrendador +
+  // Cofianza. Por defecto: un solo firmante (flujo histórico).
+  if (env.FIRMA_MULTIPARTE_ENABLED) {
+    const { crearSolicitudFirmaMultiparte } = await import('./firma-multiparte.service');
+    const result = await crearSolicitudFirmaMultiparte(
+      input.contrato_id,
+      req.user!.id,
+      req.ip as string | undefined,
+    );
+    sendSuccess(res, result, 201);
+    return;
+  }
+
   const result = await firmaService.crearSolicitudFirma(
     input,
     req.user!.id,
