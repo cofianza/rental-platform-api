@@ -358,12 +358,13 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   if (!exp.solicitantes) {
     throw AppError.badRequest('El expediente no tiene solicitante asociado', 'NO_SOLICITANTE');
   }
-  // El contrato es el paso posterior a la aprobación: solo se puede generar
-  // cuando el estudio del arrendatario fue aprobado (o condicionado). Antes
-  // (borrador/en_revision/info_incompleta/rechazado/cerrado) no corresponde.
-  if (exp.estado !== 'aprobado' && exp.estado !== 'condicionado') {
+  // El contrato es el paso posterior a la aprobación: solo se genera cuando el
+  // expediente está APROBADO. En 'condicionado' NO se genera directo: primero
+  // hay que aprobar explícito vía aprobarCondicionado (que transiciona
+  // condicionado→aprobado y luego llama aquí) o invitar a un co-arrendatario.
+  if (exp.estado !== 'aprobado') {
     throw AppError.badRequest(
-      'El contrato solo puede generarse cuando el estudio del arrendatario está aprobado.',
+      'El contrato solo puede generarse cuando el expediente está aprobado. Si el estudio quedó condicionado, primero apruébalo (o invita a un co-arrendatario).',
       'EXPEDIENTE_NO_APROBADO',
     );
   }
