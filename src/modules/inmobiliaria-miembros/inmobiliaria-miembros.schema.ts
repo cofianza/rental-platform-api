@@ -31,6 +31,18 @@ export const cambiarRolMiembroSchema = z.object({
 });
 export type CambiarRolMiembroInput = z.infer<typeof cambiarRolMiembroSchema>;
 
+// ── Administración de plataforma (rol administrador) ──────────
+export const adminOrgParamSchema = z.object({
+  orgId: z.string().uuid({ message: 'ID de inmobiliaria inválido' }),
+});
+export type AdminOrgParam = z.infer<typeof adminOrgParamSchema>;
+
+export const adminOrgMiembroParamsSchema = z.object({
+  orgId: z.string().uuid({ message: 'ID de inmobiliaria inválido' }),
+  miembroId: z.string().uuid({ message: 'ID de miembro inválido' }),
+});
+export type AdminOrgMiembroParams = z.infer<typeof adminOrgMiembroParamsSchema>;
+
 // Registro de un invitado que aún NO tiene cuenta. El email NO se pide: sale
 // de la invitación (token), para que no se pueda registrar con otro correo.
 export const setVenTodoSchema = z.object({

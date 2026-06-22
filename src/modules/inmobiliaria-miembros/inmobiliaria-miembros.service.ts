@@ -831,3 +831,232 @@ export async function registrarMiembro(
   logger.info({ inmobiliariaId: inv.inmobiliaria_id, userId }, 'Miembro registrado y vinculado');
   return { message: 'Cuenta creada. Ya puedes iniciar sesión.', email: inv.email };
 }
+
+// ============================================================
+// Administración de plataforma (rol 'administrador'): gestiona los miembros
+// de CUALQUIER organización. La autorización es por roleGuard(['administrador'])
+// en las rutas; aquí NO se aplica assertOwner.
+// ============================================================
+
+export interface InmobiliariaAdminView {
+  id: string;
+  nombre: string;
+  estado: string;
+  owner_perfil_id: string | null;
+  owner_nombre: string | null;
+  miembros_ven_todo: boolean;
+  miembros_activos: number;
+  invitaciones_pendientes: number;
+  created_at: string;
+}
+
+export async function adminListInmobiliarias(): Promise<InmobiliariaAdminView[]> {
+  const { data: orgsRaw, error } = await db('inmobiliarias')
+    .select('id, nombre, estado, owner_perfil_id, miembros_ven_todo, created_at, perfiles!inmobiliarias_owner_perfil_id_fkey(nombre, apellido, razon_social)')
+    .order('created_at', { ascending: false });
+  if (error) {
+    logger.error({ error: error.message }, 'Error listando inmobiliarias (admin)');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudieron cargar las inmobiliarias');
+  }
+  const orgs = (orgsRaw as unknown as Array<{
+    id: string;
+    nombre: string;
+    estado: string;
+    owner_perfil_id: string | null;
+    miembros_ven_todo: boolean;
+    created_at: string;
+    perfiles: { nombre: string | null; apellido: string | null; razon_social: string | null } | null;
+  }>) || [];
+
+  // Conteos por org (una sola lectura de miembros no-revocados).
+  const { data: miembrosRaw } = await db('inmobiliaria_miembros')
+    .select('inmobiliaria_id, estado')
+    .neq('estado', 'revocado');
+  const conteos = new Map<string, { activos: number; pendientes: number }>();
+  ((miembrosRaw as Array<{ inmobiliaria_id: string; estado: string }> | null) || []).forEach((r) => {
+    const c = conteos.get(r.inmobiliaria_id) ?? { activos: 0, pendientes: 0 };
+    if (r.estado === 'activo') c.activos += 1;
+    else if (r.estado === 'invitado') c.pendientes += 1;
+    conteos.set(r.inmobiliaria_id, c);
+  });
+
+  return orgs.map((o) => {
+    const p = o.perfiles;
+    const ownerNombre = p
+      ? p.razon_social || `${p.nombre ?? ''} ${p.apellido ?? ''}`.trim() || null
+      : null;
+    const c = conteos.get(o.id) ?? { activos: 0, pendientes: 0 };
+    return {
+      id: o.id,
+      nombre: o.nombre,
+      estado: o.estado,
+      owner_perfil_id: o.owner_perfil_id,
+      owner_nombre: ownerNombre,
+      miembros_ven_todo: o.miembros_ven_todo,
+      miembros_activos: c.activos,
+      invitaciones_pendientes: c.pendientes,
+      created_at: o.created_at,
+    };
+  });
+}
+
+/** Devuelve {id, nombre} de la org o lanza notFound. */
+async function getOrgOrThrow(orgId: string): Promise<{ id: string; nombre: string }> {
+  const { data } = await db('inmobiliarias').select('id, nombre').eq('id', orgId).maybeSingle();
+  const org = data as { id: string; nombre: string } | null;
+  if (!org) throw AppError.notFound('Inmobiliaria no encontrada', 'INMOBILIARIA_NOT_FOUND');
+  return org;
+}
+
+export async function adminListMiembrosDeOrg(orgId: string): Promise<{
+  organizacion: { id: string; nombre: string };
+  miembros_ven_todo: boolean;
+  miembros: MiembroView[];
+}> {
+  const { data: orgRow } = await db('inmobiliarias')
+    .select('id, nombre, miembros_ven_todo')
+    .eq('id', orgId)
+    .maybeSingle();
+  const org = orgRow as { id: string; nombre: string; miembros_ven_todo: boolean } | null;
+  if (!org) throw AppError.notFound('Inmobiliaria no encontrada', 'INMOBILIARIA_NOT_FOUND');
+
+  const { data, error } = await db('inmobiliaria_miembros')
+    .select('id, email, rol_miembro, estado, perfil_id, created_at, perfiles!inmobiliaria_miembros_perfil_id_fkey(nombre, apellido)')
+    .eq('inmobiliaria_id', orgId)
+    .neq('estado', 'revocado')
+    .order('created_at', { ascending: true });
+  if (error) {
+    logger.error({ error: error.message, orgId }, 'Error listando miembros (admin)');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudieron cargar los miembros');
+  }
+  const rows = (data as unknown as Array<{
+    id: string;
+    email: string | null;
+    rol_miembro: RolMiembro;
+    estado: 'activo' | 'invitado' | 'revocado';
+    perfil_id: string | null;
+    created_at: string;
+    perfiles: { nombre: string; apellido: string } | null;
+  }>) || [];
+
+  return {
+    organizacion: { id: org.id, nombre: org.nombre },
+    miembros_ven_todo: org.miembros_ven_todo,
+    miembros: rows.map((r) => ({
+      id: r.id,
+      perfil_id: r.perfil_id,
+      email: r.email,
+      rol_miembro: r.rol_miembro,
+      estado: r.estado,
+      nombre: r.perfiles?.nombre ?? null,
+      apellido: r.perfiles?.apellido ?? null,
+      invitado_en: r.created_at,
+      es_yo: false,
+    })),
+  };
+}
+
+/** Carga una fila de miembro garantizando que pertenece a la org dada. */
+async function cargarMiembroDeOrg(
+  orgId: string,
+  miembroId: string,
+): Promise<{ id: string; rol_miembro: RolMiembro; perfil_id: string | null; estado: string }> {
+  const { data } = await db('inmobiliaria_miembros')
+    .select('id, rol_miembro, perfil_id, estado, inmobiliaria_id')
+    .eq('id', miembroId)
+    .maybeSingle();
+  const row = data as
+    | { id: string; rol_miembro: RolMiembro; perfil_id: string | null; estado: string; inmobiliaria_id: string }
+    | null;
+  if (!row || row.inmobiliaria_id !== orgId) {
+    throw AppError.notFound('Miembro no encontrado', 'MIEMBRO_NOT_FOUND');
+  }
+  return row;
+}
+
+export async function adminCambiarRolMiembro(
+  adminId: string,
+  orgId: string,
+  miembroId: string,
+  nuevoRol: RolMiembro,
+): Promise<{ message: string }> {
+  await getOrgOrThrow(orgId);
+  const row = await cargarMiembroDeOrg(orgId, miembroId);
+
+  if (row.estado !== 'activo' || !row.perfil_id) {
+    throw AppError.badRequest('Sólo puedes cambiar el rol de un miembro activo', 'MIEMBRO_NO_ACTIVO');
+  }
+  if (row.rol_miembro === nuevoRol) {
+    return { message: 'El rol no cambió' };
+  }
+  if (row.rol_miembro === 'owner' && nuevoRol !== 'owner' && (await contarOwnersActivos(orgId)) <= 1) {
+    throw AppError.badRequest(
+      'No puedes quitar la titularidad al único titular. Promueve antes a otro miembro.',
+      'ULTIMO_OWNER',
+    );
+  }
+
+  const { error } = await db('inmobiliaria_miembros')
+    .update({ rol_miembro: nuevoRol } as never)
+    .eq('id', miembroId);
+  if (error) {
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo cambiar el rol del miembro');
+  }
+
+  if (row.rol_miembro === 'owner' && nuevoRol !== 'owner') {
+    await reapuntarTitularPrincipalSiNecesario(orgId, row.perfil_id);
+  }
+  if (nuevoRol === 'solo_lectura') {
+    await liberarResponsablesDeMiembro(orgId, row.perfil_id);
+  }
+
+  logAudit({
+    usuarioId: adminId,
+    accion: AUDIT_ACTIONS.MIEMBRO_ROL_CAMBIADO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: miembroId,
+    detalle: { inmobiliaria_id: orgId, de: row.rol_miembro, a: nuevoRol, por: 'admin' },
+  });
+  logger.info({ orgId, miembroId, de: row.rol_miembro, a: nuevoRol, adminId }, 'Rol de miembro cambiado (admin)');
+  return { message: 'Rol actualizado' };
+}
+
+export async function adminRevocarMiembro(
+  adminId: string,
+  orgId: string,
+  miembroId: string,
+): Promise<{ message: string }> {
+  await getOrgOrThrow(orgId);
+  const row = await cargarMiembroDeOrg(orgId, miembroId);
+
+  if (row.rol_miembro === 'owner' && (await contarOwnersActivos(orgId)) <= 1) {
+    throw AppError.badRequest(
+      'No puedes revocar al único titular. Promueve antes a otro miembro como titular.',
+      'ULTIMO_OWNER',
+    );
+  }
+
+  const { error } = await db('inmobiliaria_miembros')
+    .update({ estado: 'revocado', token: null, token_expiracion: null } as never)
+    .eq('id', miembroId);
+  if (error) {
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo revocar el miembro');
+  }
+
+  if (row.perfil_id) {
+    await liberarResponsablesDeMiembro(orgId, row.perfil_id);
+    if (row.rol_miembro === 'owner') {
+      await reapuntarTitularPrincipalSiNecesario(orgId, row.perfil_id);
+    }
+  }
+
+  logAudit({
+    usuarioId: adminId,
+    accion: AUDIT_ACTIONS.MIEMBRO_REVOCADO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: miembroId,
+    detalle: { inmobiliaria_id: orgId, perfil_id: row.perfil_id, rol_miembro: row.rol_miembro, por: 'admin' },
+  });
+  logger.info({ orgId, miembroId, adminId }, 'Miembro revocado (admin)');
+  return { message: 'Miembro revocado' };
+}

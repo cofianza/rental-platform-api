@@ -9,6 +9,8 @@ import type {
   MiembroIdParam,
   SetVenTodoInput,
   CambiarRolMiembroInput,
+  AdminOrgParam,
+  AdminOrgMiembroParams,
 } from './inmobiliaria-miembros.schema';
 
 // ── Autenticado (owner / miembro de la inmobiliaria) ──────────
@@ -72,4 +74,30 @@ export async function registrar(req: Request, res: Response) {
   const { token } = req.params as unknown as TokenParam;
   const data = await service.registrarMiembro(token, req.body as RegistrarMiembroInput);
   sendSuccess(res, data, undefined, 201);
+}
+
+// ── Administración de plataforma (rol administrador) ──────────
+
+export async function adminListOrgs(_req: Request, res: Response) {
+  const data = await service.adminListInmobiliarias();
+  sendSuccess(res, data);
+}
+
+export async function adminListMiembros(req: Request, res: Response) {
+  const { orgId } = req.params as unknown as AdminOrgParam;
+  const data = await service.adminListMiembrosDeOrg(orgId);
+  sendSuccess(res, data);
+}
+
+export async function adminCambiarRol(req: Request, res: Response) {
+  const { orgId, miembroId } = req.params as unknown as AdminOrgMiembroParams;
+  const { rol_miembro } = req.body as CambiarRolMiembroInput;
+  const data = await service.adminCambiarRolMiembro(req.user!.id, orgId, miembroId, rol_miembro);
+  sendSuccess(res, data);
+}
+
+export async function adminRevocar(req: Request, res: Response) {
+  const { orgId, miembroId } = req.params as unknown as AdminOrgMiembroParams;
+  const data = await service.adminRevocarMiembro(req.user!.id, orgId, miembroId);
+  sendSuccess(res, data);
 }

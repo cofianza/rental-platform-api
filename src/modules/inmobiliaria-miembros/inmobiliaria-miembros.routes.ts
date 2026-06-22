@@ -9,6 +9,8 @@ import {
   registrarMiembroSchema,
   setVenTodoSchema,
   cambiarRolMiembroSchema,
+  adminOrgParamSchema,
+  adminOrgMiembroParamsSchema,
 } from './inmobiliaria-miembros.schema';
 import * as controller from './inmobiliaria-miembros.controller';
 
@@ -85,4 +87,30 @@ publicInvitacionMiembroRouter.post(
   publicFormLimiter,
   validate({ params: tokenParamSchema, body: registrarMiembroSchema }),
   controller.registrar,
+);
+
+// ── Router admin: /api/v1/admin/inmobiliarias (rol administrador) ──────────
+// La plataforma gestiona los miembros de CUALQUIER organización.
+export const adminInmobiliariasRouter = Router();
+
+adminInmobiliariasRouter.use(authMiddleware, roleGuard(['administrador']));
+
+adminInmobiliariasRouter.get('/', controller.adminListOrgs);
+
+adminInmobiliariasRouter.get(
+  '/:orgId/miembros',
+  validate({ params: adminOrgParamSchema }),
+  controller.adminListMiembros,
+);
+
+adminInmobiliariasRouter.patch(
+  '/:orgId/miembros/:miembroId/rol',
+  validate({ params: adminOrgMiembroParamsSchema, body: cambiarRolMiembroSchema }),
+  controller.adminCambiarRol,
+);
+
+adminInmobiliariasRouter.delete(
+  '/:orgId/miembros/:miembroId',
+  validate({ params: adminOrgMiembroParamsSchema }),
+  controller.adminRevocar,
 );
