@@ -3,7 +3,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { esMiembroNoOwnerDeOrg, esOwnerDeOrg, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
-import { notificarUsuario } from '../notificaciones/notificaciones.service';
+import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import type {
   CreateExpedienteInput,
   UpdateExpedienteInput,
@@ -344,7 +344,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
   // propio creador (no tiene sentido notificarse a sí mismo).
   const responsableAsignado = insertData.miembro_responsable_id as string | undefined;
   if (responsableAsignado && responsableAsignado !== createdBy) {
-    await notificarUsuario({
+    await notificarYCorreo({
       userId: responsableAsignado,
       tipo: 'expediente_asignado',
       titulo: 'Te asignaron un expediente',
@@ -521,7 +521,7 @@ export async function asignarMiembroResponsableExpediente(
   }
 
   if (miembroId) {
-    await notificarUsuario({
+    await notificarYCorreo({
       userId: miembroId,
       tipo: 'expediente_asignado',
       titulo: 'Te asignaron un expediente',

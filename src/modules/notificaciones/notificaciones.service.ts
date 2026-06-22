@@ -17,6 +17,8 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
+import { env } from '@/config';
+import { sendResponsableAsignadoEmail } from '../orchestrator/orchestrator.emails';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
@@ -74,6 +76,44 @@ export async function notificarUsuario(input: NotificarUsuarioInput): Promise<vo
     logger.warn(
       { error: error.message, userId: input.userId, tipo: input.tipo },
       'Error al crear notificacion',
+    );
+  }
+}
+
+/**
+ * Igual que notificarUsuario pero ADEMÁS manda un email (best-effort) al
+ * usuario. Para avisos importantes (ej. asignación de responsable) donde el
+ * miembro puede no estar conectado. La parte email es defensiva: si falla
+ * (sin email, Resend caído), la notificación in-app ya quedó y no se rompe el
+ * flujo. perfiles NO guarda email → se resuelve de auth.users vía RPC.
+ */
+export async function notificarYCorreo(input: NotificarUsuarioInput): Promise<void> {
+  await notificarUsuario(input);
+  if (!input.userId) return;
+  try {
+    const { data } = await supabase.rpc('get_user_with_email' as never, { user_id: input.userId } as never);
+    const email = (data as unknown as Array<{ email: string }> | null)?.[0]?.email;
+    if (!email) return;
+
+    const { data: perfilRow } = await db('perfiles')
+      .select('nombre, apellido')
+      .eq('id', input.userId)
+      .maybeSingle();
+    const perfil = perfilRow as { nombre: string | null; apellido: string | null } | null;
+    const nombre = perfil ? `${perfil.nombre ?? ''} ${perfil.apellido ?? ''}`.trim() || null : null;
+
+    await sendResponsableAsignadoEmail({
+      email,
+      nombre,
+      titulo: input.titulo,
+      mensaje: input.mensaje,
+      link: input.link ?? '/',
+      frontend_url: env.FRONTEND_URL,
+    });
+  } catch (err) {
+    logger.warn(
+      { error: (err as Error).message, userId: input.userId },
+      'No se pudo enviar email de notificacion (in-app ya enviada)',
     );
   }
 }

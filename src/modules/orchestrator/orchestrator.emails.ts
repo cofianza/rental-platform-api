@@ -296,6 +296,44 @@ export async function sendInvitacionMiembroEmail(params: {
   logger.info({ email, nombre_organizacion }, 'Orchestrator email: invitacion de miembro enviada');
 }
 
+// ── Responsable asignado (inmueble o expediente) ───────────
+
+export async function sendResponsableAsignadoEmail(params: {
+  email: string;
+  nombre: string | null;
+  titulo: string;
+  mensaje: string;
+  link: string; // ruta relativa, ej. /expedientes/<id>
+  frontend_url: string;
+}) {
+  const { email, nombre, titulo, mensaje, link, frontend_url } = params;
+  const url = `${frontend_url}${link.startsWith('/') ? '' : '/'}${link}`;
+  const saludo = nombre ? `Hola ${nombre},` : 'Hola,';
+
+  await resend.emails.send({
+    from: FROM,
+    to: email,
+    subject: titulo,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+          <h1 style="color: white; margin: 0; font-size: 22px;">${titulo}</h1>
+        </div>
+        <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+          <p style="color: #374151; font-size: 16px;">${saludo}</p>
+          <p style="color: #6b7280;">${mensaje}</p>
+          <div style="text-align: center; margin: 24px 0;">
+            <a href="${url}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Ver en Cofianza</a>
+          </div>
+          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+        </div>
+      </div>
+    `,
+  });
+
+  logger.info({ email, titulo }, 'Orchestrator email: responsable asignado enviado');
+}
+
 // ── Cita Solicitada — Notificacion al Propietario ──────────
 
 export async function sendCitaSolicitadaPropietarioEmail(params: {

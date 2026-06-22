@@ -3,7 +3,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
-import { notificarUsuario } from '../notificaciones/notificaciones.service';
+import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import type {
   CreateInmuebleInput,
   UpdateInmuebleInput,
@@ -672,7 +672,7 @@ export async function asignarMiembroResponsable(
 
   // Notificar al miembro asignado (best-effort).
   if (miembroId) {
-    await notificarUsuario({
+    await notificarYCorreo({
       userId: miembroId,
       tipo: 'inmueble_asignado',
       titulo: 'Te asignaron un inmueble',
