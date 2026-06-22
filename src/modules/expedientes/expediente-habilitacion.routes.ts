@@ -43,6 +43,15 @@ const datosContratoBody = z.object({
   fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)'),
 });
 
+// Aprobar condicionado: los datos del contrato son OPCIONALES. Sin ellos solo
+// se aprueba (transición condicionado→aprobado) y el contrato se genera luego
+// desde la pestaña Contratos con el formulario completo (modalidad de fianza +
+// servicios públicos). Con ellos, se aprueba y genera en un paso.
+const aprobarCondicionadoBody = z.object({
+  duracion_contrato_meses: z.coerce.number().int().min(1).max(120).optional(),
+  fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)').optional(),
+});
+
 // POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la
 // documentación adicional pedida (codeudor, póliza, etc.) el propietario
 // decide proceder. Transicionamos expediente a 'aprobado' y disparamos la
@@ -51,7 +60,7 @@ router.post(
   '/:id/aprobar-condicionado',
   authMiddleware,
   roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
-  validate({ params: expedienteIdParamsSchema, body: datosContratoBody }),
+  validate({ params: expedienteIdParamsSchema, body: aprobarCondicionadoBody }),
   controller.aprobarCondicionado,
 );
 

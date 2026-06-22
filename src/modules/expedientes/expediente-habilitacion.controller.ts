@@ -19,10 +19,15 @@ export async function rechazarEstudio(req: Request, res: Response) {
 export async function aprobarCondicionado(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
   const body = req.body as {
-    duracion_contrato_meses: number;
-    fecha_inicio_contrato: string;
+    duracion_contrato_meses?: number;
+    fecha_inicio_contrato?: string;
   };
-  const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol, body);
+  // Datos del contrato opcionales: si no vienen, solo se aprueba (sin generar).
+  const datosContrato =
+    body.duracion_contrato_meses && body.fecha_inicio_contrato
+      ? { duracion_contrato_meses: body.duracion_contrato_meses, fecha_inicio_contrato: body.fecha_inicio_contrato }
+      : undefined;
+  const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol, datosContrato);
   sendSuccess(res, result);
 }
 

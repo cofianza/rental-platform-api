@@ -329,7 +329,7 @@ export async function aprobarCondicionado(
   expedienteId: string,
   userId: string,
   userRol: string,
-  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string },
+  datosContrato?: { duracion_contrato_meses: number; fecha_inicio_contrato: string },
 ): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
   contrato_id: string | null;
@@ -383,7 +383,7 @@ async function aprobarYGenerarContrato(params: {
   expedienteId: string;
   userId: string;
   userRol: string;
-  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string };
+  datosContrato?: { duracion_contrato_meses: number; fecha_inicio_contrato: string };
   fromState: 'condicionado' | 'aprobado';
 }): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
@@ -411,19 +411,21 @@ async function aprobarYGenerarContrato(params: {
   const nowIso = new Date().toISOString();
 
   // 2. Persistir datos del contrato en el expediente (para auditoría +
-  //    re-generación). Aún no transicionamos estado — eso depende del flujo.
-  const { error: persistErr } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      duracion_contrato_meses: datosContrato.duracion_contrato_meses,
-      fecha_inicio_contrato: datosContrato.fecha_inicio_contrato,
-      updated_at: nowIso,
-    } as never)
-    .eq('id', expedienteId);
+  //    re-generación), solo si vinieron. Aún no transicionamos estado.
+  if (datosContrato) {
+    const { error: persistErr } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        duracion_contrato_meses: datosContrato.duracion_contrato_meses,
+        fecha_inicio_contrato: datosContrato.fecha_inicio_contrato,
+        updated_at: nowIso,
+      } as never)
+      .eq('id', expedienteId);
 
-  if (persistErr) {
-    logger.error({ error: persistErr.message, expedienteId }, 'Error al guardar datos del contrato en expediente');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al guardar los datos del contrato');
+    if (persistErr) {
+      logger.error({ error: persistErr.message, expedienteId }, 'Error al guardar datos del contrato en expediente');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al guardar los datos del contrato');
+    }
   }
 
   // 3. Transición condicionado → aprobado (solo si venía de condicionado).
@@ -452,25 +454,29 @@ async function aprobarYGenerarContrato(params: {
       } as never);
   }
 
-  // 4. Generar el contrato con los datos enviados.
+  // 4. Generar el contrato SOLO si vinieron los datos. Si no, el expediente
+  //    queda 'aprobado' sin contrato y este se genera luego desde la pestaña
+  //    Contratos con el formulario completo (modalidad de fianza + servicios).
   let contratoId: string | null = null;
-  try {
-    const { generarContrato } = await import('@/modules/contratos/contratos.service');
-    const result = await generarContrato(
-      expedienteId,
-      {
-        duracion_meses: datosContrato.duracion_contrato_meses,
-        fecha_inicio: datosContrato.fecha_inicio_contrato,
-      },
-      userId,
-    );
-    contratoId = (result as { id?: string } | null)?.id || null;
-    logger.info({ expedienteId, contratoId, fromState }, 'Contrato generado por el propietario');
-  } catch (err) {
-    logger.error(
-      { error: err, expedienteId, fromState },
-      'Error al generar contrato — el expediente quedó aprobado, hay que reintentar desde la pestaña Contratos',
-    );
+  if (datosContrato) {
+    try {
+      const { generarContrato } = await import('@/modules/contratos/contratos.service');
+      const result = await generarContrato(
+        expedienteId,
+        {
+          duracion_meses: datosContrato.duracion_contrato_meses,
+          fecha_inicio: datosContrato.fecha_inicio_contrato,
+        },
+        userId,
+      );
+      contratoId = (result as { id?: string } | null)?.id || null;
+      logger.info({ expedienteId, contratoId, fromState }, 'Contrato generado por el propietario');
+    } catch (err) {
+      logger.error(
+        { error: err, expedienteId, fromState },
+        'Error al generar contrato — el expediente quedó aprobado, hay que reintentar desde la pestaña Contratos',
+      );
+    }
   }
 
   // 5. Notificaciones al solicitante (solo si transicionamos desde
