@@ -175,13 +175,17 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
   });
 
   // ── Cofianza (orden 3): afianzadora ──
+  // Si el NIT sigue siendo placeholder (contiene X), no lo mandamos a Auco:
+  // un identification inválido puede romper el flujo. El OTP por WhatsApp no
+  // requiere el documento.
+  const nitEsPlaceholder = /x/i.test(COMPANY.nit);
   firmantes.push({
     rol_firmante: 'cofianza',
     nombre: COMPANY.name,
     email: COMPANY.email,
     telefono: COMPANY.phone,
-    tipo_documento: 'NIT',
-    numero_documento: COMPANY.nit,
+    tipo_documento: nitEsPlaceholder ? null : 'NIT',
+    numero_documento: nitEsPlaceholder ? null : COMPANY.nit,
     country: 'CO',
     orden: 3,
   });
