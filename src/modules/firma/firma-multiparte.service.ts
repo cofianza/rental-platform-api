@@ -395,7 +395,11 @@ export async function crearSolicitudFirmaMultiparte(
   }
   const sobreId = (sobre as { id: string }).id;
 
-  // 5. Insertar las N filas de contrato_firmantes
+  // 5. (Re)insertar las N filas de contrato_firmantes. Un reenvío crea un sobre
+  //    nuevo y supersede los firmantes previos; el índice único
+  //    (contrato_id, rol_firmante) impide duplicar, así que borramos los
+  //    anteriores primero (cancelar la solicitud no los borra).
+  await db('contrato_firmantes').delete().eq('contrato_id', contratoId);
   const filas = firmantes.map((f) => ({
     contrato_id: contratoId,
     solicitud_firma_id: sobreId,
