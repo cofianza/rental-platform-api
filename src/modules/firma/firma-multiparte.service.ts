@@ -500,6 +500,20 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
   }
 
   // 4. ¿Todas firmaron? → cerrar sobre + post-firma
+  await cerrarSobreSiTodasFirmaron(contratoId, { id: sobre.id, estado: sobre.estado }, info.url ?? null);
+}
+
+/**
+ * Si TODAS las filas de contrato_firmantes están 'firmado', marca el sobre como
+ * firmado y dispara executePostFirma (contrato → firmado, timeline, acuses).
+ * Idempotente. Compartido por la reconciliación por poll y por webhook.
+ */
+async function cerrarSobreSiTodasFirmaron(
+  contratoId: string,
+  sobre: { id: string; estado: string },
+  signedUrl: string | null,
+): Promise<void> {
+  const now = new Date().toISOString();
   const { data: refrescadas } = await db('contrato_firmantes')
     .select('estado')
     .eq('contrato_id', contratoId);
@@ -508,7 +522,7 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
 
   if (sobre.estado !== 'firmado') {
     await db('solicitudes_firma')
-      .update({ estado: 'firmado', firmado_en: now, auco_signed_url: info.url ?? null, updated_at: now } as never)
+      .update({ estado: 'firmado', firmado_en: now, auco_signed_url: signedUrl, updated_at: now } as never)
       .eq('id', sobre.id);
   }
 
@@ -517,7 +531,7 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
     accion: AUDIT_ACTIONS.FIRMA_AUCO_SIGNED,
     entidad: AUDIT_ENTITIES.CONTRATO,
     entidadId: contratoId,
-    detalle: { solicitud_id: sobre.id, auco_code: sobre.auco_document_code, multiparte: true },
+    detalle: { solicitud_id: sobre.id, multiparte: true },
   });
 
   const { executePostFirma } = await import('./post-firma.service');
@@ -528,4 +542,49 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
     emailFirmante: '',
     firmadoEn: now,
   }).catch((err) => logger.error({ error: err, contratoId }, 'Firma multi-parte: error en executePostFirma'));
+}
+
+/**
+ * Reconcilia los firmantes multi-parte desde el PAYLOAD del webhook de Auco, SIN
+ * llamar a getDocumentStatus (que en stage devuelve 401 y rompía la sync).
+ * Eventos Auco (docs/api/webhooks/document):
+ *   - NOTIFICATION (+ signer): ese participante COMPLETÓ su firma → 'firmado'
+ *   - REJECTED / BLOCKED (+ signer): ese firmante rechazó/bloqueó → 'cancelado'
+ *   - FINISH (sin signer): TODAS las partes firmaron → marca pendientes 'firmado'
+ * Cuando todas quedan 'firmado', cierra el sobre + executePostFirma.
+ */
+export async function reconciliarFirmantesPorWebhook(
+  contratoId: string,
+  sobre: { id: string; estado: string },
+  payload: { status: string; url?: string; signer?: { id?: string; email?: string | null } | null },
+): Promise<void> {
+  const now = new Date().toISOString();
+  const status = payload.status;
+  const signerEmail = payload.signer?.email ?? null;
+
+  if (signerEmail && status === 'NOTIFICATION') {
+    await db('contrato_firmantes')
+      .update({ estado: 'firmado', firmado_en: now, auco_signer_id: payload.signer?.id ?? null, updated_at: now } as never)
+      .eq('contrato_id', contratoId)
+      .eq('email', signerEmail)
+      .neq('estado', 'firmado');
+    logger.info({ contratoId, email: signerEmail }, 'Firma multi-parte: firmante firmado (webhook)');
+  } else if (signerEmail && (status === 'REJECTED' || status === 'BLOCKED')) {
+    await db('contrato_firmantes')
+      .update({ estado: 'cancelado', updated_at: now } as never)
+      .eq('contrato_id', contratoId)
+      .eq('email', signerEmail);
+    logger.info({ contratoId, email: signerEmail, status }, 'Firma multi-parte: firmante cancelado (webhook)');
+  } else if (status === 'FINISH') {
+    await db('contrato_firmantes')
+      .update({ estado: 'firmado', firmado_en: now, updated_at: now } as never)
+      .eq('contrato_id', contratoId)
+      .neq('estado', 'firmado')
+      .neq('estado', 'cancelado');
+    logger.info({ contratoId }, 'Firma multi-parte: todas firmadas (webhook FINISH)');
+  } else {
+    return;
+  }
+
+  await cerrarSobreSiTodasFirmaron(contratoId, sobre, payload.url ?? null);
 }

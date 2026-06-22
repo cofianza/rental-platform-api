@@ -1118,18 +1118,23 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
   };
 
   // Multi-parte (M1): si el contrato tiene firmantes registrados, el estado por
-  // parte vive en contrato_firmantes — delegamos a la reconciliación por poll
-  // (que casa cada firmante con signProfile[] de Auco). El webhook de documento
-  // solo actúa de disparador.
+  // parte vive en contrato_firmantes. Actualizamos DIRECTO desde el PAYLOAD del
+  // webhook (signer + status) — NO por poll a getDocumentStatus, que en stage
+  // devuelve 401 y dejaba el panel congelado en "0/3". NOTIFICATION(+signer) =
+  // ese firmante firmó; FINISH = todas firmaron.
   const { data: cfRows } = await (supabase
     .from('contrato_firmantes' as string) as ReturnType<typeof supabase.from>)
     .select('id')
     .eq('contrato_id', row.contrato_id)
     .limit(1);
   if (cfRows && (cfRows as unknown[]).length > 0) {
-    const { reconciliarFirmantesConAuco } = await import('./firma-multiparte.service');
-    await reconciliarFirmantesConAuco(row.contrato_id).catch((err) =>
-      logger.error({ error: err, contratoId: row.contrato_id }, 'Auco webhook: error reconciliando multi-parte'),
+    const { reconciliarFirmantesPorWebhook } = await import('./firma-multiparte.service');
+    await reconciliarFirmantesPorWebhook(
+      row.contrato_id,
+      { id: row.id, estado: row.estado },
+      payload,
+    ).catch((err) =>
+      logger.error({ error: err, contratoId: row.contrato_id }, 'Auco webhook: error reconciliando multi-parte (payload)'),
     );
     return;
   }
