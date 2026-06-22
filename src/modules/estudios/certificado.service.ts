@@ -6,7 +6,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
-import { COMPANY } from '@/config/company';
+import { getCompany } from '@/lib/companyConfig';
 
 // ============================================================
 // Constants
@@ -133,6 +133,7 @@ export async function generateCertificatePdf(
   data: CertificatePdfData,
   qrBuffer: Buffer,
 ): Promise<Buffer> {
+  const company = await getCompany();
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'LETTER', margin: 50 });
     const passthrough = new PassThrough();
@@ -164,10 +165,10 @@ export async function generateCertificatePdf(
 
     // Company info
     doc.fontSize(9).font('Helvetica').fillColor('#ffffff');
-    doc.text(COMPANY.name, 120, 62);
-    doc.text(`NIT: ${COMPANY.nit}`, 120, 74);
-    doc.text(COMPANY.address, 120, 86);
-    doc.text(`${COMPANY.phone} | ${COMPANY.email}`, 120, 98);
+    doc.text(company.name, 120, 62);
+    doc.text(`NIT: ${company.nit}`, 120, 74);
+    doc.text(company.address, 120, 86);
+    doc.text(`${company.phone} | ${company.email}`, 120, 98);
 
     // Title
     doc.fontSize(13).font('Helvetica-Bold').fillColor('#ffffff');
@@ -274,7 +275,7 @@ export async function generateCertificatePdf(
       { width: contentWidth },
     );
     y += 30;
-    doc.text(`${COMPANY.name} | NIT: ${COMPANY.nit} | ${COMPANY.website}`, 50, y, {
+    doc.text(`${company.name} | NIT: ${company.nit} | ${company.website}`, 50, y, {
       width: contentWidth,
       align: 'center',
     });
@@ -392,7 +393,7 @@ export async function generarCertificado(
   // 5. Dates
   const fechaEmision = new Date().toISOString();
   const fechaVencimiento = new Date(
-    Date.now() + COMPANY.certificateValidityDays * 24 * 60 * 60 * 1000,
+    Date.now() + (await getCompany()).certificateValidityDays * 24 * 60 * 60 * 1000,
   ).toISOString();
 
   // 6. Generate PDF
@@ -546,6 +547,7 @@ export async function descargarCertificado(estudioId: string) {
 // ============================================================
 
 export async function verificarCertificado(codigo: string) {
+  const company = await getCompany();
   const { data: cert, error: certErr } = await (supabase
     .from('estudios_certificados' as string) as ReturnType<typeof supabase.from>)
     .select(`
@@ -575,7 +577,7 @@ export async function verificarCertificado(codigo: string) {
       direccion_masked: '',
       fecha_emision: '',
       fecha_vencimiento: '',
-      empresa: COMPANY.name,
+      empresa: company.name,
       numero_documento_masked: '',
     };
   }
@@ -609,7 +611,7 @@ export async function verificarCertificado(codigo: string) {
       : '',
     fecha_emision: c.fecha_emision as string,
     fecha_vencimiento: c.fecha_vencimiento as string,
-    empresa: COMPANY.name,
+    empresa: company.name,
     numero_documento_masked: solicitante
       ? maskDocumento(solicitante.numero_documento as string)
       : '',

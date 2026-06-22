@@ -23,7 +23,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
-import { COMPANY } from '@/config/company';
+import { getCompany } from '@/lib/companyConfig';
 import * as aucoClient from '@/lib/auco';
 import type { AucoSignerStatus } from '@/lib/auco';
 
@@ -175,17 +175,18 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
   });
 
   // ── Cofianza (orden 3): afianzadora ──
-  // Si el NIT sigue siendo placeholder (contiene X), no lo mandamos a Auco:
-  // un identification inválido puede romper el flujo. El OTP por WhatsApp no
-  // requiere el documento.
-  const nitEsPlaceholder = /x/i.test(COMPANY.nit);
+  // Datos editables por el admin (configuracion_sistema). Si el NIT sigue
+  // siendo placeholder (contiene X), no lo mandamos a Auco: un identification
+  // inválido puede romper el flujo. El OTP por WhatsApp no requiere documento.
+  const company = await getCompany();
+  const nitEsPlaceholder = /x/i.test(company.nit);
   firmantes.push({
     rol_firmante: 'cofianza',
-    nombre: COMPANY.name,
-    email: COMPANY.email,
-    telefono: COMPANY.phone,
+    nombre: company.name,
+    email: company.email,
+    telefono: company.phone,
     tipo_documento: nitEsPlaceholder ? null : 'NIT',
-    numero_documento: nitEsPlaceholder ? null : COMPANY.nit,
+    numero_documento: nitEsPlaceholder ? null : company.nit,
     country: 'CO',
     orden: 3,
   });
