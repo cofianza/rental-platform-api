@@ -20,10 +20,14 @@ import * as firmaController from './firma.controller';
 export const firmaRouter = Router();
 firmaRouter.use(authMiddleware);
 
-// POST / — Create solicitud and send link
+// POST / — Create solicitud and send link.
+// inmobiliaria/propietario pueden enviar a firma sus propios contratos (igual
+// que el botón coral "Enviar a firma" del workflow). El bloqueo de solo_lectura
+// se aplica en el chokepoint de auth (viewers no mutan). El scoping por
+// pertenencia del contrato es backlog (ver pendiente-scoping-idor).
 firmaRouter.post(
   '/',
-  roleGuard(['administrador', 'operador_analista']),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
   validate({ body: crearSolicitudFirmaSchema }),
   firmaController.crear,
 );
@@ -40,7 +44,7 @@ firmaRouter.get(
 // { email_alternativo } para redirigir el correo a otra direccion.
 firmaRouter.post(
   '/:id/reenviar',
-  roleGuard(['administrador', 'operador_analista', 'inmobiliaria']),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
   validate({ params: solicitudIdParamsSchema, body: reenviarFirmaSchema }),
   firmaController.reenviar,
 );
@@ -55,10 +59,11 @@ firmaRouter.post(
   firmaController.reenviarSelf,
 );
 
-// POST /:id/cancelar — Cancel solicitud
+// POST /:id/cancelar — Cancel solicitud (inmobiliaria/propietario sobre sus
+// propios contratos; viewers bloqueados en el chokepoint de auth).
 firmaRouter.post(
   '/:id/cancelar',
-  roleGuard(['administrador', 'operador_analista']),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
   validate({ params: solicitudIdParamsSchema }),
   firmaController.cancelar,
 );
