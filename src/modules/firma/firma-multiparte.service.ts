@@ -381,7 +381,7 @@ export async function crearSolicitudFirmaMultiparte(
       contrato_id: contratoId,
       nombre_firmante: primer.nombre,
       email_firmante: primer.email,
-      telefono_firmante: primer.telefono,
+      telefono_firmante: conTelefono[0]?.phone ?? primer.telefono,
       token,
       token_expiracion: tokenExpiracion,
       estado: 'enviado',
@@ -403,13 +403,16 @@ export async function crearSolicitudFirmaMultiparte(
   //    (contrato_id, rol_firmante) impide duplicar, así que borramos los
   //    anteriores primero (cancelar la solicitud no los borra).
   await db('contrato_firmantes').delete().eq('contrato_id', contratoId);
-  const filas = firmantes.map((f) => ({
+  // Guardamos el teléfono NORMALIZADO (el que de verdad recibe el WhatsApp por
+  // Auco, +57.../+52...), no el crudo del perfil — así el panel muestra a qué
+  // número llega el link de cada parte.
+  const filas = conTelefono.map(({ f, phone }) => ({
     contrato_id: contratoId,
     solicitud_firma_id: sobreId,
     rol_firmante: f.rol_firmante,
     nombre: f.nombre,
     email: f.email,
-    telefono: f.telefono,
+    telefono: phone,
     tipo_documento: f.tipo_documento,
     numero_documento: f.numero_documento,
     country: f.country,
