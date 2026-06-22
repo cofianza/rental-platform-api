@@ -222,22 +222,27 @@ export async function uploadDocumentForSignature(
 /**
  * Query the status and details of a document by its code.
  *
- * Aunque la doc de Auco indica que GET /document acepta la public key
- * (`puk_xxx`), en nuestra cuenta esa llave devuelve 401 UNAUTHORIZED
- * mientras que la private key (`prk_xxx`) sí responde. Probablemente
- * tema de scopes/configuracion en el panel. Usamos private aqui para
- * desbloquear el flow — la private key vive solo en el server, no se
- * expone al cliente, asi que es seguro.
+ * La doc de Auco indica que las LECTURAS (GET /document) usan la PUBLIC key
+ * (https://docs.auco.ai/en/api/environment → "Read (GET): use the public key").
+ * Históricamente en esta cuenta la public devolvía 401 y la private respondía,
+ * pero observamos que el comportamiento cambia entre entornos/rotaciones de key
+ * (en stage AMBAS pueden dar 401 porque stage no mueve documentos). Para ser
+ * robustos: intentamos primero con la public (lo correcto según la doc) y, si
+ * Auco la rechaza, reintentamos con la private. Ambas viven solo en el server.
  */
 export async function getDocumentStatus(
   code: string,
 ): Promise<AucoDocumentInfo> {
-  return aucoRequest<AucoDocumentInfo>(
-    'GET',
-    `/document?code=${encodeURIComponent(code)}`,
-    undefined,
-    true,
-  );
+  const path = `/document?code=${encodeURIComponent(code)}`;
+  try {
+    return await aucoRequest<AucoDocumentInfo>('GET', path, undefined, false);
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), code },
+      'getDocumentStatus: public key falló, reintentando con private key',
+    );
+    return aucoRequest<AucoDocumentInfo>('GET', path, undefined, true);
+  }
 }
 
 /**
