@@ -17,8 +17,26 @@
 -- cambio es sólo la restricción de integridad del valor permitido.
 -- ============================================================
 
-ALTER TABLE public.inmobiliaria_miembros
-  DROP CONSTRAINT IF EXISTS inmobiliaria_miembros_rol_miembro_check;
+-- Elimina CUALQUIER CHECK existente sobre rol_miembro (el original tiene nombre
+-- autogenerado; borrarlo por nombre fijo sería frágil y podría dejar el viejo
+-- constraint rechazando 'solo_lectura'). Robust + idempotente.
+DO $$
+DECLARE
+  c RECORD;
+BEGIN
+  FOR c IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'inmobiliaria_miembros'
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) ILIKE '%rol_miembro%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.inmobiliaria_miembros DROP CONSTRAINT %I', c.conname);
+  END LOOP;
+END $$;
 
 ALTER TABLE public.inmobiliaria_miembros
   ADD CONSTRAINT inmobiliaria_miembros_rol_miembro_check
