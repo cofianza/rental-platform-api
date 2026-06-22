@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
+import { publicFormLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from './expedientes.schema';
 import * as controller from './expediente-soportes.controller';
@@ -77,4 +78,43 @@ router.get(
   controller.listar,
 );
 
+// POST /api/v1/expedientes/:id/soportes/enviar-enlace — La inmobiliaria genera
+// y envía al solicitante un enlace público para que cargue su documentación.
+router.post(
+  '/:id/soportes/enviar-enlace',
+  authMiddleware,
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({ params: expedienteIdParamsSchema }),
+  controller.enviarEnlaceDocumentos,
+);
+
 export default router;
+
+// ── Router PÚBLICO: /api/v1/public/cargar-documentos ─────────────────────────
+// El solicitante carga sus soportes con el token, sin cuenta.
+export const publicCargarDocumentosRouter = Router();
+
+const tokenParamSchema = z.object({
+  token: z.string().regex(/^[a-f0-9]{64}$/, { message: 'Token inválido' }),
+});
+
+publicCargarDocumentosRouter.get(
+  '/:token',
+  publicFormLimiter,
+  validate({ params: tokenParamSchema }),
+  controller.getContextoPublico,
+);
+
+publicCargarDocumentosRouter.post(
+  '/:token/presigned-url',
+  publicFormLimiter,
+  validate({ params: tokenParamSchema, body: presignedUrlBody }),
+  controller.presignedUrlPublico,
+);
+
+publicCargarDocumentosRouter.post(
+  '/:token/confirmar',
+  publicFormLimiter,
+  validate({ params: tokenParamSchema, body: confirmarBody }),
+  controller.confirmarPublico,
+);

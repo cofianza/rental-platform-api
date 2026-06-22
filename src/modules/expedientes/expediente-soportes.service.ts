@@ -19,6 +19,7 @@ import crypto from 'crypto';
 import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { env } from '@/config';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 
@@ -404,4 +405,221 @@ export async function listarSoportes(
   void supabaseAuth;
 
   return result;
+}
+
+// ============================================================
+// Flujo PÚBLICO por token — el solicitante carga sus soportes sin cuenta.
+// La inmobiliaria genera y envía el enlace; el token autoriza la carga.
+// ============================================================
+
+const TOKEN_DOCS_EXPIRY_DAYS = 14;
+
+interface TokenDocsCtx {
+  expedienteId: string;
+  estudioActivoId: string;
+  estado: string;
+  propietarioId: string | null;
+  solicitanteNombre: string;
+  inmuebleDireccion: string;
+  inmuebleCiudad: string;
+}
+
+/** Resuelve el expediente a partir del token público de carga (valida vigencia). */
+async function resolveExpedientePorTokenDocumentos(token: string): Promise<TokenDocsCtx> {
+  const { data } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, token_documentos_expiracion, inmuebles(propietario_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at)')
+    .eq('token_documentos', token)
+    .maybeSingle();
+
+  const row = data as unknown as {
+    id: string;
+    estado: string;
+    token_documentos_expiracion: string | null;
+    inmuebles: { propietario_id: string | null; direccion: string | null; ciudad: string | null } | null;
+    solicitantes: { nombre: string | null; apellido: string | null } | null;
+    estudios: Array<{ id: string; created_at: string }> | null;
+  } | null;
+
+  if (!row) throw AppError.notFound('Enlace de carga no válido', 'TOKEN_INVALIDO');
+  if (row.token_documentos_expiracion && new Date(row.token_documentos_expiracion) < new Date()) {
+    throw AppError.badRequest('El enlace de carga ha expirado. Pide uno nuevo a la inmobiliaria.', 'TOKEN_EXPIRADO');
+  }
+  const estudios = row.estudios ?? [];
+  if (estudios.length === 0) throw AppError.badRequest('El expediente aún no tiene estudio.', 'SIN_ESTUDIO');
+  const estudioActivo = [...estudios].sort(
+    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+  )[0];
+
+  return {
+    expedienteId: row.id,
+    estudioActivoId: estudioActivo.id,
+    estado: row.estado,
+    propietarioId: row.inmuebles?.propietario_id ?? null,
+    solicitanteNombre: `${row.solicitantes?.nombre ?? ''} ${row.solicitantes?.apellido ?? ''}`.trim() || 'Solicitante',
+    inmuebleDireccion: row.inmuebles?.direccion ?? '',
+    inmuebleCiudad: row.inmuebles?.ciudad ?? '',
+  };
+}
+
+/** Genera+persiste el token y envía el enlace público de carga al solicitante. */
+export async function enviarEnlaceDocumentos(
+  expedienteId: string,
+  userId: string,
+  userRol: string,
+): Promise<{ ok: true; email_destino: string }> {
+  const ctx = await assertSoporteAccess(expedienteId, userId, userRol);
+  if (ctx.estado !== 'condicionado') {
+    throw AppError.badRequest(
+      `Solo se puede enviar el enlace de documentos cuando el expediente está "condicionado". Estado actual: ${ctx.estado}.`,
+      'EXPEDIENTE_NO_CONDICIONADO',
+    );
+  }
+
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('solicitantes(nombre, apellido, email), inmuebles(direccion, ciudad)')
+    .eq('id', expedienteId)
+    .single();
+  const e = exp as unknown as {
+    solicitantes: { nombre: string | null; apellido: string | null; email: string | null } | null;
+    inmuebles: { direccion: string | null; ciudad: string | null } | null;
+  } | null;
+
+  const email = e?.solicitantes?.email;
+  if (!email) {
+    throw AppError.badRequest('El solicitante no tiene email registrado para enviarle el enlace.', 'SIN_EMAIL_SOLICITANTE');
+  }
+  const nombre = `${e?.solicitantes?.nombre ?? ''} ${e?.solicitantes?.apellido ?? ''}`.trim() || 'Solicitante';
+  const direccion = e?.inmuebles?.direccion ?? 'tu inmueble';
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiracion = new Date(Date.now() + TOKEN_DOCS_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const { error: updErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({ token_documentos: token, token_documentos_expiracion: expiracion } as never)
+    .eq('id', expedienteId);
+  if (updErr) {
+    logger.error({ error: updErr.message, expedienteId }, 'Error al guardar token de documentos');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo generar el enlace');
+  }
+
+  const link = `/cargar-documentos/${token}`;
+  try {
+    const { sendResponsableAsignadoEmail } = await import('../orchestrator/orchestrator.emails');
+    await sendResponsableAsignadoEmail({
+      email,
+      nombre,
+      titulo: 'Carga tus documentos',
+      mensaje: `Para continuar con tu solicitud de arriendo del inmueble en ${direccion}, sube los documentos solicitados desde el siguiente enlace personal.`,
+      link,
+      frontend_url: env.FRONTEND_URL,
+    });
+  } catch (err) {
+    logger.warn({ error: (err as Error).message, expedienteId }, 'No se pudo enviar email de enlace de documentos (token ya guardado)');
+  }
+
+  logger.info({ expedienteId, email }, 'Enlace de carga de documentos enviado al solicitante');
+  return { ok: true, email_destino: email };
+}
+
+/** Contexto público (sin auth): qué inmueble/solicitante y qué ya subió. */
+export async function getContextoDocumentosPublico(token: string): Promise<{
+  solicitante: string;
+  inmueble: { direccion: string; ciudad: string };
+  estado: string;
+  puede_subir: boolean;
+  soportes: Array<{ id: string; proposito: Proposito; nombre_original: string; created_at: string }>;
+}> {
+  const ctx = await resolveExpedientePorTokenDocumentos(token);
+
+  const { data: docs } = await (supabase
+    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
+    .select('id, proposito, nombre_original, created_at')
+    .eq('estudio_id', ctx.estudioActivoId)
+    .order('created_at', { ascending: false });
+
+  return {
+    solicitante: ctx.solicitanteNombre,
+    inmueble: { direccion: ctx.inmuebleDireccion, ciudad: ctx.inmuebleCiudad },
+    estado: ctx.estado,
+    puede_subir: ctx.estado === 'condicionado',
+    soportes: (docs as Array<{ id: string; proposito: Proposito; nombre_original: string; created_at: string }> | null) ?? [],
+  };
+}
+
+/** Presigned URL para subir un soporte vía token público. */
+export async function presignedUrlSoportePublico(
+  token: string,
+  input: PresignedSoporteInput,
+): Promise<{ signed_url: string; storage_key: string; nombre_archivo: string; expires_in: number }> {
+  const ctx = await resolveExpedientePorTokenDocumentos(token);
+  if (ctx.estado !== 'condicionado') {
+    throw AppError.badRequest('Este expediente ya no admite cargar documentos.', 'EXPEDIENTE_NO_CONDICIONADO');
+  }
+  if (input.tamano_bytes > MAX_SOPORTE_BYTES) {
+    throw AppError.badRequest('Archivo demasiado grande (máximo 10MB)', 'FILE_TOO_LARGE');
+  }
+
+  const ext = getExtensionFromMime(input.tipo_mime);
+  const nombreArchivo = `${crypto.randomUUID()}.${ext}`;
+  const storageKey = `expedientes/${ctx.expedienteId}/soportes/${nombreArchivo}`;
+
+  const { data, error } = await supabase.storage.from(BUCKET_NAME).createSignedUploadUrl(storageKey);
+  if (error || !data) {
+    logger.error({ error: error?.message, expedienteId: ctx.expedienteId }, 'Error signed URL soporte público');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al generar URL de subida');
+  }
+  return { signed_url: data.signedUrl, storage_key: storageKey, nombre_archivo: nombreArchivo, expires_in: 900 };
+}
+
+/** Confirma (registra) un soporte subido vía token público. subido_por = null. */
+export async function confirmarSoportePublico(
+  token: string,
+  input: ConfirmarSoporteInput,
+): Promise<{ id: string; proposito: Proposito; nombre_original: string }> {
+  const ctx = await resolveExpedientePorTokenDocumentos(token);
+  if (ctx.estado !== 'condicionado') {
+    throw AppError.badRequest('Este expediente ya no admite cargar documentos.', 'EXPEDIENTE_NO_CONDICIONADO');
+  }
+
+  const { error: existsErr } = await supabase.storage.from(BUCKET_NAME).createSignedUrl(input.storage_key, 60);
+  if (existsErr) {
+    throw AppError.badRequest('El archivo no se encontró en storage. Súbelo primero antes de confirmar.', 'ARCHIVO_NOT_FOUND');
+  }
+
+  const { data: doc, error: insertErr } = await (supabase
+    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      estudio_id: ctx.estudioActivoId,
+      storage_key: input.storage_key,
+      nombre_original: input.nombre_original,
+      tipo_mime: input.tipo_mime,
+      tamano_bytes: input.tamano_bytes,
+      proposito: input.proposito,
+      subido_por: null,
+    } as never)
+    .select('id, proposito, nombre_original')
+    .single();
+
+  if (insertErr || !doc) {
+    logger.error({ error: insertErr?.message, expedienteId: ctx.expedienteId }, 'Error al registrar soporte público');
+    throw AppError.badRequest('Error al registrar el documento', 'SOPORTE_INSERT_ERROR');
+  }
+  const docTyped = doc as unknown as { id: string; proposito: Proposito; nombre_original: string };
+
+  // Avisar al propietario/inmobiliaria que el solicitante subió un documento.
+  if (ctx.propietarioId) {
+    notificarUsuario({
+      userId: ctx.propietarioId,
+      tipo: 'soporte.subido',
+      titulo: 'El solicitante subió un documento',
+      mensaje: `El solicitante subió un documento (${input.proposito.replace(/_/g, ' ')}) para ${ctx.inmuebleDireccion || 'el inmueble'}. Revísalo antes de aprobar.`,
+      link: `/expedientes/${ctx.expedienteId}`,
+      payload: { expediente_id: ctx.expedienteId, soporte_id: docTyped.id, proposito: input.proposito },
+    }).catch((e) => logger.warn({ error: e, expedienteId: ctx.expedienteId }, 'Error notificando soporte público'));
+  }
+
+  return { id: docTyped.id, proposito: docTyped.proposito, nombre_original: docTyped.nombre_original };
 }

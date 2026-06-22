@@ -15,7 +15,7 @@ import expedienteCommentsRouter from '@/modules/expedientes/expediente-comments.
 import expedienteTimelineRouter from '@/modules/expedientes/expediente-timeline.routes';
 import expedienteAssignmentsRouter from '@/modules/expedientes/expediente-assignments.routes';
 import expedienteHabilitacionRouter from '@/modules/expedientes/expediente-habilitacion.routes';
-import expedienteSoportesRouter from '@/modules/expedientes/expediente-soportes.routes';
+import expedienteSoportesRouter, { publicCargarDocumentosRouter } from '@/modules/expedientes/expediente-soportes.routes';
 import {
   expedienteCoarrendatariosRouter,
   publicCoarrendatarioRouter,
@@ -111,6 +111,7 @@ app.use('/api/v1/expedientes', expedienteTimelineRouter);
 app.use('/api/v1/expedientes', expedienteAssignmentsRouter);
 app.use('/api/v1/expedientes', expedienteHabilitacionRouter);
 app.use('/api/v1/expedientes', expedienteSoportesRouter);
+app.use('/api/v1/public/cargar-documentos', publicCargarDocumentosRouter);
 app.use('/api/v1/expedientes', expedienteCoarrendatariosRouter);
 app.use('/api/v1/public/coarrendatario', publicCoarrendatarioRouter);
 app.use('/api/v1/users', usersRouter);
