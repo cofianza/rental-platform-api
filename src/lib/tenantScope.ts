@@ -98,6 +98,25 @@ export async function esOwnerDeOrg(perfilId: string, orgId: string): Promise<boo
   return !!data;
 }
 
+/**
+ * ¿El perfil es un miembro 'solo_lectura' (viewer) ACTIVO de ALGUNA organización?
+ * Los viewers ven la cartera (resolveVisibilityScope les da org/own) pero no
+ * pueden mutar datos — el bloqueo de escritura se aplica en authMiddleware.
+ * Role-agnóstico: sólo necesita el perfilId (el caller ya sabe que es rol
+ * 'inmobiliaria'). Devuelve false si no tiene ninguna membresía solo_lectura.
+ */
+export async function esMiembroSoloLectura(perfilId: string): Promise<boolean> {
+  const { data } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('perfil_id', perfilId)
+    .eq('rol_miembro', 'solo_lectura')
+    .eq('estado', 'activo')
+    .limit(1)
+    .maybeSingle();
+  return !!data;
+}
+
 /** ¿El perfil es MIEMBRO activo no-owner de la organización dada? (para auto-asignar al creador). */
 export async function esMiembroNoOwnerDeOrg(perfilId: string, orgId: string): Promise<boolean> {
   const { data } = await (supabase

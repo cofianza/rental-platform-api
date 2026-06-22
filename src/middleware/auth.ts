@@ -3,7 +3,26 @@ import { supabase, supabaseAuth } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
 import { hasPermission, type Resource, type Action } from '@/config/permissions';
+import { esMiembroSoloLectura } from '@/lib/tenantScope';
 import type { UserRole } from '@/types/auth';
+
+// Métodos que mutan estado — sujetos al bloqueo de miembros 'solo_lectura'.
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/**
+ * Rutas que un miembro 'solo_lectura' (viewer) SÍ puede mutar pese al bloqueo
+ * global de escritura: autogestión de su cuenta y su pertenencia. Deny-by-default
+ * (cualquier ruta de escritura nueva queda bloqueada para viewers salvo que se
+ * agregue aquí) — sesgo seguro para un rol de sólo lectura.
+ */
+function viewerPuedeMutar(path: string): boolean {
+  return (
+    path.startsWith('/api/v1/notificaciones') || // marcar leídas
+    path.startsWith('/api/v1/auth') || // logout, cambio de contraseña, refresh
+    path.startsWith('/api/v1/users') || // perfil propio (con RBAC adicional)
+    path === '/api/v1/inmobiliaria/miembros/salir' // salir de la organización
+  );
+}
 
 /**
  * Middleware que verifica el JWT de Supabase Auth.
@@ -52,6 +71,20 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
     rol: perfilData.rol,
     activo: perfilData.estado === 'activo',
   };
+
+  // Bloqueo de escritura para miembros 'solo_lectura' (viewer). Sólo se
+  // consulta la membresía en peticiones mutantes de un usuario 'inmobiliaria'
+  // fuera de la allowlist (las lecturas y otros roles no pagan el query extra).
+  if (req.user.rol === 'inmobiliaria' && MUTATING_METHODS.has(req.method)) {
+    const path = req.originalUrl.split('?')[0];
+    if (!viewerPuedeMutar(path) && (await esMiembroSoloLectura(req.user.id))) {
+      logger.warn({ userId: req.user.id, method: req.method, path }, 'Escritura bloqueada para miembro solo_lectura');
+      throw AppError.forbidden(
+        'Tu rol en la inmobiliaria es de sólo lectura: no puedes crear ni modificar datos.',
+        'MIEMBRO_SOLO_LECTURA',
+      );
+    }
+  }
 
   next();
 }

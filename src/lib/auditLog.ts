@@ -111,6 +111,7 @@ export const AUDIT_ACTIONS = {
   MIEMBRO_INVITADO: 'miembro_invitado',
   MIEMBRO_REVOCADO: 'miembro_revocado',
   MIEMBRO_ACEPTO: 'miembro_acepto',
+  MIEMBRO_ROL_CAMBIADO: 'miembro_rol_cambiado',
 } as const;
 
 export const AUDIT_ENTITIES = {

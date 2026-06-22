@@ -8,6 +8,7 @@ import {
   invitarMiembroSchema,
   registrarMiembroSchema,
   setVenTodoSchema,
+  cambiarRolMiembroSchema,
 } from './inmobiliaria-miembros.schema';
 import * as controller from './inmobiliaria-miembros.controller';
 
@@ -33,10 +34,22 @@ miembrosRouter.post(
   controller.invitar,
 );
 
+// Salir de la organización (cualquier miembro activo, incl. solo_lectura).
+// Ruta estática ANTES de las de :id. Allowlisted para viewers en authMiddleware.
+miembrosRouter.post('/salir', controller.salir);
+
 miembrosRouter.post(
   '/:id/reenviar',
   validate({ params: miembroIdParamSchema }),
   controller.reenviar,
+);
+
+// Cambiar rol de un miembro activo (owner-only, validado en el service):
+// promover a co-titular, degradar a miembro, o pasar a sólo lectura.
+miembrosRouter.patch(
+  '/:id/rol',
+  validate({ params: miembroIdParamSchema, body: cambiarRolMiembroSchema }),
+  controller.cambiarRol,
 );
 
 miembrosRouter.delete(

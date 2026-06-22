@@ -8,6 +8,7 @@ import type {
   TokenParam,
   MiembroIdParam,
   SetVenTodoInput,
+  CambiarRolMiembroInput,
 } from './inmobiliaria-miembros.schema';
 
 // ── Autenticado (owner / miembro de la inmobiliaria) ──────────
@@ -37,6 +38,18 @@ export async function revocar(req: Request, res: Response) {
 export async function setVenTodo(req: Request, res: Response) {
   const { miembros_ven_todo } = req.body as SetVenTodoInput;
   const data = await service.setMiembrosVenTodo(req.user!.id, miembros_ven_todo);
+  sendSuccess(res, data);
+}
+
+export async function cambiarRol(req: Request, res: Response) {
+  const { id } = req.params as unknown as MiembroIdParam;
+  const { rol_miembro } = req.body as CambiarRolMiembroInput;
+  const data = await service.cambiarRolMiembro(req.user!.id, id, rol_miembro);
+  sendSuccess(res, data);
+}
+
+export async function salir(req: Request, res: Response) {
+  const data = await service.salirDeOrg(req.user!.id);
   sendSuccess(res, data);
 }
 

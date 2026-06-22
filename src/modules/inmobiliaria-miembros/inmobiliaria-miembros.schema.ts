@@ -17,10 +17,19 @@ export const invitarMiembroSchema = z.object({
     .string()
     .email({ message: 'Email inválido' })
     .transform((s) => s.toLowerCase().trim()),
-  // Sólo se puede invitar como 'miembro'; 'owner' es el dueño de la org (no se invita).
-  rol_miembro: z.literal('miembro').optional().default('miembro'),
+  // Se invita como 'miembro' (staff operativo) o 'solo_lectura' (viewer).
+  // 'owner' (co-titular) NO se invita: se promueve a un miembro ya activo
+  // mediante PATCH /:id/rol, para no crear co-titulares antes de que entren.
+  rol_miembro: z.enum(['miembro', 'solo_lectura']).optional().default('miembro'),
 });
 export type InvitarMiembroInput = z.infer<typeof invitarMiembroSchema>;
+
+// Cambio de rol de un miembro ACTIVO (owner-only). Permite promover a
+// co-titular ('owner'), degradar, o pasar a sólo lectura.
+export const cambiarRolMiembroSchema = z.object({
+  rol_miembro: z.enum(['owner', 'miembro', 'solo_lectura']),
+});
+export type CambiarRolMiembroInput = z.infer<typeof cambiarRolMiembroSchema>;
 
 // Registro de un invitado que aún NO tiene cuenta. El email NO se pide: sale
 // de la invitación (token), para que no se pueda registrar con otro correo.

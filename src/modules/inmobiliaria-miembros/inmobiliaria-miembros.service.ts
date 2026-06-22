@@ -28,9 +28,12 @@ function truncateToken(token: string): string {
 // Resolución de organización / rol del que llama
 // ============================================================
 
+type RolMiembro = 'owner' | 'miembro' | 'solo_lectura';
+
 interface OrgMembership {
+  miembro_id: string;
   inmobiliaria_id: string;
-  rol_miembro: 'owner' | 'miembro';
+  rol_miembro: RolMiembro;
   nombre_organizacion: string;
   miembros_ven_todo: boolean;
 }
@@ -38,7 +41,7 @@ interface OrgMembership {
 /** Org (membresía activa) del usuario, o null si no pertenece a ninguna. */
 async function resolveMembership(userId: string): Promise<OrgMembership | null> {
   const { data } = await db('inmobiliaria_miembros')
-    .select('inmobiliaria_id, rol_miembro, inmobiliarias(nombre, miembros_ven_todo)')
+    .select('id, inmobiliaria_id, rol_miembro, inmobiliarias(nombre, miembros_ven_todo)')
     .eq('perfil_id', userId)
     .eq('estado', 'activo')
     .limit(1)
@@ -46,16 +49,89 @@ async function resolveMembership(userId: string): Promise<OrgMembership | null> 
 
   if (!data) return null;
   const row = data as unknown as {
+    id: string;
     inmobiliaria_id: string;
-    rol_miembro: 'owner' | 'miembro';
+    rol_miembro: RolMiembro;
     inmobiliarias: { nombre: string; miembros_ven_todo: boolean } | null;
   };
   return {
+    miembro_id: row.id,
     inmobiliaria_id: row.inmobiliaria_id,
     rol_miembro: row.rol_miembro,
     nombre_organizacion: row.inmobiliarias?.nombre ?? 'Tu organización',
     miembros_ven_todo: row.inmobiliarias?.miembros_ven_todo ?? true,
   };
+}
+
+/** Nº de owners ACTIVOS de una organización (para no dejarla sin titular). */
+async function contarOwnersActivos(orgId: string): Promise<number> {
+  const { count } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .eq('inmobiliaria_id', orgId)
+    .eq('rol_miembro', 'owner')
+    .eq('estado', 'activo') as unknown as { count: number | null };
+  return count ?? 0;
+}
+
+/**
+ * Si `salientePerfilId` es el titular principal (inmobiliarias.owner_perfil_id),
+ * re-apunta esa columna a otro owner activo de la org para que siempre referencie
+ * a un titular real. Best-effort: no rompe el flujo si falla.
+ */
+async function reapuntarTitularPrincipalSiNecesario(orgId: string, salientePerfilId: string): Promise<void> {
+  const { data: org } = await (supabase
+    .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+    .select('owner_perfil_id')
+    .eq('id', orgId)
+    .maybeSingle();
+  const ownerPrincipal = (org as { owner_perfil_id: string | null } | null)?.owner_perfil_id;
+  if (ownerPrincipal !== salientePerfilId) return;
+
+  const { data: otro } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('perfil_id')
+    .eq('inmobiliaria_id', orgId)
+    .eq('rol_miembro', 'owner')
+    .eq('estado', 'activo')
+    .neq('perfil_id', salientePerfilId)
+    .not('perfil_id', 'is', null)
+    .limit(1)
+    .maybeSingle();
+  const nuevoTitular = (otro as { perfil_id: string | null } | null)?.perfil_id;
+  if (!nuevoTitular) return;
+
+  const { error } = await (supabase
+    .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+    .update({ owner_perfil_id: nuevoTitular } as never)
+    .eq('id', orgId);
+  if (error) {
+    logger.warn({ error: error.message, orgId }, 'No se pudo re-apuntar owner_perfil_id');
+  }
+}
+
+/**
+ * Libera inmuebles/expedientes de la org que tenían a `perfilId` como
+ * responsable, para no dejar asignaciones apuntando a alguien que sale del
+ * equipo. Best-effort (loguea warn si falla, no rompe el flujo).
+ */
+async function liberarResponsablesDeMiembro(orgId: string, perfilId: string): Promise<void> {
+  const [{ error: errInm }, { error: errExp }] = await Promise.all([
+    db('inmuebles')
+      .update({ miembro_responsable_id: null } as never)
+      .eq('inmobiliaria_id', orgId)
+      .eq('miembro_responsable_id', perfilId),
+    db('expedientes')
+      .update({ miembro_responsable_id: null } as never)
+      .eq('inmobiliaria_id', orgId)
+      .eq('miembro_responsable_id', perfilId),
+  ]);
+  if (errInm) {
+    logger.warn({ error: errInm.message, perfilId }, 'No se pudieron limpiar responsables de inmuebles');
+  }
+  if (errExp) {
+    logger.warn({ error: errExp.message, perfilId }, 'No se pudieron limpiar responsables de expedientes');
+  }
 }
 
 /** Exige que el usuario sea OWNER activo de una org; devuelve su contexto. */
@@ -78,12 +154,37 @@ export interface MiembroView {
   id: string;
   perfil_id: string | null;
   email: string | null;
-  rol_miembro: 'owner' | 'miembro';
+  rol_miembro: RolMiembro;
   estado: 'activo' | 'invitado' | 'revocado';
   nombre: string | null;
   apellido: string | null;
   invitado_en: string;
   es_yo: boolean;
+}
+
+/**
+ * Borra invitaciones PENDIENTES vencidas de una organización (token expirado y
+ * aún sin aceptar). No toca miembros activos ni filas con perfil vinculado.
+ * Best-effort: se invoca al listar el equipo para mantener la tabla limpia sin
+ * necesidad de un cron. El owner puede volver a invitar cuando quiera.
+ */
+async function limpiarInvitacionesExpiradas(orgId: string): Promise<void> {
+  const { error, count } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .delete({ count: 'exact' })
+    .eq('inmobiliaria_id', orgId)
+    .eq('estado', 'invitado')
+    .is('perfil_id', null)
+    .not('token_expiracion', 'is', null)
+    .lt('token_expiracion', new Date().toISOString()) as unknown as {
+      error: { message: string } | null;
+      count: number | null;
+    };
+  if (error) {
+    logger.warn({ error: error.message, orgId }, 'No se pudieron limpiar invitaciones expiradas');
+  } else if (count && count > 0) {
+    logger.info({ orgId, count }, 'Invitaciones expiradas eliminadas');
+  }
 }
 
 export async function listMiembros(userId: string): Promise<{
@@ -98,6 +199,9 @@ export async function listMiembros(userId: string): Promise<{
     // defensivo): no hay equipo que mostrar.
     return { organizacion: { id: '', nombre: '' }, soy_owner: false, miembros_ven_todo: true, miembros: [] };
   }
+
+  // Limpieza perezosa: purga invitaciones vencidas antes de listar (sin cron).
+  await limpiarInvitacionesExpiradas(m.inmobiliaria_id);
 
   const { data, error } = await db('inmobiliaria_miembros')
     // FK explícito: inmobiliaria_miembros tiene 2 FKs a perfiles (perfil_id e
@@ -116,7 +220,7 @@ export async function listMiembros(userId: string): Promise<{
   const rows = (data as unknown as Array<{
     id: string;
     email: string | null;
-    rol_miembro: 'owner' | 'miembro';
+    rol_miembro: RolMiembro;
     estado: 'activo' | 'invitado' | 'revocado';
     perfil_id: string | null;
     created_at: string;
@@ -195,7 +299,7 @@ export async function invitarMiembro(
     const { error } = await db('inmobiliaria_miembros')
       .update({
         estado: 'invitado',
-        rol_miembro: 'miembro',
+        rol_miembro: input.rol_miembro,
         token,
         token_expiracion: expiracion,
         invitado_por: userId,
@@ -319,14 +423,19 @@ export async function revocarMiembro(userId: string, miembroId: string): Promise
     .eq('id', miembroId)
     .maybeSingle();
   const row = data as
-    | { id: string; rol_miembro: string; perfil_id: string | null; inmobiliaria_id: string }
+    | { id: string; rol_miembro: RolMiembro; perfil_id: string | null; inmobiliaria_id: string }
     | null;
 
   if (!row || row.inmobiliaria_id !== org.inmobiliaria_id) {
     throw AppError.notFound('Miembro no encontrado', 'MIEMBRO_NOT_FOUND');
   }
-  if (row.rol_miembro === 'owner') {
-    throw AppError.badRequest('No puedes revocar al titular de la inmobiliaria', 'NO_REVOCAR_OWNER');
+  // Con co-titularidad, un owner SÍ puede revocar a otro owner, pero nunca al
+  // último: la organización no puede quedarse sin titular.
+  if (row.rol_miembro === 'owner' && (await contarOwnersActivos(org.inmobiliaria_id)) <= 1) {
+    throw AppError.badRequest(
+      'No puedes revocar al único titular. Promueve antes a otro miembro como titular.',
+      'ULTIMO_OWNER',
+    );
   }
 
   const { error } = await db('inmobiliaria_miembros')
@@ -336,24 +445,12 @@ export async function revocarMiembro(userId: string, miembroId: string): Promise
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo revocar el miembro');
   }
 
-  // Liberar inmuebles/expedientes que tenían a este miembro como responsable,
-  // para no dejar asignaciones apuntando a alguien que ya no pertenece a la org.
+  // Liberar asignaciones de responsable y, si era el titular principal,
+  // re-apuntar owner_perfil_id a otro owner activo.
   if (row.perfil_id) {
-    const [{ error: errInm }, { error: errExp }] = await Promise.all([
-      db('inmuebles')
-        .update({ miembro_responsable_id: null } as never)
-        .eq('inmobiliaria_id', org.inmobiliaria_id)
-        .eq('miembro_responsable_id', row.perfil_id),
-      db('expedientes')
-        .update({ miembro_responsable_id: null } as never)
-        .eq('inmobiliaria_id', org.inmobiliaria_id)
-        .eq('miembro_responsable_id', row.perfil_id),
-    ]);
-    if (errInm) {
-      logger.warn({ error: errInm.message, miembroId }, 'No se pudieron limpiar responsables de inmuebles al revocar');
-    }
-    if (errExp) {
-      logger.warn({ error: errExp.message, miembroId }, 'No se pudieron limpiar responsables de expedientes al revocar');
+    await liberarResponsablesDeMiembro(org.inmobiliaria_id, row.perfil_id);
+    if (row.rol_miembro === 'owner') {
+      await reapuntarTitularPrincipalSiNecesario(org.inmobiliaria_id, row.perfil_id);
     }
   }
 
@@ -362,11 +459,153 @@ export async function revocarMiembro(userId: string, miembroId: string): Promise
     accion: AUDIT_ACTIONS.MIEMBRO_REVOCADO,
     entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
     entidadId: miembroId,
-    detalle: { inmobiliaria_id: org.inmobiliaria_id, perfil_id: row.perfil_id },
+    detalle: { inmobiliaria_id: org.inmobiliaria_id, perfil_id: row.perfil_id, rol_miembro: row.rol_miembro },
   });
 
   logger.info({ inmobiliariaId: org.inmobiliaria_id, miembroId }, 'Miembro revocado');
   return { message: 'Miembro revocado' };
+}
+
+// ============================================================
+// Cambio de rol (owner-only): promover a co-titular, degradar, sólo lectura
+// ============================================================
+
+export async function cambiarRolMiembro(
+  userId: string,
+  miembroId: string,
+  nuevoRol: RolMiembro,
+): Promise<{ message: string }> {
+  const org = await assertOwner(userId);
+
+  const { data } = await db('inmobiliaria_miembros')
+    .select('id, rol_miembro, perfil_id, estado, inmobiliaria_id')
+    .eq('id', miembroId)
+    .maybeSingle();
+  const row = data as
+    | { id: string; rol_miembro: RolMiembro; perfil_id: string | null; estado: string; inmobiliaria_id: string }
+    | null;
+
+  if (!row || row.inmobiliaria_id !== org.inmobiliaria_id) {
+    throw AppError.notFound('Miembro no encontrado', 'MIEMBRO_NOT_FOUND');
+  }
+  if (row.estado !== 'activo' || !row.perfil_id) {
+    throw AppError.badRequest('Sólo puedes cambiar el rol de un miembro activo', 'MIEMBRO_NO_ACTIVO');
+  }
+  if (row.rol_miembro === nuevoRol) {
+    return { message: 'El rol no cambió' };
+  }
+  // Degradar a un owner (incluido uno mismo) sólo si queda otro titular activo.
+  if (row.rol_miembro === 'owner' && nuevoRol !== 'owner' && (await contarOwnersActivos(org.inmobiliaria_id)) <= 1) {
+    throw AppError.badRequest(
+      'No puedes quitar la titularidad al único titular. Promueve antes a otro miembro como titular.',
+      'ULTIMO_OWNER',
+    );
+  }
+
+  const { error } = await db('inmobiliaria_miembros')
+    .update({ rol_miembro: nuevoRol } as never)
+    .eq('id', miembroId);
+  if (error) {
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo cambiar el rol del miembro');
+  }
+
+  // Si se degradó al titular principal, re-apuntar owner_perfil_id.
+  if (row.rol_miembro === 'owner' && nuevoRol !== 'owner') {
+    await reapuntarTitularPrincipalSiNecesario(org.inmobiliaria_id, row.perfil_id);
+  }
+  // Si pasó a sólo lectura, ya no debe figurar como responsable de nada.
+  if (nuevoRol === 'solo_lectura') {
+    await liberarResponsablesDeMiembro(org.inmobiliaria_id, row.perfil_id);
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MIEMBRO_ROL_CAMBIADO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: miembroId,
+    detalle: { inmobiliaria_id: org.inmobiliaria_id, de: row.rol_miembro, a: nuevoRol },
+  });
+
+  const promovido = nuevoRol === 'owner';
+  notificarUsuario({
+    userId: row.perfil_id,
+    tipo: 'inmobiliaria.rol_cambiado',
+    titulo: promovido ? 'Ahora eres titular' : 'Tu rol cambió',
+    mensaje: promovido
+      ? `Te promovieron a titular (co-titular) de ${org.nombre_organizacion}.`
+      : `Tu rol en ${org.nombre_organizacion} ahora es ${nuevoRol === 'solo_lectura' ? 'sólo lectura' : 'miembro'}.`,
+    link: '/configuracion/equipo',
+  }).catch((e) => logger.warn({ error: e, miembroId }, 'Error notificando cambio de rol'));
+
+  logger.info({ inmobiliariaId: org.inmobiliaria_id, miembroId, de: row.rol_miembro, a: nuevoRol }, 'Rol de miembro cambiado');
+  return { message: 'Rol actualizado' };
+}
+
+// ============================================================
+// Salir de la organización (cualquier miembro activo, incl. viewer)
+// ============================================================
+
+export async function salirDeOrg(userId: string): Promise<{ message: string }> {
+  const m = await resolveMembership(userId);
+  if (!m) {
+    throw AppError.badRequest('No perteneces a ninguna inmobiliaria', 'SIN_ORGANIZACION');
+  }
+  // Un titular no puede salir si es el único: dejaría la org sin owner.
+  if (m.rol_miembro === 'owner' && (await contarOwnersActivos(m.inmobiliaria_id)) <= 1) {
+    throw AppError.badRequest(
+      'Eres el único titular. Transfiere la titularidad a otro miembro antes de salir.',
+      'ULTIMO_OWNER',
+    );
+  }
+
+  const { error } = await db('inmobiliaria_miembros')
+    .update({ estado: 'revocado', token: null, token_expiracion: null } as never)
+    .eq('id', m.miembro_id);
+  if (error) {
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo procesar la salida');
+  }
+
+  await liberarResponsablesDeMiembro(m.inmobiliaria_id, userId);
+  if (m.rol_miembro === 'owner') {
+    await reapuntarTitularPrincipalSiNecesario(m.inmobiliaria_id, userId);
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MIEMBRO_REVOCADO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: m.miembro_id,
+    detalle: { inmobiliaria_id: m.inmobiliaria_id, perfil_id: userId, via: 'self' },
+  });
+
+  // Avisar a los titulares restantes que alguien salió del equipo.
+  notificarOwnersOrg(m.inmobiliaria_id, userId, `Un miembro salió de ${m.nombre_organizacion}.`)
+    .catch((e) => logger.warn({ error: e }, 'Error notificando salida de miembro'));
+
+  logger.info({ inmobiliariaId: m.inmobiliaria_id, userId }, 'Miembro salió de la organización');
+  return { message: 'Saliste de la inmobiliaria' };
+}
+
+/** Notifica (in-app) a todos los owners activos de una org, excepto a `exceptoPerfilId`. */
+async function notificarOwnersOrg(orgId: string, exceptoPerfilId: string, mensaje: string): Promise<void> {
+  const { data } = await db('inmobiliaria_miembros')
+    .select('perfil_id')
+    .eq('inmobiliaria_id', orgId)
+    .eq('rol_miembro', 'owner')
+    .eq('estado', 'activo')
+    .not('perfil_id', 'is', null);
+  const owners = ((data as Array<{ perfil_id: string | null }> | null) || [])
+    .map((r) => r.perfil_id)
+    .filter((id): id is string => !!id && id !== exceptoPerfilId);
+  for (const ownerId of owners) {
+    notificarUsuario({
+      userId: ownerId,
+      tipo: 'inmobiliaria.miembro_salio',
+      titulo: 'Cambio en tu equipo',
+      mensaje,
+      link: '/configuracion/equipo',
+    }).catch(() => {});
+  }
 }
 
 // ============================================================
