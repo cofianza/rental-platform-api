@@ -340,6 +340,19 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
 
   const created = data as unknown as { id: string; numero: string; estado: string };
 
+  // Fase 3.1: notificar al responsable asignado al crear, salvo que sea el
+  // propio creador (no tiene sentido notificarse a sí mismo).
+  const responsableAsignado = insertData.miembro_responsable_id as string | undefined;
+  if (responsableAsignado && responsableAsignado !== createdBy) {
+    await notificarUsuario({
+      userId: responsableAsignado,
+      tipo: 'expediente_asignado',
+      titulo: 'Te asignaron un expediente',
+      mensaje: `Eres responsable del expediente ${created.numero}.`,
+      link: `/expedientes/${created.id}`,
+    });
+  }
+
   logAudit({
     usuarioId: createdBy,
     accion: AUDIT_ACTIONS.EXPEDIENTE_CREATED,
