@@ -1530,6 +1530,35 @@ function uuidOrNull(v: string | null | undefined): string | null {
   return v && UUID_RE.test(v) ? v : null;
 }
 
+/**
+ * Inyecta las anclas de firma de Auco (`{{signature:N}}`) en la línea de firma
+ * de cada parte del bloque multi-parte, para que CADA firma caiga en su lugar
+ * (arrendatario=0, arrendador=1, cofianza=2) en vez de apilarse en una posición
+ * fija. El span es invisible (color blanco, 1px) — Auco extrae el texto igual,
+ * pero no se ve el token en el PDF. Empareja `label:true` en
+ * buildSignProfileMultiparte. El co-titular (si existe) no es firmante Auco, así
+ * que su línea no se ancla. Si la plantilla no trae el bloque esperado, el HTML
+ * pasa intacto (no rompe la generación).
+ */
+function inyectarAnclasFirmaMultiparte(html: string): string {
+  const ancla = (n: number) => `<span style="color:#ffffff;font-size:1px;">{{signature:${n}}}</span>`;
+  const partes: Array<[string, number]> = [
+    ['EL ARRENDATARIO', 0],
+    ['EL ARRENDADOR', 1],
+    ['COFIANZA S.A.S.', 2],
+  ];
+  let out = html;
+  for (const [label, n] of partes) {
+    const labelEsc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // <div class="firma-line"></div> (línea en blanco) seguido del <p><strong>PARTE</strong>
+    const re = new RegExp(
+      `(<div class="firma-line">)(</div>\\s*<p>\\s*<strong>${labelEsc}</strong>)`,
+    );
+    out = out.replace(re, `$1${ancla(n)}$2`);
+  }
+  return out;
+}
+
 export async function generarContrato(
   expedienteId: string,
   input: GenerarContratoInput,
@@ -1623,8 +1652,11 @@ export async function generarContrato(
   let nombreArchivoContrato: string;
 
   if (plantillaRow.contenido_html) {
-    // Plantilla V2 (HTML rico) → Puppeteer.
-    const renderedHtml = renderTemplate(plantillaRow.contenido_html, finalVariables);
+    // Plantilla V2 (HTML rico) → Puppeteer. Inyectamos las anclas de firma para
+    // que cada parte firme en su línea (ver inyectarAnclasFirmaMultiparte).
+    const renderedHtml = inyectarAnclasFirmaMultiparte(
+      renderTemplate(plantillaRow.contenido_html, finalVariables),
+    );
     pdfBuffer = await renderHtmlToPdf(renderedHtml);
     nombreArchivoContrato = `contrato-${expedienteNumero}-v1.pdf`;
   } else {
@@ -2072,7 +2104,9 @@ export async function regenerarContrato(
 
   let pdfBuffer: Buffer;
   if (pl.contenido_html) {
-    const renderedHtml = renderTemplate(pl.contenido_html, finalVariables);
+    const renderedHtml = inyectarAnclasFirmaMultiparte(
+      renderTemplate(pl.contenido_html, finalVariables),
+    );
     pdfBuffer = await renderHtmlToPdf(renderedHtml);
   } else {
     const flatVars = flattenForLegacyTemplate(ctx);

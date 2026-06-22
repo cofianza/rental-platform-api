@@ -236,9 +236,12 @@ function buildSignProfileMultiparte(f: FirmanteDerivado, phoneInternational: str
     name: f.nombre,
     email: f.email,
     phone: phoneInternational,
-    // Auco exige al menos uno de [type, label, position]; usamos position
-    // (mismo default que el flujo de un firmante que ya funciona).
-    position: [{ page: 1, x: 0.6, y: 0.85, w: 150, h: 50 }],
+    // `label: true` activa el posicionamiento por ancla de texto: cada firma
+    // cae donde está su `{{signature:N}}` en el PDF (N = índice en signProfile:
+    // arrendatario=0, arrendador=1, cofianza=2), inyectado por
+    // inyectarAnclasFirmaMultiparte en la generación del contrato. Antes era
+    // `position` fija → las 3 firmas se apilaban en el mismo punto.
+    label: true,
     otpCode: true,
     options: { whatsapp: true, otpCode: 'phone' },
   };
