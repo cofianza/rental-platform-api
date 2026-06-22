@@ -76,17 +76,23 @@ const BUCKET_NAME = 'documentos-expedientes';
 
 // Mapea tipo_documento de nuestro DB al formato Auco. Auco usa codigos
 // estandar colombianos en mayusculas (CC, CE, TI, NIT, PASAPORTE).
+// Tipos de documento que Auco acepta para un FIRMANTE (persona natural). NIT
+// (empresa) y TI NO están en la lista → mapean a null y no se envían (Auco
+// rechaza el sobre con 400 si identificationType no está en su lista).
+const AUCO_DOC_TYPES = new Set([
+  'CC', 'CE', 'PPT', 'PEP', 'CI', 'RUT', 'RUN', 'CCCR', 'DUI', 'DNI', 'CURP', 'PASSPORT',
+]);
+
 function mapTipoDocumentoToAuco(tipoDocumento: string | null | undefined): string | null {
   if (!tipoDocumento) return null;
   const tipo = tipoDocumento.trim().toLowerCase();
-  switch (tipo) {
-    case 'cc': return 'CC';
-    case 'ce': return 'CE';
-    case 'ti': return 'TI';
-    case 'nit': return 'NIT';
-    case 'pasaporte': return 'PASAPORTE';
-    default: return tipo.toUpperCase();
-  }
+  const alias: Record<string, string> = {
+    cc: 'CC', ce: 'CE', pep: 'PEP', ppt: 'PPT', ci: 'CI',
+    dni: 'DNI', curp: 'CURP', rut: 'RUT',
+    pasaporte: 'PASSPORT', passport: 'PASSPORT',
+  };
+  const mapped = alias[tipo] ?? tipo.toUpperCase();
+  return AUCO_DOC_TYPES.has(mapped) ? mapped : null;
 }
 
 // Deriva el codigo ISO de pais a partir del prefijo internacional del telefono.
@@ -193,8 +199,10 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
         otpCode: 'phone',
       },
     };
-    if (idNumero) profile.identification = idNumero;
-    if (tipoAuco) profile.identificationType = tipoAuco;
+    if (idNumero && tipoAuco) {
+      profile.identification = idNumero;
+      profile.identificationType = tipoAuco;
+    }
     if (countryCode) profile.country = countryCode;
     return profile;
   }
@@ -209,8 +217,10 @@ function buildSignProfile(params: SignProfileInput): SignProfileOutput {
       otpCode: 'email',
     },
   };
-  if (idNumero) profile.identification = idNumero;
-  if (tipoAuco) profile.identificationType = tipoAuco;
+  if (idNumero && tipoAuco) {
+    profile.identification = idNumero;
+    profile.identificationType = tipoAuco;
+  }
   if (countryCode) profile.country = countryCode;
   return profile;
 }

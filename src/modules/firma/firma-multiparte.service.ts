@@ -235,17 +235,34 @@ function buildSignProfileMultiparte(f: FirmanteDerivado, phoneInternational: str
     otpCode: true,
     options: { whatsapp: true, otpCode: 'phone' },
   };
-  if (f.numero_documento) profile.identification = f.numero_documento;
-  if (tipoAuco) profile.identificationType = tipoAuco;
+  // Solo mandamos identificación si el tipo es válido para Auco. Una inmobiliaria
+  // (NIT) o tipos no soportados (TI) → omitimos AMBOS campos: Auco rechaza el
+  // sobre (400) si identificationType no está en su lista. El OTP por WhatsApp no
+  // requiere documento, así que el firmante igual puede firmar.
+  if (tipoAuco && f.numero_documento) {
+    profile.identification = f.numero_documento;
+    profile.identificationType = tipoAuco;
+  }
   if (country) profile.country = country;
   return profile;
 }
 
+// Tipos de documento que Auco acepta para un FIRMANTE (persona natural). NIT
+// (empresa) y TI NO están en la lista, así que mapean a null y no se envían.
+const AUCO_DOC_TYPES = new Set([
+  'CC', 'CE', 'PPT', 'PEP', 'CI', 'RUT', 'RUN', 'CCCR', 'DUI', 'DNI', 'CURP', 'PASSPORT',
+]);
+
 function mapTipoDocumentoToAuco(tipo: string | null | undefined): string | null {
   if (!tipo) return null;
   const t = tipo.trim().toLowerCase();
-  const map: Record<string, string> = { cc: 'CC', ce: 'CE', ti: 'TI', nit: 'NIT', pasaporte: 'PASAPORTE' };
-  return map[t] ?? t.toUpperCase();
+  const alias: Record<string, string> = {
+    cc: 'CC', ce: 'CE', pep: 'PEP', ppt: 'PPT', ci: 'CI',
+    dni: 'DNI', curp: 'CURP', rut: 'RUT',
+    pasaporte: 'PASSPORT', passport: 'PASSPORT',
+  };
+  const mapped = alias[t] ?? t.toUpperCase();
+  return AUCO_DOC_TYPES.has(mapped) ? mapped : null;
 }
 
 function aucoDeriveCountry(phone: string | null): string | null {
