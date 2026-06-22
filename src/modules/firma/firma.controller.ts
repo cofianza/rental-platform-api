@@ -71,6 +71,14 @@ export async function listarPorContrato(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+// Firmantes multi-parte del contrato (arrendatario/arrendador/cofianza).
+export async function listarFirmantes(req: Request, res: Response) {
+  const contratoId = req.params.contratoId as string;
+  const { listarFirmantes } = await import('./firma-multiparte.service');
+  const result = await listarFirmantes(contratoId);
+  sendSuccess(res, result);
+}
+
 export async function cancelar(req: Request, res: Response) {
   const id = req.params.id as string;
   await firmaService.cancelarSolicitud(

@@ -94,6 +94,17 @@ contratoFirmaSolicitudesRouter.get(
   firmaController.listarPorContrato,
 );
 
+// ── Router: /api/v1/contratos/:contratoId/firma/firmantes ──────
+// Firmantes multi-parte (arrendatario/arrendador/cofianza) del contrato.
+export const contratoFirmantesRouter = Router({ mergeParams: true });
+contratoFirmantesRouter.use(authMiddleware);
+contratoFirmantesRouter.get(
+  '/',
+  authorize('contratos', 'read'),
+  validate({ params: contratoIdParamsSchema }),
+  firmaController.listarFirmantes,
+);
+
 // ============================================================
 // Public routes: /api/v1/public/firma
 // ============================================================

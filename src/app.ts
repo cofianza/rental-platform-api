@@ -37,7 +37,7 @@ import { expedienteContratosRouter, contratosRouter, inmuebleContratoPreviewRout
 import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes';
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
 import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
-import { firmaRouter, contratoFirmaSolicitudesRouter, publicFirmaRouter, aucoWebhookRouter, firmaCronRouter } from '@/modules/firma/firma.routes';
+import { firmaRouter, contratoFirmaSolicitudesRouter, contratoFirmantesRouter, publicFirmaRouter, aucoWebhookRouter, firmaCronRouter } from '@/modules/firma/firma.routes';
 import { expedientePagosRouter, pagosRouter, pagosWebhookRouter, devWebhookRouter } from '@/modules/pagos/pagos.routes';
 import { pagoEstudioRouter, publicPagoResultadoRouter } from '@/modules/pago-estudio/pago-estudio.routes';
 import dashboardRouter from '@/modules/dashboard/dashboard.routes';
@@ -144,6 +144,7 @@ app.use('/api/v1/contratos', contratoArchivosRouter);
 app.use('/api/v1/contratos', contratosRouter);
 app.use('/api/v1/firma/solicitudes', firmaRouter);
 app.use('/api/v1/contratos/:contratoId/firma/solicitudes', contratoFirmaSolicitudesRouter);
+app.use('/api/v1/contratos/:contratoId/firma/firmantes', contratoFirmantesRouter);
 app.use('/api/v1/public/firma', publicFirmaRouter);
 app.use('/api/v1/webhooks/auco/firma', aucoWebhookRouter);
 app.use('/api/v1/cron/firma/expirar', firmaCronRouter);

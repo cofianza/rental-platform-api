@@ -90,6 +90,18 @@ export function todasFirmaron(firmantes: Array<{ estado: string }>): boolean {
 }
 
 // ============================================================
+// Listado de firmantes de un contrato (para el panel del detalle)
+// ============================================================
+
+export async function listarFirmantes(contratoId: string): Promise<{ firmantes: Array<Record<string, unknown>> }> {
+  const { data } = await db('contrato_firmantes')
+    .select('id, rol_firmante, nombre, email, telefono, orden, estado, firmado_en, created_at')
+    .eq('contrato_id', contratoId)
+    .order('orden', { ascending: true });
+  return { firmantes: (data as Array<Record<string, unknown>> | null) ?? [] };
+}
+
+// ============================================================
 // Fase 2 — Derivar los firmantes de un contrato
 // ============================================================
 
