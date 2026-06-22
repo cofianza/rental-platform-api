@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { env } from '@/config';
 import { generateContractPdf } from './contratos.pdf';
 import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 import { renderTemplate } from '@/lib/templateEngine';
@@ -1249,22 +1250,30 @@ async function dispatchAutoFirma(contratoId: string, expedienteId: string, invoc
         usuario_id: null,
       } as never);
 
-    // 3. Crear solicitud Auco con los datos del solicitante
-    const { crearSolicitudFirma } = await import('@/modules/firma/firma.service');
-    const nombreFirmante = `${exp.solicitante.nombre} ${exp.solicitante.apellido}`.trim();
+    // 3. Crear el sobre de firma en Auco.
+    //    Multi-parte (flag ON): un solo documento con arrendatario + arrendador
+    //    + Cofianza. Por defecto (flag OFF): un solo firmante (arrendatario),
+    //    flujo histórico intacto.
+    if (env.FIRMA_MULTIPARTE_ENABLED) {
+      const { crearSolicitudFirmaMultiparte } = await import('@/modules/firma/firma-multiparte.service');
+      await crearSolicitudFirmaMultiparte(contratoId, exp.inmueble.propietario_id);
+    } else {
+      const { crearSolicitudFirma } = await import('@/modules/firma/firma.service');
+      const nombreFirmante = `${exp.solicitante.nombre} ${exp.solicitante.apellido}`.trim();
 
-    await crearSolicitudFirma(
-      {
-        contrato_id: contratoId,
-        nombre_firmante: nombreFirmante,
-        email_firmante: exp.solicitante.email,
-        telefono_firmante: exp.solicitante.telefono || undefined,
-        enviar_sms: false,
-      },
-      // El enviado_por es el propietario del inmueble (responsable
-      // contractual). Cumple el FK NOT NULL a perfiles.
-      exp.inmueble.propietario_id,
-    );
+      await crearSolicitudFirma(
+        {
+          contrato_id: contratoId,
+          nombre_firmante: nombreFirmante,
+          email_firmante: exp.solicitante.email,
+          telefono_firmante: exp.solicitante.telefono || undefined,
+          enviar_sms: false,
+        },
+        // El enviado_por es el propietario del inmueble (responsable
+        // contractual). Cumple el FK NOT NULL a perfiles.
+        exp.inmueble.propietario_id,
+      );
+    }
 
     logger.info(
       { contratoId, expedienteId, invocationId, duracionMs: Date.now() - dispatchStartedAt },

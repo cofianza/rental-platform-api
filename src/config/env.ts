@@ -92,6 +92,12 @@ const envSchema = z.object({
   // liberación), pero si se escala horizontalmente conviene dejarlo en 'true'
   // en UNA sola instancia para evitar trabajo redundante.
   CONTRATO_VENCIMIENTO_JOB_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+
+  // Firma multi-parte (arrendatario + arrendador + Cofianza) en un solo sobre Auco.
+  // OFF por defecto: mientras siga en false, la firma usa el flujo de un solo
+  // firmante (arrendatario). Activar solo cuando estén listos los teléfonos
+  // reales de cada parte y los datos de Cofianza (company.ts: nit/phone).
+  FIRMA_MULTIPARTE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

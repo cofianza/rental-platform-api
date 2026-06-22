@@ -72,14 +72,26 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
 
   const contrato = contratoData as unknown as ContratoForPostFirma;
 
-  // 2. Check if ALL solicitudes for this contrato are firmado
-  const { data: solicitudes } = await (supabase
-    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado')
+  // 2. ¿Todas las partes firmaron? En multi-parte (M1) la verdad vive en
+  //    contrato_firmantes (una fila por parte). Si no hay filas (flujo de un
+  //    solo firmante), caemos al comportamiento histórico sobre solicitudes_firma.
+  const { data: firmantesRows } = await (supabase
+    .from('contrato_firmantes' as string) as ReturnType<typeof supabase.from>)
+    .select('estado')
     .eq('contrato_id', contratoId);
+  const firmantes = (firmantesRows as unknown as Array<{ estado: string }>) || [];
 
-  const allSolicitudes = (solicitudes as unknown as SolicitudEstado[]) || [];
-  const allSigned = allSolicitudes.length > 0 && allSolicitudes.every((s) => s.estado === 'firmado');
+  let allSigned: boolean;
+  if (firmantes.length > 0) {
+    allSigned = firmantes.every((f) => f.estado === 'firmado');
+  } else {
+    const { data: solicitudes } = await (supabase
+      .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado')
+      .eq('contrato_id', contratoId);
+    const allSolicitudes = (solicitudes as unknown as SolicitudEstado[]) || [];
+    allSigned = allSolicitudes.length > 0 && allSolicitudes.every((s) => s.estado === 'firmado');
+  }
 
   // 3. Transition contrato to "firmado" if all solicitudes signed AND contrato is in pendiente_firma
   if (allSigned && contrato.estado === 'pendiente_firma') {

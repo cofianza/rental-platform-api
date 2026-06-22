@@ -1107,6 +1107,23 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
     email_firmante: string;
   };
 
+  // Multi-parte (M1): si el contrato tiene firmantes registrados, el estado por
+  // parte vive en contrato_firmantes — delegamos a la reconciliación por poll
+  // (que casa cada firmante con signProfile[] de Auco). El webhook de documento
+  // solo actúa de disparador.
+  const { data: cfRows } = await (supabase
+    .from('contrato_firmantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('contrato_id', row.contrato_id)
+    .limit(1);
+  if (cfRows && (cfRows as unknown[]).length > 0) {
+    const { reconciliarFirmantesConAuco } = await import('./firma-multiparte.service');
+    await reconciliarFirmantesConAuco(row.contrato_id).catch((err) =>
+      logger.error({ error: err, contratoId: row.contrato_id }, 'Auco webhook: error reconciliando multi-parte'),
+    );
+    return;
+  }
+
   // Don't update if already in terminal state
   if (['firmado', 'cancelado', 'expirado'].includes(row.estado)) {
     logger.debug({ id: row.id, estado: row.estado, aucoStatus: status }, 'Auco webhook: solicitud already in terminal state');
@@ -1231,6 +1248,21 @@ export async function syncFirmaConAucoForExpediente(expedienteId: string): Promi
   if (contratos.length === 0) return;
 
   for (const contrato of contratos) {
+    // Multi-parte (M1): si el contrato tiene firmantes registrados, delegamos a
+    // la reconciliación por parte y saltamos el flujo de un solo firmante.
+    const { data: cfRows } = await (supabase
+      .from('contrato_firmantes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('contrato_id', contrato.id)
+      .limit(1);
+    if (cfRows && (cfRows as unknown[]).length > 0) {
+      const { reconciliarFirmantesConAuco } = await import('./firma-multiparte.service');
+      await reconciliarFirmantesConAuco(contrato.id).catch((err) =>
+        logger.error({ error: err, contratoId: contrato.id }, 'syncFirmaConAuco: error reconciliando multi-parte'),
+      );
+      continue;
+    }
+
     // 2. Encontrar solicitudes_firma del contrato. Filtramos en JS para
     //    evitar la sintaxis fragil de .not('estado','in',...) de Supabase
     //    (que silently no matchea y nos hacia ignorar todas las solicitudes).

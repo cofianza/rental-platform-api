@@ -62,6 +62,31 @@ Each business module in `src/modules/<domain>/` follows this structure:
 
 The `health` module serves as the reference implementation of this pattern.
 
+## Multi-tenant data isolation (CRITICAL — read before touching any read/write of inmuebles/expedientes)
+
+The Supabase client uses the **service_role key, which BYPASSES RLS**. There is **no row-level enforcement** — *all* tenant isolation lives in the application layer. Getting this wrong silently leaks one agency's data to another.
+
+**Model.** An `inmobiliaria` is an **organization** (`inmobiliarias`: `owner_perfil_id`, `miembros_ven_todo`, `estado`) with members (`inmobiliaria_miembros`: `perfil_id`, `email`, `rol_miembro`, `estado`, invitation `token`). Only `rol='inmobiliaria'` profiles have an org; a `propietario` is an individual scoped by `inmuebles.propietario_id` (its `inmobiliaria_id` is NULL). `inmuebles.inmobiliaria_id` / `expedientes.inmobiliaria_id` are denormalized for fast scoping; `inmuebles.miembro_responsable_id` / `expedientes.miembro_responsable_id` assign a specific member.
+
+- `rol_miembro`: `owner` (titular — **can be several = co-titulares**), `miembro` (staff, creates/edits org data), `solo_lectura` (viewer — reads only).
+- `inmobiliarias.owner_perfil_id` is the "primary titular"; the app re-points it to another active owner when that profile is demoted/leaves (`reapuntarTitularPrincipalSiNecesario`). Ownership checks use `rol_miembro='owner'` and never assume a single owner.
+
+**`src/lib/tenantScope.ts` is the single source of truth for "what can a user see".** Reuse it; do not re-derive scoping inline (three duplicated copies of that logic were the original bug this module fixed). Key exports:
+- `resolveVisibilityScope(userId, rol)` → `all` (internal roles) | `org` (owner, or member when `miembros_ven_todo`) | `own` (restricted member / individual propietario) | `none`.
+- `resolveAllowedInmuebleIds` / `resolveAllowedExpedienteIds` → `null` = no filter (internal), `[]` = empty, `[...]` = the only IDs this user may read. Most list endpoints filter on these.
+- `perfilEsDuenoDeInmueble(...)` → the ownership guard for write/detail endpoints (direct `propietario_id` OR active member of the owning org). Use it instead of `propietario_id === userId`.
+- `esOwnerDeOrg`, `esMiembroNoOwnerDeOrg`, `esMiembroSoloLectura`, `resolveOrgMemberPerfilIds`, `ensureOrgConOwner`.
+
+**`solo_lectura` write-block lives in `src/middleware/auth.ts`** (the universal authenticated chokepoint): for a `rol='inmobiliaria'` viewer, mutating methods (POST/PUT/PATCH/DELETE) are **denied by default**, with a small allowlist (`/notificaciones`, `/auth`, `/users`, `/inmobiliaria/miembros/salir`). Consequence: **a new mutating route is automatically blocked for viewers** — if a viewer legitimately needs it, add the path to `viewerPuedeMutar()`. This is the deliberate safe bias; don't replace it with per-route checks.
+
+The **`inmobiliaria-miembros` module** owns the membership lifecycle (invite / accept / register / revoke / change-role / self-leave) plus an admin router (`/api/v1/admin/inmobiliarias`, `rol='administrador'`) to manage any org. Guards that protect the last titular (`contarOwnersActivos`) and free orphaned responsables (`liberarResponsablesDeMiembro`) are shared between the owner-facing and admin-facing paths.
+
+**PostgREST FK ambiguity:** `inmobiliaria_miembros`, `inmuebles`, and `expedientes` each have **two FKs to `perfiles`** — embeds must use an explicit FK hint (e.g. `perfiles!inmobiliaria_miembros_perfil_id_fkey(...)`), or the query 500s with "more than one relationship was found".
+
+## Tests
+
+`npm test` (vitest) — **but CI runs only lint + typecheck + build, not vitest**, so the suite is not a merge gate and several test files are pre-existing failures (expedientes state-machine/workflow, autorizaciones). Run a single file with `npx vitest run path/to/file.test.ts` (note: test files live under `__tests__/`). Tests mock `@/lib/supabase`; mock helper variables referenced inside a `vi.mock` factory must be **inlined or prefixed `mock`** (hoisting), since factories run above the file's top-level consts.
+
 ## Conventions
 
 - The project README and docs are in Spanish; code (variables, functions) is in English.
