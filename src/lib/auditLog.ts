@@ -107,6 +107,10 @@ export const AUDIT_ACTIONS = {
   WHATSAPP_ENVIADO: 'whatsapp_enviado',
   WHATSAPP_FALLIDO: 'whatsapp_fallido',
   WHATSAPP_MOCK: 'whatsapp_mock',
+  // Miembros de inmobiliaria (multi-tenant)
+  MIEMBRO_INVITADO: 'miembro_invitado',
+  MIEMBRO_REVOCADO: 'miembro_revocado',
+  MIEMBRO_ACEPTO: 'miembro_acepto',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -129,6 +133,7 @@ export const AUDIT_ENTITIES = {
   CONTRATO: 'contrato',
   PAGO: 'pago',
   WHATSAPP: 'whatsapp',
+  INMOBILIARIA_MIEMBRO: 'inmobiliaria_miembro',
 } as const;
 
 interface AuditLogParams {

@@ -3,7 +3,9 @@ import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendInvitacionMiembroEmail } from '../orchestrator/orchestrator.emails';
+import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import type { AuthUser } from '@/types/auth';
 import type { InvitarMiembroInput, RegistrarMiembroInput } from './inmobiliaria-miembros.schema';
 
@@ -185,6 +187,7 @@ export async function invitarMiembro(
 
   const { token, expiracion } = nuevoToken();
   let reenviada = false;
+  let miembroRowId: string | null = ex?.id ?? null;
 
   if (ex) {
     // Invitación pendiente o revocada -> regenerar token y reactivar.
@@ -203,7 +206,7 @@ export async function invitarMiembro(
       throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo enviar la invitación');
     }
   } else {
-    const { error } = await db('inmobiliaria_miembros').insert({
+    const { data: inserted, error } = await db('inmobiliaria_miembros').insert({
       inmobiliaria_id: org.inmobiliaria_id,
       email,
       rol_miembro: input.rol_miembro,
@@ -211,14 +214,25 @@ export async function invitarMiembro(
       token,
       token_expiracion: expiracion,
       invitado_por: userId,
-    } as never);
+    } as never)
+      .select('id')
+      .maybeSingle();
     if (error) {
       logger.error({ error: error.message }, 'Error al crear invitación de miembro');
       throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo crear la invitación');
     }
+    miembroRowId = (inserted as { id: string } | null)?.id ?? null;
   }
 
   await enviarEmailInvitacion(email, token, org.nombre_organizacion, userId);
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MIEMBRO_INVITADO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: miembroRowId ?? undefined,
+    detalle: { inmobiliaria_id: org.inmobiliaria_id, email, rol_miembro: input.rol_miembro, reenviada },
+  });
 
   logger.info(
     { inmobiliariaId: org.inmobiliaria_id, email, reenviada },
@@ -321,6 +335,35 @@ export async function revocarMiembro(userId: string, miembroId: string): Promise
   if (error) {
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo revocar el miembro');
   }
+
+  // Liberar inmuebles/expedientes que tenían a este miembro como responsable,
+  // para no dejar asignaciones apuntando a alguien que ya no pertenece a la org.
+  if (row.perfil_id) {
+    const [{ error: errInm }, { error: errExp }] = await Promise.all([
+      db('inmuebles')
+        .update({ miembro_responsable_id: null } as never)
+        .eq('inmobiliaria_id', org.inmobiliaria_id)
+        .eq('miembro_responsable_id', row.perfil_id),
+      db('expedientes')
+        .update({ miembro_responsable_id: null } as never)
+        .eq('inmobiliaria_id', org.inmobiliaria_id)
+        .eq('miembro_responsable_id', row.perfil_id),
+    ]);
+    if (errInm) {
+      logger.warn({ error: errInm.message, miembroId }, 'No se pudieron limpiar responsables de inmuebles al revocar');
+    }
+    if (errExp) {
+      logger.warn({ error: errExp.message, miembroId }, 'No se pudieron limpiar responsables de expedientes al revocar');
+    }
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MIEMBRO_REVOCADO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: miembroId,
+    detalle: { inmobiliaria_id: org.inmobiliaria_id, perfil_id: row.perfil_id },
+  });
 
   logger.info({ inmobiliariaId: org.inmobiliaria_id, miembroId }, 'Miembro revocado');
   return { message: 'Miembro revocado' };
@@ -436,6 +479,15 @@ export async function aceptarInvitacionMiembro(
 
   await vincularMiembro(inv.id, user.id);
 
+  notificarOwnerNuevoMiembro(inv, user.email);
+  logAudit({
+    usuarioId: user.id,
+    accion: AUDIT_ACTIONS.MIEMBRO_ACEPTO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: inv.id,
+    detalle: { inmobiliaria_id: inv.inmobiliaria_id, via: 'login' },
+  });
+
   logger.info({ inmobiliariaId: inv.inmobiliaria_id, userId: user.id }, 'Invitación de miembro aceptada');
   return { message: 'Te uniste a la inmobiliaria', redirect: '/dashboard' };
 }
@@ -454,6 +506,22 @@ async function vincularMiembro(miembroId: string, perfilId: string): Promise<voi
     logger.error({ error: error.message, miembroId }, 'Error al vincular miembro');
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar la aceptación');
   }
+}
+
+/**
+ * Avisa al owner (quien invitó) que el invitado ya se unió. Fire-and-forget:
+ * la aceptación no debe fallar si la notificación falla.
+ */
+function notificarOwnerNuevoMiembro(inv: InvitacionRow, nombreMiembro: string): void {
+  if (!inv.invitado_por) return;
+  const org = inv.inmobiliarias?.nombre ?? 'tu inmobiliaria';
+  notificarUsuario({
+    userId: inv.invitado_por,
+    tipo: 'inmobiliaria.miembro_acepto',
+    titulo: 'Nuevo miembro en tu equipo',
+    mensaje: `${nombreMiembro} aceptó tu invitación y ya forma parte de ${org}.`,
+    link: '/configuracion/equipo',
+  }).catch((e) => logger.warn({ error: e, miembroId: inv.id }, 'Error notificando owner de nuevo miembro'));
 }
 
 // ============================================================
@@ -510,6 +578,16 @@ export async function registrarMiembro(
   }
 
   await vincularMiembro(inv.id, userId);
+
+  const nombreMiembro = `${input.nombre ?? ''} ${input.apellido ?? ''}`.trim() || inv.email;
+  notificarOwnerNuevoMiembro(inv, nombreMiembro);
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MIEMBRO_ACEPTO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA_MIEMBRO,
+    entidadId: inv.id,
+    detalle: { inmobiliaria_id: inv.inmobiliaria_id, via: 'registro' },
+  });
 
   logger.info({ inmobiliariaId: inv.inmobiliaria_id, userId }, 'Miembro registrado y vinculado');
   return { message: 'Cuenta creada. Ya puedes iniciar sesión.', email: inv.email };
