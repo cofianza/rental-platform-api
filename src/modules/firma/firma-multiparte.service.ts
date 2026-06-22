@@ -294,6 +294,23 @@ export async function crearSolicitudFirmaMultiparte(
     );
   }
 
+  // Cada firmante WhatsApp necesita un teléfono ÚNICO: Auco enruta el OTP por
+  // número, así que dos partes con el mismo phone rompen el sobre. Caso típico
+  // en pruebas: Cofianza configurada con el mismo número que el arrendatario.
+  const porTelefono = new Map<string, string[]>();
+  for (const x of conTelefono) {
+    const key = x.phone as string;
+    porTelefono.set(key, [...(porTelefono.get(key) ?? []), x.f.rol_firmante]);
+  }
+  const duplicados = [...porTelefono.values()].filter((roles) => roles.length > 1);
+  if (duplicados.length > 0) {
+    const partes = duplicados.map((roles) => roles.join(' y ')).join('; ');
+    throw AppError.badRequest(
+      `Hay firmantes con el mismo teléfono (${partes}). Cada parte necesita un número distinto para recibir su OTP por WhatsApp. Revisa el teléfono de Cofianza en Configuración o el del arrendador.`,
+      'FIRMANTES_TELEFONO_DUPLICADO',
+    );
+  }
+
   // 3. Descargar PDF y subir UN documento con N firmantes
   const { data: pdfData, error: downloadError } = await supabase.storage
     .from(BUCKET_NAME)

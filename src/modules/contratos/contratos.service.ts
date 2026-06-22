@@ -1207,7 +1207,8 @@ export async function enviarContratoAFirma(
   }
 
   // Llevar a 'pendiente_firma' (salto directo, igual que el flujo automático).
-  if (c.estado !== 'pendiente_firma') {
+  const estadoPrevio = c.estado;
+  if (estadoPrevio !== 'pendiente_firma') {
     const { error: updErr } = await (supabase
       .from('contratos' as string) as ReturnType<typeof supabase.from>)
       .update({ estado: 'pendiente_firma', updated_at: new Date().toISOString() } as never)
@@ -1219,7 +1220,7 @@ export async function enviarContratoAFirma(
       .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
       .insert({
         contrato_id: contratoId,
-        estado_anterior: c.estado,
+        estado_anterior: estadoPrevio,
         estado_nuevo: 'pendiente_firma',
         descripcion: 'Enviado a firma desde la pestaña Contratos',
         usuario_id: userId,
@@ -1227,32 +1228,58 @@ export async function enviarContratoAFirma(
   }
 
   // Disparar el envío. Multi-parte si el flag está ON; si no, un firmante.
-  if (env.FIRMA_MULTIPARTE_ENABLED) {
-    const { crearSolicitudFirmaMultiparte } = await import('@/modules/firma/firma-multiparte.service');
-    await crearSolicitudFirmaMultiparte(contratoId, userId);
-  } else {
-    const { data: expRow } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('solicitante:solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email, telefono)')
-      .eq('id', c.expediente_id)
-      .single();
-    const sol = (expRow as unknown as {
-      solicitante: { nombre: string; apellido: string; email: string | null; telefono: string | null } | null;
-    } | null)?.solicitante;
-    if (!sol?.email) {
-      throw AppError.badRequest('El solicitante no tiene email para enviarle el contrato a firma.', 'SIN_EMAIL_SOLICITANTE');
+  // IMPORTANTE: si el envío a Auco falla, revertimos el estado para no dejar el
+  // contrato trabado en "pendiente_firma" sin sobre de firma (bug observado en
+  // EXP-2026-0001). El error original se propaga al usuario.
+  try {
+    if (env.FIRMA_MULTIPARTE_ENABLED) {
+      const { crearSolicitudFirmaMultiparte } = await import('@/modules/firma/firma-multiparte.service');
+      await crearSolicitudFirmaMultiparte(contratoId, userId);
+    } else {
+      const { data: expRow } = await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('solicitante:solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email, telefono)')
+        .eq('id', c.expediente_id)
+        .single();
+      const sol = (expRow as unknown as {
+        solicitante: { nombre: string; apellido: string; email: string | null; telefono: string | null } | null;
+      } | null)?.solicitante;
+      if (!sol?.email) {
+        throw AppError.badRequest('El solicitante no tiene email para enviarle el contrato a firma.', 'SIN_EMAIL_SOLICITANTE');
+      }
+      const { crearSolicitudFirma } = await import('@/modules/firma/firma.service');
+      await crearSolicitudFirma(
+        {
+          contrato_id: contratoId,
+          nombre_firmante: `${sol.nombre} ${sol.apellido}`.trim(),
+          email_firmante: sol.email,
+          telefono_firmante: sol.telefono || undefined,
+          enviar_sms: false,
+        },
+        userId,
+      );
     }
-    const { crearSolicitudFirma } = await import('@/modules/firma/firma.service');
-    await crearSolicitudFirma(
-      {
-        contrato_id: contratoId,
-        nombre_firmante: `${sol.nombre} ${sol.apellido}`.trim(),
-        email_firmante: sol.email,
-        telefono_firmante: sol.telefono || undefined,
-        enviar_sms: false,
-      },
-      userId,
+  } catch (sendErr) {
+    if (estadoPrevio !== 'pendiente_firma') {
+      await (supabase
+        .from('contratos' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: estadoPrevio, updated_at: new Date().toISOString() } as never)
+        .eq('id', contratoId);
+      await (supabase
+        .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
+        .insert({
+          contrato_id: contratoId,
+          estado_anterior: 'pendiente_firma',
+          estado_nuevo: estadoPrevio,
+          descripcion: 'Reversión automática: el envío a firma falló',
+          usuario_id: userId,
+        } as never);
+    }
+    logger.warn(
+      { contratoId, userId, error: sendErr instanceof Error ? sendErr.message : String(sendErr) },
+      'Enviar a firma: envío falló, estado revertido',
     );
+    throw sendErr;
   }
 
   logger.info({ contratoId, userId }, 'Contrato enviado a firma manualmente');
