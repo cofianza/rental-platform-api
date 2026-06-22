@@ -6,8 +6,9 @@
  *   2. arrendador   (inmobiliaria → representante legal, o propietario individual)
  *   3. cofianza      (afianzadora)
  *
- * Modelo: un único documento Auco (signProfile[] con `order` para firma
- * secuencial) → un `auco_document_code` → un sobre `solicitudes_firma` + N filas
+ * Modelo: un único documento Auco (signProfile[] — firma en PARALELO; ver nota
+ * en buildSignProfileMultiparte sobre por qué NO usamos `order`) → un
+ * `auco_document_code` → un sobre `solicitudes_firma` + N filas
  * `contrato_firmantes`. La reconciliación del estado por parte se hace por POLL
  * (`getDocumentStatus().signProfile[].status`), así no dependemos de que Auco
  * emita un webhook por firmante. El contrato pasa a `firmado` cuando TODAS las
@@ -219,7 +220,15 @@ async function resolveAuthEmail(perfilId: string): Promise<string | null> {
 // Fase 3 — Crear el sobre multi-parte en Auco
 // ============================================================
 
-/** Perfil de firma WhatsApp para Auco (OTP por phone) con orden secuencial. */
+/**
+ * Perfil de firma WhatsApp para Auco (OTP por phone), firma en PARALELO.
+ *
+ * NO mandamos el campo `order`: con `order` (firma secuencial) Auco no entrega
+ * la notificación de WhatsApp en nuestra cuenta (el flujo de un firmante, que es
+ * idéntico salvo ese campo, sí entrega). Sin `order`, las 3 partes se notifican
+ * a la vez y firman en cualquier orden. El `orden` (1/2/3) se conserva en
+ * `contrato_firmantes` solo para mostrarlo en el panel del detalle.
+ */
 function buildSignProfileMultiparte(f: FirmanteDerivado, phoneInternational: string) {
   const tipoAuco = mapTipoDocumentoToAuco(f.tipo_documento);
   const country = aucoDeriveCountry(phoneInternational) || f.country;
@@ -230,8 +239,6 @@ function buildSignProfileMultiparte(f: FirmanteDerivado, phoneInternational: str
     // Auco exige al menos uno de [type, label, position]; usamos position
     // (mismo default que el flujo de un firmante que ya funciona).
     position: [{ page: 1, x: 0.6, y: 0.85, w: 150, h: 50 }],
-    // `order` controla la firma secuencial (1 = primero).
-    order: String(f.orden),
     otpCode: true,
     options: { whatsapp: true, otpCode: 'phone' },
   };
