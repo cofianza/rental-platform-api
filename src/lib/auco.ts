@@ -262,10 +262,12 @@ export async function sendReminder(code: string): Promise<void> {
  * Cancel a signing process in Auco.
  */
 export async function cancelDocument(code: string): Promise<void> {
+  // Auco espera el campo `codes` (array), no `documents` — con `documents`
+  // devuelve 400 "codes is required" y el documento queda activo en Auco.
   await aucoRequest(
     'POST',
     '/document/cancel',
-    { documents: [code] },
+    { codes: [code] },
     true,
   );
   logger.info({ code }, 'Auco document cancelled');
