@@ -1167,6 +1167,98 @@ async function maybeAutoFirmaExistente(
   }
 }
 
+/**
+ * Envío MANUAL a firma desde la pestaña Contratos ("Enviar a firma").
+ * A diferencia de dispatchAutoFirma (fire-and-forget que traga errores), esta
+ * PROPAGA los errores para que el botón muestre el motivo (falta teléfono del
+ * firmante, Auco caído, etc.). Lleva el contrato a 'pendiente_firma' (salto
+ * directo, como el flujo automático) y dispara el envío (multi-parte si el flag
+ * está ON; si no, un solo firmante con los datos del solicitante). Idempotente:
+ * si ya hay una solicitud activa, no duplica.
+ */
+export async function enviarContratoAFirma(
+  contratoId: string,
+  userId: string,
+): Promise<{ ok: true; message: string }> {
+  const { data: contratoRow } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, expediente_id, storage_key')
+    .eq('id', contratoId)
+    .maybeSingle();
+  const c = contratoRow as { id: string; estado: string; expediente_id: string; storage_key: string | null } | null;
+  if (!c) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+
+  if (['firmado', 'vigente', 'finalizado', 'cancelado'].includes(c.estado)) {
+    throw AppError.badRequest('El contrato ya está firmado o cerrado; no se puede enviar a firma.', 'CONTRATO_ESTADO_INVALIDO');
+  }
+  if (!c.storage_key) {
+    throw AppError.badRequest('El contrato no tiene PDF generado para enviar a firma.', 'NO_PDF');
+  }
+
+  // Idempotencia: si ya hay una solicitud de firma activa, no duplicamos.
+  const { data: activa } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('contrato_id', contratoId)
+    .in('estado', ['enviado', 'abierto'])
+    .maybeSingle();
+  if (activa) {
+    return { ok: true, message: 'El contrato ya está en proceso de firma.' };
+  }
+
+  // Llevar a 'pendiente_firma' (salto directo, igual que el flujo automático).
+  if (c.estado !== 'pendiente_firma') {
+    const { error: updErr } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .update({ estado: 'pendiente_firma', updated_at: new Date().toISOString() } as never)
+      .eq('id', contratoId);
+    if (updErr) {
+      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo preparar el contrato para firma');
+    }
+    await (supabase
+      .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        contrato_id: contratoId,
+        estado_anterior: c.estado,
+        estado_nuevo: 'pendiente_firma',
+        descripcion: 'Enviado a firma desde la pestaña Contratos',
+        usuario_id: userId,
+      } as never);
+  }
+
+  // Disparar el envío. Multi-parte si el flag está ON; si no, un firmante.
+  if (env.FIRMA_MULTIPARTE_ENABLED) {
+    const { crearSolicitudFirmaMultiparte } = await import('@/modules/firma/firma-multiparte.service');
+    await crearSolicitudFirmaMultiparte(contratoId, userId);
+  } else {
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('solicitante:solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email, telefono)')
+      .eq('id', c.expediente_id)
+      .single();
+    const sol = (expRow as unknown as {
+      solicitante: { nombre: string; apellido: string; email: string | null; telefono: string | null } | null;
+    } | null)?.solicitante;
+    if (!sol?.email) {
+      throw AppError.badRequest('El solicitante no tiene email para enviarle el contrato a firma.', 'SIN_EMAIL_SOLICITANTE');
+    }
+    const { crearSolicitudFirma } = await import('@/modules/firma/firma.service');
+    await crearSolicitudFirma(
+      {
+        contrato_id: contratoId,
+        nombre_firmante: `${sol.nombre} ${sol.apellido}`.trim(),
+        email_firmante: sol.email,
+        telefono_firmante: sol.telefono || undefined,
+        enviar_sms: false,
+      },
+      userId,
+    );
+  }
+
+  logger.info({ contratoId, userId }, 'Contrato enviado a firma manualmente');
+  return { ok: true, message: 'Contrato enviado a firma.' };
+}
+
 async function dispatchAutoFirma(contratoId: string, expedienteId: string, invocationId?: string): Promise<void> {
   const dispatchStartedAt = Date.now();
   try {

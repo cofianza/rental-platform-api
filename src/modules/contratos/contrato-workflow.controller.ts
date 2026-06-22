@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/lib/response';
 import * as workflowService from './contrato-workflow.service';
+import { enviarContratoAFirma } from './contratos.service';
 import type { ContratoTransitionInput } from './contrato-workflow.schema';
 import type { ContratoIdParams } from './contratos.schema';
 
@@ -20,5 +21,13 @@ export async function getAvailableTransitions(req: Request, res: Response) {
 export async function getHistory(req: Request, res: Response) {
   const { id } = req.params as unknown as ContratoIdParams;
   const result = await workflowService.getContratoTransitionHistory(id);
+  sendSuccess(res, result);
+}
+
+// POST /:id/enviar-firma — Acción directa "Enviar a firma": lleva el contrato a
+// pendiente_firma y dispara el envío (Auco). Propaga errores al usuario.
+export async function enviarFirma(req: Request, res: Response) {
+  const { id } = req.params as unknown as ContratoIdParams;
+  const result = await enviarContratoAFirma(id, req.user!.id);
   sendSuccess(res, result);
 }
