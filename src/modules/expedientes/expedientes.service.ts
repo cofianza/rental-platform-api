@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { esMiembroNoOwnerDeOrg, esOwnerDeOrg, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
+import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import type {
   CreateExpedienteInput,
   UpdateExpedienteInput,
@@ -250,6 +251,30 @@ export async function getExpedienteById(id: string) {
   };
 }
 
+/**
+ * Aviso por WhatsApp al miembro responsable de un expediente (fire-and-forget).
+ * Requiere que su perfil tenga teléfono; si no, enviarTemplate lo omite solo.
+ * Complementa el aviso in-app + correo (notificarYCorreo).
+ */
+async function enviarWhatsAppResponsable(responsableId: string, numero: string, expedienteId: string): Promise<void> {
+  try {
+    const { data: perfil } = await (supabase
+      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('nombre, telefono')
+      .eq('id', responsableId)
+      .maybeSingle();
+    const p = perfil as { nombre?: string | null; telefono?: string | null } | null;
+    await enviarTemplateWhatsApp({
+      to: p?.telefono ?? null,
+      template: 'RESPONSABLE_EXPEDIENTE',
+      variables: [p?.nombre || 'Hola', numero],
+      context: { expediente_id: expedienteId },
+    });
+  } catch (err) {
+    logger.warn({ error: err, responsableId, expedienteId }, 'WhatsApp de responsable de expediente falló');
+  }
+}
+
 // ============================================================
 // Create
 // ============================================================
@@ -381,6 +406,8 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
       mensaje: `Eres responsable del expediente ${created.numero}.`,
       link: `/expedientes/${created.id}`,
     });
+    // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.
+    void enviarWhatsAppResponsable(responsableAsignado, created.numero, created.id);
   }
 
   logAudit({
@@ -558,6 +585,8 @@ export async function asignarMiembroResponsableExpediente(
       mensaje: `Eres responsable del expediente ${exp.numero}.`,
       link: `/expedientes/${expedienteId}`,
     });
+    // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.
+    void enviarWhatsAppResponsable(miembroId, exp.numero, expedienteId);
   }
 
   logAudit({

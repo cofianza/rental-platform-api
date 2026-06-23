@@ -179,6 +179,16 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} dueño (nombre completo), {{2}} solicitante, {{3}} dirección, {{4}} ciudad, {{5}} fecha
     description: 'Hola {{1}}, {{2}} confirmó que asistirá a la visita. 📍 Inmueble: {{3}}, {{4}} 📅 Fecha: {{5}}.',
   },
+  /**
+   * Aviso a un MIEMBRO de la inmobiliaria de que le asignaron un expediente como
+   * responsable (al crearlo o al reasignarlo). Sin botones.
+   */
+  RESPONSABLE_EXPEDIENTE: {
+    id: 'cofianza_responsable_expediente_v1',
+    language: 'es_CO',
+    // {{1}} nombre del miembro, {{2}} numero_expediente
+    description: 'Hola {{1}}, te asignaron como responsable del expediente {{2}} en Cofianza. Ingresa a tu panel para gestionarlo. 📋',
+  },
 } as const;
 
 export type WhatsappTemplateKey = keyof typeof WHATSAPP_TEMPLATES;
