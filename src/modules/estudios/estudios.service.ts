@@ -169,16 +169,14 @@ export async function listAllEstudios(
     dataQuery = dataQuery.lte('created_at', `${query.fecha_hasta}T23:59:59`);
   }
 
-  // Count
-  const { count } = await countQuery;
-  const total = count || 0;
-
-  // Apply sort and pagination
+  // Sort + paginación al dataQuery ANTES de lanzar ambos en PARALELO: count y
+  // data son independientes (antes iban en serie = 2 round-trips secuenciales).
   const sortBy = query.sortBy || 'created_at';
   const ascending = (query.sortOrder || 'desc') === 'asc';
   dataQuery = dataQuery.order(sortBy, { ascending }).range(offset, offset + limit - 1);
 
-  const { data, error } = await dataQuery;
+  const [{ count }, { data, error }] = await Promise.all([countQuery, dataQuery]);
+  const total = count || 0;
 
   if (error) {
     logger.error({ error }, 'Error al listar todos los estudios');

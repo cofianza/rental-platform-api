@@ -24,6 +24,73 @@ function viewerPuedeMutar(path: string): boolean {
   );
 }
 
+// ── Caché de autenticación por token (perf) ────────────────────────────────
+// Cada request autenticado costaba 2 round-trips SECUENCIALES a Supabase
+// (getUser remoto + query a perfiles). Como el front dispara varias llamadas a
+// la vez por pantalla, eso multiplicaba la latencia de TODA la app. Cacheamos el
+// resultado (user + perfil) por token con TTL corto y deduplicamos peticiones
+// concurrentes con el mismo token (evita el "thundering herd" en la ráfaga
+// inicial de una pantalla). TTL corto = un cambio de rol/desactivación se
+// refleja en ≤TTL; se puede invalidar explícitamente con invalidateAuthCache.
+interface AuthResolved {
+  userId: string;
+  email: string;
+  rol: UserRole;
+  estado: string;
+}
+const AUTH_CACHE_TTL_MS = 30_000;
+const authCache = new Map<string, { value: AuthResolved; expiresAt: number }>();
+const authInflight = new Map<string, Promise<AuthResolved>>();
+
+/** Invalida el caché de auth de un usuario (llamar al cambiar rol/estado/revocar). */
+export function invalidateAuthCache(userId: string): void {
+  for (const [token, entry] of authCache) {
+    if (entry.value.userId === userId) authCache.delete(token);
+  }
+}
+
+async function resolveAuth(token: string): Promise<AuthResolved> {
+  const now = Date.now();
+  const cached = authCache.get(token);
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const existing = authInflight.get(token);
+  if (existing) return existing;
+
+  const promise = (async (): Promise<AuthResolved> => {
+    const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
+    if (error || !user) {
+      logger.warn({ error }, 'Token invalido o expirado');
+      throw AppError.unauthorized('Token invalido o expirado');
+    }
+
+    const { data: perfil, error: perfilError } = await supabase
+      .from('perfiles')
+      .select('id, rol, estado')
+      .eq('id', user.id)
+      .single();
+
+    if (perfilError || !perfil) {
+      logger.warn({ userId: user.id, error: perfilError }, 'Perfil no encontrado para usuario autenticado');
+      throw AppError.unauthorized('Perfil de usuario no encontrado');
+    }
+
+    const pd = perfil as { id: string; rol: UserRole; estado: string };
+    const value: AuthResolved = { userId: pd.id, email: user.email || '', rol: pd.rol, estado: pd.estado };
+    // Cota de memoria: ante muchísimos tokens distintos, reseteamos el caché.
+    if (authCache.size > 1000) authCache.clear();
+    authCache.set(token, { value, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+    return value;
+  })();
+
+  authInflight.set(token, promise);
+  try {
+    return await promise;
+  } finally {
+    authInflight.delete(token);
+  }
+}
+
 /**
  * Middleware que verifica el JWT de Supabase Auth.
  * Extrae el token del header Authorization: Bearer <token>,
@@ -39,37 +106,18 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
 
   const token = authHeader.slice(7);
 
-  const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
+  const auth = await resolveAuth(token);
 
-  if (error || !user) {
-    logger.warn({ error }, 'Token invalido o expirado');
-    throw AppError.unauthorized('Token invalido o expirado');
-  }
-
-  // Consultar tabla perfiles para verificar estado activo y rol
-  const { data: perfil, error: perfilError } = await supabase
-    .from('perfiles')
-    .select('id, rol, estado')
-    .eq('id', user.id)
-    .single();
-
-  if (perfilError || !perfil) {
-    logger.warn({ userId: user.id, error: perfilError }, 'Perfil no encontrado para usuario autenticado');
-    throw AppError.unauthorized('Perfil de usuario no encontrado');
-  }
-
-  const perfilData = perfil as { id: string; rol: UserRole; estado: 'activo' | 'inactivo' };
-
-  if (perfilData.estado !== 'activo') {
+  if (auth.estado !== 'activo') {
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
 
   // El email viene de auth.users (del token JWT), no de perfiles
   req.user = {
-    id: perfilData.id,
-    email: user.email || '',
-    rol: perfilData.rol,
-    activo: perfilData.estado === 'activo',
+    id: auth.userId,
+    email: auth.email,
+    rol: auth.rol,
+    activo: auth.estado === 'activo',
   };
 
   // Bloqueo de escritura para miembros 'solo_lectura' (viewer). Sólo se

@@ -197,23 +197,20 @@ export async function getMiExpedientePorInmueble(inmuebleId: string, userId: str
 // ============================================================
 
 export async function getExpedienteById(id: string) {
-  // Auto-heal de firmas: si hay un contrato en `pendiente_firma`, polleamos
-  // Auco para ver si ya completo y actualizamos local. Cubre el caso donde
-  // el webhook no llego (red, config). AWAIT con timeout corto para que el
-  // front reciba el expediente ya actualizado en la misma respuesta — sin
-  // esto, fire-and-forget hacia que el primer GET volviera con datos viejos
-  // y solo el segundo GET veria el cambio.
-  try {
-    const { syncFirmaConAucoForExpediente } = await import('@/modules/firma/firma.service');
-    // Timeout 5s — si Auco se tarda, no bloqueamos al usuario; el siguiente
-    // GET intenta de nuevo. Mejor un retraso ocasional que un cuelgue.
-    await Promise.race([
-      syncFirmaConAucoForExpediente(id),
-      new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-    ]);
-  } catch (err) {
-    logger.error({ error: err, expedienteId: id }, 'Error en syncFirmaConAucoForExpediente');
-  }
+  // Auto-heal de firmas (FALLBACK): si hay un contrato en `pendiente_firma`,
+  // reconcilia con Auco. Es un respaldo — la fuente de verdad es el webhook de
+  // Auco (reconciliarFirmantesPorWebhook), que actualiza en tiempo real. Por eso
+  // se dispara FIRE-AND-FORGET (sin await): antes este sync bloqueaba CADA GET de
+  // expediente hasta 5s esperando a Auco, lo que hacía lentísimo abrir un
+  // expediente. El front además refresca el panel de firmas (poll + onAllSigned).
+  void (async () => {
+    try {
+      const { syncFirmaConAucoForExpediente } = await import('@/modules/firma/firma.service');
+      await syncFirmaConAucoForExpediente(id);
+    } catch (err) {
+      logger.error({ error: err, expedienteId: id }, 'Error en syncFirmaConAucoForExpediente (background)');
+    }
+  })();
 
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
