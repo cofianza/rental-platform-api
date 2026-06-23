@@ -539,10 +539,42 @@ export async function liberarInmuebleEnEstudio(inmuebleId: string) {
  * Liberar al terminar/cancelar el contrato: el inmueble vuelve a 'disponible'.
  * Solo desde ocupado (contrato vigente terminado) o en_estudio (cancelación
  * pre-firma); NO revive un inmueble 'inactivo' que el dueño desactivó a mano.
- * No re-publica en vitrina: visible_vitrina se conserva (lo controla el dueño).
+ * Lo saca de la vitrina (visible_vitrina=false): el dueño decide cuándo
+ * re-publicarlo para arrendarlo de nuevo.
  */
 export async function liberarInmuebleTrasContrato(inmuebleId: string) {
-  await setInmuebleEstado(inmuebleId, 'disponible', ['ocupado', 'en_estudio']);
+  const { error } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'disponible', visible_vitrina: false, updated_at: new Date().toISOString() } as never)
+    .eq('id', inmuebleId)
+    .in('estado', ['ocupado', 'en_estudio']);
+  if (error) logger.warn({ error: error.message, inmuebleId }, 'No se pudo liberar el inmueble tras contrato');
+}
+
+/**
+ * Contrato VIGENTE del inmueble (vía sus expedientes), o null. Lo usa el detalle
+ * del inmueble para enlazar "Ver contrato" y la acción "Terminar contrato".
+ */
+export async function getContratoVigenteDeInmueble(
+  inmuebleId: string,
+): Promise<{ id: string; estado: string } | null> {
+  const { data: exps } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('inmueble_id', inmuebleId);
+  const expIds = ((exps as Array<{ id: string }> | null) ?? []).map((e) => e.id);
+  if (expIds.length === 0) return null;
+
+  const { data: contrato } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .in('expediente_id', expIds)
+    .eq('estado', 'vigente')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return (contrato as { id: string; estado: string } | null) ?? null;
 }
 
 // Toggle vitrina visibility — HP-369

@@ -68,6 +68,15 @@ router.get(
   inmueblesController.getCambiosResumen,
 );
 
+// Contrato vigente del inmueble (para "Ver contrato" / "Terminar contrato"
+// desde el detalle del inmueble ocupado).
+router.get(
+  '/:id/contrato-vigente',
+  authorize('inmuebles', 'read'),
+  validate({ params: inmuebleIdParamsSchema }),
+  inmueblesController.getContratoVigente,
+);
+
 router.post(
   '/',
   authorize('inmuebles', 'create'),

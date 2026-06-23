@@ -39,6 +39,12 @@ export async function getById(req: Request, res: Response) {
   sendSuccess(res, inmueble);
 }
 
+export async function getContratoVigente(req: Request, res: Response) {
+  const { id } = req.params as unknown as InmuebleIdParams;
+  const contrato = await inmueblesService.getContratoVigenteDeInmueble(id);
+  sendSuccess(res, contrato);
+}
+
 export async function create(req: Request, res: Response) {
   const input = req.body as CreateInmuebleInput;
   // Propietario/Inmobiliaria: force propietario_id to their own user ID

@@ -360,8 +360,8 @@ async function applySideEffects(
         .from('contratos' as string) as ReturnType<typeof supabase.from>)
         .update({ fecha_terminacion: new Date().toISOString() } as never)
         .eq('id', contratoId);
-      // El arriendo terminó: el inmueble vuelve a estar disponible.
-      liberarInmuebleDelExpediente(expedienteId);
+      // El arriendo terminó: el inmueble vuelve a estar disponible (fuera de vitrina).
+      await liberarInmuebleDelExpediente(expedienteId);
       break;
     }
 
@@ -373,19 +373,21 @@ async function applySideEffects(
           fecha_terminacion: new Date().toISOString(),
         } as never)
         .eq('id', contratoId);
-      // Contrato cancelado (vigente o pre-firma): liberar el inmueble.
-      liberarInmuebleDelExpediente(expedienteId);
+      // Contrato cancelado (vigente o pre-firma): liberar el inmueble (fuera de vitrina).
+      await liberarInmuebleDelExpediente(expedienteId);
       break;
     }
   }
 }
 
 /**
- * Fire-and-forget: ocupado/en_estudio → disponible al terminar o cancelar el
- * contrato. Nunca debe tumbar la transición de estado del contrato.
+ * ocupado/en_estudio → disponible (fuera de vitrina) al terminar o cancelar el
+ * contrato. Se AWAITea en applySideEffects para que el inmueble quede liberado
+ * antes de responder (el front re-consulta y lo ve 'disponible'). No re-lanza:
+ * si falla, loguea ERROR pero no tumba la transición del contrato (que ya pasó).
  */
-function liberarInmuebleDelExpediente(expedienteId: string): void {
-  (async () => {
+async function liberarInmuebleDelExpediente(expedienteId: string): Promise<void> {
+  try {
     const { data: expRow } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('inmueble_id')
@@ -395,7 +397,9 @@ function liberarInmuebleDelExpediente(expedienteId: string): void {
     if (!inmuebleId) return;
     const { liberarInmuebleTrasContrato } = await import('@/modules/inmuebles/inmuebles.service');
     await liberarInmuebleTrasContrato(inmuebleId);
-  })().catch((err) => logger.warn({ err, expedienteId }, 'No se pudo liberar el inmueble tras fin/cancelación del contrato'));
+  } catch (err) {
+    logger.error({ err, expedienteId }, 'No se pudo liberar el inmueble tras fin/cancelación del contrato');
+  }
 }
 
 function buildDescription(

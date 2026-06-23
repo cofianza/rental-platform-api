@@ -258,6 +258,19 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     throw AppError.badRequest('Inmueble no encontrado. Verifique el ID proporcionado', 'INMUEBLE_NOT_FOUND');
   }
 
+  // 1b. No permitir crear expediente sobre un inmueble ya arrendado o
+  //     desactivado. Para volver a arrendar uno 'ocupado' hay que terminar su
+  //     contrato vigente (que lo libera a 'disponible').
+  const estadoInmueble = (inmueble as { estado?: string }).estado;
+  if (estadoInmueble === 'ocupado' || estadoInmueble === 'inactivo') {
+    throw AppError.badRequest(
+      estadoInmueble === 'ocupado'
+        ? 'El inmueble ya está arrendado (contrato vigente). Termina el contrato actual para volver a arrendarlo.'
+        : 'El inmueble está inactivo. Actívalo antes de crear un expediente.',
+      'INMUEBLE_NO_DISPONIBLE',
+    );
+  }
+
   // 2. Validar que el solicitante existe
   const { data: solicitante, error: solicitanteError } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
