@@ -99,13 +99,19 @@ export async function habilitarEstudio(
     if (inmuebleId) await bloquearInmuebleEnEstudio(inmuebleId);
   })().catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo bloquear el inmueble en estudio'));
 
-  // 3. Notificación + pago.
-  //    - Propietario habilita: auto-creamos Stripe Checkout Session y dejamos
-  //      el pago pendiente para que el solicitante pague desde su panel/email.
-  //      El email con el link de pago lo envía enviarLinkPago(), así que
-  //      omitimos el email genérico de "habilitado" para no duplicar.
-  //    - Admin/inmobiliaria: mantienen el flujo manual (enviar-link / asumir),
-  //      así que solo enviamos el email informativo de habilitación.
+  // 3. Notificación + pago. La regla de negocio es QUIÉN decide el pago:
+  //    - PROPIETARIO individual: se manda directo. Auto-creamos el Checkout
+  //      Session y enviarLinkPago() le envía al solicitante el link de pago
+  //      (email + WhatsApp); por eso omitimos el email genérico de "habilitado".
+  //    - INMOBILIARIA / admin / operador: NO se notifica nada al solicitante
+  //      todavía. El gestor decide primero quién paga (usar un crédito, asumir
+  //      el costo, o "Enviar link al arrendatario") desde el panel del
+  //      expediente. Recién entonces se le escribe al solicitante:
+  //        · "Enviar link al arrendatario" → enviarLinkPago() (correo + WhatsApp)
+  //        · pagar con crédito             → enviarEnlaceAutorizacion() (Habeas Data)
+  //      Mandar aquí el correo "paga el estudio" era prematuro: el solicitante
+  //      recibía la orden de pagar aunque la inmobiliaria fuera a cubrirlo con
+  //      un crédito.
   const puedeAutoCrearPago =
     userRol === 'propietario' &&
     !!ctx.solicitanteEmail &&
@@ -126,7 +132,7 @@ export async function habilitarEstudio(
         'Pago de estudio auto-creado tras habilitación por propietario',
       );
     } catch (pagoError) {
-      // Si Stripe falla, caemos al email genérico para que el solicitante
+      // Si la pasarela falla, caemos al email genérico para que el solicitante
       // al menos sepa que el estudio fue habilitado y pueda intentar desde
       // el panel (futuro: self-service).
       logger.warn(
@@ -135,30 +141,28 @@ export async function habilitarEstudio(
       );
       await sendHabilitadoFallbackEmail(expedienteId, rpcResult.numero, ctx);
     }
-  } else if (ctx.solicitanteEmail && ctx.solicitanteNombre) {
-    await sendHabilitadoFallbackEmail(expedienteId, rpcResult.numero, ctx);
   } else {
-    // Escenario borde: expediente sin solicitante vinculado (source='invitacion'
-    // con estudio_habilitado=false que se habilita manualmente). No hay a quién
-    // notificar hasta que el token se canjee.
-    logger.warn(
-      { expedienteId, source: ctx.source },
-      'Expediente habilitado sin solicitante asociado — email omitido',
+    // Inmobiliaria / admin / operador (o expediente sin solicitante vinculado):
+    // la decisión de pago es manual, así que NO se envía correo ni notificación
+    // al solicitante hasta que el gestor elija una opción de pago. Ver comentario.
+    logger.info(
+      { expedienteId, userRol, source: ctx.source },
+      'Estudio habilitado por gestor (no propietario) — notificación al solicitante diferida a la decisión de pago',
     );
   }
 
-  // Notificacion in-app al solicitante. Independiente del email — el solicitante
-  // entra al panel y ve la campana con "Tu estudio fue habilitado". Fire-and-forget.
-  if (ctx.solicitanteEmail) {
+  // Notificacion in-app al solicitante — SOLO en el flujo directo del propietario
+  // (puedeAutoCrearPago). Para inmobiliaria/admin/operador se omite: aún no hay
+  // nada que el solicitante deba hacer hasta que el gestor decida el pago, así que
+  // tampoco le escribimos en la campana. Fire-and-forget.
+  if (puedeAutoCrearPago && ctx.solicitanteEmail) {
     findPerfilIdByEmail(ctx.solicitanteEmail).then((solicitanteUserId) => {
       if (!solicitanteUserId) return;
       return notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'estudio.habilitado',
         titulo: '¡Tu estudio fue habilitado!',
-        mensaje: puedeAutoCrearPago
-          ? `El propietario habilitó tu estudio crediticio. Realiza el pago para continuar con la evaluación.`
-          : `El propietario habilitó tu estudio crediticio. Recibirás el link de pago en breve.`,
+        mensaje: 'El propietario habilitó tu estudio crediticio. Realiza el pago para continuar con la evaluación.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, estudio_id: rpcResult.estudio_id },
       });
