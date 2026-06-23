@@ -229,11 +229,19 @@ export interface SlotsDia {
   slots: SlotEntry[];
 }
 
+export interface SlotsPorInmuebleResponse {
+  dias: SlotsDia[];
+  /** Antelación mínima configurada del propietario, en horas. El front la usa
+   *  para decidir el PRIMER día navegable de la grilla (mismo día=0 → hoy;
+   *  24h → mañana; 48h → pasado mañana). Default 24 si no hay config. */
+  antelacion_minima_horas: number;
+}
+
 export async function getSlotsPorInmueble(
   inmuebleId: string,
   desde: string,
   hasta: string,
-): Promise<SlotsDia[]> {
+): Promise<SlotsPorInmuebleResponse> {
   // Resolver propietario del inmueble.
   const { data: inmuebleRow, error: inmErr } = await db('inmuebles')
     .select('propietario_id')
@@ -250,6 +258,17 @@ export async function getSlotsPorInmueble(
   }
 
   const { propietario_id } = inmuebleRow as { propietario_id: string };
+
+  // Antelación mínima del propietario — la necesita el front para arrancar la
+  // grilla en el primer día permitido (mismo día / 24h / 48h). Mismo default
+  // (24h) que el RPC y getDisponibilidad cuando no hay config explícita.
+  const { data: configRow } = await db('configuracion_disponibilidad')
+    .select('antelacion_minima_horas')
+    .eq('propietario_id', propietario_id)
+    .maybeSingle();
+  const antelacionMinimaHoras =
+    (configRow as { antelacion_minima_horas?: number } | null)?.antelacion_minima_horas
+    ?? DEFAULTS.antelacion_minima_horas;
 
   // Invocar el RPC.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -271,7 +290,10 @@ export async function getSlotsPorInmueble(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al calcular los slots disponibles');
   }
 
-  return (data as SlotsDia[]) ?? [];
+  return {
+    dias: (data as SlotsDia[]) ?? [],
+    antelacion_minima_horas: antelacionMinimaHoras,
+  };
 }
 
 // ============================================================

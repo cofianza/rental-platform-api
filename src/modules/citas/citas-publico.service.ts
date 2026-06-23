@@ -99,7 +99,7 @@ export async function getSlotsPublicos(
   const c = await fetchCitaByToken(token);
   const inmuebleId = c.expediente?.inmueble?.id;
   if (!inmuebleId) throw AppError.notFound('Inmueble de la visita no encontrado');
-  return getSlotsPorInmueble(inmuebleId, desde, hasta);
+  return (await getSlotsPorInmueble(inmuebleId, desde, hasta)).dias;
 }
 
 /**
