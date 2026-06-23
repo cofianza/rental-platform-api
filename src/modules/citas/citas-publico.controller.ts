@@ -35,3 +35,8 @@ export async function cancelar(req: Request, res: Response) {
   const { motivo } = req.body as { motivo?: string };
   sendSuccess(res, await service.cancelarCitaPublica(extractToken(token), motivo));
 }
+
+export async function confirmar(req: Request, res: Response) {
+  const { token } = req.params as unknown as VisitaTokenParams;
+  sendSuccess(res, await service.confirmarAsistenciaPublica(extractToken(token)));
+}

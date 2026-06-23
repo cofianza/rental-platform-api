@@ -41,3 +41,11 @@ publicVisitaRouter.post(
   validate({ params: visitaTokenParamsSchema, body: cancelarPublicaSchema }),
   ctrl.cancelar,
 );
+
+// Confirmar asistencia (botón "Confirmar" del WhatsApp). Sin body — el token basta.
+publicVisitaRouter.post(
+  '/:token/confirmar',
+  publicFormLimiter,
+  validate({ params: visitaTokenParamsSchema }),
+  ctrl.confirmar,
+);

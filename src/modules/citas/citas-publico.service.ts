@@ -16,7 +16,11 @@ import {
   getSlotsPorInmueble,
   type SlotsDia,
 } from '../disponibilidad/disponibilidad.service';
-import { notificarCitaCreada, notificarCitaCancelada } from './citas.service';
+import {
+  notificarCitaCreada,
+  notificarCitaCancelada,
+  notificarPropietarioConfirmacionAsistencia,
+} from './citas.service';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
@@ -28,6 +32,7 @@ interface CitaPublicaRow {
   estado: string;
   fecha_propuesta: string | null;
   fecha_confirmada: string | null;
+  acuse_solicitante_at: string | null;
   expediente_id: string;
   expediente: {
     inmueble: { id: string; direccion: string; ciudad: string; propietario_id: string } | null;
@@ -38,7 +43,7 @@ interface CitaPublicaRow {
 async function fetchCitaByToken(token: string): Promise<CitaPublicaRow> {
   const { data, error } = await db('citas')
     .select(`
-      id, estado, fecha_propuesta, fecha_confirmada, expediente_id,
+      id, estado, fecha_propuesta, fecha_confirmada, acuse_solicitante_at, expediente_id,
       expediente:expedientes (
         inmueble:inmuebles (id, direccion, ciudad, propietario_id),
         solicitante:solicitantes (nombre, apellido)
@@ -63,6 +68,8 @@ export interface CitaPublicaDTO {
   fecha: string | null;
   inmueble: { direccion: string; ciudad: string } | null;
   nombre: string;
+  /** Solo aplica a citas 'confirmada': true si el solicitante ya confirmó que asistirá. */
+  confirmada_asistencia: boolean;
 }
 
 function toDTO(c: CitaPublicaRow): CitaPublicaDTO {
@@ -74,6 +81,7 @@ function toDTO(c: CitaPublicaRow): CitaPublicaDTO {
     fecha: c.fecha_confirmada || c.fecha_propuesta,
     inmueble: inm ? { direccion: inm.direccion, ciudad: inm.ciudad } : null,
     nombre: primerNombre,
+    confirmada_asistencia: c.estado === 'confirmada' && !!c.acuse_solicitante_at,
   };
 }
 
@@ -174,5 +182,45 @@ export async function cancelarCitaPublica(token: string, motivo?: string): Promi
   );
 
   logger.info({ citaId: c.id }, 'Cita cancelada desde link público');
+  return toDTO(await fetchCitaByToken(token));
+}
+
+/**
+ * Confirmar asistencia desde el link público (botón "Confirmar" del WhatsApp):
+ * el solicitante avisa que SÍ asistirá a la visita ya confirmada. No cambia el
+ * estado de la cita (sigue 'confirmada'); marca `acuse_solicitante_at` (mismo
+ * campo que el acuse de reprogramación: "el solicitante está al tanto y asiste").
+ * Idempotente: si ya confirmó, no re-notifica. Solo aplica a citas 'confirmada'
+ * (en 'solicitada' aún no hay fecha confirmada que asistir).
+ */
+export async function confirmarAsistenciaPublica(token: string): Promise<CitaPublicaDTO> {
+  const c = await fetchCitaByToken(token);
+  if (c.estado !== 'confirmada') {
+    throw AppError.badRequest(
+      'Esta visita no está pendiente de confirmar asistencia.',
+      'CITA_NO_CONFIRMABLE',
+    );
+  }
+  // Idempotente: si ya confirmó, devolvemos el estado actual sin re-notificar.
+  if (c.acuse_solicitante_at) {
+    return toDTO(c);
+  }
+
+  const { error } = await db('citas')
+    .update({ acuse_solicitante_at: new Date().toISOString(), updated_at: new Date().toISOString() } as never)
+    .eq('token', token);
+
+  if (error) {
+    logger.error({ error: error.message, citaId: c.id }, 'Error al confirmar asistencia (público)');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo confirmar tu asistencia');
+  }
+
+  // Avisa al propietario/inmobiliaria (in-app) que el solicitante asistirá. Fire-and-forget.
+  const fechaCita = c.fecha_confirmada || c.fecha_propuesta || new Date().toISOString();
+  notificarPropietarioConfirmacionAsistencia(c.expediente_id, fechaCita).catch((e) =>
+    logger.warn({ error: e, citaId: c.id }, 'Error al notificar confirmación de asistencia pública'),
+  );
+
+  logger.info({ citaId: c.id }, 'Asistencia confirmada desde link público');
   return toDTO(await fetchCitaByToken(token));
 }

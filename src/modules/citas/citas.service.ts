@@ -953,6 +953,29 @@ async function notificarPropietarioAcuse(expedienteId: string, fechaConfirmada: 
   });
 }
 
+/**
+ * Avisa al propietario/inmobiliaria (in-app) que el solicitante CONFIRMÓ que
+ * asistirá a la visita (botón "Confirmar" del WhatsApp). Distinto del acuse de
+ * reprogramación: aquí no hubo cambio de fecha, solo confirma asistencia.
+ * Exportada para el flujo público (citas-publico.service).
+ */
+export async function notificarPropietarioConfirmacionAsistencia(expedienteId: string, fechaConfirmada: string) {
+  const ctx = await obtenerContextoExpediente(expedienteId);
+  if (!ctx) return;
+  const fechaStr = new Date(fechaConfirmada).toLocaleString('es-CO', {
+    timeZone: 'America/Bogota',
+    weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit',
+  });
+  notificarUsuario({
+    userId: ctx.propietarioUserId,
+    tipo: 'cita.confirmacion_asistencia',
+    titulo: 'Asistencia confirmada',
+    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} confirmó que asistirá a la visita del ${fechaStr}.`,
+    link: `/expedientes/${ctx.expedienteId}`,
+    payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
+  });
+}
+
 // ============================================================
 // Realizar (confirmada → realizada)
 // ============================================================
