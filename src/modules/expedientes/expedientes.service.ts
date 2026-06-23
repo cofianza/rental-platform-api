@@ -69,7 +69,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
 // ============================================================
 
 export async function listExpedientes(query: ListExpedientesQuery) {
-  const { search, estado, analista_id, inmueble_id, fecha_desde, fecha_hasta } = query;
+  const { search, estado, analista_id, inmueble_id, fecha_desde, fecha_hasta, estudio_filtro } = query;
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
   const sortBy = query.sortBy || 'created_at';
@@ -80,7 +80,7 @@ export async function listExpedientes(query: ListExpedientesQuery) {
   const estados = estado ? estado.split(',').map((s) => s.trim()).filter(Boolean) : null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any).rpc('list_expedientes_with_relations', {
+  const rpcParams: Record<string, any> = {
     p_search: search || null,
     p_estados: estados,
     p_analista_id: analista_id || null,
@@ -91,7 +91,16 @@ export async function listExpedientes(query: ListExpedientesQuery) {
     p_sort_direction: sortOrder,
     p_limit: limit,
     p_offset: offset,
-  });
+  };
+  // Solo enviamos el filtro de estudio cuando está activo: así el listado base
+  // sigue resolviendo con la firma vieja del RPC si la migración del estudio
+  // vigente aún no corrió (despliegue desacoplado de la migración).
+  if (estudio_filtro && estudio_filtro !== 'todos') {
+    rpcParams.p_estudio_filtro = estudio_filtro;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('list_expedientes_with_relations', rpcParams);
 
   if (error) {
     logger.error({ error: error.message }, 'Error al listar expedientes');

@@ -58,6 +58,10 @@ export const listExpedientesQuerySchema = z.object({
   inmueble_id: z.uuid({ error: 'ID de inmueble invalido' }).optional(), // HP-247: filtrar por inmueble
   fecha_desde: z.string().optional(),
   fecha_hasta: z.string().optional(),
+  // Filtra expedientes por el estado/resultado de su estudio vigente (vista
+  // fusionada de la inmobiliaria). Chips: aprobado/rechazado/condicionado/
+  // en_proceso/sin_estudio. 'todos' o ausente = sin filtro.
+  estudio_filtro: z.enum(['todos', 'aprobado', 'rechazado', 'condicionado', 'en_proceso', 'sin_estudio']).optional(),
   sortBy: z.enum(['created_at', 'numero', 'estado']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
