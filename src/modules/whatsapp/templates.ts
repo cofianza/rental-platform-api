@@ -168,6 +168,17 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} dueño (nombre completo), {{2}} solicitante, {{3}} dirección, {{4}} ciudad, {{5}} nueva fecha
     description: 'Hola {{1}}, {{2}} reprogramó su visita y propuso una nueva fecha. 📍 Inmueble: {{3}}, {{4}} 📅 Nueva fecha: {{5}}. Ingresa a Cofianza para confirmarla o proponer otra fecha.',
   },
+  /**
+   * Aviso al dueño/inmobiliaria de que el SOLICITANTE confirmó que asistirá a la
+   * visita (botón "Confirmar asistencia" del WhatsApp). Mismas 5 variables que
+   * CITA_SOLICITADA_DUENO. Sin botones.
+   */
+  CITA_ASISTENCIA_CONFIRMADA_DUENO: {
+    id: 'cofianza_cita_asistencia_confirmada_dueno',
+    language: 'es_CO',
+    // {{1}} dueño (nombre completo), {{2}} solicitante, {{3}} dirección, {{4}} ciudad, {{5}} fecha
+    description: 'Hola {{1}}, {{2}} confirmó que asistirá a la visita. 📍 Inmueble: {{3}}, {{4}} 📅 Fecha: {{5}}.',
+  },
 } as const;
 
 export type WhatsappTemplateKey = keyof typeof WHATSAPP_TEMPLATES;

@@ -974,6 +974,16 @@ export async function notificarPropietarioConfirmacionAsistencia(expedienteId: s
     link: `/expedientes/${ctx.expedienteId}`,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
+  // WhatsApp a la inmobiliaria/dueño (además del aviso in-app). Fire-and-forget:
+  // si la plantilla aún no está aprobada en Meta, no llega pero no rompe el flujo.
+  enviarTemplateWhatsApp({
+    to: ctx.propietarioTelefono,
+    template: 'CITA_ASISTENCIA_CONFIRMADA_DUENO',
+    variables: [ctx.propietarioNombre, ctx.solicitanteNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaStr],
+    context: { expediente_id: ctx.expedienteId },
+  }).catch((e) =>
+    logger.warn({ error: e, expedienteId }, 'Error al enviar WhatsApp de confirmación de asistencia al dueño'),
+  );
 }
 
 // ============================================================
