@@ -33,15 +33,15 @@ export const WHATSAPP_TEMPLATES = {
   },
   /**
    * Cita confirmada por el propietario en la fecha original.
-   * v2: incluye 2 botones URL dinámicos — "Reprogramar" y "Cancelar" — que
-   * abren cofianza.co/visita/<accion>/<token>. El token de la cita se pasa
-   * como urlButtons:[token, token] (índices 0 y 1) al enviar.
+   * v3: 2 botones URL dinámicos — "Confirmar asistencia" y "Reprogramar o
+   * cancelar" — que abren cofianza.co/visita/<accion>/<token>. El token de la
+   * cita se pasa como urlButtons:[token, token] (índices 0 y 1) al enviar.
    */
   CITA_CONFIRMADA: {
-    id: 'cofianza_cita_confirmada_v2',
+    id: 'cofianza_cita_confirmada_v3',
     language: 'es_CO',
     // {{1}} nombre, {{2}} direccion_inmueble, {{3}} ciudad, {{4}} fecha_confirmada
-    // Botón 0 (Reprogramar) y botón 1 (Cancelar): sufijo URL = token de la cita.
+    // Botón 0 (Confirmar) y botón 1 (Reprogramar/cancelar): sufijo URL = token.
     description: 'Hola {{1}}, tu visita al inmueble en {{2}}, {{3}} fue confirmada para el {{4}}.',
   },
   /**
