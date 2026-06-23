@@ -960,7 +960,7 @@ async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
  * electronica -> contrato vigente -> expediente cerrado, sin
  * intervencion manual.
  */
-async function maybeAutoActivarVigente(
+export async function maybeAutoActivarVigente(
   contratoId: string,
   expedienteId: string,
 ): Promise<void> {
@@ -997,6 +997,29 @@ async function maybeAutoActivarVigente(
         'Auto-heal: error transicionando firmado -> vigente',
       );
       return;
+    }
+
+    // 2b. Bloqueo PERMANENTE del inmueble: el contrato quedó vigente → está
+    //     arrendado, sale de la vitrina (estado != 'disponible') y no admite
+    //     nuevas solicitudes/estudios. Idempotente (re-setear 'ocupado' es
+    //     inocuo). Se hace aquí (no solo al cerrar el expediente) para cubrir
+    //     también expedientes que ya quedaron 'cerrado' sin marcar el inmueble.
+    try {
+      const { data: expInmRow } = await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('inmueble_id')
+        .eq('id', expedienteId)
+        .maybeSingle();
+      const inmuebleId = (expInmRow as { inmueble_id?: string | null } | null)?.inmueble_id;
+      if (inmuebleId) {
+        const { bloquearInmuebleOcupado } = await import('@/modules/inmuebles/inmuebles.service');
+        await bloquearInmuebleOcupado(inmuebleId);
+      }
+    } catch (inmErr) {
+      logger.warn(
+        { contratoId, expedienteId, err: inmErr instanceof Error ? inmErr.message : String(inmErr) },
+        'Auto-heal: no se pudo marcar el inmueble como ocupado',
+      );
     }
 
     // 3. Cerrar el expediente (transicion aprobado/condicionado -> cerrado).

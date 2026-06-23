@@ -545,6 +545,24 @@ async function cerrarSobreSiTodasFirmaron(
     emailFirmante: '',
     firmadoEn: now,
   }).catch((err) => logger.error({ error: err, contratoId }, 'Firma multi-parte: error en executePostFirma'));
+
+  // Cierre SÍNCRONO del pipeline tras firma: contrato firmado → vigente,
+  // expediente → cerrado, inmueble → ocupado (fuera de vitrina). Antes esto solo
+  // ocurría de forma DIFERIDA (auto-heal al listar contratos), lo que dejaba el
+  // stepper "trabado" en Firma y el inmueble sin marcar como ocupado hasta un
+  // refresco posterior. Idempotente (maybeAutoActivarVigente guarda por estado).
+  try {
+    const { data: cRow } = await db('contratos')
+      .select('expediente_id')
+      .eq('id', contratoId)
+      .single() as { data: { expediente_id: string } | null };
+    if (cRow?.expediente_id) {
+      const { maybeAutoActivarVigente } = await import('@/modules/contratos/contratos.service');
+      await maybeAutoActivarVigente(contratoId, cRow.expediente_id);
+    }
+  } catch (err) {
+    logger.error({ error: err, contratoId }, 'Firma multi-parte: error activando contrato a vigente tras firma');
+  }
 }
 
 /**
