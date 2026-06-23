@@ -46,15 +46,15 @@ export const WHATSAPP_TEMPLATES = {
   },
   /**
    * Cita reprogramada por el propietario (la fecha confirmada difiere de la
-   * propuesta). v2: incluye los 2 botones URL (Reprogramar / Cancelar) igual
-   * que CITA_CONFIRMADA, para que el solicitante pueda gestionar la visita. El
-   * token se pasa como urlButtons:[token, token].
+   * propuesta). v3: 2 botones URL ("Confirmar asistencia" + "Reprogramar o
+   * cancelar") igual que CITA_CONFIRMADA, para que el solicitante confirme la
+   * nueva fecha o gestione la visita. El token se pasa como urlButtons:[token, token].
    */
   CITA_REPROGRAMADA: {
-    id: 'cofianza_cita_reprogramada_v2',
+    id: 'cofianza_cita_reprogramada_v3',
     language: 'es_CO',
     // {{1}} nombre, {{2}} direccion_inmueble, {{3}} fecha_propuesta, {{4}} fecha_confirmada
-    // Botón 0 (Reprogramar) y botón 1 (Cancelar): sufijo URL = token de la cita.
+    // Botón 0 (Confirmar) y botón 1 (Reprogramar/cancelar): sufijo URL = token.
     description: 'Hola {{1}}, el propietario ajustó tu visita al inmueble {{2}} de {{3}} a {{4}}.',
   },
   /** Cita cancelada — destinada al contrario del actor que canceló. */
