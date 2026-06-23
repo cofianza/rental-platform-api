@@ -68,7 +68,12 @@ const EXPEDIENTE_DETAIL_SELECT = `
 // List
 // ============================================================
 
-export async function listExpedientes(query: ListExpedientesQuery) {
+export async function listExpedientes(
+  query: ListExpedientesQuery,
+  /** IDs de expediente accesibles (scoping multi-tenant). null/undefined = sin
+   *  filtro (roles internos). El controller NUNCA pasa [] (cortocircuita antes). */
+  allowedExpedienteIds?: string[] | null,
+) {
   const { search, estado, analista_id, inmueble_id, fecha_desde, fecha_hasta, estudio_filtro } = query;
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
@@ -97,6 +102,12 @@ export async function listExpedientes(query: ListExpedientesQuery) {
   // vigente aún no corrió (despliegue desacoplado de la migración).
   if (estudio_filtro && estudio_filtro !== 'todos') {
     rpcParams.p_estudio_filtro = estudio_filtro;
+  }
+  // Scoping multi-tenant en SQL: solo lo agregamos cuando hay una lista concreta
+  // (roles scopeados). Roles internos llegan con null/undefined → sin filtro
+  // (el RPC ve todo). Requiere la migración 20260623000003 (param nuevo).
+  if (allowedExpedienteIds && allowedExpedienteIds.length > 0) {
+    rpcParams.p_allowed_expediente_ids = allowedExpedienteIds;
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import { supabase } from '@/lib/supabase';
+import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 import * as expedientesService from './expedientes.service';
 import type {
   ListExpedientesQuery,
@@ -12,52 +13,48 @@ import type { ExpedienteIdParams } from './expediente-workflow.schema';
 
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListExpedientesQuery;
+  const page = Number(query.page) || 1;
+  const limit = Number(query.limit) || 20;
+  const rol = req.user?.rol;
 
-  // Solicitante: only show expedientes where they are the solicitante
-  if (req.user?.rol === 'solicitante') {
-    // Find solicitante records linked to this user (by email or creado_por)
+  // Scoping multi-tenant: resolvemos los expediente IDs accesibles y se los
+  // pasamos al RPC, que filtra + cuenta + pagina en SQL. Antes esto se hacía
+  // post-filtrando en JS sobre una página GLOBAL y recalculando el total sobre
+  // el slice → paginación rota (pedías 20 y veías 0-3, total incorrecto) +
+  // RPC caro desperdiciado. null = sin filtro (roles internos ven todo).
+  let allowedExpedienteIds: string[] | null = null;
+
+  if (rol === 'solicitante') {
+    // El solicitante ve solo SUS expedientes (vía sus filas de solicitante).
     const { data: mySolicitantes } = await supabase
       .from('solicitantes')
       .select('id')
-      .eq('creado_por', req.user.id);
-    const solIds = new Set((mySolicitantes || []).map((s: { id: string }) => s.id));
-    if (solIds.size === 0) {
-      sendSuccess(res, [], 200, { total: 0, page: 1, limit: 10, totalPages: 0 });
+      .eq('creado_por', req.user!.id);
+    const solIds = (mySolicitantes || []).map((s: { id: string }) => s.id);
+    if (solIds.length === 0) {
+      sendSuccess(res, [], 200, { total: 0, page, limit, totalPages: 0 });
       return;
     }
-    const result = await expedientesService.listExpedientes(query);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filtered = result.expedientes.filter((exp: any) => {
-      const solId = exp.solicitante_id || exp.solicitante?.id;
-      return solId && solIds.has(solId);
-    });
-    sendSuccess(res, filtered, 200, { ...result.pagination, total: filtered.length, totalPages: Math.ceil(filtered.length / (Number(query.limit) || 20)) });
-    return;
-  }
-
-  // Propietario: only show expedientes for their inmuebles
-  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
-    const { data: myInmuebles } = await supabase
-      .from('inmuebles')
+    const { data: exps } = await supabase
+      .from('expedientes')
       .select('id')
-      .eq('propietario_id', req.user.id);
-    const myIds = new Set((myInmuebles || []).map((i: { id: string }) => i.id));
-    if (myIds.size === 0) {
-      sendSuccess(res, [], 200, { total: 0, page: 1, limit: 10, totalPages: 0 });
-      return;
-    }
-    const result = await expedientesService.listExpedientes(query);
-    // Post-filter: only expedientes whose inmueble belongs to propietario
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const filtered = result.expedientes.filter((exp: any) => {
-      const inmId = exp.inmueble_id || exp.inmueble?.id;
-      return inmId && myIds.has(inmId);
-    });
-    sendSuccess(res, filtered, 200, { ...result.pagination, total: filtered.length, totalPages: Math.ceil(filtered.length / (Number(query.limit) || 20)) });
+      .in('solicitante_id', solIds);
+    allowedExpedienteIds = (exps || []).map((e: { id: string }) => e.id);
+  } else if (rol === 'propietario' || rol === 'inmobiliaria') {
+    // Org-aware: cartera de la organización (no solo propietario_id) + los
+    // expedientes asignados al miembro como responsable (modo restringido).
+    allowedExpedienteIds = await resolveAllowedExpedienteIds(req.user!.id, rol);
+  }
+
+  // Roles scopeados sin expedientes accesibles → respuesta vacía SIN llamar al
+  // RPC. Además, así nunca pasamos [] al RPC (evita cualquier ambigüedad de
+  // serialización array-vacío→NULL que pudiera saltarse el filtro).
+  if (Array.isArray(allowedExpedienteIds) && allowedExpedienteIds.length === 0) {
+    sendSuccess(res, [], 200, { total: 0, page, limit, totalPages: 0 });
     return;
   }
 
-  const result = await expedientesService.listExpedientes(query);
+  const result = await expedientesService.listExpedientes(query, allowedExpedienteIds);
   sendSuccess(res, result.expedientes, 200, result.pagination);
 }
 
