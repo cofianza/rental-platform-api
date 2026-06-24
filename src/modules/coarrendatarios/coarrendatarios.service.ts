@@ -429,7 +429,35 @@ export async function aceptarInvitacion(
     );
   }
 
-  // 2. Crear estudio TransUnion para el co-arrendatario. Reusamos la tabla
+  // 2. CLAIM atómico: marcar aceptado SOLO si sigue 'pendiente_aceptacion'.
+  //    Evita que dos POST /aceptar concurrentes (doble click / retry de red)
+  //    pasen ambos el check en memoria y creen DOS estudios TransUnion (coste
+  //    real) para el mismo co-arrendatario. El estudio se crea DESPUÉS del
+  //    claim, así que el perdedor de la carrera aborta sin crear nada.
+  const aceptadoAt = new Date().toISOString();
+  const { data: claimRows, error: claimErr } = await (supabase
+    .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estado: 'aceptado',
+      aceptado_at: aceptadoAt,
+      aceptado_ip: ip.slice(0, 45),
+      aceptado_user_agent: userAgent?.slice(0, 1000) ?? null,
+      updated_at: aceptadoAt,
+    } as never)
+    .eq('id', coa.id)
+    .eq('estado', 'pendiente_aceptacion')
+    .select('id');
+
+  if (claimErr) {
+    logger.error({ error: claimErr.message, coarrendatarioId: coa.id }, 'Error al marcar coarrendatario aceptado');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al registrar la aceptación');
+  }
+  if (!claimRows || (claimRows as unknown[]).length === 0) {
+    // Otra request ya ganó la carrera y procesó la invitación.
+    throw AppError.badRequest('Esta invitación ya fue procesada', 'COARRENDATARIO_YA_PROCESADA');
+  }
+
+  // 3. Crear estudio TransUnion para el co-arrendatario. Reusamos la tabla
   //    `estudios` con tipo='con_coarrendatario' como marca semántica. Los
   //    datos_formulario llevan los datos del COARRENDATARIO (no del titular)
   //    para que TransUnion lo consulte a él.
@@ -464,23 +492,11 @@ export async function aceptarInvitacion(
 
   const estudioId = (estudioRow as { id: string }).id;
 
-  // 3. Marcar coarrendatario aceptado + audit legal.
-  const { error: updErr } = await (supabase
+  // 4. Vincular el estudio recién creado a la invitación ya reclamada.
+  await (supabase
     .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      estado: 'aceptado',
-      aceptado_at: new Date().toISOString(),
-      aceptado_ip: ip.slice(0, 45),
-      aceptado_user_agent: userAgent?.slice(0, 1000) ?? null,
-      estudio_id: estudioId,
-      updated_at: new Date().toISOString(),
-    } as never)
+    .update({ estudio_id: estudioId, updated_at: new Date().toISOString() } as never)
     .eq('id', coa.id);
-
-  if (updErr) {
-    logger.error({ error: updErr.message, coarrendatarioId: coa.id }, 'Error al marcar coarrendatario aceptado');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al registrar la aceptación');
-  }
 
   // 3.5 Persistir los datos del coarrendatario en expedientes.coarrendatario_*
   //     para que la plantilla del contrato los pueda leer sin necesidad de
@@ -649,11 +665,24 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
   };
   if (motivoRechazo) expedienteUpdate.motivo_rechazo = motivoRechazo;
 
-  await (supabase
+  const { data: expUpdated } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .update(expedienteUpdate as never)
     .eq('id', est.expediente_id)
-    .eq('estado', 'condicionado'); // race-safe: solo si sigue condicionado
+    .eq('estado', 'condicionado') // race-safe: solo si sigue condicionado
+    .select('id');
+
+  // Si otra ruta ya movió el expediente fuera de 'condicionado' (cierre/
+  // cancelación o una ponderación concurrente), el UPDATE afecta 0 filas. No
+  // seguimos: evitamos un evento de timeline, una liberación de inmueble y unas
+  // notificaciones inconsistentes con el estado real.
+  if (!expUpdated || (expUpdated as unknown[]).length === 0) {
+    logger.info(
+      { expedienteId: est.expediente_id, estudioId },
+      'Ponderación coarrendatario: el expediente ya no estaba condicionado — se omiten los efectos',
+    );
+    return;
+  }
 
   await (supabase
     .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)

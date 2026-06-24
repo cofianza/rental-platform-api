@@ -925,6 +925,50 @@ export async function completarFormularioDesdeOnboarding(params: {
 // Register resultado (irreversible)
 // ============================================================
 
+/**
+ * Dispara el hook post-resultado de un estudio YA marcado como 'completado'
+ * (vía RPC). Ramifica por tipo de estudio:
+ *  - 'con_coarrendatario' → ponderación (onCoarrendatarioEstudioCompletado):
+ *    combina con el estudio del titular y resuelve el expediente.
+ *  - resto → orchestrator (onEstudioCompletado): transiciona el expediente
+ *    (en_revision → aprobado/condicionado/rechazado) y dispara correos/notifs.
+ *
+ * Es la ÚNICA forma de que el expediente avance tras un estudio, así que TODAS
+ * las rutas de completado (registro manual, inline del provider y polling) deben
+ * llamarla — antes divergían y la ruta manual no disparaba nada, dejando el
+ * expediente atascado en su estado previo. Fire-and-forget y nunca lanza: el
+ * resultado ya quedó persistido y no debe romper la respuesta HTTP.
+ */
+async function dispararHookPostResultado(
+  estudioId: string,
+  expedienteId: string,
+  resultado: string,
+  score: number | null,
+): Promise<void> {
+  try {
+    const tipoRow = (await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('tipo')
+      .eq('id', estudioId)
+      .maybeSingle()).data as { tipo?: string } | null;
+
+    if (tipoRow?.tipo === 'con_coarrendatario') {
+      import('@/modules/coarrendatarios/coarrendatarios.service')
+        .then(({ onCoarrendatarioEstudioCompletado }) => onCoarrendatarioEstudioCompletado(estudioId))
+        .catch((err) => logger.warn({ error: err, estudioId }, 'Hook ponderación coarrendatario falló'));
+      return;
+    }
+
+    import('@/modules/orchestrator/orchestrator.service')
+      .then(({ onEstudioCompletado }) =>
+        onEstudioCompletado({ estudioId, expedienteId, resultado, score, solicitanteId: '' }),
+      )
+      .catch((err) => logger.warn({ error: err, estudioId }, 'Orchestrator hook post-estudio falló'));
+  } catch (err) {
+    logger.warn({ error: err, estudioId }, 'No se pudo disparar el hook post-resultado del estudio');
+  }
+}
+
 export async function registrarResultado(
   estudioId: string,
   input: RegistrarResultadoInput,
@@ -1016,12 +1060,16 @@ export async function registrarResultado(
     ip,
   });
 
-  // 5. Notificacion in-app al solicitante (fire-and-forget). El email
-  // formal del flujo va por orchestrator en otra ruta; esto es solo
-  // para empujar al campanario y badges en tiempo real.
+  // 5. Notificacion in-app al solicitante (fire-and-forget). Empuja el
+  // campanario y badges en tiempo real; el correo formal lo manda el hook.
   notificarSolicitanteResultadoEstudio(est.expediente_id, input.resultado).catch((e) =>
     logger.warn({ error: e, estudioId, expedienteId: est.expediente_id }, 'Error notificando resultado de estudio'),
   );
+
+  // 6. Disparar el hook post-resultado (transiciona el expediente / pondera con
+  // el coarrendatario). El registro MANUAL antes no lo hacía y el expediente
+  // quedaba atascado en su estado previo sin llegar a condicionado/aprobado.
+  void dispararHookPostResultado(estudioId, est.expediente_id, input.resultado, input.score ?? null);
 
   return getEstudioById(estudioId);
 }
@@ -1058,11 +1106,13 @@ async function notificarSolicitanteResultadoEstudio(
   if (userId) {
     await notificarUsuario({
       userId,
-      tipo: aprobado ? 'estudio.aprobado' : 'estudio.rechazado',
-      titulo: aprobado ? 'Estudio aprobado' : 'Resultado de tu estudio',
+      tipo: aprobado ? 'estudio.aprobado' : condicionado ? 'estudio.condicionado' : 'estudio.rechazado',
+      titulo: aprobado ? 'Estudio aprobado' : condicionado ? 'Estudio condicionado' : 'Resultado de tu estudio',
       mensaje: aprobado
         ? `Tu solicitud ${numeroExpediente} avanzó. Ya puedes continuar con el contrato.`
-        : `Tu solicitud ${numeroExpediente} no fue aprobada. Revisa los detalles.`,
+        : condicionado
+          ? `Tu solicitud ${numeroExpediente} quedó condicionada. Invita a un co-arrendatario para continuar.`
+          : `Tu solicitud ${numeroExpediente} no fue aprobada. Revisa los detalles.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, resultado },
     });
@@ -1342,13 +1392,18 @@ export async function ejecutarEstudio(
   // documento que realmente se va a consultar en TransUnion. Helper
   // extraido para llamarse ademas desde registrarResultadoInline (red de
   // seguridad post-completado).
-  await sincronizarDocumentoSolicitante({
-    estudioId,
-    solicitanteId: expediente.solicitante_id,
-    targetNumero: datos.numero_documento,
-    targetTipo: datos.tipo_documento,
-    origen: 'ejecutarEstudio',
-  });
+  // OJO: NO sincronizar para estudios 'con_coarrendatario' — el documento del
+  // formulario es del CO-ARRENDATARIO, no del titular; sincronizarlo
+  // sobreescribiría la cédula del solicitante titular con la del co-arrendatario.
+  if (est.tipo !== 'con_coarrendatario') {
+    await sincronizarDocumentoSolicitante({
+      estudioId,
+      solicitanteId: expediente.solicitante_id,
+      targetNumero: datos.numero_documento,
+      targetTipo: datos.tipo_documento,
+      origen: 'ejecutarEstudio',
+    });
+  }
 
   // 4. Build provider input
   const providerInput: ProviderSolicitudInput = {
@@ -2153,12 +2208,14 @@ async function registrarResultadoInline(
   try {
     const { data: estRow } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .select('datos_formulario, expediente_id')
+      .select('datos_formulario, expediente_id, tipo')
       .eq('id', estudioId)
       .maybeSingle();
-    const estData = estRow as { datos_formulario: Record<string, string> | null; expediente_id: string } | null;
+    const estData = estRow as { datos_formulario: Record<string, string> | null; expediente_id: string; tipo: string | null } | null;
 
-    if (estData?.expediente_id && estData?.datos_formulario) {
+    // No sincronizar para 'con_coarrendatario': el documento del formulario es
+    // del co-arrendatario y sobreescribiría la cédula del titular.
+    if (estData?.tipo !== 'con_coarrendatario' && estData?.expediente_id && estData?.datos_formulario) {
       const { data: expRow } = await (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
         .select('solicitante_id')
@@ -2188,33 +2245,7 @@ async function registrarResultadoInline(
   //     titular. NO disparamos orchestrator porque ya el titular pasó por él
   //     (ahora estamos cerrando el ciclo del par).
   // Fire-and-forget: el resultado del estudio ya quedó persistido vía RPC.
-  const tipoEstudio = (await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('tipo')
-    .eq('id', estudioId)
-    .maybeSingle()).data as { tipo?: string } | null;
-
-  if (tipoEstudio?.tipo === 'con_coarrendatario') {
-    import('@/modules/coarrendatarios/coarrendatarios.service')
-      .then(({ onCoarrendatarioEstudioCompletado }) =>
-        onCoarrendatarioEstudioCompletado(estudioId),
-      )
-      .catch((err) =>
-        logger.warn({ error: err, estudioId }, 'Hook ponderación coarrendatario falló'),
-      );
-  } else {
-    import('@/modules/orchestrator/orchestrator.service')
-      .then(({ onEstudioCompletado }) =>
-        onEstudioCompletado({
-          estudioId,
-          expedienteId,
-          resultado: result.resultado,
-          score: result.score,
-          solicitanteId: '',
-        }),
-      )
-      .catch((err) => logger.warn({ error: err, estudioId }, 'Orchestrator hook falló'));
-  }
+  void dispararHookPostResultado(estudioId, expedienteId, result.resultado, result.score);
 }
 
 // ============================================================
@@ -2319,18 +2350,11 @@ export async function consultarEstadoProveedor(estudioId: string) {
       },
     });
 
-    // Orchestrator: disparar flujo automatico segun resultado
-    import('@/modules/orchestrator/orchestrator.service')
-      .then(({ onEstudioCompletado }) =>
-        onEstudioCompletado({
-          estudioId,
-          expedienteId: est.expediente_id,
-          resultado: result.resultado,
-          score: result.score,
-          solicitanteId: '', // se resuelve dentro del orquestador via expediente
-        }),
-      )
-      .catch((err) => logger.warn({ error: err }, 'Orchestrator: error en hook post-estudio'));
+    // Hook post-resultado: ramifica por tipo (orchestrator del titular vs
+    // ponderación del coarrendatario). Antes este camino de polling SIEMPRE
+    // llamaba al orchestrator, así que un estudio de coarrendatario completado
+    // por polling resolvía mal el expediente (no ponderaba con el titular).
+    void dispararHookPostResultado(estudioId, est.expediente_id, result.resultado, result.score);
 
     return {
       provider_status: statusResponse,
