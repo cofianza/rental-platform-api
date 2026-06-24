@@ -10,10 +10,13 @@ const router = Router();
 // Todas las rutas de workflow requieren autenticacion
 router.use(authMiddleware);
 
-// POST /api/v1/contratos/:id/transitions — Ejecutar transicion
+// POST /api/v1/contratos/:id/transitions — Ejecutar transicion.
+// La inmobiliaria/propietario solo puede TERMINAR o CANCELAR su propio contrato
+// (validado en el servicio: estado destino + ownership); el resto del workflow
+// queda para roles internos. El gate fino vive en executeContratoTransition.
 router.post(
   '/:id/transitions',
-  roleGuard(['administrador', 'operador_analista']),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
   validate({ params: contratoIdParamsSchema, body: contratoTransitionBodySchema }),
   workflowController.transition,
 );

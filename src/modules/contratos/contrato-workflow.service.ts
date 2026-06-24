@@ -10,6 +10,7 @@ import {
   type ContratoPreconditionId,
 } from './contrato-state-machine';
 import { getContratoById } from './contratos.service';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { ContratoTransitionInput } from './contrato-workflow.schema';
 
@@ -55,8 +56,8 @@ export async function executeContratoTransition(
     );
   }
 
-  // Verificar permisos
-  checkPermissions(user);
+  // Verificar permisos (incluye ownership para inmobiliaria/propietario)
+  await checkTransitionPermissions(user, contrato, targetState);
 
   // Verificar precondiciones
   const transitionDef = getContratoTransitionDef(currentState, targetState)!;
@@ -126,7 +127,7 @@ const COMENTARIO_VENCIMIENTO = 'Finalizacion automatica por vencimiento del plaz
  * Finaliza un contrato VENCIDO como accion del sistema (sin usuario HTTP).
  * Reusa el RPC atomico + efectos secundarios (libera el inmueble) que usa la
  * transicion normal, pero con actor null — mismo patron que post-firma. No
- * aplica checkPermissions (no hay usuario) ni precondiciones (el motivo se
+ * aplica checkTransitionPermissions (no hay usuario) ni precondiciones (el motivo se
  * provee aqui). Idempotente: si el contrato ya no esta 'vigente', no hace nada.
  * @returns true si lo finalizo, false si lo omitio.
  */
@@ -263,15 +264,70 @@ async function fetchContrato(id: string): Promise<ContratoRow> {
   return data as unknown as ContratoRow;
 }
 
-function checkPermissions(user: AuthUser): void {
-  const canTransition = user.rol === 'administrador' || user.rol === 'operador_analista';
+// Estados terminales que liberan el inmueble. Son los unicos a los que una
+// inmobiliaria/propietario puede llevar su propio contrato (terminar/cancelar);
+// el resto del workflow lo maneja un rol interno.
+const OWNER_TERMINATE_STATES: EstadoContrato[] = ['finalizado', 'cancelado'];
 
-  if (!canTransition) {
-    throw AppError.forbidden(
-      'Solo un administrador u operador analista puede transicionar contratos',
-      'FORBIDDEN',
-    );
+/**
+ * Permisos para ejecutar una transicion de contrato.
+ * - administrador / operador_analista: cualquier transicion valida.
+ * - inmobiliaria / propietario: SOLO terminar o cancelar (estado destino
+ *   'finalizado'/'cancelado') y SOLO si administran el inmueble del contrato.
+ *   Asi el dueño puede liberar su inmueble para re-arrendar sin depender de un
+ *   admin de la plataforma, pero no puede tocar el resto del flujo ni contratos
+ *   de terceros.
+ */
+async function checkTransitionPermissions(
+  user: AuthUser,
+  contrato: ContratoRow,
+  targetState: EstadoContrato,
+): Promise<void> {
+  if (user.rol === 'administrador' || user.rol === 'operador_analista') return;
+
+  if (user.rol === 'inmobiliaria' || user.rol === 'propietario') {
+    if (!OWNER_TERMINATE_STATES.includes(targetState)) {
+      throw AppError.forbidden(
+        'Solo puedes terminar o cancelar el contrato; el resto del flujo lo gestiona Cofianza.',
+        'FORBIDDEN',
+      );
+    }
+    if (!(await ownerAdministraContrato(user, contrato))) {
+      throw AppError.forbidden(
+        'No puedes modificar un contrato de un inmueble que no administras',
+        'FORBIDDEN',
+      );
+    }
+    return;
   }
+
+  throw AppError.forbidden('No tienes permisos para transicionar contratos', 'FORBIDDEN');
+}
+
+/** ¿El usuario (inmobiliaria/propietario) administra el inmueble del contrato? */
+async function ownerAdministraContrato(user: AuthUser, contrato: ContratoRow): Promise<boolean> {
+  const { data: expRow } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('inmueble_id')
+    .eq('id', contrato.expediente_id)
+    .single();
+  const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
+  if (!inmuebleId) return false;
+
+  const { data: inmRow } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('propietario_id, inmobiliaria_id')
+    .eq('id', inmuebleId)
+    .single();
+  const inm = inmRow as { propietario_id?: string | null; inmobiliaria_id?: string | null } | null;
+  if (!inm) return false;
+
+  return perfilEsDuenoDeInmueble({
+    userId: user.id,
+    userRol: user.rol,
+    inmueblePropietarioId: inm.propietario_id,
+    inmuebleInmobiliariaId: inm.inmobiliaria_id,
+  });
 }
 
 async function checkPreconditions(
