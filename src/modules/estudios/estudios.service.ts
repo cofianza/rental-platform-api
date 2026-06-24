@@ -11,7 +11,7 @@ import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from './providers/types';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
-import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 
 // ============================================================
 // Constants
@@ -1273,6 +1273,39 @@ export async function ejecutarEstudio(
         'No tienes permisos para ejecutar este estudio',
         'ESTUDIO_FORBIDDEN',
       );
+    }
+  }
+
+  // 1.3. Ownership guard para inmobiliaria / propietario: solo pueden ejecutar
+  //      (o reintentar) estudios de expedientes de un inmueble que administran.
+  //      La inmobiliaria es quien paga el estudio, así que debe poder
+  //      relanzarlo si la consulta falló. Admin/operador pasan sin chequeo.
+  if (userRol === 'inmobiliaria' || userRol === 'propietario') {
+    const { data: expInmRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('inmueble_id')
+      .eq('id', est.expediente_id)
+      .single();
+    const inmuebleId = (expInmRow as { inmueble_id?: string | null } | null)?.inmueble_id ?? null;
+    let esDueno = false;
+    if (inmuebleId) {
+      const { data: inmRow } = await (supabase
+        .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+        .select('propietario_id, inmobiliaria_id')
+        .eq('id', inmuebleId)
+        .single();
+      const inm = inmRow as { propietario_id?: string | null; inmobiliaria_id?: string | null } | null;
+      if (inm) {
+        esDueno = await perfilEsDuenoDeInmueble({
+          userId,
+          userRol,
+          inmueblePropietarioId: inm.propietario_id,
+          inmuebleInmobiliariaId: inm.inmobiliaria_id,
+        });
+      }
+    }
+    if (!esDueno) {
+      throw AppError.forbidden('No tienes permisos para ejecutar este estudio', 'ESTUDIO_FORBIDDEN');
     }
   }
 

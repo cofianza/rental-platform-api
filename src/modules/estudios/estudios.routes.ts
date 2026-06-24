@@ -120,12 +120,14 @@ estudiosRouter.get(
 );
 
 // POST /estudios/:estudioId/ejecutar (execute via provider).
-// El solicitante puede dispararlo sobre SUS estudios (ownership check en
-// el service). Admin/operador pueden sobre cualquiera. Propietario/inmobiliaria
-// no — ellos ya habilitaron; la ejecución es decisión del solicitante.
+// El solicitante puede dispararlo sobre SUS estudios; la inmobiliaria/
+// propietario sobre estudios de un inmueble que administran (ambos con
+// ownership check en el service) — la inmobiliaria paga el estudio y debe
+// poder reintentarlo si la consulta a TransUnion falla. Admin/operador,
+// cualquiera.
 estudiosRouter.post(
   '/:estudioId/ejecutar',
-  roleGuard(['administrador', 'operador_analista', 'solicitante']),
+  roleGuard(['administrador', 'operador_analista', 'solicitante', 'inmobiliaria', 'propietario']),
   validate({ params: estudioIdParamsSchema, body: ejecutarEstudioBodySchema }),
   estudiosController.ejecutarEstudio,
 );
