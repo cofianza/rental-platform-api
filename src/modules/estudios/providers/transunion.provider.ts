@@ -218,14 +218,21 @@ export class TransUnionProvider implements CreditRiskProvider {
       () => this.executeRequest(body, basicAuth),
       'TransUnion consultarCombo',
       {
-        maxAttempts: 2,
+        maxAttempts: 3,
         baseDelayMs: 2000,
         maxDelayMs: 10000,
         backoffFactor: 2,
-        // NO reintentar tras timeout: el abort es solo local — TransUnion muy
-        // probablemente procesó (y facturó) la consulta; reintentar emitiría
-        // una segunda consulta billable idéntica.
-        shouldRetry: (error) => !(error instanceof AppError && error.errorCode === 'PROVIDER_TIMEOUT'),
+        // Reintentar SOLO errores transitorios del proveedor:
+        //  - PROVIDER_UNAVAILABLE: TransUnion caído (5xx/520). El origen erroró
+        //    sin procesar, así que reintentar es seguro (no factura doble) y
+        //    suele resolver caídas pasajeras.
+        //  - errores de red sin respuesta (fetch lanza, no es AppError).
+        // NO reintentar: PROVIDER_TIMEOUT (el abort es local; TransUnion pudo
+        // procesar y facturar) ni errores 4xx / de credenciales.
+        shouldRetry: (error) =>
+          error instanceof AppError
+            ? error.errorCode === 'PROVIDER_UNAVAILABLE'
+            : true,
       },
     );
 
@@ -384,7 +391,19 @@ export class TransUnionProvider implements CreditRiskProvider {
       });
 
       if (!res.ok) {
-        throw new Error(`TransUnion HTTP ${res.status}: ${res.statusText}`);
+        // 5xx (incluye los 52x de Cloudflare, p.ej. HTTP 520: el origen de
+        // TransUnion está caído o respondió algo inválido) → transitorio del
+        // lado del proveedor. Lo marcamos como PROVIDER_UNAVAILABLE para que
+        // withRetry lo reintente y el estudio muestre un mensaje claro.
+        // 4xx → error de la petición; no se reintenta.
+        if (res.status >= 500) {
+          throw new AppError(
+            503,
+            'PROVIDER_UNAVAILABLE',
+            `TransUnion no disponible (HTTP ${res.status})`,
+          );
+        }
+        throw new Error(`TransUnion HTTP ${res.status}: ${res.statusText || 'sin detalle'}`);
       }
 
       return await res.json() as TransUnionResponse;

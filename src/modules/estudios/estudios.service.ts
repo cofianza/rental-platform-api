@@ -1592,6 +1592,7 @@ async function procesarEstudioAsync(args: {
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Error desconocido del proveedor';
+    const errorCode = err instanceof AppError ? err.errorCode : null;
 
     const lowerErr = errorMsg.toLowerCase();
     const documentoNoEncontrado = lowerErr.includes('tercero consultado no existe')
@@ -1599,9 +1600,22 @@ async function procesarEstudioAsync(args: {
       || lowerErr.includes('numero de identificacion invalido')
       || lowerErr.includes('tercero no encontrado');
 
+    // TransUnion caído / no disponible (5xx, p.ej. HTTP 520 de Cloudflare) o
+    // timeout: es transitorio y del lado del proveedor, no del usuario ni un
+    // rechazo de crédito. Mensaje claro para que el gestor sepa que solo hay
+    // que reintentar más tarde (suele coincidir con mantenimiento / fuera de
+    // horario del ambiente de TransUnion).
+    const proveedorNoDisponible =
+      errorCode === 'PROVIDER_UNAVAILABLE'
+      || errorCode === 'PROVIDER_TIMEOUT'
+      || /http 5\d\d/.test(lowerErr)
+      || lowerErr.includes('timeout');
+
     const observaciones = documentoNoEncontrado
       ? 'No encontramos antecedentes con este documento en las centrales de riesgo colombianas. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos.'
-      : `Error de proveedor (${proveedor}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
+      : proveedorNoDisponible
+        ? 'TransUnion no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos.'
+        : `Error de proveedor (${proveedor}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
 
     const { error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -2401,7 +2415,9 @@ export async function consultarEstadoProveedor(estudioId: string) {
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({
         estado: 'fallido',
-        observaciones: `Proveedor reporto fallo: ${statusResponse.mensaje || 'Sin detalle'}. Puede registrar el resultado manualmente.`,
+        observaciones:
+          'TransUnion no está disponible en este momento (posible mantenimiento o caída temporal). ' +
+          'No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos.',
       } as never)
       .eq('id', estudioId);
 
