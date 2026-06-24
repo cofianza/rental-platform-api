@@ -54,6 +54,12 @@ export const registrarMiembroSchema = z.object({
   nombre: z.string().trim().min(1, { message: 'El nombre es obligatorio' }).max(100),
   apellido: z.string().trim().min(1, { message: 'El apellido es obligatorio' }).max(100),
   password: z.string().min(8, { message: 'La contraseña debe tener al menos 8 caracteres' }).max(72),
-  telefono: z.string().trim().max(20).optional(),
+  // El telefono es obligatorio: es el WhatsApp de contacto del miembro y el
+  // respaldo para la firma de contratos. Sin el, el perfil queda incompleto.
+  telefono: z
+    .string()
+    .trim()
+    .min(7, { message: 'El teléfono es obligatorio (con código de país, ej. +57…)' })
+    .max(20),
 });
 export type RegistrarMiembroInput = z.infer<typeof registrarMiembroSchema>;

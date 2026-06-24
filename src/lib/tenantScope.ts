@@ -58,6 +58,17 @@ async function getActiveMembership(
   };
 }
 
+/**
+ * rol_miembro ('owner' | 'miembro' | 'solo_lectura') del perfil en su
+ * organización activa, o null si no es miembro de ninguna (rol interno,
+ * propietario, o inmobiliaria sin org). Lo usa /auth/me para que el front
+ * sepa si el usuario es titular (no se gatea) o staff.
+ */
+export async function resolveRolMiembro(perfilId: string): Promise<string | null> {
+  const m = await getActiveMembership(perfilId);
+  return m?.rolMiembro ?? null;
+}
+
 export type VisibilityScope =
   | { kind: 'all' } // rol interno: ve todo
   | { kind: 'org'; orgIds: string[] } // owner, o miembro con miembros_ven_todo=true

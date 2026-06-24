@@ -5,6 +5,7 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendPasswordResetEmail } from '@/lib/email';
+import { resolveRolMiembro } from '@/lib/tenantScope';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
 
 export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
@@ -123,12 +124,18 @@ export async function logout(accessToken: string, userId?: string, ip?: string) 
 }
 
 export async function getProfile(userId: string) {
-  // Obtener perfil de la tabla perfiles
+  // Obtener perfil de la tabla perfiles. Incluimos telefono + documento para
+  // poder calcular `perfil_completo` (los datos personales minimos que un
+  // miembro debe tener antes de poder administrar un expediente asignado).
   const { data: perfil, error: perfilError } = await supabase
     .from('perfiles' as string)
-    .select('id, nombre, apellido, rol, estado, created_at, updated_at')
+    .select('id, nombre, apellido, rol, estado, telefono, tipo_documento, numero_documento, created_at, updated_at')
     .eq('id', userId)
-    .single<{ id: string; nombre: string; apellido: string; rol: string; estado: string; created_at: string; updated_at: string }>();
+    .single<{
+      id: string; nombre: string; apellido: string; rol: string; estado: string;
+      telefono: string | null; tipo_documento: string | null; numero_documento: string | null;
+      created_at: string; updated_at: string;
+    }>();
 
   if (perfilError || !perfil) {
     throw AppError.notFound('Perfil no encontrado');
@@ -141,12 +148,29 @@ export async function getProfile(userId: string) {
     throw AppError.notFound('Usuario no encontrado');
   }
 
+  // rol_miembro: solo aplica a inmobiliaria (owner/miembro/solo_lectura);
+  // null para roles internos, propietario o solicitante.
+  const rolMiembro = perfil.rol === 'inmobiliaria' ? await resolveRolMiembro(userId) : null;
+
+  // Perfil personal "completo": nombre, apellido, telefono y documento. Si
+  // falta cualquiera, el front bloquea la gestion de expedientes a los
+  // miembros (no titulares).
+  const perfilCompleto = [
+    perfil.nombre,
+    perfil.apellido,
+    perfil.telefono,
+    perfil.tipo_documento,
+    perfil.numero_documento,
+  ].every((v) => v != null && String(v).trim().length > 0);
+
   // Construir respuesta con datos combinados
   return {
     id: perfil.id,
     email: user.email || '',
     nombre_completo: `${perfil.nombre} ${perfil.apellido}`.trim(),
     rol: perfil.rol,
+    rol_miembro: rolMiembro,
+    perfil_completo: perfilCompleto,
     activo: perfil.estado === 'activo',
     created_at: perfil.created_at,
     updated_at: perfil.updated_at,

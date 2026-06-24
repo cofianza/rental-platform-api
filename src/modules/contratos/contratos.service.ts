@@ -9,6 +9,7 @@ import { renderTemplate } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
+import { checkPerfilCompletitud } from '../perfil-arrendador/perfil-arrendador.service';
 import type {
   GenerarContratoInput,
   RenovarContratoInput,
@@ -1591,6 +1592,22 @@ export async function generarContrato(
   // 1. Fetch expediente data (incluye arrendador completo + coarrendatario).
   const { expediente: expRow, data: expData } = await fetchExpedienteData(expedienteId);
   const expedienteNumero = (expRow as { numero?: string }).numero || expedienteId;
+
+  // 1b. Bloqueo: el arrendador debe tener completos los datos del contrato.
+  // Si falta cualquiera (domicilio, cuenta de recaudo, contacto, matricula /
+  // representante legal para inmobiliaria), el PDF saldria con campos en
+  // blanco. Validamos contra el MISMO set que exige la pantalla web
+  // "Datos para contrato".
+  const arrendadorPerfilId = expData.inmueble.propietario_id;
+  const completitud = await checkPerfilCompletitud(arrendadorPerfilId);
+  if (!completitud.completo) {
+    const faltantes = completitud.faltantes.map((f) => f.etiqueta).join(', ');
+    throw AppError.badRequest(
+      `No se puede generar el contrato: faltan datos del arrendador (${faltantes}). ` +
+        'Completalos en Configuracion → Datos para contrato.',
+      'PERFIL_ARRENDADOR_INCOMPLETO',
+    );
+  }
 
   const now = new Date();
   // Prioridad: input del caller > datos persistidos en el expediente al

@@ -33,7 +33,9 @@ function normalizeEmpty(value: string | null | undefined): string | null {
  *   domicilio (dir+ciudad), cuenta de recaudo completa, contacto recaudo.
  *
  * Solo inmobiliaria: matricula_arrendador (las inmobiliarias estan obligadas
- * por ley colombiana a tener matricula. El logo NO es obligatorio.)
+ * por ley colombiana a tener matricula. El logo NO es obligatorio.) y
+ * representante_legal (quien firma el contrato a nombre de la inmobiliaria;
+ * si falta, la linea de firma del contrato sale en blanco).
  */
 const REQUIRED_FIELDS_COMUNES = [
   'domicilio_direccion',
@@ -47,7 +49,7 @@ const REQUIRED_FIELDS_COMUNES = [
   'email_recaudo',
 ] as const;
 
-const REQUIRED_FIELDS_INMOBILIARIA = ['matricula_arrendador'] as const;
+const REQUIRED_FIELDS_INMOBILIARIA = ['matricula_arrendador', 'representante_legal'] as const;
 
 const FIELD_LABELS: Record<string, string> = {
   domicilio_direccion: 'Domicilio (direccion)',
@@ -60,6 +62,7 @@ const FIELD_LABELS: Record<string, string> = {
   whatsapp_recaudo: 'WhatsApp de recaudo',
   email_recaudo: 'Email de recaudo',
   matricula_arrendador: 'Matricula de arrendador',
+  representante_legal: 'Representante legal',
 };
 
 interface CompletitudResultado {
@@ -76,7 +79,7 @@ interface CompletitudResultado {
 export async function checkPerfilCompletitud(userId: string): Promise<CompletitudResultado> {
   const { data } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('rol, ' + REQUIRED_FIELDS_COMUNES.join(', ') + ', matricula_arrendador')
+    .select('rol, ' + REQUIRED_FIELDS_COMUNES.join(', ') + ', matricula_arrendador, representante_legal')
     .eq('id', userId)
     .single();
 

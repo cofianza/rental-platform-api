@@ -3,7 +3,7 @@ import { supabase, supabaseAuth } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
 import { hasPermission, type Resource, type Action } from '@/config/permissions';
-import { esMiembroSoloLectura } from '@/lib/tenantScope';
+import { resolveRolMiembro } from '@/lib/tenantScope';
 import type { UserRole } from '@/types/auth';
 
 // Métodos que mutan estado — sujetos al bloqueo de miembros 'solo_lectura'.
@@ -18,9 +18,31 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 function viewerPuedeMutar(path: string): boolean {
   return (
     path.startsWith('/api/v1/notificaciones') || // marcar leídas
-    path.startsWith('/api/v1/auth') || // logout, cambio de contraseña, refresh
+    path.startsWith('/api/v1/auth') || // logout, cambio de contraseña, refresh, perfil propio (/auth/me/perfil)
     path.startsWith('/api/v1/users') || // perfil propio (con RBAC adicional)
     path === '/api/v1/inmobiliaria/miembros/salir' // salir de la organización
+  );
+}
+
+/**
+ * ¿El perfil personal del usuario está incompleto? Datos mínimos que un
+ * miembro del equipo debe tener para administrar expedientes: nombre,
+ * apellido, teléfono y documento (tipo + número). Si falta cualquiera,
+ * devuelve true. Se consulta sólo en mutaciones de miembros 'miembro'.
+ */
+async function perfilPersonalIncompleto(userId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('perfiles')
+    .select('nombre, apellido, telefono, tipo_documento, numero_documento')
+    .eq('id', userId)
+    .single();
+  if (!data) return false;
+  const p = data as {
+    nombre: string | null; apellido: string | null; telefono: string | null;
+    tipo_documento: string | null; numero_documento: string | null;
+  };
+  return ![p.nombre, p.apellido, p.telefono, p.tipo_documento, p.numero_documento].every(
+    (v) => v != null && String(v).trim().length > 0,
   );
 }
 
@@ -120,17 +142,34 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
     activo: auth.estado === 'activo',
   };
 
-  // Bloqueo de escritura para miembros 'solo_lectura' (viewer). Sólo se
-  // consulta la membresía en peticiones mutantes de un usuario 'inmobiliaria'
-  // fuera de la allowlist (las lecturas y otros roles no pagan el query extra).
+  // Bloqueos de escritura para miembros de una inmobiliaria. Sólo se consulta
+  // la membresía en peticiones mutantes de un usuario 'inmobiliaria' fuera de
+  // la allowlist (las lecturas y otros roles no pagan el query extra). La
+  // allowlist deja siempre pasar la autogestión de la cuenta — incluido
+  // completar el propio perfil — para que el miembro pueda desbloquearse.
   if (req.user.rol === 'inmobiliaria' && MUTATING_METHODS.has(req.method)) {
     const path = req.originalUrl.split('?')[0];
-    if (!viewerPuedeMutar(path) && (await esMiembroSoloLectura(req.user.id))) {
-      logger.warn({ userId: req.user.id, method: req.method, path }, 'Escritura bloqueada para miembro solo_lectura');
-      throw AppError.forbidden(
-        'Tu rol en la inmobiliaria es de sólo lectura: no puedes crear ni modificar datos.',
-        'MIEMBRO_SOLO_LECTURA',
-      );
+    if (!viewerPuedeMutar(path)) {
+      const rolMiembro = await resolveRolMiembro(req.user.id);
+
+      // 1. Viewer (solo_lectura): nunca puede mutar datos de la org.
+      if (rolMiembro === 'solo_lectura') {
+        logger.warn({ userId: req.user.id, method: req.method, path }, 'Escritura bloqueada para miembro solo_lectura');
+        throw AppError.forbidden(
+          'Tu rol en la inmobiliaria es de sólo lectura: no puedes crear ni modificar datos.',
+          'MIEMBRO_SOLO_LECTURA',
+        );
+      }
+
+      // 2. Miembro (staff, no titular) con perfil personal incompleto: no puede
+      // administrar hasta completar sus datos. El titular (owner) no se bloquea.
+      if (rolMiembro === 'miembro' && (await perfilPersonalIncompleto(req.user.id))) {
+        logger.warn({ userId: req.user.id, method: req.method, path }, 'Escritura bloqueada para miembro con perfil incompleto');
+        throw AppError.forbidden(
+          'Completá tus datos personales (nombre, apellido, teléfono y documento) en tu perfil antes de administrar expedientes.',
+          'PERFIL_PERSONAL_INCOMPLETO',
+        );
+      }
     }
   }
 
