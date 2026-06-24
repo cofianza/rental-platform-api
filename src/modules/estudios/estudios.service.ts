@@ -1059,9 +1059,9 @@ async function notificarSolicitanteResultadoEstudio(
     await notificarUsuario({
       userId,
       tipo: aprobado ? 'estudio.aprobado' : 'estudio.rechazado',
-      titulo: aprobado ? 'Tu estudio fue aprobado' : 'Resultado de tu estudio',
+      titulo: aprobado ? 'Estudio aprobado' : 'Resultado de tu estudio',
       mensaje: aprobado
-        ? `Tu solicitud ${numeroExpediente} avanzo. Ya puedes continuar con el contrato.`
+        ? `Tu solicitud ${numeroExpediente} avanzó. Ya puedes continuar con el contrato.`
         : `Tu solicitud ${numeroExpediente} no fue aprobada. Revisa los detalles.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, resultado },

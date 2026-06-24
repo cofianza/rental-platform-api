@@ -504,7 +504,7 @@ export async function crearSolicitudFirma(
       userId: firmanteUserId,
       tipo: 'contrato.pendiente_firma',
       titulo: 'Contrato listo para firmar',
-      mensaje: `El contrato del inmueble en ${direccionInmueble || 'tu inmueble'} está listo. Recibiste el link de firma por WhatsApp.`,
+      mensaje: `El contrato de ${direccionInmueble || 'tu inmueble'} está listo. Te enviamos el link de firma por WhatsApp.`,
       link: `/expedientes/${c.expediente_id}`,
       payload: { contrato_id: input.contrato_id, expediente_id: c.expediente_id, solicitud_id: row.id },
     });

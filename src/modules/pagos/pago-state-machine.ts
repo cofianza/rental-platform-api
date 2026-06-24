@@ -378,8 +378,8 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
       tipo: 'pago.confirmado',
       titulo: 'Pago confirmado',
       mensaje: data.solicitantes
-        ? `${data.solicitantes.nombre} ${data.solicitantes.apellido} pago el ${conceptLabel.toLowerCase()} de ${direccion}.`
-        : `Se confirmo el pago del ${conceptLabel.toLowerCase()} de ${direccion}.`,
+        ? `${data.solicitantes.nombre} ${data.solicitantes.apellido} pagó el ${conceptLabel.toLowerCase()} de ${direccion}.`
+        : `Se confirmó el pago del ${conceptLabel.toLowerCase()} de ${direccion}.`,
       link,
       payload,
     });
@@ -392,8 +392,8 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
       await notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'pago.confirmado',
-        titulo: 'Pago procesado correctamente',
-        mensaje: `Recibimos tu pago del ${conceptLabel.toLowerCase()}. ¡Listo para continuar!`,
+        titulo: 'Pago confirmado',
+        mensaje: `Recibimos tu pago del ${conceptLabel.toLowerCase()}. Ya puedes continuar.`,
         link,
         payload,
       });

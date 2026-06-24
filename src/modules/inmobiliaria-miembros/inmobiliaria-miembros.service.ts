@@ -532,7 +532,7 @@ export async function cambiarRolMiembro(
     tipo: 'inmobiliaria.rol_cambiado',
     titulo: promovido ? 'Ahora eres titular' : 'Tu rol cambió',
     mensaje: promovido
-      ? `Te promovieron a titular (co-titular) de ${org.nombre_organizacion}.`
+      ? `Ahora eres co-titular de ${org.nombre_organizacion}.`
       : `Tu rol en ${org.nombre_organizacion} ahora es ${nuevoRol === 'solo_lectura' ? 'sólo lectura' : 'miembro'}.`,
     link: '/configuracion/equipo',
   }).catch((e) => logger.warn({ error: e, miembroId }, 'Error notificando cambio de rol'));
@@ -579,7 +579,7 @@ export async function salirDeOrg(userId: string): Promise<{ message: string }> {
   });
 
   // Avisar a los titulares restantes que alguien salió del equipo.
-  notificarOwnersOrg(m.inmobiliaria_id, userId, `Un miembro salió de ${m.nombre_organizacion}.`)
+  notificarOwnersOrg(m.inmobiliaria_id, userId, `Un miembro salió de tu equipo en ${m.nombre_organizacion}.`)
     .catch((e) => logger.warn({ error: e }, 'Error notificando salida de miembro'));
 
   logger.info({ inmobiliariaId: m.inmobiliaria_id, userId }, 'Miembro salió de la organización');

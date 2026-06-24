@@ -260,7 +260,7 @@ export async function invitarCoarrendatario(
       userId: ctx.solicitante_creado_por,
       tipo: 'coarrendatario.invitado',
       titulo: 'Invitación enviada',
-      mensaje: `Le enviamos a ${input.nombre} la invitación para ser tu co-arrendatario. Te avisaremos cuando responda.`,
+      mensaje: `Enviamos a ${input.nombre} la invitación como co-arrendatario. Te avisaremos cuando responda.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, coarrendatario_id: coa.id },
     }).catch((e) => logger.warn({ error: e }, 'Error notif coarrendatario invitado'));
@@ -517,8 +517,8 @@ export async function aceptarInvitacion(
     notificarUsuario({
       userId: ctx.solicitante_creado_por,
       tipo: 'coarrendatario.acepto',
-      titulo: '¡Tu co-arrendatario aceptó!',
-      mensaje: `${coa.nombre} aceptó la invitación. Estamos procesando su estudio crediticio — te avisaremos cuando esté listo.`,
+      titulo: 'Co-arrendatario confirmado',
+      mensaje: `${coa.nombre} aceptó la invitación. Estamos procesando su estudio crediticio; te avisaremos cuando esté listo.`,
       link: `/expedientes/${coa.expediente_id}`,
       payload: { expediente_id: coa.expediente_id, coarrendatario_id: coa.id, estudio_id: estudioId },
     }).catch((e) => logger.warn({ error: e }, 'Error notif coarrendatario acepto'));
@@ -689,11 +689,11 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
 
   // 7. Notificar al titular y al propietario.
   const ctx = await fetchExpedienteCtx(est.expediente_id);
-  const tituloAprobado = '¡Tu solicitud fue aprobada!';
-  const tituloRechazado = 'Tu solicitud no procedió';
+  const tituloAprobado = 'Solicitud aprobada';
+  const tituloRechazado = 'Solicitud no aprobada';
   const titulo = nuevoEstadoExpediente === 'aprobado' ? tituloAprobado : tituloRechazado;
-  const mensajeAprobado = `Buenas noticias: el estudio combinado tuyo y de tu co-arrendatario fue aprobado. Te avisaremos cuando el contrato esté listo para firmar.`;
-  const mensajeRechazado = `Tras evaluar el perfil combinado tuyo y de tu co-arrendatario, no podemos respaldar este arrendamiento. Si tienes dudas, escríbenos.`;
+  const mensajeAprobado = `El estudio combinado tuyo y de tu co-arrendatario fue aprobado. Te avisaremos cuando el contrato esté listo para firmar.`;
+  const mensajeRechazado = `El estudio combinado tuyo y de tu co-arrendatario no fue aprobado. Si tienes dudas, escríbenos.`;
   const mensaje = nuevoEstadoExpediente === 'aprobado' ? mensajeAprobado : mensajeRechazado;
 
   if (ctx.solicitante_creado_por) {
@@ -714,12 +714,12 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
   if (ctx.inmueble_propietario_id) {
     const titProp =
       nuevoEstadoExpediente === 'aprobado'
-        ? 'Solicitante aprobado con co-arrendatario'
+        ? 'Aprobado con co-arrendatario'
         : 'Solicitante no aprobado';
     const msgProp =
       nuevoEstadoExpediente === 'aprobado'
-        ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario ${coa?.nombre ?? ''} pasaron el estudio combinado. Genera el contrato cuando estés listo.`
-        : `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario no pasaron el estudio combinado. El inmueble vuelve a estar disponible.`;
+        ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario ${coa?.nombre ?? ''} aprobaron el estudio combinado. Genera el contrato para continuar.`
+        : `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario no aprobaron el estudio combinado. El inmueble vuelve a estar disponible.`;
     notificarUsuario({
       userId: ctx.inmueble_propietario_id,
       tipo: nuevoEstadoExpediente === 'aprobado' ? 'estudio.aprobado' : 'estudio.rechazado',
@@ -909,7 +909,7 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
         return notificarUsuario({
           userId: solicitanteUserId,
           tipo: 'coarrendatario.rechazo',
-          titulo: 'Tu invitado declinó',
+          titulo: 'Invitación declinada',
           mensaje: `${coa.nombre} no aceptó la invitación de co-arrendatario. Puedes invitar a otra persona.`,
           link: `/expedientes/${coa.expediente_id}`,
           payload: { expediente_id: coa.expediente_id, coarrendatario_id: coa.id },

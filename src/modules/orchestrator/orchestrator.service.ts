@@ -257,8 +257,8 @@ export async function onEstudioCompletado(params: {
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.aprobado.propietario',
-          titulo: '¡El estudio del arrendatario fue aprobado!',
-          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el expediente para continuar con la firma.`,
+          titulo: 'Estudio del arrendatario aprobado',
+          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el expediente para continuar.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario aprobado'));
@@ -327,8 +327,8 @@ export async function onEstudioCompletado(params: {
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
-          titulo: 'Estudio condicionado — requiere tu revisión',
-          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue condicionado. Cuando el solicitante cargue los documentos adicionales, revisa y decide si proceder.`,
+          titulo: 'Estudio condicionado',
+          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado. Revisa los documentos adicionales del solicitante y decide si proceder.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));

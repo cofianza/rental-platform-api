@@ -707,7 +707,7 @@ export async function asignarMiembroResponsable(
     await notificarYCorreo({
       userId: miembroId,
       tipo: 'inmueble_asignado',
-      titulo: 'Te asignaron un inmueble',
+      titulo: 'Inmueble asignado',
       mensaje: `Eres responsable del inmueble ${inm.codigo ?? ''} — ${inm.direccion}, ${inm.ciudad}.`.replace('  ', ' '),
       link: `/inmuebles/${inmuebleId}`,
     });

@@ -161,7 +161,7 @@ export async function habilitarEstudio(
       return notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'estudio.habilitado',
-        titulo: '¡Tu estudio fue habilitado!',
+        titulo: 'Estudio habilitado',
         mensaje: 'El propietario habilitó tu estudio crediticio. Realiza el pago para continuar con la evaluación.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, estudio_id: rpcResult.estudio_id },
@@ -292,10 +292,10 @@ export async function rechazarEstudio(
       return notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'estudio.rechazado',
-        titulo: 'El propietario no continuara con tu solicitud',
+        titulo: 'Solicitud no continúa',
         mensaje: motivoNorm
-          ? `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidio no habilitar el estudio. Motivo: ${motivoNorm}`
-          : `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidio no habilitar el estudio.`,
+          ? `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar el estudio. Motivo: ${motivoNorm}`
+          : `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar el estudio.`,
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, motivo: motivoNorm },
       });
@@ -500,8 +500,8 @@ async function aprobarYGenerarContrato(params: {
       return notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'estudio.aprobado',
-        titulo: '¡Tu solicitud fue aprobada!',
-        mensaje: 'El propietario revisó tu documentación y aprobó tu solicitud. Estamos preparando el contrato — te avisaremos cuando esté listo para firmar.',
+        titulo: 'Solicitud aprobada',
+        mensaje: 'El propietario revisó tu documentación y aprobó tu solicitud. Te avisaremos cuando el contrato esté listo para firmar.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, contrato_id: contratoId, via: 'aprobacion_condicionado' },
       });

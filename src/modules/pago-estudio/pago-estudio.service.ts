@@ -444,7 +444,7 @@ export async function enviarLinkPago(
     return notificarUsuario({
       userId: solicitanteUserId,
       tipo: 'pago.disponible',
-      titulo: 'Listo para pagar tu estudio',
+      titulo: 'Pago de estudio disponible',
       mensaje: `Ya puedes pagar el estudio crediticio (${formatCOP(monto)}). El pago habilita la consulta a TransUnion automáticamente.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, pago_id: pago.id },

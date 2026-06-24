@@ -299,7 +299,7 @@ export async function confirmarSoporte(
     notificarUsuario({
       userId: ctx.propietarioId,
       tipo: 'soporte.subido',
-      titulo: 'Nuevo documento subido por el solicitante',
+      titulo: 'Nuevo documento del solicitante',
       mensaje: `El solicitante subió un documento (${input.proposito.replace(/_/g, ' ')}). Revísalo antes de aprobar.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, soporte_id: docTyped.id, proposito: input.proposito },
@@ -614,7 +614,7 @@ export async function confirmarSoportePublico(
     notificarUsuario({
       userId: ctx.propietarioId,
       tipo: 'soporte.subido',
-      titulo: 'El solicitante subió un documento',
+      titulo: 'Nuevo documento del solicitante',
       mensaje: `El solicitante subió un documento (${input.proposito.replace(/_/g, ' ')}) para ${ctx.inmuebleDireccion || 'el inmueble'}. Revísalo antes de aprobar.`,
       link: `/expedientes/${ctx.expedienteId}`,
       payload: { expediente_id: ctx.expedienteId, soporte_id: docTyped.id, proposito: input.proposito },

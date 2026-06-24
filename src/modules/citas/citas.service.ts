@@ -253,8 +253,8 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
     notificarUsuario({
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.confirmada',
-      titulo: 'Cita confirmada',
-      mensaje: `Tu visita a ${ctx.inmuebleDireccion} fue confirmada.`,
+      titulo: 'Visita confirmada',
+      mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaPropuesta },
     });
@@ -283,10 +283,10 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
     notificarUsuario({
       userId: ctx.propietarioUserId,
       tipo: esReprogramacion ? 'cita.reprogramada' : 'cita.solicitada',
-      titulo: esReprogramacion ? 'Visita reprogramada' : 'Nueva visita solicitada',
+      titulo: esReprogramacion ? 'Visita reprogramada' : 'Nueva solicitud de visita',
       mensaje: esReprogramacion
-        ? `${ctx.solicitanteNombre || 'El solicitante'} reprogramó su visita a ${ctx.inmuebleDireccion}. Confírmala.`
-        : `${ctx.solicitanteNombre || 'Un solicitante'} pidio visitar ${ctx.inmuebleDireccion}.`,
+        ? `${ctx.solicitanteNombre || 'El solicitante'} propuso una nueva fecha para visitar ${ctx.inmuebleDireccion}. Confírmala.`
+        : `${ctx.solicitanteNombre || 'Un solicitante'} solicitó visitar ${ctx.inmuebleDireccion}. Confirma la fecha.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_propuesta: fechaPropuesta },
     });
@@ -351,8 +351,8 @@ async function notificarCitaConfirmada(
     notificarUsuario({
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.reprogramada',
-      titulo: 'Cita reprogramada',
-      mensaje: `El propietario ajustó la fecha de tu visita a ${ctx.inmuebleDireccion}.`,
+      titulo: 'Visita reprogramada',
+      mensaje: `El propietario ajustó la fecha de tu visita a ${ctx.inmuebleDireccion}. Revisa el nuevo horario.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
     });
@@ -380,8 +380,8 @@ async function notificarCitaConfirmada(
   notificarUsuario({
     userId: ctx.solicitanteUserId ?? '',
     tipo: 'cita.confirmada',
-    titulo: 'Cita confirmada',
-    mensaje: `Tu visita a ${ctx.inmuebleDireccion} fue confirmada.`,
+    titulo: 'Visita confirmada',
+    mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.`,
     link: linkExpediente,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
@@ -478,7 +478,7 @@ export async function notificarCitaCancelada(
       userId: ctx.propietarioUserId,
       tipo: 'cita.cancelada',
       titulo: 'Visita cancelada por el solicitante',
-      mensaje: `${ctx.solicitanteNombre || 'El solicitante'} cancelo la visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
+      mensaje: `${ctx.solicitanteNombre || 'El solicitante'} canceló la visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, motivo },
     });
@@ -946,8 +946,8 @@ async function notificarPropietarioAcuse(expedienteId: string, fechaConfirmada: 
   notificarUsuario({
     userId: ctx.propietarioUserId,
     tipo: 'cita.acuse_solicitante',
-    titulo: 'Solicitante acepto el horario',
-    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} confirmo la visita reprogramada para ${fechaStr}.`,
+    titulo: 'Horario aceptado por el solicitante',
+    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} aceptó la nueva fecha de la visita: ${fechaStr}.`,
     link: `/expedientes/${ctx.expedienteId}`,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
@@ -970,7 +970,7 @@ export async function notificarPropietarioConfirmacionAsistencia(expedienteId: s
     userId: ctx.propietarioUserId,
     tipo: 'cita.confirmacion_asistencia',
     titulo: 'Asistencia confirmada',
-    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} confirmó que asistirá a la visita del ${fechaStr}.`,
+    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} confirmó su asistencia a la visita del ${fechaStr}.`,
     link: `/expedientes/${ctx.expedienteId}`,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });

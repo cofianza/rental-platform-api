@@ -1305,7 +1305,7 @@ async function notificarSolicitantePagoCompletado(
 
   const titulo = concepto === 'estudio' ? 'Pago del estudio confirmado' : 'Pago confirmado';
   const mensaje = concepto === 'estudio'
-    ? `Recibimos tu pago. Empezamos el estudio crediticio de la solicitud ${exp.numero ?? ''}.`
+    ? `Recibimos tu pago. Iniciamos el estudio crediticio de la solicitud ${exp.numero ?? ''}.`
     : `Tu pago de la solicitud ${exp.numero ?? ''} fue confirmado.`;
 
   await notificarUsuario({

@@ -402,7 +402,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     await notificarYCorreo({
       userId: responsableAsignado,
       tipo: 'expediente_asignado',
-      titulo: 'Te asignaron un expediente',
+      titulo: 'Expediente asignado',
       mensaje: `Eres responsable del expediente ${created.numero}.`,
       link: `/expedientes/${created.id}`,
     });
@@ -581,7 +581,7 @@ export async function asignarMiembroResponsableExpediente(
     await notificarYCorreo({
       userId: miembroId,
       tipo: 'expediente_asignado',
-      titulo: 'Te asignaron un expediente',
+      titulo: 'Expediente asignado',
       mensaje: `Eres responsable del expediente ${exp.numero}.`,
       link: `/expedientes/${expedienteId}`,
     });

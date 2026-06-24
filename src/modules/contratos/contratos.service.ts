@@ -1098,7 +1098,7 @@ async function notificarPartesContratoVigente(
       userId: inm.propietario_id,
       tipo: 'contrato.vigente',
       titulo: 'Contrato vigente',
-      mensaje: `El contrato de ${direccion} esta firmado y activo.`,
+      mensaje: `El contrato de ${direccion} está firmado y vigente.`,
       link,
       payload: { contrato_id: contratoId, expediente_id: expedienteId },
     });
@@ -1115,8 +1115,8 @@ async function notificarPartesContratoVigente(
       await notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'contrato.vigente',
-        titulo: 'Tu contrato esta activo',
-        mensaje: `Tu contrato de ${direccion} quedo firmado y vigente.`,
+        titulo: 'Tu contrato está vigente',
+        mensaje: `Tu contrato de ${direccion} quedó firmado y vigente.`,
         link,
         payload: { contrato_id: contratoId, expediente_id: expedienteId },
       });
