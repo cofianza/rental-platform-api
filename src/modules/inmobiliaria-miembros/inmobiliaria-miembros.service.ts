@@ -550,11 +550,13 @@ export async function salirDeOrg(userId: string): Promise<{ message: string }> {
   if (!m) {
     throw AppError.badRequest('No perteneces a ninguna inmobiliaria', 'SIN_ORGANIZACION');
   }
-  // Un titular no puede salir si es el único: dejaría la org sin owner.
-  if (m.rol_miembro === 'owner' && (await contarOwnersActivos(m.inmobiliaria_id)) <= 1) {
+  // Un titular NO puede salir de su propia inmobiliaria: primero debe dejar de
+  // ser titular (otro titular lo cambia a 'miembro', o transfiere la titularidad).
+  // Aplica a cualquier owner, no solo al único — un dueño no "renuncia" a su org.
+  if (m.rol_miembro === 'owner') {
     throw AppError.badRequest(
-      'Eres el único titular. Transfiere la titularidad a otro miembro antes de salir.',
-      'ULTIMO_OWNER',
+      'Eres titular de la inmobiliaria: no puedes salir de tu propia organización. Primero deja de ser titular (transfiere la titularidad a otro miembro).',
+      'TITULAR_NO_PUEDE_SALIR',
     );
   }
 
@@ -565,10 +567,9 @@ export async function salirDeOrg(userId: string): Promise<{ message: string }> {
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo procesar la salida');
   }
 
+  // Quien sale aquí siempre es no-titular (los owners se bloquean arriba), así
+  // que no hay que reapuntar el titular principal de la org.
   await liberarResponsablesDeMiembro(m.inmobiliaria_id, userId);
-  if (m.rol_miembro === 'owner') {
-    await reapuntarTitularPrincipalSiNecesario(m.inmobiliaria_id, userId);
-  }
 
   logAudit({
     usuarioId: userId,
