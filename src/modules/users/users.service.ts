@@ -364,9 +364,23 @@ async function checkDeleteBlockers(userId: string): Promise<DeleteCheck> {
         .eq('creado_por', userId);
       return count || 0;
     }],
-    ['creditos_estudios (perfil)', async () => {
+    ['lotes_creditos_estudios (perfil)', async () => {
       const { count } = await (supabase
-        .from('creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+        .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+        .select('id', { count: 'exact', head: true })
+        .eq('perfil_id', userId);
+      return count || 0;
+    }],
+    ['compras_creditos_estudios (perfil)', async () => {
+      const { count } = await (supabase
+        .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+        .select('id', { count: 'exact', head: true })
+        .eq('perfil_id', userId);
+      return count || 0;
+    }],
+    ['movimientos_creditos_estudios (perfil)', async () => {
+      const { count } = await (supabase
+        .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('perfil_id', userId);
       return count || 0;

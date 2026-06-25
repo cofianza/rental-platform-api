@@ -214,7 +214,7 @@ export const reEvaluarSchema = z.object({
 // Body opcional para POST /estudios/:id/ejecutar — permite al solicitante
 // enviar/corregir su documento justo antes de ejecutar el estudio.
 export const ejecutarEstudioBodySchema = z.object({
-  tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte']).optional(),
+  tipo_documento: z.enum(['cc', 'nit', 'ce', 'pasaporte']).optional(),
   numero_documento: z
     .string()
     .trim()

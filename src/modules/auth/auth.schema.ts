@@ -42,7 +42,7 @@ export const updateMyProfileSchema = z.object({
     .regex(/^\+?\d{7,15}$/, 'Teléfono inválido (incluye lada, ej: +573001234567)')
     .nullish()
     .transform((v) => (v == null || v === '' ? null : v)),
-  tipo_documento: z.enum(['cc', 'ce', 'ti', 'nit', 'pasaporte']).nullish(),
+  tipo_documento: z.enum(['cc', 'ce', 'nit', 'pasaporte']).nullish(),
   numero_documento: z
     .string()
     .trim()

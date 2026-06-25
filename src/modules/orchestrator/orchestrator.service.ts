@@ -662,7 +662,7 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
 
   await db('eventos_timeline').insert({
     expediente_id: expedienteId,
-    tipo: 'transicion',
+    tipo: 'estado',
     descripcion: `Estado cambiado automaticamente: "${exp.estado}" → "${estadoDestino}"`,
     estado_anterior: exp.estado,
     estado_nuevo: estadoDestino,

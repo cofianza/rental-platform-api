@@ -317,25 +317,23 @@ async function notifyPaymentCompleted(pagoId: string, expedienteId: string, conc
 
     // Add timeline entry to expediente
     await (supabase
-      .from('expediente_timeline' as string) as ReturnType<typeof supabase.from>)
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .insert({
         expediente_id: expedienteId,
-        tipo: 'pago_confirmado',
+        tipo: 'pago',
         descripcion: `Pago de ${conceptLabel} confirmado`,
-        detalle: { pago_id: pagoId, concepto },
-        origen: 'system',
+        metadata: { pago_id: pagoId, concepto, evento: 'pago_confirmado', origen: 'system' },
       } as never);
 
     // If estudio payment completed → unlock expediente flow
     if (concepto === 'estudio') {
       await (supabase
-        .from('expediente_timeline' as string) as ReturnType<typeof supabase.from>)
+        .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
         .insert({
           expediente_id: expedienteId,
-          tipo: 'estudio_desbloqueado',
+          tipo: 'estudio',
           descripcion: 'Pago de estudio confirmado — flujo de estudio desbloqueado',
-          detalle: { pago_id: pagoId, trigger: 'pago_estudio_completado' },
-          origen: 'system',
+          metadata: { pago_id: pagoId, evento: 'estudio_desbloqueado', trigger: 'pago_estudio_completado', origen: 'system' },
         } as never);
 
       logger.info({ pagoId, expedienteId }, 'Estudio flow unlocked after payment confirmation');
@@ -418,13 +416,12 @@ async function notifyPaymentFailed(pagoId: string, expedienteId: string, concept
 
     // Add timeline entry
     await (supabase
-      .from('expediente_timeline' as string) as ReturnType<typeof supabase.from>)
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .insert({
         expediente_id: expedienteId,
-        tipo: 'pago_fallido',
+        tipo: 'pago',
         descripcion: `Pago de ${conceptLabel} fallido`,
-        detalle: { pago_id: pagoId, concepto },
-        origen: 'system',
+        metadata: { pago_id: pagoId, concepto, evento: 'pago_fallido', origen: 'system' },
       } as never);
 
     logger.info({ pagoId, expedienteId, concepto }, 'Payment failed notification sent');

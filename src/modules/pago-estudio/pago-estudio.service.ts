@@ -230,13 +230,13 @@ export async function asumirCosto(expedienteId: string, userId: string, ip?: str
 
   // Timeline entry
   await (supabase
-    .from('expediente_timeline' as string) as ReturnType<typeof supabase.from>)
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
     .insert({
       expediente_id: expedienteId,
-      tipo: 'pago_confirmado',
+      tipo: 'pago',
       descripcion: 'Pago de estudio asumido por la inmobiliaria',
-      detalle: { pago_id: pago.id, concepto: 'estudio', metodo: 'inmobiliaria_asume' },
-      origen: 'system',
+      metadata: { pago_id: pago.id, concepto: 'estudio', metodo: 'inmobiliaria_asume', evento: 'pago_confirmado', origen: 'system' },
+      usuario_id: userId,
     } as never);
 
   logAudit({

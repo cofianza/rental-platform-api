@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // Tipos de documento aceptados — alineado con tipo_documento_id del DB.
-const TIPO_DOCUMENTO = ['cc', 'ce', 'ti', 'pasaporte', 'nit'] as const;
+const TIPO_DOCUMENTO = ['cc', 'ce', 'pasaporte', 'nit'] as const;
 
 export const invitarCoarrendatarioSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100),

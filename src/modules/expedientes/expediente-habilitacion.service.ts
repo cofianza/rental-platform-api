@@ -449,7 +449,7 @@ async function aprobarYGenerarContrato(params: {
       .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .insert({
         expediente_id: expedienteId,
-        tipo: 'transicion',
+        tipo: 'estado',
         descripcion: 'Propietario aprobó manualmente el expediente condicionado tras revisar la documentación adicional.',
         estado_anterior: 'condicionado',
         estado_nuevo: 'aprobado',
