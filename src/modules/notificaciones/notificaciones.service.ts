@@ -19,6 +19,7 @@ import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
 import { env } from '@/config';
 import { sendResponsableAsignadoEmail } from '../orchestrator/orchestrator.emails';
+import type { WhatsappTemplateKey } from '@/modules/whatsapp';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
@@ -114,6 +115,74 @@ export async function notificarYCorreo(input: NotificarUsuarioInput): Promise<vo
     logger.warn(
       { error: (err as Error).message, userId: input.userId },
       'No se pudo enviar email de notificacion (in-app ya enviada)',
+    );
+  }
+}
+
+/**
+ * Notifica al MIEMBRO RESPONSABLE de un expediente (in-app + WhatsApp opcional),
+ * replicando lo que recibe el dueño en un evento operativo (cita, estudio, pago).
+ * Se llama ADEMÁS de la notificación al dueño, para que quien gestiona el
+ * expediente también se entere.
+ *
+ * - No-op si el expediente no tiene `miembro_responsable_id`, o si coincide con
+ *   `excluirPerfilId` (el dueño — evita duplicar cuando el responsable es el
+ *   mismo titular).
+ * - El WhatsApp reusa la MISMA plantilla `_DUENO` del dueño: su primera variable
+ *   es el nombre del destinatario, así que la sustituimos por la del miembro.
+ *   Solo se envía si el miembro tiene teléfono.
+ * - Fire-and-forget defensivo: nunca lanza (el aviso al dueño ya ocurrió).
+ */
+export async function notificarResponsableExpediente(params: {
+  expedienteId: string;
+  excluirPerfilId?: string | null;
+  tipo: string;
+  titulo: string;
+  mensaje: string;
+  link?: string;
+  payload?: Record<string, unknown>;
+  whatsapp?: { template: WhatsappTemplateKey; variables: string[] };
+}): Promise<void> {
+  try {
+    const { data: exp } = await db('expedientes')
+      .select('miembro_responsable_id')
+      .eq('id', params.expedienteId)
+      .maybeSingle();
+    const miembroId = (exp as { miembro_responsable_id?: string | null } | null)?.miembro_responsable_id ?? null;
+    if (!miembroId || miembroId === params.excluirPerfilId) return;
+
+    const { data: perfilRow } = await db('perfiles')
+      .select('nombre, apellido, razon_social, telefono')
+      .eq('id', miembroId)
+      .maybeSingle();
+    const p = perfilRow as {
+      nombre?: string | null; apellido?: string | null; razon_social?: string | null; telefono?: string | null;
+    } | null;
+    const nombreMiembro = p?.razon_social || `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || 'Hola';
+
+    await notificarUsuario({
+      userId: miembroId,
+      tipo: params.tipo,
+      titulo: params.titulo,
+      mensaje: params.mensaje,
+      link: params.link,
+      payload: params.payload,
+    });
+
+    if (params.whatsapp && p?.telefono) {
+      const variables = [nombreMiembro, ...params.whatsapp.variables.slice(1)];
+      const { enviarTemplate } = await import('@/modules/whatsapp');
+      await enviarTemplate({
+        to: p.telefono,
+        template: params.whatsapp.template,
+        variables,
+        context: { expediente_id: params.expedienteId },
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      { error: err, expedienteId: params.expedienteId },
+      'No se pudo notificar al miembro responsable del expediente',
     );
   }
 }

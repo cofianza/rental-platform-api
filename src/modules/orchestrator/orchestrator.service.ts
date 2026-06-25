@@ -6,7 +6,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
-import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
+import { notificarUsuario, notificarResponsableExpediente } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
@@ -263,6 +263,22 @@ export async function onEstudioCompletado(params: {
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario aprobado'));
 
+        // Espejo para el miembro responsable del expediente (in-app + WhatsApp).
+        notificarResponsableExpediente({
+          expedienteId,
+          excluirPerfilId: inm.propietario_id,
+          tipo: 'estudio.aprobado.propietario',
+          titulo: 'Estudio del arrendatario aprobado',
+          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el expediente para continuar.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
+          whatsapp: {
+            // variables[0] (nombre del dueño) lo sustituye el helper por el nombre del miembro.
+            template: 'ESTUDIO_APROBADO_DUENO',
+            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble'],
+          },
+        }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable aprobado'));
+
         // WhatsApp al dueño: "el estudio fue aprobado, genera el contrato".
         enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_APROBADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble', expedienteId)
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño aprobado'));
@@ -307,6 +323,17 @@ export async function onEstudioCompletado(params: {
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario rechazado'));
+
+        // Espejo para el miembro responsable del expediente (in-app; sin WhatsApp).
+        notificarResponsableExpediente({
+          expedienteId,
+          excluirPerfilId: inm.propietario_id,
+          tipo: 'estudio.rechazado.propietario',
+          titulo: 'Estudio del arrendatario rechazado',
+          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El expediente no avanza al contrato.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
+        }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable rechazado'));
       }
 
     } else if (resultado === 'condicionado') {
@@ -332,6 +359,22 @@ export async function onEstudioCompletado(params: {
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
+
+        // Espejo para el miembro responsable del expediente (in-app + WhatsApp).
+        notificarResponsableExpediente({
+          expedienteId,
+          excluirPerfilId: inm.propietario_id,
+          tipo: 'estudio.condicionado.propietario',
+          titulo: 'Estudio condicionado',
+          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado. Revisa los documentos adicionales del solicitante y decide si proceder.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
+          whatsapp: {
+            // variables[0] (nombre del dueño) lo sustituye el helper por el nombre del miembro.
+            template: 'ESTUDIO_CONDICIONADO_DUENO',
+            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble'],
+          },
+        }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable condicionado'));
 
         // WhatsApp al dueño: "el estudio quedó condicionado, requiere tu revisión".
         enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_CONDICIONADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble', expedienteId)

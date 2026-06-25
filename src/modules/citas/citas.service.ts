@@ -10,7 +10,7 @@ import {
 } from '../orchestrator/orchestrator.emails';
 import { assertCitaPermission, resolveAccessibleExpedienteIds } from './citas.permissions';
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
-import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import type { UserRole } from '@/types/auth';
 import type {
@@ -298,6 +298,23 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
       variables: [ctx.propietarioNombre, ctx.solicitanteNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaLegible],
       context: { expediente_id: ctx.expedienteId },
     });
+    // Espejo al miembro responsable del expediente (in-app + WhatsApp con la
+    // misma plantilla _DUENO). No-op si no hay responsable o si es el dueño.
+    await notificarResponsableExpediente({
+      expedienteId: ctx.expedienteId,
+      excluirPerfilId: ctx.propietarioUserId,
+      tipo: esReprogramacion ? 'cita.reprogramada' : 'cita.solicitada',
+      titulo: esReprogramacion ? 'Visita reprogramada' : 'Nueva solicitud de visita',
+      mensaje: esReprogramacion
+        ? `${ctx.solicitanteNombre || 'El solicitante'} propuso una nueva fecha para visitar ${ctx.inmuebleDireccion}. Confírmala.`
+        : `${ctx.solicitanteNombre || 'Un solicitante'} solicitó visitar ${ctx.inmuebleDireccion}. Confirma la fecha.`,
+      link: linkExpediente,
+      payload: { expediente_id: ctx.expedienteId, fecha_propuesta: fechaPropuesta },
+      whatsapp: {
+        template: esReprogramacion ? 'CITA_REPROGRAMADA_DUENO' : 'CITA_SOLICITADA_DUENO',
+        variables: [ctx.propietarioNombre, ctx.solicitanteNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaLegible],
+      },
+    });
   }
 }
 
@@ -476,6 +493,17 @@ export async function notificarCitaCancelada(
     }
     notificarUsuario({
       userId: ctx.propietarioUserId,
+      tipo: 'cita.cancelada',
+      titulo: 'Visita cancelada por el solicitante',
+      mensaje: `${ctx.solicitanteNombre || 'El solicitante'} canceló la visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
+      link: linkExpediente,
+      payload: { expediente_id: ctx.expedienteId, motivo },
+    });
+    // Espejo al miembro responsable del expediente (solo in-app: este punto
+    // usa la plantilla genérica CITA_CANCELADA, no una _DUENO).
+    await notificarResponsableExpediente({
+      expedienteId: ctx.expedienteId,
+      excluirPerfilId: ctx.propietarioUserId,
       tipo: 'cita.cancelada',
       titulo: 'Visita cancelada por el solicitante',
       mensaje: `${ctx.solicitanteNombre || 'El solicitante'} canceló la visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
@@ -951,6 +979,17 @@ async function notificarPropietarioAcuse(expedienteId: string, fechaConfirmada: 
     link: `/expedientes/${ctx.expedienteId}`,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
+  // Espejo al miembro responsable del expediente (solo in-app; este punto no
+  // manda WhatsApp). No-op si no hay responsable o si es el dueño.
+  void notificarResponsableExpediente({
+    expedienteId: ctx.expedienteId,
+    excluirPerfilId: ctx.propietarioUserId,
+    tipo: 'cita.acuse_solicitante',
+    titulo: 'Horario aceptado por el solicitante',
+    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} aceptó la nueva fecha de la visita: ${fechaStr}.`,
+    link: `/expedientes/${ctx.expedienteId}`,
+    payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
+  });
 }
 
 /**
@@ -983,6 +1022,23 @@ export async function notificarPropietarioConfirmacionAsistencia(expedienteId: s
     context: { expediente_id: ctx.expedienteId },
   }).catch((e) =>
     logger.warn({ error: e, expedienteId }, 'Error al enviar WhatsApp de confirmación de asistencia al dueño'),
+  );
+  // Espejo al miembro responsable del expediente (in-app + WhatsApp con la
+  // misma plantilla _DUENO). No-op si no hay responsable o si es el dueño.
+  notificarResponsableExpediente({
+    expedienteId: ctx.expedienteId,
+    excluirPerfilId: ctx.propietarioUserId,
+    tipo: 'cita.confirmacion_asistencia',
+    titulo: 'Asistencia confirmada',
+    mensaje: `${ctx.solicitanteNombre || 'El solicitante'} confirmó su asistencia a la visita del ${fechaStr}.`,
+    link: `/expedientes/${ctx.expedienteId}`,
+    payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
+    whatsapp: {
+      template: 'CITA_ASISTENCIA_CONFIRMADA_DUENO',
+      variables: [ctx.propietarioNombre, ctx.solicitanteNombre, ctx.inmuebleDireccion, ctx.inmuebleCiudad, fechaStr],
+    },
+  }).catch((e) =>
+    logger.warn({ error: e, expedienteId }, 'Error al espejar confirmación de asistencia al responsable'),
   );
 }
 

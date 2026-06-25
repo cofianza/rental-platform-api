@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
+import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '@/modules/notificaciones/notificaciones.service';
 
 // ============================================================
 // State machine definition
@@ -375,6 +375,17 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
   if (data.inmuebles?.propietario_id) {
     await notificarUsuario({
       userId: data.inmuebles.propietario_id,
+      tipo: 'pago.confirmado',
+      titulo: 'Pago confirmado',
+      mensaje: data.solicitantes
+        ? `${data.solicitantes.nombre} ${data.solicitantes.apellido} pagó el ${conceptLabel.toLowerCase()} de ${direccion}.`
+        : `Se confirmó el pago del ${conceptLabel.toLowerCase()} de ${direccion}.`,
+      link,
+      payload,
+    });
+    await notificarResponsableExpediente({
+      expedienteId,
+      excluirPerfilId: data.inmuebles.propietario_id,
       tipo: 'pago.confirmado',
       titulo: 'Pago confirmado',
       mensaje: data.solicitantes

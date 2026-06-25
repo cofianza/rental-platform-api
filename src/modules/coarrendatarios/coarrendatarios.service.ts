@@ -14,7 +14,11 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
 import { Resend } from 'resend';
-import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import {
+  notificarUsuario,
+  findPerfilIdByEmail,
+  notificarResponsableExpediente,
+} from '../notificaciones/notificaciones.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { InvitarCoarrendatarioInput, AceptarCoarrendatarioInput } from './coarrendatarios.schema';
 
@@ -761,6 +765,23 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
         coarrendatario_id: coa?.id,
       },
     }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion propietario'));
+
+    // Espejo para el miembro responsable del expediente (no-op si no hay
+    // responsable o si el responsable es el mismo dueño). Solo in-app — este
+    // punto no manda WhatsApp _DUENO.
+    notificarResponsableExpediente({
+      expedienteId: est.expediente_id,
+      excluirPerfilId: ctx.inmueble_propietario_id,
+      tipo: nuevoEstadoExpediente === 'aprobado' ? 'estudio.aprobado' : 'estudio.rechazado',
+      titulo: titProp,
+      mensaje: msgProp,
+      link: `/expedientes/${est.expediente_id}`,
+      payload: {
+        expediente_id: est.expediente_id,
+        via: 'coarrendatario_ponderado',
+        coarrendatario_id: coa?.id,
+      },
+    }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion responsable'));
   }
 
   // Email al coarrendatario con el resultado de SU estudio + qué pasó con la
