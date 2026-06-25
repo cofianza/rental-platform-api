@@ -134,6 +134,32 @@ async function liberarResponsablesDeMiembro(orgId: string, perfilId: string): Pr
   }
 }
 
+/**
+ * Reapunta a la TITULAR los inmuebles cuyo propietario_id era el miembro que
+ * SALE del equipo (revocado / self-leave). Sus contratos usan los datos del
+ * perfil canónico de la org, que se resuelve por membresía ACTIVA; al salir el
+ * miembro ya no la tiene, así que sin esto sus inmuebles quedarían "huérfanos"
+ * de datos de contrato. El inmueble sigue en la cartera (inmobiliaria_id intacto).
+ * NO se llama en cambios de rol (el miembro sigue activo). Best-effort.
+ */
+async function reapuntarInmueblesDeMiembroSaliente(orgId: string, perfilId: string): Promise<void> {
+  const { data: orgRow } = await db('inmobiliarias')
+    .select('owner_perfil_id')
+    .eq('id', orgId)
+    .maybeSingle();
+  const ownerId = (orgRow as { owner_perfil_id?: string | null } | null)?.owner_perfil_id ?? null;
+  // Si el saliente ERA el titular principal, reapuntarTitularPrincipalSiNecesario
+  // ya movió owner_perfil_id a otro owner antes de llamarnos.
+  if (!ownerId || ownerId === perfilId) return;
+  const { error } = await db('inmuebles')
+    .update({ propietario_id: ownerId } as never)
+    .eq('inmobiliaria_id', orgId)
+    .eq('propietario_id', perfilId);
+  if (error) {
+    logger.warn({ error: error.message, orgId, perfilId }, 'No se pudieron reapuntar inmuebles del miembro saliente');
+  }
+}
+
 /** Exige que el usuario sea OWNER activo de una org; devuelve su contexto. */
 async function assertOwner(userId: string): Promise<OrgMembership> {
   const m = await resolveMembership(userId);
@@ -452,6 +478,9 @@ export async function revocarMiembro(userId: string, miembroId: string): Promise
     if (row.rol_miembro === 'owner') {
       await reapuntarTitularPrincipalSiNecesario(org.inmobiliaria_id, row.perfil_id);
     }
+    // Reapuntar sus inmuebles a la titular para que sus contratos sigan usando
+    // los datos de la org (corre DESPUÉS del reapuntado de titular principal).
+    await reapuntarInmueblesDeMiembroSaliente(org.inmobiliaria_id, row.perfil_id);
   }
 
   logAudit({
@@ -570,6 +599,8 @@ export async function salirDeOrg(userId: string): Promise<{ message: string }> {
   // Quien sale aquí siempre es no-titular (los owners se bloquean arriba), así
   // que no hay que reapuntar el titular principal de la org.
   await liberarResponsablesDeMiembro(m.inmobiliaria_id, userId);
+  // Sus inmuebles pasan a la titular para no perder los datos de contrato de la org.
+  await reapuntarInmueblesDeMiembroSaliente(m.inmobiliaria_id, userId);
 
   logAudit({
     usuarioId: userId,
