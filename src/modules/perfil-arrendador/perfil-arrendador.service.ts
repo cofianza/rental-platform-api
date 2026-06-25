@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { resolveOrgCanonicalPerfilId, resolveRolMiembro } from '@/lib/tenantScope';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
@@ -77,10 +78,14 @@ interface CompletitudResultado {
  * para que el frontend muestre un mensaje claro.
  */
 export async function checkPerfilCompletitud(userId: string): Promise<CompletitudResultado> {
+  // La completitud se evalúa sobre el perfil canónico de la org (titular) para
+  // una inmobiliaria — son los datos que de verdad usa el contrato. Idempotente
+  // para propietario individual / titular (devuelve su propio id).
+  const canonicalId = await resolveOrgCanonicalPerfilId(userId);
   const { data } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select('rol, ' + REQUIRED_FIELDS_COMUNES.join(', ') + ', matricula_arrendador, representante_legal')
-    .eq('id', userId)
+    .eq('id', canonicalId)
     .single();
 
   if (!data) {
@@ -103,14 +108,33 @@ export async function checkPerfilCompletitud(userId: string): Promise<Completitu
 }
 
 export async function getMiPerfilArrendador(userId: string) {
+  // Datos para contrato = de la ORGANIZACIÓN (perfil canónico = titular) para una
+  // inmobiliaria, así todo el equipo ve los MISMOS datos. Para propietario
+  // individual es su propio perfil.
+  const canonicalId = await resolveOrgCanonicalPerfilId(userId);
   const { data, error } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select(PERFIL_ARRENDADOR_FIELDS)
-    .eq('id', userId)
+    .eq('id', canonicalId)
     .single();
 
   if (error || !data) throw AppError.notFound('Perfil no encontrado');
-  return data;
+  // `puede_editar`: solo el titular edita los datos compartidos (los miembros
+  // los ven de solo lectura). El propietario individual siempre puede.
+  const puedeEditar = await usuarioPuedeEditarDatosContrato(userId);
+  return { ...(data as Record<string, unknown>), puede_editar: puedeEditar };
+}
+
+/**
+ * ¿Este usuario puede editar los "Datos para contrato" / "Mi Inmobiliaria"?
+ * Solo el titular de la inmobiliaria (o un propietario individual sobre lo suyo,
+ * o un rol interno). Un miembro no-titular los ve de solo lectura.
+ */
+export async function usuarioPuedeEditarDatosContrato(userId: string): Promise<boolean> {
+  const rolMiembro = await resolveRolMiembro(userId);
+  // Si no es miembro de ninguna org (propietario individual / interno) → puede.
+  if (rolMiembro === null) return true;
+  return rolMiembro === 'owner';
 }
 
 export async function updateMiPerfilArrendador(
@@ -119,6 +143,17 @@ export async function updateMiPerfilArrendador(
   input: UpdatePerfilArrendadorInput,
   ip?: string,
 ) {
+  // Los "Datos para contrato" son de la ORGANIZACIÓN: solo el titular los edita
+  // (un miembro no-titular los ve de solo lectura). Se escriben en el perfil
+  // canónico de la org, no en el del miembro.
+  if (!(await usuarioPuedeEditarDatosContrato(userId))) {
+    throw AppError.forbidden(
+      'Solo el titular de la inmobiliaria puede editar los Datos para contrato.',
+      'SOLO_TITULAR',
+    );
+  }
+  const canonicalId = await resolveOrgCanonicalPerfilId(userId);
+
   // matricula_arrendador es exclusivo de inmobiliaria — silenciosamente
   // ignoramos el campo si lo manda un propietario directo.
   const update: Record<string, string | null> = {
@@ -151,12 +186,12 @@ export async function updateMiPerfilArrendador(
   const { data, error } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .update(filtered as never)
-    .eq('id', userId)
+    .eq('id', canonicalId)
     .select(PERFIL_ARRENDADOR_FIELDS)
     .single();
 
   if (error || !data) {
-    logger.error({ error: error?.message, userId }, 'Error al actualizar perfil arrendador');
+    logger.error({ error: error?.message, userId, canonicalId }, 'Error al actualizar perfil arrendador');
     throw AppError.badRequest('No se pudo actualizar el perfil', 'PERFIL_UPDATE_ERROR');
   }
 
@@ -184,6 +219,11 @@ export async function uploadLogo(
       'LOGO_NOT_ALLOWED',
     );
   }
+  // El logo es de la org: solo el titular lo edita; se guarda en el perfil canónico.
+  if (!(await usuarioPuedeEditarDatosContrato(userId))) {
+    throw AppError.forbidden('Solo el titular de la inmobiliaria puede cambiar el logo.', 'SOLO_TITULAR');
+  }
+  const canonicalId = await resolveOrgCanonicalPerfilId(userId);
 
   const allowedMimes = ['image/png', 'image/jpeg', 'image/webp'];
   if (!allowedMimes.includes(file.mimetype)) {
@@ -201,7 +241,7 @@ export async function uploadLogo(
   const ext = file.mimetype === 'image/png' ? 'png'
     : file.mimetype === 'image/webp' ? 'webp'
     : 'jpg';
-  const storageKey = `${LOGO_PATH_PREFIX}/${userId}/logo.${ext}`;
+  const storageKey = `${LOGO_PATH_PREFIX}/${canonicalId}/logo.${ext}`;
 
   const { error: uploadError } = await supabase.storage
     .from(LOGO_BUCKET)
@@ -225,7 +265,7 @@ export async function uploadLogo(
   const { data: updated, error: updateError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .update({ logo_storage_key: storageKey, logo_url: logoUrl } as never)
-    .eq('id', userId)
+    .eq('id', canonicalId)
     .select(PERFIL_ARRENDADOR_FIELDS)
     .single();
 
@@ -246,10 +286,15 @@ export async function uploadLogo(
 }
 
 export async function deleteLogo(userId: string, ip?: string) {
+  if (!(await usuarioPuedeEditarDatosContrato(userId))) {
+    throw AppError.forbidden('Solo el titular de la inmobiliaria puede cambiar el logo.', 'SOLO_TITULAR');
+  }
+  const canonicalId = await resolveOrgCanonicalPerfilId(userId);
+
   const { data: current } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select('logo_storage_key')
-    .eq('id', userId)
+    .eq('id', canonicalId)
     .single();
 
   const key = (current as { logo_storage_key?: string } | null)?.logo_storage_key;
@@ -260,7 +305,7 @@ export async function deleteLogo(userId: string, ip?: string) {
   const { data: updated, error } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .update({ logo_storage_key: null, logo_url: null } as never)
-    .eq('id', userId)
+    .eq('id', canonicalId)
     .select(PERFIL_ARRENDADOR_FIELDS)
     .single();
 

@@ -8,7 +8,7 @@ import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 import { renderTemplate } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
-import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
 import { checkPerfilCompletitud } from '../perfil-arrendador/perfil-arrendador.service';
 import type {
   GenerarContratoInput,
@@ -373,6 +373,10 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   // 2. Fetch arrendador (propietario | inmobiliaria) con todos los campos
   //    necesarios para el contrato. perfiles.rol determina si es inmobiliaria
   //    (lleva logo y cláusula de comisión) o propietario directo.
+  //    Para una inmobiliaria, los datos del arrendador son los de la ORG (perfil
+  //    canónico = titular), no los del miembro que creó el inmueble — así el
+  //    contrato usa SIEMPRE los datos de la inmobiliaria, los cree quien los cree.
+  const arrendadorPerfilId = await resolveOrgCanonicalPerfilId(exp.inmuebles.propietario_id);
   const { data: arrendadorRow, error: arrendadorError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select(`
@@ -384,7 +388,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       cuenta_recaudo_banco, cuenta_recaudo_tipo, cuenta_recaudo_numero,
       cuenta_recaudo_titular_nombre, cuenta_recaudo_titular_nit
     `)
-    .eq('id', exp.inmuebles.propietario_id)
+    .eq('id', arrendadorPerfilId)
     .single();
 
   if (arrendadorError || !arrendadorRow) {
@@ -1598,7 +1602,10 @@ export async function generarContrato(
   // representante legal para inmobiliaria), el PDF saldria con campos en
   // blanco. Validamos contra el MISMO set que exige la pantalla web
   // "Datos para contrato".
-  const arrendadorPerfilId = expData.inmueble.propietario_id;
+  // Datos del arrendador = perfil canónico de la org (titular) para inmobiliaria;
+  // el propio propietario para individual. Así validamos los datos que de verdad
+  // saldrán en el contrato.
+  const arrendadorPerfilId = await resolveOrgCanonicalPerfilId(expData.inmueble.propietario_id);
   const completitud = await checkPerfilCompletitud(arrendadorPerfilId);
   if (!completitud.completo) {
     const faltantes = completitud.faltantes.map((f) => f.etiqueta).join(', ');
@@ -1804,7 +1811,9 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
   }
   const inmueble = inmuebleRow as unknown as ExpedienteData['inmueble'];
 
-  // 2. Cargar arrendador (propietario o inmobiliaria) con todos los campos.
+  // 2. Cargar arrendador con todos los campos. Para inmobiliaria, el perfil
+  //    canónico de la org (titular) — mismos datos que usará el contrato real.
+  const arrendadorPreviewPerfilId = await resolveOrgCanonicalPerfilId(inmueble.propietario_id);
   const { data: arrendadorRow, error: arrError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select(`
@@ -1816,7 +1825,7 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
       cuenta_recaudo_banco, cuenta_recaudo_tipo, cuenta_recaudo_numero,
       cuenta_recaudo_titular_nombre, cuenta_recaudo_titular_nit
     `)
-    .eq('id', inmueble.propietario_id)
+    .eq('id', arrendadorPreviewPerfilId)
     .single();
   if (arrError || !arrendadorRow) {
     throw AppError.badRequest('No se encontro el arrendador del inmueble', 'NO_ARRENDADOR');

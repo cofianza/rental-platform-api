@@ -11,9 +11,24 @@
  */
 
 import { supabase } from '@/lib/supabase';
+import { resolveOrgCanonicalPerfilId, resolveRolMiembro } from '@/lib/tenantScope';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+
+/**
+ * Los documentos legales ("Mi Inmobiliaria") son de la ORGANIZACIÓN: solo el
+ * titular los gestiona; un miembro no-titular los ve de solo lectura.
+ */
+async function assertPuedeGestionarDocsLegales(perfilId: string): Promise<void> {
+  const rolM = await resolveRolMiembro(perfilId);
+  if (rolM !== null && rolM !== 'owner') {
+    throw AppError.forbidden(
+      'Solo el titular de la inmobiliaria puede gestionar los documentos legales.',
+      'SOLO_TITULAR',
+    );
+  }
+}
 import { TIPOS_DOCUMENTO_LEGAL, type TipoDocumentoLegal } from './documentos-legales.schema';
 
 const BUCKET = 'documentos-expedientes';
@@ -56,10 +71,12 @@ function mimeToExt(mime: string): string {
  * autenticado. Si un tipo no tiene fila, viene como `cargado: false`.
  */
 export async function listMisDocumentosLegales(perfilId: string): Promise<DocumentoLegalResumen[]> {
+  // De la org (perfil canónico) → todo el equipo ve los mismos documentos.
+  const canonicalId = await resolveOrgCanonicalPerfilId(perfilId);
   const { data, error } = await (supabase
     .from('documentos_legales_inmobiliaria' as string) as ReturnType<typeof supabase.from>)
     .select('*')
-    .eq('perfil_id', perfilId);
+    .eq('perfil_id', canonicalId);
 
   if (error) {
     logger.error({ error: error.message, perfilId }, 'Error listando documentos legales');
@@ -86,15 +103,18 @@ export async function uploadDocumentoLegal(
   file: { buffer: Buffer; mimetype: string; size: number; originalname: string },
   ip?: string,
 ): Promise<DocumentoLegalRow> {
+  await assertPuedeGestionarDocsLegales(perfilId);
+  const canonicalId = await resolveOrgCanonicalPerfilId(perfilId);
+
   const ext = mimeToExt(file.mimetype);
-  const storageKey = `${PATH_PREFIX}/${perfilId}/${tipo}.${ext}`;
+  const storageKey = `${PATH_PREFIX}/${canonicalId}/${tipo}.${ext}`;
 
   // Si ya existe, leer storage_key actual para limpiar el blob anterior
   // (puede tener una extension distinta — ej. antes era .pdf y ahora .jpg).
   const { data: existingRow } = await (supabase
     .from('documentos_legales_inmobiliaria' as string) as ReturnType<typeof supabase.from>)
     .select('storage_key')
-    .eq('perfil_id', perfilId)
+    .eq('perfil_id', canonicalId)
     .eq('tipo', tipo)
     .maybeSingle();
 
@@ -116,7 +136,7 @@ export async function uploadDocumentoLegal(
   }
 
   const payload = {
-    perfil_id: perfilId,
+    perfil_id: canonicalId,
     tipo,
     storage_key: storageKey,
     nombre_archivo: file.originalname.slice(0, 255),
@@ -164,7 +184,7 @@ export async function getSignedDownloadUrl(
   isAdmin: boolean,
   targetPerfilId?: string,
 ): Promise<{ url: string; nombre_archivo: string }> {
-  const ownerId = isAdmin && targetPerfilId ? targetPerfilId : perfilId;
+  const ownerId = isAdmin && targetPerfilId ? targetPerfilId : await resolveOrgCanonicalPerfilId(perfilId);
 
   const { data: row } = await (supabase
     .from('documentos_legales_inmobiliaria' as string) as ReturnType<typeof supabase.from>)
@@ -197,10 +217,13 @@ export async function deleteDocumentoLegal(
   tipo: TipoDocumentoLegal,
   ip?: string,
 ): Promise<void> {
+  await assertPuedeGestionarDocsLegales(perfilId);
+  const canonicalId = await resolveOrgCanonicalPerfilId(perfilId);
+
   const { data: row } = await (supabase
     .from('documentos_legales_inmobiliaria' as string) as ReturnType<typeof supabase.from>)
     .select('id, storage_key')
-    .eq('perfil_id', perfilId)
+    .eq('perfil_id', canonicalId)
     .eq('tipo', tipo)
     .maybeSingle();
 

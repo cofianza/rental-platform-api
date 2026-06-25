@@ -69,6 +69,33 @@ export async function resolveRolMiembro(perfilId: string): Promise<string | null
   return m?.rolMiembro ?? null;
 }
 
+/**
+ * Perfil CANÓNICO que guarda los datos de arrendador de la organización
+ * ("Datos para contrato" + documentos legales "Mi Inmobiliaria"). Para un
+ * usuario de una inmobiliaria es SIEMPRE el titular principal de la org
+ * (`inmobiliarias.owner_perfil_id`), de modo que todo el equipo comparte los
+ * mismos datos y los contratos los usan sin importar quién creó el inmueble.
+ * Para un propietario individual o un rol interno, es su propio perfilId.
+ */
+export async function resolveOrgCanonicalPerfilId(perfilId: string): Promise<string> {
+  const m = await getActiveMembership(perfilId);
+  if (!m) return perfilId;
+  const { data } = await (supabase
+    .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+    .select('owner_perfil_id')
+    .eq('id', m.orgId)
+    .maybeSingle();
+  const ownerId = (data as { owner_perfil_id?: string | null } | null)?.owner_perfil_id ?? null;
+  return ownerId ?? perfilId;
+}
+
+/** ¿El perfil es titular (owner) de SU organización activa? Para gatear la
+ *  edición de los datos compartidos de la org (solo titulares editan). */
+export async function esTitularDeSuOrg(perfilId: string): Promise<boolean> {
+  const m = await getActiveMembership(perfilId);
+  return m?.rolMiembro === 'owner';
+}
+
 export type VisibilityScope =
   | { kind: 'all' } // rol interno: ve todo
   | { kind: 'org'; orgIds: string[] } // owner, o miembro con miembros_ven_todo=true

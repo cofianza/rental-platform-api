@@ -25,6 +25,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getCompany } from '@/lib/companyConfig';
+import { resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
 import * as aucoClient from '@/lib/auco';
 import type { AucoSignerStatus } from '@/lib/auco';
 
@@ -152,9 +153,12 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
   });
 
   // ── Arrendador (orden 2): inmobiliaria (representante legal) o propietario ──
+  // Para inmobiliaria, el firmante arrendador es el perfil canónico de la org
+  // (titular): su WhatsApp/representante legal, no los del miembro que gestiona.
+  const arrendadorPerfilId = await resolveOrgCanonicalPerfilId(exp.inmuebles.propietario_id);
   const { data: arrendadorRow } = await db('perfiles')
     .select('id, nombre, apellido, rol, tipo_documento, numero_documento, razon_social, representante_legal, telefono, whatsapp_recaudo, email_recaudo')
-    .eq('id', exp.inmuebles.propietario_id)
+    .eq('id', arrendadorPerfilId)
     .single();
   const arr = arrendadorRow as unknown as {
     id: string; nombre: string; apellido: string; rol: string;
