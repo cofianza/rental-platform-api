@@ -91,7 +91,7 @@ function buildAcuseHtml(
               <table role="presentation" cellpadding="0" cellspacing="0">
                 <tr>
                   <td style="background-color: #0f766e; border-radius: 12px; width: 48px; height: 48px; text-align: center; vertical-align: middle;">
-                    <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
+                    <span style="color: #ffffff; font-weight: bold; font-size: 24px; line-height: 48px;">C</span>
                   </td>
                   <td style="padding-left: 12px;">
                     <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
@@ -237,7 +237,7 @@ function buildOperadorHtml(
               <table role="presentation" cellpadding="0" cellspacing="0">
                 <tr>
                   <td style="background-color: #0f766e; border-radius: 12px; width: 48px; height: 48px; text-align: center; vertical-align: middle;">
-                    <span style="color: #ffffff; font-weight: bold; font-size: 20px; line-height: 48px;">HP</span>
+                    <span style="color: #ffffff; font-weight: bold; font-size: 24px; line-height: 48px;">C</span>
                   </td>
                   <td style="padding-left: 12px;">
                     <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>

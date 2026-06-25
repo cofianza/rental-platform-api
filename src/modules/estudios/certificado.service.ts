@@ -159,9 +159,9 @@ export async function generateCertificatePdf(
     const headerHeight = 90;
     doc.rect(50, 50, contentWidth, headerHeight).fill(TEAL as unknown as string);
 
-    // HP logo text
+    // Logo monogram (Cofianza)
     doc.fontSize(32).fillColor('#ffffff').font('Helvetica-Bold');
-    doc.text('HP', 70, 62);
+    doc.text('C', 70, 62);
 
     // Company info
     doc.fontSize(9).font('Helvetica').fillColor('#ffffff');
