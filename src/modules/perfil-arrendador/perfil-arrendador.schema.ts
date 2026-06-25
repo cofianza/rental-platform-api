@@ -11,6 +11,9 @@ import { z } from 'zod';
  */
 export const updatePerfilArrendadorSchema = z.object({
   // Datos generales (PJ/PN)
+  // Nombre comercial / razón social de la inmobiliaria (sale en el contrato y
+  // en el header). Solo inmobiliaria; un propietario individual usa su nombre.
+  razon_social: z.string().max(200).optional().nullable(),
   representante_legal: z.string().max(200).optional().nullable(),
   domicilio_direccion: z.string().max(200).optional().nullable(),
   domicilio_ciudad: z.string().max(120).optional().nullable(),

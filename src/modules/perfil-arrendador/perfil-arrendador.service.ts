@@ -170,6 +170,9 @@ export async function updateMiPerfilArrendador(
   };
   if (rol === 'inmobiliaria') {
     update.matricula_arrendador = normalizeEmpty(input.matricula_arrendador);
+    // Razón social / nombre comercial: exclusivo de inmobiliaria (un propietario
+    // individual se identifica con su nombre personal de Mi cuenta).
+    update.razon_social = normalizeEmpty(input.razon_social);
   }
 
   // Solo escribimos las claves explicitamente provistas — Supabase no
