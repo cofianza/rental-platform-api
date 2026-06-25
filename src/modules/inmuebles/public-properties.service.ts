@@ -59,6 +59,9 @@ export interface PublicProperty {
   foto_fachada_url: string | null;
   fotos?: PublicPropertyPhoto[];
   created_at: string;
+  // Identidad PÚBLICA de la inmobiliaria dueña (nombre comercial + logo).
+  // null para propietarios individuales o si no hay nada que mostrar.
+  inmobiliaria?: InmobiliariaPublica | null;
 }
 
 export interface PublicPropertyPhoto {
@@ -68,10 +71,93 @@ export interface PublicPropertyPhoto {
   orden: number;
 }
 
+export interface InmobiliariaPublica {
+  nombre: string | null;
+  logo_url: string | null;
+}
+
 export interface PublicPropertyFilters {
   ciudades: string[];
   tipos: string[];
   estratos: number[];
+}
+
+// El logo vive en un bucket PRIVADO; el logo_url guardado es una URL firmada con
+// TTL (se vence). Para la vitrina pública generamos una URL firmada FRESCA por
+// request (la vitrina se sirve no-store, así que se regenera en cada carga).
+const LOGO_BUCKET = 'documentos-expedientes';
+const LOGO_URL_TTL_SECONDS = 60 * 60;
+
+const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
+
+/**
+ * Resuelve la identidad PÚBLICA (nombre comercial + logo) de la inmobiliaria
+ * dueña de cada inmueble, vía `inmobiliaria_id → inmobiliarias.owner_perfil_id →
+ * perfiles` (el perfil canónico de la org, que tiene razón social + logo). NO
+ * expone propietario_id ni inmobiliaria_id (se eliminan del objeto devuelto).
+ * Los inmuebles de propietario individual quedan con `inmobiliaria: null`.
+ */
+async function attachInmobiliarias(
+  rows: Array<Record<string, unknown>>,
+): Promise<Array<Record<string, unknown>>> {
+  const ids = [
+    ...new Set(rows.map((r) => r.inmobiliaria_id).filter((x): x is string => typeof x === 'string')),
+  ];
+  const byInmoId = new Map<string, InmobiliariaPublica>();
+
+  if (ids.length > 0) {
+    const { data: orgs } = await db('inmobiliarias').select('id, owner_perfil_id').in('id', ids);
+    const orgRows = (orgs ?? []) as Array<{ id: string; owner_perfil_id: string | null }>;
+    const ownerIds = [
+      ...new Set(orgRows.map((o) => o.owner_perfil_id).filter((x): x is string => typeof x === 'string')),
+    ];
+
+    const ownerById = new Map<
+      string,
+      { razon_social: string | null; nombre: string | null; apellido: string | null; logo_storage_key: string | null }
+    >();
+    if (ownerIds.length > 0) {
+      const { data: perfiles } = await db('perfiles')
+        .select('id, razon_social, nombre, apellido, logo_storage_key')
+        .in('id', ownerIds);
+      for (const p of (perfiles ?? []) as Array<{
+        id: string; razon_social: string | null; nombre: string | null; apellido: string | null; logo_storage_key: string | null;
+      }>) {
+        ownerById.set(p.id, p);
+      }
+    }
+
+    // URL firmada fresca por cada logo distinto (en paralelo).
+    const keys = [
+      ...new Set(
+        [...ownerById.values()].map((p) => p.logo_storage_key).filter((x): x is string => typeof x === 'string'),
+      ),
+    ];
+    const signedByKey = new Map<string, string>();
+    await Promise.all(
+      keys.map(async (key) => {
+        const { data: signed } = await supabase.storage.from(LOGO_BUCKET).createSignedUrl(key, LOGO_URL_TTL_SECONDS);
+        if (signed?.signedUrl) signedByKey.set(key, signed.signedUrl);
+      }),
+    );
+
+    for (const o of orgRows) {
+      const owner = o.owner_perfil_id ? ownerById.get(o.owner_perfil_id) : undefined;
+      if (!owner) continue;
+      const nombre =
+        owner.razon_social?.trim() || `${owner.nombre ?? ''} ${owner.apellido ?? ''}`.trim() || null;
+      const logo_url = owner.logo_storage_key ? signedByKey.get(owner.logo_storage_key) ?? null : null;
+      byInmoId.set(o.id, { nombre, logo_url });
+    }
+  }
+
+  return rows.map((row) => {
+    const { inmobiliaria_id, ...rest } = row as Record<string, unknown> & { inmobiliaria_id?: string | null };
+    const inmo = typeof inmobiliaria_id === 'string' ? byInmoId.get(inmobiliaria_id) ?? null : null;
+    // Solo exponemos el bloque si hay algo que mostrar (nombre o logo).
+    const inmobiliaria = inmo && (inmo.nombre || inmo.logo_url) ? inmo : null;
+    return { ...rest, inmobiliaria };
+  });
 }
 
 // ── Base query conditions (visible_vitrina=true AND estado=disponible) ──
@@ -95,7 +181,7 @@ export async function listPublicProperties(query: ListPublicPropertiesQuery) {
 
   let qb = supabase
     .from('inmuebles')
-    .select(PUBLIC_FIELDS, { count: 'exact' });
+    .select(`${PUBLIC_FIELDS}, inmobiliaria_id`, { count: 'exact' });
 
   // Always apply public conditions
   qb = applyPublicConditions(qb);
@@ -139,14 +225,15 @@ export async function listPublicProperties(query: ListPublicPropertiesQuery) {
   const total = count ?? 0;
   const pagination = buildPaginationMeta(total, page, limit);
 
-  return { data: data ?? [], pagination };
+  const withInmo = await attachInmobiliarias((data ?? []) as Array<Record<string, unknown>>);
+  return { data: withInmo, pagination };
 }
 
 export async function getPublicPropertyById(id: string) {
   // Fetch the property with public fields only
   let qb = supabase
     .from('inmuebles')
-    .select(PUBLIC_DETAIL_FIELDS);
+    .select(`${PUBLIC_DETAIL_FIELDS}, inmobiliaria_id`);
 
   qb = applyPublicConditions(qb);
 
@@ -171,9 +258,9 @@ export async function getPublicPropertyById(id: string) {
     .order('es_fachada', { ascending: false })
     .order('orden', { ascending: true });
 
-  const result = data as Record<string, unknown>;
+  const [withInmo] = await attachInmobiliarias([data as Record<string, unknown>]);
   return {
-    ...result,
+    ...withInmo,
     fotos: fotos ?? [],
   };
 }
