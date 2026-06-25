@@ -371,6 +371,7 @@ export interface MiInmuebleRow {
   area: number | null;
   estado: string; // disponible | en_estudio | ocupado | inactivo
   visibleVitrina: boolean;
+  fotoFachadaUrl: string | null;
   inquilino: string | null;
   expedienteId: string | null;
   contratoId: string | null;
@@ -391,7 +392,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
   const { data: inmData, error: e1 } = await supabase
     .from('inmuebles')
     .select(
-      'id, codigo, direccion, ciudad, tipo, valor_arriendo, habitaciones, banos, area_m2, estado, visible_vitrina, created_at',
+      'id, codigo, direccion, ciudad, tipo, valor_arriendo, habitaciones, banos, area_m2, estado, visible_vitrina, foto_fachada_url, created_at',
     )
     .in('id', portfolioIds)
     .order('created_at', { ascending: false });
@@ -496,6 +497,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
       area: (i.area_m2 as number) ?? null,
       estado: (i.estado as string) ?? 'disponible',
       visibleVitrina: Boolean(i.visible_vitrina),
+      fotoFachadaUrl: (i.foto_fachada_url as string) || null,
       inquilino: activo?.inquilino ?? null,
       expedienteId: activo?.expedienteId ?? null,
       contratoId: activo?.contratoId ?? null,
