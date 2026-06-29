@@ -182,9 +182,9 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
 
   // Inmueble + propietario
   const { data: inm } = await db('inmuebles')
-    .select('direccion, ciudad, propietario_id')
+    .select('direccion, ciudad, propietario_id, inmobiliaria_id')
     .eq('id', exp.inmueble_id)
-    .single() as { data: { direccion: string; ciudad: string; propietario_id: string } | null };
+    .single() as { data: { direccion: string; ciudad: string; propietario_id: string; inmobiliaria_id: string | null } | null };
 
   if (!inm) return null;
 
@@ -201,7 +201,21 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
     logger.warn({ error: e, propietarioId: inm.propietario_id }, 'Error al obtener email de propietario');
   }
 
-  const propietarioNombre = perfil?.razon_social || `${perfil?.nombre || ''} ${perfil?.apellido || ''}`.trim();
+  // Nombre del dueño en los avisos: prioriza la razón social del perfil (si la
+  // editó en "Datos para contrato"); si no, el nombre de la INMOBILIARIA
+  // (inmobiliarias.nombre, fijado al registrarse) — así no cae al nombre
+  // personal del titular; por último, nombre + apellido.
+  let propietarioNombre = (perfil?.razon_social || '').trim();
+  if (!propietarioNombre && inm.inmobiliaria_id) {
+    const { data: org } = await db('inmobiliarias')
+      .select('nombre')
+      .eq('id', inm.inmobiliaria_id)
+      .maybeSingle() as { data: { nombre: string | null } | null };
+    propietarioNombre = (org?.nombre || '').trim();
+  }
+  if (!propietarioNombre) {
+    propietarioNombre = `${perfil?.nombre || ''} ${perfil?.apellido || ''}`.trim();
+  }
 
   // Perfil-id del solicitante: lookup por email contra auth.users. Puede no
   // existir aun (solicitante invitado externo) — devolvemos null y los
