@@ -163,7 +163,9 @@ export const WHATSAPP_TEMPLATES = {
     id: 'cofianza_interesado_mensaje_dueno',
     language: 'es_CO',
     // {{1}} dueño/inmobiliaria, {{2}} interesado, {{3}} mensaje del interesado
-    description: 'Hola {{1}}, {{2}} dejó el siguiente mensaje sobre tu inmueble:\n\n{{3}}',
+    // Cuerpo profesional (sin emojis, con saltos de línea).
+    description:
+      'Hola {{1}}, {{2}} está interesado en tu inmueble y te dejó el siguiente mensaje:\n\n{{3}}',
   },
   /** Nueva solicitud desde la vitrina — aviso al propietario/inmobiliaria. */
   NUEVA_SOLICITUD_VITRINA: {
