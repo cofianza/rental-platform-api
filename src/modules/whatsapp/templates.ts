@@ -154,6 +154,17 @@ export const WHATSAPP_TEMPLATES = {
     description:
       'Hola {{1}}, recibiste un nuevo interesado en uno de tus inmuebles publicados en Cofianza.\n\nInmueble: {{2}}\nInteresado: {{3}}\nWhatsApp: {{4}}\nCorreo: {{5}}\n\nTe recomendamos contactarlo lo antes posible para coordinar la visita. También puedes gestionarlo desde tu panel en Cofianza.',
   },
+  /**
+   * Mensaje del INTERESADO sobre el inmueble — 2º mensaje al dueño, SOLO cuando
+   * el interesado escribió un mensaje en el formulario (el aviso de interesado
+   * tiene variables fijas y Meta no admite variables vacías). Categoría UTILITY.
+   */
+  INTERESADO_MENSAJE_DUENO: {
+    id: 'cofianza_interesado_mensaje_dueno',
+    language: 'es_CO',
+    // {{1}} dueño/inmobiliaria, {{2}} interesado, {{3}} mensaje del interesado
+    description: 'Hola {{1}}, {{2}} dejó el siguiente mensaje sobre tu inmueble:\n\n{{3}}',
+  },
   /** Nueva solicitud desde la vitrina — aviso al propietario/inmobiliaria. */
   NUEVA_SOLICITUD_VITRINA: {
     id: 'cofianza_nueva_solicitud_vitrina',

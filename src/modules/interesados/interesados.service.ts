@@ -155,6 +155,16 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
       template: 'INTERESADO_VITRINA_DUENO',
       variables: [duenoNombre, label, input.nombre, input.telefono, input.email],
     });
+    // 2º mensaje con el mensaje del interesado (solo si lo escribió). Saneado
+    // para Meta (sin saltos de línea / espacios múltiples), truncado a 500.
+    const mensaje = input.mensaje?.trim().replace(/\s+/g, ' ').slice(0, 500);
+    if (mensaje) {
+      await enviarTemplate({
+        to: duenoWhatsapp,
+        template: 'INTERESADO_MENSAJE_DUENO',
+        variables: [duenoNombre, input.nombre, mensaje],
+      });
+    }
   }
 
   // Correo al dueño (si se resolvió email).
