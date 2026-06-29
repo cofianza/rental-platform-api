@@ -76,23 +76,9 @@ export async function registrarInteresPublico(
 
   const emailNorm = input.email.trim().toLowerCase();
 
-  // 1b. Anti-duplicados: si este interesado (mismo correo) ya escribió por este
-  // inmueble en las últimas 24h, NO creamos otro lead ni re-avisamos al dueño
-  // (evita doble-submit / spam). El visitante igual recibe el "ok" del form.
-  const desde24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const { data: dup } = await db('inmueble_interesados')
-    .select('id')
-    .eq('inmueble_id', inmuebleId)
-    .eq('email', emailNorm)
-    .gte('created_at', desde24h)
-    .limit(1)
-    .maybeSingle();
-  if (dup) {
-    logger.info({ inmuebleId }, 'Interés duplicado reciente (24h) — no se crea nuevo lead');
-    return;
-  }
-
-  // 2. Guardar el lead.
+  // 2. Guardar el lead. Permitimos que el mismo interesado escriba varias veces
+  // por el mismo inmueble (sin tope): cada interés es un lead nuevo y vuelve a
+  // avisar al dueño.
   const now = new Date().toISOString();
   const { error } = await db('inmueble_interesados').insert({
     inmueble_id: inmuebleId,
