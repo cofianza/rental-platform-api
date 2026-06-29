@@ -13,7 +13,7 @@ import { env } from '@/config';
 import { buildPaginationMeta } from '@/utils/pagination';
 import { resolveAllowedInmuebleIds, resolveOrgCanonicalPerfilId, resolveNombreDueno } from '@/lib/tenantScope';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
-import { sendNuevoInteresadoEmail } from '@/lib/email';
+import { sendNuevoInteresadoEmail, sendInteresadoConfirmacionEmail } from '@/lib/email';
 import type { ListInteresadosQuery, RegistrarInteresInput } from './interesados.schema';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
@@ -81,6 +81,12 @@ export async function registrarInteresPublico(
   await notificarDueno(inm, input).catch((err) =>
     logger.warn({ err, inmuebleId }, 'No se pudo notificar al dueño del nuevo interesado'),
   );
+
+  // 4. Confirmación al interesado (best-effort; cierra el loop y da confianza).
+  await sendInteresadoConfirmacionEmail(input.email.trim().toLowerCase(), {
+    nombre: input.nombre.trim(),
+    inmuebleLabel: inmuebleLabel(inm),
+  });
 }
 
 async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): Promise<void> {

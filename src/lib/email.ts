@@ -353,6 +353,102 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
 </html>`;
 }
 
+interface InteresadoConfirmacionParams {
+  nombre: string;
+  inmuebleLabel: string;
+}
+
+/**
+ * Confirmación al INTERESADO (visitante sin cuenta) de que recibimos su interés.
+ * Cierra el loop: le da confianza de que su solicitud llegó y qué sigue.
+ * Best-effort: no lanza (es informativo; el lead ya quedó guardado).
+ */
+export async function sendInteresadoConfirmacionEmail(
+  to: string,
+  params: InteresadoConfirmacionParams,
+): Promise<void> {
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to,
+      subject: 'Recibimos tu interés — Cofianza',
+      html: buildInteresadoConfirmacionHtml(params),
+    });
+    logger.info({ to }, 'Email de confirmación al interesado enviado');
+  } catch (error) {
+    logger.warn({ to, error }, 'No se pudo enviar la confirmación al interesado (no crítico)');
+  }
+}
+
+function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): string {
+  return `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recibimos tu interés</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%;">
+          <!-- Header -->
+          <tr>
+            <td align="center" style="padding-bottom: 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background-color: #0f766e; border-radius: 12px; width: 48px; height: 48px; text-align: center; vertical-align: middle;">
+                    <span style="color: #ffffff; font-weight: bold; font-size: 24px; line-height: 48px;">C</span>
+                  </td>
+                  <td style="padding-left: 12px;">
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+              <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
+                Recibimos tu interés
+              </h1>
+              <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                Hola ${p.nombre}, gracias por tu interés en <strong>${p.inmuebleLabel}</strong>.
+              </p>
+              <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                El anunciante (propietario o inmobiliaria) te contactará pronto por WhatsApp o correo
+                para coordinar una visita. Por ahora no necesitas hacer nada más.
+              </p>
+              <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #6b7280;">
+                Si el inmueble te convence tras la visita, podrás continuar con Cofianza como tu fiador
+                — solo en ese momento te pediremos los datos para el estudio.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding-top: 32px;">
+              <p style="margin: 0; font-size: 13px; color: #9ca3af;">
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
+              </p>
+              <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
+                Este es un correo automatico, por favor no respondas a este mensaje.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 interface NuevoInteresadoEmailParams {
   duenoNombre: string;
   interesadoNombre: string;
