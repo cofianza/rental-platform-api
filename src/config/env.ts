@@ -98,6 +98,15 @@ const envSchema = z.object({
   // firmante (arrendatario). Activar solo cuando estén listos los teléfonos
   // reales de cada parte y los datos de Cofianza (company.ts: nit/phone).
   FIRMA_MULTIPARTE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+
+  // Auto-firma de Cofianza (sello institucional). OFF por defecto. Solo aplica
+  // si FIRMA_MULTIPARTE_ENABLED=true. Cuando está ON, Cofianza NO firma por Auco
+  // (no necesita persona ni OTP): su firma electrónica institucional (Ley 527 /
+  // Decreto 2364 de 2012 / Ley 2213 de 2022) se PRE-ESTAMPA en el contrato al
+  // generarlo y su fila contrato_firmantes nace 'firmado'. En Auco solo firman
+  // arrendatario + arrendador. Activar SOLO con visto bueno legal (cambia la
+  // naturaleza de la firma de Cofianza: de OTP-validada a sello institucional).
+  COFIANZA_AUTOFIRMA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

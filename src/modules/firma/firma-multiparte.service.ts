@@ -51,6 +51,12 @@ export interface FirmanteDerivado {
   country: string;
   /** Orden de firma (1 = primero). */
   orden: number;
+  /**
+   * Auto-firmado: no va a Auco como firmante (no necesita OTP/persona). Su firma
+   * se pre-estampa en el contrato y su fila contrato_firmantes nace 'firmado'.
+   * Hoy solo Cofianza, gated por COFIANZA_AUTOFIRMA_ENABLED.
+   */
+  auto?: boolean;
 }
 
 interface FirmanteRow {
@@ -206,6 +212,9 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
     numero_documento: nitEsPlaceholder ? null : company.nit,
     country: 'CO',
     orden: 3,
+    // Auto-firma: Cofianza firma con sello institucional pre-estampado, no por
+    // Auco. Gated: si está OFF, Cofianza vuelve a ser un firmante Auco normal.
+    auto: env.COFIANZA_AUTOFIRMA_ENABLED,
   });
 
   return firmantes;
@@ -245,6 +254,9 @@ function buildSignProfileMultiparte(f: FirmanteDerivado, phoneInternational: str
     // arrendatario=0, arrendador=1, cofianza=2), inyectado por
     // inyectarAnclasFirmaMultiparte en la generación del contrato. Antes era
     // `position` fija → las 3 firmas se apilaban en el mismo punto.
+    // Con COFIANZA_AUTOFIRMA_ENABLED, Cofianza no es firmante Auco: el signProfile
+    // queda [arrendatario=0, arrendador=1] y la inyección de anclas omite la 2
+    // (Cofianza se pre-estampa). Los índices 0/1 se mantienen alineados.
     label: true,
     otpCode: true,
     options: { whatsapp: true, otpCode: 'phone' },
@@ -316,7 +328,15 @@ export async function crearSolicitudFirmaMultiparte(
     f,
     phone: aucoClient.normalizePhoneToInternational(f.telefono),
   }));
-  const sinDatos = conTelefono.filter((x) => !x.phone || !x.f.email);
+
+  // Los firmantes AUTO (Cofianza con sello institucional, gated por
+  // COFIANZA_AUTOFIRMA_ENABLED) NO van a Auco: su firma se pre-estampa en el PDF
+  // y su fila nace 'firmado'. Toda la validación de Auco (teléfono/email/OTP,
+  // teléfono único) aplica solo a los firmantes que SÍ firman por Auco. Con la
+  // bandera OFF, aucoSigners == firmantes (comportamiento idéntico al actual).
+  const aucoSigners = conTelefono.filter((x) => !x.f.auto);
+
+  const sinDatos = aucoSigners.filter((x) => !x.phone || !x.f.email);
   if (sinDatos.length > 0) {
     const faltan = sinDatos.map((x) => x.f.rol_firmante).join(', ');
     throw AppError.badRequest(
@@ -327,9 +347,10 @@ export async function crearSolicitudFirmaMultiparte(
 
   // Cada firmante WhatsApp necesita un teléfono ÚNICO: Auco enruta el OTP por
   // número, así que dos partes con el mismo phone rompen el sobre. Caso típico
-  // en pruebas: Cofianza configurada con el mismo número que el arrendatario.
+  // en pruebas: Cofianza configurada con el mismo número que el arrendatario
+  // (cuando Cofianza auto-firma esto deja de ser un problema: ya no va a Auco).
   const porTelefono = new Map<string, string[]>();
-  for (const x of conTelefono) {
+  for (const x of aucoSigners) {
     const key = x.phone as string;
     porTelefono.set(key, [...(porTelefono.get(key) ?? []), x.f.rol_firmante]);
   }
@@ -354,7 +375,7 @@ export async function crearSolicitudFirmaMultiparte(
   const token = crypto.randomBytes(32).toString('hex');
   const tokenExpiracion = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
 
-  const signProfile = conTelefono.map((x) => buildSignProfileMultiparte(x.f, x.phone as string));
+  const signProfile = aucoSigners.map((x) => buildSignProfileMultiparte(x.f, x.phone as string));
 
   let aucoDocumentCode: string;
   try {
@@ -409,19 +430,23 @@ export async function crearSolicitudFirmaMultiparte(
   await db('contrato_firmantes').delete().eq('contrato_id', contratoId);
   // Guardamos el teléfono NORMALIZADO (el que de verdad recibe el WhatsApp por
   // Auco, +57.../+52...), no el crudo del perfil — así el panel muestra a qué
-  // número llega el link de cada parte.
+  // número llega el link de cada parte. Los firmantes AUTO (Cofianza) nacen
+  // 'firmado' (firma institucional pre-estampada): no esperan a Auco, y como su
+  // teléfono no se normaliza para OTP, cae al crudo solo para mostrarlo.
+  const ahora = new Date().toISOString();
   const filas = conTelefono.map(({ f, phone }) => ({
     contrato_id: contratoId,
     solicitud_firma_id: sobreId,
     rol_firmante: f.rol_firmante,
     nombre: f.nombre,
     email: f.email,
-    telefono: phone,
+    telefono: phone ?? f.telefono,
     tipo_documento: f.tipo_documento,
     numero_documento: f.numero_documento,
     country: f.country,
     orden: f.orden,
-    estado: 'enviado',
+    estado: f.auto ? 'firmado' : 'enviado',
+    firmado_en: f.auto ? ahora : null,
   }));
   const { error: firmantesError } = await db('contrato_firmantes').insert(filas as never);
   if (firmantesError) {

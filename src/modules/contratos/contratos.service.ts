@@ -1567,14 +1567,26 @@ function uuidOrNull(v: string | null | undefined): string | null {
  * buildSignProfileMultiparte. El co-titular (si existe) no es firmante Auco, así
  * que su línea no se ancla. Si la plantilla no trae el bloque esperado, el HTML
  * pasa intacto (no rompe la generación).
+ *
+ * COFIANZA_AUTOFIRMA_ENABLED: cuando está ON, Cofianza NO firma por Auco — se
+ * anclan solo arrendatario(0) y arrendador(1), y la línea de Cofianza se
+ * PRE-ESTAMPA con su firma electrónica institucional (sello). Así el contrato
+ * sale ya firmado por Cofianza desde la generación, sin intervención humana.
  */
 function inyectarAnclasFirmaMultiparte(html: string): string {
+  const autofirmaCofianza = env.FIRMA_MULTIPARTE_ENABLED && env.COFIANZA_AUTOFIRMA_ENABLED;
+
   const ancla = (n: number) => `<span style="color:#ffffff;font-size:1px;">{{signature:${n}}}</span>`;
-  const partes: Array<[string, number]> = [
-    ['EL ARRENDATARIO', 0],
-    ['EL ARRENDADOR', 1],
-    ['COFIANZA S.A.S.', 2],
-  ];
+  const partes: Array<[string, number]> = autofirmaCofianza
+    ? [
+        ['EL ARRENDATARIO', 0],
+        ['EL ARRENDADOR', 1],
+      ]
+    : [
+        ['EL ARRENDATARIO', 0],
+        ['EL ARRENDADOR', 1],
+        ['COFIANZA S.A.S.', 2],
+      ];
   let out = html;
   for (const [label, n] of partes) {
     const labelEsc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1584,7 +1596,34 @@ function inyectarAnclasFirmaMultiparte(html: string): string {
     );
     out = out.replace(re, `$1${ancla(n)}$2`);
   }
+  if (autofirmaCofianza) out = inyectarSelloCofianza(out);
   return out;
+}
+
+/**
+ * Pre-estampa la firma electrónica institucional de Cofianza cuando Cofianza
+ * NO firma por Auco (COFIANZA_AUTOFIRMA_ENABLED). REEMPLAZA la línea de firma
+ * vacía de Cofianza por un SELLO/estampa con estilos inline (independiente de
+ * fuentes instaladas — se ve igual en cualquier servidor). Debajo siguen el rol
+ * + la leyenda "Firma electrónica institucional — Ley 527 de 1999" que ya trae
+ * la plantilla. La validez la dan la Ley 527 de 1999, el Decreto 2364 de 2012 y
+ * la Ley 2213 de 2022 (equivalencia funcional de la firma electrónica de la
+ * persona jurídica que emite el documento). Si el bloque no existe, el HTML
+ * pasa intacto.
+ */
+function inyectarSelloCofianza(html: string): string {
+  const sello =
+    '<div style="margin-top:26px;height:62px;display:flex;align-items:flex-end;">' +
+    '<span style="display:inline-block;border:2px solid #0a3d2e;border-radius:6px;' +
+    'padding:6px 12px;color:#0a3d2e;text-align:center;line-height:1.25;' +
+    'font-family:Arial,Helvetica,sans-serif;transform:rotate(-3deg);">' +
+    '<span style="font-size:8pt;font-weight:bold;letter-spacing:1.5px;">FIRMADO ELECTRÓNICAMENTE</span><br>' +
+    '<span style="font-size:13pt;font-weight:bold;letter-spacing:0.5px;">COFIANZA S.A.S.</span><br>' +
+    '<span style="font-size:7.5pt;">NIT 902.038.122-7 · Ley 527 de 1999</span>' +
+    '</span></div>';
+  // Reemplaza el <div class="firma-line"></div> de Cofianza por la estampa.
+  const re = /<div class="firma-line"><\/div>(\s*<p>\s*<strong>COFIANZA S\.A\.S\.<\/strong>)/;
+  return html.replace(re, `${sello}$1`);
 }
 
 export async function generarContrato(
