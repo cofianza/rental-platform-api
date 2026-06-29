@@ -27,6 +27,12 @@ export async function list(req: Request, res: Response) {
   sendSuccess(res, data, pagination);
 }
 
+/** Autenticado: conteo de interesados 'nuevo' (para el badge de la pestaña). */
+export async function countNuevos(req: Request, res: Response) {
+  const nuevos = await service.contarInteresadosNuevos(req.user!.id, req.user!.rol);
+  sendSuccess(res, { nuevos });
+}
+
 /** Autenticado: cambiar el estado de un interesado (nuevo/contactado/descartado). */
 export async function updateEstado(req: Request, res: Response) {
   const id = req.params.id as string;

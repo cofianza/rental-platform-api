@@ -17,6 +17,9 @@ const router = Router();
 
 router.use(authMiddleware);
 
+// GET /api/v1/interesados/count — conteo de 'nuevo' (badge). Antes de '/'.
+router.get('/count', controller.countNuevos);
+
 // GET /api/v1/interesados — lista scopeada a los inmuebles del usuario
 router.get('/', validate({ query: listInteresadosQuerySchema }), controller.list);
 

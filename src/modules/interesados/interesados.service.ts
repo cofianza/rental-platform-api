@@ -193,6 +193,20 @@ export async function listInteresados(userId: string, rol: string, query: ListIn
   return { data: data ?? [], pagination: buildPaginationMeta(count ?? 0, query.page, query.limit) };
 }
 
+/** Cuenta los interesados en estado 'nuevo' (sin atender) de los inmuebles del
+ *  usuario — para el badge de la pestaña Interesados. */
+export async function contarInteresadosNuevos(userId: string, rol: string): Promise<number> {
+  const allowed = await resolveAllowedInmuebleIds(userId, rol);
+  if (allowed && allowed.length === 0) return 0;
+  let qb = db('inmueble_interesados')
+    .select('id', { count: 'exact', head: true })
+    .eq('estado', 'nuevo');
+  if (allowed) qb = qb.in('inmueble_id', allowed);
+  const { count, error } = await qb;
+  if (error) throw fromSupabaseError(error);
+  return count ?? 0;
+}
+
 export async function updateEstadoInteresado(
   id: string,
   userId: string,
