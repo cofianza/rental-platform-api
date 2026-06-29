@@ -89,6 +89,41 @@ export async function resolveOrgCanonicalPerfilId(perfilId: string): Promise<str
   return ownerId ?? perfilId;
 }
 
+/**
+ * Nombre del dueño para AVISOS (correo / WhatsApp / in-app). Prioridad:
+ *   1) razón social del perfil (si la editó en "Datos para contrato"),
+ *   2) nombre de la INMOBILIARIA (inmobiliarias.nombre, fijado al registrarse)
+ *      — así no cae al nombre personal del titular cuando la razón social está
+ *      vacía,
+ *   3) nombre + apellido.
+ * Para un propietario individual (sin organización) devuelve su nombre+apellido,
+ * que es lo correcto (es una persona, no una empresa).
+ */
+export async function resolveNombreDueno(perfilId: string): Promise<string> {
+  const { data: p } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('nombre, apellido, razon_social')
+    .eq('id', perfilId)
+    .maybeSingle();
+  const perfil = p as { nombre?: string | null; apellido?: string | null; razon_social?: string | null } | null;
+
+  const razon = (perfil?.razon_social || '').trim();
+  if (razon) return razon;
+
+  const m = await getActiveMembership(perfilId);
+  if (m?.orgId) {
+    const { data: org } = await (supabase
+      .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+      .select('nombre')
+      .eq('id', m.orgId)
+      .maybeSingle();
+    const nombreOrg = ((org as { nombre?: string | null } | null)?.nombre || '').trim();
+    if (nombreOrg) return nombreOrg;
+  }
+
+  return `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim() || 'Hola';
+}
+
 /** ¿El perfil es titular (owner) de SU organización activa? Para gatear la
  *  edición de los datos compartidos de la org (solo titulares editan). */
 export async function esTitularDeSuOrg(perfilId: string): Promise<boolean> {

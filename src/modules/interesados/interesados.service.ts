@@ -11,7 +11,7 @@ import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { buildPaginationMeta } from '@/utils/pagination';
-import { resolveAllowedInmuebleIds, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
+import { resolveAllowedInmuebleIds, resolveOrgCanonicalPerfilId, resolveNombreDueno } from '@/lib/tenantScope';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { sendNuevoInteresadoEmail } from '@/lib/email';
 import type { ListInteresadosQuery, RegistrarInteresInput } from './interesados.schema';
@@ -99,7 +99,8 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
     telefono: string | null; whatsapp_recaudo: string | null; email_recaudo: string | null;
   } | null;
 
-  const duenoNombre = p?.razon_social?.trim() || `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || 'Hola';
+  // Nombre del dueño: razón social → nombre de la inmobiliaria → nombre+apellido.
+  const duenoNombre = await resolveNombreDueno(inm.propietario_id);
   const duenoWhatsapp = p?.whatsapp_recaudo || p?.telefono || null;
   let duenoEmail = p?.email_recaudo || null;
   if (!duenoEmail) {

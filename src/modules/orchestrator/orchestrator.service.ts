@@ -8,6 +8,7 @@ import { logger } from '@/lib/logger';
 import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
 import { notificarUsuario, notificarResponsableExpediente } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
+import { resolveNombreDueno } from '@/lib/tenantScope';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
@@ -25,11 +26,12 @@ async function enviarWhatsAppDueno(
   expedienteId: string,
 ) {
   const { data: prop } = await db('perfiles')
-    .select('nombre, apellido, razon_social, telefono')
+    .select('telefono')
     .eq('id', propietarioId)
     .maybeSingle();
-  const p = prop as { nombre?: string | null; apellido?: string | null; razon_social?: string | null; telefono?: string | null } | null;
-  const nombreDueno = p?.razon_social || `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || 'Hola';
+  const p = prop as { telefono?: string | null } | null;
+  // Nombre del dueño: razón social → nombre de la inmobiliaria → nombre+apellido.
+  const nombreDueno = await resolveNombreDueno(propietarioId);
   await enviarTemplate({
     to: p?.telefono ?? null,
     template,
