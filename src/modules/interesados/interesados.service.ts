@@ -155,7 +155,7 @@ export async function listInteresados(userId: string, rol: string, query: ListIn
 
   const offset = (query.page - 1) * query.limit;
   let qb = db('inmueble_interesados').select(
-    'id, inmueble_id, nombre, telefono, email, estado, created_at, inmuebles(tipo, ciudad, barrio, direccion)',
+    'id, inmueble_id, nombre, telefono, email, estado, created_at, inmuebles(tipo, ciudad, barrio, direccion, foto_fachada_url)',
     { count: 'exact' },
   );
   if (allowed) qb = qb.in('inmueble_id', allowed);
