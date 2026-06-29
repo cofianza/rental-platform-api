@@ -368,6 +368,8 @@ async function notificarCitaConfirmada(
     hour12: true,
   });
   const primerNombre = ctx.solicitanteNombre.split(' ')[0] || 'Hola';
+  // Nota del dueño en el aviso in-app (el correo ya la incluye). Vacío si no hay.
+  const notaSuffix = notasPropietario?.trim() ? ` Nota del anunciante: ${notasPropietario.trim()}` : '';
 
   if (reprogramada) {
     await sendCitaReprogramadaSolicitanteEmail({
@@ -383,7 +385,7 @@ async function notificarCitaConfirmada(
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.reprogramada',
       titulo: 'Visita reprogramada',
-      mensaje: `El propietario ajustó la fecha de tu visita a ${ctx.inmuebleDireccion}. Revisa el nuevo horario.`,
+      mensaje: `El propietario ajustó la fecha de tu visita a ${ctx.inmuebleDireccion}. Revisa el nuevo horario.${notaSuffix}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
     });
@@ -412,7 +414,7 @@ async function notificarCitaConfirmada(
     userId: ctx.solicitanteUserId ?? '',
     tipo: 'cita.confirmada',
     titulo: 'Visita confirmada',
-    mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.`,
+    mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.${notaSuffix}`,
     link: linkExpediente,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
