@@ -64,6 +64,19 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} nombre, {{2}} direccion_inmueble, {{3}} fecha_cita, {{4}} motivo
     description: 'Hola {{1}}, la visita al inmueble {{2}} programada para {{3}} fue cancelada. Motivo: {{4}}.',
   },
+  /**
+   * Nota del dueño sobre la visita — mensaje ADICIONAL al solicitante, enviado
+   * SOLO cuando el dueño escribió una nota al confirmar/reprogramar la cita
+   * (la plantilla de cita no tiene hueco para texto libre opcional, y Meta no
+   * admite variables vacías). Categoría UTILITY.
+   */
+  CITA_NOTA_VISITA: {
+    id: 'cofianza_cita_nota_visita',
+    language: 'es_CO',
+    // {{1}} solicitante (primer nombre), {{2}} inmueble (dirección), {{3}} nota del dueño
+    description:
+      'Hola {{1}}, sobre tu visita al inmueble {{2}} el anunciante dejó esta nota: {{3}}',
+  },
   /** Fase 1 de Mora — recordatorio amistoso al inquilino (+0d desde el reporte). */
   MORA_FASE_1: {
     id: 'cofianza_mora_fase1_v1',

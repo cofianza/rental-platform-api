@@ -371,6 +371,20 @@ async function notificarCitaConfirmada(
   // Nota del dueño en el aviso in-app (el correo ya la incluye). Vacío si no hay.
   const notaSuffix = notasPropietario?.trim() ? ` Nota del anunciante: ${notasPropietario.trim()}` : '';
 
+  // WhatsApp ADICIONAL con la nota del dueño (solo si hay nota). La plantilla de
+  // cita no admite texto libre opcional, así que la nota va como 2º mensaje.
+  // Sanitiza (Meta rechaza saltos de línea / espacios múltiples en variables).
+  const enviarNotaWhatsApp = async () => {
+    const nota = notasPropietario?.trim().replace(/\s+/g, ' ').slice(0, 500);
+    if (!nota || !ctx.solicitanteTelefono) return;
+    await enviarTemplateWhatsApp({
+      to: ctx.solicitanteTelefono,
+      template: 'CITA_NOTA_VISITA',
+      variables: [primerNombre, ctx.inmuebleDireccion, nota],
+      context: { expediente_id: ctx.expedienteId },
+    });
+  };
+
   if (reprogramada) {
     await sendCitaReprogramadaSolicitanteEmail({
       email: ctx.solicitanteEmail,
@@ -399,6 +413,7 @@ async function notificarCitaConfirmada(
       urlButtons: tokenReprog ? [tokenReprog, tokenReprog] : undefined,
       context: { expediente_id: ctx.expedienteId },
     });
+    await enviarNotaWhatsApp();
     return;
   }
 
@@ -429,6 +444,7 @@ async function notificarCitaConfirmada(
     urlButtons: token ? [token, token] : undefined,
     context: { expediente_id: ctx.expedienteId },
   });
+  await enviarNotaWhatsApp();
 }
 
 /**
