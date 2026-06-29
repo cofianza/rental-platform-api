@@ -135,8 +135,10 @@ export const WHATSAPP_TEMPLATES = {
     id: 'cofianza_interesado_vitrina_dueno',
     language: 'es_CO',
     // {{1}} dueño/inmobiliaria, {{2}} inmueble, {{3}} interesado, {{4}} WhatsApp, {{5}} correo
+    // Cuerpo profesional (sin emojis). Header de texto sugerido en Meta:
+    // "Nuevo interesado en tu inmueble".
     description:
-      'Hola {{1}} 👋, tienes un nuevo interesado en tu inmueble. 🏠 Inmueble: {{2}} 👤 Interesado: {{3}} 📱 WhatsApp: {{4}} ✉️ Correo: {{5}}. Escríbele para coordinar la visita. También lo ves en tu panel de Cofianza.',
+      'Hola {{1}}, recibiste un nuevo interesado en uno de tus inmuebles publicados en Cofianza.\n\nInmueble: {{2}}\nInteresado: {{3}}\nWhatsApp: {{4}}\nCorreo: {{5}}\n\nTe recomendamos contactarlo lo antes posible para coordinar la visita. También puedes gestionarlo desde tu panel en Cofianza.',
   },
   /** Nueva solicitud desde la vitrina — aviso al propietario/inmobiliaria. */
   NUEVA_SOLICITUD_VITRINA: {
