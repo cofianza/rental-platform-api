@@ -74,8 +74,9 @@ export const WHATSAPP_TEMPLATES = {
     id: 'cofianza_cita_nota_visita',
     language: 'es_CO',
     // {{1}} solicitante (primer nombre), {{2}} inmueble (dirección), {{3}} nota del dueño
+    // Cuerpo profesional (sin emojis, con saltos de línea).
     description:
-      'Hola {{1}}, sobre tu visita al inmueble {{2}} el anunciante dejó esta nota: {{3}}',
+      'Hola {{1}}, sobre tu visita al inmueble {{2}}, el anunciante te dejó la siguiente nota:\n\n{{3}}\n\nTe recomendamos tenerla en cuenta para tu visita.',
   },
   /** Fase 1 de Mora — recordatorio amistoso al inquilino (+0d desde el reporte). */
   MORA_FASE_1: {
