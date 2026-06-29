@@ -8,6 +8,8 @@ import { publicFormLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
 import { listPublicPropertiesSchema, propertyIdParamsSchema } from './public-properties.schema';
 import * as controller from './public-properties.controller';
+import { registrarInteresSchema } from '@/modules/interesados/interesados.schema';
+import * as interesadosController from '@/modules/interesados/interesados.controller';
 
 const router = Router();
 
@@ -39,6 +41,13 @@ router.post(
   '/:id/visita',
   validate({ params: propertyIdParamsSchema }),
   controller.trackVisit,
+);
+
+// POST /api/v1/public/properties/:id/interes — interesado sin cuenta (lead vitrina)
+router.post(
+  '/:id/interes',
+  validate({ params: propertyIdParamsSchema, body: registrarInteresSchema }),
+  interesadosController.registrarInteres,
 );
 
 export { router as publicPropertiesRouter };

@@ -49,6 +49,7 @@ import documentosLegalesRouter from '@/modules/documentos-legales/documentos-leg
 import whatsappRouter from '@/modules/whatsapp/whatsapp.routes';
 import morasRouter, { morasCronRouter } from '@/modules/moras/moras.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
+import { interesadosRouter } from '@/modules/interesados/interesados.routes';
 import { vitrinaRouter } from '@/modules/vitrina/vitrina.routes';
 import exportRouter from '@/modules/export/export.routes';
 import citasRouter from '@/modules/citas/citas.routes';
@@ -158,6 +159,7 @@ app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/reportes', reportesRouter);
 app.use('/api/v1/admin-tools', adminToolsRouter);
 app.use('/api/v1/public/properties', publicPropertiesRouter);
+app.use('/api/v1/interesados', interesadosRouter);
 app.use('/api/v1/vitrina', vitrinaRouter);
 app.use('/api/v1/export', exportRouter);
 app.use('/api/v1/citas', citasRouter);

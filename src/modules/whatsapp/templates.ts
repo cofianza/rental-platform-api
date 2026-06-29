@@ -126,6 +126,18 @@ export const WHATSAPP_TEMPLATES = {
     // {{1}} nombre, {{2}} dirección del inmueble
     description: 'Hola {{1}}, tu contrato de arrendamiento del inmueble {{2}} fue firmado por todas las partes. Te llegará copia por correo. Bienvenido a tu nuevo hogar.',
   },
+  /**
+   * Nuevo INTERESADO de la vitrina (visitante sin cuenta) — aviso al
+   * dueño/inmobiliaria con los datos de contacto para que le escriba.
+   * Categoría UTILITY en Meta.
+   */
+  INTERESADO_VITRINA_DUENO: {
+    id: 'cofianza_interesado_vitrina_dueno',
+    language: 'es_CO',
+    // {{1}} dueño/inmobiliaria, {{2}} inmueble, {{3}} interesado, {{4}} WhatsApp, {{5}} correo
+    description:
+      'Hola {{1}} 👋, tienes un nuevo interesado en tu inmueble. 🏠 Inmueble: {{2}} 👤 Interesado: {{3}} 📱 WhatsApp: {{4}} ✉️ Correo: {{5}}. Escríbele para coordinar la visita. También lo ves en tu panel de Cofianza.',
+  },
   /** Nueva solicitud desde la vitrina — aviso al propietario/inmobiliaria. */
   NUEVA_SOLICITUD_VITRINA: {
     id: 'cofianza_nueva_solicitud_vitrina',

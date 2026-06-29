@@ -353,6 +353,134 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
 </html>`;
 }
 
+interface NuevoInteresadoEmailParams {
+  duenoNombre: string;
+  interesadoNombre: string;
+  interesadoTelefono: string;
+  interesadoEmail: string;
+  inmuebleLabel: string;
+  panelUrl: string;
+}
+
+/**
+ * Aviso al dueño/inmobiliaria de que un visitante de la vitrina (sin cuenta)
+ * mostró interés en su inmueble, con los datos de contacto para escribirle.
+ * Best-effort: no lanza (es una notificación; el lead ya quedó guardado).
+ */
+export async function sendNuevoInteresadoEmail(
+  to: string,
+  params: NuevoInteresadoEmailParams,
+): Promise<void> {
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to,
+      subject: `Nuevo interesado en tu inmueble — ${params.inmuebleLabel}`,
+      html: buildNuevoInteresadoHtml(params),
+    });
+    logger.info({ to }, 'Email de nuevo interesado enviado al dueño');
+  } catch (error) {
+    logger.warn({ to, error }, 'No se pudo enviar email de nuevo interesado (no crítico)');
+  }
+}
+
+function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
+  return `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nuevo interesado</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%;">
+          <!-- Header -->
+          <tr>
+            <td align="center" style="padding-bottom: 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="background-color: #0f766e; border-radius: 12px; width: 48px; height: 48px; text-align: center; vertical-align: middle;">
+                    <span style="color: #ffffff; font-weight: bold; font-size: 24px; line-height: 48px;">C</span>
+                  </td>
+                  <td style="padding-left: 12px;">
+                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+              <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
+                Tienes un nuevo interesado
+              </h1>
+              <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                Hola ${p.duenoNombre}, una persona mostró interés en tu inmueble
+                <strong>${p.inmuebleLabel}</strong> desde la vitrina de Cofianza. Estos son sus datos de contacto:
+              </p>
+
+              <!-- Datos del interesado -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Nombre:</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${p.interesadoNombre}</p>
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">WhatsApp:</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0f766e;">${p.interesadoTelefono}</p>
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Correo:</p>
+                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #0f766e;">${p.interesadoEmail}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Button -->
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;">
+                <tr>
+                  <td align="center">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                          <a href="${p.panelUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
+                            Ver en mi panel
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #6b7280;">
+                Escríbele por WhatsApp o correo para coordinar la visita. Cuando avancen, podrás iniciar el estudio con Cofianza como fiador.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="padding-top: 32px;">
+              <p style="margin: 0; font-size: 13px; color: #9ca3af;">
+                &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
+              </p>
+              <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
+                Este es un correo automatico, por favor no respondas a este mensaje.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 export async function sendAutorizacionEmail(
   to: string,
   nombre: string,
