@@ -166,7 +166,7 @@ export const WHATSAPP_TEMPLATES = {
     // Cuerpo profesional (sin emojis, con saltos de línea). Cierra con texto
     // tras {{3}} porque Meta no permite variables al final de la plantilla.
     description:
-      'Hola {{1}}, {{2}} está interesado en tu inmueble y te dejó el siguiente mensaje:\n\n{{3}}\n\nPuedes responderle por WhatsApp o desde tu panel de Cofianza.',
+      'Hola {{1}}, {{2}} está interesado en tu inmueble y te dejó el siguiente mensaje:\n\n{{3}}\n\nPara responderle, escríbele directamente a su WhatsApp personal.',
   },
   /** Nueva solicitud desde la vitrina — aviso al propietario/inmobiliaria. */
   NUEVA_SOLICITUD_VITRINA: {
