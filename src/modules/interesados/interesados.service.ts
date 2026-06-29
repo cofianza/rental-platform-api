@@ -26,10 +26,22 @@ const TIPO_LABEL: Record<string, string> = {
   bodega: 'Bodega',
 };
 
-function inmuebleLabel(inm: { tipo: string; barrio: string | null; ciudad: string }): string {
+function inmuebleLabel(inm: {
+  tipo: string;
+  barrio: string | null;
+  ciudad: string;
+  direccion?: string | null;
+  codigo?: string | null;
+}): string {
   const tipo = TIPO_LABEL[inm.tipo] || inm.tipo;
-  const lugar = inm.barrio ? `${inm.barrio}, ${inm.ciudad}` : inm.ciudad;
-  return `${tipo} en ${lugar}`;
+  // Preferimos la dirección (lo más específico); si no hay, el barrio. Siempre
+  // la ciudad y, cuando exista, el código del inmueble entre paréntesis, para
+  // que el dueño con varios inmuebles en la misma ciudad sepa de cuál se trata.
+  const direccion = inm.direccion?.trim();
+  const detalle = direccion || inm.barrio?.trim();
+  const lugar = detalle ? `${detalle}, ${inm.ciudad}` : inm.ciudad;
+  const codigo = inm.codigo?.trim();
+  return `${tipo} en ${lugar}${codigo ? ` (cód. ${codigo})` : ''}`;
 }
 
 interface InmuebleRow {
@@ -39,6 +51,8 @@ interface InmuebleRow {
   tipo: string;
   ciudad: string;
   barrio: string | null;
+  direccion: string | null;
+  codigo: string | null;
   visible_vitrina: boolean;
   estado: string;
 }
@@ -52,7 +66,7 @@ export async function registrarInteresPublico(
 ): Promise<void> {
   // 1. El inmueble debe existir y estar publicado/disponible (igual que la vitrina).
   const { data: inmRow } = await db('inmuebles')
-    .select('id, propietario_id, inmobiliaria_id, tipo, ciudad, barrio, visible_vitrina, estado')
+    .select('id, propietario_id, inmobiliaria_id, tipo, ciudad, barrio, direccion, codigo, visible_vitrina, estado')
     .eq('id', inmuebleId)
     .maybeSingle();
   const inm = inmRow as InmuebleRow | null;
@@ -192,7 +206,7 @@ export async function listInteresados(userId: string, rol: string, query: ListIn
 
   const offset = (query.page - 1) * query.limit;
   let qb = db('inmueble_interesados').select(
-    'id, inmueble_id, nombre, telefono, email, mensaje, estado, created_at, inmuebles(tipo, ciudad, barrio, direccion, foto_fachada_url)',
+    'id, inmueble_id, nombre, telefono, email, mensaje, estado, created_at, inmuebles(tipo, ciudad, barrio, direccion, codigo, foto_fachada_url)',
     { count: 'exact' },
   );
   if (allowed) qb = qb.in('inmueble_id', allowed);
