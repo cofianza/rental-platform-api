@@ -87,6 +87,7 @@ export async function registrarInteresPublico(
     nombre: input.nombre.trim(),
     telefono: input.telefono.trim(),
     email: emailNorm,
+    mensaje: input.mensaje?.trim() || null,
     acepta_datos: true,
     acepta_datos_at: now,
     ip: meta.ip ? meta.ip.slice(0, 45) : null,
@@ -141,7 +142,7 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
     userId: inm.propietario_id,
     tipo: 'interesado.vitrina',
     titulo: 'Nuevo interesado en tu inmueble',
-    mensaje: `${input.nombre} está interesado en ${label}. WhatsApp: ${input.telefono}.`,
+    mensaje: `${input.nombre} está interesado en ${label}. WhatsApp: ${input.telefono}.${input.mensaje?.trim() ? ` Mensaje: ${input.mensaje.trim()}` : ''}`,
     link: '/interesados',
     payload: { inmueble: label, nombre: input.nombre, telefono: input.telefono, email: input.email },
   });
@@ -164,6 +165,7 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
       interesadoTelefono: input.telefono,
       interesadoEmail: input.email,
       inmuebleLabel: label,
+      mensaje: input.mensaje?.trim() || undefined,
       panelUrl: `${env.FRONTEND_URL}/interesados`,
     });
   }
@@ -180,7 +182,7 @@ export async function listInteresados(userId: string, rol: string, query: ListIn
 
   const offset = (query.page - 1) * query.limit;
   let qb = db('inmueble_interesados').select(
-    'id, inmueble_id, nombre, telefono, email, estado, created_at, inmuebles(tipo, ciudad, barrio, direccion, foto_fachada_url)',
+    'id, inmueble_id, nombre, telefono, email, mensaje, estado, created_at, inmuebles(tipo, ciudad, barrio, direccion, foto_fachada_url)',
     { count: 'exact' },
   );
   if (allowed) qb = qb.in('inmueble_id', allowed);
