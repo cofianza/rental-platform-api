@@ -237,7 +237,37 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
   };
 }
 
-export async function notificarCitaCreada(citaId: string, expedienteId: string, fechaPropuesta: string, autoConfirm: boolean, esReprogramacion = false) {
+/**
+ * WhatsApp ADICIONAL con la nota del anunciante para el solicitante (2º mensaje,
+ * solo si hay nota). La plantilla de cita no admite texto libre opcional, por eso
+ * la nota va como mensaje aparte con CITA_NOTA_VISITA. Sanitiza el texto (Meta
+ * rechaza saltos de línea / espacios múltiples en variables).
+ */
+async function enviarNotaVisitaWhatsApp(
+  ctx: { solicitanteTelefono?: string | null; inmuebleDireccion: string; expedienteId: string },
+  primerNombre: string,
+  nota?: string | null,
+) {
+  const n = nota?.trim().replace(/\s+/g, ' ').slice(0, 500);
+  if (!n || !ctx.solicitanteTelefono) return;
+  await enviarTemplateWhatsApp({
+    to: ctx.solicitanteTelefono,
+    template: 'CITA_NOTA_VISITA',
+    variables: [primerNombre, ctx.inmuebleDireccion, n],
+    context: { expediente_id: ctx.expedienteId },
+  });
+}
+
+export async function notificarCitaCreada(
+  citaId: string,
+  expedienteId: string,
+  fechaPropuesta: string,
+  autoConfirm: boolean,
+  esReprogramacion = false,
+  // Nota del anunciante (gestor) para el solicitante — solo en el flujo
+  // "agendar ya confirmada". Se entrega por correo + in-app + WhatsApp.
+  notaParaSolicitante?: string | null,
+) {
   const ctx = await obtenerContextoExpediente(expedienteId);
   if (!ctx) return;
 
@@ -252,6 +282,9 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
     hour12: true,
   });
   const primerNombreSol = ctx.solicitanteNombre.split(' ')[0] || 'Hola';
+  // Nota del anunciante para el aviso in-app (el correo la incluye aparte). Vacío si no hay.
+  const notaTrim = notaParaSolicitante?.trim() || undefined;
+  const notaSuffix = notaTrim ? ` Nota del anunciante: ${notaTrim}` : '';
 
   if (autoConfirm) {
     // Cita creada ya confirmada por propietario/inmobiliaria → notificar al solicitante
@@ -262,13 +295,14 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
         inmueble: ctx.inmuebleDireccion,
         ciudad: ctx.inmuebleCiudad,
         fecha_confirmada: fechaPropuesta,
+        notas_propietario: notaTrim,
       });
     }
     notificarUsuario({
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.confirmada',
       titulo: 'Visita confirmada',
-      mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.`,
+      mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.${notaSuffix}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaPropuesta },
     });
@@ -282,6 +316,8 @@ export async function notificarCitaCreada(citaId: string, expedienteId: string, 
       urlButtons: token ? [token, token] : undefined,
       context: { expediente_id: ctx.expedienteId },
     });
+    // Nota del anunciante como 2º mensaje (misma plantilla que confirmar/reprogramar).
+    await enviarNotaVisitaWhatsApp(ctx, primerNombreSol, notaTrim);
   } else {
     // Cita solicitada → notificar al propietario
     if (ctx.propietarioEmail) {
@@ -371,19 +407,9 @@ async function notificarCitaConfirmada(
   // Nota del dueño en el aviso in-app (el correo ya la incluye). Vacío si no hay.
   const notaSuffix = notasPropietario?.trim() ? ` Nota del anunciante: ${notasPropietario.trim()}` : '';
 
-  // WhatsApp ADICIONAL con la nota del dueño (solo si hay nota). La plantilla de
-  // cita no admite texto libre opcional, así que la nota va como 2º mensaje.
-  // Sanitiza (Meta rechaza saltos de línea / espacios múltiples en variables).
-  const enviarNotaWhatsApp = async () => {
-    const nota = notasPropietario?.trim().replace(/\s+/g, ' ').slice(0, 500);
-    if (!nota || !ctx.solicitanteTelefono) return;
-    await enviarTemplateWhatsApp({
-      to: ctx.solicitanteTelefono,
-      template: 'CITA_NOTA_VISITA',
-      variables: [primerNombre, ctx.inmuebleDireccion, nota],
-      context: { expediente_id: ctx.expedienteId },
-    });
-  };
+  // WhatsApp ADICIONAL con la nota del dueño (solo si hay nota), como 2º mensaje.
+  // Reusa el helper de módulo (misma sanitización y plantilla CITA_NOTA_VISITA).
+  const enviarNotaWhatsApp = () => enviarNotaVisitaWhatsApp(ctx, primerNombre, notasPropietario);
 
   if (reprogramada) {
     await sendCitaReprogramadaSolicitanteEmail({
@@ -660,8 +686,16 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
     { cita_id: created.id, fecha_propuesta: input.fecha_propuesta },
   );
 
-  // Disparar email apropiado segun el origen
-  notificarCitaCreada(created.id, input.expediente_id, input.fecha_propuesta, autoConfirm).catch((e) =>
+  // Disparar email apropiado segun el origen. En "agendar ya confirmada" (gestor)
+  // la nota que escribió se entrega al solicitante por correo + in-app + WhatsApp.
+  notificarCitaCreada(
+    created.id,
+    input.expediente_id,
+    input.fecha_propuesta,
+    autoConfirm,
+    false,
+    autoConfirm ? input.notas_solicitante : undefined,
+  ).catch((e) =>
     logger.warn({ error: e, citaId: created.id }, 'Error al enviar notificacion de cita'),
   );
 
