@@ -14,6 +14,7 @@ import {
   submitFormularioSchema,
   registrarResultadoSchema,
   ejecutarEstudioBodySchema,
+  enviarEnlaceBodySchema,
   certificadoPresignedUrlSchema,
   soportePresignedUrlSchema,
   confirmarSoporteSchema,
@@ -87,11 +88,12 @@ estudiosRouter.patch(
   estudiosController.cancel,
 );
 
-// POST /estudios/:estudioId/enviar-enlace
+// POST /estudios/:estudioId/enviar-enlace — body opcional { email } para
+// corregir el destino si el email del solicitante estaba mal escrito.
 estudiosRouter.post(
   '/:estudioId/enviar-enlace',
   authorize('expedientes', 'update'),
-  validate({ params: estudioIdParamsSchema }),
+  validate({ params: estudioIdParamsSchema, body: enviarEnlaceBodySchema }),
   estudiosController.sendLink,
 );
 

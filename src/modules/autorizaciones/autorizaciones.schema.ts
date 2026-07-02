@@ -13,6 +13,20 @@ export const tokenParamsSchema = z.object({
 });
 
 // ============================================================
+// POST /expedientes/:expedienteId/autorizacion-riesgo/enviar-enlace
+// ============================================================
+
+// Body opcional: corrige el contacto del solicitante si estaba mal escrito.
+// Se persiste en `solicitantes` server-side (así también sirve para el rol
+// propietario, que no tiene PATCH de solicitantes) y el enlace va al corregido.
+export const enviarEnlaceAutorizacionSchema = z
+  .object({
+    email: z.string().email('Email invalido').optional(),
+    telefono: z.string().max(20).optional(),
+  })
+  .optional();
+
+// ============================================================
 // POST /public/autorizar/:token/firmar
 // ============================================================
 
@@ -71,6 +85,7 @@ export const verificarOtpSchema = z.object({
 
 export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type TokenParams = z.infer<typeof tokenParamsSchema>;
+export type EnviarEnlaceAutorizacionInput = z.infer<typeof enviarEnlaceAutorizacionSchema>;
 export type FirmarInput = z.infer<typeof firmarSchema>;
 export type RevocarInput = z.infer<typeof revocarSchema>;
 export type VerificarOtpInput = z.infer<typeof verificarOtpSchema>;

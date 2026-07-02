@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as pagoEstudioService from './pago-estudio.service';
-import type { ExpedienteIdParams, EnviarLinkInput, PagoIdParams, ReconciliarInput } from './pago-estudio.schema';
+import type { ExpedienteIdParams, EnviarLinkInput, ReenviarLinkInput, PagoIdParams, ReconciliarInput } from './pago-estudio.schema';
 
 // GET /expedientes/:expedienteId/pago-estudio/estado
 export async function getEstado(req: Request, res: Response) {
@@ -28,7 +28,14 @@ export async function enviarLink(req: Request, res: Response) {
 // POST /expedientes/:expedienteId/pago-estudio/reenviar
 export async function reenviar(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const result = await pagoEstudioService.reenviarLink(expedienteId, req.user!.id, req.ip);
+  const input = req.body as ReenviarLinkInput;
+  const result = await pagoEstudioService.reenviarLink(
+    expedienteId,
+    req.user!.id,
+    req.ip,
+    input,
+    req.user!.rol,
+  );
   sendSuccess(res, result);
 }
 

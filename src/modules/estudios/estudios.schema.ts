@@ -211,10 +211,21 @@ export const reEvaluarSchema = z.object({
   observaciones: z.string().max(2000, 'Observaciones no deben exceder 2000 caracteres').optional(),
 });
 
+// Body opcional para POST /estudios/:id/enviar-enlace — permite corregir el
+// email del solicitante si estaba mal escrito (se persiste en `solicitantes`
+// y el enlace se envía al corregido).
+export const enviarEnlaceBodySchema = z
+  .object({
+    email: z.email('Email inválido').optional(),
+  })
+  .optional();
+
 // Body opcional para POST /estudios/:id/ejecutar — permite al solicitante
 // enviar/corregir su documento justo antes de ejecutar el estudio.
 export const ejecutarEstudioBodySchema = z.object({
-  tipo_documento: z.enum(['cc', 'nit', 'ce', 'pasaporte']).optional(),
+  // Alineado con TIPO_DOCUMENTO_MAP del provider TransUnion (cc/nit/ce/ti/pasaporte)
+  // — los selects de la web ofrecen 'ti' y antes este enum la rechazaba con 400.
+  tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte']).optional(),
   numero_documento: z
     .string()
     .trim()

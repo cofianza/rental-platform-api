@@ -1,7 +1,12 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as autorizacionesService from './autorizaciones.service';
-import type { FirmarInput, RevocarInput, VerificarOtpInput } from './autorizaciones.schema';
+import type {
+  EnviarEnlaceAutorizacionInput,
+  FirmarInput,
+  RevocarInput,
+  VerificarOtpInput,
+} from './autorizaciones.schema';
 
 // ============================================================
 // Authenticated endpoints
@@ -15,10 +20,13 @@ export async function getAutorizacionStatus(req: Request, res: Response) {
 
 export async function enviarEnlace(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };
+  const contacto = req.body as EnviarEnlaceAutorizacionInput;
   const result = await autorizacionesService.enviarEnlaceAutorizacion(
     expedienteId,
     req.user!.id,
     req.ip,
+    contacto,
+    req.user!.rol,
   );
   sendCreated(res, result);
 }

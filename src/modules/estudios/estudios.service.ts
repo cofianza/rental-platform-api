@@ -556,11 +556,19 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
 // Send self-service link
 // ============================================================
 
-export async function sendSelfServiceLink(estudioId: string, userId: string, ip?: string) {
+export async function sendSelfServiceLink(
+  estudioId: string,
+  userId: string,
+  ip?: string,
+  // Corrección del email del solicitante: si viene y difiere del guardado,
+  // se persiste en `solicitantes` y el enlace se envía al corregido.
+  emailOverride?: string,
+  userRol?: string,
+) {
   // 1. Get estudio with expediente + solicitante
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, expediente_id')
+    .select('id, estado, tipo, expediente_id')
     .eq('id', estudioId)
     .single();
 
@@ -568,7 +576,7 @@ export async function sendSelfServiceLink(estudioId: string, userId: string, ip?
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; estado: string; expediente_id: string };
+  const est = estudio as unknown as { id: string; estado: string; tipo: string; expediente_id: string };
 
   if (ESTADOS_ESTUDIO_FINALIZADOS.includes(est.estado)) {
     throw AppError.badRequest(
@@ -585,10 +593,10 @@ export async function sendSelfServiceLink(estudioId: string, userId: string, ip?
     );
   }
 
-  // 2. Get solicitante email from expediente
+  // 2. Get solicitante email from expediente (+ inmueble para tenant guard)
   const { data: expediente } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('solicitante_id, solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email)')
+    .select('solicitante_id, inmuebles(propietario_id, inmobiliaria_id), solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email)')
     .eq('id', est.expediente_id)
     .single();
 
@@ -598,14 +606,59 @@ export async function sendSelfServiceLink(estudioId: string, userId: string, ip?
 
   const exp = expediente as unknown as {
     solicitante_id: string;
+    inmuebles: { propietario_id: string | null; inmobiliaria_id: string | null } | null;
     solicitantes: { nombre: string; apellido: string; email: string };
   };
 
-  if (!exp.solicitantes?.email) {
+  // 2b. Tenant guard (mismo criterio que ejecutarEstudio): inmobiliaria/
+  // propietario solo sobre estudios de inmuebles que administran — sin esto,
+  // el override de email permitía reescribir el contacto de solicitantes
+  // ajenos y desviar el enlace. Admin/operador pasan.
+  if (userRol === 'inmobiliaria' || userRol === 'propietario') {
+    const esDueno = await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
+      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
+    });
+    if (!esDueno) {
+      throw AppError.forbidden(
+        'No tienes permisos para enviar el enlace de este estudio',
+        'ESTUDIO_FORBIDDEN',
+      );
+    }
+  }
+
+  // Destino: el override (corregido por el gestor) o el registrado.
+  const emailNorm = emailOverride?.trim().toLowerCase();
+  const emailDestino = emailNorm || exp.solicitantes?.email;
+  if (!emailDestino) {
     throw AppError.badRequest(
       'El solicitante no tiene email registrado',
       'SOLICITANTE_SIN_EMAIL',
     );
+  }
+
+  // Si el email cambió, sincronizarlo en `solicitantes` para que los envíos
+  // futuros (autorización, pago, firma) también lleguen al correcto.
+  // OJO: NO persistir para estudios 'con_coarrendatario' — la fila de
+  // `solicitantes` es del TITULAR (mismo criterio que ejecutarEstudio); el
+  // enlace igual se envía al override.
+  if (
+    est.tipo !== 'con_coarrendatario' &&
+    emailNorm &&
+    emailNorm !== (exp.solicitantes?.email ?? '').toLowerCase()
+  ) {
+    const { error: emailUpdError } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .update({ email: emailNorm } as never)
+      .eq('id', exp.solicitante_id);
+    if (emailUpdError) {
+      logger.warn(
+        { error: emailUpdError.message, estudioId, solicitanteId: exp.solicitante_id },
+        'No se pudo actualizar el email del solicitante al enviar enlace (se envía igual al override)',
+      );
+    }
   }
 
   // 3. Generate token
@@ -631,7 +684,7 @@ export async function sendSelfServiceLink(estudioId: string, userId: string, ip?
   const formUrl = `${env.FRONTEND_URL}/estudio/${token}`;
   const nombreCompleto = `${exp.solicitantes.nombre} ${exp.solicitantes.apellido}`;
 
-  await sendEstudioFormEmail(exp.solicitantes.email, nombreCompleto, formUrl, TOKEN_EXPIRY_HOURS);
+  await sendEstudioFormEmail(emailDestino, nombreCompleto, formUrl, TOKEN_EXPIRY_HOURS);
 
   // 6. Audit
   logAudit({
@@ -640,7 +693,7 @@ export async function sendSelfServiceLink(estudioId: string, userId: string, ip?
     entidad: AUDIT_ENTITIES.ESTUDIO,
     entidadId: estudioId,
     detalle: {
-      email: exp.solicitantes.email,
+      email: emailDestino,
       expiration: expiration.toISOString(),
     },
     ip,
@@ -649,7 +702,7 @@ export async function sendSelfServiceLink(estudioId: string, userId: string, ip?
   return {
     estudio: await getEstudioById(estudioId),
     enlace_enviado: true,
-    email_destino: exp.solicitantes.email,
+    email_destino: emailDestino,
   };
 }
 

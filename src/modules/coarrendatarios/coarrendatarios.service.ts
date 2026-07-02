@@ -20,7 +20,11 @@ import {
   notificarResponsableExpediente,
 } from '../notificaciones/notificaciones.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
-import type { InvitarCoarrendatarioInput, AceptarCoarrendatarioInput } from './coarrendatarios.schema';
+import type {
+  InvitarCoarrendatarioInput,
+  AceptarCoarrendatarioInput,
+  ReenviarCoarrendatarioInput,
+} from './coarrendatarios.schema';
 
 const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
@@ -126,6 +130,69 @@ function tokenExpiracion(): string {
 }
 
 /**
+ * Acceso al coarrendatario de un expediente: admin/operador siempre; el
+ * solicitante dueño del expediente; propietario/inmobiliaria dueños del
+ * inmueble. Compartido por invitar / get / reenviar.
+ */
+async function tieneAccesoExpediente(
+  ctx: ExpedienteCtx,
+  userId: string,
+  userRol: string,
+): Promise<boolean> {
+  if (userRol === 'administrador' || userRol === 'operador_analista') return true;
+  if (userRol === 'solicitante') return ctx.solicitante_creado_por === userId;
+  if (userRol === 'propietario' || userRol === 'inmobiliaria') {
+    return perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: ctx.inmueble_propietario_id,
+      inmuebleInmobiliariaId: ctx.inmueble_inmobiliaria_id,
+    });
+  }
+  return false;
+}
+
+/** Correo de invitación al co-arrendatario (usado al invitar y al reenviar). */
+function enviarEmailInvitacionCoarrendatario(opts: {
+  to: string;
+  nombre: string;
+  titularNombre: string;
+  inmuebleStr: string;
+  token: string;
+  expedienteId: string;
+}): void {
+  const link = `${env.FRONTEND_URL}/coarrendatario/${opts.token}`;
+  resend.emails
+    .send({
+      from: FROM,
+      to: opts.to,
+      subject: `${opts.titularNombre} te invita a ser su co-arrendatario en Cofianza`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+          <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 24px;">Invitación a co-arrendar</h1>
+          </div>
+          <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+            <p style="color: #374151; font-size: 16px;">Hola <strong>${opts.nombre}</strong>,</p>
+            <p style="color: #6b7280;"><strong>${opts.titularNombre}</strong> te invita a ser su co-arrendatario para el inmueble en <strong>${opts.inmuebleStr}</strong>.</p>
+            <p style="color: #6b7280;">En Cofianza renta sin fiador. Si aceptas la invitación, evaluaremos tu perfil junto con el de ${opts.titularNombre} y respaldamos a los dos como un solo arrendatario.</p>
+            <div style="text-align: center; margin: 24px 0;">
+              <a href="${link}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Revisar invitación</a>
+            </div>
+            <p style="color: #9ca3af; font-size: 12px;">Si no esperabas esta invitación, puedes ignorar este correo. El enlace expira en ${TOKEN_EXPIRY_DAYS} días.</p>
+          </div>
+        </div>
+      `,
+    })
+    .catch((e) =>
+      logger.warn(
+        { error: e, expedienteId: opts.expedienteId, email: opts.to },
+        'Error enviando email invitacion coarrendatario',
+      ),
+    );
+}
+
+/**
  * Mensaje legible que persistimos en `expedientes.motivo_rechazo` cuando la
  * ponderación titular+coarrendatario rechaza el expediente. Lo lee el banner
  * de cierre del expediente en la web.
@@ -159,18 +226,7 @@ export async function invitarCoarrendatario(
   // 1. Cargar contexto del expediente y validar ownership.
   const ctx = await fetchExpedienteCtx(expedienteId);
 
-  const esAdmin = userRol === 'administrador' || userRol === 'operador_analista';
-  const esSolicitante = userRol === 'solicitante' && ctx.solicitante_creado_por === userId;
-  const esPropietario =
-    (userRol === 'propietario' || userRol === 'inmobiliaria') &&
-    (await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: ctx.inmueble_propietario_id,
-      inmuebleInmobiliariaId: ctx.inmueble_inmobiliaria_id,
-    }));
-
-  if (!esAdmin && !esSolicitante && !esPropietario) {
+  if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
     throw AppError.forbidden(
       'No tienes permisos para invitar a un co-arrendatario en este expediente',
       'COARRENDATARIO_FORBIDDEN',
@@ -230,33 +286,14 @@ export async function invitarCoarrendatario(
   const coa = data as unknown as Coarrendatario;
 
   // 5. Email de invitación — link público con el token.
-  const link = `${env.FRONTEND_URL}/coarrendatario/${token}`;
-  const titularNombre = ctx.solicitante_nombre || 'el solicitante';
-  const inmuebleStr = `${ctx.inmueble_direccion}${ctx.inmueble_ciudad ? `, ${ctx.inmueble_ciudad}` : ''}`;
-
-  resend.emails
-    .send({
-      from: FROM,
-      to: input.email,
-      subject: `${titularNombre} te invita a ser su co-arrendatario en Cofianza`,
-      html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-          <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 24px;">Invitación a co-arrendar</h1>
-          </div>
-          <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
-            <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
-            <p style="color: #6b7280;"><strong>${titularNombre}</strong> te invita a ser su co-arrendatario para el inmueble en <strong>${inmuebleStr}</strong>.</p>
-            <p style="color: #6b7280;">En Cofianza renta sin fiador. Si aceptas la invitación, evaluaremos tu perfil junto con el de ${titularNombre} y respaldamos a los dos como un solo arrendatario.</p>
-            <div style="text-align: center; margin: 24px 0;">
-              <a href="${link}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Revisar invitación</a>
-            </div>
-            <p style="color: #9ca3af; font-size: 12px;">Si no esperabas esta invitación, puedes ignorar este correo. El enlace expira en ${TOKEN_EXPIRY_DAYS} días.</p>
-          </div>
-        </div>
-      `,
-    })
-    .catch((e) => logger.warn({ error: e, expedienteId, email: input.email }, 'Error enviando email invitacion coarrendatario'));
+  enviarEmailInvitacionCoarrendatario({
+    to: input.email,
+    nombre: input.nombre,
+    titularNombre: ctx.solicitante_nombre || 'el solicitante',
+    inmuebleStr: `${ctx.inmueble_direccion}${ctx.inmueble_ciudad ? `, ${ctx.inmueble_ciudad}` : ''}`,
+    token,
+    expedienteId,
+  });
 
   // 6. Notificar al titular para que vea que la invitación se envió.
   if (ctx.solicitante_creado_por) {
@@ -289,18 +326,7 @@ export async function getCoarrendatarioPorExpediente(
 ): Promise<Coarrendatario | null> {
   const ctx = await fetchExpedienteCtx(expedienteId);
 
-  const esAdmin = userRol === 'administrador' || userRol === 'operador_analista';
-  const esSolicitante = userRol === 'solicitante' && ctx.solicitante_creado_por === userId;
-  const esPropietario =
-    (userRol === 'propietario' || userRol === 'inmobiliaria') &&
-    (await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: ctx.inmueble_propietario_id,
-      inmuebleInmobiliariaId: ctx.inmueble_inmobiliaria_id,
-    }));
-
-  if (!esAdmin && !esSolicitante && !esPropietario) {
+  if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
     throw AppError.forbidden('No tienes permisos para ver este expediente', 'EXPEDIENTE_FORBIDDEN');
   }
 
@@ -330,6 +356,101 @@ export async function getCoarrendatarioPorExpediente(
   }
 
   return coa;
+}
+
+// ============================================================
+// 2b. Reenviar la invitación (corrigiendo email/teléfono si venían mal)
+// ============================================================
+//
+// Sin esto, una invitación con el email mal escrito era un callejón sin
+// salida: el enlace nunca llegaba, el unique index bloqueaba re-invitar y
+// solo el invitado (que nunca recibió el correo) podía declinar.
+
+export async function reenviarInvitacionCoarrendatario(
+  expedienteId: string,
+  userId: string,
+  userRol: string,
+  input: ReenviarCoarrendatarioInput,
+): Promise<Coarrendatario> {
+  const ctx = await fetchExpedienteCtx(expedienteId);
+
+  if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
+    throw AppError.forbidden(
+      'No tienes permisos para reenviar esta invitación',
+      'COARRENDATARIO_FORBIDDEN',
+    );
+  }
+
+  // La invitación debe existir y seguir pendiente de aceptación.
+  const { data: coaRow } = await (supabase
+    .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .select('*')
+    .eq('expediente_id', expedienteId)
+    .neq('estado', 'rechazado_invitacion')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const coa = (coaRow as unknown as Coarrendatario) ?? null;
+
+  if (!coa || coa.estado !== 'pendiente_aceptacion') {
+    throw AppError.badRequest(
+      'Solo se puede reenviar una invitación pendiente de aceptación',
+      'COARRENDATARIO_NO_PENDIENTE',
+    );
+  }
+
+  // Mismo guard que al invitar: el coarrendatario no puede ser el titular.
+  const nuevoEmail = input.email?.trim().toLowerCase();
+  if (nuevoEmail && ctx.solicitante_email && nuevoEmail === ctx.solicitante_email.toLowerCase()) {
+    throw AppError.badRequest(
+      'El co-arrendatario no puede ser la misma persona que el solicitante',
+      'COARRENDATARIO_MISMO_EMAIL',
+    );
+  }
+
+  // UPDATE in-place (no insert: el unique index parcial sigue intacto).
+  // Regenerar el token invalida el enlace anterior — si el correo viejo era
+  // de otra persona, esa persona ya no puede aceptar.
+  const token = generateToken();
+  const { data: updRow, error: updError } = await (supabase
+    .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      ...(nuevoEmail ? { email: nuevoEmail } : {}),
+      ...(input.telefono ? { telefono: input.telefono } : {}),
+      token,
+      token_expiracion: tokenExpiracion(),
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', coa.id)
+    .eq('estado', 'pendiente_aceptacion')
+    .select('*')
+    .single();
+
+  if (updError || !updRow) {
+    logger.error(
+      { error: updError?.message, expedienteId, coarrendatarioId: coa.id },
+      'Error al reenviar invitación de coarrendatario',
+    );
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al reenviar la invitación');
+  }
+
+  const actualizado = updRow as unknown as Coarrendatario;
+
+  enviarEmailInvitacionCoarrendatario({
+    to: actualizado.email,
+    nombre: actualizado.nombre,
+    titularNombre: ctx.solicitante_nombre || 'el solicitante',
+    inmuebleStr: `${ctx.inmueble_direccion}${ctx.inmueble_ciudad ? `, ${ctx.inmueble_ciudad}` : ''}`,
+    token,
+    expedienteId,
+  });
+
+  logger.info(
+    { expedienteId, coarrendatarioId: actualizado.id, email: actualizado.email },
+    'Invitación de coarrendatario reenviada',
+  );
+
+  return actualizado;
 }
 
 // ============================================================

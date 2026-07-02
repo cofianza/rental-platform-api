@@ -6,6 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import { env } from '@/config';
 import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
 
@@ -98,6 +99,8 @@ interface ExpedienteInfo {
     direccion: string;
     ciudad: string;
     barrio: string | null;
+    propietario_id: string | null;
+    inmobiliaria_id: string | null;
   };
 }
 
@@ -149,11 +152,15 @@ export async function enviarEnlaceAutorizacion(
   expedienteId: string,
   userId: string,
   ip?: string,
+  // Corrección del contacto del solicitante: si viene y difiere, se persiste
+  // en `solicitantes` y el enlace (email + WhatsApp) va al corregido.
+  contacto?: { email?: string; telefono?: string },
+  userRol?: string,
 ) {
   // 1. Get expediente with solicitante + inmueble
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento), inmuebles(id, direccion, ciudad, barrio)')
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento), inmuebles(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
     .eq('id', expedienteId)
     .single();
 
@@ -162,6 +169,53 @@ export async function enviarEnlaceAutorizacion(
   }
 
   const exp = expediente as unknown as ExpedienteInfo;
+
+  // 0b. Tenant guard: propietario/inmobiliaria solo pueden operar sobre
+  // expedientes de un inmueble que administran. Sin esto, cualquier usuario
+  // con ese rol podía redirigir el enlace (y ahora reescribir el contacto)
+  // de solicitantes ajenos conociendo el expedienteId. Admin/operador pasan.
+  if (userRol === 'propietario' || userRol === 'inmobiliaria') {
+    const esDueno = await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
+      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
+    });
+    if (!esDueno) {
+      throw AppError.forbidden(
+        'No tienes permisos para enviar la autorización de este expediente',
+        'AUTORIZACION_FORBIDDEN',
+      );
+    }
+  }
+
+  // 1a. Aplicar la corrección de contacto si vino en el body. El teléfono
+  // solo cuenta si trae dígitos reales (el PhoneInput de la web deja '+57 '
+  // cuando se borra el número).
+  const emailNuevo = contacto?.email?.trim().toLowerCase();
+  const telNuevo =
+    contacto?.telefono && contacto.telefono.replace(/\D/g, '').replace(/^57/, '').length >= 7
+      ? contacto.telefono.trim()
+      : undefined;
+  const cambiaEmail = !!emailNuevo && emailNuevo !== (exp.solicitantes?.email ?? '').toLowerCase();
+  const cambiaTel = !!telNuevo && telNuevo !== (exp.solicitantes?.telefono ?? '');
+  if ((cambiaEmail || cambiaTel) && exp.solicitante_id) {
+    const { error: contactoError } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        ...(cambiaEmail ? { email: emailNuevo } : {}),
+        ...(cambiaTel ? { telefono: telNuevo } : {}),
+      } as never)
+      .eq('id', exp.solicitante_id);
+    if (contactoError) {
+      logger.warn(
+        { error: contactoError.message, expedienteId },
+        'No se pudo actualizar el contacto del solicitante (el enlace se envía igual al corregido)',
+      );
+    }
+    if (cambiaEmail && exp.solicitantes) exp.solicitantes.email = emailNuevo!;
+    if (cambiaTel && exp.solicitantes) exp.solicitantes.telefono = telNuevo!;
+  }
 
   if (!exp.solicitantes?.email) {
     throw AppError.badRequest('El solicitante no tiene email registrado', 'SOLICITANTE_SIN_EMAIL');

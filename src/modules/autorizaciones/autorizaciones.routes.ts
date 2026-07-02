@@ -9,6 +9,7 @@ import {
 import {
   expedienteIdParamsSchema,
   tokenParamsSchema,
+  enviarEnlaceAutorizacionSchema,
   firmarSchema,
   revocarSchema,
   verificarOtpSchema,
@@ -35,10 +36,12 @@ expedienteAutorizacionRouter.get(
 // roleGuard (no authorize('expedientes','update')): el propietario gestiona el
 // estudio de su candidato y su UI ofrece "Enviar/Reenviar enlace", pero darle
 // expedientes:update abriría una docena de rutas que no le corresponden.
+// Body opcional { email?, telefono? }: corrige el contacto del solicitante si
+// estaba mal escrito (se persiste server-side y el enlace va al corregido).
 expedienteAutorizacionRouter.post(
   '/enviar-enlace',
   roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
-  validate({ params: expedienteIdParamsSchema }),
+  validate({ params: expedienteIdParamsSchema, body: enviarEnlaceAutorizacionSchema }),
   autorizacionesController.enviarEnlace,
 );
 

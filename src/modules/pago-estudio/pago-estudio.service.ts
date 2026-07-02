@@ -18,14 +18,21 @@ import { transitionPagoState } from '@/modules/pagos/pago-state-machine';
 import { attachFacturas } from '@/modules/pagos/pagos.service';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
-import type { EnviarLinkInput } from './pago-estudio.schema';
+import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import type { EnviarLinkInput, ReenviarLinkInput } from './pago-estudio.schema';
 
 /**
  * WhatsApp con el link de pago al solicitante del expediente (refuerzo del
  * correo). Fire-and-forget: enviarTemplate ya traga errores y sin teléfono
- * simplemente no envía.
+ * simplemente no envía. `telefonoOverride` (del form de enviar-link) tiene
+ * prioridad sobre el teléfono registrado del solicitante.
  */
-async function enviarLinkPagoWhatsApp(expedienteId: string, montoFormateado: string, linkUrl: string) {
+async function enviarLinkPagoWhatsApp(
+  expedienteId: string,
+  montoFormateado: string,
+  linkUrl: string,
+  telefonoOverride?: string | null,
+) {
   const { data: exp } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('solicitante_id, solicitantes(nombre, telefono)')
@@ -33,11 +40,22 @@ async function enviarLinkPagoWhatsApp(expedienteId: string, montoFormateado: str
     .maybeSingle();
   const sol = (exp as { solicitantes?: { nombre?: string | null; telefono?: string | null } } | null)?.solicitantes;
   await enviarTemplate({
-    to: sol?.telefono ?? null,
+    to: telefonoOverride ?? sol?.telefono ?? null,
     template: 'PAGO_ESTUDIO_LINK',
     variables: [sol?.nombre || 'Hola', montoFormateado, linkUrl],
     context: { expediente_id: expedienteId },
   });
+}
+
+/**
+ * El PhoneInput de la web emite '+57 ' (truthy) cuando el usuario borra el
+ * número — solo tratamos el teléfono como override si tiene dígitos reales
+ * más allá del indicativo.
+ */
+function telefonoOverrideValido(telefono?: string): string | undefined {
+  if (!telefono) return undefined;
+  const digits = telefono.replace(/\D/g, '').replace(/^57/, '');
+  return digits.length >= 7 ? telefono : undefined;
 }
 
 // ============================================================
@@ -423,7 +441,9 @@ export async function enviarLinkPago(
   }
 
   // WhatsApp con el link al solicitante (refuerzo del correo) — fire-and-forget.
-  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), linkResult.url).catch((err) =>
+  // El teléfono escrito en el form tiene prioridad sobre el registrado (antes
+  // se aceptaba en el schema pero se ignoraba — dato muerto).
+  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), linkResult.url, telefonoOverrideValido(input.telefono)).catch((err) =>
     logger.warn({ err, expedienteId }, 'No se pudo enviar el WhatsApp del link de pago'),
   );
 
@@ -458,7 +478,37 @@ export async function enviarLinkPago(
 // Reenviar link — POST /reenviar
 // ============================================================
 
-export async function reenviarLink(expedienteId: string, userId: string, ip?: string) {
+export async function reenviarLink(
+  expedienteId: string,
+  userId: string,
+  ip?: string,
+  input?: ReenviarLinkInput,
+  userRol?: string,
+) {
+  // Tenant guard: propietario/inmobiliaria solo sobre expedientes de inmuebles
+  // que administran — sin esto, el override permitía reescribir el email del
+  // pagador de otro tenant y desviar su link de pago. Admin/operador pasan.
+  if (userRol === 'propietario' || userRol === 'inmobiliaria') {
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('inmuebles(propietario_id, inmobiliaria_id)')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const inm = (expRow as { inmuebles?: { propietario_id: string | null; inmobiliaria_id: string | null } } | null)?.inmuebles;
+    const esDueno = await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: inm?.propietario_id ?? null,
+      inmuebleInmobiliariaId: inm?.inmobiliaria_id ?? null,
+    });
+    if (!esDueno) {
+      throw AppError.forbidden(
+        'No tienes permisos para reenviar el link de pago de este expediente',
+        'PAGO_ESTUDIO_FORBIDDEN',
+      );
+    }
+  }
+
   const pago = await findPagoEstudio(expedienteId);
   if (!pago) throw AppError.notFound('No existe un pago de estudio para este expediente');
   if ((pago.estado as string) !== 'pendiente') {
@@ -468,12 +518,38 @@ export async function reenviarLink(expedienteId: string, userId: string, ip?: st
     throw AppError.badRequest('Este pago no tiene link o email asociado', 'NO_PAYMENT_LINK');
   }
 
+  // Corrección del destinatario: si vienen email/nombre nuevos, se persisten
+  // en la fila `pagos` y el MISMO link se reenvía al contacto corregido (la
+  // preference de Mercado Pago no está atada al email — no hay que recrearla).
+  const emailNuevo = input?.email_pagador?.trim().toLowerCase();
+  const nombreNuevo = input?.nombre_pagador?.trim();
+  const emailDestino = emailNuevo || (pago.email_pagador as string);
+  const nombreDestino = nombreNuevo || (pago.nombre_pagador as string) || '';
+  const cambioContacto =
+    (!!emailNuevo && emailNuevo !== (pago.email_pagador as string).toLowerCase()) ||
+    (!!nombreNuevo && nombreNuevo !== ((pago.nombre_pagador as string) || ''));
+  if (cambioContacto) {
+    const { error: updError } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        ...(emailNuevo ? { email_pagador: emailNuevo } : {}),
+        ...(nombreNuevo ? { nombre_pagador: nombreNuevo } : {}),
+      } as never)
+      .eq('id', pago.id as string);
+    if (updError) {
+      logger.warn(
+        { error: updError.message, pagoId: pago.id },
+        'No se pudo actualizar el contacto del pagador (se reenvía igual al corregido)',
+      );
+    }
+  }
+
   const exp = await getExpedienteWithInmueble(expedienteId);
   const monto = pago.monto as number;
 
   await sendPaymentLinkEmail(
-    pago.email_pagador as string,
-    (pago.nombre_pagador as string) || '',
+    emailDestino,
+    nombreDestino,
     pago.payment_link_url as string,
     {
       concepto: 'Estudio de arrendamiento',
@@ -488,7 +564,11 @@ export async function reenviarLink(expedienteId: string, userId: string, ip?: st
       pago_id: pago.id as string,
       tipo: 'link_sent',
       origen: 'system',
-      detalles: { email: pago.email_pagador, reenviado_por: userId },
+      detalles: {
+        email: emailDestino,
+        reenviado_por: userId,
+        ...(cambioContacto ? { email_anterior: pago.email_pagador } : {}),
+      },
     } as never);
 
   // WhatsApp con el link al solicitante (refuerzo del correo) — fire-and-forget.
@@ -501,11 +581,14 @@ export async function reenviarLink(expedienteId: string, userId: string, ip?: st
     accion: AUDIT_ACTIONS.PAGO_LINK_RESENT,
     entidad: AUDIT_ENTITIES.PAGO,
     entidadId: pago.id as string,
-    detalle: { email: pago.email_pagador },
+    detalle: {
+      email: emailDestino,
+      ...(cambioContacto ? { email_anterior: pago.email_pagador } : {}),
+    },
     ip,
   });
 
-  return { message: `Link reenviado a ${pago.email_pagador}` };
+  return { message: `Link reenviado a ${emailDestino}` };
 }
 
 // ============================================================

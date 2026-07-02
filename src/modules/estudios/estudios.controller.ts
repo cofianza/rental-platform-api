@@ -70,7 +70,14 @@ export async function cancel(req: Request, res: Response) {
 
 export async function sendLink(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const result = await estudiosService.sendSelfServiceLink(estudioId, req.user!.id, req.ip);
+  const emailOverride = (req.body as { email?: string } | undefined)?.email;
+  const result = await estudiosService.sendSelfServiceLink(
+    estudioId,
+    req.user!.id,
+    req.ip,
+    emailOverride,
+    req.user!.rol,
+  );
   sendSuccess(res, result);
 }
 

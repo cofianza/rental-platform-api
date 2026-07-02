@@ -5,6 +5,7 @@ import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from '../expedientes/expedientes.schema';
 import {
   invitarCoarrendatarioSchema,
+  reenviarCoarrendatarioSchema,
   tokenParamSchema,
   aceptarCoarrendatarioSchema,
 } from './coarrendatarios.schema';
@@ -21,6 +22,16 @@ expedienteCoarrendatariosRouter.post(
   roleGuard(['solicitante', 'propietario', 'inmobiliaria', 'administrador', 'operador_analista']),
   validate({ params: expedienteIdParamsSchema, body: invitarCoarrendatarioSchema }),
   controller.invitar,
+);
+
+// POST /api/v1/expedientes/:id/coarrendatario/reenviar — reenviar la invitación
+// pendiente, corrigiendo email/teléfono si venían mal escritos.
+expedienteCoarrendatariosRouter.post(
+  '/:id/coarrendatario/reenviar',
+  authMiddleware,
+  roleGuard(['solicitante', 'propietario', 'inmobiliaria', 'administrador', 'operador_analista']),
+  validate({ params: expedienteIdParamsSchema, body: reenviarCoarrendatarioSchema }),
+  controller.reenviar,
 );
 
 // GET /api/v1/expedientes/:id/coarrendatario — ver el coarrendatario actual.

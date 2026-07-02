@@ -575,6 +575,30 @@ export async function reenviarSolicitudFirma(
   const cambiaEmail =
     !!emailNuevoNormalizado && emailNuevoNormalizado !== emailActualNormalizado;
 
+  // Guard multi-parte: la rama de re-upload construye un signProfile de UN
+  // solo firmante. Si el contrato tiene sobre multi-parte (filas en
+  // contrato_firmantes), re-subir por aquí lo corrompería — el cambio de
+  // contacto de un firmante multi-parte requiere recrear el sobre completo.
+  if (cambiaEmail) {
+    const { count: firmantesMultiparte, error: fmError } = await (supabase
+      .from('contrato_firmantes' as string) as ReturnType<typeof supabase.from>)
+      .select('id', { count: 'exact', head: true })
+      .eq('contrato_id', row.contrato_id);
+    // Fail-closed: si no pudimos verificar, NO arriesgamos corromper un sobre
+    // multi-parte con un re-upload de un solo firmante.
+    if (fmError) {
+      logger.error({ error: fmError.message, contratoId: row.contrato_id }, 'No se pudo verificar si el contrato es multi-parte');
+      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el tipo de firma del contrato. Intenta de nuevo.');
+    }
+    if ((firmantesMultiparte ?? 0) > 0) {
+      throw AppError.badRequest(
+        'Este contrato usa firma multi-parte (un solo sobre para todos los firmantes). ' +
+          'No se puede cambiar el correo de un firmante por esta vía — contacta a soporte para recrear el sobre.',
+        'FIRMA_MULTIPARTE_NO_EMAIL_OVERRIDE',
+      );
+    }
+  }
+
   let nuevoAucoDocumentCode: string | null = row.auco_document_code;
   // Para decidir si enviar email de fallback al final: si Auco WhatsApp
   // sigue activo, no enviamos. Por defecto asumimos activo si la solicitud

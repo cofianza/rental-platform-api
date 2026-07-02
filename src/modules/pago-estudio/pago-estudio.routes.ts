@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, authorize } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { expedienteIdParamsSchema, enviarLinkSchema, pagoIdParamsSchema, reconciliarSchema } from './pago-estudio.schema';
+import { expedienteIdParamsSchema, enviarLinkSchema, reenviarLinkSchema, pagoIdParamsSchema, reconciliarSchema } from './pago-estudio.schema';
 import * as controller from './pago-estudio.controller';
 
 // ============================================================
@@ -32,10 +32,13 @@ pagoEstudioRouter.post(
   controller.enviarLink,
 );
 
+// Body opcional { email_pagador?, nombre_pagador? } para corregir el destino
+// si el email quedó mal escrito (no se puede re-crear el link: hay un pago
+// pendiente activo que bloquea /enviar-link con 409).
 pagoEstudioRouter.post(
   '/reenviar',
   authorize('pagos', 'update'),
-  validate({ params: expedienteIdParamsSchema }),
+  validate({ params: expedienteIdParamsSchema, body: reenviarLinkSchema }),
   controller.reenviar,
 );
 
