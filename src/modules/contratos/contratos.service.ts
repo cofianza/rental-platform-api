@@ -1166,6 +1166,10 @@ async function notificarPartesContratoVigente(
 export async function enviarContratoAFirma(
   contratoId: string,
   userId: string,
+  // Trazabilidad cuando el envio llega desde la transicion del workflow
+  // (ContratoTransicionModal): comentario obligatorio del usuario + motivo,
+  // y una descripcion de origen para el historial.
+  opts?: { comentario?: string | null; motivo?: string | null; descripcion?: string },
 ): Promise<{ ok: true; message: string }> {
   const { data: contratoRow } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
@@ -1209,7 +1213,9 @@ export async function enviarContratoAFirma(
         contrato_id: contratoId,
         estado_anterior: estadoPrevio,
         estado_nuevo: 'pendiente_firma',
-        descripcion: 'Enviado a firma desde la pestaña Contratos',
+        descripcion: opts?.descripcion ?? 'Enviado a firma desde la pestaña Contratos',
+        comentario: opts?.comentario ?? null,
+        motivo: opts?.motivo ?? null,
         usuario_id: userId,
       } as never);
   }

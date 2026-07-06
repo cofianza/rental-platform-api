@@ -9,7 +9,7 @@ import {
   type EstadoContrato,
   type ContratoPreconditionId,
 } from './contrato-state-machine';
-import { getContratoById } from './contratos.service';
+import { getContratoById, enviarContratoAFirma } from './contratos.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { ContratoTransitionInput } from './contrato-workflow.schema';
@@ -62,6 +62,37 @@ export async function executeContratoTransition(
   // Verificar precondiciones
   const transitionDef = getContratoTransitionDef(currentState, targetState)!;
   await checkPreconditions(transitionDef.preconditions, contrato, input);
+
+  // 4.2 — "Enviar a firma" NO es una transicion pasiva: marcar pendiente_firma
+  // sin crear el sobre dejaria el contrato "enviado" sin que ningun firmante
+  // reciba nada (el mismo sintoma del bug 4.2, por otro camino). Delegamos en
+  // la accion real de envio, que valida los datos de los firmantes, crea el
+  // sobre en Auco, registra el historial y REVIERTE el estado si el envio
+  // falla. Los checks de permisos/precondiciones de arriba ya corrieron.
+  if (targetState === 'pendiente_firma') {
+    // Conservar la trazabilidad de la transicion: el comentario (obligatorio
+    // en el modal) y el motivo viajan al historial, y se emite el mismo audit
+    // CONTRATO_TRANSITIONED que las demas transiciones manuales.
+    await enviarContratoAFirma(contratoId, user.id, {
+      comentario: input.comentario,
+      motivo: input.motivo || null,
+      descripcion: buildDescription(currentState, targetState, user, input),
+    });
+    logAudit({
+      usuarioId: user.id,
+      accion: AUDIT_ACTIONS.CONTRATO_TRANSITIONED,
+      entidad: AUDIT_ENTITIES.CONTRATO,
+      entidadId: contratoId,
+      detalle: {
+        estado_anterior: currentState,
+        estado_nuevo: targetState,
+        comentario: input.comentario,
+        motivo: input.motivo || null,
+      },
+    });
+    const contratoEnviado = await getContratoById(contratoId);
+    return { ...(contratoEnviado as Record<string, unknown>), estado_anterior: currentState };
+  }
 
   // Construir descripcion del evento
   const descripcion = buildDescription(currentState, targetState, user, input);
