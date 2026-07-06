@@ -874,27 +874,22 @@ export async function listContratosByExpediente(
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener contratos');
   }
 
-  // Self-heal automatico (decision Mario 5-may-2026: NO auto-generar el
-  // contrato cuando hay 0; el propietario decide duracion + fecha desde
-  // AccionContratoPendienteCard). Casos restantes:
-  // - 1 contrato 'borrador' con PDF -> auto-disparamos la firma. La generacion
-  //   fue explicita del propietario; aqui solo encadenamos al envio a Auco.
-  //   dispatchAutoFirma es idempotente (chequea solicitudes_firma existentes).
+  // Self-heal automatico POST-firma. IMPORTANTE (tarea 4.2, jul-2026): este GET
+  // (listar contratos del expediente) ya NO dispara el envio a firma. Antes, si
+  // habia 1 contrato 'borrador' con PDF, con solo VER/listar los contratos se
+  // auto-enviaba a Auco mediante un fire-and-forget que ademas TRAGABA los
+  // errores (su catch solo logueaba): el estado saltaba a 'pendiente_firma' sin
+  // accion expresa del usuario y quedaba "enviado" aunque el envio hubiera
+  // fallado (arrendatario sin contacto, Auco caido, links rotos por
+  // FRONTEND_URL). El envio a firma ahora ocurre SOLO por la accion explicita
+  // "Enviar a firma" (enviarContratoAFirma), que valida el contacto del
+  // firmante, propaga el error al usuario y revierte el estado si falla.
+  // Aqui solo quedan los self-heal que avanzan un contrato YA firmado:
   // - Contrato en 'pendiente_firma' pero todas las solicitudes ya estan
   //   firmadas -> destrabar la UI moviendo el contrato a 'firmado'.
   // - Contrato 'firmado' -> activar a 'vigente' y cerrar el expediente.
   const lista = (data ?? []) as Array<{ id: string; estado: string; storage_key?: string | null; created_at: string }>;
-  if (lista.length === 1 && lista[0].estado === 'borrador' && lista[0].storage_key) {
-    logger.info(
-      {
-        expedienteId,
-        contratoId: lista[0].id,
-        trigger: 'listContratosByExpediente',
-      },
-      'Auto-firma trigger: contrato borrador detectado en listado',
-    );
-    void maybeAutoFirmaExistente(expedienteId, lista[0].id, lista[0].created_at);
-  } else if (lista.length > 0) {
+  if (lista.length > 0) {
     // Caso 3: revisar si hay contrato pendiente_firma con todas las
     // solicitudes firmadas. Solo necesitamos mirar el contrato mas reciente.
     const pendienteFirma = lista.find((c) => c.estado === 'pendiente_firma');
@@ -902,8 +897,7 @@ export async function listContratosByExpediente(
       void maybeAutoTransicionarFirmado(pendienteFirma.id);
     }
     // Caso 4: contrato en 'firmado' (post-firma exitosa) -> activar a
-    // 'vigente' y cerrar el expediente. El usuario quiere todo el
-    // pipeline automatico hasta el final, sin intervencion manual.
+    // 'vigente' y cerrar el expediente.
     const firmado = lista.find((c) => c.estado === 'firmado');
     if (firmado) {
       void maybeAutoActivarVigente(firmado.id, expedienteId);
@@ -1159,81 +1153,15 @@ async function notificarPartesContratoVigente(
   }
 }
 
-async function maybeAutoFirmaExistente(
-  expedienteId: string,
-  contratoId: string,
-  _contratoCreatedAt: string,
-): Promise<void> {
-  // ID unico de invocacion para correlacionar logs entre disparos concurrentes.
-  // Si vemos dos invocaciones casi simultaneas con distintos invocationId, sabemos
-  // exactamente cuantos hilos pasaron y cual gano la carrera del lock.
-  const invocationId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const startedAt = Date.now();
-
-  // Lock ANTES del SELECT — si no, dos requests simultaneos hacen check (ambos
-  // ven el lock libre) → SELECT (~100ms) → ambos llegan al `add()` → ambos
-  // suben a Auco. Lo vimos en EXP-2026-0009: 2 docs Auco para el mismo
-  // contrato (5DTIYSH0FO + MC7VV38CGB en 322ms de diferencia). El lock
-  // memoriza por expedienteId, asi que la 2da llamada concurrente exit-early
-  // mientras la 1ra termina el dispatch.
-  if (autoGenInflight.has(expedienteId)) {
-    logger.info(
-      { expedienteId, contratoId, invocationId },
-      'Auto-firma: skip — lock ya tomado por otra invocacion concurrente',
-    );
-    return;
-  }
-  autoGenInflight.add(expedienteId);
-  logger.info(
-    { expedienteId, contratoId, invocationId },
-    'Auto-firma: lock adquirido, comenzando',
-  );
-
-  try {
-    // Guard: solo expedientes 'aprobado'/'condicionado' (mismo que generacion).
-    const { data: exp } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id, estado')
-      .eq('id', expedienteId)
-      .maybeSingle();
-    const estado = (exp as { estado?: string } | null)?.estado;
-    if (estado !== 'aprobado' && estado !== 'condicionado') {
-      logger.info(
-        { expedienteId, contratoId, invocationId, estado },
-        'Auto-firma: skip — expediente no esta en estado terminal pre-firma',
-      );
-      return;
-    }
-
-    logger.info(
-      { expedienteId, contratoId, invocationId },
-      'Auto-firma: contrato en borrador detectado — disparando envio a Auco',
-    );
-
-    await dispatchAutoFirma(contratoId, expedienteId, invocationId);
-
-    logger.info(
-      { expedienteId, contratoId, invocationId, duracionMs: Date.now() - startedAt },
-      'Auto-firma: dispatch completado',
-    );
-  } catch (err) {
-    logger.error(
-      { contratoId, expedienteId, invocationId, err: err instanceof Error ? err.message : String(err) },
-      'Auto-firma: error en dispatch para contrato existente',
-    );
-  } finally {
-    autoGenInflight.delete(expedienteId);
-  }
-}
-
 /**
- * Envío MANUAL a firma desde la pestaña Contratos ("Enviar a firma").
- * A diferencia de dispatchAutoFirma (fire-and-forget que traga errores), esta
- * PROPAGA los errores para que el botón muestre el motivo (falta teléfono del
- * firmante, Auco caído, etc.). Lleva el contrato a 'pendiente_firma' (salto
- * directo, como el flujo automático) y dispara el envío (multi-parte si el flag
- * está ON; si no, un solo firmante con los datos del solicitante). Idempotente:
- * si ya hay una solicitud activa, no duplica.
+ * Envío a firma desde la pestaña Contratos ("Enviar a firma"). Es el ÚNICO
+ * punto que envía un contrato a firma: ocurre solo por acción explícita del
+ * usuario (tarea 4.2 — antes un GET de listado lo auto-disparaba). PROPAGA los
+ * errores para que el botón muestre el motivo (falta teléfono/email del
+ * firmante, Auco caído, etc.) y REVIERTE el estado si el envío falla. Lleva el
+ * contrato a 'pendiente_firma' y dispara el envío (multi-parte si el flag está
+ * ON; si no, un solo firmante con los datos del solicitante). Idempotente: si
+ * ya hay una solicitud activa, no duplica.
  */
 export async function enviarContratoAFirma(
   contratoId: string,
@@ -1343,141 +1271,6 @@ export async function enviarContratoAFirma(
 
   logger.info({ contratoId, userId }, 'Contrato enviado a firma manualmente');
   return { ok: true, message: 'Contrato enviado a firma.' };
-}
-
-async function dispatchAutoFirma(contratoId: string, expedienteId: string, invocationId?: string): Promise<void> {
-  const dispatchStartedAt = Date.now();
-  try {
-    // Guard de idempotencia: si ya existe una solicitud de firma activa
-    // para este contrato, no creamos una segunda. Solo cuenta como
-    // "existente" si esta en un estado activo — los terminales (cancelado/
-    // firmado/expirado) si permiten re-intento.
-    const { data: existingSol } = await (supabase
-      .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-      .select('id, estado, auco_document_code, created_at')
-      .eq('contrato_id', contratoId)
-      .in('estado', ['enviado', 'abierto']);
-    if (existingSol && existingSol.length > 0) {
-      logger.info(
-        { contratoId, expedienteId, invocationId, count: existingSol.length, existing: existingSol },
-        'Auto-firma: ya existe solicitud_firma activa para este contrato — skip',
-      );
-      return;
-    }
-    logger.info(
-      { contratoId, expedienteId, invocationId },
-      'Auto-firma: idempotency check passed (0 solicitudes activas), procediendo a Auco',
-    );
-
-    // 1. Obtener solicitante (firmante) e inmueble para mensaje a Auco
-    const { data: expRow } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select(`
-        id, solicitante_id, inmueble_id,
-        solicitante:solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email, telefono),
-        inmueble:inmuebles!expedientes_inmueble_id_fkey(propietario_id)
-      `)
-      .eq('id', expedienteId)
-      .single();
-
-    const exp = expRow as unknown as {
-      id: string;
-      solicitante_id: string | null;
-      inmueble_id: string | null;
-      solicitante: { nombre: string; apellido: string; email: string; telefono: string | null } | null;
-      inmueble: { propietario_id: string } | null;
-    } | null;
-
-    if (!exp?.solicitante?.email) {
-      logger.warn(
-        { expedienteId, contratoId },
-        'Auto-firma: solicitante sin email — no se puede enviar a Auco',
-      );
-      return;
-    }
-    if (!exp.inmueble?.propietario_id) {
-      logger.warn(
-        { expedienteId, contratoId },
-        'Auto-firma: inmueble sin propietario_id — no hay enviado_por valido',
-      );
-      return;
-    }
-
-    // 2. Saltar contrato directamente a 'pendiente_firma'.
-    //    Hacemos UPDATE directo (no via RPC executeContratoTransition)
-    //    porque la state-machine exige user real con permisos. Aqui es
-    //    flujo system, registramos el cambio en contrato_historial_estados.
-    const { error: updErr } = await (supabase
-      .from('contratos' as string) as ReturnType<typeof supabase.from>)
-      .update({ estado: 'pendiente_firma', updated_at: new Date().toISOString() } as never)
-      .eq('id', contratoId)
-      .eq('estado', 'borrador'); // guard: si alguien ya lo movio, no pisamos
-
-    if (updErr) {
-      logger.error({ contratoId, err: updErr.message }, 'Auto-firma: error transicionando contrato a pendiente_firma');
-      return;
-    }
-
-    await (supabase
-      .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
-      .insert({
-        contrato_id: contratoId,
-        estado_anterior: 'borrador',
-        estado_nuevo: 'pendiente_firma',
-        descripcion: 'Auto-envio a firma tras aprobacion de estudio (flujo system)',
-        comentario: 'Generacion y envio automatico — sin intervencion del propietario',
-        usuario_id: null,
-      } as never);
-
-    // 3. Crear el sobre de firma en Auco.
-    //    Multi-parte (flag ON): un solo documento con arrendatario + arrendador
-    //    + Cofianza. Por defecto (flag OFF): un solo firmante (arrendatario),
-    //    flujo histórico intacto.
-    if (env.FIRMA_MULTIPARTE_ENABLED) {
-      const { crearSolicitudFirmaMultiparte } = await import('@/modules/firma/firma-multiparte.service');
-      await crearSolicitudFirmaMultiparte(contratoId, exp.inmueble.propietario_id);
-    } else {
-      const { crearSolicitudFirma } = await import('@/modules/firma/firma.service');
-      const nombreFirmante = `${exp.solicitante.nombre} ${exp.solicitante.apellido}`.trim();
-
-      await crearSolicitudFirma(
-        {
-          contrato_id: contratoId,
-          nombre_firmante: nombreFirmante,
-          email_firmante: exp.solicitante.email,
-          telefono_firmante: exp.solicitante.telefono || undefined,
-          enviar_sms: false,
-        },
-        // El enviado_por es el propietario del inmueble (responsable
-        // contractual). Cumple el FK NOT NULL a perfiles.
-        exp.inmueble.propietario_id,
-      );
-    }
-
-    logger.info(
-      { contratoId, expedienteId, invocationId, duracionMs: Date.now() - dispatchStartedAt },
-      'Auto-firma: solicitud Auco creada y email enviado al solicitante',
-    );
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    // Si la BD rechazo el INSERT por violacion del unique partial index
-    // `solicitudes_firma_contrato_activa_unique`, otra request gano la
-    // carrera y ya creo la solicitud — no es error real, downgrade a info.
-    const esRaceCondition =
-      errMsg.includes('solicitudes_firma_contrato_activa_unique') ||
-      (errMsg.includes('duplicate key') && errMsg.includes('contrato_id'));
-    if (esRaceCondition) {
-      logger.info(
-        { contratoId, expedienteId, invocationId, errMsg },
-        'Auto-firma: race detectado — otra request ya creo la solicitud, skip',
-      );
-      return;
-    }
-    logger.error(
-      { contratoId, expedienteId, invocationId, err: errMsg, duracionMs: Date.now() - dispatchStartedAt },
-      'Auto-firma: fallo el envio automatico a firma — el propietario podra disparar manualmente',
-    );
-  }
 }
 
 // ============================================================
