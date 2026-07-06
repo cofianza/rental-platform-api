@@ -24,7 +24,10 @@ export async function getById(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const input = req.body as CreateApplicantInput;
-  const applicant = await solicitantesService.createApplicant(input, req.user!.id, req.ip);
+  // userRol: acota la reutilizacion por documento al alcance del actor —
+  // propietario/inmobiliaria solo reutilizan sus propias fichas (evita fuga
+  // cross-tenant de PII). Admin/operador reutilizan cualquiera.
+  const applicant = await solicitantesService.createApplicant(input, req.user!.id, req.ip, req.user?.rol);
   sendCreated(res, applicant);
 }
 

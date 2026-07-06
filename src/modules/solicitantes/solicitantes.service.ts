@@ -144,20 +144,38 @@ export async function getApplicantById(id: string) {
 // Create
 // ============================================================
 
-export async function createApplicant(input: CreateApplicantInput, createdBy: string, ip?: string) {
-  // Validar unicidad tipo_documento + numero_documento
-  const { data: existing } = await (supabase
+export async function createApplicant(input: CreateApplicantInput, createdBy: string, ip?: string, userRol?: string) {
+  // Tarea 3.1: en vez de bloquear cuando el documento ya existe, REUTILIZAMOS
+  // la ficha existente (una persona = una ficha; puede tener varias solicitudes)
+  // y devolvemos `reutilizado: true` para que la UI avise al gestor y verifique
+  // los datos / expedientes previos. No sobrescribimos la ficha existente.
+  //
+  // AISLAMIENTO MULTI-TENANT (CRITICO): la reutilizacion se ACOTA al alcance de
+  // lectura del actor — propietario/inmobiliaria solo reutilizan (y por tanto
+  // solo pueden ver) las fichas que ELLOS registraron (creado_por), igual que
+  // listApplicants/updateApplicant. Sin este scope, reutilizar por documento
+  // devolveria la ficha completa (PII) de un cliente de otra agencia => fuga
+  // cross-tenant + oraculo de enumeracion de cedulas. Admin/operador tienen
+  // visibilidad total de la base de solicitantes, asi que reutilizan cualquier
+  // ficha. Cuando el documento existe pero pertenece a otra agencia, el INSERT
+  // choca con el unique global y caemos en DOCUMENTO_DUPLICADO (rama 23505),
+  // sin exponer PII ajena.
+  const scoped = userRol === 'propietario' || userRol === 'inmobiliaria';
+
+  let dedupQb = (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select(APPLICANT_FIELDS)
     .eq('tipo_documento', input.tipo_documento)
-    .eq('numero_documento', input.numero_documento)
-    .maybeSingle();
+    .eq('numero_documento', input.numero_documento);
+  if (scoped) dedupQb = dedupQb.eq('creado_por', createdBy);
+  const { data: existing } = await dedupQb.maybeSingle();
 
   if (existing) {
-    throw AppError.conflict(
-      `Ya existe un solicitante con ${input.tipo_documento.toUpperCase()} ${input.numero_documento}`,
-      'DOCUMENTO_DUPLICADO',
+    logger.info(
+      { tipo: input.tipo_documento, doc: input.numero_documento },
+      'Solicitante existente reutilizado (documento duplicado)',
     );
+    return { ...(existing as Record<string, unknown>), reutilizado: true };
   }
 
   const { data, error } = await (supabase
@@ -168,7 +186,20 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
 
   if (error) {
     logger.error({ error: error.message }, 'Error al crear solicitante');
+    // Carrera: otro proceso creó la misma ficha entre el SELECT y el INSERT, o
+    // el documento ya existe bajo otro actor. Re-consultamos con el MISMO scope
+    // que el dedup de arriba: si la ficha es del propio actor la reutilizamos;
+    // si pertenece a otra agencia (fuera de scope) NO la encontramos y caemos
+    // en DOCUMENTO_DUPLICADO sin exponer su PII.
     if (error.code === '23505') {
+      let raceQb = (supabase
+        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+        .select(APPLICANT_FIELDS)
+        .eq('tipo_documento', input.tipo_documento)
+        .eq('numero_documento', input.numero_documento);
+      if (scoped) raceQb = raceQb.eq('creado_por', createdBy);
+      const { data: race } = await raceQb.maybeSingle();
+      if (race) return { ...(race as Record<string, unknown>), reutilizado: true };
       throw AppError.conflict(
         `Ya existe un solicitante con ${input.tipo_documento.toUpperCase()} ${input.numero_documento}`,
         'DOCUMENTO_DUPLICADO',
