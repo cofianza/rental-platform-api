@@ -82,6 +82,15 @@ contratosRouter.get(
   contratosController.getDetalle,
 );
 
+// GET /:id/verificacion-html — HTML del contrato con los datos insertados
+// resaltados (vista de verificación, tarea 4.1d). No genera PDF.
+contratosRouter.get(
+  '/:id/verificacion-html',
+  authorize('contratos', 'read'),
+  validate({ params: contratoIdParamsSchema }),
+  contratosController.verificacionHtml,
+);
+
 // POST /:id/renovar — Create renewal contract (vigente only)
 contratosRouter.post(
   '/:id/renovar',

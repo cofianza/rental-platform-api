@@ -24,6 +24,17 @@ export async function previewByInmueble(req: Request, res: Response) {
   res.type('html').send(html);
 }
 
+/**
+ * Devuelve el HTML del contrato re-renderizado con los datos insertados
+ * RESALTADOS (tarea 4.1d — "vista de verificación"). Scopeado por propiedad en
+ * el service (getContratoById). No genera PDF ni toca el documento legal.
+ */
+export async function verificacionHtml(req: Request, res: Response) {
+  const { id } = req.params as { id: string };
+  const html = await contratosService.previewContratoVerificacion(id, req.user?.id, req.user?.rol);
+  res.type('html').send(html);
+}
+
 export async function listAll(req: Request, res: Response) {
   const query = req.query as unknown as ListAllContratosQuery;
   // El service filtra en SQL segun rol: propietario/inmobiliaria solo

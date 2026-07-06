@@ -5,7 +5,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { generateContractPdf } from './contratos.pdf';
 import { renderHtmlToPdf } from '@/lib/pdfRenderer';
-import { renderTemplate } from '@/lib/templateEngine';
+import { renderTemplate, renderTemplateHighlighted } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
@@ -1735,6 +1735,96 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
 
   // 5. Renderizar.
   return renderTemplate(html, ctx);
+}
+
+/**
+ * "Vista de verificación" del contrato (tarea 4.1d): re-renderiza la plantilla
+ * con los datos_variables que se usaron al generar el contrato, RESALTANDO cada
+ * valor insertado, para que la inmobiliaria confirme de un vistazo que el
+ * contrato se generó bien. Devuelve HTML para embeber en un iframe. NO es el
+ * documento legal (ese es el PDF); es solo un apoyo de verificación.
+ */
+export async function previewContratoVerificacion(
+  contratoId: string,
+  userId?: string,
+  userRol?: string,
+): Promise<string> {
+  // getContratoById aplica el scope de propiedad (404 si no es del usuario) y
+  // trae datos_variables + plantilla_id.
+  const contrato = (await getContratoById(contratoId, userId, userRol)) as unknown as {
+    plantilla_id: string | null;
+    datos_variables: Record<string, unknown> | null;
+    plantilla_version: number | null;
+  };
+
+  const datosVariables = contrato.datos_variables;
+  if (!datosVariables || Object.keys(datosVariables).length === 0) {
+    throw AppError.badRequest(
+      'Este contrato no tiene datos para mostrar en la vista de verificación.',
+      'SIN_DATOS_VARIABLES',
+    );
+  }
+
+  // Plantilla usada por el contrato; si no quedó registrada, caemos a la activa.
+  let plantillaQuery = (supabase
+    .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
+    .select('contenido_html, version');
+  plantillaQuery = contrato.plantilla_id
+    ? plantillaQuery.eq('id', contrato.plantilla_id)
+    : plantillaQuery.eq('activa', true).order('created_at', { ascending: false }).limit(1);
+  const { data: plantilla } = await plantillaQuery.maybeSingle();
+
+  const plantillaRow = plantilla as { contenido_html: string | null; version: number | null } | null;
+  const html = plantillaRow?.contenido_html;
+  if (!html) {
+    // Plantilla legacy sin HTML rico: no hay vista de verificación resaltada.
+    throw AppError.badRequest(
+      'La plantilla de este contrato no admite la vista de verificación resaltada.',
+      'PLANTILLA_SIN_HTML',
+    );
+  }
+
+  // Fidelidad: el PDF es un artefacto congelado, pero aquí re-renderizamos con
+  // la plantilla ACTUAL. Si la plantilla se editó desde que se generó el
+  // contrato (version distinta), la vista puede no coincidir con el PDF —
+  // avisamos para no dar una falsa sensación de verificación.
+  const plantillaCambio =
+    plantillaRow?.version != null &&
+    contrato.plantilla_version != null &&
+    plantillaRow.version !== contrato.plantilla_version;
+
+  return wrapVerificacionHtml(renderTemplateHighlighted(html, datosVariables), plantillaCambio);
+}
+
+/**
+ * Inyecta el CSS del resaltado (.hp-var) y una franja-leyenda en el HTML del
+ * contrato, sin asumir si la plantilla es un documento completo o un fragmento.
+ * Si `plantillaCambio` es true, agrega un aviso de que la plantilla se editó
+ * desde la generación y la vista puede no coincidir con el PDF.
+ */
+function wrapVerificacionHtml(inner: string, plantillaCambio = false): string {
+  const style =
+    '<style>.hp-var{background:#fef08a;box-shadow:0 0 0 1px #eab308;border-radius:2px;padding:0 1px;}</style>';
+  const legend =
+    '<div style="position:sticky;top:0;z-index:99999;background:#1f2937;color:#fff;' +
+    'font:13px/1.5 system-ui,-apple-system,sans-serif;padding:8px 14px;">' +
+    'Vista de verificación — los campos <span style="background:#fef08a;color:#1f2937;' +
+    'padding:0 4px;border-radius:2px;">resaltados</span> son los datos insertados ' +
+    'automáticamente en el contrato. El documento legal es el PDF.</div>';
+  const aviso = plantillaCambio
+    ? '<div style="background:#fef3c7;color:#92400e;font:13px/1.5 system-ui,-apple-system,sans-serif;' +
+      'padding:8px 14px;border-bottom:1px solid #fde68a;">⚠ La plantilla del contrato se editó después ' +
+      'de generar este documento; esta vista puede no coincidir exactamente con el PDF. El PDF sigue ' +
+      'siendo el documento válido.</div>'
+    : '';
+  const banner = legend + aviso;
+
+  let html = inner;
+  html = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${style}</head>`) : style + html;
+  html = /<body[^>]*>/i.test(html)
+    ? html.replace(/<body([^>]*)>/i, `<body$1>${banner}`)
+    : banner + html;
+  return html;
 }
 
 /**

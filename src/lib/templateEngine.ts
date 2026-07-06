@@ -73,6 +73,32 @@ export function renderTemplate(template: string, context: Context): string {
   return html;
 }
 
+/**
+ * Igual que renderTemplate pero envuelve CADA valor insertado en
+ * <span class="hp-var"> para poder resaltarlo. Es la "vista de verificación"
+ * (tarea 4.1d): permite a la inmobiliaria identificar de un vistazo qué datos
+ * se incorporaron automáticamente al contrato y confirmar que se generó bien.
+ *
+ * IMPORTANTE: NO se usa para el PDF legal — solo para un preview HTML de
+ * verificación. Las URLs (_url, p.ej. logo en un src="…") NO se envuelven para
+ * no romper el atributo, igual que en renderTemplate.
+ */
+export function renderTemplateHighlighted(template: string, context: Context): string {
+  let html = resolveIfBlocks(template, context);
+
+  html = html.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path: string) => {
+    const v = getValue(context, path);
+    if (v === undefined || v === null) return '';
+    if (path.endsWith('logo_url') || path.endsWith('_url')) return String(v);
+    const safe = escapeHtml(String(v));
+    // Valor vacío tras resolver: no resaltamos (no hay dato que verificar).
+    if (safe.trim() === '') return safe;
+    return `<span class="hp-var">${safe}</span>`;
+  });
+
+  return html;
+}
+
 function resolveIfBlocks(template: string, context: Context): string {
   // Encuentra {{#if X}} o {{else}} o {{/if}} con sus posiciones, los empareja
   // con un stack y reemplaza el bloque resultante. Repetimos hasta que no
