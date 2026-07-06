@@ -128,6 +128,8 @@ Usuarios internos del sistema. Extiende la tabla `auth.users` de Supabase Auth. 
 | rol | rol_usuario | NO | 'operador_analista' | Rol dentro del sistema |
 | estado | estado_usuario | NO | 'activo' | Estado del usuario |
 | avatar_url | TEXT | SI | NULL | URL de la foto de perfil |
+| afianzadora_actual | VARCHAR(200) | SI | NULL | Afianzadora o aseguradora que usa hoy (se captura en el registro de inmobiliaria) |
+| afianzadora_tipo | VARCHAR(20) | SI | NULL | 'afianzadora', 'aseguradora' o 'ninguna' (validado en capa de app) |
 | created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
 | updated_at | TIMESTAMPTZ | NO | NOW() | Fecha de ultima modificacion |
 
@@ -153,7 +155,7 @@ Propiedades registradas para arrendamiento. El codigo (`INM-XXX`) se genera auto
 | departamento | VARCHAR(100) | NO | - | Departamento (division administrativa) |
 | tipo | tipo_inmueble | NO | - | Tipo de inmueble (apartamento, casa, etc.) |
 | uso | uso_inmueble | NO | 'vivienda' | Uso del inmueble (vivienda o comercial) |
-| estrato | SMALLINT | NO | - | Estrato socioeconomico (1-6) |
+| estrato | SMALLINT | NO | - | Estrato socioeconomico (1-7) |
 | valor_arriendo | NUMERIC(12,2) | NO | - | Canon mensual de arrendamiento (COP) |
 | valor_comercial | NUMERIC(14,2) | SI | NULL | Valor comercial estimado |
 | administracion | NUMERIC(10,2) | SI | 0 | Cuota de administracion mensual |
@@ -172,7 +174,7 @@ Propiedades registradas para arrendamiento. El codigo (`INM-XXX`) se genera auto
 
 **Foreign Keys:** `propietario_id` → `perfiles(id)`
 
-**Constraints:** `estrato` BETWEEN 1 AND 6, `valor_arriendo` > 0, `codigo` UNIQUE
+**Constraints:** `estrato` BETWEEN 1 AND 7, `valor_arriendo` > 0, `codigo` UNIQUE
 
 **Indices:** `idx_inmuebles_propietario`, `idx_inmuebles_estado`, `idx_inmuebles_ciudad`, `idx_inmuebles_visible` (parcial, WHERE visible_vitrina = TRUE)
 
@@ -233,6 +235,7 @@ Caso de arrendamiento que vincula un inmueble con un solicitante. Nucleo del flu
 | codeudor_parentesco | VARCHAR(50) | SI | NULL | Parentesco del codeudor con solicitante |
 | estado | estado_expediente | NO | 'borrador' | Estado actual del expediente |
 | analista_id | UUID | SI | NULL | Analista asignado al caso |
+| cita_omitida | BOOLEAN | NO | FALSE | La visita se coordino por fuera; salta el gate de cita para habilitar el estudio |
 | created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
 | updated_at | TIMESTAMPTZ | NO | NOW() | Fecha de ultima modificacion |
 
@@ -573,6 +576,12 @@ Clasificacion de la propiedad.
 | `casa` | Vivienda independiente |
 | `oficina` | Espacio para uso de oficina |
 | `local` | Local comercial |
+| `bodega` | Espacio de almacenamiento o industrial |
+| `apartaestudio` | Unidad compacta de un solo ambiente |
+| `casa_finca` | Casa campestre o de recreo |
+| `finca` | Predio rural |
+| `lote` | Terreno sin construir |
+| `parqueadero` | Espacio de estacionamiento |
 
 ### uso_inmueble
 Uso destinado del inmueble.
@@ -581,6 +590,7 @@ Uso destinado del inmueble.
 |-------|-------------|
 | `vivienda` | Uso residencial |
 | `comercial` | Uso comercial o de oficina |
+| `mixto` | Uso mixto (vivienda + comercial) |
 
 ### estado_inmueble
 Estado operativo del inmueble dentro de la plataforma.

@@ -18,12 +18,19 @@ import type { ListInteresadosQuery, RegistrarInteresInput } from './interesados.
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
+// Cubre los 10 tipos de TIPOS_INMUEBLE (inmuebles.schema.ts); si aparece un
+// tipo desconocido, inmuebleLabel cae al valor crudo.
 const TIPO_LABEL: Record<string, string> = {
   apartamento: 'Apartamento',
   casa: 'Casa',
   oficina: 'Oficina',
   local: 'Local',
   bodega: 'Bodega',
+  apartaestudio: 'Apartaestudio',
+  casa_finca: 'Casa Finca',
+  finca: 'Finca',
+  lote: 'Lote',
+  parqueadero: 'Parqueadero',
 };
 
 function inmuebleLabel(inm: {

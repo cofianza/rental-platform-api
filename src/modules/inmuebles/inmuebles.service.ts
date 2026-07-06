@@ -584,6 +584,7 @@ export async function toggleVisibility(
   visible_vitrina: boolean,
   userId: string,
   userRol?: string,
+  ip?: string,
 ) {
   // Verify inmueble exists
   const inmueble = await getInmuebleById(id);
@@ -620,6 +621,15 @@ export async function toggleVisibility(
   }
 
   logger.info({ id, visible_vitrina, userId }, 'Visibilidad de inmueble actualizada — HP-369');
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.INMUEBLE_UPDATED,
+    entidad: AUDIT_ENTITIES.INMUEBLE,
+    entidadId: id,
+    detalle: { visible_vitrina, origen: 'toggle_vitrina' },
+    ip,
+  });
 
   return getInmuebleById(id);
 }

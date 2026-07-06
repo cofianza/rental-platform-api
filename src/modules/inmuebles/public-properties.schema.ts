@@ -9,7 +9,8 @@ export const listPublicPropertiesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(12),
   ciudad: z.string().max(100).optional(),
   tipo: z.string().max(50).optional(),
-  estrato: z.coerce.number().int().min(1).max(6).optional(),
+  // max(7): igual que inmuebles.schema.ts y el CHECK de la migracion 20260706000001.
+  estrato: z.coerce.number().int().min(1).max(7).optional(),
   precio_min: z.coerce.number().min(0).optional(),
   precio_max: z.coerce.number().min(0).optional(),
   habitaciones: z.coerce.number().int().min(0).optional(),

@@ -96,7 +96,7 @@ export async function getCambiosResumen(req: Request, res: Response) {
 export async function toggleVisibility(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
   const { visible_vitrina } = req.body as VisibilityInput;
-  const inmueble = await inmueblesService.toggleVisibility(id, visible_vitrina, req.user!.id, req.user!.rol);
+  const inmueble = await inmueblesService.toggleVisibility(id, visible_vitrina, req.user!.id, req.user!.rol, req.ip);
   sendSuccess(res, inmueble);
 }
 

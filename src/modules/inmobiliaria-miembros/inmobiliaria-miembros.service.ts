@@ -876,6 +876,10 @@ export interface InmobiliariaAdminView {
   estado: string;
   owner_perfil_id: string | null;
   owner_nombre: string | null;
+  // Afianzadora/aseguradora actual del titular: dato de conversión capturado
+  // en el registro (1.6) para que el admin lo vea.
+  afianzadora_actual: string | null;
+  afianzadora_tipo: string | null;
   miembros_ven_todo: boolean;
   miembros_activos: number;
   invitaciones_pendientes: number;
@@ -884,7 +888,7 @@ export interface InmobiliariaAdminView {
 
 export async function adminListInmobiliarias(): Promise<InmobiliariaAdminView[]> {
   const { data: orgsRaw, error } = await db('inmobiliarias')
-    .select('id, nombre, estado, owner_perfil_id, miembros_ven_todo, created_at, perfiles!inmobiliarias_owner_perfil_id_fkey(nombre, apellido, razon_social)')
+    .select('id, nombre, estado, owner_perfil_id, miembros_ven_todo, created_at, perfiles!inmobiliarias_owner_perfil_id_fkey(nombre, apellido, razon_social, afianzadora_actual, afianzadora_tipo)')
     .order('created_at', { ascending: false });
   if (error) {
     logger.error({ error: error.message }, 'Error listando inmobiliarias (admin)');
@@ -897,7 +901,13 @@ export async function adminListInmobiliarias(): Promise<InmobiliariaAdminView[]>
     owner_perfil_id: string | null;
     miembros_ven_todo: boolean;
     created_at: string;
-    perfiles: { nombre: string | null; apellido: string | null; razon_social: string | null } | null;
+    perfiles: {
+      nombre: string | null;
+      apellido: string | null;
+      razon_social: string | null;
+      afianzadora_actual: string | null;
+      afianzadora_tipo: string | null;
+    } | null;
   }>) || [];
 
   // Conteos por org (una sola lectura de miembros no-revocados).
@@ -924,6 +934,8 @@ export async function adminListInmobiliarias(): Promise<InmobiliariaAdminView[]>
       estado: o.estado,
       owner_perfil_id: o.owner_perfil_id,
       owner_nombre: ownerNombre,
+      afianzadora_actual: p?.afianzadora_actual ?? null,
+      afianzadora_tipo: p?.afianzadora_tipo ?? null,
       miembros_ven_todo: o.miembros_ven_todo,
       miembros_activos: c.activos,
       invitaciones_pendientes: c.pendientes,
