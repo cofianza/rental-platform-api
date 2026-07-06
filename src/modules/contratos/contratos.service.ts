@@ -1931,7 +1931,10 @@ export async function renovarContrato(
 
   const autoVariables = buildVariablesFromExpediente(expData, fechaInicio, duracionMeses);
   const parentVars = p.datos_variables || {};
-  const finalVariables = { ...parentVars, ...autoVariables, ...(input.variables ?? {}) };
+  // 4.1e: sin escape hatch `variables` — la plantilla legacy de renovación usa
+  // claves planas (arrendatario_nombre, canon_mensual...) y un override libre
+  // permitiría alterar la identidad del arrendatario y el canon sin tope.
+  const finalVariables = { ...parentVars, ...autoVariables };
 
   // 5. Compile HTML and generate PDF
   const compiledHtml = compileTemplate(pl.contenido, finalVariables);
@@ -2023,9 +2026,12 @@ export async function regenerarContrato(
   input: ReGenerarContratoInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
-  // 1. Get existing contrato
-  const existing = await getContratoById(id);
+  // 1. Get existing contrato. Con userId/userRol, getContratoById aplica el
+  // scope de propiedad (propietario/inmobiliaria solo los suyos → 404 si es de
+  // otra agencia); cierra el IDOR de escritura en la regeneración.
+  const existing = await getContratoById(id, userId, userRol);
   const row = existing as unknown as {
     id: string; expediente_id: string; plantilla_id: string;
     version: number; estado: string; storage_key: string;
@@ -2033,6 +2039,7 @@ export async function regenerarContrato(
     nombre_archivo: string | null; plantilla_version: number | null;
     generado_por: string | null; fecha_generacion: string | null;
     fecha_inicio: string | null; duracion_meses: number | null;
+    valor_arriendo: number | null;
   };
 
   if (row.estado !== 'borrador') {
@@ -2072,17 +2079,54 @@ export async function regenerarContrato(
       : new Date();
   const duracionMeses = input.duracion_meses ?? row.duracion_meses ?? 12;
 
-  // Override del valor_arriendo en el inmueble si el caller lo provee
-  // (caso: el canon negociado con el inquilino difiere del listado).
-  if (input.valor_arriendo && expData.inmueble) {
-    expData.inmueble.valor_arriendo = input.valor_arriendo;
+  // 4.1e — Tope del canon: no se permite subir el canon más del 10% sobre el
+  // "valor usado para el estudio". Base = valor publicado del inmueble
+  // (inmueble.valor_arriendo), capturado ANTES de aplicar el override. Si el
+  // inmueble no tiene valor (>0), no hay base con la cual comparar y no se
+  // aplica el tope.
+  const baseValorArriendo = expData.inmueble?.valor_arriendo ?? 0;
+  if (input.valor_arriendo && baseValorArriendo > 0) {
+    const topeMax = Math.round(baseValorArriendo * 1.1);
+    if (input.valor_arriendo > topeMax) {
+      const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+      throw AppError.badRequest(
+        `El canon ${cop(input.valor_arriendo)} supera el tope permitido de ${cop(topeMax)} ` +
+          `(10% sobre el valor del inmueble ${cop(baseValorArriendo)}). Ajusta el canon dentro del límite.`,
+        'CANON_EXCEDE_TOPE',
+      );
+    }
   }
+
+  // Canon efectivo: si el caller NO reenvía valor_arriendo, conservamos el canon
+  // ya pactado en el contrato (row.valor_arriendo) en vez de revertir al valor
+  // base del inmueble. Así el PDF, datos_variables y la columna valor_arriendo
+  // no divergen entre regeneraciones (4.1e). El tope de arriba solo aplica al
+  // nuevo valor que envía el usuario (input.valor_arriendo).
+  const canonEfectivo = input.valor_arriendo ?? row.valor_arriendo ?? null;
+  if (canonEfectivo && canonEfectivo > 0 && expData.inmueble) {
+    expData.inmueble.valor_arriendo = canonEfectivo;
+  }
+
   const { data: expRowRegen } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('numero, modalidad_fianza, servicios_reparto, cotitular_nombre, cotitular_tipo_documento, cotitular_documento, cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio')
     .eq('id', row.expediente_id)
     .single();
   const expRecordRegen = (expRowRegen as Record<string, unknown> | null) ?? {};
+
+  // 4.1e — Distribución de obligaciones (servicios_reparto): MERGE — solo
+  // sobrescribimos las claves que el usuario cambió, conservando el resto de la
+  // distribución vigente (no reset silencioso). Se persiste en el expediente
+  // para esta y futuras regeneraciones.
+  if (input.servicios_reparto && Object.keys(input.servicios_reparto).length > 0) {
+    const actual = (expRecordRegen.servicios_reparto as Record<string, string> | null) ?? {};
+    const merged = { ...actual, ...input.servicios_reparto };
+    await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update({ servicios_reparto: merged } as never)
+      .eq('id', row.expediente_id);
+    expRecordRegen.servicios_reparto = merged;
+  }
   const expedienteNumero = (expRecordRegen.numero as string | undefined) || row.expediente_id;
   const modalidadRegen = await fetchModalidadFianza(expRecordRegen.modalidad_fianza as string | null | undefined);
 
@@ -2090,7 +2134,11 @@ export async function regenerarContrato(
     modalidad: modalidadRegen,
     expediente: expRecordRegen,
   });
-  const finalVariables: Record<string, unknown> = { ...ctx, ...(input.variables ?? {}) };
+  // 4.1e: solo el contexto derivado del expediente/inmueble; sin overrides
+  // libres (el escape hatch `variables` se eliminó para no poder alterar la
+  // identidad del arrendatario). Los cambios permitidos ya se aplicaron arriba
+  // (fecha, duración, canon dentro del tope, reparto de servicios).
+  const finalVariables: Record<string, unknown> = { ...ctx };
 
   // 4b. Archive current version before regenerating (skip si NULL).
   const resumenCambios = generateResumenCambios(
@@ -2151,8 +2199,8 @@ export async function regenerarContrato(
     fecha_fin: fechaFin.toISOString().split('T')[0],
     duracion_meses: duracionMeses,
   };
-  if (input.valor_arriendo) {
-    updatePayload.valor_arriendo = input.valor_arriendo;
+  if (canonEfectivo) {
+    updatePayload.valor_arriendo = canonEfectivo;
   }
 
   const { error: updateError } = await (supabase

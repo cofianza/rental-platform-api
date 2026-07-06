@@ -82,7 +82,9 @@ export async function generar(req: Request, res: Response) {
 export async function regenerar(req: Request, res: Response) {
   const { id } = req.params as unknown as { id: string };
   const input = req.body as ReGenerarContratoInput;
-  const contrato = await contratosService.regenerarContrato(id, input, req.user!.id, req.ip);
+  // userRol: para scopear la propiedad del contrato (propietario/inmobiliaria
+  // solo regeneran los suyos) — cierra el IDOR de escritura en regenerar.
+  const contrato = await contratosService.regenerarContrato(id, input, req.user!.id, req.ip, req.user?.rol);
   sendSuccess(res, contrato);
 }
 

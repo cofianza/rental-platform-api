@@ -44,7 +44,9 @@ export const generarContratoSchema = z.object({
 export const renovarContratoSchema = z.object({
   fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha invalido (YYYY-MM-DD)').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
-  variables: z.record(z.string(), z.string()).optional(),
+  // 4.1e: se eliminó el escape hatch `variables` — la renovación renderiza con
+  // plantilla legacy plana y un override libre permitía alterar la identidad
+  // del arrendatario y el canon (mismo cierre que en regenerar).
 });
 
 // ============================================================
@@ -55,7 +57,13 @@ export const regenerarContratoSchema = z.object({
   fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato YYYY-MM-DD').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
   valor_arriendo: z.coerce.number().positive().optional(),
-  variables: z.record(z.string(), z.string()).optional(),
+  // 4.1e: distribución de obligaciones (quién paga cada servicio) editable
+  // antes de firmar.
+  servicios_reparto: z.record(z.string(), z.enum(['arrendatario', 'arrendador'])).optional(),
+  // 4.1e: se ELIMINÓ el escape hatch `variables` (z.record libre) en la
+  // regeneración: permitía sobreescribir CUALQUIER placeholder del contrato,
+  // incluida la identidad del arrendatario (nombre/documento/correo), que el
+  // ticket prohíbe modificar. Los cambios permitidos van por campos tipados.
 });
 
 // ============================================================
