@@ -16,6 +16,13 @@ export async function rechazarEstudio(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+export async function omitirCita(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const motivo = (req.body as { motivo?: string } | undefined)?.motivo;
+  const result = await service.omitirCita(id, motivo, req.user!.id, req.user!.rol);
+  sendSuccess(res, result);
+}
+
 export async function aprobarCondicionado(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
   const body = req.body as {

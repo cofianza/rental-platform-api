@@ -55,7 +55,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
   id, numero, estado, notas,
   coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco,
   analista_id, inmueble_id, solicitante_id, creado_por, miembro_responsable_id,
-  estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
+  estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado, cita_omitida,
   duracion_contrato_meses, fecha_inicio_contrato,
   cancelado_at, motivo_cancelacion, estado_pre_cancelacion, motivo_rechazo,
   created_at, updated_at,

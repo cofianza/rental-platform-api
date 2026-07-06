@@ -315,6 +315,73 @@ export async function rechazarEstudio(
 }
 
 /**
+ * Tarea 3.2: marcar que la cita se omite porque ya hubo contacto/visita por
+ * fuera (p. ej. coordinada por WhatsApp tras "Me interesa"). Esto habilita
+ * poder correr el estudio sin exigir una cita 'realizada' (el gate de la RPC
+ * fn_habilitar_estudio_expediente salta cuando cita_omitida=true).
+ *
+ * Ownership: mismo guard que habilitar (propietario/inmobiliaria dueños +
+ * admin/operador). Idempotente: si ya estaba omitida, devuelve el estado actual.
+ */
+export async function omitirCita(
+  expedienteId: string,
+  motivo: string | undefined,
+  userId: string,
+  userRol: string,
+): Promise<{ expediente: { id: string; numero: string; cita_omitida: true } }> {
+  await assertHabilitacionPermission({
+    userId,
+    userRol: userRol as UserRole,
+    expedienteId,
+  });
+
+  const { data: current } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, estudio_habilitado, cita_omitida')
+    .eq('id', expedienteId)
+    .single() as {
+      data: { id: string; numero: string; estudio_habilitado: boolean; cita_omitida: boolean } | null;
+    };
+
+  if (!current) throw AppError.notFound('Expediente no encontrado');
+  if (current.estudio_habilitado) {
+    throw AppError.conflict(
+      'El estudio ya fue habilitado; no aplica omitir la cita.',
+      'ESTUDIO_YA_HABILITADO',
+    );
+  }
+  if (current.cita_omitida) {
+    return { expediente: { id: current.id, numero: current.numero, cita_omitida: true } };
+  }
+
+  const motivoNorm = motivo?.trim() ? motivo.trim() : null;
+  const { error: updErr } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({ cita_omitida: true, updated_at: new Date().toISOString() } as never)
+    .eq('id', expedienteId);
+
+  if (updErr) {
+    logger.error({ error: updErr.message, expedienteId }, 'Error al omitir la cita');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al omitir la cita');
+  }
+
+  await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'cita',
+      descripcion: motivoNorm
+        ? `Cita omitida (contacto/visita previa por fuera). Motivo: ${motivoNorm}`
+        : 'Cita omitida: el gestor indicó que la visita ya se coordinó por fuera.',
+      usuario_id: userId,
+      metadata: { cita_omitida: true, motivo: motivoNorm },
+    } as never);
+
+  logger.info({ expedienteId, userId, motivo: motivoNorm }, 'Cita omitida por contacto previo');
+  return { expediente: { id: current.id, numero: current.numero, cita_omitida: true } };
+}
+
+/**
  * Aprobar manualmente un expediente que el buró dejó condicionado.
  *
  * Flujo: cuando TransUnion devuelve resultado='condicionado', el orchestrator

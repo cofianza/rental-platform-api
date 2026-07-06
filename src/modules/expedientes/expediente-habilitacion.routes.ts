@@ -35,6 +35,20 @@ router.post(
   controller.rechazarEstudio,
 );
 
+// POST /api/v1/expedientes/:id/omitir-cita — el gestor indica que la visita ya
+// se coordinó por fuera (WhatsApp), así se puede habilitar el estudio sin exigir
+// una cita 'realizada'. body.motivo opcional (queda en el timeline).
+router.post(
+  '/:id/omitir-cita',
+  authMiddleware,
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({
+    params: expedienteIdParamsSchema,
+    body: z.object({ motivo: z.string().max(2000).optional() }),
+  }),
+  controller.omitirCita,
+);
+
 // Body común para el momento de generar el contrato: duración + fecha de inicio.
 // Antes vivía en `habilitar-estudio` pero la regla de negocio (Mario, 5-may-2026)
 // es pedirlos justo antes de generar el contrato — no del estudio.
