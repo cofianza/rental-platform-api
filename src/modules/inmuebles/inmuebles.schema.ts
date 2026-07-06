@@ -1,7 +1,12 @@
 import { z } from 'zod';
 
-const TIPOS_INMUEBLE = ['apartamento', 'casa', 'oficina', 'local', 'bodega'] as const;
-const USOS_INMUEBLE = ['vivienda', 'local_comercial'] as const;
+const TIPOS_INMUEBLE = [
+  'apartamento', 'casa', 'oficina', 'local', 'bodega',
+  'apartaestudio', 'casa_finca', 'finca', 'lote', 'parqueadero',
+] as const;
+// Incluye todos los valores válidos del enum de BD (para validar filas
+// existentes 'local_comercial') + 'mixto'; la UI ofrece Vivienda/Comercio/Mixto.
+const USOS_INMUEBLE = ['vivienda', 'comercial', 'local_comercial', 'mixto'] as const;
 const ESTADOS_INMUEBLE = ['disponible', 'en_estudio', 'ocupado', 'inactivo'] as const;
 
 export const inmuebleIdParamsSchema = z.object({
@@ -27,7 +32,7 @@ export const createInmuebleSchema = z.object({
   tipo: z.enum(TIPOS_INMUEBLE, { error: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}` }),
   uso: z.enum(USOS_INMUEBLE, { error: `Uso invalido. Valores permitidos: ${USOS_INMUEBLE.join(', ')}` }).default('vivienda'),
   destinacion: z.string().max(500, 'Destinacion muy larga').optional(),
-  estrato: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6'),
+  estrato: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(7, 'Estrato maximo es 7'),
   valor_arriendo: z.coerce.number().positive('Valor de arriendo debe ser mayor a 0').max(999999999, 'Valor de arriendo no puede superar $999.999.999'),
   valor_comercial: z.coerce.number().positive('Valor comercial debe ser mayor a 0').max(99999999999, 'Valor comercial no puede superar $99.999.999.999').optional(),
   administracion: z.coerce.number().min(0, 'Administracion no puede ser negativa').max(999999999, 'Administracion no puede superar $999.999.999').default(0),
@@ -65,7 +70,7 @@ export const updateInmuebleSchema = z.object({
   tipo: z.enum(TIPOS_INMUEBLE, { error: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}` }).optional(),
   uso: z.enum(USOS_INMUEBLE, { error: `Uso invalido. Valores permitidos: ${USOS_INMUEBLE.join(', ')}` }).optional(),
   destinacion: z.string().max(500, 'Destinacion muy larga').nullable().optional(),
-  estrato: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6').optional(),
+  estrato: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(7, 'Estrato maximo es 7').optional(),
   valor_arriendo: z.coerce.number().positive('Valor de arriendo debe ser mayor a 0').max(999999999, 'Valor de arriendo no puede superar $999.999.999').optional(),
   valor_comercial: z.coerce.number().positive('Valor comercial debe ser mayor a 0').max(99999999999, 'Valor comercial no puede superar $99.999.999.999').nullable().optional(),
   administracion: z.coerce.number().min(0, 'Administracion no puede ser negativa').max(999999999, 'Administracion no puede superar $999.999.999').optional(),
@@ -97,7 +102,7 @@ export const listInmueblesQuerySchema = z.object({
   uso: z.enum(USOS_INMUEBLE).optional(),
   estado: z.enum(ESTADOS_INMUEBLE).optional(),
   ciudad: z.string().optional(),
-  estrato: z.coerce.number().int().min(1).max(6).optional(),
+  estrato: z.coerce.number().int().min(1).max(7).optional(),
   propietario_id: z.uuid().optional(),
   visible_vitrina: z.enum(['true', 'false']).optional(),
   include_inactive: z.enum(['true', 'false']).optional(),
@@ -116,8 +121,8 @@ export const searchInmueblesQuerySchema = z.object({
   property_type: z.enum(TIPOS_INMUEBLE, {
     error: `Tipo invalido. Valores permitidos: ${TIPOS_INMUEBLE.join(', ')}`,
   }).optional(),
-  stratum_min: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6').optional(),
-  stratum_max: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(6, 'Estrato maximo es 6').optional(),
+  stratum_min: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(7, 'Estrato maximo es 7').optional(),
+  stratum_max: z.coerce.number().int().min(1, 'Estrato minimo es 1').max(7, 'Estrato maximo es 7').optional(),
   rent_min: z.coerce.number().min(0, 'Valor minimo no puede ser negativo').optional(),
   rent_max: z.coerce.number().min(0, 'Valor maximo no puede ser negativo').optional(),
   area_min: z.coerce.number().min(0, 'Area minima no puede ser negativa').optional(),
