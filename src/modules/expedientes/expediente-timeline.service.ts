@@ -7,7 +7,7 @@ import type { TimelineQuery } from './expediente-timeline.schema';
 // Types
 // ============================================================
 
-type TimelineTipo = 'creacion' | 'transicion' | 'comentario' | 'asignacion' | 'estudio' | 'firma';
+type TimelineTipo = 'creacion' | 'transicion' | 'comentario' | 'asignacion' | 'estudio' | 'firma' | 'cita';
 
 interface TimelineEvent {
   id: string;
@@ -66,15 +66,16 @@ export async function getUnifiedTimeline(expedienteId: string, query: TimelineQu
   const fetchAsignaciones = !tipo || tipo === 'asignacion';
   const fetchEstudios = !tipo || tipo === 'estudio';
   const fetchFirma = !tipo || tipo === 'firma';
+  const fetchCitas = !tipo || tipo === 'cita';
   const fetchComments = !tipo || tipo === 'comentario';
   const fetchCreation = !tipo || tipo === 'creacion';
 
   // Query all sources in parallel
   const promises: Promise<void>[] = [];
 
-  if (fetchTransitions || fetchAsignaciones || fetchEstudios || fetchFirma) {
+  if (fetchTransitions || fetchAsignaciones || fetchEstudios || fetchFirma || fetchCitas) {
     promises.push(
-      queryEventosTimeline(expedienteId, fetchTransitions, fetchAsignaciones, fetchEstudios, fetchFirma).then((events) => {
+      queryEventosTimeline(expedienteId, fetchTransitions, fetchAsignaciones, fetchEstudios, fetchFirma, fetchCitas).then((events) => {
         allEvents.push(...events);
       }),
     );
@@ -123,6 +124,7 @@ async function queryEventosTimeline(
   includeAsignaciones: boolean,
   includeEstudios: boolean = false,
   includeFirma: boolean = false,
+  includeCitas: boolean = false,
 ): Promise<TimelineEvent[]> {
   // Build tipo filter
   const tipos: string[] = [];
@@ -130,6 +132,9 @@ async function queryEventosTimeline(
   if (includeAsignaciones) tipos.push('asignacion');
   if (includeEstudios) tipos.push('estudio');
   if (includeFirma) tipos.push('firma');
+  // Eventos de cita (agendada/reprogramada/omitida 3.2): existian en la tabla
+  // pero el timeline nunca los consultaba — quedaban invisibles.
+  if (includeCitas) tipos.push('cita');
 
   if (tipos.length === 0) return [];
 
@@ -163,6 +168,9 @@ async function queryEventosTimeline(
       detalle = row.metadata || null;
     } else if (row.tipo === 'firma') {
       tipo = 'firma';
+      detalle = row.metadata || null;
+    } else if (row.tipo === 'cita') {
+      tipo = 'cita';
       detalle = row.metadata || null;
     } else {
       tipo = 'asignacion';
