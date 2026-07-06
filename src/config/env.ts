@@ -20,6 +20,14 @@ const envSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
+  // Límite global de requests por IP por minuto (generalLimiter). El dashboard
+  // hace fan-out de muchas peticiones al cargar cada detalle (expediente,
+  // contrato…), así que 100/min se agota con uso normal de un operador (o de
+  // varios agentes tras la misma IP de oficina). Configurable por env para
+  // ajustar sin redeploy. Los límites estrictos (auth, OTP, registro) siguen
+  // aparte y NO se tocan con esto.
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+
   // Auco.ai (electronic signature provider)
   AUCO_API_URL: z.string().url().default('https://dev.auco.ai/v1.5/ext'),
   AUCO_PUBLIC_KEY: z.string().default('puk_placeholder'),

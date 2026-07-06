@@ -1,8 +1,13 @@
 import rateLimit from 'express-rate-limit';
+import { env } from '@/config';
 
+// Límite global por IP/min. Configurable por RATE_LIMIT_MAX (default 300):
+// el dashboard hace fan-out de muchas peticiones por página de detalle, así
+// que 100 se agotaba con uso normal. Los límites estrictos de abajo (auth,
+// OTP, registro) NO dependen de esto.
 export const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 100,
+  limit: env.RATE_LIMIT_MAX,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: {
