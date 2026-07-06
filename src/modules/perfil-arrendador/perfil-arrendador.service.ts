@@ -10,7 +10,7 @@ const LOGO_PATH_PREFIX = 'logos-arrendador';
 const LOGO_URL_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 días
 
 const PERFIL_ARRENDADOR_FIELDS = `
-  id, nombre, apellido, rol, tipo_documento, numero_documento,
+  id, nombre, apellido, rol, tipo_documento, numero_documento, nit,
   razon_social, representante_legal,
   domicilio_direccion, domicilio_ciudad, ciudad,
   matricula_arrendador, logo_storage_key, logo_url,
@@ -173,6 +173,8 @@ export async function updateMiPerfilArrendador(
     // Razón social / nombre comercial: exclusivo de inmobiliaria (un propietario
     // individual se identifica con su nombre personal de Mi cuenta).
     update.razon_social = normalizeEmpty(input.razon_social);
+    // NIT de la inmobiliaria (sale en el contrato).
+    update.nit = normalizeEmpty(input.nit);
   }
 
   // Solo escribimos las claves explicitamente provistas — Supabase no

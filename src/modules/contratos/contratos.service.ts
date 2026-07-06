@@ -197,6 +197,7 @@ interface ArrendadorRow {
   rol: string;
   tipo_documento: string | null;
   numero_documento: string | null;
+  nit: string | null;
   razon_social: string | null;
   representante_legal: string | null;
   domicilio_direccion: string | null;
@@ -233,6 +234,7 @@ interface ExpedienteData {
     departamento?: string;
     valor_arriendo: number;
     parqueadero?: boolean | null;
+    parqueaderos?: number | null;
     administracion?: number | null;
     propiedad_horizontal?: boolean | null;
     cuarto_util?: boolean | null;
@@ -304,7 +306,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       cotitular_nombre, cotitular_tipo_documento, cotitular_documento,
       cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio,
       inmuebles(
-        id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero,
+        id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, parqueaderos,
         administracion, propietario_id,
         propiedad_horizontal, cuarto_util, ubicacion_detallada, matricula_inmobiliaria,
         contrato_tipo_storage_key, contrato_tipo_nombre_archivo
@@ -339,6 +341,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       departamento: string;
       valor_arriendo: number;
       parqueadero: boolean | null;
+      parqueaderos: number | null;
       administracion: number | null;
       propietario_id: string;
       matricula_inmobiliaria: string | null;
@@ -380,7 +383,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   const { data: arrendadorRow, error: arrendadorError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, nombre, apellido, rol, tipo_documento, numero_documento,
+      id, nombre, apellido, rol, tipo_documento, numero_documento, nit,
       razon_social, representante_legal,
       domicilio_direccion, domicilio_ciudad, ciudad,
       matricula_arrendador, matricula_expedida_por, matricula_fecha, logo_storage_key, logo_url,
@@ -397,7 +400,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
 
   const arrendador = arrendadorRow as unknown as {
     id: string; nombre: string; apellido: string; rol: string;
-    tipo_documento: string | null; numero_documento: string | null;
+    tipo_documento: string | null; numero_documento: string | null; nit: string | null;
     razon_social: string | null; representante_legal: string | null;
     domicilio_direccion: string | null; domicilio_ciudad: string | null; ciudad: string | null;
     matricula_arrendador: string | null;
@@ -591,6 +594,30 @@ async function buildContratoContext(
     admin_ph: { arrendatario: svc('admin_ph', 'arrendatario'), arrendador: svc('admin_ph', 'arrendador') },
   };
 
+  // Fuente única de parqueadero: el inmueble guarda un boolean y un conteo que
+  // pueden divergir; el contrato considera ambos.
+  const tieneParqueadero = Boolean(inmueble.parqueadero) || (inmueble.parqueaderos ?? 0) > 0;
+
+  // Texto-resumen de cargo de servicios/PH para la tabla del contrato (antes se
+  // dejaba vacío aunque el reparto sí estuviera definido). Se deriva del reparto
+  // del expediente: si todos los servicios públicos van a un mismo lado, se dice
+  // así; si están mezclados, se remite a la tabla de detalle (serv.*).
+  const SERVICIOS_PUBLICOS = ['agua', 'energia', 'gas', 'basuras', 'alumbrado', 'internet'];
+  const ladosPublicos = SERVICIOS_PUBLICOS.map((s) => reparto[s]).filter(Boolean);
+  const serviciosPublicosCargo =
+    ladosPublicos.length === 0
+      ? 'A cargo del arrendatario'
+      : ladosPublicos.every((l) => l === 'arrendatario')
+        ? 'A cargo del arrendatario'
+        : ladosPublicos.every((l) => l === 'arrendador')
+          ? 'A cargo del arrendador'
+          : 'Según reparto (ver detalle)';
+  const administracionPhCargo = !esPH
+    ? 'No aplica'
+    : reparto.admin_ph === 'arrendador'
+      ? 'A cargo del arrendador'
+      : 'A cargo del arrendatario';
+
   return {
     cob,
     cotitular,
@@ -618,7 +645,9 @@ async function buildContratoContext(
     // vacíos hasta Fase 3.
     inmobiliaria: {
       razon_social: razonSocialArrendador,
-      nit: arrendador?.numero_documento || '',
+      // NIT canónico desde perfiles.nit (con dígito de verificación); si no está,
+      // se cae al numero_documento (persona natural = su cédula).
+      nit: arrendador?.nit || arrendador?.numero_documento || '',
       matricula_arrendador: esInmobiliaria ? (arrendador?.matricula_arrendador || '') : '',
       matricula_expedida_por: arrendador?.matricula_expedida_por || '',
       matricula_fecha: arrendador?.matricula_fecha || '',
@@ -671,7 +700,9 @@ async function buildContratoContext(
       // Si está explícito en el inmueble, lo respetamos. Si es null, caemos
       // a la heurística: paga administración → propiedad horizontal.
       es_propiedad_horizontal: esPH,
-      tiene_parqueadero: Boolean(inmueble.parqueadero),
+      // El inmueble guarda parqueadero (boolean) y parqueaderos (conteo); pueden
+      // divergir, así que consideramos ambos como fuente única para el contrato.
+      tiene_parqueadero: tieneParqueadero,
       tiene_cuarto_util: Boolean(inmueble.cuarto_util),
       // Campos del contrato V4.
       municipio: inmueble.ciudad,
@@ -679,7 +710,7 @@ async function buildContratoContext(
       canon_numero: formatearPesos(monto),
       canon_letras: numeroALetras(monto).toUpperCase(),
       propiedad_horizontal: esPH ? 'Sí' : 'No',
-      parqueadero: inmueble.parqueadero ? 'Sí' : 'No',
+      parqueadero: tieneParqueadero ? 'Sí' : 'No',
       cuarto_util: inmueble.cuarto_util ? 'Sí' : 'No',
     },
     contrato: {
@@ -704,8 +735,8 @@ async function buildContratoContext(
       comision_texto: mod?.comision_texto || '',
       prima_texto: mod?.prima_texto || '',
       // Resumen de cargo de servicios/PH (la tabla serv.* tiene el detalle).
-      servicios_publicos_cargo: '',
-      administracion_ph_cargo: '',
+      servicios_publicos_cargo: serviciosPublicosCargo,
+      administracion_ph_cargo: administracionPhCargo,
     },
     canon: {
       valor_numerico: formatearPesos(monto),
@@ -1842,7 +1873,7 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
   // 1. Cargar inmueble con datos relevantes para el contrato.
   const { data: inmuebleRow, error: inmError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, administracion, propietario_id, propiedad_horizontal, cuarto_util, ubicacion_detallada')
+    .select('id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, parqueaderos, administracion, propietario_id, propiedad_horizontal, cuarto_util, ubicacion_detallada')
     .eq('id', inmuebleId)
     .single();
   if (inmError || !inmuebleRow) {
@@ -1856,7 +1887,7 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
   const { data: arrendadorRow, error: arrError } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, nombre, apellido, rol, tipo_documento, numero_documento,
+      id, nombre, apellido, rol, tipo_documento, numero_documento, nit,
       razon_social, representante_legal,
       domicilio_direccion, domicilio_ciudad, ciudad,
       matricula_arrendador, matricula_expedida_por, matricula_fecha, logo_storage_key, logo_url,
