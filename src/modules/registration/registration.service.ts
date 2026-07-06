@@ -74,7 +74,7 @@ export async function registerInmobiliaria(
 ): Promise<{ message: string }> {
   const { email, password, razon_social, nit, direccion_comercial, ciudad,
           nombre_representante_nombre, nombre_representante_apellido, telefono,
-          cargo_representante } = input;
+          cargo_representante, afianzadora_actual, afianzadora_tipo } = input;
 
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
@@ -114,6 +114,9 @@ export async function registerInmobiliaria(
       // El campo es opcional y la migracion 20260512000003 lo agrega; si la
       // BD aun no tiene la columna, ignorar el undefined sin romper el insert.
       ...(cargo_representante ? { cargo_representante } : {}),
+      // Afianzadora/aseguradora actual (tarea 1.6, migración 20260706000002).
+      ...(afianzadora_actual ? { afianzadora_actual } : {}),
+      ...(afianzadora_tipo ? { afianzadora_tipo } : {}),
       registration_source: 'email',
     } as never)
     .eq('id', userId);

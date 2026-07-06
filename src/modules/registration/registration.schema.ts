@@ -75,6 +75,9 @@ export const registerInmobiliariaSchema = z.object({
   nombre_representante_nombre: z.string().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
   nombre_representante_apellido: z.string().min(1, 'Apellido del representante requerido').max(100, 'Apellido muy largo'),
   cargo_representante: z.string().max(100, 'Cargo muy largo').optional(),
+  // ¿Qué afianzadora/aseguradora usan hoy? (opcional, tarea 1.6)
+  afianzadora_actual: z.string().max(200, 'Nombre muy largo').optional(),
+  afianzadora_tipo: z.enum(['afianzadora', 'aseguradora', 'ninguna']).optional(),
   email: z.email({ error: 'Email invalido' }),
   telefono: phoneSchema,
   password: passwordSchema,
