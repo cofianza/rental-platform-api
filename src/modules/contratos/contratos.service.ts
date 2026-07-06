@@ -1553,10 +1553,12 @@ export async function generarContrato(
     expediente: expRecord,
   });
 
-  // Permitir overrides explícitos desde input.variables (admin puede ajustar
-  // un valor puntual antes de generar — hoy nadie llama así, pero el shape
-  // del schema lo permite).
-  const finalVariables: Record<string, unknown> = { ...context, ...(input.variables ?? {}) };
+  // 4.1e: solo el contexto derivado del expediente/inmueble, sin overrides
+  // libres — el antiguo escape hatch `variables` permitía blanquear/alterar
+  // identidad del arrendatario y canon en el PDF legal. Los ajustes permitidos
+  // ya viajan por campos tipados (fecha, duración, modalidad, cotitular,
+  // servicios_reparto). Mismo cierre que en regenerar/renovar.
+  const finalVariables: Record<string, unknown> = { ...context };
 
   let pdfBuffer: Buffer;
   let nombreArchivoContrato: string;
@@ -1830,9 +1832,9 @@ function wrapVerificacionHtml(inner: string, plantillaCambio = false): string {
     'automáticamente en el contrato. El documento legal es el PDF.</div>';
   const aviso = plantillaCambio
     ? '<div style="background:#fef3c7;color:#92400e;font:13px/1.5 system-ui,-apple-system,sans-serif;' +
-      'padding:8px 14px;border-bottom:1px solid #fde68a;">⚠ La plantilla del contrato se editó después ' +
-      'de generar este documento; esta vista puede no coincidir exactamente con el PDF. El PDF sigue ' +
-      'siendo el documento válido.</div>'
+      'padding:8px 14px;border-bottom:1px solid #fde68a;"><strong>Aviso:</strong> la plantilla del ' +
+      'contrato se editó después de generar este documento; esta vista puede no coincidir exactamente ' +
+      'con el PDF. El PDF sigue siendo el documento válido.</div>'
     : '';
   const banner = legend + aviso;
 

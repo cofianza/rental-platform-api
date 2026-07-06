@@ -20,7 +20,9 @@ export const generarContratoSchema = z.object({
   // plantilla_id es opcional: si el inmueble tiene contrato_tipo subido por
   // el propietario, se usa ese PDF en lugar de compilar desde plantilla.
   plantilla_id: z.string().uuid('ID de plantilla invalido').optional(),
-  variables: z.record(z.string(), z.string()).optional(),
+  // 4.1e: sin escape hatch `variables` (z.record libre) — permitía sobreescribir
+  // cualquier placeholder del contrato (identidad del arrendatario, canon).
+  // Mismo cierre que en regenerar/renovar; los ajustes van por campos tipados.
   fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha invalido (YYYY-MM-DD)').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
   // Condiciones de fianza del contrato V4 — se persisten en el expediente.
