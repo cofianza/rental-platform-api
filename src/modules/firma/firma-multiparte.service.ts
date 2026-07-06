@@ -110,6 +110,63 @@ export async function listarFirmantes(contratoId: string): Promise<{ firmantes: 
 }
 
 // ============================================================
+// Preview de firmantes (pre-chequeo antes de enviar a firma) — tarea 4.3
+// ============================================================
+
+export interface FirmantePreview {
+  rol_firmante: RolFirmante;
+  nombre: string;
+  email: string;
+  /** Teléfono NORMALIZADO (+57…) al que Auco enviaría el OTP; null si no hay. */
+  telefono: string | null;
+  /** Cofianza auto-firma: no va a Auco (no necesita número/OTP). */
+  auto: boolean;
+  /** Firmante que SÍ va a Auco pero le falta teléfono o email. */
+  falta_datos: boolean;
+  /** Comparte teléfono con otro firmante Auco → bloquea el envío. */
+  duplicado: boolean;
+}
+
+/**
+ * Deriva los firmantes SIN crear nada (read-only) y marca los problemas que
+ * bloquearían el envío: firmante Auco sin teléfono/email, o dos firmantes con
+ * el mismo teléfono (cada parte necesita un número distinto para su OTP). Es el
+ * pre-chequeo del botón "Enviar a firma": mismas reglas que
+ * crearSolicitudFirmaMultiparte, pero sin subir nada a Auco.
+ */
+export async function previewFirmantesMultiparte(
+  contratoId: string,
+): Promise<{ firmantes: FirmantePreview[]; puede_enviar: boolean }> {
+  const derivados = await derivarFirmantes(contratoId);
+  const conTel = derivados.map((f) => ({
+    f,
+    phone: aucoClient.normalizePhoneToInternational(f.telefono),
+  }));
+
+  // Frecuencia de teléfonos entre los firmantes que SÍ van a Auco (no auto).
+  const freq = new Map<string, number>();
+  for (const x of conTel) {
+    if (!x.f.auto && x.phone) freq.set(x.phone, (freq.get(x.phone) ?? 0) + 1);
+  }
+
+  const firmantes: FirmantePreview[] = conTel.map(({ f, phone }) => {
+    const auto = f.auto ?? false;
+    return {
+      rol_firmante: f.rol_firmante,
+      nombre: f.nombre,
+      email: f.email,
+      telefono: phone,
+      auto,
+      falta_datos: !auto && (!phone || !f.email),
+      duplicado: !auto && !!phone && (freq.get(phone) ?? 0) > 1,
+    };
+  });
+
+  const puede_enviar = !firmantes.some((f) => f.falta_datos || f.duplicado);
+  return { firmantes, puede_enviar };
+}
+
+// ============================================================
 // Fase 2 — Derivar los firmantes de un contrato
 // ============================================================
 

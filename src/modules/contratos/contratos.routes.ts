@@ -91,6 +91,15 @@ contratosRouter.get(
   contratosController.verificacionHtml,
 );
 
+// GET /:id/firmantes-preview — pre-chequeo de firmantes antes de enviar a firma
+// (4.3): números por firmante + flags de repetido/faltante. No crea sobre.
+contratosRouter.get(
+  '/:id/firmantes-preview',
+  authorize('contratos', 'read'),
+  validate({ params: contratoIdParamsSchema }),
+  contratosController.firmantesPreview,
+);
+
 // POST /:id/renovar — Create renewal contract (vigente only)
 contratosRouter.post(
   '/:id/renovar',

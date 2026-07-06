@@ -35,6 +35,16 @@ export async function verificacionHtml(req: Request, res: Response) {
   res.type('html').send(html);
 }
 
+/**
+ * Pre-chequeo de firmantes antes de enviar a firma (4.3): devuelve los
+ * firmantes derivados + a qué número va cada OTP, marcando repetidos/faltantes.
+ */
+export async function firmantesPreview(req: Request, res: Response) {
+  const { id } = req.params as { id: string };
+  const data = await contratosService.previewFirmantesContrato(id, req.user?.id, req.user?.rol);
+  sendSuccess(res, data);
+}
+
 export async function listAll(req: Request, res: Response) {
   const query = req.query as unknown as ListAllContratosQuery;
   // El service filtra en SQL segun rol: propietario/inmobiliaria solo

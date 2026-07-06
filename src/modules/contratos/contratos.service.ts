@@ -1738,6 +1738,23 @@ export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<
 }
 
 /**
+ * Pre-chequeo de firmantes antes de "Enviar a firma" (tarea 4.3). Deriva los
+ * firmantes y sus números SIN crear nada, para que la UI los muestre y bloquee
+ * el envío si hay un número repetido o datos faltantes. Scopeado por propiedad
+ * (getContratoById → 404 si el contrato no es del usuario).
+ */
+export async function previewFirmantesContrato(contratoId: string, userId?: string, userRol?: string) {
+  await getContratoById(contratoId, userId, userRol);
+  if (!env.FIRMA_MULTIPARTE_ENABLED) {
+    // Flujo de un solo firmante: no aplica el pre-chequeo multi-parte.
+    return { aplica: false as const, firmantes: [], puede_enviar: true };
+  }
+  const { previewFirmantesMultiparte } = await import('@/modules/firma/firma-multiparte.service');
+  const r = await previewFirmantesMultiparte(contratoId);
+  return { aplica: true as const, ...r };
+}
+
+/**
  * "Vista de verificación" del contrato (tarea 4.1d): re-renderiza la plantilla
  * con los datos_variables que se usaron al generar el contrato, RESALTANDO cada
  * valor insertado, para que la inmobiliaria confirme de un vistazo que el
