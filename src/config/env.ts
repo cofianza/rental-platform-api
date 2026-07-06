@@ -120,3 +120,17 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+// Guardrail (auditoría jul-2026): FRONTEND_URL alimenta TODOS los enlaces de los
+// correos salientes (verificación de cuenta, reset de contraseña, autorización
+// del inquilino, firma, pago, invitación de miembro…). Si en producción quedó
+// en el default localhost, esos enlaces llegan ROTOS al destinatario y el fallo
+// es silencioso. Avisamos fuerte en el arranque para que salte en los logs del
+// deploy (no abortamos para no bloquear un arranque legítimo mal configurado).
+if (env.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/.test(env.FRONTEND_URL)) {
+  console.error(
+    `[CONFIG] ADVERTENCIA CRÍTICA: FRONTEND_URL="${env.FRONTEND_URL}" en producción — ` +
+      'los enlaces de los correos (verificación, firma, pago, etc.) saldrán rotos. ' +
+      'Configura FRONTEND_URL=https://www.cofianza.co en las variables del servicio.',
+  );
+}

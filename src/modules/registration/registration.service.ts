@@ -145,14 +145,29 @@ export async function registerInmobiliaria(
 export async function verifyEmail(token: string): Promise<{ message: string }> {
   const tokenHash = hashToken(token);
 
-  const { data: tokenData, error: tokenError } = await supabase
+  const { data: tokenData } = await supabase
     .from('email_verification_tokens' as string)
     .select('id, user_id, expires_at, used_at')
     .eq('token_hash', tokenHash)
-    .is('used_at', null)
-    .single<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
+    .maybeSingle<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
 
-  if (tokenError || !tokenData) {
+  if (!tokenData) {
+    throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
+  }
+
+  // Idempotencia: si el enlace ya se usó (doble click en el correo, o el
+  // usuario lo reabre) y la cuenta ya quedó verificada, respondemos éxito en
+  // vez de un "enlace inválido" alarmante — la cuenta ya está activa.
+  if (tokenData.used_at) {
+    const { data: perfilRow } = await (supabase
+      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('email_verified_at')
+      .eq('id', tokenData.user_id)
+      .maybeSingle();
+    const perfilVerificado = perfilRow as { email_verified_at: string | null } | null;
+    if (perfilVerificado?.email_verified_at) {
+      return { message: 'Tu correo ya estaba verificado. Ya puedes iniciar sesion.' };
+    }
     throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
   }
 
