@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { resolveInmobiliariaIdForPerfil, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
 import type {
   CreateApplicantInput,
   UpdateApplicantInput,
@@ -141,6 +142,30 @@ export async function getApplicantById(id: string) {
 }
 
 // ============================================================
+// Alcance de "fichas propias" (3.1)
+// ============================================================
+
+/**
+ * Devuelve los creado_por que el actor puede reutilizar/buscar, o null si no
+ * hay filtro (admin/operador ven toda la base). Propietario = solo las suyas.
+ * Inmobiliaria = las de TODOS los miembros activos de su org: los co-miembros
+ * comparten la base de solicitantes de la agencia — sin esto, el unique global
+ * de documento dejaria a un miembro bloqueado (ni reutilizar ni crear) frente
+ * a una ficha creada por un colega de su misma inmobiliaria.
+ */
+async function resolveCreadoPorScope(userId: string, userRol?: string): Promise<string[] | null> {
+  if (userRol === 'propietario') return [userId];
+  if (userRol === 'inmobiliaria') {
+    const orgId = await resolveInmobiliariaIdForPerfil(userId);
+    if (!orgId) return [userId];
+    const ids = await resolveOrgMemberPerfilIds(orgId);
+    if (!ids.includes(userId)) ids.push(userId);
+    return ids;
+  }
+  return null;
+}
+
+// ============================================================
 // Create
 // ============================================================
 
@@ -160,14 +185,14 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
   // ficha. Cuando el documento existe pero pertenece a otra agencia, el INSERT
   // choca con el unique global y caemos en DOCUMENTO_DUPLICADO (rama 23505),
   // sin exponer PII ajena.
-  const scoped = userRol === 'propietario' || userRol === 'inmobiliaria';
+  const scopeIds = await resolveCreadoPorScope(createdBy, userRol);
 
   let dedupQb = (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
     .select(APPLICANT_FIELDS)
     .eq('tipo_documento', input.tipo_documento)
     .eq('numero_documento', input.numero_documento);
-  if (scoped) dedupQb = dedupQb.eq('creado_por', createdBy);
+  if (scopeIds) dedupQb = dedupQb.in('creado_por', scopeIds);
   const { data: existing } = await dedupQb.maybeSingle();
 
   if (existing) {
@@ -197,7 +222,7 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
         .select(APPLICANT_FIELDS)
         .eq('tipo_documento', input.tipo_documento)
         .eq('numero_documento', input.numero_documento);
-      if (scoped) raceQb = raceQb.eq('creado_por', createdBy);
+      if (scopeIds) raceQb = raceQb.in('creado_por', scopeIds);
       const { data: race } = await raceQb.maybeSingle();
       if (race) return { ...(race as Record<string, unknown>), reutilizado: true };
       throw AppError.conflict(
@@ -358,13 +383,22 @@ export async function deactivateApplicant(id: string, deactivatedBy: string, ip?
 // Search by document
 // ============================================================
 
-export async function searchByDocument(query: SearchByDocumentQuery) {
-  const { data, error } = await (supabase
+export async function searchByDocument(query: SearchByDocumentQuery, userId?: string, userRol?: string) {
+  // AISLAMIENTO MULTI-TENANT: mismo scope que el dedup de createApplicant —
+  // propietario solo encuentra sus fichas; inmobiliaria las de su org (todos
+  // los miembros activos comparten la base de la agencia). Sin este filtro,
+  // buscar por documento devolveria la ficha completa (PII) de un cliente de
+  // otra agencia y serviria de oraculo de enumeracion de cedulas.
+  // Admin/operador siguen viendo toda la base.
+  const scopeIds = userId ? await resolveCreadoPorScope(userId, userRol) : null;
+
+  let qb = (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
     .select(APPLICANT_FIELDS)
     .eq('tipo_documento', query.document_type)
-    .eq('numero_documento', query.document_number)
-    .maybeSingle();
+    .eq('numero_documento', query.document_number);
+  if (scopeIds) qb = qb.in('creado_por', scopeIds);
+  const { data, error } = await qb.maybeSingle();
 
   if (error) {
     logger.error({ error: error.message }, 'Error al buscar solicitante por documento');

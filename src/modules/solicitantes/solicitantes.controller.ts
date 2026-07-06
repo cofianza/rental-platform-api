@@ -47,7 +47,10 @@ export async function deactivate(req: Request, res: Response) {
 
 export async function searchByDocument(req: Request, res: Response) {
   const query = req.query as unknown as SearchByDocumentQuery;
-  const applicant = await solicitantesService.searchByDocument(query);
+  // userId/userRol: mismo motivo que el dedup de createApplicant — propietario/
+  // inmobiliaria solo encuentran sus propias fichas (no exponer PII de otra
+  // agencia ni servir de oraculo de cedulas). Admin/operador ven todo.
+  const applicant = await solicitantesService.searchByDocument(query, req.user?.id, req.user?.rol);
   sendSuccess(res, applicant);
 }
 
