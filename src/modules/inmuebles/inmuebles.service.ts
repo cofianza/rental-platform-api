@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
+import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds, perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import type {
   CreateInmuebleInput,
@@ -54,7 +54,7 @@ interface InmuebleWithOwnerRow extends InmuebleRow {
   perfiles: { id: string; nombre: string; apellido: string; telefono: string | null } | null;
 }
 
-const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, miembro_responsable_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
+const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, inmobiliaria_id, miembro_responsable_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
 
 const INMUEBLE_WITH_OWNER = `${INMUEBLE_FIELDS}, perfiles!inmuebles_propietario_id_fkey(id, nombre, apellido, telefono)`;
 
@@ -577,11 +577,32 @@ export async function getContratoVigenteDeInmueble(
   return (contrato as { id: string; estado: string } | null) ?? null;
 }
 
-// Toggle vitrina visibility — HP-369
-export async function toggleVisibility(id: string, visible_vitrina: boolean, userId: string) {
+// Toggle vitrina visibility — HP-369. "Pausar" = visible_vitrina=false (el
+// inmueble conserva su estado 'disponible', solo deja de mostrarse en la vitrina).
+export async function toggleVisibility(
+  id: string,
+  visible_vitrina: boolean,
+  userId: string,
+  userRol?: string,
+) {
   // Verify inmueble exists
   const inmueble = await getInmuebleById(id);
-  const estado = (inmueble as unknown as Record<string, unknown>).estado as string;
+  const row = inmueble as unknown as Record<string, unknown>;
+  const estado = row.estado as string;
+
+  // Ownership: inmobiliaria/propietario solo pueden pausar/publicar inmuebles
+  // que administran (el endpoint ya no es admin-only). Admin/operador pasan.
+  if (userRol === 'inmobiliaria' || userRol === 'propietario') {
+    const esDueno = await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: (row.propietario_id as string | null) ?? null,
+      inmuebleInmobiliariaId: (row.inmobiliaria_id as string | null) ?? null,
+    });
+    if (!esDueno) {
+      throw AppError.forbidden('No tienes permisos sobre este inmueble', 'INMUEBLE_FORBIDDEN');
+    }
+  }
 
   // Only available inmuebles can be published
   if (visible_vitrina && estado !== 'disponible') {
