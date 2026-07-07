@@ -1454,8 +1454,77 @@ export async function enviarContratoAFirma(
     throw sendErr;
   }
 
+  // Un solo contrato en firma por expediente: ahora que ESTE contrato quedó
+  // enviado con éxito, cancelamos los OTROS del mismo expediente que hubieran
+  // quedado en 'pendiente_firma' (sobrantes de envíos previos) + sus sobres
+  // Auco. Así no se acumulan sobres huérfanos que mantienen el inmueble ocupado.
+  await supersederContratosEnFirma(c.expediente_id, contratoId, userId);
+
   logger.info({ contratoId, userId }, 'Contrato enviado a firma manualmente');
   return { ok: true, message: 'Contrato enviado a firma.' };
+}
+
+/**
+ * "Un solo contrato en firma por expediente". Al enviar un contrato a firma,
+ * cancela los OTROS contratos del mismo expediente que estén en 'pendiente_firma'
+ * (cancela su sobre en Auco y los pasa a 'cancelado'). NO toca 'firmado'/'vigente'
+ * (más avanzados) ni el recién enviado. Best-effort: nunca tumba el envío nuevo.
+ */
+async function supersederContratosEnFirma(
+  expedienteId: string,
+  exceptContratoId: string,
+  userId: string,
+): Promise<void> {
+  try {
+    const { data: hermanos } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .neq('id', exceptContratoId)
+      .eq('estado', 'pendiente_firma');
+    const ids = ((hermanos as Array<{ id: string }> | null) ?? []).map((h) => h.id);
+    if (ids.length === 0) return;
+
+    const { cancelarSolicitudesDeContrato } = await import('@/modules/firma/firma.service');
+    for (const id of ids) {
+      // Cancelar sobres/solicitudes en Auco (best-effort; en local Auco puede fallar).
+      try {
+        await cancelarSolicitudesDeContrato(id);
+      } catch (e) {
+        logger.warn(
+          { contratoId: id, error: e instanceof Error ? e.message : String(e) },
+          'Superseder: no se pudo cancelar el sobre Auco del contrato anterior (continúo)',
+        );
+      }
+      await (supabase
+        .from('contratos' as string) as ReturnType<typeof supabase.from>)
+        .update({
+          estado: 'cancelado',
+          motivo_cancelacion: 'Reemplazado por un nuevo envío a firma del mismo expediente',
+          updated_at: new Date().toISOString(),
+        } as never)
+        .eq('id', id);
+      await (supabase
+        .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
+        .insert({
+          contrato_id: id,
+          estado_anterior: 'pendiente_firma',
+          estado_nuevo: 'cancelado',
+          descripcion:
+            'Cancelado automáticamente: se envió a firma otro contrato del mismo expediente (un solo contrato en firma por expediente)',
+          usuario_id: userId,
+        } as never);
+    }
+    logger.info(
+      { expedienteId, exceptContratoId, superseded: ids },
+      'Contratos en firma anteriores cancelados (un solo contrato en firma por expediente)',
+    );
+  } catch (err) {
+    logger.warn(
+      { expedienteId, exceptContratoId, error: err instanceof Error ? err.message : String(err) },
+      'Superseder contratos en firma falló (best-effort, ignorado)',
+    );
+  }
 }
 
 // ============================================================
