@@ -19,7 +19,8 @@ const FIRMADO_SELECT = `
   id, expediente_id, estado, storage_key, nombre_archivo,
   firmado_storage_key, firmado_nombre_archivo, firmado_hash_integridad,
   firmado_ip, firmado_user_agent, firmado_referencia_otp, firmado_notas,
-  firmado_tamano_bytes, firmado_subido_por, firmado_subido_en
+  firmado_tamano_bytes, firmado_subido_por, firmado_subido_en,
+  storage_key_firmado, nombre_archivo_firmado
 `;
 
 // ============================================================
@@ -79,6 +80,10 @@ async function fetchContratoFirmado(contratoId: string) {
     firmado_tamano_bytes: number | null;
     firmado_subido_por: string | null;
     firmado_subido_en: string | null;
+    // PDF firmado ARCHIVADO DESDE AUCO (firmas estampadas + certificado).
+    // OJO: columna distinta de firmado_storage_key (subida manual / combinado).
+    storage_key_firmado: string | null;
+    nombre_archivo_firmado: string | null;
   };
 }
 
@@ -306,36 +311,69 @@ export async function descargarContratoFirmado(
   ip?: string,
   userAgent?: string,
 ) {
-  const contrato = await fetchContratoFirmado(contratoId);
+  let contrato = await fetchContratoFirmado(contratoId);
 
-  // Determinar de donde sale el PDF:
-  //   1. firmado_storage_key (alguien subio el PDF estampado por separado,
-  //      o lo generamos previamente al combinar contrato + acuses).
-  //   2. Si no existe pero el contrato esta firmado/vigente y tiene
-  //      acuses de firma electronica, los combinamos al vuelo con el PDF
-  //      original y cacheamos el resultado en firmado_storage_key.
-  //   3. Fallback: PDF original solo (sin acuse).
-  let usarStorageKey: string | null = contrato.firmado_storage_key;
-  let nombreArchivo =
-    contrato.firmado_nombre_archivo ||
-    contrato.nombre_archivo ||
-    'contrato-firmado.pdf';
+  // Determinar de donde sale el PDF, en orden de FIDELIDAD (y reportarlo en
+  // `fuente` para que el front NO afirme "con firmas de Auco" sobre un PDF
+  // que no las tiene — bug jul-2026: se servia el original bajo ese banner):
+  //   1. 'manual'    → firmado_storage_key subido a mano (PDF estampado).
+  //   2. 'auco'      → storage_key_firmado: el PDF real de Auco (firmas
+  //                    estampadas + certificado). Si falta, se intenta
+  //                    archivar AHORA (lazy) — cubre contratos donde el
+  //                    archive post-firma fallo o no corrio.
+  //   3. 'combinado' → contrato original + acuses PDF generados localmente.
+  //   4. 'original'  → PDF generado sin firmas (ultimo recurso).
+  const esCombinadoCacheado = !!contrato.firmado_storage_key?.endsWith('firmado-combinado.pdf');
+  let usarStorageKey: string | null = null;
+  let nombreArchivo = contrato.nombre_archivo || 'contrato-firmado.pdf';
+  let fuente: 'manual' | 'auco' | 'combinado' | 'original';
 
-  if (!usarStorageKey && ESTADOS_CON_FIRMADO.includes(contrato.estado) && contrato.storage_key) {
-    // Intentar generar PDF combinado: contrato original + acuses de cada
-    // firma. Si falla o no hay acuses, caemos al PDF original.
-    const generado = await generarFirmadoCombinado(contrato).catch((err) => {
-      logger.warn(
-        { contratoId, err: err instanceof Error ? err.message : String(err) },
-        'Generar PDF firmado combinado: error — fallback al PDF original',
-      );
-      return null;
-    });
-    if (generado?.storageKey) {
-      usarStorageKey = generado.storageKey;
-      nombreArchivo = generado.nombreArchivo;
+  if (contrato.firmado_storage_key && !esCombinadoCacheado) {
+    usarStorageKey = contrato.firmado_storage_key;
+    nombreArchivo = contrato.firmado_nombre_archivo || nombreArchivo;
+    fuente = 'manual';
+  } else {
+    // 2. PDF firmado de Auco (con lazy-archive si aun no esta).
+    if (!contrato.storage_key_firmado && ESTADOS_CON_FIRMADO.includes(contrato.estado)) {
+      try {
+        const { archivarPdfFirmadoEnStorage } = await import('@/modules/firma/firma.service');
+        await archivarPdfFirmadoEnStorage(contratoId);
+        contrato = await fetchContratoFirmado(contratoId);
+      } catch (err) {
+        logger.warn(
+          { contratoId, err: err instanceof Error ? err.message : String(err) },
+          'Lazy archive del PDF firmado de Auco fallo',
+        );
+      }
+    }
+    if (contrato.storage_key_firmado) {
+      usarStorageKey = contrato.storage_key_firmado;
+      nombreArchivo = contrato.nombre_archivo_firmado || nombreArchivo;
+      fuente = 'auco';
+    } else if (esCombinadoCacheado && contrato.firmado_storage_key) {
+      usarStorageKey = contrato.firmado_storage_key;
+      nombreArchivo = contrato.firmado_nombre_archivo || nombreArchivo;
+      fuente = 'combinado';
+    } else if (ESTADOS_CON_FIRMADO.includes(contrato.estado) && contrato.storage_key) {
+      // 3. Combinar contrato original + acuses. Si falla, caer al original.
+      const generado = await generarFirmadoCombinado(contrato).catch((err) => {
+        logger.warn(
+          { contratoId, err: err instanceof Error ? err.message : String(err) },
+          'Generar PDF firmado combinado: error — fallback al PDF original',
+        );
+        return null;
+      });
+      if (generado?.storageKey) {
+        usarStorageKey = generado.storageKey;
+        nombreArchivo = generado.nombreArchivo;
+        fuente = 'combinado';
+      } else {
+        usarStorageKey = contrato.storage_key;
+        fuente = 'original';
+      }
     } else {
-      usarStorageKey = contrato.storage_key;
+      usarStorageKey = null;
+      fuente = 'original';
     }
   }
 
@@ -416,9 +454,12 @@ export async function descargarContratoFirmado(
 
   return {
     url: urlData.signedUrl,
-    nombre_archivo: contrato.firmado_nombre_archivo || 'contrato-firmado.pdf',
+    nombre_archivo: nombreArchivo,
     tipo_mime: 'application/pdf',
     expires_in: FIRMADO_URL_EXPIRY_SECONDS,
+    // De dónde salió el PDF — el front adapta el banner (no afirmar "con
+    // firmas de Auco" cuando fuente es 'combinado' u 'original').
+    fuente,
   };
 }
 

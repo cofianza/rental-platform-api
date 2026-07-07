@@ -1526,11 +1526,47 @@ export async function archivarPdfFirmadoEnStorage(contratoId: string): Promise<v
     .limit(1)
     .maybeSingle();
 
-  const sol = solRow as unknown as {
+  let sol = solRow as unknown as {
     id: string;
-    auco_signed_url: string;
+    auco_signed_url: string | null;
     auco_document_code: string;
   } | null;
+
+  // 2b. RESCATE: sin auco_signed_url guardada (webhooks/polls viejos no la
+  //     persistían, o expiró antes de usarse) pero con document code, pedirle
+  //     a Auco una URL fresca. Auco conserva el documento firmado: mientras
+  //     el sobre exista, esta vía recupera el PDF con las firmas estampadas.
+  if (!sol?.auco_signed_url) {
+    const { data: solCodeRow } = await (supabase
+      .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+      .select('id, auco_document_code')
+      .eq('contrato_id', contratoId)
+      .eq('estado', 'firmado')
+      .not('auco_document_code', 'is', null)
+      .order('firmado_en', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const solCode = solCodeRow as unknown as { id: string; auco_document_code: string } | null;
+    if (solCode?.auco_document_code) {
+      try {
+        const info = await aucoClient.getDocumentStatus(solCode.auco_document_code);
+        if (info.status === 'FINISH' && info.url) {
+          sol = { id: solCode.id, auco_signed_url: info.url, auco_document_code: solCode.auco_document_code };
+          // Persistir la URL para diagnósticos futuros (no crítica: expira).
+          await (supabase
+            .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+            .update({ auco_signed_url: info.url, updated_at: new Date().toISOString() } as never)
+            .eq('id', solCode.id);
+          logger.info({ contratoId, aucoCode: solCode.auco_document_code }, 'archivarPdfFirmado: URL recuperada de Auco por document code');
+        }
+      } catch (err) {
+        logger.warn(
+          { contratoId, error: err instanceof Error ? err.message : String(err) },
+          'archivarPdfFirmado: no se pudo recuperar la URL desde Auco por document code',
+        );
+      }
+    }
+  }
 
   if (!sol?.auco_signed_url) {
     logger.warn({ contratoId }, 'archivarPdfFirmado: no hay auco_signed_url disponible');
