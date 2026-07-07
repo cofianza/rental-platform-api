@@ -487,6 +487,58 @@ async function agregarMensajeInterno(
   }
 }
 
+/**
+ * Nº de moras ACTIVAS (fase_1/2/3) de un contrato. Lo usa la UI de "Terminar
+ * contrato" para advertir al operador antes de cerrar (una mora sobrevive a la
+ * terminación por diseño — el cobro de la fianza sigue). Best-effort: 0 si falla.
+ * OJO: no aplica tenant-scoping — asume que el caller ya validó ownership del
+ * contrato (hoy: getContratoTransitions vía assertPuedeVerContrato).
+ */
+export async function contarMorasActivasDeContrato(contratoId: string): Promise<number> {
+  const { count, error } = await db('moras_tickets')
+    .select('id', { count: 'exact', head: true })
+    .eq('contrato_id', contratoId)
+    .in('estado', ESTADOS_ACTIVOS as unknown as string[]);
+  if (error) {
+    logger.warn({ error: error.message, contratoId }, 'No se pudo contar moras activas del contrato');
+    return 0;
+  }
+  return count ?? 0;
+}
+
+/**
+ * Deja un mensaje interno de sistema en las moras ACTIVAS de un contrato cuando
+ * este se termina/cancela, SIN cambiar su estado. La mora sobrevive al contrato
+ * a propósito (cobro de la fianza tras impago); esto solo da trazabilidad para
+ * que el asesor revise si sigue vigente. Log-only: nunca lanza.
+ */
+export async function anotarContratoTerminadoEnMoras(
+  contratoId: string,
+  targetState: 'finalizado' | 'cancelado',
+): Promise<void> {
+  try {
+    const { data } = await db('moras_tickets')
+      .select('id')
+      .eq('contrato_id', contratoId)
+      .in('estado', ESTADOS_ACTIVOS as unknown as string[]);
+    const moras = (data as Array<{ id: string }> | null) ?? [];
+    const verbo = targetState === 'cancelado' ? 'canceló' : 'finalizó';
+    for (const m of moras) {
+      await agregarMensajeInterno(
+        m.id,
+        'sistema',
+        null,
+        `El contrato se ${verbo}. Revisar si esta mora sigue vigente (el cobro continúa salvo que se marque pagada o se cancele).`,
+      );
+    }
+    if (moras.length > 0) {
+      logger.info({ contratoId, moras: moras.length }, 'Moras activas anotadas por terminación del contrato');
+    }
+  } catch (err) {
+    logger.warn({ err, contratoId }, 'No se pudieron anotar las moras al terminar el contrato');
+  }
+}
+
 // ============================================================
 // Cron auto-escalado: Fase 1 → 2 (+4d), Fase 2 → 3 (+10d)
 // ============================================================

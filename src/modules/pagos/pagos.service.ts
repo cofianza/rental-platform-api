@@ -405,6 +405,67 @@ export async function cancelPago(pagoId: string, userId: string, ip?: string) {
   return pago;
 }
 
+/**
+ * Cancela TODOS los pagos pendientes/en proceso de un expediente. Variante de
+ * SISTEMA (userId null) para los side-effects de "Terminar/Cancelar contrato".
+ * ALCANCE: `pagos` NO tiene `contrato_id` (solo `expediente_id`), así que esto
+ * cancela CUALQUIER pago pendiente del expediente sin importar concepto/contrato.
+ * En el modelo normal (1 expediente ≈ 1 relación de arriendo) es correcto; el
+ * caller ya gatea con `inmuebleLiberado` (no se llama si hay renovación en curso
+ * que podría financiarse con esos links).
+ * sin esto, un link de pago pendiente seguía siendo pagable y un webhook tardío
+ * lo completaba, mandaba "¡recibimos tu pago!" y facturaba en Factus sobre un
+ * contrato ya terminado. LOG-ONLY: nunca lanza — la transición del contrato ya
+ * quedó confirmada. Un pago 'procesando' (PSE) que luego aprueba cae a
+ * pagos_no_conciliados (fail-safe existente) para conciliación/reembolso manual.
+ * Expira además el link en la pasarela (best-effort).
+ */
+export async function cancelarPagosPendientesDeExpediente(
+  expedienteId: string,
+  motivo: string,
+): Promise<void> {
+  try {
+    const { data } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, metodo, external_id')
+      .eq('expediente_id', expedienteId)
+      .in('estado', ['pendiente', 'procesando']);
+    const pagos = (data as Array<{ id: string; estado: string; metodo: string | null; external_id: string | null }> | null) ?? [];
+
+    for (const pago of pagos) {
+      try {
+        await transitionPagoState({
+          pagoId: pago.id,
+          targetEstado: 'cancelado',
+          origen: 'system',
+          detalles: { motivo, cancelado_por: 'sistema' },
+          userId: null,
+        });
+        // Expirar el link en la pasarela (best-effort): un pago cancelado no
+        // debe seguir siendo pagable desde el email del arrendatario.
+        if (pago.metodo === 'pasarela' && pago.external_id) {
+          const gateway = getPaymentGateway();
+          if (gateway.cancelPaymentLink) {
+            gateway.cancelPaymentLink(pago.external_id).catch((err) =>
+              logger.warn({ err, pagoId: pago.id }, 'No se pudo expirar el link en la pasarela'),
+            );
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          { err, pagoId: pago.id, expedienteId },
+          'No se pudo cancelar un pago pendiente al terminar el contrato',
+        );
+      }
+    }
+    if (pagos.length > 0) {
+      logger.info({ expedienteId, cancelados: pagos.length }, 'Pagos pendientes cancelados al terminar el contrato');
+    }
+  } catch (err) {
+    logger.error({ err, expedienteId }, 'Error cancelando pagos pendientes del expediente');
+  }
+}
+
 // ============================================================
 // Resend payment link email — POST /pagos/:pagoId/reenviar-link
 // ============================================================

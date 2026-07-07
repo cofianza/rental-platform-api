@@ -268,10 +268,24 @@ export async function getContratoTransitions(contratoId: string, user: AuthUser)
     transiciones = [];
   }
 
+  // Moras activas del contrato: la UI advierte antes de terminar (la mora
+  // sobrevive a la terminación — el cobro sigue — así que el operador debe
+  // decidir si marcarla pagada/cancelarla explícitamente). Best-effort.
+  let morasActivas = 0;
+  if (transiciones.some((t) => OWNER_TERMINATE_STATES.includes(t.estado))) {
+    try {
+      const { contarMorasActivasDeContrato } = await import('@/modules/moras/moras.service');
+      morasActivas = await contarMorasActivasDeContrato(contratoId);
+    } catch {
+      // no crítico
+    }
+  }
+
   return {
     contrato_id: contratoId,
     estado_actual: contrato.estado,
     transiciones_disponibles: transiciones,
+    moras_activas: morasActivas,
   };
 }
 
@@ -516,8 +530,8 @@ async function applySideEffects(
         .update({ fecha_terminacion: new Date().toISOString() } as never)
         .eq('id', contratoId);
       // El arriendo terminó: el inmueble vuelve a estar disponible (fuera de vitrina).
-      await liberarInmuebleDelExpediente(expedienteId, contratoId);
-      await aplicarEfectosTerminacion(contratoId, expedienteId, 'finalizado', input, usuarioId);
+      const liberadoFin = await liberarInmuebleDelExpediente(expedienteId, contratoId);
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'finalizado', input, usuarioId, liberadoFin);
       break;
     }
 
@@ -538,7 +552,7 @@ async function applySideEffects(
       // pendiente_firma cuando el contrato padre ya finalizó (el guard de
       // renovación evitó liberarlo entonces; sin esto quedaría 'ocupado' para
       // siempre, con el expediente ya cerrado).
-      await liberarInmuebleDelExpediente(
+      const liberadoCancel = await liberarInmuebleDelExpediente(
         expedienteId,
         contratoId,
         fromState === 'vigente' ? ['ocupado', 'en_estudio'] : ['ocupado'],
@@ -552,7 +566,7 @@ async function applySideEffects(
       } catch (err) {
         logger.error({ err, contratoId }, 'No se pudieron cancelar las solicitudes de firma del contrato cancelado');
       }
-      await aplicarEfectosTerminacion(contratoId, expedienteId, 'cancelado', input, usuarioId);
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'cancelado', input, usuarioId, liberadoCancel);
       break;
     }
   }
@@ -576,12 +590,35 @@ async function aplicarEfectosTerminacion(
   targetState: 'finalizado' | 'cancelado',
   input: ContratoTransitionInput,
   usuarioId: string | null,
+  inmuebleLiberado: boolean,
 ): Promise<void> {
   const automatico = usuarioId === null;
 
   notificarPartesContratoTerminado(contratoId, expedienteId, targetState, automatico).catch((e) =>
     logger.warn({ error: e, contratoId }, 'Error notificando terminación del contrato'),
   );
+
+  // MORAS: NO se cancelan — una mora sobrevive al contrato por diseño (el cobro
+  // de la fianza continúa tras un impago). Solo dejamos rastro interno para que
+  // el asesor revise; la UI ya advierte antes de terminar si hay moras activas.
+  import('@/modules/moras/moras.service')
+    .then((m) => m.anotarContratoTerminadoEnMoras(contratoId, targetState))
+    .catch((e) => logger.warn({ error: e, contratoId }, 'Error anotando moras por terminación'));
+
+  // PAGOS: cancelar links pendientes/en proceso del expediente SOLO si el
+  // arriendo terminó de verdad (inmuebleLiberado). Si hay una renovación en
+  // curso (guard), los pagos pueden financiarla → NO se tocan. Sin esto, un
+  // webhook tardío completaba el pago y facturaba sobre un contrato terminado.
+  if (inmuebleLiberado) {
+    import('@/modules/pagos/pagos.service')
+      .then((p) =>
+        p.cancelarPagosPendientesDeExpediente(
+          expedienteId,
+          `Contrato ${targetState} — pagos pendientes cancelados`,
+        ),
+      )
+      .catch((e) => logger.warn({ error: e, expedienteId }, 'Error cancelando pagos pendientes por terminación'));
+  }
 
   try {
     const descripcion =
@@ -648,11 +685,17 @@ async function aplicarEfectosTerminacion(
  * padre cuando ya corre su renovación — NO se libera: el inmueble sigue
  * arrendado por el contrato sucesor.
  */
+/**
+ * @returns `true` si el expediente NO tiene contrato sucesor activo (vigente/
+ * firmado/pendiente_firma) — es decir, el arriendo terminó de verdad y el
+ * expediente puede tratarse como cerrado (→ seguro cancelar pagos pendientes).
+ * `false` si hay una renovación en curso o no se pudo verificar (fail-closed).
+ */
 async function liberarInmuebleDelExpediente(
   expedienteId: string,
   contratoId: string,
   desde: string[] = ['ocupado', 'en_estudio'],
-): Promise<void> {
+): Promise<boolean> {
   try {
     const { data: otros, error: guardError } = await (supabase
       .from('contratos' as string) as ReturnType<typeof supabase.from>)
@@ -668,14 +711,14 @@ async function liberarInmuebleDelExpediente(
         { expedienteId, contratoId, error: guardError.message },
         'Guard de renovación falló — inmueble NO liberado por precaución',
       );
-      return;
+      return false;
     }
     if (((otros as Array<{ id: string }> | null) ?? []).length > 0) {
       logger.info(
         { expedienteId, contratoId },
         'Inmueble NO liberado: el expediente tiene otro contrato activo/en firma (renovación)',
       );
-      return;
+      return false;
     }
 
     const { data: expRow, error: expError } = await (supabase
@@ -685,14 +728,18 @@ async function liberarInmuebleDelExpediente(
       .single();
     if (expError) {
       logger.error({ expedienteId, error: expError.message }, 'No se pudo resolver el inmueble del expediente para liberarlo');
-      return;
+      return false;
     }
     const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
-    if (!inmuebleId) return;
+    // Sin inmueble no hay nada que liberar, pero el expediente igual quedó sin
+    // sucesor → se considera cerrado (safe para cancelar pagos).
+    if (!inmuebleId) return true;
     const { liberarInmuebleTrasContrato } = await import('@/modules/inmuebles/inmuebles.service');
     await liberarInmuebleTrasContrato(inmuebleId, desde);
+    return true;
   } catch (err) {
     logger.error({ err, expedienteId }, 'No se pudo liberar el inmueble tras fin/cancelación del contrato');
+    return false;
   }
 }
 
