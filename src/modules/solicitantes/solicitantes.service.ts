@@ -43,7 +43,7 @@ interface ApplicantRow {
 // Constants
 // ============================================================
 
-const APPLICANT_FIELDS = `id, tipo_persona, nombre, apellido, tipo_documento, numero_documento, email, telefono, direccion, departamento, ciudad, ocupacion, actividad_economica, empresa, ingresos_mensuales, nivel_educativo, parentesco, habitara_inmueble, estado, creado_por, created_at, updated_at`;
+const APPLICANT_FIELDS = `id, tipo_persona, nombre, apellido, tipo_documento, numero_documento, email, telefono, direccion, departamento, ciudad, ocupacion, actividad_economica, empresa, ingresos_mensuales, nivel_educativo, parentesco, habitara_inmueble, estado, creado_por, inmobiliaria_id, created_at, updated_at`;
 
 // ============================================================
 // List
@@ -261,7 +261,7 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
 
 export async function updateApplicant(id: string, input: UpdateApplicantInput, updatedBy: string, ip?: string, userRol?: string) {
   // Obtener estado anterior para diff
-  const previous = await getApplicantById(id) as { creado_por?: string | null } & Record<string, unknown>;
+  const previous = await getApplicantById(id) as { creado_por?: string | null; inmobiliaria_id?: string | null } & Record<string, unknown>;
 
   // Ownership: propietario/inmobiliaria solo pueden editar los solicitantes que
   // ELLOS registraron. Sin esto, con solicitantes:update podrían modificar por
@@ -289,13 +289,19 @@ export async function updateApplicant(id: string, input: UpdateApplicantInput, u
   const documentChanged = updateData.tipo_documento !== undefined || updateData.numero_documento !== undefined;
 
   if (documentChanged) {
-    const { data: existing } = await (supabase
+    // Unicidad POR AGENCIA (consistente con createApplicant y el índice
+    // COALESCE(inmobiliaria_id, creado_por)): solo choca si OTRA ficha de LA
+    // MISMA agencia ya tiene ese documento. Una ficha de otra agencia (p. ej.
+    // el mismo documento registrado por otra inmobiliaria) NO bloquea.
+    let dupQb = (supabase
       .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
       .select('id')
       .eq('tipo_documento', newTipoDoc)
       .eq('numero_documento', newNumDoc)
-      .neq('id', id)
-      .maybeSingle();
+      .neq('id', id);
+    if (previous.inmobiliaria_id) dupQb = dupQb.eq('inmobiliaria_id', previous.inmobiliaria_id);
+    else if (previous.creado_por) dupQb = dupQb.eq('creado_por', previous.creado_por);
+    const { data: existing } = await dupQb.maybeSingle();
 
     if (existing) {
       throw AppError.conflict(
