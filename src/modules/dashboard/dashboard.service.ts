@@ -515,7 +515,9 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
       // Disponible = sin contrato activo (evita doble conteo si el estado del
       // inmueble no se actualizó al firmar; arrendados + disponibles = total).
       disponibles: inmuebles.filter((i) => !i.garantiaActiva).length,
-      enVitrina: inmuebles.filter((i) => i.visibleVitrina).length,
+      // Publicado DE VERDAD = flag + disponible + sin contrato activo (la
+      // vitrina pública exige estado='disponible'; el flag solo no basta).
+      enVitrina: inmuebles.filter((i) => i.visibleVitrina && i.estado === 'disponible' && !i.garantiaActiva).length,
       ingresoMes: inmuebles.filter((i) => i.garantiaActiva).reduce((s, i) => s + i.canon, 0),
     },
     inmuebles,
@@ -1162,11 +1164,14 @@ async function countInmobiliariasActivas(): Promise<number> {
 }
 
 async function countVitrinaPublicados(): Promise<number> {
+  // Mismo criterio que la vitrina pública (public-properties.service): flag +
+  // estado disponible. Solo con el flag, el KPI contaba inmuebles ocupados.
   const { count, error } = await (
     supabase.from('inmuebles' as string) as ReturnType<typeof supabase.from>
   )
     .select('*', { count: 'exact', head: true })
-    .eq('visible_vitrina', true);
+    .eq('visible_vitrina', true)
+    .eq('estado', 'disponible');
 
   if (error) throw fromSupabaseError(error);
   return count ?? 0;

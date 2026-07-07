@@ -304,6 +304,25 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
     throw AppError.badRequest('No se proporcionaron campos para actualizar');
   }
 
+  // Guard de vitrina (paridad con toggleVisibility, que este PUT general
+  // permitía saltarse). Coerción silenciosa —no error— porque el form de
+  // edición precarga el checkbox con el valor actual y lanzar bloquearía
+  // ediciones inocentes de un inmueble con flag residual.
+  //  1. ENCENDER (false→true) solo se acepta con estado final 'disponible'.
+  //  2. En 'ocupado'/'inactivo' el flag no tiene ningún uso (la liberación lo
+  //     fuerza a false de todas formas) → se apaga: cada edición auto-sanea
+  //     filas rancias. OJO: 'en_estudio' se exime a propósito — ahí el flag
+  //     en true se CONSERVA para que el inmueble vuelva solo a la vitrina si
+  //     el estudio se cae.
+  const prevRow = previous as unknown as Record<string, unknown>;
+  const estadoFinal = (input.estado ?? prevRow.estado) as string;
+  if (updateData.visible_vitrina === true) {
+    const encendiendo = prevRow.visible_vitrina !== true;
+    if ((encendiendo && estadoFinal !== 'disponible') || estadoFinal === 'ocupado' || estadoFinal === 'inactivo') {
+      updateData.visible_vitrina = false;
+    }
+  }
+
   // Update atomico via RPC: actualiza inmueble + registra cambios por campo en una transaccion
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rpcResult, error: rpcError } = await (supabase as any).rpc('update_inmueble_con_cambios', {
@@ -501,11 +520,15 @@ export async function validateDisponibleParaEstudio(inmuebleId: string) {
 
 // ============================================================
 // Bloqueo automático del inmueble según el ciclo del expediente.
-// La vitrina pública filtra estado='disponible', así que cambiar el estado
-// lo esconde/expone sin tocar visible_vitrina (que se conserva).
+// La vitrina pública filtra estado='disponible' AND visible_vitrina=true.
 //   - Temporal (en_estudio): mientras un candidato está en estudio. Solo desde
-//     'disponible' (no pisa 'ocupado'/'inactivo'). Reversible.
-//   - Permanente (ocupado): al firmarse el contrato. No reversible aquí.
+//     'disponible' (no pisa 'ocupado'/'inactivo'). Reversible: CONSERVA
+//     visible_vitrina para que al caerse el estudio vuelva solo a la vitrina.
+//   - Permanente (ocupado): al quedar el contrato vigente. Aquí SÍ se apaga
+//     visible_vitrina: el flag nunca se aprovecha durante la ocupación (la
+//     liberación posterior lo fuerza a false de todas formas) y dejarlo en
+//     true hacía que el dashboard mostrara "En vitrina"/toggle ON en un
+//     inmueble arrendado (bug Apt-001, jul-2026).
 // Fire-and-forget desde los flujos: no deben tumbar el flujo de negocio.
 // ============================================================
 
@@ -525,9 +548,17 @@ export async function bloquearInmuebleEnEstudio(inmuebleId: string) {
   await setInmuebleEstado(inmuebleId, 'en_estudio', 'disponible');
 }
 
-/** Bloqueo PERMANENTE: contrato firmado. → ocupado. */
+/**
+ * Bloqueo PERMANENTE: contrato vigente. → ocupado + fuera de vitrina.
+ * Simétrico con liberarInmuebleTrasContrato (que también fuerza el flag a
+ * false): el dueño decide re-publicar cuando el inmueble vuelva a liberarse.
+ */
 export async function bloquearInmuebleOcupado(inmuebleId: string) {
-  await setInmuebleEstado(inmuebleId, 'ocupado');
+  const { error } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'ocupado', visible_vitrina: false, updated_at: new Date().toISOString() } as never)
+    .eq('id', inmuebleId);
+  if (error) logger.warn({ error: error.message, inmuebleId }, 'No se pudo marcar el inmueble como ocupado');
 }
 
 /** Liberar SOLO el bloqueo temporal (rechazo/cancelación). en_estudio → disponible. */

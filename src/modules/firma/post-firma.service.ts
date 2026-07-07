@@ -98,6 +98,24 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
     await transitionContratoToFirmado(contrato, nombreFirmante);
   }
 
+  // 3.2. Auto-activar: firmado → vigente + inmueble ocupado + expediente
+  //      cerrado. Antes esto solo corría lazy (maybeAutoActivarVigente desde
+  //      listContratosByExpediente), así que el contrato quedaba en 'firmado'
+  //      —y el inmueble publicable— hasta que ALGUIEN abriera el expediente.
+  //      Se dispara con allSigned a secas (no solo si la transición del paso 3
+  //      corrió ahora): así un reintento del webhook también sana contratos que
+  //      ya estaban 'firmado' de una corrida parcial anterior. Idempotente
+  //      (maybeAutoActivarVigente verifica estado y tiene lock in-flight).
+  //      Import dinámico para no crear ciclo estático firma ↔ contratos.
+  if (allSigned) {
+    try {
+      const { maybeAutoActivarVigente } = await import('@/modules/contratos/contratos.service');
+      await maybeAutoActivarVigente(contratoId, contrato.expediente_id);
+    } catch (err) {
+      logger.error({ error: err, contratoId }, 'Post-firma: error auto-activando contrato a vigente');
+    }
+  }
+
   // 3.5. Archivar PDF firmado en nuestro Storage. Cuando todas las partes
   //      firmaron, descargamos de Auco la version con certificado/hash/OTP
   //      y la guardamos local — asi "Descargar contrato" devuelve el PDF

@@ -302,11 +302,13 @@ export async function onEstudioCompletado(params: {
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');
 
-      // Liberar inmueble
+      // Liberar inmueble — SOLO el bloqueo temporal (en_estudio → disponible).
+      // Antes era un UPDATE incondicional a 'disponible' que podía pisar un
+      // 'ocupado' legítimo si el resultado del estudio llegaba tarde (p. ej.
+      // reintento del proveedor con el contrato ya vigente).
       if (inm) {
-        await db('inmuebles')
-          .update({ estado: 'disponible', updated_at: new Date().toISOString() } as never)
-          .eq('id', inm.id);
+        const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
+        await liberarInmuebleEnEstudio(inm.id);
       }
 
       if (sol?.email) {
@@ -391,63 +393,12 @@ export async function onEstudioCompletado(params: {
 }
 
 // ── Event: Firma Completada ─────────────────────────────────
-
-export async function onFirmaCompletada(params: {
-  contratoId: string;
-  expedienteId: string;
-}) {
-  const { contratoId, expedienteId } = params;
-  logger.info({ contratoId, expedienteId }, 'Orchestrator: firma completada');
-
-  try {
-    const { data: solicitudes } = await db('solicitudes_firma')
-      .select('id, estado')
-      .eq('contrato_id', contratoId) as { data: Array<{ id: string; estado: string }> | null };
-
-    const todasFirmadas = solicitudes?.every((s) => s.estado === 'firmado');
-
-    if (todasFirmadas) {
-      await db('contratos')
-        .update({ estado: 'vigente', updated_at: new Date().toISOString() } as never)
-        .eq('id', contratoId);
-
-      await transicionarExpediente(expedienteId, 'cerrado');
-      await registrarTimeline(expedienteId, 'contrato', 'Contrato firmado por todas las partes. Expediente cerrado automaticamente.');
-
-      // Bloqueo PERMANENTE del inmueble: ya está arrendado → estado 'ocupado',
-      // sale de la vitrina y no admite nuevas solicitudes. Fire-and-forget.
-      (async () => {
-        const { inmuebleId } = await getSolicitanteDelExpediente(expedienteId);
-        if (inmuebleId) {
-          const { bloquearInmuebleOcupado } = await import('@/modules/inmuebles/inmuebles.service');
-          await bloquearInmuebleOcupado(inmuebleId);
-        }
-      })().catch((err) => logger.warn({ err, expedienteId }, 'Orchestrator: no se pudo marcar el inmueble como ocupado'));
-
-      // WhatsApp de status al solicitante: contrato firmado por todos —
-      // cierre feliz del proceso (fire-and-forget).
-      (async () => {
-        const { sol, inmuebleId } = await getSolicitanteDelExpediente(expedienteId);
-        let direccion = 'arrendado';
-        if (inmuebleId) {
-          const { data: inm } = await db('inmuebles')
-            .select('direccion')
-            .eq('id', inmuebleId)
-            .maybeSingle();
-          direccion = (inm as { direccion?: string | null } | null)?.direccion || direccion;
-        }
-        await enviarTemplate({
-          to: sol?.telefono ?? null,
-          template: 'CONTRATO_FIRMADO',
-          variables: [sol?.nombre || 'Hola', direccion],
-          context: { expediente_id: expedienteId, contrato_id: contratoId },
-        });
-      })().catch((err) => logger.warn({ err, contratoId }, 'Orchestrator: WhatsApp de contrato firmado falló'));
-    }
-  } catch (error) {
-    logger.error({ error, contratoId }, 'Orchestrator: error en onFirmaCompletada');
-  }
-}
+// (Eliminado, jul-2026.) Aquí vivía onFirmaCompletada: código MUERTO (sin
+// callers) que además activaba 'vigente' con UPDATE directo saltándose la
+// máquina de estados (sin fecha_firma, sin historial). El pipeline post-firma
+// canónico vive en firma/post-firma.service.ts (RPC transicionar_contrato +
+// maybeAutoActivarVigente en contratos.service.ts, que marca el inmueble
+// ocupado y cierra el expediente). No reintroducir un segundo punto de entrada.
 
 // ── Event: Pago Confirmado ──────────────────────────────────
 

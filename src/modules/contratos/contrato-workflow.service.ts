@@ -116,7 +116,7 @@ export async function executeContratoTransition(
   const result = data as TransitionRpcResult;
 
   // Efectos secundarios post-transicion
-  await applySideEffects(contratoId, contrato.expediente_id, targetState, input);
+  await applySideEffects(contratoId, contrato.expediente_id, targetState, input, currentState);
 
   logger.info(
     { contratoId, from: currentState, to: targetState, userId: user.id },
@@ -200,7 +200,7 @@ export async function finalizarContratoVencido(contratoId: string): Promise<bool
   const result = data as TransitionRpcResult;
 
   // Efectos secundarios: setea fecha_terminacion y libera el inmueble.
-  await applySideEffects(contratoId, contrato.expediente_id, 'finalizado', input);
+  await applySideEffects(contratoId, contrato.expediente_id, 'finalizado', input, 'vigente');
 
   logAudit({
     usuarioId: null,
@@ -423,6 +423,7 @@ async function applySideEffects(
   expedienteId: string,
   targetState: EstadoContrato,
   input: ContratoTransitionInput,
+  fromState: EstadoContrato,
 ): Promise<void> {
   switch (targetState) {
     case 'firmado': {
@@ -434,7 +435,12 @@ async function applySideEffects(
     }
 
     case 'vigente': {
-      // Marcar expediente como cerrado cuando el contrato entra en vigencia
+      // El contrato entra en vigencia: el inmueble queda ARRENDADO. Marcarlo
+      // 'ocupado' ANTES de cerrar el expediente (mismo efecto que el auto-heal
+      // de firma electrónica; esta ruta cubre la activación manual y el
+      // contrato firmado en papel, que antes dejaban el inmueble publicable
+      // y aceptando estudios con contrato vigente).
+      await ocuparInmuebleDelExpediente(expedienteId);
       await (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
         .update({ estado: 'cerrado', updated_at: new Date().toISOString() } as never)
@@ -448,7 +454,7 @@ async function applySideEffects(
         .update({ fecha_terminacion: new Date().toISOString() } as never)
         .eq('id', contratoId);
       // El arriendo terminó: el inmueble vuelve a estar disponible (fuera de vitrina).
-      await liberarInmuebleDelExpediente(expedienteId);
+      await liberarInmuebleDelExpediente(expedienteId, contratoId);
       break;
     }
 
@@ -460,8 +466,15 @@ async function applySideEffects(
           fecha_terminacion: new Date().toISOString(),
         } as never)
         .eq('id', contratoId);
-      // Contrato cancelado (vigente o pre-firma): liberar el inmueble (fuera de vitrina).
-      await liberarInmuebleDelExpediente(expedienteId);
+      // Liberar el inmueble SOLO al cancelar un contrato que estaba VIGENTE
+      // (arriendo en curso que se rompe). Cancelar un contrato pre-firma
+      // (borrador/en_revision/aprobado/pendiente_firma/firmado) NO toca el
+      // inmueble: el bloqueo temporal 'en_estudio' pertenece al ciclo del
+      // EXPEDIENTE (que sigue activo y puede generar otro contrato); su propia
+      // cancelación ya lo libera con liberarInmuebleEnEstudio.
+      if (fromState === 'vigente') {
+        await liberarInmuebleDelExpediente(expedienteId, contratoId);
+      }
       break;
     }
   }
@@ -472,9 +485,29 @@ async function applySideEffects(
  * contrato. Se AWAITea en applySideEffects para que el inmueble quede liberado
  * antes de responder (el front re-consulta y lo ve 'disponible'). No re-lanza:
  * si falla, loguea ERROR pero no tumba la transición del contrato (que ya pasó).
+ *
+ * Guard de RENOVACIÓN: si el mismo expediente tiene OTRO contrato activo o en
+ * camino (vigente/firmado/pendiente_firma) — típico al finalizar el contrato
+ * padre cuando ya corre su renovación — NO se libera: el inmueble sigue
+ * arrendado por el contrato sucesor.
  */
-async function liberarInmuebleDelExpediente(expedienteId: string): Promise<void> {
+async function liberarInmuebleDelExpediente(expedienteId: string, contratoId: string): Promise<void> {
   try {
+    const { data: otros } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .neq('id', contratoId)
+      .in('estado', ['vigente', 'firmado', 'pendiente_firma'])
+      .limit(1);
+    if (((otros as Array<{ id: string }> | null) ?? []).length > 0) {
+      logger.info(
+        { expedienteId, contratoId },
+        'Inmueble NO liberado: el expediente tiene otro contrato activo/en firma (renovación)',
+      );
+      return;
+    }
+
     const { data: expRow } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('inmueble_id')
@@ -486,6 +519,27 @@ async function liberarInmuebleDelExpediente(expedienteId: string): Promise<void>
     await liberarInmuebleTrasContrato(inmuebleId);
   } catch (err) {
     logger.error({ err, expedienteId }, 'No se pudo liberar el inmueble tras fin/cancelación del contrato');
+  }
+}
+
+/**
+ * Contrapartida de liberarInmuebleDelExpediente: al quedar VIGENTE el contrato,
+ * el inmueble del expediente pasa a 'ocupado' y sale de la vitrina. Mismo
+ * patrón log-only: la transición ya se confirmó vía RPC, no se revierte.
+ */
+async function ocuparInmuebleDelExpediente(expedienteId: string): Promise<void> {
+  try {
+    const { data: expRow } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('inmueble_id')
+      .eq('id', expedienteId)
+      .single();
+    const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
+    if (!inmuebleId) return;
+    const { bloquearInmuebleOcupado } = await import('@/modules/inmuebles/inmuebles.service');
+    await bloquearInmuebleOcupado(inmuebleId);
+  } catch (err) {
+    logger.error({ err, expedienteId }, 'No se pudo marcar el inmueble como ocupado al activar el contrato');
   }
 }
 

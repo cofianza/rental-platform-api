@@ -141,9 +141,16 @@ export async function executeTransition(
       );
     }
 
-    // Liberar el inmueble si estaba bloqueado temporalmente (en_estudio) por
-    // este expediente. Solo revierte el bloqueo temporal — un inmueble ocupado
-    // (contrato firmado) no se toca. Fire-and-forget.
+  }
+
+  // Liberar el inmueble si estaba bloqueado temporalmente (en_estudio) por
+  // este expediente. Corre en TODO rechazo o cierre — no solo en cancelación:
+  // antes un condicionado→rechazado manual dejaba el inmueble atascado en
+  // 'en_estudio' para siempre (sin admitir nuevos estudios ni volver a
+  // vitrina). Es seguro para el cierre natural post-contrato: el flujo del
+  // contrato ya marcó el inmueble 'ocupado' y liberarInmuebleEnEstudio solo
+  // transiciona desde 'en_estudio'. Fire-and-forget.
+  if (targetState === 'rechazado' || targetState === 'cerrado') {
     (async () => {
       const { data: expRow } = await (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -155,7 +162,7 @@ export async function executeTransition(
         const { liberarInmuebleEnEstudio } = await import('../inmuebles/inmuebles.service');
         await liberarInmuebleEnEstudio(inmuebleId);
       }
-    })().catch((e) => logger.warn({ e, expedienteId }, 'No se pudo liberar el inmueble tras cancelar'));
+    })().catch((e) => logger.warn({ e, expedienteId }, 'No se pudo liberar el inmueble tras rechazo/cierre'));
   }
 
   logger.info(

@@ -826,6 +826,9 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
     } as never);
 
   // 6. Si se rechazó: liberar el inmueble (mismo patrón que orchestrator).
+  //    SOLO el bloqueo temporal (en_estudio → disponible): un UPDATE
+  //    incondicional podía pisar un 'ocupado' legítimo si este resultado
+  //    llegaba con otro contrato ya vigente sobre el inmueble.
   if (nuevoEstadoExpediente === 'rechazado') {
     const { data: expRow } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -834,10 +837,8 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
       .maybeSingle();
     const inmuebleId = (expRow as { inmueble_id?: string } | null)?.inmueble_id;
     if (inmuebleId) {
-      await (supabase
-        .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-        .update({ estado: 'disponible', updated_at: nowIso } as never)
-        .eq('id', inmuebleId);
+      const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
+      await liberarInmuebleEnEstudio(inmuebleId);
     }
   }
 
