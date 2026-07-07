@@ -407,9 +407,23 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     // para ese mismo solicitante en ese mismo inmueble.
     if (error.code === '23505') {
       if ((error.message || '').includes('idx_expediente_activo_solicitante_inmueble')) {
-        throw AppError.conflict(
-          'Este solicitante ya tiene un expediente activo para este inmueble. Continúa con el existente o ciérralo antes de crear otro.',
+        // Adjuntar el expediente activo existente en `details` para que la UI
+        // ofrezca "Ver expediente" en vez de dejar al usuario en un callejón.
+        const { data: existente } = await (supabase
+          .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+          .select('id, numero')
+          .eq('inmueble_id', input.inmueble_id)
+          .eq('solicitante_id', input.solicitante_id)
+          .in('estado', ['borrador', 'en_revision', 'info_incompleta', 'aprobado', 'condicionado'])
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const ex = existente as { id?: string; numero?: string } | null;
+        throw new AppError(
+          409,
           'EXPEDIENTE_ACTIVO_DUPLICADO',
+          'Este solicitante ya tiene un expediente activo para este inmueble. Continúa con el existente o ciérralo antes de crear otro.',
+          ex?.id ? { expediente_id: ex.id, expediente_numero: ex.numero ?? null } : undefined,
         );
       }
       throw AppError.conflict('Ya existe un expediente con esos datos.', 'EXPEDIENTE_DUPLICADO');
