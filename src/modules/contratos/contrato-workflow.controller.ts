@@ -28,6 +28,6 @@ export async function getHistory(req: Request, res: Response) {
 // pendiente_firma y dispara el envío (Auco). Propaga errores al usuario.
 export async function enviarFirma(req: Request, res: Response) {
   const { id } = req.params as unknown as ContratoIdParams;
-  const result = await enviarContratoAFirma(id, req.user!.id);
+  const result = await enviarContratoAFirma(id, req.user!.id, req.user?.rol);
   sendSuccess(res, result);
 }

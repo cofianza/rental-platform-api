@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { AppError } from '@/lib/errors';
 
 /**
  * Scoping multi-tenant centralizado.
@@ -387,6 +388,56 @@ export async function perfilEsDuenoDeInmueble(params: {
     return orgIds.includes(inmuebleInmobiliariaId);
   }
   return false;
+}
+
+/**
+ * Guard de propiedad a nivel EXPEDIENTE para endpoints por-id. Lanza 404 si el
+ * usuario NO puede acceder al expediente (mismo trato que "no existe", para no
+ * filtrar existencia cross-tenant). No hace nada para llamadas SIN identidad
+ * (procesos internos/sistema que pasan userId/userRol undefined) ni para roles
+ * internos (admin/operador/gerencia: ven todo).
+ *
+ * Es la contraparte a nivel-expediente de getContratoById(id, userId, userRol):
+ * úsalo en cualquier endpoint por-id que devuelva o mute un recurso ligado a un
+ * expediente (pagos, firma, facturas, timeline, transiciones...). El caller
+ * resuelve el expediente_id del recurso y llama a este guard antes de exponer/
+ * mutar datos. NO re-derives el scoping inline (única fuente de verdad aquí).
+ */
+export async function assertExpedienteAccess(
+  expedienteId: string,
+  userId?: string,
+  userRol?: string,
+): Promise<void> {
+  if (!userId || !userRol) return; // sin identidad: no gatear (llamadas de sistema)
+  if (INTERNAL_ROLES.includes(userRol)) return; // ve todo
+
+  // Solicitante: dueño vía solicitantes.creado_por → expedientes.solicitante_id
+  // (mismo criterio que list()/getMyExpedienteByInmueble; resolveAllowedExpedienteIds
+  // NO cubre al solicitante, cuyo scope es 'none').
+  if (userRol === 'solicitante') {
+    const { data: exp } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('solicitante_id')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const solicitanteId = (exp as { solicitante_id?: string } | null)?.solicitante_id;
+    if (solicitanteId) {
+      const { data: sol } = await (supabase
+        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+        .select('id')
+        .eq('id', solicitanteId)
+        .eq('creado_por', userId)
+        .maybeSingle();
+      if (sol) return;
+    }
+    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  }
+
+  // propietario / inmobiliaria: cartera de inmuebles (+ responsable asignado).
+  const allowed = await resolveAllowedExpedienteIds(userId, userRol);
+  if (allowed !== null && !allowed.includes(expedienteId)) {
+    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  }
 }
 
 /**

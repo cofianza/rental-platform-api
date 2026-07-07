@@ -32,7 +32,7 @@ export async function listAll(req: Request, res: Response) {
 export async function listByExpediente(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };
   const query = req.query as unknown as ListEstudiosQuery;
-  const result = await estudiosService.listEstudios(expedienteId, query);
+  const result = await estudiosService.listEstudios(expedienteId, query, req.user?.id, req.user?.rol);
   sendSuccess(res, result.estudios, 200, result.pagination);
 }
 
@@ -44,27 +44,27 @@ export async function stats(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const estudio = await estudiosService.getEstudioById(estudioId);
+  const estudio = await estudiosService.getEstudioById(estudioId, req.user?.id, req.user?.rol);
   sendSuccess(res, estudio);
 }
 
 export async function create(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };
   const input = req.body as CreateEstudioInput;
-  const estudio = await estudiosService.createEstudio(expedienteId, input, req.user!.id, req.ip);
+  const estudio = await estudiosService.createEstudio(expedienteId, input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, estudio);
 }
 
 export async function createFromInmueble(req: Request, res: Response) {
   const { inmuebleId } = req.params as unknown as { inmuebleId: string };
   const input = req.body as CreateEstudioFromInmuebleInput;
-  const estudio = await estudiosService.createEstudioFromInmueble(inmuebleId, input, req.user!.id, req.ip);
+  const estudio = await estudiosService.createEstudioFromInmueble(inmuebleId, input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, estudio);
 }
 
 export async function cancel(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const estudio = await estudiosService.cancelEstudio(estudioId, req.user!.id, req.ip);
+  const estudio = await estudiosService.cancelEstudio(estudioId, req.user!.id, req.ip, req.user!.rol);
   sendSuccess(res, estudio);
 }
 
@@ -84,20 +84,20 @@ export async function sendLink(req: Request, res: Response) {
 export async function registrarResultado(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const input = req.body as RegistrarResultadoInput;
-  const estudio = await estudiosService.registrarResultado(estudioId, input, req.user!.id, req.ip);
+  const estudio = await estudiosService.registrarResultado(estudioId, input, req.user!.id, req.ip, req.user!.rol);
   sendSuccess(res, estudio);
 }
 
 export async function getCertificadoPresignedUrl(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const input = req.body as CertificadoPresignedUrlInput;
-  const result = await estudiosService.getCertificadoPresignedUrl(estudioId, input);
+  const result = await estudiosService.getCertificadoPresignedUrl(estudioId, input, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
 export async function getCertificadoUrl(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const result = await estudiosService.getCertificadoViewUrl(estudioId);
+  const result = await estudiosService.getCertificadoViewUrl(estudioId, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
@@ -108,27 +108,27 @@ export async function getCertificadoUrl(req: Request, res: Response) {
 export async function getSoportePresignedUrl(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const input = req.body as SoportePresignedUrlInput;
-  const result = await estudiosService.getSoportePresignedUrl(estudioId, input);
+  const result = await estudiosService.getSoportePresignedUrl(estudioId, input, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
 export async function confirmarSoporte(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const input = req.body as ConfirmarSoporteInput;
-  const result = await estudiosService.confirmarSoporteUpload(estudioId, input, req.user!.id, req.ip);
+  const result = await estudiosService.confirmarSoporteUpload(estudioId, input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, result);
 }
 
 export async function reEvaluar(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const input = req.body as ReEvaluarInput;
-  const result = await estudiosService.solicitarReEvaluacion(estudioId, input, req.user!.id, req.ip);
+  const result = await estudiosService.solicitarReEvaluacion(estudioId, input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, result);
 }
 
 export async function getHistorial(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const result = await estudiosService.getHistorialReEvaluacion(estudioId);
+  const result = await estudiosService.getHistorialReEvaluacion(estudioId, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
@@ -138,13 +138,13 @@ export async function getHistorial(req: Request, res: Response) {
 
 export async function generarCertificado(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const result = await certificadoService.generarCertificado(estudioId, req.user!.id, req.ip);
+  const result = await certificadoService.generarCertificado(estudioId, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, result);
 }
 
 export async function descargarCertificado(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const result = await certificadoService.descargarCertificado(estudioId);
+  const result = await certificadoService.descargarCertificado(estudioId, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
@@ -176,7 +176,7 @@ export async function ejecutarEstudio(req: Request, res: Response) {
 
 export async function getEstadoProveedor(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const result = await estudiosService.consultarEstadoProveedor(estudioId);
+  const result = await estudiosService.consultarEstadoProveedor(estudioId, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 

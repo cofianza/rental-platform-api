@@ -10,6 +10,7 @@ import { transitionPagoState, transitionPagoStateChecked, isValidTransition } fr
 import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 // ============================================================
 // Helpers
@@ -100,7 +101,16 @@ const CONCEPTO_LABELS: Record<string, string> = {
 // List pagos by expediente
 // ============================================================
 
-export async function listPagosByExpediente(expedienteId: string, query: ListPagosQuery) {
+export async function listPagosByExpediente(
+  expedienteId: string,
+  query: ListPagosQuery,
+  userId?: string,
+  userRol?: string,
+) {
+  // Ownership multi-tenant (cierra IDOR): roles tenant-scopeados solo ven pagos
+  // de expedientes de su cartera. 404 fuera de scope (no confirma existencia).
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   // Apply defaults defensively in case validation middleware didn't run
   const page = query.page ?? 1;
   const limit = query.limit ?? 10;
@@ -169,8 +179,12 @@ export async function getPagoById(id: string) {
 // Get pago detail with events
 // ============================================================
 
-export async function getPagoDetailWithEvents(id: string) {
+export async function getPagoDetailWithEvents(id: string, userId?: string, userRol?: string) {
   const pago = await getPagoById(id);
+
+  // Ownership multi-tenant (cierra IDOR del detalle): resolvemos el expediente
+  // del pago y gateamos por cartera. 404 fuera de scope (no confirma existencia).
+  await assertExpedienteAccess((pago as unknown as { expediente_id: string }).expediente_id, userId, userRol);
 
   const { data: eventos, error } = await (supabase
     .from('eventos_pago' as string) as ReturnType<typeof supabase.from>)
@@ -196,6 +210,7 @@ export async function createPaymentLink(
   expedienteId: string,
   input: CreatePaymentLinkInput,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
   // 1. Verify expediente exists
@@ -208,6 +223,10 @@ export async function createPaymentLink(
   if (expError || !expediente) {
     throw AppError.notFound('Expediente no encontrado');
   }
+
+  // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo crean
+  // pagos sobre expedientes de su cartera. 404 fuera de scope.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
 
   // 2. Check for duplicate: no pendiente/procesando for same expediente+concepto
   const { data: existing } = await (supabase
@@ -380,7 +399,18 @@ export async function createPaymentLink(
 // Uses centralized state machine (HP-352)
 // ============================================================
 
-export async function cancelPago(pagoId: string, userId: string, ip?: string) {
+export async function cancelPago(pagoId: string, userId: string, userRol?: string, ip?: string) {
+  // Ownership multi-tenant (cierra IDOR): resolvemos el expediente del pago y
+  // gateamos por cartera antes de mutar. 404 fuera de scope; si el pago no
+  // existe, la transición de abajo lanza el 404 habitual.
+  const { data: row } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('expediente_id')
+    .eq('id', pagoId)
+    .maybeSingle();
+  const expId = (row as { expediente_id?: string } | null)?.expediente_id;
+  if (expId) await assertExpedienteAccess(expId, userId, userRol);
+
   const pago = await transitionPagoState({
     pagoId,
     targetEstado: 'cancelado',
@@ -470,7 +500,7 @@ export async function cancelarPagosPendientesDeExpediente(
 // Resend payment link email — POST /pagos/:pagoId/reenviar-link
 // ============================================================
 
-export async function resendPaymentLink(pagoId: string, userId: string, ip?: string) {
+export async function resendPaymentLink(pagoId: string, userId: string, userRol?: string, ip?: string) {
   const pago = await getPagoById(pagoId) as unknown as {
     id: string;
     estado: string;
@@ -481,6 +511,10 @@ export async function resendPaymentLink(pagoId: string, userId: string, ip?: str
     monto: number;
     expediente_id: string;
   };
+
+  // Ownership multi-tenant (cierra IDOR): gateamos por cartera antes de
+  // reenviar el email y devolver el email_pagador. 404 fuera de scope.
+  await assertExpedienteAccess(pago.expediente_id, userId, userRol);
 
   if (pago.estado !== 'pendiente') {
     throw AppError.badRequest(
@@ -567,11 +601,16 @@ export async function generateComprobantePresignedUrl(
 // Get comprobante download URL (HP-350)
 // ============================================================
 
-export async function getComprobanteUrl(pagoId: string) {
+export async function getComprobanteUrl(pagoId: string, userId?: string, userRol?: string) {
   const pago = await getPagoById(pagoId) as unknown as {
+    expediente_id: string;
     comprobante_storage_key: string | null;
     comprobante_nombre_original: string | null;
   };
+
+  // Ownership multi-tenant (cierra IDOR): gateamos por cartera antes de firmar
+  // la URL de descarga del comprobante. 404 fuera de scope.
+  await assertExpedienteAccess(pago.expediente_id, userId, userRol);
 
   if (!pago.comprobante_storage_key) {
     throw AppError.notFound('Este pago no tiene comprobante adjunto');
@@ -603,6 +642,7 @@ export async function registerManualPayment(
   expedienteId: string,
   input: RegisterManualPaymentInput,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
   // Verify expediente exists
@@ -615,6 +655,10 @@ export async function registerManualPayment(
   if (expError) {
     throw AppError.notFound('Expediente no encontrado');
   }
+
+  // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo
+  // registran pagos sobre expedientes de su cartera. 404 fuera de scope.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
 
   // Validate fecha_pago is not in the future
   const fechaPago = new Date(input.fecha_pago);

@@ -7,6 +7,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getCompany } from '@/lib/companyConfig';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 // ============================================================
 // Constants
@@ -321,6 +322,7 @@ export async function generarCertificado(
   estudioId: string,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
   // 1. Deep join: estudio → expediente → solicitante + inmueble
   const { data: estudio, error: estudioErr } = await (supabase
@@ -345,6 +347,12 @@ export async function generarCertificado(
   }
 
   const e = estudio as Record<string, unknown>;
+
+  // Tenant guard: genera + persiste el PDF del certificado (con datos del
+  // solicitante y del inmueble) para este estudio. Sin scoping, la inmobiliaria
+  // (rol externo con expedientes:update) generaba certificados de estudios de
+  // OTRA agencia por UUID (write-IDOR). No-op para roles internos.
+  await assertExpedienteAccess(e.expediente_id as string, userId, userRol);
 
   // 2. Validate
   if (e.estado !== 'completado') {
@@ -512,7 +520,22 @@ export async function generarCertificado(
 // descargarCertificado
 // ============================================================
 
-export async function descargarCertificado(estudioId: string) {
+export async function descargarCertificado(estudioId: string, userId?: string, userRol?: string) {
+  // Tenant guard: resolvemos el expediente del estudio y verificamos acceso antes
+  // de devolver la URL firmada del PDF. Sin scoping, un rol externo con
+  // expedientes:read descargaba el certificado de OTRA agencia por UUID (IDOR).
+  const { data: estRow, error: estErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('expediente_id')
+    .eq('id', estudioId)
+    .single();
+
+  if (estErr || !estRow) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  await assertExpedienteAccess((estRow as { expediente_id: string }).expediente_id, userId, userRol);
+
   const { data: cert, error: certErr } = await (supabase
     .from('estudios_certificados' as string) as ReturnType<typeof supabase.from>)
     .select('id, codigo, pdf_storage_key, version, fecha_emision, fecha_vencimiento')

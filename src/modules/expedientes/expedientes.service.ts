@@ -2,7 +2,13 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { esMiembroNoOwnerDeOrg, esOwnerDeOrg, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
+import {
+  esMiembroNoOwnerDeOrg,
+  esOwnerDeOrg,
+  resolveOrgMemberPerfilIds,
+  assertExpedienteAccess,
+  resolveAllowedInmuebleIds,
+} from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import type {
@@ -138,7 +144,22 @@ export async function listExpedientes(
 // Check Active Expediente by Inmueble - HP-247
 // ============================================================
 
-export async function checkActiveExpedienteByInmueble(inmuebleId: string) {
+export async function checkActiveExpedienteByInmueble(
+  inmuebleId: string,
+  userId?: string,
+  userRol?: string,
+) {
+  // Guard multi-tenant: solo el dueño (propietario/inmobiliaria) o un rol interno
+  // puede consultar el expediente activo de un inmueble ajeno. resolveAllowedInmuebleIds
+  // devuelve null para roles internos y llamadas de sistema (sin filtro); si el
+  // inmueble está fuera del scope del usuario, no revelamos su existencia (mismo
+  // trato que "sin expediente activo"). Endpoint de severidad baja: nos limitamos
+  // a no filtrar datos cross-tenant sin cambiar el flujo de los dueños legítimos.
+  const allowed = await resolveAllowedInmuebleIds(userId, userRol);
+  if (allowed !== null && !allowed.includes(inmuebleId)) {
+    return { hasActiveExpediente: false, expediente: null };
+  }
+
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('id, numero, estado')
@@ -208,7 +229,13 @@ export async function getMiExpedientePorInmueble(inmuebleId: string, userId: str
 // Get by ID
 // ============================================================
 
-export async function getExpedienteById(id: string) {
+export async function getExpedienteById(id: string, userId?: string, userRol?: string) {
+  // Guard multi-tenant ANTES de exponer PII (o disparar el sync de Auco). No-op
+  // para llamadas de sistema (sin userId/userRol) y roles internos; 404 si el
+  // usuario no puede acceder al expediente. Cubre propietario/inmobiliaria y
+  // solicitante (vía solicitantes.creado_por) — única fuente de verdad del scope.
+  await assertExpedienteAccess(id, userId, userRol);
+
   // Auto-heal de firmas (FALLBACK): si hay un contrato en `pendiente_firma`,
   // reconcilia con Auco. Es un respaldo — la fuente de verdad es el webhook de
   // Auco (reconciliarFirmantesPorWebhook), que actualiza en tiempo real. Por eso
@@ -432,7 +459,20 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
 // Update
 // ============================================================
 
-export async function updateExpediente(id: string, input: UpdateExpedienteInput, updatedBy: string, ip?: string) {
+export async function updateExpediente(
+  id: string,
+  input: UpdateExpedienteInput,
+  updatedBy: string,
+  userRol?: string,
+  ip?: string,
+) {
+  // Guard multi-tenant ANTES de mutar: roles scopeados (propietario/inmobiliaria/
+  // solicitante) solo pueden actualizar expedientes de su cartera. No-op para
+  // roles internos y llamadas de sistema. 404 si no es accesible (no revela existencia).
+  await assertExpedienteAccess(id, updatedBy, userRol);
+
+  // getExpedienteById sin identidad = llamada interna → no re-gatea (el guard de
+  // arriba ya validó la pertenencia).
   const previous = await getExpedienteById(id);
 
   // Construir solo campos definidos

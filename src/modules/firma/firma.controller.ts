@@ -18,6 +18,7 @@ export async function crear(req: Request, res: Response) {
     const result = await crearSolicitudFirmaMultiparte(
       input.contrato_id,
       req.user!.id,
+      req.user!.rol,
       req.ip as string | undefined,
     );
     sendSuccess(res, result, 201);
@@ -27,6 +28,7 @@ export async function crear(req: Request, res: Response) {
   const result = await firmaService.crearSolicitudFirma(
     input,
     req.user!.id,
+    req.user!.rol,
     req.ip as string | undefined,
   );
   sendSuccess(res, result, 201);
@@ -38,6 +40,7 @@ export async function reenviar(req: Request, res: Response) {
   const result = await firmaService.reenviarSolicitudFirma(
     id,
     req.user!.id,
+    req.user!.rol,
     req.ip as string | undefined,
     body.email_alternativo,
   );
@@ -61,13 +64,13 @@ export async function reenviarSelf(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const id = req.params.id as string;
-  const result = await firmaService.getSolicitud(id);
+  const result = await firmaService.getSolicitud(id, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
 export async function listarPorContrato(req: Request, res: Response) {
   const contratoId = req.params.contratoId as string;
-  const result = await firmaService.listarSolicitudes(contratoId);
+  const result = await firmaService.listarSolicitudes(contratoId, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
@@ -75,7 +78,7 @@ export async function listarPorContrato(req: Request, res: Response) {
 export async function listarFirmantes(req: Request, res: Response) {
   const contratoId = req.params.contratoId as string;
   const { listarFirmantes } = await import('./firma-multiparte.service');
-  const result = await listarFirmantes(contratoId);
+  const result = await listarFirmantes(contratoId, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
@@ -84,6 +87,7 @@ export async function cancelar(req: Request, res: Response) {
   await firmaService.cancelarSolicitud(
     id,
     req.user!.id,
+    req.user!.rol,
     req.ip as string | undefined,
   );
   sendSuccess(res, { cancelled: true });
@@ -170,7 +174,7 @@ export async function expirarCron(req: Request, res: Response) {
 
 export async function getEvidencia(req: Request, res: Response) {
   const id = req.params.id as string;
-  const result = await evidenciaService.getEvidencia(id);
+  const result = await evidenciaService.getEvidencia(id, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 

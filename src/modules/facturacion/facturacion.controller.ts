@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/utils/response';
 import { AppError } from '@/lib/errors';
+import { supabase } from '@/lib/supabase';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import * as service from './facturacion.service';
 import * as factus from '@/lib/factus';
 
@@ -17,18 +19,17 @@ export async function listPendientesFacturar(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const { id } = req.params as { id: string };
-  const result = await service.getFacturaById(id);
+  const result = await service.getFacturaById(id, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
 
 export async function previewFacturaPago(req: Request, res: Response) {
   const { pagoId } = req.params as { pagoId: string };
 
-  // Mismo guard de pertenencia que facturarPago — evita que un solicitante
-  // espie datos fiscales de otros pagos.
-  if (req.user!.rol === 'solicitante') {
-    await assertPagoBelongsToSolicitante(pagoId, req.user!.id);
-  }
+  // Guard de pertenencia uniforme para TODOS los roles scopeados
+  // (solicitante, propietario, inmobiliaria) — evita espiar datos fiscales
+  // de pagos ajenos. Roles internos / llamadas sin identidad: no-op.
+  await assertPagoAccess(pagoId, req.user!.id, req.user!.rol);
 
   const result = await service.previewFacturaPago(pagoId);
   sendSuccess(res, result);
@@ -42,42 +43,38 @@ export async function facturarPago(req: Request, res: Response) {
   const hasOverride = Object.values(body).some((v) => v !== undefined && v !== '');
   const override = hasOverride ? body : undefined;
 
-  // Si el caller es solicitante, validamos pertenencia: solo puede
-  // facturar pagos de SU expediente. Admin/operador/inmobiliaria/
-  // propietario operan sin este check (gestores del expediente).
-  if (req.user!.rol === 'solicitante') {
-    await assertPagoBelongsToSolicitante(pagoId, req.user!.id);
-  }
+  // Guard de pertenencia uniforme (ver assertPagoAccess). Antes solo corria
+  // para 'solicitante'; propietario/inmobiliaria podian facturar pagos de
+  // cualquier expediente fuera de su cartera (IDOR) — ahora todos validan.
+  await assertPagoAccess(pagoId, req.user!.id, req.user!.rol);
 
   const result = await service.crearFacturaDesdePago(pagoId, req.user!.id, req.ip, override);
   sendSuccess(res, result, undefined, 201);
 }
 
-async function assertPagoBelongsToSolicitante(pagoId: string, userId: string): Promise<void> {
-  const { supabase } = await import('@/lib/supabase');
-  const { AppError } = await import('@/lib/errors');
-
+/**
+ * Guard de pertenencia por pago para los endpoints de facturación por pago.
+ * Resuelve el expediente del pago y delega en assertExpedienteAccess (única
+ * fuente de verdad del scoping): no-op para roles internos y llamadas sin
+ * identidad; 404 para roles scopeados fuera de su cartera (solicitante vía
+ * solicitantes.creado_por; propietario/inmobiliaria vía cartera de inmuebles).
+ */
+async function assertPagoAccess(
+  pagoId: string,
+  userId?: string,
+  userRol?: string,
+): Promise<void> {
   const { data: pagoRow } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select(`
-      id, expediente_id,
-      expediente:expedientes!pagos_expediente_id_fkey(
-        solicitante:solicitantes!expedientes_solicitante_id_fkey(creado_por)
-      )
-    `)
+    .select('id, expediente_id')
     .eq('id', pagoId)
-    .single();
+    .maybeSingle();
 
-  const owner = (pagoRow as unknown as {
-    expediente?: { solicitante?: { creado_por?: string | null } | null } | null;
-  } | null)?.expediente?.solicitante?.creado_por;
-
-  if (!owner || owner !== userId) {
-    throw AppError.forbidden(
-      'No tienes permisos para facturar este pago.',
-      'NOT_OWNER',
-    );
+  const expedienteId = (pagoRow as { expediente_id?: string | null } | null)?.expediente_id;
+  if (!expedienteId) {
+    throw AppError.notFound('Pago no encontrado', 'PAGO_NOT_FOUND');
   }
+  await assertExpedienteAccess(expedienteId, userId, userRol);
 }
 
 export async function searchMunicipalities(req: Request, res: Response) {
@@ -121,7 +118,9 @@ export async function downloadFactusDocumento(req: Request, res: Response) {
     throw AppError.badRequest('Tipo invalido — usar pdf o xml', 'TIPO_INVALIDO');
   }
 
-  const factura = await service.getFacturaById(id);
+  // getFacturaById aplica el guard multi-tenant por-id (404 si el usuario no
+  // puede ver la factura) ANTES de firmar/descargar el PDF/XML desde Factus.
+  const factura = await service.getFacturaById(id, req.user!.id, req.user!.rol);
   if (!factura) throw AppError.notFound('Factura no encontrada');
 
   const f = factura as unknown as { factus_number?: string | null; numero?: string | null };

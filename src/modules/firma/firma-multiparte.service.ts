@@ -25,7 +25,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getCompany } from '@/lib/companyConfig';
-import { resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
+import { resolveOrgCanonicalPerfilId, assertExpedienteAccess } from '@/lib/tenantScope';
 import * as aucoClient from '@/lib/auco';
 import type { AucoSignerStatus } from '@/lib/auco';
 
@@ -101,7 +101,26 @@ export function todasFirmaron(firmantes: Array<{ estado: string }>): boolean {
 // Listado de firmantes de un contrato (para el panel del detalle)
 // ============================================================
 
-export async function listarFirmantes(contratoId: string): Promise<{ firmantes: Array<Record<string, unknown>> }> {
+export async function listarFirmantes(
+  contratoId: string,
+  userId?: string,
+  userRol?: string,
+): Promise<{ firmantes: Array<Record<string, unknown>> }> {
+  // Guard de pertenencia (IDOR): resolvemos el expediente del contrato y
+  // gateamos. No-op para roles internos / sin identidad; 404 fuera de scope.
+  const { data: contrato } = await db('contratos')
+    .select('id, expediente_id')
+    .eq('id', contratoId)
+    .single();
+  if (!contrato) {
+    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  }
+  await assertExpedienteAccess(
+    (contrato as { expediente_id?: string | null }).expediente_id ?? '',
+    userId,
+    userRol,
+  );
+
   const { data } = await db('contrato_firmantes')
     .select('id, rol_firmante, nombre, email, telefono, orden, estado, firmado_en, created_at')
     .eq('contrato_id', contratoId)
@@ -360,6 +379,7 @@ function aucoDeriveCountry(phone: string | null): string | null {
 export async function crearSolicitudFirmaMultiparte(
   contratoId: string,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
   // 1. Validar contrato + PDF
@@ -369,6 +389,11 @@ export async function crearSolicitudFirmaMultiparte(
     .single();
   const c = contrato as { id: string; estado: string; expediente_id: string; storage_key: string | null } | null;
   if (!c) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+
+  // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
+  // 404 si el contrato no está en el scope del usuario (inmobiliaria/propietario).
+  await assertExpedienteAccess(c.expediente_id, userId, userRol);
+
   if (c.estado !== 'pendiente_firma') {
     throw AppError.badRequest(
       `El contrato debe estar en "Pendiente de firma". Estado actual: ${c.estado}`,

@@ -73,7 +73,7 @@ export async function executeContratoTransition(
     // Conservar la trazabilidad de la transicion: el comentario (obligatorio
     // en el modal) y el motivo viajan al historial, y se emite el mismo audit
     // CONTRATO_TRANSITIONED que las demas transiciones manuales.
-    await enviarContratoAFirma(contratoId, user.id, {
+    await enviarContratoAFirma(contratoId, user.id, user.rol, {
       comentario: input.comentario,
       motivo: input.motivo || null,
       descripcion: buildDescription(currentState, targetState, user, input),

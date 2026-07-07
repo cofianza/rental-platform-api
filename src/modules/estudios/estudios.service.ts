@@ -11,7 +11,7 @@ import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from './providers/types';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
-import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 
 // ============================================================
 // Constants
@@ -32,7 +32,12 @@ const BUCKET_NAME = 'documentos-expedientes';
 // List estudios for expediente
 // ============================================================
 
-export async function listEstudios(expedienteId: string, query: ListEstudiosQuery) {
+export async function listEstudios(
+  expedienteId: string,
+  query: ListEstudiosQuery,
+  userId?: string,
+  userRol?: string,
+) {
   // Verify expediente exists
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -43,6 +48,11 @@ export async function listEstudios(expedienteId: string, query: ListEstudiosQuer
   if (expError || !expediente) {
     throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
+
+  // Tenant guard: propietario/inmobiliaria/solicitante solo listan los estudios
+  // de expedientes de su cartera. Sin esto, cualquier rol con expedientes:read
+  // enumeraba los estudios de OTRA agencia por expedienteId (IDOR).
+  await assertExpedienteAccess(expedienteId, userId, userRol);
 
   const page = query.page;
   const limit = query.limit;
@@ -297,7 +307,7 @@ export async function getEstudiosStats(
   };
 }
 
-export async function getEstudioById(estudioId: string) {
+export async function getEstudioById(estudioId: string, userId?: string, userRol?: string) {
   const { data, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select(`
@@ -317,6 +327,12 @@ export async function getEstudioById(estudioId: string) {
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
+  // Tenant guard: el detalle expone datos_formulario, respuesta_proveedor (crudo
+  // del buró) y token_self_service. Sin scoping, un rol externo con
+  // expedientes:read leía el estudio de OTRA agencia por UUID (IDOR). No-op para
+  // roles internos y para llamadas internas sin identidad (userId/userRol undefined).
+  await assertExpedienteAccess((data as { expediente_id: string }).expediente_id, userId, userRol);
+
   return data;
 }
 
@@ -332,6 +348,7 @@ export async function createEstudio(
   input: CreateEstudioInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
   // 1. Verify expediente exists and get inmueble_id
   const { data: expediente, error: expError } = await (supabase
@@ -343,6 +360,11 @@ export async function createEstudio(
   if (expError || !expediente) {
     throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
+
+  // Tenant guard: la inmobiliaria (único rol externo con expedientes:update) solo
+  // crea estudios sobre expedientes de su cartera — sin esto podría adjuntar un
+  // estudio a un expediente de OTRA agencia por UUID (write-IDOR).
+  await assertExpedienteAccess(expedienteId, userId, userRol);
 
   const exp = expediente as unknown as { id: string; estado: string; inmueble_id: string };
 
@@ -461,7 +483,34 @@ export async function createEstudioFromInmueble(
   input: CreateEstudioFromInmuebleInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
+  // Tenant guard: la inmobiliaria/propietario solo crea estudios (auto-creando
+  // el expediente) sobre inmuebles que administra. El expediente aún no existe,
+  // así que el scoping es a nivel INMUEBLE (mismo criterio que ejecutarEstudio).
+  // Sin esto, un rol externo con expedientes:update adjuntaba un estudio +
+  // expediente a un inmueble de OTRA agencia por UUID (write-IDOR). 404 para no
+  // filtrar existencia cross-tenant. Roles internos pasan sin chequeo.
+  if (userRol === 'inmobiliaria' || userRol === 'propietario') {
+    const { data: inmRow } = await (supabase
+      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('propietario_id, inmobiliaria_id')
+      .eq('id', inmuebleId)
+      .maybeSingle();
+    const inm = inmRow as { propietario_id?: string | null; inmobiliaria_id?: string | null } | null;
+    const esDueno = inm
+      ? await perfilEsDuenoDeInmueble({
+          userId,
+          userRol,
+          inmueblePropietarioId: inm.propietario_id,
+          inmuebleInmobiliariaId: inm.inmobiliaria_id,
+        })
+      : false;
+    if (!esDueno) {
+      throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
+    }
+  }
+
   // Atomic: create expediente + estudio + update inmueble via RPC
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error: rpcError } = await (supabase as any).rpc('fn_crear_estudio_desde_inmueble', {
@@ -517,7 +566,27 @@ export async function createEstudioFromInmueble(
 // Cancel estudio
 // ============================================================
 
-export async function cancelEstudio(estudioId: string, userId: string, ip?: string) {
+export async function cancelEstudio(estudioId: string, userId: string, ip?: string, userRol?: string) {
+  // Tenant guard: resolvemos el expediente del estudio y verificamos acceso antes
+  // de cancelar. Sin esto, la inmobiliaria (rol externo con expedientes:update)
+  // cancelaba estudios de OTRA agencia por UUID (write-IDOR); la RPC solo valida
+  // el estado, no la pertenencia.
+  const { data: estudioRow, error: estudioErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, expediente_id')
+    .eq('id', estudioId)
+    .single();
+
+  if (estudioErr || !estudioRow) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  await assertExpedienteAccess(
+    (estudioRow as { expediente_id: string }).expediente_id,
+    userId,
+    userRol,
+  );
+
   // Atomic: cancel estudio + revert inmueble via RPC
   // RPC validates estado === 'solicitado' and handles row locking
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1027,6 +1096,7 @@ export async function registrarResultado(
   input: RegistrarResultadoInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
   // 1. Get estudio — verify exists, estado, and resultado still pendiente
   const { data: estudio, error: getError } = await (supabase
@@ -1045,6 +1115,11 @@ export async function registrarResultado(
     resultado: string;
     expediente_id: string;
   };
+
+  // Tenant guard: registrar (irreversiblemente) el resultado es una mutación
+  // sensible. Sin esto la inmobiliaria (rol externo con expedientes:update)
+  // falseaba el resultado de estudios de OTRA agencia por UUID (write-IDOR).
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (!ESTADOS_PERMITIDOS_RESULTADO.includes(est.estado)) {
     throw AppError.badRequest(
@@ -1195,11 +1270,13 @@ async function notificarSolicitanteResultadoEstudio(
 export async function getCertificadoPresignedUrl(
   estudioId: string,
   input: CertificadoPresignedUrlInput,
+  userId?: string,
+  userRol?: string,
 ) {
   // 1. Verify estudio exists and is eligible
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado')
+    .select('id, estado, resultado, expediente_id')
     .eq('id', estudioId)
     .single();
 
@@ -1207,7 +1284,12 @@ export async function getCertificadoPresignedUrl(
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; estado: string; resultado: string };
+  const est = estudio as unknown as { id: string; estado: string; resultado: string; expediente_id: string };
+
+  // Tenant guard: genera una URL de subida firmada a estudios/<id>/certificado/…
+  // Sin scoping, la inmobiliaria subía certificados al storage de estudios de
+  // OTRA agencia por UUID (write-IDOR).
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (!ESTADOS_PERMITIDOS_RESULTADO.includes(est.estado)) {
     throw AppError.badRequest(
@@ -1246,10 +1328,10 @@ export async function getCertificadoPresignedUrl(
 // Get signed view URL for certificado
 // ============================================================
 
-export async function getCertificadoViewUrl(estudioId: string) {
+export async function getCertificadoViewUrl(estudioId: string, userId?: string, userRol?: string) {
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, certificado_url')
+    .select('id, certificado_url, expediente_id')
     .eq('id', estudioId)
     .single();
 
@@ -1257,7 +1339,12 @@ export async function getCertificadoViewUrl(estudioId: string) {
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; certificado_url: string | null };
+  const est = estudio as unknown as { id: string; certificado_url: string | null; expediente_id: string };
+
+  // Tenant guard: devuelve una URL firmada al PDF del certificado. Sin scoping,
+  // un rol externo con expedientes:read descargaba el certificado de OTRA
+  // agencia por UUID (IDOR de lectura).
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (!est.certificado_url) {
     throw AppError.notFound('Este estudio no tiene certificado adjunto', 'CERTIFICADO_NOT_FOUND');
@@ -1719,11 +1806,13 @@ function getExtensionFromMime(mimeType: string): string {
 export async function getSoportePresignedUrl(
   estudioId: string,
   input: SoportePresignedUrlInput,
+  userId?: string,
+  userRol?: string,
 ) {
   // 1. Validate estudio exists and is eligible for re-evaluation
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado')
+    .select('id, estado, resultado, expediente_id')
     .eq('id', estudioId)
     .single();
 
@@ -1731,7 +1820,12 @@ export async function getSoportePresignedUrl(
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; estado: string; resultado: string };
+  const est = estudio as unknown as { id: string; estado: string; resultado: string; expediente_id: string };
+
+  // Tenant guard: URL de subida firmada a estudios/<id>/soporte/… Sin scoping,
+  // la inmobiliaria subía documentos soporte al storage de estudios de OTRA
+  // agencia por UUID (write-IDOR).
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
     throw AppError.badRequest(
@@ -1772,11 +1866,12 @@ export async function confirmarSoporteUpload(
   input: ConfirmarSoporteInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
   // 1. Re-validate eligibility (race-condition guard)
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado')
+    .select('id, estado, resultado, expediente_id')
     .eq('id', estudioId)
     .single();
 
@@ -1784,7 +1879,12 @@ export async function confirmarSoporteUpload(
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; estado: string; resultado: string };
+  const est = estudio as unknown as { id: string; estado: string; resultado: string; expediente_id: string };
+
+  // Tenant guard: registra una fila en estudios_documentos_soporte para este
+  // estudio. Sin scoping, la inmobiliaria adjuntaba soportes a estudios de OTRA
+  // agencia por UUID (write-IDOR).
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
     throw AppError.badRequest(
@@ -1859,6 +1959,7 @@ export async function solicitarReEvaluacion(
   input: ReEvaluarInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
   // 1. Validate estudio completado + rechazado/condicionado
   const { data: estudio, error: getError } = await (supabase
@@ -1877,6 +1978,11 @@ export async function solicitarReEvaluacion(
     duracion_contrato_meses: number; pago_por: string;
     estudio_padre_id: string | null;
   };
+
+  // Tenant guard: crea un nuevo estudio (hijo) sobre el mismo expediente. Sin
+  // scoping, la inmobiliaria disparaba re-evaluaciones sobre estudios de OTRA
+  // agencia por UUID (write-IDOR).
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
     throw AppError.badRequest(
@@ -2000,7 +2106,23 @@ export async function solicitarReEvaluacion(
 // Re-evaluacion: get historial
 // ============================================================
 
-export async function getHistorialReEvaluacion(estudioId: string) {
+export async function getHistorialReEvaluacion(estudioId: string, userId?: string, userRol?: string) {
+  // Tenant guard: el historial expone toda la cadena de estudios del expediente.
+  // Resolvemos el expediente del estudio solicitado y verificamos acceso ANTES de
+  // recorrer la cadena (las re-evaluaciones heredan el mismo expediente_id). Sin
+  // esto, un rol externo con expedientes:read leía la cadena de OTRA agencia (IDOR).
+  const { data: baseRow, error: baseErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('expediente_id')
+    .eq('id', estudioId)
+    .single();
+
+  if (baseErr || !baseRow) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+
+  await assertExpedienteAccess((baseRow as { expediente_id: string }).expediente_id, userId, userRol);
+
   // 1. Walk up to find root (the one without estudio_padre_id)
   let rootId = estudioId;
   let currentId: string | null = estudioId;
@@ -2352,7 +2474,7 @@ async function registrarResultadoInline(
 // Check provider status and auto-register result if completed
 // ============================================================
 
-export async function consultarEstadoProveedor(estudioId: string) {
+export async function consultarEstadoProveedor(estudioId: string, userId?: string, userRol?: string) {
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -2371,6 +2493,12 @@ export async function consultarEstadoProveedor(estudioId: string) {
     referencia_proveedor: string | null;
     expediente_id: string;
   };
+
+  // Tenant guard: además de exponer el detalle del estudio, este endpoint puede
+  // consultar al proveedor y auto-registrar el resultado (side-effecting). Sin
+  // scoping, un rol externo con estudios:read leía/avanzaba estudios de OTRA
+  // agencia por UUID (IDOR). Se gatea ANTES de tocar el proveedor.
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   // Estudios finalizados: responder desde BD SIN consultar al provider. El
   // cache del provider vive en memoria — tras un restart respondería 'failed'

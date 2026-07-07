@@ -60,7 +60,7 @@ export async function list(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const expediente = await expedientesService.getExpedienteById(id);
+  const expediente = await expedientesService.getExpedienteById(id, req.user?.id, req.user?.rol);
   sendSuccess(res, expediente);
 }
 
@@ -73,7 +73,7 @@ export async function create(req: Request, res: Response) {
 export async function update(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
   const input = req.body as UpdateExpedienteInput;
-  const expediente = await expedientesService.updateExpediente(id, input, req.user!.id, req.ip);
+  const expediente = await expedientesService.updateExpediente(id, input, req.user!.id, req.user!.rol, req.ip);
   sendSuccess(res, expediente);
 }
 
@@ -135,7 +135,11 @@ export async function stats(req: Request, res: Response) {
 // HP-247: Verificar si un inmueble tiene expediente activo
 export async function checkByInmueble(req: Request, res: Response) {
   const { inmuebleId } = req.params as { inmuebleId: string };
-  const result = await expedientesService.checkActiveExpedienteByInmueble(inmuebleId);
+  const result = await expedientesService.checkActiveExpedienteByInmueble(
+    inmuebleId,
+    req.user?.id,
+    req.user?.rol,
+  );
   sendSuccess(res, result);
 }
 

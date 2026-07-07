@@ -18,7 +18,13 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import * as factus from '@/lib/factus';
 import type { ListFacturasQuery } from './facturacion.schema';
 import type { UserRole } from '@/types/auth';
-import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
+import {
+  resolveAllowedExpedienteIds,
+  assertExpedienteAccess,
+  resolveVisibilityScope,
+  resolveMembershipInmobiliariaIds,
+  resolveOrgMemberPerfilIds,
+} from '@/lib/tenantScope';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -1284,7 +1290,68 @@ export async function listPendientesFacturar(
     });
 }
 
-export async function getFacturaById(id: string) {
+/**
+ * Resuelve el expediente_id ligado a una factura: directo si la fila lo trae,
+ * o vía su pago (pago.expediente_id). Devuelve null para facturas de compra de
+ * créditos (sin expediente) o filas huérfanas.
+ */
+async function resolveFacturaExpedienteId(
+  factura: Record<string, unknown>,
+): Promise<string | null> {
+  const direct = (factura.expediente_id as string | null) ?? null;
+  if (direct) return direct;
+  const pagoId = (factura.pago_id as string | null) ?? null;
+  if (pagoId) {
+    const { data: pago } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('expediente_id')
+      .eq('id', pagoId)
+      .maybeSingle();
+    return (pago as { expediente_id?: string | null } | null)?.expediente_id ?? null;
+  }
+  return null;
+}
+
+/**
+ * Guard de pertenencia para facturas SIN expediente (compra de créditos de
+ * estudios). El "cliente" de la factura es la inmobiliaria compradora, no un
+ * solicitante. No-op para roles internos y llamadas sin identidad; 404 para
+ * cualquier otro rol que no sea el comprador (o miembro activo de su
+ * organización, en el caso de una inmobiliaria).
+ */
+async function assertCompraFacturaAccess(
+  factura: Record<string, unknown>,
+  userId?: string,
+  userRol?: string,
+): Promise<void> {
+  if (!userId || !userRol) return; // llamada de sistema
+  const scope = await resolveVisibilityScope(userId, userRol);
+  if (scope.kind === 'all') return; // rol interno: ve todo
+
+  const compraId = (factura.compra_creditos_id as string | null) ?? null;
+  if (compraId) {
+    const { data: compra } = await (supabase
+      .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('perfil_id')
+      .eq('id', compraId)
+      .maybeSingle();
+    const compradorId = (compra as { perfil_id?: string | null } | null)?.perfil_id ?? null;
+    if (compradorId) {
+      if (compradorId === userId) return; // su propia compra
+      if (userRol === 'inmobiliaria') {
+        // El comprador puede ser cualquier miembro de su organización.
+        const orgIds = await resolveMembershipInmobiliariaIds(userId);
+        for (const orgId of orgIds) {
+          const memberIds = await resolveOrgMemberPerfilIds(orgId);
+          if (memberIds.includes(compradorId)) return;
+        }
+      }
+    }
+  }
+  throw AppError.notFound('Factura no encontrada', 'FACTURA_NOT_FOUND');
+}
+
+export async function getFacturaById(id: string, userId?: string, userRol?: string) {
   const { data, error } = await (supabase
     .from('facturas' as string) as ReturnType<typeof supabase.from>)
     .select('*')
@@ -1295,6 +1362,19 @@ export async function getFacturaById(id: string) {
   }
 
   const f = data as Record<string, unknown>;
+
+  // Guard multi-tenant por-id: resuelve el expediente de la factura y valida
+  // pertenencia (no-op para roles internos / llamadas sin identidad). Cierra el
+  // IDOR de GET /facturas/:id y GET /facturas/:id/factus/:tipo — antes cualquier
+  // rol con permiso 'facturas:read' podía leer/descargar facturas ajenas.
+  const expedienteId = await resolveFacturaExpedienteId(f);
+  if (expedienteId) {
+    await assertExpedienteAccess(expedienteId, userId, userRol);
+  } else {
+    // Sin expediente: factura de compra de créditos (o huérfana).
+    await assertCompraFacturaAccess(f, userId, userRol);
+  }
+
   const totalDb = f.total != null ? Number(f.total) : null;
   const taxDb = f.tax_amount != null ? Number(f.tax_amount) : null;
 

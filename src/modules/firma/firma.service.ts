@@ -8,6 +8,7 @@ import { env } from '@/config';
 import * as aucoClient from '@/lib/auco';
 import type { AucoWebhookPayload } from '@/lib/auco';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import type { CrearSolicitudFirmaInput } from './firma.schema';
 
 // ============================================================
@@ -269,6 +270,7 @@ interface SolicitudFirmaRow {
 export async function crearSolicitudFirma(
   input: CrearSolicitudFirmaInput,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
   // 1. Validate contrato exists and is in valid state
@@ -286,6 +288,10 @@ export async function crearSolicitudFirma(
     id: string; estado: string; expediente_id: string;
     storage_key: string | null; nombre_archivo: string | null;
   };
+
+  // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
+  // 404 si el contrato no está en el scope del usuario (inmobiliaria/propietario).
+  await assertExpedienteAccess(c.expediente_id, userId, userRol);
 
   if (!ESTADOS_VALIDOS_FIRMA.includes(c.estado)) {
     throw AppError.badRequest(
@@ -523,6 +529,7 @@ export async function crearSolicitudFirma(
 export async function reenviarSolicitudFirma(
   solicitudId: string,
   userId: string,
+  userRol?: string,
   ip?: string,
   emailAlternativo?: string,
 ) {
@@ -548,6 +555,11 @@ export async function reenviarSolicitudFirma(
       } | null;
     } | null;
   };
+
+  // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
+  // 404 si el contrato del solicitud no está en el scope del usuario. Se aplica
+  // ANTES de tocar Auco (re-upload / recordatorio) o mutar la solicitud.
+  await assertExpedienteAccess(row.contratos?.expediente_id ?? '', userId, userRol);
 
   // Check estado
   if (['firmado', 'cancelado'].includes(row.estado)) {
@@ -799,18 +811,21 @@ export async function reenviarSolicitudFirmaSelf(
     );
   }
 
-  // 3. Reusar el flujo principal con el email alternativo opcional.
-  return reenviarSolicitudFirma(solicitudId, userId, ip, emailAlternativo);
+  // 3. Reusar el flujo principal con el email alternativo opcional. La
+  //    pertenencia YA quedó validada arriba por solicitantes.creado_por, así
+  //    que pasamos userRol=undefined para que el guard del flujo principal sea
+  //    no-op (no doble-gatear al solicitante, cuyo scope no es por expediente).
+  return reenviarSolicitudFirma(solicitudId, userId, undefined, ip, emailAlternativo);
 }
 
 // ============================================================
 // Consultar estado de una solicitud
 // ============================================================
 
-export async function getSolicitud(solicitudId: string) {
+export async function getSolicitud(solicitudId: string, userId?: string, userRol?: string) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select(`${SOLICITUD_SELECT}, perfiles(id, nombre, apellido)`)
+    .select(`${SOLICITUD_SELECT}, perfiles(id, nombre, apellido), contratos(expediente_id)`)
     .eq('id', solicitudId)
     .single();
 
@@ -820,7 +835,12 @@ export async function getSolicitud(solicitudId: string) {
 
   const row = data as unknown as SolicitudFirmaRow & {
     perfiles: { id: string; nombre: string; apellido: string } | null;
+    contratos: { expediente_id: string | null } | null;
   };
+
+  // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
+  // 404 fuera de scope (no confirma existencia cross-tenant).
+  await assertExpedienteAccess(row.contratos?.expediente_id ?? '', userId, userRol);
 
   return {
     ...row,
@@ -829,6 +849,7 @@ export async function getSolicitud(solicitudId: string) {
       : null,
     token: undefined, // Don't expose token
     perfiles: undefined,
+    contratos: undefined,
   };
 }
 
@@ -836,17 +857,25 @@ export async function getSolicitud(solicitudId: string) {
 // Listar solicitudes de un contrato
 // ============================================================
 
-export async function listarSolicitudes(contratoId: string) {
+export async function listarSolicitudes(contratoId: string, userId?: string, userRol?: string) {
   // Verify contrato exists
   const { data: contrato } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, expediente_id')
     .eq('id', contratoId)
     .single();
 
   if (!contrato) {
     throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
   }
+
+  // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
+  // 404 si el contrato no está en el scope del usuario.
+  await assertExpedienteAccess(
+    (contrato as { expediente_id?: string | null }).expediente_id ?? '',
+    userId,
+    userRol,
+  );
 
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
@@ -951,11 +980,12 @@ export async function cancelarSolicitudesDeContrato(contratoId: string): Promise
 export async function cancelarSolicitud(
   solicitudId: string,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, contrato_id, estado, auco_document_code')
+    .select('id, contrato_id, estado, auco_document_code, contratos(expediente_id)')
     .eq('id', solicitudId)
     .single();
 
@@ -965,7 +995,12 @@ export async function cancelarSolicitud(
 
   const row = data as unknown as {
     id: string; contrato_id: string; estado: string; auco_document_code: string | null;
+    contratos: { expediente_id: string | null } | null;
   };
+
+  // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
+  // 404 fuera de scope. Se aplica ANTES de cancelar el sobre en Auco / mutar.
+  await assertExpedienteAccess(row.contratos?.expediente_id ?? '', userId, userRol);
 
   if (['firmado', 'cancelado'].includes(row.estado)) {
     throw AppError.badRequest('No se puede cancelar esta solicitud', 'INVALID_STATE');

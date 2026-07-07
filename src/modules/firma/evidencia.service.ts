@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { executePostFirma } from './post-firma.service';
 
 // ============================================================
@@ -259,7 +260,24 @@ export async function completarFirma(
 // Get evidencia (authenticated, for dashboard)
 // ============================================================
 
-export async function getEvidencia(solicitudId: string) {
+export async function getEvidencia(solicitudId: string, userId?: string, userRol?: string) {
+  // Guard de pertenencia (IDOR): resolvemos el expediente vía el contrato de la
+  // solicitud y gateamos. No-op para roles internos / sin identidad; 404 fuera
+  // de scope (no confirma existencia cross-tenant).
+  const { data: sol } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, contratos(expediente_id)')
+    .eq('id', solicitudId)
+    .single();
+  if (!sol) {
+    throw AppError.notFound('Evidencia no encontrada', 'EVIDENCIA_NOT_FOUND');
+  }
+  await assertExpedienteAccess(
+    (sol as { contratos?: { expediente_id: string | null } | null }).contratos?.expediente_id ?? '',
+    userId,
+    userRol,
+  );
+
   const { data, error } = await (supabase
     .from('evidencias_firma' as string) as ReturnType<typeof supabase.from>)
     .select('*')

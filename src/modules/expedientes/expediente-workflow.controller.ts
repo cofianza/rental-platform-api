@@ -12,12 +12,12 @@ export async function transition(req: Request, res: Response) {
 
 export async function getAvailableTransitions(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const result = await workflowService.getTransitionsForExpediente(id);
+  const result = await workflowService.getTransitionsForExpediente(id, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
 export async function getHistory(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const result = await workflowService.getTransitionHistory(id);
+  const result = await workflowService.getTransitionHistory(id, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }

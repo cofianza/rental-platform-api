@@ -11,6 +11,7 @@ import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '@/modules/notificaciones/notificaciones.service';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 // ============================================================
 // State machine definition
@@ -234,10 +235,10 @@ export async function transitionPagoState(params: TransitionParams) {
 // Get current estado with last transition metadata
 // ============================================================
 
-export async function getPagoEstado(pagoId: string) {
+export async function getPagoEstado(pagoId: string, userId?: string, userRol?: string) {
   const { data: pago, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, fecha_pago, updated_at')
+    .select('id, estado, expediente_id, fecha_pago, updated_at')
     .eq('id', pagoId)
     .single();
 
@@ -245,6 +246,9 @@ export async function getPagoEstado(pagoId: string) {
     if (error.code === 'PGRST116') throw AppError.notFound('Pago no encontrado');
     throw fromSupabaseError(error);
   }
+
+  // Ownership multi-tenant (cierra IDOR): gateamos por cartera. 404 fuera de scope.
+  await assertExpedienteAccess((pago as { expediente_id: string }).expediente_id, userId, userRol);
 
   // Get last transition event
   const { data: lastEvent } = await (supabase
@@ -272,11 +276,11 @@ export async function getPagoEstado(pagoId: string) {
 // Get full event history
 // ============================================================
 
-export async function getPagoEventos(pagoId: string) {
+export async function getPagoEventos(pagoId: string, userId?: string, userRol?: string) {
   // Verify pago exists
-  const { error: pagoError } = await (supabase
+  const { data: pago, error: pagoError } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, expediente_id')
     .eq('id', pagoId)
     .single();
 
@@ -284,6 +288,9 @@ export async function getPagoEventos(pagoId: string) {
     if (pagoError.code === 'PGRST116') throw AppError.notFound('Pago no encontrado');
     throw fromSupabaseError(pagoError);
   }
+
+  // Ownership multi-tenant (cierra IDOR): gateamos por cartera. 404 fuera de scope.
+  await assertExpedienteAccess((pago as { expediente_id: string }).expediente_id, userId, userRol);
 
   const { data, error } = await (supabase
     .from('eventos_pago' as string) as ReturnType<typeof supabase.from>)

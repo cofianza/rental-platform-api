@@ -21,7 +21,7 @@ export async function listByExpediente(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
   // Use validatedQuery to get parsed data with defaults applied
   const query = (req as Request & { validatedQuery: ListPagosQuery }).validatedQuery;
-  const result = await pagosService.listPagosByExpediente(expedienteId, query);
+  const result = await pagosService.listPagosByExpediente(expedienteId, query, req.user?.id, req.user?.rol);
   sendSuccess(res, result.pagos, 200, result.pagination);
 }
 
@@ -32,7 +32,7 @@ export async function listByExpediente(req: Request, res: Response) {
 export async function createPaymentLink(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
   const input = req.body as CreatePaymentLinkInput;
-  const pago = await pagosService.createPaymentLink(expedienteId, input, req.user!.id, req.ip);
+  const pago = await pagosService.createPaymentLink(expedienteId, input, req.user!.id, req.user?.rol, req.ip);
   sendCreated(res, pago);
 }
 
@@ -42,7 +42,7 @@ export async function createPaymentLink(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
-  const pago = await pagosService.getPagoDetailWithEvents(pagoId);
+  const pago = await pagosService.getPagoDetailWithEvents(pagoId, req.user?.id, req.user?.rol);
   sendSuccess(res, pago);
 }
 
@@ -52,7 +52,7 @@ export async function getById(req: Request, res: Response) {
 
 export async function cancel(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
-  const pago = await pagosService.cancelPago(pagoId, req.user!.id, req.ip);
+  const pago = await pagosService.cancelPago(pagoId, req.user!.id, req.user?.rol, req.ip);
   sendSuccess(res, pago);
 }
 
@@ -62,7 +62,7 @@ export async function cancel(req: Request, res: Response) {
 
 export async function resendLink(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
-  const result = await pagosService.resendPaymentLink(pagoId, req.user!.id, req.ip);
+  const result = await pagosService.resendPaymentLink(pagoId, req.user!.id, req.user?.rol, req.ip);
   sendSuccess(res, result);
 }
 
@@ -73,7 +73,7 @@ export async function resendLink(req: Request, res: Response) {
 export async function registerManualPayment(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
   const input = req.body as RegisterManualPaymentInput;
-  const pago = await pagosService.registerManualPayment(expedienteId, input, req.user!.id, req.ip);
+  const pago = await pagosService.registerManualPayment(expedienteId, input, req.user!.id, req.user?.rol, req.ip);
   sendCreated(res, pago);
 }
 
@@ -93,7 +93,7 @@ export async function comprobantePresignedUrl(req: Request, res: Response) {
 
 export async function getComprobante(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
-  const result = await pagosService.getComprobanteUrl(pagoId);
+  const result = await pagosService.getComprobanteUrl(pagoId, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 
@@ -103,7 +103,7 @@ export async function getComprobante(req: Request, res: Response) {
 
 export async function getEventos(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
-  const eventos = await stateMachine.getPagoEventos(pagoId);
+  const eventos = await stateMachine.getPagoEventos(pagoId, req.user?.id, req.user?.rol);
   sendSuccess(res, eventos);
 }
 
@@ -113,7 +113,7 @@ export async function getEventos(req: Request, res: Response) {
 
 export async function getEstado(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
-  const estado = await stateMachine.getPagoEstado(pagoId);
+  const estado = await stateMachine.getPagoEstado(pagoId, req.user?.id, req.user?.rol);
   sendSuccess(res, estado);
 }
 

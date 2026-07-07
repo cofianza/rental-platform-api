@@ -8,7 +8,7 @@ import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 import { renderTemplate, renderTemplateHighlighted } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
-import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess } from '@/lib/tenantScope';
 import { checkPerfilCompletitud } from '../perfil-arrendador/perfil-arrendador.service';
 import type {
   GenerarContratoInput,
@@ -1341,6 +1341,7 @@ export async function notificarPartesContratoTerminado(
 export async function enviarContratoAFirma(
   contratoId: string,
   userId: string,
+  userRol?: string,
   // Trazabilidad cuando el envio llega desde la transicion del workflow
   // (ContratoTransicionModal): comentario obligatorio del usuario + motivo,
   // y una descripcion de origen para el historial.
@@ -1353,6 +1354,9 @@ export async function enviarContratoAFirma(
     .maybeSingle();
   const c = contratoRow as { id: string; estado: string; expediente_id: string; storage_key: string | null } | null;
   if (!c) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  // Ownership (cierra IDOR: la inmobiliaria A no puede enviar a firma un
+  // contrato de la agencia B por UUID). No-op para roles internos/sin identidad.
+  await assertExpedienteAccess(c.expediente_id, userId, userRol);
 
   if (['firmado', 'vigente', 'finalizado', 'cancelado'].includes(c.estado)) {
     throw AppError.badRequest('El contrato ya está firmado o cerrado; no se puede enviar a firma.', 'CONTRATO_ESTADO_INVALIDO');

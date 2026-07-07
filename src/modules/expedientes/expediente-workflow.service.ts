@@ -9,7 +9,7 @@ import {
   type PreconditionId,
 } from './expediente-state-machine';
 import { getExpedienteById } from './expedientes.service';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { TransitionInput } from './expediente-workflow.schema';
 
@@ -198,7 +198,12 @@ export async function executeTransition(
 // Obtener transiciones disponibles
 // ============================================================
 
-export async function getTransitionsForExpediente(expedienteId: string) {
+export async function getTransitionsForExpediente(expedienteId: string, userId?: string, userRol?: string) {
+  // Guard multi-tenant: roles internos y llamadas de sistema pasan (no-op);
+  // propietario/inmobiliaria/solicitante solo ven las transiciones de sus
+  // expedientes. 404 (no 403) para no revelar existencia cross-tenant.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   const expediente = await fetchExpediente(expedienteId);
   const transiciones = getAvailableTransitions(expediente.estado);
 
@@ -213,7 +218,11 @@ export async function getTransitionsForExpediente(expedienteId: string) {
 // Historial de transiciones
 // ============================================================
 
-export async function getTransitionHistory(expedienteId: string) {
+export async function getTransitionHistory(expedienteId: string, userId?: string, userRol?: string) {
+  // Guard multi-tenant (mismo criterio que getTransitionsForExpediente): no-op
+  // para roles internos y llamadas de sistema; 404 si el usuario no puede acceder.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   // Verificar que el expediente existe
   const expediente = await fetchExpediente(expedienteId);
 
