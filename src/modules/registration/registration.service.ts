@@ -15,6 +15,23 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+/**
+ * ¿El error de supabaseAuth.admin.createUser corresponde a un email ya
+ * registrado? El texto del mensaje varía según la versión de GoTrue
+ * ("already registered", "email_exists", …); nos apoyamos también en el
+ * `code`/`status` para no clasificar un duplicado como 500 genérico.
+ */
+function esEmailDuplicado(err: { message?: string; code?: string; status?: number }): boolean {
+  const msg = (err.message ?? '').toLowerCase();
+  return (
+    msg.includes('already') ||
+    msg.includes('duplicate') ||
+    msg.includes('exists') ||
+    err.code === 'email_exists' ||
+    err.status === 422
+  );
+}
+
 export async function registerPropietario(
   input: RegisterPropietarioInput,
   ipAddress: string,
@@ -31,8 +48,8 @@ export async function registerPropietario(
   });
 
   if (authError) {
-    logger.error({ error: authError.message, email }, 'Error al crear usuario propietario');
-    if (authError.message.includes('already') || authError.message.includes('duplicate')) {
+    logger.error({ error: authError.message, code: authError.code, status: authError.status, email }, 'Error al crear usuario propietario');
+    if (esEmailDuplicado(authError)) {
       throw AppError.conflict('Ya existe un usuario con este email', 'EMAIL_ALREADY_EXISTS');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el usuario');
@@ -88,8 +105,8 @@ export async function registerInmobiliaria(
   });
 
   if (authError) {
-    logger.error({ error: authError.message, email }, 'Error al crear usuario inmobiliaria');
-    if (authError.message.includes('already') || authError.message.includes('duplicate')) {
+    logger.error({ error: authError.message, code: authError.code, status: authError.status, email }, 'Error al crear usuario inmobiliaria');
+    if (esEmailDuplicado(authError)) {
       throw AppError.conflict('Ya existe un usuario con este email', 'EMAIL_ALREADY_EXISTS');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el usuario');
