@@ -120,28 +120,131 @@ function addMonths(date: Date, months: number): Date {
   return result;
 }
 
+// Etiquetas legibles para los campos más relevantes del snapshot de contrato
+// (datos_variables). Si un campo no está aquí se cae a "Grupo · campo".
+const RESUMEN_ETIQUETAS: Record<string, string> = {
+  'canon.valor_numerico': 'Canon mensual',
+  'canon.valor_letras': 'Canon (en letras)',
+  'contrato.duracion_meses': 'Duración (meses)',
+  'contrato.fecha_inicio': 'Fecha de inicio',
+  'contrato.fecha_vencimiento': 'Fecha de vencimiento',
+  'contrato.servicios_publicos_cargo': 'Servicios públicos',
+  'contrato.administracion_ph_cargo': 'Administración PH',
+  'contrato.modalidad': 'Modalidad de fianza',
+  'config.afianzamiento_mensual': 'Afianzamiento mensual',
+  'config.comision_porcentaje': 'Comisión (%)',
+};
+const RESUMEN_GRUPOS: Record<string, string> = {
+  canon: 'Canon',
+  config: 'Configuración',
+  contrato: 'Contrato',
+  arrendador: 'Arrendador',
+  inmobiliaria: 'Inmobiliaria',
+  arrendatario: 'Arrendatario',
+  coarrendatario: 'Coarrendatario',
+  inmueble: 'Inmueble',
+  serv: 'Servicios',
+  cob: 'Cobertura',
+};
+// Campos derivados de "hoy" o URLs firmadas que cambian solos en cada
+// regeneración (no son términos del contrato) — se omiten del resumen.
+const RESUMEN_IGNORAR = new Set<string>([
+  'contrato.fecha_dia',
+  'contrato.fecha_dia_letras',
+  'contrato.fecha_mes_nombre',
+  'contrato.fecha_anio',
+  'contrato.fecha_firma_dia',
+  'contrato.fecha_firma_mes',
+  'contrato.fecha_firma_ano',
+  'arrendador.logo_url',
+  'inmobiliaria.logo_url',
+]);
+
+// Aplana el snapshot anidado (grupos → objetos) a rutas con punto
+// ("canon.valor_numerico") con valores primitivos como string, para poder
+// comparar HOJA por hoja. Sin esto, comparar los grupos como objetos siempre
+// da "distinto" (referencias) y los serializa como "[object Object]".
+function flattenVars(
+  obj: Record<string, unknown> | null | undefined,
+  prefix = '',
+  out: Record<string, string> = {},
+): Record<string, string> {
+  if (!obj || typeof obj !== 'object') return out;
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (Array.isArray(v)) {
+      out[key] = v.map((x) => (x == null ? '' : String(x))).join(', ');
+    } else if (v && typeof v === 'object') {
+      flattenVars(v as Record<string, unknown>, key, out);
+    } else if (v === null || v === undefined) {
+      out[key] = '';
+    } else {
+      out[key] = String(v);
+    }
+  }
+  return out;
+}
+
+function etiquetaCampo(path: string): string {
+  if (RESUMEN_ETIQUETAS[path]) return RESUMEN_ETIQUETAS[path];
+  const [grupo, ...rest] = path.split('.');
+  const g = RESUMEN_GRUPOS[grupo] || grupo;
+  const campo = rest.join(' · ').replace(/_/g, ' ').trim();
+  return campo ? `${g} · ${campo}` : g;
+}
+
+function fmtResumenVal(v: string | undefined): string {
+  return v === undefined || v === null || v === '' ? '(vacío)' : v;
+}
+
+// Prioridad para el corte del resumen: 0 = campos que el usuario realmente
+// edita (canon, fechas/duración, reparto de servicios, modalidad) → nunca
+// deben quedar detrás del cap; 1 = el resto (derivados/secundarios).
+function prioridadCambio(key: string): number {
+  if (RESUMEN_ETIQUETAS[key]) return 0;
+  const grupo = key.split('.')[0];
+  return grupo === 'serv' || grupo === 'canon' || grupo === 'contrato' || grupo === 'config' ? 0 : 1;
+}
+
 function generateResumenCambios(
-  oldVars: Record<string, string>,
-  newVars: Record<string, string>,
+  oldVars: Record<string, unknown>,
+  newVars: Record<string, unknown>,
 ): string {
+  const oldFlat = flattenVars(oldVars);
+  const newFlat = flattenVars(newVars);
+  // Orden por relevancia (prioridad) y alfabético como desempate estable, para
+  // que el cap de MAX no esconda justo el campo editado (p. ej. servicios).
+  const allKeys = [...new Set([...Object.keys(oldFlat), ...Object.keys(newFlat)])].sort((a, b) => {
+    const pa = prioridadCambio(a);
+    const pb = prioridadCambio(b);
+    return pa !== pb ? pa - pb : a.localeCompare(b);
+  });
+
   const changes: string[] = [];
-  const allKeys = new Set([...Object.keys(oldVars), ...Object.keys(newVars)]);
-
   for (const key of allKeys) {
-    const oldVal = oldVars[key];
-    const newVal = newVars[key];
-
-    if (oldVal === undefined && newVal !== undefined) {
-      changes.push(`"${key}" agregada: "${newVal}"`);
-    } else if (oldVal !== undefined && newVal === undefined) {
-      changes.push(`"${key}" eliminada (era: "${oldVal}")`);
-    } else if (oldVal !== newVal) {
-      changes.push(`"${key}" cambio de "${oldVal}" a "${newVal}"`);
+    if (RESUMEN_IGNORAR.has(key)) continue;
+    const oldVal = oldFlat[key];
+    const newVal = newFlat[key];
+    if (oldVal === newVal) continue;
+    const oldEmpty = oldVal === undefined || oldVal === '';
+    const newEmpty = newVal === undefined || newVal === '';
+    if (oldEmpty && newEmpty) continue; // ausente vs vacío = sin cambio real
+    const label = etiquetaCampo(key);
+    if (oldVal === undefined) {
+      changes.push(`${label}: se agregó "${fmtResumenVal(newVal)}"`);
+    } else if (newVal === undefined) {
+      changes.push(`${label}: se quitó (era "${fmtResumenVal(oldVal)}")`);
+    } else {
+      changes.push(`${label}: "${fmtResumenVal(oldVal)}" → "${fmtResumenVal(newVal)}"`);
     }
   }
 
-  return changes.length === 0
-    ? 'Sin cambios en variables'
+  if (changes.length === 0) return 'Sin cambios en los datos del contrato';
+  // Regenerar recalcula varios campos derivados; acotamos para no dejar un
+  // resumen kilométrico (el front lo trunca de todas formas).
+  const MAX = 10;
+  return changes.length > MAX
+    ? `${changes.slice(0, MAX).join('; ')}; y ${changes.length - MAX} cambio(s) más`
     : changes.join('; ');
 }
 
@@ -170,9 +273,14 @@ async function archiveCurrentVersion(
     return;
   }
 
+  // upsert con ignoreDuplicates en vez de insert plano: si una regeneración
+  // previa archivó esta versión pero falló al bumpear contratos.version, un
+  // reintento volvería a intentar (contrato_id, version) y chocaría con
+  // uq_contrato_versiones (23505) — dejando el contrato permanentemente
+  // no-regenerable. Con onConflict el reintento es idempotente y seguro.
   const { error } = await (supabase
     .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
-    .insert({
+    .upsert({
       contrato_id: contrato.id,
       version: contrato.version,
       datos_variables: contrato.datos_variables,
@@ -182,7 +290,7 @@ async function archiveCurrentVersion(
       generado_por: contrato.generado_por,
       fecha_generacion: contrato.fecha_generacion,
       resumen_cambios: resumenCambios,
-    } as never);
+    } as never, { onConflict: 'contrato_id,version', ignoreDuplicates: true });
 
   if (error) {
     logger.error({ error: error.message }, 'Error al archivar version de contrato');
@@ -2239,8 +2347,8 @@ export async function regenerarContrato(
 
   // 4b. Archive current version before regenerating (skip si NULL).
   const resumenCambios = generateResumenCambios(
-    (row.datos_variables ?? {}) as Record<string, string>,
-    finalVariables as Record<string, string>,
+    (row.datos_variables ?? {}) as Record<string, unknown>,
+    finalVariables,
   );
   await archiveCurrentVersion(row, resumenCambios);
 
@@ -2265,14 +2373,17 @@ export async function regenerarContrato(
     });
   }
 
-  // 6. Upload new PDF (new version key)
+  // 6. Upload new PDF (new version key). upsert:true para que un reintento tras
+  // un fallo parcial (p. ej. el UPDATE de contratos falló) pueda re-subir
+  // vN+1.pdf sin STORAGE_ERROR por "ya existe". La llave es única por versión,
+  // así que solo sobreescribe el PDF de esta misma versión.
   const storageKey = `contratos/${row.expediente_id}/${row.id}/v${newVersion}.pdf`;
 
   const { error: uploadError } = await supabase.storage
     .from(BUCKET_NAME)
     .upload(storageKey, pdfBuffer, {
       contentType: 'application/pdf',
-      upsert: false,
+      upsert: true,
     });
 
   if (uploadError) {
@@ -2332,8 +2443,11 @@ export async function descargarContrato(
   userId: string,
   ip?: string,
   options?: { inline?: boolean },
+  userRol?: string,
 ) {
-  const contrato = await getContratoById(id);
+  // getContratoById aplica el scope de propiedad (404 si el contrato no es del
+  // usuario) — sin userId/userRol se saltaría el aislamiento multi-tenant.
+  const contrato = await getContratoById(id, userId, userRol);
   const row = contrato as unknown as {
     id: string;
     estado: string;
@@ -2412,9 +2526,9 @@ export async function descargarContrato(
 // List versiones by contrato
 // ============================================================
 
-export async function listVersionesByContrato(contratoId: string) {
-  // Verify contrato exists
-  await getContratoById(contratoId);
+export async function listVersionesByContrato(contratoId: string, userId?: string, userRol?: string) {
+  // Verify contrato exists Y pertenece al usuario (404 si es de otra agencia).
+  await getContratoById(contratoId, userId, userRol);
 
   const { data, error } = await (supabase
     .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
@@ -2439,7 +2553,13 @@ export async function descargarVersion(
   versionNum: number,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
+  // Gate de propiedad ANTES de servir el PDF archivado (404 si el contrato es
+  // de otra agencia) — antes se consultaba contrato_versiones directo sin
+  // verificar pertenencia = fuga cross-tenant de PDFs con PII.
+  await getContratoById(contratoId, userId, userRol);
+
   const { data, error } = await (supabase
     .from('contrato_versiones' as string) as ReturnType<typeof supabase.from>)
     .select('id, storage_key, nombre_archivo')
@@ -2489,8 +2609,12 @@ export async function compararVersiones(
   contratoId: string,
   v1: number,
   v2: number,
+  userId?: string,
+  userRol?: string,
 ) {
-  const contrato = await getContratoById(contratoId);
+  // Scope de propiedad (404 si el contrato es de otra agencia) — sin esto se
+  // podían leer los datos_variables (PII) de un contrato ajeno por UUID.
+  const contrato = await getContratoById(contratoId, userId, userRol);
   const currentRow = contrato as unknown as {
     version: number; datos_variables: Record<string, string> | null;
     fecha_generacion: string | null; plantilla_version: number | null;
@@ -2537,11 +2661,14 @@ export async function compararVersiones(
     getVariablesForVersion(v2),
   ]);
 
-  // Build diff
-  const allKeys = new Set([
-    ...Object.keys(version1.datos_variables),
-    ...Object.keys(version2.datos_variables),
-  ]);
+  // Build diff. Aplanamos a hojas (rutas con punto): los grupos de
+  // datos_variables son objetos; compararlos por referencia siempre da
+  // "modificada" + "[object Object]" y, peor, el modal intentaría renderizar
+  // un objeto como hijo de React (crash). Con hojas primitivas el diff es real
+  // y el valor siempre es string.
+  const flat1 = flattenVars(version1.datos_variables as Record<string, unknown>);
+  const flat2 = flattenVars(version2.datos_variables as Record<string, unknown>);
+  const allKeys = [...new Set([...Object.keys(flat1), ...Object.keys(flat2)])].sort();
 
   const diferencias: Array<{
     variable: string;
@@ -2551,16 +2678,19 @@ export async function compararVersiones(
   }> = [];
 
   for (const key of allKeys) {
-    const val1 = version1.datos_variables[key] ?? null;
-    const val2 = version2.datos_variables[key] ?? null;
+    if (RESUMEN_IGNORAR.has(key)) continue;
+    const has1 = Object.prototype.hasOwnProperty.call(flat1, key);
+    const has2 = Object.prototype.hasOwnProperty.call(flat2, key);
+    const val1 = has1 ? flat1[key] : null;
+    const val2 = has2 ? flat2[key] : null;
 
     let cambio: 'agregada' | 'eliminada' | 'modificada' | 'sin_cambio';
-    if (val1 === null) cambio = 'agregada';
-    else if (val2 === null) cambio = 'eliminada';
+    if (!has1) cambio = 'agregada';
+    else if (!has2) cambio = 'eliminada';
     else if (val1 !== val2) cambio = 'modificada';
     else cambio = 'sin_cambio';
 
-    diferencias.push({ variable: key, valor_v1: val1, valor_v2: val2, cambio });
+    diferencias.push({ variable: etiquetaCampo(key), valor_v1: val1, valor_v2: val2, cambio });
   }
 
   return {
