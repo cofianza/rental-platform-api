@@ -9,7 +9,7 @@ import {
   type EstadoContrato,
   type ContratoPreconditionId,
 } from './contrato-state-machine';
-import { getContratoById, enviarContratoAFirma } from './contratos.service';
+import { getContratoById, enviarContratoAFirma, notificarPartesContratoTerminado } from './contratos.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { ContratoTransitionInput } from './contrato-workflow.schema';
@@ -109,6 +109,21 @@ export async function executeContratoTransition(
   });
 
   if (error) {
+    // Carrera perdedora: el RPC valida from->to bajo FOR UPDATE; si otro
+    // actor (usuario concurrente, job de vencimiento, auto-heal) movió el
+    // contrato entre nuestro fetch y el RPC, éste lanza 'Transicion no
+    // permitida: X -> Y'. Devolver 409 con el estado real (no un 400 genérico)
+    // para que el front pueda refrescar y explicar qué pasó.
+    const rpcMsg = (error as { message?: string }).message ?? '';
+    if (rpcMsg.includes('Transicion no permitida')) {
+      const actual = await fetchContrato(contratoId).catch(() => null);
+      throw new AppError(
+        409,
+        'CONTRATO_ESTADO_CAMBIADO',
+        'El contrato ya fue actualizado por otro usuario o proceso. Refresca para ver el estado actual.',
+        { estado_actual: actual?.estado ?? null },
+      );
+    }
     logger.error({ error, contratoId }, 'Error al transicionar contrato');
     throw AppError.badRequest('Error al ejecutar la transicion', 'TRANSITION_FAILED');
   }
@@ -126,6 +141,7 @@ export async function executeContratoTransition(
     targetState,
     input,
     result.estado_anterior ?? currentState,
+    user.id,
   );
 
   logger.info(
@@ -209,8 +225,9 @@ export async function finalizarContratoVencido(contratoId: string): Promise<bool
 
   const result = data as TransitionRpcResult;
 
-  // Efectos secundarios: setea fecha_terminacion y libera el inmueble.
-  await applySideEffects(contratoId, contrato.expediente_id, 'finalizado', input, 'vigente');
+  // Efectos secundarios: setea fecha_terminacion, libera el inmueble,
+  // notifica a las partes y registra el timeline (usuario null = sistema).
+  await applySideEffects(contratoId, contrato.expediente_id, 'finalizado', input, 'vigente', null);
 
   logAudit({
     usuarioId: null,
@@ -236,9 +253,20 @@ export async function finalizarContratoVencido(contratoId: string): Promise<bool
 // Obtener transiciones disponibles
 // ============================================================
 
-export async function getContratoTransitions(contratoId: string) {
+export async function getContratoTransitions(contratoId: string, user: AuthUser) {
   const contrato = await fetchContrato(contratoId);
-  const transiciones = getAvailableContratoTransitions(contrato.estado);
+  await assertPuedeVerContrato(user, contrato);
+
+  // Filtrar por ROL con la misma lógica de checkTransitionPermissions: así el
+  // GET es la única fuente de verdad y el web nunca ofrece una transición que
+  // el POST rechazaría con 403 (inmobiliaria/propietario solo pueden terminar
+  // o cancelar; gerencia_consulta es solo-lectura → ninguna).
+  let transiciones = getAvailableContratoTransitions(contrato.estado);
+  if (user.rol === 'inmobiliaria' || user.rol === 'propietario') {
+    transiciones = transiciones.filter((t) => OWNER_TERMINATE_STATES.includes(t.estado));
+  } else if (user.rol !== 'administrador' && user.rol !== 'operador_analista') {
+    transiciones = [];
+  }
 
   return {
     contrato_id: contratoId,
@@ -251,9 +279,10 @@ export async function getContratoTransitions(contratoId: string) {
 // Historial de transiciones
 // ============================================================
 
-export async function getContratoTransitionHistory(contratoId: string) {
-  // Verificar que el contrato existe
+export async function getContratoTransitionHistory(contratoId: string, user: AuthUser) {
+  // Verificar que el contrato existe y que el usuario puede verlo
   const contrato = await fetchContrato(contratoId);
+  await assertPuedeVerContrato(user, contrato);
 
   const { data, error } = await (supabase
     .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
@@ -319,6 +348,28 @@ const OWNER_TERMINATE_STATES: EstadoContrato[] = ['finalizado', 'cancelado'];
  *   admin de la plataforma, pero no puede tocar el resto del flujo ni contratos
  *   de terceros.
  */
+/**
+ * Scoping de LECTURA de los endpoints de workflow (available-transitions e
+ * historial). El POST siempre validó ownership, pero los GET no: cualquier
+ * inmobiliaria/propietario con el UUID de un contrato ajeno podía leer su
+ * estado, transiciones e historial completo (comentarios, motivos, actores) —
+ * IDOR cross-tenant (auditoría jul-2026). 404 (no 403) para no confirmar la
+ * existencia del contrato. El rol solicitante no tiene vínculo perfil↔
+ * solicitantes (solo email) y ninguna vista suya consume estos GET → 404.
+ */
+async function assertPuedeVerContrato(user: AuthUser, contrato: ContratoRow): Promise<void> {
+  if (user.rol === 'administrador' || user.rol === 'operador_analista' || user.rol === 'gerencia_consulta') {
+    return;
+  }
+  if (
+    (user.rol === 'inmobiliaria' || user.rol === 'propietario') &&
+    (await ownerAdministraContrato(user, contrato))
+  ) {
+    return;
+  }
+  throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+}
+
 async function checkTransitionPermissions(
   user: AuthUser,
   contrato: ContratoRow,
@@ -434,6 +485,7 @@ async function applySideEffects(
   targetState: EstadoContrato,
   input: ContratoTransitionInput,
   fromState: EstadoContrato,
+  usuarioId: string | null,
 ): Promise<void> {
   switch (targetState) {
     case 'firmado': {
@@ -465,6 +517,7 @@ async function applySideEffects(
         .eq('id', contratoId);
       // El arriendo terminó: el inmueble vuelve a estar disponible (fuera de vitrina).
       await liberarInmuebleDelExpediente(expedienteId, contratoId);
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'finalizado', input, usuarioId);
       break;
     }
 
@@ -490,8 +543,97 @@ async function applySideEffects(
         contratoId,
         fromState === 'vigente' ? ['ocupado', 'en_estudio'] : ['ocupado'],
       );
+      // Si el contrato estaba en firma, cancelar solicitudes + sobres en Auco:
+      // sin esto los firmantes conservaban el link activo por WhatsApp y podían
+      // firmar (y recibir acuse de) un contrato ya cancelado. Log-only.
+      try {
+        const { cancelarSolicitudesDeContrato } = await import('@/modules/firma/firma.service');
+        await cancelarSolicitudesDeContrato(contratoId);
+      } catch (err) {
+        logger.error({ err, contratoId }, 'No se pudieron cancelar las solicitudes de firma del contrato cancelado');
+      }
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'cancelado', input, usuarioId);
       break;
     }
+  }
+}
+
+/**
+ * Efectos comunes de una TERMINACIÓN (finalizado/cancelado), todos log-only:
+ *  - Notificación in-app a solicitante y propietario (antes NADIE se enteraba,
+ *    ni siquiera con el vencimiento automático).
+ *  - Evento en el timeline del expediente (eventos_timeline tipo 'contrato').
+ *  - Auto-cancelación de renovaciones PRE-firma (borrador/en_revision/aprobado)
+ *    del mismo expediente: al terminar el padre, un borrador de renovación
+ *    huérfano seguía operable y podía re-arrendar un inmueble ya liberado y
+ *    re-publicado para otro candidato (carrera de doble arriendo). Una
+ *    renovación ya en firma o firmada NO se toca: ese es el flujo legítimo que
+ *    protege el guard de liberación.
+ */
+async function aplicarEfectosTerminacion(
+  contratoId: string,
+  expedienteId: string,
+  targetState: 'finalizado' | 'cancelado',
+  input: ContratoTransitionInput,
+  usuarioId: string | null,
+): Promise<void> {
+  const automatico = usuarioId === null;
+
+  notificarPartesContratoTerminado(contratoId, expedienteId, targetState, automatico).catch((e) =>
+    logger.warn({ error: e, contratoId }, 'Error notificando terminación del contrato'),
+  );
+
+  try {
+    const descripcion =
+      targetState === 'cancelado'
+        ? `Contrato cancelado${input.motivo ? `. Motivo: ${input.motivo}` : ''}`
+        : automatico
+          ? 'Contrato finalizado automáticamente por vencimiento del plazo'
+          : `Contrato finalizado${input.motivo ? `. Motivo: ${input.motivo}` : ''}`;
+    await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: expedienteId,
+        tipo: 'contrato',
+        descripcion,
+        usuario_id: usuarioId,
+        metadata: { contrato_id: contratoId, estado: targetState, automatico },
+      } as never);
+  } catch (err) {
+    logger.warn({ err, contratoId }, 'No se pudo registrar la terminación en el timeline');
+  }
+
+  try {
+    const { data: hijos } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado')
+      .eq('contrato_padre_id', contratoId)
+      .in('estado', ['borrador', 'en_revision', 'aprobado']);
+    for (const hijo of ((hijos as Array<{ id: string; estado: string }> | null) ?? [])) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: rpcErr } = await (supabase as any).rpc('transicionar_contrato', {
+        p_contrato_id: hijo.id,
+        p_nuevo_estado: 'cancelado',
+        p_descripcion: `Cancelación automática: el contrato padre quedó ${targetState}`,
+        p_usuario_id: usuarioId,
+        p_comentario: null,
+        p_motivo: 'Contrato padre terminado',
+      });
+      if (rpcErr) {
+        logger.warn(
+          { contratoId: hijo.id, padre: contratoId, error: (rpcErr as { message?: string }).message },
+          'No se pudo auto-cancelar la renovación pre-firma al terminar el padre',
+        );
+      } else {
+        await (supabase
+          .from('contratos' as string) as ReturnType<typeof supabase.from>)
+          .update({ motivo_cancelacion: 'Contrato padre terminado', fecha_terminacion: new Date().toISOString() } as never)
+          .eq('id', hijo.id);
+        logger.info({ contratoId: hijo.id, padre: contratoId }, 'Renovación pre-firma auto-cancelada al terminar el padre');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, contratoId }, 'Error auto-cancelando renovaciones pre-firma del contrato terminado');
   }
 }
 

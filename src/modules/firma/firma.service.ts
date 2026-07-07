@@ -891,6 +891,63 @@ export async function listarSolicitudes(contratoId: string) {
 // Cancelar solicitud (+ cancelar en Auco)
 // ============================================================
 
+/**
+ * Cancela TODAS las solicitudes de firma no terminales de un contrato (y sus
+ * sobres en Auco). Pensada para los side-effects de "Cancelar contrato": si el
+ * contrato estaba en pendiente_firma, sin esto los firmantes conservaban el
+ * link de Auco activo y podían firmar (y recibir acuse de) un contrato ya
+ * cancelado. LOG-ONLY: nunca lanza — la transición del contrato ya quedó
+ * confirmada en BD y no debe revertirse por un fallo aquí. También marca
+ * cancelados los contrato_firmantes no terminales (flujo multi-parte).
+ */
+export async function cancelarSolicitudesDeContrato(contratoId: string): Promise<void> {
+  try {
+    const { data } = await (supabase
+      .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, auco_document_code')
+      .eq('contrato_id', contratoId)
+      .not('estado', 'in', '("firmado","cancelado","expirado")');
+    const rows = (data as unknown as Array<{ id: string; estado: string; auco_document_code: string | null }>) ?? [];
+
+    for (const row of rows) {
+      if (row.auco_document_code) {
+        try {
+          await aucoClient.cancelDocument(row.auco_document_code);
+        } catch (aucoError) {
+          logger.error(
+            { error: aucoError, solicitudId: row.id, contratoId },
+            'No se pudo cancelar el documento en Auco al cancelar el contrato',
+          );
+        }
+      }
+      const { error: updError } = await (supabase
+        .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: 'cancelado', updated_at: new Date().toISOString() } as never)
+        .eq('id', row.id);
+      if (updError) {
+        logger.error({ error: updError.message, solicitudId: row.id }, 'No se pudo marcar cancelada la solicitud de firma');
+      }
+    }
+
+    // Multi-parte: los firmantes pendientes también quedan cancelados para que
+    // el panel de firmantes no siga mostrando "esperando firma".
+    const { error: firmantesErr } = await (supabase
+      .from('contrato_firmantes' as string) as ReturnType<typeof supabase.from>)
+      .update({ estado: 'cancelado', updated_at: new Date().toISOString() } as never)
+      .eq('contrato_id', contratoId)
+      .not('estado', 'in', '("firmado","cancelado","expirado")');
+    if (firmantesErr) {
+      logger.warn({ error: firmantesErr.message, contratoId }, 'No se pudieron cancelar los contrato_firmantes pendientes');
+    }
+
+    if (rows.length > 0) {
+      logger.info({ contratoId, solicitudes: rows.length }, 'Solicitudes de firma canceladas al cancelar el contrato');
+    }
+  } catch (err) {
+    logger.error({ err, contratoId }, 'Error cancelando solicitudes de firma del contrato');
+  }
+}
+
 export async function cancelarSolicitud(
   solicitudId: string,
   userId: string,

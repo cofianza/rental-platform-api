@@ -14,13 +14,13 @@ export async function transition(req: Request, res: Response) {
 
 export async function getAvailableTransitions(req: Request, res: Response) {
   const { id } = req.params as unknown as ContratoIdParams;
-  const result = await workflowService.getContratoTransitions(id);
+  const result = await workflowService.getContratoTransitions(id, req.user!);
   sendSuccess(res, result);
 }
 
 export async function getHistory(req: Request, res: Response) {
   const { id } = req.params as unknown as ContratoIdParams;
-  const result = await workflowService.getContratoTransitionHistory(id);
+  const result = await workflowService.getContratoTransitionHistory(id, req.user!);
   sendSuccess(res, result);
 }
 

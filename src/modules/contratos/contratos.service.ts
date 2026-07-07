@@ -1154,6 +1154,73 @@ async function notificarPartesContratoVigente(
 }
 
 /**
+ * Notifica a solicitante y propietario cuando un contrato se TERMINA
+ * (finalizado — fin natural o vencimiento automático — o cancelado). Espejo de
+ * notificarPartesContratoVigente; antes de esto NADIE se enteraba de la
+ * terminación (ni siquiera el inquilino). El caller la invoca fire-and-forget
+ * con .catch — no debe tumbar la transición.
+ */
+export async function notificarPartesContratoTerminado(
+  contratoId: string,
+  expedienteId: string,
+  targetState: 'finalizado' | 'cancelado',
+  automatico: boolean,
+): Promise<void> {
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, solicitante_id, inmueble_id')
+    .eq('id', expedienteId)
+    .single() as { data: { id: string; numero: string | null; solicitante_id: string | null; inmueble_id: string } | null };
+
+  if (!exp) return;
+
+  const { data: inm } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('direccion, propietario_id')
+    .eq('id', exp.inmueble_id)
+    .single() as { data: { direccion: string; propietario_id: string | null } | null };
+
+  const link = `/contratos/${contratoId}`;
+  const direccion = inm?.direccion ?? 'el inmueble';
+  const esCancelacion = targetState === 'cancelado';
+  const causa = esCancelacion
+    ? 'fue cancelado'
+    : automatico
+      ? 'finalizó por vencimiento del plazo'
+      : 'fue finalizado';
+
+  if (inm?.propietario_id) {
+    await notificarUsuario({
+      userId: inm.propietario_id,
+      tipo: esCancelacion ? 'contrato.cancelado' : 'contrato.finalizado',
+      titulo: esCancelacion ? 'Contrato cancelado' : 'Contrato finalizado',
+      mensaje: `El contrato de ${direccion} ${causa}.`,
+      link,
+      payload: { contrato_id: contratoId, expediente_id: expedienteId, automatico },
+    });
+  }
+
+  if (exp.solicitante_id) {
+    const { data: sol } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('email')
+      .eq('id', exp.solicitante_id)
+      .single() as { data: { email: string } | null };
+    const solicitanteUserId = await findPerfilIdByEmail(sol?.email);
+    if (solicitanteUserId) {
+      await notificarUsuario({
+        userId: solicitanteUserId,
+        tipo: esCancelacion ? 'contrato.cancelado' : 'contrato.finalizado',
+        titulo: esCancelacion ? 'Tu contrato fue cancelado' : 'Tu contrato finalizó',
+        mensaje: `Tu contrato de ${direccion} ${causa}.`,
+        link,
+        payload: { contrato_id: contratoId, expediente_id: expedienteId, automatico },
+      });
+    }
+  }
+}
+
+/**
  * Envío a firma desde la pestaña Contratos ("Enviar a firma"). Es el ÚNICO
  * punto que envía un contrato a firma: ocurre solo por acción explícita del
  * usuario (tarea 4.2 — antes un GET de listado lo auto-disparaba). PROPAGA los
@@ -1915,11 +1982,16 @@ export async function renovarContrato(
     );
   }
 
-  // 2. Check no existing renewal already exists
+  // 2. Check no existing renewal already exists. Las renovaciones CANCELADAS
+  // no bloquean: sin este filtro, una renovación cancelada (p. ej. la
+  // auto-cancelación al terminar el padre, o un borrador descartado) impedía
+  // para siempre crear una nueva. Una renovación finalizada SÍ bloquea (el
+  // ciclo ya ocurrió).
   const { data: existingRenewal } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select('id')
     .eq('contrato_padre_id', contratoId)
+    .neq('estado', 'cancelado')
     .limit(1)
     .maybeSingle();
 
