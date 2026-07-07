@@ -304,6 +304,22 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
     throw AppError.badRequest('No se proporcionaron campos para actualizar');
   }
 
+  // Guard de estado (el PUT general no pasa por la máquina de estados de
+  // contratos): liberar un 'ocupado' a mano solo es legítimo si NO hay un
+  // contrato vigente sobre el inmueble — la liberación real la hace el
+  // workflow del contrato (terminar/cancelar). Sin esto, cualquier dueño
+  // podía re-publicar un inmueble arrendado con PUT {estado:'disponible'}.
+  const prevRow = previous as unknown as Record<string, unknown>;
+  if (input.estado === 'disponible' && prevRow.estado === 'ocupado') {
+    const contratoVigente = await getContratoVigenteDeInmueble(id);
+    if (contratoVigente) {
+      throw AppError.conflict(
+        'El inmueble tiene un contrato vigente. Para liberarlo, termina o cancela el contrato.',
+        'INMUEBLE_CON_CONTRATO_VIGENTE',
+      );
+    }
+  }
+
   // Guard de vitrina (paridad con toggleVisibility, que este PUT general
   // permitía saltarse). Coerción silenciosa —no error— porque el form de
   // edición precarga el checkbox con el valor actual y lanzar bloquearía
@@ -314,7 +330,6 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
   //     filas rancias. OJO: 'en_estudio' se exime a propósito — ahí el flag
   //     en true se CONSERVA para que el inmueble vuelva solo a la vitrina si
   //     el estudio se cae.
-  const prevRow = previous as unknown as Record<string, unknown>;
   const estadoFinal = (input.estado ?? prevRow.estado) as string;
   if (updateData.visible_vitrina === true) {
     const encendiendo = prevRow.visible_vitrina !== true;
@@ -391,9 +406,13 @@ export async function deleteInmueble(id: string, deletedBy: string, ip?: string)
     throw AppError.badRequest('El inmueble ya se encuentra inactivo', 'ALREADY_INACTIVE');
   }
 
+  // Desactivar también lo saca de la vitrina (visible_vitrina=false): mismo
+  // criterio que bloquear/liberar — al reactivarlo, el dueño decide cuándo
+  // re-publicar (sin esto, un inmueble desactivado estando publicado
+  // reaparecía en la vitrina solo con reactivarlo).
   const { error } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: 'inactivo' } as never)
+    .update({ estado: 'inactivo', visible_vitrina: false } as never)
     .eq('id', id);
 
   if (error) {
@@ -552,12 +571,15 @@ export async function bloquearInmuebleEnEstudio(inmuebleId: string) {
  * Bloqueo PERMANENTE: contrato vigente. → ocupado + fuera de vitrina.
  * Simétrico con liberarInmuebleTrasContrato (que también fuerza el flag a
  * false): el dueño decide re-publicar cuando el inmueble vuelva a liberarse.
+ * NO pisa un 'inactivo' (soft-delete): misma cortesía que la liberación —
+ * si el dueño desactivó el inmueble a mano, ningún flujo automático lo revive.
  */
 export async function bloquearInmuebleOcupado(inmuebleId: string) {
   const { error } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .update({ estado: 'ocupado', visible_vitrina: false, updated_at: new Date().toISOString() } as never)
-    .eq('id', inmuebleId);
+    .eq('id', inmuebleId)
+    .neq('estado', 'inactivo');
   if (error) logger.warn({ error: error.message, inmuebleId }, 'No se pudo marcar el inmueble como ocupado');
 }
 
@@ -568,17 +590,22 @@ export async function liberarInmuebleEnEstudio(inmuebleId: string) {
 
 /**
  * Liberar al terminar/cancelar el contrato: el inmueble vuelve a 'disponible'.
- * Solo desde ocupado (contrato vigente terminado) o en_estudio (cancelación
- * pre-firma); NO revive un inmueble 'inactivo' que el dueño desactivó a mano.
+ * `desde` acota desde qué estados se libera (default: ocupado —contrato
+ * vigente terminado— o en_estudio —cancelación desde vigente—); el caller de
+ * cancelaciones pre-firma pasa solo ['ocupado'] para no tocar el bloqueo
+ * en_estudio del expediente. NUNCA revive un 'inactivo' (soft-delete manual).
  * Lo saca de la vitrina (visible_vitrina=false): el dueño decide cuándo
  * re-publicarlo para arrendarlo de nuevo.
  */
-export async function liberarInmuebleTrasContrato(inmuebleId: string) {
+export async function liberarInmuebleTrasContrato(
+  inmuebleId: string,
+  desde: string[] = ['ocupado', 'en_estudio'],
+) {
   const { error } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .update({ estado: 'disponible', visible_vitrina: false, updated_at: new Date().toISOString() } as never)
     .eq('id', inmuebleId)
-    .in('estado', ['ocupado', 'en_estudio']);
+    .in('estado', desde);
   if (error) logger.warn({ error: error.message, inmuebleId }, 'No se pudo liberar el inmueble tras contrato');
 }
 

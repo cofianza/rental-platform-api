@@ -115,8 +115,18 @@ export async function executeContratoTransition(
 
   const result = data as TransitionRpcResult;
 
-  // Efectos secundarios post-transicion
-  await applySideEffects(contratoId, contrato.expediente_id, targetState, input, currentState);
+  // Efectos secundarios post-transicion. fromState = el estado_anterior que
+  // reporta el RPC (leído bajo FOR UPDATE), NO el currentState leído antes:
+  // el auto-heal fire-and-forget puede mover el contrato (pendiente_firma →
+  // firmado → vigente) entre nuestro fetch y el RPC, y decidir la liberación
+  // del inmueble con un estado obsoleto saltaría la liberación de un vigente.
+  await applySideEffects(
+    contratoId,
+    contrato.expediente_id,
+    targetState,
+    input,
+    result.estado_anterior ?? currentState,
+  );
 
   logger.info(
     { contratoId, from: currentState, to: targetState, userId: user.id },
@@ -466,15 +476,20 @@ async function applySideEffects(
           fecha_terminacion: new Date().toISOString(),
         } as never)
         .eq('id', contratoId);
-      // Liberar el inmueble SOLO al cancelar un contrato que estaba VIGENTE
-      // (arriendo en curso que se rompe). Cancelar un contrato pre-firma
-      // (borrador/en_revision/aprobado/pendiente_firma/firmado) NO toca el
-      // inmueble: el bloqueo temporal 'en_estudio' pertenece al ciclo del
-      // EXPEDIENTE (que sigue activo y puede generar otro contrato); su propia
-      // cancelación ya lo libera con liberarInmuebleEnEstudio.
-      if (fromState === 'vigente') {
-        await liberarInmuebleDelExpediente(expedienteId, contratoId);
-      }
+      // Cancelar desde VIGENTE (arriendo en curso que se rompe): liberación
+      // completa (ocupado O en_estudio → disponible).
+      // Cancelar PRE-firma: NO tocar el bloqueo temporal 'en_estudio' — ese
+      // pertenece al ciclo del EXPEDIENTE (que sigue activo y puede generar
+      // otro contrato); su propia cancelación lo libera. PERO sí liberar si el
+      // inmueble quedó 'ocupado': cubre cancelar una renovación en
+      // pendiente_firma cuando el contrato padre ya finalizó (el guard de
+      // renovación evitó liberarlo entonces; sin esto quedaría 'ocupado' para
+      // siempre, con el expediente ya cerrado).
+      await liberarInmuebleDelExpediente(
+        expedienteId,
+        contratoId,
+        fromState === 'vigente' ? ['ocupado', 'en_estudio'] : ['ocupado'],
+      );
       break;
     }
   }
@@ -491,15 +506,28 @@ async function applySideEffects(
  * padre cuando ya corre su renovación — NO se libera: el inmueble sigue
  * arrendado por el contrato sucesor.
  */
-async function liberarInmuebleDelExpediente(expedienteId: string, contratoId: string): Promise<void> {
+async function liberarInmuebleDelExpediente(
+  expedienteId: string,
+  contratoId: string,
+  desde: string[] = ['ocupado', 'en_estudio'],
+): Promise<void> {
   try {
-    const { data: otros } = await (supabase
+    const { data: otros, error: guardError } = await (supabase
       .from('contratos' as string) as ReturnType<typeof supabase.from>)
       .select('id')
       .eq('expediente_id', expedienteId)
       .neq('id', contratoId)
       .in('estado', ['vigente', 'firmado', 'pendiente_firma'])
       .limit(1);
+    if (guardError) {
+      // FAIL-CLOSED: si no podemos confirmar que no hay contrato sucesor, NO
+      // liberamos (liberar de más es peor que dejar el inmueble bloqueado).
+      logger.error(
+        { expedienteId, contratoId, error: guardError.message },
+        'Guard de renovación falló — inmueble NO liberado por precaución',
+      );
+      return;
+    }
     if (((otros as Array<{ id: string }> | null) ?? []).length > 0) {
       logger.info(
         { expedienteId, contratoId },
@@ -508,15 +536,19 @@ async function liberarInmuebleDelExpediente(expedienteId: string, contratoId: st
       return;
     }
 
-    const { data: expRow } = await (supabase
+    const { data: expRow, error: expError } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('inmueble_id')
       .eq('id', expedienteId)
       .single();
+    if (expError) {
+      logger.error({ expedienteId, error: expError.message }, 'No se pudo resolver el inmueble del expediente para liberarlo');
+      return;
+    }
     const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
     if (!inmuebleId) return;
     const { liberarInmuebleTrasContrato } = await import('@/modules/inmuebles/inmuebles.service');
-    await liberarInmuebleTrasContrato(inmuebleId);
+    await liberarInmuebleTrasContrato(inmuebleId, desde);
   } catch (err) {
     logger.error({ err, expedienteId }, 'No se pudo liberar el inmueble tras fin/cancelación del contrato');
   }
@@ -529,11 +561,15 @@ async function liberarInmuebleDelExpediente(expedienteId: string, contratoId: st
  */
 async function ocuparInmuebleDelExpediente(expedienteId: string): Promise<void> {
   try {
-    const { data: expRow } = await (supabase
+    const { data: expRow, error: expError } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('inmueble_id')
       .eq('id', expedienteId)
       .single();
+    if (expError) {
+      logger.error({ expedienteId, error: expError.message }, 'No se pudo resolver el inmueble del expediente para ocuparlo');
+      return;
+    }
     const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
     if (!inmuebleId) return;
     const { bloquearInmuebleOcupado } = await import('@/modules/inmuebles/inmuebles.service');

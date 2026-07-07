@@ -152,6 +152,20 @@ export async function executeTransition(
   // transiciona desde 'en_estudio'. Fire-and-forget.
   if (targetState === 'rechazado' || targetState === 'cerrado') {
     (async () => {
+      // Guard para el CIERRE: si el expediente tiene un contrato en curso
+      // (firmado a la espera de activarse, en firma, o vigente), NO liberar —
+      // el cierre manual aprobado→cerrado es válido con contrato 'firmado'
+      // (flujo papel) y liberar aquí re-publicaría un inmueble comprometido.
+      // El rechazo sí libera incondicional (el candidato no sigue).
+      if (targetState === 'cerrado') {
+        const { data: contratosActivos } = await (supabase
+          .from('contratos' as string) as ReturnType<typeof supabase.from>)
+          .select('id')
+          .eq('expediente_id', expedienteId)
+          .in('estado', ['vigente', 'firmado', 'pendiente_firma'])
+          .limit(1);
+        if (((contratosActivos as Array<{ id: string }> | null) ?? []).length > 0) return;
+      }
       const { data: expRow } = await (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
         .select('inmueble_id')
