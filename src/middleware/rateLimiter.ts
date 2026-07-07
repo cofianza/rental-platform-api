@@ -1,5 +1,23 @@
 import rateLimit from 'express-rate-limit';
+import type { Request } from 'express';
 import { env } from '@/config';
+
+// Direcciones loopback (mismo host). En desarrollo local TODO el tráfico sale
+// de 127.0.0.1/::1, compartiendo un único cupo por IP.
+const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+
+// El límite global por IP es una protección anti-abuso pensada para tráfico
+// REAL de producción (muchas IPs distintas). NO debe aplicar a entornos
+// no-producción NI a peticiones locales/loopback: en local el dashboard hace
+// fan-out de muchas peticiones por página de detalle y, sumado a StrictMode +
+// Fast Refresh, agota el cupo y devuelve 429 espurios (peor aún si el
+// .env.local quedó con NODE_ENV=production). Un atacante real nunca llega por
+// loopback (detrás del proxy de Railway trae su IP real vía X-Forwarded-For con
+// trust proxy=1), así que saltarse loopback no debilita la protección.
+function skipRateLimit(req: Request): boolean {
+  if (env.NODE_ENV !== 'production') return true;
+  return LOOPBACK_IPS.has(req.ip ?? '');
+}
 
 // Límite global por IP/min. Configurable por RATE_LIMIT_MAX (default 300):
 // el dashboard hace fan-out de muchas peticiones por página de detalle, así
@@ -8,6 +26,7 @@ import { env } from '@/config';
 export const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: env.RATE_LIMIT_MAX,
+  skip: skipRateLimit,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: {
