@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds, perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds, perfilEsDuenoDeInmueble, assertInmuebleAccess } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import type {
   CreateInmuebleInput,
@@ -272,9 +272,25 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
   return created;
 }
 
-export async function updateInmueble(id: string, input: UpdateInmuebleInput, updatedBy: string, ip?: string) {
+export async function updateInmueble(id: string, input: UpdateInmuebleInput, updatedBy: string, updatedByRol?: string, ip?: string) {
+  // Guard multi-tenant (por-id): propietario/inmobiliaria solo pueden mutar
+  // inmuebles que administran. No-op para roles internos / llamadas sin
+  // identidad. 404 cross-tenant (misma fuente de verdad que el resto de by-id).
+  await assertInmuebleAccess(id, updatedBy, updatedByRol);
+
   // Obtener estado anterior para diff
   const previous = await getInmuebleById(id);
+
+  // Un externo (propietario/inmobiliaria) NO puede reasignar el propietario del
+  // inmueble: sería un hijack cross-tenant (recalcularía inmobiliaria_id hacia
+  // otra org). El create() ya fuerza propietario_id al propio usuario; aquí se
+  // rechaza cualquier cambio. Roles internos (admin/operador) sí pueden.
+  if (updatedByRol === 'inmobiliaria' || updatedByRol === 'propietario') {
+    const prevPropietarioId = (previous as unknown as { propietario_id?: string | null }).propietario_id;
+    if (input.propietario_id && input.propietario_id !== prevPropietarioId) {
+      throw AppError.forbidden('No puedes cambiar el propietario del inmueble', 'PROPIETARIO_CHANGE_FORBIDDEN');
+    }
+  }
 
   // Si cambia propietario, validar que exista
   if (input.propietario_id) {
@@ -440,7 +456,7 @@ const SORT_MAP: Record<string, string> = {
   city: 'ciudad',
 };
 
-export async function searchInmuebles(query: SearchInmueblesQuery) {
+export async function searchInmuebles(query: SearchInmueblesQuery, restrictToIds?: string[] | null) {
   const {
     keyword, city, state, property_type,
     stratum_min, stratum_max, rent_min, rent_max,
@@ -454,11 +470,22 @@ export async function searchInmuebles(query: SearchInmueblesQuery) {
   const sortOrder = query.sortOrder || 'desc';
   const offset = (page - 1) * limit;
 
+  // Multi-tenant: restrictToIds = inmueble IDs visibles para el usuario (misma
+  // semántica que listInmuebles). [] => no ve ninguno; null/undefined => sin
+  // filtro (rol interno).
+  if (restrictToIds !== undefined && restrictToIds !== null && restrictToIds.length === 0) {
+    return { inmuebles: [], pagination: { total: 0, page, limit, totalPages: 0 } };
+  }
+
   let qb = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select(INMUEBLE_FIELDS, { count: 'exact' })
     .order(SORT_MAP[sortBy] || 'created_at', { ascending: sortOrder === 'asc' })
     .range(offset, offset + limit - 1);
+
+  if (restrictToIds !== undefined && restrictToIds !== null) {
+    qb = qb.in('id', restrictToIds); // ANDs con el .in('id', matchIds) del keyword, igual que list()
+  }
 
   // RN-001: Nunca mostrar inactivos
   if (status) {
@@ -615,7 +642,13 @@ export async function liberarInmuebleTrasContrato(
  */
 export async function getContratoVigenteDeInmueble(
   inmuebleId: string,
+  userId?: string,
+  userRol?: string,
 ): Promise<{ id: string; estado: string } | null> {
+  // Guard multi-tenant (por-id): externos solo sobre su cartera. No-op para
+  // roles internos y para la llamada interna de updateInmueble (sin identidad).
+  await assertInmuebleAccess(inmuebleId, userId, userRol);
+
   const { data: exps } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('id')
@@ -692,11 +725,30 @@ export async function toggleVisibility(
   return getInmuebleById(id);
 }
 
-export async function getFilterOptions() {
-  const { data, error } = await (supabase
+export async function getFilterOptions(restrictToIds?: string[] | null) {
+  // Multi-tenant: null/undefined => sin filtro (rol interno); [] => cartera
+  // vacía (opciones vacías); [...] => agregar solo sobre esos inmuebles.
+  if (restrictToIds !== undefined && restrictToIds !== null && restrictToIds.length === 0) {
+    return {
+      ciudades: [],
+      departamentos: [],
+      tipos: [],
+      estados: [],
+      estrato: { min: null, max: null },
+      valor_arriendo: { min: null, max: null },
+    };
+  }
+
+  let q = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select('ciudad, departamento, tipo, estrato, valor_arriendo, estado')
     .neq('estado', 'inactivo');
+
+  if (restrictToIds !== undefined && restrictToIds !== null) {
+    q = q.in('id', restrictToIds);
+  }
+
+  const { data, error } = await q;
 
   if (error) {
     logger.error({ error: error.message }, 'Error al obtener opciones de filtros');

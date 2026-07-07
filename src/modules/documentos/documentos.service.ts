@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import type {
   PresignedUrlInput,
   ConfirmarSubidaInput,
@@ -116,7 +117,11 @@ async function addSignedUrls<T extends DocumentoRow>(docs: T[]): Promise<T[]> {
 // generatePresignedUrl
 // ============================================================
 
-export async function generatePresignedUrl(input: PresignedUrlInput, _userId: string) {
+export async function generatePresignedUrl(
+  input: PresignedUrlInput,
+  userId: string,
+  userRol?: string,
+) {
   // 1. Validate tipo_documento
   const { data: tipoDoc, error: tipoError } = await (supabase
     .from('tipos_documento' as string) as ReturnType<typeof supabase.from>)
@@ -171,6 +176,11 @@ export async function generatePresignedUrl(input: PresignedUrlInput, _userId: st
     );
   }
 
+  // 4b. Tenant guard: 404 si el usuario no puede acceder a este expediente
+  // (no-op para roles internos / llamadas sin identidad). Evita mintear una URL
+  // de subida contra la ruta de storage de un expediente ajeno.
+  await assertExpedienteAccess(input.expediente_id, userId, userRol);
+
   // 5. Generate storage key
   const ext = input.nombre_original.includes('.')
     ? input.nombre_original.split('.').pop()!.toLowerCase()
@@ -204,6 +214,7 @@ export async function generatePresignedUrl(input: PresignedUrlInput, _userId: st
 export async function confirmarSubida(
   input: ConfirmarSubidaInput,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
   // 1. Validate expediente
@@ -224,6 +235,11 @@ export async function confirmarSubida(
       'EXPEDIENTE_TERMINAL',
     );
   }
+
+  // 1b. Tenant guard: 404 si el usuario no puede acceder a este expediente
+  // (no-op para roles internos / llamadas sin identidad). Antes de cualquier
+  // escritura en BD contra un expediente ajeno.
+  await assertExpedienteAccess(input.expediente_id, userId, userRol);
 
   // 2. Validate tipo_documento
   const { data: tipoDoc, error: tipoError } = await (supabase
@@ -344,6 +360,8 @@ export async function confirmarSubida(
 export async function listDocumentosByExpediente(
   expedienteId: string,
   query: ListDocumentosQuery,
+  userId?: string,
+  userRol?: string,
 ) {
   // Validate expediente exists
   const { data: expediente, error: expError } = await (supabase
@@ -355,6 +373,10 @@ export async function listDocumentosByExpediente(
   if (expError || !expediente) {
     throw AppError.notFound('Expediente no encontrado');
   }
+
+  // Tenant guard: 404 si el usuario no puede acceder a este expediente
+  // (no-op para roles internos / llamadas sin identidad).
+  await assertExpedienteAccess(expedienteId, userId, userRol);
 
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
@@ -413,7 +435,7 @@ export async function listDocumentosByExpediente(
 // getDocumentoById
 // ============================================================
 
-export async function getDocumentoById(id: string) {
+export async function getDocumentoById(id: string, userId?: string, userRol?: string) {
   const { data, error } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
     .select(`
@@ -435,6 +457,11 @@ export async function getDocumentoById(id: string) {
 
   // Add signed URL for viewing
   const doc = data as unknown as DocumentoRow;
+
+  // Tenant guard: 404 cross-tenant (no-op para roles internos / llamadas sin
+  // identidad). Antes de firmar la URL de visualización.
+  await assertExpedienteAccess(doc.expediente_id, userId, userRol);
+
   const archivo_url = await generateViewUrl(doc.storage_key);
 
   return { ...data, archivo_url };
@@ -743,7 +770,7 @@ export async function getPendientesRevision(expedienteId: string) {
 // getHistorialRevision
 // ============================================================
 
-export async function getHistorialRevision(docId: string) {
+export async function getHistorialRevision(docId: string, userId?: string, userRol?: string) {
   // Get the document to find its expediente_id and tipo_documento_id
   const { data: doc, error: docError } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
@@ -762,6 +789,10 @@ export async function getHistorialRevision(docId: string) {
     expediente_id: string;
     tipo_documento_id: string;
   };
+
+  // Tenant guard: 404 si el usuario no puede acceder a este expediente
+  // (no-op para roles internos / llamadas sin identidad).
+  await assertExpedienteAccess(expediente_id, userId, userRol);
 
   // Get all versions of this document type for this expediente
   const { data, error } = await (supabase
@@ -795,11 +826,11 @@ export async function getHistorialRevision(docId: string) {
 // generateViewUrlForViewer (15-min signed URL for inline viewing)
 // ============================================================
 
-export async function generateViewUrlForViewer(id: string, _userId: string) {
+export async function generateViewUrlForViewer(id: string, userId: string, userRol?: string) {
   // 1. Fetch document
   const { data, error } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, storage_key, nombre_original, tipo_mime')
+    .select('id, storage_key, nombre_original, tipo_mime, expediente_id')
     .eq('id', id)
     .single();
 
@@ -812,7 +843,12 @@ export async function generateViewUrlForViewer(id: string, _userId: string) {
     storage_key: string | null;
     nombre_original: string;
     tipo_mime: string | null;
+    expediente_id: string;
   };
+
+  // Tenant guard: 404 cross-tenant (no-op para roles internos / llamadas sin
+  // identidad). Antes de firmar la URL de visualización.
+  await assertExpedienteAccess(doc.expediente_id, userId, userRol);
 
   if (!doc.storage_key) {
     throw AppError.badRequest('El documento no tiene archivo asociado', 'NO_STORAGE_KEY');
@@ -840,11 +876,16 @@ export async function generateViewUrlForViewer(id: string, _userId: string) {
 // generateDownloadUrl (signed URL with Content-Disposition: attachment)
 // ============================================================
 
-export async function generateDownloadUrl(id: string, userId: string, ip?: string) {
+export async function generateDownloadUrl(
+  id: string,
+  userId: string,
+  userRol?: string,
+  ip?: string,
+) {
   // 1. Fetch document
   const { data, error } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, storage_key, nombre_original, tipo_mime')
+    .select('id, storage_key, nombre_original, tipo_mime, expediente_id')
     .eq('id', id)
     .single();
 
@@ -857,7 +898,12 @@ export async function generateDownloadUrl(id: string, userId: string, ip?: strin
     storage_key: string | null;
     nombre_original: string;
     tipo_mime: string | null;
+    expediente_id: string;
   };
+
+  // Tenant guard: 404 cross-tenant (no-op para roles internos / llamadas sin
+  // identidad). Antes de firmar la URL de descarga.
+  await assertExpedienteAccess(doc.expediente_id, userId, userRol);
 
   if (!doc.storage_key) {
     throw AppError.badRequest('El documento no tiene archivo asociado', 'NO_STORAGE_KEY');
@@ -1023,6 +1069,7 @@ export async function confirmarReemplazo(
   docId: string,
   input: ConfirmarReemplazoInput,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
   // 1. Re-fetch and re-validate estado (race condition protection)
@@ -1044,6 +1091,18 @@ export async function confirmarReemplazo(
       'DOCUMENTO_NOT_RECHAZADO',
     );
   }
+
+  // 1b. Ownership del documento (consistente con iniciarReemplazo): solo quien
+  // lo subió o un admin puede reemplazarlo.
+  if (doc.subido_por !== userId && userRol !== 'administrador') {
+    throw AppError.forbidden(
+      'Solo el propietario del documento o un administrador puede reemplazarlo',
+    );
+  }
+
+  // 1c. Tenant guard: 404 si el usuario no puede acceder a este expediente
+  // (no-op para roles internos / llamadas sin identidad).
+  await assertExpedienteAccess(doc.expediente_id, userId, userRol);
 
   // 2. Verify file exists in storage
   const { error: verifyError } = await supabase.storage
@@ -1129,7 +1188,7 @@ export async function confirmarReemplazo(
 // getVersiones — version history for a document type in an expediente
 // ============================================================
 
-export async function getVersiones(docId: string) {
+export async function getVersiones(docId: string, userId?: string, userRol?: string) {
   // 1. Fetch doc to get expediente_id, tipo_documento_id
   const { data: doc, error: docError } = await (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
@@ -1148,6 +1207,10 @@ export async function getVersiones(docId: string) {
     expediente_id: string;
     tipo_documento_id: string;
   };
+
+  // 1b. Tenant guard: 404 si el usuario no puede acceder a este expediente
+  // (no-op para roles internos / llamadas sin identidad).
+  await assertExpedienteAccess(expediente_id, userId, userRol);
 
   // 2. Get all versions
   const { data, error } = await (supabase

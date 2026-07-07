@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import * as inmueblesService from './inmuebles.service';
 import * as cambiosService from './inmuebles-cambios.service';
-import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
+import { resolvePortfolioInmuebleIds, assertInmuebleAccess } from '@/lib/tenantScope';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 import type {
@@ -35,13 +35,16 @@ export async function list(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
+  // Multi-tenant (por-id): propietario/inmobiliaria solo ven inmuebles que
+  // administran. No-op para roles internos. 404 cross-tenant.
+  await assertInmuebleAccess(id, req.user?.id, req.user?.rol);
   const inmueble = await inmueblesService.getInmuebleById(id);
   sendSuccess(res, inmueble);
 }
 
 export async function getContratoVigente(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
-  const contrato = await inmueblesService.getContratoVigenteDeInmueble(id);
+  const contrato = await inmueblesService.getContratoVigenteDeInmueble(id, req.user?.id, req.user?.rol);
   sendSuccess(res, contrato);
 }
 
@@ -58,7 +61,7 @@ export async function create(req: Request, res: Response) {
 export async function update(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
   const input = req.body as UpdateInmuebleInput;
-  const inmueble = await inmueblesService.updateInmueble(id, input, req.user!.id, req.ip);
+  const inmueble = await inmueblesService.updateInmueble(id, input, req.user!.id, req.user!.rol, req.ip);
   sendSuccess(res, inmueble);
 }
 
@@ -70,25 +73,37 @@ export async function remove(req: Request, res: Response) {
 
 export async function search(req: Request, res: Response) {
   const query = req.query as unknown as SearchInmueblesQuery;
-  const result = await inmueblesService.searchInmuebles(query);
+  // Multi-tenant: propietario/inmobiliaria solo buscan dentro de su cartera
+  // (org-aware). Roles internos (admin/operador/gerencia): sin restricción.
+  let restrictToIds: string[] | null = null;
+  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
+    restrictToIds = await resolvePortfolioInmuebleIds(req.user.id);
+  }
+  const result = await inmueblesService.searchInmuebles(query, restrictToIds);
   sendSuccess(res, result.inmuebles, 200, result.pagination);
 }
 
-export async function filterOptions(_req: Request, res: Response) {
-  const options = await inmueblesService.getFilterOptions();
+export async function filterOptions(req: Request, res: Response) {
+  // Multi-tenant: las opciones de filtro se agregan solo sobre la cartera del
+  // usuario (paridad con list()). Roles internos: sin restricción.
+  let restrictToIds: string[] | null = null;
+  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
+    restrictToIds = await resolvePortfolioInmuebleIds(req.user.id);
+  }
+  const options = await inmueblesService.getFilterOptions(restrictToIds);
   sendSuccess(res, options);
 }
 
 export async function listCambios(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
   const query = req.query as unknown as ListCambiosQuery;
-  const result = await cambiosService.listCambios(id, query);
+  const result = await cambiosService.listCambios(id, query, req.user?.id, req.user?.rol);
   sendSuccess(res, result.cambios, 200, result.pagination);
 }
 
 export async function getCambiosResumen(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
-  const result = await cambiosService.getCambiosResumen(id);
+  const result = await cambiosService.getCambiosResumen(id, req.user?.id, req.user?.rol);
   sendSuccess(res, result);
 }
 

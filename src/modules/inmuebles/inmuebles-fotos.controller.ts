@@ -18,7 +18,7 @@ import type {
  */
 export async function list(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdOnlyParams;
-  const fotos = await fotosService.getFotosByInmuebleId(id);
+  const fotos = await fotosService.getFotosByInmuebleId(id, req.user?.id, req.user?.rol);
   sendSuccess(res, fotos);
 }
 
@@ -29,7 +29,7 @@ export async function list(req: Request, res: Response) {
 export async function create(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdOnlyParams;
   const input = req.body as CreateFotoInput;
-  const foto = await fotosService.createFoto(id, input, req.user!.id, req.ip);
+  const foto = await fotosService.createFoto(id, input, req.user!.id, req.user!.rol, req.ip);
   sendCreated(res, foto);
 }
 
@@ -40,7 +40,7 @@ export async function create(req: Request, res: Response) {
 export async function update(req: Request, res: Response) {
   const { id, fotoId } = req.params as unknown as FotoIdParams;
   const input = req.body as UpdateFotoInput;
-  const foto = await fotosService.updateFoto(id, fotoId, input, req.user!.id, req.ip);
+  const foto = await fotosService.updateFoto(id, fotoId, input, req.user!.id, req.user!.rol, req.ip);
   sendSuccess(res, foto);
 }
 
@@ -50,7 +50,7 @@ export async function update(req: Request, res: Response) {
  */
 export async function remove(req: Request, res: Response) {
   const { id, fotoId } = req.params as unknown as FotoIdParams;
-  await fotosService.deleteFoto(id, fotoId, req.user!.id, req.ip);
+  await fotosService.deleteFoto(id, fotoId, req.user!.id, req.user!.rol, req.ip);
   sendNoContent(res);
 }
 
@@ -61,7 +61,7 @@ export async function remove(req: Request, res: Response) {
 export async function reordenar(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdOnlyParams;
   const { foto_ids } = req.body as ReordenarFotosInput;
-  const fotos = await fotosService.reordenarFotos(id, foto_ids, req.user!.id, req.ip);
+  const fotos = await fotosService.reordenarFotos(id, foto_ids, req.user!.id, req.user!.rol, req.ip);
   sendSuccess(res, fotos);
 }
 
@@ -71,6 +71,6 @@ export async function reordenar(req: Request, res: Response) {
  */
 export async function setFachada(req: Request, res: Response) {
   const { id, fotoId } = req.params as unknown as FotoIdParams;
-  const foto = await fotosService.setFotoFachada(id, fotoId, req.user!.id, req.ip);
+  const foto = await fotosService.setFotoFachada(id, fotoId, req.user!.id, req.user!.rol, req.ip);
   sendSuccess(res, foto);
 }

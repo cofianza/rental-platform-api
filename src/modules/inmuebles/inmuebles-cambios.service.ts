@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { assertInmuebleAccess } from '@/lib/tenantScope';
 import { getFieldLabel } from './inmuebles.field-labels';
 import type { ListCambiosQuery } from './inmuebles.schema';
 
@@ -42,7 +43,12 @@ function mapCambioRow(row: CambioRow): CambioResponse {
   };
 }
 
-export async function listCambios(inmuebleId: string, query: ListCambiosQuery) {
+export async function listCambios(
+  inmuebleId: string,
+  query: ListCambiosQuery,
+  userId?: string,
+  userRol?: string,
+) {
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
   const sortOrder = query.sortOrder || 'desc';
@@ -58,6 +64,10 @@ export async function listCambios(inmuebleId: string, query: ListCambiosQuery) {
   if (inmError || !inmueble) {
     throw AppError.notFound('Inmueble no encontrado');
   }
+
+  // Guard multi-tenant (por-id): externos solo ven el historial de inmuebles
+  // que administran. No-op para roles internos / llamadas sin identidad.
+  await assertInmuebleAccess(inmuebleId, userId, userRol);
 
   let qb = (supabase
     .from('cambios_inmuebles' as string) as ReturnType<typeof supabase.from>)
@@ -95,7 +105,7 @@ export async function listCambios(inmuebleId: string, query: ListCambiosQuery) {
   };
 }
 
-export async function getCambiosResumen(inmuebleId: string) {
+export async function getCambiosResumen(inmuebleId: string, userId?: string, userRol?: string) {
   // Verificar que el inmueble exista
   const { data: inmueble, error: inmError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
@@ -106,6 +116,10 @@ export async function getCambiosResumen(inmuebleId: string) {
   if (inmError || !inmueble) {
     throw AppError.notFound('Inmueble no encontrado');
   }
+
+  // Guard multi-tenant (por-id): externos solo ven el resumen de inmuebles que
+  // administran. No-op para roles internos / llamadas sin identidad.
+  await assertInmuebleAccess(inmuebleId, userId, userRol);
 
   // Total de cambios
   const { count: totalCambios, error: countError } = await (supabase

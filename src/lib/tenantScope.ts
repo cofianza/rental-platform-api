@@ -391,6 +391,36 @@ export async function perfilEsDuenoDeInmueble(params: {
 }
 
 /**
+ * Guard de propiedad a nivel INMUEBLE para endpoints por-id (detalle, update,
+ * fotos, cambios, contrato-vigente...). Lanza 404 si el usuario NO es dueño del
+ * inmueble (propietario directo o miembro de la org dueña). No-op para roles
+ * internos y llamadas sin identidad. Es la contraparte a nivel-inmueble de
+ * assertExpedienteAccess; usa perfilEsDuenoDeInmueble como única fuente de verdad.
+ */
+export async function assertInmuebleAccess(
+  inmuebleId: string,
+  userId?: string,
+  userRol?: string,
+): Promise<void> {
+  if (!userId || !userRol) return; // sin identidad: no gatear (sistema)
+  if (INTERNAL_ROLES.includes(userRol)) return; // ve todo
+  const { data } = await (supabase
+    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+    .select('propietario_id, inmobiliaria_id')
+    .eq('id', inmuebleId)
+    .maybeSingle();
+  const row = data as { propietario_id: string | null; inmobiliaria_id: string | null } | null;
+  if (!row) throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
+  const ok = await perfilEsDuenoDeInmueble({
+    userId,
+    userRol,
+    inmueblePropietarioId: row.propietario_id,
+    inmuebleInmobiliariaId: row.inmobiliaria_id,
+  });
+  if (!ok) throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
+}
+
+/**
  * Guard de propiedad a nivel EXPEDIENTE para endpoints por-id. Lanza 404 si el
  * usuario NO puede acceder al expediente (mismo trato que "no existe", para no
  * filtrar existencia cross-tenant). No hace nada para llamadas SIN identidad

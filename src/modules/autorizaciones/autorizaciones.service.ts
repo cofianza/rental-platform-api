@@ -6,7 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { env } from '@/config';
 import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
 
@@ -117,8 +117,19 @@ interface OtpRow {
 // 1. Get autorizacion status for expediente
 // ============================================================
 
-export async function getAutorizacionForExpediente(expedienteId: string) {
-  // Verify expediente exists
+export async function getAutorizacionForExpediente(
+  expedienteId: string,
+  userId?: string,
+  userRol?: string,
+) {
+  // Tenant guard: no-op para roles internos / llamadas sin identidad; lanza 404
+  // para un propietario/inmobiliaria/solicitante fuera de su cartera. Esta fila
+  // es evidencia legal de la firma habeas data (IP, dispositivo, texto literal),
+  // así que no debe exponerse cross-tenant conociendo solo el expedienteId.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
+  // Verify expediente exists. Para roles internos el guard es no-op, así que
+  // conservamos este 404 explícito de "no existe".
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('id')
@@ -802,8 +813,14 @@ export async function revocarAutorizacion(
   expedienteId: string,
   input: RevocarInput,
   userId: string,
+  userRol?: string,
   ip?: string,
 ) {
+  // Tenant guard: no-op para roles internos / llamadas sin identidad; 404 para
+  // propietario/inmobiliaria/solicitante fuera de su cartera. Revocar es mutar
+  // la evidencia legal de la firma, así que gateamos ANTES de buscar/mutar.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   // 1. Find active autorizacion for this expediente
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)

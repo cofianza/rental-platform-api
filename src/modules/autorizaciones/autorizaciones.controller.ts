@@ -14,7 +14,11 @@ import type {
 
 export async function getAutorizacionStatus(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };
-  const autorizacion = await autorizacionesService.getAutorizacionForExpediente(expedienteId);
+  const autorizacion = await autorizacionesService.getAutorizacionForExpediente(
+    expedienteId,
+    req.user?.id,
+    req.user?.rol,
+  );
   sendSuccess(res, autorizacion);
 }
 
@@ -38,6 +42,7 @@ export async function revocarAutorizacion(req: Request, res: Response) {
     expedienteId,
     input,
     req.user!.id,
+    req.user!.rol,
     req.ip,
   );
   sendSuccess(res, result);

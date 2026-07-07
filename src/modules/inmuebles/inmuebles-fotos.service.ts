@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { assertInmuebleAccess } from '@/lib/tenantScope';
 import { FOTO_LIMITS } from './inmuebles-fotos.schema';
 import type { CreateFotoInput, UpdateFotoInput } from './inmuebles-fotos.schema';
 
@@ -26,7 +27,16 @@ const FOTO_FIELDS = `id, inmueble_id, url, url_thumbnail, descripcion, orden, es
 /**
  * Obtener todas las fotos de un inmueble
  */
-export async function getFotosByInmuebleId(inmuebleId: string): Promise<FotoRow[]> {
+export async function getFotosByInmuebleId(
+  inmuebleId: string,
+  userId?: string,
+  userRol?: string,
+): Promise<FotoRow[]> {
+  // Guard multi-tenant (por-id, sobre el inmueble padre): externos solo ven las
+  // fotos de inmuebles que administran. No-op para roles internos y para la
+  // llamada interna de reordenarFotos (sin identidad).
+  await assertInmuebleAccess(inmuebleId, userId, userRol);
+
   // Verificar que el inmueble existe
   const { data: inmueble, error: inmuebleError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
@@ -59,8 +69,13 @@ export async function createFoto(
   inmuebleId: string,
   input: CreateFotoInput,
   createdBy: string,
+  createdByRol?: string,
   ip?: string,
 ): Promise<FotoRow> {
+  // Guard multi-tenant (por-id, inmueble padre): externos solo sobre inmuebles
+  // que administran. No-op para roles internos / llamadas sin identidad.
+  await assertInmuebleAccess(inmuebleId, createdBy, createdByRol);
+
   // Verificar que el inmueble existe
   const { data: inmueble, error: inmuebleError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
@@ -166,8 +181,13 @@ export async function updateFoto(
   fotoId: string,
   input: UpdateFotoInput,
   updatedBy: string,
+  updatedByRol?: string,
   ip?: string,
 ): Promise<FotoRow> {
+  // Guard multi-tenant (por-id, inmueble padre): externos solo sobre inmuebles
+  // que administran. No-op para roles internos / llamadas sin identidad.
+  await assertInmuebleAccess(inmuebleId, updatedBy, updatedByRol);
+
   // Verificar que la foto existe y pertenece al inmueble
   const { data: existing, error: existingError } = await (supabase
     .from('fotos_inmueble' as string) as ReturnType<typeof supabase.from>)
@@ -257,8 +277,13 @@ export async function deleteFoto(
   inmuebleId: string,
   fotoId: string,
   deletedBy: string,
+  deletedByRol?: string,
   ip?: string,
 ): Promise<void> {
+  // Guard multi-tenant (por-id, inmueble padre): externos solo sobre inmuebles
+  // que administran. No-op para roles internos / llamadas sin identidad.
+  await assertInmuebleAccess(inmuebleId, deletedBy, deletedByRol);
+
   // Verificar que la foto existe y pertenece al inmueble
   const { data: existing, error: existingError } = await (supabase
     .from('fotos_inmueble' as string) as ReturnType<typeof supabase.from>)
@@ -327,8 +352,13 @@ export async function reordenarFotos(
   inmuebleId: string,
   fotoIds: string[],
   updatedBy: string,
+  updatedByRol?: string,
   ip?: string,
 ): Promise<FotoRow[]> {
+  // Guard multi-tenant (por-id, inmueble padre): externos solo sobre inmuebles
+  // que administran. No-op para roles internos / llamadas sin identidad.
+  await assertInmuebleAccess(inmuebleId, updatedBy, updatedByRol);
+
   // Verificar que todas las fotos existen y pertenecen al inmueble
   const { data: existingFotos, error: existingError } = await (supabase
     .from('fotos_inmueble' as string) as ReturnType<typeof supabase.from>)
@@ -381,8 +411,13 @@ export async function setFotoFachada(
   inmuebleId: string,
   fotoId: string,
   updatedBy: string,
+  updatedByRol?: string,
   ip?: string,
 ): Promise<FotoRow> {
+  // Guard multi-tenant (por-id, inmueble padre): externos solo sobre inmuebles
+  // que administran. No-op para roles internos / llamadas sin identidad.
+  await assertInmuebleAccess(inmuebleId, updatedBy, updatedByRol);
+
   // Verificar que la foto existe y pertenece al inmueble
   const { data: existing, error: existingError } = await (supabase
     .from('fotos_inmueble' as string) as ReturnType<typeof supabase.from>)
