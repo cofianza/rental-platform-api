@@ -18,6 +18,10 @@ export const updatePerfilArrendadorSchema = z.object({
   // Solo inmobiliaria (un propietario individual se identifica con su cédula).
   // max(20) para coincidir con la columna perfiles.nit VARCHAR(20).
   nit: z.string().max(20).optional().nullable(),
+  // ¿Qué afianzadora/aseguradora usan hoy? (dato de conversión, tarea 1.6).
+  // Se captura en el registro y ahora también es editable desde Mi Inmobiliaria.
+  afianzadora_tipo: z.enum(['afianzadora', 'aseguradora', 'ninguna']).optional().nullable(),
+  afianzadora_actual: z.string().max(200).optional().nullable(),
   representante_legal: z.string().max(200).optional().nullable(),
   domicilio_direccion: z.string().max(200).optional().nullable(),
   domicilio_ciudad: z.string().max(120).optional().nullable(),

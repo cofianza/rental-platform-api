@@ -12,6 +12,7 @@ const LOGO_URL_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 días
 const PERFIL_ARRENDADOR_FIELDS = `
   id, nombre, apellido, rol, tipo_documento, numero_documento, nit,
   razon_social, representante_legal,
+  afianzadora_tipo, afianzadora_actual,
   domicilio_direccion, domicilio_ciudad, ciudad,
   matricula_arrendador, logo_storage_key, logo_url,
   whatsapp_recaudo, email_recaudo,
@@ -175,6 +176,14 @@ export async function updateMiPerfilArrendador(
     update.razon_social = normalizeEmpty(input.razon_social);
     // NIT de la inmobiliaria (sale en el contrato).
     update.nit = normalizeEmpty(input.nit);
+    // Afianzadora/aseguradora actual (dato de conversión, tarea 1.6). El nombre
+    // solo tiene sentido si el tipo es afianzadora/aseguradora; con 'ninguna' o
+    // vacío lo limpiamos para no dejar un dato contradictorio.
+    update.afianzadora_tipo = normalizeEmpty(input.afianzadora_tipo);
+    update.afianzadora_actual =
+      input.afianzadora_tipo === 'afianzadora' || input.afianzadora_tipo === 'aseguradora'
+        ? normalizeEmpty(input.afianzadora_actual)
+        : null;
   }
 
   // Solo escribimos las claves explicitamente provistas — Supabase no
@@ -183,7 +192,13 @@ export async function updateMiPerfilArrendador(
   for (const [k, v] of Object.entries(update)) {
     // No filtramos null intencionales: si el caller manda explicit null,
     // queremos limpiar el campo.
-    if (k in input || (rol === 'inmobiliaria' && k === 'matricula_arrendador' && 'matricula_arrendador' in input)) {
+    if (
+      k in input ||
+      (rol === 'inmobiliaria' && k === 'matricula_arrendador' && 'matricula_arrendador' in input) ||
+      // Al cambiar el tipo de afianzadora persistimos también el nombre
+      // recalculado (se limpia si el tipo pasa a 'ninguna'/vacío).
+      (rol === 'inmobiliaria' && k === 'afianzadora_actual' && 'afianzadora_tipo' in input)
+    ) {
       filtered[k] = v;
     }
   }
