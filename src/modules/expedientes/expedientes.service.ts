@@ -414,7 +414,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
           .select('id, numero')
           .eq('inmueble_id', input.inmueble_id)
           .eq('solicitante_id', input.solicitante_id)
-          .in('estado', ['borrador', 'en_revision', 'info_incompleta', 'aprobado', 'condicionado'])
+          .in('estado', ['borrador', 'en_revision', 'informacion_incompleta', 'aprobado', 'condicionado'])
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
