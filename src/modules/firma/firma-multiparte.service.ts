@@ -57,6 +57,11 @@ export interface FirmanteDerivado {
    * Hoy solo Cofianza, gated por COFIANZA_AUTOFIRMA_ENABLED.
    */
   auto?: boolean;
+  /** De dónde sale el teléfono editable (para "editar en línea" en el preview):
+   *  'solicitante' → ficha del solicitante (origenId); 'arrendador' → WhatsApp de
+   *  recaudo de la inmobiliaria (perfil-arrendador). undefined = no editable. */
+  origen?: 'solicitante' | 'arrendador';
+  origenId?: string | null;
 }
 
 interface FirmanteRow {
@@ -144,6 +149,9 @@ export interface FirmantePreview {
   falta_datos: boolean;
   /** Comparte teléfono con otro firmante Auco → bloquea el envío. */
   duplicado: boolean;
+  /** Fuente editable del teléfono para corregirlo en línea desde el modal. */
+  origen?: 'solicitante' | 'arrendador';
+  origen_id?: string | null;
 }
 
 /**
@@ -178,6 +186,8 @@ export async function previewFirmantesMultiparte(
       auto,
       falta_datos: !auto && (!phone || !f.email),
       duplicado: !auto && !!phone && (freq.get(phone) ?? 0) > 1,
+      origen: f.origen,
+      origen_id: f.origenId ?? null,
     };
   });
 
@@ -202,7 +212,7 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
   const { data: expediente } = await db('expedientes')
     .select(`
       id,
-      solicitantes(nombre, apellido, email, telefono, tipo_documento, numero_documento),
+      solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento),
       inmuebles(propietario_id, inmobiliaria_id)
     `)
     .eq('id', c.expediente_id)
@@ -210,6 +220,7 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
   const exp = expediente as unknown as {
     id: string;
     solicitantes: {
+      id: string;
       nombre: string; apellido: string; email: string | null; telefono: string | null;
       tipo_documento: string | null; numero_documento: string | null;
     } | null;
@@ -232,6 +243,8 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
     numero_documento: sol.numero_documento ?? null,
     country: 'CO',
     orden: 1,
+    origen: 'solicitante',
+    origenId: sol.id,
   });
 
   // ── Arrendador (orden 2): inmobiliaria (representante legal) o propietario ──
@@ -271,6 +284,9 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
     numero_documento: arr.numero_documento ?? null,
     country: 'CO',
     orden: 2,
+    // El teléfono del arrendador (inmobiliaria) es su whatsapp_recaudo, editable
+    // desde el perfil-arrendador del propio usuario ("Mi Inmobiliaria").
+    origen: 'arrendador',
   });
 
   // ── Cofianza (orden 3): afianzadora ──
