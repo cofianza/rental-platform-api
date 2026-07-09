@@ -64,11 +64,25 @@ export async function listApplicants(query: ListApplicantsQuery, userId?: string
     .order(sortBy, { ascending: sortOrder === 'asc' })
     .range(offset, offset + limit - 1);
 
-  // Scope por rol: propietario/inmobiliaria SOLO ven los solicitantes que
-  // ellos registraron (creado_por). Sin esto verían toda la base de datos
-  // personales de la plataforma (fuga). Admin/operador ven todo.
+  // Scope por rol: propietario/inmobiliaria SOLO ven SU cartera de solicitantes.
+  // Sin esto verían toda la base de datos personales de la plataforma (fuga).
+  // Admin/operador ven todo.
+  //
+  // Usa el MISMO scope que el dedup de createApplicant y que el índice único
+  // por agencia (COALESCE(inmobiliaria_id, creado_por)): una inmobiliaria ve la
+  // cartera de su ORGANIZACIÓN (no solo lo que registró ella misma), si no un
+  // co-miembro no encontraría la ficha que createApplicant sí reutiliza.
+  // Defensivo: la ficha puede estar etiquetada por columna (inmobiliaria_id) o,
+  // si es legacy/sin backfill, sólo por su creador (un miembro de la org).
   if (userId && (userRol === 'propietario' || userRol === 'inmobiliaria')) {
-    qb = qb.eq('creado_por', userId);
+    const orgId = await resolveInmobiliariaIdForPerfil(userId);
+    if (orgId) {
+      const memberIds = await resolveOrgMemberPerfilIds(orgId);
+      if (!memberIds.includes(userId)) memberIds.push(userId);
+      qb = qb.or(`inmobiliaria_id.eq.${orgId},creado_por.in.(${memberIds.join(',')})`);
+    } else {
+      qb = qb.eq('creado_por', userId);
+    }
   }
 
   // Excluir inactivos por defecto

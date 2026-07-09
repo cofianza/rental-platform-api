@@ -28,6 +28,10 @@ export const updatePerfilArrendadorSchema = z.object({
 
   // Solo inmobiliaria (admin valida en el service)
   matricula_arrendador: z.string().max(50).optional().nullable(),
+  // El contrato imprime "Matricula No. X expedida por Y el Z". Sin estos dos
+  // campos escribibles, Y y Z salian SIEMPRE vacios en todo contrato nuevo.
+  matricula_expedida_por: z.string().max(120).optional().nullable(),
+  matricula_fecha: z.string().max(60).optional().nullable(),
 
   // Recaudo
   whatsapp_recaudo: z.string().max(30).optional().nullable(),

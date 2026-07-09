@@ -37,24 +37,43 @@ export async function registerSolicitante(
 
   const registrationSource = from_invitation ? 'invitacion_externa' : 'vitrina_publica';
 
-  // 0. Pre-flight: validar duplicados ANTES de crear el auth.user. Sin esto,
-  //    si el INSERT en `solicitantes` falla por unique violation (documento
-  //    ya registrado por otro solicitante), nos queda un auth.user huérfano
-  //    que bloquea reintentos con "EMAIL_ALREADY_EXISTS".
-  //    UNIQUE (tipo_documento, numero_documento) — definido en la migración
-  //    20260224000001_solicitantes_crud_columns.
-  const { data: solicitantesByDoc } = await (supabase
+  // 0. Pre-flight: validar duplicados ANTES de crear el auth.user, para no dejar
+  //    un auth.user huérfano que bloquee reintentos con "EMAIL_ALREADY_EXISTS".
+  //
+  //    OJO (tarea 3.1 / migración 20260707000002): el documento del solicitante
+  //    ya NO es único GLOBALMENTE, sino POR AGENCIA —
+  //    UNIQUE(COALESCE(inmobiliaria_id, creado_por), tipo_documento, numero_documento).
+  //    La ficha que crea este auto-registro nace con inmobiliaria_id=NULL y
+  //    creado_por = el userId RECIÉN creado, así que su scope es único por
+  //    definición: el INSERT nunca puede chocar con la ficha de una agencia.
+  //    Por eso NO validamos el documento globalmente (bloquearía a una persona
+  //    que alguna inmobiliaria ya registró en su cartera). Lo que sí impedimos
+  //    es que la MISMA persona se cree DOS cuentas de auto-servicio: buscamos
+  //    una ficha con ese documento cuyo creador sea un perfil rol='solicitante'
+  //    (= ficha auto-propiedad). Las fichas de agencia/propietario no bloquean.
+  const { data: fichasMismoDoc } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, email')
+    .select('id, creado_por, inmobiliaria_id')
     .eq('tipo_documento', tipo_documento)
-    .eq('numero_documento', numero_documento)
-    .limit(1);
+    .eq('numero_documento', numero_documento);
 
-  if (solicitantesByDoc && solicitantesByDoc.length > 0) {
-    throw AppError.conflict(
-      'Ya existe un solicitante registrado con este documento. Si es tu cuenta, inicia sesión.',
-      'DOCUMENT_ALREADY_EXISTS',
-    );
+  const candidatasAutoServicio = ((fichasMismoDoc as Array<{
+    id: string; creado_por: string | null; inmobiliaria_id: string | null;
+  }> | null) ?? []).filter((f) => !f.inmobiliaria_id && f.creado_por);
+
+  if (candidatasAutoServicio.length > 0) {
+    const { data: creadores } = await (supabase
+      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('id, rol')
+      .in('id', candidatasAutoServicio.map((f) => f.creado_por as string));
+    const yaTieneCuentaPropia = ((creadores as Array<{ id: string; rol: string }> | null) ?? [])
+      .some((p) => p.rol === 'solicitante');
+    if (yaTieneCuentaPropia) {
+      throw AppError.conflict(
+        'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
+        'DOCUMENT_ALREADY_EXISTS',
+      );
+    }
   }
 
   const { data: solicitantesByEmail } = await (supabase

@@ -14,7 +14,8 @@ const PERFIL_ARRENDADOR_FIELDS = `
   razon_social, representante_legal,
   afianzadora_tipo, afianzadora_actual,
   domicilio_direccion, domicilio_ciudad, ciudad,
-  matricula_arrendador, logo_storage_key, logo_url,
+  matricula_arrendador, matricula_expedida_por, matricula_fecha,
+  logo_storage_key, logo_url,
   whatsapp_recaudo, email_recaudo,
   cuenta_recaudo_banco, cuenta_recaudo_tipo, cuenta_recaudo_numero,
   cuenta_recaudo_titular_nombre, cuenta_recaudo_titular_nit
@@ -51,7 +52,16 @@ const REQUIRED_FIELDS_COMUNES = [
   'email_recaudo',
 ] as const;
 
-const REQUIRED_FIELDS_INMOBILIARIA = ['matricula_arrendador', 'representante_legal'] as const;
+// razon_social y nit SON obligatorios para una inmobiliaria: el contrato imprime
+// "Inmobiliaria X, NIT ..." como identidad del ARRENDADOR (tarea 4.1a). Sin
+// ellos el contrato sale con la identidad del arrendador incompleta, que es
+// justo lo que este gate debe impedir.
+const REQUIRED_FIELDS_INMOBILIARIA = [
+  'razon_social',
+  'nit',
+  'matricula_arrendador',
+  'representante_legal',
+] as const;
 
 const FIELD_LABELS: Record<string, string> = {
   domicilio_direccion: 'Domicilio (direccion)',
@@ -63,6 +73,8 @@ const FIELD_LABELS: Record<string, string> = {
   cuenta_recaudo_titular_nit: 'NIT/CC del titular',
   whatsapp_recaudo: 'WhatsApp de recaudo',
   email_recaudo: 'Email de recaudo',
+  razon_social: 'Nombre comercial / Razon social',
+  nit: 'NIT de la inmobiliaria',
   matricula_arrendador: 'Matricula de arrendador',
   representante_legal: 'Representante legal',
 };
@@ -85,7 +97,7 @@ export async function checkPerfilCompletitud(userId: string): Promise<Completitu
   const canonicalId = await resolveOrgCanonicalPerfilId(userId);
   const { data } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('rol, ' + REQUIRED_FIELDS_COMUNES.join(', ') + ', matricula_arrendador, representante_legal')
+    .select('rol, ' + REQUIRED_FIELDS_COMUNES.join(', ') + ', razon_social, nit, matricula_arrendador, representante_legal')
     .eq('id', canonicalId)
     .single();
 
@@ -171,6 +183,10 @@ export async function updateMiPerfilArrendador(
   };
   if (rol === 'inmobiliaria') {
     update.matricula_arrendador = normalizeEmpty(input.matricula_arrendador);
+    // El contrato imprime "Matrícula No. X expedida por Y el Z". Sin estos dos
+    // campos escribibles, Y y Z salían SIEMPRE en blanco en todo contrato nuevo.
+    update.matricula_expedida_por = normalizeEmpty(input.matricula_expedida_por);
+    update.matricula_fecha = normalizeEmpty(input.matricula_fecha);
     // Razón social / nombre comercial: exclusivo de inmobiliaria (un propietario
     // individual se identifica con su nombre personal de Mi cuenta).
     update.razon_social = normalizeEmpty(input.razon_social);

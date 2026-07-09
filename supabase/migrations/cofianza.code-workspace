@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"name": "cofianza",
+			"path": "../../.."
+		}
+	],
+	"settings": {
+		"typescript.tsdk": "rental-platform-api/node_modules/typescript/lib",
+		"typescript.enablePromptUseWorkspaceTsdk": true
+	}
+}
