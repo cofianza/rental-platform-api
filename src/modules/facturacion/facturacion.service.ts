@@ -12,6 +12,7 @@
  */
 
 import { supabase } from '@/lib/supabase';
+import { getCompany } from '@/lib/companyConfig';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
@@ -1400,7 +1401,11 @@ export async function getFacturaById(id: string, userId?: string, userRol?: stri
       ? Math.round((taxEffective / subtotal) * 10000) / 100
       : 0;
 
-  // Mapear a la forma esperada por el frontend (IFactura).
+  // Mapear a la forma esperada por el frontend (IFactura). Los datos del EMISOR
+  // salen de getCompany() (configuracion_sistema.empresa, editable por admin) —
+  // antes estaban hardcodeados con un NIT placeholder ('901.000.000-0') que se
+  // mostraba en la factura.
+  const empresa = await getCompany();
   return {
     ...f,
     numero: f.factus_number ?? f.numero_factura ?? null,
@@ -1409,9 +1414,9 @@ export async function getFacturaById(id: string, userId?: string, userRol?: stri
     iva: taxEffective,
     iva_porcentaje: ivaPorcentaje,
     total: totalEffective ?? 0,
-    emisor_razon_social: 'Cofianza S.A.S.',
-    emisor_nit: '901.000.000-0',
-    emisor_direccion: 'Medellín, Colombia',
+    emisor_razon_social: empresa.name,
+    emisor_nit: empresa.nit,
+    emisor_direccion: empresa.address,
     receptor_razon_social: f.razon_social ?? '',
     receptor_documento: f.nit ?? '',
     receptor_direccion: f.direccion_fiscal ?? '',
