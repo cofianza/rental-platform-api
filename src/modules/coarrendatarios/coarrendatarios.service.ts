@@ -614,6 +614,11 @@ export async function aceptarInvitacion(
       resultado: 'pendiente',
       datos_formulario: {
         nombre_completo: `${coa.nombre} ${coa.apellido}`.trim(),
+        // El apellido se guarda TAMBIEN por separado: la invitación lo captura
+        // en su propio campo, y DataCrédito lo contrasta contra Registraduría.
+        // Sin esto el provider tendría que derivarlo del nombre completo, que
+        // falla con apellidos compuestos o dos nombres (código 10).
+        apellido: coa.apellido,
         tipo_documento: coa.tipo_documento,
         numero_documento: coa.numero_documento,
         email: coa.email,
