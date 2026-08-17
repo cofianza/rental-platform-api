@@ -508,15 +508,30 @@ async function aprobarYGenerarContrato(params: {
 
   // 3. Transición condicionado → aprobado (solo si venía de condicionado).
   if (fromState === 'condicionado') {
-    const { error: updErr } = await (supabase
+    const { data: updRows, error: updErr } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .update({ estado: 'aprobado', updated_at: nowIso } as never)
       .eq('id', expedienteId)
-      .eq('estado', 'condicionado'); // doble check anti-race
+      .eq('estado', 'condicionado') // doble check anti-race
+      .select('id');
 
     if (updErr) {
       logger.error({ error: updErr.message, expedienteId }, 'Error al aprobar expediente condicionado');
       throw new AppError(500, 'INTERNAL_ERROR', 'Error al aprobar el expediente');
+    }
+
+    // 0 filas = otro proceso cambió el estado entre la lectura del contexto y
+    // este UPDATE. El caso real es la ponderación del coarrendatario: su
+    // estudio completa mientras el gestor tiene la card abierta y el
+    // expediente pasa a aprobado/rechazado solo. Sin este check, la función
+    // respondía 'aprobado', insertaba un evento de timeline falso y disparaba
+    // notificaciones de aprobación sobre un expediente que pudo quedar
+    // RECHAZADO por la ponderación.
+    if (!updRows || updRows.length === 0) {
+      throw AppError.conflict(
+        'El expediente cambió de estado mientras decidías (p. ej. completó el estudio del co-arrendatario). Refresca para ver el estado actual.',
+        'EXPEDIENTE_ESTADO_CAMBIADO',
+      );
     }
 
     await (supabase
