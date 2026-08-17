@@ -1817,6 +1817,12 @@ async function procesarEstudioAsync(args: {
       || lowerErr.includes('numero de identificacion invalido')
       || lowerErr.includes('tercero no encontrado');
 
+    // El buró SÍ encontró la cédula, pero el apellido enviado no coincide con
+    // Registraduría. El dato a corregir es el nombre del solicitante, no el
+    // documento — decir "verifica tu documento" manda a revisar lo que está
+    // bien. Solo DataCrédito valida el apellido (TransUnion lo ignora).
+    const apellidoNoCoincide = errorCode === 'PROVIDER_LASTNAME_MISMATCH';
+
     // Buró caído / no disponible (5xx, p.ej. HTTP 520 de Cloudflare) o
     // timeout: es transitorio y del lado del proveedor, no del usuario ni un
     // rechazo de crédito. Mensaje claro para que el gestor sepa que solo hay
@@ -1828,7 +1834,9 @@ async function procesarEstudioAsync(args: {
       || /http 5\d\d/.test(lowerErr)
       || lowerErr.includes('timeout');
 
-    const observaciones = documentoNoEncontrado
+    const observaciones = apellidoNoCoincide
+      ? `${buroLabel} encontró la cédula, pero el PRIMER APELLIDO registrado no coincide con el que enviamos. El documento está bien: hay que corregir el apellido del solicitante para que sea igual al de la Registraduría (solo el primero, sin el segundo) y reintentar.`
+      : documentoNoEncontrado
       ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos, o reintenta con el otro buró.`
       : proveedorNoDisponible
         ? `${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.`

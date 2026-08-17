@@ -430,9 +430,17 @@ export class DatacreditoProvider implements CreditRiskProvider {
         throw new AppError(503, 'PROVIDER_UNAVAILABLE', `DataCredito: ${descripcion}`);
       }
 
-      // Documento inexistente o apellido que no concuerda: no es fallo tecnico
-      // ni rechazo de credito, es un dato de entrada que no valida.
-      if (codigo === '09' || codigo === '10' || codigo === '05' || codigo === '06') {
+      // Apellido que no concuerda con Registraduria (10) o mal formado (06).
+      // Se distingue del documento inexistente porque el dato a corregir es
+      // OTRO: mandar al gestor a revisar la cedula cuando el problema es el
+      // apellido lo hace revisar justo lo que esta bien.
+      if (codigo === '10' || codigo === '06') {
+        throw AppError.badRequest(`DataCredito: ${descripcion}`, 'PROVIDER_LASTNAME_MISMATCH');
+      }
+
+      // Documento inexistente o mal formado: no es fallo tecnico ni rechazo de
+      // credito, es un dato de entrada que no valida.
+      if (codigo === '09' || codigo === '05') {
         throw AppError.badRequest(`DataCredito: ${descripcion}`, 'PROVIDER_SUBJECT_NOT_FOUND');
       }
 
