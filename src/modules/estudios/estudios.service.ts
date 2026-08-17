@@ -1387,6 +1387,7 @@ export async function ejecutarEstudio(
     tipo_documento?: string;
     numero_documento?: string;
     proveedor?: 'transunion' | 'datacredito';
+    primer_apellido?: string;
   },
 ) {
   // 1. Get estudio
@@ -1555,8 +1556,10 @@ export async function ejecutarEstudio(
   const datos: Record<string, string> = { ...datosBase };
   const overrideNumero = documentoOverride?.numero_documento?.trim();
   const overrideTipo = documentoOverride?.tipo_documento?.trim().toLowerCase();
+  const overrideApellido = documentoOverride?.primer_apellido?.trim();
   if (overrideNumero) datos.numero_documento = overrideNumero;
   if (overrideTipo) datos.tipo_documento = overrideTipo;
+  if (overrideApellido) datos.apellido = overrideApellido;
 
   if (!datos.numero_documento) {
     throw AppError.badRequest(
@@ -1568,7 +1571,8 @@ export async function ejecutarEstudio(
   // Si el override trajo cambios respecto a datos_formulario, persistir.
   const cambioNumeroDatos = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
   const cambioTipoDatos = !!(overrideTipo && overrideTipo !== datosBase.tipo_documento);
-  if (cambioNumeroDatos || cambioTipoDatos) {
+  const cambioApellidoDatos = !!(overrideApellido && overrideApellido !== datosBase.apellido);
+  if (cambioNumeroDatos || cambioTipoDatos || cambioApellidoDatos) {
     await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({ datos_formulario: datos } as never)
@@ -1588,6 +1592,11 @@ export async function ejecutarEstudio(
       solicitanteId: expediente.solicitante_id,
       targetNumero: datos.numero_documento,
       targetTipo: datos.tipo_documento,
+      // Solo cuando el gestor lo corrigió explícitamente: el apellido de
+      // `datos_formulario` puede venir derivado del nombre completo, y
+      // sobreescribir el del solicitante con una heurística sería peor que
+      // dejarlo como está.
+      targetApellido: overrideApellido,
       origen: 'ejecutarEstudio',
     });
   }
@@ -2340,9 +2349,11 @@ async function sincronizarDocumentoSolicitante(args: {
   solicitanteId: string | null;
   targetNumero: string | null | undefined;
   targetTipo: string | null | undefined;
+  /** Primer apellido corregido por el gestor (solo DataCrédito lo valida). */
+  targetApellido?: string | null;
   origen: string;
 }): Promise<void> {
-  const { estudioId, solicitanteId, targetNumero, targetTipo, origen } = args;
+  const { estudioId, solicitanteId, targetNumero, targetTipo, targetApellido, origen } = args;
 
   if (!solicitanteId) {
     logger.warn(
@@ -2363,7 +2374,7 @@ async function sincronizarDocumentoSolicitante(args: {
   try {
     const { data: solRow, error: solReadErr } = await (supabase
       .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-      .select('numero_documento, tipo_documento')
+      .select('numero_documento, tipo_documento, apellido')
       .eq('id', solicitanteId)
       .maybeSingle();
 
@@ -2375,7 +2386,11 @@ async function sincronizarDocumentoSolicitante(args: {
       return;
     }
 
-    const sol = solRow as { numero_documento: string | null; tipo_documento: string | null } | null;
+    const sol = solRow as {
+      numero_documento: string | null;
+      tipo_documento: string | null;
+      apellido: string | null;
+    } | null;
 
     logger.info(
       {
@@ -2396,6 +2411,9 @@ async function sincronizarDocumentoSolicitante(args: {
     }
     if (targetTipo && targetTipo !== sol?.tipo_documento) {
       solUpdates.tipo_documento = targetTipo;
+    }
+    if (targetApellido && targetApellido !== sol?.apellido) {
+      solUpdates.apellido = targetApellido;
     }
 
     if (Object.keys(solUpdates).length === 0) {

@@ -236,6 +236,16 @@ export const ejecutarEstudioBodySchema = z.object({
   // puede relanzar la consulta por DataCrédito (o viceversa) sin crear otro
   // expediente. Solo burós reales — manual/sifin no son ejecutables.
   proveedor: z.enum(['transunion', 'datacredito']).optional(),
+  // Primer apellido. DataCrédito lo contrasta contra la Registraduría cuando
+  // el documento es CC y responde código 10 si no coincide; TransUnion no lo
+  // pide. Corregible en el reintento para no obligar a salir a editar los
+  // datos del solicitante.
+  primer_apellido: z
+    .string()
+    .trim()
+    .min(2, 'El apellido debe tener al menos 2 caracteres')
+    .max(80, 'El apellido no debe exceder 80 caracteres')
+    .optional(),
 }).optional();
 
 // ============================================================

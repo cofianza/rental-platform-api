@@ -164,6 +164,7 @@ export async function ejecutarEstudio(req: Request, res: Response) {
     tipo_documento?: string;
     numero_documento?: string;
     proveedor?: 'transunion' | 'datacredito';
+    primer_apellido?: string;
   };
   const result = await estudiosService.ejecutarEstudio(
     estudioId,
@@ -174,6 +175,7 @@ export async function ejecutarEstudio(req: Request, res: Response) {
       tipo_documento: body.tipo_documento,
       numero_documento: body.numero_documento,
       proveedor: body.proveedor,
+      primer_apellido: body.primer_apellido,
     },
   );
   sendSuccess(res, result);
