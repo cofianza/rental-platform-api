@@ -1583,6 +1583,10 @@ export async function ejecutarEstudio(
     estudio_id: est.id,
     tipo: est.tipo as 'individual' | 'con_coarrendatario',
     nombre_completo: datos.nombre_completo || '',
+    // DataCredito valida el primer apellido contra Registraduria (codigo 10 si
+    // no coincide). Si datos_formulario no lo trae por separado el provider lo
+    // deriva de nombre_completo, que es menos confiable.
+    primer_apellido: (datos.apellido as string) || undefined,
     tipo_documento: datos.tipo_documento || '',
     numero_documento: datos.numero_documento || '',
     email: datos.email || '',

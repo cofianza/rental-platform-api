@@ -72,9 +72,36 @@ const envSchema = z.object({
   SIFIN_API_URL: z.string().url().optional(),
   SIFIN_API_KEY: z.string().optional(),
 
-  // DataCredito
-  DATACREDITO_API_URL: z.string().url().optional(),
-  DATACREDITO_API_KEY: z.string().optional(),
+  // DataCredito / Experian — Historia de Credito+ (HDC Plus) REST.
+  // Auth en DOS pasos: (1) POST {BASE}/spla/oauth2/v1/token con headers
+  // client_id+client_secret y body {username,password} de OKTA -> access_token;
+  // (2) POST {BASE}/cs/credit-history/v1/hdcplus con Bearer + client/secret +
+  // serverIpAddress + ProductId + InfoAccountType, y user/password en el BODY
+  // (credenciales distintas a las de Okta).
+  // DEMO/UAT: https://uat-api.datacredito.com.co | PROD: https://api.datacredito.com.co
+  DATACREDITO_API_URL: z.string().url().default('https://uat-api.datacredito.com.co'),
+  DATACREDITO_CLIENT_ID: z.string().optional(),
+  DATACREDITO_CLIENT_SECRET: z.string().optional(),
+  // Usuario Okta — solo para obtener el token.
+  DATACREDITO_OKTA_USERNAME: z.string().optional(),
+  DATACREDITO_OKTA_PASSWORD: z.string().optional(),
+  // Credenciales del servicio — van en el BODY de la consulta.
+  DATACREDITO_USER: z.string().optional(),
+  DATACREDITO_PASSWORD: z.string().optional(),
+  // Headers fijos del producto contratado.
+  DATACREDITO_PRODUCT_ID: z.string().default('64'),
+  DATACREDITO_INFO_ACCOUNT_TYPE: z.string().default('1'),
+  // IP publica de salida declarada a Experian (el header admite UNA sola).
+  DATACREDITO_SERVER_IP: z.string().optional(),
+  // identifyingTrx — canal asignado por Experian.
+  DATACREDITO_CHANNEL_NAME: z.string().default('Canal-01'),
+  DATACREDITO_CHANNEL_TYPE: z.string().default('42'),
+  // Bandas de corte del score Advance 1.1 (modelCode 'DF'). PROVISIONALES: los
+  // manuales NO documentan rango ni direccion del scoreValue, asi que quedan
+  // configurables hasta que Experian confirme. Defaults alineados con la regla
+  // que ya usa TransUnion para no introducir un criterio distinto por proveedor.
+  DATACREDITO_SCORE_MIN_APROBADO: z.string().default('600').transform((v) => parseInt(v, 10)),
+  DATACREDITO_SCORE_MIN_CONDICIONADO: z.string().default('400').transform((v) => parseInt(v, 10)),
 
   // Factus — facturación electrónica DIAN (Colombia)
   // OAuth2 password grant. Token expira en 600s, refresh disponible.

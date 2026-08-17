@@ -10,6 +10,10 @@ export interface ProviderSolicitudInput {
   estudio_id: string;
   tipo: 'individual' | 'con_coarrendatario';
   nombre_completo: string;
+  // Primer apellido por separado. DataCredito lo valida contra Registraduria
+  // cuando el documento es CC (responseCode 10 si no coincide); TransUnion lo
+  // ignora. Opcional: si no viene, el provider lo deriva de nombre_completo.
+  primer_apellido?: string;
   tipo_documento: string;
   numero_documento: string;
   email: string;
