@@ -20,6 +20,7 @@ import {
   notificarResponsableExpediente,
 } from '../notificaciones/notificaciones.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { enviarTemplate } from '../whatsapp';
 import type {
   InvitarCoarrendatarioInput,
   AceptarCoarrendatarioInput,
@@ -29,6 +30,11 @@ import type {
 const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 const TOKEN_EXPIRY_DAYS = 7;
+
+/** Enlace público de la invitación. Compartido por el correo y el WhatsApp. */
+function urlInvitacionCoarrendatario(token: string): string {
+  return `${env.FRONTEND_URL}/coarrendatario/${token}`;
+}
 
 // ============================================================
 // Tipos
@@ -161,7 +167,7 @@ function enviarEmailInvitacionCoarrendatario(opts: {
   token: string;
   expedienteId: string;
 }): void {
-  const link = `${env.FRONTEND_URL}/coarrendatario/${opts.token}`;
+  const link = urlInvitacionCoarrendatario(opts.token);
   resend.emails
     .send({
       from: FROM,
@@ -285,7 +291,11 @@ export async function invitarCoarrendatario(
 
   const coa = data as unknown as Coarrendatario;
 
-  // 5. Email de invitación — link público con el token.
+  // 5. Invitación por los DOS canales: correo y WhatsApp.
+  //    El invitado no tiene cuenta en Cofianza, así que el enlace con token es
+  //    su único acceso — y un correo de una marca que no conoce se pierde en
+  //    spam con facilidad. El WhatsApp es fire-and-forget: si no hay teléfono o
+  //    el envío falla, la invitación por correo ya quedó hecha y el flujo sigue.
   enviarEmailInvitacionCoarrendatario({
     to: input.email,
     nombre: input.nombre,
@@ -293,6 +303,17 @@ export async function invitarCoarrendatario(
     inmuebleStr: `${ctx.inmueble_direccion}${ctx.inmueble_ciudad ? `, ${ctx.inmueble_ciudad}` : ''}`,
     token,
     expedienteId,
+  });
+
+  enviarTemplate({
+    to: input.telefono,
+    template: 'COARRENDATARIO_INVITACION',
+    variables: [
+      input.nombre,
+      ctx.solicitante_nombre || 'El solicitante',
+      urlInvitacionCoarrendatario(token),
+    ],
+    context: { expediente_id: expedienteId },
   });
 
   // 6. Notificar al titular para que vea que la invitación se envió.
@@ -436,6 +457,9 @@ export async function reenviarInvitacionCoarrendatario(
 
   const actualizado = updRow as unknown as Coarrendatario;
 
+  // Reenvío por los dos canales, igual que la invitación original. El token se
+  // regeneró arriba, así que el enlace viejo (correo o WhatsApp) queda muerto y
+  // ambos mensajes deben llevar el nuevo.
   enviarEmailInvitacionCoarrendatario({
     to: actualizado.email,
     nombre: actualizado.nombre,
@@ -443,6 +467,17 @@ export async function reenviarInvitacionCoarrendatario(
     inmuebleStr: `${ctx.inmueble_direccion}${ctx.inmueble_ciudad ? `, ${ctx.inmueble_ciudad}` : ''}`,
     token,
     expedienteId,
+  });
+
+  enviarTemplate({
+    to: actualizado.telefono,
+    template: 'COARRENDATARIO_INVITACION',
+    variables: [
+      actualizado.nombre,
+      ctx.solicitante_nombre || 'El solicitante',
+      urlInvitacionCoarrendatario(token),
+    ],
+    context: { expediente_id: expedienteId },
   });
 
   logger.info(

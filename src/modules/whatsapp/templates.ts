@@ -110,6 +110,18 @@ export const WHATSAPP_TEMPLATES = {
     description: 'Hola {{1}}, Cofianza necesita tu autorización para estudiar tu solicitud de arriendo. Abre este enlace para revisarla y firmarla: {{2}}',
   },
   /**
+   * Invitación a ser co-arrendatario (categoría UTILITY en Meta). Refuerzo del
+   * correo: la persona invitada no tiene cuenta en Cofianza, así que el enlace
+   * con token es su único acceso. Se manda por los dos canales porque un correo
+   * a alguien que no conoce la marca se pierde en spam con facilidad.
+   */
+  COARRENDATARIO_INVITACION: {
+    id: 'cofianza_coarrendatario_invitacion',
+    language: 'es_CO',
+    // {{1}} nombre del invitado, {{2}} nombre del titular, {{3}} enlace de la invitación
+    description: 'Hola {{1}}, {{2}} te invitó a ser co-arrendatario en su solicitud de arriendo con Cofianza. Revisa la invitación y autoriza tu estudio aquí: {{3}}',
+  },
+  /**
    * Código OTP de la autorización (categoría AUTHENTICATION en Meta). La validación
    * del código constituye la firma electrónica de la autorización (Ley 527/1999).
    */
