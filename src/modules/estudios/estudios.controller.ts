@@ -160,7 +160,11 @@ export async function verificarCertificadoPublic(req: Request, res: Response) {
 
 export async function ejecutarEstudio(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const body = (req.body || {}) as { tipo_documento?: string; numero_documento?: string };
+  const body = (req.body || {}) as {
+    tipo_documento?: string;
+    numero_documento?: string;
+    proveedor?: 'transunion' | 'datacredito';
+  };
   const result = await estudiosService.ejecutarEstudio(
     estudioId,
     req.user!.id,
@@ -169,6 +173,7 @@ export async function ejecutarEstudio(req: Request, res: Response) {
     {
       tipo_documento: body.tipo_documento,
       numero_documento: body.numero_documento,
+      proveedor: body.proveedor,
     },
   );
   sendSuccess(res, result);

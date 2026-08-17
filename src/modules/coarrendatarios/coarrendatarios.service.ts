@@ -582,16 +582,34 @@ export async function aceptarInvitacion(
     throw AppError.badRequest('Esta invitación ya fue procesada', 'COARRENDATARIO_YA_PROCESADA');
   }
 
-  // 3. Crear estudio TransUnion para el co-arrendatario. Reusamos la tabla
-  //    `estudios` con tipo='con_coarrendatario' como marca semántica. Los
-  //    datos_formulario llevan los datos del COARRENDATARIO (no del titular)
-  //    para que TransUnion lo consulte a él.
+  // 3. Crear el estudio del co-arrendatario. Reusamos la tabla `estudios` con
+  //    tipo='con_coarrendatario' como marca semántica. Los datos_formulario
+  //    llevan los datos del COARRENDATARIO (no del titular) para que el buró
+  //    lo consulte a él.
+  //
+  //    El buró se HEREDA del estudio del titular: si el gestor eligió
+  //    DataCrédito para el expediente, consultar al coarrendatario en otro
+  //    buró daría resultados no comparables (y otra factura distinta).
+  //    Fallback a TransUnion si aún no hay estudio del titular.
+  const { data: estudioTitularRow } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('proveedor')
+    .eq('expediente_id', coa.expediente_id)
+    .eq('tipo', 'individual')
+    .in('proveedor', ['transunion', 'datacredito'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const proveedorHeredado =
+    (estudioTitularRow as { proveedor?: string } | null)?.proveedor ?? 'transunion';
+
   const { data: estudioRow, error: estErr } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .insert({
       expediente_id: coa.expediente_id,
       tipo: 'con_coarrendatario',
-      proveedor: 'transunion',
+      proveedor: proveedorHeredado,
       estado: 'formulario_completado',
       resultado: 'pendiente',
       datos_formulario: {

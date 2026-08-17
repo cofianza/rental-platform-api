@@ -41,6 +41,12 @@ export async function habilitarEstudio(
   expedienteId: string,
   userId: string,
   userRol: string,
+  /**
+   * Buró con el que se creará el estudio. Solo los ejecutables por provider;
+   * el RPC valida de nuevo y rechaza cualquier otro. Por defecto TransUnion,
+   * que era el comportamiento fijo antes de que hubiera dos burós.
+   */
+  proveedor: 'transunion' | 'datacredito' = 'transunion',
 ): Promise<HabilitarEstudioResult> {
   // 1. Ownership + datos del expediente para el email posterior.
   const ctx = await assertHabilitacionPermission({
@@ -57,6 +63,7 @@ export async function habilitarEstudio(
   const { data, error } = await (supabase as any).rpc('fn_habilitar_estudio_expediente', {
     p_expediente_id: expedienteId,
     p_user_id: userId,
+    p_proveedor: proveedor,
   });
 
   if (error) {

@@ -532,11 +532,15 @@ export async function onPagoConfirmado(params: {
 
     // Buscar estudio placeholder (creado por fn_habilitar_estudio_expediente
     // en Prompt 4). Si otro proceso ya lo avanzó, salimos silenciosos.
+    // Se filtra por los burós EJECUTABLES, no por TransUnion fijo: desde que
+    // el gestor puede habilitar el estudio con DataCrédito, filtrar por un
+    // solo buró dejaba el estudio en 'solicitado' para siempre tras el pago.
+    // 'manual'/'sifin' siguen fuera: no los resuelve un provider.
     const { data: estudioRow } = await db('estudios')
       .select('id, estado')
       .eq('expediente_id', expedienteId)
       .eq('estado', 'solicitado')
-      .eq('proveedor', 'transunion')
+      .in('proveedor', ['transunion', 'datacredito'])
       .maybeSingle() as { data: { id: string; estado: string } | null };
 
     if (!estudioRow) {

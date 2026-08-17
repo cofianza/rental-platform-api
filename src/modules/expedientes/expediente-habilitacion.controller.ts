@@ -5,7 +5,8 @@ import type { ExpedienteIdParams } from './expedientes.schema';
 
 export async function habilitarEstudio(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol);
+  const { proveedor } = (req.body || {}) as { proveedor?: 'transunion' | 'datacredito' };
+  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol, proveedor);
   sendSuccess(res, result);
 }
 

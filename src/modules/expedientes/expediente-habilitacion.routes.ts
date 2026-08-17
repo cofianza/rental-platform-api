@@ -13,11 +13,19 @@ const router = Router();
 // Antes este endpoint pedia duracion + fecha del contrato, pero esos datos
 // no son necesarios para correr el estudio crediticio — se piden solo cuando
 // se va a generar el contrato (post-aprobacion). Por eso ahora no requiere body.
+// El body ahora acepta `proveedor` opcional: el gestor elige con qué buró se
+// consulta. Se omite → TransUnion, que era el comportamiento fijo anterior.
+const habilitarEstudioBodySchema = z
+  .object({
+    proveedor: z.enum(['transunion', 'datacredito']).optional(),
+  })
+  .optional();
+
 router.patch(
   '/:id/habilitar-estudio',
   authMiddleware,
   roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
-  validate({ params: expedienteIdParamsSchema }),
+  validate({ params: expedienteIdParamsSchema, body: habilitarEstudioBodySchema }),
   controller.habilitarEstudio,
 );
 

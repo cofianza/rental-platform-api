@@ -232,6 +232,10 @@ export const ejecutarEstudioBodySchema = z.object({
     .min(5, 'El número de documento debe tener al menos 5 caracteres')
     .max(20, 'El número de documento no debe exceder 20 caracteres')
     .optional(),
+  // Cambio MANUAL de buró para el reintento: si TransUnion falla, el gestor
+  // puede relanzar la consulta por DataCrédito (o viceversa) sin crear otro
+  // expediente. Solo burós reales — manual/sifin no son ejecutables.
+  proveedor: z.enum(['transunion', 'datacredito']).optional(),
 }).optional();
 
 // ============================================================

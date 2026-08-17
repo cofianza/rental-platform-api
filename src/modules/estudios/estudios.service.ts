@@ -26,6 +26,14 @@ const ESTADOS_PERMITIDOS_RESULTADO = ['solicitado', 'en_proceso'];
 // primer intento, etc). El estudio sigue siendo el mismo registro — no se
 // crea uno nuevo — solo se vuelve a ejecutar la consulta.
 const ESTADOS_PERMITIDOS_EJECUCION = ['formulario_completado', 'documentos_cargados', 'fallido'];
+
+// Nombre legible de cada buró — se usa en las observaciones que ve el gestor.
+// Con dos proveedores activos ya no se puede hardcodear "TransUnion".
+const BURO_LABELS: Record<string, string> = {
+  transunion: 'TransUnion',
+  datacredito: 'DataCrédito',
+  sifin: 'SIFIN',
+};
 const BUCKET_NAME = 'documentos-expedientes';
 
 // ============================================================
@@ -933,9 +941,11 @@ export async function completarFormularioDesdeOnboarding(params: {
     return { estudioId, yaCompletado: true };
   }
 
-  if (estudio.proveedor !== 'transunion') {
+  // Ambos burós reales son síncronos y consumen datos_formulario igual;
+  // manual/sifin siguen fuera (no ejecutables por provider).
+  if (estudio.proveedor !== 'transunion' && estudio.proveedor !== 'datacredito') {
     throw AppError.badRequest(
-      'Camino sin-OTP solo aplica a TransUnion',
+      'Camino sin-OTP solo aplica a proveedores de buró (TransUnion / DataCrédito)',
       'PROVEEDOR_INVALIDO',
     );
   }
@@ -1373,7 +1383,11 @@ export async function ejecutarEstudio(
   userId: string,
   ip?: string,
   userRol?: string,
-  documentoOverride?: { tipo_documento?: string; numero_documento?: string },
+  documentoOverride?: {
+    tipo_documento?: string;
+    numero_documento?: string;
+    proveedor?: 'transunion' | 'datacredito';
+  },
 ) {
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
@@ -1606,9 +1620,58 @@ export async function ejecutarEstudio(
   //        click, o reintento contra un estudio que otro flujo ya tomó) solo
   //        dejan pasar a UNA. Sin esto, cada ejecución duplicada consumía una
   //        consulta TransUnion facturada.
+  // 4.5. Cambio manual de buró (reintento con el otro proveedor).
+  //
+  //      El override es una decisión FACTURABLE, así que se reserva a los
+  //      gestores: si lo manda un solicitante se ignora en silencio (la UI no
+  //      se lo ofrece, pero la ruta sí admite ese rol).
+  const proveedorAnterior = est.proveedor;
+  const overrideProveedor = userRol === 'solicitante' ? undefined : documentoOverride?.proveedor;
+  if (documentoOverride?.proveedor && userRol === 'solicitante') {
+    logger.warn(
+      { estudioId, userId, intento: documentoOverride.proveedor },
+      'ejecutarEstudio: un solicitante intentó cambiar de buró — override ignorado',
+    );
+  }
+  const proveedorFinal = overrideProveedor ?? est.proveedor;
+  const cambioProveedor = proveedorFinal !== proveedorAnterior;
+
+  //      Guard: solo los burós reales son ejecutables. Sin esto, (a) un
+  //      estudio 'manual' con override se convertiría en una consulta
+  //      facturada sin aviso, y (b) uno 'manual' SIN override tomaría el lock
+  //      y luego getProvider() lanzaría, dejándolo en 'en_proceso' para
+  //      siempre (el throw ocurre fuera del try de procesarEstudioAsync).
+  if (proveedorFinal !== 'transunion' && proveedorFinal !== 'datacredito') {
+    throw AppError.badRequest(
+      `El estudio tiene proveedor "${proveedorFinal}", que no se consulta automáticamente. Elige TransUnion o DataCrédito para ejecutarlo.`,
+      'PROVEEDOR_NO_EJECUTABLE',
+    );
+  }
+
+  if (cambioProveedor) {
+    logger.info(
+      { estudioId, proveedorAnterior, proveedorFinal, userId },
+      'ejecutarEstudio: cambio manual de proveedor para el reintento',
+    );
+  }
+
+  //      El proveedor se escribe SIEMPRE dentro del CAS, no solo cuando
+  //      cambia: `proveedorFinal` sale de un snapshot leído varios roundtrips
+  //      antes, así que si otra request cambió el buró entretanto, escribirlo
+  //      condicionalmente dejaría la columna con un buró distinto al que este
+  //      proceso va a consultar. Quien gana el lock fija el buró que ejecuta.
+  //
+  //      La referencia y la respuesta del buró anterior se limpian: pertenecen
+  //      a otro proveedor y `consultarEstadoProveedor` las usaría contra el
+  //      nuevo (cache-miss garantizado → marcaría 'fallido' un reintento en
+  //      vuelo).
   const { data: lockRows, error: lockError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: 'en_proceso' } as never)
+    .update({
+      estado: 'en_proceso',
+      proveedor: proveedorFinal,
+      ...(cambioProveedor ? { referencia_proveedor: null, respuesta_proveedor: null } : {}),
+    } as never)
     .eq('id', estudioId)
     .in('estado', ESTADOS_PERMITIDOS_EJECUCION)
     .select('id');
@@ -1631,7 +1694,8 @@ export async function ejecutarEstudio(
   //    como fallido para que el solicitante pueda reintentar.
   procesarEstudioAsync({
     estudioId,
-    proveedor: est.proveedor,
+    proveedor: proveedorFinal,
+    proveedorAnterior: cambioProveedor ? proveedorAnterior : undefined,
     expedienteId: est.expediente_id,
     providerInput,
     userId,
@@ -1656,13 +1720,18 @@ export async function ejecutarEstudio(
 async function procesarEstudioAsync(args: {
   estudioId: string;
   proveedor: string;
+  /** Presente solo cuando el reintento cambió de buró — queda en bitácora. */
+  proveedorAnterior?: string;
   expedienteId: string;
   providerInput: ProviderSolicitudInput;
   userId: string;
   ip?: string;
 }): Promise<void> {
-  const { estudioId, proveedor, expedienteId, providerInput, userId, ip } = args;
+  const { estudioId, proveedor, proveedorAnterior, expedienteId, providerInput, userId, ip } = args;
   const provider = getProvider(proveedor as 'transunion' | 'sifin' | 'datacredito');
+  // Nombre legible del buró para los mensajes que ve el gestor: con dos
+  // proveedores activos, hardcodear "TransUnion" muestra el buró equivocado.
+  const buroLabel = BURO_LABELS[proveedor] ?? proveedor;
 
   logger.info(
     { estudioId, provider: proveedor, documento: maskDocumento(providerInput.numero_documento) },
@@ -1692,6 +1761,7 @@ async function procesarEstudioAsync(args: {
       entidadId: estudioId,
       detalle: {
         proveedor,
+        ...(proveedorAnterior ? { proveedor_anterior: proveedorAnterior } : {}),
         referencia_proveedor: response.referencia_proveedor,
         expediente_id: expedienteId,
       },
@@ -1739,16 +1809,19 @@ async function procesarEstudioAsync(args: {
     const errorCode = err instanceof AppError ? err.errorCode : null;
 
     const lowerErr = errorMsg.toLowerCase();
-    const documentoNoEncontrado = lowerErr.includes('tercero consultado no existe')
+    // DataCrédito lo señala con su propio errorCode; TransUnion solo con el
+    // texto del mensaje, de ahí la mezcla de criterios.
+    const documentoNoEncontrado = errorCode === 'PROVIDER_SUBJECT_NOT_FOUND'
+      || lowerErr.includes('tercero consultado no existe')
       || lowerErr.includes('no existe en centrales')
       || lowerErr.includes('numero de identificacion invalido')
       || lowerErr.includes('tercero no encontrado');
 
-    // TransUnion caído / no disponible (5xx, p.ej. HTTP 520 de Cloudflare) o
+    // Buró caído / no disponible (5xx, p.ej. HTTP 520 de Cloudflare) o
     // timeout: es transitorio y del lado del proveedor, no del usuario ni un
     // rechazo de crédito. Mensaje claro para que el gestor sepa que solo hay
     // que reintentar más tarde (suele coincidir con mantenimiento / fuera de
-    // horario del ambiente de TransUnion).
+    // horario del ambiente del buró).
     const proveedorNoDisponible =
       errorCode === 'PROVIDER_UNAVAILABLE'
       || errorCode === 'PROVIDER_TIMEOUT'
@@ -1756,10 +1829,10 @@ async function procesarEstudioAsync(args: {
       || lowerErr.includes('timeout');
 
     const observaciones = documentoNoEncontrado
-      ? 'No encontramos antecedentes con este documento en las centrales de riesgo colombianas. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos.'
+      ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos, o reintenta con el otro buró.`
       : proveedorNoDisponible
-        ? 'TransUnion no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos.'
-        : `Error de proveedor (${proveedor}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
+        ? `${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.`
+        : `Error de proveedor (${buroLabel}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
 
     const { error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -1777,6 +1850,9 @@ async function procesarEstudioAsync(args: {
       entidadId: estudioId,
       detalle: {
         proveedor,
+        // Sin esto, un cambio de buró que falla al solicitar dejaba la columna
+        // `proveedor` cambiada sin ningún evento que lo registrara.
+        ...(proveedorAnterior ? { proveedor_anterior: proveedorAnterior } : {}),
         error: errorMsg,
         documento_no_encontrado: documentoNoEncontrado,
         expediente_id: expedienteId,
