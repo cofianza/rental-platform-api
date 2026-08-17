@@ -110,16 +110,30 @@ export const WHATSAPP_TEMPLATES = {
     description: 'Hola {{1}}, Cofianza necesita tu autorización para estudiar tu solicitud de arriendo. Abre este enlace para revisarla y firmarla: {{2}}',
   },
   /**
-   * Invitación a ser co-arrendatario (categoría UTILITY en Meta). Refuerzo del
-   * correo: la persona invitada no tiene cuenta en Cofianza, así que el enlace
-   * con token es su único acceso. Se manda por los dos canales porque un correo
-   * a alguien que no conoce la marca se pierde en spam con facilidad.
+   * Invitación a ser co-arrendatario (categoría UTILITY en Meta).
+   *
+   * Refuerzo del correo: la persona invitada NO tiene cuenta en Cofianza ni
+   * conoce la marca, así que el enlace con token es su único acceso y un correo
+   * frío se pierde en spam con facilidad.
+   *
+   * El mensaje explica quién invita, qué implica ser co-arrendatario (y que NO
+   * es fiador ni codeudor — la confusión más común) y qué se le va a pedir,
+   * porque Meta rechaza los UTILITY vagos y porque un desconocido no abre un
+   * enlace que no entiende.
+   *
+   * v1: header TEXT + body 3 variables + footer + botón URL dinámico cuyo
+   * sufijo es el token (mismo patrón que CITA_CONFIRMADA).
    */
   COARRENDATARIO_INVITACION: {
-    id: 'cofianza_coarrendatario_invitacion',
+    id: 'cofianza_coarrendatario_invitacion_v1',
     language: 'es_CO',
-    // {{1}} nombre del invitado, {{2}} nombre del titular, {{3}} enlace de la invitación
-    description: 'Hola {{1}}, {{2}} te invitó a ser co-arrendatario en su solicitud de arriendo con Cofianza. Revisa la invitación y autoriza tu estudio aquí: {{3}}',
+    // {{1}} nombre del invitado, {{2}} nombre del titular, {{3}} días de vigencia
+    // Botón 0: sufijo URL = token de la invitación.
+    description:
+      'Hola {{1}}. {{2}} te invitó a acompañarlo como co-arrendatario en su solicitud de arriendo respaldada por Cofianza. ' +
+      'Tu perfil se evalúa junto con el suyo y ambos quedan respaldados como un solo arrendatario: no eres fiador ni codeudor. ' +
+      'Para continuar necesitamos tu autorización para consultar tu información en centrales de riesgo. Toma menos de 3 minutos. ' +
+      'La invitación vence en {{3}} días.',
   },
   /**
    * Código OTP de la autorización (categoría AUTHENTICATION en Meta). La validación

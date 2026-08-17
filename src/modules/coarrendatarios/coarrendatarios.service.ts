@@ -311,8 +311,11 @@ export async function invitarCoarrendatario(
     variables: [
       input.nombre,
       ctx.solicitante_nombre || 'El solicitante',
-      urlInvitacionCoarrendatario(token),
+      String(TOKEN_EXPIRY_DAYS),
     ],
+    // El enlace va en el boton URL, no en el cuerpo: el sufijo dinamico es el
+    // token (mismo patron que las plantillas de cita).
+    urlButtons: [token],
     context: { expediente_id: expedienteId },
   });
 
@@ -475,8 +478,9 @@ export async function reenviarInvitacionCoarrendatario(
     variables: [
       actualizado.nombre,
       ctx.solicitante_nombre || 'El solicitante',
-      urlInvitacionCoarrendatario(token),
+      String(TOKEN_EXPIRY_DAYS),
     ],
+    urlButtons: [token],
     context: { expediente_id: expedienteId },
   });
 
