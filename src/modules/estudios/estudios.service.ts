@@ -1393,7 +1393,7 @@ export async function ejecutarEstudio(
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, proveedor, tipo, datos_formulario, expediente_id')
+    .select('id, estado, resultado, score, proveedor, tipo, datos_formulario, expediente_id')
     .eq('id', estudioId)
     .single();
 
@@ -1405,6 +1405,7 @@ export async function ejecutarEstudio(
     id: string;
     estado: string;
     resultado: string;
+    score: number | null;
     proveedor: string;
     tipo: string;
     datos_formulario: Record<string, unknown> | null;
@@ -1540,7 +1541,38 @@ export async function ejecutarEstudio(
   }
 
   // 2. Validate estado
-  if (!ESTADOS_PERMITIDOS_EJECUCION.includes(est.estado)) {
+  // El override de proveedor es una decisión FACTURABLE, reservada al gestor:
+  // si lo manda un solicitante se ignora (la UI no se lo ofrece, pero la ruta
+  // admite ese rol). Se resuelve aquí porque el guard de estado depende de él.
+  const overrideProveedor = userRol === 'solicitante' ? undefined : documentoOverride?.proveedor;
+  if (documentoOverride?.proveedor && userRol === 'solicitante') {
+    logger.warn(
+      { estudioId, userId, intento: documentoOverride.proveedor },
+      'ejecutarEstudio: un solicitante intentó cambiar de buró — override ignorado',
+    );
+  }
+
+  // Re-consulta al OTRO buró de un estudio ya completado.
+  //
+  // Un 'completado' + 'condicionado' + score null significa que el buró no
+  // pudo evaluar a la persona (código 14 de DataCrédito, exclusiones -4..-7 de
+  // CreditVision). Preguntarle al otro buró es la salida natural, pero no
+  // existía ninguna: el reintento solo aparece en 'fallido', la re-evaluación
+  // es admin/operador, exige documentos y hereda el mismo proveedor.
+  //
+  // Se abre SOLO para ese caso y SOLO si además se cambia de buró: re-ejecutar
+  // un estudio aprobado o uno condicionado CON score (el buró sí evaluó y dio
+  // banda media) seguiría prohibido.
+  const esCondicionadoSinInfo =
+    est.estado === 'completado' && est.resultado === 'condicionado' && est.score === null;
+  const reconsultaOtroBuro =
+    esCondicionadoSinInfo && !!overrideProveedor && overrideProveedor !== est.proveedor;
+
+  const estadosPermitidos = reconsultaOtroBuro
+    ? [...ESTADOS_PERMITIDOS_EJECUCION, 'completado']
+    : ESTADOS_PERMITIDOS_EJECUCION;
+
+  if (!estadosPermitidos.includes(est.estado)) {
     throw AppError.badRequest(
       `Solo se puede ejecutar via proveedor en estados: ${ESTADOS_PERMITIDOS_EJECUCION.join(', ')}. Estado actual: ${est.estado}`,
       'ESTUDIO_ESTADO_INVALIDO',
@@ -1635,13 +1667,6 @@ export async function ejecutarEstudio(
   //      gestores: si lo manda un solicitante se ignora en silencio (la UI no
   //      se lo ofrece, pero la ruta sí admite ese rol).
   const proveedorAnterior = est.proveedor;
-  const overrideProveedor = userRol === 'solicitante' ? undefined : documentoOverride?.proveedor;
-  if (documentoOverride?.proveedor && userRol === 'solicitante') {
-    logger.warn(
-      { estudioId, userId, intento: documentoOverride.proveedor },
-      'ejecutarEstudio: un solicitante intentó cambiar de buró — override ignorado',
-    );
-  }
   const proveedorFinal = overrideProveedor ?? est.proveedor;
   const cambioProveedor = proveedorFinal !== proveedorAnterior;
 
@@ -1680,9 +1705,17 @@ export async function ejecutarEstudio(
       estado: 'en_proceso',
       proveedor: proveedorFinal,
       ...(cambioProveedor ? { referencia_proveedor: null, respuesta_proveedor: null } : {}),
+      // Re-consulta de un estudio ya completado: hay que devolverlo a
+      // 'pendiente'. fn_registrar_resultado_estudio rechaza registrar sobre un
+      // estudio que ya tiene resultado ("ya tiene un resultado registrado"),
+      // así que sin este reset la consulta al otro buró se ejecutaría —
+      // facturada — y su respuesta no podría guardarse.
+      ...(reconsultaOtroBuro
+        ? { resultado: 'pendiente', score: null, observaciones: null }
+        : {}),
     } as never)
     .eq('id', estudioId)
-    .in('estado', ESTADOS_PERMITIDOS_EJECUCION)
+    .in('estado', estadosPermitidos)
     .select('id');
 
   if (lockError) {
