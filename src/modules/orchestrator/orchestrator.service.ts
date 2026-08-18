@@ -208,7 +208,21 @@ export async function onEstudioCompletado(params: {
     if (resultado === 'aprobado') {
       // ── APROBADO ──
       await transicionarExpediente(expedienteId, 'en_revision');
-      await transicionarExpediente(expedienteId, 'aprobado');
+      const transiciono = await transicionarExpediente(expedienteId, 'aprobado');
+
+      // Si el expediente no llegó a 'aprobado' (ya estaba aprobado, o está en
+      // un estado que no lo permite) NO se disparan los efectos: mandar el
+      // correo "tu estudio fue aprobado" y pedirle al dueño que genere el
+      // contrato sobre un expediente que no avanzó produce un boton que falla
+      // con EXPEDIENTE_NO_APROBADO — y, si ya estaba aprobado, un correo
+      // duplicado.
+      if (!transiciono) {
+        logger.warn(
+          { expedienteId, resultado },
+          'Orchestrator: resultado aprobado pero el expediente no transicionó — se omiten notificaciones',
+        );
+        return;
+      }
 
       // Decisión Mario (2026-05-05): NO auto-generar el contrato. La duración
       // del contrato y la fecha de inicio las decide el propietario justo
@@ -289,7 +303,18 @@ export async function onEstudioCompletado(params: {
     } else if (resultado === 'rechazado') {
       // ── RECHAZADO ──
       await transicionarExpediente(expedienteId, 'en_revision');
-      await transicionarExpediente(expedienteId, 'rechazado');
+      const transiciono = await transicionarExpediente(expedienteId, 'rechazado');
+
+      // Mismo criterio que la rama aprobado: sin transición no hay efectos.
+      // Aquí además evita el caso grave — liberar el inmueble de un expediente
+      // que sigue vivo (ver migración 20260817000002).
+      if (!transiciono) {
+        logger.warn(
+          { expedienteId, resultado },
+          'Orchestrator: resultado rechazado pero el expediente no transicionó — se omiten notificaciones y NO se libera el inmueble',
+        );
+        return;
+      }
       await registrarTimeline(expedienteId, 'estudio', `Estudio crediticio rechazado (Score: ${score}).`);
 
       // Persistir motivo legible para el banner de cierre. Si la transición
@@ -302,30 +327,14 @@ export async function onEstudioCompletado(params: {
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');
 
-      // Liberar inmueble — SOLO el bloqueo temporal (en_estudio → disponible),
-      // y SOLO si el expediente quedó efectivamente rechazado.
-      //
-      // Las dos transiciones de arriba son no-op silenciosas cuando el estado
-      // actual no las permite: un expediente ya 'aprobado' (el gestor aprobó
-      // manualmente un condicionado, o llega tarde el resultado de una
-      // re-evaluación) solo admite 'cerrado'. Sin este chequeo se soltaba la
-      // reserva de un expediente vivo camino al contrato, que además vuelve a
-      // la vitrina si visible_vitrina está encendido → doble arriendo.
+      // Liberar inmueble — SOLO el bloqueo temporal (en_estudio → disponible).
+      // Llegar aquí ya implica que el expediente transicionó a 'rechazado'
+      // (guard arriba), así que no se suelta la reserva de un expediente vivo.
+      // El guard estado='en_estudio' dentro del helper evita además pisar un
+      // 'ocupado' legítimo si el resultado llega con un contrato ya vigente.
       if (inm) {
-        const { data: expActual } = await db('expedientes')
-          .select('estado')
-          .eq('id', expedienteId)
-          .single() as { data: { estado: string } | null };
-
-        if (expActual?.estado === 'rechazado') {
-          const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
-          await liberarInmuebleEnEstudio(inm.id);
-        } else {
-          logger.warn(
-            { expedienteId, estadoExpediente: expActual?.estado, inmuebleId: inm.id },
-            'Orchestrator: estudio rechazado pero el expediente no quedó rechazado — NO se libera el inmueble',
-          );
-        }
+        const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
+        await liberarInmuebleEnEstudio(inm.id);
       }
 
       if (sol?.email) {
@@ -360,7 +369,16 @@ export async function onEstudioCompletado(params: {
     } else if (resultado === 'condicionado') {
       // ── CONDICIONADO ──
       await transicionarExpediente(expedienteId, 'en_revision');
-      await transicionarExpediente(expedienteId, 'condicionado');
+      const transiciono = await transicionarExpediente(expedienteId, 'condicionado');
+
+      // Mismo criterio que las otras dos ramas: sin transición no hay efectos.
+      if (!transiciono) {
+        logger.warn(
+          { expedienteId, resultado },
+          'Orchestrator: resultado condicionado pero el expediente no transicionó — se omiten notificaciones',
+        );
+        return;
+      }
       await registrarTimeline(expedienteId, 'estudio', `Estudio condicionado (Score: ${score}). Se requieren documentos adicionales.`);
 
       if (sol?.email) {
@@ -608,13 +626,22 @@ export async function onPagoConfirmado(params: {
 
 // ── Helpers ─────────────────────────────────────────────────
 
-async function transicionarExpediente(expedienteId: string, estadoDestino: string) {
+/**
+ * Transiciona el expediente si el salto es válido.
+ *
+ * Devuelve `true` SOLO si escribió el nuevo estado. Los callers dependen de
+ * eso para no disparar efectos (correos, notificaciones, liberación del
+ * inmueble) cuando la transición fue un no-op: sin ese chequeo, un resultado
+ * que llega tarde sobre un expediente que ya avanzó mandaba correos de
+ * "aprobado" y pedía generar un contrato imposible.
+ */
+async function transicionarExpediente(expedienteId: string, estadoDestino: string): Promise<boolean> {
   const { data: exp } = await db('expedientes')
     .select('estado')
     .eq('id', expedienteId)
     .single() as { data: { estado: string } | null };
 
-  if (!exp || exp.estado === estadoDestino) return;
+  if (!exp || exp.estado === estadoDestino) return false;
 
   const transiciones: Record<string, string[]> = {
     borrador: ['en_revision'],
@@ -622,12 +649,19 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
     informacion_incompleta: ['en_revision'],
     condicionado: ['aprobado', 'rechazado'],
     aprobado: ['cerrado'],
-    rechazado: ['cerrado'],
+    // Un rechazo del buró es una señal, no una sentencia: la re-evaluación
+    // (RESULTADOS_REEVALUABLES incluye 'rechazado') existe para reconsiderarlo
+    // con soportes nuevos. Sin este salto, el resultado del estudio hijo no
+    // podía mover el expediente y la mitad 'rechazado' de esa funcionalidad
+    // era un callejón sin salida. Reabre a 'en_revision' — de ahí el mismo
+    // flujo decide aprobado/condicionado/rechazado. NO se abre 'aprobado' a
+    // reapertura: ahí puede haber un contrato en camino.
+    rechazado: ['cerrado', 'en_revision'],
   };
 
   if (!(transiciones[exp.estado] || []).includes(estadoDestino)) {
     logger.warn({ expedienteId, from: exp.estado, to: estadoDestino }, 'Orchestrator: transicion no permitida');
-    return;
+    return false;
   }
 
   await db('expedientes')
@@ -644,6 +678,7 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
   } as never);
 
   logger.info({ expedienteId, from: exp.estado, to: estadoDestino }, 'Orchestrator: expediente transicionado');
+  return true;
 }
 
 async function registrarTimeline(expedienteId: string, tipo: string, descripcion: string) {
