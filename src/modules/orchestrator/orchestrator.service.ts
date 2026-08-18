@@ -302,13 +302,30 @@ export async function onEstudioCompletado(params: {
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');
 
-      // Liberar inmueble — SOLO el bloqueo temporal (en_estudio → disponible).
-      // Antes era un UPDATE incondicional a 'disponible' que podía pisar un
-      // 'ocupado' legítimo si el resultado del estudio llegaba tarde (p. ej.
-      // reintento del proveedor con el contrato ya vigente).
+      // Liberar inmueble — SOLO el bloqueo temporal (en_estudio → disponible),
+      // y SOLO si el expediente quedó efectivamente rechazado.
+      //
+      // Las dos transiciones de arriba son no-op silenciosas cuando el estado
+      // actual no las permite: un expediente ya 'aprobado' (el gestor aprobó
+      // manualmente un condicionado, o llega tarde el resultado de una
+      // re-evaluación) solo admite 'cerrado'. Sin este chequeo se soltaba la
+      // reserva de un expediente vivo camino al contrato, que además vuelve a
+      // la vitrina si visible_vitrina está encendido → doble arriendo.
       if (inm) {
-        const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
-        await liberarInmuebleEnEstudio(inm.id);
+        const { data: expActual } = await db('expedientes')
+          .select('estado')
+          .eq('id', expedienteId)
+          .single() as { data: { estado: string } | null };
+
+        if (expActual?.estado === 'rechazado') {
+          const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
+          await liberarInmuebleEnEstudio(inm.id);
+        } else {
+          logger.warn(
+            { expedienteId, estadoExpediente: expActual?.estado, inmuebleId: inm.id },
+            'Orchestrator: estudio rechazado pero el expediente no quedó rechazado — NO se libera el inmueble',
+          );
+        }
       }
 
       if (sol?.email) {
