@@ -203,12 +203,31 @@ function enviarEmailInvitacionCoarrendatario(opts: {
  * ponderación titular+coarrendatario rechaza el expediente. Lo lee el banner
  * de cierre del expediente en la web.
  */
+/**
+ * ¿El buró llegó a evaluar a esta persona?
+ *
+ * Un 'condicionado' SIN score no es un perfil marginal: es un perfil que el
+ * buró no pudo calificar por falta de información (código 14 de DataCrédito,
+ * exclusiones -4..-7 de CreditVision). 'pendiente' tampoco es concluyente —
+ * el resultado nunca bajó. En ambos casos la ponderación no debe auto-decidir.
+ */
+function fueEvaluadoPorElBuro(estudio: {
+  resultado: 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente';
+  score: number | null;
+}): boolean {
+  if (estudio.resultado === 'aprobado' || estudio.resultado === 'rechazado') return true;
+  if (estudio.resultado === 'condicionado') return estudio.score !== null;
+  return false; // 'pendiente'
+}
+
 function buildMotivoRechazoCoarrendatario(
   titularResultado: string,
   coarrendatarioResultado: string,
 ): string {
   if (titularResultado === 'condicionado' && coarrendatarioResultado === 'condicionado') {
-    return 'Tanto el estudio del titular como el del co-arrendatario quedaron en perfil marginal. La solicitud no procede.';
+    // Solo se llega aquí con AMBOS scores presentes: el caso sin información
+    // se desvía antes a decisión manual (ver fueEvaluadoPorElBuro).
+    return 'Los estudios del titular y del co-arrendatario quedaron en perfil marginal en el buró. La solicitud no procede.';
   }
   if (coarrendatarioResultado === 'rechazado') {
     return 'El estudio crediticio del co-arrendatario invitado fue rechazado. La solicitud no procede.';
@@ -824,13 +843,126 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
   }
 
   // 4. Decidir resultado combinado.
+  //
+  //    Regla del producto (Mario, 5-may-2026): "se ponderan uno con otro; si el
+  //    otro salió muy bueno, se fueron juntos". Con dos burós activos hay que
+  //    distinguir un caso que antes no existía: un 'condicionado' puede
+  //    significar dos cosas MUY distintas.
+  //
+  //      (a) el buró evaluó a la persona y su score quedó en banda media
+  //          → hay evidencia de riesgo, la ponderación puede decidir;
+  //      (b) el buró NO pudo evaluarla porque no tiene información
+  //          (código 14 de DataCrédito, exclusiones -4..-7 de CreditVision):
+  //          score null → ausencia de evidencia, NO evidencia de riesgo.
+  //
+  //    Auto-rechazar en el caso (b) contradice el propio flujo: un titular sin
+  //    historial, solo, queda 'condicionado' y el gestor decide a mano con los
+  //    soportes. Si además invita a un co-arrendatario que tampoco está
+  //    bancarizado — escenario común en parejas jóvenes, justo el público de
+  //    Cofianza — el expediente se cerraba SOLO y sin apelación, castigando
+  //    haber invitado a alguien. Por eso ese caso vuelve a decisión humana.
   const resultados = [titular.resultado, est.resultado];
-  let resultadoCombinado: 'aprobado' | 'rechazado';
+  let resultadoCombinado: 'aprobado' | 'rechazado' | 'sin_evaluar';
   if (resultados.includes('aprobado')) {
     resultadoCombinado = 'aprobado';
-  } else {
-    // Ambos condicionados o cualquiera rechazado → rechazo definitivo.
+  } else if (resultados.includes('rechazado')) {
+    // Un rechazo sí es evidencia de riesgo, y manda aunque el otro no se
+    // hubiera podido evaluar.
     resultadoCombinado = 'rechazado';
+  } else if (!fueEvaluadoPorElBuro(titular) || !fueEvaluadoPorElBuro(est)) {
+    resultadoCombinado = 'sin_evaluar';
+  } else {
+    // Ambos evaluados y ninguno aprobado → rechazo definitivo.
+    resultadoCombinado = 'rechazado';
+  }
+
+  // 4.5. Sin evaluar: el expediente SE QUEDA en 'condicionado' para que el
+  //      gestor decida con los soportes. Se registra en el timeline y se avisa,
+  //      pero no se toca el estado ni se libera el inmueble.
+  if (resultadoCombinado === 'sin_evaluar') {
+    logger.info(
+      {
+        expedienteId: est.expediente_id,
+        estudioId,
+        titularResultado: titular.resultado,
+        titularScore: titular.score,
+        coaResultado: est.resultado,
+        coaScore: est.score,
+      },
+      'Ponderación coarrendatario: sin información suficiente en el buró — queda para decisión manual',
+    );
+
+    await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: est.expediente_id,
+        tipo: 'estudio',
+        descripcion:
+          'El estudio del co-arrendatario se completó, pero el buró no tiene información crediticia suficiente para ponderar. El expediente queda pendiente de decisión manual.',
+        metadata: {
+          automatico: true,
+          origen: 'ponderacion_coarrendatario',
+          resultado: 'sin_evaluar',
+          titular_resultado: titular.resultado,
+          titular_score: titular.score,
+          coarrendatario_resultado: est.resultado,
+          coarrendatario_score: est.score,
+        },
+      } as never);
+
+    const ctxSin = await fetchExpedienteCtx(est.expediente_id);
+    const msgGestor =
+      `El co-arrendatario ${coa?.nombre ?? ''} completó su estudio, pero ni él ni ${ctxSin.solicitante_nombre || 'el solicitante'} ` +
+      'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: revisa los documentos de soporte y decide si apruebas el expediente.';
+
+    if (ctxSin.inmueble_propietario_id) {
+      notificarUsuario({
+        userId: ctxSin.inmueble_propietario_id,
+        tipo: 'estudio.condicionado',
+        titulo: 'Decisión pendiente: sin historial crediticio',
+        mensaje: msgGestor,
+        link: `/expedientes/${est.expediente_id}`,
+        payload: {
+          expediente_id: est.expediente_id,
+          via: 'coarrendatario_sin_evaluar',
+          coarrendatario_id: coa?.id,
+        },
+      }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion sin evaluar (propietario)'));
+
+      notificarResponsableExpediente({
+        expedienteId: est.expediente_id,
+        excluirPerfilId: ctxSin.inmueble_propietario_id,
+        tipo: 'estudio.condicionado',
+        titulo: 'Decisión pendiente: sin historial crediticio',
+        mensaje: msgGestor,
+        link: `/expedientes/${est.expediente_id}`,
+        payload: {
+          expediente_id: est.expediente_id,
+          via: 'coarrendatario_sin_evaluar',
+          coarrendatario_id: coa?.id,
+        },
+      }).catch((e) => logger.warn({ error: e }, 'Error notif responsable ponderacion sin evaluar'));
+    }
+
+    // Al titular se le avisa con honestidad: hizo la gestión de invitar y
+    // quedarse sin respuesta sería peor que un mensaje que no promete nada.
+    if (ctxSin.solicitante_creado_por) {
+      notificarUsuario({
+        userId: ctxSin.solicitante_creado_por,
+        tipo: 'estudio.condicionado',
+        titulo: 'Tu co-arrendatario completó su estudio',
+        mensaje:
+          'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: el propietario revisará tu caso con los documentos de soporte.',
+        link: `/expedientes/${est.expediente_id}`,
+        payload: {
+          expediente_id: est.expediente_id,
+          via: 'coarrendatario_sin_evaluar',
+          coarrendatario_id: coa?.id,
+        },
+      }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion sin evaluar (titular)'));
+    }
+
+    return;
   }
 
   // 5. Transicionar el expediente. Reusamos la transición directa (no la
