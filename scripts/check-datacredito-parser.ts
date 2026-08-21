@@ -37,9 +37,11 @@ const report = {
     { productCode: 'DW', value: 4852, valueSMLV: 3.409 },
     { productCode: 'DW', value: 9011, valueSMLV: 6.331 },
   ]],
+  // Grafia del manual (mayusculas). Los consolidados van en MILES de pesos:
+  // 12500 = $12.500.000. Ver el caso 'forma real' al final del archivo.
   AgregatedInfo: { overview: {
-    PrincipalsAgregatedInfo: { currentCredits: 5, currentNegativeCredits: 1, negativeHistoricalLast12Months: 2, currentDisputes: -1, valueMonthlyPayment: 850000 },
-    BalancesAgregatedInfo: { totaldebtBalance: 12500000, debtBalanceD30: 300000, debtBalanceD60: -1, debtBalanceD90: -1 },
+    PrincipalsAgregatedInfo: { currentCredits: 5, currentNegativeCredits: 1, negativeHistoricalLast12Months: 2, currentDisputes: -1 },
+    BalancesAgregatedInfo: { totaldebtBalance: 12500, debtBalanceD30: 300, debtBalanceD60: -1, debtBalanceD90: -1, valueMonthlyPayment: 850 },
   } },
   alerts: [{ alertCode: 'A1', textAlert: 'Documento reportado como extraviado' }],
 };
@@ -54,6 +56,7 @@ assert.ok(r.observaciones.includes('6.932.000'), 'ingreso DW en miles -> pesos')
 assert.ok(!r.observaciones.includes('-1'), '-1 debe normalizarse a null y no imprimirse');
 assert.ok(!/Reclamos vigentes/.test(r.observaciones), 'currentDisputes=-1 no debe reportarse');
 assert.ok(r.observaciones.includes('en mora'), 'debe reportar la mora maxima');
+assert.ok(/Saldo total: .*12\.500\.000/.test(r.observaciones), `la grafia del manual tambien va en miles: ${r.observaciones}`);
 
 // Sin score DF -> revision manual
 const sinScore = p.parseResult({ ...report, models: [{ modelCode: 47, scoreValue: 700 }] }, '13');
@@ -90,5 +93,40 @@ const conExclusion = p.parseResult(
   '13',
 );
 assert.ok(!/Ingreso estimado/.test(conExclusion.observaciones), 'reason 50-54 => ingreso no estimable');
+
+// ── Forma REAL del servicio (verificada contra DEMO el 2026-08-21) ──────────
+// El manual documenta 'AgregatedInfo.overview.{Principals,Balances}AgregatedInfo'
+// con valores en pesos; el servicio devuelve 'agregatedInfo.overview.{principals,
+// balances}' con valores en MILES y valueMonthlyPayment dentro de balances.
+// Leyendo las claves del manual el consolidado salia vacio y la card omitia
+// justo lo que decide un condicionado: mora y endeudamiento.
+const formaReal = {
+  productResult: { securityCode: 'CV58220', responseCode: 13, responseDesc: 'La consulta fue efectiva' },
+  models: [{ modelCode: 'DF', scoreValue: 972 }],
+  productValueList: [[{ productCode: 'DW', reason: '0099', value: 2387, valueSMLV: 1.3635 }]],
+  agregatedInfo: { overview: {
+    principals: { currentCredits: 6, currentNegativeCredits: 0, negativeHistoricalLast12Months: 0, currentDisputes: 0 },
+    balances: { valueMonthlyPayment: 460, totaldebtBalance: 1545, debtBalanceD30: 0, debtBalanceD60: 0, debtBalanceD90: 0, totalValueBalanceOverdue: 0 },
+  } },
+};
+const rReal = p.parseResult(formaReal, '13');
+console.log('\n[forma real] score:', rReal.score, '| resultado:', rReal.resultado);
+console.log('[forma real] observaciones:', rReal.observaciones);
+assert.strictEqual(rReal.score, 972);
+assert.ok(/Creditos vigentes: 6/.test(rReal.observaciones), 'debe leer principals en minuscula');
+assert.ok(/Saldo total/.test(rReal.observaciones), 'debe leer balances en minuscula');
+// x1000: 1545 miles = $1.545.000, no $1.545.
+assert.ok(/1\.545\.000/.test(rReal.observaciones), `saldo en miles sin convertir: ${rReal.observaciones}`);
+assert.ok(/460\.000/.test(rReal.observaciones), 'cuota mensual vive en balances y va en miles');
+assert.ok(/2\.387\.000/.test(rReal.observaciones), 'ingreso DW anidado, en miles');
+assert.ok(!/en mora/.test(rReal.observaciones), 'sin mora no debe anunciar mora');
+
+// Mora real: solo totalValueBalanceOverdue poblado (los D30/60/90 pueden venir en 0).
+const conMora = p.parseResult(
+  { ...formaReal, agregatedInfo: { overview: { ...formaReal.agregatedInfo.overview,
+    balances: { ...formaReal.agregatedInfo.overview.balances, totalValueBalanceOverdue: 820 } } } },
+  '13',
+);
+assert.ok(/en mora: .*820\.000/.test(conMora.observaciones), `mora no reportada: ${conMora.observaciones}`);
 
 console.log('\nOK — todas las aserciones pasaron');

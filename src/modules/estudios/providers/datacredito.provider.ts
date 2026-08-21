@@ -110,16 +110,18 @@ interface DcPrincipals {
   currentDisputes?: number;
   totalDisputes?: number;
   consultedLast6Months?: number;
-  valueMonthlyPayment?: number;
   maturationSince?: string;
 }
 
 interface DcBalances {
   totaldebtBalance?: number;
+  totalValueBalanceOverdue?: number;
   debtBalanceD30?: number;
   debtBalanceD60?: number;
   debtBalanceD90?: number;
-  hightestDebtBalance?: number;
+  valueMonthlyPayment?: number;
+  // El servicio lo escribe con H mayuscula ('HightestDebtBalance').
+  HightestDebtBalance?: number;
 }
 
 interface DcReport {
@@ -129,13 +131,21 @@ interface DcReport {
   models?: DcModel[];
   // Anexo Advance Income: llega como arreglo ANIDADO (productValueList[0][n]).
   productValueList?: DcProductValue[][] | DcProductValue[];
-  AgregatedInfo?: {
-    overview?: {
-      PrincipalsAgregatedInfo?: DcPrincipals;
-      BalancesAgregatedInfo?: DcBalances;
-    };
-  };
+  // El manual documenta 'AgregatedInfo.overview.{Principals,Balances}AgregatedInfo'
+  // pero el servicio real devuelve 'agregatedInfo.overview.{principals,balances}'.
+  // Se aceptan ambas grafias porque no sabemos cual usa produccion.
+  agregatedInfo?: DcAgregatedInfo;
+  AgregatedInfo?: DcAgregatedInfo;
   alerts?: { alertCode?: string; textAlert?: string }[];
+}
+
+interface DcAgregatedInfo {
+  overview?: {
+    principals?: DcPrincipals;
+    balances?: DcBalances;
+    PrincipalsAgregatedInfo?: DcPrincipals;
+    BalancesAgregatedInfo?: DcBalances;
+  };
 }
 
 interface DcSuccessResponse {
@@ -270,6 +280,12 @@ function extraerIngresoDW(report: DcReport): number | null {
   return valor * 1000;
 }
 
+/** Los consolidados llegan en miles de pesos (ver buildObservaciones). */
+function milesAPesos(v: unknown): number | null {
+  const n = num(v);
+  return n === null ? null : n * 1000;
+}
+
 /**
  * Construye las observaciones legibles a partir del consolidado. Es lo que ve
  * el gestor en la card del estudio, asi que se prioriza mora y endeudamiento.
@@ -279,8 +295,9 @@ function buildObservaciones(report: DcReport, score: number | null, ingreso: num
 
   parts.push(score !== null ? `Score Advance 1.1: ${score}` : 'Score Advance 1.1 no disponible');
 
-  const p = report.AgregatedInfo?.overview?.PrincipalsAgregatedInfo;
-  const b = report.AgregatedInfo?.overview?.BalancesAgregatedInfo;
+  const overview = (report.agregatedInfo ?? report.AgregatedInfo)?.overview;
+  const p = overview?.principals ?? overview?.PrincipalsAgregatedInfo;
+  const b = overview?.balances ?? overview?.BalancesAgregatedInfo;
 
   const vigentes = num(p?.currentCredits);
   const negativos = num(p?.currentNegativeCredits);
@@ -289,16 +306,22 @@ function buildObservaciones(report: DcReport, score: number | null, ingreso: num
   if (negativos !== null && negativos > 0) parts.push(`negativos actuales: ${negativos}`);
   if (negHist12 !== null && negHist12 > 0) parts.push(`negativos ult. 12 meses: ${negHist12}`);
 
-  const saldoTotal = num(b?.totaldebtBalance);
+  // Los agregados vienen en MILES de pesos: totaldebtBalance 1545 corresponde al
+  // totalBalance 1545000 del detalle mensual. Sin el x1000 la card reporta
+  // saldos y moras mil veces menores de lo real.
+  const saldoTotal = milesAPesos(b?.totaldebtBalance);
   if (saldoTotal !== null) parts.push(`Saldo total: ${formatCOP(saldoTotal)}`);
 
-  const mora30 = num(b?.debtBalanceD30);
-  const mora60 = num(b?.debtBalanceD60);
-  const mora90 = num(b?.debtBalanceD90);
-  const moraMax = Math.max(mora30 ?? 0, mora60 ?? 0, mora90 ?? 0);
+  const moraMax = Math.max(
+    milesAPesos(b?.debtBalanceD30) ?? 0,
+    milesAPesos(b?.debtBalanceD60) ?? 0,
+    milesAPesos(b?.debtBalanceD90) ?? 0,
+    milesAPesos(b?.totalValueBalanceOverdue) ?? 0,
+  );
   if (moraMax > 0) parts.push(`en mora: ${formatCOP(moraMax)}`);
 
-  const cuota = num(p?.valueMonthlyPayment);
+  // valueMonthlyPayment vive en 'balances', no en 'principals'.
+  const cuota = milesAPesos(b?.valueMonthlyPayment);
   if (cuota !== null && cuota > 0) parts.push(`Cuota mensual comprometida: ${formatCOP(cuota)}`);
 
   if (ingreso !== null) parts.push(`Ingreso estimado (Advance Income): ${formatCOP(ingreso)}`);
