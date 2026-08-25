@@ -34,13 +34,24 @@ import type {
   ProviderHealthInfo,
 } from './types';
 
-// ── Tipo documento → personIdType (Tabla 1 del manual) ──────
+// ── Tipo documento → personIdType (Tabla 1 del manual, pag. 18) ──────
+// 1 CC · 2 NIT · 3 PJE (persona juridica del extranjero) · 4 CE · 5 PAS ·
+// 6 PPT/CD · 7 TI · 8 DNI · 9 PEP.
+// OJO: NO copiar el mapa de transunion.provider.ts — ese buro usa otro
+// catalogo (alli ce='3' y ti='4') y confundirlos hace que DataCredito reciba
+// un tipo de documento que no corresponde, facture la consulta y responda
+// codigo 05/09 ("documento errado" / "no existe"). El reporte devuelve el
+// mismo personIdType que se envio, asi que este mapa tiene que ir en linea con
+// TIPOS_DOCUMENTO de rental-platform-web/components/estudios/DataCreditoReportDetail.tsx.
+// Solo los cinco tipos que acepta estudios.schema.ts; el resto de la Tabla 1
+// (6 PPT/CD, 8 DNI, 9 PEP) se agrega aqui cuando el schema los admita, para
+// que el mensaje de "tipos validos" no prometa lo que la API rechaza antes.
 const TIPO_DOCUMENTO_MAP: Record<string, number> = {
   cc: 1,
-  ce: 2,
-  nit: 3,
-  ti: 4,
+  nit: 2,
+  ce: 4,
   pasaporte: 5,
+  ti: 7,
 };
 
 // ── Catalogo de responseCode (Tabla 13, pags. 28-29) ────────
