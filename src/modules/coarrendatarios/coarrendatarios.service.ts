@@ -20,6 +20,10 @@ import {
   notificarResponsableExpediente,
 } from '../notificaciones/notificaciones.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+// Tope de canon (flujo del modulo de estudios §4.4). El estudio del
+// co-arrendatario es una consulta al buro mas, y esa consulta no puede
+// depender del fire-and-forget del final: ver los dos call sites de abajo.
+import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import {
   TEXTO_LEGAL_COARRENDATARIO,
   VERSION_TERMINOS_COARRENDATARIO,
@@ -271,6 +275,16 @@ export async function invitarCoarrendatario(
       'EXPEDIENTE_NO_CONDICIONADO',
     );
   }
+
+  // 2b. TOPE DE CANON — flujo §4.4. Se valida al EMITIR la invitación, que es
+  //     el único momento en que el gestor todavía puede actuar. Si el inmueble
+  //     está fuera de tope, el estudio del co-arrendatario no va a poder correr
+  //     nunca (el expediente tampoco se puede aprobar), y sin este chequeo la
+  //     invitación salía igual: la persona entregaba nombre, documento y su
+  //     autorización de habeas data para una consulta imposible. Es el mismo
+  //     argumento de finalidad (Ley 1581) con el que el guard justifica ir
+  //     antes del gate 8.4.
+  await assertCanonDentroDelTope({ expedienteId, origen: 'invitarCoarrendatario' });
 
   // 3. No reinvitar el mismo email del titular (no tiene sentido).
   if (ctx.solicitante_email && input.email.toLowerCase() === ctx.solicitante_email.toLowerCase()) {
@@ -633,6 +647,24 @@ export async function aceptarInvitacion(
       { estado: coa.estado },
     );
   }
+
+  // 1b. TOPE DE CANON — flujo §4.4. Va ANTES del claim y ANTES del INSERT del
+  //     estudio. Sin esto, el único control era el ejecutarEstudio
+  //     fire-and-forget del final, cuyo rechazo se lo traga el .catch: la API
+  //     respondía 200, el co-arrendatario veía éxito, el titular recibía
+  //     "estamos procesando su estudio" y quedaba una fila de estudio en
+  //     'formulario_completado' que nunca iba a correr — y que además, por no
+  //     ser un estado finalizado, bloqueaba para siempre cualquier estudio
+  //     futuro del expediente (ESTUDIO_ACTIVO_EXISTENTE).
+  //
+  //     Cubre las invitaciones emitidas antes de que existiera el guard de
+  //     invitarCoarrendatario. Aquí sí lanza (el invitado ve el mensaje del
+  //     tope, que no es un portazo y no habla de rechazo, §13), en vez de
+  //     dejar el expediente en un estado del que no se sale.
+  await assertCanonDentroDelTope({
+    expedienteId: coa.expediente_id,
+    origen: 'aceptarInvitacionCoarrendatario',
+  });
 
   // 2. CLAIM atómico: marcar aceptado SOLO si sigue 'pendiente_aceptacion'.
   //    Evita que dos POST /aceptar concurrentes (doble click / retry de red)

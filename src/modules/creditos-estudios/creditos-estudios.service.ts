@@ -17,6 +17,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
 
 // ============================================================
@@ -530,6 +531,13 @@ export async function liberarEstudioConCredito(
   if (!esDueno) {
     throw AppError.forbidden('Este inmueble no le pertenece', 'INMUEBLE_NO_PROPIO');
   }
+
+  // 2.5. TOPE DE CANON — flujo §4.4: "no se cobra el estudio". Descontar un
+  //      credito ES el cobro (es un estudio ya pagado que se consume), asi que
+  //      el tope se verifica ANTES del INSERT en `pagos` y ANTES del RPC
+  //      consume_credito_estudio. Si se bloquea aqui, el saldo de la
+  //      inmobiliaria queda intacto.
+  await assertCanonDentroDelTope({ expedienteId, origen: 'liberarEstudioConCredito' });
 
   // 3. Validar que no exista ya un pago de estudio completado
   const { data: existingPago } = await (supabase

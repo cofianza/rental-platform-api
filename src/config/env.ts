@@ -94,6 +94,24 @@ const envSchema = z.object({
   // vigentes, para no invalidar retroactivamente estudios historicos.
   AUTORIZACION_VIGENCIA_MESES: z.coerce.number().int().positive().max(120).default(12),
 
+  // Tope de canon que Cofianza puede afianzar, en PESOS. Flujo del modulo de
+  // estudios §4.4: "Al seleccionar la propiedad, y ANTES de avanzar y de
+  // generar cualquier cobro, el sistema valida el tope de canon vigente. Si el
+  // canon supera el maximo permitido sin acuerdo de coafianzamiento, el flujo
+  // se detiene con un mensaje claro y no se cobra el estudio. Hasta 3.000.000".
+  // Es un tope INCLUSIVO: 3.000.000 exactos pasan.
+  //
+  // Vive en env y no en codigo porque es una regla TRANSITORIA — rige
+  // "mientras Cofianza no tenga acuerdo de coafianzamiento" con un tercero que
+  // absorba el exceso. Cuando ese acuerdo exista, el tope sube (o se retira)
+  // cambiando una variable, sin desplegar.
+  //
+  // OJO: NO confundir con la regla V3 del scorecard (canon/ingreso > 40%) del
+  // motor sombra. Esta es un tope ABSOLUTO en pesos sobre el inmueble; aquella
+  // es una RELACION entre el canon y el ingreso de la persona. Son reglas
+  // distintas, con fuentes distintas, y no se fusionan.
+  CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: z.coerce.number().int().positive().default(3_000_000),
+
   // TransUnion Colombia (Basic Auth — Combo CreditVision + Info Comercial 1901)
   TRANSUNION_API_URL: z.string().url().default('https://tucoapplicationserviceuat.transunion.co/ws/v1/rest/consultarCombo'),
   TRANSUNION_USERNAME: z.string().optional(),

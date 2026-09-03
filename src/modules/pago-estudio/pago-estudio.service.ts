@@ -19,6 +19,7 @@ import { attachFacturas } from '@/modules/pagos/pagos.service';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type { EnviarLinkInput, ReenviarLinkInput } from './pago-estudio.schema';
 
 /**
@@ -189,6 +190,15 @@ function invalidarLinkPasarela(pago: { external_id?: string | null; metodo?: str
 // ============================================================
 
 export async function asumirCosto(expedienteId: string, userId: string, ip?: string) {
+  // TOPE DE CANON — flujo §4.4: "no se cobra el estudio". Asumir el costo es un
+  // cobro (interno, pero cobro: crea el pago 'completado' y dispara la
+  // facturación y el link de autorización). Se verifica ANTES de cancelar el
+  // link vivo y ANTES del INSERT, para no dejar el expediente sin link y sin
+  // pago. Ojo: por el wrapper cancelarYAsumir esto no alcanzaba —cuando entra
+  // por ahí, el link ya se canceló antes de llegar acá—, así que ese wrapper
+  // repite el guard al principio. El guard es de sólo lectura e idempotente.
+  await assertCanonDentroDelTope({ expedienteId, origen: 'asumirCosto' });
+
   // Check no existing active pago
   const existing = await findPagoEstudio(expedienteId);
   if (existing && (existing.estado as string) === 'completado') {
@@ -293,6 +303,12 @@ export async function enviarLinkPago(
   userId: string,
   ip?: string,
 ) {
+  // TOPE DE CANON — flujo §4.4: "el flujo se detiene con un mensaje claro y no
+  // se cobra el estudio". Este es el cobro literal al prospecto (checkout de la
+  // pasarela + correo + WhatsApp con el link), así que el tope se verifica
+  // antes de crear la preference.
+  await assertCanonDentroDelTope({ expedienteId, origen: 'enviarLinkPago' });
+
   // Check no existing active pago (pendiente or procesando)
   const existing = await findPagoEstudio(expedienteId);
   if (existing) {
@@ -596,6 +612,18 @@ export async function reenviarLink(
 // ============================================================
 
 export async function cancelarYAsumir(expedienteId: string, userId: string, ip?: string) {
+  // TOPE DE CANON — flujo §4.4. Va ANTES de tocar el pago, no dentro de
+  // asumirCosto: si el guard corriera allá abajo (línea final de esta función),
+  // el link ya estaría cancelado en BD y la preference expirada en la pasarela
+  // —ambas irreversibles— cuando llegue el 400. El expediente quedaría sin pago
+  // y sin link, con el arrendatario mirando un enlace muerto en su correo, y
+  // /enviar-link tampoco podría reemitirlo porque el mismo tope lo bloquea.
+  // Mismo criterio que el saldo de créditos en cancelarYLiberarCredito: todo lo
+  // que puede abortar la operación se valida antes de tocar el link vivo.
+  // (Para cancelar el link sin asumir el costo existe PATCH /pagos/:id/cancelar,
+  // que sigue disponible.)
+  await assertCanonDentroDelTope({ expedienteId, origen: 'cancelarYAsumir' });
+
   const pago = await findPagoEstudio(expedienteId);
   if (!pago) throw AppError.notFound('No existe un pago de estudio pendiente');
   // 'procesando' también es cancelable: un PSE abandonado deja el pago ahí y la
@@ -625,6 +653,12 @@ export async function cancelarYAsumir(expedienteId: string, userId: string, ip?:
  * crea el pago y auto-envía la autorización.
  */
 export async function cancelarYLiberarCredito(expedienteId: string, userId: string, ip?: string) {
+  // TOPE DE CANON — flujo §4.4. Antes de tocar el pago, por la misma razón que
+  // el saldo de créditos se verifica abajo antes de cancelar el link: el guard
+  // vive dentro de liberarEstudioConCredito, que se llama al final, y para
+  // entonces el link ya estaría cancelado y la preference expirada.
+  await assertCanonDentroDelTope({ expedienteId, origen: 'cancelarYLiberarCredito' });
+
   const pago = await findPagoEstudio(expedienteId);
   if (!pago) throw AppError.notFound('No existe un pago de estudio pendiente');
   if (!['pendiente', 'procesando'].includes(pago.estado as string)) {

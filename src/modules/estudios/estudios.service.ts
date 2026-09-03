@@ -19,6 +19,9 @@ import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteA
 // terminarian con el mismo resultado, score y respuesta_proveedor de hoy.
 import { registrarScorecardSombra } from './motor/sombra.service';
 import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './autorizacion.guard';
+// Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
+// de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
+import { assertCanonDentroDelTope } from './tope-canon.guard';
 
 // ============================================================
 // Constants
@@ -33,6 +36,42 @@ const ESTADOS_PERMITIDOS_RESULTADO = ['solicitado', 'en_proceso'];
 // primer intento, etc). El estudio sigue siendo el mismo registro — no se
 // crea uno nuevo — solo se vuelve a ejecutar la consulta.
 const ESTADOS_PERMITIDOS_EJECUCION = ['formulario_completado', 'documentos_cargados', 'fallido'];
+
+/**
+ * ¿El estudio de este expediente YA se cobró?
+ *
+ * Se usa para el grandfathering del tope de canon (§4.4). La regla de Gerencia
+ * prohíbe COBRAR un estudio sobre un inmueble fuera de tope; no dice nada de
+ * dejar sin entregar uno ya pagado. Los caminos que corren después del pago
+ * —reintento de un 'fallido', re-consulta al otro buró, re-evaluación con
+ * soportes— tienen que poder terminar: bloquearlos dejaría al cliente cobrado
+ * y sin estudio, con un mensaje que además le afirma que "no se generó ningún
+ * cobro". El bloqueo real vive en los sitios que preceden al cobro.
+ *
+ * Best-effort a propósito: si la consulta falla asumimos "no pagado", que es el
+ * lado seguro (el tope bloquea). No es una decisión de plata, es solo el
+ * interruptor entre bloquear y advertir.
+ */
+async function estudioYaCobrado(expedienteId: string): Promise<boolean> {
+  const { data, error } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', 'estudio')
+    .eq('estado', 'completado')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    logger.warn(
+      { error: error.message, expedienteId },
+      'No se pudo verificar si el estudio ya fue cobrado — se asume que no (el tope bloquea)',
+    );
+    return false;
+  }
+
+  return !!data;
+}
 
 // Nombre legible de cada buró — se usa en las observaciones que ve el gestor.
 // Con dos proveedores activos ya no se puede hardcodear "TransUnion".
@@ -390,6 +429,11 @@ export async function createEstudio(
     );
   }
 
+  // 1.5. Tope de canon (flujo §4.4). Va antes que las validaciones de
+  //      documentos y que el RPC: si el inmueble excede el tope el estudio no
+  //      debe nacer, y el gestor tiene que leer ESO y no "te faltan documentos".
+  await assertCanonDentroDelTope({ expedienteId, origen: 'createEstudio' });
+
   // 2. Verify no active estudio exists for this expediente
   const { data: activeEstudio } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -531,6 +575,11 @@ export async function createEstudioFromInmueble(
       throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
     }
   }
+
+  // Tope de canon (flujo §4.4). Aqui el expediente todavia no existe, asi que
+  // se contrasta directo contra el inmueble — que es justamente el sujeto de la
+  // regla ("al seleccionar la propiedad").
+  await assertCanonDentroDelTope({ inmuebleId, origen: 'createEstudioFromInmueble' });
 
   // Atomic: create expediente + estudio + update inmueble via RPC
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1505,7 +1554,7 @@ export async function ejecutarEstudio(
   //      el que se usa en el form (ver paso 3).
   const { data: expedienteRow, error: expErr } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estudio_habilitado, solicitante_id')
+    .select('id, numero, estudio_habilitado, solicitante_id, inmueble_id')
     .eq('id', est.expediente_id)
     .single();
 
@@ -1525,6 +1574,7 @@ export async function ejecutarEstudio(
     numero: string;
     estudio_habilitado: boolean;
     solicitante_id: string | null;
+    inmueble_id: string | null;
   };
 
   if (!expediente.estudio_habilitado) {
@@ -1538,6 +1588,43 @@ export async function ejecutarEstudio(
       'ESTUDIO_NO_HABILITADO',
     );
   }
+
+  // 1.6. TOPE DE CANON — flujo §4.4.
+  //
+  //      Última barrera antes del buró, y la que cubre los caminos que no
+  //      pasan por createEstudio ni por habilitarEstudio: el estudio del
+  //      co-arrendatario (coarrendatarios.service lo dispara aquí), el
+  //      onboarding de vitrina/invitación (orchestrator → este mismo punto),
+  //      el reintento de un 'fallido' y la re-consulta al otro buró. Todos
+  //      terminan en ejecutarEstudio, así que cerrar aquí cierra todos.
+  //
+  //      PERO aquí NUNCA se está antes del cobro: a ejecutarEstudio no se
+  //      llega sin pago previo (el orchestrator sólo dispara desde
+  //      dispatchPagoCompletado, y el panel sólo tras habilitar + pagar). Si
+  //      el estudio ya se cobró, bloquear aquí deja al cliente cobrado y sin
+  //      servicio — y con un mensaje que le afirma que "no se generó ningún
+  //      cobro", que sería falso. Casos reales: el reintento de un 'fallido'
+  //      (que en este sistema aparece de forma espuria cuando se reinicia la
+  //      API) y la re-consulta al otro buró de un condicionado sin score, que
+  //      es justo el remedio documentado 70 líneas más abajo. Por eso, si ya
+  //      hay pago completado, el guard sólo advierte (grandfathering); el
+  //      bloqueo real vive en los sitios previos al cobro.
+  //
+  //      Va ANTES del gate 8.4 a propósito. Los dos son de sólo lectura, así
+  //      que el orden sólo decide qué mensaje lee el gestor — y el accionable
+  //      es este: si el canon excede el tope, el estudio no va a poder correr
+  //      nunca, y contestar "falta la autorización" lo mandaría a perseguir
+  //      una firma inútil. Además, pedir habeas data para un estudio que no
+  //      se puede ejecutar sería recolectar datos sin finalidad (Ley 1581).
+  //      Ver la nota de ORDEN en tope-canon.guard.ts.
+  await assertCanonDentroDelTope({
+    // El inmueble ya viene resuelto del select de arriba: no cuesta un
+    // roundtrip extra.
+    inmuebleId: expediente.inmueble_id,
+    expedienteId: est.expediente_id,
+    origen: 'ejecutarEstudio',
+    soloAdvertir: await estudioYaCobrado(est.expediente_id),
+  });
 
   // 1.8. Normalizar 'formulario_enviado' → 'formulario_completado' (igual que
   //      el orchestrator): el solicitante puede ejecutar desde su panel con el
@@ -2200,6 +2287,21 @@ export async function solicitarReEvaluacion(
   // scoping, la inmobiliaria disparaba re-evaluaciones sobre estudios de OTRA
   // agencia por UUID (write-IDOR).
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
+
+  // Tope de canon (flujo §4.4). La re-evaluacion crea un estudio HIJO, o sea un
+  // estudio nuevo: si el inmueble no esta dentro del tope no hay razon para
+  // volver a consultar el buro por el.
+  //
+  // Salvo que el estudio YA se haya cobrado, que es el caso normal aqui: la
+  // re-evaluacion se le ofrece al gestor sobre un estudio condicionado o
+  // rechazado — o sea despues del pago — y no genera un cobro nuevo (no crea
+  // ningun pago; solo inserta el estudio hijo). Bloquearla despues de que el
+  // gestor subio los soportes seria cobrar y no entregar. Ver estudioYaCobrado.
+  await assertCanonDentroDelTope({
+    expedienteId: est.expediente_id,
+    origen: 'solicitarReEvaluacion',
+    soloAdvertir: await estudioYaCobrado(est.expediente_id),
+  });
 
   if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
     throw AppError.badRequest(

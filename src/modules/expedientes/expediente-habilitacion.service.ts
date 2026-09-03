@@ -8,6 +8,7 @@ import {
   sendEstudioAprobadoEmail,
 } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
+import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
 import { bloquearInmuebleEnEstudio } from '../inmuebles/inmuebles.service';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
@@ -54,6 +55,15 @@ export async function habilitarEstudio(
     userRol: userRol as UserRole,
     expedienteId,
   });
+
+  // 1.5. TOPE DE CANON — flujo §4.4: "ANTES de avanzar y de generar cualquier
+  //      cobro". Va aquí, antes del RPC, porque este es el punto donde el
+  //      estudio NACE y donde arranca el cobro: el RPC inserta la fila en
+  //      `estudios` y, para el propietario individual, unas líneas más abajo
+  //      se auto-crea el link de pago (enviarLinkPago). Bloquear aquí deja el
+  //      expediente exactamente como estaba: sin estudio, sin pago, sin
+  //      inmueble reservado y sin correo al solicitante.
+  await assertCanonDentroDelTope({ expedienteId, origen: 'habilitarEstudio' });
 
   // 2. RPC atómico: UPDATE expediente + INSERT estudio + INSERT timeline.
   //    Las validaciones (existencia, idempotencia, estado, cita realizada)

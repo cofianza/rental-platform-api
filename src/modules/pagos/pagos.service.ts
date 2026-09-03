@@ -11,6 +11,10 @@ import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+// Tope de canon (flujo del modulo de estudios §4.4): este endpoint generico
+// tambien puede cobrar el estudio (concepto='estudio'), asi que necesita el
+// mismo guard que /pago-estudio. Ver tope-canon.guard.ts.
+import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 
 // ============================================================
 // Helpers
@@ -227,6 +231,21 @@ export async function createPaymentLink(
   // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo crean
   // pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
+
+  // 1b. TOPE DE CANON — flujo §4.4: "ANTES de avanzar y de generar cualquier
+  //     cobro... no se cobra el estudio". Esta ruta generica es el OTRO camino
+  //     por el que se cobra un estudio: la UI ofrece "Generar Link de Pago" con
+  //     'Estudio de riesgo crediticio' como primer concepto, y desde aqui se
+  //     creaba el pago pendiente + la preference de la pasarela + el correo al
+  //     arrendatario sin pasar nunca por /pago-estudio/enviar-link, que si tiene
+  //     el guard. Sin esto el tope solo aparecia en ejecutarEstudio, con la
+  //     plata ya capturada.
+  //
+  //     Solo aplica a concepto='estudio': garantia, primer_canon, deposito y
+  //     otro no son el cobro que el §4.4 regula.
+  if (input.concepto === 'estudio') {
+    await assertCanonDentroDelTope({ expedienteId, origen: 'createPaymentLink' });
+  }
 
   // 2. Check for duplicate: no pendiente/procesando for same expediente+concepto
   const { data: existing } = await (supabase
