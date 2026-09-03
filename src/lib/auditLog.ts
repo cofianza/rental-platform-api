@@ -58,6 +58,10 @@ export const AUDIT_ACTIONS = {
   // Proveedores de riesgo crediticio
   ESTUDIO_PROVIDER_EXECUTED: 'estudio_provider_executed',
   ESTUDIO_PROVIDER_FAILED: 'estudio_provider_failed',
+  // Gate 8.4: la consulta al buro se bloqueo por falta de autorizacion previa
+  // (o por su revocacion). NO es un fallo del proveedor: el buro nunca se
+  // llamo, y confundirlo con uno hacia que el gestor reintentara en bucle.
+  ESTUDIO_AUTORIZACION_BLOQUEADA: 'estudio_autorizacion_bloqueada',
   ESTUDIO_PROVIDER_RESULT_RECEIVED: 'estudio_provider_result_received',
   // Re-evaluacion de estudios
   ESTUDIO_SOPORTE_UPLOADED: 'estudio_soporte_uploaded',

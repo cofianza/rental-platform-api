@@ -6,6 +6,7 @@ import { env } from '@/config/env';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { withRetry } from './retry';
+import { TRANSUNION_TIMEOUT_MS } from './timeouts';
 import type {
   CreditRiskProvider,
   ProviderSolicitudInput,
@@ -47,11 +48,20 @@ const TU_ERROR_MESSAGES: Record<number, string> = {
   37: 'Numero de identificacion invalido',
 };
 
-// 60s para tolerar la flakiness del UAT de TransUnion (puede tardar 35-50s
-// legitimamente bajo carga, sin estar caido). En PROD las consultas tardan
-// 8-25s, asi que 60s sobra y deja margen para picos. La cedula 1026130143
-// fallo con timeout de 30s aunque previamente devolvia 'aprobado' rapido.
-const REQUEST_TIMEOUT_MS = 60_000;
+// Timeout por llamada. Politica de Evaluacion y Score V4.1, seccion 14: "el
+// tiempo de espera maximo por respuesta de cada API antes de considerar falla
+// es de 8 segundos [...] El timeout debe configurarse en la capa de
+// integracion, no en el motor de scoring". Antes eran 60s fijos.
+//
+// TransUnion hace UNA llamada HTTP por intento, asi que el presupuesto de un
+// intento es exactamente el timeout.
+//
+// El valor NO es la constante de la politica a secas: mientras
+// TRANSUNION_API_URL siga apuntando al host UAT (que es lo que hay hoy en
+// produccion) el corte de 8s no distingue "buro caido" de "UAT bajo carga", y
+// como PROVIDER_TIMEOUT no es reintentable dejaria el modulo inoperante. Lo
+// resuelve providers/timeouts.ts; TRANSUNION_REQUEST_TIMEOUT_MS lo fuerza.
+const requestTimeoutMs = () => TRANSUNION_TIMEOUT_MS;
 
 // ── Interfaces de respuesta TransUnion ──────────────────────
 
@@ -218,10 +228,20 @@ export class TransUnionProvider implements CreditRiskProvider {
       () => this.executeRequest(body, basicAuth),
       'TransUnion consultarCombo',
       {
+        // Aritmetica del SLA de 40 s con el timeout de la politica (8 s):
+        //   intento 1 (8) + espera (1) + intento 2 (8) + espera (2) + intento 3 (8) = 27 s
+        // Quedan ~13 s para parsear, persistir respuesta_proveedor, la RPC de
+        // resultado y el orquestador. `deadlineMs` es la garantia dura: si un
+        // reintento no cabe, no se intenta — y por eso `attemptBudgetMs` usa el
+        // timeout REAL del proveedor, no la constante de la politica: mientras
+        // la URL apunte a UAT (45 s por intento) el guard suprime los
+        // reintentos, que es lo correcto (no caben en el SLA de ninguna forma).
         maxAttempts: 3,
-        baseDelayMs: 2000,
-        maxDelayMs: 10000,
+        baseDelayMs: 1000,
+        maxDelayMs: 4000,
         backoffFactor: 2,
+        deadlineMs: env.BURO_SLA_TOTAL_MS,
+        attemptBudgetMs: TRANSUNION_TIMEOUT_MS,
         // Reintentar SOLO errores transitorios del proveedor:
         //  - PROVIDER_UNAVAILABLE: TransUnion caído (5xx/520). El origen erroró
         //    sin procesar, así que reintentar es seguro (no factura doble) y
@@ -377,7 +397,8 @@ export class TransUnionProvider implements CreditRiskProvider {
 
   private async executeRequest(body: Record<string, string>, basicAuth: string): Promise<TransUnionResponse> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutMs = requestTimeoutMs();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(env.TRANSUNION_API_URL, {
@@ -410,7 +431,7 @@ export class TransUnionProvider implements CreditRiskProvider {
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         throw AppError.badRequest(
-          `TransUnion: timeout de ${REQUEST_TIMEOUT_MS / 1000}s excedido`,
+          `TransUnion: timeout de ${timeoutMs / 1000}s excedido (limite de la politica, seccion 14)`,
           'PROVIDER_TIMEOUT',
         );
       }

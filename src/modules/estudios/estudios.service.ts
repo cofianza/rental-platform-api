@@ -18,6 +18,7 @@ import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteA
 // abajo, los tres flujos (ejecucion normal, polling y registro manual)
 // terminarian con el mismo resultado, score y respuesta_proveedor de hoy.
 import { registrarScorecardSombra } from './motor/sombra.service';
+import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './autorizacion.guard';
 
 // ============================================================
 // Constants
@@ -405,13 +406,19 @@ export async function createEstudio(
     );
   }
 
-  // 3. Verify autorizacion habeas data exists and is active
+  // 3. Verify autorizacion habeas data exists and is active.
+  //    Filtrada POR SUJETO: desde 2026-09-03 el co-arrendatario tiene su propia
+  //    fila con el MISMO expediente_id, asi que buscar solo por expediente
+  //    podia enlazar el estudio del TITULAR a la autorizacion de otra persona —
+  //    justo el vinculo "evidencia asociada al estudio" que exige el 8.4.
   const { data: autorizacion } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado')
     .eq('expediente_id', expedienteId)
+    .is('coarrendatario_id', null)
     .eq('estado', 'autorizado')
     .is('fecha_revocacion', null)
+    .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -898,10 +905,13 @@ export async function submitFormulario(token: string, input: SubmitFormularioInp
 // Completar formulario desde flujo de onboarding (sin OTP+canvas)
 //
 // Usado por el orchestrator tras confirmar pago en expedientes cuyo
-// `source ∈ {vitrina_publica, invitacion}`. El consentimiento legal del
-// solicitante está cubierto por terminos_aceptaciones (registrado en
-// vitrina.service.registerSolicitante). No se exige autorizaciones_habeas_data
-// (OTP+canvas) en estos flujos.
+// `source ∈ {vitrina_publica, invitacion}`. El registro del solicitante deja
+// `terminos_aceptaciones` (vitrina.service.registerSolicitante), pero eso NO
+// sustituye la autorización habeas data: esa tabla no guarda el texto íntegro
+// aceptado, ni su versión, ni el documento del aceptante, que es lo que exige
+// el 8.4 del flujo. Desde 2026-09-03 estos flujos también pasan por el gate de
+// autorización previa antes de consultar el buró; el enlace de autorización lo
+// envía automáticamente orchestrator.onPagoConfirmado.
 //
 // Rellena `datos_formulario` desde la tabla `solicitantes`, avanza el
 // estudio a `formulario_completado` y NO lo ejecuta — la ejecución la
@@ -1020,9 +1030,14 @@ export async function completarFormularioDesdeOnboarding(params: {
     .update({
       estado: 'formulario_completado',
       datos_formulario: datosFormulario,
-      // Explícitamente null: flujo vitrina/invitación no exige autorización
-      // habeas-data formal (OTP+canvas). Consentimiento en terminos_aceptaciones.
-      autorizacion_habeas_data_id: null,
+      // NO se pisa `autorizacion_habeas_data_id`. Antes se escribía null
+      // explícito con el argumento de que en vitrina/invitación bastaba
+      // `terminos_aceptaciones`; esa tabla no guarda texto_autorizado, ni
+      // version_terminos, ni el documento del aceptante, así que no cumple el
+      // 8.4 y ademas borraba el vínculo que el orquestador ya había escrito.
+      // El gate de ejecución (autorizacion.guard.ts) exige la autorización
+      // firmada también en estos flujos; el enlace lo envía automáticamente
+      // orchestrator.onPagoConfirmado.
       updated_at: new Date().toISOString(),
     } as never)
     .eq('id', estudioId);
@@ -1618,6 +1633,28 @@ export async function ejecutarEstudio(
     );
   }
 
+  // 3.5. GATE 8.4 — autorización PREVIA para consultar centrales de riesgo.
+  //
+  //      Va aquí a propósito: el documento efectivo ya está resuelto (con el
+  //      override del gestor aplicado) pero todavía NO se ha escrito nada —
+  //      ni el lock a 'en_proceso', ni la sincronización del documento del
+  //      solicitante. Un estudio bloqueado aquí no consume consulta facturable
+  //      ni queda colgado en 'en_proceso'.
+  //
+  //      Hasta 2026-09-03 el único gate era `estudio_habilitado`, y en 4 de 7
+  //      estudios completados el buró se consultó ANTES de que la persona
+  //      autorizara. Ver src/modules/estudios/autorizacion.guard.ts.
+  const { autorizacionId } = await assertAutorizacionVigente({
+    estudioId: est.id,
+    expedienteId: est.expediente_id,
+    tipoEstudio: est.tipo,
+    // El PAR completo: `tipo_documento` tambien viaja al buro y tambien llega
+    // desde el body, asi que comparar solo el numero permitia consultar a otro
+    // titular de datos (mismo numero, distinto tipo) con una firma legitima.
+    numeroDocumentoConsultado: datos.numero_documento,
+    tipoDocumentoConsultado: datos.tipo_documento,
+  });
+
   // Si el override trajo cambios respecto a datos_formulario, persistir.
   const cambioNumeroDatos = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
   const cambioTipoDatos = !!(overrideTipo && overrideTipo !== datosBase.tipo_documento);
@@ -1722,6 +1759,11 @@ export async function ejecutarEstudio(
     .update({
       estado: 'en_proceso',
       proveedor: proveedorFinal,
+      // Deja el estudio atado a la evidencia concreta que lo habilitó. Antes
+      // quedaba null en los caminos de habilitación, onboarding y
+      // co-arrendatario, así que no había forma de reconstruir con qué firma
+      // se consultó el buró.
+      autorizacion_habeas_data_id: autorizacionId,
       ...(cambioProveedor ? { referencia_proveedor: null, respuesta_proveedor: null } : {}),
       // Re-consulta de un estudio ya completado: hay que devolverlo a
       // 'pendiente'. fn_registrar_resultado_estudio rechaza registrar sobre un
@@ -1799,6 +1841,20 @@ async function procesarEstudioAsync(args: {
   );
 
   try {
+    // GATE 8.4, segunda capa. `ejecutarEstudio` ya lo verificó, pero esta es la
+    // última línea antes del fetch al buró: cubre a cualquier caller futuro de
+    // procesarEstudioAsync y cierra la ventana entre el lock y la consulta (el
+    // titular pudo revocar en el intermedio). `momentoConsulta` es AHORA, que
+    // es el instante que tiene que ser posterior a la firma.
+    await assertAutorizacionVigente({
+      estudioId,
+      expedienteId,
+      tipoEstudio: providerInput.tipo,
+      numeroDocumentoConsultado: providerInput.numero_documento,
+      tipoDocumentoConsultado: providerInput.tipo_documento,
+      momentoConsulta: new Date(),
+    });
+
     const response = await provider.solicitar(providerInput);
 
     // Persistir la referencia con error-check: sin ella no hay forma de
@@ -1868,6 +1924,13 @@ async function procesarEstudioAsync(args: {
     const errorMsg = err instanceof Error ? err.message : 'Error desconocido del proveedor';
     const errorCode = err instanceof AppError ? err.errorCode : null;
 
+    // Gate 8.4 (autorizacion previa) — se evalúa ANTES que las heurísticas de
+    // proveedor. El buró no llegó a llamarse: etiquetarlo como "Error de
+    // proveedor" y sugerir reintentar ocultaba el único evento que este módulo
+    // tiene que registrar bien (p. ej. una revocación entre el lock y el fetch)
+    // y mandaba al gestor a un bucle de reintentos que vuelven a fallar.
+    const bloqueadoPorAutorizacion = errorCode === AUTORIZACION_PREVIA_ERROR_CODE;
+
     const lowerErr = errorMsg.toLowerCase();
     // DataCrédito lo señala con su propio errorCode; TransUnion solo con el
     // texto del mensaje, de ahí la mezcla de criterios.
@@ -1894,7 +1957,9 @@ async function procesarEstudioAsync(args: {
       || /http 5\d\d/.test(lowerErr)
       || lowerErr.includes('timeout');
 
-    const observaciones = apellidoNoCoincide
+    const observaciones = bloqueadoPorAutorizacion
+      ? errorMsg
+      : apellidoNoCoincide
       ? `${buroLabel} encontró la cédula, pero el PRIMER APELLIDO registrado no coincide con el que enviamos. El documento está bien: hay que corregir el apellido del solicitante para que sea igual al de la Registraduría (solo el primero, sin el segundo) y reintentar.`
       : documentoNoEncontrado
       ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos, o reintenta con el otro buró.`
@@ -1913,7 +1978,9 @@ async function procesarEstudioAsync(args: {
 
     logAudit({
       usuarioId: userId,
-      accion: AUDIT_ACTIONS.ESTUDIO_PROVIDER_FAILED,
+      accion: bloqueadoPorAutorizacion
+        ? AUDIT_ACTIONS.ESTUDIO_AUTORIZACION_BLOQUEADA
+        : AUDIT_ACTIONS.ESTUDIO_PROVIDER_FAILED,
       entidad: AUDIT_ENTITIES.ESTUDIO,
       entidadId: estudioId,
       detalle: {
@@ -1929,8 +1996,10 @@ async function procesarEstudioAsync(args: {
     });
 
     logger.error(
-      { estudioId, provider: proveedor, error: errorMsg, documentoNoEncontrado },
-      'procesarEstudioAsync: provider falló — estudio marcado como fallido',
+      { estudioId, provider: proveedor, error: errorMsg, documentoNoEncontrado, bloqueadoPorAutorizacion },
+      bloqueadoPorAutorizacion
+        ? 'procesarEstudioAsync: gate 8.4 bloqueó la consulta al buró — estudio marcado como fallido (NO es un fallo del proveedor)'
+        : 'procesarEstudioAsync: provider falló — estudio marcado como fallido',
     );
   }
 }

@@ -507,10 +507,17 @@ export async function onPagoConfirmado(params: {
       // Idempotencia: solo auto-enviar si NO existe ya una autorización pendiente o
       // firmada para el expediente. Evita que un doble webhook de pago (dos eventos
       // Stripe distintos del mismo pago) genere dos links y dos WhatsApp.
+      // Mismo predicado que enviarEnlaceAutorizacion y que el gate 8.4: solo
+      // el TITULAR (`coarrendatario_id IS NULL`, porque el co-arrendatario
+      // invitado tiene su propia fila con el mismo expediente_id) y solo si la
+      // firma sigue VIGENTE — si caducó hay que volver a pedirla, no omitir el
+      // envío.
       const { data: autExistente } = (await db('autorizaciones_habeas_data')
         .select('id, estado')
         .eq('expediente_id', expedienteId)
+        .is('coarrendatario_id', null)
         .in('estado', ['pendiente', 'autorizado'])
+        .or(`vigente_hasta.is.null,vigente_hasta.gt.${new Date().toISOString()}`)
         .limit(1)
         .maybeSingle()) as { data: { id: string; estado: string } | null };
 

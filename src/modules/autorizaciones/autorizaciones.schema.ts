@@ -69,6 +69,13 @@ export const revocarSchema = z.object({
   motivo: z.string()
     .min(10, 'El motivo debe tener al menos 10 caracteres')
     .max(1000, 'El motivo no debe exceder 1000 caracteres'),
+  // Sujeto a revocar. Sin este campo se revoca la del TITULAR (comportamiento
+  // historico). Con el, la del co-arrendatario invitado indicado: desde
+  // 2026-09-03 el co-arrendatario tiene su propia autorizacion habeas data y
+  // sin esta via no tendria forma de ejercer su derecho de revocacion
+  // (Ley 1581 de 2012, art. 8), porque la fila del titular y la suya comparten
+  // expediente_id.
+  coarrendatario_id: z.uuid({ error: 'ID de co-arrendatario invalido' }).optional(),
 });
 
 // ============================================================

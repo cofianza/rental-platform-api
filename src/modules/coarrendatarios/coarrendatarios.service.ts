@@ -20,6 +20,10 @@ import {
   notificarResponsableExpediente,
 } from '../notificaciones/notificaciones.service';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import {
+  TEXTO_LEGAL_COARRENDATARIO,
+  VERSION_TERMINOS_COARRENDATARIO,
+} from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
 import type {
   InvitarCoarrendatarioInput,
@@ -527,6 +531,14 @@ export interface CoarrendatarioPublicView {
     titular_nombre: string;
   };
   expira_en: string;
+  /**
+   * Texto integro de la autorizacion que el invitado va a aceptar, con su
+   * version. Flujo 8.4: "el texto de la autorizacion debe estar visible en la
+   * pantalla, no oculto tras un enlace". Es exactamente el mismo texto que se
+   * congela en autorizaciones_habeas_data.texto_autorizado al aceptar.
+   */
+  texto_legal: string;
+  version_terminos: string;
 }
 
 export async function getPublicByToken(token: string): Promise<CoarrendatarioPublicView> {
@@ -569,6 +581,8 @@ export async function getPublicByToken(token: string): Promise<CoarrendatarioPub
       titular_nombre: ctx.solicitante_nombre || 'El solicitante',
     },
     expira_en: coa.token_expiracion,
+    texto_legal: TEXTO_LEGAL_COARRENDATARIO,
+    version_terminos: VERSION_TERMINOS_COARRENDATARIO,
   };
 }
 
@@ -599,7 +613,10 @@ export async function aceptarInvitacion(
     throw AppError.notFound('Invitación no encontrada', 'COARRENDATARIO_NOT_FOUND');
   }
 
-  const coa = coaRow as unknown as Coarrendatario & { token_expiracion: string };
+  const coa = coaRow as unknown as Coarrendatario & {
+    token_expiracion: string;
+    invitado_por: string | null;
+  };
 
   if (new Date(coa.token_expiracion) < new Date()) {
     throw AppError.badRequest('Esta invitación ya expiró', 'TOKEN_EXPIRED');
@@ -607,8 +624,13 @@ export async function aceptarInvitacion(
 
   if (coa.estado !== 'pendiente_aceptacion') {
     throw AppError.badRequest(
-      `Esta invitación ya fue procesada (estado: ${coa.estado})`,
+      'Esta invitación ya fue procesada',
       'COARRENDATARIO_YA_PROCESADA',
+      // El estado va en `details`, no en el mensaje: el mensaje se pinta tal
+      // cual en la pantalla pública del invitado y uno de los valores del enum
+      // es 'rechazado_invitacion' — la palabra que el §13 del flujo prohíbe
+      // mostrarle al prospecto, además del enum interno a la vista.
+      { estado: coa.estado },
     );
   }
 
@@ -639,6 +661,99 @@ export async function aceptarInvitacion(
     // Otra request ya ganó la carrera y procesó la invitación.
     throw AppError.badRequest('Esta invitación ya fue procesada', 'COARRENDATARIO_YA_PROCESADA');
   }
+
+  // 2b. Autorización habeas data PROPIA del co-arrendatario.
+  //
+  //     El flujo 8.4 exige autorización previa, expresa e informada de la
+  //     persona que se va a consultar, y demostrable: fecha/hora, IP,
+  //     dispositivo, texto íntegro con su versión y documento de quien aceptó.
+  //     El invitado es otro titular de datos: la firma del titular del
+  //     expediente NO lo cubre. Hasta 2026-09-03 aquí solo se guardaban
+  //     aceptado_ip / aceptado_user_agent en expediente_coarrendatarios y el
+  //     buró se consultaba 40 líneas más abajo sin ninguna evidencia.
+  //
+  //     canal='web': el invitado acepta el texto en la propia pantalla, no a
+  //     través de un enlace de autorización firmado con OTP.
+  //     El documento se congela NORMALIZADO (sin espacios en los extremos):
+  //     es lo que la columna admite y lo que el gate compara, y un documento
+  //     con espacios haría fallar el INSERT dejando la invitación consumida.
+  const documentoAceptante = (coa.numero_documento ?? '').trim() || null;
+
+  const hashAutorizacion = crypto
+    .createHash('sha256')
+    .update(
+      [
+        TEXTO_LEGAL_COARRENDATARIO,
+        'invitacion_coarrendatario',
+        coa.numero_documento,
+        ip,
+        userAgent ?? '',
+        aceptadoAt,
+      ].join('|'),
+    )
+    .digest('hex');
+
+  const vigenteHasta = new Date(aceptadoAt);
+  vigenteHasta.setMonth(vigenteHasta.getMonth() + env.AUTORIZACION_VIGENCIA_MESES);
+
+  const { data: autorizacionRow, error: autErr } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      solicitante_id: null,
+      coarrendatario_id: coa.id,
+      expediente_id: coa.expediente_id,
+      canal: 'web',
+      estado: 'autorizado',
+      generado_por: coa.invitado_por ?? null,
+      texto_autorizado: TEXTO_LEGAL_COARRENDATARIO,
+      version_terminos: VERSION_TERMINOS_COARRENDATARIO,
+      autorizado_en: aceptadoAt,
+      ip_autorizacion: ip.slice(0, 45),
+      user_agent: userAgent?.slice(0, 1000) ?? null,
+      numero_documento_aceptante: documentoAceptante,
+      tipo_documento_aceptante: coa.tipo_documento,
+      hash_documento: hashAutorizacion,
+      vigencia_meses: env.AUTORIZACION_VIGENCIA_MESES,
+      vigente_hasta: vigenteHasta.toISOString(),
+    } as never)
+    .select('id')
+    .single();
+
+  if (autErr || !autorizacionRow) {
+    logger.error(
+      { error: autErr?.message, coarrendatarioId: coa.id },
+      'No se pudo registrar la autorización habeas data del co-arrendatario',
+    );
+    // REVERTIR EL CLAIM. El claim de arriba ya marcó la invitación 'aceptado';
+    // si nos vamos con un 500 sin deshacerlo, la invitación queda consumida sin
+    // autorización y sin estudio, y no hay salida: el invitado reintenta y ve
+    // COARRENDATARIO_YA_PROCESADA, el gestor no puede reenviar (exige
+    // 'pendiente_aceptacion') ni invitar a otro (índice único por expediente).
+    const { error: revertErr } = await (supabase
+      .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        estado: 'pendiente_aceptacion',
+        aceptado_at: null,
+        aceptado_ip: null,
+        aceptado_user_agent: null,
+        updated_at: new Date().toISOString(),
+      } as never)
+      .eq('id', coa.id)
+      .eq('estado', 'aceptado');
+    if (revertErr) {
+      logger.error(
+        { error: revertErr.message, coarrendatarioId: coa.id },
+        'No se pudo revertir la aceptación del co-arrendatario — la invitación queda consumida sin autorización (requiere intervención manual)',
+      );
+    }
+    throw new AppError(
+      500,
+      'AUTORIZACION_CREATE_ERROR',
+      'No se pudo registrar tu autorización de tratamiento de datos. Intenta de nuevo.',
+    );
+  }
+
+  const autorizacionId = (autorizacionRow as { id: string }).id;
 
   // 3. Crear el estudio del co-arrendatario. Reusamos la tabla `estudios` con
   //    tipo='con_coarrendatario' como marca semántica. Los datos_formulario
@@ -683,7 +798,9 @@ export async function aceptarInvitacion(
         telefono: coa.telefono ?? '',
         acepta_terminos: true,
       },
-      autorizacion_habeas_data_id: null,
+      // Evidencia 8.4: el estudio queda atado a la autorizacion del propio
+      // co-arrendatario (antes se escribia null explicito).
+      autorizacion_habeas_data_id: autorizacionId,
     } as never)
     .select('id')
     .single();
@@ -1251,8 +1368,13 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
 
   if (coa.estado !== 'pendiente_aceptacion') {
     throw AppError.badRequest(
-      `Esta invitación ya fue procesada (estado: ${coa.estado})`,
+      'Esta invitación ya fue procesada',
       'COARRENDATARIO_YA_PROCESADA',
+      // El estado va en `details`, no en el mensaje: el mensaje se pinta tal
+      // cual en la pantalla pública del invitado y uno de los valores del enum
+      // es 'rechazado_invitacion' — la palabra que el §13 del flujo prohíbe
+      // mostrarle al prospecto, además del enum interno a la vista.
+      { estado: coa.estado },
     );
   }
 

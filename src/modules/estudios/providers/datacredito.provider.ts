@@ -22,6 +22,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { env } from '@/config/env';
+import { DATACREDITO_TIMEOUT_MS } from './timeouts';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { withRetry } from './retry';
@@ -81,7 +82,22 @@ const RESPONSE_CODES: Record<string, { mensaje: string; exito?: boolean; reinten
 const TOKEN_TTL_FALLBACK_S = 600;
 // Margen para no usar un token que expira mientras viaja la peticion.
 const TOKEN_SAFETY_MARGIN_MS = 30_000;
-const REQUEST_TIMEOUT_MS = 60_000;
+// Timeout por llamada HTTP. Politica de Evaluacion y Score V4.1, seccion 14:
+// 8 s por API, configurado en la capa de integracion. Antes eran 60 s fijos, y
+// DataCredito los aplicaba DOS veces por intento (token + consulta), asi que un
+// solo intento podia costar 120 s contra un SLA de 40 s.
+// El valor efectivo (y su override DATACREDITO_REQUEST_TIMEOUT_MS) se resuelve
+// en providers/timeouts.ts.
+const requestTimeoutMs = () => DATACREDITO_TIMEOUT_MS;
+
+// Llamadas HTTP que puede emitir UN intento, en el PEOR caso. No son dos:
+// `executeConsulta` hace obtenerToken -> postConsulta y, si el servicio
+// responde 401/403 (PROVIDER_TOKEN_REJECTED), repite obtenerToken(true) ->
+// postConsulta. Son CUATRO. Modelarlo como 2 hacia que el guard de deadline
+// autorizara un reintento que no cabia: medido contra el withRetry real, el
+// peor caso llegaba a 55 s con un SLA de 40 s. Con 4, el guard solo deja
+// reintentar si el primer intento tardo menos de ~7 s.
+const LLAMADAS_POR_INTENTO = 4;
 
 // ── Respuesta del servicio ──────────────────────────────────
 // Todo opcional a proposito: nunca hemos visto un payload real con
@@ -419,16 +435,35 @@ export class DatacreditoProvider implements CreditRiskProvider {
       () => this.executeConsulta(body),
       'DataCredito consultarHDCPlus',
       {
-        maxAttempts: 3,
-        baseDelayMs: 2000,
-        maxDelayMs: 10000,
+        // Aritmetica del SLA de 40 s con timeout de 8 s por llamada. Un intento
+        // son hasta CUATRO llamadas (token + consulta, y otra vez ambas si el
+        // servicio rechaza el token) = 32 s, asi que ya con 2 intentos el peor
+        // caso teorico (32 + 1 + 32) se pasa del SLA. Por eso `attemptBudgetMs`
+        // vale 4 llamadas: el guard de `deadlineMs` en withRetry solo autoriza
+        // el segundo intento si el primero tardo poco (<= ~7 s), y el peor caso
+        // real queda en ~32 s con margen para el parseo y la persistencia.
+        //
+        // OJO: `deadlineMs` se evalua ENTRE intentos, nunca dentro de
+        // executeConsulta. La cota de un intento la da el timeout por llamada.
+        maxAttempts: 2,
+        baseDelayMs: 1000,
+        maxDelayMs: 4000,
         backoffFactor: 2,
+        deadlineMs: env.BURO_SLA_TOTAL_MS,
+        attemptBudgetMs: env.BURO_REQUEST_TIMEOUT_MS * LLAMADAS_POR_INTENTO,
         // Solo transitorios del proveedor. Los errores de entrada (documento
         // invalido, apellido que no coincide) y los de credenciales no se
         // reintentan: darian el mismo resultado y cada intento puede facturarse.
+        //
+        // PROVIDER_TOKEN_TIMEOUT si se reintenta: el endpoint OAuth no factura
+        // nada y es idempotente (el propio codigo lo llama "el health check mas
+        // barato"). La razon para NO reintentar PROVIDER_TIMEOUT — que el abort
+        // es local y el buro pudo procesar y facturar — no aplica ahi, y sin
+        // esta distincion un pico de 8 s del servidor de Okta mataba el estudio
+        // sin que DataCredito llegara a recibir una sola consulta.
         shouldRetry: (error) =>
           error instanceof AppError
-            ? error.errorCode === 'PROVIDER_UNAVAILABLE'
+            ? error.errorCode === 'PROVIDER_UNAVAILABLE' || error.errorCode === 'PROVIDER_TOKEN_TIMEOUT'
             : true,
       },
     );
@@ -576,7 +611,8 @@ export class DatacreditoProvider implements CreditRiskProvider {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutMs = requestTimeoutMs();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const res = await fetch(`${baseUrl()}/spla/oauth2/v1/token`, {
@@ -625,9 +661,11 @@ export class DatacreditoProvider implements CreditRiskProvider {
       return json.access_token;
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
+        // Codigo propio, distinto del de la consulta: este timeout SI es
+        // reintentable (ver shouldRetry).
         throw AppError.badRequest(
-          `DataCredito: timeout de ${REQUEST_TIMEOUT_MS / 1000}s al obtener el token`,
-          'PROVIDER_TIMEOUT',
+          `DataCredito: timeout de ${timeoutMs / 1000}s al obtener el token (limite de la politica, seccion 14)`,
+          'PROVIDER_TOKEN_TIMEOUT',
         );
       }
       throw error;
@@ -660,7 +698,8 @@ export class DatacreditoProvider implements CreditRiskProvider {
   ): Promise<DcSuccessResponse | DcErrorEnvelope> {
     const creds = assertCredentials();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutMs = requestTimeoutMs();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const headers: Record<string, string> = {
@@ -703,7 +742,7 @@ export class DatacreditoProvider implements CreditRiskProvider {
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         throw AppError.badRequest(
-          `DataCredito: timeout de ${REQUEST_TIMEOUT_MS / 1000}s excedido`,
+          `DataCredito: timeout de ${timeoutMs / 1000}s excedido (limite de la politica, seccion 14)`,
           'PROVIDER_TIMEOUT',
         );
       }

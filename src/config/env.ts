@@ -61,6 +61,39 @@ const envSchema = z.object({
   // Credit risk providers
   CREDIT_PROVIDER_USE_MOCK: z.string().default('true').transform((v) => v === 'true'),
 
+  // ── Presupuesto de tiempo de las consultas a buro ──────────────────────
+  // Politica de Evaluacion y Score V4.1, seccion 14: "El tiempo de espera
+  // maximo por respuesta de cada API antes de considerar falla es de 8
+  // segundos. [...] El timeout debe configurarse en la capa de integracion,
+  // no en el motor de scoring." Y el SLA de decision automatica es < 40 s.
+  //
+  // BURO_REQUEST_TIMEOUT_MS se aplica a CADA llamada HTTP (TransUnion
+  // consultarCombo, DataCredito token y DataCredito hdcplus).
+  // BURO_SLA_TOTAL_MS es el presupuesto total de withRetry: si un reintento
+  // no cabe dentro de el, no se intenta (mejor fallar dentro del SLA que
+  // devolver tarde).
+  //
+  // BURO_REQUEST_TIMEOUT_MS es el valor de la POLITICA y el default de ambos
+  // proveedores. No se aplica como una unica variable global: cada buro tiene
+  // su propia override, porque mitigar uno lento subiendo la global rompia el
+  // cumplimiento del otro y desactivaba todos los reintentos (ver
+  // src/modules/estudios/providers/timeouts.ts, que resuelve el valor final).
+  BURO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  BURO_SLA_TOTAL_MS: z.coerce.number().int().positive().default(40000),
+
+  // Overrides por proveedor. Sin valor, cada uno resuelve su default en
+  // timeouts.ts: 8000 (politica) salvo que la URL configurada siga apuntando al
+  // ambiente UAT del buro, donde el corte de 8 s no mide una falla real.
+  TRANSUNION_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  DATACREDITO_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+
+  // Vigencia de la autorizacion habeas data firmada, en meses. Se congela en
+  // la fila al firmar (vigente_hasta = autorizado_en + N meses); cambiarla NO
+  // reescribe las autorizaciones ya firmadas. Las 8 autorizaciones anteriores
+  // al 2026-09-03 quedan con vigente_hasta NULL = sin vigencia declarada =
+  // vigentes, para no invalidar retroactivamente estudios historicos.
+  AUTORIZACION_VIGENCIA_MESES: z.coerce.number().int().positive().max(120).default(12),
+
   // TransUnion Colombia (Basic Auth — Combo CreditVision + Info Comercial 1901)
   TRANSUNION_API_URL: z.string().url().default('https://tucoapplicationserviceuat.transunion.co/ws/v1/rest/consultarCombo'),
   TRANSUNION_USERNAME: z.string().optional(),

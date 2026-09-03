@@ -9,6 +9,7 @@ import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { env } from '@/config';
 import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
+import { TEXTO_LEGAL, VERSION_TERMINOS } from './autorizaciones.texto';
 
 // ============================================================
 // Constants
@@ -17,42 +18,6 @@ import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
 const TOKEN_EXPIRY_HOURS = 48;
 const OTP_EXPIRY_MINUTES = 5;
 const OTP_COOLDOWN_SECONDS = 60;
-const VERSION_TERMINOS = '2.0';
-
-const TEXTO_LEGAL = `AUTORIZACIÓN PARA EL TRATAMIENTO DE DATOS PERSONALES
-
-1. Responsable del tratamiento
-COFIANZA S.A.S., NIT 902.038.122, domicilio en Itagüí, Antioquia, Colombia. Canal de atención: hola@cofianza.co · Sitio web: www.cofianza.co · Oficial de protección de datos: datospersonales@cofianza.co
-
-2. Naturaleza y alcance
-Al validar el código OTP enviado a mi celular o correo, autorizo de manera libre, previa, expresa, informada e inequívoca a COFIANZA S.A.S. y a sus encargados (proveedores tecnológicos, operadores de centrales de riesgo, firmas de cobranza, abogados y terceros necesarios) a recolectar, almacenar, usar, consultar, verificar, actualizar, circular, compartir, transmitir, transferir, suprimir y tratar mis datos personales conforme a las finalidades aquí descritas. La validación OTP constituye firma electrónica (Ley 527/1999 y Decreto 2364/2012) con la misma validez que la firma manuscrita. Se conservará como prueba: código OTP, canal, IP, fecha/hora, dispositivo y documento autorizado.
-
-3. Marco normativo
-- Ley 1266 de 2008 — Habeas Data Financiero.
-- Ley 1581 de 2012 — Protección de Datos Personales.
-- Decreto 1377 de 2013 — requisitos de la autorización.
-- Ley 527 de 1999 y Decreto 2364 de 2012 — firma electrónica.
-- Circular Externa 005 de 2017 SIC — datos en cobranza.
-
-4. Datos objeto de tratamiento
-Identificación, contacto, financieros y crediticios (historial, score, obligaciones, cuentas, ingresos), comerciales (contratos, inmuebles, cánones, comisiones), del servicio de fianza (modalidad, siniestros, cobranza, pagos) y técnicos (IP, metadatos, logs, firma electrónica). No se recolectan datos sensibles ni de menores; el servicio es solo para mayores de 18 años.
-
-5.1. Finalidades obligatorias
-- Evaluar perfil de riesgo y capacidad de pago para aprobar o rechazar la fianza.
-- Administrar la relación contractual y el servicio de fianza.
-- Consultar, verificar, reportar y actualizar información ante centrales de riesgo (Datacrédito Experian, TransUnion), Ley 1266.
-- Contacto, notificación, requerimiento y cobranza por cualquier medio (llamada, WhatsApp, correo, SMS, voz).
-- Compartir o transferir información con encargados necesarios para la operación.
-- Prevenir fraude y suplantación conforme a SARLAFT.
-- Cumplir obligaciones legales, regulatorias y requerimientos de autoridades.
-- Construir y administrar bases de datos de comportamiento de pago en arrendamientos, para actuar como fuente y eventualmente operador de información (Art. 3, Ley 1266): recopilar historial, compartirlo con usuarios autorizados por la ley o por el titular, permitir consulta de terceros con interés legítimo, y generar calificaciones e indicadores de riesgo.
-- Análisis mediante scoring automatizado, con derecho del titular a revisión humana de decisiones que le afecten significativamente.
-
-5.2. Finalidades opcionales
-No son necesarias para el servicio y su no autorización no condiciona el acceso. Se gestionan en el paso "Beneficios": (i) analítica avanzada, segmentación y perfilamiento comercial; (ii) comunicaciones comerciales, ofertas y mercadeo; (iii) compartir el historial de buen pago como referencia ante terceros del ecosistema.
-
-6. Reporte a centrales de riesgo (Ley 1266)
-En caso de mora, la información podrá reportarse negativamente con aviso previo de 20 días calendario (Art. 12). Permanencia del dato negativo: máximo el doble de la mora, sin exceder 4 años desde el pago o exigibilidad.`;
 
 // ============================================================
 // Helper types
@@ -140,14 +105,22 @@ export async function getAutorizacionForExpediente(
     throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
-  // Get latest autorizacion for this expediente. Incluye los consentimientos
-  // opcionales que el solicitante eligió y la evidencia completa de la firma
-  // (IP, dispositivo, versión y texto literal firmado) — el panel admin los
-  // muestra como soporte legal de la autorización.
+  // Get latest autorizacion DEL TITULAR para este expediente. Incluye los
+  // consentimientos opcionales que el solicitante eligió y la evidencia
+  // completa de la firma (IP, dispositivo, versión y texto literal firmado) —
+  // el panel admin los muestra como soporte legal de la autorización.
+  //
+  // `coarrendatario_id IS NULL` NO es opcional: desde 2026-09-03 el
+  // co-arrendatario invitado tiene su PROPIA fila con el MISMO expediente_id, y
+  // como se inserta después, era la que devolvía el `order by created_at desc`.
+  // El panel habría mostrado la IP, el dispositivo y el texto de OTRO titular
+  // de datos como si fueran los del solicitante: exactamente la evidencia que
+  // el 8.4 exige poder demostrar si alguna vez se cuestiona.
   const { data: autorizacion } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, canal, metodo_firma, autorizado_en, hash_documento, fecha_revocacion, motivo_revocacion, token_expiracion, created_at, consent_analitica, consent_comercial, consent_historial_referencia, ip_autorizacion, user_agent, version_terminos, texto_autorizado')
+    .select('id, estado, canal, metodo_firma, autorizado_en, hash_documento, fecha_revocacion, motivo_revocacion, token_expiracion, created_at, consent_analitica, consent_comercial, consent_historial_referencia, ip_autorizacion, user_agent, version_terminos, texto_autorizado, numero_documento_aceptante, tipo_documento_aceptante, vigente_hasta')
     .eq('expediente_id', expedienteId)
+    .is('coarrendatario_id', null)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -232,16 +205,29 @@ export async function enviarEnlaceAutorizacion(
     throw AppError.badRequest('El solicitante no tiene email registrado', 'SOLICITANTE_SIN_EMAIL');
   }
 
-  // 1b. No re-crear un enlace si el inquilino YA firmó (estado autorizado, no revocado).
-  // Un nuevo enlace pendiente podría re-firmarse y re-disparar el estudio de crédito.
-  // Esto hace idempotente el auto-envío del orquestador (doble webhook de pago) y evita
-  // pisar una firma existente desde el botón manual. Para repetir, revocar primero.
+  // 1b. No re-crear un enlace si el inquilino YA firmó (estado autorizado, no
+  // revocado Y VIGENTE). Un nuevo enlace pendiente podría re-firmarse y
+  // re-disparar el estudio de crédito. Esto hace idempotente el auto-envío del
+  // orquestador (doble webhook de pago) y evita pisar una firma existente desde
+  // el botón manual.
+  //
+  // El predicado tiene que ser el MISMO que el del gate (fn_autorizacion_es_vigente
+  // / evaluarAutorizacionPrevia), o las dos capas se contradicen:
+  //   - sin `vigente_hasta`: una autorización caducada — que el gate rechaza con
+  //     "envíe una nueva solicitud" — bloqueaba justo esa nueva solicitud, y la
+  //     única salida era revocar, es decir fabricar en la evidencia legal una
+  //     revocación del titular que nunca ocurrió.
+  //   - sin `coarrendatario_id IS NULL`: la fila del co-arrendatario (mismo
+  //     expediente_id) bloqueaba el enlace del titular de inmediato.
   const { data: yaAutorizada } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select('id')
     .eq('expediente_id', expedienteId)
+    .is('coarrendatario_id', null)
     .eq('estado', 'autorizado')
     .is('fecha_revocacion', null)
+    .or(`vigente_hasta.is.null,vigente_hasta.gt.${new Date().toISOString()}`)
+    .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
 
@@ -252,11 +238,13 @@ export async function enviarEnlaceAutorizacion(
     );
   }
 
-  // 2. Invalidate any existing pending autorizacion for this expediente
+  // 2. Invalidate any existing pending autorizacion DEL TITULAR for this
+  //    expediente (mismo filtro de sujeto que el resto del módulo).
   await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .update({ estado: 'expirado' } as never)
     .eq('expediente_id', expedienteId)
+    .is('coarrendatario_id', null)
     .eq('estado', 'pendiente');
 
   // 3. Generate secure token
@@ -437,7 +425,7 @@ export async function firmarAutorizacion(
   // 1. Get autorizacion and validate
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_expiracion, texto_autorizado, solicitante_id, expediente_id')
+    .select('id, estado, token_expiracion, texto_autorizado, solicitante_id, expediente_id, solicitantes(tipo_documento, numero_documento)')
     .eq('token', token)
     .maybeSingle();
 
@@ -450,7 +438,10 @@ export async function firmarAutorizacion(
     throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 
-  const auth = autorizacion as unknown as AutorizacionRow & { expediente_id?: string };
+  const auth = autorizacion as unknown as AutorizacionRow & {
+    expediente_id?: string;
+    solicitantes?: { tipo_documento: string | null; numero_documento: string | null } | null;
+  };
 
   if (auth.estado !== 'pendiente') {
     // Diferenciar: 'autorizado' = ya firmada (el front puede mostrar éxito
@@ -508,6 +499,27 @@ export async function firmarAutorizacion(
 
   const hashDocumento = crypto.createHash('sha256').update(hashContent).digest('hex');
 
+  // 3b. Congelar el documento del aceptante (flujo 8.4: "el numero de
+  // documento de quien acepto"). Se toma un SNAPSHOT de `solicitantes` en el
+  // instante de la aceptacion y se guarda en la propia fila: el campo de
+  // `solicitantes` es editable por el gestor y el backend lo reescribe tras
+  // cada ejecucion (sincronizarDocumentoSolicitante), asi que leerlo por FK
+  // mas tarde no prueba a quien se le pidio la autorizacion.
+  const numeroDocumentoAceptante = auth.solicitantes?.numero_documento?.trim() || null;
+  const tipoDocumentoAceptante = auth.solicitantes?.tipo_documento?.trim().toLowerCase() || null;
+  if (!numeroDocumentoAceptante) {
+    logger.warn(
+      { autorizacionId: auth.id, solicitanteId: auth.solicitante_id },
+      'firmarAutorizacion: el solicitante no tiene numero_documento — la evidencia queda sin documento del aceptante',
+    );
+  }
+
+  // 3c. Vigencia congelada. Se calcula una sola vez, aqui, para que un cambio
+  // de politica no reescriba evidencia pasada.
+  const autorizadoEn = new Date();
+  const vigenteHasta = new Date(autorizadoEn);
+  vigenteHasta.setMonth(vigenteHasta.getMonth() + env.AUTORIZACION_VIGENCIA_MESES);
+
   // 4. Update autorizacion to autorizado.
   // Idempotencia / anti doble-firma: el UPDATE incluye `.eq('estado','pendiente')`,
   // así la transición es atómica. Si dos POST /firmar entran concurrentes, solo uno
@@ -520,9 +532,14 @@ export async function firmarAutorizacion(
       metodo_firma: input.metodo_firma,
       datos_firma: input.datos_firma || null,
       hash_documento: hashDocumento,
-      autorizado_en: new Date().toISOString(),
+      autorizado_en: autorizadoEn.toISOString(),
       ip_autorizacion: ip || null,
       user_agent: userAgent || null,
+      // Evidencia del 8.4 que faltaba: documento del aceptante congelado.
+      numero_documento_aceptante: numeroDocumentoAceptante,
+      tipo_documento_aceptante: tipoDocumentoAceptante,
+      vigencia_meses: env.AUTORIZACION_VIGENCIA_MESES,
+      vigente_hasta: vigenteHasta.toISOString(),
       // Consentimientos opcionales (Paso 2). No condicionan el servicio.
       consent_analitica: input.consentimientos_opcionales?.analitica ?? false,
       consent_comercial: input.consentimientos_opcionales?.comercial ?? false,
@@ -584,7 +601,7 @@ export async function firmarAutorizacion(
   return {
     estado: 'autorizado',
     hash_documento: hashDocumento,
-    autorizado_en: new Date().toISOString(),
+    autorizado_en: autorizadoEn.toISOString(),
   };
 }
 
@@ -821,19 +838,40 @@ export async function revocarAutorizacion(
   // la evidencia legal de la firma, así que gateamos ANTES de buscar/mutar.
   await assertExpedienteAccess(expedienteId, userId, userRol);
 
-  // 1. Find active autorizacion for this expediente
-  const { data: autorizacion, error } = await (supabase
+  // 1. Find active autorizacion DEL TITULAR for this expediente.
+  //
+  //    `coarrendatario_id IS NULL` + ORDER BY determinista: desde 2026-09-03 un
+  //    expediente puede tener DOS filas 'autorizado' (titular y co-arrendatario
+  //    invitado). Sin filtrar por sujeto, Postgres podía devolver la del
+  //    co-arrendatario: la API respondía 200 'revocado' al titular, revocaba a
+  //    quien no lo pidió y dejaba viva la firma del titular — que el gate seguía
+  //    aceptando, así que el buró se podía volver a consultar sobre alguien que
+  //    acababa de revocar. Y el trigger de la migración hace la revocación
+  //    irreversible. El gate (autorizacion.guard.ts) ya resuelve el sujeto antes
+  //    de consultar; aquí se hace igual.
+  //
+  //    `input.coarrendatario_id` selecciona el otro sujeto: es la única vía por
+  //    la que se puede revocar la autorización del co-arrendatario invitado
+  //    (Ley 1581 de 2012, art. 8) sin tocar la del titular.
+  const base = (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado')
     .eq('expediente_id', expedienteId)
     .eq('estado', 'autorizado')
     .is('fecha_revocacion', null)
-    .limit(1)
-    .maybeSingle();
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  const { data: autorizacion, error } = await (input.coarrendatario_id
+    ? base.eq('coarrendatario_id', input.coarrendatario_id)
+    : base.is('coarrendatario_id', null)
+  ).maybeSingle();
 
   if (error || !autorizacion) {
     throw AppError.notFound(
-      'No se encontro autorizacion activa para este expediente',
+      input.coarrendatario_id
+        ? 'No se encontro autorizacion activa de ese co-arrendatario en este expediente'
+        : 'No se encontro autorizacion activa para este expediente',
       'AUTORIZACION_NOT_FOUND',
     );
   }
@@ -864,6 +902,8 @@ export async function revocarAutorizacion(
     detalle: {
       expediente_id: expedienteId,
       motivo: input.motivo,
+      sujeto: input.coarrendatario_id ? 'coarrendatario' : 'solicitante',
+      ...(input.coarrendatario_id ? { coarrendatario_id: input.coarrendatario_id } : {}),
     },
     ip,
   });
