@@ -12,6 +12,12 @@ import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from 
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
+// Motor de scorecard V4.1 en MODO SOMBRA. Calcula y guarda en paralelo lo que
+// la politica de Gerencia HABRIA decidido; no participa de ninguna decision.
+// Es best-effort y no lanza: si se borrara este import y las tres llamadas de
+// abajo, los tres flujos (ejecucion normal, polling y registro manual)
+// terminarian con el mismo resultado, score y respuesta_proveedor de hoy.
+import { registrarScorecardSombra } from './motor/sombra.service';
 
 // ============================================================
 // Constants
@@ -1208,6 +1214,18 @@ export async function registrarResultado(
   // el coarrendatario). El registro MANUAL antes no lo hacía y el expediente
   // quedaba atascado en su estado previo sin llegar a condicionado/aprobado.
   void dispararHookPostResultado(estudioId, est.expediente_id, input.resultado, input.score ?? null);
+
+  // 7. Scorecard V4.1 en SOMBRA — no decide nada, solo mide. Va despues del
+  //    RPC y de su error-check a proposito: el resultado real ya esta
+  //    commiteado, asi que ni una excepcion ni un await lento pueden afectarlo.
+  //    Aqui no hay ni proveedor ni payload en scope (el select de arriba no los
+  //    trae): el motor los lee de la fila, y sale en silencio si no hay nada
+  //    que puntuar, que es el caso normal de un registro manual.
+  void registrarScorecardSombra({
+    estudioId,
+    expedienteId: est.expediente_id,
+    scorePersistido: input.score ?? null,
+  }).catch(() => undefined);
 
   return getEstudioById(estudioId);
 }
@@ -2607,6 +2625,17 @@ async function registrarResultadoInline(
   //     (ahora estamos cerrando el ciclo del par).
   // Fire-and-forget: el resultado del estudio ya quedó persistido vía RPC.
   void dispararHookPostResultado(estudioId, expedienteId, result.resultado, result.score);
+
+  // Scorecard V4.1 en SOMBRA — no decide nada, solo mide. Este es el mejor de
+  // los tres puntos de enganche: `result.datos_crudos` esta en memoria, asi
+  // que el motor no necesita releer respuesta_proveedor.
+  void registrarScorecardSombra({
+    estudioId,
+    expedienteId,
+    proveedor: proveedorId,
+    datosCrudos: result.datos_crudos,
+    scorePersistido: result.score,
+  }).catch(() => undefined);
 }
 
 // ============================================================
@@ -2722,6 +2751,18 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
     // llamaba al orchestrator, así que un estudio de coarrendatario completado
     // por polling resolvía mal el expediente (no ponderaba con el titular).
     void dispararHookPostResultado(estudioId, est.expediente_id, result.resultado, result.score);
+
+    // Scorecard V4.1 en SOMBRA — no decide nada, solo mide. Va despues del
+    // `if (rpcError)` a proposito: cuando dos pollings concurrentes pasan el
+    // guard con el mismo snapshot de `est`, el segundo muere en el RPC y asi
+    // no llega a calcular ni escribir nada.
+    void registrarScorecardSombra({
+      estudioId,
+      expedienteId: est.expediente_id,
+      proveedor: est.proveedor,
+      datosCrudos: result.datos_crudos,
+      scorePersistido: result.score,
+    }).catch(() => undefined);
 
     return {
       provider_status: statusResponse,
