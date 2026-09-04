@@ -7,11 +7,17 @@
 // parametro. Es lo que hace que el check de scripts/check-scorecard.ts pueda
 // recorrer cada frontera de cada banda sin levantar nada.
 //
-// MODO SOMBRA: nada de lo que sale de aqui decide un estudio. El resultado
-// operativo lo sigue registrando fn_registrar_resultado_estudio con el
-// scoreToResultado de cada provider. Este motor solo calcula lo que la
-// politica HABRIA dicho, para que Gerencia pueda medir el impacto antes de
-// mover un umbral.
+// CASI TODO SIGUE EN SOMBRA. El resultado operativo lo registra
+// fn_registrar_resultado_estudio con el scoreToResultado de cada provider, y
+// los puntajes y umbrales de aqui solo calculan lo que la politica HABRIA
+// dicho, para que Gerencia mida el impacto antes de mover un umbral.
+//
+// LA EXCEPCION (Gerencia, 2026-09-03): las reglas duras 'dti_mayor_65' (§4.2)
+// y 'canon_ingreso_mayor_40' (§4.3) que devuelven puntajeV2Dti y
+// puntajeV3CanonIngreso YA fuerzan el rechazo real. Cambiar V2_DTI_MAXIMO o
+// V3_CANON_INGRESO_MAXIMO ahora mueve produccion, no una medicion. El resto de
+// codigos de CodigoReglaDura se calculan y no deciden: la lista blanca esta en
+// src/modules/estudios/reglas-duras.ts.
 //
 // ------------------------------------------------------------
 // TRES ESTADOS, Y LA DIFERENCIA IMPORTA
@@ -227,7 +233,8 @@ export function puntajeV2Dti(dtiPct: number | null): ResultadoVariable {
 
 /**
  * Politica V4.1 §4.3 "Variable 3 — Relacion canon / ingreso" (10 pts).
- * Por encima del 40% es regla dura de rechazo.
+ * Por encima del 40% es regla dura de rechazo — ACTIVA: rechaza de verdad.
+ * Estrictamente mayor: 40.00% exacto NO rechaza (la tabla dice "> 40%").
  */
 export const TABLA_V3: readonly Banda[] = [
   { corte: 25, puntos: 10, etiqueta: '<= 25%' },

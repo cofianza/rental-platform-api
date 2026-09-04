@@ -11,6 +11,7 @@ import {
 } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
+import { motivoParaProspectoDesdeMotivoGestor } from '@/modules/estudios/reglas-duras';
 import type {
   CreateExpedienteInput,
   UpdateExpedienteInput,
@@ -268,6 +269,21 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
   // Mapear relaciones con nombres claros
   const raw = data as unknown as Record<string, unknown>;
   const { inmuebles, solicitantes, analista, creador, ...expediente } = raw;
+
+  // `motivo_rechazo` es un campo de GESTOR. Desde que las reglas duras V4.1
+  // deciden, el orquestador copia aqui el motivo con cifras (DTI, ingreso
+  // inferido, umbrales 65/40, version del modelo). El banner del prospecto no
+  // lo pinta, pero el JSON si le llega: el rol 'solicitante' abre su propio
+  // expediente y lo lee con DevTools. Politica §2 ("sin revelar los parametros
+  // internos del modelo") y §11. Se sustituye por el motivo general del flujo
+  // §10 cuando el rechazo fue por regla dura, y por null en cualquier otro caso
+  // (el texto generico tampoco es apto: §13 prohibe "rechazado" en sus
+  // pantallas). Misma decision, y mismo helper, que en estudios.service.ts.
+  if (userRol === 'solicitante') {
+    expediente.motivo_rechazo = motivoParaProspectoDesdeMotivoGestor(
+      (expediente.motivo_rechazo as string | null | undefined) ?? null,
+    );
+  }
 
   return {
     ...expediente,

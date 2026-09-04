@@ -12,12 +12,22 @@ import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from 
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
-// Motor de scorecard V4.1 en MODO SOMBRA. Calcula y guarda en paralelo lo que
-// la politica de Gerencia HABRIA decidido; no participa de ninguna decision.
-// Es best-effort y no lanza: si se borrara este import y las tres llamadas de
-// abajo, los tres flujos (ejecucion normal, polling y registro manual)
-// terminarian con el mismo resultado, score y respuesta_proveedor de hoy.
+// Motor de scorecard V4.1. Sigue en SOMBRA para todo el scorecard (puntajes,
+// umbrales 85/70, resto de reglas duras): calcula y guarda en paralelo lo que
+// la politica HABRIA decidido. registrarScorecardSombra es best-effort y no
+// lanza — borrarlo no cambiaria ningun resultado.
 import { registrarScorecardSombra } from './motor/sombra.service';
+// LA EXCEPCION, autorizada por Gerencia el 2026-09-03: las dos reglas duras
+// de la Politica V4.1 que YA deciden — DTI > 65% (§4.2) y canon/ingreso > 40%
+// (§4.3). resolverResultadoEstudio es el punto UNICO por el que pasan los tres
+// caminos que llaman a fn_registrar_resultado_estudio, y corre ANTES del RPC.
+// Tampoco lanza: ante cualquier fallo devuelve el resultado del proveedor.
+import {
+  resolverResultadoEstudio,
+  registrarReglaDuraActivada,
+  motivoParaProspectoDesdeMotivoGestor,
+} from './reglas-duras';
+import type { VeredictoReglasDuras } from './reglas-duras';
 import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './autorizacion.guard';
 // Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
 // de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
@@ -83,6 +93,53 @@ const BURO_LABELS: Record<string, string> = {
 const BUCKET_NAME = 'documentos-expedientes';
 
 // ============================================================
+// Separacion de audiencias en la RESPUESTA (Politica §2 y §11)
+// ============================================================
+
+/**
+ * `estudios.motivo_rechazo` y `estudios.observaciones` son campos de GESTOR.
+ * Desde que las reglas duras V4.1 deciden, `motivo_rechazo` no es texto libre:
+ * lleva deterministicamente el DTI real, el ingreso inferido, la cuota, los
+ * umbrales 65/40 y la version del modelo, y `observaciones` la misma nota en
+ * corto.
+ *
+ * Y ese JSON SI llega al prospecto: el rol 'solicitante' tiene expedientes:read
+ * y GET /expedientes/:id/estudios es exactamente lo que consulta su propia
+ * tarjeta en cada poll. Que ninguna pantalla suya lo pinte no protege nada —
+ * con DevTools, o con cualquier cliente HTTP y su propio token, lo lee. La
+ * Politica §2 ("sin revelar los parametros internos del modelo") y §11
+ * ("Cofianza no esta obligada a revelar los parametros internos del modelo ni
+ * los puntajes especificos por variable") lo prohiben.
+ *
+ * Por eso la separacion se hace aqui, en el servicio, junto al guard de tenant
+ * que ya corre — no en el render:
+ *   - `motivo_rechazo` -> el motivo GENERAL del Flujo §10 cuando el rechazo fue
+ *     por regla dura (asi la tarjeta del solicitante puede al fin decirle la
+ *     causa correcta), y null en cualquier otro caso.
+ *   - `observaciones`  -> null.
+ *
+ * No se toca nada para los demas roles: el gestor necesita el detalle.
+ */
+function redactarEstudioParaProspecto<T extends Record<string, unknown>>(row: T): T {
+  return {
+    ...row,
+    motivo_rechazo: motivoParaProspectoDesdeMotivoGestor(
+      (row.motivo_rechazo as string | null | undefined) ?? null,
+    ),
+    observaciones: null,
+  };
+}
+
+/** No-op salvo para el rol 'solicitante' (el prospecto mirando lo suyo). */
+function redactarEstudiosSegunRol<T extends Record<string, unknown>>(
+  rows: T[],
+  userRol?: string,
+): T[] {
+  if (userRol !== 'solicitante') return rows;
+  return rows.map(redactarEstudioParaProspecto);
+}
+
+// ============================================================
 // List estudios for expediente
 // ============================================================
 
@@ -141,7 +198,10 @@ export async function listEstudios(
   }
 
   return {
-    estudios: data || [],
+    estudios: redactarEstudiosSegunRol(
+      (data || []) as unknown as Record<string, unknown>[],
+      userRol,
+    ),
     pagination: {
       total,
       page,
@@ -266,7 +326,10 @@ export async function listAllEstudios(
   }
 
   return {
-    estudios: filteredData,
+    estudios: redactarEstudiosSegunRol(
+      filteredData as unknown as Record<string, unknown>[],
+      userRol,
+    ),
     pagination: {
       total: query.search ? filteredData.length : total,
       page,
@@ -386,6 +449,12 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
   // expedientes:read leía el estudio de OTRA agencia por UUID (IDOR). No-op para
   // roles internos y para llamadas internas sin identidad (userId/userRol undefined).
   await assertExpedienteAccess((data as { expediente_id: string }).expediente_id, userId, userRol);
+
+  // Mismo criterio que en los listados: al prospecto no le viajan ni el motivo
+  // con cifras ni las observaciones del gestor.
+  if (userRol === 'solicitante') {
+    return redactarEstudioParaProspecto(data as unknown as Record<string, unknown>);
+  }
 
   return data;
 }
@@ -1140,13 +1209,25 @@ export async function completarFormularioDesdeOnboarding(params: {
  * llamarla — antes divergían y la ruta manual no disparaba nada, dejando el
  * expediente atascado en su estado previo. Fire-and-forget y nunca lanza: el
  * resultado ya quedó persistido y no debe romper la respuesta HTTP.
+ *
+ * `veredicto` viaja EN MEMORIA a proposito. Los dos consumidores (orquestador y
+ * ponderación) necesitan saber si el rechazo fue por regla dura para no
+ * atribuirlo al score, y redescubrirlo releyendo `estudios.regla_dura_activada`
+ * los ataba a una migración pendiente: sin la columna, el SELECT falla y los
+ * textos vuelven a los genéricos — justo el mensaje contradictorio (score 773 +
+ * "no cumplió los requisitos") que la activación existía para eliminar. La
+ * columna queda como trazabilidad/analítica y como respaldo de los llamadores
+ * que no tienen el veredicto a mano.
  */
 async function dispararHookPostResultado(
   estudioId: string,
   expedienteId: string,
   resultado: string,
   score: number | null,
+  veredicto?: VeredictoReglasDuras,
 ): Promise<void> {
+  const reglasDuras = veredicto?.rechaza ? veredicto.reglas : [];
+  const motivoGestorReglaDura = veredicto?.rechaza ? veredicto.motivoGestor : null;
   try {
     const tipoRow = (await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -1156,14 +1237,24 @@ async function dispararHookPostResultado(
 
     if (tipoRow?.tipo === 'con_coarrendatario') {
       import('@/modules/coarrendatarios/coarrendatarios.service')
-        .then(({ onCoarrendatarioEstudioCompletado }) => onCoarrendatarioEstudioCompletado(estudioId))
+        .then(({ onCoarrendatarioEstudioCompletado }) =>
+          onCoarrendatarioEstudioCompletado(estudioId, { reglasDuras }),
+        )
         .catch((err) => logger.warn({ error: err, estudioId }, 'Hook ponderación coarrendatario falló'));
       return;
     }
 
     import('@/modules/orchestrator/orchestrator.service')
       .then(({ onEstudioCompletado }) =>
-        onEstudioCompletado({ estudioId, expedienteId, resultado, score, solicitanteId: '' }),
+        onEstudioCompletado({
+          estudioId,
+          expedienteId,
+          resultado,
+          score,
+          solicitanteId: '',
+          reglasDuras,
+          motivoGestorReglaDura,
+        }),
       )
       .catch((err) => logger.warn({ error: err, estudioId }, 'Orchestrator hook post-estudio falló'));
   } catch (err) {
@@ -1229,15 +1320,35 @@ export async function registrarResultado(
     }
   }
 
+  // 2.5. Reglas duras V4.1. Tercer y ultimo camino que llega al RPC, asi que
+  //      tambien pasa por el punto de decision: la Politica §3 no distingue si
+  //      el resultado lo trajo el buro o lo escribio un gestor.
+  //
+  //      En la practica es casi siempre un no-op: el registro manual solo
+  //      procede sobre estudios con resultado 'pendiente', que normalmente no
+  //      tienen `respuesta_proveedor`, y sin payload no hay ingreso inferido y
+  //      ninguna de las dos reglas es evaluable. Cuando SI hay payload (se
+  //      registra a mano un estudio cuyo buro ya respondio), la regla decide.
+  const decision = await resolverResultadoEstudio({
+    estudioId,
+    expedienteId: est.expediente_id,
+    resultadoPropuesto: input.resultado,
+    score: input.score ?? null,
+    observaciones: input.observaciones,
+    motivoRechazo: input.motivo_rechazo ?? null,
+  });
+
   // 3. Atomic RPC: update estudio + revert inmueble + insert timeline event
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
     p_estudio_id: estudioId,
-    p_resultado: input.resultado,
-    p_observaciones: input.observaciones,
+    p_resultado: decision.resultado,
+    p_observaciones: decision.observaciones,
     p_score: input.score ?? null,
-    p_motivo_rechazo: input.motivo_rechazo ?? null,
-    p_condiciones: input.condiciones ?? null,
+    p_motivo_rechazo: decision.motivoRechazo,
+    // Un rechazo por regla dura no lleva condiciones: no hay nada que cumplir
+    // para levantarlo dentro de este estudio.
+    p_condiciones: decision.veredicto.rechaza ? null : (input.condiciones ?? null),
     p_certificado_url: input.certificado_storage_key ?? null,
     p_usuario_id: userId,
   });
@@ -1253,6 +1364,9 @@ export async function registrarResultado(
     throw AppError.badRequest('Error al registrar el resultado', 'RESULTADO_UPDATE_ERROR');
   }
 
+  // 3.5. Trazabilidad de la regla dura, antes del hook que la lee.
+  await registrarReglaDuraActivada(estudioId, decision.veredicto);
+
   // 4. Audit
   logAudit({
     usuarioId: userId,
@@ -1260,7 +1374,9 @@ export async function registrarResultado(
     entidad: AUDIT_ENTITIES.ESTUDIO,
     entidadId: estudioId,
     detalle: {
-      resultado: input.resultado,
+      resultado: decision.resultado,
+      resultado_solicitado: input.resultado,
+      reglas_duras: decision.veredicto.rechaza ? decision.veredicto.reglas : null,
       score: input.score,
       has_certificado: !!input.certificado_storage_key,
       expediente_id: est.expediente_id,
@@ -1270,25 +1386,32 @@ export async function registrarResultado(
 
   // 5. Notificacion in-app al solicitante (fire-and-forget). Empuja el
   // campanario y badges en tiempo real; el correo formal lo manda el hook.
-  notificarSolicitanteResultadoEstudio(est.expediente_id, input.resultado).catch((e) =>
+  notificarSolicitanteResultadoEstudio(est.expediente_id, decision.resultado).catch((e) =>
     logger.warn({ error: e, estudioId, expedienteId: est.expediente_id }, 'Error notificando resultado de estudio'),
   );
 
   // 6. Disparar el hook post-resultado (transiciona el expediente / pondera con
   // el coarrendatario). El registro MANUAL antes no lo hacía y el expediente
   // quedaba atascado en su estado previo sin llegar a condicionado/aprobado.
-  void dispararHookPostResultado(estudioId, est.expediente_id, input.resultado, input.score ?? null);
+  void dispararHookPostResultado(
+    estudioId,
+    est.expediente_id,
+    decision.resultado,
+    input.score ?? null,
+    decision.veredicto,
+  );
 
-  // 7. Scorecard V4.1 en SOMBRA — no decide nada, solo mide. Va despues del
-  //    RPC y de su error-check a proposito: el resultado real ya esta
-  //    commiteado, asi que ni una excepcion ni un await lento pueden afectarlo.
-  //    Aqui no hay ni proveedor ni payload en scope (el select de arriba no los
-  //    trae): el motor los lee de la fila, y sale en silencio si no hay nada
-  //    que puntuar, que es el caso normal de un registro manual.
+  // 7. Registro sombra del scorecard completo. Va despues del RPC y de su
+  //    error-check a proposito: el resultado real ya esta commiteado, asi que
+  //    ni una excepcion ni un await lento pueden afectarlo. Recibe la corrida
+  //    que ya hizo el punto de decision (que si tuvo que leer proveedor y
+  //    payload de la fila) y sale en silencio si no habia nada que puntuar,
+  //    que es el caso normal de un registro manual.
   void registrarScorecardSombra({
     estudioId,
     expedienteId: est.expediente_id,
     scorePersistido: input.score ?? null,
+    salidaPrecalculada: decision.salida,
   }).catch(() => undefined);
 
   return getEstudioById(estudioId);
@@ -2695,13 +2818,26 @@ async function registrarResultadoInline(
     'registrarResultadoInline: resultado obtenido, llamando RPC',
   );
 
+  // Reglas duras V4.1 (§4.2 DTI > 65%, §4.3 canon/ingreso > 40%). Corre ANTES
+  // del RPC porque el resultado solo se puede registrar una vez: la funcion
+  // rechaza escribir sobre un estudio que ya tiene resultado.
+  const decision = await resolverResultadoEstudio({
+    estudioId,
+    expedienteId,
+    resultadoPropuesto: result.resultado,
+    score: result.score,
+    observaciones: result.observaciones || 'Resultado recibido del proveedor',
+    proveedor: proveedorId,
+    datosCrudos: result.datos_crudos,
+  });
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
     p_estudio_id: estudioId,
-    p_resultado: result.resultado,
-    p_observaciones: result.observaciones || 'Resultado recibido del proveedor',
+    p_resultado: decision.resultado,
+    p_observaciones: decision.observaciones,
     p_score: result.score ?? null,
-    p_motivo_rechazo: null,
+    p_motivo_rechazo: decision.motivoRechazo,
     p_condiciones: null,
     p_certificado_url: null,
     p_usuario_id: null,
@@ -2736,6 +2872,10 @@ async function registrarResultadoInline(
     }
   }
 
+  // Trazabilidad de la regla dura. Se AWAITEA (no fire-and-forget) porque el
+  // hook post-resultado lee esta columna para redactar el mensaje del prospecto.
+  await registrarReglaDuraActivada(estudioId, decision.veredicto);
+
   logger.info({ estudioId }, 'registrarResultadoInline: RPC ejecutada, disparando orchestrator');
 
   logAudit({
@@ -2745,7 +2885,12 @@ async function registrarResultadoInline(
     entidadId: estudioId,
     detalle: {
       proveedor: proveedorId,
-      resultado: result.resultado,
+      // El resultado REGISTRADO, que puede diferir del que trajo el buro si se
+      // activo una regla dura. Se dejan los dos: la auditoria tiene que poder
+      // reconstruir quien decidio que.
+      resultado: decision.resultado,
+      resultado_proveedor: result.resultado,
+      reglas_duras: decision.veredicto.rechaza ? decision.veredicto.reglas : null,
       score: result.score,
       referencia_proveedor: referenciaProveedor,
     },
@@ -2795,17 +2940,19 @@ async function registrarResultadoInline(
   //     titular. NO disparamos orchestrator porque ya el titular pasó por él
   //     (ahora estamos cerrando el ciclo del par).
   // Fire-and-forget: el resultado del estudio ya quedó persistido vía RPC.
-  void dispararHookPostResultado(estudioId, expedienteId, result.resultado, result.score);
+  void dispararHookPostResultado(estudioId, expedienteId, decision.resultado, result.score, decision.veredicto);
 
-  // Scorecard V4.1 en SOMBRA — no decide nada, solo mide. Este es el mejor de
-  // los tres puntos de enganche: `result.datos_crudos` esta en memoria, asi
-  // que el motor no necesita releer respuesta_proveedor.
+  // Registro sombra del scorecard completo (puntajes por variable, umbrales,
+  // decision hipotetica). Recibe LA MISMA corrida que decidio arriba, asi que
+  // no re-evalua; y sigue siendo best-effort: si este upsert falla, el rechazo
+  // por regla dura ya quedo escrito con su motivo.
   void registrarScorecardSombra({
     estudioId,
     expedienteId,
     proveedor: proveedorId,
     datosCrudos: result.datos_crudos,
     scorePersistido: result.score,
+    salidaPrecalculada: decision.salida,
   }).catch(() => undefined);
 }
 
@@ -2872,13 +3019,24 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
   if (statusResponse.status === 'completed' && est.estado !== 'completado') {
     const result = await provider.obtenerResultado(est.referencia_proveedor);
 
+    // Reglas duras V4.1 — mismo punto de decision que el camino sincrono.
+    const decision = await resolverResultadoEstudio({
+      estudioId,
+      expedienteId: est.expediente_id,
+      resultadoPropuesto: result.resultado,
+      score: result.score,
+      observaciones: result.observaciones || 'Resultado recibido del proveedor',
+      proveedor: est.proveedor,
+      datosCrudos: result.datos_crudos,
+    });
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
       p_estudio_id: estudioId,
-      p_resultado: result.resultado,
-      p_observaciones: result.observaciones || 'Resultado recibido del proveedor',
+      p_resultado: decision.resultado,
+      p_observaciones: decision.observaciones,
       p_score: result.score ?? null,
-      p_motivo_rechazo: null,
+      p_motivo_rechazo: decision.motivoRechazo,
       p_condiciones: null,
       p_certificado_url: null,
       p_usuario_id: null,
@@ -2904,6 +3062,9 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
       }
     }
 
+    // Trazabilidad de la regla dura, antes del hook que la lee.
+    await registrarReglaDuraActivada(estudioId, decision.veredicto);
+
     logAudit({
       usuarioId: null,
       accion: AUDIT_ACTIONS.ESTUDIO_PROVIDER_RESULT_RECEIVED,
@@ -2911,7 +3072,9 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
       entidadId: estudioId,
       detalle: {
         proveedor: est.proveedor,
-        resultado: result.resultado,
+        resultado: decision.resultado,
+        resultado_proveedor: result.resultado,
+        reglas_duras: decision.veredicto.rechaza ? decision.veredicto.reglas : null,
         score: result.score,
         referencia_proveedor: est.referencia_proveedor,
       },
@@ -2921,18 +3084,24 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
     // ponderación del coarrendatario). Antes este camino de polling SIEMPRE
     // llamaba al orchestrator, así que un estudio de coarrendatario completado
     // por polling resolvía mal el expediente (no ponderaba con el titular).
-    void dispararHookPostResultado(estudioId, est.expediente_id, result.resultado, result.score);
+    void dispararHookPostResultado(
+      estudioId,
+      est.expediente_id,
+      decision.resultado,
+      result.score,
+      decision.veredicto,
+    );
 
-    // Scorecard V4.1 en SOMBRA — no decide nada, solo mide. Va despues del
-    // `if (rpcError)` a proposito: cuando dos pollings concurrentes pasan el
-    // guard con el mismo snapshot de `est`, el segundo muere en el RPC y asi
-    // no llega a calcular ni escribir nada.
+    // Registro sombra del scorecard completo. Va despues del `if (rpcError)` a
+    // proposito: cuando dos pollings concurrentes pasan el guard con el mismo
+    // snapshot de `est`, el segundo muere en el RPC y no llega a escribir nada.
     void registrarScorecardSombra({
       estudioId,
       expedienteId: est.expediente_id,
       proveedor: est.proveedor,
       datosCrudos: result.datos_crudos,
       scorePersistido: result.score,
+      salidaPrecalculada: decision.salida,
     }).catch(() => undefined);
 
     return {

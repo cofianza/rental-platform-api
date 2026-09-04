@@ -9,6 +9,79 @@ import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequ
 import { notificarUsuario, notificarResponsableExpediente } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
 import { resolveNombreDueno } from '@/lib/tenantScope';
+import {
+  motivoProspectoReglasDuras,
+  inferirReglasDurasDesdeMotivo,
+} from '@/modules/estudios/reglas-duras';
+import type { ReglaDuraActiva } from '@/modules/estudios/reglas-duras';
+
+/**
+ * Un rechazo por REGLA DURA de la Politica V4.1 (DTI > 65% §4.2, canon/ingreso
+ * > 40% §4.3) no se parece al rechazo por score bajo que este orquestador
+ * conocia: el score puede ser altisimo (773 en el caso de produccion que
+ * motivo la activacion) y sin embargo el estudio se rechaza.
+ *
+ * Sin esta lectura, los tres efectos del rechazo mienten:
+ *   - el timeline diria "Estudio crediticio rechazado (Score: 773)", como si
+ *     el score fuera la causa;
+ *   - el banner del expediente diria solo "fue rechazado", perdiendo las
+ *     cifras que el gestor necesita (Politica §2, trazabilidad);
+ *   - el correo al prospecto le mostraria su score al lado de "no cumplio los
+ *     requisitos minimos".
+ *
+ * RESPALDO, no camino principal. Lo normal es que el veredicto llegue EN
+ * MEMORIA por los parametros del evento (dispararHookPostResultado lo propaga
+ * desde el mismo punto que decidio). Esta lectura solo cubre a los llamadores
+ * que no lo traen — y por eso no puede depender de una columna nueva:
+ * `regla_dura_activada` solo existe si corrio la migracion, y mientras no corra
+ * un SELECT que la nombre falla entero (42703) y devolveria el caso vacio.
+ *
+ * De ahi los dos pasos: primero `motivo_rechazo`, que existe desde siempre y
+ * lleva el marcador de regla dura al inicio del texto; y solo si la columna
+ * existe se prefieren sus codigos, que son el dato canonico.
+ */
+async function leerReglaDuraDelEstudio(estudioId: string): Promise<{
+  reglas: ReglaDuraActiva[];
+  motivoGestor: string | null;
+}> {
+  if (!estudioId) return { reglas: [], motivoGestor: null };
+  try {
+    const { data, error } = await db('estudios')
+      .select('motivo_rechazo')
+      .eq('id', estudioId)
+      .maybeSingle();
+    if (error) {
+      logger.warn(
+        { estudioId, error: error.message },
+        'Orchestrator: no se pudo leer motivo_rechazo — se usan los textos genericos',
+      );
+      return { reglas: [], motivoGestor: null };
+    }
+    const motivoGestor = (data as { motivo_rechazo?: string | null } | null)?.motivo_rechazo ?? null;
+    const reglas = inferirReglasDurasDesdeMotivo(motivoGestor);
+
+    // Codigos canonicos si la columna ya existe. Un fallo aqui (migracion sin
+    // correr) NO degrada nada: ya tenemos las reglas inferidas del texto.
+    const { data: colData, error: colError } = await db('estudios')
+      .select('regla_dura_activada')
+      .eq('id', estudioId)
+      .maybeSingle();
+    if (!colError) {
+      const codigos = (colData as { regla_dura_activada?: unknown } | null)?.regla_dura_activada;
+      if (Array.isArray(codigos) && codigos.length > 0) {
+        return { reglas: codigos as ReglaDuraActiva[], motivoGestor };
+      }
+    }
+
+    return { reglas, motivoGestor };
+  } catch (err) {
+    logger.warn(
+      { estudioId, err: err instanceof Error ? err.message : String(err) },
+      'Orchestrator: excepcion leyendo la regla dura — se usan los textos genericos',
+    );
+    return { reglas: [], motivoGestor: null };
+  }
+}
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
 const db = (table: string) => (supabase.from(table as string) as ReturnType<typeof supabase.from>);
@@ -180,6 +253,15 @@ export async function onEstudioCompletado(params: {
   resultado: string;
   score: number | null;
   solicitanteId: string;
+  /**
+   * Reglas duras que forzaron el rechazo, tal como las devolvio el punto de
+   * decision. Viene en memoria desde dispararHookPostResultado: asi los textos
+   * de esta rama no dependen de ninguna columna ni de ningun UPDATE
+   * best-effort. Ausente (llamador antiguo) -> se cae al respaldo por fila.
+   */
+  reglasDuras?: readonly ReglaDuraActiva[];
+  /** Motivo con cifras para el gestor. Acompaña a `reglasDuras`. */
+  motivoGestorReglaDura?: string | null;
 }) {
   const { estudioId, expedienteId, resultado, score } = params;
 
@@ -315,14 +397,45 @@ export async function onEstudioCompletado(params: {
         );
         return;
       }
-      await registrarTimeline(expedienteId, 'estudio', `Estudio crediticio rechazado (Score: ${score}).`);
+      // ¿Fue una regla dura de la Politica V4.1, o el score bajo de siempre?
+      // Cambia los tres textos de esta rama, no la mecanica.
+      //
+      // Preferimos SIEMPRE el veredicto que llego en memoria: es el mismo que
+      // decidio, no puede haberse perdido en un UPDATE best-effort ni depende
+      // de que la migracion de `regla_dura_activada` haya corrido. La lectura
+      // por fila queda para los llamadores que no lo traen.
+      const reglaDura =
+        params.reglasDuras && params.reglasDuras.length > 0
+          ? {
+              reglas: [...params.reglasDuras],
+              motivoGestor: params.motivoGestorReglaDura ?? null,
+            }
+          : await leerReglaDuraDelEstudio(estudioId);
+      const porReglaDura = reglaDura.reglas.length > 0;
+
+      await registrarTimeline(
+        expedienteId,
+        'estudio',
+        porReglaDura
+          ? `Estudio rechazado por regla dura de la Politica V4.1 (${reglaDura.reglas.join(', ')}). ` +
+              `Las reglas duras anulan el puntaje total${score !== null ? `: el score del buro fue ${score}` : ''}.`
+          : `Estudio crediticio rechazado (Score: ${score}).`,
+      );
 
       // Persistir motivo legible para el banner de cierre. Si la transición
       // anterior no ocurrió (estado no era 'condicionado'), el .eq lo dejará
       // sin cambios — no rompe.
+      //
+      // Con regla dura se copia el motivo del estudio, que trae las cifras y
+      // los umbrales (Politica §2 "trazabilidad"). Ese banner es gestor-only:
+      // el prospecto ve el texto §10 de ExpedienteRechazadoBanner, que no lee
+      // este campo.
       await db('expedientes')
         .update({
-          motivo_rechazo: 'El estudio crediticio del titular fue rechazado. La solicitud no procede.',
+          motivo_rechazo:
+            porReglaDura && reglaDura.motivoGestor
+              ? reglaDura.motivoGestor
+              : 'El estudio crediticio del titular fue rechazado. La solicitud no procede.',
         } as never)
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');
@@ -338,8 +451,16 @@ export async function onEstudioCompletado(params: {
       }
 
       if (sol?.email) {
-        sendEstudioRechazadoEmail({ email: sol.email, nombre: `${sol.nombre} ${sol.apellido}`, score })
-          .catch((e) => logger.warn({ error: e }, 'Orchestrator: error email rechazado'));
+        // Al PROSPECTO va el motivo GENERAL en el lenguaje del Flujo §10, sin
+        // porcentajes ni umbrales (Politica §2: "sin revelar los parametros
+        // internos del modelo"). Y sin el score: mostrarle 773 al lado de "no
+        // pudimos respaldar tu solicitud" es contradictorio y no explica nada.
+        sendEstudioRechazadoEmail({
+          email: sol.email,
+          nombre: `${sol.nombre} ${sol.apellido}`,
+          score: porReglaDura ? null : score,
+          motivoGeneral: porReglaDura ? motivoProspectoReglasDuras(reglaDura.reglas) : null,
+        }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email rechazado'));
       }
 
       // Notificacion in-app al propietario: el estudio fue rechazado, el flujo

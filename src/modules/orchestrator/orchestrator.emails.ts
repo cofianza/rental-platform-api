@@ -64,8 +64,17 @@ export async function sendEstudioRechazadoEmail(params: {
   email: string;
   nombre: string;
   score: number | null;
+  /**
+   * Motivo GENERAL para el prospecto cuando el rechazo vino de una regla dura
+   * de la Politica V4.1 (DTI > 65%, canon/ingreso > 40%). Lo redacta
+   * motivoProspectoReglasDuras en el lenguaje del Flujo §10, sin porcentajes
+   * ni umbrales. Cuando viene, sustituye la frase generica y el llamado a
+   * "mejorar el perfil crediticio", que no aplica: la persona puede tener el
+   * historial impecable y aun asi no caber en ESTE canon.
+   */
+  motivoGeneral?: string | null;
 }) {
-  const { email, nombre, score } = params;
+  const { email, nombre, score, motivoGeneral } = params;
 
   await resend.emails.send({
     from: FROM,
@@ -78,10 +87,12 @@ export async function sendEstudioRechazadoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-          <p style="color: #6b7280;">Lamentablemente, tu estudio crediticio no cumplio con los requisitos minimos para el arrendamiento en esta oportunidad.</p>
+          <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu estudio crediticio no cumplio con los requisitos minimos para el arrendamiento en esta oportunidad.'}</p>
           ${score ? `<p style="color: #6b7280;">Score crediticio: <strong>${score}</strong></p>` : ''}
           <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #991b1b; margin: 0;">Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al dia.</p>
+            <p style="color: #991b1b; margin: 0;">${motivoGeneral
+              ? 'Si quieres, escribenos y revisamos juntos que opciones tienes: un inmueble de canon menor o un co-arrendatario suelen ser el camino.'
+              : 'Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al dia.'}</p>
           </div>
           <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza.</p>
         </div>

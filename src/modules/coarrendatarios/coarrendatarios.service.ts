@@ -24,6 +24,14 @@ import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+// Reglas duras V4.1 (§4.2 DTI, §4.3 canon/ingreso). El co-arrendatario SI es
+// evaluable por las dos: la Politica §5 lo evalua "sobre ingresos propios", asi
+// que su canon/ingreso individual dispara §4.3 con frecuencia.
+import {
+  motivoProspectoReglasDuras,
+  inferirReglasDurasDesdeMotivo,
+} from '@/modules/estudios/reglas-duras';
+import type { ReglaDuraActiva } from '@/modules/estudios/reglas-duras';
 import {
   TEXTO_LEGAL_COARRENDATARIO,
   VERSION_TERMINOS_COARRENDATARIO,
@@ -921,11 +929,23 @@ export async function aceptarInvitacion(
 //     conversación).
 // ============================================================
 
-export async function onCoarrendatarioEstudioCompletado(estudioId: string): Promise<void> {
+export async function onCoarrendatarioEstudioCompletado(
+  estudioId: string,
+  opts?: {
+    /**
+     * Reglas duras que forzaron el rechazo de ESTE estudio, tal como las
+     * devolvio el punto de decision. Llega en memoria desde
+     * dispararHookPostResultado; si no llega se infieren del motivo persistido.
+     * Sin esto el correo al co-arrendatario le atribuiria al buro un rechazo
+     * que puede convivir con un score altisimo.
+     */
+    reglasDuras?: readonly ReglaDuraActiva[];
+  },
+): Promise<void> {
   // 1. Cargar el estudio del coarrendatario.
   const { data: estudioRow } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, tipo, resultado, score')
+    .select('id, expediente_id, tipo, resultado, score, motivo_rechazo')
     .eq('id', estudioId)
     .maybeSingle();
 
@@ -940,7 +960,15 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
     tipo: string;
     resultado: 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente';
     score: number | null;
+    motivo_rechazo: string | null;
   };
+
+  // Regla dura del co-arrendatario: preferimos el veredicto en memoria y solo
+  // caemos al marcador del motivo persistido si no vino (llamador antiguo).
+  const reglasDurasCoa: ReglaDuraActiva[] =
+    opts?.reglasDuras && opts.reglasDuras.length > 0
+      ? [...opts.reglasDuras]
+      : inferirReglasDurasDesdeMotivo(est.motivo_rechazo);
 
   if (est.tipo !== 'con_coarrendatario') return; // No aplica.
 
@@ -1262,6 +1290,7 @@ export async function onCoarrendatarioEstudioCompletado(estudioId: string): Prom
       inmuebleDireccion: ctx.inmueble_direccion,
       inmuebleCiudad: ctx.inmueble_ciudad,
       decisionExpediente: nuevoEstadoExpediente,
+      reglasDurasCoarrendatario: reglasDurasCoa,
     }).catch((e) =>
       logger.warn({ error: e, coarrendatarioId: coa.id }, 'Error email resultado coarrendatario'),
     );
@@ -1291,11 +1320,14 @@ interface SendResultadoEmailInput {
   inmuebleDireccion: string;
   inmuebleCiudad: string;
   decisionExpediente: 'aprobado' | 'rechazado';
+  /** Reglas duras V4.1 que decidieron SU estudio. Vacio = no fue por regla. */
+  reglasDurasCoarrendatario?: readonly ReglaDuraActiva[];
 }
 
 async function sendCoarrendatarioResultadoEmail(input: SendResultadoEmailInput): Promise<void> {
   const inmuebleStr = `${input.inmuebleDireccion}${input.inmuebleCiudad ? `, ${input.inmuebleCiudad}` : ''}`;
   const titular = input.titularNombre || 'el titular';
+  const porReglaDura = (input.reglasDurasCoarrendatario?.length ?? 0) > 0;
 
   // El subject y el cuerpo dependen de la decisión final del expediente.
   // No le mostramos el detalle de la ponderación al coa (es info entre el
@@ -1329,7 +1361,17 @@ async function sendCoarrendatarioResultadoEmail(input: SendResultadoEmailInput):
       `;
       badgeColor = '#b45309'; // amber
     } else if (input.coarrendatarioResultado === 'rechazado') {
-      cuerpoPrincipal = `
+      // Un rechazo por REGLA DURA (§4.2 DTI, §4.3 canon/ingreso) no es un
+      // problema de reporte: el score puede ser altisimo. Mandarlo a la central
+      // de riesgo seria mandarlo a arreglar algo que no esta roto — el mismo
+      // defecto que ya se corrigio para el titular en orchestrator.emails.ts.
+      cuerpoPrincipal = porReglaDura
+        ? `
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #6b7280;">${motivoProspectoReglasDuras(input.reglasDurasCoarrendatario ?? [])}</p>
+        <p style="color: #6b7280;">Por esta razón no podemos respaldar el arrendamiento del inmueble en <strong>${inmuebleStr}</strong>.</p>
+      `
+        : `
         <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
         <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #b91c1c;">no aprobado</strong>.
         Por esta razón no podemos respaldar el arrendamiento del inmueble en <strong>${inmuebleStr}</strong>.</p>
@@ -1349,9 +1391,13 @@ async function sendCoarrendatarioResultadoEmail(input: SendResultadoEmailInput):
     }
   }
 
-  const scoreLine = typeof input.coarrendatarioScore === 'number' && input.coarrendatarioScore > 0
-    ? `<p style="color: #6b7280; font-size: 13px; margin: 4px 0;">Score crediticio: <strong>${input.coarrendatarioScore}</strong></p>`
-    : '';
+  // Con regla dura NO se imprime el score: mostrar "Score crediticio: 773"
+  // debajo de "no aprobado" contradice el propio mensaje y no explica nada
+  // (Politica §3: las reglas duras anulan el puntaje).
+  const scoreLine =
+    !porReglaDura && typeof input.coarrendatarioScore === 'number' && input.coarrendatarioScore > 0
+      ? `<p style="color: #6b7280; font-size: 13px; margin: 4px 0;">Score crediticio: <strong>${input.coarrendatarioScore}</strong></p>`
+      : '';
 
   await resend.emails.send({
     from: FROM,

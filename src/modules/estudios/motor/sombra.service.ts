@@ -8,7 +8,11 @@
 //
 // Es fisicamente incapaz de tocar `estudios.resultado` / `estudios.score`: no
 // escribe en la tabla `estudios`. Esa es la garantia estructural del modo
-// sombra, no solo una promesa del try/catch.
+// sombra, no solo una promesa del try/catch — y SIGUE VIGENTE aunque desde el
+// 2026-09-03 dos reglas duras decidan: quien las aplica es
+// src/modules/estudios/reglas-duras.ts, que corre ANTES del RPC y no depende
+// de que este upsert funcione. Si esta escritura falla, el rechazo por regla
+// dura ya quedo registrado igual.
 //
 // TRES REGLAS DE ESTE ARCHIVO
 //   1. NUNCA lanza. Devuelve void y traga todo con logger.warn. El call site
@@ -32,6 +36,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { MODELO_VERSION, evaluarSombra } from './index';
+import type { SalidaSombra } from './index';
 import { construirFilaSombra } from './fila';
 
 export interface ArgsScorecardSombra {
@@ -44,6 +49,17 @@ export interface ArgsScorecardSombra {
   datosCrudos?: Record<string, unknown> | null;
   /** `estudios.score` — respaldo de V1 en el registro manual. */
   scorePersistido?: number | null;
+  /**
+   * Corrida del motor YA evaluada por el punto de decision de reglas duras
+   * (reglas-duras.ts), que corre antes del RPC. Cuando viene, esta funcion no
+   * vuelve a leer ni a evaluar: solo persiste.
+   *
+   * No invierte la dependencia — la decision NO espera nada de aqui. Es al
+   * reves: se pasa para que la fila sombra cuente exactamente la misma corrida
+   * que decidio, en vez de una segunda evaluacion con otra fecha y, si el
+   * gestor movio el canon del inmueble en el intervalo, otros ratios.
+   */
+  salidaPrecalculada?: SalidaSombra | null;
 }
 
 /**
@@ -85,6 +101,12 @@ async function obtenerCanon(expedienteId: string): Promise<number | null> {
 export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promise<void> {
   const { estudioId, expedienteId } = args;
   try {
+    // 0. Corrida ya evaluada por el punto de decision: no se repite nada.
+    if (args.salidaPrecalculada) {
+      await persistirFila(estudioId, args.salidaPrecalculada);
+      return;
+    }
+
     // 1. Completar lo que no vino del call site. El registro manual no tiene
     //    ni proveedor ni payload en scope, asi que se leen de la fila.
     let proveedor = args.proveedor ?? null;
@@ -118,46 +140,57 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
       score_persistido: scorePersistido,
     });
 
-    // 4. Una corrida sin ninguna variable calculable no mide nada: se registra
-    //    en el log y no se escribe fila.
-    if (salida.puntaje_normalizado === null) {
-      logger.debug(
-        { estudioId, proveedor, motivo: salida.motivo_no_calculable },
-        'scorecard sombra: sin variables calculables, no se persiste',
-      );
-      return;
-    }
-
-    // 5. Upsert idempotente por (estudio_id, modelo_version).
-    const { error } = await (supabase
-      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-      .upsert(construirFilaSombra(estudioId, salida) as never, {
-        onConflict: 'estudio_id,modelo_version',
-      });
-
-    if (error) {
-      logger.warn(
-        { estudioId, error: error.message, modeloVersion: MODELO_VERSION },
-        'scorecard sombra: no se pudo persistir — el estudio no se ve afectado',
-      );
-      return;
-    }
-
-    logger.info(
-      {
-        estudioId,
-        proveedor: salida.proveedor,
-        decisionSombra: salida.decision_sombra,
-        puntaje: salida.puntaje_normalizado,
-        techo: salida.puntaje_maximo_alcanzable,
-        modeloVersion: salida.modelo_version,
-      },
-      'scorecard sombra calculado (no afecta la decision del estudio)',
-    );
+    // 4-5. Descartar la corrida vacia y hacer el upsert idempotente.
+    await persistirFila(estudioId, salida);
   } catch (err) {
     logger.warn(
       { estudioId, expedienteId, err: err instanceof Error ? err.message : String(err) },
       'scorecard sombra fallo — el estudio se completo igual',
     );
   }
+}
+
+/**
+ * Descarta la corrida vacia y hace el upsert idempotente por
+ * (estudio_id, modelo_version). Extraido para que el camino con salida
+ * precalculada y el que evalua aqui escriban por el mismo sitio.
+ *
+ * Una corrida sin ninguna variable calculable no mide nada: se registra en el
+ * log y no se escribe fila (regla 3 del encabezado).
+ */
+async function persistirFila(estudioId: string, salida: SalidaSombra): Promise<void> {
+  if (salida.puntaje_normalizado === null) {
+    logger.debug(
+      { estudioId, proveedor: salida.proveedor, motivo: salida.motivo_no_calculable },
+      'scorecard sombra: sin variables calculables, no se persiste',
+    );
+    return;
+  }
+
+  const { error } = await (supabase
+    .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+    .upsert(construirFilaSombra(estudioId, salida) as never, {
+      onConflict: 'estudio_id,modelo_version',
+    });
+
+  if (error) {
+    logger.warn(
+      { estudioId, error: error.message, modeloVersion: MODELO_VERSION },
+      'scorecard sombra: no se pudo persistir — el estudio no se ve afectado',
+    );
+    return;
+  }
+
+  logger.info(
+    {
+      estudioId,
+      proveedor: salida.proveedor,
+      decisionSombra: salida.decision_sombra,
+      puntaje: salida.puntaje_normalizado,
+      techo: salida.puntaje_maximo_alcanzable,
+      modeloVersion: salida.modelo_version,
+      reglasDuras: salida.reglas_duras.map((r) => r.codigo),
+    },
+    'scorecard sombra calculado',
+  );
 }

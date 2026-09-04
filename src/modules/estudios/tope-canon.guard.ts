@@ -199,8 +199,14 @@ export function errorTopeExcedido(
  * Devuelve `undefined` solo en el caso estructural: no hay inmueble que
  * resolver todavia (o la fila no existe), que el caller trata como canon
  * desconocido y deja pasar con un warning.
+ *
+ * Se EXPORTA porque la regla dura de canon / ingreso (§4.3, reglas-duras.ts)
+ * necesita exactamente el mismo canon que el tope: si cada una resolviera el
+ * suyo, el estudio podria bloquearse contra un canon y evaluarse contra otro.
+ * Ese caller SI atrapa el throw — para el, un canon no legible solo vuelve la
+ * regla no evaluable, que es el lado seguro.
  */
-async function leerCanon(args: {
+export async function leerCanonDelInmueble(args: {
   expedienteId?: string | null;
   inmuebleId?: string | null;
 }): Promise<number | string | null | undefined> {
@@ -288,7 +294,7 @@ export interface AssertTopeArgs {
 export async function assertCanonDentroDelTope(
   args: AssertTopeArgs,
 ): Promise<{ canonCop: number | null }> {
-  const canonBruto = await leerCanon(args);
+  const canonBruto = await leerCanonDelInmueble(args);
   const veredicto = evaluarTopeCanon({ canonCop: canonBruto });
 
   if (!veredicto.ok) {

@@ -1,7 +1,15 @@
 // ============================================================
-// Motor de scorecard V4.1 — ORQUESTADOR (modo sombra)
+// Motor de scorecard V4.1 — ORQUESTADOR
 // ------------------------------------------------------------
 // evaluarSombra() = extraccion de features + scorecard + decision hipotetica.
+//
+// EL NOMBRE YA NO ES DEL TODO EXACTO (2026-09-03). El scorecard entero sigue
+// en sombra —puntajes, umbrales 85/70, decision_sombra—, pero DOS de las
+// reglas duras que salen en `reglas_duras` YA DECIDEN el resultado real:
+// 'dti_mayor_65' (§4.2) y 'canon_ingreso_mayor_40' (§4.3), autorizadas por
+// Gerencia. Quien las aplica es src/modules/estudios/reglas-duras.ts, que las
+// filtra por lista blanca; esta funcion sigue sin aplicar nada por su cuenta.
+// El nombre se conserva porque la version del modelo persistida lo lleva.
 //
 // INVARIANTE MAS IMPORTANTE DEL ARCHIVO: NUNCA LANZA. Con cualquier entrada —
 // null, undefined, {}, un payload de otro buro, un string — devuelve una
@@ -9,8 +17,10 @@
 // quedo registrado, asi que una excepcion aqui no puede llegar a tumbar nada;
 // pero el contrato explicito ahorra tener que razonarlo en cada call site.
 //
-// Nada de lo que devuelve esta funcion se aplica: `decision_sombra` convive
-// con `estudios.resultado` para poder cruzarlas, no para reemplazarla.
+// `decision_sombra` NO se aplica: convive con `estudios.resultado` para poder
+// cruzarlas, no para reemplazarla. Lo unico de esta salida que llega a la
+// decision real es `reglas_duras`, y solo los dos codigos de la lista blanca
+// de reglas-duras.ts.
 // ============================================================
 
 import {
