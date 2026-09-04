@@ -277,3 +277,9 @@ export type ConfirmarSoporteInput = z.infer<typeof confirmarSoporteSchema>;
 export type ReEvaluarInput = z.infer<typeof reEvaluarSchema>;
 export type ReasignarEstudioInput = z.infer<typeof reasignarEstudioSchema>;
 export type CodigoParams = z.infer<typeof codigoParamsSchema>;
+
+/** §5.2 — búsqueda de un estudio vigente por documento desde el paso 2 del asistente. */
+export const estudioVigenteQuerySchema = z.object({
+  tipo_documento: z.string().min(2).max(20),
+  numero_documento: z.string().min(3).max(30),
+});

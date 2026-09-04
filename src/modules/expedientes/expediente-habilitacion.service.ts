@@ -48,6 +48,14 @@ export async function habilitarEstudio(
    * que era el comportamiento fijo antes de que hubiera dos burós.
    */
   proveedor: 'transunion' | 'datacredito' = 'transunion',
+  /**
+   * Si el llamador ya sabe quién paga, apaga el auto-cobro del propietario.
+   * Lo usa `iniciarEstudio` (paso 3 del asistente, §6): ahí la forma de pago
+   * es una decisión EXPLÍCITA del gestor, así que dejar que esta función
+   * mande además el link al prospecto duplicaría el cobro de la opción C y
+   * contradiría a las opciones A y B.
+   */
+  autoPago = true,
 ): Promise<HabilitarEstudioResult> {
   // 1. Ownership + datos del expediente para el email posterior.
   const ctx = await assertHabilitacionPermission({
@@ -142,6 +150,7 @@ export async function habilitarEstudio(
   //      recibía la orden de pagar aunque la inmobiliaria fuera a cubrirlo con
   //      un crédito. Y desde el §6.3 sería además cobrar antes de autorizar.
   const puedeAutoCrearPago =
+    autoPago &&
     userRol === 'propietario' &&
     !!ctx.solicitanteEmail &&
     !!ctx.solicitanteNombre;
@@ -667,4 +676,108 @@ async function sendHabilitadoFallbackEmail(
       'Error al enviar email de habilitación de estudio (fallback)',
     );
   }
+}
+
+/**
+ * Paso 4 del asistente de nuevo expediente (Flujo de Gerencia, módulo de
+ * estudios, §7 "PASO 4 — CONFIRMACIÓN"):
+ *
+ *   "Botón para enviar la solicitud de autorización. Al enviar, el sistema
+ *    genera un enlace único e irrepetible y lo remite por WhatsApp al celular
+ *    registrado, con copia al correo electrónico. El estudio queda en estado
+ *    ESPERANDO AUTORIZACIÓN."
+ *
+ * Existe porque el asistente necesita UNA llamada, no cuatro. Encadenarlas
+ * desde el navegador (habilitar → omitir cita → pagar) dejaba expedientes a
+ * medias en cuanto una fallaba o el usuario cerraba la pestaña, y el estado
+ * intermedio no es reparable desde la UI.
+ *
+ * El orden §6.3 (autorizar → cobrar → ejecutar) NO se implementa aquí: las
+ * tres formas de pago ya terminan mandando el habeas data por su cuenta
+ * (la C en la fase 0 de enviarLinkPago; la A y la B vía onEstudioPagado).
+ * Esta función solo elige cuál disparar.
+ *
+ * ponytail: la cita se omite sólo si el RPC la reclama. Marcarla siempre
+ * ensuciaría el timeline de los expedientes que sí tuvieron visita.
+ */
+export type FormaPagoEstudio = 'credito' | 'inmobiliaria' | 'prospecto';
+
+export async function iniciarEstudio(
+  expedienteId: string,
+  userId: string,
+  userRol: string,
+  input: {
+    forma_pago: FormaPagoEstudio;
+    proveedor?: 'transunion' | 'datacredito';
+    notas?: string;
+  },
+  ip?: string,
+): Promise<{
+  expediente: { id: string; numero: string };
+  estudio: { id: string };
+  forma_pago: FormaPagoEstudio;
+  cita_omitida: boolean;
+}> {
+  const ctx = await assertHabilitacionPermission({
+    userId,
+    userRol: userRol as UserRole,
+    expedienteId,
+  });
+
+  // 1. Habilitar. autoPago=false: quién paga lo dijo el gestor en el paso 3.
+  let citaOmitida = false;
+  let habilitado: HabilitarEstudioResult;
+  try {
+    habilitado = await habilitarEstudio(expedienteId, userId, userRol, input.proveedor, false);
+  } catch (err) {
+    if (!(err instanceof AppError) || err.errorCode !== 'CITA_REQUERIDA') throw err;
+    // El flujo del §3 no tiene visita: va de la selección del inmueble a la
+    // autorización del prospecto. Nuestra RPC sí la exige, así que la damos
+    // por omitida DEJANDO CONSTANCIA de que fue el asistente quien lo hizo.
+    await omitirCita(
+      expedienteId,
+      'Estudio iniciado desde el asistente de nuevo expediente (el flujo del módulo de estudios no contempla visita previa).',
+      userId,
+      userRol,
+    );
+    citaOmitida = true;
+    habilitado = await habilitarEstudio(expedienteId, userId, userRol, input.proveedor, false);
+  }
+
+  // 2. Aplicar la forma de pago elegida. Si esto falla, el expediente queda
+  //    con el estudio habilitado y sin pago — que es exactamente el estado en
+  //    el que lo deja hoy el panel, y del que se sale eligiendo pago otra vez.
+  if (input.forma_pago === 'credito') {
+    const { liberarEstudioConCredito } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+    await liberarEstudioConCredito(expedienteId, userId, userId, ip, input.notas);
+  } else if (input.forma_pago === 'inmobiliaria') {
+    const { asumirCosto } = await import('@/modules/pago-estudio/pago-estudio.service');
+    await asumirCosto(expedienteId, userId, ip, userRol);
+  } else {
+    if (!ctx.solicitanteEmail || !ctx.solicitanteNombre) {
+      throw AppError.badRequest(
+        'El prospecto no tiene correo y nombre registrados, así que no se le puede enviar el enlace.',
+        'SOLICITANTE_SIN_CONTACTO',
+      );
+    }
+    await enviarLinkPago(
+      expedienteId,
+      { email_pagador: ctx.solicitanteEmail, nombre_pagador: ctx.solicitanteNombre },
+      userId,
+      ip,
+      userRol,
+    );
+  }
+
+  logger.info(
+    { expedienteId, estudioId: habilitado.estudio.id, formaPago: input.forma_pago, citaOmitida, userId },
+    'Estudio iniciado desde el asistente',
+  );
+
+  return {
+    expediente: { id: habilitado.expediente.id, numero: habilitado.expediente.numero },
+    estudio: { id: habilitado.estudio.id },
+    forma_pago: input.forma_pago,
+    cita_omitida: citaOmitida,
+  };
 }

@@ -5,6 +5,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
+import { getCompany } from '@/lib/companyConfig';
 import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
@@ -3295,4 +3296,148 @@ export async function getProviderHealth(): Promise<ProviderHealthInfo[]> {
       timestamp: new Date().toISOString(),
     };
   });
+}
+
+/**
+ * §5.2 del Flujo de Gerencia (módulo de estudios, PASO 2 — SOLICITANTE):
+ *
+ *   "Si ya existe un estudio vigente para ese mismo número de documento, el
+ *    sistema lo informa y ofrece consultarlo o reutilizarlo, en lugar de crear
+ *    uno nuevo y cobrarlo."
+ *
+ * Se consulta desde el paso 2 del asistente, antes de que exista expediente y
+ * antes de cualquier cobro. Devuelve `null` cuando no hay nada que reutilizar,
+ * que es el camino normal.
+ *
+ * La vigencia se ancla en `fecha_completado` con los mismos días que el
+ * certificado (`certificateValidityDays`, hoy 60), porque son la misma
+ * vigencia: el §4.3 dice que "el estudio conserva su vigencia original".
+ *
+ * ponytail: filtra en memoria por (tipo, número) tras acotar por los
+ * expedientes visibles. Con carteras de este tamaño no compensa un índice
+ * nuevo ni un RPC; si algún día pesa, el sitio a mover es esta query.
+ */
+export async function buscarEstudioVigentePorDocumento(
+  tipoDocumento: string,
+  numeroDocumento: string,
+  userId: string,
+  userRol: string,
+): Promise<{
+  id: string;
+  expediente_id: string;
+  expediente_numero: string | null;
+  resultado: string | null;
+  fecha_completado: string | null;
+  vigente_hasta: string;
+  dias_restantes: number;
+} | null> {
+  // Scoping: sólo estudios de expedientes que este usuario puede ver. `null`
+  // = rol interno sin filtro; `[]` = no ve nada, así que ni consultamos.
+  const allowed = await resolveAllowedExpedienteIds(userId, userRol);
+  if (allowed !== null && allowed.length === 0) return null;
+
+  const { certificateValidityDays } = await getCompany();
+  const validezMs = certificateValidityDays * 24 * 60 * 60 * 1000;
+  const desde = new Date(Date.now() - validezMs).toISOString();
+
+  let query = (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, expediente_id, resultado, fecha_completado, datos_formulario, expedientes(numero)')
+    .eq('estado', 'completado')
+    .gte('fecha_completado', desde)
+    .order('fecha_completado', { ascending: false })
+    .limit(25);
+
+  if (allowed !== null) query = query.in('expediente_id', allowed);
+
+  const { data, error } = await query as {
+    data:
+      | {
+          id: string;
+          expediente_id: string;
+          resultado: string | null;
+          fecha_completado: string | null;
+          datos_formulario: Record<string, unknown> | null;
+          expedientes: { numero: string | null } | null;
+        }[]
+      | null;
+    error: { message: string } | null;
+  };
+
+  if (error) {
+    // No bloqueamos el paso 2 por esto: es un aviso, no un guard.
+    logger.warn({ error: error.message }, 'No se pudo buscar un estudio vigente por documento');
+    return null;
+  }
+
+  const elegido = seleccionarEstudioVigente(data ?? [], tipoDocumento, numeroDocumento, validezMs, Date.now());
+  if (!elegido) return null;
+
+  return {
+    ...elegido,
+    expediente_numero: (data ?? []).find((e) => e.id === elegido.id)?.expedientes?.numero ?? null,
+  };
+}
+
+/** Fila mínima que `seleccionarEstudioVigente` necesita. */
+export interface FilaEstudioVigente {
+  id: string;
+  expediente_id: string;
+  resultado: string | null;
+  fecha_completado: string | null;
+  datos_formulario: Record<string, unknown> | null;
+}
+
+/**
+ * Parte PURA del §5.2: de las filas candidatas, cuál corresponde a este
+ * documento y cuánta vigencia le queda. Separada de la query para poder
+ * ejercitarla sin Supabase (scripts/check-estudio-vigente.ts).
+ *
+ * El match compara el PAR (tipo, número), no sólo el número: la misma cifra
+ * puede existir como CC y como CE y son personas distintas. El tipo se compara
+ * sin distinguir mayúsculas y el número se recorta, porque ambos vienen de
+ * `datos_formulario`, que es JSON escrito por varios caminos (formulario
+ * público, snapshot del solicitante, corrección manual).
+ */
+export function seleccionarEstudioVigente(
+  filas: FilaEstudioVigente[],
+  tipoDocumento: string,
+  numeroDocumento: string,
+  validezMs: number,
+  ahoraMs: number,
+): {
+  id: string;
+  expediente_id: string;
+  resultado: string | null;
+  fecha_completado: string | null;
+  vigente_hasta: string;
+  dias_restantes: number;
+} | null {
+  const numero = numeroDocumento.trim();
+  const tipo = tipoDocumento.trim().toLowerCase();
+
+  const hit = filas.find((e) => {
+    const f = e.datos_formulario ?? {};
+    return (
+      String(f.numero_documento ?? '').trim() === numero &&
+      String(f.tipo_documento ?? '').trim().toLowerCase() === tipo
+    );
+  });
+
+  if (!hit || !hit.fecha_completado) return null;
+
+  const venceMs = new Date(hit.fecha_completado).getTime() + validezMs;
+  // Ya vencido: no es "vigente", aunque la query lo haya traído (el filtro de
+  // SQL usa un `gte` sobre la misma ventana, pero el reloj puede correrse
+  // entre la consulta y este cálculo).
+  if (venceMs <= ahoraMs) return null;
+
+  return {
+    id: hit.id,
+    expediente_id: hit.expediente_id,
+    resultado: hit.resultado,
+    fecha_completado: hit.fecha_completado,
+    vigente_hasta: new Date(venceMs).toISOString(),
+    dias_restantes: Math.max(0, Math.ceil((venceMs - ahoraMs) / (24 * 60 * 60 * 1000))),
+  };
 }

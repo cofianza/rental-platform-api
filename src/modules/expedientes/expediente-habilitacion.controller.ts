@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { sendSuccess } from '@/lib/response';
+import { sendSuccess, sendCreated } from '@/lib/response';
 import * as service from './expediente-habilitacion.service';
 import type { ExpedienteIdParams } from './expedientes.schema';
 
@@ -47,4 +47,15 @@ export async function generarContratoExpediente(req: Request, res: Response) {
   };
   const result = await service.generarContratoExpediente(id, req.user!.id, req.user!.rol, body);
   sendSuccess(res, result);
+}
+
+export async function iniciarEstudio(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const body = (req.body || {}) as {
+    forma_pago: 'credito' | 'inmobiliaria' | 'prospecto';
+    proveedor?: 'transunion' | 'datacredito';
+    notas?: string;
+  };
+  const result = await service.iniciarEstudio(id, req.user!.id, req.user!.rol, body, req.ip);
+  sendCreated(res, result);
 }

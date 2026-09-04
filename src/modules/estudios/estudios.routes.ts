@@ -21,6 +21,7 @@ import {
   reEvaluarSchema,
   reasignarEstudioSchema,
   codigoParamsSchema,
+  estudioVigenteQuerySchema,
 } from './estudios.schema';
 import * as estudiosController from './estudios.controller';
 
@@ -55,6 +56,17 @@ expedienteEstudiosRouter.post(
 export const estudiosRouter = Router();
 
 estudiosRouter.use(authMiddleware);
+
+// GET /estudios/vigente?tipo_documento=cc&numero_documento=123 — §5.2: avisar
+// en el paso 2 del asistente si esa persona ya tiene un estudio vigente, para
+// ofrecer reutilizarlo "en lugar de crear uno nuevo y cobrarlo". Va ANTES del
+// listado global para que '/vigente' no lo capture ninguna ruta con :estudioId.
+estudiosRouter.get(
+  '/vigente',
+  authorize('expedientes', 'read'),
+  validate({ query: estudioVigenteQuerySchema }),
+  estudiosController.estudioVigentePorDocumento,
+);
 
 // GET /estudios (global listing)
 estudiosRouter.get(

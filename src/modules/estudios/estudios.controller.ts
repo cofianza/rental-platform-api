@@ -228,3 +228,17 @@ export async function submitFormulario(req: Request, res: Response) {
   const result = await estudiosService.submitFormulario(token, input);
   sendSuccess(res, result);
 }
+
+export async function estudioVigentePorDocumento(req: Request, res: Response) {
+  const { tipo_documento, numero_documento } = req.query as {
+    tipo_documento: string;
+    numero_documento: string;
+  };
+  const estudio = await estudiosService.buscarEstudioVigentePorDocumento(
+    tipo_documento,
+    numero_documento,
+    req.user!.id,
+    req.user!.rol,
+  );
+  sendSuccess(res, { estudio });
+}

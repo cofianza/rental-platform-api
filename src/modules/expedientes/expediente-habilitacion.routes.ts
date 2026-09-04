@@ -97,4 +97,24 @@ router.post(
   controller.generarContratoExpediente,
 );
 
+// POST /api/v1/expedientes/:id/iniciar-estudio — paso 4 del asistente (§7).
+// Una sola llamada: habilita el estudio, omite la cita si la RPC la reclama
+// (el flujo del §3 no tiene visita) y aplica la forma de pago que el gestor
+// eligió en el paso 3. El habeas data lo manda la forma de pago elegida.
+// Sin 'solicitante' ni 'gerencia_consulta': elegir quién paga es del gestor.
+router.post(
+  '/:id/iniciar-estudio',
+  authMiddleware,
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  validate({
+    params: expedienteIdParamsSchema,
+    body: z.object({
+      forma_pago: z.enum(['credito', 'inmobiliaria', 'prospecto']),
+      proveedor: z.enum(['transunion', 'datacredito']).optional(),
+      notas: z.string().max(5000).optional(),
+    }),
+  }),
+  controller.iniciarEstudio,
+);
+
 export default router;
