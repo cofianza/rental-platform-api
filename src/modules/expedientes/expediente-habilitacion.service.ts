@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { errorNoAdmision } from '../estudios/estudios-simultaneos.guard';
 import { env } from '@/config/env';
 import {
   sendEstudioHabilitadoEmail,
@@ -9,7 +10,6 @@ import {
 } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
 import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
-import { bloquearInmuebleEnEstudio } from '../inmuebles/inmuebles.service';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
@@ -90,6 +90,16 @@ export async function habilitarEstudio(
     if (msg.includes('Estado no permitido')) {
       throw AppError.badRequest(msg, 'INVALID_STATE');
     }
+    // Guard de reserva (Flujo §4.2): la propiedad ya se comprometio con un
+    // candidato aprobado, o esta arrendada/inactiva. Es el UNICO bloqueo por
+    // inmueble que queda — tener otros estudios en curso no bloquea.
+    if (msg.includes('INMUEBLE_RESERVADO')) {
+      throw errorNoAdmision({
+        admite: false,
+        motivo: msg.includes('inactivo') ? 'inactivo' : 'reservado',
+        reservadoPorExpedienteId: null,
+      });
+    }
     if (msg.includes('cita realizada')) {
       throw AppError.badRequest(
         'Se requiere al menos una cita realizada antes de habilitar el estudio',
@@ -102,19 +112,15 @@ export async function habilitarEstudio(
 
   const rpcResult = data as { expediente_id: string; numero: string; estudio_id: string };
 
-  // Bloqueo temporal del inmueble: el candidato entró en estudio, así que el
-  // inmueble se reserva y desaparece de la vitrina (estado en_estudio). Si el
-  // estudio se rechaza o el expediente se cancela, se libera de nuevo.
-  // Fire-and-forget: no debe tumbar la habilitación si falla.
-  (async () => {
-    const { data: expRow } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('inmueble_id')
-      .eq('id', expedienteId)
-      .maybeSingle();
-    const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
-    if (inmuebleId) await bloquearInmuebleEnEstudio(inmuebleId);
-  })().catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo bloquear el inmueble en estudio'));
+  // Flujo de Gerencia §4.2 (CAMBIO APROBADO): habilitar un estudio ya NO
+  // bloquea el inmueble. Aquí vivía un bloqueo fire-and-forget a 'en_estudio'
+  // que además nunca funcionó — corría fuera de la transacción de la RPC y
+  // solo transicionaba desde 'disponible', así que el segundo candidato pasaba
+  // igual. Varios candidatos se evalúan en paralelo y la propiedad se reserva
+  // recién cuando uno aprobado avanza a la generación del contrato
+  // (fn_reservar_inmueble_para_contrato). El guard que SÍ aplica — no habilitar
+  // sobre una propiedad ya reservada — vive ahora dentro de
+  // fn_habilitar_estudio_expediente, en la misma transacción.
 
   // 3. Notificación + pago. La regla de negocio es QUIÉN decide el pago:
   //    - PROPIETARIO individual: se manda directo. Auto-creamos el Checkout
@@ -575,6 +581,22 @@ async function aprobarYGenerarContrato(params: {
       contratoId = (result as { id?: string } | null)?.id || null;
       logger.info({ expedienteId, contratoId, fromState }, 'Contrato generado por el propietario');
     } catch (err) {
+      // La RESERVA de la propiedad (Flujo §4.2) es la excepción que SÍ sube.
+      // Si otro candidato aprobado se llevó el inmueble, tragarse el error
+      // dejaría al gestor con un "aprobado" mudo y sin contrato, sin saber por
+      // qué — y volviendo a pulsar el botón para siempre. El expediente queda
+      // aprobado (correcto: el candidato sigue siendo apto) y el mensaje le
+      // dice que puede usarlo para otra propiedad.
+      if (
+        err instanceof AppError &&
+        (err.errorCode === 'INMUEBLE_YA_RESERVADO' || err.errorCode === 'RESERVA_NO_VERIFICABLE')
+      ) {
+        logger.warn(
+          { expedienteId, fromState, errorCode: err.errorCode },
+          'Generación de contrato abortada: la propiedad ya estaba reservada por otro candidato',
+        );
+        throw err;
+      }
       logger.error(
         { error: err, expedienteId, fromState },
         'Error al generar contrato — el expediente quedó aprobado, hay que reintentar desde la pestaña Contratos',

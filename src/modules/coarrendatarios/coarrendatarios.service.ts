@@ -1196,21 +1196,14 @@ export async function onCoarrendatarioEstudioCompletado(
       },
     } as never);
 
-  // 6. Si se rechazó: liberar el inmueble (mismo patrón que orchestrator).
-  //    SOLO el bloqueo temporal (en_estudio → disponible): un UPDATE
-  //    incondicional podía pisar un 'ocupado' legítimo si este resultado
-  //    llegaba con otro contrato ya vigente sobre el inmueble.
+  // 6. Si se rechazó: soltar la RESERVA del inmueble (mismo patrón que
+  //    orchestrator). Flujo §4.2: solo se suelta si ESTE expediente era el
+  //    titular. Sustituye al viejo "en_estudio → disponible", que con estudios
+  //    simultáneos habría liberado una propiedad que otros candidatos siguen
+  //    disputando, o peor, una reservada por otro expediente.
   if (nuevoEstadoExpediente === 'rechazado') {
-    const { data: expRow } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('inmueble_id')
-      .eq('id', est.expediente_id)
-      .maybeSingle();
-    const inmuebleId = (expRow as { inmueble_id?: string } | null)?.inmueble_id;
-    if (inmuebleId) {
-      const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
-      await liberarInmuebleEnEstudio(inmuebleId);
-    }
+    const { liberarReservaDeExpediente } = await import('@/modules/inmuebles/inmuebles.service');
+    await liberarReservaDeExpediente(est.expediente_id);
   }
 
   // 7. Notificar al titular y al propietario.

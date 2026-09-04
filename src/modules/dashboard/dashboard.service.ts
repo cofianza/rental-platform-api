@@ -369,7 +369,7 @@ export interface MiInmuebleRow {
   habitaciones: number | null;
   banos: number | null;
   area: number | null;
-  estado: string; // disponible | en_estudio | ocupado | inactivo
+  estado: string; // disponible | ocupado | inactivo ('en_estudio' es legado: ya no se escribe)
   visibleVitrina: boolean;
   fotoFachadaUrl: string | null;
   inquilino: string | null;
@@ -379,6 +379,14 @@ export interface MiInmuebleRow {
   garantiaActiva: boolean;
   pago: 'al_dia' | 'mora' | null; // null cuando no hay inquilino
   historial: HistorialInquilino[];
+  /**
+   * Indicador del Flujo §4.2: cuantos candidatos se estan evaluando en
+   * paralelo sobre esta propiedad. Informativo — no bloquea nada. Este DTO no
+   * comparte forma con IInmueble, asi que el campo se agrega tambien aqui.
+   */
+  estudiosActivos: number;
+  /** Reservada: candidato aprobado con el contrato en proceso, aun sin firmar. */
+  reservado: boolean;
 }
 
 export interface MisInmueblesData {
@@ -482,9 +490,27 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
     for (const m of (moras ?? []) as Array<{ contrato_id: string }>) conMora.add(m.contrato_id);
   }
 
+  // Indicador de estudios en curso (Flujo §4.2), UNA consulta agregada para
+  // todo el portafolio — no una por inmueble.
+  const agregadoPorInmueble = new Map<string, { estudios_activos: number; reservado: boolean }>();
+  if (inmuebleIds.length > 0) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: ag, error: eAg } = await (supabase as any).rpc('fn_inmuebles_estado_estudios', {
+      p_inmueble_ids: inmuebleIds,
+    });
+    if (eAg) {
+      logger.warn({ error: eAg.message }, 'No se pudo calcular el indicador de estudios activos (mis inmuebles)');
+    } else {
+      for (const r of (ag as Array<{ inmueble_id: string; estudios_activos: number; reservado: boolean }> | null) ?? []) {
+        agregadoPorInmueble.set(r.inmueble_id, { estudios_activos: r.estudios_activos, reservado: r.reservado });
+      }
+    }
+  }
+
   const inmuebles: MiInmuebleRow[] = inms.map((i) => {
     const id = i.id as string;
     const activo = activoPorInmueble.get(id);
+    const agregado = agregadoPorInmueble.get(id);
     return {
       id,
       codigo: (i.codigo as string) ?? null,
@@ -505,6 +531,8 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
       garantiaActiva: !!activo,
       pago: activo ? (conMora.has(activo.contratoId) ? 'mora' : 'al_dia') : null,
       historial: historialPorInmueble.get(id) ?? [],
+      estudiosActivos: agregado?.estudios_activos ?? 0,
+      reservado: agregado?.reservado ?? false,
     };
   });
 

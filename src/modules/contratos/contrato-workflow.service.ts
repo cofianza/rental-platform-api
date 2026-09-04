@@ -684,6 +684,13 @@ async function aplicarEfectosTerminacion(
  * camino (vigente/firmado/pendiente_firma) — típico al finalizar el contrato
  * padre cuando ya corre su renovación — NO se libera: el inmueble sigue
  * arrendado por el contrato sucesor.
+ *
+ * Guard de PROPIEDAD (§4.2, estudios simultáneos): el de renovación solo mira
+ * contratos del MISMO expediente, y con varios candidatos por inmueble eso ya
+ * no basta — cancelar un contrato muerto de A no puede liberar el inmueble que
+ * B tiene arrendado. Se consulta también si queda algún contrato activo de
+ * CUALQUIER expediente del inmueble; si lo hay, el inmueble no se toca (pero el
+ * expediente sí se considera cerrado: el return sigue siendo sobre él).
  */
 /**
  * @returns `true` si el expediente NO tiene contrato sucesor activo (vigente/
@@ -734,8 +741,49 @@ async function liberarInmuebleDelExpediente(
     // Sin inmueble no hay nada que liberar, pero el expediente igual quedó sin
     // sucesor → se considera cerrado (safe para cancelar pagos).
     if (!inmuebleId) return true;
+
+    // Guard de PROPIEDAD: ¿queda algún contrato activo de OTRO expediente sobre
+    // este mismo inmueble? Si sí, el inmueble sigue comprometido y no se libera.
+    // El expediente propio sí terminó → se devuelve true igualmente.
+    const { data: expsDelInmueble, error: expsError } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('inmueble_id', inmuebleId);
+    if (expsError) {
+      logger.error(
+        { inmuebleId, expedienteId, error: expsError.message },
+        'Guard de propiedad falló — inmueble NO liberado por precaución',
+      );
+      return true;
+    }
+    const expIds = ((expsDelInmueble as Array<{ id: string }> | null) ?? []).map((e) => e.id);
+    if (expIds.length > 0) {
+      const { data: ajenos, error: ajenosError } = await (supabase
+        .from('contratos' as string) as ReturnType<typeof supabase.from>)
+        .select('id, expediente_id')
+        .in('expediente_id', expIds)
+        .neq('expediente_id', expedienteId)
+        .in('estado', ['vigente', 'firmado', 'pendiente_firma'])
+        .limit(1);
+      if (ajenosError) {
+        logger.error(
+          { inmuebleId, expedienteId, error: ajenosError.message },
+          'Guard de propiedad falló — inmueble NO liberado por precaución',
+        );
+        return true;
+      }
+      const ajeno = ((ajenos as Array<{ id: string; expediente_id: string }> | null) ?? [])[0];
+      if (ajeno) {
+        logger.info(
+          { inmuebleId, expedienteId, contratoAjeno: ajeno.id },
+          'Inmueble NO liberado: otro expediente tiene un contrato activo sobre esta propiedad',
+        );
+        return true;
+      }
+    }
+
     const { liberarInmuebleTrasContrato } = await import('@/modules/inmuebles/inmuebles.service');
-    await liberarInmuebleTrasContrato(inmuebleId, desde);
+    await liberarInmuebleTrasContrato(inmuebleId, desde, expedienteId);
     return true;
   } catch (err) {
     logger.error({ err, expedienteId }, 'No se pudo liberar el inmueble tras fin/cancelación del contrato');

@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds, perfilEsDuenoDeInmueble, assertInmuebleAccess } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
+import { errorReservaPerdida } from '../estudios/estudios-simultaneos.guard';
 import type {
   CreateInmuebleInput,
   UpdateInmuebleInput,
@@ -39,6 +40,8 @@ interface InmuebleRow {
   estado: string;
   propietario_id: string;
   miembro_responsable_id: string | null;
+  /** Expediente que tiene tomada la reserva (Flujo §4.2), o null. */
+  reservado_por_expediente_id: string | null;
   visible_vitrina: boolean;
   foto_fachada_url: string | null;
   created_at: string;
@@ -54,7 +57,7 @@ interface InmuebleWithOwnerRow extends InmuebleRow {
   perfiles: { id: string; nombre: string; apellido: string; telefono: string | null } | null;
 }
 
-const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, inmobiliaria_id, miembro_responsable_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
+const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, inmobiliaria_id, miembro_responsable_id, reservado_por_expediente_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
 
 const INMUEBLE_WITH_OWNER = `${INMUEBLE_FIELDS}, perfiles!inmuebles_propietario_id_fkey(id, nombre, apellido, telefono)`;
 
@@ -74,6 +77,60 @@ function mapWithOwner(row: InmuebleWithOwnerRow) {
       ? { id: perfiles.id, nombre: perfiles.nombre, apellido: perfiles.apellido, telefono: perfiles.telefono } as PropietarioWithEmail
       : null,
   };
+}
+
+/**
+ * Indicador de estudios en curso por inmueble (Flujo de Gerencia §4.2: "se
+ * muestra un indicador con el numero de estudios activos, sin impedir la
+ * seleccion").
+ *
+ * UNA sola consulta por PAGINA de resultados, no una por fila: se pasan los
+ * <= limit ids de la pagina a fn_inmuebles_estado_estudios y se mapean de
+ * vuelta. Es el mismo patron "query extra + Map" que ya usa getVitrinaAdmin
+ * para visitas/contactos. PostgREST no puede agregar a dos saltos
+ * (inmuebles -> expedientes -> estudios) en una proyeccion utilizable.
+ *
+ * Best-effort: si la RPC falla (o todavia no corrio la migracion), las filas
+ * salen sin contador. El indicador es informativo — no puede tumbar el listado.
+ *
+ * Devuelve tambien `reservado` / `arrendado` porque en `estado` las dos son
+ * 'ocupado' y la UI necesita distinguir "Reservado" (contrato en proceso) de
+ * "Arrendado" (contrato vigente).
+ */
+async function anotarEstudiosActivos<T extends { id: string }>(rows: T[]): Promise<T[]> {
+  if (rows.length === 0) return rows;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('fn_inmuebles_estado_estudios', {
+    p_inmueble_ids: rows.map((r) => r.id),
+  });
+
+  if (error) {
+    logger.warn({ error: error.message }, 'No se pudo calcular el indicador de estudios activos');
+    return rows;
+  }
+
+  type AgregadoRow = {
+    inmueble_id: string;
+    estudios_activos: number;
+    expedientes_activos: number;
+    reservado: boolean;
+    arrendado: boolean;
+  };
+  const porId = new Map<string, AgregadoRow>(
+    ((data as AgregadoRow[] | null) ?? []).map((r) => [r.inmueble_id, r]),
+  );
+
+  return rows.map((r) => {
+    const ag = porId.get(r.id);
+    return {
+      ...r,
+      estudios_activos: ag?.estudios_activos ?? 0,
+      expedientes_activos: ag?.expedientes_activos ?? 0,
+      reservado: ag?.reservado ?? false,
+      arrendado: ag?.arrendado ?? false,
+    };
+  });
 }
 
 export async function listInmuebles(query: ListInmueblesQuery, restrictToIds?: string[] | null) {
@@ -142,7 +199,8 @@ export async function listInmuebles(query: ListInmueblesQuery, restrictToIds?: s
   const total = count ?? 0;
 
   return {
-    inmuebles: rows,
+    // Indicador §4.2: +1 query por pagina, nunca N+1.
+    inmuebles: await anotarEstudiosActivos(rows),
     pagination: {
       total,
       page,
@@ -186,7 +244,10 @@ export async function getInmuebleById(id: string) {
     }
   }
 
-  return inmueble;
+  // El detalle tambien lleva el indicador §4.2: la ficha del inmueble es donde
+  // el gestor decide si inicia otro estudio.
+  const [conIndicador] = await anotarEstudiosActivos([inmueble]);
+  return conIndicador;
 }
 
 export async function createInmueble(input: CreateInmuebleInput, createdBy: string, ip?: string) {
@@ -321,12 +382,31 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
   }
 
   // Guard de estado (el PUT general no pasa por la máquina de estados de
-  // contratos): liberar un 'ocupado' a mano solo es legítimo si NO hay un
-  // contrato vigente sobre el inmueble — la liberación real la hace el
-  // workflow del contrato (terminar/cancelar). Sin esto, cualquier dueño
-  // podía re-publicar un inmueble arrendado con PUT {estado:'disponible'}.
+  // contratos): liberar un 'ocupado' a mano solo es legítimo si el inmueble NO
+  // está comprometido — la liberación real la hace el workflow del contrato
+  // (terminar/cancelar). Sin esto, cualquier dueño podía re-publicar un
+  // inmueble arrendado con PUT {estado:'disponible'}.
+  //
+  // Desde el Flujo §4.2 hay DOS formas de estar comprometido, y el guard tiene
+  // que cubrir las dos:
+  //   1. RESERVADO — `reservado_por_expediente_id` apunta a un expediente cuyo
+  //      contrato está en curso pero todavía sin firmar. Es el caso NUEVO: ya
+  //      no hay contrato vigente que detectar, así que el guard viejo lo dejaba
+  //      pasar y el inmueble volvía 'disponible' CON el titular escrito ->
+  //      reaparecía en la vitrina, admitía estudios nuevos, y todos ellos se
+  //      estrellaban contra INMUEBLE_YA_RESERVADO al generar su contrato
+  //      (callejón sin salida: solo se limpia cerrando el expediente titular).
+  //   2. ARRENDADO — contrato vigente. El caso de siempre.
   const prevRow = previous as unknown as Record<string, unknown>;
+  const reservadoPorExpedienteId = (prevRow.reservado_por_expediente_id as string | null) ?? null;
   if (input.estado === 'disponible' && prevRow.estado === 'ocupado') {
+    if (reservadoPorExpedienteId) {
+      throw AppError.conflict(
+        'El inmueble está reservado para un candidato aprobado y su contrato está en proceso. ' +
+          'Para liberarlo, termina o cancela ese contrato.',
+        'INMUEBLE_RESERVADO',
+      );
+    }
     const contratoVigente = await getContratoVigenteDeInmueble(id);
     if (contratoVigente) {
       throw AppError.conflict(
@@ -345,11 +425,22 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
   //     fuerza a false de todas formas) → se apaga: cada edición auto-sanea
   //     filas rancias. OJO: 'en_estudio' se exime a propósito — ahí el flag
   //     en true se CONSERVA para que el inmueble vuelva solo a la vitrina si
-  //     el estudio se cae.
+  //     el estudio se cae. (Desde §4.2 'en_estudio' ya no se escribe; la
+  //     exención sigue solo por las filas legadas sin normalizar.)
+  //  3. RESERVADO (§4.2) → se apaga SIEMPRE, sea cual sea el estado final. Un
+  //     inmueble con titular de reserva está comprometido aunque el PUT intente
+  //     dejarlo 'disponible'; publicarlo reproduce el bug Apt-001 de la
+  //     auditoría de vitrina (panel mostrando "En vitrina" sobre un inmueble
+  //     que no admite candidatos nuevos).
   const estadoFinal = (input.estado ?? prevRow.estado) as string;
   if (updateData.visible_vitrina === true) {
     const encendiendo = prevRow.visible_vitrina !== true;
-    if ((encendiendo && estadoFinal !== 'disponible') || estadoFinal === 'ocupado' || estadoFinal === 'inactivo') {
+    if (
+      (encendiendo && estadoFinal !== 'disponible') ||
+      estadoFinal === 'ocupado' ||
+      estadoFinal === 'inactivo' ||
+      reservadoPorExpedienteId !== null
+    ) {
       updateData.visible_vitrina = false;
     }
   }
@@ -534,7 +625,8 @@ export async function searchInmuebles(query: SearchInmueblesQuery, restrictToIds
   const total = count ?? 0;
 
   return {
-    inmuebles: rows,
+    // Indicador §4.2: +1 query por pagina, nunca N+1.
+    inmuebles: await anotarEstudiosActivos(rows),
     pagination: {
       total,
       page,
@@ -544,55 +636,35 @@ export async function searchInmuebles(query: SearchInmueblesQuery, restrictToIds
   };
 }
 
-/**
- * Valida que un inmueble no esté en estado 'en_estudio'.
- * Invocable desde el módulo de estudios antes de iniciar uno nuevo (AC 10).
- * @throws 409 si el inmueble ya tiene un estudio en curso.
- */
-export async function validateDisponibleParaEstudio(inmuebleId: string) {
-  const inmueble = await getInmuebleById(inmuebleId);
-  const estado = (inmueble as unknown as Record<string, unknown>).estado;
-
-  if (estado === 'en_estudio') {
-    throw new AppError(
-      409,
-      'INMUEBLE_EN_ESTUDIO',
-      'El inmueble ya tiene un estudio en curso. No se permite iniciar otro estudio mientras esté en estado "En Estudio"',
-    );
-  }
-
-  return inmueble;
-}
-
 // ============================================================
-// Bloqueo automático del inmueble según el ciclo del expediente.
-// La vitrina pública filtra estado='disponible' AND visible_vitrina=true.
-//   - Temporal (en_estudio): mientras un candidato está en estudio. Solo desde
-//     'disponible' (no pisa 'ocupado'/'inactivo'). Reversible: CONSERVA
-//     visible_vitrina para que al caerse el estudio vuelva solo a la vitrina.
-//   - Permanente (ocupado): al quedar el contrato vigente. Aquí SÍ se apaga
-//     visible_vitrina: el flag nunca se aprovecha durante la ocupación (la
-//     liberación posterior lo fuerza a false de todas formas) y dejarlo en
-//     true hacía que el dashboard mostrara "En vitrina"/toggle ON en un
-//     inmueble arrendado (bug Apt-001, jul-2026).
+// Estado del inmueble segun el ciclo del CONTRATO (Flujo de Gerencia §4.2).
+//
+// Hasta 2026-09-03 el estado seguia el ciclo del ESTUDIO: el primer candidato
+// que entraba en estudio dejaba el inmueble 'en_estudio' y ahi se acababa el
+// negocio para los demas. §4.2 lo cambio: varios estudios en curso conviven
+// sobre la misma propiedad, y la proteccion contra el doble arriendo se corrio
+// al final — la propiedad se RESERVA cuando un candidato aprobado avanza a la
+// generacion del contrato.
+//
+// Consecuencias en este archivo:
+//   - 'en_estudio' ya NO se escribe (bloquearInmuebleEnEstudio se retiro junto
+//     con su unico llamador). El valor sigue en el enum por las filas
+//     historicas, y las liberaciones lo siguen aceptando como origen para que
+//     cualquier fila rancia se auto-sanee.
+//   - validateDisponibleParaEstudio se borro: era codigo muerto (ningun
+//     llamador en ninguno de los dos repos) y ademas codificaba justo la regla
+//     que §4.2 elimina.
+//   - La RESERVA es atomica y vive en la base (fn_reservar_inmueble_para_
+//     contrato). Aqui solo esta el envoltorio.
+//
+// La regla canonica de vitrina NO cambia: publicado <=> visible_vitrina = true
+// AND estado = 'disponible'. La reserva usa 'ocupado' precisamente para salir
+// de la vitrina por esa misma regla, sin logica nueva.
+//
 // Fire-and-forget desde los flujos: no deben tumbar el flujo de negocio.
+// EXCEPCION: reservarInmuebleParaContrato SI lanza — es la unica barrera
+// contra el doble arriendo y tragarse su fallo la anularia.
 // ============================================================
-
-async function setInmuebleEstado(inmuebleId: string, estado: string, soloDesde?: string | string[]) {
-  let qb = (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado, updated_at: new Date().toISOString() } as never)
-    .eq('id', inmuebleId);
-  if (Array.isArray(soloDesde)) qb = qb.in('estado', soloDesde);
-  else if (soloDesde) qb = qb.eq('estado', soloDesde);
-  const { error } = await qb;
-  if (error) logger.warn({ error: error.message, inmuebleId, estado }, 'No se pudo actualizar el estado del inmueble');
-}
-
-/** Bloqueo TEMPORAL: el candidato entró en estudio. disponible → en_estudio. */
-export async function bloquearInmuebleEnEstudio(inmuebleId: string) {
-  await setInmuebleEstado(inmuebleId, 'en_estudio', 'disponible');
-}
 
 /**
  * Bloqueo PERMANENTE: contrato vigente. → ocupado + fuera de vitrina.
@@ -600,6 +672,12 @@ export async function bloquearInmuebleEnEstudio(inmuebleId: string) {
  * false): el dueño decide re-publicar cuando el inmueble vuelva a liberarse.
  * NO pisa un 'inactivo' (soft-delete): misma cortesía que la liberación —
  * si el dueño desactivó el inmueble a mano, ningún flujo automático lo revive.
+ *
+ * Desde §4.2 este ya no es el PRIMER momento en que el inmueble sale del
+ * mercado: la reserva (fn_reservar_inmueble_para_contrato) lo dejó 'ocupado'
+ * al generar el contrato. Esta llamada queda como confirmación idempotente al
+ * quedar vigente, y sigue cubriendo los caminos que nunca pasaron por una
+ * reserva (activación manual, contrato en papel).
  */
 export async function bloquearInmuebleOcupado(inmuebleId: string) {
   const { error } = await (supabase
@@ -610,29 +688,185 @@ export async function bloquearInmuebleOcupado(inmuebleId: string) {
   if (error) logger.warn({ error: error.message, inmuebleId }, 'No se pudo marcar el inmueble como ocupado');
 }
 
-/** Liberar SOLO el bloqueo temporal (rechazo/cancelación). en_estudio → disponible. */
-export async function liberarInmuebleEnEstudio(inmuebleId: string) {
-  await setInmuebleEstado(inmuebleId, 'disponible', 'en_estudio');
+/**
+ * RESERVA ATOMICA del inmueble de un expediente aprobado que avanza al
+ * contrato (Flujo §4.2). Es el punto UNICO donde la propiedad se compromete y
+ * la unica barrera contra el doble arriendo.
+ *
+ * Toda la atomicidad esta en la RPC: SELECT ... FOR UPDATE sobre la fila del
+ * inmueble + titular escalar `reservado_por_expediente_id`. De dos aprobaciones
+ * concurrentes, la segunda se bloquea en el lock y al despertar lee el titular
+ * ya escrito -> pierde. No se replica ninguna decision aqui: hacerlo en JS
+ * volveria a abrir la ventana entre leer y escribir.
+ *
+ * LANZA (no es fire-and-forget) — 409 INMUEBLE_YA_RESERVADO si otro candidato
+ * llego primero. El caller debe abortar la generacion del contrato.
+ *
+ * Idempotente para el propio titular: regenerar el contrato del mismo
+ * expediente devuelve `ya_reservado: true` sin error.
+ */
+export interface ReservaInmuebleResult {
+  reservado: boolean;
+  ya_reservado: boolean;
+  sin_inmueble?: boolean;
+  inmueble_id?: string | null;
+  inmueble_codigo?: string | null;
+  inmueble_direccion?: string | null;
+  /** Los DEMAS expedientes con estudio en curso sobre la propiedad (§4.2). */
+  afectados: Array<{
+    expediente_id: string;
+    expediente_numero: string | null;
+    solicitante_id: string | null;
+    solicitante_nombre: string | null;
+    solicitante_apellido: string | null;
+    solicitante_email: string | null;
+  }>;
+}
+
+export async function reservarInmuebleParaContrato(
+  expedienteId: string,
+): Promise<ReservaInmuebleResult> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('fn_reservar_inmueble_para_contrato', {
+    p_expediente_id: expedienteId,
+  });
+
+  if (error) {
+    const msg = (error.message || '') as string;
+    if (msg.includes('INMUEBLE_YA_RESERVADO')) {
+      logger.warn({ expedienteId, detalle: msg }, 'Reserva perdida: la propiedad ya estaba comprometida');
+      throw errorReservaPerdida({
+        accion: 'conflicto',
+        motivo: msg.includes('arrendada') ? 'ocupado' : msg.includes('inactivo') ? 'inactivo' : 'reservado',
+        titular: null,
+      });
+    }
+    if (msg.includes('no encontrado')) {
+      throw AppError.notFound('Expediente o inmueble no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    }
+    // ORDEN DE DESPLIEGUE. Si este codigo sale antes de correr la migracion
+    // 20260903000005, la RPC no existe y TODA generacion de contrato se
+    // detiene. Se falla igual de cerrado —seguir sin reserva es el doble
+    // arriendo— pero el mensaje nombra la causa para que se diagnostique en
+    // segundos en vez de parecer una caida de la base.
+    const faltaMigracion =
+      error.code === 'PGRST202' ||
+      msg.includes('Could not find the function') ||
+      msg.includes('does not exist');
+    if (faltaMigracion) {
+      logger.error(
+        { expedienteId, error: msg },
+        'fn_reservar_inmueble_para_contrato no existe — falta correr la migracion 20260903000005; no se genera ningun contrato',
+      );
+      throw new AppError(
+        503,
+        'RESERVA_NO_VERIFICABLE',
+        'La reserva de propiedades no esta disponible (falta aplicar la migracion de estudios simultaneos). ' +
+          'No se genero el contrato para no arriesgar un doble arriendo.',
+      );
+    }
+
+    // FAIL-CLOSED. Si no podemos confirmar la reserva NO se genera el contrato:
+    // seguir seria exactamente el doble arriendo que esta funcion existe para
+    // impedir.
+    logger.error({ expedienteId, error: msg }, 'No se pudo reservar el inmueble — se aborta la generacion del contrato');
+    throw new AppError(
+      503,
+      'RESERVA_NO_VERIFICABLE',
+      'No pudimos confirmar la reserva de la propiedad en este momento, asi que no generamos el contrato. Intenta de nuevo en un momento.',
+    );
+  }
+
+  const result = (data as ReservaInmuebleResult | null) ?? {
+    reservado: false,
+    ya_reservado: false,
+    afectados: [],
+  };
+  return { ...result, afectados: result.afectados ?? [] };
+}
+
+/**
+ * Contrapartida de la reserva: la suelta SOLO si este expediente es su titular.
+ *
+ * Sustituye a liberarInmuebleEnEstudio en los tres caminos de rechazo/cierre.
+ * El criterio del titular es ORTOGONAL al de la migración 20260817000002 ("no
+ * liberar si el expediente ya está aprobado"), NO lo subsume: protege de que el
+ * rechazo del candidato B suelte la reserva de A, pero no de que un rechazo
+ * tardío del PROPIO titular (típicamente el estudio del co-arrendatario, que
+ * comparte expediente_id) suelte una reserva con contrato ya en curso. Ese
+ * segundo guard vive donde le corresponde, en cada caller:
+ *   - fn_registrar_resultado_estudio lo aplica en SQL (estado del expediente +
+ *     contrato no terminal) antes de tocar el inmueble.
+ *   - liberarReservaSiNoQuedaContratoVivo (expediente-workflow.service.ts) lo
+ *     aplica antes de llamar aquí.
+ *
+ * Fire-and-forget: liberar de menos deja un inmueble bloqueado (molesto,
+ * corregible a mano); liberar de más produce doble arriendo. Se falla al lado
+ * seguro y se loguea.
+ */
+export async function liberarReservaDeExpediente(
+  expedienteId: string,
+  volverDisponible = true,
+): Promise<boolean> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('fn_liberar_reserva_expediente', {
+    p_expediente_id: expedienteId,
+    p_volver_disponible: volverDisponible,
+  });
+  if (error) {
+    logger.warn({ error: error.message, expedienteId }, 'No se pudo liberar la reserva del inmueble');
+    return false;
+  }
+  return data === true;
 }
 
 /**
  * Liberar al terminar/cancelar el contrato: el inmueble vuelve a 'disponible'.
  * `desde` acota desde qué estados se libera (default: ocupado —contrato
- * vigente terminado— o en_estudio —cancelación desde vigente—); el caller de
- * cancelaciones pre-firma pasa solo ['ocupado'] para no tocar el bloqueo
- * en_estudio del expediente. NUNCA revive un 'inactivo' (soft-delete manual).
- * Lo saca de la vitrina (visible_vitrina=false): el dueño decide cuándo
- * re-publicarlo para arrendarlo de nuevo.
+ * vigente terminado— o en_estudio —filas legadas—); el caller de cancelaciones
+ * pre-firma pasa solo ['ocupado']. NUNCA revive un 'inactivo' (soft-delete
+ * manual). Lo saca de la vitrina (visible_vitrina=false): el dueño decide
+ * cuándo re-publicarlo para arrendarlo de nuevo.
+ *
+ * Limpia además el titular de la reserva: si no lo hiciera, el inmueble
+ * quedaría 'disponible' pero con `reservado_por_expediente_id` apuntando a un
+ * contrato muerto, y los guards de admisión seguirían viéndolo comprometido.
+ *
+ * HOLDER-AWARE, igual que su gemela SQL fn_liberar_reserva_expediente: solo
+ * libera si el inmueble NO tiene titular o si el titular es `expedienteId` (el
+ * expediente cuyo contrato se acaba de terminar/cancelar). Sin esto, cancelar
+ * un contrato muerto del expediente A borraba la reserva de B y ponía
+ * 'disponible' un inmueble que B tiene arrendado con contrato vigente — el
+ * filtro por `desde` no lo evita, porque un inmueble arrendado está justamente
+ * en 'ocupado'.
  */
 export async function liberarInmuebleTrasContrato(
   inmuebleId: string,
   desde: string[] = ['ocupado', 'en_estudio'],
+  expedienteId?: string | null,
 ) {
-  const { error } = await (supabase
+  let query = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .update({ estado: 'disponible', visible_vitrina: false, updated_at: new Date().toISOString() } as never)
+    .update({
+      estado: 'disponible',
+      visible_vitrina: false,
+      reservado_por_expediente_id: null,
+      updated_at: new Date().toISOString(),
+    } as never)
     .eq('id', inmuebleId)
     .in('estado', desde);
+
+  if (expedienteId) {
+    query = query.or(
+      `reservado_por_expediente_id.is.null,reservado_por_expediente_id.eq.${expedienteId}`,
+    );
+  } else {
+    // Sin expediente conocido solo se libera lo que no tiene dueño de reserva:
+    // fallar al lado seguro (dejar bloqueado) en vez de pisar la reserva ajena.
+    query = query.is('reservado_por_expediente_id', null);
+  }
+
+  const { error } = await query;
   if (error) logger.warn({ error: error.message, inmuebleId }, 'No se pudo liberar el inmueble tras contrato');
 }
 

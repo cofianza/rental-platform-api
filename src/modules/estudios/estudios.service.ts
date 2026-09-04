@@ -32,6 +32,9 @@ import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './aut
 // Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
 // de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
 import { assertCanonDentroDelTope } from './tope-canon.guard';
+// Estudios simultaneos por inmueble (Flujo §4.2). De aqui salen la definicion
+// canonica de "estudio en curso" y el unico bloqueo que queda: la reserva.
+import { errorNoAdmision, ESTADOS_ESTUDIO_FINALES } from './estudios-simultaneos.guard';
 
 // ============================================================
 // Constants
@@ -39,7 +42,10 @@ import { assertCanonDentroDelTope } from './tope-canon.guard';
 
 const TOKEN_EXPIRY_HOURS = 72;
 const ESTADOS_TERMINALES_EXPEDIENTE = ['cerrado', 'rechazado'];
-const ESTADOS_ESTUDIO_FINALIZADOS = ['completado', 'fallido', 'cancelado'];
+// Misma lista que el guard de estudios simultaneos: una sola definicion de
+// "estudio finalizado" para el indicador del §4.2 y para el limite de un
+// estudio activo POR EXPEDIENTE (que sigue vigente y no lo toca el cambio).
+const ESTADOS_ESTUDIO_FINALIZADOS: readonly string[] = ESTADOS_ESTUDIO_FINALES;
 const ESTADOS_PERMITIDOS_RESULTADO = ['solicitado', 'en_proceso'];
 // 'fallido' tambien se permite para que el solicitante pueda reintentar tras
 // un error transitorio del proveedor (caida de TransUnion, doc invalido en el
@@ -580,11 +586,16 @@ export async function createEstudio(
 
   if (rpcError) {
     logger.error({ error: rpcError.message, expedienteId }, 'Error al crear estudio (RPC)');
-    if (rpcError.message?.includes('en_estudio') || rpcError.message?.includes('estudio en proceso')) {
-      throw AppError.conflict(
-        'El inmueble ya tiene un estudio en proceso. Debe finalizar o cancelar el estudio actual.',
-        'INMUEBLE_EN_ESTUDIO',
-      );
+    // Flujo §4.2: tener otros estudios en curso ya NO bloquea — varios
+    // candidatos se evaluan en paralelo. El unico bloqueo por inmueble que
+    // queda es que la propiedad este reservada por un candidato aprobado que
+    // avanzo al contrato (o arrendada/inactiva).
+    if (rpcError.message?.includes('INMUEBLE_RESERVADO')) {
+      throw errorNoAdmision({
+        admite: false,
+        motivo: rpcError.message.includes('inactivo') ? 'inactivo' : 'reservado',
+        reservadoPorExpedienteId: null,
+      });
     }
     throw AppError.badRequest('Error al crear el estudio', 'ESTUDIO_CREATE_ERROR');
   }
@@ -669,11 +680,16 @@ export async function createEstudioFromInmueble(
       const entity = rpcError.message.includes('Inmueble') ? 'Inmueble' : 'Solicitante';
       throw AppError.notFound(`${entity} no encontrado`, `${entity.toUpperCase()}_NOT_FOUND`);
     }
-    if (rpcError.message?.includes('en_estudio') || rpcError.message?.includes('estudio en proceso')) {
-      throw AppError.conflict(
-        'El inmueble ya tiene un estudio en proceso. Debe finalizar o cancelar el estudio actual.',
-        'INMUEBLE_EN_ESTUDIO',
-      );
+    // Flujo §4.2: tener otros estudios en curso ya NO bloquea — varios
+    // candidatos se evaluan en paralelo. El unico bloqueo por inmueble que
+    // queda es que la propiedad este reservada por un candidato aprobado que
+    // avanzo al contrato (o arrendada/inactiva).
+    if (rpcError.message?.includes('INMUEBLE_RESERVADO')) {
+      throw errorNoAdmision({
+        admite: false,
+        motivo: rpcError.message.includes('inactivo') ? 'inactivo' : 'reservado',
+        reservadoPorExpedienteId: null,
+      });
     }
     throw AppError.badRequest('Error al crear el estudio', 'ESTUDIO_CREATE_ERROR');
   }

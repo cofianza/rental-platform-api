@@ -143,40 +143,18 @@ export async function executeTransition(
 
   }
 
-  // Liberar el inmueble si estaba bloqueado temporalmente (en_estudio) por
-  // este expediente. Corre en TODO rechazo o cierre — no solo en cancelación:
-  // antes un condicionado→rechazado manual dejaba el inmueble atascado en
-  // 'en_estudio' para siempre (sin admitir nuevos estudios ni volver a
-  // vitrina). Es seguro para el cierre natural post-contrato: el flujo del
-  // contrato ya marcó el inmueble 'ocupado' y liberarInmuebleEnEstudio solo
-  // transiciona desde 'en_estudio'. Fire-and-forget.
+  // Soltar la RESERVA del inmueble si este expediente era su titular. Corre en
+  // TODO rechazo o cierre — no solo en cancelación: antes un
+  // condicionado→rechazado manual dejaba el inmueble atascado para siempre.
+  //
+  // Flujo §4.2: la liberación es ahora HOLDER-AWARE (solo suelta si
+  // `reservado_por_expediente_id` apunta a ESTE expediente), no "desde
+  // en_estudio". Con estudios simultáneos ese matiz es todo: el rechazo del
+  // candidato B no puede soltar la reserva que tomó A. Fire-and-forget.
   if (targetState === 'rechazado' || targetState === 'cerrado') {
     (async () => {
-      // Guard para el CIERRE: si el expediente tiene un contrato en curso
-      // (firmado a la espera de activarse, en firma, o vigente), NO liberar —
-      // el cierre manual aprobado→cerrado es válido con contrato 'firmado'
-      // (flujo papel) y liberar aquí re-publicaría un inmueble comprometido.
-      // El rechazo sí libera incondicional (el candidato no sigue).
-      if (targetState === 'cerrado') {
-        const { data: contratosActivos } = await (supabase
-          .from('contratos' as string) as ReturnType<typeof supabase.from>)
-          .select('id')
-          .eq('expediente_id', expedienteId)
-          .in('estado', ['vigente', 'firmado', 'pendiente_firma'])
-          .limit(1);
-        if (((contratosActivos as Array<{ id: string }> | null) ?? []).length > 0) return;
-      }
-      const { data: expRow } = await (supabase
-        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-        .select('inmueble_id')
-        .eq('id', expedienteId)
-        .maybeSingle();
-      const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
-      if (inmuebleId) {
-        const { liberarInmuebleEnEstudio } = await import('../inmuebles/inmuebles.service');
-        await liberarInmuebleEnEstudio(inmuebleId);
-      }
-    })().catch((e) => logger.warn({ e, expedienteId }, 'No se pudo liberar el inmueble tras rechazo/cierre'));
+      await liberarReservaSiNoQuedaContratoVivo(expedienteId, targetState, user.id);
+    })().catch((e) => logger.warn({ e, expedienteId }, 'No se pudo liberar la reserva del inmueble tras rechazo/cierre'));
   }
 
   logger.info(
@@ -192,6 +170,116 @@ export async function executeTransition(
     estado_anterior: result.estado_anterior,
     evento_timeline_id: result.evento_timeline_id,
   };
+}
+
+// ============================================================
+// Liberación de la reserva al rechazar/cerrar el expediente
+// ============================================================
+
+/**
+ * Estados PRE-FIRMA del contrato: el contrato existe pero nadie lo ha firmado
+ * ni enviado a firma. Al morir el expediente estos contratos se auto-cancelan,
+ * exactamente igual que las renovaciones pre-firma cuando termina su padre
+ * (aplicarEfectosTerminacion en contrato-workflow.service.ts).
+ */
+const CONTRATO_ESTADOS_PRE_FIRMA = ['borrador', 'en_revision', 'aprobado'] as const;
+
+/** Estados terminales del contrato: ya no comprometen la propiedad. */
+const CONTRATO_ESTADOS_TERMINALES = ['finalizado', 'cancelado'] as const;
+
+/**
+ * Suelta la reserva del inmueble al rechazar/cerrar el expediente, pero SOLO
+ * despues de asegurarse de que no queda ningun contrato vivo que pueda revivir
+ * y arrendar la propiedad por segunda vez.
+ *
+ * El guard viejo miraba unicamente ['vigente','firmado','pendiente_firma'] y
+ * solo en el cierre. Dejaba pasar dos agujeros de DOBLE ARRIENDO:
+ *
+ *   1. Un contrato en 'borrador'/'en_revision'/'aprobado' no lo veia. Se
+ *      liberaba el inmueble, otro candidato lo reservaba y firmaba, y despues
+ *      alguien retomaba aquel contrato (su unica precondicion, ESTUDIO_APROBADO,
+ *      sigue cumpliendose y nada mira el estado del expediente) hasta 'vigente'.
+ *      Dos contratos vigentes sobre la misma propiedad.
+ *   2. El rechazo liberaba INCONDICIONAL, asi que la ponderacion del
+ *      coarrendatario o el orchestrator podian soltar la reserva de un contrato
+ *      que estaba literalmente en la mesa de firmas.
+ *
+ * Ahora: (a) se auto-cancelan los contratos pre-firma —matar la via de vuelta,
+ * no solo detectarla, para que el gestor no quede atascado—; (b) el guard cubre
+ * TODO estado no terminal y se aplica igual al rechazo que al cierre. Si tras
+ * cancelar los pre-firma sigue habiendo un contrato en firma / firmado /
+ * vigente, NO se libera: esa propiedad esta comprometida y el camino correcto
+ * es cancelar o terminar el contrato desde su propio workflow (que si libera).
+ */
+async function liberarReservaSiNoQuedaContratoVivo(
+  expedienteId: string,
+  targetState: EstadoExpediente,
+  usuarioId: string | null,
+): Promise<void> {
+  // 1. Auto-cancelar los contratos pre-firma del expediente. Se usa el RPC
+  //    directo (mismo patron que la auto-cancelacion de renovaciones): no
+  //    queremos los side effects TS de la transicion, la liberacion la hacemos
+  //    aqui abajo una sola vez.
+  const { data: preFirma } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .in('estado', CONTRATO_ESTADOS_PRE_FIRMA as unknown as string[]);
+
+  const motivo = targetState === 'rechazado' ? 'Expediente rechazado' : 'Expediente cerrado';
+  for (const contrato of ((preFirma as Array<{ id: string; estado: string }> | null) ?? [])) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error: rpcErr } = await (supabase as any).rpc('transicionar_contrato', {
+      p_contrato_id: contrato.id,
+      p_nuevo_estado: 'cancelado',
+      p_descripcion: `Cancelacion automatica: el expediente quedo ${targetState}`,
+      p_usuario_id: usuarioId,
+      p_comentario: null,
+      p_motivo: motivo,
+    });
+    if (rpcErr) {
+      logger.warn(
+        { contratoId: contrato.id, expedienteId, error: (rpcErr as { message?: string }).message },
+        'No se pudo auto-cancelar el contrato pre-firma del expediente rechazado/cerrado',
+      );
+    } else {
+      await (supabase
+        .from('contratos' as string) as ReturnType<typeof supabase.from>)
+        .update({ motivo_cancelacion: motivo, fecha_terminacion: new Date().toISOString() } as never)
+        .eq('id', contrato.id);
+      logger.info({ contratoId: contrato.id, expedienteId }, 'Contrato pre-firma auto-cancelado con el expediente');
+    }
+  }
+
+  // 2. Guard: cualquier contrato NO TERMINAL que quede (incluidos los pre-firma
+  //    que no se pudieron cancelar) bloquea la liberacion. FAIL-CLOSED: si la
+  //    consulta falla tampoco liberamos — dejar un inmueble bloqueado es
+  //    molesto y corregible a mano; liberarlo de mas es doble arriendo.
+  const { data: vivos, error: guardError } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .not('estado', 'in', `(${CONTRATO_ESTADOS_TERMINALES.join(',')})`)
+    .limit(1);
+
+  if (guardError) {
+    logger.error(
+      { expedienteId, error: guardError.message },
+      'Guard de contrato vivo fallo — reserva NO liberada por precaucion',
+    );
+    return;
+  }
+  const contratoVivo = ((vivos as Array<{ id: string; estado: string }> | null) ?? [])[0];
+  if (contratoVivo) {
+    logger.info(
+      { expedienteId, contratoId: contratoVivo.id, estado: contratoVivo.estado },
+      'Reserva NO liberada: el expediente conserva un contrato no terminal',
+    );
+    return;
+  }
+
+  const { liberarReservaDeExpediente } = await import('../inmuebles/inmuebles.service');
+  await liberarReservaDeExpediente(expedienteId);
 }
 
 // ============================================================

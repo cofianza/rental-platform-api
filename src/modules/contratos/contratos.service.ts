@@ -1733,6 +1733,42 @@ export async function generarContrato(
     );
   }
 
+  // 1c. RESERVA DE LA PROPIEDAD (Flujo de Gerencia §4.2).
+  //
+  // "La propiedad se marca como reservada y deja de admitir nuevos estudios
+  //  unicamente cuando un estudio resulta APROBADO y avanza a la generacion del
+  //  contrato." Este es ese momento, y es el chokepoint por el que pasan los
+  //  DOS caminos aprobado -> contrato (aprobarCondicionado y
+  //  generarContratoExpediente) mas la pestaña Contratos.
+  //
+  // Va ANTES de renderizar el PDF a proposito: un perdedor del CAS no debe
+  // quemar un render de Puppeteer, y sobre todo no debe llegar a insertar un
+  // segundo contrato sobre la misma propiedad.
+  //
+  // ATOMICO: la RPC toma la fila del inmueble con SELECT ... FOR UPDATE y
+  // escribe un titular escalar. De dos aprobaciones concurrentes solo una
+  // reserva; la otra recibe 409 INMUEBLE_YA_RESERVADO y ESTA GENERACION SE
+  // ABORTA (la funcion lanza). Ese es el punto donde vive ahora la proteccion
+  // contra el doble arriendo, despues de que §4.2 quitara el bloqueo del
+  // inicio del flujo.
+  const { reservarInmuebleParaContrato } = await import('@/modules/inmuebles/inmuebles.service');
+  const reserva = await reservarInmuebleParaContrato(expedienteId);
+
+  // §4.2: "Al aprobarse uno. Los demas estudios en curso sobre esa propiedad se
+  // notifican al solicitante". Solo lo hace el GANADOR (en el camino
+  // idempotente `afectados` viene vacio), y es best-effort: la reserva ya esta
+  // confirmada en la base y no se revierte porque un correo falle. La
+  // REASIGNACION del estudio es el §4.3 y no se implementa aqui.
+  if (reserva.afectados.length > 0) {
+    const { avisarCandidatosDeReserva } = await import('@/modules/estudios/reserva-inmueble.notificaciones');
+    avisarCandidatosDeReserva({
+      afectados: reserva.afectados,
+      inmuebleCodigo: reserva.inmueble_codigo ?? null,
+      inmuebleDireccion: reserva.inmueble_direccion ?? null,
+      expedienteGanadorId: expedienteId,
+    }).catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar a los demas candidatos'));
+  }
+
   const now = new Date();
   // Prioridad: input del caller > datos persistidos en el expediente al
   // habilitar estudio > defaults (hoy + 12 meses). Asi el operador no tiene

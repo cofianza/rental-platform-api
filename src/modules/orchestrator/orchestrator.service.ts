@@ -440,15 +440,14 @@ export async function onEstudioCompletado(params: {
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');
 
-      // Liberar inmueble — SOLO el bloqueo temporal (en_estudio → disponible).
+      // Soltar la RESERVA del inmueble, si este expediente era su titular.
       // Llegar aquí ya implica que el expediente transicionó a 'rechazado'
-      // (guard arriba), así que no se suelta la reserva de un expediente vivo.
-      // El guard estado='en_estudio' dentro del helper evita además pisar un
-      // 'ocupado' legítimo si el resultado llega con un contrato ya vigente.
-      if (inm) {
-        const { liberarInmuebleEnEstudio } = await import('@/modules/inmuebles/inmuebles.service');
-        await liberarInmuebleEnEstudio(inm.id);
-      }
+      // (guard arriba). El helper es holder-aware (Flujo §4.2): si la reserva
+      // es de OTRO candidato aprobado, o no hay reserva, no toca nada — antes
+      // el criterio era "desde en_estudio", que con estudios simultáneos
+      // liberaba propiedades ajenas.
+      const { liberarReservaDeExpediente } = await import('@/modules/inmuebles/inmuebles.service');
+      await liberarReservaDeExpediente(expedienteId);
 
       if (sol?.email) {
         // Al PROSPECTO va el motivo GENERAL en el lenguaje del Flujo §10, sin
