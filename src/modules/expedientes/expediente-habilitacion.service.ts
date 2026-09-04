@@ -123,18 +123,24 @@ export async function habilitarEstudio(
   // fn_habilitar_estudio_expediente, en la misma transacción.
 
   // 3. Notificación + pago. La regla de negocio es QUIÉN decide el pago:
-  //    - PROPIETARIO individual: se manda directo. Auto-creamos el Checkout
-  //      Session y enviarLinkPago() le envía al solicitante el link de pago
-  //      (email + WhatsApp); por eso omitimos el email genérico de "habilitado".
+  //    - PROPIETARIO individual: se manda directo. Llamamos a enviarLinkPago(),
+  //      que desde el §6.3 NO cobra en esta primera pasada: le envía al
+  //      solicitante el enlace de AUTORIZACIÓN (habeas data) y deja anotado que
+  //      el pagador será el arrendatario; el cobro se le genera cuando firme.
+  //      Por eso omitimos igual el email genérico de "habilitado".
   //    - INMOBILIARIA / admin / operador: NO se notifica nada al solicitante
   //      todavía. El gestor decide primero quién paga (usar un crédito, asumir
   //      el costo, o "Enviar link al arrendatario") desde el panel del
-  //      expediente. Recién entonces se le escribe al solicitante:
-  //        · "Enviar link al arrendatario" → enviarLinkPago() (correo + WhatsApp)
-  //        · pagar con crédito             → enviarEnlaceAutorizacion() (Habeas Data)
+  //      expediente. Recién entonces se le escribe al solicitante — y en las
+  //      tres opciones lo PRIMERO que recibe es el habeas data:
+  //        · "Enviar link al arrendatario" → enviarLinkPago() → autorización
+  //          primero, cobro al firmar (§6.3, opción C)
+  //        · crédito / asumir el costo     → onEstudioPagado() → autorización
+  //          (ahí el pagador es la agencia y el cobro ya ocurrió: A y B no
+  //          invierten nada)
   //      Mandar aquí el correo "paga el estudio" era prematuro: el solicitante
   //      recibía la orden de pagar aunque la inmobiliaria fuera a cubrirlo con
-  //      un crédito.
+  //      un crédito. Y desde el §6.3 sería además cobrar antes de autorizar.
   const puedeAutoCrearPago =
     userRol === 'propietario' &&
     !!ctx.solicitanteEmail &&
@@ -152,7 +158,7 @@ export async function habilitarEstudio(
       );
       logger.info(
         { expedienteId, estudioId: rpcResult.estudio_id },
-        'Pago de estudio auto-creado tras habilitación por propietario',
+        '§6.3: autorización enviada al solicitante tras habilitación por propietario (el cobro se genera cuando firme)',
       );
     } catch (pagoError) {
       // Si la pasarela falla, caemos al email genérico para que el solicitante
@@ -160,7 +166,7 @@ export async function habilitarEstudio(
       // el panel (futuro: self-service).
       logger.warn(
         { error: pagoError, expedienteId, estudioId: rpcResult.estudio_id },
-        'Error al auto-crear pago de estudio post-habilitación',
+        'Error al enviar la autorización/pago de estudio post-habilitación',
       );
       await sendHabilitadoFallbackEmail(expedienteId, rpcResult.numero, ctx);
     }
@@ -185,7 +191,7 @@ export async function habilitarEstudio(
         userId: solicitanteUserId,
         tipo: 'estudio.habilitado',
         titulo: 'Estudio habilitado',
-        mensaje: 'El propietario habilitó tu estudio crediticio. Realiza el pago para continuar con la evaluación.',
+        mensaje: 'El propietario habilitó tu estudio crediticio. Firma la autorización de datos para continuar; el cobro llega después de que autorices.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, estudio_id: rpcResult.estudio_id },
       });

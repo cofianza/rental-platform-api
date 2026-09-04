@@ -1020,7 +1020,7 @@ function buildPaymentLinkHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este link de pago expirara en <strong>48 horas</strong>. Si necesitas un nuevo link, contacta a tu agente inmobiliario.
+                Si tienes cualquier problema con el pago, contacta a tu agente inmobiliario.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />

@@ -4,6 +4,7 @@
 // ============================================================
 
 import { supabase } from '@/lib/supabase';
+import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequeridosEmail, sendArrendatarioAprobadoNotificacionEmail } from './orchestrator.emails';
 import { notificarUsuario, notificarResponsableExpediente } from '@/modules/notificaciones/notificaciones.service';
@@ -14,6 +15,14 @@ import {
   inferirReglasDurasDesdeMotivo,
 } from '@/modules/estudios/reglas-duras';
 import type { ReglaDuraActiva } from '@/modules/estudios/reglas-duras';
+// §6.3: la señal canonica de pago y la decision de orden (pura).
+import {
+  leerSenalPagoEstudio,
+  senalIndicaPagado,
+  siguientePasoEstudio,
+  ESTADO_ESPERANDO_PAGO,
+  type SenalPagoEstudio,
+} from '@/modules/estudios/pago.guard';
 
 /**
  * Un rechazo por REGLA DURA de la Politica V4.1 (DTI > 65% §4.2, canon/ingreso
@@ -140,10 +149,18 @@ export async function onHabeasDataAutorizado(params: {
   try {
     // 1. Buscar estudio pendiente del expediente (con error leído: un fallo de
     //    BD aquí no debe confundirse con "no hay estudio")
+    // `pago_pendiente` entra en la lista desde el §6.3: con el orden invertido
+    // un estudio puede estar EN ESPERA DE PAGO cuando llega una segunda firma
+    // (reenvio del enlace), y dejarlo fuera lo volvia invisible para siempre.
+    // El .neq del tipo es un bug preexistente que la inversion vuelve
+    // frecuente: sin el, la firma del TITULAR tomaba el estudio del
+    // co-arrendatario (mismo expediente_id, creado despues) y le pisaba
+    // `datos_formulario` con el documento del titular.
     const { data: estudio, error: estudioError } = await db('estudios')
-      .select('id, estado, proveedor, expediente_id, datos_formulario')
+      .select('id, estado, proveedor, expediente_id, datos_formulario, pago_por')
       .eq('expediente_id', expedienteId)
-      .in('estado', ['solicitado', 'formulario_completado', 'formulario_enviado', 'documentos_cargados'])
+      .neq('tipo', 'con_coarrendatario')
+      .in('estado', ['solicitado', 'pago_pendiente', 'formulario_completado', 'formulario_enviado', 'documentos_cargados'])
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle() as { data: Record<string, unknown> | null; error: { message: string } | null };
@@ -197,10 +214,26 @@ export async function onHabeasDataAutorizado(params: {
       numero_documento: datosBase.numero_documento,
       acepta_terminos: true,
     };
+    //    Y el ESTADO depende del §6.3: si el pago ya entró (opciones A y B, y
+    //    los expedientes de siempre) el estudio queda listo para ejecutar; si
+    //    no, queda EN ESPERA DE PAGO — "el estudio permanece en estado de
+    //    espera y no consume consultas a centrales".
+    const senalPago = await leerSenalPagoEstudio(expedienteId);
+    const pagado = senalIndicaPagado(senalPago);
+    // 'no_verificable' (blip de PostgREST) NO aparca. Aparcar es irreversible
+    // en la practica: en A y B el pago YA ocurrio, asi que no habra otro
+    // onEstudioPagado que despierte el estudio, 'pago_pendiente' no esta en
+    // ESTADOS_PERMITIDOS_EJECUCION (el boton Ejecutar responde
+    // ESTUDIO_ESTADO_INVALIDO) y cuenta como estudio en curso, bloqueando
+    // cualquier otro. Un error de lectura dejaria muerto un expediente pagado
+    // y firmado. El fail-closed del dinero ya lo da assertPagoEstudio dentro
+    // de ejecutarEstudio: aqui aparcar no aporta seguridad, solo un pozo.
+    const aparcar = senalPago === 'no_pagado';
+
     const { error: updateError } = await db('estudios')
       .update({
         datos_formulario: datosMerged,
-        estado: 'formulario_completado',
+        ...(pagado ? { estado: 'formulario_completado' } : aparcar ? { estado: ESTADO_ESPERANDO_PAGO } : {}),
         autorizacion_habeas_data_id: autorizacionId,
         updated_at: new Date().toISOString(),
       } as never)
@@ -208,6 +241,33 @@ export async function onHabeasDataAutorizado(params: {
 
     if (updateError) {
       throw new Error(`Error preparando el estudio para ejecución: ${(updateError as { message?: string }).message}`);
+    }
+
+    // 3.5 §6.3 — el cobro va DESPUÉS de la autorización y ANTES de la
+    //     evaluación. Si todavía no hay pago, aquí NO se ejecuta nada: se pide
+    //     el cobro (o se espera al que ya está en marcha) y el estudio queda
+    //     aparcado. Ojo: aunque este return no existiera, ejecutarEstudio tiene
+    //     su propio gate de pago — este camino solo evita el ruido de intentar.
+    if (!pagado) {
+      // RE-LECTURA DESPUES de escribir el estado: cierra la carrera con el
+      // pago que entra en paralelo. Si el gestor pulsa "liberar credito" /
+      // "yo asumo" entre la lectura de arriba y este UPDATE, su
+      // `onEstudioPagado` corre cuando el estudio todavia esta en 'solicitado'
+      // y su CAS sobre 'pago_pendiente' no encuentra nada: se da por hecho y
+      // no reintenta. Sin esta relectura el estudio quedaba pagado (credito
+      // consumido) y aparcado para siempre. Con ella, quien escribio ultimo el
+      // estado es quien reevalua.
+      const senalPost = aparcar ? await leerSenalPagoEstudio(expedienteId) : senalPago;
+      if (senalPost === 'pagado') {
+        await onEstudioPagado(expedienteId, solicitanteId);
+        return;
+      }
+      await pedirPagoTrasAutorizacion({
+        expedienteId,
+        senalPago: senalPost,
+        pagoPor: (estudio.pago_por as string | null) ?? null,
+      });
+      return;
     }
 
     // 4. Ejecutar estudio via provider. ejecutarEstudio dispara el proceso en
@@ -243,6 +303,240 @@ export async function onHabeasDataAutorizado(params: {
       'Falló el inicio automático del estudio tras la autorización — iniciar manualmente o pedir al solicitante reintentar',
     ).catch(() => {});
   }
+}
+
+// ── §6.3: el punto UNICO de convergencia ────────────────────
+//
+// La firma y el pago son dos eventos que pueden llegar en cualquier orden (y a
+// la vez). En vez de tener logica espejada en cada hook, los dos terminan
+// consultando la misma decision pura (`siguientePasoEstudio`), de modo que el
+// orden de llegada deja de importar POR CONSTRUCCION y no por analisis caso a
+// caso.
+
+/**
+ * Autorizacion del TITULAR del expediente. Mismo predicado que
+ * `enviarEnlaceAutorizacion` y que el gate 8.4 — si se desincronizan, las capas
+ * se contradicen: `coarrendatario_id IS NULL` (el co-arrendatario tiene su
+ * propia fila con el mismo expediente_id), no revocada y VIGENTE.
+ */
+async function leerAutorizacionTitular(
+  expedienteId: string,
+): Promise<{ id: string; estado: string } | null> {
+  const { data, error } = (await db('autorizaciones_habeas_data')
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .is('coarrendatario_id', null)
+    .is('fecha_revocacion', null)
+    .in('estado', ['pendiente', 'autorizado'])
+    .or(`vigente_hasta.is.null,vigente_hasta.gt.${new Date().toISOString()}`)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()) as { data: { id: string; estado: string } | null; error: { message: string } | null };
+  // Fail-closed, mismo criterio que pago.guard.ts sobre `pagos`: "no pude
+  // leer" NO es "no hay autorizacion". Confundirlos manda un habeas data a
+  // quien ya firmo (AUTORIZACION_YA_FIRMADA -> warn) y deja el estudio pagado
+  // y aparcado sin salida, guiando al operador a un boton que tambien falla.
+  // Los tres call-sites llaman a onEstudioPagado fire-and-forget con .catch,
+  // asi que el throw queda como warn y el pago se puede reintentar.
+  if (error) {
+    throw new Error(`No se pudo verificar la autorizacion del titular: ${error.message}`);
+  }
+  return data;
+}
+
+/** ¿Hay una fila de pago de estudio VIVA (el cobro ya salio)? */
+async function hayPagoEstudioActivo(expedienteId: string): Promise<boolean> {
+  const { data } = (await db('pagos')
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', 'estudio')
+    .in('estado', ['pendiente', 'procesando'])
+    .limit(1)
+    .maybeSingle()) as { data: { id: string } | null };
+  return !!data;
+}
+
+/**
+ * El prospecto acaba de autorizar y NO hay pago confirmado. Aqui vive la
+ * inversion del §6.3: recien ahora se le pide el dinero.
+ *
+ * - opcion C (pago_por='arrendatario'): se crea el link y se le manda por
+ *   correo + WhatsApp. `enviarLinkPago` es reentrante a proposito — es la
+ *   MISMA funcion que el gestor dispara desde el panel, solo que aquella vez
+ *   se desvio a mandar el habeas data.
+ * - el gestor todavia no eligio quien paga, o ya hay un link vivo: el estudio
+ *   queda EN ESPERA y el aviso va al expediente. Cobrarle al prospecto por
+ *   defecto le pisaria la decision al gestor (podia querer usar un credito).
+ */
+async function pedirPagoTrasAutorizacion(params: {
+  expedienteId: string;
+  senalPago: SenalPagoEstudio;
+  pagoPor: string | null;
+}): Promise<void> {
+  const { expedienteId, senalPago, pagoPor } = params;
+
+  const paso = siguientePasoEstudio({
+    autorizado: true,
+    senalPago,
+    pagoActivo: await hayPagoEstudioActivo(expedienteId),
+    pagoPor,
+  });
+
+  if (paso !== 'cobrar') {
+    await registrarTimeline(
+      expedienteId,
+      'estudio',
+      'Autorización firmada. El estudio queda EN ESPERA del pago: no se consulta a centrales de riesgo hasta confirmarlo.',
+    ).catch(() => {});
+    return;
+  }
+
+  const { data: expRow } = (await db('expedientes')
+    .select('creado_por, solicitantes(nombre, apellido, email)')
+    .eq('id', expedienteId)
+    .maybeSingle()) as {
+    data: {
+      creado_por: string | null;
+      solicitantes: { nombre: string | null; apellido: string | null; email: string | null } | null;
+    } | null;
+  };
+  const sol = expRow?.solicitantes ?? null;
+  if (!expRow?.creado_por || !sol?.email) {
+    logger.warn({ expedienteId }, 'Orchestrator §6.3: sin creado_por o sin email del solicitante — no se puede generar el cobro');
+    await registrarTimeline(
+      expedienteId,
+      'estudio',
+      'El arrendatario ya autorizó, pero no pudimos generarle el cobro (falta su correo). Define el pago desde el expediente.',
+    ).catch(() => {});
+    return;
+  }
+
+  const { enviarLinkPago } = await import('@/modules/pago-estudio/pago-estudio.service');
+  try {
+    await enviarLinkPago(
+      expedienteId,
+      {
+        email_pagador: sol.email,
+        nombre_pagador: `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || sol.email,
+      },
+      expRow.creado_por,
+    );
+    await registrarTimeline(
+      expedienteId,
+      'pago',
+      'Autorización firmada: se le envió al arrendatario el enlace de pago del estudio (correo y WhatsApp).',
+    ).catch(() => {});
+  } catch (err) {
+    const code = err instanceof AppError ? err.errorCode : null;
+    // Carreras con el gestor, que resuelven solas:
+    //   YA_COMPLETADO -> alguien pago/asumio mientras tanto: reentrar UNA vez.
+    //   PENDIENTE/23505 -> otro evento gano y ya hay link vivo: no hacer nada.
+    if (code === 'PAGO_ESTUDIO_YA_COMPLETADO') {
+      await onEstudioPagado(expedienteId, expRow.creado_por);
+      return;
+    }
+    if (code === 'PAGO_ESTUDIO_PENDIENTE') return;
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), expedienteId },
+      'Orchestrator §6.3: no se pudo generar el cobro tras la autorización',
+    );
+    await registrarTimeline(
+      expedienteId,
+      'pago',
+      // El tope de canon (§4.4) puede rechazar el cobro DESPUÉS de la firma: es
+      // el modo de falla nuevo que trae la inversión. Sin este rastro el
+      // expediente quedaba en espera sin causa visible para el gestor.
+      `No se pudo generar el cobro del estudio tras la autorización (${err instanceof Error ? err.message : 'error'}). Revísalo desde el expediente.`,
+    ).catch(() => {});
+  }
+}
+
+/**
+ * DUEÑO UNICO de "el estudio de este expediente quedo pagado".
+ *
+ * Reemplaza las TRES copias del bloque "ya se pago -> mandar autorizacion" que
+ * vivian en onPagoConfirmado, asumirCosto y liberarEstudioConCredito. Tras la
+ * inversion del §6.3 esas tres llamaban a `enviarEnlaceAutorizacion` incluso
+ * cuando la firma YA existia, y esa funcion lanza AUTORIZACION_YA_FIRMADA: el
+ * `.catch` lo degradaba a un warn y el estudio quedaba pagado y parado para
+ * siempre. Aqui se bifurca:
+ *
+ *   ya firmo   -> se despierta el estudio aparcado y se ejecuta (CAS sobre
+ *                 'pago_pendiente': idempotente frente a los tres caminos que
+ *                 confirman un pago — webhook, cron de reconciliacion y el
+ *                 endpoint publico de retorno de la pasarela).
+ *   pendiente  -> nada: la firma disparara la ejecucion.
+ *   sin firma  -> se le manda el habeas data (comportamiento de siempre para
+ *                 A y B, y para las opciones C que quedaron en vuelo).
+ *
+ * Devuelve true solo si disparo la ejecucion de algun estudio.
+ */
+export async function onEstudioPagado(expedienteId: string, userId?: string | null): Promise<boolean> {
+  const autorizacion = await leerAutorizacionTitular(expedienteId);
+
+  if (!autorizacion) {
+    if (!userId) {
+      logger.warn({ expedienteId }, 'Orchestrator: pago de estudio sin autorización y sin usuario para enviar el enlace');
+      return false;
+    }
+    try {
+      const { enviarEnlaceAutorizacion } = await import('@/modules/autorizaciones/autorizaciones.service');
+      await enviarEnlaceAutorizacion(expedienteId, userId);
+      logger.info({ expedienteId }, 'Orchestrator: link de autorización enviado tras el pago');
+    } catch (err) {
+      logger.warn(
+        { error: err instanceof Error ? err.message : String(err), expedienteId },
+        'Orchestrator: no se pudo enviar el link de autorización tras el pago',
+      );
+      await registrarTimeline(
+        expedienteId,
+        'pago',
+        'No se pudo enviar automáticamente el link de autorización al inquilino. Reenvíalo manualmente desde el expediente.',
+      ).catch(() => {});
+    }
+    return false;
+  }
+
+  if (autorizacion.estado !== 'autorizado') {
+    logger.info({ expedienteId }, 'Orchestrator: pago confirmado, esperando la firma del arrendatario');
+    return false;
+  }
+
+  // CAS: solo despierta a los que estaban EN ESPERA DE PAGO. Multi-fila a
+  // propósito — el estudio del co-arrendatario se aparca igual y arranca junto
+  // con el del titular.
+  const { data: despertados, error: casErr } = (await db('estudios')
+    .update({ estado: 'formulario_completado', updated_at: new Date().toISOString() } as never)
+    .eq('expediente_id', expedienteId)
+    .eq('estado', ESTADO_ESPERANDO_PAGO)
+    .select('id')) as { data: { id: string }[] | null; error: { message: string } | null };
+
+  if (casErr) {
+    logger.error({ error: casErr.message, expedienteId }, 'Orchestrator: no se pudo despertar el estudio tras el pago');
+    return false;
+  }
+  if (!despertados || despertados.length === 0) {
+    logger.info({ expedienteId }, 'Orchestrator: pago confirmado pero no había estudio en espera de pago');
+    return false;
+  }
+
+  const { ejecutarEstudio } = await import('@/modules/estudios/estudios.service');
+  let alguno = false;
+  for (const { id } of despertados) {
+    try {
+      await ejecutarEstudio(id, userId ?? '');
+      alguno = true;
+      logger.info({ estudioId: id, expedienteId }, 'Orchestrator: estudio disparado tras confirmarse el pago');
+    } catch (err) {
+      logger.warn({ error: err, estudioId: id }, 'Orchestrator: falló el arranque del estudio tras el pago');
+      await registrarTimeline(
+        expedienteId,
+        'estudio',
+        'Falló el inicio automático del estudio tras confirmarse el pago — iniciar manualmente desde el expediente.',
+      ).catch(() => {});
+    }
+  }
+  return alguno;
 }
 
 // ── Event: Estudio Completado ───────────────────────────────
@@ -575,7 +869,15 @@ export async function onPagoConfirmado(params: {
 
     // WhatsApp de status al solicitante: "recibimos tu pago" (fire-and-forget;
     // enviarTemplate traga errores y sin teléfono no envía).
-    (async () => {
+    //
+    // NO se envía para concepto='estudio': el texto aprobado por Meta de
+    // PAGO_CONFIRMADO promete "en breve te llegará el enlace para autorizar tu
+    // estudio", y con el orden del §6.3 esa autorización ya se firmó antes del
+    // pago — sería mandarle a esperar un paso que ya cumplió. Se reactiva
+    // cuando exista `cofianza_pago_confirmado_v2` aprobada (mismo versionado
+    // que CITA_CONFIRMADA v3). El prospecto igual recibe la notificación in-app
+    // 'pago.confirmado' de la máquina de estados.
+    if (concepto !== 'estudio') (async () => {
       const { data: pagoRow } = await db('pagos')
         .select('monto')
         .eq('id', pagoId)
@@ -617,61 +919,16 @@ export async function onPagoConfirmado(params: {
       return;
     }
 
-    // (b) Tras confirmar el pago del estudio, enviar AUTOMÁTICAMENTE el link de
-    // autorización (habeas data) por WhatsApp/correo para que el inquilino firme
-    // con OTP. Al firmar, onHabeasDataAutorizado ejecuta el estudio. Best-effort:
-    // no bloquea el resto del flujo si falla (el botón "Enviar autorización" queda
-    // como respaldo manual).
-    if (expRow.creado_por) {
-      const generadoPor = expRow.creado_por;
-      // Idempotencia: solo auto-enviar si NO existe ya una autorización pendiente o
-      // firmada para el expediente. Evita que un doble webhook de pago (dos eventos
-      // Stripe distintos del mismo pago) genere dos links y dos WhatsApp.
-      // Mismo predicado que enviarEnlaceAutorizacion y que el gate 8.4: solo
-      // el TITULAR (`coarrendatario_id IS NULL`, porque el co-arrendatario
-      // invitado tiene su propia fila con el mismo expediente_id) y solo si la
-      // firma sigue VIGENTE — si caducó hay que volver a pedirla, no omitir el
-      // envío.
-      const { data: autExistente } = (await db('autorizaciones_habeas_data')
-        .select('id, estado')
-        .eq('expediente_id', expedienteId)
-        .is('coarrendatario_id', null)
-        .in('estado', ['pendiente', 'autorizado'])
-        .or(`vigente_hasta.is.null,vigente_hasta.gt.${new Date().toISOString()}`)
-        .limit(1)
-        .maybeSingle()) as { data: { id: string; estado: string } | null };
-
-      if (autExistente) {
-        logger.info(
-          { expedienteId, estado: autExistente.estado },
-          'Orchestrator: ya existe autorización — se omite el auto-envío del link',
-        );
-      } else {
-        import('@/modules/autorizaciones/autorizaciones.service')
-          .then(({ enviarEnlaceAutorizacion }) => enviarEnlaceAutorizacion(expedienteId, generadoPor))
-          .then(() =>
-            logger.info({ expedienteId }, 'Orchestrator: link de autorización enviado automáticamente tras el pago'),
-          )
-          .catch(async (err) => {
-            logger.warn(
-              { error: err instanceof Error ? err.message : String(err), expedienteId },
-              'Orchestrator: no se pudo enviar el link de autorización automático tras el pago',
-            );
-            // No dejar el fallo en silencio: queda en el timeline del expediente
-            // para que el operador lo reenvíe manualmente (botón "Enviar autorización").
-            await registrarTimeline(
-              expedienteId,
-              'pago',
-              'No se pudo enviar automáticamente el link de autorización al inquilino. Reenvíalo manualmente desde el expediente.',
-            ).catch(() => {});
-          });
-      }
-    } else {
-      logger.warn(
-        { expedienteId },
-        'Orchestrator: expediente sin creado_por — no se pudo auto-enviar el link de autorización (requiere envío manual)',
-      );
-    }
+    // (b) §6.3 — el pago acaba de entrar. Todo lo que sigue (¿ya firmó? ¿hay
+    // estudio en espera? ¿hay que mandarle el habeas data?) lo decide
+    // onEstudioPagado, que es el dueño único de ese evento para las TRES
+    // opciones de pago. Hasta 2026-09-04 aquí vivía el auto-envío del link de
+    // autorización, que era el eslabón "pago → autorización" del orden viejo.
+    //
+    // El early-return evita además el ruido de la rama de onboarding de abajo
+    // (que busca un estudio en 'solicitado'): si el estudio ya arrancó, no hay
+    // nada que completar.
+    if (await onEstudioPagado(expedienteId, expRow.creado_por)) return;
 
     // Flujo manual: admin opera con OTP+canvas. Sin intervención automática.
     if (!expRow.source || !SOURCES_ONBOARDING_AUTOMATICO.has(expRow.source)) {
@@ -736,6 +993,11 @@ export async function onPagoConfirmado(params: {
       // NO auto-ejecutar. Dejamos el estudio en 'formulario_completado' para que
       // el solicitante confirme su cédula explícitamente desde el panel y recién
       // entonces dispare la consulta a TransUnion vía POST /estudios/:id/ejecutar.
+      //
+      // Con el §6.3 este camino solo se alcanza cuando el pago llegó SIN firma
+      // previa (opciones C emitidas antes de la inversión, y A/B): onEstudioPagado
+      // acaba de mandar el habeas data, así que cuando el prospecto firme será
+      // onHabeasDataAutorizado —con el pago ya confirmado— quien ejecute.
       logger.info(
         { pagoId, estudioId: estudioRow.id, expedienteId: expRow.id },
         'Orchestrator: pago confirmado, formulario poblado — esperando confirmación del solicitante para ejecutar TransUnion',

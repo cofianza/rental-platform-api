@@ -18,7 +18,7 @@ import { transitionPagoState } from '@/modules/pagos/pago-state-machine';
 import { attachFacturas } from '@/modules/pagos/pagos.service';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type { EnviarLinkInput, ReenviarLinkInput } from './pago-estudio.schema';
 
@@ -69,7 +69,14 @@ const PAGO_SELECT = `
   fecha_pago, created_at, updated_at, creado_por
 `;
 
-async function getMontoEstudio(): Promise<number> {
+/**
+ * Precio canonico del estudio. Exportado porque la ruta generica
+ * POST /expedientes/:id/pagos tambien puede cobrar concepto='estudio' y NO
+ * puede aceptar el monto que mande el cliente: el gate de ejecucion solo mira
+ * que exista la fila 'completado', asi que un link de $1.000 compraba una
+ * consulta al buro entera.
+ */
+export async function getMontoEstudio(): Promise<number> {
   const { data, error } = await (supabase
     .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
     .select('valor')
@@ -129,18 +136,85 @@ function formatCOP(amount: number): string {
   return `$${amount.toLocaleString('es-CO')}`;
 }
 
+/**
+ * ¿El TITULAR ya firmó el habeas data y sigue vigente?
+ *
+ * Mismo predicado que `enviarEnlaceAutorizacion` y que el gate 8.4
+ * (`coarrendatario_id IS NULL`, no revocada, vigente): si se desincronizan, una
+ * capa cobra y la otra bloquea.
+ */
+async function titularYaAutorizo(expedienteId: string): Promise<boolean> {
+  const { data } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .is('coarrendatario_id', null)
+    .eq('estado', 'autorizado')
+    .is('fecha_revocacion', null)
+    .or(`vigente_hasta.is.null,vigente_hasta.gt.${new Date().toISOString()}`)
+    .limit(1)
+    .maybeSingle();
+  return !!data;
+}
+
+/**
+ * Deja anotado en el estudio que el pagador sera el ARRENDATARIO (opcion C).
+ * Es lo que le permite al hook de la firma saber si tiene que generarle el
+ * cobro al prospecto o si el gestor todavia no decidio y hay que esperarlo.
+ *
+ * Best-effort: si falla, el estudio queda en espera y el gestor decide desde el
+ * panel — el lado seguro (nunca se cobra de mas). Solo se escribe aqui: A y B
+ * crean su fila de pago 'completado', y `pago_por` unicamente se consulta
+ * cuando NO hay ninguna fila de pago.
+ */
+async function marcarPagoArrendatario(expedienteId: string): Promise<void> {
+  const { error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .update({ pago_por: 'arrendatario' } as never)
+    .eq('expediente_id', expedienteId)
+    .neq('tipo', 'con_coarrendatario');
+  if (error) {
+    logger.warn({ error: error.message, expedienteId }, 'No se pudo marcar pago_por en el estudio');
+  }
+}
+
 // ============================================================
 // Get estado del pago del estudio
 // ============================================================
 
-export async function getEstadoPagoEstudio(expedienteId: string) {
+export async function getEstadoPagoEstudio(expedienteId: string, userId?: string, userRol?: string) {
+  // Tenant guard (404 fuera de scope): esta respuesta lleva el objeto `pago`
+  // completo —con email_pagador/nombre_pagador del prospecto— y, desde el
+  // §6.3, tambien `autorizado`, o sea si un tercero ya firmo su habeas data.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   const monto = await getMontoEstudio();
   const pago = await findPagoEstudio(expedienteId);
+  // `autorizado` es lo unico que le permite al panel (y a la vista del
+  // prospecto) distinguir "esperando que autorice" de "autorizado, falta
+  // cobrar". Sin el, con el orden del §6.3 la ventana entre habilitar y firmar
+  // se veia igual que "el gestor no ha decidido nada".
+  const autorizado = await titularYaAutorizo(expedienteId);
 
   if (!pago) {
+    // Opcion C con el orden nuevo: el gestor ya eligio "enviar link al
+    // arrendatario", pero todavia no existe fila de pago porque el cobro se
+    // crea al firmar. No es 'sin_definir': la decision ya esta tomada.
+    const { data: estRow } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('pago_por')
+      .eq('expediente_id', expedienteId)
+      .neq('tipo', 'con_coarrendatario')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const esperandoAutorizacion =
+      !autorizado && (estRow as { pago_por?: string | null } | null)?.pago_por === 'arrendatario';
+
     return {
-      estado: 'sin_definir',
+      estado: esperandoAutorizacion ? 'esperando_autorizacion' : 'sin_definir',
       puede_avanzar: false,
+      autorizado,
       monto,
       moneda: 'COP',
       monto_formateado: formatCOP(monto),
@@ -160,6 +234,7 @@ export async function getEstadoPagoEstudio(expedienteId: string) {
   return {
     estado: estado === 'completado' && metodo !== 'pasarela' ? 'asumido_inmobiliaria' : estado,
     puede_avanzar: estado === 'completado',
+    autorizado,
     monto: pago.monto as number,
     moneda: 'COP',
     monto_formateado: formatCOP(pago.monto as number),
@@ -189,7 +264,14 @@ function invalidarLinkPasarela(pago: { external_id?: string | null; metodo?: str
 // Inmobiliaria asume el costo — POST /asumir
 // ============================================================
 
-export async function asumirCosto(expedienteId: string, userId: string, ip?: string) {
+export async function asumirCosto(expedienteId: string, userId: string, ip?: string, userRol?: string) {
+  // Tenant guard (404 fuera de scope). Va PRIMERO: asumir el costo escribe un
+  // pago 'completado' sobre el expediente y, desde el §6.3, ese pago dispara
+  // onEstudioPagado -> ejecutarEstudio, o sea una consulta FACTURABLE al buro
+  // del prospecto. Sin esto, cualquier gestor de otra agencia podia pagar
+  // (y ejecutar) el estudio de una cartera ajena conociendo el expedienteId.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   // TOPE DE CANON — flujo §4.4: "no se cobra el estudio". Asumir el costo es un
   // cobro (interno, pero cobro: crea el pago 'completado' y dispara la
   // facturación y el link de autorización). Se verifica ANTES de cancelar el
@@ -276,17 +358,23 @@ export async function asumirCosto(expedienteId: string, userId: string, ip?: str
     ip,
   });
 
-  // Auto-enviar el link de autorización (habeas data) al inquilino, igual que el
-  // flujo de pago por Stripe (que lo hace vía onPagoConfirmado). Best-effort y
-  // fire-and-forget: no bloquea la respuesta ni rompe el registro del pago si
-  // falla — queda el botón manual "Enviar autorización" como respaldo.
-  import('@/modules/autorizaciones/autorizaciones.service')
-    .then(({ enviarEnlaceAutorizacion }) => enviarEnlaceAutorizacion(expedienteId, userId))
-    .then(() => logger.info({ expedienteId }, 'Link de autorización auto-enviado (inmobiliaria asume costo)'))
+  // El pago quedó completado: el dueño único de ese evento es onEstudioPagado.
+  //
+  // Antes aquí se llamaba directo a `enviarEnlaceAutorizacion`, "igual que el
+  // flujo de pago por Stripe (que lo hace vía onPagoConfirmado)". Con el §6.3
+  // esa analogía dejó de ser cierta: si el prospecto YA firmó (es lo que pasa
+  // al entrar por cancelar-y-asumir sobre una opción C), esa función lanza
+  // AUTORIZACION_YA_FIRMADA, el .catch lo degradaba a un warn y el estudio
+  // quedaba pagado y parado para siempre. onEstudioPagado bifurca: si ya firmó
+  // despierta el estudio y lo ejecuta; si no, manda el habeas data como antes.
+  // Sigue siendo fire-and-forget: no bloquea la respuesta.
+  //
+  import('@/modules/orchestrator/orchestrator.service')
+    .then(({ onEstudioPagado }) => onEstudioPagado(expedienteId, userId))
     .catch((err) =>
       logger.warn(
         { error: err instanceof Error ? err.message : String(err), expedienteId },
-        'No se pudo auto-enviar el link de autorización tras asumir el costo (reenviable manualmente)',
+        'No se pudo continuar el flujo tras asumir el costo (reenviable manualmente)',
       ),
     );
 
@@ -302,12 +390,62 @@ export async function enviarLinkPago(
   input: EnviarLinkInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
+  // Tenant guard (404 fuera de scope). Desde el §6.3 la primera pasada de esta
+  // funcion EMITE EVIDENCIA LEGAL: invalida la autorizacion pendiente del
+  // titular, genera un token de habeas data firmable con OTP y le manda correo
+  // + WhatsApp. Sin este guard, un gestor de otra agencia (o cualquier
+  // solicitante, antes del roleGuard de la ruta) hacia todo eso sobre un
+  // expediente ajeno. Las llamadas de sistema (habilitarEstudio, el hook de la
+  // firma) no pasan rol y siguen entrando: assertExpedienteAccess retorna
+  // early sin identidad.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   // TOPE DE CANON — flujo §4.4: "el flujo se detiene con un mensaje claro y no
   // se cobra el estudio". Este es el cobro literal al prospecto (checkout de la
   // pasarela + correo + WhatsApp con el link), así que el tope se verifica
   // antes de crear la preference.
   await assertCanonDentroDelTope({ expedienteId, origen: 'enviarLinkPago' });
+
+  // FASE 0 — LA INVERSIÓN DEL §6.3.
+  //
+  //   "El pago se solicita DESPUÉS de que el prospecto otorgue la autorización
+  //    y ANTES de que el motor ejecute la evaluación. Si se cobra antes de
+  //    autorizar, se cobra a personas que nunca autorizan."
+  //
+  // Por eso esta función tiene DOS fases y sigue teniendo un solo nombre
+  // (ponytail: renombrarla arrastra routes, controller y el componente web sin
+  // cambiar nada de comportamiento):
+  //   1ª llamada (el gestor pulsa "Enviar link al arrendatario", o el
+  //      propietario habilita el estudio): NO se cobra. Se anota quién paga y
+  //      se le manda el habeas data. Es la única rama que cambia de orden.
+  //   2ª llamada (el hook de la firma, orchestrator §6.3): el prospecto ya
+  //      autorizó, así que aquí abajo se crea el cobro de verdad.
+  //
+  // Va ANTES del INSERT y de la preference —lo abortable primero, lo
+  // irreversible después, la misma doctrina que cancelarYAsumir— para no dejar
+  // una fila 'pendiente' huérfana bloqueando el índice único si el solicitante
+  // no tiene email.
+  //
+  // Las opciones A y B NO pasan por aquí y NO cambian de orden: ahí el pagador
+  // es la agencia y el cobro ya ocurrió antes de la autorización.
+  if (!(await titularYaAutorizo(expedienteId))) {
+    const { enviarEnlaceAutorizacion } = await import('@/modules/autorizaciones/autorizaciones.service');
+    await enviarEnlaceAutorizacion(expedienteId, userId, ip, undefined, userRol);
+    await marcarPagoArrendatario(expedienteId);
+    logger.info(
+      { expedienteId },
+      '§6.3: primero la autorización — el enlace de pago se le genera al arrendatario cuando firme',
+    );
+    const monto = await getMontoEstudio();
+    return {
+      estado: 'esperando_autorizacion' as const,
+      monto,
+      monto_formateado: formatCOP(monto),
+      pago: null,
+    };
+  }
 
   // Check no existing active pago (pendiente or procesando)
   const existing = await findPagoEstudio(expedienteId);
@@ -481,7 +619,7 @@ export async function enviarLinkPago(
       userId: solicitanteUserId,
       tipo: 'pago.disponible',
       titulo: 'Pago de estudio disponible',
-      mensaje: `Ya puedes pagar el estudio crediticio (${formatCOP(monto)}). El pago habilita la consulta a TransUnion automáticamente.`,
+      mensaje: `Ya autorizaste el tratamiento de datos. Paga el estudio crediticio (${formatCOP(monto)}) y ejecutamos la consulta en centrales automáticamente.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, pago_id: pago.id },
     });
@@ -611,7 +749,11 @@ export async function reenviarLink(
 // Cancelar link y asumir — POST /cancelar-y-asumir
 // ============================================================
 
-export async function cancelarYAsumir(expedienteId: string, userId: string, ip?: string) {
+export async function cancelarYAsumir(expedienteId: string, userId: string, ip?: string, userRol?: string) {
+  // Tenant guard (404 fuera de scope) antes de cancelar nada: este wrapper
+  // cancela el link vivo del arrendatario, que es irreversible.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   // TOPE DE CANON — flujo §4.4. Va ANTES de tocar el pago, no dentro de
   // asumirCosto: si el guard corriera allá abajo (línea final de esta función),
   // el link ya estaría cancelado en BD y la preference expirada en la pasarela
@@ -644,7 +786,7 @@ export async function cancelarYAsumir(expedienteId: string, userId: string, ip?:
   invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
 
   // Create new completed payment
-  return asumirCosto(expedienteId, userId, ip);
+  return asumirCosto(expedienteId, userId, ip, userRol);
 }
 
 /**
@@ -652,7 +794,11 @@ export async function cancelarYAsumir(expedienteId: string, userId: string, ip?:
  * CRÉDITO (no "asume" gratis). Reusa liberarEstudioConCredito, que valida saldo,
  * crea el pago y auto-envía la autorización.
  */
-export async function cancelarYLiberarCredito(expedienteId: string, userId: string, ip?: string) {
+export async function cancelarYLiberarCredito(expedienteId: string, userId: string, ip?: string, userRol?: string) {
+  // Tenant guard (404 fuera de scope): igual que cancelarYAsumir, cancela el
+  // link vivo y consume un credito.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   // TOPE DE CANON — flujo §4.4. Antes de tocar el pago, por la misma razón que
   // el saldo de créditos se verifica abajo antes de cancelar el link: el guard
   // vive dentro de liberarEstudioConCredito, que se llama al final, y para

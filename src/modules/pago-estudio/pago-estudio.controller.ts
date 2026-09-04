@@ -6,14 +6,14 @@ import type { ExpedienteIdParams, EnviarLinkInput, ReenviarLinkInput, PagoIdPara
 // GET /expedientes/:expedienteId/pago-estudio/estado
 export async function getEstado(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const result = await pagoEstudioService.getEstadoPagoEstudio(expedienteId);
+  const result = await pagoEstudioService.getEstadoPagoEstudio(expedienteId, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
 
 // POST /expedientes/:expedienteId/pago-estudio/asumir
 export async function asumir(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const pago = await pagoEstudioService.asumirCosto(expedienteId, req.user!.id, req.ip);
+  const pago = await pagoEstudioService.asumirCosto(expedienteId, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, pago);
 }
 
@@ -21,7 +21,7 @@ export async function asumir(req: Request, res: Response) {
 export async function enviarLink(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
   const input = req.body as EnviarLinkInput;
-  const pago = await pagoEstudioService.enviarLinkPago(expedienteId, input, req.user!.id, req.ip);
+  const pago = await pagoEstudioService.enviarLinkPago(expedienteId, input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, pago);
 }
 
@@ -42,14 +42,14 @@ export async function reenviar(req: Request, res: Response) {
 // POST /expedientes/:expedienteId/pago-estudio/cancelar-y-asumir
 export async function cancelarYAsumir(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const pago = await pagoEstudioService.cancelarYAsumir(expedienteId, req.user!.id, req.ip);
+  const pago = await pagoEstudioService.cancelarYAsumir(expedienteId, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, pago);
 }
 
 // POST /expedientes/:expedienteId/pago-estudio/cancelar-y-liberar-credito
 export async function cancelarYLiberarCredito(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const result = await pagoEstudioService.cancelarYLiberarCredito(expedienteId, req.user!.id, req.ip);
+  const result = await pagoEstudioService.cancelarYLiberarCredito(expedienteId, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, result);
 }
 

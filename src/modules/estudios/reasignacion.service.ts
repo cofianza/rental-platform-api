@@ -99,11 +99,19 @@ import {
   ESTADOS_ESTUDIO_EN_CURSO,
 } from './estudios-simultaneos.guard';
 import { generarCertificado } from './certificado.service';
+import {
+  assertEstudioPagado as assertEstudioPagadoGuard,
+  PAGO_NO_VERIFICABLE_ERROR_CODE as PAGO_NO_VERIFICABLE,
+} from './pago.guard';
 
 /** El estudio no esta en condiciones de portarse (estado, pago o expediente). */
 export const ESTUDIO_NO_REASIGNABLE_ERROR_CODE = 'ESTUDIO_NO_REASIGNABLE';
-/** No se pudo confirmar el pago. No es un "no pago": es un "no pude verificar". */
-export const PAGO_NO_VERIFICABLE_ERROR_CODE = 'PAGO_ESTUDIO_NO_VERIFICABLE';
+/**
+ * No se pudo confirmar el pago. No es un "no pago": es un "no pude verificar".
+ * La constante vive en pago.guard.ts (la comparte con el gate de ejecucion);
+ * se re-exporta aqui para no tocar los call-sites que ya la importaban.
+ */
+export const PAGO_NO_VERIFICABLE_ERROR_CODE = PAGO_NO_VERIFICABLE;
 
 /**
  * Estados terminales del expediente. Misma lista que estudios.service.ts: un
@@ -196,51 +204,19 @@ export interface ResultadoReasignacion {
 /**
  * ¿El estudio de este expediente esta REALMENTE pagado?
  *
- * Deliberadamente NO reusa `estudioYaCobrado` de estudios.service.ts: aquel es
- * best-effort A LA BAJA (si la consulta falla asume "no pagado") porque su uso
- * es el interruptor entre bloquear y advertir en el tope. Aqui el lado seguro
- * es el CONTRARIO: la reasignacion REGALA una evaluacion, asi que un error de
- * lectura no puede convertirse en "sigamos, seguro estaba pagado". Falla
- * CERRADO con 503, que ademas es la respuesta honesta (reintentar sirve).
+ * La implementacion (una sola lectura, dos politicas) vive en pago.guard.ts
+ * desde que el §6.3 invirtio el orden de la opcion C y la EJECUCION del estudio
+ * necesito el mismo predicado. Aqui solo se fija la politica: `origen:
+ * 'reasignacion'` conserva los codigos que la web ya consume
+ * (ESTUDIO_NO_REASIGNABLE y PAGO_ESTUDIO_NO_VERIFICABLE) y su mensaje.
  *
- * La señal es la misma que usa todo el sistema: una fila en `pagos` con
- * concepto='estudio' y estado='completado' para el expediente. Ahi terminan los
- * tres caminos de cobro (credito prepago, la inmobiliaria asume, link al
- * prospecto), y el indice `uq_pagos_estudio_activo` garantiza que hay como
- * maximo una.
+ * Sigue fallando CERRADO a proposito: la reasignacion REGALA una evaluacion,
+ * asi que un error de lectura no puede convertirse en "sigamos, seguro estaba
+ * pagado". El fail-OPEN de `estudioYaCobrado` es otro uso (el interruptor
+ * bloquear/advertir del tope), y por eso conviven en el mismo archivo.
  */
 async function assertEstudioPagado(expedienteId: string, expedienteNumero: string | null): Promise<void> {
-  const { data, error } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('expediente_id', expedienteId)
-    .eq('concepto', 'estudio')
-    .eq('estado', 'completado')
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    logger.error(
-      { error: error.message, expedienteId },
-      'Reasignacion §4.3: no se pudo verificar el pago del estudio — no se reasigna (fail closed)',
-    );
-    throw new AppError(
-      503,
-      PAGO_NO_VERIFICABLE_ERROR_CODE,
-      'No pudimos verificar el pago de este estudio en este momento, asi que no lo reasignamos. ' +
-        'Intenta de nuevo en un momento.',
-    );
-  }
-
-  if (!data) {
-    throw new AppError(
-      409,
-      ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El estudio del expediente ${expedienteNumero ?? ''} no figura como pagado, y la reasignacion sin costo ` +
-        'del §4.3 aplica solo a estudios ya pagados y ejecutados. Completa el pago y vuelve a intentarlo.',
-      { motivo: 'estudio_no_pagado' },
-    );
-  }
+  await assertEstudioPagadoGuard(expedienteId, { origen: 'reasignacion', expedienteNumero });
 }
 
 /**

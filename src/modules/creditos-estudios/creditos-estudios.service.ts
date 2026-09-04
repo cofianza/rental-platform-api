@@ -681,17 +681,24 @@ export async function liberarEstudioConCredito(
     ip,
   });
 
-  // Auto-enviar el link de autorización (habeas data) al inquilino, igual que el
-  // flujo de pago por Stripe (que lo hace vía onPagoConfirmado). Best-effort y
-  // fire-and-forget: no rompe el consumo del crédito si falla — queda el botón
-  // manual "Enviar autorización" como respaldo.
-  import('@/modules/autorizaciones/autorizaciones.service')
-    .then(({ enviarEnlaceAutorizacion }) => enviarEnlaceAutorizacion(expedienteId, userId))
-    .then(() => logger.info({ expedienteId }, 'Link de autorización auto-enviado (estudio liberado con crédito)'))
+  // El pago quedó completado (el crédito consumido SÍ deja fila en `pagos`): el
+  // dueño único de ese evento es onEstudioPagado.
+  //
+  // Antes aquí se llamaba directo a `enviarEnlaceAutorizacion`, "igual que el
+  // flujo de pago por Stripe (que lo hace vía onPagoConfirmado)". Con el §6.3
+  // esa analogía dejó de ser cierta: al entrar por cancelar-y-liberar-crédito
+  // sobre una opción C el prospecto YA firmó, esa función lanza
+  // AUTORIZACION_YA_FIRMADA y el .catch la degradaba a un warn — la agencia
+  // pagaba y nadie ejecutaba el estudio. La OPCIÓN A no cambia de orden: su
+  // pago nace 'completado' antes de pedir la autorización, así que cuando el
+  // prospecto firme el gate de pago lo deja pasar sin tocar nada de arriba.
+  // Fire-and-forget, como antes.
+  import('@/modules/orchestrator/orchestrator.service')
+    .then(({ onEstudioPagado }) => onEstudioPagado(expedienteId, userId))
     .catch((err) =>
       logger.warn(
         { error: err instanceof Error ? err.message : String(err), expedienteId },
-        'No se pudo auto-enviar el link de autorización tras liberar con crédito (reenviable manualmente)',
+        'No se pudo continuar el flujo tras liberar con crédito (reenviable manualmente)',
       ),
     );
 

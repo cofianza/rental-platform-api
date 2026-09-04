@@ -7,6 +7,7 @@ import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
+import { estudioYaCobrado as estudioPagado } from '@/modules/estudios/pago.guard';
 import { env } from '@/config';
 import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
 import { TEXTO_LEGAL, VERSION_TERMINOS } from './autorizaciones.texto';
@@ -598,11 +599,48 @@ export async function firmarAutorizacion(
       .catch((err) => logger.warn({ error: err }, 'Orchestrator: error en hook post-autorizacion'));
   }
 
+  // §6.3: al prospecto le toca pagar DESPUÉS de firmar (opción C). La pantalla
+  // pública no puede inferirlo —el mismo endpoint sirve a A y B, donde el pago
+  // ya ocurrió y ofrecerle un cobro sería cobrar dos veces—, así que el dato
+  // viaja en la respuesta. Es una lectura barata y DERIVADA: no toca la
+  // pasarela, para no colgar al prospecto con un spinner después de haber
+  // escrito evidencia legal que ya quedó inmutable. El link real se lo mandan
+  // el correo y el WhatsApp que dispara el hook de arriba.
+  //
+  // "No hay pago completado" NO alcanza como criterio: en A y B, y mientras el
+  // gestor no haya decidido quién paga, el backend resuelve 'esperar_pago' y NO
+  // envía ningún cobro — prometerle "revisa tu correo para pagar" lo dejaba
+  // esperando un correo que no existe, y encima le pedía plata a quien no le
+  // toca pagar. Solo la opción C (estudios.pago_por='arrendatario', que escribe
+  // marcarPagoArrendatario) le genera el link al firmar.
+  const pagoRequerido = auth.expediente_id
+    ? !(await estudioPagado(auth.expediente_id)) && (await cobroLeTocaAlProspecto(auth.expediente_id))
+    : false;
+
   return {
     estado: 'autorizado',
     hash_documento: hashDocumento,
     autorizado_en: autorizadoEn.toISOString(),
+    pago_requerido: pagoRequerido,
   };
+}
+
+/**
+ * ¿El pagador del estudio es el ARRENDATARIO (opción C del §6.3)? Es el mismo
+ * dato con el que decide el orquestador (`siguientePasoEstudio`), leído de la
+ * misma columna, para que la pantalla del prospecto no prometa un cobro que el
+ * backend no va a emitir.
+ */
+async function cobroLeTocaAlProspecto(expedienteId: string): Promise<boolean> {
+  const { data } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('pago_por')
+    .eq('expediente_id', expedienteId)
+    .neq('tipo', 'con_coarrendatario')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as { pago_por?: string | null } | null)?.pago_por === 'arrendatario';
 }
 
 // ============================================================

@@ -32,6 +32,14 @@ import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './aut
 // Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
 // de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
 import { assertCanonDentroDelTope, leerCanonDelInmueble } from './tope-canon.guard';
+// Gate de PAGO (§6.3) + la señal canonica de "este estudio ya se cobro".
+import {
+  leerSenalPagoEstudio,
+  senalIndicaPagado,
+  assertPagoEstudio,
+  estudioYaCobrado,
+  ESTADO_ESPERANDO_PAGO,
+} from './pago.guard';
 // Estudios simultaneos por inmueble (Flujo §4.2). De aqui salen la definicion
 // canonica de "estudio en curso" y el unico bloqueo que queda: la reserva.
 import { errorNoAdmision, ESTADOS_ESTUDIO_FINALES } from './estudios-simultaneos.guard';
@@ -54,40 +62,17 @@ const ESTADOS_PERMITIDOS_RESULTADO = ['solicitado', 'en_proceso'];
 const ESTADOS_PERMITIDOS_EJECUCION = ['formulario_completado', 'documentos_cargados', 'fallido'];
 
 /**
- * ¿El estudio de este expediente YA se cobró?
+ * Señal de pago del estudio. La lectura, las dos politicas (fail-open para el
+ * tope §4.4, fail-closed para el gate de dinero) y la decision de orden del
+ * §6.3 viven en pago.guard.ts — aqui solo se consumen.
  *
- * Se usa para el grandfathering del tope de canon (§4.4). La regla de Gerencia
- * prohíbe COBRAR un estudio sobre un inmueble fuera de tope; no dice nada de
- * dejar sin entregar uno ya pagado. Los caminos que corren después del pago
- * —reintento de un 'fallido', re-consulta al otro buró, re-evaluación con
- * soportes— tienen que poder terminar: bloquearlos dejaría al cliente cobrado
- * y sin estudio, con un mensaje que además le afirma que "no se generó ningún
- * cobro". El bloqueo real vive en los sitios que preceden al cobro.
- *
- * Best-effort a propósito: si la consulta falla asumimos "no pagado", que es el
- * lado seguro (el tope bloquea). No es una decisión de plata, es solo el
- * interruptor entre bloquear y advertir.
+ * `estudioYaCobrado` sigue siendo el interruptor entre BLOQUEAR y ADVERTIR en
+ * el tope de canon: la regla de Gerencia prohibe COBRAR un estudio sobre un
+ * inmueble fuera de tope, no dejar sin entregar uno ya pagado. Los caminos
+ * post-cobro (reintento de un 'fallido', re-consulta al otro buro,
+ * re-evaluacion con soportes) tienen que poder terminar. NO es el gate de
+ * pago: ese es `assertPagoEstudio`, que falla CERRADO.
  */
-async function estudioYaCobrado(expedienteId: string): Promise<boolean> {
-  const { data, error } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('expediente_id', expedienteId)
-    .eq('concepto', 'estudio')
-    .eq('estado', 'completado')
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    logger.warn(
-      { error: error.message, expedienteId },
-      'No se pudo verificar si el estudio ya fue cobrado — se asume que no (el tope bloquea)',
-    );
-    return false;
-  }
-
-  return !!data;
-}
 
 // Nombre legible de cada buró — se usa en las observaciones que ve el gestor.
 // Con dos proveedores activos ya no se puede hardcodear "TransUnion".
@@ -1010,12 +995,23 @@ export async function submitFormulario(token: string, input: SubmitFormularioInp
     );
   }
 
+  // Un estudio EN ESPERA DE PAGO (§6.3) no sale de esa espera por llenar el
+  // formulario: este endpoint es público (token) y mandarlo a
+  // 'formulario_completado' lo dejaría en un estado ejecutable antes de cobrar.
+  // El único que lo despierta es la confirmación del pago (onEstudioPagado).
+  const { data: estadoRow } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('estado')
+    .eq('token_self_service', token)
+    .maybeSingle();
+  const enEsperaDePago = (estadoRow as { estado?: string } | null)?.estado === ESTADO_ESPERANDO_PAGO;
+
   // Update estudio with form data
   const { error: updateError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .update({
       datos_formulario: input as unknown as never,
-      estado: 'formulario_completado',
+      estado: enEsperaDePago ? ESTADO_ESPERANDO_PAGO : 'formulario_completado',
       fecha_completado_self_service: new Date().toISOString(),
     } as never)
     .eq('token_self_service', token);
@@ -1789,17 +1785,24 @@ export async function ejecutarEstudio(
   //      el reintento de un 'fallido' y la re-consulta al otro buró. Todos
   //      terminan en ejecutarEstudio, así que cerrar aquí cierra todos.
   //
-  //      PERO aquí NUNCA se está antes del cobro: a ejecutarEstudio no se
-  //      llega sin pago previo (el orchestrator sólo dispara desde
-  //      dispatchPagoCompletado, y el panel sólo tras habilitar + pagar). Si
-  //      el estudio ya se cobró, bloquear aquí deja al cliente cobrado y sin
-  //      servicio — y con un mensaje que le afirma que "no se generó ningún
-  //      cobro", que sería falso. Casos reales: el reintento de un 'fallido'
-  //      (que en este sistema aparece de forma espuria cuando se reinicia la
-  //      API) y la re-consulta al otro buró de un condicionado sin score, que
-  //      es justo el remedio documentado 70 líneas más abajo. Por eso, si ya
-  //      hay pago completado, el guard sólo advierte (grandfathering); el
-  //      bloqueo real vive en los sitios previos al cobro.
+  //      HASTA 2026-09-04 aquí NUNCA se estaba antes del cobro: a
+  //      ejecutarEstudio no se llegaba sin pago previo. Esa invariante MURIÓ
+  //      con la inversión del §6.3 (opción C: primero se autoriza, después se
+  //      cobra), porque la firma del prospecto puede llegar sin ningún pago.
+  //      Por eso justo debajo está el gate 1.7, que es el que ahora impide
+  //      consultar el buró sin cobro.
+  //
+  //      La lógica del grandfathering del tope NO cambia, y sigue siendo
+  //      correcta con el orden nuevo: si el estudio ya se cobró, bloquear aquí
+  //      deja al cliente cobrado y sin servicio —y con un mensaje que le
+  //      afirma que "no se generó ningún cobro", que sería falso—, así que el
+  //      guard sólo advierte. Casos reales: el reintento de un 'fallido' (que
+  //      en este sistema aparece de forma espuria cuando se reinicia la API) y
+  //      la re-consulta al otro buró de un condicionado sin score, que es justo
+  //      el remedio documentado 70 líneas más abajo. Y si NO se cobró, el tope
+  //      bloquea y su mensaje sigue siendo literalmente cierto. El bloqueo real
+  //      del tope vive, como siempre, en los sitios previos al cobro
+  //      (habilitarEstudio, enviarLinkPago, asumirCosto, liberarEstudioConCredito).
   //
   //      Va ANTES del gate 8.4 a propósito. Los dos son de sólo lectura, así
   //      que el orden sólo decide qué mensaje lee el gestor — y el accionable
@@ -1811,14 +1814,20 @@ export async function ejecutarEstudio(
   //
   //      El canon que devuelve el guard es el que se CONGELA mas abajo, en el
   //      CAS (paso 5). Ver alli por que.
+  // Una sola lectura de la señal de pago para los DOS consumidores que vienen
+  // (el interruptor bloquear/advertir del tope, y el gate 1.7): son la misma
+  // pregunta y el camino es caliente.
+  const senalPago = await leerSenalPagoEstudio(est.expediente_id);
+
   const { canonCop: canonEvaluado } = await assertCanonDentroDelTope({
     // El inmueble ya viene resuelto del select de arriba: no cuesta un
     // roundtrip extra.
     inmuebleId: expediente.inmueble_id,
     expedienteId: est.expediente_id,
     origen: 'ejecutarEstudio',
-    soloAdvertir: await estudioYaCobrado(est.expediente_id),
+    soloAdvertir: senalIndicaPagado(senalPago),
   });
+
 
   // 1.8. Normalizar 'formulario_enviado' → 'formulario_completado' (igual que
   //      el orchestrator): el solicitante puede ejecutar desde su panel con el
@@ -1935,6 +1944,31 @@ export async function ejecutarEstudio(
     numeroDocumentoConsultado: datos.numero_documento,
     tipoDocumentoConsultado: datos.tipo_documento,
   });
+
+  // 3.6. GATE DE PAGO — flujo §6.3 ("mientras el pago no se confirme, el
+  //      estudio permanece en estado de espera y no consume consultas a
+  //      centrales").
+  //
+  //      Este es el ÚNICO cuello por el que pasan los seis caminos que llegan
+  //      al buró: POST /estudios/:id/ejecutar (panel del gestor Y del
+  //      solicitante), el orquestador tras la firma, la aceptación del
+  //      co-arrendatario, el reintento de un 'fallido' y la re-consulta al
+  //      otro buró. Ponerlo en el hook de autorización dejaría los otros cinco
+  //      abiertos.
+  //
+  //      Es por EXPEDIENTE, no por estudio: el estudio del co-arrendatario y el
+  //      hijo de re-evaluación no tienen pago propio y se amparan en el del
+  //      titular (uq_pagos_estudio_activo garantiza como máximo uno). Eso es
+  //      también lo que hace que los expedientes ya pagados pasen sin backfill.
+  //
+  //      ORDEN de los tres guards: tope de canon (1.6) → autorización previa
+  //      (3.5) → pago (3.6). No es estético. Si el canon excede el tope el
+  //      estudio no va a correr nunca y contestar "falta el pago" mandaría al
+  //      gestor a cobrar por algo imposible; y pedirle plata a quien todavía no
+  //      autorizó es exactamente lo que el §6.3 prohíbe. Como el 8.4, va antes
+  //      del lock y del proveedor: un estudio bloqueado aquí no consume
+  //      consulta ni queda colgado en 'en_proceso'.
+  assertPagoEstudio(senalPago, { origen: 'ejecutar', expedienteNumero: expediente.numero });
 
   // Si el override trajo cambios respecto a datos_formulario, persistir.
   const cambioNumeroDatos = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
@@ -2162,6 +2196,13 @@ async function procesarEstudioAsync(args: {
       tipoDocumentoConsultado: providerInput.tipo_documento,
       momentoConsulta: new Date(),
     });
+
+    // ponytail: el gate de PAGO (§6.3) NO se repite aquí, a diferencia del 8.4.
+    // El 8.4 se repite porque una autorización SE PUEDE revocar entre el lock y
+    // el fetch; un pago 'completado' no se des-completa (a 'reembolsado' sí,
+    // pero para entonces la consulta ya se hizo). Con el CAS a 'en_proceso' de
+    // por medio la ventana es de milisegundos, y procesarEstudioAsync solo se
+    // llama desde ejecutarEstudio, que ya lo verificó.
 
     const response = await provider.solicitar(providerInput);
 

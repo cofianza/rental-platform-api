@@ -243,8 +243,17 @@ export async function createPaymentLink(
   //
   //     Solo aplica a concepto='estudio': garantia, primer_canon, deposito y
   //     otro no son el cobro que el §4.4 regula.
+  //     Y el MONTO no puede venir del cliente: el gate de ejecucion (§6.3)
+  //     solo comprueba que exista una fila 'estudio'+'completado', nunca su
+  //     valor, asi que un link de $1.000 pagaba una consulta al buro entera.
+  //     El precio canonico lo manda configuracion_sistema, igual que
+  //     /pago-estudio/enviar-link. Import dinamico: pago-estudio.service ya
+  //     importa de aqui (attachFacturas) y un import estatico cerraria el ciclo.
+  let monto = input.monto;
   if (input.concepto === 'estudio') {
     await assertCanonDentroDelTope({ expedienteId, origen: 'createPaymentLink' });
+    const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
+    monto = await getMontoEstudio();
   }
 
   // 2. Check for duplicate: no pendiente/procesando for same expediente+concepto
@@ -283,7 +292,7 @@ export async function createPaymentLink(
       expediente_id: expedienteId,
       concepto: input.concepto,
       descripcion: input.descripcion,
-      monto: input.monto,
+      monto,
       metodo: 'pasarela',
       estado: 'pendiente',
       email_pagador: input.email_pagador,
@@ -307,7 +316,7 @@ export async function createPaymentLink(
   let linkResult: { url: string; externalId: string };
   try {
     linkResult = await gateway.createPaymentLink({
-      amount: input.monto,
+      amount: monto,
       concept: `${conceptLabel} - Exp. ${expNumero}`,
       description: input.descripcion,
       metadata: {
@@ -383,7 +392,7 @@ export async function createPaymentLink(
         linkResult.url,
         {
           concepto: conceptLabel,
-          monto: formatCOP(input.monto),
+          monto: formatCOP(monto),
           expediente_numero: expNumero,
         },
       );
@@ -404,7 +413,7 @@ export async function createPaymentLink(
     detalle: {
       expediente_id: expedienteId,
       concepto: input.concepto,
-      monto: input.monto,
+      monto,
       email_pagador: input.email_pagador,
     },
     ip,
@@ -741,6 +750,24 @@ export async function registerManualPayment(
     },
     ip,
   });
+
+  // §6.3: este pago satisface el gate de ejecución, pero como NO pasa por
+  // dispatchPagoCompletado nadie despertaría el estudio aparcado en espera de
+  // pago — quedaría pagado y parado esperando un click manual. Se avisa al
+  // dueño del evento (que es idempotente). NO se enruta por
+  // dispatchPagoCompletado a propósito: eso le agregaría de golpe el WhatsApp
+  // de pago y la facturación electrónica automática, que estos pagos manuales
+  // no tienen (se facturan a mano) — riesgo de doble facturación.
+  if (input.concepto === 'estudio') {
+    import('@/modules/orchestrator/orchestrator.service')
+      .then(({ onEstudioPagado }) => onEstudioPagado(expedienteId, userId))
+      .catch((err) =>
+        logger.warn(
+          { error: err instanceof Error ? err.message : String(err), expedienteId },
+          'No se pudo continuar el flujo del estudio tras el pago manual',
+        ),
+      );
+  }
 
   return pago;
 }

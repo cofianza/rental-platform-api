@@ -24,6 +24,7 @@ import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { estudioYaCobrado, ESTADO_ESPERANDO_PAGO } from '@/modules/estudios/pago.guard';
 // Reglas duras V4.1 (§4.2 DTI, §4.3 canon/ingreso). El co-arrendatario SI es
 // evaluable por las dos: la Politica §5 lo evalua "sobre ingresos propios", asi
 // que su canon/ingreso individual dispara §4.3 con frecuencia.
@@ -669,6 +670,12 @@ export async function aceptarInvitacion(
   //     invitarCoarrendatario. Aquí sí lanza (el invitado ve el mensaje del
   //     tope, que no es un portazo y no habla de rechazo, §13), en vez de
   //     dejar el expediente en un estado del que no se sale.
+  //
+  //     Desde el §6.3 hay un segundo caso con la misma forma: el titular pudo
+  //     autorizar y todavía no haber pagado. Ese NO se resuelve lanzando (el
+  //     invitado no tiene nada que ver con el cobro del titular): el estudio se
+  //     crea EN ESPERA DE PAGO y arranca solo cuando el pago entre. Ver el
+  //     bloque 4.
   await assertCanonDentroDelTope({
     expedienteId: coa.expediente_id,
     origen: 'aceptarInvitacionCoarrendatario',
@@ -817,13 +824,24 @@ export async function aceptarInvitacion(
   const proveedorHeredado =
     (estudioTitularRow as { proveedor?: string } | null)?.proveedor ?? 'transunion';
 
+  // El co-arrendatario NUNCA tiene pago propio (uq_pagos_estudio_activo solo
+  // admite un pago de estudio por expediente): se ampara en el del titular.
+  const titularYaPago = await estudioYaCobrado(coa.expediente_id);
+
   const { data: estudioRow, error: estErr } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .insert({
       expediente_id: coa.expediente_id,
       tipo: 'con_coarrendatario',
       proveedor: proveedorHeredado,
-      estado: 'formulario_completado',
+      // §6.3: si el titular todavía no pagó, el estudio del co-arrendatario
+      // nace EN ESPERA DE PAGO y NO se dispara (ver el bloque 4). Sin esto, el
+      // gate de pago lo rechazaría dentro del fire-and-forget de abajo, el
+      // .catch se comería el error, el invitado vería un 200 y quedaría un
+      // estudio muerto en 'formulario_completado' bloqueando cualquier estudio
+      // futuro del expediente (ESTUDIO_ACTIVO_EXISTENTE) — exactamente el
+      // fallo que el comentario 1b dice haber arreglado ya una vez.
+      estado: titularYaPago ? 'formulario_completado' : ESTADO_ESPERANDO_PAGO,
       resultado: 'pendiente',
       datos_formulario: {
         nombre_completo: `${coa.nombre} ${coa.apellido}`.trim(),
@@ -881,14 +899,32 @@ export async function aceptarInvitacion(
   // 4. Disparar el estudio TransUnion async — el co-arrendatario no espera.
   //    El hook post-estudio (registrarResultadoInline) detectará tipo='con_coarrendatario'
   //    y disparará la ponderación cuando termine.
-  import('@/modules/estudios/estudios.service')
-    .then(({ ejecutarEstudio }) => ejecutarEstudio(estudioId, '', ip, undefined))
-    .catch((e) =>
-      logger.error(
-        { error: e, estudioId, coarrendatarioId: coa.id },
-        'Error al ejecutar estudio del coarrendatario — admin debe lanzarlo manual',
-      ),
-    );
+  //    §6.3: solo si el titular ya pagó. Si no, el estudio queda aparcado y lo
+  //    despierta onEstudioPagado junto con el del titular (su CAS es multi-fila
+  //    justamente por esto). Se deja rastro VISIBLE en el timeline: el .catch de
+  //    abajo solo loguea, y un bloqueo invisible aquí es el modo de fallo que ya
+  //    costó caro una vez.
+  if (!titularYaPago) {
+    await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: coa.expediente_id,
+        tipo: 'estudio',
+        descripcion:
+          'El co-arrendatario aceptó la invitación. Su estudio queda EN ESPERA del pago del titular y se ejecutará solo al confirmarse.',
+        metadata: { automatico: true, estudio_id: estudioId, coarrendatario_id: coa.id },
+      } as never)
+      .then(() => undefined, () => undefined);
+  } else {
+    import('@/modules/estudios/estudios.service')
+      .then(({ ejecutarEstudio }) => ejecutarEstudio(estudioId, '', ip, undefined))
+      .catch((e) =>
+        logger.error(
+          { error: e, estudioId, coarrendatarioId: coa.id },
+          'Error al ejecutar estudio del coarrendatario — admin debe lanzarlo manual',
+        ),
+      );
+  }
 
   // 5. Notificar al titular.
   const ctx = await fetchExpedienteCtx(coa.expediente_id);

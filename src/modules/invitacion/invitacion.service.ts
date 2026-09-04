@@ -36,7 +36,7 @@ export interface CanjearResult {
     estudio_habilitado: boolean;
     source: 'invitacion';
   };
-  siguiente_paso: 'pagar_estudio';
+  siguiente_paso: 'autorizar_estudio';
   redirect: string;
 }
 
@@ -286,7 +286,7 @@ export async function canjearInvitacion(token: string, user: AuthUser): Promise<
       estudio_habilitado: updatedExp.estudio_habilitado,
       source: 'invitacion',
     },
-    siguiente_paso: 'pagar_estudio',
+    siguiente_paso: 'autorizar_estudio',
     redirect: `/expedientes/${updatedExp.id}`,
   };
 }

@@ -542,9 +542,9 @@ export async function sendEstudioHabilitadoEmail(params: {
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre_solicitante}</strong>,</p>
           <p style="color: #6b7280;">Tu solicitud para el inmueble en <strong>${inmueble}, ${ciudad}</strong> fue <span style="color: #059669; font-weight: bold;">autorizada</span> por el propietario.</p>
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: pagar el estudio crediticio</p>
+            <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: firmar la autorización de datos</p>
             <p style="color: #065f46; margin: 8px 0 0;">Expediente: <strong>${expediente_numero}</strong></p>
-            <p style="color: #065f46; margin: 4px 0 0;">Ingresa a tu panel para proceder con el pago. Una vez recibido, se ejecuta el estudio automáticamente.</p>
+            <p style="color: #065f46; margin: 4px 0 0;">Te enviamos por correo y WhatsApp el enlace para autorizar la consulta en centrales de riesgo. El cobro del estudio llega después de que autorices.</p>
           </div>
           <p style="text-align: center; margin: 24px 0;">
             <a href="${url_panel}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">Ir al panel</a>

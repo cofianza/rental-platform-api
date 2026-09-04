@@ -1,5 +1,5 @@
 import { Router, raw } from 'express';
-import { authMiddleware, authorize } from '@/middleware/auth';
+import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import {
   pagoIdParamsSchema,
@@ -35,9 +35,18 @@ expedientePagosRouter.post(
 );
 
 // POST /expedientes/:expedienteId/pagos/manual — Register manual payment (HP-350)
+//
+// roleGuard: registrar un pago manual (con comprobante) es una accion de
+// gestor, nunca del pagador — es exactamente lo que la web ya asume
+// (PagosSection solo muestra "Registrar Pago Manual" a admin/operador). Sin
+// esto, `authorize('pagos','create')` dejaba pasar al rol 'solicitante', que
+// desde el §6.3 podia insertarse a si mismo un pago 'estudio' 'completado' por
+// $1: esa fila ES la señal que lee el gate de ejecucion, y ademas dispara
+// onEstudioPagado -> consulta FACTURABLE al buro.
 expedientePagosRouter.post(
   '/manual',
   authorize('pagos', 'create'),
+  roleGuard(['administrador', 'operador_analista']),
   validate({ params: expedienteIdParamsSchema, body: registerManualPaymentSchema }),
   pagosController.registerManualPayment,
 );
