@@ -16,6 +16,13 @@ import { assertExpedienteAccess } from '@/lib/tenantScope';
 const BUCKET_NAME = 'documentos-expedientes';
 const RESULTADOS_CERTIFICABLES = ['aprobado', 'condicionado'];
 
+/**
+ * El estudio ya cumplio su vigencia: no se emite un certificado que naceria
+ * vencido. Codigo propio (y no CONFLICT generico) porque la web y la
+ * reasignacion del §4.3 discriminan por el.
+ */
+export const ESTUDIO_VENCIDO_ERROR_CODE = 'ESTUDIO_VENCIDO';
+
 const RESULTADO_COLORS: Record<string, { bg: [number, number, number]; text: [number, number, number]; label: string }> = {
   aprobado: { bg: [220, 252, 231], text: [22, 101, 52], label: 'APROBADO' },
   condicionado: { bg: [254, 249, 195], text: [133, 77, 14], label: 'CONDICIONADO' },
@@ -365,6 +372,38 @@ export async function generarCertificado(
     );
   }
 
+  // 2.b VIGENCIA DEL ESTUDIO — el guard que faltaba.
+  //
+  //      La vigencia se ancla en `fecha_completado` (ver el paso 5), asi que un
+  //      estudio mas viejo que la ventana produce un `fecha_vencimiento`
+  //      ANTERIOR a la emision: un PDF que se declara vencido antes de existir
+  //      ("Fecha de emision: hoy / Valido hasta: hace tres semanas") y que
+  //      /verificar/<codigo> marca 'valido_vencido' en el primer escaneo del QR.
+  //      Emitirlo en silencio es entregarle al arrendador un documento inutil,
+  //      asi que se bloquea aqui, con la salida que manda el §13.
+  //
+  //      Va ANTES del paso 3 a proposito: alli la regeneracion BORRA el PDF
+  //      anterior del storage, y fallar despues dejaria al estudio sin
+  //      certificado descargable.
+  const validezDias = (await getCompany()).certificateValidityDays;
+  const validezMs = validezDias * 24 * 60 * 60 * 1000;
+  const fechaEmisionMs = Date.now();
+  const fechaCompletado = e.fecha_completado as string | null;
+  // Fallback a `now` cuando el estudio no tiene fecha_completado (registro
+  // manual antiguo): ahi no hay corrida en que anclarse y el comportamiento es
+  // el de siempre — nace vigente.
+  const completadoMs = fechaCompletado ? new Date(fechaCompletado).getTime() : Number.NaN;
+  const inicioVigenciaMs = Number.isFinite(completadoMs) ? completadoMs : fechaEmisionMs;
+
+  if (inicioVigenciaMs + validezMs <= fechaEmisionMs) {
+    throw AppError.conflict(
+      `Este estudio se completo el ${formatDate(new Date(inicioVigenciaMs).toISOString())} y ya cumplio su ` +
+        `vigencia de ${validezDias} dias, asi que el certificado naceria vencido. ` +
+        'Para certificar esta propiedad se requiere una evaluacion nueva.',
+      ESTUDIO_VENCIDO_ERROR_CODE,
+    );
+  }
+
   const expediente = e.expedientes as Record<string, unknown> | null;
   if (!expediente) {
     throw AppError.badRequest('Estudio no tiene expediente asociado', 'ESTUDIO_SIN_EXPEDIENTE');
@@ -399,10 +438,25 @@ export async function generarCertificado(
   const qrBuffer = await generateQrCode(verificationUrl);
 
   // 5. Dates
-  const fechaEmision = new Date().toISOString();
-  const fechaVencimiento = new Date(
-    Date.now() + (await getCompany()).certificateValidityDays * 24 * 60 * 60 * 1000,
-  ).toISOString();
+  //
+  //    La vigencia se ancla en `estudios.fecha_completado` (cuando el dato del
+  //    buro estuvo vigente), NO en la emision del certificado.
+  //
+  //    Es lo que hace estructural la promesa del Flujo §4.3: "el estudio
+  //    conserva su vigencia original; la reutilizacion no la extiende". Con el
+  //    calculo anterior (emision + N dias), bastaba con reasignar el estudio a
+  //    otra propiedad y regenerar el certificado para ganar 60 dias nuevos —
+  //    justo por la puerta de atras que el documento cierra. Anclado en la
+  //    corrida, regenerar el PDF (version+1) reimprime el mismo vencimiento.
+  //
+  //    Fallback a `now` solo si el estudio no tiene fecha_completado (registro
+  //    manual antiguo): ahi no hay corrida en que anclarse y el comportamiento
+  //    es el de siempre.
+  //    Los dos instantes ya se resolvieron en el paso 2.b, que es donde se
+  //    verifica que el estudio siga vigente. Recalcularlos aqui abriria la
+  //    puerta a que el guard mirara un numero y el PDF imprimiera otro.
+  const fechaEmision = new Date(fechaEmisionMs).toISOString();
+  const fechaVencimiento = new Date(inicioVigenciaMs + validezMs).toISOString();
 
   // 6. Generate PDF
   const pdfData: CertificatePdfData = {

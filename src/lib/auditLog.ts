@@ -63,6 +63,10 @@ export const AUDIT_ACTIONS = {
   // llamo, y confundirlo con uno hacia que el gestor reintentara en bucle.
   ESTUDIO_AUTORIZACION_BLOQUEADA: 'estudio_autorizacion_bloqueada',
   ESTUDIO_PROVIDER_RESULT_RECEIVED: 'estudio_provider_result_received',
+  // Portabilidad del estudio a otra propiedad (Flujo §4.3). No hay estado
+  // 'reasignado' en el enum: el estudio sigue 'completado' y lo que se mueve es
+  // el inmueble del expediente, asi que esta accion es parte de la traza.
+  ESTUDIO_REASIGNADO: 'estudio_reasignado',
   // Re-evaluacion de estudios
   ESTUDIO_SOPORTE_UPLOADED: 'estudio_soporte_uploaded',
   ESTUDIO_REEVALUACION_SOLICITADA: 'estudio_reevaluacion_solicitada',

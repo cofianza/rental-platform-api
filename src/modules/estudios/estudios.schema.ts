@@ -207,6 +207,14 @@ export const confirmarSoporteSchema = z.object({
   }),
 });
 
+// ============================================================
+// POST /estudios/:estudioId/reasignar (portabilidad §4.3)
+// ============================================================
+
+export const reasignarEstudioSchema = z.object({
+  inmueble_id_destino: z.string().uuid('ID de inmueble invalido'),
+});
+
 export const reEvaluarSchema = z.object({
   observaciones: z.string().max(2000, 'Observaciones no deben exceder 2000 caracteres').optional(),
 });
@@ -267,4 +275,5 @@ export type SoportePresignedUrlInput = z.infer<typeof soportePresignedUrlSchema>
 export type EjecutarEstudioBody = z.infer<typeof ejecutarEstudioBodySchema>;
 export type ConfirmarSoporteInput = z.infer<typeof confirmarSoporteSchema>;
 export type ReEvaluarInput = z.infer<typeof reEvaluarSchema>;
+export type ReasignarEstudioInput = z.infer<typeof reasignarEstudioSchema>;
 export type CodigoParams = z.infer<typeof codigoParamsSchema>;

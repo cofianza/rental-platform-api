@@ -31,7 +31,7 @@ import type { VeredictoReglasDuras } from './reglas-duras';
 import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './autorizacion.guard';
 // Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
 // de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
-import { assertCanonDentroDelTope } from './tope-canon.guard';
+import { assertCanonDentroDelTope, leerCanonDelInmueble } from './tope-canon.guard';
 // Estudios simultaneos por inmueble (Flujo §4.2). De aqui salen la definicion
 // canonica de "estudio en curso" y el unico bloqueo que queda: la reserva.
 import { errorNoAdmision, ESTADOS_ESTUDIO_FINALES } from './estudios-simultaneos.guard';
@@ -192,6 +192,7 @@ export async function listEstudios(
       duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
       referencia_proveedor, certificado_url, datos_formulario,
       created_at, updated_at,
+      canon_evaluado, canon_evaluado_origen,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('expediente_id', expedienteId)
@@ -441,6 +442,7 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
       certificado_url, codigo_qr, datos_formulario, respuesta_proveedor,
       token_self_service,
       expiracion_token, created_at, updated_at,
+      canon_evaluado, canon_evaluado_origen,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('id', estudioId)
@@ -1288,7 +1290,7 @@ export async function registrarResultado(
   // 1. Get estudio — verify exists, estado, and resultado still pendiente
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, expediente_id')
+    .select('id, estado, resultado, expediente_id, canon_evaluado')
     .eq('id', estudioId)
     .single();
 
@@ -1301,6 +1303,7 @@ export async function registrarResultado(
     estado: string;
     resultado: string;
     expediente_id: string;
+    canon_evaluado: number | string | null;
   };
 
   // Tenant guard: registrar (irreversiblemente) el resultado es una mutación
@@ -1353,6 +1356,55 @@ export async function registrarResultado(
     observaciones: input.observaciones,
     motivoRechazo: input.motivo_rechazo ?? null,
   });
+
+  // 2.6. CANON CONGELADO — el otro camino que llega a 'completado'.
+  //
+  //      `ejecutarEstudio` congela el canon dentro de su CAS, pero este registro
+  //      MANUAL no pasa por ahi (existe justamente porque ejecutarEstudio
+  //      rechaza los proveedores no consultables: 'manual', 'sifin'). Sin esto,
+  //      un estudio registrado a mano HOY quedaba 'completado' con
+  //      `canon_evaluado` NULL y, por tanto, no portable para siempre — con un
+  //      mensaje que ademas culpaba a que era "anterior al registro del canon".
+  //      Prerequisito del §4.3, igual que en ejecutarEstudio.
+  //
+  //      Se usa `leerCanonDelInmueble` y NO `assertCanonDentroDelTope`: el tope
+  //      del §4.4 se aplica ANTES del cobro, y este call site corre despues de
+  //      que el estudio se hizo. Bloquear aqui dejaria al cliente cobrado y sin
+  //      resultado, que es justo lo que el grandfathering del tope evita.
+  //
+  //      Solo se escribe si falta: un estudio que ya paso por ejecutarEstudio
+  //      lleva el canon de la corrida que fue al buro, y ese manda. Y nunca
+  //      bloquea: si el canon no se puede leer, se registra el resultado igual y
+  //      la columna queda NULL (el §4.3 lo dice con claridad).
+  if (est.canon_evaluado === null || est.canon_evaluado === undefined) {
+    try {
+      const bruto = await leerCanonDelInmueble({ expedienteId: est.expediente_id });
+      const canon = typeof bruto === 'string' ? Number(bruto) : bruto;
+      if (typeof canon === 'number' && Number.isFinite(canon) && canon > 0) {
+        const { error: canonError } = await (supabase
+          .from('estudios' as string) as ReturnType<typeof supabase.from>)
+          .update({ canon_evaluado: canon, canon_evaluado_origen: 'manual' } as never)
+          .eq('id', estudioId)
+          .is('canon_evaluado', null);
+        if (canonError) {
+          logger.warn(
+            { error: canonError.message, estudioId },
+            'registrarResultado: no se pudo congelar el canon evaluado — el estudio no sera portable (§4.3)',
+          );
+        }
+      } else {
+        logger.warn(
+          { estudioId, expedienteId: est.expediente_id },
+          'registrarResultado: el inmueble no tiene canon utilizable — el estudio queda sin canon congelado (§4.3)',
+        );
+      }
+    } catch (err) {
+      logger.warn(
+        { estudioId, err: err instanceof Error ? err.message : String(err) },
+        'registrarResultado: excepcion leyendo el canon del inmueble — se registra el resultado igual, sin canon congelado',
+      );
+    }
+  }
 
   // 3. Atomic RPC: update estudio + revert inmueble + insert timeline event
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1756,7 +1808,10 @@ export async function ejecutarEstudio(
   //      una firma inútil. Además, pedir habeas data para un estudio que no
   //      se puede ejecutar sería recolectar datos sin finalidad (Ley 1581).
   //      Ver la nota de ORDEN en tope-canon.guard.ts.
-  await assertCanonDentroDelTope({
+  //
+  //      El canon que devuelve el guard es el que se CONGELA mas abajo, en el
+  //      CAS (paso 5). Ver alli por que.
+  const { canonCop: canonEvaluado } = await assertCanonDentroDelTope({
     // El inmueble ya viene resuelto del select de arriba: no cuesta un
     // roundtrip extra.
     inmuebleId: expediente.inmueble_id,
@@ -1998,6 +2053,33 @@ export async function ejecutarEstudio(
       // facturada — y su respuesta no podría guardarse.
       ...(reconsultaOtroBuro
         ? { resultado: 'pendiente', score: null, observaciones: null }
+        : {}),
+      // CANON CONGELADO — prerequisito de la portabilidad del §4.3.
+      //
+      // `inmuebles.valor_arriendo` es EDITABLE: el gestor puede moverlo
+      // cualquier dia. Sin este snapshot, la tolerancia del +15% compararia la
+      // propiedad destino contra un valor que pudo cambiar despues del
+      // estudio, y el certificado dejaria de decir para que canon se aprobo.
+      // Por eso el canon con el que se ejecuto se guarda EN EL ESTUDIO
+      // (columnas de la migracion 20260903000001, que hasta hoy nadie escribia).
+      //
+      // Va AQUI, dentro del CAS, por tres razones: (a) es exactamente el mismo
+      // numero que uso el guard del tope unas lineas arriba, no una segunda
+      // lectura que podria diferir; (b) el CAS es el unico punto que gana UNO
+      // solo, asi que el canon queda atado a la corrida que de verdad va al
+      // buro, sin un UPDATE extra ni una carrera propia; (c) es antes del buro,
+      // como pide el comentario de la migracion.
+      //
+      // Se SOBRESCRIBE en cada toma de lock (no es write-once): el reintento de
+      // un 'fallido' y la re-consulta al otro buro reescriben `resultado`, y el
+      // estudio debe llevar el canon de la corrida que produjo el resultado
+      // vigente, no el de un intento abortado.
+      //
+      // Si el canon no se pudo resolver (caso estructural: todavia no hay
+      // inmueble) no se escribe nada: la columna tiene CHECK > 0 y un cero
+      // inventado seria peor que un NULL honesto.
+      ...(canonEvaluado !== null
+        ? { canon_evaluado: canonEvaluado, canon_evaluado_origen: 'inmueble' }
         : {}),
     } as never)
     .eq('id', estudioId)

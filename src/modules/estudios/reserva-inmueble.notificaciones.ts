@@ -12,9 +12,13 @@
 // acaba de reservarse: notificacion in-app + correo, mas un evento de timeline
 // en su expediente para que el gestor lo vea al abrirlo.
 //
-// NO SE REASIGNA. La portabilidad del estudio a otro inmueble es el §4.3 y es
-// otra fase. Por eso el copy anuncia pero NO promete un boton: dice "un asesor
-// puede asignarlo a otra propiedad", no "reasignalo aqui".
+// NO SE REASIGNA AQUI. La portabilidad del estudio a otro inmueble es el §4.3 y
+// ya existe: POST /estudios/:estudioId/reasignar (reasignacion.service.ts), que
+// mueve `expedientes.inmueble_id` sin cobrar cuando el canon de la nueva
+// propiedad cabe en la tolerancia. Pero la dispara el GESTOR desde el
+// expediente, no este aviso ni el prospecto (que solo tiene expedientes:read).
+// Por eso el copy sigue diciendo "un asesor te ayuda a asignarlo": es literal,
+// no un placeholder a la espera del §4.3.
 //
 // ── EL ESTUDIO NO SE TOCA: ES DELIBERADO ─────────────────────────────────
 //
@@ -134,8 +138,12 @@ export async function avisarCandidatosDeReserva(input: AvisoReservaInput): Promi
           payload: {
             expediente_id: cand.expediente_id,
             inmueble_codigo: input.inmuebleCodigo ?? null,
-            // La reasignacion es el §4.3 y todavia no existe: se deja el dato
-            // para que la web pueda mostrar el aviso sin ofrecer un boton.
+            // El §4.3 ya existe, pero este payload viaja al PROSPECTO y el
+            // prospecto no puede dispararlo (solo tiene expedientes:read; la
+            // ruta pide expedientes:update). Sigue en false a proposito: el
+            // aviso informa, y el boton vive en el expediente, del lado del
+            // gestor. Ponerlo en true aqui prometeria una accion que quien lee
+            // el aviso no puede ejecutar.
             reasignacion_disponible: false,
           },
         });

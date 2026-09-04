@@ -19,6 +19,7 @@ import {
   soportePresignedUrlSchema,
   confirmarSoporteSchema,
   reEvaluarSchema,
+  reasignarEstudioSchema,
   codigoParamsSchema,
 } from './estudios.schema';
 import * as estudiosController from './estudios.controller';
@@ -180,6 +181,31 @@ estudiosRouter.post(
   authorize('expedientes', 'update'),
   validate({ params: estudioIdParamsSchema, body: reEvaluarSchema }),
   estudiosController.reEvaluar,
+);
+
+// POST /estudios/:estudioId/reasignar — portabilidad del §4.3.
+//
+// roleGuard y no `authorize('expedientes','update')`, por el mismo motivo que
+// /ejecutar: el PROPIETARIO tiene `expedientes: ['read']` y con `authorize`
+// recibia un 403 seco ("Sin permisos para update en expedientes") despues de
+// recorrer el modal y elegir la propiedad. Y el propietario es un destinatario
+// natural del §4.3 — su candidato perdio el inmueble (§4.2) y quiere llevarle
+// el estudio a otra propiedad SUYA, que es exactamente el beneficio comercial
+// que el documento promete. Un callejon sin salida en una promesa comercial es
+// peor que un permiso de mas.
+//
+// La lista cubre lo mismo que cubria `authorize` (quedan fuera
+// gerencia_consulta y solicitante: la reasignacion la dispara el gestor, que es
+// quien conoce el inventario) y no debilita nada: el bloqueo de escritura de
+// los miembros 'solo_lectura' vive en authMiddleware, y el scoping fino —ser
+// dueño del expediente Y del inmueble destino, y que ambos sean de la misma
+// cartera— lo hace el servicio con assertExpedienteAccess +
+// assertInmuebleAccess + el guard de cartera.
+estudiosRouter.post(
+  '/:estudioId/reasignar',
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
+  validate({ params: estudioIdParamsSchema, body: reasignarEstudioSchema }),
+  estudiosController.reasignar,
 );
 
 // GET /estudios/:estudioId/historial

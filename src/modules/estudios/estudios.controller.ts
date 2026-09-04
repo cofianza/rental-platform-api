@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as estudiosService from './estudios.service';
 import * as certificadoService from './certificado.service';
+import { reasignarEstudio } from './reasignacion.service';
 import type {
   CreateEstudioInput,
   CreateEstudioFromInmuebleInput,
@@ -13,6 +14,7 @@ import type {
   SoportePresignedUrlInput,
   ConfirmarSoporteInput,
   ReEvaluarInput,
+  ReasignarEstudioInput,
 } from './estudios.schema';
 
 // ============================================================
@@ -124,6 +126,24 @@ export async function reEvaluar(req: Request, res: Response) {
   const input = req.body as ReEvaluarInput;
   const result = await estudiosService.solicitarReEvaluacion(estudioId, input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, result);
+}
+
+/**
+ * Portabilidad §4.3: mueve el expediente de este estudio a otra propiedad, sin
+ * cobrar. La regla (tolerancia +15% y recalculo canon/ingreso <= 40%) la aplica
+ * el servicio; aqui solo se traslada el input.
+ */
+export async function reasignar(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const { inmueble_id_destino } = req.body as ReasignarEstudioInput;
+  const result = await reasignarEstudio({
+    estudioId,
+    inmuebleDestinoId: inmueble_id_destino,
+    userId: req.user!.id,
+    userRol: req.user!.rol,
+    ip: req.ip,
+  });
+  sendSuccess(res, result);
 }
 
 export async function getHistorial(req: Request, res: Response) {
