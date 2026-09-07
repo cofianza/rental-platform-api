@@ -18,40 +18,53 @@ import { AppError } from '@/lib/errors';
 // Roles internos: ven todos los datos (sin filtro de tenant).
 const INTERNAL_ROLES = ['administrador', 'operador_analista', 'gerencia_consulta'];
 
+// ── Membresias activas por perfil, cacheadas ───────────────────
+// Cada listado resolvia la membresia 2-3 veces (resolveAllowedInmuebleIds +
+// resolveVisibilityScope + permisos) con la misma consulta. Una sola query
+// por perfil, cacheada con el mismo horizonte que authCache (auth.ts).
+// Las rutas que mutan membresias llaman invalidateMembresiasCache() al
+// responder (inmobiliaria-miembros.routes.ts).
+// ponytail: cache por replica; con multi-replica el otro nodo tarda hasta
+// TTL en ver un cambio (mismo trade-off que el auth cache).
+const MEMBRESIAS_TTL_MS = 30_000;
+type FilaMembresia = {
+  inmobiliaria_id: string;
+  rol_miembro: string;
+  inmobiliarias: { miembros_ven_todo: boolean } | null;
+};
+const membresiasCache = new Map<string, { expira: number; filas: FilaMembresia[] }>();
+
+async function loadMembresiasActivas(perfilId: string): Promise<FilaMembresia[]> {
+  const hit = membresiasCache.get(perfilId);
+  if (hit && hit.expira > Date.now()) return hit.filas;
+  const { data, error } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('inmobiliaria_id, rol_miembro, inmobiliarias(miembros_ven_todo)')
+    .eq('perfil_id', perfilId)
+    .eq('estado', 'activo');
+  const filas = (data as unknown as FilaMembresia[] | null) ?? [];
+  if (!error) membresiasCache.set(perfilId, { expira: Date.now() + MEMBRESIAS_TTL_MS, filas });
+  return filas;
+}
+
+export function invalidateMembresiasCache(perfilId?: string): void {
+  if (perfilId) membresiasCache.delete(perfilId);
+  else membresiasCache.clear();
+}
+
 /**
  * IDs de las organizaciones (inmobiliarias) a las que pertenece un perfil
  * como miembro ACTIVO. Vacío si no pertenece a ninguna.
  */
 export async function resolveMembershipInmobiliariaIds(perfilId: string): Promise<string[]> {
-  const { data } = await (supabase
-    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
-    .select('inmobiliaria_id')
-    .eq('perfil_id', perfilId)
-    .eq('estado', 'activo');
-  return ((data as Array<{ inmobiliaria_id: string }> | null) || []).map((m) => m.inmobiliaria_id);
+  return (await loadMembresiasActivas(perfilId)).map((m) => m.inmobiliaria_id);
 }
 
-/**
- * Membresía ACTIVA del perfil (en Fase 1 cada perfil pertenece a lo sumo a una
- * organización) junto con el flag `miembros_ven_todo` de esa organización.
- * NULL si no pertenece a ninguna.
- */
 async function getActiveMembership(
   perfilId: string,
 ): Promise<{ orgId: string; rolMiembro: string; venTodo: boolean } | null> {
-  const { data } = await (supabase
-    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
-    .select('inmobiliaria_id, rol_miembro, inmobiliarias(miembros_ven_todo)')
-    .eq('perfil_id', perfilId)
-    .eq('estado', 'activo')
-    .limit(1)
-    .maybeSingle();
-  if (!data) return null;
-  const row = data as unknown as {
-    inmobiliaria_id: string;
-    rol_miembro: string;
-    inmobiliarias: { miembros_ven_todo: boolean } | null;
-  };
+  const row = (await loadMembresiasActivas(perfilId))[0];
+  if (!row) return null;
   return {
     orgId: row.inmobiliaria_id,
     rolMiembro: row.rol_miembro,
@@ -59,12 +72,6 @@ async function getActiveMembership(
   };
 }
 
-/**
- * rol_miembro ('owner' | 'miembro' | 'solo_lectura') del perfil en su
- * organización activa, o null si no es miembro de ninguna (rol interno,
- * propietario, o inmobiliaria sin org). Lo usa /auth/me para que el front
- * sepa si el usuario es titular (no se gatea) o staff.
- */
 export async function resolveRolMiembro(perfilId: string): Promise<string | null> {
   const m = await getActiveMembership(perfilId);
   return m?.rolMiembro ?? null;

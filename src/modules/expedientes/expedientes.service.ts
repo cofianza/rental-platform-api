@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { ESTADOS_EXPEDIENTE } from './expediente-state-machine';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import {
   esMiembroNoOwnerDeOrg,
@@ -567,34 +568,32 @@ export async function updateExpediente(
 // Stats (contadores por estado)
 // ============================================================
 
-export async function getExpedienteStats() {
-  const { data, error } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('estado');
-
-  if (error) {
-    logger.error({ error: error.message }, 'Error al obtener estadisticas de expedientes');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener estadisticas');
-  }
-
-  const rows = (data as unknown as Array<{ estado: string }>) || [];
-
-  // Contar por estado
-  const counts: Record<string, number> = {};
-  for (const row of rows) {
-    counts[row.estado] = (counts[row.estado] || 0) + 1;
-  }
-
-  // Retornar todos los estados posibles (con 0 si no hay expedientes)
-  const allStates = ['borrador', 'en_revision', 'informacion_incompleta', 'aprobado', 'rechazado', 'condicionado', 'cerrado'];
-  const stats = allStates.map((estado) => ({
-    estado,
-    count: counts[estado] || 0,
-  }));
-
-  const total = rows.length;
-
-  return { stats, total };
+/**
+ * Conteo por estado. `allowedIds` viene de resolveAllowedExpedienteIds:
+ * null = sin filtro (rol interno), [] = nada visible, [...] = solo esos.
+ * Un HEAD count por estado en paralelo: no se transfieren filas y no aplica
+ * el max-rows (1000) de PostgREST, que truncaba el conteo en JS.
+ * ponytail: 7 requests con la lista de ids en la URL; si una org pasa de
+ * ~1000 expedientes, mover a un RPC con GROUP BY.
+ */
+export async function getExpedienteStats(allowedIds: string[] | null = null) {
+  const stats = await Promise.all(
+    ESTADOS_EXPEDIENTE.map(async (estado) => {
+      if (allowedIds && allowedIds.length === 0) return { estado, count: 0 };
+      let q = (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('id', { count: 'exact', head: true })
+        .eq('estado', estado);
+      if (allowedIds) q = q.in('id', allowedIds);
+      const { count, error } = await q;
+      if (error) {
+        logger.error({ error: error.message, estado }, 'Error al obtener estadisticas de expedientes');
+        throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener estadisticas');
+      }
+      return { estado, count: count ?? 0 };
+    }),
+  );
+  return { stats, total: stats.reduce((acc, s) => acc + s.count, 0) };
 }
 
 // ============================================================

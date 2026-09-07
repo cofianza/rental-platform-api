@@ -903,6 +903,9 @@ export async function listAllContratos(
       const estados = query.estado.split(',').map((s) => s.trim()).filter(Boolean);
       if (estados.length > 0) q = q.in('estado', estados);
     }
+    if (query.expediente_ids) {
+      q = q.in('expediente_id', query.expediente_ids.split(','));
+    }
     if (query.search) {
       q = q.ilike('nombre_archivo', `%${query.search}%`);
     }

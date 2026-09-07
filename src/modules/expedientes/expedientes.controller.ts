@@ -101,35 +101,9 @@ export async function stats(req: Request, res: Response) {
     return;
   }
 
-  // Propietario/Inmobiliaria: only stats for their inmuebles
-  if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
-    const { data: myInmuebles } = await supabase
-      .from('inmuebles')
-      .select('id')
-      .eq('propietario_id', req.user.id);
-    const myIds = (myInmuebles || []).map((i: { id: string }) => i.id);
-    if (myIds.length === 0) {
-      sendSuccess(res, { total: 0, stats: [] });
-      return;
-    }
-    await expedientesService.getExpedienteStats();
-    // Filter stats — recalculate from filtered expedientes
-    const { data: myExps } = await supabase
-      .from('expedientes')
-      .select('estado')
-      .in('inmueble_id', myIds);
-    const rows = myExps || [];
-    const counts: Record<string, number> = {};
-    for (const r of rows) {
-      const estado = (r as { estado: string }).estado;
-      counts[estado] = (counts[estado] || 0) + 1;
-    }
-    const filteredStats = Object.entries(counts).map(([estado, count]) => ({ estado, count }));
-    sendSuccess(res, { total: rows.length, stats: filteredStats });
-    return;
-  }
-  const result = await expedientesService.getExpedienteStats();
-  sendSuccess(res, result);
+  // Resto de roles: mismo alcance que el listado (tenantScope), conteo en SQL.
+  const allowed = await resolveAllowedExpedienteIds(req.user?.id, req.user?.rol);
+  sendSuccess(res, await expedientesService.getExpedienteStats(allowed));
 }
 
 // HP-247: Verificar si un inmueble tiene expediente activo

@@ -92,6 +92,9 @@ export const listAllContratosQuerySchema = z.object({
   search: z.string().max(200).optional(),
   fecha_desde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   fecha_hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  // Hasta 50 uuids separados por coma. Lo usa el dashboard para saber en UNA
+  // consulta que expedientes aprobados ya tienen contrato (antes: 1 por cada uno).
+  expediente_ids: z.string().regex(/^[0-9a-f-]{36}(,[0-9a-f-]{36}){0,49}$/i).optional(),
 });
 
 // ============================================================

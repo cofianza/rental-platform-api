@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import { invalidateMembresiasCache } from '@/lib/tenantScope';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
 import { publicFormLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
@@ -14,11 +15,19 @@ import {
 } from './inmobiliaria-miembros.schema';
 import * as controller from './inmobiliaria-miembros.controller';
 
+// Toda mutacion de membresia (invitar/aceptar/revocar/rol/salir/ven_todo, y
+// las rutas admin) invalida el cache de tenantScope al terminar de responder.
+// A nivel de router para que una ruta nueva quede cubierta sola.
+function invalidaCacheMembresias(req: Request, res: Response, next: NextFunction): void {
+  if (req.method !== 'GET') res.on('finish', () => invalidateMembresiasCache());
+  next();
+}
+
 // ── Router autenticado: /api/v1/inmobiliaria/miembros ──────────
 // Sólo rol inmobiliaria; el owner-check fino vive en el service (assertOwner).
 export const miembrosRouter = Router();
 
-miembrosRouter.use(authMiddleware, roleGuard(['inmobiliaria']));
+miembrosRouter.use(authMiddleware, roleGuard(['inmobiliaria']), invalidaCacheMembresias);
 
 miembrosRouter.get('/', controller.list);
 
@@ -62,6 +71,7 @@ miembrosRouter.delete(
 
 // ── Router público: /api/v1/public/invitacion-miembro ──────────
 export const publicInvitacionMiembroRouter = Router();
+publicInvitacionMiembroRouter.use(invalidaCacheMembresias);
 
 // GET info de la invitación (sin auth).
 publicInvitacionMiembroRouter.get(
@@ -93,7 +103,7 @@ publicInvitacionMiembroRouter.post(
 // La plataforma gestiona los miembros de CUALQUIER organización.
 export const adminInmobiliariasRouter = Router();
 
-adminInmobiliariasRouter.use(authMiddleware, roleGuard(['administrador']));
+adminInmobiliariasRouter.use(authMiddleware, roleGuard(['administrador']), invalidaCacheMembresias);
 
 adminInmobiliariasRouter.get('/', controller.adminListOrgs);
 
