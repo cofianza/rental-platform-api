@@ -12,7 +12,7 @@ import { resolverRuta } from './rutas-resultado';
 import { MODELO_VERSION } from './motor';
 // Adenda 1: tarifas por ruta (§5), factor de ajuste del ingreso (§1.1),
 // fuentes consultadas (§2.4) y vigencia del panel (§6, §11).
-import { calcularTarifas, leerTarifaOverride, viaDeAprobacion, type Tarifas } from './tarifas';
+import { calcularTarifas, leerTarifaOverride, viaSegunCalibracion, type Tarifas } from './tarifas';
 import { getCalibracion } from '@/lib/calibracion';
 import { getCompany } from '@/lib/companyConfig';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
@@ -458,7 +458,7 @@ function drawTable(doc: PDFKit.PDFDocument, rows: string[][], startY: number, wi
  * anterior al motor, o migracion sin correr) el CRC sale igual, sin factor
  * ni puntaje.
  */
-async function leerSombraDelEstudio(
+export async function leerSombraDelEstudio(
   estudioId: string,
 ): Promise<{ puntaje: number | null; factor: number | null; modeloVersion: string | null } | null> {
   try {
@@ -640,14 +640,7 @@ export async function generarCertificado(
   });
 
   // Adenda §5: la fila de la tabla de tarifas segun la via de aprobacion.
-  const via = viaDeAprobacion({
-    puntaje: puntajeCrc,
-    coarrendatarioVinculado: (e.tipo as string) === 'con_coarrendatario',
-    puntajeCoarrendatario: null,
-    umbralAprobacion: umbrales.aprobacion,
-    umbralZonaGris: umbrales.zonaGris,
-    umbralCoarrendatario: umbrales.coarrendatario,
-  });
+  const via = viaSegunCalibracion(puntajeCrc, (e.tipo as string) === 'con_coarrendatario', cal);
 
   // Adenda §2.4: que centrales se consultaron.
   const etiquetaBuro = (id: unknown) =>

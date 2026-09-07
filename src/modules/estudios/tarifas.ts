@@ -143,3 +143,23 @@ export function viaDeAprobacion(e: {
   }
   return 'revision_manual';
 }
+
+/**
+ * La via segun lo que el sistema sabe hoy: el puntaje solo cuenta cuando el
+ * motor decide (o la ruta usa el scorecard) y los umbrales salen del panel de
+ * calibracion. Una sola definicion para el CRC y para GET /estudios/:id/tarifa.
+ */
+export function viaSegunCalibracion(
+  puntaje: number | null,
+  conCoarrendatario: boolean,
+  cal: { UMBRAL_APROBACION_AUTOMATICA: number; UMBRAL_ZONA_GRIS: number; UMBRAL_COARRENDATARIO: number },
+): ViaAprobacion {
+  return viaDeAprobacion({
+    puntaje,
+    coarrendatarioVinculado: conCoarrendatario,
+    puntajeCoarrendatario: null,
+    umbralAprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
+    umbralZonaGris: cal.UMBRAL_ZONA_GRIS,
+    umbralCoarrendatario: cal.UMBRAL_COARRENDATARIO,
+  });
+}

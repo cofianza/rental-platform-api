@@ -5,6 +5,7 @@ import { publicFormLimiter } from '@/middleware/rateLimiter';
 import {
   expedienteIdParamsSchema,
   estudioIdParamsSchema,
+  tarifaOverrideSchema,
   inmuebleIdParamsSchema,
   tokenParamsSchema,
   createEstudioSchema,
@@ -116,6 +117,28 @@ estudiosRouter.patch(
   authorize('expedientes', 'update'),
   validate({ params: estudioIdParamsSchema, body: registrarResultadoSchema }),
   estudiosController.registrarResultado,
+);
+
+// Adenda §5 (nota): tarifa del estudio (tabla estandar + condiciones
+// especiales). Ver: cualquiera que vea el expediente. Poner/quitar: solo
+// Gerencia General (administrador), con registro de quien y cuando.
+estudiosRouter.get(
+  '/:estudioId/tarifa',
+  authorize('expedientes', 'read'),
+  validate({ params: estudioIdParamsSchema }),
+  estudiosController.getTarifa,
+);
+estudiosRouter.patch(
+  '/:estudioId/tarifa',
+  roleGuard(['administrador']),
+  validate({ params: estudioIdParamsSchema, body: tarifaOverrideSchema }),
+  estudiosController.setTarifaOverride,
+);
+estudiosRouter.delete(
+  '/:estudioId/tarifa',
+  roleGuard(['administrador']),
+  validate({ params: estudioIdParamsSchema }),
+  estudiosController.quitarTarifaOverride,
 );
 
 // POST /estudios/:estudioId/certificado/presigned-url

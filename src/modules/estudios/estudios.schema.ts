@@ -283,3 +283,25 @@ export const estudioVigenteQuerySchema = z.object({
   tipo_documento: z.string().min(2).max(20),
   numero_documento: z.string().min(3).max(30),
 });
+
+// ============================================================
+// Adenda §5 (nota): condiciones especiales negociadas caso por caso
+// ============================================================
+
+const pctSchema = z.coerce.number().min(0, 'Minimo 0%').max(100, 'Maximo 100%');
+
+export const tarifaOverrideSchema = z
+  .object({
+    tarifa_mensual_pct: pctSchema.optional(),
+    prima_vinculacion_pct: pctSchema.optional(),
+    cashback_pct: pctSchema.optional(),
+    // "dejando registro de quien autorizo y cuando": el motivo es lo que
+    // hace util ese registro seis meses despues.
+    motivo: z.string().trim().min(5, 'Indica el motivo de la condicion especial').max(500),
+  })
+  .refine(
+    (b) => b.tarifa_mensual_pct != null || b.prima_vinculacion_pct != null || b.cashback_pct != null,
+    { message: 'Indica al menos un porcentaje a sobrescribir' },
+  );
+
+export type TarifaOverrideInput = z.infer<typeof tarifaOverrideSchema>;

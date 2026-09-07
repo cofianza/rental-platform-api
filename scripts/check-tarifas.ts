@@ -17,6 +17,7 @@ import {
   PRIMA_VINCULACION_PCT,
   CASHBACK_PCT,
   IVA_PCT,
+  viaSegunCalibracion,
 } from '@/modules/estudios/tarifas';
 
 let pasos = 0;
@@ -72,5 +73,11 @@ ok(viaDeAprobacion({ puntaje: 84, coarrendatarioVinculado: true, puntajeCoarrend
 ok(viaDeAprobacion({ puntaje: 84, coarrendatarioVinculado: true, puntajeCoarrendatario: 79, ...u }) === 'revision_manual', '84 + coa 79 -> revision manual');
 ok(viaDeAprobacion({ puntaje: 70, coarrendatarioVinculado: false, puntajeCoarrendatario: null, ...u }) === 'revision_manual', '70 solo -> revision manual');
 ok(viaDeAprobacion({ puntaje: null, coarrendatarioVinculado: false, puntajeCoarrendatario: null, ...u }) === 'revision_manual', 'sin puntaje -> tarifa de revision manual (la mas conservadora)');
+
+// viaSegunCalibracion: la misma via para el CRC y para GET /estudios/:id/tarifa.
+const cal = { UMBRAL_APROBACION_AUTOMATICA: 85, UMBRAL_ZONA_GRIS: 70, UMBRAL_COARRENDATARIO: 80 };
+ok(viaSegunCalibracion(null, false, cal) === 'revision_manual', 'sin puntaje del modelo -> revision manual (2,7%)');
+ok(viaSegunCalibracion(90, false, cal) === 'automatica', '90 -> automatica (2,0%)');
+ok(viaSegunCalibracion(75, true, cal) === 'revision_manual', '75 con coarrendatario sin puntaje propio -> revision manual (el 2,5% exige coarrendatario >= 80)');
 
 console.log(`\nOK — ${pasos} aserciones: la tabla de tarifas de la Adenda §5 esta tal cual.`);

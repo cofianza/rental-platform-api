@@ -3,6 +3,8 @@ import { sendSuccess, sendCreated } from '@/lib/response';
 import * as estudiosService from './estudios.service';
 import * as certificadoService from './certificado.service';
 import { reasignarEstudio } from './reasignacion.service';
+import * as tarifaOverrideService from './tarifa-override.service';
+import type { TarifaOverrideInput } from './estudios.schema';
 import type {
   CreateEstudioInput,
   CreateEstudioFromInmuebleInput,
@@ -241,4 +243,21 @@ export async function estudioVigentePorDocumento(req: Request, res: Response) {
     req.user!.rol,
   );
   sendSuccess(res, { estudio });
+}
+
+// ── Adenda §5 (nota): tarifa negociada ──────────────────────
+export async function getTarifa(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  sendSuccess(res, await tarifaOverrideService.tarifasDelEstudio(estudioId, req.user?.id, req.user?.rol));
+}
+
+export async function setTarifaOverride(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const input = req.body as TarifaOverrideInput;
+  sendSuccess(res, await tarifaOverrideService.setTarifaOverride(estudioId, input, req.user!.id, req.user!.rol, req.ip));
+}
+
+export async function quitarTarifaOverride(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  sendSuccess(res, await tarifaOverrideService.quitarTarifaOverride(estudioId, req.user!.id, req.user!.rol, req.ip));
 }
