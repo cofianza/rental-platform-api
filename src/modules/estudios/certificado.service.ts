@@ -6,6 +6,10 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
+// §10.1 — el CRC lleva "su numero, vigencia y condiciones economicas".
+import { canonMaximoTolerado, PORTABILIDAD_TOLERANCIA_PCT } from './portabilidad';
+import { resolverRuta } from './rutas-resultado';
+import { MODELO_VERSION } from './motor';
 import { getCompany } from '@/lib/companyConfig';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 
@@ -135,6 +139,13 @@ interface CertificatePdfData {
   duracionContrato: number;
   observaciones: string | null;
   condiciones: string | null;
+  // §10.1 — "Certificado de Riesgo Cofianza (CRC) descargable, con su numero,
+  // vigencia y CONDICIONES ECONOMICAS."
+  canonEvaluado: number | null;
+  canonMaximoTolerado: number | null;
+  requiereAcompanante: boolean;
+  rutaEtiqueta: string | null;
+  modeloVersion: string;
 }
 
 export async function generateCertificatePdf(
@@ -180,16 +191,27 @@ export async function generateCertificatePdf(
 
     // Title
     doc.fontSize(13).font('Helvetica-Bold').fillColor('#ffffff');
-    doc.text('CERTIFICADO DE ESTUDIO DE RIESGO CREDITICIO', 50, 118, {
+    doc.text('CERTIFICADO DE RIESGO COFIANZA (CRC)', 50, 118, {
       width: contentWidth,
       align: 'center',
     });
 
     let y = 50 + headerHeight + 15;
 
-    // Code + date row
+    // §10.1 pide que el CRC lleve "su numero, vigencia y condiciones
+    // economicas". El numero y la vigencia iban antes en 9pt y en el pie en
+    // 7pt: quien recibe el certificado no los encontraba. Ahora abren el
+    // documento, que es donde el documento los pone.
+    doc.roundedRect(50, y, contentWidth, 46, 4).fill('#f0fdfa');
+    doc.fontSize(8).font('Helvetica').fillColor('#6b7280');
+    doc.text('NUMERO DEL CERTIFICADO', 60, y + 8);
+    doc.text('VIGENTE HASTA', 60 + contentWidth / 2, y + 8);
+    doc.fontSize(13).font('Helvetica-Bold').fillColor(TEAL as unknown as string);
+    doc.text(data.codigo, 60, y + 21);
+    doc.text(formatDate(data.fechaVencimiento), 60 + contentWidth / 2, y + 21);
+    y += 54;
+
     doc.fontSize(9).font('Helvetica').fillColor('#374151');
-    doc.text(`Codigo: ${data.codigo}`, 50, y);
     doc.text(`Fecha de emision: ${formatDate(data.fechaEmision)}`, 50, y, {
       width: contentWidth,
       align: 'right',
@@ -242,9 +264,54 @@ export async function generateCertificatePdf(
     resultRows.push(['Proveedor', data.proveedor.toUpperCase()]);
     resultRows.push(['Fecha del estudio', formatDate(data.fechaEstudio)]);
     resultRows.push(['Duracion contrato', `${data.duracionContrato} meses`]);
+    if (data.rutaEtiqueta) resultRows.push(['Perfil', data.rutaEtiqueta]);
     if (data.observaciones) resultRows.push(['Observaciones', data.observaciones]);
     if (data.condiciones) resultRows.push(['Condiciones', data.condiciones]);
     y = drawTable(doc, resultRows, y, contentWidth);
+
+    y += 10;
+
+    // ---- SECTION: CONDICIONES DEL CERTIFICADO (§10.1) ----
+    //
+    // El §10.1 pide "condiciones economicas". Aqui va lo que el sistema SI
+    // conoce: sobre que canon se evaluo y hasta que canon sigue sirviendo este
+    // mismo CRC. El VALOR DE LA PRIMA no aparece porque no existe todavia en
+    // el sistema — no hay modelo de precios — y ponerlo inventado seria peor
+    // que omitirlo en un documento que el cliente puede oponer.
+    if (data.canonEvaluado != null) {
+      // titulo (22) + 4 filas (~22 c/u) + el parrafo de tolerancia (~32).
+      y = asegurarEspacio(doc, y, 22 + 4 * 22 + 32);
+      y = drawSectionTitle(doc, 'CONDICIONES DEL CERTIFICADO', y, contentWidth);
+      const condRows: string[][] = [
+        ['Canon evaluado', formatCurrency(data.canonEvaluado)],
+      ];
+      if (data.canonMaximoTolerado != null) {
+        condRows.push(['Canon maximo amparado', formatCurrency(data.canonMaximoTolerado)]);
+      }
+      condRows.push([
+        'Acompanante',
+        data.requiereAcompanante
+          ? 'Requerido: este CRC ampara el contrato presentado con coarrendatario'
+          : 'No requerido',
+      ]);
+      condRows.push(['Version del modelo', data.modeloVersion]);
+      y = drawTable(doc, condRows, y, contentWidth);
+
+      // Parrafo del §8 de la Politica V4.1 (TOLERANCIA DE CANON DEL CRC),
+      // parafraseado. Va aqui y no en el pie porque define CUANDO este
+      // certificado deja de servir, que es justo lo que el arrendador necesita
+      // saber antes de firmar.
+      doc.fontSize(7).font('Helvetica').fillColor('#6b7280');
+      doc.text(
+        `Este certificado ampara contratos cuyo canon no supere en mas de ${PORTABILIDAD_TOLERANCIA_PCT}% el canon evaluado, ` +
+          'siempre que la relacion canon/ingreso recalculada se mantenga en o por debajo del 40%. ' +
+          'Si el canon excede esa tolerancia se requiere una nueva evaluacion.',
+        50,
+        y + 4,
+        { width: contentWidth },
+      );
+      y += 32;
+    }
 
     y += 15;
 
@@ -293,6 +360,21 @@ export async function generateCertificatePdf(
 }
 
 // ---- PDF Drawing Helpers ----
+
+/**
+ * Evita el titulo huerfano: si en lo que queda de pagina no cabe el bloque,
+ * salta antes de dibujarlo. Sin esto el encabezado "CONDICIONES DEL
+ * CERTIFICADO" quedaba solo al pie de la pagina 1 y su tabla arrancaba en la 2.
+ *
+ * ponytail: el alto se estima, no se mide. pdfkit no sabe cuanto va a ocupar
+ * una tabla hasta dibujarla, y medir de verdad exigiria renderizar dos veces.
+ */
+function asegurarEspacio(doc: PDFKit.PDFDocument, y: number, altoNecesario: number): number {
+  const limite = doc.page.height - 60;
+  if (y + altoNecesario <= limite) return y;
+  doc.addPage();
+  return 50;
+}
 
 function drawSectionTitle(doc: PDFKit.PDFDocument, title: string, y: number, width: number): number {
   doc.rect(50, y, width, 22).fill('#f3f4f6');
@@ -459,6 +541,24 @@ export async function generarCertificado(
   const fechaVencimiento = new Date(inicioVigenciaMs + validezMs).toISOString();
 
   // 6. Generate PDF
+  // §10 — la ruta del resultado, para imprimir el perfil y saber si el CRC
+  // ampara un contrato con acompañante. Sin puntaje: el scorecard sigue en
+  // sombra (ver adjuntarRuta en estudios.service.ts).
+  const reglasDuras = e.regla_dura_activada;
+  const rutaCrc = resolverRuta({
+    puntaje: null,
+    resultadoVigente: (e.resultado as 'pendiente' | 'aprobado' | 'rechazado' | 'condicionado' | null) ?? 'pendiente',
+    reglaDuraActivada: Array.isArray(reglasDuras) ? reglasDuras.length > 0 : Boolean(reglasDuras),
+    coarrendatarioVinculado: (e.tipo as string) === 'con_coarrendatario',
+    puntajeCoarrendatario: null,
+  });
+
+  const canonEvaluadoRaw = e.canon_evaluado;
+  const canonEvaluadoCop =
+    canonEvaluadoRaw === null || canonEvaluadoRaw === undefined
+      ? ((inmueble.valor_arriendo as number | null) ?? null)
+      : Number(canonEvaluadoRaw);
+
   const pdfData: CertificatePdfData = {
     codigo,
     fechaEmision,
@@ -486,6 +586,20 @@ export async function generarCertificado(
     duracionContrato: e.duracion_contrato_meses as number,
     observaciones: (e.observaciones as string) || null,
     condiciones: (e.condiciones as string) || null,
+    // §10.1 — condiciones economicas. El canon evaluado es el CONGELADO con el
+    // que se corrio el estudio (portabilidad.ts lo explica): si el inmueble
+    // cambia de precio despues, el CRC sigue amparando lo que se evaluo, no lo
+    // que valga hoy.
+    canonEvaluado: canonEvaluadoCop,
+    canonMaximoTolerado:
+      canonEvaluadoCop === null
+        ? null
+        : canonMaximoTolerado(canonEvaluadoCop, PORTABILIDAD_TOLERANCIA_PCT),
+    requiereAcompanante: rutaCrc.coarrendatarioObligatorio || (e.tipo as string) === 'con_coarrendatario',
+    rutaEtiqueta: rutaCrc.etiquetaGestor,
+    // La Politica V4.1 §8 lo exige: "Version del modelo aplicable — registrada
+    // en cada CRC emitido", para poder reproducir cualquier evaluacion pasada.
+    modeloVersion: MODELO_VERSION,
   };
 
   const pdfBuffer = await generateCertificatePdf(pdfData, qrBuffer);
