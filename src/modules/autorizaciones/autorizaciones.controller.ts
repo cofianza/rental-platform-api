@@ -8,6 +8,7 @@ import type {
   VerificarOtpInput,
   PerfilProspectoInput,
   ReportarIdentidadInput,
+  BiometriaInput,
 } from './autorizaciones.schema';
 
 // ============================================================
@@ -90,6 +91,22 @@ export async function guardarPerfil(req: Request, res: Response) {
   const { token } = req.params as unknown as { token: string };
   const input = req.body as PerfilProspectoInput;
   const result = await autorizacionesService.guardarPerfilProspecto(token, input);
+  sendSuccess(res, result);
+}
+
+// Cotejo biometrico (Politica Anexo A + §14). NUNCA responde error por un
+// cotejo fallido: el veredicto viaja en el 200 y el prospecto puede seguir.
+export async function verificarBiometria(req: Request, res: Response) {
+  const { token } = req.params as unknown as { token: string };
+  const input = req.body as BiometriaInput;
+  const result = await autorizacionesService.verificarBiometriaProspecto(token, input);
+  sendSuccess(res, result);
+}
+
+// El prospecto ejerce su derecho a no dar el dato sensible (Ley 1581, art. 6).
+export async function omitirBiometria(req: Request, res: Response) {
+  const { token } = req.params as unknown as { token: string };
+  const result = await autorizacionesService.omitirBiometriaProspecto(token);
   sendSuccess(res, result);
 }
 

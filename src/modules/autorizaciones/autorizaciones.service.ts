@@ -16,7 +16,15 @@ import type {
   ReportarIdentidadInput,
 } from './autorizaciones.schema';
 import { senalDiscrepanciaIngreso } from './ingreso-declarado';
-import { TEXTO_LEGAL, VERSION_TERMINOS } from './autorizaciones.texto';
+import { textoLegalSolicitante } from './autorizaciones.texto';
+// Cotejo biometrico AucoFace (Politica Anexo A + §14). Apagado por
+// AUCO_BIOMETRIA_ENABLED no se pide nada y el texto legal no cambia.
+import {
+  validarIdentidadProspecto,
+  biometriaOmitida,
+  leerResumenBiometria,
+} from './biometria';
+import type { ResumenBiometria } from './biometria';
 
 // ============================================================
 // Constants
@@ -370,6 +378,7 @@ export async function enviarEnlaceAutorizacion(
   const tokenExpiracion = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
 
   // 4. Insert new autorizacion
+  const textoLegal = textoLegalSolicitante(env.AUCO_BIOMETRIA_ENABLED);
   const { data: autorizacion, error: insertError } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .insert({
@@ -380,8 +389,11 @@ export async function enviarEnlaceAutorizacion(
       token,
       token_expiracion: tokenExpiracion,
       generado_por: userId,
-      texto_autorizado: TEXTO_LEGAL,
-      version_terminos: VERSION_TERMINOS,
+      // El texto y su version dependen del interruptor de biometria: el 2.0
+      // afirma "no se recolectan datos sensibles" y con la camara encendida
+      // eso seria falso. Se congela el que de verdad se le presento (§8.4).
+      texto_autorizado: textoLegal.texto,
+      version_terminos: textoLegal.version,
     } as never)
     .select('id')
     .single();
@@ -536,11 +548,23 @@ export async function getAutorizacionByToken(token: string) {
     );
   }
 
+  const biometriaPrevia = env.AUCO_BIOMETRIA_ENABLED
+    ? await leerBiometriaPorAutorizacion(auth.id)
+    : null;
+
   return {
     id: auth.id,
     estado: auth.estado,
     texto_legal: auth.texto_autorizado,
     version_terminos: auth.version_terminos,
+    // Politica Anexo A + §14: si el interruptor esta encendido, la pantalla
+    // suma el paso de camara. Se manda tambien el estado de lo YA verificado
+    // para que reabrir el enlace (gesto normalisimo: vive en WhatsApp) no
+    // obligue a repetir el cotejo ni, peor, lo pise con uno nuevo.
+    biometria: {
+      requerida: env.AUCO_BIOMETRIA_ENABLED,
+      estado: biometriaPrevia?.estado ?? null,
+    },
     solicitante: {
       nombre: auth.solicitantes.nombre,
       apellido: auth.solicitantes.apellido,
@@ -673,6 +697,168 @@ export async function guardarPerfilProspecto(token: string, input: PerfilProspec
     return { guardado: false };
   }
   return { guardado: true };
+}
+
+// ============================================================
+// 3c. PASO 5 — cotejo biometrico (Politica Anexo A + §14)
+// ============================================================
+
+/**
+ * Lee el veredicto ya guardado para el expediente de esta autorizacion.
+ * SELECT propio y tolerante: si la migracion 20260907000003 no corrio, nombrar
+ * la columna reventaria el GET publico entero (42703) y dejaria al prospecto
+ * sin pantalla. Aqui un fallo solo devuelve null.
+ */
+async function leerBiometriaPorAutorizacion(autorizacionId: string): Promise<ResumenBiometria | null> {
+  try {
+    const { data, error } = await (supabase
+      .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+      .select('biometria')
+      .eq('autorizacion_id', autorizacionId)
+      .maybeSingle();
+    if (error) {
+      logger.warn({ autorizacionId, error: error.message }, 'Biometria: no se pudo leer el veredicto previo');
+      return null;
+    }
+    return leerResumenBiometria((data as { biometria?: unknown } | null)?.biometria);
+  } catch (err) {
+    logger.warn({ autorizacionId, err: err instanceof Error ? err.message : String(err) }, 'Biometria: excepcion leyendo el veredicto previo');
+    return null;
+  }
+}
+
+/** Guarda el veredicto en la fila del PASO 5. Best-effort, no lanza. */
+async function persistirBiometria(
+  expedienteId: string,
+  autorizacionId: string,
+  resumen: ResumenBiometria,
+): Promise<boolean> {
+  const { error } = await (supabase
+    .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+    .upsert(
+      {
+        expediente_id: expedienteId,
+        autorizacion_id: autorizacionId,
+        biometria: resumen as unknown,
+        updated_at: new Date().toISOString(),
+      } as never,
+      { onConflict: 'expediente_id' },
+    );
+  if (error) {
+    logger.warn({ expedienteId, error: error.message }, 'Biometria: no se pudo persistir el veredicto');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Cotejo cara-vs-documento del prospecto. Cierra el riesgo que el Flujo §12
+ * manda documentar ("enlace reenviado a un tercero").
+ *
+ * LO QUE ESTA FUNCION *NO* HACE: bloquear. Devuelve el veredicto y el front
+ * deja continuar SIEMPRE — incluso con 'no_coincide'. Quien decide es el §14
+ * mas adelante, mandando el estudio a revision manual. Bloquear aqui seria
+ * (a) inventar un rechazo que la Politica no da a esta fuente y (b) dejar sin
+ * salida a quien simplemente tiene mala camara.
+ *
+ * LAS IMAGENES NO SE GUARDAN NI SE LOGUEAN. Entran por el body, van a Auco y
+ * mueren con el request (ver la migracion 20260907000003).
+ */
+export async function verificarBiometriaProspecto(
+  token: string,
+  input: { documentImage: string; photo: string },
+) {
+  const auth = await autorizacionPendientePorToken(token);
+  const umbral = env.AUCO_BIOMETRIA_UMBRAL_SIMILITUD;
+
+  if (!env.AUCO_BIOMETRIA_ENABLED) {
+    // No es un error del cliente: el front puede tener el paso cacheado de
+    // antes de apagar el interruptor. Se responde 'desactivada' y sigue.
+    return { estado: 'desactivada' as const, similitud: null, umbral, motivo: null, guardado: false };
+  }
+
+  const { data: solRow } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('tipo_documento, numero_documento')
+    .eq('id', auth.solicitante_id)
+    .maybeSingle();
+  const sol = solRow as { tipo_documento?: string | null; numero_documento?: string | null } | null;
+
+  const resumen = await validarIdentidadProspecto({
+    autorizacionId: auth.id,
+    tipo_documento: sol?.tipo_documento,
+    numero_documento: sol?.numero_documento,
+    documentImage: input.documentImage,
+    photo: input.photo,
+  });
+
+  const guardado = auth.expediente_id
+    ? await persistirBiometria(auth.expediente_id, auth.id, resumen)
+    : false;
+
+  logAudit({
+    usuarioId: null,
+    accion: AUDIT_ACTIONS.AUTORIZACION_BIOMETRIA,
+    entidad: AUDIT_ENTITIES.AUTORIZACION,
+    entidadId: auth.id,
+    detalle: {
+      estado: resumen.estado,
+      similitud: resumen.similitud,
+      umbral: resumen.umbral,
+      documento_coincide: resumen.documento_coincide,
+      auco_code: resumen.code,
+      expediente_id: auth.expediente_id,
+    },
+  });
+
+  // Al prospecto NO se le devuelve el porcentaje cuando no coincide: es un
+  // parametro del control antifraude y sirve de oraculo para calibrar un
+  // intento de suplantacion ("con esta foto subi de 41 a 63"). El gestor si lo
+  // ve, en la ficha del expediente.
+  return {
+    estado: resumen.estado,
+    similitud: resumen.estado === 'verificada' ? resumen.similitud : null,
+    umbral,
+    motivo: resumen.estado === 'verificada' ? null : mensajeProspectoBiometria(resumen.estado),
+    guardado,
+  };
+}
+
+/** Copy para el prospecto. Sin cifras, sin nombrar a Auco, sin dramatismo. */
+function mensajeProspectoBiometria(estado: ResumenBiometria['estado']): string {
+  switch (estado) {
+    case 'no_coincide':
+      return 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puedes intentarlo de nuevo con mejor luz, o continuar: alguien de nuestro equipo revisara tu caso.';
+    case 'omitida':
+      return 'Continuamos sin la verificacion con foto. Tu solicitud sigue: la revisara una persona de nuestro equipo.';
+    default:
+      return 'No pudimos completar la verificacion en este momento. Puedes continuar: alguien de nuestro equipo revisara tu caso.';
+  }
+}
+
+/**
+ * El prospecto se niega a dar la foto. Ley 1581 art. 6-a: NO esta obligado a
+ * autorizar el tratamiento de un dato sensible, y el texto legal se lo dice.
+ * Se registra el ejercicio del derecho —no el silencio— y el caso sigue vivo
+ * rumbo a revision manual (§14).
+ */
+export async function omitirBiometriaProspecto(token: string) {
+  const auth = await autorizacionPendientePorToken(token);
+  const resumen = biometriaOmitida(new Date().toISOString(), env.AUCO_BIOMETRIA_UMBRAL_SIMILITUD);
+
+  const guardado = auth.expediente_id
+    ? await persistirBiometria(auth.expediente_id, auth.id, resumen)
+    : false;
+
+  logAudit({
+    usuarioId: null,
+    accion: AUDIT_ACTIONS.AUTORIZACION_BIOMETRIA,
+    entidad: AUDIT_ENTITIES.AUTORIZACION,
+    entidadId: auth.id,
+    detalle: { estado: 'omitida', expediente_id: auth.expediente_id },
+  });
+
+  return { estado: resumen.estado, motivo: mensajeProspectoBiometria('omitida'), guardado };
 }
 
 /**
@@ -865,6 +1051,50 @@ async function avisarReporteIdentidad(expedienteId: string, input: ReportarIdent
   );
 }
 
+/**
+ * Flujo §9: "El solicitante recibe una notificacion indicando que el prospecto
+ * ya autorizo". Hasta 2026-09-07 solo quedaba en la bitacora (y solo en la
+ * opcion C): el gestor se enteraba al ver que el estudio ya corria. In-app al
+ * propietario del inmueble (si lo hay) y al responsable del expediente. Best
+ * effort: la firma ya quedo escrita.
+ */
+async function avisarAutorizacionFirmada(expedienteId: string, solicitanteId: string) {
+  const { notificarUsuario, notificarResponsableExpediente } =
+    await import('@/modules/notificaciones/notificaciones.service');
+
+  const { data: expRow } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('numero, inmuebles(propietario_id, direccion), solicitantes(nombre, apellido)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  const exp = expRow as unknown as {
+    numero?: string;
+    inmuebles?: { propietario_id?: string | null; direccion?: string | null } | null;
+    solicitantes?: { nombre?: string | null; apellido?: string | null } | null;
+  } | null;
+
+  const nombre = `${exp?.solicitantes?.nombre ?? ''} ${exp?.solicitantes?.apellido ?? ''}`.trim() || 'El prospecto';
+  const titulo = 'El prospecto ya autorizo';
+  const mensaje = `${nombre} autorizo la consulta en centrales de riesgo para el expediente ${exp?.numero ?? ''}${exp?.inmuebles?.direccion ? ` (${exp.inmuebles.direccion})` : ''}. El estudio continua segun la forma de pago elegida.`;
+  const link = `/expedientes/${expedienteId}`;
+  const payload = { expediente_id: expedienteId, solicitante_id: solicitanteId };
+
+  const propietarioId = exp?.inmuebles?.propietario_id ?? null;
+  if (propietarioId) {
+    await notificarUsuario({ userId: propietarioId, tipo: 'autorizacion.firmada', titulo, mensaje, link, payload })
+      .catch((e) => logger.warn({ error: e }, '§9: notif propietario'));
+  }
+  await notificarResponsableExpediente({
+    expedienteId,
+    excluirPerfilId: propietarioId,
+    tipo: 'autorizacion.firmada',
+    titulo,
+    mensaje,
+    link,
+    payload,
+  }).catch((e) => logger.warn({ error: e }, '§9: notif responsable'));
+}
+
 // ============================================================
 // 4. Firmar autorizacion (public)
 // ============================================================
@@ -1053,6 +1283,11 @@ export async function firmarAutorizacion(
 
   // 6. Orchestrator: disparar estudio automatico si hay expediente asociado
   if (auth.expediente_id) {
+    // §9: aviso al gestor de que el prospecto ya autorizo. Fire-and-forget.
+    void avisarAutorizacionFirmada(auth.expediente_id, auth.solicitante_id).catch((err) =>
+      logger.warn({ error: err, expedienteId: auth.expediente_id }, '§9: no se pudo avisar la autorizacion firmada'),
+    );
+
     import('@/modules/orchestrator/orchestrator.service')
       .then(({ onHabeasDataAutorizado }) =>
         onHabeasDataAutorizado({

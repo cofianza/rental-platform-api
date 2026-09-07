@@ -145,6 +145,8 @@ async function aucoRequest<T>(
   path: string,
   body?: unknown,
   usePrivateKey = false,
+  /** Corte por llamada. Sin valor, sin corte (comportamiento historico de la firma). */
+  timeoutMs?: number,
 ): Promise<T> {
   const url = `${env.AUCO_API_URL}${path}`;
   const key = usePrivateKey ? env.AUCO_PRIVATE_KEY : env.AUCO_PUBLIC_KEY;
@@ -158,6 +160,7 @@ async function aucoRequest<T>(
   if (body && method !== 'GET') {
     options.body = JSON.stringify(body);
   }
+  if (timeoutMs) options.signal = AbortSignal.timeout(timeoutMs);
 
   // Diagnostico: confirmamos que la key tiene el prefijo correcto y la
   // URL apunta al ambiente correcto. Solo el prefijo (5 chars) — el resto
@@ -333,4 +336,103 @@ export function normalizePhoneToInternational(raw: string | null | undefined): s
   if (digits.length === 10) return `+57${digits}`;
   if (digits.length === 12 && digits.startsWith('57')) return `+${digits}`;
   return null;
+}
+
+// ============================================================
+// Background check (listas restrictivas, antecedentes, FOSYGA)
+// https://docs.auco.ai/api/background-check
+// ------------------------------------------------------------
+// Asincrono en dos pasos: POST crea la validacion y devuelve `code`; GET la
+// consulta hasta que `ready` sea true ("puede tardar hasta 1 minuto"). La
+// interpretacion del resultado NO vive aqui: ver
+// src/modules/estudios/antecedentes.ts.
+// ============================================================
+
+export type AucoTipoDocumento = 'CC' | 'CE' | 'NIT' | 'PPT' | 'PP' | 'INT';
+
+export interface AucoBackgroundCheckInput {
+  type: AucoTipoDocumento;
+  identification: string;
+  /** Obligatorio para PP e INT. */
+  name?: string;
+  /** Obligatorio para PPT. Formato DD/MM/YYYY. */
+  expeditionDate?: string;
+}
+
+export async function crearBackgroundCheck(
+  input: AucoBackgroundCheckInput,
+  timeoutMs?: number,
+): Promise<{ code: string }> {
+  const res = await aucoRequest<{ code?: string; name?: string }>(
+    'POST',
+    '/validate/background',
+    // `email` = creador del proceso registrado en Auco (mismo que la firma).
+    { email: env.AUCO_SENDER_EMAIL, ...input },
+    true,
+    timeoutMs,
+  );
+  if (!res?.code) throw new Error('Auco background check: respuesta sin code');
+  return { code: res.code };
+}
+
+/** Respuesta cruda del GET. `ready:false` mientras Auco sigue consultando. */
+export interface AucoBackgroundCheckResponse {
+  code?: string;
+  ready?: boolean;
+  validation?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+
+export async function obtenerBackgroundCheck(
+  code: string,
+  timeoutMs?: number,
+): Promise<AucoBackgroundCheckResponse> {
+  return aucoRequest<AucoBackgroundCheckResponse>(
+    'GET',
+    `/validate/background?code=${encodeURIComponent(code)}`,
+    undefined,
+    false,
+    timeoutMs,
+  );
+}
+
+// ============================================================
+// AucoFace — biometria documento vs foto
+// https://docs.auco.ai/api/aucoface/biometric-validation
+// ------------------------------------------------------------
+// Sincrono. Devuelve `similarity` (0-100) y el OCR del documento. Hoy NO
+// tiene caller en el flujo: la captura de selfie + cedula del prospecto exige
+// consentimiento de dato SENSIBLE (Ley 1581 art. 5-6) que el texto de
+// autorizacion vigente no incluye. Se deja listo para cuando Gerencia
+// apruebe ese texto.
+// ============================================================
+
+export interface AucoVerifaceInput {
+  /** ISO-2, p. ej. 'CO'. */
+  country: string;
+  type: AucoTipoDocumento;
+  identification: string;
+  /** Base64 o URL publica (JPEG/PNG). */
+  documentImage: string;
+  /** Base64 o URL publica (JPEG/PNG). */
+  photo: string;
+}
+
+export interface AucoVerifaceResponse {
+  error?: boolean;
+  similarity?: number;
+  code?: string;
+  identificationCard?: {
+    error?: boolean;
+    message?: string;
+    isFront?: boolean;
+    data?: Record<string, unknown>;
+  };
+}
+
+export async function validarBiometria(
+  input: AucoVerifaceInput,
+  timeoutMs?: number,
+): Promise<AucoVerifaceResponse> {
+  return aucoRequest<AucoVerifaceResponse>('POST', '/veriface/validate', input, true, timeoutMs);
 }

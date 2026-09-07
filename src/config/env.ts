@@ -37,6 +37,33 @@ const envSchema = z.object({
   // con USER_NOTFOUND si este email no esta enrolled. Sin default — debe venir
   // del .env real (ver Stage panel: Settings → Team).
   AUCO_SENDER_EMAIL: z.string().email().min(1),
+  // Background check de Auco (listas restrictivas OFAC/ONU, antecedentes,
+  // FOSYGA). OFF por defecto: encenderlo ACTIVA la regla dura de listas
+  // (Politica §6) y la revision manual obligatoria cuando Auco no responde
+  // (§14). Antes de ponerlo en true correr scripts/test-auco-background.ts
+  // para confirmar que el modulo esta habilitado en la cuenta — si no lo
+  // esta, TODO estudio aprobado caeria a revision manual (§14, fail-closed).
+  AUCO_BACKGROUND_CHECK_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Presupuesto TOTAL de espera del resultado. Auco documenta "hasta 1
+  // minuto" y la sonda real (2026-09-07) tardo 56 s: por debajo de ~60 s el
+  // §14 mandaria casi todo a revision manual. Cada llamada HTTP individual
+  // sigue el corte de 8 s de la politica (BURO_REQUEST_TIMEOUT_MS); esto
+  // acota el sondeo completo. Corre solapado con el buro.
+  AUCO_BACKGROUND_TIMEOUT_MS: z.coerce.number().int().positive().default(90000),
+  // Cotejo biometrico AucoFace en la pantalla del prospecto (Politica Anexo A
+  // + §14). OFF por defecto: encenderlo cambia el TEXTO LEGAL que firma el
+  // prospecto (pasa a VERSION_TERMINOS_BIOMETRIA, que declara el dato
+  // sensible) y agrega un paso con camara. Nunca rechaza: lo peor que hace es
+  // mandar el caso a revision manual.
+  AUCO_BIOMETRIA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Similitud minima (0-100) para dar la identidad por validada. Auco publica
+  // 89.47 como ejemplo de exito y 49.42 de fallo; 70 es un corte conservador
+  // en el medio. NO es un umbral de rechazo — por debajo solo se pierde la
+  // aprobacion automatica. Gerencia lo mueve sin tocar codigo.
+  AUCO_BIOMETRIA_UMBRAL_SIMILITUD: z.coerce.number().min(0).max(100).default(70),
+  // El cotejo es sincrono y el prospecto espera mirando la pantalla: mas de
+  // ~20 s se lee como app colgada.
+  AUCO_BIOMETRIA_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
 
   // Payment gateway — seleccionable. Stripe NO opera en Colombia (solo vía
   // entidad US), así que producción CO usa Mercado Pago. Las llaves de cada

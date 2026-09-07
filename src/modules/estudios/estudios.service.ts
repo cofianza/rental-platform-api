@@ -32,6 +32,11 @@ import {
   motivoParaProspectoDesdeMotivoGestor,
 } from './reglas-duras';
 import type { VeredictoReglasDuras } from './reglas-duras';
+// Background check de Auco (listas restrictivas §6, antecedentes §16.5,
+// FOSYGA §4.4). Apagado por AUCO_BACKGROUND_CHECK_ENABLED devuelve
+// 'desactivado' y no cambia nada. Ver antecedentes.ts.
+import { verificarAntecedentes } from './antecedentes';
+import type { ResumenAntecedentes } from './antecedentes';
 import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './autorizacion.guard';
 // Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
 // de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
@@ -128,6 +133,8 @@ function redactarEstudioParaProspecto<T extends Record<string, unknown>>(row: T)
     ...(row.ruta ? { ruta: { ...(row.ruta as Record<string, unknown>), etiquetaGestor: undefined } } : {}),
     // El puntaje crudo del modelo tampoco: mismo criterio que motivo/observaciones.
     score: null,
+    // Ni el background check (listas, flags, afiliacion): es insumo del modelo.
+    antecedentes: null,
   };
 }
 
@@ -459,7 +466,7 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
       certificado_url, codigo_qr, datos_formulario, respuesta_proveedor,
       token_self_service,
       expiracion_token, created_at, updated_at,
-      canon_evaluado, canon_evaluado_origen, regla_dura_activada,
+      canon_evaluado, canon_evaluado_origen, regla_dura_activada, antecedentes,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('id', estudioId)
@@ -467,6 +474,13 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
 
   if (error || !data) {
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+  // El bloque `raw` de Auco (procesos judiciales por nombre, RUES, etc.) es
+  // evidencia para auditoria, no para la tarjeta: se queda en la base.
+  if ((data as Record<string, unknown>).antecedentes) {
+    const { raw: _raw, ...resumen } = (data as Record<string, unknown>).antecedentes as Record<string, unknown>;
+    void _raw;
+    (data as Record<string, unknown>).antecedentes = resumen;
   }
 
   // Tenant guard: el detalle expone datos_formulario, respuesta_proveedor (crudo
@@ -2337,6 +2351,11 @@ async function procesarEstudioAsync(args: {
     'procesarEstudioAsync: solicitando al proveedor',
   );
 
+  // Background check de Auco. Se DISPARA antes del buro (las dos esperas se
+  // solapan: Auco tarda "hasta 1 minuto") y se RECOGE despues, ya con el
+  // resultado del buro en la mano. Nunca lanza; apagado, es 'desactivado'.
+  let antecedentesPromise: Promise<ResumenAntecedentes> | null = null;
+
   try {
     // GATE 8.4, segunda capa. `ejecutarEstudio` ya lo verificó, pero esta es la
     // última línea antes del fetch al buró: cubre a cualquier caller futuro de
@@ -2358,6 +2377,13 @@ async function procesarEstudioAsync(args: {
     // pero para entonces la consulta ya se hizo). Con el CAS a 'en_proceso' de
     // por medio la ventana es de milisegundos, y procesarEstudioAsync solo se
     // llama desde ejecutarEstudio, que ya lo verificó.
+
+    antecedentesPromise = verificarAntecedentes({
+      estudioId,
+      tipo_documento: providerInput.tipo_documento,
+      numero_documento: providerInput.numero_documento,
+      nombre_completo: providerInput.nombre_completo,
+    });
 
     const response = await provider.solicitar(providerInput);
 
@@ -2413,8 +2439,13 @@ async function procesarEstudioAsync(args: {
         );
       }
 
+      // Antecedentes: se persisten ANTES del RPC para que los tres caminos que
+      // registran resultado (inline, polling, manual) decidan con el mismo dato.
+      const antecedentes = await antecedentesPromise;
+      await persistirAntecedentes(estudioId, antecedentes);
+
       try {
-        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result);
+        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result, antecedentes);
         logger.info({ estudioId }, 'Estudio completado exitosamente (async)');
       } catch (postErr) {
         const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
@@ -2425,6 +2456,13 @@ async function procesarEstudioAsync(args: {
       }
     }
   } catch (err) {
+    // El buro fallo: no se espera a Auco para marcar 'fallido' (hasta 30 s de
+    // demora inutil). Lo que llegue se guarda igual, best-effort; el reintento
+    // vuelve a consultar de todos modos.
+    if (antecedentesPromise) {
+      void antecedentesPromise.then((a) => persistirAntecedentes(estudioId, a)).catch(() => undefined);
+    }
+
     const errorMsg = err instanceof Error ? err.message : 'Error desconocido del proveedor';
     const errorCode = err instanceof AppError ? err.errorCode : null;
 
@@ -2505,6 +2543,23 @@ async function procesarEstudioAsync(args: {
         ? 'procesarEstudioAsync: gate 8.4 bloqueó la consulta al buró — estudio marcado como fallido (NO es un fallo del proveedor)'
         : 'procesarEstudioAsync: provider falló — estudio marcado como fallido',
     );
+  }
+}
+
+/**
+ * Guarda el resumen de Auco en `estudios.antecedentes`. Best-effort: si la
+ * migracion 20260907000002 no corrio, avisa y sigue — el estudio se registra
+ * igual (resolverResultadoEstudio recibe el resumen en memoria por el camino
+ * inline). 'desactivado' no se escribe: NULL ya significa "no se consulto".
+ */
+async function persistirAntecedentes(estudioId: string, a: ResumenAntecedentes): Promise<void> {
+  if (a.estado === 'desactivado') return;
+  const { error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .update({ antecedentes: a as unknown } as never)
+    .eq('id', estudioId);
+  if (error) {
+    logger.warn({ estudioId, error: error.message, estado: a.estado }, 'No se pudo persistir estudios.antecedentes');
   }
 }
 
@@ -3102,6 +3157,8 @@ async function registrarResultadoInline(
   referenciaProveedor: string,
   expedienteId: string,
   resultPreObtenido?: ProviderResult,
+  /** Resumen de Auco en memoria. `undefined` = que lo lea de la fila. */
+  antecedentes?: ResumenAntecedentes,
 ): Promise<void> {
   const provider = getProvider(proveedorId as 'transunion' | 'sifin' | 'datacredito');
 
@@ -3123,6 +3180,7 @@ async function registrarResultadoInline(
     observaciones: result.observaciones || 'Resultado recibido del proveedor',
     proveedor: proveedorId,
     datosCrudos: result.datos_crudos,
+    antecedentes,
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

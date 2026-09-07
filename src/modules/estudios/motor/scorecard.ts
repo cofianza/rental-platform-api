@@ -33,6 +33,8 @@
 // ============================================================
 
 import type { FeaturesBuro, SectoresCredito } from './features';
+// Solo TIPOS: el motor sigue sin env, sin Supabase y sin fetch.
+import type { ResumenAntecedentes } from '../antecedentes';
 
 // ── Escala del modelo ───────────────────────────────────────
 
@@ -67,7 +69,7 @@ export const PUNTOS_MAXIMOS: Record<CodigoVariable, number> = {
   V1: 50, // score externo
   V2: 15, // DTI
   V3: 10, // canon / ingreso
-  V4: 8,  // seguridad social (PILA) — sin fuente · §4.4
+  V4: 8,  // seguridad social — FOSYGA/BDUA via Auco (parcial: sin pension ni IBC) · §4.4
   V5: 6,  // experiencia crediticia
   V6: 10, // comportamiento reciente
   V7: 10, // estabilidad laboral — sin fuente · §4.7
@@ -75,7 +77,8 @@ export const PUNTOS_MAXIMOS: Record<CodigoVariable, number> = {
   V9: 5,  // arrendamiento previo — sin fuente
 };
 
-/** Variables sin fuente contratada. Fuera de alcance de esta tarea. */
+/** Variables sin fuente contratada. V4 sale de aqui en cuanto se enciende
+ *  AUCO_BACKGROUND_CHECK_ENABLED (fuente parcial: afiliacion BDUA). */
 export const VARIABLES_FUERA_DE_ALCANCE: readonly CodigoVariable[] = ['V4', 'V7', 'V9'];
 
 export type EstadoVariable = 'calculada' | 'no_calculable' | 'fuera_de_alcance';
@@ -87,7 +90,10 @@ export type CodigoReglaDura =
   | 'dti_mayor_65'
   | 'canon_ingreso_mayor_40'
   | 'mora_vigente'
-  | 'mora_mayor_30d_6m';
+  | 'mora_mayor_30d_6m'
+  /** §6 "Reporte en listas restrictivas (OFAC, ONU, listas Clinton)". Global,
+   *  no cuelga de ninguna variable: la evalua evaluarSombra desde antecedentes. */
+  | 'listas_restrictivas';
 
 export interface ResultadoVariable {
   puntos: number | null;
@@ -258,12 +264,59 @@ export function puntajeV3CanonIngreso(pct: number | null): ResultadoVariable {
 }
 
 // ============================================================
-// V4 / V7 / V9 — sin fuente contratada
+// V4 — Seguridad social (8 pts) · fuente PARCIAL: FOSYGA/BDUA via Auco
 // ============================================================
 
-export function puntajeV4SeguridadSocial(): ResultadoVariable {
-  return fueraDeAlcance('Sin fuente: no hay integracion PILA / seguridad social');
+/**
+ * Politica V4.1 §4.4. La fuente que pide la politica es PILA (IBC); lo que se
+ * tiene es la afiliacion en la BDUA que trae el background check de Auco
+ * (`fosyga`): dice si la persona esta afiliada y en que regimen, NO si cotiza
+ * a pension ni si esta al dia. Por eso el maximo alcanzable con esta fuente es
+ * la fila de 5 puntos — las dos de 8 exigen pension o mesada verificable — y
+ * se toma siempre la fila mas conservadora que los datos permiten afirmar.
+ *
+ *   ACTIVO + COTIZANTE (cualquier regimen)  -> 5  "afiliado activo a salud"
+ *   ACTIVO + regimen SUBSIDIADO             -> 5  (fila literal)
+ *   ACTIVO + BENEFICIARIO / otro tipo       -> 3  "beneficiario activo"
+ *   sin registro, o estado != ACTIVO        -> 0  la fila dice ademas "revision
+ *                                                 manual obligatoria": aqui solo
+ *                                                 se puntua (sombra), no decide
+ *   antecedentes 'no_verificado', o FOSYGA
+ *   entre las fuentes con error            -> no_calculable (no se sabe)
+ *   sin antecedentes (interruptor OFF)      -> fuera_de_alcance
+ */
+export const V4_PUNTOS_AFILIADO_ACTIVO = 5;
+export const V4_PUNTOS_BENEFICIARIO = 3;
+
+export function puntajeV4SeguridadSocial(
+  a: Pick<ResumenAntecedentes, 'estado' | 'seguridad_social' | 'fuentes_con_error'> | null | undefined,
+): ResultadoVariable {
+  if (!a || a.estado === 'desactivado') {
+    return fueraDeAlcance('Sin fuente: background check de Auco desactivado (AUCO_BACKGROUND_CHECK_ENABLED); PILA sin integrar');
+  }
+  if (a.estado === 'no_verificado') {
+    return noCalculable('Auco no respondio: afiliacion a seguridad social sin verificar');
+  }
+  if (a.fuentes_con_error.includes('fosyga')) {
+    return noCalculable('Auco no pudo consultar FOSYGA: afiliacion sin verificar');
+  }
+  const ss = a.seguridad_social;
+  const estado = ss?.estado ?? null;
+  if (!ss || estado !== 'ACTIVO') {
+    return calculada(0, estado ?? 'sin registro', 'sin registro activo en BDUA — revision manual obligatoria (§4.4)');
+  }
+  const tipo = ss.tipo_afiliado ?? '';
+  const regimen = ss.regimen ?? '';
+  const valor = `${tipo || 's/d'}/${regimen || 's/d'}`;
+  if (tipo === 'COTIZANTE' || regimen === 'SUBSIDIADO') {
+    return calculada(V4_PUNTOS_AFILIADO_ACTIVO, valor, 'afiliado activo a salud (sin verificar pension: tope 5)');
+  }
+  return calculada(V4_PUNTOS_BENEFICIARIO, valor, 'beneficiario activo');
 }
+
+// ============================================================
+// V7 / V9 — sin fuente contratada
+// ============================================================
 
 export function puntajeV7EstabilidadLaboral(): ResultadoVariable {
   return fueraDeAlcance('Sin fuente: no hay verificacion de empleador ni antiguedad laboral');
@@ -546,7 +599,9 @@ export interface DecisionCalculada {
  * Decision HIPOTETICA. No se aplica en ningun lado: se guarda al lado de la
  * decision real para poder cruzarlas.
  *
- * Jerarquia (politica V4.1 §3.1 + §5):
+ * Jerarquia (politica V4.1 §3.1 + §5 + §6):
+ *   0. Regla dura GLOBAL (listas restrictivas) -> rechazado, haya o no puntaje:
+ *      el §6 las verifica "antes de calcular cualquier variable".
  *   1. Sin ninguna variable calculable -> no_calculable (sin puntaje que comparar).
  *   2. Alguna regla dura activada      -> rechazado.
  *   3. Score externo en [450, 599]     -> revision manual obligatoria, prevalece
@@ -565,7 +620,14 @@ export function decidirSombra(
   scoreExterno: number | null,
   umbralAprobado: number = UMBRAL_APROBADO,
   umbralRevision: number = UMBRAL_REVISION,
+  reglasGlobales: readonly CodigoReglaDura[] = [],
 ): DecisionCalculada {
+  if (reglasGlobales.length > 0) {
+    return {
+      decision: 'rechazado',
+      motivo: `Regla dura global activada: ${reglasGlobales.join(', ')}`,
+    };
+  }
   if (totales.puntaje_normalizado === null) {
     return {
       decision: 'no_calculable',

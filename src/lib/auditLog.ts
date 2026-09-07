@@ -76,6 +76,9 @@ export const AUDIT_ACTIONS = {
   AUTORIZACION_ENLACE_SENT: 'autorizacion_enlace_sent',
   AUTORIZACION_FIRMADA: 'autorizacion_firmada',
   AUTORIZACION_REVOCADA: 'autorizacion_revocada',
+  // Cotejo biometrico AucoFace. El detalle lleva el veredicto y el code del
+  // proceso en Auco — NUNCA las imagenes.
+  AUTORIZACION_BIOMETRIA: 'autorizacion_biometria',
   // Plantillas de contrato
   PLANTILLA_CREATED: 'plantilla_created',
   PLANTILLA_UPDATED: 'plantilla_updated',

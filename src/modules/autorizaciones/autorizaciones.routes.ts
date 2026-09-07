@@ -15,6 +15,7 @@ import {
   verificarOtpSchema,
   perfilProspectoSchema,
   reportarIdentidadSchema,
+  biometriaSchema,
 } from './autorizaciones.schema';
 import * as autorizacionesController from './autorizaciones.controller';
 
@@ -107,6 +108,32 @@ publicAutorizacionRouter.post(
   publicFormLimiter,
   validate({ params: tokenParamsSchema, body: perfilProspectoSchema }),
   autorizacionesController.guardarPerfil,
+);
+
+// POST /public/autorizar/:token/biometria — Politica Anexo A ("cedula validada
+// via biometria AUCO") + §14 ("no aprobar automaticamente sin validacion de
+// identidad"). Cierra el riesgo del Flujo §12: enlace reenviado a un tercero.
+//
+// otpSendByTokenLimiter, no solo el de IP: cada llamada es una consulta
+// FACTURABLE a Auco y el enlace es publico. Reusar el limite del OTP por token
+// (mismo orden de magnitud de reintentos legitimos) evita inventar un limiter
+// mas y deja el gasto acotado por enlace, no por IP — que en movil es
+// compartida por media ciudad.
+publicAutorizacionRouter.post(
+  '/:token/biometria',
+  publicFormLimiter,
+  otpSendByTokenLimiter,
+  validate({ params: tokenParamsSchema, body: biometriaSchema }),
+  autorizacionesController.verificarBiometria,
+);
+
+// POST /public/autorizar/:token/biometria/omitir — Ley 1581 art. 6-a: el
+// titular NO esta obligado a autorizar datos sensibles. Sin body.
+publicAutorizacionRouter.post(
+  '/:token/biometria/omitir',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema }),
+  autorizacionesController.omitirBiometria,
 );
 
 // POST /public/autorizar/:token/reportar-identidad — §8.1 + §12

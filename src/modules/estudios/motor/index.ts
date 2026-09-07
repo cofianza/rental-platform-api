@@ -52,6 +52,9 @@ import type {
 } from './scorecard';
 import { extraerFeatures, featuresVacias } from './features';
 import type { FeaturesBuro } from './features';
+// Solo TIPOS (el motor no habla con Auco): el resumen ya interpretado llega
+// por EntradaSombra.antecedentes desde quien si lo consulto.
+import type { ResumenAntecedentes } from '../antecedentes';
 
 export * from './scorecard';
 export * from './features';
@@ -62,10 +65,11 @@ export * from './features';
  * cada corrida y forma parte de la clave unica, asi que recalcular el
  * historico con otra version no pisa lo que dijo esta.
  *
- * '6var' = las 6 variables con fuente hoy (V1, V2, V3, V5, V6, V8).
+ * '7var' = las 6 variables del buro (V1, V2, V3, V5, V6, V8) mas V4, que
+ * desde 2026-09-07 sale del background check de Auco cuando esta encendido.
  * Maximo 20 caracteres (VARCHAR de la tabla).
  */
-export const MODELO_VERSION = 'v4.1-sombra-6var';
+export const MODELO_VERSION = 'v4.1-sombra-7var';
 
 export interface EntradaSombra {
   /** 'datacredito' | 'transunion' | ... Decide el extractor. */
@@ -80,11 +84,21 @@ export interface EntradaSombra {
   score_persistido?: number | null;
   /** ISO inyectada para que la evaluacion sea reproducible en los checks. */
   fecha_evaluacion?: string | null;
+  /**
+   * Background check de Auco ya interpretado (antecedentes.ts). Alimenta V4
+   * (FOSYGA) y la regla dura global 'listas_restrictivas'. null/undefined =
+   * no se consulto (interruptor OFF): V4 queda fuera de alcance y nada cambia.
+   */
+  antecedentes?: ResumenAntecedentes | null;
 }
+
+/** Lo que del resumen viaja en la salida (y a features_crudas): sin `raw`. */
+export type AntecedentesEvaluados = Omit<ResumenAntecedentes, 'raw'>;
 
 export interface ReglaDuraActivada {
   codigo: CodigoReglaDura;
-  variable: CodigoVariable;
+  /** 'global' = no cuelga de ninguna variable (listas restrictivas, §6). */
+  variable: CodigoVariable | 'global';
   detalle: string;
 }
 
@@ -120,6 +134,8 @@ export interface SalidaSombra {
   reglas_duras: ReglaDuraActivada[];
   variables_no_calculables: CodigoVariable[];
   advertencias: string[];
+  /** Eco del insumo de Auco con el que se evaluo, sin `raw`. null si no hubo. */
+  antecedentes: AntecedentesEvaluados | null;
 }
 
 const ETIQUETA_VARIABLE: Record<CodigoVariable, string> = {
@@ -160,7 +176,15 @@ function salidaDegradada(proveedor: string, fecha: string, motivo: string): Sali
     reglas_duras: [],
     variables_no_calculables: ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9'],
     advertencias: [motivo],
+    antecedentes: null,
   };
+}
+
+function sinRaw(a: ResumenAntecedentes | null | undefined): AntecedentesEvaluados | null {
+  if (!a) return null;
+  const { raw: _raw, ...resto } = a;
+  void _raw;
+  return resto;
 }
 
 /** Numero positivo utilizable, o null. Filtra NaN, Infinity, negativos y los
@@ -180,6 +204,8 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     return typeof f === 'string' && f.trim() !== '' ? f : new Date().toISOString();
   })();
   const proveedor = String(entrada?.proveedor ?? '').trim().toLowerCase() || 'desconocido';
+
+  const antecedentes = sinRaw(entrada?.antecedentes);
 
   try {
     const features = extraerFeatures(proveedor, entrada?.payload);
@@ -217,7 +243,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       { variable: 'V1', puntos_maximos: PUNTOS_MAXIMOS.V1, ...puntajeV1ScoreExterno(features.score_externo) },
       { variable: 'V2', puntos_maximos: PUNTOS_MAXIMOS.V2, ...puntajeV2Dti(dtiPct) },
       { variable: 'V3', puntos_maximos: PUNTOS_MAXIMOS.V3, ...puntajeV3CanonIngreso(canonIngresoPct) },
-      { variable: 'V4', puntos_maximos: PUNTOS_MAXIMOS.V4, ...puntajeV4SeguridadSocial() },
+      { variable: 'V4', puntos_maximos: PUNTOS_MAXIMOS.V4, ...puntajeV4SeguridadSocial(antecedentes) },
       { variable: 'V5', puntos_maximos: PUNTOS_MAXIMOS.V5, ...puntajeV5Experiencia(features.sectores, features.sin_historial_crediticio) },
       { variable: 'V6', puntos_maximos: PUNTOS_MAXIMOS.V6, ...puntajeV6Comportamiento(features) },
       { variable: 'V7', puntos_maximos: PUNTOS_MAXIMOS.V7, ...puntajeV7EstabilidadLaboral() },
@@ -226,15 +252,41 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     ];
 
     const totales: TotalesScorecard = totalizar(puntajes);
-    const decision = decidirSombra(totales, features.score_externo, UMBRAL_APROBADO, UMBRAL_REVISION);
 
-    const reglasDuras: ReglaDuraActivada[] = puntajes
-      .filter((p) => p.reglaDura !== null)
-      .map((p) => ({
-        codigo: p.reglaDura as CodigoReglaDura,
-        variable: p.variable,
-        detalle: `${ETIQUETA_VARIABLE[p.variable]}: ${p.banda ?? ''} (valor ${String(p.valor ?? 's/d')})`.trim(),
-      }));
+    // ── Regla dura GLOBAL (§6): listas restrictivas ─────────
+    // Solo con un resumen 'verificado' que reporte OFAC u ONU. 'no_verificado'
+    // NO es un hit: es el §14 (revision manual), que aplica reglas-duras.ts.
+    const reglasGlobales: ReglaDuraActivada[] = [];
+    if (antecedentes?.estado === 'verificado' && antecedentes.reportado_en_listas) {
+      const listas = [
+        antecedentes.listas_vinculantes.ofac ? 'OFAC' : null,
+        antecedentes.listas_vinculantes.onu ? 'ONU' : null,
+      ].filter(Boolean).join(', ');
+      reglasGlobales.push({
+        codigo: 'listas_restrictivas',
+        variable: 'global',
+        detalle: `listas restrictivas: reportado en ${listas} (Auco ${antecedentes.code ?? 's/c'})`,
+      });
+    }
+
+    const decision = decidirSombra(
+      totales,
+      features.score_externo,
+      UMBRAL_APROBADO,
+      UMBRAL_REVISION,
+      reglasGlobales.map((r) => r.codigo),
+    );
+
+    const reglasDuras: ReglaDuraActivada[] = [
+      ...reglasGlobales,
+      ...puntajes
+        .filter((p) => p.reglaDura !== null)
+        .map((p) => ({
+          codigo: p.reglaDura as CodigoReglaDura,
+          variable: p.variable,
+          detalle: `${ETIQUETA_VARIABLE[p.variable]}: ${p.banda ?? ''} (valor ${String(p.valor ?? 's/d')})`.trim(),
+        })),
+    ];
 
     // ── Advertencias: lo que hace interpretable el numero ────
     if (totales.puntaje_topado) {
@@ -278,6 +330,17 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     if (canon === null) {
       advertencias.push('Sin canon del inmueble: V3 (canon / ingreso) queda no calculable.');
     }
+    if (antecedentes?.estado === 'no_verificado') {
+      advertencias.push(
+        `Antecedentes (Auco) sin verificar: ${antecedentes.motivo ?? 's/m'}. V4 queda no calculable y las listas restrictivas no se chequearon (§14: no aprobar automaticamente).`,
+      );
+    }
+    if (antecedentes?.estado === 'verificado' && antecedentes.flags_revision.length > 0) {
+      advertencias.push(
+        `Antecedentes (Auco) con flags de revision manual (§16.5, no rechazan): ${antecedentes.flags_revision.join(', ')}.`,
+      );
+    }
+    if (antecedentes) features.crudas.antecedentes = antecedentes;
 
     return {
       modelo_version: MODELO_VERSION,
@@ -307,6 +370,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       reglas_duras: reglasDuras,
       variables_no_calculables: totales.variables_no_calculables,
       advertencias,
+      antecedentes,
     };
   } catch (err) {
     // Ultimo blindaje. Los extractores ya son a prueba de payloads raros, asi

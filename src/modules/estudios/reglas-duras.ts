@@ -21,7 +21,11 @@
 //
 //   - NO activa la regla dura de score < 450 (moveria el corte 400 -> 450 de
 //     los providers, que Gerencia todavia no autorizo).
-//   - NO activa las reglas de mora (V6), ni las de restitucion, ni listas.
+//   - NO activa las reglas de mora (V6) ni las de restitucion.
+//   - SI activa (2026-09-07) 'listas_restrictivas' (§6: OFAC/ONU via Auco),
+//     pero esa regla SOLO puede dispararse con AUCO_BACKGROUND_CHECK_ENABLED:
+//     apagado, nunca hay resumen 'verificado' y la lista blanca no cambia
+//     nada. El interruptor ES la autorizacion. Ver antecedentes.ts.
 //   - NO toca scoreToResultado ni los umbrales 85/70 del scorecard.
 //
 // Por eso el filtro no es "cualquier regla dura que traiga el motor" sino la
@@ -74,6 +78,14 @@ import { logger } from '@/lib/logger';
 import { evaluarSombra } from './motor';
 import type { CodigoReglaDura, SalidaSombra } from './motor';
 import { V2_DTI_MAXIMO, V3_CANON_INGRESO_MAXIMO } from './motor/scorecard';
+// §14 / §16.5: lo que NO rechaza pero tampoco deja aprobar en automatico.
+import { leerResumenAntecedentes, requiereRevisionManual } from './antecedentes';
+import type { ResumenAntecedentes } from './antecedentes';
+// Anexo A + §14: la identidad del prospecto tampoco puede quedar sin validar
+// para aprobar en automatico. Vive en el modulo de autorizaciones porque el
+// cotejo ocurre AHI (pantalla del prospecto), mucho antes de que exista un
+// resultado de estudio.
+import { leerBiometriaDeExpediente, requiereRevisionManualPorBiometria } from '@/modules/autorizaciones/biometria';
 // El canon se lee con el MISMO helper del guard del tope (§4.4): una sola
 // definicion de "cual es el canon de este estudio" para las dos reglas que lo
 // usan. Duplicarla dejaria al tope y al scorecard mirando canones distintos.
@@ -88,7 +100,7 @@ import { formatearCOP, leerCanonDelInmueble } from './tope-canon.guard';
  * el 2026-09-03. Agregar una aqui es activar una regla en produccion: no se
  * hace sin autorizacion escrita (Politica §1).
  */
-export const REGLAS_DURAS_ACTIVAS = ['dti_mayor_65', 'canon_ingreso_mayor_40'] as const;
+export const REGLAS_DURAS_ACTIVAS = ['dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'] as const;
 
 export type ReglaDuraActiva = (typeof REGLAS_DURAS_ACTIVAS)[number];
 
@@ -100,6 +112,7 @@ function esReglaActiva(codigo: CodigoReglaDura): codigo is ReglaDuraActiva {
 const ETIQUETA_REGLA: Record<ReglaDuraActiva, string> = {
   dti_mayor_65: 'capacidad de endeudamiento (DTI)',
   canon_ingreso_mayor_40: 'relacion canon / ingreso',
+  listas_restrictivas: 'listas restrictivas (OFAC / ONU)',
 };
 
 // ============================================================
@@ -118,6 +131,10 @@ export interface DetalleReglasDuras {
   score_externo: number | null;
   proveedor: string;
   modelo_version: string;
+  /** Solo con 'listas_restrictivas': que lista(s) reporto Auco. */
+  listas_vinculantes: { ofac: boolean; onu: boolean } | null;
+  /** Codigo del proceso en Auco, para reabrir el reporte. */
+  antecedentes_code: string | null;
 }
 
 export type VeredictoReglasDuras =
@@ -180,6 +197,7 @@ export const PREFIJO_MOTIVO_REGLA_DURA =
 const MARCADOR_SECCION: Record<ReglaDuraActiva, string> = {
   dti_mayor_65: 'Capacidad de endeudamiento (DTI, §4.2):',
   canon_ingreso_mayor_40: 'Relacion canon / ingreso (§4.3):',
+  listas_restrictivas: 'Listas restrictivas (§6):',
 };
 
 /**
@@ -266,6 +284,17 @@ export function motivoGestorReglasDuras(
     );
   }
 
+  if (reglas.includes('listas_restrictivas')) {
+    const cuales = [
+      d.listas_vinculantes?.ofac ? 'OFAC (lista Clinton)' : null,
+      d.listas_vinculantes?.onu ? 'ONU' : null,
+    ].filter(Boolean).join(' y ') || 'listas vinculantes';
+    partes.push(
+      `Listas restrictivas (§6): reportado en ${cuales} segun el background check de Auco` +
+        `${d.antecedentes_code ? ` (proceso ${d.antecedentes_code})` : ''}.`,
+    );
+  }
+
   partes.push(
     d.score_externo === null
       ? 'Las reglas duras anulan el puntaje total (Politica §3).'
@@ -284,6 +313,16 @@ export function motivoGestorReglasDuras(
  * de variables: son parametros internos del modelo que §2 manda no revelar.
  */
 export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): string {
+  // Listas restrictivas: sin nombrar la lista ni la fuente. Las mejoras de
+  // canon/coarrendatario no aplican, asi que el cierre es distinto.
+  if (reglas.includes('listas_restrictivas')) {
+    return (
+      'No aprobable por ahora. Con la informacion disponible hoy, no pudimos completar las verificaciones ' +
+      'de identidad y cumplimiento que la ley nos exige para respaldar un contrato. ' +
+      'No es una decision definitiva sobre ti: puedes volver a solicitarlo mas adelante o escribirnos para revisar tu caso.'
+    );
+  }
+
   const soloCanon =
     reglas.includes('canon_ingreso_mayor_40') && !reglas.includes('dti_mayor_65');
 
@@ -353,6 +392,8 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
     score_externo: salida.features.score_externo,
     proveedor: salida.proveedor,
     modelo_version: salida.modelo_version,
+    listas_vinculantes: salida.antecedentes?.listas_vinculantes ?? null,
+    antecedentes_code: salida.antecedentes?.code ?? null,
   };
 
   return {
@@ -374,7 +415,9 @@ export function notaObservacionesReglasDuras(
   const trozos = reglas.map((r) =>
     r === 'dti_mayor_65'
       ? `DTI ${pct(d.dti_pct)} (max ${d.dti_umbral}%)`
-      : `canon/ingreso ${pct(d.canon_ingreso_pct)} (max ${d.canon_ingreso_umbral}%)`,
+      : r === 'canon_ingreso_mayor_40'
+        ? `canon/ingreso ${pct(d.canon_ingreso_pct)} (max ${d.canon_ingreso_umbral}%)`
+        : `listas restrictivas: reportado (${[d.listas_vinculantes?.ofac ? 'OFAC' : null, d.listas_vinculantes?.onu ? 'ONU' : null].filter(Boolean).join('/') || 's/d'})`,
   );
   return `Regla dura V4.1 activada — ${trozos.join('; ')}. Anula el puntaje total (§3).`;
 }
@@ -398,6 +441,12 @@ export interface ArgsResolverResultado {
   proveedor?: string | null;
   /** `ProviderResult.datos_crudos` en memoria. Evita releer la fila. */
   datosCrudos?: Record<string, unknown> | null;
+  /**
+   * Resumen del background check de Auco en memoria (camino inline). Si viene
+   * `undefined` se lee de `estudios.antecedentes`; `null` significa "ya se, no
+   * hay" y no se lee nada.
+   */
+  antecedentes?: ResumenAntecedentes | null;
 }
 
 export interface ResolucionEstudio {
@@ -406,6 +455,12 @@ export interface ResolucionEstudio {
   observaciones: string | null;
   motivoRechazo: string | null;
   veredicto: VeredictoReglasDuras;
+  /**
+   * §14 / §16.5: motivo por el que un 'aprobado' del buro se registro como
+   * 'condicionado' (revision manual). null si no aplico. Es informativo: el
+   * resultado ya viene cambiado en `resultado`.
+   */
+  revisionManual: string | null;
   /**
    * La corrida del motor, para que registrarScorecardSombra persista ESTA y no
    * una segunda evaluacion. null si no se pudo evaluar (y entonces tampoco se
@@ -422,6 +477,30 @@ export interface ResolucionEstudio {
  * de PostgREST seria exactamente el "rechazo por fallo tecnico" que §2
  * prohibe.
  */
+/**
+ * `estudios.antecedentes` en un SELECT APARTE del de proveedor/payload: si la
+ * migracion 20260907000002 no corrio, nombrar la columna falla el SELECT
+ * entero (42703) y se perderia la evaluacion de DTI/canon por una columna que
+ * no tiene que ver. Aqui el fallo solo deja los antecedentes en null.
+ */
+async function leerAntecedentesDelEstudio(estudioId: string): Promise<ResumenAntecedentes | null> {
+  try {
+    const { data, error } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('antecedentes')
+      .eq('id', estudioId)
+      .maybeSingle();
+    if (error) {
+      logger.warn({ estudioId, error: error.message }, 'Reglas duras: no se pudo leer estudios.antecedentes — se evalua sin ellos');
+      return null;
+    }
+    return leerResumenAntecedentes((data as { antecedentes?: unknown } | null)?.antecedentes);
+  } catch (err) {
+    logger.warn({ estudioId, err: err instanceof Error ? err.message : String(err) }, 'Reglas duras: excepcion leyendo antecedentes');
+    return null;
+  }
+}
+
 async function canonParaLaRegla(expedienteId: string): Promise<number | null> {
   try {
     const bruto = await leerCanonDelInmueble({ expedienteId });
@@ -454,6 +533,7 @@ export async function resolverResultadoEstudio(
     motivoRechazo: args.motivoRechazo ?? null,
     veredicto: aplicarReglasDuras({ resultadoPropuesto: args.resultadoPropuesto, salida: null }),
     salida: null,
+    revisionManual: null,
   };
 
   try {
@@ -479,6 +559,13 @@ export async function resolverResultadoEstudio(
       score = score ?? est?.score ?? null;
     }
 
+    // 1b. Antecedentes de Auco: en memoria (inline) o de la columna (polling y
+    //     registro manual). Ver leerAntecedentesDelEstudio.
+    const antecedentes =
+      args.antecedentes !== undefined
+        ? args.antecedentes
+        : await leerAntecedentesDelEstudio(args.estudioId);
+
     // 2. Canon congelado de esta corrida.
     const canon = await canonParaLaRegla(args.expedienteId);
 
@@ -488,6 +575,7 @@ export async function resolverResultadoEstudio(
       payload,
       canon_mensual_cop: canon,
       score_persistido: score,
+      antecedentes,
     });
 
     const veredicto = aplicarReglasDuras({
@@ -496,7 +584,48 @@ export async function resolverResultadoEstudio(
     });
 
     if (!veredicto.rechaza) {
-      return { ...base, veredicto, salida };
+      // §14 ("no aprobar automaticamente sin chequeo de listas") y §16.5
+      // (antecedentes = flag de revision manual, nunca rechazo). Solo toca un
+      // 'aprobado': lo baja a 'condicionado', que es la revision manual de
+      // este sistema (ruta 'en_revision' para el prospecto). Un 'rechazado' o
+      // un 'condicionado' del buro solo reciben la nota.
+      //
+      // DOS fuentes mandan a revision y ninguna anula a la otra: los
+      // antecedentes (listas / §16.5) y la identidad (Anexo A / §14). Se
+      // acumulan porque el analista tiene que ver las dos razones — quedarse
+      // con la primera esconderia la otra.
+      const biometria = await leerBiometriaDeExpediente(args.expedienteId);
+      const motivos = [
+        requiereRevisionManual(antecedentes),
+        requiereRevisionManualPorBiometria(biometria),
+      ].filter((m): m is string => !!m);
+      const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
+      if (!motivoRevision) return { ...base, veredicto, salida };
+
+      const obs = (args.observaciones ?? '').trim();
+      const observaciones = obs ? `${obs} ${motivoRevision}` : motivoRevision;
+      const baja = args.resultadoPropuesto === 'aprobado';
+      if (baja) {
+        logger.warn(
+          {
+            estudioId: args.estudioId,
+            expedienteId: args.expedienteId,
+            antecedentes: antecedentes?.estado,
+            flags: antecedentes?.flags_revision,
+            biometria: biometria?.estado,
+            similitud: biometria?.similitud,
+          },
+          'Auco: el aprobado del buro se registra como CONDICIONADO — revision manual (§14/§16.5/Anexo A)',
+        );
+      }
+      return {
+        ...base,
+        resultado: baja ? 'condicionado' : args.resultadoPropuesto,
+        observaciones,
+        veredicto,
+        salida,
+        revisionManual: motivoRevision,
+      };
     }
 
     const nota = notaObservacionesReglasDuras(veredicto.reglas, veredicto.detalle);
@@ -525,6 +654,7 @@ export async function resolverResultadoEstudio(
       motivoRechazo: veredicto.motivoGestor,
       veredicto,
       salida,
+      revisionManual: null,
     };
   } catch (err) {
     // Falla controlada (§2): sin veredicto, el estudio sigue el flujo de hoy.

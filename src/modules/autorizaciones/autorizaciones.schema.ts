@@ -111,6 +111,36 @@ export const perfilProspectoSchema = z.object({
 });
 
 // ============================================================
+// POST /public/autorizar/:token/biometria  (Politica Anexo A + §14)
+// ============================================================
+
+/**
+ * Imagen como data URL JPEG/PNG o base64 crudo.
+ *
+ * EL TOPE ES EL PUNTO: `express.json({ limit: '2mb' })` cubre el REQUEST
+ * ENTERO, y aqui viajan DOS imagenes. Sin corte por campo, dos fotos de un
+ * celular moderno (4-8 MB cada una en base64) revientan el body parser con un
+ * 413 crudo, sin mensaje util y sin llegar a este schema. 1.4 MB de base64
+ * son ~1 MB de JPEG, de sobra para un cotejo facial; el front ya reescala a
+ * 1280 px antes de enviar.
+ */
+const imagenBase64 = z
+  .string()
+  .min(100, 'Imagen vacia o incompleta')
+  .max(1_400_000, 'La imagen es demasiado grande: vuelve a tomarla')
+  .refine(
+    (v) => /^data:image\/(jpeg|jpg|png);base64,[A-Za-z0-9+/=\s]+$/.test(v) || /^[A-Za-z0-9+/=\s]+$/.test(v),
+    { message: 'Formato de imagen invalido (se espera JPEG o PNG en base64)' },
+  );
+
+export const biometriaSchema = z.object({
+  /** Foto del documento de identidad (anverso). */
+  documentImage: imagenBase64,
+  /** Selfie del titular. */
+  photo: imagenBase64,
+});
+
+// ============================================================
 // POST /public/autorizar/:token/reportar-identidad  (Flujo §12)
 // ============================================================
 
@@ -156,3 +186,4 @@ export type RevocarInput = z.infer<typeof revocarSchema>;
 export type VerificarOtpInput = z.infer<typeof verificarOtpSchema>;
 export type PerfilProspectoInput = z.infer<typeof perfilProspectoSchema>;
 export type ReportarIdentidadInput = z.infer<typeof reportarIdentidadSchema>;
+export type BiometriaInput = z.infer<typeof biometriaSchema>;

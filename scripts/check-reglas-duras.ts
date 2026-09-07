@@ -120,18 +120,24 @@ function fila(ok: boolean, etiqueta: string, detalle: string): void {
 }
 
 // ============================================================
-// 0. Solo DOS reglas estan activas
+// 0. Solo TRES reglas estan activas
 // ============================================================
 //
-// Es la asercion mas importante del archivo: Gerencia autorizo estas dos y
-// NADA mas. Si alguien agrega 'score_menor_450' a la lista, el corte externo
-// se mueve de 400 a 450 en produccion sin que nadie lo pida — y este check cae.
+// Es la asercion mas importante del archivo: Gerencia autorizo DTI y
+// canon/ingreso (2026-09-03) y NADA mas del scorecard. Si alguien agrega
+// 'score_menor_450' a la lista, el corte externo se mueve de 400 a 450 en
+// produccion sin que nadie lo pida — y este check cae.
+//
+// 'listas_restrictivas' (§6, OFAC/ONU via Auco, 2026-09-07) esta en la lista
+// pero SOLO puede dispararse con AUCO_BACKGROUND_CHECK_ENABLED=true: sin
+// resumen 'verificado' no existe. El interruptor es la autorizacion. Lo cubre
+// scripts/check-antecedentes.ts.
 
 console.log('\n── 0. Alcance autorizado ──');
 assert.deepStrictEqual(
   [...REGLAS_DURAS_ACTIVAS],
-  ['dti_mayor_65', 'canon_ingreso_mayor_40'],
-  'Gerencia autorizo SOLO la de DTI (§4.2) y la de canon/ingreso (§4.3)',
+  ['dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'],
+  'Gerencia autorizo DTI (§4.2) y canon/ingreso (§4.3); listas (§6) va tras el interruptor de Auco',
 );
 assert.strictEqual(V2_DTI_MAXIMO, 65, 'la tabla §4.2 dice "> 65%"');
 assert.strictEqual(V3_CANON_INGRESO_MAXIMO, 40, 'la tabla §4.3 dice "> 40%"');
@@ -195,7 +201,7 @@ for (const [etiqueta, patron] of [
   ['ingreso en pesos', /\$5\.094\.000/],
   ['canon en pesos', /\$3\.800\.000/],
   ['el score no salva', /score del buro \(773\)/],
-  ['version del modelo', /v4\.1-sombra-6var/],
+  ['version del modelo', /v4\.1-sombra-\dvar/],
 ] as const) {
   assert.ok(patron.test(motivoGestor), `el motivo del gestor debe decir ${etiqueta}`);
 }
