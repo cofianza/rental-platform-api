@@ -15,7 +15,7 @@ export const documentoIdParamsSchema = z.object({
 });
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.uuid({ error: 'ID de expediente invalido' }),
+  expedienteId: z.uuid({ error: 'ID de estudio invalido' }),
 });
 
 // ============================================================
@@ -23,7 +23,7 @@ export const expedienteIdParamsSchema = z.object({
 // ============================================================
 
 export const presignedUrlSchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de expediente invalido' }),
+  expediente_id: z.uuid({ error: 'ID de estudio invalido' }),
   tipo_documento_id: z.uuid({ error: 'ID de tipo de documento invalido' }),
   nombre_original: z.string()
     .min(1, 'Nombre del archivo requerido')
@@ -48,7 +48,7 @@ const metadatosSchema = z.object({
 }).optional();
 
 export const confirmarSubidaSchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de expediente invalido' }),
+  expediente_id: z.uuid({ error: 'ID de estudio invalido' }),
   tipo_documento_id: z.uuid({ error: 'ID de tipo de documento invalido' }),
   nombre_original: z.string().min(1, 'Nombre original requerido').max(255, 'Nombre muy largo'),
   nombre_archivo: z.string().min(1, 'Nombre de archivo requerido').max(255, 'Nombre muy largo'),

@@ -723,7 +723,7 @@ async function liberarInmuebleDelExpediente(
     if (((otros as Array<{ id: string }> | null) ?? []).length > 0) {
       logger.info(
         { expedienteId, contratoId },
-        'Inmueble NO liberado: el expediente tiene otro contrato activo/en firma (renovación)',
+        'Inmueble NO liberado: el estudio tiene otro contrato activo/en firma (renovación)',
       );
       return false;
     }
@@ -734,7 +734,7 @@ async function liberarInmuebleDelExpediente(
       .eq('id', expedienteId)
       .single();
     if (expError) {
-      logger.error({ expedienteId, error: expError.message }, 'No se pudo resolver el inmueble del expediente para liberarlo');
+      logger.error({ expedienteId, error: expError.message }, 'No se pudo resolver el inmueble del estudio para liberarlo');
       return false;
     }
     const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
@@ -776,7 +776,7 @@ async function liberarInmuebleDelExpediente(
       if (ajeno) {
         logger.info(
           { inmuebleId, expedienteId, contratoAjeno: ajeno.id },
-          'Inmueble NO liberado: otro expediente tiene un contrato activo sobre esta propiedad',
+          'Inmueble NO liberado: otro estudio tiene un contrato activo sobre esta propiedad',
         );
         return true;
       }
@@ -804,7 +804,7 @@ async function ocuparInmuebleDelExpediente(expedienteId: string): Promise<void> 
       .eq('id', expedienteId)
       .single();
     if (expError) {
-      logger.error({ expedienteId, error: expError.message }, 'No se pudo resolver el inmueble del expediente para ocuparlo');
+      logger.error({ expedienteId, error: expError.message }, 'No se pudo resolver el inmueble del estudio para ocuparlo');
       return;
     }
     const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;

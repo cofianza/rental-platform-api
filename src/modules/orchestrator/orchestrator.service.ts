@@ -406,7 +406,7 @@ async function pedirPagoTrasAutorizacion(params: {
     await registrarTimeline(
       expedienteId,
       'estudio',
-      'El arrendatario ya autorizó, pero no pudimos generarle el cobro (falta su correo). Define el pago desde el expediente.',
+      'El arrendatario ya autorizó, pero no pudimos generarle el cobro (falta su correo). Define el pago desde el estudio.',
     ).catch(() => {});
     return;
   }
@@ -446,7 +446,7 @@ async function pedirPagoTrasAutorizacion(params: {
       // El tope de canon (§4.4) puede rechazar el cobro DESPUÉS de la firma: es
       // el modo de falla nuevo que trae la inversión. Sin este rastro el
       // expediente quedaba en espera sin causa visible para el gestor.
-      `No se pudo generar el cobro del estudio tras la autorización (${err instanceof Error ? err.message : 'error'}). Revísalo desde el expediente.`,
+      `No se pudo generar el cobro del estudio tras la autorización (${err instanceof Error ? err.message : 'error'}). Revísalo desde el estudio.`,
     ).catch(() => {});
   }
 }
@@ -491,7 +491,7 @@ export async function onEstudioPagado(expedienteId: string, userId?: string | nu
       await registrarTimeline(
         expedienteId,
         'pago',
-        'No se pudo enviar automáticamente el link de autorización al inquilino. Reenvíalo manualmente desde el expediente.',
+        'No se pudo enviar automáticamente el link de autorización al inquilino. Reenvíalo manualmente desde el estudio.',
       ).catch(() => {});
     }
     return false;
@@ -532,7 +532,7 @@ export async function onEstudioPagado(expedienteId: string, userId?: string | nu
       await registrarTimeline(
         expedienteId,
         'estudio',
-        'Falló el inicio automático del estudio tras confirmarse el pago — iniciar manualmente desde el expediente.',
+        'Falló el inicio automático del estudio tras confirmarse el pago — iniciar manualmente desde el estudio.',
       ).catch(() => {});
     }
   }
@@ -595,7 +595,7 @@ export async function onEstudioCompletado(params: {
       if (!transiciono) {
         logger.warn(
           { expedienteId, resultado },
-          'Orchestrator: resultado aprobado pero el expediente no transicionó — se omiten notificaciones',
+          'Orchestrator: resultado aprobado pero el estudio no transicionó — se omiten notificaciones',
         );
         return;
       }
@@ -650,7 +650,7 @@ export async function onEstudioCompletado(params: {
           userId: inm.propietario_id,
           tipo: 'estudio.aprobado.propietario',
           titulo: 'Estudio del arrendatario aprobado',
-          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el expediente para continuar.`,
+          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el estudio para continuar.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario aprobado'));
@@ -661,7 +661,7 @@ export async function onEstudioCompletado(params: {
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.aprobado.propietario',
           titulo: 'Estudio del arrendatario aprobado',
-          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el expediente para continuar.`,
+          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el estudio para continuar.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
           whatsapp: {
@@ -687,7 +687,7 @@ export async function onEstudioCompletado(params: {
       if (!transiciono) {
         logger.warn(
           { expedienteId, resultado },
-          'Orchestrator: resultado rechazado pero el expediente no transicionó — se omiten notificaciones y NO se libera el inmueble',
+          'Orchestrator: resultado rechazado pero el estudio no transicionó — se omiten notificaciones y NO se libera el inmueble',
         );
         return;
       }
@@ -763,7 +763,7 @@ export async function onEstudioCompletado(params: {
           userId: inm.propietario_id,
           tipo: 'estudio.rechazado.propietario',
           titulo: 'Estudio del arrendatario rechazado',
-          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El expediente no avanza al contrato.`,
+          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El estudio no avanza al contrato.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario rechazado'));
@@ -774,7 +774,7 @@ export async function onEstudioCompletado(params: {
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.rechazado.propietario',
           titulo: 'Estudio del arrendatario rechazado',
-          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El expediente no avanza al contrato.`,
+          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El estudio no avanza al contrato.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable rechazado'));
@@ -789,7 +789,7 @@ export async function onEstudioCompletado(params: {
       if (!transiciono) {
         logger.warn(
           { expedienteId, resultado },
-          'Orchestrator: resultado condicionado pero el expediente no transicionó — se omiten notificaciones',
+          'Orchestrator: resultado condicionado pero el estudio no transicionó — se omiten notificaciones',
         );
         return;
       }
@@ -915,7 +915,7 @@ export async function onPagoConfirmado(params: {
       .single() as { data: { id: string; source: string | null; solicitante_id: string | null; creado_por: string | null } | null };
 
     if (!expRow) {
-      logger.error({ expedienteId }, 'Orchestrator: expediente no encontrado en onPagoConfirmado');
+      logger.error({ expedienteId }, 'Orchestrator: estudio no encontrado en onPagoConfirmado');
       return;
     }
 
@@ -944,7 +944,7 @@ export async function onPagoConfirmado(params: {
     if (!expRow.solicitante_id) {
       logger.warn(
         { expedienteId, source: expRow.source },
-        'Orchestrator: expediente sin solicitante vinculado — no se puede avanzar estudio',
+        'Orchestrator: estudio sin solicitante vinculado — no se puede avanzar estudio',
       );
       return;
     }
@@ -1066,7 +1066,7 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
     metadata: { automatico: true, origen: 'orchestrator' },
   } as never);
 
-  logger.info({ expedienteId, from: exp.estado, to: estadoDestino }, 'Orchestrator: expediente transicionado');
+  logger.info({ expedienteId, from: exp.estado, to: estadoDestino }, 'Orchestrator: estudio transicionado');
   return true;
 }
 

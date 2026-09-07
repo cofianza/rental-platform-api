@@ -115,7 +115,7 @@ export async function avisarCandidatosDeReserva(input: AvisoReservaInput): Promi
           tipo: 'estado',
           descripcion:
             `El inmueble ${referencia} fue reservado para otro candidato aprobado. ` +
-            'El estudio de este expediente sigue vigente y puede asignarse a otra propiedad.',
+            'La evaluación de este estudio sigue vigente y puede asignarse a otra propiedad.',
           metadata: {
             motivo: 'inmueble_reservado_por_otro_candidato',
             expediente_ganador_id: expedienteGanadorId,

@@ -611,7 +611,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
       'Intento de crear cita con una activa ya existente',
     );
     throw AppError.conflict(
-      `Ya existe una cita ${existentes[0].estado} para este expediente. Cancelala antes de agendar otra.`,
+      `Ya existe una cita ${existentes[0].estado} para este estudio. Cancelala antes de agendar otra.`,
       'CITA_ACTIVA_EXISTE',
     );
   }
@@ -676,8 +676,8 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
 
   const created = data as unknown as { id: string };
   const descripcion = autoConfirm
-    ? `Cita confirmada para el expediente ${expediente.expedienteNumero}`
-    : `Cita solicitada para el expediente ${expediente.expedienteNumero}`;
+    ? `Cita confirmada para el estudio ${expediente.expedienteNumero}`
+    : `Cita solicitada para el estudio ${expediente.expedienteNumero}`;
 
   await registrarTimelineCita(
     input.expediente_id,
@@ -715,7 +715,7 @@ export async function getCitasByExpediente(query: ListCitasQuery, userId: string
   // Resolver qué expedientes ve este usuario. null = sin filtro (admin/operador/gerencia).
   const accessibleIds = await resolveAccessibleExpedienteIds(userId, userRol as UserRole);
   if (accessibleIds !== null && accessibleIds.length === 0) {
-    logger.debug({ userId, userRol }, 'Usuario sin expedientes accesibles — lista vacía');
+    logger.debug({ userId, userRol }, 'Usuario sin estudios accesibles — lista vacía');
     return {
       citas: [],
       pagination: { total: 0, page, limit, totalPages: 0 },
@@ -728,9 +728,9 @@ export async function getCitasByExpediente(query: ListCitasQuery, userId: string
   ) {
     logger.warn(
       { userId, userRol, expedienteId: query.expediente_id },
-      'Intento de listar citas de expediente ajeno',
+      'Intento de listar citas de estudio ajeno',
     );
-    throw AppError.forbidden('No tienes permisos sobre este expediente', 'CITA_FORBIDDEN');
+    throw AppError.forbidden('No tienes permisos sobre este estudio', 'CITA_FORBIDDEN');
   }
 
   let qb = db('citas')

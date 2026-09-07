@@ -267,7 +267,7 @@ export async function sendExpedienteInvitacionEmail(params: {
     `,
   });
 
-  logger.info({ email, nombre_invitador }, 'Orchestrator email: expediente invitacion enviado');
+  logger.info({ email, nombre_invitador }, 'Orchestrator email: estudio invitacion enviado');
 }
 
 // ── Invitacion de Miembro a Inmobiliaria ───────────────────
@@ -293,7 +293,7 @@ export async function sendInvitacionMiembroEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola,</p>
-          <p style="color: #6b7280;"><strong>${nombre_invitador}</strong> te invito a unirte a <strong>${nombre_organizacion}</strong> en la plataforma Cofianza para gestionar inmuebles y expedientes en equipo.</p>
+          <p style="color: #6b7280;"><strong>${nombre_invitador}</strong> te invito a unirte a <strong>${nombre_organizacion}</strong> en la plataforma Cofianza para gestionar inmuebles y estudios en equipo.</p>
           <div style="text-align: center; margin: 24px 0;">
             <a href="${aceptarUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Aceptar invitacion</a>
           </div>
@@ -566,7 +566,7 @@ export async function sendEstudioHabilitadoEmail(params: {
           <p style="color: #6b7280;">Tu solicitud para el inmueble en <strong>${inmueble}, ${ciudad}</strong> fue <span style="color: #059669; font-weight: bold;">autorizada</span> por el propietario.</p>
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: firmar la autorización de datos</p>
-            <p style="color: #065f46; margin: 8px 0 0;">Expediente: <strong>${expediente_numero}</strong></p>
+            <p style="color: #065f46; margin: 8px 0 0;">Estudio: <strong>${expediente_numero}</strong></p>
             <p style="color: #065f46; margin: 4px 0 0;">Te enviamos por correo y WhatsApp el enlace para autorizar la consulta en centrales de riesgo. El cobro del estudio llega después de que autorices.</p>
           </div>
           <p style="text-align: center; margin: 24px 0;">

@@ -465,7 +465,7 @@ function buildAcusePdf(
     doc.moveDown(0.5);
     doc.fontSize(10).font('Helvetica');
     addField(doc, 'Contrato', contrato.nombre_archivo || 'N/A');
-    addField(doc, 'Expediente', contrato.expedientes?.numero || 'N/A');
+    addField(doc, 'Estudio', contrato.expedientes?.numero || 'N/A');
     addField(doc, 'Inmueble', formatInmueble(contrato.expedientes?.inmuebles));
     doc.moveDown(1);
 

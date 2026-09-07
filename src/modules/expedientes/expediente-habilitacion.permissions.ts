@@ -50,13 +50,13 @@ export async function assertHabilitacionPermission(params: {
 
   if (error || !data) {
     if (error?.code === 'PGRST116') {
-      throw AppError.notFound('Expediente no encontrado');
+      throw AppError.notFound('Estudio no encontrado');
     }
     logger.error(
       { error: error?.message, expedienteId },
-      'Error al verificar expediente para habilitación',
+      'Error al verificar estudio para habilitación',
     );
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar el expediente');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar el estudio');
   }
 
   const row = data as unknown as {
@@ -105,7 +105,7 @@ export async function assertHabilitacionPermission(params: {
         'Habilitación denegada',
       );
       throw AppError.forbidden(
-        'No tienes permisos para habilitar este expediente',
+        'No tienes permisos para habilitar este estudio',
         'EXPEDIENTE_FORBIDDEN',
       );
     }

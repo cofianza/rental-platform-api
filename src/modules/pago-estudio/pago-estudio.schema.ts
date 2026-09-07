@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.uuid({ error: 'ID de expediente invalido' }),
+  expedienteId: z.uuid({ error: 'ID de estudio invalido' }),
 });
 
 export const pagoIdParamsSchema = z.object({

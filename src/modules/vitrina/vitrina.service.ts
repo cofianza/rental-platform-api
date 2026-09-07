@@ -287,7 +287,7 @@ export async function createInterest(
 
   if (existingExpedientes && existingExpedientes.length > 0) {
     throw AppError.conflict(
-      'Ya tienes un expediente activo sobre este inmueble',
+      'Ya tienes un estudio activo sobre este inmueble',
       'EXPEDIENTE_ALREADY_EXISTS',
     );
   }
@@ -311,8 +311,8 @@ export async function createInterest(
     .single();
 
   if (expedienteError || !expediente) {
-    logger.error({ error: expedienteError?.message, userId, propertyId }, 'Error al crear expediente desde vitrina');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el expediente');
+    logger.error({ error: expedienteError?.message, userId, propertyId }, 'Error al crear estudio desde vitrina');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el estudio');
   }
 
   const expedienteData = expediente as {
@@ -329,7 +329,7 @@ export async function createInterest(
     .insert({
       expediente_id: expedienteData.id,
       tipo: 'creacion',
-      descripcion: 'Expediente creado desde vitrina pública',
+      descripcion: 'Estudio creado desde vitrina pública',
       usuario_id: userId,
       metadata: { source: 'vitrina_publica', inmueble_id: propertyId },
     } as never);
@@ -343,7 +343,7 @@ export async function createInterest(
 
   logger.info(
     { userId, propertyId, expedienteId: expedienteData.id, numero: expedienteData.numero },
-    'Expediente creado desde vitrina pública (sin estudio — pendiente de cita)',
+    'Estudio creado desde vitrina pública (sin estudio — pendiente de cita)',
   );
 
   // Avisar al dueño del inmueble (propietario o inmobiliaria) que hay un nuevo

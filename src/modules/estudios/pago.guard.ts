@@ -145,7 +145,7 @@ export function assertPagoEstudio(
     throw new AppError(
       409,
       'ESTUDIO_NO_REASIGNABLE',
-      `El estudio del expediente ${ctx.expedienteNumero ?? ''} no figura como pagado, y la reasignacion sin costo ` +
+      `La evaluación del estudio ${ctx.expedienteNumero ?? ''} no figura como pagada, y la reasignacion sin costo ` +
         'del §4.3 aplica solo a estudios ya pagados y ejecutados. Completa el pago y vuelve a intentarlo.',
       { motivo: 'estudio_no_pagado' },
     );
@@ -154,7 +154,7 @@ export function assertPagoEstudio(
   throw new AppError(
     409,
     PAGO_ESTUDIO_REQUERIDO_ERROR_CODE,
-    'El estudio de este expediente todavia no figura como pagado, asi que no se consulta a centrales de riesgo. ' +
+    'La evaluación de este estudio todavia no figura como pagada, asi que no se consulta a centrales de riesgo. ' +
       'Se ejecuta solo apenas se confirme el pago del arrendatario, o cuando la inmobiliaria asuma el costo o libere un credito.',
     { motivo: 'estudio_no_pagado' },
   );

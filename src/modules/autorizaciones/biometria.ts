@@ -300,12 +300,12 @@ export async function leerBiometriaDeExpediente(expedienteId: string): Promise<R
       .eq('expediente_id', expedienteId)
       .maybeSingle();
     if (error) {
-      logger.warn({ expedienteId, error: error.message }, 'Biometria: no se pudo leer el veredicto del expediente');
+      logger.warn({ expedienteId, error: error.message }, 'Biometria: no se pudo leer el veredicto del estudio');
       return null;
     }
     return leerResumenBiometria((data as { biometria?: unknown } | null)?.biometria);
   } catch (err) {
-    logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'Biometria: excepcion leyendo el veredicto del expediente');
+    logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'Biometria: excepcion leyendo el veredicto del estudio');
     return null;
   }
 }

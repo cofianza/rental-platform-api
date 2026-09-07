@@ -182,7 +182,7 @@ export async function notificarResponsableExpediente(params: {
   } catch (err) {
     logger.warn(
       { error: err, expedienteId: params.expedienteId },
-      'No se pudo notificar al miembro responsable del expediente',
+      'No se pudo notificar al miembro responsable del estudio',
     );
   }
 }

@@ -317,7 +317,7 @@ export function errorReservaPerdida(
     INMUEBLE_YA_RESERVADO_ERROR_CODE,
     resultado.motivo === 'reservado'
       ? 'Otro candidato fue aprobado primero y esta propiedad ya quedo reservada para su contrato. ' +
-          'Este expediente sigue vigente: puedes usarlo para otra propiedad.'
+          'Este estudio sigue vigente: puedes usarlo para otra propiedad.'
       : mensajeNoAdmision(resultado.motivo),
     { motivo: resultado.motivo, reservado_por_expediente_id: resultado.titular },
   );

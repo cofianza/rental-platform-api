@@ -56,7 +56,7 @@ export async function assignResponsable(
 
     const msg = error.message || '';
     if (msg.includes('no encontrado')) {
-      throw AppError.notFound('Expediente no encontrado');
+      throw AppError.notFound('Estudio no encontrado');
     }
     if (msg.includes('ya es el responsable')) {
       throw AppError.badRequest('El analista seleccionado ya es el responsable actual', 'SAME_ANALYST');
@@ -71,7 +71,7 @@ export async function assignResponsable(
 
   logger.info(
     { expedienteId, from: result.analista_anterior_id, to: result.analista_nuevo_id, userId },
-    'Responsable de expediente asignado',
+    'Responsable de estudio asignado',
   );
 
   logAudit({
@@ -103,7 +103,7 @@ export async function getAssignmentHistory(expedienteId: string) {
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   const { data, error } = await (supabase

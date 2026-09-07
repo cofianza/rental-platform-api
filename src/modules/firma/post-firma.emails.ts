@@ -263,7 +263,7 @@ function buildOperadorHtml(
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 4px; font-size: 13px; color: #6b7280;">Contrato:</p>
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${contrato}</p>
-                    <p style="margin: 0 0 4px; font-size: 13px; color: #6b7280;">Expediente:</p>
+                    <p style="margin: 0 0 4px; font-size: 13px; color: #6b7280;">Estudio:</p>
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${expedienteNumero}</p>
                     <p style="margin: 0 0 4px; font-size: 13px; color: #6b7280;">Firmado el:</p>
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${fecha}</p>
@@ -277,7 +277,7 @@ function buildOperadorHtml(
                 <tr>
                   <td align="center">
                     <a href="${expedienteUrl}" target="_blank" style="display: inline-block; background-color: #0d9488; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 14px 32px; border-radius: 8px;">
-                      Ver expediente
+                      Ver estudio
                     </a>
                   </td>
                 </tr>

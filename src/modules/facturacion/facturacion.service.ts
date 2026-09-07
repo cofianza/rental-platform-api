@@ -329,7 +329,7 @@ export async function previewFacturaPago(pagoId: string): Promise<{
   const sol = ctx.expediente?.solicitante;
   if (!sol) {
     throw AppError.badRequest(
-      'El expediente del pago no tiene solicitante asociado — no se puede facturar.',
+      'El estudio del pago no tiene solicitante asociado — no se puede facturar.',
       'NO_SOLICITANTE',
     );
   }
@@ -399,7 +399,7 @@ export async function crearFacturaDesdePago(
   const sol = ctx.expediente?.solicitante;
   if (!sol) {
     throw AppError.badRequest(
-      'El expediente del pago no tiene solicitante asociado — no se puede facturar.',
+      'El estudio del pago no tiene solicitante asociado — no se puede facturar.',
       'NO_SOLICITANTE',
     );
   }

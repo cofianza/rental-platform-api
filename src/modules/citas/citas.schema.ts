@@ -12,7 +12,7 @@ export type EstadoCita = (typeof ESTADOS_CITA)[number];
 // ============================================================
 
 export const createCitaSchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de expediente invalido' }),
+  expediente_id: z.uuid({ error: 'ID de estudio invalido' }),
   fecha_propuesta: z.string().datetime({ offset: true, message: 'Fecha propuesta debe ser una fecha/hora valida en formato ISO 8601' }),
   notas_solicitante: z.string().max(2000, { error: 'Notas no deben exceder 2000 caracteres' }).optional(),
   // Solo propietario/inmobiliaria/admin pueden marcar como confirmada al crear
@@ -66,7 +66,7 @@ export const citaIdParamsSchema = z.object({
 // ============================================================
 
 export const listCitasQuerySchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de expediente invalido' }).optional(),
+  expediente_id: z.uuid({ error: 'ID de estudio invalido' }).optional(),
   estado: z.enum(ESTADOS_CITA, { error: `Estado invalido. Valores permitidos: ${ESTADOS_CITA.join(', ')}` }).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),

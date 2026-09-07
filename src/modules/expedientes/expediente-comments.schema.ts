@@ -5,7 +5,7 @@ export { expedienteIdParamsSchema } from './expediente-workflow.schema';
 
 // Params: expedienteId + commentId
 export const commentParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de expediente invalido' }),
+  id: z.uuid({ error: 'ID de estudio invalido' }),
   commentId: z.uuid({ error: 'ID de comentario invalido' }),
 });
 

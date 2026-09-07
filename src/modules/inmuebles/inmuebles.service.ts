@@ -742,7 +742,7 @@ export async function reservarInmuebleParaContrato(
       });
     }
     if (msg.includes('no encontrado')) {
-      throw AppError.notFound('Expediente o inmueble no encontrado', 'EXPEDIENTE_NOT_FOUND');
+      throw AppError.notFound('Estudio o inmueble no encontrado', 'EXPEDIENTE_NOT_FOUND');
     }
     // ORDEN DE DESPLIEGUE. Si este codigo sale antes de correr la migracion
     // 20260903000005, la RPC no existe y TODA generacion de contrato se

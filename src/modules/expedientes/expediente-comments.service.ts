@@ -178,7 +178,7 @@ async function verifyExpedienteExists(id: string): Promise<void> {
     .single();
 
   if (error || !data) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 }
 

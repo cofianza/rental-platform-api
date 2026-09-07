@@ -304,7 +304,7 @@ export async function getAuditoriaScore(expedienteId: string): Promise<Auditoria
     .single();
 
   if (expErr || !expRow) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
   // Traer el estudio mas reciente del titular (tipo='individual') con score.
@@ -319,7 +319,7 @@ export async function getAuditoriaScore(expedienteId: string): Promise<Auditoria
 
   if (estErr) {
     logger.error({ expedienteId, error: estErr.message }, 'Auditoria: error consultando estudios');
-    throw AppError.badRequest('Error al obtener estudios del expediente', 'ESTUDIOS_LIST_ERROR');
+    throw AppError.badRequest('Error al obtener las evaluaciones del estudio', 'ESTUDIOS_LIST_ERROR');
   }
 
   const estudios = (estudiosRow as Array<{
@@ -336,7 +336,7 @@ export async function getAuditoriaScore(expedienteId: string): Promise<Auditoria
 
   if (estudios.length === 0) {
     throw AppError.notFound(
-      'No hay estudios crediticios registrados para este expediente. Aun no se puede auditar.',
+      'No hay evaluaciones crediticias registradas para este estudio. Aun no se puede auditar.',
       'ESTUDIO_NOT_FOUND',
     );
   }

@@ -339,7 +339,7 @@ async function notifyPaymentCompleted(pagoId: string, expedienteId: string, conc
         .insert({
           expediente_id: expedienteId,
           tipo: 'estudio',
-          descripcion: 'Pago de estudio confirmado — flujo de estudio desbloqueado',
+          descripcion: 'Pago de la evaluación confirmado — flujo del estudio desbloqueado',
           metadata: { pago_id: pagoId, evento: 'estudio_desbloqueado', trigger: 'pago_estudio_completado', origen: 'system' },
         } as never);
 

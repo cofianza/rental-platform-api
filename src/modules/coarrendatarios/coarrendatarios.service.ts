@@ -118,7 +118,7 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     .single();
 
   if (error || !data) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   const row = data as unknown as {
@@ -271,7 +271,7 @@ export async function invitarCoarrendatario(
 
   if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
     throw AppError.forbidden(
-      'No tienes permisos para invitar a un co-arrendatario en este expediente',
+      'No tienes permisos para invitar a un co-arrendatario en este estudio',
       'COARRENDATARIO_FORBIDDEN',
     );
   }
@@ -281,7 +281,7 @@ export async function invitarCoarrendatario(
   //    estudio aún no se ejecutó.
   if (ctx.estado !== 'condicionado') {
     throw AppError.badRequest(
-      `Solo se puede invitar co-arrendatario cuando el expediente está condicionado. Estado actual: ${ctx.estado}.`,
+      `Solo se puede invitar co-arrendatario cuando el estudio está condicionado. Estado actual: ${ctx.estado}.`,
       'EXPEDIENTE_NO_CONDICIONADO',
     );
   }
@@ -328,7 +328,7 @@ export async function invitarCoarrendatario(
   if (error) {
     if ((error as { code?: string }).code === '23505') {
       throw AppError.conflict(
-        'Ya hay un co-arrendatario activo invitado para este expediente. Si quieres invitar a otra persona, primero rechaza la invitación actual.',
+        'Ya hay un co-arrendatario activo invitado para este estudio. Si quieres invitar a otra persona, primero rechaza la invitación actual.',
         'COARRENDATARIO_DUPLICADO',
       );
     }
@@ -398,7 +398,7 @@ export async function getCoarrendatarioPorExpediente(
   const ctx = await fetchExpedienteCtx(expedienteId);
 
   if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
-    throw AppError.forbidden('No tienes permisos para ver este expediente', 'EXPEDIENTE_FORBIDDEN');
+    throw AppError.forbidden('No tienes permisos para ver este estudio', 'EXPEDIENTE_FORBIDDEN');
   }
 
   const { data } = await (supabase
@@ -1161,7 +1161,7 @@ export async function onCoarrendatarioEstudioCompletado(
         expediente_id: est.expediente_id,
         tipo: 'estudio',
         descripcion:
-          'El estudio del co-arrendatario se completó, pero el buró no tiene información crediticia suficiente para ponderar. El expediente queda pendiente de decisión manual.',
+          'La evaluación del co-arrendatario se completó, pero el buró no tiene información crediticia suficiente para ponderar. El estudio queda pendiente de decisión manual.',
         metadata: {
           automatico: true,
           origen: 'ponderacion_coarrendatario',
@@ -1176,7 +1176,7 @@ export async function onCoarrendatarioEstudioCompletado(
     const ctxSin = await fetchExpedienteCtx(est.expediente_id);
     const msgGestor =
       `El co-arrendatario ${coa?.nombre ?? ''} completó su estudio, pero ni él ni ${ctxSin.solicitante_nombre || 'el solicitante'} ` +
-      'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: revisa los documentos de soporte y decide si apruebas el expediente.';
+      'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: revisa los documentos de soporte y decide si apruebas el estudio.';
 
     if (ctxSin.inmueble_propietario_id) {
       notificarUsuario({
@@ -1261,7 +1261,7 @@ export async function onCoarrendatarioEstudioCompletado(
   if (!expUpdated || (expUpdated as unknown[]).length === 0) {
     logger.info(
       { expedienteId: est.expediente_id, estudioId },
-      'Ponderación coarrendatario: el expediente ya no estaba condicionado — se omiten los efectos',
+      'Ponderación coarrendatario: el estudio ya no estaba condicionado — se omiten los efectos',
     );
     return;
   }

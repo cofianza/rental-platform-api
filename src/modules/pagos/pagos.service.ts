@@ -225,7 +225,7 @@ export async function createPaymentLink(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo crean
@@ -266,7 +266,7 @@ export async function createPaymentLink(
 
   if (existing && existing.length > 0) {
     throw AppError.conflict(
-      `Ya existe un pago ${input.concepto.replace(/_/g, ' ')} pendiente o en proceso para este expediente`,
+      `Ya existe un pago ${input.concepto.replace(/_/g, ' ')} pendiente o en proceso para este estudio`,
       'PAGO_DUPLICADO',
     );
   }
@@ -304,7 +304,7 @@ export async function createPaymentLink(
     // 23505 = índice único uq_pagos_estudio_activo (carrera de doble click).
     if (insertError.code === '23505') {
       throw AppError.conflict(
-        `Ya existe un pago ${input.concepto.replace(/_/g, ' ')} activo para este expediente`,
+        `Ya existe un pago ${input.concepto.replace(/_/g, ' ')} activo para este estudio`,
         'PAGO_DUPLICADO',
       );
     }
@@ -520,7 +520,7 @@ export async function cancelarPagosPendientesDeExpediente(
       logger.info({ expedienteId, cancelados: pagos.length }, 'Pagos pendientes cancelados al terminar el contrato');
     }
   } catch (err) {
-    logger.error({ err, expedienteId }, 'Error cancelando pagos pendientes del expediente');
+    logger.error({ err, expedienteId }, 'Error cancelando pagos pendientes del estudio');
   }
 }
 
@@ -681,7 +681,7 @@ export async function registerManualPayment(
     .single();
 
   if (expError) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo
@@ -1092,7 +1092,7 @@ async function processMercadoPagoWebhook(
   // segmento de external_reference); el fallback legacy filtra también por
   // concepto — sin eso, pagar el estudio podía "completar" la garantía.
   if (!refId && !pagoIdRef) {
-    logger.warn({ paymentId, externalReference }, 'MP webhook: external_reference sin expediente — ignorado');
+    logger.warn({ paymentId, externalReference }, 'MP webhook: external_reference sin estudio — ignorado');
     await registrarPagoNoConciliado(paymentId, externalReference, status, 'referencia_desconocida');
     return { received: true };
   }
@@ -1108,7 +1108,7 @@ async function processMercadoPagoWebhook(
       .maybeSingle();
     pago = data as PagoLookup | null;
     if (pago && refId && pago.expediente_id !== refId) {
-      logger.error({ paymentId, pagoIdRef, refId }, 'MP webhook: pago_id no corresponde al expediente de la referencia');
+      logger.error({ paymentId, pagoIdRef, refId }, 'MP webhook: pago_id no corresponde al estudio de la referencia');
       await registrarPagoNoConciliado(paymentId, externalReference, status, 'pago_id_expediente_mismatch');
       return { received: true };
     }

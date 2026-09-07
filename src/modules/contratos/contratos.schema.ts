@@ -9,7 +9,7 @@ export const contratoIdParamsSchema = z.object({
 });
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.string().uuid('ID de expediente invalido'),
+  expedienteId: z.string().uuid('ID de estudio invalido'),
 });
 
 // ============================================================

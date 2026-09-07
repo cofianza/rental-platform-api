@@ -96,7 +96,7 @@ export async function executeTransition(
   });
 
   if (error) {
-    logger.error({ error, expedienteId }, 'Error al transicionar expediente');
+    logger.error({ error, expedienteId }, 'Error al transicionar estudio');
     throw AppError.badRequest('Error al ejecutar la transicion', 'TRANSITION_FAILED');
   }
 
@@ -118,7 +118,8 @@ export async function executeTransition(
   ];
   const fueCancelacion =
     targetState === 'cerrado' &&
-    (input.etiqueta === 'Cancelar expediente' ||
+    // 'Cancelar expediente' = etiqueta vieja (web sin redeploy aun); se acepta igual.
+    (input.etiqueta === 'Cancelar estudio' || input.etiqueta === 'Cancelar expediente' ||
       (ESTADOS_CANCELABLES.includes(currentState) && !!input.comentario));
 
   if (fueCancelacion) {
@@ -137,7 +138,7 @@ export async function executeTransition(
       // pero al menos el cierre quedo bien.
       logger.warn(
         { expedienteId, err: updErr.message },
-        'No se pudo persistir info de cancelacion — el expediente quedo cerrado pero sin marca de cancelacion',
+        'No se pudo persistir info de cancelacion — el estudio quedo cerrado pero sin marca de cancelacion',
       );
     }
 
@@ -159,7 +160,7 @@ export async function executeTransition(
 
   logger.info(
     { expedienteId, from: currentState, to: targetState, userId: user.id, cancelacion: fueCancelacion },
-    'Transicion de expediente ejecutada',
+    'Transicion de estudio ejecutada',
   );
 
   // Retornar expediente actualizado completo con relaciones
@@ -226,13 +227,13 @@ async function liberarReservaSiNoQuedaContratoVivo(
     .eq('expediente_id', expedienteId)
     .in('estado', CONTRATO_ESTADOS_PRE_FIRMA as unknown as string[]);
 
-  const motivo = targetState === 'rechazado' ? 'Expediente rechazado' : 'Expediente cerrado';
+  const motivo = targetState === 'rechazado' ? 'Estudio rechazado' : 'Estudio cerrado';
   for (const contrato of ((preFirma as Array<{ id: string; estado: string }> | null) ?? [])) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: rpcErr } = await (supabase as any).rpc('transicionar_contrato', {
       p_contrato_id: contrato.id,
       p_nuevo_estado: 'cancelado',
-      p_descripcion: `Cancelacion automatica: el expediente quedo ${targetState}`,
+      p_descripcion: `Cancelacion automatica: el estudio quedo ${targetState}`,
       p_usuario_id: usuarioId,
       p_comentario: null,
       p_motivo: motivo,
@@ -240,14 +241,14 @@ async function liberarReservaSiNoQuedaContratoVivo(
     if (rpcErr) {
       logger.warn(
         { contratoId: contrato.id, expedienteId, error: (rpcErr as { message?: string }).message },
-        'No se pudo auto-cancelar el contrato pre-firma del expediente rechazado/cerrado',
+        'No se pudo auto-cancelar el contrato pre-firma del estudio rechazado/cerrado',
       );
     } else {
       await (supabase
         .from('contratos' as string) as ReturnType<typeof supabase.from>)
         .update({ motivo_cancelacion: motivo, fecha_terminacion: new Date().toISOString() } as never)
         .eq('id', contrato.id);
-      logger.info({ contratoId: contrato.id, expedienteId }, 'Contrato pre-firma auto-cancelado con el expediente');
+      logger.info({ contratoId: contrato.id, expedienteId }, 'Contrato pre-firma auto-cancelado con el estudio');
     }
   }
 
@@ -273,7 +274,7 @@ async function liberarReservaSiNoQuedaContratoVivo(
   if (contratoVivo) {
     logger.info(
       { expedienteId, contratoId: contratoVivo.id, estado: contratoVivo.estado },
-      'Reserva NO liberada: el expediente conserva un contrato no terminal',
+      'Reserva NO liberada: el estudio conserva un contrato no terminal',
     );
     return;
   }
@@ -358,7 +359,7 @@ async function fetchExpediente(id: string): Promise<ExpedienteRow> {
     .single();
 
   if (error || !data) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   const row = data as unknown as {
@@ -403,7 +404,7 @@ async function checkPermissions(
     });
     if (!esDueno) {
       throw AppError.forbidden(
-        'Solo el dueño del inmueble puede cambiar el estado de este expediente',
+        'Solo el dueño del inmueble puede cambiar el estado de este estudio',
         'EXPEDIENTE_FORBIDDEN',
       );
     }
@@ -412,7 +413,7 @@ async function checkPermissions(
     );
     if (!allowed) {
       throw AppError.forbidden(
-        `Como ${user.rol} solo puedes cerrar expedientes ya aprobados o rechazados. La transicion ${fromState} → ${toState} requiere un administrador.`,
+        `Como ${user.rol} solo puedes cerrar estudios ya aprobados o rechazados. La transicion ${fromState} → ${toState} requiere un administrador.`,
         'TRANSITION_NOT_ALLOWED_FOR_ROLE',
       );
     }
@@ -420,7 +421,7 @@ async function checkPermissions(
   }
 
   throw AppError.forbidden(
-    'Solo el analista asignado, un administrador o el dueño del inmueble pueden transicionar este expediente',
+    'Solo el analista asignado, un administrador o el dueño del inmueble pueden transicionar este estudio',
     'FORBIDDEN',
   );
 }
@@ -444,7 +445,7 @@ async function checkSinglePrecondition(
     case 'ANALISTA_ASIGNADO': {
       if (!expediente.analista_id) {
         throw AppError.badRequest(
-          'El expediente debe tener un analista asignado',
+          'El estudio debe tener un analista asignado',
           'PRECONDITION_FAILED',
           { precondition: 'ANALISTA_ASIGNADO' },
         );
@@ -460,7 +461,7 @@ async function checkSinglePrecondition(
 
       if (error || !count || count === 0) {
         throw AppError.badRequest(
-          'El expediente debe tener al menos un documento',
+          'El estudio debe tener al menos un documento',
           'PRECONDITION_FAILED',
           { precondition: 'DOCUMENTOS_EXISTENTES' },
         );
@@ -577,7 +578,7 @@ async function checkSinglePrecondition(
       // aceptamos cualquiera para no acoplar la regla al naming del UI.
       if (!input.motivo?.trim() && !input.comentario?.trim()) {
         throw AppError.badRequest(
-          'Se requiere un motivo/comentario para cerrar el expediente',
+          'Se requiere un motivo/comentario para cerrar el estudio',
           'PRECONDITION_FAILED',
           { precondition: 'MOTIVO_CIERRE' },
         );

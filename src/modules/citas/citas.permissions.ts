@@ -56,10 +56,10 @@ async function fetchExpedienteOwnership(expedienteId: string): Promise<Expedient
 
   if (error || !data) {
     if (error?.code === 'PGRST116') {
-      throw AppError.notFound('Expediente no encontrado');
+      throw AppError.notFound('Estudio no encontrado');
     }
-    logger.error({ error: error?.message, expedienteId }, 'Error al verificar expediente para permisos de cita');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar el expediente');
+    logger.error({ error: error?.message, expedienteId }, 'Error al verificar estudio para permisos de cita');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar el estudio');
   }
 
   return data as unknown as ExpedienteOwnershipRow;
@@ -153,7 +153,7 @@ export async function assertCitaPermission(params: {
       denyAndThrow(userId, userRol, expedienteId, action, 'solicitante no puede confirmar/realizar/no_asistio');
     }
     if (row.solicitantes?.creado_por !== userId) {
-      denyAndThrow(userId, userRol, expedienteId, action, 'solicitante no es dueño del expediente');
+      denyAndThrow(userId, userRol, expedienteId, action, 'solicitante no es dueño del estudio');
     }
     if (action === 'cancelar' && citaCreadoPor !== userId) {
       denyAndThrow(userId, userRol, expedienteId, action, 'solicitante solo puede cancelar citas propias');

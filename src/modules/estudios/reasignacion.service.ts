@@ -324,12 +324,12 @@ async function assertExpedienteSinContratos(
   if (error) {
     logger.error(
       { error: error.message, expedienteId },
-      'Reasignacion §4.3: no se pudieron verificar los contratos del expediente — no se reasigna (fail closed)',
+      'Reasignacion §4.3: no se pudieron verificar los contratos del estudio — no se reasigna (fail closed)',
     );
     throw new AppError(
       503,
       PAGO_NO_VERIFICABLE_ERROR_CODE,
-      'No pudimos verificar si este expediente ya genero un contrato, asi que no lo reasignamos. ' +
+      'No pudimos verificar si este estudio ya genero un contrato, asi que no lo reasignamos. ' +
         'Intenta de nuevo en un momento.',
     );
   }
@@ -339,9 +339,9 @@ async function assertExpedienteSinContratos(
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El expediente ${expedienteNumero ?? ''} ya genero el contrato ${contrato.numero ?? contrato.id} ` +
+      `El estudio ${expedienteNumero ?? ''} ya genero el contrato ${contrato.numero ?? contrato.id} ` +
         `(${contrato.estado}) sobre la propiedad actual, y ese contrato no puede quedar hablando de otra. ` +
-        'Crea un expediente nuevo para la otra propiedad — el estudio de este ya esta pagado y su ' +
+        'Crea un estudio nuevo para la otra propiedad — la evaluación de este ya esta pagada y su ' +
         'resultado sigue disponible.',
       { motivo: 'expediente_con_contrato', contrato_id: contrato.id, estado: contrato.estado },
     );
@@ -375,12 +375,12 @@ async function assertExpedienteSinCitasVivas(
   if (error) {
     logger.error(
       { error: error.message, expedienteId },
-      'Reasignacion §4.3: no se pudieron verificar las citas del expediente — no se reasigna (fail closed)',
+      'Reasignacion §4.3: no se pudieron verificar las citas del estudio — no se reasigna (fail closed)',
     );
     throw new AppError(
       503,
       PAGO_NO_VERIFICABLE_ERROR_CODE,
-      'No pudimos verificar las visitas agendadas de este expediente, asi que no lo reasignamos. ' +
+      'No pudimos verificar las visitas agendadas de este estudio, asi que no lo reasignamos. ' +
         'Intenta de nuevo en un momento.',
     );
   }
@@ -390,7 +390,7 @@ async function assertExpedienteSinCitasVivas(
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El expediente ${expedienteNumero ?? ''} tiene una visita ${cita.estado} para la propiedad actual. ` +
+      `El estudio ${expedienteNumero ?? ''} tiene una visita ${cita.estado} para la propiedad actual. ` +
         'Si la reasignas, esa visita pasaria a mostrar la direccion de la propiedad nueva sin que nadie ' +
         'lo haya acordado. Cancelala o reprogramala primero y vuelve a intentarlo.',
       { motivo: 'cita_viva', cita_id: cita.id, estado: cita.estado },
@@ -548,7 +548,7 @@ export async function reasignarEstudio(args: {
 
   if (expedienteError) throw fromSupabaseError(expedienteError);
   if (!expedienteRow) {
-    throw AppError.notFound('Expediente asociado al estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Evaluación asociada al estudio no encontrada', 'EXPEDIENTE_NOT_FOUND');
   }
   const expediente = expedienteRow as unknown as ExpedienteParaReasignar;
 
@@ -556,21 +556,21 @@ export async function reasignarEstudio(args: {
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El expediente ${expediente.numero ?? ''} esta ${expediente.estado} y ya no se traslada a otra propiedad.`,
+      `El estudio ${expediente.numero ?? ''} esta ${expediente.estado} y ya no se traslada a otra propiedad.`,
       { motivo: 'expediente_terminal', estado: expediente.estado },
     );
   }
 
   if (!expediente.inmueble_id) {
     throw AppError.badRequest(
-      'El expediente no tiene una propiedad asociada, asi que no hay nada que reasignar.',
+      'El estudio no tiene una propiedad asociada, asi que no hay nada que reasignar.',
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
     );
   }
 
   if (expediente.inmueble_id === inmuebleDestinoId) {
     throw AppError.badRequest(
-      'El expediente ya esta sobre esa propiedad.',
+      'El estudio ya esta sobre esa propiedad.',
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       { motivo: 'mismo_inmueble' },
     );
@@ -605,7 +605,7 @@ export async function reasignarEstudio(args: {
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `Este expediente tiene reservada la propiedad ${origen.codigo ?? origen.direccion ?? ''} para su contrato. ` +
+      `Este estudio tiene reservada la propiedad ${origen.codigo ?? origen.direccion ?? ''} para su contrato. ` +
         'Termina o cancela ese contrato desde el detalle del inmueble y luego reasigna el estudio.',
       { motivo: 'expediente_titular_de_reserva' },
     );
@@ -697,7 +697,7 @@ export async function reasignarEstudio(args: {
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       `La propiedad ${destino.codigo ?? destino.direccion ?? 'de destino'} pertenece a otra cartera. ` +
         'Un estudio solo se reutiliza dentro de la misma agencia o del mismo propietario: trasladarlo ' +
-        'moveria el expediente completo —con los datos del solicitante y el resultado del buro— a una ' +
+        'moveria el estudio completo —con los datos del solicitante y el resultado del buro— a una ' +
         'cartera distinta. Elige una propiedad de esta misma cartera.',
       { motivo: 'cambio_de_cartera' },
     );
@@ -768,21 +768,21 @@ export async function reasignarEstudio(args: {
       throw new AppError(
         409,
         'EXPEDIENTE_ACTIVO_DUPLICADO',
-        'Este solicitante ya tiene un expediente activo sobre esa propiedad. ' +
+        'Este solicitante ya tiene un estudio activo sobre esa propiedad. ' +
           'Continua con el existente en vez de trasladar este.',
         { inmueble_destino_id: destino.id },
       );
     }
     logger.error(
       { error: updateError.message, expedienteId: expediente.id, inmuebleDestinoId: destino.id },
-      'Reasignacion §4.3: fallo el UPDATE del expediente',
+      'Reasignacion §4.3: fallo el UPDATE del estudio',
     );
     throw fromSupabaseError(updateError);
   }
 
   if (!movidas || (movidas as unknown[]).length === 0) {
     throw AppError.conflict(
-      'El expediente cambio de propiedad mientras se procesaba la reasignacion — refresca para ver el estado actual.',
+      'El estudio cambio de propiedad mientras se procesaba la reasignacion — refresca para ver el estado actual.',
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
     );
   }
@@ -901,7 +901,7 @@ async function registrarTrazaReasignacion(
     if (timelineError) {
       logger.error(
         { error: timelineError.message, expedienteId: resultado.expediente_id },
-        'Reasignacion §4.3: no se pudo escribir el evento de timeline — el expediente cambio de propiedad sin dejar constancia legible',
+        'Reasignacion §4.3: no se pudo escribir el evento de timeline — el estudio cambio de propiedad sin dejar constancia legible',
       );
     }
   } catch (err) {

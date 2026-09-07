@@ -123,8 +123,8 @@ export async function listExpedientes(
   const { data, error } = await (supabase as any).rpc('list_expedientes_with_relations', rpcParams);
 
   if (error) {
-    logger.error({ error: error.message }, 'Error al listar expedientes');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener la lista de expedientes');
+    logger.error({ error: error.message }, 'Error al listar estudios');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener la lista de estudios');
   }
 
   const result = data as RpcListResult;
@@ -170,8 +170,8 @@ export async function checkActiveExpedienteByInmueble(
     .limit(1);
 
   if (error) {
-    logger.error({ error: error.message, inmuebleId }, 'Error al verificar expediente activo');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar expediente activo');
+    logger.error({ error: error.message, inmuebleId }, 'Error al verificar estudio activo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar estudio activo');
   }
 
   const activeExpediente = data && data.length > 0 ? data[0] : null;
@@ -201,7 +201,7 @@ export async function getMiExpedientePorInmueble(inmuebleId: string, userId: str
 
   if (solErr) {
     logger.error({ error: solErr.message, userId }, 'Error al resolver solicitantes del usuario');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar expediente activo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar estudio activo');
   }
 
   const solIds = ((misSolicitantes as { id: string }[] | null) ?? []).map((s) => s.id);
@@ -219,7 +219,7 @@ export async function getMiExpedientePorInmueble(inmuebleId: string, userId: str
 
   if (error) {
     logger.error({ error: error.message, inmuebleId, userId }, 'Error al consultar mi-expediente-por-inmueble');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar expediente activo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al verificar estudio activo');
   }
 
   return {
@@ -261,10 +261,10 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
 
   if (error || !data) {
     if (error?.code === 'PGRST116') {
-      throw AppError.notFound('Expediente no encontrado');
+      throw AppError.notFound('Estudio no encontrado');
     }
-    logger.error({ error: error?.message, id }, 'Error al obtener expediente');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el expediente');
+    logger.error({ error: error?.message, id }, 'Error al obtener estudio');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el estudio');
   }
 
   // Mapear relaciones con nombres claros
@@ -315,7 +315,7 @@ async function enviarWhatsAppResponsable(responsableId: string, numero: string, 
       context: { expediente_id: expedienteId },
     });
   } catch (err) {
-    logger.warn({ error: err, responsableId, expedienteId }, 'WhatsApp de responsable de expediente falló');
+    logger.warn({ error: err, responsableId, expedienteId }, 'WhatsApp de responsable de estudio falló');
   }
 }
 
@@ -343,7 +343,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     throw AppError.badRequest(
       estadoInmueble === 'ocupado'
         ? 'El inmueble ya está arrendado (contrato vigente). Termina el contrato actual para volver a arrendarlo.'
-        : 'El inmueble está inactivo. Actívalo antes de crear un expediente.',
+        : 'El inmueble está inactivo. Actívalo antes de crear un estudio.',
       'INMUEBLE_NO_DISPONIBLE',
     );
   }
@@ -418,7 +418,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     .single();
 
   if (error) {
-    logger.error({ error: error.message, code: error.code }, 'Error al crear expediente');
+    logger.error({ error: error.message, code: error.code }, 'Error al crear estudio');
     // Índice único parcial idx_expediente_activo_solicitante_inmueble: ya hay un
     // expediente activo (borrador/en_revision/info_incompleta/aprobado/condicionado)
     // para ese mismo solicitante en ese mismo inmueble.
@@ -439,16 +439,16 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
         throw new AppError(
           409,
           'EXPEDIENTE_ACTIVO_DUPLICADO',
-          'Este solicitante ya tiene un expediente activo para este inmueble. Continúa con el existente o ciérralo antes de crear otro.',
+          'Este solicitante ya tiene un estudio activo para este inmueble. Continúa con el existente o ciérralo antes de crear otro.',
           ex?.id ? { expediente_id: ex.id, expediente_numero: ex.numero ?? null } : undefined,
         );
       }
-      throw AppError.conflict('Ya existe un expediente con esos datos.', 'EXPEDIENTE_DUPLICADO');
+      throw AppError.conflict('Ya existe un estudio con esos datos.', 'EXPEDIENTE_DUPLICADO');
     }
     if (error.code === '23503') {
       throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
     }
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el expediente');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el estudio');
   }
 
   const created = data as unknown as { id: string; numero: string; estado: string };
@@ -460,8 +460,8 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     await notificarYCorreo({
       userId: responsableAsignado,
       tipo: 'expediente_asignado',
-      titulo: 'Expediente asignado',
-      mensaje: `Eres responsable del expediente ${created.numero}.`,
+      titulo: 'Estudio asignado',
+      mensaje: `Eres responsable del estudio ${created.numero}.`,
       link: `/expedientes/${created.id}`,
     });
     // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.
@@ -542,8 +542,8 @@ export async function updateExpediente(
     .eq('id', id);
 
   if (error) {
-    logger.error({ error: error.message, id }, 'Error al actualizar expediente');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el expediente');
+    logger.error({ error: error.message, id }, 'Error al actualizar estudio');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el estudio');
   }
 
   // Diff before/after
@@ -587,7 +587,7 @@ export async function getExpedienteStats(allowedIds: string[] | null = null) {
       if (allowedIds) q = q.in('id', allowedIds);
       const { count, error } = await q;
       if (error) {
-        logger.error({ error: error.message, estado }, 'Error al obtener estadisticas de expedientes');
+        logger.error({ error: error.message, estado }, 'Error al obtener estadisticas de estudios');
         throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener estadisticas');
       }
       return { estado, count: count ?? 0 };
@@ -618,15 +618,15 @@ export async function asignarMiembroResponsableExpediente(
     .eq('id', expedienteId)
     .single();
   if (expErr || !expRow) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
   const exp = expRow as unknown as { id: string; numero: string; inmobiliaria_id: string | null };
   if (!exp.inmobiliaria_id) {
-    throw AppError.badRequest('El expediente no pertenece a una organización', 'SIN_ORGANIZACION');
+    throw AppError.badRequest('El estudio no pertenece a una organización', 'SIN_ORGANIZACION');
   }
   if (!(await esOwnerDeOrg(userId, exp.inmobiliaria_id))) {
     throw AppError.forbidden(
-      'Sólo el titular de la inmobiliaria puede asignar el responsable del expediente',
+      'Sólo el titular de la inmobiliaria puede asignar el responsable del estudio',
       'NO_ES_OWNER',
     );
   }
@@ -642,7 +642,7 @@ export async function asignarMiembroResponsableExpediente(
     .update({ miembro_responsable_id: miembroId } as never)
     .eq('id', expedienteId);
   if (updErr) {
-    logger.error({ error: updErr.message, expedienteId }, 'Error al asignar responsable de expediente');
+    logger.error({ error: updErr.message, expedienteId }, 'Error al asignar responsable de estudio');
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo asignar el responsable');
   }
 
@@ -650,8 +650,8 @@ export async function asignarMiembroResponsableExpediente(
     await notificarYCorreo({
       userId: miembroId,
       tipo: 'expediente_asignado',
-      titulo: 'Expediente asignado',
-      mensaje: `Eres responsable del expediente ${exp.numero}.`,
+      titulo: 'Estudio asignado',
+      mensaje: `Eres responsable del estudio ${exp.numero}.`,
       link: `/expedientes/${expedienteId}`,
     });
     // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.

@@ -252,7 +252,7 @@ async function queryCreacion(expedienteId: string): Promise<TimelineEvent | null
     id: `creation-${row.id}`,
     expediente_id: row.id,
     tipo: 'creacion',
-    descripcion: 'Expediente creado',
+    descripcion: 'Estudio creado',
     detalle: null,
     usuario_id: row.creado_por || '',
     usuario: row.creador || { id: row.creado_por || '', nombre: 'Sistema', apellido: '' },
@@ -272,6 +272,6 @@ async function verifyExpedienteExists(id: string): Promise<void> {
     .single();
 
   if (error || !data) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 }

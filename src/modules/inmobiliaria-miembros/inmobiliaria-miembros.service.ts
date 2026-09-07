@@ -130,7 +130,7 @@ async function liberarResponsablesDeMiembro(orgId: string, perfilId: string): Pr
     logger.warn({ error: errInm.message, perfilId }, 'No se pudieron limpiar responsables de inmuebles');
   }
   if (errExp) {
-    logger.warn({ error: errExp.message, perfilId }, 'No se pudieron limpiar responsables de expedientes');
+    logger.warn({ error: errExp.message, perfilId }, 'No se pudieron limpiar responsables de estudios');
   }
 }
 

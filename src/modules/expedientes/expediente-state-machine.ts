@@ -56,19 +56,19 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   {
     from: 'en_revision',
     to: 'aprobado',
-    label: 'Aprobar expediente',
+    label: 'Aprobar estudio',
     preconditions: ['ESTUDIO_APROBADO'],
   },
   {
     from: 'en_revision',
     to: 'rechazado',
-    label: 'Rechazar expediente',
+    label: 'Rechazar estudio',
     preconditions: ['ESTUDIO_RECHAZADO'],
   },
   {
     from: 'en_revision',
     to: 'condicionado',
-    label: 'Condicionar expediente',
+    label: 'Condicionar estudio',
     preconditions: ['ESTUDIO_CONDICIONADO'],
   },
   {
@@ -80,25 +80,25 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   {
     from: 'condicionado',
     to: 'aprobado',
-    label: 'Aprobar expediente',
+    label: 'Aprobar estudio',
     preconditions: [],
   },
   {
     from: 'condicionado',
     to: 'rechazado',
-    label: 'Rechazar expediente',
+    label: 'Rechazar estudio',
     preconditions: [],
   },
   {
     from: 'aprobado',
     to: 'cerrado',
-    label: 'Cerrar expediente',
+    label: 'Cerrar estudio',
     preconditions: ['CONTRATO_FIRMADO_O_MOTIVO'],
   },
   {
     from: 'rechazado',
     to: 'cerrado',
-    label: 'Cerrar expediente',
+    label: 'Cerrar estudio',
     preconditions: [],
   },
   // Cancelaciones: cualquier estado activo puede cerrarse cuando el dueño
@@ -113,31 +113,31 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   {
     from: 'borrador',
     to: 'cerrado',
-    label: 'Cancelar expediente',
+    label: 'Cancelar estudio',
     preconditions: ['MOTIVO_CIERRE'],
   },
   {
     from: 'en_revision',
     to: 'cerrado',
-    label: 'Cancelar expediente',
+    label: 'Cancelar estudio',
     preconditions: ['MOTIVO_CIERRE'],
   },
   {
     from: 'informacion_incompleta',
     to: 'cerrado',
-    label: 'Cancelar expediente',
+    label: 'Cancelar estudio',
     preconditions: ['MOTIVO_CIERRE'],
   },
   {
     from: 'condicionado',
     to: 'cerrado',
-    label: 'Cancelar expediente',
+    label: 'Cancelar estudio',
     preconditions: ['MOTIVO_CIERRE'],
   },
   {
     from: 'aprobado',
     to: 'cerrado',
-    label: 'Cancelar expediente',
+    label: 'Cancelar estudio',
     preconditions: ['MOTIVO_CIERRE'],
   },
 ];

@@ -311,7 +311,7 @@ describe('expediente-workflow.service', () => {
         estado_actual: 'borrador',
         transiciones_disponibles: [
           { estado: 'en_revision', label: 'Enviar a revision' },
-          { estado: 'cerrado', label: 'Cancelar expediente' },
+          { estado: 'cerrado', label: 'Cancelar estudio' },
         ],
       });
     });

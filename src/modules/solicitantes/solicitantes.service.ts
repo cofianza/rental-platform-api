@@ -174,7 +174,7 @@ export async function getApplicantById(id: string, userId?: string, userRol?: st
     .eq('solicitante_id', id);
 
   if (countError) {
-    logger.warn({ error: countError.message, id }, 'Error al contar expedientes del solicitante');
+    logger.warn({ error: countError.message, id }, 'Error al contar estudios del solicitante');
   }
 
   return {

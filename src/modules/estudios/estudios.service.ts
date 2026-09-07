@@ -194,7 +194,7 @@ export async function listEstudios(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
   // Tenant guard: propietario/inmobiliaria/solicitante solo listan los estudios
@@ -630,7 +630,7 @@ export async function createEstudio(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
   // Tenant guard: la inmobiliaria (único rol externo con expedientes:update) solo
@@ -642,7 +642,7 @@ export async function createEstudio(
 
   if (ESTADOS_TERMINALES_EXPEDIENTE.includes(exp.estado)) {
     throw AppError.badRequest(
-      'No se puede crear un estudio en un expediente cerrado o rechazado',
+      'No se puede crear una evaluación en un estudio cerrado o rechazado',
       'EXPEDIENTE_ESTADO_INVALIDO',
     );
   }
@@ -663,7 +663,7 @@ export async function createEstudio(
 
   if (activeEstudio) {
     throw AppError.conflict(
-      'Ya existe un estudio activo para este expediente',
+      'Ya existe una evaluación activa para este estudio',
       'ESTUDIO_ACTIVO_EXISTENTE',
     );
   }
@@ -1933,10 +1933,10 @@ export async function ejecutarEstudio(
   if (expErr || !expedienteRow) {
     logger.warn(
       { estudioId, expedienteId: est.expediente_id, err: expErr?.message },
-      'Expediente asociado al estudio no encontrado al ejecutar',
+      'Evaluación asociada al estudio no encontrada al ejecutar',
     );
     throw AppError.notFound(
-      'Expediente asociado al estudio no encontrado',
+      'Evaluación asociada al estudio no encontrada',
       'EXPEDIENTE_NOT_FOUND',
     );
   }
@@ -1955,7 +1955,7 @@ export async function ejecutarEstudio(
       'Intento de ejecutar estudio sin habilitación',
     );
     throw AppError.badRequest(
-      'El estudio crediticio no está habilitado para este expediente. ' +
+      'La evaluación crediticia no está habilitada para este estudio. ' +
         'Se requiere que el propietario autorice el estudio después de la cita.',
       'ESTUDIO_NO_HABILITADO',
     );
@@ -3083,7 +3083,7 @@ async function sincronizarDocumentoSolicitante(args: {
   if (!solicitanteId) {
     logger.warn(
       { estudioId, origen },
-      'syncDocSolicitante: skip — expediente sin solicitante_id',
+      'syncDocSolicitante: skip — estudio sin solicitante_id',
     );
     return;
   }

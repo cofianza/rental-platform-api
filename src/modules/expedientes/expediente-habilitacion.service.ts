@@ -87,11 +87,11 @@ export async function habilitarEstudio(
   if (error) {
     const msg = (error.message || '') as string;
     if (msg.includes('no encontrado')) {
-      throw AppError.notFound('Expediente no encontrado');
+      throw AppError.notFound('Estudio no encontrado');
     }
     if (msg.includes('ya habilitado')) {
       throw AppError.conflict(
-        'El estudio ya fue habilitado para este expediente',
+        'La evaluación ya fue habilitada para este estudio',
         'ESTUDIO_YA_HABILITADO',
       );
     }
@@ -110,12 +110,12 @@ export async function habilitarEstudio(
     }
     if (msg.includes('cita realizada')) {
       throw AppError.badRequest(
-        'Se requiere al menos una cita realizada antes de habilitar el estudio',
+        'Se requiere al menos una cita realizada antes de habilitar la evaluación',
         'CITA_REQUERIDA',
       );
     }
     logger.error({ error, expedienteId }, 'Error al habilitar estudio');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al habilitar el estudio');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al habilitar la evaluación');
   }
 
   const rpcResult = data as { expediente_id: string; numero: string; estudio_id: string };
@@ -185,7 +185,7 @@ export async function habilitarEstudio(
     // al solicitante hasta que el gestor elija una opción de pago. Ver comentario.
     logger.info(
       { expedienteId, userRol, source: ctx.source },
-      'Estudio habilitado por gestor (no propietario) — notificación al solicitante diferida a la decisión de pago',
+      'Evaluación habilitada por gestor (no propietario) — notificación al solicitante diferida a la decisión de pago',
     );
   }
 
@@ -199,7 +199,7 @@ export async function habilitarEstudio(
       return notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'estudio.habilitado',
-        titulo: 'Estudio habilitado',
+        titulo: 'Evaluación habilitada',
         mensaje: 'El propietario habilitó tu estudio crediticio. Firma la autorización de datos para continuar; el cobro llega después de que autorices.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, estudio_id: rpcResult.estudio_id },
@@ -215,7 +215,7 @@ export async function habilitarEstudio(
       estudioId: rpcResult.estudio_id,
       numero: rpcResult.numero,
     },
-    'Estudio habilitado exitosamente',
+    'Evaluación habilitada exitosamente',
   );
 
   return {
@@ -263,7 +263,7 @@ export async function rechazarEstudio(
     .single() as { data: { id: string; numero: string; estudio_habilitado: boolean; estudio_rechazado: boolean } | null };
 
   if (!current) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
   if (current.estudio_habilitado) {
     throw AppError.conflict(
@@ -332,8 +332,8 @@ export async function rechazarEstudio(
         tipo: 'estudio.rechazado',
         titulo: 'Solicitud no continúa',
         mensaje: motivoNorm
-          ? `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar el estudio. Motivo: ${motivoNorm}`
-          : `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar el estudio.`,
+          ? `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar la evaluación. Motivo: ${motivoNorm}`
+          : `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar la evaluación.`,
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, motivo: motivoNorm },
       });
@@ -381,7 +381,7 @@ export async function omitirCita(
       data: { id: string; numero: string; estudio_habilitado: boolean; cita_omitida: boolean } | null;
     };
 
-  if (!current) throw AppError.notFound('Expediente no encontrado');
+  if (!current) throw AppError.notFound('Estudio no encontrado');
   if (current.estudio_habilitado) {
     throw AppError.conflict(
       'El estudio ya fue habilitado; no aplica omitir la cita.',
@@ -512,7 +512,7 @@ async function aprobarYGenerarContrato(params: {
       ? 'condicionado'
       : 'aprobado (sin contrato generado)';
     throw AppError.badRequest(
-      `Estado de expediente invalido para esta accion. Esperado: ${expected}. Actual: ${ctx.estado}.`,
+      `Estado de estudio invalido para esta accion. Esperado: ${expected}. Actual: ${ctx.estado}.`,
       'INVALID_STATE',
     );
   }
@@ -532,7 +532,7 @@ async function aprobarYGenerarContrato(params: {
       .eq('id', expedienteId);
 
     if (persistErr) {
-      logger.error({ error: persistErr.message, expedienteId }, 'Error al guardar datos del contrato en expediente');
+      logger.error({ error: persistErr.message, expedienteId }, 'Error al guardar datos del contrato en estudio');
       throw new AppError(500, 'INTERNAL_ERROR', 'Error al guardar los datos del contrato');
     }
   }
@@ -547,8 +547,8 @@ async function aprobarYGenerarContrato(params: {
       .select('id');
 
     if (updErr) {
-      logger.error({ error: updErr.message, expedienteId }, 'Error al aprobar expediente condicionado');
-      throw new AppError(500, 'INTERNAL_ERROR', 'Error al aprobar el expediente');
+      logger.error({ error: updErr.message, expedienteId }, 'Error al aprobar estudio condicionado');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al aprobar el estudio');
     }
 
     // 0 filas = otro proceso cambió el estado entre la lectura del contexto y
@@ -560,7 +560,7 @@ async function aprobarYGenerarContrato(params: {
     // RECHAZADO por la ponderación.
     if (!updRows || updRows.length === 0) {
       throw AppError.conflict(
-        'El expediente cambió de estado mientras decidías (p. ej. completó el estudio del co-arrendatario). Refresca para ver el estado actual.',
+        'El estudio cambió de estado mientras decidías (p. ej. completó la evaluación del co-arrendatario). Refresca para ver el estado actual.',
         'EXPEDIENTE_ESTADO_CAMBIADO',
       );
     }
@@ -570,7 +570,7 @@ async function aprobarYGenerarContrato(params: {
       .insert({
         expediente_id: expedienteId,
         tipo: 'estado',
-        descripcion: 'Propietario aprobó manualmente el expediente condicionado tras revisar la documentación adicional.',
+        descripcion: 'Propietario aprobó manualmente el estudio condicionado tras revisar la documentación adicional.',
         estado_anterior: 'condicionado',
         estado_nuevo: 'aprobado',
         usuario_id: userId,
@@ -614,7 +614,7 @@ async function aprobarYGenerarContrato(params: {
       }
       logger.error(
         { error: err, expedienteId, fromState },
-        'Error al generar contrato — el expediente quedó aprobado, hay que reintentar desde la pestaña Contratos',
+        'Error al generar contrato — el estudio quedó aprobado, hay que reintentar desde la pestaña Contratos',
       );
     }
   }
@@ -736,7 +736,7 @@ export async function iniciarEstudio(
     // por omitida DEJANDO CONSTANCIA de que fue el asistente quien lo hizo.
     await omitirCita(
       expedienteId,
-      'Estudio iniciado desde el asistente de nuevo expediente (el flujo del módulo de estudios no contempla visita previa).',
+      'Evaluación iniciada desde el asistente de nuevo estudio (el flujo del módulo de estudios no contempla visita previa).',
       userId,
       userRol,
     );

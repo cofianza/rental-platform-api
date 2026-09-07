@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ESTADOS_EXPEDIENTE } from './expediente-state-machine';
 
 export const expedienteIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de expediente invalido' }),
+  id: z.uuid({ error: 'ID de estudio invalido' }),
 });
 
 export const transitionBodySchema = z.object({

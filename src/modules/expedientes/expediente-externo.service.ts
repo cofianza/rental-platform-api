@@ -70,11 +70,11 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
     .single();
 
   if (error) {
-    logger.error({ error: error.message }, 'Error al crear expediente externo');
+    logger.error({ error: error.message }, 'Error al crear estudio externo');
     if (error.code === '23503') {
       throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
     }
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el expediente externo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el estudio externo');
   }
 
   const created = data as unknown as { id: string; numero: string; estado: string };
@@ -90,7 +90,7 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
       frontend_url: env.FRONTEND_URL,
     });
   } catch (emailError) {
-    logger.error({ error: emailError, expedienteId: created.id }, 'Error al enviar email de invitacion (expediente ya creado)');
+    logger.error({ error: emailError, expedienteId: created.id }, 'Error al enviar email de invitacion (estudio ya creado)');
   }
 
   // 6. Registrar evento en timeline
@@ -98,7 +98,7 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
     .insert({
       expediente_id: created.id,
       tipo: 'creacion',
-      descripcion: `Expediente externo creado. Invitacion enviada a ${email_invitacion}`,
+      descripcion: `Estudio externo creado. Invitacion enviada a ${email_invitacion}`,
       usuario_id: userId,
     } as never);
 
@@ -117,7 +117,7 @@ export async function crearExpedienteExterno(input: CrearExpedienteExternoInput,
     ip,
   });
 
-  logger.info({ expedienteId: created.id, email_invitacion }, 'Expediente externo creado con invitacion');
+  logger.info({ expedienteId: created.id, email_invitacion }, 'Estudio externo creado con invitacion');
 
   return created;
 }
@@ -148,7 +148,7 @@ export async function vincularExpedienteExterno(token: string, solicitanteId: st
 
   // 2. Validar que el expediente no tenga ya un solicitante asignado
   if (exp.solicitante_id) {
-    throw AppError.badRequest('Este expediente ya tiene un solicitante asignado', 'EXPEDIENTE_YA_VINCULADO');
+    throw AppError.badRequest('Este estudio ya tiene un solicitante asignado', 'EXPEDIENTE_YA_VINCULADO');
   }
 
   // 3. Actualizar expediente: asignar solicitante, limpiar token, habilitar estudio
@@ -161,8 +161,8 @@ export async function vincularExpedienteExterno(token: string, solicitanteId: st
     .eq('id', exp.id);
 
   if (updateError) {
-    logger.error({ error: updateError.message, expedienteId: exp.id }, 'Error al vincular expediente externo');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al vincular el expediente');
+    logger.error({ error: updateError.message, expedienteId: exp.id }, 'Error al vincular estudio externo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al vincular el estudio');
   }
 
   // 4. Registrar evento en timeline
@@ -170,12 +170,12 @@ export async function vincularExpedienteExterno(token: string, solicitanteId: st
     .insert({
       expediente_id: exp.id,
       tipo: 'estado',
-      descripcion: `Solicitante vinculado via invitacion externa. Estudio habilitado.`,
+      descripcion: `Solicitante vinculado via invitacion externa. Evaluación habilitada.`,
       usuario_id: solicitanteId,
       metadata: { via: 'invitacion_externa', email_invitacion: exp.email_invitacion },
     } as never);
 
-  logger.info({ expedienteId: exp.id, solicitanteId }, 'Expediente externo vinculado con solicitante');
+  logger.info({ expedienteId: exp.id, solicitanteId }, 'Estudio externo vinculado con solicitante');
 
   // 5. Retornar expediente actualizado
   const { data: updated, error: getError } = await db('expedientes')
@@ -184,7 +184,7 @@ export async function vincularExpedienteExterno(token: string, solicitanteId: st
     .single();
 
   if (getError || !updated) {
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener expediente actualizado');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener estudio actualizado');
   }
 
   return updated;

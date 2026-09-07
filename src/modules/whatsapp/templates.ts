@@ -199,7 +199,7 @@ export const WHATSAPP_TEMPLATES = {
     id: 'cofianza_nueva_solicitud_vitrina',
     language: 'es_CO',
     // {{1}} nombre del interesado, {{2}} dirección del inmueble
-    description: 'Hola, recibiste una nueva solicitud de arriendo: {{1}} está interesado en tu inmueble {{2}}. Ingresa a Cofianza para revisar el expediente y agendar la visita.',
+    description: 'Hola, recibiste una nueva solicitud de arriendo: {{1}} está interesado en tu inmueble {{2}}. Ingresa a Cofianza para revisar el estudio y agendar la visita.',
   },
   /** Estudio aprobado — aviso al dueño para que genere el contrato. */
   ESTUDIO_APROBADO_DUENO: {
@@ -255,7 +255,7 @@ export const WHATSAPP_TEMPLATES = {
     id: 'cofianza_responsable_expediente_v1',
     language: 'es_CO',
     // {{1}} nombre del miembro, {{2}} numero_expediente
-    description: 'Hola {{1}}, te asignaron como responsable del expediente {{2}} en Cofianza. Ingresa a tu panel para gestionarlo. 📋',
+    description: 'Hola {{1}}, te asignaron como responsable del estudio {{2}} en Cofianza. Ingresa a tu panel para gestionarlo. 📋',
   },
 } as const;
 

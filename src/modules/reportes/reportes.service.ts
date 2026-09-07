@@ -88,7 +88,7 @@ export async function getVolumenExpedientes(
     ? { dateFrom, dateTo }
     : getDefaultDateRange();
 
-  logger.debug({ range, estado }, 'Fetching volumen expedientes');
+  logger.debug({ range, estado }, 'Fetching volumen estudios');
 
   // Query 1: expedientes created in range (for "creados" count)
   let creadosQuery = supabase
@@ -213,7 +213,7 @@ export async function getAprobacionExpedientes(
     ? { dateFrom, dateTo }
     : getDefaultDateRange();
 
-  logger.debug({ range }, 'Fetching aprobacion expedientes');
+  logger.debug({ range }, 'Fetching aprobacion estudios');
 
   const { data, error } = await supabase
     .from('expedientes')

@@ -98,7 +98,7 @@ async function getExpedienteWithInmueble(expedienteId: string) {
     .eq('id', expedienteId)
     .single();
 
-  if (error || !data) throw AppError.notFound('Expediente no encontrado');
+  if (error || !data) throw AppError.notFound('Estudio no encontrado');
 
   const exp = data as { id: string; numero: string; estado: string; inmueble_id: string | null };
 
@@ -284,7 +284,7 @@ export async function asumirCosto(expedienteId: string, userId: string, ip?: str
   // Check no existing active pago
   const existing = await findPagoEstudio(expedienteId);
   if (existing && (existing.estado as string) === 'completado') {
-    throw AppError.conflict('Ya existe un pago de estudio completado para este expediente', 'PAGO_ESTUDIO_YA_COMPLETADO');
+    throw AppError.conflict('Ya existe un pago de estudio completado para este estudio', 'PAGO_ESTUDIO_YA_COMPLETADO');
   }
 
   // Si hay un link de pago vivo, cancelarlo primero (BD + preference en la
@@ -322,7 +322,7 @@ export async function asumirCosto(expedienteId: string, userId: string, ip?: str
 
   if (error) {
     if (error.code === '23505') {
-      throw AppError.conflict('Ya existe un pago de estudio activo para este expediente', 'PAGO_ESTUDIO_PENDIENTE');
+      throw AppError.conflict('Ya existe un pago de evaluación activo para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
     }
     logger.error({ error: error.message }, 'Error registering inmobiliaria-assumed estudio payment');
     throw fromSupabaseError(error);
@@ -491,7 +491,7 @@ export async function enviarLinkPago(
 
   if (insertError) {
     if (insertError.code === '23505') {
-      throw AppError.conflict('Ya existe un pago de estudio activo para este expediente', 'PAGO_ESTUDIO_PENDIENTE');
+      throw AppError.conflict('Ya existe un pago de evaluación activo para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
     }
     logger.error({ error: insertError.message }, 'Error creating estudio payment record');
     throw fromSupabaseError(insertError);
@@ -657,14 +657,14 @@ export async function reenviarLink(
     });
     if (!esDueno) {
       throw AppError.forbidden(
-        'No tienes permisos para reenviar el link de pago de este expediente',
+        'No tienes permisos para reenviar el link de pago de este estudio',
         'PAGO_ESTUDIO_FORBIDDEN',
       );
     }
   }
 
   const pago = await findPagoEstudio(expedienteId);
-  if (!pago) throw AppError.notFound('No existe un pago de estudio para este expediente');
+  if (!pago) throw AppError.notFound('No existe un pago de estudio para este estudio');
   if ((pago.estado as string) !== 'pendiente') {
     throw AppError.badRequest('Solo se puede reenviar el link de pagos en estado pendiente', 'PAGO_NO_REENVIABLE');
   }

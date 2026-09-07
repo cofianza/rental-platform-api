@@ -467,13 +467,13 @@ export async function assertExpedienteAccess(
         .maybeSingle();
       if (sol) return;
     }
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
   // propietario / inmobiliaria: cartera de inmuebles (+ responsable asignado).
   const allowed = await resolveAllowedExpedienteIds(userId, userRol);
   if (allowed !== null && !allowed.includes(expedienteId)) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 }
 

@@ -118,7 +118,7 @@ export async function getAutorizacionForExpediente(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
   // Get latest autorizacion DEL TITULAR para este expediente. Incluye los
@@ -277,7 +277,7 @@ export async function enviarEnlaceAutorizacion(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
   const exp = expediente as unknown as ExpedienteInfo;
@@ -295,7 +295,7 @@ export async function enviarEnlaceAutorizacion(
     });
     if (!esDueno) {
       throw AppError.forbidden(
-        'No tienes permisos para enviar la autorización de este expediente',
+        'No tienes permisos para enviar la autorización de este estudio',
         'AUTORIZACION_FORBIDDEN',
       );
     }
@@ -361,7 +361,7 @@ export async function enviarEnlaceAutorizacion(
 
   if (yaAutorizada) {
     throw AppError.badRequest(
-      'Este expediente ya tiene una autorizacion firmada vigente.',
+      'Este estudio ya tiene una autorizacion firmada vigente.',
       'AUTORIZACION_YA_FIRMADA',
     );
   }
@@ -656,7 +656,7 @@ async function autorizacionPendientePorToken(token: string): Promise<{
 export async function guardarPerfilProspecto(token: string, input: PerfilProspectoInput) {
   const auth = await autorizacionPendientePorToken(token);
   if (!auth.expediente_id) {
-    logger.warn({ autorizacionId: auth.id }, 'PASO 5: autorizacion sin expediente — no se guarda el perfil');
+    logger.warn({ autorizacionId: auth.id }, 'PASO 5: autorizacion sin estudio — no se guarda el perfil');
     return { guardado: false };
   }
 
@@ -999,10 +999,10 @@ async function avisarReporteIdentidad(expedienteId: string, input: ReportarIdent
   // autorizacion_perfil_prospecto.identidad_reporte_detalle, que AutorizacionSection
   // renderiza escapado por JSX y solo para roles internos.
   const mensaje =
-    `En el expediente ${exp?.numero || expedienteId}, ${MOTIVO_REPORTE_LABEL[input.motivo]}. ` +
+    `En el estudio ${exp?.numero || expedienteId}, ${MOTIVO_REPORTE_LABEL[input.motivo]}. ` +
     'Detuvimos el enlace de autorizacion y no se consultara ninguna central de riesgo. ' +
     'Revisa los datos del solicitante y, si corresponde, envia un enlace nuevo.' +
-    (input.detalle ? ' Quien reporto dejo una nota: la ve el equipo de Cofianza en el expediente.' : '');
+    (input.detalle ? ' Quien reporto dejo una nota: la ve el equipo de Cofianza en el estudio.' : '');
   const link = `/expedientes/${expedienteId}`;
   const payload = { expediente_id: expedienteId, motivo: input.motivo };
 
@@ -1077,7 +1077,7 @@ async function avisarAutorizacionFirmada(expedienteId: string, solicitanteId: st
 
   const nombre = `${exp?.solicitantes?.nombre ?? ''} ${exp?.solicitantes?.apellido ?? ''}`.trim() || 'El prospecto';
   const titulo = 'El prospecto ya autorizo';
-  const mensaje = `${nombre} autorizo la consulta en centrales de riesgo para el expediente ${exp?.numero ?? ''}${exp?.inmuebles?.direccion ? ` (${exp.inmuebles.direccion})` : ''}. El estudio continua segun la forma de pago elegida.`;
+  const mensaje = `${nombre} autorizo la consulta en centrales de riesgo para el estudio ${exp?.numero ?? ''}${exp?.inmuebles?.direccion ? ` (${exp.inmuebles.direccion})` : ''}. El estudio continua segun la forma de pago elegida.`;
   const link = `/expedientes/${expedienteId}`;
   const payload = { expediente_id: expedienteId, solicitante_id: solicitanteId };
 
@@ -1613,8 +1613,8 @@ export async function revocarAutorizacion(
   if (error || !autorizacion) {
     throw AppError.notFound(
       input.coarrendatario_id
-        ? 'No se encontro autorizacion activa de ese co-arrendatario en este expediente'
-        : 'No se encontro autorizacion activa para este expediente',
+        ? 'No se encontro autorizacion activa de ese co-arrendatario en este estudio'
+        : 'No se encontro autorizacion activa para este estudio',
       'AUTORIZACION_NOT_FOUND',
     );
   }

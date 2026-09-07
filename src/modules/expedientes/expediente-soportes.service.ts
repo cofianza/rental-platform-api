@@ -94,10 +94,10 @@ async function assertSoporteAccess(
 
   if (error || !data) {
     if (error?.code === 'PGRST116') {
-      throw AppError.notFound('Expediente no encontrado');
+      throw AppError.notFound('Estudio no encontrado');
     }
-    logger.error({ error: error?.message, expedienteId }, 'Error al cargar expediente para soportes');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al cargar el expediente');
+    logger.error({ error: error?.message, expedienteId }, 'Error al cargar estudio para soportes');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al cargar el estudio');
   }
 
   const row = data as unknown as {
@@ -114,7 +114,7 @@ async function assertSoporteAccess(
   const estudios = row.estudios ?? [];
   if (estudios.length === 0) {
     throw AppError.badRequest(
-      'Este expediente aún no tiene un estudio crediticio habilitado.',
+      'Este estudio aún no tiene una evaluación crediticia habilitada.',
       'SIN_ESTUDIO',
     );
   }
@@ -148,7 +148,7 @@ async function assertSoporteAccess(
 
   if (!allowed) {
     throw AppError.forbidden(
-      'No tienes permisos para acceder a los soportes de este expediente',
+      'No tienes permisos para acceder a los soportes de este estudio',
       'EXPEDIENTE_FORBIDDEN',
     );
   }
@@ -193,7 +193,7 @@ export async function generarPresignedUrlSoporte(
   // 'condicionado'. Para 'aprobado' / 'rechazado' / 'cerrado' bloqueamos.
   if (ctx.estado !== 'condicionado') {
     throw AppError.badRequest(
-      `Solo se pueden subir soportes cuando el expediente está "condicionado". Estado actual: ${ctx.estado}.`,
+      `Solo se pueden subir soportes cuando el estudio está "condicionado". Estado actual: ${ctx.estado}.`,
       'EXPEDIENTE_NO_CONDICIONADO',
     );
   }
@@ -250,7 +250,7 @@ export async function confirmarSoporte(
 
   if (ctx.estado !== 'condicionado') {
     throw AppError.badRequest(
-      `Solo se pueden registrar soportes cuando el expediente está "condicionado". Estado actual: ${ctx.estado}.`,
+      `Solo se pueden registrar soportes cuando el estudio está "condicionado". Estado actual: ${ctx.estado}.`,
       'EXPEDIENTE_NO_CONDICIONADO',
     );
   }
@@ -446,7 +446,7 @@ async function resolveExpedientePorTokenDocumentos(token: string): Promise<Token
     throw AppError.badRequest('El enlace de carga ha expirado. Pide uno nuevo a la inmobiliaria.', 'TOKEN_EXPIRADO');
   }
   const estudios = row.estudios ?? [];
-  if (estudios.length === 0) throw AppError.badRequest('El expediente aún no tiene estudio.', 'SIN_ESTUDIO');
+  if (estudios.length === 0) throw AppError.badRequest('El estudio aún no tiene evaluación.', 'SIN_ESTUDIO');
   const estudioActivo = [...estudios].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )[0];
@@ -471,7 +471,7 @@ export async function enviarEnlaceDocumentos(
   const ctx = await assertSoporteAccess(expedienteId, userId, userRol);
   if (ctx.estado !== 'condicionado') {
     throw AppError.badRequest(
-      `Solo se puede enviar el enlace de documentos cuando el expediente está "condicionado". Estado actual: ${ctx.estado}.`,
+      `Solo se puede enviar el enlace de documentos cuando el estudio está "condicionado". Estado actual: ${ctx.estado}.`,
       'EXPEDIENTE_NO_CONDICIONADO',
     );
   }
@@ -556,7 +556,7 @@ export async function presignedUrlSoportePublico(
 ): Promise<{ signed_url: string; storage_key: string; nombre_archivo: string; expires_in: number }> {
   const ctx = await resolveExpedientePorTokenDocumentos(token);
   if (ctx.estado !== 'condicionado') {
-    throw AppError.badRequest('Este expediente ya no admite cargar documentos.', 'EXPEDIENTE_NO_CONDICIONADO');
+    throw AppError.badRequest('Este estudio ya no admite cargar documentos.', 'EXPEDIENTE_NO_CONDICIONADO');
   }
   if (input.tamano_bytes > MAX_SOPORTE_BYTES) {
     throw AppError.badRequest('Archivo demasiado grande (máximo 10MB)', 'FILE_TOO_LARGE');
@@ -581,7 +581,7 @@ export async function confirmarSoportePublico(
 ): Promise<{ id: string; proposito: Proposito; nombre_original: string }> {
   const ctx = await resolveExpedientePorTokenDocumentos(token);
   if (ctx.estado !== 'condicionado') {
-    throw AppError.badRequest('Este expediente ya no admite cargar documentos.', 'EXPEDIENTE_NO_CONDICIONADO');
+    throw AppError.badRequest('Este estudio ya no admite cargar documentos.', 'EXPEDIENTE_NO_CONDICIONADO');
   }
 
   const { error: existsErr } = await supabase.storage.from(BUCKET_NAME).createSignedUrl(input.storage_key, 60);

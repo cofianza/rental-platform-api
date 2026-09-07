@@ -563,7 +563,7 @@ export async function generarCertificado(
 
   const expediente = e.expedientes as Record<string, unknown> | null;
   if (!expediente) {
-    throw AppError.badRequest('Estudio no tiene expediente asociado', 'ESTUDIO_SIN_EXPEDIENTE');
+    throw AppError.badRequest('La evaluación no tiene estudio asociado', 'ESTUDIO_SIN_EXPEDIENTE');
   }
 
   const solicitante = (expediente.solicitantes as Record<string, unknown>) || {};

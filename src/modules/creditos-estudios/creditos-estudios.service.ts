@@ -506,12 +506,12 @@ export async function liberarEstudioConCredito(
     .eq('id', expedienteId)
     .single();
 
-  if (expErr || !expData) throw AppError.notFound('Expediente no encontrado');
+  if (expErr || !expData) throw AppError.notFound('Estudio no encontrado');
   const exp = expData as { id: string; numero: string; inmueble_id: string | null; solicitante_id: string | null };
 
   // 2. Validar que el inmueble pertenece al perfil que libera (la inmobiliaria figura como propietario_id)
   if (!exp.inmueble_id) {
-    throw AppError.badRequest('Expediente sin inmueble asociado', 'EXPEDIENTE_SIN_INMUEBLE');
+    throw AppError.badRequest('Estudio sin inmueble asociado', 'EXPEDIENTE_SIN_INMUEBLE');
   }
   const { data: inmData } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
@@ -588,7 +588,7 @@ export async function liberarEstudioConCredito(
     // 23505 = uq_pagos_estudio_activo: otro click/flujo concurrente ya creó el
     // pago del estudio — sin esto se consumían DOS créditos por un estudio.
     if (pagoErr?.code === '23505') {
-      throw AppError.conflict('Ya existe un pago de estudio activo para este expediente', 'PAGO_ESTUDIO_PENDIENTE');
+      throw AppError.conflict('Ya existe un pago de evaluación activo para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
     }
     logger.error({ pagoErr }, 'Error creando pago al liberar credito');
     throw fromSupabaseError(pagoErr!);

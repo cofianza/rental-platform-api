@@ -165,13 +165,13 @@ export async function generatePresignedUrl(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   const exp = expediente as unknown as { id: string; estado: string };
   if (ESTADOS_TERMINALES.includes(exp.estado)) {
     throw AppError.badRequest(
-      'No se pueden subir documentos a un expediente en estado terminal',
+      'No se pueden subir documentos a un estudio en estado terminal',
       'EXPEDIENTE_TERMINAL',
     );
   }
@@ -225,13 +225,13 @@ export async function confirmarSubida(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   const exp = expediente as unknown as { id: string; estado: string };
   if (ESTADOS_TERMINALES.includes(exp.estado)) {
     throw AppError.badRequest(
-      'No se pueden subir documentos a un expediente en estado terminal',
+      'No se pueden subir documentos a un estudio en estado terminal',
       'EXPEDIENTE_TERMINAL',
     );
   }
@@ -371,7 +371,7 @@ export async function listDocumentosByExpediente(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   // Tenant guard: 404 si el usuario no puede acceder a este expediente
@@ -731,7 +731,7 @@ export async function getPendientesRevision(expedienteId: string) {
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   // Get total docs count (excluding reemplazado)
@@ -988,13 +988,13 @@ export async function iniciarReemplazo(
     .single();
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente no encontrado');
+    throw AppError.notFound('Estudio no encontrado');
   }
 
   const exp = expediente as unknown as { id: string; estado: string };
   if (ESTADOS_TERMINALES.includes(exp.estado)) {
     throw AppError.badRequest(
-      'No se pueden subir documentos a un expediente en estado terminal',
+      'No se pueden subir documentos a un estudio en estado terminal',
       'EXPEDIENTE_TERMINAL',
     );
   }

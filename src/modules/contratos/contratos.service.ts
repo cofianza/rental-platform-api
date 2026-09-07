@@ -428,7 +428,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     .single();
 
   if (error || !expediente) {
-    throw AppError.notFound('Expediente no encontrado', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
   const exp = expediente as unknown as {
@@ -465,10 +465,10 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   };
 
   if (!exp.inmuebles) {
-    throw AppError.badRequest('El expediente no tiene inmueble asociado', 'NO_INMUEBLE');
+    throw AppError.badRequest('El estudio no tiene inmueble asociado', 'NO_INMUEBLE');
   }
   if (!exp.solicitantes) {
-    throw AppError.badRequest('El expediente no tiene solicitante asociado', 'NO_SOLICITANTE');
+    throw AppError.badRequest('El estudio no tiene solicitante asociado', 'NO_SOLICITANTE');
   }
   // El contrato es el paso posterior a la aprobación: solo se genera cuando el
   // expediente está APROBADO. En 'condicionado' NO se genera directo: primero
@@ -476,7 +476,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   // condicionado→aprobado y luego llama aquí) o invitar a un co-arrendatario.
   if (exp.estado !== 'aprobado') {
     throw AppError.badRequest(
-      'El contrato solo puede generarse cuando el expediente está aprobado. Si el estudio quedó condicionado, primero apruébalo (o invita a un co-arrendatario).',
+      'El contrato solo puede generarse cuando el estudio está aprobado. Si el estudio quedó condicionado, primero apruébalo (o invita a un co-arrendatario).',
       'EXPEDIENTE_NO_APROBADO',
     );
   }
@@ -1118,7 +1118,7 @@ export async function maybeAutoActivarVigente(
   if (!c || c.estado !== 'firmado') return;
 
   autoGenInflight.add(lockKey);
-  logger.info({ contratoId, expedienteId }, 'Auto-heal: contrato firmado — activando a vigente y cerrando expediente');
+  logger.info({ contratoId, expedienteId }, 'Auto-heal: contrato firmado — activando a vigente y cerrando estudio');
 
   try {
     // 2. Transicionar contrato firmado -> vigente
@@ -1181,14 +1181,14 @@ export async function maybeAutoActivarVigente(
         .insert({
           expediente_id: expedienteId,
           tipo: 'contrato',
-          descripcion: 'Contrato firmado por todas las partes — expediente cerrado automaticamente.',
+          descripcion: 'Contrato firmado por todas las partes — estudio cerrado automaticamente.',
           metadata: { automatico: true, origen: 'auto-heal-vigente' },
         } as never);
     }
 
     logger.info(
       { contratoId, expedienteId, expEstadoAnterior: expEstado },
-      'Auto-heal: contrato vigente + expediente cerrado',
+      'Auto-heal: contrato vigente + estudio cerrado',
     );
 
     // Notificar a solicitante y propietario que el contrato esta vigente.
@@ -1503,7 +1503,7 @@ async function supersederContratosEnFirma(
         .from('contratos' as string) as ReturnType<typeof supabase.from>)
         .update({
           estado: 'cancelado',
-          motivo_cancelacion: 'Reemplazado por un nuevo envío a firma del mismo expediente',
+          motivo_cancelacion: 'Reemplazado por un nuevo envío a firma del mismo estudio',
           updated_at: new Date().toISOString(),
         } as never)
         .eq('id', id);
@@ -1514,13 +1514,13 @@ async function supersederContratosEnFirma(
           estado_anterior: 'pendiente_firma',
           estado_nuevo: 'cancelado',
           descripcion:
-            'Cancelado automáticamente: se envió a firma otro contrato del mismo expediente (un solo contrato en firma por expediente)',
+            'Cancelado automáticamente: se envió a firma otro contrato del mismo estudio (un solo contrato en firma por estudio)',
           usuario_id: userId,
         } as never);
     }
     logger.info(
       { expedienteId, exceptContratoId, superseded: ids },
-      'Contratos en firma anteriores cancelados (un solo contrato en firma por expediente)',
+      'Contratos en firma anteriores cancelados (un solo contrato en firma por estudio)',
     );
   } catch (err) {
     logger.warn(

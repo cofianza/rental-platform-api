@@ -996,7 +996,7 @@ function buildPaymentLinkHtml(
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${context.concepto}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Monto:</p>
                     <p style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: #0f766e;">${context.monto}</p>
-                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Expediente:</p>
+                    <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Estudio:</p>
                     <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">${context.expediente_numero}</p>
                   </td>
                 </tr>

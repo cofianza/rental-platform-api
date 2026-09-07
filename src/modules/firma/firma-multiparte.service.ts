@@ -227,7 +227,7 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
     inmuebles: { propietario_id: string; inmobiliaria_id: string | null } | null;
   } | null;
 
-  if (!exp?.solicitantes) throw AppError.badRequest('El expediente no tiene solicitante', 'NO_SOLICITANTE');
+  if (!exp?.solicitantes) throw AppError.badRequest('El estudio no tiene solicitante', 'NO_SOLICITANTE');
   if (!exp.inmuebles?.propietario_id) throw AppError.badRequest('El inmueble no tiene propietario', 'NO_PROPIETARIO');
 
   const sol = exp.solicitantes;

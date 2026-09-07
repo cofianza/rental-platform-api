@@ -65,7 +65,7 @@ export async function exportExpedientes(req: Request, res: Response) {
   });
 
   const result = q.format === 'xlsx'
-    ? await generateXLSX(EXPEDIENTE_COLS, rows, 'expedientes', 'Expedientes')
+    ? await generateXLSX(EXPEDIENTE_COLS, rows, 'expedientes', 'Estudios')
     : generateCSV(EXPEDIENTE_COLS, rows, 'expedientes');
 
   sendExport(res, result);
@@ -178,7 +178,7 @@ const TIEMPOS_COLS: ExportColumn[] = [
   { header: 'Promedio (dias)', key: 'promedio_dias', width: 16 },
   { header: 'Minimo (dias)', key: 'minimo_dias', width: 14 },
   { header: 'Maximo (dias)', key: 'maximo_dias', width: 14 },
-  { header: '# Expedientes', key: 'cantidad_expedientes', width: 14 },
+  { header: '# Estudios', key: 'cantidad_expedientes', width: 14 },
   { header: 'Cuello Botella', key: 'es_cuello_botella', width: 16 },
 ];
 

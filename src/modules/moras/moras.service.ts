@@ -77,7 +77,7 @@ async function snapshotContrato(contratoId: string): Promise<ContratoSnapshot> {
   }
 
   if (!contrato.expediente_id) {
-    throw AppError.badRequest('Contrato sin expediente vinculado', 'EXPEDIENTE_FALTANTE');
+    throw AppError.badRequest('Contrato sin estudio vinculado', 'EXPEDIENTE_FALTANTE');
   }
 
   const { data: expediente, error: expError } = (await db('expedientes')
@@ -89,7 +89,7 @@ async function snapshotContrato(contratoId: string): Promise<ContratoSnapshot> {
     };
 
   if (expError || !expediente) {
-    throw AppError.notFound('Expediente del contrato no encontrado');
+    throw AppError.notFound('Estudio del contrato no encontrado');
   }
 
   let inquilino_nombre = 'Inquilino';

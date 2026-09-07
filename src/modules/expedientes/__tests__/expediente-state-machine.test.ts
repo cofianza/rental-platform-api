@@ -28,7 +28,7 @@ describe('expediente-state-machine', () => {
     // 5-may-2026). rechazado -> cerrado es el unico cierre que no es abandono.
     it('debe tener 15 transiciones definidas (10 del flujo + 5 cancelaciones)', () => {
       expect(TRANSITION_MAP).toHaveLength(15);
-      expect(TRANSITION_MAP.filter((t) => t.label === 'Cancelar expediente').map((t) => t.from)).toEqual([
+      expect(TRANSITION_MAP.filter((t) => t.label === 'Cancelar estudio').map((t) => t.from)).toEqual([
         'borrador', 'en_revision', 'informacion_incompleta', 'condicionado', 'aprobado',
       ]);
     });
@@ -119,7 +119,7 @@ describe('expediente-state-machine', () => {
       expect(estados).toContain('aprobado');
       expect(estados).toContain('rechazado');
       expect(estados).toContain('condicionado');
-      expect(transitions).toContainEqual({ estado: 'cerrado', label: 'Cancelar expediente' });
+      expect(transitions).toContainEqual({ estado: 'cerrado', label: 'Cancelar estudio' });
       // Verificar que todas tienen label
       for (const t of transitions) {
         expect(t.label).toBeDefined();
@@ -131,7 +131,7 @@ describe('expediente-state-machine', () => {
       const transitions = getAvailableTransitions('borrador');
       expect(transitions).toEqual([
         { estado: 'en_revision', label: 'Enviar a revision' },
-        { estado: 'cerrado', label: 'Cancelar expediente' },
+        { estado: 'cerrado', label: 'Cancelar estudio' },
       ]);
     });
 
@@ -142,9 +142,9 @@ describe('expediente-state-machine', () => {
     it('condicionado debe retornar aprobado, rechazado y cancelar', () => {
       const transitions = getAvailableTransitions('condicionado');
       expect(transitions).toEqual([
-        { estado: 'aprobado', label: 'Aprobar expediente' },
-        { estado: 'rechazado', label: 'Rechazar expediente' },
-        { estado: 'cerrado', label: 'Cancelar expediente' },
+        { estado: 'aprobado', label: 'Aprobar estudio' },
+        { estado: 'rechazado', label: 'Rechazar estudio' },
+        { estado: 'cerrado', label: 'Cancelar estudio' },
       ]);
     });
 
@@ -152,21 +152,21 @@ describe('expediente-state-machine', () => {
       const transitions = getAvailableTransitions('informacion_incompleta');
       expect(transitions).toEqual([
         { estado: 'en_revision', label: 'Reenviar a revision' },
-        { estado: 'cerrado', label: 'Cancelar expediente' },
+        { estado: 'cerrado', label: 'Cancelar estudio' },
       ]);
     });
 
     it('aprobado debe retornar dos opciones a cerrado: cerrar y cancelar', () => {
       const transitions = getAvailableTransitions('aprobado');
       expect(transitions).toEqual([
-        { estado: 'cerrado', label: 'Cerrar expediente' },
-        { estado: 'cerrado', label: 'Cancelar expediente' },
+        { estado: 'cerrado', label: 'Cerrar estudio' },
+        { estado: 'cerrado', label: 'Cancelar estudio' },
       ]);
     });
 
     it('rechazado debe retornar solo cerrado', () => {
       const transitions = getAvailableTransitions('rechazado');
-      expect(transitions).toEqual([{ estado: 'cerrado', label: 'Cerrar expediente' }]);
+      expect(transitions).toEqual([{ estado: 'cerrado', label: 'Cerrar estudio' }]);
     });
   });
 

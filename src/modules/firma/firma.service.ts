@@ -35,7 +35,7 @@ async function buildDebugPdf(params: {
   page.drawText('para aislar fallos del flow de firma con Auco.', {
     x: 50, y: 725, size: 11, font,
   });
-  page.drawText(`Expediente: ${params.expedienteNumero}`, {
+  page.drawText(`Estudio: ${params.expedienteNumero}`, {
     x: 50, y: 680, size: 12, font,
   });
   page.drawText(`Firmante: ${params.firmanteName}`, {
