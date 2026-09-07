@@ -11,7 +11,7 @@
  *   1. interpretarBackgroundCheck sobre la respuesta de EJEMPLO de la
  *      documentacion de Auco (sin reporte), sobre un hit OFAC, un hit ONU, un
  *      'ready:false', un error y basura.
- *   2. El motor: V4 por fila del §4.4, la regla dura global y la decision.
+ *   2. El motor: V4 solo desde la central (Adenda §1.2), la regla dura global y la decision.
  *   3. aplicarReglasDuras + los textos: el gestor ve la lista; el prospecto
  *      NUNCA ve "OFAC", "lista", "Auco" ni "rechazado" (§2, §13).
  *   4. requiereRevisionManual: 'no_verificado' -> obligatoria (§14); flags ->
@@ -45,7 +45,7 @@ import {
 } from '@/modules/estudios/antecedentes';
 import type { ResumenAntecedentes } from '@/modules/estudios/antecedentes';
 import { evaluarSombra, MODELO_VERSION } from '@/modules/estudios/motor';
-import { V4_PUNTOS_AFILIADO_ACTIVO, V4_PUNTOS_BENEFICIARIO } from '@/modules/estudios/motor/scorecard';
+import { V4_PUNTOS_AFILIADO_ACTIVO, V4_PUNTOS_BENEFICIARIO, type VinculacionCentral } from '@/modules/estudios/motor/scorecard';
 import { construirFilaSombra } from '@/modules/estudios/motor/fila';
 import {
   REGLAS_DURAS_ACTIVAS,
@@ -161,25 +161,22 @@ function payloadDC(score = 850): Record<string, unknown> {
     },
   };
 }
-function v4(a: ResumenAntecedentes | null) {
-  const s = evaluarSombra({ proveedor: 'datacredito', payload: payloadDC(), canon_mensual_cop: 900_000, fecha_evaluacion: HOY, antecedentes: a });
+function v4(a: ResumenAntecedentes | null, vinculacion: VinculacionCentral | null = null) {
+  const s = evaluarSombra({ proveedor: 'datacredito', payload: payloadDC(), canon_mensual_cop: 900_000, fecha_evaluacion: HOY, antecedentes: a, vinculacion_central: vinculacion });
   const p = s.puntajes.find((x) => x.variable === 'V4')!;
   return { s, p };
 }
-ok(v4(null).p.estado === 'fuera_de_alcance', 'sin antecedentes -> V4 fuera de alcance (interruptor OFF)');
-ok(v4(antecedentesDesactivados(HOY)).p.estado === 'fuera_de_alcance', 'desactivado -> V4 fuera de alcance');
-ok(v4(antecedentesNoVerificados('timeout', 'C', HOY)).p.estado === 'no_calculable', 'no_verificado -> V4 no calculable');
-ok(v4(limpio).p.puntos === V4_PUNTOS_AFILIADO_ACTIVO, 'ACTIVO + COTIZANTE -> 5 (tope sin pension)');
-const subsidiado = { ...limpio, seguridad_social: { estado: 'ACTIVO', regimen: 'SUBSIDIADO', tipo_afiliado: 'CABEZA DE FAMILIA', entidad: null } };
-ok(v4(subsidiado).p.puntos === V4_PUNTOS_AFILIADO_ACTIVO, 'ACTIVO + SUBSIDIADO -> 5');
-const beneficiario = { ...limpio, seguridad_social: { estado: 'ACTIVO', regimen: 'CONTRIBUTIVO', tipo_afiliado: 'BENEFICIARIO', entidad: null } };
-ok(v4(beneficiario).p.puntos === V4_PUNTOS_BENEFICIARIO, 'ACTIVO + BENEFICIARIO -> 3');
-const retirado = { ...limpio, seguridad_social: { estado: 'RETIRADO', regimen: 'CONTRIBUTIVO', tipo_afiliado: 'COTIZANTE', entidad: null } };
-ok(v4(retirado).p.puntos === 0 && v4(retirado).p.estado === 'calculada', 'no ACTIVO -> 0 (calculada, no null)');
-ok(v4(sinFosyga).p.puntos === 0, 'sin registro -> 0');
-ok(v4(fosygaCaido).p.estado === 'no_calculable', 'fosyga con error -> V4 no calculable (no 0)');
-ok(!v4(limpio).s.variables_no_calculables.includes('V4') && v4(null).s.variables_no_calculables.includes('V4'), 'con Auco V4 deja de faltar');
-ok(v4(limpio).s.puntaje_bruto_alcanzable === v4(null).s.puntaje_bruto_alcanzable + 8, 'el techo bruto sube exactamente los 8 puntos de V4');
+// Adenda §1.2: V4 sale de la CENTRAL, no de Auco. Sin vinculacion reportada por
+// la central, V4 queda fuera de la ponderacion, haya o no background check.
+ok(v4(null).p.estado === 'no_calculable' && v4(limpio).p.estado === 'no_calculable', 'sin vinculacion de la central -> V4 no calculable, con o sin Auco');
+ok(v4(limpio).s.variables_no_calculables.includes('V4'), 'V4 figura entre las no calculables');
+ok(v4(limpio).s.puntaje_bruto_alcanzable === v4(null).s.puntaje_bruto_alcanzable, 'Auco ya no mueve el techo alcanzable');
+const cotizante = v4(limpio, { estado: 'cotizante', fuente: 'datacredito' });
+ok(cotizante.p.puntos === V4_PUNTOS_AFILIADO_ACTIVO, 'central: cotizante -> 5 (tope sin pension)');
+ok(v4(limpio, { estado: 'beneficiario', fuente: 'datacredito' }).p.puntos === V4_PUNTOS_BENEFICIARIO, 'central: beneficiario -> 3');
+const inactiva = v4(limpio, { estado: 'inactiva', fuente: 'transunion' });
+ok(inactiva.p.puntos === 0 && inactiva.p.estado === 'calculada', 'central: inactiva -> 0 (calculada, no null)');
+ok(cotizante.s.puntaje_bruto_alcanzable === v4(null).s.puntaje_bruto_alcanzable + 8, 'con vinculacion de la central el techo sube los 8 de V4');
 ok(v4(limpio).s.antecedentes !== null && !('raw' in (v4(limpio).s.antecedentes as object)), 'la salida ecoa antecedentes sin raw');
 
 const conHit = v4(ofac).s;
@@ -191,7 +188,7 @@ ok(sinReglaListas(antecedentesNoVerificados('t', 'C', HOY)), 'no_verificado NO e
 const fila = construirFilaSombra('e1', conHit) as Record<string, unknown>;
 ok((fila.reglas_duras_activadas as string[]).includes('listas_restrictivas'), 'la fila sombra lleva el codigo');
 ok(JSON.stringify(fila.features_crudas).includes('"antecedentes"') && !JSON.stringify(fila.features_crudas).includes('"raw"'), 'features_crudas lleva el resumen sin raw');
-ok(MODELO_VERSION === 'v4.1-adenda1-7var' && MODELO_VERSION.length <= 20, 'version del modelo actualizada (Adenda 1, V4 con fuente)');
+ok(MODELO_VERSION === 'v4.1-adenda1-6var' && MODELO_VERSION.length <= 20, 'version del modelo actualizada (Adenda 1, V4 con fuente)');
 
 // ── 3. Decision real + textos ───────────────────────────────
 ok((REGLAS_DURAS_ACTIVAS as readonly string[]).includes('listas_restrictivas'), 'listas_restrictivas esta en la lista blanca');
@@ -219,4 +216,4 @@ ok((requiereRevisionManual(policia) ?? '').includes('§16.5') && (requiereRevisi
 ok(requiereRevisionManual(limpio) === null, 'verificado y limpio -> aprobacion automatica posible');
 ok(requiereRevisionManual(ofac) !== null, 'un hit tambien lleva flags (nivel alto): la regla dura manda antes');
 
-console.log(`\nOK — ${pasos} aserciones: Auco decide lo que la Politica dice (§6 rechaza OFAC/ONU; §14 y §16.5 revisan; §4.4 puntua en sombra).`);
+console.log(`\nOK — ${pasos} aserciones: Auco decide lo que la Politica dice (§6 rechaza OFAC/ONU; §14 y §16.5 revisan; V4 solo desde la central, Adenda §1.2).`);

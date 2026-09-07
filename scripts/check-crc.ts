@@ -65,7 +65,7 @@ const BASE = {
   canonMaximoTolerado: 2_875_000,
   requiereAcompanante: false,
   rutaEtiqueta: 'Aprobado por el buro — sin puntaje del modelo',
-  modeloVersion: 'v4.1-adenda1-7var',
+  modeloVersion: 'v4.1-adenda1-6var',
   tarifas: null,
   factorAjusteIngreso: null,
   fuentesConsultadas: null,

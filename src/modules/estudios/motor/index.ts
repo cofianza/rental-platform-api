@@ -38,7 +38,8 @@ import {
   puntajeV1ScoreExterno,
   puntajeV2Dti,
   puntajeV3CanonIngreso,
-  puntajeV4SeguridadSocial,
+  puntajeV4VinculacionCentral,
+  type VinculacionCentral,
   puntajeV5Experiencia,
   puntajeV6Comportamiento,
   puntajeV7EstabilidadLaboral,
@@ -70,10 +71,11 @@ export * from './features';
  *
  * 'adenda1' = Adenda 1 a la Politica V4.1 (07/09/2026): factor de ajuste del
  * ingreso (§1.1), V1 como promedio de dos centrales con cascada (§2) y Caso G.
- * '7var' = las 6 variables del buro (V1, V2, V3, V5, V6, V8) mas V4 (FOSYGA
- * via Auco cuando esta encendido). Maximo 20 caracteres (VARCHAR de la tabla).
+ * '6var' = las 6 variables del buro (V1, V2, V3, V5, V6, V8). V4 solo puntua
+ * si una central reporta vinculacion (Adenda §1.2); Auco ya no la alimenta.
+ * Maximo 20 caracteres (VARCHAR de la tabla).
  */
-export const MODELO_VERSION = 'v4.1-adenda1-7var';
+export const MODELO_VERSION = 'v4.1-adenda1-6var';
 
 export interface EntradaSombra {
   /** 'datacredito' | 'transunion' | ... Decide el extractor. */
@@ -89,11 +91,17 @@ export interface EntradaSombra {
   /** ISO inyectada para que la evaluacion sea reproducible en los checks. */
   fecha_evaluacion?: string | null;
   /**
-   * Background check de Auco ya interpretado (antecedentes.ts). Alimenta V4
-   * (FOSYGA) y la regla dura global 'listas_restrictivas'. null/undefined =
-   * no se consulto (interruptor OFF): V4 queda fuera de alcance y nada cambia.
+   * Background check de Auco ya interpretado (antecedentes.ts). Alimenta la
+   * regla dura global 'listas_restrictivas' y los flags de revision; desde la
+   * Adenda §1.2 NO puntua V4. null/undefined = no se consulto (interruptor OFF).
    */
   antecedentes?: ResumenAntecedentes | null;
+  /**
+   * Adenda §1.2: vinculacion a seguridad social reportada por la CENTRAL de
+   * riesgo. Hoy ningun extractor la llena (ni HDC Plus ni TransUnion la traen):
+   * V4 queda fuera de la ponderacion hasta que una central la entregue.
+   */
+  vinculacion_central?: VinculacionCentral | null;
   /**
    * Adenda §1.1: multiplica el ingreso estimado por la central ANTES del DTI
    * y del canon/ingreso. 1 (o ausente) = sin ajuste. Se registra en la salida
@@ -332,7 +340,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       { variable: 'V1', puntos_maximos: PUNTOS_MAXIMOS.V1, ...puntajeV1ScoreExterno(features.score_externo) },
       { variable: 'V2', puntos_maximos: PUNTOS_MAXIMOS.V2, ...puntajeV2Dti(dtiPct) },
       { variable: 'V3', puntos_maximos: PUNTOS_MAXIMOS.V3, ...puntajeV3CanonIngreso(canonIngresoPct) },
-      { variable: 'V4', puntos_maximos: PUNTOS_MAXIMOS.V4, ...puntajeV4SeguridadSocial(antecedentes) },
+      { variable: 'V4', puntos_maximos: PUNTOS_MAXIMOS.V4, ...puntajeV4VinculacionCentral(entrada?.vinculacion_central ?? null) },
       { variable: 'V5', puntos_maximos: PUNTOS_MAXIMOS.V5, ...puntajeV5Experiencia(features.sectores, features.sin_historial_crediticio) },
       { variable: 'V6', puntos_maximos: PUNTOS_MAXIMOS.V6, ...puntajeV6Comportamiento(features) },
       { variable: 'V7', puntos_maximos: PUNTOS_MAXIMOS.V7, ...puntajeV7EstabilidadLaboral() },
@@ -435,7 +443,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     }
     if (antecedentes?.estado === 'no_verificado') {
       advertencias.push(
-        `Antecedentes (Auco) sin verificar: ${antecedentes.motivo ?? 's/m'}. V4 queda no calculable y las listas restrictivas no se chequearon (§14: no aprobar automaticamente).`,
+        `Antecedentes (Auco) sin verificar: ${antecedentes.motivo ?? 's/m'}. las listas restrictivas no se chequearon (§14: no aprobar automaticamente).`,
       );
     }
     if (antecedentes?.estado === 'verificado' && antecedentes.flags_revision.length > 0) {

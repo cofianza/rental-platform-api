@@ -2370,6 +2370,10 @@ async function procesarEstudioAsync(args: {
   /** Politica §9. */
   sessionId?: string;
   inicioMs?: number;
+  /** Adenda §2.3: central que ya fallo en esta ejecucion (esta llamada es el fallback). */
+  centralCaida?: string;
+  /** Background check ya lanzado en el intento anterior: no se vuelve a pedir a Auco. */
+  antecedentesPrevios?: Promise<ResumenAntecedentes> | null;
 }): Promise<void> {
   const { estudioId, proveedor, proveedorAnterior, expedienteId, providerInput, userId, ip, sessionId, inicioMs } = args;
   const provider = getProvider(proveedor as 'transunion' | 'sifin' | 'datacredito');
@@ -2409,7 +2413,7 @@ async function procesarEstudioAsync(args: {
     // por medio la ventana es de milisegundos, y procesarEstudioAsync solo se
     // llama desde ejecutarEstudio, que ya lo verificó.
 
-    antecedentesPromise = verificarAntecedentes({
+    antecedentesPromise = args.antecedentesPrevios ?? verificarAntecedentes({
       estudioId,
       tipo_documento: providerInput.tipo_documento,
       numero_documento: providerInput.numero_documento,
@@ -2476,7 +2480,7 @@ async function procesarEstudioAsync(args: {
       await persistirAntecedentes(estudioId, antecedentes);
 
       try {
-        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result, antecedentes, providerInput, { sessionId, inicioMs });
+        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result, antecedentes, providerInput, { sessionId, inicioMs, centralCaida: args.centralCaida });
         logger.info({ estudioId }, 'Estudio completado exitosamente (async)');
       } catch (postErr) {
         const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
@@ -2530,6 +2534,33 @@ async function procesarEstudioAsync(args: {
       || /http 5\d\d/.test(lowerErr)
       || lowerErr.includes('timeout');
 
+    // Adenda 1 §2.3 (literal): "Si Datacredito no responde o devuelve error,
+    // TransUnion pasa a ser la central primaria y se le aplican los mismos
+    // umbrales de cascada". Solo con el motor decisor encendido (sin el, el
+    // gestor elige buro y reintenta a mano) y una sola vez: si TransUnion
+    // tampoco responde, aplica el protocolo de fallo de API del §14 (abajo,
+    // 'fallido' con la causa). El background check ya lanzado se reutiliza.
+    if (proveedorNoDisponible && env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' && !args.centralCaida) {
+      logger.warn({ estudioId, error: errorMsg }, 'Adenda §2.3: DataCredito no respondio — TransUnion pasa a ser la central primaria');
+      const { error: swErr } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update({ proveedor: 'transunion' } as never)
+        .eq('id', estudioId);
+      if (!swErr) {
+        logAudit({
+          usuarioId: userId,
+          accion: AUDIT_ACTIONS.ESTUDIO_PROVIDER_EXECUTED,
+          entidad: AUDIT_ENTITIES.ESTUDIO,
+          entidadId: estudioId,
+          detalle: { adenda_2_3: 'transunion pasa a primaria', central_caida: 'datacredito', error: errorMsg.slice(0, 200), expediente_id: expedienteId },
+          ip,
+        });
+        await procesarEstudioAsync({ ...args, proveedor: 'transunion', proveedorAnterior: 'datacredito', centralCaida: 'datacredito', antecedentesPrevios: antecedentesPromise });
+        return;
+      }
+      logger.error({ estudioId, error: swErr.message }, 'Adenda §2.3: no se pudo pasar la primaria a TransUnion — el estudio queda fallido');
+    }
+
     const observaciones = bloqueadoPorAutorizacion
       ? errorMsg
       : apellidoNoCoincide
@@ -2537,7 +2568,7 @@ async function procesarEstudioAsync(args: {
       : documentoNoEncontrado
       ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos, o reintenta con el otro buró.`
       : proveedorNoDisponible
-        ? `${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintenta eligiendo TransUnion.' : ''}`
+        ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió (Adenda §2.3 → Política §14: sin centrales no hay decisión automática). ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintenta eligiendo TransUnion.' : ''}`
         : `Error de proveedor (${buroLabel}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
 
     const { error: failError } = await (supabase
@@ -3193,7 +3224,7 @@ async function registrarResultadoInline(
   /** Insumo del buro: hace falta para consultar la SEGUNDA central (Adenda §2). */
   providerInput?: ProviderSolicitudInput,
   /** Politica §9: sesion e inicio de la ejecucion. */
-  ejecucion: { sessionId?: string; inicioMs?: number } = {},
+  ejecucion: { sessionId?: string; inicioMs?: number; centralCaida?: string } = {},
 ): Promise<void> {
   const provider = getProvider(proveedorId as 'transunion' | 'sifin' | 'datacredito');
 
@@ -3244,6 +3275,7 @@ async function registrarResultadoInline(
       revisionManual: decision.revisionManual,
       providerInput,
       antecedentes: antecedentes ?? null,
+      centralCaida: ejecucion.centralCaida ?? null,
     });
     resultadoFinal = c.resultado;
     salidaFinal = c.salida;
@@ -3410,6 +3442,8 @@ async function decidirConCascada(args: {
   revisionManual: string | null;
   providerInput?: ProviderSolicitudInput;
   antecedentes: ResumenAntecedentes | null;
+  /** Adenda §2.3: central que ya no respondio en esta ejecucion; no se reconsulta. */
+  centralCaida?: string | null;
 }): Promise<{ resultado: ResultadoDecidido; motivo: string; via: string | null; nota: string; salida: SalidaSombra; veredicto: VeredictoReglasDuras; apisFallidas: string[] }> {
   const { estudioId, expedienteId, proveedorPrimario } = args;
   const cal = await getCalibracion();
@@ -3429,10 +3463,15 @@ async function decidirConCascada(args: {
   let secundario: string | null = null;
   let scoreSecundario: number | null = null;
   let nota = `Cascada (Adenda §2): ${cascada.motivo}.`;
-  const apisFallidas: string[] = [];
+  const apisFallidas: string[] = args.centralCaida ? [args.centralCaida] : [];
 
   const candidato = proveedorPrimario === 'datacredito' ? 'transunion' : 'datacredito';
-  if (cascada.consultarSecundaria && args.providerInput) {
+  const etiqueta = (id: string) => BURO_LABELS[id] ?? id;
+  if (cascada.consultarSecundaria && candidato === args.centralCaida) {
+    // Adenda §2.3: la central que ya no respondio en esta ejecucion no se
+    // vuelve a consultar; se decide con la que actuo como primaria (§14).
+    nota = `Cascada (Adenda §2): ${cascada.motivo}, pero ${etiqueta(candidato)} no respondio en esta ejecucion (Adenda §2.3: ${etiqueta(proveedorPrimario)} actuo como primaria): se decide con ${etiqueta(proveedorPrimario)} como fuente unica (Politica §14).`;
+  } else if (cascada.consultarSecundaria && args.providerInput) {
     try {
       const prov = getProvider(candidato as 'transunion' | 'datacredito');
       const resp = await prov.solicitar(args.providerInput);
@@ -3485,6 +3524,8 @@ async function decidirConCascada(args: {
   const traza = {
     modelo_version: salida.modelo_version,
     primaria: proveedorPrimario,
+    primaria_original: args.centralCaida ?? proveedorPrimario,
+    fallback_2_3: !!args.centralCaida,
     puntaje_primaria: args.salidaPrimaria.puntaje_normalizado,
     decision_cascada: cascada.motivo,
     secundaria_consultada: secundario !== null,

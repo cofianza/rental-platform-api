@@ -34,7 +34,6 @@
 
 import type { FeaturesBuro, SectoresCredito } from './features';
 // Solo TIPOS: el motor sigue sin env, sin Supabase y sin fetch.
-import type { ResumenAntecedentes } from '../antecedentes';
 
 // ── Escala del modelo ───────────────────────────────────────
 
@@ -271,54 +270,48 @@ export function puntajeV3CanonIngreso(pct: number | null): ResultadoVariable {
 }
 
 // ============================================================
-// V4 — Seguridad social (8 pts) · fuente PARCIAL: FOSYGA/BDUA via Auco
+// V4 — Seguridad social (8 pts) · fuente: la CENTRAL de riesgo (Adenda §1.2)
 // ============================================================
 
 /**
- * Politica V4.1 §4.4. La fuente que pide la politica es PILA (IBC); lo que se
- * tiene es la afiliacion en la BDUA que trae el background check de Auco
- * (`fosyga`): dice si la persona esta afiliada y en que regimen, NO si cotiza
- * a pension ni si esta al dia. Por eso el maximo alcanzable con esta fuente es
- * la fila de 5 puntos — las dos de 8 exigen pension o mesada verificable — y
- * se toma siempre la fila mas conservadora que los datos permiten afirmar.
+ * La Politica V4.1 §4.4 pedia PILA. Adenda 1 §1.2 (literal): donde la variable
+ * "cita PILA via proveedor (AUCO / Aportes en Linea), debe reemplazarse por la
+ * informacion de vinculacion que entregue la central o eliminarse de la
+ * ponderacion si ninguna la reporta". Auco (FOSYGA/BDUA) NO es una central:
+ * su afiliacion se muestra en la card del estudio, pero no puntua.
  *
- *   ACTIVO + COTIZANTE (cualquier regimen)  -> 5  "afiliado activo a salud"
- *   ACTIVO + regimen SUBSIDIADO             -> 5  (fila literal)
- *   ACTIVO + BENEFICIARIO / otro tipo       -> 3  "beneficiario activo"
- *   sin registro, o estado != ACTIVO        -> 0  la fila dice ademas "revision
- *                                                 manual obligatoria": aqui solo
- *                                                 se puntua (sombra), no decide
- *   antecedentes 'no_verificado', o FOSYGA
- *   entre las fuentes con error            -> no_calculable (no se sabe)
- *   sin antecedentes (interruptor OFF)      -> fuera_de_alcance
+ * Hoy ninguna central la reporta (HDC Plus y TransUnion no traen vinculacion),
+ * asi que V4 queda no_calculable: fuera del maximo alcanzable, sin castigar el
+ * puntaje. El dia que una central la entregue, el extractor llena
+ * `EntradaSombra.vinculacion_central` y aplica esta tabla:
+ *
+ *   cotizante     -> 5  "afiliado activo" (sin verificar pension: tope 5)
+ *   beneficiario  -> 3  "beneficiario activo"
+ *   inactiva      -> 0  la fila dice ademas "revision manual obligatoria"
+ *   sin dato      -> no_calculable (eliminada de la ponderacion)
  */
 export const V4_PUNTOS_AFILIADO_ACTIVO = 5;
 export const V4_PUNTOS_BENEFICIARIO = 3;
 
-export function puntajeV4SeguridadSocial(
-  a: Pick<ResumenAntecedentes, 'estado' | 'seguridad_social' | 'fuentes_con_error'> | null | undefined,
-): ResultadoVariable {
-  if (!a || a.estado === 'desactivado') {
-    return fueraDeAlcance('Sin fuente: background check de Auco desactivado (AUCO_BACKGROUND_CHECK_ENABLED); PILA sin integrar');
+export interface VinculacionCentral {
+  estado: 'cotizante' | 'beneficiario' | 'inactiva';
+  /** 'datacredito' | 'transunion' — quien la reporto. */
+  fuente: string;
+  detalle?: string | null;
+}
+
+export function puntajeV4VinculacionCentral(v: VinculacionCentral | null | undefined): ResultadoVariable {
+  if (!v) {
+    return noCalculable('Ninguna central reporta vinculacion a seguridad social: V4 fuera de la ponderacion (Adenda §1.2)');
   }
-  if (a.estado === 'no_verificado') {
-    return noCalculable('Auco no respondio: afiliacion a seguridad social sin verificar');
+  const valor = `${v.estado} (${v.fuente})`;
+  if (v.estado === 'cotizante') {
+    return calculada(V4_PUNTOS_AFILIADO_ACTIVO, valor, 'afiliado activo segun la central (sin verificar pension: tope 5)');
   }
-  if (a.fuentes_con_error.includes('fosyga')) {
-    return noCalculable('Auco no pudo consultar FOSYGA: afiliacion sin verificar');
+  if (v.estado === 'beneficiario') {
+    return calculada(V4_PUNTOS_BENEFICIARIO, valor, 'beneficiario activo segun la central');
   }
-  const ss = a.seguridad_social;
-  const estado = ss?.estado ?? null;
-  if (!ss || estado !== 'ACTIVO') {
-    return calculada(0, estado ?? 'sin registro', 'sin registro activo en BDUA — revision manual obligatoria (§4.4)');
-  }
-  const tipo = ss.tipo_afiliado ?? '';
-  const regimen = ss.regimen ?? '';
-  const valor = `${tipo || 's/d'}/${regimen || 's/d'}`;
-  if (tipo === 'COTIZANTE' || regimen === 'SUBSIDIADO') {
-    return calculada(V4_PUNTOS_AFILIADO_ACTIVO, valor, 'afiliado activo a salud (sin verificar pension: tope 5)');
-  }
-  return calculada(V4_PUNTOS_BENEFICIARIO, valor, 'beneficiario activo');
+  return calculada(0, valor, 'sin vinculacion activa segun la central — revision manual obligatoria (§4.4)');
 }
 
 // ============================================================
