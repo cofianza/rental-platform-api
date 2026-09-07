@@ -23,8 +23,14 @@ describe('expediente-state-machine', () => {
       }
     });
 
-    it('debe tener 10 transiciones definidas', () => {
-      expect(TRANSITION_MAP).toHaveLength(10);
+    // 10 del flujo + 5 "Cancelar expediente" (borrador, en_revision,
+    // informacion_incompleta, condicionado, aprobado -> cerrado; Mario,
+    // 5-may-2026). rechazado -> cerrado es el unico cierre que no es abandono.
+    it('debe tener 15 transiciones definidas (10 del flujo + 5 cancelaciones)', () => {
+      expect(TRANSITION_MAP).toHaveLength(15);
+      expect(TRANSITION_MAP.filter((t) => t.label === 'Cancelar expediente').map((t) => t.from)).toEqual([
+        'borrador', 'en_revision', 'informacion_incompleta', 'condicionado', 'aprobado',
+      ]);
     });
 
     it('todas las transiciones deben tener label no vacio', () => {
@@ -105,14 +111,15 @@ describe('expediente-state-machine', () => {
 
   // AC #4: Transiciones disponibles con labels
   describe('getAvailableTransitions', () => {
-    it('en_revision debe retornar 4 transiciones con labels', () => {
+    it('en_revision debe retornar 5 transiciones con labels (4 del flujo + cancelar)', () => {
       const transitions = getAvailableTransitions('en_revision');
-      expect(transitions).toHaveLength(4);
+      expect(transitions).toHaveLength(5);
       const estados = transitions.map((t) => t.estado);
       expect(estados).toContain('informacion_incompleta');
       expect(estados).toContain('aprobado');
       expect(estados).toContain('rechazado');
       expect(estados).toContain('condicionado');
+      expect(transitions).toContainEqual({ estado: 'cerrado', label: 'Cancelar expediente' });
       // Verificar que todas tienen label
       for (const t of transitions) {
         expect(t.label).toBeDefined();
@@ -120,27 +127,33 @@ describe('expediente-state-machine', () => {
       }
     });
 
-    it('borrador debe retornar solo en_revision con label', () => {
+    it('borrador debe retornar en_revision y cancelar', () => {
       const transitions = getAvailableTransitions('borrador');
-      expect(transitions).toEqual([{ estado: 'en_revision', label: 'Enviar a revision' }]);
+      expect(transitions).toEqual([
+        { estado: 'en_revision', label: 'Enviar a revision' },
+        { estado: 'cerrado', label: 'Cancelar expediente' },
+      ]);
     });
 
     it('cerrado debe retornar array vacio (terminal)', () => {
       expect(getAvailableTransitions('cerrado')).toEqual([]);
     });
 
-    it('condicionado debe retornar aprobado y rechazado con labels', () => {
+    it('condicionado debe retornar aprobado, rechazado y cancelar', () => {
       const transitions = getAvailableTransitions('condicionado');
-      expect(transitions).toHaveLength(2);
       expect(transitions).toEqual([
         { estado: 'aprobado', label: 'Aprobar expediente' },
         { estado: 'rechazado', label: 'Rechazar expediente' },
+        { estado: 'cerrado', label: 'Cancelar expediente' },
       ]);
     });
 
-    it('informacion_incompleta debe retornar solo en_revision', () => {
+    it('informacion_incompleta debe retornar en_revision y cancelar', () => {
       const transitions = getAvailableTransitions('informacion_incompleta');
-      expect(transitions).toEqual([{ estado: 'en_revision', label: 'Reenviar a revision' }]);
+      expect(transitions).toEqual([
+        { estado: 'en_revision', label: 'Reenviar a revision' },
+        { estado: 'cerrado', label: 'Cancelar expediente' },
+      ]);
     });
 
     it('aprobado debe retornar dos opciones a cerrado: cerrar y cancelar', () => {

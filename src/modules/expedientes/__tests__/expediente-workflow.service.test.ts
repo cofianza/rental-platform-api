@@ -50,7 +50,9 @@ import {
 // Helpers
 const adminUser: AuthUser = { id: 'admin-uuid', email: 'admin@test.com', rol: 'administrador', activo: true };
 const analistaUser: AuthUser = { id: 'analista-uuid', email: 'analista@test.com', rol: 'operador_analista', activo: true };
-const otherUser: AuthUser = { id: 'other-uuid', email: 'other@test.com', rol: 'operador_analista', activo: true };
+// gerencia_consulta: ni admin/operador (que transicionan cualquier expediente),
+// ni analista asignado, ni dueño del inmueble -> FORBIDDEN.
+const otherUser: AuthUser = { id: 'other-uuid', email: 'other@test.com', rol: 'gerencia_consulta', activo: true };
 
 const mockExpediente = {
   id: 'exp-uuid',
@@ -309,16 +311,17 @@ describe('expediente-workflow.service', () => {
         estado_actual: 'borrador',
         transiciones_disponibles: [
           { estado: 'en_revision', label: 'Enviar a revision' },
+          { estado: 'cerrado', label: 'Cancelar expediente' },
         ],
       });
     });
 
-    it('debe retornar 4 transiciones con labels desde en_revision', async () => {
+    it('debe retornar 5 transiciones con labels desde en_revision', async () => {
       setupFetchExpediente({ ...mockExpediente, estado: 'en_revision' });
 
       const result = await getTransitionsForExpediente('exp-uuid');
 
-      expect(result.transiciones_disponibles).toHaveLength(4);
+      expect(result.transiciones_disponibles).toHaveLength(5);
       for (const t of result.transiciones_disponibles) {
         expect(t).toHaveProperty('estado');
         expect(t).toHaveProperty('label');

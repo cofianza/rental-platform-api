@@ -1,81 +1,122 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ============================================================
-// Mock chain builders
+// Mock de Supabase: builder encadenable + colas de resultados POR TABLA.
+//
+// El anterior armaba a mano una cadena por test (select→eq→eq→order→limit→
+// maybeSingle) y se rompia con cada `.is()` o `.or()` nuevo del servicio: 25
+// de 26 tests en rojo desde 2026-09-03, cero señal justo en el modulo que
+// custodia la evidencia legal de la firma.
+//
+// Aqui cualquier metodo de filtro devuelve el mismo builder; los terminales
+// (`maybeSingle`, `single`) y el `await` directo del builder consumen el
+// siguiente resultado de la cola DE ESA TABLA. Una tabla sin cola responde
+// `{ data: null, error: null }`: las lecturas auxiliares (perfil del
+// prospecto, estudios, timeline) no obligan a re-escribir cada test cuando el
+// servicio agrega una. Todo lo que se llamo queda en `ops` para poder afirmar
+// QUE se escribio, no solo que no exploto.
 // ============================================================
 
-const mockMaybeSingle = vi.fn();
-const mockSingle = vi.fn();
-const mockLimit = vi.fn(() => ({ maybeSingle: mockMaybeSingle, single: mockSingle }));
-const mockOrder = vi.fn(() => ({ limit: mockLimit, maybeSingle: mockMaybeSingle }));
-const mockIs = vi.fn(() => ({ limit: mockLimit, maybeSingle: mockMaybeSingle }));
-const mockEq: ReturnType<typeof vi.fn> = vi.fn((): Record<string, unknown> => ({
-  eq: mockEq,
-  single: mockSingle,
-  maybeSingle: mockMaybeSingle,
-  order: mockOrder,
-  limit: mockLimit,
-  is: mockIs,
-}));
-const mockSelect = vi.fn((_cols?: string, _opts?: Record<string, unknown>) => ({
-  eq: mockEq,
-  single: mockSingle,
-}));
-const mockInsert = vi.fn(() => ({
-  select: vi.fn(() => ({ single: mockSingle })),
-}));
-const mockUpdate = vi.fn(() => ({
-  eq: mockEq,
-}));
-const mockFrom = vi.fn((_table?: string) => ({
-  select: mockSelect,
-  insert: mockInsert,
-  update: mockUpdate,
-}));
+const { mockEnv, mockFrom, ops, queues, enqueue, mockEnviarMensaje, mockAssertAccess, mockEstudioYaCobrado, mockOnHabeas, mockNotificarUsuario, mockNotificarResponsable } = vi.hoisted(() => {
+  type Res = Record<string, unknown>;
+  const queues = new Map<string, Res[]>();
+  const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
+  const next = (table: string): Res => {
+    const q = queues.get(table);
+    return q && q.length ? q.shift()! : { data: null, error: null, count: null };
+  };
+  const PASSTHROUGH = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'or', 'lt', 'gt', 'gte', 'lte', 'order', 'limit'];
+  const chainFor = (table: string) => {
+    const chain: Record<string, unknown> = {};
+    for (const m of PASSTHROUGH) {
+      chain[m] = (...args: unknown[]) => {
+        ops.push({ table, method: m, args });
+        return chain;
+      };
+    }
+    chain.maybeSingle = async () => next(table);
+    chain.single = async () => next(table);
+    chain.then = (resolve: (v: Res) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(next(table)).then(resolve, reject);
+    return chain;
+  };
+  const mockFrom = vi.fn((table: string) => chainFor(table));
+  const enqueue = (table: string, ...items: Res[]) => {
+    queues.set(table, [...(queues.get(table) ?? []), ...items]);
+  };
+  return {
+    mockEnv: {
+      FRONTEND_URL: 'http://localhost:3000',
+      AUTORIZACION_VIGENCIA_MESES: 12,
+      AUCO_BIOMETRIA_ENABLED: false,
+      AUCO_BIOMETRIA_UMBRAL_SIMILITUD: 70,
+      AUCO_BIOMETRIA_TIMEOUT_MS: 20000,
+      AUCO_API_URL: 'https://dev.auco.ai/v1.5/ext',
+      AUCO_PUBLIC_KEY: 'puk_x',
+      AUCO_PRIVATE_KEY: 'prk_x',
+      AUCO_SENDER_EMAIL: 'qa@cofianza.co',
+      BURO_REQUEST_TIMEOUT_MS: 8000,
+      AUCO_BACKGROUND_CHECK_ENABLED: false,
+      AUCO_BACKGROUND_TIMEOUT_MS: 90000,
+    },
+    mockFrom,
+    ops,
+    queues,
+    enqueue,
+    mockEnviarMensaje: vi.fn(async () => ({ estado: 'enviado' })),
+    mockAssertAccess: vi.fn(async () => undefined),
+    mockEstudioYaCobrado: vi.fn(async () => false),
+    mockOnHabeas: vi.fn(async () => undefined),
+    mockNotificarUsuario: vi.fn(async () => undefined),
+    mockNotificarResponsable: vi.fn(async () => undefined),
+  };
+});
 
-// ============================================================
-// Module mocks
-// ============================================================
-
-vi.mock('@/lib/supabase', () => ({
-  supabase: {
-    from: (table: string) => mockFrom(table),
-  },
-}));
-
-vi.mock('@/lib/logger', () => ({
-  logger: {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
+vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
+vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/lib/auditLog', () => ({
   logAudit: vi.fn(),
   AUDIT_ACTIONS: {
     AUTORIZACION_ENLACE_SENT: 'autorizacion_enlace_sent',
     AUTORIZACION_FIRMADA: 'autorizacion_firmada',
     AUTORIZACION_REVOCADA: 'autorizacion_revocada',
+    AUTORIZACION_BIOMETRIA: 'autorizacion_biometria',
   },
-  AUDIT_ENTITIES: {
-    AUTORIZACION: 'autorizacion',
-  },
+  AUDIT_ENTITIES: { AUTORIZACION: 'autorizacion' },
 }));
+vi.mock('@/config', () => ({ env: mockEnv }));
 
 const mockSendAutorizacionEmail = vi.fn().mockResolvedValue(undefined);
 const mockSendOtpEmail = vi.fn().mockResolvedValue(undefined);
-
 vi.mock('@/lib/email', () => ({
   sendAutorizacionEmail: (...args: unknown[]) => mockSendAutorizacionEmail(...args),
   sendOtpEmail: (...args: unknown[]) => mockSendOtpEmail(...args),
 }));
-
-vi.mock('@/config', () => ({
-  env: {
-    FRONTEND_URL: 'http://localhost:3000',
+vi.mock('@/modules/whatsapp/whatsapp.service', () => ({
+  enviarMensaje: (...args: unknown[]) => mockEnviarMensaje(...args),
+}));
+vi.mock('@/modules/whatsapp/templates', () => ({
+  WHATSAPP_TEMPLATES: {
+    AUTORIZACION_LINK: { id: 'cofianza_autorizacion_link', language: 'es_CO' },
+    AUTORIZACION_OTP: { id: 'cofianza_otp_autorizacion', language: 'es_CO' },
   },
 }));
+vi.mock('@/lib/tenantScope', () => ({
+  assertExpedienteAccess: (...args: unknown[]) => mockAssertAccess(...args),
+  perfilEsDuenoDeInmueble: vi.fn(async () => true),
+}));
+vi.mock('@/modules/estudios/pago.guard', () => ({
+  estudioYaCobrado: (...args: unknown[]) => mockEstudioYaCobrado(...args),
+}));
+vi.mock('@/modules/orchestrator/orchestrator.service', () => ({
+  onHabeasDataAutorizado: (...args: unknown[]) => mockOnHabeas(...args),
+}));
+vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
+  notificarUsuario: (...args: unknown[]) => mockNotificarUsuario(...args),
+  notificarResponsableExpediente: (...args: unknown[]) => mockNotificarResponsable(...args),
+  notificarYCorreo: vi.fn(async () => undefined),
+}));
+vi.mock('@/modules/users/users.service', () => ({ listOperators: vi.fn(async () => []) }));
 
 // Import AFTER mocks
 import {
@@ -87,6 +128,7 @@ import {
   verificarOtpCode,
   revocarAutorizacion,
 } from '../autorizaciones.service';
+import { TEXTO_LEGAL, TEXTO_LEGAL_BIOMETRIA, VERSION_TERMINOS, VERSION_TERMINOS_BIOMETRIA } from '../autorizaciones.texto';
 
 // ============================================================
 // Fixtures
@@ -99,9 +141,9 @@ const TOKEN = 'a'.repeat(64);
 const FUTURE_DATE = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const PAST_DATE = new Date(Date.now() - 1000).toISOString();
 
-const mockExpedienteWithSolicitante = {
+const expedienteConSolicitante = {
   id: EXPEDIENTE_ID,
-  numero_expediente: 'EXP-2026-0001',
+  numero: 'EXP-2026-0001',
   estado: 'en_revision',
   solicitante_id: 'sol-uuid',
   solicitantes: {
@@ -109,153 +151,51 @@ const mockExpedienteWithSolicitante = {
     nombre: 'Juan',
     apellido: 'Perez',
     email: 'juan@test.com',
-    tipo_documento: 'CC',
+    telefono: null as string | null,
+    tipo_documento: 'cc',
     numero_documento: '123456789',
   },
-  inmuebles: {
-    id: 'inm-uuid',
-    direccion: 'Calle 1 #2-3',
-    ciudad: 'Bogota',
-    barrio: 'Centro',
-  },
+  inmuebles: { id: 'inm-uuid', direccion: 'Calle 1 #2-3', ciudad: 'Bogota', barrio: 'Centro', propietario_id: null, inmobiliaria_id: null },
 };
 
-const mockAutorizacionPendiente = {
+const autorizacionPendiente = {
   id: AUTORIZACION_ID,
   estado: 'pendiente',
   token_expiracion: FUTURE_DATE,
   texto_autorizado: 'Texto legal de autorizacion',
-  version_terminos: '1.0',
+  version_terminos: '2.0',
   metodo_firma: null,
-  solicitante_id: 'sol-uuid',
-  solicitantes: {
-    nombre: 'Juan',
-    apellido: 'Perez',
-    email: 'juan@test.com',
-  },
-  expedientes: {
-    numero_expediente: 'EXP-2026-0001',
-    inmuebles: {
-      direccion: 'Calle 1 #2-3',
-      ciudad: 'Bogota',
-      barrio: 'Centro',
-    },
-  },
+  solicitantes: { nombre: 'Juan', apellido: 'Perez', telefono: '+573001112233', tipo_documento: 'cc', numero_documento: '123456789' },
+  // OJO: el servicio lee `expedientes.numero` y lo devuelve como numero_expediente.
+  expedientes: { numero: 'EXP-2026-0001', inmuebles: { direccion: 'Calle 1 #2-3', ciudad: 'Bogota', barrio: 'Centro' } },
 };
 
-// ============================================================
-// Helper: setup from() calls sequentially
-// ============================================================
+/** Fila que lee firmarAutorizacion. Sin expediente: no dispara hooks. */
+const paraFirmar = {
+  id: AUTORIZACION_ID,
+  estado: 'pendiente',
+  token_expiracion: FUTURE_DATE,
+  texto_autorizado: 'Texto legal',
+  solicitante_id: 'sol-uuid',
+  expediente_id: null as string | null,
+  solicitantes: { tipo_documento: 'cc', numero_documento: '123456789' },
+};
 
-function setupFromCall(returnValue: Record<string, unknown>) {
-  mockFrom.mockReturnValueOnce(returnValue);
-}
+const otpVerificado = { id: 'otp-uuid', codigo: '123456', expira_en: FUTURE_DATE, verificado: true };
+const CANVAS = { metodo_firma: 'canvas' as const, datos_firma: 'data:image/png;base64,AAA' };
+const OTP = { metodo_firma: 'otp' as const, codigo_otp: '123456' };
 
-function setupSelectSingle(data: unknown, error: unknown = null) {
-  return {
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data, error }),
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({ data, error }),
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data, error }),
-          }),
-          order: vi.fn().mockReturnValue({
-            limit: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-            }),
-            maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-          }),
-          is: vi.fn().mockReturnValue({
-            limit: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-            }),
-          }),
-          limit: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-          }),
-        }),
-      }),
-    }),
-  };
-}
-
-function setupSelectMaybeSingle(data: unknown, error: unknown = null) {
-  return {
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        order: vi.fn().mockReturnValue({
-          limit: vi.fn().mockReturnValue({
-            maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-          }),
-        }),
-        eq: vi.fn().mockReturnValue({
-          order: vi.fn().mockReturnValue({
-            limit: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-            }),
-          }),
-          is: vi.fn().mockReturnValue({
-            limit: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-            }),
-          }),
-        }),
-        maybeSingle: vi.fn().mockResolvedValue({ data, error }),
-      }),
-    }),
-  };
-}
-
-function setupUpdate(error: unknown = null) {
-  return {
-    update: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error }),
-      }),
-    }),
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error }),
-      }),
-    }),
-  };
-}
-
-function setupInsertWithSelect(data: unknown, error: unknown = null) {
-  return {
-    insert: vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data, error }),
-      }),
-    }),
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data, error }),
-      }),
-    }),
-  };
-}
-
-function setupInsertNoSelect(error: unknown = null) {
-  return {
-    insert: vi.fn().mockResolvedValue({ error }),
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data: null, error }),
-      }),
-    }),
-  };
-}
-
-// ============================================================
-// Tests
-// ============================================================
+const opsDe = (table: string, method: string) => ops.filter((o) => o.table === table && o.method === method);
 
 describe('autorizaciones.service', () => {
   beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
     vi.clearAllMocks();
+    mockEnv.AUCO_BIOMETRIA_ENABLED = false;
+    mockEnviarMensaje.mockResolvedValue({ estado: 'enviado' });
+    mockEstudioYaCobrado.mockResolvedValue(false);
+    mockSendOtpEmail.mockResolvedValue(undefined);
   });
 
   // ============================================================
@@ -264,26 +204,44 @@ describe('autorizaciones.service', () => {
 
   describe('getAutorizacionForExpediente', () => {
     it('debe retornar null si no hay autorizacion', async () => {
-      // 1st call: expedientes check
-      setupFromCall(setupSelectSingle({ id: EXPEDIENTE_ID }));
-      // 2nd call: autorizaciones query
-      setupFromCall(setupSelectMaybeSingle(null));
+      enqueue('expedientes', { data: { id: EXPEDIENTE_ID } });
+      enqueue('autorizaciones_habeas_data', { data: null });
 
-      const result = await getAutorizacionForExpediente(EXPEDIENTE_ID);
+      const result = await getAutorizacionForExpediente(EXPEDIENTE_ID, USER_ID, 'administrador');
       expect(result).toBeNull();
+      expect(mockAssertAccess).toHaveBeenCalledWith(EXPEDIENTE_ID, USER_ID, 'administrador');
       expect(mockFrom).toHaveBeenCalledWith('expedientes');
       expect(mockFrom).toHaveBeenCalledWith('autorizaciones_habeas_data');
+      // Solo la fila del TITULAR: la del co-arrendatario comparte expediente_id.
+      expect(opsDe('autorizaciones_habeas_data', 'is')[0].args).toEqual(['coarrendatario_id', null]);
     });
 
     it('debe lanzar error si expediente no existe', async () => {
-      setupFromCall(setupSelectSingle(null, { message: 'not found' }));
-
-      await expect(
-        getAutorizacionForExpediente(EXPEDIENTE_ID),
-      ).rejects.toMatchObject({
+      enqueue('expedientes', { data: null, error: { message: 'not found' } });
+      await expect(getAutorizacionForExpediente(EXPEDIENTE_ID)).rejects.toMatchObject({
         statusCode: 404,
         errorCode: 'EXPEDIENTE_NOT_FOUND',
       });
+    });
+
+    it('a la inmobiliaria NO le muestra el ingreso declarado (§8.2), a Cofianza si', async () => {
+      const fila = { id: AUTORIZACION_ID, estado: 'autorizado' };
+      const perfil = { identidad_confirmada: true, situacion_laboral: 'empleado', donde_labora: 'Acme', ingreso_declarado_cop: 5_000_000, presentacion: 'solo' };
+
+      enqueue('expedientes', { data: { id: EXPEDIENTE_ID } });
+      enqueue('autorizaciones_habeas_data', { data: fila });
+      enqueue('autorizacion_perfil_prospecto', { data: perfil });
+      const agencia = await getAutorizacionForExpediente(EXPEDIENTE_ID, USER_ID, 'inmobiliaria');
+      expect(agencia).toMatchObject({ id: AUTORIZACION_ID, perfil_prospecto: { identidad_confirmada: true, presentacion: 'solo' } });
+      expect(agencia?.perfil_prospecto).not.toHaveProperty('ingreso_declarado_cop');
+      expect(agencia?.perfil_prospecto).not.toHaveProperty('situacion_laboral');
+
+      enqueue('expedientes', { data: { id: EXPEDIENTE_ID } });
+      enqueue('autorizaciones_habeas_data', { data: fila });
+      enqueue('autorizacion_perfil_prospecto', { data: perfil });
+      const cofianza = await getAutorizacionForExpediente(EXPEDIENTE_ID, USER_ID, 'administrador');
+      expect(cofianza?.perfil_prospecto).toMatchObject({ ingreso_declarado_cop: 5_000_000, situacion_laboral: 'empleado', donde_labora: 'Acme' });
+      expect(cofianza?.perfil_prospecto).toHaveProperty('discrepancia_ingreso');
     });
   });
 
@@ -293,19 +251,17 @@ describe('autorizaciones.service', () => {
 
   describe('enviarEnlaceAutorizacion', () => {
     it('debe crear autorizacion y enviar email', async () => {
-      // 1st from: expedientes with joins
-      setupFromCall(setupSelectSingle(mockExpedienteWithSolicitante));
-      // 2nd from: update existing pending → expirado
-      setupFromCall(setupUpdate());
-      // 3rd from: insert new autorizacion
-      setupFromCall(setupInsertWithSelect({ id: AUTORIZACION_ID }));
+      enqueue('expedientes', { data: expedienteConSolicitante });
+      enqueue(
+        'autorizaciones_habeas_data',
+        { data: null },                      // ¿ya hay una firmada vigente? no
+        { error: null },                     // expirar pendientes anteriores
+        { data: { id: AUTORIZACION_ID } },   // insert
+      );
 
       const result = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, '127.0.0.1');
 
-      expect(result).toMatchObject({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-      });
+      expect(result).toMatchObject({ id: AUTORIZACION_ID, estado: 'pendiente' });
       expect(result.token_expiracion).toBeDefined();
       expect(mockSendAutorizacionEmail).toHaveBeenCalledWith(
         'juan@test.com',
@@ -313,29 +269,65 @@ describe('autorizaciones.service', () => {
         expect.stringContaining('http://localhost:3000/autorizar/'),
         48,
       );
+      // Sin celular no hay WhatsApp.
+      expect(mockEnviarMensaje).not.toHaveBeenCalled();
+      // §8.4: se congela el texto y la version que de verdad se presentaron.
+      const insert = opsDe('autorizaciones_habeas_data', 'insert')[0].args[0] as Record<string, unknown>;
+      expect(insert).toMatchObject({ estado: 'pendiente', texto_autorizado: TEXTO_LEGAL, version_terminos: VERSION_TERMINOS });
+      expect(String(insert.token)).toHaveLength(64);
+      // Las pendientes anteriores DEL TITULAR se expiran (no las del co-arrendatario).
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
+      expect(opsDe('autorizaciones_habeas_data', 'is').some((o) => o.args[0] === 'coarrendatario_id')).toBe(true);
+    });
+
+    it('manda tambien el enlace por WhatsApp cuando hay celular', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, telefono: '+573001112233' } } });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+
+      expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
+        to: '+573001112233',
+        template_id: 'cofianza_autorizacion_link',
+        variables: ['Juan', expect.stringContaining('/autorizar/')],
+      }));
+    });
+
+    it('con la biometria encendida presenta y congela el texto 3.0-biometria', async () => {
+      mockEnv.AUCO_BIOMETRIA_ENABLED = true;
+      enqueue('expedientes', { data: expedienteConSolicitante });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+
+      const insert = opsDe('autorizaciones_habeas_data', 'insert')[0].args[0] as Record<string, unknown>;
+      expect(insert).toMatchObject({ texto_autorizado: TEXTO_LEGAL_BIOMETRIA, version_terminos: VERSION_TERMINOS_BIOMETRIA });
+      expect(insert.texto_autorizado).not.toBe(TEXTO_LEGAL);
+    });
+
+    it('no re-crea el enlace si ya hay una firma vigente (AUTORIZACION_YA_FIRMADA)', async () => {
+      enqueue('expedientes', { data: expedienteConSolicitante });
+      enqueue('autorizaciones_habeas_data', { data: { id: 'firmada-uuid' } });
+
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
+        statusCode: 400,
+        errorCode: 'AUTORIZACION_YA_FIRMADA',
+      });
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toHaveLength(0);
+      expect(mockSendAutorizacionEmail).not.toHaveBeenCalled();
     });
 
     it('debe lanzar error si expediente no existe', async () => {
-      setupFromCall(setupSelectSingle(null, { message: 'not found' }));
-
-      await expect(
-        enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID),
-      ).rejects.toMatchObject({
+      enqueue('expedientes', { data: null, error: { message: 'not found' } });
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
         statusCode: 404,
         errorCode: 'EXPEDIENTE_NOT_FOUND',
       });
     });
 
     it('debe lanzar error si solicitante no tiene email', async () => {
-      const expSinEmail = {
-        ...mockExpedienteWithSolicitante,
-        solicitantes: { ...mockExpedienteWithSolicitante.solicitantes, email: '' },
-      };
-      setupFromCall(setupSelectSingle(expSinEmail));
-
-      await expect(
-        enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID),
-      ).rejects.toMatchObject({
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, email: '' } } });
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'SOLICITANTE_SIN_EMAIL',
       });
@@ -347,8 +339,8 @@ describe('autorizaciones.service', () => {
   // ============================================================
 
   describe('getAutorizacionByToken', () => {
-    it('debe retornar datos publicos para token valido', async () => {
-      setupFromCall(setupSelectSingle(mockAutorizacionPendiente));
+    it('debe retornar datos publicos para token valido, con PII minimizada', async () => {
+      enqueue('autorizaciones_habeas_data', { data: autorizacionPendiente });
 
       const result = await getAutorizacionByToken(TOKEN);
 
@@ -356,46 +348,45 @@ describe('autorizaciones.service', () => {
         id: AUTORIZACION_ID,
         estado: 'pendiente',
         texto_legal: 'Texto legal de autorizacion',
-        solicitante: { nombre: 'Juan', apellido: 'Perez' },
-        expediente: {
-          numero_expediente: 'EXP-2026-0001',
-          inmueble: { ciudad: 'Bogota' },
-        },
+        version_terminos: '2.0',
+        biometria: { requerida: false, estado: null },
+        solicitante: { nombre: 'Juan', apellido: 'Perez', tipo_documento: 'cc', numero_documento_masked: '••••6789', telefono_masked: '••• ••33' },
+        expediente: { numero_expediente: 'EXP-2026-0001', inmueble: { ciudad: 'Bogota' } },
       });
+      // Ni el email ni el documento completo viajan al portador del enlace.
+      expect(JSON.stringify(result)).not.toContain('123456789');
+      expect(JSON.stringify(result)).not.toContain('@');
     });
 
     it('debe lanzar error si token no existe', async () => {
-      setupFromCall(setupSelectSingle(null, { code: 'PGRST116' }));
-
-      await expect(
-        getAutorizacionByToken(TOKEN),
-      ).rejects.toMatchObject({
+      enqueue('autorizaciones_habeas_data', { data: null });
+      await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({
         statusCode: 404,
         errorCode: 'AUTORIZACION_NOT_FOUND',
       });
     });
 
-    it('debe lanzar error si token expirado', async () => {
-      const expirada = { ...mockAutorizacionPendiente, token_expiracion: PAST_DATE };
-      setupFromCall(setupSelectSingle(expirada));
-      // The service also updates estado to 'expirado' — need update mock
-      setupFromCall(setupUpdate());
+    it('debe lanzar error si token expirado, y marcarla expirada', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, token_expiracion: PAST_DATE } }, { error: null });
 
-      await expect(
-        getAutorizacionByToken(TOKEN),
-      ).rejects.toMatchObject({
+      await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'AUTORIZACION_EXPIRADA',
       });
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
     });
 
-    it('debe lanzar error si autorizacion ya fue firmada', async () => {
-      const firmada = { ...mockAutorizacionPendiente, estado: 'autorizado', token_expiracion: FUTURE_DATE };
-      setupFromCall(setupSelectSingle(firmada));
+    it('ya firmada -> AUTORIZACION_YA_FIRMADA (el front muestra exito idempotente)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, estado: 'autorizado' } });
+      await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({
+        statusCode: 400,
+        errorCode: 'AUTORIZACION_YA_FIRMADA',
+      });
+    });
 
-      await expect(
-        getAutorizacionByToken(TOKEN),
-      ).rejects.toMatchObject({
+    it('revocada -> AUTORIZACION_ESTADO_INVALIDO', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, estado: 'revocado' } });
+      await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'AUTORIZACION_ESTADO_INVALIDO',
       });
@@ -407,112 +398,124 @@ describe('autorizaciones.service', () => {
   // ============================================================
 
   describe('firmarAutorizacion', () => {
-    it('debe firmar con metodo canvas exitosamente', async () => {
-      // 1st from: get autorizacion by token
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-        texto_autorizado: 'Texto legal',
-        solicitante_id: 'sol-uuid',
-      }));
-      // 2nd from: update to autorizado
-      setupFromCall(setupUpdate());
+    // La prueba de posesion es OBLIGATORIA para TODA firma de la ruta publica.
+    // Antes `canvas` sin OTP firmaba: con el enlace reenviado (Flujo §12)
+    // cualquiera congelaba el documento del titular y disparaba la consulta
+    // FACTURABLE al buro. Este test existe para que nadie lo vuelva a
+    // condicionar al metodo.
+    it('canvas SIN OTP verificado NO firma (OTP_NO_VERIFICADO)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar });
+      enqueue('autorizacion_otps', { data: null });
 
-      const result = await firmarAutorizacion(
-        TOKEN,
-        { metodo_firma: 'canvas', datos_firma: 'data:image/png;base64,AAA' },
-        '192.168.1.1',
-        'Mozilla/5.0',
-      );
-
-      expect(result).toMatchObject({
-        estado: 'autorizado',
+      await expect(firmarAutorizacion(TOKEN, CANVAS, '1.1.1.1', 'UA')).rejects.toMatchObject({
+        statusCode: 400,
+        errorCode: 'OTP_NO_VERIFICADO',
       });
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+    });
+
+    it('debe firmar con metodo canvas cuando hay OTP verificado', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
+      enqueue('autorizacion_otps', { data: otpVerificado });
+
+      const result = await firmarAutorizacion(TOKEN, CANVAS, '192.168.1.1', 'Mozilla/5.0');
+
+      expect(result).toMatchObject({ estado: 'autorizado', pago_requerido: false });
       expect(result.hash_documento).toHaveLength(64); // SHA-256 hex
       expect(result.autorizado_en).toBeDefined();
+
+      // §8.4: evidencia congelada en la fila, y la transicion es atomica
+      // (update ... eq estado='pendiente').
+      const update = opsDe('autorizaciones_habeas_data', 'update')[0].args[0] as Record<string, unknown>;
+      expect(update).toMatchObject({
+        estado: 'autorizado',
+        metodo_firma: 'canvas',
+        ip_autorizacion: '192.168.1.1',
+        user_agent: 'Mozilla/5.0',
+        numero_documento_aceptante: '123456789',
+        tipo_documento_aceptante: 'cc',
+        vigencia_meses: 12,
+      });
+      expect(update.vigente_hasta).toBeDefined();
+      expect(opsDe('autorizaciones_habeas_data', 'eq').some((o) => o.args[0] === 'estado' && o.args[1] === 'pendiente')).toBe(true);
     });
 
     it('debe firmar con metodo OTP cuando hay OTP verificado', async () => {
-      // 1st from: get autorizacion
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-        texto_autorizado: 'Texto legal',
-        solicitante_id: 'sol-uuid',
-      }));
-      // 2nd from: check verified OTP
-      setupFromCall(setupSelectMaybeSingle({ id: 'otp-uuid', codigo: '123456', verificado: true }));
-      // 3rd from: update to autorizado
-      setupFromCall(setupUpdate());
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
+      enqueue('autorizacion_otps', { data: otpVerificado });
 
-      const result = await firmarAutorizacion(
-        TOKEN,
-        { metodo_firma: 'otp', codigo_otp: '123456' },
-        '192.168.1.1',
-      );
-
+      const result = await firmarAutorizacion(TOKEN, OTP, '192.168.1.1');
       expect(result.estado).toBe('autorizado');
       expect(result.hash_documento).toHaveLength(64);
     });
 
-    it('debe lanzar error si OTP no verificado', async () => {
-      // 1st from: get autorizacion
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-        texto_autorizado: 'Texto legal',
-        solicitante_id: 'sol-uuid',
-      }));
-      // 2nd from: no verified OTP found
-      setupFromCall(setupSelectMaybeSingle(null));
+    it('OTP verificado pero caducado -> OTP_EXPIRADO', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar });
+      enqueue('autorizacion_otps', { data: { ...otpVerificado, expira_en: PAST_DATE } });
 
-      await expect(
-        firmarAutorizacion(TOKEN, { metodo_firma: 'otp', codigo_otp: '123456' }),
-      ).rejects.toMatchObject({
+      await expect(firmarAutorizacion(TOKEN, OTP)).rejects.toMatchObject({
         statusCode: 400,
-        errorCode: 'OTP_NO_VERIFICADO',
+        errorCode: 'OTP_EXPIRADO',
       });
     });
 
-    it('debe lanzar error si autorizacion ya procesada', async () => {
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'autorizado',
-        token_expiracion: FUTURE_DATE,
-      }));
+    it('doble submit: el segundo no re-firma ni re-dispara nada (AUTORIZACION_YA_FIRMADA)', async () => {
+      // El UPDATE condicionado no afecta filas; la relectura dice 'autorizado'.
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [] }, { data: { estado: 'autorizado' } });
+      enqueue('autorizacion_otps', { data: otpVerificado });
 
-      await expect(
-        firmarAutorizacion(TOKEN, { metodo_firma: 'canvas', datos_firma: 'data:image/png;base64,AAA' }),
-      ).rejects.toMatchObject({
+      await expect(firmarAutorizacion(TOKEN, OTP)).rejects.toMatchObject({
         statusCode: 400,
-        errorCode: 'AUTORIZACION_ESTADO_INVALIDO',
+        errorCode: 'AUTORIZACION_YA_FIRMADA',
       });
+      expect(mockOnHabeas).not.toHaveBeenCalled();
+    });
+
+    it('con expediente: dispara el orquestador y avisa al gestor (§9)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID } }, { data: [{ id: AUTORIZACION_ID }] });
+      enqueue('autorizacion_otps', { data: otpVerificado });
+      enqueue('expedientes', { data: { numero: 'EXP-2026-0001', inmuebles: { propietario_id: 'prop-1', direccion: 'Calle 1' }, solicitantes: { nombre: 'Juan', apellido: 'Perez' } } });
+
+      const result = await firmarAutorizacion(TOKEN, OTP);
+      expect(result.estado).toBe('autorizado');
+
+      // Los dos hooks son fire-and-forget detras de un import() dinamico:
+      // se esperan, no se asume que ya corrieron al volver la promesa.
+      await vi.waitFor(() => expect(mockOnHabeas).toHaveBeenCalled());
+      await vi.waitFor(() => expect(mockNotificarResponsable).toHaveBeenCalled());
+      expect(mockOnHabeas).toHaveBeenCalledWith(expect.objectContaining({ expedienteId: EXPEDIENTE_ID, autorizacionId: AUTORIZACION_ID }));
+      expect(mockNotificarUsuario).toHaveBeenCalledWith(expect.objectContaining({ userId: 'prop-1', tipo: 'autorizacion.firmada' }));
+      expect(mockNotificarResponsable).toHaveBeenCalledWith(expect.objectContaining({ expedienteId: EXPEDIENTE_ID, tipo: 'autorizacion.firmada' }));
+    });
+
+    it('§6.3 opcion C: pago_requerido=true solo si el estudio no esta pagado y le toca al arrendatario', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID } }, { data: [{ id: AUTORIZACION_ID }] });
+      enqueue('autorizacion_otps', { data: otpVerificado });
+      enqueue('estudios', { data: { pago_por: 'arrendatario' } });
+
+      const result = await firmarAutorizacion(TOKEN, OTP);
+      expect(result.pago_requerido).toBe(true);
+    });
+
+    it('ya firmada -> AUTORIZACION_YA_FIRMADA; revocada -> AUTORIZACION_NO_VIGENTE', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, estado: 'autorizado' } });
+      await expect(firmarAutorizacion(TOKEN, CANVAS)).rejects.toMatchObject({ statusCode: 400, errorCode: 'AUTORIZACION_YA_FIRMADA' });
+
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, estado: 'revocado' } });
+      await expect(firmarAutorizacion(TOKEN, CANVAS)).rejects.toMatchObject({ statusCode: 400, errorCode: 'AUTORIZACION_NO_VIGENTE' });
     });
 
     it('debe lanzar error si token expirado', async () => {
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: PAST_DATE,
-      }));
-
-      await expect(
-        firmarAutorizacion(TOKEN, { metodo_firma: 'canvas', datos_firma: 'data:image/png;base64,AAA' }),
-      ).rejects.toMatchObject({
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, token_expiracion: PAST_DATE } });
+      await expect(firmarAutorizacion(TOKEN, CANVAS)).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'AUTORIZACION_EXPIRADA',
       });
     });
 
     it('debe lanzar error si autorizacion no encontrada', async () => {
-      setupFromCall(setupSelectSingle(null, { message: 'not found' }));
-
-      await expect(
-        firmarAutorizacion(TOKEN, { metodo_firma: 'canvas', datos_firma: 'data:image/png;base64,AAA' }),
-      ).rejects.toMatchObject({
+      enqueue('autorizaciones_habeas_data', { data: null });
+      await expect(firmarAutorizacion(TOKEN, CANVAS)).rejects.toMatchObject({
         statusCode: 404,
         errorCode: 'AUTORIZACION_NOT_FOUND',
       });
@@ -524,69 +527,73 @@ describe('autorizaciones.service', () => {
   // ============================================================
 
   describe('enviarOtpCode', () => {
-    it('debe generar y enviar OTP exitosamente', async () => {
-      // 1st from: get autorizacion with solicitante
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-        solicitantes: { nombre: 'Juan', apellido: 'Perez', email: 'juan@test.com' },
-      }));
-      // 2nd from: check cooldown — no previous OTP
-      setupFromCall(setupSelectMaybeSingle(null));
-      // 3rd from: insert OTP
-      setupFromCall(setupInsertNoSelect());
+    const paraOtp = (telefono: string | null = null) => ({
+      id: AUTORIZACION_ID,
+      estado: 'pendiente',
+      token_expiracion: FUTURE_DATE,
+      solicitantes: { nombre: 'Juan', apellido: 'Perez', email: 'juan@test.com', telefono },
+    });
+
+    it('debe generar y enviar OTP por correo', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraOtp() });
+      enqueue(
+        'autorizacion_otps',
+        { data: null },              // cooldown: sin OTP previo
+        { error: null },             // invalidar OTPs no verificados
+        { data: { id: 'otp-1' } },   // insert
+      );
 
       const result = await enviarOtpCode(TOKEN);
 
-      expect(result.mensaje).toContain('Codigo OTP enviado');
+      expect(result.mensaje).toBe('Codigo OTP enviado al correo del solicitante');
       expect(result.expira_en).toBeDefined();
-      expect(mockSendOtpEmail).toHaveBeenCalledWith(
-        'juan@test.com',
-        'Juan Perez',
-        expect.stringMatching(/^\d{6}$/),
-      );
+      expect(mockSendOtpEmail).toHaveBeenCalledWith('juan@test.com', 'Juan Perez', expect.stringMatching(/^\d{6}$/));
+      expect(mockEnviarMensaje).not.toHaveBeenCalled();
+      // Un solo codigo activo a la vez.
+      expect(opsDe('autorizacion_otps', 'update')).toHaveLength(1);
+      expect(opsDe('autorizacion_otps', 'insert')[0].args[0]).toMatchObject({ autorizacion_id: AUTORIZACION_ID, codigo: expect.stringMatching(/^\d{6}$/) });
+    });
+
+    it('con celular lo manda tambien por WhatsApp como plantilla de autenticacion', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraOtp('+573001112233') });
+      enqueue('autorizacion_otps', { data: null }, { error: null }, { data: { id: 'otp-1' } });
+
+      const result = await enviarOtpCode(TOKEN);
+
+      expect(result.mensaje).toBe('Codigo OTP enviado por WhatsApp y correo');
+      expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
+        to: '+573001112233',
+        template_id: 'cofianza_otp_autorizacion',
+        is_authentication: true,
+      }));
+    });
+
+    it('si ningun canal entrega, borra el OTP y falla (OTP_DELIVERY_FAILED)', async () => {
+      mockSendOtpEmail.mockRejectedValueOnce(new Error('resend down'));
+      mockEnviarMensaje.mockResolvedValueOnce({ estado: 'fallido', error: 'meta down' });
+      enqueue('autorizaciones_habeas_data', { data: paraOtp('+573001112233') });
+      enqueue('autorizacion_otps', { data: null }, { error: null }, { data: { id: 'otp-1' } }, { error: null });
+
+      await expect(enviarOtpCode(TOKEN)).rejects.toMatchObject({ statusCode: 400, errorCode: 'OTP_DELIVERY_FAILED' });
+      expect(opsDe('autorizacion_otps', 'delete')).toHaveLength(1);
     });
 
     it('debe lanzar error si autorizacion no encontrada', async () => {
-      setupFromCall(setupSelectSingle(null, { message: 'not found' }));
-
-      await expect(enviarOtpCode(TOKEN)).rejects.toMatchObject({
-        statusCode: 404,
-        errorCode: 'AUTORIZACION_NOT_FOUND',
-      });
+      enqueue('autorizaciones_habeas_data', { data: null });
+      await expect(enviarOtpCode(TOKEN)).rejects.toMatchObject({ statusCode: 404, errorCode: 'AUTORIZACION_NOT_FOUND' });
     });
 
-    it('debe lanzar error si autorizacion ya procesada', async () => {
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'autorizado',
-        token_expiracion: FUTURE_DATE,
-        solicitantes: { nombre: 'Juan', apellido: 'Perez', email: 'juan@test.com' },
-      }));
-
-      await expect(enviarOtpCode(TOKEN)).rejects.toMatchObject({
-        statusCode: 400,
-        errorCode: 'AUTORIZACION_ESTADO_INVALIDO',
-      });
+    it('ya firmada -> AUTORIZACION_YA_FIRMADA', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraOtp(), estado: 'autorizado' } });
+      await expect(enviarOtpCode(TOKEN)).rejects.toMatchObject({ statusCode: 400, errorCode: 'AUTORIZACION_YA_FIRMADA' });
     });
 
     it('debe lanzar error si cooldown activo', async () => {
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-        solicitantes: { nombre: 'Juan', apellido: 'Perez', email: 'juan@test.com' },
-      }));
-      // Recent OTP created 10 seconds ago
-      setupFromCall(setupSelectMaybeSingle({
-        created_at: new Date(Date.now() - 10 * 1000).toISOString(),
-      }));
+      enqueue('autorizaciones_habeas_data', { data: paraOtp() });
+      enqueue('autorizacion_otps', { data: { created_at: new Date(Date.now() - 10 * 1000).toISOString() } });
 
-      await expect(enviarOtpCode(TOKEN)).rejects.toMatchObject({
-        statusCode: 429,
-        errorCode: 'OTP_COOLDOWN',
-      });
+      await expect(enviarOtpCode(TOKEN)).rejects.toMatchObject({ statusCode: 429, errorCode: 'OTP_COOLDOWN' });
+      expect(opsDe('autorizacion_otps', 'insert')).toHaveLength(0);
     });
   });
 
@@ -595,98 +602,41 @@ describe('autorizaciones.service', () => {
   // ============================================================
 
   describe('verificarOtpCode', () => {
+    const auth = { id: AUTORIZACION_ID, estado: 'pendiente', token_expiracion: FUTURE_DATE };
+    const otpPendiente = { id: 'otp-uuid', codigo: '123456', expira_en: FUTURE_DATE, verificado: false };
+
     it('debe verificar OTP correcto', async () => {
-      // 1st from: get autorizacion
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-      }));
-      // 2nd from: find OTP
-      setupFromCall(setupSelectMaybeSingle({
-        id: 'otp-uuid',
-        codigo: '123456',
-        expira_en: FUTURE_DATE,
-        verificado: false,
-      }));
-      // 3rd from: update OTP as verified
-      setupFromCall(setupUpdate());
+      enqueue('autorizaciones_habeas_data', { data: auth });
+      enqueue('autorizacion_otps', { data: otpPendiente }, { error: null });
 
       const result = await verificarOtpCode(TOKEN, '123456');
 
-      expect(result).toMatchObject({
-        verificado: true,
-        mensaje: 'Codigo OTP verificado correctamente',
-      });
+      expect(result).toEqual({ verificado: true, mensaje: 'Codigo OTP verificado correctamente' });
+      expect(opsDe('autorizacion_otps', 'update')[0].args[0]).toEqual({ verificado: true });
     });
 
     it('debe lanzar error si codigo incorrecto', async () => {
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-      }));
-      setupFromCall(setupSelectMaybeSingle({
-        id: 'otp-uuid',
-        codigo: '123456',
-        expira_en: FUTURE_DATE,
-        verificado: false,
-      }));
-
-      await expect(
-        verificarOtpCode(TOKEN, '999999'),
-      ).rejects.toMatchObject({
-        statusCode: 400,
-        errorCode: 'OTP_INCORRECTO',
-      });
+      enqueue('autorizaciones_habeas_data', { data: auth });
+      enqueue('autorizacion_otps', { data: otpPendiente });
+      await expect(verificarOtpCode(TOKEN, '999999')).rejects.toMatchObject({ statusCode: 400, errorCode: 'OTP_INCORRECTO' });
+      expect(opsDe('autorizacion_otps', 'update')).toHaveLength(0);
     });
 
     it('debe lanzar error si OTP expirado', async () => {
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-      }));
-      setupFromCall(setupSelectMaybeSingle({
-        id: 'otp-uuid',
-        codigo: '123456',
-        expira_en: PAST_DATE,
-        verificado: false,
-      }));
-
-      await expect(
-        verificarOtpCode(TOKEN, '123456'),
-      ).rejects.toMatchObject({
-        statusCode: 400,
-        errorCode: 'OTP_EXPIRADO',
-      });
+      enqueue('autorizaciones_habeas_data', { data: auth });
+      enqueue('autorizacion_otps', { data: { ...otpPendiente, expira_en: PAST_DATE } });
+      await expect(verificarOtpCode(TOKEN, '123456')).rejects.toMatchObject({ statusCode: 400, errorCode: 'OTP_EXPIRADO' });
     });
 
     it('debe lanzar error si no hay OTP pendiente', async () => {
-      setupFromCall(setupSelectSingle({
-        id: AUTORIZACION_ID,
-        estado: 'pendiente',
-        token_expiracion: FUTURE_DATE,
-      }));
-      setupFromCall(setupSelectMaybeSingle(null));
-
-      await expect(
-        verificarOtpCode(TOKEN, '123456'),
-      ).rejects.toMatchObject({
-        statusCode: 400,
-        errorCode: 'OTP_NOT_FOUND',
-      });
+      enqueue('autorizaciones_habeas_data', { data: auth });
+      enqueue('autorizacion_otps', { data: null });
+      await expect(verificarOtpCode(TOKEN, '123456')).rejects.toMatchObject({ statusCode: 400, errorCode: 'OTP_NOT_FOUND' });
     });
 
     it('debe lanzar error si autorizacion no encontrada', async () => {
-      setupFromCall(setupSelectSingle(null, { message: 'not found' }));
-
-      await expect(
-        verificarOtpCode(TOKEN, '123456'),
-      ).rejects.toMatchObject({
-        statusCode: 404,
-        errorCode: 'AUTORIZACION_NOT_FOUND',
-      });
+      enqueue('autorizaciones_habeas_data', { data: null });
+      await expect(verificarOtpCode(TOKEN, '123456')).rejects.toMatchObject({ statusCode: 404, errorCode: 'AUTORIZACION_NOT_FOUND' });
     });
   });
 
@@ -695,38 +645,37 @@ describe('autorizaciones.service', () => {
   // ============================================================
 
   describe('revocarAutorizacion', () => {
-    it('debe revocar autorizacion activa', async () => {
-      // 1st from: find active autorizacion
-      setupFromCall(setupSelectMaybeSingle({ id: AUTORIZACION_ID, estado: 'autorizado' }));
-      // 2nd from: update to revocado
-      setupFromCall(setupUpdate());
+    const motivo = { motivo: 'Revocacion por solicitud del titular' };
 
-      const result = await revocarAutorizacion(
-        EXPEDIENTE_ID,
-        { motivo: 'Revocacion por solicitud del titular' },
-        USER_ID,
-        '127.0.0.1',
-      );
+    it('debe revocar la autorizacion activa DEL TITULAR', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { id: AUTORIZACION_ID, estado: 'autorizado' } }, { error: null });
 
-      expect(result).toMatchObject({
-        estado: 'revocado',
-      });
+      const result = await revocarAutorizacion(EXPEDIENTE_ID, motivo, USER_ID, 'administrador', '127.0.0.1');
+
+      expect(result).toMatchObject({ estado: 'revocado' });
       expect(result.fecha_revocacion).toBeDefined();
+      expect(mockAssertAccess).toHaveBeenCalledWith(EXPEDIENTE_ID, USER_ID, 'administrador');
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toMatchObject({ estado: 'revocado', motivo_revocacion: motivo.motivo });
+      // Sujeto: el titular (coarrendatario_id IS NULL), nunca "la mas reciente".
+      expect(opsDe('autorizaciones_habeas_data', 'is').some((o) => o.args[0] === 'coarrendatario_id' && o.args[1] === null)).toBe(true);
+    });
+
+    it('con coarrendatario_id revoca la del co-arrendatario, no la del titular', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { id: 'coa-auth', estado: 'autorizado' } }, { error: null });
+
+      await revocarAutorizacion(EXPEDIENTE_ID, { ...motivo, coarrendatario_id: 'coa-1' }, USER_ID);
+
+      expect(opsDe('autorizaciones_habeas_data', 'eq').some((o) => o.args[0] === 'coarrendatario_id' && o.args[1] === 'coa-1')).toBe(true);
+      expect(opsDe('autorizaciones_habeas_data', 'is').some((o) => o.args[0] === 'coarrendatario_id')).toBe(false);
     });
 
     it('debe lanzar error si no hay autorizacion activa', async () => {
-      setupFromCall(setupSelectMaybeSingle(null));
-
-      await expect(
-        revocarAutorizacion(
-          EXPEDIENTE_ID,
-          { motivo: 'Revocacion por solicitud del titular' },
-          USER_ID,
-        ),
-      ).rejects.toMatchObject({
+      enqueue('autorizaciones_habeas_data', { data: null });
+      await expect(revocarAutorizacion(EXPEDIENTE_ID, motivo, USER_ID)).rejects.toMatchObject({
         statusCode: 404,
         errorCode: 'AUTORIZACION_NOT_FOUND',
       });
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
     });
   });
 });

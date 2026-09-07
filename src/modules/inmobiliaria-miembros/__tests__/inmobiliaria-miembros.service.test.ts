@@ -92,9 +92,11 @@ describe('cambiarRolMiembro — protección del último titular', () => {
 });
 
 describe('salirDeOrg — protección del último titular', () => {
-  it('rechaza que el único owner salga (ULTIMO_OWNER)', async () => {
-    enqueue(ownerMembership, { count: 1 });
-    await expect(salirDeOrg('p-self')).rejects.toMatchObject({ errorCode: 'ULTIMO_OWNER' });
+  // Un titular no "renuncia" a su org (sea o no el único): primero transfiere
+  // la titularidad. Por eso ya no se cuenta owners aquí.
+  it('rechaza que un owner salga (TITULAR_NO_PUEDE_SALIR)', async () => {
+    enqueue(ownerMembership);
+    await expect(salirDeOrg('p-self')).rejects.toMatchObject({ errorCode: 'TITULAR_NO_PUEDE_SALIR' });
   });
 
   it('permite salir a un miembro no-titular', async () => {

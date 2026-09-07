@@ -293,6 +293,9 @@ describe('contrato-firmado.service', () => {
         nombre_archivo: 'contrato-firmado.pdf',
         tipo_mime: 'application/pdf',
         expires_in: 600,
+        // firmado_storage_key subido a mano -> 'manual' (el front no afirma
+        // "con firmas de Auco" sobre un PDF que no salió de Auco).
+        fuente: 'manual',
       });
       expect(mockCreateSignedUrl).toHaveBeenCalledWith(
         mockContratoConFirmado.firmado_storage_key,
