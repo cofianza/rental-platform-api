@@ -81,7 +81,7 @@ The Supabase client uses the **service_role key, which BYPASSES RLS**. There is 
 
 The **`inmobiliaria-miembros` module** owns the membership lifecycle (invite / accept / register / revoke / change-role / self-leave) plus an admin router (`/api/v1/admin/inmobiliarias`, `rol='administrador'`) to manage any org. Guards that protect the last titular (`contarOwnersActivos`) and free orphaned responsables (`liberarResponsablesDeMiembro`) are shared between the owner-facing and admin-facing paths.
 
-**PostgREST FK ambiguity:** `inmobiliaria_miembros`, `inmuebles`, and `expedientes` each have **two FKs to `perfiles`** — embeds must use an explicit FK hint (e.g. `perfiles!inmobiliaria_miembros_perfil_id_fkey(...)`), or the query 500s with "more than one relationship was found".
+**PostgREST FK ambiguity:** `inmobiliaria_miembros`, `inmuebles`, and `expedientes` each have **two FKs to `perfiles`** — embeds must use an explicit FK hint (e.g. `perfiles!inmobiliaria_miembros_perfil_id_fkey(...)`), or the query 500s with "more than one relationship was found". **Same between `expedientes` and `inmuebles`** since `inmuebles.reservado_por_expediente_id` (migration 20260903000005): every embed of `inmuebles` from an `expedientes` context — direct (`.from('expedientes').select('..., inmuebles(...)')`) or nested (`contratos → expedientes(..., inmuebles(...))`) — must be written `inmuebles!expedientes_inmueble_id_fkey(...)`, otherwise PostgREST answers 300 PGRST201 and the API turns it into a 500 (this took down the expediente detail in prod on 2026-09-07). Embeds of `inmuebles` from other tables (`citas`, `inmueble_interesados`…) stay unhinted.
 
 ## Tests
 

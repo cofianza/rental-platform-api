@@ -605,7 +605,7 @@ export async function getMisPagosCofianza(perfilId: string): Promise<MisPagosCof
       const { data: conts, error } = await (
         supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
       )
-        .select('id, valor_arriendo, expedientes(inmuebles(codigo, direccion), solicitantes(nombre, apellido))')
+        .select('id, valor_arriendo, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))')
         .in('expediente_id', expedienteIds)
         .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
       if (error) throw fromSupabaseError(error);
@@ -1102,7 +1102,7 @@ async function fetchContratosActivos(): Promise<ContratoActivoRow[]> {
   const { data, error } = await supabase
     .from('contratos')
     .select(
-      'id, estado, valor_arriendo, fecha_inicio, fecha_fin, expedientes(inmuebles(codigo, direccion), solicitantes(nombre, apellido))',
+      'id, estado, valor_arriendo, fecha_inicio, fecha_fin, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
     )
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
 

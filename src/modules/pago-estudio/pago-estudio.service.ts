@@ -645,7 +645,7 @@ export async function reenviarLink(
   if (userRol === 'propietario' || userRol === 'inmobiliaria') {
     const { data: expRow } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('inmuebles(propietario_id, inmobiliaria_id)')
+      .select('inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)')
       .eq('id', expedienteId)
       .maybeSingle();
     const inm = (expRow as { inmuebles?: { propietario_id: string | null; inmobiliaria_id: string | null } } | null)?.inmuebles;

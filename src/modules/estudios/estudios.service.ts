@@ -963,7 +963,7 @@ export async function sendSelfServiceLink(
   // 2. Get solicitante email from expediente (+ inmueble para tenant guard)
   const { data: expediente } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('solicitante_id, inmuebles(propietario_id, inmobiliaria_id), solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email)')
+    .select('solicitante_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email)')
     .eq('id', est.expediente_id)
     .single();
 

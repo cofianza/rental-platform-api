@@ -49,7 +49,7 @@ async function fetchExpedienteOwnership(expedienteId: string): Promise<Expedient
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
-      'id, numero, estado, solicitante_id, inmueble_id, inmuebles(propietario_id, inmobiliaria_id), solicitantes(creado_por)',
+      'id, numero, estado, solicitante_id, inmueble_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes(creado_por)',
     )
     .eq('id', expedienteId)
     .single();

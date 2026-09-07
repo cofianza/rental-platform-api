@@ -42,7 +42,7 @@ export async function assertHabilitacionPermission(params: {
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
       'id, numero, estado, source, estudio_habilitado, inmueble_id, solicitante_id, ' +
-        'inmuebles(propietario_id, inmobiliaria_id, direccion, ciudad), ' +
+        'inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, direccion, ciudad), ' +
         'solicitantes(email, nombre, apellido)',
     )
     .eq('id', expedienteId)

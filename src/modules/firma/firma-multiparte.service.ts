@@ -213,7 +213,7 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
     .select(`
       id,
       solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento),
-      inmuebles(propietario_id, inmobiliaria_id)
+      inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)
     `)
     .eq('id', c.expediente_id)
     .single();

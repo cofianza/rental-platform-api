@@ -58,7 +58,7 @@ export async function executePostFirma(ctx: PostFirmaContext): Promise<void> {
       id, estado, expediente_id, nombre_archivo,
       expedientes(
         numero, analista_id,
-        inmuebles(direccion, ciudad),
+        inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad),
         analista:perfiles!expedientes_analista_id_fkey(id, nombre, apellido, email)
       )
     `)

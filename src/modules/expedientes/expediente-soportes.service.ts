@@ -85,7 +85,7 @@ async function assertSoporteAccess(
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
       'id, estado, creado_por, ' +
-        'inmuebles(propietario_id, inmobiliaria_id), ' +
+        'inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), ' +
         'solicitantes(creado_por), ' +
         'estudios(id, created_at)',
     )
@@ -428,7 +428,7 @@ interface TokenDocsCtx {
 async function resolveExpedientePorTokenDocumentos(token: string): Promise<TokenDocsCtx> {
   const { data } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_documentos_expiracion, inmuebles(propietario_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at)')
+    .select('id, estado, token_documentos_expiracion, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at)')
     .eq('token_documentos', token)
     .maybeSingle();
 
@@ -478,7 +478,7 @@ export async function enviarEnlaceDocumentos(
 
   const { data: exp } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('solicitantes(nombre, apellido, email), inmuebles(direccion, ciudad)')
+    .select('solicitantes(nombre, apellido, email), inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad)')
     .eq('id', expedienteId)
     .single();
   const e = exp as unknown as {

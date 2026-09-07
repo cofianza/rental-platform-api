@@ -112,7 +112,7 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     .select(
       'id, numero, estado, ' +
         'solicitantes(creado_por, email, nombre, apellido), ' +
-        'inmuebles(propietario_id, inmobiliaria_id, direccion, ciudad)',
+        'inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, direccion, ciudad)',
     )
     .eq('id', expedienteId)
     .single();

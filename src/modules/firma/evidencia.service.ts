@@ -116,7 +116,7 @@ export async function completarFirma(
   // 3. Get contrato PDF and compute SHA-256 hash
   const { data: contrato } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, storage_key, nombre_archivo, expediente_id, expedientes(numero, inmuebles(direccion, ciudad))')
+    .select('id, storage_key, nombre_archivo, expediente_id, expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad))')
     .eq('id', solicitud.contrato_id)
     .single();
 
@@ -582,7 +582,7 @@ export async function ensureAcuseExists(
       id, contrato_id, nombre_firmante, email_firmante, estado, token_expiracion,
       contratos!inner(
         id, nombre_archivo, expediente_id,
-        expedientes(numero, inmuebles(direccion, ciudad))
+        expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad))
       )
     `)
     .eq('id', solicitudId)

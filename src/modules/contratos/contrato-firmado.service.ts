@@ -394,7 +394,7 @@ export async function descargarContratoFirmado(
   if (userRol !== 'administrador' && userRol !== 'operador_analista') {
     const { data: expediente, error: expError } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id, solicitante_id, inmuebles(propietario_id, inmobiliaria_id), solicitantes(creado_por)')
+      .select('id, solicitante_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes(creado_por)')
       .eq('id', contrato.expediente_id)
       .single();
 

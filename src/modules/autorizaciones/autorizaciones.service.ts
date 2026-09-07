@@ -272,7 +272,7 @@ export async function enviarEnlaceAutorizacion(
   // 1. Get expediente with solicitante + inmueble
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento), inmuebles(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento), inmuebles!expedientes_inmueble_id_fkey(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
     .eq('id', expedienteId)
     .single();
 
@@ -493,7 +493,7 @@ export async function getAutorizacionByToken(token: string) {
     .select(`
       id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma,
       solicitantes(nombre, apellido, telefono, tipo_documento, numero_documento),
-      expedientes(numero, inmuebles(direccion, ciudad, barrio))
+      expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, barrio))
     `)
     .eq('token', token)
     .maybeSingle();
@@ -977,7 +977,7 @@ async function avisarReporteIdentidad(expedienteId: string, input: ReportarIdent
 
   const { data: expRow } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero, inmuebles(propietario_id, direccion)')
+    .select('numero, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion)')
     .eq('id', expedienteId)
     .maybeSingle();
   const exp = expRow as unknown as {
@@ -1066,7 +1066,7 @@ async function avisarAutorizacionFirmada(expedienteId: string, solicitanteId: st
 
   const { data: expRow } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero, inmuebles(propietario_id, direccion), solicitantes(nombre, apellido)')
+    .select('numero, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion), solicitantes(nombre, apellido)')
     .eq('id', expedienteId)
     .maybeSingle();
   const exp = expRow as unknown as {

@@ -313,7 +313,7 @@ export async function crearSolicitudFirma(
   // (options.camera = 'identification') segun la doc de Auco.
   const { data: expediente } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero, inmuebles(direccion, ciudad), solicitantes(tipo_documento, numero_documento)')
+    .select('numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad), solicitantes(tipo_documento, numero_documento)')
     .eq('id', c.expediente_id)
     .single();
 
@@ -535,7 +535,7 @@ export async function reenviarSolicitudFirma(
 ) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, storage_key, nombre_archivo, expedientes(numero, inmuebles(direccion, ciudad), solicitantes(tipo_documento, numero_documento)))`)
+    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, storage_key, nombre_archivo, expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad), solicitantes(tipo_documento, numero_documento)))`)
     .eq('id', solicitudId)
     .single();
 
@@ -1096,7 +1096,7 @@ export async function validarToken(token: string) {
   // Fetch contrato + expediente info for display
   const { data: contratoData } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, nombre_archivo, expedientes(numero, inmuebles(direccion, ciudad))')
+    .select('id, expediente_id, nombre_archivo, expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad))')
     .eq('id', row.contrato_id)
     .single();
 

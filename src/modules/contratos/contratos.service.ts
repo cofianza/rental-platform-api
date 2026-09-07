@@ -413,7 +413,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       modalidad_fianza, servicios_reparto,
       cotitular_nombre, cotitular_tipo_documento, cotitular_documento,
       cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio,
-      inmuebles(
+      inmuebles!expedientes_inmueble_id_fkey(
         id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, parqueaderos,
         administracion, propietario_id,
         propiedad_horizontal, cuarto_util, ubicacion_detallada, matricula_inmobiliaria,
@@ -864,7 +864,7 @@ async function buildContratoContext(
 
 const CONTRATO_LIST_WITH_RELATIONS = `
   ${CONTRATO_LIST_SELECT},
-  expedientes(numero, inmuebles(codigo, direccion, ciudad), solicitantes(nombre, apellido))
+  expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(nombre, apellido))
 `;
 
 // Scoping por rol propietario/inmobiliaria centralizado en @/lib/tenantScope

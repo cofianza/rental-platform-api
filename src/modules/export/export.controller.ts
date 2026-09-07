@@ -39,7 +39,7 @@ export async function exportExpedientes(req: Request, res: Response) {
 
   let qb = supabase
     .from('expedientes')
-    .select('numero, estado, created_at, solicitantes(nombre, apellido), inmuebles(direccion), perfiles!expedientes_analista_id_fkey(nombre, apellido)')
+    .select('numero, estado, created_at, solicitantes(nombre, apellido), inmuebles!expedientes_inmueble_id_fkey(direccion), perfiles!expedientes_analista_id_fkey(nombre, apellido)')
     .order('created_at', { ascending: false })
     .limit(10500);
 

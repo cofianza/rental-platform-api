@@ -340,12 +340,12 @@ async function fetchPropietarioPorExpediente(expedienteIds: string[]): Promise<M
 
 const CONTRATO_SELECT =
   'id, estado, valor_arriendo, fecha_inicio, fecha_fin, motivo_cancelacion, expediente_id, ' +
-  'expedientes(id, inmuebles(codigo, direccion, ciudad), solicitantes(nombre, apellido, numero_documento, telefono))';
+  'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(nombre, apellido, numero_documento, telefono))';
 
 // Variante con datos extra del solicitante (ficha de detalle en Inquilinos).
 const INQUILINO_SELECT =
   'id, estado, valor_arriendo, fecha_inicio, fecha_fin, motivo_cancelacion, expediente_id, ' +
-  'expedientes(id, inmuebles(codigo, direccion, ciudad), solicitantes(' +
+  'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(' +
   'nombre, apellido, numero_documento, telefono, email, ocupacion, actividad_economica, ingresos_mensuales, empresa, tipo_persona))';
 
 // ── INQUILINOS (contratos activos, foco en el arrendatario) ──
@@ -555,7 +555,7 @@ export async function getVitrinaAdmin(): Promise<VitrinaData> {
   const { data: exps, error: e3 } = await (
     supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>
   )
-    .select('id, source, estado, notas, created_at, inmuebles(codigo, direccion), solicitantes(nombre, apellido, telefono)')
+    .select('id, source, estado, notas, created_at, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido, telefono)')
     .eq('source', 'vitrina_publica')
     .order('created_at', { ascending: false });
   if (e3) throw fromSupabaseError(e3);

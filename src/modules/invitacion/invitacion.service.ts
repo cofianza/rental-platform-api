@@ -58,7 +58,7 @@ export async function getInvitacionPublic(token: string): Promise<InvitacionPubl
   const { data, error } = await db('expedientes')
     .select(
       'numero, source, solicitante_id, email_invitacion, ' +
-        'inmuebles(codigo, direccion, ciudad, valor_arriendo, propietario_id)',
+        'inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad, valor_arriendo, propietario_id)',
     )
     .eq('token_invitacion', token)
     .maybeSingle();

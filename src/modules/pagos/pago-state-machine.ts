@@ -360,7 +360,7 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
   // Cargar expediente con sus FKs hacia propietario y solicitante.
   const { data } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero, inmuebles(direccion, propietario_id), solicitantes(email, nombre, apellido)')
+    .select('numero, inmuebles!expedientes_inmueble_id_fkey(direccion, propietario_id), solicitantes(email, nombre, apellido)')
     .eq('id', expedienteId)
     .single() as {
       data: {

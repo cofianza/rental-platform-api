@@ -67,7 +67,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
   duracion_contrato_meses, fecha_inicio_contrato,
   cancelado_at, motivo_cancelacion, estado_pre_cancelacion, motivo_rechazo,
   created_at, updated_at,
-  inmuebles(id, codigo, direccion, ciudad, departamento, tipo, estado, valor_arriendo),
+  inmuebles!expedientes_inmueble_id_fkey(id, codigo, direccion, ciudad, departamento, tipo, estado, valor_arriendo),
   solicitantes(id, nombre, apellido, tipo_documento, numero_documento, email, telefono),
   analista:perfiles!expedientes_analista_id_fkey(id, nombre, apellido),
   creador:perfiles!expedientes_creado_por_fkey(id, nombre, apellido)

@@ -353,7 +353,7 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
 async function fetchExpediente(id: string): Promise<ExpedienteRow> {
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, analista_id, inmuebles(propietario_id, inmobiliaria_id)')
+    .select('id, numero, estado, analista_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)')
     .eq('id', id)
     .single();
 
