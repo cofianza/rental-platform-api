@@ -5,6 +5,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
+import { resolverRuta, type Ruta, type EntradaRuta } from './rutas-resultado';
 import { getCompany } from '@/lib/companyConfig';
 import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
@@ -119,6 +120,12 @@ function redactarEstudioParaProspecto<T extends Record<string, unknown>>(row: T)
       (row.motivo_rechazo as string | null | undefined) ?? null,
     ),
     observaciones: null,
+    // La ruta del §10 SI se le muestra al prospecto — es justamente lo que el
+    // documento quiere que lea. Pero `etiquetaGestor` es interna y lleva el
+    // puntaje entre parentesis ("Perfil medio (82 pts)"): eso no viaja.
+    ...(row.ruta ? { ruta: { ...(row.ruta as Record<string, unknown>), etiquetaGestor: undefined } } : {}),
+    // El puntaje crudo del modelo tampoco: mismo criterio que motivo/observaciones.
+    score: null,
   };
 }
 
@@ -450,7 +457,7 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
       certificado_url, codigo_qr, datos_formulario, respuesta_proveedor,
       token_self_service,
       expiracion_token, created_at, updated_at,
-      canon_evaluado, canon_evaluado_origen,
+      canon_evaluado, canon_evaluado_origen, regla_dura_activada,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('id', estudioId)
@@ -466,14 +473,73 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
   // roles internos y para llamadas internas sin identidad (userId/userRol undefined).
   await assertExpedienteAccess((data as { expediente_id: string }).expediente_id, userId, userRol);
 
+  const conRuta = await adjuntarRuta(data as unknown as Record<string, unknown>);
+
   // Mismo criterio que en los listados: al prospecto no le viajan ni el motivo
   // con cifras ni las observaciones del gestor.
   if (userRol === 'solicitante') {
-    return redactarEstudioParaProspecto(data as unknown as Record<string, unknown>);
+    return redactarEstudioParaProspecto(conRuta);
   }
 
   // §8.2: a la agencia no le viaja el ingreso declarado por el prospecto.
-  return redactarIngresoDeclarado(data as unknown as Record<string, unknown>, userRol);
+  return redactarIngresoDeclarado(conRuta, userRol);
+}
+
+/**
+ * Adjunta la ruta del §10 ("Perfil fuerte / medio / Coarrendatario requerido /
+ * No aprobable") al detalle del estudio. Ver modules/estudios/rutas-resultado.ts.
+ *
+ * ── POR QUE `puntaje` VA EN null SALVO QUE SE ENCIENDA EL FLAG ────────────
+ *
+ * El scorecard V4.1 corre EN SOMBRA: `estudios_scorecard_sombra` se calcula y
+ * se guarda, pero su decision NO se aplica (ver motor/index.ts). Dejar que ese
+ * puntaje eligiera la ruta seria aplicarlo por la puerta de atras, y hoy
+ * saldria mal en las dos direcciones:
+ *
+ *   * el techo alcanzable sin PILA es 80.7 sobre los 85 que pide el §3, asi que
+ *     NADIE llegaria nunca a 'perfil_fuerte';
+ *   * y mucha gente aprobada por el buro caeria en 70-79 y leeria "necesitas un
+ *     acompañante" por un puntaje que Cofianza todavia no valida.
+ *
+ * Asi que la ruta se decide hoy con la unica autoridad vigente —el resultado
+ * del buro y las reglas duras— y el puntaje entra el dia que Gerencia saque el
+ * modelo de sombra. Ese dia se enciende MOTOR_RUTA_USA_SCORECARD y esto lee la
+ * fila de sombra; el resto del modulo ya esta escrito y probado
+ * (scripts/check-rutas-resultado.ts cubre las cuatro bandas).
+ *
+ * ponytail: una sola lectura extra y solo con el flag encendido. Sin flag no
+ * hay query adicional en el camino caliente del detalle.
+ */
+async function adjuntarRuta<T extends Record<string, unknown>>(row: T): Promise<T & { ruta: Ruta }> {
+  let puntaje: number | null = null;
+
+  if (env.MOTOR_RUTA_USA_SCORECARD) {
+    const { data: sombra } = (await (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .select('puntaje_normalizado')
+      .eq('estudio_id', row.id as string)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()) as { data: { puntaje_normalizado: number | string | null } | null };
+
+    const n = sombra?.puntaje_normalizado;
+    puntaje = n === null || n === undefined ? null : Number(n);
+    if (puntaje !== null && Number.isNaN(puntaje)) puntaje = null;
+  }
+
+  const reglas = row.regla_dura_activada;
+  const ruta = resolverRuta({
+    puntaje,
+    resultadoVigente: (row.resultado as EntradaRuta['resultadoVigente'] | null) ?? 'pendiente',
+    reglaDuraActivada: Array.isArray(reglas) ? reglas.length > 0 : Boolean(reglas),
+    // El coarrendatario se evalua en su propio estudio hijo. Se resuelve con el
+    // `tipo` que ya viaja en la fila: 'con_coarrendatario' significa que este
+    // estudio YA contempla al acompañante.
+    coarrendatarioVinculado: row.tipo === 'con_coarrendatario',
+    puntajeCoarrendatario: null,
+  });
+
+  return { ...row, ruta };
 }
 
 // ============================================================

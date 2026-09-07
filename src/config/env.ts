@@ -183,6 +183,13 @@ const envSchema = z.object({
   // OFF por defecto: mientras siga en false, la firma usa el flujo de un solo
   // firmante (arrendatario). Activar solo cuando estén listos los teléfonos
   // reales de cada parte y los datos de Cofianza (company.ts: nit/phone).
+  // Flujo §10: las cuatro rutas del resultado se deciden hoy con el resultado del
+  // buro y las reglas duras. Encender esto hace que el PUNTAJE del scorecard V4.1
+  // elija la ruta — o sea, saca al modelo de sombra para efectos de lo que lee el
+  // prospecto. NO encender hasta que Gerencia valide el modelo: sin PILA el techo
+  // alcanzable es 80.7 sobre los 85 que pide el §3, asi que nadie llegaria nunca a
+  // 'perfil fuerte' y muchos aprobados caerian en "necesitas acompañante".
+  MOTOR_RUTA_USA_SCORECARD: z.string().default('false').transform((v) => v === 'true'),
   FIRMA_MULTIPARTE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
 
   // Auto-firma de Cofianza (sello institucional). OFF por defecto. Solo aplica
