@@ -616,7 +616,18 @@ assert.strictEqual(incoherentes, 0, 'una salida que viola un CHECK haria fallar 
  */
 function validarContraSchema(s: SalidaSombra): string[] {
   const e: string[] = [];
-  const row = construirFilaSombra('00000000-0000-0000-0000-000000000000', s);
+  const row = construirFilaSombra('00000000-0000-0000-0000-000000000000', s, {
+    apis_fallidas: ['listas_restrictivas', 'listas_restrictivas'],
+    tiempo_procesamiento_ms: 12_345.6,
+    session_id: '11111111-1111-1111-1111-111111111111',
+  });
+  // Politica §9: los campos de ejecucion viajan a la fila; los duplicados se
+  // colapsan y el tiempo se encuadra a entero.
+  if (!['CENTRALES', 'NO_DISPONIBLE'].includes(String(row.fuente_ingreso_inferido))) e.push(`fuente_ingreso_inferido invalida: ${row.fuente_ingreso_inferido}`);
+  if ((s.features.ingreso_mensual_inferido_cop !== null) !== (row.fuente_ingreso_inferido === 'CENTRALES')) e.push('fuente_ingreso_inferido no refleja el ingreso');
+  if (JSON.stringify(row.apis_fallidas) !== JSON.stringify(['listas_restrictivas'])) e.push(`apis_fallidas no dedup: ${JSON.stringify(row.apis_fallidas)}`);
+  if (row.tiempo_procesamiento_ms !== 12_346) e.push(`tiempo_procesamiento_ms no es entero: ${row.tiempo_procesamiento_ms}`);
+  if (row.analista_responsable !== 'AUTOMATICO') e.push('analista_responsable default debe ser AUTOMATICO');
 
   const DECISIONES = ['aprobado', 'revision_manual', 'rechazado', 'no_calculable'];
   if (!DECISIONES.includes(String(row.decision_sombra))) e.push(`decision_sombra invalida: ${row.decision_sombra}`);

@@ -37,7 +37,7 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { MODELO_VERSION, evaluarSombra } from './index';
 import type { SalidaSombra } from './index';
-import { construirFilaSombra } from './fila';
+import { construirFilaSombra, type ContextoEjecucion } from './fila';
 import { getCalibracion } from '@/lib/calibracion';
 
 export interface ArgsScorecardSombra {
@@ -61,6 +61,8 @@ export interface ArgsScorecardSombra {
    * gestor movio el canon del inmueble en el intervalo, otros ratios.
    */
   salidaPrecalculada?: SalidaSombra | null;
+  /** Politica §9: apis_fallidas, tiempo, session_id, analista. */
+  contexto?: ContextoEjecucion;
 }
 
 /**
@@ -104,7 +106,7 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
   try {
     // 0. Corrida ya evaluada por el punto de decision: no se repite nada.
     if (args.salidaPrecalculada) {
-      await persistirFila(estudioId, args.salidaPrecalculada);
+      await persistirFila(estudioId, args.salidaPrecalculada, args.contexto);
       return;
     }
 
@@ -147,7 +149,7 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
     });
 
     // 4-5. Descartar la corrida vacia y hacer el upsert idempotente.
-    await persistirFila(estudioId, salida);
+    await persistirFila(estudioId, salida, args.contexto);
   } catch (err) {
     logger.warn(
       { estudioId, expedienteId, err: err instanceof Error ? err.message : String(err) },
@@ -164,7 +166,7 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
  * Una corrida sin ninguna variable calculable no mide nada: se registra en el
  * log y no se escribe fila (regla 3 del encabezado).
  */
-async function persistirFila(estudioId: string, salida: SalidaSombra): Promise<void> {
+async function persistirFila(estudioId: string, salida: SalidaSombra, contexto: ContextoEjecucion = {}): Promise<void> {
   if (salida.puntaje_normalizado === null) {
     logger.debug(
       { estudioId, proveedor: salida.proveedor, motivo: salida.motivo_no_calculable },
@@ -175,7 +177,7 @@ async function persistirFila(estudioId: string, salida: SalidaSombra): Promise<v
 
   const { error } = await (supabase
     .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-    .upsert(construirFilaSombra(estudioId, salida) as never, {
+    .upsert(construirFilaSombra(estudioId, salida, contexto) as never, {
       onConflict: 'estudio_id,modelo_version',
     });
 

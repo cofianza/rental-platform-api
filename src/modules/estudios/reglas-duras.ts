@@ -92,6 +92,8 @@ import { contrasteIngresoProspecto } from '@/modules/autorizaciones/ingreso-decl
 // Adenda §11: factor de ajuste del ingreso, umbrales y demas parametros vienen
 // del panel de calibracion, no de constantes.
 import { getCalibracion } from '@/lib/calibracion';
+// Politica §15: ningun perfil sin cedula colombiana se aprueba en automatico.
+import { motivoRevisionPerfilExtranjero } from './perfil-extranjero';
 // El canon se lee con el MISMO helper del guard del tope (§4.4): una sola
 // definicion de "cual es el canon de este estudio" para las dos reglas que lo
 // usan. Duplicarla dejaria al tope y al scorecard mirando canones distintos.
@@ -472,6 +474,11 @@ export interface ArgsResolverResultado {
    * hay" y no se lee nada.
    */
   antecedentes?: ResumenAntecedentes | null;
+  /**
+   * Tipo de documento CONSULTADO (§15). `undefined` = leerlo de
+   * `datos_formulario` de la fila; el camino inline lo pasa del providerInput.
+   */
+  tipoDocumento?: string | null;
 }
 
 export interface ResolucionEstudio {
@@ -486,6 +493,12 @@ export interface ResolucionEstudio {
    * resultado ya viene cambiado en `resultado`.
    */
   revisionManual: string | null;
+  /**
+   * Politica §14 / §9 `apis_fallidas`: fuentes que no respondieron en ESTA
+   * evaluacion, con los nombres que usa la Politica ('listas_restrictivas',
+   * 'registraduria'). El call site agrega las centrales.
+   */
+  apisFallidas: string[];
   /**
    * La corrida del motor, para que registrarScorecardSombra persista ESTA y no
    * una segunda evaluacion. null si no se pudo evaluar (y entonces tampoco se
@@ -559,6 +572,7 @@ export async function resolverResultadoEstudio(
     veredicto: aplicarReglasDuras({ resultadoPropuesto: args.resultadoPropuesto, salida: null }),
     salida: null,
     revisionManual: null,
+    apisFallidas: [],
   };
 
   try {
@@ -567,21 +581,24 @@ export async function resolverResultadoEstudio(
     let proveedor = args.proveedor ?? null;
     let payload: unknown = args.datosCrudos ?? null;
     let score = args.score ?? null;
+    let tipoDocumento: string | null | undefined = args.tipoDocumento;
 
-    if (!proveedor || !payload) {
+    if (!proveedor || !payload || tipoDocumento === undefined) {
       const { data: row } = await (supabase
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
-        .select('proveedor, respuesta_proveedor, score')
+        .select('proveedor, respuesta_proveedor, score, datos_formulario')
         .eq('id', args.estudioId)
         .maybeSingle();
       const est = row as {
         proveedor?: string | null;
         respuesta_proveedor?: Record<string, unknown> | null;
         score?: number | null;
+        datos_formulario?: { tipo_documento?: string | null } | null;
       } | null;
       proveedor = proveedor ?? est?.proveedor ?? null;
       payload = payload ?? est?.respuesta_proveedor ?? null;
       score = score ?? est?.score ?? null;
+      if (tipoDocumento === undefined) tipoDocumento = est?.datos_formulario?.tipo_documento ?? null;
     }
 
     // 1b. Antecedentes de Auco: en memoria (inline) o de la columna (polling y
@@ -626,6 +643,11 @@ export async function resolverResultadoEstudio(
       // acumulan porque el analista tiene que ver las dos razones — quedarse
       // con la primera esconderia la otra.
       const biometria = await leerBiometriaDeExpediente(args.expedienteId);
+      // §14 / §9: fuentes que no respondieron, con los nombres de la Politica.
+      const apisFallidas = [
+        antecedentes?.estado === 'no_verificado' ? 'listas_restrictivas' : null,
+        biometria?.estado === 'no_verificada' ? 'registraduria' : null,
+      ].filter((a): a is string => !!a);
       const motivos = [
         requiereRevisionManual(antecedentes),
         requiereRevisionManualPorBiometria(biometria),
@@ -635,9 +657,11 @@ export async function resolverResultadoEstudio(
           salida.features.ingreso_mensual_inferido_cop,
           cal.UMBRAL_DIFERENCIA_INGRESO,
         ),
+        // Politica §15: sin cedula colombiana no hay aprobacion automatica.
+        motivoRevisionPerfilExtranjero(tipoDocumento),
       ].filter((m): m is string => !!m);
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
-      if (!motivoRevision) return { ...base, veredicto, salida };
+      if (!motivoRevision) return { ...base, veredicto, salida, apisFallidas };
 
       const obs = (args.observaciones ?? '').trim();
       const observaciones = obs ? `${obs} ${motivoRevision}` : motivoRevision;
@@ -662,6 +686,7 @@ export async function resolverResultadoEstudio(
         veredicto,
         salida,
         revisionManual: motivoRevision,
+        apisFallidas,
       };
     }
 
@@ -692,6 +717,7 @@ export async function resolverResultadoEstudio(
       veredicto,
       salida,
       revisionManual: null,
+      apisFallidas: [],
     };
   } catch (err) {
     // Falla controlada (§2): sin veredicto, el estudio sigue el flujo de hoy.

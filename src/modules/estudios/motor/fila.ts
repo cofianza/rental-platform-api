@@ -33,7 +33,33 @@ export function sectoresPresentes(sectores: SectoresCredito | null): string[] {
   return (Object.keys(sectores) as (keyof SectoresCredito)[]).filter((k) => sectores[k] > 0);
 }
 
-export function construirFilaSombra(estudioId: string, salida: SalidaSombra): Record<string, unknown> {
+/**
+ * Politica §9 — lo que NO sale del motor sino de la ejecucion: que APIs
+ * fallaron, cuanto tardo, en que sesion y quien decidio.
+ */
+export interface ContextoEjecucion {
+  apis_fallidas?: readonly string[];
+  tiempo_procesamiento_ms?: number | null;
+  session_id?: string | null;
+  /** User ID del analista, o 'AUTOMATICO'. */
+  analista_responsable?: string | null;
+}
+
+/**
+ * Politica §9 `fuente_ingreso_inferido`: IBC_PILA / CENTRALES / EXTRACTOS /
+ * MANUAL / NO_DISPONIBLE. Hoy la unica fuente cableada es el estimador de la
+ * central (Adenda §1: Inncome / Income Estimator), asi que es CENTRALES o
+ * NO_DISPONIBLE.
+ */
+export function fuenteIngresoInferido(salida: SalidaSombra): string {
+  return salida.features.ingreso_mensual_inferido_cop !== null ? 'CENTRALES' : 'NO_DISPONIBLE';
+}
+
+export function construirFilaSombra(
+  estudioId: string,
+  salida: SalidaSombra,
+  contexto: ContextoEjecucion = {},
+): Record<string, unknown> {
   const f = salida.features;
 
   const puntajePorVariable: Record<string, unknown> = {};
@@ -64,6 +90,12 @@ export function construirFilaSombra(estudioId: string, salida: SalidaSombra): Re
     // Politica §9 / Adenda §2.4: de donde salio V1.
     fuente_score_externo: salida.fuente_score_externo,
     scores_individuales: salida.scores_individuales,
+    // Politica §9.
+    fuente_ingreso_inferido: fuenteIngresoInferido(salida),
+    apis_fallidas: [...new Set(contexto.apis_fallidas ?? [])],
+    tiempo_procesamiento_ms: entero(contexto.tiempo_procesamiento_ms ?? null, 0, 2_000_000_000),
+    session_id: contexto.session_id ?? null,
+    analista_responsable: contexto.analista_responsable ?? 'AUTOMATICO',
     cuota_mensual_cop: monto(f.cuota_mensual_vigente_cop),
     canon_evaluado_cop: monto(salida.canon_evaluado_cop),
 

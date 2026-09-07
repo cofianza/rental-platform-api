@@ -1659,6 +1659,8 @@ export async function registrarResultado(
     expedienteId: est.expediente_id,
     scorePersistido: input.score ?? null,
     salidaPrecalculada: decision.salida,
+    // Politica §9: aqui decidio una persona, no el sistema.
+    contexto: { apis_fallidas: decision.apisFallidas, analista_responsable: userId },
   }).catch(() => undefined);
 
   return getEstudioById(estudioId);
@@ -2256,6 +2258,12 @@ export async function ejecutarEstudio(
   //      a otro proveedor y `consultarEstadoProveedor` las usaría contra el
   //      nuevo (cache-miss garantizado → marcaría 'fallido' un reintento en
   //      vuelo).
+  // Politica §9: `session_id` identifica ESTA ejecucion (§16.7 la usa para la
+  // regla de velocidad) y `tiempo_procesamiento_ms` se mide desde aqui — el
+  // lock es el instante en que el sistema decide consultar.
+  const sessionId = crypto.randomUUID();
+  const inicioMs = Date.now();
+
   const { data: lockRows, error: lockError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .update({
@@ -2331,6 +2339,8 @@ export async function ejecutarEstudio(
     providerInput,
     userId,
     ip,
+    sessionId,
+    inicioMs,
   }).catch((err) => {
     logger.error(
       { error: err, estudioId },
@@ -2357,8 +2367,11 @@ async function procesarEstudioAsync(args: {
   providerInput: ProviderSolicitudInput;
   userId: string;
   ip?: string;
+  /** Politica §9. */
+  sessionId?: string;
+  inicioMs?: number;
 }): Promise<void> {
-  const { estudioId, proveedor, proveedorAnterior, expedienteId, providerInput, userId, ip } = args;
+  const { estudioId, proveedor, proveedorAnterior, expedienteId, providerInput, userId, ip, sessionId, inicioMs } = args;
   const provider = getProvider(proveedor as 'transunion' | 'sifin' | 'datacredito');
   // Nombre legible del buró para los mensajes que ve el gestor: con dos
   // proveedores activos, hardcodear "TransUnion" muestra el buró equivocado.
@@ -2463,7 +2476,7 @@ async function procesarEstudioAsync(args: {
       await persistirAntecedentes(estudioId, antecedentes);
 
       try {
-        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result, antecedentes, providerInput);
+        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result, antecedentes, providerInput, { sessionId, inicioMs });
         logger.info({ estudioId }, 'Estudio completado exitosamente (async)');
       } catch (postErr) {
         const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
@@ -3179,6 +3192,8 @@ async function registrarResultadoInline(
   antecedentes?: ResumenAntecedentes,
   /** Insumo del buro: hace falta para consultar la SEGUNDA central (Adenda §2). */
   providerInput?: ProviderSolicitudInput,
+  /** Politica §9: sesion e inicio de la ejecucion. */
+  ejecucion: { sessionId?: string; inicioMs?: number } = {},
 ): Promise<void> {
   const provider = getProvider(proveedorId as 'transunion' | 'sifin' | 'datacredito');
 
@@ -3201,7 +3216,10 @@ async function registrarResultadoInline(
     proveedor: proveedorId,
     datosCrudos: result.datos_crudos,
     antecedentes,
+    // §15: el documento consultado decide si el perfil es extranjero.
+    tipoDocumento: providerInput?.tipo_documento ?? undefined,
   });
+  const apisFallidas = [...decision.apisFallidas];
 
   // ── Adenda 1 §2/§3: el scorecard decide (MOTOR_DECIDE_ENABLED) ────────
   // Con el flag apagado, `decision` ya trae lo de siempre: el resultado del
@@ -3230,6 +3248,7 @@ async function registrarResultadoInline(
     resultadoFinal = c.resultado;
     salidaFinal = c.salida;
     veredictoFinal = c.veredicto;
+    apisFallidas.push(...c.apisFallidas);
     observacionesFinal = [decision.observaciones, c.nota].filter(Boolean).join(' ');
     motivoRechazoFinal = c.veredicto.rechaza
       ? c.veredicto.motivoGestor
@@ -3361,6 +3380,13 @@ async function registrarResultadoInline(
     datosCrudos: result.datos_crudos,
     scorePersistido: result.score,
     salidaPrecalculada: salidaFinal,
+    // Politica §9: la parte de la salida que no es del motor.
+    contexto: {
+      apis_fallidas: apisFallidas,
+      tiempo_procesamiento_ms: ejecucion.inicioMs ? Date.now() - ejecucion.inicioMs : null,
+      session_id: ejecucion.sessionId ?? null,
+      analista_responsable: 'AUTOMATICO',
+    },
   }).catch(() => undefined);
 }
 
@@ -3384,7 +3410,7 @@ async function decidirConCascada(args: {
   revisionManual: string | null;
   providerInput?: ProviderSolicitudInput;
   antecedentes: ResumenAntecedentes | null;
-}): Promise<{ resultado: ResultadoDecidido; motivo: string; via: string | null; nota: string; salida: SalidaSombra; veredicto: VeredictoReglasDuras }> {
+}): Promise<{ resultado: ResultadoDecidido; motivo: string; via: string | null; nota: string; salida: SalidaSombra; veredicto: VeredictoReglasDuras; apisFallidas: string[] }> {
   const { estudioId, expedienteId, proveedorPrimario } = args;
   const cal = await getCalibracion();
   const u: UmbralesDecision = {
@@ -3403,6 +3429,7 @@ async function decidirConCascada(args: {
   let secundario: string | null = null;
   let scoreSecundario: number | null = null;
   let nota = `Cascada (Adenda §2): ${cascada.motivo}.`;
+  const apisFallidas: string[] = [];
 
   const candidato = proveedorPrimario === 'datacredito' ? 'transunion' : 'datacredito';
   if (cascada.consultarSecundaria && args.providerInput) {
@@ -3438,6 +3465,7 @@ async function decidirConCascada(args: {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ estudioId, secundario: candidato, err: msg }, 'Cascada: la segunda central no respondio — se decide con la primaria');
+      apisFallidas.push(candidato);
       nota = `Cascada (Adenda §2): ${cascada.motivo}, pero ${BURO_LABELS[candidato] ?? candidato} no respondio (${msg.slice(0, 120)}): se decide con ${BURO_LABELS[proveedorPrimario] ?? proveedorPrimario} como fuente unica (Adenda §2.3 / Politica §14).`;
     }
   } else if (cascada.consultarSecundaria) {
@@ -3489,6 +3517,7 @@ async function decidirConCascada(args: {
     nota: `${nota} Decision del modelo: ${d.motivo}.`,
     salida,
     veredicto,
+    apisFallidas,
   };
 }
 
@@ -3638,6 +3667,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
       datosCrudos: result.datos_crudos,
       scorePersistido: result.score,
       salidaPrecalculada: decision.salida,
+      contexto: { apis_fallidas: decision.apisFallidas, analista_responsable: 'AUTOMATICO' },
     }).catch(() => undefined);
 
     return {
