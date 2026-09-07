@@ -6,6 +6,8 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
 import { resolverRuta, type Ruta, type EntradaRuta } from './rutas-resultado';
+// §12 + §14: expiracion del estudio por falta de autorizacion. Derivada, no persistida.
+import { evaluarExpiracion, type VeredictoExpiracion } from './expiracion';
 import { getCompany } from '@/lib/companyConfig';
 import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
@@ -474,15 +476,51 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
   await assertExpedienteAccess((data as { expediente_id: string }).expediente_id, userId, userRol);
 
   const conRuta = await adjuntarRuta(data as unknown as Record<string, unknown>);
+  const conDerivados = await adjuntarExpiracion(conRuta);
 
   // Mismo criterio que en los listados: al prospecto no le viajan ni el motivo
   // con cifras ni las observaciones del gestor.
   if (userRol === 'solicitante') {
-    return redactarEstudioParaProspecto(conRuta);
+    return redactarEstudioParaProspecto(conDerivados);
   }
 
   // §8.2: a la agencia no le viaja el ingreso declarado por el prospecto.
-  return redactarIngresoDeclarado(conRuta, userRol);
+  return redactarIngresoDeclarado(conDerivados, userRol);
+}
+
+/**
+ * Adjunta el veredicto de expiracion del §12 al detalle del estudio.
+ * Ver modules/estudios/expiracion.ts: se DERIVA del reloj, no se persiste.
+ *
+ * El reloj arranca cuando se le pidio la autorizacion al TITULAR — el
+ * coarrendatario tiene su propia fila y su propio estudio, y el §12 habla del
+ * prospecto. Mismo predicado que usa el orchestrator y enviarEnlaceAutorizacion.
+ *
+ * ponytail: una lectura extra en el detalle. En los LISTADOS no se calcula: son
+ * N estudios y serian N consultas. Si algun dia el listado necesita mostrar
+ * "expirado", eso pide un join, no este helper en un bucle.
+ */
+async function adjuntarExpiracion<T extends Record<string, unknown>>(
+  row: T,
+): Promise<T & { expiracion: VeredictoExpiracion }> {
+  const { data: aut } = (await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .select('created_at, estado')
+    .eq('expediente_id', row.expediente_id as string)
+    .is('coarrendatario_id', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()) as { data: { created_at: string; estado: string } | null };
+
+  return {
+    ...row,
+    expiracion: evaluarExpiracion({
+      estado: row.estado as string | null,
+      autorizacionSolicitadaEn: aut?.created_at ?? null,
+      autorizacionFirmada: aut?.estado === 'autorizado',
+      ahoraMs: Date.now(),
+    }),
+  };
 }
 
 /**
