@@ -46,8 +46,8 @@ export async function sendEstudioAprobadoEmail(params: {
           <p style="color: #6b7280;">Tu estudio crediticio para el inmueble en <strong>${inmueble}, ${ciudad}</strong> ha sido <span style="color: #059669; font-weight: bold;">aprobado</span>.</p>
           ${score ? `<p style="color: #6b7280;">Score crediticio: <strong>${score}</strong></p>` : ''}
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: Firma del contrato</p>
-            <p style="color: #065f46; margin: 4px 0 0;">Tu contrato ha sido generado automaticamente. Recibiras un enlace para firmarlo electronicamente en los proximos minutos.</p>
+            <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: tu contrato</p>
+            <p style="color: #065f46; margin: 4px 0 0;">El propietario o la inmobiliaria preparará tu contrato (fecha de inicio y duración). Cuando esté listo para firmar, te llegará el enlace por WhatsApp al número que registraste. No necesitas hacer nada por ahora.</p>
           </div>
           <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
         </div>
