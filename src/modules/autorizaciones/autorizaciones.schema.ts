@@ -30,6 +30,12 @@ export const enviarEnlaceAutorizacionSchema = z
 // POST /public/autorizar/:token/firmar
 // ============================================================
 
+// OJO: `metodo_firma` describe la firma, NO la autoriza. Desde el §12
+// ("enlace reenviado a un tercero"), firmarAutorizacion exige un OTP verificado
+// y vigente para CUALQUIER metodo — antes 'canvas' saltaba esa prueba de
+// posesion y bastaba un curl con el token del enlace para autorizar en nombre
+// del titular. Si algun dia se retira 'canvas' de este enum, el gate real sigue
+// estando alli, en el servicio.
 export const firmarSchema = z.object({
   metodo_firma: z.enum(['canvas', 'otp'], {
     message: 'Metodo de firma invalido. Valores permitidos: canvas, otp',
@@ -59,6 +65,58 @@ export const firmarSchema = z.object({
       message: 'El codigo OTP es requerido para verificacion por OTP',
     });
   }
+});
+
+// ============================================================
+// POST /public/autorizar/:token/perfil  (Flujo §8, PASO 5)
+// ============================================================
+
+// Todo opcional a proposito. §8.2 es, segun el propio documento, "donde mas
+// gente abandona": el boton Continuar nunca se deshabilita y un envio parcial
+// vale. `identidad_confirmada` es z.literal(true) cuando viene, para que un
+// cliente no pueda registrar "confirme" con false.
+//
+// TOLERANCIA POR CAMPO (`.catch(undefined)`): los tres bloques del §8 viajan en
+// UN solo POST y `validate` rechaza el body ENTERO ante cualquier issue. Sin
+// esto, un correo del co-arrendatario tecleado en un celular sin el TLD
+// ("maria@gmail") o un par de ceros de mas en el ingreso tiraban a la basura
+// tambien la confirmacion de identidad, la situacion laboral y el resto — todo
+// el PASO 5 perdido por el campo opcional de un tercero. Un campo malo se cae
+// solo; los demas se guardan. `identidad_confirmada` NO lleva catch: es
+// literal(true) o nada, y ahi si queremos el 400.
+export const perfilProspectoSchema = z.object({
+  // §8.1
+  identidad_confirmada: z.literal(true).optional(),
+  // §8.2 — AUTORREPORTADO. No alimenta el scorecard (Politica V4.1 §4.2).
+  situacion_laboral: z.enum(['empleado', 'independiente', 'pensionado', 'otro']).optional().catch(undefined),
+  donde_labora: z.string().max(200).optional().catch(undefined),
+  ingreso_declarado_cop: z.coerce.number().nonnegative().max(1_000_000_000).optional().catch(undefined),
+  // §8.3 — INTENCION, no invitacion. No se piden tipo ni numero de documento
+  // del co-arrendatario: es el dato de un tercero tecleado de memoria por un
+  // cuarto en un celular (calidad pesima) y es friccion justo donde la gente
+  // abandona. El gestor los completa en el formulario que ya existe.
+  presentacion: z.enum(['solo', 'acompanado']).optional(),
+  coarrendatario: z
+    .object({
+      nombre: z.string().min(1).max(100),
+      apellido: z.string().min(1).max(100),
+      email: z.email('Email invalido').optional(),
+      telefono: z.string().max(20).optional(),
+    })
+    .refine((c) => !!(c.email || c.telefono), {
+      message: 'Necesitamos su correo o su WhatsApp para poder escribirle',
+    })
+    .optional()
+    .catch(undefined),
+});
+
+// ============================================================
+// POST /public/autorizar/:token/reportar-identidad  (Flujo §12)
+// ============================================================
+
+export const reportarIdentidadSchema = z.object({
+  motivo: z.enum(['no_soy_yo', 'datos_incorrectos']),
+  detalle: z.string().max(500).optional(),
 });
 
 // ============================================================
@@ -96,3 +154,5 @@ export type EnviarEnlaceAutorizacionInput = z.infer<typeof enviarEnlaceAutorizac
 export type FirmarInput = z.infer<typeof firmarSchema>;
 export type RevocarInput = z.infer<typeof revocarSchema>;
 export type VerificarOtpInput = z.infer<typeof verificarOtpSchema>;
+export type PerfilProspectoInput = z.infer<typeof perfilProspectoSchema>;
+export type ReportarIdentidadInput = z.infer<typeof reportarIdentidadSchema>;

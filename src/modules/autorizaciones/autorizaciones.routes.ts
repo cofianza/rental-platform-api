@@ -13,6 +13,8 @@ import {
   firmarSchema,
   revocarSchema,
   verificarOtpSchema,
+  perfilProspectoSchema,
+  reportarIdentidadSchema,
 } from './autorizaciones.schema';
 import * as autorizacionesController from './autorizaciones.controller';
 
@@ -93,4 +95,26 @@ publicAutorizacionRouter.post(
   otpVerifyByTokenLimiter,
   validate({ params: tokenParamsSchema, body: verificarOtpSchema }),
   autorizacionesController.verificarOtp,
+);
+
+// POST /public/autorizar/:token/perfil — PASO 5 (Flujo §8.1/§8.2/§8.3).
+// Una sola llamada, al salir del paso "Sobre ti" y ANTES del paso de firma:
+// el OTP se dispara al entrar a firma y caduca a los 5 minutos, asi que meter
+// formularios despues de ese disparo llevaria al prospecto a firmar con
+// OTP_EXPIRADO. Hereda publicFormLimiter (60/min por IP) como el resto.
+publicAutorizacionRouter.post(
+  '/:token/perfil',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema, body: perfilProspectoSchema }),
+  autorizacionesController.guardarPerfil,
+);
+
+// POST /public/autorizar/:token/reportar-identidad — §8.1 + §12
+// ("El prospecto reporta que no es el. El estudio se detiene, se marca para
+// revision y se notifica al solicitante y a Cofianza").
+publicAutorizacionRouter.post(
+  '/:token/reportar-identidad',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema, body: reportarIdentidadSchema }),
+  autorizacionesController.reportarIdentidad,
 );

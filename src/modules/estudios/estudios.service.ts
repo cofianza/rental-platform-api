@@ -122,13 +122,35 @@ function redactarEstudioParaProspecto<T extends Record<string, unknown>>(row: T)
   };
 }
 
-/** No-op salvo para el rol 'solicitante' (el prospecto mirando lo suyo). */
+/**
+ * Flujo §8.2: el ingreso que declara el PROSPECTO no se le muestra a la
+ * agencia. Desde el PASO 5 ese dato ya no se escribe en `datos_formulario`
+ * (submitFormulario lo desvia a `autorizacion_perfil_prospecto`), pero las
+ * filas ESCRITAS ANTES lo tienen guardado y EstudioDetailModal las vuelca
+ * clave por clave con Object.entries, sin allowlist. Sin esto, la promesa que
+ * el §8.2 le hace al prospecto seria falsa para todo el historico.
+ *
+ * No le esconde a la agencia ningun numero suyo: el ingreso que teclea el
+ * gestor vive en `solicitantes.ingresos_mensuales` y lo sigue viendo entero en
+ * la ficha del solicitante. Lo que se tapa aqui es la COPIA dentro del JSON
+ * del estudio, donde ya no se puede distinguir el origen.
+ */
+function redactarIngresoDeclarado<T extends Record<string, unknown>>(row: T, userRol?: string): T {
+  if (userRol !== 'inmobiliaria' && userRol !== 'propietario') return row;
+  const datos = row.datos_formulario as Record<string, unknown> | null | undefined;
+  if (!datos || typeof datos !== 'object' || !('ingresos_mensuales' in datos)) return row;
+  const resto = { ...datos };
+  delete resto.ingresos_mensuales;
+  return { ...row, datos_formulario: resto };
+}
+
+/** Redaccion por audiencia: prospecto (motivo/observaciones) y agencia (§8.2). */
 function redactarEstudiosSegunRol<T extends Record<string, unknown>>(
   rows: T[],
   userRol?: string,
 ): T[] {
-  if (userRol !== 'solicitante') return rows;
-  return rows.map(redactarEstudioParaProspecto);
+  if (userRol === 'solicitante') return rows.map(redactarEstudioParaProspecto);
+  return rows.map((r) => redactarIngresoDeclarado(r, userRol));
 }
 
 // ============================================================
@@ -450,7 +472,8 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
     return redactarEstudioParaProspecto(data as unknown as Record<string, unknown>);
   }
 
-  return data;
+  // §8.2: a la agencia no le viaja el ingreso declarado por el prospecto.
+  return redactarIngresoDeclarado(data as unknown as Record<string, unknown>, userRol);
 }
 
 // ============================================================
@@ -1002,16 +1025,43 @@ export async function submitFormulario(token: string, input: SubmitFormularioInp
   // El único que lo despierta es la confirmación del pago (onEstudioPagado).
   const { data: estadoRow } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('estado')
+    .select('estado, expediente_id')
     .eq('token_self_service', token)
     .maybeSingle();
-  const enEsperaDePago = (estadoRow as { estado?: string } | null)?.estado === ESTADO_ESPERANDO_PAGO;
+  const estadoActual = estadoRow as { estado?: string; expediente_id?: string } | null;
+  const enEsperaDePago = estadoActual?.estado === ESTADO_ESPERANDO_PAGO;
+
+  // Flujo §8.2: el ingreso que declara el PROSPECTO no puede quedar en
+  // `datos_formulario` — EstudioDetailModal vuelca ese JSON entero, clave por
+  // clave y sin allowlist, a la inmobiliaria (justo en el caso "sin reporte
+  // financiero del buro", que es el habitual con TransUnion). Se desvia a
+  // `autorizacion_perfil_prospecto`, que ninguna ruta de la agencia devuelve.
+  // El campo sigue siendo opcional en submitFormularioSchema: no rompe nada.
+  const { ingresos_mensuales: ingresoDeclarado, ...formularioSinIngreso } = input;
+  if (ingresoDeclarado != null && estadoActual?.expediente_id) {
+    const { error: perfilError } = await (supabase
+      .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+      .upsert(
+        {
+          expediente_id: estadoActual.expediente_id,
+          ingreso_declarado_cop: ingresoDeclarado,
+          updated_at: new Date().toISOString(),
+        } as never,
+        { onConflict: 'expediente_id' },
+      );
+    if (perfilError) {
+      logger.warn(
+        { error: perfilError.message, expedienteId: estadoActual.expediente_id },
+        '§8.2: no se pudo guardar el ingreso declarado del formulario publico',
+      );
+    }
+  }
 
   // Update estudio with form data
   const { error: updateError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .update({
-      datos_formulario: input as unknown as never,
+      datos_formulario: formularioSinIngreso as unknown as never,
       estado: enEsperaDePago ? ESTADO_ESPERANDO_PAGO : 'formulario_completado',
       fecha_completado_self_service: new Date().toISOString(),
     } as never)

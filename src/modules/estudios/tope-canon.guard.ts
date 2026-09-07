@@ -19,7 +19,13 @@
 //
 // NO es la regla V3 del scorecard. El motor sombra (src/modules/estudios/motor/)
 // tiene su propia regla de canon / ingreso > 40%, que es una RELACION entre el
-// canon y el ingreso declarado de la persona. Esta de aqui es un tope ABSOLUTO
+// canon y el ingreso INFERIDO POR EL BURO (features.ingreso_mensual_inferido_cop),
+// NUNCA el declarado por el prospecto: la Politica V4.1 §4.2 excluye
+// explicitamente el autorreportado de la inferencia, y lo que el prospecto
+// declara en el PASO 5 (§8.2) vive en su propia tabla, fuera de este modulo y
+// sin ninguna via hacia el motor (scripts/check-ingreso-declarado.ts lo
+// verifica con un grep sobre todo src/modules/estudios/).
+// Esta de aqui es un tope ABSOLUTO
 // en pesos sobre el inmueble, no depende de quien lo arriende, y se evalua antes
 // de que exista dato alguno del prospecto. Son dos reglas distintas y no se
 // fusionan.

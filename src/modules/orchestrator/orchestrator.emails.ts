@@ -309,6 +309,26 @@ export async function sendInvitacionMiembroEmail(params: {
 
 // ── Responsable asignado (inmueble o expediente) ───────────
 
+/**
+ * Escapa texto antes de interpolarlo en el HTML de un correo.
+ *
+ * Existe por sendResponsableAsignadoEmail: es el unico correo cuyo `titulo` y
+ * `mensaje` los arma quien lo llama, y desde el §12 uno de esos llamadores
+ * (el reporte de identidad) nace en una ruta PUBLICA sin sesion. Sin escapar,
+ * un `<a href>` tecleado por cualquiera con el enlace saldria dentro de un
+ * correo legitimo del dominio verificado de Cofianza — phishing con nuestra
+ * propia cabecera de marca. Los mensajes del sistema son texto plano, asi que
+ * escapar no cambia nada de lo que ya se enviaba.
+ */
+function escapeHtml(texto: string): string {
+  return texto
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export async function sendResponsableAsignadoEmail(params: {
   email: string;
   nombre: string | null;
@@ -317,14 +337,17 @@ export async function sendResponsableAsignadoEmail(params: {
   link: string; // ruta relativa, ej. /expedientes/<id>
   frontend_url: string;
 }) {
-  const { email, nombre, titulo, mensaje, link, frontend_url } = params;
+  const { email, nombre, link, frontend_url } = params;
+  // Escapado obligatorio: ver escapeHtml. El `subject` va en texto plano.
+  const titulo = escapeHtml(params.titulo);
+  const mensaje = escapeHtml(params.mensaje);
   const url = `${frontend_url}${link.startsWith('/') ? '' : '/'}${link}`;
-  const saludo = nombre ? `Hola ${nombre},` : 'Hola,';
+  const saludo = nombre ? `Hola ${escapeHtml(nombre)},` : 'Hola,';
 
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: titulo,
+    subject: params.titulo,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -342,7 +365,7 @@ export async function sendResponsableAsignadoEmail(params: {
     `,
   });
 
-  logger.info({ email, titulo }, 'Orchestrator email: responsable asignado enviado');
+  logger.info({ email, titulo: params.titulo }, 'Orchestrator email: responsable asignado enviado');
 }
 
 // ── Cita Solicitada — Notificacion al Propietario ──────────

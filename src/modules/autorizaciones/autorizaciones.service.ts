@@ -9,7 +9,13 @@ import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { estudioYaCobrado as estudioPagado } from '@/modules/estudios/pago.guard';
 import { env } from '@/config';
-import type { FirmarInput, RevocarInput } from './autorizaciones.schema';
+import type {
+  FirmarInput,
+  RevocarInput,
+  PerfilProspectoInput,
+  ReportarIdentidadInput,
+} from './autorizaciones.schema';
+import { senalDiscrepanciaIngreso } from './ingreso-declarado';
 import { TEXTO_LEGAL, VERSION_TERMINOS } from './autorizaciones.texto';
 
 // ============================================================
@@ -126,7 +132,118 @@ export async function getAutorizacionForExpediente(
     .limit(1)
     .maybeSingle();
 
-  return autorizacion as (Record<string, unknown>) | null;
+  if (!autorizacion) return null;
+
+  // PASO 5 (Flujo §8): lo que el prospecto declaro en su celular. Se adjunta
+  // por ALLOWLIST construida campo a campo, NUNCA con `...perfil`.
+  //
+  // Una blocklist se rompe sola en cuanto alguien agregue una columna, y este
+  // endpoint corre bajo authorize('expedientes','read') — que la inmobiliaria
+  // tiene. La promesa que el §8.2 le hace al prospecto en pantalla ("esta
+  // cifra no se la mostramos a la inmobiliaria") se sostiene AQUI, en el
+  // servicio junto al tenant guard, no en el render: con DevTools se lee igual.
+  const perfil = await leerPerfilProspecto(expedienteId, userRol);
+  return { ...(autorizacion as Record<string, unknown>), perfil_prospecto: perfil };
+}
+
+/** Roles internos de Cofianza: los unicos que ven el bloque §8.2. */
+function esRolInternoCofianza(userRol?: string): boolean {
+  return userRol === 'administrador' || userRol === 'operador_analista' || userRol === 'gerencia_consulta';
+}
+
+async function leerPerfilProspecto(
+  expedienteId: string,
+  userRol?: string,
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await (supabase
+    .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+    .select('*')
+    .eq('expediente_id', expedienteId)
+    .maybeSingle();
+
+  // Tabla ausente (migracion sin correr) o error: el resto de la card sigue.
+  if (error || !data) return null;
+  const p = data as Record<string, unknown>;
+
+  // Lo que ve CUALQUIER rol con acceso al expediente: si el prospecto confirmo
+  // quien es, si reporto que esos datos no son suyos (el gestor tiene que
+  // poder corregir y reenviar) y si dijo que viene acompanado.
+  const publico: Record<string, unknown> = {
+    identidad_confirmada: p.identidad_confirmada ?? false,
+    identidad_confirmada_en: p.identidad_confirmada_en ?? null,
+    identidad_reporte: p.identidad_reporte ?? null,
+    identidad_reporte_en: p.identidad_reporte_en ?? null,
+    presentacion: p.presentacion ?? null,
+    coarrendatario_intencion: p.coarrendatario_intencion ?? null,
+  };
+
+  if (!esRolInternoCofianza(userRol)) return publico;
+
+  // Solo Cofianza: el bloque §8.2 completo, el texto libre del reporte (puede
+  // contener cualquier cosa) y la senal de discrepancia — calculada al vuelo,
+  // JAMAS persistida y jamas devuelta al motor.
+  const declarado = p.ingreso_declarado_cop == null ? null : Number(p.ingreso_declarado_cop);
+  return {
+    ...publico,
+    identidad_reporte_detalle: p.identidad_reporte_detalle ?? null,
+    situacion_laboral: p.situacion_laboral ?? null,
+    donde_labora: p.donde_labora ?? null,
+    ingreso_declarado_cop: declarado,
+    discrepancia_ingreso: senalDiscrepanciaIngreso(
+      declarado,
+      await leerIngresoInferidoDelExpediente(expedienteId, declarado),
+    ),
+  };
+}
+
+/**
+ * Ingreso INFERIDO por el buro para el expediente, solo para contrastarlo con
+ * el declarado. Se lee de `estudios_scorecard_sombra` (el unico hogar legitimo
+ * del inferido) y NO al reves: nada de esta funcion vuelve al motor.
+ *
+ * Hoy devuelve null casi siempre — TransUnion no entrega ingreso inferido por
+ * ningun nodo del combo 1901 — y esa ausencia se respeta: NO se rellena con el
+ * declarado. Rellenarla taparia la brecha de fuentes en vez de arreglarla.
+ *
+ * OJO: un expediente contiene estudios de MAS DE UN titular de datos. El
+ * co-arrendatario invitado comparte `expediente_id` (coarrendatarios.service
+ * lo inserta con tipo='con_coarrendatario') y produce su propia fila en
+ * estudios_scorecard_sombra. Sin el `.neq` de abajo, el declarado del TITULAR
+ * se contrastaba contra el inferido del CO-ARRENDATARIO: una discrepancia
+ * fabricada entre dos personas distintas que ademas TAPABA la ausencia real
+ * del titular, que es justo la brecha que este diseno quiere dejar visible.
+ * Mismo filtro y misma razon que orchestrator.service.ts.
+ */
+async function leerIngresoInferidoDelExpediente(
+  expedienteId: string,
+  declarado: number | null,
+): Promise<number | null> {
+  if (declarado == null) return null; // sin declarado no hay nada que contrastar
+  try {
+    const { data: estudios } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .neq('tipo', 'con_coarrendatario')
+      .order('created_at', { ascending: false })
+      .limit(5);
+    const ids = ((estudios || []) as Array<{ id: string }>).map((e) => e.id);
+    if (ids.length === 0) return null;
+
+    const { data } = await (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .select('ingreso_inferido_cop')
+      .in('estudio_id', ids)
+      .not('ingreso_inferido_cop', 'is', null)
+      .order('fecha_calculo', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const bruto = (data as { ingreso_inferido_cop?: number | string | null } | null)?.ingreso_inferido_cop;
+    const n = typeof bruto === 'string' ? Number(bruto) : bruto;
+    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 // ============================================================
@@ -339,12 +456,29 @@ function maskTelefono(tel: string | null): string | null {
   return `••• ••${digits.slice(-2)}`;
 }
 
+/**
+ * Enmascara un documento dejando visibles solo los 4 ultimos digitos.
+ *
+ * §8.1 pide mostrar "el documento registrado" para que el prospecto lo
+ * confirme, pero §12 dice que esa confirmacion ES la defensa contra el enlace
+ * reenviado a un tercero: enseñarle el numero completo al portador del enlace
+ * le regalaria la respuesta al impostor, y encima seria PII nueva sobre un
+ * endpoint que hoy minimiza a proposito (quito el email, enmascara el
+ * telefono). Mismo criterio que maskTelefono.
+ */
+function maskDocumento(doc: string | null): string | null {
+  if (!doc) return null;
+  const digits = doc.replace(/[^A-Za-z0-9]/g, '');
+  if (digits.length < 4) return null;
+  return `••••${digits.slice(-4)}`;
+}
+
 export async function getAutorizacionByToken(token: string) {
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma,
-      solicitantes(nombre, apellido, telefono),
+      solicitantes(nombre, apellido, telefono, tipo_documento, numero_documento),
       expedientes(numero, inmuebles(direccion, ciudad, barrio))
     `)
     .eq('token', token)
@@ -365,7 +499,13 @@ export async function getAutorizacionByToken(token: string) {
     texto_autorizado: string;
     version_terminos: string;
     metodo_firma: string | null;
-    solicitantes: { nombre: string; apellido: string; telefono: string | null };
+    solicitantes: {
+      nombre: string;
+      apellido: string;
+      telefono: string | null;
+      tipo_documento: string | null;
+      numero_documento: string | null;
+    };
     expedientes: { numero: string; inmuebles: { direccion: string; ciudad: string; barrio: string | null } };
   };
 
@@ -382,10 +522,16 @@ export async function getAutorizacionByToken(token: string) {
   }
 
   if (auth.estado !== 'pendiente') {
+    // Codigos distintos porque la pantalla del prospecto los trata distinto:
+    // reabrir el enlace despues de firmar (gesto normalisimo: el enlace vive en
+    // WhatsApp) tiene que mostrar la pantalla de exito, no una alerta roja. El
+    // mensaje NO se le renderiza al prospecto — el front tiene copy propio —
+    // asi que el nombre interno del enum se queda aqui, para los logs.
+    if (auth.estado === 'autorizado') {
+      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+    }
     throw AppError.badRequest(
-      auth.estado === 'autorizado'
-        ? 'Esta autorizacion ya fue firmada'
-        : `Esta autorizacion tiene estado: ${auth.estado}`,
+      `Esta autorizacion tiene estado: ${auth.estado}`,
       'AUTORIZACION_ESTADO_INVALIDO',
     );
   }
@@ -401,6 +547,10 @@ export async function getAutorizacionByToken(token: string) {
       // PII minimizada para el portador del token: NO se devuelve el email completo
       // (la pantalla no lo usa) y el teléfono va enmascarado.
       telefono_masked: maskTelefono(auth.solicitantes.telefono),
+      // §8.1: el prospecto confirma su identidad. El documento va ENMASCARADO
+      // (ver maskDocumento) — nunca completo.
+      tipo_documento: auth.solicitantes.tipo_documento,
+      numero_documento_masked: maskDocumento(auth.solicitantes.numero_documento),
     },
     expediente: {
       numero_expediente: auth.expedientes.numero,
@@ -411,6 +561,308 @@ export async function getAutorizacionByToken(token: string) {
       },
     },
   };
+}
+
+// ============================================================
+// 3b. PASO 5 (Flujo §8) — perfil declarado por el prospecto
+// ============================================================
+
+/**
+ * Repite el trio de validaciones que hacen todos los handlers publicos de este
+ * modulo (existe / no expirado / estado 'pendiente') y devuelve el contexto
+ * minimo. Que sea 'pendiente' NO es burocracia: es lo que impide que alguien
+ * reescriba lo declarado despues de que la firma congelo la evidencia del 8.4,
+ * y es la unica defensa que necesita esta tabla (por eso no lleva trigger de
+ * inmutabilidad — ver el encabezado de la migracion 20260907000001).
+ */
+async function autorizacionPendientePorToken(token: string): Promise<{
+  id: string;
+  expediente_id: string | null;
+  solicitante_id: string;
+}> {
+  const { data, error } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, token_expiracion, expediente_id, solicitante_id')
+    .eq('token', token)
+    .maybeSingle();
+
+  if (error) {
+    logger.error({ error }, 'Error de BD consultando autorizacion por token');
+    throw fromSupabaseError(error);
+  }
+  if (!data) {
+    throw AppError.notFound('Autorizacion no encontrada o enlace invalido', 'AUTORIZACION_NOT_FOUND');
+  }
+  const auth = data as unknown as {
+    id: string;
+    estado: string;
+    token_expiracion: string;
+    expediente_id: string | null;
+    solicitante_id: string;
+  };
+  if (new Date(auth.token_expiracion) < new Date()) {
+    throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
+  }
+  if (auth.estado !== 'pendiente') {
+    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
+  }
+  return { id: auth.id, expediente_id: auth.expediente_id, solicitante_id: auth.solicitante_id };
+}
+
+/**
+ * Guarda lo que el prospecto declara en el PASO 5 (§8.1 confirmacion de
+ * identidad, §8.2 laboral e ingreso, §8.3 solo/acompanado).
+ *
+ * Va a `autorizacion_perfil_prospecto` y NO a otro sitio, a proposito:
+ *   - NO a `autorizaciones_habeas_data`: su trigger es una allowlist y
+ *     cualquier columna nueva escrita ahi revienta la firma (restrict_violation)
+ *     dejando a esa persona sin poder autorizar nunca;
+ *   - NO a `solicitantes`: es el system-of-record del documento que se congela
+ *     y se compara contra el buro, y su `ingresos_mensuales` es el numero del
+ *     GESTOR, que la agencia si puede ver;
+ *   - NO a `estudios.datos_formulario`: EstudioDetailModal vuelca ese JSON
+ *     entero, clave por clave y sin allowlist, a la inmobiliaria — escribir el
+ *     ingreso ahi haria falsa la promesa del §8.2 el primer dia.
+ *
+ * Best-effort: si la tabla no existe todavia (migracion sin correr) se loguea
+ * y se sigue. Perder lo declarado es malo; bloquear la autorizacion, peor.
+ */
+export async function guardarPerfilProspecto(token: string, input: PerfilProspectoInput) {
+  const auth = await autorizacionPendientePorToken(token);
+  if (!auth.expediente_id) {
+    logger.warn({ autorizacionId: auth.id }, 'PASO 5: autorizacion sin expediente — no se guarda el perfil');
+    return { guardado: false };
+  }
+
+  const ahora = new Date().toISOString();
+  // Solo las claves que vienen: un envio parcial no borra lo anterior.
+  const fila: Record<string, unknown> = {
+    expediente_id: auth.expediente_id,
+    autorizacion_id: auth.id,
+    updated_at: ahora,
+  };
+  if (input.identidad_confirmada) {
+    fila.identidad_confirmada = true;
+    fila.identidad_confirmada_en = ahora;
+    // Y se limpia el reporte anterior. La fila es 1:1 con el EXPEDIENTE, no con
+    // el enlace: sin esto, un reporte de 'datos_incorrectos' que el gestor ya
+    // corrigio (ficha arreglada + enlace nuevo + prospecto correcto que
+    // confirma, firma, paga y ejecuta) dejaba para siempre el banner ambar
+    // "el enlace se detuvo y no se consulto ninguna central de riesgo" encima
+    // de un expediente ya autorizado y ya consultado. Quien confirma hoy es
+    // quien manda; la traza del reporte queda en el audit log y en el timeline.
+    fila.identidad_reporte = null;
+    fila.identidad_reporte_detalle = null;
+    fila.identidad_reporte_en = null;
+  }
+  if (input.situacion_laboral !== undefined) fila.situacion_laboral = input.situacion_laboral;
+  if (input.donde_labora !== undefined) fila.donde_labora = input.donde_labora;
+  if (input.ingreso_declarado_cop !== undefined) fila.ingreso_declarado_cop = input.ingreso_declarado_cop;
+  if (input.presentacion !== undefined) fila.presentacion = input.presentacion;
+  if (input.coarrendatario !== undefined) fila.coarrendatario_intencion = input.coarrendatario;
+
+  const { error } = await (supabase
+    .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+    .upsert(fila as never, { onConflict: 'expediente_id' });
+
+  if (error) {
+    logger.warn(
+      { error: error.message, expedienteId: auth.expediente_id },
+      'PASO 5: no se pudo guardar el perfil declarado por el prospecto',
+    );
+    return { guardado: false };
+  }
+  return { guardado: true };
+}
+
+/**
+ * §8.1 + §12: "El prospecto reporta que no es el. El estudio se detiene, se
+ * marca para revision y se notifica al solicitante y a Cofianza."
+ *
+ * NO existe la "correccion" literal del §8.1 (que el prospecto reescriba su
+ * documento desde la pantalla publica) y no es un olvido: ver el comentario de
+ * `identidad_confirmada` en la migracion 20260907000001. Confirmar o reportar,
+ * dos salidas, ninguna escribe identidad. La correccion real la hace el gestor
+ * en el dashboard —donde esta auditada y scopeada— y reenvia el enlace.
+ *
+ * ORDEN NO NEGOCIABLE: primero se guarda el reporte, DESPUES se expira la
+ * autorizacion. Al reves, el chequeo de estado='pendiente' del propio servicio
+ * rechazaria la escritura del reporte y se perderia el motivo.
+ */
+export async function reportarIdentidadProspecto(
+  token: string,
+  input: ReportarIdentidadInput,
+  ip?: string,
+  userAgent?: string,
+) {
+  const auth = await autorizacionPendientePorToken(token);
+  const ahora = new Date().toISOString();
+
+  // 1. Traza del reporte (antes de expirar — ver el comentario de arriba).
+  if (auth.expediente_id) {
+    const { error: perfilError } = await (supabase
+      .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+      .upsert(
+        {
+          expediente_id: auth.expediente_id,
+          autorizacion_id: auth.id,
+          identidad_reporte: input.motivo,
+          identidad_reporte_detalle: input.detalle ?? null,
+          identidad_reporte_en: ahora,
+          // Mismo truncado defensivo que coarrendatarios.service: un valor
+          // largo daria un 22001 opaco justo en el camino de un reporte.
+          identidad_reporte_ip: ip ? ip.slice(0, 45) : null,
+          identidad_reporte_user_agent: userAgent ? userAgent.slice(0, 1000) : null,
+          updated_at: ahora,
+        } as never,
+        { onConflict: 'expediente_id' },
+      );
+    if (perfilError) {
+      logger.warn(
+        { error: perfilError.message, expedienteId: auth.expediente_id },
+        '§12: no se pudo guardar el reporte de identidad (el enlace se expira igual)',
+      );
+    }
+  }
+
+  // 2. Detener el proceso. 'expirado' es la UNICA transicion que
+  //    fn_autorizaciones_habeas_data_inalterable permite sobre una fila
+  //    pendiente, y solo puede tocar `estado`. Basta: sin autorizacion vigente,
+  //    el gate fail-closed assertAutorizacionVigente impide toda consulta
+  //    FACTURABLE al buro. Por eso no se inventa ningun estado nuevo de
+  //    estudio ni de expediente.
+  await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'expirado' } as never)
+    .eq('id', auth.id)
+    .eq('estado', 'pendiente');
+
+  logAudit({
+    usuarioId: null,
+    accion: AUDIT_ACTIONS.AUTORIZACION_REVOCADA,
+    entidad: AUDIT_ENTITIES.AUTORIZACION,
+    entidadId: auth.id,
+    detalle: {
+      origen: 'reporte_identidad_prospecto',
+      motivo: input.motivo,
+      detalle: input.detalle ?? null,
+      solicitante_id: auth.solicitante_id,
+    },
+    ip,
+  });
+
+  // 3. "Se marca para revision" + avisos. Fire-and-forget: el enlace ya quedo
+  //    muerto, que es lo unico que no puede fallar.
+  if (auth.expediente_id) {
+    void avisarReporteIdentidad(auth.expediente_id, input).catch((err) =>
+      logger.warn({ error: err }, '§12: fallo el fan-out del reporte de identidad'),
+    );
+  }
+
+  return { reportado: true };
+}
+
+const MOTIVO_REPORTE_LABEL: Record<string, string> = {
+  no_soy_yo: 'la persona que abrio el enlace dice que NO es el titular de esos datos',
+  datos_incorrectos: 'los datos registrados no corresponden a esa persona',
+};
+
+/**
+ * Evento de timeline + notificaciones del §12. Tipo 'estudio' a proposito: la
+ * UI del timeline filtra por una lista CERRADA de tipos, asi que un tipo nuevo
+ * se escribiria pero seria invisible (ya paso con citas y contratos).
+ *
+ * Canales: in-app + correo. SIN WhatsApp — ninguna plantilla aprobada en Meta
+ * corresponde a este mensaje, y WHATSAPP_PROVIDER cae a 'mock' por defecto, o
+ * sea el aviso critico podria no salir nunca y fallar en silencio.
+ *
+ * Tampoco se le escribe al contacto del solicitante: si acaban de reportar que
+ * esos datos no son de esa persona, ese correo y ese telefono son justamente
+ * los que estan en duda.
+ */
+async function avisarReporteIdentidad(expedienteId: string, input: ReportarIdentidadInput) {
+  const [{ notificarUsuario, notificarYCorreo, notificarResponsableExpediente }, { listOperators }] =
+    await Promise.all([
+      import('@/modules/notificaciones/notificaciones.service'),
+      import('@/modules/users/users.service'),
+    ]);
+
+  const { data: expRow } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('numero, inmuebles(propietario_id, direccion)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  const exp = expRow as unknown as {
+    numero?: string;
+    inmuebles?: { propietario_id?: string | null; direccion?: string | null } | null;
+  } | null;
+
+  const titulo = 'Verificacion de identidad detenida';
+  // `input.detalle` NO entra aqui, y no es un olvido. Es texto libre de un
+  // endpoint PUBLICO sin sesion (500 chars, cualquier charset) y este mensaje
+  // va a la campanita del propietario y del miembro responsable de la
+  // inmobiliaria, y por correo HTML a todos los operadores: incrustarlo
+  // (a) burlaba la allowlist de leerPerfilProspecto, que le esconde
+  //     `identidad_reporte_detalle` justo a esos dos roles porque "puede
+  //     contener cualquier cosa" (y suele traer PII de terceros), y
+  // (b) convertia el dominio verificado de Cofianza en un vector de phishing
+  //     (un <a href> del atacante dentro de un correo legitimo).
+  // El detalle vive en UN solo sitio, con UN solo control de acceso:
+  // autorizacion_perfil_prospecto.identidad_reporte_detalle, que AutorizacionSection
+  // renderiza escapado por JSX y solo para roles internos.
+  const mensaje =
+    `En el expediente ${exp?.numero || expedienteId}, ${MOTIVO_REPORTE_LABEL[input.motivo]}. ` +
+    'Detuvimos el enlace de autorizacion y no se consultara ninguna central de riesgo. ' +
+    'Revisa los datos del solicitante y, si corresponde, envia un enlace nuevo.' +
+    (input.detalle ? ' Quien reporto dejo una nota: la ve el equipo de Cofianza en el expediente.' : '');
+  const link = `/expedientes/${expedienteId}`;
+  const payload = { expediente_id: expedienteId, motivo: input.motivo };
+
+  await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'estudio',
+      descripcion: `Autorizacion detenida: ${MOTIVO_REPORTE_LABEL[input.motivo]}. Marcado para revision.`,
+      metadata: { automatico: true, origen: 'reporte_identidad_prospecto', motivo: input.motivo },
+    } as never);
+
+  const propietarioId = exp?.inmuebles?.propietario_id ?? null;
+  if (propietarioId) {
+    await notificarUsuario({
+      userId: propietarioId,
+      tipo: 'autorizacion.identidad_reportada',
+      titulo,
+      mensaje,
+      link,
+      payload,
+    }).catch((e) => logger.warn({ error: e }, '§12: notif propietario'));
+  }
+  await notificarResponsableExpediente({
+    expedienteId,
+    excluirPerfilId: propietarioId,
+    tipo: 'autorizacion.identidad_reportada',
+    titulo,
+    mensaje,
+    link,
+    payload,
+  }).catch((e) => logger.warn({ error: e }, '§12: notif responsable'));
+
+  // "y a Cofianza": no existe un canal interno unico, asi que se avisa a los
+  // operadores activos (in-app + correo con la cascara generica).
+  const operadores = await listOperators().catch(() => []);
+  await Promise.all(
+    operadores.map((op) =>
+      notificarYCorreo({
+        userId: op.id,
+        tipo: 'autorizacion.identidad_reportada',
+        titulo,
+        mensaje,
+        link,
+        payload,
+      }).catch((e) => logger.warn({ error: e }, '§12: notif operador Cofianza')),
+    ),
+  );
 }
 
 // ============================================================
@@ -458,34 +910,47 @@ export async function firmarAutorizacion(
     throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
   }
 
-  // 2. If OTP method, verify the OTP code
-  if (input.metodo_firma === 'otp') {
-    const { data: otp } = await (supabase
-      .from('autorizacion_otps' as string) as ReturnType<typeof supabase.from>)
-      .select('id, codigo, expira_en, verificado')
-      .eq('autorizacion_id', auth.id)
-      .eq('verificado', true)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  // 2. PRUEBA DE POSESION — OBLIGATORIA PARA TODA FIRMA DE ESTA RUTA PUBLICA.
+  //
+  // Antes esto colgaba de `if (input.metodo_firma === 'otp')`, y ahi estaba el
+  // agujero: la ruta es publica y su unico gate es el token del enlace, asi que
+  // quien reenviara el WhatsApp (justo el caso borde del §12 "enlace reenviado
+  // a un tercero") podia firmar con un simple
+  //   POST /public/autorizar/<token>/firmar {"metodo_firma":"canvas","datos_firma":"..."}
+  // sin OTP, sin ver la pantalla y sin pasar por §8.1. La autorizacion quedaba
+  // 'autorizado' congelando el documento del TITULAR con la IP del impostor, y
+  // el orquestador disparaba la consulta FACTURABLE al buro sobre alguien que
+  // nunca autorizo. La confirmacion de identidad del §8.1 no lo frena: vive en
+  // otra tabla, es best-effort y no gatea nada.
+  //
+  // Ahora el OTP verificado y vigente es requisito de la firma, sea cual sea el
+  // metodo declarado: es la UNICA prueba de que quien firma controla el
+  // telefono/correo del titular. No lo vuelvas a condicionar al metodo.
+  const { data: otp } = await (supabase
+    .from('autorizacion_otps' as string) as ReturnType<typeof supabase.from>)
+    .select('id, codigo, expira_en, verificado')
+    .eq('autorizacion_id', auth.id)
+    .eq('verificado', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-    if (!otp) {
-      throw AppError.badRequest(
-        'Debe verificar el codigo OTP antes de firmar',
-        'OTP_NO_VERIFICADO',
-      );
-    }
+  if (!otp) {
+    throw AppError.badRequest(
+      'Debe verificar el codigo OTP antes de firmar',
+      'OTP_NO_VERIFICADO',
+    );
+  }
 
-    // El OTP verificado no debe estar caducado al momento de firmar: una firma
-    // electrónica (Ley 527/1999) con un OTP viejo no es válida como prueba de
-    // posesión reciente. El frontend verifica y firma seguido, así que la
-    // ventana de 5 min basta; si expiró, hay que solicitar y verificar uno nuevo.
-    if (new Date((otp as unknown as OtpRow).expira_en) < new Date()) {
-      throw AppError.badRequest(
-        'El codigo OTP expiro. Solicite uno nuevo y verifiquelo antes de firmar.',
-        'OTP_EXPIRADO',
-      );
-    }
+  // El OTP verificado no debe estar caducado al momento de firmar: una firma
+  // electrónica (Ley 527/1999) con un OTP viejo no es válida como prueba de
+  // posesión reciente. El frontend verifica y firma seguido, así que la
+  // ventana de 5 min basta; si expiró, hay que solicitar y verificar uno nuevo.
+  if (new Date((otp as unknown as OtpRow).expira_en) < new Date()) {
+    throw AppError.badRequest(
+      'El codigo OTP expiro. Solicite uno nuevo y verifiquelo antes de firmar.',
+      'OTP_EXPIRADO',
+    );
   }
 
   // 3. Compute SHA-256 hash of legal text + signature data

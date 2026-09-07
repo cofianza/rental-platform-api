@@ -6,6 +6,8 @@ import type {
   FirmarInput,
   RevocarInput,
   VerificarOtpInput,
+  PerfilProspectoInput,
+  ReportarIdentidadInput,
 } from './autorizaciones.schema';
 
 // ============================================================
@@ -80,5 +82,25 @@ export async function verificarOtp(req: Request, res: Response) {
   const { token } = req.params as unknown as { token: string };
   const { codigo } = req.body as VerificarOtpInput;
   const result = await autorizacionesService.verificarOtpCode(token, codigo);
+  sendSuccess(res, result);
+}
+
+// PASO 5 (Flujo §8): perfil declarado por el prospecto y reporte de identidad.
+export async function guardarPerfil(req: Request, res: Response) {
+  const { token } = req.params as unknown as { token: string };
+  const input = req.body as PerfilProspectoInput;
+  const result = await autorizacionesService.guardarPerfilProspecto(token, input);
+  sendSuccess(res, result);
+}
+
+export async function reportarIdentidad(req: Request, res: Response) {
+  const { token } = req.params as unknown as { token: string };
+  const input = req.body as ReportarIdentidadInput;
+  const result = await autorizacionesService.reportarIdentidadProspecto(
+    token,
+    input,
+    req.ip,
+    req.headers['user-agent'],
+  );
   sendSuccess(res, result);
 }

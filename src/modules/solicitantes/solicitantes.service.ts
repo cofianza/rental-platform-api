@@ -122,12 +122,40 @@ export async function listApplicants(query: ListApplicantsQuery, userId?: string
 // Get by ID
 // ============================================================
 
-export async function getApplicantById(id: string) {
-  const { data, error } = await (supabase
+/**
+ * AISLAMIENTO MULTI-TENANT: `userId`/`userRol` son OPCIONALES a proposito.
+ *
+ *   - Con ellos (handler HTTP): propietario/inmobiliaria solo leen su cartera,
+ *     con el MISMO predicado que listApplicants — si no, un ID que la lista si
+ *     scopea daria 404 al abrir el detalle.
+ *   - Sin ellos (llamadas internas: updateApplicant lee el estado previo y
+ *     re-lee la ficha tras escribir): sin scope, porque el permiso ya se
+ *     comprobo arriba y una re-lectura scopeada podria 404 despues de un UPDATE
+ *     legitimo.
+ *
+ * Era el UNICO camino a esta tabla sin scope (listApplicants, searchByDocument y
+ * updateApplicant si lo tienen): con solo el UUID —que queda en la URL del
+ * dashboard— un ex-miembro de otra agencia leia nombre, documento, contacto,
+ * empresa e ingresos_mensuales de un cliente ajeno.
+ */
+export async function getApplicantById(id: string, userId?: string, userRol?: string) {
+  let qb = (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
     .select(APPLICANT_FIELDS)
-    .eq('id', id)
-    .single();
+    .eq('id', id);
+
+  if (userId && (userRol === 'propietario' || userRol === 'inmobiliaria')) {
+    const orgId = await resolveInmobiliariaIdForPerfil(userId);
+    if (orgId) {
+      const memberIds = await resolveOrgMemberPerfilIds(orgId);
+      if (!memberIds.includes(userId)) memberIds.push(userId);
+      qb = qb.or(`inmobiliaria_id.eq.${orgId},creado_por.in.(${memberIds.join(',')})`);
+    } else {
+      qb = qb.eq('creado_por', userId);
+    }
+  }
+
+  const { data, error } = await qb.single();
 
   if (error || !data) {
     if (error?.code === 'PGRST116') {

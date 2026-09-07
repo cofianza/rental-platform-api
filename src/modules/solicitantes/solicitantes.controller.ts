@@ -18,7 +18,9 @@ export async function list(req: Request, res: Response) {
 
 export async function getById(req: Request, res: Response) {
   const { id } = req.params as unknown as ApplicantIdParams;
-  const applicant = await solicitantesService.getApplicantById(id);
+  // userId/userRol: scope de tenant — propietario/inmobiliaria solo ven su
+  // cartera (fuera de alcance = 404, igual que la lista).
+  const applicant = await solicitantesService.getApplicantById(id, req.user?.id, req.user?.rol);
   sendSuccess(res, applicant);
 }
 
