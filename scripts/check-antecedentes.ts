@@ -191,7 +191,7 @@ ok(sinReglaListas(antecedentesNoVerificados('t', 'C', HOY)), 'no_verificado NO e
 const fila = construirFilaSombra('e1', conHit) as Record<string, unknown>;
 ok((fila.reglas_duras_activadas as string[]).includes('listas_restrictivas'), 'la fila sombra lleva el codigo');
 ok(JSON.stringify(fila.features_crudas).includes('"antecedentes"') && !JSON.stringify(fila.features_crudas).includes('"raw"'), 'features_crudas lleva el resumen sin raw');
-ok(MODELO_VERSION === 'v4.1-sombra-7var' && MODELO_VERSION.length <= 20, 'version del modelo actualizada (V4 con fuente)');
+ok(MODELO_VERSION === 'v4.1-adenda1-7var' && MODELO_VERSION.length <= 20, 'version del modelo actualizada (Adenda 1, V4 con fuente)');
 
 // ── 3. Decision real + textos ───────────────────────────────
 ok((REGLAS_DURAS_ACTIVAS as readonly string[]).includes('listas_restrictivas'), 'listas_restrictivas esta en la lista blanca');

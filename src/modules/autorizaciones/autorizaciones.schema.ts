@@ -30,15 +30,16 @@ export const enviarEnlaceAutorizacionSchema = z
 // POST /public/autorizar/:token/firmar
 // ============================================================
 
-// OJO: `metodo_firma` describe la firma, NO la autoriza. Desde el §12
-// ("enlace reenviado a un tercero"), firmarAutorizacion exige un OTP verificado
-// y vigente para CUALQUIER metodo — antes 'canvas' saltaba esa prueba de
-// posesion y bastaba un curl con el token del enlace para autorizar en nombre
-// del titular. Si algun dia se retira 'canvas' de este enum, el gate real sigue
-// estando alli, en el servicio.
+// Adenda 1 §7 (Gerencia, 07/09/2026): "No se implementa OTP en el flujo de
+// autorizacion del estudio." El prospecto autoriza marcando las casillas
+// ('casilla', Decreto 1377/2013 art. 7). 'otp' sigue aceptado y, si viene,
+// se verifica; 'canvas' se conserva por compatibilidad. El riesgo del enlace
+// reenviado a un tercero (Flujo §12) queda ACEPTADO y registrado por la
+// Gerencia General en esa Adenda: la evidencia es el registro de la
+// aceptacion (fecha, hora, IP, dispositivo, texto y documento confirmado).
 export const firmarSchema = z.object({
-  metodo_firma: z.enum(['canvas', 'otp'], {
-    message: 'Metodo de firma invalido. Valores permitidos: canvas, otp',
+  metodo_firma: z.enum(['casilla', 'canvas', 'otp'], {
+    message: 'Metodo de firma invalido. Valores permitidos: casilla, canvas, otp',
   }),
   datos_firma: z.string().min(100, 'Firma invalida').max(500000, 'Firma demasiado grande').optional(),
   codigo_otp: z.string().length(6, 'Codigo OTP debe ser de 6 digitos').optional(),

@@ -79,6 +79,10 @@ export const AUDIT_ACTIONS = {
   // Cotejo biometrico AucoFace. El detalle lleva el veredicto y el code del
   // proceso en Auco — NUNCA las imagenes.
   AUTORIZACION_BIOMETRIA: 'autorizacion_biometria',
+  // Panel de calibracion (Adenda 1 §11).
+  CALIBRACION_PARAMETRO_CAMBIADO: 'calibracion_parametro_cambiado',
+  // Tarifa negociada caso por caso (Adenda 1 §5).
+  ESTUDIO_TARIFA_OVERRIDE: 'estudio_tarifa_override',
   // Plantillas de contrato
   PLANTILLA_CREATED: 'plantilla_created',
   PLANTILLA_UPDATED: 'plantilla_updated',
@@ -141,6 +145,7 @@ export const AUDIT_ENTITIES = {
   DOCUMENTO_SOPORTE: 'documento_soporte',
   CERTIFICADO: 'certificado',
   AUTORIZACION: 'autorizacion',
+  CALIBRACION: 'calibracion',
   PLANTILLA: 'plantilla',
   CONTRATO: 'contrato',
   PAGO: 'pago',

@@ -85,14 +85,14 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { getCompany } from '@/lib/companyConfig';
+import { getCalibracion } from '@/lib/calibracion';
 import { assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
 import {
   evaluarPortabilidad,
   errorNoPortable,
   type VeredictoCanonIngreso,
 } from './portabilidad';
-import { formatearCOP } from './tope-canon.guard';
+import { formatearCOP, getTopeCanonVigente } from './tope-canon.guard';
 import {
   evaluarAdmisionDeEstudio,
   errorNoAdmision,
@@ -471,7 +471,7 @@ async function vigenciaOriginalISO(fechaCompletado: string | null): Promise<stri
   if (!fechaCompletado) return null;
   const base = new Date(fechaCompletado).getTime();
   if (!Number.isFinite(base)) return null;
-  const dias = (await getCompany()).certificateValidityDays;
+  const dias = (await getCalibracion()).VIGENCIA_CRC_DIAS;
   return new Date(base + dias * 24 * 60 * 60 * 1000).toISOString();
 }
 
@@ -720,6 +720,7 @@ export async function reasignarEstudio(args: {
   //    la regla ni se la salta.
   const ingresoOriginal = await leerIngresoInferidoOriginal(estudio.id);
   const veredicto = evaluarPortabilidad({
+    topeCop: await getTopeCanonVigente(),
     canonOriginal: estudio.canon_evaluado,
     ingresoOriginal,
     canonDestino: destino.valor_arriendo,

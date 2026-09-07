@@ -217,6 +217,11 @@ const envSchema = z.object({
   // alcanzable es 80.7 sobre los 85 que pide el §3, asi que nadie llegaria nunca a
   // 'perfil fuerte' y muchos aprobados caerian en "necesitas acompañante".
   MOTOR_RUTA_USA_SCORECARD: z.string().default('false').transform((v) => v === 'true'),
+  // Adenda 1 §2/§3: el scorecard DECIDE el resultado y se consulta en cascada
+  // (Datacredito primaria; TransUnion solo en 40-89). OFF = el buro sigue
+  // decidiendo y el motor sigue en sombra. La Adenda §11 exige correr la
+  // matriz de casos (scripts/check-decision-adenda.ts) antes de encenderlo.
+  MOTOR_DECIDE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   FIRMA_MULTIPARTE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
 
   // Auto-firma de Cofianza (sello institucional). OFF por defecto. Solo aplica

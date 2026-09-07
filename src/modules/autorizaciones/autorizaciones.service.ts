@@ -9,6 +9,7 @@ import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { estudioYaCobrado as estudioPagado } from '@/modules/estudios/pago.guard';
 import { env } from '@/config';
+import { getCalibracion } from '@/lib/calibracion';
 import type {
   FirmarInput,
   RevocarInput,
@@ -200,6 +201,7 @@ async function leerPerfilProspecto(
     discrepancia_ingreso: senalDiscrepanciaIngreso(
       declarado,
       await leerIngresoInferidoDelExpediente(expedienteId, declarado),
+      (await getCalibracion()).UMBRAL_DIFERENCIA_INGRESO,
     ),
   };
 }
@@ -1140,47 +1142,50 @@ export async function firmarAutorizacion(
     throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
   }
 
-  // 2. PRUEBA DE POSESION — OBLIGATORIA PARA TODA FIRMA DE ESTA RUTA PUBLICA.
+  // 2. OTP — SOLO si el metodo declarado es 'otp' (Adenda 1 §7).
   //
-  // Antes esto colgaba de `if (input.metodo_firma === 'otp')`, y ahi estaba el
-  // agujero: la ruta es publica y su unico gate es el token del enlace, asi que
-  // quien reenviara el WhatsApp (justo el caso borde del §12 "enlace reenviado
-  // a un tercero") podia firmar con un simple
-  //   POST /public/autorizar/<token>/firmar {"metodo_firma":"canvas","datos_firma":"..."}
-  // sin OTP, sin ver la pantalla y sin pasar por §8.1. La autorizacion quedaba
-  // 'autorizado' congelando el documento del TITULAR con la IP del impostor, y
-  // el orquestador disparaba la consulta FACTURABLE al buro sobre alguien que
-  // nunca autorizo. La confirmacion de identidad del §8.1 no lo frena: vive en
-  // otra tabla, es best-effort y no gatea nada.
+  // Historia corta: hasta 2026-09-04 el OTP colgaba de `metodo_firma === 'otp'`
+  // y 'canvas' lo saltaba (un curl con el token bastaba para autorizar en
+  // nombre del titular). Se cerro exigiendo OTP a TODA firma. Tres dias
+  // despues la Gerencia General decidio por escrito lo contrario:
   //
-  // Ahora el OTP verificado y vigente es requisito de la firma, sea cual sea el
-  // metodo declarado: es la UNICA prueba de que quien firma controla el
-  // telefono/correo del titular. No lo vuelvas a condicionar al metodo.
-  const { data: otp } = await (supabase
-    .from('autorizacion_otps' as string) as ReturnType<typeof supabase.from>)
-    .select('id, codigo, expira_en, verificado')
-    .eq('autorizacion_id', auth.id)
-    .eq('verificado', true)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  //   Adenda 1 §7: "No se implementa OTP en el flujo de autorizacion del
+  //   estudio. [...] Riesgo aceptado que queda registrado. Sin OTP, la
+  //   evidencia de que la autorizacion fue otorgada por el titular y no por un
+  //   tercero que recibio el enlace reenviado se apoya unicamente en el
+  //   registro de la aceptacion: fecha, hora, IP, dispositivo, texto aceptado
+  //   y documento confirmado. Es una decision consciente de la Gerencia
+  //   General para no agregar friccion en esta etapa."
+  //
+  // Asi que 'casilla' (y 'canvas') firman sin OTP, y ESO ES LO DECIDIDO, no un
+  // descuido. Si el front manda 'otp', se sigue verificando: mas prueba nunca
+  // sobra. El §8.1 (confirmacion de identidad) y la biometria opcional
+  // (AUCO_BIOMETRIA_ENABLED) son las defensas que quedan.
+  if (input.metodo_firma === 'otp') {
+    const { data: otp } = await (supabase
+      .from('autorizacion_otps' as string) as ReturnType<typeof supabase.from>)
+      .select('id, codigo, expira_en, verificado')
+      .eq('autorizacion_id', auth.id)
+      .eq('verificado', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  if (!otp) {
-    throw AppError.badRequest(
-      'Debe verificar el codigo OTP antes de firmar',
-      'OTP_NO_VERIFICADO',
-    );
-  }
+    if (!otp) {
+      throw AppError.badRequest(
+        'Debe verificar el codigo OTP antes de firmar',
+        'OTP_NO_VERIFICADO',
+      );
+    }
 
-  // El OTP verificado no debe estar caducado al momento de firmar: una firma
-  // electrónica (Ley 527/1999) con un OTP viejo no es válida como prueba de
-  // posesión reciente. El frontend verifica y firma seguido, así que la
-  // ventana de 5 min basta; si expiró, hay que solicitar y verificar uno nuevo.
-  if (new Date((otp as unknown as OtpRow).expira_en) < new Date()) {
-    throw AppError.badRequest(
-      'El codigo OTP expiro. Solicite uno nuevo y verifiquelo antes de firmar.',
-      'OTP_EXPIRADO',
-    );
+    // Un OTP verificado pero caducado no sirve como prueba de posesion
+    // reciente: hay que pedir y verificar uno nuevo.
+    if (new Date((otp as unknown as OtpRow).expira_en) < new Date()) {
+      throw AppError.badRequest(
+        'El codigo OTP expiro. Solicite uno nuevo y verifiquelo antes de firmar.',
+        'OTP_EXPIRADO',
+      );
+    }
   }
 
   // 3. Compute SHA-256 hash of legal text + signature data

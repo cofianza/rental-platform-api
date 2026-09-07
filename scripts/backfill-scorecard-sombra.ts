@@ -36,6 +36,7 @@ import { registrarScorecardSombra } from '@/modules/estudios/motor/sombra.servic
 // El MISMO lector de canon que usan el tope (§4.4) y las reglas duras: una
 // sola definicion de "cual es el canon de este estudio".
 import { leerCanonDelInmueble } from '@/modules/estudios/tope-canon.guard';
+import { getCalibracion } from '@/lib/calibracion';
 
 const WRITE = process.argv.includes('--write');
 
@@ -82,6 +83,8 @@ async function main() {
   console.log(`${filas.length} estudio(s) completados con payload del buro.\n`);
 
   const resumen: Array<{ real: string; sombra: string }> = [];
+  const cal = await getCalibracion();
+  console.log(`Parametros: factor ingreso ${cal.FACTOR_AJUSTE_INGRESO} · umbrales ${cal.UMBRAL_APROBACION_AUTOMATICA}/${cal.UMBRAL_ZONA_GRIS}\n`);
 
   for (const f of filas) {
     const canon = await canonDe(f.expediente_id);
@@ -90,6 +93,9 @@ async function main() {
       payload: f.respuesta_proveedor,
       canon_mensual_cop: canon,
       score_persistido: f.score,
+      factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
+      umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
+      umbral_revision: cal.UMBRAL_ZONA_GRIS,
     });
 
     const faltan = salida.variables_no_calculables.join(',') || '—';

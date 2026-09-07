@@ -32,6 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { generateCertificatePdf, generateQrCode } from '@/modules/estudios/certificado.service';
+import { calcularTarifas } from '@/modules/estudios/tarifas';
 
 const BASE = {
   codigo: 'CRC-2026-0001',
@@ -64,7 +65,11 @@ const BASE = {
   canonMaximoTolerado: 2_875_000,
   requiereAcompanante: false,
   rutaEtiqueta: 'Aprobado por el buro — sin puntaje del modelo',
-  modeloVersion: 'v4.1-sombra-6var',
+  modeloVersion: 'v4.1-adenda1-7var',
+  tarifas: null,
+  factorAjusteIngreso: null,
+  fuentesConsultadas: null,
+  decisionCascada: null,
 };
 
 /**
@@ -178,6 +183,26 @@ function check(nombre: string, fn: () => void | Promise<void>) {
       qr,
     );
     assert.ok(largo.length > 5000);
+  });
+
+  await check('Adenda §5: un CRC aprobado imprime tarifa mensual, prima de vinculacion y cashback', async () => {
+    const conTarifas = await generateCertificatePdf(
+      {
+        ...BASE,
+        tarifas: calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 2_500_000 }),
+        fuentesConsultadas: 'DataCredito + TransUnion',
+        decisionCascada: 'promedio de dos centrales',
+        factorAjusteIngreso: 1.15,
+      },
+      qr,
+    );
+    const t = textoDelPdf(conTarifas);
+    assert.ok(t.includes('Tarifa mensual'), 'tarifa mensual');
+    assert.ok(t.includes('2%'), '2,0% para aprobacion automatica');
+    assert.ok(t.includes('Prima de vinculacion') && t.includes('20%'), 'prima 20% firmando solo');
+    assert.ok(t.includes('Cashback') && t.includes('30%'), 'cashback 30%');
+    assert.ok(t.includes('Fuentes consultadas') && t.includes('TransUnion'), 'Adenda §2.4: fuentes consultadas');
+    assert.ok(t.includes('Factor de ajuste') && t.includes('1.15'), 'Adenda §1.1: factor aplicado');
   });
 
   await check('un CRC con acompanante lo dice', async () => {

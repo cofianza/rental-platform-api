@@ -38,6 +38,7 @@ import { logger } from '@/lib/logger';
 import { MODELO_VERSION, evaluarSombra } from './index';
 import type { SalidaSombra } from './index';
 import { construirFilaSombra } from './fila';
+import { getCalibracion } from '@/lib/calibracion';
 
 export interface ArgsScorecardSombra {
   estudioId: string;
@@ -132,12 +133,17 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
     // 2. Canon congelado para esta corrida.
     const canon = await obtenerCanon(expedienteId);
 
-    // 3. Evaluar. evaluarSombra nunca lanza.
+    // 3. Evaluar. evaluarSombra nunca lanza. Mismos parametros del panel que
+    //    usa el punto de decision, para que sombra y decision cuenten lo mismo.
+    const cal = await getCalibracion();
     const salida = evaluarSombra({
       proveedor,
       payload,
       canon_mensual_cop: canon,
       score_persistido: scorePersistido,
+      factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
+      umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
+      umbral_revision: cal.UMBRAL_ZONA_GRIS,
     });
 
     // 4-5. Descartar la corrida vacia y hacer el upsert idempotente.

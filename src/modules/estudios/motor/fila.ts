@@ -58,6 +58,12 @@ export function construirFilaSombra(estudioId: string, salida: SalidaSombra): Re
     score_externo_modelo: f.score_modelo,
 
     ingreso_inferido_cop: monto(f.ingreso_mensual_inferido_cop),
+    // Adenda §1.1: el crudo arriba, el ajustado y el factor aqui. Nunca se pisa el crudo.
+    ingreso_inferido_ajustado_cop: monto(salida.ingreso_inferido_ajustado_cop),
+    factor_ajuste_ingreso: salida.factor_ajuste_ingreso,
+    // Politica §9 / Adenda §2.4: de donde salio V1.
+    fuente_score_externo: salida.fuente_score_externo,
+    scores_individuales: salida.scores_individuales,
     cuota_mensual_cop: monto(f.cuota_mensual_vigente_cop),
     canon_evaluado_cop: monto(salida.canon_evaluado_cop),
 
@@ -104,6 +110,8 @@ export function construirFilaSombra(estudioId: string, salida: SalidaSombra): Re
       fecha_consulta_buro: f.fecha_consulta,
       ausencias: f.ausencias,
       advertencias: salida.advertencias,
+      inconsistencia_score_buros: salida.inconsistencia_score_buros,
+      revision_obligatoria: salida.revision_obligatoria,
     },
   };
 }

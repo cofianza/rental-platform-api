@@ -398,25 +398,42 @@ describe('autorizaciones.service', () => {
   // ============================================================
 
   describe('firmarAutorizacion', () => {
-    // La prueba de posesion es OBLIGATORIA para TODA firma de la ruta publica.
-    // Antes `canvas` sin OTP firmaba: con el enlace reenviado (Flujo §12)
-    // cualquiera congelaba el documento del titular y disparaba la consulta
-    // FACTURABLE al buro. Este test existe para que nadie lo vuelva a
-    // condicionar al metodo.
-    it('canvas SIN OTP verificado NO firma (OTP_NO_VERIFICADO)', async () => {
+    // Adenda 1 §7 (Gerencia, 07/09/2026): "No se implementa OTP en el flujo de
+    // autorizacion del estudio." La aceptacion por casilla firma SIN OTP; el
+    // riesgo del enlace reenviado (Flujo §12) queda aceptado y registrado por
+    // la Gerencia General. Si alguien vuelve a exigir OTP a la casilla, este
+    // test se cae — y la decision documentada es la de la Adenda.
+    it('casilla firma SIN OTP (Adenda §7) y congela la evidencia del §8.4', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
+
+      const result = await firmarAutorizacion(TOKEN, { metodo_firma: 'casilla' }, '192.168.1.1', 'Mozilla/5.0');
+
+      expect(result).toMatchObject({ estado: 'autorizado', pago_requerido: false });
+      expect(mockFrom).not.toHaveBeenCalledWith('autorizacion_otps');
+      const update = opsDe('autorizaciones_habeas_data', 'update')[0].args[0] as Record<string, unknown>;
+      expect(update).toMatchObject({
+        estado: 'autorizado',
+        metodo_firma: 'casilla',
+        ip_autorizacion: '192.168.1.1',
+        user_agent: 'Mozilla/5.0',
+        numero_documento_aceptante: '123456789',
+        tipo_documento_aceptante: 'cc',
+      });
+    });
+
+    it('otp SIN OTP verificado NO firma (OTP_NO_VERIFICADO)', async () => {
       enqueue('autorizaciones_habeas_data', { data: paraFirmar });
       enqueue('autorizacion_otps', { data: null });
 
-      await expect(firmarAutorizacion(TOKEN, CANVAS, '1.1.1.1', 'UA')).rejects.toMatchObject({
+      await expect(firmarAutorizacion(TOKEN, OTP, '1.1.1.1', 'UA')).rejects.toMatchObject({
         statusCode: 400,
         errorCode: 'OTP_NO_VERIFICADO',
       });
       expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
     });
 
-    it('debe firmar con metodo canvas cuando hay OTP verificado', async () => {
+    it('debe firmar con metodo canvas (sin OTP, Adenda §7)', async () => {
       enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
-      enqueue('autorizacion_otps', { data: otpVerificado });
 
       const result = await firmarAutorizacion(TOKEN, CANVAS, '192.168.1.1', 'Mozilla/5.0');
 

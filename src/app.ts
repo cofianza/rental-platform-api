@@ -45,6 +45,7 @@ import reportesRouter from '@/modules/reportes/reportes.routes';
 // TEMPORAL (Mario 7-may-2026): herramienta de QA "Borrar datos de prueba".
 // Eliminar antes de produccion junto con la migracion 20260507000005.
 import adminToolsRouter from '@/modules/admin-tools/admin-tools.routes';
+import calibracionRouter from '@/modules/calibracion/calibracion.routes';
 import documentosLegalesRouter from '@/modules/documentos-legales/documentos-legales.routes';
 import whatsappRouter from '@/modules/whatsapp/whatsapp.routes';
 import morasRouter, { morasCronRouter } from '@/modules/moras/moras.routes';
@@ -158,6 +159,8 @@ app.use('/api/v1/dev/webhooks/pagos', devWebhookRouter);
 app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/reportes', reportesRouter);
 app.use('/api/v1/admin-tools', adminToolsRouter);
+// Panel de calibracion del modelo (Adenda 1 §11) — solo administrador.
+app.use('/api/v1/admin/calibracion', calibracionRouter);
 app.use('/api/v1/public/properties', publicPropertiesRouter);
 app.use('/api/v1/interesados', interesadosRouter);
 app.use('/api/v1/vitrina', vitrinaRouter);

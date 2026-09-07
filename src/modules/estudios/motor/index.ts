@@ -24,6 +24,9 @@
 // ============================================================
 
 import {
+  DIFERENCIA_BUROS_REVISION,
+  V1_REVISION_MANUAL_MIN,
+  V1_REVISION_MANUAL_MAX,
   MAX_BRUTO_MODELO,
   PUNTOS_MAXIMOS,
   UMBRAL_APROBADO,
@@ -65,11 +68,12 @@ export * from './features';
  * cada corrida y forma parte de la clave unica, asi que recalcular el
  * historico con otra version no pisa lo que dijo esta.
  *
- * '7var' = las 6 variables del buro (V1, V2, V3, V5, V6, V8) mas V4, que
- * desde 2026-09-07 sale del background check de Auco cuando esta encendido.
- * Maximo 20 caracteres (VARCHAR de la tabla).
+ * 'adenda1' = Adenda 1 a la Politica V4.1 (07/09/2026): factor de ajuste del
+ * ingreso (§1.1), V1 como promedio de dos centrales con cascada (§2) y Caso G.
+ * '7var' = las 6 variables del buro (V1, V2, V3, V5, V6, V8) mas V4 (FOSYGA
+ * via Auco cuando esta encendido). Maximo 20 caracteres (VARCHAR de la tabla).
  */
-export const MODELO_VERSION = 'v4.1-sombra-7var';
+export const MODELO_VERSION = 'v4.1-adenda1-7var';
 
 export interface EntradaSombra {
   /** 'datacredito' | 'transunion' | ... Decide el extractor. */
@@ -90,6 +94,22 @@ export interface EntradaSombra {
    * no se consulto (interruptor OFF): V4 queda fuera de alcance y nada cambia.
    */
   antecedentes?: ResumenAntecedentes | null;
+  /**
+   * Adenda §1.1: multiplica el ingreso estimado por la central ANTES del DTI
+   * y del canon/ingreso. 1 (o ausente) = sin ajuste. Se registra en la salida
+   * para reconstruir con que valor se decidio cada caso.
+   */
+  factor_ajuste_ingreso?: number | null;
+  /**
+   * Adenda §2 (cascada): score externo de la SEGUNDA central, cuando se
+   * consulto. V1 pasa a ser el promedio simple de las dos (Politica §4.1) y se
+   * evalua el Caso G (diferencia > 80 -> revision manual obligatoria).
+   */
+  score_externo_secundario?: number | null;
+  proveedor_secundario?: string | null;
+  /** Umbrales vigentes del panel de calibracion. Sin ellos, los de la Politica. */
+  umbral_aprobado?: number | null;
+  umbral_revision?: number | null;
 }
 
 /** Lo que del resumen viaja en la salida (y a features_crudas): sin `raw`. */
@@ -136,6 +156,25 @@ export interface SalidaSombra {
   advertencias: string[];
   /** Eco del insumo de Auco con el que se evaluo, sin `raw`. null si no hubo. */
   antecedentes: AntecedentesEvaluados | null;
+
+  // ── Adenda §1.1: ingreso crudo vs ajustado ────────────────
+  /** Ingreso de la central x factor. Es el que usaron V2/V3 y sus reglas duras. */
+  ingreso_inferido_ajustado_cop: number | null;
+  factor_ajuste_ingreso: number;
+
+  // ── Adenda §2 / Politica §9: de donde salio V1 ─────────────
+  /** DATACREDITO | TRANSUNION | PROMEDIO | PERSISTIDO | NO_DISPONIBLE */
+  fuente_score_externo: string;
+  scores_individuales: Record<string, number>;
+  /** Caso G: |score primaria - score secundaria| > 80. Solo con dos centrales. */
+  inconsistencia_score_buros: boolean;
+  /**
+   * Revision manual OBLIGATORIA por jerarquia (Politica §3.1: score 450-599;
+   * Caso G), con su motivo. Distinta de la revision "por banda" (70-84), que
+   * es donde el coarrendatario todavia puede aprobar (Adenda §3). null si no
+   * aplica.
+   */
+  revision_obligatoria: string | null;
 }
 
 const ETIQUETA_VARIABLE: Record<CodigoVariable, string> = {
@@ -177,6 +216,12 @@ function salidaDegradada(proveedor: string, fecha: string, motivo: string): Sali
     variables_no_calculables: ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9'],
     advertencias: [motivo],
     antecedentes: null,
+    ingreso_inferido_ajustado_cop: null,
+    factor_ajuste_ingreso: 1,
+    fuente_score_externo: 'NO_DISPONIBLE',
+    scores_individuales: {},
+    inconsistencia_score_buros: false,
+    revision_obligatoria: null,
   };
 }
 
@@ -225,9 +270,53 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       }
     }
 
+    // ── V1 con cascada (Adenda §2): promedio de las dos centrales ──
+    // Politica §4.1: "se utiliza el promedio simple de los dos scores. Si la
+    // diferencia entre los dos scores es mayor a 80 puntos, se activa revision
+    // manual adicional". Solo cuando el V1 primario es de un buro real: un
+    // score PERSISTIDO (capturado a mano) no se promedia con nada.
+    const scoresIndividuales: Record<string, number> = {};
+    let fuenteScore = 'NO_DISPONIBLE';
+    let inconsistenciaBuros = false;
+    if (features.score_externo !== null) {
+      fuenteScore = features.score_modelo === 'PERSISTIDO' ? 'PERSISTIDO' : proveedor.toUpperCase();
+      if (features.score_modelo !== 'PERSISTIDO') scoresIndividuales[proveedor.toUpperCase()] = features.score_externo;
+    }
+    const scoreSecundario = montoPositivo(entrada?.score_externo_secundario);
+    if (scoreSecundario !== null && features.score_externo !== null && features.score_modelo !== 'PERSISTIDO') {
+      const provSec = String(entrada?.proveedor_secundario ?? 'secundaria').trim().toUpperCase() || 'SECUNDARIA';
+      scoresIndividuales[provSec] = scoreSecundario;
+      inconsistenciaBuros = Math.abs(features.score_externo - scoreSecundario) > DIFERENCIA_BUROS_REVISION;
+      const promedio = Math.round((features.score_externo + scoreSecundario) / 2);
+      advertencias.push(
+        `V1 es el promedio simple de ${proveedor.toUpperCase()} (${features.score_externo}) y ${provSec} (${scoreSecundario}) = ${promedio} (Politica §4.1, Adenda §2).`,
+      );
+      features.score_externo = promedio;
+      features.score_modelo = 'PROMEDIO';
+      fuenteScore = 'PROMEDIO';
+      if (inconsistenciaBuros) {
+        advertencias.push(
+          `Caso G: los scores de las dos centrales difieren en mas de ${DIFERENCIA_BUROS_REVISION} puntos — revision manual obligatoria (Politica §4.1).`,
+        );
+      }
+    }
+
     // ── Insumos derivados ───────────────────────────────────
+    // Adenda §1.1: el ingreso que entra al DTI y al canon/ingreso es el de la
+    // central multiplicado por FACTOR_AJUSTE_INGRESO. El crudo se conserva
+    // intacto en features; el ajustado se publica aparte. Gerencia dejo
+    // escrito que esto amplia de hecho las reglas duras (40% -> 46% real,
+    // 65% -> 74,7% real) y que es una decision deliberada de apetito de riesgo.
+    const factorBruto = entrada?.factor_ajuste_ingreso;
+    const factor = typeof factorBruto === 'number' && Number.isFinite(factorBruto) && factorBruto > 0 ? factorBruto : 1;
     const canon = montoPositivo(entrada?.canon_mensual_cop);
-    const ingreso = features.ingreso_mensual_inferido_cop;
+    const ingresoCrudo = features.ingreso_mensual_inferido_cop;
+    const ingreso = ingresoCrudo === null ? null : Math.round(ingresoCrudo * factor);
+    if (ingreso !== null && factor !== 1) {
+      advertencias.push(
+        `Ingreso ajustado x${factor} (Adenda §1.1): ${ingresoCrudo} -> ${ingreso}. DTI y canon/ingreso —y sus reglas duras— se evaluaron sobre el ajustado.`,
+      );
+    }
     const dtiPct = porcentaje(features.cuota_mensual_vigente_cop, ingreso);
     const canonIngresoPct = porcentaje(canon, ingreso);
 
@@ -269,12 +358,26 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       });
     }
 
+    const umbralAprobado = montoPositivo(entrada?.umbral_aprobado) ?? UMBRAL_APROBADO;
+    const umbralRevision = montoPositivo(entrada?.umbral_revision) ?? UMBRAL_REVISION;
+    // Revision OBLIGATORIA por jerarquia, separada de la banda 70-84: la banda
+    // la puede levantar un coarrendatario (Adenda §3); esto no.
+    const scoreEnBandaRevision =
+      features.score_externo !== null &&
+      features.score_externo >= V1_REVISION_MANUAL_MIN &&
+      features.score_externo <= V1_REVISION_MANUAL_MAX;
+    const revisionObligatoria = inconsistenciaBuros
+      ? `Caso G: diferencia entre centrales mayor a ${DIFERENCIA_BUROS_REVISION} puntos (${Object.entries(scoresIndividuales).map(([k, v]) => `${k} ${v}`).join(' vs ')})`
+      : scoreEnBandaRevision
+        ? `Score externo ${features.score_externo} en la banda de revision manual obligatoria (${V1_REVISION_MANUAL_MIN}-${V1_REVISION_MANUAL_MAX}, Politica §3.1)`
+        : null;
     const decision = decidirSombra(
       totales,
       features.score_externo,
-      UMBRAL_APROBADO,
-      UMBRAL_REVISION,
+      umbralAprobado,
+      umbralRevision,
       reglasGlobales.map((r) => r.codigo),
+      revisionObligatoria,
     );
 
     const reglasDuras: ReglaDuraActivada[] = [
@@ -362,8 +465,8 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       canon_ingreso_pct: porcentajeParaMostrar(canonIngresoPct),
       canon_evaluado_cop: canon,
       antiguedad_historial_meses: antiguedadMeses !== null && antiguedadMeses >= 0 ? antiguedadMeses : null,
-      umbral_aprobado: UMBRAL_APROBADO,
-      umbral_revision: UMBRAL_REVISION,
+      umbral_aprobado: umbralAprobado,
+      umbral_revision: umbralRevision,
       decision_sombra: decision.decision,
       decision_motivo: decision.motivo,
       motivo_no_calculable: decision.decision === 'no_calculable' ? decision.motivo : null,
@@ -371,6 +474,12 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       variables_no_calculables: totales.variables_no_calculables,
       advertencias,
       antecedentes,
+      ingreso_inferido_ajustado_cop: ingreso,
+      factor_ajuste_ingreso: factor,
+      fuente_score_externo: fuenteScore,
+      scores_individuales: scoresIndividuales,
+      inconsistencia_score_buros: inconsistenciaBuros,
+      revision_obligatoria: revisionObligatoria,
     };
   } catch (err) {
     // Ultimo blindaje. Los extractores ya son a prueba de payloads raros, asi

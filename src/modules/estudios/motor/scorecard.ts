@@ -50,6 +50,13 @@ export const MAX_BRUTO_MODELO = 119;
 export const UMBRAL_APROBADO = 85;
 export const UMBRAL_REVISION = 70;
 
+/**
+ * Politica §4.1 / Caso G: "Si la diferencia entre los dos scores es mayor a
+ * 80 puntos, se activa revision manual adicional como senal de inconsistencia
+ * de perfil". Adenda §2.2: solo aplica cuando se consultaron AMBAS centrales.
+ */
+export const DIFERENCIA_BUROS_REVISION = 80;
+
 export type CodigoVariable = 'V1' | 'V2' | 'V3' | 'V4' | 'V5' | 'V6' | 'V7' | 'V8' | 'V9';
 
 /**
@@ -621,6 +628,8 @@ export function decidirSombra(
   umbralAprobado: number = UMBRAL_APROBADO,
   umbralRevision: number = UMBRAL_REVISION,
   reglasGlobales: readonly CodigoReglaDura[] = [],
+  /** Caso G y similares: una razon que fuerza revision manual aunque el puntaje apruebe. */
+  motivoRevisionObligatoria: string | null = null,
 ): DecisionCalculada {
   if (reglasGlobales.length > 0) {
     return {
@@ -649,6 +658,9 @@ export function decidirSombra(
       decision: 'revision_manual',
       motivo: `Score externo ${scoreExterno} en la banda de revision manual obligatoria (${V1_REVISION_MANUAL_MIN}-${V1_REVISION_MANUAL_MAX})`,
     };
+  }
+  if (motivoRevisionObligatoria) {
+    return { decision: 'revision_manual', motivo: motivoRevisionObligatoria };
   }
   const p = totales.puntaje_normalizado;
   if (p >= umbralAprobado) {

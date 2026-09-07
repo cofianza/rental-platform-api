@@ -86,6 +86,12 @@ import type { ResumenAntecedentes } from './antecedentes';
 // cotejo ocurre AHI (pantalla del prospecto), mucho antes de que exista un
 // resultado de estudio.
 import { leerBiometriaDeExpediente, requiereRevisionManualPorBiometria } from '@/modules/autorizaciones/biometria';
+// Adenda §8: el ingreso declarado contrasta con el estimado y puede escalar a
+// revision. Vive en autorizaciones porque este arbol no puede nombrarlo.
+import { contrasteIngresoProspecto } from '@/modules/autorizaciones/ingreso-declarado';
+// Adenda §11: factor de ajuste del ingreso, umbrales y demas parametros vienen
+// del panel de calibracion, no de constantes.
+import { getCalibracion } from '@/lib/calibracion';
 // El canon se lee con el MISMO helper del guard del tope (§4.4): una sola
 // definicion de "cual es el canon de este estudio" para las dos reglas que lo
 // usan. Duplicarla dejaria al tope y al scorecard mirando canones distintos.
@@ -126,6 +132,9 @@ export interface DetalleReglasDuras {
   canon_ingreso_pct: number | null;
   canon_ingreso_umbral: number;
   ingreso_mensual_inferido_cop: number | null;
+  /** Adenda §1.1: el crudo x FACTOR_AJUSTE_INGRESO. Es el que evaluo la regla. */
+  ingreso_mensual_ajustado_cop: number | null;
+  factor_ajuste_ingreso: number;
   cuota_mensual_vigente_cop: number | null;
   canon_evaluado_cop: number | null;
   score_externo: number | null;
@@ -181,6 +190,20 @@ export interface EntradaReglasDuras {
 /** Porcentaje con dos decimales, o 's/d'. */
 function pct(valor: number | null): string {
   return valor === null ? 's/d' : `${valor}%`;
+}
+
+/**
+ * El ingreso tal como lo vio la regla. Con factor 1 es el crudo; con el factor
+ * de la Adenda §1.1 se muestran las dos cifras — el gestor tiene que poder ver
+ * que el 40% se evaluo sobre un ingreso ampliado, no sobre el de la central.
+ */
+function textoIngreso(d: DetalleReglasDuras): string {
+  const crudo = d.ingreso_mensual_inferido_cop;
+  if (crudo === null) return 'ingreso mensual estimado s/d';
+  if (d.factor_ajuste_ingreso === 1 || d.ingreso_mensual_ajustado_cop === null) {
+    return `ingreso mensual estimado ${formatearCOP(crudo)}`;
+  }
+  return `ingreso estimado ${formatearCOP(crudo)} x factor ${d.factor_ajuste_ingreso} = ${formatearCOP(d.ingreso_mensual_ajustado_cop)} (Adenda §1.1)`;
 }
 
 /**
@@ -272,7 +295,7 @@ export function motivoGestorReglasDuras(
     partes.push(
       `Capacidad de endeudamiento (DTI, §4.2): ${pct(d.dti_pct)} supera el maximo de ${d.dti_umbral}% ` +
         `(cuota mensual comprometida ${d.cuota_mensual_vigente_cop === null ? 's/d' : formatearCOP(d.cuota_mensual_vigente_cop)} ` +
-        `sobre ingreso mensual inferido ${d.ingreso_mensual_inferido_cop === null ? 's/d' : formatearCOP(d.ingreso_mensual_inferido_cop)}).`,
+        `sobre ${textoIngreso(d)}).`,
     );
   }
 
@@ -280,7 +303,7 @@ export function motivoGestorReglasDuras(
     partes.push(
       `Relacion canon / ingreso (§4.3): ${pct(d.canon_ingreso_pct)} supera el maximo de ${d.canon_ingreso_umbral}% ` +
         `(canon ${d.canon_evaluado_cop === null ? 's/d' : formatearCOP(d.canon_evaluado_cop)} ` +
-        `sobre ingreso mensual inferido ${d.ingreso_mensual_inferido_cop === null ? 's/d' : formatearCOP(d.ingreso_mensual_inferido_cop)}).`,
+        `sobre ${textoIngreso(d)}).`,
     );
   }
 
@@ -387,6 +410,8 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
     canon_ingreso_pct: salida.canon_ingreso_pct,
     canon_ingreso_umbral: V3_CANON_INGRESO_MAXIMO,
     ingreso_mensual_inferido_cop: salida.features.ingreso_mensual_inferido_cop,
+    ingreso_mensual_ajustado_cop: salida.ingreso_inferido_ajustado_cop,
+    factor_ajuste_ingreso: salida.factor_ajuste_ingreso,
     cuota_mensual_vigente_cop: salida.features.cuota_mensual_vigente_cop,
     canon_evaluado_cop: salida.canon_evaluado_cop,
     score_externo: salida.features.score_externo,
@@ -501,7 +526,7 @@ async function leerAntecedentesDelEstudio(estudioId: string): Promise<ResumenAnt
   }
 }
 
-async function canonParaLaRegla(expedienteId: string): Promise<number | null> {
+export async function canonParaLaRegla(expedienteId: string): Promise<number | null> {
   try {
     const bruto = await leerCanonDelInmueble({ expedienteId });
     const n = typeof bruto === 'string' ? Number(bruto) : bruto;
@@ -566,16 +591,22 @@ export async function resolverResultadoEstudio(
         ? args.antecedentes
         : await leerAntecedentesDelEstudio(args.estudioId);
 
-    // 2. Canon congelado de esta corrida.
+    // 2. Canon congelado de esta corrida + parametros vigentes del panel.
     const canon = await canonParaLaRegla(args.expedienteId);
+    const cal = await getCalibracion();
 
-    // 3. Evaluar. evaluarSombra nunca lanza.
+    // 3. Evaluar. evaluarSombra nunca lanza. El factor de ajuste (Adenda §1.1)
+    //    entra AQUI, no en el motor: asi cada corrida registra el factor con el
+    //    que se decidio.
     const salida = evaluarSombra({
       proveedor,
       payload,
       canon_mensual_cop: canon,
       score_persistido: score,
       antecedentes,
+      factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
+      umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
+      umbral_revision: cal.UMBRAL_ZONA_GRIS,
     });
 
     const veredicto = aplicarReglasDuras({
@@ -598,6 +629,12 @@ export async function resolverResultadoEstudio(
       const motivos = [
         requiereRevisionManual(antecedentes),
         requiereRevisionManualPorBiometria(biometria),
+        // Adenda §8: declarado vs estimado CRUDO de la central.
+        await contrasteIngresoProspecto(
+          args.expedienteId,
+          salida.features.ingreso_mensual_inferido_cop,
+          cal.UMBRAL_DIFERENCIA_INGRESO,
+        ),
       ].filter((m): m is string => !!m);
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
       if (!motivoRevision) return { ...base, veredicto, salida };

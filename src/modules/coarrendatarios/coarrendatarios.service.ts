@@ -13,6 +13,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
+import { getCalibracion } from '@/lib/calibracion';
 import { Resend } from 'resend';
 import {
   notificarUsuario,
@@ -965,6 +966,42 @@ export async function aceptarInvitacion(
 //     conversación).
 // ============================================================
 
+/**
+ * Adenda 1 §3 sobre el par titular/coarrendatario, leyendo los puntajes del
+ * scorecard de cada estudio. Devuelve null si falta cualquiera de los dos
+ * puntajes (y entonces manda la ponderacion por resultado del buro).
+ */
+async function ponderarConScorecard(
+  titularEstudioId: string,
+  coaEstudioId: string,
+  coaConReglaDura: boolean,
+): Promise<{ resultado: 'aprobado' | 'sin_evaluar'; puntajeTitular: number; puntajeCoa: number; umbral: number } | null> {
+  const [cal, filas] = await Promise.all([
+    getCalibracion(),
+    (supabase.from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .select('estudio_id, puntaje_normalizado, fecha_calculo')
+      .in('estudio_id', [titularEstudioId, coaEstudioId])
+      .order('fecha_calculo', { ascending: false }),
+  ]);
+  const puntaje = (id: string): number | null => {
+    const row = ((filas.data ?? []) as Array<{ estudio_id: string; puntaje_normalizado: number | string | null }>).find((r) => r.estudio_id === id);
+    const n = row?.puntaje_normalizado == null ? null : Number(row.puntaje_normalizado);
+    return n !== null && Number.isFinite(n) ? n : null;
+  };
+  const pT = puntaje(titularEstudioId);
+  const pC = puntaje(coaEstudioId);
+  if (pT === null || pC === null) return null;
+
+  const enZonaGris = pT >= cal.UMBRAL_ZONA_GRIS && pT < cal.UMBRAL_APROBACION_AUTOMATICA;
+  const coaAprueba = !coaConReglaDura && pC >= cal.UMBRAL_COARRENDATARIO;
+  return {
+    resultado: enZonaGris && coaAprueba ? 'aprobado' : 'sin_evaluar',
+    puntajeTitular: pT,
+    puntajeCoa: pC,
+    umbral: cal.UMBRAL_COARRENDATARIO,
+  };
+}
+
 export async function onCoarrendatarioEstudioCompletado(
   estudioId: string,
   opts?: {
@@ -1087,6 +1124,19 @@ export async function onCoarrendatarioEstudioCompletado(
   } else {
     // Ambos evaluados y ninguno aprobado → rechazo definitivo.
     resultadoCombinado = 'rechazado';
+  }
+
+  // 4.1. Adenda 1 §3, con el motor decidiendo: "70 a 84 CON coarrendatario
+  //      que obtiene 80 o mas por flujo automatico: APROBACION AUTOMATICA
+  //      CONDICIONADA". El titular quedo 'condicionado' (zona gris) esperando
+  //      justamente esto; si el coarrendatario llega al umbral y ninguno tiene
+  //      regla dura, el par se aprueba sin analista. Si no, se queda como esta.
+  if (env.MOTOR_DECIDE_ENABLED && titular.resultado === 'condicionado' && resultadoCombinado !== 'rechazado') {
+    const ponderado = await ponderarConScorecard(titular.id, est.id, reglasDurasCoa.length > 0);
+    if (ponderado) {
+      logger.info({ expedienteId: est.expediente_id, ...ponderado }, 'Adenda §3: ponderacion titular/coarrendatario con el scorecard');
+      resultadoCombinado = ponderado.resultado;
+    }
   }
 
   // 4.5. Sin evaluar: el expediente SE QUEDA en 'condicionado' para que el

@@ -201,7 +201,7 @@ for (const [etiqueta, patron] of [
   ['ingreso en pesos', /\$5\.094\.000/],
   ['canon en pesos', /\$3\.800\.000/],
   ['el score no salva', /score del buro \(773\)/],
-  ['version del modelo', /v4\.1-sombra-\dvar/],
+  ['version del modelo', /v4\.1-adenda1-\dvar/],
 ] as const) {
   assert.ok(patron.test(motivoGestor), `el motivo del gestor debe decir ${etiqueta}`);
 }

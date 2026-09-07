@@ -185,8 +185,15 @@ const fuenteSenal = fs.readFileSync(
   'utf8',
 );
 assert.ok(!/from '@\/modules\/estudios/.test(fuenteSenal), 'la senal no importa nada del modulo de estudios');
-assert.ok(!/supabase/i.test(fuenteSenal), 'la senal es pura: no persiste nada');
-fila(true, 'la senal es pura y no persiste', 'sin imports del motor, sin Supabase');
+// Adenda 1 §8: el contraste declarado-vs-estimado SI escala a revision manual,
+// asi que este archivo lee la fila del §8.2 (Supabase). Lo que sigue prohibido
+// es la DIRECCION: el motor no importa esto; reglas-duras.ts lo llama desde
+// aqui y solo recibe un motivo de texto, nunca el numero.
+const fuenteReglas = fs.readFileSync(path.resolve(RAIZ, 'reglas-duras.ts'), 'utf8');
+assert.ok(/from '@\/modules\/autorizaciones\/ingreso-declarado'/.test(fuenteReglas), 'reglas-duras importa el contraste desde autorizaciones');
+assert.ok(/contrasteIngresoProspecto\(/.test(fuenteReglas), 'y lo usa para escalar a revision (Adenda §8)');
+assert.ok(typeof senalDiscrepanciaIngreso(5_000_000, 3_000_000, 50)?.umbral_pct === 'number', 'el umbral es parametro (panel de calibracion)');
+fila(true, 'la senal escala pero no alimenta', 'Adenda §8: bandera de revision; el motor nunca ve el declarado');
 
 // ============================================================
 

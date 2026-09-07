@@ -8,7 +8,8 @@ import { env } from '@/config';
 import { resolverRuta, type Ruta, type EntradaRuta } from './rutas-resultado';
 // §12 + §14: expiracion del estudio por falta de autorizacion. Derivada, no persistida.
 import { evaluarExpiracion, type VeredictoExpiracion } from './expiracion';
-import { getCompany } from '@/lib/companyConfig';
+// Adenda 1 §11: umbrales, vigencia y plazos vienen del panel de calibracion.
+import { getCalibracion } from '@/lib/calibracion';
 import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
@@ -30,8 +31,14 @@ import {
   resolverResultadoEstudio,
   registrarReglaDuraActivada,
   motivoParaProspectoDesdeMotivoGestor,
+  aplicarReglasDuras,
+  canonParaLaRegla,
 } from './reglas-duras';
 import type { VeredictoReglasDuras } from './reglas-duras';
+// Adenda 1 §2/§3: con MOTOR_DECIDE_ENABLED el scorecard decide y la consulta
+// va en cascada (Datacredito primaria; la segunda central solo en 40-89).
+import { decidirCascada, decidirResultado, type UmbralesDecision, type ResultadoDecidido } from './decision';
+import { evaluarSombra, type SalidaSombra } from './motor';
 // Background check de Auco (listas restrictivas §6, antecedentes §16.5,
 // FOSYGA §4.4). Apagado por AUCO_BACKGROUND_CHECK_ENABLED devuelve
 // 'desactivado' y no cambia nada. Ver antecedentes.ts.
@@ -533,6 +540,7 @@ async function adjuntarExpiracion<T extends Record<string, unknown>>(
       autorizacionSolicitadaEn: aut?.created_at ?? null,
       autorizacionFirmada: aut?.estado === 'autorizado',
       ahoraMs: Date.now(),
+      plazoDias: (await getCalibracion()).DIAS_EXPIRACION_ESTUDIO,
     }),
   };
 }
@@ -564,8 +572,9 @@ async function adjuntarExpiracion<T extends Record<string, unknown>>(
  */
 async function adjuntarRuta<T extends Record<string, unknown>>(row: T): Promise<T & { ruta: Ruta }> {
   let puntaje: number | null = null;
+  const cal = await getCalibracion();
 
-  if (env.MOTOR_RUTA_USA_SCORECARD) {
+  if (env.MOTOR_RUTA_USA_SCORECARD || env.MOTOR_DECIDE_ENABLED) {
     const { data: sombra } = (await (supabase
       .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
       .select('puntaje_normalizado')
@@ -589,6 +598,11 @@ async function adjuntarRuta<T extends Record<string, unknown>>(row: T): Promise<
     // estudio YA contempla al acompañante.
     coarrendatarioVinculado: row.tipo === 'con_coarrendatario',
     puntajeCoarrendatario: null,
+    umbrales: {
+      aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
+      zonaGris: cal.UMBRAL_ZONA_GRIS,
+      coarrendatario: cal.UMBRAL_COARRENDATARIO,
+    },
   });
 
   return { ...row, ruta };
@@ -2206,7 +2220,11 @@ export async function ejecutarEstudio(
   //      gestores: si lo manda un solicitante se ignora en silencio (la UI no
   //      se lo ofrece, pero la ruta sí admite ese rol).
   const proveedorAnterior = est.proveedor;
-  const proveedorFinal = overrideProveedor ?? est.proveedor;
+  // Adenda §2: con el motor decidiendo, Datacredito es SIEMPRE la central
+  // primaria; TransUnion solo entra en cascada (o si el gestor la fuerza con
+  // el override, p. ej. porque Datacredito esta caido — Adenda §2.3).
+  const proveedorFinal: string =
+    overrideProveedor ?? (env.MOTOR_DECIDE_ENABLED && est.proveedor === 'transunion' ? 'datacredito' : est.proveedor);
   const cambioProveedor = proveedorFinal !== proveedorAnterior;
 
   //      Guard: solo los burós reales son ejecutables. Sin esto, (a) un
@@ -2445,7 +2463,7 @@ async function procesarEstudioAsync(args: {
       await persistirAntecedentes(estudioId, antecedentes);
 
       try {
-        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result, antecedentes);
+        await registrarResultadoInline(estudioId, proveedor, response.referencia_proveedor, expedienteId, result, antecedentes, providerInput);
         logger.info({ estudioId }, 'Estudio completado exitosamente (async)');
       } catch (postErr) {
         const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
@@ -2506,7 +2524,7 @@ async function procesarEstudioAsync(args: {
       : documentoNoEncontrado
       ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos, o reintenta con el otro buró.`
       : proveedorNoDisponible
-        ? `${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.`
+        ? `${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintenta eligiendo TransUnion.' : ''}`
         : `Error de proveedor (${buroLabel}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
 
     const { error: failError } = await (supabase
@@ -3159,6 +3177,8 @@ async function registrarResultadoInline(
   resultPreObtenido?: ProviderResult,
   /** Resumen de Auco en memoria. `undefined` = que lo lea de la fila. */
   antecedentes?: ResumenAntecedentes,
+  /** Insumo del buro: hace falta para consultar la SEGUNDA central (Adenda §2). */
+  providerInput?: ProviderSolicitudInput,
 ): Promise<void> {
   const provider = getProvider(proveedorId as 'transunion' | 'sifin' | 'datacredito');
 
@@ -3169,9 +3189,9 @@ async function registrarResultadoInline(
     'registrarResultadoInline: resultado obtenido, llamando RPC',
   );
 
-  // Reglas duras V4.1 (§4.2 DTI > 65%, §4.3 canon/ingreso > 40%). Corre ANTES
-  // del RPC porque el resultado solo se puede registrar una vez: la funcion
-  // rechaza escribir sobre un estudio que ya tiene resultado.
+  // Reglas duras V4.1 (§4.2 DTI > 65%, §4.3 canon/ingreso > 40%, §6 listas) y
+  // los flags de revision (§14, §16.5, §8). Corre ANTES del RPC porque el
+  // resultado solo se puede registrar una vez.
   const decision = await resolverResultadoEstudio({
     estudioId,
     expedienteId,
@@ -3183,13 +3203,48 @@ async function registrarResultadoInline(
     antecedentes,
   });
 
+  // ── Adenda 1 §2/§3: el scorecard decide (MOTOR_DECIDE_ENABLED) ────────
+  // Con el flag apagado, `decision` ya trae lo de siempre: el resultado del
+  // buro, corregido por reglas duras y flags. Con el flag encendido, la
+  // cascada puede consultar la segunda central y la decision final sale de
+  // las bandas de la Adenda, no del buro.
+  let resultadoFinal: string = decision.resultado;
+  let observacionesFinal = decision.observaciones;
+  let motivoRechazoFinal = decision.motivoRechazo;
+  let salidaFinal = decision.salida;
+  let veredictoFinal = decision.veredicto;
+
+  if (env.MOTOR_DECIDE_ENABLED && decision.salida) {
+    const c = await decidirConCascada({
+      estudioId,
+      expedienteId,
+      proveedorPrimario: proveedorId,
+      payloadPrimario: result.datos_crudos,
+      resultadoBuro: result.resultado,
+      salidaPrimaria: decision.salida,
+      veredictoPrimario: decision.veredicto,
+      revisionManual: decision.revisionManual,
+      providerInput,
+      antecedentes: antecedentes ?? null,
+    });
+    resultadoFinal = c.resultado;
+    salidaFinal = c.salida;
+    veredictoFinal = c.veredicto;
+    observacionesFinal = [decision.observaciones, c.nota].filter(Boolean).join(' ');
+    motivoRechazoFinal = c.veredicto.rechaza
+      ? c.veredicto.motivoGestor
+      : c.resultado === 'rechazado'
+        ? `Decision del modelo (Adenda 1): ${c.motivo}`
+        : decision.motivoRechazo;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
     p_estudio_id: estudioId,
-    p_resultado: decision.resultado,
-    p_observaciones: decision.observaciones,
+    p_resultado: resultadoFinal,
+    p_observaciones: observacionesFinal,
     p_score: result.score ?? null,
-    p_motivo_rechazo: decision.motivoRechazo,
+    p_motivo_rechazo: motivoRechazoFinal,
     p_condiciones: null,
     p_certificado_url: null,
     p_usuario_id: null,
@@ -3226,7 +3281,7 @@ async function registrarResultadoInline(
 
   // Trazabilidad de la regla dura. Se AWAITEA (no fire-and-forget) porque el
   // hook post-resultado lee esta columna para redactar el mensaje del prospecto.
-  await registrarReglaDuraActivada(estudioId, decision.veredicto);
+  await registrarReglaDuraActivada(estudioId, veredictoFinal);
 
   logger.info({ estudioId }, 'registrarResultadoInline: RPC ejecutada, disparando orchestrator');
 
@@ -3238,11 +3293,12 @@ async function registrarResultadoInline(
     detalle: {
       proveedor: proveedorId,
       // El resultado REGISTRADO, que puede diferir del que trajo el buro si se
-      // activo una regla dura. Se dejan los dos: la auditoria tiene que poder
-      // reconstruir quien decidio que.
-      resultado: decision.resultado,
+      // activo una regla dura o si el modelo decidio (Adenda 1). Se dejan los
+      // dos: la auditoria tiene que poder reconstruir quien decidio que.
+      resultado: resultadoFinal,
       resultado_proveedor: result.resultado,
-      reglas_duras: decision.veredicto.rechaza ? decision.veredicto.reglas : null,
+      motor_decide: env.MOTOR_DECIDE_ENABLED,
+      reglas_duras: veredictoFinal.rechaza ? veredictoFinal.reglas : null,
       score: result.score,
       referencia_proveedor: referenciaProveedor,
     },
@@ -3292,20 +3348,148 @@ async function registrarResultadoInline(
   //     titular. NO disparamos orchestrator porque ya el titular pasó por él
   //     (ahora estamos cerrando el ciclo del par).
   // Fire-and-forget: el resultado del estudio ya quedó persistido vía RPC.
-  void dispararHookPostResultado(estudioId, expedienteId, decision.resultado, result.score, decision.veredicto);
+  void dispararHookPostResultado(estudioId, expedienteId, resultadoFinal, result.score, veredictoFinal);
 
   // Registro sombra del scorecard completo (puntajes por variable, umbrales,
-  // decision hipotetica). Recibe LA MISMA corrida que decidio arriba, asi que
-  // no re-evalua; y sigue siendo best-effort: si este upsert falla, el rechazo
-  // por regla dura ya quedo escrito con su motivo.
+  // decision hipotetica). Recibe LA MISMA corrida que decidio arriba (la
+  // combinada con la segunda central, si la hubo), asi que no re-evalua; y
+  // sigue siendo best-effort.
   void registrarScorecardSombra({
     estudioId,
     expedienteId,
     proveedor: proveedorId,
     datosCrudos: result.datos_crudos,
     scorePersistido: result.score,
-    salidaPrecalculada: decision.salida,
+    salidaPrecalculada: salidaFinal,
   }).catch(() => undefined);
+}
+
+/**
+ * Adenda 1 §2 (cascada) + §3 (bandas), con la corrida de la central PRIMARIA
+ * ya evaluada. Consulta la segunda central solo cuando la cascada lo pide,
+ * re-evalua el motor con V1 = promedio de las dos, y decide con las bandas.
+ * Deja la traza en `estudios.cascada` (Adenda §2.4).
+ *
+ * Nunca lanza por la segunda central: si no responde, se decide con la
+ * primaria como fuente unica y queda dicho en la nota (§2.3 / §14).
+ */
+async function decidirConCascada(args: {
+  estudioId: string;
+  expedienteId: string;
+  proveedorPrimario: string;
+  payloadPrimario: Record<string, unknown> | null;
+  resultadoBuro: string;
+  salidaPrimaria: SalidaSombra;
+  veredictoPrimario: VeredictoReglasDuras;
+  revisionManual: string | null;
+  providerInput?: ProviderSolicitudInput;
+  antecedentes: ResumenAntecedentes | null;
+}): Promise<{ resultado: ResultadoDecidido; motivo: string; via: string | null; nota: string; salida: SalidaSombra; veredicto: VeredictoReglasDuras }> {
+  const { estudioId, expedienteId, proveedorPrimario } = args;
+  const cal = await getCalibracion();
+  const u: UmbralesDecision = {
+    cascadaRechazo: cal.UMBRAL_CASCADA_RECHAZO,
+    cascadaAprobacion: cal.UMBRAL_CASCADA_APROBACION,
+    aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
+    zonaGris: cal.UMBRAL_ZONA_GRIS,
+    coarrendatario: cal.UMBRAL_COARRENDATARIO,
+  };
+
+  let salida = args.salidaPrimaria;
+  let veredicto = args.veredictoPrimario;
+  const reglasPrimaria = veredicto.rechaza ? veredicto.reglas : [];
+  const cascada = decidirCascada(salida, reglasPrimaria, u);
+
+  let secundario: string | null = null;
+  let scoreSecundario: number | null = null;
+  let nota = `Cascada (Adenda §2): ${cascada.motivo}.`;
+
+  const candidato = proveedorPrimario === 'datacredito' ? 'transunion' : 'datacredito';
+  if (cascada.consultarSecundaria && args.providerInput) {
+    try {
+      const prov = getProvider(candidato as 'transunion' | 'datacredito');
+      const resp = await prov.solicitar(args.providerInput);
+      const res = await prov.obtenerResultado(resp.referencia_proveedor);
+      secundario = candidato;
+      scoreSecundario = res.score;
+
+      const { error: secErr } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update({ proveedor_secundario: secundario, respuesta_proveedor_secundario: res.datos_crudos as never } as never)
+        .eq('id', estudioId);
+      if (secErr) logger.warn({ estudioId, error: secErr.message }, 'Cascada: no se pudo persistir la segunda central');
+
+      // Re-evaluar con V1 = promedio (Politica §4.1). Misma corrida, mismos
+      // parametros, mas el score de la segunda central.
+      salida = evaluarSombra({
+        proveedor: proveedorPrimario,
+        payload: args.payloadPrimario,
+        canon_mensual_cop: await canonParaLaRegla(expedienteId),
+        score_persistido: null,
+        antecedentes: args.antecedentes,
+        factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
+        umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
+        umbral_revision: cal.UMBRAL_ZONA_GRIS,
+        score_externo_secundario: scoreSecundario,
+        proveedor_secundario: secundario,
+      });
+      veredicto = aplicarReglasDuras({ resultadoPropuesto: args.resultadoBuro, salida });
+      nota = `Cascada (Adenda §2): ${cascada.motivo}. ${BURO_LABELS[secundario] ?? secundario} respondio score ${scoreSecundario ?? 's/d'}; V1 = promedio de las dos centrales.`;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ estudioId, secundario: candidato, err: msg }, 'Cascada: la segunda central no respondio — se decide con la primaria');
+      nota = `Cascada (Adenda §2): ${cascada.motivo}, pero ${BURO_LABELS[candidato] ?? candidato} no respondio (${msg.slice(0, 120)}): se decide con ${BURO_LABELS[proveedorPrimario] ?? proveedorPrimario} como fuente unica (Adenda §2.3 / Politica §14).`;
+    }
+  } else if (cascada.consultarSecundaria) {
+    nota = `Cascada (Adenda §2): ${cascada.motivo}, pero no habia insumo para consultar la segunda central: se decide con la primaria como fuente unica.`;
+  }
+
+  const d = decidirResultado({
+    salida,
+    reglasDurasActivas: veredicto.rechaza ? veredicto.reglas : [],
+    u,
+    // El coarrendatario se evalua en su propio estudio y se pondera despues
+    // (onCoarrendatarioEstudioCompletado). Aqui el titular se decide solo.
+    coarrendatario: null,
+    motivosRevision: args.revisionManual ? [args.revisionManual] : [],
+  });
+
+  const traza = {
+    modelo_version: salida.modelo_version,
+    primaria: proveedorPrimario,
+    puntaje_primaria: args.salidaPrimaria.puntaje_normalizado,
+    decision_cascada: cascada.motivo,
+    secundaria_consultada: secundario !== null,
+    secundaria: secundario,
+    score_secundaria: scoreSecundario,
+    puntaje_final: salida.puntaje_normalizado,
+    fuente_score: salida.fuente_score_externo,
+    scores_individuales: salida.scores_individuales,
+    resultado: d.resultado,
+    via: d.via,
+    decision: d.motivo,
+    umbrales: u,
+    decidido_en: new Date().toISOString(),
+  };
+  const { error: trazaErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .update({ cascada: traza as never } as never)
+    .eq('id', estudioId);
+  if (trazaErr) logger.warn({ estudioId, error: trazaErr.message }, 'Cascada: no se pudo persistir la traza');
+
+  logger.info(
+    { estudioId, primaria: proveedorPrimario, secundaria: secundario, puntajePrimaria: traza.puntaje_primaria, puntajeFinal: traza.puntaje_final, resultado: d.resultado, via: d.via },
+    'Motor decide (Adenda 1): resultado del estudio',
+  );
+
+  return {
+    resultado: d.resultado,
+    motivo: d.motivo,
+    via: d.via,
+    nota: `${nota} Decision del modelo: ${d.motivo}.`,
+    salida,
+    veredicto,
+  };
 }
 
 // ============================================================
@@ -3548,7 +3732,8 @@ export async function buscarEstudioVigentePorDocumento(
   const allowed = await resolveAllowedExpedienteIds(userId, userRol);
   if (allowed !== null && allowed.length === 0) return null;
 
-  const { certificateValidityDays } = await getCompany();
+  // Adenda §6: la vigencia del CRC (60 dias) vive en el panel de calibracion.
+  const certificateValidityDays = (await getCalibracion()).VIGENCIA_CRC_DIAS;
   const validezMs = certificateValidityDays * 24 * 60 * 60 * 1000;
   const desde = new Date(Date.now() - validezMs).toISOString();
 

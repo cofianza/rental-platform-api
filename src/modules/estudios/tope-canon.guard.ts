@@ -52,6 +52,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
+import { getCalibracion } from '@/lib/calibracion';
 
 /** Codigo de dominio unico del tope. La web lo usa para el mensaje accionable. */
 export const CANON_EXCEDE_TOPE_ERROR_CODE = 'CANON_EXCEDE_TOPE';
@@ -95,9 +96,18 @@ export function formatearCOP(valor: number): string {
   return `$${new Intl.NumberFormat('es-CO').format(valor)}`;
 }
 
-/** Tope vigente en pesos. Un solo lugar de lectura del env. */
+/** Default del env. Lo usan los evaluadores PUROS cuando nadie les pasa el tope. */
 export function getTopeCanon(): number {
   return env.CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP;
+}
+
+/**
+ * Tope VIGENTE: el del panel de calibracion (CANON_MAX_TRANSITORIO, Adenda
+ * §11), que se siembra con el mismo valor del env. Los call sites async lo
+ * resuelven y se lo pasan al evaluador puro.
+ */
+export async function getTopeCanonVigente(): Promise<number> {
+  return (await getCalibracion()).CANON_MAX_TRANSITORIO;
 }
 
 /**
@@ -301,7 +311,7 @@ export async function assertCanonDentroDelTope(
   args: AssertTopeArgs,
 ): Promise<{ canonCop: number | null }> {
   const canonBruto = await leerCanonDelInmueble(args);
-  const veredicto = evaluarTopeCanon({ canonCop: canonBruto });
+  const veredicto = evaluarTopeCanon({ canonCop: canonBruto, topeCop: await getTopeCanonVigente() });
 
   if (!veredicto.ok) {
     logger.warn(

@@ -18,8 +18,16 @@
 // cada fila y es lo que permite reconstruir despues que se acepto exactamente.
 // ============================================================
 
-/** Version del texto que se presenta al SOLICITANTE (aceptacion por OTP). */
-export const VERSION_TERMINOS = '2.0';
+/**
+ * Version del texto que se presenta al SOLICITANTE.
+ *
+ * '3.0' = aceptacion por CASILLA (Adenda 1 §7: "No se implementa OTP en el
+ * flujo de autorizacion del estudio"). La '2.0' describia la aceptacion por
+ * OTP y sigue congelada byte a byte en las filas historicas.
+ */
+export const VERSION_TERMINOS = '3.0';
+/** La version anterior, por OTP. Solo para verificar que no se altero. */
+export const VERSION_TERMINOS_V2_OTP = '2.0';
 
 /**
  * Version del texto cuando ademas se pide el cotejo biometrico
@@ -113,13 +121,20 @@ const CUERPO_BIOMETRIA = [MARCO_NORMATIVO, DATOS_CON_BIOMETRIA, FINALIDADES].joi
 const CLAUSULA_COARRENDATARIO = `7. Condición de co-arrendatario
 Acepto la invitación a figurar como CO-ARRENDATARIO del contrato de arrendamiento indicado, junto al titular. Entiendo que Cofianza consultará mi historial en centrales de información para evaluar la solicitud conjunta, y que esta autorización cubre esa consulta.`;
 
-// OJO: el resultado tiene que ser byte a byte el texto de la version 2.0 que
-// ya esta congelado en las filas historicas. Cualquier cambio aqui exige subir
+// El 2.0 (OTP) tiene que seguir siendo byte a byte el texto congelado en las
+// filas historicas; se conserva para poder verificarlo, no para presentarlo.
+export const TEXTO_LEGAL_V2_OTP = [ENCABEZADO, NATURALEZA_OTP, CUERPO].join('\n\n');
+
+// Lo que se presenta HOY al solicitante: aceptacion por casilla (Adenda §7).
+// Es el mismo parrafo 2 que ya usaba el co-arrendatario invitado: la evidencia
+// que describe (texto integro con version, documento, IP, fecha y hora,
+// dispositivo y navegador) es exactamente la que la Adenda §7 deja como
+// unica prueba de la autorizacion. Cualquier cambio aqui exige subir
 // VERSION_TERMINOS.
-export const TEXTO_LEGAL = [ENCABEZADO, NATURALEZA_OTP, CUERPO].join('\n\n');
+export const TEXTO_LEGAL = [ENCABEZADO, NATURALEZA_CASILLA, CUERPO].join('\n\n');
 
 /** Variante con la clausula de datos biometricos. Ver VERSION_TERMINOS_BIOMETRIA. */
-export const TEXTO_LEGAL_BIOMETRIA = [ENCABEZADO, NATURALEZA_OTP, CUERPO_BIOMETRIA].join('\n\n');
+export const TEXTO_LEGAL_BIOMETRIA = [ENCABEZADO, NATURALEZA_CASILLA, CUERPO_BIOMETRIA].join('\n\n');
 
 /** El par (texto, version) que toca presentar segun el interruptor. */
 export function textoLegalSolicitante(conBiometria: boolean): { texto: string; version: string } {

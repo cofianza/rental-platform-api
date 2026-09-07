@@ -44,9 +44,11 @@ import {
 import type { ResumenBiometria } from '@/modules/autorizaciones/biometria';
 import {
   TEXTO_LEGAL,
+  TEXTO_LEGAL_V2_OTP,
   TEXTO_LEGAL_BIOMETRIA,
   TEXTO_LEGAL_COARRENDATARIO,
   VERSION_TERMINOS,
+  VERSION_TERMINOS_V2_OTP,
   VERSION_TERMINOS_BIOMETRIA,
   textoLegalSolicitante,
 } from '@/modules/autorizaciones/autorizaciones.texto';
@@ -185,7 +187,12 @@ for (const r of [off, omitida, veredicto(null)]) {
 }
 
 // ── 9. El texto legal ───────────────────────────────────────
-ok(TEXTO_LEGAL.includes('No se recolectan datos sensibles'), 'el 2.0 sigue afirmando que no hay datos sensibles');
+// Adenda 1 §7: sin OTP en la autorizacion. El 3.0 acepta por casilla; el 2.0
+// (OTP) queda congelado para las filas historicas.
+ok(VERSION_TERMINOS === '3.0' && VERSION_TERMINOS_V2_OTP === '2.0', 'el texto vigente es el 3.0 (casilla); el 2.0 (OTP) queda historico');
+ok(TEXTO_LEGAL.includes('Al marcar las casillas de aceptación') && !TEXTO_LEGAL.includes('código OTP'), 'el 3.0 describe la aceptacion por casilla, no por OTP');
+ok(TEXTO_LEGAL_V2_OTP.includes('código OTP') && !TEXTO_LEGAL_V2_OTP.includes('Al marcar las casillas'), 'el 2.0 sigue describiendo el OTP, byte a byte');
+ok(TEXTO_LEGAL.includes('No se recolectan datos sensibles'), 'el 3.0 sin biometria sigue afirmando que no hay datos sensibles');
 ok(!TEXTO_LEGAL.includes('biométric') && !TEXTO_LEGAL.includes('rostro'), 'y por tanto NO puede mencionar biometria');
 ok(TEXTO_LEGAL_BIOMETRIA !== TEXTO_LEGAL, 'el texto con biometria es OTRO instrumento');
 ok(!TEXTO_LEGAL_BIOMETRIA.includes('No se recolectan datos sensibles'), 'el 3.0 no puede seguir negando el dato sensible que pide');
@@ -193,13 +200,13 @@ ok(TEXTO_LEGAL_BIOMETRIA.includes('DATO SENSIBLE') && TEXTO_LEGAL_BIOMETRIA.incl
 ok(TEXTO_LEGAL_BIOMETRIA.includes('NO ESTOY OBLIGADO'), 'y avisa que no esta obligado (art. 6-a)');
 ok(TEXTO_LEGAL_BIOMETRIA.includes('sin perder el acceso al servicio'), 'y que negarse no le cuesta el servicio');
 ok(TEXTO_LEGAL_BIOMETRIA.includes('NO se almacenan en las bases de datos de Cofianza'), 'y que las imagenes no se guardan (minimizacion)');
-ok(VERSION_TERMINOS === '2.0' && VERSION_TERMINOS_BIOMETRIA === '3.0-biometria', 'versiones distintas para textos distintos (§8.4)');
+ok(VERSION_TERMINOS === '3.0' && VERSION_TERMINOS_BIOMETRIA === '3.0-biometria', 'versiones distintas para textos distintos (§8.4)');
 // Los dos textos comparten encabezado y marco normativo: la unica diferencia
 // es la clausula 4. Si divergiera algo mas, alguien reescribio de mas.
 ok(TEXTO_LEGAL_BIOMETRIA.startsWith(TEXTO_LEGAL.slice(0, TEXTO_LEGAL.indexOf('4. Datos objeto'))), 'los dos textos son identicos hasta la clausula 4');
 ok(TEXTO_LEGAL_BIOMETRIA.endsWith(TEXTO_LEGAL.slice(TEXTO_LEGAL.indexOf('5.1. Finalidades'))), 'e identicos desde la 5.1 hasta el final');
 ok(TEXTO_LEGAL_COARRENDATARIO.includes('No se recolectan datos sensibles'), 'el texto del co-arrendatario no cambio (no se le pide biometria)');
-ok(textoLegalSolicitante(false).version === VERSION_TERMINOS && textoLegalSolicitante(false).texto === TEXTO_LEGAL, 'interruptor OFF -> 2.0');
+ok(textoLegalSolicitante(false).version === VERSION_TERMINOS && textoLegalSolicitante(false).texto === TEXTO_LEGAL, 'interruptor OFF -> 3.0');
 ok(textoLegalSolicitante(true).version === VERSION_TERMINOS_BIOMETRIA && textoLegalSolicitante(true).texto === TEXTO_LEGAL_BIOMETRIA, 'interruptor ON -> 3.0');
 
 console.log(`\nOK — ${pasos} aserciones: la biometria valida identidad y NUNCA rechaza (Anexo A, §14, §7), y el texto legal declara el dato sensible.`);

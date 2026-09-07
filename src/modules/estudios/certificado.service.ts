@@ -10,6 +10,10 @@ import { env } from '@/config';
 import { canonMaximoTolerado, PORTABILIDAD_TOLERANCIA_PCT } from './portabilidad';
 import { resolverRuta } from './rutas-resultado';
 import { MODELO_VERSION } from './motor';
+// Adenda 1: tarifas por ruta (§5), factor de ajuste del ingreso (§1.1),
+// fuentes consultadas (§2.4) y vigencia del panel (§6, §11).
+import { calcularTarifas, leerTarifaOverride, viaDeAprobacion, type Tarifas } from './tarifas';
+import { getCalibracion } from '@/lib/calibracion';
 import { getCompany } from '@/lib/companyConfig';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 
@@ -146,6 +150,13 @@ interface CertificatePdfData {
   requiereAcompanante: boolean;
   rutaEtiqueta: string | null;
   modeloVersion: string;
+  // Adenda §5: tarifa mensual, prima de vinculacion y cashback por ruta.
+  tarifas: Tarifas | null;
+  // Adenda §1.1: "el CRC [...] debe registrar el valor del factor aplicado".
+  factorAjusteIngreso: number | null;
+  // Adenda §2.4: "que centrales se consultaron y cual fue la decision de cascada".
+  fuentesConsultadas: string | null;
+  decisionCascada: string | null;
 }
 
 export async function generateCertificatePdf(
@@ -279,8 +290,8 @@ export async function generateCertificatePdf(
     // el sistema — no hay modelo de precios — y ponerlo inventado seria peor
     // que omitirlo en un documento que el cliente puede oponer.
     if (data.canonEvaluado != null) {
-      // titulo (22) + 4 filas (~22 c/u) + el parrafo de tolerancia (~32).
-      y = asegurarEspacio(doc, y, 22 + 4 * 22 + 32);
+      // titulo (22) + hasta 10 filas (~22 c/u) + el parrafo de tolerancia (~32).
+      y = asegurarEspacio(doc, y, 22 + 10 * 22 + 32);
       y = drawSectionTitle(doc, 'CONDICIONES DEL CERTIFICADO', y, contentWidth);
       const condRows: string[][] = [
         ['Canon evaluado', formatCurrency(data.canonEvaluado)],
@@ -294,6 +305,41 @@ export async function generateCertificatePdf(
           ? 'Requerido: este CRC ampara el contrato presentado con coarrendatario'
           : 'No requerido',
       ]);
+      // Adenda §5 — tarifas y primas por ruta de aprobacion.
+      if (data.tarifas) {
+        const t = data.tarifas;
+        const via =
+          t.via === 'automatica'
+            ? 'aprobacion automatica'
+            : t.via === 'condicionada_coarrendatario'
+              ? 'aprobacion condicionada con coarrendatario'
+              : 'aprobacion tras revision manual';
+        condRows.push([
+          'Tarifa mensual de la fianza',
+          `${t.tarifa_mensual_pct}% del canon mas IVA (${via})` +
+            (t.tarifa_mensual_cop != null ? ` = ${formatCurrency(t.tarifa_mensual_cop)} + IVA` : '') +
+            (t.negociada ? ' — condiciones especiales autorizadas' : ''),
+        ]);
+        condRows.push([
+          'Prima de vinculacion',
+          `${t.prima_vinculacion_pct}% del canon, pago unico al activar` +
+            (t.prima_vinculacion_cop != null ? ` = ${formatCurrency(t.prima_vinculacion_cop)}` : ''),
+        ]);
+        condRows.push([
+          'Cashback',
+          `${t.cashback_pct}% de las tarifas mensuales pagadas, al terminar sin moras (no aplica sobre la prima)`,
+        ]);
+      }
+      // Adenda §2.4 y §1.1 — trazabilidad de la evaluacion.
+      if (data.fuentesConsultadas) {
+        condRows.push([
+          'Fuentes consultadas',
+          data.decisionCascada ? `${data.fuentesConsultadas} — ${data.decisionCascada}` : data.fuentesConsultadas,
+        ]);
+      }
+      if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {
+        condRows.push(['Factor de ajuste de ingreso', `x${data.factorAjusteIngreso} (Adenda 1 §1.1)`]);
+      }
       condRows.push(['Version del modelo', data.modeloVersion]);
       y = drawTable(doc, condRows, y, contentWidth);
 
@@ -407,6 +453,34 @@ function drawTable(doc: PDFKit.PDFDocument, rows: string[][], startY: number, wi
 // generarCertificado (orchestrator)
 // ============================================================
 
+/**
+ * Ultima corrida del motor para el estudio. Best-effort: sin fila (estudio
+ * anterior al motor, o migracion sin correr) el CRC sale igual, sin factor
+ * ni puntaje.
+ */
+async function leerSombraDelEstudio(
+  estudioId: string,
+): Promise<{ puntaje: number | null; factor: number | null; modeloVersion: string | null } | null> {
+  try {
+    const { data } = await (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version')
+      .eq('estudio_id', estudioId)
+      .order('fecha_calculo', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null } | null;
+    if (!row) return null;
+    const num = (v: unknown) => {
+      const n = typeof v === 'string' ? Number(v) : v;
+      return typeof n === 'number' && Number.isFinite(n) ? n : null;
+    };
+    return { puntaje: num(row.puntaje_normalizado), factor: num(row.factor_ajuste_ingreso), modeloVersion: row.modelo_version ?? null };
+  } catch {
+    return null;
+  }
+}
+
 export async function generarCertificado(
   estudioId: string,
   userId: string,
@@ -467,7 +541,8 @@ export async function generarCertificado(
   //      Va ANTES del paso 3 a proposito: alli la regeneracion BORRA el PDF
   //      anterior del storage, y fallar despues dejaria al estudio sin
   //      certificado descargable.
-  const validezDias = (await getCompany()).certificateValidityDays;
+  // Adenda §6: vigencia del CRC desde el panel de calibracion (60 dias).
+  const validezDias = (await getCalibracion()).VIGENCIA_CRC_DIAS;
   const validezMs = validezDias * 24 * 60 * 60 * 1000;
   const fechaEmisionMs = Date.now();
   const fechaCompletado = e.fecha_completado as string | null;
@@ -545,13 +620,40 @@ export async function generarCertificado(
   // ampara un contrato con acompañante. Sin puntaje: el scorecard sigue en
   // sombra (ver adjuntarRuta en estudios.service.ts).
   const reglasDuras = e.regla_dura_activada;
+  const cal = await getCalibracion();
+  // Corrida del motor de ESTE estudio: puntaje (solo cuando el motor decide),
+  // factor de ajuste aplicado y fuente del score. La ultima por fecha.
+  const sombra = await leerSombraDelEstudio(estudioId);
+  const puntajeCrc = env.MOTOR_DECIDE_ENABLED || env.MOTOR_RUTA_USA_SCORECARD ? (sombra?.puntaje ?? null) : null;
+  const umbrales = {
+    aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
+    zonaGris: cal.UMBRAL_ZONA_GRIS,
+    coarrendatario: cal.UMBRAL_COARRENDATARIO,
+  };
   const rutaCrc = resolverRuta({
-    puntaje: null,
+    puntaje: puntajeCrc,
     resultadoVigente: (e.resultado as 'pendiente' | 'aprobado' | 'rechazado' | 'condicionado' | null) ?? 'pendiente',
     reglaDuraActivada: Array.isArray(reglasDuras) ? reglasDuras.length > 0 : Boolean(reglasDuras),
     coarrendatarioVinculado: (e.tipo as string) === 'con_coarrendatario',
     puntajeCoarrendatario: null,
+    umbrales,
   });
+
+  // Adenda §5: la fila de la tabla de tarifas segun la via de aprobacion.
+  const via = viaDeAprobacion({
+    puntaje: puntajeCrc,
+    coarrendatarioVinculado: (e.tipo as string) === 'con_coarrendatario',
+    puntajeCoarrendatario: null,
+    umbralAprobacion: umbrales.aprobacion,
+    umbralZonaGris: umbrales.zonaGris,
+    umbralCoarrendatario: umbrales.coarrendatario,
+  });
+
+  // Adenda §2.4: que centrales se consultaron.
+  const etiquetaBuro = (id: unknown) =>
+    id === 'datacredito' ? 'DataCredito' : id === 'transunion' ? 'TransUnion' : id ? String(id) : null;
+  const fuentes = [etiquetaBuro(e.proveedor), etiquetaBuro(e.proveedor_secundario)].filter((x): x is string => !!x);
+  const cascada = (e.cascada && typeof e.cascada === 'object' ? (e.cascada as Record<string, unknown>) : null);
 
   const canonEvaluadoRaw = e.canon_evaluado;
   const canonEvaluadoCop =
@@ -599,7 +701,19 @@ export async function generarCertificado(
     rutaEtiqueta: rutaCrc.etiquetaGestor,
     // La Politica V4.1 §8 lo exige: "Version del modelo aplicable — registrada
     // en cada CRC emitido", para poder reproducir cualquier evaluacion pasada.
-    modeloVersion: MODELO_VERSION,
+    modeloVersion: sombra?.modeloVersion ?? MODELO_VERSION,
+    tarifas:
+      e.resultado === 'aprobado'
+        ? calcularTarifas({
+            via,
+            conCoarrendatario: (e.tipo as string) === 'con_coarrendatario',
+            canonCop: canonEvaluadoCop,
+            override: leerTarifaOverride(e.tarifa_override),
+          })
+        : null,
+    factorAjusteIngreso: sombra?.factor ?? null,
+    fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
+    decisionCascada: typeof cascada?.decision === 'string' ? cascada.decision : null,
   };
 
   const pdfBuffer = await generateCertificatePdf(pdfData, qrBuffer);
