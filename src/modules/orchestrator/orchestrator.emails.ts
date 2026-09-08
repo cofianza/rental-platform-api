@@ -6,9 +6,16 @@
 import { Resend } from 'resend';
 import { env } from '@/config/env';
 import { logger } from '@/lib/logger';
+import { getCompany, type CompanyInfo } from '@/lib/companyConfig';
 
 const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
+
+// Pie unico para todos los correos. Antes decia solo "No responder a este
+// correo": cerraba la puerta sin dejar ninguna abierta. Ahora ofrece WhatsApp
+// y correo reales, tomados de la configuracion de la empresa.
+const footerHtml = (c: CompanyInfo) =>
+  `<p style="color:#9ca3af;font-size:12px;margin-top:24px;">Correo automático de Cofianza. ¿Dudas? Escríbenos por WhatsApp al ${c.phone} o a ${c.email}.</p>`;
 
 // Todos los emails que muestran fechas de citas usan hora Colombia (UTC-5),
 // sin importar la timezone del servidor. Antes de fijar `timeZone` aquí,
@@ -32,6 +39,8 @@ export async function sendEstudioAprobadoEmail(params: {
 }) {
   const { email, nombre, inmueble, ciudad, score } = params;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -49,7 +58,7 @@ export async function sendEstudioAprobadoEmail(params: {
             <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: tu contrato</p>
             <p style="color: #065f46; margin: 4px 0 0;">El propietario o la inmobiliaria preparará tu contrato (fecha de inicio y duración). Cuando esté listo para firmar, te llegará el enlace por WhatsApp al número que registraste. No necesitas hacer nada por ahora.</p>
           </div>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -76,6 +85,8 @@ export async function sendEstudioRechazadoEmail(params: {
 }) {
   const { email, nombre, score, motivoGeneral } = params;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -87,14 +98,14 @@ export async function sendEstudioRechazadoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-          <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu estudio crediticio no cumplio con los requisitos minimos para el arrendamiento en esta oportunidad.'}</p>
+          <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu estudio crediticio no cumplió con los requisitos mínimos para el arrendamiento en esta oportunidad.'}</p>
           ${score ? `<p style="color: #6b7280;">Score crediticio: <strong>${score}</strong></p>` : ''}
           <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #991b1b; margin: 0;">${motivoGeneral
-              ? 'Si quieres, escribenos y revisamos juntos que opciones tienes: un inmueble de canon menor o un co-arrendatario suelen ser el camino.'
-              : 'Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al dia.'}</p>
+              ? 'Si quieres, escríbenos y revisamos juntos qué opciones tienes: un inmueble de canon menor o un co-arrendatario suelen ser el camino.'
+              : 'Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al día.'}</p>
           </div>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -118,6 +129,8 @@ export async function sendDocumentosRequeridosEmail(params: {
 }) {
   const { email, nombre } = params;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -140,7 +153,7 @@ export async function sendDocumentosRequeridosEmail(params: {
             </ul>
           </div>
           <p style="color: #6b7280;">No es un fiador ni codeudor — es la persona con quien vas a compartir el arriendo.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automático de Cofianza.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -159,6 +172,8 @@ export async function sendContratoListoEmail(params: {
 }) {
   const { email, nombre, inmueble, ciudad } = params;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -170,11 +185,11 @@ export async function sendContratoListoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-          <p style="color: #6b7280;">Tu contrato de arrendamiento para el inmueble en <strong>${inmueble}, ${ciudad}</strong> esta listo para firmar.</p>
+          <p style="color: #6b7280;">Tu contrato de arrendamiento para el inmueble en <strong>${inmueble}, ${ciudad}</strong> está listo para firmar.</p>
           <div style="background: #f0fdfa; border: 1px solid #99f6e4; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #115e59; margin: 0;">Recibiras un enlace de firma electronica en tu correo. El proceso toma menos de 5 minutos.</p>
+            <p style="color: #115e59; margin: 0;">Recibirás un enlace de firma electrónica en tu correo. El proceso toma menos de 5 minutos.</p>
           </div>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -196,6 +211,8 @@ export async function sendArrendatarioAprobadoNotificacionEmail(params: {
 }) {
   const { email, nombre_propietario, nombre_arrendatario, inmueble, ciudad, telefono_arrendatario, email_arrendatario } = params;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -213,14 +230,14 @@ export async function sendArrendatarioAprobadoNotificacionEmail(params: {
             <ul style="color: #065f46; margin: 8px 0 0; padding-left: 20px; list-style: none;">
               <li>Nombre: <strong>${nombre_arrendatario}</strong></li>
               <li>Email: <strong>${email_arrendatario}</strong></li>
-              ${telefono_arrendatario ? `<li>Telefono: <strong>${telefono_arrendatario}</strong></li>` : ''}
+              ${telefono_arrendatario ? `<li>Teléfono: <strong>${telefono_arrendatario}</strong></li>` : ''}
             </ul>
           </div>
           <div style="text-align: center; margin: 24px 0;">
             <a href="mailto:${email_arrendatario}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Contacta al arrendatario lo antes posible</a>
           </div>
           <p style="color: #6b7280; font-size: 14px;">Te recomendamos comunicarte con el arrendatario a la brevedad para coordinar los siguientes pasos del proceso de arrendamiento.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -242,6 +259,8 @@ export async function sendExpedienteInvitacionEmail(params: {
   const { email, nombre_invitador, inmueble, ciudad, token, frontend_url } = params;
   const registroUrl = `${frontend_url}/registro/solicitante?token=${token}`;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -261,7 +280,7 @@ export async function sendExpedienteInvitacionEmail(params: {
             <a href="${registroUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Registrarme y continuar</a>
           </div>
           <p style="color: #6b7280; font-size: 14px;">Si no esperabas esta invitacion, puedes ignorar este correo.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -282,6 +301,8 @@ export async function sendInvitacionMiembroEmail(params: {
   const { email, nombre_invitador, nombre_organizacion, token, frontend_url } = params;
   const aceptarUrl = `${frontend_url}/invitacion-miembro/${token}`;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -293,12 +314,12 @@ export async function sendInvitacionMiembroEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola,</p>
-          <p style="color: #6b7280;"><strong>${nombre_invitador}</strong> te invito a unirte a <strong>${nombre_organizacion}</strong> en la plataforma Cofianza para gestionar inmuebles y estudios en equipo.</p>
+          <p style="color: #6b7280;"><strong>${nombre_invitador}</strong> te invitó a unirte a <strong>${nombre_organizacion}</strong> en la plataforma Cofianza para gestionar inmuebles y estudios en equipo.</p>
           <div style="text-align: center; margin: 24px 0;">
             <a href="${aceptarUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Aceptar invitacion</a>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">Este enlace vence en 7 dias. Si no esperabas esta invitacion, puedes ignorar este correo.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          <p style="color: #6b7280; font-size: 14px;">Este enlace vence en 7 días. Si no esperabas esta invitación, puedes ignorar este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -344,6 +365,8 @@ export async function sendResponsableAsignadoEmail(params: {
   const url = `${frontend_url}${link.startsWith('/') ? '' : '/'}${link}`;
   const saludo = nombre ? `Hola ${escapeHtml(nombre)},` : 'Hola,';
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -359,7 +382,7 @@ export async function sendResponsableAsignadoEmail(params: {
           <div style="text-align: center; margin: 24px 0;">
             <a href="${url}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Ver en Cofianza</a>
           </div>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -381,6 +404,8 @@ export async function sendCitaSolicitadaPropietarioEmail(params: {
   const { email, nombre_propietario, nombre_solicitante, inmueble, ciudad, fecha_propuesta } = params;
   const fechaFormateada = formatFechaColombia(fecha_propuesta);
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -398,7 +423,7 @@ export async function sendCitaSolicitadaPropietarioEmail(params: {
             <p style="color: #155e75; margin: 4px 0 0;">${fechaFormateada}</p>
           </div>
           <p style="color: #6b7280;">Ingresa a la plataforma para confirmar o ajustar la fecha de la visita.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -420,6 +445,8 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
   const { email, nombre_solicitante, inmueble, ciudad, fecha_confirmada, notas_propietario } = params;
   const fechaFormateada = formatFechaColombia(fecha_confirmada);
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -438,7 +465,7 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
             ${notas_propietario ? `<p style="color: #065f46; margin: 8px 0 0;"><strong>Notas:</strong> ${notas_propietario}</p>` : ''}
           </div>
           <p style="color: #6b7280;">Despues de la visita, el propietario habilitara tu estudio crediticio.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -462,6 +489,8 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
   const fechaOriginal = formatFechaColombia(fecha_propuesta);
   const fechaNueva = formatFechaColombia(fecha_confirmada);
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -482,7 +511,7 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
             ${notas_propietario ? `<p style="color: #92400e; margin: 12px 0 0;"><strong>Notas del propietario:</strong> ${notas_propietario}</p>` : ''}
           </div>
           <p style="color: #6b7280;">Si el nuevo horario no te sirve, contacta al propietario desde tu panel para reagendar.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -512,6 +541,8 @@ export async function sendCitaCanceladaEmail(params: {
 
   const quienCancelo = cancelado_por === 'propietario' ? 'El propietario' : 'El solicitante';
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -531,7 +562,7 @@ export async function sendCitaCanceladaEmail(params: {
             <p style="color: #991b1b; margin: 4px 0 0;">${motivo}</p>
           </div>
           <p style="color: #6b7280;">Puedes coordinar una nueva fecha desde tu panel en Cofianza.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -551,6 +582,8 @@ export async function sendEstudioHabilitadoEmail(params: {
   url_panel: string;
 }) {
   const { email, nombre_solicitante, expediente_numero, inmueble, ciudad, url_panel } = params;
+
+  const company = await getCompany();
 
   await resend.emails.send({
     from: FROM,
@@ -572,7 +605,7 @@ export async function sendEstudioHabilitadoEmail(params: {
           <p style="text-align: center; margin: 24px 0;">
             <a href="${url_panel}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">Ir al panel</a>
           </p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,
@@ -593,6 +626,8 @@ export async function sendEstudioNoHabilitadoEmail(params: {
 }) {
   const { email, nombre_solicitante, expediente_numero, inmueble, ciudad, motivo } = params;
 
+  const company = await getCompany();
+
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -600,11 +635,11 @@ export async function sendEstudioNoHabilitadoEmail(params: {
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #6b7280; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Solicitud no continuara</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Solicitud no continuará</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre_solicitante}</strong>,</p>
-          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${inmueble}, ${ciudad}</strong>, el propietario decidio no continuar con el proceso de estudio crediticio para tu solicitud (<strong>${expediente_numero}</strong>).</p>
+          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${inmueble}, ${ciudad}</strong>, el propietario decidió no continuar con el proceso de estudio crediticio para tu solicitud (<strong>${expediente_numero}</strong>).</p>
           ${motivo ? `
           <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #374151; margin: 0; font-weight: bold;">Motivo del propietario:</p>
@@ -612,7 +647,7 @@ export async function sendEstudioNoHabilitadoEmail(params: {
           </div>
           ` : ''}
           <p style="color: #6b7280;">Puedes seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar tu fiador para el que prefieras.</p>
-          <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">Este es un mensaje automatico de Cofianza. No responder a este correo.</p>
+          ${footerHtml(company)}
         </div>
       </div>
     `,

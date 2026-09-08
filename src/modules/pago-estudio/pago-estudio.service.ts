@@ -463,17 +463,21 @@ export async function enviarLinkPago(
   const monto = await getMontoEstudio();
   const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || `Exp. ${exp.numero}`}`;
 
+  // El id va PRE-generado y viaja en las URLs de retorno: el arrendatario que
+  // cancela o al que le rechazan el pago no tiene sesión, así que sin el
+  // `pago` en la URL la pantalla de resultado no puede ofrecerle reintentar.
+  const pagoId = crypto.randomUUID();
+
   // Build success/cancel/pending URLs (pending: PSE/efectivo no es éxito todavía)
-  const successUrl = `${env.FRONTEND_URL}/pago/resultado?status=success&expediente=${expedienteId}`;
-  const cancelUrl = `${env.FRONTEND_URL}/pago/resultado?status=cancelled&expediente=${expedienteId}`;
-  const pendingUrl = `${env.FRONTEND_URL}/pago/resultado?status=pending&expediente=${expedienteId}`;
+  const successUrl = `${env.FRONTEND_URL}/pago/resultado?status=success&expediente=${expedienteId}&pago=${pagoId}`;
+  const cancelUrl = `${env.FRONTEND_URL}/pago/resultado?status=cancelled&expediente=${expedienteId}&pago=${pagoId}`;
+  const pendingUrl = `${env.FRONTEND_URL}/pago/resultado?status=pending&expediente=${expedienteId}&pago=${pagoId}`;
 
   // Insert pago ANTES de crear el checkout, con id pre-generado: la preference
   // lleva el pago_id en external_reference y el webhook casa el pago EXACTO.
   // El índice único uq_pagos_estudio_activo convierte la carrera de doble click
   // en un 23505 limpio en lugar de dos links vivos.
   const gateway = getPaymentGateway();
-  const pagoId = crypto.randomUUID();
   const { error: insertError } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .insert({
@@ -845,7 +849,7 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
 export async function getResultadoPagoPublico(pagoId: string) {
   const { data, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, concepto, monto, moneda, fecha_pago, expediente_id')
+    .select('id, estado, concepto, monto, moneda, fecha_pago, expediente_id, payment_link_url')
     .eq('id', pagoId)
     .single();
 
@@ -853,7 +857,7 @@ export async function getResultadoPagoPublico(pagoId: string) {
     throw AppError.notFound('Pago no encontrado');
   }
 
-  const pago = data as { id: string; estado: string; concepto: string; monto: number; moneda: string; fecha_pago: string | null; expediente_id: string };
+  const pago = data as { id: string; estado: string; concepto: string; monto: number; moneda: string; fecha_pago: string | null; expediente_id: string; payment_link_url: string | null };
 
   // Get expediente numero (minimal, no sensitive data)
   const { data: exp } = await (supabase
@@ -871,6 +875,15 @@ export async function getResultadoPagoPublico(pagoId: string) {
     monto_formateado: formatCOP(pago.monto),
     fecha_pago: pago.fecha_pago,
     expediente_numero: (exp as { numero: string } | null)?.numero || null,
+    // Para que la pantalla de resultado pueda ofrecer "Volver a intentar" a
+    // quien no tiene sesión. Solo mientras el checkout siga sirviendo:
+    // 'fallido' incluido porque la máquina de estados permite fallido →
+    // completado (Mercado Pago deja reintentar dentro del mismo checkout).
+    // En 'completado'/'cancelado'/'reembolsado' se devuelve null: reabrir el
+    // link ahí sería invitarlo a pagar dos veces o a un enlace muerto.
+    payment_link_url: ['pendiente', 'procesando', 'fallido'].includes(pago.estado)
+      ? pago.payment_link_url
+      : null,
   };
 }
 

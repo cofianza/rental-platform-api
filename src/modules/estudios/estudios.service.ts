@@ -1102,7 +1102,7 @@ export async function getFormularioByToken(token: string) {
       expedientes!estudios_expediente_id_fkey(
         numero,
         inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, departamento),
-        solicitantes!expedientes_solicitante_id_fkey(nombre, apellido)
+        solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email, telefono, tipo_documento, numero_documento)
       )
     `)
     .eq('token_self_service', token)
@@ -1122,7 +1122,14 @@ export async function getFormularioByToken(token: string) {
     expedientes: {
       numero: string;
       inmuebles: { direccion: string; ciudad: string; departamento: string };
-      solicitantes: { nombre: string; apellido: string };
+      solicitantes: {
+        nombre: string;
+        apellido: string;
+        email: string | null;
+        telefono: string | null;
+        tipo_documento: string | null;
+        numero_documento: string | null;
+      };
     };
   };
 
@@ -1147,6 +1154,16 @@ export async function getFormularioByToken(token: string) {
     inmueble_direccion: estudio.expedientes.inmuebles?.direccion || '',
     inmueble_ciudad: estudio.expedientes.inmuebles?.ciudad || '',
     solicitante_nombre: `${estudio.expedientes.solicitantes?.nombre || ''} ${estudio.expedientes.solicitantes?.apellido || ''}`.trim(),
+    // El enlace sale del expediente, donde estos datos YA estan: llegaba el
+    // formulario en blanco y el solicitante tenia que teclear de nuevo lo que
+    // la inmobiliaria ya habia registrado por el. El token es el mismo secreto
+    // que ya daba nombre y direccion del inmueble, asi que no abre superficie.
+    solicitante: {
+      email: estudio.expedientes.solicitantes?.email ?? null,
+      telefono: estudio.expedientes.solicitantes?.telefono ?? null,
+      tipo_documento: estudio.expedientes.solicitantes?.tipo_documento ?? null,
+      numero_documento: estudio.expedientes.solicitantes?.numero_documento ?? null,
+    },
     ya_completado: yaCompletado,
     datos_formulario: yaCompletado ? estudio.datos_formulario : null,
   };

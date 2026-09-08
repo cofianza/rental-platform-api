@@ -186,6 +186,8 @@ export interface MiembroView {
   apellido: string | null;
   invitado_en: string;
   es_yo: boolean;
+  /** Estudios de la org asignados a este miembro y todavía en curso. */
+  estudios_activos: number;
 }
 
 /**
@@ -211,6 +213,33 @@ async function limpiarInvitacionesExpiradas(orgId: string): Promise<void> {
   } else if (count && count > 0) {
     logger.info({ orgId, count }, 'Invitaciones expiradas eliminadas');
   }
+}
+
+/**
+ * Cuenta, por miembro responsable, los estudios de la organización que siguen
+ * en curso. "En curso" = ni cerrado ni rechazado y sin marca de cancelación.
+ * Best-effort: si la consulta falla devolvemos el mapa vacío (el roster se
+ * muestra igual, solo sin el conteo).
+ */
+async function contarEstudiosActivosPorMiembro(orgId: string): Promise<Map<string, number>> {
+  const carga = new Map<string, number>();
+  const { data, error } = await db('expedientes')
+    .select('miembro_responsable_id')
+    .eq('inmobiliaria_id', orgId)
+    .not('estado', 'in', '(cerrado,rechazado)')
+    .is('cancelado_at', null);
+
+  if (error) {
+    logger.warn({ error: error.message, orgId }, 'No se pudo contar la carga de estudios por miembro');
+    return carga;
+  }
+
+  for (const row of (data as unknown as Array<{ miembro_responsable_id: string | null }>) || []) {
+    const id = row.miembro_responsable_id;
+    if (!id) continue;
+    carga.set(id, (carga.get(id) ?? 0) + 1);
+  }
+  return carga;
 }
 
 export async function listMiembros(userId: string): Promise<{
@@ -253,6 +282,11 @@ export async function listMiembros(userId: string): Promise<{
     perfiles: { nombre: string; apellido: string } | null;
   }>) || [];
 
+  // Carga de trabajo por miembro: sin esto el titular que reparte estudios no
+  // tenía forma de ver quién lleva 12 y quién 2. Una sola consulta y el conteo
+  // se hace en memoria (el volumen por org es pequeño).
+  const cargaPorMiembro = await contarEstudiosActivosPorMiembro(m.inmobiliaria_id);
+
   return {
     organizacion: { id: m.inmobiliaria_id, nombre: m.nombre_organizacion },
     soy_owner: m.rol_miembro === 'owner',
@@ -267,6 +301,7 @@ export async function listMiembros(userId: string): Promise<{
       apellido: r.perfiles?.apellido ?? null,
       invitado_en: r.created_at,
       es_yo: r.perfil_id === userId,
+      estudios_activos: r.perfil_id ? (cargaPorMiembro.get(r.perfil_id) ?? 0) : 0,
     })),
   };
 }
@@ -983,6 +1018,9 @@ export async function adminListMiembrosDeOrg(orgId: string): Promise<{
     perfiles: { nombre: string; apellido: string } | null;
   }>) || [];
 
+  // Misma carga de trabajo que ve el titular en su propio equipo.
+  const cargaPorMiembro = await contarEstudiosActivosPorMiembro(orgId);
+
   return {
     organizacion: { id: org.id, nombre: org.nombre },
     miembros_ven_todo: org.miembros_ven_todo,
@@ -996,6 +1034,7 @@ export async function adminListMiembrosDeOrg(orgId: string): Promise<{
       apellido: r.perfiles?.apellido ?? null,
       invitado_en: r.created_at,
       es_yo: false,
+      estudios_activos: r.perfil_id ? (cargaPorMiembro.get(r.perfil_id) ?? 0) : 0,
     })),
   };
 }

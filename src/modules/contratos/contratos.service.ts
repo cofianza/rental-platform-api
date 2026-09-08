@@ -871,6 +871,60 @@ const CONTRATO_LIST_WITH_RELATIONS = `
 // (resolveAllowedExpedienteIds). Compartido por listado, stats y detalle para
 // que nunca diverjan.
 
+/**
+ * PostgREST interpreta `%`, `,`, `(` y `)` dentro de un `or(...)`, así que un
+ * término con esos caracteres rompería el filtro (o filtraría de más).
+ */
+function escaparBusqueda(termino: string): string {
+  return termino.replace(/[%,()\\]/g, ' ').trim();
+}
+
+/**
+ * Traduce el texto libre a ids de expediente.
+ *
+ * PORQUÉ: la búsqueda solo miraba `nombre_archivo`, inútil para quien busca a
+ * su arrendatario por nombre/cédula o el inmueble por dirección/código — que es
+ * lo que ve en pantalla. Devuelve [] cuando nada coincide (resultado vacío
+ * honesto, no "todos").
+ */
+async function resolverExpedientesPorTexto(
+  termino: string,
+  allowedExpedienteIds: string[] | null,
+): Promise<string[]> {
+  const q = escaparBusqueda(termino);
+  if (!q) return [];
+
+  const [solicitantesRes, inmueblesRes] = await Promise.all([
+    (supabase.from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .or(`nombre.ilike.%${q}%,apellido.ilike.%${q}%,numero_documento.ilike.%${q}%`)
+      .limit(200),
+    (supabase.from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .or(`direccion.ilike.%${q}%,codigo.ilike.%${q}%`)
+      .limit(200),
+  ]);
+
+  const solicitanteIds = ((solicitantesRes.data as Array<{ id: string }>) || []).map((r) => r.id);
+  const inmuebleIds = ((inmueblesRes.data as Array<{ id: string }>) || []).map((r) => r.id);
+
+  const ors = [`numero.ilike.%${q}%`];
+  if (solicitanteIds.length > 0) ors.push(`solicitante_id.in.(${solicitanteIds.join(',')})`);
+  if (inmuebleIds.length > 0) ors.push(`inmueble_id.in.(${inmuebleIds.join(',')})`);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let expQ: any = (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .or(ors.join(','))
+    .limit(500);
+  // El scoping multi-tenant se aplica también aquí: nunca resolvemos ids fuera
+  // de lo que el usuario ya podía ver.
+  if (allowedExpedienteIds !== null) expQ = expQ.in('id', allowedExpedienteIds);
+
+  const { data } = await expQ;
+  return ((data as Array<{ id: string }>) || []).map((r) => r.id);
+}
+
 export async function listAllContratos(
   query: ListAllContratosQuery,
   userId?: string,
@@ -892,6 +946,13 @@ export async function listAllContratos(
     };
   }
 
+  // La búsqueda por texto se resuelve ANTES (es asíncrona: toca solicitantes,
+  // inmuebles y expedientes) y entra al filtro como lista de expediente_id.
+  const searchExpedienteIds = query.search
+    ? await resolverExpedientesPorTexto(query.search, allowedExpedienteIds)
+    : null;
+  const searchEscapado = query.search ? escaparBusqueda(query.search) : '';
+
   // Build filters helper
   function applyFilters(qb: ReturnType<typeof supabase.from>) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -907,7 +968,13 @@ export async function listAllContratos(
       q = q.in('expediente_id', query.expediente_ids.split(','));
     }
     if (query.search) {
-      q = q.ilike('nombre_archivo', `%${query.search}%`);
+      // Nombre de archivo O cualquier contrato de los expedientes que hicieron
+      // match por arrendatario / cédula / dirección / código / número.
+      const ors = [`nombre_archivo.ilike.%${searchEscapado}%`];
+      if (searchExpedienteIds && searchExpedienteIds.length > 0) {
+        ors.push(`expediente_id.in.(${searchExpedienteIds.join(',')})`);
+      }
+      q = q.or(ors.join(','));
     }
     if (query.fecha_desde) {
       q = q.gte('fecha_generacion', query.fecha_desde);
@@ -1542,6 +1609,9 @@ async function supersederContratosEnFirma(
 // ============================================================
 export interface ContratosStats {
   total: number
+  // OJO: cuenta CONTRATOS en borrador (ya generados), NO los estudios
+  // aprobados a los que todavía les falta contrato — esos no existen como fila
+  // en `contratos` y se calculan en el web (useAprobadosSinContrato).
   pendientes_generar: number  // estado='borrador'
   en_proceso_firma: number    // estado='pendiente_firma'
   activos: number              // estado IN ('firmado','vigente')
