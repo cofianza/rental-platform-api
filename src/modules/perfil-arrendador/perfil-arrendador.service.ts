@@ -14,6 +14,7 @@ const PERFIL_ARRENDADOR_FIELDS = `
   razon_social, representante_legal,
   afianzadora_tipo, afianzadora_actual,
   domicilio_direccion, domicilio_ciudad, ciudad,
+  direccion, telefono,
   matricula_arrendador, matricula_expedida_por, matricula_fecha,
   logo_storage_key, logo_url,
   whatsapp_recaudo, email_recaudo,

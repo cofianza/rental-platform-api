@@ -1,6 +1,13 @@
 import { Resend } from 'resend';
 import { env } from '@/config';
 import { logger } from '@/lib/logger';
+import { COMPANY } from '@/config/company';
+
+// Antes los correos cerraban con "contacta a tu agente inmobiliario": el
+// prospecto no tiene agente y se quedaba sin a quien escribirle. Se leen del
+// env para no volver este modulo asincrono (getCompany hace I/O).
+const SOPORTE_WHATSAPP = COMPANY.phone;
+const SOPORTE_EMAIL = COMPANY.email;
 
 const resend = new Resend(env.RESEND_API_KEY);
 
@@ -320,7 +327,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirara en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, contacta a tu agente inmobiliario.
+                Este enlace expirara en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -678,7 +685,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, contacta a tu agente inmobiliario.
+                Este enlace expirará en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -890,7 +897,7 @@ function buildFirmaHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, contacta a tu agente inmobiliario.
+                Este enlace expirará en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -1020,7 +1027,7 @@ function buildPaymentLinkHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Si tienes cualquier problema con el pago, contacta a tu agente inmobiliario.
+                Si tienes cualquier problema con el pago, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
