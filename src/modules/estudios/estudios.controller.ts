@@ -46,6 +46,18 @@ export async function stats(req: Request, res: Response) {
   sendSuccess(res, data);
 }
 
+/**
+ * Flujo §4.4: el tope se valida "al seleccionar la propiedad, y ANTES de
+ * avanzar y de generar cualquier cobro". Hasta ahora solo se validaba al
+ * enviar, asi que el gestor recorria los 4 pasos del asistente para chocar al
+ * final y quedarse con un expediente que nunca podia arrancar.
+ */
+export async function getTopeCanon(_req: Request, res: Response) {
+  const { getTopeCanonVigente } = await import('./tope-canon.guard');
+  const tope_cop = await getTopeCanonVigente();
+  sendSuccess(res, { tope_cop });
+}
+
 export async function getById(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const estudio = await estudiosService.getEstudioById(estudioId, req.user?.id, req.user?.rol);

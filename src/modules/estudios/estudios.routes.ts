@@ -62,6 +62,10 @@ estudiosRouter.use(authMiddleware);
 // en el paso 2 del asistente si esa persona ya tiene un estudio vigente, para
 // ofrecer reutilizarlo "en lugar de crear uno nuevo y cobrarlo". Va ANTES del
 // listado global para que '/vigente' no lo capture ninguna ruta con :estudioId.
+// GET /estudios/tope-canon — Flujo §4.4: el asistente lo consulta en el paso 1
+// para no dejar elegir un inmueble que el sistema no puede afianzar.
+estudiosRouter.get('/tope-canon', estudiosController.getTopeCanon);
+
 estudiosRouter.get(
   '/vigente',
   authorize('expedientes', 'read'),
