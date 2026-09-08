@@ -275,6 +275,35 @@ export async function listAllEstudios(
     };
   }
 
+  // Busqueda por numero de estudio, nombre/apellido o CEDULA del solicitante.
+  // Antes se filtraba en memoria DESPUES de paginar: buscar 'Perez' devolvia
+  // "sin resultados" si no caia en las 10 filas de la pagina, y el total mentia.
+  // Ahora se resuelven los expediente_id que hacen match y se filtra en SQL.
+  let searchExpedienteIds: string[] | null = null;
+  if (query.search) {
+    const termino = query.search.replace(/[,()]/g, '').trim();
+    if (termino) {
+      const { data: sols } = await (supabase
+        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+        .select('id')
+        .or(`nombre.ilike.%${termino}%,apellido.ilike.%${termino}%,numero_documento.ilike.%${termino}%`);
+      const solIds = ((sols as Array<{ id: string }> | null) || []).map((x) => x.id);
+      const filtroExp = `numero.ilike.%${termino}%${solIds.length ? `,solicitante_id.in.(${solIds.join(',')})` : ''}`;
+      const { data: exps } = await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('id')
+        .or(filtroExp);
+      searchExpedienteIds = ((exps as Array<{ id: string }> | null) || []).map((x) => x.id);
+      if (allowedExpedienteIds !== null) {
+        const permitidos = new Set(allowedExpedienteIds);
+        searchExpedienteIds = searchExpedienteIds.filter((id) => permitidos.has(id));
+      }
+      if (searchExpedienteIds.length === 0) {
+        return { estudios: [], pagination: { total: 0, page, limit, totalPages: 0 } };
+      }
+    }
+  }
+
   // Build base query for count
   let countQuery = (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -296,6 +325,11 @@ export async function listAllEstudios(
         solicitantes!expedientes_solicitante_id_fkey(nombre, apellido)
       )
     `);
+
+  if (searchExpedienteIds !== null) {
+    countQuery = countQuery.in('expediente_id', searchExpedienteIds);
+    dataQuery = dataQuery.in('expediente_id', searchExpedienteIds);
+  }
 
   if (allowedExpedienteIds !== null) {
     countQuery = countQuery.in('expediente_id', allowedExpedienteIds);
@@ -345,34 +379,16 @@ export async function listAllEstudios(
     throw AppError.badRequest('Error al obtener estudios', 'ESTUDIOS_LIST_ERROR');
   }
 
-  // If search filter, do in-memory filtering on joined data
-  let filteredData = data || [];
-  if (query.search) {
-    const searchLower = query.search.toLowerCase();
-    filteredData = filteredData.filter((item: Record<string, unknown>) => {
-      const exp = item.expedientes as { numero?: string; solicitantes?: { nombre?: string; apellido?: string } } | null;
-      const numero = exp?.numero || '';
-      const nombre = exp?.solicitantes?.nombre || '';
-      const apellido = exp?.solicitantes?.apellido || '';
-      const proveedor = (item.proveedor as string) || '';
-      return (
-        numero.toLowerCase().includes(searchLower) ||
-        `${nombre} ${apellido}`.toLowerCase().includes(searchLower) ||
-        proveedor.toLowerCase().includes(searchLower)
-      );
-    });
-  }
-
   return {
     estudios: redactarEstudiosSegunRol(
-      filteredData as unknown as Record<string, unknown>[],
+      (data || []) as unknown as Record<string, unknown>[],
       userRol,
     ),
     pagination: {
-      total: query.search ? filteredData.length : total,
+      total,
       page,
       limit,
-      totalPages: Math.ceil((query.search ? filteredData.length : total) / limit),
+      totalPages: Math.ceil(total / limit),
     },
   };
 }
