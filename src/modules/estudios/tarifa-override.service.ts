@@ -27,6 +27,7 @@ import {
   type TarifaOverride,
 } from './tarifas';
 import { generarCertificado, leerSombraDelEstudio } from './certificado.service';
+import { coarrendatarioVinculado } from './coarrendatario-vinculado';
 import type { TarifaOverrideInput } from './estudios.schema';
 
 interface FilaEstudio {
@@ -70,8 +71,13 @@ async function leerFila(estudioId: string): Promise<FilaEstudio> {
 async function armar(e: FilaEstudio): Promise<TarifaEstudio> {
   const cal = await getCalibracion();
   const sombra = await leerSombraDelEstudio(e.id);
-  const puntaje = env.MOTOR_DECIDE_ENABLED || env.MOTOR_RUTA_USA_SCORECARD ? (sombra?.puntaje ?? null) : null;
-  const conCoarrendatario = e.tipo === 'con_coarrendatario';
+  const usaPuntaje = env.MOTOR_DECIDE_ENABLED || env.MOTOR_RUTA_USA_SCORECARD;
+  const puntaje = usaPuntaje ? (sombra?.puntaje ?? null) : null;
+  // Mismo criterio que el CRC (Adenda §5.2 / §3): el coarrendatario es la fila
+  // vinculada al expediente con su propio puntaje, no el `tipo` de este estudio.
+  const coa = await coarrendatarioVinculado(e.expediente_id);
+  const conCoarrendatario = coa !== null;
+  const puntajeCoa = usaPuntaje ? (coa?.puntaje ?? null) : null;
   const override = leerTarifaOverride(e.tarifa_override);
   // Mismo canon que el CRC: el congelado al ejecutar; si no lo hay, el del inmueble.
   const canonCop =
@@ -79,7 +85,7 @@ async function armar(e: FilaEstudio): Promise<TarifaEstudio> {
       ? (e.expedientes?.inmuebles?.valor_arriendo ?? null)
       : Number(e.canon_evaluado);
   const tarifas = calcularTarifas({
-    via: viaSegunCalibracion(puntaje, conCoarrendatario, cal),
+    via: viaSegunCalibracion(puntaje, conCoarrendatario, cal, puntajeCoa),
     conCoarrendatario,
     canonCop,
     override,

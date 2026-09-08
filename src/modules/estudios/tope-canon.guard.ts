@@ -57,6 +57,14 @@ import { getCalibracion } from '@/lib/calibracion';
 /** Codigo de dominio unico del tope. La web lo usa para el mensaje accionable. */
 export const CANON_EXCEDE_TOPE_ERROR_CODE = 'CANON_EXCEDE_TOPE';
 
+/**
+ * Nombre con el que la Politica V4.1 §6 (y el panel de calibracion, Adenda
+ * §11) llaman a esta salida. El errorCode de arriba NO se renombra —la web
+ * discrimina por el— pero viaja en `details.codigo_politica` para que el
+ * error se pueda cruzar con el documento sin traducir.
+ */
+export const CODIGO_POLITICA_TOPE_CANON = 'CANON_MAX_TRANSITORIO';
+
 /** Unico motivo de rechazo. Es un tope, no una bateria de reglas. */
 export type MotivoRechazoTopeCanon = 'excede_tope';
 
@@ -190,6 +198,7 @@ export function errorTopeExcedido(
     CANON_EXCEDE_TOPE_ERROR_CODE,
     {
       motivo: veredicto.motivo,
+      codigo_politica: CODIGO_POLITICA_TOPE_CANON,
       canon_cop: veredicto.canonCop,
       tope_cop: veredicto.topeCop,
     },

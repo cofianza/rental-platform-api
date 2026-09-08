@@ -13,6 +13,17 @@ const resend = new Resend(env.RESEND_API_KEY);
 
 const FROM_EMAIL = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 
+/**
+ * Plazo del enlace tal como lo lee la persona. Los plazos largos —el de
+ * autorizacion es DIAS_EXPIRACION_ESTUDIO * 24 (Flujo §14: 15 dias)— se dicen
+ * en dias: "360 horas" no le dice nada a nadie. Menos de dos dias, o un numero
+ * de horas no redondo, sigue en horas.
+ */
+export function formatearPlazoEnlace(expiryHours: number): string {
+  if (expiryHours >= 48 && expiryHours % 24 === 0) return `${expiryHours / 24} días`;
+  return `${expiryHours} horas`;
+}
+
 export async function sendPasswordResetEmail(to: string, resetUrl: string): Promise<void> {
   try {
     await resend.emails.send({
@@ -327,7 +338,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirara en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
+                Este enlace expirara en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -685,7 +696,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
+                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -897,7 +908,7 @@ function buildFirmaHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${expiryHours} horas</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
+                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />

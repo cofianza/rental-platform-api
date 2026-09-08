@@ -19,6 +19,15 @@ router.use(authMiddleware, roleGuard(['administrador']));
 
 router.get('/', controller.listar);
 router.get('/historial', controller.historial);
+// Adenda §2.4: "el tablero de calibracion debe mostrar el porcentaje de
+// estudios resueltos con una sola central y con dos". Ventana en dias.
+router.get(
+  '/cascada',
+  validate({
+    query: z.object({ dias: z.coerce.number().int().min(1).max(365).default(30) }),
+  }),
+  controller.cascada,
+);
 router.patch(
   '/:clave',
   validate({

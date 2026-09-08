@@ -62,6 +62,14 @@ export function construirFilaSombra(
 ): Record<string, unknown> {
   const f = salida.features;
 
+  // Coherencia con chk_scorecard_sombra_no_calculable: sin puntaje, la unica
+  // decision que la tabla admite es 'no_calculable'. decidirSombra puede
+  // devolver 'rechazado' SIN puntaje (regla dura global de listas, §6), y esa
+  // fila fallaria entera por el CHECK. La decision que el motor habria tomado
+  // no se pierde: queda en motivo_no_calculable, en reglas_duras_activadas y
+  // en features_crudas.decision_sombra_motor.
+  const sinPuntaje = salida.puntaje_normalizado === null;
+
   const puntajePorVariable: Record<string, unknown> = {};
   for (const p of salida.puntajes) {
     puntajePorVariable[p.variable] = {
@@ -123,8 +131,10 @@ export function construirFilaSombra(
     umbral_aprobado: salida.umbral_aprobado,
     umbral_revision: salida.umbral_revision,
 
-    decision_sombra: salida.decision_sombra,
-    motivo_no_calculable: salida.motivo_no_calculable,
+    decision_sombra: sinPuntaje ? 'no_calculable' : salida.decision_sombra,
+    motivo_no_calculable: sinPuntaje
+      ? (salida.motivo_no_calculable ?? salida.decision_motivo)
+      : salida.motivo_no_calculable,
 
     reglas_duras_activadas: salida.reglas_duras.map((r) => r.codigo),
     variables_no_calculables: salida.variables_no_calculables,
@@ -134,6 +144,7 @@ export function construirFilaSombra(
       ...f.crudas,
       proveedor: salida.proveedor,
       decision_motivo: salida.decision_motivo,
+      decision_sombra_motor: salida.decision_sombra,
       puntaje_topado: salida.puntaje_topado,
       puntaje_bruto_alcanzable: salida.puntaje_bruto_alcanzable,
       puntaje_bruto_maximo_modelo: salida.puntaje_bruto_maximo_modelo,

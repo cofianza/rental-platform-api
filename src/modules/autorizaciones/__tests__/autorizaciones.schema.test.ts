@@ -199,3 +199,26 @@ describe('verificarOtpSchema', () => {
     expect(result.success).toBe(false);
   });
 });
+
+// ============================================================
+// firmarSchema — identidad_confirmada (Flujo §8.1)
+// ============================================================
+
+describe('firmarSchema — identidad_confirmada (§8.1)', () => {
+  it('debe aceptar identidad_confirmada: true junto a la casilla', () => {
+    const result = firmarSchema.safeParse({ metodo_firma: 'casilla', identidad_confirmada: true });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.identidad_confirmada).toBe(true);
+  });
+
+  it('debe seguir aceptando la casilla sin identidad_confirmada (es opcional)', () => {
+    const result = firmarSchema.safeParse({ metodo_firma: 'casilla' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.identidad_confirmada).toBeUndefined();
+  });
+
+  it('debe rechazar identidad_confirmada: false (literal true o nada)', () => {
+    const result = firmarSchema.safeParse({ metodo_firma: 'casilla', identidad_confirmada: false });
+    expect(result.success).toBe(false);
+  });
+});

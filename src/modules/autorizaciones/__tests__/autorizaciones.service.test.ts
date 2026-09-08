@@ -117,6 +117,10 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarYCorreo: vi.fn(async () => undefined),
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: vi.fn(async () => []) }));
+// Flujo §14 / Adenda §9: el enlace vive DIAS_EXPIRACION_ESTUDIO dias.
+vi.mock('@/lib/calibracion', () => ({
+  getCalibracion: vi.fn(async () => ({ DIAS_EXPIRACION_ESTUDIO: 15, UMBRAL_DIFERENCIA_INGRESO: 50 })),
+}));
 
 // Import AFTER mocks
 import {
@@ -267,12 +271,16 @@ describe('autorizaciones.service', () => {
         'juan@test.com',
         'Juan Perez',
         expect.stringContaining('http://localhost:3000/autorizar/'),
-        48,
+        15 * 24, // Flujo §14 "Plazo de expiracion: 15 dias", no 48 h
       );
       // Sin celular no hay WhatsApp.
       expect(mockEnviarMensaje).not.toHaveBeenCalled();
       // §8.4: se congela el texto y la version que de verdad se presentaron.
       const insert = opsDe('autorizaciones_habeas_data', 'insert')[0].args[0] as Record<string, unknown>;
+      // El token caduca con el estudio (15 dias calibrables), no antes.
+      const expira = new Date(String(insert.token_expiracion)).getTime();
+      expect(expira).toBeGreaterThan(Date.now() + 14 * 24 * 60 * 60 * 1000);
+      expect(expira).toBeLessThanOrEqual(Date.now() + 15 * 24 * 60 * 60 * 1000 + 1000);
       expect(insert).toMatchObject({ estado: 'pendiente', texto_autorizado: TEXTO_LEGAL, version_terminos: VERSION_TERMINOS });
       expect(String(insert.token)).toHaveLength(64);
       // Las pendientes anteriores DEL TITULAR se expiran (no las del co-arrendatario).
@@ -419,6 +427,36 @@ describe('autorizaciones.service', () => {
         numero_documento_aceptante: '123456789',
         tipo_documento_aceptante: 'cc',
       });
+      // Sin identidad_confirmada en el body no se toca el perfil del prospecto.
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
+    });
+
+    it('identidad_confirmada en el body de la firma se registra en el perfil del prospecto (§8.1)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID } }, { data: [{ id: AUTORIZACION_ID }] });
+
+      const result = await firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', identidad_confirmada: true }, '1.1.1.1', 'UA');
+      expect(result.estado).toBe('autorizado');
+
+      // Mismas columnas que el PASO 5 (/perfil), en la fila 1:1 del expediente.
+      const upsert = opsDe('autorizacion_perfil_prospecto', 'upsert')[0];
+      expect(upsert.args[0]).toMatchObject({
+        expediente_id: EXPEDIENTE_ID,
+        autorizacion_id: AUTORIZACION_ID,
+        identidad_confirmada: true,
+        identidad_reporte: null,
+      });
+      expect((upsert.args[0] as Record<string, unknown>).identidad_confirmada_en).toEqual(expect.any(String));
+      expect(upsert.args[1]).toEqual({ onConflict: 'expediente_id' });
+      // La firma sigue igual: casilla sin OTP.
+      expect(mockFrom).not.toHaveBeenCalledWith('autorizacion_otps');
+    });
+
+    it('identidad_confirmada NO se registra si la autorizacion no tiene estudio (no hay fila donde ponerla)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
+
+      const result = await firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', identidad_confirmada: true });
+      expect(result.estado).toBe('autorizado');
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
     });
 
     it('otp SIN OTP verificado NO firma (OTP_NO_VERIFICADO)', async () => {

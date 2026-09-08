@@ -22,8 +22,13 @@
 //      'fallido' y re-consulta al otro buro son caminos reales — y la segunda
 //      corrida debe SOBRESCRIBIR a la primera, no acumularse: si el buro
 //      cambio de TransUnion a DataCredito, el scorecard viejo esta obsoleto.
-//   3. No persiste corridas vacias. Si ninguna variable resulto calculable no
-//      hay nada que medir y la fila solo ensuciaria el cruce agregado.
+//   3. Persiste TODAS las corridas, tambien las vacias. Hasta el 2026-09-08 una
+//      corrida sin puntaje (no-hit, thin file, buro degradado) no dejaba fila,
+//      y con ella se perdia justo la traza que pide la Politica §9
+//      (apis_fallidas, session_id, tiempo_procesamiento_ms, factor...). La fila
+//      va con decision_sombra = 'no_calculable' y el motivo, que es lo que el
+//      CHECK de la tabla admite sin puntaje; el cruce agregado la filtra por
+//      esa columna.
 //
 // NOTA sobre estudios.canon_evaluado: la migracion agrega esa columna como el
 // hogar definitivo del canon congelado, pero el motor sombra NO la escribe. El
@@ -148,7 +153,7 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
       umbral_revision: cal.UMBRAL_ZONA_GRIS,
     });
 
-    // 4-5. Descartar la corrida vacia y hacer el upsert idempotente.
+    // 4-5. Upsert idempotente (tambien de la corrida vacia: regla 3).
     await persistirFila(estudioId, salida, args.contexto);
   } catch (err) {
     logger.warn(
@@ -159,20 +164,20 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
 }
 
 /**
- * Descarta la corrida vacia y hace el upsert idempotente por
- * (estudio_id, modelo_version). Extraido para que el camino con salida
- * precalculada y el que evalua aqui escriban por el mismo sitio.
+ * Upsert idempotente por (estudio_id, modelo_version). Extraido para que el
+ * camino con salida precalculada y el que evalua aqui escriban por el mismo
+ * sitio.
  *
- * Una corrida sin ninguna variable calculable no mide nada: se registra en el
- * log y no se escribe fila (regla 3 del encabezado).
+ * Una corrida sin ninguna variable calculable tambien se escribe (regla 3 del
+ * encabezado): no mide el scorecard, pero SI deja la traza de ejecucion del
+ * §9. construirFilaSombra la encuadra como 'no_calculable' con su motivo.
  */
 async function persistirFila(estudioId: string, salida: SalidaSombra, contexto: ContextoEjecucion = {}): Promise<void> {
   if (salida.puntaje_normalizado === null) {
     logger.debug(
-      { estudioId, proveedor: salida.proveedor, motivo: salida.motivo_no_calculable },
-      'scorecard sombra: sin variables calculables, no se persiste',
+      { estudioId, proveedor: salida.proveedor, motivo: salida.motivo_no_calculable ?? salida.decision_motivo },
+      'scorecard sombra: sin variables calculables — se persiste solo la traza (§9)',
     );
-    return;
   }
 
   const { error } = await (supabase

@@ -7,6 +7,8 @@ import { Resend } from 'resend';
 import { env } from '@/config/env';
 import { logger } from '@/lib/logger';
 import { getCompany, type CompanyInfo } from '@/lib/companyConfig';
+// Flujo §10: al prospecto solo le llegan los textos de las cuatro rutas.
+import { resolverRuta } from '@/modules/estudios/rutas-resultado';
 
 const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
@@ -72,7 +74,6 @@ export async function sendEstudioAprobadoEmail(params: {
 export async function sendEstudioRechazadoEmail(params: {
   email: string;
   nombre: string;
-  score: number | null;
   /**
    * Motivo GENERAL para el prospecto cuando el rechazo vino de una regla dura
    * de la Politica V4.1 (DTI > 65%, canon/ingreso > 40%). Lo redacta
@@ -83,10 +84,15 @@ export async function sendEstudioRechazadoEmail(params: {
    */
   motivoGeneral?: string | null;
 }) {
-  const { email, nombre, score, motivoGeneral } = params;
+  const { email, nombre, motivoGeneral } = params;
 
   const company = await getCompany();
 
+  // Politica §11: al prospecto se le comunica SOLO el motivo general — sin
+  // score ni parametros del modelo (antes este correo imprimia "Score
+  // crediticio: N", que la API ya le redacta en pantalla) — y su derecho de
+  // apelacion: 15 dias habiles para presentarla, respuesta de Cofianza en 10
+  // dias habiles, y la apelacion no suspende el proceso de arrendamiento.
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -99,11 +105,14 @@ export async function sendEstudioRechazadoEmail(params: {
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
           <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu estudio crediticio no cumplió con los requisitos mínimos para el arrendamiento en esta oportunidad.'}</p>
-          ${score ? `<p style="color: #6b7280;">Score crediticio: <strong>${score}</strong></p>` : ''}
           <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #991b1b; margin: 0;">${motivoGeneral
               ? 'Si quieres, escríbenos y revisamos juntos qué opciones tienes: un inmueble de canon menor o un co-arrendatario suelen ser el camino.'
               : 'Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al día.'}</p>
+          </div>
+          <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="color: #374151; margin: 0; font-weight: bold;">¿No estás de acuerdo con esta decisión?</p>
+            <p style="color: #4b5563; margin: 4px 0 0;">Puedes presentar una apelación escribiendo a <a href="mailto:${company.email}" style="color: #0d9488;">${company.email}</a> dentro de los <strong>15 días hábiles</strong> siguientes a esta notificación. Cofianza te responde en un máximo de <strong>10 días hábiles</strong>. La apelación no suspende el proceso de arrendamiento del inmueble.</p>
           </div>
           ${footerHtml(company)}
         </div>
@@ -131,18 +140,33 @@ export async function sendDocumentosRequeridosEmail(params: {
 
   const company = await getCompany();
 
+  // Flujo §10/§13: al prospecto solo le llegan los textos de las rutas — nunca
+  // "marginal" ni "rechazado". Para resolverRuta un 'condicionado' es el estado
+  // EN REVISION (un analista decide, Politica §3.1): el mismo titulo y mensaje
+  // que ve en su pantalla, asi correo y web no se contradicen. El coarrendatario
+  // sigue siendo la palanca (Mario, 5-may-2026), pero se ofrece como opcion
+  // mientras el equipo revisa, no como veredicto.
+  const ruta = resolverRuta({
+    puntaje: null,
+    resultadoVigente: 'condicionado',
+    reglaDuraActivada: false,
+    coarrendatarioVinculado: false,
+    puntajeCoarrendatario: null,
+  });
+
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Tu solicitud necesita un co-arrendatario - Cofianza',
+    subject: `${ruta.titulo} - Cofianza`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #d97706; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Sigamos juntos</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">${ruta.titulo}</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-          <p style="color: #6b7280;">Tu perfil crediticio quedó marginal. En Cofianza <strong>no pedimos fiador</strong> — para continuar, invita a la persona con quien vas a vivir como tu co-arrendatario.</p>
+          <p style="color: #6b7280;">${ruta.mensaje}</p>
+          <p style="color: #6b7280;">Mientras tanto, puedes sumar un co-arrendatario. En Cofianza <strong>no pedimos fiador</strong>: invita a la persona con quien vas a vivir y evaluamos a los dos como un solo arrendatario.</p>
           <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #92400e; margin: 0; font-weight: bold;">¿Cómo funciona?</p>
             <ul style="color: #92400e; margin: 8px 0 0; padding-left: 20px;">

@@ -31,7 +31,6 @@ import type { ResumenBiometria } from './biometria';
 // Constants
 // ============================================================
 
-const TOKEN_EXPIRY_HOURS = 48;
 const OTP_EXPIRY_MINUTES = 5;
 const OTP_COOLDOWN_SECONDS = 60;
 
@@ -375,9 +374,13 @@ export async function enviarEnlaceAutorizacion(
     .is('coarrendatario_id', null)
     .eq('estado', 'pendiente');
 
-  // 3. Generate secure token
+  // 3. Generate secure token. El enlace vive lo mismo que el estudio (Flujo
+  //    §14 "Plazo de expiracion: 15 dias"; Adenda §9 lo hace calibrable como
+  //    DIAS_EXPIRACION_ESTUDIO): antes caducaba a las 48 h y el prospecto se
+  //    encontraba un enlace muerto dentro de un estudio todavia vigente.
+  const expiryHours = (await getCalibracion()).DIAS_EXPIRACION_ESTUDIO * 24;
   const token = crypto.randomBytes(32).toString('hex');
-  const tokenExpiracion = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
+  const tokenExpiracion = new Date(Date.now() + expiryHours * 60 * 60 * 1000).toISOString();
 
   // 4. Insert new autorizacion
   const textoLegal = textoLegalSolicitante(env.AUCO_BIOMETRIA_ENABLED);
@@ -414,7 +417,7 @@ export async function enviarEnlaceAutorizacion(
   // Email best-effort: si Resend falla (p.ej. dirección no verificada en dev),
   // NO debe bloquear el envío del link por WhatsApp que viene abajo.
   try {
-    await sendAutorizacionEmail(exp.solicitantes.email, nombreCompleto, autorizacionUrl, TOKEN_EXPIRY_HOURS);
+    await sendAutorizacionEmail(exp.solicitantes.email, nombreCompleto, autorizacionUrl, expiryHours);
   } catch (err) {
     logger.warn(
       { error: err instanceof Error ? err.message : String(err), expedienteId },
@@ -636,6 +639,30 @@ async function autorizacionPendientePorToken(token: string): Promise<{
 }
 
 /**
+ * Columnas con las que se registra la confirmacion de identidad del §8.1 en
+ * `autorizacion_perfil_prospecto`. UNA sola definicion para los dos caminos
+ * que la escriben (el PASO 5 y la firma): si divergieran, el banner del
+ * gestor diria una cosa segun por donde haya entrado la confirmacion.
+ *
+ * Limpia ademas el reporte anterior. La fila es 1:1 con el EXPEDIENTE, no con
+ * el enlace: sin esto, un reporte de 'datos_incorrectos' que el gestor ya
+ * corrigio (ficha arreglada + enlace nuevo + prospecto correcto que confirma,
+ * firma, paga y ejecuta) dejaba para siempre el banner ambar "el enlace se
+ * detuvo y no se consulto ninguna central de riesgo" encima de un expediente
+ * ya autorizado y ya consultado. Quien confirma hoy es quien manda; la traza
+ * del reporte queda en el audit log y en el timeline.
+ */
+function camposIdentidadConfirmada(ahora: string): Record<string, unknown> {
+  return {
+    identidad_confirmada: true,
+    identidad_confirmada_en: ahora,
+    identidad_reporte: null,
+    identidad_reporte_detalle: null,
+    identidad_reporte_en: null,
+  };
+}
+
+/**
  * Guarda lo que el prospecto declara en el PASO 5 (§8.1 confirmacion de
  * identidad, §8.2 laboral e ingreso, §8.3 solo/acompanado).
  *
@@ -668,18 +695,7 @@ export async function guardarPerfilProspecto(token: string, input: PerfilProspec
     updated_at: ahora,
   };
   if (input.identidad_confirmada) {
-    fila.identidad_confirmada = true;
-    fila.identidad_confirmada_en = ahora;
-    // Y se limpia el reporte anterior. La fila es 1:1 con el EXPEDIENTE, no con
-    // el enlace: sin esto, un reporte de 'datos_incorrectos' que el gestor ya
-    // corrigio (ficha arreglada + enlace nuevo + prospecto correcto que
-    // confirma, firma, paga y ejecuta) dejaba para siempre el banner ambar
-    // "el enlace se detuvo y no se consulto ninguna central de riesgo" encima
-    // de un expediente ya autorizado y ya consultado. Quien confirma hoy es
-    // quien manda; la traza del reporte queda en el audit log y en el timeline.
-    fila.identidad_reporte = null;
-    fila.identidad_reporte_detalle = null;
-    fila.identidad_reporte_en = null;
+    Object.assign(fila, camposIdentidadConfirmada(ahora));
   }
   if (input.situacion_laboral !== undefined) fila.situacion_laboral = input.situacion_laboral;
   if (input.donde_labora !== undefined) fila.donde_labora = input.donde_labora;
@@ -1271,6 +1287,34 @@ export async function firmarAutorizacion(
     throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
+  // 4b. Flujo §8.1: la confirmacion de identidad puede venir tambien en el
+  // body de la firma. El PASO 5 la guarda por su propio endpoint, pero la web
+  // traga ese fallo y firma igual; si llego aqui se registra con las MISMAS
+  // columnas (camposIdentidadConfirmada), en la fila 1:1 del expediente.
+  // Best-effort: la firma ya quedo escrita; perder esta marca es malo,
+  // deshacer la firma por ella seria peor.
+  if (input.identidad_confirmada && auth.expediente_id) {
+    try {
+      const { error: perfilError } = await (supabase
+        .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+        .upsert(
+          {
+            expediente_id: auth.expediente_id,
+            autorizacion_id: auth.id,
+            updated_at: autorizadoEn.toISOString(),
+            ...camposIdentidadConfirmada(autorizadoEn.toISOString()),
+          } as never,
+          { onConflict: 'expediente_id' },
+        );
+      if (perfilError) throw new Error(perfilError.message);
+    } catch (err) {
+      logger.warn(
+        { error: err instanceof Error ? err.message : String(err), autorizacionId: auth.id, expedienteId: auth.expediente_id },
+        '§8.1: no se pudo registrar la confirmacion de identidad que vino con la firma',
+      );
+    }
+  }
+
   // 5. Audit
   logAudit({
     usuarioId: null,
@@ -1280,6 +1324,7 @@ export async function firmarAutorizacion(
     detalle: {
       solicitante_id: auth.solicitante_id,
       metodo_firma: input.metodo_firma,
+      identidad_confirmada: input.identidad_confirmada === true,
       hash_documento: hashDocumento,
       ip,
     },

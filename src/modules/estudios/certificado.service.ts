@@ -13,6 +13,9 @@ import { MODELO_VERSION } from './motor';
 // Adenda 1: tarifas por ruta (§5), factor de ajuste del ingreso (§1.1),
 // fuentes consultadas (§2.4) y vigencia del panel (§6, §11).
 import { calcularTarifas, leerTarifaOverride, viaSegunCalibracion, type Tarifas } from './tarifas';
+// Adenda §5.2: la prima baja al 10% cuando HAY coarrendatario vinculado al
+// expediente — no cuando el tipo de esta fila es 'con_coarrendatario'.
+import { coarrendatarioVinculado } from './coarrendatario-vinculado';
 import { getCalibracion } from '@/lib/calibracion';
 import { getCompany } from '@/lib/companyConfig';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
@@ -148,6 +151,8 @@ interface CertificatePdfData {
   canonEvaluado: number | null;
   canonMaximoTolerado: number | null;
   requiereAcompanante: boolean;
+  /** Hay un coarrendatario que ya acepto y tiene su propio estudio (Adenda §5.2). */
+  coarrendatarioVinculado: boolean;
   rutaEtiqueta: string | null;
   modeloVersion: string;
   // Adenda §5: tarifa mensual, prima de vinculacion y cashback por ruta.
@@ -301,9 +306,11 @@ export async function generateCertificatePdf(
       }
       condRows.push([
         'Acompanante',
-        data.requiereAcompanante
-          ? 'Requerido: este CRC ampara el contrato presentado con coarrendatario'
-          : 'No requerido',
+        data.coarrendatarioVinculado
+          ? 'Vinculado: este CRC ampara el contrato presentado con coarrendatario'
+          : data.requiereAcompanante
+            ? 'Requerido: este CRC ampara el contrato presentado con coarrendatario'
+            : 'No requerido',
       ]);
       // Adenda §5 — tarifas y primas por ruta de aprobacion.
       if (data.tarifas) {
@@ -330,17 +337,6 @@ export async function generateCertificatePdf(
           `${t.cashback_pct}% de las tarifas mensuales pagadas, al terminar sin moras (no aplica sobre la prima)`,
         ]);
       }
-      // Adenda §2.4 y §1.1 — trazabilidad de la evaluacion.
-      if (data.fuentesConsultadas) {
-        condRows.push([
-          'Fuentes consultadas',
-          data.decisionCascada ? `${data.fuentesConsultadas} — ${data.decisionCascada}` : data.fuentesConsultadas,
-        ]);
-      }
-      if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {
-        condRows.push(['Factor de ajuste de ingreso', `x${data.factorAjusteIngreso} (Adenda 1 §1.1)`]);
-      }
-      condRows.push(['Version del modelo', data.modeloVersion]);
       y = drawTable(doc, condRows, y, contentWidth);
 
       // Parrafo del §8 de la Politica V4.1 (TOLERANCIA DE CANON DEL CRC),
@@ -358,6 +354,25 @@ export async function generateCertificatePdf(
       );
       y += 32;
     }
+
+    y += 10;
+
+    // ---- SECTION: TRAZABILIDAD (Adenda §2.4, §1.1; Politica §8) ----
+    //
+    // Antes vivia dentro del bloque de condiciones y desaparecia con el: un
+    // estudio sin canon congelado (registro manual antiguo) salia sin fuentes,
+    // sin factor y sin version del modelo, que la Politica §8 exige "en cada
+    // CRC emitido". Ahora imprime siempre.
+    const trazaRows: string[][] = [];
+    if (data.fuentesConsultadas) trazaRows.push(['Fuentes consultadas', data.fuentesConsultadas]);
+    if (data.decisionCascada) trazaRows.push(['Decision de cascada', data.decisionCascada]);
+    if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {
+      trazaRows.push(['Factor de ajuste de ingreso', `x${data.factorAjusteIngreso} (Adenda 1 §1.1)`]);
+    }
+    trazaRows.push(['Version del modelo', data.modeloVersion]);
+    y = asegurarEspacio(doc, y, 22 + trazaRows.length * 22);
+    y = drawSectionTitle(doc, 'TRAZABILIDAD DE LA EVALUACION', y, contentWidth);
+    y = drawTable(doc, trazaRows, y, contentWidth);
 
     y += 15;
 
@@ -493,7 +508,7 @@ export async function generarCertificado(
     .select(`
       *,
       expedientes!estudios_expediente_id_fkey(
-        numero,
+        numero, estado,
         solicitantes!expedientes_solicitante_id_fkey(
           nombre, apellido, tipo_documento, numero_documento, email, telefono
         ),
@@ -624,7 +639,20 @@ export async function generarCertificado(
   // Corrida del motor de ESTE estudio: puntaje (solo cuando el motor decide),
   // factor de ajuste aplicado y fuente del score. La ultima por fecha.
   const sombra = await leerSombraDelEstudio(estudioId);
-  const puntajeCrc = env.MOTOR_DECIDE_ENABLED || env.MOTOR_RUTA_USA_SCORECARD ? (sombra?.puntaje ?? null) : null;
+  const usaPuntaje = env.MOTOR_DECIDE_ENABLED || env.MOTOR_RUTA_USA_SCORECARD;
+  const puntajeCrc = usaPuntaje ? (sombra?.puntaje ?? null) : null;
+  // Adenda §5.2 / §3: el coarrendatario es una fila de expediente_coarrendatarios
+  // con su propio estudio, no el `tipo` de esta fila (ver coarrendatario-vinculado.ts).
+  const coa = await coarrendatarioVinculado(e.expediente_id as string);
+  const conCoarrendatario = coa !== null;
+  const puntajeCoa = usaPuntaje ? (coa?.puntaje ?? null) : null;
+  // El estudio guarda lo que dijo el buro/motor; la decision de Cofianza es
+  // la del expediente. Un 'condicionado' cuyo expediente ya esta 'aprobado'
+  // (analista en revision manual, o ponderacion con coarrendatario) se
+  // certifica como aprobado: un CRC que diga CONDICIONADO / "en revision"
+  // sobre un contrato que Cofianza ya respalda es un documento que miente.
+  const resultadoEfectivo: 'aprobado' | 'condicionado' =
+    e.resultado === 'condicionado' && expediente.estado === 'aprobado' ? 'aprobado' : (e.resultado as 'aprobado' | 'condicionado');
   const umbrales = {
     aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
     zonaGris: cal.UMBRAL_ZONA_GRIS,
@@ -632,21 +660,29 @@ export async function generarCertificado(
   };
   const rutaCrc = resolverRuta({
     puntaje: puntajeCrc,
-    resultadoVigente: (e.resultado as 'pendiente' | 'aprobado' | 'rechazado' | 'condicionado' | null) ?? 'pendiente',
+    resultadoVigente: resultadoEfectivo,
     reglaDuraActivada: Array.isArray(reglasDuras) ? reglasDuras.length > 0 : Boolean(reglasDuras),
-    coarrendatarioVinculado: (e.tipo as string) === 'con_coarrendatario',
-    puntajeCoarrendatario: null,
+    coarrendatarioVinculado: conCoarrendatario,
+    puntajeCoarrendatario: puntajeCoa,
     umbrales,
   });
 
   // Adenda §5: la fila de la tabla de tarifas segun la via de aprobacion.
-  const via = viaSegunCalibracion(puntajeCrc, (e.tipo as string) === 'con_coarrendatario', cal);
+  const via = viaSegunCalibracion(puntajeCrc, conCoarrendatario, cal, puntajeCoa);
 
-  // Adenda §2.4: que centrales se consultaron.
+  // Adenda §2.4: que centrales se consultaron y cual fue la decision de cascada.
+  // `decision_cascada` es la traza que escribe decidirConCascada (Adenda §2);
+  // `decision` (la del modelo) queda de respaldo para trazas anteriores.
   const etiquetaBuro = (id: unknown) =>
     id === 'datacredito' ? 'DataCredito' : id === 'transunion' ? 'TransUnion' : id ? String(id) : null;
   const fuentes = [etiquetaBuro(e.proveedor), etiquetaBuro(e.proveedor_secundario)].filter((x): x is string => !!x);
   const cascada = (e.cascada && typeof e.cascada === 'object' ? (e.cascada as Record<string, unknown>) : null);
+  const decisionCascada =
+    typeof cascada?.decision_cascada === 'string'
+      ? cascada.decision_cascada
+      : typeof cascada?.decision === 'string'
+        ? cascada.decision
+        : null;
 
   const canonEvaluadoRaw = e.canon_evaluado;
   const canonEvaluadoCop =
@@ -664,7 +700,7 @@ export async function generarCertificado(
     solicitanteNumDoc: (solicitante.numero_documento as string) || '',
     solicitanteEmail: (solicitante.email as string) || '',
     solicitanteTelefono: (solicitante.telefono as string) || '',
-    tipoEstudio: e.tipo as string,
+    tipoEstudio: conCoarrendatario ? 'con_coarrendatario' : 'individual',
     inmuebleDireccion: (inmueble.direccion as string) || '',
     inmuebleCiudad: (inmueble.ciudad as string) || '',
     inmuebleDepartamento: (inmueble.departamento as string) || '',
@@ -674,7 +710,7 @@ export async function generarCertificado(
     inmuebleValorArriendo: (inmueble.valor_arriendo as number) || null,
     inmuebleArea: (inmueble.area_m2 as number) || null,
     inmuebleCodigo: (inmueble.codigo as string) || null,
-    resultado: e.resultado as string,
+    resultado: resultadoEfectivo,
     score: (e.score as number) ?? null,
     proveedor: e.proveedor as string,
     fechaEstudio: (e.fecha_completado as string) || (e.created_at as string),
@@ -690,23 +726,25 @@ export async function generarCertificado(
       canonEvaluadoCop === null
         ? null
         : canonMaximoTolerado(canonEvaluadoCop, PORTABILIDAD_TOLERANCIA_PCT),
-    requiereAcompanante: rutaCrc.coarrendatarioObligatorio || (e.tipo as string) === 'con_coarrendatario',
+    requiereAcompanante: rutaCrc.coarrendatarioObligatorio || conCoarrendatario,
+    coarrendatarioVinculado: conCoarrendatario,
     rutaEtiqueta: rutaCrc.etiquetaGestor,
     // La Politica V4.1 §8 lo exige: "Version del modelo aplicable — registrada
     // en cada CRC emitido", para poder reproducir cualquier evaluacion pasada.
     modeloVersion: sombra?.modeloVersion ?? MODELO_VERSION,
-    tarifas:
-      e.resultado === 'aprobado'
-        ? calcularTarifas({
-            via,
-            conCoarrendatario: (e.tipo as string) === 'con_coarrendatario',
-            canonCop: canonEvaluadoCop,
-            override: leerTarifaOverride(e.tarifa_override),
-          })
-        : null,
+    // Adenda §5: la tabla de tarifas "va en la Politica y en el CRC" — para
+    // TODO resultado certificable, no solo el aprobado. Un condicionado en
+    // revision imprime la fila que le aplicaria al aprobarse (revision manual,
+    // 2,7%, o la condicionada si su coarrendatario ya alcanza el umbral).
+    tarifas: calcularTarifas({
+      via,
+      conCoarrendatario,
+      canonCop: canonEvaluadoCop,
+      override: leerTarifaOverride(e.tarifa_override),
+    }),
     factorAjusteIngreso: sombra?.factor ?? null,
     fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
-    decisionCascada: typeof cascada?.decision === 'string' ? cascada.decision : null,
+    decisionCascada,
   };
 
   const pdfBuffer = await generateCertificatePdf(pdfData, qrBuffer);
@@ -791,6 +829,60 @@ export async function generarCertificado(
   };
 }
 
+/**
+ * Flujo §10/§11: el CRC es un ENTREGABLE del resultado, no un boton. Se emite
+ * apenas el expediente avanza a aprobado/condicionado (orquestador) y se
+ * ACTUALIZA cuando la ponderacion con coarrendatario aprueba el conjunto (las
+ * condiciones economicas cambian: prima 10%, via condicionada).
+ *
+ * Best-effort y NUNCA lanza: si falla (estudio vencido, storage caido, sin
+ * actor) el gestor conserva el boton manual y queda un warn. Sin `regenerar`
+ * es idempotente — un certificado ya emitido (o subido a mano con el
+ * resultado) no se toca: pudo llevar una tarifa negociada mas reciente que lo
+ * que el hook sabe. `actorId` = perfil que firma la emision (quien creo el
+ * expediente); sin rol, assertExpedienteAccess lo trata como llamada de sistema.
+ */
+export async function emitirCertificadoAutomatico(
+  estudioId: string,
+  actorId: string | null | undefined,
+  opts: { regenerar?: boolean } = {},
+): Promise<boolean> {
+  if (!actorId) {
+    logger.warn({ estudioId }, 'CRC automatico: sin actor (expediente sin creado_por) — queda el boton manual');
+    return false;
+  }
+  try {
+    const { data } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('expediente_id, certificado_url')
+      .eq('id', estudioId)
+      .maybeSingle();
+    const row = data as { expediente_id: string; certificado_url: string | null } | null;
+    if (!row) return false;
+    if (row.certificado_url && !opts.regenerar) return false;
+
+    const cert = await generarCertificado(estudioId, actorId);
+
+    await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: row.expediente_id,
+        tipo: 'estudio',
+        descripcion:
+          `Certificado de Riesgo Cofianza ${cert.codigo} ` +
+          `${cert.version > 1 ? 'actualizado' : 'emitido'} automáticamente con el resultado del estudio.`,
+        metadata: { automatico: true, origen: 'crc_automatico', estudio_id: estudioId, codigo: cert.codigo, version: cert.version },
+      } as never);
+    return true;
+  } catch (err) {
+    logger.warn(
+      { estudioId, err: err instanceof Error ? err.message : String(err) },
+      'CRC automatico: no se pudo emitir el certificado — queda el boton manual',
+    );
+    return false;
+  }
+}
+
 // ============================================================
 // descargarCertificado
 // ============================================================
@@ -853,7 +945,7 @@ export async function verificarCertificado(codigo: string) {
       estudios!estudios_certificados_estudio_id_fkey(
         resultado, score, proveedor,
         expedientes!estudios_expediente_id_fkey(
-          numero,
+          numero, estado,
           solicitantes!expedientes_solicitante_id_fkey(
             nombre, apellido, tipo_documento, numero_documento
           ),
@@ -897,13 +989,19 @@ export async function verificarCertificado(codigo: string) {
   const vencimiento = new Date(c.fecha_vencimiento as string);
   const status = now <= vencimiento ? 'valido_vigente' : 'valido_vencido';
 
+  // Mismo criterio que el PDF (ver resultadoEfectivo en generarCertificado):
+  // un condicionado cuyo expediente ya esta aprobado se verifica como aprobado.
+  const resultadoEstudio = (estudio?.resultado as string) || '';
+  const resultadoVerificado =
+    resultadoEstudio === 'condicionado' && expediente?.estado === 'aprobado' ? 'aprobado' : resultadoEstudio;
+
   return {
     status,
     codigo: c.codigo as string,
     nombre_masked: solicitante
       ? maskName(solicitante.nombre as string, solicitante.apellido as string)
       : '',
-    resultado: estudio?.resultado as string || '',
+    resultado: resultadoVerificado,
     direccion_masked: inmueble
       ? maskAddress(inmueble.direccion as string)
       : '',

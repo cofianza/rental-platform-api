@@ -14,7 +14,7 @@ import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQu
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from './providers/types';
-import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 // Motor de scorecard V4.1. Sigue en SOMBRA para todo el scorecard (puntajes,
@@ -34,7 +34,7 @@ import {
   aplicarReglasDuras,
   canonParaLaRegla,
 } from './reglas-duras';
-import type { VeredictoReglasDuras } from './reglas-duras';
+import type { VeredictoReglasDuras, ResolucionEstudio } from './reglas-duras';
 // Adenda 1 §2/§3: con MOTOR_DECIDE_ENABLED el scorecard decide y la consulta
 // va en cascada (Datacredito primaria; la segunda central solo en 40-89).
 import { decidirCascada, decidirResultado, type UmbralesDecision, type ResultadoDecidido } from './decision';
@@ -223,7 +223,7 @@ export async function listEstudios(
       duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
       referencia_proveedor, certificado_url, datos_formulario,
       created_at, updated_at,
-      canon_evaluado, canon_evaluado_origen,
+      canon_evaluado, canon_evaluado_origen, regla_dura_activada,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('expediente_id', expedienteId)
@@ -235,11 +235,17 @@ export async function listEstudios(
     throw AppError.badRequest('Error al obtener estudios', 'ESTUDIOS_LIST_ERROR');
   }
 
+  // Mismos derivados que el detalle: la ruta del §10 (tarjeta del prospecto) y
+  // el veredicto de expiracion del §12 (tarjeta del gestor) se leen desde este
+  // listado, que es lo que consultan las dos tarjetas en cada poll. Es un
+  // listado POR EXPEDIENTE (pocas filas): la ruta va fila a fila y la
+  // expiracion con UNA lectura de la autorizacion del titular para todas.
+  const filas = (data || []) as unknown as Record<string, unknown>[];
+  const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila)));
+  const conDerivados = await adjuntarExpiracionALista(conRuta, expedienteId);
+
   return {
-    estudios: redactarEstudiosSegunRol(
-      (data || []) as unknown as Record<string, unknown>[],
-      userRol,
-    ),
+    estudios: redactarEstudiosSegunRol(conDerivados, userRol),
     pagination: {
       total,
       page,
@@ -533,32 +539,57 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
  * coarrendatario tiene su propia fila y su propio estudio, y el §12 habla del
  * prospecto. Mismo predicado que usa el orchestrator y enviarEnlaceAutorizacion.
  *
- * ponytail: una lectura extra en el detalle. En los LISTADOS no se calcula: son
- * N estudios y serian N consultas. Si algun dia el listado necesita mostrar
- * "expirado", eso pide un join, no este helper en un bucle.
+ * ponytail: una lectura extra en el detalle. En el listado POR EXPEDIENTE
+ * (adjuntarExpiracionALista) esa misma lectura sirve para todas las filas: la
+ * autorizacion es del expediente, no del estudio.
  */
 async function adjuntarExpiracion<T extends Record<string, unknown>>(
   row: T,
 ): Promise<T & { expiracion: VeredictoExpiracion }> {
-  const { data: aut } = (await (supabase
+  const [aut, cal] = await Promise.all([
+    leerAutorizacionTitular(row.expediente_id as string),
+    getCalibracion(),
+  ]);
+  return { ...row, expiracion: veredictoExpiracion(row, aut, cal.DIAS_EXPIRACION_ESTUDIO) };
+}
+
+/** Listado por expediente: UNA lectura de la autorizacion para N estudios. */
+async function adjuntarExpiracionALista<T extends Record<string, unknown>>(
+  rows: T[],
+  expedienteId: string,
+): Promise<(T & { expiracion: VeredictoExpiracion })[]> {
+  if (rows.length === 0) return [];
+  const [aut, cal] = await Promise.all([leerAutorizacionTitular(expedienteId), getCalibracion()]);
+  return rows.map((row) => ({ ...row, expiracion: veredictoExpiracion(row, aut, cal.DIAS_EXPIRACION_ESTUDIO) }));
+}
+
+type AutorizacionTitular = { created_at: string; estado: string } | null;
+
+/** Ultima autorizacion del TITULAR del expediente (el coarrendatario tiene la suya). */
+async function leerAutorizacionTitular(expedienteId: string): Promise<AutorizacionTitular> {
+  const { data } = (await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select('created_at, estado')
-    .eq('expediente_id', row.expediente_id as string)
+    .eq('expediente_id', expedienteId)
     .is('coarrendatario_id', null)
     .order('created_at', { ascending: false })
     .limit(1)
-    .maybeSingle()) as { data: { created_at: string; estado: string } | null };
+    .maybeSingle()) as { data: AutorizacionTitular };
+  return data;
+}
 
-  return {
-    ...row,
-    expiracion: evaluarExpiracion({
-      estado: row.estado as string | null,
-      autorizacionSolicitadaEn: aut?.created_at ?? null,
-      autorizacionFirmada: aut?.estado === 'autorizado',
-      ahoraMs: Date.now(),
-      plazoDias: (await getCalibracion()).DIAS_EXPIRACION_ESTUDIO,
-    }),
-  };
+function veredictoExpiracion(
+  row: Record<string, unknown>,
+  aut: AutorizacionTitular,
+  plazoDias: number,
+): VeredictoExpiracion {
+  return evaluarExpiracion({
+    estado: row.estado as string | null,
+    autorizacionSolicitadaEn: aut?.created_at ?? null,
+    autorizacionFirmada: aut?.estado === 'autorizado',
+    ahoraMs: Date.now(),
+    plazoDias,
+  });
 }
 
 /**
@@ -678,9 +709,20 @@ export async function createEstudio(
     .maybeSingle();
 
   if (activeEstudio) {
-    throw AppError.conflict(
-      'Ya existe una evaluación activa para este estudio',
+    // §12: si la evaluacion activa EXPIRO sin autorizacion del prospecto, la
+    // salida es reenviarle la solicitud desde esa misma evaluacion (sin costo)
+    // o cancelarla — no crear otra a ciegas: una segunda sobre una 'pagado'
+    // cobraria dos veces el mismo caso. El bloqueo se mantiene; el mensaje
+    // ahora dice cual es la salida.
+    const activa = activeEstudio as { id: string; estado: string };
+    const { expiracion } = await adjuntarExpiracion({ ...activa, expediente_id: expedienteId });
+    throw new AppError(
+      409,
       'ESTUDIO_ACTIVO_EXISTENTE',
+      expiracion.expirado
+        ? 'La evaluación anterior expiró sin autorización del prospecto. No se crea otra: reenvíale la solicitud desde esa evaluación (sin costo adicional) o cancélala antes de crear una nueva.'
+        : 'Ya existe una evaluación activa para este estudio',
+      { estudio_id: activa.id, expirado: expiracion.expirado },
     );
   }
 
@@ -1502,7 +1544,7 @@ export async function registrarResultado(
   // 1. Get estudio — verify exists, estado, and resultado still pendiente
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, expediente_id, canon_evaluado')
+    .select('id, estado, resultado, expediente_id, canon_evaluado, proveedor')
     .eq('id', estudioId)
     .single();
 
@@ -1516,6 +1558,7 @@ export async function registrarResultado(
     resultado: string;
     expediente_id: string;
     canon_evaluado: number | string | null;
+    proveedor: string | null;
   };
 
   // Tenant guard: registrar (irreversiblemente) el resultado es una mutación
@@ -1567,6 +1610,17 @@ export async function registrarResultado(
     score: input.score ?? null,
     observaciones: input.observaciones,
     motivoRechazo: input.motivo_rechazo ?? null,
+  });
+
+  // Adenda 1 §2/§3 con MOTOR_DECIDE_ENABLED — mismo helper que los caminos
+  // automaticos. Sin providerInput: el registro manual no consulta centrales.
+  const final = await aplicarMotorSiAplica({
+    estudioId,
+    expedienteId: est.expediente_id,
+    proveedor: est.proveedor,
+    resultadoBuro: input.resultado,
+    datosCrudos: null,
+    decision,
   });
 
   // 2.6. CANON CONGELADO — el otro camino que llega a 'completado'.
@@ -1622,13 +1676,13 @@ export async function registrarResultado(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
     p_estudio_id: estudioId,
-    p_resultado: decision.resultado,
-    p_observaciones: decision.observaciones,
+    p_resultado: final.resultado,
+    p_observaciones: final.observaciones,
     p_score: input.score ?? null,
-    p_motivo_rechazo: decision.motivoRechazo,
+    p_motivo_rechazo: final.motivoRechazo,
     // Un rechazo por regla dura no lleva condiciones: no hay nada que cumplir
     // para levantarlo dentro de este estudio.
-    p_condiciones: decision.veredicto.rechaza ? null : (input.condiciones ?? null),
+    p_condiciones: final.veredicto.rechaza ? null : (input.condiciones ?? null),
     p_certificado_url: input.certificado_storage_key ?? null,
     p_usuario_id: userId,
   });
@@ -1645,7 +1699,7 @@ export async function registrarResultado(
   }
 
   // 3.5. Trazabilidad de la regla dura, antes del hook que la lee.
-  await registrarReglaDuraActivada(estudioId, decision.veredicto);
+  await registrarReglaDuraActivada(estudioId, final.veredicto);
 
   // 4. Audit
   logAudit({
@@ -1654,9 +1708,9 @@ export async function registrarResultado(
     entidad: AUDIT_ENTITIES.ESTUDIO,
     entidadId: estudioId,
     detalle: {
-      resultado: decision.resultado,
+      resultado: final.resultado,
       resultado_solicitado: input.resultado,
-      reglas_duras: decision.veredicto.rechaza ? decision.veredicto.reglas : null,
+      reglas_duras: final.veredicto.rechaza ? final.veredicto.reglas : null,
       score: input.score,
       has_certificado: !!input.certificado_storage_key,
       expediente_id: est.expediente_id,
@@ -1666,7 +1720,7 @@ export async function registrarResultado(
 
   // 5. Notificacion in-app al solicitante (fire-and-forget). Empuja el
   // campanario y badges en tiempo real; el correo formal lo manda el hook.
-  notificarSolicitanteResultadoEstudio(est.expediente_id, decision.resultado).catch((e) =>
+  notificarSolicitanteResultadoEstudio(est.expediente_id, final.resultado).catch((e) =>
     logger.warn({ error: e, estudioId, expedienteId: est.expediente_id }, 'Error notificando resultado de estudio'),
   );
 
@@ -1676,9 +1730,9 @@ export async function registrarResultado(
   void dispararHookPostResultado(
     estudioId,
     est.expediente_id,
-    decision.resultado,
+    final.resultado,
     input.score ?? null,
-    decision.veredicto,
+    final.veredicto,
   );
 
   // 7. Registro sombra del scorecard completo. Va despues del RPC y de su
@@ -1691,9 +1745,9 @@ export async function registrarResultado(
     estudioId,
     expedienteId: est.expediente_id,
     scorePersistido: input.score ?? null,
-    salidaPrecalculada: decision.salida,
+    salidaPrecalculada: final.salida,
     // Politica §9: aqui decidio una persona, no el sistema.
-    contexto: { apis_fallidas: decision.apisFallidas, analista_responsable: userId },
+    contexto: { apis_fallidas: final.apisFallidas, analista_responsable: userId },
   }).catch(() => undefined);
 
   return getEstudioById(estudioId);
@@ -2613,6 +2667,9 @@ async function procesarEstudioAsync(args: {
       logger.error({ error: failError, estudioId }, 'Error al marcar estudio como fallido');
     }
 
+    // Politica §14: que alguien se entere (timeline + responsable + internos).
+    await avisarEstudioFallido({ estudioId, expedienteId, observaciones });
+
     logAudit({
       usuarioId: userId,
       accion: bloqueadoPorAutorizacion
@@ -2658,12 +2715,102 @@ async function persistirAntecedentes(estudioId: string, a: ResumenAntecedentes):
   }
 }
 
+/**
+ * Politica §14: cuando la evaluacion cae en 'fallido' (centrales caidas,
+ * documento no encontrado, gate 8.4...) la revision manual es obligatoria — y
+ * hasta hoy nadie se enteraba: el estudio moria en silencio con la causa en
+ * `observaciones`, visible solo si alguien abria la tarjeta. Deja constancia
+ * en el timeline del expediente y avisa in-app al miembro responsable y a los
+ * perfiles internos activos (mismo criterio que users.service.listOperators).
+ *
+ * Todo best-effort y por pasos independientes: que falle uno no se lleva a
+ * los demas, y NUNCA lanza (corre dentro del catch de procesarEstudioAsync).
+ */
+async function avisarEstudioFallido(args: {
+  estudioId: string;
+  expedienteId: string;
+  observaciones: string;
+}): Promise<void> {
+  const { estudioId, expedienteId, observaciones } = args;
+  const titulo = 'Evaluación fallida — requiere revisión';
+  const link = `/expedientes/${expedienteId}`;
+  const payload = { estudio_id: estudioId, expediente_id: expedienteId };
+  const intentar = async (paso: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      logger.warn(
+        { estudioId, expedienteId, paso, err: err instanceof Error ? err.message : String(err) },
+        'avisarEstudioFallido: no se pudo avisar — el estudio queda fallido igual',
+      );
+    }
+  };
+
+  // (a) Timeline del expediente, mismo patron que el resto del archivo.
+  await intentar('timeline', async () => {
+    const { error } = await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: expedienteId,
+        tipo: 'estudio',
+        descripcion: `${titulo}: ${observaciones}`,
+        usuario_id: null,
+        metadata: { estudio_id: estudioId, estado: 'fallido' },
+      } as never);
+    if (error) throw new Error(error.message);
+  });
+
+  // (b) Miembro responsable del expediente (no-op si no hay).
+  await intentar('responsable', () =>
+    notificarResponsableExpediente({ expedienteId, tipo: 'estudio.fallido', titulo, mensaje: observaciones, link, payload }),
+  );
+
+  // (c) Perfiles internos activos: quienes hacen la revision manual del §14.
+  await intentar('internos', async () => {
+    const { data, error } = await (supabase
+      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .in('rol', ['administrador', 'operador_analista'])
+      .eq('estado', 'activo');
+    if (error) throw new Error(error.message);
+    const ids = ((data as Array<{ id: string }> | null) ?? []).map((perfil) => perfil.id);
+    await Promise.all(
+      ids.map((userId) => notificarUsuario({ userId, tipo: 'estudio.fallido', titulo, mensaje: observaciones, link, payload })),
+    );
+  });
+}
+
 // ============================================================
 // Re-evaluacion: get presigned URL for soporte upload
 // ============================================================
 
 const RESULTADOS_REEVALUABLES = ['rechazado', 'condicionado'];
 const MAX_REEVALUACIONES = 2;
+/** Politica §8: "plazo para reevaluar si el solicitante subsana inconsistencias: 15 dias habiles". */
+const PLAZO_REEVALUACION_DIAS_HABILES = 15;
+const MS_POR_DIA = 24 * 60 * 60 * 1000;
+/** Colombia no tiene horario de verano: UTC-5 fijo basta para saber "que dia es". */
+const OFFSET_BOGOTA_MS = -5 * 60 * 60 * 1000;
+
+/**
+ * Dias habiles (lunes a viernes) transcurridos entre dos instantes, contados
+ * por fecha calendario de Bogota: el dia de `desde` no cuenta, el de `hasta` si.
+ *
+ * ponytail: ignora los festivos colombianos (18 al año, varios moviles). Un
+ * festivo cuenta como habil, asi que la ventana queda un poco MAS estricta que
+ * la del calendario oficial — nunca mas laxa. Si algun dia hace falta el
+ * calendario exacto, es una tabla de fechas, no una dependencia.
+ */
+export function diasHabilesTranscurridos(desde: Date, hasta: Date): number {
+  const diaLocal = (d: Date) => Math.floor((d.getTime() + OFFSET_BOGOTA_MS) / MS_POR_DIA);
+  let dias = 0;
+  for (let dia = diaLocal(desde) + 1; dia <= diaLocal(hasta); dia++) {
+    // El dia 0 de la epoch (1970-01-01) fue jueves: (dia + 4) % 7 = 0 es domingo.
+    const diaSemana = (((dia + 4) % 7) + 7) % 7;
+    if (diaSemana !== 0 && diaSemana !== 6) dias++;
+  }
+  return dias;
+}
 
 function getExtensionFromMime(mimeType: string): string {
   const map: Record<string, string> = {
@@ -2835,7 +2982,7 @@ export async function solicitarReEvaluacion(
   // 1. Validate estudio completado + rechazado/condicionado
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, tipo, proveedor, expediente_id, duracion_contrato_meses, pago_por, estudio_padre_id')
+    .select('id, estado, resultado, tipo, proveedor, expediente_id, duracion_contrato_meses, pago_por, estudio_padre_id, fecha_completado')
     .eq('id', estudioId)
     .single();
 
@@ -2848,6 +2995,7 @@ export async function solicitarReEvaluacion(
     tipo: string; proveedor: string; expediente_id: string;
     duracion_contrato_meses: number; pago_por: string;
     estudio_padre_id: string | null;
+    fecha_completado: string | null;
   };
 
   // Tenant guard: crea un nuevo estudio (hijo) sobre el mismo expediente. Sin
@@ -2875,6 +3023,24 @@ export async function solicitarReEvaluacion(
       'Solo se puede solicitar re-evaluacion para estudios completados con resultado rechazado o condicionado',
       'ESTUDIO_NO_REEVALUABLE',
     );
+  }
+
+  // Politica §8: pasados 15 dias habiles desde que se completo, ya no es una
+  // re-evaluacion del resultado viejo: hay que habilitar una evaluacion nueva.
+  // Sin fecha_completado no se puede medir y no se bloquea.
+  if (est.fecha_completado) {
+    const diasHabiles = diasHabilesTranscurridos(new Date(est.fecha_completado), new Date());
+    if (diasHabiles > PLAZO_REEVALUACION_DIAS_HABILES) {
+      throw AppError.badRequest(
+        `El plazo para re-evaluar ya venció: pasaron ${diasHabiles} días hábiles desde que la evaluación se completó y la Política (§8) da ${PLAZO_REEVALUACION_DIAS_HABILES} días hábiles para subsanar inconsistencias. Para volver a evaluar al solicitante hay que habilitar una evaluación nueva.`,
+        'REEVALUACION_FUERA_DE_PLAZO',
+        {
+          dias_habiles_transcurridos: diasHabiles,
+          plazo_dias_habiles: PLAZO_REEVALUACION_DIAS_HABILES,
+          fecha_completado: est.fecha_completado,
+        },
+      );
+    }
   }
 
   // 2. Verify at least 1 soporte doc exists
@@ -3283,44 +3449,28 @@ async function registrarResultadoInline(
     // §15: el documento consultado decide si el perfil es extranjero.
     tipoDocumento: providerInput?.tipo_documento ?? undefined,
   });
-  const apisFallidas = [...decision.apisFallidas];
 
   // ── Adenda 1 §2/§3: el scorecard decide (MOTOR_DECIDE_ENABLED) ────────
-  // Con el flag apagado, `decision` ya trae lo de siempre: el resultado del
-  // buro, corregido por reglas duras y flags. Con el flag encendido, la
-  // cascada puede consultar la segunda central y la decision final sale de
-  // las bandas de la Adenda, no del buro.
-  let resultadoFinal: string = decision.resultado;
-  let observacionesFinal = decision.observaciones;
-  let motivoRechazoFinal = decision.motivoRechazo;
-  let salidaFinal = decision.salida;
-  let veredictoFinal = decision.veredicto;
-
-  if (env.MOTOR_DECIDE_ENABLED && decision.salida) {
-    const c = await decidirConCascada({
-      estudioId,
-      expedienteId,
-      proveedorPrimario: proveedorId,
-      payloadPrimario: result.datos_crudos,
-      resultadoBuro: result.resultado,
-      salidaPrimaria: decision.salida,
-      veredictoPrimario: decision.veredicto,
-      revisionManual: decision.revisionManual,
-      providerInput,
-      antecedentes: antecedentes ?? null,
-      centralCaida: ejecucion.centralCaida ?? null,
-    });
-    resultadoFinal = c.resultado;
-    salidaFinal = c.salida;
-    veredictoFinal = c.veredicto;
-    apisFallidas.push(...c.apisFallidas);
-    observacionesFinal = [decision.observaciones, c.nota].filter(Boolean).join(' ');
-    motivoRechazoFinal = c.veredicto.rechaza
-      ? c.veredicto.motivoGestor
-      : c.resultado === 'rechazado'
-        ? `Decision del modelo (Adenda 1): ${c.motivo}`
-        : decision.motivoRechazo;
-  }
+  // Mismo helper que usan el polling y el registro manual: los tres caminos
+  // llegan al RPC con la misma decision y la misma traza (estudios.cascada).
+  const {
+    resultado: resultadoFinal,
+    observaciones: observacionesFinal,
+    motivoRechazo: motivoRechazoFinal,
+    salida: salidaFinal,
+    veredicto: veredictoFinal,
+    apisFallidas,
+  } = await aplicarMotorSiAplica({
+    estudioId,
+    expedienteId,
+    proveedor: proveedorId,
+    resultadoBuro: result.resultado,
+    datosCrudos: result.datos_crudos,
+    decision,
+    providerInput,
+    antecedentes: antecedentes ?? null,
+    ejecucion,
+  });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
@@ -3453,6 +3603,97 @@ async function registrarResultadoInline(
       analista_responsable: 'AUTOMATICO',
     },
   }).catch(() => undefined);
+}
+
+/** Decision con la que los tres caminos llegan a fn_registrar_resultado_estudio. */
+interface DecisionFinalEstudio {
+  resultado: string;
+  observaciones: string | null;
+  motivoRechazo: string | null;
+  salida: SalidaSombra | null;
+  veredicto: VeredictoReglasDuras;
+  /** Politica §9: las del punto de decision mas las centrales que no respondieron. */
+  apisFallidas: string[];
+}
+
+/** Centrales sobre las que la cascada de la Adenda §2 tiene sentido. */
+const BUROS_CON_CASCADA: readonly string[] = ['transunion', 'datacredito'];
+
+/**
+ * Adenda 1 §2 (cascada) + §3 (bandas) sobre la resolucion de reglas duras,
+ * SOLO con MOTOR_DECIDE_ENABLED. Con el flag apagado devuelve `decision` tal
+ * cual: el buro decide, corregido por reglas duras y flags, como siempre.
+ *
+ * Es el UNICO punto por el que los tres caminos que registran resultado
+ * (inline tras el buro, polling de consultarEstadoProveedor y registro manual)
+ * pasan por el motor. Antes solo lo hacia el inline: los otros dos llegaban al
+ * RPC sin cascada, sin bandas y sin escribir `estudios.cascada`.
+ *
+ * Solo aplica sobre las dos centrales: para 'manual' / 'sifin' la cascada no
+ * significa nada (no hay "otra central" que consultar) y el resultado que
+ * registra el gestor se respeta, con las reglas duras de siempre.
+ *
+ * Sin `providerInput` (polling y manual) la cascada no puede consultar la
+ * segunda central: decide con la primaria como fuente unica y lo deja dicho en
+ * la nota y en la traza. Es a proposito: esos caminos son de recuperacion y no
+ * deben disparar consultas facturables por su cuenta.
+ */
+async function aplicarMotorSiAplica(args: {
+  estudioId: string;
+  expedienteId: string;
+  proveedor: string | null;
+  /** Resultado que trajo el buro (o que registra el gestor). */
+  resultadoBuro: string;
+  datosCrudos: Record<string, unknown> | null | undefined;
+  decision: ResolucionEstudio;
+  providerInput?: ProviderSolicitudInput;
+  antecedentes?: ResumenAntecedentes | null;
+  /** Politica §9 / Adenda §2.3. Opcional: solo el camino inline lo tiene. */
+  ejecucion?: { sessionId?: string; inicioMs?: number; centralCaida?: string };
+}): Promise<DecisionFinalEstudio> {
+  const { decision } = args;
+  const base: DecisionFinalEstudio = {
+    resultado: decision.resultado,
+    observaciones: decision.observaciones,
+    motivoRechazo: decision.motivoRechazo,
+    salida: decision.salida,
+    veredicto: decision.veredicto,
+    apisFallidas: [...decision.apisFallidas],
+  };
+  if (
+    !env.MOTOR_DECIDE_ENABLED ||
+    !decision.salida ||
+    !args.proveedor ||
+    !BUROS_CON_CASCADA.includes(args.proveedor)
+  ) {
+    return base;
+  }
+
+  const c = await decidirConCascada({
+    estudioId: args.estudioId,
+    expedienteId: args.expedienteId,
+    proveedorPrimario: args.proveedor,
+    payloadPrimario: args.datosCrudos ?? null,
+    resultadoBuro: args.resultadoBuro,
+    salidaPrimaria: decision.salida,
+    veredictoPrimario: decision.veredicto,
+    revisionManual: decision.revisionManual,
+    providerInput: args.providerInput,
+    antecedentes: args.antecedentes ?? null,
+    centralCaida: args.ejecucion?.centralCaida ?? null,
+  });
+  return {
+    resultado: c.resultado,
+    observaciones: [decision.observaciones, c.nota].filter(Boolean).join(' '),
+    motivoRechazo: c.veredicto.rechaza
+      ? c.veredicto.motivoGestor
+      : c.resultado === 'rechazado'
+        ? `Decision del modelo (Adenda 1): ${c.motivo}`
+        : decision.motivoRechazo,
+    salida: c.salida,
+    veredicto: c.veredicto,
+    apisFallidas: [...decision.apisFallidas, ...c.apisFallidas],
+  };
 }
 
 /**
@@ -3669,13 +3910,24 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
       datosCrudos: result.datos_crudos,
     });
 
+    // Adenda 1 §2/§3 con MOTOR_DECIDE_ENABLED — mismo helper que el camino
+    // inline. Sin providerInput: este camino no consulta la segunda central.
+    const final = await aplicarMotorSiAplica({
+      estudioId,
+      expedienteId: est.expediente_id,
+      proveedor: est.proveedor,
+      resultadoBuro: result.resultado,
+      datosCrudos: result.datos_crudos,
+      decision,
+    });
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
       p_estudio_id: estudioId,
-      p_resultado: decision.resultado,
-      p_observaciones: decision.observaciones,
+      p_resultado: final.resultado,
+      p_observaciones: final.observaciones,
       p_score: result.score ?? null,
-      p_motivo_rechazo: decision.motivoRechazo,
+      p_motivo_rechazo: final.motivoRechazo,
       p_condiciones: null,
       p_certificado_url: null,
       p_usuario_id: null,
@@ -3702,7 +3954,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
     }
 
     // Trazabilidad de la regla dura, antes del hook que la lee.
-    await registrarReglaDuraActivada(estudioId, decision.veredicto);
+    await registrarReglaDuraActivada(estudioId, final.veredicto);
 
     logAudit({
       usuarioId: null,
@@ -3711,9 +3963,9 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
       entidadId: estudioId,
       detalle: {
         proveedor: est.proveedor,
-        resultado: decision.resultado,
+        resultado: final.resultado,
         resultado_proveedor: result.resultado,
-        reglas_duras: decision.veredicto.rechaza ? decision.veredicto.reglas : null,
+        reglas_duras: final.veredicto.rechaza ? final.veredicto.reglas : null,
         score: result.score,
         referencia_proveedor: est.referencia_proveedor,
       },
@@ -3726,9 +3978,9 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
     void dispararHookPostResultado(
       estudioId,
       est.expediente_id,
-      decision.resultado,
+      final.resultado,
       result.score,
-      decision.veredicto,
+      final.veredicto,
     );
 
     // Registro sombra del scorecard completo. Va despues del `if (rpcError)` a
@@ -3740,8 +3992,8 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
       proveedor: est.proveedor,
       datosCrudos: result.datos_crudos,
       scorePersistido: result.score,
-      salidaPrecalculada: decision.salida,
-      contexto: { apis_fallidas: decision.apisFallidas, analista_responsable: 'AUTOMATICO' },
+      salidaPrecalculada: final.salida,
+      contexto: { apis_fallidas: final.apisFallidas, analista_responsable: 'AUTOMATICO' },
     }).catch(() => undefined);
 
     return {
@@ -3752,19 +4004,20 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
 
   // 4. If failed, mark as fallido
   if (statusResponse.status === 'failed' && est.estado !== 'fallido') {
+    const observaciones =
+      `${BURO_LABELS[est.proveedor] ?? est.proveedor} no está disponible en este momento (posible mantenimiento o caída temporal). ` +
+      'No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos.';
     const { error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .update({
-        estado: 'fallido',
-        observaciones:
-          'TransUnion no está disponible en este momento (posible mantenimiento o caída temporal). ' +
-          'No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos.',
-      } as never)
+      .update({ estado: 'fallido', observaciones } as never)
       .eq('id', estudioId);
 
     if (failError) {
       logger.error({ error: failError, estudioId }, 'Error al marcar estudio como fallido tras consulta a proveedor');
     }
+
+    // Politica §14: que alguien se entere (timeline + responsable + internos).
+    await avisarEstudioFallido({ estudioId, expedienteId: est.expediente_id, observaciones });
   }
 
   return {

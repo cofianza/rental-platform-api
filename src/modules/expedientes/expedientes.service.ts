@@ -13,6 +13,8 @@ import {
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { motivoParaProspectoDesdeMotivoGestor } from '@/modules/estudios/reglas-duras';
+import { errorNoAdmision } from '@/modules/estudios/estudios-simultaneos.guard';
+import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type {
   CreateExpedienteInput,
   UpdateExpedienteInput,
@@ -336,7 +338,7 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
   // 1. Validar que el inmueble existe
   const { data: inmueble, error: inmuebleError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, codigo, estado, inmobiliaria_id')
+    .select('id, codigo, estado, inmobiliaria_id, reservado_por_expediente_id')
     .eq('id', input.inmueble_id)
     .single();
 
@@ -344,7 +346,19 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
     throw AppError.badRequest('Inmueble no encontrado. Verifique el ID proporcionado', 'INMUEBLE_NOT_FOUND');
   }
 
-  // 1b. No permitir crear expediente sobre un inmueble ya arrendado o
+  // 1b. Flujo §4.2/§4.3: un inmueble RESERVADO para un candidato aprobado
+  //     (su contrato ya va en proceso) no admite estudios nuevos, y el mensaje
+  //     tiene que decir ESO — el genérico "ya está arrendado" mandaba al gestor
+  //     a terminar un contrato que todavía no existe. Aquí no hay expediente
+  //     propio con el que comparar el titular: cualquier titular es "otro".
+  //     Misma salida (409 INMUEBLE_RESERVADO) que el guard de estudios.
+  const reservadoPor =
+    (inmueble as { reservado_por_expediente_id?: string | null }).reservado_por_expediente_id ?? null;
+  if (reservadoPor) {
+    throw errorNoAdmision({ admite: false, motivo: 'reservado', reservadoPorExpedienteId: reservadoPor });
+  }
+
+  // 1c. No permitir crear expediente sobre un inmueble ya arrendado o
   //     desactivado. Para volver a arrendar uno 'ocupado' hay que terminar su
   //     contrato vigente (que lo libera a 'disponible').
   const estadoInmueble = (inmueble as { estado?: string }).estado;
@@ -356,6 +370,12 @@ export async function createExpediente(input: CreateExpedienteInput, createdBy: 
       'INMUEBLE_NO_DISPONIBLE',
     );
   }
+
+  // 1d. Flujo §4.4: el tope de canon detiene el flujo en el Paso 1, ANTES de
+  //     crear nada. Sin esto el expediente nacía igual y el tope recién
+  //     saltaba al habilitar el estudio, con un expediente huérfano de por
+  //     medio. Lanza CANON_EXCEDE_TOPE (400) con el mensaje accionable.
+  await assertCanonDentroDelTope({ inmuebleId: input.inmueble_id, origen: 'createExpediente' });
 
   // 2. Validar que el solicitante existe
   const { data: solicitante, error: solicitanteError } = await (supabase

@@ -18,6 +18,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
+import { AppError } from '@/lib/errors';
 import { env } from '@/config';
 
 export type ClaveCalibracion =
@@ -251,6 +252,31 @@ export async function setParametro(
   const anterior = (await getCalibracion())[clave as ClaveCalibracion];
   const ahora = new Date().toISOString();
 
+  // SIN HISTORIAL NO HAY CAMBIO. La Adenda §11 exige el rastro de cada cambio;
+  // antes el valor se escribia primero y, si el historial fallaba, quedaba un
+  // cambio vigente sin rastro (solo un log). Ahora el rastro va PRIMERO: si no
+  // se puede escribir, el valor no se toca. No hay transaccion (dos tablas por
+  // PostgREST), asi que el orden es la garantia.
+  const { data: hist, error: histError } = await db('parametros_calibracion_historial')
+    .insert({
+      clave,
+      valor_anterior: anterior,
+      valor_nuevo: valor,
+      usuario_id: usuarioId,
+      motivo: motivo ?? null,
+    } as never)
+    .select('id')
+    .single();
+  if (histError || !hist) {
+    logger.error({ clave, error: histError?.message ?? 'sin fila' }, 'Calibracion: no se pudo registrar el historial — el valor NO se cambio');
+    throw new AppError(
+      500,
+      'CALIBRACION_HISTORIAL_ERROR',
+      `No se pudo registrar el historial del cambio de ${clave}; el valor no se modifico. ${histError?.message ?? ''}`.trim(),
+    );
+  }
+  const histId = (hist as { id?: string }).id;
+
   const { error } = await db('parametros_calibracion').upsert(
     {
       clave,
@@ -261,18 +287,16 @@ export async function setParametro(
     } as never,
     { onConflict: 'clave' } as never,
   );
-  if (error) throw new Error(`No se pudo guardar ${clave}: ${error.message}`);
-
-  const { error: histError } = await db('parametros_calibracion_historial').insert({
-    clave,
-    valor_anterior: anterior,
-    valor_nuevo: valor,
-    usuario_id: usuarioId,
-    motivo: motivo ?? null,
-  } as never);
-  if (histError) {
-    // El valor ya cambio; sin historial la Adenda no se cumple. Se avisa fuerte.
-    logger.error({ clave, error: histError.message }, 'Calibracion: el cambio quedo SIN historial');
+  if (error) {
+    // El valor no cambio: se retira el rastro recien escrito (best-effort) para
+    // que el historial no cuente un cambio que nunca ocurrio.
+    if (histId) {
+      const { error: delError } = await db('parametros_calibracion_historial').delete().eq('id', histId);
+      if (delError) {
+        logger.error({ clave, histId, error: delError.message }, 'Calibracion: el valor NO cambio pero quedo una fila de historial huerfana');
+      }
+    }
+    throw new AppError(500, 'CALIBRACION_GUARDAR_ERROR', `No se pudo guardar ${clave}: ${error.message}`);
   }
 
   invalidateCalibracionCache();

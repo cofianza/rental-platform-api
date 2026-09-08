@@ -17,6 +17,7 @@ import { getCalibracion } from '@/lib/calibracion';
 import { Resend } from 'resend';
 import {
   notificarUsuario,
+  notificarYCorreo,
   findPerfilIdByEmail,
   notificarResponsableExpediente,
 } from '../notificaciones/notificaciones.service';
@@ -26,12 +27,16 @@ import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { estudioYaCobrado, ESTADO_ESPERANDO_PAGO } from '@/modules/estudios/pago.guard';
+// Flujo §10/§11: el CRC se produce con el resultado — tambien cuando el
+// resultado lo pone la ponderacion con coarrendatario.
+import { emitirCertificadoAutomatico } from '@/modules/estudios/certificado.service';
 // Reglas duras V4.1 (§4.2 DTI, §4.3 canon/ingreso). El co-arrendatario SI es
 // evaluable por las dos: la Politica §5 lo evalua "sobre ingresos propios", asi
 // que su canon/ingreso individual dispara §4.3 con frecuencia.
 import {
   motivoProspectoReglasDuras,
   inferirReglasDurasDesdeMotivo,
+  etiquetaReglaDura,
 } from '@/modules/estudios/reglas-duras';
 import type { ReglaDuraActiva } from '@/modules/estudios/reglas-duras';
 import {
@@ -93,6 +98,8 @@ interface ExpedienteCtx {
   id: string;
   numero: string;
   estado: string;
+  /** Perfil del gestor que creo el expediente: firma la emision automatica del CRC. */
+  creado_por: string | null;
   solicitante_creado_por: string | null;
   inmueble_propietario_id: string | null;
   inmueble_inmobiliaria_id: string | null;
@@ -100,6 +107,8 @@ interface ExpedienteCtx {
   inmueble_ciudad: string;
   solicitante_email: string | null;
   solicitante_nombre: string | null;
+  /** Documento del titular: Politica §5, el coarrendatario no puede ser el mismo afianzado. */
+  solicitante_numero_documento: string | null;
 }
 
 // ============================================================
@@ -110,8 +119,8 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
-      'id, numero, estado, ' +
-        'solicitantes(creado_por, email, nombre, apellido), ' +
+      'id, numero, estado, creado_por, ' +
+        'solicitantes(creado_por, email, nombre, apellido, numero_documento), ' +
         'inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, direccion, ciudad)',
     )
     .eq('id', expedienteId)
@@ -125,7 +134,14 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     id: string;
     numero: string;
     estado: string;
-    solicitantes: { creado_por: string | null; email: string; nombre: string; apellido: string } | null;
+    creado_por: string | null;
+    solicitantes: {
+      creado_por: string | null;
+      email: string;
+      nombre: string;
+      apellido: string;
+      numero_documento: string | null;
+    } | null;
     inmuebles: { propietario_id: string; inmobiliaria_id: string | null; direccion: string; ciudad: string } | null;
   };
 
@@ -133,6 +149,7 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     id: row.id,
     numero: row.numero,
     estado: row.estado,
+    creado_por: row.creado_por ?? null,
     solicitante_creado_por: row.solicitantes?.creado_por ?? null,
     inmueble_propietario_id: row.inmuebles?.propietario_id ?? null,
     inmueble_inmobiliaria_id: row.inmuebles?.inmobiliaria_id ?? null,
@@ -142,7 +159,16 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     solicitante_nombre: row.solicitantes
       ? `${row.solicitantes.nombre} ${row.solicitantes.apellido}`.trim()
       : null,
+    solicitante_numero_documento: row.solicitantes?.numero_documento ?? null,
   };
+}
+
+/**
+ * Documento comparable: sin puntos, espacios ni guiones, en mayusculas, para
+ * que "1.234.567" y "1234567" sean la misma persona (Politica §5, NOTA).
+ */
+function normalizarDocumento(numero: string | null | undefined): string {
+  return (numero ?? '').replace(/[.\s-]/g, '').trim().toUpperCase();
 }
 
 function generateToken(): string {
@@ -241,7 +267,17 @@ function fueEvaluadoPorElBuro(estudio: {
 function buildMotivoRechazoCoarrendatario(
   titularResultado: string,
   coarrendatarioResultado: string,
+  reglasDurasCoarrendatario: readonly ReglaDuraActiva[] = [],
 ): string {
+  if (reglasDurasCoarrendatario.length > 0) {
+    // Politica §5: la regla dura del coarrendatario contamina el conjunto,
+    // gane lo que gane el titular. Este banner es gestor-only.
+    return (
+      `El estudio del co-arrendatario activó una regla dura de la Política V4.1 ` +
+      `(${reglasDurasCoarrendatario.map(etiquetaReglaDura).join(', ')}). ` +
+      'La regla dura del co-arrendatario contamina el conjunto (Política §5): la solicitud no procede.'
+    );
+  }
   if (titularResultado === 'condicionado' && coarrendatarioResultado === 'condicionado') {
     // Solo se llega aquí con AMBOS scores presentes: el caso sin información
     // se desvía antes a decisión manual (ver fueEvaluadoPorElBuro).
@@ -301,6 +337,19 @@ export async function invitarCoarrendatario(
     throw AppError.badRequest(
       'El co-arrendatario no puede ser la misma persona que el solicitante',
       'COARRENDATARIO_MISMO_EMAIL',
+    );
+  }
+
+  // 3b. Politica V4.1 §5, NOTA: "El coarrendatario no puede ser el mismo
+  //     afianzado bajo otro nombre". El correo se cambia en un minuto; el
+  //     documento no. Se compara normalizado (sin puntos ni espacios). El
+  //     reenvio (reenviarInvitacionCoarrendatario) no admite cambiar el
+  //     documento, asi que este es el unico punto de entrada.
+  const docTitular = normalizarDocumento(ctx.solicitante_numero_documento);
+  if (docTitular && normalizarDocumento(input.numero_documento) === docTitular) {
+    throw AppError.badRequest(
+      'El co-arrendatario no puede ser la misma persona que el solicitante: el número de documento coincide con el del titular del estudio.',
+      'COARRENDATARIO_MISMO_DOCUMENTO',
     );
   }
 
@@ -1113,7 +1162,20 @@ export async function onCoarrendatarioEstudioCompletado(
   //    haber invitado a alguien. Por eso ese caso vuelve a decisión humana.
   const resultados = [titular.resultado, est.resultado];
   let resultadoCombinado: 'aprobado' | 'rechazado' | 'sin_evaluar';
-  if (resultados.includes('aprobado')) {
+  if (reglasDurasCoa.length > 0) {
+    // Politica V4.1 §5, ultima fila de la tabla: "Cualquiera + Regla dura
+    // activada -> RECHAZO AUTOMATICO — la regla dura del coarrendatario
+    // contamina el conjunto". Va ANTES del aprobado a proposito: un titular
+    // aprobado no la compensa (hasta 2026-09-08 ganaba el 'aprobado' y el par
+    // se aprobaba con un coarrendatario en lista restrictiva o con DTI > 65%).
+    // Los rechazos POR SCORE del coarrendatario no entran aqui: esa fila la
+    // Politica la deja sin definir y el ocupante es quien define el riesgo.
+    resultadoCombinado = 'rechazado';
+    logger.info(
+      { expedienteId: est.expediente_id, estudioId, reglasDuras: reglasDurasCoa, titularResultado: titular.resultado },
+      'Politica §5: regla dura del coarrendatario — rechazo automatico del conjunto',
+    );
+  } else if (resultados.includes('aprobado')) {
     resultadoCombinado = 'aprobado';
   } else if (resultados.includes('rechazado')) {
     // Un rechazo sí es evidencia de riesgo, y manda aunque el otro no se
@@ -1238,7 +1300,7 @@ export async function onCoarrendatarioEstudioCompletado(
   // para explicar al solicitante y al propietario por qué cerró así. Si
   // aprobamos, no tocamos ese campo.
   const motivoRechazo = resultadoCombinado === 'rechazado'
-    ? buildMotivoRechazoCoarrendatario(titular.resultado, est.resultado)
+    ? buildMotivoRechazoCoarrendatario(titular.resultado, est.resultado, reglasDurasCoa)
     : null;
 
   const expedienteUpdate: Record<string, unknown> = {
@@ -1271,7 +1333,11 @@ export async function onCoarrendatarioEstudioCompletado(
     .insert({
       expediente_id: est.expediente_id,
       tipo: 'estado',
-      descripcion: `Resultado combinado del estudio del coarrendatario: ${resultadoCombinado}. Titular ${titular.resultado} + coarrendatario ${est.resultado}.`,
+      descripcion:
+        `Resultado combinado del estudio del coarrendatario: ${resultadoCombinado}. Titular ${titular.resultado} + coarrendatario ${est.resultado}.` +
+        (reglasDurasCoa.length > 0
+          ? ` Regla dura del co-arrendatario (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}): contamina el conjunto (Política §5).`
+          : ''),
       estado_anterior: 'condicionado',
       estado_nuevo: nuevoEstadoExpediente,
       metadata: {
@@ -1279,6 +1345,7 @@ export async function onCoarrendatarioEstudioCompletado(
         origen: 'ponderacion_coarrendatario',
         titular_resultado: titular.resultado,
         coarrendatario_resultado: est.resultado,
+        coarrendatario_reglas_duras: reglasDurasCoa,
       },
     } as never);
 
@@ -1294,6 +1361,17 @@ export async function onCoarrendatarioEstudioCompletado(
 
   // 7. Notificar al titular y al propietario.
   const ctx = await fetchExpedienteCtx(est.expediente_id);
+
+  // 7b. Flujo §10/§11: el CRC se produce con el resultado. El del titular ya
+  //     pudo salir al quedar condicionado; aquí se REGENERA (version+1) porque
+  //     las condiciones económicas cambiaron con el acompañante (prima 10%,
+  //     Adenda §5.2; vía condicionada, §5.1). Fire-and-forget: el helper
+  //     nunca lanza y deja rastro en el timeline. Firma quien creó el expediente.
+  if (nuevoEstadoExpediente === 'aprobado') {
+    emitirCertificadoAutomatico(titular.id, ctx.creado_por, { regenerar: true }).catch((e) =>
+      logger.warn({ error: e, expedienteId: est.expediente_id, estudioId: titular.id }, 'Ponderación: no se pudo emitir el CRC automático'),
+    );
+  }
   const tituloAprobado = 'Solicitud aprobada';
   const tituloRechazado = 'Solicitud no aprobada';
   const titulo = nuevoEstadoExpediente === 'aprobado' ? tituloAprobado : tituloRechazado;
@@ -1544,24 +1622,69 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
     } as never)
     .eq('id', coa.id);
 
-  // Notificar al titular vía email del solicitante (suficiente — no
-  // queremos saturar la campana del titular con un rechazo que ya esperaba).
+  // Flujo §12: "Coarrendatario que no autoriza -> se informa al principal y al
+  // solicitante, con opcion de reemplazarlo o continuar solo". Hasta
+  // 2026-09-08 solo se intentaba avisar al prospecto por su correo (casi nunca
+  // tiene perfil): el gestor no se enteraba y el expediente quedaba
+  // condicionado esperando a alguien que ya habia dicho que no.
   const ctx = await fetchExpedienteCtx(coa.expediente_id);
-  if (ctx.solicitante_email) {
-    findPerfilIdByEmail(ctx.solicitante_email)
-      .then((solicitanteUserId) => {
-        if (!solicitanteUserId) return;
-        return notificarUsuario({
-          userId: solicitanteUserId,
-          tipo: 'coarrendatario.rechazo',
-          titulo: 'Invitación declinada',
-          mensaje: `${coa.nombre} no aceptó la invitación de co-arrendatario. Puedes invitar a otra persona.`,
-          link: `/expedientes/${coa.expediente_id}`,
-          payload: { expediente_id: coa.expediente_id, coarrendatario_id: coa.id },
-        });
-      })
-      .catch((e) => logger.warn({ error: e }, 'Error notif coarrendatario rechazo'));
+  const link = `/expedientes/${coa.expediente_id}`;
+  const payload = { expediente_id: coa.expediente_id, coarrendatario_id: coa.id };
+
+  // Rastro en el expediente (best-effort).
+  await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: coa.expediente_id,
+      tipo: 'estudio',
+      descripcion: `${coa.nombre} declinó la invitación como co-arrendatario. Se puede invitar a otra persona o continuar solo si la ruta lo permite.`,
+      metadata: { automatico: true, origen: 'coarrendatario_declino', coarrendatario_id: coa.id },
+    } as never)
+    .then(() => undefined, () => undefined);
+
+  // Al gestor (dueño del inmueble) in-app + correo, y al miembro responsable
+  // (mismo patron que la invitacion y el resultado de la ponderacion).
+  const tituloGestor = 'Co-arrendatario declinó la invitación';
+  const mensajeGestor =
+    `${coa.nombre} declinó ser coarrendatario del estudio ${ctx.numero}. ` +
+    'Puedes invitar a otra persona o continuar solo si la ruta lo permite.';
+  if (ctx.inmueble_propietario_id) {
+    notificarYCorreo({
+      userId: ctx.inmueble_propietario_id,
+      tipo: 'coarrendatario.rechazo',
+      titulo: tituloGestor,
+      mensaje: mensajeGestor,
+      link,
+      payload,
+    }).catch((e) => logger.warn({ error: e }, 'Error notif gestor coarrendatario rechazo'));
   }
+  notificarResponsableExpediente({
+    expedienteId: coa.expediente_id,
+    excluirPerfilId: ctx.inmueble_propietario_id,
+    tipo: 'coarrendatario.rechazo',
+    titulo: tituloGestor,
+    mensaje: mensajeGestor,
+    link,
+    payload,
+  }).catch((e) => logger.warn({ error: e }, 'Error notif responsable coarrendatario rechazo'));
+
+  // Al solicitante (prospecto): su perfil directo si lo tiene; si no, por correo.
+  (ctx.solicitante_creado_por
+    ? Promise.resolve(ctx.solicitante_creado_por)
+    : findPerfilIdByEmail(ctx.solicitante_email)
+  )
+    .then((solicitanteUserId) => {
+      if (!solicitanteUserId) return;
+      return notificarUsuario({
+        userId: solicitanteUserId,
+        tipo: 'coarrendatario.rechazo',
+        titulo: 'Invitación declinada',
+        mensaje: `${coa.nombre} no aceptó la invitación de co-arrendatario. Puedes invitar a otra persona.`,
+        link,
+        payload,
+      });
+    })
+    .catch((e) => logger.warn({ error: e }, 'Error notif coarrendatario rechazo'));
 
   return { ok: true };
 }

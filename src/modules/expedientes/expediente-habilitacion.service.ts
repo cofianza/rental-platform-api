@@ -576,6 +576,9 @@ async function aprobarYGenerarContrato(params: {
         usuario_id: userId,
         metadata: { manual: true, origen: 'propietario_aprobar_condicionado' },
       } as never);
+
+    // Política §9: la decisión deja de ser 'AUTOMATICO' — la ratificó un humano.
+    await ratificarAnalistaResponsable(expedienteId, userId);
   }
 
   // 4. Generar el contrato SOLO si vinieron los datos. Si no, el expediente
@@ -648,6 +651,69 @@ async function aprobarYGenerarContrato(params: {
     expediente: { id: ctx.expedienteId, numero: ctx.numero, estado: 'aprobado' },
     contrato_id: contratoId,
   };
+}
+
+/**
+ * Política V4.1 §9, `analista_responsable`: "User ID o 'AUTOMATICO' — usuario
+ * que tomó/ratificó la decisión". El motor escribe 'AUTOMATICO' en la corrida
+ * (estudios_scorecard_sombra); cuando un humano ratifica un condicionado, la
+ * corrida vigente del TITULAR tiene que quedar a su nombre, o la salida del
+ * §9 sigue atribuyendo al sistema una decisión que tomó una persona.
+ *
+ * Best-effort: es trazabilidad, no puede tumbar una aprobación ya escrita.
+ * El estudio del co-arrendatario comparte expediente_id (tipo
+ * 'con_coarrendatario'), por eso se excluye: la decisión ratificada es la del
+ * titular.
+ */
+async function ratificarAnalistaResponsable(expedienteId: string, userId: string): Promise<void> {
+  try {
+    const { data: est, error: estErr } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .neq('tipo', 'con_coarrendatario')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (estErr) throw new Error(estErr.message);
+    const estudioId = (est as { id?: string } | null)?.id;
+    if (!estudioId) return;
+
+    // Flujo §10 / Adenda §5: el CRC emitido al quedar 'condicionado' decía
+    // "en revisión"; la ratificación cambia las condiciones (APROBADO, tarifa,
+    // prima) → se regenera. Import dinámico para no cerrar un ciclo
+    // expedientes ↔ estudios. Fire-and-forget: nunca bloquea la aprobación.
+    void import('@/modules/estudios/certificado.service')
+      .then((m) => m.emitirCertificadoAutomatico(estudioId, userId, { regenerar: true }))
+      .catch((err: unknown) =>
+        logger.warn(
+          { error: err instanceof Error ? err.message : String(err), estudioId },
+          'CRC: no se pudo regenerar tras ratificar el condicionado',
+        ),
+      );
+
+    const { data: sombra, error: sombraErr } = await (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('estudio_id', estudioId)
+      .order('fecha_calculo', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (sombraErr) throw new Error(sombraErr.message);
+    const sombraId = (sombra as { id?: string } | null)?.id;
+    if (!sombraId) return;
+
+    const { error: updErr } = await (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .update({ analista_responsable: userId } as never)
+      .eq('id', sombraId);
+    if (updErr) throw new Error(updErr.message);
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), expedienteId, userId },
+      '§9: no se pudo registrar al analista que ratificó el condicionado (queda AUTOMATICO)',
+    );
+  }
 }
 
 /**

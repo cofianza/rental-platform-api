@@ -43,6 +43,10 @@ export const firmarSchema = z.object({
   }),
   datos_firma: z.string().min(100, 'Firma invalida').max(500000, 'Firma demasiado grande').optional(),
   codigo_otp: z.string().length(6, 'Codigo OTP debe ser de 6 digitos').optional(),
+  // Flujo §8.1: la web confirma la identidad por /perfil (fallo tragado) y
+  // repite la marca al firmar. Mismo contrato que perfilProspectoSchema:
+  // literal(true) o nada — un cliente no puede registrar "confirme" con false.
+  identidad_confirmada: z.literal(true).optional(),
   // Consentimientos opcionales (Paso 2 "Beneficios"). No condicionan el servicio.
   consentimientos_opcionales: z
     .object({

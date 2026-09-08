@@ -135,6 +135,84 @@ async function getSolicitanteDelExpediente(expedienteId: string) {
   return { sol: row?.solicitantes ?? null, inmuebleId: row?.inmueble_id ?? null };
 }
 
+/**
+ * Flujo §10/§11: el CRC se produce CON el resultado, no con un boton. Fire-and-
+ * forget: emitirCertificadoAutomatico nunca lanza, salta si ya hay certificado
+ * y deja rastro en el timeline; si no se puede (estudio vencido, sin actor)
+ * queda el boton manual del gestor. `actorId` = perfil que creo el expediente.
+ * Import dinamico como el resto del archivo (evita cargar pdfkit en el ciclo
+ * estudios -> orchestrator).
+ */
+function emitirCrcAutomatico(estudioId: string, actorId: string | null, expedienteId: string): void {
+  if (!estudioId) return;
+  import('@/modules/estudios/certificado.service')
+    .then(({ emitirCertificadoAutomatico }) => emitirCertificadoAutomatico(estudioId, actorId))
+    .catch((err) => logger.warn({ err, estudioId, expedienteId }, 'Orchestrator: no se pudo emitir el CRC automático'));
+}
+
+/**
+ * Politica V4.1 §3.1/§8: la revision manual tiene un SLA de 2 HORAS HABILES
+ * para un analista de Cofianza. Hasta 2026-09-08 el condicionado solo avisaba
+ * al prospecto, al dueño y al responsable de la agencia: nadie de Cofianza se
+ * enteraba y el reloj corria sin analista. In-app a todos los perfiles
+ * internos activos (administrador + operador_analista = listOperators).
+ * Best-effort: nunca lanza.
+ */
+async function avisarRevisionManualAnalistas(params: {
+  expedienteId: string;
+  numero: string;
+  estudioId: string;
+  score: number | null;
+  solicitante: string;
+  direccion: string;
+}): Promise<void> {
+  const { expedienteId, numero, estudioId, score, solicitante, direccion } = params;
+  try {
+    // Motivo tal como lo dejo el punto de decision (nota del motor /
+    // observaciones del buro). Recortado: es una campana, no un informe.
+    const { data } = await db('estudios')
+      .select('observaciones, motivo_rechazo')
+      .eq('id', estudioId)
+      .maybeSingle();
+    const est = data as { observaciones?: string | null; motivo_rechazo?: string | null } | null;
+    const motivoCrudo = est?.motivo_rechazo || est?.observaciones || null;
+    const motivo = motivoCrudo
+      ? motivoCrudo.length > 280
+        ? `${motivoCrudo.slice(0, 277)}...`
+        : motivoCrudo
+      : `resultado condicionado del buró${score !== null ? ` (score ${score})` : ''}`;
+
+    const { listOperators } = await import('@/modules/users/users.service');
+    const analistas = await listOperators().catch(() => []);
+    if (analistas.length === 0) {
+      logger.warn({ expedienteId }, 'Orchestrator §3.1: no hay analistas activos a quien avisar la revisión manual');
+      return;
+    }
+
+    const titulo = `Revisión manual requerida — ${numero}`;
+    const mensaje =
+      `El estudio de ${solicitante} para ${direccion || 'el inmueble'} quedó condicionado. ` +
+      `Motivo: ${motivo}. SLA: 2 horas hábiles (Política V4.1 §3.1).`;
+    await Promise.all(
+      analistas.map((a) =>
+        notificarUsuario({
+          userId: a.id,
+          tipo: 'estudio.revision_manual',
+          titulo,
+          mensaje,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, estudio_id: estudioId, score, sla_horas_habiles: 2 },
+        }).catch((e) => logger.warn({ error: e, userId: a.id }, 'Orchestrator §3.1: error notif analista')),
+      ),
+    );
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err), expedienteId },
+      'Orchestrator §3.1: no se pudo avisar la revisión manual a los analistas',
+    );
+  }
+}
+
 // ── Event: Habeas Data Autorizado ───────────────────────────
 
 export async function onHabeasDataAutorizado(params: {
@@ -563,12 +641,14 @@ export async function onEstudioCompletado(params: {
 
   try {
     // Obtener datos del expediente con joins
+    // `creado_por` (perfil del gestor) firma la emision automatica del CRC.
     const { data: expediente } = await db('expedientes')
-      .select('id, numero, inmueble_id, solicitante_id')
+      .select('id, numero, inmueble_id, solicitante_id, creado_por')
       .eq('id', expedienteId)
       .single() as { data: Record<string, unknown> | null };
 
     if (!expediente) return;
+    const actorCrc = (expediente.creado_por as string | null) ?? null;
 
     // Obtener solicitante y inmueble por separado (evita joins complejos)
     const { data: sol } = await db('solicitantes')
@@ -606,6 +686,9 @@ export async function onEstudioCompletado(params: {
       // 'aprobado' y el panel del propietario muestra el card "Generar
       // contrato" que pide los datos y dispara la generación.
       await registrarTimeline(expedienteId, 'estudio', `Estudio crediticio aprobado (Score: ${score}). El propietario debe generar el contrato desde el panel.`);
+
+      // Flujo §10/§11: el CRC sale CON el resultado. No bloquea las notificaciones.
+      emitirCrcAutomatico(estudioId, actorCrc, expedienteId);
 
       if (sol?.email) {
         sendEstudioAprobadoEmail({
@@ -746,12 +829,11 @@ export async function onEstudioCompletado(params: {
       if (sol?.email) {
         // Al PROSPECTO va el motivo GENERAL en el lenguaje del Flujo §10, sin
         // porcentajes ni umbrales (Politica §2: "sin revelar los parametros
-        // internos del modelo"). Y sin el score: mostrarle 773 al lado de "no
-        // pudimos respaldar tu solicitud" es contradictorio y no explica nada.
+        // internos del modelo"). Nunca el score (Politica §11): el correo ya
+        // no lo acepta, y ademas trae el derecho de apelacion.
         sendEstudioRechazadoEmail({
           email: sol.email,
           nombre: `${sol.nombre} ${sol.apellido}`,
-          score: porReglaDura ? null : score,
           motivoGeneral: porReglaDura ? motivoProspectoReglasDuras(reglaDura.reglas) : null,
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email rechazado'));
       }
@@ -794,6 +876,20 @@ export async function onEstudioCompletado(params: {
         return;
       }
       await registrarTimeline(expedienteId, 'estudio', `Estudio condicionado (Score: ${score}). Se requieren documentos adicionales.`);
+
+      // Flujo §10/§11: el CRC (condicionado) sale CON el resultado. No bloquea.
+      emitirCrcAutomatico(estudioId, actorCrc, expedienteId);
+
+      // Politica §3.1/§8: SLA de 2 horas habiles para un analista de Cofianza.
+      // Fire-and-forget: el aviso interno no puede frenar los del prospecto.
+      avisarRevisionManualAnalistas({
+        expedienteId,
+        numero: (expediente.numero as string) || expedienteId,
+        estudioId,
+        score,
+        solicitante: sol ? `${sol.nombre} ${sol.apellido}` : 'el solicitante',
+        direccion: inm?.direccion || '',
+      }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error aviso revisión manual a analistas'));
 
       if (sol?.email) {
         sendDocumentosRequeridosEmail({ email: sol.email, nombre: `${sol.nombre} ${sol.apellido}`, score })

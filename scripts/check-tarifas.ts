@@ -79,5 +79,10 @@ const cal = { UMBRAL_APROBACION_AUTOMATICA: 85, UMBRAL_ZONA_GRIS: 70, UMBRAL_COA
 ok(viaSegunCalibracion(null, false, cal) === 'revision_manual', 'sin puntaje del modelo -> revision manual (2,7%)');
 ok(viaSegunCalibracion(90, false, cal) === 'automatica', '90 -> automatica (2,0%)');
 ok(viaSegunCalibracion(75, true, cal) === 'revision_manual', '75 con coarrendatario sin puntaje propio -> revision manual (el 2,5% exige coarrendatario >= 80)');
+// La fila de 2,5% se alcanza con el puntaje del estudio PROPIO del coarrendatario.
+ok(viaSegunCalibracion(75, true, cal, 80) === 'condicionada_coarrendatario', '75 con coarrendatario de 80 -> condicionada (2,5%)');
+ok(viaSegunCalibracion(84, true, cal, 79) === 'revision_manual', '84 con coarrendatario de 79 -> revision manual (2,7%)');
+ok(viaSegunCalibracion(75, false, cal, 95) === 'revision_manual', 'un puntaje de coarrendatario sin coarrendatario vinculado no cuenta');
+ok(viaSegunCalibracion(90, true, cal, 50) === 'automatica', '90 es automatica aunque el coarrendatario sea flojo (la prima si baja, la tarifa no cambia)');
 
 console.log(`\nOK — ${pasos} aserciones: la tabla de tarifas de la Adenda §5 esta tal cual.`);
