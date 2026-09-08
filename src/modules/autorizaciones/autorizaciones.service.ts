@@ -1331,6 +1331,62 @@ export async function firmarAutorizacion(
 }
 
 /**
+ * Estado del cobro del prospecto para la pantalla de "ya firmaste".
+ *
+ * Tras firmar, la pantalla le decia "te enviamos el enlace de pago por correo y
+ * WhatsApp": el prospecto tenia que salir de la pagina a buscar un mensaje que
+ * el orquestador genera fire-and-forget segundos despues. Con esto la propia
+ * pantalla espera el enlace y lo muestra.
+ *
+ * No expone email, external_id ni nada del expediente: solo estado, monto y el
+ * enlace de pago cuando ya existe.
+ */
+export async function getPagoProspectoPorToken(token: string): Promise<{
+  estado: 'preparando' | 'pendiente' | 'procesando' | 'completado' | 'no_aplica';
+  monto_formateado: string | null;
+  payment_link_url: string | null;
+}> {
+  const { data: auth } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, expediente_id')
+    .eq('token', token)
+    .maybeSingle();
+  const a = auth as { estado?: string; expediente_id?: string | null } | null;
+  if (!a) throw AppError.notFound('Autorización no encontrada', 'AUTORIZACION_NOT_FOUND');
+  if (a.estado !== 'autorizado' || !a.expediente_id) {
+    return { estado: 'no_aplica', monto_formateado: null, payment_link_url: null };
+  }
+  if (!(await cobroLeTocaAlProspecto(a.expediente_id))) {
+    return { estado: 'no_aplica', monto_formateado: null, payment_link_url: null };
+  }
+
+  const { data: pagoRow } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('estado, monto, payment_link_url')
+    .eq('expediente_id', a.expediente_id)
+    .eq('concepto', 'estudio')
+    .in('estado', ['pendiente', 'procesando', 'completado'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const pago = pagoRow as { estado?: string; monto?: number; payment_link_url?: string | null } | null;
+
+  const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
+  const monto = pago?.monto ?? (await getMontoEstudio().catch(() => null));
+  const montoFormateado =
+    typeof monto === 'number' ? `$${Math.round(monto).toLocaleString('es-CO')}` : null;
+
+  // Una fila 'pendiente' sin URL significa que el link todavia se esta creando
+  // en la pasarela: el front sigue esperando en vez de mostrar un boton muerto.
+  const listo = pago?.estado === 'pendiente' && !!pago.payment_link_url;
+  return {
+    estado: !pago ? 'preparando' : pago.estado === 'pendiente' && !listo ? 'preparando' : (pago.estado as 'pendiente' | 'procesando' | 'completado'),
+    monto_formateado: montoFormateado,
+    payment_link_url: listo ? (pago!.payment_link_url as string) : null,
+  };
+}
+
+/**
  * ¿El pagador del estudio es el ARRENDATARIO (opción C del §6.3)? Es el mismo
  * dato con el que decide el orquestador (`siguientePasoEstudio`), leído de la
  * misma columna, para que la pantalla del prospecto no prometa un cobro que el

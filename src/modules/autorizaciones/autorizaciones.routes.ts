@@ -70,6 +70,14 @@ publicAutorizacionRouter.get(
   autorizacionesController.getAutorizacionPublic,
 );
 
+// GET /public/autorizar/:token/pago — estado del cobro tras firmar
+publicAutorizacionRouter.get(
+  '/:token/pago',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema }),
+  autorizacionesController.getPagoProspecto,
+);
+
 // POST /public/autorizar/:token/firmar
 publicAutorizacionRouter.post(
   '/:token/firmar',

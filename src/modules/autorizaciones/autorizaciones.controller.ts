@@ -61,6 +61,11 @@ export async function getAutorizacionPublic(req: Request, res: Response) {
   sendSuccess(res, data);
 }
 
+export async function getPagoProspecto(req: Request, res: Response) {
+  const { token } = req.params as unknown as { token: string };
+  sendSuccess(res, await autorizacionesService.getPagoProspectoPorToken(token));
+}
+
 export async function firmar(req: Request, res: Response) {
   const { token } = req.params as unknown as { token: string };
   const input = req.body as FirmarInput;
