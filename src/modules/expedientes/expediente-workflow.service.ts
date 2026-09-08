@@ -296,10 +296,22 @@ export async function getTransitionsForExpediente(expedienteId: string, userId?:
   const expediente = await fetchExpediente(expedienteId);
   const transiciones = getAvailableTransitions(expediente.estado);
 
+  // El dueno (propietario/inmobiliaria) solo puede cerrar: ofrecerle "Aprobar"
+  // o "Rechazar" lo llevaba a escribir el comentario y recibir un 403 al final
+  // (executeTransition aplica esta misma lista mas abajo).
+  const esDueno = userRol === 'propietario' || userRol === 'inmobiliaria';
+  const visibles = esDueno
+    ? transiciones.filter((t) =>
+        PROPIETARIO_TRANSITIONS.some(
+          (p) => p.from === expediente.estado && p.to === (t.estado as EstadoExpediente),
+        ),
+      )
+    : transiciones;
+
   return {
     expediente_id: expedienteId,
     estado_actual: expediente.estado,
-    transiciones_disponibles: transiciones,
+    transiciones_disponibles: visibles,
   };
 }
 
