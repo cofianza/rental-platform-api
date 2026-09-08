@@ -55,6 +55,8 @@ export const listExpedientesQuerySchema = z.object({
   search: z.string().optional(),
   estado: z.string().optional(), // Comma-separated: "borrador,en_revision"
   analista_id: z.uuid({ error: 'ID de analista invalido' }).optional(),
+  // Miembro del equipo de la inmobiliaria (distinto del analista interno de Cofianza).
+  miembro_responsable_id: z.uuid({ error: 'ID de miembro invalido' }).optional(),
   inmueble_id: z.uuid({ error: 'ID de inmueble invalido' }).optional(), // HP-247: filtrar por inmueble
   fecha_desde: z.string().optional(),
   fecha_hasta: z.string().optional(),
@@ -62,7 +64,7 @@ export const listExpedientesQuerySchema = z.object({
   // fusionada de la inmobiliaria). Chips: aprobado/rechazado/condicionado/
   // en_proceso/sin_estudio. 'todos' o ausente = sin filtro.
   estudio_filtro: z.enum(['todos', 'aprobado', 'rechazado', 'condicionado', 'en_proceso', 'sin_estudio', 'requiere_accion']).optional(),
-  sortBy: z.enum(['created_at', 'numero', 'estado']).default('created_at'),
+  sortBy: z.enum(['created_at', 'numero', 'estado', 'updated_at']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 

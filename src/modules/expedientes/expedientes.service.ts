@@ -87,7 +87,7 @@ export async function listExpedientes(
    *  filtro (roles internos). El controller NUNCA pasa [] (cortocircuita antes). */
   allowedExpedienteIds?: string[] | null,
 ) {
-  const { search, estado, analista_id, inmueble_id, fecha_desde, fecha_hasta, estudio_filtro } = query;
+  const { search, estado, analista_id, inmueble_id, fecha_desde, fecha_hasta, estudio_filtro, miembro_responsable_id } = query;
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
   const sortBy = query.sortBy || 'created_at';
@@ -115,6 +115,11 @@ export async function listExpedientes(
   // vigente aún no corrió (despliegue desacoplado de la migración).
   if (estudio_filtro && estudio_filtro !== 'todos') {
     rpcParams.p_estudio_filtro = estudio_filtro;
+  }
+  // Mismo criterio 'solo si viene': si la migracion del filtro por miembro aun
+  // no corrio, el listado base sigue resolviendo con la firma vieja del RPC.
+  if (miembro_responsable_id) {
+    rpcParams.p_miembro_responsable_id = miembro_responsable_id;
   }
   // Scoping multi-tenant en SQL: solo lo agregamos cuando hay una lista concreta
   // (roles scopeados). Roles internos llegan con null/undefined → sin filtro
