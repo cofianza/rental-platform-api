@@ -61,7 +61,7 @@ export const listExpedientesQuerySchema = z.object({
   // Filtra expedientes por el estado/resultado de su estudio vigente (vista
   // fusionada de la inmobiliaria). Chips: aprobado/rechazado/condicionado/
   // en_proceso/sin_estudio. 'todos' o ausente = sin filtro.
-  estudio_filtro: z.enum(['todos', 'aprobado', 'rechazado', 'condicionado', 'en_proceso', 'sin_estudio']).optional(),
+  estudio_filtro: z.enum(['todos', 'aprobado', 'rechazado', 'condicionado', 'en_proceso', 'sin_estudio', 'requiere_accion']).optional(),
   sortBy: z.enum(['created_at', 'numero', 'estado']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });

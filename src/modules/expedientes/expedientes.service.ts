@@ -24,6 +24,10 @@ import type {
 // ============================================================
 
 interface ExpedienteListRow {
+  /** El estudio espera una acción del gestor (habilitar, definir pago, decidir condicionado, generar contrato). */
+  requiere_accion?: boolean;
+  /** De quién depende ahora: 'gestor' | 'prospecto' | 'cofianza' | null. */
+  depende_de?: string | null;
   id: string;
   numero: string;
   estado: string;
