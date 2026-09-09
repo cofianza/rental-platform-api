@@ -177,7 +177,7 @@ export async function setTarifaOverride(
     cashback_pct: input.cashback_pct,
     autorizado_por: userId,
     autorizado_en: new Date().toISOString(),
-    motivo: input.motivo,
+    motivo: input.motivo ?? null,
   };
   return guardar(e, nuevo, userId, userRol, ip);
 }

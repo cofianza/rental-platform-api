@@ -119,6 +119,13 @@ const noVigente = interpretarBackgroundCheck(respuestaAuco({ registraduria: { es
 ok(['documento_no_vigente', 'defuncion', 'fuentes_con_error'].every((f) => noVigente.flags_revision.includes(f)), 'documento no vigente, defuncion y policia con error son flags');
 ok(noVigente.estado === 'verificado' && noVigente.fuentes_con_error.join() === 'policia', 'un error en policia no invalida las listas (§16.5 = flag)');
 
+// Decision de Gerencia (Mario, 2026-09-09): sin informacion de la Registraduria
+// el estudio NO sigue solo — queda pendiente de revision manual.
+const sinRegistraduria = interpretarBackgroundCheck(respuestaAuco({ registraduria: {} }), 'C4b', HOY);
+ok(sinRegistraduria.flags_revision.includes('registraduria_sin_informacion'), 'Registraduria sin estado -> flag de revision');
+ok((requiereRevisionManual(sinRegistraduria) ?? '').includes('Registraduria'), 'Registraduria sin dato -> revision manual con motivo propio');
+ok(requiereRevisionManual(limpio) === null, 'Registraduria VIGENTE -> sigue sin revision manual');
+
 const pendiente = interpretarBackgroundCheck(respuestaAuco({}, false), 'C5', HOY);
 ok(pendiente.estado === 'no_verificado' && pendiente.code === 'C5', 'ready:false -> no_verificado con code');
 // Lo que devolvio la sonda real del 2026-09-07 con la cedula de ejemplo: 23

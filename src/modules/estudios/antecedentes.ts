@@ -223,7 +223,13 @@ export function interpretarBackgroundCheck(
   if (res.nivel === 'alto') flags.push('nivel_alto');
   const reg = obj(v.registraduria);
   res.registraduria_estado = texto(reg?.estado);
-  if (res.registraduria_estado && res.registraduria_estado !== 'VIGENTE') flags.push('documento_no_vigente');
+  // Decision de Gerencia (Mario, 2026-09-09): "sin informacion de la
+  // Registraduria no podemos seguir, el estudio debe quedar pendiente para
+  // poderlo revisar". Antes, una respuesta sin estado no producia nada y el
+  // estudio podia aprobarse solo sin haber confirmado que la cedula existe.
+  // Igual que el resto del §16.5: revision manual, nunca rechazo automatico.
+  if (!res.registraduria_estado) flags.push('registraduria_sin_informacion');
+  else if (res.registraduria_estado !== 'VIGENTE') flags.push('documento_no_vigente');
   const def = obj(v.defuncion);
   const vigenciaDef = texto(def?.validity);
   if (vigenciaDef && !vigenciaDef.includes('VIVO')) flags.push('defuncion');
@@ -267,6 +273,16 @@ export function requiereRevisionManual(a: ResumenAntecedentes | null | undefined
     return (
       `Revision manual obligatoria (Politica §14): listas restrictivas SIN VERIFICAR — ${a.motivo ?? 'Auco no respondio'}. ` +
       'No se aprueba automaticamente sin chequeo de listas.'
+    );
+  }
+  if (a.flags_revision.includes('registraduria_sin_informacion')) {
+    return (
+      'Revision manual: la Registraduria no entrego informacion de la cedula, asi que no se pudo ' +
+      'confirmar que el documento exista y este vigente. Decision de Gerencia (2026-09-09): el estudio ' +
+      'queda pendiente hasta que un analista lo revise.' +
+      (a.flags_revision.length > 1
+        ? ` El background check reporta ademas: ${a.flags_revision.filter((f) => f !== 'registraduria_sin_informacion').join(', ')}.`
+        : '')
     );
   }
   if (a.flags_revision.length > 0) {

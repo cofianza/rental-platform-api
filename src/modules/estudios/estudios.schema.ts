@@ -295,9 +295,10 @@ export const tarifaOverrideSchema = z
     tarifa_mensual_pct: pctSchema.optional(),
     prima_vinculacion_pct: pctSchema.optional(),
     cashback_pct: pctSchema.optional(),
-    // "dejando registro de quien autorizo y cuando": el motivo es lo que
-    // hace util ese registro seis meses despues.
-    motivo: z.string().trim().min(5, 'Indica el motivo de la condicion especial').max(500),
+    // La Adenda §5 solo exige "registro de quien autorizo y cuando". Gerencia
+    // (Mario, 2026-09-09) definio el motivo como OPCIONAL: se guarda si lo
+    // escriben, pero no bloquea la condicion especial.
+    motivo: z.string().trim().max(500).optional(),
   })
   .refine(
     (b) => b.tarifa_mensual_pct != null || b.prima_vinculacion_pct != null || b.cashback_pct != null,

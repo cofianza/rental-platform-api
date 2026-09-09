@@ -131,7 +131,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     entero: true,
     seccion: 'Politica §6 / Flujo §4.4',
     descripcion: 'Canon maximo sin coafianzamiento (COP). Se deroga al entrar en vigencia el coafianzamiento.',
-    advertencia: 'La Politica §6 dice 2.000.000 y el Flujo §4.4 dice 3.000.000; produccion corre con 3.000.000.',
+    advertencia: 'La Politica §6 dice 2.000.000 y el Flujo §4.4 dice 3.000.000. Gerencia (Mario, 2026-09-09) resolvio 3.000.000; falta actualizar el texto del §6.',
   },
   {
     clave: 'UMBRAL_APROBACION_AUTOMATICA',
