@@ -14,6 +14,27 @@ interface ValidationError {
   received?: unknown;
 }
 
+/**
+ * El `message` del 400 es lo que el web muestra en el toast. Antes era siempre
+ * "Datos de entrada invalidos" y el usuario no sabia que campo corregir; ahora
+ * es el mensaje del primer campo, que los schemas escriben en espanol.
+ *
+ * ponytail: los mensajes por defecto de zod llegan en ingles ("Invalid input",
+ * "Too small: ..."), asi que se detectan por prefijo y se cambian por uno
+ * generico. Si algun dia hay schemas con mensajes propios en ingles, esto los
+ * trataria como genericos; la salida es darles mensaje en espanol.
+ */
+const MENSAJE_POR_DEFECTO_DE_ZOD = /^(Invalid|Too (small|big)|Expected|Required|Unrecognized)/;
+
+export function mensajeDeValidacion(errors: ValidationError[]): string {
+  const [primero] = errors;
+  const base = MENSAJE_POR_DEFECTO_DE_ZOD.test(primero.message)
+    ? 'Revisa los datos: hay un campo con un valor no válido.'
+    : primero.message;
+  const resto = errors.length - 1;
+  return resto > 0 ? `${base} (y ${resto} ${resto === 1 ? 'error' : 'errores'} más)` : base;
+}
+
 function getValueAtPath(obj: unknown, path: (string | number)[]): unknown {
   let current = obj;
   for (const key of path) {
@@ -74,7 +95,7 @@ export function validate(schemas: ValidationSchemas) {
     }
 
     if (errors.length > 0) {
-      throw AppError.badRequest('Datos de entrada invalidos', 'VALIDATION_ERROR', errors);
+      throw AppError.badRequest(mensajeDeValidacion(errors), 'VALIDATION_ERROR', errors);
     }
 
     next();
