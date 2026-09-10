@@ -30,3 +30,17 @@ if (env.CONTRATO_VENCIMIENTO_JOB_ENABLED) {
   runVencimiento();
   setInterval(runVencimiento, VENCIMIENTO_INTERVAL_MS).unref();
 }
+
+// Escalada automatica de mora. Antes solo existia como POST /cron/moras/
+// auto-escalar protegido por CRON_SECRET, que no esta configurado: nunca corria
+// y la pantalla de moras prometia una escalada que no pasaba. Mismo patron que
+// el vencimiento de contratos; apagado hasta tener las plantillas en Meta.
+const MORAS_INTERVAL_MS = 60 * 60 * 1000;
+if (env.MORAS_AUTOESCALAR_ENABLED) {
+  const runMoras = () =>
+    import('@/modules/moras/moras.service')
+      .then(({ autoEscalar }) => autoEscalar())
+      .catch((err) => logger.warn({ err }, 'autoEscalar moras: ciclo fallido'));
+  runMoras();
+  setInterval(runMoras, MORAS_INTERVAL_MS).unref();
+}

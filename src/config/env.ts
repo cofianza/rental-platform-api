@@ -206,6 +206,12 @@ const envSchema = z.object({
   // en UNA sola instancia para evitar trabajo redundante.
   CONTRATO_VENCIMIENTO_JOB_ENABLED: z.string().default('true').transform((v) => v === 'true'),
 
+  // Escalada automatica de mora (Fase 1 -> 2 a los 4 dias, 2 -> 3 a los 10).
+  // OFF por defecto: cada escalada le envia al inquilino la plantilla de
+  // WhatsApp MORA_FASE_2/3. Encender cuando esas plantillas esten aprobadas en
+  // Meta; mientras tanto el operador escala a mano desde /moras.
+  MORAS_AUTOESCALAR_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+
   // Firma multi-parte (arrendatario + arrendador + Cofianza) en un solo sobre Auco.
   // OFF por defecto: mientras siga en false, la firma usa el flujo de un solo
   // firmante (arrendatario). Activar solo cuando estén listos los teléfonos
