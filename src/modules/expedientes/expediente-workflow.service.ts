@@ -9,7 +9,7 @@ import {
   type PreconditionId,
 } from './expediente-state-machine';
 import { getExpedienteById } from './expedientes.service';
-import { perfilEsDuenoDeInmueble, assertExpedienteAccess, esMiembroSoloLectura } from '@/lib/tenantScope';
+import { perfilEsDuenoDeInmueble, assertExpedienteAccess, resolveRolMiembro } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { TransitionInput } from './expediente-workflow.schema';
 
@@ -298,10 +298,12 @@ export async function getTransitionsForExpediente(expedienteId: string, userId?:
 
   // Solo lectura (Gerencia y el miembro 'solo_lectura' de una inmobiliaria):
   // el POST de transiciones los rechaza siempre, asi que ofrecerles transiciones
-  // los llevaba a escribir el comentario y chocar con un 403.
+  // los llevaba a escribir el comentario y chocar con un 403. Misma fuente
+  // (resolveRolMiembro, cacheada) que el write-block de auth.ts: si no, un
+  // titular que ademas es viewer en otra org perdia "Cambiar estado".
   const soloLectura =
     userRol === 'gerencia_consulta' ||
-    (userRol === 'inmobiliaria' && !!userId && (await esMiembroSoloLectura(userId)));
+    (userRol === 'inmobiliaria' && !!userId && (await resolveRolMiembro(userId)) === 'solo_lectura');
   // El dueno (propietario/inmobiliaria) solo puede cerrar: ofrecerle "Aprobar"
   // o "Rechazar" lo llevaba a escribir el comentario y recibir un 403 al final
   // (executeTransition aplica esta misma lista mas abajo).
