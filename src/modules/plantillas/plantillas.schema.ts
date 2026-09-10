@@ -21,7 +21,7 @@ export const STANDARD_VARIABLES = [
 // ============================================================
 
 export const plantillaIdParamsSchema = z.object({
-  id: z.string().uuid('ID de plantilla invalido'),
+  id: z.string().uuid('ID de plantilla inválido'),
 });
 
 // ============================================================
@@ -33,7 +33,7 @@ export const createPlantillaSchema = z.object({
     .min(1, 'El nombre es requerido')
     .max(200, 'Nombre no debe exceder 200 caracteres'),
   descripcion: z.string()
-    .max(1000, 'Descripcion no debe exceder 1000 caracteres')
+    .max(1000, 'Descripción no debe exceder 1000 caracteres')
     .optional(),
   contenido: z.string()
     .min(1, 'El contenido es requerido'),
@@ -50,11 +50,11 @@ export const updatePlantillaSchema = z.object({
     .max(200, 'Nombre no debe exceder 200 caracteres')
     .optional(),
   descripcion: z.string()
-    .max(1000, 'Descripcion no debe exceder 1000 caracteres')
+    .max(1000, 'Descripción no debe exceder 1000 caracteres')
     .nullable()
     .optional(),
   contenido: z.string()
-    .min(1, 'El contenido no puede estar vacio')
+    .min(1, 'El contenido no puede estar vacío')
     .optional(),
   activa: z.boolean().optional(),
 });

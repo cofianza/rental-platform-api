@@ -12,7 +12,7 @@ export const listAuditLogsQuerySchema = z.object({
 });
 
 export const auditLogIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID invalido' }),
+  id: z.uuid({ error: 'ID inválido' }),
 });
 
 export type ListAuditLogsQuery = z.infer<typeof listAuditLogsQuerySchema>;

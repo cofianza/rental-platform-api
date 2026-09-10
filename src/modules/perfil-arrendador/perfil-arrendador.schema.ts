@@ -35,7 +35,7 @@ export const updatePerfilArrendadorSchema = z.object({
 
   // Recaudo
   whatsapp_recaudo: z.string().max(30).optional().nullable(),
-  email_recaudo: z.string().email('Email invalido').optional().nullable().or(z.literal('')),
+  email_recaudo: z.string().email('Email inválido').optional().nullable().or(z.literal('')),
   cuenta_recaudo_banco: z.string().max(80).optional().nullable(),
   cuenta_recaudo_tipo: z.enum(['ahorros', 'corriente']).optional().nullable(),
   cuenta_recaudo_numero: z.string().max(40).optional().nullable(),

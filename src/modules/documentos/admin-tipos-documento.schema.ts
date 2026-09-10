@@ -8,35 +8,35 @@ export const listAdminTiposQuerySchema = z.object({
 });
 
 export const tipoDocumentoIdSchema = z.object({
-  id: z.uuid({ error: 'ID de tipo de documento invalido' }),
+  id: z.uuid({ error: 'ID de tipo de documento inválido' }),
 });
 
 export const createTipoDocumentoSchema = z.object({
   codigo: z
     .string()
-    .min(2, 'Codigo debe tener al menos 2 caracteres')
-    .max(50, 'Codigo muy largo')
-    .regex(/^[a-z0-9_]+$/, 'Codigo solo admite letras minusculas, numeros y guion bajo'),
+    .min(2, 'Código debe tener al menos 2 caracteres')
+    .max(50, 'Código muy largo')
+    .regex(/^[a-z0-9_]+$/, 'Código solo admite letras minusculas, números y guion bajo'),
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
-  descripcion: z.string().max(500, 'Descripcion muy larga').nullable().optional(),
+  descripcion: z.string().max(500, 'Descripción muy larga').nullable().optional(),
   es_obligatorio: z.boolean(),
   formatos_aceptados: z.array(z.string()).min(1, 'Al menos un formato requerido'),
-  tamano_maximo_mb: z.coerce.number().min(1, 'Tamano minimo 1 MB').max(10, 'Tamano maximo 10 MB (limite del bucket)'),
+  tamano_maximo_mb: z.coerce.number().min(1, 'Tamaño mínimo 1 MB').max(10, 'Tamaño máximo 10 MB (limite del bucket)'),
   orden: z.coerce.number().int().min(0).optional(),
 });
 
 export const updateTipoDocumentoSchema = z.object({
   codigo: z
     .string()
-    .min(2, 'Codigo debe tener al menos 2 caracteres')
-    .max(50, 'Codigo muy largo')
-    .regex(/^[a-z0-9_]+$/, 'Codigo solo admite letras minusculas, numeros y guion bajo')
+    .min(2, 'Código debe tener al menos 2 caracteres')
+    .max(50, 'Código muy largo')
+    .regex(/^[a-z0-9_]+$/, 'Código solo admite letras minusculas, números y guion bajo')
     .optional(),
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo').optional(),
-  descripcion: z.string().max(500, 'Descripcion muy larga').nullable().optional(),
+  descripcion: z.string().max(500, 'Descripción muy larga').nullable().optional(),
   es_obligatorio: z.boolean().optional(),
   formatos_aceptados: z.array(z.string()).min(1, 'Al menos un formato requerido').optional(),
-  tamano_maximo_mb: z.coerce.number().min(1, 'Tamano minimo 1 MB').max(10, 'Tamano maximo 10 MB (limite del bucket)').optional(),
+  tamano_maximo_mb: z.coerce.number().min(1, 'Tamaño mínimo 1 MB').max(10, 'Tamaño máximo 10 MB (limite del bucket)').optional(),
   orden: z.coerce.number().int().min(0).optional(),
 });
 

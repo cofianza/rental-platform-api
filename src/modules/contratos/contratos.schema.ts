@@ -5,11 +5,11 @@ import { z } from 'zod';
 // ============================================================
 
 export const contratoIdParamsSchema = z.object({
-  id: z.string().uuid('ID de contrato invalido'),
+  id: z.string().uuid('ID de contrato inválido'),
 });
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.string().uuid('ID de estudio invalido'),
+  expedienteId: z.string().uuid('ID de estudio inválido'),
 });
 
 // ============================================================
@@ -19,11 +19,11 @@ export const expedienteIdParamsSchema = z.object({
 export const generarContratoSchema = z.object({
   // plantilla_id es opcional: si el inmueble tiene contrato_tipo subido por
   // el propietario, se usa ese PDF en lugar de compilar desde plantilla.
-  plantilla_id: z.string().uuid('ID de plantilla invalido').optional(),
+  plantilla_id: z.string().uuid('ID de plantilla inválido').optional(),
   // 4.1e: sin escape hatch `variables` (z.record libre) — permitía sobreescribir
   // cualquier placeholder del contrato (identidad del arrendatario, canon).
   // Mismo cierre que en regenerar/renovar; los ajustes van por campos tipados.
-  fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha invalido (YYYY-MM-DD)').optional(),
+  fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
   // Condiciones de fianza del contrato V4 — se persisten en el expediente.
   modalidad_fianza: z.enum(['plena', 'compartida', 'plus']).optional(),
@@ -44,7 +44,7 @@ export const generarContratoSchema = z.object({
 // ============================================================
 
 export const renovarContratoSchema = z.object({
-  fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha invalido (YYYY-MM-DD)').optional(),
+  fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
   // 4.1e: se eliminó el escape hatch `variables` — la renovación renderiza con
   // plantilla legacy plana y un override libre permitía alterar la identidad
@@ -102,13 +102,13 @@ export const listAllContratosQuerySchema = z.object({
 // ============================================================
 
 export const versionDescargarParamsSchema = z.object({
-  id: z.string().uuid('ID de contrato invalido'),
-  versionNum: z.coerce.number().int().min(1, 'Numero de version invalido'),
+  id: z.string().uuid('ID de contrato inválido'),
+  versionNum: z.coerce.number().int().min(1, 'Número de versión inválido'),
 });
 
 export const compararVersionesQuerySchema = z.object({
-  v1: z.coerce.number().int().min(1, 'Version v1 invalida'),
-  v2: z.coerce.number().int().min(1, 'Version v2 invalida'),
+  v1: z.coerce.number().int().min(1, 'Versión v1 inválida'),
+  v2: z.coerce.number().int().min(1, 'Versión v2 inválida'),
 });
 
 // ============================================================

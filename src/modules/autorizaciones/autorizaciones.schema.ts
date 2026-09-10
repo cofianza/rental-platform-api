@@ -5,11 +5,11 @@ import { z } from 'zod';
 // ============================================================
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.string().uuid('ID de estudio invalido'),
+  expedienteId: z.string().uuid('ID de estudio inválido'),
 });
 
 export const tokenParamsSchema = z.object({
-  token: z.string().min(32, 'Token invalido').max(64, 'Token invalido'),
+  token: z.string().min(32, 'Token inválido').max(64, 'Token inválido'),
 });
 
 // ============================================================
@@ -21,7 +21,7 @@ export const tokenParamsSchema = z.object({
 // propietario, que no tiene PATCH de solicitantes) y el enlace va al corregido.
 export const enviarEnlaceAutorizacionSchema = z
   .object({
-    email: z.string().email('Email invalido').optional(),
+    email: z.string().email('Email inválido').optional(),
     telefono: z.string().max(20).optional(),
   })
   .optional();
@@ -39,10 +39,10 @@ export const enviarEnlaceAutorizacionSchema = z
 // aceptacion (fecha, hora, IP, dispositivo, texto y documento confirmado).
 export const firmarSchema = z.object({
   metodo_firma: z.enum(['casilla', 'canvas', 'otp'], {
-    message: 'Metodo de firma invalido. Valores permitidos: casilla, canvas, otp',
+    message: 'Método de firma inválido. Valores permitidos: casilla, canvas, otp',
   }),
-  datos_firma: z.string().min(100, 'Firma invalida').max(500000, 'Firma demasiado grande').optional(),
-  codigo_otp: z.string().length(6, 'Codigo OTP debe ser de 6 digitos').optional(),
+  datos_firma: z.string().min(100, 'Firma inválida').max(500000, 'Firma demasiado grande').optional(),
+  codigo_otp: z.string().length(6, 'Código OTP debe ser de 6 dígitos').optional(),
   // Flujo §8.1: la web confirma la identidad por /perfil (fallo tragado) y
   // repite la marca al firmar. Mismo contrato que perfilProspectoSchema:
   // literal(true) o nada — un cliente no puede registrar "confirme" con false.
@@ -60,14 +60,14 @@ export const firmarSchema = z.object({
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['datos_firma'],
-      message: 'La firma es requerida para el metodo canvas',
+      message: 'La firma es requerida para el método canvas',
     });
   }
   if (data.metodo_firma === 'otp' && !data.codigo_otp) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['codigo_otp'],
-      message: 'El codigo OTP es requerido para verificacion por OTP',
+      message: 'El código OTP es requerido para verificación por OTP',
     });
   }
 });
@@ -105,7 +105,7 @@ export const perfilProspectoSchema = z.object({
     .object({
       nombre: z.string().min(1).max(100),
       apellido: z.string().min(1).max(100),
-      email: z.email('Email invalido').optional(),
+      email: z.email('Email inválido').optional(),
       telefono: z.string().max(20).optional(),
     })
     .refine((c) => !!(c.email || c.telefono), {
@@ -131,11 +131,11 @@ export const perfilProspectoSchema = z.object({
  */
 const imagenBase64 = z
   .string()
-  .min(100, 'Imagen vacia o incompleta')
+  .min(100, 'Imagen vacía o incompleta')
   .max(1_400_000, 'La imagen es demasiado grande: vuelve a tomarla')
   .refine(
     (v) => /^data:image\/(jpeg|jpg|png);base64,[A-Za-z0-9+/=\s]+$/.test(v) || /^[A-Za-z0-9+/=\s]+$/.test(v),
-    { message: 'Formato de imagen invalido (se espera JPEG o PNG en base64)' },
+    { message: 'Formato de imagen inválido (se espera JPEG o PNG en base64)' },
   );
 
 export const biometriaSchema = z.object({
@@ -168,7 +168,7 @@ export const revocarSchema = z.object({
   // sin esta via no tendria forma de ejercer su derecho de revocacion
   // (Ley 1581 de 2012, art. 8), porque la fila del titular y la suya comparten
   // expediente_id.
-  coarrendatario_id: z.uuid({ error: 'ID de co-arrendatario invalido' }).optional(),
+  coarrendatario_id: z.uuid({ error: 'ID de co-arrendatario inválido' }).optional(),
 });
 
 // ============================================================
@@ -176,7 +176,7 @@ export const revocarSchema = z.object({
 // ============================================================
 
 export const verificarOtpSchema = z.object({
-  codigo: z.string().length(6, 'Codigo debe ser de 6 digitos'),
+  codigo: z.string().length(6, 'Código debe ser de 6 dígitos'),
 });
 
 // ============================================================

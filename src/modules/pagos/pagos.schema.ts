@@ -13,11 +13,11 @@ export const ESTADOS_PAGO = ['pendiente', 'procesando', 'completado', 'fallido',
 // ============================================================
 
 export const pagoIdParamsSchema = z.object({
-  pagoId: z.uuid({ error: 'ID de pago invalido' }),
+  pagoId: z.uuid({ error: 'ID de pago inválido' }),
 });
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.uuid({ error: 'ID de estudio invalido' }),
+  expedienteId: z.uuid({ error: 'ID de estudio inválido' }),
 });
 
 // ============================================================
@@ -25,10 +25,10 @@ export const expedienteIdParamsSchema = z.object({
 // ============================================================
 
 export const createPaymentLinkSchema = z.object({
-  concepto: z.enum(CONCEPTOS_PAGO, { error: 'Concepto invalido' }),
+  concepto: z.enum(CONCEPTOS_PAGO, { error: 'Concepto inválido' }),
   monto: z.number().int().positive('Monto debe ser un entero positivo en COP'),
-  descripcion: z.string().max(500).min(1, 'Descripcion es requerida'),
-  email_pagador: z.email({ error: 'Email del pagador invalido' }),
+  descripcion: z.string().max(500).min(1, 'Descripción es requerida'),
+  email_pagador: z.email({ error: 'Email del pagador inválido' }),
   nombre_pagador: z.string().min(1, 'Nombre del pagador es requerido').max(200),
   enviar_email: z.boolean().default(true),
 });
@@ -38,9 +38,9 @@ export const createPaymentLinkSchema = z.object({
 // ============================================================
 
 export const registerManualPaymentSchema = z.object({
-  concepto: z.enum(CONCEPTOS_PAGO, { error: 'Concepto invalido' }),
+  concepto: z.enum(CONCEPTOS_PAGO, { error: 'Concepto inválido' }),
   monto: z.number().int().positive('Monto debe ser un entero positivo en COP'),
-  metodo: z.enum(['transferencia', 'efectivo', 'cheque'] as const, { error: 'Metodo de pago invalido' }),
+  metodo: z.enum(['transferencia', 'efectivo', 'cheque'] as const, { error: 'Método de pago inválido' }),
   descripcion: z.string().max(500).optional(),
   referencia_bancaria: z.string().max(255).optional(),
   notas: z.string().max(2000).optional(),

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
 export const facturaIdParamsSchema = z.object({
-  id: z.string().uuid('ID de factura invalido'),
+  id: z.string().uuid('ID de factura inválido'),
 });
 
 export const pagoIdParamsSchema = z.object({
-  pagoId: z.string().uuid('ID de pago invalido'),
+  pagoId: z.string().uuid('ID de pago inválido'),
 });
 
 export const listFacturasQuerySchema = z.object({
@@ -22,7 +22,7 @@ export const updateTarifasIvaSchema = z.object({
     .array(
       z.object({
         concepto: conceptoFacturable,
-        tasa: z.number().min(0, 'No puede ser negativa').max(100, 'Maximo 100'),
+        tasa: z.number().min(0, 'No puede ser negativa').max(100, 'Máximo 100'),
       }),
     )
     .min(1, 'Envia al menos una tarifa'),
@@ -36,9 +36,9 @@ export const facturarPagoSchema = z.object({
   tipo_documento: z.string().min(1).max(20).optional(),
   nombre_completo: z.string().min(1).max(200).optional(),
   direccion: z.string().min(1).max(200).optional(),
-  email: z.string().email('Email invalido').max(200).optional(),
+  email: z.string().email('Email inválido').max(200).optional(),
   telefono: z.string().min(1).max(20).optional(),
-  municipio_codigo: z.string().regex(/^\d{5}$/, 'Codigo DANE invalido (5 digitos)').optional(),
+  municipio_codigo: z.string().regex(/^\d{5}$/, 'Código DANE inválido (5 dígitos)').optional(),
 });
 
 export type FacturaIdParams = z.infer<typeof facturaIdParamsSchema>;

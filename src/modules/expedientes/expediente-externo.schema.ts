@@ -5,8 +5,8 @@ import { z } from 'zod';
 // ============================================================
 
 export const crearExpedienteExternoSchema = z.object({
-  inmueble_id: z.string().uuid({ message: 'ID de inmueble invalido' }),
-  email_invitacion: z.string().email({ message: 'Email de invitacion invalido' }),
+  inmueble_id: z.string().uuid({ message: 'ID de inmueble inválido' }),
+  email_invitacion: z.string().email({ message: 'Email de invitacion inválido' }),
   notas: z.string().max(500, { message: 'Notas no deben exceder 500 caracteres' }).optional(),
 });
 

@@ -13,22 +13,22 @@ export const listUsersQuerySchema = z.object({
 });
 
 export const userIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de usuario invalido' }),
+  id: z.uuid({ error: 'ID de usuario inválido' }),
 });
 
 export const createUserSchema = z.object({
-  email: z.email({ error: 'Email invalido' }),
+  email: z.email({ error: 'Email inválido' }),
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
   apellido: z.string().min(1, 'Apellido requerido').max(100, 'Apellido muy largo'),
-  telefono: z.string().max(20, 'Telefono muy largo').optional(),
-  rol: z.enum(ROLES_USUARIO, { error: 'Rol invalido. Roles permitidos: administrador, operador_analista, gerencia_consulta, propietario, inmobiliaria' }),
+  telefono: z.string().max(20, 'Teléfono muy largo').optional(),
+  rol: z.enum(ROLES_USUARIO, { error: 'Rol inválido. Roles permitidos: administrador, operador_analista, gerencia_consulta, propietario, inmobiliaria' }),
 });
 
 export const updateUserSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo').optional(),
   apellido: z.string().min(1, 'Apellido requerido').max(100, 'Apellido muy largo').optional(),
-  telefono: z.string().max(20, 'Telefono muy largo').nullable().optional(),
-  rol: z.enum(ROLES_USUARIO, { error: 'Rol invalido. Roles permitidos: administrador, operador_analista, gerencia_consulta, propietario, inmobiliaria' }).optional(),
+  telefono: z.string().max(20, 'Teléfono muy largo').nullable().optional(),
+  rol: z.enum(ROLES_USUARIO, { error: 'Rol inválido. Roles permitidos: administrador, operador_analista, gerencia_consulta, propietario, inmobiliaria' }).optional(),
 });
 
 // Reset de contraseña por administrador — el admin ingresa directamente
@@ -37,10 +37,10 @@ export const updateUserSchema = z.object({
 export const resetPasswordByAdminSchema = z.object({
   password: z
     .string()
-    .min(8, 'La contrasena debe tener al menos 8 caracteres')
+    .min(8, 'La contraseña debe tener al menos 8 caracteres')
     .regex(
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
-      'La contrasena debe contener al menos 1 mayuscula, 1 minuscula y 1 numero',
+      'La contraseña debe contener al menos 1 mayúscula, 1 minúscula y 1 número',
     ),
 });
 

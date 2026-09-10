@@ -5,15 +5,15 @@ export { expedienteIdParamsSchema } from './expediente-workflow.schema';
 
 // Params: expedienteId + commentId
 export const commentParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de estudio invalido' }),
-  commentId: z.uuid({ error: 'ID de comentario invalido' }),
+  id: z.uuid({ error: 'ID de estudio inválido' }),
+  commentId: z.uuid({ error: 'ID de comentario inválido' }),
 });
 
 // Body: create comment
 export const createCommentSchema = z.object({
   texto: z
     .string()
-    .min(1, { error: 'El comentario no puede estar vacio' })
+    .min(1, { error: 'El comentario no puede estar vacío' })
     .max(5000, { error: 'El comentario no debe exceder 5000 caracteres' }),
   is_internal: z.boolean().default(true).optional(),
 });
@@ -22,7 +22,7 @@ export const createCommentSchema = z.object({
 export const updateCommentSchema = z.object({
   texto: z
     .string()
-    .min(1, { error: 'El comentario no puede estar vacio' })
+    .min(1, { error: 'El comentario no puede estar vacío' })
     .max(5000, { error: 'El comentario no debe exceder 5000 caracteres' }),
 });
 

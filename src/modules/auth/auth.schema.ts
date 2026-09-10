@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 export const loginSchema = z.object({
-  email: z.email({ error: 'Email invalido' }),
-  password: z.string().min(1, 'Contrasena requerida'),
+  email: z.email({ error: 'Email inválido' }),
+  password: z.string().min(1, 'Contraseña requerida'),
 });
 
 export const refreshSchema = z.object({
@@ -10,17 +10,17 @@ export const refreshSchema = z.object({
 });
 
 export const forgotPasswordSchema = z.object({
-  email: z.email({ error: 'Email invalido' }),
+  email: z.email({ error: 'Email inválido' }),
 });
 
 export const resetPasswordSchema = z.object({
   token: z.string().min(1, 'Token requerido'),
   password: z
     .string()
-    .min(8, 'La contrasena debe tener al menos 8 caracteres')
+    .min(8, 'La contraseña debe tener al menos 8 caracteres')
     .regex(
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
-      'La contrasena debe contener al menos 1 mayuscula, 1 minuscula y 1 numero',
+      'La contraseña debe contener al menos 1 mayúscula, 1 minúscula y 1 número',
     ),
 });
 

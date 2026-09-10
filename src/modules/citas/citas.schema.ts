@@ -12,8 +12,8 @@ export type EstadoCita = (typeof ESTADOS_CITA)[number];
 // ============================================================
 
 export const createCitaSchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de estudio invalido' }),
-  fecha_propuesta: z.string().datetime({ offset: true, message: 'Fecha propuesta debe ser una fecha/hora valida en formato ISO 8601' }),
+  expediente_id: z.uuid({ error: 'ID de estudio inválido' }),
+  fecha_propuesta: z.string().datetime({ offset: true, message: 'Fecha propuesta debe ser una fecha/hora válida en formato ISO 8601' }),
   notas_solicitante: z.string().max(2000, { error: 'Notas no deben exceder 2000 caracteres' }).optional(),
   // Solo propietario/inmobiliaria/admin pueden marcar como confirmada al crear
   confirmar_inmediatamente: z.boolean().optional(),
@@ -24,7 +24,7 @@ export const createCitaSchema = z.object({
 // ============================================================
 
 export const confirmarCitaSchema = z.object({
-  fecha_confirmada: z.string().datetime({ offset: true, message: 'Fecha confirmada debe ser una fecha/hora valida en formato ISO 8601' }).optional(),
+  fecha_confirmada: z.string().datetime({ offset: true, message: 'Fecha confirmada debe ser una fecha/hora válida en formato ISO 8601' }).optional(),
   notas_propietario: z.string().max(2000, { error: 'Notas no deben exceder 2000 caracteres' }).optional(),
 });
 
@@ -33,7 +33,7 @@ export const confirmarCitaSchema = z.object({
 // ============================================================
 
 export const reprogramarCitaSchema = z.object({
-  fecha_confirmada: z.string().datetime({ offset: true, message: 'Fecha confirmada debe ser una fecha/hora valida en formato ISO 8601' }),
+  fecha_confirmada: z.string().datetime({ offset: true, message: 'Fecha confirmada debe ser una fecha/hora válida en formato ISO 8601' }),
   notas_propietario: z.string().max(2000, { error: 'Notas no deben exceder 2000 caracteres' }).optional(),
 });
 
@@ -58,7 +58,7 @@ export const cancelarCitaSchema = z.object({
 // ============================================================
 
 export const citaIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de cita invalido' }),
+  id: z.uuid({ error: 'ID de cita inválido' }),
 });
 
 // ============================================================
@@ -66,8 +66,8 @@ export const citaIdParamsSchema = z.object({
 // ============================================================
 
 export const listCitasQuerySchema = z.object({
-  expediente_id: z.uuid({ error: 'ID de estudio invalido' }).optional(),
-  estado: z.enum(ESTADOS_CITA, { error: `Estado invalido. Valores permitidos: ${ESTADOS_CITA.join(', ')}` }).optional(),
+  expediente_id: z.uuid({ error: 'ID de estudio inválido' }).optional(),
+  estado: z.enum(ESTADOS_CITA, { error: `Estado inválido. Valores permitidos: ${ESTADOS_CITA.join(', ')}` }).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

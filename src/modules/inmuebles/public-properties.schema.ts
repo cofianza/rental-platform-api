@@ -20,7 +20,7 @@ export const listPublicPropertiesSchema = z.object({
 });
 
 export const propertyIdParamsSchema = z.object({
-  id: z.string().uuid('ID de inmueble invalido'),
+  id: z.string().uuid('ID de inmueble inválido'),
 });
 
 export type ListPublicPropertiesQuery = z.infer<typeof listPublicPropertiesSchema>;

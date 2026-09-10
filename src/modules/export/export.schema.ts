@@ -8,8 +8,8 @@ const isoDateRegex = /^\d{4}-\d{2}-\d{2}/;
 
 export const exportQuerySchema = z.object({
   format: z.enum(['csv', 'xlsx']).default('csv'),
-  dateFrom: z.string().regex(isoDateRegex, 'Formato fecha invalido').optional(),
-  dateTo: z.string().regex(isoDateRegex, 'Formato fecha invalido').optional(),
+  dateFrom: z.string().regex(isoDateRegex, 'Formato fecha inválido').optional(),
+  dateTo: z.string().regex(isoDateRegex, 'Formato fecha inválido').optional(),
   estado: z.string().max(50).optional(),
   concepto: z.string().max(50).optional(),
   search: z.string().max(200).optional(),

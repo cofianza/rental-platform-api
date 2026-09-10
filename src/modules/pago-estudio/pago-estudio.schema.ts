@@ -1,15 +1,15 @@
 import { z } from 'zod';
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.uuid({ error: 'ID de estudio invalido' }),
+  expedienteId: z.uuid({ error: 'ID de estudio inválido' }),
 });
 
 export const pagoIdParamsSchema = z.object({
-  pagoId: z.uuid({ error: 'ID de pago invalido' }),
+  pagoId: z.uuid({ error: 'ID de pago inválido' }),
 });
 
 export const enviarLinkSchema = z.object({
-  email_pagador: z.email({ error: 'Email del arrendatario invalido' }),
+  email_pagador: z.email({ error: 'Email del arrendatario inválido' }),
   nombre_pagador: z.string().min(1, 'Nombre del arrendatario es requerido').max(200),
   telefono: z.string().max(20).optional(),
 });
@@ -19,7 +19,7 @@ export const enviarLinkSchema = z.object({
 // reenvía al corregido — la preference de la pasarela no está atada al email).
 export const reenviarLinkSchema = z
   .object({
-    email_pagador: z.email({ error: 'Email del arrendatario invalido' }).optional(),
+    email_pagador: z.email({ error: 'Email del arrendatario inválido' }).optional(),
     nombre_pagador: z.string().min(1).max(200).optional(),
   })
   .optional();

@@ -5,7 +5,7 @@ import { z } from 'zod';
 // ============================================================
 
 export const comprarPaqueteSchema = z.object({
-  paquete_id: z.uuid({ error: 'ID de paquete invalido' }),
+  paquete_id: z.uuid({ error: 'ID de paquete inválido' }),
 });
 
 export const liberarEstudioCreditoSchema = z.object({
@@ -18,9 +18,9 @@ export const liberarEstudioCreditoSchema = z.object({
 
 export const createPaqueteSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
-  descripcion: z.string().max(500, 'Descripcion muy larga').optional(),
-  cantidad_estudios: z.coerce.number().int().min(1, 'Cantidad minima es 1').max(1000, 'Maximo 1000'),
-  precio_cop: z.coerce.number().int().min(1000, 'Precio minimo es $1.000').max(99999999, 'Precio muy alto'),
+  descripcion: z.string().max(500, 'Descripción muy larga').optional(),
+  cantidad_estudios: z.coerce.number().int().min(1, 'Cantidad mínima es 1').max(1000, 'Máximo 1000'),
+  precio_cop: z.coerce.number().int().min(1000, 'Precio mínimo es $1.000').max(99999999, 'Precio muy alto'),
   vence_en_dias: z.coerce.number().int().positive().nullable().optional(),
   activo: z.boolean().default(true),
   orden: z.coerce.number().int().min(0).default(0),
@@ -29,7 +29,7 @@ export const createPaqueteSchema = z.object({
 export const updatePaqueteSchema = createPaqueteSchema.partial();
 
 export const paqueteIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de paquete invalido' }),
+  id: z.uuid({ error: 'ID de paquete inválido' }),
 });
 
 // ============================================================
@@ -43,7 +43,7 @@ export const listMovimientosQuerySchema = z.object({
 });
 
 export const compraIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de compra invalido' }),
+  id: z.uuid({ error: 'ID de compra inválido' }),
 });
 
 // Datos fiscales de la inmobiliaria que pueden venir como override en
@@ -54,9 +54,9 @@ export const facturarCompraSchema = z.object({
   razon_social: z.string().min(1).max(200).optional(),
   nit: z.string().min(1).max(20).optional(),
   direccion: z.string().min(1).max(200).optional(),
-  email: z.string().email('Email invalido').max(200).optional(),
+  email: z.string().email('Email inválido').max(200).optional(),
   telefono: z.string().min(1).max(20).optional(),
-  municipio_codigo: z.string().regex(/^\d{5}$/, 'Codigo DANE invalido (5 digitos)').optional(),
+  municipio_codigo: z.string().regex(/^\d{5}$/, 'Código DANE inválido (5 dígitos)').optional(),
   municipio_nombre: z.string().min(1).max(100).optional(),
   tipo_documento: z.string().min(1).max(5).optional(),
 });

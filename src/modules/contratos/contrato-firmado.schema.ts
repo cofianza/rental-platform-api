@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const contratoFirmadoParamsSchema = z.object({
-  id: z.string().uuid('ID de contrato invalido'),
+  id: z.string().uuid('ID de contrato inválido'),
 });
 
 export const subirFirmadoBodySchema = z.object({

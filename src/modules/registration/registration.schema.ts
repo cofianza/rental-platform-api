@@ -2,10 +2,10 @@ import { z } from 'zod';
 
 const passwordSchema = z
   .string()
-  .min(8, 'La contrasena debe tener al menos 8 caracteres')
+  .min(8, 'La contraseña debe tener al menos 8 caracteres')
   .regex(
     /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
-    'La contrasena debe contener al menos 1 mayuscula, 1 minuscula y 1 numero',
+    'La contraseña debe contener al menos 1 mayúscula, 1 minúscula y 1 número',
   );
 
 /**
@@ -35,22 +35,22 @@ function validateNitModulo11(nit: string): boolean {
 
 const phoneSchema = z
   .string()
-  .min(10, 'Telefono muy corto')
-  .max(20, 'Telefono muy largo')
-  .regex(/^\+\d{1,4}\s?\d{7,15}$/, 'Telefono invalido. Debe incluir lada internacional (ej: +57 3001234567)');
+  .min(10, 'Teléfono muy corto')
+  .max(20, 'Teléfono muy largo')
+  .regex(/^\+\d{1,4}\s?\d{7,15}$/, 'Teléfono inválido. Debe incluir lada internacional (ej: +57 3001234567)');
 
 export const registerPropietarioSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
   apellido: z.string().min(1, 'Apellido requerido').max(100, 'Apellido muy largo'),
-  email: z.email({ error: 'Email invalido' }),
+  email: z.email({ error: 'Email inválido' }),
   telefono: phoneSchema,
   tipo_documento: z.enum(['cc', 'ce', 'pasaporte'], {
-    error: 'Tipo de documento invalido',
+    error: 'Tipo de documento inválido',
   }),
-  numero_documento: z.string().min(1, 'Numero de documento requerido').max(20, 'Numero muy largo'),
-  direccion: z.string().min(1, 'Direccion requerida').max(300, 'Direccion muy larga'),
+  numero_documento: z.string().min(1, 'Número de documento requerido').max(20, 'Número muy largo'),
+  direccion: z.string().min(1, 'Dirección requerida').max(300, 'Dirección muy larga'),
   password: passwordSchema,
-  confirm_password: z.string().min(1, 'Confirmacion de contrasena requerida'),
+  confirm_password: z.string().min(1, 'Confirmacion de contraseña requerida'),
   accept_terms: z.literal(true, {
     error: 'Debes aceptar los terminos y condiciones',
   }),
@@ -58,19 +58,19 @@ export const registerPropietarioSchema = z.object({
     error: 'Debes autorizar el tratamiento de datos personales',
   }),
 }).refine((data) => data.password === data.confirm_password, {
-  error: 'Las contrasenas no coinciden',
+  error: 'Las contraseñas no coinciden',
   path: ['confirm_password'],
 });
 
 export const registerInmobiliariaSchema = z.object({
-  razon_social: z.string().min(1, 'Razon social requerida').max(300, 'Razon social muy larga'),
+  razon_social: z.string().min(1, 'Razón social requerida').max(300, 'Razón social muy larga'),
   nit: z
     .string()
     .min(1, 'NIT requerido')
     .max(20, 'NIT muy largo')
-    .regex(/^\d{1,15}-\d$/, 'NIT invalido. Formato: digitos-digito verificacion')
-    .refine(validateNitModulo11, 'Digito de verificacion del NIT invalido'),
-  direccion_comercial: z.string().min(1, 'Direccion comercial requerida').max(300, 'Direccion muy larga'),
+    .regex(/^\d{1,15}-\d$/, 'NIT inválido. Formato: dígitos-dígito verificación')
+    .refine(validateNitModulo11, 'Dígito de verificación del NIT inválido'),
+  direccion_comercial: z.string().min(1, 'Dirección comercial requerida').max(300, 'Dirección muy larga'),
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga'),
   nombre_representante_nombre: z.string().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
   nombre_representante_apellido: z.string().min(1, 'Apellido del representante requerido').max(100, 'Apellido muy largo'),
@@ -78,10 +78,10 @@ export const registerInmobiliariaSchema = z.object({
   // ¿Qué afianzadora/aseguradora usan hoy? (opcional, tarea 1.6)
   afianzadora_actual: z.string().max(200, 'Nombre muy largo').optional(),
   afianzadora_tipo: z.enum(['afianzadora', 'aseguradora', 'ninguna']).optional(),
-  email: z.email({ error: 'Email invalido' }),
+  email: z.email({ error: 'Email inválido' }),
   telefono: phoneSchema,
   password: passwordSchema,
-  confirm_password: z.string().min(1, 'Confirmacion de contrasena requerida'),
+  confirm_password: z.string().min(1, 'Confirmacion de contraseña requerida'),
   accept_terms: z.literal(true, {
     error: 'Debes aceptar los terminos y condiciones',
   }),
@@ -89,7 +89,7 @@ export const registerInmobiliariaSchema = z.object({
     error: 'Debes autorizar el tratamiento de datos personales',
   }),
 }).refine((data) => data.password === data.confirm_password, {
-  error: 'Las contrasenas no coinciden',
+  error: 'Las contraseñas no coinciden',
   path: ['confirm_password'],
 });
 
@@ -98,7 +98,7 @@ export const verifyEmailParamsSchema = z.object({
 });
 
 export const resendVerificationSchema = z.object({
-  email: z.email({ error: 'Email invalido' }),
+  email: z.email({ error: 'Email inválido' }),
 });
 
 export type RegisterPropietarioInput = z.infer<typeof registerPropietarioSchema>;

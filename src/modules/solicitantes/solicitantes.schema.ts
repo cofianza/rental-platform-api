@@ -57,7 +57,7 @@ export const DEPARTAMENTOS_COLOMBIA = [
 // ============================================================
 
 export const applicantIdParamsSchema = z.object({
-  id: z.uuid({ error: 'ID de solicitante invalido' }),
+  id: z.uuid({ error: 'ID de solicitante inválido' }),
 });
 
 // ============================================================
@@ -67,20 +67,20 @@ export const applicantIdParamsSchema = z.object({
 export const createApplicantSchema = z.object({
   // Obligatorios
   tipo_persona: z.enum(TIPOS_PERSONA, {
-    error: `Tipo de persona invalido. Valores permitidos: ${TIPOS_PERSONA.join(', ')}`,
+    error: `Tipo de persona inválido. Valores permitidos: ${TIPOS_PERSONA.join(', ')}`,
   }),
   nombre: z.string().min(1, 'Nombre es requerido').max(100, 'Nombre no debe exceder 100 caracteres'),
   apellido: z.string().min(1, 'Apellido es requerido').max(100, 'Apellido no debe exceder 100 caracteres'),
   tipo_documento: z.enum(TIPOS_DOCUMENTO, {
-    error: `Tipo de documento invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
+    error: `Tipo de documento inválido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
   }),
-  numero_documento: z.string().min(1, 'Numero de documento es requerido').max(20, 'Numero de documento no debe exceder 20 caracteres'),
-  email: z.email({ error: 'Email invalido' }),
+  numero_documento: z.string().min(1, 'Número de documento es requerido').max(20, 'Número de documento no debe exceder 20 caracteres'),
+  email: z.email({ error: 'Email inválido' }),
   // Opcionales
-  telefono: z.string().max(20, 'Telefono no debe exceder 20 caracteres').optional(),
-  direccion: z.string().max(300, 'Direccion no debe exceder 300 caracteres').optional(),
+  telefono: z.string().max(20, 'Teléfono no debe exceder 20 caracteres').optional(),
+  direccion: z.string().max(300, 'Dirección no debe exceder 300 caracteres').optional(),
   departamento: z.enum(DEPARTAMENTOS_COLOMBIA, {
-    error: `Departamento invalido. Debe ser un departamento colombiano valido`,
+    error: `Departamento inválido. Debe ser un departamento colombiano válido`,
   }).optional(),
   ciudad: z.string().max(100, 'Ciudad no debe exceder 100 caracteres').optional(),
   ocupacion: z.string().max(100, 'Ocupacion no debe exceder 100 caracteres').optional(),
@@ -88,7 +88,7 @@ export const createApplicantSchema = z.object({
   empresa: z.string().max(200, 'Nombre del empleador no debe exceder 200 caracteres').optional(),
   ingresos_mensuales: z.coerce.number().min(0, 'Ingresos mensuales no puede ser negativo').optional(),
   nivel_educativo: z.enum(NIVELES_EDUCATIVOS, {
-    error: `Nivel educativo invalido. Valores permitidos: ${NIVELES_EDUCATIVOS.join(', ')}`,
+    error: `Nivel educativo inválido. Valores permitidos: ${NIVELES_EDUCATIVOS.join(', ')}`,
   }).optional(),
   parentesco: z.string().max(50, 'Parentesco no debe exceder 50 caracteres').optional(),
   habitara_inmueble: z.boolean().default(false),
@@ -100,19 +100,19 @@ export const createApplicantSchema = z.object({
 
 export const updateApplicantSchema = z.object({
   tipo_persona: z.enum(TIPOS_PERSONA, {
-    error: `Tipo de persona invalido. Valores permitidos: ${TIPOS_PERSONA.join(', ')}`,
+    error: `Tipo de persona inválido. Valores permitidos: ${TIPOS_PERSONA.join(', ')}`,
   }).optional(),
   nombre: z.string().min(1, 'Nombre es requerido').max(100, 'Nombre no debe exceder 100 caracteres').optional(),
   apellido: z.string().min(1, 'Apellido es requerido').max(100, 'Apellido no debe exceder 100 caracteres').optional(),
   tipo_documento: z.enum(TIPOS_DOCUMENTO, {
-    error: `Tipo de documento invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
+    error: `Tipo de documento inválido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
   }).optional(),
-  numero_documento: z.string().min(1, 'Numero de documento es requerido').max(20, 'Numero de documento no debe exceder 20 caracteres').optional(),
-  email: z.email({ error: 'Email invalido' }).optional(),
-  telefono: z.string().max(20, 'Telefono no debe exceder 20 caracteres').nullable().optional(),
-  direccion: z.string().max(300, 'Direccion no debe exceder 300 caracteres').nullable().optional(),
+  numero_documento: z.string().min(1, 'Número de documento es requerido').max(20, 'Número de documento no debe exceder 20 caracteres').optional(),
+  email: z.email({ error: 'Email inválido' }).optional(),
+  telefono: z.string().max(20, 'Teléfono no debe exceder 20 caracteres').nullable().optional(),
+  direccion: z.string().max(300, 'Dirección no debe exceder 300 caracteres').nullable().optional(),
   departamento: z.enum(DEPARTAMENTOS_COLOMBIA, {
-    error: `Departamento invalido. Debe ser un departamento colombiano valido`,
+    error: `Departamento inválido. Debe ser un departamento colombiano válido`,
   }).nullable().optional(),
   ciudad: z.string().max(100, 'Ciudad no debe exceder 100 caracteres').nullable().optional(),
   ocupacion: z.string().max(100, 'Ocupacion no debe exceder 100 caracteres').nullable().optional(),
@@ -120,7 +120,7 @@ export const updateApplicantSchema = z.object({
   empresa: z.string().max(200, 'Nombre del empleador no debe exceder 200 caracteres').nullable().optional(),
   ingresos_mensuales: z.coerce.number().min(0, 'Ingresos mensuales no puede ser negativo').nullable().optional(),
   nivel_educativo: z.enum(NIVELES_EDUCATIVOS, {
-    error: `Nivel educativo invalido. Valores permitidos: ${NIVELES_EDUCATIVOS.join(', ')}`,
+    error: `Nivel educativo inválido. Valores permitidos: ${NIVELES_EDUCATIVOS.join(', ')}`,
   }).nullable().optional(),
   parentesco: z.string().max(50, 'Parentesco no debe exceder 50 caracteres').nullable().optional(),
   habitara_inmueble: z.boolean().optional(),
@@ -145,9 +145,9 @@ export const listApplicantsQuerySchema = z.object({
 
 export const searchByDocumentQuerySchema = z.object({
   document_type: z.enum(TIPOS_DOCUMENTO, {
-    error: `Tipo de documento invalido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
+    error: `Tipo de documento inválido. Valores permitidos: ${TIPOS_DOCUMENTO.join(', ')}`,
   }),
-  document_number: z.string().min(1, 'Numero de documento es requerido'),
+  document_number: z.string().min(1, 'Número de documento es requerido'),
 });
 
 // ============================================================

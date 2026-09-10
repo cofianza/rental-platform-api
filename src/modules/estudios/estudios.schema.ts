@@ -13,19 +13,19 @@ const PAGO_POR_OPTIONS = ['inmobiliaria', 'arrendatario'] as const;
 // ============================================================
 
 export const estudioIdParamsSchema = z.object({
-  estudioId: z.string().uuid('ID de estudio invalido'),
+  estudioId: z.string().uuid('ID de estudio inválido'),
 });
 
 export const expedienteIdParamsSchema = z.object({
-  expedienteId: z.string().uuid('ID de estudio invalido'),
+  expedienteId: z.string().uuid('ID de estudio inválido'),
 });
 
 export const inmuebleIdParamsSchema = z.object({
-  inmuebleId: z.string().uuid('ID de inmueble invalido'),
+  inmuebleId: z.string().uuid('ID de inmueble inválido'),
 });
 
 export const tokenParamsSchema = z.object({
-  token: z.string().min(32, 'Token invalido').max(64, 'Token invalido'),
+  token: z.string().min(32, 'Token inválido').max(64, 'Token inválido'),
 });
 
 // ============================================================
@@ -34,18 +34,18 @@ export const tokenParamsSchema = z.object({
 
 const estudioBaseFields = {
   tipo: z.enum(TIPOS_ESTUDIO, {
-    message: `Tipo de estudio invalido. Valores permitidos: ${TIPOS_ESTUDIO.join(', ')}`,
+    message: `Tipo de estudio inválido. Valores permitidos: ${TIPOS_ESTUDIO.join(', ')}`,
   }),
   proveedor: z.enum(PROVEEDORES_ESTUDIO, {
-    message: `Proveedor invalido. Valores permitidos: ${PROVEEDORES_ESTUDIO.join(', ')}`,
+    message: `Proveedor inválido. Valores permitidos: ${PROVEEDORES_ESTUDIO.join(', ')}`,
   }),
   duracion_contrato_meses: z.coerce
     .number()
-    .int('Debe ser un numero entero')
-    .min(1, 'Minimo 1 mes')
-    .max(60, 'Maximo 60 meses'),
+    .int('Debe ser un número entero')
+    .min(1, 'Mínimo 1 mes')
+    .max(60, 'Máximo 60 meses'),
   pago_por: z.enum(PAGO_POR_OPTIONS, {
-    message: `Pago por invalido. Valores permitidos: ${PAGO_POR_OPTIONS.join(', ')}`,
+    message: `Pago por inválido. Valores permitidos: ${PAGO_POR_OPTIONS.join(', ')}`,
   }),
   observaciones: z.string().max(2000, 'Observaciones no deben exceder 2000 caracteres').optional(),
 };
@@ -62,7 +62,7 @@ export const createEstudioSchema = z.object(estudioBaseFields);
 
 export const createEstudioFromInmuebleSchema = z.object({
   ...estudioBaseFields,
-  solicitante_id: z.string().uuid('ID de solicitante invalido'),
+  solicitante_id: z.string().uuid('ID de solicitante inválido'),
 });
 
 // ============================================================
@@ -81,9 +81,9 @@ export const listEstudiosQuerySchema = z.object({
 export const submitFormularioSchema = z.object({
   nombre_completo: z.string().min(2, 'Nombre es requerido').max(200),
   tipo_documento: z.string().min(2, 'Tipo de documento es requerido').max(20),
-  numero_documento: z.string().min(3, 'Numero de documento es requerido').max(30),
-  email: z.string().email('Email invalido'),
-  telefono: z.string().min(7, 'Telefono invalido').max(20),
+  numero_documento: z.string().min(3, 'Número de documento es requerido').max(30),
+  email: z.string().email('Email inválido'),
+  telefono: z.string().min(7, 'Teléfono inválido').max(20),
   ingresos_mensuales: z.coerce.number().positive('Ingresos deben ser positivos').optional(),
   ocupacion: z.string().max(100).optional(),
   empresa: z.string().max(200).optional(),
@@ -99,13 +99,13 @@ const RESULTADOS_FINALES = ['aprobado', 'rechazado', 'condicionado'] as const;
 
 export const registrarResultadoSchema = z.object({
   resultado: z.enum(RESULTADOS_FINALES, {
-    message: `Resultado invalido. Valores permitidos: ${RESULTADOS_FINALES.join(', ')}`,
+    message: `Resultado inválido. Valores permitidos: ${RESULTADOS_FINALES.join(', ')}`,
   }),
   score: z.coerce
     .number()
-    .int('El score debe ser un numero entero')
-    .min(0, 'El score minimo es 0')
-    .max(999, 'El score maximo es 999')
+    .int('El score debe ser un número entero')
+    .min(0, 'El score mínimo es 0')
+    .max(999, 'El score máximo es 999')
     .optional(),
   observaciones: z
     .string()
@@ -137,7 +137,7 @@ export const registrarResultadoSchema = z.object({
 
 export const certificadoPresignedUrlSchema = z.object({
   nombre_original: z.string().min(1, 'Nombre es requerido').max(255),
-  tamano_bytes: z.coerce.number().int().positive().max(20 * 1024 * 1024, 'Maximo 20MB'),
+  tamano_bytes: z.coerce.number().int().positive().max(20 * 1024 * 1024, 'Máximo 20MB'),
 });
 
 // ============================================================
@@ -162,7 +162,7 @@ export const listAllEstudiosQuerySchema = z.object({
 // ============================================================
 
 export const codigoParamsSchema = z.object({
-  codigo: z.string().min(10, 'Codigo invalido').max(20, 'Codigo invalido'),
+  codigo: z.string().min(10, 'Código inválido').max(20, 'Código inválido'),
 });
 
 // ============================================================
@@ -187,11 +187,11 @@ const MIME_TYPES_SOPORTE = ['application/pdf', 'image/jpeg', 'image/png'] as con
 export const soportePresignedUrlSchema = z.object({
   nombre_original: z.string().min(1, 'Nombre es requerido').max(255),
   tipo_mime: z.enum(MIME_TYPES_SOPORTE, {
-    message: `Tipo de archivo invalido. Valores permitidos: ${MIME_TYPES_SOPORTE.join(', ')}`,
+    message: `Tipo de archivo inválido. Valores permitidos: ${MIME_TYPES_SOPORTE.join(', ')}`,
   }),
-  tamano_bytes: z.coerce.number().int().positive().max(10 * 1024 * 1024, 'Maximo 10MB'),
+  tamano_bytes: z.coerce.number().int().positive().max(10 * 1024 * 1024, 'Máximo 10MB'),
   proposito: z.enum(PROPOSITOS_SOPORTE, {
-    message: `Proposito invalido. Valores permitidos: ${PROPOSITOS_SOPORTE.join(', ')}`,
+    message: `Proposito inválido. Valores permitidos: ${PROPOSITOS_SOPORTE.join(', ')}`,
   }),
 });
 
@@ -199,11 +199,11 @@ export const confirmarSoporteSchema = z.object({
   storage_key: z.string().min(1, 'Storage key es requerido').max(500),
   nombre_original: z.string().min(1, 'Nombre es requerido').max(255),
   tipo_mime: z.enum(MIME_TYPES_SOPORTE, {
-    message: `Tipo de archivo invalido. Valores permitidos: ${MIME_TYPES_SOPORTE.join(', ')}`,
+    message: `Tipo de archivo inválido. Valores permitidos: ${MIME_TYPES_SOPORTE.join(', ')}`,
   }),
-  tamano_bytes: z.coerce.number().int().positive().max(10 * 1024 * 1024, 'Maximo 10MB'),
+  tamano_bytes: z.coerce.number().int().positive().max(10 * 1024 * 1024, 'Máximo 10MB'),
   proposito: z.enum(PROPOSITOS_SOPORTE, {
-    message: `Proposito invalido. Valores permitidos: ${PROPOSITOS_SOPORTE.join(', ')}`,
+    message: `Proposito inválido. Valores permitidos: ${PROPOSITOS_SOPORTE.join(', ')}`,
   }),
 });
 
@@ -212,7 +212,7 @@ export const confirmarSoporteSchema = z.object({
 // ============================================================
 
 export const reasignarEstudioSchema = z.object({
-  inmueble_id_destino: z.string().uuid('ID de inmueble invalido'),
+  inmueble_id_destino: z.string().uuid('ID de inmueble inválido'),
 });
 
 export const reEvaluarSchema = z.object({
@@ -288,7 +288,7 @@ export const estudioVigenteQuerySchema = z.object({
 // Adenda §5 (nota): condiciones especiales negociadas caso por caso
 // ============================================================
 
-const pctSchema = z.coerce.number().min(0, 'Minimo 0%').max(100, 'Maximo 100%');
+const pctSchema = z.coerce.number().min(0, 'Mínimo 0%').max(100, 'Máximo 100%');
 
 export const tarifaOverrideSchema = z
   .object({
