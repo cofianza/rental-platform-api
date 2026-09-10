@@ -1024,7 +1024,13 @@ const autoGenInflight = new Set<string>();
 export async function listContratosByExpediente(
   expedienteId: string,
   query: ListContratosQuery,
+  userId?: string,
+  userRol?: string,
 ) {
+  // Ownership: sin esto cualquier rol con contratos:read listaba los contratos
+  // de un estudio ajeno por UUID. No-op para roles internos.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
   const sortBy = query.sortBy || 'created_at';
@@ -2249,6 +2255,7 @@ export async function renovarContrato(
   input: RenovarContratoInput,
   userId: string,
   ip?: string,
+  userRol?: string,
 ) {
   // 1. Fetch parent contract
   const { data: parent, error: parentError } = await (supabase
@@ -2270,6 +2277,9 @@ export async function renovarContrato(
     datos_variables: Record<string, string> | null;
     plantilla_version: number;
   };
+  // Ownership (mismo cierre de IDOR que enviar a firma): no se renueva el
+  // contrato de otra organización por UUID.
+  await assertExpedienteAccess(p.expediente_id, userId, userRol);
 
   if (p.estado !== 'vigente') {
     throw AppError.badRequest(

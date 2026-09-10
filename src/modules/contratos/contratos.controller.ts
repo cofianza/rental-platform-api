@@ -60,7 +60,7 @@ export async function listAll(req: Request, res: Response) {
 export async function listByExpediente(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as { expedienteId: string };
   const query = req.query as unknown as ListContratosQuery;
-  const result = await contratosService.listContratosByExpediente(expedienteId, query);
+  const result = await contratosService.listContratosByExpediente(expedienteId, query, req.user?.id, req.user?.rol);
   sendSuccess(res, result.contratos, 200, result.pagination);
 }
 
@@ -128,6 +128,6 @@ export async function compararVersiones(req: Request, res: Response) {
 export async function renovar(req: Request, res: Response) {
   const { id } = req.params as unknown as { id: string };
   const input = req.body as RenovarContratoInput;
-  const contrato = await contratosService.renovarContrato(id, input, req.user!.id, req.ip);
+  const contrato = await contratosService.renovarContrato(id, input, req.user!.id, req.ip, req.user?.rol);
   sendCreated(res, contrato);
 }
