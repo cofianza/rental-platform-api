@@ -5,6 +5,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '@/lib/supabase';
 import { fromSupabaseError } from '@/lib/errors';
+import { resolveAllowedExpedienteIds, resolveAllowedInmuebleIds } from '@/lib/tenantScope';
 import * as reportesService from '@/modules/reportes/reportes.service';
 import { generateCSV, generateXLSX, type ExportColumn } from './export.service';
 import type { ExportQuery } from './export.schema';
@@ -36,6 +37,12 @@ const EXPEDIENTE_COLS: ExportColumn[] = [
 
 export async function exportExpedientes(req: Request, res: Response) {
   const q = getQuery(req);
+  // Tenant (el cliente es service_role: no hay RLS). Sin esto cualquier rol con
+  // expedientes:read —propietario, inmobiliaria, solicitante— descargaba los
+  // estudios de TODA la plataforma, con el nombre de cada prospecto.
+  // ponytail: .in() con la lista de ids, igual que el resto de tenantScope; si
+  // una organización llega a miles de estudios, filtrar en SQL (RPC).
+  const allowed = await resolveAllowedExpedienteIds(req.user?.id, req.user?.rol);
 
   let qb = supabase
     .from('expedientes')
@@ -46,8 +53,10 @@ export async function exportExpedientes(req: Request, res: Response) {
   if (q.estado) qb = qb.eq('estado', q.estado);
   if (q.fecha_desde) qb = qb.gte('created_at', q.fecha_desde);
   if (q.fecha_hasta) qb = qb.lte('created_at', q.fecha_hasta);
+  if (allowed !== null) qb = qb.in('id', allowed);
 
-  const { data, error } = await qb;
+  // Rol scopeado sin estudios visibles: archivo vacío, sin consultar.
+  const { data, error } = allowed !== null && allowed.length === 0 ? { data: [], error: null } : await qb;
   if (error) throw fromSupabaseError(error);
 
   const rows = (data ?? []).map((r: Record<string, unknown>) => {
@@ -84,6 +93,8 @@ const INMUEBLE_COLS: ExportColumn[] = [
 
 export async function exportInmuebles(req: Request, res: Response) {
   const q = getQuery(req);
+  // Mismo scoping de tenant que la lista de inmuebles (ver exportExpedientes).
+  const allowed = await resolveAllowedInmuebleIds(req.user?.id, req.user?.rol);
 
   let qb = supabase
     .from('inmuebles')
@@ -94,8 +105,9 @@ export async function exportInmuebles(req: Request, res: Response) {
   if (q.estado) qb = qb.eq('estado', q.estado);
   if (q.tipo) qb = qb.eq('tipo', q.tipo);
   if (q.ciudad) qb = qb.ilike('ciudad', q.ciudad);
+  if (allowed !== null) qb = qb.in('id', allowed);
 
-  const { data, error } = await qb;
+  const { data, error } = allowed !== null && allowed.length === 0 ? { data: [], error: null } : await qb;
   if (error) throw fromSupabaseError(error);
 
   const rows = (data ?? []) as Record<string, unknown>[];
