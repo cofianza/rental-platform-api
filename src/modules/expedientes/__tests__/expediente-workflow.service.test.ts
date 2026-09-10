@@ -316,6 +316,14 @@ describe('expediente-workflow.service', () => {
       });
     });
 
+    it('Gerencia (solo lectura) no recibe transiciones: el POST se las rechazaria', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'en_revision' });
+
+      const result = await getTransitionsForExpediente('exp-uuid', 'gerencia-uuid', 'gerencia_consulta');
+
+      expect(result.transiciones_disponibles).toEqual([]);
+    });
+
     it('debe retornar 5 transiciones con labels desde en_revision', async () => {
       setupFetchExpediente({ ...mockExpediente, estado: 'en_revision' });
 

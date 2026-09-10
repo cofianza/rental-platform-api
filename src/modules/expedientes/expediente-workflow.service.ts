@@ -9,7 +9,7 @@ import {
   type PreconditionId,
 } from './expediente-state-machine';
 import { getExpedienteById } from './expedientes.service';
-import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
+import { perfilEsDuenoDeInmueble, assertExpedienteAccess, esMiembroSoloLectura } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { TransitionInput } from './expediente-workflow.schema';
 
@@ -296,11 +296,19 @@ export async function getTransitionsForExpediente(expedienteId: string, userId?:
   const expediente = await fetchExpediente(expedienteId);
   const transiciones = getAvailableTransitions(expediente.estado);
 
+  // Solo lectura (Gerencia y el miembro 'solo_lectura' de una inmobiliaria):
+  // el POST de transiciones los rechaza siempre, asi que ofrecerles transiciones
+  // los llevaba a escribir el comentario y chocar con un 403.
+  const soloLectura =
+    userRol === 'gerencia_consulta' ||
+    (userRol === 'inmobiliaria' && !!userId && (await esMiembroSoloLectura(userId)));
   // El dueno (propietario/inmobiliaria) solo puede cerrar: ofrecerle "Aprobar"
   // o "Rechazar" lo llevaba a escribir el comentario y recibir un 403 al final
   // (executeTransition aplica esta misma lista mas abajo).
   const esDueno = userRol === 'propietario' || userRol === 'inmobiliaria';
-  const visibles = esDueno
+  const visibles = soloLectura
+    ? []
+    : esDueno
     ? transiciones.filter((t) =>
         PROPIETARIO_TRANSITIONS.some(
           (p) => p.from === expediente.estado && p.to === (t.estado as EstadoExpediente),
