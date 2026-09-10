@@ -85,6 +85,7 @@ export async function generar(req: Request, res: Response) {
     input,
     req.user!.id,
     req.ip,
+    req.user?.rol,
   );
   sendCreated(res, contrato);
 }

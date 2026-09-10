@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
-import { authMiddleware, authorize } from '@/middleware/auth';
+import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import {
   contratoIdParamsSchema,
   expedienteIdParamsSchema,
@@ -30,9 +30,13 @@ expedienteContratosRouter.get(
 );
 
 // POST /generar — Generate contract from template
+// Mario (2026-05-05): el contrato NO se genera solo; lo genera el dueño del
+// inmueble al definir duración y fecha de inicio. El propietario no tiene
+// contratos:create (renovar sigue siendo de la inmobiliaria y Cofianza), así
+// que esta ruta va por rol, y el service verifica que el estudio sea suyo.
 expedienteContratosRouter.post(
   '/generar',
-  authorize('contratos', 'create'),
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
   validate({ params: expedienteIdParamsSchema, body: generarContratoSchema }),
   contratosController.generar,
 );

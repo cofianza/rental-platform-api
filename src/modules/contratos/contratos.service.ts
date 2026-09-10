@@ -1782,7 +1782,13 @@ export async function generarContrato(
   input: GenerarContratoInput,
   userId: string | null,
   ip?: string,
+  userRol?: string,
 ) {
+  // Ownership: la inmobiliaria A no genera (ni reserva el inmueble de) un
+  // estudio de la B por UUID. No-op para roles internos y para las llamadas
+  // internas sin rol (aprobarCondicionado / generarContratoExpediente).
+  await assertExpedienteAccess(expedienteId, userId ?? undefined, userRol);
+
   // 1. Fetch expediente data (incluye arrendador completo + coarrendatario).
   const { expediente: expRow, data: expData } = await fetchExpedienteData(expedienteId);
   const expedienteNumero = (expRow as { numero?: string }).numero || expedienteId;
