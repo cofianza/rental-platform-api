@@ -132,13 +132,6 @@ export async function resolveNombreDueno(perfilId: string): Promise<string> {
   return `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim() || 'Hola';
 }
 
-/** ¿El perfil es titular (owner) de SU organización activa? Para gatear la
- *  edición de los datos compartidos de la org (solo titulares editan). */
-export async function esTitularDeSuOrg(perfilId: string): Promise<boolean> {
-  const m = await getActiveMembership(perfilId);
-  return m?.rolMiembro === 'owner';
-}
-
 export type VisibilityScope =
   | { kind: 'all' } // rol interno: ve todo
   | { kind: 'org'; orgIds: string[] } // owner, o miembro con miembros_ven_todo=true
