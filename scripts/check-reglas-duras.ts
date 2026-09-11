@@ -125,9 +125,9 @@ function fila(ok: boolean, etiqueta: string, detalle: string): void {
 // ============================================================
 //
 // Es la asercion mas importante del archivo: Gerencia autorizo DTI y
-// canon/ingreso (2026-09-03) y score < 450 (Adenda 2 §2, 2026-09-11), y NADA
-// mas del scorecard. Si alguien agrega otra regla (mora, restitucion) a la
-// lista sin autorizacion escrita, este check cae.
+// canon/ingreso (2026-09-03), score < 450 y mora (Adenda 2 §2 y §1,
+// 2026-09-11), y NADA mas del scorecard. Si alguien agrega otra regla
+// (restitucion) a la lista sin autorizacion escrita, este check cae.
 //
 // 'listas_restrictivas' (§6, OFAC/ONU via Auco, 2026-09-07) esta en la lista
 // pero SOLO puede dispararse con AUCO_BACKGROUND_CHECK_ENABLED=true: sin
@@ -137,8 +137,8 @@ function fila(ok: boolean, etiqueta: string, detalle: string): void {
 console.log('\n── 0. Alcance autorizado ──');
 assert.deepStrictEqual(
   [...REGLAS_DURAS_ACTIVAS],
-  ['score_menor_450', 'dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'],
-  'Gerencia autorizo score < 450 (Adenda 2 §2), DTI (§4.2) y canon/ingreso (§4.3); listas (§6) va tras el interruptor de Auco',
+  ['score_menor_450', 'mora_vigente', 'mora_mayor_30d_6m', 'dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'],
+  'Gerencia autorizo score < 450 (Adenda 2 §2), mora (Adenda 2 §1), DTI (§4.2) y canon/ingreso (§4.3); listas (§6) va tras el interruptor de Auco',
 );
 assert.strictEqual(V2_DTI_MAXIMO, 65, 'la tabla §4.2 dice "> 65%"');
 assert.strictEqual(V3_CANON_INGRESO_MAXIMO, 40, 'la tabla §4.3 dice "> 40%"');
@@ -487,8 +487,10 @@ const conMora = evaluarSombra({
   fecha_evaluacion: HOY,
 });
 const veredictoMora = aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida: conMora });
-assert.strictEqual(veredictoMora.rechaza, false, 'las reglas de mora (V6) no estan autorizadas');
-fila(true, 'mora observada', 'no decide (V6 sigue en sombra)');
+// Adenda 2 §1: saldo en mora > 0 en el consolidado es atraso HOY.
+assert.strictEqual(veredictoMora.rechaza, true, 'saldo en mora vigente -> rechazo (Adenda 2 §1)');
+assert.deepStrictEqual([...(veredictoMora.rechaza ? veredictoMora.reglas : [])], ['mora_vigente']);
+fila(true, 'saldo en mora vigente', 'rechaza (Adenda 2 §1)');
 
 // ============================================================
 // 8. Confirmar vs cambiar: un rechazo que ya lo era
@@ -665,6 +667,98 @@ for (const filtrado of ['80.11', '74.6', '65%', '40%', 'DTI', 'v4.1', 'datacredi
   );
 }
 fila(true, 'separacion de audiencias', 'el §10 no lleva cifras, umbrales, buro ni version del modelo');
+
+// ============================================================
+// 12. Mora (Adenda 2 §1): vigente = atraso HOY; ventana por fecha de ocurrencia
+// ============================================================
+//
+// Payloads armados con la Tabla 4 (estado de pago por obligacion) y la Tabla 5
+// (vector de comportamiento) del manual HDC+. No hay un reporte real con mora:
+// estos son los casos que la Adenda describe, incluido el Caso I (mora antigua
+// pagada que sigue visible NO rechaza).
+
+console.log('\n── 12. Mora (Adenda 2 §1) ──');
+
+const CONSULTA = '2026-09-02';
+function cuentaDC(o: { codigo: string; dias?: number; vencido?: number; corte?: string; entidad?: string }) {
+  return {
+    account: { businessLineName: o.entidad ?? 'BANCO PRUEBA', economicSector: 1 },
+    status: { payment: { businessBureauEvent: o.codigo, businessBureauEventDesc: `ESTADO ${o.codigo}`, paymentDate: o.corte ?? '2026-08-31' } },
+    values: [{ behaviourDate: o.corte ?? '2026-08-31', delinquencyMaturation: o.dias ?? 0, businessValueBalanceOverdue: o.vencido ?? 0 }],
+  };
+}
+/** meses: [fecha, marca Tabla 5] del vector consolidado. */
+function payloadMora(o: { cuentas: unknown[]; meses?: Array<[string, string]>; negativos?: number }) {
+  return {
+    ReportHDCplus: {
+      productResult: { consultDate: CONSULTA },
+      models: [{ modelCode: 'DF', scoreValue: 750 }],
+      productValueList: [[{ productCode: 'DW', reason: '00000', value: 10_000 }]],
+      liabilities: o.cuentas,
+      agregatedInfo: {
+        overview: {
+          balances: { valueMonthlyPayment: 1_000, totalValueBalanceOverdue: 0 },
+          principals: { currentCredits: o.cuentas.length, currentNegativeCredits: o.negativos ?? 0 },
+          behavior: { month: (o.meses ?? []).map(([behaviourDate, behaviour]) => ({ behaviourDate, behaviour })) },
+        },
+      },
+    },
+  };
+}
+function moraDe(payload: unknown) {
+  const salida = evaluarSombra({ proveedor: 'datacredito', payload, canon_mensual_cop: 1_000_000, fecha_evaluacion: `${CONSULTA}T12:00:00.000Z` });
+  return { salida, v: aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida }) };
+}
+
+// Caso I: la obligacion estuvo en mora 30 hace 10 meses y hoy esta al dia
+// (Tabla 4 codigo 13, "Al dia Mora 30"). El dato sigue visible; no es mora
+// vigente ni cae en los 6 meses. El contador agregado de "negativos" (1) ya no
+// decide: era justo el falso positivo que la Adenda prohibe.
+const casoI = moraDe(payloadMora({ cuentas: [cuentaDC({ codigo: '13' })], meses: [['2026-08-31', 'N'], ['2025-11-30', '1']], negativos: 1 }));
+assert.strictEqual(casoI.salida.features.mora_vigente, false, 'Caso I: al dia hoy -> sin mora vigente');
+assert.strictEqual(casoI.salida.features.moras_mayor_30d_ultimos_6m, 0, 'Caso I: la mora ocurrio hace 10 meses, fuera de los 6');
+assert.strictEqual(casoI.v.rechaza, false, 'Caso I: la mora antigua pagada NO rechaza');
+fila(true, 'Caso I: mora 30 hace 10 meses, hoy al dia', 'no rechaza');
+
+// Obligacion cerrada con mora maxima 30 (codigo 09): tampoco.
+const cerrada = moraDe(payloadMora({ cuentas: [cuentaDC({ codigo: '09', vencido: 120_000 })], meses: [['2026-08-31', 'N']] }));
+assert.strictEqual(cerrada.v.rechaza, false, 'cerrada "Pago voluntario MX 30": no es atraso hoy aunque traiga saldo');
+fila(true, 'obligacion cerrada (09)', 'no rechaza');
+
+// Mora vigente por estado de pago (codigo 18, "Esta en mora 60"): rechaza y
+// deja la fecha de ocurrencia = corte menos dias de mora.
+const vigente = moraDe(payloadMora({ cuentas: [cuentaDC({ codigo: '18', dias: 65, vencido: 900_000, corte: '2026-08-31', entidad: 'BANCO X' })] }));
+assert.strictEqual(vigente.v.rechaza, true, 'codigo 18 -> mora vigente -> rechazo');
+assert.ok(vigente.v.rechaza && vigente.v.reglas.includes('mora_vigente'));
+assert.strictEqual(vigente.salida.features.mora_vigente_desde, '2026-06-27', '2026-08-31 menos 65 dias');
+assert.ok(vigente.v.rechaza && vigente.v.motivoGestor.includes('fecha de ocurrencia 2026-06-27') && vigente.v.motivoGestor.includes('BANCO X'), 'el motivo lleva la fecha de ocurrencia y la obligacion');
+assert.ok(vigente.v.rechaza && !/BANCO|2026|65/.test(vigente.v.motivoProspecto), 'el prospecto no ve entidad, fechas ni dias (§2)');
+assert.deepStrictEqual(inferirReglasDurasDesdeMotivo(vigente.v.rechaza ? vigente.v.motivoGestor : null), ['mora_vigente']);
+fila(true, 'codigo 18 (esta en mora 60)', 'rechaza, ocurrencia 2026-06-27');
+
+// Atraso de menos de 30 dias: DataCredito lo reporta "al dia" (01) pero con
+// saldo en mora. Una obligacion abierta con saldo vencido esta en atraso hoy.
+const atrasoCorto = moraDe(payloadMora({ cuentas: [cuentaDC({ codigo: '01', dias: 12, vencido: 250_000 })] }));
+assert.strictEqual(atrasoCorto.v.rechaza, true, 'saldo vencido en obligacion abierta -> mora vigente');
+fila(true, 'al dia (01) con saldo vencido', 'rechaza (atraso < 30 dias)');
+
+// Mora > 30 dias hace 3 meses, hoy todo al dia: regla de los 6 meses.
+const reciente = moraDe(payloadMora({ cuentas: [cuentaDC({ codigo: '14' })], meses: [['2026-08-31', 'N'], ['2026-05-31', '2']] }));
+assert.strictEqual(reciente.salida.features.mora_vigente, false);
+assert.ok(reciente.v.rechaza && reciente.v.reglas.includes('mora_mayor_30d_6m'), 'mora 60 en 2026-05 (dentro de 6 meses) -> rechazo');
+assert.ok(reciente.v.rechaza && reciente.v.motivoGestor.includes('60 dias con fecha de ocurrencia 2026-05-31'));
+fila(true, 'mora 60 hace 3 meses, hoy al dia', 'rechaza (ventana de 6 meses)');
+
+// La misma mora hace 8 meses: fuera de la ventana por fecha de ocurrencia.
+// Contando posiciones desde el corte (lo de antes) caia adentro.
+const vieja = moraDe(payloadMora({ cuentas: [cuentaDC({ codigo: '14' })], meses: [['2026-05-31', 'N'], ['2026-01-31', '1']] }));
+assert.strictEqual(vieja.salida.features.moras_mayor_30d_ultimos_6m, 0, 'hace 8 meses no es "ultimos 6 meses"');
+assert.strictEqual(vieja.v.rechaza, false);
+fila(true, 'mora 30 hace 8 meses', 'no rechaza (fuera de la ventana)');
+
+// Politica §10 Caso C: score 750 y mora vigente -> rechazo; el puntaje no cuenta.
+assert.strictEqual(vigente.salida.features.score_externo, 750);
+fila(true, 'Caso C: score 750 + mora vigente', 'rechazado');
 
 // ============================================================
 

@@ -52,11 +52,11 @@ export interface FeaturesBuro {
   /** Cuando se consulto el buro (ISO). */
   fecha_consulta: string | null;
   /**
-   * Corte de los datos del buro (ISO). Es el ancla de TODAS las ventanas
-   * temporales: en la evidencia real el `consultDate` es 2026-08-21 pero el
-   * ultimo mes con comportamiento es 2026-05-31 — casi 3 meses de rezago.
-   * Anclar en `new Date()` haria que la ventana de 6 meses incluyera meses sin
-   * dato y los leyera como limpios.
+   * Corte de los datos del buro (ISO): ancla de la antiguedad (V8) y de los
+   * 24 meses OBSERVADOS del bono. En la evidencia real el `consultDate` es
+   * 2026-08-21 y el ultimo mes con comportamiento 2026-05-31 — casi 3 meses de
+   * rezago. Las ventanas de MORA (6 y 12 meses) no se anclan aqui sino en la
+   * consulta, por fecha de ocurrencia (Adenda 2 §1).
    */
   fecha_corte_datos: string | null;
 
@@ -83,6 +83,16 @@ export interface FeaturesBuro {
 
   // V6 — comportamiento reciente
   mora_vigente: boolean | null;
+  /**
+   * Adenda 2 §1: "el log debe registrar la fecha de ocurrencia que motivo el
+   * rechazo". Desde cuando esta en mora la obligacion (corte menos dias de
+   * mora) y cual es. null si no hay mora vigente o la central no la fecha.
+   */
+  mora_vigente_desde: string | null;
+  mora_vigente_detalle: string | null;
+  /** Mes de ocurrencia y dias de la mora > 30 dias mas reciente de los ultimos 6 meses. */
+  mora_30d_6m_fecha: string | null;
+  mora_30d_6m_dias: number | null;
   /** Meses de comportamiento efectivamente REPORTADOS (no la ventana pedida).
    *  Cero moras sobre 3 meses no es lo mismo que cero moras sobre 24. */
   meses_observados: number | null;
@@ -122,6 +132,10 @@ export function featuresVacias(proveedor: string): FeaturesBuro {
     sectores: null,
     sin_historial_crediticio: null,
     mora_vigente: null,
+    mora_vigente_desde: null,
+    mora_vigente_detalle: null,
+    mora_30d_6m_fecha: null,
+    mora_30d_6m_dias: null,
     meses_observados: null,
     meses_con_mora_24m: null,
     meses_con_mora_12m: null,
@@ -248,6 +262,86 @@ const DC_COMPORTAMIENTO_MORA: Record<string, number> = {
 };
 const DC_COMPORTAMIENTO_AL_DIA = 'N';
 
+/**
+ * Tabla 4 del manual HDC+ (estado de pago de cada obligacion). Estos codigos
+ * SON mora a la fecha de corte: 17-41 ("esta en mora", "FM/RM ... esta M"),
+ * 45 cartera castigada y 47 dudoso recaudo. Adenda 2 §1: 13-16 ("al dia mora
+ * XX") y las cerradas 06/09-12 ("MX") son moras ANTIGUAS ya normalizadas y NO
+ * cuentan; 60 (en reclamacion) tampoco.
+ */
+const DC_ESTADO_PAGO_EN_MORA: ReadonlySet<string> = new Set([
+  ...Array.from({ length: 25 }, (_, i) => String(17 + i)),
+  '45',
+  '47',
+]);
+/** Tabla 4: obligaciones cerradas (pagadas o canceladas). Su saldo en mora no es atraso hoy. */
+const DC_ESTADO_PAGO_CERRADA: ReadonlySet<string> = new Set(['02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '49']);
+
+/** Resta dias a una fecha ISO (YYYY-MM-DD). Pura: sin reloj. */
+function restarDias(iso: string, dias: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - dias);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Resta meses a una fecha ISO, con el dia topado al fin de mes. Pura. */
+function restarMeses(iso: string, meses: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const total = y * 12 + (m - 1) - meses;
+  const ny = Math.floor(total / 12);
+  const nm = total % 12;
+  const fin = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+  return `${ny}-${String(nm + 1).padStart(2, '0')}-${String(Math.min(d, fin)).padStart(2, '0')}`;
+}
+
+interface ObligacionEnMora {
+  entidad: string | null;
+  estado: string;
+  dias: number | null;
+  /** Fecha de ocurrencia: corte de la obligacion menos sus dias de mora. */
+  desde: string | null;
+}
+
+/**
+ * Obligaciones en atraso a la fecha de corte, leidas una por una (cartera y
+ * tarjetas). En mora = estado de pago de la Tabla 4 en mora, o saldo en mora
+ * > 0 en una obligacion que no esta cerrada. null si el reporte no trae
+ * detalle por obligacion.
+ */
+function obligacionesEnMoraDC(report: Record<string, unknown>): ObligacionEnMora[] | null {
+  const cuentas = [...arr(report.liabilities), ...arr(report.creditCard)]
+    .map(obj)
+    .filter((c): c is Record<string, unknown> => c !== null);
+  if (cuentas.length === 0) return null;
+
+  const enMora: ObligacionEnMora[] = [];
+  for (const c of cuentas) {
+    const pago = obj(obj(c.status)?.payment);
+    const bruto = texto(pago?.businessBureauEvent) ?? (num(pago?.businessBureauEvent) !== null ? String(num(pago?.businessBureauEvent)) : null);
+    const codigo = bruto ? bruto.padStart(2, '0') : null;
+    // El registro de valores mas reciente de la obligacion.
+    const valores = arr(c.values)
+      .map(obj)
+      .filter((v): v is Record<string, unknown> => v !== null)
+      .sort((a, b) => (fechaISO(b.behaviourDate) ?? '').localeCompare(fechaISO(a.behaviourDate) ?? ''))[0] ?? null;
+    const vencido = num(valores?.businessValueBalanceOverdue) ?? 0;
+    const porCodigo = codigo !== null && DC_ESTADO_PAGO_EN_MORA.has(codigo);
+    const porSaldo = vencido > 0 && !(codigo !== null && DC_ESTADO_PAGO_CERRADA.has(codigo));
+    if (!porCodigo && !porSaldo) continue;
+
+    const dias = num(valores?.delinquencyMaturation);
+    const corte = fechaISO(valores?.behaviourDate) ?? fechaISO(pago?.paymentDate);
+    const cuenta = obj(c.account);
+    enMora.push({
+      entidad: texto(cuenta?.businessLineName) ?? texto(cuenta?.businessLineCode),
+      estado: porCodigo ? `${codigo} ${texto(pago?.businessBureauEventDesc) ?? ''}`.trim() : 'saldo en mora',
+      dias: dias !== null && dias > 0 ? dias : null,
+      desde: corte && dias !== null && dias > 0 ? restarDias(corte, dias) : null,
+    });
+  }
+  return enMora;
+}
+
 /** economicSector de DataCredito (verificado en la evidencia del 2026-08-21). */
 const DC_SECTOR_MAP: Record<string, keyof SectoresCredito> = {
   '1': 'financiero',
@@ -358,17 +452,31 @@ export function extraerFeaturesDataCredito(payload: unknown): FeaturesBuro {
     f.obligaciones_vigentes = num(principals?.currentCredits);
     f.obligaciones_negativas = num(principals?.currentNegativeCredits);
 
-    // ── V6: mora vigente ───────────────────────────────────
-    // Dos senales independientes: conteo de creditos negativos actuales y
-    // saldo total en mora. Basta una para marcar mora vigente; si ninguna
-    // llego, queda null (desconocido), NO false.
+    // ── V6: mora vigente (Adenda 2 §1) ─────────────────────
+    // "Mora vigente" = obligacion en ATRASO a la fecha de corte, NO un dato de
+    // mora visible en el reporte. Dos senales: el estado de pago de cada
+    // obligacion (Tabla 4) y el saldo en mora del consolidado (> 0 es atraso
+    // hoy; una mora antigua pagada deja saldo 0). El conteo agregado de
+    // "creditos actuales negativos" ya no decide: no separa mora actual de
+    // antigua, que es justo lo que la Adenda manda no confundir.
     const saldoMora = f.saldo_mora_cop;
-    const negativos = f.obligaciones_negativas;
-    if (negativos === null && saldoMora === null) {
+    const cuentasMora = obligacionesEnMoraDC(report);
+    if (cuentasMora === null && saldoMora === null) {
       f.mora_vigente = null;
       f.ausencias.mora_vigente = 'no_reportado';
     } else {
-      f.mora_vigente = (negativos ?? 0) > 0 || (saldoMora ?? 0) > 0;
+      f.mora_vigente = (cuentasMora?.length ?? 0) > 0 || (saldoMora ?? 0) > 0;
+      if (cuentasMora && cuentasMora.length > 0) {
+        f.crudas.obligaciones_en_mora = cuentasMora;
+        const fechas = cuentasMora.map((c) => c.desde).filter((d): d is string => d !== null).sort();
+        f.mora_vigente_desde = fechas[0] ?? null;
+        const peor = [...cuentasMora].sort((a, b) => (b.dias ?? 0) - (a.dias ?? 0))[0];
+        f.mora_vigente_detalle =
+          `${cuentasMora.length} obligacion(es) en mora; la mayor: ${peor.entidad ?? 'entidad s/d'}, ${peor.estado}` +
+          `${peor.dias !== null ? ` (${peor.dias} dias)` : ''}`;
+      } else if ((saldoMora ?? 0) > 0) {
+        f.mora_vigente_detalle = `saldo en mora del consolidado ${saldoMora} pesos`;
+      }
     }
 
     // ── V6: serie mes a mes ────────────────────────────────
@@ -396,9 +504,28 @@ export function extraerFeaturesDataCredito(payload: unknown): FeaturesBuro {
       const enVentana = (n: number) => ordenados.slice(0, n).filter((m) => m.moraDias !== null);
       const conMora = (v: MesComportamiento[]) => v.filter((m) => (m.moraDias ?? 0) > 0).length;
 
+      // Adenda 2 §1 / Politica V6: las ventanas de MORA se miden por FECHA DE
+      // OCURRENCIA (el mes del vector) contra la fecha de la consulta. Contar
+      // posiciones desde el corte (~3 meses de rezago) metia en "los ultimos 6
+      // meses" moras de hace 7 a 9. El bono de 24 meses sigue contando meses
+      // OBSERVADOS: es completitud del dato, no una ventana de mora.
+      const ancla = f.fecha_consulta ?? f.fecha_corte_datos;
+      const enVentanaPorFecha = (n: number) => {
+        if (!ancla) return enVentana(n);
+        const desde = restarMeses(ancla, n);
+        return ordenados.filter((m) => m.fecha !== null && m.fecha > desde && m.fecha <= ancla && m.moraDias !== null);
+      };
+
       f.meses_con_mora_24m = conMora(enVentana(24));
-      f.meses_con_mora_12m = conMora(enVentana(12));
-      f.meses_con_mora_6m = conMora(enVentana(6));
+      f.meses_con_mora_12m = conMora(enVentanaPorFecha(12));
+      const ventana6 = enVentanaPorFecha(6);
+      f.meses_con_mora_6m = conMora(ventana6);
+      const reciente = ventana6.find((m) => (m.moraDias ?? 0) > 0);
+      if (reciente) {
+        f.mora_30d_6m_fecha = reciente.fecha;
+        f.mora_30d_6m_dias = reciente.moraDias;
+      }
+      if (ancla) f.crudas.ventana_mora = { ancla, desde_6m: restarMeses(ancla, 6), desde_12m: restarMeses(ancla, 12) };
       // El bucket mas fino de DataCredito es 30-59 dias: una mora de 1-30 dias
       // simplemente no aparece en el vector. Por eso 0 aqui es "el buro no
       // puede reportarlas", no "no las tuvo" — el motor lo advierte.
@@ -611,6 +738,9 @@ export function extraerFeaturesTransUnion(payload: unknown): FeaturesBuro {
         f.ausencias.mora_vigente = 'no_reportado';
       } else {
         f.mora_vigente = (f.obligaciones_negativas ?? 0) > 0 || (valorMoraCrudo ?? 0) > 0;
+        if (f.mora_vigente) {
+          f.mora_vigente_detalle = `${f.obligaciones_negativas ?? 's/d'} obligacion(es) en mora segun el consolidado de TransUnion (no fecha la ocurrencia)`;
+        }
       }
     } else {
       f.ausencias.mora_vigente = 'seccion_ausente';

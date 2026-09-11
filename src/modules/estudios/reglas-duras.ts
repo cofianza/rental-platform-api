@@ -23,7 +23,10 @@
 //     UMBRAL_SCORE_RECHAZO (450): el corte real pasa de 400 (providers) a
 //     450. Salvo con un score capturado a mano (PERSISTIDO): su escala no es
 //     la del buro y lo decide el analista que lo registro.
-//   - NO activa las reglas de mora (V6) ni las de restitucion.
+//   - SI activa (2026-09-11, Adenda 2 §1) las de mora: 'mora_vigente'
+//     (obligacion en atraso HOY, no un dato de mora visible) y
+//     'mora_mayor_30d_6m' (por fecha de ocurrencia). Ver features.ts.
+//   - NO activa las de restitucion.
 //   - SI activa (2026-09-07) 'listas_restrictivas' (§6: OFAC/ONU via Auco),
 //     pero esa regla SOLO puede dispararse con AUCO_BACKGROUND_CHECK_ENABLED:
 //     apagado, nunca hay resumen 'verificado' y la lista blanca no cambia
@@ -107,11 +110,18 @@ import { formatearCOP, leerCanonDelInmueble } from './tope-canon.guard';
 
 /**
  * Las unicas reglas duras del motor que hoy deciden. DTI y canon/ingreso
- * autorizadas por Gerencia el 2026-09-03; score < 450 por la Adenda 2 §2.
- * Agregar una aqui es activar una regla en produccion: no se hace sin
- * autorizacion escrita (Politica §1).
+ * autorizadas por Gerencia el 2026-09-03; score < 450 y mora por la Adenda 2
+ * (§2 y §1). Agregar una aqui es activar una regla en produccion: no se hace
+ * sin autorizacion escrita (Politica §1).
  */
-export const REGLAS_DURAS_ACTIVAS = ['score_menor_450', 'dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'] as const;
+export const REGLAS_DURAS_ACTIVAS = [
+  'score_menor_450',
+  'mora_vigente',
+  'mora_mayor_30d_6m',
+  'dti_mayor_65',
+  'canon_ingreso_mayor_40',
+  'listas_restrictivas',
+] as const;
 
 export type ReglaDuraActiva = (typeof REGLAS_DURAS_ACTIVAS)[number];
 
@@ -122,6 +132,8 @@ function esReglaActiva(codigo: CodigoReglaDura): codigo is ReglaDuraActiva {
 /** Etiqueta legible por codigo, para el mensaje del gestor. */
 const ETIQUETA_REGLA: Record<ReglaDuraActiva, string> = {
   score_menor_450: 'score externo por debajo del minimo',
+  mora_vigente: 'mora vigente',
+  mora_mayor_30d_6m: 'mora mayor a 30 dias en los ultimos 6 meses',
   dti_mayor_65: 'capacidad de endeudamiento (DTI)',
   canon_ingreso_mayor_40: 'relacion canon / ingreso',
   listas_restrictivas: 'listas restrictivas (OFAC / ONU)',
@@ -146,6 +158,12 @@ export interface DetalleReglasDuras {
   score_externo: number | null;
   /** Adenda 2 §2: corte vigente del score externo (UMBRAL_SCORE_RECHAZO). */
   score_umbral_rechazo: number;
+  /** Adenda 2 §1: que obligacion esta en mora y desde cuando (fecha de ocurrencia). */
+  mora_vigente_detalle: string | null;
+  mora_vigente_desde: string | null;
+  /** Mes de ocurrencia y dias de la mora > 30 dias de los ultimos 6 meses. */
+  mora_30d_6m_fecha: string | null;
+  mora_30d_6m_dias: number | null;
   proveedor: string;
   modelo_version: string;
   /** Solo con 'listas_restrictivas': que lista(s) reporto Auco. */
@@ -229,6 +247,8 @@ export const PREFIJO_MOTIVO_REGLA_DURA =
 /** Marcadores de seccion del motivo del gestor, uno por regla activa. */
 const MARCADOR_SECCION: Record<ReglaDuraActiva, string> = {
   score_menor_450: 'Score externo (§6, Adenda 2 §2):',
+  mora_vigente: 'Mora vigente (§6, Adenda 2 §1):',
+  mora_mayor_30d_6m: 'Mora mayor a 30 dias en los ultimos 6 meses (§6):',
   dti_mayor_65: 'Capacidad de endeudamiento (DTI, §4.2):',
   canon_ingreso_mayor_40: 'Relacion canon / ingreso (§4.3):',
   listas_restrictivas: 'Listas restrictivas (§6):',
@@ -309,6 +329,20 @@ export function motivoGestorReglasDuras(
     );
   }
 
+  if (reglas.includes('mora_vigente')) {
+    partes.push(
+      `Mora vigente (§6, Adenda 2 §1): ${d.mora_vigente_detalle ?? 'obligacion en atraso a la fecha de corte'}; ` +
+        `fecha de ocurrencia ${d.mora_vigente_desde ?? 's/d (la central no la fecha)'}.`,
+    );
+  }
+
+  if (reglas.includes('mora_mayor_30d_6m')) {
+    partes.push(
+      `Mora mayor a 30 dias en los ultimos 6 meses (§6): mora de ${d.mora_30d_6m_dias ?? 's/d'} dias ` +
+        `con fecha de ocurrencia ${d.mora_30d_6m_fecha ?? 's/d'}.`,
+    );
+  }
+
   if (reglas.includes('dti_mayor_65')) {
     partes.push(
       `Capacidad de endeudamiento (DTI, §4.2): ${pct(d.dti_pct)} supera el maximo de ${d.dti_umbral}% ` +
@@ -361,6 +395,16 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
       'No aprobable por ahora. Con la informacion disponible hoy, no pudimos completar las verificaciones ' +
       'de identidad y cumplimiento que la ley nos exige para respaldar un contrato. ' +
       'No es una decision definitiva sobre ti: puedes volver a solicitarlo mas adelante o escribirnos para revisar tu caso.'
+    );
+  }
+
+  // Mora (Politica §11: "Mora vigente detectada"): sin entidad, fechas ni
+  // montos. La salida natural es ponerse al dia.
+  if (reglas.includes('mora_vigente') || reglas.includes('mora_mayor_30d_6m')) {
+    return (
+      'No aprobable por ahora. Con la informacion disponible hoy, las centrales de riesgo reportan ' +
+      'obligaciones en mora recientes o vigentes a tu nombre. ' +
+      'No es una decision definitiva sobre ti: cuando esten al dia puedes volver a solicitarlo, o escribirnos para revisar tu caso.'
     );
   }
 
@@ -447,6 +491,10 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
     canon_evaluado_cop: salida.canon_evaluado_cop,
     score_externo: salida.features.score_externo,
     score_umbral_rechazo: entrada.umbralScoreRechazo ?? V1_RECHAZO_DURO,
+    mora_vigente_detalle: salida.features.mora_vigente_detalle,
+    mora_vigente_desde: salida.features.mora_vigente_desde,
+    mora_30d_6m_fecha: salida.features.mora_30d_6m_fecha,
+    mora_30d_6m_dias: salida.features.mora_30d_6m_dias,
     proveedor: salida.proveedor,
     modelo_version: salida.modelo_version,
     listas_vinculantes: salida.antecedentes?.listas_vinculantes ?? null,
@@ -487,7 +535,11 @@ export function notaObservacionesReglasDuras(
   const trozos = reglas.map((r) =>
     r === 'score_menor_450'
       ? `score externo ${d.score_externo ?? 's/d'} (min ${d.score_umbral_rechazo})`
-      : r === 'dti_mayor_65'
+      : r === 'mora_vigente'
+        ? `mora vigente desde ${d.mora_vigente_desde ?? 's/d'}`
+        : r === 'mora_mayor_30d_6m'
+          ? `mora de ${d.mora_30d_6m_dias ?? 's/d'} dias en ${d.mora_30d_6m_fecha ?? 's/d'}`
+          : r === 'dti_mayor_65'
         ? `DTI ${pct(d.dti_pct)} (max ${d.dti_umbral}%)`
         : r === 'canon_ingreso_mayor_40'
           ? `canon/ingreso ${pct(d.canon_ingreso_pct)} (max ${d.canon_ingreso_umbral}%)`
@@ -758,6 +810,9 @@ export async function resolverResultadoEstudio(
         dtiPct: veredicto.detalle.dti_pct,
         canonIngresoPct: veredicto.detalle.canon_ingreso_pct,
         score: veredicto.detalle.score_externo,
+        // Adenda 2 §1: la fecha de ocurrencia que motivo el rechazo por mora.
+        moraVigenteDesde: veredicto.detalle.mora_vigente_desde,
+        mora30d6mFecha: veredicto.detalle.mora_30d_6m_fecha,
         proveedor: veredicto.detalle.proveedor,
         cambiaResultado: veredicto.cambiaResultado,
       },
