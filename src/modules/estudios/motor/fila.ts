@@ -13,6 +13,7 @@
 
 import type { SalidaSombra } from './index';
 import type { SectoresCredito } from './features';
+import type { CodigoReglaDura, CodigoVariable, EstadoVariable, PuntajeVariable } from './scorecard';
 
 /** Encuadra a entero dentro del rango que admite la columna. */
 export function entero(valor: number | null, min: number, max: number): number | null {
@@ -53,6 +54,29 @@ export interface ContextoEjecucion {
  */
 export function fuenteIngresoInferido(salida: SalidaSombra): string {
   return salida.features.ingreso_mensual_inferido_cop !== null ? 'CENTRALES' : 'NO_DISPONIBLE';
+}
+
+/**
+ * El camino de vuelta de `puntaje_por_variable`: los puntajes de una corrida ya
+ * guardada, para recalcular en revision manual (Adenda 2 §4.3) sin volver a
+ * consultar la central. Tolera JSON viejo o incompleto: lo que no se entiende
+ * se descarta.
+ */
+export function puntajesDesdeFila(puntajePorVariable: unknown): PuntajeVariable[] {
+  if (!puntajePorVariable || typeof puntajePorVariable !== 'object') return [];
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return Object.entries(puntajePorVariable as Record<string, Record<string, unknown> | null>)
+    .filter(([variable, p]) => /^V[1-9]$/.test(variable) && p && typeof p.estado === 'string' && num(p.max) !== null)
+    .map(([variable, p]) => ({
+      variable: variable as CodigoVariable,
+      puntos_maximos: num(p!.max) as number,
+      puntos: num(p!.puntos),
+      estado: p!.estado as EstadoVariable,
+      valor: (p!.valor as number | string | null) ?? null,
+      banda: (p!.banda as string | null) ?? null,
+      motivo: (p!.motivo as string | null) ?? null,
+      reglaDura: (p!.regla_dura as CodigoReglaDura | null) ?? null,
+    }));
 }
 
 export function construirFilaSombra(

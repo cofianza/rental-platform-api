@@ -48,6 +48,16 @@ vi.mock('../expedientes.service', () => ({
   getExpedienteById: (...args: unknown[]) => mockGetExpedienteById(...args),
 }));
 
+// Adenda 2 §4.3: aprobar una revision manual recalcula el puntaje (habilitacion).
+const mockRatificar = vi.fn();
+vi.mock('../expediente-habilitacion.service', () => ({
+  ratificarRevisionManual: (...args: unknown[]) => mockRatificar(...args),
+}));
+vi.mock('@/lib/auditLog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auditLog')>()),
+  logAudit: vi.fn(),
+}));
+
 import {
   executeTransition,
   getTransitionsForExpediente,
@@ -279,6 +289,45 @@ describe('expediente-workflow.service', () => {
           p_comentario: 'Mi comentario',
         }),
       );
+    });
+  });
+
+  // ================================================================
+  // Adenda 2 §4.3 — aprobar una revision manual por "Cambiar estado"
+  // ================================================================
+  describe('executeTransition - revision manual (condicionado → aprobado)', () => {
+    const evaluacion = { estabilidad_laboral: 'empleado_mas_12m', arrendamiento_previo: 'sin_historial' } as const;
+
+    it('sin V7/V9 del analista no se aprueba: 400 antes de mover el estado', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+
+      await expect(
+        executeTransition('exp-uuid', { nuevo_estado: 'aprobado', comentario: 'Soportes revisados' }, adminUser),
+      ).rejects.toMatchObject({ statusCode: 400, errorCode: 'EVALUACION_REQUERIDA' });
+      expect(mockRpc).not.toHaveBeenCalled();
+    });
+
+    it('con V7/V9: recalcula el puntaje y lo deja en el timeline', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      mockRpc.mockResolvedValueOnce({
+        data: { expediente_id: 'exp-uuid', estado_anterior: 'condicionado', estado_nuevo: 'aprobado', evento_timeline_id: 'evt-uuid', updated_at: '2026-09-11T10:00:00Z' },
+        error: null,
+      });
+      const recalculo = { puntaje_normalizado: 90.1, denominador: 111 };
+      mockRatificar.mockResolvedValueOnce(recalculo);
+      const mockUpdate = vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) }));
+      mockFrom.mockReturnValueOnce({ update: mockUpdate } as never);
+
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'aprobado', comentario: 'Soportes revisados', evaluacion },
+        adminUser,
+      );
+
+      expect(mockRatificar).toHaveBeenCalledWith('exp-uuid', 'admin-uuid', evaluacion);
+      expect(mockUpdate).toHaveBeenCalledWith({
+        metadata: expect.objectContaining({ fundamento: 'Soportes revisados', puntaje_revision_manual: recalculo }),
+      });
     });
   });
 

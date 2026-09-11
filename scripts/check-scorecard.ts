@@ -43,9 +43,10 @@ import {
   puntajeV2Dti,
   puntajeV3CanonIngreso,
   puntajeV8Antiguedad,
+  recalcularConRevisionManual,
 } from '@/modules/estudios/motor';
 import type { CodigoVariable, PuntajeVariable, SalidaSombra } from '@/modules/estudios/motor';
-import { construirFilaSombra } from '@/modules/estudios/motor/fila';
+import { construirFilaSombra, puntajesDesdeFila } from '@/modules/estudios/motor/fila';
 
 const RUTA_DC = '/home/hector/Documentos/github/cofianza/datacredito/evidencia_response_20260821.json';
 const RUTA_TU = '/home/hector/Documentos/cofianza-transunion/TransUnion_UAT_response_1026130143.json';
@@ -554,6 +555,38 @@ assert.strictEqual(pts(sinHistorial, 'V5').puntos, 0, 'sin historial puntua 0 pe
 assert.strictEqual(pts(sinHistorial, 'V5').estado, 'calculada');
 assert.strictEqual(pts(sinHistorial, 'V6').puntos, 5, 'bono documentado de sin historial');
 fila(true, 'sin historial: V5=0 calculada, V6=+5', `bruto=${sinHistorial.puntaje_bruto}`);
+
+// ============================================================
+// 7b. Revision manual — el analista puntua V7 y V9 (Adenda 2 §4.3)
+// ============================================================
+
+console.log('\n── 7b. Revision manual: V7 y V9 del analista (Adenda 2 §4.3) ──');
+
+// "En revision manual el denominador es mayor": V7 (10) y V9 (5) pasan a
+// participar -> 96 + 15 = 111 con DataCredito.
+const rm = recalcularConRevisionManual(dc.puntajes, 'empleado_mas_12m', 'referencia_positiva');
+assert.strictEqual(rm.denominador, 111, '96 + V7 (10) + V9 (5) = 111');
+assert.deepStrictEqual(rm.variables_participantes, ['V1', 'V2', 'V3', 'V5', 'V6', 'V7', 'V8', 'V9']);
+assert.strictEqual(rm.puntaje_normalizado, 100, '111/111 -> 100');
+const rmBajo = recalcularConRevisionManual(dc.puntajes, 'informal_sin_soporte', 'reporte_negativo');
+assert.strictEqual(rmBajo.puntaje_bruto, 87, '96 + 1 - 10: V9 negativo resta');
+assert.strictEqual(rmBajo.puntaje_normalizado, 78.4, '87/111 = 78,38 -> 78,4');
+assert.strictEqual(
+  recalcularConRevisionManual(dc.puntajes, 'empleado_menos_6m', 'sin_historial').puntaje_normalizado,
+  90.1,
+  '100/111 = 90,09 -> 90,1',
+);
+// Lo que se guarda en la fila sombra alcanza para recalcular despues, sin
+// volver a consultar la central.
+const rmDesdeFila = recalcularConRevisionManual(
+  puntajesDesdeFila(construirFilaSombra('estudio-check', dc).puntaje_por_variable),
+  'empleado_mas_12m',
+  'referencia_positiva',
+);
+assert.deepStrictEqual(rmDesdeFila, rm, 'recalcular desde la fila guardada = recalcular desde la corrida');
+// TransUnion no tiene estimador de ingresos (V2/V3 fuera): 71 + 15.
+assert.strictEqual(recalcularConRevisionManual(tu.puntajes, 'pensionado', 'sin_historial').denominador, 86, 'TransUnion: 71 + 15');
+fila(true, 'revision manual: denominador 111 (DataCredito) y 86 (TransUnion)', `bajo=${rmBajo.puntaje_normalizado}`);
 
 // ============================================================
 // 8. INVARIANTE CRITICA — evaluarSombra nunca lanza

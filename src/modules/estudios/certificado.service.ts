@@ -495,10 +495,15 @@ export async function leerSombraDelEstudio(
     };
     // Adenda 2 §4.3: "el CRC [...] debe indicar el denominador aplicado y que
     // variables participaron". Las corridas anteriores a la Adenda 2 no lo traen.
-    const den = num(row.features_crudas?.denominador_normalizacion);
-    const vars = row.features_crudas?.variables_participantes;
-    const denominador = den && Array.isArray(vars) ? `${den} puntos (${vars.join(', ')})` : null;
-    return { puntaje: num(row.puntaje_normalizado), factor: num(row.factor_ajuste_ingreso), modeloVersion: row.modelo_version ?? null, denominador };
+    // Si un analista resolvio la revision manual, manda su recalculo (con V7/V9).
+    const rm = row.features_crudas?.revision_manual as Record<string, unknown> | undefined;
+    const den = num(rm?.denominador ?? row.features_crudas?.denominador_normalizacion);
+    const vars = rm?.variables_participantes ?? row.features_crudas?.variables_participantes;
+    const denominador = den && Array.isArray(vars)
+      ? `${den} puntos (${vars.join(', ')})${rm ? ' — recalculado en revisión manual' : ''}`
+      : null;
+    const puntaje = rm ? num(rm.puntaje_normalizado) : num(row.puntaje_normalizado);
+    return { puntaje, factor: num(row.factor_ajuste_ingreso), modeloVersion: row.modelo_version ?? null, denominador };
   } catch {
     return null;
   }

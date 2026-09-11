@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from './expedientes.schema';
+import { evaluacionRevisionManualSchema } from './expediente-workflow.schema';
 import * as controller from './expediente-habilitacion.controller';
 
 const router = Router();
@@ -76,6 +77,8 @@ const aprobarCondicionadoBody = z.object({
   // escrito y los documentos que consulto".
   fundamento: z.string().trim().min(10, 'Escribe el fundamento de la decisión (mínimo 10 caracteres).').max(2000),
   documentos_consultados: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
+  // Adenda 2 §4.3: el puntaje se recalcula con V7 y V9 que puntúa el analista.
+  evaluacion: evaluacionRevisionManualSchema,
 });
 
 // POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la

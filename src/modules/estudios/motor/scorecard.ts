@@ -339,6 +339,69 @@ export function puntajeV9ArrendamientoPrevio(): ResultadoVariable {
 }
 
 // ============================================================
+// V7 / V9 en REVISION MANUAL — Adenda 2 §4.3
+// ------------------------------------------------------------
+// "En revision manual el denominador es mayor, porque el analista si puede
+// puntuar estabilidad laboral e historial de arrendamiento. El puntaje debe
+// recalcularse al momento de la revision manual con el denominador
+// correspondiente." Las opciones son las filas de la Politica §4.7 y §4.9.
+// La restitucion de inmueble (§4.9, ultima fila) no esta: es regla dura, y un
+// caso con restitucion no se aprueba.
+// ============================================================
+
+export const OPCIONES_V7 = {
+  empleado_mas_12m: { puntos: 10, etiqueta: 'Empleado formal con más de 12 meses en el cargo actual' },
+  pensionado: { puntos: 10, etiqueta: 'Pensionado (ingreso fijo garantizado)' },
+  independiente_mas_24m: { puntos: 8, etiqueta: 'Independiente formal: RUT activo y más de 24 meses de actividad verificable' },
+  empleado_6_12m: { puntos: 7, etiqueta: 'Empleado formal con 6 a 12 meses en el cargo actual' },
+  rentista: { puntos: 7, etiqueta: 'Rentista de capital con soporte documentado' },
+  independiente_12_24m: { puntos: 5, etiqueta: 'Independiente formal: RUT activo y 12 a 24 meses de actividad' },
+  empleado_menos_6m: { puntos: 4, etiqueta: 'Empleado formal con menos de 6 meses en el cargo actual' },
+  informal_con_extractos: { puntos: 3, etiqueta: 'Independiente informal: extractos con ingresos recurrentes de 3 veces el canon por 6 meses' },
+  informal_sin_soporte: { puntos: 1, etiqueta: 'Independiente informal sin soporte verificable' },
+} as const;
+
+export const OPCIONES_V9 = {
+  referencia_positiva: { puntos: 5, etiqueta: 'Referencia positiva verificada del arrendador anterior (últimos 3 años)' },
+  sin_historial: { puntos: 0, etiqueta: 'Sin historial de arrendamiento previo' },
+  no_verificable: { puntos: 0, etiqueta: 'Referencia no verificable (no suma ni resta)' },
+  reporte_negativo: { puntos: -10, etiqueta: 'Reporte negativo verificable: mora, daños o proceso judicial (últimos 3 años)' },
+} as const;
+
+export type OpcionV7 = keyof typeof OPCIONES_V7;
+export type OpcionV9 = keyof typeof OPCIONES_V9;
+
+/**
+ * Cambia V7 y V9 (sin fuente en el flujo automatico) por lo que puntuo el
+ * analista y vuelve a totalizar: ahora participan, asi que el denominador sube
+ * 15 (96 -> 111 con DataCredito). El resto de variables queda como las dejo
+ * la corrida automatica.
+ */
+export function recalcularConRevisionManual(
+  puntajes: readonly PuntajeVariable[],
+  v7: OpcionV7,
+  v9: OpcionV9,
+): TotalesScorecard {
+  const analista = (variable: 'V7' | 'V9', o: { puntos: number; etiqueta: string }): PuntajeVariable => ({
+    variable,
+    puntos_maximos: PUNTOS_MAXIMOS[variable],
+    puntos: o.puntos,
+    estado: 'calculada',
+    valor: null,
+    banda: o.etiqueta,
+    reglaDura: null,
+    motivo: 'Puntuada por el analista en revision manual (Adenda 2 §4.3)',
+  });
+  return totalizar(
+    [
+      ...puntajes.filter((p) => p.variable !== 'V7' && p.variable !== 'V9'),
+      analista('V7', OPCIONES_V7[v7]),
+      analista('V9', OPCIONES_V9[v9]),
+    ].sort((a, b) => a.variable.localeCompare(b.variable)),
+  );
+}
+
+// ============================================================
 // V5 — Experiencia crediticia (6 pts)
 // ============================================================
 

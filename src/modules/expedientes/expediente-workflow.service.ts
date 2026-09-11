@@ -84,6 +84,16 @@ export async function executeTransition(
   const transitionDef = getTransitionDef(currentState, targetState)!;
   await checkPreconditions(transitionDef.preconditions, expediente, input);
 
+  // Adenda 2 §4.3: aprobar una revisión manual recalcula el puntaje con V7/V9
+  // del analista, igual que la card "Aprobar estudio". Se exige ANTES de mover
+  // el estado: después ya no hay cómo pedirlo.
+  if (currentState === 'condicionado' && targetState === 'aprobado' && !input.evaluacion) {
+    throw AppError.badRequest(
+      'Para aprobar una revisión manual puntúa la estabilidad laboral y el historial de arrendamiento del solicitante.',
+      'EVALUACION_REQUERIDA',
+    );
+  }
+
   // Construir descripcion del evento
   const descripcion = buildTimelineDescription(currentState, targetState, user, input);
 
@@ -165,9 +175,21 @@ export async function executeTransition(
   // fundamento) con los documentos consultados, y en la bitacora.
   if (currentState === 'condicionado') {
     const documentos = input.documentos_consultados ?? [];
+    // Aprobar: mismo cierre que la card (recálculo §4.3, analista §9, CRC).
+    const puntajeRevisionManual = targetState === 'aprobado'
+      ? await (await import('./expediente-habilitacion.service')).ratificarRevisionManual(expedienteId, user.id, input.evaluacion)
+      : null;
     const { error: metaErr } = await (supabase
       .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
-      .update({ metadata: { manual: true, origen: 'analista_revision_manual', fundamento: input.comentario, documentos_consultados: documentos } } as never)
+      .update({
+        metadata: {
+          manual: true,
+          origen: 'analista_revision_manual',
+          fundamento: input.comentario,
+          documentos_consultados: documentos,
+          puntaje_revision_manual: puntajeRevisionManual,
+        },
+      } as never)
       .eq('id', result.evento_timeline_id);
     if (metaErr) logger.warn({ expedienteId, err: metaErr.message }, 'No se pudieron guardar los documentos consultados en el timeline');
     logAudit({
@@ -175,7 +197,12 @@ export async function executeTransition(
       accion: AUDIT_ACTIONS.REVISION_MANUAL_DECIDIDA,
       entidad: AUDIT_ENTITIES.EXPEDIENTE,
       entidadId: expedienteId,
-      detalle: { decision: targetState, fundamento: input.comentario, documentos_consultados: documentos },
+      detalle: {
+        decision: targetState,
+        fundamento: input.comentario,
+        documentos_consultados: documentos,
+        puntaje_revision_manual: puntajeRevisionManual,
+      },
     });
   }
 

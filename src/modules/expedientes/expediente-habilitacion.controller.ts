@@ -31,6 +31,7 @@ export async function aprobarCondicionado(req: Request, res: Response) {
     fecha_inicio_contrato?: string;
     fundamento: string;
     documentos_consultados: string[];
+    evaluacion: service.DecisionRevisionManual['evaluacion'];
   };
   // Datos del contrato opcionales: si no vienen, solo se aprueba (sin generar).
   const datosContrato =
@@ -40,6 +41,7 @@ export async function aprobarCondicionado(req: Request, res: Response) {
   const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol, datosContrato, {
     fundamento: body.fundamento,
     documentos_consultados: body.documentos_consultados,
+    evaluacion: body.evaluacion,
   }, req.ip);
   sendSuccess(res, result);
 }

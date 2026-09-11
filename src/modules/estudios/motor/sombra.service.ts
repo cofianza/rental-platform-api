@@ -42,7 +42,8 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { MODELO_VERSION, evaluarSombra } from './index';
 import type { SalidaSombra } from './index';
-import { construirFilaSombra, type ContextoEjecucion } from './fila';
+import { construirFilaSombra, puntajesDesdeFila, type ContextoEjecucion } from './fila';
+import { OPCIONES_V7, OPCIONES_V9, recalcularConRevisionManual, type OpcionV7, type OpcionV9 } from './scorecard';
 import { getCalibracion } from '@/lib/calibracion';
 
 export interface ArgsScorecardSombra {
@@ -162,6 +163,88 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
       { estudioId, expedienteId, err: err instanceof Error ? err.message : String(err) },
       'scorecard sombra fallo — el estudio se completo igual',
     );
+  }
+}
+
+export interface EvaluacionRevisionManual {
+  estabilidad_laboral: OpcionV7;
+  arrendamiento_previo: OpcionV9;
+}
+
+export interface RecalculoRevisionManual {
+  puntaje_normalizado: number | null;
+  denominador: number;
+  variables_participantes: string[];
+  estabilidad_laboral: { opcion: OpcionV7; puntos: number };
+  arrendamiento_previo: { opcion: OpcionV9; puntos: number };
+  puntaje_automatico: number | null;
+  denominador_automatico: number | null;
+}
+
+/**
+ * Adenda 2 §4.3: recalcula la ultima corrida del estudio con V7 y V9 puntuados
+ * por el analista y la guarda en features_crudas.revision_manual, que es lo que
+ * leen el CRC y el log. NO toca puntaje_normalizado ni decision_sombra: esos
+ * son la corrida AUTOMATICA, la que Gerencia cruza para calibrar.
+ *
+ * Sin corrida, o sin puntaje automatico (nada calculable), no hay nada que
+ * recalcular: devuelve null. Nunca lanza, como el resto de este archivo.
+ */
+export async function recalcularEnRevisionManual(
+  estudioId: string,
+  analistaId: string,
+  evaluacion: EvaluacionRevisionManual,
+): Promise<RecalculoRevisionManual | null> {
+  try {
+    const { data, error } = await (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .select('id, puntaje_normalizado, puntaje_por_variable, features_crudas')
+      .eq('estudio_id', estudioId)
+      .order('fecha_calculo', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const fila = data as {
+      id: string;
+      puntaje_normalizado: number | string | null;
+      puntaje_por_variable: unknown;
+      features_crudas: Record<string, unknown> | null;
+    } | null;
+    const num = (v: unknown) => {
+      const n = typeof v === 'string' ? Number(v) : v;
+      return typeof n === 'number' && Number.isFinite(n) ? n : null;
+    };
+    if (!fila || num(fila.puntaje_normalizado) === null) return null;
+
+    const { estabilidad_laboral: v7, arrendamiento_previo: v9 } = evaluacion;
+    const totales = recalcularConRevisionManual(puntajesDesdeFila(fila.puntaje_por_variable), v7, v9);
+    const crudas = fila.features_crudas ?? {};
+    const recalculo: RecalculoRevisionManual = {
+      puntaje_normalizado: totales.puntaje_normalizado,
+      denominador: totales.denominador,
+      variables_participantes: totales.variables_participantes,
+      estabilidad_laboral: { opcion: v7, puntos: OPCIONES_V7[v7].puntos },
+      arrendamiento_previo: { opcion: v9, puntos: OPCIONES_V9[v9].puntos },
+      puntaje_automatico: num(fila.puntaje_normalizado),
+      denominador_automatico: num(crudas.denominador_normalizacion),
+    };
+
+    const { error: updErr } = await (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        features_crudas: { ...crudas, revision_manual: { ...recalculo, analista_id: analistaId, fecha: new Date().toISOString() } },
+      } as never)
+      .eq('id', fila.id);
+    if (updErr) throw new Error(updErr.message);
+
+    logger.info({ estudioId, ...recalculo }, 'scorecard: puntaje recalculado en revision manual (Adenda 2 §4.3)');
+    return recalculo;
+  } catch (err) {
+    logger.warn(
+      { estudioId, err: err instanceof Error ? err.message : String(err) },
+      'scorecard: no se pudo recalcular en revision manual — la decision del analista queda igual',
+    );
+    return null;
   }
 }
 

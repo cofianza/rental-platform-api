@@ -14,6 +14,7 @@ import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
+import type { EvaluacionRevisionManual, RecalculoRevisionManual } from '../estudios/motor/sombra.service';
 
 export interface HabilitarEstudioResult {
   expediente: {
@@ -439,6 +440,8 @@ export async function omitirCita(
 export interface DecisionRevisionManual {
   fundamento: string;
   documentos_consultados: string[];
+  /** Adenda 2 §4.3: V7 y V9, con los que se recalcula el puntaje. */
+  evaluacion: EvaluacionRevisionManual;
 }
 
 export async function aprobarCondicionado(
@@ -451,6 +454,7 @@ export async function aprobarCondicionado(
 ): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
   contrato_id: string | null;
+  puntaje_revision_manual: RecalculoRevisionManual | null;
 }> {
   return await aprobarYGenerarContrato({
     expedienteId,
@@ -510,8 +514,10 @@ async function aprobarYGenerarContrato(params: {
 }): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
   contrato_id: string | null;
+  puntaje_revision_manual: RecalculoRevisionManual | null;
 }> {
   const { expedienteId, userId, userRol, datosContrato, fromState } = params;
+  let puntajeRevisionManual: RecalculoRevisionManual | null = null;
 
   // 1. Ownership + datos para emails / contrato.
   const ctx = await assertHabilitacionPermission({
@@ -578,6 +584,11 @@ async function aprobarYGenerarContrato(params: {
       );
     }
 
+    // Política §9 + Adenda 2 §4.3: la decisión deja de ser 'AUTOMATICO' y el
+    // puntaje se recalcula con V7/V9 del analista. Antes del timeline para que
+    // el log lleve el puntaje, el denominador y las variables.
+    puntajeRevisionManual = await ratificarRevisionManual(expedienteId, userId, params.revision?.evaluacion);
+
     await (supabase
       .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .insert({
@@ -594,6 +605,7 @@ async function aprobarYGenerarContrato(params: {
           origen: 'analista_aprobar_condicionado',
           fundamento: params.revision?.fundamento ?? null,
           documentos_consultados: params.revision?.documentos_consultados ?? [],
+          puntaje_revision_manual: puntajeRevisionManual,
         },
       } as never);
 
@@ -606,12 +618,10 @@ async function aprobarYGenerarContrato(params: {
         decision: 'aprobado',
         fundamento: params.revision?.fundamento ?? null,
         documentos_consultados: params.revision?.documentos_consultados ?? [],
+        puntaje_revision_manual: puntajeRevisionManual,
       },
       ip: params.ip,
     });
-
-    // Política §9: la decisión deja de ser 'AUTOMATICO' — la ratificó un humano.
-    await ratificarAnalistaResponsable(expedienteId, userId);
   }
 
   // 4. Generar el contrato SOLO si vinieron los datos. Si no, el expediente
@@ -683,22 +693,31 @@ async function aprobarYGenerarContrato(params: {
   return {
     expediente: { id: ctx.expedienteId, numero: ctx.numero, estado: 'aprobado' },
     contrato_id: contratoId,
+    puntaje_revision_manual: puntajeRevisionManual,
   };
 }
 
 /**
- * Política V4.1 §9, `analista_responsable`: "User ID o 'AUTOMATICO' — usuario
- * que tomó/ratificó la decisión". El motor escribe 'AUTOMATICO' en la corrida
- * (estudios_scorecard_sombra); cuando un humano ratifica un condicionado, la
- * corrida vigente del TITULAR tiene que quedar a su nombre, o la salida del
- * §9 sigue atribuyendo al sistema una decisión que tomó una persona.
+ * Un analista aprobó una revisión manual (por la card o por "Cambiar estado").
+ *
+ * - Adenda 2 §4.3: recalcula el puntaje con V7/V9 que puntuó el analista.
+ * - Política V4.1 §9, `analista_responsable`: "User ID o 'AUTOMATICO' —
+ *   usuario que tomó/ratificó la decisión". El motor escribe 'AUTOMATICO' en la
+ *   corrida (estudios_scorecard_sombra); la corrida vigente del TITULAR queda
+ *   a nombre de quien la ratificó.
+ * - Regenera el CRC, DESPUÉS del recálculo para que imprima el puntaje nuevo.
  *
  * Best-effort: es trazabilidad, no puede tumbar una aprobación ya escrita.
  * El estudio del co-arrendatario comparte expediente_id (tipo
  * 'con_coarrendatario'), por eso se excluye: la decisión ratificada es la del
- * titular.
+ * titular. Devuelve el recálculo (null si no hubo corrida con puntaje).
  */
-async function ratificarAnalistaResponsable(expedienteId: string, userId: string): Promise<void> {
+export async function ratificarRevisionManual(
+  expedienteId: string,
+  userId: string,
+  evaluacion: EvaluacionRevisionManual | undefined,
+): Promise<RecalculoRevisionManual | null> {
+  let recalculo: RecalculoRevisionManual | null = null;
   try {
     const { data: est, error: estErr } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -710,7 +729,12 @@ async function ratificarAnalistaResponsable(expedienteId: string, userId: string
       .maybeSingle();
     if (estErr) throw new Error(estErr.message);
     const estudioId = (est as { id?: string } | null)?.id;
-    if (!estudioId) return;
+    if (!estudioId) return null;
+
+    if (evaluacion) {
+      const { recalcularEnRevisionManual } = await import('@/modules/estudios/motor/sombra.service');
+      recalculo = await recalcularEnRevisionManual(estudioId, userId, evaluacion);
+    }
 
     // Flujo §10 / Adenda §5: el CRC emitido al quedar 'condicionado' decía
     // "en revisión"; la ratificación cambia las condiciones (APROBADO, tarifa,
@@ -734,7 +758,7 @@ async function ratificarAnalistaResponsable(expedienteId: string, userId: string
       .maybeSingle();
     if (sombraErr) throw new Error(sombraErr.message);
     const sombraId = (sombra as { id?: string } | null)?.id;
-    if (!sombraId) return;
+    if (!sombraId) return recalculo;
 
     const { error: updErr } = await (supabase
       .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
@@ -747,6 +771,7 @@ async function ratificarAnalistaResponsable(expedienteId: string, userId: string
       '§9: no se pudo registrar al analista que ratificó el condicionado (queda AUTOMATICO)',
     );
   }
+  return recalculo;
 }
 
 /**
