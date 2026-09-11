@@ -203,10 +203,6 @@ export async function getCalibracion(): Promise<Calibracion> {
   return value;
 }
 
-export async function getParametro(clave: ClaveCalibracion): Promise<number> {
-  return (await getCalibracion())[clave];
-}
-
 export interface FilaParametro extends DefinicionParametro {
   valor: number;
   actualizado_en: string | null;

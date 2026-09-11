@@ -186,11 +186,3 @@ export async function searchMunicipios(query: string): Promise<MunicipioCO[]> {
   });
   return matches.slice(0, 50);
 }
-
-/**
- * Lookup por codigo DANE de 5 digitos. Util para validar al guardar.
- */
-export async function findMunicipioByCode(code: string): Promise<MunicipioCO | null> {
-  const all = await getCatalog();
-  return all.find((m) => m.code === code) || null;
-}
