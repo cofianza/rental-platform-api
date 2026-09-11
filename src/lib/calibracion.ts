@@ -33,7 +33,8 @@ export type ClaveCalibracion =
   | 'UMBRAL_APROBACION_AUTOMATICA'
   | 'UMBRAL_ZONA_GRIS'
   | 'UMBRAL_SCORE_RECHAZO'
-  | 'UMBRAL_SCORE_REVISION';
+  | 'UMBRAL_SCORE_REVISION'
+  | 'UMBRAL_SIMILITUD_BIOMETRICA';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -174,6 +175,16 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     descripcion: 'Score externo hasta el cual el caso va a revision manual obligatoria (desde el umbral de rechazo). Prevalece sobre el rechazo por puntaje normalizado.',
     advertencia:
       'Subirlo manda mas casos a revision manual. Bajarlo de 599 no aprueba solos los scores de 600 hacia abajo: con el motor apagado, las centrales siguen marcando condicionado por debajo de 600.',
+  },
+  {
+    clave: 'UMBRAL_SIMILITUD_BIOMETRICA',
+    valorDefault: 80,
+    min: 50,
+    max: 100,
+    entero: true,
+    seccion: 'Adenda 2 §9',
+    descripcion: 'Similitud minima (%) entre la selfie y la cedula para dar por verificada la identidad al firmar el contrato. Por debajo, un analista de Cofianza verifica por otro medio: nunca rechaza.',
+    advertencia: 'Revisar a los tres meses cuantas verificaciones legitimas caen al analista; si son pocas, puede evaluarse bajarlo.',
   },
 ];
 

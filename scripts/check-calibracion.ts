@@ -42,12 +42,13 @@ const ESPERADO: Record<string, number> = {
   // Adenda 2 §10.
   UMBRAL_SCORE_RECHAZO: 450,
   UMBRAL_SCORE_REVISION: 599,
+  UMBRAL_SIMILITUD_BIOMETRICA: 80,
 };
 for (const [clave, valor] of Object.entries(ESPERADO)) {
   ok(CALIBRACION_DEFAULT[clave as keyof typeof CALIBRACION_DEFAULT] === valor, `${clave} = ${valor} (Adenda §11)`);
 }
 ok(CALIBRACION_DEFAULT.CANON_MAX_TRANSITORIO === 3_000_000, 'CANON_MAX_TRANSITORIO arranca con lo que corre en produccion (3.000.000, Flujo §4.4)');
-ok(PARAMETROS.length === 12, 'doce parametros en el panel (10 de la Adenda 1 + 2 de la Adenda 2)');
+ok(PARAMETROS.length === 13, 'trece parametros en el panel (10 de la Adenda 1 + 3 de la Adenda 2)');
 ok(validarParametro('UMBRAL_SCORE_RECHAZO', 449)?.error !== null, 'el corte no baja de 450: la tabla de V1 no tiene banda debajo');
 ok(PARAMETROS.every((p) => p.descripcion.length > 10 && p.seccion.length > 0), 'todos con descripcion y seccion');
 ok(PARAMETROS.find((p) => p.clave === 'FACTOR_AJUSTE_INGRESO')?.advertencia?.includes('46%') === true, 'la advertencia de la Adenda §1.1 (46% / 74,7%) queda registrada');

@@ -20,6 +20,21 @@ export const tokenParamsSchema = z.object({
   token: z.string().length(64, 'Token inválido'),
 });
 
+// Adenda 2 §9 — verificación de identidad antes de la firma
+export const consentimientoIdentidadSchema = z.object({
+  opcion: z.enum(['autoriza', 'analista']),
+});
+
+export const verificacionIdentidadParamsSchema = z.object({
+  contratoId: z.string().uuid('ID de contrato inválido'),
+  verificacionId: z.string().uuid('ID de verificación inválido'),
+});
+
+export const revisarIdentidadSchema = z.object({
+  resultado: z.enum(['confirmada', 'suplantacion']),
+  nota: z.string().trim().min(10, 'Escribe cómo verificaste la identidad (mínimo 10 caracteres)').max(1000),
+});
+
 export const otpVerificarSchema = z.object({
   codigo: z.string().length(6, 'El código debe ser de 6 dígitos').regex(/^\d+$/, 'El código debe ser numérico'),
 });

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, roleGuard, authorize } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { otpLimiter, otpVerifyLimiter } from '@/middleware/rateLimiter';
+import { otpLimiter, otpVerifyLimiter, publicFormLimiter, otpSendByTokenLimiter } from '@/middleware/rateLimiter';
 import {
   crearSolicitudFirmaSchema,
   solicitudIdParamsSchema,
@@ -10,7 +10,11 @@ import {
   otpVerificarSchema,
   completarFirmaSchema,
   reenviarFirmaSchema,
+  consentimientoIdentidadSchema,
+  verificacionIdentidadParamsSchema,
+  revisarIdentidadSchema,
 } from './firma.schema';
+import { biometriaSchema } from '@/modules/autorizaciones/autorizaciones.schema';
 import * as firmaController from './firma.controller';
 
 // ============================================================
@@ -108,6 +112,53 @@ contratoFirmantesRouter.get(
   authorize('contratos', 'read'),
   validate({ params: contratoIdParamsSchema }),
   firmaController.listarFirmantes,
+);
+
+// POST /identidad/:verificacionId/revisar — Adenda 2 §9: el analista de
+// Cofianza registra la verificación por otro medio ('suplantacion' cancela el
+// contrato). Solo Cofianza, como toda revisión manual (Adenda 2 §5).
+contratoFirmantesRouter.post(
+  '/identidad/:verificacionId/revisar',
+  roleGuard(['administrador', 'operador_analista']),
+  validate({ params: verificacionIdentidadParamsSchema, body: revisarIdentidadSchema }),
+  firmaController.revisarIdentidad,
+);
+
+// ============================================================
+// Public routes: /api/v1/public/verificacion-identidad/:token (Adenda 2 §9)
+// ============================================================
+
+export const publicVerificacionIdentidadRouter = Router();
+
+publicVerificacionIdentidadRouter.get(
+  '/:token',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema }),
+  firmaController.getVerificacionIdentidad,
+);
+
+publicVerificacionIdentidadRouter.post(
+  '/:token/consentimiento',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema, body: consentimientoIdentidadSchema }),
+  firmaController.consentimientoIdentidad,
+);
+
+// Limite por token además del de IP: cada intento es una consulta facturable a
+// Auco (mismo criterio que /public/autorizar/:token/biometria).
+publicVerificacionIdentidadRouter.post(
+  '/:token/biometria',
+  publicFormLimiter,
+  otpSendByTokenLimiter,
+  validate({ params: tokenParamsSchema, body: biometriaSchema }),
+  firmaController.biometriaIdentidad,
+);
+
+publicVerificacionIdentidadRouter.post(
+  '/:token/continuar',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema }),
+  firmaController.continuarIdentidad,
 );
 
 // ============================================================

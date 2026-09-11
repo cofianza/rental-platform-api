@@ -164,7 +164,13 @@ export interface FirmantePreview {
 export async function previewFirmantesMultiparte(
   contratoId: string,
 ): Promise<{ firmantes: FirmantePreview[]; puede_enviar: boolean }> {
-  const derivados = await derivarFirmantes(contratoId);
+  return evaluarFirmantes(await derivarFirmantes(contratoId));
+}
+
+/** Pura: las reglas del preview sobre firmantes ya derivados. */
+export function evaluarFirmantes(
+  derivados: FirmanteDerivado[],
+): { firmantes: FirmantePreview[]; puede_enviar: boolean } {
   const conTel = derivados.map((f) => ({
     f,
     phone: aucoClient.normalizePhoneToInternational(f.telefono),
@@ -383,6 +389,17 @@ function mapTipoDocumentoToAuco(tipo: string | null | undefined): string | null 
   return AUCO_DOC_TYPES.has(mapped) ? mapped : null;
 }
 
+/** Sin fila o con la fila 'pendiente' = el arrendatario no ha pasado por la verificación. */
+async function identidadPendiente(contratoId: string): Promise<boolean> {
+  const { data, error } = await db('firma_verificacion_identidad')
+    .select('estado')
+    .eq('contrato_id', contratoId)
+    .eq('rol', 'arrendatario')
+    .maybeSingle();
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', `No se pudo leer la verificación de identidad: ${error.message}`);
+  return !data || (data as { estado: string }).estado === 'pendiente';
+}
+
 function aucoDeriveCountry(phone: string | null): string | null {
   if (!phone) return null;
   if (phone.startsWith('+57')) return 'CO';
@@ -418,6 +435,17 @@ export async function crearSolicitudFirmaMultiparte(
   }
   if (!c.storage_key) {
     throw AppError.badRequest('El contrato no tiene PDF generado para enviar a firma', 'NO_PDF');
+  }
+
+  // Adenda 2 §9: con la biometría encendida, el sobre sale solo después de que
+  // el arrendatario pase por la verificación de identidad (con cualquier
+  // resultado: nunca rechaza). La inicia enviarContratoAFirma y, al terminar,
+  // verificacion-identidad.service vuelve a llamar aquí.
+  if (env.FIRMA_BIOMETRIA_ENABLED && (await identidadPendiente(contratoId))) {
+    throw AppError.conflict(
+      'El arrendatario todavía no confirma su identidad. El contrato sale a firma apenas lo haga; desde "Enviar a firma" puedes reenviarle el enlace.',
+      'VERIFICACION_IDENTIDAD_PENDIENTE',
+    );
   }
 
   // 2. Derivar firmantes y validar datos mínimos (flujo WhatsApp: teléfono real)

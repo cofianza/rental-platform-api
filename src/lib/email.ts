@@ -809,19 +809,28 @@ function buildOtpHtml(nombre: string, codigo: string): string {
 </html>`;
 }
 
+/** Textos del correo de firma. El default es el enlace de firma; la
+ *  verificacion de identidad previa (Adenda 2 §9) cambia asunto, parrafo y boton. */
+export interface CopyFirmaEmail {
+  asunto: string;
+  intro: string;
+  boton: string;
+}
+
 export async function sendFirmaEmail(
   to: string,
   nombre: string,
   firmaUrl: string,
   expiryHours: number,
   context: { direccion_inmueble: string; ciudad_inmueble: string; nombre_arrendatario: string },
+  copy?: CopyFirmaEmail,
 ): Promise<void> {
   try {
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Firma de contrato de arrendamiento - Cofianza',
-      html: buildFirmaHtml(nombre, firmaUrl, expiryHours, context),
+      subject: copy?.asunto ?? 'Firma de contrato de arrendamiento - Cofianza',
+      html: buildFirmaHtml(nombre, firmaUrl, expiryHours, context, copy),
     });
 
     logger.info({ to }, 'Email de firma de contrato enviado');
@@ -836,6 +845,7 @@ function buildFirmaHtml(
   firmaUrl: string,
   expiryHours: number,
   context: { direccion_inmueble: string; ciudad_inmueble: string; nombre_arrendatario: string },
+  copy?: CopyFirmaEmail,
 ): string {
   return `
 <!DOCTYPE html>
@@ -873,7 +883,7 @@ function buildFirmaHtml(
                 Firma de contrato de arrendamiento
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, tienes un contrato de arrendamiento pendiente de firma. Haz clic en el siguiente botón para revisar y firmar el documento.
+                Hola ${nombre}, ${copy?.intro ?? 'tienes un contrato de arrendamiento pendiente de firma. Haz clic en el siguiente botón para revisar y firmar el documento.'}
               </p>
 
               <!-- Contract info -->
@@ -898,7 +908,7 @@ function buildFirmaHtml(
                       <tr>
                         <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${firmaUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
-                            Firmar contrato
+                            ${copy?.boton ?? 'Firmar contrato'}
                           </a>
                         </td>
                       </tr>

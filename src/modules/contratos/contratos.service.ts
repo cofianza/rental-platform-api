@@ -1479,8 +1479,16 @@ export async function enviarContratoAFirma(
   // IMPORTANTE: si el envío a Auco falla, revertimos el estado para no dejar el
   // contrato trabado en "pendiente_firma" sin sobre de firma (bug observado en
   // EXP-2026-0001). El error original se propaga al usuario.
+  let message = 'Contrato enviado a firma.';
   try {
-    if (env.FIRMA_MULTIPARTE_ENABLED) {
+    // Adenda 2 §9: con la biometría encendida, primero el arrendatario confirma
+    // su identidad; el sobre sale cuando termina (verificacion-identidad.service).
+    const identidad = env.FIRMA_MULTIPARTE_ENABLED && env.FIRMA_BIOMETRIA_ENABLED
+      ? await (await import('@/modules/firma/verificacion-identidad.service')).iniciarVerificacionIdentidad(contratoId, userId)
+      : null;
+    if (identidad?.pendiente) {
+      message = identidad.message;
+    } else if (env.FIRMA_MULTIPARTE_ENABLED) {
       const { crearSolicitudFirmaMultiparte } = await import('@/modules/firma/firma-multiparte.service');
       await crearSolicitudFirmaMultiparte(contratoId, userId);
     } else {
@@ -1537,7 +1545,7 @@ export async function enviarContratoAFirma(
   await supersederContratosEnFirma(c.expediente_id, contratoId, userId);
 
   logger.info({ contratoId, userId }, 'Contrato enviado a firma manualmente');
-  return { ok: true, message: 'Contrato enviado a firma.' };
+  return { ok: true, message };
 }
 
 /**
@@ -2128,7 +2136,8 @@ export async function previewFirmantesContrato(contratoId: string, userId?: stri
   }
   const { previewFirmantesMultiparte } = await import('@/modules/firma/firma-multiparte.service');
   const r = await previewFirmantesMultiparte(contratoId);
-  return { aplica: true as const, ...r };
+  // biometria: el modal avisa que primero va el correo de verificación de identidad (Adenda 2 §9).
+  return { aplica: true as const, biometria: env.FIRMA_BIOMETRIA_ENABLED, ...r };
 }
 
 /**

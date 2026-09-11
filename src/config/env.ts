@@ -229,6 +229,12 @@ const envSchema = z.object({
   // matriz de casos (scripts/check-decision-adenda.ts) antes de encenderlo.
   MOTOR_DECIDE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   FIRMA_MULTIPARTE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Adenda 2 §9: biometria en la FIRMA del contrato (solo con multi-parte).
+  // ON = antes del sobre de Auco, el arrendatario confirma su identidad en
+  // /verificar-identidad/:token (consentimiento §9.2 + cotejo AucoFace con
+  // UMBRAL_SIMILITUD_BIOMETRICA). Nunca rechaza. Requiere la migracion
+  // 20260911000001 ANTES de encenderlo.
+  FIRMA_BIOMETRIA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
 
   // Auto-firma de Cofianza (sello institucional). OFF por defecto. Solo aplica
   // si FIRMA_MULTIPARTE_ENABLED=true. Cuando está ON, Cofianza NO firma por Auco

@@ -12,7 +12,33 @@ vi.mock('@/lib/auco', () => ({
   getDocumentStatus: vi.fn(),
 }));
 
-import { mapAucoSignerStatusToEstado, todasFirmaron } from '../firma-multiparte.service';
+import { mapAucoSignerStatusToEstado, todasFirmaron, crearSolicitudFirmaMultiparte } from '../firma-multiparte.service';
+import { supabase } from '@/lib/supabase';
+import { env } from '@/config';
+import * as auco from '@/lib/auco';
+
+// Adenda 2 §9: con la biometria encendida, ningun camino (tampoco el POST
+// legacy /firma/solicitudes) crea el sobre si el arrendatario no paso por la
+// verificacion de identidad.
+describe('crearSolicitudFirmaMultiparte — gate de la biometria de firma', () => {
+  it('sin verificacion del arrendatario: 409 y no se sube nada a Auco', async () => {
+    (env as Record<string, unknown>).FIRMA_BIOMETRIA_ENABLED = true;
+    const filas: Record<string, unknown> = {
+      contratos: { data: { id: 'c1', estado: 'pendiente_firma', expediente_id: 'e1', storage_key: 'k.pdf' }, error: null },
+      firma_verificacion_identidad: { data: null, error: null },
+    };
+    vi.mocked(supabase.from).mockImplementation(((table: string) => {
+      const chain: Record<string, unknown> = {};
+      for (const m of ['select', 'eq']) chain[m] = () => chain;
+      chain.single = chain.maybeSingle = async () => filas[table];
+      return chain;
+    }) as never);
+
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ errorCode: 'VERIFICACION_IDENTIDAD_PENDIENTE' });
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+    (env as Record<string, unknown>).FIRMA_BIOMETRIA_ENABLED = false;
+  });
+});
 
 describe('mapAucoSignerStatusToEstado', () => {
   it('FINISH → firmado', () => {

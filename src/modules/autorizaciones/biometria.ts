@@ -126,6 +126,11 @@ export function biometriaOmitida(
   );
 }
 
+/** La persona siguio sin cotejo (no tomo las fotos o no le funciono la camara). */
+export function biometriaSinCotejo(motivo: string, umbral: number): ResumenBiometria {
+  return base('no_verificada', new Date().toISOString(), motivo, umbral);
+}
+
 /** Deja los 3 ultimos digitos. Mismo criterio que el resto del modulo. */
 function maskDoc(numero: string | null | undefined): string | null {
   const n = String(numero ?? '').replace(/\D/g, '');
@@ -315,6 +320,7 @@ export async function leerBiometriaDeExpediente(expedienteId: string): Promise<R
 export interface EntradaValidacion {
   /** Solo para el log; no viaja a Auco. */
   autorizacionId: string;
+  /** Tipo y numero del documento contra el que se coteja. */
   tipo_documento: string | null | undefined;
   numero_documento: string | null | undefined;
   /** Base64 (data URL o crudo) de la cedula. */
@@ -324,15 +330,27 @@ export interface EntradaValidacion {
 }
 
 /**
- * Llama a AucoFace y devuelve el veredicto. NUNCA lanza: cualquier fallo es
- * 'no_verificada' con su motivo, y el §14 decide (revision manual).
+ * Autorizacion del prospecto: AucoFace con el umbral del env, si el
+ * interruptor AUCO_BIOMETRIA_ENABLED esta encendido.
  */
 export async function validarIdentidadProspecto(input: EntradaValidacion): Promise<ResumenBiometria> {
-  const ahora = new Date().toISOString();
   const umbral = env.AUCO_BIOMETRIA_UMBRAL_SIMILITUD;
+  if (!env.AUCO_BIOMETRIA_ENABLED) return biometriaDesactivada(new Date().toISOString(), umbral);
+  return cotejarConAuco(input.autorizacionId, input, umbral);
+}
 
-  if (!env.AUCO_BIOMETRIA_ENABLED) return biometriaDesactivada(ahora, umbral);
-
+/**
+ * Llama a AucoFace y devuelve el veredicto con el umbral dado. NUNCA lanza:
+ * cualquier fallo es 'no_verificada' con su motivo, y quien llama manda el
+ * caso a un humano. `ref` solo va al log. Lo usan la autorizacion y la firma
+ * del contrato (Adenda 2 §9, firma/verificacion-identidad.service.ts).
+ */
+export async function cotejarConAuco(
+  ref: string,
+  input: Omit<EntradaValidacion, 'autorizacionId'>,
+  umbral: number,
+): Promise<ResumenBiometria> {
+  const ahora = new Date().toISOString();
   const tipo = mapearTipoDocumentoAuco(input.tipo_documento);
   const numero = String(input.numero_documento ?? '').trim();
   if (!tipo || !numero) {
@@ -363,7 +381,7 @@ export async function validarIdentidadProspecto(input: EntradaValidacion): Promi
     });
     logger.info(
       {
-        autorizacionId: input.autorizacionId,
+        ref,
         code: resumen.code,
         estado: resumen.estado,
         similitud: resumen.similitud,
@@ -375,7 +393,7 @@ export async function validarIdentidadProspecto(input: EntradaValidacion): Promi
     return resumen;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.warn({ autorizacionId: input.autorizacionId, err: msg }, 'AucoFace: fallo el cotejo');
+    logger.warn({ ref, err: msg }, 'AucoFace: fallo el cotejo');
     return base('no_verificada', ahora, `Auco no respondio: ${msg}`, umbral);
   }
 }

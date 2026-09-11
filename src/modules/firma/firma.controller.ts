@@ -5,6 +5,7 @@ import { env } from '@/config';
 import * as firmaService from './firma.service';
 import * as otpService from './otp.service';
 import * as evidenciaService from './evidencia.service';
+import * as identidadService from './verificacion-identidad.service';
 import type { AucoWebhookPayload } from '@/lib/auco';
 import type { CrearSolicitudFirmaInput, OtpVerificarInput, CompletarFirmaInput, ReenviarFirmaInput } from './firma.schema';
 
@@ -74,12 +75,47 @@ export async function listarPorContrato(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
-// Firmantes multi-parte del contrato (arrendatario/arrendador/cofianza).
+// Firmantes multi-parte del contrato (arrendatario/arrendador/cofianza) y,
+// con la biometría de firma, la verificación de identidad previa (Adenda 2 §9).
+// listarFirmantes va primero: es el que valida el acceso al contrato.
 export async function listarFirmantes(req: Request, res: Response) {
   const contratoId = req.params.contratoId as string;
   const { listarFirmantes } = await import('./firma-multiparte.service');
   const result = await listarFirmantes(contratoId, req.user?.id, req.user?.rol);
+  const verificaciones = await identidadService.listarVerificaciones(contratoId, req.user?.rol);
+  sendSuccess(res, { ...result, verificaciones });
+}
+
+// ============================================================
+// Adenda 2 §9 — verificación de identidad antes de la firma
+// ============================================================
+
+export async function getVerificacionIdentidad(req: Request, res: Response) {
+  sendSuccess(res, await identidadService.getVerificacionPublica(req.params.token as string));
+}
+
+export async function consentimientoIdentidad(req: Request, res: Response) {
+  const { opcion } = req.body as { opcion: 'autoriza' | 'analista' };
+  const result = await identidadService.registrarConsentimiento(req.params.token as string, opcion, {
+    ip: req.ip,
+    dispositivo: req.get('user-agent'),
+  });
   sendSuccess(res, result);
+}
+
+export async function biometriaIdentidad(req: Request, res: Response) {
+  const { documentImage, photo } = req.body as { documentImage: string; photo: string };
+  sendSuccess(res, await identidadService.verificarBiometriaFirma(req.params.token as string, { documentImage, photo }));
+}
+
+export async function continuarIdentidad(req: Request, res: Response) {
+  sendSuccess(res, await identidadService.continuarSinVerificar(req.params.token as string));
+}
+
+export async function revisarIdentidad(req: Request, res: Response) {
+  const { contratoId, verificacionId } = req.params as { contratoId: string; verificacionId: string };
+  const input = req.body as { resultado: 'confirmada' | 'suplantacion'; nota: string };
+  sendSuccess(res, await identidadService.revisarVerificacion(contratoId, verificacionId, input, req.user!));
 }
 
 export async function cancelar(req: Request, res: Response) {
