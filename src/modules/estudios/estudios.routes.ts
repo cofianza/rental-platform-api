@@ -116,9 +116,13 @@ estudiosRouter.post(
 );
 
 // PATCH /estudios/:estudioId/resultado
+// Adenda 2 §5: registrar el resultado a mano es una decisión de riesgo y es
+// SOLO de Cofianza. Con `authorize('expedientes','update')` la inmobiliaria
+// podía marcar 'aprobado' un estudio suyo en 'solicitado' sin consultar
+// ningún buró. Mismo guard para el certificado y la re-evaluación de abajo.
 estudiosRouter.patch(
   '/:estudioId/resultado',
-  authorize('expedientes', 'update'),
+  roleGuard(['administrador', 'operador_analista']),
   validate({ params: estudioIdParamsSchema, body: registrarResultadoSchema }),
   estudiosController.registrarResultado,
 );
@@ -145,10 +149,11 @@ estudiosRouter.delete(
   estudiosController.quitarTarifaOverride,
 );
 
-// POST /estudios/:estudioId/certificado/presigned-url
+// POST /estudios/:estudioId/certificado/presigned-url — solo lo usa el
+// registro manual del resultado (arriba), así que lleva su mismo guard.
 estudiosRouter.post(
   '/:estudioId/certificado/presigned-url',
-  authorize('expedientes', 'update'),
+  roleGuard(['administrador', 'operador_analista']),
   validate({ params: estudioIdParamsSchema, body: certificadoPresignedUrlSchema }),
   estudiosController.getCertificadoPresignedUrl,
 );
@@ -214,10 +219,12 @@ estudiosRouter.post(
   estudiosController.confirmarSoporte,
 );
 
-// POST /estudios/:estudioId/re-evaluar
+// POST /estudios/:estudioId/re-evaluar — crea el estudio hijo que luego se
+// resuelve con /resultado; es parte de la revisión manual (Adenda 2 §5), así
+// que es solo de Cofianza. La web ya lo mostraba solo a admin/operador.
 estudiosRouter.post(
   '/:estudioId/re-evaluar',
-  authorize('expedientes', 'update'),
+  roleGuard(['administrador', 'operador_analista']),
   validate({ params: estudioIdParamsSchema, body: reEvaluarSchema }),
   estudiosController.reEvaluar,
 );

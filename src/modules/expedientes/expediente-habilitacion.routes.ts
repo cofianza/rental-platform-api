@@ -75,13 +75,16 @@ const aprobarCondicionadoBody = z.object({
 });
 
 // POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la
-// documentación adicional pedida (codeudor, póliza, etc.) el propietario
-// decide proceder. Transicionamos expediente a 'aprobado' y disparamos la
-// generación del contrato con los datos enviados.
+// documentación adicional pedida (codeudor, póliza, etc.) un analista de
+// Cofianza decide proceder. Transicionamos expediente a 'aprobado' y
+// disparamos la generación del contrato con los datos enviados.
+// Adenda 2 §5: la revisión manual la resuelve SOLO Cofianza. El dueño
+// (propietario/inmobiliaria) tiene interés comercial en cerrar el arriendo
+// mientras Cofianza responde por los cánones: no puede aprobar.
 router.post(
   '/:id/aprobar-condicionado',
   authMiddleware,
-  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
+  roleGuard(['administrador', 'operador_analista']),
   validate({ params: expedienteIdParamsSchema, body: aprobarCondicionadoBody }),
   controller.aprobarCondicionado,
 );

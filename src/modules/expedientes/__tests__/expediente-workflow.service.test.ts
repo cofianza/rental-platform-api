@@ -35,6 +35,13 @@ vi.mock('@/lib/logger', () => ({
   },
 }));
 
+// El guard de tenant (assertExpedienteAccess) no es lo que se prueba aquí:
+// para el dueño consultaría Supabase. Se deja pasar; el resto, real.
+vi.mock('@/lib/tenantScope', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tenantScope')>()),
+  assertExpedienteAccess: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock getExpedienteById from expedientes.service
 const mockGetExpedienteById = vi.fn();
 vi.mock('../expedientes.service', () => ({
@@ -314,6 +321,26 @@ describe('expediente-workflow.service', () => {
           { estado: 'cerrado', label: 'Cancelar estudio' },
         ],
       });
+    });
+
+    it('Adenda 2 §5: el dueño no puede cerrar un condicionado (revisión manual de Cofianza)', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      const dueno = await getTransitionsForExpediente('exp-uuid', 'prop-uuid', 'propietario');
+      expect(dueno.transiciones_disponibles).toEqual([]);
+
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      const admin = await getTransitionsForExpediente('exp-uuid', 'admin-uuid', 'administrador');
+      expect(admin.transiciones_disponibles.map((t) => t.estado)).toEqual(
+        expect.arrayContaining(['aprobado', 'rechazado', 'cerrado']),
+      );
+
+      // Un aprobado sí lo puede cerrar el dueño (no es revisión manual). Desde
+      // aprobado hay dos salidas a 'cerrado' (cierre y cancelación).
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      const duenoAprobado = await getTransitionsForExpediente('exp-uuid', 'prop-uuid', 'propietario');
+      const destinos = duenoAprobado.transiciones_disponibles.map((t) => t.estado);
+      expect(destinos.length).toBeGreaterThan(0);
+      expect(new Set(destinos)).toEqual(new Set(['cerrado']));
     });
 
     it('Gerencia (solo lectura) no recibe transiciones: el POST se las rechazaria', async () => {

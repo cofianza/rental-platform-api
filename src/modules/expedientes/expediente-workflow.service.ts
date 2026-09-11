@@ -31,14 +31,15 @@ interface ExpedienteRow {
 
 // Transiciones que el propietario / inmobiliaria pueden ejecutar sobre los
 // expedientes de SUS propios inmuebles. El dueño puede CERRAR / CANCELAR
-// el expediente en cualquier estado dando un motivo — no necesita pedir
-// permiso a un admin para abandonar un flujo. Las transiciones intermedias
-// (aprobar, rechazar, condicionar) siguen siendo del analista.
+// el expediente dando un motivo — no necesita pedir permiso a un admin para
+// abandonar un flujo. Las transiciones intermedias (aprobar, rechazar,
+// condicionar) siguen siendo del analista.
+// Salvo 'condicionado': es revisión manual y la Adenda 2 §5 prohíbe al dueño
+// aprobar, modificar o CERRAR ese caso. Lo resuelve un analista de Cofianza.
 const PROPIETARIO_TRANSITIONS: ReadonlyArray<{ from: EstadoExpediente; to: EstadoExpediente }> = [
   { from: 'borrador', to: 'cerrado' },
   { from: 'en_revision', to: 'cerrado' },
   { from: 'informacion_incompleta', to: 'cerrado' },
-  { from: 'condicionado', to: 'cerrado' },
   { from: 'aprobado', to: 'cerrado' },
   { from: 'rechazado', to: 'cerrado' },
 ];

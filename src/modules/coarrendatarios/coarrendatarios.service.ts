@@ -1238,13 +1238,13 @@ export async function onCoarrendatarioEstudioCompletado(
     const ctxSin = await fetchExpedienteCtx(est.expediente_id);
     const msgGestor =
       `El co-arrendatario ${coa?.nombre ?? ''} completó su estudio, pero ni él ni ${ctxSin.solicitante_nombre || 'el solicitante'} ` +
-      'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: revisa los documentos de soporte y decide si apruebas el estudio.';
+      'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: un analista de Cofianza revisa el caso con los documentos de soporte.';
 
     if (ctxSin.inmueble_propietario_id) {
       notificarUsuario({
         userId: ctxSin.inmueble_propietario_id,
         tipo: 'estudio.condicionado',
-        titulo: 'Decisión pendiente: sin historial crediticio',
+        titulo: 'En revisión de Cofianza: sin historial crediticio',
         mensaje: msgGestor,
         link: `/expedientes/${est.expediente_id}`,
         payload: {
@@ -1258,7 +1258,7 @@ export async function onCoarrendatarioEstudioCompletado(
         expedienteId: est.expediente_id,
         excluirPerfilId: ctxSin.inmueble_propietario_id,
         tipo: 'estudio.condicionado',
-        titulo: 'Decisión pendiente: sin historial crediticio',
+        titulo: 'En revisión de Cofianza: sin historial crediticio',
         mensaje: msgGestor,
         link: `/expedientes/${est.expediente_id}`,
         payload: {
@@ -1277,7 +1277,7 @@ export async function onCoarrendatarioEstudioCompletado(
         tipo: 'estudio.condicionado',
         titulo: 'Tu co-arrendatario completó su estudio',
         mensaje:
-          'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: el propietario revisará tu caso con los documentos de soporte.',
+          'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: un analista de Cofianza revisará tu caso con los documentos de soporte.',
         link: `/expedientes/${est.expediente_id}`,
         payload: {
           expediente_id: est.expediente_id,

@@ -897,14 +897,14 @@ export async function onEstudioCompletado(params: {
       }
 
       // Notificacion in-app al propietario: el estudio salio condicionado.
-      // El propietario debe revisar la documentacion adicional cuando llegue
-      // y decidir si proceder con el contrato. Fire-and-forget.
+      // Decide un analista de Cofianza (Adenda 2 §5); el dueño puede aportar
+      // soportes o sumar co-arrendatario. Fire-and-forget.
       if (inm?.propietario_id && sol) {
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
           titulo: 'Estudio condicionado',
-          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado. Revisa los documentos adicionales del solicitante y decide si proceder.`,
+          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
@@ -915,7 +915,7 @@ export async function onEstudioCompletado(params: {
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
           titulo: 'Estudio condicionado',
-          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado. Revisa los documentos adicionales del solicitante y decide si proceder.`,
+          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
           whatsapp: {
