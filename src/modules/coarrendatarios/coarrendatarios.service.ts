@@ -44,6 +44,7 @@ import {
   VERSION_TERMINOS_COARRENDATARIO,
 } from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
+import { ponderarConCoarrendatario } from './ponderacion';
 import type {
   InvitarCoarrendatarioInput,
   AceptarCoarrendatarioInput,
@@ -1006,13 +1007,9 @@ export async function aceptarInvitacion(
 // 6. Ponderación: cuando termina el estudio del coarrendatario, combinar
 //    su resultado con el del titular y decidir el expediente.
 //
-// Regla del producto (Mario, 5-may-2026): "se ponderan uno con otro. Si el
-// otro salió muy bueno, entonces se fueron juntos." Implementación:
-//   - Si AL MENOS UNO está 'aprobado' → expediente.estado = 'aprobado'
-//   - Si AMBOS 'condicionado' o cualquiera 'rechazado' → 'rechazado'
-//   - Solo se rechaza/aprueba aquí — la generación del contrato sigue
-//     siendo manual del propietario (decisión Mario, 5-may en otra
-//     conversación).
+// La regla vive en ponderacion.ts (Adenda 2 §2 y §5; reemplaza la regla verbal
+// de mayo "si uno aprueba, se van juntos"). Solo se rechaza/aprueba aquí — la
+// generación del contrato sigue siendo manual del propietario.
 // ============================================================
 
 /**
@@ -1141,70 +1138,37 @@ export async function onCoarrendatarioEstudioCompletado(
     return;
   }
 
-  // 4. Decidir resultado combinado.
-  //
-  //    Regla del producto (Mario, 5-may-2026): "se ponderan uno con otro; si el
-  //    otro salió muy bueno, se fueron juntos". Con dos burós activos hay que
-  //    distinguir un caso que antes no existía: un 'condicionado' puede
-  //    significar dos cosas MUY distintas.
-  //
-  //      (a) el buró evaluó a la persona y su score quedó en banda media
-  //          → hay evidencia de riesgo, la ponderación puede decidir;
-  //      (b) el buró NO pudo evaluarla porque no tiene información
-  //          (código 14 de DataCrédito, exclusiones -4..-7 de CreditVision):
-  //          score null → ausencia de evidencia, NO evidencia de riesgo.
-  //
-  //    Auto-rechazar en el caso (b) contradice el propio flujo: un titular sin
-  //    historial, solo, queda 'condicionado' y el gestor decide a mano con los
-  //    soportes. Si además invita a un co-arrendatario que tampoco está
-  //    bancarizado — escenario común en parejas jóvenes, justo el público de
-  //    Cofianza — el expediente se cerraba SOLO y sin apelación, castigando
-  //    haber invitado a alguien. Por eso ese caso vuelve a decisión humana.
-  const resultados = [titular.resultado, est.resultado];
-  let resultadoCombinado: 'aprobado' | 'rechazado' | 'sin_evaluar';
-  if (reglasDurasCoa.length > 0) {
-    // Politica V4.1 §5, ultima fila de la tabla: "Cualquiera + Regla dura
-    // activada -> RECHAZO AUTOMATICO — la regla dura del coarrendatario
-    // contamina el conjunto". Va ANTES del aprobado a proposito: un titular
-    // aprobado no la compensa (hasta 2026-09-08 ganaba el 'aprobado' y el par
-    // se aprobaba con un coarrendatario en lista restrictiva o con DTI > 65%).
-    // Los rechazos POR SCORE del coarrendatario no entran aqui: esa fila la
-    // Politica la deja sin definir y el ocupante es quien define el riesgo.
-    resultadoCombinado = 'rechazado';
+  // 4. Decidir el expediente (ver ponderacion.ts). Adenda 2 §2 y §5: un
+  //    titular condicionado esta en revision manual y lo decide un analista
+  //    de Cofianza — ya no se aprueba solo porque el coarrendatario salio
+  //    aprobado (regla verbal de mayo). Solo se decide sin analista por la
+  //    regla dura del coarrendatario (Politica §5) o, con el motor, por la
+  //    aprobacion automatica condicionada (70-84 + coarrendatario >= 80).
+  const coaConReglaDura = reglasDurasCoa.length > 0;
+  if (coaConReglaDura) {
     logger.info(
       { expedienteId: est.expediente_id, estudioId, reglasDuras: reglasDurasCoa, titularResultado: titular.resultado },
       'Politica §5: regla dura del coarrendatario — rechazo automatico del conjunto',
     );
-  } else if (resultados.includes('aprobado')) {
-    resultadoCombinado = 'aprobado';
-  } else if (resultados.includes('rechazado')) {
-    // Un rechazo sí es evidencia de riesgo, y manda aunque el otro no se
-    // hubiera podido evaluar.
-    resultadoCombinado = 'rechazado';
-  } else if (!fueEvaluadoPorElBuro(titular) || !fueEvaluadoPorElBuro(est)) {
-    resultadoCombinado = 'sin_evaluar';
-  } else {
-    // Ambos evaluados y ninguno aprobado → rechazo definitivo.
-    resultadoCombinado = 'rechazado';
   }
-
-  // 4.1. Adenda 1 §3, con el motor decidiendo: "70 a 84 CON coarrendatario
-  //      que obtiene 80 o mas por flujo automatico: APROBACION AUTOMATICA
-  //      CONDICIONADA". El titular quedo 'condicionado' (zona gris) esperando
-  //      justamente esto; si el coarrendatario llega al umbral y ninguno tiene
-  //      regla dura, el par se aprueba sin analista. Si no, se queda como esta.
-  if (env.MOTOR_DECIDE_ENABLED && titular.resultado === 'condicionado' && resultadoCombinado !== 'rechazado') {
-    const ponderado = await ponderarConScorecard(titular.id, est.id, reglasDurasCoa.length > 0);
+  let scorecard: 'aprobado' | 'sin_evaluar' | null = null;
+  if (!coaConReglaDura && env.MOTOR_DECIDE_ENABLED && titular.resultado === 'condicionado') {
+    const ponderado = await ponderarConScorecard(titular.id, est.id, false);
     if (ponderado) {
       logger.info({ expedienteId: est.expediente_id, ...ponderado }, 'Adenda §3: ponderacion titular/coarrendatario con el scorecard');
-      resultadoCombinado = ponderado.resultado;
+      scorecard = ponderado.resultado;
     }
   }
+  const resultadoCombinado = ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura, scorecard });
 
-  // 4.5. Sin evaluar: el expediente SE QUEDA en 'condicionado' para que el
-  //      gestor decida con los soportes. Se registra en el timeline y se avisa,
-  //      pero no se toca el estado ni se libera el inmueble.
-  if (resultadoCombinado === 'sin_evaluar') {
+  // 4.5. Revision manual: el expediente SE QUEDA en 'condicionado' y lo decide
+  //      un analista de Cofianza con los dos resultados. Se registra en el
+  //      timeline y se avisa (dueño, responsable, titular y analistas), pero
+  //      no se toca el estado ni se libera el inmueble.
+  if (resultadoCombinado === 'revision_manual') {
+    // Ninguno de los dos pudo ser evaluado por el buro (sin historial): se
+    // explica distinto que "el coarrendatario ya tiene resultado".
+    const sinInfo = !fueEvaluadoPorElBuro(titular) || !fueEvaluadoPorElBuro(est);
     logger.info(
       {
         expedienteId: est.expediente_id,
@@ -1214,7 +1178,7 @@ export async function onCoarrendatarioEstudioCompletado(
         coaResultado: est.resultado,
         coaScore: est.score,
       },
-      'Ponderación coarrendatario: sin información suficiente en el buró — queda para decisión manual',
+      'Ponderación coarrendatario: queda en revisión manual para un analista de Cofianza (Adenda 2 §5)',
     );
 
     await (supabase
@@ -1222,12 +1186,13 @@ export async function onCoarrendatarioEstudioCompletado(
       .insert({
         expediente_id: est.expediente_id,
         tipo: 'estudio',
-        descripcion:
-          'La evaluación del co-arrendatario se completó, pero el buró no tiene información crediticia suficiente para ponderar. El estudio queda pendiente de decisión manual.',
+        descripcion: sinInfo
+          ? 'La evaluación del co-arrendatario se completó, pero el buró no tiene información crediticia suficiente para ponderar. El estudio sigue en revisión manual de Cofianza.'
+          : `La evaluación del co-arrendatario se completó (resultado: ${est.resultado}). El estudio sigue en revisión manual: lo decide un analista de Cofianza con los dos resultados (Adenda 2 §5).`,
         metadata: {
           automatico: true,
           origen: 'ponderacion_coarrendatario',
-          resultado: 'sin_evaluar',
+          resultado: 'revision_manual',
           titular_resultado: titular.resultado,
           titular_score: titular.score,
           coarrendatario_resultado: est.resultado,
@@ -1236,37 +1201,58 @@ export async function onCoarrendatarioEstudioCompletado(
       } as never);
 
     const ctxSin = await fetchExpedienteCtx(est.expediente_id);
-    const msgGestor =
-      `El co-arrendatario ${coa?.nombre ?? ''} completó su estudio, pero ni él ni ${ctxSin.solicitante_nombre || 'el solicitante'} ` +
-      'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: un analista de Cofianza revisa el caso con los documentos de soporte.';
+    const msgGestor = sinInfo
+      ? `El co-arrendatario ${coa?.nombre ?? ''} completó su estudio, pero ni él ni ${ctxSin.solicitante_nombre || 'el solicitante'} ` +
+        'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: un analista de Cofianza revisa el caso con los documentos de soporte.'
+      : `El co-arrendatario ${coa?.nombre ?? ''} completó su estudio (${est.resultado}). Un analista de Cofianza decide el caso con los dos resultados.`;
+    const tituloGestor = sinInfo ? 'En revisión de Cofianza: sin historial crediticio' : 'Co-arrendatario evaluado: decide Cofianza';
+    const via = sinInfo ? 'coarrendatario_sin_evaluar' : 'coarrendatario_revision_manual';
+
+    // El analista tiene informacion nueva para decidir (SLA de 2 h habiles).
+    void (async () => {
+      const { listOperators } = await import('@/modules/users/users.service');
+      const analistas = await listOperators().catch(() => []);
+      await Promise.all(
+        analistas.map((a) =>
+          notificarUsuario({
+            userId: a.id,
+            tipo: 'estudio.revision_manual',
+            titulo: `Co-arrendatario evaluado — ${ctxSin.numero}`,
+            mensaje: `El co-arrendatario completó su estudio (${est.resultado}). El caso sigue en revisión manual y lo decide un analista de Cofianza.`,
+            link: `/expedientes/${est.expediente_id}`,
+            payload: { expediente_id: est.expediente_id, via, coarrendatario_id: coa?.id },
+          }),
+        ),
+      );
+    })().catch((e) => logger.warn({ error: e }, 'Error notif analistas ponderacion coarrendatario'));
 
     if (ctxSin.inmueble_propietario_id) {
       notificarUsuario({
         userId: ctxSin.inmueble_propietario_id,
         tipo: 'estudio.condicionado',
-        titulo: 'En revisión de Cofianza: sin historial crediticio',
+        titulo: tituloGestor,
         mensaje: msgGestor,
         link: `/expedientes/${est.expediente_id}`,
         payload: {
           expediente_id: est.expediente_id,
-          via: 'coarrendatario_sin_evaluar',
+          via,
           coarrendatario_id: coa?.id,
         },
-      }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion sin evaluar (propietario)'));
+      }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion revision manual (propietario)'));
 
       notificarResponsableExpediente({
         expedienteId: est.expediente_id,
         excluirPerfilId: ctxSin.inmueble_propietario_id,
         tipo: 'estudio.condicionado',
-        titulo: 'En revisión de Cofianza: sin historial crediticio',
+        titulo: tituloGestor,
         mensaje: msgGestor,
         link: `/expedientes/${est.expediente_id}`,
         payload: {
           expediente_id: est.expediente_id,
-          via: 'coarrendatario_sin_evaluar',
+          via,
           coarrendatario_id: coa?.id,
         },
-      }).catch((e) => logger.warn({ error: e }, 'Error notif responsable ponderacion sin evaluar'));
+      }).catch((e) => logger.warn({ error: e }, 'Error notif responsable ponderacion revision manual'));
     }
 
     // Al titular se le avisa con honestidad: hizo la gestión de invitar y
@@ -1276,12 +1262,13 @@ export async function onCoarrendatarioEstudioCompletado(
         userId: ctxSin.solicitante_creado_por,
         tipo: 'estudio.condicionado',
         titulo: 'Tu co-arrendatario completó su estudio',
-        mensaje:
-          'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: un analista de Cofianza revisará tu caso con los documentos de soporte.',
+        mensaje: sinInfo
+          ? 'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: un analista de Cofianza revisará tu caso con los documentos de soporte.'
+          : 'Un analista de Cofianza revisará tu caso con los resultados de los dos. Te avisamos cuando decida.',
         link: `/expedientes/${est.expediente_id}`,
         payload: {
           expediente_id: est.expediente_id,
-          via: 'coarrendatario_sin_evaluar',
+          via,
           coarrendatario_id: coa?.id,
         },
       }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion sin evaluar (titular)'));

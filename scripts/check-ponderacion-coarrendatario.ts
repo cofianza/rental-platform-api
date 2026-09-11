@@ -15,6 +15,7 @@
  */
 
 import assert from 'node:assert';
+import { ponderarConCoarrendatario } from '@/modules/coarrendatarios/ponderacion';
 
 type Resultado = 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente';
 interface Estudio {
@@ -22,21 +23,12 @@ interface Estudio {
   score: number | null;
 }
 
-// ── Copia fiel de la lógica del service (mantener en sync) ──────────────────
+// ── La regla REAL (ponderacion.ts), no una copia ─────────────────────────────
+// Adenda 2 §2 y §5: un titular condicionado lo decide un analista de Cofianza.
+// La regla verbal de mayo ("si uno aprueba, se van juntos") dejo de aplicar.
 
-function fueEvaluadoPorElBuro(estudio: Estudio): boolean {
-  if (estudio.resultado === 'aprobado' || estudio.resultado === 'rechazado') return true;
-  if (estudio.resultado === 'condicionado') return estudio.score !== null;
-  return false;
-}
-
-function ponderar(titular: Estudio, coa: Estudio): 'aprobado' | 'rechazado' | 'sin_evaluar' {
-  const resultados = [titular.resultado, coa.resultado];
-  if (resultados.includes('aprobado')) return 'aprobado';
-  if (resultados.includes('rechazado')) return 'rechazado';
-  if (!fueEvaluadoPorElBuro(titular) || !fueEvaluadoPorElBuro(coa)) return 'sin_evaluar';
-  return 'rechazado';
-}
+const ponderar = (titular: Estudio, _coa: Estudio, opts: { reglaDuraCoa?: boolean; scorecard?: 'aprobado' | 'sin_evaluar' | null } = {}) =>
+  ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura: !!opts.reglaDuraCoa, scorecard: opts.scorecard ?? null });
 
 // ── Casos ───────────────────────────────────────────────────────────────────
 
@@ -46,29 +38,20 @@ const MARGINAL: Estudio = { resultado: 'condicionado', score: 480 }; // evaluado
 const SIN_INFO: Estudio = { resultado: 'condicionado', score: null }; // código 14 / exclusión
 const PENDIENTE: Estudio = { resultado: 'pendiente', score: null };
 
-const casos: Array<[string, Estudio, Estudio, 'aprobado' | 'rechazado' | 'sin_evaluar']> = [
-  // Regla original: basta uno aprobado.
+const casos: Array<[string, Estudio, Estudio, 'aprobado' | 'rechazado' | 'revision_manual']> = [
+  // El titular NO estaba en revision manual: el coarrendatario no lo cambia.
   ['aprobado + marginal', APROBADO, MARGINAL, 'aprobado'],
-  ['marginal + aprobado', MARGINAL, APROBADO, 'aprobado'],
-  ['aprobado + sin info', APROBADO, SIN_INFO, 'aprobado'],
   ['aprobado + rechazado', APROBADO, RECHAZADO, 'aprobado'],
+  ['rechazado + aprobado', RECHAZADO, APROBADO, 'rechazado'], // "< 70: ningun coarrendatario compensa"
 
-  // Un rechazo es evidencia real de riesgo y manda sobre la falta de datos.
-  ['rechazado + sin info', RECHAZADO, SIN_INFO, 'rechazado'],
-  ['sin info + rechazado', SIN_INFO, RECHAZADO, 'rechazado'],
-  ['marginal + rechazado', MARGINAL, RECHAZADO, 'rechazado'],
-
-  // Ambos evaluados y ninguno aprobado → rechazo (comportamiento original).
-  ['marginal + marginal', MARGINAL, MARGINAL, 'rechazado'],
-
-  // EL FIX: sin información no es evidencia de riesgo → decisión humana.
-  ['sin info + sin info', SIN_INFO, SIN_INFO, 'sin_evaluar'],
-  ['sin info + marginal', SIN_INFO, MARGINAL, 'sin_evaluar'],
-  ['marginal + sin info', MARGINAL, SIN_INFO, 'sin_evaluar'],
-
-  // 'pendiente' nunca debe auto-rechazar.
-  ['pendiente + marginal', PENDIENTE, MARGINAL, 'sin_evaluar'],
-  ['marginal + pendiente', MARGINAL, PENDIENTE, 'sin_evaluar'],
+  // Titular condicionado = revision manual: decide un analista (Adenda 2 §5),
+  // aunque el coarrendatario salga aprobado (antes se aprobaba solo).
+  ['marginal + aprobado', MARGINAL, APROBADO, 'revision_manual'],
+  ['sin info + aprobado', SIN_INFO, APROBADO, 'revision_manual'],
+  ['marginal + rechazado', MARGINAL, RECHAZADO, 'revision_manual'],
+  ['marginal + marginal', MARGINAL, MARGINAL, 'revision_manual'],
+  ['sin info + sin info', SIN_INFO, SIN_INFO, 'revision_manual'],
+  ['marginal + pendiente', MARGINAL, PENDIENTE, 'revision_manual'],
 ];
 
 let fallos = 0;
@@ -78,21 +61,16 @@ for (const [nombre, titular, coa, esperado] of casos) {
   if (!ok) fallos++;
   console.log(`${ok ? '✓' : '✗'} ${nombre.padEnd(24)} → ${real}${ok ? '' : `  (esperado: ${esperado})`}`);
 }
-
 assert.strictEqual(fallos, 0, `${fallos} caso(s) de la matriz fallaron`);
 
-// Un rechazo automático solo es legítimo con evidencia de ambos lados.
-for (const [nombre, titular, coa] of casos) {
-  if (ponderar(titular, coa) === 'rechazado') {
-    const hayRechazoExplicito =
-      titular.resultado === 'rechazado' || coa.resultado === 'rechazado';
-    const ambosEvaluados = fueEvaluadoPorElBuro(titular) && fueEvaluadoPorElBuro(coa);
-    assert.ok(
-      hayRechazoExplicito || ambosEvaluados,
-      `"${nombre}" auto-rechaza sin evidencia: nadie fue rechazado y alguno no pudo ser evaluado`,
-    );
-  }
+// Politica §5, ultima fila: la regla dura del coarrendatario contamina el conjunto.
+for (const titular of [APROBADO, MARGINAL, SIN_INFO]) {
+  assert.strictEqual(ponderar(titular, APROBADO, { reglaDuraCoa: true }), 'rechazado', 'regla dura del coarrendatario -> rechazo automatico');
 }
+// Con el motor: la aprobacion automatica condicionada (70-84 + coa >= 80) sigue.
+assert.strictEqual(ponderar(MARGINAL, APROBADO, { scorecard: 'aprobado' }), 'aprobado', 'scorecard aprueba -> aprobado sin analista');
+assert.strictEqual(ponderar(MARGINAL, APROBADO, { scorecard: 'sin_evaluar' }), 'revision_manual');
+assert.strictEqual(ponderar(APROBADO, APROBADO, { reglaDuraCoa: true, scorecard: 'aprobado' }), 'rechazado', 'la regla dura manda sobre el scorecard');
 
 console.log('\nOK — la matriz de ponderación se comporta como se espera');
 

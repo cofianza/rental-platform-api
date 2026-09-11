@@ -80,6 +80,8 @@ vi.mock('@/lib/calibracion', () => ({
   getCalibracion: vi.fn(async () => ({ UMBRAL_ZONA_GRIS: 70, UMBRAL_APROBACION_AUTOMATICA: 85, UMBRAL_COARRENDATARIO: 80 })),
 }));
 vi.mock('@/lib/tenantScope', () => ({ perfilEsDuenoDeInmueble: vi.fn(async () => true) }));
+const mockListOperators = vi.fn(async () => [{ id: 'analista-1' }]);
+vi.mock('@/modules/users/users.service', () => ({ listOperators: () => mockListOperators() }));
 vi.mock('resend', () => ({
   Resend: class {
     emails = { send: (...args: unknown[]) => mockResendSend(...args) };
@@ -226,17 +228,45 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     expect(mockLiberarReserva).not.toHaveBeenCalled();
   });
 
-  it('cuando el conjunto se aprueba, el CRC del titular se regenera con el acompañante (Flujo §10/§11)', async () => {
+  it('Adenda 2 §5: titular condicionado + coarrendatario aprobado ya NO se aprueba solo (decide el analista)', async () => {
     enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado'));
     enqueue('expediente_coarrendatarios', coaRow);
-    // UPDATE + ctx del paso 7 (que tambien firma el CRC con creado_por).
-    enqueue('expedientes', { data: [{ id: EXPEDIENTE_ID }], error: null }, ctxRow('aprobado'));
+    enqueue('expedientes', ctxRow());
 
     await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-    await vi.waitFor(() =>
-      expect(mockEmitirCrc).toHaveBeenCalledWith(TITULAR_ESTUDIO_ID, GESTOR_ID, { regenerar: true }),
-    );
+    expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+    const timeline = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert');
+    expect((timeline!.args[0] as { metadata: { resultado: string } }).metadata.resultado).toBe('revision_manual');
+    await vi.waitFor(() => expect(mockListOperators).toHaveBeenCalled());
+    expect(mockEmitirCrc).not.toHaveBeenCalled();
+  });
+
+  it('con el motor: 70-84 + coarrendatario >= 80 se aprueba solo y el CRC se regenera (Adenda 1 §3, Flujo §10/§11)', async () => {
+    mockEnv.MOTOR_DECIDE_ENABLED = true;
+    try {
+      enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado'));
+      enqueue('expediente_coarrendatarios', coaRow);
+      enqueue('estudios_scorecard_sombra', {
+        data: [
+          { estudio_id: TITULAR_ESTUDIO_ID, puntaje_normalizado: 75 },
+          { estudio_id: COA_ESTUDIO_ID, puntaje_normalizado: 85 },
+        ],
+        error: null,
+      });
+      // UPDATE + ctx del paso 7 (que tambien firma el CRC con creado_por).
+      enqueue('expedientes', { data: [{ id: EXPEDIENTE_ID }], error: null }, ctxRow('aprobado'));
+
+      await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+      const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
+      expect((update!.args[0] as { estado: string }).estado).toBe('aprobado');
+      await vi.waitFor(() =>
+        expect(mockEmitirCrc).toHaveBeenCalledWith(TITULAR_ESTUDIO_ID, GESTOR_ID, { regenerar: true }),
+      );
+    } finally {
+      mockEnv.MOTOR_DECIDE_ENABLED = false;
+    }
   });
 });
 
