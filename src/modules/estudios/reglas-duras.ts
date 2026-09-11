@@ -464,6 +464,21 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
   };
 }
 
+/**
+ * Politica §6/§14 y Adenda 2 §3: sin ingreso inferible de NINGUNA fuente no
+ * hay aprobacion automatica (no rechaza). Se mira la corrida FINAL —en la
+ * cascada la segunda central solo aporta score; el ingreso viene de la
+ * primaria—, no cada fuente. Hoy la unica fuente es el estimador de la central
+ * (Adenda 1 §1): una corrida solo por TransUnion, que no lo tiene, cae aqui.
+ * Solo aplica si se leyo el reporte de una central (la ausencia tiene motivo):
+ * el registro manual del analista no trae reporte y no se frena por esto.
+ */
+export function motivoRevisionIngresoNoInferible(salida: SalidaSombra | null): string | null {
+  if (!salida || salida.features.ingreso_mensual_inferido_cop !== null) return null;
+  if (!salida.features.ausencias.ingreso_mensual_inferido_cop) return null;
+  return 'Revisión manual obligatoria (Política §6/§14, Adenda 2 §3): no se pudo inferir el ingreso de ninguna fuente de esta evaluación.';
+}
+
 /** Linea corta para anexar a `observaciones`, que es factual (score, saldos). */
 export function notaObservacionesReglasDuras(
   reglas: readonly ReglaDuraActiva[],
@@ -698,6 +713,8 @@ export async function resolverResultadoEstudio(
         // obligatoria. Con los cortes de hoy el buro ya marca condicionado
         // bajo 600; esto cubre que Gerencia suba el tope desde el panel.
         salida.revision_obligatoria,
+        // Adenda 2 §3: sin ingreso de ninguna fuente, nada de aprobacion automatica.
+        motivoRevisionIngresoNoInferible(salida),
       ].filter((m): m is string => !!m);
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
       if (!motivoRevision) return { ...base, veredicto, salida, apisFallidas };

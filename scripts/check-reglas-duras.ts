@@ -54,6 +54,7 @@ import {
   motivoGestorReglasDuras,
   motivoParaProspectoDesdeMotivoGestor,
   motivoProspectoReglasDuras,
+  motivoRevisionIngresoNoInferible,
   notaObservacionesReglasDuras,
 } from '@/modules/estudios/reglas-duras';
 import type { VeredictoReglasDuras } from '@/modules/estudios/reglas-duras';
@@ -322,8 +323,10 @@ for (const [etiqueta, resultadoPropuesto] of [
   assert.strictEqual(v.resultadoFinal, resultadoPropuesto, 'el resultado pasa intacto');
   assert.strictEqual(v.cambiaResultado, false);
   assert.deepStrictEqual([...v.reglas], []);
+  // Adenda 2 §3: pero sin ingreso de ninguna fuente NO se aprueba solo.
+  assert.ok(motivoRevisionIngresoNoInferible(salidaTU)?.includes('Adenda 2 §3'), 'TransUnion sin ingreso -> revision manual');
 }
-fila(true, 'TransUnion (sin ingreso)', 'los 3 resultados pasan intactos');
+fila(true, 'TransUnion (sin ingreso)', 'no rechaza, pero va a revision manual (Adenda 2 §3)');
 
 // Mismo criterio para DataCredito cuando el buro EXCLUYE el ingreso (codigos de
 // exclusion del producto DW) o simplemente no manda la seccion.
@@ -344,8 +347,16 @@ for (const [etiqueta, payload] of [
   assert.strictEqual(s.features.ingreso_mensual_inferido_cop, null, `${etiqueta}: sin ingreso`);
   const v = aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida: s });
   assert.strictEqual(v.rechaza, false, `${etiqueta}: dato ausente NO es dato incumplido`);
+  assert.ok(motivoRevisionIngresoNoInferible(s) !== null, `${etiqueta}: revision manual (Adenda 2 §3)`);
 }
-fila(true, 'DataCredito sin ingreso inferido', 'no rechaza (dato ausente != incumplido)');
+fila(true, 'DataCredito sin ingreso inferido', 'no rechaza, va a revision manual (Adenda 2 §3)');
+
+// Con ingreso no hay motivo; y el registro manual (sin reporte de central)
+// tampoco se frena: no hay de donde sacar ingreso y decide el analista.
+assert.strictEqual(motivoRevisionIngresoNoInferible(decidir({ ingresoCop: 5_000_000, cuotaCop: 100_000, canonCop: 1_000_000, score: 700 }).salida), null, 'con ingreso: sin motivo');
+assert.strictEqual(motivoRevisionIngresoNoInferible(evaluarSombra({ proveedor: 'manual', payload: null, score_persistido: 700, fecha_evaluacion: HOY })), null, 'registro manual: sin motivo');
+assert.strictEqual(motivoRevisionIngresoNoInferible(null), null, 'sin corrida: sin motivo');
+fila(true, 'con ingreso / registro manual', 'sin motivo de revision por ingreso');
 
 // Y el caso degenerado: sin salida del motor no hay nada que decidir.
 const sinSalida = aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida: null });
