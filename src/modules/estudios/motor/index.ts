@@ -25,7 +25,7 @@
 
 import {
   DIFERENCIA_BUROS_REVISION,
-  V1_REVISION_MANUAL_MIN,
+  V1_RECHAZO_DURO,
   V1_REVISION_MANUAL_MAX,
   MAX_BRUTO_MODELO,
   PUNTOS_MAXIMOS,
@@ -118,6 +118,9 @@ export interface EntradaSombra {
   /** Umbrales vigentes del panel de calibracion. Sin ellos, los de la Politica. */
   umbral_aprobado?: number | null;
   umbral_revision?: number | null;
+  /** Adenda 2 §2: score externo < rechazo -> regla dura; rechazo..revision -> revision obligatoria. */
+  umbral_score_rechazo?: number | null;
+  umbral_score_revision?: number | null;
 }
 
 /** Lo que del resumen viaja en la salida (y a features_crudas): sin `raw`. */
@@ -335,9 +338,13 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     const ancla = features.fecha_corte_datos ?? features.fecha_consulta ?? fecha.slice(0, 10);
     const antiguedadMeses = mesesEntre(features.fecha_primera_obligacion, ancla);
 
+    // Adenda 2 §2: cortes del score externo desde el panel.
+    const scoreRechazo = montoPositivo(entrada?.umbral_score_rechazo) ?? V1_RECHAZO_DURO;
+    const scoreRevisionMax = montoPositivo(entrada?.umbral_score_revision) ?? V1_REVISION_MANUAL_MAX;
+
     // ── Puntajes ────────────────────────────────────────────
     const puntajes: PuntajeVariable[] = [
-      { variable: 'V1', puntos_maximos: PUNTOS_MAXIMOS.V1, ...puntajeV1ScoreExterno(features.score_externo) },
+      { variable: 'V1', puntos_maximos: PUNTOS_MAXIMOS.V1, ...puntajeV1ScoreExterno(features.score_externo, scoreRechazo) },
       { variable: 'V2', puntos_maximos: PUNTOS_MAXIMOS.V2, ...puntajeV2Dti(dtiPct) },
       { variable: 'V3', puntos_maximos: PUNTOS_MAXIMOS.V3, ...puntajeV3CanonIngreso(canonIngresoPct) },
       { variable: 'V4', puntos_maximos: PUNTOS_MAXIMOS.V4, ...puntajeV4VinculacionCentral(entrada?.vinculacion_central ?? null) },
@@ -372,12 +379,12 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     // la puede levantar un coarrendatario (Adenda §3); esto no.
     const scoreEnBandaRevision =
       features.score_externo !== null &&
-      features.score_externo >= V1_REVISION_MANUAL_MIN &&
-      features.score_externo <= V1_REVISION_MANUAL_MAX;
+      features.score_externo >= scoreRechazo &&
+      features.score_externo <= scoreRevisionMax;
     const revisionObligatoria = inconsistenciaBuros
       ? `Caso G: diferencia entre centrales mayor a ${DIFERENCIA_BUROS_REVISION} puntos (${Object.entries(scoresIndividuales).map(([k, v]) => `${k} ${v}`).join(' vs ')})`
       : scoreEnBandaRevision
-        ? `Score externo ${features.score_externo} en la banda de revision manual obligatoria (${V1_REVISION_MANUAL_MIN}-${V1_REVISION_MANUAL_MAX}, Politica §3.1)`
+        ? `Score externo ${features.score_externo} en la banda de revision manual obligatoria (${scoreRechazo}-${scoreRevisionMax}, Politica §3.1 / Adenda 2 §2)`
         : null;
     const decision = decidirSombra(
       totales,
@@ -386,6 +393,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       umbralRevision,
       reglasGlobales.map((r) => r.codigo),
       revisionObligatoria,
+      { min: scoreRechazo, max: scoreRevisionMax },
     );
 
     const reglasDuras: ReglaDuraActivada[] = [

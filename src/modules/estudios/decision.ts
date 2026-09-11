@@ -81,6 +81,16 @@ export function decidirCascada(
     // en la otra ("si una sola central reporta score, se usa ese score").
     return { consultarSecundaria: true, resultadoAnticipado: null, motivo: 'la primaria no produjo puntaje: se consulta la segunda central' };
   }
+  // Adenda 2 §2: score 450-599 = revision manual con prioridad sobre el
+  // rechazo por puntaje. Ni el < 40 ni el >= 90 se anticipan: se consulta la
+  // segunda y decidirResultado aplica la jerarquia sobre el score promedio.
+  if (primaria.revision_obligatoria) {
+    return {
+      consultarSecundaria: true,
+      resultadoAnticipado: null,
+      motivo: `${primaria.revision_obligatoria}: prevalece sobre el puntaje ${p}; se consulta la segunda central`,
+    };
+  }
   if (p < u.cascadaRechazo) {
     return {
       consultarSecundaria: false,

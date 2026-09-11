@@ -284,6 +284,10 @@ for (const [score, esperado, regla] of fronterasV1) {
   fila(ok, `V1 score ${score}`, `puntos=${r.puntos} regla=${r.reglaDura ?? '-'} (esperado ${esperado}/${regla ?? '-'})`);
 }
 assert.strictEqual(puntajeV1ScoreExterno(null).estado, 'no_calculable', 'sin score V1 no es 0, es no calculable');
+// Adenda 2 §2: el corte viene del panel (UMBRAL_SCORE_RECHAZO). Subido a 500,
+// un 480 ya dispara la regla aunque la tabla le daria 10 puntos.
+assert.strictEqual(puntajeV1ScoreExterno(480, 500).reglaDura, 'score_menor_450', 'el corte del panel manda sobre el 450 fijo');
+assert.strictEqual(puntajeV1ScoreExterno(500, 500).reglaDura, null, 'en el corte exacto no hay regla (es "menor a")');
 
 // V2 — DTI (politica §4.2). Por encima de 65% es regla dura.
 // Los .1 cierran los huecos que deja una tabla escrita con enteros.

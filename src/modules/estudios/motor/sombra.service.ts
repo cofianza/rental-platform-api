@@ -151,6 +151,8 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
       factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
       umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
       umbral_revision: cal.UMBRAL_ZONA_GRIS,
+      umbral_score_rechazo: cal.UMBRAL_SCORE_RECHAZO,
+      umbral_score_revision: cal.UMBRAL_SCORE_REVISION,
     });
 
     // 4-5. Upsert idempotente (tambien de la corrida vacia: regla 3).

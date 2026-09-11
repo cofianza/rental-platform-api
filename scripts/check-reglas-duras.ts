@@ -124,9 +124,9 @@ function fila(ok: boolean, etiqueta: string, detalle: string): void {
 // ============================================================
 //
 // Es la asercion mas importante del archivo: Gerencia autorizo DTI y
-// canon/ingreso (2026-09-03) y NADA mas del scorecard. Si alguien agrega
-// 'score_menor_450' a la lista, el corte externo se mueve de 400 a 450 en
-// produccion sin que nadie lo pida — y este check cae.
+// canon/ingreso (2026-09-03) y score < 450 (Adenda 2 §2, 2026-09-11), y NADA
+// mas del scorecard. Si alguien agrega otra regla (mora, restitucion) a la
+// lista sin autorizacion escrita, este check cae.
 //
 // 'listas_restrictivas' (§6, OFAC/ONU via Auco, 2026-09-07) esta en la lista
 // pero SOLO puede dispararse con AUCO_BACKGROUND_CHECK_ENABLED=true: sin
@@ -136,8 +136,8 @@ function fila(ok: boolean, etiqueta: string, detalle: string): void {
 console.log('\n── 0. Alcance autorizado ──');
 assert.deepStrictEqual(
   [...REGLAS_DURAS_ACTIVAS],
-  ['dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'],
-  'Gerencia autorizo DTI (§4.2) y canon/ingreso (§4.3); listas (§6) va tras el interruptor de Auco',
+  ['score_menor_450', 'dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'],
+  'Gerencia autorizo score < 450 (Adenda 2 §2), DTI (§4.2) y canon/ingreso (§4.3); listas (§6) va tras el interruptor de Auco',
 );
 assert.strictEqual(V2_DTI_MAXIMO, 65, 'la tabla §4.2 dice "> 65%"');
 assert.strictEqual(V3_CANON_INGRESO_MAXIMO, 40, 'la tabla §4.3 dice "> 40%"');
@@ -404,47 +404,58 @@ assert.ok(scoreAltisimo.veredicto.rechaza && /score del buro \(900\)/.test(score
 fila(true, 'score 900 + DTI 80%', 'rechaza: el puntaje no salva');
 
 // ============================================================
-// 7. Score bajo: decide el camino de SIEMPRE, no este
+// 7. Score bajo: corte en 450 (Adenda 2 §2)
 // ============================================================
 //
-// La regla dura de score < 450 (§4.1) NO esta autorizada: activarla moveria el
-// corte 400 -> 450 de los providers. El motor la calcula —aparece en
-// salida.reglas_duras— y la lista blanca la descarta. Si alguien la activara
-// sin querer, estas aserciones caen.
+// "La implementacion actual en 400 [...] debe modificarse". Los providers
+// siguen cortando en 400; la regla dura mueve el corte real a 450.
 
-console.log('\n── 7. Score bajo sigue por el camino de siempre ──');
+console.log('\n── 7. Score bajo: corte en 450 ──');
 
 const scoreBajo = decidir({
   ingresoCop: 10_000_000,
-  cuotaCop: 1_000_000, // DTI 10% — ninguna regla activa aplica
+  cuotaCop: 1_000_000, // DTI 10% — ninguna otra regla aplica
   canonCop: 1_000_000, // canon/ingreso 10%
   score: 300,
   resultadoPropuesto: 'rechazado', // scoreToResultado: 300 < 400
 });
-assert.ok(
-  scoreBajo.salida.reglas_duras.some((r) => r.codigo === 'score_menor_450'),
-  'el motor SI calcula score_menor_450 (sigue midiendose en sombra)',
-);
-assert.strictEqual(scoreBajo.veredicto.rechaza, false, 'pero NO decide: no esta en la lista blanca');
-assert.strictEqual(scoreBajo.veredicto.resultadoFinal, 'rechazado', 'el resultado del provider pasa intacto');
-assert.strictEqual(scoreBajo.veredicto.motivoGestor, null, 'sin motivo de regla dura: no la hubo');
-fila(true, 'score 300', 'rechazado por el provider, no por regla dura');
+assert.strictEqual(scoreBajo.veredicto.rechaza, true, 'score 300: la regla dura confirma el rechazo');
+assert.strictEqual(scoreBajo.veredicto.cambiaResultado, false, 'el provider ya habia rechazado: confirma, no cambia');
+assert.ok(scoreBajo.veredicto.rechaza && scoreBajo.veredicto.motivoGestor.includes('Score externo (§6, Adenda 2 §2): 300'));
+fila(true, 'score 300', 'rechazado, ahora con la regla y su motivo');
 
-// El caso que lo prueba de verdad: score 420 esta por debajo de 450 (regla
-// dura de la politica) pero por encima de 400 (corte del provider). Si la
-// regla estuviera activa, este estudio pasaria de 'condicionado' a
-// 'rechazado' — que es justo el cambio que Gerencia NO autorizo.
-const scoreZonaGris = decidir({
+// Caso N de la matriz (Adenda 2 §2): un 430 era 'condicionado' con el corte
+// del provider en 400. Ahora es rechazo automatico inmediato.
+const casoN = decidir({
   ingresoCop: 10_000_000,
   cuotaCop: 1_000_000,
   canonCop: 1_000_000,
-  score: 420,
-  resultadoPropuesto: 'condicionado', // scoreToResultado: 400 <= 420 < 600
+  score: 430,
+  resultadoPropuesto: 'condicionado', // scoreToResultado: 400 <= 430 < 600
 });
-assert.ok(scoreZonaGris.salida.reglas_duras.some((r) => r.codigo === 'score_menor_450'));
-assert.strictEqual(scoreZonaGris.veredicto.rechaza, false, 'el corte 400 -> 450 NO se movio');
-assert.strictEqual(scoreZonaGris.veredicto.resultadoFinal, 'condicionado');
-fila(true, 'score 420 (400 <= s < 450)', 'sigue condicionado, no rechazado');
+assert.strictEqual(casoN.veredicto.rechaza, true, 'caso N: 430 -> rechazo automatico');
+assert.deepStrictEqual([...casoN.veredicto.reglas], ['score_menor_450']);
+assert.strictEqual(casoN.veredicto.cambiaResultado, true, 'antes quedaba condicionado');
+assert.ok(casoN.veredicto.rechaza && !/430|450/.test(casoN.veredicto.motivoProspecto), 'el prospecto no ve el score ni el corte (§2)');
+assert.deepStrictEqual(
+  inferirReglasDurasDesdeMotivo(casoN.veredicto.rechaza ? casoN.veredicto.motivoGestor : null),
+  ['score_menor_450'],
+  'el marcador del motivo permite reconstruir la regla',
+);
+fila(true, 'caso N: score 430', 'rechazado (antes condicionado)');
+
+// En el corte exacto no hay regla: 450 va a revision manual (banda 450-599).
+const en450 = decidir({ ingresoCop: 10_000_000, cuotaCop: 1_000_000, canonCop: 1_000_000, score: 450, resultadoPropuesto: 'condicionado' });
+assert.strictEqual(en450.veredicto.rechaza, false, '450 no es "menor a 450"');
+assert.ok(en450.salida.revision_obligatoria?.includes('450-599'), '450 cae en la banda de revision obligatoria');
+fila(true, 'score 450', 'revision manual, no rechazo');
+
+// Un score capturado a mano (PERSISTIDO) no dispara el corte: su escala no
+// es la del buro y lo decide el analista que lo registro.
+const persistido = evaluarSombra({ proveedor: 'manual', payload: null, score_persistido: 420, canon_mensual_cop: 1_000_000, fecha_evaluacion: HOY });
+assert.strictEqual(persistido.features.score_modelo, 'PERSISTIDO');
+assert.strictEqual(aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida: persistido }).rechaza, false, 'score manual 420: no rechaza');
+fila(true, 'score manual 420', 'no dispara el corte (lo decide el analista)');
 
 // Las reglas de mora tampoco deciden todavia.
 const conMora = evaluarSombra({

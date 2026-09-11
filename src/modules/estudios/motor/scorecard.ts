@@ -182,20 +182,26 @@ export const TABLA_V1: readonly Banda[] = [
   { corte: 450, puntos: 10, etiqueta: '450-549' },
 ];
 
-/** Banda de revision manual obligatoria de §3.1: prevalece sobre el puntaje. */
+/**
+ * Banda de revision manual obligatoria de §3.1: prevalece sobre el puntaje.
+ * Defaults de la Politica; los vigentes vienen del panel (UMBRAL_SCORE_RECHAZO
+ * y UMBRAL_SCORE_REVISION, Adenda 2 §2) por EntradaSombra.
+ */
 export const V1_REVISION_MANUAL_MIN = 450;
 export const V1_REVISION_MANUAL_MAX = 599;
 export const V1_RECHAZO_DURO = 450;
 
-export function puntajeV1ScoreExterno(score: number | null): ResultadoVariable {
+export function puntajeV1ScoreExterno(score: number | null, rechazo: number = V1_RECHAZO_DURO): ResultadoVariable {
   if (score === null) {
     return noCalculable('El buro no entrego score (exclusion, sin historia o seccion ausente)');
   }
-  if (score < V1_RECHAZO_DURO) {
+  if (score < rechazo) {
     // Regla dura: la variable SI se evaluo (puntos 0, estado 'calculada'), lo
     // que cambia es que dispara rechazo. Marcarla 'no_calculable' la sacaria
-    // del denominador y haria parecer que faltaba una fuente.
-    return calculada(0, score, `< ${V1_RECHAZO_DURO}`, 'score_menor_450');
+    // del denominador y haria parecer que faltaba una fuente. El codigo sigue
+    // llamandose 'score_menor_450' aunque el panel mueva el corte: es el que
+    // acepta el CHECK de estudios.regla_dura_activada.
+    return calculada(0, score, `< ${rechazo}`, 'score_menor_450');
   }
   const banda = bandaPorCotaInferior(score, TABLA_V1);
   return banda
@@ -623,6 +629,8 @@ export function decidirSombra(
   reglasGlobales: readonly CodigoReglaDura[] = [],
   /** Caso G y similares: una razon que fuerza revision manual aunque el puntaje apruebe. */
   motivoRevisionObligatoria: string | null = null,
+  /** Banda de score de revision obligatoria (panel, Adenda 2 §2). */
+  bandaRevision: { min: number; max: number } = { min: V1_REVISION_MANUAL_MIN, max: V1_REVISION_MANUAL_MAX },
 ): DecisionCalculada {
   if (reglasGlobales.length > 0) {
     return {
@@ -644,12 +652,12 @@ export function decidirSombra(
   }
   if (
     scoreExterno !== null &&
-    scoreExterno >= V1_REVISION_MANUAL_MIN &&
-    scoreExterno <= V1_REVISION_MANUAL_MAX
+    scoreExterno >= bandaRevision.min &&
+    scoreExterno <= bandaRevision.max
   ) {
     return {
       decision: 'revision_manual',
-      motivo: `Score externo ${scoreExterno} en la banda de revision manual obligatoria (${V1_REVISION_MANUAL_MIN}-${V1_REVISION_MANUAL_MAX})`,
+      motivo: `Score externo ${scoreExterno} en la banda de revision manual obligatoria (${bandaRevision.min}-${bandaRevision.max})`,
     };
   }
   if (motivoRevisionObligatoria) {

@@ -3770,10 +3770,12 @@ async function decidirConCascada(args: {
         factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
         umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
         umbral_revision: cal.UMBRAL_ZONA_GRIS,
+        umbral_score_rechazo: cal.UMBRAL_SCORE_RECHAZO,
+        umbral_score_revision: cal.UMBRAL_SCORE_REVISION,
         score_externo_secundario: scoreSecundario,
         proveedor_secundario: secundario,
       });
-      veredicto = aplicarReglasDuras({ resultadoPropuesto: args.resultadoBuro, salida });
+      veredicto = aplicarReglasDuras({ resultadoPropuesto: args.resultadoBuro, salida, umbralScoreRechazo: cal.UMBRAL_SCORE_RECHAZO });
       nota = `Cascada (Adenda §2): ${cascada.motivo}. ${BURO_LABELS[secundario] ?? secundario} respondio score ${scoreSecundario ?? 's/d'}; V1 = promedio de las dos centrales.`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

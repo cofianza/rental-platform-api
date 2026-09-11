@@ -27,7 +27,8 @@ for (const [k, v] of Object.entries({
 }
 
 import { decidirCascada, decidirResultado, type UmbralesDecision } from '@/modules/estudios/decision';
-import type { SalidaSombra, DecisionSombra } from '@/modules/estudios/motor';
+import { evaluarSombra, type SalidaSombra, type DecisionSombra } from '@/modules/estudios/motor';
+import { aplicarReglasDuras } from '@/modules/estudios/reglas-duras';
 import { CALIBRACION_DEFAULT } from '@/lib/calibracion';
 
 const U: UmbralesDecision = {
@@ -122,6 +123,29 @@ ok(conFlag.resultado === 'condicionado' && conFlag.motivo.includes('§14'), '95 
 ok(decidirResultado({ ...sinFlags, salida: salida({ puntaje: 75 }), coarrendatario: { puntaje: 90, reglaDura: false }, motivosRevision: ['flag'] }).resultado === 'condicionado', 'el flag tambien frena la condicionada con coarrendatario');
 ok(decidirResultado({ ...sinFlags, salida: salida({ puntaje: 60 }), motivosRevision: ['flag'] }).resultado === 'rechazado', 'pero un < 70 sigue siendo rechazado: el flag no rescata');
 ok(decidirResultado({ ...sinFlags, salida: salida({ puntaje: null }) }).resultado === 'condicionado', 'sin puntaje en ninguna central -> revision manual (§14), nunca rechazo');
+
+console.log('\nAdenda 2 §2 — score externo: < 450 rechazo inmediato, 450-599 revision');
+
+// Caso N ("un score externo de 430 produce rechazo automatico inmediato"),
+// con el motor y la lista blanca REALES, no con una corrida sintetica.
+const corridaN = evaluarSombra({
+  proveedor: 'datacredito',
+  payload: { ReportHDCplus: { productResult: { consultDate: '2026-09-02' }, models: [{ modelCode: 'DF', scoreValue: 430 }] } },
+  canon_mensual_cop: 1_000_000,
+  fecha_evaluacion: '2026-09-11T12:00:00.000Z',
+});
+const vN = aplicarReglasDuras({ resultadoPropuesto: 'condicionado', salida: corridaN });
+ok(vN.rechaza && vN.reglas.includes('score_menor_450'), 'N: 430 -> la regla dura se activa');
+const cN = decidirCascada(corridaN, vN.reglas, U);
+ok(cN.resultadoAnticipado === 'rechazado' && !cN.consultarSecundaria, 'N: rechazado sin consultar la segunda central');
+ok(decidirResultado({ ...sinFlags, salida: corridaN, reglasDurasActivas: vN.reglas }).resultado === 'rechazado', 'N: decision final rechazado');
+
+// 450-599 prevalece sobre el rechazo por puntaje TAMBIEN en la cascada: antes
+// un puntaje < 40 con score 480 se rechazaba sin mirar la banda.
+const banda = 'Score externo 480 en la banda de revision manual obligatoria (450-599, Politica §3.1 / Adenda 2 §2)';
+const cD = decidirCascada(salida({ puntaje: 30, obligatoria: banda }), [], U);
+ok(cD.consultarSecundaria && cD.resultadoAnticipado === null, 'score 480 con puntaje 30: no se rechaza, se consulta la segunda');
+ok(decidirCascada(salida({ puntaje: 95, obligatoria: banda }), [], U).resultadoAnticipado === null, 'score en banda con puntaje 95: tampoco se aprueba sin la segunda');
 
 console.log('\nLos umbrales del panel mandan');
 const U2 = { ...U, aprobacion: 90, zonaGris: 60, coarrendatario: 85, cascadaAprobacion: 95, cascadaRechazo: 30 };

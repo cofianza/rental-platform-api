@@ -19,8 +19,10 @@
 // ------------------------------------------------------------
 // LO QUE ESTE ARCHIVO **NO** HACE (autorizacion de Gerencia, no omision)
 //
-//   - NO activa la regla dura de score < 450 (moveria el corte 400 -> 450 de
-//     los providers, que Gerencia todavia no autorizo).
+//   - SI activa (2026-09-11, Adenda 2 §2) la regla dura de score externo <
+//     UMBRAL_SCORE_RECHAZO (450): el corte real pasa de 400 (providers) a
+//     450. Salvo con un score capturado a mano (PERSISTIDO): su escala no es
+//     la del buro y lo decide el analista que lo registro.
 //   - NO activa las reglas de mora (V6) ni las de restitucion.
 //   - SI activa (2026-09-07) 'listas_restrictivas' (§6: OFAC/ONU via Auco),
 //     pero esa regla SOLO puede dispararse con AUCO_BACKGROUND_CHECK_ENABLED:
@@ -77,7 +79,7 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { evaluarSombra } from './motor';
 import type { CodigoReglaDura, SalidaSombra } from './motor';
-import { V2_DTI_MAXIMO, V3_CANON_INGRESO_MAXIMO } from './motor/scorecard';
+import { V1_RECHAZO_DURO, V2_DTI_MAXIMO, V3_CANON_INGRESO_MAXIMO } from './motor/scorecard';
 // §14 / §16.5: lo que NO rechaza pero tampoco deja aprobar en automatico.
 import { leerResumenAntecedentes, requiereRevisionManual } from './antecedentes';
 import type { ResumenAntecedentes } from './antecedentes';
@@ -104,11 +106,12 @@ import { formatearCOP, leerCanonDelInmueble } from './tope-canon.guard';
 // ============================================================
 
 /**
- * Las unicas reglas duras del motor que hoy deciden. Autorizadas por Gerencia
- * el 2026-09-03. Agregar una aqui es activar una regla en produccion: no se
- * hace sin autorizacion escrita (Politica §1).
+ * Las unicas reglas duras del motor que hoy deciden. DTI y canon/ingreso
+ * autorizadas por Gerencia el 2026-09-03; score < 450 por la Adenda 2 §2.
+ * Agregar una aqui es activar una regla en produccion: no se hace sin
+ * autorizacion escrita (Politica §1).
  */
-export const REGLAS_DURAS_ACTIVAS = ['dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'] as const;
+export const REGLAS_DURAS_ACTIVAS = ['score_menor_450', 'dti_mayor_65', 'canon_ingreso_mayor_40', 'listas_restrictivas'] as const;
 
 export type ReglaDuraActiva = (typeof REGLAS_DURAS_ACTIVAS)[number];
 
@@ -118,6 +121,7 @@ function esReglaActiva(codigo: CodigoReglaDura): codigo is ReglaDuraActiva {
 
 /** Etiqueta legible por codigo, para el mensaje del gestor. */
 const ETIQUETA_REGLA: Record<ReglaDuraActiva, string> = {
+  score_menor_450: 'score externo por debajo del minimo',
   dti_mayor_65: 'capacidad de endeudamiento (DTI)',
   canon_ingreso_mayor_40: 'relacion canon / ingreso',
   listas_restrictivas: 'listas restrictivas (OFAC / ONU)',
@@ -140,6 +144,8 @@ export interface DetalleReglasDuras {
   cuota_mensual_vigente_cop: number | null;
   canon_evaluado_cop: number | null;
   score_externo: number | null;
+  /** Adenda 2 §2: corte vigente del score externo (UMBRAL_SCORE_RECHAZO). */
+  score_umbral_rechazo: number;
   proveedor: string;
   modelo_version: string;
   /** Solo con 'listas_restrictivas': que lista(s) reporto Auco. */
@@ -183,6 +189,8 @@ export interface EntradaReglasDuras {
   resultadoPropuesto: string;
   /** Salida del motor. Si es null no hay nada que evaluar y no se rechaza. */
   salida: SalidaSombra | null;
+  /** Corte del score externo con el que corrio el motor (solo para el motivo). */
+  umbralScoreRechazo?: number;
 }
 
 // ============================================================
@@ -220,6 +228,7 @@ export const PREFIJO_MOTIVO_REGLA_DURA =
 
 /** Marcadores de seccion del motivo del gestor, uno por regla activa. */
 const MARCADOR_SECCION: Record<ReglaDuraActiva, string> = {
+  score_menor_450: 'Score externo (§6, Adenda 2 §2):',
   dti_mayor_65: 'Capacidad de endeudamiento (DTI, §4.2):',
   canon_ingreso_mayor_40: 'Relacion canon / ingreso (§4.3):',
   listas_restrictivas: 'Listas restrictivas (§6):',
@@ -293,6 +302,13 @@ export function motivoGestorReglasDuras(
 ): string {
   const partes: string[] = [PREFIJO_MOTIVO_REGLA_DURA];
 
+  if (reglas.includes('score_menor_450')) {
+    partes.push(
+      `Score externo (§6, Adenda 2 §2): ${d.score_externo ?? 's/d'} es menor que el minimo de ${d.score_umbral_rechazo}; ` +
+        'rechazo inmediato sin calcular el resto del modelo.',
+    );
+  }
+
   if (reglas.includes('dti_mayor_65')) {
     partes.push(
       `Capacidad de endeudamiento (DTI, §4.2): ${pct(d.dti_pct)} supera el maximo de ${d.dti_umbral}% ` +
@@ -321,7 +337,7 @@ export function motivoGestorReglasDuras(
   }
 
   partes.push(
-    d.score_externo === null
+    d.score_externo === null || reglas.includes('score_menor_450')
       ? 'Las reglas duras anulan el puntaje total (Politica §3).'
       : `Las reglas duras anulan el puntaje total (Politica §3): el score del buro (${d.score_externo}) no cambia esta decision.`,
   );
@@ -344,6 +360,16 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
     return (
       'No aprobable por ahora. Con la informacion disponible hoy, no pudimos completar las verificaciones ' +
       'de identidad y cumplimiento que la ley nos exige para respaldar un contrato. ' +
+      'No es una decision definitiva sobre ti: puedes volver a solicitarlo mas adelante o escribirnos para revisar tu caso.'
+    );
+  }
+
+  // Score bajo: sin nombrar el score ni el corte (§2). La regla dura anula al
+  // coarrendatario (§5), asi que no se le ofrece esa salida.
+  if (reglas.includes('score_menor_450')) {
+    return (
+      'No aprobable por ahora. Con la informacion disponible hoy, tu historial en las centrales de riesgo ' +
+      'no alcanza el minimo que exige nuestra politica para respaldar un contrato. ' +
       'No es una decision definitiva sobre ti: puedes volver a solicitarlo mas adelante o escribirnos para revisar tu caso.'
     );
   }
@@ -402,6 +428,9 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
   const activadas = new Set<ReglaDuraActiva>(
     salida.reglas_duras.map((r) => r.codigo).filter(esReglaActiva),
   );
+  // Un score capturado a mano (PERSISTIDO) no tiene la escala del buro (el
+  // motor lo advierte): no dispara el corte de 450, lo decide el analista.
+  if (salida.features.score_modelo === 'PERSISTIDO') activadas.delete('score_menor_450');
   const reglas = REGLAS_DURAS_ACTIVAS.filter((codigo) => activadas.has(codigo));
 
   if (reglas.length === 0) return sinRechazo;
@@ -417,6 +446,7 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
     cuota_mensual_vigente_cop: salida.features.cuota_mensual_vigente_cop,
     canon_evaluado_cop: salida.canon_evaluado_cop,
     score_externo: salida.features.score_externo,
+    score_umbral_rechazo: entrada.umbralScoreRechazo ?? V1_RECHAZO_DURO,
     proveedor: salida.proveedor,
     modelo_version: salida.modelo_version,
     listas_vinculantes: salida.antecedentes?.listas_vinculantes ?? null,
@@ -440,11 +470,13 @@ export function notaObservacionesReglasDuras(
   d: DetalleReglasDuras,
 ): string {
   const trozos = reglas.map((r) =>
-    r === 'dti_mayor_65'
-      ? `DTI ${pct(d.dti_pct)} (max ${d.dti_umbral}%)`
-      : r === 'canon_ingreso_mayor_40'
-        ? `canon/ingreso ${pct(d.canon_ingreso_pct)} (max ${d.canon_ingreso_umbral}%)`
-        : `listas restrictivas: reportado (${[d.listas_vinculantes?.ofac ? 'OFAC' : null, d.listas_vinculantes?.onu ? 'ONU' : null].filter(Boolean).join('/') || 's/d'})`,
+    r === 'score_menor_450'
+      ? `score externo ${d.score_externo ?? 's/d'} (min ${d.score_umbral_rechazo})`
+      : r === 'dti_mayor_65'
+        ? `DTI ${pct(d.dti_pct)} (max ${d.dti_umbral}%)`
+        : r === 'canon_ingreso_mayor_40'
+          ? `canon/ingreso ${pct(d.canon_ingreso_pct)} (max ${d.canon_ingreso_umbral}%)`
+          : `listas restrictivas: reportado (${[d.listas_vinculantes?.ofac ? 'OFAC' : null, d.listas_vinculantes?.onu ? 'ONU' : null].filter(Boolean).join('/') || 's/d'})`,
   );
   return `Regla dura V4.1 activada — ${trozos.join('; ')}. Anula el puntaje total (§3).`;
 }
@@ -624,11 +656,14 @@ export async function resolverResultadoEstudio(
       factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
       umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
       umbral_revision: cal.UMBRAL_ZONA_GRIS,
+      umbral_score_rechazo: cal.UMBRAL_SCORE_RECHAZO,
+      umbral_score_revision: cal.UMBRAL_SCORE_REVISION,
     });
 
     const veredicto = aplicarReglasDuras({
       resultadoPropuesto: args.resultadoPropuesto,
       salida,
+      umbralScoreRechazo: cal.UMBRAL_SCORE_RECHAZO,
     });
 
     if (!veredicto.rechaza) {
@@ -659,6 +694,10 @@ export async function resolverResultadoEstudio(
         ),
         // Politica §15: sin cedula colombiana no hay aprobacion automatica.
         motivoRevisionPerfilExtranjero(tipoDocumento),
+        // Adenda 2 §2: score en la banda 450-599 (o la del panel) -> revision
+        // obligatoria. Con los cortes de hoy el buro ya marca condicionado
+        // bajo 600; esto cubre que Gerencia suba el tope desde el panel.
+        salida.revision_obligatoria,
       ].filter((m): m is string => !!m);
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
       if (!motivoRevision) return { ...base, veredicto, salida, apisFallidas };

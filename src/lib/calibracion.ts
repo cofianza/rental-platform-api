@@ -31,7 +31,9 @@ export type ClaveCalibracion =
   | 'UMBRAL_COARRENDATARIO'
   | 'CANON_MAX_TRANSITORIO'
   | 'UMBRAL_APROBACION_AUTOMATICA'
-  | 'UMBRAL_ZONA_GRIS';
+  | 'UMBRAL_ZONA_GRIS'
+  | 'UMBRAL_SCORE_RECHAZO'
+  | 'UMBRAL_SCORE_REVISION';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -150,6 +152,28 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     entero: true,
     seccion: 'Politica §3.1',
     descripcion: 'Puntaje normalizado desde el cual empieza la zona gris (hasta el umbral de aprobacion). Por debajo, rechazo.',
+  },
+  {
+    clave: 'UMBRAL_SCORE_RECHAZO',
+    valorDefault: 450,
+    // ponytail: minimo 450 porque la tabla de V1 (scorecard.ts) no tiene banda
+    // por debajo; bajarlo exige tocar la tabla, no solo el panel.
+    min: 450,
+    max: 700,
+    entero: true,
+    seccion: 'Adenda 2 §2',
+    descripcion: 'Score externo de la central por debajo del cual se rechaza de inmediato, sin calcular el resto del modelo.',
+  },
+  {
+    clave: 'UMBRAL_SCORE_REVISION',
+    valorDefault: 599,
+    min: 450,
+    max: 900,
+    entero: true,
+    seccion: 'Adenda 2 §2',
+    descripcion: 'Score externo hasta el cual el caso va a revision manual obligatoria (desde el umbral de rechazo). Prevalece sobre el rechazo por puntaje normalizado.',
+    advertencia:
+      'Subirlo manda mas casos a revision manual. Bajarlo de 599 no aprueba solos los scores de 600 hacia abajo: con el motor apagado, las centrales siguen marcando condicionado por debajo de 600.',
   },
 ];
 
