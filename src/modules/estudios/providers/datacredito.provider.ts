@@ -782,7 +782,7 @@ export class DatacreditoProvider implements CreditRiskProvider {
         score: null,
         resultado: 'condicionado',
         observaciones:
-          'La consulta fue efectiva pero DataCredito no tiene informacion crediticia de esta persona (no bancarizada). No es un rechazo de credito: requiere evaluacion manual con otros soportes.',
+          'La consulta fue efectiva pero DataCrédito no tiene información crediticia de esta persona (no bancarizada). No es un rechazo de crédito: requiere evaluación manual con otros soportes.',
       };
     }
 
