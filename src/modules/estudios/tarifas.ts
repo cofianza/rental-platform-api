@@ -115,56 +115,27 @@ export function leerTarifaOverride(v: unknown): TarifaOverride | null {
 }
 
 /**
- * Via de aprobacion a partir de lo que el sistema sabe del estudio. Es la
- * misma lectura que hace rutas-resultado.ts, reducida a las tres filas de la
- * tabla de tarifas:
- *   - puntaje >= umbral de aprobacion         -> automatica
- *   - zona gris con coarrendatario >= umbral  -> condicionada_coarrendatario
- *   - todo lo demas que termino aprobado      -> revision_manual (un humano
- *     lo aprobo, o el buro aprobo sin puntaje del modelo)
+ * Adenda 2 §6: "La tarifa depende de la RUTA DE APROBACION, no del numero de
+ * centrales consultadas." Se lee de COMO se aprobo, no del puntaje:
+ *   - la ponderacion con coarrendatario aprobo a un titular condicionado
+ *                                                        -> condicionada_coarrendatario (2,5%)
+ *   - el motor decidio (estudios.cascada.via)            -> esa via
+ *   - el buro (o el motor) aprobo el estudio sin humano  -> automatica (2,0%)
+ *   - lo aprobo una persona: un condicionado aprobado a mano, o un resultado
+ *     registrado a mano sin reporte de central            -> revision_manual (2,7%)
+ * "Si un caso se aprueba de forma automatica consultando unicamente
+ * Datacredito, la tarifa es 2,0%": por eso el puntaje del modelo ya no entra.
  */
-export function viaDeAprobacion(e: {
-  puntaje: number | null;
-  coarrendatarioVinculado: boolean;
-  puntajeCoarrendatario: number | null;
-  umbralAprobacion: number;
-  umbralZonaGris: number;
-  umbralCoarrendatario: number;
+export function viaPorRutaDeAprobacion(e: {
+  aprobadoPorPonderacion: boolean;
+  viaMotor: unknown;
+  resultadoEstudio: string | null;
+  conReporteDeCentral: boolean;
 }): ViaAprobacion {
-  if (e.puntaje !== null && e.puntaje >= e.umbralAprobacion) return 'automatica';
-  if (
-    e.puntaje !== null &&
-    e.puntaje >= e.umbralZonaGris &&
-    e.coarrendatarioVinculado &&
-    e.puntajeCoarrendatario !== null &&
-    e.puntajeCoarrendatario >= e.umbralCoarrendatario
-  ) {
-    return 'condicionada_coarrendatario';
+  if (e.aprobadoPorPonderacion) return 'condicionada_coarrendatario';
+  if (e.viaMotor === 'automatica' || e.viaMotor === 'condicionada_coarrendatario' || e.viaMotor === 'revision_manual') {
+    return e.viaMotor;
   }
+  if (e.resultadoEstudio === 'aprobado' && e.conReporteDeCentral) return 'automatica';
   return 'revision_manual';
-}
-
-/**
- * La via segun lo que el sistema sabe hoy: el puntaje solo cuenta cuando el
- * motor decide (o la ruta usa el scorecard) y los umbrales salen del panel de
- * calibracion. Una sola definicion para el CRC y para GET /estudios/:id/tarifa.
- *
- * `puntajeCoarrendatario` es el del estudio PROPIO del coarrendatario vinculado
- * (ver coarrendatario-vinculado.ts). Sin el, la fila de 2,5% era inalcanzable:
- * la via caia siempre a revision manual aunque el acompañante tuviera 80+.
- */
-export function viaSegunCalibracion(
-  puntaje: number | null,
-  conCoarrendatario: boolean,
-  cal: { UMBRAL_APROBACION_AUTOMATICA: number; UMBRAL_ZONA_GRIS: number; UMBRAL_COARRENDATARIO: number },
-  puntajeCoarrendatario: number | null = null,
-): ViaAprobacion {
-  return viaDeAprobacion({
-    puntaje,
-    coarrendatarioVinculado: conCoarrendatario,
-    puntajeCoarrendatario,
-    umbralAprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
-    umbralZonaGris: cal.UMBRAL_ZONA_GRIS,
-    umbralCoarrendatario: cal.UMBRAL_COARRENDATARIO,
-  });
 }

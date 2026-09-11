@@ -12,12 +12,11 @@ import assert from 'node:assert';
 import {
   calcularTarifas,
   leerTarifaOverride,
-  viaDeAprobacion,
+  viaPorRutaDeAprobacion,
   TARIFA_MENSUAL_PCT,
   PRIMA_VINCULACION_PCT,
   CASHBACK_PCT,
   IVA_PCT,
-  viaSegunCalibracion,
 } from '@/modules/estudios/tarifas';
 
 let pasos = 0;
@@ -66,23 +65,17 @@ ok(leerTarifaOverride(null) === null && leerTarifaOverride({}) === null && leerT
 ok(leerTarifaOverride({ tarifa_mensual_pct: 1.5 }) === null, 'sin autorizado_por/en no es un override valido');
 ok(leerTarifaOverride({ tarifa_mensual_pct: -1, autorizado_por: 'a', autorizado_en: 'b' })?.tarifa_mensual_pct === undefined, 'un porcentaje negativo se descarta');
 
-// ── Via de aprobacion (Adenda §3 -> fila de la tabla) ───────
-const u = { umbralAprobacion: 85, umbralZonaGris: 70, umbralCoarrendatario: 80 };
-ok(viaDeAprobacion({ puntaje: 85, coarrendatarioVinculado: false, puntajeCoarrendatario: null, ...u }) === 'automatica', '85 -> automatica');
-ok(viaDeAprobacion({ puntaje: 84, coarrendatarioVinculado: true, puntajeCoarrendatario: 80, ...u }) === 'condicionada_coarrendatario', '84 + coa 80 -> condicionada');
-ok(viaDeAprobacion({ puntaje: 84, coarrendatarioVinculado: true, puntajeCoarrendatario: 79, ...u }) === 'revision_manual', '84 + coa 79 -> revision manual');
-ok(viaDeAprobacion({ puntaje: 70, coarrendatarioVinculado: false, puntajeCoarrendatario: null, ...u }) === 'revision_manual', '70 solo -> revision manual');
-ok(viaDeAprobacion({ puntaje: null, coarrendatarioVinculado: false, puntajeCoarrendatario: null, ...u }) === 'revision_manual', 'sin puntaje -> tarifa de revision manual (la mas conservadora)');
+// ── Via de aprobacion: la RUTA, no el puntaje (Adenda 2 §6) ──
+// "La tarifa depende de la RUTA DE APROBACION, no del numero de centrales
+// consultadas. Si un caso se aprueba de forma automatica consultando
+// unicamente Datacredito, la tarifa es 2,0%."
+const base = { aprobadoPorPonderacion: false, viaMotor: null, resultadoEstudio: 'aprobado', conReporteDeCentral: true };
+ok(viaPorRutaDeAprobacion(base) === 'automatica', 'el buro aprobo solo (motor apagado) -> automatica (2,0%)');
+ok(viaPorRutaDeAprobacion({ ...base, resultadoEstudio: 'condicionado' }) === 'revision_manual', 'condicionado aprobado a mano -> revision manual (2,7%)');
+ok(viaPorRutaDeAprobacion({ ...base, conReporteDeCentral: false }) === 'revision_manual', 'resultado registrado a mano sin reporte de central -> revision manual (2,7%)');
+ok(viaPorRutaDeAprobacion({ ...base, resultadoEstudio: 'condicionado', aprobadoPorPonderacion: true }) === 'condicionada_coarrendatario', 'titular condicionado aprobado por la ponderacion con coarrendatario -> 2,5%');
+ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'revision_manual' }) === 'revision_manual', 'con el motor decidiendo manda su via');
+ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'basura' }) === 'automatica', 'una via del motor desconocida se ignora');
+ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'revision_manual', aprobadoPorPonderacion: true }) === 'condicionada_coarrendatario', 'la ponderacion posterior manda sobre la via del titular');
 
-// viaSegunCalibracion: la misma via para el CRC y para GET /estudios/:id/tarifa.
-const cal = { UMBRAL_APROBACION_AUTOMATICA: 85, UMBRAL_ZONA_GRIS: 70, UMBRAL_COARRENDATARIO: 80 };
-ok(viaSegunCalibracion(null, false, cal) === 'revision_manual', 'sin puntaje del modelo -> revision manual (2,7%)');
-ok(viaSegunCalibracion(90, false, cal) === 'automatica', '90 -> automatica (2,0%)');
-ok(viaSegunCalibracion(75, true, cal) === 'revision_manual', '75 con coarrendatario sin puntaje propio -> revision manual (el 2,5% exige coarrendatario >= 80)');
-// La fila de 2,5% se alcanza con el puntaje del estudio PROPIO del coarrendatario.
-ok(viaSegunCalibracion(75, true, cal, 80) === 'condicionada_coarrendatario', '75 con coarrendatario de 80 -> condicionada (2,5%)');
-ok(viaSegunCalibracion(84, true, cal, 79) === 'revision_manual', '84 con coarrendatario de 79 -> revision manual (2,7%)');
-ok(viaSegunCalibracion(75, false, cal, 95) === 'revision_manual', 'un puntaje de coarrendatario sin coarrendatario vinculado no cuenta');
-ok(viaSegunCalibracion(90, true, cal, 50) === 'automatica', '90 es automatica aunque el coarrendatario sea flojo (la prima si baja, la tarifa no cambia)');
-
-console.log(`\nOK — ${pasos} aserciones: la tabla de tarifas de la Adenda §5 esta tal cual.`);
+console.log(`\nOK — ${pasos} aserciones: la tabla de tarifas de la Adenda §5 esta tal cual y la via sale de la ruta (Adenda 2 §6).`);

@@ -12,7 +12,7 @@ import { resolverRuta } from './rutas-resultado';
 import { MODELO_VERSION } from './motor';
 // Adenda 1: tarifas por ruta (§5), factor de ajuste del ingreso (§1.1),
 // fuentes consultadas (§2.4) y vigencia del panel (§6, §11).
-import { calcularTarifas, leerTarifaOverride, viaSegunCalibracion, type Tarifas } from './tarifas';
+import { calcularTarifas, leerTarifaOverride, viaPorRutaDeAprobacion, type Tarifas, type ViaAprobacion } from './tarifas';
 // Adenda §5.2: la prima baja al 10% cuando HAY coarrendatario vinculado al
 // expediente — no cuando el tipo de esta fila es 'con_coarrendatario'.
 import { coarrendatarioVinculado } from './coarrendatario-vinculado';
@@ -504,6 +504,36 @@ export async function leerSombraDelEstudio(
   }
 }
 
+/**
+ * Adenda 2 §6: la via de aprobacion (fila de la tabla de tarifas) segun COMO
+ * se aprobo. Insumos de viaPorRutaDeAprobacion: la traza del motor, el
+ * resultado que dejo el buro, si hubo reporte de central (un resultado
+ * registrado a mano no trae referencia del proveedor) y si el expediente paso
+ * a aprobado por la ponderacion con coarrendatario (evento del timeline).
+ * Una sola definicion para el CRC y para GET /estudios/:id/tarifa.
+ */
+export async function viaDelEstudio(e: {
+  expediente_id: string;
+  resultado: string | null;
+  referencia_proveedor?: string | null;
+  cascada?: unknown;
+}): Promise<ViaAprobacion> {
+  const { data: ponderacion } = await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', e.expediente_id)
+    .eq('estado_nuevo', 'aprobado')
+    .eq('metadata->>origen', 'ponderacion_coarrendatario')
+    .limit(1);
+  const cascada = e.cascada && typeof e.cascada === 'object' ? (e.cascada as Record<string, unknown>) : null;
+  return viaPorRutaDeAprobacion({
+    aprobadoPorPonderacion: Array.isArray(ponderacion) && ponderacion.length > 0,
+    viaMotor: cascada?.via ?? null,
+    resultadoEstudio: e.resultado,
+    conReporteDeCentral: !!e.referencia_proveedor,
+  });
+}
+
 export async function generarCertificado(
   estudioId: string,
   userId: string,
@@ -675,8 +705,13 @@ export async function generarCertificado(
     umbrales,
   });
 
-  // Adenda §5: la fila de la tabla de tarifas segun la via de aprobacion.
-  const via = viaSegunCalibracion(puntajeCrc, conCoarrendatario, cal, puntajeCoa);
+  // Adenda 2 §6: la fila de la tabla de tarifas segun la ruta de aprobacion.
+  const via = await viaDelEstudio({
+    expediente_id: e.expediente_id as string,
+    resultado: e.resultado as string | null,
+    referencia_proveedor: e.referencia_proveedor as string | null,
+    cascada: e.cascada,
+  });
 
   // Adenda §2.4: que centrales se consultaron y cual fue la decision de cascada.
   // `decision_cascada` es la traza que escribe decidirConCascada (Adenda §2);

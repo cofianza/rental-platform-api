@@ -186,7 +186,7 @@ export function resolverRuta(e: EntradaRuta): Ruta {
       puedeContinuarSolo: true,
       coarrendatarioObligatorio: false,
       coarrendatarioAbarataPrima: true,
-      etiquetaGestor: 'Aprobado sin puntaje del modelo — tarifa de revision manual',
+      etiquetaGestor: 'Aprobado sin puntaje del modelo',
     };
   }
 
