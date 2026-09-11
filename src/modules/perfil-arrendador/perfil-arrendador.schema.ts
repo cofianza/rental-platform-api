@@ -25,6 +25,10 @@ export const updatePerfilArrendadorSchema = z.object({
   representante_legal: z.string().max(200).optional().nullable(),
   domicilio_direccion: z.string().max(200).optional().nullable(),
   domicilio_ciudad: z.string().max(120).optional().nullable(),
+  // Municipio DANE para la factura electrónica cuando el arrendador paga el
+  // estudio (Adenda 2 §7, opción B). Factus exige el código de 5 dígitos.
+  municipio_codigo: z.string().regex(/^\d{5}$/, 'Código DANE inválido').optional().nullable().or(z.literal('')),
+  municipio_nombre: z.string().max(120).optional().nullable(),
 
   // Solo inmobiliaria (admin valida en el service)
   matricula_arrendador: z.string().max(50).optional().nullable(),

@@ -14,6 +14,7 @@ const PERFIL_ARRENDADOR_FIELDS = `
   razon_social, representante_legal,
   afianzadora_tipo, afianzadora_actual,
   domicilio_direccion, domicilio_ciudad, ciudad,
+  municipio_codigo, municipio_nombre,
   direccion, telefono,
   matricula_arrendador, matricula_expedida_por, matricula_fecha,
   logo_storage_key, logo_url,
@@ -174,6 +175,9 @@ export async function updateMiPerfilArrendador(
     representante_legal: normalizeEmpty(input.representante_legal),
     domicilio_direccion: normalizeEmpty(input.domicilio_direccion),
     domicilio_ciudad: normalizeEmpty(input.domicilio_ciudad),
+    // Adenda 2 §7: municipio DANE para la factura cuando el arrendador paga el estudio.
+    municipio_codigo: normalizeEmpty(input.municipio_codigo),
+    municipio_nombre: normalizeEmpty(input.municipio_nombre),
     whatsapp_recaudo: normalizeEmpty(input.whatsapp_recaudo),
     email_recaudo: normalizeEmpty(input.email_recaudo),
     cuenta_recaudo_banco: normalizeEmpty(input.cuenta_recaudo_banco),

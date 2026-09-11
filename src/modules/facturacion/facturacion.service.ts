@@ -25,19 +25,24 @@ import {
   resolveVisibilityScope,
   resolveMembershipInmobiliariaIds,
   resolveOrgMemberPerfilIds,
+  resolveOrgCanonicalPerfilId,
 } from '@/lib/tenantScope';
+import {
+  aplicarOverride,
+  clienteDesdePerfil,
+  clienteDesdeSolicitante,
+  faltantesFiscales,
+  type ClienteFiscal,
+  type DatosFiscalesPagoOverride,
+  type PerfilFiscal,
+  type SolicitanteFiscal,
+} from './cliente-fiscal';
+
+export type { DatosFiscalesPagoOverride } from './cliente-fiscal';
 
 // ── Constants ──────────────────────────────────────────────────────
 
 const VALOR_ESTUDIO_DEFAULT = 80_000; // COP, sin IVA
-
-// Defaults V2 (códigos DIAN + DANE).
-const DEFAULTS_CLIENTE = {
-  legal_organization_code: '2', // 2=Persona natural, 1=Jurídica
-  tribute_code: 'ZZ', // No aplica (régimen ordinario)
-  identification_document_code: '13', // 13=CC en DIAN
-  municipality_code: '11001', // Bogotá D.C. (DANE)
-};
 
 const ITEM_DEFAULTS = {
   unit_measure_code: '94', // unidad
@@ -56,24 +61,12 @@ interface PagoConContexto {
   monto: number;
   email_pagador: string | null;
   nombre_pagador: string | null;
+  /** Quien creó el cobro. En la opción B es el gestor que pagó. */
+  creado_por: string | null;
   expediente: {
     numero: string;
-    solicitante: {
-      id: string;
-      tipo_persona: 'natural' | 'juridica' | null;
-      nombre: string;
-      apellido: string;
-      razon_social: string | null;
-      email: string;
-      telefono: string | null;
-      tipo_documento: string;
-      numero_documento: string;
-      digito_verificacion: string | null;
-      direccion: string | null;
-      municipio_id: string | null; // V2: código DANE (5 dígitos, ej. "11001")
-      municipio_nombre: string | null;
-      tribute_code: string | null;
-    } | null;
+    // municipio_id: código DANE (5 dígitos, ej. "11001").
+    solicitante: (SolicitanteFiscal & { id: string }) | null;
   };
 }
 
@@ -100,7 +93,7 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
   const { data, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, expediente_id, concepto, monto, email_pagador, nombre_pagador,
+      id, expediente_id, concepto, monto, email_pagador, nombre_pagador, creado_por,
       expediente:expedientes(
         numero,
         solicitante:solicitantes(
@@ -118,6 +111,40 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
     throw AppError.notFound('Pago no encontrado', 'PAGO_NOT_FOUND');
   }
   return data as unknown as PagoConContexto;
+}
+
+/**
+ * Adenda 2 §7, opción B: el cobro lo pagó el gestor con SU correo, no el
+ * solicitante. La factura va a quien pagó: la ORGANIZACIÓN (perfil canónico,
+ * con el NIT y la razón social del titular) o el propietario individual.
+ * null = pagó el solicitante. Lanza si pagó otra persona que no se identifica.
+ */
+async function clientePagador(ctx: PagoConContexto, solEmail: string | null): Promise<ClienteFiscal | null> {
+  const pagador = ctx.email_pagador?.trim().toLowerCase();
+  if (!pagador || !solEmail || pagador === solEmail.trim().toLowerCase()) return null;
+
+  const emailCreador = ctx.creado_por
+    ? ((await supabase.auth.admin.getUserById(ctx.creado_por)).data?.user?.email ?? null)
+    : null;
+  if (!ctx.creado_por || emailCreador?.trim().toLowerCase() !== pagador) {
+    throw new AppError(
+      409,
+      'PAGADOR_NO_ES_SOLICITANTE',
+      'El pago lo hizo alguien distinto al solicitante y no se pudo identificar su cuenta: la factura se emite a mano con los datos de quien pagó.',
+    );
+  }
+
+  const perfilId = await resolveOrgCanonicalPerfilId(ctx.creado_por);
+  const { data } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select(
+      'nombre, apellido, tipo_documento, numero_documento, razon_social, nit, domicilio_direccion, ' +
+        'direccion_comercial, direccion, telefono, whatsapp_recaudo, email_recaudo, municipio_codigo, municipio_nombre',
+    )
+    .eq('id', perfilId)
+    .maybeSingle();
+  if (!data) throw AppError.notFound('No se encontró el perfil de quien pagó', 'PERFIL_NOT_FOUND');
+  return clienteDesdePerfil(data as unknown as PerfilFiscal, emailCreador);
 }
 
 async function findFacturaExistente(pagoId: string) {
@@ -259,17 +286,6 @@ function inferConceptoLabel(concepto: string): string {
 
 // ── crearFacturaDesdePago ──────────────────────────────────────────
 
-export interface DatosFiscalesPagoOverride {
-  numero_documento?: string;
-  tipo_documento?: string;
-  nombre_completo?: string;
-  direccion?: string;
-  email?: string;
-  telefono?: string;
-  /** Codigo DANE (5 digitos). */
-  municipio_codigo?: string;
-}
-
 /**
  * Devuelve los datos fiscales que se usarian para emitir la factura, sin
  * tocar Factus. Sirve al frontend para mostrar un modal de confirmacion
@@ -283,19 +299,9 @@ export async function previewFacturaPago(pagoId: string): Promise<{
   ya_emitida: boolean;
   factura_id?: string;
   factura_numero?: string | null;
-  datos_actuales: {
-    tipo_persona: 'natural' | 'juridica';
-    nombre_completo: string;
-    razon_social: string;
-    tipo_documento: string;
-    numero_documento: string;
-    digito_verificacion: string;
-    email: string;
-    telefono: string;
-    direccion: string;
-    municipio_codigo: string;
-    municipio_nombre: string;
-  };
+  datos_actuales: ClienteFiscal | null;
+  /** Opción B: la factura va a la inmobiliaria o al propietario que pagó. */
+  a_nombre_de_quien_pago: boolean;
   faltantes: string[];
   monto: number;
   concepto: string;
@@ -306,19 +312,8 @@ export async function previewFacturaPago(pagoId: string): Promise<{
       ya_emitida: true,
       factura_id: existente.id,
       factura_numero: existente.factus_number,
-      datos_actuales: {
-        tipo_persona: 'natural',
-        nombre_completo: '',
-        razon_social: '',
-        tipo_documento: '',
-        numero_documento: '',
-        digito_verificacion: '',
-        email: '',
-        telefono: '',
-        direccion: '',
-        municipio_codigo: '',
-        municipio_nombre: '',
-      },
+      datos_actuales: null,
+      a_nombre_de_quien_pago: false,
       faltantes: [],
       monto: 0,
       concepto: '',
@@ -334,44 +329,14 @@ export async function previewFacturaPago(pagoId: string): Promise<{
     );
   }
 
-  const tipoPersona: 'natural' | 'juridica' = sol.tipo_persona ?? 'natural';
-  const datos = {
-    tipo_persona: tipoPersona,
-    nombre_completo: `${sol.nombre} ${sol.apellido}`.trim(),
-    razon_social: sol.razon_social ?? '',
-    tipo_documento: sol.tipo_documento || '',
-    numero_documento: sol.numero_documento || '',
-    digito_verificacion: sol.digito_verificacion ?? '',
-    email: sol.email || '',
-    telefono: sol.telefono || '',
-    direccion: sol.direccion || '',
-    municipio_codigo: sol.municipio_id || '',
-    municipio_nombre: sol.municipio_nombre || '',
-  };
-
-  // Mismas validaciones que crearFacturaDesdePago. tipo_documento debe ser
-  // tributario colombiano (CC/CE/TI/NIT) — pasaporte y otros extranjeros
-  // van en 'identidad' del registro pero NO sirven para Factus.
-  const TIPOS_FISCALES = ['cc', 'ce', 'ti', 'nit'];
-  const faltantes: string[] = [];
-  const tipoLower = (datos.tipo_documento || '').toLowerCase();
-  if (!tipoLower || !TIPOS_FISCALES.includes(tipoLower)) faltantes.push('tipo_documento');
-  if (!datos.numero_documento) faltantes.push('numero_documento');
-  if (!datos.email) faltantes.push('email');
-  if (!datos.direccion) faltantes.push('direccion');
-  if (!datos.telefono) faltantes.push('telefono');
-  if (!datos.municipio_codigo || !/^\d{5}$/.test(datos.municipio_codigo)) {
-    faltantes.push('municipio_codigo');
-  }
-  if (tipoPersona === 'juridica') {
-    if (!datos.razon_social.trim()) faltantes.push('razon_social');
-    if (!/^\d$/.test(datos.digito_verificacion)) faltantes.push('digito_verificacion');
-  }
-
+  // Mismas reglas que crearFacturaDesdePago (faltantesFiscales).
+  const pagador = await clientePagador(ctx, sol.email);
+  const datos = pagador ?? clienteDesdeSolicitante(sol);
   return {
     ya_emitida: false,
     datos_actuales: datos,
-    faltantes,
+    a_nombre_de_quien_pago: pagador !== null,
+    faltantes: faltantesFiscales(datos),
     monto: Number(ctx.monto) || 0,
     concepto: ctx.concepto,
   };
@@ -404,58 +369,24 @@ export async function crearFacturaDesdePago(
     );
   }
 
-  // Adenda 2 §7: con la opcion B paga el gestor, no el prospecto. La factura
-  // automatica sale a nombre del solicitante, asi que si pago otra persona se
-  // deja pendiente para emitirla a mano (con override) a nombre de quien pago.
-  if (
-    userId === null &&
-    ctx.email_pagador &&
-    sol.email &&
-    ctx.email_pagador.trim().toLowerCase() !== sol.email.trim().toLowerCase()
-  ) {
-    throw new AppError(
-      409,
-      'PAGADOR_NO_ES_SOLICITANTE',
-      'El pago lo hizo alguien distinto al solicitante: la factura se emite a mano con los datos de quien pagó.',
-    );
-  }
-
-  // 3. Combinar datos del solicitante con override del body.
-  const numeroDocumento = override?.numero_documento?.trim() || sol.numero_documento;
-  const tipoDocumento = override?.tipo_documento?.trim() || sol.tipo_documento;
-  const nombreCompletoOverride = override?.nombre_completo?.trim();
-  const direccion = override?.direccion?.trim() || sol.direccion || '';
-  const email = override?.email?.trim() || sol.email || '';
-  const telefono = override?.telefono?.trim() || sol.telefono || '';
-  const municipioCodigo = override?.municipio_codigo?.trim() || sol.municipio_id || '';
-  const tipoPersona: 'natural' | 'juridica' = sol.tipo_persona ?? 'natural';
-  const razonSocial = sol.razon_social?.trim() || '';
-  const digitoVerificacion = sol.digito_verificacion?.trim() || '';
-  const tributeCode = sol.tribute_code?.trim() || 'ZZ';
+  // 3. El cliente de la factura: quien pagó. Adenda 2 §7, opción B: si pagó el
+  //    gestor, la factura va a la inmobiliaria (o al propietario), no al
+  //    solicitante. Encima, lo que se corrigió en el modal de facturar.
+  const pagador = await clientePagador(ctx, sol.email);
+  const cliente = aplicarOverride(pagador ?? clienteDesdeSolicitante(sol), override);
 
   // 3.5. Validacion estricta SIEMPRE — mismo set de faltantes que el preview.
   // Bloquea cualquier emision con datos incompletos. Defense in depth contra
   // clientes que saltaron la pantalla de Datos Fiscales o que tienen un
   // tipo_documento no tributario (eg. pasaporte del wizard de registro).
-  const TIPOS_FISCALES = ['cc', 'ce', 'ti', 'nit'];
-  const faltantes: string[] = [];
-  const tipoLower = (tipoDocumento || '').toLowerCase();
-  if (!tipoLower || !TIPOS_FISCALES.includes(tipoLower)) faltantes.push('tipo_documento');
-  if (!numeroDocumento) faltantes.push('numero_documento');
-  if (!email) faltantes.push('email');
-  if (!direccion) faltantes.push('direccion');
-  if (!telefono) faltantes.push('telefono');
-  if (!municipioCodigo || !/^\d{5}$/.test(municipioCodigo)) faltantes.push('municipio_codigo');
-  // Persona juridica: razon_social y DV son obligatorios para Factus/DIAN.
-  if (tipoPersona === 'juridica') {
-    if (!razonSocial) faltantes.push('razon_social');
-    if (!/^\d$/.test(digitoVerificacion)) faltantes.push('digito_verificacion');
-  }
+  const faltantes = faltantesFiscales(cliente);
   if (faltantes.length > 0) {
     throw new AppError(
       400,
       'CLIENTE_DATOS_INCOMPLETOS',
-      'Faltan datos fiscales para emitir la factura. Completalos en Facturacion → Datos Fiscales.',
+      pagador
+        ? 'Faltan datos fiscales de quien pagó para emitir la factura. Complétalos en Configuración → Datos para contrato.'
+        : 'Faltan datos fiscales para emitir la factura. Completalos en Facturacion → Datos Fiscales.',
       { faltantes },
     );
   }
@@ -470,21 +401,12 @@ export async function crearFacturaDesdePago(
   const conceptoLabel = inferConceptoLabel(ctx.concepto);
   const monto = Number(ctx.monto) || VALOR_ESTUDIO_DEFAULT;
 
-  // Para Factus V2 quantity y price van como string con 2 decimales.
-  const fullName = nombreCompletoOverride || `${sol.nombre} ${sol.apellido}`.trim();
-
   // Lee la tasa de IVA configurada para este concepto (admin la edita en
   // /facturacion). Si tasa>0, monto del pago es total con IVA incluido y
   // calculamos el price (base) para Factus. Si tasa=0, price = monto.
   const tasaIva = await getTarifaIvaPorConcepto(ctx.concepto);
   const priceBase = tasaIva > 0 ? monto / (1 + tasaIva / 100) : monto;
   const priceStr = priceBase.toFixed(2);
-
-  // V2: code DANE = 5 dígitos. Si no matchea (legacy V1 con ID interno
-  // Factus, o vacio), caemos al default.
-  const dane = municipioCodigo && /^\d{5}$/.test(municipioCodigo)
-    ? municipioCodigo
-    : DEFAULTS_CLIENTE.municipality_code;
 
   const payload: factus.CreateBillInput = {
     reference_code: referenceCode,
@@ -501,23 +423,24 @@ export async function crearFacturaDesdePago(
       },
     ],
     customer: {
-      identification: numeroDocumento,
+      identification: cliente.numero_documento,
       // Persona juridica: company + trade_name + dv (DV del NIT). Persona
       // natural: names. legal_organization_code 1=Jurídica, 2=Natural.
-      ...(tipoPersona === 'juridica'
+      ...(cliente.tipo_persona === 'juridica'
         ? {
-            company: razonSocial,
-            trade_name: razonSocial,
-            ...(digitoVerificacion ? { dv: digitoVerificacion } : {}),
+            company: cliente.razon_social,
+            trade_name: cliente.razon_social,
+            ...(cliente.digito_verificacion ? { dv: cliente.digito_verificacion } : {}),
           }
-        : { names: fullName }),
-      address: direccion || undefined,
-      email: email || undefined,
-      phone: telefono || undefined,
-      legal_organization_code: tipoPersona === 'juridica' ? '1' : '2',
-      tribute_code: tributeCode,
-      identification_document_code: mapTipoDocumentoToFactus(tipoDocumento),
-      municipality_code: dane,
+        : { names: cliente.nombre_completo }),
+      address: cliente.direccion || undefined,
+      email: cliente.email || undefined,
+      phone: cliente.telefono || undefined,
+      legal_organization_code: cliente.tipo_persona === 'juridica' ? '1' : '2',
+      tribute_code: cliente.tribute_code,
+      identification_document_code: mapTipoDocumentoToFactus(cliente.tipo_documento),
+      // V2: code DANE = 5 dígitos (faltantesFiscales ya lo exige).
+      municipality_code: cliente.municipio_codigo,
     },
     items: [
       {
@@ -602,7 +525,7 @@ export async function crearFacturaDesdePago(
   const facturaPersisted = await persistFacturaEmitida({
     pagoId,
     expedienteId: ctx.expediente_id,
-    sol,
+    cliente,
     factusRes,
     bill,
     referenceCode,
@@ -636,14 +559,14 @@ export async function crearFacturaDesdePago(
 async function persistFacturaEmitida(params: {
   pagoId: string;
   expedienteId: string;
-  sol: NonNullable<PagoConContexto['expediente']['solicitante']>;
+  cliente: ClienteFiscal;
   factusRes: factus.CreateBillResponse;
   bill: FactusBillSnapshot;
   referenceCode: string;
   concepto: string;
   montoFallback: number;
 }) {
-  const { pagoId, expedienteId, sol, factusRes, bill, referenceCode, concepto, montoFallback } = params;
+  const { pagoId, expedienteId, cliente, factusRes, bill, referenceCode, concepto, montoFallback } = params;
 
   // Si ya hay un intento previo (fallido), actualizamos en vez de insertar.
   const existente = await findFacturaExistente(pagoId);
@@ -652,16 +575,14 @@ async function persistFacturaEmitida(params: {
   // razon social real (no el nombre del representante). Para natural usa
   // nombre completo.
   const facturaRazonSocial =
-    sol.tipo_persona === 'juridica' && sol.razon_social
-      ? sol.razon_social.trim()
-      : `${sol.nombre} ${sol.apellido}`.trim();
+    cliente.tipo_persona === 'juridica' && cliente.razon_social ? cliente.razon_social : cliente.nombre_completo;
 
   // Si es NIT con DV, lo persistimos con el sufijo (eg. "900123456-7") para
   // que el listado de facturas y el PDF muestren el documento completo.
   const facturaNit =
-    sol.digito_verificacion && sol.tipo_documento.toLowerCase() === 'nit'
-      ? `${sol.numero_documento}-${sol.digito_verificacion}`
-      : sol.numero_documento;
+    cliente.digito_verificacion && cliente.tipo_documento.toLowerCase() === 'nit'
+      ? `${cliente.numero_documento}-${cliente.digito_verificacion}`
+      : cliente.numero_documento;
 
   const data = {
     pago_id: pagoId,
@@ -669,7 +590,7 @@ async function persistFacturaEmitida(params: {
     numero_factura: bill.number,
     razon_social: facturaRazonSocial,
     nit: facturaNit,
-    direccion_fiscal: sol.direccion,
+    direccion_fiscal: cliente.direccion,
     estado: 'emitida' as const,
     factus_bill_id: bill.id,
     factus_reference_code: referenceCode,
@@ -804,7 +725,7 @@ export async function crearFacturaDesdeCompraCreditos(
     .select(`
       id, nombre, apellido, rol, tipo_documento, numero_documento,
       razon_social, nit, direccion, direccion_comercial, ciudad,
-      nombre_representante, telefono, email_recaudo
+      nombre_representante, telefono, email_recaudo, municipio_codigo, municipio_nombre
     `)
     .eq('id', perfilId)
     .single();
@@ -826,6 +747,8 @@ export async function crearFacturaDesdeCompraCreditos(
     nombre_representante: string | null;
     telefono: string | null;
     email_recaudo: string | null;
+    municipio_codigo: string | null;
+    municipio_nombre: string | null;
   };
 
   const { data: authUserData } = await supabase.auth.admin.getUserById(perfilId);
@@ -846,8 +769,9 @@ export async function crearFacturaDesdeCompraCreditos(
       '',
     email: override?.email?.trim() || perfil.email_recaudo || emailAuth || '',
     telefono: override?.telefono?.trim() || perfil.telefono || '',
-    municipio_codigo: override?.municipio_codigo?.trim() || '',
-    municipio_nombre: override?.municipio_nombre?.trim() || perfil.ciudad || '',
+    // Guardado una vez en "Datos para contrato": ya no hay que teclearlo en cada factura.
+    municipio_codigo: override?.municipio_codigo?.trim() || perfil.municipio_codigo || '',
+    municipio_nombre: override?.municipio_nombre?.trim() || perfil.municipio_nombre || perfil.ciudad || '',
     tipo_documento:
       override?.tipo_documento?.trim() ||
       mapTipoDocumentoToFactus(perfil.nit ? 'NIT' : perfil.tipo_documento || 'CC'),
