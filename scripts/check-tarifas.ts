@@ -12,6 +12,7 @@ import assert from 'node:assert';
 import {
   calcularTarifas,
   leerTarifaOverride,
+  textosTarifaContrato,
   viaPorRutaDeAprobacion,
   TARIFA_MENSUAL_PCT,
   PRIMA_VINCULACION_PCT,
@@ -77,5 +78,13 @@ ok(viaPorRutaDeAprobacion({ ...base, resultadoEstudio: 'condicionado', aprobadoP
 ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'revision_manual' }) === 'revision_manual', 'con el motor decidiendo manda su via');
 ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'basura' }) === 'automatica', 'una via del motor desconocida se ignora');
 ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'revision_manual', aprobadoPorPonderacion: true }) === 'condicionada_coarrendatario', 'la ponderacion posterior manda sobre la via del titular');
+
+// ── Lo que imprime el contrato (#3: mismas cifras que el CRC, no las de la modalidad) ──
+const auto = textosTarifaContrato(calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 1_500_000 }));
+ok(auto.comision_texto === 'el 2,0% (más IVA)' && auto.prima_texto === '20%', 'automatico y solo -> "el 2,0% (más IVA)" y prima "20%"');
+const conCoa = textosTarifaContrato(calcularTarifas({ via: 'condicionada_coarrendatario', conCoarrendatario: true, canonCop: 1_500_000 }));
+ok(conCoa.comision_texto === 'el 2,5% (más IVA)' && conCoa.prima_texto === '10%', 'con coarrendatario -> 2,5% y prima 10%');
+ok(textosTarifaContrato(o).comision_texto === 'el 1,5% (más IVA)', 'la tarifa negociada por Gerencia tambien llega al contrato');
+ok(textosTarifaContrato(null).prima_texto.startsWith('['), 'sin estudio (vista previa) -> marcador, no una cifra inventada');
 
 console.log(`\nOK — ${pasos} aserciones: la tabla de tarifas de la Adenda §5 esta tal cual y la via sale de la ruta (Adenda 2 §6).`);

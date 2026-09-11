@@ -10,6 +10,7 @@ import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numeros
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess } from '@/lib/tenantScope';
 import { checkPerfilCompletitud } from '../perfil-arrendador/perfil-arrendador.service';
+import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
 import type {
   GenerarContratoInput,
   RenovarContratoInput,
@@ -609,11 +610,13 @@ async function fetchCoarrendatarioParaContrato(
  * Resuelve: arrendador, arrendatario, coarrendatario, inmueble, contrato,
  * canon, config — todo listo para `renderTemplate`.
  */
+// La modalidad solo define la COBERTURA. La comisión mensual y la prima ya no
+// salen de aquí (sus columnas comision_texto/prima_texto quedaron con los valores
+// de ejemplo de la migración 20260604000002): salen de la ruta de aprobación,
+// como el CRC — ver tarifasParaContrato.
 interface ModalidadFianza {
   codigo: string;
   nombre: string;
-  comision_texto: string;
-  prima_texto: string;
   cubre_canones: boolean;
   cubre_servicios: boolean;
   cubre_admin_ph: boolean;
@@ -628,7 +631,9 @@ async function buildContratoContext(
   duracionMeses: number,
   // Fase 3 (contrato V4): modalidad de fianza + el expediente (co-titular,
   // reparto de servicios). Opcional para no romper los otros callers.
-  opts?: { modalidad?: ModalidadFianza | null; expediente?: Record<string, unknown> },
+  // `tarifas`: comisión mensual y prima (Adenda 1 §5 / Adenda 2 §6); sin ellas
+  // (vista previa) el contrato muestra marcadores.
+  opts?: { modalidad?: ModalidadFianza | null; expediente?: Record<string, unknown>; tarifas?: Tarifas | null },
 ): Promise<Record<string, unknown>> {
   const { arrendador, solicitante, inmueble, coarrendatario } = data;
   const fechaFin = addMonths(fechaInicio, duracionMeses);
@@ -840,8 +845,7 @@ async function buildContratoContext(
       fecha_firma_mes: nombreMes(ahora),
       fecha_firma_ano: ahora.getFullYear(),
       modalidad: mod?.nombre || '',
-      comision_texto: mod?.comision_texto || '',
-      prima_texto: mod?.prima_texto || '',
+      ...textosTarifaContrato(opts?.tarifas ?? null),
       // Resumen de cargo de servicios/PH (la tabla serv.* tiene el detalle).
       servicios_publicos_cargo: serviciosPublicosCargo,
       administracion_ph_cargo: administracionPhCargo,
@@ -1711,10 +1715,39 @@ export async function getContratoById(id: string, userId?: string, userRol?: str
 async function fetchModalidadFianza(codigo: string | null | undefined): Promise<ModalidadFianza | null> {
   const { data } = await (supabase
     .from('modalidades_fianza' as string) as ReturnType<typeof supabase.from>)
-    .select('codigo, nombre, comision_texto, prima_texto, cubre_canones, cubre_servicios, cubre_admin_ph, cubre_danos, cubre_penal')
+    .select('codigo, nombre, cubre_canones, cubre_servicios, cubre_admin_ph, cubre_danos, cubre_penal')
     .eq('codigo', codigo || 'plena')
     .maybeSingle();
   return (data as ModalidadFianza | null) ?? null;
+}
+
+/**
+ * #3 (Adenda 1 §5 / Adenda 2 §6): el contrato cobra lo mismo que dice el CRC
+ * del estudio del titular — la tarifa de la ruta de aprobación (2,0 / 2,5 /
+ * 2,7 % + IVA) o la negociada por Gerencia, y la prima de 20 % (10 % con
+ * coarrendatario). Sin estudio completado (aprobación sin buró), la ruta es la
+ * revisión manual.
+ */
+async function tarifasParaContrato(expedienteId: string): Promise<Tarifas> {
+  const { data } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .eq('tipo', 'individual')
+    .eq('estado', 'completado')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (data) {
+    const { tarifasDelEstudio } = await import('@/modules/estudios/tarifa-override.service');
+    return (await tarifasDelEstudio((data as { id: string }).id)).tarifas;
+  }
+  const { coarrendatarioVinculado } = await import('@/modules/estudios/coarrendatario-vinculado');
+  return calcularTarifas({
+    via: 'revision_manual',
+    conCoarrendatario: (await coarrendatarioVinculado(expedienteId)) !== null,
+    canonCop: null,
+  });
 }
 
 /** Regex UUID v4 — para evitar que strings como 'system' rompan la FK a perfiles. */
@@ -1934,6 +1967,7 @@ export async function generarContrato(
   const context = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses, {
     modalidad,
     expediente: expRecord,
+    tarifas: await tarifasParaContrato(expedienteId),
   });
 
   // 4.1e: solo el contexto derivado del expediente/inmueble, sin overrides
@@ -2545,6 +2579,7 @@ export async function regenerarContrato(
   const ctx = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses, {
     modalidad: modalidadRegen,
     expediente: expRecordRegen,
+    tarifas: await tarifasParaContrato(row.expediente_id),
   });
   // 4.1e: solo el contexto derivado del expediente/inmueble; sin overrides
   // libres (el escape hatch `variables` se eliminó para no poder alterar la

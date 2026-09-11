@@ -98,6 +98,23 @@ export function calcularTarifas(e: EntradaTarifas): Tarifas {
   };
 }
 
+const pctTexto = (n: number, minDecimales: number) =>
+  `${n.toLocaleString('es-CO', { minimumFractionDigits: minDecimales, maximumFractionDigits: 2 })}%`;
+
+/**
+ * Lo que imprime el contrato V4 (paragrafos tercero y cuarto de la clausula
+ * tercera): "...segun la modalidad aprobada: {comision_texto} del canon
+ * vigente" y "...equivalente al {prima_texto} del canon mensual". Mismas
+ * cifras que el CRC. Sin tarifas (vista previa sin estudio) salen marcadores.
+ */
+export function textosTarifaContrato(t: Tarifas | null): { comision_texto: string; prima_texto: string } {
+  if (!t) return { comision_texto: '[tarifa mensual + IVA]', prima_texto: '[prima de vinculación]' };
+  return {
+    comision_texto: `el ${pctTexto(t.tarifa_mensual_pct, 1)} (más IVA)`,
+    prima_texto: pctTexto(t.prima_vinculacion_pct, 0),
+  };
+}
+
 /** Lee el JSONB de la fila tolerando null, basura o versiones viejas. */
 export function leerTarifaOverride(v: unknown): TarifaOverride | null {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
