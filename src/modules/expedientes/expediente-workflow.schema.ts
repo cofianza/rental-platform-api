@@ -17,6 +17,9 @@ export const transitionBodySchema = z.object({
    *  ambas etiquetas). El service la usa para decidir si poblar las
    *  columnas de cancelacion en expedientes. */
   etiqueta: z.string().max(100).optional(),
+  /** Adenda 2 §5.1: documentos que el analista consulto al resolver un caso
+   *  en revision manual (condicionado). El comentario es el fundamento. */
+  documentos_consultados: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
 });
 
 export type TransitionInput = z.infer<typeof transitionBodySchema>;

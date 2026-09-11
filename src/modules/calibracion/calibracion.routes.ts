@@ -28,6 +28,15 @@ router.get(
   }),
   controller.cascada,
 );
+// Adenda 2 §5.1 y §8: revision manual (volumen, tiempo vs SLA), escalados
+// por falta de ingreso y tasa de caida de DataCredito. Ventana en dias.
+router.get(
+  '/revision-manual',
+  validate({
+    query: z.object({ dias: z.coerce.number().int().min(1).max(365).default(30) }),
+  }),
+  controller.revisionManual,
+);
 router.patch(
   '/:clave',
   validate({

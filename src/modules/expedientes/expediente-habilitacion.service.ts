@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { errorNoAdmision } from '../estudios/estudios-simultaneos.guard';
 import { env } from '@/config/env';
 import {
@@ -434,11 +435,19 @@ export async function omitirCita(
  * por defecto). El estudio.resultado se queda en 'condicionado' como reflejo
  * de lo que el buró dijo — solo cambia el estado del expediente.
  */
+/** Adenda 2 §5.1: lo que el analista deja escrito al resolver la revision manual. */
+export interface DecisionRevisionManual {
+  fundamento: string;
+  documentos_consultados: string[];
+}
+
 export async function aprobarCondicionado(
   expedienteId: string,
   userId: string,
   userRol: string,
-  datosContrato?: { duracion_contrato_meses: number; fecha_inicio_contrato: string },
+  datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string } | undefined,
+  revision: DecisionRevisionManual,
+  ip?: string,
 ): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
   contrato_id: string | null;
@@ -449,6 +458,8 @@ export async function aprobarCondicionado(
     userRol,
     datosContrato,
     fromState: 'condicionado',
+    revision,
+    ip,
   });
 }
 
@@ -494,6 +505,8 @@ async function aprobarYGenerarContrato(params: {
   userRol: string;
   datosContrato?: { duracion_contrato_meses: number; fecha_inicio_contrato: string };
   fromState: 'condicionado' | 'aprobado';
+  revision?: DecisionRevisionManual;
+  ip?: string;
 }): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
   contrato_id: string | null;
@@ -570,12 +583,32 @@ async function aprobarYGenerarContrato(params: {
       .insert({
         expediente_id: expedienteId,
         tipo: 'estado',
-        descripcion: 'Propietario aprobó manualmente el estudio condicionado tras revisar la documentación adicional.',
+        descripcion: `Un analista de Cofianza aprobó el estudio en revisión manual. Fundamento: ${params.revision?.fundamento ?? 's/d'}`,
         estado_anterior: 'condicionado',
         estado_nuevo: 'aprobado',
         usuario_id: userId,
-        metadata: { manual: true, origen: 'propietario_aprobar_condicionado' },
+        // Adenda 2 §5.1: usuario (usuario_id), fecha (created_at), fundamento
+        // escrito y documentos consultados.
+        metadata: {
+          manual: true,
+          origen: 'analista_aprobar_condicionado',
+          fundamento: params.revision?.fundamento ?? null,
+          documentos_consultados: params.revision?.documentos_consultados ?? [],
+        },
       } as never);
+
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.REVISION_MANUAL_DECIDIDA,
+      entidad: AUDIT_ENTITIES.EXPEDIENTE,
+      entidadId: expedienteId,
+      detalle: {
+        decision: 'aprobado',
+        fundamento: params.revision?.fundamento ?? null,
+        documentos_consultados: params.revision?.documentos_consultados ?? [],
+      },
+      ip: params.ip,
+    });
 
     // Política §9: la decisión deja de ser 'AUTOMATICO' — la ratificó un humano.
     await ratificarAnalistaResponsable(expedienteId, userId);

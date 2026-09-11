@@ -72,6 +72,10 @@ const datosContratoBody = z.object({
 const aprobarCondicionadoBody = z.object({
   duracion_contrato_meses: z.coerce.number().int().min(1).max(120).optional(),
   fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)').optional(),
+  // Adenda 2 §5.1: "toda decision manual debe registrar [...] el fundamento
+  // escrito y los documentos que consulto".
+  fundamento: z.string().trim().min(10, 'Escribe el fundamento de la decisión (mínimo 10 caracteres).').max(2000),
+  documentos_consultados: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
 });
 
 // POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la

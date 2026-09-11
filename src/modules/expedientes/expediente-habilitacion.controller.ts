@@ -29,13 +29,18 @@ export async function aprobarCondicionado(req: Request, res: Response) {
   const body = req.body as {
     duracion_contrato_meses?: number;
     fecha_inicio_contrato?: string;
+    fundamento: string;
+    documentos_consultados: string[];
   };
   // Datos del contrato opcionales: si no vienen, solo se aprueba (sin generar).
   const datosContrato =
     body.duracion_contrato_meses && body.fecha_inicio_contrato
       ? { duracion_contrato_meses: body.duracion_contrato_meses, fecha_inicio_contrato: body.fecha_inicio_contrato }
       : undefined;
-  const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol, datosContrato);
+  const result = await service.aprobarCondicionado(id, req.user!.id, req.user!.rol, datosContrato, {
+    fundamento: body.fundamento,
+    documentos_consultados: body.documentos_consultados,
+  }, req.ip);
   sendSuccess(res, result);
 }
 

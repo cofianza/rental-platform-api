@@ -31,6 +31,8 @@ export const AUDIT_ACTIONS = {
   // Expedientes
   EXPEDIENTE_CREATED: 'expediente_created',
   EXPEDIENTE_UPDATED: 'expediente_updated',
+  // Adenda 2 §5.1: decision de un analista sobre un caso en revision manual.
+  REVISION_MANUAL_DECIDIDA: 'revision_manual_decidida',
   // Comentarios
   COMMENT_CREATED: 'comment_created',
   COMMENT_UPDATED: 'comment_updated',

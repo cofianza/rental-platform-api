@@ -24,7 +24,7 @@ const { mockFrom, ops, paginas } = vi.hoisted(() => {
 
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 
-import { clasificarCascada, resumenCascada } from '../calibracion.service';
+import { clasificarCascada, resumenCascada, horasHabilesEntre, emparejarRevisiones } from '../calibracion.service';
 
 describe('clasificarCascada (pura)', () => {
   it('dos centrales cuando la traza dice que se consulto la secundaria', () => {
@@ -114,5 +114,44 @@ describe('resumenCascada', () => {
       statusCode: 500,
       errorCode: 'DATABASE_ERROR',
     });
+  });
+});
+
+// Adenda 2 §5.1: el tiempo de resolucion se mide en horas habiles (Politica §8).
+describe('horasHabilesEntre (pura, L-V 8-18 Bogota)', () => {
+  // 2026-09-11 es viernes. Bogota = UTC-5.
+  const bog = (iso: string) => new Date(`${iso}-05:00`);
+
+  it('dentro del mismo dia habil cuenta las horas reales', () => {
+    expect(horasHabilesEntre(bog('2026-09-11T09:00:00'), bog('2026-09-11T10:30:00'))).toBe(1.5);
+  });
+
+  it('fuera de horario no suma: de viernes 17:00 a lunes 9:00 son 2 horas', () => {
+    expect(horasHabilesEntre(bog('2026-09-11T17:00:00'), bog('2026-09-14T09:00:00'))).toBe(2);
+  });
+
+  it('un fin de semana completo es 0', () => {
+    expect(horasHabilesEntre(bog('2026-09-12T08:00:00'), bog('2026-09-13T20:00:00'))).toBe(0);
+  });
+
+  it('hasta antes que desde es 0', () => {
+    expect(horasHabilesEntre(bog('2026-09-11T10:00:00'), bog('2026-09-11T09:00:00'))).toBe(0);
+  });
+});
+
+describe('emparejarRevisiones (pura)', () => {
+  it('cada salida se mide desde la entrada anterior mas reciente del mismo expediente', () => {
+    const entradas = [
+      { expediente_id: 'a', created_at: '2026-09-01T10:00:00Z' },
+      { expediente_id: 'a', created_at: '2026-09-05T10:00:00Z' },
+      { expediente_id: 'b', created_at: '2026-09-02T10:00:00Z' },
+    ];
+    const salidas = [
+      { expediente_id: 'a', created_at: '2026-09-06T10:00:00Z' },
+      { expediente_id: 'c', created_at: '2026-09-06T10:00:00Z' },
+    ];
+    expect(emparejarRevisiones(entradas, salidas)).toEqual([
+      { expediente_id: 'a', desde: '2026-09-05T10:00:00Z', hasta: '2026-09-06T10:00:00Z' },
+    ]);
   });
 });

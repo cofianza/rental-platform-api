@@ -3,7 +3,7 @@ import { sendSuccess } from '@/lib/response';
 import { AppError } from '@/lib/errors';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { listarParametros, listarHistorial, setParametro, validarParametro } from '@/lib/calibracion';
-import { resumenCascada } from './calibracion.service';
+import { resumenCascada, resumenRevisionManual } from './calibracion.service';
 
 export async function listar(_req: Request, res: Response) {
   sendSuccess(res, await listarParametros());
@@ -17,6 +17,11 @@ export async function cascada(req: Request, res: Response) {
   // Express 5: req.query es de solo lectura; validate deja lo parseado aqui.
   const query = (req as Request & { validatedQuery?: { dias: number } }).validatedQuery;
   sendSuccess(res, await resumenCascada(query?.dias ?? 30));
+}
+
+export async function revisionManual(req: Request, res: Response) {
+  const query = (req as Request & { validatedQuery?: { dias: number } }).validatedQuery;
+  sendSuccess(res, await resumenRevisionManual(query?.dias ?? 30));
 }
 
 export async function actualizar(req: Request, res: Response) {

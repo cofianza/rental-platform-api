@@ -11,6 +11,7 @@ import {
 import { getExpedienteById } from './expedientes.service';
 import { perfilEsDuenoDeInmueble, assertExpedienteAccess, resolveRolMiembro } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import type { TransitionInput } from './expediente-workflow.schema';
 
 // ============================================================
@@ -157,6 +158,25 @@ export async function executeTransition(
     (async () => {
       await liberarReservaSiNoQuedaContratoVivo(expedienteId, targetState, user.id);
     })().catch((e) => logger.warn({ e, expedienteId }, 'No se pudo liberar la reserva del inmueble tras rechazo/cierre'));
+  }
+
+  // Adenda 2 §5.1: salir de 'condicionado' es resolver una revision manual.
+  // Queda en el timeline (usuario y fecha los pone el RPC; el comentario es el
+  // fundamento) con los documentos consultados, y en la bitacora.
+  if (currentState === 'condicionado') {
+    const documentos = input.documentos_consultados ?? [];
+    const { error: metaErr } = await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .update({ metadata: { manual: true, origen: 'analista_revision_manual', fundamento: input.comentario, documentos_consultados: documentos } } as never)
+      .eq('id', result.evento_timeline_id);
+    if (metaErr) logger.warn({ expedienteId, err: metaErr.message }, 'No se pudieron guardar los documentos consultados en el timeline');
+    logAudit({
+      usuarioId: user.id,
+      accion: AUDIT_ACTIONS.REVISION_MANUAL_DECIDIDA,
+      entidad: AUDIT_ENTITIES.EXPEDIENTE,
+      entidadId: expedienteId,
+      detalle: { decision: targetState, fundamento: input.comentario, documentos_consultados: documentos },
+    });
   }
 
   logger.info(

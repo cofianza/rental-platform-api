@@ -2684,6 +2684,17 @@ async function procesarEstudioAsync(args: {
         ...(proveedorAnterior ? { proveedor_anterior: proveedorAnterior } : {}),
         error: errorMsg,
         documento_no_encontrado: documentoNoEncontrado,
+        // Adenda 2 §8: separa la caida real de la central de los errores del
+        // dato (documento, apellido) para medir la tasa de falla de DataCredito.
+        tipo_fallo: proveedorNoDisponible
+          ? 'no_disponible'
+          : documentoNoEncontrado
+            ? 'documento_no_encontrado'
+            : apellidoNoCoincide
+              ? 'apellido_no_coincide'
+              : bloqueadoPorAutorizacion
+                ? 'sin_autorizacion'
+                : 'otro',
         expediente_id: expedienteId,
       },
       ip,
