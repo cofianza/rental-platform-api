@@ -1,9 +1,11 @@
 /**
  * Pago Estudio Service (HP-353)
  *
- * Orchestrates the study payment flow:
- * - Option 1: Inmobiliaria assumes cost (internal registration)
- * - Option 2: Send payment link to tenant via email
+ * Formas de pago del estudio (Flujo §6, Adenda 2 §7 — no hay una cuarta):
+ * - A: credito del paquete prepagado (creditos-estudios).
+ * - B: el gestor paga en el momento por la pasarela (pagarGestor).
+ * - C: enlace de pago al prospecto, despues de su autorizacion (enviarLinkPago).
+ * La modalidad "a cuenta" (el costo se anotaba sin cobrar) NO se aprobo.
  */
 
 import crypto from 'node:crypto';
@@ -261,122 +263,245 @@ function invalidarLinkPasarela(pago: { external_id?: string | null; metodo?: str
 }
 
 // ============================================================
-// Inmobiliaria asume el costo — POST /asumir
+// Cobro por pasarela — compartido por la opcion B y la C
 // ============================================================
 
-export async function asumirCosto(expedienteId: string, userId: string, ip?: string, userRol?: string) {
-  // Tenant guard (404 fuera de scope). Va PRIMERO: asumir el costo escribe un
-  // pago 'completado' sobre el expediente y, desde el §6.3, ese pago dispara
-  // onEstudioPagado -> ejecutarEstudio, o sea una consulta FACTURABLE al buro
-  // del prospecto. Sin esto, cualquier gestor de otra agencia podia pagar
-  // (y ejecutar) el estudio de una cartera ajena conociendo el expedienteId.
-  await assertExpedienteAccess(expedienteId, userId, userRol);
+/**
+ * Crea el pago 'pendiente' y su checkout en la pasarela. Lanza si ya hay un
+ * pago activo. Lo usan la C (paga el prospecto, fase 2 de enviarLinkPago) y la
+ * B (paga el gestor, pagarGestor): mismo cobro, distinto pagador.
+ */
+async function crearCobroPasarela(args: {
+  expedienteId: string;
+  userId: string;
+  emailPagador: string;
+  nombrePagador: string;
+  /** Sufijo del concepto que ve el pagador en el checkout. */
+  sufijoConcepto?: string;
+}) {
+  const { expedienteId, userId, emailPagador, nombrePagador } = args;
 
-  // TOPE DE CANON — flujo §4.4: "no se cobra el estudio". Asumir el costo es un
-  // cobro (interno, pero cobro: crea el pago 'completado' y dispara la
-  // facturación y el link de autorización). Se verifica ANTES de cancelar el
-  // link vivo y ANTES del INSERT, para no dejar el expediente sin link y sin
-  // pago. Ojo: por el wrapper cancelarYAsumir esto no alcanzaba —cuando entra
-  // por ahí, el link ya se canceló antes de llegar acá—, así que ese wrapper
-  // repite el guard al principio. El guard es de sólo lectura e idempotente.
-  await assertCanonDentroDelTope({ expedienteId, origen: 'asumirCosto' });
-
-  // Check no existing active pago
+  // Check no existing active pago (pendiente or procesando)
   const existing = await findPagoEstudio(expedienteId);
-  if (existing && (existing.estado as string) === 'completado') {
-    throw AppError.conflict('Ya existe un pago de estudio completado para este estudio', 'PAGO_ESTUDIO_YA_COMPLETADO');
+  if (existing) {
+    const estado = existing.estado as string;
+    if (estado === 'completado') {
+      throw AppError.conflict('Ya existe un pago de estudio completado', 'PAGO_ESTUDIO_YA_COMPLETADO');
+    }
+    if (estado === 'pendiente' || estado === 'procesando') {
+      throw AppError.conflict('Ya existe un link de pago pendiente para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
+    }
   }
 
-  // Si hay un link de pago vivo, cancelarlo primero (BD + preference en la
-  // pasarela): sin esto coexistirían dos pagos y el arrendatario podría pagar
-  // el link viejo del email — dinero capturado sin pago casable.
+  const exp = await getExpedienteWithInmueble(expedienteId);
+  const monto = await getMontoEstudio();
+  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || `Exp. ${exp.numero}`}${args.sufijoConcepto ?? ''}`;
+
+  // El id va PRE-generado y viaja en las URLs de retorno: el arrendatario que
+  // cancela o al que le rechazan el pago no tiene sesión, así que sin el
+  // `pago` en la URL la pantalla de resultado no puede ofrecerle reintentar.
+  const pagoId = crypto.randomUUID();
+
+  // Build success/cancel/pending URLs (pending: PSE/efectivo no es éxito todavía)
+  const successUrl = `${env.FRONTEND_URL}/pago/resultado?status=success&expediente=${expedienteId}&pago=${pagoId}`;
+  const cancelUrl = `${env.FRONTEND_URL}/pago/resultado?status=cancelled&expediente=${expedienteId}&pago=${pagoId}`;
+  const pendingUrl = `${env.FRONTEND_URL}/pago/resultado?status=pending&expediente=${expedienteId}&pago=${pagoId}`;
+
+  // Insert pago ANTES de crear el checkout, con id pre-generado: la preference
+  // lleva el pago_id en external_reference y el webhook casa el pago EXACTO.
+  // El índice único uq_pagos_estudio_activo convierte la carrera de doble click
+  // en un 23505 limpio en lugar de dos links vivos.
+  const gateway = getPaymentGateway();
+  const { error: insertError } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      id: pagoId,
+      expediente_id: expedienteId,
+      concepto: 'estudio',
+      descripcion: conceptLabel,
+      monto,
+      metodo: 'pasarela',
+      estado: 'pendiente',
+      email_pagador: emailPagador,
+      nombre_pagador: nombrePagador,
+      creado_por: userId,
+    } as never);
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      throw AppError.conflict('Ya existe un pago de evaluación activo para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
+    }
+    logger.error({ error: insertError.message }, 'Error creating estudio payment record');
+    throw fromSupabaseError(insertError);
+  }
+
+  let linkResult: { url: string; externalId: string };
+  try {
+    linkResult = await gateway.createPaymentLink({
+      amount: monto,
+      concept: conceptLabel,
+      description: `Pago de estudio de arrendamiento para ${nombrePagador}`,
+      metadata: {
+        expediente_id: expedienteId,
+        concepto: 'estudio',
+        email_pagador: emailPagador,
+        pago_id: pagoId,
+      },
+      successUrl,
+      cancelUrl,
+      pendingUrl,
+    });
+  } catch (gatewayError) {
+    // No dejar la fila huérfana bloqueando el índice único.
+    await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', pagoId);
+    throw gatewayError;
+  }
+
+  // CAS sobre 'pendiente': si el pago fue cancelado concurrentemente (p. ej.
+  // cancelar-y-pagar mientras se creaba el checkout), no se adjunta un link
+  // pagable a un pago cancelado — se expira la preference y se aborta.
+  const { data: pago, error } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      payment_link_url: linkResult.url,
+      external_id: linkResult.externalId,
+    } as never)
+    .eq('id', pagoId)
+    .eq('estado', 'pendiente')
+    .select(PAGO_SELECT)
+    .maybeSingle();
+
+  if (error) {
+    logger.error({ error: error.message, pagoId }, 'Error guardando el link del estudio — se revierte');
+    await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .delete()
+      .eq('id', pagoId);
+    if (gateway.cancelPaymentLink) {
+      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
+        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras revertir'),
+      );
+    }
+    throw fromSupabaseError(error);
+  }
+
+  if (!pago) {
+    if (gateway.cancelPaymentLink) {
+      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
+        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras cancelación concurrente'),
+      );
+    }
+    throw AppError.conflict('El pago fue cancelado mientras se creaba el link', 'PAGO_CANCELADO_CONCURRENTE');
+  }
+
+  // Record events
+  await (supabase
+    .from('eventos_pago' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      pago_id: pago.id,
+      tipo: 'created',
+      origen: 'system',
+      detalles: { gateway: gateway.provider, external_id: linkResult.externalId },
+    } as never);
+
+  return { pago: pago as Record<string, unknown> & { id: string }, linkUrl: linkResult.url, exp, monto };
+}
+
+// ============================================================
+// Opcion B — el gestor paga en el momento por la pasarela: POST /pagar
+// ============================================================
+
+/**
+ * Adenda 2 §7: "NO se aprueba la modalidad a cuenta. La opción de pago
+ * inmediato de la inmobiliaria debe conectarse a la pasarela de pagos. El
+ * estudio no avanza hasta que el pago quede confirmado." Reemplaza a
+ * asumirCosto, que anotaba un pago 'completado' sin mover dinero.
+ *
+ * Crea el checkout a nombre de quien paga (el gestor) y devuelve el pago con
+ * su enlace para abrirlo. Al confirmarse, el webhook o la reconciliación
+ * disparan onPagoConfirmado -> onEstudioPagado, igual que en la opción C: si
+ * el prospecto no ha autorizado se le manda el habeas data; si ya autorizó, se
+ * ejecuta el estudio. Si el gestor ya tenía SU checkout abierto, se le
+ * devuelve el mismo (cerró la pestaña y vuelve a pulsar).
+ *
+ * `reemplazarPendiente`: si hay un enlace vivo del PROSPECTO se cancela
+ * primero (era "cancelar y asumir"); sin la bandera se rechaza con 409.
+ */
+export async function pagarGestor(
+  expedienteId: string,
+  userId: string,
+  ip?: string,
+  userRol?: string,
+  opts: { reemplazarPendiente?: boolean } = {},
+) {
+  // Tenant guard (404 fuera de scope): este cobro, una vez confirmado, dispara
+  // la consulta FACTURABLE al buro del prospecto.
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
+  // TOPE DE CANON — flujo §4.4: "no se cobra el estudio". Antes de tocar el
+  // pago vivo: cancelarlo y luego chocar con el tope dejaria el expediente sin
+  // enlace y sin pago.
+  await assertCanonDentroDelTope({ expedienteId, origen: 'pagarGestor' });
+
+  const [{ data: authData }, { data: perfilRow }] = await Promise.all([
+    supabase.auth.admin.getUserById(userId),
+    (supabase.from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('nombre, apellido, razon_social')
+      .eq('id', userId)
+      .maybeSingle(),
+  ]);
+  const email = authData?.user?.email ?? null;
+  const perfil = perfilRow as { nombre?: string | null; apellido?: string | null; razon_social?: string | null } | null;
+  const nombre = perfil?.razon_social?.trim() || `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim();
+  if (!email || !nombre) {
+    throw AppError.badRequest('Tu cuenta no tiene correo o nombre para emitir el cobro.', 'GESTOR_SIN_CONTACTO');
+  }
+
+  const existing = await findPagoEstudio(expedienteId);
   if (existing && ['pendiente', 'procesando'].includes(existing.estado as string)) {
+    const esSuyo =
+      existing.metodo === 'pasarela' &&
+      String(existing.email_pagador ?? '').toLowerCase() === email.toLowerCase() &&
+      !!existing.payment_link_url;
+    if (esSuyo) return existing;
+    if (!opts.reemplazarPendiente) {
+      throw AppError.conflict(
+        'Hay un enlace de pago vivo del prospecto. Cancélalo y paga tú desde el estudio.',
+        'PAGO_ESTUDIO_PENDIENTE',
+      );
+    }
+    // Cancelar el enlace del prospecto (BD + preference en la pasarela): sin
+    // esto coexistirian dos cobros y el arrendatario podria pagar el viejo.
     await transitionPagoState({
       pagoId: existing.id as string,
       targetEstado: 'cancelado',
       origen: 'manual',
-      detalles: { cancelado_por: userId, motivo: 'inmobiliaria_asume_costo' },
+      detalles: { cancelado_por: userId, motivo: 'gestor_paga_por_pasarela' },
       userId,
       ip,
     });
     invalidarLinkPasarela(existing as { external_id?: string | null; metodo?: string | null });
   }
 
-  const exp = await getExpedienteWithInmueble(expedienteId);
-  const monto = await getMontoEstudio();
-
-  const { data: pago, error } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      expediente_id: expedienteId,
-      concepto: 'estudio',
-      descripcion: `Estudio de arrendamiento - ${exp.inmueble_direccion || `Exp. ${exp.numero}`} (asumido por inmobiliaria)`,
-      monto,
-      metodo: 'transferencia',
-      estado: 'completado',
-      fecha_pago: new Date().toISOString(),
-      creado_por: userId,
-    } as never)
-    .select(PAGO_SELECT)
-    .single();
-
-  if (error) {
-    if (error.code === '23505') {
-      throw AppError.conflict('Ya existe un pago de evaluación activo para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
-    }
-    logger.error({ error: error.message }, 'Error registering inmobiliaria-assumed estudio payment');
-    throw fromSupabaseError(error);
-  }
-
-  // Record event
-  await (supabase
-    .from('eventos_pago' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      pago_id: pago.id,
-      tipo: 'completed',
-      origen: 'manual',
-      detalles: { metodo: 'inmobiliaria_asume', registrado_por: userId },
-    } as never);
-
-  // Timeline entry
-  await (supabase
-    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      expediente_id: expedienteId,
-      tipo: 'pago',
-      descripcion: 'Pago de estudio asumido por la inmobiliaria',
-      metadata: { pago_id: pago.id, concepto: 'estudio', metodo: 'inmobiliaria_asume', evento: 'pago_confirmado', origen: 'system' },
-      usuario_id: userId,
-    } as never);
+  const { pago, monto } = await crearCobroPasarela({
+    expedienteId,
+    userId,
+    emailPagador: email,
+    nombrePagador: nombre,
+    sufijoConcepto: ` (pago de ${nombre})`,
+  });
 
   logAudit({
     usuarioId: userId,
-    accion: AUDIT_ACTIONS.PAGO_MANUAL_REGISTERED,
+    accion: AUDIT_ACTIONS.PAGO_CREATED,
     entidad: AUDIT_ENTITIES.PAGO,
     entidadId: pago.id,
-    detalle: { expediente_id: expedienteId, concepto: 'estudio', metodo: 'inmobiliaria_asume', monto },
+    detalle: { expediente_id: expedienteId, concepto: 'estudio', monto, metodo: 'pasarela_gestor' },
     ip,
   });
-
-  // El pago quedó completado: el dueño único de ese evento es onEstudioPagado.
-  //
-  // Antes aquí se llamaba directo a `enviarEnlaceAutorizacion`, "igual que el
-  // flujo de pago por Stripe (que lo hace vía onPagoConfirmado)". Con el §6.3
-  // esa analogía dejó de ser cierta: si el prospecto YA firmó (es lo que pasa
-  // al entrar por cancelar-y-asumir sobre una opción C), esa función lanza
-  // AUTORIZACION_YA_FIRMADA, el .catch lo degradaba a un warn y el estudio
-  // quedaba pagado y parado para siempre. onEstudioPagado bifurca: si ya firmó
-  // despierta el estudio y lo ejecuta; si no, manda el habeas data como antes.
-  // Sigue siendo fire-and-forget: no bloquea la respuesta.
-  //
-  import('@/modules/orchestrator/orchestrator.service')
-    .then(({ onEstudioPagado }) => onEstudioPagado(expedienteId, userId))
-    .catch((err) =>
-      logger.warn(
-        { error: err instanceof Error ? err.message : String(err), expedienteId },
-        'No se pudo continuar el flujo tras asumir el costo (reenviable manualmente)',
-      ),
-    );
 
   return pago;
 }
@@ -447,138 +572,19 @@ export async function enviarLinkPago(
     };
   }
 
-  // Check no existing active pago (pendiente or procesando)
-  const existing = await findPagoEstudio(expedienteId);
-  if (existing) {
-    const estado = existing.estado as string;
-    if (estado === 'completado') {
-      throw AppError.conflict('Ya existe un pago de estudio completado', 'PAGO_ESTUDIO_YA_COMPLETADO');
-    }
-    if (estado === 'pendiente' || estado === 'procesando') {
-      throw AppError.conflict('Ya existe un link de pago pendiente para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
-    }
-  }
-
-  const exp = await getExpedienteWithInmueble(expedienteId);
-  const monto = await getMontoEstudio();
-  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || `Exp. ${exp.numero}`}`;
-
-  // El id va PRE-generado y viaja en las URLs de retorno: el arrendatario que
-  // cancela o al que le rechazan el pago no tiene sesión, así que sin el
-  // `pago` en la URL la pantalla de resultado no puede ofrecerle reintentar.
-  const pagoId = crypto.randomUUID();
-
-  // Build success/cancel/pending URLs (pending: PSE/efectivo no es éxito todavía)
-  const successUrl = `${env.FRONTEND_URL}/pago/resultado?status=success&expediente=${expedienteId}&pago=${pagoId}`;
-  const cancelUrl = `${env.FRONTEND_URL}/pago/resultado?status=cancelled&expediente=${expedienteId}&pago=${pagoId}`;
-  const pendingUrl = `${env.FRONTEND_URL}/pago/resultado?status=pending&expediente=${expedienteId}&pago=${pagoId}`;
-
-  // Insert pago ANTES de crear el checkout, con id pre-generado: la preference
-  // lleva el pago_id en external_reference y el webhook casa el pago EXACTO.
-  // El índice único uq_pagos_estudio_activo convierte la carrera de doble click
-  // en un 23505 limpio en lugar de dos links vivos.
-  const gateway = getPaymentGateway();
-  const { error: insertError } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      id: pagoId,
-      expediente_id: expedienteId,
-      concepto: 'estudio',
-      descripcion: conceptLabel,
-      monto,
-      metodo: 'pasarela',
-      estado: 'pendiente',
-      email_pagador: input.email_pagador,
-      nombre_pagador: input.nombre_pagador,
-      creado_por: userId,
-    } as never);
-
-  if (insertError) {
-    if (insertError.code === '23505') {
-      throw AppError.conflict('Ya existe un pago de evaluación activo para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
-    }
-    logger.error({ error: insertError.message }, 'Error creating estudio payment record');
-    throw fromSupabaseError(insertError);
-  }
-
-  let linkResult: { url: string; externalId: string };
-  try {
-    linkResult = await gateway.createPaymentLink({
-      amount: monto,
-      concept: conceptLabel,
-      description: `Pago de estudio de arrendamiento para ${input.nombre_pagador}`,
-      metadata: {
-        expediente_id: expedienteId,
-        concepto: 'estudio',
-        email_pagador: input.email_pagador,
-        pago_id: pagoId,
-      },
-      successUrl,
-      cancelUrl,
-      pendingUrl,
-    });
-  } catch (gatewayError) {
-    // No dejar la fila huérfana bloqueando el índice único.
-    await (supabase
-      .from('pagos' as string) as ReturnType<typeof supabase.from>)
-      .delete()
-      .eq('id', pagoId);
-    throw gatewayError;
-  }
-
-  // CAS sobre 'pendiente': si el pago fue cancelado concurrentemente (p. ej.
-  // cancelar-y-asumir mientras se creaba el checkout), no se adjunta un link
-  // pagable a un pago cancelado — se expira la preference y se aborta.
-  const { data: pago, error } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      payment_link_url: linkResult.url,
-      external_id: linkResult.externalId,
-    } as never)
-    .eq('id', pagoId)
-    .eq('estado', 'pendiente')
-    .select(PAGO_SELECT)
-    .maybeSingle();
-
-  if (error) {
-    logger.error({ error: error.message, pagoId }, 'Error guardando el link del estudio — se revierte');
-    await (supabase
-      .from('pagos' as string) as ReturnType<typeof supabase.from>)
-      .delete()
-      .eq('id', pagoId);
-    if (gateway.cancelPaymentLink) {
-      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
-        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras revertir'),
-      );
-    }
-    throw fromSupabaseError(error);
-  }
-
-  if (!pago) {
-    if (gateway.cancelPaymentLink) {
-      gateway.cancelPaymentLink(linkResult.externalId).catch((err) =>
-        logger.warn({ err, externalId: linkResult.externalId }, 'No se pudo expirar la preference tras cancelación concurrente'),
-      );
-    }
-    throw AppError.conflict('El pago fue cancelado mientras se creaba el link', 'PAGO_CANCELADO_CONCURRENTE');
-  }
-
-  // Record events
-  await (supabase
-    .from('eventos_pago' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      pago_id: pago.id,
-      tipo: 'created',
-      origen: 'system',
-      detalles: { gateway: gateway.provider, external_id: linkResult.externalId },
-    } as never);
+  const { pago, linkUrl, exp, monto } = await crearCobroPasarela({
+    expedienteId,
+    userId,
+    emailPagador: input.email_pagador,
+    nombrePagador: input.nombre_pagador,
+  });
 
   // Send email
   try {
     await sendPaymentLinkEmail(
       input.email_pagador,
       input.nombre_pagador,
-      linkResult.url,
+      linkUrl,
       {
         concepto: 'Estudio de arrendamiento',
         monto: formatCOP(monto),
@@ -601,7 +607,7 @@ export async function enviarLinkPago(
   // WhatsApp con el link al solicitante (refuerzo del correo) — fire-and-forget.
   // El teléfono escrito en el form tiene prioridad sobre el registrado (antes
   // se aceptaba en el schema pero se ignoraba — dato muerto).
-  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), linkResult.url, telefonoOverrideValido(input.telefono)).catch((err) =>
+  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), linkUrl, telefonoOverrideValido(input.telefono)).catch((err) =>
     logger.warn({ err, expedienteId }, 'No se pudo enviar el WhatsApp del link de pago'),
   );
 
@@ -747,50 +753,6 @@ export async function reenviarLink(
   });
 
   return { message: `Link reenviado a ${emailDestino}` };
-}
-
-// ============================================================
-// Cancelar link y asumir — POST /cancelar-y-asumir
-// ============================================================
-
-export async function cancelarYAsumir(expedienteId: string, userId: string, ip?: string, userRol?: string) {
-  // Tenant guard (404 fuera de scope) antes de cancelar nada: este wrapper
-  // cancela el link vivo del arrendatario, que es irreversible.
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
-  // TOPE DE CANON — flujo §4.4. Va ANTES de tocar el pago, no dentro de
-  // asumirCosto: si el guard corriera allá abajo (línea final de esta función),
-  // el link ya estaría cancelado en BD y la preference expirada en la pasarela
-  // —ambas irreversibles— cuando llegue el 400. El expediente quedaría sin pago
-  // y sin link, con el arrendatario mirando un enlace muerto en su correo, y
-  // /enviar-link tampoco podría reemitirlo porque el mismo tope lo bloquea.
-  // Mismo criterio que el saldo de créditos en cancelarYLiberarCredito: todo lo
-  // que puede abortar la operación se valida antes de tocar el link vivo.
-  // (Para cancelar el link sin asumir el costo existe PATCH /pagos/:id/cancelar,
-  // que sigue disponible.)
-  await assertCanonDentroDelTope({ expedienteId, origen: 'cancelarYAsumir' });
-
-  const pago = await findPagoEstudio(expedienteId);
-  if (!pago) throw AppError.notFound('No existe un pago de estudio pendiente');
-  // 'procesando' también es cancelable: un PSE abandonado deja el pago ahí y la
-  // inmobiliaria debe poder desbloquear el expediente sin esperar a MP.
-  if (!['pendiente', 'procesando'].includes(pago.estado as string)) {
-    throw AppError.badRequest('Solo se puede cancelar un pago en estado pendiente o en proceso', 'PAGO_NO_CANCELABLE');
-  }
-
-  // Cancel existing via state machine + expirar el link en la pasarela
-  await transitionPagoState({
-    pagoId: pago.id as string,
-    targetEstado: 'cancelado',
-    origen: 'manual',
-    detalles: { cancelado_por: userId, motivo: 'inmobiliaria_asume_costo' },
-    userId,
-    ip,
-  });
-  invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
-
-  // Create new completed payment
-  return asumirCosto(expedienteId, userId, ip, userRol);
 }
 
 /**

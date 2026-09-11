@@ -760,7 +760,8 @@ async function sendHabilitadoFallbackEmail(
  *
  * El orden §6.3 (autorizar → cobrar → ejecutar) NO se implementa aquí: las
  * tres formas de pago ya terminan mandando el habeas data por su cuenta
- * (la C en la fase 0 de enviarLinkPago; la A y la B vía onEstudioPagado).
+ * (la C en la fase 0 de enviarLinkPago; la A y la B vía onEstudioPagado, la B
+ * cuando la pasarela confirma el pago del gestor).
  * Esta función solo elige cuál disparar.
  *
  * ponytail: la cita se omite sólo si el RPC la reclama. Marcarla siempre
@@ -783,6 +784,8 @@ export async function iniciarEstudio(
   estudio: { id: string };
   forma_pago: FormaPagoEstudio;
   cita_omitida: boolean;
+  /** Opcion B: checkout de la pasarela que el gestor debe abrir para pagar. */
+  payment_link_url: string | null;
 }> {
   const ctx = await assertHabilitacionPermission({
     userId,
@@ -810,6 +813,7 @@ export async function iniciarEstudio(
     habilitado = await habilitarEstudio(expedienteId, userId, userRol, input.proveedor, false);
   }
 
+  let paymentLinkUrl: string | null = null;
   // 2. Aplicar la forma de pago elegida. Si esto falla, el expediente queda
   //    con el estudio habilitado y sin pago — que es exactamente el estado en
   //    el que lo deja hoy el panel, y del que se sale eligiendo pago otra vez.
@@ -817,8 +821,11 @@ export async function iniciarEstudio(
     const { liberarEstudioConCredito } = await import('@/modules/creditos-estudios/creditos-estudios.service');
     await liberarEstudioConCredito(expedienteId, userId, userId, ip, input.notas);
   } else if (input.forma_pago === 'inmobiliaria') {
-    const { asumirCosto } = await import('@/modules/pago-estudio/pago-estudio.service');
-    await asumirCosto(expedienteId, userId, ip, userRol);
+    // Adenda 2 §7: la opcion B se paga por la pasarela, no "a cuenta". El
+    // estudio espera la confirmacion del pago; el asistente abre el enlace.
+    const { pagarGestor } = await import('@/modules/pago-estudio/pago-estudio.service');
+    const pago = await pagarGestor(expedienteId, userId, ip, userRol);
+    paymentLinkUrl = (pago.payment_link_url as string | null) ?? null;
   } else {
     if (!ctx.solicitanteEmail || !ctx.solicitanteNombre) {
       throw AppError.badRequest(
@@ -845,5 +852,6 @@ export async function iniciarEstudio(
     estudio: { id: habilitado.estudio.id },
     forma_pago: input.forma_pago,
     cita_omitida: citaOmitida,
+    payment_link_url: paymentLinkUrl,
   };
 }

@@ -404,6 +404,22 @@ export async function crearFacturaDesdePago(
     );
   }
 
+  // Adenda 2 §7: con la opcion B paga el gestor, no el prospecto. La factura
+  // automatica sale a nombre del solicitante, asi que si pago otra persona se
+  // deja pendiente para emitirla a mano (con override) a nombre de quien pago.
+  if (
+    userId === null &&
+    ctx.email_pagador &&
+    sol.email &&
+    ctx.email_pagador.trim().toLowerCase() !== sol.email.trim().toLowerCase()
+  ) {
+    throw new AppError(
+      409,
+      'PAGADOR_NO_ES_SOLICITANTE',
+      'El pago lo hizo alguien distinto al solicitante: la factura se emite a mano con los datos de quien pagó.',
+    );
+  }
+
   // 3. Combinar datos del solicitante con override del body.
   const numeroDocumento = override?.numero_documento?.trim() || sol.numero_documento;
   const tipoDocumento = override?.tipo_documento?.trim() || sol.tipo_documento;

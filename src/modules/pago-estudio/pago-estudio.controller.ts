@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as pagoEstudioService from './pago-estudio.service';
-import type { ExpedienteIdParams, EnviarLinkInput, ReenviarLinkInput, PagoIdParams, ReconciliarInput } from './pago-estudio.schema';
+import type { ExpedienteIdParams, EnviarLinkInput, ReenviarLinkInput, PagoIdParams, ReconciliarInput, PagarGestorInput } from './pago-estudio.schema';
 
 // GET /expedientes/:expedienteId/pago-estudio/estado
 export async function getEstado(req: Request, res: Response) {
@@ -10,10 +10,13 @@ export async function getEstado(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
-// POST /expedientes/:expedienteId/pago-estudio/asumir
-export async function asumir(req: Request, res: Response) {
+// POST /expedientes/:expedienteId/pago-estudio/pagar — opcion B por pasarela
+export async function pagar(req: Request, res: Response) {
   const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const pago = await pagoEstudioService.asumirCosto(expedienteId, req.user!.id, req.ip, req.user!.rol);
+  const input = req.body as PagarGestorInput;
+  const pago = await pagoEstudioService.pagarGestor(expedienteId, req.user!.id, req.ip, req.user!.rol, {
+    reemplazarPendiente: input?.reemplazar_pendiente === true,
+  });
   sendCreated(res, pago);
 }
 
@@ -37,13 +40,6 @@ export async function reenviar(req: Request, res: Response) {
     req.user!.rol,
   );
   sendSuccess(res, result);
-}
-
-// POST /expedientes/:expedienteId/pago-estudio/cancelar-y-asumir
-export async function cancelarYAsumir(req: Request, res: Response) {
-  const { expedienteId } = req.params as unknown as ExpedienteIdParams;
-  const pago = await pagoEstudioService.cancelarYAsumir(expedienteId, req.user!.id, req.ip, req.user!.rol);
-  sendCreated(res, pago);
 }
 
 // POST /expedientes/:expedienteId/pago-estudio/cancelar-y-liberar-credito

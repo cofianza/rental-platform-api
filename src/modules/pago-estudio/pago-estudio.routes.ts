@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { expedienteIdParamsSchema, enviarLinkSchema, reenviarLinkSchema, pagoIdParamsSchema, reconciliarSchema } from './pago-estudio.schema';
+import { expedienteIdParamsSchema, enviarLinkSchema, reenviarLinkSchema, pagoIdParamsSchema, reconciliarSchema, pagarGestorSchema } from './pago-estudio.schema';
 import * as controller from './pago-estudio.controller';
 
 // ============================================================
@@ -17,8 +17,8 @@ pagoEstudioRouter.use(authMiddleware);
 // fabrica la fila 'completado' que satisface el gate de ejecucion y dispara
 // la consulta FACTURABLE al buro, y /enviar-link emite el token de habeas
 // data. `authorize` solo mira el permiso, no el rol, asi que el recorte va
-// aqui. Las rutas /cancelar-* no lo necesitan: piden 'pagos','update', que
-// el solicitante no tiene.
+// aqui (tambien en /pagar). Las rutas /cancelar-* no lo necesitan: piden
+// 'pagos','update', que el solicitante no tiene.
 const ROLES_GESTION_PAGO = ['administrador', 'operador_analista', 'inmobiliaria', 'propietario'];
 
 pagoEstudioRouter.get(
@@ -28,12 +28,15 @@ pagoEstudioRouter.get(
   controller.getEstado,
 );
 
+// Opcion B (Adenda 2 §7): el gestor paga en el momento por la pasarela.
+// Reemplaza a /asumir y /cancelar-y-asumir: la modalidad "a cuenta" no se
+// aprobo. `reemplazar_pendiente` cancela antes el enlace vivo del prospecto.
 pagoEstudioRouter.post(
-  '/asumir',
+  '/pagar',
   authorize('pagos', 'create'),
   roleGuard(ROLES_GESTION_PAGO),
-  validate({ params: expedienteIdParamsSchema }),
-  controller.asumir,
+  validate({ params: expedienteIdParamsSchema, body: pagarGestorSchema }),
+  controller.pagar,
 );
 
 pagoEstudioRouter.post(
@@ -52,13 +55,6 @@ pagoEstudioRouter.post(
   authorize('pagos', 'update'),
   validate({ params: expedienteIdParamsSchema, body: reenviarLinkSchema }),
   controller.reenviar,
-);
-
-pagoEstudioRouter.post(
-  '/cancelar-y-asumir',
-  authorize('pagos', 'update'),
-  validate({ params: expedienteIdParamsSchema }),
-  controller.cancelarYAsumir,
 );
 
 pagoEstudioRouter.post(

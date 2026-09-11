@@ -24,6 +24,12 @@ export const reenviarLinkSchema = z
   })
   .optional();
 
+// Opcion B: el gestor paga por la pasarela. `reemplazar_pendiente` cancela
+// antes el enlace vivo del prospecto.
+export const pagarGestorSchema = z
+  .object({ reemplazar_pendiente: z.boolean().optional() })
+  .optional();
+
 // Reconciliación pública: el payment_id que la pasarela pone en la URL de retorno.
 export const reconciliarSchema = z.object({
   payment_id: z.string().min(1, 'payment_id es requerido').max(64),
@@ -34,3 +40,4 @@ export type PagoIdParams = z.infer<typeof pagoIdParamsSchema>;
 export type EnviarLinkInput = z.infer<typeof enviarLinkSchema>;
 export type ReenviarLinkInput = z.infer<typeof reenviarLinkSchema>;
 export type ReconciliarInput = z.infer<typeof reconciliarSchema>;
+export type PagarGestorInput = z.infer<typeof pagarGestorSchema>;
