@@ -3808,6 +3808,9 @@ async function decidirConCascada(args: {
     secundaria: secundario,
     score_secundaria: scoreSecundario,
     puntaje_final: salida.puntaje_normalizado,
+    // Adenda 2 §4.3: denominador aplicado y variables que participaron.
+    denominador: salida.denominador_normalizacion,
+    variables_participantes: salida.variables_participantes,
     fuente_score: salida.fuente_score_externo,
     scores_individuales: salida.scores_individuales,
     resultado: d.resultado,
@@ -3823,7 +3826,7 @@ async function decidirConCascada(args: {
   if (trazaErr) logger.warn({ estudioId, error: trazaErr.message }, 'Cascada: no se pudo persistir la traza');
 
   logger.info(
-    { estudioId, primaria: proveedorPrimario, secundaria: secundario, puntajePrimaria: traza.puntaje_primaria, puntajeFinal: traza.puntaje_final, resultado: d.resultado, via: d.via },
+    { estudioId, primaria: proveedorPrimario, secundaria: secundario, puntajePrimaria: traza.puntaje_primaria, puntajeFinal: traza.puntaje_final, denominador: traza.denominador, variables: traza.variables_participantes, resultado: d.resultado, via: d.via },
     'Motor decide (Adenda 1): resultado del estudio',
   );
 

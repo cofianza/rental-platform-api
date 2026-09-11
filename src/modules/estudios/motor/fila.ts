@@ -148,6 +148,9 @@ export function construirFilaSombra(
       puntaje_topado: salida.puntaje_topado,
       puntaje_bruto_alcanzable: salida.puntaje_bruto_alcanzable,
       puntaje_bruto_maximo_modelo: salida.puntaje_bruto_maximo_modelo,
+      // Adenda 2 §4.3: "el denominador debe quedar visible en la traza".
+      denominador_normalizacion: salida.denominador_normalizacion,
+      variables_participantes: salida.variables_participantes,
       meses_observados: f.meses_observados,
       fecha_corte_datos: f.fecha_corte_datos,
       fecha_consulta_buro: f.fecha_consulta,

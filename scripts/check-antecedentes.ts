@@ -175,8 +175,14 @@ function v4(a: ResumenAntecedentes | null, vinculacion: VinculacionCentral | nul
 }
 // Adenda §1.2: V4 sale de la CENTRAL, no de Auco. Sin vinculacion reportada por
 // la central, V4 queda fuera de la ponderacion, haya o no background check.
-ok(v4(null).p.estado === 'no_calculable' && v4(limpio).p.estado === 'no_calculable', 'sin vinculacion de la central -> V4 no calculable, con o sin Auco');
+// Adenda 2 §4.3: sin fuente (no dato faltante) -> fuera de alcance, sale del denominador.
+ok(v4(null).p.estado === 'fuera_de_alcance' && v4(limpio).p.estado === 'fuera_de_alcance', 'sin vinculacion de la central -> V4 sin fuente, con o sin Auco');
 ok(v4(limpio).s.variables_no_calculables.includes('V4'), 'V4 figura entre las no calculables');
+ok(
+  !v4(null).s.variables_participantes.includes('V4') &&
+    v4(null, { estado: 'cotizante', fuente: 'datacredito' }).s.variables_participantes.includes('V4'),
+  'V4 solo entra al denominador cuando una central la reporta',
+);
 ok(v4(limpio).s.puntaje_bruto_alcanzable === v4(null).s.puntaje_bruto_alcanzable, 'Auco ya no mueve el techo alcanzable');
 const cotizante = v4(limpio, { estado: 'cotizante', fuente: 'datacredito' });
 ok(cotizante.p.puntos === V4_PUNTOS_AFILIADO_ACTIVO, 'central: cotizante -> 5 (tope sin pension)');
@@ -195,7 +201,7 @@ ok(sinReglaListas(antecedentesNoVerificados('t', 'C', HOY)), 'no_verificado NO e
 const fila = construirFilaSombra('e1', conHit) as Record<string, unknown>;
 ok((fila.reglas_duras_activadas as string[]).includes('listas_restrictivas'), 'la fila sombra lleva el codigo');
 ok(JSON.stringify(fila.features_crudas).includes('"antecedentes"') && !JSON.stringify(fila.features_crudas).includes('"raw"'), 'features_crudas lleva el resumen sin raw');
-ok(MODELO_VERSION === 'v4.1-adenda1-6var' && MODELO_VERSION.length <= 20, 'version del modelo actualizada (Adenda 1, V4 con fuente)');
+ok(MODELO_VERSION === 'v4.1-adenda2' && MODELO_VERSION.length <= 20, 'version del modelo actualizada (Adenda 2: denominador dinamico)');
 
 // ── 3. Decision real + textos ───────────────────────────────
 ok((REGLAS_DURAS_ACTIVAS as readonly string[]).includes('listas_restrictivas'), 'listas_restrictivas esta en la lista blanca');

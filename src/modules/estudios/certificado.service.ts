@@ -162,6 +162,8 @@ interface CertificatePdfData {
   // Adenda §2.4: "que centrales se consultaron y cual fue la decision de cascada".
   fuentesConsultadas: string | null;
   decisionCascada: string | null;
+  // Adenda 2 §4.3: denominador del puntaje y variables que participaron.
+  denominadorPuntaje?: string | null;
 }
 
 export async function generateCertificatePdf(
@@ -366,6 +368,7 @@ export async function generateCertificatePdf(
     const trazaRows: string[][] = [];
     if (data.fuentesConsultadas) trazaRows.push(['Fuentes consultadas', data.fuentesConsultadas]);
     if (data.decisionCascada) trazaRows.push(['Decision de cascada', data.decisionCascada]);
+    if (data.denominadorPuntaje) trazaRows.push(['Denominador del puntaje', `${data.denominadorPuntaje} (Adenda 2 §4.3)`]);
     if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {
       trazaRows.push(['Factor de ajuste de ingreso', `x${data.factorAjusteIngreso} (Adenda 1 §1.1)`]);
     }
@@ -475,22 +478,27 @@ function drawTable(doc: PDFKit.PDFDocument, rows: string[][], startY: number, wi
  */
 export async function leerSombraDelEstudio(
   estudioId: string,
-): Promise<{ puntaje: number | null; factor: number | null; modeloVersion: string | null } | null> {
+): Promise<{ puntaje: number | null; factor: number | null; modeloVersion: string | null; denominador: string | null } | null> {
   try {
     const { data } = await (supabase
       .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-      .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version')
+      .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version, features_crudas')
       .eq('estudio_id', estudioId)
       .order('fecha_calculo', { ascending: false })
       .limit(1)
       .maybeSingle();
-    const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null } | null;
+    const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null } | null;
     if (!row) return null;
     const num = (v: unknown) => {
       const n = typeof v === 'string' ? Number(v) : v;
       return typeof n === 'number' && Number.isFinite(n) ? n : null;
     };
-    return { puntaje: num(row.puntaje_normalizado), factor: num(row.factor_ajuste_ingreso), modeloVersion: row.modelo_version ?? null };
+    // Adenda 2 §4.3: "el CRC [...] debe indicar el denominador aplicado y que
+    // variables participaron". Las corridas anteriores a la Adenda 2 no lo traen.
+    const den = num(row.features_crudas?.denominador_normalizacion);
+    const vars = row.features_crudas?.variables_participantes;
+    const denominador = den && Array.isArray(vars) ? `${den} puntos (${vars.join(', ')})` : null;
+    return { puntaje: num(row.puntaje_normalizado), factor: num(row.factor_ajuste_ingreso), modeloVersion: row.modelo_version ?? null, denominador };
   } catch {
     return null;
   }
@@ -744,6 +752,7 @@ export async function generarCertificado(
     }),
     factorAjusteIngreso: sombra?.factor ?? null,
     fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
+    denominadorPuntaje: sombra?.denominador ?? null,
     decisionCascada,
   };
 

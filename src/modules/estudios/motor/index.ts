@@ -32,6 +32,7 @@ import {
   UMBRAL_APROBADO,
   UMBRAL_REVISION,
   decidirSombra,
+  fueraDeAlcance,
   mesesEntre,
   porcentaje,
   porcentajeParaMostrar,
@@ -75,7 +76,9 @@ export * from './features';
  * si una central reporta vinculacion (Adenda §1.2); Auco ya no la alimenta.
  * Maximo 20 caracteres (VARCHAR de la tabla).
  */
-export const MODELO_VERSION = 'v4.1-adenda1-6var';
+// 'adenda2' (11/09/2026): denominador dinamico (§4.3), corte 450/599 del panel
+// (§2). Un dato faltante de la persona cuenta 0; solo sale lo que no tiene fuente.
+export const MODELO_VERSION = 'v4.1-adenda2';
 
 export interface EntradaSombra {
   /** 'datacredito' | 'transunion' | ... Decide el extractor. */
@@ -146,6 +149,9 @@ export interface SalidaSombra {
   puntaje_bruto: number;
   puntaje_bruto_maximo_modelo: number;
   puntaje_bruto_alcanzable: number;
+  /** Adenda 2 §4.3: denominador de ESTA corrida y las variables que lo forman. */
+  denominador_normalizacion: number;
+  variables_participantes: CodigoVariable[];
   puntaje_normalizado: number | null;
   puntaje_maximo_alcanzable: number | null;
   puntaje_topado: boolean;
@@ -211,6 +217,8 @@ function salidaDegradada(proveedor: string, fecha: string, motivo: string): Sali
     puntaje_bruto: 0,
     puntaje_bruto_maximo_modelo: MAX_BRUTO_MODELO,
     puntaje_bruto_alcanzable: 0,
+    denominador_normalizacion: 0,
+    variables_participantes: [],
     puntaje_normalizado: null,
     puntaje_maximo_alcanzable: null,
     puntaje_topado: true,
@@ -342,11 +350,18 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     const scoreRechazo = montoPositivo(entrada?.umbral_score_rechazo) ?? V1_RECHAZO_DURO;
     const scoreRevisionMax = montoPositivo(entrada?.umbral_score_revision) ?? V1_REVISION_MANUAL_MAX;
 
+    // Adenda 2 §4.3: una central SIN estimador de ingresos contratado
+    // (TransUnion) no es un dato que le falte a la persona: V2 y V3 no tienen
+    // fuente y salen del denominador. El dia que la central lo habilite, el
+    // extractor deja de marcar 'no_soportado' y vuelven a participar solas.
+    const sinEstimadorIngreso = features.ausencias.ingreso_mensual_inferido_cop === 'no_soportado';
+    const sinEstimador = fueraDeAlcance('La central consultada no tiene estimador de ingresos contratado (Adenda 2 §4.3)');
+
     // ── Puntajes ────────────────────────────────────────────
     const puntajes: PuntajeVariable[] = [
       { variable: 'V1', puntos_maximos: PUNTOS_MAXIMOS.V1, ...puntajeV1ScoreExterno(features.score_externo, scoreRechazo) },
-      { variable: 'V2', puntos_maximos: PUNTOS_MAXIMOS.V2, ...puntajeV2Dti(dtiPct) },
-      { variable: 'V3', puntos_maximos: PUNTOS_MAXIMOS.V3, ...puntajeV3CanonIngreso(canonIngresoPct) },
+      { variable: 'V2', puntos_maximos: PUNTOS_MAXIMOS.V2, ...(sinEstimadorIngreso ? sinEstimador : puntajeV2Dti(dtiPct)) },
+      { variable: 'V3', puntos_maximos: PUNTOS_MAXIMOS.V3, ...(sinEstimadorIngreso ? sinEstimador : puntajeV3CanonIngreso(canonIngresoPct)) },
       { variable: 'V4', puntos_maximos: PUNTOS_MAXIMOS.V4, ...puntajeV4VinculacionCentral(entrada?.vinculacion_central ?? null) },
       { variable: 'V5', puntos_maximos: PUNTOS_MAXIMOS.V5, ...puntajeV5Experiencia(features.sectores, features.sin_historial_crediticio) },
       { variable: 'V6', puntos_maximos: PUNTOS_MAXIMOS.V6, ...puntajeV6Comportamiento(features) },
@@ -410,7 +425,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     // ── Advertencias: lo que hace interpretable el numero ────
     if (totales.puntaje_topado) {
       advertencias.push(
-        `Puntaje topado: solo ${totales.puntaje_bruto_alcanzable} de ${MAX_BRUTO_MODELO} puntos brutos eran alcanzables en esta corrida (faltan ${totales.variables_no_calculables.join(', ')}). La banda solo se puede leer junto a puntaje_maximo_alcanzable.`,
+        `Puntaje topado: a la persona le faltan datos de variables que participan (cuentan 0): solo ${totales.puntaje_bruto_alcanzable} de ${totales.denominador} puntos eran alcanzables. La banda solo se puede leer junto a puntaje_maximo_alcanzable.`,
       );
     }
     if (proveedor === 'datacredito') {
@@ -471,6 +486,8 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       puntaje_bruto: totales.puntaje_bruto,
       puntaje_bruto_maximo_modelo: MAX_BRUTO_MODELO,
       puntaje_bruto_alcanzable: totales.puntaje_bruto_alcanzable,
+      denominador_normalizacion: totales.denominador,
+      variables_participantes: totales.variables_participantes,
       puntaje_normalizado: totales.puntaje_normalizado,
       puntaje_maximo_alcanzable: totales.puntaje_maximo_alcanzable,
       puntaje_topado: totales.puntaje_topado,

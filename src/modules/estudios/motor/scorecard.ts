@@ -37,14 +37,18 @@ import type { FeaturesBuro, SectoresCredito } from './features';
 
 // ── Escala del modelo ───────────────────────────────────────
 
-/** Politica V4.1: 9 variables, 119 puntos brutos, normalizados a 100. */
+/**
+ * Politica V4.1: 9 variables, 119 puntos brutos. Es el total del MODELO, no el
+ * denominador: desde la Adenda 2 §4.3 se normaliza sobre los maximos de las
+ * variables que participan en cada corrida (ver totalizar). Con 119 fijo el
+ * techo de DataCredito era 80.7 y el 85 nunca se alcanzaba.
+ */
 export const MAX_BRUTO_MODELO = 119;
 
 /**
- * Umbrales de la politica. SE GUARDAN CON CADA CORRIDA y NO se aplican a
- * ninguna decision real: con las fuentes contratadas hoy el techo alcanzable
- * es 80.7 (DataCredito) y 59.7 (TransUnion), asi que exigir 85 rechazaria a
- * toda la cartera.
+ * Umbrales de la politica. SE GUARDAN CON CADA CORRIDA y solo deciden con
+ * MOTOR_DECIDE_ENABLED. La Adenda 2 §4 los mantiene en 85/70: lo que se
+ * corrigio fue el denominador, no los umbrales.
  */
 export const UMBRAL_APROBADO = 85;
 export const UMBRAL_REVISION = 70;
@@ -129,7 +133,7 @@ function noCalculable(motivo: string, valor: number | string | null = null): Res
   return { puntos: null, estado: 'no_calculable', valor, banda: null, reglaDura: null, motivo };
 }
 
-function fueraDeAlcance(motivo: string): ResultadoVariable {
+export function fueraDeAlcance(motivo: string): ResultadoVariable {
   return { puntos: null, estado: 'fuera_de_alcance', valor: null, banda: null, reglaDura: null, motivo };
 }
 
@@ -308,7 +312,9 @@ export interface VinculacionCentral {
 
 export function puntajeV4VinculacionCentral(v: VinculacionCentral | null | undefined): ResultadoVariable {
   if (!v) {
-    return noCalculable('Ninguna central reporta vinculacion a seguridad social: V4 fuera de la ponderacion (Adenda §1.2)');
+    // Sin fuente, no dato faltante: ninguna central la entrega hoy. Sale del
+    // denominador (Adenda 2 §4.1: "seguridad social activa, eliminada por Adenda 1").
+    return fueraDeAlcance('Ninguna central reporta vinculacion a seguridad social: V4 fuera de la ponderacion (Adenda §1.2)');
   }
   const valor = `${v.estado} (${v.fuente})`;
   if (v.estado === 'cotizante') {
@@ -554,13 +560,22 @@ export function normalizar(bruto: number, maxBruto: number = MAX_BRUTO_MODELO): 
 export interface TotalesScorecard {
   /** Suma de las variables 'calculada', con piso 0. */
   puntaje_bruto: number;
-  /** 119 menos los maximos de las variables ausentes. Es el techo REAL de esta
-   *  corrida: sin el, un 62 normalizado no se puede leer. */
+  /** Suma de los maximos de las variables CALCULADAS: el techo real de esta
+   *  corrida. Sin el, un 62 normalizado no se puede leer. */
   puntaje_bruto_alcanzable: number;
+  /**
+   * Adenda 2 §4.3: denominador de la normalizacion, calculado en cada corrida
+   * (nunca constante): suma de los maximos de las variables que PARTICIPAN.
+   * Participa toda variable con fuente en esta evaluacion — calculada o no
+   * calculable porque a la PERSONA le falta el dato, que cuenta como 0. Solo
+   * sale la 'fuera_de_alcance' (sin fuente contratada: V4/V7/V9, y V2/V3 con
+   * una central sin estimador de ingresos). Hoy con DataCredito es 96.
+   */
+  denominador: number;
+  variables_participantes: CodigoVariable[];
   puntaje_normalizado: number | null;
   puntaje_maximo_alcanzable: number | null;
-  /** true si falto alguna variable. Hoy es true en el 100% de los estudios,
-   *  porque V4/V7/V9 no tienen fuente. */
+  /** true si a la persona le falto el dato de alguna variable que participa. */
   puntaje_topado: boolean;
   variables_no_calculables: CodigoVariable[];
   reglas_duras: CodigoReglaDura[];
@@ -570,10 +585,20 @@ export interface TotalesScorecard {
 export function totalizar(puntajes: readonly PuntajeVariable[]): TotalesScorecard {
   let bruto = 0;
   let alcanzable = 0;
+  let denominador = 0;
+  const participantes: CodigoVariable[] = [];
   const ausentes: CodigoVariable[] = [];
   const reglas: CodigoReglaDura[] = [];
 
   for (const p of puntajes) {
+    // ponytail: un dato faltante de la persona cuenta 0 (criterio de
+    // desarrollo, 2026-09-11, pendiente de confirmar con Gerencia). Sacarlo
+    // del denominador premiaria la falta de datos: un historial de 7 meses
+    // daria 100 igual que uno de 24.
+    if (p.estado !== 'fuera_de_alcance') {
+      denominador += p.puntos_maximos;
+      participantes.push(p.variable);
+    }
     if (p.estado === 'calculada' && p.puntos !== null) {
       bruto += p.puntos;
       alcanzable += p.puntos_maximos;
@@ -586,9 +611,11 @@ export function totalizar(puntajes: readonly PuntajeVariable[]): TotalesScorecar
   return {
     puntaje_bruto: Math.max(0, bruto),
     puntaje_bruto_alcanzable: alcanzable,
-    puntaje_normalizado: alcanzable > 0 ? normalizar(bruto) : null,
-    puntaje_maximo_alcanzable: alcanzable > 0 ? normalizar(alcanzable) : null,
-    puntaje_topado: ausentes.length > 0,
+    denominador,
+    variables_participantes: participantes,
+    puntaje_normalizado: alcanzable > 0 ? normalizar(bruto, denominador) : null,
+    puntaje_maximo_alcanzable: alcanzable > 0 ? normalizar(alcanzable, denominador) : null,
+    puntaje_topado: alcanzable < denominador,
     variables_no_calculables: ausentes,
     reglas_duras: reglas,
   };

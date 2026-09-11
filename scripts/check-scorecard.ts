@@ -144,19 +144,22 @@ for (const [variable, esperado] of casosDC) {
 
 assert.strictEqual(dc.puntaje_bruto, 96, 'bruto = 50+15+10+6+10+5');
 assert.strictEqual(dc.puntaje_bruto_alcanzable, 96, 'las 6 variables con fuente son las que se pudieron calcular');
-assert.strictEqual(dc.puntaje_normalizado, 80.7, '96/119 -> 80.7, el techo documentado de DataCredito');
-assert.strictEqual(dc.puntaje_maximo_alcanzable, 80.7);
-assert.strictEqual(dc.puntaje_topado, true, 'V4/V7/V9 no tienen fuente: siempre topado');
+// Adenda 2 §4.3: denominador dinamico. Participan las 6 variables con fuente
+// (96); V4/V7/V9 no tienen fuente y salen. Antes era 96/119 = 80.7 y el 85 no
+// se alcanzaba nunca: "un perfil automatico perfecto arroja 100".
+assert.strictEqual(dc.denominador_normalizacion, 96, 'el denominador del flujo automatico es 96 (Adenda 2 §4.3)');
+assert.deepStrictEqual(dc.variables_participantes, ['V1', 'V2', 'V3', 'V5', 'V6', 'V8']);
+assert.strictEqual(dc.puntaje_normalizado, 100, '96/96 -> 100');
+assert.strictEqual(dc.puntaje_maximo_alcanzable, 100);
+assert.strictEqual(dc.puntaje_topado, false, 'no le falto ningun dato de las variables que participan');
 assert.deepStrictEqual(dc.variables_no_calculables, ['V4', 'V7', 'V9']);
 assert.deepStrictEqual(dc.reglas_duras, []);
 
-// El hallazgo que motiva toda la tarea: un estudio que HOY se aprueba (score
-// 972 >= 600) caeria en revision manual con la politica V4.1, porque el techo
-// alcanzable (80.7) esta por debajo del umbral de aprobacion (85).
-assert.strictEqual(dc.decision_sombra, 'revision_manual');
-assert.ok(dc.puntaje_maximo_alcanzable !== null && dc.puntaje_maximo_alcanzable < UMBRAL_APROBADO,
-  'el techo con estas fuentes no alcanza el umbral de aprobacion — por eso el modo sombra');
-console.log(`  → decision real hoy: aprobado · decision sombra: ${dc.decision_sombra} (techo ${dc.puntaje_maximo_alcanzable} < ${UMBRAL_APROBADO})`);
+// Con el denominador corregido el perfil perfecto ya alcanza el umbral de 85.
+assert.strictEqual(dc.decision_sombra, 'aprobado');
+assert.ok(dc.puntaje_maximo_alcanzable !== null && dc.puntaje_maximo_alcanzable >= UMBRAL_APROBADO,
+  'con el denominador dinamico el techo alcanza el umbral de aprobacion');
+console.log(`  → decision real hoy: aprobado · decision sombra: ${dc.decision_sombra} (techo ${dc.puntaje_maximo_alcanzable} >= ${UMBRAL_APROBADO})`);
 
 // ── canon 900.000: baja de banda pero no dispara regla dura ──
 console.log('\n── 2. Mismo payload, canon 900.000 ──');
@@ -165,9 +168,9 @@ const dc900 = evaluarSombra({ proveedor: 'datacredito', payload: PAYLOAD_DC, can
 assert.strictEqual(dc900.canon_ingreso_pct, 37.7, 'canon/ingreso con canon 900.000');
 assert.strictEqual(pts(dc900, 'V3').puntos, 2, 'banda 36-40% -> 2 puntos');
 assert.strictEqual(dc900.puntaje_bruto, 88, 'bruto = 96 - 10 + 2');
-assert.strictEqual(dc900.puntaje_normalizado, 73.9, '88/119 -> 73.9');
+assert.strictEqual(dc900.puntaje_normalizado, 91.7, '88/96 -> 91.7');
 assert.deepStrictEqual(dc900.reglas_duras, [], 'el 37,7% no llega al 40% de la regla dura');
-fila(true, 'canon 900.000', `canon/ing=${dc900.canon_ingreso_pct}% V3=2 bruto=88 norm=73.9`);
+fila(true, 'canon 900.000', `canon/ing=${dc900.canon_ingreso_pct}% V3=2 bruto=88 norm=91.7`);
 
 // ── canon 1.500.000: regla dura de V3 ──
 console.log('\n── 3. Mismo payload, canon 1.500.000 (regla dura) ──');
@@ -187,7 +190,10 @@ assert.strictEqual(pts(dcSinCanon, 'V3').puntos, null, 'sin canon V3 es null, NU
 assert.strictEqual(pts(dcSinCanon, 'V3').estado, 'no_calculable');
 assert.strictEqual(dcSinCanon.puntaje_bruto_alcanzable, 86, 'el techo baja en los 10 puntos de V3');
 assert.ok(dcSinCanon.variables_no_calculables.includes('V3'));
-fila(true, 'sin canon: V3 null y techo 86/119', `norm=${dcSinCanon.puntaje_normalizado} techo=${dcSinCanon.puntaje_maximo_alcanzable}`);
+// Un dato que le falta a la persona cuenta 0: V3 SIGUE en el denominador.
+assert.strictEqual(dcSinCanon.denominador_normalizacion, 96, 'el dato faltante no saca a V3 del denominador');
+assert.strictEqual(dcSinCanon.puntaje_normalizado, 89.6, '86/96 -> 89.6 (no 100)');
+fila(true, 'sin canon: V3 null y techo 86/96', `norm=${dcSinCanon.puntaje_normalizado} techo=${dcSinCanon.puntaje_maximo_alcanzable}`);
 
 // ============================================================
 // 4. Payload REAL de TransUnion — V2 y V3 estructuralmente ausentes
@@ -219,12 +225,18 @@ assert.strictEqual(tu.features.ingreso_mensual_inferido_cop, null, 'TransUnion n
 assert.strictEqual(tu.features.ausencias.ingreso_mensual_inferido_cop, 'no_soportado', 'no es "no reporto": es que el buro no lo vende');
 assert.strictEqual(tu.dti_pct, null);
 assert.strictEqual(tu.canon_ingreso_pct, null, 'aunque HAY canon: sin ingreso no hay ratio');
+// Adenda 2 §4.3: TransUnion no tiene estimador de ingresos contratado. No es
+// un dato que le falte a la persona: V2/V3 no tienen fuente y salen del
+// denominador (71 = V1+V5+V6+V8), en vez de contar 0.
 for (const v of ['V2', 'V3'] as CodigoVariable[]) {
   const p = pts(tu, v);
-  fila(p.puntos === null && p.estado === 'no_calculable', `${v} no calculable (null, no 0)`, `puntos=${p.puntos} estado=${p.estado}`);
+  fila(p.puntos === null && p.estado === 'fuera_de_alcance', `${v} sin fuente (null, no 0)`, `puntos=${p.puntos} estado=${p.estado}`);
   assert.strictEqual(p.puntos, null, `${v} debe ser null`);
   assert.notStrictEqual(p.puntos, 0, `${v} NUNCA puede salir 0 por falta de fuente`);
 }
+assert.strictEqual(tu.denominador_normalizacion, 71, 'TransUnion: 50+6+10+5');
+assert.deepStrictEqual(tu.variables_participantes, ['V1', 'V5', 'V6', 'V8']);
+assert.strictEqual(tu.puntaje_normalizado, 60.6, '43/71 -> 60.6 (V6 sin 24 meses cuenta 0)');
 
 assert.strictEqual(tu.puntaje_topado, true, 'el puntaje queda topado');
 assert.ok(tu.variables_no_calculables.includes('V2') && tu.variables_no_calculables.includes('V3'));
