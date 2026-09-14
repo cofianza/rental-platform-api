@@ -78,26 +78,33 @@ export const WHATSAPP_TEMPLATES = {
     description:
       'Hola {{1}}, sobre tu visita al inmueble {{2}}, el anunciante te dejó la siguiente nota:\n\n{{3}}\n\nTe recomendamos tenerla en cuenta para tu visita.',
   },
+  // Las tres de mora estan aprobadas en Meta desde el 12-jun-2026 y llevan
+  // encabezado y pie fijos (p. ej. "Recordatorio de pago" / "Cofianza · Estamos
+  // para ayudarte"). Los `description` de abajo son copia literal del CUERPO
+  // aprobado: el envio solo manda las 4 variables, el resto lo pone Meta.
   /** Fase 1 de Mora — recordatorio amistoso al inquilino (+0d desde el reporte). */
   MORA_FASE_1: {
     id: 'cofianza_mora_fase1_v1',
     language: 'es_CO',
     // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} fecha_vencimiento
-    description: 'Hola {{1}} 👋 Detectamos que el canon del inmueble {{2}} por ${{3}} venció el {{4}}. ¿Pudiste hacer el pago? Si ya lo hiciste, no te preocupes — pásanos el comprobante por aquí.',
+    description:
+      'Hola *{{1}}*, te recordamos que el canon del inmueble *{{2}}* por *${{3}}* venció el *{{4}}*.\n\n¿Ya realizaste el pago? Si es así, no te preocupes: envíanos el comprobante por aquí y lo registramos.',
   },
   /** Fase 2 — Urgencia (+4d). Tono más formal, recordando al coarrendatario. */
   MORA_FASE_2: {
     id: 'cofianza_mora_fase2_v1',
     language: 'es_CO',
     // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora
-    description: 'Hola {{1}}, el canon del inmueble {{2}} por ${{3}} lleva {{4}} días en mora. Te invitamos a regularizar antes de que el caso escale a Cofianza como respaldo legal.',
+    description:
+      'Hola *{{1}}*, el canon del inmueble *{{2}}* por *${{3}}* lleva *{{4}} días* en mora.\n\nTe invitamos a regularizar el pago lo antes posible para evitar que el caso escale a Cofianza como respaldo legal.\n\nSi ya realizaste el pago, envíanos el comprobante por aquí.',
   },
   /** Fase 3 — Legal (+10d). Cofianza toma control. */
   MORA_FASE_3: {
     id: 'cofianza_mora_fase3_v1',
     language: 'es_CO',
     // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora
-    description: 'Hola {{1}}, el caso de la mora del inmueble {{2}} por ${{3}} ({{4}} días) fue escalado formalmente a Cofianza. Nuestro equipo se comunicará contigo en las próximas horas.',
+    description:
+      'Hola *{{1}}*, el caso de mora del inmueble *{{2}}* por *${{3}}* (*{{4}} días*) fue escalado formalmente a Cofianza.\n\nA partir de ahora, Cofianza asume la gestión del cobro como garante. Nuestro equipo se comunicará contigo en las próximas horas para coordinar la regularización.',
   },
   /**
    * Link de autorización de tratamiento de datos (categoría UTILITY en Meta).
