@@ -192,6 +192,13 @@ export async function executeTransition(
       } as never)
       .eq('id', result.evento_timeline_id);
     if (metaErr) logger.warn({ expedienteId, err: metaErr.message }, 'No se pudieron guardar los documentos consultados en el timeline');
+    // Mismo aviso por correo al coarrendatario que en la card de aprobar.
+    if (targetState === 'aprobado' || targetState === 'rechazado') {
+      void import('@/modules/coarrendatarios/coarrendatarios.service')
+        .then((m) => m.avisarCoarrendatarioDecision(expedienteId, targetState))
+        .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al coarrendatario'));
+    }
+
     logAudit({
       usuarioId: user.id,
       accion: AUDIT_ACTIONS.REVISION_MANUAL_DECIDIDA,

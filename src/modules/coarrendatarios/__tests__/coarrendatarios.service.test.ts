@@ -117,6 +117,7 @@ vi.mock('@/modules/estudios/reglas-duras', () => ({
 import {
   invitarCoarrendatario,
   onCoarrendatarioEstudioCompletado,
+  construirCorreoCoarrendatario,
   rechazarInvitacion,
 } from '../coarrendatarios.service';
 
@@ -302,5 +303,51 @@ describe('rechazarInvitacion — Flujo §12', () => {
     );
     // El prospecto sigue recibiendo su aviso (aqui via correo, porque no tiene perfil).
     expect(mockFindPerfilIdByEmail).toHaveBeenCalledWith('ana@correo.co');
+  });
+});
+
+// ============================================================
+// Correo al coarrendatario (puro): lo unico que el recibe de Cofianza
+// ============================================================
+
+describe('construirCorreoCoarrendatario', () => {
+  const base = {
+    email: 'coa@correo.co',
+    nombre: 'Ana',
+    coarrendatarioScore: 720,
+    titularNombre: 'Juan Pérez',
+    inmuebleDireccion: 'Cra 7 # 45-10',
+    inmuebleCiudad: 'Bogotá',
+  } as const;
+
+  it('en revisión manual: ni aprobado ni rechazado, y sin score', () => {
+    const { subject, html } = construirCorreoCoarrendatario({
+      ...base,
+      coarrendatarioResultado: 'aprobado',
+      decisionExpediente: 'en_revision',
+    });
+    expect(subject).toContain('ya está listo');
+    expect(html).toContain('analista de Cofianza');
+    // El score solo va con una decision final.
+    expect(html).not.toContain('720');
+  });
+
+  it('aprobado con su estudio condicionado: no le dice que su estudio quedó aprobado', () => {
+    const { html } = construirCorreoCoarrendatario({
+      ...base,
+      coarrendatarioResultado: 'condicionado',
+      decisionExpediente: 'aprobado',
+    });
+    expect(html).toContain('aprobó');
+    expect(html).not.toContain('Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong>');
+  });
+
+  it('rechazado: cierra el proceso sin prometer nada', () => {
+    const { html } = construirCorreoCoarrendatario({
+      ...base,
+      coarrendatarioResultado: 'condicionado',
+      decisionExpediente: 'rechazado',
+    });
+    expect(html).toContain('El proceso queda cerrado');
   });
 });

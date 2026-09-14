@@ -609,6 +609,11 @@ async function aprobarYGenerarContrato(params: {
         },
       } as never);
 
+    // El coarrendatario no tiene cuenta: su unico canal es el correo.
+    void import('@/modules/coarrendatarios/coarrendatarios.service')
+      .then((m) => m.avisarCoarrendatarioDecision(expedienteId, 'aprobado'))
+      .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al coarrendatario'));
+
     logAudit({
       usuarioId: userId,
       accion: AUDIT_ACTIONS.REVISION_MANUAL_DECIDIDA,
