@@ -545,11 +545,17 @@ export async function anotarContratoTerminadoEnMoras(
 
 const DIAS_FASE_2 = 4;
 const DIAS_FASE_3 = 10;
+// Tiempo minimo que una mora debe pasar EN fase_2 antes de llegar a fase_3.
+// Sin esto una mora vieja que entra a fase_2 en esta misma corrida cumple
+// tambien el corte de los 10 dias desde reportado_at y salta 1 -> 3 de una,
+// mandando los dos WhatsApp seguidos al inquilino.
+const DIAS_EN_FASE_2 = DIAS_FASE_3 - DIAS_FASE_2;
 
 export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }> {
   const ahora = new Date();
   const limiteFase2 = new Date(ahora.getTime() - DIAS_FASE_2 * 24 * 60 * 60 * 1000).toISOString();
   const limiteFase3 = new Date(ahora.getTime() - DIAS_FASE_3 * 24 * 60 * 60 * 1000).toISOString();
+  const limiteEnFase2 = new Date(ahora.getTime() - DIAS_EN_FASE_2 * 24 * 60 * 60 * 1000).toISOString();
 
   // Fase 1 → 2 (lleva al menos 4 días en fase_1)
   const { data: aSubirF2 } = await db('moras_tickets')
@@ -569,9 +575,15 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
 
   let aFase2 = 0;
   for (const m of aSubirF2 ?? []) {
-    await db('moras_tickets')
+    // El `.eq('estado', ...)` hace el UPDATE condicional: si otra corrida (o el
+    // escalado manual) ya la movió, no afecta filas y no mandamos el WhatsApp
+    // por segunda vez.
+    const { data: movida } = await db('moras_tickets')
       .update({ estado: 'fase_2', fase_2_at: ahora.toISOString() } as never)
-      .eq('id', m.id);
+      .eq('id', m.id)
+      .eq('estado', 'fase_1')
+      .select('id') as unknown as { data: Array<{ id: string }> | null };
+    if (!movida || movida.length === 0) continue;
     await agregarMensajeInterno(
       m.id,
       'sistema',
@@ -592,12 +604,14 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
     aFase2++;
   }
 
-  // Fase 2 → 3 (lleva al menos 10 días totales desde reportado, lo que
-  // significa ~6 días en fase_2 después del primer escalado).
+  // Fase 2 → 3: al menos 10 días desde reportado Y al menos 6 días dentro de
+  // fase_2. La segunda condición es la que evita el salto 1 → 3 en una sola
+  // corrida; `fase_2_at` lo escriben tanto este cron como el escalado manual.
   const { data: aSubirF3 } = await db('moras_tickets')
     .select('id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at')
     .eq('estado', 'fase_2')
     .lte('reportado_at', limiteFase3)
+    .lte('fase_2_at', limiteEnFase2)
     .limit(100) as unknown as {
       data: Array<{
         id: string;
@@ -611,9 +625,12 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
 
   let aFase3 = 0;
   for (const m of aSubirF3 ?? []) {
-    await db('moras_tickets')
+    const { data: movida } = await db('moras_tickets')
       .update({ estado: 'fase_3', fase_3_at: ahora.toISOString() } as never)
-      .eq('id', m.id);
+      .eq('id', m.id)
+      .eq('estado', 'fase_2')
+      .select('id') as unknown as { data: Array<{ id: string }> | null };
+    if (!movida || movida.length === 0) continue;
     await agregarMensajeInterno(
       m.id,
       'sistema',
