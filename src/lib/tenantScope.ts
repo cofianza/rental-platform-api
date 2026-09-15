@@ -48,7 +48,8 @@ async function loadMembresiasActivas(perfilId: string): Promise<FilaMembresia[]>
     // permisos saldrian irreproducibles. Gana la membresia mas antigua.
     // Hoy ningun perfil tiene dos (verificado en produccion, 2026-09-15); si
     // eso cambia y hace falta priorizar 'owner', se ordena aqui.
-    .order('created_at', { ascending: true });
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true });
   const filas = (data as unknown as FilaMembresia[] | null) ?? [];
   if (!error) membresiasCache.set(perfilId, { expira: Date.now() + MEMBRESIAS_TTL_MS, filas });
   return filas;
@@ -485,13 +486,49 @@ export async function assertExpedienteAccess(
  * existían en su momento; sin esto, una inmobiliaria registrada después no
  * podría invitar miembros (no sería owner de ninguna org).
  */
+/**
+ * Deja al titular con su membresía 'owner' activa en la organización. Es el
+ * paso reparador: si una creación anterior dejó la organización sin membresía,
+ * el early-return por `owner_perfil_id` impedía para siempre arreglarla y la
+ * cuenta quedaba inservible (no podía invitar a nadie y su scope caía a 'own').
+ * No toca una membresía que ya exista, ni siquiera revocada: eso es una
+ * decisión de negocio (ver reapuntarTitularPrincipalSiNecesario), no un error.
+ */
+async function asegurarMembresiaOwner(inmobiliariaId: string, perfilId: string): Promise<void> {
+  const { data: yaEsta } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('inmobiliaria_id', inmobiliariaId)
+    .eq('perfil_id', perfilId)
+    .maybeSingle();
+  if (yaEsta) return;
+
+  const { error } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      inmobiliaria_id: inmobiliariaId,
+      perfil_id: perfilId,
+      rol_miembro: 'owner',
+      estado: 'activo',
+    } as never);
+  if (error) throw error;
+
+  // Sin esto, una lectura previa deja al perfil cacheado con lista vacía hasta
+  // 30 s y el titular no ve su organización.
+  invalidateMembresiasCache(perfilId);
+}
+
 export async function ensureOrgConOwner(perfilId: string, nombre: string): Promise<string> {
   const { data: existing } = await (supabase
     .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
     .select('id')
     .eq('owner_perfil_id', perfilId)
     .maybeSingle();
-  if (existing) return (existing as { id: string }).id;
+  if (existing) {
+    const id = (existing as { id: string }).id;
+    await asegurarMembresiaOwner(id, perfilId);
+    return id;
+  }
 
   const { data: created, error } = await (supabase
     .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
@@ -503,22 +540,11 @@ export async function ensureOrgConOwner(perfilId: string, nombre: string): Promi
   }
   const inmobiliariaId = (created as { id: string }).id;
 
-  // El error de este insert se descartaba: si fallaba, la organizacion quedaba
-  // con un titular SIN membresia — no podia invitar a nadie y su scope caia a
-  // 'own' en vez de 'org', sin que nada lo avisara.
-  const { error: errorMiembro } = await (supabase
-    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      inmobiliaria_id: inmobiliariaId,
-      perfil_id: perfilId,
-      rol_miembro: 'owner',
-      estado: 'activo',
-    } as never);
-  if (errorMiembro) throw errorMiembro;
-
-  // Y sin esto, un loadMembresiasActivas previo deja el perfil cacheado con
-  // lista vacia hasta 30 s: el titular recien creado no veria su organizacion.
-  invalidateMembresiasCache(perfilId);
+  // Si esto falla lanza, pero la organización ya existe: el siguiente intento
+  // entra por la rama de arriba y la repara. El caller (registro) se traga el
+  // error a propósito, así que sin esa reparación la cuenta quedaba rota para
+  // siempre.
+  await asegurarMembresiaOwner(inmobiliariaId, perfilId);
 
   return inmobiliariaId;
 }
