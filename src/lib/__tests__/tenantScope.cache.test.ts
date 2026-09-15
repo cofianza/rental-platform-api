@@ -6,15 +6,26 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockFrom, filas } = vi.hoisted(() => {
+const { mockFrom, filas, ops, respuestas } = vi.hoisted(() => {
   const filas: Array<Record<string, unknown>> = [];
-  // Chain minimo: from().select().eq().eq() -> thenable con { data, error }
-  const chain = {
-    select: () => chain,
-    eq: () => chain,
+  const ops: Array<{ metodo: string; args: unknown[] }> = [];
+  // Resultados para los terminales (maybeSingle/single) de ensureOrgConOwner.
+  const respuestas: Array<Record<string, unknown>> = [];
+  const siguiente = () => respuestas.shift() ?? { data: null, error: null };
+  // Chain minimo: cualquier filtro devuelve el mismo builder; el `await`
+  // directo resuelve con las filas de membresia.
+  const chain: Record<string, unknown> = {
     then: (resolve: (v: unknown) => void) => resolve({ data: [...filas], error: null }),
+    maybeSingle: async () => siguiente(),
+    single: async () => siguiente(),
   };
-  return { mockFrom: vi.fn(() => chain), filas };
+  for (const m of ['select', 'eq', 'order', 'insert', 'limit']) {
+    chain[m] = (...args: unknown[]) => {
+      ops.push({ metodo: m, args });
+      return chain;
+    };
+  }
+  return { mockFrom: vi.fn(() => chain), filas, ops, respuestas };
 });
 vi.mock('@/lib/supabase', () => ({ supabase: { from: mockFrom } }));
 
@@ -22,11 +33,14 @@ import {
   resolveMembershipInmobiliariaIds,
   resolveVisibilityScope,
   invalidateMembresiasCache,
+  ensureOrgConOwner,
 } from '@/lib/tenantScope';
 
 describe('tenantScope — cache de membresias', () => {
   beforeEach(() => {
     mockFrom.mockClear();
+    ops.length = 0;
+    respuestas.length = 0;
     invalidateMembresiasCache();
     filas.length = 0;
     filas.push({ inmobiliaria_id: 'org-1', rol_miembro: 'owner', inmobiliarias: { miembros_ven_todo: true } });
@@ -37,6 +51,11 @@ describe('tenantScope — cache de membresias', () => {
     expect(await resolveVisibilityScope('p1', 'inmobiliaria')).toEqual({ kind: 'org', orgIds: ['org-1'] });
     await resolveMembershipInmobiliariaIds('p1');
     expect(mockFrom).toHaveBeenCalledTimes(1);
+  });
+
+  it('la consulta va ordenada: sin orden, un perfil con dos organizaciones caia en una distinta cada vez', async () => {
+    await resolveMembershipInmobiliariaIds('p1');
+    expect(ops.filter((o) => o.metodo === 'order').map((o) => o.args[0])).toContain('created_at');
   });
 
   it('otro perfil es otra entrada', async () => {
@@ -53,5 +72,46 @@ describe('tenantScope — cache de membresias', () => {
     expect(await resolveMembershipInmobiliariaIds('p1')).toEqual([]);
     expect(await resolveVisibilityScope('p1', 'inmobiliaria')).toEqual({ kind: 'own', perfilId: 'p1' });
     expect(mockFrom).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ensureOrgConOwner', () => {
+  beforeEach(() => {
+    mockFrom.mockClear();
+    ops.length = 0;
+    respuestas.length = 0;
+    invalidateMembresiasCache();
+    filas.length = 0;
+  });
+
+  it('si falla el insert de la membresia, lanza: la org no puede quedar con un titular sin membresia', async () => {
+    respuestas.push(
+      { data: null, error: null },              // no existe org previa
+      { data: { id: 'org-9' }, error: null },   // se crea la org
+    );
+    // El insert de la membresia se resuelve por `await` del builder, que
+    // devuelve las filas vacias mas el error que dejemos aqui.
+    const chain = mockFrom('inmobiliaria_miembros') as unknown as Record<string, unknown>;
+    const thenOriginal = chain.then;
+    chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: new Error('insert falló') });
+
+    await expect(ensureOrgConOwner('p1', 'Mi Inmobiliaria')).rejects.toThrow('insert falló');
+
+    chain.then = thenOriginal;
+  });
+
+  it('tras crear la org invalida el cache, para que el titular la vea de una', async () => {
+    await resolveMembershipInmobiliariaIds('p1'); // deja el perfil cacheado sin orgs
+    const llamadasAntes = mockFrom.mock.calls.length;
+
+    respuestas.push(
+      { data: null, error: null },
+      { data: { id: 'org-9' }, error: null },
+    );
+    expect(await ensureOrgConOwner('p1', 'Mi Inmobiliaria')).toBe('org-9');
+
+    filas.push({ inmobiliaria_id: 'org-9', rol_miembro: 'owner', inmobiliarias: { miembros_ven_todo: true } });
+    expect(await resolveMembershipInmobiliariaIds('p1')).toEqual(['org-9']);
+    expect(mockFrom.mock.calls.length).toBeGreaterThan(llamadasAntes);
   });
 });

@@ -41,7 +41,14 @@ async function loadMembresiasActivas(perfilId: string): Promise<FilaMembresia[]>
     .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
     .select('inmobiliaria_id, rol_miembro, inmobiliarias(miembros_ven_todo)')
     .eq('perfil_id', perfilId)
-    .eq('estado', 'activo');
+    .eq('estado', 'activo')
+    // Sin este orden, getActiveMembership toma el [0] de un conjunto que
+    // Postgres no garantiza estable: un perfil en dos organizaciones obtendria
+    // un rol_miembro / venTodo / orgId distinto entre peticiones, y los bugs de
+    // permisos saldrian irreproducibles. Gana la membresia mas antigua.
+    // Hoy ningun perfil tiene dos (verificado en produccion, 2026-09-15); si
+    // eso cambia y hace falta priorizar 'owner', se ordena aqui.
+    .order('created_at', { ascending: true });
   const filas = (data as unknown as FilaMembresia[] | null) ?? [];
   if (!error) membresiasCache.set(perfilId, { expira: Date.now() + MEMBRESIAS_TTL_MS, filas });
   return filas;
@@ -496,7 +503,10 @@ export async function ensureOrgConOwner(perfilId: string, nombre: string): Promi
   }
   const inmobiliariaId = (created as { id: string }).id;
 
-  await (supabase
+  // El error de este insert se descartaba: si fallaba, la organizacion quedaba
+  // con un titular SIN membresia — no podia invitar a nadie y su scope caia a
+  // 'own' en vez de 'org', sin que nada lo avisara.
+  const { error: errorMiembro } = await (supabase
     .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
     .insert({
       inmobiliaria_id: inmobiliariaId,
@@ -504,6 +514,11 @@ export async function ensureOrgConOwner(perfilId: string, nombre: string): Promi
       rol_miembro: 'owner',
       estado: 'activo',
     } as never);
+  if (errorMiembro) throw errorMiembro;
+
+  // Y sin esto, un loadMembresiasActivas previo deja el perfil cacheado con
+  // lista vacia hasta 30 s: el titular recien creado no veria su organizacion.
+  invalidateMembresiasCache(perfilId);
 
   return inmobiliariaId;
 }
