@@ -22,6 +22,15 @@ export interface CreatePaymentLinkParams {
   cancelUrl: string;
   /** URL to redirect when the payment stays pending (PSE/efectivo). Falls back to successUrl. */
   pendingUrl?: string;
+  /**
+   * URL para un pago RECHAZADO por el banco. Sin esto se reusaba `cancelUrl`,
+   * asi que un rechazo aterrizaba con `status=cancelled` y la web pintaba el
+   * copy de la cancelacion voluntaria: "Has cancelado el proceso de pago" a
+   * alguien a quien le rechazaron la tarjeta. El copy correcto ya existia en la
+   * rama `else` de la pantalla, inalcanzable desde la pasarela.
+   * Falls back to cancelUrl.
+   */
+  failureUrl?: string;
 }
 
 export interface PaymentLinkResult {

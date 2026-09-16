@@ -288,19 +288,27 @@ export async function createPaymentLink(
   }
 
   // 3. Build success/cancel/pending URLs (pending: PSE/efectivo no debe verse como éxito)
+  //    El id va PRE-generado y viaja en las URLs: sin `&pago=` la pantalla de
+  //    resultado no puede consultar el pago, asi que para garantia, canon y
+  //    deposito no habia ni concepto, ni monto, ni boton de reintento — cosa que
+  //    la ruta de /pago-estudio si hacia.
+  const pagoId = crypto.randomUUID();
   const resultUrl = `${env.FRONTEND_URL}/pago/resultado`;
-  const successUrl = `${resultUrl}?status=success&expediente=${expedienteId}`;
-  const cancelUrl = `${resultUrl}?status=cancelled&expediente=${expedienteId}`;
-  const pendingUrl = `${resultUrl}?status=pending&expediente=${expedienteId}`;
+  const successUrl = `${resultUrl}?status=success&expediente=${expedienteId}&pago=${pagoId}`;
+  const cancelUrl = `${resultUrl}?status=cancelled&expediente=${expedienteId}&pago=${pagoId}`;
+  // Un rechazo del banco NO es una cancelacion voluntaria: sin esta URL aparte
+  // aterrizaba con status=cancelled y la web decia "Has cancelado el proceso de
+  // pago" a quien le rechazaron la tarjeta.
+  const failureUrl = `${resultUrl}?status=failed&expediente=${expedienteId}&pago=${pagoId}`;
+  const pendingUrl = `${resultUrl}?status=pending&expediente=${expedienteId}&pago=${pagoId}`;
 
   const gateway = getPaymentGateway();
   const conceptLabel = CONCEPTO_LABELS[input.concepto] || input.concepto;
   const expNumero = (expediente as { numero: string }).numero;
 
-  // 4. Insert pago record ANTES de crear el checkout, con id pre-generado: así
-  // la preference lleva el pago_id en external_reference/metadata y el webhook
-  // puede casar el pago EXACTO (no "el más reciente del expediente").
-  const pagoId = crypto.randomUUID();
+  // 4. Insert pago record ANTES de crear el checkout, con el id pre-generado
+  // arriba: así la preference lleva el pago_id en external_reference/metadata y
+  // el webhook puede casar el pago EXACTO (no "el más reciente del expediente").
   const { error: insertError } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .insert({
@@ -343,6 +351,7 @@ export async function createPaymentLink(
       },
       successUrl,
       cancelUrl,
+      failureUrl,
       pendingUrl,
     });
   } catch (gatewayError) {

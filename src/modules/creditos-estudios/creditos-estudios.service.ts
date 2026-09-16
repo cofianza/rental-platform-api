@@ -297,6 +297,10 @@ export async function comprarPaquete(
   // 3. Crear Stripe Checkout
   const successUrl = `${env.FRONTEND_URL}/configuracion/creditos-estudios?compra=${compra.id}&status=success`;
   const cancelUrl = `${env.FRONTEND_URL}/configuracion/creditos-estudios?compra=${compra.id}&status=cancelled`;
+  // Un rechazo del banco NO es una cancelacion voluntaria: sin esta URL aparte
+  // aterrizaba con status=cancelled y la web decia "Has cancelado el proceso de
+  // pago" a quien le rechazaron la tarjeta.
+  const failureUrl = `${env.FRONTEND_URL}/configuracion/creditos-estudios?compra=${compra.id}&status=failed`;
 
   try {
     const gateway = getPaymentGateway();
@@ -312,6 +316,7 @@ export async function comprarPaquete(
       },
       successUrl,
       cancelUrl,
+      failureUrl,
     });
 
     // 4. Guardar Stripe session ID en la compra

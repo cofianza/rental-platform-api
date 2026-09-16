@@ -345,6 +345,10 @@ async function crearCobroPasarela(args: {
   // Build success/cancel/pending URLs (pending: PSE/efectivo no es éxito todavía)
   const successUrl = `${env.FRONTEND_URL}/pago/resultado?status=success&expediente=${expedienteId}&pago=${pagoId}`;
   const cancelUrl = `${env.FRONTEND_URL}/pago/resultado?status=cancelled&expediente=${expedienteId}&pago=${pagoId}`;
+  // Un rechazo del banco NO es una cancelacion voluntaria: sin esta URL aparte
+  // aterrizaba con status=cancelled y la web decia "Has cancelado el proceso de
+  // pago" a quien le rechazaron la tarjeta.
+  const failureUrl = `${env.FRONTEND_URL}/pago/resultado?status=failed&expediente=${expedienteId}&pago=${pagoId}`;
   const pendingUrl = `${env.FRONTEND_URL}/pago/resultado?status=pending&expediente=${expedienteId}&pago=${pagoId}`;
 
   // Insert pago ANTES de crear el checkout, con id pre-generado: la preference
@@ -389,6 +393,7 @@ async function crearCobroPasarela(args: {
       },
       successUrl,
       cancelUrl,
+      failureUrl,
       pendingUrl,
     });
   } catch (gatewayError) {

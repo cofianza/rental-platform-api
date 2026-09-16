@@ -63,7 +63,7 @@ export class MercadoPagoAdapter implements PaymentGatewayAdapter {
   // ----------------------------------------------------------
 
   async createPaymentLink(params: CreatePaymentLinkParams): Promise<PaymentLinkResult> {
-    const { amount, concept, description, metadata, successUrl, cancelUrl, pendingUrl } = params;
+    const { amount, concept, description, metadata, successUrl, cancelUrl, pendingUrl, failureUrl } = params;
 
     // external_reference es el ÚNICO dato que MP propaga del preference al payment,
     // así que codificamos ahí cómo enrutar el webhook: "<concepto>:<id>[:<pago_id>]".
@@ -87,7 +87,7 @@ export class MercadoPagoAdapter implements PaymentGatewayAdapter {
       ],
       external_reference: externalReference,
       metadata,
-      back_urls: { success: successUrl, failure: cancelUrl, pending: pendingUrl ?? successUrl },
+      back_urls: { success: successUrl, failure: failureUrl ?? cancelUrl, pending: pendingUrl ?? successUrl },
       // MP exige que back_url.success sea https para usar auto_return; en
       // desarrollo (localhost http) lo omitimos para no romper la creación del
       // link (el comprador vuelve manualmente con "Volver al sitio").
