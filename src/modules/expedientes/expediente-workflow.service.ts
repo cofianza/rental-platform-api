@@ -198,10 +198,11 @@ export async function executeTransition(
   // Adenda 2 §5.1: salir de 'condicionado' es resolver una revision manual.
   // Queda en el timeline (usuario y fecha los pone el RPC; el comentario es el
   // fundamento) con los documentos consultados, y en la bitacora.
+  let puntajeRevisionManual: Awaited<ReturnType<typeof import("./expediente-habilitacion.service").ratificarRevisionManual>> | null = null;
   if (currentState === 'condicionado') {
     const documentos = input.documentos_consultados ?? [];
     // Aprobar: mismo cierre que la card (recálculo §4.3, analista §9, CRC).
-    const puntajeRevisionManual = targetState === 'aprobado'
+    puntajeRevisionManual = targetState === 'aprobado'
       ? await (await import('./expediente-habilitacion.service')).ratificarRevisionManual(expedienteId, user.id, input.evaluacion)
       : null;
     const { error: metaErr } = await (supabase
@@ -250,6 +251,9 @@ export async function executeTransition(
     ...expedienteActualizado,
     estado_anterior: result.estado_anterior,
     evento_timeline_id: result.evento_timeline_id,
+    // La card lo devuelve y lo muestra en el toast; por "Cambiar estado" se
+    // calculaba y se tiraba, asi que el analista no sabia en cuanto quedo.
+    puntaje_revision_manual: puntajeRevisionManual,
   };
 }
 
