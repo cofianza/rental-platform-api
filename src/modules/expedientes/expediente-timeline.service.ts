@@ -167,7 +167,18 @@ async function queryEventosTimeline(
 
     if (row.tipo === 'estado') {
       tipo = 'transicion';
-      detalle = { estado_anterior: row.estado_anterior, estado_nuevo: row.estado_nuevo, comentario: row.comentario };
+      // `...row.metadata` al final: 'estado' era el UNICO tipo que reconstruia
+      // el detalle a mano y descartaba metadata — justo el tipo que lleva los
+      // documentos consultados y el puntaje recalculado de la revision manual
+      // (Adenda 2 §5.1). Se le pedian al analista, se guardaban, y no se
+      // mostraban en ninguna pantalla; la bitacora esta cerrada a
+      // 'administrador', asi que ni el propio analista podia releerlos.
+      detalle = {
+        estado_anterior: row.estado_anterior,
+        estado_nuevo: row.estado_nuevo,
+        comentario: row.comentario,
+        ...(row.metadata ?? {}),
+      };
     } else if (row.tipo === 'estudio') {
       tipo = 'estudio';
       detalle = row.metadata || null;
