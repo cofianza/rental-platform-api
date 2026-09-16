@@ -29,7 +29,10 @@ const VALID_TRANSITIONS: Record<EstadoPago, EstadoPago[]> = {
   completado: ['reembolsado'],
   // 'completado': MP permite reintentar dentro del mismo checkout — un intento
   // rechazado (fallido) seguido de uno aprobado debe poder completar el pago.
-  fallido: ['pendiente', 'completado'],
+  // 'cancelado': por eso mismo, antes de abrir un SEGUNDO cobro para el mismo
+  // estudio hay que cerrar el primero. Sin esta transición no había forma de
+  // hacerlo y quedaban dos checkouts vivos (ver crearCobroPasarela).
+  fallido: ['pendiente', 'completado', 'cancelado'],
   cancelado: [],          // final state
   reembolsado: [],        // final state
 };

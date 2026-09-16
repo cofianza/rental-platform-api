@@ -252,8 +252,24 @@ export async function createPaymentLink(
   let monto = input.monto;
   if (input.concepto === 'estudio') {
     await assertCanonDentroDelTope({ expedienteId, origen: 'createPaymentLink' });
-    const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
+    const { getMontoEstudio, cerrarCobroEstudioFallido } = await import(
+      '@/modules/pago-estudio/pago-estudio.service'
+    );
     monto = await getMontoEstudio();
+
+    // Esta es la TERCERA puerta que abre un cobro de estudio, y tenia el mismo
+    // hueco que crearCobroPasarela: el chequeo de duplicados de abajo solo mira
+    // 'pendiente' y 'procesando', asi que un cobro anterior en 'fallido' se
+    // colaba con su link todavia pagable y quedaban dos checkouts vivos.
+    const { data: fallidos } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, external_id, metodo')
+      .eq('expediente_id', expedienteId)
+      .eq('concepto', 'estudio')
+      .eq('estado', 'fallido');
+    for (const previo of ((fallidos as Array<Record<string, unknown>> | null) ?? [])) {
+      await cerrarCobroEstudioFallido(previo, userId);
+    }
   }
 
   // 2. Check for duplicate: no pendiente/procesando for same expediente+concepto

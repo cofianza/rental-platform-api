@@ -101,6 +101,37 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     expect(mockCreateLink).toHaveBeenCalledOnce();
   });
 
+  it('con un cobro anterior FALLIDO lo cancela y expira su link antes de abrir el nuevo', async () => {
+    // 'fallido' no es terminal: la maquina permite fallido->completado porque MP
+    // deja reintentar dentro del mismo checkout. O sea el link viejo sigue
+    // siendo pagable. Si abrimos otro encima quedan dos cobros vivos: el
+    // prospecto puede pagar los dos, y si paga el viejo el webhook choca con
+    // uq_pagos_estudio_activo (ya ocupado por el nuevo 'pendiente'), reintenta
+    // en bucle y la plata cobrada no se acredita nunca.
+    const fallido = {
+      id: 'p-fallido',
+      estado: 'fallido',
+      metodo: 'pasarela',
+      email_pagador: 'prospecto@x.co',
+      payment_link_url: 'https://mp.test/viejo',
+      external_id: 'pref-vieja',
+    };
+
+    datosComunes();
+    enqueue('pagos', { data: [fallido], error: null }); // pagarGestor
+    enqueue('pagos', { data: [fallido], error: null }); // crearCobroPasarela
+    cobroNuevo();
+
+    const pago = await pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria');
+
+    expect(mockTransition).toHaveBeenCalledWith(
+      expect.objectContaining({ pagoId: 'p-fallido', targetEstado: 'cancelado' }),
+    );
+    expect(mockCancelLink).toHaveBeenCalledWith('pref-vieja');
+    expect(pago.payment_link_url).toBe('https://mp.test/checkout/1');
+    expect(ops.filter((o) => o.table === 'pagos' && o.method === 'insert')).toHaveLength(1);
+  });
+
   it('si ya tiene SU checkout abierto, devuelve el mismo sin crear otro', async () => {
     datosComunes();
     const suyo = { id: 'p1', estado: 'pendiente', metodo: 'pasarela', email_pagador: 'GESTOR@inmo.co', payment_link_url: 'https://mp.test/viejo' };

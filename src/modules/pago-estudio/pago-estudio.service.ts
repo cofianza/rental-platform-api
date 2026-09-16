@@ -267,6 +267,34 @@ function invalidarLinkPasarela(pago: { external_id?: string | null; metodo?: str
 // ============================================================
 
 /**
+ * Cierra un cobro de estudio que quedo en 'fallido' antes de abrir otro.
+ *
+ * 'fallido' NO es terminal: la maquina de estados permite fallido→completado
+ * porque "MP permite reintentar dentro del mismo checkout", o sea que el link
+ * del intento rechazado sigue siendo pagable. Sin esto quedaban dos cobros
+ * vivos para el mismo estudio: el prospecto podia pagar los dos, y si pagaba el
+ * viejo el webhook chocaba con uq_pagos_estudio_activo (que ya tenia la fila
+ * nueva en 'pendiente'), reintentaba en bucle y la plata cobrada no se
+ * acreditaba nunca.
+ *
+ * Lo llaman las TRES puertas que crean un cobro de estudio: la B y la C via
+ * crearCobroPasarela, y createPaymentLink de pagos.service.
+ */
+export async function cerrarCobroEstudioFallido(
+  pago: Record<string, unknown>,
+  userId: string,
+): Promise<void> {
+  await transitionPagoState({
+    pagoId: pago.id as string,
+    targetEstado: 'cancelado',
+    origen: 'manual',
+    detalles: { cancelado_por: userId, motivo: 'reemplazado_por_nuevo_cobro' },
+    userId,
+  });
+  invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
+}
+
+/**
  * Crea el pago 'pendiente' y su checkout en la pasarela. Lanza si ya hay un
  * pago activo. Lo usan la C (paga el prospecto, fase 2 de enviarLinkPago) y la
  * B (paga el gestor, pagarGestor): mismo cobro, distinto pagador.
@@ -290,6 +318,18 @@ async function crearCobroPasarela(args: {
     }
     if (estado === 'pendiente' || estado === 'procesando') {
       throw AppError.conflict('Ya existe un link de pago pendiente para este estudio', 'PAGO_ESTUDIO_PENDIENTE');
+    }
+    // 'fallido' NO es terminal: la propia maquina de estados permite
+    // fallido→completado porque "MP permite reintentar dentro del mismo
+    // checkout". O sea el link del intento rechazado SIGUE siendo pagable.
+    // Antes se colaba por aqui y quedaban dos cobros vivos para el mismo
+    // estudio: el prospecto podia pagar los dos, y si pagaba el viejo el
+    // webhook chocaba con uq_pagos_estudio_activo (que ya tenia la fila nueva
+    // en 'pendiente'), reintentaba en bucle y la plata cobrada no se acreditaba
+    // nunca. Se cierra el anterior antes de abrir el nuevo, igual que hace
+    // pagarGestor con el link del prospecto.
+    if (estado === 'fallido') {
+      await cerrarCobroEstudioFallido(existing, userId);
     }
   }
 
