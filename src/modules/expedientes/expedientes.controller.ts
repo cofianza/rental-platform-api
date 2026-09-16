@@ -66,7 +66,7 @@ export async function getById(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const input = req.body as CreateExpedienteInput;
-  const expediente = await expedientesService.createExpediente(input, req.user!.id, req.ip);
+  const expediente = await expedientesService.createExpediente(input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, expediente);
 }
 

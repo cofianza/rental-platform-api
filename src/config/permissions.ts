@@ -101,7 +101,20 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
   },
   propietario: {
     usuarios: ['read_own'],
-    expedientes: ['read'],
+    // create/update: el propietario tiene que poder EVALUAR a sus candidatos.
+    // Publica en vitrina, recibe interesados y el onboarding ("Primeros pasos",
+    // paso 3) le pide crear el estudio — pero con solo 'read' el asistente
+    // moria en el paso 2 con el texto crudo "Sin permisos para 'read' en
+    // 'solicitantes'", y la web le ofrecia ese camino desde SEIS sitios. Es el
+    // mismo criterio que ya se aplico dos veces en estudios.routes.ts y
+    // contratos.routes.ts: un callejon sin salida en una promesa comercial es
+    // peor que un permiso de mas.
+    //
+    // No debilita el aislamiento: createExpediente ahora exige
+    // assertInmuebleAccess (el inmueble tiene que ser suyo), el resto de rutas
+    // por-id usan assertExpedienteAccess, y solicitantes.service ya scopea al
+    // propietario por `creado_por` (no tiene organizacion).
+    expedientes: ['create', 'read', 'update'],
     estudios: ['read'],
     // 'update' permite regenerar el PDF cuando cambien datos del perfil
     // o del inmueble. La generacion inicial es automatica via orchestrator.
@@ -116,7 +129,11 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     configuracion: ['read', 'update'],
     bitacora: [],
     dashboard: ['read'],
-    solicitantes: [],
+    // Sin esto el asistente de estudio moria en el paso 2: para registrar al
+    // candidato hay que buscarlo y crearlo. El scoping por `creado_por` ya
+    // estaba escrito en solicitantes.service.ts —nombrando explicitamente al
+    // rol 'propietario'— y era codigo inalcanzable.
+    solicitantes: ['create', 'read', 'update'],
     documentos: ['read', 'descargar'],
     // create/update: el propietario gestiona el pago del estudio de su
     // candidato (enviar link al arrendatario, asumir, cancelar-y-asumir).

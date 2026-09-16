@@ -8,6 +8,7 @@ import {
   esOwnerDeOrg,
   resolveOrgMemberPerfilIds,
   assertExpedienteAccess,
+  assertInmuebleAccess,
   resolveAllowedInmuebleIds,
 } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
@@ -334,7 +335,21 @@ async function enviarWhatsAppResponsable(responsableId: string, numero: string, 
 // Create
 // ============================================================
 
-export async function createExpediente(input: CreateExpedienteInput, createdBy: string, ip?: string) {
+export async function createExpediente(
+  input: CreateExpedienteInput,
+  createdBy: string,
+  ip?: string,
+  userRol?: string,
+) {
+  // 0. Tenant guard: el inmueble tiene que ser de SU cartera. Faltaba, y el
+  //    expediente hereda `inmobiliaria_id` del inmueble, asi que crear sobre
+  //    una propiedad ajena metia una ficha en la cartera de otra agencia —
+  //    invisible para quien la creo, pero capaz de reservarle el inmueble — y
+  //    los mensajes de error distintos ('no encontrado' / 'reservado' /
+  //    'ocupado') confirmaban de paso la existencia y el estado de un inmueble
+  //    ajeno. No-op para roles internos y para llamadas sin identidad.
+  await assertInmuebleAccess(input.inmueble_id, createdBy, userRol);
+
   // 1. Validar que el inmueble existe
   const { data: inmueble, error: inmuebleError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
