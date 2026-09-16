@@ -93,6 +93,26 @@ export async function registerInmobiliaria(
           nombre_representante_nombre, nombre_representante_apellido, telefono,
           cargo_representante, afianzadora_actual, afianzadora_tipo } = input;
 
+  // NIT duplicado. La web ya tenia una rama para `NIT_ALREADY_EXISTS` y ese
+  // codigo no existia en todo el API: el registro escribia el NIT sin consultar
+  // y acto seguido ensureOrgConOwner creaba una SEGUNDA organizacion con la
+  // misma razon social — cartera partida, equipo invisible, y dos clientes DIAN
+  // donde hay uno. Va antes de createUser para no dejar un usuario huerfano.
+  // El cierre duradero es el indice unico (migracion 20260916000001); esto
+  // ademas da un mensaje que dice que hacer.
+  const { data: nitExistente } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('nit', nit)
+    .limit(1)
+    .maybeSingle();
+  if (nitExistente) {
+    throw AppError.conflict(
+      'Ya hay una inmobiliaria registrada con este NIT. Pídele al titular de la cuenta que te invite a su equipo.',
+      'NIT_ALREADY_EXISTS',
+    );
+  }
+
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
     password,
@@ -139,7 +159,24 @@ export async function registerInmobiliaria(
     .eq('id', userId);
 
   if (updateError) {
+    // 23505 = el indice unico uq_perfiles_nit (migracion 20260916000001) gano la
+    // carrera que el pre-chequeo de arriba no puede cerrar.
+    if ((updateError as { code?: string }).code === '23505') {
+      await supabaseAuth.auth.admin.deleteUser(userId).catch(() => undefined);
+      throw AppError.conflict(
+        'Ya hay una inmobiliaria registrada con este NIT. Pídele al titular de la cuenta que te invite a su equipo.',
+        'NIT_ALREADY_EXISTS',
+      );
+    }
+    // Antes solo se logueaba y el usuario leia "Registro exitoso" sobre un
+    // perfil sin razon social, sin NIT y sin rol de inmobiliaria — una cuenta
+    // inservible que nadie sabia que estaba rota. Se borra el usuario de auth
+    // para que pueda reintentar con el mismo correo.
     logger.error({ error: updateError.message, userId }, 'Error al actualizar perfil de inmobiliaria');
+    await supabaseAuth.auth.admin.deleteUser(userId).catch((e) =>
+      logger.error({ err: e, userId }, 'No se pudo limpiar el usuario tras fallar el perfil'),
+    );
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar el registro. Inténtalo de nuevo.');
   }
 
   // Multi-tenant: crear la organización con esta inmobiliaria como owner, para

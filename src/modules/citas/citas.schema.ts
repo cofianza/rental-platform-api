@@ -68,6 +68,13 @@ export const citaIdParamsSchema = z.object({
 export const listCitasQuerySchema = z.object({
   expediente_id: z.uuid({ error: 'ID de estudio inválido' }).optional(),
   estado: z.enum(ESTADOS_CITA, { error: `Estado inválido. Valores permitidos: ${ESTADOS_CITA.join(', ')}` }).optional(),
+  // La web ya los mandaba (citaService.ts) y el servicio no los leia: el filtro
+  // se "aplicaba" —el boton Limpiar se encendia— y la lista no cambiaba. Como
+  // ademas no hay controles de paginacion, las citas viejas quedaban
+  // inalcanzables.
+  inmueble_id: z.uuid({ error: 'ID de inmueble inválido' }).optional(),
+  fecha_desde: z.string().optional(),
+  fecha_hasta: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

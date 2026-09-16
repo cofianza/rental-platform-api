@@ -746,6 +746,29 @@ export async function getCitasByExpediente(query: ListCitasQuery, userId: string
   if (query.estado) {
     qb = qb.eq('estado', query.estado);
   }
+  // La fecha que le importa al usuario es la confirmada si existe y, si no, la
+  // propuesta — que es justo el orden con el que la lista las pinta. PostgREST
+  // no filtra sobre un COALESCE, asi que se compara contra las dos columnas.
+  if (query.fecha_desde) {
+    qb = qb.or(`fecha_confirmada.gte.${query.fecha_desde},and(fecha_confirmada.is.null,fecha_propuesta.gte.${query.fecha_desde})`);
+  }
+  if (query.fecha_hasta) {
+    qb = qb.or(`fecha_confirmada.lte.${query.fecha_hasta},and(fecha_confirmada.is.null,fecha_propuesta.lte.${query.fecha_hasta})`);
+  }
+  // Por ids y no por el embed: `expediente:expedientes(...)` es un left join,
+  // asi que filtrar por la tabla anidada recorta el embebido y NO las filas de
+  // citas. Resolver los expedientes del inmueble primero es explicito y no
+  // depende de convertir el embed en !inner para todos los callers.
+  if (query.inmueble_id) {
+    const { data: expsDelInmueble } = await db('expedientes')
+      .select('id')
+      .eq('inmueble_id', query.inmueble_id);
+    const ids = ((expsDelInmueble as Array<{ id: string }> | null) ?? []).map((e) => e.id);
+    if (ids.length === 0) {
+      return { citas: [], pagination: { total: 0, page, limit, totalPages: 0 } };
+    }
+    qb = qb.in('expediente_id', ids);
+  }
 
   const { data, error, count } = await qb;
 

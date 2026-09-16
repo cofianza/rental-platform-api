@@ -106,6 +106,11 @@ export const listInmueblesQuerySchema = z.object({
   propietario_id: z.uuid().optional(),
   visible_vitrina: z.enum(['true', 'false']).optional(),
   include_inactive: z.enum(['true', 'false']).optional(),
+  // La web ya los mandaba (inmuebleService.ts) y listInmuebles no los leia. El
+  // valor persiste en la URL, asi que el filtro fantasma sobrevivia a recargas
+  // y a enlaces compartidos. Existen y funcionan, pero solo en la vitrina.
+  rent_min: z.coerce.number().min(0).optional(),
+  rent_max: z.coerce.number().min(0).optional(),
   sortBy: z.enum(['created_at', 'valor_arriendo', 'ciudad', 'codigo', 'area_m2', 'tipo', 'estrato', 'estado']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });

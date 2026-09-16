@@ -135,7 +135,7 @@ async function anotarEstudiosActivos<T extends { id: string }>(rows: T[]): Promi
 
 export async function listInmuebles(query: ListInmueblesQuery, restrictToIds?: string[] | null) {
   const { search, tipo, uso, estado, ciudad, estrato,
-    propietario_id, visible_vitrina, include_inactive } = query;
+    propietario_id, visible_vitrina, include_inactive, rent_min, rent_max } = query;
   // Express 5 req.query es read-only: los defaults de Zod no se aplican, usar fallbacks
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
@@ -183,6 +183,8 @@ export async function listInmuebles(query: ListInmueblesQuery, restrictToIds?: s
   if (uso) qb = qb.eq('uso', uso);
   if (ciudad) qb = qb.ilike('ciudad', `%${ciudad}%`);
   if (estrato) qb = qb.eq('estrato', estrato);
+  if (rent_min) qb = qb.gte('valor_arriendo', rent_min);
+  if (rent_max) qb = qb.lte('valor_arriendo', rent_max);
   if (propietario_id) qb = qb.eq('propietario_id', propietario_id);
   if (visible_vitrina !== undefined) {
     qb = qb.eq('visible_vitrina', visible_vitrina === 'true');
