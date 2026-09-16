@@ -128,11 +128,19 @@ export async function executeTransition(
     'condicionado',
     'aprobado',
   ];
+  // El fallback por estado_anterior SOLO aplica cuando la etiqueta no llega.
+  // Antes se evaluaba siempre, y como `comentario` es obligatorio por schema
+  // (min(1)) la tercera rama del OR era verdadera en todos los casos: desde
+  // 'aprobado' salen DOS transiciones a 'cerrado' —'Cerrar estudio' (cierre
+  // natural, con el contrato firmado) y 'Cancelar estudio' (abandono)— y la
+  // etiqueta es lo unico que las distingue, asi que un arriendo que termino
+  // bien quedaba archivado en rojo como "Estudio cancelado — no continuara con
+  // el proceso", en el detalle, en la lista y en el dashboard. Sin deshacer.
   const fueCancelacion =
     targetState === 'cerrado' &&
     // 'Cancelar expediente' = etiqueta vieja (web sin redeploy aun); se acepta igual.
     (input.etiqueta === 'Cancelar estudio' || input.etiqueta === 'Cancelar expediente' ||
-      (ESTADOS_CANCELABLES.includes(currentState) && !!input.comentario));
+      (!input.etiqueta && ESTADOS_CANCELABLES.includes(currentState) && !!input.comentario));
 
   if (fueCancelacion) {
     const { error: updErr } = await (supabase
@@ -154,6 +162,23 @@ export async function executeTransition(
       );
     }
 
+  } else if (targetState === 'cerrado' && currentState === 'rechazado') {
+    // rechazado→cerrado NO es abandono, asi que no lleva `cancelado_at`. Pero
+    // sin ninguna marca cae en la rama "else" de la UI y el detalle saluda con
+    // "¡Estudio finalizado! Todos los pasos se completaron exitosamente" —
+    // sobre un candidato rechazado y sin contrato. Guardar de donde viene deja
+    // que la barra de progreso y el banner elijan el texto correcto sin
+    // inventarse una cancelacion que no hubo.
+    const { error: preErr } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update({ estado_pre_cancelacion: currentState } as never)
+      .eq('id', expedienteId);
+    if (preErr) {
+      logger.warn(
+        { expedienteId, err: preErr.message },
+        'No se pudo marcar el cierre como posterior a un rechazo — el detalle lo mostrara como finalizado',
+      );
+    }
   }
 
   // Soltar la RESERVA del inmueble si este expediente era su titular. Corre en
