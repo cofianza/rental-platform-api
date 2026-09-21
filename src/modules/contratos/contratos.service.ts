@@ -8,9 +8,11 @@ import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 import { renderTemplate, renderTemplateHighlighted } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
-import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
 import { checkPerfilCompletitud } from '../perfil-arrendador/perfil-arrendador.service';
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
+import { destinacionParaContrato } from '../inmuebles/destinacion';
+import { getCalibracion } from '@/lib/calibracion';
 import type {
   GenerarContratoInput,
   RenovarContratoInput,
@@ -350,6 +352,7 @@ interface ExpedienteData {
     ubicacion_detallada?: string | null;
     matricula_inmobiliaria?: string | null;
     propietario_id: string;
+    uso?: string | null;
     contrato_tipo_storage_key?: string | null;
     contrato_tipo_nombre_archivo?: string | null;
   };
@@ -416,7 +419,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio,
       inmuebles!expedientes_inmueble_id_fkey(
         id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, parqueaderos,
-        administracion, propietario_id,
+        administracion, propietario_id, uso,
         propiedad_horizontal, cuarto_util, ubicacion_detallada, matricula_inmobiliaria,
         contrato_tipo_storage_key, contrato_tipo_nombre_archivo
       ),
@@ -453,6 +456,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       parqueaderos: number | null;
       administracion: number | null;
       propietario_id: string;
+      uso: string | null;
       matricula_inmobiliaria: string | null;
       contrato_tipo_storage_key: string | null;
       contrato_tipo_nombre_archivo: string | null;
@@ -481,6 +485,9 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       'EXPEDIENTE_NO_APROBADO',
     );
   }
+  // Contratos V3: solo se contrata una destinacion habilitada (hoy vivienda).
+  // Cubre generar, renovar y regenerar, antes de la reserva y de cualquier escritura.
+  destinacionParaContrato(exp.inmuebles.uso);
 
   // 2. Fetch arrendador (propietario | inmobiliaria) con todos los campos
   //    necesarios para el contrato. perfiles.rol determina si es inmobiliaria
@@ -1747,6 +1754,7 @@ async function tarifasParaContrato(expedienteId: string): Promise<Tarifas> {
     via: 'revision_manual',
     conCoarrendatario: (await coarrendatarioVinculado(expedienteId)) !== null,
     canonCop: null,
+    ivaPct: (await getCalibracion()).TARIFA_IVA,
   });
 }
 
@@ -2081,16 +2089,24 @@ export async function generarContrato(
  * Usado para mostrar un preview visual en el detalle del inmueble (sin
  * generar PDF — solo HTML para embeber en un iframe).
  */
-export async function previewPlantillaParaInmueble(inmuebleId: string): Promise<string> {
+export async function previewPlantillaParaInmueble(
+  inmuebleId: string,
+  userId?: string,
+  userRol?: string,
+): Promise<string> {
+  // Scoping: el preview expone la cuenta de recaudo y el NIT del arrendador.
+  await assertInmuebleAccess(inmuebleId, userId, userRol);
+
   // 1. Cargar inmueble con datos relevantes para el contrato.
   const { data: inmuebleRow, error: inmError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, parqueaderos, administracion, propietario_id, propiedad_horizontal, cuarto_util, ubicacion_detallada')
+    .select('id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, parqueaderos, administracion, propietario_id, propiedad_horizontal, cuarto_util, ubicacion_detallada, uso')
     .eq('id', inmuebleId)
     .single();
   if (inmError || !inmuebleRow) {
     throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
   }
+  destinacionParaContrato((inmuebleRow as { uso?: string | null }).uso);
   const inmueble = inmuebleRow as unknown as ExpedienteData['inmueble'];
 
   // 2. Cargar arrendador con todos los campos. Para inmobiliaria, el perfil

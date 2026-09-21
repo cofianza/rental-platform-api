@@ -148,6 +148,7 @@ assert.strictEqual(err.errorCode, CANON_EXCEDE_TOPE_ERROR_CODE, 'codigo propio, 
 assert.notStrictEqual(err.errorCode, 'BAD_REQUEST');
 assert.deepStrictEqual(err.details, {
   motivo: 'excede_tope',
+  codigo_politica: 'CANON_MAX_TRANSITORIO',
   canon_cop: 3_800_000,
   tope_cop: TOPE,
 });

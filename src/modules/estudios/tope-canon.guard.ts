@@ -53,6 +53,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
 import { getCalibracion } from '@/lib/calibracion';
+import { topeCanonPara } from '../inmuebles/destinacion';
 
 /** Codigo de dominio unico del tope. La web lo usa para el mensaje accionable. */
 export const CANON_EXCEDE_TOPE_ERROR_CODE = 'CANON_EXCEDE_TOPE';
@@ -192,13 +193,15 @@ export function mensajeTopeExcedido(canonCop: number, topeCop: number): string {
  */
 export function errorTopeExcedido(
   veredicto: Extract<VeredictoTopeCanon, { ok: false }>,
+  /** Clave del tope que se aplico (vivienda o comercial). */
+  codigoPolitica: string = CODIGO_POLITICA_TOPE_CANON,
 ): AppError {
   return AppError.badRequest(
     mensajeTopeExcedido(veredicto.canonCop, veredicto.topeCop),
     CANON_EXCEDE_TOPE_ERROR_CODE,
     {
       motivo: veredicto.motivo,
-      codigo_politica: CODIGO_POLITICA_TOPE_CANON,
+      codigo_politica: codigoPolitica,
       canon_cop: veredicto.canonCop,
       tope_cop: veredicto.topeCop,
     },
@@ -235,6 +238,17 @@ export async function leerCanonDelInmueble(args: {
   expedienteId?: string | null;
   inmuebleId?: string | null;
 }): Promise<number | string | null | undefined> {
+  return (await leerInmuebleDelTope(args))?.valor_arriendo ?? undefined;
+}
+
+/**
+ * Canon + uso del inmueble (el uso decide que tope aplica, ver
+ * inmuebles/destinacion.ts). Mismo fail-closed que leerCanonDelInmueble.
+ */
+async function leerInmuebleDelTope(args: {
+  expedienteId?: string | null;
+  inmuebleId?: string | null;
+}): Promise<{ valor_arriendo?: number | string | null; uso?: string | null } | undefined> {
   let inmuebleId = args.inmuebleId ?? null;
 
   if (!inmuebleId && args.expedienteId) {
@@ -251,13 +265,13 @@ export async function leerCanonDelInmueble(args: {
 
   const { data: inm, error: inmError } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('valor_arriendo')
+    .select('valor_arriendo, uso')
     .eq('id', inmuebleId)
     .maybeSingle();
 
   if (inmError) throw errorCanonNoLegible(inmError.message, args);
 
-  return (inm as { valor_arriendo?: number | string | null } | null)?.valor_arriendo ?? undefined;
+  return (inm as { valor_arriendo?: number | string | null; uso?: string | null } | null) ?? undefined;
 }
 
 /** Codigo del fallo de lectura. No es un rechazo del tope: es un "no pude verificar". */
@@ -319,8 +333,9 @@ export interface AssertTopeArgs {
 export async function assertCanonDentroDelTope(
   args: AssertTopeArgs,
 ): Promise<{ canonCop: number | null }> {
-  const canonBruto = await leerCanonDelInmueble(args);
-  const veredicto = evaluarTopeCanon({ canonCop: canonBruto, topeCop: await getTopeCanonVigente() });
+  const inm = await leerInmuebleDelTope(args);
+  const { topeCop, clave } = topeCanonPara(inm?.uso, await getCalibracion());
+  const veredicto = evaluarTopeCanon({ canonCop: inm?.valor_arriendo, topeCop });
 
   if (!veredicto.ok) {
     logger.warn(
@@ -337,7 +352,7 @@ export async function assertCanonDentroDelTope(
         : 'Tope 4.4: estudio bloqueado — el canon del inmueble supera el maximo afianzable sin coafianzamiento',
     );
     if (!args.soloAdvertir) {
-      throw errorTopeExcedido(veredicto);
+      throw errorTopeExcedido(veredicto, clave);
     }
     return { canonCop: veredicto.canonCop };
   }

@@ -30,11 +30,13 @@ export type ClaveCalibracion =
   | 'DIAS_EXPIRACION_ESTUDIO'
   | 'UMBRAL_COARRENDATARIO'
   | 'CANON_MAX_TRANSITORIO'
+  | 'TOPE_CANON_COMERCIAL'
   | 'UMBRAL_APROBACION_AUTOMATICA'
   | 'UMBRAL_ZONA_GRIS'
   | 'UMBRAL_SCORE_RECHAZO'
   | 'UMBRAL_SCORE_REVISION'
-  | 'UMBRAL_SIMILITUD_BIOMETRICA';
+  | 'UMBRAL_SIMILITUD_BIOMETRICA'
+  | 'TARIFA_IVA';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -133,8 +135,18 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     max: 100_000_000,
     entero: true,
     seccion: 'Politica §6 / Flujo §4.4',
-    descripcion: 'Canon maximo sin coafianzamiento (COP). Se deroga al entrar en vigencia el coafianzamiento.',
-    advertencia: 'La Politica §6 dice 2.000.000 y el Flujo §4.4 dice 3.000.000. Gerencia (Mario, 2026-09-09) resolvio 3.000.000; falta actualizar el texto del §6.',
+    descripcion: 'Canon maximo sin coafianzamiento para destinacion VIVIENDA (COP). Mientras el comercial no este habilitado, tambien aplica a inmuebles comerciales y mixtos. Se deroga al entrar en vigencia el coafianzamiento.',
+    advertencia: 'La Politica §6 dice 2.000.000 y el Flujo §4.4 dice 3.000.000. Gerencia (Mario, 2026-09-09) resolvio 3.000.000; falta actualizar el texto del §6. La Nota de envio del modulo de contratos (21/09/2026) fija 2.000.000 para vivienda: pendiente de confirmar con Gerencia; no se cambio el valor vigente.',
+  },
+  {
+    clave: 'TOPE_CANON_COMERCIAL',
+    valorDefault: 4_000_000,
+    min: 100_000,
+    max: 100_000_000,
+    entero: true,
+    seccion: 'Contratos comercial §2.1 / §12.1',
+    descripcion: 'Canon maximo sin coafianzamiento para destinacion COMERCIAL (COP), evaluado sobre el canon SIN IVA.',
+    advertencia: 'Sin efecto hasta habilitar el arrendamiento comercial (Fase 2); mientras tanto los inmuebles comerciales y mixtos usan el tope de vivienda.',
   },
   {
     clave: 'UMBRAL_APROBACION_AUTOMATICA',
@@ -185,6 +197,16 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     seccion: 'Adenda 2 §9',
     descripcion: 'Similitud minima (%) entre la selfie y la cedula para dar por verificada la identidad al firmar el contrato. Por debajo, un analista de Cofianza verifica por otro medio: nunca rechaza.',
     advertencia: 'Revisar a los tres meses cuantas verificaciones legitimas caen al analista; si son pocas, puede evaluarse bajarlo.',
+  },
+  {
+    clave: 'TARIFA_IVA',
+    valorDefault: 19,
+    min: 0,
+    max: 50,
+    entero: false,
+    seccion: 'Contratos comercial §3.3.2 / §12.2',
+    descripcion: 'Tarifa general de IVA (%). Se suma a la tarifa mensual de la fianza y, en arrendamiento comercial, al canon.',
+    advertencia: 'Es la tarifa legal: cambiarla solo si cambia la ley. Aplica a lo que se emita desde el cambio (hasta 60 s de cache). La facturacion electronica usa configuracion_sistema.iva_concepto_garantia (hoy 0, exento): pendiente de Gerencia.',
   },
 ];
 

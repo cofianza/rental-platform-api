@@ -11,6 +11,7 @@ import {
 } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
 import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
+import { DESTINACION_NO_HABILITADA } from '../inmuebles/destinacion';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
@@ -652,14 +653,16 @@ async function aprobarYGenerarContrato(params: {
       // dejaría al gestor con un "aprobado" mudo y sin contrato, sin saber por
       // qué — y volviendo a pulsar el botón para siempre. El expediente queda
       // aprobado (correcto: el candidato sigue siendo apto) y el mensaje le
-      // dice que puede usarlo para otra propiedad.
+      // dice que puede usarlo para otra propiedad. Igual con la destinación no
+      // habilitada (Contratos V3): salta antes de la reserva, sin efectos.
       if (
         err instanceof AppError &&
-        (err.errorCode === 'INMUEBLE_YA_RESERVADO' || err.errorCode === 'RESERVA_NO_VERIFICABLE')
+        (err.errorCode === 'INMUEBLE_YA_RESERVADO' || err.errorCode === 'RESERVA_NO_VERIFICABLE'
+          || err.errorCode === DESTINACION_NO_HABILITADA)
       ) {
         logger.warn(
           { expedienteId, fromState, errorCode: err.errorCode },
-          'Generación de contrato abortada: la propiedad ya estaba reservada por otro candidato',
+          'Generación de contrato abortada: el error sube al gestor',
         );
         throw err;
       }

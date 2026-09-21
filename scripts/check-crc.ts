@@ -189,7 +189,7 @@ function check(nombre: string, fn: () => void | Promise<void>) {
     const conTarifas = await generateCertificatePdf(
       {
         ...BASE,
-        tarifas: calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 2_500_000 }),
+        tarifas: calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 2_500_000, ivaPct: 19 }),
         fuentesConsultadas: 'DataCredito + TransUnion',
         decisionCascada: 'promedio de dos centrales',
         factorAjusteIngreso: 1.15,

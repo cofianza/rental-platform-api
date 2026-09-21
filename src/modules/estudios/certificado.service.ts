@@ -788,6 +788,7 @@ export async function generarCertificado(
       via,
       conCoarrendatario,
       canonCop: canonEvaluadoCop,
+      ivaPct: cal.TARIFA_IVA,
       override: leerTarifaOverride(e.tarifa_override),
     }),
     factorAjusteIngreso: sombra?.factor ?? null,

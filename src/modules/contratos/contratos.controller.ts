@@ -18,7 +18,7 @@ import type {
  */
 export async function previewByInmueble(req: Request, res: Response) {
   const { inmuebleId } = req.params as { inmuebleId: string };
-  const html = await contratosService.previewPlantillaParaInmueble(inmuebleId);
+  const html = await contratosService.previewPlantillaParaInmueble(inmuebleId, req.user?.id, req.user?.rol);
   // Devolvemos texto/html directo para que el frontend lo embeba en un
   // iframe via srcdoc o data URL.
   res.type('html').send(html);

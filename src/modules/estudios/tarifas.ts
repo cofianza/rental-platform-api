@@ -19,14 +19,11 @@
 //   sobrescribir la tarifa con autorizacion de Gerencia General, dejando
 //   registro de quien autorizo y cuando.
 //
-// Funcion PURA: recibe la via de aprobacion y el canon, devuelve las cifras.
+// Funcion PURA: recibe la via de aprobacion, el canon y el IVA, devuelve las cifras.
 // El override (estudios.tarifa_override) se aplica encima y se marca.
 // ============================================================
 
 export type ViaAprobacion = 'automatica' | 'condicionada_coarrendatario' | 'revision_manual';
-
-/** IVA general en Colombia. */
-export const IVA_PCT = 19;
 
 export const TARIFA_MENSUAL_PCT: Record<ViaAprobacion, number> = {
   automatica: 2.0,
@@ -50,6 +47,8 @@ export interface EntradaTarifas {
   via: ViaAprobacion;
   conCoarrendatario: boolean;
   canonCop: number | null;
+  /** Tarifa de IVA vigente (parametro TARIFA_IVA); el llamador la lee de getCalibracion. */
+  ivaPct: number;
   override?: TarifaOverride | null;
 }
 
@@ -88,8 +87,8 @@ export function calcularTarifas(e: EntradaTarifas): Tarifas {
     con_coarrendatario: e.conCoarrendatario,
     tarifa_mensual_pct: tarifaPct,
     tarifa_mensual_cop: tarifaCop,
-    iva_pct: IVA_PCT,
-    tarifa_mensual_con_iva_cop: tarifaCop === null ? null : redondear(tarifaCop * (1 + IVA_PCT / 100)),
+    iva_pct: e.ivaPct,
+    tarifa_mensual_con_iva_cop: tarifaCop === null ? null : redondear(tarifaCop * (1 + e.ivaPct / 100)),
     prima_vinculacion_pct: primaPct,
     prima_vinculacion_cop: pctDe(e.canonCop, primaPct),
     cashback_pct: cashbackPct,

@@ -17,6 +17,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { getCalibracion } from '@/lib/calibracion';
 import {
   calcularTarifas,
   leerTarifaOverride,
@@ -83,6 +84,7 @@ async function armar(e: FilaEstudio): Promise<TarifaEstudio> {
     via: await viaDelEstudio(e),
     conCoarrendatario,
     canonCop,
+    ivaPct: (await getCalibracion()).TARIFA_IVA,
     override,
   });
 

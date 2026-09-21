@@ -17,7 +17,6 @@ import {
   TARIFA_MENSUAL_PCT,
   PRIMA_VINCULACION_PCT,
   CASHBACK_PCT,
-  IVA_PCT,
 } from '@/modules/estudios/tarifas';
 
 let pasos = 0;
@@ -27,7 +26,6 @@ const ok = (c: boolean, m: string) => { assert.ok(c, m); pasos++; };
 ok(TARIFA_MENSUAL_PCT.automatica === 2.0, 'aprobado automatico: 2,0%');
 ok(TARIFA_MENSUAL_PCT.condicionada_coarrendatario === 2.5, 'condicionada con coarrendatario: 2,5%');
 ok(TARIFA_MENSUAL_PCT.revision_manual === 2.7, 'tras revision manual: 2,7%');
-ok(IVA_PCT === 19, 'IVA general Colombia 19%');
 
 // ── 5.2 Prima de vinculacion ────────────────────────────────
 ok(PRIMA_VINCULACION_PCT.solo === 20 && PRIMA_VINCULACION_PCT.con_coarrendatario === 10, 'prima 20% solo / 10% con coarrendatario');
@@ -36,19 +34,30 @@ ok(PRIMA_VINCULACION_PCT.solo === 20 && PRIMA_VINCULACION_PCT.con_coarrendatario
 ok(CASHBACK_PCT === 30, 'cashback 30% de las tarifas pagadas');
 
 // ── Cifras sobre un canon de 2.500.000 ──────────────────────
-const t = calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 2_500_000 });
+const t = calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 2_500_000, ivaPct: 19 });
 ok(t.tarifa_mensual_cop === 50_000, '2% de 2.500.000 = 50.000');
 ok(t.tarifa_mensual_con_iva_cop === 59_500, '50.000 + 19% IVA = 59.500');
 ok(t.prima_vinculacion_cop === 500_000, '20% de 2.500.000 = 500.000');
 ok(t.negociada === false && t.override === null, 'sin override no es negociada');
+ok(t.iva_pct === 19, 'el IVA sale del parametro TARIFA_IVA, no de una constante');
 
-const c = calcularTarifas({ via: 'condicionada_coarrendatario', conCoarrendatario: true, canonCop: 2_500_000 });
+// El IVA es parametro (TARIFA_IVA): si la ley lo cambia, cambia la cifra con IVA.
+const iva16 = calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 2_500_000, ivaPct: 16 });
+ok(iva16.iva_pct === 16 && iva16.tarifa_mensual_con_iva_cop === 58_000, '50.000 + 16% IVA = 58.000');
+
+// Complemento comercial §4.5: canon 4.000.000 + 19% IVA = base 4.760.000.
+const comercial = calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 4_760_000, ivaPct: 19 });
+ok(comercial.tarifa_mensual_cop === 95_200, '2% de 4.760.000 = 95.200');
+ok(comercial.tarifa_mensual_con_iva_cop === 113_288, '95.200 + 19% IVA = 113.288');
+ok(comercial.prima_vinculacion_cop === 952_000, '20% de 4.760.000 = 952.000');
+
+const c = calcularTarifas({ via: 'condicionada_coarrendatario', conCoarrendatario: true, canonCop: 2_500_000, ivaPct: 19 });
 ok(c.tarifa_mensual_cop === 62_500 && c.prima_vinculacion_cop === 250_000, 'con coarrendatario: 2,5% = 62.500 y prima 10% = 250.000');
 
-const m = calcularTarifas({ via: 'revision_manual', conCoarrendatario: false, canonCop: 1_000_000 });
+const m = calcularTarifas({ via: 'revision_manual', conCoarrendatario: false, canonCop: 1_000_000, ivaPct: 19 });
 ok(m.tarifa_mensual_cop === 27_000, '2,7% de 1.000.000 = 27.000');
 
-const sinCanon = calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: null });
+const sinCanon = calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: null, ivaPct: 19 });
 ok(sinCanon.tarifa_mensual_cop === null && sinCanon.prima_vinculacion_cop === null && sinCanon.tarifa_mensual_pct === 2, 'sin canon: porcentajes si, pesos no');
 
 // ── Override autorizado (nota de la Adenda §5) ──────────────
@@ -56,6 +65,7 @@ const o = calcularTarifas({
   via: 'automatica',
   conCoarrendatario: false,
   canonCop: 2_500_000,
+  ivaPct: 19,
   override: { tarifa_mensual_pct: 1.5, autorizado_por: 'gerencia-uuid', autorizado_en: '2026-09-07T00:00:00Z', motivo: 'convenio' },
 });
 ok(o.tarifa_mensual_pct === 1.5 && o.tarifa_mensual_cop === 37_500, 'el override manda sobre la tabla');
@@ -80,9 +90,9 @@ ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'basura' }) === 'automatica', 'un
 ok(viaPorRutaDeAprobacion({ ...base, viaMotor: 'revision_manual', aprobadoPorPonderacion: true }) === 'condicionada_coarrendatario', 'la ponderacion posterior manda sobre la via del titular');
 
 // ── Lo que imprime el contrato (#3: mismas cifras que el CRC, no las de la modalidad) ──
-const auto = textosTarifaContrato(calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 1_500_000 }));
+const auto = textosTarifaContrato(calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 1_500_000, ivaPct: 19 }));
 ok(auto.comision_texto === 'el 2,0% (más IVA)' && auto.prima_texto === '20%', 'automatico y solo -> "el 2,0% (más IVA)" y prima "20%"');
-const conCoa = textosTarifaContrato(calcularTarifas({ via: 'condicionada_coarrendatario', conCoarrendatario: true, canonCop: 1_500_000 }));
+const conCoa = textosTarifaContrato(calcularTarifas({ via: 'condicionada_coarrendatario', conCoarrendatario: true, canonCop: 1_500_000, ivaPct: 19 }));
 ok(conCoa.comision_texto === 'el 2,5% (más IVA)' && conCoa.prima_texto === '10%', 'con coarrendatario -> 2,5% y prima 10%');
 ok(textosTarifaContrato(o).comision_texto === 'el 1,5% (más IVA)', 'la tarifa negociada por Gerencia tambien llega al contrato');
 ok(textosTarifaContrato(null).prima_texto.startsWith('['), 'sin estudio (vista previa) -> marcador, no una cifra inventada');

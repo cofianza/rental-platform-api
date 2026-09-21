@@ -23,6 +23,7 @@ El modelo de datos de Cofianza 2.0 consta de **15 tablas** alojadas en **Supabas
 | 13 | `comentarios` | Notas y comentarios internos sobre un expediente |
 | 14 | `eventos_timeline` | Linea de tiempo de eventos relevantes de un expediente |
 | 15 | `autorizaciones_habeas_data` | Autorizaciones de consulta crediticia (Habeas Data, Ley 1581/2012 + Ley 1266/2008) |
+| 16 | `contrato_partes` | Partes del contrato V3: una fila por bloque de firma (arrendatario, coarrendatarios, arrendador) |
 
 ---
 
@@ -104,6 +105,7 @@ El modelo de datos de Cofianza 2.0 consta de **15 tablas** alojadas en **Supabas
 | expedientes → eventos_timeline | 1:N (expediente_id) |
 | plantillas_contrato → contratos | 1:N (plantilla_id) |
 | contratos → firmas | 1:N (contrato_id) |
+| contratos → contrato_partes | 1:N (contrato_id) |
 | pagos → facturas | 1:N (pago_id) |
 | solicitantes → autorizaciones_habeas_data | 1:N (solicitante_id) |
 | autorizaciones_habeas_data → estudios | 1:N (autorizacion_habeas_data_id) |
@@ -343,19 +345,24 @@ Contratos de arrendamiento generados a partir de un expediente aprobado. Pueden 
 | fecha_inicio | DATE | SI | NULL | Fecha de inicio de vigencia |
 | fecha_fin | DATE | SI | NULL | Fecha de fin de vigencia |
 | duracion_meses | SMALLINT | SI | NULL | Duracion en meses |
-| valor_arriendo | NUMERIC(12,2) | SI | NULL | Canon pactado en el contrato |
+| valor_arriendo | NUMERIC(12,2) | SI | NULL | Canon pactado en el contrato, SIN IVA. Base de cobertura (tope de 18 canones) en toda destinacion |
+| destinacion | VARCHAR(12) | SI | NULL | Flujo con que se genero el contrato (`vivienda` \| `comercial`), resuelto de `inmuebles.uso` al generar. NULL = contrato legacy V1/V4 |
+| iva_canon_pct | NUMERIC(5,2) | SI | NULL | IVA (%) sobre el canon, congelado al generar. Vivienda = 0 siempre. NULL solo en legacy |
+| base_calculo_fianza_cop | NUMERIC(14,2) | SI | generada | Columna generada (STORED): `valor_arriendo + round(valor_arriendo * iva_canon_pct / 100)`. Canon + IVA del canon: base de prima y tarifa. NULL en legacy. No alterar la expresion (recalcularia contratos firmados) |
 | created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
 | updated_at | TIMESTAMPTZ | NO | NOW() | Fecha de ultima modificacion |
 
 **Foreign Keys:** `expediente_id` → `expedientes(id)`, `plantilla_id` → `plantillas_contrato(id)`
 
-**Constraints:** `chk_contratos_fechas` CHECK (fecha_fin IS NULL OR fecha_inicio IS NULL OR fecha_fin > fecha_inicio)
+**Constraints:** `chk_contratos_fechas` CHECK (fecha_fin IS NULL OR fecha_inicio IS NULL OR fecha_fin > fecha_inicio), `contratos_destinacion_chk` CHECK (destinacion IN ('vivienda','comercial')), `contratos_iva_canon_chk` (destinacion e iva_canon_pct ambos NULL o ambos presentes; iva_canon_pct entre 0 y 100; vivienda solo con iva_canon_pct = 0)
 
 **Indices:** `idx_contratos_expediente`
 
 **Triggers:** `contratos_updated_at`
 
-**Tablas relacionadas:** expedientes, plantillas_contrato, firmas
+**Tablas relacionadas:** expedientes, plantillas_contrato, firmas, contrato_partes
+
+**Contratos V3 (migracion `20260921000001_contratos_v3_modelo.sql`):** `destinacion`, `iva_canon_pct` y `base_calculo_fianza_cop` son aditivas; la API de Entrega 1 aun no las lee ni escribe, y las filas legacy quedan en NULL.
 
 ---
 
@@ -533,6 +540,48 @@ Autorizaciones de consulta crediticia otorgadas por los solicitantes conforme a 
 **Indices:** `idx_autorizaciones_solicitante`, `idx_autorizaciones_token`, `idx_autorizaciones_estado`
 
 **Tablas relacionadas:** solicitantes, perfiles (generador del enlace), estudios (via estudios.autorizacion_habeas_data_id)
+
+---
+
+### 3.16 contrato_partes
+
+Partes del contrato V3: una fila = un bloque de firma. `orden` = orden de firma: arrendatario 1, luego los coarrendatarios, arrendador al final. Snapshot congelado al generar (no se relee de `solicitantes`/`perfiles`). Distinta de `contrato_firmantes`, que guarda el estado del sobre Auco y se reinserta en cada envio. Los contratos legacy V1/V4 no tienen filas. Migracion `20260921000001_contratos_v3_modelo.sql`.
+
+| Campo | Tipo | Nullable | Default | Descripcion |
+|-------|------|----------|---------|-------------|
+| id | UUID | NO | gen_random_uuid() | Clave primaria |
+| contrato_id | UUID | NO | - | Contrato al que pertenece la parte |
+| rol | VARCHAR(15) | NO | - | `arrendatario`, `coarrendatario` o `arrendador` |
+| orden | SMALLINT | NO | - | Orden de firma (arrendatario = 1) |
+| tipo_persona | tipo_persona | NO | 'natural' | Persona natural o juridica |
+| nombre | VARCHAR(300) | NO | - | Natural: nombre completo. Juridica: razon social |
+| tipo_documento | tipo_documento_id | NO | - | Tipo de documento (juridica = `nit`) |
+| numero_documento | VARCHAR(30) | NO | - | Numero de documento |
+| digito_verificacion | VARCHAR(2) | SI | NULL | DV del NIT |
+| representante_legal_nombre | VARCHAR(200) | SI | NULL | Representante legal (obligatorio si es juridica) |
+| representante_legal_tipo_documento | tipo_documento_id | SI | NULL | Tipo de documento del representante legal |
+| representante_legal_documento | VARCHAR(30) | SI | NULL | Documento del representante legal (obligatorio si es juridica) |
+| matricula_numero | VARCHAR(40) | SI | NULL | Arrendador: matricula de arrendador. Arrendatario comercial: matricula mercantil del establecimiento |
+| matricula_expedida_por | VARCHAR(150) | SI | NULL | Entidad que expidio la matricula |
+| email | VARCHAR(255) | SI | NULL | Email de la parte |
+| telefono | VARCHAR(20) | SI | NULL | Telefono de la parte |
+| direccion | VARCHAR(300) | SI | NULL | Direccion de notificacion |
+| municipio | VARCHAR(120) | SI | NULL | Municipio de notificacion |
+| estudio_id | UUID | SI | NULL | Evaluacion que cubre a esta persona |
+| created_at | TIMESTAMPTZ | NO | NOW() | Fecha de creacion |
+| updated_at | TIMESTAMPTZ | NO | NOW() | Fecha de ultima modificacion |
+
+**Foreign Keys:** `contrato_id` → `contratos(id)` ON DELETE CASCADE, `estudio_id` → `estudios(id)` ON DELETE SET NULL
+
+**Constraints:** `contrato_partes_rol_chk` CHECK (rol IN ('arrendatario','coarrendatario','arrendador')), `contrato_partes_orden_chk` (orden >= 1 y el arrendatario, y solo el, va en orden 1), `contrato_partes_juridica_chk` (juridica exige `tipo_documento = 'nit'` y representante legal con nombre y documento), `contrato_partes_orden_uq` UNIQUE (contrato_id, orden), `contrato_partes_documento_uq` UNIQUE (contrato_id, tipo_documento, numero_documento)
+
+**Indices:** `contrato_partes_rol_unico_uq` UNIQUE parcial (contrato_id, rol) WHERE rol <> 'coarrendatario': a lo sumo un arrendatario y un arrendador por contrato
+
+**Triggers:** `contrato_partes_updated_at`
+
+**RLS:** habilitado sin policies (datos personales; solo service_role)
+
+**Tablas relacionadas:** contratos, estudios
 
 ---
 
@@ -856,6 +905,7 @@ El expediente es la entidad central del modelo. Desde el se derivan:
 | `idx_estudios_expediente` | estudios | expediente_id | Listar estudios de un expediente |
 | `idx_contratos_expediente` | contratos | expediente_id | Listar contratos de un expediente |
 | `idx_firmas_contrato` | firmas | contrato_id | Listar firmas de un contrato |
+| `contrato_partes_rol_unico_uq` | contrato_partes | contrato_id, rol | Parcial UNIQUE: WHERE rol <> 'coarrendatario'. Un arrendatario y un arrendador por contrato |
 | `idx_pagos_expediente` | pagos | expediente_id | Listar pagos de un expediente |
 | `idx_pagos_estado` | pagos | estado | Filtrar pagos por estado |
 | `idx_facturas_expediente` | facturas | expediente_id | Listar facturas de un expediente |
