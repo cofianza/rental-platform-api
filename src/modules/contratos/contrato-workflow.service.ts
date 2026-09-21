@@ -23,6 +23,8 @@ interface ContratoRow {
   expediente_id: string;
   estado: EstadoContrato;
   storage_key: string | null;
+  /** NOT NULL = contrato V3 (asistente). */
+  destinacion: string | null;
 }
 
 interface TransitionRpcResult {
@@ -45,6 +47,13 @@ export async function executeContratoTransition(
   const contrato = await fetchContrato(contratoId);
   const currentState = contrato.estado;
   const targetState = input.nuevo_estado;
+
+  // Contratos V3: el workflow legacy (revisión, aprobación, envío a firma) no
+  // aplica; mientras el asistente no cubra la firma solo se cancela el borrador.
+  // Incluye el camino a 'pendiente_firma'.
+  if (contrato.destinacion && targetState !== 'cancelado') {
+    throw AppError.badRequest('Por ahora este contrato solo se puede cancelar.', 'CONTRATO_V3_TRANSICION_NO_PERMITIDA');
+  }
 
   // Validar que la transicion es estructuralmente valida
   if (!isContratoTransitionValid(currentState, targetState)) {
@@ -262,6 +271,8 @@ export async function getContratoTransitions(contratoId: string, user: AuthUser)
   // el POST rechazaría con 403 (inmobiliaria/propietario solo pueden terminar
   // o cancelar; gerencia_consulta es solo-lectura → ninguna).
   let transiciones = getAvailableContratoTransitions(contrato.estado);
+  // Contratos V3: mismo límite que executeContratoTransition (solo cancelar).
+  if (contrato.destinacion) transiciones = transiciones.filter((t) => t.estado === 'cancelado');
   if (user.rol === 'inmobiliaria' || user.rol === 'propietario') {
     transiciones = transiciones.filter((t) => OWNER_TERMINATE_STATES.includes(t.estado));
   } else if (user.rol !== 'administrador' && user.rol !== 'operador_analista') {
@@ -337,7 +348,7 @@ export async function getContratoTransitionHistory(contratoId: string, user: Aut
 async function fetchContrato(id: string): Promise<ContratoRow> {
   const { data, error } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, estado, storage_key')
+    .select('id, expediente_id, estado, storage_key, destinacion')
     .eq('id', id)
     .single();
 

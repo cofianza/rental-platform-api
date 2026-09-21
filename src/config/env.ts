@@ -244,6 +244,14 @@ const envSchema = z.object({
   // arrendatario + arrendador. Activar SOLO con visto bueno legal (cambia la
   // naturaleza de la firma de Cofianza: de OTP-validada a sello institucional).
   COFIANZA_AUTOFIRMA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+
+  // Contratos V3 (asistente de vivienda). OFF por defecto y en produccion hasta
+  // la Entrega 6: con el flag apagado el asistente responde "no habilitado" sin
+  // leer la base. Encendido, los inmuebles de una inmobiliaria usan SOLO el
+  // asistente (el generar legacy los rechaza); el propietario sin inmobiliaria
+  // sigue en el flujo anterior. Para QA local: CONTRATOS_V3_ENABLED=true en el
+  // .env.local de la API (ojo: la base es la de produccion).
+  CONTRATOS_V3_ENABLED: z.string().default('false').transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

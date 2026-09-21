@@ -46,12 +46,18 @@ const ESPERADO: Record<string, number> = {
   // Contratos comercial §12.1 / §12.2.
   TOPE_CANON_COMERCIAL: 4_000_000,
   TARIFA_IVA: 19,
+  // Contratos V3 §14.
+  TOLERANCIA_CANON: 15,
+  TOPE_CANON_INGRESO_RECALCULO: 40,
+  VIGENCIA_MESES_DEFECTO: 12,
 };
 for (const [clave, valor] of Object.entries(ESPERADO)) {
   ok(CALIBRACION_DEFAULT[clave as keyof typeof CALIBRACION_DEFAULT] === valor, `${clave} = ${valor} (Adenda §11)`);
 }
 ok(CALIBRACION_DEFAULT.CANON_MAX_TRANSITORIO === 3_000_000, 'CANON_MAX_TRANSITORIO arranca con lo que corre en produccion (3.000.000, Flujo §4.4)');
-ok(PARAMETROS.length === 15, 'quince parametros en el panel (10 de la Adenda 1 + 3 de la Adenda 2 + 2 de contratos comercial)');
+ok(PARAMETROS.length === 18, 'dieciocho parametros en el panel (10 de la Adenda 1 + 3 de la Adenda 2 + 2 de contratos comercial + 3 de contratos V3)');
+ok(validarParametro('VIGENCIA_MESES_DEFECTO', 12.5)?.error !== null, 'la vigencia por defecto es en meses enteros');
+ok(validarParametro('TOLERANCIA_CANON', 51)?.error !== null, 'la tolerancia del canon no pasa de 50');
 ok(validarParametro('UMBRAL_SCORE_RECHAZO', 449)?.error !== null, 'el corte no baja de 450: la tabla de V1 no tiene banda debajo');
 ok(PARAMETROS.every((p) => p.descripcion.length > 10 && p.seccion.length > 0), 'todos con descripcion y seccion');
 ok(PARAMETROS.find((p) => p.clave === 'FACTOR_AJUSTE_INGRESO')?.advertencia?.includes('46%') === true, 'la advertencia de la Adenda §1.1 (46% / 74,7%) queda registrada');

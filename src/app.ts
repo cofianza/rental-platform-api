@@ -34,6 +34,7 @@ import { expedienteEstudiosRouter, estudiosRouter, publicEstudiosRouter, proveed
 import { expedienteAutorizacionRouter, publicAutorizacionRouter } from '@/modules/autorizaciones/autorizaciones.routes';
 import plantillasRouter from '@/modules/plantillas/plantillas.routes';
 import { expedienteContratosRouter, contratosRouter, inmuebleContratoPreviewRouter } from '@/modules/contratos/contratos.routes';
+import { asistenteV3Router } from '@/modules/contratos/v3/asistente.routes';
 import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes';
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
 import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
@@ -140,6 +141,8 @@ app.use('/api/v1/admin/inmobiliarias', adminInmobiliariasRouter);
 app.use('/api/v1/empresa', empresaRouter);
 app.use('/api/v1/plantillas-contrato', plantillasRouter);
 app.use('/api/v1/expedientes/:expedienteId/contratos', expedienteContratosRouter);
+// Asistente de contratos V3 (Entrega 3); con CONTRATOS_V3_ENABLED apagado responde "no habilitado".
+app.use('/api/v1/expedientes/:expedienteId/contrato-v3', asistenteV3Router);
 app.use('/api/v1/inmuebles/:inmuebleId', inmuebleContratoPreviewRouter);
 app.use('/api/v1/contratos', contratoWorkflowRouter);
 app.use('/api/v1/contratos', contratoFirmadoRouter);

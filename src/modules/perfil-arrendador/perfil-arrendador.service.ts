@@ -12,6 +12,7 @@ const LOGO_URL_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 días
 const PERFIL_ARRENDADOR_FIELDS = `
   id, nombre, apellido, rol, tipo_documento, numero_documento, nit,
   razon_social, representante_legal,
+  representante_legal_tipo_documento, representante_legal_documento,
   afianzadora_tipo, afianzadora_actual,
   domicilio_direccion, domicilio_ciudad, ciudad,
   municipio_codigo, municipio_nombre,
@@ -63,6 +64,8 @@ const REQUIRED_FIELDS_INMOBILIARIA = [
   'nit',
   'matricula_arrendador',
   'representante_legal',
+  // El documento del representante legal NO va aquí: solo lo exige el
+  // asistente V3 (bloqueo G1), así el flujo legacy no cambia.
 ] as const;
 
 const FIELD_LABELS: Record<string, string> = {
@@ -197,6 +200,10 @@ export async function updateMiPerfilArrendador(
     update.razon_social = normalizeEmpty(input.razon_social);
     // NIT de la inmobiliaria (sale en el contrato).
     update.nit = normalizeEmpty(input.nit);
+    // Documento del representante legal (Contratos V3). El schema ya exige los
+    // dos o ninguno, igual que el CHECK de la BD.
+    update.representante_legal_tipo_documento = normalizeEmpty(input.representante_legal_tipo_documento);
+    update.representante_legal_documento = normalizeEmpty(input.representante_legal_documento);
     // Afianzadora/aseguradora actual (dato de conversión, tarea 1.6). El nombre
     // solo tiene sentido si el tipo es afianzadora/aseguradora; con 'ninguna' o
     // vacío lo limpiamos para no dejar un dato contradictorio.

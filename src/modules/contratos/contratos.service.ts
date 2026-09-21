@@ -35,6 +35,7 @@ const CONTRATO_SELECT = `
   datos_variables, generado_por, fecha_generacion,
   storage_key, nombre_archivo, plantilla_version,
   storage_key_firmado, nombre_archivo_firmado,
+  destinacion, numero,
   created_at, updated_at
 `;
 
@@ -42,7 +43,7 @@ const CONTRATO_LIST_SELECT = `
   id, expediente_id, plantilla_id, version, estado,
   fecha_inicio, duracion_meses, valor_arriendo,
   nombre_archivo, fecha_generacion, plantilla_version,
-  storage_key, created_at, updated_at
+  storage_key, destinacion, numero, created_at, updated_at
 `;
 
 const VERSION_SELECT = `
@@ -352,6 +353,7 @@ interface ExpedienteData {
     ubicacion_detallada?: string | null;
     matricula_inmobiliaria?: string | null;
     propietario_id: string;
+    inmobiliaria_id?: string | null;
     uso?: string | null;
     contrato_tipo_storage_key?: string | null;
     contrato_tipo_nombre_archivo?: string | null;
@@ -419,7 +421,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio,
       inmuebles!expedientes_inmueble_id_fkey(
         id, direccion, ciudad, barrio, departamento, valor_arriendo, parqueadero, parqueaderos,
-        administracion, propietario_id, uso,
+        administracion, propietario_id, inmobiliaria_id, uso,
         propiedad_horizontal, cuarto_util, ubicacion_detallada, matricula_inmobiliaria,
         contrato_tipo_storage_key, contrato_tipo_nombre_archivo
       ),
@@ -456,6 +458,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
       parqueaderos: number | null;
       administracion: number | null;
       propietario_id: string;
+      inmobiliaria_id: string | null;
       uso: string | null;
       matricula_inmobiliaria: string | null;
       contrato_tipo_storage_key: string | null;
@@ -1436,14 +1439,26 @@ export async function enviarContratoAFirma(
 ): Promise<{ ok: true; message: string }> {
   const { data: contratoRow } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, expediente_id, storage_key')
+    .select('id, estado, expediente_id, storage_key, destinacion')
     .eq('id', contratoId)
     .maybeSingle();
-  const c = contratoRow as { id: string; estado: string; expediente_id: string; storage_key: string | null } | null;
+  const c = contratoRow as {
+    id: string; estado: string; expediente_id: string; storage_key: string | null; destinacion: string | null;
+  } | null;
   if (!c) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
   // Ownership (cierra IDOR: la inmobiliaria A no puede enviar a firma un
   // contrato de la agencia B por UUID). No-op para roles internos/sin identidad.
   await assertExpedienteAccess(c.expediente_id, userId, userRol);
+
+  // Contratos V3: su PDF es la vista previa de revisión (con marca de agua) y
+  // sus firmantes salen de contrato_partes, no de este envío legacy. Cubre
+  // también la transición a 'pendiente_firma' del workflow, que delega aquí.
+  if (c.destinacion) {
+    throw AppError.badRequest(
+      'El envío a firma de este contrato se hará desde el asistente de contratos (próximamente).',
+      'CONTRATO_V3_FIRMA_NO_DISPONIBLE',
+    );
+  }
 
   if (['firmado', 'vigente', 'finalizado', 'cancelado'].includes(c.estado)) {
     throw AppError.badRequest('El contrato ya está firmado o cerrado; no se puede enviar a firma.', 'CONTRATO_ESTADO_INVALIDO');
@@ -1848,6 +1863,36 @@ export async function generarContrato(
   const { expediente: expRow, data: expData } = await fetchExpedienteData(expedienteId);
   const expedienteNumero = (expRow as { numero?: string }).numero || expedienteId;
 
+  // 1a. Contratos V3: el flujo anterior no crea un segundo contrato vivo junto a
+  // un borrador del asistente, y con el flag encendido no contrata inmuebles de
+  // inmobiliaria (esos van por el asistente). Antes de la reserva y de cualquier
+  // escritura; cubre /generar, /aprobar-condicionado y /generar-contrato
+  // (aprobarYGenerarContrato se traga este error y el estudio queda aprobado).
+  // La fila V3 se busca aunque el flag esté apagado: el QA local escribe en la
+  // misma base que producción.
+  let usaAsistente = env.CONTRATOS_V3_ENABLED && !!expData.inmueble.inmobiliaria_id;
+  if (!usaAsistente) {
+    const { data: v3Vivo, error: v3Err } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .not('destinacion', 'is', null)
+      .not('estado', 'in', '(cancelado,finalizado)')
+      .limit(1);
+    if (v3Err) {
+      // Sin poder descartar un borrador V3 no se crea otro contrato (fail-closed).
+      logger.error({ error: v3Err, expedienteId }, 'No se pudo verificar si el estudio tiene contrato V3');
+      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los datos del estudio. Intenta de nuevo en un momento.');
+    }
+    usaAsistente = (v3Vivo ?? []).length > 0;
+  }
+  if (usaAsistente) {
+    throw AppError.conflict(
+      'Este estudio usa el asistente de contratos. Crea o continúa el contrato desde allí.',
+      'CONTRATO_USA_ASISTENTE',
+    );
+  }
+
   // 1b. Bloqueo: el arrendador debe tener completos los datos del contrato.
   // Si falta cualquiera (domicilio, cuenta de recaudo, contacto, matricula /
   // representante legal para inmobiliaria), el PDF saldria con campos en
@@ -2208,7 +2253,13 @@ export async function previewContratoVerificacion(
     plantilla_id: string | null;
     datos_variables: Record<string, unknown> | null;
     plantilla_version: number | null;
+    destinacion: string | null;
   };
+  // Contratos V3: sin plantilla_id caería a la plantilla legacy activa y la
+  // pintaría con los datos del asistente — mostraría otro documento.
+  if (contrato.destinacion) {
+    throw AppError.badRequest('Este contrato se edita desde el asistente de contratos.', 'CONTRATO_V3_USA_ASISTENTE');
+  }
 
   const datosVariables = contrato.datos_variables;
   if (!datosVariables || Object.keys(datosVariables).length === 0) {
@@ -2501,8 +2552,14 @@ export async function regenerarContrato(
     nombre_archivo: string | null; plantilla_version: number | null;
     generado_por: string | null; fecha_generacion: string | null;
     fecha_inicio: string | null; duracion_meses: number | null;
-    valor_arriendo: number | null;
+    valor_arriendo: number | null; destinacion: string | null;
   };
+
+  // Contratos V3: el borrador lo regenera el asistente; aquí se sobrescribiría
+  // con un render de la plantilla legacy.
+  if (row.destinacion) {
+    throw AppError.badRequest('Este contrato se edita desde el asistente de contratos.', 'CONTRATO_V3_USA_ASISTENTE');
+  }
 
   if (row.estado !== 'borrador') {
     throw AppError.badRequest(

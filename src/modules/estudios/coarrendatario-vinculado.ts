@@ -34,6 +34,13 @@ export interface CoarrendatarioVinculado {
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
 /**
+ * Estados de expediente_coarrendatarios que cuentan como vinculado. El
+ * asistente de contratos V3 lee con los MISMOS estados, para que la prima del
+ * CRC y las partes del contrato no se contradigan.
+ */
+export const ESTADOS_VINCULADO = ['aceptado', 'estudio_completado'] as const;
+
+/**
  * El coarrendatario vinculado al expediente: acepto la invitacion (tiene su
  * propia autorizacion y su estudio) y no la declino. Una invitacion todavia
  * pendiente NO vincula a nadie. Best-effort: ante un error de lectura devuelve
@@ -44,7 +51,7 @@ export async function coarrendatarioVinculado(expedienteId: string): Promise<Coa
     const { data, error } = await db('expediente_coarrendatarios')
       .select('id, nombre, estudio_id')
       .eq('expediente_id', expedienteId)
-      .in('estado', ['aceptado', 'estudio_completado'])
+      .in('estado', ESTADOS_VINCULADO)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();

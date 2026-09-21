@@ -23,6 +23,16 @@ export const updatePerfilArrendadorSchema = z.object({
   afianzadora_tipo: z.enum(['afianzadora', 'aseguradora', 'ninguna']).optional().nullable(),
   afianzadora_actual: z.string().max(200).optional().nullable(),
   representante_legal: z.string().max(200).optional().nullable(),
+  // Documento del representante legal (Contratos V3): la parte del arrendador
+  // lo imprime. Solo lo exige el asistente V3; el flujo legacy no lo pide.
+  representante_legal_tipo_documento: z.enum(['cc', 'ce', 'pasaporte']).nullable().optional(),
+  // Se guarda sin puntos, espacios ni guiones. '' = vacío (el service lo vuelve null).
+  representante_legal_documento: z
+    .string()
+    .transform((s) => s.replace(/[.\s-]/g, ''))
+    .refine((s) => s === '' || /^[A-Za-z0-9]{3,30}$/.test(s), 'Número de documento inválido')
+    .nullable()
+    .optional(),
   domicilio_direccion: z.string().max(200).optional().nullable(),
   domicilio_ciudad: z.string().max(120).optional().nullable(),
   // Municipio DANE para la factura electrónica cuando el arrendador paga el
@@ -45,6 +55,13 @@ export const updatePerfilArrendadorSchema = z.object({
   cuenta_recaudo_numero: z.string().max(40).optional().nullable(),
   cuenta_recaudo_titular_nombre: z.string().max(200).optional().nullable(),
   cuenta_recaudo_titular_nit: z.string().max(40).optional().nullable(),
-});
+}).refine(
+  // Tipo y número van juntos (la BD tiene el mismo CHECK): los dos o ninguno.
+  (d) => !d.representante_legal_tipo_documento === !d.representante_legal_documento,
+  {
+    message: 'Completa el tipo y el número de documento del representante legal, o deja ambos vacíos',
+    path: ['representante_legal_documento'],
+  },
+);
 
 export type UpdatePerfilArrendadorInput = z.infer<typeof updatePerfilArrendadorSchema>;

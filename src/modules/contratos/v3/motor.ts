@@ -1036,7 +1036,7 @@ export function asientosDeHtml(doc: string): Asiento[] {
 
 // ── Verificaciones (diseño §4.2.6–7) ──
 
-const MARCADOR = /[Xx]{3,}|_{3,}|▢|⟦|[{}]|NO APLICA|\b(undefined|null|NaN)\b/;
+export const MARCADOR = /[Xx]{3,}|_{3,}|▢|⟦|[{}]|NO APLICA|\b(undefined|null|NaN)\b/;
 
 export function verificarSinMarcadores(l: Linea[], o: { sinCoarrendatario: boolean }): void {
   for (const { kind, texto } of l) {

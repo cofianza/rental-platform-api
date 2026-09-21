@@ -12,7 +12,7 @@ const passwordSchema = z
  * Valida el digito de verificacion del NIT colombiano con algoritmo modulo-11.
  * Formato esperado: "XXXXXXXXX-D" donde D es el digito de verificacion.
  */
-function validateNitModulo11(nit: string): boolean {
+export function validateNitModulo11(nit: string): boolean {
   const match = nit.match(/^(\d{1,15})-(\d)$/);
   if (!match) return false;
 

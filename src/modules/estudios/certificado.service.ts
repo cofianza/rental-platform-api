@@ -641,8 +641,10 @@ export async function generarCertificado(
   if (existingCert) {
     codigo = existingCert.codigo;
     version = existingCert.version + 1;
-    // Delete old PDF from storage
-    await supabase.storage.from(BUCKET_NAME).remove([existingCert.pdf_storage_key]);
+    // El PDF anterior NO se borra (Contratos V3, Entrega 3): un contrato puede
+    // citar esa version del CRC ("CRC N° … del {fecha_emision}") y su snapshot
+    // guarda pdf_storage_key. Cada version tiene su propia llave (uuid), asi que
+    // conservarlo no pisa nada.
   } else {
     codigo = await generateCertificateCode();
     version = 1;

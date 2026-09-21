@@ -130,6 +130,12 @@ export interface ContextoPortabilidad {
   topeCop?: number;
   /** Tolerancia en puntos porcentuales. Por defecto, el 15 del §4.3. */
   toleranciaPct?: number;
+  /**
+   * Maximo canon/ingreso en porcentaje. Por defecto, el 40 de la regla dura
+   * (V3_CANON_INGRESO_MAXIMO). Solo lo cambia el asistente de contratos V3
+   * (TOPE_CANON_INGRESO_RECALCULO, §14); la reasignacion usa el default.
+   */
+  canonIngresoMaxPct?: number;
 }
 
 interface DatosComunes {
@@ -215,6 +221,7 @@ export function relacionCanonIngresoPct(
  */
 export function evaluarPortabilidad(contexto: ContextoPortabilidad): VeredictoPortabilidad {
   const toleranciaPct = contexto.toleranciaPct ?? PORTABILIDAD_TOLERANCIA_PCT;
+  const canonIngresoMaxPct = contexto.canonIngresoMaxPct ?? V3_CANON_INGRESO_MAXIMO;
   const topeCop = contexto.topeCop ?? getTopeCanon();
 
   const canonOriginalCop = aMonto(contexto.canonOriginal);
@@ -237,7 +244,7 @@ export function evaluarPortabilidad(contexto: ContextoPortabilidad): VeredictoPo
   const veredictoCanonIngreso: VeredictoCanonIngreso =
     canonIngresoExactoPct === null
       ? 'no_evaluable'
-      : canonIngresoExactoPct > V3_CANON_INGRESO_MAXIMO
+      : canonIngresoExactoPct > canonIngresoMaxPct
         ? 'no_cumple'
         : 'cumple';
 
@@ -301,7 +308,7 @@ export function evaluarPortabilidad(contexto: ContextoPortabilidad): VeredictoPo
     return noPortable(
       'canon_ingreso_excede',
       `Con el canon de la nueva propiedad, la relacion canon/ingreso quedaria en ` +
-        `${(canonIngresoDestinoPct as number).toFixed(2)}%, por encima del maximo de ${V3_CANON_INGRESO_MAXIMO}%.`,
+        `${(canonIngresoDestinoPct as number).toFixed(2)}%, por encima del maximo de ${canonIngresoMaxPct}%.`,
     );
   }
 

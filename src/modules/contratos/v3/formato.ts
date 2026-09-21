@@ -55,6 +55,14 @@ export function sumarMeses(iso: string, meses: number): string {
   return `${a}-${dos(m)}-${dos(Math.min(dia, diasDelMes(a, m)))}`;
 }
 
+/**
+ * Día calendario (AAAA-MM-DD) de un instante en Bogotá: UTC−5 todo el año, sin
+ * horario de verano. 2026-07-24T00:30Z → '2026-07-23'.
+ */
+export function fechaBogota(d: Date | string): string {
+  return new Date(new Date(d).getTime() - 5 * 3_600_000).toISOString().slice(0, 10);
+}
+
 // ── Números ──
 
 /** "2,5" (es-CO, hasta 2 decimales). */

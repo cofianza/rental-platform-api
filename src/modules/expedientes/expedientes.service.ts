@@ -3,6 +3,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { ESTADOS_EXPEDIENTE } from './expediente-state-machine';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { env } from '@/config';
 import {
   esMiembroNoOwnerDeOrg,
   esOwnerDeOrg,
@@ -74,7 +75,7 @@ const EXPEDIENTE_DETAIL_SELECT = `
   duracion_contrato_meses, fecha_inicio_contrato,
   cancelado_at, motivo_cancelacion, estado_pre_cancelacion, motivo_rechazo,
   created_at, updated_at,
-  inmuebles!expedientes_inmueble_id_fkey(id, codigo, direccion, ciudad, departamento, tipo, estado, valor_arriendo),
+  inmuebles!expedientes_inmueble_id_fkey(id, codigo, direccion, ciudad, departamento, tipo, estado, valor_arriendo, inmobiliaria_id),
   solicitantes(id, nombre, apellido, tipo_documento, numero_documento, email, telefono),
   analista:perfiles!expedientes_analista_id_fkey(id, nombre, apellido),
   creador:perfiles!expedientes_creado_por_fkey(id, nombre, apellido)
@@ -304,6 +305,10 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
     solicitante: solicitantes || null,
     analista: analista || null,
     creador: creador || null,
+    // Contratos V3: el web decide aquí si el contrato va por el asistente, sin
+    // otra petición. Mismo criterio que el asistente (flag + inmueble de inmobiliaria).
+    contratos_v3:
+      env.CONTRATOS_V3_ENABLED && !!(inmuebles as { inmobiliaria_id?: string | null } | null)?.inmobiliaria_id,
   };
 }
 

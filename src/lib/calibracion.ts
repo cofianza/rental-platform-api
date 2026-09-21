@@ -36,7 +36,10 @@ export type ClaveCalibracion =
   | 'UMBRAL_SCORE_RECHAZO'
   | 'UMBRAL_SCORE_REVISION'
   | 'UMBRAL_SIMILITUD_BIOMETRICA'
-  | 'TARIFA_IVA';
+  | 'TARIFA_IVA'
+  | 'TOLERANCIA_CANON'
+  | 'TOPE_CANON_INGRESO_RECALCULO'
+  | 'VIGENCIA_MESES_DEFECTO';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -207,6 +210,39 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     seccion: 'Contratos comercial §3.3.2 / §12.2',
     descripcion: 'Tarifa general de IVA (%). Se suma a la tarifa mensual de la fianza y, en arrendamiento comercial, al canon.',
     advertencia: 'Es la tarifa legal: cambiarla solo si cambia la ley. Aplica a lo que se emita desde el cambio (hasta 60 s de cache). La facturacion electronica usa configuracion_sistema.iva_concepto_garantia (hoy 0, exento): pendiente de Gerencia.',
+  },
+  // Contratos V3 §14. Rigen SOLO para el asistente de contratos: el motor sigue
+  // con su 40% (scorecard.ts) y la reasignacion con su 15% (portabilidad.ts).
+  // Quedan fuera PUNTOS_ADICIONALES_IPC (Ley 820 art. 20 lo fija; nadie lo
+  // leeria), MAX_CLAUSULAS (Entrega 4) y DIAS_EXPIRACION_FIRMA (Entrega 5).
+  {
+    clave: 'TOLERANCIA_CANON',
+    valorDefault: 15,
+    min: 0,
+    max: 50,
+    entero: false,
+    seccion: 'Contratos V3 §14 / §2.2',
+    descripcion: 'Maximo (%) en que el canon pactado en el contrato puede superar el canon evaluado sin exigir una nueva evaluacion. Inclusivo.',
+    advertencia: 'Solo el contrato; la reasignacion conserva su 15 %.',
+  },
+  {
+    clave: 'TOPE_CANON_INGRESO_RECALCULO',
+    valorDefault: 40,
+    min: 10,
+    max: 100,
+    entero: false,
+    seccion: 'Contratos V3 §14 / §2.2',
+    descripcion: 'Relacion canon/ingreso maxima (%) al recalcular con un canon pactado mayor que el evaluado. Si el ingreso no se conoce, no bloquea.',
+    advertencia: 'No cambia la regla dura del motor (40 %).',
+  },
+  {
+    clave: 'VIGENCIA_MESES_DEFECTO',
+    valorDefault: 12,
+    min: 2,
+    max: 120,
+    entero: true,
+    seccion: 'Contratos V3 §14',
+    descripcion: 'Vigencia (meses) con la que el asistente precarga el contrato cuando el estudio no trae una duracion.',
   },
 ];
 
