@@ -426,6 +426,17 @@ describe('G1 — perfil del arrendador', () => {
       }),
     ]);
   });
+
+  it('bloquea antes de generar si la matrícula no cabe en contrato_partes (40)', () => {
+    const b = bloqueos({ arrendador: { ...PERFIL, matricula_arrendador: 'M'.repeat(41) } });
+    expect(b).toEqual([
+      expect.objectContaining({
+        codigo: 'PERFIL_ARRENDADOR_INCOMPLETO',
+        detalle: ['Matrícula de arrendador (máximo 40 caracteres)'],
+      }),
+    ]);
+    expect(bloqueos({ arrendador: { ...PERFIL, matricula_arrendador: 'M'.repeat(40) } })).toEqual([]);
+  });
 });
 
 // 9. armarDatosVivienda → plantilla real

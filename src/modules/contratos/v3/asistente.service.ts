@@ -438,8 +438,13 @@ export async function iniciarContrato(
     .single();
 
   if (error || !data) {
-    // Otra pestaña lo inició primero: la reserva es de este mismo estudio, no se suelta.
-    if (error?.code === '23505') return { estado: armarEstado(await cargar(expedienteId), hoy), creado: false };
+    // Otra pestaña lo inició primero: la reserva es de este mismo estudio, no se suelta. Si
+    // la hizo ESTA petición, solo ella tiene los afectados (la otra recibió ya_reservado y
+    // lista vacía): el contrato vivo existe, así que el aviso se envía aquí.
+    if (error?.code === '23505') {
+      avisarAfectados(reserva, expedienteId);
+      return { estado: armarEstado(await cargar(expedienteId), hoy), creado: false };
+    }
     logger.error({ expedienteId, error: error?.message }, 'Asistente V3: no se pudo crear el borrador');
     if (reserva.reservado) await liberarReservaDeExpediente(expedienteId);
     throw new AppError(500, 'CONTRATO_CREATE_ERROR', 'No se pudo iniciar el contrato. Intenta de nuevo.');

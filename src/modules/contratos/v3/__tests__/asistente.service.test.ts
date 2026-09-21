@@ -432,7 +432,7 @@ describe('iniciarContrato', () => {
     expect(opsDe('contratos', 'insert')).toHaveLength(0);
   });
 
-  it('23505 (otra pestaña ganó): devuelve la fila existente y NO libera la reserva', async () => {
+  it('23505 (otra pestaña ganó): devuelve la fila existente, NO libera y avisa si esta petición reservó', async () => {
     mockReservar.mockImplementation(async () => {
       ops.push({ table: 'fn', method: 'reservar', args: [] });
       return reserva({ afectados: [AFECTADO] });
@@ -446,7 +446,8 @@ describe('iniciarContrato', () => {
     expect(r.creado).toBe(false);
     expect(r.estado.contrato!.id).toBe(CTO);
     expect(mockLiberar).not.toHaveBeenCalled();
-    expect(mockAvisar).not.toHaveBeenCalled();
+    // Solo esta petición recibió los afectados; el contrato vivo existe → se avisa aquí.
+    expect(mockAvisar).toHaveBeenCalledTimes(1);
   });
 
   it('otro error del INSERT con reservado:true libera la reserva y no avisa', async () => {

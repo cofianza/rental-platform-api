@@ -321,6 +321,12 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
   if (!partirNit(p.nit)) faltan.push('NIT con dígito de verificación válido (ej. 900.123.456-8)');
   if (vacio(p.representante_legal_tipo_documento) || vacio(p.representante_legal_documento))
     faltan.push('Tipo y número de documento del representante legal');
+  // Los anchos de contrato_partes (migración 20260921000001) son el límite real: el perfil
+  // admite matrícula de 50 caracteres y generar fallaría con 500 al insertar la parte.
+  const largo = (v: string | null | undefined) => (v ?? '').trim().length;
+  if (largo(p.matricula_arrendador) > 40) faltan.push('Matrícula de arrendador (máximo 40 caracteres)');
+  if (largo(p.representante_legal) > 200) faltan.push('Representante legal (máximo 200 caracteres)');
+  if (largo(p.matricula_expedida_por) > 150) faltan.push('Matrícula expedida por (máximo 150 caracteres)');
   if (faltan.length)
     b(
       'PERFIL_ARRENDADOR_INCOMPLETO',
