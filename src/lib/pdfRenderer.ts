@@ -15,6 +15,22 @@
 import type { Browser } from 'puppeteer';
 import puppeteer from 'puppeteer';
 import { logger } from '@/lib/logger';
+import { AppError } from '@/lib/errors';
+
+/**
+ * Opciones del PDF con cabecera/pie propios (contratos V3). Sin ellas el
+ * render es el legacy: márgenes en cero y el HTML manda con su `@page`.
+ * Márgenes en pulgadas ('0.986in'): Chromium rechaza 'pt' ("Failed to
+ * parse parameter value"). `fuentes` son shorthands CSS ('bold 10pt Gelasio')
+ * que deben cargar antes de imprimir; si una no carga el PDF saldría con la
+ * fuente de respaldo del sistema, así que se aborta.
+ */
+export interface OpcionesPdf {
+  margin: { top: string; right: string; bottom: string; left: string };
+  headerTemplate: string;
+  footerTemplate: string;
+  fuentes: string[];
+}
 
 let cachedBrowser: Browser | null = null;
 let inflightLaunch: Promise<Browser> | null = null;
@@ -67,7 +83,7 @@ async function getBrowser(): Promise<Browser> {
  * El HTML debe traer su propio `<style>` con `@page { size: Letter; ... }`
  * para controlar márgenes; el renderer respeta esos estilos.
  */
-export async function renderHtmlToPdf(html: string): Promise<Buffer> {
+export async function renderHtmlToPdf(html: string, o?: OpcionesPdf): Promise<Buffer> {
   const startTotal = Date.now();
   let browser: Browser;
   try {
@@ -86,13 +102,36 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
     await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
     logger.info({ ms: Date.now() - startContent }, 'PDF renderer: setContent listo');
 
+    // Expresión en string (no función) porque el tsconfig no trae la lib DOM.
+    // Un data URI corrupto rechaza la promesa; una familia sin @font-face da 0.
+    for (const f of o?.fuentes ?? []) {
+      const n = await page
+        .evaluate(`document.fonts.load(${JSON.stringify(f)}).then(r => r.length)`)
+        .catch(() => 0);
+      if (!n) {
+        throw new AppError(500, 'FUENTE_NO_CARGADA', `No cargó la fuente ${f}`, { fuente: f });
+      }
+    }
+
     const startPdf = Date.now();
-    const pdf = await page.pdf({
-      format: 'Letter',
-      printBackground: true,
-      preferCSSPageSize: true,
-      margin: { top: '0', right: '0', bottom: '0', left: '0' },
-    });
+    const pdf = await page.pdf(
+      o
+        ? {
+            format: 'Letter',
+            printBackground: true,
+            preferCSSPageSize: false,
+            displayHeaderFooter: true,
+            headerTemplate: o.headerTemplate,
+            footerTemplate: o.footerTemplate,
+            margin: o.margin,
+          }
+        : {
+            format: 'Letter',
+            printBackground: true,
+            preferCSSPageSize: true,
+            margin: { top: '0', right: '0', bottom: '0', left: '0' },
+          },
+    );
     logger.info(
       { ms: Date.now() - startPdf, totalMs: Date.now() - startTotal, bytes: pdf.length },
       'PDF renderer: PDF generado',

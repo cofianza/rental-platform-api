@@ -5,7 +5,8 @@
  * afianzamiento). Para montos en pesos colombianos suele querer la
  * cadena con sufijo "PESOS M/CTE" — eso lo agrega `numeroAPesosLetras`.
  *
- * Casos: 0 → "cero", 1 → "uno", 21 → "veintiuno", 1000000 → "un millón".
+ * Casos: 0 → "cero", 1 → "uno", 21 → "veintiuno", 1000000 → "un millón",
+ * 21000 → "veintiún mil", 21000000 → "veintiún millones".
  */
 
 const UNIDADES = [
@@ -47,6 +48,14 @@ function centenas(n: number): string {
   return `${CENTENAS[c]} ${unidadesYDecenas(resto)}`;
 }
 
+/**
+ * Apócope ante sustantivo: "veintiuno" → "veintiún", "treinta y uno" →
+ * "treinta y un" ("veintiún mil", "treinta y un días"). Antes solo se
+ * cortaba el "uno" suelto y 21000 salía "veintiuno mil".
+ */
+export const apocopar = (s: string): string =>
+  s.replace(/veintiuno$/, 'veintiún').replace(/\buno$/, 'un');
+
 function miles(n: number): string {
   if (n < 1000) return centenas(n);
   const m = Math.floor(n / 1000);
@@ -55,7 +64,7 @@ function miles(n: number): string {
   if (m === 1) {
     prefijo = 'mil';
   } else {
-    prefijo = `${centenas(m).replace(/\buno\b/g, 'un')} mil`;
+    prefijo = `${apocopar(centenas(m))} mil`;
   }
   if (resto === 0) return prefijo;
   return `${prefijo} ${centenas(resto)}`;
@@ -70,7 +79,7 @@ export function numeroALetras(n: number): string {
 
   const millones = Math.floor(entero / 1_000_000);
   const resto = entero % 1_000_000;
-  const prefijo = millones === 1 ? 'un millón' : `${miles(millones).replace(/\buno\b/g, 'un')} millones`;
+  const prefijo = millones === 1 ? 'un millón' : `${apocopar(miles(millones))} millones`;
   if (resto === 0) return prefijo;
   return `${prefijo} ${miles(resto)}`;
 }
@@ -79,7 +88,11 @@ export function numeroALetras(n: number): string {
  * Para canon/afianzamiento: "$80.000" → "OCHENTA MIL PESOS M/CTE"
  */
 export function numeroAPesosLetras(n: number): string {
-  return `${numeroALetras(n).toUpperCase()} PESOS M/CTE`;
+  const entero = Math.floor(Math.abs(n));
+  // Ante "pesos": apócope ("veintiún pesos") y "de" tras millones exactos
+  // ("dos millones de pesos"), que es como se escribe en un documento legal.
+  const de = entero >= 1_000_000 && entero % 1_000_000 === 0 ? ' de' : '';
+  return `${(apocopar(numeroALetras(n)) + de).toUpperCase()} PESOS M/CTE`;
 }
 
 /**

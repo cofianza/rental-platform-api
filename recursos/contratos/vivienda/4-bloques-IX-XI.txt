@@ -1,0 +1,79 @@
+# Contrato de arrendamiento de vivienda urbana — parte 4: bloques IX a XI,
+# VIGÉSIMA SÉPTIMA a TRIGÉSIMA TERCERA, adicionales y firmas (Word ¶307–361).
+# Formato: diseño Entrega 2 §3. Los #c-NN: son la concordancia en singular sin
+# coarrendatario (V3 §9.4); los #j-*: otro tipo de documento; #k-dia1: día 1.
+@bloque IX.  AUTORIZACIONES Y TRATAMIENTO DE DATOS PERSONALES
+@clausula datos
+**{N}: AUTORIZACIÓN DE TRATAMIENTO DE DATOS Y REPORTE A CENTRALES DE INFORMACIÓN**
+[[coa: EL ARRENDATARIO y EL COARRENDATARIO autorizan | #c-15: EL ARRENDATARIO autoriza]] de manera previa, expresa, informada e inequívoca a EL ARRENDADOR y a COFIANZA S.A.S., NIT 902.038.122-7, en su calidad de fiador, o a sus delegados, para recolectar, almacenar, usar, circular, actualizar, transmitir, transferir, suprimir y en general tratar sus datos personales, con el fin de dar cumplimiento al presente contrato de arrendamiento y a la fianza que lo garantiza, realizar gestiones de cobro, enviar notificaciones e información relacionada con los servicios, conforme a la Ley 1581 de 2012, el Decreto 1377 de 2013 y las políticas de tratamiento de datos personales vigentes.
+Así mismo, [[coa: autorizan | #c-23: autoriza]] a EL ARRENDADOR, a COFIANZA S.A.S. o a quien represente sus derechos, ostente actualmente o en el futuro la calidad de acreedor, cesionario o afianzador del contrato, para consultar, solicitar, suministrar, reportar, procesar, circular y divulgar la información relacionada con su comportamiento crediticio, financiero, comercial y de servicios, incluyendo su hábito de pago, ante DATACRÉDITO EXPERIAN, TRANSUNION y cualquier otro operador de información legalmente habilitado con el que EL ARRENDADOR o COFIANZA S.A.S. mantengan convenio vigente, así como ante las bases de datos administradas por EL ARRENDADOR y por COFIANZA S.A.S., conforme a la Ley 1266 de 2008 y demás normas concordantes.
+> **{P:alcance} — ALCANCE Y CONSULTAS:** La autorización incluye la consulta de información ante entidades públicas o privadas, nacionales o extranjeras, con fines de análisis, validación, gestión y administración del riesgo crediticio, prevención del fraude, del lavado de activos y de la financiación del terrorismo, así como para la elaboración de indicadores o puntajes crediticios. Igualmente, [[coa: autorizan ser contactados | #c-24: autoriza ser contactado]] por medios físicos, telefónicos o electrónicos —correo, mensajes de texto, chat u otros— para notificaciones, gestiones contractuales, comerciales, de cobro y para el aviso previo de reporte a centrales de información, sin que pueda alegarse falta de notificación por este medio.
+> **{P:declaraciones} — DECLARACIONES DE LOS TITULARES:** [[coa: EL ARRENDATARIO y EL COARRENDATARIO declaran conocer que el alcance de esta autorización implica que el cumplimiento o incumplimiento de sus obligaciones será registrado con el propósito de suministrar información suficiente y veraz al mercado sobre el estado de sus obligaciones. Exoneran de toda responsabilidad a EL ARRENDADOR, a COFIANZA S.A.S. y a los operadores de información por la inclusión, reporte o actualización de los datos suministrados, siempre que dicha actuación se realice conforme a la ley. Se les informa que es facultativo suministrar datos sensibles o de menores de edad, y que podrán ejercer | #c-16: EL ARRENDATARIO declara conocer que el alcance de esta autorización implica que el cumplimiento o incumplimiento de sus obligaciones será registrado con el propósito de suministrar información suficiente y veraz al mercado sobre el estado de sus obligaciones. Exonera de toda responsabilidad a EL ARRENDADOR, a COFIANZA S.A.S. y a los operadores de información por la inclusión, reporte o actualización de los datos suministrados, siempre que dicha actuación se realice conforme a la ley. Se le informa que es facultativo suministrar datos sensibles o de menores de edad, y que podrá ejercer]] en cualquier momento los derechos de conocer, actualizar, rectificar y suprimir su información ante los canales de atención dispuestos para tal efecto.
+> **{P:cesion} — CESIÓN:** En caso de que EL ARRENDADOR ceda, transfiera o venda total o parcialmente las obligaciones derivadas del presente contrato, los efectos de esta autorización se extenderán automáticamente al cesionario o adquirente, en los mismos términos aquí previstos.
+@bloque X.  DISPOSICIONES FINALES
+@clausula notificaciones
+**{N}: NOTIFICACIONES, DOMICILIO CONTRACTUAL Y ACTUALIZACIÓN DE DATOS**
+LAS PARTES acuerdan que todas las comunicaciones, avisos y notificaciones que deban realizarse con ocasión del presente contrato podrán efectuarse por medios físicos o electrónicos, incluyendo correo electrónico, mensajes de datos y plataformas de terceros que permitan acreditar: (i) la fecha y hora de envío, (ii) el contenido de la comunicación y (iii) la identificación del remitente y del destinatario. Las notificaciones electrónicas se entenderán válidamente realizadas en la fecha y hora que conste en el sistema utilizado para su envío, para todos los efectos legales, independientemente de que el destinatario acceda o no a la comunicación, siempre que la falta de acceso no sea imputable al remitente.
+Para todos los efectos legales, LAS PARTES fijan las siguientes direcciones físicas y electrónicas de notificación:
+@datos
+ARRENDADOR
+Dirección: {arrendador.direccion}     Municipio: {arrendador.municipio}
+Correo electrónico: {arrendador.email}     Celular: {arrendador.celular}
+ARRENDATARIO
+Dirección: {arrendatario.direccion}     Municipio: {arrendatario.municipio}
+Correo electrónico: {arrendatario.email}     Celular: {arrendatario.celular}
+@cada coarrendatario
+COARRENDATARIO
+Dirección: {parte.direccion}     Municipio: {parte.municipio}
+Correo electrónico: {parte.email}     Celular: {parte.celular}
+@fin
+@fin
+> **{P:actualizacion} — ACTUALIZACIÓN DE DATOS Y EFICACIA DE LAS NOTIFICACIONES:** [[coa: EL ARRENDATARIO y EL COARRENDATARIO se obligan a mantener actualizados los datos de notificación registrados en este contrato —dirección física, correo electrónico y número de celular— e informar cualquier cambio a EL ARRENDADOR por escrito dentro de los cinco (5) días siguientes. Mientras no se informe el cambio, todas las comunicaciones, avisos, requerimientos y notificaciones remitidos a los datos aquí registrados se entenderán válida y eficazmente realizados para todos los efectos legales y contractuales, sin que puedan | #c-17: EL ARRENDATARIO se obliga a mantener actualizados los datos de notificación registrados en este contrato —dirección física, correo electrónico y número de celular— e informar cualquier cambio a EL ARRENDADOR por escrito dentro de los cinco (5) días siguientes. Mientras no se informe el cambio, todas las comunicaciones, avisos, requerimientos y notificaciones remitidos a los datos aquí registrados se entenderán válida y eficazmente realizados para todos los efectos legales y contractuales, sin que pueda]] alegar no haberlos recibido, desconocimiento o falta de notificación. La imposibilidad de contacto por datos desactualizados no suspende ni excusa el cumplimiento de ninguna obligación.
+> **{P:domicilio} — DOMICILIO CONTRACTUAL:** Para todos los efectos judiciales y extrajudiciales, LAS PARTES declaran como domicilio contractual el municipio en el cual se encuentra ubicado el inmueble arrendado.
+@clausula compra
+**{N}: COMPRA DEL INMUEBLE ARRENDADO.** En el evento en que EL ARRENDATARIO manifieste su intención de adquirir en propiedad el inmueble objeto del presente contrato, se obliga a adelantar todas las gestiones correspondientes a través de EL ARRENDADOR, a quien reconoce desde ahora como intermediario de la eventual compraventa.
+> **{P:p1}:** En caso de que se presente una opción de venta del inmueble a favor de un tercero, EL ARRENDATARIO se obliga a permitir la exhibición del inmueble dentro de un plazo máximo de dos (2) días calendario contados a partir de la solicitud presentada por EL ARRENDADOR, fijando de común acuerdo la fecha y hora de la visita, la cual deberá realizarse preferiblemente en horario diurno.
+@clausula origen
+**{N}: ORIGEN DE INGRESOS Y CUMPLIMIENTO NORMATIVO**
+LAS PARTES declaran, bajo la gravedad del juramento, que los recursos y fondos utilizados para el cumplimiento de las obligaciones derivadas del presente contrato provienen exclusivamente de actividades lícitas, que no se encuentran registradas en listas restrictivas o de prevención de lavado de activos y financiación del terrorismo, nacionales o internacionales, y que no hacen parte de las categorías de lavado de activos relacionadas con la conversión o el movimiento de recursos.
+Así mismo, LAS PARTES manifiestan que sus actuaciones se ajustan a la ley, a la ética y a los principios de buena fe, y se obligan a mantener indemne a su contraparte frente a cualquier perjuicio que se derive de la inexactitud o falsedad de las declaraciones aquí contenidas, respondiendo igualmente frente a terceros que puedan resultar afectados.
+Igualmente, LAS PARTES declaran que no se encuentran incluidas en listas de terroristas, criminales o sanciones emitidas por autoridades nacionales o extranjeras, incluyendo, sin limitarse a: (i) la lista de Nacionales Especialmente Designados (SDN/SDT) emitida por la Oficina de Control de Activos Extranjeros (OFAC); (ii) la lista de Terroristas Globales Especialmente Designados (SDGT) emitida por la OFAC; y (iii) la lista de Organizaciones Terroristas Extranjeras (FTO) emitida por el Departamento de Estado de los Estados Unidos.
+> **{P:p1}:** El incumplimiento de cualquiera de las declaraciones contenidas en la presente cláusula, así como la inclusión posterior de cualquiera de LAS PARTES en las listas restrictivas aquí mencionadas, constituirá causal suficiente para la terminación inmediata del presente contrato, sin perjuicio de las acciones legales a que haya lugar.
+@clausula aceptacion
+**{N}: ACEPTACIÓN IRREVOCABLE DE LAS CONDICIONES RELACIONADAS CON COFIANZA S.A.S.**
+[[coa: EL ARRENDADOR, EL ARRENDATARIO y EL COARRENDATARIO | #c-18: EL ARRENDADOR y EL ARRENDATARIO]] declaran que han leído, entendido y aceptado de manera libre, expresa e irrevocable la totalidad de las cláusulas del presente contrato y, en especial, las condiciones relacionadas con la fianza otorgada por COFIANZA S.A.S. contenidas en la {ref:fianza} y sus parágrafos, las cuales constituyen elemento esencial y determinante para la celebración del presente contrato.
+LAS PARTES renuncian expresamente a alegar, por vía judicial o extrajudicial, desconocimiento, error, falta de claridad, ausencia de consentimiento o cualquier otra circunstancia que pretenda desconocer, desvirtuar, modificar o dejar sin efecto, total o parcialmente, las condiciones relacionadas con la fianza.
+> **{P:prevalencia} — PREVALENCIA Y NO MODIFICACIÓN UNILATERAL:** Ninguna modificación, novación, condonación o dejación sin efecto de las condiciones relacionadas con la fianza producirá efecto alguno si no consta por escrito y cuenta con la aceptación expresa de COFIANZA S.A.S. EL ARRENDADOR y EL ARRENDATARIO no podrán, por acuerdo exclusivo entre ellos, modificar, novar o dejar sin efecto dichas condiciones.
+> **{P:indivisibilidad} — INDIVISIBILIDAD:** El presente contrato constituye un todo indivisible en lo relacionado con las condiciones de la fianza. La nulidad, ineficacia o inoponibilidad de alguna de sus cláusulas no eximirá a EL ARRENDATARIO de sus obligaciones frente a COFIANZA S.A.S., ni a EL ARRENDADOR de las obligaciones de colaboración, notificación y subrogación pactadas en la {ref:fianza}.
+@clausula constancia
+**{N}: CONSTANCIA SOBRE EL RESUMEN PRELIMINAR.** [[coa: EL ARRENDATARIO y EL COARRENDATARIO declaran que recibieron y leyeron el apartado PRELIMINAR de este contrato, denominado RESUMEN — LO QUE ESTÁ FIRMANDO, antes de suscribirlo; que entendieron su contenido; y que tuvieron la oportunidad de preguntar y aclarar lo que no les resultó claro. Declaran igualmente que entienden | #c-19: EL ARRENDATARIO declara que recibió y leyó el apartado PRELIMINAR de este contrato, denominado RESUMEN — LO QUE ESTÁ FIRMANDO, antes de suscribirlo; que entendió su contenido; y que tuvo la oportunidad de preguntar y aclarar lo que no le resultó claro. Declara igualmente que entiende]] que dicho resumen tiene carácter explicativo y que, en caso de diferencia entre lo allí expresado y lo dispuesto en las cláusulas del presente contrato, prevalecen las cláusulas.
+@clausula totalidad
+**{N}: TOTALIDAD DEL ACUERDO Y CLÁUSULAS ADICIONALES.** LAS PARTES manifiestan que el presente contrato constituye un acuerdo completo y total acerca de su objeto, y reemplaza y deja sin efecto cualquier otro acuerdo verbal o documento referido al inmueble objeto de este contrato. Lo anterior se entiende sin perjuicio del convenio vigente suscrito entre EL ARRENDADOR y COFIANZA S.A.S., el cual conserva plena vigencia y aplicación y no resulta afectado, modificado ni reemplazado por el presente contrato.
+> **{P:clausulas} — CLÁUSULAS ADICIONALES DEL ARRENDADOR. AUTORÍA, PREVALENCIA E INDEMNIDAD:** Las cláusulas adicionales que se incorporen al final del presente contrato son de autoría, iniciativa y responsabilidad exclusiva de EL ARRENDADOR. COFIANZA S.A.S. no las redacta, no las revisa, no las aprueba y no las avala, y su inclusión no implica pronunciamiento alguno de su parte sobre su legalidad, validez o conveniencia. En caso de conflicto o incompatibilidad entre una cláusula adicional y las condiciones relacionadas con la fianza otorgada por COFIANZA S.A.S., prevalecen estas últimas, y la cláusula adicional se entenderá no escrita en aquello que las contradiga. Si alguna cláusula adicional resulta contraria a la ley o al presente contrato, o si por causa de ella se produce una reclamación, un proceso judicial o administrativo, una decisión desfavorable, una condena, costas, sanciones o cualquier otra consecuencia económica, EL ARRENDADOR asumirá de manera íntegra y exclusiva dichas consecuencias y costos, y mantendrá indemne a COFIANZA S.A.S., obligándose a reembolsarle cualquier suma que esta deba pagar por tal causa.
+@adicionales CLÁUSULAS ADICIONALES DEL ARRENDADOR
+@nota-editorial Este bloque se imprime únicamente si EL ARRENDADOR incorpora cláusulas adicionales. Las cláusulas se numeran de forma continua a partir de la TRIGÉSIMA CUARTA. Si no se incorporan, el bloque no se imprime.
+@bloque XI.  PERFECCIONAMIENTO Y FIRMAS
+El presente contrato se perfecciona con la firma de LAS PARTES y, en señal de conformidad, se suscribe en dos (2) ejemplares del mismo tenor y a un solo efecto, en la ciudad de {ciudadFirma}, [[diaPlural: a los {diaLetras:fechaDocumento} ( {dia:fechaDocumento} ) días | #k-dia1: al primer ( 1 ) día]] del mes de {mes:fechaDocumento} de {anio:fechaDocumento}.
+# Orden de firma (V3 §6.5): arrendatario, coarrendatario, arrendador
+@firma
+{linea}
+**EL ARRENDATARIO**
+{arrendatario.nombre}
+[[arrendatario.cc: C.C. | #j-firma-arrendatario: {doc:arrendatario.tipoDocumento}]] N° {arrendatario.documento}
+@fin
+@cada coarrendatario
+@firma
+{linea}
+**EL COARRENDATARIO**
+{parte.nombre}
+[[parte.cc: C.C. | #j-firma-coa: {doc:parte.tipoDocumento}]] N° {parte.documento}
+@fin
+@fin
+@firma
+{linea}
+**EL ARRENDADOR**
+{arrendador.representante}
+Representante Legal
+NIT {arrendador.nit}
+@fin
+@nota ANEXO 1 — Acta de entrega e inventario del inmueble, que forma parte integral de este contrato.

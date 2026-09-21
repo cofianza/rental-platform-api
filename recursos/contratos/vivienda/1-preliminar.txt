@@ -1,0 +1,137 @@
+# Contrato de arrendamiento de vivienda urbana — parte 1: cuadro inicial y
+# PRELIMINAR (Word ¶0–134). Formato: diseño Entrega 2 §3. Una línea = un
+# párrafo del Word; el texto del Word es siempre la rama verdadera.
+@pie Contrato de arrendamiento de vivienda urbana
+@titulo CONTRATO DE ARRENDAMIENTO DE VIVIENDA URBANA
+@nota Ley 820 de 2003
+@cuadro
+**Lugar y fecha** | {ciudadFirma}, {dia:fechaDocumento} de {mes:fechaDocumento} de {anio:fechaDocumento}
+**Arrendador** | {arrendador.nombre}  ·  NIT {arrendador.nit}
+**Representante legal** | {arrendador.representante}
+**Matrícula de arrendador** | N° {arrendador.matricula} expedida por {arrendador.matriculaExpedidaPor}
+**Arrendatario** | {arrendatario.nombre}
+@cada coarrendatario
+**Coarrendatario** | {parte.nombre}
+@fin
+**Dirección del inmueble** | {inmueble.direccion}
+**Municipio del inmueble** | {inmueble.municipio}
+**Canon de arrendamiento** | ${pesos:canon}  ({pesosLetras:canon})
+**Duración del contrato** | {meses:vigenciaMeses}
+**Fecha de iniciación** | {fecha:fechaInicio}
+**Fecha de vencimiento** | {fecha:fechaVencimiento}
+**Propiedad horizontal** | SÍ {casilla:ph}   NO {casilla:!ph}
+@fin
+@bloque PRELIMINAR.  RESUMEN — LO QUE ESTÁ FIRMANDO
+Este apartado resume, en lenguaje claro, los puntos más importantes del contrato que va a firmar. Léalo completo: le toma pocos minutos y le evita sorpresas.
+**Alcance de este resumen.** Forma parte integral del presente contrato y se firma con él. Sin embargo, tiene carácter explicativo: en caso de diferencia entre lo expresado en este resumen y lo dispuesto en las cláusulas, prevalecen las cláusulas. Le recomendamos leer también el texto completo antes de firmar.
+@seccion {S}.  ¿Cuánto tengo que pagar?
+@subtitulo Al momento de ingresar
+# Tablas de dinero (V3 §3.4.3–3.4.5, §3.4.7): filas sin IVA, iguales a las
+# cifras de las cláusulas; el total es la suma de las filas impresas (pendiente g).
+@dinero
+**Concepto** | **Valor**
+Primer canon de arrendamiento | ${pesos:canon}
+?comision Comisión de intermediación ({pct:comisionPct}% + IVA) | ${pesos:comisionCop}
+?trasladada Prima de la fianza ({pct:primaPct}% del canon) | ${pesos:primaCop}
+**TOTAL APROXIMADO AL INGRESO** | **${pesos:totalIngreso}**
+@fin
+@subtitulo Cada mes
+@dinero
+**Concepto** | **Valor**
+Canon de arrendamiento | ${pesos:canon}
+?trasladada Tarifa de la fianza ({pct:tarifaPct}% + IVA) | ${pesos:tarifaCop}
+# si la cuota va incluida en el canon, esta fila la contaría dos veces
+?adminAparte Cuota de administración, si está a su cargo | ${pesos:adminCop}
+Servicios públicos a su cargo | Según consumo
+**TOTAL MENSUAL APROXIMADO** | **${pesos:totalMensual}**
+@fin
+Los porcentajes son los que rigen el contrato. Los valores en pesos corresponden al canon de hoy y se actualizan cuando el canon suba.
+@subtitulo ¿Cuándo debo pagar?
+El canon se paga por adelantado, el primer día de cada mes. A partir del día siguiente usted está en mora, sin que nadie tenga que avisarle ni requerirle.
+@subtitulo ¿El canon sube?
+Sí. Cada doce meses aumenta automáticamente en el mismo porcentaje en que haya subido el Índice de Precios al Consumidor del año anterior, dentro del límite legal. No requiere aviso previo: al firmar queda notificado de ese aumento.
+@seccion {S}.  ¿Qué es la fianza de Cofianza y para qué sirve?
+# Tradicional (V3 §3.4.5): falta el texto de que la fianza la asume la inmobiliaria (pendiente b)
+?!trasladada PENDIENTE(b)
+Cofianza es la afianzadora que respalda su contrato. Gracias a ella usted no necesitó presentar un fiador o codeudor con finca raíz.
+**Lo que hace:** si usted deja de pagar el canon, Cofianza le paga al arrendador para que el arriendo no se caiga de inmediato.
+**Lo que NO hace:** la fianza no es un seguro a su favor. No lo exonera de pagar. Si Cofianza paga por usted, esa deuda pasa a ser con Cofianza, que se la va a cobrar directamente, incluso por vía judicial.
+**Qué cubre:** únicamente el canon de arrendamiento, hasta un máximo de dieciocho meses.
+**Qué NO cubre:** la administración, los servicios públicos, los daños al inmueble, los faltantes de inventario ni las multas. Todo eso lo paga usted.
+@recuadro
+**Si paga de menos, así sea por poco**
+- Si el pago que hace no alcanza para cubrir todo, primero se abona al canon y después a la tarifa de la fianza.
+- Lo que quede faltando lo puede cubrir Cofianza, y en ese momento usted queda debiéndole esa suma a Cofianza, no al arrendador.
+- Esa deuda se le suma al pago del mes siguiente y se le cobra con la misma firmeza, sin importar si son mil pesos o un millón.
+@fin
+@seccion {S}.  El beneficio de pagar a tiempo, y lo fácil que es perderlo
+**Cashback del 30%.** Si al terminar el contrato usted no tuvo ni una sola mora, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.
+**Reporte positivo.** Su buen comportamiento de pago se puede reportar a las centrales de información, lo que le ayuda a construir historial crediticio.
+@recuadro
+**Lea esto con atención: pierde el cashback si se atrasa en CUALQUIERA de estos pagos**
+- El canon de arrendamiento.
+- La tarifa mensual de la fianza.
+- Los servicios públicos que estén a su cargo.
+# V3 §3.4.7: sin cuota a cargo de EL ARRENDATARIO no hace perder el cashback
+?adminArrendatario - La cuota de administración, si está a su cargo.
+- Cualquier otra obligación económica del contrato.
+- Un solo pago incompleto, así sea de pocos pesos y así Cofianza lo haya cubierto, le hace perder el beneficio completo.
+@fin
+@seccion {S}.  ¿Quién paga las reparaciones?
+@subtitulo Las paga usted
+Todo lo que se desgasta por usar la vivienda: chapas y cerraduras, vidrios, bombillos e interruptores, resane y pintura por rayones o huecos de clavos, destape de lavamanos y sanitarios, grifería y duchas, mallas y angeos, mantenimiento del calentador y la estufa, control de plagas, y reposición de llaves y controles.
+@subtitulo Las paga el arrendador
+Todo lo que hace parte de la estructura o de las redes: muros de carga, filtraciones y humedades de cubierta o fachadas, tuberías empotradas, red eléctrica interna, red de gas, tanque de agua y bomba, tejas, y los defectos de construcción, incluso los ocultos.
+@subtitulo Si el daño fue por culpa suya
+Lo paga usted, sin importar el tamaño ni el costo, incluso si afecta la estructura o las redes. Que la reparación normalmente le corresponda al arrendador no cambia nada si el daño lo causó usted, su familia, sus ocupantes o visitantes.
+@subtitulo Cómo se reporta un daño
+- Avísele al arrendador tan pronto lo note, por los medios de contacto del contrato.
+- Si es urgente puede avisar por teléfono, pero debe confirmarlo por escrito dentro de las 24 horas siguientes.
+- **Si no avisa a tiempo,** usted responde por lo que el daño se haya agravado mientras guardó silencio.
+- **El arrendador tiene 48 horas** para atender lo urgente y diez días hábiles para lo demás. Debe permitir la entrada del personal técnico: si la niega sin razón, esos plazos se suspenden y usted responde por el daño que se agrave.
+@seccion {S}.  ¿Qué puedo y qué no puedo hacer en el inmueble?
+@subtitulo Sí puede
+- **Tener mascotas.** Este contrato no lo prohíbe ni lo condiciona. Solo debe informar cuántos animales y de qué especie, para el registro, y responder por los daños, plagas, multas o desinfección que se deriven de tenerlos. Tener una mascota no es causal para terminarle el contrato.
+- Vivir en el inmueble con su familia y con las personas que convivan con usted.
+@subtitulo No puede
+- Darle al inmueble un uso distinto a vivienda, subarrendarlo o ceder el contrato sin autorización escrita del arrendador.
+- Hacer mejoras, adecuaciones o cambios sin autorización escrita.
+- Retener, descontar o pagar de menos el canon por ningún motivo, ni siquiera si tiene un reclamo pendiente. El reclamo se tramita aparte; el canon se paga completo.
+@recuadro
+**Sobre las mejoras que usted haga**
+- Si hace una mejora con autorización, queda para el inmueble: no le devuelven el dinero ni puede retenerla.
+- Al terminar el contrato, el arrendador decide si la conserva o si le pide retirarla, aunque se la haya autorizado antes.
+- Si le pide retirarla y usted no lo hace, el arrendador la retira y le cobra a usted el desmonte y las reparaciones.
+@fin
+@seccion {S}.  ¿Cómo se termina el contrato y cómo entrego el inmueble?
+@subtitulo Si quiere irse al vencimiento
+Debe avisar por escrito con tres meses de antelación a la fecha de vencimiento.
+@subtitulo Si quiere irse antes del vencimiento
+Puede hacerlo, pero debe pagar una indemnización equivalente a tres meses de arriendo.
+@subtitulo Cómo entregar el inmueble
+- Pida la cita de entrega con ocho días calendario de antelación.
+- **Entregue el inmueble totalmente pintado,** limpio y en buen estado, con colores iguales o parecidos a los que tenía cuando lo recibió.
+- Debe estar a paz y salvo en canon, administración y servicios públicos, y entregar todas las llaves, controles y dispositivos de acceso.
+- Lleve los comprobantes de servicios pagados y pague los días consumidos que aún no le han facturado.
+- **Si la entrega no queda satisfactoria** —faltan cosas del inventario, hay daños, no está pintado o hay saldos pendientes—, usted debe corregirlo y pedir una nueva cita. Mientras eso pase, el canon se le sigue cobrando.
+**El acta de entrega es su mejor defensa.** Al recibir el inmueble se firma un acta con el inventario y el estado del bien. Es el documento que determina, cuando usted entregue, qué deterioros son del uso normal y cuáles le cobran. Revísela bien y quédese con una copia.
+# V3 §3.4.6: sin coarrendatario la sección 7 no se imprime y las siguientes se renumeran
+?coa @seccion {S}.  Si usted firma como coarrendatario, esto es lo que asume
+Si además del arrendatario firma un coarrendatario, esta es su situación:
+- **Responde por todo,** no solo por el canon: también por la tarifa de la fianza, administración, servicios, daños, intereses, gastos de cobranza y la cláusula penal.
+- **Le pueden cobrar a usted primero.** No puede exigir que se persiga antes al arrendatario ni que se agoten sus bienes.
+- **No tiene derecho a usar el inmueble.** Su firma es una garantía de pago, no un derecho de habitación.
+- **Su obligación sigue en las prórrogas,** aunque el canon suba o aunque el arrendador y el arrendatario hagan acuerdos entre ellos. Solo queda liberado cuando se paguen todas las obligaciones o con una liberación por escrito.
+- **Si el arrendatario abandona el inmueble,** usted puede entregarlo directamente al arrendador, sin necesidad de permiso del arrendatario. Le conviene hacerlo: la entrega detiene el cobro de los cánones.
+@seccion {S}.  Sus datos personales
+Al firmar autoriza a la inmobiliaria y a Cofianza a consultar y reportar su comportamiento de pago ante Datacrédito Experian, TransUnion y otros operadores habilitados: tanto el cumplimiento como el incumplimiento quedan registrados. Puede ejercer sus derechos de conocer, actualizar, rectificar y suprimir su información ante los canales de atención de la inmobiliaria o de Cofianza.
+**Mantenga sus datos actualizados.** La dirección, el correo y el celular del contrato son los que producen efectos legales: mientras no informe un cambio, todo lo que le envíen a esos datos se entiende recibido.
+@seccion Las cinco cosas que más reclamos generan
+@recuadro
+**Si solo va a leer una parte de este resumen, lea esta**
+- Pagar el canon incompleto. Así falten pocos pesos, se considera mora y le cuesta el cashback.
+- Creer que la fianza lo exonera de pagar. No lo exonera: la deuda pasa a ser con Cofianza.
+- Creer que la fianza cubre administración, servicios o daños. No los cubre.
+- Descontar del canon una reparación o un reclamo. No se puede: el canon se paga completo y el reclamo se tramita aparte.
+- Entregar el inmueble sin pintar o con saldos pendientes. La entrega no se recibe y el canon se le sigue cobrando.
+@fin

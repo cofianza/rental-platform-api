@@ -69,7 +69,7 @@ export interface Tarifas {
 
 const redondear = (n: number) => Math.round(n);
 
-function pctDe(canon: number | null, pct: number): number | null {
+export function pctDe(canon: number | null, pct: number): number | null {
   return canon === null ? null : redondear((canon * pct) / 100);
 }
 
