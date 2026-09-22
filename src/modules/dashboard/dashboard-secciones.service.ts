@@ -342,12 +342,12 @@ async function fetchPropietarioPorExpediente(expedienteIds: string[]): Promise<M
 }
 
 const CONTRATO_SELECT =
-  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, motivo_cancelacion, expediente_id, ' +
+  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, motivo_cancelacion, expediente_id, ' +
   'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(nombre, apellido, numero_documento, telefono))';
 
 // Variante con datos extra del solicitante (ficha de detalle en Inquilinos).
 const INQUILINO_SELECT =
-  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, motivo_cancelacion, expediente_id, ' +
+  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, motivo_cancelacion, expediente_id, ' +
   'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(' +
   'nombre, apellido, numero_documento, telefono, email, ocupacion, actividad_economica, ingresos_mensuales, empresa, tipo_persona))';
 

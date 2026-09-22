@@ -71,18 +71,27 @@ export function periodoVigente(fechaInicio: string, meses: number, hoy: string) 
 }
 
 /**
- * Para listados y tableros: un contrato V3 vigente se prorroga solo, así que su
- * "fin" es el del período en curso y no `fecha_fin` (el término inicial, congelado).
- * Las demás filas pasan igual.
+ * Para listados y tableros, el "fin" real de un contrato V3: vigente, el del
+ * período en curso (se prorroga solo); terminado, el día de la terminación. No
+ * `fecha_fin`, que es el término inicial congelado. Las demás filas pasan igual.
  */
 export function conFinVigente<
-  T extends { estado?: string; fecha_inicio: string | null; fecha_fin: string | null; destinacion?: string | null; duracion_meses?: number | null },
+  T extends {
+    estado?: string;
+    fecha_inicio: string | null;
+    fecha_fin: string | null;
+    destinacion?: string | null;
+    duracion_meses?: number | null;
+    fecha_terminacion?: string | null;
+  },
 >(rows: T[], hoy = fechaBogota(new Date())): T[] {
-  return rows.map((r) =>
-    r.destinacion && r.estado === 'vigente' && r.fecha_inicio && r.duracion_meses
-      ? { ...r, fecha_fin: periodoVigente(r.fecha_inicio, r.duracion_meses, hoy).hasta }
-      : r,
-  );
+  return rows.map((r) => {
+    if (!r.destinacion) return r;
+    if (r.estado === 'vigente' && r.fecha_inicio && r.duracion_meses)
+      return { ...r, fecha_fin: periodoVigente(r.fecha_inicio, r.duracion_meses, hoy).hasta };
+    if (r.estado === 'finalizado' && r.fecha_terminacion) return { ...r, fecha_fin: fechaBogota(r.fecha_terminacion) };
+    return r;
+  });
 }
 
 /**

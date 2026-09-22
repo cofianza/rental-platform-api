@@ -265,6 +265,21 @@ async function destinatariosDe(c: ContratoCtx, s: Sobre): Promise<string[]> {
 
 const linkAsistente = (c: ContratoCtx) => `/expedientes/${c.expediente_id}/contrato`;
 
+/** Para avisos de otros módulos (TERMINADO): los destinatarios V3 del contrato, o null si no es V3. */
+export async function destinatariosV3(contratoId: string): Promise<string[] | null> {
+  try {
+    const { data } = await db('contratos').select('destinacion').eq('id', contratoId).maybeSingle();
+    if (!(data as { destinacion: string | null } | null)?.destinacion) return null;
+    const c = await leerContrato(contratoId);
+    if (!c) return null;
+    const s = await ultimoSobre(contratoId);
+    return await destinatariosDe(c, s ?? ({ enviado_por: null } as Sobre));
+  } catch (e) {
+    logger.warn({ contratoId, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: sin destinatarios para el aviso');
+    return null;
+  }
+}
+
 // ── Activación (FIANZA ACTIVA) ──
 
 /**
@@ -287,6 +302,14 @@ export async function activarContrato(s: Sobre): Promise<void> {
     if (error) falla('no se pudo registrar la fecha de activación', error);
   };
   if (c.estado === 'vigente') await registrarFecha('vigente');
+  if (c.estado === 'finalizado') {
+    // Curación tardía de un contrato que ya se activó y se terminó: no hay nada que avisar.
+    await db('contrato_v3_sobres')
+      .update({ aviso_entregado_en: new Date().toISOString(), aviso_detalle: { omitido: 'finalizado' } } as never)
+      .eq('id', s.id)
+      .is('aviso_entregado_en', null);
+    return;
+  }
   if (c.estado === 'pendiente_firma') {
     await registrarFecha('pendiente_firma');
     await transicionar(
@@ -655,7 +678,7 @@ export async function barrerFirmasV3(): Promise<void> {
   const { data: sinPdf } = await db('contratos')
     .select('id')
     .not('destinacion', 'is', null)
-    .eq('estado', 'vigente')
+    .in('estado', ['vigente', 'finalizado'])
     .is('storage_key_firmado', null)
     .limit(20);
   for (const { id } of (sinPdf as { id: string }[] | null) ?? []) {

@@ -8,12 +8,21 @@ const mockOrder = vi.fn(() => ({ limit: mockLimit }));
 const mockGt = vi.fn(() => ({ single: mockSingle }));
 // `not → in → limit`: la consulta de fianza V3 (tieneFianzaV3); por defecto, sin contratos V3.
 const mockFianzaV3 = vi.fn(async () => ({ data: [] as unknown[], error: null }));
+const filtrosFianza: unknown[][] = [];
 const mockEq: ReturnType<typeof vi.fn> = vi.fn((): Record<string, unknown> => ({
   eq: mockEq,
   single: mockSingle,
   order: mockOrder,
   gt: mockGt,
-  not: () => ({ in: () => ({ limit: mockFianzaV3 }) }),
+  not: (...a: unknown[]) => {
+    filtrosFianza.push(['not', ...a]);
+    return {
+      in: (...b: unknown[]) => {
+        filtrosFianza.push(['in', ...b]);
+        return { limit: mockFianzaV3 };
+      },
+    };
+  },
 }));
 const mockSelect = vi.fn((_cols?: string, _opts?: Record<string, unknown>) => ({
   eq: mockEq,
@@ -365,11 +374,23 @@ describe('expediente-workflow.service', () => {
     it('"Cancelar estudio" con una fianza V3 activa o terminada → 409 sin llamar a la RPC', async () => {
       setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
       mockFianzaV3.mockResolvedValueOnce({ data: [{ id: 'c1' }], error: null });
+      filtrosFianza.length = 0;
       await expect(executeTransition('exp-uuid', cierre('Cancelar estudio'), adminUser)).rejects.toMatchObject({
         statusCode: 409,
         errorCode: 'ESTUDIO_CON_FIANZA',
       });
       expect(mockRpc).not.toHaveBeenCalled();
+      // Solo cuentan los V3 con la fianza activa o terminada.
+      expect(filtrosFianza).toEqual([['not', 'destinacion', 'is', null], ['in', 'estado', ['vigente', 'finalizado']]]);
+    });
+
+    it('con el contrato V3 en firma el trigger rechaza el cierre y se responde 409 CONTRATO_EN_FIRMA', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'CONTRATO_EN_FIRMA: el contrato del estudio esta en firma…' } });
+      await expect(executeTransition('exp-uuid', cierre('Cerrar estudio'), adminUser)).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'CONTRATO_EN_FIRMA',
+      });
     });
 
     it('"Cerrar estudio" sin acta: el trigger de la BD rechaza y se responde 409 con el motivo', async () => {

@@ -10,7 +10,7 @@ import {
   type ContratoPreconditionId,
 } from './contrato-state-machine';
 import { getContratoById, enviarContratoAFirma, notificarPartesContratoTerminado } from './contratos.service';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertExpedienteAccess, perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { ContratoTransitionInput } from './contrato-workflow.schema';
 
@@ -45,6 +45,8 @@ export async function executeContratoTransition(
   user: AuthUser,
 ) {
   const contrato = await fetchContrato(contratoId);
+  // Quien actúa debe ver el estudio (404 si no: no confirma que exista ni su estado).
+  await assertExpedienteAccess(contrato.expediente_id, user.id, user.rol);
   const currentState = contrato.estado;
   const targetState = input.nuevo_estado;
   if (input.estado_esperado && input.estado_esperado !== currentState)

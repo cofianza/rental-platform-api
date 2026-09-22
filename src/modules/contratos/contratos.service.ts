@@ -1381,15 +1381,18 @@ export async function notificarPartesContratoTerminado(
   const link = `/contratos/${contratoId}`;
   const direccion = inm?.direccion ?? 'el inmueble';
   const esCancelacion = targetState === 'cancelado';
+  // V3: a los mismos de "Fianza activa" (titulares, responsable y quien envió), no al dueño del inmueble.
+  const { destinatariosV3 } = await import('./v3/firma/reconciliar');
+  const internos = (await destinatariosV3(contratoId)) ?? (inm?.propietario_id ? [inm.propietario_id] : []);
   const causa = esCancelacion
     ? 'fue cancelado'
     : automatico
       ? 'finalizó por vencimiento del plazo'
       : 'fue finalizado';
 
-  if (inm?.propietario_id) {
+  for (const userId of internos) {
     await notificarUsuario({
-      userId: inm.propietario_id,
+      userId,
       tipo: esCancelacion ? 'contrato.cancelado' : 'contrato.finalizado',
       titulo: esCancelacion ? 'Contrato cancelado' : 'Contrato finalizado',
       mensaje: `El contrato de ${direccion} ${causa}.`,
@@ -2792,7 +2795,8 @@ export async function descargarContrato(
   let storageKey = row.storage_key;
   let nombreArchivo = row.nombre_archivo || 'contrato.pdf';
 
-  const esFirmado = row.estado === 'firmado' || row.estado === 'vigente';
+  // Un contrato terminado también se firmó (V3 pasa de vigente a finalizado).
+  const esFirmado = ['firmado', 'vigente', 'finalizado'].includes(row.estado);
   if (esFirmado && !row.storage_key_firmado) {
     try {
       const { archivarPdfFirmadoEnStorage } = await import('@/modules/firma/firma.service');

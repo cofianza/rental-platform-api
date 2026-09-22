@@ -439,7 +439,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
       const { data: conts, error: e3 } = await (
         supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
       )
-        .select('id, expediente_id, fecha_inicio, fecha_fin, destinacion, duracion_meses, estado, expedientes(solicitantes(nombre, apellido))')
+        .select('id, expediente_id, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, estado, expedientes(solicitantes(nombre, apellido))')
         .in('expediente_id', expedienteIds)
         .in('estado', ESTADOS_CONTRATO_HISTORIAL as unknown as string[])
         .order('fecha_inicio', { ascending: false });
@@ -1106,7 +1106,7 @@ async function fetchContratosActivos(): Promise<ContratoActivoRow[]> {
   const { data, error } = await supabase
     .from('contratos')
     .select(
-      'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
+      'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
     )
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
 
@@ -1121,7 +1121,7 @@ async function fetchContratosHistorico(): Promise<Array<{ fecha_inicio: string |
   const { data, error } = await (
     supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
   )
-    .select('estado, fecha_inicio, fecha_fin, destinacion, duracion_meses')
+    .select('estado, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion')
     .in('estado', ['firmado', 'vigente', 'finalizado', 'cancelado']);
 
   if (error) throw fromSupabaseError(error);

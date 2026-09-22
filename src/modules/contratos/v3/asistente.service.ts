@@ -540,6 +540,9 @@ export async function iniciarContrato(
 ): Promise<{ estado: EstadoAsistente; creado: boolean }> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
+  // Ya salió de borrador (en firma, activo o terminado): un estudio, un contrato.
+  if (await contratoEnviado(expedienteId))
+    throw AppError.conflict('Este estudio ya tiene su contrato; no se puede iniciar otro.', 'CONTRATO_YA_EXISTE');
   const c = await cargar(expedienteId);
   const hoy = hoyBogota();
   if (c.f.v3) return { estado: armarEstado(c, hoy), creado: false };
@@ -1238,11 +1241,14 @@ async function urlDelContrato(
 ): Promise<string | null> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
+  // El más reciente no cancelado: también el TERMINADO (sus documentos se siguen viendo).
   const r = await db('contratos')
     .select('datos_variables')
     .eq('expediente_id', expedienteId)
     .not('destinacion', 'is', null)
-    .not('estado', 'in', '(cancelado,finalizado)')
+    .neq('estado', 'cancelado')
+    .order('created_at', { ascending: false })
+    .limit(1)
     .maybeSingle();
   const fila = dato<{ datos_variables: { propio?: PropioGuardado; documento?: DocumentoV3 } | null } | null>(r, expedienteId, 'contrato V3');
   const key = fila?.datos_variables ? cual(fila.datos_variables) : null;

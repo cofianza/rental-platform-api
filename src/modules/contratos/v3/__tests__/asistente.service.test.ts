@@ -393,6 +393,12 @@ function obtener() {
   return obtenerEstado(EXP, USER, ROL);
 }
 
+/** Iniciar también lee primero si el estudio ya tiene un contrato fuera de borrador (E6): aquí no. */
+function iniciar() {
+  queues.set('contratos', [{ data: null, error: null }, ...(queues.get('contratos') ?? [])]);
+  return iniciarContrato(EXP, USER, ROL);
+}
+
 describe('flag CONTRATOS_V3_ENABLED apagado', () => {
   beforeEach(() => {
     mockEnv.CONTRATOS_V3_ENABLED = false;
@@ -439,6 +445,9 @@ describe('obtenerEstado', () => {
     const e = await obtenerEstado(EXP, USER, ROL);
     expect(e.enviado).toMatchObject({ id: CTO, estado: 'finalizado' });
     expect(estadoEnviado).toHaveBeenCalledWith(CTO);
+    // Con dos filas V3 (una terminada y otra cancelada, por ejemplo) maybeSingle no debe fallar.
+    expect(opsDe('contratos', 'order')[0].args).toEqual(['created_at', { ascending: false }]);
+    expect(opsDe('contratos', 'limit')[0].args).toEqual([1]);
   });
 
   it('si el más reciente es un borrador, manda el asistente (aunque haya uno terminado antes)', async () => {
@@ -476,7 +485,7 @@ describe('iniciarContrato', () => {
     encolarCarga();
     enqueue('contratos', { data: fila(), error: null });
 
-    const r = await iniciarContrato(EXP, USER, ROL);
+    const r = await iniciar();
 
     expect(r.creado).toBe(true);
     expect(r.estado.contrato).toMatchObject({ id: CTO, numero: 'CTO-2026-0007', estado: 'borrador' });
@@ -499,7 +508,7 @@ describe('iniciarContrato', () => {
 
   it('con un borrador vivo devuelve su estado sin reservar ni insertar', async () => {
     encolarCarga({ contratos: [fila()] });
-    const r = await iniciarContrato(EXP, USER, ROL);
+    const r = await iniciar();
     expect(r.creado).toBe(false);
     expect(r.estado.contrato!.id).toBe(CTO);
     expect(mockReservar).not.toHaveBeenCalled();
@@ -515,7 +524,7 @@ describe('iniciarContrato', () => {
     enqueue('contratos', { data: null, error: { code: '23505', message: 'duplicate key' } });
     encolarCarga({ contratos: [fila()] });
 
-    const r = await iniciarContrato(EXP, USER, ROL);
+    const r = await iniciar();
 
     expect(r.creado).toBe(false);
     expect(r.estado.contrato!.id).toBe(CTO);
@@ -529,7 +538,7 @@ describe('iniciarContrato', () => {
     encolarCarga();
     enqueue('contratos', { data: null, error: { code: '57014', message: 'timeout' } });
 
-    const e = await error(iniciarContrato(EXP, USER, ROL));
+    const e = await error(iniciar());
 
     expect(e.statusCode).toBe(500);
     expect(mockLiberar).toHaveBeenCalledWith(EXP);
@@ -541,16 +550,23 @@ describe('iniciarContrato', () => {
     encolarCarga();
     enqueue('contratos', { data: null, error: { code: '57014', message: 'timeout' } });
 
-    const e = await error(iniciarContrato(EXP, USER, ROL));
+    const e = await error(iniciar());
 
     expect(e.statusCode).toBe(500);
     expect(mockLiberar).not.toHaveBeenCalled();
   });
 
+  it('un estudio que ya tuvo su contrato (en firma, activo o terminado) no inicia otro: 409', async () => {
+    queues.set('contratos', [{ data: { id: CTO, estado: 'finalizado' }, error: null }]);
+    const e = await error(iniciarContrato(EXP, USER, ROL));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_YA_EXISTE' });
+    expect(mockReservar).not.toHaveBeenCalled();
+  });
+
   it('con un bloqueo responde 409 CONTRATO_BLOQUEADO y nunca reserva', async () => {
     encolarCarga({ estado: 'en_revision' });
 
-    const e = await error(iniciarContrato(EXP, USER, ROL));
+    const e = await error(iniciar());
 
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BLOQUEADO' });
     expect(e.message).toBe('El contrato solo se crea sobre un estudio aprobado.');

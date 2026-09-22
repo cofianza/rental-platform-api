@@ -145,11 +145,18 @@ export async function executeTransition(
   });
 
   if (error) {
-    // Trigger de la BD (V3 §12.2): sin acta de entrega no se cierra.
-    if (String((error as { message?: string }).message ?? '').includes('ACTA_ENTREGA_REQUERIDA')) {
+    // Triggers de la BD (V3 §12.2): sin acta de entrega, o con el contrato en firma, no se cierra.
+    const msg = String((error as { message?: string }).message ?? '');
+    if (msg.includes('ACTA_ENTREGA_REQUERIDA')) {
       throw AppError.conflict(
         'Carga el acta de entrega e inventario del contrato antes de cerrar el estudio.',
         'ACTA_ENTREGA_REQUERIDA',
+      );
+    }
+    if (msg.includes('CONTRATO_EN_FIRMA')) {
+      throw AppError.conflict(
+        'El contrato de este estudio está en firma. Cancélalo antes de cerrar el estudio.',
+        'CONTRATO_EN_FIRMA',
       );
     }
     logger.error({ error, expedienteId }, 'Error al transicionar estudio');

@@ -135,14 +135,16 @@ describe('periodoVigente (prórroga por el mismo término)', () => {
 });
 
 describe('conFinVigente (tableros)', () => {
-  it('solo cambia el fin de un V3 vigente: legacy y V3 terminado pasan igual', () => {
+  it('V3 vigente: el período en curso; V3 terminado: el día de la terminación (Bogotá); legacy: igual', () => {
     const filas = [
-      { id: 'v3', estado: 'vigente', destinacion: 'vivienda', fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15' },
-      { id: 'legacy', estado: 'vigente', destinacion: null, fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15' },
-      { id: 'terminado', estado: 'finalizado', destinacion: 'vivienda', fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15' },
+      { id: 'v3', estado: 'vigente', destinacion: 'vivienda', fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15', fecha_terminacion: null },
+      { id: 'legacy', estado: 'vigente', destinacion: null, fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15', fecha_terminacion: null },
+      // prorrogado y terminado el 3 de marzo de 2028 a las 22:00 de Bogotá (04:00Z del 4)
+      { id: 'terminado', estado: 'finalizado', destinacion: 'vivienda', fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15', fecha_terminacion: '2028-03-04T03:00:00Z' },
+      { id: 'legacy-fin', estado: 'finalizado', destinacion: null, fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15', fecha_terminacion: '2026-06-01T15:00:00Z' },
     ];
     const r = conFinVigente(filas, '2028-03-01');
-    expect(r.map((f) => f.fecha_fin)).toEqual(['2029-01-15', '2027-01-15', '2027-01-15']);
+    expect(r.map((f) => f.fecha_fin)).toEqual(['2029-01-15', '2027-01-15', '2028-03-03', '2027-01-15']);
     expect(filas[0].fecha_fin).toBe('2027-01-15'); // no muta la entrada
   });
 });

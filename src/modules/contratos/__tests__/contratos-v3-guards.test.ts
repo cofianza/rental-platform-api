@@ -242,6 +242,16 @@ describe('fila V3 en el flujo legacy', () => {
     expect(primera('contrato_v3_sobres')).toBe(-1); // sin cancelarFirmaV3: con fianza activa respondería 409
   });
 
+  it('un miembro que no ve el estudio no termina el contrato (404) aunque sea de su organización', async () => {
+    const { assertExpedienteAccess } = await import('@/lib/tenantScope');
+    vi.mocked(assertExpedienteAccess).mockRejectedValueOnce(new AppError(404, 'EXPEDIENTE_NOT_FOUND', 'Estudio no encontrado'));
+    enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null });
+    const miembro = { id: 'miembro-1', rol: 'inmobiliaria' } as AuthUser;
+    const terminar = { nuevo_estado: 'finalizado', comentario: 'Entregó el inmueble', motivo: 'Terminación' } as never;
+    expect(await error(executeContratoTransition(CTO, terminar, miembro))).toMatchObject({ statusCode: 404 });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('un V3 no se termina desde otro estado que no sea FIANZA ACTIVA', async () => {
     enqueue('contratos', { data: filaV3({ estado: 'firma_incompleta' }), error: null });
     const terminar = { nuevo_estado: 'finalizado', comentario: 'x'.repeat(12), motivo: 'x' } as never;

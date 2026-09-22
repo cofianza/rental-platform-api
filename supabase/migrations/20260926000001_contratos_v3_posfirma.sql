@@ -4,7 +4,9 @@
 -- (a) transicionar_contrato: la matriz V3 admite vigente -> finalizado
 --     (TERMINADO). Copia exacta de 20260925000002 con esa sola linea.
 -- (b) expedientes: no se cierra el estudio de un contrato V3 con fianza activa
---     o terminada sin acta de entrega e inventario (§12.2). Trigger: cubre la
+--     o terminada sin acta de entrega e inventario (§12.2), ni con el contrato
+--     EN FIRMA (su proceso sigue vivo en Auco: al firmar quedaria una fianza
+--     activa sobre un estudio cerrado; primero se cancela). Trigger: cubre la
 --     RPC de 4 y de 5 argumentos, los UPDATE directos y el editor SQL. Solo V3:
 --     los autocierres del flujo anterior no revisan el error del UPDATE.
 -- (c) list_expedientes_with_relations: condicion (h) "acta pendiente" en las
@@ -125,6 +127,12 @@ SECURITY DEFINER
 SET search_path = public
 AS $function$
 BEGIN
+  IF EXISTS (
+    SELECT 1 FROM contratos c
+    WHERE c.expediente_id = NEW.id AND c.destinacion IS NOT NULL AND c.estado = 'pendiente_firma'
+  ) THEN
+    RAISE EXCEPTION 'CONTRATO_EN_FIRMA: el contrato del estudio esta en firma; cancelalo antes de cerrar el estudio';
+  END IF;
   IF EXISTS (
     SELECT 1 FROM contratos c
     WHERE c.expediente_id = NEW.id
@@ -488,7 +496,16 @@ $function$;
 --     SELECT (list_expedientes_with_relations(p_estudio_filtro => 'requiere_accion', p_limit => 1000)->>'total')::INT INTO antes;
 --     INSERT INTO contratos (expediente_id, estado, destinacion, iva_canon_pct, datos_variables)
 --       VALUES (e, 'borrador', 'vivienda', 0, '{"asistente":{}}') RETURNING id INTO c;
---     UPDATE contratos SET estado = 'vigente' WHERE id = c;   -- OLD en borrador: el congelamiento no lo revisa
+--     -- (b) EN FIRMA no cierra
+--     UPDATE contratos SET estado = 'pendiente_firma' WHERE id = c;   -- OLD en borrador: el congelamiento no lo revisa
+--     BEGIN
+--       UPDATE expedientes SET estado = 'cerrado' WHERE id = e;
+--       RAISE EXCEPTION 'FALLA (b): cerro con el contrato en firma';
+--     EXCEPTION WHEN raise_exception THEN
+--       IF SQLERRM LIKE 'FALLA%' THEN RAISE; END IF;
+--       ASSERT SQLERRM LIKE 'CONTRATO_EN_FIRMA%', 'FALLA (b): otro error: ' || SQLERRM;
+--     END;
+--     UPDATE contratos SET estado = 'vigente' WHERE id = c;   -- pendiente_firma -> vigente: columnas congeladas intactas
 --     -- (c) acta pendiente -> entra en "Requieren mi accion"
 --     SELECT (list_expedientes_with_relations(p_estudio_filtro => 'requiere_accion', p_limit => 1000)->>'total')::INT INTO despues;
 --     ASSERT despues = antes + 1, format('FALLA (c): el total paso de %s a %s (esperado +1)', antes, despues);
@@ -507,6 +524,13 @@ $function$;
 --     EXCEPTION WHEN raise_exception THEN IF SQLERRM LIKE 'FALLA%' THEN RAISE; END IF;
 --     END;
 --     PERFORM transicionar_contrato(c, 'finalizado', 'v', NULL);
+--     -- (b) terminado sin acta tampoco cierra
+--     BEGIN
+--       UPDATE expedientes SET estado = 'cerrado' WHERE id = e;
+--       RAISE EXCEPTION 'FALLA (b): cerro un terminado sin acta';
+--     EXCEPTION WHEN raise_exception THEN
+--       IF SQLERRM LIKE 'FALLA%' THEN RAISE; END IF;
+--     END;
 --     -- (b) con acta si cierra, y (c) sale de "Requieren mi accion"
 --     INSERT INTO contrato_archivos (contrato_id, tipo_archivo, storage_key, nombre_archivo, tipo_mime, tamano_bytes, hash_integridad)
 --       VALUES (c, 'acta_entrega', 'verificacion/acta.pdf', 'acta.pdf', 'application/pdf', 1, repeat('0', 64));

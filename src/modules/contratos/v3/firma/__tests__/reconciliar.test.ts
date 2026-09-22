@@ -288,6 +288,16 @@ describe('reconciliarSobre: ecos y sobres viejos', () => {
     expect(aviso.map((n) => [n.user_id, n.tipo])).toEqual([['ad1', 'firma.conflicto']]);
   });
 
+  it('curación de un contrato que ya se terminó: sin aviso ni alarma, solo la constancia de omitido', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo', cerrado_en: '2026-09-21T15:30:00.000Z' })));
+    enqueue('contratos', ok(contrato({ estado: 'finalizado' })));
+    enqueue('expedientes', EXPEDIENTE);
+    await reconciliarSobre('s1');
+    expect(tabla('notificaciones', 'insert')).toEqual([]);
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({ aviso_detalle: { omitido: 'finalizado' } });
+  });
+
   it('un contrato ya activo sin fecha (activación a medias) la recibe, sin volver a transicionar', async () => {
     enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo', cerrado_en: '2026-09-21T15:30:00.000Z' })));
     enqueue('contratos', ok(contrato({ estado: 'vigente' })), ok(null));
