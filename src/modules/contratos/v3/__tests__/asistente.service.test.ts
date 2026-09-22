@@ -126,6 +126,7 @@ vi.mock('../firma/firma.service', () => ({
   reintentar: vi.fn(),
   actualizarFirma: vi.fn(),
 }));
+vi.mock('../firma/reconciliar', () => ({ ultimoSobre: vi.fn(async () => null) }));
 // Sin Chromium: el PDF es un buffer falso, los pendientes salen de la plantilla real.
 vi.mock('../vivienda', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../vivienda')>();
@@ -157,6 +158,7 @@ import {
 } from '../asistente.service';
 import type { Asistente, DocumentoV3 } from '../asistente.reglas';
 import { crearSobre, estadoEnviado } from '../firma/firma.service';
+import { ultimoSobre } from '../firma/reconciliar';
 import { guardarPasoSchema } from '../asistente.schema';
 import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, Paso4 } from '../asistente.types';
 import { AVISO_VERSION, huella, shaClausula } from '../clausulas.reglas';
@@ -1284,6 +1286,16 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(crearSobre).not.toHaveBeenCalled();
   });
 
+  it('el GET marca desactualizada la vista previa con lo mismo que rechaza el envío (datos de hoy distintos)', async () => {
+    const doc = await documentoRevisado(PASOS);
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    expect((await obtener()).contrato?.documento?.desactualizado).toBe(false);
+    encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, entrada: { ...doc.entrada, canonCop: 1_000_000 } })] });
+    expect((await obtener()).contrato?.documento?.desactualizado).toBe(true);
+    encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, logoStorageKey: 'otro-logo.png' })] });
+    expect((await obtener()).contrato?.documento?.desactualizado).toBe(true);
+  });
+
   it('con textos pendientes de aprobación no se envía; el día 1.º tiene su propio mensaje', async () => {
     const doc = await documentoRevisado(PASOS);
     encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, pendientes: ['c-01'] })] });
@@ -1321,7 +1333,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     vi.mocked(crearSobre).mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
     encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
     enqueue('contrato_partes', OK, OK);
-    enqueue('contratos', { data: [{ id: CTO }], error: null }, OK, OK);
+    enqueue('contratos', { data: [{ id: CTO }], error: null }, { data: [{ id: CTO }], error: null }, OK);
 
     expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
       errorCode: 'AUCO_UPLOAD_FAILED',
@@ -1333,6 +1345,39 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(storageApi.remove).not.toHaveBeenCalledWith([KEY_PREVIA]);
     const historial = opsDe('contrato_historial_estados', 'insert').map((o) => o.args[0] as Record<string, unknown>);
     expect(historial.map((h) => h.estado_nuevo)).toEqual(['pendiente_firma', 'borrador']);
+  });
+
+  it('si lo cancelaron mientras Auco fallaba, no revierte: ni borrador, ni historial, ni borra el PDF final', async () => {
+    const doc = await documentoRevisado(PASOS);
+    archivos[CRC_KEY] = await pdfReal(1);
+    vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
+    vi.mocked(crearSobre).mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    enqueue('contrato_partes', OK, OK);
+    enqueue('contratos', { data: [{ id: CTO }], error: null }, { data: [], error: null });
+
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
+    expect(opsDe('contratos', 'update')).toHaveLength(2); // el CAS y el intento de volver; nada de restaurar
+    expect(opsDe('contrato_historial_estados', 'insert')).toHaveLength(1); // solo el del envío
+    expect(storageApi.remove).not.toHaveBeenCalled();
+  });
+
+  it('si pese al error el proceso quedó vivo en Auco, el envío cuenta: no revierte', async () => {
+    const doc = await documentoRevisado(PASOS);
+    archivos[CRC_KEY] = await pdfReal(1);
+    vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
+    vi.mocked(crearSobre).mockRejectedValueOnce(AppError.conflict('cambió', 'CONTRATO_ESTADO_CAMBIADO'));
+    vi.mocked(ultimoSobre).mockResolvedValueOnce({ estado: 'en_firma', auco_code: 'AUCO1' } as never);
+    vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO, estado: 'pendiente_firma' } as never);
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    enqueue('contrato_partes', OK, OK);
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+
+    const e = await enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL);
+    expect(e.enviado).toMatchObject({ id: CTO, estado: 'pendiente_firma' });
+    expect(opsDe('contratos', 'update')).toHaveLength(1);
+    expect(storageApi.remove).toHaveBeenCalledWith([KEY_PREVIA]);
+    expect(storageApi.remove).not.toHaveBeenCalledWith([KEY_FINAL]);
   });
 
   it('Ruta B: sin paso 4, sin el PDF propio no sale; con él, se une [propio, Anexo, CRC] sin tocarlo', async () => {

@@ -36,13 +36,16 @@ if (env.CONTRATO_VENCIMIENTO_JOB_ENABLED) {
 // avisos sin entregar). Atado a los datos y NO a CONTRATOS_V3_ENABLED: los
 // sobres de QA (flag encendido en local) mandan sus webhooks a producción.
 // Sin sobres V3 solo hace una consulta vacía.
+// FIRMA_V3_BARRIDO_ENABLED=false en una API local (su .env.local apunta a producción).
 const FIRMA_V3_INTERVAL_MS = 15 * 60 * 1000; // ponytail: una consulta por sobre vivo; bajar la frecuencia si hay volumen
-const runFirmaV3 = () =>
-  import('@/modules/contratos/v3/firma/reconciliar')
-    .then(({ barrerFirmasV3 }) => barrerFirmasV3())
-    .catch((err) => logger.warn({ err }, 'barrerFirmasV3: ciclo fallido'));
-runFirmaV3();
-setInterval(runFirmaV3, FIRMA_V3_INTERVAL_MS).unref();
+if (env.FIRMA_V3_BARRIDO_ENABLED) {
+  const runFirmaV3 = () =>
+    import('@/modules/contratos/v3/firma/reconciliar')
+      .then(({ barrerFirmasV3 }) => barrerFirmasV3())
+      .catch((err) => logger.warn({ err }, 'barrerFirmasV3: ciclo fallido'));
+  runFirmaV3();
+  setInterval(runFirmaV3, FIRMA_V3_INTERVAL_MS).unref();
+}
 
 // Escalada automatica de mora. Antes solo existia como POST /cron/moras/
 // auto-escalar protegido por CRON_SECRET, que no esta configurado: nunca corria

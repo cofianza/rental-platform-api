@@ -16,6 +16,13 @@
 -- ROLLBACK: reaplicar 20260910000002.
 -- ============================================================
 
+-- Requiere 20260925000001 (el valor 'firma_incompleta' del enum) ya corrida y confirmada.
+DO $$ BEGIN
+  IF NOT ('firma_incompleta' = ANY (enum_range(NULL::public.estado_contrato)::text[])) THEN
+    RAISE EXCEPTION 'Corre y confirma primero 20260925000001_estado_contrato_firma_incompleta.sql';
+  END IF;
+END $$;
+
 CREATE OR REPLACE FUNCTION public.list_expedientes_with_relations(
   p_search text DEFAULT NULL::text,
   p_estados text[] DEFAULT NULL::text[],
@@ -327,7 +334,10 @@ $function$;
 --   DO $v$
 --   DECLARE
 --     e UUID := (SELECT x.id FROM expedientes x WHERE NOT EXISTS (
---       SELECT 1 FROM contratos t WHERE t.expediente_id = x.id AND t.estado <> 'cancelado') LIMIT 1);
+--       SELECT 1 FROM contratos t WHERE t.expediente_id = x.id AND t.estado <> 'cancelado')
+--       AND x.id NOT IN (SELECT (d->>'id')::uuid FROM json_array_elements(
+--         list_expedientes_with_relations(p_estudio_filtro => 'requiere_accion', p_limit => 1000)->'data') d)
+--       LIMIT 1);
 --     c UUID; antes INT; despues INT;
 --   BEGIN
 --     ASSERT e IS NOT NULL, 'FALLA: no hay un estudio sin contrato para la prueba';

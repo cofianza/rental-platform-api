@@ -12,6 +12,13 @@
 --     puede moverse por un camino del flujo anterior.
 -- ============================================================
 
+-- Requiere 20260925000001 (el valor 'firma_incompleta' del enum) ya corrida y confirmada.
+DO $$ BEGIN
+  IF NOT ('firma_incompleta' = ANY (enum_range(NULL::public.estado_contrato)::text[])) THEN
+    RAISE EXCEPTION 'Corre y confirma primero 20260925000001_estado_contrato_firma_incompleta.sql';
+  END IF;
+END $$;
+
 -- ── (a) Sobres de firma V3 ──
 
 CREATE TABLE IF NOT EXISTS public.contrato_v3_sobres (
@@ -154,7 +161,9 @@ $function$;
 --   BEGIN;
 --   DO $v$
 --   DECLARE
---     e UUID := (SELECT id FROM expedientes LIMIT 1);
+--     e UUID := (SELECT x.id FROM expedientes x WHERE NOT EXISTS (
+--       SELECT 1 FROM contratos t WHERE t.expediente_id = x.id AND t.destinacion IS NOT NULL
+--       AND t.estado NOT IN ('cancelado','finalizado')) LIMIT 1);
 --     c UUID; l UUID;
 --   BEGIN
 --     ASSERT e IS NOT NULL, 'FALLA: no hay expedientes para la prueba';

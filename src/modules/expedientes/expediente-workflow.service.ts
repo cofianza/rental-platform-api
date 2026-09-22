@@ -307,14 +307,19 @@ async function liberarReservaSiNoQuedaContratoVivo(
   //    directo (mismo patron que la auto-cancelacion de renovaciones): no
   //    queremos los side effects TS de la transicion, la liberacion la hacemos
   //    aqui abajo una sola vez.
-  const { data: preFirma } = await (supabase
+  // Se leen los no terminales y se filtra aquí: nombrar 'firma_incompleta' en la
+  // consulta la haría fallar mientras el valor no exista en el enum (migración aparte).
+  const { data: noTerminales } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado')
     .eq('expediente_id', expedienteId)
-    .in('estado', CONTRATO_ESTADOS_PRE_FIRMA as unknown as string[]);
+    .not('estado', 'in', `(${CONTRATO_ESTADOS_TERMINALES.join(',')})`);
+  const preFirma = ((noTerminales as Array<{ id: string; estado: string }> | null) ?? []).filter((c) =>
+    (CONTRATO_ESTADOS_PRE_FIRMA as readonly string[]).includes(c.estado),
+  );
 
   const motivo = targetState === 'rechazado' ? 'Estudio rechazado' : 'Estudio cerrado';
-  for (const contrato of ((preFirma as Array<{ id: string; estado: string }> | null) ?? [])) {
+  for (const contrato of preFirma) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: rpcErr } = await (supabase as any).rpc('transicionar_contrato', {
       p_contrato_id: contrato.id,

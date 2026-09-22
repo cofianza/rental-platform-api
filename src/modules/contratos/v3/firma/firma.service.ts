@@ -20,6 +20,7 @@ import { notificarUsuario } from '@/modules/notificaciones/notificaciones.servic
 import type { EnvioV3 } from '../asistente.types';
 import { construirSignProfile, datosDeFirma, partesCompletas, validarFirmantes, type FirmanteSobre } from './reglas';
 import {
+  activarContrato,
   leerContrato,
   leerPartes,
   leerSobre,
@@ -50,6 +51,30 @@ async function sobreVivo(contratoId: string): Promise<Sobre | null> {
   const s = await ultimoSobre(contratoId);
   return s && (s.estado === 'creando' || s.estado === 'en_firma') ? s : null;
 }
+
+/** Algún sobre firmado por todas las partes (aunque la activación haya quedado a medias). */
+async function sobreCompleto(contratoId: string): Promise<{ id: string } | null> {
+  const { data, error } = await db('contrato_v3_sobres')
+    .select('id')
+    .eq('contrato_id', contratoId)
+    .eq('estado', 'completo')
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo leer el proceso de firma.');
+  return (data as { id: string } | null) ?? null;
+}
+
+/** Con la firma completa en algún sobre no se reintenta ni se cancela: se termina de activar (§11.5). */
+async function exigirSinFirmaCompleta(contratoId: string): Promise<void> {
+  const completo = await sobreCompleto(contratoId);
+  if (!completo) return;
+  const s = await leerSobre(completo.id);
+  if (s) await activarContrato(s).catch((e) => logger.warn({ contratoId, e }, 'Firma V3: activación pendiente (la retoma el barrido)'));
+  throw AppError.conflict('Todas las partes ya firmaron: la fianza queda activa.', 'FIRMA_COMPLETA');
+}
+
+/** Solo se reintenta si no hubo proceso o el último no llegó a Auco (fallido) o se anuló. */
+const reintentable = (s: Sobre | null) => !s || s.estado === 'fallido' || s.estado === 'cancelado';
 
 /**
  * Crea el proceso de firma en Auco para un contrato V3 en EN FIRMA con su PDF
@@ -99,7 +124,8 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   if (errIns) {
     if ((errIns as { code?: string }).code === '23505')
       throw AppError.conflict('Ya hay un envío a firma en curso para este contrato.', 'FIRMA_YA_EN_CURSO');
-    throw new AppError(500, 'INTERNAL_ERROR', `No se pudo registrar el envío: ${errIns.message}`);
+    logger.error({ contratoId, error: errIns.message }, 'Firma V3: no se pudo registrar el sobre');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar el envío a firma. Intenta de nuevo.');
   }
   const sobre = (await leerSobre((creado as { id: string }).id))!;
 
@@ -126,10 +152,18 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
     );
   } catch (e) {
     const detalle = e instanceof Error ? e.message : String(e);
-    await db('contrato_v3_sobres')
+    const { data: marcado } = await db('contrato_v3_sobres')
       .update({ estado: 'fallido', motivo: 'AUCO_UPLOAD', motivo_detalle: detalle.slice(0, 500) } as never)
       .eq('id', sobre.id)
-      .eq('estado', 'creando');
+      .eq('estado', 'creando')
+      .select('id');
+    if (!(marcado as unknown[] | null)?.length) {
+      // Ya no está 'creando': el webhook adoptó el proceso (Auco sí lo creó y el
+      // upload solo se demoró) o lo cancelaron mientras subía.
+      const ahora = await leerSobre(sobre.id).catch(() => null);
+      if (ahora?.estado === 'en_firma' && ahora.auco_code) return ahora;
+      throw AppError.conflict('El contrato cambió mientras se enviaba a firma.', 'CONTRATO_ESTADO_CAMBIADO');
+    }
     logger.error({ contratoId, sobreId: sobre.id, error: detalle }, 'Firma V3: Auco no creó el proceso');
     throw new AppError(502, 'AUCO_UPLOAD_FAILED', `Auco no aceptó el envío: ${detalle.slice(0, 300)}`);
   }
@@ -145,6 +179,9 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
     throw new AppError(500, 'FIRMA_ENVIADA_SIN_REGISTRO', 'Se envió a firma, pero no quedó registrado. Lo sincronizamos en unos minutos.');
   }
   if (!(act as unknown[] | null)?.length) {
+    const ahora = await leerSobre(sobre.id).catch(() => null);
+    // El webhook de Auco (CREATE, con `custom`) llegó antes que la respuesta del upload y ya lo adoptó.
+    if (ahora?.estado === 'en_firma' && ahora.auco_code === code) return ahora;
     // Lo cancelaron mientras subía: se anula también en Auco.
     await db('contrato_v3_sobres').update({ auco_code: code } as never).eq('id', sobre.id).is('auco_code', null);
     await cancelDocument(code, { message: 'Contrato cancelado durante el envío', email: env.AUCO_SENDER_EMAIL })
@@ -153,13 +190,16 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
     throw AppError.conflict('El contrato cambió mientras se enviaba a firma.', 'CONTRATO_ESTADO_CAMBIADO');
   }
 
-  await db('eventos_timeline').insert({
-    expediente_id: c.expediente_id,
-    tipo: 'contrato',
-    descripcion: `Contrato ${c.numero} enviado a firma${sobre.intento > 1 ? ` (intento ${sobre.intento})` : ''}`,
-    usuario_id: userId,
-    metadata: { contrato_id: contratoId, sobre_id: sobre.id, auco_code: code },
-  } as never);
+  // Desde aquí el proceso ya salió: nada puede lanzar (una reversión lo dejaría vivo en Auco).
+  await Promise.resolve(
+    db('eventos_timeline').insert({
+      expediente_id: c.expediente_id,
+      tipo: 'contrato',
+      descripcion: `Contrato ${c.numero} enviado a firma${sobre.intento > 1 ? ` (intento ${sobre.intento})` : ''}`,
+      usuario_id: userId,
+      metadata: { contrato_id: contratoId, sobre_id: sobre.id, auco_code: code },
+    } as never),
+  ).catch(() => undefined);
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.FIRMA_SOLICITUD_CREATED,
@@ -167,7 +207,7 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
     entidadId: contratoId,
     detalle: { v3: true, intento: sobre.intento, auco_code: code, expira: expira.toISOString() },
   });
-  return (await leerSobre(sobre.id))!;
+  return (await leerSobre(sobre.id).catch(() => null)) ?? { ...sobre, auco_code: code, estado: 'en_firma' };
 }
 
 /**
@@ -200,7 +240,9 @@ export async function reenviar(contratoId: string, userId: string): Promise<void
     await crearSobre(contratoId, userId);
   } catch (e) {
     if (e instanceof AppError && e.errorCode === 'FIRMA_ENVIADA_SIN_REGISTRO') throw e;
-    await transicionar(contratoId, 'firma_incompleta', `Reenvío fallido: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500), userId);
+    await transicionar(contratoId, 'firma_incompleta', `Reenvío fallido: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500), userId).catch(
+      (err) => logger.error({ contratoId, err }, 'Firma V3: el reenvío falló y el contrato no volvió a FIRMA INCOMPLETA'),
+    );
     throw e;
   }
 }
@@ -210,7 +252,9 @@ export async function reintentar(contratoId: string, userId: string): Promise<vo
   const c = await leerContrato(contratoId);
   if (!c) throw AppError.notFound('Contrato no encontrado.');
   if (c.estado !== 'pendiente_firma') throw AppError.conflict('El contrato no está en firma.', 'CONTRATO_ESTADO_CAMBIADO');
-  if (await sobreVivo(contratoId)) throw AppError.conflict('Ya hay un envío a firma en curso.', 'FIRMA_YA_EN_CURSO');
+  await exigirSinFirmaCompleta(contratoId);
+  if (!reintentable(await ultimoSobre(contratoId)))
+    throw AppError.conflict('El proceso de firma sigue su curso; actualiza el estado.', 'FIRMA_YA_EN_CURSO');
   await crearSobre(contratoId, userId);
 }
 
@@ -220,6 +264,8 @@ export async function reintentar(contratoId: string, userId: string): Promise<vo
  * avisa a quien envió; el contrato queda EN FIRMA con "Reintentar".
  */
 export async function continuarTrasIdentidad(contratoId: string, userId: string | null): Promise<void> {
+  const c = await leerContrato(contratoId);
+  if (c?.estado !== 'pendiente_firma') return; // lo cancelaron o revirtieron mientras verificaban
   if ((await identidadPendientes(contratoId)) > 0) return;
   if (await sobreVivo(contratoId)) return;
   try {
@@ -247,10 +293,9 @@ export async function continuarTrasIdentidad(contratoId: string, userId: string 
  * Nunca deja un CANCELADO con la firma completa en Auco.
  */
 export async function cancelarFirmaV3(contratoId: string): Promise<void> {
+  await exigirSinFirmaCompleta(contratoId);
   const ultimo = await ultimoSobre(contratoId);
   if (!ultimo) return;
-  if (ultimo.estado === 'completo')
-    throw AppError.conflict('Todas las partes ya firmaron: la fianza está activa.', 'FIRMA_COMPLETA');
   if (ultimo.estado !== 'creando' && ultimo.estado !== 'en_firma') return; // incompleta o sin sobre vivo: nada en Auco
 
   const { data: marcado } = await db('contrato_v3_sobres')
@@ -262,12 +307,19 @@ export async function cancelarFirmaV3(contratoId: string): Promise<void> {
     throw AppError.conflict('El proceso de firma cambió; recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
   if (!ultimo.auco_code) return; // 'creando': crearSobre ve el CAS perdido y cancela en Auco al volver
 
+  const marcarCancelado = () =>
+    db('contrato_v3_sobres').update({ auco_cancelado_en: new Date().toISOString() } as never).eq('id', ultimo.id);
   try {
-    await cancelDocument(ultimo.auco_code, { message: 'Contrato cancelado por la inmobiliaria', email: env.AUCO_SENDER_EMAIL });
-    await db('contrato_v3_sobres').update({ auco_cancelado_en: new Date().toISOString() } as never).eq('id', ultimo.id);
+    const r = await cancelDocument(ultimo.auco_code, { message: 'Contrato cancelado por la inmobiliaria', email: env.AUCO_SENDER_EMAIL });
+    // Auco puede responder 200 con el documento en `errors` (p. ej. si ya estaba firmado).
+    if (r?.success === false || (r?.errors?.cant ?? 0) > 0) throw new Error('Auco respondió que no canceló el proceso');
+    await marcarCancelado();
   } catch (e) {
     const info = await getDocumentStatus(ultimo.auco_code).catch(() => null);
-    if (info?.status === 'REJECTED' || info?.status === 'EXPIRED') return; // ya cerrado en Auco
+    if (info?.status === 'REJECTED' || info?.status === 'EXPIRED') {
+      await marcarCancelado(); // ya cerrado en Auco: el barrido no tiene nada que reintentar
+      return;
+    }
     // No se pudo anular: el sobre vuelve a estar en firma.
     await db('contrato_v3_sobres')
       .update({ estado: 'en_firma', motivo: null } as never)
@@ -304,9 +356,9 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
     vigenciaEstudio(c),
   ]);
   const parte = new Map(partes.map((p) => [p.id, p]));
-  const incompleto = c.estado === 'firma_incompleta' && s?.estado === 'incompleto' ? s : null;
+  // El aviso es el del último sobre incompleto: tras un reenvío fallido el último queda 'fallido'.
+  const incompleto = c.estado === 'firma_incompleta' ? await ultimoIncompleto(contratoId) : null;
   const textoAviso = incompleto?.aviso_detalle?.texto;
-  const vivo = s && (s.estado === 'creando' || s.estado === 'en_firma');
   return {
     id: c.id,
     numero: c.numero,
@@ -342,6 +394,18 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
         : vig?.vigente
           ? { puede: true, motivo: null }
           : { puede: false, motivo: 'El estudio ya no está vigente: se requiere una nueva evaluación.' },
-    reintento: c.estado === 'pendiente_firma' && !vivo && pendientes === 0,
+    reintento: c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0,
   };
+}
+
+async function ultimoIncompleto(contratoId: string): Promise<Sobre | null> {
+  const { data } = await db('contrato_v3_sobres')
+    .select('id')
+    .eq('contrato_id', contratoId)
+    .eq('estado', 'incompleto')
+    .order('intento', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const fila = data as { id: string } | null;
+  return fila ? leerSobre(fila.id) : null;
 }

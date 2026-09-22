@@ -47,6 +47,8 @@ export async function executeContratoTransition(
   const contrato = await fetchContrato(contratoId);
   const currentState = contrato.estado;
   const targetState = input.nuevo_estado;
+  if (input.estado_esperado && input.estado_esperado !== currentState)
+    throw AppError.conflict('El contrato cambió de estado mientras tanto. Recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
 
   // Contratos V3: el workflow legacy (revisión, aprobación, envío a firma) no
   // aplica —el asistente envía, reenvía y activa—. Aquí solo se cancela, y
@@ -733,7 +735,9 @@ async function liberarInmuebleDelExpediente(
       .select('id')
       .eq('expediente_id', expedienteId)
       .neq('id', contratoId)
-      .in('estado', ['vigente', 'firmado', 'pendiente_firma', 'firma_incompleta'])
+      // Lista negativa (= vigente, firmado, pendiente_firma, firma_incompleta): no
+      // nombra 'firma_incompleta', así la consulta no depende de que el valor exista en el enum.
+      .not('estado', 'in', '(borrador,en_revision,aprobado,finalizado,cancelado)')
       .limit(1);
     if (guardError) {
       // FAIL-CLOSED: si no podemos confirmar que no hay contrato sucesor, NO
@@ -787,7 +791,7 @@ async function liberarInmuebleDelExpediente(
         .select('id, expediente_id')
         .in('expediente_id', expIds)
         .neq('expediente_id', expedienteId)
-        .in('estado', ['vigente', 'firmado', 'pendiente_firma', 'firma_incompleta'])
+        .not('estado', 'in', '(borrador,en_revision,aprobado,finalizado,cancelado)')
         .limit(1);
       if (ajenosError) {
         logger.error(

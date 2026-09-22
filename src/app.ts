@@ -91,6 +91,8 @@ app.use(generalLimiter);
 app.use(
   pinoHttp({
     logger,
+    // Nunca a los logs: el JWT de cada usuario, la cookie de sesión y el secreto del webhook de Auco.
+    redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-webhook-secret"]'],
     genReqId: (req) => {
       const existing = req.headers['x-request-id'];
       return typeof existing === 'string' ? existing : crypto.randomUUID();

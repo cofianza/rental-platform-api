@@ -210,6 +210,14 @@ describe('fila V3 en el flujo legacy', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
+  it('con `estado_esperado` viejo (otro lo envió a firma mientras tanto) → 409 sin tocar Auco ni la RPC', async () => {
+    enqueue('contratos', { data: filaV3({ estado: 'pendiente_firma' }), error: null });
+    const e = await error(executeContratoTransition(CTO, { ...(cancelar as object), estado_esperado: 'borrador' } as never, ADMIN));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_ESTADO_CAMBIADO' });
+    expect(primera('contrato_v3_sobres')).toBe(-1);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('si todas las partes ya firmaron, el hook responde 409 y no se cancela', async () => {
     enqueue('contratos', { data: filaV3({ estado: 'pendiente_firma' }), error: null });
     enqueue('contrato_v3_sobres', { data: { id: 's1', contrato_id: CTO, intento: 1, estado: 'completo', auco_code: 'AUCO1' }, error: null });

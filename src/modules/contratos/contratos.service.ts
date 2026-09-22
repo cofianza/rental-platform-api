@@ -2843,6 +2843,8 @@ export async function descargarContrato(
     nombre_archivo: nombreArchivo,
     tipo_mime: 'application/pdf',
     expires_in: DOWNLOAD_URL_EXPIRY_SECONDS,
+    // Si el archivado del firmado falló arriba se sirve el original: quien rotula "firmado" lo necesita saber.
+    firmado: storageKey !== row.storage_key,
   };
 }
 

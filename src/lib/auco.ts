@@ -125,6 +125,8 @@ export interface AucoDocumentInfo {
   code: string;
   status: AucoDocumentStatus;
   signProfile: AucoSignerInfo[];
+  /** Lo que el integrador mandó en `custom` al crear el proceso (forma sin verificar: objeto o arreglo). */
+  custom?: unknown;
 }
 
 export interface AucoWebhookPayload {
@@ -305,16 +307,26 @@ export async function sendReminder(code: string): Promise<void> {
 export async function cancelDocument(
   code: string,
   opts?: { message: string; email: string },
-): Promise<void> {
+): Promise<AucoCancelResponse> {
   // Auco espera el campo `codes` (array), no `documents` — con `documents`
   // devuelve 400 "codes is required" y el documento queda activo en Auco.
-  await aucoRequest(
+  const r = await aucoRequest<AucoCancelResponse>(
     'POST',
     '/document/cancel',
     { codes: [code], ...(opts ?? {}) },
     true,
   );
-  logger.info({ code }, 'Auco document cancelled');
+  logger.info({ code, success: r?.success, noCancelados: r?.errors?.cant }, 'Auco document cancelled');
+  return r;
+}
+
+/**
+ * Respuesta de POST /document/cancel. Ojo: puede venir HTTP 200 con errores
+ * parciales (`errors.cant` documentos que NO se cancelaron, p. ej. ya firmados).
+ */
+export interface AucoCancelResponse {
+  success?: boolean;
+  errors?: { cant?: number; documents?: unknown };
 }
 
 /**

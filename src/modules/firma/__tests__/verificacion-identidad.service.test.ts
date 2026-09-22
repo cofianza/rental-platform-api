@@ -424,7 +424,6 @@ describe('contratos V3', () => {
     queues.set('contratos', [CTX_V3]);
     enqueue(T, fila({ opcion: 'autoriza' }), { data: [{ id: 'v1' }], error: null }, { count: 1, error: null });
     expect(await verificarBiometriaFirma(TOKEN, imgs)).toEqual({ completada: true, motivo: null });
-    expect(v3.leerContrato).not.toHaveBeenCalled(); // no llegó a crearSobre
     expect(mockUpload).not.toHaveBeenCalled();
     expect(ops.some((o) => o.table === 'contrato_v3_sobres')).toBe(false);
 
@@ -445,6 +444,19 @@ describe('contratos V3', () => {
     expect(input.custom).toEqual({ cofianza_sobre: 's1' });
     expect(input.signProfile).toHaveLength(3);
     expect(mockCrearSobre).not.toHaveBeenCalled();
+  });
+
+  it('si cancelaron el contrato mientras verificaban, la última verificación no crea el sobre', async () => {
+    mockCotejar.mockResolvedValue(resumen('verificada', 95));
+    v3.leerContrato.mockResolvedValueOnce({
+      id: 'c1', estado: 'cancelado', numero: 'CTO-2026-0001', expediente_id: 'e1', fecha_firma: null,
+      datos_variables: { documento: { final: { ruta: 'A' } } }, inmuebleId: null, orgId: null,
+    });
+    queues.set('contratos', [CTX_V3]);
+    enqueue(T, fila({ opcion: 'autoriza' }), { data: [{ id: 'v1' }], error: null }, { count: 0, error: null });
+    expect(await verificarBiometriaFirma(TOKEN, imgs)).toEqual({ completada: true, motivo: null });
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(ops.some((o) => o.table === 'contrato_v3_sobres')).toBe(false);
   });
 
   it('un contrato del flujo anterior sigue creando su sobre con crearSolicitudFirmaMultiparte', async () => {

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, it, expect, vi } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString } from 'pdf-lib';
 
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
@@ -71,6 +71,26 @@ describe('validarPdfPropio', () => {
     const buf = await pdf(2);
     await expect(validarPdfPropio(buf, { ...LIMITES, maxBytes: 10 })).rejects.toMatchObject({ motivo: 'peso' });
     await expect(validarPdfPropio(buf, { ...LIMITES, maxPaginas: 1 })).rejects.toMatchObject({ motivo: 'paginas' });
+  });
+
+  it('rechaza acciones que ejecutan algo (JavaScript al abrir); un enlace web pasa', async () => {
+    const conJs = await PDFDocument.create();
+    conJs.addPage([200, 200]);
+    conJs.catalog.set(PDFName.of('OpenAction'), conJs.context.obj({ S: 'JavaScript', JS: PDFString.of('app.alert(1)') }));
+    await expect(validarPdfPropio(Buffer.from(await conJs.save()), LIMITES)).rejects.toMatchObject({ motivo: 'activo' });
+
+    const conEnlace = await PDFDocument.create();
+    conEnlace.addPage([200, 200]);
+    conEnlace.catalog.set(PDFName.of('OpenAction'), conEnlace.context.obj({ S: 'URI', URI: PDFString.of('https://cofianza.co') }));
+    await expect(validarPdfPropio(Buffer.from(await conEnlace.save()), LIMITES)).resolves.toMatchObject({ paginas: 1 });
+  });
+
+  it('la carga corre vigilada: si tarda o la memoria crece de más, se corta como dañado (PDF bomba)', async () => {
+    const buf = await pdf(3);
+    await expect(validarPdfPropio(buf, { ...LIMITES, timeoutMs: 1 })).rejects.toMatchObject({ motivo: 'danado' });
+    await expect(validarPdfPropio(buf, { ...LIMITES, maxMemoriaExtra: 1 })).rejects.toMatchObject({ motivo: 'danado' });
+    // y con los límites normales el mismo PDF pasa
+    await expect(validarPdfPropio(buf, LIMITES)).resolves.toMatchObject({ paginas: 3 });
   });
 
   it('el error es PdfInvalidoError, para que la ruta lo traduzca a 422', async () => {

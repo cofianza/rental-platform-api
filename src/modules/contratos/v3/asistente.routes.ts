@@ -75,6 +75,14 @@ asistenteV3Router.get(
   asistenteController.propioUrl,
 );
 
+// GET /crc — URL firmada del CRC que se envió a firma (null en borrador).
+asistenteV3Router.get(
+  '/crc',
+  roleGuard(['administrador', 'operador_analista', 'gerencia_consulta', 'inmobiliaria']),
+  validate({ params: expedienteIdParamsSchema }),
+  asistenteController.crcUrl,
+);
+
 // POST /enviar — saca el contrato de borrador y lo manda a Auco (V3 §8.7.5, §10).
 asistenteV3Router.post(
   '/enviar',

@@ -252,6 +252,12 @@ const envSchema = z.object({
   // sigue en el flujo anterior. Para QA local: CONTRATOS_V3_ENABLED=true en el
   // .env.local de la API (ojo: la base es la de produccion).
   CONTRATOS_V3_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Contratos V3 · Entrega 5: barrido de respaldo de la firma (server.ts, cada
+  // 15 min). Encendido por defecto y SIN depender de CONTRATOS_V3_ENABLED
+  // (producción recibe los webhooks de los sobres de QA). Apagarlo en una API
+  // LOCAL (.env.local apunta a la base de producción): si no, esa API también
+  // entrega avisos y correos, con enlaces a localhost.
+  FIRMA_V3_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). OFF por defecto: con el flag
   // apagado nunca se construye el cliente ni se llama a Anthropic. Encendido

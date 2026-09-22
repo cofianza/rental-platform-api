@@ -24,7 +24,6 @@ import { cancelDocument, getDocumentRoadmap, getDocumentStatus, type AucoRoadmap
 import { getCalibracion } from '@/lib/calibracion';
 import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
-import { resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
 import { archivarPdfFirmadoEnStorage } from '@/modules/firma/firma.service';
 import { bloquearInmuebleOcupado } from '@/modules/inmuebles/inmuebles.service';
 import { enviarCorreoNotificacion } from '@/modules/notificaciones/notificaciones.service';
@@ -123,6 +122,7 @@ interface ContratoCtx {
   } | null;
   inmuebleId: string | null;
   orgId: string | null;
+  responsableId: string | null;
 }
 
 export async function leerContrato(id: string): Promise<ContratoCtx | null> {
@@ -132,13 +132,20 @@ export async function leerContrato(id: string): Promise<ContratoCtx | null> {
     .maybeSingle();
   if (error) falla('no se pudo leer el contrato', error);
   if (!data) return null;
-  const c = data as unknown as Omit<ContratoCtx, 'inmuebleId' | 'orgId'>;
-  const { data: exp } = await db('expedientes')
-    .select('inmueble_id, inmobiliaria_id')
+  const c = data as unknown as Omit<ContratoCtx, 'inmuebleId' | 'orgId' | 'responsableId'>;
+  // Estricta: sin el expediente no se sabe a quién avisar ni qué inmueble ocupar.
+  const { data: exp, error: expError } = await db('expedientes')
+    .select('inmueble_id, inmobiliaria_id, miembro_responsable_id')
     .eq('id', c.expediente_id)
     .maybeSingle();
-  const e = exp as { inmueble_id: string | null; inmobiliaria_id: string | null } | null;
-  return { ...c, inmuebleId: e?.inmueble_id ?? null, orgId: e?.inmobiliaria_id ?? null };
+  if (expError) falla('no se pudo leer el estudio del contrato', expError);
+  const e = exp as { inmueble_id: string | null; inmobiliaria_id: string | null; miembro_responsable_id: string | null } | null;
+  return {
+    ...c,
+    inmuebleId: e?.inmueble_id ?? null,
+    orgId: e?.inmobiliaria_id ?? null,
+    responsableId: e?.miembro_responsable_id ?? null,
+  };
 }
 
 /**
@@ -221,10 +228,35 @@ async function notificar(
   if (error) falla('no se pudieron crear las notificaciones', error);
 }
 
+/**
+ * A quién va el aviso: quien ve el estudio en la inmobiliaria. Los titulares
+ * siempre; el resto de miembros solo si la org tiene `miembros_ven_todo`; y el
+ * responsable del estudio y quien lo envió, si siguen activos. Lecturas
+ * estrictas y lista nunca vacía: la constancia de entrega (§11.7.4) no puede
+ * afirmar un aviso que no le llegó a nadie.
+ */
 async function destinatariosDe(c: ContratoCtx, s: Sobre): Promise<string[]> {
-  const miembros = c.orgId ? await resolveOrgMemberPerfilIds(c.orgId) : [];
-  const todos = new Set([...miembros, ...(s.enviado_por ? [s.enviado_por] : [])]);
-  return [...todos];
+  if (!c.orgId) {
+    if (s.enviado_por) return [s.enviado_por];
+    throw new Error('Firma V3: el contrato no tiene inmobiliaria ni remitente a quien avisar');
+  }
+  const [orgR, miembrosR] = await Promise.all([
+    db('inmobiliarias').select('miembros_ven_todo').eq('id', c.orgId).maybeSingle(),
+    db('inmobiliaria_miembros')
+      .select('perfil_id, rol_miembro')
+      .eq('inmobiliaria_id', c.orgId)
+      .eq('estado', 'activo')
+      .not('perfil_id', 'is', null),
+  ]);
+  if (orgR.error) falla('no se pudo leer la inmobiliaria', orgR.error);
+  if (miembrosR.error) falla('no se pudieron leer los miembros de la inmobiliaria', miembrosR.error);
+  const venTodo = !!(orgR.data as { miembros_ven_todo?: boolean } | null)?.miembros_ven_todo;
+  const miembros = (miembrosR.data as { perfil_id: string; rol_miembro: string }[] | null) ?? [];
+  const activos = new Set(miembros.map((m) => m.perfil_id));
+  const ids = new Set(miembros.filter((m) => venTodo || m.rol_miembro === 'owner').map((m) => m.perfil_id));
+  for (const id of [c.responsableId, s.enviado_por]) if (id && activos.has(id)) ids.add(id);
+  if (!ids.size) throw new Error('Firma V3: la inmobiliaria no tiene miembros activos a quien avisar');
+  return [...ids];
 }
 
 const linkAsistente = (c: ContratoCtx) => `/expedientes/${c.expediente_id}/contrato`;
@@ -239,11 +271,20 @@ const linkAsistente = (c: ContratoCtx) => `/expedientes/${c.expediente_id}/contr
 export async function activarContrato(s: Sobre): Promise<void> {
   const c = await leerContrato(s.contrato_id);
   if (!c) return;
-  if (s.cerrado_en && !c.fecha_firma) {
-    const { error } = await db('contratos').update({ fecha_firma: s.cerrado_en } as never).eq('id', c.id).is('fecha_firma', null);
+  // La fecha de activación (§11.7.2) se escribe solo si el contrato se activa con
+  // ESTE sobre: antes de la transición, o al curar una activación a medias.
+  const registrarFecha = async (estado: 'pendiente_firma' | 'vigente') => {
+    if (!s.cerrado_en || c.fecha_firma) return;
+    const { error } = await db('contratos')
+      .update({ fecha_firma: s.cerrado_en } as never)
+      .eq('id', c.id)
+      .eq('estado', estado)
+      .is('fecha_firma', null);
     if (error) falla('no se pudo registrar la fecha de activación', error);
-  }
+  };
+  if (c.estado === 'vigente') await registrarFecha('vigente');
   if (c.estado === 'pendiente_firma') {
+    await registrarFecha('pendiente_firma');
     await transicionar(
       c.id,
       'vigente',
@@ -307,6 +348,16 @@ export async function activarContrato(s: Sobre): Promise<void> {
  * exacto, su versión y a quién se entregó quedan en el sobre. Idempotente.
  */
 export async function cerrarIncompleto(s: Sobre): Promise<void> {
+  // Un sobre viejo (curación tardía) no toca un contrato que ya se reenvió: el
+  // sobre vigente es el que manda. Se deja constancia para que el barrido no insista.
+  const ultimo = await ultimoSobre(s.contrato_id);
+  if (ultimo && ultimo.id !== s.id) {
+    await db('contrato_v3_sobres')
+      .update({ aviso_entregado_en: new Date().toISOString(), aviso_detalle: { omitido: 'superado', por: ultimo.id } } as never)
+      .eq('id', s.id)
+      .is('aviso_entregado_en', null);
+    return;
+  }
   const c = await leerContrato(s.contrato_id);
   if (!c) return;
   const motivo = s.motivo === 'EXPIRED' ? 'EXPIRED' : 'REJECTED';
@@ -356,10 +407,42 @@ export async function cerrarIncompleto(s: Sobre): Promise<void> {
 
 const hace = (iso: string, minutos: number) => Date.now() - Date.parse(iso) > minutos * 60_000;
 
-async function cancelarEnAuco(s: Sobre, code: string, motivo: string): Promise<void> {
-  if (!s.auco_code) await db('contrato_v3_sobres').update({ auco_code: code } as never).eq('id', s.id).is('auco_code', null);
-  await cancelDocument(code, { message: motivo, email: env.AUCO_SENDER_EMAIL });
-  await db('contrato_v3_sobres').update({ auco_cancelado_en: new Date().toISOString() } as never).eq('id', s.id);
+/**
+ * Anula el proceso en Auco y deja la marca. Si Auco no lo cancela porque ya está
+ * cerrado (vencido o rechazado) también se marca, para que el barrido no lo
+ * intente para siempre; si ya lo firmaron todos, avisa a los administradores.
+ * Cualquier otro error se propaga: el barrido reintenta.
+ */
+export async function cancelarEnAuco(s: Sobre, code: string, motivo: string): Promise<void> {
+  if (!s.auco_code) {
+    const { error } = await db('contrato_v3_sobres').update({ auco_code: code } as never).eq('id', s.id).is('auco_code', null);
+    if (error) falla('no se pudo registrar el código de Auco del sobre', error);
+  }
+  const marcar = (detalle?: string) =>
+    db('contrato_v3_sobres')
+      .update({ auco_cancelado_en: new Date().toISOString(), ...(detalle ? { motivo_detalle: detalle } : {}) } as never)
+      .eq('id', s.id);
+  try {
+    const r = await cancelDocument(code, { message: motivo, email: env.AUCO_SENDER_EMAIL });
+    if (r?.success === false || (r?.errors?.cant ?? 0) > 0) throw new Error('Auco respondió que no canceló el proceso');
+  } catch (e) {
+    const info = await getDocumentStatus(code).catch(() => null);
+    if (info?.status === 'FINISH') {
+      logger.error({ sobreId: s.id, code }, 'Firma V3: un proceso que se debía anular quedó firmado en Auco');
+      const admins = (await listOperators()).filter((o) => o.rol === 'administrador').map((o) => o.id);
+      await notificar(admins, {
+        tipo: 'firma.conflicto',
+        titulo: 'Proceso de firma completo que se debía anular',
+        mensaje: `Auco reporta firmado por todas las partes el proceso ${code}, que Cofianza había anulado. Revísalo.`,
+        link: '/contratos',
+        payload: { contrato_id: s.contrato_id, sobre_id: s.id },
+      }).catch((err) => logger.warn({ err }, 'Firma V3: no se pudo avisar el conflicto'));
+      await marcar('Auco lo reporta firmado: no se pudo anular.');
+      return;
+    }
+    if (info?.status !== 'REJECTED' && info?.status !== 'EXPIRED') throw e;
+  }
+  await marcar();
 }
 
 /** Bloqueos nuevos (3 OTP fallidos): Cofianza desbloquea en el panel de Auco. */
@@ -385,16 +468,26 @@ export async function reconciliarSobre(sobreId: string, evento?: { code?: string
   let s = await leerSobre(sobreId);
   if (!s) return;
 
-  // 1. Proceso que Auco sí creó y no quedó registrado (timeout o caída tras el upload).
+  // 1. Proceso que Auco sí creó y no quedó registrado (timeout o caída tras el
+  // upload). El `code` del webhook no se cree: se adopta (o anula) solo si Auco
+  // confirma que ese proceso lleva en `custom` el id de ESTE sobre.
   if (!s.auco_code && evento?.code) {
-    if (s.estado === 'creando') await casSobre(s, { auco_code: evento.code, estado: 'en_firma' });
-    else if (s.estado === 'fallido' || s.estado === 'cancelado')
-      await cancelarEnAuco(s, evento.code, 'Proceso anulado: el envío no quedó registrado en Cofianza');
+    const info = await getDocumentStatus(evento.code).catch(() => null);
+    if (info && sobreIdDeCustom(info.custom) === s.id) {
+      if (s.estado === 'creando') await casSobre(s, { auco_code: evento.code, estado: 'en_firma' });
+      else if (s.estado === 'fallido' || s.estado === 'cancelado')
+        await cancelarEnAuco(s, evento.code, 'Proceso anulado: el envío no quedó registrado en Cofianza');
+    } else {
+      logger.warn({ sobreId, code: evento.code }, 'Firma V3: el proceso del webhook no es de este sobre (o Auco no lo confirmó); no se adopta');
+    }
     s = await leerSobre(sobreId);
     if (!s) return;
   }
 
-  // 2. Curación de lo que quedó a medias.
+  // 2. Curación de lo que quedó a medias. ponytail: sin exclusión entre procesos;
+  // si el webhook y el barrido curan el mismo sobre a la vez, el aviso puede salir
+  // dos veces (la transición no: la RPC es la exclusión). Un marcador con
+  // vencimiento lo evitaría si llega a pasar.
   if (s.estado === 'completo' && !s.aviso_entregado_en) return activarContrato(s);
   if (s.estado === 'incompleto' && !s.aviso_entregado_en) return cerrarIncompleto(s);
   if (s.estado === 'cancelado' && s.auco_code && !s.auco_cancelado_en) {
@@ -435,7 +528,7 @@ export async function reconciliarSobre(sobreId: string, evento?: { code?: string
             estado: 'incompleto',
             cerrado_en: new Date().toISOString(),
             motivo: info.status === 'EXPIRED' ? 'EXPIRED' : 'REJECTED',
-            motivo_detalle: (evento?.message || (quien ? `rechazó ${quien}` : null))?.slice(0, 500) ?? null,
+            motivo_detalle: (evento?.message || (quien ? `el ${quien}` : null))?.slice(0, 500) ?? null,
           }
         : {};
   if (!Object.keys(cambio).length && JSON.stringify(firmantes) === JSON.stringify(s.firmantes)) return;
@@ -480,6 +573,8 @@ function secretoValido(req: Request): boolean {
  */
 export async function webhookAucoV3(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (req.method !== 'POST') return next();
+  // Sin secreto válido ni se consulta la base: el flujo anterior responde su 401.
+  if (!secretoValido(req)) return next();
   let sobre: { id: string } | null = null;
   try {
     sobre = await sobreDelEvento(req.body);
@@ -487,11 +582,6 @@ export async function webhookAucoV3(req: Request, res: Response, next: NextFunct
     return next(); // BD caída o tabla sin migrar: decide el flujo anterior
   }
   if (!sobre) return next();
-  if (!secretoValido(req)) {
-    logger.warn({ ip: req.ip }, 'Auco webhook V3: secreto inválido');
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
   res.status(200).json({ received: true });
   const body = (req.body ?? {}) as { code?: unknown; status?: unknown; message?: unknown; custom?: unknown };
   logger.info(
@@ -500,14 +590,31 @@ export async function webhookAucoV3(req: Request, res: Response, next: NextFunct
   );
   const evento = {
     code: typeof body.code === 'string' ? body.code : undefined,
-    message: typeof body.message === 'string' ? body.message : undefined,
+    // El motivo del rechazo termina en avisos y correos de Cofianza: solo se toma
+    // de un webhook autenticado; sin secreto configurado, sale de Auco ("rechazó …").
+    message: env.AUCO_WEBHOOK_SECRET && typeof body.message === 'string' ? body.message : undefined,
   };
-  const id = sobre.id;
-  setImmediate(() => {
-    reconciliarSobre(id, evento).catch((e) =>
+  programarReconciliacion(sobre.id, evento);
+}
+
+/**
+ * Un solo reconciliar por sobre cada RETARDO_MS, con el último evento: una
+ * ráfaga de webhooks (reales o no) no multiplica las llamadas a Auco, y el
+ * último evento nunca se pierde.
+ */
+const RETARDO_MS = 3000;
+const programados = new Map<string, { code?: string; message?: string }>();
+function programarReconciliacion(id: string, evento: { code?: string; message?: string }) {
+  const yaProgramado = programados.has(id);
+  programados.set(id, evento);
+  if (yaProgramado) return;
+  setTimeout(() => {
+    const ultimo = programados.get(id);
+    programados.delete(id);
+    reconciliarSobre(id, ultimo).catch((e) =>
       logger.error({ sobreId: id, error: e instanceof Error ? e.message : String(e) }, 'Auco webhook V3: reconciliación fallida (la retoma el barrido)'),
     );
-  });
+  }, RETARDO_MS).unref();
 }
 
 // ── Barrido de respaldo ──

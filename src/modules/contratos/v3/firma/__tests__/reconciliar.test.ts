@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Firma V3 — reconciliación, activación, firma incompleta, webhook, cancelar
@@ -83,7 +83,6 @@ vi.mock('@/lib/auditLog', () => ({
 }));
 vi.mock('@/lib/auco', async (orig) => ({ ...(await orig<typeof import('@/lib/auco')>()), ...auco }));
 vi.mock('@/lib/calibracion', () => ({ getCalibracion: async () => ({ DIAS_EXPIRACION_FIRMA: 15, VIGENCIA_CRC_DIAS: 60 }) }));
-vi.mock('@/lib/tenantScope', () => ({ resolveOrgMemberPerfilIds: async () => ['m1', 'm2'] }));
 vi.mock('@/modules/inmuebles/inmuebles.service', () => ({ bloquearInmuebleOcupado: efectos.bloquearInmuebleOcupado }));
 vi.mock('@/modules/firma/firma.service', () => ({ archivarPdfFirmadoEnStorage: efectos.archivarPdfFirmadoEnStorage }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
@@ -92,7 +91,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: efectos.listOperators }));
 
-import { cancelarFirmaV3, crearSobre, reenviar } from '../firma.service';
+import { cancelarFirmaV3, crearSobre, estadoEnviado, reenviar, reintentar } from '../firma.service';
 import { reconciliarSobre, webhookAucoV3 } from '../reconciliar';
 
 // ── Datos ──
@@ -114,7 +113,18 @@ const contrato = (x: Record<string, unknown> = {}) => ({
   datos_variables: { documento: { entrada: { inmueble: { direccion: 'Calle 1' } }, snapshot: { estudio: { fechaCompletado: HOY } }, final: { ruta: 'A' } } },
   ...x,
 });
-const EXPEDIENTE = { data: { inmueble_id: 'i1', inmobiliaria_id: 'org1' }, error: null };
+const EXPEDIENTE = { data: { inmueble_id: 'i1', inmobiliaria_id: 'org1', miembro_responsable_id: 'm2' }, error: null };
+/** La org: m1 titular, m2 miembro (responsable del estudio), m3 miembro, u1 miembro (envió). */
+const MIEMBROS = [
+  { perfil_id: 'm1', rol_miembro: 'owner' },
+  { perfil_id: 'm2', rol_miembro: 'miembro' },
+  { perfil_id: 'm3', rol_miembro: 'miembro' },
+  { perfil_id: 'u1', rol_miembro: 'miembro' },
+];
+const org = (venTodo = false, miembros = MIEMBROS) => {
+  enqueue('inmobiliarias', { data: { miembros_ven_todo: venTodo }, error: null });
+  enqueue('inmobiliaria_miembros', { data: miembros, error: null });
+};
 const ok = (data: unknown) => ({ data, error: null });
 const roadmap = (n: number) => ({
   participants: [{ id: '01', phone: '+573001112233' }, { id: '02', phone: '+573004445566' }],
@@ -143,6 +153,7 @@ describe('reconciliarSobre: FINISH', () => {
     enqueue('contrato_partes', ok(PARTES));
     enqueue('contratos', ok(contrato()), ok(null)); // leerContrato, update fecha_firma
     enqueue('expedientes', EXPEDIENTE);
+    org();
     auco.getDocumentStatus.mockResolvedValue(statusFinish);
     auco.getDocumentRoadmap.mockResolvedValue(roadmap(2));
 
@@ -154,7 +165,7 @@ describe('reconciliarSobre: FINISH', () => {
     expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(1);
     expect(efectos.bloquearInmuebleOcupado).toHaveBeenCalledWith('i1');
     const aviso = tabla('notificaciones', 'insert')[0].args[0] as Array<{ user_id: string; tipo: string }>;
-    expect(aviso.map((n) => n.user_id)).toEqual(['m1', 'm2', 'u1']);
+    expect(aviso.map((n) => n.user_id)).toEqual(['m1', 'm2', 'u1']); // titular + responsable + quien envió; m3 no ve el estudio
     expect(aviso[0].tipo).toBe('contrato.fianza_activa');
     // la constancia va al final
     const ultimo = tabla('contrato_v3_sobres', 'update').at(-1)!.args[0] as Record<string, unknown>;
@@ -196,6 +207,7 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     enqueue('contrato_partes', ok(PARTES));
     enqueue('contratos', ok(contrato()), ok({ estado: 'firma_incompleta' }));
     enqueue('expedientes', EXPEDIENTE);
+    org(true);
     auco.getDocumentStatus.mockResolvedValue({ status: 'EXPIRED', signProfile: [] });
 
     await reconciliarSobre('s1');
@@ -204,7 +216,9 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
     const avisos = tabla('notificaciones', 'insert');
     expect(avisos).toHaveLength(1); // un solo insert, con el error verificado
-    const fila = (avisos[0].args[0] as Array<{ tipo: string; mensaje: string }>)[0];
+    const filas = avisos[0].args[0] as Array<{ user_id: string; tipo: string; mensaje: string }>;
+    expect(filas.map((n) => n.user_id)).toEqual(['m1', 'm2', 'm3', 'u1']); // miembros_ven_todo: todos
+    const fila = filas[0];
     expect(fila.tipo).toBe('contrato.firma_incompleta');
     expect(fila.mensaje).toContain('NO está operando');
     const constancia = tabla('contrato_v3_sobres', 'update').at(-1)!.args[0] as Record<string, unknown>;
@@ -216,6 +230,7 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     enqueue('contrato_partes', ok(PARTES));
     enqueue('contratos', ok(contrato()), ok({ estado: 'firma_incompleta' }));
     enqueue('expedientes', EXPEDIENTE);
+    org();
     enqueue('notificaciones', { data: null, error: { message: 'caída' } });
     auco.getDocumentStatus.mockResolvedValue({ status: 'REJECTED', signProfile: [{ email: 'ana@x.co', status: 'REJECT' }] });
 
@@ -256,15 +271,86 @@ describe('reconciliarSobre: ecos y sobres viejos', () => {
     enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo', cerrado_en: '2026-09-21T15:30:00.000Z' })));
     enqueue('contratos', ok(contrato({ estado: 'pendiente_firma' })), ok(null));
     enqueue('expedientes', EXPEDIENTE);
+    org();
     await reconciliarSobre('s1');
     expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(1);
     expect(auco.getDocumentStatus).not.toHaveBeenCalled();
+  });
+
+  it('un contrato movido por fuera (cancelado) no recibe la fecha de activación: avisa el conflicto a los administradores', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo', cerrado_en: '2026-09-21T15:30:00.000Z' })));
+    enqueue('contratos', ok(contrato({ estado: 'cancelado' })));
+    enqueue('expedientes', EXPEDIENTE);
+    await reconciliarSobre('s1');
+    expect(tabla('contratos', 'update')).toEqual([]);
+    expect(mockRpc).not.toHaveBeenCalled();
+    const aviso = tabla('notificaciones', 'insert')[0].args[0] as Array<{ user_id: string; tipo: string }>;
+    expect(aviso.map((n) => [n.user_id, n.tipo])).toEqual([['ad1', 'firma.conflicto']]);
+  });
+
+  it('un contrato ya activo sin fecha (activación a medias) la recibe, sin volver a transicionar', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo', cerrado_en: '2026-09-21T15:30:00.000Z' })));
+    enqueue('contratos', ok(contrato({ estado: 'vigente' })), ok(null));
+    enqueue('expedientes', EXPEDIENTE);
+    org();
+    await reconciliarSobre('s1');
+    const fecha = ops.filter((o) => o.table === 'contratos' && o.method === 'eq').map((o) => o.args);
+    expect(tabla('contratos', 'update')[0].args[0]).toEqual({ fecha_firma: '2026-09-21T15:30:00.000Z' });
+    expect(fecha).toContainEqual(['estado', 'vigente']);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('un sobre incompleto viejo (ya hubo reenvío) no toca el contrato: constancia de "superado"', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'incompleto', motivo: 'EXPIRED' })), ok(sobre({ id: 's2', intento: 2 })));
+    await reconciliarSobre('s1');
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(tabla('notificaciones', 'insert')).toEqual([]);
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({ aviso_detalle: { omitido: 'superado', por: 's2' } });
+  });
+
+  it('sin nadie activo a quien avisar no escribe la constancia (el barrido reintenta)', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'incompleto', motivo: 'EXPIRED' })));
+    enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })), ok({ estado: 'firma_incompleta' }));
+    enqueue('expedientes', EXPEDIENTE);
+    org(false, [{ perfil_id: 'm3', rol_miembro: 'miembro' }]); // ni titular ni responsable ni remitente activos
+    await expect(reconciliarSobre('s1')).rejects.toThrow(/miembros activos/);
+    expect(tabla('contrato_v3_sobres', 'update')).toEqual([]);
+  });
+});
+
+describe('reconciliarSobre: adopción de un proceso sin registrar', () => {
+  const ID = '3f1a2b4c-5d6e-4f70-8a91-b2c3d4e5f607';
+  const custom = (id: string) => [`cofianza_sobre: '${id}'`];
+
+  it('solo adopta el `code` si Auco confirma en `custom` que el proceso es de ESTE sobre', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ id: ID, estado: 'creando', auco_code: null })));
+    auco.getDocumentStatus.mockResolvedValue({ status: 'CREATED', signProfile: [], custom: custom('0f1a2b4c-5d6e-4f70-8a91-b2c3d4e5f607') });
+    await reconciliarSobre(ID, { code: 'AJENO' });
+    expect(escrituras()).toEqual([]);
+
+    enqueue('contrato_v3_sobres', ok(sobre({ id: ID, estado: 'creando', auco_code: null })), ok([{ id: ID }]));
+    auco.getDocumentStatus.mockResolvedValue({ status: 'CREATED', signProfile: [], custom: custom(ID) });
+    await reconciliarSobre(ID, { code: 'PROPIO' });
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toEqual({ auco_code: 'PROPIO', estado: 'en_firma' });
+  });
+
+  it('el proceso de un sobre que quedó fallido se anula en Auco (confirmado por `custom`)', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ id: ID, estado: 'fallido', auco_code: null })));
+    auco.getDocumentStatus.mockResolvedValue({ status: 'CREATED', signProfile: [], custom: custom(ID) });
+    await reconciliarSobre(ID, { code: 'TARDIO' });
+    expect(auco.cancelDocument).toHaveBeenCalledWith('TARDIO', { message: expect.any(String), email: 'firma@cofianza.co' });
+    const updates = tabla('contrato_v3_sobres', 'update').map((o) => o.args[0] as Record<string, unknown>);
+    expect(updates[0]).toEqual({ auco_code: 'TARDIO' });
+    expect(updates[1].auco_cancelado_en).toBeTruthy();
   });
 });
 
 // ── Webhook ──
 
 describe('webhookAucoV3', () => {
+  // La reconciliación va con setTimeout: con timers falsos no se escapa a otra prueba.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
   const res = () => {
     const r = { status: vi.fn(() => r), json: vi.fn(() => r) };
     return r;
@@ -292,12 +378,46 @@ describe('webhookAucoV3', () => {
     expect(r.status).toHaveBeenCalledWith(200);
   });
 
-  it('con secreto configurado y equivocado responde 401', async () => {
+  it('con secreto configurado y equivocado ni consulta la base: decide el webhook anterior (su 401)', async () => {
     mockEnv.AUCO_WEBHOOK_SECRET = 'bien';
-    enqueue('contrato_v3_sobres', ok({ id: 's1' }));
+    const next = vi.fn();
     const r = res();
-    await webhookAucoV3({ method: 'POST', body: { code: 'AUCO1' }, headers: { authorization: 'mal' } } as never, r as never, vi.fn());
-    expect(r.status).toHaveBeenCalledWith(401);
+    await webhookAucoV3({ method: 'POST', body: { code: 'AUCO1' }, headers: { authorization: 'mal' } } as never, r as never, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(r.status).not.toHaveBeenCalled();
+    expect(ops).toEqual([]);
+  });
+
+  it('una ráfaga de eventos del mismo sobre reconcilia UNA vez, con el último evento', async () => {
+    const ID = 'a1b2c3d4-0000-4000-8000-000000000001'; // otro id: el de la prueba anterior quedó programado
+    const custom = [`cofianza_sobre: '${ID}'`];
+    for (let i = 0; i < 2; i++) enqueue('contrato_v3_sobres', ok(null), ok({ id: ID })); // por code (no está) y por custom
+    for (const code of ['X1', 'X2'])
+      await webhookAucoV3({ method: 'POST', body: { code, status: 'CREATE', custom }, headers: {} } as never, res() as never, vi.fn());
+    expect(auco.getDocumentStatus).not.toHaveBeenCalled();
+
+    enqueue('contrato_v3_sobres', ok(sobre({ id: ID, estado: 'creando', auco_code: null })), ok([{ id: ID }]));
+    auco.getDocumentStatus.mockResolvedValue({ status: 'CREATED', signProfile: [], custom });
+    await vi.advanceTimersByTimeAsync(3000);
+    await vi.waitFor(() => expect(tabla('contrato_v3_sobres', 'update')).toHaveLength(1));
+    expect(auco.getDocumentStatus).toHaveBeenCalledTimes(1);
+    expect(auco.getDocumentStatus).toHaveBeenCalledWith('X2');
+  });
+
+  it('el motivo del rechazo solo se toma de un webhook autenticado; si no, sale de Auco', async () => {
+    const rechazo = async (headers: Record<string, string>) => {
+      ops.length = 0;
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(sobre()), ok([{ id: 's1' }]), ok(sobre({ id: 's2' })));
+      enqueue('contrato_partes', ok(PARTES));
+      auco.getDocumentStatus.mockResolvedValue({ status: 'REJECTED', signProfile: [{ email: 'ana@x.co', status: 'REJECT' }] });
+      await webhookAucoV3({ method: 'POST', body: { code: 'AUCO1', message: '<a href=x>clic aquí</a>' }, headers } as never, res() as never, vi.fn());
+      await vi.advanceTimersByTimeAsync(3000);
+      await vi.waitFor(() => expect(tabla('contrato_v3_sobres', 'update').length).toBeGreaterThan(0));
+      return (tabla('contrato_v3_sobres', 'update')[0].args[0] as Record<string, unknown>).motivo_detalle;
+    };
+    expect(await rechazo({})).toBe('el arrendatario');
+    mockEnv.AUCO_WEBHOOK_SECRET = 'bien';
+    expect(await rechazo({ authorization: 'bien' })).toBe('<a href=x>clic aquí</a>');
   });
 
   it('si la tabla no existe todavía (migración sin correr), decide el webhook anterior', async () => {
@@ -311,8 +431,9 @@ describe('webhookAucoV3', () => {
 // ── Cancelar ──
 
 describe('cancelarFirmaV3', () => {
+  // Cada caso arranca con la consulta de sobreCompleto (null = nadie firmó todo).
   it('marca el sobre cancelado ANTES de ir a Auco', async () => {
-    enqueue('contrato_v3_sobres', ok(sobre()), ok([{ id: 's1' }]));
+    enqueue('contrato_v3_sobres', ok(null), ok(sobre()), ok([{ id: 's1' }]));
     await cancelarFirmaV3('c1');
     const i = ops.findIndex((o) => o.table === 'contrato_v3_sobres' && o.method === 'update');
     const j = ops.findIndex((o) => o.table === 'auco' && o.method === 'cancel');
@@ -322,7 +443,7 @@ describe('cancelarFirmaV3', () => {
   });
 
   it('si Auco falla y ya firmaron todos: el sobre vuelve a en_firma, se reconcilia y responde 409', async () => {
-    enqueue('contrato_v3_sobres', ok(sobre()), ok([{ id: 's1' }]), ok(null), ok(null));
+    enqueue('contrato_v3_sobres', ok(null), ok(sobre()), ok([{ id: 's1' }]), ok(null), ok(null));
     auco.cancelDocument.mockRejectedValueOnce(new Error('ya firmado'));
     auco.getDocumentStatus.mockResolvedValue({ status: 'FINISH', signProfile: [] });
     await expect(cancelarFirmaV3('c1')).rejects.toMatchObject({ errorCode: 'CONTRATO_YA_FIRMADO' });
@@ -331,18 +452,39 @@ describe('cancelarFirmaV3', () => {
   });
 
   it('si Auco no responde: el sobre vuelve y 502', async () => {
-    enqueue('contrato_v3_sobres', ok(sobre()), ok([{ id: 's1' }]));
+    enqueue('contrato_v3_sobres', ok(null), ok(sobre()), ok([{ id: 's1' }]));
     auco.cancelDocument.mockRejectedValueOnce(new Error('timeout'));
     auco.getDocumentStatus.mockRejectedValue(new Error('caído'));
     await expect(cancelarFirmaV3('c1')).rejects.toMatchObject({ errorCode: 'AUCO_NO_DISPONIBLE' });
   });
 
   it('desde FIRMA INCOMPLETA no toca Auco; con la firma completa responde 409', async () => {
-    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'incompleto' })));
+    enqueue('contrato_v3_sobres', ok(null), ok(sobre({ estado: 'incompleto' })));
     await cancelarFirmaV3('c1');
     expect(auco.cancelDocument).not.toHaveBeenCalled();
-    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo' })));
+    enqueue('contrato_v3_sobres', ok({ id: 's0' }), ok(sobre({ id: 's0', estado: 'completo' })));
     await expect(cancelarFirmaV3('c1')).rejects.toMatchObject({ errorCode: 'FIRMA_COMPLETA' });
+    expect(auco.cancelDocument).not.toHaveBeenCalled();
+  });
+
+  it('Auco responde 200 sin cancelar (`errors.cant`): si el proceso sigue vivo, vuelve a en_firma y 502', async () => {
+    enqueue('contrato_v3_sobres', ok(null), ok(sobre()), ok([{ id: 's1' }]));
+    auco.cancelDocument.mockResolvedValueOnce({ errors: { cant: 1 } } as never);
+    auco.getDocumentStatus.mockResolvedValue({ status: 'CREATED', signProfile: [] });
+    await expect(cancelarFirmaV3('c1')).rejects.toMatchObject({ errorCode: 'AUCO_NO_DISPONIBLE' });
+    const updates = tabla('contrato_v3_sobres', 'update').map((o) => o.args[0] as Record<string, unknown>);
+    expect(updates.map((u) => u.estado)).toEqual(['cancelado', 'en_firma']);
+  });
+
+  it('si Auco ya lo había cerrado (vencido o rechazado), queda anulado sin error', async () => {
+    enqueue('contrato_v3_sobres', ok(null), ok(sobre()), ok([{ id: 's1' }]));
+    auco.cancelDocument.mockResolvedValueOnce({ success: false } as never);
+    auco.getDocumentStatus.mockResolvedValue({ status: 'EXPIRED', signProfile: [] });
+    await cancelarFirmaV3('c1');
+    const updates = tabla('contrato_v3_sobres', 'update').map((o) => o.args[0] as Record<string, unknown>);
+    expect(updates[0].estado).toBe('cancelado');
+    expect(updates[1].auco_cancelado_en).toBeTruthy();
+    expect(updates).toHaveLength(2);
   });
 });
 
@@ -379,10 +521,33 @@ describe('crearSobre', () => {
 
   it('si Auco falla, el sobre queda fallido y responde 502', async () => {
     preparar();
-    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })));
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([{ id: 's1' }]));
     auco.uploadDocumentForSignature.mockRejectedValue(new Error('Auco API error (400): teléfono inválido'));
     await expect(crearSobre('c1', 'u1')).rejects.toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
     expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({ estado: 'fallido', motivo: 'AUCO_UPLOAD' });
+  });
+
+  it('upload con timeout pero el webhook ya adoptó el proceso: no es error', async () => {
+    preparar();
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([]), ok(sobre({ auco_code: 'AUCO7' })));
+    auco.uploadDocumentForSignature.mockRejectedValue(new Error('timeout'));
+    expect(await crearSobre('c1', 'u1')).toMatchObject({ estado: 'en_firma', auco_code: 'AUCO7' });
+  });
+
+  it('el webhook de creación llegó antes que la respuesta del upload: devuelve el sobre sin anular nada', async () => {
+    preparar();
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([]), ok(sobre({ auco_code: 'AUCO9' })));
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
+    expect(await crearSobre('c1', 'u1')).toMatchObject({ auco_code: 'AUCO9' });
+    expect(auco.cancelDocument).not.toHaveBeenCalled();
+  });
+
+  it('lo cancelaron mientras subía: se anula también en Auco y 409', async () => {
+    preparar();
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([]), ok(sobre({ estado: 'cancelado', auco_code: null })));
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
+    await expect(crearSobre('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CONTRATO_ESTADO_CAMBIADO' });
+    expect(auco.cancelDocument).toHaveBeenCalledWith('AUCO9', expect.anything());
   });
 
   it('partes incompletas (un generar concurrente las borró): 500 y no sale nada', async () => {
@@ -407,9 +572,43 @@ describe('reenviar', () => {
     // crearSobre: leerContrato + destinacion; partes; sobres
     enqueue('contratos', ok(contrato()), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
     enqueue('contrato_partes', ok(PARTES));
-    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'incompleto' })), ok({ id: 's2' }), ok(sobre({ id: 's2', intento: 2, estado: 'creando', auco_code: null })));
+    enqueue(
+      'contrato_v3_sobres',
+      ok(sobre({ estado: 'incompleto' })),
+      ok({ id: 's2' }),
+      ok(sobre({ id: 's2', intento: 2, estado: 'creando', auco_code: null })),
+      ok([{ id: 's2' }]),
+    );
     auco.uploadDocumentForSignature.mockRejectedValue(new Error('Auco caído'));
     await expect(reenviar('c1', 'u1')).rejects.toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
     expect(ops.filter((o) => o.table === 'rpc:transicionar_contrato').map((o) => o.method)).toEqual(['pendiente_firma', 'firma_incompleta']);
+  });
+});
+
+describe('reintentar y la vista', () => {
+  it('no reintenta si el último proceso está incompleto o firmado por todos (solo fallido/cancelado/ninguno)', async () => {
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(null), ok(sobre({ estado: 'incompleto' })));
+    await expect(reintentar('c1', 'u1')).rejects.toMatchObject({ errorCode: 'FIRMA_YA_EN_CURSO' });
+
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(sobre({ estado: 'completo', aviso_entregado_en: HOY })));
+    await expect(reintentar('c1', 'u1')).rejects.toMatchObject({ errorCode: 'FIRMA_COMPLETA' });
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+  });
+
+  it('la vista no ofrece "Reintentar" con el proceso completo, y sí con uno fallido', async () => {
+    const vista = async (s: ReturnType<typeof sobre>) => {
+      enqueue('contratos', ok(contrato()));
+      enqueue('expedientes', EXPEDIENTE);
+      enqueue('contrato_v3_sobres', ok(s));
+      enqueue('contrato_partes', ok(PARTES));
+      return (await estadoEnviado('c1'))!.reintento;
+    };
+    expect(await vista(sobre({ estado: 'completo' }))).toBe(false);
+    expect(await vista(sobre({ estado: 'incompleto' }))).toBe(false);
+    expect(await vista(sobre({ estado: 'fallido', auco_code: null }))).toBe(true);
   });
 });

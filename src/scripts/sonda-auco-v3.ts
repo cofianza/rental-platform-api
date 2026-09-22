@@ -138,7 +138,8 @@ async function ver(codeArg?: string) {
   const code = codeArg ?? process.env.SONDA_CODE;
   if (!code) throw new Error('Falta SONDA_CODE');
   const info = (await getDocumentStatus(code)) as unknown as Record<string, unknown>;
-  imprimir('GET /document', { status: info.status, signProfile: info.signProfile, url: info.url ? '(hay url)' : null });
+  // `custom` confirma si Auco devuelve lo que mandamos: la adopción de procesos huérfanos depende de eso.
+  imprimir('GET /document', { status: info.status, signProfile: info.signProfile, custom: info.custom ?? null, url: info.url ? '(hay url)' : null });
   const roadmap = await getDocumentRoadmap(code).catch((e) => ({ error: e instanceof Error ? e.message : String(e) }));
   imprimir('GET /document/roadmap', roadmap);
 
@@ -164,8 +165,9 @@ async function cancelar() {
   const code = process.env.SONDA_CODE;
   if (!code) throw new Error('Falta SONDA_CODE');
   if (process.env.SONDA_CONFIRMAR !== 'si') return console.log('SONDA_CONFIRMAR≠si: no se canceló nada.');
-  await cancelDocument(code, { message: 'Prueba de cancelación (sonda Cofianza)', email: env.AUCO_SENDER_EMAIL });
-  console.log('CANCELADO. Corre `ver` y anota en qué estado queda (esperado: REJECTED).');
+  const r = await cancelDocument(code, { message: 'Prueba de cancelación (sonda Cofianza)', email: env.AUCO_SENDER_EMAIL });
+  imprimir('POST /document/cancel', r);
+  console.log('Corre `ver` y anota en qué estado queda (esperado: REJECTED). Si `errors.cant` > 0, Auco NO lo canceló.');
 }
 
 async function recordar() {

@@ -45,6 +45,10 @@ export async function propioUrl(req: Request, res: Response) {
   sendSuccess(res, await asistente.propioUrl(expedienteId(req), req.user!.id, req.user!.rol));
 }
 
+export async function crcUrl(req: Request, res: Response) {
+  sendSuccess(res, await asistente.crcUrl(expedienteId(req), req.user!.id, req.user!.rol));
+}
+
 export async function enviar(req: Request, res: Response) {
   const body = req.body as { generacion: number; propioSha256?: string };
   sendSuccess(res, await asistente.enviarAFirma(expedienteId(req), body, req.user!.id, req.user!.rol, req.ip));
