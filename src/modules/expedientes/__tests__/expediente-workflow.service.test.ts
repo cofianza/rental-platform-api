@@ -6,11 +6,14 @@ const mockSingle = vi.fn();
 const mockLimit = vi.fn(() => ({ single: mockSingle }));
 const mockOrder = vi.fn(() => ({ limit: mockLimit }));
 const mockGt = vi.fn(() => ({ single: mockSingle }));
+// `not → in → limit`: la consulta de fianza V3 (tieneFianzaV3); por defecto, sin contratos V3.
+const mockFianzaV3 = vi.fn(async () => ({ data: [] as unknown[], error: null }));
 const mockEq: ReturnType<typeof vi.fn> = vi.fn((): Record<string, unknown> => ({
   eq: mockEq,
   single: mockSingle,
   order: mockOrder,
   gt: mockGt,
+  not: () => ({ in: () => ({ limit: mockFianzaV3 }) }),
 }));
 const mockSelect = vi.fn((_cols?: string, _opts?: Record<string, unknown>) => ({
   eq: mockEq,
@@ -354,6 +357,32 @@ describe('expediente-workflow.service', () => {
   });
 
   // ================================================================
+  // V3 §12.2: cancelar con fianza y cerrar sin acta
+  // ================================================================
+  describe('cierre con contrato V3', () => {
+    const cierre = (etiqueta: string) => ({ nuevo_estado: 'cerrado', comentario: 'Cierre del estudio de prueba', etiqueta }) as never;
+
+    it('"Cancelar estudio" con una fianza V3 activa o terminada → 409 sin llamar a la RPC', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockFianzaV3.mockResolvedValueOnce({ data: [{ id: 'c1' }], error: null });
+      await expect(executeTransition('exp-uuid', cierre('Cancelar estudio'), adminUser)).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'ESTUDIO_CON_FIANZA',
+      });
+      expect(mockRpc).not.toHaveBeenCalled();
+    });
+
+    it('"Cerrar estudio" sin acta: el trigger de la BD rechaza y se responde 409 con el motivo', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'ACTA_ENTREGA_REQUERIDA: el contrato del estudio tiene la fianza activa…' } });
+      await expect(executeTransition('exp-uuid', cierre('Cerrar estudio'), adminUser)).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'ACTA_ENTREGA_REQUERIDA',
+      });
+    });
+  });
+
+  // ================================================================
   // getTransitionsForExpediente - retorna { estado, label }[]
   // ================================================================
   describe('getTransitionsForExpediente', () => {
@@ -390,6 +419,15 @@ describe('expediente-workflow.service', () => {
       const destinos = duenoAprobado.transiciones_disponibles.map((t) => t.estado);
       expect(destinos.length).toBeGreaterThan(0);
       expect(new Set(destinos)).toEqual(new Set(['cerrado']));
+    });
+
+    it('V3 §12.2: con una fianza activa o terminada no se ofrece "Cancelar estudio" (sí "Cerrar estudio")', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockFianzaV3.mockResolvedValueOnce({ data: [{ id: 'c1' }], error: null });
+      const r = await getTransitionsForExpediente('exp-uuid', 'admin-uuid', 'administrador');
+      const labels = r.transiciones_disponibles.map((t) => t.label);
+      expect(labels).toContain('Cerrar estudio');
+      expect(labels).not.toContain('Cancelar estudio');
     });
 
     it('Gerencia (solo lectura) no recibe transiciones: el POST se las rechazaria', async () => {

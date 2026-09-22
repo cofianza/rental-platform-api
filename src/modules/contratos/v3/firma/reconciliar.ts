@@ -113,9 +113,13 @@ interface ContratoCtx {
   numero: string;
   expediente_id: string;
   fecha_firma: string | null;
+  fecha_terminacion: string | null;
+  fecha_inicio: string | null;
+  duracion_meses: number | null;
   datos_variables: {
+    asistente?: { paso2?: { amoblado?: boolean }; paso3?: { fechaEntrega?: string } };
     documento?: {
-      entrada?: { inmueble?: { direccion?: string } };
+      entrada?: { inmueble?: { direccion?: string; municipio?: string } };
       snapshot?: { estudio?: { fechaCompletado?: string | null } };
       final?: { ruta?: 'A' | 'B' };
     };
@@ -127,7 +131,7 @@ interface ContratoCtx {
 
 export async function leerContrato(id: string): Promise<ContratoCtx | null> {
   const { data, error } = await db('contratos')
-    .select('id, estado, numero, expediente_id, fecha_firma, datos_variables')
+    .select('id, estado, numero, expediente_id, fecha_firma, fecha_terminacion, fecha_inicio, duracion_meses, datos_variables')
     .eq('id', id)
     .maybeSingle();
   if (error) falla('no se pudo leer el contrato', error);
@@ -318,7 +322,9 @@ export async function activarContrato(s: Sobre): Promise<void> {
   const fecha = s.cerrado_en ? ddmmaaaa(fechaBogota(s.cerrado_en)) : null;
   const destinatarios = await destinatariosDe(c, s);
   const titulo = `Fianza activa — contrato ${c.numero}`;
-  const mensaje = `Firmaron todas las partes${fecha ? ` (última firma el ${fecha})` : ''}. La fianza de COFIANZA S.A.S. está activa.`;
+  const mensaje =
+    `Firmaron todas las partes${fecha ? ` (última firma el ${fecha})` : ''}. La fianza de COFIANZA S.A.S. está activa. ` +
+    'Falta cargar el acta de entrega e inventario: sin ella no se puede cerrar el estudio.';
   await notificar(destinatarios, {
     tipo: 'contrato.fianza_activa',
     titulo,
@@ -327,6 +333,8 @@ export async function activarContrato(s: Sobre): Promise<void> {
     payload: { contrato_id: c.id, sobre_id: s.id },
   });
   await timeline(c.expediente_id, `${titulo}. ${mensaje}`, { contrato_id: c.id, sobre_id: s.id, estado: 'vigente' });
+  // §12.1: queda registrado que el acta está pendiente (la alerta y "Requieren mi acción" lo derivan del archivo).
+  await timeline(c.expediente_id, `Acta de entrega e inventario pendiente — contrato ${c.numero}`, { contrato_id: c.id, acta: 'pendiente' });
   logAudit({
     usuarioId: null,
     accion: AUDIT_ACTIONS.FIRMA_COMPLETADA,

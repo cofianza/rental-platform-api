@@ -18,6 +18,7 @@ import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import type { EnvioV3 } from '../asistente.types';
+import { fechaBogota, periodoVigente, sumarMeses } from '../formato';
 import { construirSignProfile, datosDeFirma, partesCompletas, validarFirmantes, type FirmanteSobre } from './reglas';
 import {
   activarContrato,
@@ -341,19 +342,36 @@ export async function actualizarFirma(contratoId: string): Promise<void> {
   await reconciliarSobre(s.id);
 }
 
+/** Las actas de entrega del contrato (§12.2: con una basta para cerrar el estudio), la más reciente primero. */
+async function actasDeEntrega(contratoId: string): Promise<{ id: string; nombre: string; subidoEn: string }[]> {
+  const { data, error } = await db('contrato_archivos')
+    .select('id, nombre_archivo, created_at')
+    .eq('contrato_id', contratoId)
+    .eq('tipo_archivo', 'acta_entrega')
+    .order('created_at', { ascending: false });
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo leer el acta de entrega.');
+  return ((data as { id: string; nombre_archivo: string; created_at: string }[] | null) ?? []).map((a) => ({
+    id: a.id,
+    nombre: a.nombre_archivo,
+    subidoEn: a.created_at,
+  }));
+}
+
 /**
  * Vista del contrato V3 fuera de borrador (EN FIRMA, FIRMA INCOMPLETA,
- * FIANZA ACTIVA). Sin evaluar bloqueos: a los 61 días una fianza activa no
- * debe mostrar "estudio vencido".
+ * FIANZA ACTIVA, TERMINADO). Sin evaluar bloqueos: a los 61 días una fianza
+ * activa no debe mostrar "estudio vencido".
  */
 export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null> {
   const c = await leerContrato(contratoId);
-  if (!c || !['pendiente_firma', 'firma_incompleta', 'vigente'].includes(c.estado)) return null;
-  const [s, partes, pendientes, vig] = await Promise.all([
+  if (!c || !['pendiente_firma', 'firma_incompleta', 'vigente', 'finalizado'].includes(c.estado)) return null;
+  const firmado = c.estado === 'vigente' || c.estado === 'finalizado';
+  const [s, partes, pendientes, vig, actas] = await Promise.all([
     ultimoSobre(contratoId),
     leerPartes(contratoId),
     identidadPendientes(contratoId),
     vigenciaEstudio(c),
+    firmado ? actasDeEntrega(contratoId) : Promise.resolve([]),
   ]);
   const parte = new Map(partes.map((p) => [p.id, p]));
   // El aviso es el del último sobre incompleto: tras un reenvío fallido el último queda 'fallido'.
@@ -365,6 +383,23 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
     ruta: c.datos_variables?.documento?.final?.ruta ?? 'A',
     estado: c.estado as EnvioV3['estado'],
     fechaActivacion: c.fecha_firma,
+    fechaTerminacion: c.fecha_terminacion,
+    vigencia: c.estado === 'vigente' ? vigenciaDe(c) : null,
+    acta: firmado
+      ? {
+          pendiente: actas.length === 0,
+          archivos: actas,
+          datos: {
+            fechaEntrega: c.datos_variables?.asistente?.paso3?.fechaEntrega ?? null,
+            amoblado: c.datos_variables?.asistente?.paso2?.amoblado ?? null,
+            inmueble: {
+              direccion: c.datos_variables?.documento?.entrada?.inmueble?.direccion ?? null,
+              municipio: c.datos_variables?.documento?.entrada?.inmueble?.municipio ?? null,
+            },
+            partes: partes.map((p) => ({ rol: p.rol, nombre: datosDeFirma(p).nombre })),
+          },
+        }
+      : null,
     sobre: s && {
       intento: s.intento,
       estado: s.estado,
@@ -395,6 +430,18 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
           ? { puede: true, motivo: null }
           : { puede: false, motivo: 'El estudio ya no está vigente: se requiere una nueva evaluación.' },
     reintento: c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0,
+  };
+}
+
+/** Prórroga automática: el período en curso, calculado (las fechas del contrato están congeladas). */
+function vigenciaDe(c: { fecha_inicio: string | null; duracion_meses: number | null }): EnvioV3['vigencia'] {
+  if (!c.fecha_inicio || !c.duracion_meses) return null;
+  const p = periodoVigente(c.fecha_inicio, c.duracion_meses, fechaBogota(new Date()));
+  return {
+    inicio: c.fecha_inicio,
+    vencimientoInicial: sumarMeses(c.fecha_inicio, c.duracion_meses),
+    venceEl: p.hasta,
+    prorrogas: p.prorrogas,
   };
 }
 

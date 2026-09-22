@@ -94,29 +94,9 @@ export async function executeTransition(
     );
   }
 
-  // Construir descripcion del evento
-  const descripcion = buildTimelineDescription(currentState, targetState, user, input);
-
-  // Ejecutar transicion atomica via RPC
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any).rpc('transicionar_expediente', {
-    p_expediente_id: expedienteId,
-    p_nuevo_estado: targetState,
-    p_descripcion: descripcion,
-    p_usuario_id: user.id,
-    p_comentario: input.comentario,
-  });
-
-  if (error) {
-    logger.error({ error, expedienteId }, 'Error al transicionar estudio');
-    throw AppError.badRequest('Error al ejecutar la transicion', 'TRANSITION_FAILED');
-  }
-
-  const result = data as TransitionRpcResult;
-
-  // Si la transicion fue "Cancelar expediente" (cualquier estado activo →
-  // cerrado con esa etiqueta), persistimos las columnas de cancelacion para
-  // que el UI distinga entre cierre natural y abandono mid-flow. Si la
+  // Si la transicion es "Cancelar expediente" (cualquier estado activo →
+  // cerrado con esa etiqueta), despues de la RPC se persisten las columnas de
+  // cancelacion para que el UI distinga entre cierre natural y abandono mid-flow. Si la
   // etiqueta no llega (clientes viejos o el caller no la mando), inferimos
   // por estado_anterior: aprobado/borrador/en_revision/info_incompleta/
   // condicionado → cerrado siempre fue cancelacion (rechazado→cerrado es la
@@ -141,6 +121,42 @@ export async function executeTransition(
     // 'Cancelar expediente' = etiqueta vieja (web sin redeploy aun); se acepta igual.
     (input.etiqueta === 'Cancelar estudio' || input.etiqueta === 'Cancelar expediente' ||
       (!input.etiqueta && ESTADOS_CANCELABLES.includes(currentState) && !!input.comentario));
+
+  // V3 §12.2: un estudio con la fianza activa o terminada no se cancela (eso
+  // marcaría abandono sobre un arriendo en curso): se cierra con el acta.
+  if (fueCancelacion && (await tieneFianzaV3(expedienteId))) {
+    throw AppError.conflict(
+      'Este estudio tiene un contrato con la fianza activa o terminada: se cierra con el acta de entrega, no se cancela.',
+      'ESTUDIO_CON_FIANZA',
+    );
+  }
+
+  // Construir descripcion del evento
+  const descripcion = buildTimelineDescription(currentState, targetState, user, input);
+
+  // Ejecutar transicion atomica via RPC
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('transicionar_expediente', {
+    p_expediente_id: expedienteId,
+    p_nuevo_estado: targetState,
+    p_descripcion: descripcion,
+    p_usuario_id: user.id,
+    p_comentario: input.comentario,
+  });
+
+  if (error) {
+    // Trigger de la BD (V3 §12.2): sin acta de entrega no se cierra.
+    if (String((error as { message?: string }).message ?? '').includes('ACTA_ENTREGA_REQUERIDA')) {
+      throw AppError.conflict(
+        'Carga el acta de entrega e inventario del contrato antes de cerrar el estudio.',
+        'ACTA_ENTREGA_REQUERIDA',
+      );
+    }
+    logger.error({ error, expedienteId }, 'Error al transicionar estudio');
+    throw AppError.badRequest('Error al ejecutar la transicion', 'TRANSITION_FAILED');
+  }
+
+  const result = data as TransitionRpcResult;
 
   if (fueCancelacion) {
     const { error: updErr } = await (supabase
@@ -385,7 +401,11 @@ export async function getTransitionsForExpediente(expedienteId: string, userId?:
   await assertExpedienteAccess(expedienteId, userId, userRol);
 
   const expediente = await fetchExpediente(expedienteId);
-  const transiciones = getAvailableTransitions(expediente.estado);
+  let transiciones = getAvailableTransitions(expediente.estado);
+  // Con una fianza V3 activa o terminada no se ofrece "Cancelar estudio" (executeTransition la rechaza).
+  if (transiciones.some((t) => t.label === 'Cancelar estudio') && (await tieneFianzaV3(expedienteId))) {
+    transiciones = transiciones.filter((t) => t.label !== 'Cancelar estudio');
+  }
 
   // Solo lectura (Gerencia y el miembro 'solo_lectura' de una inmobiliaria):
   // el POST de transiciones los rechaza siempre, asi que ofrecerles transiciones
@@ -414,6 +434,19 @@ export async function getTransitionsForExpediente(expedienteId: string, userId?:
     estado_actual: expediente.estado,
     transiciones_disponibles: visibles,
   };
+}
+
+/** ¿El estudio tiene un contrato V3 con la fianza activa o terminada? */
+async function tieneFianzaV3(expedienteId: string): Promise<boolean> {
+  const { data, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .not('destinacion', 'is', null)
+    .in('estado', ['vigente', 'finalizado'])
+    .limit(1);
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el contrato del estudio');
+  return !!(data as unknown[] | null)?.length;
 }
 
 // ============================================================

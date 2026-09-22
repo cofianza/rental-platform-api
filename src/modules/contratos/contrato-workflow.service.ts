@@ -51,9 +51,10 @@ export async function executeContratoTransition(
     throw AppError.conflict('El contrato cambió de estado mientras tanto. Recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
 
   // Contratos V3: el workflow legacy (revisión, aprobación, envío a firma) no
-  // aplica —el asistente envía, reenvía y activa—. Aquí solo se cancela, y
-  // solo antes de completar la firma (§11.5). Incluye el camino a 'pendiente_firma'.
-  if (contrato.destinacion && (targetState !== 'cancelado' || !V3_CANCELABLE.includes(currentState))) {
+  // aplica —el asistente envía, reenvía y activa—. Aquí solo se cancela antes
+  // de completar la firma (§11.5) y se termina una fianza activa (§11.6).
+  // Incluye el camino a 'pendiente_firma'.
+  if (contrato.destinacion && !V3_TRANSICIONES[currentState]?.includes(targetState)) {
     throw AppError.badRequest('Este contrato no admite esa acción en su estado actual.', 'CONTRATO_V3_TRANSICION_NO_PERMITIDA');
   }
 
@@ -75,8 +76,9 @@ export async function executeContratoTransition(
   await checkPreconditions(transitionDef.preconditions, contrato, input);
 
   // V3: anular el proceso de firma en Auco ANTES de cancelar. Si todas las
-  // partes ya firmaron lanza 409 y el contrato no se cancela.
-  if (contrato.destinacion) {
+  // partes ya firmaron lanza 409 y el contrato no se cancela. Al terminar una
+  // fianza activa no hay proceso que anular.
+  if (contrato.destinacion && targetState === 'cancelado') {
     const { cancelarFirmaV3 } = await import('./v3/firma/firma.service');
     await cancelarFirmaV3(contratoId);
   }
@@ -210,6 +212,9 @@ export async function finalizarContratoVencido(contratoId: string): Promise<bool
   const contrato = await fetchContrato(contratoId);
   // Idempotencia: otra ejecucion/usuario pudo finalizarlo o cancelarlo ya.
   if (contrato.estado !== 'vigente') return false;
+  // Un V3 se prorroga solo (cláusula de PRÓRROGAS): nunca vence por fecha. El
+  // job ya los excluye; esto es la segunda defensa.
+  if (contrato.destinacion) return false;
   // Defensa en profundidad: la transicion debe seguir siendo valida.
   if (!isContratoTransitionValid('vigente', 'finalizado')) return false;
 
@@ -280,9 +285,10 @@ export async function getContratoTransitions(contratoId: string, user: AuthUser)
   // el POST rechazaría con 403 (inmobiliaria/propietario solo pueden terminar
   // o cancelar; gerencia_consulta es solo-lectura → ninguna).
   let transiciones = getAvailableContratoTransitions(contrato.estado);
-  // Contratos V3: mismo límite que executeContratoTransition (solo cancelar, antes de la firma).
+  // Contratos V3: mismo límite que executeContratoTransition.
   if (contrato.destinacion) {
-    transiciones = V3_CANCELABLE.includes(contrato.estado) ? transiciones.filter((t) => t.estado === 'cancelado') : [];
+    const v3 = V3_TRANSICIONES[contrato.estado] ?? [];
+    transiciones = transiciones.filter((t) => v3.includes(t.estado));
   }
   if (user.rol === 'inmobiliaria' || user.rol === 'propietario') {
     transiciones = transiciones.filter((t) => OWNER_TERMINATE_STATES.includes(t.estado));
@@ -375,8 +381,13 @@ async function fetchContrato(id: string): Promise<ContratoRow> {
 // el resto del workflow lo maneja un rol interno.
 const OWNER_TERMINATE_STATES: EstadoContrato[] = ['finalizado', 'cancelado'];
 
-/** Contratos V3: estados desde los que se pueden cancelar (antes de completar la firma, §11.5). */
-const V3_CANCELABLE: EstadoContrato[] = ['borrador', 'pendiente_firma', 'firma_incompleta'];
+/** Lo único que el workflow hace con un V3: cancelar antes de la firma completa (§11.5) y terminar (§11.6). */
+const V3_TRANSICIONES: Partial<Record<EstadoContrato, EstadoContrato[]>> = {
+  borrador: ['cancelado'],
+  pendiente_firma: ['cancelado'],
+  firma_incompleta: ['cancelado'],
+  vigente: ['finalizado'],
+};
 
 /**
  * Permisos para ejecutar una transicion de contrato.

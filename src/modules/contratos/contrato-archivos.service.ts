@@ -27,7 +27,7 @@ const TIPO_LABELS: Record<TipoArchivoContrato, string> = {
 async function fetchContratoBase(contratoId: string) {
   const { data, error } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, estado')
+    .select('id, expediente_id, estado, destinacion')
     .eq('id', contratoId)
     .single();
 
@@ -35,7 +35,7 @@ async function fetchContratoBase(contratoId: string) {
     throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
   }
 
-  return data as unknown as { id: string; expediente_id: string; estado: string };
+  return data as unknown as { id: string; expediente_id: string; estado: string; destinacion: string | null };
 }
 
 /** El contrato, solo si quien pide ve su estudio. 404 si no: no confirma que exista. */
@@ -239,6 +239,28 @@ export async function descargarArchivo(
 // Eliminar archivo
 // ============================================================
 
+/**
+ * V3 §12.2: con la fianza activa o terminada, el acta de entrega es lo que deja
+ * cerrar el estudio. La última no se borra: primero se sube la nueva.
+ * ponytail: dos borrados simultáneos de las dos últimas actas podrían dejar
+ * cero (solo borra el administrador); un trigger lo cerraría si hace falta.
+ */
+async function exigirOtraActa(contratoId: string): Promise<void> {
+  const contrato = await fetchContratoBase(contratoId);
+  if (!contrato.destinacion || !['vigente', 'finalizado'].includes(contrato.estado)) return;
+  const { count, error } = await (supabase
+    .from('contrato_archivos' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .eq('contrato_id', contratoId)
+    .eq('tipo_archivo', 'acta_entrega');
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el acta de entrega');
+  if ((count ?? 0) <= 1)
+    throw AppError.conflict(
+      'Es la única acta de entrega de este contrato y sin ella no se puede cerrar el estudio. Sube la nueva antes de borrar esta.',
+      'ACTA_ENTREGA_UNICA',
+    );
+}
+
 export async function eliminarArchivo(
   contratoId: string,
   archivoId: string,
@@ -263,16 +285,10 @@ export async function eliminarArchivo(
     tipo_archivo: string;
   };
 
-  // Delete from storage
-  const { error: removeError } = await supabase.storage
-    .from(BUCKET_NAME)
-    .remove([archivo.storage_key]);
+  if (archivo.tipo_archivo === 'acta_entrega') await exigirOtraActa(contratoId);
 
-  if (removeError) {
-    logger.warn({ error: removeError.message, archivoId }, 'Error al eliminar archivo de storage');
-  }
-
-  // Delete record
+  // Primero el registro: si falla, el archivo sigue ahí. Un objeto huérfano en
+  // storage no le hace daño a nadie; un registro sin su archivo, sí.
   const { error: deleteError } = await (supabase
     .from('contrato_archivos' as string) as ReturnType<typeof supabase.from>)
     .delete()
@@ -281,6 +297,14 @@ export async function eliminarArchivo(
   if (deleteError) {
     logger.error({ error: deleteError.message, archivoId }, 'Error al eliminar registro de archivo');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al eliminar el archivo');
+  }
+
+  const { error: removeError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .remove([archivo.storage_key]);
+
+  if (removeError) {
+    logger.warn({ error: removeError.message, archivoId }, 'Error al eliminar archivo de storage');
   }
 
   logAudit({

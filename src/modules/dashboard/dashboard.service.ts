@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { fromSupabaseError } from '@/lib/errors';
 import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
+import { conFinVigente } from '@/modules/contratos/v3/formato';
 
 // ── Constantes para vista admin ─────────────────────────────
 //
@@ -438,13 +439,14 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
       const { data: conts, error: e3 } = await (
         supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
       )
-        .select('id, expediente_id, fecha_inicio, fecha_fin, estado, expedientes(solicitantes(nombre, apellido))')
+        .select('id, expediente_id, fecha_inicio, fecha_fin, destinacion, duracion_meses, estado, expedientes(solicitantes(nombre, apellido))')
         .in('expediente_id', expedienteIds)
         .in('estado', ESTADOS_CONTRATO_HISTORIAL as unknown as string[])
         .order('fecha_inicio', { ascending: false });
       if (e3) throw fromSupabaseError(e3);
       const activos = ESTADOS_CONTRATO_ACTIVO as unknown as string[];
-      for (const c of (conts ?? []) as Array<Record<string, unknown>>) {
+      type Fila = { estado: string; fecha_inicio: string | null; fecha_fin: string | null } & Record<string, unknown>;
+      for (const c of conFinVigente((conts ?? []) as Fila[])) {
         const expId = c.expediente_id as string;
         const inmId = expToInmueble.get(expId);
         if (!inmId) continue;
@@ -881,6 +883,8 @@ interface ContratoActivoRow {
   valor_arriendo: number | string | null;
   fecha_inicio: string | null;
   fecha_fin: string | null;
+  destinacion: string | null;
+  duracion_meses: number | null;
   expedientes: {
     inmuebles: { codigo: string | null; direccion: string | null } | null;
     solicitantes: { nombre: string | null; apellido: string | null } | null;
@@ -1102,12 +1106,12 @@ async function fetchContratosActivos(): Promise<ContratoActivoRow[]> {
   const { data, error } = await supabase
     .from('contratos')
     .select(
-      'id, estado, valor_arriendo, fecha_inicio, fecha_fin, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
+      'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
     )
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
 
   if (error) throw fromSupabaseError(error);
-  return (data ?? []) as unknown as ContratoActivoRow[];
+  return conFinVigente((data ?? []) as unknown as ContratoActivoRow[]);
 }
 
 // Contratos que alguna vez estuvieron activos (para el histórico de
@@ -1117,11 +1121,11 @@ async function fetchContratosHistorico(): Promise<Array<{ fecha_inicio: string |
   const { data, error } = await (
     supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
   )
-    .select('fecha_inicio, fecha_fin')
+    .select('estado, fecha_inicio, fecha_fin, destinacion, duracion_meses')
     .in('estado', ['firmado', 'vigente', 'finalizado', 'cancelado']);
 
   if (error) throw fromSupabaseError(error);
-  return (data ?? []) as unknown as Array<{ fecha_inicio: string | null; fecha_fin: string | null }>;
+  return conFinVigente((data ?? []) as unknown as Array<{ estado: string; fecha_inicio: string | null; fecha_fin: string | null }>);
 }
 
 async function fetchMoraTickets(): Promise<MoraTicketRow[]> {

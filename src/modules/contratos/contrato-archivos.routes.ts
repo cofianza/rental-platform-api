@@ -9,10 +9,12 @@ const router = Router();
 
 router.use(authMiddleware);
 
-// POST /api/v1/contratos/:id/archivos — Subir archivo asociado
+// POST /api/v1/contratos/:id/archivos — Subir archivo asociado. La inmobiliaria
+// sube el acta de entrega de sus contratos (V3 §12.3); el servicio exige ver el
+// estudio y el middleware ya frena a los miembros de solo lectura.
 router.post(
   '/:id/archivos',
-  roleGuard(['administrador', 'operador_analista']),
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria']),
   uploadDoc,
   validate({ params: subirArchivoParamsSchema, body: subirArchivoBodySchema }),
   archivosController.subir,

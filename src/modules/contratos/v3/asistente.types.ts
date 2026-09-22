@@ -71,9 +71,27 @@ export interface EnvioV3 {
   id: string;
   numero: string;
   ruta: 'A' | 'B';
-  estado: 'pendiente_firma' | 'firma_incompleta' | 'vigente';
+  estado: 'pendiente_firma' | 'firma_incompleta' | 'vigente' | 'finalizado';
   /** contratos.fecha_firma: la última firma según Auco (UTC). */
   fechaActivacion: string | null;
+  /** TERMINADO (§11.6): cuándo se terminó. */
+  fechaTerminacion: string | null;
+  /** FIANZA ACTIVA: el período en curso con la prórroga automática (fechas AAAA-MM-DD). */
+  vigencia: null | { inicio: string; vencimientoInicial: string; venceEl: string; prorrogas: number };
+  /**
+   * FIANZA ACTIVA o TERMINADO: el acta de entrega e inventario (§12.1-12.3).
+   * `datos` es lo que necesita el módulo de inventario para levantarla.
+   */
+  acta: null | {
+    pendiente: boolean;
+    archivos: { id: string; nombre: string; subidoEn: string }[];
+    datos: {
+      fechaEntrega: string | null;
+      amoblado: boolean | null;
+      inmueble: { direccion: string | null; municipio: string | null };
+      partes: { rol: 'arrendatario' | 'coarrendatario' | 'arrendador'; nombre: string }[];
+    };
+  };
   sobre: null | {
     intento: number;
     estado: EstadoSobreV3;

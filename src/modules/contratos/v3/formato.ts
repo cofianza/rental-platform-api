@@ -56,6 +56,36 @@ export function sumarMeses(iso: string, meses: number): string {
 }
 
 /**
+ * Período vigente de un contrato que se prorroga "en iguales condiciones y por
+ * el mismo término inicial" (cláusula de PRÓRROGAS): el primero cuyo
+ * vencimiento no ha pasado. Siempre desde el inicio con múltiplos del término,
+ * nunca encadenando: el recorte a fin de mes volvería un 31 en 28 para siempre.
+ * 2026-01-31, 1 mes, hoy 2026-03-15 → { n: 2, desde: 2026-02-28, hasta: 2026-03-31 }.
+ */
+export function periodoVigente(fechaInicio: string, meses: number, hoy: string) {
+  if (!Number.isInteger(meses) || meses < 1) throw new RangeError(`Término inválido: ${meses}`);
+  fecha(hoy);
+  let n = 1;
+  while (sumarMeses(fechaInicio, n * meses) < hoy) n++;
+  return { n, desde: sumarMeses(fechaInicio, (n - 1) * meses), hasta: sumarMeses(fechaInicio, n * meses), prorrogas: n - 1 };
+}
+
+/**
+ * Para listados y tableros: un contrato V3 vigente se prorroga solo, así que su
+ * "fin" es el del período en curso y no `fecha_fin` (el término inicial, congelado).
+ * Las demás filas pasan igual.
+ */
+export function conFinVigente<
+  T extends { estado?: string; fecha_inicio: string | null; fecha_fin: string | null; destinacion?: string | null; duracion_meses?: number | null },
+>(rows: T[], hoy = fechaBogota(new Date())): T[] {
+  return rows.map((r) =>
+    r.destinacion && r.estado === 'vigente' && r.fecha_inicio && r.duracion_meses
+      ? { ...r, fecha_fin: periodoVigente(r.fecha_inicio, r.duracion_meses, hoy).hasta }
+      : r,
+  );
+}
+
+/**
  * Día calendario (AAAA-MM-DD) de un instante en Bogotá: UTC−5 todo el año, sin
  * horario de verano. 2026-07-24T00:30Z → '2026-07-23'.
  */

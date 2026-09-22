@@ -427,8 +427,26 @@ describe('obtenerEstado', () => {
     expect(e.resumen!.canon).toEqual({ evaluadoCop: 2_000_000, maximoSinNuevaEvaluacionCop: 2_300_000 });
     expect(JSON.stringify(e)).not.toContain('4000000');
     // La lectura del contrato excluye cancelados y finalizados (índice contratos_v3_vivo_uq).
-    expect(opsDe('contratos', 'not')[0].args).toEqual(['destinacion', 'is', null]); // la lectura liviana (E5)
-    expect(opsDe('contratos', 'not')[2].args).toEqual(['estado', 'in', '(cancelado,finalizado)']);
+    // La lectura liviana (E5/E6): el V3 más reciente no cancelado; un borrador cae al asistente.
+    expect(opsDe('contratos', 'not')[0].args).toEqual(['destinacion', 'is', null]);
+    expect(opsDe('contratos', 'neq')[0].args).toEqual(['estado', 'cancelado']);
+    expect(opsDe('contratos', 'not')[1].args).toEqual(['estado', 'in', '(cancelado,finalizado)']);
+  });
+
+  it('con un contrato TERMINADO (el más reciente) muestra el contrato, no "Iniciar contrato"', async () => {
+    queues.set('contratos', [{ data: { id: CTO, estado: 'finalizado' }, error: null }]);
+    vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO, estado: 'finalizado' } as never);
+    const e = await obtenerEstado(EXP, USER, ROL);
+    expect(e.enviado).toMatchObject({ id: CTO, estado: 'finalizado' });
+    expect(estadoEnviado).toHaveBeenCalledWith(CTO);
+  });
+
+  it('si el más reciente es un borrador, manda el asistente (aunque haya uno terminado antes)', async () => {
+    queues.set('contratos', [{ data: { id: 'otro', estado: 'borrador' }, error: null }]);
+    encolarCarga();
+    const e = await obtenerEstado(EXP, USER, ROL);
+    expect(e.enviado ?? null).toBeNull();
+    expect(estadoEnviado).not.toHaveBeenCalled();
   });
 
   it('un error de lectura es 503 LECTURA_NO_VERIFICABLE', async () => {

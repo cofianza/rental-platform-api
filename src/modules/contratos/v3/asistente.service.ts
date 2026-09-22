@@ -468,21 +468,25 @@ const propioVisible = (p: PropioGuardado | undefined): NonNullable<EstadoAsisten
   p ? { nombre: p.nombre, paginas: p.paginas, bytes: p.bytes, sha256: p.sha256, subidoEn: p.subidoEn } : null;
 
 /**
- * El V3 vivo que ya salió de borrador (EN FIRMA, FIRMA INCOMPLETA o FIANZA
- * ACTIVA), o null. Lectura liviana: sin cargarFuentes ni evaluarBloqueos (a los
- * 61 días una fianza activa no debe mostrar "estudio vencido").
+ * El V3 que ya salió de borrador (EN FIRMA, FIRMA INCOMPLETA, FIANZA ACTIVA o
+ * TERMINADO), o null. Manda el más reciente no cancelado: si es un borrador, la
+ * pantalla es el asistente. Lectura liviana: sin cargarFuentes ni
+ * evaluarBloqueos (a los 61 días una fianza activa no debe mostrar "estudio vencido").
  */
 async function contratoEnviado(expedienteId: string): Promise<{ id: string } | null> {
-  return dato<{ id: string } | null>(
+  const ultimo = dato<{ id: string; estado: string } | null>(
     await db('contratos')
-      .select('id')
+      .select('id, estado')
       .eq('expediente_id', expedienteId)
       .not('destinacion', 'is', null)
-      .not('estado', 'in', '(borrador,cancelado,finalizado)')
+      .neq('estado', 'cancelado')
+      .order('created_at', { ascending: false })
+      .limit(1)
       .maybeSingle(),
     expedienteId,
     'contrato V3',
   );
+  return ultimo && ultimo.estado !== 'borrador' ? { id: ultimo.id } : null;
 }
 
 const estadoDeEnviado = (enviado: EnvioV3): EstadoAsistente => ({ ...DESHABILITADO, habilitado: true, enviado });

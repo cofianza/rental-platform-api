@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // por tabla; `ops` registra lo que se consultó.
 // ============================================================
 
-const { queues, ops, enqueue, chainFor, mockSignedUrl, mockAcceso } = vi.hoisted(() => {
+const { queues, ops, enqueue, chainFor, mockSignedUrl, mockRemove, mockAcceso } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string }> = [];
@@ -29,6 +29,7 @@ const { queues, ops, enqueue, chainFor, mockSignedUrl, mockAcceso } = vi.hoisted
     enqueue: (t: string, ...r: Res[]) => queues.set(t, [...(queues.get(t) ?? []), ...r]),
     chainFor,
     mockSignedUrl: vi.fn(async () => ({ data: { signedUrl: 'https://firmada' }, error: null })),
+    mockRemove: vi.fn(async () => ({ error: null })),
     // Solo el estudio exp-propio es visible para el usuario de prueba.
     mockAcceso: vi.fn(async (expedienteId: string) => {
       if (expedienteId !== 'exp-propio') throw new Error('Estudio no encontrado');
@@ -37,7 +38,7 @@ const { queues, ops, enqueue, chainFor, mockSignedUrl, mockAcceso } = vi.hoisted
 });
 
 vi.mock('@/lib/supabase', () => ({
-  supabase: { from: (t: string) => chainFor(t), storage: { from: () => ({ createSignedUrl: mockSignedUrl }) } },
+  supabase: { from: (t: string) => chainFor(t), storage: { from: () => ({ createSignedUrl: mockSignedUrl, remove: mockRemove }) } },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/auditLog', () => ({
@@ -47,7 +48,7 @@ vi.mock('@/lib/auditLog', () => ({
 }));
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: (id: string) => mockAcceso(id) }));
 
-import { descargarArchivo, listarArchivos } from '../contrato-archivos.service';
+import { descargarArchivo, eliminarArchivo, listarArchivos } from '../contrato-archivos.service';
 
 const contrato = (expediente_id: string) => ({ data: { id: 'c1', expediente_id, estado: 'vigente' }, error: null });
 
@@ -76,5 +77,32 @@ describe('archivos del contrato: alcance', () => {
     enqueue('contrato_archivos', { data: { id: 'a1', storage_key: 'k', nombre_archivo: 'acta.pdf', tipo_mime: 'application/pdf' }, error: null });
     expect(await listarArchivos('c1', 'u1', 'inmobiliaria')).toEqual({ archivos: [] });
     expect((await descargarArchivo('c1', 'a1', 'u1', 'inmobiliaria')).url).toBe('https://firmada');
+  });
+});
+
+describe('borrar el acta de entrega (V3 §12.2)', () => {
+  const acta = { data: { id: 'a1', contrato_id: 'c1', storage_key: 'k1', nombre_archivo: 'acta.pdf', tipo_archivo: 'acta_entrega' }, error: null };
+  const v3 = (estado: string) => ({ data: { id: 'c1', expediente_id: 'exp-propio', estado, destinacion: 'vivienda' }, error: null });
+
+  it('la única acta de un V3 con fianza activa no se borra (409) y no se toca storage', async () => {
+    enqueue('contrato_archivos', acta, { count: 1, error: null });
+    enqueue('contratos', v3('vigente'));
+    await expect(eliminarArchivo('c1', 'a1', 'admin')).rejects.toMatchObject({ statusCode: 409, errorCode: 'ACTA_ENTREGA_UNICA' });
+    expect(ops.some((o) => o.method === 'delete')).toBe(false);
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  it('con otra acta cargada se borra: primero el registro, después el archivo', async () => {
+    enqueue('contrato_archivos', acta, { count: 2, error: null }, { data: null, error: null });
+    enqueue('contratos', v3('finalizado'));
+    await eliminarArchivo('c1', 'a1', 'admin');
+    expect(ops.some((o) => o.table === 'contrato_archivos' && o.method === 'delete')).toBe(true);
+    expect(mockRemove).toHaveBeenCalledWith(['k1']);
+  });
+
+  it('si el registro no se borra, el archivo sigue en storage', async () => {
+    enqueue('contrato_archivos', { ...acta, data: { ...acta.data, tipo_archivo: 'inventario' } }, { data: null, error: { message: 'caída' } });
+    await expect(eliminarArchivo('c1', 'a1', 'admin')).rejects.toMatchObject({ statusCode: 500 });
+    expect(mockRemove).not.toHaveBeenCalled();
   });
 });

@@ -611,4 +611,64 @@ describe('reintentar y la vista', () => {
     expect(await vista(sobre({ estado: 'incompleto' }))).toBe(false);
     expect(await vista(sobre({ estado: 'fallido', auco_code: null }))).toBe(true);
   });
+
+  it('FIANZA ACTIVA: período en curso con la prórroga y el acta pendiente con los datos para el inventario', async () => {
+    enqueue('contratos', ok(contrato({
+      estado: 'vigente', fecha_inicio: '2020-01-15', duracion_meses: 12, fecha_firma: HOY,
+      datos_variables: {
+        asistente: { paso2: { amoblado: true }, paso3: { fechaEntrega: '2020-01-20' } },
+        documento: { entrada: { inmueble: { direccion: 'Calle 1', municipio: 'Medellín' } }, snapshot: { estudio: { fechaCompletado: HOY } }, final: { ruta: 'A' } },
+      },
+    })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo' })));
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_archivos', ok([]));
+    const e = (await estadoEnviado('c1'))!;
+    expect(e.vigencia).toMatchObject({ inicio: '2020-01-15', vencimientoInicial: '2021-01-15' });
+    expect(e.vigencia!.prorrogas).toBeGreaterThanOrEqual(5); // hoy es 2026 o después
+    expect(e.vigencia!.venceEl >= new Date().toISOString().slice(0, 10)).toBe(true);
+    expect(e.acta).toMatchObject({
+      pendiente: true,
+      archivos: [],
+      datos: { fechaEntrega: '2020-01-20', amoblado: true, inmueble: { direccion: 'Calle 1', municipio: 'Medellín' } },
+    });
+    expect(e.acta!.datos.partes).toEqual([{ rol: 'arrendatario', nombre: 'Ana' }, { rol: 'arrendador', nombre: 'Caro' }]);
+  });
+
+  it('TERMINADO: fecha de terminación, sin período en curso y el acta ya cargada', async () => {
+    enqueue('contratos', ok(contrato({ estado: 'finalizado', fecha_terminacion: HOY, fecha_inicio: '2026-01-01', duracion_meses: 12 })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo' })));
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_archivos', ok([{ id: 'a1', nombre_archivo: 'acta.pdf', created_at: HOY }]));
+    const e = (await estadoEnviado('c1'))!;
+    expect(e).toMatchObject({ estado: 'finalizado', fechaTerminacion: HOY, vigencia: null });
+    expect(e.acta).toMatchObject({ pendiente: false, archivos: [{ id: 'a1', nombre: 'acta.pdf', subidoEn: HOY }] });
+    expect(e.reintento).toBe(false);
+  });
+
+  it('EN FIRMA no trae acta ni período (no se lee contrato_archivos)', async () => {
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(sobre()));
+    enqueue('contrato_partes', ok(PARTES));
+    const e = (await estadoEnviado('c1'))!;
+    expect(e).toMatchObject({ acta: null, vigencia: null });
+    expect(ops.some((o) => o.table === 'contrato_archivos')).toBe(false);
+  });
+});
+
+describe('activación: §12.1', () => {
+  it('deja constancia de que el acta de entrega está pendiente y lo dice en el aviso', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo', cerrado_en: '2026-09-21T15:30:00.000Z' })));
+    enqueue('contratos', ok(contrato()), ok(null));
+    enqueue('expedientes', EXPEDIENTE);
+    org();
+    await reconciliarSobre('s1');
+    const eventos = tabla('eventos_timeline', 'insert').map((o) => o.args[0] as { descripcion: string; metadata: Record<string, unknown> });
+    expect(eventos.some((ev) => ev.metadata.acta === 'pendiente' && ev.descripcion.startsWith('Acta de entrega e inventario pendiente'))).toBe(true);
+    const aviso = (tabla('notificaciones', 'insert')[0].args[0] as Array<{ mensaje: string }>)[0];
+    expect(aviso.mensaje).toContain('acta de entrega e inventario');
+  });
 });

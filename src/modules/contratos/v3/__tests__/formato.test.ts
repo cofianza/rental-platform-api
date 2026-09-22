@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { numeroALetras, numeroAPesosLetras } from '@/lib/numerosEnLetras';
-import { FORMATOS, mayus, ordinal, sumarMeses, titulo } from '../formato';
+import { FORMATOS, conFinVigente, mayus, ordinal, periodoVigente, sumarMeses, titulo } from '../formato';
 
 // ============================================================
 // Formatos del motor V3 (diseño §8.1). Lo que sale de aquí se imprime tal
@@ -111,5 +111,38 @@ describe('sumarMeses (art. 67 C.C.)', () => {
     expect(sumarMeses('2026-01-31', 1)).toBe('2026-02-28');
     expect(sumarMeses('2026-10-01', 12)).toBe('2027-10-01');
     expect(sumarMeses('2027-11-30', 3)).toBe('2028-02-29');
+  });
+});
+
+describe('periodoVigente (prórroga por el mismo término)', () => {
+  it('dentro del término inicial no hay prórroga; el día del vencimiento sigue siendo el primer período', () => {
+    expect(periodoVigente('2026-10-01', 12, '2027-03-15')).toEqual({ n: 1, desde: '2026-10-01', hasta: '2027-10-01', prorrogas: 0 });
+    expect(periodoVigente('2026-10-01', 12, '2027-10-01')).toMatchObject({ n: 1, prorrogas: 0 });
+    expect(periodoVigente('2026-10-01', 12, '2027-10-02')).toEqual({ n: 2, desde: '2027-10-01', hasta: '2028-10-01', prorrogas: 1 });
+  });
+
+  it('se cuenta siempre desde el inicio: un 31 no se vuelve 28 para siempre', () => {
+    expect(periodoVigente('2026-01-31', 1, '2026-03-15')).toEqual({ n: 2, desde: '2026-02-28', hasta: '2026-03-31', prorrogas: 1 });
+    expect(periodoVigente('2026-01-31', 1, '2026-04-15')).toMatchObject({ desde: '2026-03-31', hasta: '2026-04-30' });
+    expect(periodoVigente('2028-02-29', 12, '2029-06-01')).toMatchObject({ hasta: '2030-02-28', prorrogas: 1 });
+    expect(periodoVigente('2026-05-31', 6, '2031-01-01')).toMatchObject({ desde: '2030-11-30', hasta: '2031-05-31', prorrogas: 9 });
+  });
+
+  it('rechaza un término que no sea un entero positivo o una fecha inválida', () => {
+    expect(() => periodoVigente('2026-01-01', 0, '2026-01-02')).toThrow(RangeError);
+    expect(() => periodoVigente('2026-01-01', 12, '2026-13-01')).toThrow(RangeError);
+  });
+});
+
+describe('conFinVigente (tableros)', () => {
+  it('solo cambia el fin de un V3 vigente: legacy y V3 terminado pasan igual', () => {
+    const filas = [
+      { id: 'v3', estado: 'vigente', destinacion: 'vivienda', fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15' },
+      { id: 'legacy', estado: 'vigente', destinacion: null, fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15' },
+      { id: 'terminado', estado: 'finalizado', destinacion: 'vivienda', fecha_inicio: '2026-01-15', duracion_meses: 12, fecha_fin: '2027-01-15' },
+    ];
+    const r = conFinVigente(filas, '2028-03-01');
+    expect(r.map((f) => f.fecha_fin)).toEqual(['2029-01-15', '2027-01-15', '2027-01-15']);
+    expect(filas[0].fecha_fin).toBe('2027-01-15'); // no muta la entrada
   });
 });

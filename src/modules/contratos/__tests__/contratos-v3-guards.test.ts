@@ -90,7 +90,7 @@ import {
   renovarContrato,
   supersederContratosEnFirma,
 } from '../contratos.service';
-import { executeContratoTransition, getContratoTransitions } from '../contrato-workflow.service';
+import { executeContratoTransition, finalizarContratoVencido, getContratoTransitions } from '../contrato-workflow.service';
 import { finalizarContratosVencidos } from '../contrato-vencimiento.service';
 import type { GenerarContratoInput, ReGenerarContratoInput, RenovarContratoInput } from '../contratos.schema';
 import { crearSolicitudFirmaMultiparte } from '@/modules/firma/firma-multiparte.service';
@@ -226,11 +226,26 @@ describe('fila V3 en el flujo legacy', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it('transiciones disponibles: un V3 vigente no ofrece ninguna; en firma incompleta, solo cancelar', async () => {
+  it('transiciones disponibles: un V3 vigente solo se termina; en firma incompleta, solo se cancela', async () => {
     enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null }, { data: filaV3({ estado: 'firma_incompleta' }), error: null });
-    expect((await getContratoTransitions(CTO, ADMIN)).transiciones_disponibles).toEqual([]);
+    expect((await getContratoTransitions(CTO, ADMIN)).transiciones_disponibles.map((t) => t.estado)).toEqual(['finalizado']);
     const r = await getContratoTransitions(CTO, ADMIN);
     expect(r.transiciones_disponibles.map((t) => t.estado)).toEqual(['cancelado']);
+  });
+
+  it('TERMINADO (§11.6): vigente → finalizado pasa el guard y NO toca el proceso de firma', async () => {
+    enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null });
+    const terminar = { nuevo_estado: 'finalizado', comentario: 'Entregó el inmueble', motivo: 'Terminación por mutuo acuerdo' } as never;
+    const e = await error(executeContratoTransition(CTO, terminar, ADMIN));
+    expect(e.errorCode).not.toBe('CONTRATO_V3_TRANSICION_NO_PERMITIDA');
+    expect(mockRpc).toHaveBeenCalledWith('transicionar_contrato', expect.objectContaining({ p_nuevo_estado: 'finalizado' }));
+    expect(primera('contrato_v3_sobres')).toBe(-1); // sin cancelarFirmaV3: con fianza activa respondería 409
+  });
+
+  it('un V3 no se termina desde otro estado que no sea FIANZA ACTIVA', async () => {
+    enqueue('contratos', { data: filaV3({ estado: 'firma_incompleta' }), error: null });
+    const terminar = { nuevo_estado: 'finalizado', comentario: 'x'.repeat(12), motivo: 'x' } as never;
+    expect(await error(executeContratoTransition(CTO, terminar, ADMIN))).toMatchObject({ errorCode: 'CONTRATO_V3_TRANSICION_NO_PERMITIDA' });
   });
 
   it('regenerarContrato → 400 CONTRATO_V3_USA_ASISTENTE', async () => {
@@ -248,6 +263,12 @@ describe('fila V3 en el flujo legacy', () => {
 });
 
 describe('guards de la Entrega 5 sobre filas V3', () => {
+  it('finalizarContratoVencido no finaliza un V3 aunque le llegue (se prorroga solo)', async () => {
+    enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null });
+    expect(await finalizarContratoVencido(CTO)).toBe(false);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('el job de vencimiento no toca contratos V3', async () => {
     enqueue('contratos', { data: [], error: null });
     await finalizarContratosVencidos();

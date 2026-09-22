@@ -12,6 +12,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
+import { conFinVigente } from '@/modules/contratos/v3/formato';
 
 // Estados de contrato considerados "activos" (firmado = listo, vigente = corriendo).
 const ESTADOS_CONTRATO_ACTIVO = ['firmado', 'vigente'] as const;
@@ -201,6 +202,8 @@ interface ContratoRowDB {
   valor_arriendo: number | string | null;
   fecha_inicio: string | null;
   fecha_fin: string | null;
+  destinacion: string | null;
+  duracion_meses: number | null;
   motivo_cancelacion: string | null;
   expediente_id: string;
   expedientes: {
@@ -339,12 +342,12 @@ async function fetchPropietarioPorExpediente(expedienteIds: string[]): Promise<M
 }
 
 const CONTRATO_SELECT =
-  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, motivo_cancelacion, expediente_id, ' +
+  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, motivo_cancelacion, expediente_id, ' +
   'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(nombre, apellido, numero_documento, telefono))';
 
 // Variante con datos extra del solicitante (ficha de detalle en Inquilinos).
 const INQUILINO_SELECT =
-  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, motivo_cancelacion, expediente_id, ' +
+  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, motivo_cancelacion, expediente_id, ' +
   'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(' +
   'nombre, apellido, numero_documento, telefono, email, ocupacion, actividad_economica, ingresos_mensuales, empresa, tipo_persona))';
 
@@ -382,7 +385,7 @@ export async function listInquilinos(): Promise<InquilinoRow[]> {
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
   if (error) throw fromSupabaseError(error);
 
-  const rows = (data ?? []) as unknown as ContratoRowDB[];
+  const rows = conFinVigente((data ?? []) as unknown as ContratoRowDB[]);
   const expedienteIds = rows.map((r) => r.expediente_id).filter(Boolean);
   const contratoIds = rows.map((r) => r.id);
 
@@ -448,7 +451,7 @@ export async function listContratosAdmin(): Promise<ContratoAdminRow[]> {
     .order('created_at', { ascending: false });
   if (error) throw fromSupabaseError(error);
 
-  const rows = (data ?? []) as unknown as ContratoRowDB[];
+  const rows = conFinVigente((data ?? []) as unknown as ContratoRowDB[]);
   const expedienteIds = rows.map((r) => r.expediente_id).filter(Boolean);
   const contratoIds = rows.map((r) => r.id);
 
@@ -629,7 +632,7 @@ export async function getIngresosAdmin(): Promise<IngresosData> {
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
   if (error) throw fromSupabaseError(error);
 
-  const rows = (data ?? []) as unknown as ContratoRowDB[];
+  const rows = conFinVigente((data ?? []) as unknown as ContratoRowDB[]);
   const porContrato: IngresoContratoRow[] = rows.map((r) => {
     const sol = r.expedientes?.solicitantes ?? null;
     const inm = r.expedientes?.inmuebles ?? null;
@@ -763,7 +766,7 @@ export async function getPerfilDetalle(id: string): Promise<PerfilDetalle> {
         .order('created_at', { ascending: false });
       if (ec) throw fromSupabaseError(ec);
 
-      const rows = (cont ?? []) as unknown as ContratoRowDB[];
+      const rows = conFinVigente((cont ?? []) as unknown as ContratoRowDB[]);
       const conMora = await fetchContratoIdsConMora(rows.map((r) => r.id));
       const now = new Date();
       contratos = rows.map((r) => {
