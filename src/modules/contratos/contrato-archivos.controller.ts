@@ -23,6 +23,7 @@ export async function subir(req: Request, res: Response) {
       mimetype: req.file.mimetype,
     },
     req.user!.id,
+    req.user!.rol,
     req.ip as string | undefined,
   );
 
@@ -31,7 +32,7 @@ export async function subir(req: Request, res: Response) {
 
 export async function listar(req: Request, res: Response) {
   const id = req.params.id as string;
-  const result = await archivosService.listarArchivos(id);
+  const result = await archivosService.listarArchivos(id, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
 
@@ -42,6 +43,7 @@ export async function descargar(req: Request, res: Response) {
     id,
     archivoId,
     req.user!.id,
+    req.user!.rol,
     req.ip as string | undefined,
   );
   sendSuccess(res, result);

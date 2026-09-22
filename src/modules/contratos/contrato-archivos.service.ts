@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import type { TipoArchivoContrato } from './contrato-archivos.schema';
 
 // ============================================================
@@ -37,6 +38,15 @@ async function fetchContratoBase(contratoId: string) {
   return data as unknown as { id: string; expediente_id: string; estado: string };
 }
 
+/** El contrato, solo si quien pide ve su estudio. 404 si no: no confirma que exista. */
+async function contratoVisible(contratoId: string, userId: string, userRol: string) {
+  const contrato = await fetchContratoBase(contratoId);
+  await assertExpedienteAccess(contrato.expediente_id, userId, userRol).catch(() => {
+    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  });
+  return contrato;
+}
+
 // ============================================================
 // Subir archivo asociado
 // ============================================================
@@ -46,9 +56,10 @@ export async function subirArchivo(
   tipoArchivo: TipoArchivoContrato,
   file: { buffer: Buffer; originalname: string; size: number; mimetype: string },
   userId: string,
+  userRol: string,
   ip?: string,
 ) {
-  const contrato = await fetchContratoBase(contratoId);
+  const contrato = await contratoVisible(contratoId, userId, userRol);
 
   if (!ESTADOS_CON_ARCHIVOS.includes(contrato.estado)) {
     throw AppError.badRequest(
@@ -122,9 +133,8 @@ export async function subirArchivo(
 // Listar archivos del contrato
 // ============================================================
 
-export async function listarArchivos(contratoId: string) {
-  // Verify contrato exists
-  await fetchContratoBase(contratoId);
+export async function listarArchivos(contratoId: string, userId: string, userRol: string) {
+  await contratoVisible(contratoId, userId, userRol);
 
   const { data, error } = await (supabase
     .from('contrato_archivos' as string) as ReturnType<typeof supabase.from>)
@@ -175,8 +185,10 @@ export async function descargarArchivo(
   contratoId: string,
   archivoId: string,
   userId: string,
+  userRol: string,
   ip?: string,
 ) {
+  await contratoVisible(contratoId, userId, userRol);
   const { data, error } = await (supabase
     .from('contrato_archivos' as string) as ReturnType<typeof supabase.from>)
     .select('id, contrato_id, storage_key, nombre_archivo, tipo_mime')

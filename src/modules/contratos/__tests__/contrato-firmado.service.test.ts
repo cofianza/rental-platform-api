@@ -58,6 +58,9 @@ vi.mock('@/lib/logger', () => ({
   },
 }));
 
+const mockArchivar = vi.fn();
+vi.mock('@/modules/firma/firma.service', () => ({ archivarPdfFirmadoEnStorage: (...a: unknown[]) => mockArchivar(...a) }));
+
 vi.mock('@/lib/auditLog', () => ({
   logAudit: vi.fn(),
   AUDIT_ACTIONS: {
@@ -345,6 +348,17 @@ describe('contrato-firmado.service', () => {
         descargarContratoFirmado(CONTRATO_ID, USER_ID, 'propietario'),
       ).rejects.toThrow('No tiene permiso');
     });
+  });
+
+  it('un usuario sin permiso no dispara el archivado desde Auco (el permiso va primero)', async () => {
+    // firmado sin PDF archivado: antes, el lazy-archive corría antes de revisar el permiso
+    mockFrom.mockReturnValueOnce(setupSelectSingle(mockContratoFirmado, null));
+    mockFrom.mockReturnValueOnce(
+      setupSelectSingle({ id: EXPEDIENTE_ID, solicitante_id: 'otro-1', inmuebles: { propietario_id: 'otro-2' } }, null),
+    );
+    await expect(descargarContratoFirmado(CONTRATO_ID, USER_ID, 'propietario')).rejects.toThrow('No tiene permiso');
+    expect(mockArchivar).not.toHaveBeenCalled();
+    expect(mockCreateSignedUrl).not.toHaveBeenCalled();
   });
 
   // ==========================================================

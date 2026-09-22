@@ -304,6 +304,58 @@ async function generarFirmadoCombinado(contrato: {
 // Descargar contrato firmado
 // ============================================================
 
+/**
+ * Quién puede descargar el firmado. Corre ANTES de cualquier efecto (archivar
+ * desde Auco, combinar acuses): un usuario sin permiso no dispara escrituras ni
+ * distingue un contrato sin firmar (404) de uno ajeno (403).
+ */
+async function assertPuedeDescargarFirmado(expedienteId: string, userId: string, userRol: string): Promise<void> {
+  if (userRol === 'gerencia_consulta') {
+    throw AppError.forbidden(
+      'No tiene permiso para descargar el contrato firmado',
+      'DOWNLOAD_FORBIDDEN',
+    );
+  }
+
+  // Admin y operador_analista siempre pueden descargar
+  // Para propietario/inmobiliaria/solicitante: verificar vinculacion
+  if (userRol !== 'administrador' && userRol !== 'operador_analista') {
+    const { data: expediente, error: expError } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id, solicitante_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes(creado_por)')
+      .eq('id', expedienteId)
+      .single();
+
+    if (expError || !expediente) {
+      throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
+    }
+
+    const exp = expediente as unknown as {
+      id: string;
+      solicitante_id: string | null;
+      inmuebles: { propietario_id: string | null; inmobiliaria_id: string | null } | null;
+      solicitantes: { creado_por: string | null } | null;
+    };
+
+    // Org-aware: dueño directo del inmueble o miembro activo de la organización
+    // dueña (consistente con los demás guards multi-tenant de Fase 2).
+    const isArrendador = await perfilEsDuenoDeInmueble({
+      userId,
+      userRol,
+      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
+      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
+    });
+    // El solicitante.id es UUID interno; quien firmo el JWT es el
+    // perfil cuyo id == solicitantes.creado_por en flujo self-service.
+    const isArrendatario =
+      exp.solicitante_id === userId || exp.solicitantes?.creado_por === userId;
+
+    if (!isArrendatario && !isArrendador) {
+      throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
+    }
+  }
+}
+
 export async function descargarContratoFirmado(
   contratoId: string,
   userId: string,
@@ -312,6 +364,7 @@ export async function descargarContratoFirmado(
   userAgent?: string,
 ) {
   let contrato = await fetchContratoFirmado(contratoId);
+  await assertPuedeDescargarFirmado(contrato.expediente_id, userId, userRol);
 
   // Determinar de donde sale el PDF, en orden de FIDELIDAD (y reportarlo en
   // `fuente` para que el front NO afirme "con firmas de Auco" sobre un PDF
@@ -379,52 +432,6 @@ export async function descargarContratoFirmado(
 
   if (!usarStorageKey) {
     throw AppError.notFound('El contrato no tiene documento firmado', 'NO_FIRMADO');
-  }
-
-  // Verificar permisos de descarga
-  if (userRol === 'gerencia_consulta') {
-    throw AppError.forbidden(
-      'No tiene permiso para descargar el contrato firmado',
-      'DOWNLOAD_FORBIDDEN',
-    );
-  }
-
-  // Admin y operador_analista siempre pueden descargar
-  // Para propietario/inmobiliaria/solicitante: verificar vinculacion
-  if (userRol !== 'administrador' && userRol !== 'operador_analista') {
-    const { data: expediente, error: expError } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id, solicitante_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes(creado_por)')
-      .eq('id', contrato.expediente_id)
-      .single();
-
-    if (expError || !expediente) {
-      throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
-    }
-
-    const exp = expediente as unknown as {
-      id: string;
-      solicitante_id: string | null;
-      inmuebles: { propietario_id: string | null; inmobiliaria_id: string | null } | null;
-      solicitantes: { creado_por: string | null } | null;
-    };
-
-    // Org-aware: dueño directo del inmueble o miembro activo de la organización
-    // dueña (consistente con los demás guards multi-tenant de Fase 2).
-    const isArrendador = await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
-      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
-    });
-    // El solicitante.id es UUID interno; quien firmo el JWT es el
-    // perfil cuyo id == solicitantes.creado_por en flujo self-service.
-    const isArrendatario =
-      exp.solicitante_id === userId || exp.solicitantes?.creado_por === userId;
-
-    if (!isArrendatario && !isArrendador) {
-      throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
-    }
   }
 
   // Generar signed URL (10 min)
