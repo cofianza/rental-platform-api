@@ -327,12 +327,17 @@ describe('rendimiento', () => {
     rep('[['),
   ];
 
+  // Mejor de tres: lo que se vigila es el backtracking catastrofico (segundos),
+  // no el ruido de la maquina cuando la suite corre en paralelo.
   it('4.000 caracteres adversarios en < 50 ms cada uno', () => {
     validar('Calentamiento: EL ARRENDADOR renuncia al preaviso.');
     for (const texto of ADVERSARIOS) {
-      const t0 = performance.now();
-      validar(texto, { sinCoarrendatario: true });
-      expect(performance.now() - t0).toBeLessThan(50);
+      const medidas = [0, 1, 2].map(() => {
+        const t0 = performance.now();
+        validar(texto, { sinCoarrendatario: true });
+        return performance.now() - t0;
+      });
+      expect(Math.min(...medidas)).toBeLessThan(50);
     }
   });
 });

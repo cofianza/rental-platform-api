@@ -12,6 +12,9 @@ export const ESTADOS_CONTRATO = [
   'en_revision',
   'aprobado',
   'pendiente_firma',
+  // Contratos V3 (§11.3): el proceso de firma se cerro o vencio sin todas las
+  // firmas. No existe en el flujo anterior.
+  'firma_incompleta',
   'firmado',
   'vigente',
   'finalizado',
@@ -113,6 +116,15 @@ export const CONTRATO_TRANSITION_MAP: readonly ContratoTransitionDef[] = [
   },
   {
     from: 'pendiente_firma',
+    to: 'cancelado',
+    label: 'Cancelar contrato',
+    preconditions: ['MOTIVO_REQUERIDO'],
+  },
+  // Solo contratos V3: desde FIRMA INCOMPLETA se reenvia a firma (por la ruta
+  // del asistente, no por aqui) o se cancela. El resto de la matriz V3 la
+  // decide la RPC transicionar_contrato (20260925000002).
+  {
+    from: 'firma_incompleta',
     to: 'cancelado',
     label: 'Cancelar contrato',
     preconditions: ['MOTIVO_REQUERIDO'],

@@ -40,7 +40,8 @@ export type ClaveCalibracion =
   | 'TOLERANCIA_CANON'
   | 'TOPE_CANON_INGRESO_RECALCULO'
   | 'VIGENCIA_MESES_DEFECTO'
-  | 'MAX_CLAUSULAS_ADICIONALES';
+  | 'MAX_CLAUSULAS_ADICIONALES'
+  | 'DIAS_EXPIRACION_FIRMA';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -214,9 +215,9 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
   },
   // Contratos V3 §14. Rigen SOLO para el asistente de contratos: el motor sigue
   // con su 40% (scorecard.ts) y la reasignacion con su 15% (portabilidad.ts).
-  // Quedan fuera PUNTOS_ADICIONALES_IPC (Ley 820 art. 20 lo fija; nadie lo
-  // leeria) y DIAS_EXPIRACION_FIRMA (Entrega 5). MAX_CLAUSULAS_ADICIONALES
-  // (Entrega 4) va al final.
+  // Queda fuera PUNTOS_ADICIONALES_IPC (Ley 820 art. 20 lo fija; nadie lo
+  // leeria). MAX_CLAUSULAS_ADICIONALES (Entrega 4) y DIAS_EXPIRACION_FIRMA
+  // (Entrega 5) van al final.
   {
     clave: 'TOLERANCIA_CANON',
     valorDefault: 15,
@@ -255,6 +256,16 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     seccion: 'Contratos V3 §14.5 / §5.1.6',
     descripcion: 'Cláusulas adicionales por contrato sin revisión de Cofianza. Por encima, el contrato queda bloqueado hasta que un administrador autorice ese conjunto exacto.',
     advertencia: 'El tope técnico es 25 (la numeración llega a QUINCUAGÉSIMA OCTAVA).',
+  },
+  {
+    clave: 'DIAS_EXPIRACION_FIRMA',
+    valorDefault: 15,
+    min: 4,
+    max: 60,
+    entero: true,
+    seccion: 'Contratos V3 §14.8 / §15.1',
+    descripcion: 'Dias que el proceso de firma queda abierto en Auco. Al vencer, el contrato pasa a FIRMA INCOMPLETA: la fianza no opera y hay que reenviarlo.',
+    advertencia: 'Auco exige mas de 3 dias. Un plazo largo no amplia la vigencia del estudio: para reenviar, el CRC debe seguir vigente.',
   },
 ];
 

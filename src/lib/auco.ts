@@ -42,12 +42,17 @@ export interface AucoValidationOptions {
   flow?: boolean;
 }
 
-interface AucoSignProfile {
+export interface AucoSignProfile {
   name: string;
   email: string;
   phone?: string;
   role?: 'SIGNER' | 'APPROVER';
+  /** Turno de firma ("1", "2", …): el siguiente se notifica cuando firma el anterior. */
   order?: string;
+  /** Coloca la firma sobre el ancla `{{signature:N}}` del PDF (N = indice en signProfile). */
+  label?: boolean;
+  /** false = Auco no le avisa; el integrador lo notifica (plan B si `order` falla). */
+  notification?: boolean;
   /** Auco exige al menos uno de [type, label, position] por firmante. 'signature'
    *  = firma libre que el firmante coloca durante el flujo. Sin esto, el upload
    *  falla con 400 ("must contain at least one of [type, label, position]"). */
@@ -62,7 +67,7 @@ interface AucoSignProfile {
   options?: AucoValidationOptions;
 }
 
-interface AucoUploadDocumentInput {
+export interface AucoUploadDocumentInput {
   /** Creator's email (admin/operator sending the request) */
   email: string;
   /** Process name for tracking */
@@ -86,6 +91,8 @@ interface AucoUploadDocumentInput {
   remember?: number;
   /** Validaciones globales — aplican a todos los firmantes salvo override. */
   options?: AucoValidationOptions;
+  /** Datos propios que Auco devuelve en el webhook y en el GET (correlacion). */
+  custom?: Record<string, string>;
 }
 
 interface AucoUploadResponse {
@@ -133,7 +140,15 @@ export interface AucoWebhookPayload {
   };
   message?: string;
   tags?: string[];
-  custom?: string[];
+  /** La doc de Auco lo documenta como objeto en el upload y como arreglo en el
+   *  webhook: se lee con `sobreIdDeCustom` (v3/firma/reglas.ts), que tolera ambos. */
+  custom?: unknown;
+}
+
+/** GET /document/roadmap: unica fuente de la FECHA de cada firma (el webhook no la trae). */
+export interface AucoRoadmap {
+  participants?: { id?: string; name?: string; email?: string; phone?: string }[];
+  activityLog?: { action?: string; participant?: string; timestamp?: string; by?: string; ip?: string }[];
 }
 
 // ============================================================
@@ -206,12 +221,14 @@ async function aucoRequest<T>(
  */
 export async function uploadDocumentForSignature(
   input: AucoUploadDocumentInput,
+  timeoutMs?: number,
 ): Promise<string> {
   const result = await aucoRequest<AucoUploadResponse>(
     'POST',
     '/document/upload',
     input,
     true, // private key for write operations
+    timeoutMs,
   );
 
   logger.info(
@@ -249,6 +266,23 @@ export async function getDocumentStatus(
 }
 
 /**
+ * Bitacora del proceso (lectura con public key, private de respaldo como el GET).
+ * `activityLog[].action='PARTICIPANT_SIGN'` + `timestamp` (UTC) = cuando firmo cada parte.
+ */
+export async function getDocumentRoadmap(code: string): Promise<AucoRoadmap> {
+  const path = `/document/roadmap?code=${encodeURIComponent(code)}`;
+  try {
+    return await aucoRequest<AucoRoadmap>('GET', path, undefined, false);
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), code },
+      'getDocumentRoadmap: public key fallo, reintentando con private key',
+    );
+    return aucoRequest<AucoRoadmap>('GET', path, undefined, true);
+  }
+}
+
+/**
  * Send a signature reminder for a document.
  */
 export async function sendReminder(code: string): Promise<void> {
@@ -263,14 +297,21 @@ export async function sendReminder(code: string): Promise<void> {
 
 /**
  * Cancel a signing process in Auco.
+ *
+ * La doc exige tambien `message` y `email` (usuario de la organizacion en Auco):
+ * https://docs.auco.ai/api/manager/documents/cancel. Se mandan solo si el caller
+ * los pasa, para no cambiar el cuerpo que usa el flujo anterior.
  */
-export async function cancelDocument(code: string): Promise<void> {
+export async function cancelDocument(
+  code: string,
+  opts?: { message: string; email: string },
+): Promise<void> {
   // Auco espera el campo `codes` (array), no `documents` — con `documents`
   // devuelve 400 "codes is required" y el documento queda activo en Auco.
   await aucoRequest(
     'POST',
     '/document/cancel',
-    { codes: [code] },
+    { codes: [code], ...(opts ?? {}) },
     true,
   );
   logger.info({ code }, 'Auco document cancelled');

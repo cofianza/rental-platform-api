@@ -377,7 +377,7 @@ const AUCO_DOC_TYPES = new Set([
   'CC', 'CE', 'PPT', 'PEP', 'CI', 'RUT', 'RUN', 'CCCR', 'DUI', 'DNI', 'CURP', 'PASSPORT',
 ]);
 
-function mapTipoDocumentoToAuco(tipo: string | null | undefined): string | null {
+export function mapTipoDocumentoToAuco(tipo: string | null | undefined): string | null {
   if (!tipo) return null;
   const t = tipo.trim().toLowerCase();
   const alias: Record<string, string> = {
@@ -400,7 +400,7 @@ async function identidadPendiente(contratoId: string): Promise<boolean> {
   return !data || (data as { estado: string }).estado === 'pendiente';
 }
 
-function aucoDeriveCountry(phone: string | null): string | null {
+export function aucoDeriveCountry(phone: string | null): string | null {
   if (!phone) return null;
   if (phone.startsWith('+57')) return 'CO';
   if (phone.startsWith('+52')) return 'MX';

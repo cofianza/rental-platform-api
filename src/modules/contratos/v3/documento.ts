@@ -18,6 +18,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { AppError } from '@/lib/errors';
 import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 
 // Misma profundidad desde src/…/v3 (ts-node, vitest) y dist/…/v3 (build).
@@ -89,7 +90,8 @@ td{padding:0;vertical-align:top;border:.5pt solid #BFBFBF}
 .k-recuadro{font-size:9.5pt;line-height:1.14;padding:1.75pt 0}
 .k-recuadro:first-child{font-size:10pt;text-align:left;padding:0 0 4.5pt}
 .k-firma{text-align:left;padding-top:19pt;break-inside:avoid;break-before:avoid}
-.linea{display:block;width:3in;border-top:.75pt solid;margin:30pt 0 5pt}
+.linea{display:block;position:relative;width:3in;border-top:.75pt solid;margin:30pt 0 5pt}
+.ancla{position:absolute;left:0;bottom:4pt;font-size:1px;line-height:1px;color:#fff}
 .linea+br{display:none}
 .casilla{display:inline-block;box-sizing:border-box;width:9pt;height:9pt;border:.75pt solid;font-size:7pt;line-height:7.5pt;text-align:center;vertical-align:-1pt}
 .pendiente{background:#FFF3B0}
@@ -108,6 +110,30 @@ export function pieTexto(pie: string, _modo: 'fidelidad'): string {
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Mete el ancla `{{signature:i}}` de Auco dentro de cada raya de firma, en
+ * orden (i = indice del firmante en signProfile = orden de firma). Va DESPUES
+ * de renderizar: en modo final el motor rechaza llaves en el texto
+ * (verificarSinMarcadores, motor.ts). El span va dentro de `.linea` (absoluto,
+ * 1px, blanco) para no mover la paginacion ni romper `.linea+br{display:none}`.
+ * Si el numero de rayas no coincide con el de firmantes, lanza: es preferible
+ * no enviar a que una firma caiga en el bloque de otra parte.
+ */
+export function anclarFirmas(html: string, firmantes: number): string {
+  let i = 0;
+  const out = html.replace(
+    /(<p class="k-firma"[^>]*><span class="linea">)(<\/span>)/g,
+    (_m, a: string, b: string) => `${a}<span class="ancla">{{signature:${i++}}}</span>${b}`,
+  );
+  if (i !== firmantes)
+    throw new AppError(
+      500,
+      'ANCLAS_FIRMA',
+      `El documento tiene ${i} bloques de firma y el sobre lleva ${firmantes} firmantes.`,
+    );
+  return out;
 }
 
 export interface LogoPdf {
