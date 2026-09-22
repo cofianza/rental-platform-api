@@ -417,15 +417,23 @@ export async function crearSolicitudFirmaMultiparte(
 ) {
   // 1. Validar contrato + PDF
   const { data: contrato } = await db('contratos')
-    .select('id, estado, expediente_id, storage_key')
+    .select('id, estado, expediente_id, storage_key, destinacion')
     .eq('id', contratoId)
     .single();
-  const c = contrato as { id: string; estado: string; expediente_id: string; storage_key: string | null } | null;
+  const c = contrato as {
+    id: string; estado: string; expediente_id: string; storage_key: string | null; destinacion: string | null;
+  } | null;
   if (!c) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
 
   // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
   // 404 si el contrato no está en el scope del usuario (inmobiliaria/propietario).
   await assertExpedienteAccess(c.expediente_id, userId, userRol);
+
+  // Contratos V3: su sobre lo crea el asistente (contrato_v3_sobres), nunca
+  // este flujo. Tapa POST /firma/solicitudes para filas V3.
+  if (c.destinacion) {
+    throw AppError.conflict('El envío a firma de este contrato se hace desde el asistente de contratos.', 'CONTRATO_V3_USA_ASISTENTE');
+  }
 
   if (c.estado !== 'pendiente_firma') {
     throw AppError.badRequest(

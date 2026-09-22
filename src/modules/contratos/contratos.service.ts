@@ -1455,7 +1455,7 @@ export async function enviarContratoAFirma(
   // también la transición a 'pendiente_firma' del workflow, que delega aquí.
   if (c.destinacion) {
     throw AppError.badRequest(
-      'El envío a firma de este contrato se hará desde el asistente de contratos (próximamente).',
+      'El envío a firma de este contrato se hace desde el asistente de contratos.',
       'CONTRATO_V3_FIRMA_NO_DISPONIBLE',
     );
   }
@@ -1580,7 +1580,7 @@ export async function enviarContratoAFirma(
  * (cancela su sobre en Auco y los pasa a 'cancelado'). NO toca 'firmado'/'vigente'
  * (más avanzados) ni el recién enviado. Best-effort: nunca tumba el envío nuevo.
  */
-async function supersederContratosEnFirma(
+export async function supersederContratosEnFirma(
   expedienteId: string,
   exceptContratoId: string,
   userId: string,
@@ -1591,7 +1591,9 @@ async function supersederContratosEnFirma(
       .select('id')
       .eq('expediente_id', expedienteId)
       .neq('id', exceptContratoId)
-      .eq('estado', 'pendiente_firma');
+      .eq('estado', 'pendiente_firma')
+      // Un V3 en firma no se toca: este UPDATE directo se saltaría la RPC y su sobre V3.
+      .is('destinacion', null);
     const ids = ((hermanos as Array<{ id: string }> | null) ?? []).map((h) => h.id);
     if (ids.length === 0) return;
 
@@ -2370,7 +2372,7 @@ export async function renovarContrato(
   // 1. Fetch parent contract
   const { data: parent, error: parentError } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, plantilla_id, estado, duracion_meses, datos_variables, plantilla_version')
+    .select('id, expediente_id, plantilla_id, estado, duracion_meses, datos_variables, plantilla_version, destinacion')
     .eq('id', contratoId)
     .single();
 
@@ -2386,10 +2388,17 @@ export async function renovarContrato(
     duracion_meses: number;
     datos_variables: Record<string, string> | null;
     plantilla_version: number;
+    destinacion: string | null;
   };
   // Ownership (mismo cierre de IDOR que enviar a firma): no se renueva el
   // contrato de otra organización por UUID.
   await assertExpedienteAccess(p.expediente_id, userId, userRol);
+
+  // Contratos V3: tienen prórroga automática, y la renovación legacy lee una
+  // plantilla y un `contenido` que un V3 no tiene.
+  if (p.destinacion) {
+    throw AppError.badRequest('Los contratos del asistente no se renuevan desde aquí.', 'CONTRATO_V3_NO_RENOVABLE');
+  }
 
   if (p.estado !== 'vigente') {
     throw AppError.badRequest(

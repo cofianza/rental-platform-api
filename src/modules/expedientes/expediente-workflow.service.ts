@@ -265,9 +265,11 @@ export async function executeTransition(
  * Estados PRE-FIRMA del contrato: el contrato existe pero nadie lo ha firmado
  * ni enviado a firma. Al morir el expediente estos contratos se auto-cancelan,
  * exactamente igual que las renovaciones pre-firma cuando termina su padre
- * (aplicarEfectosTerminacion en contrato-workflow.service.ts).
+ * (aplicarEfectosTerminacion en contrato-workflow.service.ts). Incluye
+ * 'firma_incompleta' (V3): el proceso de Auco ya se cerró sin todas las firmas
+ * y no hay fianza operando. 'pendiente_firma' sigue fuera: bloquea la liberación.
  */
-const CONTRATO_ESTADOS_PRE_FIRMA = ['borrador', 'en_revision', 'aprobado'] as const;
+export const CONTRATO_ESTADOS_PRE_FIRMA = ['borrador', 'en_revision', 'aprobado', 'firma_incompleta'] as const;
 
 /** Estados terminales del contrato: ya no comprometen la propiedad. */
 const CONTRATO_ESTADOS_TERMINALES = ['finalizado', 'cancelado'] as const;

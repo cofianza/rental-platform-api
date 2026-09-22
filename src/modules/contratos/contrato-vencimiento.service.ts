@@ -30,6 +30,8 @@ export async function finalizarContratosVencidos(): Promise<{ revisados: number;
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select('id, fecha_fin')
     .eq('estado', 'vigente')
+    // Contratos V3 (FIANZA ACTIVA): tienen prórroga automática; su terminación llega con E6.
+    .is('destinacion', null)
     .not('fecha_fin', 'is', null)
     .lt('fecha_fin', hoy)
     .order('fecha_fin', { ascending: true })

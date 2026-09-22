@@ -19,6 +19,9 @@ const {
   mockSendFirmaEmail,
   mockNotificar,
   mockTransicion,
+  mockListOperators,
+  mockUpload,
+  v3,
 } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
@@ -54,22 +57,50 @@ const {
     mockSendFirmaEmail: vi.fn(async () => undefined),
     mockNotificar: vi.fn(async () => undefined),
     mockTransicion: vi.fn(async () => ({})),
+    mockListOperators: vi.fn(async () => [{ id: 'analista-1', rol: 'operador_analista' }]),
+    mockUpload: vi.fn(async () => 'AUCO1'),
+    // Lecturas del módulo de firma V3 (reconciliar.ts); la lógica de firma.service corre de verdad.
+    v3: {
+      leerContrato: vi.fn(async () => ({
+        id: 'c1', estado: 'pendiente_firma', numero: 'CTO-2026-0001', expediente_id: 'e1', fecha_firma: null,
+        datos_variables: { documento: { final: { ruta: 'A' } } }, inmuebleId: null, orgId: null,
+      })),
+      leerPartes: vi.fn(),
+      leerSobre: vi.fn(async () => ({ id: 's1', intento: 1, estado: 'creando' })),
+      ultimoSobre: vi.fn(async () => null),
+    },
   };
 });
 
-vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    from: (t: string) => mockFrom(t),
+    storage: { from: () => ({ download: async () => ({ data: { arrayBuffer: async () => new ArrayBuffer(8) }, error: null }) }) },
+  },
+}));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
-vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'https://www.cofianza.co' } }));
+vi.mock('@/config', () => ({
+  env: { FRONTEND_URL: 'https://www.cofianza.co', FIRMA_BIOMETRIA_ENABLED: true, AUCO_SENDER_EMAIL: 'firma@cofianza.co' },
+}));
 vi.mock('@/lib/auditLog', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auditLog')>()),
   logAudit: vi.fn(),
 }));
-vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => ({ UMBRAL_SIMILITUD_BIOMETRICA: 80 })) }));
+vi.mock('@/lib/calibracion', () => ({
+  getCalibracion: vi.fn(async () => ({ UMBRAL_SIMILITUD_BIOMETRICA: 80, DIAS_EXPIRACION_FIRMA: 15 })),
+}));
+vi.mock('@/lib/auco', async (orig) => ({
+  ...(await orig<typeof import('@/lib/auco')>()),
+  uploadDocumentForSignature: (...a: unknown[]) => mockUpload(...a),
+  cancelDocument: vi.fn(),
+  getDocumentStatus: vi.fn(),
+}));
+vi.mock('@/modules/contratos/v3/firma/reconciliar', () => ({ ...v3, reconciliarSobre: vi.fn(), transicionar: vi.fn(), vigenciaEstudio: vi.fn() }));
 vi.mock('@/lib/email', () => ({ sendFirmaEmail: (...a: unknown[]) => mockSendFirmaEmail(...a) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarUsuario: (...a: unknown[]) => mockNotificar(...a),
 }));
-vi.mock('@/modules/users/users.service', () => ({ listOperators: vi.fn(async () => [{ id: 'analista-1' }]) }));
+vi.mock('@/modules/users/users.service', () => ({ listOperators: (...a: unknown[]) => mockListOperators(...a) }));
 vi.mock('@/modules/autorizaciones/biometria', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/modules/autorizaciones/biometria')>()),
   cotejarConAuco: (...a: unknown[]) => mockCotejar(...a),
@@ -78,6 +109,9 @@ vi.mock('../firma-multiparte.service', () => ({
   derivarFirmantes: (...a: unknown[]) => mockDerivar(...a),
   evaluarFirmantes: (...a: unknown[]) => mockEvaluar(...a),
   crearSolicitudFirmaMultiparte: (...a: unknown[]) => mockCrearSobre(...a),
+  // Los usa la firma V3 (reglas.construirSignProfile).
+  mapTipoDocumentoToAuco: () => 'CC',
+  aucoDeriveCountry: () => 'CO',
 }));
 vi.mock('@/modules/contratos/contrato-workflow.service', () => ({
   executeContratoTransition: (...a: unknown[]) => mockTransicion(...a),
@@ -290,11 +324,136 @@ describe('panel del contrato y revision del analista', () => {
     expect(updatesDe(T)[0]).toMatchObject({ revision: 'suplantacion', revisado_por: 'analista-1' });
   });
 
+  it('suplantacion sobre un contrato V3 con FIANZA ACTIVA: queda registrada, NO cancela y avisa a los administradores', async () => {
+    enqueue(T, fila({ estado: 'no_coincide', resultado: resumen('no_coincide', 62) }));
+    queues.set('contratos', [{ data: { estado: 'vigente', destinacion: 'vivienda', numero: 'CTO-2026-0001' }, error: null }]);
+    mockListOperators.mockResolvedValueOnce([{ id: 'op-1', rol: 'operador_analista' }, { id: 'admin-1', rol: 'administrador' }]);
+    const user = { id: 'analista-1', email: 'a@cofianza.co', rol: 'operador_analista' as const, activo: true };
+    await revisarVerificacion('c1', 'v1', { resultado: 'suplantacion', nota: 'El titular no conoce el trámite.' }, user);
+
+    expect(mockTransicion).not.toHaveBeenCalled();
+    expect(updatesDe(T)[0]).toMatchObject({ revision: 'suplantacion', revisado_por: 'analista-1' });
+    expect(mockNotificar).toHaveBeenCalledTimes(1);
+    expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'admin-1', tipo: 'firma.suplantacion_fianza_activa' }));
+  });
+
   it('una verificacion limpia no se revisa', async () => {
     enqueue(T, fila({ estado: 'verificada', resultado: resumen('verificada', 95) }));
     const user = { id: 'analista-1', email: 'a@cofianza.co', rol: 'operador_analista' as const, activo: true };
     await expect(
       revisarVerificacion('c1', 'v1', { resultado: 'confirmada', nota: 'Todo en orden con la cédula.' }, user),
     ).rejects.toMatchObject({ errorCode: 'VERIFICACION_SIN_REVISION' });
+  });
+});
+
+// ============================================================
+// Contratos V3 (Entrega 5 §8): arrendatario Y coarrendatario verifican antes
+// del sobre, y el sobre sale cuando se cierra la ULTIMA verificacion.
+// ============================================================
+
+const PARTES = [
+  { id: 'p1', rol: 'arrendatario', orden: 1, nombre: 'Ana Pérez', tipo_documento: 'cc', numero_documento: '1020304050', email: 'ana@correo.co', telefono: '3001112233' },
+  { id: 'p2', rol: 'coarrendatario', orden: 2, nombre: 'Beto Ruiz', tipo_documento: 'cc', numero_documento: '2030405060', email: 'beto@correo.co', telefono: '3004445566' },
+  { id: 'p3', rol: 'arrendador', orden: 3, nombre: 'Inmobiliaria SAS', tipo_documento: 'nit', numero_documento: '900', email: 'inmo@correo.co', telefono: '3007778899',
+    representante_legal_nombre: 'Caro Díaz', representante_legal_tipo_documento: 'cc', representante_legal_documento: '5060' },
+] as never[];
+const CTX_V3 = { data: { destinacion: 'vivienda', expedientes: { numero: 'EXP-2026-0010', inmuebles: { direccion: 'Cra 7 # 45-10', ciudad: 'Bogotá' } } }, error: null };
+
+describe('contratos V3', () => {
+  const imgs = { documentImage: 'data:image/jpeg;base64,AAA', photo: 'data:image/jpeg;base64,BBB' };
+
+  /** Lo que crearSobre lee y escribe después de leerContrato/leerPartes (mockeados). */
+  const encolarSobre = () => {
+    enqueue('contratos', { data: { destinacion: 'vivienda', storage_key: 'contratos/e1/c1/final.pdf' }, error: null });
+    enqueue('contrato_v3_sobres', { data: { id: 's1' }, error: null }, { data: [{ id: 's1' }], error: null });
+  };
+
+  it('iniciar: toma las partes de contrato_partes y escribe al arrendatario y al coarrendatario (cotitular), nunca al arrendador', async () => {
+    queues.set('contratos', [CTX_V3]);
+    v3.leerPartes.mockResolvedValue(PARTES);
+    const r = await iniciarVerificacionIdentidad('c1', 'gestor-1');
+
+    expect(r.pendiente).toBe(true);
+    const inserts = ops.filter((o) => o.table === T && o.method === 'insert').map((o) => o.args[0] as Record<string, string>);
+    expect(inserts.map((i) => [i.rol, i.email])).toEqual([['arrendatario', 'ana@correo.co'], ['cotitular', 'beto@correo.co']]);
+    expect(mockSendFirmaEmail.mock.calls.map((c) => c[0])).toEqual(['ana@correo.co', 'beto@correo.co']);
+    expect(mockSendFirmaEmail).toHaveBeenCalledWith(
+      'beto@correo.co', 'Beto Ruiz', expect.stringContaining('/verificar-identidad/'), 72, expect.anything(),
+      expect.objectContaining({ intro: expect.stringContaining('cuando sea tu turno de firmar') }),
+    );
+    expect(mockDerivar).not.toHaveBeenCalled();
+    expect(mockUpload).not.toHaveBeenCalled();
+  });
+
+  it('reenvio: reutiliza las cerradas y solo renueva a quien sigue pendiente', async () => {
+    queues.set('contratos', [CTX_V3]);
+    v3.leerPartes.mockResolvedValue(PARTES);
+    enqueue(T, { data: { id: 'v1', estado: 'verificada' }, error: null }, { data: { id: 'v2', estado: 'pendiente' }, error: null });
+    const r = await iniciarVerificacionIdentidad('c1', 'gestor-1');
+
+    expect(r.pendiente).toBe(true);
+    expect(ops.filter((o) => o.table === T && o.method === 'insert')).toHaveLength(0);
+    expect(updatesDe(T)).toHaveLength(1);
+    expect(mockSendFirmaEmail.mock.calls.map((c) => c[0])).toEqual(['beto@correo.co']);
+    expect(mockUpload).not.toHaveBeenCalled();
+  });
+
+  it('todas ya cerradas: el sobre sale de una vez (y si Auco falla, el error le llega a quien envia)', async () => {
+    queues.set('contratos', [CTX_V3]);
+    v3.leerPartes.mockResolvedValue(PARTES);
+    enqueue(T, { data: { id: 'v1', estado: 'verificada' }, error: null }, { data: { id: 'v2', estado: 'omitida' }, error: null });
+    enqueue(T, { count: 0, error: null }); // crearSobre: identidad pendiente
+    encolarSobre();
+    expect((await iniciarVerificacionIdentidad('c1', 'gestor-1')).pendiente).toBe(false);
+    expect(mockSendFirmaEmail).not.toHaveBeenCalled();
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+
+    queues.set('contratos', [CTX_V3]);
+    enqueue(T, { data: { id: 'v1', estado: 'verificada' }, error: null }, { data: { id: 'v2', estado: 'omitida' }, error: null });
+    enqueue(T, { count: 0, error: null });
+    encolarSobre();
+    mockUpload.mockRejectedValueOnce(new Error('Auco 503'));
+    await expect(iniciarVerificacionIdentidad('c1', 'gestor-1')).rejects.toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
+  });
+
+  it('dos verificaciones: la primera que cierra no crea el sobre; la segunda sí (y nunca el sobre del flujo anterior)', async () => {
+    mockCotejar.mockResolvedValue(resumen('verificada', 95));
+    v3.leerPartes.mockResolvedValue(PARTES);
+
+    // 1.ª: cierra la del arrendatario; queda la del coarrendatario pendiente.
+    queues.set('contratos', [CTX_V3]);
+    enqueue(T, fila({ opcion: 'autoriza' }), { data: [{ id: 'v1' }], error: null }, { count: 1, error: null });
+    expect(await verificarBiometriaFirma(TOKEN, imgs)).toEqual({ completada: true, motivo: null });
+    expect(v3.leerContrato).not.toHaveBeenCalled(); // no llegó a crearSobre
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(ops.some((o) => o.table === 'contrato_v3_sobres')).toBe(false);
+
+    // 2.ª: cierra la del coarrendatario → no queda ninguna pendiente → sale el sobre V3.
+    queues.set('contratos', [CTX_V3]);
+    encolarSobre();
+    enqueue(
+      T,
+      fila({ id: 'v2', nombre: 'Beto Ruiz', opcion: 'autoriza' }),
+      { data: [{ id: 'v2' }], error: null },
+      { count: 0, error: null }, // continuarTrasIdentidad
+      { count: 0, error: null }, // crearSobre
+    );
+    expect(await verificarBiometriaFirma(TOKEN, imgs)).toEqual({ completada: true, motivo: null });
+
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+    const [input] = mockUpload.mock.calls[0] as unknown as [{ custom: Record<string, string>; signProfile: unknown[] }];
+    expect(input.custom).toEqual({ cofianza_sobre: 's1' });
+    expect(input.signProfile).toHaveLength(3);
+    expect(mockCrearSobre).not.toHaveBeenCalled();
+  });
+
+  it('un contrato del flujo anterior sigue creando su sobre con crearSolicitudFirmaMultiparte', async () => {
+    enqueue(T, fila({ opcion: 'autoriza' }), { data: [{ id: 'v1' }], error: null });
+    mockCotejar.mockResolvedValue(resumen('verificada', 95));
+    await verificarBiometriaFirma(TOKEN, imgs);
+
+    expect(mockCrearSobre).toHaveBeenCalledWith('c1', 'gestor-1');
+    expect(v3.leerContrato).not.toHaveBeenCalled();
+    expect(mockUpload).not.toHaveBeenCalled();
   });
 });

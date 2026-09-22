@@ -232,6 +232,26 @@ export async function createPaymentLink(
   // pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
 
+  // 1a. FIRMA INCOMPLETA (contratos V3, §11.7.3): la fianza no está operando,
+  //     así que no se cobra garantía ni primer canon (cada pago es una factura
+  //     real ante la DIAN). En EN FIRMA sí se permite. Solo mira filas V3, y
+  //     filtra el estado aquí y no en la consulta para no depender del valor
+  //     nuevo del enum.
+  if (input.concepto === 'garantia' || input.concepto === 'primer_canon') {
+    const { data: v3, error: v3Error } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('estado')
+      .eq('expediente_id', expedienteId)
+      .not('destinacion', 'is', null);
+    if (v3Error) throw fromSupabaseError(v3Error);
+    if (((v3 as Array<{ estado: string }> | null) ?? []).some((c) => c.estado === 'firma_incompleta')) {
+      throw AppError.conflict(
+        'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la garantía o el primer canon.',
+        'FIANZA_NO_OPERANDO',
+      );
+    }
+  }
+
   // 1b. TOPE DE CANON — flujo §4.4: "ANTES de avanzar y de generar cualquier
   //     cobro... no se cobra el estudio". Esta ruta generica es el OTRO camino
   //     por el que se cobra un estudio: la UI ofrece "Generar Link de Pago" con

@@ -276,7 +276,7 @@ export async function crearSolicitudFirma(
   // 1. Validate contrato exists and is in valid state
   const { data: contrato, error: contratoError } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, expediente_id, storage_key, nombre_archivo')
+    .select('id, estado, expediente_id, storage_key, nombre_archivo, destinacion')
     .eq('id', input.contrato_id)
     .single();
 
@@ -286,12 +286,17 @@ export async function crearSolicitudFirma(
 
   const c = contrato as unknown as {
     id: string; estado: string; expediente_id: string;
-    storage_key: string | null; nombre_archivo: string | null;
+    storage_key: string | null; nombre_archivo: string | null; destinacion: string | null;
   };
 
   // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
   // 404 si el contrato no está en el scope del usuario (inmobiliaria/propietario).
   await assertExpedienteAccess(c.expediente_id, userId, userRol);
+
+  // Contratos V3: su sobre lo crea el asistente (contrato_v3_sobres), nunca este flujo.
+  if (c.destinacion) {
+    throw AppError.conflict('El envío a firma de este contrato se hace desde el asistente de contratos.', 'CONTRATO_V3_USA_ASISTENTE');
+  }
 
   if (!ESTADOS_VALIDOS_FIRMA.includes(c.estado)) {
     throw AppError.badRequest(
@@ -1581,17 +1586,38 @@ export async function archivarPdfFirmadoEnStorage(contratoId: string): Promise<v
       .order('firmado_en', { ascending: false })
       .limit(1)
       .maybeSingle();
-    const solCode = solCodeRow as unknown as { id: string; auco_document_code: string } | null;
+    let solCode = solCodeRow as unknown as { id: string; auco_document_code: string } | null;
+    // Respaldo V3 (Entrega 5): el asistente no usa solicitudes_firma; el código
+    // de Auco está en su sobre completo. No hay fila de solicitud que persistir.
+    let esSobreV3 = false;
+    if (!solCode) {
+      const { data: sobreRow } = await (supabase
+        .from('contrato_v3_sobres' as string) as ReturnType<typeof supabase.from>)
+        .select('id, auco_code')
+        .eq('contrato_id', contratoId)
+        .eq('estado', 'completo')
+        .not('auco_code', 'is', null)
+        .order('intento', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const sobre = sobreRow as { id: string; auco_code: string } | null;
+      if (sobre) {
+        solCode = { id: sobre.id, auco_document_code: sobre.auco_code };
+        esSobreV3 = true;
+      }
+    }
     if (solCode?.auco_document_code) {
       try {
         const info = await aucoClient.getDocumentStatus(solCode.auco_document_code);
         if (info.status === 'FINISH' && info.url) {
           sol = { id: solCode.id, auco_signed_url: info.url, auco_document_code: solCode.auco_document_code };
           // Persistir la URL para diagnósticos futuros (no crítica: expira).
-          await (supabase
-            .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-            .update({ auco_signed_url: info.url, updated_at: new Date().toISOString() } as never)
-            .eq('id', solCode.id);
+          if (!esSobreV3) {
+            await (supabase
+              .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+              .update({ auco_signed_url: info.url, updated_at: new Date().toISOString() } as never)
+              .eq('id', solCode.id);
+          }
           logger.info({ contratoId, aucoCode: solCode.auco_document_code }, 'archivarPdfFirmado: URL recuperada de Auco por document code');
         }
       } catch (err) {

@@ -31,6 +31,19 @@ if (env.CONTRATO_VENCIMIENTO_JOB_ENABLED) {
   setInterval(runVencimiento, VENCIMIENTO_INTERVAL_MS).unref();
 }
 
+// Firma de contratos V3: barrido de respaldo del webhook de Auco (vencimientos,
+// rechazos y firmas cuyo aviso se perdió, procesos cortados por un redeploy,
+// avisos sin entregar). Atado a los datos y NO a CONTRATOS_V3_ENABLED: los
+// sobres de QA (flag encendido en local) mandan sus webhooks a producción.
+// Sin sobres V3 solo hace una consulta vacía.
+const FIRMA_V3_INTERVAL_MS = 15 * 60 * 1000; // ponytail: una consulta por sobre vivo; bajar la frecuencia si hay volumen
+const runFirmaV3 = () =>
+  import('@/modules/contratos/v3/firma/reconciliar')
+    .then(({ barrerFirmasV3 }) => barrerFirmasV3())
+    .catch((err) => logger.warn({ err }, 'barrerFirmasV3: ciclo fallido'));
+runFirmaV3();
+setInterval(runFirmaV3, FIRMA_V3_INTERVAL_MS).unref();
+
 // Escalada automatica de mora. Antes solo existia como POST /cron/moras/
 // auto-escalar protegido por CRON_SECRET, que no esta configurado: nunca corria
 // y la pantalla de moras prometia una escalada que no pasaba. Mismo patron que

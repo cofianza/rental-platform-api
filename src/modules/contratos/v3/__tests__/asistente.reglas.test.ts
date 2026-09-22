@@ -571,10 +571,11 @@ describe('schema de los pasos', () => {
     expect(r.contactos.arrendatario.telefono).toBe('+573001234567');
   });
 
-  it('rechaza la Ruta B', () => {
-    const r = paso1Schema.safeParse({ ...PASOS.paso1, ruta: 'B' });
+  it('acepta las rutas A y B (Entrega 5) y nada más', () => {
+    expect(paso1Schema.safeParse({ ...PASOS.paso1, ruta: 'B' }).success).toBe(true);
+    const r = paso1Schema.safeParse({ ...PASOS.paso1, ruta: 'C' });
     expect(r.success).toBe(false);
-    expect(r.error!.issues[0].message).toBe('La Ruta B todavía no está disponible');
+    expect(r.error!.issues[0].message).toBe('Elige la ruta del contrato');
   });
 
   it('comisión: 2,555 no, 2,55 sí', () => {

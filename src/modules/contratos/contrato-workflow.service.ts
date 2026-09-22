@@ -49,10 +49,10 @@ export async function executeContratoTransition(
   const targetState = input.nuevo_estado;
 
   // Contratos V3: el workflow legacy (revisión, aprobación, envío a firma) no
-  // aplica; mientras el asistente no cubra la firma solo se cancela el borrador.
-  // Incluye el camino a 'pendiente_firma'.
-  if (contrato.destinacion && targetState !== 'cancelado') {
-    throw AppError.badRequest('Por ahora este contrato solo se puede cancelar.', 'CONTRATO_V3_TRANSICION_NO_PERMITIDA');
+  // aplica —el asistente envía, reenvía y activa—. Aquí solo se cancela, y
+  // solo antes de completar la firma (§11.5). Incluye el camino a 'pendiente_firma'.
+  if (contrato.destinacion && (targetState !== 'cancelado' || !V3_CANCELABLE.includes(currentState))) {
+    throw AppError.badRequest('Este contrato no admite esa acción en su estado actual.', 'CONTRATO_V3_TRANSICION_NO_PERMITIDA');
   }
 
   // Validar que la transicion es estructuralmente valida
@@ -71,6 +71,13 @@ export async function executeContratoTransition(
   // Verificar precondiciones
   const transitionDef = getContratoTransitionDef(currentState, targetState)!;
   await checkPreconditions(transitionDef.preconditions, contrato, input);
+
+  // V3: anular el proceso de firma en Auco ANTES de cancelar. Si todas las
+  // partes ya firmaron lanza 409 y el contrato no se cancela.
+  if (contrato.destinacion) {
+    const { cancelarFirmaV3 } = await import('./v3/firma/firma.service');
+    await cancelarFirmaV3(contratoId);
+  }
 
   // 4.2 — "Enviar a firma" NO es una transicion pasiva: marcar pendiente_firma
   // sin crear el sobre dejaria el contrato "enviado" sin que ningun firmante
@@ -271,8 +278,10 @@ export async function getContratoTransitions(contratoId: string, user: AuthUser)
   // el POST rechazaría con 403 (inmobiliaria/propietario solo pueden terminar
   // o cancelar; gerencia_consulta es solo-lectura → ninguna).
   let transiciones = getAvailableContratoTransitions(contrato.estado);
-  // Contratos V3: mismo límite que executeContratoTransition (solo cancelar).
-  if (contrato.destinacion) transiciones = transiciones.filter((t) => t.estado === 'cancelado');
+  // Contratos V3: mismo límite que executeContratoTransition (solo cancelar, antes de la firma).
+  if (contrato.destinacion) {
+    transiciones = V3_CANCELABLE.includes(contrato.estado) ? transiciones.filter((t) => t.estado === 'cancelado') : [];
+  }
   if (user.rol === 'inmobiliaria' || user.rol === 'propietario') {
     transiciones = transiciones.filter((t) => OWNER_TERMINATE_STATES.includes(t.estado));
   } else if (user.rol !== 'administrador' && user.rol !== 'operador_analista') {
@@ -363,6 +372,9 @@ async function fetchContrato(id: string): Promise<ContratoRow> {
 // inmobiliaria/propietario puede llevar su propio contrato (terminar/cancelar);
 // el resto del workflow lo maneja un rol interno.
 const OWNER_TERMINATE_STATES: EstadoContrato[] = ['finalizado', 'cancelado'];
+
+/** Contratos V3: estados desde los que se pueden cancelar (antes de completar la firma, §11.5). */
+const V3_CANCELABLE: EstadoContrato[] = ['borrador', 'pendiente_firma', 'firma_incompleta'];
 
 /**
  * Permisos para ejecutar una transicion de contrato.
@@ -694,7 +706,8 @@ async function aplicarEfectosTerminacion(
  * Guard de RENOVACIÓN: si el mismo expediente tiene OTRO contrato activo o en
  * camino (vigente/firmado/pendiente_firma) — típico al finalizar el contrato
  * padre cuando ya corre su renovación — NO se libera: el inmueble sigue
- * arrendado por el contrato sucesor.
+ * arrendado por el contrato sucesor. Incluye 'firma_incompleta' (V3): ese
+ * contrato espera un reenvío a firma sobre el mismo inmueble.
  *
  * Guard de PROPIEDAD (§4.2, estudios simultáneos): el de renovación solo mira
  * contratos del MISMO expediente, y con varios candidatos por inmueble eso ya
@@ -720,7 +733,7 @@ async function liberarInmuebleDelExpediente(
       .select('id')
       .eq('expediente_id', expedienteId)
       .neq('id', contratoId)
-      .in('estado', ['vigente', 'firmado', 'pendiente_firma'])
+      .in('estado', ['vigente', 'firmado', 'pendiente_firma', 'firma_incompleta'])
       .limit(1);
     if (guardError) {
       // FAIL-CLOSED: si no podemos confirmar que no hay contrato sucesor, NO
@@ -774,7 +787,7 @@ async function liberarInmuebleDelExpediente(
         .select('id, expediente_id')
         .in('expediente_id', expIds)
         .neq('expediente_id', expedienteId)
-        .in('estado', ['vigente', 'firmado', 'pendiente_firma'])
+        .in('estado', ['vigente', 'firmado', 'pendiente_firma', 'firma_incompleta'])
         .limit(1);
       if (ajenosError) {
         logger.error(

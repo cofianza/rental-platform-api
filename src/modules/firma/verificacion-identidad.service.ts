@@ -13,8 +13,10 @@
  * verifica por otro medio y registra el resultado; si detecta suplantacion,
  * cancela el contrato.
  *
- * Hoy solo el arrendatario: el co-titular no firma en Auco (hueco anterior a
- * la Adenda). La tabla ya admite rol 'cotitular' para cuando firme.
+ * Flujo anterior: solo el arrendatario (el co-titular no firma en Auco).
+ * Contratos V3 (asistente, Entrega 5 §8): arrendatario y coarrendatario (rol
+ * 'cotitular'), tomados de contrato_partes; el sobre sale cuando TODAS las
+ * verificaciones del contrato estan cerradas (contratos/v3/firma).
  *
  * LAS IMAGENES NO SE GUARDAN: entran por el body, van a Auco y mueren con el
  * request. Se guarda el veredicto y el `code` de Auco (ver biometria.ts).
@@ -93,17 +95,62 @@ function requiereAnalista(v: { estado: string; resultado: unknown }): boolean {
 
 async function contextoContrato(contratoId: string) {
   const { data } = await db('contratos')
-    .select('expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad))')
+    .select('destinacion, expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad))')
     .eq('id', contratoId)
     .maybeSingle();
-  const exp = (data as {
+  const row = data as {
+    destinacion?: string | null;
     expedientes: { numero: string; inmuebles: { direccion: string; ciudad: string } | null } | null;
-  } | null)?.expedientes;
+  } | null;
+  const exp = row?.expedientes;
   return {
     numero: exp?.numero ?? '',
     direccion: exp?.inmuebles?.direccion ?? '',
     ciudad: exp?.inmuebles?.ciudad ?? '',
+    /** Contrato del asistente V3 (destinacion NOT NULL). */
+    v3: !!row?.destinacion,
   };
+}
+
+/**
+ * Crea (o renueva) la verificacion de una persona y le escribe. Token nuevo en
+ * cada envio: el enlace anterior deja de servir.
+ */
+async function enviarEnlace(
+  contratoId: string,
+  userId: string,
+  rol: 'arrendatario' | 'cotitular',
+  persona: { nombre: string; email: string | null; tipo_documento: string | null; numero_documento: string | null },
+  prevId: string | null,
+  intro: string,
+  ctx: { direccion: string; ciudad: string },
+): Promise<void> {
+  const ahora = new Date();
+  const campos = {
+    nombre: persona.nombre,
+    email: persona.email,
+    tipo_documento: persona.tipo_documento,
+    numero_documento: persona.numero_documento,
+    token: crypto.randomBytes(32).toString('hex'),
+    token_expiracion: new Date(ahora.getTime() + TOKEN_EXPIRY_HOURS * 3600 * 1000).toISOString(),
+    enviado_por: userId,
+    updated_at: ahora.toISOString(),
+  };
+  const { error } = prevId
+    ? await db(TABLA).update(campos as never).eq('id', prevId)
+    : await db(TABLA).insert({ contrato_id: contratoId, rol, ...campos } as never);
+  if (error) {
+    throw new AppError(500, 'INTERNAL_ERROR', `No se pudo iniciar la verificación de identidad: ${error.message}`);
+  }
+
+  await sendFirmaEmail(
+    persona.email ?? '',
+    persona.nombre,
+    `${env.FRONTEND_URL}/verificar-identidad/${campos.token}`,
+    TOKEN_EXPIRY_HOURS,
+    { direccion_inmueble: ctx.direccion || 'N/A', ciudad_inmueble: ctx.ciudad, nombre_arrendatario: persona.nombre },
+    { asunto: 'Confirma tu identidad para firmar tu contrato - Cofianza', intro, boton: 'Confirmar mi identidad' },
+  );
 }
 
 // ============================================================
@@ -113,11 +160,17 @@ async function contextoContrato(contratoId: string) {
 /**
  * `pendiente: false` = el arrendatario ya paso por la verificacion y el sobre
  * puede salir. Si no, crea/renueva el enlace y le escribe.
+ *
+ * Contratos V3: ver iniciarVerificacionesV3 (con `pendiente: false` el sobre
+ * ya salio).
  */
 export async function iniciarVerificacionIdentidad(
   contratoId: string,
   userId: string,
 ): Promise<{ pendiente: boolean; message: string }> {
+  const ctx = await contextoContrato(contratoId);
+  if (ctx.v3) return iniciarVerificacionesV3(contratoId, userId, ctx);
+
   const { data: prevRow } = await db(TABLA)
     .select('id, estado')
     .eq('contrato_id', contratoId)
@@ -136,38 +189,14 @@ export async function iniciarVerificacionIdentidad(
     );
   }
   const arrendatario = firmantes.find((f) => f.rol_firmante === 'arrendatario')!;
-
-  // Token nuevo en cada envio: el enlace anterior deja de servir.
-  const ahora = new Date();
-  const campos = {
-    nombre: arrendatario.nombre,
-    email: arrendatario.email,
-    tipo_documento: arrendatario.tipo_documento,
-    numero_documento: arrendatario.numero_documento,
-    token: crypto.randomBytes(32).toString('hex'),
-    token_expiracion: new Date(ahora.getTime() + TOKEN_EXPIRY_HOURS * 3600 * 1000).toISOString(),
-    enviado_por: userId,
-    updated_at: ahora.toISOString(),
-  };
-  const { error } = prev
-    ? await db(TABLA).update(campos as never).eq('id', prev.id)
-    : await db(TABLA).insert({ contrato_id: contratoId, rol: 'arrendatario', ...campos } as never);
-  if (error) {
-    throw new AppError(500, 'INTERNAL_ERROR', `No se pudo iniciar la verificación de identidad: ${error.message}`);
-  }
-
-  const ctx = await contextoContrato(contratoId);
-  await sendFirmaEmail(
-    arrendatario.email,
-    arrendatario.nombre,
-    `${env.FRONTEND_URL}/verificar-identidad/${campos.token}`,
-    TOKEN_EXPIRY_HOURS,
-    { direccion_inmueble: ctx.direccion || 'N/A', ciudad_inmueble: ctx.ciudad, nombre_arrendatario: arrendatario.nombre },
-    {
-      asunto: 'Confirma tu identidad para firmar tu contrato - Cofianza',
-      intro: 'antes de firmar tu contrato de arrendamiento necesitamos confirmar que eres tú. Toma menos de dos minutos; al terminar te llega por WhatsApp el enlace para firmar.',
-      boton: 'Confirmar mi identidad',
-    },
+  await enviarEnlace(
+    contratoId,
+    userId,
+    'arrendatario',
+    arrendatario,
+    prev?.id ?? null,
+    'antes de firmar tu contrato de arrendamiento necesitamos confirmar que eres tú. Toma menos de dos minutos; al terminar te llega por WhatsApp el enlace para firmar.',
+    ctx,
   );
 
   logger.info({ contratoId, reenvio: !!prev }, 'Verificacion de identidad: enlace enviado al arrendatario');
@@ -176,6 +205,53 @@ export async function iniciarVerificacionIdentidad(
     message: prev
       ? 'Le reenviamos al arrendatario el enlace para confirmar su identidad.'
       : 'Le enviamos al arrendatario un correo para confirmar su identidad. Apenas lo haga, le llega el contrato para firmar por WhatsApp.',
+  };
+}
+
+/**
+ * Contratos V3 (Entrega 5 §8): verifican el arrendatario y el coarrendatario
+ * (rol 'cotitular'), tomados de contrato_partes (congeladas y ya validadas al
+ * enviar). Solo escribe a quien sigue pendiente; las cerradas se reutilizan
+ * (reenvio). Si no queda nadie pendiente sale el sobre aqui mismo, y si Auco
+ * falla el error le llega a quien llama para que revierta el envio.
+ */
+async function iniciarVerificacionesV3(
+  contratoId: string,
+  userId: string,
+  ctx: { direccion: string; ciudad: string },
+): Promise<{ pendiente: boolean; message: string }> {
+  const { leerPartes } = await import('@/modules/contratos/v3/firma/reconciliar');
+  // ponytail: un solo 'cotitular' por el UNIQUE (contrato_id, rol); vivienda admite a lo sumo un coarrendatario.
+  let escritos = 0;
+  for (const p of (await leerPartes(contratoId)).filter((x) => x.rol !== 'arrendador')) {
+    const rol = p.rol === 'arrendatario' ? 'arrendatario' : 'cotitular';
+    const { data: prevRow } = await db(TABLA)
+      .select('id, estado')
+      .eq('contrato_id', contratoId)
+      .eq('rol', rol)
+      .maybeSingle();
+    const prev = prevRow as { id: string; estado: EstadoVerificacion } | null;
+    if (prev && prev.estado !== 'pendiente') continue;
+    await enviarEnlace(
+      contratoId,
+      userId,
+      rol,
+      p,
+      prev?.id ?? null,
+      'antes de firmar tu contrato de arrendamiento necesitamos confirmar que eres tú. Toma menos de dos minutos; te llega por WhatsApp cuando sea tu turno de firmar.',
+      ctx,
+    );
+    escritos++;
+  }
+  if (!escritos) {
+    const { crearSobre } = await import('@/modules/contratos/v3/firma/firma.service');
+    await crearSobre(contratoId, userId);
+    return { pendiente: false, message: 'Contrato enviado a firma.' };
+  }
+  logger.info({ contratoId, escritos }, 'Verificacion de identidad V3: enlaces enviados');
+  return {
+    pendiente: true,
+    message: 'Les enviamos un correo para confirmar su identidad. Apenas todos lo hagan, el contrato sale a firma por WhatsApp.',
   };
 }
 
@@ -347,7 +423,14 @@ async function finalizar(v: VerificacionRow, resumen: ResumenBiometria): Promise
   }
 
   try {
-    await crearSolicitudFirmaMultiparte(v.contrato_id, v.enviado_por ?? '');
+    // V3: el sobre sale solo cuando TODAS las verificaciones del contrato estan
+    // cerradas (continuarTrasIdentidad no hace nada si queda alguna pendiente).
+    if (ctx.v3) {
+      const { continuarTrasIdentidad } = await import('@/modules/contratos/v3/firma/firma.service');
+      await continuarTrasIdentidad(v.contrato_id, v.enviado_por);
+    } else {
+      await crearSolicitudFirmaMultiparte(v.contrato_id, v.enviado_por ?? '');
+    }
   } catch (err) {
     const detalle = err instanceof Error ? err.message : String(err);
     logger.error({ contratoId: v.contrato_id, error: detalle }, 'Verificacion de identidad: no se pudo crear el sobre de Auco');
@@ -413,8 +496,27 @@ export async function revisarVerificacion(
   if (!requiereAnalista(v)) throw AppError.conflict('Esta verificación no requiere revisión.', 'VERIFICACION_SIN_REVISION');
 
   if (input.resultado === 'suplantacion') {
-    const { data: c } = await db('contratos').select('estado').eq('id', contratoId).single();
-    if (!['cancelado', 'finalizado'].includes((c as { estado: string } | null)?.estado ?? '')) {
+    const { data: c } = await db('contratos').select('estado, destinacion, numero').eq('id', contratoId).single();
+    const contrato = c as { estado: string; destinacion?: string | null; numero?: string } | null;
+    if (contrato?.destinacion && contrato.estado === 'vigente') {
+      // V3 con FIANZA ACTIVA: no se cancela (§11.5: cancelar es solo antes de
+      // completar la firma; la matriz V3 lo rechazaria). Queda la revision y
+      // deciden los administradores (Q6).
+      const { listOperators } = await import('@/modules/users/users.service');
+      const admins = (await listOperators().catch(() => [])).filter((o) => o.rol === 'administrador');
+      await Promise.all(
+        admins.map((a) =>
+          notificarUsuario({
+            userId: a.id,
+            tipo: 'firma.suplantacion_fianza_activa',
+            titulo: `Suplantación detectada en un contrato con fianza activa — ${contrato.numero}`,
+            mensaje: `Un analista registró suplantación de identidad en ${v.nombre}, pero la fianza ya está activa y el contrato no se canceló. Revísalo. Nota: ${input.nota}`,
+            link: `/contratos/${contratoId}`,
+            payload: { contrato_id: contratoId, verificacion_id: v.id },
+          }),
+        ),
+      );
+    } else if (!['cancelado', 'finalizado'].includes(contrato?.estado ?? '')) {
       const { executeContratoTransition } = await import('@/modules/contratos/contrato-workflow.service');
       await executeContratoTransition(
         contratoId,
