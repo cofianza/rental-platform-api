@@ -56,6 +56,43 @@ export interface EstadoAsistente {
   };
 }
 
+// ── Firma (Entrega 5) ──
+export type EstadoSobreV3 = 'creando' | 'en_firma' | 'completo' | 'incompleto' | 'cancelado' | 'fallido';
+export type EstadoFirmanteV3 = 'pendiente' | 'notificado' | 'firmado' | 'rechazado' | 'bloqueado';
+
+/** Un contrato V3 que ya salió de borrador: EN FIRMA, FIRMA INCOMPLETA o FIANZA ACTIVA. */
+export interface EnvioV3 {
+  id: string;
+  numero: string;
+  ruta: 'A' | 'B';
+  estado: 'pendiente_firma' | 'firma_incompleta' | 'vigente';
+  /** contratos.fecha_firma: la última firma según Auco (UTC). */
+  fechaActivacion: string | null;
+  sobre: null | {
+    intento: number;
+    estado: EstadoSobreV3;
+    enviadoEn: string;
+    expiraEn: string;
+    motivo: string | null;
+    motivoDetalle: string | null;
+    firmantes: {
+      rol: 'arrendatario' | 'coarrendatario' | 'arrendador';
+      nombre: string;
+      orden: number;
+      estado: EstadoFirmanteV3;
+      firmadoEn: string | null;
+    }[];
+  };
+  /** Aviso de firma incompleta (§11.7.4) ya entregado, con su texto exacto. */
+  aviso: null | { texto: string; entregadoEn: string };
+  /** Verificaciones de identidad que faltan antes de crear el sobre (0 sin biometría). */
+  identidadPendientes: number;
+  /** FIRMA INCOMPLETA + estudio vigente (§11.7.5). */
+  reenvio: { puede: boolean; motivo: string | null };
+  /** EN FIRMA sin sobre vivo ni identidad pendiente: el envío falló y se puede reintentar. */
+  reintento: boolean;
+}
+
 // ── Cláusulas adicionales (Entrega 4) ──
 export type OrigenClausula = 'biblioteca' | 'propia';
 export type CodigoHallazgo =

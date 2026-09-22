@@ -90,6 +90,16 @@ export async function notificarUsuario(input: NotificarUsuarioInput): Promise<vo
  */
 export async function notificarYCorreo(input: NotificarUsuarioInput): Promise<void> {
   await notificarUsuario(input);
+  await enviarCorreoNotificacion(input);
+}
+
+/**
+ * Solo la parte de correo de notificarYCorreo (best-effort, nunca lanza). La
+ * usa quien inserta la notificacion in-app por su cuenta y necesita saber si
+ * el insert fallo (notificarUsuario se traga el error): p. ej. la constancia
+ * del aviso de firma incompleta de contratos V3.
+ */
+export async function enviarCorreoNotificacion(input: NotificarUsuarioInput): Promise<void> {
   if (!input.userId) return;
   try {
     const { data } = await supabase.rpc('get_user_with_email' as never, { user_id: input.userId } as never);
