@@ -118,6 +118,14 @@ vi.mock('@/modules/inmuebles/inmuebles.service', () => ({
   reservarInmuebleParaContrato: (...args: unknown[]) => mockReservar(...args),
   liberarReservaDeExpediente: (...args: unknown[]) => mockLiberar(...args),
 }));
+// Firma V3 (Entrega 5): el módulo se prueba aparte (firma/__tests__); aquí solo se ve que el asistente lo llame.
+vi.mock('../firma/firma.service', () => ({
+  crearSobre: vi.fn(async () => ({ id: 's1' })),
+  estadoEnviado: vi.fn(async () => null),
+  reenviar: vi.fn(),
+  reintentar: vi.fn(),
+  actualizarFirma: vi.fn(),
+}));
 // Sin Chromium: el PDF es un buffer falso, los pendientes salen de la plantilla real.
 vi.mock('../vivienda', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../vivienda')>();
@@ -127,26 +135,34 @@ vi.mock('../vivienda', async (importOriginal) => {
       const r = actual.renderizarVivienda(d, o);
       return { pdf: Buffer.from('%PDF-1.4 prueba'), pendientes: r.pendientes, version: 'vivienda-prueba', lineas: r.lineas };
     }),
+    generarAnexoVivienda: vi.fn(async (d: Parameters<typeof actual.renderizarAnexo>[0], o: Parameters<typeof actual.renderizarAnexo>[1]) => {
+      const r = actual.renderizarAnexo(d, o);
+      return { pdf: Buffer.from('%PDF-1.4 anexo'), pendientes: r.pendientes, version: 'anexo-prueba', lineas: r.lineas };
+    }),
   };
 });
 
 // Import AFTER mocks
 import { AppError } from '@/lib/errors';
 import type { Tarifas } from '@/modules/estudios/tarifas';
+import { PDFDocument } from 'pdf-lib';
 import {
   autorizarExceso,
+  cargarPropio,
+  enviarAFirma,
   generarVistaPrevia,
   guardarPaso,
   iniciarContrato,
   obtenerEstado,
 } from '../asistente.service';
-import type { Asistente } from '../asistente.reglas';
+import type { Asistente, DocumentoV3 } from '../asistente.reglas';
+import { crearSobre, estadoEnviado } from '../firma/firma.service';
 import { guardarPasoSchema } from '../asistente.schema';
 import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, Paso4 } from '../asistente.types';
 import { AVISO_VERSION, huella, shaClausula } from '../clausulas.reglas';
 import { contarClausulas } from '../motor';
 import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
-import { generarContratoVivienda } from '../vivienda';
+import { generarAnexoVivienda, generarContratoVivienda } from '../vivienda';
 
 // ============================================================
 // Fixtures (hoy = 2026-09-15 en Bogotá)
@@ -366,6 +382,15 @@ afterEach(() => {
 // 14. Flag apagado
 // ============================================================
 
+/**
+ * GET con el flag encendido: primero lee si el contrato ya salió de borrador
+ * (Entrega 5, lectura liviana); aquí no hay ninguno, y luego la carga completa.
+ */
+function obtener() {
+  queues.set('contratos', [{ data: null, error: null }, ...(queues.get('contratos') ?? [])]);
+  return obtenerEstado(EXP, USER, ROL);
+}
+
 describe('flag CONTRATOS_V3_ENABLED apagado', () => {
   beforeEach(() => {
     mockEnv.CONTRATOS_V3_ENABLED = false;
@@ -373,7 +398,7 @@ describe('flag CONTRATOS_V3_ENABLED apagado', () => {
 
   it('GET responde habilitado:false sin tocar la base (ni para el acceso)', async () => {
     const e = await obtenerEstado(EXP, USER, ROL);
-    expect(e).toEqual({ habilitado: false, bloqueos: [], avisos: [], resumen: null, contrato: null });
+    expect(e).toEqual({ habilitado: false, bloqueos: [], avisos: [], resumen: null, contrato: null, enviado: null });
     expect(mockFrom).not.toHaveBeenCalled();
     expect(mockAssertAccess).not.toHaveBeenCalled();
   });
@@ -392,7 +417,7 @@ describe('flag CONTRATOS_V3_ENABLED apagado', () => {
 describe('obtenerEstado', () => {
   it('antes de Iniciar: sin bloqueos, resumen sin ingreso, contrato null', async () => {
     encolarCarga({ ingreso: 4_000_000 });
-    const e = await obtenerEstado(EXP, USER, ROL);
+    const e = await obtener();
     expect(mockAssertAccess).toHaveBeenCalledWith(EXP, USER, ROL);
     expect(e.habilitado).toBe(true);
     expect(e.bloqueos).toEqual([]);
@@ -400,19 +425,20 @@ describe('obtenerEstado', () => {
     expect(e.resumen!.canon).toEqual({ evaluadoCop: 2_000_000, maximoSinNuevaEvaluacionCop: 2_300_000 });
     expect(JSON.stringify(e)).not.toContain('4000000');
     // La lectura del contrato excluye cancelados y finalizados (índice contratos_v3_vivo_uq).
-    expect(opsDe('contratos', 'not')[0].args).toEqual(['estado', 'in', '(cancelado,finalizado)']);
+    expect(opsDe('contratos', 'not')[0].args).toEqual(['destinacion', 'is', null]); // la lectura liviana (E5)
+    expect(opsDe('contratos', 'not')[2].args).toEqual(['estado', 'in', '(cancelado,finalizado)']);
   });
 
   it('un error de lectura es 503 LECTURA_NO_VERIFICABLE', async () => {
     encolarCarga({ expedienteError: true });
-    const e = await error(obtenerEstado(EXP, USER, ROL));
+    const e = await error(obtener());
     expect(e).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 
   it('tarifa con coarrendatario y ningún coarrendatario vinculado es 503 (nunca "solo")', async () => {
     mockTarifas.mockResolvedValue({ tarifas: { ...TARIFAS, con_coarrendatario: true } });
     encolarCarga();
-    const e = await error(obtenerEstado(EXP, USER, ROL));
+    const e = await error(obtener());
     expect(e).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 });
@@ -979,7 +1005,7 @@ describe('paso 4: validación al guardar', () => {
 describe('paso 4: estado (GET) y bloqueos', () => {
   it('ordinales desde la primera adicional de ESTE contrato, aviso y máximo', async () => {
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: COMPLETO } })] });
-    const e = await obtenerEstado(EXP, USER, ROL);
+    const e = await obtener();
     // Sin coarrendatario ni PH, con comisión: 31 cláusulas → la 1.ª adicional es la 32.
     expect(e.contrato!.adicionales).toMatchObject({ maximo: 10, excesoAutorizado: null, aviso: { version: AVISO_VERSION } });
     expect(e.contrato!.adicionales.ordinales).toHaveLength(25);
@@ -997,7 +1023,7 @@ describe('paso 4: estado (GET) y bloqueos', () => {
         { ...BIBLIO, version: 3 },
       ]),
     });
-    const e = await obtenerEstado(EXP, USER, ROL);
+    const e = await obtener();
     expect(opsDe('clausulas_adicionales', 'in')[0].args).toEqual(['id', ['pro-1', 'bib-1']]);
     expect(e.bloqueos).toEqual([
       {
@@ -1014,24 +1040,24 @@ describe('paso 4: estado (GET) y bloqueos', () => {
   it('un error al leer el catálogo es 503 (fail-closed)', async () => {
     encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA)]))] });
     enqueue('clausulas_adicionales', { data: null, error: { message: 'timeout' } });
-    const e = await error(obtenerEstado(EXP, USER, ROL));
+    const e = await error(obtener());
     expect(e).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 
   it('IA encendida: una propia sin veredicto vigente bloquea; con el veredicto de su texto, no', async () => {
     mockEnv.CLAUSULAS_IA_ENABLED = true;
     encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA)]))], catalogo: catalogoDe([PROPIA]) });
-    expect(codigos(await obtenerEstado(EXP, USER, ROL))).toEqual(['REVISION_AUTOMATICA_PENDIENTE']);
+    expect(codigos(await obtener())).toEqual(['REVISION_AUTOMATICA_PENDIENTE']);
 
     const ia = { sha256: shaClausula(PROPIA), modelo: 'claude-opus-5', en: '2026-09-15T14:00:00.000Z' };
     encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA, { ia })]))], catalogo: catalogoDe([PROPIA]) });
-    expect(codigos(await obtenerEstado(EXP, USER, ROL))).toEqual([]);
+    expect(codigos(await obtener())).toEqual([]);
   });
 
   it('una regla endurecida frena el borrador: el coarrendatario mencionado sin coarrendatario', async () => {
     const texto = 'EL COARRENDATARIO mantendrá el jardín del inmueble podado y regado.';
     encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA, { texto })]))], catalogo: catalogoDe([PROPIA]) });
-    const e = await obtenerEstado(EXP, USER, ROL);
+    const e = await obtener();
     expect(e.bloqueos).toEqual([expect.objectContaining({ codigo: 'CLAUSULA_NO_PERMITIDA', paso: 4 })]);
     expect(e.bloqueos[0].mensaje).toMatch(/^«Cuidado del jardín»: Este contrato no tiene coarrendatario/);
   });
@@ -1074,7 +1100,7 @@ describe('autorizarExceso (D6)', () => {
     const otra = paso4De([...ONCE].reverse().map((f) => snap(f)));
     const viejo = { huella: P4.huella, cantidad: 11, usuarioId: 'admin-1', en: '2026-09-15T15:00:00.000Z' };
     encolarCarga({ contratos: [conPaso4(otra, { excesoAutorizado: viejo })], catalogo: catalogoDe(ONCE) });
-    expect(codigos(await obtenerEstado(EXP, USER, ROL))).toEqual(['ADICIONALES_EXCEDEN_LIMITE']);
+    expect(codigos(await obtener())).toEqual(['ADICIONALES_EXCEDEN_LIMITE']);
   });
 
   it('sin pasar el máximo → 409 EXCESO_NO_APLICA', async () => {
@@ -1146,5 +1172,228 @@ describe('generar con adicionales', () => {
 
     expect(e).toMatchObject({ statusCode: 500, errorCode: 'CONTRATO_PARTES_NO_GUARDADAS' });
     expect(e.message).toContain('registro de cláusulas');
+  });
+});
+
+// ============================================================
+// Entrega 5: enviar a firma (diseño §13 casos 1-6)
+// ============================================================
+
+describe('enviar a firma y Ruta B (Entrega 5)', () => {
+  const OK = { data: null, error: null };
+  const KEY_PREVIA = `contratos/${EXP}/${CTO}/revision-1-1.pdf`;
+  const CRC_KEY = 'certificados/est-1.pdf';
+  const AHORA = Date.parse('2026-09-15T15:00:00Z');
+  const KEY_FINAL = `contratos/${EXP}/${CTO}/final-${AHORA}.pdf`;
+
+  /** Mismos pasos, con el celular del arrendador distinto del arrendatario (Auco los exige únicos). */
+  const PASOS: Asistente = {
+    ...COMPLETO,
+    paso5: {
+      ...COMPLETO.paso5!,
+      contactos: {
+        ...COMPLETO.paso5!.contactos,
+        arrendador: { ...contacto('contratos@inmobiliaria-ejemplo.co'), telefono: '3009998877' },
+      },
+    },
+  };
+  const PASOS_B: Asistente = { ...PASOS, paso1: { ...PASOS.paso1!, ruta: 'B' }, paso4: undefined };
+
+  async function pdfReal(paginas: number): Promise<Buffer> {
+    const d = await PDFDocument.create();
+    for (let i = 0; i < paginas; i++) d.addPage([200, 200]);
+    return Buffer.from(await d.save());
+  }
+  const blob = (b: Buffer) => ({ arrayBuffer: async () => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) });
+  let archivos: Record<string, Buffer> = {};
+
+  beforeEach(() => {
+    archivos = {};
+    storageApi.download.mockImplementation(async (...args: unknown[]) => {
+      ops.push({ table: 'storage', method: 'download', args });
+      const b = archivos[args[0] as string];
+      return b ? { data: blob(b), error: null } : { data: null, error: { message: 'no' } };
+    });
+  });
+  afterEach(() => {
+    storageApi.download.mockImplementation(async (...args: unknown[]) => {
+      ops.push({ table: 'storage', method: 'download', args });
+      return { data: null, error: { message: 'no' } };
+    });
+  });
+
+  /** La vista previa que la inmobiliaria revisó (la de generar), sin textos pendientes. */
+  async function documentoRevisado(a: Asistente): Promise<DocumentoV3> {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: a } })] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    enqueue('contrato_partes', OK, OK);
+    encolarCarga({ contratos: [fila()] });
+    await generarVistaPrevia(EXP, USER, ROL);
+    const dv = (opsDe('contratos', 'update')[0].args[0] as { datos_variables: { documento: DocumentoV3 } }).datos_variables;
+    queues.clear();
+    ops.length = 0;
+    vi.mocked(crearSobre).mockClear();
+    storageApi.upload.mockClear();
+    storageApi.remove.mockClear();
+    return { ...dv.documento, pendientes: [] };
+  }
+  const conDocumento = (a: Asistente, documento: DocumentoV3, extra: Record<string, unknown> = {}) =>
+    fila({ storage_key: KEY_PREVIA, datos_variables: { asistente: a, documento, ...extra } });
+
+  it('Ruta A: final, partes, CAS fuera de borrador, sobre y recién ahí se borra la vista previa', async () => {
+    const doc = await documentoRevisado(PASOS);
+    archivos[CRC_KEY] = await pdfReal(1);
+    vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(3), pendientes: [], version: 'v', lineas: [] });
+    vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO, estado: 'pendiente_firma' } as never);
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    enqueue('contrato_partes', OK, OK);
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+
+    const e = await enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL);
+
+    expect(e.enviado).toMatchObject({ id: CTO, estado: 'pendiente_firma' });
+    expect(vi.mocked(generarContratoVivienda).mock.calls.at(-1)![1]).toMatchObject({ modo: 'final', anclas: true });
+    expect(crearSobre).toHaveBeenCalledWith(CTO, USER);
+    const orden = [pos('storage', 'upload'), pos('contrato_partes', 'delete'), pos('contratos', 'update'), pos('storage', 'remove')];
+    expect(orden.every((i) => i >= 0)).toBe(true);
+    expect([...orden].sort((x, y) => x - y)).toEqual(orden);
+    expect(storageApi.upload).toHaveBeenCalledWith(KEY_FINAL, expect.any(Buffer), expect.objectContaining({ upsert: false }));
+    expect(storageApi.remove).toHaveBeenCalledWith([KEY_PREVIA]);
+    const upd = opsDe('contratos', 'update')[0].args[0] as { estado: string; storage_key: string; datos_variables: { documento: DocumentoV3 } };
+    expect(upd.estado).toBe('pendiente_firma');
+    expect(upd.storage_key).toBe(KEY_FINAL);
+    expect(upd.datos_variables.documento.final).toMatchObject({ ruta: 'A', paginas: [3, 1], crcKey: CRC_KEY, propioKey: null });
+    const eqs = opsDe('contratos', 'eq').map((o) => o.args);
+    expect(eqs).toContainEqual(['estado', 'borrador']);
+    expect(eqs).toContainEqual(['updated_at', LEIDO]);
+  });
+
+  it('una vista previa vieja, o con datos que cambiaron, no se envía (sin subir nada)', async () => {
+    const doc = await documentoRevisado(PASOS);
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion + 1 }, USER, ROL))).toMatchObject({
+      statusCode: 409,
+      errorCode: 'VISTA_PREVIA_DESACTUALIZADA',
+    });
+    const otroCanon = { ...doc, entrada: { ...doc.entrada, canonCop: 1_000_000 } };
+    encolarCarga({ contratos: [conDocumento(PASOS, otroCanon)] });
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
+      errorCode: 'VISTA_PREVIA_DESACTUALIZADA',
+    });
+    expect(storageApi.upload).not.toHaveBeenCalled();
+    expect(crearSobre).not.toHaveBeenCalled();
+  });
+
+  it('con textos pendientes de aprobación no se envía; el día 1.º tiene su propio mensaje', async () => {
+    const doc = await documentoRevisado(PASOS);
+    encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, pendientes: ['c-01'] })] });
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({ errorCode: 'TEXTOS_PENDIENTES' });
+
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    vi.mocked(generarContratoVivienda).mockRejectedValueOnce(
+      new AppError(422, 'PLANTILLA_TEXTO_PENDIENTE', 'x', { pendientes: [{ id: 'k-dia1', tipo: 'borrador' }] }),
+    );
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
+      statusCode: 409,
+      errorCode: 'ENVIO_DIA_1',
+    });
+  });
+
+  it('CAS perdido: borra el PDF final y no llama a Auco', async () => {
+    const doc = await documentoRevisado(PASOS);
+    archivos[CRC_KEY] = await pdfReal(1);
+    vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    enqueue('contrato_partes', OK, OK);
+    enqueue('contratos', { data: [], error: null });
+
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
+      errorCode: 'CONTRATO_BORRADOR_CAMBIADO',
+    });
+    expect(storageApi.remove).toHaveBeenCalledWith([KEY_FINAL]);
+    expect(crearSobre).not.toHaveBeenCalled();
+  });
+
+  it('si Auco falla: vuelve a borrador con su vista previa, borra el final y relanza', async () => {
+    const doc = await documentoRevisado(PASOS);
+    archivos[CRC_KEY] = await pdfReal(1);
+    vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
+    vi.mocked(crearSobre).mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    enqueue('contrato_partes', OK, OK);
+    enqueue('contratos', { data: [{ id: CTO }], error: null }, OK, OK);
+
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
+      errorCode: 'AUCO_UPLOAD_FAILED',
+    });
+    const updates = opsDe('contratos', 'update').map((o) => o.args[0] as Record<string, unknown>);
+    expect(updates[1]).toEqual({ estado: 'borrador' });
+    expect(updates[2]).toMatchObject({ storage_key: KEY_PREVIA, nombre_archivo: 'CTO-2026-0007-borrador.pdf' });
+    expect(storageApi.remove).toHaveBeenCalledWith([KEY_FINAL]);
+    expect(storageApi.remove).not.toHaveBeenCalledWith([KEY_PREVIA]);
+    const historial = opsDe('contrato_historial_estados', 'insert').map((o) => o.args[0] as Record<string, unknown>);
+    expect(historial.map((h) => h.estado_nuevo)).toEqual(['pendiente_firma', 'borrador']);
+  });
+
+  it('Ruta B: sin paso 4, sin el PDF propio no sale; con él, se une [propio, Anexo, CRC] sin tocarlo', async () => {
+    const doc = await documentoRevisado(PASOS_B);
+    expect(vi.mocked(generarAnexoVivienda)).toHaveBeenCalled();
+    // sin el PDF propio
+    encolarCarga({ contratos: [conDocumento(PASOS_B, doc)] });
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
+      errorCode: 'CONTRATO_PROPIO_REQUERIDO',
+    });
+    // con el PDF propio
+    const propioPdf = await pdfReal(4);
+    const sha = (await import('crypto')).createHash('sha256').update(propioPdf).digest('hex');
+    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: propioPdf.length, sha256: sha, subidoEn: LEIDO, subidoPor: USER };
+    archivos['propio.pdf'] = propioPdf;
+    archivos[CRC_KEY] = await pdfReal(1);
+    vi.mocked(generarAnexoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
+    encolarCarga({ contratos: [conDocumento(PASOS_B, doc, { propio })] });
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: 'f'.repeat(64) }, USER, ROL))).toMatchObject({
+      errorCode: 'PDF_PROPIO_ALTERADO',
+    });
+    encolarCarga({ contratos: [conDocumento(PASOS_B, doc, { propio })] });
+    enqueue('contrato_partes', OK, OK);
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO } as never);
+    await enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: sha }, USER, ROL);
+    const upd = opsDe('contratos', 'update').at(-1)!.args[0] as { datos_variables: { documento: DocumentoV3 } };
+    expect(upd.datos_variables.documento.final).toMatchObject({ ruta: 'B', paginas: [4, 2, 1], propioKey: 'propio.pdf' });
+    expect(vi.mocked(generarAnexoVivienda).mock.calls.at(-1)![1]).toMatchObject({ modo: 'final', anclas: true });
+    // el registro de adicionales queda vacío en B
+    expect(opsDe('contrato_clausulas_adicionales', 'insert')).toHaveLength(0);
+  });
+
+  it('cargarPropio: solo en Ruta B, valida el PDF y guarda su sha256 sin tocar actualizadoEn', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS } })] });
+    expect(await error(cargarPropio(EXP, { buffer: await pdfReal(1), originalname: 'x.pdf' }, USER, ROL))).toMatchObject({
+      errorCode: 'RUTA_NO_ES_B',
+    });
+
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B } })] });
+    const noPdf = await error(cargarPropio(EXP, { buffer: Buffer.from('hola'), originalname: 'x.pdf' }, USER, ROL));
+    expect(noPdf).toMatchObject({ statusCode: 422, errorCode: 'PDF_PROPIO_INVALIDO', details: { motivo: 'no_es_pdf' } });
+
+    const viejo = { key: 'viejo.pdf', nombre: 'v.pdf', paginas: 1, bytes: 1, sha256: 'a'.repeat(64), subidoEn: LEIDO, subidoPor: USER };
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B, propio: viejo } })] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+    await cargarPropio(EXP, { buffer: await pdfReal(2), originalname: 'contrato.pdf' }, USER, ROL);
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente; propio: Record<string, unknown> } };
+    expect(upd.datos_variables.propio).toMatchObject({ nombre: 'contrato.pdf', paginas: 2, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(upd.datos_variables.asistente.actualizadoEn).toBe(PASOS_B.actualizadoEn);
+    expect(storageApi.remove).toHaveBeenCalledWith(['viejo.pdf']);
+  });
+
+  it('cargarPropio con el CAS perdido borra lo que subió', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B } })] });
+    enqueue('contratos', { data: [], error: null });
+    expect(await error(cargarPropio(EXP, { buffer: await pdfReal(1), originalname: 'x.pdf' }, USER, ROL))).toMatchObject({
+      errorCode: 'CONTRATO_BORRADOR_CAMBIADO',
+    });
+    const subida = (storageApi.upload.mock.calls[0] as unknown[])[0];
+    expect(storageApi.remove).toHaveBeenCalledWith([subida]);
   });
 });

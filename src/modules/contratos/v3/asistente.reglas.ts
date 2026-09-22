@@ -82,6 +82,31 @@ export interface DocumentoV3 {
   snapshot: Record<string, unknown>;
   /** Las adicionales impresas (Entrega 4): su huella, la aceptación y el número de la primera. */
   adicionales: { huella: string; aceptacion: AceptacionClausulas; primera: number } | null;
+  /**
+   * El PDF que se envió a firma (Entrega 5): se escribe en el mismo UPDATE que
+   * saca la fila de borrador, así que queda congelado con ella.
+   */
+  final?: {
+    ruta: 'A' | 'B';
+    sha256: string;
+    bytes: number;
+    /** Páginas de cada pieza del PDF unido, en orden: [contrato|propio, (anexo), crc]. */
+    paginas: number[];
+    crcKey: string;
+    propioKey: string | null;
+    fechaDocumento: string;
+  };
+}
+
+/** datos_variables.propio: el contrato de la inmobiliaria en la Ruta B (§4.5). */
+export interface PropioGuardado {
+  key: string;
+  nombre: string;
+  paginas: number;
+  bytes: number;
+  sha256: string;
+  subidoEn: string;
+  subidoPor: string;
 }
 
 export interface ContratoV3 {
@@ -89,7 +114,7 @@ export interface ContratoV3 {
   estado: string;
   numero: string;
   updated_at: string;
-  datos_variables: { asistente?: Asistente; documento?: DocumentoV3 } | null;
+  datos_variables: { asistente?: Asistente; documento?: DocumentoV3; propio?: PropioGuardado } | null;
   storage_key: string | null;
 }
 
@@ -467,7 +492,9 @@ export function prefill(f: Fuentes, hoy: string, cal: Calibracion): Prefill {
 const PASOS: NumeroPaso[] = [1, 2, 3, 4, 5];
 
 export function faltantes(a: Asistente, f: Fuentes, hoy: string): { paso: NumeroPaso; mensaje: string }[] {
-  const out = PASOS.filter((n) => !a[`paso${n}`]).map((paso) => ({
+  // Ruta B: no hay cláusulas adicionales (§4.8), el paso 4 no aplica.
+  const pasos = a.paso1?.ruta === 'B' ? PASOS.filter((n) => n !== 4) : PASOS;
+  const out = pasos.filter((n) => !a[`paso${n}`]).map((paso) => ({
     paso,
     mensaje: 'Falta guardar este paso.',
   }));

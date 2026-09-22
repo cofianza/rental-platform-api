@@ -34,3 +34,30 @@ export async function autorizarExceso(req: Request, res: Response) {
   const { huella } = req.body as { huella: string };
   sendSuccess(res, await asistente.autorizarExceso(expedienteId(req), huella, req.user!.id, req.user!.rol, req.ip));
 }
+
+// ── Entrega 5 ──
+
+export async function cargarPropio(req: Request, res: Response) {
+  sendSuccess(res, await asistente.cargarPropio(expedienteId(req), req.file, req.user!.id, req.user!.rol));
+}
+
+export async function propioUrl(req: Request, res: Response) {
+  sendSuccess(res, await asistente.propioUrl(expedienteId(req), req.user!.id, req.user!.rol));
+}
+
+export async function enviar(req: Request, res: Response) {
+  const body = req.body as { generacion: number; propioSha256?: string };
+  sendSuccess(res, await asistente.enviarAFirma(expedienteId(req), body, req.user!.id, req.user!.rol, req.ip));
+}
+
+export async function reenviar(req: Request, res: Response) {
+  sendSuccess(res, await asistente.reenviarFirma(expedienteId(req), req.user!.id, req.user!.rol));
+}
+
+export async function reintentar(req: Request, res: Response) {
+  sendSuccess(res, await asistente.reintentarFirma(expedienteId(req), req.user!.id, req.user!.rol));
+}
+
+export async function actualizarFirma(req: Request, res: Response) {
+  sendSuccess(res, await asistente.actualizarFirmaV3(expedienteId(req), req.user!.id, req.user!.rol));
+}

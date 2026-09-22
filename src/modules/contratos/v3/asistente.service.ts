@@ -11,7 +11,11 @@
  * inmobiliaria es assertExpedienteAccess con userId Y userRol (sin ellos es no-op).
  */
 
+import { createHash } from 'crypto';
+import { isDeepStrictEqual } from 'util';
+import { PDFDocument } from 'pdf-lib';
 import { env } from '@/config';
+import { mergePdfs, PdfInvalidoError, validarPdfPropio, type MotivoPdfInvalido } from '@/lib/pdfMerger';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -30,6 +34,7 @@ import {
 import type {
   AceptacionClausulas,
   ClausulaEnContrato,
+  EnvioV3,
   EstadoAsistente,
   GuardarPasoBody,
   Hallazgo,
@@ -58,6 +63,7 @@ import {
   type FilaCatalogoAdicional,
   type Fuentes,
   type PerfilArrendador,
+  type PropioGuardado,
 } from './asistente.reglas';
 import { validarTexto } from './clausulas.ia';
 import {
@@ -73,13 +79,22 @@ import type { LogoPdf } from './documento';
 import { fechaBogota, mayus, ordinal, sumarMeses } from './formato';
 import { contarClausulas } from './motor';
 import { PLANTILLA_VIVIENDA } from './plantilla-vivienda';
-import { contexto, generarContratoVivienda, type DatosVivienda } from './vivienda';
+import { contexto, generarAnexoVivienda, generarContratoVivienda, type DatosVivienda } from './vivienda';
+import { validarFirmantes, type ParteFirmante } from './firma/reglas';
+import { actualizarFirma, crearSobre, estadoEnviado, reenviar, reintentar } from './firma/firma.service';
 
 const BUCKET = 'documentos-expedientes';
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
 const hoyBogota = () => fechaBogota(new Date());
 
-const DESHABILITADO: EstadoAsistente = { habilitado: false, bloqueos: [], avisos: [], resumen: null, contrato: null };
+const DESHABILITADO: EstadoAsistente = {
+  habilitado: false,
+  bloqueos: [],
+  avisos: [],
+  resumen: null,
+  contrato: null,
+  enviado: null,
+};
 
 const CONTRATO_V3_SELECT = 'id, estado, destinacion, numero, updated_at, datos_variables, storage_key';
 const PERFIL_SELECT = `
@@ -340,9 +355,12 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
       const rutas = noImprimibles(armarDatosVivienda(f, a as AsistenteCompleto, hoy, f.v3.numero));
       if (rutas.length) bloqueos.push(bloqueoNoImprimible(rutas));
     }
-    const adic = bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal));
-    bloqueos.push(...adic.bloqueos);
-    avisos.push(...adic.avisos);
+    // Ruta B: sin cláusulas adicionales (§4.8); un paso 4 que quedó de la A no bloquea.
+    if (a.paso1?.ruta !== 'B') {
+      const adic = bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal));
+      bloqueos.push(...adic.bloqueos);
+      avisos.push(...adic.avisos);
+    }
     const primera = primeraAdicional(f, a);
     const doc = f.v3.datos_variables?.documento;
     contrato = {
@@ -354,11 +372,14 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
       faltantes: falta,
       documento: doc
         ? {
+            generacion: doc.generacion,
             generadoEn: doc.generadoEn,
             avisos: doc.avisos,
+            pendientes: doc.pendientes,
             desactualizado: !!a.actualizadoEn && a.actualizadoEn > doc.generadoEn,
           }
         : null,
+      propio: propioVisible(f.v3.datos_variables?.propio),
       adicionales: {
         maximo: cal.MAX_CLAUSULAS_ADICIONALES,
         // primera ≤ 34 y 34 + 24 = 58: dentro de lo que ordinal() sabe escribir.
@@ -433,8 +454,32 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
       canon: { evaluadoCop: f.estudio?.canonEvaluadoCop ?? null, maximoSinNuevaEvaluacionCop: maximoSinNuevaEvaluacionCop(f, cal) },
     },
     contrato,
+    enviado: null,
   };
 }
+
+const propioVisible = (p: PropioGuardado | undefined): NonNullable<EstadoAsistente['contrato']>['propio'] =>
+  p ? { nombre: p.nombre, paginas: p.paginas, bytes: p.bytes, sha256: p.sha256, subidoEn: p.subidoEn } : null;
+
+/**
+ * El V3 vivo que ya salió de borrador (EN FIRMA, FIRMA INCOMPLETA o FIANZA
+ * ACTIVA), o null. Lectura liviana: sin cargarFuentes ni evaluarBloqueos (a los
+ * 61 días una fianza activa no debe mostrar "estudio vencido").
+ */
+async function contratoEnviado(expedienteId: string): Promise<{ id: string } | null> {
+  return dato<{ id: string } | null>(
+    await db('contratos')
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .not('destinacion', 'is', null)
+      .not('estado', 'in', '(borrador,cancelado,finalizado)')
+      .maybeSingle(),
+    expedienteId,
+    'contrato V3',
+  );
+}
+
+const estadoDeEnviado = (enviado: EnvioV3): EstadoAsistente => ({ ...DESHABILITADO, habilitado: true, enviado });
 
 /** Fuentes de un estudio con asistente, o 404 si no aplica. Sin verificar acceso: lo hace el caller. */
 async function cargar(expedienteId: string): Promise<Cargadas> {
@@ -452,6 +497,9 @@ export async function obtenerEstado(
 ): Promise<EstadoAsistente> {
   if (!env.CONTRATOS_V3_ENABLED) return DESHABILITADO;
   await assertExpedienteAccess(expedienteId, userId, userRol);
+  const enviado = await contratoEnviado(expedienteId);
+  const vista = enviado && (await estadoEnviado(enviado.id));
+  if (vista) return estadoDeEnviado(vista);
   const c = await cargarFuentes(expedienteId);
   return c ? armarEstado(c, hoyBogota()) : DESHABILITADO;
 }
@@ -792,6 +840,43 @@ function partes(contratoId: string, d: DatosVivienda, f: Fuentes) {
   ];
 }
 
+/**
+ * Reescribe las partes y el registro de adicionales del contrato (lo que se
+ * firma tiene que ser exactamente lo registrado, §5.4.1). Solo con el contrato
+ * en borrador: el trigger de partes lo exige. Devuelve el error, si hubo.
+ * ponytail: borrar + insertar no es atómico; un fallo se realinea en el
+ * próximo generar o enviar (crearSobre verifica que las partes estén completas).
+ */
+async function escribirPartesYRegistro(
+  contratoId: string,
+  d: DatosVivienda,
+  f: Fuentes,
+  adicionales: ClausulaEnContrato[],
+  primera: number,
+): Promise<{ message: string } | null> {
+  const del = await db('contrato_partes').delete().eq('contrato_id', contratoId);
+  if (del.error) return del.error;
+  const ins = await db('contrato_partes').insert(partes(contratoId, d, f) as never);
+  if (ins.error) return ins.error;
+  // Registro pasivo (D3): la versión y el texto exactos que imprimió ESTE contrato.
+  const reg = await db('contrato_clausulas_adicionales').delete().eq('contrato_id', contratoId);
+  if (reg.error || !adicionales.length) return reg.error;
+  const filas = adicionales.map((x, k) => ({
+    contrato_id: contratoId,
+    clausula_id: x.clausulaId,
+    orden: k + 1,
+    numero: primera + k,
+    version: x.version,
+    origen: x.origen,
+    titulo: x.titulo,
+    texto: x.texto,
+  }));
+  return (await db('contrato_clausulas_adicionales').insert(filas as never)).error;
+}
+
+const nombreBorrador = (numero: string, ruta: 'A' | 'B') =>
+  ruta === 'B' ? `${numero}-anexo-borrador.pdf` : `${numero}-borrador.pdf`;
+
 export async function generarVistaPrevia(
   expedienteId: string,
   userId: string,
@@ -814,7 +899,7 @@ export async function generarVistaPrevia(
   const canon = a.paso1 ? evaluarCanon(f, a.paso1.canonCop, cal) : null;
   if (canon?.bloqueo) bloqueos.push(canon.bloqueo);
   // Generar nunca llama a la IA: con el flag encendido, bloquea la cláusula sin veredicto vigente.
-  bloqueos.push(...bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal)).bloqueos);
+  if (a.paso1?.ruta !== 'B') bloqueos.push(...bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal)).bloqueos);
   if (bloqueos.length) throw bloqueado(bloqueos);
   const falta = faltantes(a, f, hoy);
   if (falta.length)
@@ -827,19 +912,26 @@ export async function generarVistaPrevia(
   const rutas = noImprimibles(d);
   if (rutas.length) throw bloqueado([bloqueoNoImprimible(rutas)]);
 
-  const p4 = completo.paso4;
+  // Ruta A: el contrato de Cofianza con sus adicionales. Ruta B: el Anexo de
+  // Condiciones (el contrato de la inmobiliaria no se genera ni se toca, §4.4).
+  const ruta = completo.paso1.ruta;
+  const p4 = ruta === 'A' ? completo.paso4 : undefined;
   const adicionales = clausulasDe(p4);
   const ctx = contexto(d);
   // La misma cuenta que hace el motor al numerar (vivienda.test la fija contra lo impreso).
   const primera = contarClausulas(PLANTILLA_VIVIENDA, ctx.condiciones) + 1;
 
   const logoStorageKey = f.arrendador.logo_storage_key;
+  const logoInmobiliaria = await leerLogo(logoStorageKey);
   // PLANTILLA_* (400/422/500) pasan tal cual.
-  const r = await generarContratoVivienda(d, {
-    modo: 'revision',
-    logoInmobiliaria: await leerLogo(logoStorageKey),
-    adicionales: adicionales.map(({ titulo, texto }) => ({ titulo, texto })),
-  });
+  const r =
+    ruta === 'B'
+      ? await generarAnexoVivienda(d, { modo: 'revision', logoInmobiliaria })
+      : await generarContratoVivienda(d, {
+          modo: 'revision',
+          logoInmobiliaria,
+          adicionales: adicionales.map(({ titulo, texto }) => ({ titulo, texto })),
+        });
 
   const generacion = (dv.documento?.generacion ?? 0) + 1;
   // Con el instante en la llave: un PDF huérfano (reinicio o timeout entre la
@@ -894,7 +986,7 @@ export async function generarVistaPrevia(
       },
       coarrendatario: f.coarrendatario ? { id: f.coarrendatario.id, estudioId: f.coarrendatario.estudio_id } : null,
     },
-    adicionales: 'clausulas' in p4 ? { huella: p4.huella, aceptacion: p4.aceptacion, primera } : null,
+    adicionales: p4 && 'clausulas' in p4 ? { huella: p4.huella, aceptacion: p4.aceptacion, primera } : null,
   };
 
   const { data, error } = await db('contratos')
@@ -904,7 +996,7 @@ export async function generarVistaPrevia(
       fecha_fin: sumarMeses(completo.paso3.fechaInicio, completo.paso3.vigenciaMeses),
       duracion_meses: completo.paso3.vigenciaMeses,
       storage_key: key,
-      nombre_archivo: `${v3.numero}-borrador.pdf`,
+      nombre_archivo: nombreBorrador(v3.numero, ruta),
       fecha_generacion: generadoEn,
       datos_variables: { ...dv, asistente: a, documento },
     } as never)
@@ -921,29 +1013,7 @@ export async function generarVistaPrevia(
     throw borradorCambiado();
   }
 
-  // ponytail: borrar + insertar no es atómico (partes y registro de cláusulas); si
-  // falla, el próximo generar realinea ambos y E5 debe reconstruirlos antes de enviar a firma.
-  const escribirPartes = async () => {
-    const del = await db('contrato_partes').delete().eq('contrato_id', v3.id);
-    if (del.error) return del.error;
-    const ins = await db('contrato_partes').insert(partes(v3.id, d, f) as never);
-    if (ins.error) return ins.error;
-    // Registro pasivo (D3): la versión y el texto exactos que imprimió ESTE contrato.
-    const reg = await db('contrato_clausulas_adicionales').delete().eq('contrato_id', v3.id);
-    if (reg.error || !adicionales.length) return reg.error;
-    const filas = adicionales.map((x, k) => ({
-      contrato_id: v3.id,
-      clausula_id: x.clausulaId,
-      orden: k + 1,
-      numero: primera + k,
-      version: x.version,
-      origen: x.origen,
-      titulo: x.titulo,
-      texto: x.texto,
-    }));
-    return (await db('contrato_clausulas_adicionales').insert(filas as never)).error;
-  };
-  const partesError = await escribirPartes();
+  const partesError = await escribirPartesYRegistro(v3.id, d, f, adicionales, primera);
 
   if (v3.storage_key && v3.storage_key !== key) {
     const { error: rmError } = await supabase.storage.from(BUCKET).remove([v3.storage_key]);
@@ -1039,4 +1109,387 @@ export async function autorizarExceso(
     ip,
   });
   return armarEstado(await cargar(expedienteId), hoyBogota());
+}
+
+// ── Entrega 5: Ruta B — el contrato propio de la inmobiliaria (§4.4-4.5) ──
+
+/** Topes del PDF propio. ponytail: hasta medir con la sonda cuánto base64 acepta Auco. */
+const MAX_BYTES_PROPIO = 6 * 1024 * 1024;
+const MAX_PAGINAS_PROPIO = 60;
+/** Tope del PDF unido que va a Auco (propio + Anexo + CRC). Mismo ponytail. */
+const MAX_BYTES_SOBRE = 8 * 1024 * 1024;
+
+const MOTIVO_PDF: Record<MotivoPdfInvalido, string> = {
+  peso: 'El PDF pesa más de 6 MB. Redúcelo (por ejemplo, imprimiéndolo de nuevo a PDF) y súbelo otra vez.',
+  no_es_pdf: 'El archivo no es un PDF.',
+  protegido: 'El PDF está protegido con contraseña. Súbelo sin contraseña.',
+  danado: 'El PDF está dañado o no se puede leer. Genéralo de nuevo y vuelve a subirlo.',
+  paginas: `El PDF debe tener entre 1 y ${MAX_PAGINAS_PROPIO} páginas.`,
+  formulario: 'El PDF tiene campos de formulario editables. Imprímelo a PDF (sin campos) y súbelo de nuevo.',
+};
+
+const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+
+async function bajar(key: string, que: string): Promise<Buffer> {
+  const { data, error } = await supabase.storage.from(BUCKET).download(key);
+  if (error || !data) {
+    logger.error({ key, error: error?.message }, `Asistente V3: no se pudo leer ${que}`);
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', `No pudimos leer ${que}. Intenta de nuevo en un momento.`);
+  }
+  return Buffer.from(await data.arrayBuffer());
+}
+
+/**
+ * Carga (o reemplaza) el contrato propio de la Ruta B. No se modifica ni una
+ * coma (§4.4): se valida que se pueda unir tal cual al Anexo y se guarda con su
+ * sha256. No toca `actualizadoEn`: el Anexo no depende del PDF propio.
+ */
+export async function cargarPropio(
+  expedienteId: string,
+  archivo: { buffer: Buffer; originalname: string } | undefined,
+  userId: string,
+  userRol: string,
+): Promise<EstadoAsistente> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+  const c = await cargar(expedienteId);
+  const v3 = borradorEditable(c.f);
+  const dv = v3.datos_variables ?? {};
+  if (dv.asistente?.paso1?.ruta !== 'B')
+    throw AppError.conflict('El contrato propio solo se carga en la Ruta B.', 'RUTA_NO_ES_B');
+  if (!archivo?.buffer?.length) throw AppError.badRequest('Adjunta el PDF del contrato.', 'ARCHIVO_REQUERIDO');
+
+  let info: { paginas: number; bytes: number };
+  try {
+    info = await validarPdfPropio(archivo.buffer, { maxBytes: MAX_BYTES_PROPIO, maxPaginas: MAX_PAGINAS_PROPIO });
+  } catch (e) {
+    if (e instanceof PdfInvalidoError)
+      throw new AppError(422, 'PDF_PROPIO_INVALIDO', MOTIVO_PDF[e.motivo], { motivo: e.motivo });
+    throw e;
+  }
+
+  const key = `contratos/${expedienteId}/${v3.id}/propio-${Date.now()}.pdf`;
+  const { error: upError } = await supabase.storage
+    .from(BUCKET)
+    .upload(key, archivo.buffer, { contentType: 'application/pdf', upsert: false });
+  if (upError) {
+    logger.error({ expedienteId, key, error: upError.message }, 'Asistente V3: no se pudo subir el contrato propio');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF');
+  }
+  const propio: PropioGuardado = {
+    key,
+    nombre: archivo.originalname.slice(0, 200),
+    ...info,
+    sha256: sha256(archivo.buffer),
+    subidoEn: new Date().toISOString(),
+    subidoPor: userId,
+  };
+  const { data, error } = await db('contratos')
+    .update({ datos_variables: { ...dv, propio } } as never)
+    .eq('id', v3.id)
+    .eq('estado', 'borrador')
+    .eq('updated_at', v3.updated_at)
+    .select('id');
+  if (error || !(data as unknown[] | null)?.length) {
+    await supabase.storage.from(BUCKET).remove([key]);
+    if (error) {
+      logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo guardar el contrato propio');
+      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar el PDF. Intenta de nuevo.');
+    }
+    throw borradorCambiado();
+  }
+  if (dv.propio?.key) await supabase.storage.from(BUCKET).remove([dv.propio.key]);
+  return armarEstado(await cargar(expedienteId), hoyBogota());
+}
+
+/** URL firmada (1 h) del contrato propio, en cualquier estado del contrato (solo lectura). */
+export async function propioUrl(expedienteId: string, userId: string, userRol: string): Promise<{ url: string }> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+  const r = await db('contratos')
+    .select('datos_variables')
+    .eq('expediente_id', expedienteId)
+    .not('destinacion', 'is', null)
+    .not('estado', 'in', '(cancelado,finalizado)')
+    .maybeSingle();
+  const fila = dato<{ datos_variables: { propio?: PropioGuardado } | null } | null>(r, expedienteId, 'contrato V3');
+  const key = fila?.datos_variables?.propio?.key;
+  if (!key) throw AppError.notFound('Este contrato no tiene un contrato propio cargado.', 'SIN_CONTRATO_PROPIO');
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(key, 3600);
+  if (error || !data?.signedUrl) throw new AppError(500, 'STORAGE_ERROR', 'No se pudo abrir el PDF.');
+  return { url: data.signedUrl };
+}
+
+// ── Entrega 5: enviar a firma (§3 del diseño, V3 §8.7.5 y §10) ──
+
+async function paginasDe(pdf: Buffer): Promise<number> {
+  return (await PDFDocument.load(pdf)).getPageCount();
+}
+
+/**
+ * Saca el contrato de borrador y lo manda a Auco. Lo que se firma es lo que se
+ * revisó: se exige la vista previa vigente (misma generación y mismos datos,
+ * salvo la fecha) y, en la Ruta B, el mismo PDF propio (sha256).
+ *
+ * Orden (el congelamiento de V3 no revisa el UPDATE que saca la fila de
+ * borrador, así que todo lo que queda congelado se escribe ahí):
+ *   1. compuertas de generar + vista previa vigente + firmantes válidos;
+ *   2. render FINAL (sin marca de agua, con anclas de firma) y PDF unido
+ *      (Ruta A: contrato + CRC; Ruta B: propio intacto + Anexo + CRC);
+ *   3. partes y registro de adicionales (en borrador: el trigger lo exige);
+ *   4. un UPDATE con CAS: borrador → pendiente_firma + storage_key + documento.final;
+ *   5. el sobre en Auco (o la verificación de identidad, si está encendida).
+ * Si 5 falla, vuelve a borrador con su vista previa (salvo que el sobre sí haya salido).
+ */
+export async function enviarAFirma(
+  expedienteId: string,
+  body: { generacion: number; propioSha256?: string },
+  userId: string,
+  userRol: string,
+  ip?: string,
+): Promise<EstadoAsistente> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+  const c = await cargar(expedienteId);
+  const { f, cal, catalogo } = c;
+  const v3 = borradorEditable(f);
+  const hoy = hoyBogota();
+  const dv = v3.datos_variables ?? {};
+  const a: Asistente = dv.asistente ?? {};
+  const ruta = a.paso1?.ruta ?? 'A';
+
+  // 1. Las mismas compuertas que generar.
+  const bloqueos = evaluarBloqueos(f, hoy, cal);
+  const canon = a.paso1 ? evaluarCanon(f, a.paso1.canonCop, cal) : null;
+  if (canon?.bloqueo) bloqueos.push(canon.bloqueo);
+  if (ruta === 'A') bloqueos.push(...bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal)).bloqueos);
+  if (bloqueos.length) throw bloqueado(bloqueos);
+  const falta = faltantes(a, f, hoy);
+  if (falta.length)
+    throw new AppError(422, 'CONTRATO_ASISTENTE_INCOMPLETO', `Faltan datos del asistente: ${falta[0].mensaje}`, {
+      faltantes: falta,
+    });
+  const completo = a as AsistenteCompleto;
+  const d = armarDatosVivienda(f, completo, hoy, v3.numero);
+  const rutas = noImprimibles(d);
+  if (rutas.length) throw bloqueado([bloqueoNoImprimible(rutas)]);
+
+  const doc = dv.documento;
+  if (!doc) throw AppError.conflict('Genera la vista previa antes de enviar a firma.', 'VISTA_PREVIA_REQUERIDA');
+  const desactualizada = () =>
+    AppError.conflict(
+      'Cambiaron datos del contrato, del perfil, del estudio o del CRC después de la vista previa. Genérala de nuevo y revísala.',
+      'VISTA_PREVIA_DESACTUALIZADA',
+    );
+  if ((a.actualizadoEn && a.actualizadoEn > doc.generadoEn) || doc.generacion !== body.generacion) throw desactualizada();
+  if (doc.pendientes.length)
+    throw new AppError(409, 'TEXTOS_PENDIENTES', 'El contrato tiene textos pendientes de aprobación de Cofianza.', {
+      avisos: doc.avisos,
+    });
+  // Lo que se firma es lo que se revisó: los datos de hoy, salvo la fecha, deben ser los de la vista previa.
+  const sinFecha = (x: DatosVivienda) => JSON.parse(JSON.stringify({ ...x, fechaDocumento: null })) as unknown;
+  if (!isDeepStrictEqual(sinFecha(d), sinFecha(doc.entrada)) || f.arrendador.logo_storage_key !== doc.logoStorageKey)
+    throw desactualizada();
+
+  const filas = partes(v3.id, d, f);
+  const fallas = validarFirmantes(filas.map((p, i) => ({ id: String(i), ...p }) as unknown as ParteFirmante));
+  if (fallas.length)
+    throw new AppError(422, 'FIRMANTES_INVALIDOS', `${fallas[0].motivo} (${fallas[0].rol})`, { fallas });
+  const crcKey = f.crc?.pdf_storage_key;
+  if (!crcKey) throw AppError.conflict('El estudio no tiene el PDF del CRC emitido.', 'CRC_NO_EMITIDO');
+  const propio = dv.propio;
+  if (ruta === 'B') {
+    if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
+    if (body.propioSha256 !== propio.sha256)
+      throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
+  }
+
+  // 2. Render final y PDF unido.
+  const logoInmobiliaria = await leerLogo(f.arrendador.logo_storage_key);
+  const adicionales = ruta === 'A' ? clausulasDe(completo.paso4) : [];
+  let final: { pdf: Buffer };
+  try {
+    final =
+      ruta === 'B'
+        ? await generarAnexoVivienda(d, { modo: 'final', logoInmobiliaria, anclas: true })
+        : await generarContratoVivienda(d, {
+            modo: 'final',
+            logoInmobiliaria,
+            adicionales: adicionales.map(({ titulo, texto }) => ({ titulo, texto })),
+            anclas: true,
+          });
+  } catch (e) {
+    const pend = e instanceof AppError && e.errorCode === 'PLANTILLA_TEXTO_PENDIENTE'
+      ? ((e.details as { pendientes?: { id: string }[] } | undefined)?.pendientes ?? [])
+      : null;
+    // Con la vista previa sin pendientes, lo único que cambia al enviar es la fecha (§ k-dia1).
+    if (pend?.length && pend.every((x) => x.id === 'k-dia1'))
+      throw AppError.conflict(
+        'Hoy es día 1.º y la redacción de esa fecha está pendiente de aprobación de Cofianza. Envíalo a partir de mañana.',
+        'ENVIO_DIA_1',
+      );
+    throw e;
+  }
+  const crcPdf = await bajar(crcKey, 'el PDF del CRC');
+  let piezas: Buffer[] = [final.pdf, crcPdf];
+  if (ruta === 'B') {
+    const propioPdf = await bajar(propio!.key, 'el contrato de la inmobiliaria');
+    if (sha256(propioPdf) !== propio!.sha256)
+      throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
+    piezas = [propioPdf, final.pdf, crcPdf];
+  }
+  const unido = await mergePdfs(piezas, { estricto: true });
+  if (unido.length > MAX_BYTES_SOBRE)
+    throw new AppError(413, 'PDF_SOBRE_DEMASIADO_GRANDE', 'El documento para firmar supera 8 MB. Reduce el PDF de la inmobiliaria.');
+  const paginas = await Promise.all(piezas.map(paginasDe));
+  const keyFinal = `contratos/${expedienteId}/${v3.id}/final-${Date.now()}.pdf`;
+  const { error: upError } = await supabase.storage
+    .from(BUCKET)
+    .upload(keyFinal, unido, { contentType: 'application/pdf', upsert: false });
+  if (upError) {
+    logger.error({ expedienteId, error: upError.message }, 'Asistente V3: no se pudo subir el documento final');
+    throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF');
+  }
+  const quitarFinal = () => supabase.storage.from(BUCKET).remove([keyFinal]).then(() => undefined);
+
+  // 3. Partes y registro, todavía en borrador.
+  const primera = contarClausulas(PLANTILLA_VIVIENDA, contexto(d).condiciones) + 1;
+  const partesError = await escribirPartesYRegistro(v3.id, d, f, adicionales, primera);
+  if (partesError) {
+    await quitarFinal();
+    logger.error({ expedienteId, error: partesError.message }, 'Asistente V3: no se guardaron las partes al enviar');
+    throw new AppError(500, 'CONTRATO_PARTES_NO_GUARDADAS', 'No se guardaron las partes del contrato. Intenta de nuevo.');
+  }
+
+  // 4. Fuera de borrador, en un solo UPDATE con CAS.
+  const ahora = new Date().toISOString();
+  const documento: DocumentoV3 = {
+    ...doc,
+    final: { ruta, sha256: sha256(unido), bytes: unido.length, paginas, crcKey, propioKey: propio?.key ?? null, fechaDocumento: hoy },
+  };
+  const { data, error } = await db('contratos')
+    .update({
+      estado: 'pendiente_firma',
+      storage_key: keyFinal,
+      nombre_archivo: `${v3.numero}-para-firma.pdf`,
+      fecha_generacion: ahora,
+      datos_variables: { ...dv, documento },
+    } as never)
+    .eq('id', v3.id)
+    .eq('estado', 'borrador')
+    .eq('updated_at', v3.updated_at)
+    .select('id');
+  if (error || !(data as unknown[] | null)?.length) {
+    await quitarFinal();
+    if (error) {
+      logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo sacar el contrato de borrador');
+      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo enviar a firma. Intenta de nuevo.');
+    }
+    throw borradorCambiado();
+  }
+  await db('contrato_historial_estados').insert({
+    contrato_id: v3.id,
+    estado_anterior: 'borrador',
+    estado_nuevo: 'pendiente_firma',
+    descripcion: `Enviado a firma (asistente V3, Ruta ${ruta})`,
+    usuario_id: userId,
+  } as never);
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.CONTRATO_TRANSITIONED,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: v3.id,
+    detalle: { expediente_id: expedienteId, v3: true, ruta, de: 'borrador', a: 'pendiente_firma', sha256: documento.final!.sha256 },
+    ip,
+  });
+
+  // 5. La verificación de identidad (si está encendida) o el sobre.
+  try {
+    if (env.FIRMA_BIOMETRIA_ENABLED) {
+      const { iniciarVerificacionIdentidad } = await import('@/modules/firma/verificacion-identidad.service');
+      await iniciarVerificacionIdentidad(v3.id, userId);
+    } else {
+      await crearSobre(v3.id, userId);
+    }
+  } catch (e) {
+    // El proceso sí salió: no se revierte (el webhook lo adopta).
+    if (e instanceof AppError && e.errorCode === 'FIRMA_ENVIADA_SIN_REGISTRO') throw e;
+    await revertirEnvio(v3, dv, ruta, e);
+    await quitarFinal();
+    throw e;
+  }
+
+  // Solo con el sobre fuera se borra la vista previa: si hubo que revertir, sigue ahí.
+  if (v3.storage_key) {
+    const { error: rmError } = await supabase.storage.from(BUCKET).remove([v3.storage_key]);
+    if (rmError) logger.warn({ expedienteId, key: v3.storage_key }, 'Asistente V3: no se borro la vista previa al enviar');
+  }
+  const vista = await estadoEnviado(v3.id);
+  return vista ? estadoDeEnviado(vista) : armarEstado(await cargar(expedienteId), hoy);
+}
+
+/**
+ * Vuelta a borrador tras un envío fallido. Dos pasos por el congelamiento:
+ * primero el estado (columna libre), después, ya en borrador, el documento.
+ */
+async function revertirEnvio(v3: ContratoV3, dv: NonNullable<ContratoV3['datos_variables']>, ruta: 'A' | 'B', e: unknown) {
+  const detalle = (e instanceof Error ? e.message : String(e)).slice(0, 300);
+  const volver = await db('contratos').update({ estado: 'borrador' } as never).eq('id', v3.id).eq('estado', 'pendiente_firma');
+  if (volver.error) {
+    logger.error({ contratoId: v3.id, error: volver.error.message }, 'Asistente V3: no se pudo revertir el envío a firma');
+    return;
+  }
+  const restaurar = await db('contratos')
+    .update({
+      storage_key: v3.storage_key,
+      nombre_archivo: nombreBorrador(v3.numero, ruta),
+      fecha_generacion: dv.documento?.generadoEn ?? null,
+      datos_variables: dv,
+    } as never)
+    .eq('id', v3.id)
+    .eq('estado', 'borrador');
+  if (restaurar.error)
+    logger.error({ contratoId: v3.id, error: restaurar.error.message }, 'Asistente V3: no se restauró la vista previa');
+  await db('contrato_historial_estados').insert({
+    contrato_id: v3.id,
+    estado_anterior: 'pendiente_firma',
+    estado_nuevo: 'borrador',
+    descripcion: `Reversión automática: el envío a firma falló: ${detalle}`,
+    usuario_id: null,
+  } as never);
+}
+
+/** El V3 fuera de borrador de este estudio, con acceso verificado. */
+async function enviadoOError(expedienteId: string, userId: string, userRol: string): Promise<string> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+  const c = await contratoEnviado(expedienteId);
+  if (!c) throw AppError.conflict('El contrato no está en firma.', 'CONTRATO_ESTADO_CAMBIADO');
+  return c.id;
+}
+
+async function estadoTras(contratoId: string, expedienteId: string): Promise<EstadoAsistente> {
+  const vista = await estadoEnviado(contratoId);
+  return vista ? estadoDeEnviado(vista) : armarEstado(await cargar(expedienteId), hoyBogota());
+}
+
+/** Reenvío desde FIRMA INCOMPLETA (§11.7.5). */
+export async function reenviarFirma(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
+  const id = await enviadoOError(expedienteId, userId, userRol);
+  await reenviar(id, userId);
+  return estadoTras(id, expedienteId);
+}
+
+/** EN FIRMA sin sobre (Auco falló después de la verificación de identidad, o el sobre quedó huérfano). */
+export async function reintentarFirma(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
+  const id = await enviadoOError(expedienteId, userId, userRol);
+  await reintentar(id, userId);
+  return estadoTras(id, expedienteId);
+}
+
+/** "Actualizar estado": pregunta a Auco ya, sin esperar el webhook ni el barrido. */
+export async function actualizarFirmaV3(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
+  const id = await enviadoOError(expedienteId, userId, userRol);
+  await actualizarFirma(id);
+  return estadoTras(id, expedienteId);
 }

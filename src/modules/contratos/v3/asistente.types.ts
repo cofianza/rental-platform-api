@@ -5,7 +5,7 @@
  */
 export type NumeroPaso = 1 | 2 | 3 | 4 | 5;
 export interface Contacto { direccion: string; municipio: string; email: string; telefono: string }
-export interface Paso1 { ruta: 'A'; modalidad: 'trasladada' | 'tradicional'; canonCop: number }
+export interface Paso1 { ruta: 'A' | 'B'; modalidad: 'trasladada' | 'tradicional'; canonCop: number }
 export interface Paso2 {
   usos: { carro: string | null; moto: string | null; util: string | null }; // null = NO; texto = número/identificación
   amoblado: boolean; ocupantes: number;
@@ -47,14 +47,20 @@ export interface EstadoAsistente {
     guardados: Partial<Pasos>;
     prefill: { 1: Partial<Paso1>; 2: Partial<Paso2>; 3: Partial<Paso3>; 5: Partial<Paso5> };
     faltantes: { paso: NumeroPaso; mensaje: string }[];
-    documento: null | { generadoEn: string; avisos: string[]; desactualizado: boolean };
+    documento: null | { generacion: number; generadoEn: string; avisos: string[]; pendientes: string[]; desactualizado: boolean };
+    /** Ruta B: el contrato propio de la inmobiliaria, tal como se cargó (sin modificar, §4.4). */
+    propio: PdfPropio | null;
     adicionales: {
       maximo: number; ordinales: string[] /* 25, desde la 1.ª adicional de ESTE contrato */;
       aviso: { version: string; texto: string }; prevalencia: string;
       excesoAutorizado: { huella: string; cantidad: number; en: string } | null;
     };
   };
+  /** El contrato ya salió de borrador (Entrega 5): EN FIRMA, FIRMA INCOMPLETA o FIANZA ACTIVA. */
+  enviado: EnvioV3 | null;
 }
+
+export interface PdfPropio { nombre: string; paginas: number; bytes: number; sha256: string; subidoEn: string }
 
 // ── Firma (Entrega 5) ──
 export type EstadoSobreV3 = 'creando' | 'en_firma' | 'completo' | 'incompleto' | 'cancelado' | 'fallido';

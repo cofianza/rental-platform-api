@@ -56,7 +56,7 @@ const contacto = z
 
 export const paso1Schema = z
   .object({
-    ruta: z.literal('A', { error: 'La Ruta B todavía no está disponible' }),
+    ruta: z.enum(['A', 'B'], { error: 'Elige la ruta del contrato' }),
     modalidad: z.enum(['trasladada', 'tradicional'], { error: 'Elige la modalidad de la fianza' }),
     canonCop: entero(1, 100_000_000, 'Canon'),
   })
@@ -165,4 +165,12 @@ export const guardarPasoSchema = z.discriminatedUnion(
 /** La huella (sha256) del conjunto exacto de adicionales que el administrador autoriza (D6). */
 export const autorizarExcesoSchema = z
   .object({ huella: z.string({ error: 'Falta la huella' }).regex(/^[0-9a-f]{64}$/, 'Huella inválida') })
+  .strict();
+
+/** Enviar a firma: la vista previa que se revisó y, en la Ruta B, el PDF propio que se vio. */
+export const enviarSchema = z
+  .object({
+    generacion: z.number({ error: 'Falta la vista previa' }).int().min(1),
+    propioSha256: z.string().regex(/^[0-9a-f]{64}$/, 'Huella del PDF inválida').optional(),
+  })
   .strict();
