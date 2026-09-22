@@ -1,7 +1,14 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as usersService from './users.service';
-import type { ListUsersQuery, UserIdParams, CreateUserInput, UpdateUserInput, ResetPasswordByAdminInput } from './users.schema';
+import type {
+  BuscarUsuariosQuery,
+  ListUsersQuery,
+  UserIdParams,
+  CreateUserInput,
+  UpdateUserInput,
+  ResetPasswordByAdminInput,
+} from './users.schema';
 
 export async function list(req: Request, res: Response) {
   const query = req.query as unknown as ListUsersQuery;
@@ -50,6 +57,11 @@ export async function remove(req: Request, res: Response) {
 export async function listOrphans(_req: Request, res: Response) {
   const orphans = await usersService.listOrphanAuthUsers();
   sendSuccess(res, orphans);
+}
+
+export async function buscar(req: Request, res: Response) {
+  const { search } = req.query as unknown as BuscarUsuariosQuery;
+  sendSuccess(res, await usersService.buscarPerfilesActivos(search));
 }
 
 export async function listOperators(_req: Request, res: Response) {

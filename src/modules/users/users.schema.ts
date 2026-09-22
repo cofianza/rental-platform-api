@@ -12,6 +12,10 @@ export const listUsersQuerySchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
+export const buscarUsuariosQuerySchema = z.object({
+  search: z.string().trim().min(2, 'Escribe al menos 2 letras').max(60),
+});
+
 export const userIdParamsSchema = z.object({
   id: z.uuid({ error: 'ID de usuario inválido' }),
 });
@@ -45,6 +49,7 @@ export const resetPasswordByAdminSchema = z.object({
 });
 
 export type ListUsersQuery = z.infer<typeof listUsersQuerySchema>;
+export type BuscarUsuariosQuery = z.infer<typeof buscarUsuariosQuerySchema>;
 export type UserIdParams = z.infer<typeof userIdParamsSchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;

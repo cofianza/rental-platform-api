@@ -553,6 +553,40 @@ export async function resetPasswordByAdmin(
 // Operators (HP-285)
 // ============================================================
 
+/** El término dentro del filtro `or` de PostgREST: sin comas, paréntesis, comillas ni comodines (no cambian el filtro). */
+export const terminoBusqueda = (s: string) => s.replace(/[^\p{L}\p{N} .@-]/gu, '').trim().slice(0, 60);
+
+/**
+ * Selector de propietario del formulario de inmueble (admin y operador):
+ * perfiles activos por nombre, apellido o razón social. Antes la web leía
+ * `perfiles` directo con la llave anon, que dejaba la tabla pública.
+ */
+export async function buscarPerfilesActivos(search: string) {
+  const t = terminoBusqueda(search);
+  if (t.length < 2) return [];
+  const { data, error } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('id, nombre, apellido, telefono, rol, estado')
+    .eq('estado', 'activo')
+    .or(`nombre.ilike.%${t}%,apellido.ilike.%${t}%,razon_social.ilike.%${t}%`)
+    .order('nombre', { ascending: true })
+    .limit(10);
+
+  if (error) {
+    logger.error({ error: error.message }, 'Error al buscar perfiles');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al buscar usuarios');
+  }
+
+  return (data as unknown as Array<{
+    id: string;
+    nombre: string;
+    apellido: string;
+    telefono: string | null;
+    rol: string;
+    estado: string;
+  }>) ?? [];
+}
+
 export async function listOperators() {
   const { data, error } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)

@@ -1,7 +1,14 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
-import { listUsersQuerySchema, userIdParamsSchema, createUserSchema, updateUserSchema, resetPasswordByAdminSchema } from './users.schema';
+import {
+  buscarUsuariosQuerySchema,
+  listUsersQuerySchema,
+  userIdParamsSchema,
+  createUserSchema,
+  updateUserSchema,
+  resetPasswordByAdminSchema,
+} from './users.schema';
 import * as usersController from './users.controller';
 
 const router = Router();
@@ -11,6 +18,14 @@ router.use(authMiddleware);
 
 // GET /users/operators — accessible to admin + operador_analista (HP-285)
 router.get('/operators', roleGuard(['administrador', 'operador_analista']), usersController.listOperators);
+
+// GET /users/buscar?search= — selector de propietario del formulario de inmueble.
+router.get(
+  '/buscar',
+  roleGuard(['administrador', 'operador_analista']),
+  validate({ query: buscarUsuariosQuerySchema }),
+  usersController.buscar,
+);
 
 // All remaining routes require administrador role
 router.use(roleGuard(['administrador']));
