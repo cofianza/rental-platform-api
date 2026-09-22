@@ -13,7 +13,7 @@
 import { AppError } from '@/lib/errors';
 import { pctDe } from '@/modules/estudios/tarifas';
 import { APROBACIONES } from './aprobaciones';
-import { pdfContrato, type LogoPdf } from './documento';
+import { anclarFirmas, pdfContrato, type LogoPdf } from './documento';
 import { sumarMeses } from './formato';
 import {
   renderizar,
@@ -24,7 +24,7 @@ import {
   type Pendiente,
   type Resultado,
 } from './motor';
-import { PLANTILLA_VIVIENDA } from './plantilla-vivienda';
+import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 
 type TipoDoc = 'cc' | 'ce' | 'pasaporte' | 'nit' | 'ti';
 
@@ -79,6 +79,8 @@ export interface OpcionesVivienda {
   modo: 'final' | 'revision';
   logoInmobiliaria: LogoPdf | null;
   adicionales?: Adicional[];
+  /** Mete las anclas {{signature:i}} de Auco en las rayas de firma (Entrega 5 §3.3). */
+  anclas?: boolean;
 }
 
 // El Word dice "treinta por ciento (30%)" en letras: otro porcentaje no se puede imprimir.
@@ -222,6 +224,9 @@ export function contexto(d: DatosVivienda): Contexto {
       diaPlural: !d.fechaDocumento.endsWith('-01'),
     },
     valores: {
+      // solo lo imprime el Anexo (su cuadro trae el "Contrato asociado N°"); la
+      // plantilla de vivienda no declara `numero` y el motor ignora lo que sobra
+      numero: d.numero,
       ciudadFirma: d.ciudadFirma,
       fechaDocumento: d.fechaDocumento,
       fechaInicio: d.fechaInicio,
@@ -284,6 +289,10 @@ export function renderizarVivienda(d: DatosVivienda, o: OpcionesVivienda): Resul
   return r;
 }
 
+/** Un bloque de firma por parte: arrendatario, coarrendatario(s) y arrendador. */
+const conAnclas = (html: string, d: DatosVivienda, o: OpcionesVivienda) =>
+  o.anclas ? anclarFirmas(html, 2 + d.coarrendatarios.length) : html;
+
 /**
  * PDF del contrato de vivienda. En 'revision' sale con marca de agua BORRADOR
  * y los pendientes resaltados; en 'final', solo si no queda nada pendiente.
@@ -293,11 +302,42 @@ export async function generarContratoVivienda(
   o: OpcionesVivienda,
 ): Promise<{ pdf: Buffer; pendientes: Pendiente[]; version: string; lineas: Linea[] }> {
   const r = renderizarVivienda(d, o);
-  const pdf = await pdfContrato(r.html, {
+  const pdf = await pdfContrato(conAnclas(r.html, d, o), {
     pie: PLANTILLA_VIVIENDA.pie,
     numero: d.numero,
     logo: o.logoInmobiliaria,
     borrador: o.modo !== 'final',
   });
   return { pdf, pendientes: r.pendientes, version: PLANTILLA_VIVIENDA.version, lineas: r.lineas };
+}
+
+// ── Anexo de Condiciones de Afianzamiento (Ruta B, Entrega 5 §4.4) ──
+
+/**
+ * Mismo flujo que renderizarVivienda con la plantilla del Anexo: los mismos
+ * DatosVivienda (el Anexo imprime un subconjunto) y el mismo contexto. Sin
+ * cláusulas adicionales: en la Ruta B las pone EL ARRENDADOR en su documento.
+ */
+export function renderizarAnexo(d: DatosVivienda, o: OpcionesVivienda): Resultado {
+  validarDatos(d, o);
+  const r = renderizar(PLANTILLA_ANEXO, contexto(d), { modo: o.modo, aprobados: APROBACIONES });
+  verificarCoherencia(r.asientos, DERIVADAS);
+  return r;
+}
+
+/** PDF del Anexo. El pie lleva el CRC, no el número del contrato ni iniciales. */
+export async function generarAnexoVivienda(
+  d: DatosVivienda,
+  o: OpcionesVivienda,
+): Promise<{ pdf: Buffer; pendientes: Pendiente[]; version: string; lineas: Linea[] }> {
+  const r = renderizarAnexo(d, o);
+  const pdf = await pdfContrato(conAnclas(r.html, d, o), {
+    pie: PLANTILLA_ANEXO.pie,
+    rotulo: 'CRC N°',
+    numero: d.crc.numero,
+    iniciales: false,
+    logo: o.logoInmobiliaria,
+    borrador: o.modo !== 'final',
+  });
+  return { pdf, pendientes: r.pendientes, version: PLANTILLA_ANEXO.version, lineas: r.lineas };
 }

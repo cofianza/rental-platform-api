@@ -1,0 +1,204 @@
+# Anexo de Condiciones de Afianzamiento COFIANZA — Ruta B (Entrega 5, diseño
+# §4.4). Una línea = un párrafo del Word (151 párrafos con texto del .docx
+# fijado por sha256). El texto del Word es siempre la rama verdadera.
+# Los #a-c-NN: son la concordancia en singular sin coarrendatario (spec §2.4);
+# los #a-j-*: un documento distinto de la cédula de ciudadanía. El prefijo a-
+# no choca con los c-*/j-* del contrato de vivienda.
+@pie Anexo de Condiciones de Afianzamiento COFIANZA
+@titulo ANEXO DE CONDICIONES DE AFIANZAMIENTO
+# El Word centra esta línea en 11 pt; el motor solo emite k-centrado desde
+# @adicionales, que no se imprime sin cláusulas adicionales (desviación 1).
+@titulo COFIANZA S.A.S.
+@nota Anexo integral al contrato de arrendamiento de vivienda urbana
+@cuadro
+**CRC N°** | {crc.numero} del {dia:crc.fecha} de {mes:crc.fecha} de {anio:crc.fecha}
+**Contrato asociado N°** | {numero}
+**Lugar y fecha** | {ciudadFirma}, {dia:fechaDocumento} de {mes:fechaDocumento} de {anio:fechaDocumento}
+**Arrendador** | {arrendador.nombre}  ·  NIT {arrendador.nit}
+**Representante legal** | {arrendador.representante}
+**Matrícula de arrendador** | N° {arrendador.matricula} expedida por {arrendador.matriculaExpedidaPor}
+**Arrendatario** | {arrendatario.nombre}  ·  [[arrendatario.cc: C.C. | #a-j-cuadro-arrendatario: {doc:arrendatario.tipoDocumento}]] {arrendatario.documento}
+# Sin coarrendatario la fila no se imprime (supresión de estructura, spec §2.4)
+?coa **Coarrendatario** | {coa.nombre}  ·  [[coa.cc: C.C. | #a-j-cuadro-coa: {doc:coa.tipoDocumento}]] {coa.documento}
+**Dirección del inmueble** | {inmueble.direccion}
+**Municipio del inmueble** | {inmueble.municipio}
+**Canon de arrendamiento** | ${pesos:canon} ( {pesosLetras:canon} )
+**Vigencia del contrato** | {letras:vigenciaMeses} ( {pesos:vigenciaMeses} ) meses, del {dd2:fechaInicio}/{mm2:fechaInicio}/{anio:fechaInicio} al {dd2:fechaVencimiento}/{mm2:fechaVencimiento}/{anio:fechaVencimiento}
+**Modalidad de la fianza** | TRADICIONAL {casilla:!trasladada}   TRASLADADA {casilla:trasladada}
+@fin
+Entre COFIANZA S.A.S., sociedad comercial identificada con NIT 902.038.122-7, con domicilio en Itagüí (Antioquia), en adelante COFIANZA, y las partes identificadas en el cuadro anterior, se suscribe el presente ANEXO DE CONDICIONES DE AFIANZAMIENTO, que forma parte integral del contrato de arrendamiento de vivienda urbana celebrado entre ellas.
+LAS PARTES declaran que este anexo se firma en el mismo acto y por las mismas personas que suscriben el contrato de arrendamiento, y que sus estipulaciones son exigibles en los mismos términos y con el mismo alcance que las de aquel.
+@seccion I.  OBJETO Y ALCANCE DE ESTE ANEXO
+@clausula objeto
+**{N}: OBJETO.** El presente anexo regula de manera íntegra y autosuficiente las condiciones de la fianza otorgada por COFIANZA respecto del contrato de arrendamiento identificado en el cuadro inicial. Se suscribe porque EL ARRENDADOR utiliza su propio documento de contrato de arrendamiento y no la plantilla institucional de COFIANZA.
+@clausula autosuficiencia
+**{N}: AUTOSUFICIENCIA.** Este anexo no depende del contenido, de la redacción ni de la numeración del contrato de arrendamiento al que se anexa. Todas sus estipulaciones se entienden completas en sí mismas y no requieren remisión a cláusula alguna de dicho contrato para producir efectos.
+@clausula marco
+**{N}: MARCO DE LA FIANZA.** La fianza se otorga en el marco del convenio vigente suscrito entre EL ARRENDADOR y COFIANZA, cuyos términos EL ARRENDADOR declara conocer y aceptar, y con fundamento en la evaluación de riesgo contenida en el Certificado de Riesgo COFIANZA (CRC) identificado en el cuadro inicial. En caso de conflicto entre este anexo y el convenio, prevalece el convenio.
+@seccion II.  DECLARACIONES Y GARANTÍAS DE EL ARRENDADOR
+@clausula declaraciones
+**{N}: DECLARACIONES**
+EL ARRENDADOR declara a COFIANZA, bajo su responsabilidad y como condición determinante para el otorgamiento de la fianza, que:
++ Suscribe el contrato de arrendamiento EN NOMBRE PROPIO y en calidad de arrendador, y no como mandatario, apoderado o representante del propietario del inmueble. En consecuencia, es titular directo de las acciones de cobro y de restitución frente a EL ARRENDATARIO.
++ Cuenta con matrícula de arrendador vigente y con las autorizaciones legales necesarias para ejercer la actividad de arrendamiento de bienes inmuebles.
++ El canon de arrendamiento pactado en el contrato corresponde al informado a COFIANZA y no difiere del canon evaluado en el CRC por encima de la tolerancia admitida por COFIANZA.
++ El inmueble tiene destinación de vivienda urbana y se rige por la Ley 820 de 2003.
++ El inmueble se encontraba desocupado al momento de la celebración del contrato y fue entregado a EL ARRENDATARIO en condiciones adecuadas de uso, seguridad y salubridad.
++ El contrato de arrendamiento suscrito NO contiene ninguna de las siguientes estipulaciones: (i) exigencia de depósito en dinero u otra caución real a cargo de EL ARRENDATARIO; (ii) prohibición o condicionamiento de la tenencia de animales de compañía; (iii) facultad de recuperar la tenencia del inmueble sin orden judicial ni entrega voluntaria; (iv) incremento del canon superior al límite legal; ni (v) renuncia de EL ARRENDATARIO a derechos irrenunciables.
++ No ha celebrado ni celebrará con EL ARRENDATARIO acuerdos paralelos, verbales o escritos, que modifiquen el canon, el plazo, las garantías o las condiciones de pago informadas a COFIANZA.
++ La información suministrada a COFIANZA sobre el inmueble, las partes y las condiciones del contrato es veraz, completa y actual.
+> **{P:inexactitud} — CONSECUENCIA DE LA INEXACTITUD:** La falsedad o inexactitud de cualquiera de las declaraciones anteriores faculta a COFIANZA para dar por terminada la fianza a partir de la fecha en que tenga conocimiento del hecho, sin que ello afecte las obligaciones ya causadas a su favor. Si COFIANZA hubiere efectuado pagos con fundamento en una declaración falsa o inexacta, tendrá acción de repetición contra EL ARRENDADOR por la totalidad de lo pagado, con sus intereses, y no contra EL ARRENDATARIO. EL ARRENDADOR mantendrá indemne a COFIANZA por los perjuicios, costas y sanciones que se deriven de tal circunstancia.
+@seccion III.  NEUTRALIZACIÓN DE ESTIPULACIONES DEL CONTRATO DE ARRENDAMIENTO
+@clausula prevalencia
+**{N}: PREVALENCIA DE ESTE ANEXO**
+LAS PARTES acuerdan expresamente que, en caso de conflicto, incompatibilidad o contradicción entre el contrato de arrendamiento y el presente anexo respecto de las condiciones de la fianza, prevalecen las estipulaciones de este anexo y del CRC. Ninguna cláusula del contrato de arrendamiento se entenderá aplicable en cuanto contradiga lo aquí pactado.
+@clausula no-escritas
+**{N}: ESTIPULACIONES QUE SE ENTIENDEN NO ESCRITAS FRENTE A COFIANZA**
+Aun cuando el contrato de arrendamiento las contenga, las siguientes estipulaciones se entienden NO ESCRITAS frente a COFIANZA y no le son oponibles en ninguna circunstancia:
+>> **(a)** Cualquier orden de imputación de pagos que aplique las sumas recibidas de EL ARRENDATARIO a intereses moratorios, gastos de cobranza, gestión de cartera, cláusula penal o cualquier otro concepto ANTES del canon de arrendamiento y de la tarifa mensual de la fianza. Frente a COFIANZA rige exclusivamente el orden de imputación de la {ref:imputacion} de este anexo.
+>> **(b)** Cualquier facultad de EL ARRENDADOR para condonar, remitir, novar, reducir, aplazar o dejar sin efecto obligaciones de EL ARRENDATARIO, sin la aceptación previa y escrita de COFIANZA.
+>> **(c)** Cualquier estipulación que limite, module o excluya la subrogación de COFIANZA, o que le imponga requisitos, plazos o condiciones adicionales a los previstos en este anexo para ejercerla.
+>> **(d)** Cualquier estipulación que faculte a EL ARRENDADOR para recuperar la tenencia del inmueble sin orden judicial ni entrega voluntaria, o que autorice el ingreso al inmueble para recuperar la tenencia con la sola presencia de testigos.
+>> **(e)** Cualquier exigencia de depósito en dinero o caución real a cargo de EL ARRENDATARIO, por estar prohibida en el arrendamiento de vivienda urbana.
+>> **(f)** Cualquier prohibición, condicionamiento o causal de terminación fundada en la sola tenencia de animales de compañía.
+>> **(g)** Cualquier cláusula que exima a EL ARRENDADOR de su responsabilidad legal de garantizar el goce útil y pacífico del inmueble o de responder por los vicios que impidan o limiten sustancialmente dicho goce, aun ocultos.
+>> **(h)** Cualquier cláusula de totalidad del acuerdo, integralidad o equivalente que pretenda que el contrato de arrendamiento reemplaza, modifica o deja sin efecto el presente anexo o el convenio suscrito entre EL ARRENDADOR y COFIANZA.
+>> **(i)** Cualquier estipulación que extienda la cobertura de la fianza a conceptos distintos del canon de arrendamiento, o que la extienda a personas distintas de [[coa: EL ARRENDATARIO y EL COARRENDATARIO identificados | #a-c-01: EL ARRENDATARIO identificado]] en el cuadro inicial.
+> **{P:alcance}:** La neutralización prevista en esta cláusula opera únicamente en la relación con COFIANZA y no afecta la validez de dichas estipulaciones entre EL ARRENDADOR y EL ARRENDATARIO, salvo cuando sean contrarias a normas de orden público, en cuyo caso su ineficacia se rige por la ley.
+@seccion IV.  CONSTITUCIÓN, VALORES Y RECAUDO
+@clausula constitucion
+**{N}: CONSTITUCIÓN DE LA FIANZA.** COFIANZA se constituye como FIADOR de EL ARRENDATARIO frente a EL ARRENDADOR, respecto de las obligaciones de pago del canon de arrendamiento derivadas del contrato asociado. EL ARRENDATARIO no presenta fiador ni codeudor con finca raíz, siendo la presente fianza la garantía de cumplimiento de sus obligaciones de pago.
+@clausula modalidad
+**{N}: MODALIDAD.** La modalidad aplicable es la señalada en el cuadro inicial. En modalidad TRASLADADA la tarifa mensual de la fianza es asumida por EL ARRENDATARIO y se paga junto con el canon. En modalidad TRADICIONAL la tarifa mensual es asumida íntegramente por EL ARRENDADOR y EL ARRENDATARIO no debe suma alguna por concepto de fianza.
+@clausula valores
+**{N}: VALORES DE LA FIANZA**
+Conforme al CRC identificado en el cuadro inicial, se causan los siguientes valores:
++ PRIMA DE VINCULACIÓN: {pctLetras:primaPct} por ciento ({pct:primaPct}%) del canon mensual, equivalente a la fecha de suscripción a la suma de ${pesos:primaCop}, pagadera por una sola vez al momento de la activación de la fianza.
++ TARIFA MENSUAL: {pctLetras:tarifaPct} por ciento ({pct:tarifaPct}%) del canon de arrendamiento más el Impuesto sobre las Ventas (IVA), equivalente a la fecha de suscripción a la suma de ${pesos:tarifaCop} más IVA, pagadera junto con cada canon durante toda la vigencia del contrato y sus prórrogas.
+> **{P:actualizacion}:** Los porcentajes señalados son los que rigen jurídicamente y se aplican sobre el canon vigente, de modo que los valores en pesos se actualizan automáticamente cuando el canon se incrementa. Las sumas expresadas en pesos son informativas y corresponden al canon vigente a la fecha de suscripción.
+> **{P:recibo}:** Estos valores no hacen parte del canon de arrendamiento y serán referenciados de manera independiente en el correspondiente recibo de caja o documento de cobro.
+@clausula imputacion
+**{N}: IMPUTACIÓN DE PAGOS Y COBERTURA DE FALTANTES**
+Frente a COFIANZA, todo pago que EL ARRENDATARIO realice con ocasión del contrato de arrendamiento se imputará conforme al siguiente orden, con prelación sobre cualquier otra regla de imputación contenida en el contrato de arrendamiento:
++ Canon de arrendamiento.
++ Tarifa mensual de la fianza.
++ Cuotas de administración vencidas.
++ Valores correspondientes a servicios públicos.
++ Intereses moratorios causados.
++ Gastos y costos de cobranza extrajudicial o judicial.
++ Daños, faltantes o deterioros ocasionados al inmueble.
++ Cláusula penal pactada.
++ Obligaciones no vencidas.
+> **{P:faltantes} — COBERTURA DE FALTANTES:** Si el pago que realice EL ARRENDATARIO resultare insuficiente, COFIANZA podrá cubrir a EL ARRENDADOR la diferencia faltante, con lo cual EL ARRENDATARIO quedará obligado por esa suma directamente frente a COFIANZA y no frente a EL ARRENDADOR. Las sumas así cubiertas se acumulan al valor a pagar del período siguiente y serán exigibles en los mismos términos y con el mismo alcance que las demás obligaciones, sin consideración a su cuantía. El presente anexo, junto con el contrato de arrendamiento, presta mérito ejecutivo a favor de COFIANZA para su cobro.
+@clausula recaudo
+**{N}: RECAUDO POR CONDUCTO DE EL ARRENDADOR.** COFIANZA no recibe pagos directamente de EL ARRENDATARIO por concepto de prima de vinculación ni de tarifa mensual. En modalidad Trasladada, EL ARRENDADOR recauda dichos valores por cuenta de COFIANZA, junto con el canon, y los remite en los términos y plazos previstos en el convenio vigente entre ellos. El recaudo se realiza por cuenta de COFIANZA; en modalidad Trasladada EL ARRENDADOR no es deudor de la tarifa mensual, sin perjuicio de su obligación de remitir lo efectivamente recaudado.
+@seccion V.  COBERTURA Y VIGENCIA DE LA FIANZA
+@clausula cobertura
+**{N}: ALCANCE DE LA COBERTURA.** La fianza cubre el pago del canon de arrendamiento desde la fecha de mora hasta la restitución material del inmueble, con un tope máximo de DIECIOCHO (18) CÁNONES de arrendamiento, lo que ocurra primero.
+> **{P:no-cubiertos} — CONCEPTOS NO CUBIERTOS:** La cobertura comprende únicamente el canon de arrendamiento. NO están cubiertas las cuotas de administración, los servicios públicos, los daños al inmueble, los faltantes de inventario, la cláusula penal, los intereses moratorios, los gastos de cobranza, ni ningún otro concepto, salvo que se contraten expresamente como amparo adicional y así conste por escrito.
+> **{P:impago} — IMPAGO DE LA PRIMA O DE LA TARIFA:** El no pago de la prima de vinculación o de la tarifa mensual por parte de EL ARRENDATARIO no exime a COFIANZA de su obligación como fiador frente a EL ARRENDADOR, sin perjuicio de las acciones de cobro que adelante directamente contra EL ARRENDATARIO.
+> **{P:exclusion} — EXCLUSIÓN POR CAUSA IMPUTABLE A EL ARRENDADOR:** No estará cubierta por la fianza la mora de EL ARRENDATARIO que tenga por causa el incumplimiento de las obligaciones de EL ARRENDADOR, en particular la falta de entrega del inmueble, la no ejecución de las reparaciones necesarias a su cargo, la existencia de vicios que impidan o limiten sustancialmente el goce del inmueble, la perturbación del goce pacífico, o la suspensión de servicios o de acceso a zonas comunes derivada del no pago de obligaciones a su cargo.
+> Si COFIANZA hubiere efectuado pagos en tales circunstancias, tendrá acción de repetición contra EL ARRENDADOR por las sumas pagadas, y no contra EL ARRENDATARIO. EL ARRENDADOR se obliga a informar a COFIANZA cualquier reclamación de EL ARRENDATARIO relativa al estado del inmueble, a las reparaciones a su cargo o al goce del bien, dentro de los cinco (5) días siguientes a su recepción.
+@clausula activacion
+**{N}: ACTIVACIÓN DE LA FIANZA.** La fianza se activa con la firma completa del contrato de arrendamiento y del presente anexo [[coa: por todas las partes requeridas. Cuando la evaluación de riesgo hubiere exigido la vinculación de un coarrendatario, la fianza NO se activa si este no suscribe ambos documentos. | #a-c-02: por todas las partes requeridas.]] No existe activación parcial ni provisional.
+> **{P:firma-incompleta}:** Mientras la firma esté incompleta no existe cobertura alguna y COFIANZA no responde por el inmueble. La decisión de entregar o no el inmueble en tal circunstancia es de la exclusiva responsabilidad de EL ARRENDADOR. La prima de vinculación no es condición de activación: se causa con la activación y constituye cuenta por cobrar.
+@clausula prorrogas
+**{N}: CONTINUIDAD EN LAS PRÓRROGAS**
+La fianza se entiende extendida de manera automática a las prórrogas del contrato de arrendamiento, en las mismas condiciones y sin necesidad de nueva evaluación ni de trámite alguno, mientras EL ARRENDATARIO se encuentre al día en sus obligaciones. La tarifa mensual se ajusta de forma automática al nuevo canon, conforme al porcentaje pactado en la {ref:valores}.
+Únicamente en el evento de que COFIANZA hubiere tenido que cubrir sumas a cargo de EL ARRENDATARIO durante la vigencia del contrato, podrá manifestar por escrito, con una antelación no inferior a treinta (30) días al vencimiento del período en curso, su decisión de no extender la fianza a la siguiente prórroga. En tal caso la fianza se mantiene íntegramente vigente hasta el vencimiento del período en curso, y EL ARRENDADOR queda en libertad de exigir una garantía distinta para la prórroga. En ningún otro caso COFIANZA podrá dar por terminada la fianza de un arrendatario que se encuentre al día en sus pagos.
+@clausula reporte-mora
+**{N}: REPORTE DE LA MORA.** EL ARRENDADOR se obliga a reportar a COFIANZA el incumplimiento de EL ARRENDATARIO dentro de la ventana establecida en el convenio vigente, contada desde la fecha en que se configure la mora. El reporte extemporáneo excluye de cobertura los cánones correspondientes al período de silencio. El reporte deberá indicar el contrato, el inmueble, el arrendatario, los períodos en mora y el valor adeudado por cada concepto.
+@seccion VI.  SUBROGACIÓN Y RESTITUCIÓN
+@clausula subrogacion
+**{N}: SUBROGACIÓN LEGAL.** En caso de que COFIANZA efectúe pagos a EL ARRENDADOR en cumplimiento de su obligación como fiador, se subrogará de pleno derecho, hasta la concurrencia de lo pagado, en todos los derechos, acciones, privilegios y garantías que EL ARRENDADOR tenía [[coa: contra EL ARRENDATARIO y contra EL COARRENDATARIO | #a-c-03: contra EL ARRENDATARIO]], conforme a los artículos 1666 y 2394 del Código Civil.
+@clausula obligaciones
+**{N}: OBLIGACIONES DE EL ARRENDADOR PARA LA EFECTIVIDAD DE LA SUBROGACIÓN**
+EL ARRENDADOR se obliga a:
++ Notificar a COFIANZA de manera inmediata cualquier pago, total o parcial, que reciba directamente [[coa: de EL ARRENDATARIO o de EL COARRENDATARIO | #a-c-04: de EL ARRENDATARIO]] con posterioridad al pago realizado por COFIANZA, y a reintegrar dichos valores dentro de las veinticuatro (24) horas siguientes a su recepción.
++ Abstenerse de celebrar acuerdos de pago, condonaciones, quitas, novaciones o prórrogas con EL ARRENDATARIO respecto de las sumas cubiertas o por cubrir por la fianza, sin autorización previa y escrita de COFIANZA.
++ Suscribir los documentos y otorgar los poderes que sean necesarios para que COFIANZA ejerza las acciones de cobro y de restitución, judiciales o extrajudiciales, dentro de los cinco (5) días siguientes al requerimiento.
++ Poner a disposición de COFIANZA la copia íntegra del contrato de arrendamiento, sus anexos, el acta de entrega e inventario, los soportes de pago y el estado de la cartera, dentro de los cinco (5) días siguientes al requerimiento.
++ Informar a COFIANZA, dentro de los cinco (5) días siguientes, cualquier hecho que afecte el contrato de arrendamiento o la fianza, incluyendo la terminación, la cesión, el abandono del inmueble, el cambio de ocupantes, la restitución y cualquier reclamación de EL ARRENDATARIO.
++ Abstenerse de recibir de EL ARRENDATARIO garantías adicionales en dinero que le estén prohibidas por la ley, o de exigirle sumas no informadas a COFIANZA.
+> **{P:incumplimiento} — INCUMPLIMIENTO:** El incumplimiento de cualquiera de estas obligaciones que impida, dificulte o encarezca el ejercicio de la subrogación faculta a COFIANZA para repetir contra EL ARRENDADOR por el valor no recuperado como consecuencia de dicho incumplimiento.
+@clausula restitucion
+**{N}: FACULTAD DE COFIANZA PARA ADELANTAR LA RESTITUCIÓN.** Desde el momento en que EL ARRENDATARIO incurra en mora, COFIANZA queda facultada para iniciar y adelantar, a su elección y en su propio nombre o en nombre de EL ARRENDADOR, el proceso de restitución del inmueble arrendado y las acciones de cobro correspondientes, sin que se requiera autorización adicional. EL ARRENDATARIO acepta desde ahora que, una vez producida la subrogación, COFIANZA queda facultada para adelantar en su propio nombre cualquier acción de cobro derivada del contrato de arrendamiento, incluyendo el uso de su mérito ejecutivo.
+@seccion VII.  TERMINACIÓN Y CESIÓN
+@clausula terminacion
+**{N}: TERMINACIÓN POR MUTUO ACUERDO.** Si EL ARRENDADOR y EL ARRENDATARIO dan por terminado el contrato de arrendamiento por mutuo acuerdo, la fianza se extingue a partir de la fecha de la terminación. La liquidación previa deberá incluir la totalidad de las obligaciones pendientes a favor de COFIANZA, y EL ARRENDADOR se obliga a informarle la terminación dentro de los cinco (5) días siguientes.
+La extinción de la fianza no extingue las obligaciones [[coa: que EL ARRENDATARIO o EL COARRENDATARIO tengan | #a-c-05: que EL ARRENDATARIO tenga]] pendientes con COFIANZA a esa fecha, las cuales podrán ser cobradas directamente por esta con el mérito ejecutivo del contrato y del presente anexo. EL ARRENDADOR no podrá condonar, remitir ni dejar sin efecto, total o parcialmente, sumas que hayan sido cubiertas por COFIANZA ni obligaciones en las que esta se haya subrogado.
+@clausula cesion-arrendador
+**{N}: CESIÓN DEL CONTRATO POR EL ARRENDADOR**
+La fianza se otorga en consideración a la persona de EL ARRENDADOR en su calidad de parte del convenio vigente suscrito con COFIANZA, y a las obligaciones de reporte, notificación y colaboración que de dicho convenio se derivan. En consecuencia, la fianza no se extiende al cesionario y se extingue a partir de la fecha de la cesión, salvo que COFIANZA la apruebe previamente por escrito y el cesionario se adhiera al convenio correspondiente.
+Lo anterior no afecta la validez de la cesión entre EL ARRENDADOR y el cesionario, ni las obligaciones causadas a favor de COFIANZA con anterioridad a dicha fecha. EL ARRENDADOR se obliga a informar a COFIANZA cualquier cesión, total o parcial, del contrato de arrendamiento o de los derechos que de él se derivan, con una antelación no inferior a quince (15) días.
+@clausula cesion-arrendatario
+**{N}: CESIÓN O SUBARRIENDO POR EL ARRENDATARIO.** La fianza se otorga exclusivamente respecto de [[coa: EL ARRENDATARIO y, cuando exista, de EL COARRENDATARIO identificados | #a-c-06: EL ARRENDATARIO identificado]] en el cuadro inicial. No se extiende a cesionarios, subarrendatarios, ocupantes ni terceros, autorizados o no. Si EL ARRENDADOR optare por celebrar un nuevo contrato de arrendamiento con los ocupantes reales del inmueble como consecuencia de una cesión o subarriendo, dicho nuevo contrato requerirá la evaluación y aprobación previa del nuevo arrendatario por parte de COFIANZA, y la presente fianza no se extenderá a él.
+@seccion VIII.  BENEFICIOS POR BUEN COMPORTAMIENTO DE PAGO
+@clausula cashback
+**{N}: CASHBACK.** Si a la terminación del contrato de arrendamiento EL ARRENDATARIO no hubiere incurrido en mora por ningún concepto durante la vigencia de la fianza, COFIANZA reintegrará el TREINTA POR CIENTO (30%) del valor total de las tarifas mensuales efectivamente pagadas. Este reintegro no aplica sobre la prima de vinculación y se liquida a la terminación del contrato.
+> **{P:mora} — DEFINICIÓN DE MORA PARA ESTE EFECTO:** Se entiende que existe mora cuando hubiere ocurrido pago tardío, parcial o incompleto de cualquiera de los siguientes conceptos: canon de arrendamiento, tarifa mensual de la fianza, servicios públicos a cargo de EL ARRENDATARIO, cuota de administración a su cargo, o cualquier otra obligación económica derivada del contrato de arrendamiento. Cualquier faltante cubierto por COFIANZA conforme al {ref:imputacion/faltantes}, sin importar su cuantía, se computa como mora para efectos de este beneficio.
+> **{P:beneficiario} — BENEFICIARIO:** El cashback se liquida a favor de quien hubiere pagado efectivamente las tarifas mensuales: EL ARRENDATARIO en modalidad Trasladada, y EL ARRENDADOR en modalidad Tradicional.
+@clausula reporte-positivo
+**{N}: REPORTE POSITIVO.** El cumplimiento oportuno de las obligaciones de EL ARRENDATARIO podrá ser reportado a las centrales de información con las que COFIANZA mantenga convenio vigente, en los términos de la autorización otorgada en este anexo, contribuyendo a la construcción de su historial crediticio.
+@seccion IX.  AUTORIZACIONES Y TRATAMIENTO DE DATOS
+@clausula datos
+**{N}: AUTORIZACIÓN DE TRATAMIENTO DE DATOS Y REPORTE A CENTRALES**
+[[coa: EL ARRENDATARIO y EL COARRENDATARIO autorizan | #a-c-07: EL ARRENDATARIO autoriza]] de manera previa, expresa, informada e inequívoca a COFIANZA, o a sus delegados, para recolectar, almacenar, usar, circular, actualizar, transmitir, transferir, suprimir y en general tratar sus datos personales, con el fin de dar cumplimiento a la fianza, realizar gestiones de cobro y enviar notificaciones e información relacionada con el servicio, conforme a la Ley 1581 de 2012, el Decreto 1377 de 2013 y las políticas de tratamiento de datos vigentes.
+Así mismo, [[coa: autorizan | #a-c-08: autoriza]] a COFIANZA o a quien represente sus derechos para consultar, solicitar, suministrar, reportar, procesar, circular y divulgar la información relacionada con su comportamiento crediticio, financiero, comercial y de servicios, incluyendo su hábito de pago, ante DATACRÉDITO EXPERIAN, TRANSUNION y cualquier otro operador de información legalmente habilitado con el que COFIANZA mantenga convenio vigente, así como ante sus propias bases de datos, conforme a la Ley 1266 de 2008 y demás normas concordantes.
+> **{P:alcance} — ALCANCE:** La autorización incluye la consulta de información ante entidades públicas o privadas con fines de análisis, validación, gestión y administración del riesgo, prevención del fraude, del lavado de activos y de la financiación del terrorismo, así como para la elaboración de indicadores o puntajes. Igualmente [[coa: autorizan ser contactados | #a-c-09: autoriza ser contactado]] por medios físicos, telefónicos o electrónicos para notificaciones, gestiones de cobro y aviso previo de reporte a centrales de información.
+> **{P:declaraciones} — DECLARACIONES DE LOS TITULARES:** [[coa: Declaran conocer que el alcance de esta autorización implica que el cumplimiento o incumplimiento de sus obligaciones será registrado con el propósito de suministrar información suficiente y veraz al mercado. Se les informa que podrán ejercer | #a-c-10: Declara conocer que el alcance de esta autorización implica que el cumplimiento o incumplimiento de sus obligaciones será registrado con el propósito de suministrar información suficiente y veraz al mercado. Se le informa que podrá ejercer]] en cualquier momento los derechos de conocer, actualizar, rectificar y suprimir su información ante los canales de atención de COFIANZA.
+@seccion X.  DISPOSICIONES FINALES
+@clausula aceptacion
+**{N}: ACEPTACIÓN IRREVOCABLE**
+LAS PARTES declaran que han leído, entendido y aceptado de manera libre, expresa e irrevocable la totalidad de las condiciones contenidas en el presente anexo, las cuales constituyen elemento esencial y determinante para el otorgamiento de la fianza y para la celebración del contrato de arrendamiento asociado. LAS PARTES renuncian expresamente a alegar, por vía judicial o extrajudicial, desconocimiento, error, falta de claridad, ausencia de consentimiento o cualquier otra circunstancia que pretenda desconocer, desvirtuar, modificar o dejar sin efecto, total o parcialmente, las condiciones aquí pactadas.
+> **{P:unilateral} — NO MODIFICACIÓN UNILATERAL:** Ninguna modificación, novación, condonación o dejación sin efecto de las condiciones de la fianza producirá efecto alguno si no consta por escrito y cuenta con la aceptación expresa de COFIANZA. EL ARRENDADOR y EL ARRENDATARIO no podrán, por acuerdo exclusivo entre ellos, modificar, novar o dejar sin efecto dichas condiciones.
+> **{P:indivisibilidad} — INDIVISIBILIDAD:** El contrato de arrendamiento y el presente anexo constituyen un todo indivisible en lo relacionado con las condiciones de la fianza. La nulidad, ineficacia o inoponibilidad de alguna cláusula del contrato de arrendamiento no eximirá a [[coa: EL ARRENDATARIO ni a EL COARRENDATARIO | #a-c-11: EL ARRENDATARIO]] de sus obligaciones frente a COFIANZA, ni a EL ARRENDADOR de las obligaciones de colaboración, notificación y subrogación aquí pactadas.
+@clausula ajenas
+**{N}: CLÁUSULAS DEL CONTRATO DE ARRENDAMIENTO AJENAS A COFIANZA.** Las cláusulas del contrato de arrendamiento son de autoría, iniciativa y responsabilidad exclusiva de EL ARRENDADOR. COFIANZA no las redacta, no las revisa, no las aprueba y no las avala, y su existencia no implica pronunciamiento alguno de su parte sobre su legalidad, validez o conveniencia. Si alguna de ellas resulta contraria a la ley, o si por causa de ella se produce una reclamación, un proceso judicial o administrativo, una decisión desfavorable, una condena, costas, sanciones o cualquier otra consecuencia económica que afecte a COFIANZA, EL ARRENDADOR asumirá de manera íntegra y exclusiva dichas consecuencias y costos, y mantendrá indemne a COFIANZA, obligándose a reembolsarle cualquier suma que esta deba pagar por tal causa.
+@clausula merito
+**{N}: MÉRITO EJECUTIVO.** El presente anexo, junto con el contrato de arrendamiento asociado, constituye título con mérito ejecutivo a favor de COFIANZA y de EL ARRENDADOR, según corresponda, para la exigencia judicial de las obligaciones de dar y hacer que en ellos se incorporan, sin necesidad de requerimiento previo, judicial o extrajudicial, al cual LAS PARTES renuncian expresamente.
+@clausula notificaciones
+**{N}: NOTIFICACIONES.** Para todos los efectos, las comunicaciones entre LAS PARTES se remitirán a las direcciones físicas y electrónicas señaladas a continuación, y las dirigidas a COFIANZA a los canales de atención que esta indique. Es obligación de cada parte mantener sus datos actualizados; mientras no se informe un cambio, las comunicaciones remitidas a los datos registrados se entenderán válidamente realizadas.
+@datos
+ARRENDADOR
+Dirección: {arrendador.direccion}     Municipio: {arrendador.municipio}
+Correo electrónico: {arrendador.email}     Celular: {arrendador.celular}
+ARRENDATARIO
+Dirección: {arrendatario.direccion}     Municipio: {arrendatario.municipio}
+Correo electrónico: {arrendatario.email}     Celular: {arrendatario.celular}
+@cada coarrendatario
+COARRENDATARIO
+Dirección: {parte.direccion}     Municipio: {parte.municipio}
+Correo electrónico: {parte.email}     Celular: {parte.celular}
+@fin
+@fin
+@clausula domicilio
+**{N}: DOMICILIO CONTRACTUAL.** LAS PARTES fijan como domicilio contractual el municipio en el cual se encuentra ubicado el inmueble arrendado.
+@clausula firma-electronica
+**{N}: FIRMA ELECTRÓNICA.** LAS PARTES acuerdan que el presente anexo podrá suscribirse mediante firma electrónica, la cual tendrá plena validez y fuerza probatoria conforme a la Ley 527 de 1999, el Decreto 2364 de 2012, la Ley 2213 de 2022 y el artículo 244 del Código General del Proceso. LAS PARTES renuncian a objetar su validez, autenticidad o integridad por el solo hecho de haber sido suscrito por medios electrónicos.
+@seccion XI.  PERFECCIONAMIENTO Y FIRMAS
+El presente anexo se suscribe en el mismo acto y por las mismas partes que el contrato de arrendamiento asociado, y forma parte integral del mismo.
+# Orden de firma (V3 §6.5): arrendatario, coarrendatario, arrendador. COFIANZA
+# no firma el anexo (spec §2.3): el Word no le abre bloque de firma.
+@firma
+{linea}
+**EL ARRENDATARIO**
+{arrendatario.nombre}
+[[arrendatario.cc: C.C. | #a-j-firma-arrendatario: {doc:arrendatario.tipoDocumento}]] N° {arrendatario.documento}
+@fin
+@cada coarrendatario
+@firma
+{linea}
+**EL COARRENDATARIO**
+{parte.nombre}
+[[parte.cc: C.C. | #a-j-firma-coa: {doc:parte.tipoDocumento}]] N° {parte.documento}
+@fin
+@fin
+@firma
+{linea}
+**EL ARRENDADOR**
+{arrendador.representante}
+Representante Legal
+NIT {arrendador.nit}
+@fin
+@nota Documento anexo al contrato de arrendamiento de vivienda urbana identificado en el cuadro inicial. Forma parte integral del mismo.

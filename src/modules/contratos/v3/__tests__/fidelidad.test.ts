@@ -3,9 +3,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import JSZip from 'jszip';
-import { lineaDeSegmentos, renderizar, type Linea } from '../motor';
-import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
-import { pieTexto } from '../documento';
+import { lineaDeSegmentos, renderizar, type Linea, type Plantilla } from '../motor';
+import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
+import { pieTexto, type OpcionesPie } from '../documento';
 
 // documento.ts → pdfRenderer → logger → env, que exige las variables de entorno
 vi.mock('@/lib/logger', () => ({
@@ -13,54 +13,108 @@ vi.mock('@/lib/logger', () => ({
 }));
 
 // ============================================================
-// Fidelidad de la plantilla de vivienda contra el Word (diseño §8.3).
-// En modo 'fidelidad' todo campo imprime ▢, toda condición es verdadera y
-// @cada corre una vez: así la plantilla tiene que leerse, párrafo por
-// párrafo, igual al .docx fijado por sha256 (texto, negritas/cursivas y
-// tipo de párrafo). Lo único que puede diferir está en DESVIACIONES.
+// Fidelidad de las plantillas contra su Word (diseño §8.3; Entrega 5 §4.4
+// agrega el Anexo). En modo 'fidelidad' todo campo imprime ▢, toda condición
+// es verdadera y @cada corre una vez: así la plantilla tiene que leerse,
+// párrafo por párrafo, igual al .docx fijado por sha256 (texto,
+// negritas/cursivas y tipo de párrafo). Lo único que puede diferir está en
+// las DESVIACIONES de ese documento.
 //
 // FIDELIDAD_PARTE=1..4 compara solo un archivo de la plantilla contra su
 // rango de párrafos del Word; es lo que usa cada conversor (C1–C4):
 //   FIDELIDAD_PARTE=2 npx vitest run fidelidad
+// (el Anexo es una sola parte, la 1).
 // ============================================================
 
-const DOCX = path.resolve(
-  __dirname,
-  '../../../../../recursos/contratos/fuente/CONTRATO_ARRENDAMIENTO_VIVIENDA_COFIANZA_INTEGRADO.docx',
-);
-const SHA256_DOCX = '083eeabb0836b4a79663d7542d40c857803956af06fffc32b9462346ac6bdc5e';
+const fuente = (f: string) =>
+  path.resolve(__dirname, '../../../../../recursos/contratos/fuente', f);
+
+/** Rango de párrafos del Word (w:p del document.xml, base 0) que convierte cada parte. */
+interface Parte {
+  n: number;
+  desde: number;
+  hasta: number;
+}
 
 /**
- * Rango de párrafos del Word (w:p del document.xml, base 0) que convierte cada
- * parte de la plantilla, C1–C4 en el orden de def.partes.
+ * Diferencia autorizada contra el Word; cada una tiene que ocurrir exactamente
+ * una vez: `word`→`motor` cambia el texto, `kindWord`→`kindMotor` el tipo de
+ * párrafo (lo que el motor no sabe emitir igual).
  */
-const PARTES = [
-  { n: 1, desde: 0, hasta: 134 },
-  { n: 2, desde: 135, hasta: 195 },
-  { n: 3, desde: 196, hasta: 306 },
-  { n: 4, desde: 307, hasta: 361 },
-];
-/** Nombre del archivo de la parte n, como sale en Resultado.origenes ("archivo:línea"). */
-const archivo = (n: number) => path.basename(PLANTILLA_VIVIENDA.def.partes[n - 1]);
+interface Desviacion {
+  parrafo: number;
+  motivo: string;
+  word?: string;
+  motor?: string;
+  kindWord?: string;
+  kindMotor?: string;
+}
 
-/** Diferencias autorizadas contra el Word; cada una tiene que ocurrir exactamente una vez. */
-const DESVIACIONES = {
-  cuerpo: [
-    {
-      parrafo: 242,
-      word: 'Cláusula Trigésima,',
-      motor: 'Cláusula Vigésima Octava,',
-      motivo:
-        '(f) el Word remite a la TRIGÉSIMA; la cláusula de notificaciones es la VIGÉSIMA OCTAVA',
-    },
-  ],
-  // documento.ts pone los logos en el encabezado; el motor no emite estos textos
-  encabezado: ['*[ espacio para logo de la inmobiliaria ]*', '*[ espacio para logo de COFIANZA ]*'],
-};
+interface Documento {
+  nombre: string;
+  docx: string;
+  sha256: string;
+  plantilla: Plantilla;
+  partes: Parte[];
+  cuerpo: Desviacion[];
+  /** documento.ts pone los logos en el encabezado; el motor no emite estos textos */
+  encabezado: string[];
+  pie: OpcionesPie;
+}
+
+const LOGOS = ['*[ espacio para logo de la inmobiliaria ]*', '*[ espacio para logo de COFIANZA ]*'];
+
+const DOCUMENTOS: Documento[] = [
+  {
+    nombre: 'vivienda',
+    docx: fuente('CONTRATO_ARRENDAMIENTO_VIVIENDA_COFIANZA_INTEGRADO.docx'),
+    sha256: '083eeabb0836b4a79663d7542d40c857803956af06fffc32b9462346ac6bdc5e',
+    plantilla: PLANTILLA_VIVIENDA,
+    partes: [
+      { n: 1, desde: 0, hasta: 134 },
+      { n: 2, desde: 135, hasta: 195 },
+      { n: 3, desde: 196, hasta: 306 },
+      { n: 4, desde: 307, hasta: 361 },
+    ],
+    cuerpo: [
+      {
+        parrafo: 242,
+        word: 'Cláusula Trigésima,',
+        motor: 'Cláusula Vigésima Octava,',
+        motivo:
+          '(f) el Word remite a la TRIGÉSIMA; la cláusula de notificaciones es la VIGÉSIMA OCTAVA',
+      },
+    ],
+    encabezado: LOGOS,
+    pie: {},
+  },
+  {
+    nombre: 'anexo',
+    docx: fuente('ANEXO_CONDICIONES_AFIANZAMIENTO_COFIANZA_V3.docx'),
+    sha256: '9bd779a4c3e2c1a026ca18b82251b5275df3e7be2559cf3aeb0f2a5a987a02c0',
+    plantilla: PLANTILLA_ANEXO,
+    partes: [{ n: 1, desde: 0, hasta: 157 }],
+    cuerpo: [
+      {
+        parrafo: 1,
+        kindWord: 'centrado',
+        kindMotor: 'titulo',
+        motivo:
+          'el Word centra "COFIANZA S.A.S." en 11 pt; el motor solo emite k-centrado desde ' +
+          '@adicionales, que no se imprime cuando no hay cláusulas adicionales. @titulo da el ' +
+          'mismo centrado en negrita (13 pt) y el texto queda idéntico',
+      },
+    ],
+    encabezado: LOGOS,
+    pie: { rotulo: 'CRC N°', iniciales: false },
+  },
+];
 
 const envParte = process.env.FIDELIDAD_PARTE;
-const SOLO = envParte ? PARTES.find((p) => String(p.n) === envParte) : undefined;
-if (envParte && !SOLO) throw new Error(`FIDELIDAD_PARTE=${envParte}: debe ser 1, 2, 3 o 4`);
+const DOCS = envParte
+  ? DOCUMENTOS.filter((d) => d.partes.some((p) => String(p.n) === envParte))
+  : DOCUMENTOS;
+if (!DOCS.length) throw new Error(`FIDELIDAD_PARTE=${envParte}: ninguna plantilla tiene esa parte`);
 
 // ── Lado Word ──
 
@@ -153,24 +207,31 @@ function parrafosWord(xml: string): LineaWord[] {
   return out;
 }
 
-function aplicarDesviaciones(lineas: LineaWord[]): LineaWord[] {
+function aplicarDesviaciones(lineas: LineaWord[], cuerpo: Desviacion[]): LineaWord[] {
   return lineas.map((l) => {
-    const d = DESVIACIONES.cuerpo.find((x) => x.parrafo === l.parrafo);
+    const d = cuerpo.find((x) => x.parrafo === l.parrafo);
     if (!d) return l;
-    const n = l.texto.split(d.word).length - 1;
-    if (n !== 1)
-      throw new Error(`Desviación ${d.motivo}: "${d.word}" aparece ${n} veces en el ¶${d.parrafo}`);
-    return { ...l, texto: l.texto.replace(d.word, d.motor) };
+    let { kind, texto } = l;
+    if (d.word !== undefined) {
+      const n = texto.split(d.word).length - 1;
+      if (n !== 1)
+        throw new Error(
+          `Desviación ${d.motivo}: "${d.word}" aparece ${n} veces en el ¶${d.parrafo}`,
+        );
+      texto = texto.replace(d.word, d.motor!);
+    }
+    if (d.kindWord !== undefined) {
+      if (kind !== d.kindWord)
+        throw new Error(`Desviación ${d.motivo}: el ¶${d.parrafo} es ${kind}, no ${d.kindWord}`);
+      kind = d.kindMotor!;
+    }
+    return { ...l, kind, texto };
   });
 }
 
 // ── Diferencias ──
 
 const clave = (l: Linea) => `${l.kind}\u0000${l.texto}`;
-const etiqueta = (parrafo: number) => {
-  const { n } = PARTES.find((p) => parrafo <= p.hasta)!;
-  return `[C${n} ${archivo(n)}]`;
-};
 
 /** Contexto alrededor del primer carácter distinto, para párrafos de 500+ caracteres. */
 function recorte(a: string, b: string): [string, string] {
@@ -183,7 +244,11 @@ function recorte(a: string, b: string): [string, string] {
 }
 
 /** Diff por LCS (≈350² celdas): una línea faltante no descuadra todo lo que sigue. */
-function diferencias(word: LineaWord[], motor: LineaMotor[]): string[] {
+function diferencias(
+  word: LineaWord[],
+  motor: LineaMotor[],
+  etiqueta: (parrafo: number) => string,
+): string[] {
   const n = word.length;
   const m = motor.length;
   const L = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
@@ -228,14 +293,22 @@ function diferencias(word: LineaWord[], motor: LineaMotor[]): string[] {
 
 // ── Tests ──
 
-describe('fidelidad de la plantilla de vivienda con el Word', () => {
+describe.each(DOCS)('fidelidad de la plantilla de $nombre con el Word', (doc) => {
+  const SOLO = envParte ? doc.partes.find((p) => String(p.n) === envParte) : undefined;
+  /** Nombre del archivo de la parte n, como sale en Resultado.origenes ("archivo:línea"). */
+  const archivo = (n: number) => path.basename(doc.plantilla.def.partes[n - 1]);
+  const etiqueta = (parrafo: number) => {
+    const { n } = doc.partes.find((p) => parrafo <= p.hasta) ?? doc.partes[doc.partes.length - 1];
+    return `[C${n} ${archivo(n)}]`;
+  };
+
   let docx: Buffer;
   let cuerpo: string;
   let encabezado: string;
   let pie: string;
 
   beforeAll(async () => {
-    docx = fs.readFileSync(DOCX);
+    docx = fs.readFileSync(doc.docx);
     const zip = await JSZip.loadAsync(docx);
     const leer = (f: string) => zip.file(`word/${f}`)!.async('string');
     [cuerpo, encabezado, pie] = await Promise.all([
@@ -246,31 +319,31 @@ describe('fidelidad de la plantilla de vivienda con el Word', () => {
   });
 
   it('el .docx fuente es el fijado por sha256', () => {
-    expect(crypto.createHash('sha256').update(docx).digest('hex')).toBe(SHA256_DOCX);
+    expect(crypto.createHash('sha256').update(docx).digest('hex')).toBe(doc.sha256);
   });
 
   it(`modo fidelidad reproduce el Word párrafo por párrafo${SOLO ? ` (solo C${SOLO.n}: ¶${SOLO.desde}–${SOLO.hasta})` : ''}`, () => {
-    const word = aplicarDesviaciones(parrafosWord(cuerpo)).filter(
+    const word = aplicarDesviaciones(parrafosWord(cuerpo), doc.cuerpo).filter(
       (l) => !SOLO || (l.parrafo >= SOLO.desde && l.parrafo <= SOLO.hasta),
     );
-    const r = renderizar(PLANTILLA_VIVIENDA, null, { modo: 'fidelidad' });
+    const r = renderizar(doc.plantilla, null, { modo: 'fidelidad' });
     const motor = r.lineas
       .map((l, k) => ({ ...l, o: r.origenes[k] }))
       .filter((l) => !SOLO || l.o.startsWith(`${archivo(SOLO.n)}:`));
-    const difs = diferencias(word, motor);
+    const difs = diferencias(word, motor, etiqueta);
     const informe = `${difs.length} diferencia(s) con el Word (primeras 20):\n${difs.slice(0, 20).join('\n')}`;
     expect(difs.length, informe).toBe(0);
   });
 
   it('el encabezado del Word solo trae los dos espacios de logo', () => {
-    expect(parrafosWord(encabezado).map((l) => l.texto)).toEqual(DESVIACIONES.encabezado);
+    expect(parrafosWord(encabezado).map((l) => l.texto)).toEqual(doc.encabezado);
   });
 
   it.skipIf(SOLO && SOLO.n !== 1)('el pie del Word es pieTexto(pie, "fidelidad")', () => {
     const word = parrafosWord(pie);
     expect(word).toHaveLength(1);
     const motor = lineaDeSegmentos(word[0].kind, [
-      { t: pieTexto(PLANTILLA_VIVIENDA.pie, 'fidelidad'), b: false, i: false },
+      { t: pieTexto(doc.plantilla.pie, 'fidelidad', doc.pie), b: false, i: false },
     ]);
     expect(motor.texto).toBe(word[0].texto);
   });

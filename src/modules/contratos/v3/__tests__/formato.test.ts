@@ -82,6 +82,12 @@ describe('FORMATOS', () => {
     expect(() => f('fecha', '2026-10-01T00:00:00Z')).toThrow(RangeError);
   });
 
+  it('dd2 y mm2: el dd/mm/aaaa del cuadro del Anexo va a dos dígitos', () => {
+    expect([f('dd2', '2026-10-01'), f('mm2', '2026-10-01')]).toEqual(['01', '10']);
+    expect([f('dd2', '2027-09-15'), f('mm2', '2027-09-15')]).toEqual(['15', '09']);
+    expect(() => f('dd2', '2026-02-30')).toThrow(RangeError);
+  });
+
   it('pesos y pct se leen de vuelta con inverso; lo que no tiene la forma da NaN', () => {
     expect(f('pesos', 2_500_000)).toBe('2.500.000');
     expect(FORMATOS.pesos.inverso!('2.500.000')).toBe(2_500_000);

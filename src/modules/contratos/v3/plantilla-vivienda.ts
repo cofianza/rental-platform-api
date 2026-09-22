@@ -88,3 +88,59 @@ const DEF: DefPlantilla = {
 };
 
 export const PLANTILLA_VIVIENDA = parsearPlantilla(DEF);
+
+/**
+ * Anexo de Condiciones de Afianzamiento (Entrega 5, diseño §4.4): lo que
+ * firman las partes en la Ruta B, cuando el contrato lo pone la inmobiliaria.
+ * Comparte el contexto de vivienda (vivienda.ts:contexto), así que sus campos
+ * son un subconjunto de los de arriba más `numero` (el Word imprime el número
+ * del contrato asociado en el cuadro; el del contrato lo lleva en el pie).
+ */
+const DEF_ANEXO: DefPlantilla = {
+  codigo: 'anexo-vivienda',
+  partes: ['anexo.txt'],
+  campos: {
+    ...Object.fromEntries(
+      [
+        'numero',
+        'ciudadFirma',
+        ...de(
+          'arrendador',
+          'nombre',
+          'nit',
+          'representante',
+          'matricula',
+          'matriculaExpedidaPor',
+          ...CONTACTO,
+        ),
+        ...de('arrendatario', ...PERSONA),
+        ...de('coa', 'nombre', 'tipoDocumento', 'documento'),
+        ...de('parte', ...PERSONA),
+        ...de('inmueble', 'direccion', 'municipio'),
+        'crc.numero',
+      ].map((c) => [c, 'texto' as const]),
+    ),
+    ...Object.fromEntries(
+      ['canon', 'vigenciaMeses', 'primaPct', 'primaCop', 'tarifaPct', 'tarifaCop'].map((c) => [
+        c,
+        'numero' as const,
+      ]),
+    ),
+    fechaDocumento: 'fecha',
+    fechaInicio: 'fecha',
+    fechaVencimiento: 'fecha',
+    'crc.fecha': 'fecha',
+  },
+  cifras: ['canon', 'primaPct', 'primaCop', 'tarifaPct', 'tarifaCop'],
+  condiciones: [
+    'coa', // hay coarrendatario
+    'trasladada', // modalidad Trasladada
+    // el documento de la parte es cédula de ciudadanía
+    'arrendatario.cc',
+    'coa.cc',
+    'parte.cc',
+  ],
+  roles: ['coarrendatario'],
+};
+
+export const PLANTILLA_ANEXO = parsearPlantilla(DEF_ANEXO);

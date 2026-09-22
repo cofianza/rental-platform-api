@@ -100,13 +100,32 @@ td{padding:0;vertical-align:top;border:.5pt solid #BFBFBF}
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+/**
+ * Qué lleva el pie además del rótulo: el contrato, "N° <CTO> · Iniciales: ___";
+ * el Anexo, "CRC N° <CRC>" y nada más (Entrega 5 §4.4). Los valores por
+ * defecto dejan el pie del contrato byte a byte igual (lo vigilan los golden).
+ */
+export interface OpcionesPie {
+  rotulo?: string;
+  iniciales?: boolean;
+}
+
 // Una sola definición del pie para el PDF y para la prueba de fidelidad.
-const lineaPie = (pie: string, numero: string, iniciales: string, pagina: string, total: string) =>
-  `<span>${pie}  ·  N° ${numero}  ·  Iniciales: ${iniciales}</span><span>Página ${pagina} de ${total}</span>`;
+const lineaPie = (
+  pie: string,
+  o: OpcionesPie,
+  numero: string,
+  iniciales: string,
+  pagina: string,
+  total: string,
+) =>
+  `<span>${pie}  ·  ${o.rotulo ?? 'N°'} ${numero}` +
+  `${o.iniciales === false ? '' : `  ·  Iniciales: ${iniciales}`}</span>` +
+  `<span>Página ${pagina} de ${total}</span>`;
 
 /** El pie tal como lo lee la prueba de fidelidad: ▢ en número, iniciales y páginas. */
-export function pieTexto(pie: string, _modo: 'fidelidad'): string {
-  return lineaPie(pie, '▢', '▢', '▢', '▢')
+export function pieTexto(pie: string, _modo: 'fidelidad', o: OpcionesPie = {}): string {
+  return lineaPie(pie, o, '▢', '▢', '▢', '▢')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -162,13 +181,14 @@ function cabecera(logo: LogoPdf | null): string {
   );
 }
 
-function piePagina(pie: string, numero: string): string {
+function piePagina(pie: string, o: OpcionesPie, numero: string): string {
   return (
     `<style>${RESET_PLANTILLA}${CARAS[0].css}.ini{display:inline-block;width:22mm;border-bottom:.5pt solid #595959}</style>` +
     `<div style="box-sizing:border-box;width:100%;padding:0 ${MARGENES.right} ${PIE_HASTA_ABAJO} ${MARGENES.left};font-family:Gelasio;font-size:7.5pt;color:#595959">` +
     `<div style="display:flex;justify-content:space-between;padding-top:3pt;border-top:.75pt solid #BFBFBF;white-space:pre">` +
     lineaPie(
       esc(pie),
+      { ...o, rotulo: o.rotulo === undefined ? undefined : esc(o.rotulo) },
       esc(numero),
       '<span class="ini"></span>',
       '<span class="pageNumber"></span>',
@@ -185,7 +205,7 @@ function piePagina(pie: string, numero: string): string {
  */
 export async function pdfContrato(
   html: string,
-  o: { pie: string; numero: string; logo: LogoPdf | null; borrador: boolean },
+  o: { pie: string; numero: string; logo: LogoPdf | null; borrador: boolean } & OpcionesPie,
 ): Promise<Buffer> {
   const marca = o.borrador ? '<div class="marca">BORRADOR — NO VÁLIDO PARA FIRMA</div>' : '';
   // Gelasio no trae ⟦ ⟧ (la marca ⟦PENDIENTE: x⟧ del modo revisión): Chromium
@@ -198,7 +218,7 @@ export async function pdfContrato(
     {
       margin: MARGENES,
       headerTemplate: cabecera(o.logo),
-      footerTemplate: piePagina(o.pie, o.numero),
+      footerTemplate: piePagina(o.pie, o, o.numero),
       fuentes: CARAS.map((c) => c.prueba),
     },
   );

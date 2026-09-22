@@ -118,6 +118,9 @@ export const FORMATOS: Record<string, Formato> = Object.assign(Object.create(nul
     },
   },
   dia: { tipo: 'fecha', fn: (iso: string) => String(fecha(iso).dia) },
+  // dd/mm/aaaa del cuadro del Anexo (Entrega 5 §4.4): día y mes a dos dígitos
+  dd2: { tipo: 'fecha', fn: (iso: string) => dos(fecha(iso).dia) },
+  mm2: { tipo: 'fecha', fn: (iso: string) => dos(fecha(iso).mes) },
   mes: { tipo: 'fecha', fn: (iso: string) => MESES[fecha(iso).mes - 1] },
   anio: { tipo: 'fecha', fn: (iso: string) => String(fecha(iso).anio) },
   diaLetras: { tipo: 'fecha', fn: (iso: string) => letras(fecha(iso).dia) },
