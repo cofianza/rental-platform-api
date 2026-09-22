@@ -25,6 +25,8 @@ const {
   mockTarifas,
   mockCompletitud,
   mockLogAudit,
+  mockMembresias,
+  mockRolMiembro,
 } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
@@ -54,7 +56,7 @@ const {
       return res;
     });
   return {
-    mockEnv: { CONTRATOS_V3_ENABLED: true, CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 },
+    mockEnv: { CONTRATOS_V3_ENABLED: true, CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000, CLAUSULAS_IA_ENABLED: false },
     mockFrom: vi.fn((table: string) => chainFor(table)),
     ops,
     queues,
@@ -73,6 +75,8 @@ const {
     mockTarifas: vi.fn(),
     mockCompletitud: vi.fn(),
     mockLogAudit: vi.fn(),
+    mockMembresias: vi.fn(),
+    mockRolMiembro: vi.fn(),
   };
 });
 
@@ -84,11 +88,17 @@ vi.mock('@/lib/supabase', () => ({
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/lib/auditLog', () => ({
   logAudit: (...args: unknown[]) => mockLogAudit(...args),
-  AUDIT_ACTIONS: { CONTRATO_GENERATED: 'contrato_generated' },
+  AUDIT_ACTIONS: {
+    CONTRATO_GENERATED: 'contrato_generated',
+    CONTRATO_CLAUSULAS_ACEPTADAS: 'contrato_clausulas_aceptadas',
+    CONTRATO_CLAUSULAS_EXCESO_AUTORIZADO: 'contrato_clausulas_exceso_autorizado',
+  },
   AUDIT_ENTITIES: { CONTRATO: 'contrato' },
 }));
 vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: (...args: unknown[]) => mockAssertAccess(...args),
+  resolveMembershipInmobiliariaIds: (...args: unknown[]) => mockMembresias(...args),
+  resolveRolMiembro: (...args: unknown[]) => mockRolMiembro(...args),
 }));
 // Los defaults reales de calibración (tolerancia 15 %, tope 3.000.000, vigencia 60 días).
 vi.mock('@/lib/calibracion', async (importOriginal) => {
@@ -123,8 +133,20 @@ vi.mock('../vivienda', async (importOriginal) => {
 // Import AFTER mocks
 import { AppError } from '@/lib/errors';
 import type { Tarifas } from '@/modules/estudios/tarifas';
-import { generarVistaPrevia, guardarPaso, iniciarContrato, obtenerEstado } from '../asistente.service';
+import {
+  autorizarExceso,
+  generarVistaPrevia,
+  guardarPaso,
+  iniciarContrato,
+  obtenerEstado,
+} from '../asistente.service';
 import type { Asistente } from '../asistente.reglas';
+import { guardarPasoSchema } from '../asistente.schema';
+import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, Paso4 } from '../asistente.types';
+import { AVISO_VERSION, huella, shaClausula } from '../clausulas.reglas';
+import { contarClausulas } from '../motor';
+import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
+import { generarContratoVivienda } from '../vivienda';
 
 // ============================================================
 // Fixtures (hoy = 2026-09-15 en Bogotá)
@@ -212,6 +234,8 @@ interface Carga {
   contratos?: unknown[];
   ingreso?: number | null;
   expedienteError?: boolean;
+  /** Filas de clausulas_adicionales: solo si el paso 4 guardado trae cláusulas. */
+  catalogo?: unknown[];
 }
 
 /** Encola UNA lectura completa de cargarFuentes (cada tabla, en su orden). */
@@ -279,6 +303,7 @@ function encolarCarga(o: Carga = {}) {
     error: null,
   });
   enqueue('perfiles', { data: PERFIL, error: null });
+  if (o.catalogo) enqueue('clausulas_adicionales', { data: o.catalogo, error: null });
 }
 
 const reserva = (o: Record<string, unknown> = {}) => ({
@@ -328,6 +353,9 @@ beforeEach(() => {
   mockAvisar.mockImplementation(async () => {
     ops.push({ table: 'fn', method: 'avisar', args: [] });
   });
+  mockEnv.CLAUSULAS_IA_ENABLED = false;
+  mockMembresias.mockResolvedValue(['org-1']);
+  mockRolMiembro.mockResolvedValue('miembro');
 });
 
 afterEach(() => {
@@ -712,5 +740,411 @@ describe('generarVistaPrevia', () => {
     const e = await error(generarVistaPrevia(EXP, USER, ROL));
 
     expect(e).toMatchObject({ statusCode: 500, errorCode: 'CONTRATO_PARTES_NO_GUARDADAS' });
+  });
+});
+
+// ============================================================
+// Entrega 4 — paso 4 con cláusulas adicionales (diseño §5.3, §8)
+// ============================================================
+
+interface FilaCl {
+  id: string;
+  inmobiliaria_id: string | null;
+  titulo: string;
+  texto: string;
+  version: number;
+  estado: string;
+  validacion: { reglas: string; ia: ClausulaEnContrato['ia'] } | null;
+  inhabilitada_motivo: string | null;
+}
+const cl = (id: string, o: Partial<FilaCl> = {}): FilaCl => ({
+  id,
+  inmobiliaria_id: 'org-1',
+  titulo: 'Cuidado del jardín',
+  texto: 'EL ARRENDATARIO mantendrá el jardín del inmueble podado y regado.',
+  version: 1,
+  estado: 'activa',
+  validacion: { reglas: 'v1', ia: null },
+  inhabilitada_motivo: null,
+  ...o,
+});
+const BIBLIO = cl('bib-1', {
+  inmobiliaria_id: null,
+  titulo: 'Parqueadero asignado',
+  texto: 'EL ARRENDATARIO usará el parqueadero [[número del parqueadero]] del edificio y lo mantendrá despejado.',
+  version: 2,
+});
+const PROPIA = cl('pro-1');
+/** BIBLIO como queda en el paso 4, con su [[campo]] lleno. */
+const BIBLIO_12 = { texto: 'EL ARRENDATARIO usará el parqueadero 12 del edificio y lo mantendrá despejado.', valores: { 'número del parqueadero': '12' } };
+const ACEPTACION: AceptacionClausulas = {
+  usuarioId: USER,
+  nombre: 'Laura Gómez',
+  email: 'laura@inmo.co',
+  rolMiembro: 'miembro',
+  en: '2026-09-15T14:30:00.000Z',
+  ip: '10.0.0.1',
+  avisoVersion: AVISO_VERSION,
+};
+/** Lo que el paso 4 guarda de una fila del catálogo (valores ya llenos). */
+const snap = (f: FilaCl, o: Partial<ClausulaEnContrato> = {}): ClausulaEnContrato => ({
+  clausulaId: f.id,
+  origen: f.inmobiliaria_id ? 'propia' : 'biblioteca',
+  version: f.version,
+  titulo: f.titulo,
+  texto: f.texto,
+  valores: null,
+  ia: null,
+  ...o,
+});
+const paso4De = (cs: ClausulaEnContrato[]): Paso4 => ({ clausulas: cs, huella: huella(cs), aceptacion: ACEPTACION });
+const catalogoDe = (fs: FilaCl[]) =>
+  fs.map(({ id, estado, version, inhabilitada_motivo }) => ({ id, estado, version, inhabilitada_motivo }));
+const conPaso4 = (p4: Paso4, extra: Partial<Asistente> = {}) =>
+  fila({ datos_variables: { asistente: { ...COMPLETO, paso4: p4, ...extra } } });
+const entrada = (clausulas: { clausulaId: string; valores?: Record<string, string> }[], avisoVersion = AVISO_VERSION) => ({
+  paso: 4 as const,
+  datos: { clausulas, aceptoResponsabilidad: true as const, avisoVersion },
+});
+const codigos = (e: EstadoAsistente) => e.bloqueos.map((b) => b.codigo);
+const ONCE = Array.from({ length: 11 }, (_, k) => cl(`pro-${k + 1}`, { titulo: `Obligación ${k + 1}` }));
+
+describe('paso 4: quién incorpora cláusulas (D5)', () => {
+  it('un operador que envía cláusulas → 403, sin leer el catálogo ni escribir', async () => {
+    encolarCarga({ contratos: [fila()] });
+    const e = await error(guardarPaso(EXP, entrada([{ clausulaId: 'pro-1' }]), USER, 'operador_analista'));
+    expect(e).toMatchObject({ statusCode: 403, errorCode: 'CLAUSULAS_SOLO_INMOBILIARIA' });
+    expect(ops.some((o) => o.table === 'clausulas_adicionales')).toBe(false);
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
+  it('una inmobiliaria que entra por propietario_id pero es de otra org → 403', async () => {
+    mockMembresias.mockResolvedValue(['org-2']);
+    encolarCarga({ contratos: [fila()] });
+    const e = await error(guardarPaso(EXP, entrada([{ clausulaId: 'pro-1' }]), USER, ROL));
+    expect(e).toMatchObject({ statusCode: 403, errorCode: 'CLAUSULAS_SOLO_INMOBILIARIA' });
+    expect(mockMembresias).toHaveBeenCalledWith(USER);
+  });
+
+  it('{ omitir: true } se guarda como siempre, para cualquier rol, sin mirar la membresía', async () => {
+    encolarCarga({ contratos: [fila()] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+
+    await guardarPaso(EXP, { paso: 4, datos: { omitir: true } }, USER, 'operador_analista');
+
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente } };
+    expect(upd.datos_variables.asistente.paso4).toEqual({ omitir: true });
+    expect(mockMembresias).not.toHaveBeenCalled();
+    expect(mockLogAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe('paso 4: validación al guardar', () => {
+  const UUID = '4f7c2a9e-1b3d-4c5e-8f6a-7b8c9d0e1f2a';
+
+  it('schema: sin aceptar el aviso → 400 con mensaje propio; ids repetidos no pasan; omitir sí', () => {
+    const sinAceptar = guardarPasoSchema.safeParse({
+      paso: 4,
+      datos: { clausulas: [{ clausulaId: UUID }], avisoVersion: AVISO_VERSION },
+    });
+    expect(sinAceptar.success).toBe(false);
+    expect(sinAceptar.error!.issues[0].message).toMatch(/Acepta el aviso de responsabilidad/);
+    const repetidas = guardarPasoSchema.safeParse(entrada([{ clausulaId: UUID }, { clausulaId: UUID }]));
+    expect(repetidas.error!.issues[0].message).toBe('Una cláusula está repetida');
+    const valor = guardarPasoSchema.safeParse(entrada([{ clausulaId: UUID, valores: { puesto: '  12\n B ' } }]));
+    expect(valor.data).toMatchObject({ datos: { clausulas: [{ valores: { puesto: '12 B' } }] } });
+    expect(guardarPasoSchema.safeParse({ paso: 4, datos: { omitir: true } }).success).toBe(true);
+  });
+
+  it('avisoVersion vieja → 409 AVISO_CAMBIADO', async () => {
+    encolarCarga({ contratos: [fila()] });
+    const e = await error(guardarPaso(EXP, entrada([{ clausulaId: 'pro-1' }], '2026-01-01'), USER, ROL));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'AVISO_CAMBIADO' });
+  });
+
+  it('una cláusula de otra org → 422 CLAUSULA_NO_DISPONIBLE con su índice y sin su título', async () => {
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', {
+      data: [PROPIA, cl('ajena', { inmobiliaria_id: 'org-2', titulo: 'Secreta de otra org' })],
+      error: null,
+    });
+    const e = await error(guardarPaso(EXP, entrada([{ clausulaId: 'pro-1' }, { clausulaId: 'ajena' }]), USER, ROL));
+    expect(e).toMatchObject({ statusCode: 422, errorCode: 'CLAUSULA_NO_DISPONIBLE', details: { indice: 1 } });
+    expect(JSON.stringify({ m: e.message, d: e.details })).not.toContain('Secreta');
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
+  it('una cláusula inhabilitada → 422 al guardar', async () => {
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [cl('pro-1', { estado: 'inhabilitada' })], error: null });
+    const e = await error(guardarPaso(EXP, entrada([{ clausulaId: 'pro-1' }]), USER, ROL));
+    expect(e).toMatchObject({ statusCode: 422, errorCode: 'CLAUSULA_NO_DISPONIBLE' });
+  });
+
+  it('un [[campo]] sin valor → 422 CLAUSULA_CAMPOS; una propia no admite valores', async () => {
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [BIBLIO], error: null });
+    const e = await error(guardarPaso(EXP, entrada([{ clausulaId: 'bib-1' }]), USER, ROL));
+    expect(e).toMatchObject({ statusCode: 422, errorCode: 'CLAUSULA_CAMPOS', details: { indice: 0 } });
+    expect(e.message).toBe('Completa los datos de la cláusula «Parqueadero asignado»: número del parqueadero.');
+
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [PROPIA], error: null });
+    const p = await error(guardarPaso(EXP, entrada([{ clausulaId: 'pro-1', valores: { x: '1' } }]), USER, ROL));
+    expect(p).toMatchObject({ statusCode: 422, errorCode: 'CLAUSULA_CAMPOS' });
+  });
+
+  it('el valor "depósito en dinero" → 422 deposito sobre el texto FINAL, con índice', async () => {
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [PROPIA, BIBLIO], error: null });
+    const e = await error(
+      guardarPaso(
+        EXP,
+        entrada([{ clausulaId: 'pro-1' }, { clausulaId: 'bib-1', valores: { 'número del parqueadero': 'depósito en dinero' } }]),
+        USER,
+        ROL,
+      ),
+    );
+    expect(e).toMatchObject({ statusCode: 422, errorCode: 'CLAUSULA_NO_PERMITIDA' });
+    const d = e.details as { hallazgos: { codigo: string; indice: number; fragmento: string }[] };
+    expect(d.hallazgos).toEqual([expect.objectContaining({ codigo: 'deposito', indice: 1, fragmento: 'depósito en dinero' })]);
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
+  it('éxito: guarda el texto final, la huella y la aceptación, y lo deja en la bitácora', async () => {
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [BIBLIO, PROPIA], error: null });
+    enqueue('perfiles', { data: { nombre: 'Laura', apellido: 'Gómez' }, error: null });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+
+    await guardarPaso(
+      EXP,
+      entrada([{ clausulaId: 'pro-1' }, { clausulaId: 'bib-1', valores: { 'número del parqueadero': '12' } }]),
+      USER,
+      ROL,
+      '10.0.0.1',
+      'laura@inmo.co',
+    );
+
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente } };
+    const esperadas = [
+      snap(PROPIA),
+      snap(BIBLIO, BIBLIO_12),
+    ];
+    expect(upd.datos_variables.asistente.paso4).toEqual({
+      clausulas: esperadas,
+      huella: huella(esperadas),
+      aceptacion: { ...ACEPTACION, en: '2026-09-15T15:00:00.000Z' },
+    });
+    expect(mockLogAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accion: 'contrato_clausulas_aceptadas',
+        entidadId: CTO,
+        ip: '10.0.0.1',
+        detalle: expect.objectContaining({
+          huella: huella(esperadas),
+          aviso_version: AVISO_VERSION,
+          email: 'laura@inmo.co',
+          clausulas: [
+            { id: 'pro-1', version: 1, origen: 'propia' },
+            { id: 'bib-1', version: 2, origen: 'biblioteca' },
+          ],
+        }),
+      }),
+    );
+  });
+
+  it('11 cláusulas se guardan (pasar el máximo no impide guardar) y quedan bloqueadas', async () => {
+    const p4 = paso4De(ONCE.map((f) => snap(f)));
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: ONCE, error: null });
+    enqueue('perfiles', { data: { nombre: 'Laura', apellido: 'Gómez' }, error: null });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [conPaso4(p4)], catalogo: catalogoDe(ONCE) });
+
+    const estado = await guardarPaso(EXP, entrada(ONCE.map((f) => ({ clausulaId: f.id }))), USER, ROL, '10.0.0.1', 'x@y.co');
+
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: { paso4: Paso4 } } };
+    expect(upd.datos_variables.asistente.paso4).toMatchObject({ huella: p4.huella });
+    expect(codigos(estado)).toEqual(['ADICIONALES_EXCEDEN_LIMITE']);
+    expect(estado.bloqueos[0]).toMatchObject({
+      paso: 4,
+      mensaje: expect.stringContaining('tiene 11 cláusulas adicionales y el máximo es 10'),
+    });
+  });
+});
+
+describe('paso 4: estado (GET) y bloqueos', () => {
+  it('ordinales desde la primera adicional de ESTE contrato, aviso y máximo', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: COMPLETO } })] });
+    const e = await obtenerEstado(EXP, USER, ROL);
+    // Sin coarrendatario ni PH, con comisión: 31 cláusulas → la 1.ª adicional es la 32.
+    expect(e.contrato!.adicionales).toMatchObject({ maximo: 10, excesoAutorizado: null, aviso: { version: AVISO_VERSION } });
+    expect(e.contrato!.adicionales.ordinales).toHaveLength(25);
+    expect(e.contrato!.adicionales.ordinales[0]).toBe('TRIGÉSIMA SEGUNDA');
+    expect(e.contrato!.adicionales.ordinales[24]).toBe('QUINCUAGÉSIMA SEXTA');
+    expect(ops.some((o) => o.table === 'clausulas_adicionales')).toBe(false);
+  });
+
+  it('una cláusula inhabilitada después de guardar es bloqueo con el motivo; una versión nueva, aviso', async () => {
+    const p4 = paso4De([snap(PROPIA), snap(BIBLIO, BIBLIO_12)]);
+    encolarCarga({
+      contratos: [conPaso4(p4)],
+      catalogo: catalogoDe([
+        cl('pro-1', { estado: 'inhabilitada', inhabilitada_motivo: 'Cita una norma derogada' }),
+        { ...BIBLIO, version: 3 },
+      ]),
+    });
+    const e = await obtenerEstado(EXP, USER, ROL);
+    expect(opsDe('clausulas_adicionales', 'in')[0].args).toEqual(['id', ['pro-1', 'bib-1']]);
+    expect(e.bloqueos).toEqual([
+      {
+        codigo: 'CLAUSULA_INHABILITADA',
+        mensaje: 'Cofianza inhabilitó la cláusula «Cuidado del jardín»: Cita una norma derogada. Quítala del contrato para continuar.',
+        paso: 4,
+      },
+    ]);
+    expect(e.avisos).toEqual([
+      'Hay una versión más reciente de «Parqueadero asignado». Si vuelves a guardar el paso 4, el contrato usará la nueva.',
+    ]);
+  });
+
+  it('un error al leer el catálogo es 503 (fail-closed)', async () => {
+    encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA)]))] });
+    enqueue('clausulas_adicionales', { data: null, error: { message: 'timeout' } });
+    const e = await error(obtenerEstado(EXP, USER, ROL));
+    expect(e).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+  });
+
+  it('IA encendida: una propia sin veredicto vigente bloquea; con el veredicto de su texto, no', async () => {
+    mockEnv.CLAUSULAS_IA_ENABLED = true;
+    encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA)]))], catalogo: catalogoDe([PROPIA]) });
+    expect(codigos(await obtenerEstado(EXP, USER, ROL))).toEqual(['REVISION_AUTOMATICA_PENDIENTE']);
+
+    const ia = { sha256: shaClausula(PROPIA), modelo: 'claude-opus-5', en: '2026-09-15T14:00:00.000Z' };
+    encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA, { ia })]))], catalogo: catalogoDe([PROPIA]) });
+    expect(codigos(await obtenerEstado(EXP, USER, ROL))).toEqual([]);
+  });
+
+  it('una regla endurecida frena el borrador: el coarrendatario mencionado sin coarrendatario', async () => {
+    const texto = 'EL COARRENDATARIO mantendrá el jardín del inmueble podado y regado.';
+    encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA, { texto })]))], catalogo: catalogoDe([PROPIA]) });
+    const e = await obtenerEstado(EXP, USER, ROL);
+    expect(e.bloqueos).toEqual([expect.objectContaining({ codigo: 'CLAUSULA_NO_PERMITIDA', paso: 4 })]);
+    expect(e.bloqueos[0].mensaje).toMatch(/^«Cuidado del jardín»: Este contrato no tiene coarrendatario/);
+  });
+
+  it('contarClausulas sin una condición que usa la plantilla → 500, nunca un número a medias', () => {
+    expect(() => contarClausulas(PLANTILLA_VIVIENDA, { coa: true })).toThrow(AppError);
+  });
+});
+
+describe('autorizarExceso (D6)', () => {
+  const P4 = paso4De(ONCE.map((f) => snap(f)));
+
+  it('una huella que no es la vigente → 409 CONTRATO_BORRADOR_CAMBIADO, sin escribir', async () => {
+    encolarCarga({ contratos: [conPaso4(P4)], catalogo: catalogoDe(ONCE) });
+    const e = await error(autorizarExceso(EXP, 'f'.repeat(64), 'admin-1', 'administrador'));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BORRADOR_CAMBIADO' });
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
+  it('la huella vigente autoriza sin tocar actualizadoEn y quita el bloqueo', async () => {
+    encolarCarga({ contratos: [conPaso4(P4)], catalogo: catalogoDe(ONCE) });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    const autorizado = { huella: P4.huella, cantidad: 11, usuarioId: 'admin-1', en: '2026-09-15T15:00:00.000Z' };
+    encolarCarga({ contratos: [conPaso4(P4, { excesoAutorizado: autorizado })], catalogo: catalogoDe(ONCE) });
+
+    const estado = await autorizarExceso(EXP, P4.huella, 'admin-1', 'administrador', '10.0.0.9');
+
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente } };
+    expect(upd.datos_variables.asistente.excesoAutorizado).toEqual(autorizado);
+    expect(upd.datos_variables.asistente.actualizadoEn).toBe(COMPLETO.actualizadoEn);
+    expect(opsDe('contratos', 'eq').map((o) => o.args)).toContainEqual(['updated_at', LEIDO]);
+    expect(codigos(estado)).toEqual([]);
+    expect(estado.contrato!.adicionales.excesoAutorizado).toEqual({ huella: P4.huella, cantidad: 11, en: autorizado.en });
+    expect(mockLogAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ accion: 'contrato_clausulas_exceso_autorizado', usuarioId: 'admin-1', ip: '10.0.0.9' }),
+    );
+  });
+
+  it('cambiar la lista (otra huella) trae el bloqueo de vuelta', async () => {
+    const otra = paso4De([...ONCE].reverse().map((f) => snap(f)));
+    const viejo = { huella: P4.huella, cantidad: 11, usuarioId: 'admin-1', en: '2026-09-15T15:00:00.000Z' };
+    encolarCarga({ contratos: [conPaso4(otra, { excesoAutorizado: viejo })], catalogo: catalogoDe(ONCE) });
+    expect(codigos(await obtenerEstado(EXP, USER, ROL))).toEqual(['ADICIONALES_EXCEDEN_LIMITE']);
+  });
+
+  it('sin pasar el máximo → 409 EXCESO_NO_APLICA', async () => {
+    const dos = paso4De([snap(PROPIA), snap(BIBLIO, BIBLIO_12)]);
+    encolarCarga({ contratos: [conPaso4(dos)], catalogo: catalogoDe([PROPIA, BIBLIO]) });
+    const e = await error(autorizarExceso(EXP, dos.huella, 'admin-1', 'administrador'));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'EXCESO_NO_APLICA' });
+  });
+});
+
+describe('generar con adicionales', () => {
+  it('pasa las adicionales al motor, guarda la huella y escribe el registro con numero = primera + k', async () => {
+    const cs = [snap(BIBLIO, BIBLIO_12), snap(PROPIA)];
+    const p4 = paso4De(cs);
+    encolarCarga({ contratos: [conPaso4(p4)], catalogo: catalogoDe([BIBLIO, PROPIA]) });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    enqueue('contrato_partes', { data: null, error: null }, { data: null, error: null });
+    enqueue('contrato_clausulas_adicionales', { data: null, error: null }, { data: null, error: null });
+    encolarCarga({ contratos: [conPaso4(p4)], catalogo: catalogoDe([BIBLIO, PROPIA]) });
+
+    await generarVistaPrevia(EXP, USER, ROL);
+
+    expect(vi.mocked(generarContratoVivienda).mock.calls[0][1].adicionales).toEqual(
+      cs.map(({ titulo, texto }) => ({ titulo, texto })),
+    );
+    const upd = opsDe('contratos', 'update')[0].args[0] as {
+      datos_variables: { documento: { adicionales: unknown } };
+    };
+    expect(upd.datos_variables.documento.adicionales).toEqual({ huella: p4.huella, aceptacion: ACEPTACION, primera: 32 });
+    expect(opsDe('contrato_clausulas_adicionales', 'eq')[0].args).toEqual(['contrato_id', CTO]);
+    expect(opsDe('contrato_clausulas_adicionales', 'insert')[0].args[0]).toEqual([
+      { contrato_id: CTO, clausula_id: 'bib-1', orden: 1, numero: 32, version: 2, origen: 'biblioteca', titulo: cs[0].titulo, texto: cs[0].texto },
+      { contrato_id: CTO, clausula_id: 'pro-1', orden: 2, numero: 33, version: 1, origen: 'propia', titulo: cs[1].titulo, texto: cs[1].texto },
+    ]);
+    expect(pos('contrato_partes', 'insert')).toBeLessThan(pos('contrato_clausulas_adicionales', 'delete'));
+  });
+
+  it('sin adicionales vacía el registro y no inserta; documento.adicionales = null', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: COMPLETO } })] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+
+    await generarVistaPrevia(EXP, USER, ROL);
+
+    expect(opsDe('contrato_clausulas_adicionales', 'delete')).toHaveLength(1);
+    expect(opsDe('contrato_clausulas_adicionales', 'insert')).toHaveLength(0);
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { documento: { adicionales: unknown } } };
+    expect(upd.datos_variables.documento.adicionales).toBeNull();
+  });
+
+  it('con una cláusula inhabilitada no genera (409 CONTRATO_BLOQUEADO) y la IA nunca corre', async () => {
+    encolarCarga({
+      contratos: [conPaso4(paso4De([snap(PROPIA)]))],
+      catalogo: catalogoDe([cl('pro-1', { estado: 'inhabilitada', inhabilitada_motivo: 'x' })]),
+    });
+    const e = await error(generarVistaPrevia(EXP, USER, ROL));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BLOQUEADO' });
+    expect(storageApi.upload).not.toHaveBeenCalled();
+  });
+
+  it('si el registro no se escribe → 500 CONTRATO_PARTES_NO_GUARDADAS', async () => {
+    const p4 = paso4De([snap(PROPIA)]);
+    encolarCarga({ contratos: [conPaso4(p4)], catalogo: catalogoDe([PROPIA]) });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    enqueue('contrato_partes', { data: null, error: null }, { data: null, error: null });
+    enqueue('contrato_clausulas_adicionales', { data: null, error: null }, { data: null, error: { message: 'check_violation' } });
+
+    const e = await error(generarVistaPrevia(EXP, USER, ROL));
+
+    expect(e).toMatchObject({ statusCode: 500, errorCode: 'CONTRATO_PARTES_NO_GUARDADAS' });
+    expect(e.message).toContain('registro de cláusulas');
   });
 });

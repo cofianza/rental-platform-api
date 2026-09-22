@@ -19,6 +19,7 @@ import type { Tarifas } from '@/modules/estudios/tarifas';
 import { formatearCOP } from '@/modules/estudios/tope-canon.guard';
 import { validateNitModulo11 } from '@/modules/registration/registration.schema';
 import type {
+  AceptacionClausulas,
   Bloqueo,
   EstadoAsistente,
   NumeroPaso,
@@ -28,6 +29,7 @@ import type {
   Paso4,
   Paso5,
 } from './asistente.types';
+import { shaClausula, validarClausula } from './clausulas.reglas';
 import { fechaBogota } from './formato';
 import { MARCADOR } from './motor';
 import type { DatosVivienda, Persona } from './vivienda';
@@ -62,8 +64,10 @@ export interface Asistente {
   paso4?: Paso4;
   paso5?: Paso5;
   actualizadoEn?: string;
+  /** Un administrador autorizó ESTE conjunto de adicionales (huella) por encima del máximo (D6). */
+  excesoAutorizado?: { huella: string; cantidad: number; usuarioId: string; en: string };
 }
-export type AsistenteCompleto = Required<Omit<Asistente, 'actualizadoEn'>>;
+export type AsistenteCompleto = Required<Omit<Asistente, 'actualizadoEn' | 'excesoAutorizado'>>;
 
 /** datos_variables.documento: la última vista previa y su snapshot (§5.8). */
 export interface DocumentoV3 {
@@ -76,6 +80,8 @@ export interface DocumentoV3 {
   logoStorageKey: string | null;
   fijos: { diaPago: 1; puntosIpc: 0; servicios: 'arrendatario_todos' };
   snapshot: Record<string, unknown>;
+  /** Las adicionales impresas (Entrega 4): su huella, la aceptación y el número de la primera. */
+  adicionales: { huella: string; aceptacion: AceptacionClausulas; primera: number } | null;
 }
 
 export interface ContratoV3 {
@@ -605,4 +611,65 @@ export function armarDatosVivienda(
     comisionPct: a.paso3.comisionPct,
     administracion: a.paso3.administracion,
   };
+}
+
+// ── Entrega 4: cláusulas adicionales (diseño §5.3) ──
+
+/** Lo que cargarFuentes lee del catálogo para las cláusulas del paso 4. */
+export interface FilaCatalogoAdicional {
+  id: string;
+  estado: string;
+  version: number;
+  inhabilitada_motivo: string | null;
+}
+
+/**
+ * Lo que las adicionales guardadas impiden hoy. Se re-evalúa en GET y en
+ * generar: una regla endurecida o una inhabilitación frena los borradores y
+ * nunca toca los firmados (su registro está congelado).
+ */
+export function bloqueosAdicionales(
+  a: Asistente,
+  catalogo: FilaCatalogoAdicional[],
+  o: { maximo: number; sinCoarrendatario: boolean; iaEncendida: boolean },
+): { bloqueos: Bloqueo[]; avisos: string[] } {
+  const bloqueos: Bloqueo[] = [];
+  const avisos: string[] = [];
+  const p4 = a.paso4;
+  if (!p4 || !('clausulas' in p4)) return { bloqueos, avisos };
+  const b = (codigo: string, mensaje: string, detalle?: string[]) =>
+    bloqueos.push({ codigo, mensaje, paso: 4, ...(detalle && { detalle }) });
+
+  let sinRevision = false;
+  for (const c of p4.clausulas) {
+    const fila = catalogo.find((x) => x.id === c.clausulaId);
+    if (!fila)
+      b('CLAUSULA_INHABILITADA', `La cláusula «${c.titulo}» ya no está disponible. Quítala del contrato para continuar.`);
+    else if (fila.estado === 'inhabilitada')
+      b(
+        'CLAUSULA_INHABILITADA',
+        `Cofianza inhabilitó la cláusula «${c.titulo}»: ${fila.inhabilitada_motivo ?? 'sin motivo registrado'}. Quítala del contrato para continuar.`,
+      );
+    else if (fila.version > c.version)
+      avisos.push(`Hay una versión más reciente de «${c.titulo}». Si vuelves a guardar el paso 4, el contrato usará la nueva.`);
+
+    const h = validarClausula(c, { destinacion: 'vivienda', sinCoarrendatario: o.sinCoarrendatario }).hallazgos[0];
+    if (h) b('CLAUSULA_NO_PERMITIDA', `«${c.titulo}»: ${h.mensaje}`, h.norma ? [h.norma] : undefined);
+
+    // Misma regla que al guardar: la IA revisa lo que escribió la inmobiliaria y la biblioteca ya llena.
+    if (o.iaEncendida && (c.origen === 'propia' || c.valores) && c.ia?.sha256 !== shaClausula(c)) sinRevision = true;
+  }
+  if (sinRevision)
+    b(
+      'REVISION_AUTOMATICA_PENDIENTE',
+      'Las cláusulas adicionales deben pasar la revisión automática: vuelve a guardar el paso 4.',
+    );
+
+  const n = p4.clausulas.length;
+  if (n > o.maximo && a.excesoAutorizado?.huella !== p4.huella)
+    b(
+      'ADICIONALES_EXCEDEN_LIMITE',
+      `Este contrato tiene ${n} cláusulas adicionales y el máximo es ${o.maximo}. Para incorporar más, Cofianza debe revisarlas: solicita la revisión o reduce el número.`,
+    );
+  return { bloqueos, avisos };
 }

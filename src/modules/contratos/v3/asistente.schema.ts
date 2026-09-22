@@ -8,6 +8,7 @@
 
 import { z } from 'zod';
 import { dosDecimales, noImprimible } from './asistente.reglas';
+import { MAX_CAMPOS } from './clausulas.reglas';
 
 const texto = (max: number) =>
   z
@@ -100,7 +101,45 @@ export const paso3Schema = z
   })
   .strict();
 
-export const paso4Schema = z.object({ omitir: z.literal(true) }).strict();
+// Paso 4 (Entrega 4, §5.3): omitir, o las cláusulas elegidas + la aceptación del aviso.
+// Lo que dicen las cláusulas lo juzga el service con las reglas; aquí solo forma.
+// El valor de un [[campo]] es un solo párrafo, como la cláusula (D11).
+const valorCampo = z
+  .string({ error: 'Completa los datos de la cláusula' })
+  .transform((s) => s.replace(/\s+/g, ' ').trim())
+  .pipe(z.string().min(1, 'Completa los datos de la cláusula').max(200, 'Cada dato de la cláusula admite máximo 200 caracteres'));
+
+const clausulasPaso4 = z
+  .object({
+    omitir: z.undefined().optional(), // discrimina contra { omitir: true } con mensajes propios
+    clausulas: z
+      .array(
+        z
+          .object({
+            clausulaId: z.string().uuid('Cláusula inválida'),
+            valores: z
+              .record(z.string().regex(/^[\p{L}\d ]{1,40}$/u, 'Dato de la cláusula inválido'), valorCampo)
+              .refine((v) => Object.keys(v).length <= MAX_CAMPOS, `Máximo ${MAX_CAMPOS} datos por cláusula`)
+              .optional(),
+          })
+          .strict(),
+        { error: 'Elige las cláusulas adicionales' },
+      )
+      .min(1, 'Agrega al menos una cláusula o continúa sin ellas')
+      .max(25, 'Máximo 25 cláusulas adicionales por contrato')
+      .refine((cs) => new Set(cs.map((c) => c.clausulaId)).size === cs.length, 'Una cláusula está repetida'),
+    aceptoResponsabilidad: z.literal(true, {
+      error: 'Acepta el aviso de responsabilidad para incorporar las cláusulas adicionales',
+    }),
+    avisoVersion: z.string({ error: 'Falta la versión del aviso de responsabilidad' }).min(1).max(40),
+  })
+  .strict();
+
+export const paso4Schema = z.discriminatedUnion(
+  'omitir',
+  [z.object({ omitir: z.literal(true) }).strict(), clausulasPaso4],
+  { error: 'Paso 4 inválido' },
+);
 
 export const paso5Schema = z
   .object({
@@ -122,3 +161,8 @@ export const guardarPasoSchema = z.discriminatedUnion(
   ],
   { error: 'Paso inválido' },
 );
+
+/** La huella (sha256) del conjunto exacto de adicionales que el administrador autoriza (D6). */
+export const autorizarExcesoSchema = z
+  .object({ huella: z.string({ error: 'Falta la huella' }).regex(/^[0-9a-f]{64}$/, 'Huella inválida') })
+  .strict();

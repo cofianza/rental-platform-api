@@ -252,6 +252,17 @@ const envSchema = z.object({
   // sigue en el flujo anterior. Para QA local: CONTRATOS_V3_ENABLED=true en el
   // .env.local de la API (ojo: la base es la de produccion).
   CONTRATOS_V3_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
+  // (src/modules/contratos/v3/clausulas.ia.ts). OFF por defecto: con el flag
+  // apagado nunca se construye el cliente ni se llama a Anthropic. Encendido
+  // pero sin llave (o con Anthropic caído), guardar cláusulas responde 503
+  // (fail-closed). Encender solo con visto bueno de Mario (Ley 1581: el texto
+  // sale al exterior) y tras correr la tabla §8 desde la Console de Railway.
+  CLAUSULAS_IA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Llave de la API de Anthropic. Nunca se loguea. Vacía = sin configurar
+  // (no tumba el arranque: un `ANTHROPIC_API_KEY=` copiado del ejemplo no
+  // debe impedir que la API levante con el flag apagado).
+  ANTHROPIC_API_KEY: z.string().optional().transform((v) => v || undefined),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -277,5 +288,15 @@ if (env.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/.test(env.FRONTEND_
     `[CONFIG] ADVERTENCIA CRÍTICA: FRONTEND_URL="${env.FRONTEND_URL}" en producción — ` +
       'los enlaces de los correos (verificación, firma, pago, etc.) saldrán rotos. ' +
       'Configura FRONTEND_URL=https://www.cofianza.co en las variables del servicio.',
+  );
+}
+
+// Mismo criterio: el clasificador IA encendido sin llave no aborta el arranque,
+// pero todo guardado de cláusulas adicionales responderá 503 (fail-closed).
+if (env.CLAUSULAS_IA_ENABLED && !env.ANTHROPIC_API_KEY) {
+  console.error(
+    '[CONFIG] ADVERTENCIA: CLAUSULAS_IA_ENABLED=true sin ANTHROPIC_API_KEY — ' +
+      'guardar cláusulas adicionales responderá 503 (revisión automática no disponible). ' +
+      'Configura ANTHROPIC_API_KEY o apaga CLAUSULAS_IA_ENABLED.',
   );
 }

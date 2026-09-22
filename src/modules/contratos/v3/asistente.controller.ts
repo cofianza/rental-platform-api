@@ -19,9 +19,18 @@ export async function iniciar(req: Request, res: Response) {
 
 export async function guardarPaso(req: Request, res: Response) {
   const body = req.body as GuardarPasoBody;
-  sendSuccess(res, await asistente.guardarPaso(expedienteId(req), body, req.user!.id, req.user!.rol));
+  // ip y email van a la aceptación del aviso de las cláusulas adicionales (paso 4).
+  sendSuccess(
+    res,
+    await asistente.guardarPaso(expedienteId(req), body, req.user!.id, req.user!.rol, req.ip, req.user!.email),
+  );
 }
 
 export async function generar(req: Request, res: Response) {
   sendSuccess(res, await asistente.generarVistaPrevia(expedienteId(req), req.user!.id, req.user!.rol, req.ip));
+}
+
+export async function autorizarExceso(req: Request, res: Response) {
+  const { huella } = req.body as { huella: string };
+  sendSuccess(res, await asistente.autorizarExceso(expedienteId(req), huella, req.user!.id, req.user!.rol, req.ip));
 }

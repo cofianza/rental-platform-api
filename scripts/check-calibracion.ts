@@ -50,12 +50,15 @@ const ESPERADO: Record<string, number> = {
   TOLERANCIA_CANON: 15,
   TOPE_CANON_INGRESO_RECALCULO: 40,
   VIGENCIA_MESES_DEFECTO: 12,
+  // Contratos V3 §14.5 / §5.1.6 (Entrega 4).
+  MAX_CLAUSULAS_ADICIONALES: 10,
 };
 for (const [clave, valor] of Object.entries(ESPERADO)) {
   ok(CALIBRACION_DEFAULT[clave as keyof typeof CALIBRACION_DEFAULT] === valor, `${clave} = ${valor} (Adenda §11)`);
 }
 ok(CALIBRACION_DEFAULT.CANON_MAX_TRANSITORIO === 3_000_000, 'CANON_MAX_TRANSITORIO arranca con lo que corre en produccion (3.000.000, Flujo §4.4)');
-ok(PARAMETROS.length === 18, 'dieciocho parametros en el panel (10 de la Adenda 1 + 3 de la Adenda 2 + 2 de contratos comercial + 3 de contratos V3)');
+ok(PARAMETROS.length === 19, 'diecinueve parametros en el panel (10 de la Adenda 1 + 3 de la Adenda 2 + 2 de contratos comercial + 4 de contratos V3)');
+ok(validarParametro('MAX_CLAUSULAS_ADICIONALES', 26)?.error !== null, 'no mas de 25 adicionales: la numeracion llega a QUINCUAGESIMA OCTAVA');
 ok(validarParametro('VIGENCIA_MESES_DEFECTO', 12.5)?.error !== null, 'la vigencia por defecto es en meses enteros');
 ok(validarParametro('TOLERANCIA_CANON', 51)?.error !== null, 'la tolerancia del canon no pasa de 50');
 ok(validarParametro('UMBRAL_SCORE_RECHAZO', 449)?.error !== null, 'el corte no baja de 450: la tabla de V1 no tiene banda debajo');

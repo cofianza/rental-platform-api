@@ -133,6 +133,14 @@ export const AUDIT_ACTIONS = {
   MIEMBRO_REVOCADO: 'miembro_revocado',
   MIEMBRO_ACEPTO: 'miembro_acepto',
   MIEMBRO_ROL_CAMBIADO: 'miembro_rol_cambiado',
+  // Cláusulas adicionales (Contratos V3, Entrega 4). GUARDADA: detalle
+  // {op: crear|editar|eliminar|inhabilitar|reactivar, antes?, despues?, motivo?}.
+  CLAUSULA_ADICIONAL_GUARDADA: 'clausula_adicional_guardada',
+  // Aceptación del aviso de responsabilidad en el paso 4 (§8.6.7): detalle
+  // {huella, clausulas: [{id, version, origen}], aviso_version, email}.
+  CONTRATO_CLAUSULAS_ACEPTADAS: 'contrato_clausulas_aceptadas',
+  // Un administrador autorizó ese conjunto exacto por encima del máximo (§5.1.6).
+  CONTRATO_CLAUSULAS_EXCESO_AUTORIZADO: 'contrato_clausulas_exceso_autorizado',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -157,6 +165,7 @@ export const AUDIT_ENTITIES = {
   PAGO: 'pago',
   WHATSAPP: 'whatsapp',
   INMOBILIARIA_MIEMBRO: 'inmobiliaria_miembro',
+  CLAUSULA_ADICIONAL: 'clausula_adicional',
 } as const;
 
 interface AuditLogParams {

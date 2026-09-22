@@ -3,6 +3,7 @@ import { AppError } from '@/lib/errors';
 import { mayus, ordinal, titulo } from '../formato';
 import {
   asientosDeHtml,
+  contarClausulas,
   inventarioSupresiones,
   verificarCoherencia,
   verificarSinMarcadores,
@@ -12,6 +13,7 @@ import {
 import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
 import {
   DERIVADAS,
+  contexto,
   renderizarVivienda,
   type DatosVivienda,
   type OpcionesVivienda,
@@ -304,6 +306,8 @@ describe('matriz: coarrendatario × comisión × PH × modalidad, con 0 y 2 adic
     // cabeceras PRIMERA…N sin huecos, las adicionales a continuación
     const n = 33 - +!c.coa - +!c.comision - +!c.ph + c.adicionales;
     expect(cabeceras(r)).toEqual(ORDINALES.slice(0, n));
+    // Entrega 4: el asistente numera las adicionales con esta cuenta (la 1.ª va de la 34 a la 31).
+    expect(contarClausulas(PLANTILLA_VIVIENDA, contexto(datos(c)).condiciones)).toBe(n - c.adicionales);
     expect(r.html.match(/class="k-p inicio"/g)).toHaveLength(n);
     expect(r.lineas.some((l) => l.kind === 'centrado')).toBe(c.adicionales > 0);
 

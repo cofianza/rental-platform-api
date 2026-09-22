@@ -1176,3 +1176,19 @@ export function inventarioSupresiones(p: Plantilla): Record<string, string[]> {
   recorrer(p.nodos);
   return out;
 }
+
+/**
+ * Cláusulas numeradas que imprime `p` con estas condiciones (sin las
+ * adicionales): la primera adicional es la siguiente (V3 §13.2, sin huecos).
+ * Las cláusulas siempre son ámbitos de la raíz (el parser no las anida), así
+ * que basta con sus propias condiciones, como en resolver(). Una condición
+ * que no venga en `cond` es un error de programación: 500, nunca un número a medias.
+ */
+export function contarClausulas(p: Plantilla, cond: Record<string, boolean>): number {
+  const vale = ({ c, neg }: Cond) => {
+    if (typeof cond[c] !== 'boolean')
+      throw new AppError(500, 'PLANTILLA_INVALIDA', `contarClausulas: falta la condición ${c}`);
+    return cond[c] !== neg;
+  };
+  return p.nodos.filter((n) => n.n === 'ambito' && n.tipo === 'clausula' && n.conds.every(vale)).length;
+}

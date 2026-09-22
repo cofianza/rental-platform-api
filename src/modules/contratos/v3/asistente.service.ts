@@ -16,7 +16,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { assertExpedienteAccess, resolveMembershipInmobiliariaIds, resolveRolMiembro } from '@/lib/tenantScope';
 import { getCalibracion, type Calibracion } from '@/lib/calibracion';
 import { checkPerfilCompletitud } from '@/modules/perfil-arrendador/perfil-arrendador.service';
 import { tarifasDelEstudio } from '@/modules/estudios/tarifa-override.service';
@@ -27,12 +27,23 @@ import {
   reservarInmuebleParaContrato,
   type ReservaInmuebleResult,
 } from '@/modules/inmuebles/inmuebles.service';
-import type { EstadoAsistente, GuardarPasoBody, NumeroPaso, Pasos } from './asistente.types';
+import type {
+  AceptacionClausulas,
+  ClausulaEnContrato,
+  EstadoAsistente,
+  GuardarPasoBody,
+  Hallazgo,
+  NumeroPaso,
+  Paso4,
+  Paso4Entrada,
+  Pasos,
+} from './asistente.types';
 import {
   armarDatosVivienda,
   avisoCanon,
   avisosDePendientes,
   bloqueoNoImprimible,
+  bloqueosAdicionales,
   evaluarBloqueos,
   evaluarCanon,
   faltantes,
@@ -44,11 +55,24 @@ import {
   type AsistenteCompleto,
   type ContratoV3,
   type DocumentoV3,
+  type FilaCatalogoAdicional,
   type Fuentes,
   type PerfilArrendador,
 } from './asistente.reglas';
+import { validarTexto } from './clausulas.ia';
+import {
+  AVISO_PREVALENCIA,
+  AVISO_RESPONSABILIDAD,
+  AVISO_VERSION,
+  campos,
+  huella,
+  llenar,
+  shaClausula,
+} from './clausulas.reglas';
 import type { LogoPdf } from './documento';
-import { fechaBogota, sumarMeses } from './formato';
+import { fechaBogota, mayus, ordinal, sumarMeses } from './formato';
+import { contarClausulas } from './motor';
+import { PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 import { contexto, generarContratoVivienda, type DatosVivienda } from './vivienda';
 
 const BUCKET = 'documentos-expedientes';
@@ -121,7 +145,12 @@ interface FilaExpediente {
 interface Cargadas {
   f: Fuentes;
   cal: Calibracion;
+  /** Filas del catálogo de las adicionales del paso 4 guardado (vacío si no hay). */
+  catalogo: FilaCatalogoAdicional[];
 }
+
+type Paso4ConClausulas = Extract<Paso4, { clausulas: unknown }>;
+const clausulasDe = (p4: Paso4 | undefined): ClausulaEnContrato[] => (p4 && 'clausulas' in p4 ? p4.clausulas : []);
 
 /** null = el asistente no aplica a este estudio (inmueble sin inmobiliaria, D5). */
 export async function cargarFuentes(expedienteId: string): Promise<Cargadas | null> {
@@ -178,8 +207,10 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
   const contratos = dato<(ContratoV3 & { destinacion: string | null })[] | null>(contratosR, expedienteId, 'contratos') ?? [];
   if (!org) throw noVerificable(expedienteId, 'inmobiliaria sin titular');
   const ownerId = org.owner_perfil_id;
+  const v3 = contratos.find((c) => c.destinacion) ?? null;
+  const idsAdicionales = clausulasDe(v3?.datos_variables?.asistente?.paso4).map((c) => c.clausulaId);
 
-  const [crcR, tarifa, sombraR, coaEstR, perfilR, completitud] = await Promise.all([
+  const [crcR, tarifa, sombraR, coaEstR, perfilR, completitud, catalogoR] = await Promise.all([
     est
       ? db('estudios_certificados')
           .select('id, codigo, version, fecha_emision, fecha_vencimiento, pdf_storage_key')
@@ -205,6 +236,10 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
     checkPerfilCompletitud(ownerId).catch((e: unknown) => {
       throw noVerificable(expedienteId, 'completitud', e);
     }),
+    // Entrega 4: el estado vigente de las adicionales guardadas (inhabilitada, versión nueva).
+    idsAdicionales.length
+      ? db('clausulas_adicionales').select('id, estado, version, inhabilitada_motivo').in('id', idsAdicionales)
+      : null,
   ]);
   const perfil = dato<PerfilArrendador | null>(perfilR, expedienteId, 'perfil del arrendador');
   // checkPerfilCompletitud no lanza: sin perfil devuelve incompleto SIN faltantes.
@@ -252,9 +287,10 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
     arrendador: perfil,
     completitudFaltantes: completitud.faltantes.map((x) => x.etiqueta),
     legacyVivos: contratos.filter((c) => !c.destinacion).length,
-    v3: contratos.find((c) => c.destinacion) ?? null,
+    v3,
   };
-  return { f, cal };
+  const catalogo = dato<FilaCatalogoAdicional[] | null>(catalogoR, expedienteId, 'cláusulas adicionales') ?? [];
+  return { f, cal, catalogo };
 }
 
 // ── Estado (GET y respuesta de toda acción) ──
@@ -264,7 +300,24 @@ const pasosDe = (a: Asistente): Partial<Pasos> =>
     ([1, 2, 3, 4, 5] as NumeroPaso[]).filter((n) => a[`paso${n}`]).map((n) => [n, a[`paso${n}`]]),
   ) as Partial<Pasos>;
 
-function armarEstado({ f, cal }: Cargadas, hoy: string): EstadoAsistente {
+/**
+ * Número de la primera adicional con lo guardado hasta ahora (D1, sin huecos):
+ * el coarrendatario del estudio; la comisión y la PH de los pasos 3 y 2 o, antes, del registro.
+ */
+const primeraAdicional = (f: Fuentes, a: Asistente) =>
+  contarClausulas(PLANTILLA_VIVIENDA, {
+    coa: f.coarrendatario !== null,
+    comision: (a.paso3?.comisionPct ?? 0) > 0,
+    ph: a.paso2?.propiedadHorizontal ?? f.inmueble.propiedad_horizontal ?? false,
+  }) + 1;
+
+const opcionesAdicionales = (f: Fuentes, cal: Calibracion) => ({
+  maximo: cal.MAX_CLAUSULAS_ADICIONALES,
+  sinCoarrendatario: f.coarrendatario === null,
+  iaEncendida: env.CLAUSULAS_IA_ENABLED,
+});
+
+function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsistente {
   const bloqueos = evaluarBloqueos(f, hoy, cal);
   const avisos: string[] = [];
   const a: Asistente = f.v3?.datos_variables?.asistente ?? {};
@@ -287,6 +340,10 @@ function armarEstado({ f, cal }: Cargadas, hoy: string): EstadoAsistente {
       const rutas = noImprimibles(armarDatosVivienda(f, a as AsistenteCompleto, hoy, f.v3.numero));
       if (rutas.length) bloqueos.push(bloqueoNoImprimible(rutas));
     }
+    const adic = bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal));
+    bloqueos.push(...adic.bloqueos);
+    avisos.push(...adic.avisos);
+    const primera = primeraAdicional(f, a);
     const doc = f.v3.datos_variables?.documento;
     contrato = {
       id: f.v3.id,
@@ -302,6 +359,16 @@ function armarEstado({ f, cal }: Cargadas, hoy: string): EstadoAsistente {
             desactualizado: !!a.actualizadoEn && a.actualizadoEn > doc.generadoEn,
           }
         : null,
+      adicionales: {
+        maximo: cal.MAX_CLAUSULAS_ADICIONALES,
+        // primera ≤ 34 y 34 + 24 = 58: dentro de lo que ordinal() sabe escribir.
+        ordinales: Array.from({ length: 25 }, (_, i) => mayus(ordinal(primera + i))),
+        aviso: { version: AVISO_VERSION, texto: AVISO_RESPONSABILIDAD },
+        prevalencia: AVISO_PREVALENCIA,
+        excesoAutorizado: a.excesoAutorizado
+          ? { huella: a.excesoAutorizado.huella, cantidad: a.excesoAutorizado.cantidad, en: a.excesoAutorizado.en }
+          : null,
+      },
     };
   }
 
@@ -473,11 +540,138 @@ function borradorEditable(f: Fuentes): ContratoV3 {
   return f.v3;
 }
 
+// ── Entrega 4: paso 4 con cláusulas adicionales (§5.3) ──
+
+interface FilaClausula {
+  id: string;
+  inmobiliaria_id: string | null;
+  titulo: string;
+  texto: string;
+  version: number;
+  estado: string;
+  validacion: { reglas: string; ia: ClausulaEnContrato['ia'] } | null;
+}
+
+/**
+ * Quién (D5), el aviso vigente, que cada cláusula siga disponible para la org
+ * del contrato, sus [[campos]] y las reglas (y la IA, si está encendida) sobre
+ * el texto FINAL. Devuelve el Paso4 a guardar; ninguna falla escribe nada.
+ * Pasar el máximo no impide guardar: queda como bloqueo (D6).
+ */
+async function prepararPaso4(
+  f: Fuentes,
+  e: Extract<Paso4Entrada, { clausulas: unknown }>,
+  u: { id: string; rol: string; email: string; ip?: string },
+): Promise<Paso4ConClausulas> {
+  const exp = f.expediente.id;
+  const org = f.inmueble.inmobiliaria_id;
+  // El aviso compromete a la org del contrato: entrar por propietario_id o como responsable no basta.
+  if (u.rol !== 'inmobiliaria' || !(await resolveMembershipInmobiliariaIds(u.id)).includes(org))
+    throw AppError.forbidden(
+      'Las cláusulas adicionales las incorpora y acepta un miembro de la inmobiliaria del contrato.',
+      'CLAUSULAS_SOLO_INMOBILIARIA',
+    );
+  if (e.avisoVersion !== AVISO_VERSION)
+    throw AppError.conflict('El aviso de responsabilidad cambió. Léelo de nuevo y acéptalo.', 'AVISO_CAMBIADO');
+
+  const ids = e.clausulas.map((c) => c.clausulaId);
+  const [filasR, perfilR, rolMiembro] = await Promise.all([
+    db('clausulas_adicionales').select('id, inmobiliaria_id, titulo, texto, version, estado, validacion').in('id', ids),
+    db('perfiles').select('nombre, apellido').eq('id', u.id).maybeSingle(),
+    resolveRolMiembro(u.id),
+  ]);
+  const filas = dato<FilaClausula[] | null>(filasR, exp, 'cláusulas adicionales') ?? [];
+  const perfil = dato<{ nombre: string | null; apellido: string | null } | null>(perfilR, exp, 'perfil de quien acepta');
+  const anteriores = clausulasDe(f.v3?.datos_variables?.asistente?.paso4);
+
+  const clausulas: ClausulaEnContrato[] = [];
+  const hallazgos: Hallazgo[] = [];
+  const avisos: Hallazgo[] = [];
+  const bloqueadas: string[] = [];
+  for (const [indice, item] of e.clausulas.entries()) {
+    const fila = filas.find((x) => x.id === item.clausulaId);
+    // Sin el título: el id pudo venir de otra org.
+    if (!fila || fila.estado !== 'activa' || (fila.inmobiliaria_id !== null && fila.inmobiliaria_id !== org))
+      throw new AppError(
+        422,
+        'CLAUSULA_NO_DISPONIBLE',
+        'Una de las cláusulas elegidas ya no está disponible. Quítala del contrato.',
+        { indice },
+      );
+    const origen = fila.inmobiliaria_id ? 'propia' : 'biblioteca';
+    // Solo la biblioteca lleva [[campos]]; una propia no puede traer valores.
+    const nombres = origen === 'biblioteca' ? campos(fila.texto) : [];
+    const valores = item.valores ?? {};
+    const faltan = nombres.filter((n) => !Object.hasOwn(valores, n));
+    const sobran = Object.keys(valores).filter((n) => !nombres.includes(n));
+    if (faltan.length || sobran.length)
+      throw new AppError(
+        422,
+        'CLAUSULA_CAMPOS',
+        faltan.length
+          ? `Completa los datos de la cláusula «${fila.titulo}»: ${faltan.join(', ')}.`
+          : `La cláusula «${fila.titulo}» no lleva estos datos: ${sobran.join(', ')}.`,
+        { indice },
+      );
+    const c = { titulo: fila.titulo, texto: llenar(fila.texto, valores) };
+    if (c.texto.length > 4000)
+      throw new AppError(422, 'CLAUSULA_CAMPOS', 'Con los datos, el texto supera 4.000 caracteres; acórtalos.', {
+        indice,
+      });
+
+    // Veredicto IA reutilizable: el de este mismo texto en el paso 4 anterior o en el catálogo.
+    // ponytail: en serie; con la IA encendida, n cláusulas de biblioteca con datos nuevos son n
+    // llamadas seguidas (hasta ~50 s cada una). Paralelizar con un límite si llega a pesar.
+    const sha = shaClausula(c);
+    const iaPrevia =
+      [anteriores.find((x) => x.clausulaId === fila.id)?.ia, fila.validacion?.ia].find((x) => x?.sha256 === sha) ?? null;
+    const r = await validarTexto(c, {
+      destinacion: 'vivienda',
+      sinCoarrendatario: f.coarrendatario === null,
+      conIA: origen === 'propia' || nombres.length > 0,
+      iaPrevia,
+    });
+    if (r.hallazgos.length) bloqueadas.push(sha);
+    hallazgos.push(...r.hallazgos.map((h) => ({ ...h, indice })));
+    avisos.push(...r.avisos.map((h) => ({ ...h, indice })));
+    clausulas.push({
+      clausulaId: fila.id,
+      origen,
+      version: fila.version,
+      ...c,
+      valores: nombres.length ? valores : null,
+      ia: r.ia,
+    });
+  }
+  if (hallazgos.length) {
+    // Para afinar las reglas: códigos y sha256, nunca el texto.
+    logger.info(
+      { expedienteId: exp, codigos: hallazgos.map((h) => h.codigo), sha256: bloqueadas },
+      'Paso 4: cláusula adicional bloqueada',
+    );
+    throw new AppError(422, 'CLAUSULA_NO_PERMITIDA', hallazgos[0].mensaje, { hallazgos, avisos });
+  }
+
+  if (!perfil) throw noVerificable(exp, 'perfil de quien acepta');
+  const aceptacion: AceptacionClausulas = {
+    usuarioId: u.id,
+    nombre: `${perfil.nombre ?? ''} ${perfil.apellido ?? ''}`.trim(),
+    email: u.email,
+    rolMiembro,
+    en: new Date().toISOString(),
+    ip: u.ip ?? null,
+    avisoVersion: e.avisoVersion,
+  };
+  return { clausulas, huella: huella(clausulas), aceptacion };
+}
+
 export async function guardarPaso(
   expedienteId: string,
   body: GuardarPasoBody,
   userId: string,
   userRol: string,
+  ip?: string,
+  email = '',
 ): Promise<EstadoAsistente> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
@@ -490,11 +684,16 @@ export async function guardarPaso(
     if ([body.datos.fechaInicio, body.datos.fechaEntrega].some((d) => d < hoy || d > max))
       throw AppError.badRequest('La fecha debe estar entre hoy y dentro de un año.', 'VALIDATION_ERROR');
   }
+  // { omitir: true } se guarda como siempre, para cualquier rol con contratos:create.
+  const paso4 =
+    body.paso === 4 && 'clausulas' in body.datos
+      ? await prepararPaso4(c.f, body.datos, { id: userId, rol: userRol, email, ip })
+      : null;
 
   const dv = v3.datos_variables ?? {};
   const asistente: Asistente = {
     ...dv.asistente,
-    [`paso${body.paso}`]: body.datos,
+    [`paso${body.paso}`]: paso4 ?? body.datos,
     actualizadoEn: new Date().toISOString(),
   };
   // CAS: si otra sesión guardó o generó en el medio, updated_at ya cambió.
@@ -509,6 +708,22 @@ export async function guardarPaso(
     throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar el paso. Intenta de nuevo.');
   }
   if (!(data as unknown[] | null)?.length) throw borradorCambiado();
+
+  if (paso4)
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.CONTRATO_CLAUSULAS_ACEPTADAS,
+      entidad: AUDIT_ENTITIES.CONTRATO,
+      entidadId: v3.id,
+      detalle: {
+        expediente_id: expedienteId,
+        huella: paso4.huella,
+        clausulas: paso4.clausulas.map((x) => ({ id: x.clausulaId, version: x.version, origen: x.origen })),
+        aviso_version: paso4.aceptacion.avisoVersion,
+        email,
+      },
+      ip,
+    });
 
   // §1.4: la propiedad horizontal se contesta aquí y se escribe en el inmueble. Best-effort.
   if (body.paso === 2 && body.datos.propiedadHorizontal !== c.f.inmueble.propiedad_horizontal) {
@@ -586,7 +801,7 @@ export async function generarVistaPrevia(
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
   const c = await cargar(expedienteId);
-  const { f, cal } = c;
+  const { f, cal, catalogo } = c;
   const v3 = borradorEditable(f);
   const hoy = hoyBogota();
 
@@ -598,6 +813,8 @@ export async function generarVistaPrevia(
   const bloqueos = evaluarBloqueos(f, hoy, cal);
   const canon = a.paso1 ? evaluarCanon(f, a.paso1.canonCop, cal) : null;
   if (canon?.bloqueo) bloqueos.push(canon.bloqueo);
+  // Generar nunca llama a la IA: con el flag encendido, bloquea la cláusula sin veredicto vigente.
+  bloqueos.push(...bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal)).bloqueos);
   if (bloqueos.length) throw bloqueado(bloqueos);
   const falta = faltantes(a, f, hoy);
   if (falta.length)
@@ -610,12 +827,18 @@ export async function generarVistaPrevia(
   const rutas = noImprimibles(d);
   if (rutas.length) throw bloqueado([bloqueoNoImprimible(rutas)]);
 
+  const p4 = completo.paso4;
+  const adicionales = clausulasDe(p4);
+  const ctx = contexto(d);
+  // La misma cuenta que hace el motor al numerar (vivienda.test la fija contra lo impreso).
+  const primera = contarClausulas(PLANTILLA_VIVIENDA, ctx.condiciones) + 1;
+
   const logoStorageKey = f.arrendador.logo_storage_key;
   // PLANTILLA_* (400/422/500) pasan tal cual.
   const r = await generarContratoVivienda(d, {
     modo: 'revision',
     logoInmobiliaria: await leerLogo(logoStorageKey),
-    adicionales: [],
+    adicionales: adicionales.map(({ titulo, texto }) => ({ titulo, texto })),
   });
 
   const generacion = (dv.documento?.generacion ?? 0) + 1;
@@ -631,7 +854,7 @@ export async function generarVistaPrevia(
   }
 
   const generadoEn = new Date().toISOString();
-  const valores = contexto(d).valores;
+  const valores = ctx.valores;
   const pendientes = r.pendientes.map((x) => x.id);
   const documento: DocumentoV3 = {
     generacion,
@@ -671,6 +894,7 @@ export async function generarVistaPrevia(
       },
       coarrendatario: f.coarrendatario ? { id: f.coarrendatario.id, estudioId: f.coarrendatario.estudio_id } : null,
     },
+    adicionales: 'clausulas' in p4 ? { huella: p4.huella, aceptacion: p4.aceptacion, primera } : null,
   };
 
   const { data, error } = await db('contratos')
@@ -697,24 +921,44 @@ export async function generarVistaPrevia(
     throw borradorCambiado();
   }
 
-  // ponytail: borrar + insertar no es atómico; si falla, el próximo generar
-  // realinea las partes y E5 las reconstruye antes de enviar a firma.
-  const { error: delError } = await db('contrato_partes').delete().eq('contrato_id', v3.id);
-  const { error: insError } = delError
-    ? { error: delError }
-    : await db('contrato_partes').insert(partes(v3.id, d, f) as never);
+  // ponytail: borrar + insertar no es atómico (partes y registro de cláusulas); si
+  // falla, el próximo generar realinea ambos y E5 debe reconstruirlos antes de enviar a firma.
+  const escribirPartes = async () => {
+    const del = await db('contrato_partes').delete().eq('contrato_id', v3.id);
+    if (del.error) return del.error;
+    const ins = await db('contrato_partes').insert(partes(v3.id, d, f) as never);
+    if (ins.error) return ins.error;
+    // Registro pasivo (D3): la versión y el texto exactos que imprimió ESTE contrato.
+    const reg = await db('contrato_clausulas_adicionales').delete().eq('contrato_id', v3.id);
+    if (reg.error || !adicionales.length) return reg.error;
+    const filas = adicionales.map((x, k) => ({
+      contrato_id: v3.id,
+      clausula_id: x.clausulaId,
+      orden: k + 1,
+      numero: primera + k,
+      version: x.version,
+      origen: x.origen,
+      titulo: x.titulo,
+      texto: x.texto,
+    }));
+    return (await db('contrato_clausulas_adicionales').insert(filas as never)).error;
+  };
+  const partesError = await escribirPartes();
 
   if (v3.storage_key && v3.storage_key !== key) {
     const { error: rmError } = await supabase.storage.from(BUCKET).remove([v3.storage_key]);
     if (rmError) logger.warn({ expedienteId, key: v3.storage_key }, 'Asistente V3: no se borro la vista previa anterior');
   }
 
-  if (insError) {
-    logger.error({ expedienteId, error: insError.message }, 'Asistente V3: no se guardaron las partes del contrato');
+  if (partesError) {
+    logger.error(
+      { expedienteId, error: partesError.message },
+      'Asistente V3: no se guardaron las partes o el registro de cláusulas',
+    );
     throw new AppError(
       500,
       'CONTRATO_PARTES_NO_GUARDADAS',
-      'La vista previa quedó generada, pero no se guardaron las partes. Vuelve a generarla.',
+      'La vista previa quedó generada, pero no se guardaron las partes o el registro de cláusulas. Vuelve a generarla.',
     );
   }
 
@@ -743,4 +987,56 @@ export async function generarVistaPrevia(
   });
 
   return armarEstado(await cargar(expedienteId), hoy);
+}
+
+// ── Entrega 4: autorizar más adicionales que el máximo (D6) ──
+
+/**
+ * Un administrador autoriza el conjunto EXACTO (huella) que la inmobiliaria
+ * pidió revisar por Soporte. Cualquier cambio de la lista cambia la huella y
+ * el bloqueo vuelve. No toca actualizadoEn: la vista previa no queda desactualizada.
+ */
+export async function autorizarExceso(
+  expedienteId: string,
+  huellaPedida: string,
+  userId: string,
+  userRol: string,
+  ip?: string,
+): Promise<EstadoAsistente> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+  const c = await cargar(expedienteId);
+  const v3 = borradorEditable(c.f);
+  const dv = v3.datos_variables ?? {};
+  const a: Asistente = dv.asistente ?? {};
+  const p4 = a.paso4;
+  const noAplica = () =>
+    AppError.conflict('Este contrato no supera el máximo de cláusulas adicionales.', 'EXCESO_NO_APLICA');
+  if (!p4 || !('clausulas' in p4)) throw noAplica();
+  if (p4.huella !== huellaPedida) throw borradorCambiado();
+  const cantidad = p4.clausulas.length;
+  if (cantidad <= c.cal.MAX_CLAUSULAS_ADICIONALES) throw noAplica();
+
+  const excesoAutorizado = { huella: p4.huella, cantidad, usuarioId: userId, en: new Date().toISOString() };
+  const { data, error } = await db('contratos')
+    .update({ datos_variables: { ...dv, asistente: { ...a, excesoAutorizado } } } as never)
+    .eq('id', v3.id)
+    .eq('estado', 'borrador')
+    .eq('updated_at', v3.updated_at)
+    .select('id');
+  if (error) {
+    logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo autorizar el exceso de cláusulas');
+    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la autorización. Intenta de nuevo.');
+  }
+  if (!(data as unknown[] | null)?.length) throw borradorCambiado();
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.CONTRATO_CLAUSULAS_EXCESO_AUTORIZADO,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: v3.id,
+    detalle: { expediente_id: expedienteId, huella: p4.huella, cantidad, maximo: c.cal.MAX_CLAUSULAS_ADICIONALES },
+    ip,
+  });
+  return armarEstado(await cargar(expedienteId), hoyBogota());
 }

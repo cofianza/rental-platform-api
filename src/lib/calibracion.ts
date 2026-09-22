@@ -39,7 +39,8 @@ export type ClaveCalibracion =
   | 'TARIFA_IVA'
   | 'TOLERANCIA_CANON'
   | 'TOPE_CANON_INGRESO_RECALCULO'
-  | 'VIGENCIA_MESES_DEFECTO';
+  | 'VIGENCIA_MESES_DEFECTO'
+  | 'MAX_CLAUSULAS_ADICIONALES';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -214,7 +215,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
   // Contratos V3 §14. Rigen SOLO para el asistente de contratos: el motor sigue
   // con su 40% (scorecard.ts) y la reasignacion con su 15% (portabilidad.ts).
   // Quedan fuera PUNTOS_ADICIONALES_IPC (Ley 820 art. 20 lo fija; nadie lo
-  // leeria), MAX_CLAUSULAS (Entrega 4) y DIAS_EXPIRACION_FIRMA (Entrega 5).
+  // leeria) y DIAS_EXPIRACION_FIRMA (Entrega 5). MAX_CLAUSULAS_ADICIONALES
+  // (Entrega 4) va al final.
   {
     clave: 'TOLERANCIA_CANON',
     valorDefault: 15,
@@ -243,6 +245,16 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     entero: true,
     seccion: 'Contratos V3 §14',
     descripcion: 'Vigencia (meses) con la que el asistente precarga el contrato cuando el estudio no trae una duracion.',
+  },
+  {
+    clave: 'MAX_CLAUSULAS_ADICIONALES',
+    valorDefault: 10,
+    min: 1,
+    max: 25,
+    entero: true,
+    seccion: 'Contratos V3 §14.5 / §5.1.6',
+    descripcion: 'Cláusulas adicionales por contrato sin revisión de Cofianza. Por encima, el contrato queda bloqueado hasta que un administrador autorice ese conjunto exacto.',
+    advertencia: 'El tope técnico es 25 (la numeración llega a QUINCUAGÉSIMA OCTAVA).',
   },
 ];
 

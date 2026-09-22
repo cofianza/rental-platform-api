@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { validate } from '@/middleware/validate';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { expedienteIdParamsSchema } from '../contratos.schema';
-import { guardarPasoSchema } from './asistente.schema';
+import { autorizarExcesoSchema, guardarPasoSchema } from './asistente.schema';
 import * as asistenteController from './asistente.controller';
 
 // ============================================================
@@ -44,4 +44,13 @@ asistenteV3Router.post(
   authorize('contratos', 'create'),
   validate({ params: expedienteIdParamsSchema }),
   asistenteController.generar,
+);
+
+// POST /clausulas/autorizar-exceso — un administrador autoriza el conjunto exacto
+// de adicionales que supera el máximo (Entrega 4, D6).
+asistenteV3Router.post(
+  '/clausulas/autorizar-exceso',
+  roleGuard(['administrador']),
+  validate({ params: expedienteIdParamsSchema, body: autorizarExcesoSchema }),
+  asistenteController.autorizarExceso,
 );
