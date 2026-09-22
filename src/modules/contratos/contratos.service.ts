@@ -2774,15 +2774,27 @@ export async function descargarContrato(
 ) {
   // getContratoById aplica el scope de propiedad (404 si el contrato no es del
   // usuario) — sin userId/userRol se saltaría el aislamiento multi-tenant.
-  const contrato = await getContratoById(id, userId, userRol);
+  // El arrendatario (solicitante) no tiene cartera: su acceso es el de su
+  // estudio, y solo al documento que ya salió a firma (nunca un borrador).
+  const esArrendatario = userRol === 'solicitante';
+  const contrato = esArrendatario ? await getContratoById(id) : await getContratoById(id, userId, userRol);
   const row = contrato as unknown as {
     id: string;
     estado: string;
+    expediente_id: string | null;
     storage_key: string;
     nombre_archivo: string;
     storage_key_firmado: string | null;
     nombre_archivo_firmado: string | null;
   };
+  if (esArrendatario) {
+    const noEncontrado = AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+    if (!row.expediente_id || !['pendiente_firma', 'firma_incompleta', 'firmado', 'vigente', 'finalizado'].includes(row.estado))
+      throw noEncontrado;
+    await assertExpedienteAccess(row.expediente_id, userId, userRol).catch(() => {
+      throw noEncontrado;
+    });
+  }
 
   if (!row.storage_key) {
     throw AppError.badRequest('El contrato no tiene PDF generado', 'NO_PDF');

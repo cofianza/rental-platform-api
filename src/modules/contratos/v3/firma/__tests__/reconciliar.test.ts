@@ -57,6 +57,7 @@ const { mockEnv, ops, queues, enqueue, mockRpc, chainFor, download, auco, efecto
     efectos: {
       bloquearInmuebleOcupado: registra('efecto', 'ocupar'),
       archivarPdfFirmadoEnStorage: registra('efecto', 'archivar'),
+      cancelarPagos: registra('efecto', 'cancelar-pagos'),
       enviarCorreoNotificacion: registra('efecto', 'correo'),
       notificarUsuario: registra('efecto', 'notificar'),
       listOperators: vi.fn(async () => [{ id: 'op1', rol: 'operador_analista' }, { id: 'ad1', rol: 'administrador' }]),
@@ -90,6 +91,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarUsuario: efectos.notificarUsuario,
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: efectos.listOperators }));
+vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: efectos.cancelarPagos }));
 
 import { cancelarFirmaV3, crearSobre, estadoEnviado, reenviar, reintentar } from '../firma.service';
 import { reconciliarSobre, webhookAucoV3 } from '../reconciliar';
@@ -222,7 +224,9 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     expect(fila.tipo).toBe('contrato.firma_incompleta');
     expect(fila.mensaje).toContain('NO está operando');
     const constancia = tabla('contrato_v3_sobres', 'update').at(-1)!.args[0] as Record<string, unknown>;
-    expect(constancia).toMatchObject({ aviso_detalle: { texto_version: 'e5-11.7.4-v1' } });
+    expect(constancia).toMatchObject({ aviso_detalle: { texto_version: 'e5-11.7.4-v2' } });
+    // §11.7.3: los links de garantía y primer canon creados EN FIRMA se anulan.
+    expect(tabla('efecto', 'cancelar-pagos')[0].args).toEqual(['e1', expect.any(String), ['garantia', 'primer_canon']]);
   });
 
   it('si el insert del aviso falla, NO se escribe la constancia (el barrido reintenta)', async () => {
@@ -352,6 +356,16 @@ describe('reconciliarSobre: adopción de un proceso sin registrar', () => {
     const updates = tabla('contrato_v3_sobres', 'update').map((o) => o.args[0] as Record<string, unknown>);
     expect(updates[0]).toEqual({ auco_code: 'TARDIO' });
     expect(updates[1].auco_cancelado_en).toBeTruthy();
+  });
+
+  it('si esa anulación falló, se reintenta después (el sobre fallido ya tiene su code)', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ id: ID, estado: 'fallido', auco_code: 'TARDIO', updated_at: '2026-01-01T00:00:00Z' })));
+    await reconciliarSobre(ID);
+    expect(auco.cancelDocument).toHaveBeenCalledWith('TARDIO', {
+      message: 'Proceso anulado: el envío no quedó registrado en Cofianza',
+      email: 'firma@cofianza.co',
+    });
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({ auco_cancelado_en: expect.any(String) });
   });
 });
 
@@ -542,6 +556,8 @@ describe('crearSobre', () => {
     enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([]), ok(sobre({ auco_code: 'AUCO7' })));
     auco.uploadDocumentForSignature.mockRejectedValue(new Error('timeout'));
     expect(await crearSobre('c1', 'u1')).toMatchObject({ estado: 'en_firma', auco_code: 'AUCO7' });
+    // La adopción no registra nada: el envío queda en el timeline desde aquí.
+    expect(tabla('eventos_timeline', 'insert')[0].args[0]).toMatchObject({ usuario_id: 'u1', metadata: { auco_code: 'AUCO7' } });
   });
 
   it('el webhook de creación llegó antes que la respuesta del upload: devuelve el sobre sin anular nada', async () => {
@@ -550,6 +566,7 @@ describe('crearSobre', () => {
     auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
     expect(await crearSobre('c1', 'u1')).toMatchObject({ auco_code: 'AUCO9' });
     expect(auco.cancelDocument).not.toHaveBeenCalled();
+    expect(tabla('eventos_timeline', 'insert')).toHaveLength(1);
   });
 
   it('lo cancelaron mientras subía: se anula también en Auco y 409', async () => {
@@ -569,6 +586,13 @@ describe('crearSobre', () => {
 });
 
 describe('reenviar', () => {
+  it('con el estudio cerrado responde 409 sin tocar nada', async () => {
+    enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', { data: { ...EXPEDIENTE.data, estado: 'cerrado' }, error: null });
+    await expect(reenviar('c1', 'u1')).rejects.toMatchObject({ errorCode: 'EXPEDIENTE_CERRADO' });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('con el estudio vencido responde 409 sin tocar nada', async () => {
     enqueue('contratos', ok(contrato({ estado: 'firma_incompleta', datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: '2020-01-01' } } } } })));
     enqueue('expedientes', EXPEDIENTE);

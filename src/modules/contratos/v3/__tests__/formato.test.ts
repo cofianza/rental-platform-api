@@ -58,6 +58,11 @@ describe('numeroALetras (apócope)', () => {
     expect(numeroAPesosLetras(2_500_000)).toBe('DOS MILLONES QUINIENTOS MIL PESOS M/CTE');
     expect(numeroAPesosLetras(1_021)).toBe('MIL VEINTIÚN PESOS M/CTE');
   });
+
+  it('las compuestas con tilde: 16, 22, 23 y 26', () => {
+    expect([16, 22, 23, 26].map(numeroALetras)).toEqual(['dieciséis', 'veintidós', 'veintitrés', 'veintiséis']);
+    expect(numeroAPesosLetras(1_622_000)).toBe('UN MILLÓN SEISCIENTOS VEINTIDÓS MIL PESOS M/CTE');
+  });
 });
 
 describe('FORMATOS', () => {

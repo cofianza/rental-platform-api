@@ -227,7 +227,8 @@ const COMPLETO: Asistente = {
   paso5: {
     ciudadFirma: 'Medellín',
     contactos: {
-      arrendador: contacto('contratos@inmobiliaria-ejemplo.co'),
+      // Celulares distintos: Auco los exige únicos entre firmantes (generar ya lo revisa).
+      arrendador: { ...contacto('contratos@inmobiliaria-ejemplo.co'), telefono: '3009998877' },
       arrendatario: contacto('juan.perez@correo.co'),
       coarrendatario: null,
     },
@@ -404,11 +405,25 @@ describe('flag CONTRATOS_V3_ENABLED apagado', () => {
     mockEnv.CONTRATOS_V3_ENABLED = false;
   });
 
-  it('GET responde habilitado:false sin tocar la base (ni para el acceso)', async () => {
+  it('GET sin contrato enviado responde habilitado:false: acceso y una sola lectura', async () => {
     const e = await obtenerEstado(EXP, USER, ROL);
     expect(e).toEqual({ habilitado: false, bloqueos: [], avisos: [], resumen: null, contrato: null, enviado: null });
-    expect(mockFrom).not.toHaveBeenCalled();
-    expect(mockAssertAccess).not.toHaveBeenCalled();
+    expect(mockAssertAccess).toHaveBeenCalledWith(EXP, USER, ROL);
+    expect(mockFrom.mock.calls.map(([t]) => t)).toEqual(['contratos']);
+  });
+
+  it('GET con un contrato ya enviado lo sigue mostrando (el flag no deja la firma ni el acta sin pantalla)', async () => {
+    queues.set('contratos', [{ data: { id: CTO, estado: 'vigente' }, error: null }]);
+    vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO, estado: 'vigente' } as never);
+    const e = await obtenerEstado(EXP, USER, ROL);
+    expect(e.enviado).toMatchObject({ id: CTO, estado: 'vigente' });
+    expect(mockAssertAccess).toHaveBeenCalledWith(EXP, USER, ROL);
+  });
+
+  it('un borrador no se abre con el flag apagado', async () => {
+    queues.set('contratos', [{ data: { id: CTO, estado: 'borrador' }, error: null }]);
+    const e = await obtenerEstado(EXP, USER, ROL);
+    expect(e.habilitado).toBe(false);
   });
 
   it('Iniciar responde 404 CONTRATOS_V3_NO_HABILITADO', async () => {
@@ -638,6 +653,19 @@ describe('guardarPaso', () => {
     expect(opsDe('inmuebles', 'eq').map((o) => o.args)).toEqual([['id', 'inm-1']]);
   });
 
+  it('volver a guardar un paso sin cambios conserva actualizadoEn (la vista previa sigue vigente)', async () => {
+    // El jsonb reordena las claves: se compara por contenido.
+    const guardado = { ...COMPLETO, paso2: { nombreCopropiedad: 'Edificio Torres del Parque', ...PASO2_PH.datos }, actualizadoEn: 'antes' };
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: guardado } })], propiedadHorizontal: true });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: true });
+
+    await guardarPaso(EXP, PASO2_PH, USER, ROL);
+
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente } };
+    expect(upd.datos_variables.asistente.actualizadoEn).toBe('antes');
+  });
+
   it('paso 2 con la misma propiedad horizontal no toca el inmueble', async () => {
     encolarCarga({ contratos: [fila()], propiedadHorizontal: true });
     enqueue('contratos', { data: [{ id: CTO }], error: null });
@@ -689,6 +717,17 @@ describe('generarVistaPrevia', () => {
     const e = await error(generarVistaPrevia(EXP, USER, ROL));
 
     expect(e).toMatchObject({ statusCode: 422, errorCode: 'CONTRATO_ASISTENTE_INCOMPLETO' });
+    expect(storageApi.upload).not.toHaveBeenCalled();
+  });
+
+  it('el mismo celular en dos firmantes → 422 FIRMANTES_INVALIDOS antes de renderizar', async () => {
+    const c = COMPLETO.paso5!.contactos;
+    const repetido = { ...COMPLETO, paso5: { ...COMPLETO.paso5!, contactos: { ...c, arrendador: { ...c.arrendador, telefono: c.arrendatario.telefono } } } };
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: repetido } })] });
+
+    const e = await error(generarVistaPrevia(EXP, USER, ROL));
+
+    expect(e).toMatchObject({ statusCode: 422, errorCode: 'FIRMANTES_INVALIDOS' });
     expect(storageApi.upload).not.toHaveBeenCalled();
   });
 
@@ -1197,6 +1236,16 @@ describe('generar con adicionales', () => {
     expect(storageApi.upload).not.toHaveBeenCalled();
   });
 
+  it('con una cláusula propia eliminada tampoco genera (409 CONTRATO_BLOQUEADO)', async () => {
+    encolarCarga({
+      contratos: [conPaso4(paso4De([snap(PROPIA)]))],
+      catalogo: catalogoDe([cl('pro-1', { estado: 'eliminada' })]),
+    });
+    const e = await error(generarVistaPrevia(EXP, USER, ROL));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BLOQUEADO' });
+    expect(storageApi.upload).not.toHaveBeenCalled();
+  });
+
   it('si el registro no se escribe → 500 CONTRATO_PARTES_NO_GUARDADAS', async () => {
     const p4 = paso4De([snap(PROPIA)]);
     encolarCarga({ contratos: [conPaso4(p4)], catalogo: catalogoDe([PROPIA]) });
@@ -1222,17 +1271,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
   const AHORA = Date.parse('2026-09-15T15:00:00Z');
   const KEY_FINAL = `contratos/${EXP}/${CTO}/final-${AHORA}.pdf`;
 
-  /** Mismos pasos, con el celular del arrendador distinto del arrendatario (Auco los exige únicos). */
-  const PASOS: Asistente = {
-    ...COMPLETO,
-    paso5: {
-      ...COMPLETO.paso5!,
-      contactos: {
-        ...COMPLETO.paso5!.contactos,
-        arrendador: { ...contacto('contratos@inmobiliaria-ejemplo.co'), telefono: '3009998877' },
-      },
-    },
-  };
+  const PASOS = COMPLETO;
   const PASOS_B: Asistente = { ...PASOS, paso1: { ...PASOS.paso1!, ruta: 'B' }, paso4: undefined };
 
   async function pdfReal(paginas: number): Promise<Buffer> {

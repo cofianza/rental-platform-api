@@ -127,6 +127,7 @@ interface ContratoCtx {
   inmuebleId: string | null;
   orgId: string | null;
   responsableId: string | null;
+  expedienteEstado: string | null;
 }
 
 export async function leerContrato(id: string): Promise<ContratoCtx | null> {
@@ -136,19 +137,25 @@ export async function leerContrato(id: string): Promise<ContratoCtx | null> {
     .maybeSingle();
   if (error) falla('no se pudo leer el contrato', error);
   if (!data) return null;
-  const c = data as unknown as Omit<ContratoCtx, 'inmuebleId' | 'orgId' | 'responsableId'>;
+  const c = data as unknown as Omit<ContratoCtx, 'inmuebleId' | 'orgId' | 'responsableId' | 'expedienteEstado'>;
   // Estricta: sin el expediente no se sabe a quién avisar ni qué inmueble ocupar.
   const { data: exp, error: expError } = await db('expedientes')
-    .select('inmueble_id, inmobiliaria_id, miembro_responsable_id')
+    .select('inmueble_id, inmobiliaria_id, miembro_responsable_id, estado')
     .eq('id', c.expediente_id)
     .maybeSingle();
   if (expError) falla('no se pudo leer el estudio del contrato', expError);
-  const e = exp as { inmueble_id: string | null; inmobiliaria_id: string | null; miembro_responsable_id: string | null } | null;
+  const e = exp as {
+    inmueble_id: string | null;
+    inmobiliaria_id: string | null;
+    miembro_responsable_id: string | null;
+    estado?: string | null;
+  } | null;
   return {
     ...c,
     inmuebleId: e?.inmueble_id ?? null,
     orgId: e?.inmobiliaria_id ?? null,
     responsableId: e?.miembro_responsable_id ?? null,
+    expedienteEstado: e?.estado ?? null,
   };
 }
 
@@ -405,6 +412,16 @@ export async function cerrarIncompleto(s: Sobre): Promise<void> {
     return;
   }
 
+  // §11.7.3: sin fianza operando no se cobra garantía ni primer canon. Un link
+  // creado EN FIRMA (ahí sí se permite) seguiría pagable desde el correo y
+  // facturaría ante la DIAN: se anula aquí, también en los reintentos del
+  // barrido. Nunca lanza. Si se reenvía y se firma, se genera de nuevo.
+  await (await import('@/modules/pagos/pagos.service')).cancelarPagosPendientesDeExpediente(
+    c.expediente_id,
+    'Firma incompleta: la fianza no está operando',
+    ['garantia', 'primer_canon'],
+  );
+
   const vig = await vigenciaEstudio(c);
   const texto = textoAvisoFirmaIncompleta({
     numero: c.numero,
@@ -521,8 +538,15 @@ export async function reconciliarSobre(sobreId: string, evento?: { code?: string
   // vencimiento lo evitaría si llega a pasar.
   if (s.estado === 'completo' && !s.aviso_entregado_en) return activarContrato(s);
   if (s.estado === 'incompleto' && !s.aviso_entregado_en) return cerrarIncompleto(s);
-  if (s.estado === 'cancelado' && s.auco_code && !s.auco_cancelado_en) {
-    if (hace(s.updated_at, 10)) await cancelarEnAuco(s, s.auco_code, 'Contrato cancelado por la inmobiliaria');
+  // También 'fallido': un proceso huérfano que Auco sí creó y cuya primera
+  // anulación falló (el sobre ya tiene su code, así que el paso 1 no vuelve).
+  if ((s.estado === 'cancelado' || s.estado === 'fallido') && s.auco_code && !s.auco_cancelado_en) {
+    if (hace(s.updated_at, 10))
+      await cancelarEnAuco(
+        s,
+        s.auco_code,
+        s.estado === 'fallido' ? 'Proceso anulado: el envío no quedó registrado en Cofianza' : 'Contrato cancelado por la inmobiliaria',
+      );
     return;
   }
   if (s.estado === 'creando' && hace(s.created_at, 30)) {
@@ -661,7 +685,7 @@ export async function barrerFirmasV3(): Promise<void> {
     .or(
       'estado.in.(creando,en_firma),' +
         'and(estado.in.(completo,incompleto),aviso_entregado_en.is.null),' +
-        'and(estado.eq.cancelado,auco_code.not.is.null,auco_cancelado_en.is.null)',
+        'and(estado.in.(cancelado,fallido),auco_code.not.is.null,auco_cancelado_en.is.null)',
     )
     .order('updated_at', { ascending: true })
     .limit(50);

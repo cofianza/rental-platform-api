@@ -10,7 +10,7 @@ import {
   type ContratoPreconditionId,
 } from './contrato-state-machine';
 import { getContratoById, enviarContratoAFirma, notificarPartesContratoTerminado } from './contratos.service';
-import { assertExpedienteAccess, perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { ContratoTransitionInput } from './contrato-workflow.schema';
 
@@ -448,30 +448,16 @@ async function checkTransitionPermissions(
   throw AppError.forbidden('No tienes permisos para transicionar contratos', 'FORBIDDEN');
 }
 
-/** ¿El usuario (inmobiliaria/propietario) administra el inmueble del contrato? */
+/**
+ * ¿El usuario (inmobiliaria/propietario) administra el contrato? El mismo
+ * alcance que el detalle, los archivos y el asistente: respeta el modo
+ * restringido (miembros_ven_todo=false → solo lo creado o asignado).
+ */
 async function ownerAdministraContrato(user: AuthUser, contrato: ContratoRow): Promise<boolean> {
-  const { data: expRow } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('inmueble_id')
-    .eq('id', contrato.expediente_id)
-    .single();
-  const inmuebleId = (expRow as { inmueble_id?: string | null } | null)?.inmueble_id;
-  if (!inmuebleId) return false;
-
-  const { data: inmRow } = await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('propietario_id, inmobiliaria_id')
-    .eq('id', inmuebleId)
-    .single();
-  const inm = inmRow as { propietario_id?: string | null; inmobiliaria_id?: string | null } | null;
-  if (!inm) return false;
-
-  return perfilEsDuenoDeInmueble({
-    userId: user.id,
-    userRol: user.rol,
-    inmueblePropietarioId: inm.propietario_id,
-    inmuebleInmobiliariaId: inm.inmobiliaria_id,
-  });
+  return assertExpedienteAccess(contrato.expediente_id, user.id, user.rol).then(
+    () => true,
+    () => false,
+  );
 }
 
 async function checkPreconditions(

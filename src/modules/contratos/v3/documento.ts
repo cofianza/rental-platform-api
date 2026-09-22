@@ -90,6 +90,7 @@ td{padding:0;vertical-align:top;border:.5pt solid #BFBFBF}
 .k-recuadro{font-size:9.5pt;line-height:1.14;padding:1.75pt 0}
 .k-recuadro:first-child{font-size:10pt;text-align:left;padding:0 0 4.5pt}
 .k-firma{text-align:left;padding-top:19pt;break-inside:avoid;break-before:avoid}
+.k-firma+.k-firma{break-before:auto}
 .linea{display:block;position:relative;width:3in;border-top:.75pt solid;margin:30pt 0 5pt}
 .ancla{position:absolute;left:0;bottom:4pt;font-size:1px;line-height:1px;color:#fff}
 .linea+br{display:none}

@@ -26,7 +26,11 @@ const CENTENAS = [
   'seiscientos', 'setecientos', 'ochocientos', 'novecientos',
 ];
 
+// Las formas compuestas que llevan tilde (RAE): "dieciseis" o "veintidos" en un contrato es una falta.
+const CON_TILDE: Record<number, string> = { 16: 'dieciséis', 22: 'veintidós', 23: 'veintitrés', 26: 'veintiséis' };
+
 function unidadesYDecenas(n: number): string {
+  if (CON_TILDE[n]) return CON_TILDE[n];
   if (n < 10) return UNIDADES[n];
   if (n < 16) return ESPECIALES_10_15[n - 10];
   if (n < 20) return `dieci${UNIDADES[n - 10]}`;

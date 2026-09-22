@@ -670,7 +670,8 @@ export function bloqueosAdicionales(
   let sinRevision = false;
   for (const c of p4.clausulas) {
     const fila = catalogo.find((x) => x.id === c.clausulaId);
-    if (!fila)
+    // Eliminada = ausente: guardar el paso 4 ya la rechaza (prepararPaso4 exige 'activa').
+    if (!fila || fila.estado === 'eliminada')
       b('CLAUSULA_INHABILITADA', `La cláusula «${c.titulo}» ya no está disponible. Quítala del contrato para continuar.`);
     else if (fila.estado === 'inhabilitada')
       b(

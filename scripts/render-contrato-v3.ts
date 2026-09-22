@@ -5,7 +5,9 @@
  * rompe en silencio (una firma partida entre dos páginas, una fuente de
  * respaldo, un pie sin número). Genera los escenarios con Chromium, los relee
  * y deja en [dir] el paquete para Mario:
- *   - final:    completo, sin-logo
+ *   - final:    completo, sin-logo, y con las anclas de Auco: anexo (Ruta B)
+ *               y adicional-larga (una cláusula que empuja las firmas al
+ *               corte de página, donde se partía el bloque del arrendador)
  *   - revisión: sin-coarrendatario, minimo-adicionales, tradicional,
  *               admin-incluida, ce
  *   - <escenario>.pdf, sus páginas en PNG (pdftoppm) y borradores.txt (cada
@@ -46,6 +48,7 @@ import type { Nodo, Tok } from '@/modules/contratos/v3/motor';
 import { PLANTILLA_VIVIENDA } from '@/modules/contratos/v3/plantilla-vivienda';
 import {
   contexto,
+  generarAnexoVivienda,
   generarContratoVivienda,
   type DatosVivienda,
   type Persona,
@@ -159,11 +162,27 @@ interface Escenario {
   d: DatosVivienda;
   logo?: boolean;
   adicionales?: { titulo: string; texto: string }[];
+  /** El Anexo de la Ruta B en vez del contrato. */
+  anexo?: boolean;
+  /** Con las anclas {{signature:i}} de Auco, como sale a firma. */
+  anclas?: boolean;
 }
+
+const FRASE =
+  'EL ARRENDATARIO se obliga a mantener el inmueble en buen estado de aseo y conservación durante toda la vigencia del contrato. ';
 
 const ESCENARIOS: Escenario[] = [
   { nombre: 'completo', modo: 'final', d: COMPLETO, logo: true },
   { nombre: 'sin-logo', modo: 'final', d: COMPLETO },
+  { nombre: 'anexo', modo: 'final', d: COMPLETO, anexo: true, anclas: true },
+  {
+    nombre: 'adicional-larga',
+    modo: 'final',
+    d: COMPLETO,
+    anclas: true,
+    // 24 frases dejaban el bloque del arrendador partido entre dos páginas.
+    adicionales: [{ titulo: 'Cláusula adicional larga', texto: FRASE.repeat(24).trim() }],
+  },
   { nombre: 'sin-coarrendatario', modo: 'revision', d: SIN_COA, logo: true },
   {
     nombre: 'minimo-adicionales',
@@ -325,11 +344,14 @@ function borradoresTxt(): string {
   if (!PDFTOTEXT) console.log('(sin pdftotext: se omiten los chequeos de texto del PDF)');
 
   for (const e of ESCENARIOS) {
-    const r = await generarContratoVivienda(e.d, {
+    const r = await (e.anexo ? generarAnexoVivienda : generarContratoVivienda)(e.d, {
       modo: e.modo,
       logoInmobiliaria: e.logo ? logo : null,
       adicionales: e.adicionales,
+      anclas: e.anclas,
     });
+    // El pie del Anexo lleva el CRC, no el número del contrato.
+    const numero = e.anexo ? e.d.crc.numero : e.d.numero;
     const archivo = path.join(DIR, `${e.nombre}.pdf`);
     fs.writeFileSync(archivo, r.pdf);
 
@@ -345,11 +367,10 @@ function borradoresTxt(): string {
       textos.forEach((t, k) => {
         if (!t.includes(`Página ${k + 1} de ${paginas}`))
           falla(e.nombre, `p. ${k + 1} sin "Página ${k + 1} de ${paginas}"`);
-        if (!t.includes(`N° ${e.d.numero}`))
-          falla(e.nombre, `p. ${k + 1} sin el número ${e.d.numero}`);
+        if (!t.includes(`N° ${numero}`)) falla(e.nombre, `p. ${k + 1} sin el número ${numero}`);
       });
       if (e.modo === 'final') {
-        const m = MARCADOR.exec(textos.join('\n'));
+        const m = MARCADOR.exec(textos.join('\n').replace(/\{\{signature:\d+\}\}/g, ''));
         if (m) falla(e.nombre, `marcador en el PDF final: "${m[0]}"`);
       }
       for (const [rotulo, re] of firmas(e.d))

@@ -274,7 +274,7 @@ export function sobreIdDeCustom(custom: unknown): string | null {
  * está operando, y queda constancia de la entrega. El texto se versiona: la
  * constancia guarda la versión y el texto exacto que se entregó.
  */
-export const AVISO_FIRMA_INCOMPLETA_VERSION = 'e5-11.7.4-v1';
+export const AVISO_FIRMA_INCOMPLETA_VERSION = 'e5-11.7.4-v2';
 
 export function textoAvisoFirmaIncompleta(x: {
   numero: string;
@@ -287,9 +287,10 @@ export function textoAvisoFirmaIncompleta(x: {
     x.motivo === 'EXPIRED'
       ? 'venció el plazo para firmar'
       : `una de las partes rechazó la firma${x.detalle ? ` (${x.detalle})` : ''}`;
+  // Sin fecha = estudio vencido (o sin fecha de completado): reenviar da CRC_VENCIDO.
   const reenvio = x.crcVigenteHasta
     ? ` Puedes reenviarlo a firma mientras el estudio siga vigente (hasta el ${x.crcVigenteHasta}).`
-    : ' Puedes reenviarlo a firma mientras el estudio siga vigente.';
+    : ' El estudio ya no está vigente: para volver a enviarlo a firma se requiere una nueva evaluación.';
   return (
     `El proceso de firma del contrato ${x.numero} (${x.direccion}) terminó sin que firmaran todas las partes: ${causa}. ` +
     'La fianza de COFIANZA S.A.S. NO está operando y COFIANZA S.A.S. no responde por este inmueble mientras la firma esté incompleta. ' +

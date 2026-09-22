@@ -298,22 +298,7 @@ export async function deleteFoto(
 
   const foto = existing as unknown as FotoRow;
 
-  // Eliminar del storage de Supabase antes de eliminar de BD
-  const storagePath = extractStoragePath(foto.url);
-  if (storagePath) {
-    const { error: storageError } = await supabase.storage
-      .from('inmuebles')
-      .remove([storagePath]);
-
-    if (storageError) {
-      logger.warn({ error: storageError.message, path: storagePath, fotoId }, 'Error al eliminar archivo del storage');
-      // No lanzar error, continuar con eliminación de BD
-    } else {
-      logger.info({ path: storagePath, fotoId }, 'Archivo eliminado del storage');
-    }
-  }
-
-  // Eliminar de la base de datos
+  // Primero el registro: si falla, la foto sigue entera (archivo y fila).
   const { error } = await (supabase
     .from('fotos_inmueble' as string) as ReturnType<typeof supabase.from>)
     .delete()
@@ -322,6 +307,21 @@ export async function deleteFoto(
   if (error) {
     logger.error({ error: error.message, fotoId }, 'Error al eliminar foto');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al eliminar la foto');
+  }
+
+  // Después el archivo (solo la API puede borrar en el bucket). Si falla queda
+  // un archivo huérfano, no una foto rota.
+  const storagePath = extractStoragePath(foto.url);
+  if (storagePath) {
+    const { error: storageError } = await supabase.storage
+      .from('inmuebles')
+      .remove([storagePath]);
+
+    if (storageError) {
+      logger.warn({ error: storageError.message, path: storagePath, fotoId }, 'Error al eliminar archivo del storage');
+    } else {
+      logger.info({ path: storagePath, fotoId }, 'Archivo eliminado del storage');
+    }
   }
 
   // Si era fachada, quitar foto_fachada_url del inmueble

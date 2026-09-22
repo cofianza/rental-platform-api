@@ -499,17 +499,22 @@ async function cargar(expedienteId: string): Promise<Cargadas> {
   return c;
 }
 
-/** GET: sin efectos. Con el flag apagado no toca la base (ni para el acceso). */
+/**
+ * GET: sin efectos. El flag frena lo nuevo (iniciar, editar, generar, enviar),
+ * no a los contratos que ya salieron: apagarlo de emergencia no deja sin
+ * pantalla (firma, cancelar, terminar, acta) a uno en firma o con fianza
+ * activa. Solo la pantalla del asistente lo llama.
+ */
 export async function obtenerEstado(
   expedienteId: string,
   userId: string,
   userRol: string,
 ): Promise<EstadoAsistente> {
-  if (!env.CONTRATOS_V3_ENABLED) return DESHABILITADO;
   await assertExpedienteAccess(expedienteId, userId, userRol);
   const enviado = await contratoEnviado(expedienteId);
   const vista = enviado && (await estadoEnviado(enviado.id));
   if (vista) return estadoDeEnviado(vista);
+  if (!env.CONTRATOS_V3_ENABLED) return DESHABILITADO;
   const c = await cargarFuentes(expedienteId);
   return c ? armarEstado(c, hoyBogota()) : DESHABILITADO;
 }
@@ -752,10 +757,16 @@ export async function guardarPaso(
       : null;
 
   const dv = v3.datos_variables ?? {};
+  // Volver a guardar lo mismo (p. ej. «Guardar y continuar» al repasar un paso)
+  // no deja desactualizada la vista previa. Por JSON: el jsonb no guarda los
+  // undefined ni el orden de las claves. El paso 4 con cláusulas siempre
+  // cambia (la aceptación lleva hora).
+  const igual =
+    !paso4 && isDeepStrictEqual(JSON.parse(JSON.stringify(body.datos)), dv.asistente?.[`paso${body.paso}`]);
   const asistente: Asistente = {
     ...dv.asistente,
     [`paso${body.paso}`]: paso4 ?? body.datos,
-    actualizadoEn: new Date().toISOString(),
+    actualizadoEn: igual ? dv.asistente?.actualizadoEn : new Date().toISOString(),
   };
   // CAS: si otra sesión guardó o generó en el medio, updated_at ya cambió.
   const { data, error } = await db('contratos')
@@ -854,6 +865,19 @@ function partes(contratoId: string, d: DatosVivienda, f: Fuentes) {
 }
 
 /**
+ * Lo que Auco no acepta de los firmantes (celular o correo repetido entre
+ * partes, o inválido). Se revisa al generar, para que no aparezca recién al
+ * enviar, después de revisar la vista previa, y otra vez al enviar.
+ */
+function assertFirmantes(contratoId: string, d: DatosVivienda, f: Fuentes) {
+  const fallas = validarFirmantes(
+    partes(contratoId, d, f).map((p, i) => ({ id: String(i), ...p }) as unknown as ParteFirmante),
+  );
+  if (fallas.length)
+    throw new AppError(422, 'FIRMANTES_INVALIDOS', `${fallas[0].motivo} (${fallas[0].rol})`, { fallas });
+}
+
+/**
  * Reescribe las partes y el registro de adicionales del contrato (lo que se
  * firma tiene que ser exactamente lo registrado, §5.4.1). Solo con el contrato
  * en borrador: el trigger de partes lo exige. Devuelve el error, si hubo.
@@ -924,6 +948,7 @@ export async function generarVistaPrevia(
   const d = armarDatosVivienda(f, completo, hoy, v3.numero);
   const rutas = noImprimibles(d);
   if (rutas.length) throw bloqueado([bloqueoNoImprimible(rutas)]);
+  assertFirmantes(v3.id, d, f);
 
   // Ruta A: el contrato de Cofianza con sus adicionales. Ruta B: el Anexo de
   // Condiciones (el contrato de la inmobiliaria no se genera ni se toca, §4.4).
@@ -1232,14 +1257,13 @@ export async function cargarPropio(
   return armarEstado(await cargar(expedienteId), hoyBogota());
 }
 
-/** URL firmada (10 min) de un PDF del contrato V3 vivo, en cualquier estado (solo lectura). null = no hay. */
+/** URL firmada (10 min) de un PDF del contrato V3 vivo, en cualquier estado (solo lectura, también con el flag apagado). null = no hay. */
 async function urlDelContrato(
   expedienteId: string,
   userId: string,
   userRol: string,
   cual: (dv: { propio?: PropioGuardado; documento?: DocumentoV3 }) => string | null | undefined,
 ): Promise<string | null> {
-  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
   // El más reciente no cancelado: también el TERMINADO (sus documentos se siguen viendo).
   const r = await db('contratos')
@@ -1347,10 +1371,7 @@ export async function enviarAFirma(
     });
   if (difiereDeVistaPrevia(d, doc, f.arrendador.logo_storage_key)) throw desactualizada();
 
-  const filas = partes(v3.id, d, f);
-  const fallas = validarFirmantes(filas.map((p, i) => ({ id: String(i), ...p }) as unknown as ParteFirmante));
-  if (fallas.length)
-    throw new AppError(422, 'FIRMANTES_INVALIDOS', `${fallas[0].motivo} (${fallas[0].rol})`, { fallas });
+  assertFirmantes(v3.id, d, f);
   const crcKey = f.crc?.pdf_storage_key;
   if (!crcKey) throw AppError.conflict('El estudio no tiene el PDF del CRC emitido.', 'CRC_NO_EMITIDO');
   const propio = dv.propio;
@@ -1534,7 +1555,6 @@ async function revertirEnvio(
 
 /** El V3 fuera de borrador de este estudio, con acceso verificado. */
 async function enviadoOError(expedienteId: string, userId: string, userRol: string): Promise<string> {
-  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
   const c = await contratoEnviado(expedienteId);
   if (!c) throw AppError.conflict('El contrato no está en firma.', 'CONTRATO_ESTADO_CAMBIADO');
@@ -1546,8 +1566,9 @@ async function estadoTras(contratoId: string, expedienteId: string): Promise<Est
   return vista ? estadoDeEnviado(vista) : armarEstado(await cargar(expedienteId), hoyBogota());
 }
 
-/** Reenvío desde FIRMA INCOMPLETA (§11.7.5). */
+/** Reenvío desde FIRMA INCOMPLETA (§11.7.5). Un proceso nuevo en Auco: solo con el flag encendido. */
 export async function reenviarFirma(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   const id = await enviadoOError(expedienteId, userId, userRol);
   await reenviar(id, userId);
   return estadoTras(id, expedienteId);
@@ -1555,12 +1576,13 @@ export async function reenviarFirma(expedienteId: string, userId: string, userRo
 
 /** EN FIRMA sin sobre (Auco falló después de la verificación de identidad, o el sobre quedó huérfano). */
 export async function reintentarFirma(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   const id = await enviadoOError(expedienteId, userId, userRol);
   await reintentar(id, userId);
   return estadoTras(id, expedienteId);
 }
 
-/** "Actualizar estado": pregunta a Auco ya, sin esperar el webhook ni el barrido. */
+/** "Actualizar estado": pregunta a Auco ya, sin esperar el webhook ni el barrido (también con el flag apagado). */
 export async function actualizarFirmaV3(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
   const id = await enviadoOError(expedienteId, userId, userRol);
   await actualizarFirma(id);

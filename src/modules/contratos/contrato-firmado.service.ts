@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 // ============================================================
 // Constants
@@ -195,50 +195,15 @@ export async function subirContratoFirmado(
  * distingue un contrato sin firmar (404) de uno ajeno (403).
  */
 async function assertPuedeDescargarFirmado(expedienteId: string, userId: string, userRol: string): Promise<void> {
-  if (userRol === 'gerencia_consulta') {
-    throw AppError.forbidden(
-      'No tiene permiso para descargar el contrato firmado',
-      'DOWNLOAD_FORBIDDEN',
-    );
-  }
-
-  // Admin y operador_analista siempre pueden descargar
-  // Para propietario/inmobiliaria/solicitante: verificar vinculacion
-  if (userRol !== 'administrador' && userRol !== 'operador_analista') {
-    const { data: expediente, error: expError } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id, solicitante_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes(creado_por)')
-      .eq('id', expedienteId)
-      .single();
-
-    if (expError || !expediente) {
-      throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
-    }
-
-    const exp = expediente as unknown as {
-      id: string;
-      solicitante_id: string | null;
-      inmuebles: { propietario_id: string | null; inmobiliaria_id: string | null } | null;
-      solicitantes: { creado_por: string | null } | null;
-    };
-
-    // Org-aware: dueño directo del inmueble o miembro activo de la organización
-    // dueña (consistente con los demás guards multi-tenant de Fase 2).
-    const isArrendador = await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
-      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
-    });
-    // El solicitante.id es UUID interno; quien firmo el JWT es el
-    // perfil cuyo id == solicitantes.creado_por en flujo self-service.
-    const isArrendatario =
-      exp.solicitante_id === userId || exp.solicitantes?.creado_por === userId;
-
-    if (!isArrendatario && !isArrendador) {
-      throw AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
-    }
-  }
+  const prohibido = () =>
+    AppError.forbidden('No tiene permiso para descargar este contrato firmado', 'DOWNLOAD_FORBIDDEN');
+  if (userRol === 'gerencia_consulta') throw prohibido();
+  // El mismo alcance que el resto del contrato (detalle, archivos, asistente):
+  // internos ven todo, el arrendatario su estudio y la inmobiliaria lo que su
+  // modo de visibilidad le deja ver (miembros_ven_todo=false → solo lo suyo).
+  await assertExpedienteAccess(expedienteId, userId, userRol).catch(() => {
+    throw prohibido();
+  });
 }
 
 export async function descargarContratoFirmado(
@@ -346,11 +311,11 @@ export async function descargarContratoFirmado(
 // Info firma (metadatos)
 // ============================================================
 
-export async function getInfoFirma(contratoId: string) {
+export async function getInfoFirma(contratoId: string, userId?: string, userRol?: string) {
   const { data, error } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id,
+      id, expediente_id,
       firmado_storage_key, firmado_nombre_archivo, firmado_hash_integridad,
       firmado_ip, firmado_user_agent, firmado_referencia_otp, firmado_notas,
       firmado_tamano_bytes, firmado_subido_por, firmado_subido_en
@@ -364,6 +329,7 @@ export async function getInfoFirma(contratoId: string) {
 
   const row = data as unknown as {
     id: string;
+    expediente_id: string;
     firmado_storage_key: string | null;
     firmado_nombre_archivo: string | null;
     firmado_hash_integridad: string | null;
@@ -375,6 +341,10 @@ export async function getInfoFirma(contratoId: string) {
     firmado_subido_por: string | null;
     firmado_subido_en: string | null;
   };
+  // Como el resto de rutas por id del contrato: 404 si no es de su cartera.
+  await assertExpedienteAccess(row.expediente_id, userId, userRol).catch(() => {
+    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  });
 
   // Fetch user who uploaded
   let subidoPor = null;

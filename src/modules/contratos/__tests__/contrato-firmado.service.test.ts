@@ -61,6 +61,10 @@ vi.mock('@/lib/logger', () => ({
 const mockArchivar = vi.fn();
 vi.mock('@/modules/firma/firma.service', () => ({ archivarPdfFirmadoEnStorage: (...a: unknown[]) => mockArchivar(...a) }));
 
+// El alcance (cartera, modo restringido, arrendatario) es de tenantScope: aquí solo si deja pasar o no.
+const mockAcceso = vi.fn(async (..._a: unknown[]) => undefined);
+vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: (...a: unknown[]) => mockAcceso(...a) }));
+
 vi.mock('@/lib/auditLog', () => ({
   logAudit: vi.fn(),
   AUDIT_ACTIONS: {
@@ -308,16 +312,8 @@ describe('contrato-firmado.service', () => {
     });
 
     it('should check expediente ownership for propietario role', async () => {
-      const expedienteWithOwner = {
-        id: EXPEDIENTE_ID,
-        solicitante_id: 'other-user',
-        inmuebles: { propietario_id: USER_ID },
-      };
-
       // 1st from(): fetchContratoFirmado
       mockFrom.mockReturnValueOnce(setupSelectSingle(mockContratoConFirmado, null));
-      // 2nd from(): expedientes check
-      mockFrom.mockReturnValueOnce(setupSelectSingle(expedienteWithOwner, null));
       // createSignedUrl
       mockCreateSignedUrl.mockResolvedValueOnce({
         data: { signedUrl: 'https://url' },
@@ -330,19 +326,13 @@ describe('contrato-firmado.service', () => {
 
       const result = await descargarContratoFirmado(CONTRATO_ID, USER_ID, 'propietario');
       expect(result.url).toBe('https://url');
+      expect(mockAcceso).toHaveBeenCalledWith(EXPEDIENTE_ID, USER_ID, 'propietario');
     });
 
     it('should reject propietario who is not the owner', async () => {
-      const expedienteOtherOwner = {
-        id: EXPEDIENTE_ID,
-        solicitante_id: 'other-user-1',
-        inmuebles: { propietario_id: 'other-user-2' },
-      };
-
       // 1st from(): fetchContratoFirmado
       mockFrom.mockReturnValueOnce(setupSelectSingle(mockContratoConFirmado, null));
-      // 2nd from(): expedientes check
-      mockFrom.mockReturnValueOnce(setupSelectSingle(expedienteOtherOwner, null));
+      mockAcceso.mockRejectedValueOnce(new Error('Estudio no encontrado'));
 
       await expect(
         descargarContratoFirmado(CONTRATO_ID, USER_ID, 'propietario'),
@@ -353,9 +343,7 @@ describe('contrato-firmado.service', () => {
   it('un usuario sin permiso no dispara el archivado desde Auco (el permiso va primero)', async () => {
     // firmado sin PDF archivado: antes, el lazy-archive corría antes de revisar el permiso
     mockFrom.mockReturnValueOnce(setupSelectSingle(mockContratoFirmado, null));
-    mockFrom.mockReturnValueOnce(
-      setupSelectSingle({ id: EXPEDIENTE_ID, solicitante_id: 'otro-1', inmuebles: { propietario_id: 'otro-2' } }, null),
-    );
+    mockAcceso.mockRejectedValueOnce(new Error('Estudio no encontrado'));
     await expect(descargarContratoFirmado(CONTRATO_ID, USER_ID, 'propietario')).rejects.toThrow('No tiene permiso');
     expect(mockArchivar).not.toHaveBeenCalled();
     expect(mockCreateSignedUrl).not.toHaveBeenCalled();
@@ -395,6 +383,18 @@ describe('contrato-firmado.service', () => {
       setupMultipleFromCalls({ data: null, error: { message: 'not found' } });
 
       await expect(getInfoFirma(CONTRATO_ID)).rejects.toThrow('Contrato no encontrado');
+    });
+
+    it('un contrato de otra cartera responde 404 sin leer quién subió el firmado', async () => {
+      mockFrom.mockReturnValueOnce(setupSelectSingle(mockContratoConFirmado, null));
+      mockAcceso.mockRejectedValueOnce(new Error('Estudio no encontrado'));
+
+      await expect(getInfoFirma(CONTRATO_ID, USER_ID, 'inmobiliaria')).rejects.toMatchObject({
+        statusCode: 404,
+        errorCode: 'CONTRATO_NOT_FOUND',
+      });
+      expect(mockAcceso).toHaveBeenCalledWith(EXPEDIENTE_ID, USER_ID, 'inmobiliaria');
+      expect(mockFrom).toHaveBeenCalledTimes(1);
     });
   });
 

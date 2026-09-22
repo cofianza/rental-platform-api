@@ -277,5 +277,8 @@ describe('textoAvisoFirmaIncompleta', () => {
     });
     expect(rechazo).toContain('rechazó la firma');
     expect(rechazo).toContain('el arrendatario no está de acuerdo');
+    // Sin fecha de vigencia el estudio ya venció: no se promete un reenvío que da CRC_VENCIDO.
+    expect(rechazo).not.toContain('Puedes reenviarlo');
+    expect(rechazo).toContain('se requiere una nueva evaluación');
   });
 });

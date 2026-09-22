@@ -130,6 +130,28 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   }
   const sobre = (await leerSobre((creado as { id: string }).id))!;
 
+  // Timeline y bitácora del envío: una sola vez y siempre aquí (donde está el
+  // userId), también si el webhook adoptó el proceso antes de que respondiera
+  // el upload (la adopción no registra nada). No lanza: el proceso ya salió.
+  const registrarEnvio = async (auco: string) => {
+    await Promise.resolve(
+      db('eventos_timeline').insert({
+        expediente_id: c.expediente_id,
+        tipo: 'contrato',
+        descripcion: `Contrato ${c.numero} enviado a firma${sobre.intento > 1 ? ` (intento ${sobre.intento})` : ''}`,
+        usuario_id: userId,
+        metadata: { contrato_id: contratoId, sobre_id: sobre.id, auco_code: auco },
+      } as never),
+    ).catch(() => undefined);
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.FIRMA_SOLICITUD_CREATED,
+      entidad: AUDIT_ENTITIES.CONTRATO,
+      entidadId: contratoId,
+      detalle: { v3: true, intento: sobre.intento, auco_code: auco, expira: expira.toISOString() },
+    });
+  };
+
   let code: string;
   try {
     const { data: pdf, error } = await supabase.storage.from(BUCKET).download(extra.storage_key);
@@ -162,7 +184,10 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
       // Ya no está 'creando': el webhook adoptó el proceso (Auco sí lo creó y el
       // upload solo se demoró) o lo cancelaron mientras subía.
       const ahora = await leerSobre(sobre.id).catch(() => null);
-      if (ahora?.estado === 'en_firma' && ahora.auco_code) return ahora;
+      if (ahora?.estado === 'en_firma' && ahora.auco_code) {
+        await registrarEnvio(ahora.auco_code);
+        return ahora;
+      }
       throw AppError.conflict('El contrato cambió mientras se enviaba a firma.', 'CONTRATO_ESTADO_CAMBIADO');
     }
     logger.error({ contratoId, sobreId: sobre.id, error: detalle }, 'Firma V3: Auco no creó el proceso');
@@ -182,7 +207,10 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   if (!(act as unknown[] | null)?.length) {
     const ahora = await leerSobre(sobre.id).catch(() => null);
     // El webhook de Auco (CREATE, con `custom`) llegó antes que la respuesta del upload y ya lo adoptó.
-    if (ahora?.estado === 'en_firma' && ahora.auco_code === code) return ahora;
+    if (ahora?.estado === 'en_firma' && ahora.auco_code === code) {
+      await registrarEnvio(code);
+      return ahora;
+    }
     // Lo cancelaron mientras subía: se anula también en Auco.
     await db('contrato_v3_sobres').update({ auco_code: code } as never).eq('id', sobre.id).is('auco_code', null);
     await cancelDocument(code, { message: 'Contrato cancelado durante el envío', email: env.AUCO_SENDER_EMAIL })
@@ -192,22 +220,7 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   }
 
   // Desde aquí el proceso ya salió: nada puede lanzar (una reversión lo dejaría vivo en Auco).
-  await Promise.resolve(
-    db('eventos_timeline').insert({
-      expediente_id: c.expediente_id,
-      tipo: 'contrato',
-      descripcion: `Contrato ${c.numero} enviado a firma${sobre.intento > 1 ? ` (intento ${sobre.intento})` : ''}`,
-      usuario_id: userId,
-      metadata: { contrato_id: contratoId, sobre_id: sobre.id, auco_code: code },
-    } as never),
-  ).catch(() => undefined);
-  logAudit({
-    usuarioId: userId,
-    accion: AUDIT_ACTIONS.FIRMA_SOLICITUD_CREATED,
-    entidad: AUDIT_ENTITIES.CONTRATO,
-    entidadId: contratoId,
-    detalle: { v3: true, intento: sobre.intento, auco_code: code, expira: expira.toISOString() },
-  });
+  await registrarEnvio(code);
   return (await leerSobre(sobre.id).catch(() => null)) ?? { ...sobre, auco_code: code, estado: 'en_firma' };
 }
 
@@ -222,6 +235,10 @@ export async function reenviar(contratoId: string, userId: string): Promise<void
   if (!c) throw AppError.notFound('Contrato no encontrado.');
   if (c.estado !== 'firma_incompleta')
     throw AppError.conflict('Solo se reenvía un contrato con la firma incompleta.', 'ESTADO_NO_PERMITE_REENVIO');
+  // Con FIRMA INCOMPLETA el estudio se puede cerrar o rechazar; reenviar lo
+  // activaría (y ocuparía el inmueble) sobre un estudio terminado.
+  if (c.expedienteEstado === 'cerrado' || c.expedienteEstado === 'rechazado')
+    throw AppError.conflict(`El estudio está ${c.expedienteEstado}: el contrato ya no se puede reenviar a firma.`, 'EXPEDIENTE_CERRADO');
   const vig = await vigenciaEstudio(c);
   if (!vig?.vigente)
     throw AppError.conflict('El estudio ya no está vigente: se requiere una nueva evaluación.', 'CRC_VENCIDO');

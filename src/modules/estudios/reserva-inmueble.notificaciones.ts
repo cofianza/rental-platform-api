@@ -92,7 +92,25 @@ export function referenciaInmueble(
  * dos veces por reintentar.
  */
 export async function avisarCandidatosDeReserva(input: AvisoReservaInput): Promise<void> {
-  const { afectados, expedienteGanadorId } = input;
+  const { expedienteGanadorId } = input;
+  if (input.afectados.length === 0) return;
+
+  // Un estudio que ya tuvo contrato (p. ej. el ex-arrendatario de un V3
+  // TERMINADO: la fianza activa no cierra el estudio) no es un candidato: su
+  // evaluación se consumió y no se puede reasignar. "Tu estudio sigue vigente"
+  // le mentiría. Los de contrato cancelado antes de firmar sí siguen vivos.
+  const { data: conContrato, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('expediente_id')
+    .in('expediente_id', input.afectados.map((a) => a.expediente_id))
+    .neq('estado', 'cancelado');
+  if (error) {
+    // Mejor callar que mentir: es solo un aviso y la reserva ya quedó.
+    logger.warn({ err: error, expedienteGanadorId }, 'Flujo 4.2: sin avisos de reserva (no se pudieron leer los contratos)');
+    return;
+  }
+  const consumidos = new Set(((conContrato ?? []) as { expediente_id: string }[]).map((c) => c.expediente_id));
+  const afectados = input.afectados.filter((a) => !consumidos.has(a.expediente_id));
   if (afectados.length === 0) return;
 
   const referencia = referenciaInmueble(input.inmuebleCodigo, input.inmuebleDireccion);

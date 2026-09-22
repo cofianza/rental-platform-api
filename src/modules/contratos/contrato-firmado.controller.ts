@@ -43,7 +43,7 @@ export async function descargar(req: Request, res: Response) {
 
 export async function infoFirma(req: Request, res: Response) {
   const id = req.params.id as string;
-  const result = await firmadoService.getInfoFirma(id);
+  const result = await firmadoService.getInfoFirma(id, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
 

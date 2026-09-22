@@ -232,25 +232,8 @@ export async function createPaymentLink(
   // pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
 
-  // 1a. FIRMA INCOMPLETA (contratos V3, §11.7.3): la fianza no está operando,
-  //     así que no se cobra garantía ni primer canon (cada pago es una factura
-  //     real ante la DIAN). En EN FIRMA sí se permite. Solo mira filas V3, y
-  //     filtra el estado aquí y no en la consulta para no depender del valor
-  //     nuevo del enum.
-  if (input.concepto === 'garantia' || input.concepto === 'primer_canon') {
-    const { data: v3, error: v3Error } = await (supabase
-      .from('contratos' as string) as ReturnType<typeof supabase.from>)
-      .select('estado')
-      .eq('expediente_id', expedienteId)
-      .not('destinacion', 'is', null);
-    if (v3Error) throw fromSupabaseError(v3Error);
-    if (((v3 as Array<{ estado: string }> | null) ?? []).some((c) => c.estado === 'firma_incompleta')) {
-      throw AppError.conflict(
-        'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la garantía o el primer canon.',
-        'FIANZA_NO_OPERANDO',
-      );
-    }
-  }
+  // 1a. FIRMA INCOMPLETA (contratos V3, §11.7.3).
+  await assertFianzaOperando(expedienteId, input.concepto);
 
   // 1b. TOPE DE CANON — flujo §4.4: "ANTES de avanzar y de generar cualquier
   //     cobro... no se cobra el estudio". Esta ruta generica es el OTRO camino
@@ -526,13 +509,17 @@ export async function cancelPago(pagoId: string, userId: string, userRol?: strin
 export async function cancelarPagosPendientesDeExpediente(
   expedienteId: string,
   motivo: string,
+  /** Solo estos conceptos (p. ej. garantía y primer canon en FIRMA INCOMPLETA); sin él, todos. */
+  conceptos?: string[],
 ): Promise<void> {
   try {
-    const { data } = await (supabase
+    let q = (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
       .select('id, estado, metodo, external_id')
       .eq('expediente_id', expedienteId)
       .in('estado', ['pendiente', 'procesando']);
+    if (conceptos) q = q.in('concepto', conceptos);
+    const { data } = await q;
     const pagos = (data as Array<{ id: string; estado: string; metodo: string | null; external_id: string | null }> | null) ?? [];
 
     for (const pago of pagos) {
@@ -555,17 +542,37 @@ export async function cancelarPagosPendientesDeExpediente(
           }
         }
       } catch (err) {
-        logger.warn(
-          { err, pagoId: pago.id, expedienteId },
-          'No se pudo cancelar un pago pendiente al terminar el contrato',
-        );
+        logger.warn({ err, pagoId: pago.id, expedienteId, motivo }, 'No se pudo cancelar un pago pendiente');
       }
     }
     if (pagos.length > 0) {
-      logger.info({ expedienteId, cancelados: pagos.length }, 'Pagos pendientes cancelados al terminar el contrato');
+      logger.info({ expedienteId, cancelados: pagos.length, motivo }, 'Pagos pendientes cancelados');
     }
   } catch (err) {
     logger.error({ err, expedienteId }, 'Error cancelando pagos pendientes del estudio');
+  }
+}
+
+/**
+ * FIRMA INCOMPLETA (contratos V3, §11.7.3): la fianza no está operando, así que
+ * no se cobra garantía ni primer canon (cada pago es una factura real ante la
+ * DIAN). En EN FIRMA sí se permite. Vale al crear el link y al reenviarlo. Solo
+ * mira filas V3, y filtra el estado aquí y no en la consulta para no depender
+ * del valor nuevo del enum.
+ */
+async function assertFianzaOperando(expedienteId: string, concepto: string): Promise<void> {
+  if (concepto !== 'garantia' && concepto !== 'primer_canon') return;
+  const { data: v3, error: v3Error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('estado')
+    .eq('expediente_id', expedienteId)
+    .not('destinacion', 'is', null);
+  if (v3Error) throw fromSupabaseError(v3Error);
+  if (((v3 as Array<{ estado: string }> | null) ?? []).some((c) => c.estado === 'firma_incompleta')) {
+    throw AppError.conflict(
+      'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la garantía o el primer canon.',
+      'FIANZA_NO_OPERANDO',
+    );
   }
 }
 
@@ -588,6 +595,7 @@ export async function resendPaymentLink(pagoId: string, userId: string, userRol?
   // Ownership multi-tenant (cierra IDOR): gateamos por cartera antes de
   // reenviar el email y devolver el email_pagador. 404 fuera de scope.
   await assertExpedienteAccess(pago.expediente_id, userId, userRol);
+  await assertFianzaOperando(pago.expediente_id, pago.concepto);
 
   if (pago.estado !== 'pendiente') {
     throw AppError.badRequest(

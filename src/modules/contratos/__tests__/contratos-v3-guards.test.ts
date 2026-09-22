@@ -83,6 +83,7 @@ vi.mock('@/modules/perfil-arrendador/perfil-arrendador.service', () => ({
 import { AppError } from '@/lib/errors';
 import type { AuthUser } from '@/types/auth';
 import {
+  descargarContrato,
   enviarContratoAFirma,
   generarContrato,
   previewContratoVerificacion,
@@ -95,7 +96,7 @@ import { finalizarContratosVencidos } from '../contrato-vencimiento.service';
 import type { GenerarContratoInput, ReGenerarContratoInput, RenovarContratoInput } from '../contratos.schema';
 import { crearSolicitudFirmaMultiparte } from '@/modules/firma/firma-multiparte.service';
 import { archivarPdfFirmadoEnStorage, crearSolicitudFirma } from '@/modules/firma/firma.service';
-import { createPaymentLink } from '@/modules/pagos/pagos.service';
+import { createPaymentLink, resendPaymentLink } from '@/modules/pagos/pagos.service';
 import { CONTRATO_ESTADOS_PRE_FIRMA } from '@/modules/expedientes/expediente-workflow.service';
 
 const EXP = 'exp-1';
@@ -337,6 +338,17 @@ describe('guards de la Entrega 5 sobre filas V3', () => {
     expect(escrituras()).toEqual([]);
   });
 
+  it('reenviar el link de garantía con un V3 en FIRMA INCOMPLETA → 409 y no sale el correo', async () => {
+    enqueue('pagos', {
+      data: { id: 'pg1', estado: 'pendiente', concepto: 'garantia', expediente_id: EXP, payment_link_url: 'https://mp', email_pagador: 'p@x.co', monto: 1 },
+      error: null,
+    });
+    enqueue('contratos', { data: [{ estado: 'firma_incompleta' }], error: null });
+    const e = await error(resendPaymentLink('pg1', ADMIN.id, ADMIN.rol));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'FIANZA_NO_OPERANDO' });
+    expect(escrituras()).toEqual([]);
+  });
+
   it('cerrar o rechazar el estudio auto-cancela un contrato en FIRMA INCOMPLETA (no uno en firma)', () => {
     expect(CONTRATO_ESTADOS_PRE_FIRMA).toContain('firma_incompleta');
     expect(CONTRATO_ESTADOS_PRE_FIRMA).not.toContain('pendiente_firma');
@@ -394,5 +406,38 @@ describe('generarContrato legacy con asistente', () => {
     const e = await error(generar());
 
     expect(e.errorCode).toBe('PERFIL_ARRENDADOR_INCOMPLETO');
+  });
+});
+
+describe('descargarContrato: el arrendatario (solicitante)', () => {
+  const SOL = 'sol-user';
+  const storageOk = async () => {
+    const { supabase } = await import('@/lib/supabase');
+    vi.mocked(supabase.storage.from).mockReturnValue({
+      createSignedUrl: async () => ({ data: { signedUrl: 'https://firmada' }, error: null }),
+    } as never);
+  };
+
+  it('descarga su contrato en firma (sin pasar por el scope de cartera, que no lo cubre)', async () => {
+    await storageOk();
+    const { assertExpedienteAccess, resolveAllowedExpedienteIds } = await import('@/lib/tenantScope');
+    enqueue('contratos', { data: filaV3({ estado: 'pendiente_firma', nombre_archivo: 'c.pdf' }), error: null });
+    const r = await descargarContrato(CTO, SOL, undefined, undefined, 'solicitante');
+    expect(r.url).toBe('https://firmada');
+    expect(assertExpedienteAccess).toHaveBeenCalledWith(EXP, SOL, 'solicitante');
+    expect(resolveAllowedExpedienteIds).not.toHaveBeenCalledWith(SOL, 'solicitante');
+  });
+
+  it('un borrador o un estudio ajeno responde 404', async () => {
+    enqueue('contratos', { data: filaV3({ estado: 'borrador' }), error: null });
+    await expect(descargarContrato(CTO, SOL, undefined, undefined, 'solicitante')).rejects.toMatchObject({ statusCode: 404 });
+
+    const { assertExpedienteAccess } = await import('@/lib/tenantScope');
+    vi.mocked(assertExpedienteAccess).mockRejectedValueOnce(new AppError(404, 'EXPEDIENTE_NOT_FOUND', 'Estudio no encontrado'));
+    enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null });
+    await expect(descargarContrato(CTO, SOL, undefined, undefined, 'solicitante')).rejects.toMatchObject({
+      statusCode: 404,
+      errorCode: 'CONTRATO_NOT_FOUND',
+    });
   });
 });
