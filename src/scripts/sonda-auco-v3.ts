@@ -188,7 +188,13 @@ async function main() {
   throw new Error(`SONDA_ACCION desconocida: ${accion} (crear | ver | cancelar | recordar)`);
 }
 
-main().catch((e) => {
-  console.error('ERROR:', e instanceof Error ? e.message : e);
-  process.exit(1);
-});
+// El renderizador deja vivo un Chromium por proceso (pdfRenderer lo cachea),
+// asi que el script no termina solo: se sale a mano tras vaciar la salida.
+const salir = (codigo: number) => new Promise<never>((r) => process.stdout.write('', () => r(process.exit(codigo) as never)));
+
+main()
+  .then(() => salir(0))
+  .catch(async (e) => {
+    console.error('ERROR:', e instanceof Error ? e.message : e);
+    await salir(1);
+  });
