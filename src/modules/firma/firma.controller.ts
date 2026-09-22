@@ -3,11 +3,9 @@ import { sendSuccess } from '@/lib/response';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import * as firmaService from './firma.service';
-import * as otpService from './otp.service';
-import * as evidenciaService from './evidencia.service';
 import * as identidadService from './verificacion-identidad.service';
 import type { AucoWebhookPayload } from '@/lib/auco';
-import type { CrearSolicitudFirmaInput, OtpVerificarInput, CompletarFirmaInput, ReenviarFirmaInput } from './firma.schema';
+import type { CrearSolicitudFirmaInput, ReenviarFirmaInput } from './firma.schema';
 
 export async function crear(req: Request, res: Response) {
   const input = req.body as CrearSolicitudFirmaInput;
@@ -129,19 +127,6 @@ export async function cancelar(req: Request, res: Response) {
   sendSuccess(res, { cancelled: true });
 }
 
-export async function validarToken(req: Request, res: Response) {
-  const token = req.params.token as string;
-  const result = await firmaService.validarToken(token);
-  sendSuccess(res, result);
-}
-
-// HP-342: Get contract PDF for public signing page
-export async function getContratoPdf(req: Request, res: Response) {
-  const token = req.params.token as string;
-  const result = await firmaService.getContratoPdf(token);
-  sendSuccess(res, result);
-}
-
 /**
  * Auco webhook handler — receives signature status updates.
  * Validates webhook secret if configured.
@@ -174,48 +159,8 @@ export async function aucoWebhook(req: Request, res: Response) {
   }
 }
 
-// ============================================================
-// OTP endpoints (public, protected by firma token)
-// ============================================================
-
-export async function solicitarOtp(req: Request, res: Response) {
-  const token = req.params.token as string;
-  const result = await otpService.solicitarOtp(token);
-  sendSuccess(res, result);
-}
-
-export async function verificarOtp(req: Request, res: Response) {
-  const token = req.params.token as string;
-  const { codigo } = req.body as OtpVerificarInput;
-  const result = await otpService.verificarOtp(token, codigo);
-  sendSuccess(res, result);
-}
-
-// ============================================================
-// Evidencia endpoints
-// ============================================================
-
-export async function completarFirma(req: Request, res: Response) {
-  const token = req.params.token as string;
-  const input = req.body as CompletarFirmaInput;
-  const ip = req.headers['x-forwarded-for'] as string || req.ip || '0.0.0.0';
-  const result = await evidenciaService.completarFirma(token, input, ip);
-  sendSuccess(res, result);
-}
-
 export async function expirarCron(req: Request, res: Response) {
   const result = await firmaService.expirarSolicitudesVencidas();
   sendSuccess(res, result);
 }
 
-export async function getEvidencia(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const result = await evidenciaService.getEvidencia(id, req.user?.id, req.user?.rol);
-  sendSuccess(res, result);
-}
-
-export async function downloadAcuse(req: Request, res: Response) {
-  const id = req.params.id as string;
-  const result = await evidenciaService.downloadAcuse(id);
-  sendSuccess(res, result);
-}

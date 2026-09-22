@@ -617,7 +617,7 @@ export async function crearSolicitudFirmaMultiparte(
 /**
  * Consulta Auco (getDocumentStatus) y actualiza cada fila contrato_firmantes
  * según signProfile[].status, casando por email. Cuando todas las filas quedan
- * 'firmado', dispara el cierre del contrato (executePostFirma). Idempotente.
+ * 'firmado', cierra el sobre e intenta activar el contrato. Idempotente.
  */
 export async function reconciliarFirmantesConAuco(contratoId: string): Promise<void> {
   // 1. Sobre activo del contrato
@@ -665,13 +665,14 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
     logger.info({ contratoId, rol: fila.rol_firmante, nuevoEstado }, 'Firma multi-parte: firmante reconciliado');
   }
 
-  // 4. ¿Todas firmaron? → cerrar sobre + post-firma
+  // 4. ¿Todas firmaron? → cerrar sobre + activar
   await cerrarSobreSiTodasFirmaron(contratoId, { id: sobre.id, estado: sobre.estado }, info.url ?? null);
 }
 
 /**
  * Si TODAS las filas de contrato_firmantes están 'firmado', marca el sobre como
- * firmado y dispara executePostFirma (contrato → firmado, timeline, acuses).
+ * firmado e intenta activar el contrato. El paso pendiente_firma → firmado lo
+ * hace el auto-heal al listar contratos (maybeAutoTransicionarFirmado).
  * Idempotente. Compartido por la reconciliación por poll y por webhook.
  */
 async function cerrarSobreSiTodasFirmaron(
@@ -700,15 +701,6 @@ async function cerrarSobreSiTodasFirmaron(
     detalle: { solicitud_id: sobre.id, multiparte: true },
   });
 
-  const { executePostFirma } = await import('./post-firma.service');
-  await executePostFirma({
-    solicitudId: sobre.id,
-    contratoId,
-    nombreFirmante: 'todas las partes',
-    emailFirmante: '',
-    firmadoEn: now,
-  }).catch((err) => logger.error({ error: err, contratoId }, 'Firma multi-parte: error en executePostFirma'));
-
   // Cierre SÍNCRONO del pipeline tras firma: contrato firmado → vigente,
   // expediente → cerrado, inmueble → ocupado (fuera de vitrina). Antes esto solo
   // ocurría de forma DIFERIDA (auto-heal al listar contratos), lo que dejaba el
@@ -735,7 +727,7 @@ async function cerrarSobreSiTodasFirmaron(
  *   - NOTIFICATION (+ signer): ese participante COMPLETÓ su firma → 'firmado'
  *   - REJECTED / BLOCKED (+ signer): ese firmante rechazó/bloqueó → 'cancelado'
  *   - FINISH (sin signer): TODAS las partes firmaron → marca pendientes 'firmado'
- * Cuando todas quedan 'firmado', cierra el sobre + executePostFirma.
+ * Cuando todas quedan 'firmado', cierra el sobre e intenta activar el contrato.
  */
 export async function reconciliarFirmantesPorWebhook(
   contratoId: string,

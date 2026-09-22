@@ -3,7 +3,6 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { mergePdfs } from '@/lib/pdfMerger';
 import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
 
 // ============================================================
@@ -186,127 +185,13 @@ export async function subirContratoFirmado(
   return updated;
 }
 
-/**
- * Genera el PDF "contrato firmado" al vuelo combinando el contrato
- * original con los acuses de firma electronica de cada solicitud
- * firmada. Cachea el resultado en `contratos.firmado_storage_key`
- * para no regenerar en proximas descargas. Devuelve null si no se
- * pudo generar (sin acuses disponibles, errores de descarga, etc.)
- * para que el caller caiga al PDF original como fallback.
- */
-async function generarFirmadoCombinado(contrato: {
-  id: string;
-  expediente_id: string;
-  storage_key: string | null;
-  nombre_archivo: string | null;
-}): Promise<{ storageKey: string; nombreArchivo: string } | null> {
-  if (!contrato.storage_key) return null;
-
-  // 1. Listar TODAS las solicitudes firmadas del contrato (orden temporal).
-  const { data: solicitudesRaw } = await (supabase
-    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, firmado_en')
-    .eq('contrato_id', contrato.id)
-    .eq('estado', 'firmado')
-    .order('firmado_en', { ascending: true });
-
-  const solicitudesFirmadas =
-    (solicitudesRaw as Array<{ id: string; firmado_en: string | null }> | null) || [];
-
-  if (solicitudesFirmadas.length === 0) return null;
-
-  // 2. Para cada solicitud firmada, asegurar que existe el acuse PDF.
-  //    ensureAcuseExists regenera si falta o si hay version desactualizada
-  //    (en este flujo lo llamamos sin force — solo regenera los faltantes).
-  const { ensureAcuseExists } = await import('@/modules/firma/evidencia.service');
-  const acuseKeys: string[] = [];
-  for (const sol of solicitudesFirmadas) {
-    try {
-      const key = await ensureAcuseExists(sol.id);
-      if (key) acuseKeys.push(key);
-    } catch (err) {
-      logger.warn(
-        { contratoId: contrato.id, solicitudId: sol.id, err: err instanceof Error ? err.message : String(err) },
-        'Generar firmado: ensureAcuseExists fallo para una solicitud — se omite',
-      );
-    }
-  }
-
-  if (acuseKeys.length === 0) {
-    // No se pudo materializar ningun acuse. Caller usara el PDF original.
-    return null;
-  }
-
-  // 2. Descargar contrato original + cada acuse en paralelo.
-  const [contratoRes, ...acusesRes] = await Promise.all([
-    supabase.storage.from(BUCKET_NAME).download(contrato.storage_key),
-    ...acuseKeys.map((k) => supabase.storage.from(BUCKET_NAME).download(k)),
-  ]);
-
-  if (contratoRes.error || !contratoRes.data) {
-    logger.error(
-      { contratoId: contrato.id, err: contratoRes.error?.message },
-      'No se pudo descargar el PDF original para mergear',
-    );
-    return null;
-  }
-
-  const contratoBuffer = Buffer.from(await contratoRes.data.arrayBuffer());
-  const acuseBuffers: Buffer[] = [];
-  for (const r of acusesRes) {
-    if (r.error || !r.data) continue;
-    acuseBuffers.push(Buffer.from(await r.data.arrayBuffer()));
-  }
-
-  if (acuseBuffers.length === 0) {
-    return null;
-  }
-
-  // 3. Mergear contrato + acuses.
-  const merged = await mergePdfs([contratoBuffer, ...acuseBuffers]);
-
-  // 4. Subir como firmado y cachear referencia en contratos.firmado_storage_key.
-  const firmadoKey = `contratos/${contrato.expediente_id}/${contrato.id}/firmado-combinado.pdf`;
-  const nombreArchivo = (contrato.nombre_archivo || `contrato-${contrato.id}`).replace(/\.pdf$/i, '') + '-firmado.pdf';
-
-  const { error: upErr } = await supabase.storage
-    .from(BUCKET_NAME)
-    .upload(firmadoKey, merged, {
-      contentType: 'application/pdf',
-      upsert: true,
-    });
-  if (upErr) {
-    logger.error({ contratoId: contrato.id, err: upErr.message }, 'Error subiendo firmado combinado');
-    return null;
-  }
-
-  const hash = crypto.createHash('sha256').update(merged).digest('hex');
-  await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      firmado_storage_key: firmadoKey,
-      firmado_nombre_archivo: nombreArchivo,
-      firmado_hash_integridad: hash,
-      firmado_tamano_bytes: merged.length,
-      firmado_subido_en: new Date().toISOString(),
-    } as never)
-    .eq('id', contrato.id);
-
-  logger.info(
-    { contratoId: contrato.id, acusesIncluidos: acuseBuffers.length, tamanoBytes: merged.length },
-    'Firmado combinado generado y cacheado',
-  );
-
-  return { storageKey: firmadoKey, nombreArchivo };
-}
-
 // ============================================================
 // Descargar contrato firmado
 // ============================================================
 
 /**
  * Quién puede descargar el firmado. Corre ANTES de cualquier efecto (archivar
- * desde Auco, combinar acuses): un usuario sin permiso no dispara escrituras ni
+ * desde Auco): un usuario sin permiso no dispara escrituras ni
  * distingue un contrato sin firmar (404) de uno ajeno (403).
  */
 async function assertPuedeDescargarFirmado(expedienteId: string, userId: string, userRol: string): Promise<void> {
@@ -374,7 +259,7 @@ export async function descargarContratoFirmado(
   //                    estampadas + certificado). Si falta, se intenta
   //                    archivar AHORA (lazy) — cubre contratos donde el
   //                    archive post-firma fallo o no corrio.
-  //   3. 'combinado' → contrato original + acuses PDF generados localmente.
+  //   3. 'combinado' → el que se generaba con los acuses (ya no se genera; se sirve si quedó en caché).
   //   4. 'original'  → PDF generado sin firmas (ultimo recurso).
   const esCombinadoCacheado = !!contrato.firmado_storage_key?.endsWith('firmado-combinado.pdf');
   let usarStorageKey: string | null = null;
@@ -408,22 +293,9 @@ export async function descargarContratoFirmado(
       nombreArchivo = contrato.firmado_nombre_archivo || nombreArchivo;
       fuente = 'combinado';
     } else if (ESTADOS_CON_FIRMADO.includes(contrato.estado) && contrato.storage_key) {
-      // 3. Combinar contrato original + acuses. Si falla, caer al original.
-      const generado = await generarFirmadoCombinado(contrato).catch((err) => {
-        logger.warn(
-          { contratoId, err: err instanceof Error ? err.message : String(err) },
-          'Generar PDF firmado combinado: error — fallback al PDF original',
-        );
-        return null;
-      });
-      if (generado?.storageKey) {
-        usarStorageKey = generado.storageKey;
-        nombreArchivo = generado.nombreArchivo;
-        fuente = 'combinado';
-      } else {
-        usarStorageKey = contrato.storage_key;
-        fuente = 'original';
-      }
+      // 3. Sin el PDF de Auco: el original, rotulado como tal (sin firmas).
+      usarStorageKey = contrato.storage_key;
+      fuente = 'original';
     } else {
       usarStorageKey = null;
       fuente = 'original';

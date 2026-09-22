@@ -1,14 +1,12 @@
 import { Router } from 'express';
 import { authMiddleware, roleGuard, authorize } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { otpLimiter, otpVerifyLimiter, publicFormLimiter, otpSendByTokenLimiter } from '@/middleware/rateLimiter';
+import { publicFormLimiter, otpSendByTokenLimiter } from '@/middleware/rateLimiter';
 import {
   crearSolicitudFirmaSchema,
   solicitudIdParamsSchema,
   contratoIdParamsSchema,
   tokenParamsSchema,
-  otpVerificarSchema,
-  completarFirmaSchema,
   reenviarFirmaSchema,
   consentimientoIdentidadSchema,
   verificacionIdentidadParamsSchema,
@@ -70,22 +68,6 @@ firmaRouter.post(
   roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
   validate({ params: solicitudIdParamsSchema }),
   firmaController.cancelar,
-);
-
-// GET /:id/evidencia — Get firma evidence (admin, operador, gerencia)
-firmaRouter.get(
-  '/:id/evidencia',
-  authorize('contratos', 'read'),
-  validate({ params: solicitudIdParamsSchema }),
-  firmaController.getEvidencia,
-);
-
-// GET /:id/evidencia/pdf — Download acuse PDF (admin, operador)
-firmaRouter.get(
-  '/:id/evidencia/pdf',
-  roleGuard(['administrador', 'operador_analista']),
-  validate({ params: solicitudIdParamsSchema }),
-  firmaController.downloadAcuse,
 );
 
 // ============================================================
@@ -159,50 +141,6 @@ publicVerificacionIdentidadRouter.post(
   publicFormLimiter,
   validate({ params: tokenParamsSchema }),
   firmaController.continuarIdentidad,
-);
-
-// ============================================================
-// Public routes: /api/v1/public/firma
-// ============================================================
-
-export const publicFirmaRouter = Router();
-
-// GET /:token — Validate token and get info (public, no auth)
-publicFirmaRouter.get(
-  '/:token',
-  validate({ params: tokenParamsSchema }),
-  firmaController.validarToken,
-);
-
-// GET /:token/pdf — Get signed URL for contract PDF (HP-342, read-only)
-publicFirmaRouter.get(
-  '/:token/pdf',
-  validate({ params: tokenParamsSchema }),
-  firmaController.getContratoPdf,
-);
-
-// POST /:token/otp/solicitar — Request OTP code (public, rate-limited)
-publicFirmaRouter.post(
-  '/:token/otp/solicitar',
-  otpLimiter,
-  validate({ params: tokenParamsSchema }),
-  firmaController.solicitarOtp,
-);
-
-// POST /:token/otp/verificar — Verify OTP code (public, rate-limited)
-publicFirmaRouter.post(
-  '/:token/otp/verificar',
-  otpVerifyLimiter,
-  validate({ params: tokenParamsSchema, body: otpVerificarSchema }),
-  firmaController.verificarOtp,
-);
-
-// POST /:token/completar — Complete signature with evidence (public, rate-limited)
-publicFirmaRouter.post(
-  '/:token/completar',
-  otpVerifyLimiter,
-  validate({ params: tokenParamsSchema, body: completarFirmaSchema }),
-  firmaController.completarFirma,
 );
 
 // ============================================================

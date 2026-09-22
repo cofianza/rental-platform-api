@@ -1043,164 +1043,6 @@ export async function cancelarSolicitud(
 }
 
 // ============================================================
-// Validar token (para pagina publica)
-// ============================================================
-
-export async function validarToken(token: string) {
-  const { data, error } = await (supabase
-    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, contrato_id, nombre_firmante, email_firmante, estado, token_expiracion')
-    .eq('token', token)
-    .single();
-
-  if (error || !data) {
-    throw AppError.notFound('Enlace de firma no válido', 'INVALID_TOKEN');
-  }
-
-  const row = data as unknown as {
-    id: string;
-    contrato_id: string;
-    nombre_firmante: string;
-    email_firmante: string;
-    estado: string;
-    token_expiracion: string;
-  };
-
-  // Check expiration
-  if (new Date(row.token_expiracion) < new Date()) {
-    if (row.estado !== 'expirado' && row.estado !== 'firmado' && row.estado !== 'cancelado') {
-      await (supabase
-        .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-        .update({ estado: 'expirado', updated_at: new Date().toISOString() } as never)
-        .eq('id', row.id);
-    }
-    throw AppError.badRequest('El enlace de firma ha expirado', 'TOKEN_EXPIRED');
-  }
-
-  if (['firmado', 'cancelado', 'expirado'].includes(row.estado)) {
-    throw AppError.badRequest(
-      row.estado === 'firmado'
-        ? 'Este contrato ya fue firmado'
-        : 'Este enlace ya no es válido',
-      'INVALID_TOKEN_STATE',
-    );
-  }
-
-  // Mark as opened if first time
-  if (row.estado === 'enviado') {
-    await (supabase
-      .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-      .update({
-        estado: 'abierto',
-        abierto_en: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as never)
-      .eq('id', row.id);
-  }
-
-  // Fetch contrato + expediente info for display
-  const { data: contratoData } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, nombre_archivo, expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad))')
-    .eq('id', row.contrato_id)
-    .single();
-
-  const cc = contratoData as unknown as {
-    id: string;
-    nombre_archivo: string | null;
-    expedientes: {
-      numero: string;
-      inmuebles: { direccion: string; ciudad: string } | null;
-    } | null;
-  } | null;
-
-  return {
-    solicitud_id: row.id,
-    nombre_firmante: row.nombre_firmante,
-    email_firmante: row.email_firmante,
-    estado: row.estado === 'enviado' ? 'abierto' : row.estado,
-    token_expiracion: row.token_expiracion,
-    contrato_nombre: cc?.nombre_archivo || 'Contrato',
-    expediente_numero: cc?.expedientes?.numero || '',
-    inmueble_direccion: cc?.expedientes?.inmuebles?.direccion || '',
-    inmueble_ciudad: cc?.expedientes?.inmuebles?.ciudad || '',
-  };
-}
-
-// ============================================================
-// Get contract PDF for public signing page (HP-342)
-// ============================================================
-
-const PDF_URL_EXPIRY_SECONDS = 600; // 10 minutes
-
-export async function getContratoPdf(token: string) {
-  // Validate token first
-  const { data, error } = await (supabase
-    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, contrato_id, estado, token_expiracion')
-    .eq('token', token)
-    .single();
-
-  if (error || !data) {
-    throw AppError.notFound('Enlace de firma no válido', 'INVALID_TOKEN');
-  }
-
-  const row = data as unknown as {
-    id: string;
-    contrato_id: string;
-    estado: string;
-    token_expiracion: string;
-  };
-
-  // Check expiration
-  if (new Date(row.token_expiracion) < new Date()) {
-    throw AppError.badRequest('El enlace de firma ha expirado', 'TOKEN_EXPIRED');
-  }
-
-  // Check state
-  if (['firmado', 'cancelado', 'expirado'].includes(row.estado)) {
-    throw AppError.badRequest('Este enlace ya no es válido', 'INVALID_TOKEN_STATE');
-  }
-
-  // Get contract storage_key
-  const { data: contratoData, error: contratoError } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, storage_key, nombre_archivo')
-    .eq('id', row.contrato_id)
-    .single();
-
-  if (contratoError || !contratoData) {
-    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
-  }
-
-  const contrato = contratoData as unknown as {
-    id: string;
-    storage_key: string | null;
-    nombre_archivo: string | null;
-  };
-
-  if (!contrato.storage_key) {
-    throw AppError.badRequest('El contrato no tiene PDF generado', 'NO_PDF');
-  }
-
-  // Generate signed URL (read-only, no download header)
-  const { data: urlData, error: urlError } = await supabase.storage
-    .from(BUCKET_NAME)
-    .createSignedUrl(contrato.storage_key, PDF_URL_EXPIRY_SECONDS);
-
-  if (urlError || !urlData?.signedUrl) {
-    logger.error({ error: urlError, storageKey: contrato.storage_key }, 'Error creating signed URL for PDF');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener el PDF');
-  }
-
-  return {
-    pdf_url: urlData.signedUrl,
-    nombre_archivo: contrato.nombre_archivo || 'contrato.pdf',
-    expira_en_segundos: PDF_URL_EXPIRY_SECONDS,
-  };
-}
-
-// ============================================================
 // Auco Webhook Handler
 // ============================================================
 
@@ -1326,25 +1168,6 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
           signed_url: signedUrl,
         },
       });
-
-      // Cierra el bucle: transicion del contrato a firmado, evento timeline,
-      // emails de acuse al firmante y al operador. Sin esto, la firma via
-      // Auco webhook quedaba "huerfana" y dependia del auto-heal manual al
-      // entrar a la pestaña Contratos. Fire-and-forget — los errores se
-      // loggean pero no bloquean la respuesta del webhook.
-      const { executePostFirma } = await import('./post-firma.service');
-      executePostFirma({
-        solicitudId: row.id,
-        contratoId: row.contrato_id,
-        nombreFirmante: row.nombre_firmante,
-        emailFirmante: row.email_firmante,
-        firmadoEn: now,
-      }).catch((err) => {
-        logger.error(
-          { error: err, solicitudId: row.id },
-          'Auco webhook: error en executePostFirma',
-        );
-      });
     }
   }
 }
@@ -1356,8 +1179,8 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
  * Si el webhook de Auco no llega (eg. webhook no configurado en el panel,
  * red caida, deploy timing), pollea Auco directamente para todos los
  * contratos en `pendiente_firma` del expediente. Si Auco dice que el
- * documento esta FINISH, actualiza la solicitud_firma local y dispara
- * executePostFirma.
+ * documento esta FINISH, actualiza la solicitud_firma local (el contrato lo
+ * mueve el auto-heal al listar contratos).
  *
  * Idempotente — si ya esta en estado terminal, no hace nada.
  *
@@ -1493,20 +1316,6 @@ export async function syncFirmaConAucoForExpediente(expedienteId: string): Promi
           },
         });
 
-        // 4. Disparar el flow post-firma (transicion contrato + emails + timeline).
-        const { executePostFirma } = await import('./post-firma.service');
-        executePostFirma({
-          solicitudId: sol.id,
-          contratoId: sol.contrato_id,
-          nombreFirmante: sol.nombre_firmante,
-          emailFirmante: sol.email_firmante,
-          firmadoEn: now,
-        }).catch((err) => {
-          logger.error(
-            { error: err, solicitudId: sol.id },
-            'syncFirmaConAuco: error en executePostFirma',
-          );
-        });
       } catch (err) {
         logger.warn(
           { error: err instanceof Error ? err.message : String(err), solicitudId: sol.id },
