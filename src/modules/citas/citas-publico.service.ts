@@ -45,7 +45,7 @@ async function fetchCitaByToken(token: string): Promise<CitaPublicaRow> {
     .select(`
       id, estado, fecha_propuesta, fecha_confirmada, acuse_solicitante_at, expediente_id,
       expediente:expedientes (
-        inmueble:inmuebles (id, direccion, ciudad, propietario_id),
+        inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad, propietario_id),
         solicitante:solicitantes (nombre, apellido)
       )
     `)

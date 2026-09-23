@@ -31,6 +31,9 @@ const db = (table: string) => (supabase.from(table as string) as ReturnType<type
 // Embeds aliasados (alias:tabla) para que el response use claves singulares:
 // cita.expediente.inmueble.direccion, cita.expediente.solicitante.nombre.
 // Patrón idéntico al ya usado en estudios.service.ts con `tipo_documento:tipos_documento`.
+// El embed de inmuebles lleva hint: desde la migración 20260903000005 hay dos
+// relaciones expedientes<->inmuebles (inmuebles.reservado_por_expediente_id) y
+// sin él PostgREST responde 300 — el listado de citas daba 500 a todos.
 const CITA_SELECT = `
   id, expediente_id, estado, fecha_propuesta, fecha_confirmada,
   notas_solicitante, notas_propietario, motivo_cancelacion,
@@ -38,7 +41,7 @@ const CITA_SELECT = `
   created_at, updated_at,
   expediente:expedientes (
     id, numero, estudio_habilitado, estudio_rechazado, motivo_estudio_rechazado,
-    inmueble:inmuebles (id, direccion, ciudad),
+    inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad),
     solicitante:solicitantes (
       nombre, apellido, telefono, email,
       tipo_documento, numero_documento, ciudad, ocupacion
