@@ -8,6 +8,7 @@ import { fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
 import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
+import { sobreCanon } from '@/modules/estudios/tarifas';
 
 // ── Constantes para vista admin ─────────────────────────────
 //
@@ -768,10 +769,10 @@ export interface AdminOverviewKpis {
 }
 
 export interface AdminOverviewConfig {
-  // Tarifa plana mensual del servicio de afianzamiento (COP) por contrato.
-  // Es el ingreso real de fianza de Cofianza (NO un % del canon).
+  // Promedio de la tarifa mensual (sin IVA) por contrato activo: ya no hay una
+  // tarifa plana, cada contrato tiene la suya (ver tarifasMensualesDeContratos).
   valorAfianzamientoMensual: number;
-  // IVA aplicable a la garantía/fianza. Hoy '0' (exento) en configuracion_sistema.
+  // TARIFA_IVA: la tarifa de la fianza causa IVA (Adenda 1 de contratos §1.1).
   ivaGarantiaPorcentaje: number;
 }
 
@@ -826,6 +827,7 @@ export interface AdminOverview {
 // Rows internos para tipar las queries (no se exportan).
 interface ContratoActivoRow {
   id: string;
+  expediente_id: string;
   estado: string;
   valor_arriendo: number | string | null;
   fecha_inicio: string | null;
@@ -865,6 +867,33 @@ interface BitacoraRow {
 interface ConfiguracionRow {
   clave: string;
   valor: string;
+}
+
+// Ingreso de fianza (Adenda 1 del módulo de contratos §1.1 y respuesta 9): la
+// tarifa mensual de cada contrato es el % de su estudio —ruta de aprobación u
+// override de Gerencia, el mismo que imprime el contrato— sobre SU canon, más
+// TARIFA_IVA. Reemplaza la tarifa plana valor_afianzamiento_mensual ($20.000)
+// con el IVA de iva_concepto_garantia (0). Es lo causado del mes: la plataforma
+// no registra el recaudo de la tarifa (lo hace el arrendador con el canon).
+export async function tarifasMensualesDeContratos(
+  contratos: Array<{ id: string; expediente_id: string; valor_arriendo: number | string | null }>,
+): Promise<{ ivaPct: number; porContrato: Map<string, { tarifa: number; iva: number }> }> {
+  const [{ tarifasParaContrato }, { getCalibracion }] = await Promise.all([
+    import('@/modules/contratos/contratos.service'),
+    import('@/lib/calibracion'),
+  ]);
+  // ponytail: una lectura del estudio por contrato, en paralelo; con cientos de contratos, cargarlas en lote.
+  const [{ TARIFA_IVA }, filas] = await Promise.all([
+    getCalibracion(),
+    Promise.all(
+      contratos.map(async (c) => {
+        const t = sobreCanon(await tarifasParaContrato(c.expediente_id), Number(c.valor_arriendo) || 0);
+        const tarifa = t.tarifa_mensual_cop ?? 0;
+        return [c.id, { tarifa, iva: (t.tarifa_mensual_con_iva_cop ?? 0) - tarifa }] as const;
+      }),
+    ),
+  ]);
+  return { ivaPct: TARIFA_IVA, porContrato: new Map(filas) };
 }
 
 export async function getAdminOverview(): Promise<AdminOverview> {
@@ -938,14 +967,11 @@ export async function getAdminOverview(): Promise<AdminOverview> {
   const exposicionMaxima = canonMora + canonRiesgoSinMora;
   const zonaRiesgoExposicion = enRiesgo.reduce((s, c) => s + c.canon, 0);
 
-  // Ingresos por fianzas = tarifa plana mensual de afianzamiento × contratos
-  // activos. Esa tarifa (valor_afianzamiento_mensual) es el fee real que cobra
-  // Cofianza; NO es un % del canon (el % de "intermediación" es solo un campo
-  // de display en el contrato — ver contratos.service.ts). IVA según la tasa
-  // del concepto "garantía" (hoy exento → 0).
-  const ivaPct = config.ivaGarantiaPorcentaje / 100;
-  const ingresosFianzas = totalActivos * config.valorAfianzamientoMensual;
-  const ivaRecaudado = Math.round(ingresosFianzas * ivaPct);
+  // Ingresos por fianzas = la tarifa mensual de cada contrato activo, e IVA
+  // causado sobre ella (tarifasMensualesDeContratos).
+  const tarifas = await tarifasMensualesDeContratos(contratosActivos);
+  const ingresosFianzas = [...tarifas.porContrato.values()].reduce((s, t) => s + t.tarifa, 0);
+  const ivaRecaudado = [...tarifas.porContrato.values()].reduce((s, t) => s + t.iva, 0);
 
   // Histórico siniestralidad últimos 6 meses (incluyendo el actual).
   // Base = contratos que ALGUNA VEZ estuvieron activos (incluye finalizados/
@@ -991,8 +1017,8 @@ export async function getAdminOverview(): Promise<AdminOverview> {
       vitrinaVisitasMes,
     },
     config: {
-      valorAfianzamientoMensual: config.valorAfianzamientoMensual,
-      ivaGarantiaPorcentaje: config.ivaGarantiaPorcentaje,
+      valorAfianzamientoMensual: totalActivos ? Math.round(ingresosFianzas / totalActivos) : 0,
+      ivaGarantiaPorcentaje: tarifas.ivaPct,
     },
     histSiniestralidad,
     contratosPorVencer: porVencer
@@ -1053,7 +1079,7 @@ async function fetchContratosActivos(): Promise<ContratoActivoRow[]> {
   const { data, error } = await supabase
     .from('contratos')
     .select(
-      'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
+      'id, expediente_id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
     )
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
 
@@ -1102,30 +1128,20 @@ async function fetchBitacoraReciente(): Promise<BitacoraRow[]> {
   return (data ?? []) as unknown as BitacoraRow[];
 }
 
-async function fetchConfigDashboard(): Promise<AdminOverviewConfig & { capitalDisponible: number; reservaMinima: number }> {
-  // Defaults alineados con los seeds de configuracion_sistema:
-  //   valor_afianzamiento_mensual default 20000 (migración 20260427000004_contrato_template_data)
-  //   iva_concepto_garantia default '0' / exento (migración 20260427000003_iva_por_concepto)
-  const defaults = { valorAfianzamientoMensual: 20000, ivaGarantiaPorcentaje: 0, capitalDisponible: 0, reservaMinima: 0 };
+async function fetchConfigDashboard(): Promise<{ capitalDisponible: number; reservaMinima: number }> {
+  const defaults = { capitalDisponible: 0, reservaMinima: 0 };
 
   const { data } = await (
     supabase.from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>
   )
     .select('clave, valor')
-    .in('clave', [
-      'valor_afianzamiento_mensual',
-      'iva_concepto_garantia',
-      'tesoreria_capital_disponible',
-      'tesoreria_reserva_minima',
-    ]);
+    .in('clave', ['tesoreria_capital_disponible', 'tesoreria_reserva_minima']);
 
   const rows = (data ?? []) as unknown as ConfiguracionRow[];
   const map: Record<string, string> = {};
   for (const r of rows) map[r.clave] = r.valor;
 
   return {
-    valorAfianzamientoMensual: parseConfigNumber(map['valor_afianzamiento_mensual'], defaults.valorAfianzamientoMensual),
-    ivaGarantiaPorcentaje: parseConfigNumber(map['iva_concepto_garantia'], defaults.ivaGarantiaPorcentaje),
     capitalDisponible: parseConfigNumber(map['tesoreria_capital_disponible'], defaults.capitalDisponible),
     reservaMinima: parseConfigNumber(map['tesoreria_reserva_minima'], defaults.reservaMinima),
   };

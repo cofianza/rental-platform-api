@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as dashboardService from '../dashboard.service';
+import { calcularTarifas } from '@/modules/estudios/tarifas';
 
 // ── Mock Supabase ───────────────────────────────────────────
 
@@ -51,6 +52,14 @@ vi.mock('@/lib/tenantScope', () => ({
 vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
+
+// Ingresos de fianza: la tarifa del estudio de cada contrato, con TARIFA_IVA.
+vi.mock('@/modules/contratos/contratos.service', () => ({
+  tarifasParaContrato: vi.fn(async () =>
+    calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 1_000_000, ivaPct: 19 }),
+  ),
+}));
+vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => ({ TARIFA_IVA: 19 })) }));
 
 import { supabase } from '@/lib/supabase';
 const mockFrom = supabase.from as ReturnType<typeof vi.fn>;
@@ -281,6 +290,24 @@ describe('Dashboard Service', () => {
       const r = await dashboardService.getAdminOverview();
 
       expect(r.kpis.inmobiliariasActivas).toBe(2); // t1 y l1
+    });
+
+    it('«Ingresos fianzas»: la tarifa de cada contrato sobre su canon, más IVA (no $20.000 × contratos)', async () => {
+      mockFrom.mockImplementation((table: string) =>
+        table === 'contratos'
+          ? createChain([{ id: 'c1', expediente_id: 'e1', estado: 'vigente', valor_arriendo: '1500000', fecha_inicio: null, fecha_fin: null, expedientes: null }])
+          : createChain([]),
+      );
+      // El overview queda 5 min en caché: sin esto devolvería el del test anterior.
+      const ahora = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60_000);
+
+      const r = await dashboardService.getAdminOverview();
+      ahora.mockRestore();
+
+      // 2,0 % de 1.500.000 (el canon del contrato, no el evaluado) = 30.000 + IVA 5.700.
+      expect(r.kpis.ingresosFianzas).toBe(30_000);
+      expect(r.kpis.ivaRecaudado).toBe(5_700);
+      expect(r.config).toEqual({ valorAfianzamientoMensual: 30_000, ivaGarantiaPorcentaje: 19 });
     });
   });
 

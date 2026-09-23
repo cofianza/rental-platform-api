@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as secciones from '../dashboard-secciones.service';
+import { calcularTarifas, type ViaAprobacion } from '@/modules/estudios/tarifas';
 
 // ── Mock Supabase ───────────────────────────────────────────
 //
@@ -33,6 +34,11 @@ vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+// La tarifa de cada contrato sale de su estudio (tarifasParaContrato) y el IVA de TARIFA_IVA.
+const { mockTarifasParaContrato } = vi.hoisted(() => ({ mockTarifasParaContrato: vi.fn() }));
+vi.mock('@/modules/contratos/contratos.service', () => ({ tarifasParaContrato: mockTarifasParaContrato }));
+vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => ({ TARIFA_IVA: 19 })) }));
+
 import { supabase } from '@/lib/supabase';
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 
@@ -61,56 +67,40 @@ describe('getIngresosAdmin()', () => {
     },
   });
 
-  it('IVA exento (iva_concepto_garantia = 0): afianzamiento plano × contratos, IVA 0', async () => {
-    byTable({
-      configuracion_sistema: {
-        data: [
-          { clave: 'valor_afianzamiento_mensual', valor: '20000' },
-          { clave: 'iva_concepto_garantia', valor: '0' },
-        ],
-      },
-      contratos: { data: [contrato('c1', '1000000'), contrato('c2', '1500000')] },
-    });
-
-    const r = await secciones.getIngresosAdmin();
-
-    expect(r.valorAfianzamientoMensual).toBe(20000);
-    expect(r.ivaGarantiaPorcentaje).toBe(0);
-    expect(r.porContrato).toHaveLength(2);
-    expect(r.porContrato[0].afianzamiento).toBe(20000);
-    expect(r.porContrato[0].iva).toBe(0);
-    expect(r.porContrato[0].total).toBe(20000);
-    expect(r.totalAfianzamiento).toBe(40000);
-    expect(r.totalIva).toBe(0);
-    expect(r.totalBruto).toBe(40000);
+  // Tarifas del estudio de cada expediente, calculadas sobre el canon EVALUADO
+  // (900.000): el informe las pasa al canon del contrato (respuesta 9).
+  const viaPorExpediente: Record<string, ViaAprobacion> = { 'e-c1': 'automatica', 'e-c2': 'revision_manual' };
+  beforeEach(() => {
+    mockTarifasParaContrato.mockImplementation(async (expedienteId: string) =>
+      calcularTarifas({ via: viaPorExpediente[expedienteId], conCoarrendatario: false, canonCop: 900_000, ivaPct: 19 }),
+    );
   });
 
-  it('IVA > 0 (19%): calcula IVA sobre el afianzamiento', async () => {
-    byTable({
-      configuracion_sistema: {
-        data: [
-          { clave: 'valor_afianzamiento_mensual', valor: '20000' },
-          { clave: 'iva_concepto_garantia', valor: '19' },
-        ],
-      },
-      contratos: { data: [contrato('c1', '1000000')] },
-    });
+  it('la tarifa real de cada contrato (su % sobre su canon) más IVA 19 %, no los $20.000 planos', async () => {
+    byTable({ contratos: { data: [contrato('c1', '1000000'), contrato('c2', '1500000')] } });
 
     const r = await secciones.getIngresosAdmin();
 
+    // 2,0 % de 1.000.000 = 20.000 + IVA 3.800; 2,7 % de 1.500.000 = 40.500 + IVA 7.695.
+    expect(r.porContrato.map(({ afianzamiento, iva, total }) => ({ afianzamiento, iva, total }))).toEqual([
+      { afianzamiento: 20_000, iva: 3_800, total: 23_800 },
+      { afianzamiento: 40_500, iva: 7_695, total: 48_195 },
+    ]);
+    expect(r.totalAfianzamiento).toBe(60_500);
+    expect(r.totalIva).toBe(11_495);
+    expect(r.totalBruto).toBe(71_995);
+    expect(r.valorAfianzamientoMensual).toBe(30_250); // promedio por contrato
     expect(r.ivaGarantiaPorcentaje).toBe(19);
-    expect(r.porContrato[0].iva).toBe(3800); // round(20000 * 0.19)
-    expect(r.porContrato[0].total).toBe(23800);
-    expect(r.totalIva).toBe(3800);
+    expect(mockFrom).not.toHaveBeenCalledWith('configuracion_sistema');
   });
 
-  it('sin config: usa defaults (afianzamiento 20000, IVA 0)', async () => {
-    byTable({ configuracion_sistema: { data: [] }, contratos: { data: [] } });
+  it('sin contratos activos: todo en 0, con el IVA de TARIFA_IVA', async () => {
+    byTable({ contratos: { data: [] } });
 
     const r = await secciones.getIngresosAdmin();
 
-    expect(r.valorAfianzamientoMensual).toBe(20000);
-    expect(r.ivaGarantiaPorcentaje).toBe(0);
+    expect(r.valorAfianzamientoMensual).toBe(0);
+    expect(r.ivaGarantiaPorcentaje).toBe(19);
     expect(r.totalBruto).toBe(0);
   });
 });

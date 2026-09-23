@@ -14,7 +14,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
 import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
-import { countVitrinaVisitasMes, fetchPerfilesInmobiliaria } from './dashboard.service';
+import { countVitrinaVisitasMes, fetchPerfilesInmobiliaria, tarifasMensualesDeContratos } from './dashboard.service';
 
 // Estados de contrato considerados "activos" (firmado = listo, vigente = corriendo).
 const ESTADOS_CONTRATO_ACTIVO = ['firmado', 'vigente'] as const;
@@ -558,8 +558,8 @@ export async function getVitrinaAdmin(): Promise<VitrinaData> {
 
 // ── INGRESOS (detalle por contrato + resumen) ───────────────
 //
-// Ingreso real = tarifa plana valor_afianzamiento_mensual × contrato activo
-// (NO % del canon). IVA según iva_concepto_garantia (hoy 0/exento).
+// Ingreso = la tarifa mensual de cada contrato activo (su % sobre su canon) más
+// el IVA causado (TARIFA_IVA): ver tarifasMensualesDeContratos.
 
 export interface IngresoContratoRow {
   contratoId: string;
@@ -572,7 +572,9 @@ export interface IngresoContratoRow {
 }
 
 export interface IngresosData {
+  /** Promedio por contrato activo: ya no hay tarifa plana. */
   valorAfianzamientoMensual: number;
+  /** TARIFA_IVA (Adenda 1 de contratos §1.1). */
   ivaGarantiaPorcentaje: number;
   totalAfianzamiento: number;
   totalIva: number;
@@ -580,26 +582,7 @@ export interface IngresosData {
   porContrato: IngresoContratoRow[];
 }
 
-async function getConfigIngresos(): Promise<{ afianzamiento: number; ivaPct: number }> {
-  const { data } = await (
-    supabase.from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>
-  )
-    .select('clave, valor')
-    .in('clave', ['valor_afianzamiento_mensual', 'iva_concepto_garantia']);
-  const map: Record<string, string> = {};
-  for (const r of (data ?? []) as Array<{ clave: string; valor: string }>) map[r.clave] = r.valor;
-  const afianzamiento = Number(map['valor_afianzamiento_mensual']);
-  const ivaPct = Number(map['iva_concepto_garantia']);
-  return {
-    afianzamiento: Number.isFinite(afianzamiento) ? afianzamiento : 20000,
-    ivaPct: Number.isFinite(ivaPct) ? ivaPct : 0,
-  };
-}
-
 export async function getIngresosAdmin(): Promise<IngresosData> {
-  const cfg = await getConfigIngresos();
-  const ivaFactor = cfg.ivaPct / 100;
-
   const { data, error } = await (
     supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
   )
@@ -608,11 +591,11 @@ export async function getIngresosAdmin(): Promise<IngresosData> {
   if (error) throw fromSupabaseError(error);
 
   const rows = conFinVigente((data ?? []) as unknown as ContratoRowDB[]);
+  const tarifas = await tarifasMensualesDeContratos(rows);
   const porContrato: IngresoContratoRow[] = rows.map((r) => {
     const sol = r.expedientes?.solicitantes ?? null;
     const inm = r.expedientes?.inmuebles ?? null;
-    const afianzamiento = cfg.afianzamiento;
-    const iva = Math.round(afianzamiento * ivaFactor);
+    const { tarifa: afianzamiento, iva } = tarifas.porContrato.get(r.id) ?? { tarifa: 0, iva: 0 };
     return {
       contratoId: r.id,
       inquilino: sol ? `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || '—' : '—',
@@ -628,8 +611,8 @@ export async function getIngresosAdmin(): Promise<IngresosData> {
   const totalIva = porContrato.reduce((s, c) => s + c.iva, 0);
 
   return {
-    valorAfianzamientoMensual: cfg.afianzamiento,
-    ivaGarantiaPorcentaje: cfg.ivaPct,
+    valorAfianzamientoMensual: porContrato.length ? Math.round(totalAfianzamiento / porContrato.length) : 0,
+    ivaGarantiaPorcentaje: tarifas.ivaPct,
     totalAfianzamiento,
     totalIva,
     totalBruto: totalAfianzamiento + totalIva,
