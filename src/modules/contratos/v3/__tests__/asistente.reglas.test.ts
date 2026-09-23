@@ -460,11 +460,9 @@ describe('armarDatosVivienda → renderizarVivienda (revisión, sin Chromium)', 
     expect(render(fuentes(), PASOS).pendientes).toEqual([]);
   });
 
-  it('sin coarrendatario + sin PH + Tradicional → pendientes b-* y c-*, sin PENDIENTE de texto', () => {
-    const { pendientes } = render(fuentes(SOLO), PASOS_SOLO);
-    expect(pendientes.some((p) => p.id.startsWith('b-'))).toBe(true);
-    expect(pendientes.some((p) => p.id.startsWith('c-'))).toBe(true);
-    expect(pendientes.every((p) => p.tipo === 'borrador')).toBe(true);
+  it('sin coarrendatario + sin PH + Tradicional → sale en modo final (Adenda 1 de contratos)', () => {
+    const d = armarDatosVivienda(fuentes(SOLO), PASOS_SOLO, HOY, 'CTO-2026-0007');
+    expect(renderizarVivienda(d, { modo: 'final', logoInmobiliaria: null }).pendientes).toEqual([]);
   });
 
   it('la cuenta sale "de ahorros" y el NIT con su DV una sola vez', () => {

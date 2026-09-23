@@ -13,9 +13,9 @@ vi.mock('@/lib/logger', () => ({
 // ============================================================
 // Anexo de Condiciones de Afianzamiento (Entrega 5 §4.4): lo que firman las
 // partes en la Ruta B. La fidelidad contra el Word la cubre fidelidad.test.ts;
-// aquí van las variantes: con coarrendatario y C.C. sale en modo final en las
-// dos modalidades; sin coarrendatario o con otro documento quedan borradores
-// sin aprobar (a-c-*, a-j-*) y el modo final se bloquea. COFIANZA no firma.
+// aquí van las variantes: con y sin coarrendatario, en las dos modalidades y
+// con otro documento, todas salen en modo final (la Adenda 1 de contratos
+// aprobó los a-c-* en la resp. 1 y los a-j-* en la 4). COFIANZA no firma.
 // ============================================================
 
 const persona = (
@@ -103,34 +103,23 @@ function falla(fn: () => unknown): { code: string; details: unknown } | undefine
 }
 
 const ids = (r: { pendientes: { id: string }[] }) => r.pendientes.map((p) => p.id).sort();
-const pendientesDe = (e: ReturnType<typeof falla>) =>
-  (e!.details as { pendientes: { id: string; tipo: string }[] }).pendientes;
 const textos = (r: Resultado) => r.lineas.map((l) => l.texto);
 const deKind = (r: Resultado, kind: string) => r.lineas.filter((l) => l.kind === kind);
 
-// Las 11 redacciones en singular sin coarrendatario (spec §2.4): el Anexo no
-// las trae en el Word, así que son borradores hasta que Gerencia las apruebe.
-const A_C_IDS = Array.from({ length: 11 }, (_, k) => `a-c-${String(k + 1).padStart(2, '0')}`);
-// "C.C." está fijo en el Word (cuadro y firmas) para arrendatario y coarrendatario.
-const A_J_IDS = [
-  'a-j-cuadro-arrendatario',
-  'a-j-cuadro-coa',
-  'a-j-firma-arrendatario',
-  'a-j-firma-coa',
-].sort();
-
-describe('modo final con coarrendatario y C.C.', () => {
+describe('modo final', () => {
   it.each([
-    ['Trasladada', true],
-    ['Tradicional', false],
-  ])('%s sale sin pendientes ni marcadores', (_nombre, trasladada) => {
-    const r = renderizarAnexo(datos({ trasladada }), {
+    ['con coarrendatario, Trasladada', true, true],
+    ['con coarrendatario, Tradicional', true, false],
+    ['sin coarrendatario, Trasladada', false, true],
+    ['sin coarrendatario, Tradicional', false, false],
+  ])('%s sale sin pendientes ni marcadores', (_nombre, coa, trasladada) => {
+    const r = renderizarAnexo(datos({ coa, trasladada }), {
       modo: 'final',
       logoInmobiliaria: null,
     });
     expect(r.pendientes).toEqual([]);
-    expect(r.html).not.toMatch(/class="pendiente"/);
-    expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: false })).not.toThrow();
+    expect(r.html).not.toMatch(/class="pendiente"|⟦/);
+    expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: !coa })).not.toThrow();
   });
 
   it('la casilla marcada es la de la modalidad, y solo una', () => {
@@ -162,10 +151,10 @@ describe('el cuadro inicial', () => {
     expect(celdas).toContain('María Fernanda López Arango · C.C. 43123456');
   });
 
-  it('sin coarrendatario la fila desaparece, sin dejar rastro ni pedir aprobación', () => {
+  it('sin coarrendatario la fila desaparece, sin dejar rastro', () => {
     const sin = textos(revision(datos({ coa: false })));
     expect(sin.filter((t) => /coarrendatari/i.test(t))).toEqual([]);
-    expect(ids(revision(datos({ coa: false })))).toEqual(A_C_IDS);
+    expect(ids(revision(datos({ coa: false })))).toEqual([]);
   });
 });
 
@@ -202,22 +191,14 @@ describe('las cláusulas se numeran y se remiten solas', () => {
 });
 
 describe('sin coarrendatario', () => {
-  it('el modo final se bloquea con los a-c-* sin aprobar', () => {
-    const e = falla(final(datos({ coa: false })));
-    expect(e?.code).toBe('PLANTILLA_TEXTO_PENDIENTE');
-    expect(
-      pendientesDe(e)
-        .map((p) => p.id)
-        .sort(),
-    ).toEqual(A_C_IDS);
-    expect(new Set(pendientesDe(e).map((p) => p.tipo))).toEqual(new Set(['borrador']));
-  });
-
-  it('en revisión el singular se resalta y no queda mención al coarrendatario', () => {
-    const r = revision(datos({ coa: false }));
-    expect(r.html).toMatch(/class="pendiente"/);
+  it('el singular sale en modo final (Adenda 1 de contratos, resp. 1), sin resaltar', () => {
+    const r = renderizarAnexo(datos({ coa: false }), { modo: 'final', logoInmobiliaria: null });
+    expect(r.html).not.toMatch(/class="pendiente"/);
     expect(textos(r).join('\n')).not.toMatch(/coarrendatari/i);
-    expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: true })).not.toThrow();
+    // a-c-02: sin coarrendatario no hay activación condicionada a su firma
+    expect(textos(r)).toContainEqual(
+      expect.stringContaining('del presente anexo por todas las partes requeridas. No existe activación parcial ni provisional.'),
+    );
   });
 });
 
@@ -225,9 +206,9 @@ describe('documento distinto de C.C.', () => {
   const ce = (p: Persona) => ({ ...p, tipoDocumento: 'ce' as const });
   const d = { ...datos(), arrendatario: ce(ARRENDATARIO), coarrendatarios: [ce(COARRENDATARIO)] };
 
-  it('deja pendientes los a-j-* del cuadro y de las firmas, y no pasa a final', () => {
-    expect(ids(revision(d))).toEqual(A_J_IDS);
-    expect(falla(final(d))?.code).toBe('PLANTILLA_TEXTO_PENDIENTE');
+  it('pasa a final con el tipo real en el cuadro y las firmas (Adenda 1 de contratos, resp. 4)', () => {
+    expect(ids(revision(d))).toEqual([]);
+    expect(falla(final(d))).toBeUndefined();
   });
 
   it('imprime el tipo real de documento', () => {

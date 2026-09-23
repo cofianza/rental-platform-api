@@ -138,8 +138,6 @@ const ids = (r: { pendientes: { id: string }[] }) => r.pendientes.map((p) => p.i
 // Los borradores en singular sin coarrendatario (V3 §9.4). El diseño contaba
 // 19; los conversores hallaron 5 tramos más con concordancia plural (c-20…c-24).
 const C_IDS = Array.from({ length: 24 }, (_, k) => `c-${String(k + 1).padStart(2, '0')}`);
-// Tradicional (Adenda 1 contratos, resp. 2): b-04 está en la sección del coarrendatario.
-const B_IDS = (coa: boolean) => ['b-01', 'b-02', 'b-03', ...(coa ? ['b-04'] : []), 'b-05'];
 
 // ── Lectura de lo impreso, por origen en la plantilla ──
 
@@ -388,15 +386,8 @@ describe('matriz: coarrendatario × comisión × PH × modalidad, con 0 y 2 adic
       r.lineas.filter((l) => l.kind === 'firma').map((l) => /^\*\*([^*]+)\*\*/.exec(l.texto)?.[1]),
     ).toEqual(['EL ARRENDATARIO', ...(c.coa ? ['EL COARRENDATARIO'] : []), 'EL ARRENDADOR']);
 
-    // pendientes: c-* sin coarrendatario, b-* en Tradicional
-    expect(r.pendientes.map((x) => `${x.tipo}:${x.id}`).sort()).toEqual(
-      [
-        ...(c.coa ? [] : C_IDS),
-        ...(c.trasladada ? [] : B_IDS(c.coa)),
-      ]
-        .map((id) => `borrador:${id}`)
-        .sort(),
-    );
+    // la Adenda 1 de contratos aprobó los c-*, b-* y j-* (resp. 1, 2 y 4): nada pendiente
+    expect(r.pendientes).toEqual([]);
 
     // las cifras impresas cuadran (leídas del HTML)
     expect(() => verificarCoherencia(asientosDeHtml(r.html), derivadas(IVA))).not.toThrow();
@@ -443,12 +434,18 @@ describe('caso de referencia: sin coarrendatario, sin comisión, sin PH', () => 
   });
 });
 
-describe('modo final', () => {
-  it('el caso completo pasa por el camino final y el barrido de marcadores', () => {
-    const r = renderizarVivienda(datos(COMPLETO), { modo: 'final', logoInmobiliaria: null });
+describe('modo final: coarrendatario × modalidad × PH (Adenda 1 de contratos)', () => {
+  const casos = [true, false].flatMap((coa) =>
+    [true, false].flatMap((trasladada) => [true, false].map((ph) => ({ ...COMPLETO, coa, trasladada, ph }))),
+  );
+  const nombre = (c: Caso) =>
+    [c.coa ? 'coa' : 'sin coa', c.trasladada ? 'Trasladada' : 'Tradicional', c.ph ? 'PH' : 'sin PH'].join(' · ');
+
+  it.each(casos.map((c) => [nombre(c), c] as const))('%s: sin PENDIENTE, borradores sin aprobar ni marcadores', (_, c) => {
+    const r = renderizarVivienda(datos(c), { modo: 'final', logoInmobiliaria: null });
     expect(r.pendientes).toEqual([]);
-    expect(r.html).not.toMatch(/class="pendiente"/);
-    expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: false })).not.toThrow();
+    expect(r.html).not.toMatch(/class="pendiente"|⟦/);
+    expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: !c.coa })).not.toThrow();
   });
 });
 
@@ -456,14 +453,6 @@ describe('rechazos', () => {
   const final = (d: DatosVivienda) => () =>
     renderizarVivienda(d, { modo: 'final', logoInmobiliaria: null });
   const completo = datos(COMPLETO);
-
-  it('final sin coarrendatario → PLANTILLA_TEXTO_PENDIENTE con los c-*', () => {
-    const e = falla(final(datos({ ...COMPLETO, coa: false })));
-    expect(e?.code).toBe('PLANTILLA_TEXTO_PENDIENTE');
-    const { pendientes } = e!.details as { pendientes: { id: string; tipo: string }[] };
-    expect(pendientes.map((p) => p.id).sort()).toEqual(C_IDS);
-    expect(new Set(pendientes.map((p) => p.tipo))).toEqual(new Set(['borrador']));
-  });
 
   it('dos coarrendatarios o un cashback que no es el del Word → PLANTILLA_NO_SOPORTA', () => {
     expect(
@@ -482,7 +471,7 @@ describe('rechazos', () => {
     });
   });
 
-  it('una parte con C.E. deja pendientes los j-* y no pasa a final', () => {
+  it('una parte con C.E. imprime su documento real y pasa a final (Adenda 1 contratos, resp. 4)', () => {
     const ce = (p: Persona) => ({ ...p, tipoDocumento: 'ce' as const });
     const d = {
       ...completo,
@@ -490,7 +479,7 @@ describe('rechazos', () => {
       coarrendatarios: [ce(COARRENDATARIO)],
     };
     const r = revision(d);
-    expect(ids(r)).toEqual(['j-coa-doc', 'j-firma-arrendatario', 'j-firma-coa']);
+    expect(ids(r)).toEqual([]);
     expect(deClausula(r, 'coarrendatario')[1].texto).toContain(
       'identificado(a) con cédula de extranjería N° 43123456',
     );
@@ -499,7 +488,7 @@ describe('rechazos', () => {
       '**EL COARRENDATARIO** María Fernanda López Arango C.E. N° 43123456',
       '**EL ARRENDADOR** Ana María Gómez Restrepo Representante Legal NIT 900.123.456-7',
     ]);
-    expect(falla(final(d))?.code).toBe('PLANTILLA_TEXTO_PENDIENTE');
+    expect(falla(final(d))).toBeUndefined();
   });
 
   it('fechado el día 1 no deja pendientes: el cierre del Word corregido no lleva ciudad ni fecha', () => {
