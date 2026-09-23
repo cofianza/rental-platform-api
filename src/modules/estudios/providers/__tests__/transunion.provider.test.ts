@@ -177,6 +177,14 @@ describe('TransUnionProvider', () => {
       await expect(provider.solicitar(baseInput)).rejects.toThrow('invalidos');
     });
 
+    it('el codigo 16 (sin permiso para el combo) es error de configuracion, no del prospecto', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify(mockErrorResponse(16, 'Sin privilegios')), { status: 200 }),
+      );
+
+      await expect(provider.solicitar(baseInput)).rejects.toMatchObject({ errorCode: 'PROVIDER_AUTH_ERROR' });
+    });
+
     it('deberia lanzar error por timeout de red', async () => {
       fetchSpy.mockImplementationOnce(() => {
         const error = new DOMException('The operation was aborted', 'AbortError');

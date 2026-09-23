@@ -262,7 +262,7 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
 
   if (propError || !propietario) {
     throw AppError.badRequest(
-      'Propietario no encontrado. Verifique el ID proporcionado',
+      'Propietario no encontrado. Verifica el propietario seleccionado.',
       'PROPIETARIO_NOT_FOUND',
     );
   }
@@ -302,7 +302,7 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
   if (error) {
     logger.error({ error: error.message }, 'Error al crear inmueble');
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
     }
     // 23505 = unique_violation. El unico unique es (propietario_id, codigo),
     // asi que sabemos que el codigo ya esta en uso para ese propietario.
@@ -365,7 +365,7 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
 
     if (propError || !propietario) {
       throw AppError.badRequest(
-        'Propietario no encontrado. Verifique el ID proporcionado',
+        'Propietario no encontrado. Verifica el propietario seleccionado.',
         'PROPIETARIO_NOT_FOUND',
       );
     }

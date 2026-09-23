@@ -672,7 +672,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
   if (error) {
     logger.error({ error: error.message }, 'Error al crear cita');
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear la cita');
   }

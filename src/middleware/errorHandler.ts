@@ -8,7 +8,7 @@ export function errorHandler(err: Error, _req: Request, res: Response, _next: Ne
 
   // AppError: errores controlados con codigo HTTP especifico
   if (err instanceof AppError) {
-    logger.warn({ errorCode: err.errorCode, statusCode: err.statusCode }, err.message);
+    logger.warn({ errorCode: err.errorCode, statusCode: err.statusCode, ...(err.cause ? { cause: err.cause } : {}) }, err.message);
     res.status(err.statusCode).json({
       success: false,
       errorCode: err.errorCode,

@@ -34,7 +34,7 @@ export async function crearExpedienteExterno(
     .single();
 
   if (inmuebleError || !inmueble) {
-    throw AppError.badRequest('Inmueble no encontrado. Verifique el ID proporcionado', 'INMUEBLE_NOT_FOUND');
+    throw AppError.badRequest('Inmueble no encontrado. Verifica el inmueble seleccionado.', 'INMUEBLE_NOT_FOUND');
   }
 
   const inm = inmueble as unknown as { id: string; codigo: string; direccion: string; ciudad: string; inmobiliaria_id: string | null };
@@ -81,7 +81,7 @@ export async function crearExpedienteExterno(
   if (error) {
     logger.error({ error: error.message }, 'Error al crear estudio externo');
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el estudio externo');
   }

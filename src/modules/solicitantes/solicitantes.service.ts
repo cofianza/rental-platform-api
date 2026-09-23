@@ -242,7 +242,7 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
       );
     }
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el solicitante');
   }

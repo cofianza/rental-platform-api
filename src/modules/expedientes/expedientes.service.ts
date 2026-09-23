@@ -365,7 +365,7 @@ export async function createExpediente(
     .single();
 
   if (inmuebleError || !inmueble) {
-    throw AppError.badRequest('Inmueble no encontrado. Verifique el ID proporcionado', 'INMUEBLE_NOT_FOUND');
+    throw AppError.badRequest('Inmueble no encontrado. Verifica el inmueble seleccionado.', 'INMUEBLE_NOT_FOUND');
   }
 
   // 1b. Flujo §4.2/§4.3: un inmueble RESERVADO para un candidato aprobado
@@ -415,7 +415,7 @@ export async function createExpediente(
       .single();
 
     if (analistaError || !analista) {
-      throw AppError.badRequest('Analista no encontrado. Verifique el ID proporcionado', 'ANALISTA_NOT_FOUND');
+      throw AppError.badRequest('Analista no encontrado. Verifica el analista seleccionado.', 'ANALISTA_NOT_FOUND');
     }
 
     const rol = (analista as unknown as { rol: string }).rol;
@@ -499,7 +499,7 @@ export async function createExpediente(
       throw AppError.conflict('Ya existe un estudio con esos datos.', 'EXPEDIENTE_DUPLICADO');
     }
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia invalida. Verifique los datos proporcionados', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el estudio');
   }
@@ -580,7 +580,7 @@ export async function updateExpediente(
       .single();
 
     if (analistaError || !analista) {
-      throw AppError.badRequest('Analista no encontrado. Verifique el ID proporcionado', 'ANALISTA_NOT_FOUND');
+      throw AppError.badRequest('Analista no encontrado. Verifica el analista seleccionado.', 'ANALISTA_NOT_FOUND');
     }
 
     const rol = (analista as unknown as { rol: string }).rol;

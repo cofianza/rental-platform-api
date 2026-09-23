@@ -2733,6 +2733,10 @@ async function procesarEstudioAsync(args: {
       logger.error({ estudioId, error: swErr.message }, 'Adenda §2.3: no se pudo pasar la primaria a TransUnion — el estudio queda fallido');
     }
 
+    // Credenciales, permisos o saldo de la cuenta de Cofianza en el buró:
+    // reintentar con el mismo buró no lo arregla.
+    const errorDeConfiguracion = ['PROVIDER_AUTH_ERROR', 'PROVIDER_NOT_CONFIGURED', 'PROVIDER_TOKEN_REJECTED'].includes(errorCode ?? '');
+
     const observaciones = bloqueadoPorAutorizacion
       ? errorMsg
       : apellidoNoCoincide
@@ -2741,7 +2745,11 @@ async function procesarEstudioAsync(args: {
       ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos, o reintenta con el otro buró.`
       : proveedorNoDisponible
         ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió (Adenda §2.3 → Política §14: sin centrales no hay decisión automática). ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintenta eligiendo TransUnion.' : ''}`
-        : `Error de proveedor (${buroLabel}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
+        : errorDeConfiguracion
+        ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito: puedes intentar con el otro buró.`
+        // Sin el mensaje crudo del proveedor (códigos, combos, variables de
+        // entorno): va al log, a la auditoría y al aviso de los internos.
+        : `${buroLabel} no pudo completar la consulta. No es un rechazo de crédito: vuelve a intentarlo o escribe a soporte.`;
 
     // CAS: si lo cancelaron mientras se consultaba, no se resucita como 'fallido'
     // (reintentable) ni se avisa de un fallo.
@@ -2758,7 +2766,7 @@ async function procesarEstudioAsync(args: {
 
     // Politica §14: que alguien se entere (timeline + responsable + internos).
     if (failError || (marcados && marcados.length > 0)) {
-      await avisarEstudioFallido({ estudioId, expedienteId, observaciones });
+      await avisarEstudioFallido({ estudioId, expedienteId, observaciones, detalleTecnico: observaciones === errorMsg ? undefined : errorMsg });
     }
 
     logAudit({
@@ -2835,6 +2843,8 @@ async function avisarEstudioFallido(args: {
   titulo?: string;
   /** Solo a los internos: sin timeline ni responsable (nada que hacer para la agencia). */
   soloInternos?: boolean;
+  /** Mensaje crudo del proveedor: solo lo leen los internos. */
+  detalleTecnico?: string;
 }): Promise<void> {
   const { estudioId, expedienteId, observaciones } = args;
   const titulo = args.titulo ?? 'Evaluación fallida — requiere revisión';
@@ -2880,7 +2890,16 @@ async function avisarEstudioFallido(args: {
     if (error) throw new Error(error.message);
     const ids = ((data as Array<{ id: string }> | null) ?? []).map((perfil) => perfil.id);
     await Promise.all(
-      ids.map((userId) => notificarUsuario({ userId, tipo: 'estudio.fallido', titulo, mensaje: observaciones, link, payload })),
+      ids.map((userId) =>
+        notificarUsuario({
+          userId,
+          tipo: 'estudio.fallido',
+          titulo,
+          mensaje: args.detalleTecnico ? `${observaciones} Detalle técnico: ${args.detalleTecnico}` : observaciones,
+          link,
+          payload,
+        }),
+      ),
     );
   });
 }

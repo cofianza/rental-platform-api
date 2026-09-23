@@ -268,8 +268,9 @@ export class TransUnionProvider implements CreditRiskProvider {
         `TransUnion: error ${errorResp.codigo}`,
       );
 
-      // Auth errors → no reintentar
-      if (errorResp.codigo === 13) {
+      // Auth errors → no reintentar. El 16 (sin permiso para el combo) tambien
+      // es configuracion de la cuenta de Cofianza: reintentar no lo arregla.
+      if (errorResp.codigo === 13 || errorResp.codigo === 16) {
         throw AppError.unauthorized(
           `TransUnion: ${friendlyMsg}`,
           'PROVIDER_AUTH_ERROR',

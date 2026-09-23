@@ -659,7 +659,7 @@ export async function liberarEstudioConCredito(
     }
 
     if (rpcErr?.message?.includes('SIN_SALDO_CREDITOS')) {
-      throw AppError.badRequest('No tiene creditos disponibles. Compre un paquete primero.', 'SIN_SALDO_CREDITOS');
+      throw AppError.badRequest('No tienes créditos disponibles. Compra un paquete primero.', 'SIN_SALDO_CREDITOS');
     }
 
     logger.error({ rpcErr }, 'Error consumiendo credito');

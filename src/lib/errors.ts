@@ -55,5 +55,14 @@ export function fromSupabaseError(error: PostgrestError): AppError {
       details: error.details,
     });
   }
-  return new AppError(500, 'DATABASE_ERROR', error.message);
+  // Solo los RAISE de nuestras funciones (P0xxx) traen un texto pensado para el
+  // usuario; el resto ("Could not find a relationship…", 22P02…) es interno y
+  // en inglés. El crudo viaja en `cause`: lo registra el errorHandler.
+  const appError = new AppError(
+    500,
+    'DATABASE_ERROR',
+    error.code?.startsWith('P0') ? error.message : 'No pudimos completar la operación. Intenta de nuevo.',
+  );
+  appError.cause = error;
+  return appError;
 }

@@ -269,7 +269,7 @@ export async function confirmarSubida(
       'Archivo no encontrado en storage',
     );
     throw AppError.badRequest(
-      'El archivo no fue encontrado en el storage. Verifique que la subida se completo correctamente.',
+      'No encontramos el archivo subido. Verifica que la carga se haya completado.',
       'FILE_NOT_FOUND_IN_STORAGE',
     );
   }
@@ -306,7 +306,7 @@ export async function confirmarSubida(
     logger.error({ error: insertError.message }, 'Error al registrar documento');
     if (insertError.code === '23503') {
       throw AppError.badRequest(
-        'Referencia invalida. Verifique los datos proporcionados',
+        'Referencia inválida. Verifica los datos enviados.',
         'FK_VIOLATION',
       );
     }
@@ -1118,7 +1118,7 @@ export async function confirmarReemplazo(
       'Archivo de reemplazo no encontrado en storage',
     );
     throw AppError.badRequest(
-      'El archivo no fue encontrado en el storage. Verifique que la subida se completo correctamente.',
+      'No encontramos el archivo subido. Verifica que la carga se haya completado.',
       'FILE_NOT_FOUND_IN_STORAGE',
     );
   }
