@@ -46,15 +46,15 @@ export async function sendEstudioAprobadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Tu estudio crediticio fue aprobado - Cofianza',
+    subject: 'Tu evaluación crediticia fue aprobada - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Estudio Aprobado</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Evaluación aprobada</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-          <p style="color: #6b7280;">Tu estudio crediticio para el inmueble en <strong>${inmueble}, ${ciudad}</strong> ha sido <span style="color: #059669; font-weight: bold;">aprobado</span>.</p>
+          <p style="color: #6b7280;">Tu evaluación crediticia para el inmueble en <strong>${inmueble}, ${ciudad}</strong> fue <span style="color: #059669; font-weight: bold;">aprobada</span>.</p>
           ${score ? `<p style="color: #6b7280;">Score crediticio: <strong>${score}</strong></p>` : ''}
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: tu contrato</p>
@@ -96,15 +96,15 @@ export async function sendEstudioRechazadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Resultado de tu estudio crediticio - Cofianza',
+    subject: 'Resultado de tu evaluación crediticia - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #111827; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Resultado del Estudio</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Resultado de la evaluación</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-          <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu estudio crediticio no cumplió con los requisitos mínimos para el arrendamiento en esta oportunidad.'}</p>
+          <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu evaluación crediticia no cumplió con los requisitos mínimos para el arrendamiento en esta oportunidad.'}</p>
           <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #991b1b; margin: 0;">${motivoGeneral
               ? 'Si quieres, escríbenos y revisamos juntos qué opciones tienes: un inmueble de canon menor o un co-arrendatario suelen ser el camino.'
@@ -298,7 +298,7 @@ export async function sendExpedienteInvitacionEmail(params: {
           <p style="color: #374151; font-size: 16px;">Hola,</p>
           <p style="color: #6b7280;"><strong>${nombre_invitador}</strong> te ha invitado a completar un estudio de arrendamiento para el inmueble en <strong>${inmueble}, ${ciudad}</strong>.</p>
           <div style="background: #f0fdfa; border: 1px solid #99f6e4; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #115e59; margin: 0;">Para continuar con el proceso, necesitas registrarte en la plataforma Cofianza y completar tu estudio crediticio.</p>
+            <p style="color: #115e59; margin: 0;">Para continuar con el proceso, necesitas registrarte en la plataforma Cofianza y completar tu evaluación crediticia.</p>
           </div>
           <div style="text-align: center; margin: 24px 0;">
             <a href="${registroUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Registrarme y continuar</a>
@@ -488,7 +488,7 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
             <p style="color: #065f46; margin: 4px 0 0;">${fechaFormateada}</p>
             ${notas_propietario ? `<p style="color: #065f46; margin: 8px 0 0;"><strong>Notas:</strong> ${notas_propietario}</p>` : ''}
           </div>
-          <p style="color: #6b7280;">Despues de la visita, el propietario habilitara tu estudio crediticio.</p>
+          <p style="color: #6b7280;">Después de la visita, el propietario habilitará tu evaluación crediticia.</p>
           ${footerHtml(company)}
         </div>
       </div>
@@ -663,7 +663,7 @@ export async function sendEstudioNoHabilitadoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre_solicitante}</strong>,</p>
-          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${inmueble}, ${ciudad}</strong>, el propietario decidió no continuar con el proceso de estudio crediticio para tu solicitud (<strong>${expediente_numero}</strong>).</p>
+          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${inmueble}, ${ciudad}</strong>, el propietario decidió no continuar con la evaluación crediticia de tu solicitud (<strong>${expediente_numero}</strong>).</p>
           ${motivo ? `
           <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #374151; margin: 0; font-weight: bold;">Motivo del propietario:</p>

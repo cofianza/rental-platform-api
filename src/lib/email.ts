@@ -269,7 +269,7 @@ export async function sendEstudioFormEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Completa tu estudio de riesgo crediticio - Cofianza',
+      subject: 'Completa tu evaluación crediticia - Cofianza',
       html: buildEstudioFormHtml(nombre, formUrl, expiryHours),
     });
 
@@ -287,7 +287,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Estudio de Riesgo Crediticio</title>
+  <title>Evaluación crediticia</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
@@ -314,10 +314,10 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
           <tr>
             <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
-                Estudio de Riesgo Crediticio
+                Evaluación crediticia
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, como parte del proceso de arrendamiento necesitamos que completes un formulario con tu informacion personal para realizar el estudio de riesgo crediticio.
+                Hola ${nombre}, como parte del proceso de arrendamiento necesitamos que completes un formulario con tu informacion personal para realizar la evaluación crediticia.
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->

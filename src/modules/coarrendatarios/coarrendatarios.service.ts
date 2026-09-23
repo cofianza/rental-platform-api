@@ -292,12 +292,12 @@ function buildMotivoRechazoCoarrendatario(
     return 'Los estudios del titular y del co-arrendatario quedaron en perfil marginal en el buró. La solicitud no procede.';
   }
   if (coarrendatarioResultado === 'rechazado') {
-    return 'El estudio crediticio del co-arrendatario invitado fue rechazado. La solicitud no procede.';
+    return 'La evaluación crediticia del co-arrendatario invitado fue rechazada. La solicitud no procede.';
   }
   if (titularResultado === 'rechazado') {
-    return 'El estudio crediticio del titular fue rechazado. La solicitud no procede.';
+    return 'La evaluación crediticia del titular fue rechazada. La solicitud no procede.';
   }
-  return 'La ponderación de los estudios crediticios del titular y el co-arrendatario no permite respaldar este arrendamiento.';
+  return 'La ponderación de las evaluaciones crediticias del titular y el co-arrendatario no permite respaldar este arrendamiento.';
 }
 
 // ============================================================

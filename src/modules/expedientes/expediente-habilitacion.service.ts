@@ -208,7 +208,7 @@ export async function habilitarEstudio(
         userId: solicitanteUserId,
         tipo: 'estudio.habilitado',
         titulo: 'Evaluación habilitada',
-        mensaje: 'El propietario habilitó tu estudio crediticio. Firma la autorización de datos para continuar; el cobro llega después de que autorices.',
+        mensaje: 'El propietario habilitó tu evaluación crediticia. Firma la autorización de datos para continuar; el cobro llega después de que autorices.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, estudio_id: rpcResult.estudio_id },
       });

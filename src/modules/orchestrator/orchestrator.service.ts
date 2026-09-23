@@ -685,7 +685,7 @@ export async function onEstudioCompletado(params: {
       // antes de generar — no antes del estudio. El expediente queda en
       // 'aprobado' y el panel del propietario muestra el card "Generar
       // contrato" que pide los datos y dispara la generación.
-      await registrarTimeline(expedienteId, 'estudio', `Estudio crediticio aprobado (Score: ${score}). El propietario debe generar el contrato desde el panel.`);
+      await registrarTimeline(expedienteId, 'estudio', `Evaluación crediticia aprobada (Score: ${score}). El propietario debe generar el contrato desde el panel.`);
 
       // Flujo §10/§11: el CRC sale CON el resultado. No bloquea las notificaciones.
       emitirCrcAutomatico(estudioId, actorCrc, expedienteId);
@@ -796,7 +796,7 @@ export async function onEstudioCompletado(params: {
         porReglaDura
           ? `Estudio rechazado por regla dura de la Politica V4.1 (${reglaDura.reglas.join(', ')}). ` +
               `Las reglas duras anulan el puntaje total${score !== null ? `: el score del buro fue ${score}` : ''}.`
-          : `Estudio crediticio rechazado (Score: ${score}).`,
+          : `Evaluación crediticia rechazada (Score: ${score}).`,
       );
 
       // Persistir motivo legible para el banner de cierre. Si la transición
@@ -812,7 +812,7 @@ export async function onEstudioCompletado(params: {
           motivo_rechazo:
             porReglaDura && reglaDura.motivoGestor
               ? reglaDura.motivoGestor
-              : 'El estudio crediticio del titular fue rechazado. La solicitud no procede.',
+              : 'La evaluación crediticia del titular fue rechazada. La solicitud no procede.',
         } as never)
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');
@@ -845,7 +845,7 @@ export async function onEstudioCompletado(params: {
           userId: inm.propietario_id,
           tipo: 'estudio.rechazado.propietario',
           titulo: 'Estudio del arrendatario rechazado',
-          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El estudio no avanza al contrato.`,
+          mensaje: `La evaluación crediticia de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazada. El estudio no avanza al contrato.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario rechazado'));
@@ -856,7 +856,7 @@ export async function onEstudioCompletado(params: {
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.rechazado.propietario',
           titulo: 'Estudio del arrendatario rechazado',
-          mensaje: `El estudio crediticio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. El estudio no avanza al contrato.`,
+          mensaje: `La evaluación crediticia de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazada. El estudio no avanza al contrato.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable rechazado'));
