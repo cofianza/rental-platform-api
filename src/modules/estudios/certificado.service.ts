@@ -359,12 +359,14 @@ export async function generateCertificatePdf(
       // Adenda §5 — tarifas y primas por ruta de aprobacion.
       if (data.tarifas) {
         const t = data.tarifas;
-        const via =
-          t.via === 'automatica'
-            ? 'aprobación automática'
+        // La via deja inferir la banda del puntaje: la version para firmantes no la lleva.
+        const via = data.paraFirmantes
+          ? ''
+          : t.via === 'automatica'
+            ? ' (aprobación automática)'
             : t.via === 'condicionada_coarrendatario'
-              ? 'aprobación condicionada con coarrendatario'
-              : 'aprobación tras revisión manual';
+              ? ' (aprobación condicionada con coarrendatario)'
+              : ' (aprobación tras revisión manual)';
         // Adenda 1 contratos §1.1: la prima y la tarifa causan IVA, siempre
         // (TARIFA_IVA del panel), sobre el canon sin IVA.
         const masIva = (base: number | null, conIva: number | null) =>
@@ -375,7 +377,7 @@ export async function generateCertificatePdf(
           t.prima_vinculacion_cop == null ? null : Math.round(t.prima_vinculacion_cop * (1 + t.iva_pct / 100));
         condRows.push([
           'Tarifa mensual de la fianza',
-          `${formatPct(t.tarifa_mensual_pct)} del canon más IVA (${via})` +
+          `${formatPct(t.tarifa_mensual_pct)} del canon más IVA${via}` +
             masIva(t.tarifa_mensual_cop, t.tarifa_mensual_con_iva_cop) +
             (t.negociada ? ' — condiciones especiales autorizadas' : ''),
         ]);

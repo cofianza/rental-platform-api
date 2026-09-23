@@ -273,13 +273,18 @@ describe('filas del certificado', () => {
 // Adenda 1 del módulo de contratos §1.1: "La prima y la tarifa causan IVA, siempre."
 describe('IVA de la prima y la tarifa', () => {
   it('las dos llevan su IVA, con la tarifa del panel, en las dos versiones', async () => {
-    for (const d of [DATOS, sinPuntaje(DATOS)]) {
-      textos.mockClear();
-      await generateCertificatePdf(d, QR);
-      const t = impreso();
-      expect(t).toMatch(/2% del canon más IVA \(aprobación automática\): \$\s40\.000 \+ IVA del 19% = \$\s47\.600/);
-      expect(t).toMatch(/20% del canon más IVA, pago único al activar: \$\s400\.000 \+ IVA del 19% = \$\s476\.000/);
-    }
+    await generateCertificatePdf(DATOS, QR);
+    const completo = impreso();
+    expect(completo).toMatch(/2% del canon más IVA \(aprobación automática\): \$\s40\.000 \+ IVA del 19% = \$\s47\.600/);
+    expect(completo).toMatch(/20% del canon más IVA, pago único al activar: \$\s400\.000 \+ IVA del 19% = \$\s476\.000/);
+
+    // Sin la vía de aprobación: deja inferir la banda del puntaje.
+    textos.mockClear();
+    await generateCertificatePdf(sinPuntaje(DATOS), QR);
+    const firmantes = impreso();
+    expect(firmantes).toMatch(/2% del canon más IVA: \$\s40\.000 \+ IVA del 19% = \$\s47\.600/);
+    expect(firmantes).toMatch(/20% del canon más IVA, pago único al activar: \$\s400\.000 \+ IVA del 19% = \$\s476\.000/);
+    expect(firmantes).not.toMatch(/aprobación (automática|condicionada|tras)/);
 
     textos.mockClear();
     const tarifas = calcularTarifas({ via: 'condicionada_coarrendatario', conCoarrendatario: true, canonCop: 2_000_000, ivaPct: 16 });
