@@ -191,6 +191,40 @@ function flattenVars(
   return out;
 }
 
+// Datos que se corrigen DESPUÉS de generar el borrador (el teléfono en
+// «Enviar a firma», los Datos para contrato del arrendador) y que el PDF
+// firmado tiene que llevar: contacto de notificación, cuenta de pago y
+// representante. derivarFirmantes ya lee los actuales; el PDF no.
+const CAMPOS_VIGENTES_AL_FIRMAR = [
+  'arrendatario.celular',
+  'arrendatario.correo',
+  'inmobiliaria.telefono',
+  'inmobiliaria.whatsapp_cartera',
+  'inmobiliaria.correo_cartera',
+  'inmobiliaria.banco',
+  'inmobiliaria.tipo_cuenta',
+  'inmobiliaria.numero_cuenta',
+  'inmobiliaria.representante_legal',
+  'arrendador.cuenta_titular_nombre',
+  'arrendador.cuenta_titular_nit',
+];
+
+/**
+ * Campos de CAMPOS_VIGENTES_AL_FIRMAR que cambiaron entre el snapshot del
+ * contrato y el contexto actual. Solo compara los que el snapshot trae: un
+ * contrato generado con una plantilla vieja no se da por desactualizado por un
+ * campo que nunca imprimió.
+ */
+export function camposDesactualizadosParaFirma(
+  guardado: Record<string, unknown> | null | undefined,
+  actual: Record<string, unknown>,
+): string[] {
+  if (!guardado) return [];
+  const g = flattenVars(guardado);
+  const a = flattenVars(actual);
+  return CAMPOS_VIGENTES_AL_FIRMAR.filter((k) => k in g && g[k] !== (a[k] ?? ''));
+}
+
 function etiquetaCampo(path: string): string {
   if (RESUMEN_ETIQUETAS[path]) return RESUMEN_ETIQUETAS[path];
   const [grupo, ...rest] = path.split('.');
@@ -1434,11 +1468,12 @@ export async function enviarContratoAFirma(
 ): Promise<{ ok: true; message: string }> {
   const { data: contratoRow } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, expediente_id, storage_key, destinacion')
+    .select('id, estado, expediente_id, storage_key, destinacion, datos_variables')
     .eq('id', contratoId)
     .maybeSingle();
   const c = contratoRow as {
     id: string; estado: string; expediente_id: string; storage_key: string | null; destinacion: string | null;
+    datos_variables: Record<string, unknown> | null;
   } | null;
   if (!c) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
   // Ownership (cierra IDOR: la inmobiliaria A no puede enviar a firma un
@@ -1471,6 +1506,24 @@ export async function enviarContratoAFirma(
     .maybeSingle();
   if (activa) {
     return { ok: true, message: 'El contrato ya está en proceso de firma.' };
+  }
+
+  // El PDF que va a Auco es el del borrador; si después se corrigió el teléfono
+  // (modal de firma) o la cuenta de recaudo, el sobre saldría con los datos
+  // nuevos y el documento firmado con los viejos. El borrador se regenera; otro
+  // estado ya no se puede regenerar y se frena.
+  const desactualizados = await camposDesactualizadosDelContrato(c);
+  if (desactualizados.length > 0) {
+    if (c.estado !== 'borrador') {
+      throw AppError.conflict(
+        c.estado === 'pendiente_firma'
+          ? 'Los datos de contacto o de pago cambiaron desde que se generó este contrato. Cancélalo y genera uno nuevo para enviarlo a firma.'
+          : 'Los datos de contacto o de pago cambiaron desde que se generó este contrato. Devuélvelo a borrador para actualizarlo antes de enviarlo a firma.',
+        'CONTRATO_DATOS_DESACTUALIZADOS',
+      );
+    }
+    logger.info({ contratoId, desactualizados }, 'Enviar a firma: datos cambiaron, se regenera el borrador');
+    await regenerarContrato(contratoId, {}, userId, undefined, userRol);
   }
 
   // Llevar a 'pendiente_firma' (salto directo, igual que el flujo automático).
@@ -1575,6 +1628,29 @@ export async function enviarContratoAFirma(
  * (cancela su sobre en Auco y los pasa a 'cancelado'). NO toca 'firmado'/'vigente'
  * (más avanzados) ni el recién enviado. Best-effort: nunca tumba el envío nuevo.
  */
+/**
+ * Compara el snapshot del contrato con los datos actuales del estudio y del
+ * arrendador. Si no se pueden leer (p. ej. el estudio ya no está aprobado), no
+ * bloquea: el envío sigue como antes y lo registra.
+ */
+async function camposDesactualizadosDelContrato(c: {
+  id: string; expediente_id: string; datos_variables: Record<string, unknown> | null;
+}): Promise<string[]> {
+  if (!c.datos_variables) return [];
+  try {
+    const { data } = await fetchExpedienteData(c.expediente_id);
+    // Fecha y duración no alimentan ninguno de los campos comparados.
+    const actual = await buildContratoContext(data, '', new Date(), 12);
+    return camposDesactualizadosParaFirma(c.datos_variables, actual);
+  } catch (err) {
+    logger.warn(
+      { contratoId: c.id, error: err instanceof Error ? err.message : String(err) },
+      'Enviar a firma: no se pudo comparar el contrato con los datos actuales',
+    );
+    return [];
+  }
+}
+
 export async function supersederContratosEnFirma(
   expedienteId: string,
   exceptContratoId: string,
