@@ -210,6 +210,15 @@ export async function updatePlantilla(
     // `contenido` dejaba la edición silenciosamente ignorada por el
     // generador, que prioriza contenido_html.
     if (prev.contenido_html) {
+      // Defensa: un HTML sin @page (márgenes del PDF) ni firma-line (anclas de
+      // Auco) es el que deja un editor de texto enriquecido; guardarlo daña la
+      // plantilla que se firma.
+      if (!input.contenido.includes('@page') || !input.contenido.includes('class="firma-line"')) {
+        throw AppError.badRequest(
+          'Esta plantilla es un documento HTML con formato de impresión y espacios de firma; su contenido no se puede reemplazar con este editor.',
+          'PLANTILLA_HTML_INVALIDA',
+        );
+      }
       updateData.contenido_html = input.contenido;
     } else {
       updateData.contenido = input.contenido;
