@@ -244,6 +244,14 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
   };
 }
 
+/** 409 para no cancelar un pago que ya salio (PSE o recibo de efectivo en curso). */
+function errorPagoEnProceso(despues: string): AppError {
+  return AppError.conflict(
+    `Ya se inició un pago por PSE o en efectivo. Espera a que se confirme o venza; si vence, podrás ${despues}.`,
+    'PAGO_EN_PROCESO',
+  );
+}
+
 /**
  * Expira el link en la pasarela (best-effort, fire-and-forget): un pago
  * cancelado en BD no debe seguir siendo pagable desde el email del arrendatario.
@@ -512,6 +520,11 @@ export async function pagarGestor(
       String(existing.email_pagador ?? '').toLowerCase() === email.toLowerCase() &&
       !!existing.payment_link_url;
     if (esSuyo) return existing;
+    // 'procesando' = el pagador ya genero el recibo de efectivo o inicio el PSE.
+    // Expirar la preference no detiene ese pago: si se aprueba despues, cae
+    // sobre un pago cancelado (pagos_no_conciliados) y el estudio se cobra dos
+    // veces. Se espera a que se confirme o venza (el webhook lo cancela).
+    if (existing.estado === 'procesando') throw errorPagoEnProceso('pagarlo tú');
     if (!opts.reemplazarPendiente) {
       throw AppError.conflict(
         'Hay un enlace de pago vivo del prospecto. Cancélalo y paga tú desde el estudio.',
@@ -818,8 +831,11 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
 
   const pago = await findPagoEstudio(expedienteId);
   if (!pago) throw AppError.notFound('No existe un pago de estudio pendiente');
-  if (!['pendiente', 'procesando'].includes(pago.estado as string)) {
-    throw AppError.badRequest('Solo se puede cancelar un pago en estado pendiente o en proceso', 'PAGO_NO_CANCELABLE');
+  // 'procesando' no se cancela a mano: el pago ya salio (PSE o efectivo) y
+  // cancelarlo aqui lo cobraria dos veces (ver pagarGestor).
+  if (pago.estado === 'procesando') throw errorPagoEnProceso('liberarlo con crédito');
+  if (pago.estado !== 'pendiente') {
+    throw AppError.badRequest('Solo se puede cancelar un pago pendiente', 'PAGO_NO_CANCELABLE');
   }
 
   // perfilId = userId: la inmobiliaria dueña del inmueble es dueña de los créditos.

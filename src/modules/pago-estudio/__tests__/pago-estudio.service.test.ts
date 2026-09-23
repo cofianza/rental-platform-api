@@ -66,7 +66,7 @@ vi.mock('@/lib/tenantScope', () => ({
 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 
-import { pagarGestor } from '../pago-estudio.service';
+import { pagarGestor, cancelarYLiberarCredito } from '../pago-estudio.service';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
 
@@ -160,5 +160,41 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: 'p-pros', targetEstado: 'cancelado' }));
     expect(mockCancelLink).toHaveBeenCalledWith('pref-pros');
     expect(pago.id).toBe('pago-nuevo');
+  });
+
+  it("con el pago del prospecto 'procesando' (PSE/efectivo en curso) no lo cancela ni con la bandera: 409", async () => {
+    // Expirar la preference no detiene un PSE o un recibo de efectivo ya
+    // generado: si se aprueba despues cae sobre un pago cancelado y el estudio
+    // se cobra dos veces.
+    const enCurso = { id: 'p-pse', estado: 'procesando', metodo: 'pasarela', email_pagador: 'prospecto@x.co', payment_link_url: 'https://mp.test/pros', external_id: 'pref-pros' };
+
+    datosComunes();
+    enqueue('pagos', { data: [enCurso], error: null });
+    await expect(
+      pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria', { reemplazarPendiente: true }),
+    ).rejects.toMatchObject({ errorCode: 'PAGO_EN_PROCESO', statusCode: 409 });
+
+    expect(mockTransition).not.toHaveBeenCalled();
+    expect(mockCancelLink).not.toHaveBeenCalled();
+    expect(mockCreateLink).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancelarYLiberarCredito', () => {
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it("no cancela un pago 'procesando' para gastar un credito encima: 409", async () => {
+    enqueue('pagos', { data: [{ id: 'p-pse', estado: 'procesando', metodo: 'pasarela', external_id: 'pref-pros' }], error: null });
+
+    await expect(cancelarYLiberarCredito(EXP, 'user-1', undefined, 'inmobiliaria')).rejects.toMatchObject({
+      errorCode: 'PAGO_EN_PROCESO',
+      statusCode: 409,
+    });
+    expect(mockTransition).not.toHaveBeenCalled();
+    expect(mockCancelLink).not.toHaveBeenCalled();
   });
 });
