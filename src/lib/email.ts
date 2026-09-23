@@ -5,10 +5,20 @@ import { COMPANY } from '@/config/company';
 import { escapeHtml } from '@/lib/escapeHtml';
 
 // Antes los correos cerraban con "contacta a tu agente inmobiliario": el
-// prospecto no tiene agente y se quedaba sin a quien escribirle. Se leen del
-// env para no volver este modulo asincrono (getCompany hace I/O).
-const SOPORTE_WHATSAPP = COMPANY.phone;
-const SOPORTE_EMAIL = COMPANY.email;
+// prospecto no tiene agente y se quedaba sin a quien escribirle. Son los de
+// «Datos de la empresa» (getCompany, con caché), no los del archivo: si el
+// administrador cambia el canal, todos los correos dicen el mismo. Import
+// perezoso para no cargar Supabase al importar este módulo.
+type Soporte = { whatsapp: string; email: string };
+async function soporte(): Promise<Soporte> {
+  try {
+    const { getCompany } = await import('@/lib/companyConfig');
+    const c = await getCompany();
+    return { whatsapp: escapeHtml(c.phone), email: escapeHtml(c.email) };
+  } catch {
+    return { whatsapp: COMPANY.phone, email: COMPANY.email };
+  }
+}
 
 const resend = new Resend(env.RESEND_API_KEY);
 
@@ -271,7 +281,7 @@ export async function sendEstudioFormEmail(
       from: FROM_EMAIL,
       to,
       subject: 'Completa tu evaluación crediticia - Cofianza',
-      html: buildEstudioFormHtml(nombre, formUrl, expiryHours),
+      html: buildEstudioFormHtml(nombre, formUrl, expiryHours, await soporte()),
     });
 
     logger.info({ to }, 'Email de formulario de estudio enviado');
@@ -281,7 +291,7 @@ export async function sendEstudioFormEmail(
   }
 }
 
-function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: number): string {
+function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: number, sop: Soporte): string {
   return `
 <!DOCTYPE html>
 <html lang="es">
@@ -339,7 +349,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirara en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
+                Este enlace expirara en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -609,7 +619,7 @@ export async function sendAutorizacionEmail(
       from: FROM_EMAIL,
       to,
       subject: 'Autorización consulta centrales de riesgo - Cofianza',
-      html: buildAutorizacionHtml(nombre, autorizacionUrl, expiryHours),
+      html: buildAutorizacionHtml(nombre, autorizacionUrl, expiryHours, await soporte()),
     });
 
     logger.info({ to }, 'Email de autorizacion habeas data enviado');
@@ -635,7 +645,7 @@ export async function sendOtpEmail(to: string, nombre: string, codigo: string): 
   }
 }
 
-function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHours: number): string {
+function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHours: number, sop: Soporte): string {
   return `
 <!DOCTYPE html>
 <html lang="es">
@@ -697,7 +707,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
+                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -831,7 +841,7 @@ export async function sendFirmaEmail(
       from: FROM_EMAIL,
       to,
       subject: copy?.asunto ?? 'Firma de contrato de arrendamiento - Cofianza',
-      html: buildFirmaHtml(nombre, firmaUrl, expiryHours, context, copy),
+      html: buildFirmaHtml(nombre, firmaUrl, expiryHours, context, copy, await soporte()),
     });
 
     logger.info({ to }, 'Email de firma de contrato enviado');
@@ -846,7 +856,8 @@ function buildFirmaHtml(
   firmaUrl: string,
   expiryHours: number,
   context: { direccion_inmueble: string; ciudad_inmueble: string; nombre_arrendatario: string },
-  copy?: CopyFirmaEmail,
+  copy: CopyFirmaEmail | undefined,
+  sop: Soporte,
 ): string {
   return `
 <!DOCTYPE html>
@@ -919,7 +930,7 @@ function buildFirmaHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
+                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
@@ -963,7 +974,7 @@ export async function sendPaymentLinkEmail(
       from: FROM_EMAIL,
       to,
       subject: `Link de pago - ${context.concepto} - Cofianza`,
-      html: buildPaymentLinkHtml(nombre, paymentUrl, context),
+      html: buildPaymentLinkHtml(nombre, paymentUrl, context, await soporte()),
     });
 
     logger.info({ to, concepto: context.concepto }, 'Email de link de pago enviado');
@@ -977,6 +988,7 @@ function buildPaymentLinkHtml(
   nombre: string,
   paymentUrl: string,
   context: { concepto: string; monto: string; expediente_numero: string },
+  sop: Soporte,
 ): string {
   return `
 <!DOCTYPE html>
@@ -1049,7 +1061,7 @@ function buildPaymentLinkHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Si tienes cualquier problema con el pago, escríbenos por WhatsApp al ${SOPORTE_WHATSAPP} o a ${SOPORTE_EMAIL}.
+                Si tienes cualquier problema con el pago, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
