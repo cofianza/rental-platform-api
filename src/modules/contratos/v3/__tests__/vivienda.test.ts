@@ -1,10 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AppError } from '@/lib/errors';
 import { mayus, ordinal, titulo } from '../formato';
+import { APROBACIONES } from '../aprobaciones';
 import {
   asientosDeHtml,
   contarClausulas,
   inventarioSupresiones,
+  renderizar,
   verificarCoherencia,
   verificarSinMarcadores,
   type Nodo,
@@ -386,8 +388,9 @@ describe('matriz: coarrendatario × comisión × PH × modalidad, con 0 y 2 adic
       r.lineas.filter((l) => l.kind === 'firma').map((l) => /^\*\*([^*]+)\*\*/.exec(l.texto)?.[1]),
     ).toEqual(['EL ARRENDATARIO', ...(c.coa ? ['EL COARRENDATARIO'] : []), 'EL ARRENDADOR']);
 
-    // la Adenda 1 de contratos aprobó los c-*, b-* y j-* (resp. 1, 2 y 4): nada pendiente
-    expect(r.pendientes).toEqual([]);
+    // la Adenda 1 de contratos aprobó los c-*, b-01…b-05 y j-*; en Tradicional falta el
+    // texto del cashback a favor de EL ARRENDADOR (b-06), que espera a Gerencia
+    expect(r.pendientes).toEqual(c.trasladada ? [] : [{ id: 'b-06', tipo: 'borrador' }]);
 
     // las cifras impresas cuadran (leídas del HTML)
     expect(() => verificarCoherencia(asientosDeHtml(r.html), derivadas(IVA))).not.toThrow();
@@ -441,11 +444,32 @@ describe('modo final: coarrendatario × modalidad × PH (Adenda 1 de contratos)'
   const nombre = (c: Caso) =>
     [c.coa ? 'coa' : 'sin coa', c.trasladada ? 'Trasladada' : 'Tradicional', c.ph ? 'PH' : 'sin PH'].join(' · ');
 
-  it.each(casos.map((c) => [nombre(c), c] as const))('%s: sin PENDIENTE, borradores sin aprobar ni marcadores', (_, c) => {
-    const r = renderizarVivienda(datos(c), { modo: 'final', logoInmobiliaria: null });
+  it.each(casos.map((c) => [nombre(c), c] as const))('%s', (_, c) => {
+    const final = () => renderizarVivienda(datos(c), { modo: 'final', logoInmobiliaria: null });
+    if (!c.trasladada) {
+      // Tradicional se bloquea solo por el cashback (b-06) hasta que Gerencia lo apruebe
+      expect(falla(final)).toMatchObject({
+        code: 'PLANTILLA_TEXTO_PENDIENTE',
+        details: { pendientes: [{ id: 'b-06', tipo: 'borrador' }] },
+      });
+      return;
+    }
+    const r = final();
     expect(r.pendientes).toEqual([]);
     expect(r.html).not.toMatch(/class="pendiente"|⟦/);
     expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: !c.coa })).not.toThrow();
+  });
+
+  it('aprobado b-06, Tradicional sale en final sin nada más pendiente ni marcadores', () => {
+    const b06 = PLANTILLA_VIVIENDA.borradores.find((b) => b.id === 'b-06')!;
+    for (const coa of [true, false]) {
+      const r = renderizar(PLANTILLA_VIVIENDA, contexto(datos({ ...COMPLETO, coa, trasladada: false, ph: false })), {
+        modo: 'final',
+        aprobados: { ...APROBACIONES, 'b-06': { sha256: b06.sha256 } },
+      });
+      expect(r.pendientes).toEqual([]);
+      expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: !coa })).not.toThrow();
+    }
   });
 });
 
@@ -524,8 +548,12 @@ describe('modalidad Tradicional (Adenda 1 contratos, resp. 2)', () => {
     expect(resumen).toContain('• Pagar el canon incompleto. Así falten pocos pesos, se considera mora.');
   });
 
-  it('la cláusula de cashback del contrato no se toca (está preguntada a Gerencia)', () => {
-    expect(impresa(r, PARRAFO.get('fianza/beneficios'))).toContain('CASHBACK. Si a la terminación del presente contrato');
+  it('el cashback de la CUARTA es de quien pagó, EL ARRENDADOR: borrador b-06 que espera a Gerencia', () => {
+    expect(impresa(r, PARRAFO.get('fianza/beneficios'))).toBe(
+      '**PARÁGRAFO TERCERO — BENEFICIOS POR BUEN COMPORTAMIENTO DE PAGO:** CASHBACK. Si a la terminación del presente contrato EL ARRENDATARIO no hubiere incurrido en mora por ningún concepto durante la vigencia de la fianza, COFIANZA S.A.S. reintegrará el treinta por ciento (30%) del valor total de las tarifas mensuales efectivamente pagadas. El cashback se liquida a favor de quien hubiere pagado efectivamente las tarifas mensuales, que en modalidad Tradicional es EL ARRENDADOR. Este reintegro no aplica sobre la prima de vinculación y se liquida a la terminación del contrato.',
+    );
+    expect(ids(r)).toEqual(['b-06']);
+    expect(APROBACIONES['b-06']).toBeUndefined();
   });
 });
 
