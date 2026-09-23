@@ -98,10 +98,10 @@ function denyAndThrow(
  * - gerencia_consulta: solo action='read'.
  * - propietario, inmobiliaria: cualquier acción sobre citas cuyo expediente
  *   apunte a un inmueble de su propiedad.
- * - solicitante: create/read sobre expedientes donde sea dueño vía
- *   solicitantes.creado_por. Para 'cancelar' además requiere ser autor
- *   de la cita (se valida pasando citaCreadoPor). Nunca puede confirmar,
- *   realizar ni marcar no_asistio.
+ * - solicitante: create/read/cancelar/reprogramar sobre expedientes donde
+ *   sea dueño vía solicitantes.creado_por, aunque la cita la haya agendado
+ *   la inmobiliaria (el enlace del WhatsApp ya lo dejaba). Nunca puede
+ *   confirmar, realizar ni marcar no_asistio.
  *
  * Hace UNA sola query a expedientes con joins embebidos a inmuebles y
  * solicitantes. Devuelve el contexto del expediente para que el caller
@@ -112,9 +112,8 @@ export async function assertCitaPermission(params: {
   userRol: UserRole;
   expedienteId: string;
   action: CitaAction;
-  citaCreadoPor?: string;
 }): Promise<CitaPermissionContext> {
-  const { userId, userRol, expedienteId, action, citaCreadoPor } = params;
+  const { userId, userRol, expedienteId, action } = params;
 
   if (FULL_ACCESS_ROLES.includes(userRol)) {
     const row = await fetchExpedienteOwnership(expedienteId);
@@ -154,12 +153,6 @@ export async function assertCitaPermission(params: {
     }
     if (row.solicitantes?.creado_por !== userId) {
       denyAndThrow(userId, userRol, expedienteId, action, 'solicitante no es dueño del estudio');
-    }
-    if (action === 'cancelar' && citaCreadoPor !== userId) {
-      denyAndThrow(userId, userRol, expedienteId, action, 'solicitante solo puede cancelar citas propias');
-    }
-    if (action === 'reprogramar' && citaCreadoPor !== userId) {
-      denyAndThrow(userId, userRol, expedienteId, action, 'solicitante solo puede reprogramar citas propias');
     }
     logger.debug({ userId, userRol, expedienteId, action }, 'Cita autorizada (solicitante)');
     return toContext(row);

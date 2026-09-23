@@ -803,7 +803,6 @@ export async function getCitaById(id: string, userId: string, userRol: string) {
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
     action: 'read',
-    citaCreadoPor: cita.creado_por as string | undefined,
   });
   return cita;
 }
@@ -819,7 +818,6 @@ export async function confirmarCita(id: string, input: ConfirmarCitaInput, userI
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
     action: 'confirmar',
-    citaCreadoPor: cita.creado_por as string | undefined,
   });
   assertTransition(cita.estado as string, 'confirmada');
 
@@ -894,7 +892,6 @@ export async function reprogramarCita(
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
     action: 'reprogramar',
-    citaCreadoPor: cita.creado_por as string | undefined,
   });
 
   // Solo aplica a citas que estan vivas (solicitada o confirmada). Cualquier
@@ -1015,7 +1012,6 @@ export async function acusarReprogramacion(id: string, userId: string, userRol: 
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
     action: 'read',
-    citaCreadoPor: cita.creado_por as string | undefined,
   });
 
   // Solo aplicable a citas confirmadas con reprogramacion pendiente.
@@ -1145,7 +1141,6 @@ export async function realizarCita(id: string, input: RealizarCitaInput, userId:
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
     action: 'realizar',
-    citaCreadoPor: cita.creado_por as string | undefined,
   });
   assertTransition(cita.estado as string, 'realizada');
 
@@ -1188,7 +1183,6 @@ export async function cancelarCita(id: string, input: CancelarCitaInput, userId:
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
     action: 'cancelar',
-    citaCreadoPor: cita.creado_por as string | undefined,
   });
   assertTransition(cita.estado as string, 'cancelada');
 
@@ -1243,7 +1237,6 @@ export async function marcarNoAsistio(id: string, userId: string, userRol: strin
     userRol: userRol as UserRole,
     expedienteId: cita.expediente_id as string,
     action: 'no_asistio',
-    citaCreadoPor: cita.creado_por as string | undefined,
   });
   assertTransition(cita.estado as string, 'no_asistio');
 
