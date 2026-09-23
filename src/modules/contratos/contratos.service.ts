@@ -9,7 +9,7 @@ import { renderHtmlToPdf } from '@/lib/pdfRenderer';
 import { renderTemplate, renderTemplateHighlighted } from '@/lib/templateEngine';
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
-import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess, assertInmuebleAccess, puedeVerFilaExpediente } from '@/lib/tenantScope';
 import { checkPerfilCompletitud, usuarioPuedeEditarDatosContrato } from '../perfil-arrendador/perfil-arrendador.service';
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
@@ -937,8 +937,8 @@ const CONTRATO_LIST_WITH_RELATIONS = `
 `;
 
 // Scoping por rol propietario/inmobiliaria centralizado en @/lib/tenantScope
-// (resolveAllowedExpedienteIds). Compartido por listado, stats y detalle para
-// que nunca diverjan.
+// (resolveAllowedExpedienteIds, en listado y stats; el detalle usa la misma
+// regla sobre su fila con puedeVerFilaExpediente) para que nunca diverjan.
 
 /**
  * PostgREST interpreta `%`, `,`, `(` y `)` dentro de un `or(...)`, así que un
@@ -1800,9 +1800,13 @@ export async function getContratosStats(
 }
 
 export async function getContratoById(id: string, userId?: string, userRol?: string) {
+  // El scope del expediente viene embebido en la misma lectura: antes se bajaba
+  // la cartera entera (una ida más, y con >1000 estudios PostgREST la cortaba).
   const { data, error } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select(CONTRATO_SELECT)
+    .select(
+      `${CONTRATO_SELECT}, _scope:expedientes(miembro_responsable_id, inmueble:inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, miembro_responsable_id))`,
+    )
     .eq('id', id)
     .single();
 
@@ -1813,15 +1817,12 @@ export async function getContratoById(id: string, userId?: string, userRol?: str
   // Ownership: propietario/inmobiliaria solo pueden ver contratos de sus
   // inmuebles (cierra el IDOR del detalle — mismo scope que el listado).
   // 404 en vez de 403 para no confirmar la existencia del recurso.
-  const allowedExpedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
-  if (allowedExpedienteIds !== null) {
-    const expId = (data as { expediente_id?: string | null }).expediente_id;
-    if (!expId || !allowedExpedienteIds.includes(expId)) {
-      throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
-    }
+  const { _scope, ...contrato } = data as Record<string, unknown>;
+  if (!(await puedeVerFilaExpediente(userId, userRol, _scope as Parameters<typeof puedeVerFilaExpediente>[2]))) {
+    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
   }
 
-  return data;
+  return contrato;
 }
 
 // ============================================================

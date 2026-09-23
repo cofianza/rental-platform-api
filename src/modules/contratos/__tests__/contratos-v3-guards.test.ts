@@ -64,6 +64,7 @@ vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: vi.fn(async () => undefined),
   assertInmuebleAccess: vi.fn(async () => undefined),
   resolveAllowedExpedienteIds: vi.fn(async () => null),
+  puedeVerFilaExpediente: vi.fn(async () => true),
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
   perfilEsDuenoDeInmueble: vi.fn(async () => true),
 }));
@@ -85,6 +86,7 @@ import type { AuthUser } from '@/types/auth';
 import {
   descargarContrato,
   enviarContratoAFirma,
+  getContratoById,
   generarContrato,
   previewContratoVerificacion,
   regenerarContrato,
@@ -435,12 +437,12 @@ describe('descargarContrato: el arrendatario (solicitante)', () => {
 
   it('descarga su contrato en firma (sin pasar por el scope de cartera, que no lo cubre)', async () => {
     await storageOk();
-    const { assertExpedienteAccess, resolveAllowedExpedienteIds } = await import('@/lib/tenantScope');
+    const { assertExpedienteAccess, puedeVerFilaExpediente } = await import('@/lib/tenantScope');
     enqueue('contratos', { data: filaV3({ estado: 'pendiente_firma', nombre_archivo: 'c.pdf' }), error: null });
     const r = await descargarContrato(CTO, SOL, undefined, undefined, 'solicitante');
     expect(r.url).toBe('https://firmada');
     expect(assertExpedienteAccess).toHaveBeenCalledWith(EXP, SOL, 'solicitante');
-    expect(resolveAllowedExpedienteIds).not.toHaveBeenCalledWith(SOL, 'solicitante');
+    expect(vi.mocked(puedeVerFilaExpediente).mock.calls.some((c) => c[0] === SOL)).toBe(false);
   });
 
   it('un borrador o un estudio ajeno responde 404', async () => {
@@ -478,5 +480,30 @@ describe('descargarContrato: firmado subido a mano', () => {
       download: 'firmado-papel.pdf',
     });
     expect(r).toMatchObject({ nombre_archivo: 'firmado-papel.pdf', firmado: true });
+  });
+});
+
+describe('getContratoById: scope sobre la fila, sin bajar la cartera', () => {
+  const INMO = 'inmo-user';
+  const scope = { miembro_responsable_id: null, inmueble: { propietario_id: 'otro', inmobiliaria_id: 'org-1', miembro_responsable_id: null } };
+
+  it('decide con el expediente embebido: una sola lectura y la respuesta sin _scope', async () => {
+    const { puedeVerFilaExpediente, resolveAllowedExpedienteIds } = await import('@/lib/tenantScope');
+    enqueue('contratos', { data: { ...filaV3(), _scope: scope }, error: null });
+    const c = await getContratoById(CTO, INMO, 'inmobiliaria');
+
+    expect(puedeVerFilaExpediente).toHaveBeenCalledWith(INMO, 'inmobiliaria', scope);
+    expect(resolveAllowedExpedienteIds).not.toHaveBeenCalled();
+    expect(ops.filter((o) => o.table !== 'contratos')).toEqual([]);
+    expect(String(ops.find((o) => o.method === 'select')?.args[0])).toContain('inmuebles!expedientes_inmueble_id_fkey');
+    expect(c).not.toHaveProperty('_scope');
+    expect(c).toMatchObject({ id: CTO, expediente_id: EXP });
+  });
+
+  it('fuera de la cartera → 404', async () => {
+    const { puedeVerFilaExpediente } = await import('@/lib/tenantScope');
+    vi.mocked(puedeVerFilaExpediente).mockResolvedValueOnce(false);
+    enqueue('contratos', { data: { ...filaV3(), _scope: scope }, error: null });
+    await expect(getContratoById(CTO, INMO, 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404, errorCode: 'CONTRATO_NOT_FOUND' });
   });
 });

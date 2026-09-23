@@ -512,6 +512,23 @@ export async function assertExpedienteAccess(
 }
 
 /**
+ * ¿Ve el expediente de una fila ya leída (p.ej. embebida en el contrato)? Mismo
+ * criterio que resolveAllowedExpedienteIds, sin bajar la cartera entera: true
+ * sin identidad o rol interno; false para roles sin cartera (solicitante
+ * incluido, a diferencia de assertExpedienteAccess).
+ */
+export async function puedeVerFilaExpediente(
+  userId: string | undefined,
+  userRol: string | undefined,
+  fila: { miembro_responsable_id: string | null; inmueble: FilaInmuebleScope | null } | null,
+): Promise<boolean> {
+  if (!userId || !userRol || INTERNAL_ROLES.includes(userRol)) return true;
+  if (userRol !== 'inmobiliaria' && userRol !== 'propietario') return false;
+  const c = await carteraDe(userId, userRol);
+  return !!c && !!fila && expedienteVisible(c, fila);
+}
+
+/**
  * Garantiza que un perfil (rol 'inmobiliaria') tenga SU organización con
  * membresía 'owner' activa. Idempotente: si ya existe la org del owner, la
  * devuelve sin duplicar. Se usa al registrar una inmobiliaria NUEVA, porque

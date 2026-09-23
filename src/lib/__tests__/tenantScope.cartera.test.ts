@@ -35,6 +35,7 @@ import {
   expedienteVisible,
   filtroPortafolio,
   invalidateMembresiasCache,
+  puedeVerFilaExpediente,
   resolveAllowedExpedienteIds,
   resolvePortfolioInmuebleIds,
 } from '@/lib/tenantScope';
@@ -154,5 +155,32 @@ describe('filtroPortafolio: la lista de inmuebles filtra en su propia consulta',
     await resolvePortfolioInmuebleIds(YO);
     const or = ops.find((o) => o.tabla === 'inmuebles' && o.metodo === 'or');
     expect(or?.args[0]).toBe(await filtroPortafolio(YO));
+  });
+});
+
+describe('puedeVerFilaExpediente: el guard del detalle del contrato', () => {
+  beforeEach(() => {
+    invalidateMembresiasCache();
+    filas.length = 0;
+    ops.length = 0;
+  });
+  const fila = (org: string | null) => ({
+    miembro_responsable_id: null,
+    inmueble: { propietario_id: 'otro', inmobiliaria_id: org, miembro_responsable_id: null },
+  });
+
+  it('decide sobre la fila sin consultar expedientes', async () => {
+    filas.push({ inmobiliaria_id: ORG, rol_miembro: 'owner', inmobiliarias: { miembros_ven_todo: false } });
+    expect(await puedeVerFilaExpediente(YO, 'inmobiliaria', fila(ORG))).toBe(true);
+    expect(await puedeVerFilaExpediente(YO, 'inmobiliaria', fila('org-2'))).toBe(false);
+    expect(await puedeVerFilaExpediente(YO, 'inmobiliaria', null)).toBe(false);
+    expect(ops.filter((o) => o.tabla !== 'inmobiliaria_miembros')).toEqual([]);
+  });
+
+  it('internos y sin identidad ven; solicitante y otros roles no', async () => {
+    expect(await puedeVerFilaExpediente(YO, 'administrador', null)).toBe(true);
+    expect(await puedeVerFilaExpediente(undefined, undefined, null)).toBe(true);
+    expect(await puedeVerFilaExpediente(YO, 'solicitante', fila(ORG))).toBe(false);
+    expect(ops).toEqual([]);
   });
 });

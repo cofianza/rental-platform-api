@@ -57,6 +57,7 @@ vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: vi.fn(async () => undefined),
   assertInmuebleAccess: vi.fn(async () => undefined),
   resolveAllowedExpedienteIds: vi.fn(async () => null),
+  puedeVerFilaExpediente: vi.fn(async () => true),
   // El miembro de la org resuelve al perfil canónico (el titular).
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => (id === 'miembro-1' ? 'titular-1' : id)),
 }));
