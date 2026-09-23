@@ -86,7 +86,7 @@ export const CATALOGO: Record<CodigoHallazgo, Entrada> = {
     mensaje:
       'La cláusula se refiere a la fianza o a COFIANZA S.A.S. La cobertura, el tope de dieciocho (18) cánones, la subrogación, la prima, la tarifa y los avisos del arrendador a COFIANZA S.A.S. los rige el contrato y no cambian sin aceptación escrita de COFIANZA S.A.S.; una cláusula adicional no puede tocarlos.',
     norma:
-      'Cláusula CUARTA y sus parágrafos; cláusula «Aceptación irrevocable de las condiciones relacionadas con COFIANZA S.A.S.», Parágrafo Primero; cláusula «Totalidad del acuerdo y cláusulas adicionales», Parágrafo.',
+      'Cláusula CUARTA y sus parágrafos; cláusula «Aceptación irrevocable de las condiciones relacionadas con COFIANZA S.A.S.», Parágrafo Primero; cláusula «Totalidad del acuerdo y cláusulas adicionales», Parágrafo Segundo.',
   },
   renuncia: {
     codigo: 'renuncia',
