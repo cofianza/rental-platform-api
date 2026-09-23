@@ -167,8 +167,24 @@ export async function listExpedientes(
   }
 
   const result = data as RpcListResult;
-  const rows = result?.data || [];
+  let rows: Array<ExpedienteListRow & { tiene_contrato_vivo?: boolean }> = result?.data || [];
   const total = result?.total || 0;
+
+  // Acciones pendientes del inicio: si cada fila ya tiene contrato vivo, en la
+  // misma respuesta (antes el widget pedía GET /contratos después: otra
+  // petición y dos idas más). Si esta consulta falla, sin el campo la web
+  // vuelve a su camino anterior.
+  if (query.con_contrato_vivo === 'true' && rows.length > 0) {
+    const { data: vivos, error: cError } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('expediente_id')
+      .in('expediente_id', rows.map((r) => r.id))
+      .neq('estado', 'cancelado');
+    if (!cError) {
+      const conContrato = new Set(((vivos ?? []) as Array<{ expediente_id: string }>).map((c) => c.expediente_id));
+      rows = rows.map((r) => ({ ...r, tiene_contrato_vivo: conContrato.has(r.id) }));
+    }
+  }
 
   return {
     expedientes: rows,
