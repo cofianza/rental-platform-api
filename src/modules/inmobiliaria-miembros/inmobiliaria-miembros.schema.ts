@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { passwordSchema } from '../registration/registration.schema';
 
 // Token opaco de invitación: 64 hex (crypto.randomBytes(32).toString('hex')).
 // Mismo patrón que invitacion/autorizaciones/coarrendatarios.
@@ -61,7 +62,7 @@ export type SetVenTodoInput = z.infer<typeof setVenTodoSchema>;
 export const registrarMiembroSchema = z.object({
   nombre: z.string().trim().min(1, { message: 'El nombre es obligatorio' }).max(100),
   apellido: z.string().trim().min(1, { message: 'El apellido es obligatorio' }).max(100),
-  password: z.string().min(8, { message: 'La contraseña debe tener al menos 8 caracteres' }).max(72),
+  password: passwordSchema.max(72),
   // El telefono es obligatorio: es el WhatsApp de contacto del miembro y el
   // respaldo para la firma de contratos. Sin el, el perfil queda incompleto.
   telefono: z

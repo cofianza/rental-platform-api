@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
-const passwordSchema = z
+// Regla única de contraseña: la reutilizan el registro de miembros y de solicitantes.
+export const passwordSchema = z
   .string()
   .min(8, 'La contraseña debe tener al menos 8 caracteres')
   .regex(

@@ -4,6 +4,7 @@
 // ============================================================
 
 import { z } from 'zod';
+import { passwordSchema } from '../registration/registration.schema';
 
 export const registerSolicitanteSchema = z.object({
   nombre: z.string().min(1, 'Nombre es requerido').max(100),
@@ -20,7 +21,7 @@ export const registerSolicitanteSchema = z.object({
     .regex(/^\d{5}$/, 'Código DANE debe tener 5 dígitos')
     .optional(),
   municipio_nombre: z.string().min(1).max(120).optional(),
-  password: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres'),
+  password: passwordSchema,
   confirm_password: z.string().min(8),
   accept_terms: z.literal(true, {
     message: 'Debe aceptar los terminos y condiciones',
