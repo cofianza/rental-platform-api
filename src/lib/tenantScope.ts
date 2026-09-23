@@ -30,7 +30,7 @@ const MEMBRESIAS_TTL_MS = 30_000;
 type FilaMembresia = {
   inmobiliaria_id: string;
   rol_miembro: string;
-  inmobiliarias: { miembros_ven_todo: boolean } | null;
+  inmobiliarias: { nombre: string | null; miembros_ven_todo: boolean } | null;
 };
 const membresiasCache = new Map<string, { expira: number; filas: FilaMembresia[] }>();
 
@@ -39,7 +39,7 @@ async function loadMembresiasActivas(perfilId: string): Promise<FilaMembresia[]>
   if (hit && hit.expira > Date.now()) return hit.filas;
   const { data, error } = await (supabase
     .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
-    .select('inmobiliaria_id, rol_miembro, inmobiliarias(miembros_ven_todo)')
+    .select('inmobiliaria_id, rol_miembro, inmobiliarias(nombre, miembros_ven_todo)')
     .eq('perfil_id', perfilId)
     .eq('estado', 'activo')
     // Sin este orden, getActiveMembership toma el [0] de un conjunto que
@@ -68,15 +68,17 @@ export async function resolveMembershipInmobiliariaIds(perfilId: string): Promis
   return (await loadMembresiasActivas(perfilId)).map((m) => m.inmobiliaria_id);
 }
 
-async function getActiveMembership(
+/** Membresía activa (cacheada) del perfil; la usa también el listado del equipo. */
+export async function getActiveMembership(
   perfilId: string,
-): Promise<{ orgId: string; rolMiembro: string; venTodo: boolean } | null> {
+): Promise<{ orgId: string; rolMiembro: string; venTodo: boolean; nombreOrg: string | null } | null> {
   const row = (await loadMembresiasActivas(perfilId))[0];
   if (!row) return null;
   return {
     orgId: row.inmobiliaria_id,
     rolMiembro: row.rol_miembro,
     venTodo: row.inmobiliarias?.miembros_ven_todo ?? true,
+    nombreOrg: row.inmobiliarias?.nombre ?? null,
   };
 }
 

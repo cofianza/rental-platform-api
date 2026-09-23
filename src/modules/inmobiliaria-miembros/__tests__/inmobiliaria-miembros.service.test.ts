@@ -43,7 +43,8 @@ vi.mock('@/lib/auditLog', () => ({
 vi.mock('../../orchestrator/orchestrator.emails', () => ({ sendInvitacionMiembroEmail: vi.fn() }));
 vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(async () => {}) }));
 
-import { adminRevocarMiembro, cambiarRolMiembro, salirDeOrg, revocarMiembro } from '../inmobiliaria-miembros.service';
+import { adminRevocarMiembro, cambiarRolMiembro, salirDeOrg, revocarMiembro, listMiembros } from '../inmobiliaria-miembros.service';
+import { invalidateMembresiasCache, resolveRolMiembro } from '@/lib/tenantScope';
 
 const ownerMembership = {
   data: {
@@ -193,5 +194,19 @@ describe('cambio de titular principal: los créditos de estudios se van con la t
     );
     expect(movidos).toHaveLength(3);
     expect(chain.eq).toHaveBeenCalledWith('perfil_id', 'p-self');
+  });
+});
+
+describe('listMiembros — la tarjeta del responsable no paga otra ida por la membresía', () => {
+  it('usa la membresía que ya cacheó tenantScope al cargar el estudio', async () => {
+    invalidateMembresiasCache();
+    enqueue({ data: [{ inmobiliaria_id: 'org1', rol_miembro: 'owner', inmobiliarias: { nombre: 'Inmobiliaria X', miembros_ven_todo: false } }], error: null });
+    await resolveRolMiembro('p-self'); // la carga del estudio deja la caché caliente
+    vi.clearAllMocks();
+
+    const r = await listMiembros('p-self');
+    expect(r).toMatchObject({ organizacion: { id: 'org1', nombre: 'Inmobiliaria X' }, soy_owner: true, miembros_ven_todo: false });
+    const selects = (chain.select as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    expect(selects.some((s) => s.includes('rol_miembro, inmobiliarias('))).toBe(false);
   });
 });

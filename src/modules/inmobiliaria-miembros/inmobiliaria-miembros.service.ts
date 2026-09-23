@@ -4,6 +4,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { getActiveMembership } from '@/lib/tenantScope';
 import { sendInvitacionMiembroEmail } from '../orchestrator/orchestrator.emails';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import type { AuthUser } from '@/types/auth';
@@ -38,12 +39,18 @@ interface OrgMembership {
   miembros_ven_todo: boolean;
 }
 
-/** Org (membresía activa) del usuario, o null si no pertenece a ninguna. */
+/**
+ * Org (membresía activa) del usuario, o null si no pertenece a ninguna. Sin
+ * caché: la usan los caminos que modifican datos. Mismo orden que tenantScope
+ * (gana la más antigua) para que las dos elijan la misma membresía.
+ */
 async function resolveMembership(userId: string): Promise<OrgMembership | null> {
   const { data } = await db('inmobiliaria_miembros')
     .select('id, inmobiliaria_id, rol_miembro, inmobiliarias(nombre, miembros_ven_todo)')
     .eq('perfil_id', userId)
     .eq('estado', 'activo')
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
     .limit(1)
     .maybeSingle();
 
@@ -288,7 +295,10 @@ export async function listMiembros(userId: string): Promise<{
   miembros_ven_todo: boolean;
   miembros: MiembroView[];
 }> {
-  const m = await resolveMembership(userId);
+  // Membresía cacheada de tenantScope: la tarjeta del responsable se monta en
+  // cada estudio e inmueble, cuya carga ya la dejó caliente (antes, una ida
+  // propia en serie antes de la lista).
+  const m = await getActiveMembership(userId);
   if (!m) {
     // Inmobiliaria sin org (no debería pasar tras ensureOrgConOwner, pero es
     // defensivo): no hay equipo que mostrar.
@@ -297,7 +307,7 @@ export async function listMiembros(userId: string): Promise<{
 
   // Limpieza perezosa de invitaciones vencidas (sin cron), sin esperarla: las
   // vencidas se filtran abajo con el mismo criterio.
-  void limpiarInvitacionesExpiradas(m.inmobiliaria_id).catch(() => undefined);
+  void limpiarInvitacionesExpiradas(m.orgId).catch(() => undefined);
   const ahora = Date.now();
 
   // La lista y la carga de trabajo, a la vez.
@@ -307,13 +317,13 @@ export async function listMiembros(userId: string): Promise<{
       // invitado_por), así que hay que desambiguar el embed o PostgREST falla con
       // "more than one relationship was found".
       .select('id, email, rol_miembro, estado, perfil_id, created_at, token_expiracion, perfiles!inmobiliaria_miembros_perfil_id_fkey(nombre, apellido)')
-      .eq('inmobiliaria_id', m.inmobiliaria_id)
+      .eq('inmobiliaria_id', m.orgId)
       .neq('estado', 'revocado')
       .order('created_at', { ascending: true }),
     // Carga de trabajo por miembro: sin esto el titular que reparte estudios no
     // tenía forma de ver quién lleva 12 y quién 2. Una sola consulta y el conteo
     // se hace en memoria (el volumen por org es pequeño).
-    contarEstudiosActivosPorMiembro(m.inmobiliaria_id),
+    contarEstudiosActivosPorMiembro(m.orgId),
   ]);
 
   if (error) {
@@ -336,9 +346,9 @@ export async function listMiembros(userId: string): Promise<{
   );
 
   return {
-    organizacion: { id: m.inmobiliaria_id, nombre: m.nombre_organizacion },
-    soy_owner: m.rol_miembro === 'owner',
-    miembros_ven_todo: m.miembros_ven_todo,
+    organizacion: { id: m.orgId, nombre: m.nombreOrg ?? 'Tu organización' },
+    soy_owner: m.rolMiembro === 'owner',
+    miembros_ven_todo: m.venTodo,
     miembros: rows.map((r) => ({
       id: r.id,
       perfil_id: r.perfil_id,
