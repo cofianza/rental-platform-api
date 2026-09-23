@@ -104,6 +104,9 @@ export const listInmueblesQuerySchema = z.object({
   ciudad: z.string().optional(),
   estrato: z.coerce.number().int().min(1).max(7).optional(),
   propietario_id: z.uuid().optional(),
+  // Cartera de una organización (reasignar estudio §4.3). Se suma con AND al
+  // scoping por rol, así que no abre nada.
+  inmobiliaria_id: z.uuid().optional(),
   visible_vitrina: z.enum(['true', 'false']).optional(),
   include_inactive: z.enum(['true', 'false']).optional(),
   // La web ya los mandaba (inmuebleService.ts) y listInmuebles no los leia. El
