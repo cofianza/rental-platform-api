@@ -800,6 +800,31 @@ describe('reintentar y la vista', () => {
     expect(e.reintento).toBe(false);
   });
 
+  it('cerrado sin acta (Adenda 1 contratos, respuesta 21): el acta no queda pendiente y trae quién, cuándo y por qué', async () => {
+    enqueue('contratos', ok(contrato({ estado: 'vigente', fecha_inicio: '2026-01-01', duracion_meses: 12 })));
+    enqueue('expedientes', EXPEDIENTE, ok({ cierre_sin_acta_en: HOY, cierre_sin_acta_por: 'ad1', cierre_sin_acta_motivo: 'La inmobiliaria no levantó el acta' }));
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo' })));
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_archivos', ok([]));
+    enqueue('perfiles', ok({ nombre: 'Ana', apellido: 'Admin' }));
+    const e = (await estadoEnviado('c1'))!;
+    expect(e.acta).toMatchObject({
+      pendiente: false,
+      archivos: [],
+      cierreSinActa: { en: HOY, porNombre: 'Ana Admin', motivo: 'La inmobiliaria no levantó el acta' },
+    });
+  });
+
+  it('sin la migración del cierre sin acta (columna inexistente) el acta sigue pendiente y la vista no se cae', async () => {
+    enqueue('contratos', ok(contrato({ estado: 'vigente', fecha_inicio: '2026-01-01', duracion_meses: 12 })));
+    enqueue('expedientes', EXPEDIENTE, { data: null, error: { code: '42703', message: 'column expedientes.cierre_sin_acta_en does not exist' } });
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo' })));
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_archivos', ok([]));
+    const e = (await estadoEnviado('c1'))!;
+    expect(e.acta).toMatchObject({ pendiente: true, cierreSinActa: null });
+  });
+
   it('EN FIRMA no trae acta ni período (no se lee contrato_archivos)', async () => {
     enqueue('contratos', ok(contrato()));
     enqueue('expedientes', EXPEDIENTE);

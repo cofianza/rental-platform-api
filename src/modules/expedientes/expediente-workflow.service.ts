@@ -13,6 +13,7 @@ import { perfilEsDuenoDeInmueble, assertExpedienteAccess, resolveRolMiembro } fr
 import type { AuthUser } from '@/types/auth';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import type { TransitionInput } from './expediente-workflow.schema';
+import { faltaColumna } from './cierre-sin-acta';
 
 // ============================================================
 // Tipos internos
@@ -176,8 +177,14 @@ export async function executeTransition(
     // Triggers de la BD (V3 §12.2): sin acta de entrega, o con el contrato en firma, no se cierra.
     const msg = String((error as { message?: string }).message ?? '');
     if (msg.includes('ACTA_ENTREGA_REQUERIDA')) {
+      // Adenda 1 contratos (respuesta 21): el acta la carga la inmobiliaria, nunca Cofianza.
+      const deCofianza = user.rol === 'administrador' || user.rol === 'operador_analista';
       throw AppError.conflict(
-        'Carga el acta de entrega e inventario del contrato antes de cerrar el estudio.',
+        deCofianza
+          ? `El contrato no tiene el acta de entrega e inventario: la carga la inmobiliaria. Si no la va a cargar, ${
+              user.rol === 'administrador' ? 'puedes' : 'un administrador de Cofianza puede'
+            } cerrar el estudio sin acta, con motivo.`
+          : 'Carga el acta de entrega e inventario del contrato antes de cerrar el estudio.',
         'ACTA_ENTREGA_REQUERIDA',
       );
     }
@@ -355,6 +362,14 @@ export async function cerrarSinActa(expedienteId: string, motivo: string, user: 
   if (error) {
     if (String(error.message ?? '').includes('CONTRATO_EN_FIRMA'))
       throw AppError.conflict('El contrato de este estudio está en firma. Cancélalo antes de cerrar el estudio.', 'CONTRATO_EN_FIRMA');
+    if (faltaColumna(error)) {
+      logger.error({ expedienteId, error: error.message }, 'Cierre sin acta: falta correr la migración 20260930000002');
+      throw new AppError(
+        503,
+        'CIERRE_SIN_ACTA_NO_DISPONIBLE',
+        'El cierre sin acta todavía no está disponible (falta aplicar la migración 20260930000002). El estudio no se cerró.',
+      );
+    }
     logger.error({ expedienteId, error: error.message }, 'No se pudo cerrar el estudio sin acta');
     throw new AppError(500, 'CIERRE_SIN_ACTA_ERROR', 'No se pudo cerrar el estudio. Intenta de nuevo.');
   }

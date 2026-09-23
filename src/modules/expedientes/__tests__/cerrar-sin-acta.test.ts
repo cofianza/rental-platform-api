@@ -155,6 +155,15 @@ describe('cerrarSinActa', () => {
     expect(mockLogAudit).not.toHaveBeenCalled();
   });
 
+  it.each(['42703', 'PGRST204'])('sin la migración (%s) responde 503 con la causa, no un 500 genérico', async (code) => {
+    enqueue('expedientes', expediente(), { data: null, error: { code, message: "Could not find the 'cierre_sin_acta_en' column" } });
+    contratos();
+    const e = await error(cerrarSinActa('exp-1', MOTIVO, ADMIN));
+    expect(e).toMatchObject({ statusCode: 503, errorCode: 'CIERRE_SIN_ACTA_NO_DISPONIBLE' });
+    expect((e as unknown as Error).message).toContain('20260930000002');
+    expect(mockLogAudit).not.toHaveBeenCalled();
+  });
+
   it('con el contrato en firma el trigger lo rechaza: 409 CONTRATO_EN_FIRMA', async () => {
     enqueue('expedientes', expediente(), { data: null, error: { message: 'CONTRATO_EN_FIRMA: el contrato del estudio esta en firma' } });
     contratos();

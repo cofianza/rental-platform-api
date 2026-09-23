@@ -102,6 +102,8 @@ export interface EnvioV3 {
   acta: null | {
     pendiente: boolean;
     archivos: { id: string; nombre: string; subidoEn: string }[];
+    /** Adenda 1 contratos, respuesta 21: un administrador cerró el estudio sin acta (quién, cuándo y por qué). */
+    cierreSinActa: null | { en: string; porNombre: string | null; motivo: string };
     datos: {
       fechaEntrega: string | null;
       amoblado: boolean | null;

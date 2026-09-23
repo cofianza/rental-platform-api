@@ -19,6 +19,7 @@ import { motivoParaProspectoDesdeMotivoGestor } from '@/modules/estudios/reglas-
 import { errorNoAdmision } from '@/modules/estudios/estudios-simultaneos.guard';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
+import { leerCierreSinActa } from './cierre-sin-acta';
 import type {
   CreateExpedienteInput,
   UpdateExpedienteInput,
@@ -293,13 +294,16 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
   // solicitante (vía solicitantes.creado_por) — única fuente de verdad del scope.
   // En paralelo con la lectura (antes 2 idas en serie): si el guard falla,
   // Promise.all rechaza con su 404 y la fila leída se descarta sin salir.
-  const [, { data, error }] = await Promise.all([
+  const [, { data, error }, cierreSinActa] = await Promise.all([
     assertExpedienteAccess(id, userId, userRol),
     (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select(EXPEDIENTE_DETAIL_SELECT)
       .eq('id', id)
       .single(),
+    // Aparte y sin fallar (no en EXPEDIENTE_DETAIL_SELECT): si el API sale antes que la
+    // migración 20260930000002, el detalle no se cae. Al prospecto no le toca.
+    userRol === 'solicitante' ? null : leerCierreSinActa(id),
   ]);
 
   // Auto-heal de firmas (FALLBACK): si hay un contrato en `pendiente_firma`,
@@ -355,6 +359,8 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
     // otra petición. Mismo criterio que el asistente (flag + inmueble de inmobiliaria).
     contratos_v3:
       env.CONTRATOS_V3_ENABLED && !!(inmuebles as { inmobiliaria_id?: string | null } | null)?.inmobiliaria_id,
+    // Adenda 1 contratos (respuesta 21): un administrador lo cerró sin acta de entrega.
+    cierre_sin_acta: cierreSinActa,
   };
 }
 

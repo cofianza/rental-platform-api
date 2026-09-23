@@ -40,6 +40,8 @@ vi.mock('@/modules/firma/firma.service', () => ({ syncFirmaConAucoForExpediente:
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarYCorreo: vi.fn() }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
 vi.mock('@/modules/solicitantes/solicitantes.service', () => ({ getApplicantById: vi.fn() }));
+const mockCierre = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => null as unknown));
+vi.mock('../cierre-sin-acta', () => ({ leerCierreSinActa: mockCierre }));
 
 import { getExpedienteById } from '../expedientes.service';
 
@@ -72,5 +74,24 @@ describe('getExpedienteById', () => {
     await expect(getExpedienteById('e1', 'u2', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
     await vi.dynamicImportSettled();
     expect(mockSyncAuco).not.toHaveBeenCalled();
+  });
+});
+
+describe('getExpedienteById: cierre sin acta (Adenda 1 contratos, respuesta 21)', () => {
+  it('trae la constancia en una lectura aparte, en paralelo; al prospecto no', async () => {
+    mockGuard.mockResolvedValue(undefined);
+    const constancia = { en: '2026-09-23T15:00:00Z', porNombre: 'Ana Admin', motivo: 'La inmobiliaria no levantó el acta' };
+    mockCierre.mockResolvedValueOnce(constancia);
+    queues.set('expedientes', [
+      { data: { id: 'e1', estado: 'cerrado' }, error: null },
+      { data: { id: 'e1', estado: 'cerrado' }, error: null },
+    ]);
+    await expect(getExpedienteById('e1', 'u1', 'inmobiliaria')).resolves.toMatchObject({ cierre_sin_acta: constancia });
+    expect(mockCierre).toHaveBeenCalledWith('e1');
+
+    mockCierre.mockClear();
+    await expect(getExpedienteById('e1', 's1', 'solicitante')).resolves.toMatchObject({ cierre_sin_acta: null });
+    expect(mockCierre).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mockSyncAuco).toHaveBeenCalled());
   });
 });

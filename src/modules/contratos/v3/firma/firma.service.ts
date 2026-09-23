@@ -19,6 +19,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
 import { resolveMembershipInmobiliariaIds, resolveRolMiembro } from '@/lib/tenantScope';
+import { leerCierreSinActa } from '@/modules/expedientes/cierre-sin-acta';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import type { EnvioV3 } from '../asistente.types';
 import { fechaBogota, periodoVigente, sumarMeses } from '../formato';
@@ -628,12 +629,14 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
   const c = await leerContrato(contratoId);
   if (!c || !['pendiente_firma', 'firma_incompleta', 'vigente', 'finalizado'].includes(c.estado)) return null;
   const firmado = c.estado === 'vigente' || c.estado === 'finalizado';
-  const [s, partes, pendientes, vig, actas] = await Promise.all([
+  const [s, partes, pendientes, vig, actas, cierreSinActa] = await Promise.all([
     ultimoSobre(contratoId),
     leerPartes(contratoId),
     identidadPendientes(contratoId),
     vigenciaEstudio(c),
     firmado ? actasDeEntrega(contratoId) : Promise.resolve([]),
+    // Adenda 1 contratos (respuesta 21): cerrado sin acta, el acta ya no está pendiente.
+    firmado ? leerCierreSinActa(c.expediente_id) : Promise.resolve(null),
   ]);
   const parte = new Map(partes.map((p) => [p.id, p]));
   // El aviso es el del último sobre incompleto: tras un reenvío fallido el último queda 'fallido'.
@@ -658,8 +661,9 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
     vigencia: c.estado === 'vigente' ? vigenciaDe(c) : null,
     acta: firmado
       ? {
-          pendiente: actas.length === 0,
+          pendiente: actas.length === 0 && !cierreSinActa,
           archivos: actas,
+          cierreSinActa,
           datos: {
             fechaEntrega: c.datos_variables?.asistente?.paso3?.fechaEntrega ?? null,
             amoblado: c.datos_variables?.asistente?.paso2?.amoblado ?? null,

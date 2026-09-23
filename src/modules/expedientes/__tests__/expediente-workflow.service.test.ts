@@ -458,6 +458,18 @@ describe('expediente-workflow.service', () => {
         errorCode: 'ACTA_ENTREGA_REQUERIDA',
       });
     });
+
+    // Adenda 1 contratos (respuesta 21): Cofianza no carga el acta; la inmobiliaria sí.
+    it.each([
+      ['administrador', adminUser, 'la carga la inmobiliaria. Si no la va a cargar, puedes cerrar el estudio sin acta, con motivo.'],
+      ['operador_analista', analistaUser, 'la carga la inmobiliaria. Si no la va a cargar, un administrador de Cofianza puede cerrar el estudio sin acta'],
+    ] as const)('a %s no le dice «Carga el acta»: la carga la inmobiliaria y un administrador puede cerrar sin ella', async (_rol, user, texto) => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'ACTA_ENTREGA_REQUERIDA: …' } });
+      const e = await executeTransition('exp-uuid', cierre('Cerrar estudio'), user).catch((x: unknown) => x as Error);
+      expect((e as Error).message).toContain(texto);
+      expect((e as Error).message).not.toMatch(/^Carga el acta/);
+    });
   });
 
   // ================================================================
