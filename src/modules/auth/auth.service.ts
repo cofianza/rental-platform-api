@@ -107,7 +107,9 @@ export async function refreshSession({ refresh_token }: RefreshInput) {
 }
 
 export async function logout(accessToken: string, userId?: string, ip?: string) {
-  const { error } = await supabaseAuth.auth.admin.signOut(accessToken);
+  // 'local': solo esta sesión. Sin alcance, auth-js usa 'global' y cerrar
+  // sesión en el celular tumbaba también la del computador.
+  const { error } = await supabaseAuth.auth.admin.signOut(accessToken, 'local');
   // El token deja de valer ya, no cuando venza el caché de auth.
   if (userId) invalidateAuthCache(userId);
 
