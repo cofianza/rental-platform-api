@@ -636,7 +636,9 @@ export async function getPublicByToken(token: string): Promise<CoarrendatarioPub
     token_expiracion: string;
   };
 
-  if (new Date(coa.token_expiracion) < new Date()) {
+  // Solo vence la invitación SIN responder: reabrirla ya aceptada o declinada
+  // (el enlace vive en el correo) muestra en qué quedó, no "ya expiró".
+  if (coa.estado === 'pendiente_aceptacion' && new Date(coa.token_expiracion) < new Date()) {
     throw AppError.badRequest('Esta invitación ya expiró', 'TOKEN_EXPIRED');
   }
 

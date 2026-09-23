@@ -117,6 +117,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarYCorreo: vi.fn(async () => undefined),
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: vi.fn(async () => []) }));
+vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ getMontoEstudio: vi.fn(async () => 150000) }));
 // Flujo §14 / Adenda §9: el enlace vive DIAS_EXPIRACION_ESTUDIO dias.
 vi.mock('@/lib/calibracion', () => ({
   getCalibracion: vi.fn(async () => ({ DIAS_EXPIRACION_ESTUDIO: 15, UMBRAL_DIFERENCIA_INGRESO: 50 })),
@@ -131,6 +132,7 @@ import {
   enviarOtpCode,
   verificarOtpCode,
   revocarAutorizacion,
+  getPagoProspectoPorToken,
 } from '../autorizaciones.service';
 import { TEXTO_LEGAL, TEXTO_LEGAL_BIOMETRIA, VERSION_TERMINOS, VERSION_TERMINOS_BIOMETRIA } from '../autorizaciones.texto';
 
@@ -398,6 +400,48 @@ describe('autorizaciones.service', () => {
         statusCode: 400,
         errorCode: 'AUTORIZACION_ESTADO_INVALIDO',
       });
+    });
+
+    it('ya firmada Y vencida -> AUTORIZACION_YA_FIRMADA: reabrirla tarde no dice "pide otro"', async () => {
+      enqueue('autorizaciones_habeas_data', {
+        data: { ...autorizacionPendiente, estado: 'autorizado', token_expiracion: PAST_DATE },
+      });
+      await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({ errorCode: 'AUTORIZACION_YA_FIRMADA' });
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+    });
+  });
+
+  // ============================================================
+  // getPagoProspectoPorToken — la pantalla de "ya firmaste"
+  // ============================================================
+
+  describe('getPagoProspectoPorToken', () => {
+    const firmadaHace = (ms: number) => ({
+      data: {
+        id: AUTORIZACION_ID,
+        estado: 'autorizado',
+        expediente_id: EXPEDIENTE_ID,
+        autorizado_en: new Date(Date.now() - ms).toISOString(),
+      },
+    });
+
+    it('recién firmada y sin cobro todavía: preparando', async () => {
+      enqueue('autorizaciones_habeas_data', firmadaHace(10_000));
+      enqueue('estudios', { data: { pago_por: 'arrendatario' } });
+      expect(await getPagoProspectoPorToken(TOKEN)).toMatchObject({ estado: 'preparando', payment_link_url: null });
+    });
+
+    it('a los 2 minutos sin fila de pago: sin_enlace (deja de prometer el enlace)', async () => {
+      enqueue('autorizaciones_habeas_data', firmadaHace(3 * 60_000));
+      enqueue('estudios', { data: { pago_por: 'arrendatario' } });
+      expect(await getPagoProspectoPorToken(TOKEN)).toMatchObject({ estado: 'sin_enlace', payment_link_url: null });
+    });
+
+    it('con el cobro creado: el enlace, aunque la firma sea vieja', async () => {
+      enqueue('autorizaciones_habeas_data', firmadaHace(3 * 60_000));
+      enqueue('estudios', { data: { pago_por: 'arrendatario' } });
+      enqueue('pagos', { data: { estado: 'pendiente', monto: 150000, payment_link_url: 'https://mp/x' } });
+      expect(await getPagoProspectoPorToken(TOKEN)).toMatchObject({ estado: 'pendiente', payment_link_url: 'https://mp/x' });
     });
   });
 

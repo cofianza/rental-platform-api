@@ -526,6 +526,12 @@ export async function getAutorizacionByToken(token: string) {
     expedientes: { numero: string; inmuebles: { direccion: string; ciudad: string; barrio: string | null } };
   };
 
+  // El trámite antes que la fecha: reabrir DESPUÉS del vencimiento un enlace
+  // que ya se firmó es la pantalla de éxito (y la del pago), no "pide otro".
+  if (auth.estado === 'autorizado') {
+    throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+  }
+
   // Check if expired
   if (new Date(auth.token_expiracion) < new Date()) {
     // Mark as expired if still pending
@@ -543,10 +549,8 @@ export async function getAutorizacionByToken(token: string) {
     // reabrir el enlace despues de firmar (gesto normalisimo: el enlace vive en
     // WhatsApp) tiene que mostrar la pantalla de exito, no una alerta roja. El
     // mensaje NO se le renderiza al prospecto — el front tiene copy propio —
-    // asi que el nombre interno del enum se queda aqui, para los logs.
-    if (auth.estado === 'autorizado') {
-      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
-    }
+    // asi que el nombre interno del enum se queda aqui, para los logs. (El
+    // 'autorizado' ya salio arriba, antes del chequeo de vencimiento.)
     throw AppError.badRequest(
       `Esta autorizacion tiene estado: ${auth.estado}`,
       'AUTORIZACION_ESTADO_INVALIDO',
@@ -1387,16 +1391,16 @@ export async function firmarAutorizacion(
  * enlace de pago cuando ya existe.
  */
 export async function getPagoProspectoPorToken(token: string): Promise<{
-  estado: 'preparando' | 'pendiente' | 'procesando' | 'completado' | 'no_aplica';
+  estado: 'preparando' | 'sin_enlace' | 'pendiente' | 'procesando' | 'completado' | 'no_aplica';
   monto_formateado: string | null;
   payment_link_url: string | null;
 }> {
   const { data: auth } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, expediente_id')
+    .select('id, estado, expediente_id, autorizado_en')
     .eq('token', token)
     .maybeSingle();
-  const a = auth as { estado?: string; expediente_id?: string | null } | null;
+  const a = auth as { estado?: string; expediente_id?: string | null; autorizado_en?: string | null } | null;
   if (!a) throw AppError.notFound('Autorización no encontrada', 'AUTORIZACION_NOT_FOUND');
   if (a.estado !== 'autorizado' || !a.expediente_id) {
     return { estado: 'no_aplica', monto_formateado: null, payment_link_url: null };
@@ -1424,8 +1428,15 @@ export async function getPagoProspectoPorToken(token: string): Promise<{
   // Una fila 'pendiente' sin URL significa que el link todavia se esta creando
   // en la pasarela: el front sigue esperando en vez de mostrar un boton muerto.
   const listo = pago?.estado === 'pendiente' && !!pago.payment_link_url;
+  // Sin fila de pago a los 2 minutos de la firma, el orquestador (que tarda
+  // segundos) ya no la va a crear: sin correo del solicitante, tope de canon o
+  // pasarela caida. Lo arregla el gestor desde el estudio; la pantalla deja de
+  // decir "estamos preparando tu enlace" para siempre.
+  const firmadaHaceMs = a.autorizado_en ? Date.now() - Date.parse(a.autorizado_en) : 0;
   return {
-    estado: !pago ? 'preparando' : pago.estado === 'pendiente' && !listo ? 'preparando' : (pago.estado as 'pendiente' | 'procesando' | 'completado'),
+    estado: !pago
+      ? firmadaHaceMs > 2 * 60_000 ? 'sin_enlace' : 'preparando'
+      : pago.estado === 'pendiente' && !listo ? 'preparando' : (pago.estado as 'pendiente' | 'procesando' | 'completado'),
     monto_formateado: montoFormateado,
     payment_link_url: listo ? (pago!.payment_link_url as string) : null,
   };

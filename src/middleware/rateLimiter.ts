@@ -32,7 +32,7 @@ export const generalLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Too many requests, please try again later',
+    message: 'Demasiadas solicitudes desde tu red. Espera un minuto e inténtalo de nuevo.',
   },
 });
 
@@ -44,7 +44,7 @@ export const authLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Too many authentication attempts, please try again later',
+    message: 'Demasiados intentos de ingreso. Espera un minuto e inténtalo de nuevo.',
   },
 });
 
@@ -56,7 +56,7 @@ export const registrationLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Too many registration attempts, please try again later',
+    message: 'Demasiados registros desde tu red. Inténtalo de nuevo en una hora.',
   },
 });
 
@@ -68,7 +68,7 @@ export const resendVerificationLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Too many verification email requests, please try again later',
+    message: 'Ya te enviamos varios correos de verificación. Revisa tu bandeja de entrada (y el spam) o inténtalo de nuevo en una hora.',
   },
 });
 
@@ -85,7 +85,7 @@ export const passwordResetLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Too many password reset requests, please try again later',
+    message: 'Ya pediste varios enlaces para restablecer la contraseña. Revisa tu correo (y el spam) o inténtalo de nuevo en una hora.',
   },
 });
 
@@ -97,7 +97,7 @@ export const publicFormLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Too many requests, please try again later',
+    message: 'Demasiadas solicitudes desde tu red. Espera un minuto e inténtalo de nuevo.',
   },
 });
 
@@ -119,7 +119,7 @@ export const otpSendByTokenLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiadas solicitudes de codigo para este enlace, intenta mas tarde',
+    message: 'Demasiadas solicitudes de código para este enlace. Inténtalo más tarde.',
   },
 });
 
@@ -134,6 +134,6 @@ export const otpVerifyByTokenLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiados intentos de verificacion para este enlace, solicita un codigo nuevo',
+    message: 'Demasiados intentos de verificación para este enlace. Solicita un código nuevo.',
   },
 });

@@ -1177,18 +1177,20 @@ export async function getFormularioByToken(token: string) {
     };
   };
 
-  // Verify not expired
-  if (new Date(estudio.expiracion_token) < new Date()) {
+  const yaCompletado =
+    estudio.estado === 'formulario_completado' ||
+    ESTADOS_ESTUDIO_FINALIZADOS.includes(estudio.estado) ||
+    estudio.datos_formulario !== null;
+
+  // Solo vence el enlace SIN usar: reabrir uno ya enviado dice "ya recibimos
+  // tus datos", no "pide otro". Vencido, eso si, ya no devuelve los datos.
+  const vencido = new Date(estudio.expiracion_token) < new Date();
+  if (vencido && !yaCompletado) {
     throw AppError.badRequest(
       'Este enlace ha expirado. Solicite uno nuevo al operador.',
       'TOKEN_EXPIRADO',
     );
   }
-
-  const yaCompletado =
-    estudio.estado === 'formulario_completado' ||
-    ESTADOS_ESTUDIO_FINALIZADOS.includes(estudio.estado) ||
-    estudio.datos_formulario !== null;
 
   return {
     estudio_id: estudio.id,
@@ -1202,14 +1204,16 @@ export async function getFormularioByToken(token: string) {
     // formulario en blanco y el solicitante tenia que teclear de nuevo lo que
     // la inmobiliaria ya habia registrado por el. El token es el mismo secreto
     // que ya daba nombre y direccion del inmueble, asi que no abre superficie.
-    solicitante: {
-      email: estudio.expedientes.solicitantes?.email ?? null,
-      telefono: estudio.expedientes.solicitantes?.telefono ?? null,
-      tipo_documento: estudio.expedientes.solicitantes?.tipo_documento ?? null,
-      numero_documento: estudio.expedientes.solicitantes?.numero_documento ?? null,
-    },
+    solicitante: vencido
+      ? null
+      : {
+          email: estudio.expedientes.solicitantes?.email ?? null,
+          telefono: estudio.expedientes.solicitantes?.telefono ?? null,
+          tipo_documento: estudio.expedientes.solicitantes?.tipo_documento ?? null,
+          numero_documento: estudio.expedientes.solicitantes?.numero_documento ?? null,
+        },
     ya_completado: yaCompletado,
-    datos_formulario: yaCompletado ? estudio.datos_formulario : null,
+    datos_formulario: yaCompletado && !vencido ? estudio.datos_formulario : null,
   };
 }
 
