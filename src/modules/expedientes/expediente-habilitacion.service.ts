@@ -13,7 +13,12 @@ import { assertHabilitacionPermission } from './expediente-habilitacion.permissi
 import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
 import { DESTINACION_NO_HABILITADA } from '../inmuebles/destinacion';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
-import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import {
+  notificarUsuario,
+  notificarYCorreo,
+  notificarResponsableExpediente,
+  findPerfilIdByEmail,
+} from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
 import type { EvaluacionRevisionManual, RecalculoRevisionManual } from '../estudios/motor/sombra.service';
 
@@ -691,11 +696,12 @@ async function aprobarYGenerarContrato(params: {
         userId: solicitanteUserId,
         tipo: 'estudio.aprobado',
         titulo: 'Solicitud aprobada',
-        mensaje: 'El propietario revisó tu documentación y aprobó tu solicitud. Te avisaremos cuando el contrato esté listo para firmar.',
+        mensaje: 'Cofianza revisó tu solicitud y la aprobó. Te avisaremos cuando el contrato esté listo para firmar.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, contrato_id: contratoId, via: 'aprobacion_condicionado' },
       });
     }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error notificando aprobación condicionado'));
+    void avisarDuenoDecisionRevisionManual(expedienteId, 'aprobado');
   }
 
   return {
@@ -703,6 +709,42 @@ async function aprobarYGenerarContrato(params: {
     contrato_id: contratoId,
     puntaje_revision_manual: puntajeRevisionManual,
   };
+}
+
+/**
+ * Adenda 2 §5: el condicionado lo decide un analista de Cofianza, y la guía del
+ * estudio le promete al dueño que se enterará. Aviso in-app + correo al dueño
+ * del inmueble y, si es otro, al miembro responsable. Por la card y por
+ * "Cambiar estado". Best-effort: nunca tumba la decisión ya escrita.
+ */
+export async function avisarDuenoDecisionRevisionManual(
+  expedienteId: string,
+  decision: 'aprobado' | 'rechazado',
+): Promise<void> {
+  try {
+    const { data } = await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('numero, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion)')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const e = data as { numero: string; inmuebles: { propietario_id: string | null; direccion: string | null } | null } | null;
+    if (!e) return;
+    const donde = e.inmuebles?.direccion ? ` (${e.inmuebles.direccion})` : '';
+    const aviso = {
+      tipo: 'estudio.revision_manual',
+      titulo: decision === 'aprobado' ? 'Cofianza aprobó el estudio condicionado' : 'Cofianza no aprobó el estudio condicionado',
+      mensaje:
+        decision === 'aprobado'
+          ? `El estudio ${e.numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puedes crear el contrato.`
+          : `El estudio ${e.numero}${donde} quedó no aprobable tras la revisión de Cofianza.`,
+      link: `/expedientes/${expedienteId}`,
+      payload: { expediente_id: expedienteId, decision },
+    };
+    const duenoId = e.inmuebles?.propietario_id ?? null;
+    if (duenoId) await notificarYCorreo({ userId: duenoId, ...aviso });
+    await notificarResponsableExpediente({ expedienteId, excluirPerfilId: duenoId, ...aviso });
+  } catch (err) {
+    logger.warn({ error: err, expedienteId }, 'No se pudo avisar al dueño la decisión de la revisión manual');
+  }
 }
 
 /**
