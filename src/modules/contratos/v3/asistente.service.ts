@@ -89,7 +89,7 @@ import { APROBACIONES } from './aprobaciones';
 import { contarClausulas, type Plantilla } from './motor';
 import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 import { contexto, generarAnexoVivienda, generarContratoVivienda, type DatosVivienda } from './vivienda';
-import { exigirPlazoDeFirma, finDelCrc, validarFirmantes, type ParteFirmante } from './firma/reglas';
+import { exigirPlazoDeFirma, exigirRutaConFirmas, finDelCrc, validarFirmantes, type ParteFirmante } from './firma/reglas';
 import {
   aceptarAviso,
   actualizarFirma,
@@ -1292,22 +1292,6 @@ const MAX_PAGINAS_PROPIO = 60;
 /** Tope del PDF unido que va a Auco (propio + Anexo + CRC). Mismo ponytail. */
 const MAX_BYTES_SOBRE = 8 * 1024 * 1024;
 
-/**
- * Adenda 1 del módulo de contratos, respuesta 6, condición 3: en la Ruta B las
- * firmas van sobre las líneas de firma de CADA documento, también las del PDF
- * de la inmobiliaria. Hoy solo se anclan ({{signature:N}}) en lo que genera
- * Cofianza, así que la Ruta B se prepara pero no sale a firma. Para quitarlo:
- * marcar dónde firma cada parte en el PDF propio y mandarlo a Auco con
- * `position`; y el mismo bloqueo en la web (Paso5Notificaciones).
- */
-function exigirRutaConFirmas(ruta: 'A' | 'B'): void {
-  if (ruta === 'B')
-    throw AppError.conflict(
-      'La Ruta B todavía no se puede enviar a firma: falta ubicar las firmas sobre las líneas de firma de tu contrato. Puedes dejarla lista o usar la Ruta A.',
-      'RUTA_B_SIN_FIRMA',
-    );
-}
-
 const MOTIVO_PDF: Record<MotivoPdfInvalido, string> = {
   peso: 'El PDF pesa más de 6 MB. Redúcelo (por ejemplo, imprimiéndolo de nuevo a PDF) y súbelo otra vez.',
   no_es_pdf: 'El archivo no es un PDF.',
@@ -1491,7 +1475,7 @@ export async function enviarAFirma(
   const dv = v3.datos_variables ?? {};
   const a: Asistente = dv.asistente ?? {};
   const ruta = a.paso1?.ruta ?? 'A';
-  exigirRutaConFirmas(ruta);
+  exigirRutaConFirmas(ruta); // antes de generar nada (crearSobre lo repite)
 
   // 1. Las mismas compuertas que generar.
   const bloqueos = evaluarBloqueos(f, hoy, cal);

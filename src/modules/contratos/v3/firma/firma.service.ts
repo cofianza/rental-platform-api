@@ -24,9 +24,11 @@ import { notificarUsuario } from '@/modules/notificaciones/notificaciones.servic
 import type { EnvioV3 } from '../asistente.types';
 import { fechaBogota, periodoVigente, sumarMeses } from '../formato';
 import {
+  RUTA_B_SIN_FIRMA,
   construirSignProfile,
   datosDeFirma,
   exigirPlazoDeFirma,
+  exigirRutaConFirmas,
   fechaHora,
   motivoSinPlazo,
   partesCompletas,
@@ -146,6 +148,8 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   if (c.estado !== 'pendiente_firma')
     throw AppError.conflict('El contrato no está en firma.', 'CONTRATO_ESTADO_CAMBIADO');
   if (!extra.storage_key) throw new AppError(500, 'CONTRATO_SIN_DOCUMENTO', 'El contrato no tiene documento para firmar.');
+  // Todos los caminos a Auco pasan por aquí: enviar, reenviar, reintentar y la verificación de identidad.
+  exigirRutaConFirmas(c.datos_variables?.documento?.final?.ruta);
 
   const partes = await leerPartes(contratoId);
   const coarrendatarios = partes.filter((p) => p.rol === 'coarrendatario').length;
@@ -297,6 +301,7 @@ export async function reenviar(contratoId: string, userId: string, rol?: string)
   if (!c) throw AppError.notFound('Contrato no encontrado.');
   if (c.estado !== 'firma_incompleta')
     throw AppError.conflict('Solo se reenvía un contrato con la firma incompleta.', 'ESTADO_NO_PERMITE_REENVIO');
+  exigirRutaConFirmas(c.datos_variables?.documento?.final?.ruta); // antes de tocar el contrato (crearSobre lo repite)
   // Con FIRMA INCOMPLETA el estudio se puede cerrar o rechazar; reenviar lo
   // activaría (y ocuparía el inmueble) sobre un estudio terminado.
   if (c.expedienteEstado === 'cerrado' || c.expedienteEstado === 'rechazado')
@@ -658,13 +663,14 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
     getCalibracion(),
   ]);
   const sinPlazo = vig ? plazoDeFirma(Date.now(), cal.DIAS_EXPIRACION_FIRMA, vig.fin) : ({ motivo: 'vencido' } as const);
+  const ruta = c.datos_variables?.documento?.final?.ruta ?? 'A';
   const acuse = adendaAviso?.aviso_aceptado_en
     ? { nombre: adendaAviso.aviso_aceptado_detalle?.nombre ?? '—', en: adendaAviso.aviso_aceptado_en }
     : null;
   return {
     id: c.id,
     numero: c.numero,
-    ruta: c.datos_variables?.documento?.final?.ruta ?? 'A',
+    ruta,
     estado: c.estado as EnvioV3['estado'],
     fechaActivacion: c.fecha_firma,
     fechaTerminacion: c.fecha_terminacion,
@@ -719,7 +725,9 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
         ? { puede: false, motivo: null }
         : !env.CONTRATOS_V3_ENABLED
           ? { puede: false, motivo: 'El envío a firma está desactivado por ahora. Escríbenos si necesitas reenviarlo.' }
-          : c.expedienteEstado === 'cerrado' || c.expedienteEstado === 'rechazado'
+          : ruta === 'B'
+            ? { puede: false, motivo: RUTA_B_SIN_FIRMA }
+            : c.expedienteEstado === 'cerrado' || c.expedienteEstado === 'rechazado'
             ? {
                 puede: false,
                 motivo: `El estudio está ${c.expedienteEstado === 'rechazado' ? 'marcado como no aprobable' : 'cerrado'}: el contrato ya no se puede reenviar a firma.`,
@@ -730,7 +738,7 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
                   puede: false,
                   motivo: `${motivoSinPlazo(sinPlazo.motivo, vig?.fin)} Si no la vas a renovar, cancela el contrato para liberar el inmueble.`,
                 },
-    reintento: env.CONTRATOS_V3_ENABLED && c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0,
+    reintento: env.CONTRATOS_V3_ENABLED && c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0 && ruta !== 'B',
   };
 }
 

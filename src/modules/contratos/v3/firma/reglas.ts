@@ -260,6 +260,23 @@ export function decidir(
   return 'nada';
 }
 
+// ── Ruta B (Adenda 1 del módulo de contratos, respuesta 6, condición 3) ──
+
+/**
+ * En la Ruta B las firmas van sobre las líneas de firma de CADA documento,
+ * también las del PDF de la inmobiliaria. Hoy solo se anclan ({{signature:N}})
+ * en lo que genera Cofianza, así que la Ruta B no sale a firma por ningún
+ * camino (enviar, reenviar, reintentar ni tras la verificación de identidad).
+ * Para habilitarla: marcar dónde firma cada parte en el PDF propio, mandarlo a
+ * Auco con `position` y borrar esto y sus usos (grep RUTA_B_SIN_FIRMA, también en la web).
+ */
+export const RUTA_B_SIN_FIRMA =
+  'La Ruta B todavía no se puede enviar a firma: falta ubicar las firmas sobre las líneas de firma del contrato de la inmobiliaria. Por ahora usa la Ruta A.';
+
+export function exigirRutaConFirmas(ruta: 'A' | 'B' | undefined): void {
+  if (ruta === 'B') throw AppError.conflict(RUTA_B_SIN_FIRMA, 'RUTA_B_SIN_FIRMA');
+}
+
 // ── Plazo de firma (Adenda 1 del módulo de contratos, respuesta 10) ──
 
 const DIA_MS = 86_400_000;

@@ -1189,3 +1189,35 @@ describe('Adenda 1 (respuesta 10): una firma fuera del plazo no activa la fianza
     });
   });
 });
+
+describe('Adenda 1 (respuesta 6, condición 3): la Ruta B no sale a firma por ningún camino', () => {
+  const rutaB = (x: Record<string, unknown> = {}) =>
+    contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: HOY } }, final: { ruta: 'B' } } }, ...x });
+
+  it('crearSobre (reintentar y la verificación de identidad pasan por aquí): 409 sin sobre ni Auco', async () => {
+    enqueue('contratos', ok(rutaB()), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE);
+    await expect(crearSobre('c1', 'u1')).rejects.toMatchObject({ statusCode: 409, errorCode: 'RUTA_B_SIN_FIRMA' });
+    expect(tabla('contrato_v3_sobres', 'insert')).toEqual([]);
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+  });
+
+  it('reenviar: 409 antes de tocar el contrato; la vista no ofrece reenviar ni reintentar', async () => {
+    enqueue('contratos', ok(rutaB({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    await expect(reenviar('c1', 'ad1', 'administrador')).rejects.toMatchObject({ errorCode: 'RUTA_B_SIN_FIRMA' });
+    expect(mockRpc).not.toHaveBeenCalled();
+
+    enqueue('contratos', ok(rutaB({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(incompleto()), ok({ id: 's1' }), ok(incompleto()), ok(ADENDA));
+    enqueue('contrato_partes', ok(PARTES));
+    expect((await estadoEnviado('c1'))!.reenvio).toEqual({ puede: false, motivo: expect.stringContaining('Ruta B todavía no se puede enviar') });
+
+    enqueue('contratos', ok(rutaB()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'fallido', auco_code: null })));
+    enqueue('contrato_partes', ok(PARTES));
+    expect((await estadoEnviado('c1'))!.reintento).toBe(false);
+  });
+});
