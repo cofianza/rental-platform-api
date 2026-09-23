@@ -353,6 +353,23 @@ describe('guards de la Entrega 5 sobre filas V3', () => {
     expect(escrituras()).toEqual([]);
   });
 
+  it.each(['borrador', 'pendiente_firma'])(
+    'Adenda 1 (respuesta 12): con el V3 en %s tampoco se cobra la garantía; con la fianza activa, sí se llega al cobro',
+    async (estado) => {
+      const link = () =>
+        createPaymentLink(EXP, { concepto: 'garantia', monto: 2_000_000, descripcion: 'x', email_pagador: 'p@x.co', nombre_pagador: 'P', enviar_email: false }, ADMIN.id, ADMIN.rol);
+      enqueue('expedientes', { data: { id: EXP, numero: 'EXP-2026-0100', estado: 'aprobado' }, error: null });
+      enqueue('contratos', { data: [{ estado: 'cancelado' }, { estado }], error: null });
+      expect(await error(link())).toMatchObject({ statusCode: 409, errorCode: 'FIANZA_NO_OPERANDO', message: expect.stringContaining('firmen todos') });
+      expect(escrituras()).toEqual([]);
+
+      enqueue('expedientes', { data: { id: EXP, numero: 'EXP-2026-0100', estado: 'aprobado' }, error: null });
+      enqueue('contratos', { data: [{ estado: 'vigente' }], error: null });
+      // Pasa la puerta (y cae más adelante, en la pasarela que esta prueba no monta).
+      expect(((await link().catch((x: unknown) => x)) as { errorCode?: string }).errorCode).not.toBe('FIANZA_NO_OPERANDO');
+    },
+  );
+
   it('reenviar el link de garantía con un V3 en FIRMA INCOMPLETA → 409 y no sale el correo', async () => {
     enqueue('pagos', {
       data: { id: 'pg1', estado: 'pendiente', concepto: 'garantia', expediente_id: EXP, payment_link_url: 'https://mp', email_pagador: 'p@x.co', monto: 1 },

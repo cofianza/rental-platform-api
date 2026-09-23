@@ -586,12 +586,15 @@ export async function cancelarPagosPendientesDeExpediente(
 }
 
 /**
- * FIRMA INCOMPLETA (contratos V3, §11.7.3): la fianza no está operando, así que
- * no se cobra garantía ni primer canon (cada pago es una factura real ante la
- * DIAN). En EN FIRMA sí se permite. Vale al crear el link y al reenviarlo. Solo
- * mira filas V3, y filtra el estado aquí y no en la consulta para no depender
- * del valor nuevo del enum.
+ * Contratos V3 (§11.7.1-11.7.3 y Adenda 1 del módulo de contratos, respuesta
+ * 12): mientras el contrato no esté firmado por todas las partes (borrador, EN
+ * FIRMA o FIRMA INCOMPLETA) la fianza no opera, así que no se cobra garantía
+ * ni primer canon (cada pago es una factura real ante la DIAN). Vale al crear
+ * el link, al reenviarlo y al registrar un pago a mano. Solo mira filas V3, y
+ * filtra el estado aquí y no en la consulta para no depender del valor nuevo del enum.
  */
+const V3_SIN_FIRMA_COMPLETA = ['borrador', 'pendiente_firma', 'firma_incompleta'];
+
 async function assertFianzaOperando(expedienteId: string, concepto: string): Promise<void> {
   if (concepto !== 'garantia' && concepto !== 'primer_canon') return;
   const { data: v3, error: v3Error } = await (supabase
@@ -600,9 +603,12 @@ async function assertFianzaOperando(expedienteId: string, concepto: string): Pro
     .eq('expediente_id', expedienteId)
     .not('destinacion', 'is', null);
   if (v3Error) throw fromSupabaseError(v3Error);
-  if (((v3 as Array<{ estado: string }> | null) ?? []).some((c) => c.estado === 'firma_incompleta')) {
+  const sinFirma = ((v3 as Array<{ estado: string }> | null) ?? []).find((c) => V3_SIN_FIRMA_COMPLETA.includes(c.estado));
+  if (sinFirma) {
     throw AppError.conflict(
-      'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la garantía o el primer canon.',
+      sinFirma.estado === 'firma_incompleta'
+        ? 'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la garantía o el primer canon.'
+        : 'El contrato todavía no está firmado por todas las partes: la garantía y el primer canon se cobran cuando firmen todos.',
       'FIANZA_NO_OPERANDO',
     );
   }
