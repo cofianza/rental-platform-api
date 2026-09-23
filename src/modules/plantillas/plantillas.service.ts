@@ -155,7 +155,7 @@ export async function createPlantilla(
       descripcion: input.descripcion ?? null,
       contenido: input.contenido,
       variables,
-      activa: input.activa ?? true,
+      activa: input.activa ?? false,
       version: 1,
       creado_por: userId,
     } as never)

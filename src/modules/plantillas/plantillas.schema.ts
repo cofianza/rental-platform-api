@@ -37,7 +37,9 @@ export const createPlantillaSchema = z.object({
     .optional(),
   contenido: z.string()
     .min(1, 'El contenido es requerido'),
-  activa: z.boolean().default(true),
+  // Inactiva por defecto: la activa más reciente es la que usan TODOS los
+  // contratos nuevos, así que un borrador no debe reemplazarla en silencio.
+  activa: z.boolean().default(false),
 });
 
 // ============================================================
