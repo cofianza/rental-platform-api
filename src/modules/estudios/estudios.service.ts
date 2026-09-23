@@ -3030,6 +3030,12 @@ export function diasHabilesTranscurridos(desde: Date, hasta: Date): number {
   return dias;
 }
 
+/** Politica §8: pasaron mas de 15 dias habiles desde que se completo. Sin fecha no se puede medir y no vence. */
+function plazoReevaluacionVencido(fechaCompletado: string | null | undefined): boolean {
+  return !!fechaCompletado &&
+    diasHabilesTranscurridos(new Date(fechaCompletado), new Date()) > PLAZO_REEVALUACION_DIAS_HABILES;
+}
+
 function getExtensionFromMime(mimeType: string): string {
   const map: Record<string, string> = {
     'application/pdf': 'pdf',
@@ -3048,7 +3054,7 @@ export async function getSoportePresignedUrl(
   // 1. Validate estudio exists and is eligible for re-evaluation
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, expediente_id')
+    .select('id, estado, resultado, expediente_id, fecha_completado')
     .eq('id', estudioId)
     .single();
 
@@ -3056,7 +3062,9 @@ export async function getSoportePresignedUrl(
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; estado: string; resultado: string; expediente_id: string };
+  const est = estudio as unknown as {
+    id: string; estado: string; resultado: string; expediente_id: string; fecha_completado: string | null;
+  };
 
   // Tenant guard: URL de subida firmada a estudios/<id>/soporte/… Sin scoping,
   // la inmobiliaria subía documentos soporte al storage de estudios de OTRA
@@ -3067,6 +3075,15 @@ export async function getSoportePresignedUrl(
     throw AppError.badRequest(
       'Solo se pueden subir documentos soporte para estudios completados con resultado rechazado o condicionado',
       'ESTUDIO_NO_REEVALUABLE',
+    );
+  }
+
+  // Los soportes solo sirven para re-evaluar: fuera del plazo no se firma la
+  // subida (antes el gestor subia archivos y el 400 llegaba al final).
+  if (plazoReevaluacionVencido(est.fecha_completado)) {
+    throw AppError.badRequest(
+      `El plazo de ${PLAZO_REEVALUACION_DIAS_HABILES} días hábiles para re-evaluar ya venció. Para volver a evaluar al solicitante hay que habilitar una evaluación nueva.`,
+      'REEVALUACION_FUERA_DE_PLAZO',
     );
   }
 
@@ -3493,16 +3510,22 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
   });
 
   // 5. Determine if can re-evaluate
-  const lastEstudio = estudiosChain[estudiosChain.length - 1] as unknown as { estado: string; resultado: string } | undefined;
+  const lastEstudio = estudiosChain[estudiosChain.length - 1] as unknown as
+    { estado: string; resultado: string; fecha_completado: string | null } | undefined;
   const totalEnCadena = estudiosChain.length;
+  // Mismo plazo que valida solicitarReEvaluacion: sin esto la UI dejaba subir
+  // soportes y el 400 REEVALUACION_FUERA_DE_PLAZO llegaba al final.
+  const plazoVencido = plazoReevaluacionVencido(lastEstudio?.fecha_completado);
   const puedeReevaluar =
     totalEnCadena <= MAX_REEVALUACIONES &&
     lastEstudio?.estado === 'completado' &&
-    RESULTADOS_REEVALUABLES.includes(lastEstudio.resultado);
+    RESULTADOS_REEVALUABLES.includes(lastEstudio.resultado) &&
+    !plazoVencido;
 
   return {
     total_en_cadena: totalEnCadena,
     puede_reevaluar: puedeReevaluar,
+    plazo_vencido: plazoVencido,
     // Mismas reglas que el detalle: al prospecto no le viajan score ni motivo.
     historial: redactarEstudiosSegunRol(historial as Record<string, unknown>[], userRol),
   };
