@@ -324,6 +324,30 @@ describe('quién recibe cuál', () => {
     expect(textos).not.toHaveBeenCalled();
   });
 
+  // Regenerar con el estudio de hoy imprimiría un resultado que ya no es.
+  it('sin la versión guardada y con el estudio de hoy no certificable, no la regenera: 409 y nada se sube', async () => {
+    const casos: Array<[Record<string, unknown>, string]> = [
+      [{ ...ESTUDIO, resultado: 'rechazado' }, 'ESTUDIO_NO_CERTIFICABLE'],
+      [{ ...ESTUDIO, estado: 'en_proceso', resultado: 'pendiente' }, 'ESTUDIO_NO_COMPLETADO'],
+      // Condicionado que el analista negó: el estudio sigue 'condicionado', el expediente no.
+      [{ ...ESTUDIO, resultado: 'condicionado', expedientes: { ...ESTUDIO.expedientes, estado: 'rechazado' } }, 'ESTUDIO_NO_CERTIFICABLE'],
+    ];
+    for (const [estudio, errorCode] of casos) {
+      enqueue('estudios', { data: estudio, error: null });
+      await expect(crcParaFirmantes(CERT)).rejects.toMatchObject({ statusCode: 409, errorCode });
+    }
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(textos).not.toHaveBeenCalled();
+  });
+
+  it('el generador no pone APROBADO a un resultado sin sello', async () => {
+    await expect(generateCertificatePdf({ ...DATOS, resultado: 'rechazado' }, QR)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'ESTUDIO_NO_CERTIFICABLE',
+    });
+    expect(textos).not.toHaveBeenCalled();
+  });
+
   it('al emitir el CRC se suben los dos: el completo y, al lado, el de firmantes', async () => {
     enqueue('estudios', { data: ESTUDIO, error: null });
     enqueue('estudios_certificados', { data: null, error: null }, { data: null, error: null }, { data: { id: 'cert-9' }, error: null });

@@ -199,6 +199,14 @@ export async function generateCertificatePdf(
   data: CertificatePdfData,
   qrBuffer: Buffer,
 ): Promise<Buffer> {
+  // Sin sello para el resultado no hay certificado (antes caia en APROBADO).
+  const rc = RESULTADO_COLORS[data.resultado];
+  if (!rc) {
+    throw AppError.conflict(
+      'Solo se puede generar certificado para estudios aprobados o condicionados',
+      'ESTUDIO_NO_CERTIFICABLE',
+    );
+  }
   const company = await getCompany();
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'LETTER', margin: 50 });
@@ -306,7 +314,6 @@ export async function generateCertificatePdf(
     y = drawSectionTitle(doc, 'RESULTADO DEL ESTUDIO', y, contentWidth);
 
     // Result badge
-    const rc = RESULTADO_COLORS[data.resultado] || RESULTADO_COLORS.aprobado;
     doc.roundedRect(50, y, 160, 28, 4).fill(rc.bg as unknown as string);
     doc.fontSize(12).font('Helvetica-Bold').fillColor(rc.text as unknown as string);
     doc.text(rc.label, 55, y + 7, { width: 150, align: 'center' });
@@ -622,26 +629,8 @@ export async function generarCertificado(
   // OTRA agencia por UUID (write-IDOR). No-op para roles internos.
   await assertExpedienteAccess(e.expediente_id as string, userId, userRol);
 
-  // Los datos de la persona salen del expediente (el titular): con la fila del
-  // co-arrendatario salia un CRC a nombre del titular con el resultado y el
-  // score de otra persona, verificable por QR.
-  if (e.tipo === 'con_coarrendatario') {
-    throw AppError.conflict(
-      'El certificado se emite sobre el estudio del titular; la evaluación del co-arrendatario ya se refleja en él.',
-      'ESTUDIO_COARRENDATARIO_NO_CERTIFICABLE',
-    );
-  }
-
   // 2. Validate
-  if (e.estado !== 'completado') {
-    throw AppError.conflict('El estudio debe estar completado para generar certificado', 'ESTUDIO_NO_COMPLETADO');
-  }
-  if (!RESULTADOS_CERTIFICABLES.includes(e.resultado as string)) {
-    throw AppError.conflict(
-      'Solo se puede generar certificado para estudios aprobados o condicionados',
-      'ESTUDIO_NO_CERTIFICABLE',
-    );
-  }
+  assertCertificable(e);
 
   // 2.b VIGENCIA DEL ESTUDIO — el guard que faltaba.
   //
@@ -822,6 +811,41 @@ export async function generarCertificado(
   };
 }
 
+/**
+ * Compuertas de la emision. Tambien las pasa la version para firmantes que se
+ * genera a demanda: con el estudio de hoy pendiente, rechazado o negado por el
+ * analista, regenerar imprimiria un resultado que ya no es.
+ */
+function assertCertificable(e: Record<string, unknown>): void {
+  // Los datos de la persona salen del expediente (el titular): con la fila del
+  // co-arrendatario salia un CRC a nombre del titular con el resultado y el
+  // score de otra persona, verificable por QR.
+  if (e.tipo === 'con_coarrendatario') {
+    throw AppError.conflict(
+      'El certificado se emite sobre el estudio del titular; la evaluación del co-arrendatario ya se refleja en él.',
+      'ESTUDIO_COARRENDATARIO_NO_CERTIFICABLE',
+    );
+  }
+  if (e.estado !== 'completado') {
+    throw AppError.conflict('El estudio debe estar completado para generar certificado', 'ESTUDIO_NO_COMPLETADO');
+  }
+  if (!RESULTADOS_CERTIFICABLES.includes(e.resultado as string)) {
+    throw AppError.conflict(
+      'Solo se puede generar certificado para estudios aprobados o condicionados',
+      'ESTUDIO_NO_CERTIFICABLE',
+    );
+  }
+  // El analista niega un condicionado cambiando solo el expediente: el estudio
+  // se queda 'condicionado' (mismo criterio que resultadoEfectivo de estudios.service).
+  const exp = e.expedientes as { estado?: string | null; estado_pre_cancelacion?: string | null } | null;
+  if (exp?.estado === 'rechazado' || (exp?.estado === 'cerrado' && exp.estado_pre_cancelacion === 'rechazado')) {
+    throw AppError.conflict(
+      'El estudio quedó no aprobable tras la revisión de Cofianza, así que no se genera certificado.',
+      'ESTUDIO_NO_CERTIFICABLE',
+    );
+  }
+}
+
 /** Deep join: estudio → expediente → solicitante + inmueble. */
 async function leerEstudioCrc(estudioId: string): Promise<Record<string, unknown>> {
   const { data: estudio, error: estudioErr } = await (supabase
@@ -829,7 +853,7 @@ async function leerEstudioCrc(estudioId: string): Promise<Record<string, unknown
     .select(`
       *,
       expedientes!estudios_expediente_id_fkey(
-        numero, estado, duracion_contrato_meses,
+        numero, estado, estado_pre_cancelacion, duracion_contrato_meses,
         solicitantes!expedientes_solicitante_id_fkey(
           nombre, apellido, tipo_documento, numero_documento, email, telefono
         ),
@@ -1072,7 +1096,9 @@ export async function crcParaFirmantes(cert: {
   const { data } = await supabase.storage.from(BUCKET_NAME).download(key);
   if (data) return { key, pdf: Buffer.from(await data.arrayBuffer()) };
 
-  const datos = await datosDelCrc(await leerEstudioCrc(cert.estudio_id), cert);
+  const e = await leerEstudioCrc(cert.estudio_id);
+  assertCertificable(e);
+  const datos = await datosDelCrc(e, cert);
   const pdf = await generateCertificatePdf(sinPuntaje(datos), await generateQrCode(`${env.FRONTEND_URL}/verificar/${cert.codigo}`));
   // Sin upsert: si ya existia (una lectura que fallo), no se pisa; se reintenta.
   const { error } = await supabase.storage.from(BUCKET_NAME).upload(key, pdf, { contentType: 'application/pdf', upsert: false });
