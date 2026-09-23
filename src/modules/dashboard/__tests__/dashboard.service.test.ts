@@ -41,6 +41,10 @@ vi.mock('@/lib/supabase', () => ({
   },
 }));
 
+vi.mock('@/lib/tenantScope', () => ({
+  resolvePortfolioInmuebleIds: vi.fn(async () => ['i1']),
+}));
+
 vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
@@ -159,6 +163,25 @@ describe('Dashboard Service', () => {
       const result = await dashboardService.getExpedientesPorEstado('2026-01-01', '2026-01-02');
 
       expect(result).toEqual([]);
+    });
+  });
+
+  describe('getMiCarteraAnalitica()', () => {
+    it('"Desempeño de tus estudios" cuenta solo la evaluación del titular', async () => {
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'expedientes') return createChain([{ id: 'e1' }]);
+        if (table === 'estudios') {
+          return createChain([
+            { resultado: 'aprobado', score: 800, created_at: new Date().toISOString(), fecha_completado: null },
+          ]);
+        }
+        return createChain([]);
+      });
+
+      const r = await dashboardService.getMiCarteraAnalitica('p1');
+
+      expect(mockNeq).toHaveBeenCalledWith('tipo', 'con_coarrendatario');
+      expect(r.estudios).toMatchObject({ total: 1, aprobados: 1, scorePromedio: 800 });
     });
   });
 });

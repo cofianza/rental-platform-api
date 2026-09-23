@@ -252,7 +252,9 @@ function fmtInmueble(i: { codigo: string | null; direccion: string | null } | nu
   return i.codigo || i.direccion || '—';
 }
 
-// Mapa expediente_id → {score, resultado} (último estudio con resultado).
+// Mapa expediente_id → {score, resultado} (última evaluación terminada DEL
+// TITULAR). La del coarrendatario comparte expediente_id y suele ser posterior:
+// sin excluirla, la fila del arrendatario mostraba el puntaje de otra persona.
 async function fetchEstudiosPorExpediente(expedienteIds: string[]): Promise<Map<string, { score: number | null; resultado: string | null }>> {
   const out = new Map<string, { score: number | null; resultado: string | null }>();
   if (expedienteIds.length === 0) return out;
@@ -261,6 +263,8 @@ async function fetchEstudiosPorExpediente(expedienteIds: string[]): Promise<Map<
   )
     .select('expediente_id, score, resultado, created_at')
     .in('expediente_id', expedienteIds)
+    .neq('tipo', 'con_coarrendatario')
+    .neq('resultado', 'pendiente')
     .order('created_at', { ascending: false });
   if (error) throw fromSupabaseError(error);
   for (const e of (data ?? []) as Array<{ expediente_id: string; score: number | null; resultado: string | null }>) {

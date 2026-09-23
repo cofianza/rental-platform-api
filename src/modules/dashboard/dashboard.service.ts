@@ -740,7 +740,10 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
       supabase.from('estudios' as string) as ReturnType<typeof supabase.from>
     )
       .select('resultado, score, created_at, fecha_completado')
-      .in('expediente_id', expedienteIds);
+      .in('expediente_id', expedienteIds)
+      // Solo la del titular: la del coarrendatario es parte del mismo estudio
+      // y sumaba un "estudio" más al total, al score y a las decisiones.
+      .neq('tipo', 'con_coarrendatario');
     const treintaDias = Date.now() - 30 * 86_400_000;
     for (const e of (ests ?? []) as Array<{
       resultado: string | null;

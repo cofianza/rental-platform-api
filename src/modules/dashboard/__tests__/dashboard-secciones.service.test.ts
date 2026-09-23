@@ -169,6 +169,24 @@ describe('listInquilinos()', () => {
     expect(r.fechaFin).toBe('2026-09-01');
   });
 
+  it('score y resultado son de la última evaluación terminada del titular, no del coarrendatario', async () => {
+    let estudiosChain: Record<string, ReturnType<typeof vi.fn>> | null = null;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'contratos') return createChain({ data: [contratoConSolicitante] });
+      if (table === 'estudios') {
+        const chain = createChain({ data: [{ expediente_id: 'e1', score: 70, resultado: 'aprobado' }] });
+        estudiosChain = chain as unknown as Record<string, ReturnType<typeof vi.fn>>;
+        return chain;
+      }
+      return createChain({ data: [] });
+    });
+
+    await secciones.listInquilinos();
+
+    expect(estudiosChain!.neq).toHaveBeenCalledWith('tipo', 'con_coarrendatario');
+    expect(estudiosChain!.neq).toHaveBeenCalledWith('resultado', 'pendiente');
+  });
+
   it('marca pago=mora cuando el contrato tiene mora activa', async () => {
     byTable({
       contratos: { data: [contratoConSolicitante] },
