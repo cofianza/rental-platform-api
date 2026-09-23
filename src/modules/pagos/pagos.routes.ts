@@ -34,6 +34,16 @@ expedientePagosRouter.get(
 // le mostraba los botones y respondía 403.
 const ROLES_COBRO = ['administrador', 'operador_analista'];
 
+// GET /expedientes/:expedienteId/pagos/prima-sugerida — la prima con IVA que
+// los modales de cobro sugieren para la garantía (Adenda 1 de contratos §1.1).
+expedientePagosRouter.get(
+  '/prima-sugerida',
+  authorize('pagos', 'read'),
+  roleGuard(ROLES_COBRO),
+  validate({ params: expedienteIdParamsSchema }),
+  pagosController.getPrimaSugerida,
+);
+
 // POST /expedientes/:expedienteId/pagos — Create payment link
 expedientePagosRouter.post(
   '/',

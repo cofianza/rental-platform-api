@@ -1846,7 +1846,7 @@ async function fetchModalidadFianza(codigo: string | null | undefined): Promise<
  * coarrendatario). Sin estudio completado (aprobación sin buró), la ruta es la
  * revisión manual.
  */
-async function tarifasParaContrato(expedienteId: string): Promise<Tarifas> {
+export async function tarifasParaContrato(expedienteId: string): Promise<Tarifas> {
   const { data } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select('id')

@@ -15,6 +15,7 @@ import { assertExpedienteAccess } from '@/lib/tenantScope';
 // tambien puede cobrar el estudio (concepto='estudio'), asi que necesita el
 // mismo guard que /pago-estudio. Ver tope-canon.guard.ts.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { sobreCanon } from '@/modules/estudios/tarifas';
 
 // ============================================================
 // Helpers
@@ -198,6 +199,42 @@ export async function getPagoDetailWithEvents(id: string, userId?: string, userR
   return {
     ...pago,
     eventos: eventos ?? [],
+  };
+}
+
+// ============================================================
+// Prima sugerida — GET /expedientes/:expedienteId/pagos/prima-sugerida
+// ============================================================
+
+/**
+ * Lo que los modales de cobro sugieren para la garantía, que es la prima de
+ * vinculación: el % del estudio (el del CRC u override de Gerencia) sobre el
+ * canon del contrato —Adenda 1 de contratos, respuesta 9: rige el canon
+ * pactado— o, sin contrato todavía, sobre el evaluado; más IVA (§1.1). Solo
+ * sugiere: el monto lo sigue poniendo el gestor y el API no lo cambia.
+ */
+export async function getPrimaSugerida(expedienteId: string, userId?: string, userRol?: string) {
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+  const { tarifasParaContrato } = await import('@/modules/contratos/contratos.service');
+  const [tarifas, { data: contrato, error }] = await Promise.all([
+    tarifasParaContrato(expedienteId),
+    (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('valor_arriendo')
+      .eq('expediente_id', expedienteId)
+      .neq('estado', 'cancelado')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  if (error) throw fromSupabaseError(error);
+  const canonContrato = Number((contrato as { valor_arriendo?: unknown } | null)?.valor_arriendo) || null;
+  const t = canonContrato ? sobreCanon(tarifas, canonContrato) : tarifas;
+  return {
+    canon: canonContrato ? ('contrato' as const) : ('estudio' as const),
+    prima_vinculacion_pct: t.prima_vinculacion_pct,
+    prima_vinculacion_cop: t.prima_vinculacion_cop,
+    iva_pct: t.iva_pct,
+    prima_vinculacion_con_iva_cop: t.prima_vinculacion_con_iva_cop,
   };
 }
 

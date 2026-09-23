@@ -26,6 +26,15 @@ export async function listByExpediente(req: Request, res: Response) {
 }
 
 // ============================================================
+// GET /api/v1/expedientes/:expedienteId/pagos/prima-sugerida
+// ============================================================
+
+export async function getPrimaSugerida(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as ExpedienteIdParams;
+  sendSuccess(res, await pagosService.getPrimaSugerida(expedienteId, req.user?.id, req.user?.rol));
+}
+
+// ============================================================
 // POST /api/v1/expedientes/:expedienteId/pagos — Create payment link
 // ============================================================
 
