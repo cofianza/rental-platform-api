@@ -7,8 +7,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // inmobiliaria nace con su organización (si no, no podía operar).
 // ============================================================
 
-const { ins, rpc, auth, mockEnsureOrg } = vi.hoisted(() => ({
+const { ins, ops, rpc, auth, mockEnsureOrg } = vi.hoisted(() => ({
   ins: [] as unknown[][],
+  ops: [] as unknown[][],
   rpc: vi.fn(),
   auth: {
     listUsers: vi.fn(),
@@ -21,7 +22,7 @@ const { ins, rpc, auth, mockEnsureOrg } = vi.hoisted(() => ({
 
 vi.mock('@/lib/supabase', () => {
   const chain: Record<string, unknown> = {};
-  for (const m of ['select', 'update', 'eq']) chain[m] = () => chain;
+  for (const m of ['select', 'update', 'eq', 'is']) chain[m] = (...a: unknown[]) => (ops.push([m, ...a]), chain);
   // Solo existe perfil para 'real-1'.
   chain.in = async (_c: string, ids: string[]) => {
     ins.push(ids);
@@ -29,7 +30,7 @@ vi.mock('@/lib/supabase', () => {
   };
   chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: null, error: null }).then(resolve);
   return {
-    supabase: { from: () => chain, rpc: (...a: unknown[]) => rpc(...a) },
+    supabase: { from: (t: string) => (ops.push(['from', t]), chain), rpc: (...a: unknown[]) => rpc(...a) },
     supabaseAuth: { auth: { admin: auth } },
   };
 });
@@ -42,10 +43,11 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveInmobiliariaIdForPerfil: vi.fn(async () => null),
 }));
 
-import { listOrphanAuthUsers, deleteUser, createUser } from '../users.service';
+import { listOrphanAuthUsers, deleteUser, createUser, updateUser } from '../users.service';
 
 beforeEach(() => {
   ins.length = 0;
+  ops.length = 0;
   vi.clearAllMocks();
 });
 
@@ -76,5 +78,19 @@ describe('alta desde el panel', () => {
     auth.createUser.mockResolvedValueOnce({ data: { user: { id: 'nuevo' } }, error: null });
     await createUser({ email: 'i@x.co', nombre: 'Casa', apellido: 'Sur', rol: 'inmobiliaria' } as never, 'admin');
     expect(mockEnsureOrg).toHaveBeenCalledWith('nuevo', 'Casa Sur');
+  });
+
+  it('un propietario que pasa a inmobiliaria se lleva sus fichas sin organización', async () => {
+    const antes = { data: [{ id: 'p1', rol: 'propietario', nombre: 'Ana', apellido: 'Ruiz' }], error: null };
+    rpc.mockResolvedValueOnce(antes).mockResolvedValueOnce(antes); // get_user_with_email antes y después
+    await updateUser('p1', { rol: 'inmobiliaria' } as never, 'admin');
+    expect(mockEnsureOrg).toHaveBeenCalledWith('p1', 'Ana Ruiz');
+    const i = ops.findIndex((o) => o[0] === 'from' && o[1] === 'solicitantes');
+    expect(ops.slice(i, i + 4)).toEqual([
+      ['from', 'solicitantes'],
+      ['update', { inmobiliaria_id: 'org-1' }],
+      ['eq', 'creado_por', 'p1'],
+      ['is', 'inmobiliaria_id', null],
+    ]);
   });
 });

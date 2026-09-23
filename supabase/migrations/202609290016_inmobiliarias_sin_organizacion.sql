@@ -33,7 +33,30 @@ JOIN public.perfiles p ON p.id = i.owner_perfil_id
 WHERE p.rol = 'inmobiliaria'
   AND NOT EXISTS (SELECT 1 FROM public.inmobiliaria_miembros m WHERE m.perfil_id = i.owner_perfil_id);
 
+-- Sus fichas registradas sin organización pasan a la suya: con org, el API
+-- acota solicitantes por inmobiliaria_id y dejaría de verlas (y la
+-- deduplicación crearía otra ficha de la misma persona). Se salta la que
+-- chocaría con una ficha de la org con el mismo documento (índice único).
+UPDATE public.solicitantes s
+SET inmobiliaria_id = i.id
+FROM public.inmobiliarias i
+JOIN public.inmobiliaria_miembros m
+  ON m.inmobiliaria_id = i.id AND m.perfil_id = i.owner_perfil_id
+ AND m.rol_miembro = 'owner' AND m.estado = 'activo'
+JOIN public.perfiles p ON p.id = i.owner_perfil_id AND p.rol = 'inmobiliaria'
+WHERE s.creado_por = i.owner_perfil_id
+  AND s.inmobiliaria_id IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM public.solicitantes o
+    WHERE o.inmobiliaria_id = i.id
+      AND o.tipo_documento = s.tipo_documento
+      AND o.numero_documento = s.numero_documento
+  );
+
 -- Verificación (debe devolver 0):
 -- SELECT count(*) FROM public.perfiles p
 -- WHERE p.rol = 'inmobiliaria'
 --   AND NOT EXISTS (SELECT 1 FROM public.inmobiliaria_miembros m WHERE m.perfil_id = p.id);
+-- SELECT count(*) FROM public.solicitantes s
+-- JOIN public.inmobiliarias i ON i.owner_perfil_id = s.creado_por
+-- WHERE s.inmobiliaria_id IS NULL;

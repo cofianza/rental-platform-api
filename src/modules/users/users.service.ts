@@ -156,10 +156,23 @@ export async function createUser(input: CreateUserInput, createdBy: string, ip?:
  * createInmueble la manda a completar esos mismos datos: no podía operar.
  * Log-only como en el registro: la cuenta ya existe y ensureOrgConOwner es
  * idempotente (la migración 202609290016 repara las que quedaron sin org).
+ *
+ * Las fichas que ya registró sin organización (p.ej. un propietario que pasa a
+ * inmobiliaria) se van con ella: con org, el alcance de solicitantes es
+ * inmobiliaria_id y dejaría de verlas, y la deduplicación crearía otra ficha
+ * de la misma persona. Sus inmuebles no hace falta: se ven por propietario_id.
  */
 async function asegurarOrgPropia(userId: string, nombre: string): Promise<void> {
   try {
-    await ensureOrgConOwner(userId, nombre.trim());
+    const orgId = await ensureOrgConOwner(userId, nombre.trim());
+    // ponytail: si la org ya existía y tiene la misma cédula, el índice único
+    // rechaza todo el UPDATE (queda en el log); la migración sí salta esas.
+    const { error } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .update({ inmobiliaria_id: orgId } as never)
+      .eq('creado_por', userId)
+      .is('inmobiliaria_id', null);
+    if (error) throw error;
   } catch (orgError) {
     logger.error({ error: (orgError as Error).message, userId }, 'Error al crear organización de inmobiliaria');
   }
