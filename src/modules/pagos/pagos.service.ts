@@ -743,6 +743,29 @@ export async function registerManualPayment(
   // §11.7.3: la misma puerta que el link de pago; a mano tampoco se cobra con la firma incompleta.
   await assertFianzaOperando(expedienteId, input.concepto);
 
+  // Un enlace vivo del mismo concepto se podría pagar después: doble cobro y
+  // doble factura (la del webhook sale sola). 'fallido' cuenta porque MP deja
+  // reintentar en el mismo checkout.
+  const { data: vivos } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', input.concepto)
+    .in('estado', ['pendiente', 'procesando', 'fallido']);
+  const estadosVivos = ((vivos as Array<{ estado: string }> | null) ?? []).map((p) => p.estado);
+  if (estadosVivos.includes('procesando')) {
+    throw AppError.conflict(
+      'Hay un pago por PSE o en efectivo en proceso para este concepto. Espera a que se confirme o venza antes de registrar el pago manual.',
+      'PAGO_EN_PROCESO',
+    );
+  }
+  if (estadosVivos.length > 0) {
+    throw AppError.conflict(
+      'Hay un enlace de pago vivo para este concepto. Cancélalo en la lista de pagos antes de registrar el pago manual.',
+      'PAGO_DUPLICADO',
+    );
+  }
+
   // Validate fecha_pago is not in the future
   const fechaPago = new Date(input.fecha_pago);
   if (fechaPago > new Date()) {
