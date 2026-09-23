@@ -300,31 +300,13 @@ export async function getPortfolioStats(perfilId: string): Promise<PortfolioStat
     return { propiedades_activas: 0, inquilinos_cartera: 0, canon_mensual: 0 };
   }
 
-  // 2) Expedientes vinculados a esos inmuebles (necesario porque
-  //    contratos no apunta directamente a inmueble — pasa por expediente).
-  const { data: expedientes, error: expError } = await supabase
-    .from('expedientes')
-    .select('id, solicitante_id, inmueble_id')
-    .in('inmueble_id', inmuebleIds);
-
-  if (expError) throw fromSupabaseError(expError);
-
-  const expedienteIds = (expedientes ?? []).map((e) => (e as { id: string }).id);
-  const expedienteSolicitante: Record<string, string | null> = {};
-  for (const e of expedientes ?? []) {
-    const row = e as { id: string; solicitante_id: string | null };
-    expedienteSolicitante[row.id] = row.solicitante_id;
-  }
-
-  if (expedienteIds.length === 0) {
-    return { propiedades_activas, inquilinos_cartera: 0, canon_mensual: 0 };
-  }
-
-  // 3) Contratos activos sobre esos expedientes
-  const { data: contratos, error: contError } = await supabase
-    .from('contratos')
-    .select('expediente_id, valor_arriendo, estado')
-    .in('expediente_id', expedienteIds)
+  // 2) Contratos activos de esos inmuebles, con el expediente embebido (el
+  //    contrato no apunta al inmueble): una ida en vez de dos en serie.
+  const { data: contratos, error: contError } = await (
+    supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
+  )
+    .select('valor_arriendo, expedientes!inner(solicitante_id)')
+    .in('expedientes.inmueble_id', inmuebleIds)
     .in('estado', ['firmado', 'vigente']);
 
   if (contError) throw fromSupabaseError(contError);
@@ -332,8 +314,8 @@ export async function getPortfolioStats(perfilId: string): Promise<PortfolioStat
   const solicitantesUnicos = new Set<string>();
   let canon_mensual = 0;
   for (const c of contratos ?? []) {
-    const row = c as { expediente_id: string; valor_arriendo: number | null };
-    const sol = expedienteSolicitante[row.expediente_id];
+    const row = c as { valor_arriendo: number | null; expedientes: { solicitante_id: string | null } | null };
+    const sol = row.expedientes?.solicitante_id;
     if (sol) solicitantesUnicos.add(sol);
     if (typeof row.valor_arriendo === 'number') canon_mensual += row.valor_arriendo;
   }
@@ -396,116 +378,88 @@ export interface MisInmueblesData {
 }
 
 export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesData> {
-  // 1) Inmuebles del portafolio (org-aware)
-  const portfolioIds = await resolvePortfolioInmuebleIds(perfilId);
-  const { data: inmData, error: e1 } = await supabase
-    .from('inmuebles')
-    .select(
-      'id, codigo, direccion, ciudad, tipo, valor_arriendo, habitaciones, banos, area_m2, estado, visible_vitrina, foto_fachada_url, created_at',
-    )
-    .in('id', portfolioIds)
-    .order('created_at', { ascending: false });
-  if (e1) throw fromSupabaseError(e1);
-  const inms = (inmData ?? []) as Array<Record<string, unknown>>;
-  const inmuebleIds = inms.map((i) => i.id as string);
+  // 1) Inmuebles del portafolio (org-aware). 2) Sus datos, los contratos (con
+  //    inquilino y moras activas embebidos) y el indicador de estudios, en
+  //    paralelo: antes eran 6 idas en serie (~1,2 s en la pantalla principal).
+  const ids = await resolvePortfolioInmuebleIds(perfilId);
+  if (ids.length === 0) {
+    return { resumen: { total: 0, arrendados: 0, disponibles: 0, enVitrina: 0, ingresoMes: 0 }, inmuebles: [] };
+  }
+
+  const [inmRes, contRes, agRes] = await Promise.all([
+    supabase
+      .from('inmuebles')
+      .select(
+        'id, codigo, direccion, ciudad, tipo, valor_arriendo, habitaciones, banos, area_m2, estado, visible_vitrina, foto_fachada_url, created_at',
+      )
+      .in('id', ids)
+      .order('created_at', { ascending: false }),
+    // Historial de tenencias + contrato activo. Orden desc por fecha_inicio →
+    // el primer firmado/vigente es el más reciente.
+    (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select(
+        'id, expediente_id, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, estado, ' +
+          'expedientes!inner(inmueble_id, solicitantes(nombre, apellido)), moras_tickets(estado)',
+      )
+      .in('expedientes.inmueble_id', ids)
+      .in('estado', ESTADOS_CONTRATO_HISTORIAL as unknown as string[])
+      .in('moras_tickets.estado', ESTADOS_MORA_ACTIVA as unknown as string[])
+      .order('fecha_inicio', { ascending: false }),
+    // Indicador de estudios en curso (Flujo §4.2), UNA consulta agregada para
+    // todo el portafolio — no una por inmueble.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (supabase as any).rpc('fn_inmuebles_estado_estudios', { p_inmueble_ids: ids }),
+  ]);
+  if (inmRes.error) throw fromSupabaseError(inmRes.error);
+  if (contRes.error) throw fromSupabaseError(contRes.error);
+  const inms = (inmRes.data ?? []) as Array<Record<string, unknown>>;
 
   // inmueble_id → datos del contrato activo (1 por inmueble)
   const activoPorInmueble = new Map<
     string,
-    { inquilino: string | null; expedienteId: string; contratoId: string; venceContrato: string | null }
+    { inquilino: string | null; expedienteId: string; contratoId: string; venceContrato: string | null; mora: boolean }
   >();
   const historialPorInmueble = new Map<string, HistorialInquilino[]>();
-  const contratoIds: string[] = [];
+  const activos = ESTADOS_CONTRATO_ACTIVO as unknown as string[];
+  type Fila = { estado: string; fecha_inicio: string | null; fecha_fin: string | null } & Record<string, unknown>;
+  for (const c of conFinVigente((contRes.data ?? []) as Fila[])) {
+    const exp = c.expedientes as {
+      inmueble_id: string | null;
+      solicitantes?: { nombre: string | null; apellido: string | null } | null;
+    } | null;
+    const inmId = exp?.inmueble_id;
+    if (!inmId) continue;
+    const sol = exp?.solicitantes ?? null;
+    const inquilino = sol ? `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || null : null;
 
-  if (inmuebleIds.length > 0) {
-    // 2) Expedientes de esos inmuebles
-    const { data: exps, error: e2 } = await supabase
-      .from('expedientes')
-      .select('id, inmueble_id')
-      .in('inmueble_id', inmuebleIds);
-    if (e2) throw fromSupabaseError(e2);
-    const expToInmueble = new Map<string, string>();
-    const expedienteIds: string[] = [];
-    for (const e of (exps ?? []) as Array<{ id: string; inmueble_id: string | null }>) {
-      if (e.inmueble_id) {
-        expToInmueble.set(e.id, e.inmueble_id);
-        expedienteIds.push(e.id);
-      }
-    }
-
-    // 3) Contratos (historial de tenencias + contrato activo) de esos expedientes.
-    //    Orden desc por fecha_inicio → el primer firmado/vigente es el más reciente.
-    if (expedienteIds.length > 0) {
-      const { data: conts, error: e3 } = await (
-        supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
-      )
-        .select('id, expediente_id, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, estado, expedientes(solicitantes(nombre, apellido))')
-        .in('expediente_id', expedienteIds)
-        .in('estado', ESTADOS_CONTRATO_HISTORIAL as unknown as string[])
-        .order('fecha_inicio', { ascending: false });
-      if (e3) throw fromSupabaseError(e3);
-      const activos = ESTADOS_CONTRATO_ACTIVO as unknown as string[];
-      type Fila = { estado: string; fecha_inicio: string | null; fecha_fin: string | null } & Record<string, unknown>;
-      for (const c of conFinVigente((conts ?? []) as Fila[])) {
-        const expId = c.expediente_id as string;
-        const inmId = expToInmueble.get(expId);
-        if (!inmId) continue;
-        const sol =
-          (c.expedientes as { solicitantes?: { nombre: string | null; apellido: string | null } | null } | null)
-            ?.solicitantes ?? null;
-        const inquilino = sol ? `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || null : null;
-
-        // Historial: todas las tenencias del inmueble.
-        const arr = historialPorInmueble.get(inmId) ?? [];
-        arr.push({
-          inquilino: inquilino ?? '—',
-          desde: (c.fecha_inicio as string) ?? null,
-          hasta: (c.fecha_fin as string) ?? null,
-          estado: c.estado as string,
-        });
-        historialPorInmueble.set(inmId, arr);
-
-        // Contrato activo (el más reciente firmado/vigente) → alimenta la tarjeta.
-        if (activos.includes(c.estado as string) && !activoPorInmueble.has(inmId)) {
-          activoPorInmueble.set(inmId, {
-            inquilino,
-            expedienteId: expId,
-            contratoId: c.id as string,
-            venceContrato: (c.fecha_fin as string) ?? null,
-          });
-          contratoIds.push(c.id as string);
-        }
-      }
-    }
-  }
-
-  // 4) Moras activas → estado de pago por contrato
-  const conMora = new Set<string>();
-  if (contratoIds.length > 0) {
-    const { data: moras, error: e4 } = await (
-      supabase.from('moras_tickets' as string) as ReturnType<typeof supabase.from>
-    )
-      .select('contrato_id, estado')
-      .in('contrato_id', contratoIds)
-      .in('estado', ESTADOS_MORA_ACTIVA as unknown as string[]);
-    if (e4) throw fromSupabaseError(e4);
-    for (const m of (moras ?? []) as Array<{ contrato_id: string }>) conMora.add(m.contrato_id);
-  }
-
-  // Indicador de estudios en curso (Flujo §4.2), UNA consulta agregada para
-  // todo el portafolio — no una por inmueble.
-  const agregadoPorInmueble = new Map<string, { estudios_activos: number; reservado: boolean }>();
-  if (inmuebleIds.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: ag, error: eAg } = await (supabase as any).rpc('fn_inmuebles_estado_estudios', {
-      p_inmueble_ids: inmuebleIds,
+    // Historial: todas las tenencias del inmueble.
+    const arr = historialPorInmueble.get(inmId) ?? [];
+    arr.push({
+      inquilino: inquilino ?? '—',
+      desde: (c.fecha_inicio as string) ?? null,
+      hasta: (c.fecha_fin as string) ?? null,
+      estado: c.estado as string,
     });
-    if (eAg) {
-      logger.warn({ error: eAg.message }, 'No se pudo calcular el indicador de estudios activos (mis inmuebles)');
-    } else {
-      for (const r of (ag as Array<{ inmueble_id: string; estudios_activos: number; reservado: boolean }> | null) ?? []) {
-        agregadoPorInmueble.set(r.inmueble_id, { estudios_activos: r.estudios_activos, reservado: r.reservado });
-      }
+    historialPorInmueble.set(inmId, arr);
+
+    // Contrato activo (el más reciente firmado/vigente) → alimenta la tarjeta.
+    if (activos.includes(c.estado as string) && !activoPorInmueble.has(inmId)) {
+      activoPorInmueble.set(inmId, {
+        inquilino,
+        expedienteId: c.expediente_id as string,
+        contratoId: c.id as string,
+        venceContrato: (c.fecha_fin as string) ?? null,
+        mora: ((c.moras_tickets as unknown[] | null) ?? []).length > 0,
+      });
+    }
+  }
+
+  const agregadoPorInmueble = new Map<string, { estudios_activos: number; reservado: boolean }>();
+  if (agRes.error) {
+    logger.warn({ error: agRes.error.message }, 'No se pudo calcular el indicador de estudios activos (mis inmuebles)');
+  } else {
+    for (const r of (agRes.data as Array<{ inmueble_id: string; estudios_activos: number; reservado: boolean }> | null) ?? []) {
+      agregadoPorInmueble.set(r.inmueble_id, { estudios_activos: r.estudios_activos, reservado: r.reservado });
     }
   }
 
@@ -531,7 +485,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
       contratoId: activo?.contratoId ?? null,
       venceContrato: activo?.venceContrato ?? null,
       garantiaActiva: !!activo,
-      pago: activo ? (conMora.has(activo.contratoId) ? 'mora' : 'al_dia') : null,
+      pago: activo ? (activo.mora ? 'mora' : 'al_dia') : null,
       historial: historialPorInmueble.get(id) ?? [],
       estudiosActivos: agregado?.estudios_activos ?? 0,
       reservado: agregado?.reservado ?? false,
@@ -680,50 +634,50 @@ export interface MiCarteraAnalitica {
 export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCarteraAnalitica> {
   const inmuebleIds = await resolvePortfolioInmuebleIds(perfilId);
 
-  let expedienteIds: string[] = [];
+  // Contratos activos (con sus moras activas) y evaluaciones del portafolio, en
+  // paralelo y con el expediente embebido: antes eran 4 idas en serie.
+  let conts: Array<{ valor_arriendo: number | string | null; moras_tickets: Array<{ reportado_at: string }> | null }> = [];
+  let ests: Array<{ resultado: string | null; score: number | null; created_at: string; fecha_completado: string | null }> = [];
   if (inmuebleIds.length) {
-    const { data: exps } = await supabase.from('expedientes').select('id').in('inmueble_id', inmuebleIds);
-    expedienteIds = ((exps ?? []) as Array<{ id: string }>).map((e) => e.id);
+    const [contRes, estRes] = await Promise.all([
+      (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+        .select('valor_arriendo, expedientes!inner(inmueble_id), moras_tickets(reportado_at, estado)')
+        .in('expedientes.inmueble_id', inmuebleIds)
+        .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[])
+        .in('moras_tickets.estado', ESTADOS_MORA_ACTIVA as unknown as string[]),
+      (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .select('resultado, score, created_at, fecha_completado, expedientes!inner(inmueble_id)')
+        .in('expedientes.inmueble_id', inmuebleIds)
+        // Solo la del titular: la del coarrendatario es parte del mismo estudio
+        // y sumaba un "estudio" más al total, al score y a las decisiones.
+        .neq('tipo', 'con_coarrendatario'),
+    ]);
+    if (contRes.error) throw fromSupabaseError(contRes.error);
+    if (estRes.error) throw fromSupabaseError(estRes.error);
+    conts = (contRes.data ?? []) as unknown as typeof conts;
+    ests = (estRes.data ?? []) as unknown as typeof ests;
   }
 
   // Contratos activos + canon
   let contratosActivos = 0;
   let canonGestionado = 0;
-  const contratoIds: string[] = [];
-  if (expedienteIds.length) {
-    const { data: conts } = await (
-      supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
-    )
-      .select('id, valor_arriendo')
-      .in('expediente_id', expedienteIds)
-      .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
-    for (const c of (conts ?? []) as Array<{ id: string; valor_arriendo: number | string | null }>) {
-      contratosActivos += 1;
-      canonGestionado += Number(c.valor_arriendo ?? 0);
-      contratoIds.push(c.id);
-    }
+  const moras: Array<{ reportado_at: string }> = [];
+  for (const c of conts) {
+    contratosActivos += 1;
+    canonGestionado += Number(c.valor_arriendo ?? 0);
+    moras.push(...(c.moras_tickets ?? []));
   }
 
   // Moras activas → morosidad + días promedio
-  let moraActiva = 0;
+  const moraActiva = moras.length;
   let diasPromedioMora = 0;
-  if (contratoIds.length) {
-    const { data: moras } = await (
-      supabase.from('moras_tickets' as string) as ReturnType<typeof supabase.from>
-    )
-      .select('reportado_at, estado')
-      .in('contrato_id', contratoIds)
-      .in('estado', ESTADOS_MORA_ACTIVA as unknown as string[]);
-    const rows = (moras ?? []) as Array<{ reportado_at: string }>;
-    moraActiva = rows.length;
-    if (rows.length) {
-      const now = Date.now();
-      const totalDias = rows.reduce(
-        (s, m) => s + Math.max(0, Math.floor((now - new Date(m.reportado_at).getTime()) / 86_400_000)),
-        0,
-      );
-      diasPromedioMora = Math.round((totalDias / rows.length) * 10) / 10;
-    }
+  if (moras.length) {
+    const now = Date.now();
+    const totalDias = moras.reduce(
+      (s, m) => s + Math.max(0, Math.floor((now - new Date(m.reportado_at).getTime()) / 86_400_000)),
+      0,
+    );
+    diasPromedioMora = Math.round((totalDias / moras.length) * 10) / 10;
   }
   const morosidadPct = contratosActivos ? Math.round((moraActiva / contratosActivos) * 1000) / 10 : 0;
 
@@ -735,34 +689,19 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
   let d30Ap = 0;
   let d30Co = 0;
   let d30Re = 0;
-  if (expedienteIds.length) {
-    const { data: ests } = await (
-      supabase.from('estudios' as string) as ReturnType<typeof supabase.from>
-    )
-      .select('resultado, score, created_at, fecha_completado')
-      .in('expediente_id', expedienteIds)
-      // Solo la del titular: la del coarrendatario es parte del mismo estudio
-      // y sumaba un "estudio" más al total, al score y a las decisiones.
-      .neq('tipo', 'con_coarrendatario');
-    const treintaDias = Date.now() - 30 * 86_400_000;
-    for (const e of (ests ?? []) as Array<{
-      resultado: string | null;
-      score: number | null;
-      created_at: string;
-      fecha_completado: string | null;
-    }>) {
-      total += 1;
-      if (e.resultado === 'aprobado') aprobados += 1;
-      if (e.score != null) {
-        scoreSum += e.score;
-        scoreN += 1;
-      }
-      const fecha = e.fecha_completado || e.created_at;
-      if (fecha && new Date(fecha).getTime() >= treintaDias) {
-        if (e.resultado === 'aprobado') d30Ap += 1;
-        else if (e.resultado === 'condicionado') d30Co += 1;
-        else if (e.resultado === 'rechazado') d30Re += 1;
-      }
+  const treintaDias = Date.now() - 30 * 86_400_000;
+  for (const e of ests) {
+    total += 1;
+    if (e.resultado === 'aprobado') aprobados += 1;
+    if (e.score != null) {
+      scoreSum += e.score;
+      scoreN += 1;
+    }
+    const fecha = e.fecha_completado || e.created_at;
+    if (fecha && new Date(fecha).getTime() >= treintaDias) {
+      if (e.resultado === 'aprobado') d30Ap += 1;
+      else if (e.resultado === 'condicionado') d30Co += 1;
+      else if (e.resultado === 'rechazado') d30Re += 1;
     }
   }
   const d30Total = d30Ap + d30Co + d30Re;

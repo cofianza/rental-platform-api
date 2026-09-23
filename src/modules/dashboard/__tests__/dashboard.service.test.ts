@@ -38,6 +38,7 @@ function createChain(finalData: unknown, finalCount?: number) {
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     from: vi.fn(),
+    rpc: vi.fn(),
   },
 }));
 
@@ -51,6 +52,7 @@ vi.mock('@/lib/logger', () => ({
 
 import { supabase } from '@/lib/supabase';
 const mockFrom = supabase.from as ReturnType<typeof vi.fn>;
+const mockRpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
 
 // ── Tests ───────────────────────────────────────────────────
 
@@ -182,6 +184,89 @@ describe('Dashboard Service', () => {
 
       expect(mockNeq).toHaveBeenCalledWith('tipo', 'con_coarrendatario');
       expect(r.estudios).toMatchObject({ total: 1, aprobados: 1, scorePromedio: 800 });
+    });
+
+    it('salud de cartera: contratos y moras activas en la misma consulta (sin idas en serie)', async () => {
+      const hace10Dias = new Date(Date.now() - 10 * 86_400_000).toISOString();
+      mockFrom.mockImplementation((table: string) =>
+        table === 'contratos'
+          ? createChain([
+              { valor_arriendo: 1000000, moras_tickets: [{ reportado_at: hace10Dias }] },
+              { valor_arriendo: '3000000', moras_tickets: [] },
+            ])
+          : createChain([]),
+      );
+
+      const r = await dashboardService.getMiCarteraAnalitica('p1');
+
+      expect(mockFrom).not.toHaveBeenCalledWith('expedientes');
+      expect(mockFrom).not.toHaveBeenCalledWith('moras_tickets');
+      expect(r.salud).toEqual({
+        contratosActivos: 2,
+        morosidadPct: 50,
+        moraActiva: 1,
+        diasPromedioMora: 10,
+        canonGestionado: 4000000,
+      });
+    });
+  });
+
+  describe('getMisInmuebles()', () => {
+    it('arma las tarjetas con 3 consultas en paralelo, sin pasar por expedientes ni moras sueltas', async () => {
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'inmuebles') {
+          return createChain([
+            { id: 'i1', codigo: 'APT-1', valor_arriendo: 1500000, estado: 'ocupado', visible_vitrina: false },
+            { id: 'i2', codigo: 'APT-2', valor_arriendo: 900000, estado: 'disponible', visible_vitrina: true },
+          ]);
+        }
+        if (table === 'contratos') {
+          return createChain([
+            {
+              id: 'c2', expediente_id: 'e2', estado: 'vigente', fecha_inicio: '2026-06-01', fecha_fin: '2027-06-01',
+              expedientes: { inmueble_id: 'i1', solicitantes: { nombre: 'Ana', apellido: 'Pérez' } },
+              moras_tickets: [{ estado: 'fase_1' }],
+            },
+            {
+              id: 'c1', expediente_id: 'e1', estado: 'finalizado', fecha_inicio: '2025-01-01', fecha_fin: '2026-01-01',
+              expedientes: { inmueble_id: 'i1', solicitantes: { nombre: 'Luis', apellido: 'Gómez' } },
+              moras_tickets: [],
+            },
+          ]);
+        }
+        return createChain([]);
+      });
+      mockRpc.mockResolvedValue({ data: [{ inmueble_id: 'i2', estudios_activos: 2, reservado: false }], error: null });
+
+      const r = await dashboardService.getMisInmuebles('p1');
+
+      expect(mockFrom).not.toHaveBeenCalledWith('expedientes');
+      expect(mockFrom).not.toHaveBeenCalledWith('moras_tickets');
+      expect(mockIn).toHaveBeenCalledWith('expedientes.inmueble_id', ['i1']);
+      const i1 = r.inmuebles.find((i) => i.id === 'i1')!;
+      expect(i1).toMatchObject({ inquilino: 'Ana Pérez', contratoId: 'c2', expedienteId: 'e2', garantiaActiva: true, pago: 'mora' });
+      expect(i1.historial.map((h) => h.inquilino)).toEqual(['Ana Pérez', 'Luis Gómez']);
+      expect(r.inmuebles.find((i) => i.id === 'i2')).toMatchObject({ garantiaActiva: false, pago: null, estudiosActivos: 2 });
+      expect(r.resumen).toMatchObject({ total: 2, arrendados: 1, disponibles: 1, enVitrina: 1, ingresoMes: 1500000 });
+    });
+  });
+
+  describe('getPortfolioStats()', () => {
+    it('inquilinos y canon salen de una sola consulta a contratos con el expediente embebido', async () => {
+      mockFrom.mockImplementation((table: string) =>
+        table === 'contratos'
+          ? createChain([
+              { valor_arriendo: 1000000, expedientes: { solicitante_id: 's1' } },
+              { valor_arriendo: 2000000, expedientes: { solicitante_id: 's1' } },
+              { valor_arriendo: 500000, expedientes: { solicitante_id: 's2' } },
+            ])
+          : createChain([]),
+      );
+
+      const r = await dashboardService.getPortfolioStats('p1');
+
+      expect(mockFrom).not.toHaveBeenCalledWith('expedientes');
+      expect(r).toEqual({ propiedades_activas: 1, inquilinos_cartera: 2, canon_mensual: 3500000 });
     });
   });
 });
