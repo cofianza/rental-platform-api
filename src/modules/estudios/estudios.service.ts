@@ -3665,6 +3665,7 @@ async function registrarResultadoInline(
     antecedentes,
     // §15: el documento consultado decide si el perfil es extranjero.
     tipoDocumento: providerInput?.tipo_documento ?? undefined,
+    tipoEstudio: providerInput?.tipo,
   });
 
   // ── Adenda 1 §2/§3: el scorecard decide (MOTOR_DECIDE_ENABLED) ────────
@@ -4132,6 +4133,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
       observaciones: result.observaciones || 'Resultado recibido del proveedor',
       proveedor: est.proveedor,
       datosCrudos: result.datos_crudos,
+      tipoEstudio: est.tipo,
     });
 
     // Adenda 1 §2/§3 con MOTOR_DECIDE_ENABLED — mismo helper que el camino

@@ -578,6 +578,12 @@ export interface ArgsResolverResultado {
    * `datos_formulario` de la fila; el camino inline lo pasa del providerInput.
    */
   tipoDocumento?: string | null;
+  /**
+   * `estudios.tipo`. `undefined` = leerlo de la fila. En 'con_coarrendatario'
+   * no se usan el ingreso declarado ni la biometria: son filas 1:1 del
+   * expediente, o sea del TITULAR, no de la persona evaluada.
+   */
+  tipoEstudio?: string | null;
 }
 
 export interface ResolucionEstudio {
@@ -681,11 +687,12 @@ export async function resolverResultadoEstudio(
     let payload: unknown = args.datosCrudos ?? null;
     let score = args.score ?? null;
     let tipoDocumento: string | null | undefined = args.tipoDocumento;
+    let tipoEstudio: string | null | undefined = args.tipoEstudio;
 
-    if (!proveedor || !payload || tipoDocumento === undefined) {
+    if (!proveedor || !payload || tipoDocumento === undefined || tipoEstudio === undefined) {
       const { data: row } = await (supabase
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
-        .select('proveedor, respuesta_proveedor, score, datos_formulario')
+        .select('proveedor, respuesta_proveedor, score, datos_formulario, tipo')
         .eq('id', args.estudioId)
         .maybeSingle();
       const est = row as {
@@ -693,12 +700,15 @@ export async function resolverResultadoEstudio(
         respuesta_proveedor?: Record<string, unknown> | null;
         score?: number | null;
         datos_formulario?: { tipo_documento?: string | null } | null;
+        tipo?: string | null;
       } | null;
       proveedor = proveedor ?? est?.proveedor ?? null;
       payload = payload ?? est?.respuesta_proveedor ?? null;
       score = score ?? est?.score ?? null;
       if (tipoDocumento === undefined) tipoDocumento = est?.datos_formulario?.tipo_documento ?? null;
+      if (tipoEstudio === undefined) tipoEstudio = est?.tipo ?? null;
     }
+    const esCoarrendatario = tipoEstudio === 'con_coarrendatario';
 
     // 1b. Antecedentes de Auco: en memoria (inline) o de la columna (polling y
     //     registro manual). Ver leerAntecedentesDelEstudio.
@@ -744,7 +754,7 @@ export async function resolverResultadoEstudio(
       // antecedentes (listas / §16.5) y la identidad (Anexo A / §14). Se
       // acumulan porque el analista tiene que ver las dos razones — quedarse
       // con la primera esconderia la otra.
-      const biometria = await leerBiometriaDeExpediente(args.expedienteId);
+      const biometria = esCoarrendatario ? null : await leerBiometriaDeExpediente(args.expedienteId);
       // §14 / §9: fuentes que no respondieron, con los nombres de la Politica.
       const apisFallidas = [
         antecedentes?.estado === 'no_verificado' ? 'listas_restrictivas' : null,
@@ -753,12 +763,15 @@ export async function resolverResultadoEstudio(
       const motivos = [
         requiereRevisionManual(antecedentes),
         requiereRevisionManualPorBiometria(biometria),
-        // Adenda §8: declarado vs estimado CRUDO de la central.
-        await contrasteIngresoProspecto(
-          args.expedienteId,
-          salida.features.ingreso_mensual_inferido_cop,
-          cal.UMBRAL_DIFERENCIA_INGRESO,
-        ),
+        // Adenda §8: declarado vs estimado CRUDO de la central. El declarado es
+        // del titular: contra el co-arrendatario seria comparar dos personas.
+        esCoarrendatario
+          ? null
+          : await contrasteIngresoProspecto(
+              args.expedienteId,
+              salida.features.ingreso_mensual_inferido_cop,
+              cal.UMBRAL_DIFERENCIA_INGRESO,
+            ),
         // Politica §15: sin cedula colombiana no hay aprobacion automatica.
         motivoRevisionPerfilExtranjero(tipoDocumento),
         // Adenda 2 §2: score en la banda 450-599 (o la del panel) -> revision
