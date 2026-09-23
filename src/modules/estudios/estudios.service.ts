@@ -585,13 +585,13 @@ async function adjuntarExpiracionALista<T extends Record<string, unknown>>(
   return rows.map((row) => ({ ...row, expiracion: veredictoExpiracion(row, aut, cal.DIAS_EXPIRACION_ESTUDIO) }));
 }
 
-type AutorizacionTitular = { created_at: string; estado: string } | null;
+type AutorizacionTitular = { created_at: string; estado: string; token_expiracion?: string | null } | null;
 
 /** Ultima autorizacion del TITULAR del expediente (el coarrendatario tiene la suya). */
 async function leerAutorizacionTitular(expedienteId: string): Promise<AutorizacionTitular> {
   const { data } = (await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('created_at, estado')
+    .select('created_at, estado, token_expiracion')
     .eq('expediente_id', expedienteId)
     .is('coarrendatario_id', null)
     .order('created_at', { ascending: false })
@@ -605,12 +605,21 @@ function veredictoExpiracion(
   aut: AutorizacionTitular,
   plazoDias: number,
 ): VeredictoExpiracion {
+  // El enlace guardó su vencimiento al crearse y se valida contra él: el
+  // estudio vence con el enlace. El plazo de calibración vigente solo aplica a
+  // enlaces nuevos (o a filas sin vencimiento guardado). Espejo de
+  // list_expedientes_with_relations (migración 20260929000037).
+  const venceMs = aut?.token_expiracion ? Date.parse(aut.token_expiracion) : NaN;
+  const inicioMs = aut ? Date.parse(aut.created_at) : NaN;
+  const plazoDelEnlace = Number.isFinite(venceMs) && Number.isFinite(inicioMs)
+    ? Math.round((venceMs - inicioMs) / 86_400_000)
+    : null;
   return evaluarExpiracion({
     estado: row.estado as string | null,
     autorizacionSolicitadaEn: aut?.created_at ?? null,
     autorizacionFirmada: aut?.estado === 'autorizado',
     ahoraMs: Date.now(),
-    plazoDias,
+    plazoDias: plazoDelEnlace ?? plazoDias,
   });
 }
 

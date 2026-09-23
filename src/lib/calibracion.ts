@@ -122,7 +122,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     max: 90,
     entero: true,
     seccion: 'Adenda §9',
-    descripcion: 'Dias desde el envio de la solicitud al prospecto para que el estudio expire sin autorizar.',
+    descripcion: 'Dias desde el envio de la solicitud al prospecto para que el estudio expire sin autorizar. Aplica a las solicitudes enviadas desde el cambio: las ya enviadas conservan el vencimiento de su enlace.',
   },
   {
     clave: 'UMBRAL_COARRENDATARIO',
