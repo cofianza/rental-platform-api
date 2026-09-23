@@ -163,6 +163,37 @@ describe('Reportes Service', () => {
       expect(mockEq).toHaveBeenCalledWith('estado', 'aprobado');
     });
 
+    it('"Hasta" incluye el día elegido completo en hora Colombia', async () => {
+      mockFrom.mockImplementation(() => createChain([]));
+
+      await reportesService.getVolumenExpedientes('2026-09-23', '2026-09-23');
+
+      expect(mockGte).toHaveBeenCalledWith('created_at', '2026-09-23T00:00:00-05:00');
+      expect(mockLte).toHaveBeenCalledWith('created_at', '2026-09-23T23:59:59.999-05:00');
+    });
+
+    it('con solo "Desde" no descarta el filtro', async () => {
+      mockFrom.mockImplementation(() => createChain([]));
+
+      await reportesService.getVolumenExpedientes('2026-09-01');
+
+      expect(mockGte).toHaveBeenCalledWith('created_at', '2026-09-01T00:00:00-05:00');
+    });
+
+    it('agrupa por mes en hora Colombia y no inventa meses en los bordes', async () => {
+      let callIndex = 0;
+      mockFrom.mockImplementation(() => {
+        callIndex++;
+        // 30-sep 21:00 en Bogotá = 1-oct 02:00 UTC: es de septiembre.
+        return createChain(callIndex === 1 ? [{ id: '1', estado: 'borrador', created_at: '2026-10-01T02:00:00Z' }] : []);
+      });
+
+      const result = await reportesService.getVolumenExpedientes('2026-07-01', '2026-09-30');
+
+      expect(result.meses.map((m) => m.periodo)).toEqual(['Julio 2026', 'Agosto 2026', 'Septiembre 2026']);
+      expect(result.meses[2].creados).toBe(1);
+    });
+
     it('deberia formatear periodos en espanol', async () => {
       let callIndex = 0;
       mockFrom.mockImplementation(() => {

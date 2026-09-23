@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { desdeBogota, hastaBogota } from '@/lib/fechaBogota';
 import type { ListAuditLogsQuery } from './bitacora.schema';
 
 interface AuditLogRow {
@@ -63,11 +64,12 @@ export async function listAuditLogs(query: ListAuditLogsQuery) {
   if (entityType) {
     qb = qb.eq('entidad', entityType);
   }
+  // El filtro llega de un <input type="date">: el día completo en hora Colombia.
   if (dateFrom) {
-    qb = qb.gte('created_at', dateFrom);
+    qb = qb.gte('created_at', desdeBogota(dateFrom));
   }
   if (dateTo) {
-    qb = qb.lte('created_at', dateTo);
+    qb = qb.lte('created_at', hastaBogota(dateTo));
   }
 
   const { data, error, count } = await qb;

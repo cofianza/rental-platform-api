@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
+import { desdeBogota, hastaBogota, mesBogota } from '@/lib/fechaBogota';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -40,25 +41,22 @@ function formatPeriodo(yearMonth: string): string {
   return `${MESES[parseInt(month, 10) - 1]} ${year}`;
 }
 
-function getDefaultDateRange(): { dateFrom: string; dateTo: string } {
-  const now = new Date();
-  const dateTo = now.toISOString();
-  const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1);
-  const dateFrom = sixMonthsAgo.toISOString();
-  return { dateFrom, dateTo };
-}
-
-function toYearMonth(isoDate: string): string {
-  const d = new Date(isoDate);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  return `${year}-${month}`;
+/**
+ * Rango del reporte en hora Colombia. Sin fechas: del 1° del mes de hace 6
+ * meses a hoy. Con un solo extremo se completa el otro (antes el filtro se
+ * descartaba en silencio y se veían los últimos 6 meses).
+ */
+function resolveRange(dateFrom?: string, dateTo?: string): { dateFrom: string; dateTo: string } {
+  const fin = dateTo ? hastaBogota(dateTo) : new Date().toISOString();
+  const [y, m] = mesBogota(fin).split('-').map(Number);
+  const inicio = new Date(Date.UTC(y, m - 1 - 6, 1)).toISOString().slice(0, 10);
+  return { dateFrom: desdeBogota(dateFrom ?? inicio), dateTo: fin };
 }
 
 function generateMonthKeys(dateFrom: string, dateTo: string): string[] {
   const keys: string[] = [];
-  const startKey = toYearMonth(dateFrom);
-  const endKey = toYearMonth(dateTo);
+  const startKey = mesBogota(dateFrom);
+  const endKey = mesBogota(dateTo);
 
   const [startYear, startMonth] = startKey.split('-').map(Number);
   const [endYear, endMonth] = endKey.split('-').map(Number);
@@ -85,9 +83,7 @@ export async function getVolumenExpedientes(
   dateTo?: string,
   estado?: string,
 ): Promise<VolumenExpedientesResult> {
-  const range = dateFrom && dateTo
-    ? { dateFrom, dateTo }
-    : getDefaultDateRange();
+  const range = resolveRange(dateFrom, dateTo);
 
   logger.debug({ range, estado }, 'Fetching volumen estudios');
 
@@ -137,7 +133,7 @@ export async function getVolumenExpedientes(
   // Count creados per month
   for (const row of creadosData) {
     const r = row as { id: string; estado: string; created_at: string };
-    const key = toYearMonth(r.created_at);
+    const key = mesBogota(r.created_at);
     const entry = monthMap.get(key);
     if (entry) {
       entry.creados++;
@@ -149,7 +145,7 @@ export async function getVolumenExpedientes(
   // Count cerrados per month (by updated_at)
   for (const row of cerradosData) {
     const r = row as { id: string; estado: string; updated_at: string };
-    const key = toYearMonth(r.updated_at);
+    const key = mesBogota(r.updated_at);
     const entry = monthMap.get(key);
     if (entry) {
       entry.cerrados++;
@@ -211,9 +207,7 @@ export async function getAprobacionExpedientes(
   dateFrom?: string,
   dateTo?: string,
 ): Promise<AprobacionResult> {
-  const range = dateFrom && dateTo
-    ? { dateFrom, dateTo }
-    : getDefaultDateRange();
+  const range = resolveRange(dateFrom, dateTo);
 
   logger.debug({ range }, 'Fetching aprobacion estudios');
 
@@ -240,7 +234,7 @@ export async function getAprobacionExpedientes(
 
   for (const row of rows) {
     const r = row as { id: string; estado: string; created_at: string };
-    const key = toYearMonth(r.created_at);
+    const key = mesBogota(r.created_at);
     let entry = monthMap.get(key);
     if (!entry) {
       entry = { aprobados: 0, rechazados: 0, condicionados: 0 };
@@ -308,9 +302,7 @@ export async function getIngresosReporte(
   dateTo?: string,
   concepto?: string,
 ): Promise<IngresosResult> {
-  const range = dateFrom && dateTo
-    ? { dateFrom, dateTo }
-    : getDefaultDateRange();
+  const range = resolveRange(dateFrom, dateTo);
 
   logger.debug({ range, concepto }, 'Fetching ingresos reporte');
 
@@ -355,7 +347,7 @@ export async function getIngresosReporte(
   // Initialize all month keys (without concepto — we only create entries for actual data)
   for (const row of completadosData) {
     const r = row as { id: string; monto: number; concepto: string; created_at: string };
-    const monthKey = toYearMonth(r.created_at);
+    const monthKey = mesBogota(r.created_at);
     const groupKey = `${monthKey}|${r.concepto}`;
     const entry = groupMap.get(groupKey);
     if (entry) {
@@ -443,9 +435,7 @@ export async function getTiemposPorEtapa(
   dateFrom?: string,
   dateTo?: string,
 ): Promise<TiemposResult> {
-  const range = dateFrom && dateTo
-    ? { dateFrom, dateTo }
-    : getDefaultDateRange();
+  const range = resolveRange(dateFrom, dateTo);
 
   logger.debug({ range }, 'Fetching tiempos por etapa');
 
