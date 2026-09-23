@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { resolveInmobiliariaIdForPerfil, resolveOrgMemberPerfilIds } from '@/lib/tenantScope';
+import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
 import type {
   CreateApplicantInput,
   UpdateApplicantInput,
@@ -67,23 +67,8 @@ export async function listApplicants(query: ListApplicantsQuery, userId?: string
   // Scope por rol: propietario/inmobiliaria SOLO ven SU cartera de solicitantes.
   // Sin esto verían toda la base de datos personales de la plataforma (fuga).
   // Admin/operador ven todo.
-  //
-  // Usa el MISMO scope que el dedup de createApplicant y que el índice único
-  // por agencia (COALESCE(inmobiliaria_id, creado_por)): una inmobiliaria ve la
-  // cartera de su ORGANIZACIÓN (no solo lo que registró ella misma), si no un
-  // co-miembro no encontraría la ficha que createApplicant sí reutiliza.
-  // Defensivo: la ficha puede estar etiquetada por columna (inmobiliaria_id) o,
-  // si es legacy/sin backfill, sólo por su creador (un miembro de la org).
-  if (userId && (userRol === 'propietario' || userRol === 'inmobiliaria')) {
-    const orgId = await resolveInmobiliariaIdForPerfil(userId);
-    if (orgId) {
-      const memberIds = await resolveOrgMemberPerfilIds(orgId);
-      if (!memberIds.includes(userId)) memberIds.push(userId);
-      qb = qb.or(`inmobiliaria_id.eq.${orgId},creado_por.in.(${memberIds.join(',')})`);
-    } else {
-      qb = qb.eq('creado_por', userId);
-    }
-  }
+  const alcance = await filtroFichasPropias(userId, userRol);
+  if (alcance) qb = qb.or(alcance);
 
   // Excluir inactivos por defecto
   if (include_inactive !== 'true') {
@@ -128,10 +113,9 @@ export async function listApplicants(query: ListApplicantsQuery, userId?: string
  *   - Con ellos (handler HTTP): propietario/inmobiliaria solo leen su cartera,
  *     con el MISMO predicado que listApplicants — si no, un ID que la lista si
  *     scopea daria 404 al abrir el detalle.
- *   - Sin ellos (llamadas internas: updateApplicant lee el estado previo y
- *     re-lee la ficha tras escribir): sin scope, porque el permiso ya se
- *     comprobo arriba y una re-lectura scopeada podria 404 despues de un UPDATE
- *     legitimo.
+ *   - Sin ellos (llamadas internas: re-leer la ficha tras escribir): sin
+ *     scope, porque el permiso ya se comprobo y una re-lectura scopeada podria
+ *     404 despues de un UPDATE legitimo.
  *
  * Era el UNICO camino a esta tabla sin scope (listApplicants, searchByDocument y
  * updateApplicant si lo tienen): con solo el UUID —que queda en la URL del
@@ -144,16 +128,8 @@ export async function getApplicantById(id: string, userId?: string, userRol?: st
     .select(APPLICANT_FIELDS)
     .eq('id', id);
 
-  if (userId && (userRol === 'propietario' || userRol === 'inmobiliaria')) {
-    const orgId = await resolveInmobiliariaIdForPerfil(userId);
-    if (orgId) {
-      const memberIds = await resolveOrgMemberPerfilIds(orgId);
-      if (!memberIds.includes(userId)) memberIds.push(userId);
-      qb = qb.or(`inmobiliaria_id.eq.${orgId},creado_por.in.(${memberIds.join(',')})`);
-    } else {
-      qb = qb.eq('creado_por', userId);
-    }
-  }
+  const alcance = await filtroFichasPropias(userId, userRol);
+  if (alcance) qb = qb.or(alcance);
 
   const { data, error } = await qb.single();
 
@@ -188,23 +164,18 @@ export async function getApplicantById(id: string, userId?: string, userRol?: st
 // ============================================================
 
 /**
- * Devuelve los creado_por que el actor puede reutilizar/buscar, o null si no
- * hay filtro (admin/operador ven toda la base). Propietario = solo las suyas.
- * Inmobiliaria = las de TODOS los miembros activos de su org: los co-miembros
- * comparten la base de solicitantes de la agencia — sin esto, el unique global
- * de documento dejaria a un miembro bloqueado (ni reutilizar ni crear) frente
- * a una ficha creada por un colega de su misma inmobiliaria.
+ * Las fichas que un propietario/inmobiliaria ve, busca, reutiliza y edita,
+ * como filtro `or` de PostgREST, o null para roles internos (ven toda la base).
+ * Es la llave del índice único COALESCE(inmobiliaria_id, creado_por): con
+ * organización, TODAS las de su org (la registre quien la registre); sin ella,
+ * solo las suyas que no son de ninguna org. Antes bastaba con haberla creado:
+ * un ex-miembro seguía leyendo y editando las fichas que registró para la
+ * agencia, y si entraba a otra, esa otra veía las de la primera.
  */
-async function resolveCreadoPorScope(userId: string, userRol?: string): Promise<string[] | null> {
-  if (userRol === 'propietario') return [userId];
-  if (userRol === 'inmobiliaria') {
-    const orgId = await resolveInmobiliariaIdForPerfil(userId);
-    if (!orgId) return [userId];
-    const ids = await resolveOrgMemberPerfilIds(orgId);
-    if (!ids.includes(userId)) ids.push(userId);
-    return ids;
-  }
-  return null;
+async function filtroFichasPropias(userId?: string, userRol?: string): Promise<string | null> {
+  if (!userId || (userRol !== 'propietario' && userRol !== 'inmobiliaria')) return null;
+  const orgId = await resolveInmobiliariaIdForPerfil(userId);
+  return orgId ? `inmobiliaria_id.eq.${orgId}` : `and(creado_por.eq.${userId},inmobiliaria_id.is.null)`;
 }
 
 // ============================================================
@@ -226,7 +197,7 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
   // la base). Así, si la persona ya existe en OTRA agencia, esta agencia crea su
   // PROPIA ficha sin bloquearse y sin exponer PII ajena.
   const orgId = await resolveInmobiliariaIdForPerfil(createdBy); // null si propietario / rol interno
-  const scopeIds = orgId ? null : await resolveCreadoPorScope(createdBy, userRol);
+  const alcance = await filtroFichasPropias(createdBy, userRol);
 
   const buildDedupQb = () => {
     let qb = (supabase
@@ -234,8 +205,7 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
       .select(APPLICANT_FIELDS)
       .eq('tipo_documento', input.tipo_documento)
       .eq('numero_documento', input.numero_documento);
-    if (orgId) qb = qb.eq('inmobiliaria_id', orgId);
-    else if (scopeIds) qb = qb.in('creado_por', scopeIds);
+    if (alcance) qb = qb.or(alcance);
     return qb;
   };
 
@@ -302,16 +272,11 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
 // ============================================================
 
 export async function updateApplicant(id: string, input: UpdateApplicantInput, updatedBy: string, ip?: string, userRol?: string) {
-  // Obtener estado anterior para diff
-  const previous = await getApplicantById(id) as { creado_por?: string | null; inmobiliaria_id?: string | null } & Record<string, unknown>;
-
-  // Ownership: propietario/inmobiliaria solo pueden editar los solicitantes que
-  // ELLOS registraron. Sin esto, con solicitantes:update podrían modificar por
-  // id el solicitante de otra inmobiliaria (IDOR de escritura). 404 para no
-  // confirmar la existencia del recurso ajeno.
-  if ((userRol === 'propietario' || userRol === 'inmobiliaria') && previous.creado_por !== updatedBy) {
-    throw AppError.notFound('Solicitante no encontrado', 'SOLICITANTE_NOT_FOUND');
-  }
+  // Estado anterior para el diff, leído CON el alcance del actor: fuera de su
+  // cartera (otra inmobiliaria, o la agencia de la que ya salió) da 404 sin
+  // confirmar que existe. Dentro, el titular y los compañeros corrigen la
+  // ficha aunque la haya registrado otro miembro.
+  const previous = await getApplicantById(id, updatedBy, userRol) as { creado_por?: string | null; inmobiliaria_id?: string | null } & Record<string, unknown>;
 
   // Construir solo campos definidos
   const updateData: Record<string, unknown> = {};
@@ -342,7 +307,7 @@ export async function updateApplicant(id: string, input: UpdateApplicantInput, u
       .eq('numero_documento', newNumDoc)
       .neq('id', id);
     if (previous.inmobiliaria_id) dupQb = dupQb.eq('inmobiliaria_id', previous.inmobiliaria_id);
-    else if (previous.creado_por) dupQb = dupQb.eq('creado_por', previous.creado_por);
+    else if (previous.creado_por) dupQb = dupQb.eq('creado_por', previous.creado_por).is('inmobiliaria_id', null);
     const { data: existing } = await dupQb.maybeSingle();
 
     if (existing) {
@@ -437,14 +402,14 @@ export async function searchByDocument(query: SearchByDocumentQuery, userId?: st
   // buscar por documento devolveria la ficha completa (PII) de un cliente de
   // otra agencia y serviria de oraculo de enumeracion de cedulas.
   // Admin/operador siguen viendo toda la base.
-  const scopeIds = userId ? await resolveCreadoPorScope(userId, userRol) : null;
+  const alcance = await filtroFichasPropias(userId, userRol);
 
   let qb = (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
     .select(APPLICANT_FIELDS)
     .eq('tipo_documento', query.document_type)
     .eq('numero_documento', query.document_number);
-  if (scopeIds) qb = qb.in('creado_por', scopeIds);
+  if (alcance) qb = qb.or(alcance);
   const { data, error } = await qb.maybeSingle();
 
   if (error) {
