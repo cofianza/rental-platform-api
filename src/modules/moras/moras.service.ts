@@ -367,9 +367,11 @@ export async function listMoras(query: ListMorasQuery, userId: string, rol: stri
 
   let qb = db('moras_tickets')
     .select('*', { count: 'exact' })
-    .order('reportado_at', { ascending: false });
+    .order('reportado_at', { ascending: query.orden === 'asc' });
 
-  if (query.estado && query.estado !== 'todas') {
+  if (query.estado === 'activas') {
+    qb = qb.in('estado', ESTADOS_ACTIVOS as unknown as string[]);
+  } else if (query.estado && query.estado !== 'todas') {
     qb = qb.eq('estado', query.estado);
   }
   if (query.contrato_id) {
@@ -429,8 +431,14 @@ export async function getMoraById(id: string) {
 // Escalar manualmente
 // ============================================================
 
+const moraYaCambio = () =>
+  AppError.conflict('La mora ya cambió de fase. Revisa el detalle actualizado.', 'MORA_ESTADO_CAMBIO');
+
 export async function escalarMora(id: string, input: EscalarMoraInput, userId: string, rol: string) {
   const mora = await assertMoraAccess(id, userId, rol);
+  // La pantalla estaba vieja (otro ya la escaló): sin esto la llevaba a la
+  // fase siguiente y le mandaba al inquilino una plantilla que nadie pidió.
+  if (input.desde && input.desde !== mora.estado) throw moraYaCambio();
 
   let proximoEstado: MoraEstado;
   let templateKey: 'MORA_FASE_2' | 'MORA_FASE_3';
@@ -452,8 +460,15 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
   }
   updates.estado = proximoEstado;
 
-  const { error } = await db('moras_tickets').update(updates as never).eq('id', id);
+  // Condicionado a la fase leída, como el cron: dos escalados a la vez movían
+  // la fila los dos y el inquilino recibía la plantilla dos veces.
+  const { data: movida, error } = await db('moras_tickets')
+    .update(updates as never)
+    .eq('id', id)
+    .eq('estado', mora.estado)
+    .select('id');
   if (error) throw fromSupabaseError(error);
+  if (!movida?.length) throw moraYaCambio();
 
   const diasMora = diasEnMora(mora.fecha_vencimiento_canon);
   const whatsapp_estado = await enviarTemplateWhatsApp({

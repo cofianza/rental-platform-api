@@ -132,7 +132,7 @@ describe('escalarMora — el aviso al inquilino', () => {
         },
         error: null,
       },
-      { data: null, error: null }, // update
+      { data: [{ id: 'm1' }], error: null }, // update (1 fila)
       { data: { id: 'm1' }, error: null }, // getMoraById
     );
     const r = await escalarMora('m1', {}, 'op', 'operador_analista');
@@ -204,7 +204,7 @@ describe('fechas de la mora', () => {
         },
         error: null,
       },
-      { data: null, error: null },
+      { data: [{ id: 'm1' }], error: null },
       { data: { id: 'm1' }, error: null },
     );
     await escalarMora('m1', {}, 'op', 'operador_analista');
@@ -236,11 +236,11 @@ describe('aviso al equipo de Cofianza', () => {
   it('el escalado a Fase 3 avisa (el inquilino espera contacto); el de Fase 2 no', async () => {
     mockEnviarTemplate.mockResolvedValue('aceptado');
     mockListOperators.mockResolvedValue([{ id: 'op1' }]);
-    enqueue('moras_tickets', moraEnFase('fase_1'), { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    enqueue('moras_tickets', moraEnFase('fase_1'), { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
     await escalarMora('m1', {}, 'dueno', 'propietario');
     expect(avisos()).toEqual([]);
 
-    enqueue('moras_tickets', moraEnFase('fase_2'), { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    enqueue('moras_tickets', moraEnFase('fase_2'), { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
     await escalarMora('m1', {}, 'dueno', 'propietario');
     expect(avisos()).toEqual([expect.objectContaining({ userId: 'op1', tipo: 'mora.fase_3', titulo: 'Mora en Fase 3 — MOR-2026-007' })]);
   });
@@ -283,7 +283,7 @@ describe('rastro de quién gestionó la mora', () => {
     ['escalada', () => escalarMora('m1', {}, 'miembro1', 'inmobiliaria'), 'mora_escalada'],
   ])('la mora %s deja autor en el chat y registro en la bitácora', async (_n, accion, esperada) => {
     mockEnviarTemplate.mockResolvedValue('sin_telefono');
-    enqueue('moras_tickets', moraActiva, { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    enqueue('moras_tickets', moraActiva, { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
     await accion();
     expect(inserts('moras_mensajes')[0]).toMatchObject({ autor_tipo: 'sistema', autor_id: 'miembro1' });
     expect(inserts('bitacora')).toEqual([

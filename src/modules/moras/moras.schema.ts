@@ -23,10 +23,14 @@ export type ReportarMoraInput = z.infer<typeof reportarMoraSchema>;
 
 // Listado / filtros
 export const listMorasQuerySchema = z.object({
+  // 'activas' = fase_1..3: la cola del operador sin pagadas ni canceladas.
   estado: z
-    .enum(['todas', 'fase_1', 'fase_2', 'fase_3', 'pagada', 'cancelada'])
+    .enum(['todas', 'activas', 'fase_1', 'fase_2', 'fase_3', 'pagada', 'cancelada'])
     .optional()
     .default('todas'),
+  // 'asc' para la cola (lo más viejo primero): el corte de `limit` debe dejar
+  // fuera lo más reciente, no lo más urgente.
+  orden: z.enum(['asc', 'desc']).optional().default('desc'),
   contrato_id: z.uuid().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -42,6 +46,8 @@ export const moraIdParamsSchema = z.object({
 export const escalarMoraSchema = z.object({
   // Opcional: notas internas del asesor para la transición
   notas: z.string().max(1000).optional(),
+  // Fase que ve la pantalla: si otro ya la escaló, no se salta a la siguiente.
+  desde: z.enum(['fase_1', 'fase_2']).optional(),
 });
 export type EscalarMoraInput = z.infer<typeof escalarMoraSchema>;
 
