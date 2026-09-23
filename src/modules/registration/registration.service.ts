@@ -269,18 +269,21 @@ export async function resendVerification({ email }: ResendVerificationInput): Pr
     return { message: genericMessage };
   }
 
-  // Verificar que no este ya verificado
+  // Solo cuentas autoregistradas por correo y aun sin verificar. Las creadas
+  // por el administrador, la vitrina, Google o una invitacion nunca llenan
+  // email_verified_at: si recibieran un token, verifyEmail reactivaria una
+  // cuenta que el administrador desactivo.
   const { data: perfil } = await supabase
     .from('perfiles' as string)
-    .select('email_verified_at, nombre')
+    .select('email_verified_at, nombre, registration_source')
     .eq('id', userResult.id)
-    .single<{ email_verified_at: string | null; nombre: string }>();
+    .single<{ email_verified_at: string | null; nombre: string; registration_source: string | null }>();
 
-  if (perfil?.email_verified_at) {
+  if (!perfil || perfil.email_verified_at || perfil.registration_source !== 'email') {
     return { message: genericMessage };
   }
 
-  await generateAndSendVerificationEmail(userResult.id, email, perfil?.nombre || '');
+  await generateAndSendVerificationEmail(userResult.id, email, perfil.nombre || '');
 
   return { message: genericMessage };
 }
