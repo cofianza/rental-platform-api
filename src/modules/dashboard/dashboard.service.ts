@@ -1126,17 +1126,47 @@ async function fetchConfigDashboard(): Promise<AdminOverviewConfig & { capitalDi
   };
 }
 
-// Organizaciones, no personas: cada miembro de un equipo tiene rol
-// 'inmobiliaria' y contaba como un aliado más.
-async function countInmobiliariasActivas(): Promise<number> {
-  const { count, error } = await (
-    supabase.from('inmobiliarias' as string) as ReturnType<typeof supabase.from>
-  )
-    .select('*', { count: 'exact', head: true })
-    .eq('estado', 'activa');
-
+// Las cuentas que /inmobiliarias lista, una por organización: el titular
+// principal (inmobiliarias.owner_perfil_id) más las cuentas sin equipo. Cada
+// miembro de un equipo tiene rol 'inmobiliaria' y no es un aliado aparte.
+export async function fetchPerfilesInmobiliaria(): Promise<{
+  rows: Array<Record<string, unknown>>;
+  titularDeOrg: Map<string, string>;
+}> {
+  const [{ data, error }, orgsRes, miembrosRes] = await Promise.all([
+    supabase
+      .from('perfiles')
+      .select('id, razon_social, nombre, apellido, nit, nombre_representante, telefono, ciudad, estado, created_at')
+      .eq('rol', 'inmobiliaria')
+      .order('created_at', { ascending: false }),
+    (supabase.from('inmobiliarias' as string) as ReturnType<typeof supabase.from>).select('id, owner_perfil_id'),
+    (supabase.from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+      .select('perfil_id')
+      .eq('estado', 'activo'),
+  ]);
   if (error) throw fromSupabaseError(error);
-  return count ?? 0;
+  if (orgsRes.error) throw fromSupabaseError(orgsRes.error);
+  if (miembrosRes.error) throw fromSupabaseError(miembrosRes.error);
+
+  const titularDeOrg = new Map<string, string>();
+  for (const o of (orgsRes.data ?? []) as Array<{ id: string; owner_perfil_id: string }>) {
+    titularDeOrg.set(o.id, o.owner_perfil_id);
+  }
+  const titulares = new Set(titularDeOrg.values());
+  const conEquipo = new Set(
+    ((miembrosRes.data ?? []) as Array<{ perfil_id: string | null }>).map((m) => m.perfil_id),
+  );
+  const rows = ((data ?? []) as Array<Record<string, unknown>>).filter(
+    (r) => titulares.has(r.id as string) || !conEquipo.has(r.id as string),
+  );
+  return { rows, titularDeOrg };
+}
+
+// Las filas activas de esa misma lista. inmobiliarias.estado no sirve: nadie
+// la escribe; desactivar una inmobiliaria pone inactivo el perfil del titular.
+async function countInmobiliariasActivas(): Promise<number> {
+  const { rows } = await fetchPerfilesInmobiliaria();
+  return rows.filter((r) => r.estado === 'activo').length;
 }
 
 async function countVitrinaPublicados(): Promise<number> {

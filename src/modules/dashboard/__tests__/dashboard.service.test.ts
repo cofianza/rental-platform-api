@@ -10,11 +10,13 @@ const mockGte = vi.fn();
 const mockLte = vi.fn();
 const mockIn = vi.fn();
 const mockOrder = vi.fn();
+const mockFilter = vi.fn();
+const mockLimit = vi.fn();
 
 function createChain(finalData: unknown, finalCount?: number) {
   const chain: Record<string, unknown> = {};
   // order/range: las consultas paginan con fetchAll.
-  const methods = { select: mockSelect, eq: mockEq, neq: mockNeq, gte: mockGte, lte: mockLte, in: mockIn, order: mockOrder, range: vi.fn() };
+  const methods = { select: mockSelect, eq: mockEq, neq: mockNeq, gte: mockGte, lte: mockLte, in: mockIn, order: mockOrder, filter: mockFilter, limit: mockLimit, range: vi.fn() };
 
   for (const [name, fn] of Object.entries(methods)) {
     fn.mockImplementation(() => chain);
@@ -248,6 +250,37 @@ describe('Dashboard Service', () => {
       expect(i1.historial.map((h) => h.inquilino)).toEqual(['Ana Pérez', 'Luis Gómez']);
       expect(r.inmuebles.find((i) => i.id === 'i2')).toMatchObject({ garantiaActiva: false, pago: null, estudiosActivos: 2 });
       expect(r.resumen).toMatchObject({ total: 2, arrendados: 1, disponibles: 1, enVitrina: 1, ingresoMes: 1500000 });
+    });
+  });
+
+  describe('getAdminOverview()', () => {
+    it('«Inmobiliarias activas» cuenta las filas activas de /inmobiliarias', async () => {
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'perfiles') {
+          return createChain([
+            { id: 't1', estado: 'activo' }, // titular activo
+            { id: 't2', estado: 'inactivo' }, // titulares desactivados desde el panel
+            { id: 't3', estado: 'inactivo' },
+            { id: 'm1', estado: 'activo' }, // miembro del equipo de t1: no es otra inmobiliaria
+            { id: 'l1', estado: 'activo' }, // cuenta sin equipo
+          ]);
+        }
+        // inmobiliarias.estado sigue en 'activa' aunque se desactive el titular.
+        if (table === 'inmobiliarias') {
+          return createChain(
+            [{ id: 'o1', owner_perfil_id: 't1' }, { id: 'o2', owner_perfil_id: 't2' }, { id: 'o3', owner_perfil_id: 't3' }],
+            3,
+          );
+        }
+        if (table === 'inmobiliaria_miembros') {
+          return createChain([{ perfil_id: 't1' }, { perfil_id: 't2' }, { perfil_id: 't3' }, { perfil_id: 'm1' }]);
+        }
+        return createChain([]);
+      });
+
+      const r = await dashboardService.getAdminOverview();
+
+      expect(r.kpis.inmobiliariasActivas).toBe(2); // t1 y l1
     });
   });
 

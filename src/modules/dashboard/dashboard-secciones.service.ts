@@ -14,7 +14,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
 import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
-import { countVitrinaVisitasMes } from './dashboard.service';
+import { countVitrinaVisitasMes, fetchPerfilesInmobiliaria } from './dashboard.service';
 
 // Estados de contrato considerados "activos" (firmado = listo, vigente = corriendo).
 const ESTADOS_CONTRATO_ACTIVO = ['firmado', 'vigente'] as const;
@@ -93,40 +93,15 @@ export interface InmobiliariaRow {
   moraActivaCount: number;
 }
 
-// Una fila por ORGANIZACIÓN, no por persona: todos los miembros de un equipo
-// tienen rol 'inmobiliaria', así que listar perfiles mostraba a cada empleado
-// como un aliado y partía el canon según quién cargó cada inmueble. Se lista
-// el titular principal (inmobiliarias.owner_perfil_id) con la cartera de la
-// organización (inmuebles.inmobiliaria_id), más las cuentas sin equipo.
+// Una fila por ORGANIZACIÓN, no por persona (fetchPerfilesInmobiliaria, la
+// misma lista que cuenta el KPI), con la cartera de la organización
+// (inmuebles.inmobiliaria_id): antes se partía según quién cargó cada inmueble.
 export async function listInmobiliarias(): Promise<InmobiliariaRow[]> {
-  const [{ data, error }, orgsRes, miembrosRes, contratos] = await Promise.all([
-    supabase
-      .from('perfiles')
-      .select('id, razon_social, nombre, apellido, nit, nombre_representante, telefono, ciudad, estado, created_at')
-      .eq('rol', 'inmobiliaria')
-      .order('created_at', { ascending: false }),
-    (supabase.from('inmobiliarias' as string) as ReturnType<typeof supabase.from>).select('id, owner_perfil_id'),
-    (supabase.from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
-      .select('perfil_id')
-      .eq('estado', 'activo'),
+  const [{ rows, titularDeOrg }, contratos] = await Promise.all([
+    fetchPerfilesInmobiliaria(),
     fetchContratosActivosConDueno(),
   ]);
-  if (error) throw fromSupabaseError(error);
-  if (orgsRes.error) throw fromSupabaseError(orgsRes.error);
-  if (miembrosRes.error) throw fromSupabaseError(miembrosRes.error);
 
-  const titularDeOrg = new Map<string, string>();
-  for (const o of (orgsRes.data ?? []) as Array<{ id: string; owner_perfil_id: string }>) {
-    titularDeOrg.set(o.id, o.owner_perfil_id);
-  }
-  const titulares = new Set(titularDeOrg.values());
-  const conEquipo = new Set(
-    ((miembrosRes.data ?? []) as Array<{ perfil_id: string | null }>).map((m) => m.perfil_id),
-  );
-
-  const rows = ((data ?? []) as Array<Record<string, unknown>>).filter(
-    (r) => titulares.has(r.id as string) || !conEquipo.has(r.id as string),
-  );
   // Inmueble sin organización (legado) → a quien lo registró.
   const agg = agregarPorPerfil(
     rows.map((r) => r.id as string),
