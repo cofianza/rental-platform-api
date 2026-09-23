@@ -7,13 +7,17 @@
 -- (a) expedientes: quién, cuándo y por qué se cerró sin acta. Sin FK a
 --     perfiles: es constancia (no se pierde si se borra el perfil) y una
 --     tercera FK expedientes -> perfiles volvería ambiguos más embeds.
--- (b) fn_expediente_cierre_requiere_acta: deja pasar el cierre que trae esas
---     tres columnas en el MISMO UPDATE, puestas por un administrador. Copia
---     exacta de 20260926000001 (igual a la desplegada: pg_get_functiondef,
---     2026-09-23) con esa condición en el segundo IF. El trigger no cambia.
+-- (b) fn_expediente_cierre_requiere_acta: deja pasar el cierre cuyo MISMO
+--     UPDATE pone esas columnas (cierre_sin_acta_en distinto del anterior) a
+--     nombre de un administrador; una constancia que ya estaba no sirve para un
+--     cierre posterior. Copia exacta de 20260926000001 (igual a la desplegada:
+--     pg_get_functiondef, 2026-09-23) con esa condición en el segundo IF. El
+--     trigger no cambia.
 --
--- Idempotente. El API la necesita solo para «Cerrar sin acta»: hasta correrla,
--- esa acción responde error y nada más lee estas columnas.
+-- Idempotente. El API no la necesita para desplegar: hasta correrla, «Cerrar
+-- sin acta» responde 503 y el detalle del estudio y la vista del contrato leen
+-- estas columnas aparte y sin fallar (columna inexistente = sin cierre sin acta).
+-- Después va 20260930000002b («Requieren mi acción»).
 -- ROLLBACK: reaplicar (b) de 20260926000001 y
 --   ALTER TABLE public.expedientes DROP CONSTRAINT IF EXISTS expedientes_cierre_sin_acta_chk,
 --     DROP COLUMN IF EXISTS cierre_sin_acta_en, DROP COLUMN IF EXISTS cierre_sin_acta_por,
@@ -56,9 +60,10 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'CONTRATO_EN_FIRMA: el contrato del estudio esta en firma; cancelalo antes de cerrar el estudio';
   END IF;
-  -- Adenda 1 contratos (respuesta 21): el cierre sin acta que registra un administrador pasa.
+  -- Adenda 1 contratos (respuesta 21): pasa el cierre sin acta que este mismo UPDATE registra a nombre de un administrador.
   IF NOT (
     NEW.cierre_sin_acta_en IS NOT NULL
+    AND NEW.cierre_sin_acta_en IS DISTINCT FROM OLD.cierre_sin_acta_en
     AND EXISTS (SELECT 1 FROM perfiles p WHERE p.id = NEW.cierre_sin_acta_por AND p.rol = 'administrador')
   ) AND EXISTS (
     SELECT 1 FROM contratos c
@@ -111,6 +116,17 @@ REVOKE EXECUTE ON FUNCTION public.fn_expediente_cierre_requiere_acta() FROM PUBL
 --     EXCEPTION WHEN raise_exception THEN
 --       IF SQLERRM LIKE 'FALLA%' THEN RAISE; END IF;
 --     END;
+--     -- (2b) una constancia puesta antes (sin cerrar) no sirve para un cierre posterior
+--     UPDATE expedientes SET cierre_sin_acta_en = now() - interval '1 minute', cierre_sin_acta_por = adm,
+--       cierre_sin_acta_motivo = 'Constancia puesta sin cerrar' WHERE id = e;
+--     BEGIN
+--       UPDATE expedientes SET estado = 'cerrado' WHERE id = e;
+--       RAISE EXCEPTION 'FALLA (2b): cerró con una constancia vieja';
+--     EXCEPTION WHEN raise_exception THEN
+--       IF SQLERRM LIKE 'FALLA%' THEN RAISE; END IF;
+--       ASSERT SQLERRM LIKE 'ACTA_ENTREGA_REQUERIDA%', 'FALLA (2b): otro error: ' || SQLERRM;
+--     END;
+--     UPDATE expedientes SET cierre_sin_acta_en = NULL, cierre_sin_acta_por = NULL, cierre_sin_acta_motivo = NULL WHERE id = e;
 --     -- (3) motivo corto: lo frena el CHECK
 --     BEGIN
 --       UPDATE expedientes SET estado = 'cerrado', cierre_sin_acta_en = now(), cierre_sin_acta_por = adm,
