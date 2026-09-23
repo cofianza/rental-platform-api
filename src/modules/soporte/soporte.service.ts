@@ -102,6 +102,10 @@ export async function listTickets(
       'id, ticket_numero, remitente_id, asignado_a, tipo, asunto, descripcion, prioridad, estado, created_at, updated_at, resolved_at, perfiles!tickets_soporte_remitente_id_fkey(nombre, apellido)',
       { count: 'exact' },
     )
+    // Primero los no resueltos (el enum se declara abierto, en_proceso, resuelto):
+    // con solo created_at desc, pasados `limit` tickets los sin resolver más
+    // viejos (los de SLA más vencido) no llegaban a la pantalla.
+    .order('estado', { ascending: true })
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1);
 
