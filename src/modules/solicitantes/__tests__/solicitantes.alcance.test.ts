@@ -52,7 +52,7 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveAllowedExpedienteIds: async () => mockPermitidos(),
 }));
 
-import { listApplicants, updateApplicant, searchByDocument } from '../solicitantes.service';
+import { listApplicants, updateApplicant, searchByDocument, getApplicantById } from '../solicitantes.service';
 
 const ors = () => ops.filter((o) => o.table === 'solicitantes' && o.method === 'or').map((o) => o.args[0]);
 
@@ -109,5 +109,25 @@ describe('alcance de fichas', () => {
       updateApplicant('s-1', { telefono: '3000000000' } as never, 'restringido', undefined, 'inmobiliaria'),
     ).rejects.toMatchObject({ errorCode: 'FICHA_DE_OTRO_MIEMBRO' });
     expect(ops.some((o) => o.table === 'solicitantes' && o.method === 'update')).toBe(false);
+  });
+});
+
+describe('getApplicantById', () => {
+  it('cuenta los estudios a la vez que lee la ficha (antes en serie)', async () => {
+    let soltarFicha!: (v: Record<string, unknown>) => void;
+    enqueue('solicitantes', new Promise((r) => (soltarFicha = r)) as never);
+    enqueue('expedientes', { count: 3, error: null });
+
+    const ficha = getApplicantById('sol-1', 'm-1', 'inmobiliaria');
+    // Con la ficha aún pendiente, el conteo ya salió.
+    await vi.waitFor(() => expect(ops.some((o) => o.table === 'expedientes' && o.method === 'select')).toBe(true));
+    soltarFicha({ data: { id: 'sol-1' }, error: null });
+    await expect(ficha).resolves.toMatchObject({ id: 'sol-1', expedientes_count: 3 });
+  });
+
+  it('fuera de su alcance: 404 y el conteo no sale en la respuesta', async () => {
+    enqueue('solicitantes', { data: null, error: { code: 'PGRST116', message: 'no rows' } });
+    enqueue('expedientes', { count: 3, error: null });
+    await expect(getApplicantById('sol-ajena', 'm-1', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
   });
 });

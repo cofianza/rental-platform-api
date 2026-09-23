@@ -113,10 +113,15 @@ export async function listarFirmantes(
 ): Promise<{ firmantes: Array<Record<string, unknown>> }> {
   // Guard de pertenencia (IDOR): resolvemos el expediente del contrato y
   // gateamos. No-op para roles internos / sin identidad; 404 fuera de scope.
-  const { data: contrato } = await db('contratos')
-    .select('id, expediente_id')
-    .eq('id', contratoId)
-    .single();
+  // Los firmantes se leen a la vez que el contrato (antes en serie tras el
+  // guard) y solo se devuelven si el guard pasa.
+  const [{ data: contrato }, { data }] = await Promise.all([
+    db('contratos').select('id, expediente_id').eq('id', contratoId).single(),
+    db('contrato_firmantes')
+      .select('id, rol_firmante, nombre, email, telefono, orden, estado, firmado_en, created_at')
+      .eq('contrato_id', contratoId)
+      .order('orden', { ascending: true }),
+  ]);
   if (!contrato) {
     throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
   }
@@ -126,10 +131,6 @@ export async function listarFirmantes(
     userRol,
   );
 
-  const { data } = await db('contrato_firmantes')
-    .select('id, rol_firmante, nombre, email, telefono, orden, estado, firmado_en, created_at')
-    .eq('contrato_id', contratoId)
-    .order('orden', { ascending: true });
   return { firmantes: (data as Array<Record<string, unknown>> | null) ?? [] };
 }
 

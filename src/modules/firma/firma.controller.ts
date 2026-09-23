@@ -75,12 +75,15 @@ export async function listarPorContrato(req: Request, res: Response) {
 
 // Firmantes multi-parte del contrato (arrendatario/arrendador/cofianza) y,
 // con la biometría de firma, la verificación de identidad previa (Adenda 2 §9).
-// listarFirmantes va primero: es el que valida el acceso al contrato.
+// listarFirmantes es el que valida el acceso al contrato: van en paralelo y, si
+// da 404, Promise.all rechaza y las verificaciones leídas se descartan.
 export async function listarFirmantes(req: Request, res: Response) {
   const contratoId = req.params.contratoId as string;
   const { listarFirmantes } = await import('./firma-multiparte.service');
-  const result = await listarFirmantes(contratoId, req.user?.id, req.user?.rol);
-  const verificaciones = await identidadService.listarVerificaciones(contratoId, req.user?.rol);
+  const [result, verificaciones] = await Promise.all([
+    listarFirmantes(contratoId, req.user?.id, req.user?.rol),
+    identidadService.listarVerificaciones(contratoId, req.user?.rol),
+  ]);
   sendSuccess(res, { ...result, verificaciones });
 }
 

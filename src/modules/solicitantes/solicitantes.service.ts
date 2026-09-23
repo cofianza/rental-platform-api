@@ -131,7 +131,15 @@ export async function getApplicantById(id: string, userId?: string, userRol?: st
   const alcance = await filtroFichasPropias(userId, userRol);
   if (alcance) qb = qb.or(alcance);
 
-  const { data, error } = await qb.single();
+  // La ficha y el conteo de estudios a la vez (antes en serie): si la ficha
+  // no está en su alcance, el conteo se descarta con el 404.
+  const [{ data, error }, { count: expedientesCount, error: countError }] = await Promise.all([
+    qb.single(),
+    (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id', { count: 'exact', head: true })
+      .eq('solicitante_id', id),
+  ]);
 
   if (error || !data) {
     if (error?.code === 'PGRST116') {
@@ -142,12 +150,6 @@ export async function getApplicantById(id: string, userId?: string, userRol?: st
   }
 
   const applicant = data as unknown as ApplicantRow;
-
-  // Obtener conteo de expedientes asociados
-  const { count: expedientesCount, error: countError } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id', { count: 'exact', head: true })
-    .eq('solicitante_id', id);
 
   if (countError) {
     logger.warn({ error: countError.message, id }, 'Error al contar estudios del solicitante');

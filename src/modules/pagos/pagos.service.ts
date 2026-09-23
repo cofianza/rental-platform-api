@@ -103,10 +103,6 @@ export async function listPagosByExpediente(
   userId?: string,
   userRol?: string,
 ) {
-  // Ownership multi-tenant (cierra IDOR): roles tenant-scopeados solo ven pagos
-  // de expedientes de su cartera. 404 fuera de scope (no confirma existencia).
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
   // Apply defaults defensively in case validation middleware didn't run
   const page = query.page ?? 1;
   const limit = query.limit ?? 10;
@@ -129,7 +125,14 @@ export async function listPagosByExpediente(
   builder = builder.order(sortBy, { ascending: sortDir === 'asc' });
   builder = builder.range(offset, offset + limit - 1);
 
-  const { data, count, error } = await builder;
+  // Ownership multi-tenant (cierra IDOR): roles tenant-scopeados solo ven pagos
+  // de expedientes de su cartera. 404 fuera de scope (no confirma existencia).
+  // Guard y lectura en paralelo (antes en serie): si el guard da 404,
+  // Promise.all rechaza y lo leído se descarta.
+  const [, { data, count, error }] = await Promise.all([
+    assertExpedienteAccess(expedienteId, userId, userRol),
+    builder,
+  ]);
 
   if (error) {
     logger.error({ error: error.message }, 'Error al listar pagos');

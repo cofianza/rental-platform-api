@@ -5,6 +5,11 @@ vi.mock('@/lib/supabase', () => ({ supabase: { from: vi.fn(), rpc: vi.fn(), stor
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/config', () => ({ env: { FIRMA_MULTIPARTE_ENABLED: false, AUCO_SENDER_EMAIL: 'sender@cofianza.com' } }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
+const { mockGuard } = vi.hoisted(() => ({ mockGuard: vi.fn(async () => undefined) }));
+vi.mock('@/lib/tenantScope', async (orig) => ({
+  ...(await orig<typeof import('@/lib/tenantScope')>()),
+  assertExpedienteAccess: (...a: unknown[]) => mockGuard(...(a as [])),
+}));
 vi.mock('@/lib/auco', () => ({
   normalizePhoneToInternational: vi.fn(),
   bufferToBase64: vi.fn(),
@@ -12,7 +17,7 @@ vi.mock('@/lib/auco', () => ({
   getDocumentStatus: vi.fn(),
 }));
 
-import { mapAucoSignerStatusToEstado, todasFirmaron, crearSolicitudFirmaMultiparte } from '../firma-multiparte.service';
+import { mapAucoSignerStatusToEstado, todasFirmaron, crearSolicitudFirmaMultiparte, listarFirmantes } from '../firma-multiparte.service';
 import { supabase } from '@/lib/supabase';
 import { env } from '@/config';
 import * as auco from '@/lib/auco';
@@ -66,5 +71,32 @@ describe('todasFirmaron', () => {
   });
   it('false si la lista está vacía', () => {
     expect(todasFirmaron([])).toBe(false);
+  });
+});
+
+describe('listarFirmantes — los firmantes salen a la vez que el contrato', () => {
+  it('lee los firmantes sin esperar al guard, y con 404 no devuelve nada', async () => {
+    const tablas: string[] = [];
+    vi.mocked(supabase.from).mockImplementation(((table: string) => {
+      tablas.push(table);
+      const res = table === 'contratos' ? { data: { id: 'c1', expediente_id: 'e1' }, error: null } : { data: [{ id: 'f1' }], error: null };
+      const chain: Record<string, unknown> = {};
+      for (const m of ['select', 'eq', 'order']) chain[m] = () => chain;
+      chain.single = async () => res;
+      chain.then = (r: (v: unknown) => unknown) => Promise.resolve(res).then(r);
+      return chain;
+    }) as never);
+
+    let soltarGuard!: () => void;
+    mockGuard.mockReturnValueOnce(new Promise<undefined>((r) => (soltarGuard = () => r(undefined))));
+    const pendiente = listarFirmantes('c1', 'u1', 'inmobiliaria');
+    await vi.waitFor(() => expect(mockGuard).toHaveBeenCalledWith('e1', 'u1', 'inmobiliaria'));
+    // Con el guard aún pendiente, la consulta de firmantes ya salió (antes, 3 idas en serie).
+    expect(tablas).toContain('contrato_firmantes');
+    soltarGuard();
+    await expect(pendiente).resolves.toEqual({ firmantes: [{ id: 'f1' }] });
+
+    mockGuard.mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404 }));
+    await expect(listarFirmantes('c1', 'intruso', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
   });
 });
