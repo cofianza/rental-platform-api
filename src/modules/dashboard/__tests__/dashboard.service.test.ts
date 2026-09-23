@@ -12,7 +12,8 @@ const mockIn = vi.fn();
 
 function createChain(finalData: unknown, finalCount?: number) {
   const chain: Record<string, unknown> = {};
-  const methods = { select: mockSelect, eq: mockEq, neq: mockNeq, gte: mockGte, lte: mockLte, in: mockIn };
+  // order/range: las consultas paginan con fetchAll.
+  const methods = { select: mockSelect, eq: mockEq, neq: mockNeq, gte: mockGte, lte: mockLte, in: mockIn, order: vi.fn(), range: vi.fn() };
 
   for (const [name, fn] of Object.entries(methods)) {
     fn.mockImplementation(() => chain);

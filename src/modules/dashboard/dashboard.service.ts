@@ -5,6 +5,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { fromSupabaseError } from '@/lib/errors';
+import { fetchAll } from '@/lib/fetchAll';
 import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
 
@@ -173,14 +174,17 @@ async function queryExpedientesPorEstado(
   dateFrom: string,
   dateTo: string,
 ): Promise<ExpedientesPorEstado[]> {
-  const { data, error } = await supabase
-    .from('expedientes')
-    .select('estado')
-    .gte('created_at', dateFrom)
-    .lte('created_at', dateTo);
+  const { data, error } = await fetchAll((desde, hasta) =>
+    supabase
+      .from('expedientes')
+      .select('estado')
+      .gte('created_at', dateFrom)
+      .lte('created_at', dateTo)
+      .order('id')
+      .range(desde, hasta),
+  );
 
   if (error) throw fromSupabaseError(error);
-  if (!data) return [];
 
   // Count in memory (Supabase JS client doesn't support GROUP BY directly)
   const counts: Record<string, number> = {};
@@ -198,15 +202,19 @@ async function queryTasaAprobacion(
   dateFrom: string,
   dateTo: string,
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from('expedientes')
-    .select('estado')
-    .in('estado', ESTADOS_TERMINALES)
-    .gte('created_at', dateFrom)
-    .lte('created_at', dateTo);
+  const { data, error } = await fetchAll((desde, hasta) =>
+    supabase
+      .from('expedientes')
+      .select('estado')
+      .in('estado', ESTADOS_TERMINALES)
+      .gte('created_at', dateFrom)
+      .lte('created_at', dateTo)
+      .order('id')
+      .range(desde, hasta),
+  );
 
   if (error) throw fromSupabaseError(error);
-  if (!data || data.length === 0) return 0;
+  if (data.length === 0) return 0;
 
   const aprobados = data.filter((row) => (row as { estado: string }).estado === 'aprobado').length;
   return Math.round((aprobados / data.length) * 10000) / 100; // 2 decimal places
@@ -218,15 +226,19 @@ async function queryTiempoPromedioResolucion(
   dateFrom: string,
   dateTo: string,
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from('expedientes')
-    .select('created_at, updated_at, estado')
-    .in('estado', ESTADOS_TERMINALES)
-    .gte('created_at', dateFrom)
-    .lte('created_at', dateTo);
+  const { data, error } = await fetchAll((desde, hasta) =>
+    supabase
+      .from('expedientes')
+      .select('created_at, updated_at, estado')
+      .in('estado', ESTADOS_TERMINALES)
+      .gte('created_at', dateFrom)
+      .lte('created_at', dateTo)
+      .order('id')
+      .range(desde, hasta),
+  );
 
   if (error) throw fromSupabaseError(error);
-  if (!data || data.length === 0) return 0;
+  if (data.length === 0) return 0;
 
   let totalDays = 0;
   let count = 0;
@@ -252,15 +264,18 @@ async function queryIngresosDelPeriodo(
   dateFrom: string,
   dateTo: string,
 ): Promise<number> {
-  const { data, error } = await supabase
-    .from('pagos')
-    .select('monto')
-    .eq('estado', 'completado')
-    .gte('created_at', dateFrom)
-    .lte('created_at', dateTo);
+  const { data, error } = await fetchAll((desde, hasta) =>
+    supabase
+      .from('pagos')
+      .select('monto')
+      .eq('estado', 'completado')
+      .gte('created_at', dateFrom)
+      .lte('created_at', dateTo)
+      .order('id')
+      .range(desde, hasta),
+  );
 
   if (error) throw fromSupabaseError(error);
-  if (!data) return 0;
 
   let total = 0;
   for (const row of data) {

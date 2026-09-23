@@ -5,7 +5,7 @@ import type { Request, Response } from 'express';
 const mockLlamadas: { tabla: string; in: Array<[string, unknown]>; consultada: boolean } = { tabla: '', in: [], consultada: false };
 vi.mock('@/lib/supabase', () => {
   const builder: Record<string, unknown> = {};
-  for (const m of ['select', 'order', 'limit', 'eq', 'gte', 'lte', 'ilike']) builder[m] = () => builder;
+  for (const m of ['select', 'order', 'limit', 'range', 'eq', 'gte', 'lte', 'ilike']) builder[m] = () => builder;
   builder.in = (col: string, vals: unknown) => {
     mockLlamadas.in.push([col, vals]);
     return builder;

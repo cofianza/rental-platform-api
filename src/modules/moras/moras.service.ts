@@ -10,6 +10,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
+import { fetchAll } from '@/lib/fetchAll';
 import { logger } from '@/lib/logger';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { assertExpedienteAccess, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
@@ -684,16 +685,17 @@ export async function getStats(userId: string, rol: string): Promise<MorasStats>
   inicioMes.setHours(0, 0, 0, 0);
   const isoMes = inicioMes.toISOString();
 
-  let qb = db('moras_tickets').select('estado, monto_mora, reportado_at');
   // Mismas reglas que listMoras.
   const expedienteIds = await resolveAllowedExpedienteIds(userId, rol);
-  if (expedienteIds !== null) {
-    if (expedienteIds.length === 0) {
-      return { reportadas_mes: 0, resueltas: 0, en_gestion: 0, monto_total: 0 };
-    }
-    qb = qb.in('expediente_id', expedienteIds);
+  if (expedienteIds !== null && expedienteIds.length === 0) {
+    return { reportadas_mes: 0, resueltas: 0, en_gestion: 0, monto_total: 0 };
   }
-  const { data, error } = await qb;
+  // Paginado: PostgREST corta en 1000 filas y el monto se sumaba sobre una muestra.
+  const { data, error } = await fetchAll<{ estado: MoraEstado; monto_mora: number; reportado_at: string }>((desde, hasta) => {
+    let qb = db('moras_tickets').select('estado, monto_mora, reportado_at');
+    if (expedienteIds !== null) qb = qb.in('expediente_id', expedienteIds);
+    return qb.order('id').range(desde, hasta);
+  });
   if (error) throw fromSupabaseError(error);
 
   let reportadas_mes = 0;
@@ -701,11 +703,7 @@ export async function getStats(userId: string, rol: string): Promise<MorasStats>
   let en_gestion = 0;
   let monto_total = 0;
 
-  for (const row of (data ?? []) as Array<{
-    estado: MoraEstado;
-    monto_mora: number;
-    reportado_at: string;
-  }>) {
+  for (const row of data) {
     if (row.reportado_at >= isoMes) reportadas_mes++;
     if (row.estado === 'pagada') resueltas++;
     if ((ESTADOS_ACTIVOS as readonly string[]).includes(row.estado)) {

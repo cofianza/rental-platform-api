@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
+import { fetchAll } from '@/lib/fetchAll';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
@@ -1670,20 +1671,23 @@ export async function getContratosStats(
     };
   }
 
-  let statsQuery = (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('estado');
-  if (allowedExpedienteIds !== null) {
-    statsQuery = statsQuery.in('expediente_id', allowedExpedienteIds);
-  }
-  const { data, error } = await statsQuery;
+  // Paginado: PostgREST corta en 1000 filas y el total se congelaba ahi.
+  const { data, error } = await fetchAll<{ estado: string }>((desde, hasta) => {
+    let statsQuery = (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('estado');
+    if (allowedExpedienteIds !== null) {
+      statsQuery = statsQuery.in('expediente_id', allowedExpedienteIds);
+    }
+    return statsQuery.order('id').range(desde, hasta);
+  });
 
   if (error) {
     logger.error({ error: error.message }, 'Error al obtener stats de contratos');
     throw AppError.badRequest('Error al obtener estadisticas de contratos', 'STATS_ERROR');
   }
 
-  const rows = (data as Array<{ estado: string }>) || [];
+  const rows = data;
   const por_estado: Record<string, number> = {};
   for (const r of rows) {
     por_estado[r.estado] = (por_estado[r.estado] ?? 0) + 1;

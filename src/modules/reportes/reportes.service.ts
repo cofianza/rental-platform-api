@@ -5,6 +5,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { fromSupabaseError } from '@/lib/errors';
+import { fetchAll } from '@/lib/fetchAll';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -90,32 +91,33 @@ export async function getVolumenExpedientes(
 
   logger.debug({ range, estado }, 'Fetching volumen estudios');
 
+  // Paginadas con fetchAll: PostgREST corta en 1000 filas.
   // Query 1: expedientes created in range (for "creados" count)
-  let creadosQuery = supabase
-    .from('expedientes')
-    .select('id, estado, created_at')
-    .gte('created_at', range.dateFrom)
-    .lte('created_at', range.dateTo);
-
-  if (estado) {
-    creadosQuery = creadosQuery.eq('estado', estado);
-  }
+  const creadosQuery = (desde: number, hasta: number) => {
+    let q = supabase
+      .from('expedientes')
+      .select('id, estado, created_at')
+      .gte('created_at', range.dateFrom)
+      .lte('created_at', range.dateTo);
+    if (estado) q = q.eq('estado', estado);
+    return q.order('id').range(desde, hasta);
+  };
 
   // Query 2: expedientes that reached terminal state in range (for "cerrados" count)
-  let cerradosQuery = supabase
-    .from('expedientes')
-    .select('id, estado, updated_at')
-    .in('estado', ESTADOS_CERRADOS)
-    .gte('updated_at', range.dateFrom)
-    .lte('updated_at', range.dateTo);
-
-  if (estado) {
-    cerradosQuery = cerradosQuery.eq('estado', estado);
-  }
+  const cerradosQuery = (desde: number, hasta: number) => {
+    let q = supabase
+      .from('expedientes')
+      .select('id, estado, updated_at')
+      .in('estado', ESTADOS_CERRADOS)
+      .gte('updated_at', range.dateFrom)
+      .lte('updated_at', range.dateTo);
+    if (estado) q = q.eq('estado', estado);
+    return q.order('id').range(desde, hasta);
+  };
 
   const [creadosResult, cerradosResult] = await Promise.all([
-    creadosQuery,
-    cerradosQuery,
+    fetchAll(creadosQuery),
+    fetchAll(cerradosQuery),
   ]);
 
   if (creadosResult.error) throw fromSupabaseError(creadosResult.error);
@@ -215,12 +217,16 @@ export async function getAprobacionExpedientes(
 
   logger.debug({ range }, 'Fetching aprobacion estudios');
 
-  const { data, error } = await supabase
-    .from('expedientes')
-    .select('id, estado, created_at')
-    .in('estado', ESTADOS_RESUELTOS)
-    .gte('created_at', range.dateFrom)
-    .lte('created_at', range.dateTo);
+  const { data, error } = await fetchAll((desde, hasta) =>
+    supabase
+      .from('expedientes')
+      .select('id, estado, created_at')
+      .in('estado', ESTADOS_RESUELTOS)
+      .gte('created_at', range.dateFrom)
+      .lte('created_at', range.dateTo)
+      .order('id')
+      .range(desde, hasta),
+  );
 
   if (error) throw fromSupabaseError(error);
 
@@ -308,30 +314,33 @@ export async function getIngresosReporte(
 
   logger.debug({ range, concepto }, 'Fetching ingresos reporte');
 
-  // Query 1: completed pagos (ingresos)
-  let completadosQuery = supabase
-    .from('pagos')
-    .select('id, monto, concepto, created_at')
-    .eq('estado', 'completado')
-    .gte('created_at', range.dateFrom)
-    .lte('created_at', range.dateTo);
+  // Query 1: completed pagos (ingresos). Paginadas: PostgREST corta en 1000 filas.
+  const completadosQuery = (desde: number, hasta: number) => {
+    let q = supabase
+      .from('pagos')
+      .select('id, monto, concepto, created_at')
+      .eq('estado', 'completado')
+      .gte('created_at', range.dateFrom)
+      .lte('created_at', range.dateTo);
+    if (concepto) q = q.eq('concepto', concepto);
+    return q.order('id').range(desde, hasta);
+  };
 
   // Query 2: pending pagos (total pendiente)
-  let pendientesQuery = supabase
-    .from('pagos')
-    .select('id, monto')
-    .eq('estado', 'pendiente')
-    .gte('created_at', range.dateFrom)
-    .lte('created_at', range.dateTo);
-
-  if (concepto) {
-    completadosQuery = completadosQuery.eq('concepto', concepto);
-    pendientesQuery = pendientesQuery.eq('concepto', concepto);
-  }
+  const pendientesQuery = (desde: number, hasta: number) => {
+    let q = supabase
+      .from('pagos')
+      .select('id, monto')
+      .eq('estado', 'pendiente')
+      .gte('created_at', range.dateFrom)
+      .lte('created_at', range.dateTo);
+    if (concepto) q = q.eq('concepto', concepto);
+    return q.order('id').range(desde, hasta);
+  };
 
   const [completadosResult, pendientesResult] = await Promise.all([
-    completadosQuery,
-    pendientesQuery,
+    fetchAll(completadosQuery),
+    fetchAll(pendientesQuery),
   ]);
 
   if (completadosResult.error) throw fromSupabaseError(completadosResult.error);
@@ -441,14 +450,19 @@ export async function getTiemposPorEtapa(
   logger.debug({ range }, 'Fetching tiempos por etapa');
 
   // 1. Fetch all timeline events with state transitions in range
-  const { data, error } = await supabase
-    .from('eventos_timeline')
-    .select('expediente_id, estado_anterior, estado_nuevo, created_at')
-    .not('estado_anterior', 'is', null)
-    .not('estado_nuevo', 'is', null)
-    .gte('created_at', range.dateFrom)
-    .lte('created_at', range.dateTo)
-    .order('created_at', { ascending: true });
+  // Paginado: al pasar de 1000 transiciones se descartaban las MAS recientes.
+  const { data, error } = await fetchAll((desde, hasta) =>
+    supabase
+      .from('eventos_timeline')
+      .select('expediente_id, estado_anterior, estado_nuevo, created_at')
+      .not('estado_anterior', 'is', null)
+      .not('estado_nuevo', 'is', null)
+      .gte('created_at', range.dateFrom)
+      .lte('created_at', range.dateTo)
+      .order('created_at', { ascending: true })
+      .order('id')
+      .range(desde, hasta),
+  );
 
   if (error) throw fromSupabaseError(error);
 

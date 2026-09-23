@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { assertStorageKeyPropia } from '@/lib/storageKey';
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
+import { fetchAll } from '@/lib/fetchAll';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
@@ -447,23 +448,24 @@ export async function getEstudiosStats(
     };
   }
 
-  // Una sola query con SELECT amplio + agregacion local. La tabla
-  // estudios es pequena (~cientos en QA), no escala bien si llega a
-  // millones — en ese caso pasamos a count(*) con GROUP BY via RPC.
-  let statsQuery = (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('estado, resultado, created_at');
-  if (allowedExpedienteIds !== null) {
-    statsQuery = statsQuery.in('expediente_id', allowedExpedienteIds);
-  }
-  const { data, error } = await statsQuery;
+  // SELECT amplio + agregacion local, paginado (PostgREST corta en 1000 filas).
+  // ponytail: si llega a cientos de miles, count(*) con GROUP BY via RPC.
+  const { data, error } = await fetchAll<{ estado: string; resultado: string | null; created_at: string }>((desde, hasta) => {
+    let statsQuery = (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('estado, resultado, created_at');
+    if (allowedExpedienteIds !== null) {
+      statsQuery = statsQuery.in('expediente_id', allowedExpedienteIds);
+    }
+    return statsQuery.order('id').range(desde, hasta);
+  });
 
   if (error) {
     logger.error({ error: error.message }, 'Error al obtener stats de estudios');
     throw AppError.badRequest('Error al obtener estadisticas de estudios', 'STATS_ERROR');
   }
 
-  const rows = (data as Array<{ estado: string; resultado: string | null; created_at: string }>) || [];
+  const rows = data;
   const por_estado: Record<string, number> = {};
   const por_resultado: Record<string, number> = {};
   let este_mes = 0;

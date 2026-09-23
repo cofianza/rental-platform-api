@@ -5,6 +5,7 @@
 import { Request, Response } from 'express';
 import { supabase } from '@/lib/supabase';
 import { fromSupabaseError } from '@/lib/errors';
+import { fetchAll } from '@/lib/fetchAll';
 import { resolveAllowedExpedienteIds, resolveAllowedInmuebleIds } from '@/lib/tenantScope';
 import * as reportesService from '@/modules/reportes/reportes.service';
 import { generateCSV, generateXLSX, type ExportColumn } from './export.service';
@@ -19,6 +20,13 @@ function sendExport(res: Response, result: Awaited<ReturnType<typeof generateCSV
   res.set('X-Export-Total-Rows', String(result.totalRows));
   res.send(result.buffer);
 }
+
+/**
+ * Una fila más que el máximo del archivo (MAX_ROWS = 10000 en export.service):
+ * así `truncated` es real. Con `.limit(10500)` mandaba el tope de 1000 filas
+ * de PostgREST y el Excel salía cortado sin aviso.
+ */
+const TOPE_CONSULTA = 10001;
 
 function getQuery(req: Request): ExportQuery {
   return ((req as Request & { validatedQuery: ExportQuery }).validatedQuery || req.query) as ExportQuery;
@@ -44,19 +52,19 @@ export async function exportExpedientes(req: Request, res: Response) {
   // una organización llega a miles de estudios, filtrar en SQL (RPC).
   const allowed = await resolveAllowedExpedienteIds(req.user?.id, req.user?.rol);
 
-  let qb = supabase
-    .from('expedientes')
-    .select('numero, estado, created_at, solicitantes(nombre, apellido), inmuebles!expedientes_inmueble_id_fkey(direccion), perfiles!expedientes_analista_id_fkey(nombre, apellido)')
-    .order('created_at', { ascending: false })
-    .limit(10500);
-
-  if (q.estado) qb = qb.eq('estado', q.estado);
-  if (q.fecha_desde) qb = qb.gte('created_at', q.fecha_desde);
-  if (q.fecha_hasta) qb = qb.lte('created_at', q.fecha_hasta);
-  if (allowed !== null) qb = qb.in('id', allowed);
+  const pagina = (desde: number, hasta: number) => {
+    let qb = supabase
+      .from('expedientes')
+      .select('numero, estado, created_at, solicitantes(nombre, apellido), inmuebles!expedientes_inmueble_id_fkey(direccion), perfiles!expedientes_analista_id_fkey(nombre, apellido)');
+    if (q.estado) qb = qb.eq('estado', q.estado);
+    if (q.fecha_desde) qb = qb.gte('created_at', q.fecha_desde);
+    if (q.fecha_hasta) qb = qb.lte('created_at', q.fecha_hasta);
+    if (allowed !== null) qb = qb.in('id', allowed);
+    return qb.order('created_at', { ascending: false }).order('id').range(desde, hasta);
+  };
 
   // Rol scopeado sin estudios visibles: archivo vacío, sin consultar.
-  const { data, error } = allowed !== null && allowed.length === 0 ? { data: [], error: null } : await qb;
+  const { data, error } = allowed !== null && allowed.length === 0 ? { data: [], error: null } : await fetchAll(pagina, TOPE_CONSULTA);
   if (error) throw fromSupabaseError(error);
 
   const rows = (data ?? []).map((r: Record<string, unknown>) => {
@@ -96,18 +104,18 @@ export async function exportInmuebles(req: Request, res: Response) {
   // Mismo scoping de tenant que la lista de inmuebles (ver exportExpedientes).
   const allowed = await resolveAllowedInmuebleIds(req.user?.id, req.user?.rol);
 
-  let qb = supabase
-    .from('inmuebles')
-    .select('codigo, direccion, ciudad, tipo, estado, valor_arriendo')
-    .order('created_at', { ascending: false })
-    .limit(10500);
+  const pagina = (desde: number, hasta: number) => {
+    let qb = supabase
+      .from('inmuebles')
+      .select('codigo, direccion, ciudad, tipo, estado, valor_arriendo');
+    if (q.estado) qb = qb.eq('estado', q.estado);
+    if (q.tipo) qb = qb.eq('tipo', q.tipo);
+    if (q.ciudad) qb = qb.ilike('ciudad', q.ciudad);
+    if (allowed !== null) qb = qb.in('id', allowed);
+    return qb.order('created_at', { ascending: false }).order('id').range(desde, hasta);
+  };
 
-  if (q.estado) qb = qb.eq('estado', q.estado);
-  if (q.tipo) qb = qb.eq('tipo', q.tipo);
-  if (q.ciudad) qb = qb.ilike('ciudad', q.ciudad);
-  if (allowed !== null) qb = qb.in('id', allowed);
-
-  const { data, error } = allowed !== null && allowed.length === 0 ? { data: [], error: null } : await qb;
+  const { data, error } = allowed !== null && allowed.length === 0 ? { data: [], error: null } : await fetchAll(pagina, TOPE_CONSULTA);
   if (error) throw fromSupabaseError(error);
 
   const rows = (data ?? []) as Record<string, unknown>[];
