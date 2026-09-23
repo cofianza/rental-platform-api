@@ -16,6 +16,7 @@ import { assertExpedienteAccess } from '@/lib/tenantScope';
 // mismo guard que /pago-estudio. Ver tope-canon.guard.ts.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { sobreCanon } from '@/modules/estudios/tarifas';
+import { ESTADOS_VINCULADO } from '@/modules/estudios/coarrendatario-vinculado';
 
 // ============================================================
 // Helpers
@@ -211,30 +212,48 @@ export async function getPagoDetailWithEvents(id: string, userId?: string, userR
  * vinculación: el % del estudio (el del CRC u override de Gerencia) sobre el
  * canon del contrato —Adenda 1 de contratos, respuesta 9: rige el canon
  * pactado— o, sin contrato todavía, sobre el evaluado; más IVA (§1.1). Solo
- * sugiere: el monto lo sigue poniendo el gestor y el API no lo cambia.
+ * sugiere: el monto lo sigue poniendo el gestor y el API no lo cambia. Si no
+ * se puede sugerir, `sin_sugerencia` dice por qué y los montos van en null.
  */
 export async function getPrimaSugerida(expedienteId: string, userId?: string, userRol?: string) {
   await assertExpedienteAccess(expedienteId, userId, userRol);
   const { tarifasParaContrato } = await import('@/modules/contratos/contratos.service');
-  const [tarifas, { data: contrato, error }] = await Promise.all([
+  const db = (tabla: string) => supabase.from(tabla as string) as ReturnType<typeof supabase.from>;
+  const [tarifas, { data: contrato, error }, coa] = await Promise.all([
     tarifasParaContrato(expedienteId),
-    (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+    db('contratos')
       .select('valor_arriendo')
       .eq('expediente_id', expedienteId)
       .neq('estado', 'cancelado')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    // tarifasParaContrato da "firma solo" (20 %) si no logra leer el
+    // coarrendatario; aquí se relee para no sugerir el doble del 10 %.
+    db('expediente_coarrendatarios')
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .in('estado', ESTADOS_VINCULADO)
+      .limit(1),
   ]);
   if (error) throw fromSupabaseError(error);
   const canonContrato = Number((contrato as { valor_arriendo?: unknown } | null)?.valor_arriendo) || null;
   const t = canonContrato ? sobreCanon(tarifas, canonContrato) : tarifas;
+  // Con la prima negociada por Gerencia el coarrendatario ya no cambia la cifra.
+  const vinculado = ((coa.data as unknown[] | null)?.length ?? 0) > 0;
+  const coaConfirmado = t.override?.prima_vinculacion_pct != null || (!coa.error && vinculado === t.con_coarrendatario);
+  const sinSugerencia = !coaConfirmado
+    ? 'No se pudo confirmar si el estudio tiene coarrendatario, y con él la prima baja del 20 % al 10 %: escribe el monto a mano.'
+    : t.prima_vinculacion_con_iva_cop === null
+      ? 'No hay canon ni en el contrato ni en el estudio: escribe el monto a mano.'
+      : null;
   return {
     canon: canonContrato ? ('contrato' as const) : ('estudio' as const),
-    prima_vinculacion_pct: t.prima_vinculacion_pct,
-    prima_vinculacion_cop: t.prima_vinculacion_cop,
+    prima_vinculacion_pct: coaConfirmado ? t.prima_vinculacion_pct : null,
+    prima_vinculacion_cop: sinSugerencia ? null : t.prima_vinculacion_cop,
     iva_pct: t.iva_pct,
-    prima_vinculacion_con_iva_cop: t.prima_vinculacion_con_iva_cop,
+    prima_vinculacion_con_iva_cop: sinSugerencia ? null : t.prima_vinculacion_con_iva_cop,
+    sin_sugerencia: sinSugerencia,
   };
 }
 
@@ -607,8 +626,8 @@ async function assertFianzaOperando(expedienteId: string, concepto: string): Pro
   if (sinFirma) {
     throw AppError.conflict(
       sinFirma.estado === 'firma_incompleta'
-        ? 'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la garantía o el primer canon.'
-        : 'El contrato todavía no está firmado por todas las partes: la garantía y el primer canon se cobran cuando firmen todos.',
+        ? 'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la prima de vinculación o el primer canon.'
+        : 'El contrato todavía no está firmado por todas las partes: la prima de vinculación y el primer canon se cobran cuando firmen todos.',
       'FIANZA_NO_OPERANDO',
     );
   }

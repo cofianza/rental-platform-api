@@ -23,6 +23,8 @@ const { mockFrom, ops, queues, enqueue, mockTarifasParaContrato } = vi.hoisted((
       };
     }
     chain.maybeSingle = async () => next(table);
+    chain.then = (resolve: (v: Res) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(next(table)).then(resolve, reject);
     return chain;
   };
   return {
@@ -69,6 +71,7 @@ describe('getPrimaSugerida', () => {
       prima_vinculacion_cop: 320_000,
       iva_pct: 19,
       prima_vinculacion_con_iva_cop: 380_800,
+      sin_sugerencia: null,
     });
     expect(ops).toContainEqual({ table: 'contratos', method: 'neq', args: ['estado', 'cancelado'] });
   });
@@ -79,5 +82,39 @@ describe('getPrimaSugerida', () => {
     expect(r.canon).toBe('estudio');
     expect(r.prima_vinculacion_cop).toBe(300_000);
     expect(r.prima_vinculacion_con_iva_cop).toBe(357_000);
+  });
+
+  it('si no se pudo leer el coarrendatario no sugiere nada (la prima sería 10 %, no 20 %) y dice por qué', async () => {
+    enqueue('expediente_coarrendatarios', { data: null, error: { message: 'timeout' } });
+
+    const r = await getPrimaSugerida(EXP, 'op-1', 'operador_analista');
+
+    expect(r.prima_vinculacion_con_iva_cop).toBeNull();
+    expect(r.prima_vinculacion_pct).toBeNull();
+    expect(r.sin_sugerencia).toMatch(/coarrendatario/);
+  });
+
+  it('la tarifa dice «solo» pero hay coarrendatario vinculado: tampoco sugiere', async () => {
+    enqueue('expediente_coarrendatarios', { data: [{ id: 'coa-1' }], error: null });
+
+    expect((await getPrimaSugerida(EXP, 'op-1', 'operador_analista')).sin_sugerencia).toMatch(/coarrendatario/);
+  });
+
+  it('con la prima negociada por Gerencia el coarrendatario no importa', async () => {
+    mockTarifasParaContrato.mockResolvedValue(
+      calcularTarifas({
+        via: 'automatica',
+        conCoarrendatario: false,
+        canonCop: 1_500_000,
+        ivaPct: 19,
+        override: { prima_vinculacion_pct: 15, autorizado_por: 'g', autorizado_en: '2026-09-23T00:00:00Z' },
+      }),
+    );
+    enqueue('expediente_coarrendatarios', { data: null, error: { message: 'timeout' } });
+
+    const r = await getPrimaSugerida(EXP, 'op-1', 'operador_analista');
+
+    expect(r.sin_sugerencia).toBeNull();
+    expect(r.prima_vinculacion_con_iva_cop).toBe(267_750); // 15 % de 1.500.000 = 225.000 + IVA
   });
 });

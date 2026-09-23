@@ -315,7 +315,8 @@ export async function getPagoEventos(pagoId: string, userId?: string, userRol?: 
 
 export const CONCEPTO_LABELS: Record<string, string> = {
   estudio: 'Evaluación crediticia',
-  garantia: 'Garantía de arrendamiento',
+  // «Garantía de arrendamiento» se confundía con el depósito que la Ley 820 prohíbe.
+  garantia: 'Prima de vinculación de la fianza',
   primer_canon: 'Primer canon de arrendamiento',
   deposito: 'Depósito de garantía',
   otro: 'Otro concepto',
