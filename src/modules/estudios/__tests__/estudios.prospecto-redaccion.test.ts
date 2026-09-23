@@ -155,6 +155,33 @@ describe('las demas rutas por id que el titular alcanza', () => {
   });
 });
 
+describe('ruta del §10 cuando el analista ya decidio el condicionado', () => {
+  const condicionado = { ...fila('individual'), resultado: 'condicionado' };
+
+  it('aprobado por el analista: la tarjeta deja de decir "Estamos revisando"', async () => {
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'aprobado', estado_pre_cancelacion: null }, error: null });
+    enqueue('estudios', { data: [condicionado], error: null, count: 1 });
+    const { estudios } = await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-1', 'solicitante');
+    const ruta = (estudios[0] as { ruta: { ruta: string; titulo: string } }).ruta;
+    expect(ruta.ruta).not.toBe('en_revision');
+    expect(ruta.titulo).toMatch(/aprobada/);
+  });
+
+  it('negado por el analista: no aprobable, igual que el banner', async () => {
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { estado: 'rechazado', estado_pre_cancelacion: null }, error: null });
+    const e = (await getEstudioById('est-1', 'u-1', 'solicitante')) as { ruta: { ruta: string } };
+    expect(e.ruta.ruta).toBe('no_aprobable');
+  });
+
+  it('aprobado y despues cerrado no pasa a "no aprobable"', async () => {
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, error: null });
+    const e = (await getEstudioById('est-1', 'u-1', 'solicitante')) as { ruta: { ruta: string } };
+    expect(e.ruta.ruta).not.toBe('no_aprobable');
+  });
+});
+
 describe('§5.2 estudio vigente por documento', () => {
   it('filtra el numero en SQL antes del limit (con mas de 25 evaluaciones en la ventana no se pierde)', async () => {
     vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(null);

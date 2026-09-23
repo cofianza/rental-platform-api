@@ -221,7 +221,7 @@ export async function listEstudios(
 
   const [{ data: expediente, error: expError }, , { data, error, count }, autorizacion] = await Promise.all([
     (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
+      .select('id, estado, estado_pre_cancelacion')
       .eq('id', expedienteId)
       .maybeSingle(),
     // Tenant guard: propietario/inmobiliaria/solicitante solo listan los estudios
@@ -248,7 +248,7 @@ export async function listEstudios(
   // listado POR EXPEDIENTE (pocas filas): la ruta va fila a fila y la
   // expiracion con UNA lectura de la autorizacion del titular para todas.
   const filas = (data || []) as unknown as Record<string, unknown>[];
-  const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila)));
+  const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila, expediente as ExpedienteDecision)));
   const conDerivados = await adjuntarExpiracionALista(conRuta, expedienteId, autorizacion);
 
   return {
@@ -527,7 +527,15 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
   await assertExpedienteAccess((data as { expediente_id: string }).expediente_id, userId, userRol);
   assertNoEsEstudioDeOtraPersona((data as { tipo?: string }).tipo, userRol);
 
-  const conRuta = await adjuntarRuta(data as unknown as Record<string, unknown>);
+  // Solo un condicionado necesita el expediente (ver resultadoEfectivo).
+  const row = data as unknown as Record<string, unknown>;
+  const exp = row.resultado === 'condicionado'
+    ? ((await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .select('estado, estado_pre_cancelacion')
+        .eq('id', row.expediente_id as string)
+        .maybeSingle()) as { data: ExpedienteDecision | null }).data
+    : null;
+  const conRuta = await adjuntarRuta(row, exp);
   const conDerivados = await adjuntarExpiracion(conRuta);
 
   // Mismo criterio que en los listados: al prospecto no le viajan ni el motivo
@@ -606,6 +614,24 @@ function veredictoExpiracion(
   });
 }
 
+type ExpedienteDecision = { estado: string | null; estado_pre_cancelacion: string | null };
+
+/**
+ * El analista decide un condicionado del TITULAR cambiando solo el estado del
+ * expediente (aprobarCondicionado / transicionar_expediente): `estudios.resultado`
+ * se queda en 'condicionado' y la tarjeta del prospecto seguía en "Estamos
+ * revisando tu solicitud" con el caso ya aprobado o negado. Mismo criterio que
+ * `resultadoEfectivo` del CRC. `cerrado` solo cuenta como negado si venía de
+ * 'rechazado': un aprobado que luego se cierra no es "no aprobable".
+ */
+function resultadoEfectivo(row: Record<string, unknown>, exp?: ExpedienteDecision | null): EntradaRuta['resultadoVigente'] {
+  const r = (row.resultado as EntradaRuta['resultadoVigente'] | null) ?? 'pendiente';
+  if (r !== 'condicionado' || !exp || row.tipo === 'con_coarrendatario') return r;
+  if (exp.estado === 'aprobado') return 'aprobado';
+  if (exp.estado === 'rechazado' || (exp.estado === 'cerrado' && exp.estado_pre_cancelacion === 'rechazado')) return 'rechazado';
+  return r;
+}
+
 /**
  * Adjunta la ruta del §10 ("Perfil fuerte / medio / Coarrendatario requerido /
  * No aprobable") al detalle del estudio. Ver modules/estudios/rutas-resultado.ts.
@@ -631,7 +657,11 @@ function veredictoExpiracion(
  * ponytail: una sola lectura extra y solo con el flag encendido. Sin flag no
  * hay query adicional en el camino caliente del detalle.
  */
-async function adjuntarRuta<T extends Record<string, unknown>>(row: T): Promise<T & { ruta: Ruta }> {
+async function adjuntarRuta<T extends Record<string, unknown>>(
+  row: T,
+  /** El expediente del estudio: con él un condicionado ya decidido deja de verse "en revisión". */
+  exp?: ExpedienteDecision | null,
+): Promise<T & { ruta: Ruta }> {
   let puntaje: number | null = null;
   const cal = await getCalibracion();
 
@@ -652,7 +682,7 @@ async function adjuntarRuta<T extends Record<string, unknown>>(row: T): Promise<
   const reglas = row.regla_dura_activada;
   const ruta = resolverRuta({
     puntaje,
-    resultadoVigente: (row.resultado as EntradaRuta['resultadoVigente'] | null) ?? 'pendiente',
+    resultadoVigente: resultadoEfectivo(row, exp),
     reglaDuraActivada: Array.isArray(reglas) ? reglas.length > 0 : Boolean(reglas),
     // El coarrendatario se evalua en su propio estudio hijo. Se resuelve con el
     // `tipo` que ya viaja en la fila: 'con_coarrendatario' significa que este
