@@ -133,7 +133,7 @@ async function anotarEstudiosActivos<T extends { id: string }>(rows: T[]): Promi
   });
 }
 
-export async function listInmuebles(query: ListInmueblesQuery, restrictToIds?: string[] | null) {
+export async function listInmuebles(query: ListInmueblesQuery, filtroCartera?: string | null) {
   const { search, tipo, uso, estado, ciudad, estrato,
     propietario_id, inmobiliaria_id, visible_vitrina, include_inactive, rent_min, rent_max } = query;
   // Express 5 req.query es read-only: los defaults de Zod no se aplican, usar fallbacks
@@ -143,21 +143,15 @@ export async function listInmuebles(query: ListInmueblesQuery, restrictToIds?: s
   const sortOrder = query.sortOrder || 'desc';
   const offset = (page - 1) * limit;
 
-  // Multi-tenant: scoping org-aware. restrictToIds = inmueble IDs visibles para
-  // el usuario (su cartera / la de su organización). [] => no ve ninguno.
-  if (restrictToIds !== undefined && restrictToIds !== null && restrictToIds.length === 0) {
-    return { inmuebles: [], pagination: { total: 0, page, limit, totalPages: 0 } };
-  }
-
+  // Multi-tenant: scoping org-aware. filtroCartera = condición de la cartera
+  // del usuario (tenantScope.filtroPortafolio); null => rol interno, sin filtro.
   let qb = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select(INMUEBLE_FIELDS, { count: 'exact' })
     .order(sortBy, { ascending: sortOrder === 'asc' })
     .range(offset, offset + limit - 1);
 
-  if (restrictToIds !== undefined && restrictToIds !== null) {
-    qb = qb.in('id', restrictToIds);
-  }
+  if (filtroCartera) qb = qb.or(filtroCartera);
 
   // Excluir inactivos por defecto
   if (estado) {
@@ -231,7 +225,8 @@ export async function getInmuebleById(id: string) {
   const inmueble = mapWithOwner(data as unknown as InmuebleWithOwnerRow);
 
   // Obtener email del propietario desde auth.users usando RPC
-  if (inmueble.propietario) {
+  const conEmail = async () => {
+    if (!inmueble.propietario) return;
     const propietarioId = inmueble.propietario.id;
     try {
       const { data: userData } = await supabase
@@ -245,11 +240,12 @@ export async function getInmuebleById(id: string) {
       // Si falla obtener email, continuar sin él
       logger.warn({ propietarioId }, 'No se pudo obtener email del propietario');
     }
-  }
+  };
 
   // El detalle tambien lleva el indicador §4.2: la ficha del inmueble es donde
-  // el gestor decide si inicia otro estudio.
-  const [conIndicador] = await anotarEstudiosActivos([inmueble]);
+  // el gestor decide si inicia otro estudio. Correo e indicador en paralelo;
+  // `propietario` es el mismo objeto en las dos filas, así que el correo llega.
+  const [, [conIndicador]] = await Promise.all([conEmail(), anotarEstudiosActivos([inmueble])]);
   return conIndicador;
 }
 
@@ -550,7 +546,7 @@ const SORT_MAP: Record<string, string> = {
   city: 'ciudad',
 };
 
-export async function searchInmuebles(query: SearchInmueblesQuery, restrictToIds?: string[] | null) {
+export async function searchInmuebles(query: SearchInmueblesQuery, filtroCartera?: string | null) {
   const {
     keyword, city, state, property_type,
     stratum_min, stratum_max, rent_min, rent_max,
@@ -564,22 +560,14 @@ export async function searchInmuebles(query: SearchInmueblesQuery, restrictToIds
   const sortOrder = query.sortOrder || 'desc';
   const offset = (page - 1) * limit;
 
-  // Multi-tenant: restrictToIds = inmueble IDs visibles para el usuario (misma
-  // semántica que listInmuebles). [] => no ve ninguno; null/undefined => sin
-  // filtro (rol interno).
-  if (restrictToIds !== undefined && restrictToIds !== null && restrictToIds.length === 0) {
-    return { inmuebles: [], pagination: { total: 0, page, limit, totalPages: 0 } };
-  }
-
+  // Multi-tenant: filtroCartera con la misma semántica que listInmuebles.
   let qb = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select(INMUEBLE_FIELDS, { count: 'exact' })
     .order(SORT_MAP[sortBy] || 'created_at', { ascending: sortOrder === 'asc' })
     .range(offset, offset + limit - 1);
 
-  if (restrictToIds !== undefined && restrictToIds !== null) {
-    qb = qb.in('id', restrictToIds); // ANDs con el .in('id', matchIds) del keyword, igual que list()
-  }
+  if (filtroCartera) qb = qb.or(filtroCartera); // ANDs con el .in('id', matchIds) del keyword, igual que list()
 
   // RN-001: Nunca mostrar inactivos
   if (status) {
@@ -962,28 +950,15 @@ export async function toggleVisibility(
   return getInmuebleById(id);
 }
 
-export async function getFilterOptions(restrictToIds?: string[] | null) {
-  // Multi-tenant: null/undefined => sin filtro (rol interno); [] => cartera
-  // vacía (opciones vacías); [...] => agregar solo sobre esos inmuebles.
-  if (restrictToIds !== undefined && restrictToIds !== null && restrictToIds.length === 0) {
-    return {
-      ciudades: [],
-      departamentos: [],
-      tipos: [],
-      estados: [],
-      estrato: { min: null, max: null },
-      valor_arriendo: { min: null, max: null },
-    };
-  }
-
+export async function getFilterOptions(filtroCartera?: string | null) {
+  // Multi-tenant: null/undefined => sin filtro (rol interno); si no, agrega
+  // solo sobre la cartera del usuario (misma condición que listInmuebles).
   let q = (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select('ciudad, departamento, tipo, estrato, valor_arriendo, estado')
     .neq('estado', 'inactivo');
 
-  if (restrictToIds !== undefined && restrictToIds !== null) {
-    q = q.in('id', restrictToIds);
-  }
+  if (filtroCartera) q = q.or(filtroCartera);
 
   const { data, error } = await q;
 

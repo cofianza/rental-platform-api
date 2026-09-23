@@ -293,12 +293,20 @@ export function expedienteVisible(
  * a los endpoints "mis-*" del dashboard.
  */
 export async function resolvePortfolioInmuebleIds(perfilId: string): Promise<string[]> {
-  const c = (await carteraDe(perfilId, 'portafolio'))!;
   const { data } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select('id')
-    .or(filtroInmuebles(c));
+    .or(await filtroPortafolio(perfilId));
   return ((data as Array<{ id: string }> | null) || []).map((i) => i.id);
+}
+
+/**
+ * La misma cartera que resolvePortfolioInmuebleIds, como condición para un
+ * `.or()` sobre `inmuebles`: la lista filtra en su propia consulta, sin traer
+ * antes todos los ids (una ida menos y sin la lista en la URL).
+ */
+export async function filtroPortafolio(perfilId: string): Promise<string> {
+  return filtroInmuebles((await carteraDe(perfilId, 'portafolio'))!);
 }
 
 /**

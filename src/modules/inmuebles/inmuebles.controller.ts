@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import * as inmueblesService from './inmuebles.service';
 import * as cambiosService from './inmuebles-cambios.service';
-import { resolvePortfolioInmuebleIds, assertInmuebleAccess } from '@/lib/tenantScope';
+import { filtroPortafolio, assertInmuebleAccess } from '@/lib/tenantScope';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 import type {
@@ -25,11 +25,11 @@ export async function list(req: Request, res: Response) {
   // Multi-tenant: propietario/inmobiliaria sólo ven su cartera. Para la
   // inmobiliaria, "su cartera" = la de TODA su organización (org-aware), no
   // sólo lo registrado a su propio perfil. Roles internos: sin restricción.
-  let restrictToIds: string[] | null = null;
+  let filtroCartera: string | null = null;
   if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
-    restrictToIds = await resolvePortfolioInmuebleIds(req.user.id);
+    filtroCartera = await filtroPortafolio(req.user.id);
   }
-  const result = await inmueblesService.listInmuebles(query, restrictToIds);
+  const result = await inmueblesService.listInmuebles(query, filtroCartera);
   sendSuccess(res, result.inmuebles, 200, result.pagination);
 }
 
@@ -37,8 +37,11 @@ export async function getById(req: Request, res: Response) {
   const { id } = req.params as unknown as InmuebleIdParams;
   // Multi-tenant (por-id): propietario/inmobiliaria solo ven inmuebles que
   // administran. No-op para roles internos. 404 cross-tenant.
-  await assertInmuebleAccess(id, req.user?.id, req.user?.rol);
-  const inmueble = await inmueblesService.getInmuebleById(id);
+  // En paralelo: la respuesta solo sale si pasa el guard.
+  const [, inmueble] = await Promise.all([
+    assertInmuebleAccess(id, req.user?.id, req.user?.rol),
+    inmueblesService.getInmuebleById(id),
+  ]);
   sendSuccess(res, inmueble);
 }
 
@@ -75,22 +78,22 @@ export async function search(req: Request, res: Response) {
   const query = req.query as unknown as SearchInmueblesQuery;
   // Multi-tenant: propietario/inmobiliaria solo buscan dentro de su cartera
   // (org-aware). Roles internos (admin/operador/gerencia): sin restricción.
-  let restrictToIds: string[] | null = null;
+  let filtroCartera: string | null = null;
   if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
-    restrictToIds = await resolvePortfolioInmuebleIds(req.user.id);
+    filtroCartera = await filtroPortafolio(req.user.id);
   }
-  const result = await inmueblesService.searchInmuebles(query, restrictToIds);
+  const result = await inmueblesService.searchInmuebles(query, filtroCartera);
   sendSuccess(res, result.inmuebles, 200, result.pagination);
 }
 
 export async function filterOptions(req: Request, res: Response) {
   // Multi-tenant: las opciones de filtro se agregan solo sobre la cartera del
   // usuario (paridad con list()). Roles internos: sin restricción.
-  let restrictToIds: string[] | null = null;
+  let filtroCartera: string | null = null;
   if (req.user?.rol === 'propietario' || req.user?.rol === 'inmobiliaria') {
-    restrictToIds = await resolvePortfolioInmuebleIds(req.user.id);
+    filtroCartera = await filtroPortafolio(req.user.id);
   }
-  const options = await inmueblesService.getFilterOptions(restrictToIds);
+  const options = await inmueblesService.getFilterOptions(filtroCartera);
   sendSuccess(res, options);
 }
 

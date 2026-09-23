@@ -33,8 +33,10 @@ vi.mock('@/lib/supabase', () => ({
 
 import {
   expedienteVisible,
+  filtroPortafolio,
   invalidateMembresiasCache,
   resolveAllowedExpedienteIds,
+  resolvePortfolioInmuebleIds,
 } from '@/lib/tenantScope';
 
 const YO = 'yo';
@@ -123,5 +125,34 @@ describe('resolveAllowedExpedienteIds: la condición que va a PostgREST', () => 
     expect(await resolveAllowedExpedienteIds(YO, 'solicitante')).toEqual([]);
     expect(await resolveAllowedExpedienteIds(YO, 'administrador')).toBeNull();
     expect(ops).toEqual([]);
+  });
+});
+
+describe('filtroPortafolio: la lista de inmuebles filtra en su propia consulta', () => {
+  beforeEach(() => {
+    invalidateMembresiasCache();
+    filas.length = 0;
+    ops.length = 0;
+  });
+
+  it('titular: propios, asignados y la org; sin consultar inmuebles', async () => {
+    filas.push({ inmobiliaria_id: ORG, rol_miembro: 'owner', inmobiliarias: { miembros_ven_todo: false } });
+    expect(await filtroPortafolio(YO)).toBe(`propietario_id.eq.${YO},miembro_responsable_id.eq.${YO},inmobiliaria_id.in.(${ORG})`);
+    expect(ops.filter((o) => o.tabla === 'inmuebles')).toEqual([]);
+  });
+
+  it('miembro restringido o propietario sin org: solo propios y asignados', async () => {
+    filas.push({ inmobiliaria_id: ORG, rol_miembro: 'miembro', inmobiliarias: { miembros_ven_todo: false } });
+    expect(await filtroPortafolio(YO)).toBe(`propietario_id.eq.${YO},miembro_responsable_id.eq.${YO}`);
+    invalidateMembresiasCache();
+    filas.length = 0;
+    expect(await filtroPortafolio(YO)).toBe(`propietario_id.eq.${YO},miembro_responsable_id.eq.${YO}`);
+  });
+
+  it('es la misma condición que usa resolvePortfolioInmuebleIds', async () => {
+    filas.push({ inmobiliaria_id: ORG, rol_miembro: 'miembro', inmobiliarias: { miembros_ven_todo: true } });
+    await resolvePortfolioInmuebleIds(YO);
+    const or = ops.find((o) => o.tabla === 'inmuebles' && o.metodo === 'or');
+    expect(or?.args[0]).toBe(await filtroPortafolio(YO));
   });
 });
