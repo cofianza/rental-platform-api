@@ -197,11 +197,30 @@ export async function obtenerMora(id: string, userId: string, rol: string) {
 // Crear ticket de mora
 // ============================================================
 
+function moraDuplicada(ticket?: string) {
+  return AppError.conflict(
+    `Ya hay una mora activa para este canon${ticket ? ` (${ticket})` : ''}. Gestiónala desde la lista.`,
+    'MORA_DUPLICADA',
+  );
+}
+
 export async function reportarMora(input: ReportarMoraInput, userId: string, rol: string) {
   const snap = await snapshotContrato(input.contrato_id);
   // Solo sobre contratos de la cartera propia: sin esto se reportaba (y se le
   // escribía por WhatsApp al inquilino) sobre el contrato de otra agencia por UUID.
   await assertExpedienteAccess(snap.expediente_id, userId, rol);
+
+  // Un canon, una mora activa: dos reportes del mismo canon (dos miembros, el
+  // dueño y el operador) mandaban dos cobros al inquilino e inflaban los KPI.
+  // El índice único parcial (migración 20260929000027) cubre el doble envío.
+  const { data: yaActiva } = (await db('moras_tickets')
+    .select('ticket_numero')
+    .eq('contrato_id', snap.contrato_id)
+    .eq('fecha_vencimiento_canon', input.fecha_vencimiento_canon)
+    .in('estado', ESTADOS_ACTIVOS as unknown as string[])
+    .limit(1)
+    .maybeSingle()) as { data: { ticket_numero: string } | null };
+  if (yaActiva) throw moraDuplicada(yaActiva.ticket_numero);
 
   // Insertar el ticket — ticket_numero lo genera el DEFAULT en SQL
   const { data: inserted, error } = await db('moras_tickets')
@@ -226,6 +245,7 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
     )
     .single();
 
+  if (error?.code === '23505') throw moraDuplicada();
   if (error || !inserted) {
     logger.error({ error: error?.message, contratoId: input.contrato_id }, 'Error al reportar mora');
     throw fromSupabaseError(error ?? new Error('Error al crear el ticket de mora'));

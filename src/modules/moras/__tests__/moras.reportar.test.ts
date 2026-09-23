@@ -59,6 +59,7 @@ function prepararReporte() {
   enqueue('expedientes', { data: { id: 'exp1', solicitante_id: null, inmueble_id: 'i1' }, error: null });
   enqueue('inmuebles', { data: { codigo: 'A1', direccion: 'Cra 7 # 45-10', propietario_id: 'p1' }, error: null });
   enqueue('moras_tickets',
+    { data: null, error: null }, // sin mora activa del mismo canon
     {
       data: {
         id: 'm1', ticket_numero: 'MOR-2026-001', inquilino_telefono: null,
@@ -128,5 +129,39 @@ describe('escalarMora — el aviso al inquilino', () => {
     const r = await escalarMora('m1', {}, 'op', 'operador_analista');
     expect(r).toMatchObject({ whatsapp_estado: 'sin_telefono' });
     expect(mensajesDeSistema()[0]).toContain('Escalado a Fase 2 (Urgencia). No se pudo avisar por WhatsApp');
+  });
+});
+
+describe('reportarMora — una mora activa por canon', () => {
+  const prepararContrato = () => {
+    enqueue('contratos', { data: { id: 'c1', expediente_id: 'exp1', estado: 'vigente' }, error: null });
+    enqueue('expedientes', { data: { id: 'exp1', solicitante_id: null, inmueble_id: 'i1' }, error: null });
+    enqueue('inmuebles', { data: { codigo: 'A1', direccion: 'Cra 7', propietario_id: 'p1' }, error: null });
+  };
+
+  it('si ya hay una activa del mismo canon responde 409 sin insertar ni escribir al inquilino', async () => {
+    prepararContrato();
+    enqueue('moras_tickets', { data: { ticket_numero: 'MOR-2026-001' }, error: null });
+    await expect(reportarMora(INPUT as never, 'u2', 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'MORA_DUPLICADA',
+    });
+    expect(ops.filter((o) => o.method === 'insert')).toEqual([]);
+    expect(mockEnviarTemplate).not.toHaveBeenCalled();
+    const filtros = ops.filter((o) => o.table === 'moras_tickets' && o.method === 'eq').map((o) => o.args);
+    expect(filtros).toEqual([['contrato_id', 'c1'], ['fecha_vencimiento_canon', '2026-09-05']]);
+  });
+
+  it('dos reportes a la vez: el índice único se traduce al mismo 409', async () => {
+    prepararContrato();
+    enqueue('moras_tickets',
+      { data: null, error: null }, // no había activa al mirar
+      { data: null, error: { code: '23505', message: 'duplicate key' } }, // la otra ganó
+    );
+    await expect(reportarMora(INPUT as never, 'u2', 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'MORA_DUPLICADA',
+    });
+    expect(mockEnviarTemplate).not.toHaveBeenCalled();
   });
 });
