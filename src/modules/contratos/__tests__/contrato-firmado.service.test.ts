@@ -338,6 +338,19 @@ describe('contrato-firmado.service', () => {
         descargarContratoFirmado(CONTRATO_ID, USER_ID, 'propietario'),
       ).rejects.toThrow('No tiene permiso');
     });
+
+    it('la vista previa del detalle se registra como visualización, no como descarga', async () => {
+      const { logAudit } = await import('@/lib/auditLog');
+      const insert = vi.fn().mockResolvedValue({ error: null });
+      mockFrom.mockReturnValueOnce(setupSelectSingle(mockContratoConFirmado, null));
+      mockCreateSignedUrl.mockResolvedValueOnce({ data: { signedUrl: 'https://url' }, error: null });
+      mockFrom.mockReturnValueOnce({ insert });
+
+      await descargarContratoFirmado(CONTRATO_ID, USER_ID, 'administrador', undefined, undefined, true);
+
+      expect(insert).toHaveBeenCalledWith(expect.objectContaining({ tipo_accion: 'visualizacion' }));
+      expect(logAudit).not.toHaveBeenCalled();
+    });
   });
 
   it('un usuario sin permiso no dispara el archivado desde Auco (el permiso va primero)', async () => {

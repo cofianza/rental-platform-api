@@ -212,6 +212,9 @@ export async function descargarContratoFirmado(
   userRol: string,
   ip?: string,
   userAgent?: string,
+  // La vista previa del detalle no es una descarga: queda como 'visualizacion'
+  // y sin auditoría de descarga (si no, el log de accesos se llena de falsas).
+  vista = false,
 ) {
   let contrato = await fetchContratoFirmado(contratoId);
   await assertPuedeDescargarFirmado(contrato.expediente_id, userId, userRol);
@@ -284,17 +287,19 @@ export async function descargarContratoFirmado(
   }
 
   // Registrar acceso
-  await registrarAcceso(contratoId, userId, 'descarga', ip, userAgent);
+  await registrarAcceso(contratoId, userId, vista ? 'visualizacion' : 'descarga', ip, userAgent);
 
   // Audit log
-  logAudit({
-    usuarioId: userId,
-    accion: AUDIT_ACTIONS.CONTRATO_FIRMADO_DOWNLOADED,
-    entidad: AUDIT_ENTITIES.CONTRATO,
-    entidadId: contratoId,
-    detalle: { nombre_archivo: contrato.firmado_nombre_archivo },
-    ip,
-  });
+  if (!vista) {
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.CONTRATO_FIRMADO_DOWNLOADED,
+      entidad: AUDIT_ENTITIES.CONTRATO,
+      entidadId: contratoId,
+      detalle: { nombre_archivo: contrato.firmado_nombre_archivo },
+      ip,
+    });
+  }
 
   return {
     url: urlData.signedUrl,

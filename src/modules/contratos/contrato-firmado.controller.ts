@@ -37,6 +37,7 @@ export async function descargar(req: Request, res: Response) {
     req.user!.rol,
     req.ip as string | undefined,
     req.headers['user-agent'] as string | undefined,
+    req.query.vista === '1',
   );
   sendSuccess(res, result);
 }
