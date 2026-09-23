@@ -730,9 +730,53 @@ export async function rechazarDocumento(
     ip,
   });
 
-  // 5. Return with signed URL
+  // 5. Avisar a quien debe corregirlo (best-effort, no frena el rechazo)
+  void avisarRechazoDocumento(doc, motivoRechazo, userId);
+
+  // 6. Return with signed URL
   const archivo_url = await generateViewUrl(result.storage_key);
   return { ...result, archivo_url };
+}
+
+/**
+ * Sin este aviso el rechazo solo quedaba en la bitácora y el documento
+ * esperaba la resubida hasta que alguien abriera el estudio. Avisa (in-app +
+ * correo) a quien lo subió, al dueño del inmueble y al miembro responsable,
+ * sin repetir a nadie ni avisar a quien rechazó. Nunca lanza.
+ */
+async function avisarRechazoDocumento(doc: DocumentoRow, motivo: string, revisorId: string): Promise<void> {
+  try {
+    const { data } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('numero, miembro_responsable_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id)')
+      .eq('id', doc.expediente_id)
+      .maybeSingle();
+    const e = data as {
+      numero: string | null;
+      miembro_responsable_id: string | null;
+      inmuebles: { propietario_id: string | null } | null;
+    } | null;
+    const destinatarios = new Set(
+      [doc.subido_por, e?.inmuebles?.propietario_id, e?.miembro_responsable_id].filter(
+        (id): id is string => !!id && id !== revisorId,
+      ),
+    );
+    if (destinatarios.size === 0) return;
+
+    const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
+    const aviso = {
+      tipo: 'documento.rechazado',
+      titulo: 'Cofianza rechazó un documento del estudio',
+      mensaje:
+        `El documento «${doc.nombre_original}»${e?.numero ? ` del estudio ${e.numero}` : ''} fue rechazado. ` +
+        `Motivo: ${motivo}. Sube uno nuevo desde la pestaña Documentos del estudio.`,
+      link: `/expedientes/${doc.expediente_id}`,
+      payload: { expediente_id: doc.expediente_id, documento_id: doc.id },
+    };
+    for (const userId of destinatarios) await notificarYCorreo({ userId, ...aviso });
+  } catch (err) {
+    logger.warn({ error: err, documentoId: doc.id }, 'No se pudo avisar el rechazo del documento');
+  }
 }
 
 // ============================================================
@@ -990,12 +1034,9 @@ export async function iniciarReemplazo(
     );
   }
 
-  // 3. Validate ownership
-  if (doc.subido_por !== userId && userRole !== 'administrador') {
-    throw AppError.forbidden(
-      'Solo el propietario del documento o un administrador puede reemplazarlo',
-    );
-  }
+  // 3. Quien puede subir al estudio puede reemplazar (no solo quien lo subió):
+  // 404 fuera de la cartera; no-op para roles internos.
+  await assertExpedienteAccess(doc.expediente_id, userId, userRole);
 
   // 4. Validate expediente not terminal
   const { data: expediente, error: expError } = await (supabase
@@ -1109,15 +1150,7 @@ export async function confirmarReemplazo(
     );
   }
 
-  // 1b. Ownership del documento (consistente con iniciarReemplazo): solo quien
-  // lo subió o un admin puede reemplazarlo.
-  if (doc.subido_por !== userId && userRol !== 'administrador') {
-    throw AppError.forbidden(
-      'Solo el propietario del documento o un administrador puede reemplazarlo',
-    );
-  }
-
-  // 1c. Tenant guard: 404 si el usuario no puede acceder a este expediente
+  // 1b. Tenant guard (mismo criterio que iniciarReemplazo): 404 si el usuario no puede acceder a este expediente
   // (no-op para roles internos / llamadas sin identidad).
   await assertExpedienteAccess(doc.expediente_id, userId, userRol);
 
