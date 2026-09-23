@@ -5,6 +5,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendWelcomeEmail } from '@/lib/email';
 import { invalidateAuthCache } from '@/middleware/auth';
+import { ensureOrgConOwner, resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
 import type { CreateUserInput, UpdateUserInput, ListUsersQuery, ResetPasswordByAdminInput } from './users.schema';
 
 interface UserRow {
@@ -124,6 +125,8 @@ export async function createUser(input: CreateUserInput, createdBy: string, ip?:
     logger.error({ error: updateError.message, userId }, 'Error al actualizar perfil');
   }
 
+  if (rol === 'inmobiliaria') await asegurarOrgPropia(userId, `${nombre} ${apellido ?? ''}`);
+
   // Registrar en bitacora
   logAudit({
     usuarioId: createdBy,
@@ -144,6 +147,22 @@ export async function createUser(input: CreateUserInput, createdBy: string, ip?:
 
   // Retornar usuario creado
   return getUserById(userId);
+}
+
+/**
+ * Una inmobiliaria dada de alta desde el panel necesita su organización con
+ * ella de titular, igual que en el registro. Sin eso /auth/me le da
+ * rol_miembro null, la web le muestra sus datos en solo lectura y
+ * createInmueble la manda a completar esos mismos datos: no podía operar.
+ * Log-only como en el registro: la cuenta ya existe y ensureOrgConOwner es
+ * idempotente (la migración 202609290016 repara las que quedaron sin org).
+ */
+async function asegurarOrgPropia(userId: string, nombre: string): Promise<void> {
+  try {
+    await ensureOrgConOwner(userId, nombre.trim());
+  } catch (orgError) {
+    logger.error({ error: (orgError as Error).message, userId }, 'Error al crear organización de inmobiliaria');
+  }
 }
 
 export async function updateUser(userId: string, input: UpdateUserInput, updatedBy: string, ip?: string) {
@@ -168,6 +187,10 @@ export async function updateUser(userId: string, input: UpdateUserInput, updated
   if (error) {
     logger.error({ error: error.message, userId }, 'Error al actualizar usuario');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el usuario');
+  }
+
+  if (input.rol === 'inmobiliaria' && previousUser.rol !== 'inmobiliaria' && !(await resolveInmobiliariaIdForPerfil(userId))) {
+    await asegurarOrgPropia(userId, `${input.nombre ?? previousUser.nombre} ${input.apellido ?? previousUser.apellido ?? ''}`);
   }
 
   // Construir diff before/after solo con campos modificados
@@ -277,22 +300,10 @@ export interface OrphanAuthUser {
 }
 
 export async function listOrphanAuthUsers(): Promise<OrphanAuthUser[]> {
-  // 1. Traer todos los IDs en perfiles (un solo query — escala fino mientras
-  //    seamos < ~50k usuarios; cuando crezca, mover a una RPC con LEFT JOIN).
-  const { data: perfilesData, error: perfilesErr } = await (supabase
-    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('id');
-
-  if (perfilesErr) {
-    logger.error({ error: perfilesErr.message }, 'Error al listar perfiles para detectar huérfanos');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar perfiles');
-  }
-
-  const perfilIds = new Set(
-    (perfilesData as unknown as Array<{ id: string }>).map((r) => r.id),
-  );
-
-  // 2. Iterar auth.users paginando.
+  // Iterar auth.users paginando y, por cada lote, preguntar cuáles tienen
+  // perfil. Antes se traían todos los perfiles en una consulta, pero PostgREST
+  // corta en 1000 filas: pasado ese número, cuentas reales salían como
+  // huérfanas (y el panel las borra). Un lote de 200 nunca llega al tope.
   const PAGE_SIZE = 200;
   const orphans: OrphanAuthUser[] = [];
   let page = 1;
@@ -307,6 +318,16 @@ export async function listOrphanAuthUsers(): Promise<OrphanAuthUser[]> {
       throw new AppError(500, 'INTERNAL_ERROR', 'Error al iterar auth.users');
     }
     const batch = data?.users ?? [];
+    if (!batch.length) break;
+    const { data: perfilesData, error: perfilesErr } = await (supabase
+      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .in('id', batch.map((u) => u.id));
+    if (perfilesErr) {
+      logger.error({ error: perfilesErr.message }, 'Error al listar perfiles para detectar huérfanos');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar perfiles');
+    }
+    const perfilIds = new Set((perfilesData as unknown as Array<{ id: string }>).map((r) => r.id));
     for (const u of batch) {
       if (!perfilIds.has(u.id)) {
         orphans.push({
@@ -427,7 +448,7 @@ export interface DeleteUserResult {
 export async function deleteUser(
   userId: string,
   requestingUserId: string,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; soloHuerfano?: boolean } = {},
   ip?: string,
 ): Promise<DeleteUserResult> {
   if (userId === requestingUserId) {
@@ -454,6 +475,12 @@ export async function deleteUser(
     }
     email = authResult.user.email ?? null;
     esHuerfano = true;
+  }
+
+  // El panel de huérfanos solo debe poder borrar huérfanos: si la lista se
+  // equivocó (o quedó vieja), una cuenta real no se borra desde ahí.
+  if (options.soloHuerfano && !esHuerfano) {
+    throw AppError.conflict('Esta cuenta sí tiene perfil; no es huérfana. Gestiónala desde Usuarios.', 'USER_NOT_ORPHAN');
   }
 
   // 2. Pre-flight check de relaciones bloqueantes — solo aplica si tiene

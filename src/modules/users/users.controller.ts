@@ -50,7 +50,8 @@ export async function activate(req: Request, res: Response) {
 export async function remove(req: Request, res: Response) {
   const { id } = req.params as unknown as UserIdParams;
   const force = req.query.force === 'true' || req.query.force === '1';
-  const result = await usersService.deleteUser(id, req.user!.id, { force }, req.ip);
+  const soloHuerfano = req.query.solo_huerfano === 'true';
+  const result = await usersService.deleteUser(id, req.user!.id, { force, soloHuerfano }, req.ip);
   sendSuccess(res, result);
 }
 
