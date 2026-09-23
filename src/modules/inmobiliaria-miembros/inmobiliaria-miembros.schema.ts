@@ -37,6 +37,14 @@ export const adminOrgParamSchema = z.object({
 });
 export type AdminOrgParam = z.infer<typeof adminOrgParamSchema>;
 
+// Contratos V3 §7.2: modalidad de la fianza que fija el convenio (null = no fija).
+export const adminActualizarOrgSchema = z
+  .object({
+    modalidad_fianza_defecto: z.enum(['trasladada', 'tradicional']).nullable(),
+  })
+  .strict();
+export type AdminActualizarOrgInput = z.infer<typeof adminActualizarOrgSchema>;
+
 export const adminOrgMiembroParamsSchema = z.object({
   orgId: z.string().uuid({ message: 'ID de inmobiliaria inválido' }),
   miembroId: z.string().uuid({ message: 'ID de miembro inválido' }),

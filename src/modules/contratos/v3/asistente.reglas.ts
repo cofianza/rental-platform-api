@@ -139,6 +139,14 @@ export interface Fuentes {
     propiedad_horizontal: boolean | null;
     parqueadero: boolean | null;
     cuarto_util: boolean | null;
+    // §1.4: lo que el asistente confirma vuelve al registro del inmueble (migración 20260928000001).
+    nombre_copropiedad: string | null;
+    parqueadero_numero: string | null;
+    parqueadero_moto: boolean | null;
+    parqueadero_moto_numero: string | null;
+    cuarto_util_numero: string | null;
+    /** inmuebles.administracion; null si no hay (o no es > 0). */
+    administracionCop: number | null;
   };
   solicitante: {
     nombre: string;
@@ -180,9 +188,14 @@ export interface Fuentes {
     telefono: string | null;
     estado: string;
     estudio_id: string | null;
+    /** Los da el coarrendatario al aceptar la invitación (§8.7.2); null en las anteriores. */
+    direccion: string | null;
+    municipio: string | null;
     estudio: { estado: string; resultado: string | null } | null;
   } | null;
   arrendador: PerfilArrendador;
+  /** §7.2: modalidad que fija el convenio de la inmobiliaria (la administra Cofianza); null = no fija. */
+  modalidadFianzaDefecto: Paso1['modalidad'] | null;
   /** Etiquetas de checkPerfilCompletitud (perfil canónico de la inmobiliaria). */
   completitudFaltantes: string[];
   /** Contratos legacy (destinacion NULL) vivos en el estudio: G6. */
@@ -456,15 +469,28 @@ export function prefill(f: Fuentes, hoy: string, cal: Calibracion): Prefill {
   const inicio = f.expediente.fecha_inicio_contrato?.slice(0, 10);
   const inicioVigente = inicio && inicio >= hoy ? inicio : null;
   return {
-    1: { ruta: 'A', canonCop: inm.valorArriendoCop },
+    1: {
+      ruta: 'A',
+      canonCop: inm.valorArriendoCop,
+      // §7.2: preseleccionada y modificable contrato por contrato.
+      ...(f.modalidadFianzaDefecto ? { modalidad: f.modalidadFianzaDefecto } : {}),
+    },
     2: {
-      usos: { carro: inm.parqueadero ? '' : null, moto: null, util: inm.cuarto_util ? '' : null },
+      // '' = sí, falta el número; null = no.
+      usos: {
+        carro: inm.parqueadero ? (inm.parqueadero_numero ?? '') : null,
+        moto: inm.parqueadero_moto ? (inm.parqueadero_moto_numero ?? '') : null,
+        util: inm.cuarto_util ? (inm.cuarto_util_numero ?? '') : null,
+      },
       ...(inm.propiedad_horizontal !== null && { propiedadHorizontal: inm.propiedad_horizontal }),
+      ...(inm.propiedad_horizontal && inm.nombre_copropiedad ? { nombreCopropiedad: inm.nombre_copropiedad } : {}),
     },
     3: {
       vigenciaMeses: f.expediente.duracion_contrato_meses ?? cal.VIGENCIA_MESES_DEFECTO,
       // §8.3.3: la entrega arranca igual a la iniciación.
       ...(inicioVigente ? { fechaInicio: inicioVigente, fechaEntrega: inicioVigente } : {}),
+      // §1.3: el valor de la cuota sale del registro; a cargo de quién e incluida, no se adivinan.
+      ...(inm.propiedad_horizontal && inm.administracionCop ? { administracion: { valorCop: inm.administracionCop } } : {}),
     },
     5: {
       ...(p.domicilio_ciudad?.trim() ? { ciudadFirma: p.domicilio_ciudad } : {}),
@@ -482,11 +508,48 @@ export function prefill(f: Fuentes, hoy: string, cal: Calibracion): Prefill {
           telefono: s.telefono ?? '',
         },
         coarrendatario: coa
-          ? { direccion: '', municipio: '', email: coa.email ?? '', telefono: coa.telefono ?? '' }
+          ? {
+              direccion: coa.direccion ?? '',
+              municipio: coa.municipio ?? '',
+              email: coa.email ?? '',
+              telefono: coa.telefono ?? '',
+            }
           : null,
       },
     },
   };
+}
+
+/**
+ * §1.4: lo que el paso 2 (o el 3, la cuota) confirma del inmueble y difiere de
+ * su registro, listo para escribirse en `inmuebles`; null si no cambia nada.
+ */
+export function cambiosInmueble(
+  inm: Fuentes['inmueble'],
+  paso: { paso: 2; datos: Paso2 } | { paso: 3; datos: Paso3 },
+): Record<string, string | number | boolean | null> | null {
+  let nuevo: Record<string, string | number | boolean | null>;
+  if (paso.paso === 2) {
+    const { usos, propiedadHorizontal: ph, nombreCopropiedad } = paso.datos;
+    nuevo = {
+      propiedad_horizontal: ph,
+      nombre_copropiedad: ph ? nombreCopropiedad : null,
+      parqueadero: usos.carro !== null,
+      parqueadero_numero: usos.carro,
+      parqueadero_moto: usos.moto !== null,
+      parqueadero_moto_numero: usos.moto,
+      cuarto_util: usos.util !== null,
+      cuarto_util_numero: usos.util,
+    };
+  } else {
+    const adm = paso.datos.administracion;
+    // 0 no dice nada de la cuota (p. ej. incluida en el canon): no borra la del registro.
+    if (!adm || adm.valorCop <= 0) return null;
+    nuevo = { administracion: adm.valorCop };
+  }
+  const actual: Record<string, unknown> = { ...inm, administracion: inm.administracionCop ?? 0 };
+  const cambios = Object.fromEntries(Object.entries(nuevo).filter(([k, v]) => actual[k] !== v));
+  return Object.keys(cambios).length ? cambios : null;
 }
 
 const PASOS: NumeroPaso[] = [1, 2, 3, 4, 5];

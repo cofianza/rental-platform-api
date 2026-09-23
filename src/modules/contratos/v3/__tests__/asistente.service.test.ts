@@ -255,6 +255,8 @@ interface Carga {
   expedienteError?: boolean;
   /** Filas de clausulas_adicionales: solo si el paso 4 guardado trae cláusulas. */
   catalogo?: unknown[];
+  /** inmuebles.nombre_copropiedad (§1.4). */
+  copropiedad?: string | null;
 }
 
 /** Encola UNA lectura completa de cargarFuentes (cada tabla, en su orden). */
@@ -283,6 +285,12 @@ function encolarCarga(o: Carga = {}) {
               propiedad_horizontal: o.propiedadHorizontal === undefined ? false : o.propiedadHorizontal,
               parqueadero: false,
               cuarto_util: false,
+              nombre_copropiedad: o.copropiedad ?? null,
+              parqueadero_numero: null,
+              parqueadero_moto: false,
+              parqueadero_moto_numero: null,
+              cuarto_util_numero: null,
+              administracion: null,
             },
             solicitantes: {
               nombre: 'Juan Carlos',
@@ -649,8 +657,36 @@ describe('guardarPaso', () => {
     const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente } };
     expect(upd.datos_variables.asistente).toMatchObject({ paso1: COMPLETO.paso1, paso2: PASO2_PH.datos });
     expect(upd.datos_variables.asistente.actualizadoEn).toBe('2026-09-15T15:00:00.000Z');
-    expect(opsDe('inmuebles', 'update').map((o) => o.args[0])).toEqual([{ propiedad_horizontal: true }]);
+    expect(opsDe('inmuebles', 'update').map((o) => o.args[0])).toEqual([
+      { propiedad_horizontal: true, nombre_copropiedad: 'Edificio Torres del Parque' },
+    ]);
     expect(opsDe('inmuebles', 'eq').map((o) => o.args)).toEqual([['id', 'inm-1']]);
+  });
+
+  it('§1.4: los usos conexos con su número y la cuota de administración vuelven al registro del inmueble', async () => {
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: true, copropiedad: 'Edificio Torres del Parque' });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: true, copropiedad: 'Edificio Torres del Parque' });
+    await guardarPaso(EXP, { ...PASO2_PH, datos: { ...PASO2_PH.datos, usos: { carro: '12', moto: null, util: 'D-3' } } }, USER, ROL);
+    expect(opsDe('inmuebles', 'update').map((o) => o.args[0])).toEqual([
+      { parqueadero: true, parqueadero_numero: '12', cuarto_util: true, cuarto_util_numero: 'D-3' },
+    ]);
+
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: true, copropiedad: 'Edificio Torres del Parque' });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: true, copropiedad: 'Edificio Torres del Parque' });
+    const adm = { aCargoDe: 'arrendatario' as const, valorCop: 350000, incluidaEnCanon: false };
+    await guardarPaso(EXP, { paso: 3, datos: { ...COMPLETO.paso3!, administracion: adm } }, USER, ROL);
+    expect(opsDe('inmuebles', 'update').map((o) => o.args[0]).at(-1)).toEqual({ administracion: 350000 });
+  });
+
+  it('§1.4: si el registro del inmueble no se puede escribir → 503 (el paso ya quedó guardado; guardar de nuevo reintenta)', async () => {
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: false });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    enqueue('inmuebles', { data: null, error: { message: 'timeout' } });
+    const e = await error(guardarPaso(EXP, PASO2_PH, USER, ROL));
+    expect(e).toMatchObject({ statusCode: 503, errorCode: 'INMUEBLE_NO_ACTUALIZADO' });
+    expect(opsDe('contratos', 'update')).toHaveLength(1);
   });
 
   it('volver a guardar un paso sin cambios conserva actualizadoEn (la vista previa sigue vigente)', async () => {
@@ -666,10 +702,10 @@ describe('guardarPaso', () => {
     expect(upd.datos_variables.asistente.actualizadoEn).toBe('antes');
   });
 
-  it('paso 2 con la misma propiedad horizontal no toca el inmueble', async () => {
-    encolarCarga({ contratos: [fila()], propiedadHorizontal: true });
+  it('paso 2 igual al registro del inmueble no lo toca', async () => {
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: true, copropiedad: 'Edificio Torres del Parque' });
     enqueue('contratos', { data: [{ id: CTO }], error: null });
-    encolarCarga({ contratos: [fila()], propiedadHorizontal: true });
+    encolarCarga({ contratos: [fila()], propiedadHorizontal: true, copropiedad: 'Edificio Torres del Parque' });
 
     await guardarPaso(EXP, PASO2_PH, USER, ROL);
 

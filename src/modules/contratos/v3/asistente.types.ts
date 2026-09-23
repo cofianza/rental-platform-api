@@ -45,7 +45,13 @@ export interface EstadoAsistente {
   contrato: null | {
     id: string; numero: string; estado: 'borrador';
     guardados: Partial<Pasos>;
-    prefill: { 1: Partial<Paso1>; 2: Partial<Paso2>; 3: Partial<Paso3>; 5: Partial<Paso5> };
+    /** Paso 3: de la cuota de administración solo se precarga el valor (§1.3). */
+    prefill: {
+      1: Partial<Paso1>;
+      2: Partial<Paso2>;
+      3: Partial<Omit<Paso3, 'administracion'>> & { administracion?: Partial<NonNullable<Paso3['administracion']>> };
+      5: Partial<Paso5>;
+    };
     faltantes: { paso: NumeroPaso; mensaje: string }[];
     documento: null | { generacion: number; generadoEn: string; avisos: string[]; pendientes: string[]; desactualizado: boolean };
     /** Ruta B: el contrato propio de la inmobiliaria, tal como se cargó (sin modificar, §4.4). */

@@ -12,6 +12,7 @@ import {
   cambiarRolMiembroSchema,
   adminOrgParamSchema,
   adminOrgMiembroParamsSchema,
+  adminActualizarOrgSchema,
 } from './inmobiliaria-miembros.schema';
 import * as controller from './inmobiliaria-miembros.controller';
 
@@ -106,6 +107,13 @@ export const adminInmobiliariasRouter = Router();
 adminInmobiliariasRouter.use(authMiddleware, roleGuard(['administrador']), invalidaCacheMembresias);
 
 adminInmobiliariasRouter.get('/', controller.adminListOrgs);
+
+// Convenio de la inmobiliaria (Contratos V3 §7.2): modalidad de la fianza por defecto.
+adminInmobiliariasRouter.patch(
+  '/:orgId',
+  validate({ params: adminOrgParamSchema, body: adminActualizarOrgSchema }),
+  controller.adminActualizarOrg,
+);
 
 adminInmobiliariasRouter.get(
   '/:orgId/miembros',

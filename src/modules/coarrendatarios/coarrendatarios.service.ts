@@ -676,7 +676,7 @@ export async function aceptarInvitacion(
   token: string,
   ip: string,
   userAgent: string,
-  _input: AceptarCoarrendatarioInput,
+  input: AceptarCoarrendatarioInput,
 ): Promise<AceptarResult> {
   // 1. Cargar.
   const { data: coaRow, error } = await (supabase
@@ -747,6 +747,9 @@ export async function aceptarInvitacion(
       aceptado_at: aceptadoAt,
       aceptado_ip: ip.slice(0, 45),
       aceptado_user_agent: userAgent?.slice(0, 1000) ?? null,
+      // §8.7.2 (Contratos V3): el paso 5 del asistente los precarga.
+      ...(input.direccion ? { direccion: input.direccion } : {}),
+      ...(input.municipio ? { municipio: input.municipio } : {}),
       updated_at: aceptadoAt,
     } as never)
     .eq('id', coa.id)

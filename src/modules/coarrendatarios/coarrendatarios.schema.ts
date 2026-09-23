@@ -38,6 +38,10 @@ export const aceptarCoarrendatarioSchema = z.object({
   // Confirmación explícita de cada checkbox para auditoría legal.
   acepta_terminos: z.literal(true, { message: 'Debe aceptar los términos y condiciones' }),
   acepta_datos: z.literal(true, { message: 'Debe autorizar el tratamiento de datos' }),
+  // Contratos V3 §8.7.2: sus datos de notificación para el contrato. Opcionales
+  // aquí (la pantalla los pide) para no romper una aceptación a medio deploy.
+  direccion: z.string().trim().min(5, 'Escribe tu dirección completa').max(300, 'Máximo 300 caracteres').optional(),
+  municipio: z.string().trim().min(2, 'Escribe tu municipio').max(120, 'Máximo 120 caracteres').optional(),
 });
 
 export type InvitarCoarrendatarioInput = z.infer<typeof invitarCoarrendatarioSchema>;

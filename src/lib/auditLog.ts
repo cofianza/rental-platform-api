@@ -133,6 +133,8 @@ export const AUDIT_ACTIONS = {
   MIEMBRO_REVOCADO: 'miembro_revocado',
   MIEMBRO_ACEPTO: 'miembro_acepto',
   MIEMBRO_ROL_CAMBIADO: 'miembro_rol_cambiado',
+  // Convenio de la inmobiliaria (Contratos V3 §7.2): detalle {campo, antes, despues}.
+  INMOBILIARIA_CONVENIO_ACTUALIZADO: 'inmobiliaria_convenio_actualizado',
   // Cláusulas adicionales (Contratos V3, Entrega 4). GUARDADA: detalle
   // {op: crear|editar|eliminar|inhabilitar|reactivar, antes?, despues?, motivo?}.
   CLAUSULA_ADICIONAL_GUARDADA: 'clausula_adicional_guardada',
@@ -165,6 +167,7 @@ export const AUDIT_ENTITIES = {
   PAGO: 'pago',
   WHATSAPP: 'whatsapp',
   INMOBILIARIA_MIEMBRO: 'inmobiliaria_miembro',
+  INMOBILIARIA: 'inmobiliaria',
   CLAUSULA_ADICIONAL: 'clausula_adicional',
 } as const;
 

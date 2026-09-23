@@ -11,6 +11,7 @@ import type {
   CambiarRolMiembroInput,
   AdminOrgParam,
   AdminOrgMiembroParams,
+  AdminActualizarOrgInput,
 } from './inmobiliaria-miembros.schema';
 
 // ── Autenticado (owner / miembro de la inmobiliaria) ──────────
@@ -80,6 +81,13 @@ export async function registrar(req: Request, res: Response) {
 
 export async function adminListOrgs(_req: Request, res: Response) {
   const data = await service.adminListInmobiliarias();
+  sendSuccess(res, data);
+}
+
+export async function adminActualizarOrg(req: Request, res: Response) {
+  const { orgId } = req.params as unknown as AdminOrgParam;
+  const { modalidad_fianza_defecto } = req.body as AdminActualizarOrgInput;
+  const data = await service.adminActualizarInmobiliaria(req.user!.id, orgId, modalidad_fianza_defecto);
   sendSuccess(res, data);
 }
 

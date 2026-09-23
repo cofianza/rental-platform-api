@@ -49,6 +49,7 @@ import {
   avisosDePendientes,
   bloqueoNoImprimible,
   bloqueosAdicionales,
+  cambiosInmueble,
   evaluarBloqueos,
   evaluarCanon,
   faltantes,
@@ -151,9 +152,10 @@ interface FilaExpediente {
   estado: string;
   duracion_contrato_meses: number | null;
   fecha_inicio_contrato: string | null;
-  inmuebles: (Omit<Fuentes['inmueble'], 'valorArriendoCop' | 'inmobiliaria_id'> & {
+  inmuebles: (Omit<Fuentes['inmueble'], 'valorArriendoCop' | 'inmobiliaria_id' | 'administracionCop'> & {
     inmobiliaria_id: string | null;
     valor_arriendo: number | string;
+    administracion: number | string | null;
   }) | null;
   solicitantes: Fuentes['solicitante'] | null;
 }
@@ -176,7 +178,9 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
         `id, numero, estado, duracion_contrato_meses, fecha_inicio_contrato,
         inmuebles!expedientes_inmueble_id_fkey(
           id, codigo, direccion, ciudad, uso, estado, reservado_por_expediente_id,
-          inmobiliaria_id, valor_arriendo, propiedad_horizontal, parqueadero, cuarto_util
+          inmobiliaria_id, valor_arriendo, propiedad_horizontal, parqueadero, cuarto_util,
+          nombre_copropiedad, parqueadero_numero, parqueadero_moto, parqueadero_moto_numero,
+          cuarto_util_numero, administracion
         ),
         solicitantes(nombre, apellido, tipo_documento, numero_documento, tipo_persona, email, telefono, direccion, ciudad)`,
       )
@@ -200,13 +204,13 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
       .limit(1)
       .maybeSingle(),
     db('expediente_coarrendatarios')
-      .select('id, nombre, apellido, tipo_documento, numero_documento, email, telefono, estado, estudio_id')
+      .select('id, nombre, apellido, tipo_documento, numero_documento, email, telefono, estado, estudio_id, direccion, municipio')
       .eq('expediente_id', expedienteId)
       .in('estado', ESTADOS_VINCULADO)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    db('inmobiliarias').select('owner_perfil_id').eq('id', inm.inmobiliaria_id).maybeSingle(),
+    db('inmobiliarias').select('owner_perfil_id, modalidad_fianza_defecto').eq('id', inm.inmobiliaria_id).maybeSingle(),
     db('contratos')
       .select(CONTRATO_V3_SELECT)
       .eq('expediente_id', expedienteId)
@@ -219,7 +223,11 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
     'estudio',
   );
   const coa = dato<Omit<NonNullable<Fuentes['coarrendatario']>, 'estudio'> | null>(coaR, expedienteId, 'coarrendatario');
-  const org = dato<{ owner_perfil_id: string } | null>(orgR, expedienteId, 'inmobiliaria');
+  const org = dato<{ owner_perfil_id: string; modalidad_fianza_defecto: Fuentes['modalidadFianzaDefecto'] } | null>(
+    orgR,
+    expedienteId,
+    'inmobiliaria',
+  );
   const contratos = dato<(ContratoV3 & { destinacion: string | null })[] | null>(contratosR, expedienteId, 'contratos') ?? [];
   if (!org) throw noVerificable(expedienteId, 'inmobiliaria sin titular');
   const ownerId = org.owner_perfil_id;
@@ -278,7 +286,12 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
       duracion_contrato_meses: exp.duracion_contrato_meses,
       fecha_inicio_contrato: exp.fecha_inicio_contrato,
     },
-    inmueble: { ...inm, inmobiliaria_id: inm.inmobiliaria_id, valorArriendoCop: Number(inm.valor_arriendo) },
+    inmueble: {
+      ...inm,
+      inmobiliaria_id: inm.inmobiliaria_id,
+      valorArriendoCop: Number(inm.valor_arriendo),
+      administracionCop: monto(inm.administracion),
+    },
     solicitante: exp.solicitantes,
     estudio: est
       ? {
@@ -301,6 +314,7 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
         }
       : null,
     arrendador: perfil,
+    modalidadFianzaDefecto: org.modalidad_fianza_defecto ?? null,
     completitudFaltantes: completitud.faltantes.map((x) => x.etiqueta),
     legacyVivos: contratos.filter((c) => !c.destinacion).length,
     v3,
@@ -797,13 +811,20 @@ export async function guardarPaso(
       ip,
     });
 
-  // §1.4: la propiedad horizontal se contesta aquí y se escribe en el inmueble. Best-effort.
-  if (body.paso === 2 && body.datos.propiedadHorizontal !== c.f.inmueble.propiedad_horizontal) {
-    const { error: phError } = await db('inmuebles')
-      .update({ propiedad_horizontal: body.datos.propiedadHorizontal } as never)
-      .eq('id', c.f.inmueble.id);
-    if (phError)
-      logger.warn({ expedienteId, error: phError.message }, 'Asistente V3: no se actualizo propiedad_horizontal del inmueble');
+  // §1.4: lo que se confirma del inmueble (PH, copropiedad, usos conexos, cuota)
+  // se guarda también en su registro, no solo en el contrato. Si falla, el paso
+  // ya quedó guardado y se avisa: volver a guardar reintenta la escritura.
+  const cambios = body.paso === 2 || body.paso === 3 ? cambiosInmueble(c.f.inmueble, body) : null;
+  if (cambios) {
+    const { error: inmError } = await db('inmuebles').update(cambios as never).eq('id', c.f.inmueble.id);
+    if (inmError) {
+      logger.error({ expedienteId, error: inmError.message }, 'Asistente V3: no se actualizó el registro del inmueble');
+      throw new AppError(
+        503,
+        'INMUEBLE_NO_ACTUALIZADO',
+        'Guardamos el paso, pero no pudimos actualizar la ficha del inmueble. Vuelve a guardar.',
+      );
+    }
   }
 
   return armarEstado(await cargar(expedienteId), hoy);

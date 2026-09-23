@@ -73,6 +73,7 @@ import { validate } from '@/middleware/validate';
 import { validarTexto } from '../clausulas.ia';
 import { cambiarEstadoSchema, registroQuerySchema } from '../clausulas.schema';
 import * as svc from '../clausulas.service';
+import { REGLAS_VERSION } from '../clausulas.reglas';
 
 const T = 'clausulas_adicionales';
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -84,7 +85,7 @@ const fila = (x: Record<string, unknown> = {}) => ({
   ...BIEN,
   version: 1,
   estado: 'activa',
-  validacion: { reglas: 'v1', ia: null },
+  validacion: { reglas: REGLAS_VERSION, ia: null },
   inhabilitada_motivo: null,
   updated_at: '2026-09-21T10:00:00Z',
   ...x,
@@ -117,7 +118,7 @@ describe('inmobiliaria', () => {
     enqueue(T, { data: fila(), error: null });
     const r = await svc.crear('u-1', BIEN, '1.2.3.4');
 
-    expect(op('insert')?.[0]).toMatchObject({ inmobiliaria_id: 'org-1', creado_por: 'u-1', ...BIEN, validacion: { reglas: 'v1', ia: null } });
+    expect(op('insert')?.[0]).toMatchObject({ inmobiliaria_id: 'org-1', creado_por: 'u-1', ...BIEN, validacion: { reglas: REGLAS_VERSION, ia: null } });
     expect(vi.mocked(validarTexto).mock.calls[0][1]).toMatchObject({ destinacion: 'vivienda', conIA: true });
     expect(r).toMatchObject({ origen: 'propia', campos: [], avisos: [] });
     expect(mockLogAudit).toHaveBeenCalledWith(

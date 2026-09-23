@@ -20,6 +20,7 @@ import {
   maximoSinNuevaEvaluacionCop,
   noImprimibles,
   partirNit,
+  prefill,
   type AsistenteCompleto,
   type Fuentes,
   type PerfilArrendador,
@@ -83,6 +84,8 @@ const COA: NonNullable<Fuentes['coarrendatario']> = {
   telefono: '3007654321',
   estado: 'estudio_completado',
   estudio_id: 'est-coa',
+  direccion: null,
+  municipio: null,
   estudio: { estado: 'completado', resultado: 'aprobado' },
 };
 
@@ -108,6 +111,12 @@ function fuentes(o: Partial<Fuentes> = {}): Fuentes {
       propiedad_horizontal: true,
       parqueadero: true,
       cuarto_util: false,
+      nombre_copropiedad: null,
+      parqueadero_numero: null,
+      parqueadero_moto: null,
+      parqueadero_moto_numero: null,
+      cuarto_util_numero: null,
+      administracionCop: null,
     },
     solicitante: {
       nombre: 'Juan Carlos',
@@ -138,6 +147,7 @@ function fuentes(o: Partial<Fuentes> = {}): Fuentes {
     ingresoAjustadoCop: null,
     coarrendatario: COA,
     arrendador: PERFIL,
+    modalidadFianzaDefecto: null,
     completitudFaltantes: [],
     legacyVivos: 0,
     v3: null,
@@ -590,5 +600,48 @@ describe('schema de los pasos', () => {
 
   it('B5 estructural: una clave extra (deposito) no pasa', () => {
     expect(paso3Schema.safeParse({ ...PASOS.paso3, deposito: 1_000_000 }).success).toBe(false);
+  });
+});
+
+describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () => {
+  const HOY = '2026-09-15';
+  it('sin datos extra: modalidad vacía, parqueadero sí sin número, cuota y dirección del coarrendatario vacías', () => {
+    const p = prefill(fuentes(), HOY, CALIBRACION_DEFAULT);
+    expect(p[1]).not.toHaveProperty('modalidad');
+    expect(p[2].usos).toEqual({ carro: '', moto: null, util: null });
+    expect(p[2]).not.toHaveProperty('nombreCopropiedad');
+    expect(p[3]).not.toHaveProperty('administracion');
+    expect(p[5].contactos?.coarrendatario).toMatchObject({ direccion: '', municipio: '' });
+  });
+
+  it('con el convenio, el registro del inmueble y la aceptación del coarrendatario', () => {
+    const f = fuentes({
+      modalidadFianzaDefecto: 'tradicional',
+      inmueble: {
+        ...fuentes().inmueble,
+        nombre_copropiedad: 'Edificio Torres del Parque',
+        parqueadero_numero: '12',
+        parqueadero_moto: true,
+        parqueadero_moto_numero: 'M-4',
+        cuarto_util: true,
+        cuarto_util_numero: 'D-3',
+        administracionCop: 350_000,
+      },
+      coarrendatario: { ...COA, direccion: 'Carrera 70 # 1-2', municipio: 'Envigado' },
+    });
+    const p = prefill(f, HOY, CALIBRACION_DEFAULT);
+    expect(p[1].modalidad).toBe('tradicional');
+    expect(p[2]).toMatchObject({ usos: { carro: '12', moto: 'M-4', util: 'D-3' }, nombreCopropiedad: 'Edificio Torres del Parque' });
+    expect(p[3].administracion).toEqual({ valorCop: 350_000 });
+    expect(p[5].contactos?.coarrendatario).toMatchObject({ direccion: 'Carrera 70 # 1-2', municipio: 'Envigado' });
+  });
+
+  it('sin propiedad horizontal no precarga copropiedad ni cuota', () => {
+    const f = fuentes({
+      inmueble: { ...fuentes().inmueble, propiedad_horizontal: false, nombre_copropiedad: 'X', administracionCop: 350_000 },
+    });
+    const p = prefill(f, HOY, CALIBRACION_DEFAULT);
+    expect(p[2]).not.toHaveProperty('nombreCopropiedad');
+    expect(p[3]).not.toHaveProperty('administracion');
   });
 });

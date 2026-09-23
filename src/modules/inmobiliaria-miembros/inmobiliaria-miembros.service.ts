@@ -924,6 +924,8 @@ export interface InmobiliariaAdminView {
   afianzadora_actual: string | null;
   afianzadora_tipo: string | null;
   miembros_ven_todo: boolean;
+  /** Contratos V3 §7.2: modalidad que fija el convenio; null = no fija. */
+  modalidad_fianza_defecto: 'trasladada' | 'tradicional' | null;
   miembros_activos: number;
   invitaciones_pendientes: number;
   created_at: string;
@@ -931,7 +933,7 @@ export interface InmobiliariaAdminView {
 
 export async function adminListInmobiliarias(): Promise<InmobiliariaAdminView[]> {
   const { data: orgsRaw, error } = await db('inmobiliarias')
-    .select('id, nombre, estado, owner_perfil_id, miembros_ven_todo, created_at, perfiles!inmobiliarias_owner_perfil_id_fkey(nombre, apellido, razon_social, afianzadora_actual, afianzadora_tipo)')
+    .select('id, nombre, estado, owner_perfil_id, miembros_ven_todo, modalidad_fianza_defecto, created_at, perfiles!inmobiliarias_owner_perfil_id_fkey(nombre, apellido, razon_social, afianzadora_actual, afianzadora_tipo)')
     .order('created_at', { ascending: false });
   if (error) {
     logger.error({ error: error.message }, 'Error listando inmobiliarias (admin)');
@@ -943,6 +945,7 @@ export async function adminListInmobiliarias(): Promise<InmobiliariaAdminView[]>
     estado: string;
     owner_perfil_id: string | null;
     miembros_ven_todo: boolean;
+    modalidad_fianza_defecto: 'trasladada' | 'tradicional' | null;
     created_at: string;
     perfiles: {
       nombre: string | null;
@@ -980,11 +983,48 @@ export async function adminListInmobiliarias(): Promise<InmobiliariaAdminView[]>
       afianzadora_actual: p?.afianzadora_actual ?? null,
       afianzadora_tipo: p?.afianzadora_tipo ?? null,
       miembros_ven_todo: o.miembros_ven_todo,
+      modalidad_fianza_defecto: o.modalidad_fianza_defecto ?? null,
       miembros_activos: c.activos,
       invitaciones_pendientes: c.pendientes,
       created_at: o.created_at,
     };
   });
+}
+
+/**
+ * Contratos V3 §7.2: fija (o quita) la modalidad de la fianza que el convenio
+ * de Cofianza con la inmobiliaria establece por defecto. El asistente la
+ * presenta preseleccionada y la inmobiliaria la puede cambiar en cada contrato.
+ */
+export async function adminActualizarInmobiliaria(
+  adminId: string,
+  orgId: string,
+  modalidad: 'trasladada' | 'tradicional' | null,
+): Promise<{ modalidad_fianza_defecto: 'trasladada' | 'tradicional' | null }> {
+  const { data: antesRow } = await db('inmobiliarias')
+    .select('id, modalidad_fianza_defecto')
+    .eq('id', orgId)
+    .maybeSingle();
+  const antes = antesRow as { id: string; modalidad_fianza_defecto: string | null } | null;
+  if (!antes) throw AppError.notFound('Inmobiliaria no encontrada', 'INMOBILIARIA_NOT_FOUND');
+
+  const { error } = await db('inmobiliarias')
+    .update({ modalidad_fianza_defecto: modalidad } as never)
+    .eq('id', orgId);
+  if (error) {
+    logger.error({ error: error.message, orgId }, 'Error al actualizar el convenio de la inmobiliaria');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo guardar el convenio de la inmobiliaria');
+  }
+
+  logAudit({
+    usuarioId: adminId,
+    accion: AUDIT_ACTIONS.INMOBILIARIA_CONVENIO_ACTUALIZADO,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA,
+    entidadId: orgId,
+    detalle: { campo: 'modalidad_fianza_defecto', antes: antes.modalidad_fianza_defecto, despues: modalidad },
+  });
+  logger.info({ orgId, adminId, modalidad }, 'Convenio de la inmobiliaria actualizado (admin)');
+  return { modalidad_fianza_defecto: modalidad };
 }
 
 /** Devuelve {id, nombre} de la org o lanza notFound. */

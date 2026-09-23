@@ -29,7 +29,7 @@ import { mayus } from './formato';
 import { MARCADOR } from './motor';
 
 /** Sube cuando cambie cualquier regla (se guarda con cada validación). */
-export const REGLAS_VERSION = 'v1';
+export const REGLAS_VERSION = 'v2';
 
 export const AVISO_VERSION = '2026-09-21';
 export const AVISO_RESPONSABILIDAD =
@@ -422,6 +422,39 @@ const COBERTURA = rx(
 const SEGURO = rx(
   w('(seguro|poliza)s? (de hogar|contra|de responsabilidad|todo riesgo|de incendio|(del|de) (inmueble|hogar|contenido|enseres|bienes))'),
 );
+// «Las cuotas de administración quedan amparadas»: cobertura sin nombrar la fianza.
+// No lo es «cubiertos por EL ARRENDATARIO» (quién paga) ni «cubiertos con plástico».
+const AMPARADO = rx(
+  cerca(
+    w('(amparad|cubiert)[oa]s?'),
+    8,
+    w('administracion|servicios|canon*|cuotas?|intereses|multas?|reparacion*|danos|perjuicios|sanciones|expensas'),
+  ),
+);
+const PARTICIPIO = /(?<![^ ])(?:amparad|cubiert)[oa]s?(?![^ ])/;
+const AGENTE =
+  /^ {1,12}(?:por {1,12}(?:(?:el|la|los|las) {1,12})?(?:(?:co)?arrendatari|inquilin|locatari|arrendador|propietari|inmobiliaria)|con(?![^ ]))/;
+function amparado(f: string): Tramo | null {
+  return primero(AMPARADO, f, (m) => {
+    const p = PARTICIPIO.exec(m[0]);
+    const fin = m.index + (p ? p.index + p[0].length : 0);
+    return !p || AGENTE.test(f.slice(fin, fin + 60));
+  });
+}
+// «EL ARRENDATARIO no pagará la tarifa mensual», «La prima la pagará EL ARRENDADOR»:
+// en este contrato la tarifa y la prima son las de la fianza (CUARTA). Las de los
+// servicios, los seguros de hogar o el trabajo no.
+const TARIFA_PRIMA = rx(w('tarifas?|primas?'));
+const AJENA = rx(
+  w(
+    'servicio*|energia|luz|electric*|acueducto|alcantarillado|agua|gas|aseo|internet|television|tv|telefon*|celular*|' +
+      'parqueadero*|administracion|transaccion*|pasarela*|bancari*|bancos?|datafono*|tarjetas?|transporte|mudanza|trasteo|' +
+      'seguros?|polizas?|hogar|visitantes|navidad|nomina|salari*|vacaciones|materia',
+  ),
+);
+function tarifaPrima(f: string): Tramo | null {
+  return primero(TARIFA_PRIMA, f, (m) => hay(AJENA, f.slice(Math.max(0, m.index - 45), m.index + m[0].length + 45)));
+}
 
 // ── renuncia (5.3.5) ──
 
@@ -449,6 +482,11 @@ const EXONERA = rx(
     w('(a cargo|por cuenta|a costa|a expensas) (del|de el|de) (arrendatari*|inquilin*)'),
   ),
 );
+// «EL ARRENDATARIO asumirá (pagará, hará) las reparaciones necesarias»: son del
+// arrendador (Ley 820, art. 8, num. 2). Solo cuando quien las asume es el arrendatario.
+const NECESARIAS = tras(w('reparacion*|arreglos?'), 2, w('necesari[oa]s'));
+const ASUME = w('(asum|pag|coste|sufrag|realiz|realic|efectu|ejecut)*|hacer|hara|haran|hace|hacen|correr* con');
+const ASUME_NECESARIAS = rx(tras(ASUME, 3, NECESARIAS), tras(NECESARIAS, 3, ASUME));
 const ARRENDADOR = rx(w('arrendadora?'));
 const ARRENDATARIO = rx(w('arrendatari*|inquilin*|locatari*|las partes'));
 const REQUERIMIENTOS = rx(w('requerimient*|constitucion en mora|reconvencion*'));
@@ -459,7 +497,7 @@ const DERECHOS = rx(
 );
 const MEJORAS = rx(w('mejoras?'));
 
-function renuncia(f: string): Tramo | null {
+function renuncia(f: string, h: number): Tramo | null {
   // Precalculado por segmento: las excusas miran antes/después de cada disparo en O(1).
   const ad = primero(ARRENDADOR, f);
   const at = primero(ARRENDATARIO, f);
@@ -474,7 +512,8 @@ function renuncia(f: string): Tramo | null {
   return (
     primero(RENUNCIA, f, (m) => delArrendador(m.index) || soloRequerimientos(m.index + m[0].length)) ??
     primero(NO_RECLAMA, f, (m) => delArrendador(m.index) || (mejoras && /derecho/.test(m[0]))) ??
-    primero(EXONERA, f)
+    primero(EXONERA, f) ??
+    primero(ASUME_NECESARIAS, f, (m) => gobierna(sujetos(f, h), m.index)?.lado !== 'arrendatario')
   );
 }
 
@@ -662,7 +701,8 @@ export const REGLAS: Partial<Record<Destinacion, Regla[]>> = {
     { hallazgo: CATALOGO.incremento, detectar: incremento },
     {
       hallazgo: CATALOGO.fianza,
-      detectar: (f) => primero(FIANZA, f) ?? (hay(SEGURO, f) ? null : primero(COBERTURA, f)),
+      detectar: (f) =>
+        primero(FIANZA, f) ?? (hay(SEGURO, f) ? null : (primero(COBERTURA, f) ?? amparado(f))) ?? tarifaPrima(f),
     },
     { hallazgo: CATALOGO.renuncia, detectar: renuncia },
     { hallazgo: CATALOGO.terminacion, detectar: terminacion },
