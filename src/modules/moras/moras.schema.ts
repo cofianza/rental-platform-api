@@ -9,7 +9,13 @@ export const reportarMoraSchema = z.object({
   contrato_id: z.uuid({ error: 'contrato_id inválido' }),
   fecha_vencimiento_canon: z
     .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato esperado: YYYY-MM-DD'),
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato esperado: YYYY-MM-DD')
+    // Un canon que aún no vence no está en mora (el inquilino recibía «venció
+    // el 05» un día 3). Se compara con el día de hoy en Colombia.
+    .refine(
+      (f) => f <= new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' }),
+      'La fecha de vencimiento no puede ser futura',
+    ),
   monto_mora: z.number().int().nonnegative('Monto inválido'),
   descripcion: z.string().max(2000).optional(),
 });

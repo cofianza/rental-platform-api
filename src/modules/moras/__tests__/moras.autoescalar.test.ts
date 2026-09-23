@@ -56,6 +56,7 @@ const mora = (id: string, diasDesdeReporte: number) => ({
   inmueble_direccion: 'Cra 7 # 45-10',
   monto_mora: 1500000,
   reportado_at: new Date(Date.now() - diasDesdeReporte * 86400000).toISOString(),
+  fecha_vencimiento_canon: '2026-09-05',
 });
 
 beforeEach(() => {

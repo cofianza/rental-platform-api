@@ -50,6 +50,7 @@ vi.mock('@/lib/tenantScope', () => ({
 }));
 
 import { reportarMora, escalarMora } from '../moras.service';
+import { reportarMoraSchema } from '../moras.schema';
 
 const INPUT = { contrato_id: 'c1', monto_mora: 1_500_000, fecha_vencimiento_canon: '2026-09-05' };
 
@@ -163,5 +164,42 @@ describe('reportarMora — una mora activa por canon', () => {
       errorCode: 'MORA_DUPLICADA',
     });
     expect(mockEnviarTemplate).not.toHaveBeenCalled();
+  });
+});
+
+describe('fechas de la mora', () => {
+  const haceDias = (n: number) =>
+    new Date(Date.now() - n * 86_400_000).toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+
+  it('no acepta un vencimiento futuro (el canon aún no está en mora)', () => {
+    const base = { contrato_id: '3f1c2d4e-5a6b-4c7d-8e9f-0a1b2c3d4e5f', monto_mora: 1 };
+    expect(reportarMoraSchema.safeParse({ ...base, fecha_vencimiento_canon: haceDias(-2) }).success).toBe(false);
+    expect(reportarMoraSchema.safeParse({ ...base, fecha_vencimiento_canon: haceDias(0) }).success).toBe(true);
+  });
+
+  it('el WhatsApp de Fase 1 muestra el día del vencimiento tal cual, sin correrlo por la zona horaria', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    prepararReporte();
+    await reportarMora(INPUT as never, 'u1', 'inmobiliaria');
+    expect((mockEnviarTemplate.mock.calls[0][0] as { variables: string[] }).variables[3]).toMatch(/^05/);
+  });
+
+  it('al escalar, los días en mora se cuentan desde el vencimiento, no desde el reporte', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    enqueue('moras_tickets',
+      {
+        data: {
+          id: 'm1', estado: 'fase_1', expediente_id: 'exp1', reportado_por: 'u1',
+          reportado_at: new Date().toISOString(), fecha_vencimiento_canon: haceDias(25),
+          inquilino_telefono: '573001112233', inquilino_nombre: 'Ana Pérez', inmueble_direccion: 'Cra 7', monto_mora: 1,
+          ticket_numero: 'MOR-2026-001',
+        },
+        error: null,
+      },
+      { data: null, error: null },
+      { data: { id: 'm1' }, error: null },
+    );
+    await escalarMora('m1', {}, 'op', 'operador_analista');
+    expect((mockEnviarTemplate.mock.calls[0][0] as { variables: string[] }).variables[3]).toBe('25');
   });
 });

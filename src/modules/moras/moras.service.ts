@@ -38,6 +38,11 @@ function diasDesde(date: string | Date): number {
   return Math.floor((Date.now() - start) / (1000 * 60 * 60 * 24));
 }
 
+/** Días en mora del canon (desde su vencimiento, en hora de Colombia), no desde el reporte. */
+function diasEnMora(fechaVencimientoCanon: string): string {
+  return String(Math.max(0, diasDesde(`${fechaVencimientoCanon}T00:00:00-05:00`)));
+}
+
 function formatCOP(monto: number): string {
   return new Intl.NumberFormat('es-CO').format(monto);
 }
@@ -154,6 +159,7 @@ interface MoraAccessRow {
   expediente_id: string | null;
   reportado_por: string;
   reportado_at: string;
+  fecha_vencimiento_canon: string;
   inquilino_telefono: string | null;
   inquilino_nombre: string;
   inmueble_direccion: string | null;
@@ -167,7 +173,7 @@ async function assertMoraAccess(
 ): Promise<MoraAccessRow> {
   const { data: mora, error } = (await db('moras_tickets')
     .select(`
-      id, estado, expediente_id, reportado_por, reportado_at,
+      id, estado, expediente_id, reportado_por, reportado_at, fecha_vencimiento_canon,
       inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora
     `)
     .eq('id', moraId)
@@ -268,8 +274,10 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
       ticket.inquilino_nombre.split(' ')[0] || 'Hola',
       ticket.inmueble_direccion ?? 'tu inmueble',
       formatCOP(ticket.monto_mora),
+      // La fecha llega sin hora (medianoche UTC): formatearla en UTC evita que
+      // un servidor con otra zona la corra un día.
       new Date(input.fecha_vencimiento_canon).toLocaleDateString('es-CO', {
-        day: '2-digit', month: 'short', year: 'numeric',
+        day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
       }),
     ],
     context: { mora_id: ticket.id },
@@ -381,7 +389,7 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
   const { error } = await db('moras_tickets').update(updates as never).eq('id', id);
   if (error) throw fromSupabaseError(error);
 
-  const diasMora = String(diasDesde(mora.reportado_at));
+  const diasMora = diasEnMora(mora.fecha_vencimiento_canon);
   const whatsapp_estado = await enviarTemplateWhatsApp({
     to: mora.inquilino_telefono,
     template: templateKey,
@@ -598,7 +606,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
 
   // Fase 1 → 2 (lleva al menos 4 días en fase_1)
   const { data: aSubirF2 } = await db('moras_tickets')
-    .select('id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at')
+    .select('id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
     .eq('estado', 'fase_1')
     .lte('reportado_at', limiteFase2)
     .limit(100) as unknown as {
@@ -609,6 +617,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
         inmueble_direccion: string | null;
         monto_mora: number;
         reportado_at: string;
+        fecha_vencimiento_canon: string;
       }> | null;
     };
 
@@ -636,7 +645,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
         m.inquilino_nombre.split(' ')[0] || 'Hola',
         m.inmueble_direccion ?? 'tu inmueble',
         formatCOP(m.monto_mora),
-        String(diasDesde(m.reportado_at)),
+        diasEnMora(m.fecha_vencimiento_canon),
       ],
       context: { mora_id: m.id },
     });
@@ -647,7 +656,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
   // fase_2. La segunda condición es la que evita el salto 1 → 3 en una sola
   // corrida; `fase_2_at` lo escriben tanto este cron como el escalado manual.
   const { data: aSubirF3 } = await db('moras_tickets')
-    .select('id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at')
+    .select('id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
     .eq('estado', 'fase_2')
     .lte('reportado_at', limiteFase3)
     .lte('fase_2_at', limiteEnFase2)
@@ -659,6 +668,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
         inmueble_direccion: string | null;
         monto_mora: number;
         reportado_at: string;
+        fecha_vencimiento_canon: string;
       }> | null;
     };
 
@@ -683,7 +693,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
         m.inquilino_nombre.split(' ')[0] || 'Hola',
         m.inmueble_direccion ?? 'tu inmueble',
         formatCOP(m.monto_mora),
-        String(diasDesde(m.reportado_at)),
+        diasEnMora(m.fecha_vencimiento_canon),
       ],
       context: { mora_id: m.id },
     });
