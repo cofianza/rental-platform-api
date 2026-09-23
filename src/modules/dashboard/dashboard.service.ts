@@ -277,13 +277,12 @@ async function queryIngresosDelPeriodo(
 //
 // Resumen para el hero "Tu Oficina Virtual": 3 cards. No usa el cache
 // global porque depende del usuario.
-//   - propiedades_activas: inmuebles del propietario (cualquier estado
-//     excepto soft-delete)
+//   - propiedades_activas: inmuebles del portafolio que no están dados de
+//     baja (estado 'inactivo' = soft-delete)
 //   - inquilinos_cartera: contratos en estado firmado/vigente sobre
 //     inmuebles del propietario
-//   - canon_mensual: suma de valor_arriendo de contratos activos
-//     (equivale al "recaudado este mes" cuando todo el portafolio
-//     paga al dia)
+//   - canon_mensual: suma de valor_arriendo de contratos activos. Es canon
+//     CONTRATADO, no recaudado: no mira pagos ni moras.
 
 export interface PortfolioStats {
   propiedades_activas: number;
@@ -294,21 +293,27 @@ export interface PortfolioStats {
 export async function getPortfolioStats(perfilId: string): Promise<PortfolioStats> {
   // 1) Inmuebles del portafolio (org-aware: incluye la cartera de la organización)
   const inmuebleIds = await resolvePortfolioInmuebleIds(perfilId);
-  const propiedades_activas = inmuebleIds.length;
 
   if (inmuebleIds.length === 0) {
     return { propiedades_activas: 0, inquilinos_cartera: 0, canon_mensual: 0 };
   }
 
-  // 2) Contratos activos de esos inmuebles, con el expediente embebido (el
-  //    contrato no apunta al inmueble): una ida en vez de dos en serie.
-  const { data: contratos, error: contError } = await (
-    supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
-  )
-    .select('valor_arriendo, expedientes!inner(solicitante_id)')
-    .in('expedientes.inmueble_id', inmuebleIds)
-    .in('estado', ['firmado', 'vigente']);
+  // 2) En paralelo: cuántos siguen activos (los dados de baja no cuentan; el
+  //    listado de inmuebles tampoco los muestra) y los contratos activos con el
+  //    expediente embebido (el contrato no apunta al inmueble).
+  const [{ count: activos, error: actError }, { data: contratos, error: contError }] = await Promise.all([
+    supabase
+      .from('inmuebles')
+      .select('id', { count: 'exact', head: true })
+      .in('id', inmuebleIds)
+      .neq('estado', 'inactivo'),
+    (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('valor_arriendo, expedientes!inner(solicitante_id)')
+      .in('expedientes.inmueble_id', inmuebleIds)
+      .in('estado', ['firmado', 'vigente']),
+  ]);
 
+  if (actError) throw fromSupabaseError(actError);
   if (contError) throw fromSupabaseError(contError);
 
   const solicitantesUnicos = new Set<string>();
@@ -321,7 +326,7 @@ export async function getPortfolioStats(perfilId: string): Promise<PortfolioStat
   }
 
   return {
-    propiedades_activas,
+    propiedades_activas: activos ?? 0,
     inquilinos_cartera: solicitantesUnicos.size,
     canon_mensual,
   };

@@ -293,7 +293,9 @@ describe('Dashboard Service', () => {
               { valor_arriendo: 2000000, expedientes: { solicitante_id: 's1' } },
               { valor_arriendo: 500000, expedientes: { solicitante_id: 's2' } },
             ])
-          : createChain([]),
+          : table === 'inmuebles'
+            ? createChain([], 1) // activos (sin los dados de baja)
+            : createChain([]),
       );
 
       const r = await dashboardService.getPortfolioStats('p1');
