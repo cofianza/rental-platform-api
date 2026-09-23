@@ -17,7 +17,7 @@
 -- Idempotente. El API no la necesita para desplegar: hasta correrla, «Cerrar
 -- sin acta» responde 503 y el detalle del estudio y la vista del contrato leen
 -- estas columnas aparte y sin fallar (columna inexistente = sin cierre sin acta).
--- Después va 20260930000002b («Requieren mi acción»).
+-- Después va 20260930000007 («Requieren mi acción»).
 -- ROLLBACK: reaplicar (b) de 20260926000001 y
 --   ALTER TABLE public.expedientes DROP CONSTRAINT IF EXISTS expedientes_cierre_sin_acta_chk,
 --     DROP COLUMN IF EXISTS cierre_sin_acta_en, DROP COLUMN IF EXISTS cierre_sin_acta_por,
