@@ -55,7 +55,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: () => mockListOperators() }));
 
-import { reportarMora, escalarMora, autoEscalar } from '../moras.service';
+import { reportarMora, escalarMora, autoEscalar, marcarPagada, cancelarMora, getMoraById } from '../moras.service';
 import { reportarMoraSchema } from '../moras.schema';
 
 const INPUT = { contrato_id: 'c1', monto_mora: 1_500_000, fecha_vencimiento_canon: '2026-09-05' };
@@ -262,5 +262,47 @@ describe('aviso al equipo de Cofianza', () => {
     mockListOperators.mockRejectedValue(new Error('boom'));
     prepararReporte();
     await expect(reportarMora(INPUT as never, 'u1', 'inmobiliaria')).resolves.toMatchObject({ id: 'm1' });
+  });
+});
+
+describe('rastro de quién gestionó la mora', () => {
+  const moraActiva = {
+    data: {
+      id: 'm1', ticket_numero: 'MOR-2026-001', estado: 'fase_2', expediente_id: 'exp1', reportado_por: 'dueno',
+      reportado_at: new Date().toISOString(), fecha_vencimiento_canon: '2026-09-05',
+      inquilino_telefono: null, inquilino_nombre: 'Ana Pérez', inmueble_direccion: 'Cra 7', monto_mora: 1,
+    },
+    error: null,
+  };
+  const inserts = (table: string) =>
+    ops.filter((o) => o.table === table && o.method === 'insert').map((o) => o.args[0] as Record<string, unknown>);
+
+  it.each([
+    ['pagada', () => marcarPagada('m1', { notas: 'pagó en efectivo' }, 'miembro1', 'inmobiliaria'), 'mora_pagada'],
+    ['cancelada', () => cancelarMora('m1', { motivo: 'error de registro' }, 'miembro1', 'inmobiliaria'), 'mora_cancelada'],
+    ['escalada', () => escalarMora('m1', {}, 'miembro1', 'inmobiliaria'), 'mora_escalada'],
+  ])('la mora %s deja autor en el chat y registro en la bitácora', async (_n, accion, esperada) => {
+    mockEnviarTemplate.mockResolvedValue('sin_telefono');
+    enqueue('moras_tickets', moraActiva, { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    await accion();
+    expect(inserts('moras_mensajes')[0]).toMatchObject({ autor_tipo: 'sistema', autor_id: 'miembro1' });
+    expect(inserts('bitacora')).toEqual([
+      expect.objectContaining({
+        usuario_id: 'miembro1',
+        accion: esperada,
+        entidad: 'mora',
+        entidad_id: 'm1',
+        detalle: expect.objectContaining({ expediente_id: 'exp1', estado_anterior: 'fase_2' }),
+      }),
+    ]);
+  });
+
+  it('el detalle trae el nombre de quien escribió cada mensaje', async () => {
+    enqueue('moras_tickets', { data: { id: 'm1' }, error: null });
+    enqueue('moras_mensajes', { data: [{ id: 'msg1', autor: { nombre: 'Luisa', apellido: 'Gómez' } }], error: null });
+    const r = await getMoraById('m1');
+    expect(r.mensajes).toEqual([expect.objectContaining({ autor: { nombre: 'Luisa', apellido: 'Gómez' } })]);
+    const select = ops.find((o) => o.table === 'moras_mensajes' && o.method === 'select');
+    expect(select?.args[0]).toContain('perfiles!moras_mensajes_autor_id_fkey(nombre, apellido)');
   });
 });

@@ -15,6 +15,7 @@ import { logger } from '@/lib/logger';
 import { enviarTemplate as enviarTemplateWhatsApp, type EstadoEnvioWhatsApp } from '../whatsapp';
 import { assertExpedienteAccess, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import type {
   ReportarMoraInput,
   ListMorasQuery,
@@ -327,9 +328,23 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
   await agregarMensajeInterno(
     ticket.id,
     'sistema',
-    null,
+    userId,
     `Mora reportada — Fase 1 (Recordatorio). ${avisoWhatsApp(whatsapp_estado)}`,
   );
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MORA_REPORTADA,
+    entidad: AUDIT_ENTITIES.MORA,
+    entidadId: ticket.id,
+    detalle: {
+      expediente_id: snap.expediente_id,
+      contrato_id: snap.contrato_id,
+      ticket: ticket.ticket_numero,
+      monto_mora: input.monto_mora,
+      fecha_vencimiento_canon: input.fecha_vencimiento_canon,
+      whatsapp_estado,
+    },
+  });
   await avisarCofianza({
     moraId: ticket.id,
     actorId: userId,
@@ -400,8 +415,10 @@ export async function getMoraById(id: string) {
 
   if (error || !mora) throw AppError.notFound('Mora no encontrada', 'MORA_NOT_FOUND');
 
+  // Con el nombre de quien escribió o hizo la acción (antes el chat decía
+  // «PROPIETARIO» también para la inmobiliaria y los de sistema, nada).
   const { data: mensajes } = await db('moras_mensajes')
-    .select('*')
+    .select('*, autor:perfiles!moras_mensajes_autor_id_fkey(nombre, apellido)')
     .eq('mora_id', id)
     .order('created_at', { ascending: true });
 
@@ -453,11 +470,24 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
   await agregarMensajeInterno(
     id,
     'sistema',
-    null,
+    userId,
     `Escalado a ${proximoEstado === 'fase_2' ? 'Fase 2 (Urgencia)' : 'Fase 3 (Legal)'}. ${avisoWhatsApp(whatsapp_estado)}${
       input.notas ? ` Notas del asesor: ${input.notas}` : ''
     }`,
   );
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MORA_ESCALADA,
+    entidad: AUDIT_ENTITIES.MORA,
+    entidadId: id,
+    detalle: {
+      expediente_id: mora.expediente_id,
+      estado_anterior: mora.estado,
+      estado_nuevo: proximoEstado,
+      notas: input.notas ?? null,
+      whatsapp_estado,
+    },
+  });
   if (proximoEstado === 'fase_3') {
     await avisarCofianza({
       moraId: id,
@@ -499,9 +529,21 @@ export async function marcarPagada(id: string, input: MarcarPagadaInput, userId:
   await agregarMensajeInterno(
     id,
     'sistema',
-    null,
+    userId,
     `Mora marcada como pagada${input.notas ? `. Notas: ${input.notas}` : ''}`,
   );
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MORA_PAGADA,
+    entidad: AUDIT_ENTITIES.MORA,
+    entidadId: id,
+    detalle: {
+      expediente_id: mora.expediente_id,
+      estado_anterior: mora.estado,
+      fecha_pago: input.fecha_pago ?? null,
+      notas: input.notas ?? null,
+    },
+  });
 
   return getMoraById(id);
 }
@@ -530,7 +572,14 @@ export async function cancelarMora(id: string, input: CancelarMoraInput, userId:
 
   if (error) throw fromSupabaseError(error);
 
-  await agregarMensajeInterno(id, 'sistema', null, `Mora cancelada. Motivo: ${input.motivo}`);
+  await agregarMensajeInterno(id, 'sistema', userId, `Mora cancelada. Motivo: ${input.motivo}`);
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.MORA_CANCELADA,
+    entidad: AUDIT_ENTITIES.MORA,
+    entidadId: id,
+    detalle: { expediente_id: mora.expediente_id, estado_anterior: mora.estado, motivo: input.motivo },
+  });
 
   return getMoraById(id);
 }

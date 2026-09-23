@@ -143,6 +143,11 @@ export const AUDIT_ACTIONS = {
   CONTRATO_CLAUSULAS_ACEPTADAS: 'contrato_clausulas_aceptadas',
   // Un administrador autorizó ese conjunto exacto por encima del máximo (§5.1.6).
   CONTRATO_CLAUSULAS_EXCESO_AUTORIZADO: 'contrato_clausulas_exceso_autorizado',
+  // Moras: quién reportó, escaló, marcó pagada o canceló el caso.
+  MORA_REPORTADA: 'mora_reportada',
+  MORA_ESCALADA: 'mora_escalada',
+  MORA_PAGADA: 'mora_pagada',
+  MORA_CANCELADA: 'mora_cancelada',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -169,6 +174,7 @@ export const AUDIT_ENTITIES = {
   INMOBILIARIA_MIEMBRO: 'inmobiliaria_miembro',
   INMOBILIARIA: 'inmobiliaria',
   CLAUSULA_ADICIONAL: 'clausula_adicional',
+  MORA: 'mora',
 } as const;
 
 interface AuditLogParams {
