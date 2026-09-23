@@ -78,9 +78,12 @@ function getDefaultDateRange(): { dateFrom: string; dateTo: string } {
   return { dateFrom, dateTo };
 }
 
-// ── Estado terminal (para tasa de aprobación y tiempo resolución) ──
+// Estudios abiertos: todo lo que no terminó en rechazo ni se cerró. El
+// aprobado sigue abierto (espera contrato).
+const ESTADOS_ABIERTOS = ['borrador', 'en_revision', 'informacion_incompleta', 'condicionado', 'aprobado'] as const;
 
-const ESTADOS_TERMINALES = ['aprobado', 'rechazado', 'condicionado', 'cerrado'];
+// Decisiones de la evaluación, tal como las registra la línea de tiempo.
+const ESTADOS_DECISION = ['aprobado', 'rechazado', 'condicionado'];
 
 // ── Service Functions ───────────────────────────────────────
 
@@ -98,14 +101,12 @@ export async function getSummary(
   const [
     expedientesActivos,
     porEstado,
-    tasaAprobacionData,
-    tiempoPromedio,
+    decisiones,
     ingresos,
   ] = await Promise.all([
     queryExpedientesActivos(),
     queryExpedientesPorEstado(range.dateFrom, range.dateTo),
-    queryTasaAprobacion(range.dateFrom, range.dateTo),
-    queryTiempoPromedioResolucion(range.dateFrom, range.dateTo),
+    queryDecisiones(range.dateFrom, range.dateTo),
     queryIngresosDelPeriodo(range.dateFrom, range.dateTo),
   ]);
 
@@ -118,8 +119,8 @@ export async function getSummary(
   return {
     totalExpedientesActivos: expedientesActivos,
     expedientesPorEstado: estadoRecord,
-    tasaAprobacion: tasaAprobacionData,
-    tiempoPromedioResolucionDias: tiempoPromedio,
+    tasaAprobacion: tasaAprobacion(decisiones),
+    tiempoPromedioResolucionDias: tiempoPromedioResolucion(decisiones),
     ingresosDelPeriodo: ingresos,
   };
 }
@@ -135,13 +136,16 @@ export async function getExpedientesPorEstado(
   return queryExpedientesPorEstado(range.dateFrom, range.dateTo);
 }
 
-// ── Query: Expedientes activos (no cancelados) ─────────────
+// ── Query: Expedientes activos (ahora, sin rango) ──────────
+//
+// Contaba todo lo que no era 'cerrado', así que los rechazados se acumulaban
+// como "activos" hasta que alguien los cerraba a mano.
 
 async function queryExpedientesActivos(): Promise<number> {
   const { count, error } = await supabase
     .from('expedientes')
     .select('*', { count: 'exact', head: true })
-    .neq('estado', 'cerrado');
+    .in('estado', ESTADOS_ABIERTOS);
 
   if (error) throw fromSupabaseError(error);
   return count ?? 0;
@@ -175,66 +179,68 @@ async function queryExpedientesPorEstado(
   return Object.entries(counts).map(([estado, count]) => ({ estado, count }));
 }
 
-// ── Query: Tasa de aprobación ───────────────────────────────
+// ── Query: Decisiones del periodo (tasa y tiempo de resolución) ─
+//
+// Salen de la línea de tiempo y no del estado ni de updated_at: updated_at se
+// mueve con cualquier edición posterior (contrato, notas, asignación) y el
+// aprobado que llega a contrato termina 'cerrado', así que el mejor resultado
+// contaba como no aprobado y el tiempo medía "creación → firma".
 
-async function queryTasaAprobacion(
-  dateFrom: string,
-  dateTo: string,
-): Promise<number> {
-  const { data, error } = await fetchAll((desde, hasta) =>
-    supabase
-      .from('expedientes')
-      .select('estado')
-      .in('estado', ESTADOS_TERMINALES)
-      .gte('created_at', dateFrom)
-      .lte('created_at', dateTo)
-      .order('id')
-      .range(desde, hasta),
-  );
-
-  if (error) throw fromSupabaseError(error);
-  if (data.length === 0) return 0;
-
-  const aprobados = data.filter((row) => (row as { estado: string }).estado === 'aprobado').length;
-  return Math.round((aprobados / data.length) * 10000) / 100; // 2 decimal places
+interface Decision {
+  creado: number; // created_at del expediente
+  primera: number; // primera decisión = momento de resolución
+  ultima: string; // decisión vigente
 }
 
-// ── Query: Tiempo promedio resolución (días) ────────────────
-
-async function queryTiempoPromedioResolucion(
-  dateFrom: string,
-  dateTo: string,
-): Promise<number> {
+async function queryDecisiones(dateFrom: string, dateTo: string): Promise<Decision[]> {
+  // Paginado (fetchAll): sin tope silencioso de 1000 filas. Orden por fecha con
+  // id de desempate para que las páginas no se pisen y la última decisión gane.
   const { data, error } = await fetchAll((desde, hasta) =>
-    supabase
-      .from('expedientes')
-      .select('created_at, updated_at, estado')
-      .in('estado', ESTADOS_TERMINALES)
-      .gte('created_at', dateFrom)
-      .lte('created_at', dateTo)
-      .order('id')
+    (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .select('expediente_id, estado_nuevo, created_at, expedientes!inner(created_at)')
+      .eq('tipo', 'estado')
+      .in('estado_nuevo', ESTADOS_DECISION)
+      .gte('expedientes.created_at', dateFrom)
+      .lte('expedientes.created_at', dateTo)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
       .range(desde, hasta),
   );
 
   if (error) throw fromSupabaseError(error);
-  if (data.length === 0) return 0;
 
-  let totalDays = 0;
-  let count = 0;
-
-  for (const row of data) {
-    const r = row as { created_at: string; updated_at: string };
-    const created = new Date(r.created_at).getTime();
-    const resolved = new Date(r.updated_at).getTime();
-    const diffDays = (resolved - created) / (1000 * 60 * 60 * 24);
-    if (diffDays >= 0) {
-      totalDays += diffDays;
-      count++;
+  const porExpediente = new Map<string, Decision>();
+  for (const ev of (data ?? []) as Array<{
+    expediente_id: string;
+    estado_nuevo: string;
+    created_at: string;
+    expedientes: { created_at: string } | null;
+  }>) {
+    const d = porExpediente.get(ev.expediente_id);
+    if (d) d.ultima = ev.estado_nuevo; // orden ascendente: la última gana
+    else if (ev.expedientes) {
+      porExpediente.set(ev.expediente_id, {
+        creado: new Date(ev.expedientes.created_at).getTime(),
+        primera: new Date(ev.created_at).getTime(),
+        ultima: ev.estado_nuevo,
+      });
     }
   }
+  return [...porExpediente.values()];
+}
 
-  if (count === 0) return 0;
-  return Math.round((totalDays / count) * 100) / 100; // 2 decimal places
+/** % de estudios decididos cuya decisión vigente es 'aprobado' (2 decimales). */
+function tasaAprobacion(decisiones: Decision[]): number {
+  if (decisiones.length === 0) return 0;
+  const aprobados = decisiones.filter((d) => d.ultima === 'aprobado').length;
+  return Math.round((aprobados / decisiones.length) * 10000) / 100;
+}
+
+/** Días promedio entre la creación y la primera decisión (2 decimales). */
+function tiempoPromedioResolucion(decisiones: Decision[]): number {
+  const dias = decisiones.map((d) => (d.primera - d.creado) / 86_400_000).filter((x) => x >= 0);
+  if (dias.length === 0) return 0;
+  return Math.round((dias.reduce((s, x) => s + x, 0) / dias.length) * 100) / 100;
 }
 
 // ── Query: Ingresos del período (pagos completados) ─────────
