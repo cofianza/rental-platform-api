@@ -44,13 +44,13 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   {
     from: 'borrador',
     to: 'en_revision',
-    label: 'Enviar a revision',
+    label: 'Enviar a revisión',
     preconditions: ['ANALISTA_ASIGNADO', 'DOCUMENTOS_EXISTENTES'],
   },
   {
     from: 'en_revision',
     to: 'informacion_incompleta',
-    label: 'Solicitar informacion',
+    label: 'Solicitar información',
     preconditions: [],
   },
   {
@@ -74,7 +74,7 @@ export const TRANSITION_MAP: readonly TransitionDef[] = [
   {
     from: 'informacion_incompleta',
     to: 'en_revision',
-    label: 'Reenviar a revision',
+    label: 'Reenviar a revisión',
     preconditions: ['DOCUMENTOS_NUEVOS_DESDE_ULTIMA_TRANSICION'],
   },
   {

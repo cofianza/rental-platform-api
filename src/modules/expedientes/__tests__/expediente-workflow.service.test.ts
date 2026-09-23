@@ -495,7 +495,7 @@ describe('expediente-workflow.service', () => {
         expediente_id: 'exp-uuid',
         estado_actual: 'borrador',
         transiciones_disponibles: [
-          { estado: 'en_revision', label: 'Enviar a revision' },
+          { estado: 'en_revision', label: 'Enviar a revisión' },
           { estado: 'cerrado', label: 'Cancelar estudio' },
         ],
       });

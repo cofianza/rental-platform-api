@@ -44,7 +44,7 @@ export const CONTRATO_TRANSITION_MAP: readonly ContratoTransitionDef[] = [
   {
     from: 'borrador',
     to: 'en_revision',
-    label: 'Enviar a revision',
+    label: 'Enviar a revisión',
     preconditions: ['PDF_GENERADO'],
   },
   {

@@ -130,7 +130,7 @@ describe('expediente-state-machine', () => {
     it('borrador debe retornar en_revision y cancelar', () => {
       const transitions = getAvailableTransitions('borrador');
       expect(transitions).toEqual([
-        { estado: 'en_revision', label: 'Enviar a revision' },
+        { estado: 'en_revision', label: 'Enviar a revisión' },
         { estado: 'cerrado', label: 'Cancelar estudio' },
       ]);
     });
@@ -151,7 +151,7 @@ describe('expediente-state-machine', () => {
     it('informacion_incompleta debe retornar en_revision y cancelar', () => {
       const transitions = getAvailableTransitions('informacion_incompleta');
       expect(transitions).toEqual([
-        { estado: 'en_revision', label: 'Reenviar a revision' },
+        { estado: 'en_revision', label: 'Reenviar a revisión' },
         { estado: 'cerrado', label: 'Cancelar estudio' },
       ]);
     });
@@ -176,7 +176,7 @@ describe('expediente-state-machine', () => {
       const def = getTransitionDef('borrador', 'en_revision')!;
       expect(def).not.toBeNull();
       expect(def.preconditions).toEqual(['ANALISTA_ASIGNADO', 'DOCUMENTOS_EXISTENTES']);
-      expect(def.label).toBe('Enviar a revision');
+      expect(def.label).toBe('Enviar a revisión');
     });
 
     it('en_revision -> aprobado requiere ESTUDIO_APROBADO', () => {

@@ -519,7 +519,7 @@ export async function reasignarEstudio(args: {
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       'Solo se puede reasignar un estudio ya ejecutado (completado). ' +
-        `Este estudio esta en estado "${estudio.estado}".`,
+        `Este estudio está en estado "${estudio.estado}".`,
       { motivo: 'estado_no_completado', estado: estudio.estado },
     );
   }
@@ -538,10 +538,10 @@ export async function reasignarEstudio(args: {
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `Este estudio se completo el ${formatearFecha(estudio.fecha_completado)} y su vigencia ya termino ` +
-        `(${formatearFecha(vigenciaHasta)}). La reutilizacion del §4.3 conserva la vigencia original y no la ` +
-        'extiende, asi que para esta propiedad se requiere una evaluacion nueva. ' +
-        'No se genero ningun cobro ni se descuento ningun credito.',
+      `Este estudio se completó el ${formatearFecha(estudio.fecha_completado)} y su vigencia ya terminó ` +
+        `(${formatearFecha(vigenciaHasta)}). La reutilización del §4.3 conserva la vigencia original y no la ` +
+        'extiende, así que para esta propiedad se requiere una evaluación nueva. ' +
+        'No se generó ningún cobro ni se descontó ningún crédito.',
       { motivo: 'estudio_fuera_de_vigencia', vigencia_hasta: vigenciaHasta },
     );
   }
@@ -555,7 +555,7 @@ export async function reasignarEstudio(args: {
 
   if (expedienteError) throw fromSupabaseError(expedienteError);
   if (!expedienteRow) {
-    throw AppError.notFound('Evaluación asociada al estudio no encontrada', 'EXPEDIENTE_NOT_FOUND');
+    throw AppError.notFound('Estudio asociado a la evaluación no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
   const expediente = expedienteRow as unknown as ExpedienteParaReasignar;
 
@@ -563,21 +563,21 @@ export async function reasignarEstudio(args: {
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El estudio ${expediente.numero ?? ''} esta ${expediente.estado} y ya no se traslada a otra propiedad.`,
+      `El estudio ${expediente.numero ?? ''} está ${expediente.estado} y ya no se traslada a otra propiedad.`,
       { motivo: 'expediente_terminal', estado: expediente.estado },
     );
   }
 
   if (!expediente.inmueble_id) {
     throw AppError.badRequest(
-      'El estudio no tiene una propiedad asociada, asi que no hay nada que reasignar.',
+      'El estudio no tiene una propiedad asociada, así que no hay nada que reasignar.',
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
     );
   }
 
   if (expediente.inmueble_id === inmuebleDestinoId) {
     throw AppError.badRequest(
-      'El estudio ya esta sobre esa propiedad.',
+      'El estudio ya está sobre esa propiedad.',
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       { motivo: 'mismo_inmueble' },
     );
@@ -704,7 +704,7 @@ export async function reasignarEstudio(args: {
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       `La propiedad ${destino.codigo ?? destino.direccion ?? 'de destino'} pertenece a otra cartera. ` +
         'Un estudio solo se reutiliza dentro de la misma agencia o del mismo propietario: trasladarlo ' +
-        'moveria el estudio completo —con los datos del solicitante y el resultado del buro— a una ' +
+        'movería el estudio completo —con los datos del solicitante y el resultado del buró— a una ' +
         'cartera distinta. Elige una propiedad de esta misma cartera.',
       { motivo: 'cambio_de_cartera' },
     );
