@@ -15,6 +15,7 @@
 
 import type { AucoDocumentInfo, AucoRoadmap, AucoSignerStatus, AucoSignProfile } from '@/lib/auco';
 import { normalizePhoneToInternational } from '@/lib/auco';
+import { AppError } from '@/lib/errors';
 import { aucoDeriveCountry, mapTipoDocumentoToAuco } from '@/modules/firma/firma-multiparte.service';
 import { fechaBogota } from '../formato';
 
@@ -270,25 +271,82 @@ export const finDelDia = (fecha: string): number => Date.parse(`${fecha}T23:59:5
 
 const masPlazo = (desde: number, dias: number) => finDelDia(fechaBogota(new Date(desde + dias * DIA_MS)));
 
+/** Un instante en Bogotá: 'dd/mm/aaaa a las HH:MM'. */
+export function fechaHora(ms: number): string {
+  const iso = new Date(ms - 5 * 3_600_000).toISOString();
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)} a las ${iso.slice(11, 16)}`;
+}
+
+export type SinPlazo = 'vencido' | 'sin_margen';
+
 /**
  * Plazo de un proceso de firma nuevo: DIAS_EXPIRACION_FIRMA sin pasar el fin
- * de la vigencia del CRC. Auco no deja mover el vencimiento de un proceso vivo:
- * a Auco va lo máximo que el proceso puede durar con su única prórroga (tope
- * CRC) y el plazo de Cofianza (expira_en) lo cierra el barrido. null = el CRC
- * ya no está vigente: no se abre el proceso.
- * ponytail: si al CRC le quedan menos de 3 días, Auco vence después que el CRC
- * y el cierre depende del barrido (hasta 15 min tarde).
+ * exacto del CRC. Auco no deja mover el vencimiento de un proceso vivo: a Auco
+ * va lo máximo que el proceso puede durar con su única prórroga (tope CRC) y
+ * el plazo de Cofianza (expira_en) lo cierra el barrido. Auco exige más de 3
+ * días: con menos vigencia de CRC el proceso duraría más que el CRC, así que no
+ * se abre (se renueva la evaluación).
  */
 export function plazoDeFirma(
   ahora: number,
   dias: number,
   finCrc: number,
-): { expiraEn: number; aucoExpira: number } | null {
-  if (finCrc <= ahora) return null;
+): { expiraEn: number; aucoExpira: number } | { motivo: SinPlazo } {
+  if (finCrc <= ahora) return { motivo: 'vencido' };
+  if (finCrc - ahora < MINIMO_AUCO_MS) return { motivo: 'sin_margen' };
   return {
     expiraEn: Math.min(masPlazo(ahora, dias), finCrc),
-    aucoExpira: Math.max(Math.min(masPlazo(ahora, 2 * dias), finCrc), ahora + MINIMO_AUCO_MS),
+    aucoExpira: Math.min(masPlazo(ahora, 2 * dias), finCrc),
   };
+}
+
+/** Por qué no se abre un proceso de firma. */
+export const motivoSinPlazo = (m: SinPlazo, finCrc?: number | null): string =>
+  m === 'vencido'
+    ? 'El certificado de riesgo ya no está vigente: se requiere una nueva evaluación.'
+    : `Al certificado de riesgo le quedan menos de tres días de vigencia${finCrc ? ` (vence el ${fechaHora(finCrc)})` : ''}: no alcanza para el proceso de firma. Hay que renovar la evaluación.`;
+
+/**
+ * El plazo de un proceso nuevo, o el 409 con lo que hay que hacer (CRC vencido
+ * o sin margen). Lo usan enviar a firma, reenviar y crearSobre.
+ */
+export function exigirPlazoDeFirma(
+  finCrc: number | null,
+  dias: number,
+  ahora = Date.now(),
+): { expiraEn: number; aucoExpira: number } {
+  const p = finCrc === null ? ({ motivo: 'vencido' } as const) : plazoDeFirma(ahora, dias, finCrc);
+  if ('motivo' in p)
+    throw AppError.conflict(motivoSinPlazo(p.motivo, finCrc), p.motivo === 'vencido' ? 'CRC_VENCIDO' : 'CRC_SIN_MARGEN');
+  return p;
+}
+
+/**
+ * Fin exacto de la vigencia del CRC: su fecha_vencimiento, la misma que usa
+ * /verificar; si no viene, el mismo cálculo con que se emite (fecha de
+ * completado + VIGENCIA_CRC_DIAS). null = sin fechas: no se puede saber.
+ */
+export function finDelCrc(
+  fechaVencimiento: string | null | undefined,
+  fechaCompletado: string | null | undefined,
+  vigenciaDias: number,
+): number | null {
+  const vence = Date.parse(fechaVencimiento ?? '');
+  if (Number.isFinite(vence)) return vence;
+  const completado = Date.parse(fechaCompletado ?? '');
+  return Number.isFinite(completado) ? completado + vigenciaDias * DIA_MS : null;
+}
+
+/** Tolerancia de reloj entre Auco y Cofianza al comparar la última firma con el plazo. */
+export const TOLERANCIA_RELOJ_MS = 10 * 60_000;
+
+/**
+ * ¿La última firma (hora del roadmap de Auco) llegó tarde? Tarde = después del
+ * plazo más una tolerancia corta de reloj o, en ningún caso, después del fin
+ * del CRC. Una firma tardía no activa la fianza.
+ */
+export function fueraDePlazo(ultimaFirma: string, expiraEn: string, finCrc: number | null): boolean {
+  return Date.parse(ultimaFirma) > Math.min(Date.parse(expiraEn) + TOLERANCIA_RELOJ_MS, finCrc ?? Infinity);
 }
 
 /** La única prórroga: otros `dias` sobre el plazo vigente, sin pasar el CRC. Solo antes de que venza. */
@@ -318,28 +376,35 @@ export function sobreIdDeCustom(custom: unknown): string | null {
  * Aviso de §11.7.4: la inmobiliaria tiene que enterarse de que la fianza NO
  * está operando, y queda constancia de la entrega. El texto se versiona: la
  * constancia guarda la versión y el texto exacto que se entregó.
+ * v3 (Adenda 1 del módulo de contratos): firmas fuera del plazo, el margen de
+ * CRC para reenviar y que el aviso se acepta en la plataforma (respuesta 11).
  */
-export const AVISO_FIRMA_INCOMPLETA_VERSION = 'e5-11.7.4-v2';
+export const AVISO_FIRMA_INCOMPLETA_VERSION = 'e5-11.7.4-v3';
 
 export function textoAvisoFirmaIncompleta(x: {
   numero: string;
   direccion: string;
-  motivo: 'EXPIRED' | 'REJECTED' | string | null;
+  motivo: 'EXPIRED' | 'REJECTED' | 'FUERA_PLAZO' | string | null;
   detalle?: string | null;
+  /** Hasta cuándo va el CRC ('dd/mm/aaaa a las HH:MM'), si todavía alcanza para reenviar; null = no alcanza. */
   crcVigenteHasta?: string | null;
 }): string {
+  const detalle = x.detalle ? ` (${x.detalle})` : '';
   const causa =
     x.motivo === 'EXPIRED'
       ? 'venció el plazo para firmar'
-      : `una de las partes rechazó la firma${x.detalle ? ` (${x.detalle})` : ''}`;
-  // Sin fecha = estudio vencido (o sin fecha de completado): reenviar da CRC_VENCIDO.
+      : x.motivo === 'FUERA_PLAZO'
+        ? `las firmas se completaron después del plazo para firmar${detalle} y no cuentan`
+        : `una de las partes rechazó la firma${detalle}`;
+  // Sin fecha: al CRC no le queda vigencia para un proceso nuevo (reenviar da 409).
   const reenvio = x.crcVigenteHasta
-    ? ` Puedes reenviarlo a firma mientras el estudio siga vigente (hasta el ${x.crcVigenteHasta}).`
-    : ' El estudio ya no está vigente: para volver a enviarlo a firma se requiere una nueva evaluación.';
+    ? ` Puedes reenviarlo a firma mientras al certificado de riesgo le queden más de tres días de vigencia (vence el ${x.crcVigenteHasta}).`
+    : ' Al certificado de riesgo no le queda vigencia suficiente: para volver a enviarlo a firma se requiere una nueva evaluación.';
   return (
     `El proceso de firma del contrato ${x.numero} (${x.direccion}) terminó sin que firmaran todas las partes: ${causa}. ` +
     'La fianza de COFIANZA S.A.S. NO está operando y COFIANZA S.A.S. no responde por este inmueble mientras la firma esté incompleta. ' +
     'Entregar el inmueble en estas condiciones es decisión y responsabilidad exclusiva de la inmobiliaria.' +
-    reenvio
+    reenvio +
+    ' Para reenviarlo a firma o cancelarlo, primero acepta este aviso en la plataforma de COFIANZA S.A.S.: queda registrado quién lo aceptó y cuándo.'
   );
 }

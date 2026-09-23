@@ -28,15 +28,17 @@ import { archivarPdfFirmadoEnStorage } from '@/modules/firma/firma.service';
 import { bloquearInmuebleOcupado } from '@/modules/inmuebles/inmuebles.service';
 import { enviarCorreoNotificacion } from '@/modules/notificaciones/notificaciones.service';
 import { listOperators } from '@/modules/users/users.service';
-import { diasCalendario, masDias } from '../asistente.reglas';
 import type { EstadoSobreV3 } from '../asistente.types';
 import { fechaBogota } from '../formato';
 import {
   AVISO_FIRMA_INCOMPLETA_VERSION,
   actualizarFirmantes,
   decidir,
+  fechaHora,
   fechasDeFirma,
-  finDelDia,
+  finDelCrc,
+  fueraDePlazo,
+  plazoDeFirma,
   sobreIdDeCustom,
   textoAvisoFirmaIncompleta,
   ultimaFirma,
@@ -131,7 +133,7 @@ interface ContratoCtx {
     asistente?: { paso2?: { amoblado?: boolean }; paso3?: { fechaEntrega?: string } };
     documento?: {
       entrada?: { inmueble?: { direccion?: string; municipio?: string } };
-      snapshot?: { estudio?: { fechaCompletado?: string | null } };
+      snapshot?: { estudio?: { fechaCompletado?: string | null }; crc?: { fechaVencimiento?: string | null } | null };
       final?: { ruta?: 'A' | 'B' };
     };
   } | null;
@@ -171,19 +173,14 @@ export async function leerContrato(id: string): Promise<ContratoCtx | null> {
 }
 
 /**
- * Hasta cuándo se puede reenviar a firma (§11.7.5): la vigencia del estudio,
- * con la misma regla que bloquea el asistente (ESTUDIO_VENCIDO, asistente.reglas).
- * Se toma del snapshot congelado al enviar. null = sin fecha: no se puede.
- * `fin` = último instante de la vigencia: el tope del proceso de firma (Adenda 1, respuesta 10).
+ * La vigencia del CRC que se envió a firma (snapshot congelado): `fin` es su
+ * hora exacta de vencimiento, tope del proceso de firma y del reenvío (§11.7.5
+ * y Adenda 1, respuesta 10). null = sin fechas.
  */
-export async function vigenciaEstudio(c: ContratoCtx): Promise<{ hasta: string; vigente: boolean; fin: number } | null> {
-  const completado = c.datos_variables?.documento?.snapshot?.estudio?.fechaCompletado;
-  if (!completado) return null;
-  const cal = await getCalibracion();
-  const desde = fechaBogota(completado);
-  const hoy = fechaBogota(new Date());
-  const hasta = masDias(desde, cal.VIGENCIA_CRC_DIAS);
-  return { hasta, vigente: diasCalendario(desde, hoy) <= cal.VIGENCIA_CRC_DIAS, fin: finDelDia(hasta) };
+export async function vigenciaEstudio(c: ContratoCtx): Promise<{ fin: number } | null> {
+  const snap = c.datos_variables?.documento?.snapshot;
+  const fin = finDelCrc(snap?.crc?.fechaVencimiento, snap?.estudio?.fechaCompletado, (await getCalibracion()).VIGENCIA_CRC_DIAS);
+  return fin === null ? null : { fin };
 }
 
 const ddmmaaaa = (iso: string) => iso.split('-').reverse().join('/');
@@ -411,7 +408,7 @@ export async function cerrarIncompleto(s: Sobre): Promise<void> {
   }
   const c = await leerContrato(s.contrato_id);
   if (!c) return;
-  const motivo = s.motivo === 'EXPIRED' ? 'EXPIRED' : 'REJECTED';
+  const motivo = s.motivo === 'EXPIRED' || s.motivo === 'FUERA_PLAZO' ? s.motivo : 'REJECTED';
   if (c.estado === 'pendiente_firma')
     await transicionar(c.id, 'firma_incompleta', `Firma incompleta: ${motivo}${s.motivo_detalle ? ` — ${s.motivo_detalle}` : ''}`);
   const { data } = await db('contratos').select('estado').eq('id', c.id).maybeSingle();
@@ -435,13 +432,15 @@ export async function cerrarIncompleto(s: Sobre): Promise<void> {
     ['garantia', 'primer_canon'],
   );
 
-  const vig = await vigenciaEstudio(c);
+  const [vig, cal] = await Promise.all([vigenciaEstudio(c), getCalibracion()]);
+  // Solo se ofrece reenviar si al CRC le alcanza para un proceso nuevo (Adenda 1, respuesta 10).
+  const reabrible = !!vig && !('motivo' in plazoDeFirma(Date.now(), cal.DIAS_EXPIRACION_FIRMA, vig.fin));
   const texto = textoAvisoFirmaIncompleta({
     numero: c.numero,
     direccion: c.datos_variables?.documento?.entrada?.inmueble?.direccion ?? 'inmueble del estudio',
     motivo,
     detalle: s.motivo_detalle,
-    crcVigenteHasta: vig?.vigente ? ddmmaaaa(vig.hasta) : null,
+    crcVigenteHasta: reabrible ? fechaHora(vig.fin) : null,
   });
   const destinatarios = await destinatariosDe(c, s);
   const aviso = {
@@ -471,10 +470,17 @@ const hace = (iso: string, minutos: number) => Date.now() - Date.parse(iso) > mi
 /**
  * Anula el proceso en Auco y deja la marca. Si Auco no lo cancela porque ya está
  * cerrado (vencido o rechazado) también se marca, para que el barrido no lo
- * intente para siempre; si ya lo firmaron todos, avisa a los administradores.
+ * intente para siempre; si ya lo firmaron todos, avisa a los administradores,
+ * salvo `siFirmado: 'decidir'` (al vencer el plazo): ahí la última firma le ganó
+ * a la anulación, no es un conflicto, y la hora de esa firma decide (fueraDePlazo).
  * Cualquier otro error se propaga: el barrido reintenta.
  */
-export async function cancelarEnAuco(s: Sobre, code: string, motivo: string): Promise<void> {
+export async function cancelarEnAuco(
+  s: Sobre,
+  code: string,
+  motivo: string,
+  o: { siFirmado?: 'alertar' | 'decidir' } = {},
+): Promise<'anulado' | 'firmado'> {
   if (!s.auco_code) {
     const { error } = await db('contrato_v3_sobres').update({ auco_code: code } as never).eq('id', s.id).is('auco_code', null);
     if (error) falla('no se pudo registrar el código de Auco del sobre', error);
@@ -488,6 +494,10 @@ export async function cancelarEnAuco(s: Sobre, code: string, motivo: string): Pr
     if (r?.success === false || (r?.errors?.cant ?? 0) > 0) throw new Error('Auco respondió que no canceló el proceso');
   } catch (e) {
     const info = await getDocumentStatus(code).catch(() => null);
+    if (info?.status === 'FINISH' && o.siFirmado === 'decidir') {
+      logger.info({ sobreId: s.id, code }, 'Firma V3: la última firma llegó mientras se anulaba por vencimiento; decide su hora');
+      return 'firmado';
+    }
     if (info?.status === 'FINISH') {
       logger.error({ sobreId: s.id, code }, 'Firma V3: un proceso que se debía anular quedó firmado en Auco');
       const admins = (await listOperators()).filter((o) => o.rol === 'administrador').map((o) => o.id);
@@ -499,11 +509,12 @@ export async function cancelarEnAuco(s: Sobre, code: string, motivo: string): Pr
         payload: { contrato_id: s.contrato_id, sobre_id: s.id },
       }).catch((err) => logger.warn({ err }, 'Firma V3: no se pudo avisar el conflicto'));
       await marcar('Auco lo reporta firmado: no se pudo anular.');
-      return;
+      return 'firmado';
     }
     if (info?.status !== 'REJECTED' && info?.status !== 'EXPIRED') throw e;
   }
   await marcar();
+  return 'anulado';
 }
 
 /** Bloqueos nuevos (3 OTP fallidos): Cofianza desbloquea en el panel de Auco. */
@@ -586,12 +597,22 @@ export async function reconciliarSobre(sobreId: string, evento?: { code?: string
   }
   const fecha = d === 'activar' && roadmap ? ultimaFirma(roadmap, firmantes.length) : null;
   if (d === 'activar' && !fecha) logger.warn({ sobreId }, 'Firma V3: FINISH sin todas las firmas en el roadmap; se reintenta');
+  // Adenda 1, respuesta 10: una firma después del plazo (o del CRC) no activa la fianza.
+  const tarde = !!fecha && fueraDePlazo(fecha, s.expira_en, await finDelCrcDelContrato(s.contrato_id));
+  if (tarde) logger.warn({ sobreId, fecha, expira: s.expira_en }, 'Firma V3: la última firma llegó fuera del plazo; no se activa');
 
   const rechazo = firmantes.find((f) => f.estado === 'rechazado');
   const quien = rechazo ? partes.find((p) => p.id === rechazo.parteId)?.rol : null;
   const cambio: Partial<Sobre> =
     d === 'activar' && fecha
-      ? { estado: 'completo', cerrado_en: fecha }
+      ? tarde
+        ? {
+            estado: 'incompleto',
+            cerrado_en: new Date().toISOString(),
+            motivo: 'FUERA_PLAZO',
+            motivo_detalle: `la última firma fue el ${fechaHora(Date.parse(fecha))} y el plazo vencía el ${fechaHora(Date.parse(s.expira_en))}`,
+          }
+        : { estado: 'completo', cerrado_en: fecha }
       : d === 'incompleta'
         ? {
             estado: 'incompleto',
@@ -609,16 +630,24 @@ export async function reconciliarSobre(sobreId: string, evento?: { code?: string
   if (cambio.estado === 'incompleto') return cerrarIncompleto(nuevo);
 }
 
+/** El fin del CRC del contrato del sobre (null = sin fechas). */
+async function finDelCrcDelContrato(contratoId: string): Promise<number | null> {
+  const c = await leerContrato(contratoId);
+  return c ? ((await vigenciaEstudio(c))?.fin ?? null) : null;
+}
+
 /**
  * El plazo de firma lo cierra Cofianza (§11.3 y Adenda 1, respuesta 10): Auco
  * no deja mover el vencimiento de un proceso vivo, así que allá vence lo máximo
- * con la prórroga y aquí manda expira_en. Vencido, se anula primero en Auco (si
- * alguien firmó a última hora, gana la firma y el próximo barrido activa) y
- * después queda FIRMA INCOMPLETA, con su aviso.
+ * con la prórroga y aquí manda expira_en. Vencido, se anula primero en Auco y
+ * después queda FIRMA INCOMPLETA, con su aviso. Si la última firma le ganó a la
+ * anulación, el próximo reconciliar decide por su hora: dentro de la
+ * tolerancia activa; después, FIRMA INCOMPLETA por firma fuera de plazo.
  */
 async function cerrarPorVencimiento(s: Sobre, firmantes: FirmanteSobre[]): Promise<void> {
   const code = s.auco_code!;
-  await cancelarEnAuco(s, code, 'Venció el plazo para firmar'); // si Auco no responde, lanza: reintenta el barrido
+  // Si Auco no responde, lanza: reintenta el barrido.
+  if ((await cancelarEnAuco(s, code, 'Venció el plazo para firmar', { siFirmado: 'decidir' })) === 'firmado') return;
   if ((await getDocumentStatus(code).catch(() => null))?.status === 'FINISH') return;
   // cancelarEnAuco deja constancia en el sobre (cambia updated_at): el CAS va sobre lo recién leído.
   const actual = await leerSobre(s.id);

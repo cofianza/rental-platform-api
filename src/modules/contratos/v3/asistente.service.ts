@@ -89,7 +89,7 @@ import { APROBACIONES } from './aprobaciones';
 import { contarClausulas, type Plantilla } from './motor';
 import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 import { contexto, generarAnexoVivienda, generarContratoVivienda, type DatosVivienda } from './vivienda';
-import { validarFirmantes, type ParteFirmante } from './firma/reglas';
+import { exigirPlazoDeFirma, finDelCrc, validarFirmantes, type ParteFirmante } from './firma/reglas';
 import {
   aceptarAviso,
   actualizarFirma,
@@ -1532,6 +1532,8 @@ export async function enviarAFirma(
   assertFirmantes(v3.id, d, f);
   const crcCompleto = f.crc?.pdf_storage_key;
   if (!crcCompleto) throw AppError.conflict('El estudio no tiene el PDF del CRC emitido.', 'CRC_NO_EMITIDO');
+  // Adenda 1, respuesta 10: sin margen de CRC no se abre el proceso de firma (antes de generar nada).
+  exigirPlazoDeFirma(finDelCrc(f.crc?.fecha_vencimiento, f.estudio?.fecha_completado, cal.VIGENCIA_CRC_DIAS), cal.DIAS_EXPIRACION_FIRMA);
   const propio = dv.propio;
   if (ruta === 'B') {
     if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');

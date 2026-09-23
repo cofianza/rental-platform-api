@@ -17,6 +17,8 @@
  *     node dist/scripts/sonda-auco-v3.js
  *   SONDA_ACCION=ver SONDA_CODE=XXXXXXXX node dist/scripts/sonda-auco-v3.js
  *   SONDA_ACCION=cancelar SONDA_CODE=XXXXXXXX SONDA_CONFIRMAR=si node dist/scripts/sonda-auco-v3.js
+ *   SONDA_ACCION=anular-parcial SONDA_CODE=XXXXXXXX [SONDA_FIRMANTE=<id pendiente>] SONDA_CONFIRMAR=si \
+ *     node dist/scripts/sonda-auco-v3.js
  *
  * Perillas: SONDA_CANAL=email (plan B1), SONDA_SILENCIAR=1 (plan B2: sin order
  * y con los firmantes 2..n en notification:false), SONDA_RELLENO_MB=6 (mide el
@@ -170,6 +172,51 @@ async function cancelar() {
   console.log('Corre `ver` y anota en qué estado queda (esperado: REJECTED). Si `errors.cant` > 0, Auco NO lo canceló.');
 }
 
+/**
+ * Adenda 1 del módulo de contratos (respuesta 10): al vencer el plazo, Cofianza
+ * anula el proceso en Auco aunque alguien ya haya firmado (Auco vence después,
+ * en el máximo con la prórroga). Verifica que un proceso con firmas parciales
+ * se anule y que después ya no se pueda firmar. Se corre sobre un proceso de
+ * `crear` en el que firmó el primero y falta el resto.
+ */
+async function anularParcial() {
+  const code = process.env.SONDA_CODE;
+  if (!code) throw new Error('Falta SONDA_CODE (un proceso de la sonda con al menos una firma y al menos una pendiente)');
+  const leer = async () =>
+    (await getDocumentStatus(code)) as unknown as { status?: string; signProfile?: { id?: string; status?: string }[] };
+  const antes = await leer();
+  const estados = (antes.signProfile ?? []).map((p) => p.status);
+  imprimir('Antes', { status: antes.status, signProfile: antes.signProfile });
+  if (!estados.includes('FINISH') || estados.every((e) => e === 'FINISH'))
+    throw new Error('El proceso debe tener firmas parciales: al menos una FINISH y al menos una pendiente.');
+  if (process.env.SONDA_CONFIRMAR !== 'si') return console.log('SONDA_CONFIRMAR≠si: no se anuló nada.');
+
+  imprimir(
+    'POST /document/cancel',
+    await cancelDocument(code, { message: 'Venció el plazo para firmar (sonda Cofianza)', email: env.AUCO_SENDER_EMAIL }),
+  );
+  const despues = await leer();
+  imprimir('Después', { status: despues.status, signProfile: despues.signProfile });
+  imprimir('GET /document/roadmap', await getDocumentRoadmap(code).catch((e) => ({ error: e instanceof Error ? e.message : String(e) })));
+  // El recordatorio al pendiente es la forma de "intentar firmar" por API: sobre un proceso anulado Auco debe rechazarlo.
+  const firmante = process.env.SONDA_FIRMANTE;
+  const recordatorio = firmante
+    ? await sendReminder(`${code}${firmante}`).then(
+        () => 'Auco lo ACEPTÓ: el proceso sigue firmable (MAL)',
+        (e) => `Auco lo rechazó (bien): ${e instanceof Error ? e.message : String(e)}`,
+      )
+    : 'sin probar (falta SONDA_FIRMANTE, el id del pendiente que imprime `ver`)';
+  const cerrado = despues.status === 'REJECTED' || despues.status === 'EXPIRED';
+  const sigueNotificado = (despues.signProfile ?? []).some((p) => p.status === 'NOTIFICATION');
+  console.log(
+    `\n== Diagnóstico\nrecordatorio al pendiente: ${recordatorio}\n` +
+      (cerrado && !sigueNotificado
+        ? 'ANULADO_OK: el proceso quedó cerrado con firmas parciales.'
+        : `ANULADO_FALLA: estado ${despues.status}${sigueNotificado ? ', con firmantes todavía notificados' : ''}.`),
+  );
+  console.log('Confirma a mano: el enlace del firmante pendiente debe decir que el documento ya no se puede firmar.');
+}
+
 async function recordar() {
   const code = process.env.SONDA_CODE;
   const firmante = process.env.SONDA_FIRMANTE;
@@ -187,7 +234,8 @@ async function main() {
   if (accion === 'ver') return ver();
   if (accion === 'cancelar') return cancelar();
   if (accion === 'recordar') return recordar();
-  throw new Error(`SONDA_ACCION desconocida: ${accion} (crear | ver | cancelar | recordar)`);
+  if (accion === 'anular-parcial') return anularParcial();
+  throw new Error(`SONDA_ACCION desconocida: ${accion} (crear | ver | cancelar | recordar | anular-parcial)`);
 }
 
 // El renderizador deja vivo un Chromium por proceso (pdfRenderer lo cachea),

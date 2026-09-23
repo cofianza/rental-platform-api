@@ -13,8 +13,12 @@ import {
   construirSignProfile,
   datosDeFirma,
   decidir,
+  exigirPlazoDeFirma,
+  fechaHora,
   fechasDeFirma,
+  finDelCrc,
   finDelDia,
+  fueraDePlazo,
   mapEstadoFirmante,
   partesCompletas,
   plazoDeFirma,
@@ -284,6 +288,19 @@ describe('textoAvisoFirmaIncompleta', () => {
     expect(rechazo).not.toContain('Puedes reenviarlo');
     expect(rechazo).toContain('se requiere una nueva evaluación');
   });
+
+  it('v3 (Adenda 1): pide aceptarlo en la plataforma y explica la firma fuera de plazo', () => {
+    const t = textoAvisoFirmaIncompleta({
+      numero: 'CTO-2026-0009',
+      direccion: 'Calle 5',
+      motivo: 'FUERA_PLAZO',
+      detalle: 'la última firma fue el 09/10/2026 a las 00:20',
+      crcVigenteHasta: '30/10/2026 a las 10:00',
+    });
+    expect(t).toContain('después del plazo para firmar (la última firma fue el 09/10/2026 a las 00:20) y no cuentan');
+    expect(t).toContain('más de tres días de vigencia (vence el 30/10/2026 a las 10:00)');
+    expect(t).toContain('primero acepta este aviso en la plataforma');
+  });
 });
 
 describe('plazo de firma (Adenda 1 del módulo de contratos, respuesta 10)', () => {
@@ -296,24 +313,48 @@ describe('plazo de firma (Adenda 1 del módulo de contratos, respuesta 10)', () 
   });
 
   it('15 días; a Auco va el máximo con la prórroga (30), porque allá no se puede mover', () => {
-    const p = plazoDeFirma(AHORA, 15, finDelDia('2026-11-20'))!;
-    expect(p.expiraEn).toBe(finDelDia('2026-10-08'));
-    expect(p.aucoExpira).toBe(finDelDia('2026-10-23'));
+    expect(plazoDeFirma(AHORA, 15, finDelDia('2026-11-20'))).toEqual({
+      expiraEn: finDelDia('2026-10-08'),
+      aucoExpira: finDelDia('2026-10-23'),
+    });
   });
 
-  it('nunca pasa la vigencia del CRC, ni en Cofianza ni en Auco', () => {
-    const p = plazoDeFirma(AHORA, 15, finDelDia('2026-10-01'))!;
-    expect(p).toEqual({ expiraEn: finDelDia('2026-10-01'), aucoExpira: finDelDia('2026-10-01') });
+  it('nunca pasa la vigencia del CRC, ni en Cofianza ni en Auco (hora exacta de vencimiento)', () => {
+    const finCrc = Date.parse('2026-10-01T15:30:00-05:00');
+    expect(plazoDeFirma(AHORA, 15, finCrc)).toEqual({ expiraEn: finCrc, aucoExpira: finCrc });
   });
 
-  it('con menos de 3 días de CRC, Auco recibe su mínimo y el plazo de Cofianza sigue siendo el CRC', () => {
-    const p = plazoDeFirma(AHORA, 15, finDelDia('2026-09-24'))!;
-    expect(p.expiraEn).toBe(finDelDia('2026-09-24'));
-    expect(p.aucoExpira).toBe(AHORA + 3 * 24 * HORA + HORA);
+  it('con menos de 3 días + 1 h de CRC no se abre el proceso (Auco no acepta menos): hay que renovar la evaluación', () => {
+    const justo = AHORA + 3 * 24 * HORA + HORA;
+    expect(plazoDeFirma(AHORA, 15, justo - 1)).toEqual({ motivo: 'sin_margen' });
+    expect(plazoDeFirma(AHORA, 15, justo)).toEqual({ expiraEn: justo, aucoExpira: justo });
+    expect(() => exigirPlazoDeFirma(justo - 1, 15, AHORA)).toThrow(/menos de tres días.*renovar la evaluación/);
+    expect(() => exigirPlazoDeFirma(justo - 1, 15, AHORA)).toThrow(expect.objectContaining({ statusCode: 409, errorCode: 'CRC_SIN_MARGEN' }));
   });
 
-  it('con el CRC vencido no hay proceso de firma', () => {
-    expect(plazoDeFirma(AHORA, 15, AHORA - 1)).toBeNull();
+  it('con el CRC vencido, o sin fechas, no hay proceso de firma', () => {
+    expect(plazoDeFirma(AHORA, 15, AHORA)).toEqual({ motivo: 'vencido' });
+    expect(() => exigirPlazoDeFirma(null, 15, AHORA)).toThrow(expect.objectContaining({ errorCode: 'CRC_VENCIDO' }));
+  });
+
+  it('el fin del CRC es su fecha_vencimiento exacta (la de /verificar); sin ella, completado + vigencia', () => {
+    expect(finDelCrc('2026-10-31T16:00:00Z', '2026-09-01T15:00:00Z', 60)).toBe(Date.parse('2026-10-31T16:00:00Z'));
+    expect(finDelCrc(null, '2026-09-01T15:00:00Z', 60)).toBe(Date.parse('2026-10-31T15:00:00Z'));
+    expect(finDelCrc(undefined, null, 60)).toBeNull();
+  });
+
+  it('una firma después del plazo (más 10 min de reloj) o del fin del CRC no activa la fianza', () => {
+    const plazo = '2026-10-09T04:59:59.000Z'; // medianoche del 08/10 en Bogotá
+    const mas = (min: number) => new Date(Date.parse(plazo) + min * 60_000).toISOString();
+    expect(fueraDePlazo(mas(-60), plazo, null)).toBe(false);
+    expect(fueraDePlazo(mas(9), plazo, null)).toBe(false); // tolerancia de reloj
+    expect(fueraDePlazo(mas(11), plazo, null)).toBe(true);
+    // En ningún caso después del fin del CRC, ni dentro de la tolerancia.
+    expect(fueraDePlazo(mas(5), plazo, Date.parse(plazo))).toBe(true);
+  });
+
+  it('las horas se dicen en Bogotá', () => {
+    expect(fechaHora(Date.parse('2026-10-09T04:59:59Z'))).toBe('08/10/2026 a las 23:59');
   });
 
   it('la prórroga suma otros 15 días al plazo vigente, sin pasar el CRC', () => {

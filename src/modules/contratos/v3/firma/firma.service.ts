@@ -26,6 +26,9 @@ import { fechaBogota, periodoVigente, sumarMeses } from '../formato';
 import {
   construirSignProfile,
   datosDeFirma,
+  exigirPlazoDeFirma,
+  fechaHora,
+  motivoSinPlazo,
   partesCompletas,
   plazoDeFirma,
   prorrogaDelPlazo,
@@ -89,9 +92,8 @@ async function exigirSinFirmaCompleta(contratoId: string): Promise<void> {
 /** Solo se reintenta si no hubo proceso o el último no llegó a Auco (fallido) o se anuló. */
 const reintentable = (s: Sobre | null) => !s || s.estado === 'fallido' || s.estado === 'cancelado';
 
-/** 'AAAA-MM-DD' (o un instante, en Bogotá) → 'dd/mm/aaaa'. */
-const ddmmaaaa = (x: string | number) =>
-  (typeof x === 'number' ? fechaBogota(new Date(x)) : x).split('-').reverse().join('/');
+/** Un instante → 'dd/mm/aaaa' en Bogotá. */
+const ddmmaaaa = (ms: number) => fechaBogota(new Date(ms)).split('-').reverse().join('/');
 
 /**
  * Prórroga y acuse (Adenda 1), en un SELECT aparte y tolerante: si la
@@ -153,8 +155,7 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
 
   // Adenda 1, respuesta 10: el proceso de firma nunca pasa la vigencia del CRC.
   const [cal, vig] = await Promise.all([getCalibracion(), vigenciaEstudio(c)]);
-  const plazo = vig && plazoDeFirma(Date.now(), cal.DIAS_EXPIRACION_FIRMA, vig.fin);
-  if (!plazo) throw AppError.conflict('El estudio ya no está vigente: se requiere una nueva evaluación.', 'CRC_VENCIDO');
+  const plazo = exigirPlazoDeFirma(vig?.fin ?? null, cal.DIAS_EXPIRACION_FIRMA);
   const expira = new Date(plazo.expiraEn);
   const ultimo = await ultimoSobre(contratoId);
   const firmantes: FirmanteSobre[] = partes.map((p) => ({ parteId: p.id, estado: 'pendiente' }));
@@ -297,9 +298,9 @@ export async function reenviar(contratoId: string, userId: string, rol?: string)
       `El estudio está ${c.expedienteEstado === 'rechazado' ? 'marcado como no aprobable' : 'cerrado'}: el contrato ya no se puede reenviar a firma.`,
       'EXPEDIENTE_CERRADO',
     );
-  const vig = await vigenciaEstudio(c);
-  if (!vig?.vigente)
-    throw AppError.conflict('El estudio ya no está vigente: se requiere una nueva evaluación.', 'CRC_VENCIDO');
+  // Antes de tocar el contrato: al CRC le tiene que alcanzar para un proceso nuevo (crearSobre lo repite).
+  const [vig, cal] = await Promise.all([vigenciaEstudio(c), getCalibracion()]);
+  exigirPlazoDeFirma(vig?.fin ?? null, cal.DIAS_EXPIRACION_FIRMA);
   if (rol) await exigirAcuseAviso(contratoId, rol);
   // La transición es el mutex: el segundo clic recibe "Transicion no permitida".
   const { error } = await (supabase as unknown as {
@@ -420,10 +421,10 @@ export async function actualizarFirma(contratoId: string): Promise<void> {
 
 // ── Adenda 1 del módulo de contratos: prórroga del plazo (respuesta 10) ──
 
-const motivoSinProrroga = (m: 'vencido' | 'crc', crcHasta?: string) =>
+const motivoSinProrroga = (m: 'vencido' | 'crc', finCrc?: number) =>
   m === 'vencido'
     ? 'El plazo para firmar ya venció: en unos minutos el contrato queda con la firma incompleta.'
-    : `El proceso de firma no puede pasar la vigencia del certificado de riesgo${crcHasta ? ` (hasta el ${ddmmaaaa(crcHasta)})` : ''}: ya no admite prórroga.`;
+    : `El proceso de firma no puede pasar la vigencia del certificado de riesgo${finCrc ? ` (vence el ${fechaHora(finCrc)})` : ''}: ya no admite prórroga.`;
 
 /**
  * Una sola prórroga del plazo por proceso de firma, EN FIRMA y antes de que
@@ -443,7 +444,7 @@ export async function prorrogarPlazo(contratoId: string, userId: string): Promis
     throw AppError.conflict('El plazo de este proceso de firma ya se prorrogó: solo se permite una vez.', 'PRORROGA_YA_USADA');
   const [cal, vig] = await Promise.all([getCalibracion(), vigenciaEstudio(c)]);
   const p = prorrogaDelPlazo(Date.parse(s.expira_en), cal.DIAS_EXPIRACION_FIRMA, vig?.fin ?? 0, Date.now());
-  if ('motivo' in p) throw AppError.conflict(motivoSinProrroga(p.motivo, vig?.hasta), 'PRORROGA_NO_PERMITIDA');
+  if ('motivo' in p) throw AppError.conflict(motivoSinProrroga(p.motivo, vig?.fin), 'PRORROGA_NO_PERMITIDA');
 
   const hasta = new Date(p.hasta).toISOString();
   // La marca es el mutex: dos clics (o dos miembros) prorrogan una sola vez.
@@ -482,14 +483,14 @@ export async function prorrogarPlazo(contratoId: string, userId: string): Promis
 function prorrogaVista(
   s: Sobre,
   adenda: Adenda | null,
-  vig: { hasta: string; fin: number } | null,
+  vig: { fin: number } | null,
   dias: number,
 ): NonNullable<EnvioV3['prorroga']> {
   if (!adenda) return { puede: false, motivo: 'La prórroga del plazo todavía no está disponible.', hasta: null, usadaEn: null };
   if (adenda.plazo_prorrogado_en) return { puede: false, motivo: null, hasta: null, usadaEn: adenda.plazo_prorrogado_en };
   const p = prorrogaDelPlazo(Date.parse(s.expira_en), dias, vig?.fin ?? 0, Date.now());
   return 'motivo' in p
-    ? { puede: false, motivo: motivoSinProrroga(p.motivo, vig?.hasta), hasta: null, usadaEn: null }
+    ? { puede: false, motivo: motivoSinProrroga(p.motivo, vig?.fin), hasta: null, usadaEn: null }
     : { puede: true, motivo: null, hasta: new Date(p.hasta).toISOString(), usadaEn: null };
 }
 
@@ -646,8 +647,9 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
   const [adendaVivo, adendaAviso, cal] = await Promise.all([
     vivo ? leerAdenda(vivo.id) : null,
     incompleto ? leerAdenda(incompleto.id) : null,
-    vivo ? getCalibracion() : null,
+    getCalibracion(),
   ]);
+  const sinPlazo = vig ? plazoDeFirma(Date.now(), cal.DIAS_EXPIRACION_FIRMA, vig.fin) : ({ motivo: 'vencido' } as const);
   const acuse = adendaAviso?.aviso_aceptado_en
     ? { nombre: adendaAviso.aviso_aceptado_detalle?.nombre ?? '—', en: adendaAviso.aviso_aceptado_en }
     : null;
@@ -701,7 +703,7 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
       : null,
     // Sin la migración 20260930000001 el acuse no se puede registrar y nada lo exige.
     acuseDisponible: !!adendaAviso,
-    prorroga: vivo && cal ? prorrogaVista(vivo, adendaVivo, vig, cal.DIAS_EXPIRACION_FIRMA) : null,
+    prorroga: vivo ? prorrogaVista(vivo, adendaVivo, vig, cal.DIAS_EXPIRACION_FIRMA) : null,
     identidadPendientes: pendientes,
     // Las mismas puertas que reenviar/reintentar (y la ruta del flag): un botón habilitado nunca recibe un 409.
     reenvio:
@@ -714,12 +716,11 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
                 puede: false,
                 motivo: `El estudio está ${c.expedienteEstado === 'rechazado' ? 'marcado como no aprobable' : 'cerrado'}: el contrato ya no se puede reenviar a firma.`,
               }
-            : vig?.vigente
+            : !('motivo' in sinPlazo)
               ? { puede: true, motivo: null }
               : {
                   puede: false,
-                  motivo:
-                    'El estudio ya no está vigente: para reenviarlo se requiere una nueva evaluación. Si no la vas a hacer, cancela el contrato para liberar el inmueble.',
+                  motivo: `${motivoSinPlazo(sinPlazo.motivo, vig?.fin)} Si no la vas a renovar, cancela el contrato para liberar el inmueble.`,
                 },
     reintento: env.CONTRATOS_V3_ENABLED && c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0,
   };

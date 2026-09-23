@@ -100,7 +100,7 @@ vi.mock('@/modules/contratos/v3/firma/reconciliar', () => ({
   reconciliarSobre: vi.fn(),
   transicionar: vi.fn(),
   // CRC vigente: el proceso de firma no puede pasar su vigencia (Adenda 1 del módulo de contratos).
-  vigenciaEstudio: vi.fn(async () => ({ hasta: '2099-12-31', vigente: true, fin: Date.parse('2099-12-31T23:59:59-05:00') })),
+  vigenciaEstudio: vi.fn(async () => ({ fin: Date.parse('2099-12-31T23:59:59-05:00') })),
 }));
 vi.mock('@/lib/email', () => ({ sendFirmaEmail: (...a: unknown[]) => mockSendFirmaEmail(...a) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({

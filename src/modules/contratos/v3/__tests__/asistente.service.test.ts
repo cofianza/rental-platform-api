@@ -1606,6 +1606,21 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(eqs).toContainEqual(['updated_at', LEIDO]);
   });
 
+  it('con menos de tres días de CRC no sale a firma (Adenda 1, respuesta 10): 409 antes de generar nada', async () => {
+    const doc = await documentoRevisado(PASOS);
+    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    const crc = queues.get('estudios_certificados')!.at(-1)! as { data: Record<string, unknown> };
+    crc.data = { ...crc.data, fecha_vencimiento: '2026-09-17T12:00:00Z' }; // ahora: 15/09 15:00 UTC
+    const renders = vi.mocked(generarContratoVivienda).mock.calls.length;
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
+      statusCode: 409,
+      errorCode: 'CRC_SIN_MARGEN',
+    });
+    expect(vi.mocked(generarContratoVivienda).mock.calls.length).toBe(renders); // ni el render final
+    expect(storageApi.upload).not.toHaveBeenCalled();
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
   it('una vista previa vieja, o con datos que cambiaron, no se envía (sin subir nada)', async () => {
     const doc = await documentoRevisado(PASOS);
     encolarCarga({ contratos: [conDocumento(PASOS, doc)] });

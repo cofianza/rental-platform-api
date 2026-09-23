@@ -115,7 +115,7 @@ import {
   reintentar,
 } from '../firma.service';
 import { reconciliarSobre, webhookAucoV3 } from '../reconciliar';
-import { finDelDia } from '../reglas';
+import { AVISO_FIRMA_INCOMPLETA_VERSION, finDelDia } from '../reglas';
 import { fechaBogota } from '../../formato';
 
 // ── Datos ──
@@ -162,8 +162,6 @@ const roadmap = (n: number) => ({
 const statusFinish = { status: 'FINISH', signProfile: [{ id: 'G1', email: 'ana@x.co', status: 'FINISH' }, { id: 'G2', email: 'inmo@x.co', status: 'FINISH' }] };
 
 const DIA = 86_400_000;
-/** 'AAAA-MM-DD' + n días. */
-const masDiasIso = (f: string, n: number) => new Date(Date.parse(`${f}T00:00:00Z`) + n * DIA).toISOString().slice(0, 10);
 /** Medianoche (Bogotá) del día que cae dentro de n días: así vencen los plazos de firma. */
 const finDeDiaEn = (n: number, desde = Date.now()) => new Date(finDelDia(fechaBogota(new Date(desde + n * DIA)))).toISOString();
 
@@ -183,8 +181,8 @@ describe('reconciliarSobre: FINISH', () => {
   it('con todas las firmas en el roadmap activa la fianza con la fecha de la última firma y NO cierra el estudio', async () => {
     enqueue('contrato_v3_sobres', ok(sobre()), ok([{ id: 's1' }])); // leer, CAS
     enqueue('contrato_partes', ok(PARTES));
-    enqueue('contratos', ok(contrato()), ok(null)); // leerContrato, update fecha_firma
-    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contratos', ok(contrato()), ok(contrato()), ok(null)); // fin del CRC, leerContrato, update fecha_firma
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
     org();
     auco.getDocumentStatus.mockResolvedValue(statusFinish);
     auco.getDocumentRoadmap.mockResolvedValue(roadmap(2));
@@ -254,7 +252,10 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     expect(fila.tipo).toBe('contrato.firma_incompleta');
     expect(fila.mensaje).toContain('NO está operando');
     const constancia = tabla('contrato_v3_sobres', 'update').at(-1)!.args[0] as Record<string, unknown>;
-    expect(constancia).toMatchObject({ aviso_detalle: { texto_version: 'e5-11.7.4-v2' } });
+    expect(constancia).toMatchObject({ aviso_detalle: { texto_version: AVISO_FIRMA_INCOMPLETA_VERSION } });
+    // Adenda 1, respuesta 11: el aviso (app y correo) dice que hay que aceptarlo para reenviar o cancelar.
+    expect(fila.mensaje).toContain('primero acepta este aviso en la plataforma');
+    expect(tabla('efecto', 'correo')[0].args[0]).toMatchObject({ mensaje: fila.mensaje });
     // §11.7.3: los links de garantía y primer canon creados EN FIRMA se anulan.
     expect(tabla('efecto', 'cancelar-pagos')[0].args).toEqual(['e1', expect.any(String), ['garantia', 'primer_canon']]);
   });
@@ -295,15 +296,17 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
       expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
     });
 
-    it('si alguien firmó a última hora (Auco ya no anula: FINISH), no se cierra: el próximo barrido activa', async () => {
+    it('si la última firma le ganó a la anulación (FINISH), no se cierra ni se alerta un conflicto: decide la hora de esa firma', async () => {
       enqueue('contrato_v3_sobres', ok(sobre({ expira_en: vencido(120) })));
       enqueue('contrato_partes', ok(PARTES));
+      auco.cancelDocument.mockRejectedValueOnce(new Error('ya firmado'));
       auco.getDocumentStatus.mockResolvedValueOnce(pendiente).mockResolvedValueOnce(statusFinish);
 
       await reconciliarSobre('s1');
 
-      expect(tabla('contrato_v3_sobres', 'update').some((o) => (o.args[0] as { estado?: string }).estado === 'incompleto')).toBe(false);
-      expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(0);
+      expect(tabla('contrato_v3_sobres', 'update')).toEqual([]); // ni cierre ni "no se pudo anular"
+      expect(tabla('notificaciones', 'insert')).toEqual([]); // sin la alerta falsa firma.conflicto
+      expect(mockRpc).not.toHaveBeenCalled();
     });
 
     it('antes del plazo no toca nada; vencido, cierra sin esperar a Auco (allá vence después, Adenda 1)', async () => {
@@ -640,9 +643,34 @@ describe('crearSobre', () => {
     enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([{ id: 's1' }]), ok(sobre()));
     auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
     await crearSobre('c1', 'u1');
-    const finCrc = new Date(finDelDia(masDiasIso(fechaBogota(completado), 60))).toISOString();
+    // El fin exacto (completado + 60 días), no el fin del día calendario.
+    const finCrc = new Date(Date.parse(completado) + 60 * DIA).toISOString();
     expect((tabla('contrato_v3_sobres', 'insert')[0].args[0] as { expira_en: string }).expira_en).toBe(finCrc);
     expect((auco.uploadDocumentForSignature.mock.calls[0] as [Record<string, unknown>])[0].expiredDate).toBe(finCrc);
+  });
+
+  it('el fin del CRC es su fecha_vencimiento (la de /verificar) cuando el snapshot la trae', async () => {
+    const vence = new Date(Date.now() + 8 * DIA + 3_600_000).toISOString();
+    const dv = { documento: { snapshot: { estudio: { fechaCompletado: HOY }, crc: { fechaVencimiento: vence } } } };
+    enqueue('contratos', ok(contrato({ datos_variables: dv })), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([{ id: 's1' }]), ok(sobre()));
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
+    await crearSobre('c1', 'u1');
+    expect((tabla('contrato_v3_sobres', 'insert')[0].args[0] as { expira_en: string }).expira_en).toBe(vence);
+  });
+
+  it('con menos de 3 días de CRC no se abre el proceso: 409 CRC_SIN_MARGEN, sin sobre ni Auco', async () => {
+    const vence = new Date(Date.now() + 2 * DIA).toISOString();
+    const dv = { documento: { snapshot: { estudio: { fechaCompletado: HOY }, crc: { fechaVencimiento: vence } } } };
+    enqueue('contratos', ok(contrato({ datos_variables: dv })), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_partes', ok(PARTES));
+    const e = await crearSobre('c1', 'u1').catch((x: unknown) => x);
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CRC_SIN_MARGEN', message: expect.stringContaining('renovar la evaluación') });
+    expect(tabla('contrato_v3_sobres', 'insert')).toEqual([]);
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
   });
 
   it('con el CRC vencido no se abre el proceso: 409 CRC_VENCIDO sin sobre ni Auco', async () => {
@@ -1038,6 +1066,96 @@ describe('acuse del aviso de firma incompleta', () => {
       enqueue('contrato_v3_sobres', { data: null, error: { message: 'timeout' } });
       await expect(reenviar('c1', 'm1', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
       expect(mockRpc).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('Adenda 1 (respuesta 10): una firma fuera del plazo no activa la fianza', () => {
+  const hace = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+  /** Roadmap con las dos firmas: la del arrendador (la última) a la hora dada. */
+  const firmas = (ultima: string) => ({
+    participants: [{ id: '01', phone: '+573001112233' }, { id: '02', phone: '+573004445566' }],
+    activityLog: [
+      { action: 'PARTICIPANT_SIGN', participant: '01', timestamp: hace(180) },
+      { action: 'PARTICIPANT_SIGN', participant: '02', timestamp: ultima },
+    ],
+  });
+  beforeEach(() => {
+    auco.getDocumentStatus.mockReset();
+    auco.getDocumentRoadmap.mockReset();
+  });
+
+  it('la última firma 30 min después del plazo (más que la tolerancia de reloj): FIRMA INCOMPLETA con su aviso', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ expira_en: hace(60) })), ok([{ id: 's1' }]));
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contratos', ok(contrato()), ok(contrato()), ok({ estado: 'firma_incompleta' }));
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
+    org();
+    auco.getDocumentStatus.mockResolvedValue(statusFinish);
+    auco.getDocumentRoadmap.mockResolvedValue(firmas(hace(30)));
+
+    await reconciliarSobre('s1');
+
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({
+      estado: 'incompleto',
+      motivo: 'FUERA_PLAZO',
+      motivo_detalle: expect.stringContaining('la última firma fue el'),
+    });
+    expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(0);
+    expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
+    const aviso = (tabla('notificaciones', 'insert')[0].args[0] as Array<{ tipo: string; mensaje: string }>)[0];
+    expect(aviso).toMatchObject({ tipo: 'contrato.firma_incompleta', mensaje: expect.stringContaining('después del plazo para firmar') });
+  });
+
+  it('dentro de la tolerancia de reloj (5 min después del plazo) sí activa', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre({ expira_en: hace(60) })), ok([{ id: 's1' }]));
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contratos', ok(contrato()), ok(contrato()), ok(null));
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
+    org();
+    auco.getDocumentStatus.mockResolvedValue(statusFinish);
+    auco.getDocumentRoadmap.mockResolvedValue(firmas(hace(55)));
+
+    await reconciliarSobre('s1');
+
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({ estado: 'completo' });
+    expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(1);
+  });
+
+  it('en ningún caso después del fin del CRC, ni dentro de la tolerancia', async () => {
+    const plazo = hace(60); // el plazo era el fin del CRC
+    const conCrc = contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: HOY }, crc: { fechaVencimiento: plazo } } } } });
+    enqueue('contrato_v3_sobres', ok(sobre({ expira_en: plazo })), ok([{ id: 's1' }]));
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contratos', ok(conCrc), ok(conCrc), ok({ estado: 'firma_incompleta' }));
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
+    org();
+    auco.getDocumentStatus.mockResolvedValue(statusFinish);
+    auco.getDocumentRoadmap.mockResolvedValue(firmas(hace(55)));
+
+    await reconciliarSobre('s1');
+
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({ estado: 'incompleto', motivo: 'FUERA_PLAZO' });
+    expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(0);
+  });
+
+  it('reenviar con menos de 3 días de CRC: 409 antes de tocar el contrato, y la vista dice por qué', async () => {
+    const cercano = contrato({
+      estado: 'firma_incompleta',
+      datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: HOY }, crc: { fechaVencimiento: new Date(Date.now() + 2 * DIA).toISOString() } } } },
+    });
+    enqueue('contratos', ok(cercano));
+    enqueue('expedientes', EXPEDIENTE);
+    await expect(reenviar('c1', 'ad1', 'administrador')).rejects.toMatchObject({ statusCode: 409, errorCode: 'CRC_SIN_MARGEN' });
+    expect(mockRpc).not.toHaveBeenCalled();
+
+    enqueue('contratos', ok(cercano));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(incompleto()), ok({ id: 's1' }), ok(incompleto()), ok(ADENDA));
+    enqueue('contrato_partes', ok(PARTES));
+    expect((await estadoEnviado('c1'))!.reenvio).toEqual({
+      puede: false,
+      motivo: expect.stringMatching(/menos de tres días.*cancela el contrato/),
     });
   });
 });
