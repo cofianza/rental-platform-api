@@ -107,51 +107,53 @@ export async function getAutorizacionForExpediente(
   // para un propietario/inmobiliaria/solicitante fuera de su cartera. Esta fila
   // es evidencia legal de la firma habeas data (IP, dispositivo, texto literal),
   // así que no debe exponerse cross-tenant conociendo solo el expedienteId.
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
-  // Verify expediente exists. Para roles internos el guard es no-op, así que
-  // conservamos este 404 explícito de "no existe".
-  const { data: expediente, error: expError } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('id', expedienteId)
-    .single();
+  // Las lecturas salen en paralelo con el guard (antes 4 idas en serie): si el
+  // guard da 404, Promise.all rechaza y lo leído se descarta.
+  const [, { data: expediente, error: expError }, { data: autorizacion }, perfil] = await Promise.all([
+    assertExpedienteAccess(expedienteId, userId, userRol),
+    // Verify expediente exists. Para roles internos el guard es no-op, así que
+    // conservamos este 404 explícito de "no existe".
+    (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('id', expedienteId)
+      .single(),
+    // Get latest autorizacion DEL TITULAR para este expediente. Incluye los
+    // consentimientos opcionales que el solicitante eligió y la evidencia
+    // completa de la firma (IP, dispositivo, versión y texto literal firmado) —
+    // el panel admin los muestra como soporte legal de la autorización.
+    //
+    // `coarrendatario_id IS NULL` NO es opcional: desde 2026-09-03 el
+    // co-arrendatario invitado tiene su PROPIA fila con el MISMO expediente_id, y
+    // como se inserta después, era la que devolvía el `order by created_at desc`.
+    // El panel habría mostrado la IP, el dispositivo y el texto de OTRO titular
+    // de datos como si fueran los del solicitante: exactamente la evidencia que
+    // el 8.4 exige poder demostrar si alguna vez se cuestiona.
+    (supabase
+      .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, canal, metodo_firma, autorizado_en, hash_documento, fecha_revocacion, motivo_revocacion, token_expiracion, created_at, consent_analitica, consent_comercial, consent_historial_referencia, ip_autorizacion, user_agent, version_terminos, texto_autorizado, numero_documento_aceptante, tipo_documento_aceptante, vigente_hasta')
+      .eq('expediente_id', expedienteId)
+      .is('coarrendatario_id', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    // PASO 5 (Flujo §8): lo que el prospecto declaro en su celular. Se adjunta
+    // por ALLOWLIST construida campo a campo, NUNCA con `...perfil`.
+    //
+    // Una blocklist se rompe sola en cuanto alguien agregue una columna, y este
+    // endpoint corre bajo authorize('expedientes','read') — que la inmobiliaria
+    // tiene. La promesa que el §8.2 le hace al prospecto en pantalla ("esta
+    // cifra no se la mostramos a la inmobiliaria") se sostiene AQUI, en el
+    // servicio junto al tenant guard, no en el render: con DevTools se lee igual.
+    leerPerfilProspecto(expedienteId, userRol),
+  ]);
 
   if (expError || !expediente) {
     throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
-  // Get latest autorizacion DEL TITULAR para este expediente. Incluye los
-  // consentimientos opcionales que el solicitante eligió y la evidencia
-  // completa de la firma (IP, dispositivo, versión y texto literal firmado) —
-  // el panel admin los muestra como soporte legal de la autorización.
-  //
-  // `coarrendatario_id IS NULL` NO es opcional: desde 2026-09-03 el
-  // co-arrendatario invitado tiene su PROPIA fila con el MISMO expediente_id, y
-  // como se inserta después, era la que devolvía el `order by created_at desc`.
-  // El panel habría mostrado la IP, el dispositivo y el texto de OTRO titular
-  // de datos como si fueran los del solicitante: exactamente la evidencia que
-  // el 8.4 exige poder demostrar si alguna vez se cuestiona.
-  const { data: autorizacion } = await (supabase
-    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, canal, metodo_firma, autorizado_en, hash_documento, fecha_revocacion, motivo_revocacion, token_expiracion, created_at, consent_analitica, consent_comercial, consent_historial_referencia, ip_autorizacion, user_agent, version_terminos, texto_autorizado, numero_documento_aceptante, tipo_documento_aceptante, vigente_hasta')
-    .eq('expediente_id', expedienteId)
-    .is('coarrendatario_id', null)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
   if (!autorizacion) return null;
 
-  // PASO 5 (Flujo §8): lo que el prospecto declaro en su celular. Se adjunta
-  // por ALLOWLIST construida campo a campo, NUNCA con `...perfil`.
-  //
-  // Una blocklist se rompe sola en cuanto alguien agregue una columna, y este
-  // endpoint corre bajo authorize('expedientes','read') — que la inmobiliaria
-  // tiene. La promesa que el §8.2 le hace al prospecto en pantalla ("esta
-  // cifra no se la mostramos a la inmobiliaria") se sostiene AQUI, en el
-  // servicio junto al tenant guard, no en el render: con DevTools se lee igual.
-  const perfil = await leerPerfilProspecto(expedienteId, userRol);
   return { ...(autorizacion as Record<string, unknown>), perfil_prospecto: perfil };
 }
 

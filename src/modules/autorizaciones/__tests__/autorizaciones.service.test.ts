@@ -249,6 +249,26 @@ describe('autorizaciones.service', () => {
       expect(cofianza?.perfil_prospecto).toMatchObject({ ingreso_declarado_cop: 5_000_000, situacion_laboral: 'empleado', donde_labora: 'Acme' });
       expect(cofianza?.perfil_prospecto).toHaveProperty('discrepancia_ingreso');
     });
+
+    it('lanza las lecturas sin esperar al guard, y con 404 no devuelve nada', async () => {
+      let soltarGuard!: () => void;
+      mockAssertAccess.mockReturnValueOnce(new Promise<undefined>((r) => (soltarGuard = () => r(undefined))));
+      enqueue('expedientes', { data: { id: EXPEDIENTE_ID } });
+      enqueue('autorizaciones_habeas_data', { data: { id: AUTORIZACION_ID, estado: 'pendiente' } });
+
+      const pendiente = getAutorizacionForExpediente(EXPEDIENTE_ID, USER_ID, 'inmobiliaria');
+      // Con el guard aún pendiente, las tres consultas ya salieron (antes 4 idas en serie).
+      for (const t of ['expedientes', 'autorizaciones_habeas_data', 'autorizacion_perfil_prospecto']) {
+        expect(mockFrom).toHaveBeenCalledWith(t);
+      }
+      soltarGuard();
+      await expect(pendiente).resolves.toMatchObject({ id: AUTORIZACION_ID });
+
+      mockAssertAccess.mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404 }));
+      enqueue('expedientes', { data: { id: EXPEDIENTE_ID } });
+      enqueue('autorizaciones_habeas_data', { data: { id: AUTORIZACION_ID, estado: 'autorizado' } });
+      await expect(getAutorizacionForExpediente(EXPEDIENTE_ID, 'intruso', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
+    });
   });
 
   // ============================================================
