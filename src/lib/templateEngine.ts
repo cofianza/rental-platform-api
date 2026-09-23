@@ -19,6 +19,8 @@
  * escapar — son admin-controlled.
  */
 
+import { escapeHtml } from '@/lib/escapeHtml';
+
 type Context = Record<string, unknown>;
 
 function getValue(ctx: Context, path: string): unknown {
@@ -42,15 +44,6 @@ function isTruthy(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === 'object') return Object.keys(value).length > 0;
   return Boolean(value);
-}
-
-function escapeHtml(input: string): string {
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 /**

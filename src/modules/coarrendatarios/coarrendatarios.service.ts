@@ -22,6 +22,7 @@ import {
   notificarResponsableExpediente,
 } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { escapeHtml } from '@/lib/escapeHtml';
 // Tope de canon (flujo del modulo de estudios §4.4). El estudio del
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
@@ -219,6 +220,10 @@ function enviarEmailInvitacionCoarrendatario(opts: {
   expedienteId: string;
 }): void {
   const link = urlInvitacionCoarrendatario(opts.token);
+  // Texto de personas escapado en el cuerpo; el asunto va en texto plano.
+  const nombre = escapeHtml(opts.nombre);
+  const titular = escapeHtml(opts.titularNombre);
+  const inmueble = escapeHtml(opts.inmuebleStr);
   resend.emails
     .send({
       from: FROM,
@@ -230,9 +235,9 @@ function enviarEmailInvitacionCoarrendatario(opts: {
             <h1 style="color: white; margin: 0; font-size: 24px;">Invitación a co-arrendar</h1>
           </div>
           <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
-            <p style="color: #374151; font-size: 16px;">Hola <strong>${opts.nombre}</strong>,</p>
-            <p style="color: #6b7280;"><strong>${opts.titularNombre}</strong> te invita a ser su co-arrendatario para el inmueble en <strong>${opts.inmuebleStr}</strong>.</p>
-            <p style="color: #6b7280;">En Cofianza renta sin fiador. Si aceptas la invitación, evaluaremos tu perfil junto con el de ${opts.titularNombre} y respaldamos a los dos como un solo arrendatario.</p>
+            <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
+            <p style="color: #6b7280;"><strong>${titular}</strong> te invita a ser su co-arrendatario para el inmueble en <strong>${inmueble}</strong>.</p>
+            <p style="color: #6b7280;">En Cofianza renta sin fiador. Si aceptas la invitación, evaluaremos tu perfil junto con el de ${titular} y respaldamos a los dos como un solo arrendatario.</p>
             <div style="text-align: center; margin: 24px 0;">
               <a href="${link}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Revisar invitación</a>
             </div>
@@ -1555,8 +1560,11 @@ interface SendResultadoEmailInput {
 
 /** Puro: el asunto y el cuerpo segun la decision y el resultado propio del coa. */
 export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): { subject: string; html: string } {
-  const inmuebleStr = `${input.inmuebleDireccion}${input.inmuebleCiudad ? `, ${input.inmuebleCiudad}` : ''}`;
+  // Texto de personas escapado en el cuerpo; el asunto (titular) va en texto plano.
+  const inmuebleStr = escapeHtml(`${input.inmuebleDireccion}${input.inmuebleCiudad ? `, ${input.inmuebleCiudad}` : ''}`);
   const titular = input.titularNombre || 'el titular';
+  const titularHtml = escapeHtml(titular);
+  const nombre = escapeHtml(input.nombre);
   const porReglaDura = (input.reglasDurasCoarrendatario?.length ?? 0) > 0;
 
   // El subject y el cuerpo dependen de la decisión final del expediente.
@@ -1573,19 +1581,19 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
     // haber hecho su parte.
     subject = `Tu estudio ya está listo — arrendamiento con ${titular} (Cofianza)`;
     cuerpoPrincipal = `
-      <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+      <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
       <p style="color: #6b7280;">Ya terminamos tu estudio crediticio para el inmueble en <strong>${inmuebleStr}</strong>.
-      No es un rechazo: un analista de Cofianza está revisando el caso junto con el de ${titular} y es quien toma la decisión.</p>
+      No es un rechazo: un analista de Cofianza está revisando el caso junto con el de ${titularHtml} y es quien toma la decisión.</p>
       <p style="color: #6b7280;">Te escribimos a este mismo correo en cuanto haya respuesta. No tienes que hacer nada más.</p>
     `;
   } else if (input.decisionExpediente === 'aprobado') {
     subject = `Tu estudio se aprobó — arrendamiento con ${titular} (Cofianza)`;
     cuerpoPrincipal = `
-      <p style="color: #374151; font-size: 16px;">¡Buenas noticias, <strong>${input.nombre}</strong>!</p>
+      <p style="color: #374151; font-size: 16px;">¡Buenas noticias, <strong>${nombre}</strong>!</p>
       <p style="color: #6b7280;">${input.coarrendatarioResultado === 'aprobado'
-        ? `Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong> y junto con ${titular}\n      pasaron la evaluación combinada`
-        : `Cofianza <strong style="color: #047857;">aprobó</strong> el arrendamiento tuyo y de ${titular}`} para el inmueble en <strong>${inmuebleStr}</strong>.</p>
-      <p style="color: #6b7280;">El siguiente paso lo coordinamos con ${titular} (firma del contrato y entrega del inmueble).
+        ? `Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong> y junto con ${titularHtml}\n      pasaron la evaluación combinada`
+        : `Cofianza <strong style="color: #047857;">aprobó</strong> el arrendamiento tuyo y de ${titularHtml}`} para el inmueble en <strong>${inmuebleStr}</strong>.</p>
+      <p style="color: #6b7280;">El siguiente paso lo coordinamos con ${titularHtml} (firma del contrato y entrega del inmueble).
       No tienes que hacer nada más por ahora — si necesitamos un dato adicional, te escribimos a este mismo correo.</p>
     `;
     badgeColor = '#047857'; // green
@@ -1595,9 +1603,9 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
     subject = `Resultado de tu estudio — ${titular} (Cofianza)`;
     if (input.coarrendatarioResultado === 'aprobado') {
       cuerpoPrincipal = `
-        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
         <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong>. Sin embargo,
-        la evaluación combinada con ${titular} no permite que respaldemos este arrendamiento en este momento.</p>
+        la evaluación combinada con ${titularHtml} no permite que respaldemos este arrendamiento en este momento.</p>
         <p style="color: #6b7280;">El proceso queda cerrado. Si en el futuro hay otra oportunidad con Cofianza, con gusto te
         evaluamos de nuevo.</p>
       `;
@@ -1609,12 +1617,12 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
       // defecto que ya se corrigio para el titular en orchestrator.emails.ts.
       cuerpoPrincipal = porReglaDura
         ? `
-        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
         <p style="color: #6b7280;">${motivoProspectoReglasDuras(input.reglasDurasCoarrendatario ?? [])}</p>
         <p style="color: #6b7280;">Por esta razón no podemos respaldar el arrendamiento del inmueble en <strong>${inmuebleStr}</strong>.</p>
       `
         : `
-        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
         <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #b91c1c;">no aprobado</strong>.
         Por esta razón no podemos respaldar el arrendamiento del inmueble en <strong>${inmuebleStr}</strong>.</p>
         <p style="color: #6b7280;">Si tienes dudas sobre tu reporte, puedes consultarlo directamente con la central de riesgo.</p>
@@ -1623,9 +1631,9 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
     } else {
       // condicionado o cualquier otro estado: rechazo combinado.
       cuerpoPrincipal = `
-        <p style="color: #374151; font-size: 16px;">Hola <strong>${input.nombre}</strong>,</p>
+        <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
         <p style="color: #6b7280;">Tu estudio crediticio quedó <strong style="color: #b45309;">condicionado</strong>.
-        Combinado con el de ${titular}, no alcanza el perfil que necesitamos para respaldar el arrendamiento del
+        Combinado con el de ${titularHtml}, no alcanza el perfil que necesitamos para respaldar el arrendamiento del
         inmueble en <strong>${inmuebleStr}</strong>.</p>
         <p style="color: #6b7280;">El proceso queda cerrado.</p>
       `;
@@ -1654,7 +1662,7 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
           ${scoreLine}
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
           <p style="color: #9ca3af; font-size: 12px;">
-            Recibiste este correo porque ${titular} te invitó a ser su co-arrendatario en Cofianza y aceptaste el estudio crediticio.
+            Recibiste este correo porque ${titularHtml} te invitó a ser su co-arrendatario en Cofianza y aceptaste el estudio crediticio.
             Cofianza no almacena tu reporte de centrales de riesgo — solo usamos el resultado para esta evaluación puntual.
           </p>
         </div>

@@ -510,6 +510,20 @@ describe('construirCorreoCoarrendatario', () => {
     expect(html).not.toContain('Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong>');
   });
 
+  it('el nombre y el titular no inyectan HTML en el cuerpo; el asunto va en texto plano', () => {
+    const PHISHING = '<a href="https://evil.co">Verifica tu cuenta</a>';
+    const { subject, html } = construirCorreoCoarrendatario({
+      ...base,
+      nombre: PHISHING,
+      titularNombre: PHISHING,
+      coarrendatarioResultado: 'aprobado',
+      decisionExpediente: 'aprobado',
+    });
+    expect(html).not.toContain('<a href="https://evil.co"');
+    expect(html).toContain('&lt;a href=');
+    expect(subject).toContain(PHISHING);
+  });
+
   it('rechazado: cierra el proceso sin prometer nada', () => {
     const { html } = construirCorreoCoarrendatario({
       ...base,

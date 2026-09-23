@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { env } from '@/config';
 import { logger } from '@/lib/logger';
 import { COMPANY } from '@/config/company';
+import { escapeHtml } from '@/lib/escapeHtml';
 
 // Antes los correos cerraban con "contacta a tu agente inmobiliario": el
 // prospecto no tiene agente y se quedaba sin a quien escribirle. Se leen del
@@ -92,7 +93,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
           <tr>
             <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
-                Bienvenido, ${nombre}
+                Bienvenido, ${escapeHtml(nombre)}
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
                 Se ha creado tu cuenta en Cofianza. A continuación encontrarás tus credenciales de acceso:
@@ -103,7 +104,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Correo electrónico:</p>
-                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${email}</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${escapeHtml(email)}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Contraseña temporal:</p>
                     <p style="margin: 0; font-size: 18px; font-weight: 700; color: #0f766e; letter-spacing: 1px; font-family: monospace;">${tempPassword}</p>
                   </td>
@@ -205,7 +206,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
                 Verifica tu correo electronico
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, gracias por registrarte en Cofianza. Para completar tu registro, verifica tu correo electronico haciendo clic en el siguiente boton:
+                Hola ${escapeHtml(nombre)}, gracias por registrarte en Cofianza. Para completar tu registro, verifica tu correo electronico haciendo clic en el siguiente boton:
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -317,7 +318,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                 Evaluación crediticia
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, como parte del proceso de arrendamiento necesitamos que completes un formulario con tu informacion personal para realizar la evaluación crediticia.
+                Hola ${escapeHtml(nombre)}, como parte del proceso de arrendamiento necesitamos que completes un formulario con tu informacion personal para realizar la evaluación crediticia.
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -435,7 +436,7 @@ function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): strin
                 Recibimos tu interés
               </h1>
               <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${p.nombre}, gracias por tu interés en <strong>${p.inmuebleLabel}</strong>.
+                Hola ${escapeHtml(p.nombre)}, gracias por tu interés en <strong>${escapeHtml(p.inmuebleLabel)}</strong>.
               </p>
               <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
                 El anunciante (propietario o inmobiliaria) te contactará pronto por WhatsApp o correo
@@ -536,8 +537,8 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
                 Tienes un nuevo interesado
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${p.duenoNombre}, una persona mostró interés en tu inmueble
-                <strong>${p.inmuebleLabel}</strong> desde la vitrina de Cofianza. Estos son sus datos de contacto:
+                Hola ${escapeHtml(p.duenoNombre)}, una persona mostró interés en tu inmueble
+                <strong>${escapeHtml(p.inmuebleLabel)}</strong> desde la vitrina de Cofianza. Estos son sus datos de contacto:
               </p>
 
               <!-- Datos del interesado -->
@@ -545,12 +546,12 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Nombre:</p>
-                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${p.interesadoNombre}</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${escapeHtml(p.interesadoNombre)}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">WhatsApp:</p>
-                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0f766e;">${p.interesadoTelefono}</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0f766e;">${escapeHtml(p.interesadoTelefono)}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Correo:</p>
-                    <p style="margin: 0 0 ${p.mensaje ? '16px' : '0'}; font-size: 16px; font-weight: 600; color: #0f766e;">${p.interesadoEmail}</p>
-                    ${p.mensaje ? `<p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Mensaje:</p><p style="margin: 0; font-size: 15px; color: #111827;">${p.mensaje}</p>` : ''}
+                    <p style="margin: 0 0 ${p.mensaje ? '16px' : '0'}; font-size: 16px; font-weight: 600; color: #0f766e;">${escapeHtml(p.interesadoEmail)}</p>
+                    ${p.mensaje ? `<p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Mensaje:</p><p style="margin: 0; font-size: 15px; color: #111827;">${escapeHtml(p.mensaje)}</p>` : ''}
                   </td>
                 </tr>
               </table>
@@ -671,7 +672,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
                 Autorización de consulta en centrales de riesgo
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, como parte del proceso de arrendamiento necesitamos tu autorización para consultar tu información en centrales de riesgo crediticio (Ley 1581/2012 y Ley 1266/2008).
+                Hola ${escapeHtml(nombre)}, como parte del proceso de arrendamiento necesitamos tu autorización para consultar tu información en centrales de riesgo crediticio (Ley 1581/2012 y Ley 1266/2008).
               </p>
 
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
@@ -766,7 +767,7 @@ function buildOtpHtml(nombre: string, codigo: string): string {
                 Código de verificación
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, tu código de verificación para el proceso de firma electrónica es:
+                Hola ${escapeHtml(nombre)}, tu código de verificación para el proceso de firma electrónica es:
               </p>
 
               <!-- Code box -->
@@ -883,7 +884,7 @@ function buildFirmaHtml(
                 Firma de contrato de arrendamiento
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, ${copy?.intro ?? 'tienes un contrato de arrendamiento pendiente de firma. Haz clic en el siguiente botón para revisar y firmar el documento.'}
+                Hola ${escapeHtml(nombre)}, ${copy?.intro ?? 'tienes un contrato de arrendamiento pendiente de firma. Haz clic en el siguiente botón para revisar y firmar el documento.'}
               </p>
 
               <!-- Contract info -->
@@ -891,9 +892,9 @@ function buildFirmaHtml(
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Inmueble:</p>
-                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${context.direccion_inmueble}${context.ciudad_inmueble ? `, ${context.ciudad_inmueble}` : ''}</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${escapeHtml(context.direccion_inmueble)}${context.ciudad_inmueble ? `, ${escapeHtml(context.ciudad_inmueble)}` : ''}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Arrendatario:</p>
-                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">${context.nombre_arrendatario}</p>
+                    <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">${escapeHtml(context.nombre_arrendatario)}</p>
                   </td>
                 </tr>
               </table>
@@ -1013,7 +1014,7 @@ function buildPaymentLinkHtml(
                 Link de pago
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${nombre}, tienes un pago pendiente asociado a tu proceso de arrendamiento. A continuacion encontraras los detalles:
+                Hola ${escapeHtml(nombre)}, tienes un pago pendiente asociado a tu proceso de arrendamiento. A continuacion encontraras los detalles:
               </p>
 
               <!-- Payment details box -->
