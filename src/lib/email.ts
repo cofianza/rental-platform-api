@@ -227,7 +227,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirara en <strong>24 horas</strong>. Una vez verificado tu correo, un administrador activara tu cuenta.
+                Este enlace expira en <strong>24 horas</strong>. Al verificar tu correo, tu cuenta queda activa y ya puedes iniciar sesión.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
