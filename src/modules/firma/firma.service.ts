@@ -939,6 +939,21 @@ export async function listarSolicitudes(contratoId: string, userId?: string, use
 // ============================================================
 
 /**
+ * Anula el sobre en Auco. Auco exige `message` y `email` (usuario de la
+ * organización) y puede responder 200 sin haber cancelado (`errors.cant`), así
+ * que eso también se registra como error. Lanza solo si la llamada falla.
+ */
+async function cancelarSobreEnAuco(code: string): Promise<void> {
+  const r = await aucoClient.cancelDocument(code, {
+    message: 'Contrato cancelado en Cofianza',
+    email: env.AUCO_SENDER_EMAIL,
+  });
+  if (r?.success === false || (r?.errors?.cant ?? 0) > 0) {
+    logger.error({ code, respuesta: r }, 'Auco no canceló el documento');
+  }
+}
+
+/**
  * Cancela TODAS las solicitudes de firma no terminales de un contrato (y sus
  * sobres en Auco). Pensada para los side-effects de "Cancelar contrato": si el
  * contrato estaba en pendiente_firma, sin esto los firmantes conservaban el
@@ -959,7 +974,7 @@ export async function cancelarSolicitudesDeContrato(contratoId: string): Promise
     for (const row of rows) {
       if (row.auco_document_code) {
         try {
-          await aucoClient.cancelDocument(row.auco_document_code);
+          await cancelarSobreEnAuco(row.auco_document_code);
         } catch (aucoError) {
           logger.error(
             { error: aucoError, solicitudId: row.id, contratoId },
@@ -1027,7 +1042,7 @@ export async function cancelarSolicitud(
   // Cancel in Auco if document code exists
   if (row.auco_document_code) {
     try {
-      await aucoClient.cancelDocument(row.auco_document_code);
+      await cancelarSobreEnAuco(row.auco_document_code);
     } catch (aucoError) {
       logger.error({ error: aucoError, solicitudId }, 'Error al cancelar documento en Auco');
     }
@@ -1092,6 +1107,14 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
     nombre_firmante: string;
     email_firmante: string;
   };
+
+  // Un sobre que Cofianza ya canceló (o que venció) no se toca: si Auco siguió
+  // vivo y alguien firmó, el evento no puede volver 'firmado' al firmante ni al
+  // sobre de un contrato cancelado.
+  if (['cancelado', 'expirado'].includes(row.estado)) {
+    logger.info({ id: row.id, estado: row.estado, aucoStatus: status }, 'Auco webhook: sobre cancelado o vencido, evento ignorado');
+    return;
+  }
 
   // Multi-parte (M1): si el contrato tiene firmantes registrados, el estado por
   // parte vive en contrato_firmantes. Actualizamos DIRECTO desde el PAYLOAD del
