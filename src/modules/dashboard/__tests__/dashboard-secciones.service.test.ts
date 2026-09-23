@@ -28,6 +28,11 @@ vi.mock('@/lib/supabase', () => ({
   supabase: { from: vi.fn() },
 }));
 
+// dashboard.service (conteo de visitas del mes) importa el logger, que valida el env.
+vi.mock('@/lib/logger', () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+
 import { supabase } from '@/lib/supabase';
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 
@@ -307,6 +312,43 @@ describe('getPerfilDetalle()', () => {
   it('lanza error 404 cuando el perfil no existe', async () => {
     byTable({ perfiles: { data: null }, inmuebles: { data: [] } });
     await expect(secciones.getPerfilDetalle('no-existe')).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+// ── getVitrinaAdmin ─────────────────────────────────────────
+
+describe('getVitrinaAdmin()', () => {
+  it('visitas del mes = conteo exacto del mes; por inmueble cuenta vistas e interesados embebidos', async () => {
+    let expedientesChain: Record<string, ReturnType<typeof vi.fn>> | null = null;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'inmuebles') {
+        return createChain({
+          data: [
+            {
+              id: 'i1', codigo: 'APT-1', direccion: 'Calle 1', estado: 'disponible', created_at: '2026-09-01',
+              vitrina_interacciones: [{ tipo: 'vista' }, { tipo: 'vista' }],
+              inmueble_interesados: [{ id: 'l1' }],
+            },
+            { id: 'i2', codigo: 'APT-2', estado: 'disponible', created_at: '2026-09-02', vitrina_interacciones: [], inmueble_interesados: [] },
+          ],
+        });
+      }
+      if (table === 'vitrina_interacciones') return createChain({ data: null, count: 1500 });
+      if (table === 'expedientes') {
+        const chain = createChain({ data: [] });
+        expedientesChain = chain as unknown as Record<string, ReturnType<typeof vi.fn>>;
+        return chain;
+      }
+      return createChain({ data: [] });
+    });
+
+    const r = await secciones.getVitrinaAdmin();
+
+    expect(r.visitasMes).toBe(1500); // sin el tope de 1000 filas
+    expect(r.publicados[0]).toMatchObject({ visitas: 2, contactos: 1 });
+    expect(r.publicados[1]).toMatchObject({ visitas: 0, contactos: 0 });
+    // Prospectos: el mismo criterio que el Resumen (sin cerrados).
+    expect(expedientesChain!.neq).toHaveBeenCalledWith('estado', 'cerrado');
   });
 });
 

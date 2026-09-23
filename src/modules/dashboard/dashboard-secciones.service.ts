@@ -14,6 +14,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
 import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
+import { countVitrinaVisitasMes } from './dashboard.service';
 
 // Estados de contrato considerados "activos" (firmado = listo, vigente = corriendo).
 const ESTADOS_CONTRATO_ACTIVO = ['firmado', 'vigente'] as const;
@@ -501,8 +502,8 @@ export interface VitrinaPublicadoRow {
   municipio: string | null;
   publicado: string; // created_at (aprox)
   estado: string; // disponible | en_estudio | ocupado | inactivo
-  visitas: number;
-  contactos: number;
+  visitas: number; // vistas desde que se publicó (histórico)
+  contactos: number; // interesados "Me interesa" sin cuenta
 }
 
 export interface VitrinaProspectoRow {
@@ -519,38 +520,37 @@ export interface VitrinaProspectoRow {
 export interface VitrinaData {
   publicados: VitrinaPublicadoRow[];
   prospectos: VitrinaProspectoRow[];
+  /** Vistas del mes en curso (hora Colombia): el mismo número del Resumen. */
+  visitasMes: number;
 }
 
 export async function getVitrinaAdmin(): Promise<VitrinaData> {
-  // Publicados
-  const { data: inms, error: e1 } = await (
-    supabase.from('inmuebles' as string) as ReturnType<typeof supabase.from>
-  )
-    .select('id, codigo, direccion, ciudad, tipo, valor_arriendo, estado, created_at')
-    .eq('visible_vitrina', true)
-    .order('created_at', { ascending: false });
-  if (e1) throw fromSupabaseError(e1);
+  // Publicados con sus vistas y sus interesados ("Me interesa" sin cuenta)
+  // embebidos. Antes las interacciones se leían sueltas, sin filtrar el tipo y
+  // con el tope de 1000 filas de PostgREST; la web las sumaba como "Visitas
+  // mes" (era el histórico truncado) y "Contactos" contaba un tipo que nadie
+  // escribe (siempre 0).
+  // ponytail: trae una fila por vista; pasar a un conteo agregado (RPC) si la
+  // vitrina llega a decenas de miles de vistas.
+  const [inmRes, expsRes, visitasMes] = await Promise.all([
+    (supabase.from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('id, codigo, direccion, ciudad, tipo, valor_arriendo, estado, created_at, vitrina_interacciones(tipo), inmueble_interesados(id)')
+      .eq('visible_vitrina', true)
+      .eq('vitrina_interacciones.tipo', 'vista')
+      .order('created_at', { ascending: false }),
+    // Prospectos = expedientes abiertos provenientes de la vitrina pública
+    // (mismo criterio que el KPI del Resumen: sin los cerrados).
+    (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id, source, estado, notas, created_at, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido, telefono)')
+      .eq('source', 'vitrina_publica')
+      .neq('estado', 'cerrado')
+      .order('created_at', { ascending: false }),
+    countVitrinaVisitasMes(),
+  ]);
+  if (inmRes.error) throw fromSupabaseError(inmRes.error);
+  if (expsRes.error) throw fromSupabaseError(expsRes.error);
 
-  const inmRows = (inms ?? []) as Array<Record<string, unknown>>;
-  const inmuebleIds = inmRows.map((r) => r.id as string);
-
-  // Interacciones (vista/contacto) agregadas por inmueble
-  const visitasPorInmueble = new Map<string, number>();
-  const contactosPorInmueble = new Map<string, number>();
-  if (inmuebleIds.length > 0) {
-    const { data: inter, error: e2 } = await (
-      supabase.from('vitrina_interacciones' as string) as ReturnType<typeof supabase.from>
-    )
-      .select('inmueble_id, tipo')
-      .in('inmueble_id', inmuebleIds);
-    if (e2) throw fromSupabaseError(e2);
-    for (const it of (inter ?? []) as Array<{ inmueble_id: string; tipo: string }>) {
-      const target = it.tipo === 'contacto' ? contactosPorInmueble : visitasPorInmueble;
-      target.set(it.inmueble_id, (target.get(it.inmueble_id) ?? 0) + 1);
-    }
-  }
-
-  const publicados: VitrinaPublicadoRow[] = inmRows.map((r) => ({
+  const publicados: VitrinaPublicadoRow[] = ((inmRes.data ?? []) as Array<Record<string, unknown>>).map((r) => ({
     id: r.id as string,
     codigo: (r.codigo as string) ?? null,
     inmueble: fmtInmueble({ codigo: (r.codigo as string) ?? null, direccion: (r.direccion as string) ?? null }),
@@ -559,20 +559,11 @@ export async function getVitrinaAdmin(): Promise<VitrinaData> {
     municipio: (r.ciudad as string) ?? null,
     publicado: r.created_at as string,
     estado: (r.estado as string) ?? 'disponible',
-    visitas: visitasPorInmueble.get(r.id as string) ?? 0,
-    contactos: contactosPorInmueble.get(r.id as string) ?? 0,
+    visitas: ((r.vitrina_interacciones as unknown[] | null) ?? []).length,
+    contactos: ((r.inmueble_interesados as unknown[] | null) ?? []).length,
   }));
 
-  // Prospectos = expedientes provenientes de la vitrina pública
-  const { data: exps, error: e3 } = await (
-    supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>
-  )
-    .select('id, source, estado, notas, created_at, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido, telefono)')
-    .eq('source', 'vitrina_publica')
-    .order('created_at', { ascending: false });
-  if (e3) throw fromSupabaseError(e3);
-
-  const prospectos: VitrinaProspectoRow[] = ((exps ?? []) as Array<Record<string, unknown>>).map((r) => {
+  const prospectos: VitrinaProspectoRow[] = ((expsRes.data ?? []) as Array<Record<string, unknown>>).map((r) => {
     const sol = r.solicitantes as { nombre: string | null; apellido: string | null; telefono: string | null } | null;
     const inm = r.inmuebles as { codigo: string | null; direccion: string | null } | null;
     return {
@@ -587,7 +578,7 @@ export async function getVitrinaAdmin(): Promise<VitrinaData> {
     };
   });
 
-  return { publicados, prospectos };
+  return { publicados, prospectos, visitasMes };
 }
 
 // ── INGRESOS (detalle por contrato + resumen) ───────────────

@@ -1165,7 +1165,7 @@ async function countVitrinaProspectos(): Promise<number> {
   return count ?? 0;
 }
 
-async function countVitrinaVisitasMes(): Promise<number> {
+export async function countVitrinaVisitasMes(): Promise<number> {
   // Inicio de mes anclado a hora Colombia (no a la hora local del servidor,
   // que en Railway/Render es UTC). created_at es TIMESTAMPTZ.
   const { year, month0 } = bogotaYearMonth(new Date());
