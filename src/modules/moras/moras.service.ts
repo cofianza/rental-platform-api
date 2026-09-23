@@ -12,7 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
-import { resolveAllowedReporterIds } from '@/lib/tenantScope';
+import { assertExpedienteAccess, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 import type {
   ReportarMoraInput,
   ListMorasQuery,
@@ -43,7 +43,7 @@ function formatCOP(monto: number): string {
 
 interface ContratoSnapshot {
   contrato_id: string;
-  expediente_id: string | null;
+  expediente_id: string;
   solicitante_id: string | null;
   inquilino_nombre: string;
   inquilino_telefono: string | null;
@@ -141,6 +141,7 @@ async function snapshotContrato(contratoId: string): Promise<ContratoSnapshot> {
 interface MoraAccessRow {
   id: string;
   estado: MoraEstado;
+  expediente_id: string | null;
   reportado_por: string;
   reportado_at: string;
   inquilino_telefono: string | null;
@@ -156,7 +157,7 @@ async function assertMoraAccess(
 ): Promise<MoraAccessRow> {
   const { data: mora, error } = (await db('moras_tickets')
     .select(`
-      id, estado, reportado_por, reportado_at,
+      id, estado, expediente_id, reportado_por, reportado_at,
       inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora
     `)
     .eq('id', moraId)
@@ -167,18 +168,30 @@ async function assertMoraAccess(
   if (rol === 'administrador' || rol === 'operador_analista') {
     return mora;
   }
-  if (mora.reportado_por !== userId) {
-    throw AppError.forbidden('No tienes acceso a esta mora', 'MORA_FORBIDDEN');
-  }
+  // La mora es del estudio, no de quien la reportó: la ve y la gestiona quien ve
+  // el estudio (el equipo de la inmobiliaria, según su alcance). Así un miembro
+  // que sale del equipo deja de verla y el equipo no pierde las que él reportó.
+  if (!mora.expediente_id) throw AppError.notFound('Mora no encontrada', 'MORA_NOT_FOUND');
+  await assertExpedienteAccess(mora.expediente_id, userId, rol);
   return mora;
 }
+
+/** Detalle con su hilo, solo para quien ve el estudio de la mora (antes cualquiera por UUID). */
+export async function obtenerMora(id: string, userId: string, rol: string) {
+  await assertMoraAccess(id, userId, rol);
+  return getMoraById(id);
+}
+
 
 // ============================================================
 // Crear ticket de mora
 // ============================================================
 
-export async function reportarMora(input: ReportarMoraInput, userId: string) {
+export async function reportarMora(input: ReportarMoraInput, userId: string, rol: string) {
   const snap = await snapshotContrato(input.contrato_id);
+  // Solo sobre contratos de la cartera propia: sin esto se reportaba (y se le
+  // escribía por WhatsApp al inquilino) sobre el contrato de otra agencia por UUID.
+  await assertExpedienteAccess(snap.expediente_id, userId, rol);
 
   // Insertar el ticket — ticket_numero lo genera el DEFAULT en SQL
   const { data: inserted, error } = await db('moras_tickets')
@@ -262,18 +275,17 @@ export async function listMoras(query: ListMorasQuery, userId: string, rol: stri
   if (query.contrato_id) {
     qb = qb.eq('contrato_id', query.contrato_id);
   }
-  // Org-aware (Fase 3): el equipo ve las moras de toda la inmobiliaria; un
-  // miembro restringido (miembros_ven_todo=false) o un propietario individual
-  // ven solo las propias; roles internos ven todas.
-  const reporterIds = await resolveAllowedReporterIds(userId, rol);
-  if (reporterIds !== null) {
-    if (reporterIds.length === 0) {
+  // Las de los estudios que el usuario ve (tenantScope: el equipo según su
+  // alcance, el propietario las de sus inmuebles); roles internos, todas.
+  const expedienteIds = await resolveAllowedExpedienteIds(userId, rol);
+  if (expedienteIds !== null) {
+    if (expedienteIds.length === 0) {
       return {
         data: [],
         pagination: { page: query.page, limit: query.limit, total: 0, totalPages: 0 },
       };
     }
-    qb = qb.in('reportado_por', reporterIds);
+    qb = qb.in('expediente_id', expedienteIds);
   }
 
   const { data, error, count } = await qb.range(offset, offset + query.limit - 1);
@@ -672,14 +684,14 @@ export async function getStats(userId: string, rol: string): Promise<MorasStats>
   inicioMes.setHours(0, 0, 0, 0);
   const isoMes = inicioMes.toISOString();
 
-  let qb = db('moras_tickets').select('estado, monto_mora, reportado_at, reportado_por');
-  // Org-aware (Fase 3): mismas reglas que listMoras.
-  const reporterIds = await resolveAllowedReporterIds(userId, rol);
-  if (reporterIds !== null) {
-    if (reporterIds.length === 0) {
+  let qb = db('moras_tickets').select('estado, monto_mora, reportado_at');
+  // Mismas reglas que listMoras.
+  const expedienteIds = await resolveAllowedExpedienteIds(userId, rol);
+  if (expedienteIds !== null) {
+    if (expedienteIds.length === 0) {
       return { reportadas_mes: 0, resueltas: 0, en_gestion: 0, monto_total: 0 };
     }
-    qb = qb.in('reportado_por', reporterIds);
+    qb = qb.in('expediente_id', expedienteIds);
   }
   const { data, error } = await qb;
   if (error) throw fromSupabaseError(error);

@@ -229,6 +229,65 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     expect(tabla('efecto', 'cancelar-pagos')[0].args).toEqual(['e1', expect.any(String), ['garantia', 'primer_canon']]);
   });
 
+  describe('respaldo del vencimiento (Auco no marca EXPIRED)', () => {
+    const vencido = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    const pendiente = { status: 'PENDING', signProfile: [] };
+    // Las respuestas "Once" que un test no consuma no deben pasar al siguiente.
+    beforeEach(() => auco.getDocumentStatus.mockReset());
+
+    it('una hora después del plazo: se anula en Auco y después queda FIRMA INCOMPLETA con su aviso', async () => {
+      enqueue(
+        'contrato_v3_sobres',
+        ok(sobre({ expira_en: vencido(120) })), // lectura
+        ok(null), // constancia de la anulación en Auco
+        ok(sobre({ expira_en: vencido(120), updated_at: '2026-09-23T10:00:00+00:00' })), // relectura
+        ok([{ id: 's1' }]), // CAS
+      );
+      enqueue('contrato_partes', ok(PARTES));
+      enqueue('contratos', ok(contrato()), ok({ estado: 'firma_incompleta' }));
+      enqueue('expedientes', EXPEDIENTE);
+      org(true);
+      auco.getDocumentStatus.mockResolvedValueOnce(pendiente).mockResolvedValueOnce({ status: 'REJECTED', signProfile: [] });
+
+      await reconciliarSobre('s1');
+
+      const anulacion = ops.findIndex((o) => o.table === 'auco' && o.method === 'cancel');
+      const cierre = tabla('contrato_v3_sobres', 'update').find((o) => (o.args[0] as { estado?: string }).estado === 'incompleto');
+      expect(cierre?.args[0]).toMatchObject({ estado: 'incompleto', motivo: 'EXPIRED' });
+      // Primero Auco, después el cierre aquí.
+      expect(anulacion).toBeGreaterThanOrEqual(0);
+      expect(anulacion).toBeLessThan(ops.indexOf(cierre!));
+      // El CAS usa el updated_at releído, no el de antes de la anulación.
+      expect(ops.filter((o) => o.table === 'contrato_v3_sobres' && o.method === 'eq').map((o) => o.args)).toContainEqual([
+        'updated_at',
+        '2026-09-23T10:00:00+00:00',
+      ]);
+      expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
+    });
+
+    it('si alguien firmó a última hora (Auco ya no anula: FINISH), no se cierra: el próximo barrido activa', async () => {
+      enqueue('contrato_v3_sobres', ok(sobre({ expira_en: vencido(120) })));
+      enqueue('contrato_partes', ok(PARTES));
+      auco.getDocumentStatus.mockResolvedValueOnce(pendiente).mockResolvedValueOnce(statusFinish);
+
+      await reconciliarSobre('s1');
+
+      expect(tabla('contrato_v3_sobres', 'update').some((o) => (o.args[0] as { estado?: string }).estado === 'incompleto')).toBe(false);
+      expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(0);
+    });
+
+    it('dentro de la hora de margen no toca nada (Auco suele marcarlo solo)', async () => {
+      enqueue('contrato_v3_sobres', ok(sobre({ expira_en: vencido(30) })));
+      enqueue('contrato_partes', ok(PARTES));
+      auco.getDocumentStatus.mockResolvedValueOnce(pendiente);
+
+      await reconciliarSobre('s1');
+
+      expect(tabla('auco', 'cancel')).toHaveLength(0);
+      expect(escrituras()).toEqual([]);
+    });
+  });
+
   it('si el insert del aviso falla, NO se escribe la constancia (el barrido reintenta)', async () => {
     enqueue('contrato_v3_sobres', ok(sobre()), ok([{ id: 's1' }]));
     enqueue('contrato_partes', ok(PARTES));

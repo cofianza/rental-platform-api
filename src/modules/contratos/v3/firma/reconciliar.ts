@@ -572,6 +572,7 @@ export async function reconciliarSobre(sobreId: string, evento?: { code?: string
   const partes = await leerPartes(s.contrato_id);
   let firmantes = actualizarFirmantes(s.firmantes, partes, info.signProfile);
   const d = decidir(info, firmantes);
+  if (d === 'nada' && hace(s.expira_en, MARGEN_VENCIMIENTO_MIN)) return cerrarPorVencimiento(s, firmantes);
   let roadmap: AucoRoadmap | null = null;
   if (d === 'activar' || firmantes.some((f) => f.estado === 'firmado' && !f.firmadoEn)) {
     roadmap = await getDocumentRoadmap(s.auco_code).catch((e) => {
@@ -603,6 +604,27 @@ export async function reconciliarSobre(sobreId: string, evento?: { code?: string
   const nuevo = { ...s, firmantes, ...cambio };
   if (cambio.estado === 'completo') return activarContrato(nuevo);
   if (cambio.estado === 'incompleto') return cerrarIncompleto(nuevo);
+}
+
+/**
+ * Respaldo del vencimiento (§11.3): a Auco se le manda expiredDate, pero si una
+ * hora después del plazo no lo marca EXPIRED, el contrato no puede quedar EN FIRMA
+ * para siempre. Se anula primero en Auco (si alguien firmó a última hora, gana la
+ * firma y el próximo barrido activa) y después queda FIRMA INCOMPLETA, con su aviso.
+ */
+const MARGEN_VENCIMIENTO_MIN = 60;
+
+async function cerrarPorVencimiento(s: Sobre, firmantes: FirmanteSobre[]): Promise<void> {
+  const code = s.auco_code!;
+  await cancelarEnAuco(s, code, 'Venció el plazo para firmar'); // si Auco no responde, lanza: reintenta el barrido
+  if ((await getDocumentStatus(code).catch(() => null))?.status === 'FINISH') return;
+  // cancelarEnAuco deja constancia en el sobre (cambia updated_at): el CAS va sobre lo recién leído.
+  const actual = await leerSobre(s.id);
+  if (actual?.estado !== 'en_firma') return;
+  const cambio: Partial<Sobre> = { estado: 'incompleto', cerrado_en: new Date().toISOString(), motivo: 'EXPIRED', motivo_detalle: null };
+  if (!(await casSobre(actual, { firmantes, ...cambio }, 'en_firma'))) return;
+  logger.warn({ sobreId: s.id }, 'Firma V3: plazo vencido sin aviso de Auco; se cerró como firma incompleta');
+  return cerrarIncompleto({ ...actual, firmantes, ...cambio });
 }
 
 // ── Webhook ──

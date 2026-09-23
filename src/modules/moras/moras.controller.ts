@@ -18,7 +18,7 @@ function userOr401(req: Request) {
 
 export async function reportar(req: Request, res: Response) {
   const user = userOr401(req);
-  const mora = await morasService.reportarMora(req.body as ReportarMoraInput, user.id);
+  const mora = await morasService.reportarMora(req.body as ReportarMoraInput, user.id, user.rol);
   sendSuccess(res, mora, undefined, 201);
 }
 
@@ -31,8 +31,8 @@ export async function list(req: Request, res: Response) {
 }
 
 export async function detail(req: Request, res: Response) {
-  userOr401(req);
-  const mora = await morasService.getMoraById(String(req.params.id));
+  const user = userOr401(req);
+  const mora = await morasService.obtenerMora(String(req.params.id), user.id, user.rol);
   sendSuccess(res, mora);
 }
 

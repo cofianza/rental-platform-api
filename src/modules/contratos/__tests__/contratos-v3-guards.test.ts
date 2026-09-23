@@ -96,7 +96,7 @@ import { finalizarContratosVencidos } from '../contrato-vencimiento.service';
 import type { GenerarContratoInput, ReGenerarContratoInput, RenovarContratoInput } from '../contratos.schema';
 import { crearSolicitudFirmaMultiparte } from '@/modules/firma/firma-multiparte.service';
 import { archivarPdfFirmadoEnStorage, crearSolicitudFirma } from '@/modules/firma/firma.service';
-import { createPaymentLink, resendPaymentLink } from '@/modules/pagos/pagos.service';
+import { createPaymentLink, registerManualPayment, resendPaymentLink } from '@/modules/pagos/pagos.service';
 import { CONTRATO_ESTADOS_PRE_FIRMA } from '@/modules/expedientes/expediente-workflow.service';
 
 const EXP = 'exp-1';
@@ -345,6 +345,21 @@ describe('guards de la Entrega 5 sobre filas V3', () => {
     });
     enqueue('contratos', { data: [{ estado: 'firma_incompleta' }], error: null });
     const e = await error(resendPaymentLink('pg1', ADMIN.id, ADMIN.rol));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'FIANZA_NO_OPERANDO' });
+    expect(escrituras()).toEqual([]);
+  });
+
+  it('registrar a mano la garantía con un V3 en FIRMA INCOMPLETA → 409, sin insertar el pago', async () => {
+    enqueue('expedientes', { data: { id: EXP }, error: null });
+    enqueue('contratos', { data: [{ estado: 'firma_incompleta' }], error: null });
+    const e = await error(
+      registerManualPayment(
+        EXP,
+        { concepto: 'garantia', monto: 2_000_000, metodo: 'transferencia', fecha_pago: '2026-09-01' } as never,
+        ADMIN.id,
+        ADMIN.rol,
+      ),
+    );
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'FIANZA_NO_OPERANDO' });
     expect(escrituras()).toEqual([]);
   });

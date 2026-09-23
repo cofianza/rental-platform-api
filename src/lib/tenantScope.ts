@@ -266,29 +266,6 @@ export async function resolvePortfolioInmuebleIds(perfilId: string): Promise<str
 }
 
 /**
- * Reporter perfil_ids cuyas moras puede ver el usuario (Fase 3, piece 1).
- *  - null -> sin filtro (rol interno).
- *  - []   -> ninguno.
- *  - [...] -> en modo org, todos los miembros; en modo own, solo él mismo.
- */
-export async function resolveAllowedReporterIds(
-  userId?: string,
-  userRol?: string,
-): Promise<string[] | null> {
-  const scope = await resolveVisibilityScope(userId, userRol);
-  if (scope.kind === 'all') return null;
-  if (scope.kind === 'own') return [scope.perfilId];
-  if (scope.kind === 'org') {
-    const ids = new Set<string>();
-    for (const orgId of scope.orgIds) {
-      (await resolveOrgMemberPerfilIds(orgId)).forEach((id) => ids.add(id));
-    }
-    return Array.from(ids);
-  }
-  return [];
-}
-
-/**
  * Inmueble IDs visibles para el usuario según su rol / organización.
  *  - null  -> rol interno (admin/operador/gerencia): sin filtro, ve todo.
  *  - []    -> propietario/inmobiliaria sin inmuebles: respuesta vacía.

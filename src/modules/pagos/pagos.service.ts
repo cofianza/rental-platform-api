@@ -740,6 +740,8 @@ export async function registerManualPayment(
   // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo
   // registran pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
+  // §11.7.3: la misma puerta que el link de pago; a mano tampoco se cobra con la firma incompleta.
+  await assertFianzaOperando(expedienteId, input.concepto);
 
   // Validate fecha_pago is not in the future
   const fechaPago = new Date(input.fecha_pago);
