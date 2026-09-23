@@ -7,8 +7,8 @@ import { logger } from '@/lib/logger';
 import { fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
 import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
-import { conFinVigente } from '@/modules/contratos/v3/formato';
-import { sobreCanon } from '@/modules/estudios/tarifas';
+import { conFinVigente, fechaBogota } from '@/modules/contratos/v3/formato';
+import { calcularTarifas, leerTarifaOverride, masIva, pctDe } from '@/modules/estudios/tarifas';
 
 // ── Constantes para vista admin ─────────────────────────────
 //
@@ -756,6 +756,8 @@ export interface AdminOverviewKpis {
   zonaRiesgoExposicion: number;
   ingresosFianzas: number;
   ivaRecaudado: number;
+  /** Contratos activos que no entran en ingresosFianzas: sin estudio completado o sin dato. */
+  contratosSinTarifa: number;
   exposicionMaxima: number;
   vitrinaPublicados: number;
   vitrinaProspectos: number;
@@ -830,6 +832,7 @@ interface ContratoActivoRow {
   expediente_id: string;
   estado: string;
   valor_arriendo: number | string | null;
+  tarifa_congelada?: number | string | null;
   fecha_inicio: string | null;
   fecha_fin: string | null;
   destinacion: string | null;
@@ -870,30 +873,88 @@ interface ConfiguracionRow {
 }
 
 // Ingreso de fianza (Adenda 1 del módulo de contratos §1.1 y respuesta 9): la
-// tarifa mensual de cada contrato es el % de su estudio —ruta de aprobación u
-// override de Gerencia, el mismo que imprime el contrato— sobre SU canon, más
-// TARIFA_IVA. Reemplaza la tarifa plana valor_afianzamiento_mensual ($20.000)
-// con el IVA de iva_concepto_garantia (0). Es lo causado del mes: la plataforma
-// no registra el recaudo de la tarifa (lo hace el arrendador con el canon).
-export async function tarifasMensualesDeContratos(
-  contratos: Array<{ id: string; expediente_id: string; valor_arriendo: number | string | null }>,
-): Promise<{ ivaPct: number; porContrato: Map<string, { tarifa: number; iva: number }> }> {
-  const [{ tarifasParaContrato }, { getCalibracion }] = await Promise.all([
-    import('@/modules/contratos/contratos.service'),
+// tarifa mensual de cada contrato es su % —el que imprimió (V3 lo congela en
+// datos_variables) o, si no, el de su estudio: ruta de aprobación u override
+// de Gerencia— sobre SU canon, más TARIFA_IVA. Reemplaza la tarifa plana
+// valor_afianzamiento_mensual ($20.000) con el IVA de iva_concepto_garantia
+// (0). Es lo causado del mes: la plataforma no registra el recaudo de la
+// tarifa (lo hace el arrendador con el canon). Fuera del mes, con su motivo:
+// los que todavía no empiezan, los que no tienen estudio completado (no se
+// inventa el 2,7 %) y los que no se pudieron leer (no tumban el tablero).
+export type MotivoSinIngreso = 'inicia_despues' | 'sin_estudio' | 'sin_dato';
+
+export interface ContratoParaIngreso {
+  id: string;
+  expediente_id: string;
+  valor_arriendo: number | string | null;
+  fecha_inicio: string | null;
+  /** V3: datos_variables->documento->entrada->tarifaPct, el % que imprimió. */
+  tarifa_congelada?: number | string | null;
+}
+
+/** Para el select de contratos: el % congelado del V3, sin traer todo datos_variables. */
+export const SELECT_TARIFA_CONGELADA = 'tarifa_congelada:datos_variables->documento->entrada->tarifaPct';
+
+export async function tarifasMensualesDeContratos(contratos: ContratoParaIngreso[]): Promise<{
+  ivaPct: number;
+  porContrato: Map<string, { tarifa: number; iva: number }>;
+  excluidos: Array<{ id: string; motivo: MotivoSinIngreso }>;
+}> {
+  const [{ getCalibracion }, { viaDelEstudio }] = await Promise.all([
     import('@/lib/calibracion'),
+    import('@/modules/estudios/certificado.service'),
   ]);
-  // ponytail: una lectura del estudio por contrato, en paralelo; con cientos de contratos, cargarlas en lote.
-  const [{ TARIFA_IVA }, filas] = await Promise.all([
-    getCalibracion(),
-    Promise.all(
-      contratos.map(async (c) => {
-        const t = sobreCanon(await tarifasParaContrato(c.expediente_id), Number(c.valor_arriendo) || 0);
-        const tarifa = t.tarifa_mensual_cop ?? 0;
-        return [c.id, { tarifa, iva: (t.tarifa_mensual_con_iva_cop ?? 0) - tarifa }] as const;
-      }),
-    ),
-  ]);
-  return { ivaPct: TARIFA_IVA, porContrato: new Map(filas) };
+  const { TARIFA_IVA: ivaPct } = await getCalibracion();
+  const hoy = fechaBogota(new Date());
+
+  // El % del último estudio individual completado (el mismo que usa el contrato);
+  // null si no hay ninguno.
+  const pctDelEstudio = async (expedienteId: string): Promise<number | null> => {
+    const { data, error } = await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('expediente_id, resultado, referencia_proveedor, cascada, tarifa_override')
+      .eq('expediente_id', expedienteId)
+      .eq('tipo', 'individual')
+      .eq('estado', 'completado')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw fromSupabaseError(error);
+    if (!data) return null;
+    const e = data as { expediente_id: string; resultado: string | null; referencia_proveedor: string | null; cascada: unknown; tarifa_override: unknown };
+    return calcularTarifas({
+      via: await viaDelEstudio(e),
+      conCoarrendatario: false, // solo mueve la prima
+      canonCop: null,
+      ivaPct,
+      override: leerTarifaOverride(e.tarifa_override),
+    }).tarifa_mensual_pct;
+  };
+
+  const porContrato = new Map<string, { tarifa: number; iva: number }>();
+  const excluidos: Array<{ id: string; motivo: MotivoSinIngreso }> = [];
+  // ponytail: dos lecturas por contrato, en paralelo; con cientos de contratos, cargarlas en lote.
+  await Promise.all(
+    contratos.map(async (c) => {
+      let motivo: MotivoSinIngreso | null = null;
+      if (c.fecha_inicio && c.fecha_inicio > hoy) motivo = 'inicia_despues';
+      else {
+        try {
+          const congelada = Number(c.tarifa_congelada);
+          const pct = congelada > 0 ? congelada : await pctDelEstudio(c.expediente_id);
+          if (pct === null) motivo = 'sin_estudio';
+          else {
+            const tarifa = pctDe(Number(c.valor_arriendo) || 0, pct) ?? 0;
+            porContrato.set(c.id, { tarifa, iva: masIva(tarifa, ivaPct) - tarifa });
+          }
+        } catch (err) {
+          logger.warn({ contratoId: c.id, err: err instanceof Error ? err.message : String(err) }, 'Ingresos: no se pudo leer la tarifa del contrato');
+          motivo = 'sin_dato';
+        }
+      }
+      if (motivo) excluidos.push({ id: c.id, motivo });
+    }),
+  );
+  return { ivaPct, porContrato, excluidos };
 }
 
 export async function getAdminOverview(): Promise<AdminOverview> {
@@ -972,6 +1033,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
   const tarifas = await tarifasMensualesDeContratos(contratosActivos);
   const ingresosFianzas = [...tarifas.porContrato.values()].reduce((s, t) => s + t.tarifa, 0);
   const ivaRecaudado = [...tarifas.porContrato.values()].reduce((s, t) => s + t.iva, 0);
+  const contratosSinTarifa = tarifas.excluidos.filter((e) => e.motivo !== 'inicia_despues').length;
 
   // Histórico siniestralidad últimos 6 meses (incluyendo el actual).
   // Base = contratos que ALGUNA VEZ estuvieron activos (incluye finalizados/
@@ -1007,6 +1069,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
       zonaRiesgoExposicion,
       ingresosFianzas,
       ivaRecaudado,
+      contratosSinTarifa,
       exposicionMaxima,
       vitrinaPublicados,
       vitrinaProspectos,
@@ -1017,7 +1080,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
       vitrinaVisitasMes,
     },
     config: {
-      valorAfianzamientoMensual: totalActivos ? Math.round(ingresosFianzas / totalActivos) : 0,
+      valorAfianzamientoMensual: tarifas.porContrato.size ? Math.round(ingresosFianzas / tarifas.porContrato.size) : 0,
       ivaGarantiaPorcentaje: tarifas.ivaPct,
     },
     histSiniestralidad,
@@ -1079,7 +1142,8 @@ async function fetchContratosActivos(): Promise<ContratoActivoRow[]> {
   const { data, error } = await supabase
     .from('contratos')
     .select(
-      'id, expediente_id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))',
+      'id, expediente_id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, ' +
+        `${SELECT_TARIFA_CONGELADA}, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))`,
     )
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
 

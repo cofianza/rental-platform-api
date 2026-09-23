@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as dashboardService from '../dashboard.service';
-import { calcularTarifas } from '@/modules/estudios/tarifas';
 
 // ── Mock Supabase ───────────────────────────────────────────
 
@@ -53,11 +52,12 @@ vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-// Ingresos de fianza: la tarifa del estudio de cada contrato, con TARIFA_IVA.
-vi.mock('@/modules/contratos/contratos.service', () => ({
-  tarifasParaContrato: vi.fn(async () =>
-    calcularTarifas({ via: 'automatica', conCoarrendatario: false, canonCop: 1_000_000, ivaPct: 19 }),
-  ),
+// Ingresos de fianza: la vía del estudio de cada contrato, con TARIFA_IVA.
+vi.mock('@/modules/estudios/certificado.service', () => ({
+  viaDelEstudio: vi.fn(async (e: { expediente_id: string }) => {
+    if (e.expediente_id === 'e2') throw new Error('timeout');
+    return 'automatica';
+  }),
 }));
 vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => ({ TARIFA_IVA: 19 })) }));
 
@@ -293,20 +293,36 @@ describe('Dashboard Service', () => {
     });
 
     it('«Ingresos fianzas»: la tarifa de cada contrato sobre su canon, más IVA (no $20.000 × contratos)', async () => {
-      mockFrom.mockImplementation((table: string) =>
-        table === 'contratos'
-          ? createChain([{ id: 'c1', expediente_id: 'e1', estado: 'vigente', valor_arriendo: '1500000', fecha_inicio: null, fecha_fin: null, expedientes: null }])
-          : createChain([]),
-      );
+      const contrato = (id: string, exp: string) => ({ id, expediente_id: exp, estado: 'vigente', valor_arriendo: '1500000', fecha_inicio: null, fecha_fin: null, expedientes: null });
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'contratos') return createChain([contrato('c1', 'e1'), contrato('c2', 'e2')]);
+        if (table === 'estudios') {
+          // Cada contrato encuentra su estudio completado.
+          let exp = '';
+          const chain: Record<string, unknown> = {};
+          for (const m of ['select', 'eq', 'order', 'limit']) {
+            chain[m] = (...a: unknown[]) => {
+              if (m === 'eq' && a[0] === 'expediente_id') exp = String(a[1]);
+              return chain;
+            };
+          }
+          chain.maybeSingle = () => chain;
+          chain.then = (resolve: (v: unknown) => void) => resolve({ data: { expediente_id: exp, resultado: 'aprobado' }, error: null });
+          return chain;
+        }
+        return createChain([]);
+      });
       // El overview queda 5 min en caché: sin esto devolvería el del test anterior.
       const ahora = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60_000);
 
       const r = await dashboardService.getAdminOverview();
       ahora.mockRestore();
 
-      // 2,0 % de 1.500.000 (el canon del contrato, no el evaluado) = 30.000 + IVA 5.700.
+      // c1: 2,0 % de 1.500.000 = 30.000 + IVA 5.700. c2 no se pudo leer: queda
+      // fuera y contado, sin tumbar el Resumen.
       expect(r.kpis.ingresosFianzas).toBe(30_000);
       expect(r.kpis.ivaRecaudado).toBe(5_700);
+      expect(r.kpis.contratosSinTarifa).toBe(1);
       expect(r.config).toEqual({ valorAfianzamientoMensual: 30_000, ivaGarantiaPorcentaje: 19 });
     });
   });

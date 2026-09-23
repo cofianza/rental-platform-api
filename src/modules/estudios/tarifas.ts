@@ -79,6 +79,11 @@ export function pctDe(canon: number | null, pct: number): number | null {
   return canon === null ? null : redondear((canon * pct) / 100);
 }
 
+/** Una cifra en pesos más IVA, redondeada al peso (§1.1: prima y tarifa). */
+export function masIva(cop: number, ivaPct: number): number {
+  return redondear(cop * (1 + ivaPct / 100));
+}
+
 export function calcularTarifas(e: EntradaTarifas): Tarifas {
   const o = e.override ?? null;
   const tarifaPct = o?.tarifa_mensual_pct ?? TARIFA_MENSUAL_PCT[e.via];
@@ -89,7 +94,7 @@ export function calcularTarifas(e: EntradaTarifas): Tarifas {
 
   const tarifaCop = pctDe(e.canonCop, tarifaPct);
   const primaCop = pctDe(e.canonCop, primaPct);
-  const conIva = (n: number | null) => (n === null ? null : redondear(n * (1 + e.ivaPct / 100)));
+  const conIva = (n: number | null) => (n === null ? null : masIva(n, e.ivaPct));
   return {
     via: e.via,
     con_coarrendatario: e.conCoarrendatario,

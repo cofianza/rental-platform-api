@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as secciones from '../dashboard-secciones.service';
-import { calcularTarifas, type ViaAprobacion } from '@/modules/estudios/tarifas';
+import type { ViaAprobacion } from '@/modules/estudios/tarifas';
 
 // ── Mock Supabase ───────────────────────────────────────────
 //
@@ -34,9 +34,9 @@ vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-// La tarifa de cada contrato sale de su estudio (tarifasParaContrato) y el IVA de TARIFA_IVA.
-const { mockTarifasParaContrato } = vi.hoisted(() => ({ mockTarifasParaContrato: vi.fn() }));
-vi.mock('@/modules/contratos/contratos.service', () => ({ tarifasParaContrato: mockTarifasParaContrato }));
+// La tarifa de cada contrato sale de la vía de su estudio y el IVA de TARIFA_IVA.
+const { mockViaDelEstudio } = vi.hoisted(() => ({ mockViaDelEstudio: vi.fn() }));
+vi.mock('@/modules/estudios/certificado.service', () => ({ viaDelEstudio: mockViaDelEstudio }));
 vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => ({ TARIFA_IVA: 19 })) }));
 
 import { supabase } from '@/lib/supabase';
@@ -54,54 +54,95 @@ beforeEach(() => {
 // ── getIngresosAdmin ────────────────────────────────────────
 
 describe('getIngresosAdmin()', () => {
-  const contrato = (id: string, canon: string) => ({
+  const contrato = (id: string, canon: string, extra: Record<string, unknown> = {}) => ({
     id,
     estado: 'vigente',
     valor_arriendo: canon,
-    fecha_inicio: null,
+    fecha_inicio: '2026-01-01',
     fecha_fin: null,
     expediente_id: `e-${id}`,
     expedientes: {
       inmuebles: { codigo: 'APT', direccion: 'Calle 1', ciudad: 'Medellín' },
       solicitantes: { nombre: 'Ana', apellido: 'Pérez' },
     },
+    ...extra,
   });
 
-  // Tarifas del estudio de cada expediente, calculadas sobre el canon EVALUADO
-  // (900.000): el informe las pasa al canon del contrato (respuesta 9).
-  const viaPorExpediente: Record<string, ViaAprobacion> = { 'e-c1': 'automatica', 'e-c2': 'revision_manual' };
+  // El último estudio completado de cada expediente (null = no tiene) y la vía
+  // con la que se aprobó; 'error' = no se pudo leer.
+  const vias: Record<string, ViaAprobacion | 'error' | null> = {
+    'e-c1': 'automatica',
+    'e-c2': 'revision_manual',
+    'e-c3': 'automatica', // no se usa: el V3 imprimió 2,5 %
+    'e-c5': null,
+    'e-c6': 'error',
+  };
+  const estudios = () => {
+    let exp = '';
+    const chain: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'order', 'limit']) {
+      chain[m] = (...a: unknown[]) => {
+        if (m === 'eq' && a[0] === 'expediente_id') exp = String(a[1]);
+        return chain;
+      };
+    }
+    chain.maybeSingle = () => chain;
+    chain.then = (resolve: (v: unknown) => void) =>
+      resolve({ data: vias[exp] ? { expediente_id: exp, resultado: 'aprobado', tarifa_override: null } : null, error: null });
+    return chain;
+  };
+  const tabla = (contratos: unknown[]) =>
+    mockFrom.mockImplementation((t: string) => (t === 'estudios' ? estudios() : createChain({ data: t === 'contratos' ? contratos : [] })));
+
   beforeEach(() => {
-    mockTarifasParaContrato.mockImplementation(async (expedienteId: string) =>
-      calcularTarifas({ via: viaPorExpediente[expedienteId], conCoarrendatario: false, canonCop: 900_000, ivaPct: 19 }),
-    );
+    mockViaDelEstudio.mockImplementation(async (e: { expediente_id: string }) => {
+      if (vias[e.expediente_id] === 'error') throw new Error('timeout');
+      return vias[e.expediente_id];
+    });
   });
 
-  it('la tarifa real de cada contrato (su % sobre su canon) más IVA 19 %, no los $20.000 planos', async () => {
-    byTable({ contratos: { data: [contrato('c1', '1000000'), contrato('c2', '1500000')] } });
+  it('la tarifa real de cada contrato (su % sobre su canon) más IVA 19 %; el resto aparte con su motivo', async () => {
+    tabla([
+      contrato('c1', '1000000'),
+      contrato('c2', '1500000'),
+      contrato('c3', '2000000', { tarifa_congelada: 2.5 }),
+      contrato('c4', '1000000', { fecha_inicio: '2999-01-01' }),
+      contrato('c5', '1000000'),
+      contrato('c6', '1000000'),
+    ]);
 
     const r = await secciones.getIngresosAdmin();
 
-    // 2,0 % de 1.000.000 = 20.000 + IVA 3.800; 2,7 % de 1.500.000 = 40.500 + IVA 7.695.
-    expect(r.porContrato.map(({ afianzamiento, iva, total }) => ({ afianzamiento, iva, total }))).toEqual([
-      { afianzamiento: 20_000, iva: 3_800, total: 23_800 },
-      { afianzamiento: 40_500, iva: 7_695, total: 48_195 },
+    // 2,0 % de 1.000.000; 2,7 % de 1.500.000; 2,5 % congelado de 2.000.000.
+    expect(r.porContrato.map(({ contratoId, afianzamiento, iva, total }) => ({ contratoId, afianzamiento, iva, total }))).toEqual([
+      { contratoId: 'c1', afianzamiento: 20_000, iva: 3_800, total: 23_800 },
+      { contratoId: 'c2', afianzamiento: 40_500, iva: 7_695, total: 48_195 },
+      { contratoId: 'c3', afianzamiento: 50_000, iva: 9_500, total: 59_500 },
     ]);
-    expect(r.totalAfianzamiento).toBe(60_500);
-    expect(r.totalIva).toBe(11_495);
-    expect(r.totalBruto).toBe(71_995);
-    expect(r.valorAfianzamientoMensual).toBe(30_250); // promedio por contrato
+    expect(r.totalAfianzamiento).toBe(110_500);
+    expect(r.totalIva).toBe(20_995);
+    expect(r.totalBruto).toBe(131_495);
+    expect(r.valorAfianzamientoMensual).toBe(36_833); // promedio de los que entran
     expect(r.ivaGarantiaPorcentaje).toBe(19);
+    // Empieza después, sin estudio completado (no se asume 2,7 %) y sin dato (no tumba el informe).
+    expect(r.excluidos.map(({ contratoId, motivo }) => ({ contratoId, motivo }))).toEqual([
+      { contratoId: 'c4', motivo: 'inicia_despues' },
+      { contratoId: 'c5', motivo: 'sin_estudio' },
+      { contratoId: 'c6', motivo: 'sin_dato' },
+    ]);
+    expect(mockViaDelEstudio).not.toHaveBeenCalledWith(expect.objectContaining({ expediente_id: 'e-c3' }));
     expect(mockFrom).not.toHaveBeenCalledWith('configuracion_sistema');
   });
 
   it('sin contratos activos: todo en 0, con el IVA de TARIFA_IVA', async () => {
-    byTable({ contratos: { data: [] } });
+    tabla([]);
 
     const r = await secciones.getIngresosAdmin();
 
     expect(r.valorAfianzamientoMensual).toBe(0);
     expect(r.ivaGarantiaPorcentaje).toBe(19);
     expect(r.totalBruto).toBe(0);
+    expect(r.excluidos).toEqual([]);
   });
 });
 

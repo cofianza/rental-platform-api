@@ -14,7 +14,13 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
 import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
-import { countVitrinaVisitasMes, fetchPerfilesInmobiliaria, tarifasMensualesDeContratos } from './dashboard.service';
+import {
+  countVitrinaVisitasMes,
+  fetchPerfilesInmobiliaria,
+  tarifasMensualesDeContratos,
+  SELECT_TARIFA_CONGELADA,
+  type MotivoSinIngreso,
+} from './dashboard.service';
 
 // Estados de contrato considerados "activos" (firmado = listo, vigente = corriendo).
 const ESTADOS_CONTRATO_ACTIVO = ['firmado', 'vigente'] as const;
@@ -559,7 +565,8 @@ export async function getVitrinaAdmin(): Promise<VitrinaData> {
 // ── INGRESOS (detalle por contrato + resumen) ───────────────
 //
 // Ingreso = la tarifa mensual de cada contrato activo (su % sobre su canon) más
-// el IVA causado (TARIFA_IVA): ver tarifasMensualesDeContratos.
+// el IVA causado (TARIFA_IVA): ver tarifasMensualesDeContratos. Los que no
+// entran en el mes van aparte, en `excluidos`, con su motivo.
 
 export interface IngresoContratoRow {
   contratoId: string;
@@ -571,8 +578,18 @@ export interface IngresoContratoRow {
   total: number;
 }
 
+/** Contrato activo que no entra en el mes, con el porqué. */
+export interface IngresoExcluidoRow {
+  contratoId: string;
+  inquilino: string;
+  inmueble: string;
+  canon: number;
+  fechaInicio: string | null;
+  motivo: MotivoSinIngreso;
+}
+
 export interface IngresosData {
-  /** Promedio por contrato activo: ya no hay tarifa plana. */
+  /** Promedio por contrato que entra en el mes: ya no hay tarifa plana. */
   valorAfianzamientoMensual: number;
   /** TARIFA_IVA (Adenda 1 de contratos §1.1). */
   ivaGarantiaPorcentaje: number;
@@ -580,31 +597,36 @@ export interface IngresosData {
   totalIva: number;
   totalBruto: number;
   porContrato: IngresoContratoRow[];
+  excluidos: IngresoExcluidoRow[];
 }
 
 export async function getIngresosAdmin(): Promise<IngresosData> {
   const { data, error } = await (
     supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
   )
-    .select(CONTRATO_SELECT)
+    .select(`${CONTRATO_SELECT}, ${SELECT_TARIFA_CONGELADA}`)
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
   if (error) throw fromSupabaseError(error);
 
-  const rows = conFinVigente((data ?? []) as unknown as ContratoRowDB[]);
+  const rows = conFinVigente((data ?? []) as unknown as Array<ContratoRowDB & { tarifa_congelada?: number | string | null }>);
   const tarifas = await tarifasMensualesDeContratos(rows);
-  const porContrato: IngresoContratoRow[] = rows.map((r) => {
+  const fila = (r: ContratoRowDB) => {
     const sol = r.expedientes?.solicitantes ?? null;
-    const inm = r.expedientes?.inmuebles ?? null;
-    const { tarifa: afianzamiento, iva } = tarifas.porContrato.get(r.id) ?? { tarifa: 0, iva: 0 };
     return {
       contratoId: r.id,
       inquilino: sol ? `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || '—' : '—',
-      inmueble: fmtInmueble(inm),
+      inmueble: fmtInmueble(r.expedientes?.inmuebles ?? null),
       canon: Number(r.valor_arriendo ?? 0),
-      afianzamiento,
-      iva,
-      total: afianzamiento + iva,
     };
+  };
+  const porContrato: IngresoContratoRow[] = rows.flatMap((r) => {
+    const t = tarifas.porContrato.get(r.id);
+    return t ? [{ ...fila(r), afianzamiento: t.tarifa, iva: t.iva, total: t.tarifa + t.iva }] : [];
+  });
+  const motivos = new Map(tarifas.excluidos.map((e) => [e.id, e.motivo]));
+  const excluidos: IngresoExcluidoRow[] = rows.flatMap((r) => {
+    const motivo = motivos.get(r.id);
+    return motivo ? [{ ...fila(r), fechaInicio: r.fecha_inicio, motivo }] : [];
   });
 
   const totalAfianzamiento = porContrato.reduce((s, c) => s + c.afianzamiento, 0);
@@ -617,6 +639,7 @@ export async function getIngresosAdmin(): Promise<IngresosData> {
     totalIva,
     totalBruto: totalAfianzamiento + totalIva,
     porContrato,
+    excluidos,
   };
 }
 
