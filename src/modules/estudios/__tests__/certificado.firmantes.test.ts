@@ -250,12 +250,11 @@ describe('relación canon/ingreso', () => {
     await expect(leerSombraDelEstudio('est-1')).resolves.toBeNull();
   });
 
-  it('se lee de la corrida del motor: el ajustado por el factor y, si no lo hay, el crudo', async () => {
+  it('se lee de la corrida del motor, sobre el ingreso ajustado como en el asistente de contratos', async () => {
     enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: '40.00', canon_ingreso_ajustado_pct: '34.78' }, error: null });
     expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBe(34.78);
+    // Corrida anterior al factor (solo el crudo): el asistente no la recalcula, el CRC no la afirma.
     enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: '74.60', canon_ingreso_ajustado_pct: null }, error: null });
-    expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBe(74.6);
-    enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: null, canon_ingreso_ajustado_pct: null }, error: null });
     expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBeNull();
   });
 });

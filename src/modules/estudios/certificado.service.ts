@@ -554,7 +554,7 @@ export async function leerSombraDelEstudio(
 } | null> {
   const { data, error } = await (supabase
     .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-    .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version, features_crudas, canon_ingreso_pct, canon_ingreso_ajustado_pct')
+    .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version, features_crudas, canon_ingreso_ajustado_pct')
     .eq('estudio_id', estudioId)
     .order('fecha_calculo', { ascending: false })
     .limit(1)
@@ -563,7 +563,7 @@ export async function leerSombraDelEstudio(
     logger.error({ estudioId, error: error.message }, 'CRC: no se pudo leer la corrida del motor');
     throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del estudio. Intenta de nuevo en un momento.');
   }
-  const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null; canon_ingreso_pct?: number | string | null; canon_ingreso_ajustado_pct?: number | string | null } | null;
+  const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null; canon_ingreso_ajustado_pct?: number | string | null } | null;
   if (!row) return null;
   const num = (v: unknown) => {
     const n = typeof v === 'string' ? Number(v) : v;
@@ -584,9 +584,11 @@ export async function leerSombraDelEstudio(
     factor: num(row.factor_ajuste_ingreso),
     modeloVersion: row.modelo_version ?? null,
     denominador,
-    // Con el ingreso ajustado es con el que decide el motor (Adenda 1 §1.1);
-    // las corridas anteriores al factor solo tienen el crudo.
-    canonIngresoPct: num(row.canon_ingreso_ajustado_pct) ?? num(row.canon_ingreso_pct),
+    // Sobre el ingreso ajustado por el factor (Adenda 1 §1.1): con el que decide
+    // el motor y el unico que usa el asistente de contratos al recalcular. Una
+    // corrida anterior al factor solo trae el crudo: sale no verificable, igual
+    // que en el asistente.
+    canonIngresoPct: num(row.canon_ingreso_ajustado_pct),
   };
 }
 
