@@ -392,7 +392,9 @@ export async function listDocumentosByExpediente(
   let dbQuery = (supabase
     .from('documentos' as string) as ReturnType<typeof supabase.from>)
     .select(
-      `${DOCUMENTO_FIELDS}, tipo_documento:tipos_documento!documentos_tipo_documento_id_fkey(id, codigo, nombre)`,
+      // validador: el panel de revisión muestra «Revisado por … el …».
+      `${DOCUMENTO_FIELDS}, tipo_documento:tipos_documento!documentos_tipo_documento_id_fkey(id, codigo, nombre),
+      validador:perfiles!documentos_validado_por_fkey(id, nombre, apellido)`,
       { count: 'exact' },
     )
     .eq('expediente_id', expedienteId);
@@ -633,7 +635,7 @@ export async function aprobarDocumento(id: string, userId: string, ip?: string) 
       motivo_rechazo: null,
     } as never)
     .eq('id', id)
-    .select(DOCUMENTO_FIELDS)
+    .select(`${DOCUMENTO_FIELDS}, validador:perfiles!documentos_validado_por_fkey(id, nombre, apellido)`)
     .single();
 
   if (updateError) {
@@ -706,7 +708,7 @@ export async function rechazarDocumento(
       fecha_revision: new Date().toISOString(),
     } as never)
     .eq('id', id)
-    .select(DOCUMENTO_FIELDS)
+    .select(`${DOCUMENTO_FIELDS}, validador:perfiles!documentos_validado_por_fkey(id, nombre, apellido)`)
     .single();
 
   if (updateError) {
