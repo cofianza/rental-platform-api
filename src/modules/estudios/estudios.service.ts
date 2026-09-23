@@ -17,6 +17,7 @@ import { maskDocumento } from './providers/mock.provider';
 import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from './providers/types';
 import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
+import { getApplicantById } from '../solicitantes/solicitantes.service';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 // Motor de scorecard V4.1. Sigue en SOMBRA para todo el scorecard (puntajes,
 // umbrales 85/70, resto de reglas duras): calcula y guarda en paralelo lo que
@@ -864,6 +865,10 @@ export async function createEstudioFromInmueble(
   // se contrasta directo contra el inmueble — que es justamente el sujeto de la
   // regla ("al seleccionar la propiedad").
   await assertCanonDentroDelTope({ inmuebleId, origen: 'createEstudioFromInmueble' });
+
+  // El solicitante tambien tiene que ser de SU cartera: el RPC solo comprueba
+  // que exista (mismo hueco que createExpediente). 404 si es de otra agencia.
+  await getApplicantById(input.solicitante_id, userId, userRol);
 
   // Atomic: create expediente + estudio + update inmueble via RPC
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

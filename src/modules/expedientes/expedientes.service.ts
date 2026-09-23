@@ -18,6 +18,7 @@ import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { motivoParaProspectoDesdeMotivoGestor } from '@/modules/estudios/reglas-duras';
 import { errorNoAdmision } from '@/modules/estudios/estudios-simultaneos.guard';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { getApplicantById } from '../solicitantes/solicitantes.service';
 import type {
   CreateExpedienteInput,
   UpdateExpedienteInput,
@@ -398,16 +399,12 @@ export async function createExpediente(
   //     medio. Lanza CANON_EXCEDE_TOPE (400) con el mensaje accionable.
   await assertCanonDentroDelTope({ inmuebleId: input.inmueble_id, origen: 'createExpediente' });
 
-  // 2. Validar que el solicitante existe
-  const { data: solicitante, error: solicitanteError } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('id', input.solicitante_id)
-    .single();
-
-  if (solicitanteError || !solicitante) {
-    throw AppError.badRequest('Solicitante no encontrado. Verifique el ID proporcionado', 'SOLICITANTE_NOT_FOUND');
-  }
+  // 2. El solicitante tiene que existir Y ser de SU cartera (mismo scope que la
+  //    lista y el detalle de solicitantes). Antes bastaba con que existiera: con
+  //    el UUID de un cliente de otra agencia, el estudio nacia en la cartera
+  //    propia, mostraba su documento, correo y telefono, y le mandaba el habeas
+  //    data a nombre de una agencia a la que nunca le pidio nada. 404 si es ajeno.
+  await getApplicantById(input.solicitante_id, createdBy, userRol);
 
   // 4. Validar analista (si se proporciona)
   if (input.analista_id) {
