@@ -54,7 +54,7 @@ async function perfilPersonalIncompleto(userId: string): Promise<boolean> {
 // una pantalla ya no paga la validación. Cambiar rol o estado, resetear la
 // clave o cerrar sesión invalidan el caché del usuario (invalidateAuthCache);
 // solo un cambio hecho a mano en la base tarda hasta el TTL.
-interface AuthResolved {
+export interface AuthResolved {
   userId: string;
   email: string;
   rol: UserRole;
@@ -78,6 +78,16 @@ function subSinVerificar(token: string): string | null {
 }
 const authCache = new Map<string, { value: AuthResolved; expiresAt: number }>();
 const authInflight = new Map<string, Promise<AuthResolved>>();
+
+/**
+ * Guarda en el caché un token recién emitido por Supabase (refresh): la
+ * primera petición de la pantalla ya no espera getUser.
+ */
+export function primeAuthCache(token: string, value: AuthResolved): void {
+  // Cota de memoria: ante muchísimos tokens distintos, reseteamos el caché.
+  if (authCache.size > 1000) authCache.clear();
+  authCache.set(token, { value, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+}
 
 /** Invalida el caché de auth de un usuario (llamar al cambiar rol/estado/revocar). */
 export function invalidateAuthCache(userId: string): void {
@@ -127,9 +137,7 @@ async function resolveAuth(token: string): Promise<AuthResolved> {
 
     const pd = perfil as { id: string; rol: UserRole; estado: string };
     const value: AuthResolved = { userId: pd.id, email: user.email || '', rol: pd.rol, estado: pd.estado };
-    // Cota de memoria: ante muchísimos tokens distintos, reseteamos el caché.
-    if (authCache.size > 1000) authCache.clear();
-    authCache.set(token, { value, expiresAt: Date.now() + AUTH_CACHE_TTL_MS });
+    primeAuthCache(token, value);
     return value;
   })();
 

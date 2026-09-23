@@ -6,7 +6,9 @@ import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendPasswordResetEmail } from '@/lib/email';
 import { resolveRolMiembro } from '@/lib/tenantScope';
-import { invalidateAuthCache, cerrarSesionesDe } from '@/middleware/auth';
+import { invalidateAuthCache, cerrarSesionesDe, primeAuthCache } from '@/middleware/auth';
+import { getPermissionsForRole } from '@/config/permissions';
+import type { UserRole } from '@/types/auth';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
 
 export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
@@ -99,11 +101,29 @@ export async function refreshSession({ refresh_token }: RefreshInput) {
     throw AppError.unauthorized('Refresh token invalido o expirado', 'INVALID_REFRESH_TOKEN');
   }
 
-  return {
+  const tokens = {
     access_token: data.session.access_token,
     refresh_token: data.session.refresh_token,
     expires_at: data.session.expires_at,
   };
+
+  // Perfil y permisos en la misma respuesta: al recargar, el front ya no espera
+  // /auth/me y /auth/permissions después del refresh. El refresh token ya rotó,
+  // así que un fallo leyendo el perfil no puede tumbar la respuesta (el front
+  // cae a /auth/me); solo la cuenta desactivada corta, como en el middleware.
+  const userId = data.session.user.id;
+  const email = data.session.user.email ?? '';
+  let user: Awaited<ReturnType<typeof getProfile>>;
+  try {
+    user = await getProfile(userId, email);
+  } catch (err) {
+    logger.warn({ userId, err }, 'Refresh sin perfil: el front lo pide a /auth/me');
+    return tokens;
+  }
+  if (!user.activo) throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
+
+  primeAuthCache(tokens.access_token, { userId, email, rol: user.rol as UserRole, estado: 'activo' });
+  return { ...tokens, user, permissions: getPermissionsForRole(user.rol) };
 }
 
 export async function logout(accessToken: string, userId?: string, ip?: string) {
@@ -131,9 +151,10 @@ export async function logout(accessToken: string, userId?: string, ip?: string) 
 /**
  * GET /auth/me. `email` y `rol` vienen de req.user (el middleware ya los
  * validó con getUser): el perfil y el rol en la organización se leen a la vez,
- * una sola espera a Supabase.
+ * una sola espera a Supabase. Sin `rolSesion` (refresh, aún no se sabe el rol)
+ * el rol en la organización se pide igual en paralelo.
  */
-export async function getProfile(userId: string, email: string, rolSesion: string) {
+export async function getProfile(userId: string, email: string, rolSesion?: string) {
   // Incluimos telefono + documento para poder calcular `perfil_completo` (los
   // datos personales minimos que un miembro debe tener antes de poder
   // administrar un expediente asignado).
@@ -149,7 +170,7 @@ export async function getProfile(userId: string, email: string, rolSesion: strin
         telefono: string | null; tipo_documento: string | null; numero_documento: string | null;
         created_at: string; updated_at: string;
       }>(),
-    rolSesion === 'inmobiliaria' ? resolveRolMiembro(userId) : Promise.resolve(null),
+    !rolSesion || rolSesion === 'inmobiliaria' ? resolveRolMiembro(userId) : Promise.resolve(null),
   ]);
 
   if (perfilError || !perfil) {
