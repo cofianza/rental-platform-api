@@ -244,6 +244,7 @@ const fila = (o: Record<string, unknown> = {}) => ({
   estado: 'borrador',
   destinacion: 'vivienda',
   numero: 'CTO-2026-0007',
+  created_at: '2026-09-14T15:00:00.000Z',
   updated_at: LEIDO,
   datos_variables: { asistente: {} },
   storage_key: null,
@@ -538,8 +539,28 @@ describe('iniciarContrato', () => {
     const r = await iniciar();
     expect(r.creado).toBe(false);
     expect(r.estado.contrato!.id).toBe(CTO);
+    // Adenda 1 contratos, respuesta 15: iniciado el lunes 14, la reserva va hasta el lunes 21.
+    expect(r.estado.contrato!.reservadoHasta).toBe('2026-09-21');
     expect(mockReservar).not.toHaveBeenCalled();
     expect(opsDe('contratos', 'insert')).toHaveLength(0);
+  });
+
+  it('tras cancelarse por reserva vencida, el contrato nuevo precarga lo que llevaba', async () => {
+    const cancelado = fila({ estado: 'cancelado', datos_variables: { asistente: COMPLETO } });
+    encolarCarga({ contratos: [cancelado] });
+    enqueue('contratos', { data: fila({ id: 'cto-2', numero: 'CTO-2026-0008', created_at: '2026-09-15T15:00:00.000Z' }), error: null });
+
+    const r = await iniciar();
+
+    expect(r.creado).toBe(true);
+    const c = r.estado.contrato!;
+    expect(c.guardados).toEqual({});
+    expect(c.prefill[1]).toEqual(COMPLETO.paso1);
+    expect(c.prefill[2]).toEqual(COMPLETO.paso2);
+    expect(c.prefill[3]).toMatchObject({ vigenciaMeses: 12, comisionPct: 8, fechaInicio: '2026-10-01' });
+    expect(c.prefill[5]).toEqual(COMPLETO.paso5);
+    // La reserva nueva corre desde el nuevo inicio.
+    expect(c.reservadoHasta).toBe('2026-09-22');
   });
 
   it('23505 (otra pestaña ganó): devuelve la fila existente, NO libera y avisa si esta petición reservó', async () => {

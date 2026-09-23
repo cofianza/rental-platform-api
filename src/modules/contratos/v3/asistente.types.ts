@@ -60,6 +60,8 @@ export interface EstadoAsistente {
     textosPendientes: string[];
     /** §7.2: la modalidad que fija el convenio de la inmobiliaria (null = no fija). */
     modalidadConvenio: Paso1['modalidad'] | null;
+    /** Adenda 1 contratos, respuesta 15: último día hábil de la reserva del inmueble (AAAA-MM-DD). Sin envío a firma, al día siguiente el borrador se cancela solo. */
+    reservadoHasta: string;
     faltantes: { paso: NumeroPaso; mensaje: string }[];
     documento: null | { generacion: number; generadoEn: string; avisos: string[]; pendientes: string[]; desactualizado: boolean };
     /** Ruta B: el contrato propio de la inmobiliaria, tal como se cargó (sin modificar, §4.4). */

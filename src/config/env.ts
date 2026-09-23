@@ -274,6 +274,11 @@ const envSchema = z.object({
   // LOCAL (.env.local apunta a la base de producción): si no, esa API también
   // entrega avisos y correos, con enlaces a localhost.
   FIRMA_V3_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  // Adenda 1 contratos (respuesta 15): cada hora cancela los borradores V3 con la
+  // reserva del inmueble vencida (DIAS_RESERVA_INMUEBLE hábiles sin enviar a
+  // firma), libera el inmueble y avisa. Mismo criterio que el de firma: false en
+  // una API LOCAL (su .env.local apunta a la base de producción).
+  RESERVA_V3_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). OFF por defecto: con el flag
   // apagado nunca se construye el cliente ni se llama a Anthropic. Encendido

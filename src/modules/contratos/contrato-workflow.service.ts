@@ -277,6 +277,54 @@ export async function finalizarContratoVencido(contratoId: string): Promise<bool
 }
 
 // ============================================================
+// Cancelacion del sistema: reserva del inmueble vencida (V3)
+// ============================================================
+
+/**
+ * Cancela un borrador V3 como acción del sistema (sin usuario HTTP): cuando
+ * vence la reserva del inmueble (Adenda 1 contratos, respuesta 15; barrido en
+ * v3/reserva.ts). CAS sobre el estado: si entretanto salió a firma, no se toca
+ * (y el envío que pierda la carrera recibe "el borrador cambió"). Mismos
+ * efectos que cancelarlo a mano (libera el inmueble, historial, timeline con el
+ * motivo) salvo el aviso genérico «Contrato cancelado»: el barrido avisa con el
+ * motivo. Idempotente: true solo para quien lo canceló.
+ */
+export async function cancelarBorradorV3PorSistema(contratoId: string, motivo: string): Promise<boolean> {
+  const contrato = await fetchContrato(contratoId);
+  if (!contrato.destinacion || contrato.estado !== 'borrador') return false;
+  const { data, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'cancelado' } as never)
+    .eq('id', contratoId)
+    .eq('estado', 'borrador')
+    .select('id');
+  if (error) throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', `No se pudo cancelar el borrador: ${error.message}`);
+  if (!(data as unknown[] | null)?.length) return false;
+
+  const { error: histError } = await (supabase
+    .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      contrato_id: contratoId,
+      estado_anterior: 'borrador',
+      estado_nuevo: 'cancelado',
+      motivo,
+      descripcion: `Cancelación automática del sistema. Motivo: ${motivo}`,
+      usuario_id: null,
+    } as never);
+  if (histError) logger.warn({ contratoId, error: histError.message }, 'No se registró en el historial la cancelación automática');
+  const input: ContratoTransitionInput = { nuevo_estado: 'cancelado', comentario: motivo, motivo };
+  await applySideEffects(contratoId, contrato.expediente_id, 'cancelado', input, 'borrador', null, false);
+  logAudit({
+    usuarioId: null,
+    accion: AUDIT_ACTIONS.CONTRATO_TRANSITIONED,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: contratoId,
+    detalle: { estado_anterior: 'borrador', estado_nuevo: 'cancelado', motivo, automatico: true },
+  });
+  return true;
+}
+
+// ============================================================
 // Obtener transiciones disponibles
 // ============================================================
 
@@ -526,6 +574,8 @@ async function applySideEffects(
   input: ContratoTransitionInput,
   fromState: EstadoContrato,
   usuarioId: string | null,
+  /** false: sin el aviso genérico de terminación (quien llama avisa con su motivo). */
+  avisar = true,
 ): Promise<void> {
   switch (targetState) {
     case 'firmado': {
@@ -557,7 +607,7 @@ async function applySideEffects(
         .eq('id', contratoId);
       // El arriendo terminó: el inmueble vuelve a estar disponible (fuera de vitrina).
       const liberadoFin = await liberarInmuebleDelExpediente(expedienteId, contratoId);
-      await aplicarEfectosTerminacion(contratoId, expedienteId, 'finalizado', input, usuarioId, liberadoFin);
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'finalizado', input, usuarioId, liberadoFin, avisar);
       break;
     }
 
@@ -592,7 +642,7 @@ async function applySideEffects(
       } catch (err) {
         logger.error({ err, contratoId }, 'No se pudieron cancelar las solicitudes de firma del contrato cancelado');
       }
-      await aplicarEfectosTerminacion(contratoId, expedienteId, 'cancelado', input, usuarioId, liberadoCancel);
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'cancelado', input, usuarioId, liberadoCancel, avisar);
       break;
     }
   }
@@ -617,12 +667,14 @@ async function aplicarEfectosTerminacion(
   input: ContratoTransitionInput,
   usuarioId: string | null,
   inmuebleLiberado: boolean,
+  avisar = true,
 ): Promise<void> {
   const automatico = usuarioId === null;
 
-  notificarPartesContratoTerminado(contratoId, expedienteId, targetState, automatico).catch((e) =>
-    logger.warn({ error: e, contratoId }, 'Error notificando terminación del contrato'),
-  );
+  if (avisar)
+    notificarPartesContratoTerminado(contratoId, expedienteId, targetState, automatico).catch((e) =>
+      logger.warn({ error: e, contratoId }, 'Error notificando terminación del contrato'),
+    );
 
   // MORAS: NO se cancelan — una mora sobrevive al contrato por diseño (el cobro
   // de la fianza continúa tras un impago). Solo dejamos rastro interno para que
@@ -649,7 +701,7 @@ async function aplicarEfectosTerminacion(
   try {
     const descripcion =
       targetState === 'cancelado'
-        ? `Contrato cancelado${input.motivo ? `. Motivo: ${input.motivo}` : ''}`
+        ? `Contrato cancelado${automatico ? ' automáticamente' : ''}${input.motivo ? `. Motivo: ${input.motivo}` : ''}`
         : automatico
           ? 'Contrato finalizado automáticamente por vencimiento del plazo'
           : `Contrato finalizado${input.motivo ? `. Motivo: ${input.motivo}` : ''}`;

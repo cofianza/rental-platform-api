@@ -7,6 +7,7 @@
  */
 
 import type { Calibracion } from '@/lib/calibracion';
+import { sumarDiasHabiles } from '@/lib/diasHabiles';
 import { destinacionParaContrato, topeCanonPara } from '@/modules/inmuebles/destinacion';
 import {
   canonMaximoTolerado,
@@ -113,6 +114,8 @@ export interface ContratoV3 {
   id: string;
   estado: string;
   numero: string;
+  /** «Iniciar contrato»: desde aquí corre la reserva del inmueble (reservaHasta). */
+  created_at: string;
   updated_at: string;
   datos_variables: { asistente?: Asistente; documento?: DocumentoV3; propio?: PropioGuardado } | null;
   storage_key: string | null;
@@ -229,6 +232,13 @@ export const diasCalendario = (a: string, b: string) => (utc(b) - utc(a)) / 86_4
 /** iso + n días calendario. */
 export const masDias = (iso: string, n: number) =>
   new Date(utc(iso) + n * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * Adenda 1 contratos (respuesta 15, §5.6): último día (AAAA-MM-DD, Bogotá) de la
+ * reserva del inmueble de un borrador iniciado en `creadoEn`, `dias` hábiles
+ * después sin contar ese día. Si al día siguiente no se envió a firma, se cancela.
+ */
+export const reservaHasta = (creadoEn: string, dias: number) => sumarDiasHabiles(fechaBogota(creadoEn), dias);
 
 /** Porcentaje con a lo sumo dos decimales (lo único que el contrato sabe imprimir). */
 export const dosDecimales = (n: number) => Math.abs(n * 100 - Math.round(n * 100)) < 1e-9;

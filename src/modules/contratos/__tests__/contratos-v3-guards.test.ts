@@ -93,7 +93,12 @@ import {
   renovarContrato,
   supersederContratosEnFirma,
 } from '../contratos.service';
-import { executeContratoTransition, finalizarContratoVencido, getContratoTransitions } from '../contrato-workflow.service';
+import {
+  cancelarBorradorV3PorSistema,
+  executeContratoTransition,
+  finalizarContratoVencido,
+  getContratoTransitions,
+} from '../contrato-workflow.service';
 import { finalizarContratosVencidos } from '../contrato-vencimiento.service';
 import type { GenerarContratoInput, ReGenerarContratoInput, RenovarContratoInput } from '../contratos.schema';
 import { crearSolicitudFirmaMultiparte } from '@/modules/firma/firma-multiparte.service';
@@ -399,6 +404,55 @@ describe('guards de la Entrega 5 sobre filas V3', () => {
   it('cerrar o rechazar el estudio auto-cancela un contrato en FIRMA INCOMPLETA (no uno en firma)', () => {
     expect(CONTRATO_ESTADOS_PRE_FIRMA).toContain('firma_incompleta');
     expect(CONTRATO_ESTADOS_PRE_FIRMA).not.toContain('pendiente_firma');
+  });
+});
+
+describe('cancelación del sistema: reserva del inmueble vencida (Adenda 1 contratos, respuesta 15)', () => {
+  const MOTIVO = 'Reserva del inmueble vencida: 5 días hábiles sin enviar a firma';
+  const de = (table: string, method: string) => ops.filter((o) => o.table === table && o.method === method);
+
+  it('borrador V3: CAS sobre el estado, historial y la cancelación de siempre, sin el aviso genérico', async () => {
+    enqueue('contratos', { data: filaV3(), error: null }, { data: [{ id: CTO }], error: null });
+
+    expect(await cancelarBorradorV3PorSistema(CTO, MOTIVO)).toBe(true);
+
+    // El cambio de estado es el CAS (no la RPC, que no sabe de estado esperado).
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(de('contratos', 'update')[0].args[0]).toEqual({ estado: 'cancelado' });
+    const cas = ops.findIndex((o) => o.table === 'contratos' && o.method === 'update');
+    expect(ops.slice(cas).find((o) => o.method === 'eq' && o.args[0] === 'estado')?.args).toEqual(['estado', 'borrador']);
+    expect(de('contrato_historial_estados', 'insert')[0].args[0]).toMatchObject({
+      estado_anterior: 'borrador',
+      estado_nuevo: 'cancelado',
+      motivo: MOTIVO,
+      usuario_id: null,
+    });
+    // Efectos de la cancelación: motivo, liberar el inmueble y timeline (automática, con el motivo).
+    expect(de('contratos', 'update')[1].args[0]).toMatchObject({ motivo_cancelacion: MOTIVO });
+    expect(de('expedientes', 'select').map((o) => o.args[0])).toContain('inmueble_id');
+    expect(de('eventos_timeline', 'insert')[0].args[0]).toMatchObject({
+      descripcion: `Contrato cancelado automáticamente. Motivo: ${MOTIVO}`,
+      usuario_id: null,
+      metadata: { contrato_id: CTO, estado: 'cancelado', automatico: true },
+    });
+    // Sin «Contrato cancelado» genérico (ni al arrendatario): el barrido avisa con el motivo.
+    expect(de('expedientes', 'select').map((o) => o.args[0])).not.toContain('id, numero, solicitante_id, inmueble_id');
+  });
+
+  it('si entretanto salió a firma (el CAS no encuentra la fila) → false y ningún efecto', async () => {
+    enqueue('contratos', { data: filaV3(), error: null }, { data: [], error: null });
+    expect(await cancelarBorradorV3PorSistema(CTO, MOTIVO)).toBe(false);
+    expect(escrituras().filter((o) => o.method !== 'update')).toEqual([]);
+    expect(de('contratos', 'update')).toHaveLength(1);
+  });
+
+  it.each([
+    ['un V3 ya enviado a firma', filaV3({ estado: 'pendiente_firma' })],
+    ['un contrato del flujo anterior', filaV3({ destinacion: null })],
+  ])('%s → false sin escribir', async (_caso, fila) => {
+    enqueue('contratos', { data: fila, error: null });
+    expect(await cancelarBorradorV3PorSistema(CTO, MOTIVO)).toBe(false);
+    expect(escrituras()).toEqual([]);
   });
 });
 

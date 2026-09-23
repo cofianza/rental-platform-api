@@ -58,6 +58,7 @@ import {
   maximoSinNuevaEvaluacionCop,
   noImprimibles,
   prefill,
+  reservaHasta,
   textosPendientesPrevistos,
   type Asistente,
   type AsistenteCompleto,
@@ -111,7 +112,7 @@ const DESHABILITADO: EstadoAsistente = {
   enviado: null,
 };
 
-const CONTRATO_V3_SELECT = 'id, estado, destinacion, numero, updated_at, datos_variables, storage_key';
+const CONTRATO_V3_SELECT = 'id, estado, destinacion, numero, created_at, updated_at, datos_variables, storage_key';
 const PERFIL_SELECT = `
   razon_social, nit, representante_legal,
   representante_legal_tipo_documento, representante_legal_documento,
@@ -424,6 +425,7 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
       prefill: prefill(f, hoy, cal),
       textosPendientes: textosPendientesPrevistos(f, a, SIN_APROBAR[a.paso1?.ruta ?? 'A']),
       modalidadConvenio: f.modalidadFianzaDefecto,
+      reservadoHasta: reservaHasta(f.v3.created_at, cal.DIAS_RESERVA_INMUEBLE),
       faltantes: falta,
       documento: doc
         ? {

@@ -41,7 +41,8 @@ export type ClaveCalibracion =
   | 'TOPE_CANON_INGRESO_RECALCULO'
   | 'VIGENCIA_MESES_DEFECTO'
   | 'MAX_CLAUSULAS_ADICIONALES'
-  | 'DIAS_EXPIRACION_FIRMA';
+  | 'DIAS_EXPIRACION_FIRMA'
+  | 'DIAS_RESERVA_INMUEBLE';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -266,6 +267,16 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     seccion: 'Contratos V3 §14.8 / §15.1',
     descripcion: 'Dias que el proceso de firma queda abierto en Auco. Al vencer, el contrato pasa a FIRMA INCOMPLETA: la fianza no opera y hay que reenviarlo.',
     advertencia: 'Auco exige mas de 3 dias. Un plazo largo no amplia la vigencia del estudio: para reenviar, el CRC debe seguir vigente.',
+  },
+  {
+    clave: 'DIAS_RESERVA_INMUEBLE',
+    valorDefault: 5,
+    min: 1,
+    max: 30,
+    entero: true,
+    seccion: 'Adenda 1 contratos §5.6 / respuesta 15',
+    descripcion: 'Días hábiles (sin sábados, domingos ni festivos de Colombia) que el inmueble queda reservado mientras se elabora el contrato, contados desde el día siguiente a «Iniciar contrato». Si en ese plazo el borrador no se envía a firma, se cancela solo, el inmueble se libera y se avisa a la inmobiliaria.',
+    advertencia: 'Aplica también a los borradores en curso: acortarlo puede cancelar de inmediato los que ya superen el plazo nuevo.',
   },
 ];
 

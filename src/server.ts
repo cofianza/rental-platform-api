@@ -57,6 +57,18 @@ if (env.FIRMA_V3_BARRIDO_ENABLED) {
   setInterval(runFirmaV3, FIRMA_V3_INTERVAL_MS).unref();
 }
 
+// Contratos V3: reserva del inmueble vencida (Adenda 1 contratos, respuesta 15).
+// Escribe en la base: RESERVA_V3_BARRIDO_ENABLED=false en una API local.
+const RESERVA_V3_INTERVAL_MS = 60 * 60 * 1000;
+if (env.RESERVA_V3_BARRIDO_ENABLED) {
+  const runReservaV3 = () =>
+    import('@/modules/contratos/v3/reserva')
+      .then(({ barrerReservasV3 }) => barrerReservasV3())
+      .catch((err) => logger.warn({ err }, 'barrerReservasV3: ciclo fallido'));
+  runReservaV3();
+  setInterval(runReservaV3, RESERVA_V3_INTERVAL_MS).unref();
+}
+
 // Escalada automatica de mora. Antes solo existia como POST /cron/moras/
 // auto-escalar protegido por CRON_SECRET, que no esta configurado: nunca corria
 // y la pantalla de moras prometia una escalada que no pasaba. Mismo patron que
