@@ -887,8 +887,9 @@ export async function getResultadoPagoPublico(pagoId: string) {
     // 'fallido' incluido porque la máquina de estados permite fallido →
     // completado (Mercado Pago deja reintentar dentro del mismo checkout).
     // En 'completado'/'cancelado'/'reembolsado' se devuelve null: reabrir el
-    // link ahí sería invitarlo a pagar dos veces o a un enlace muerto.
-    payment_link_url: ['pendiente', 'procesando', 'fallido'].includes(pago.estado)
+    // link ahí sería invitarlo a pagar dos veces o a un enlace muerto. Tampoco
+    // en 'procesando' (PSE o efectivo en curso): sería un cobro doble.
+    payment_link_url: ['pendiente', 'fallido'].includes(pago.estado)
       ? pago.payment_link_url
       : null,
   };

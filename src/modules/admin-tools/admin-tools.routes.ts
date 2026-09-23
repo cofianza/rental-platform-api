@@ -1,9 +1,10 @@
 // ============================================================
-// Admin Tools — Routes (TEMPORAL)
+// Admin Tools — Routes
 //
-// Mario (7-may-2026): boton "Borrar datos de prueba" en el dashboard del
-// administrador. Solo accesible para rol='administrador'. ELIMINAR antes
-// de produccion (junto con la migracion 20260507000005).
+// Solo queda el registro del webhook de Auco. "Borrar datos de prueba"
+// (fn_wipe_test_data) y "seed-test-users" (cuentas con clave fija en el
+// repo) se retiraron el 2026-09-22: eran herramientas de QA y seguían vivas
+// en producción.
 // ============================================================
 
 import { Router } from 'express';
@@ -12,13 +13,6 @@ import * as controller from './admin-tools.controller';
 
 const router = Router();
 
-router.post(
-  '/wipe-test-data',
-  authMiddleware,
-  roleGuard(['administrador']),
-  controller.wipeTestData,
-);
-
 // Registra el webhook de Auco para notificaciones de firma. One-shot
 // que sobreescribe el webhook 'default' apuntando a nuestra API.
 router.post(
@@ -26,15 +20,6 @@ router.post(
   authMiddleware,
   roleGuard(['administrador']),
   controller.registerAucoWebhook,
-);
-
-// Seed de usuarios de prueba — crea (o re-crea) carlos.propietario,
-// inmobiliaria.valle, maria.arrendataria con password Test1234*.
-router.post(
-  '/seed-test-users',
-  authMiddleware,
-  roleGuard(['administrador']),
-  controller.seedTestUsers,
 );
 
 export default router;

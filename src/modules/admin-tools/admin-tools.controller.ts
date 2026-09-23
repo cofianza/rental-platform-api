@@ -1,22 +1,11 @@
 // ============================================================
-// Admin Tools — Controller (TEMPORAL)
+// Admin Tools — Controller
 // ============================================================
 
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/utils/response';
 import { registerWebhook } from '@/lib/auco';
 import { logger } from '@/lib/logger';
-import * as adminToolsService from './admin-tools.service';
-
-export async function wipeTestData(req: Request, res: Response) {
-  const confirm = (req.body?.confirm ?? '') as string;
-  const user = req.user!;
-  const result = await adminToolsService.wipeTestData(confirm, {
-    id: user.id,
-    email: user.email,
-  });
-  sendSuccess(res, result);
-}
 
 // Registra el webhook 'default' de Auco apuntando a la URL publica de
 // nuestra API. Body: { url } requerido — pasa la URL completa del
@@ -36,15 +25,4 @@ export async function registerAucoWebhook(req: Request, res: Response) {
   logger.info({ webhookUrl: url, userId: req.user!.id }, 'Registrando webhook de Auco');
   await registerWebhook(url);
   sendSuccess(res, { url, registered: true });
-}
-
-// Seed de 3 usuarios de prueba (propietario, inmobiliaria, solicitante)
-// con datos colombianos. Idempotente — si existen los borra y los recrea.
-export async function seedTestUsers(req: Request, res: Response) {
-  const user = req.user!;
-  const result = await adminToolsService.seedTestUsers({
-    id: user.id,
-    email: user.email,
-  });
-  sendSuccess(res, result);
 }
