@@ -102,16 +102,32 @@ async function generateViewUrl(storageKey: string | null): Promise<string | null
 }
 
 /**
+ * Firma varias llaves del bucket en UNA llamada a Storage (antes era una por
+ * archivo). Devuelve llave → URL; una llave que falla queda fuera del mapa.
+ */
+export async function firmarUrlsVista(keys: string[]): Promise<Map<string, string>> {
+  const urls = new Map<string, string>();
+  const unicas = [...new Set(keys)];
+  if (unicas.length === 0) return urls;
+  const { data, error } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrls(unicas, SIGNED_URL_VIEW_EXPIRY_SECONDS);
+  if (error) {
+    logger.warn({ error: error.message, total: unicas.length }, 'Error generating signed URLs');
+    return urls;
+  }
+  for (const item of data ?? []) {
+    if (item.path && item.signedUrl && !item.error) urls.set(item.path, item.signedUrl);
+  }
+  return urls;
+}
+
+/**
  * Adds archivo_url to documents by generating signed URLs
  */
 async function addSignedUrls<T extends DocumentoRow>(docs: T[]): Promise<T[]> {
-  const results = await Promise.all(
-    docs.map(async (doc) => {
-      const archivo_url = await generateViewUrl(doc.storage_key);
-      return { ...doc, archivo_url };
-    })
-  );
-  return results;
+  const urls = await firmarUrlsVista(docs.map((d) => d.storage_key).filter((k): k is string => !!k));
+  return docs.map((doc) => ({ ...doc, archivo_url: doc.storage_key ? urls.get(doc.storage_key) ?? null : null }));
 }
 
 // ============================================================
@@ -365,21 +381,6 @@ export async function listDocumentosByExpediente(
   userId?: string,
   userRol?: string,
 ) {
-  // Validate expediente exists
-  const { data: expediente, error: expError } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('id', expedienteId)
-    .single();
-
-  if (expError || !expediente) {
-    throw AppError.notFound('Estudio no encontrado');
-  }
-
-  // Tenant guard: 404 si el usuario no puede acceder a este expediente
-  // (no-op para roles internos / llamadas sin identidad).
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 20;
   const sortBy = query.sortBy || 'created_at';
@@ -409,7 +410,21 @@ export async function listDocumentosByExpediente(
     .order(sortBy, { ascending })
     .range(offset, offset + limit - 1);
 
-  const { data, error, count } = await dbQuery;
+  // Existencia, tenant guard (404 si el usuario no puede acceder al expediente;
+  // no-op para roles internos) y listado en paralelo: si el guard lanza, nada
+  // del listado sale.
+  const [{ data: expediente, error: expError }, , { data, error, count }] = await Promise.all([
+    (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('id', expedienteId)
+      .single(),
+    assertExpedienteAccess(expedienteId, userId, userRol),
+    dbQuery,
+  ]);
+
+  if (expError || !expediente) {
+    throw AppError.notFound('Estudio no encontrado');
+  }
 
   if (error) {
     logger.error({ error: error.message, expedienteId }, 'Error al listar documentos');

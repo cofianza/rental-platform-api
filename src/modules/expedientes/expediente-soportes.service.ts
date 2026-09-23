@@ -23,6 +23,7 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { firmarUrlsVista } from '../documentos/documentos.service';
 
 const BUCKET_NAME = 'documentos-expedientes';
 const MAX_SOPORTE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -354,7 +355,10 @@ export async function listarSoportes(
 
   const { data: docs, error } = await (supabase
     .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
-    .select('id, proposito, nombre_original, tipo_mime, tamano_bytes, subido_por, storage_key, created_at')
+    .select(
+      'id, proposito, nombre_original, tipo_mime, tamano_bytes, subido_por, storage_key, created_at, ' +
+        'subido_por_perfil:perfiles!estudios_documentos_soporte_subido_por_fkey(nombre, apellido)',
+    )
     .eq('estudio_id', ctx.estudioActivoId)
     .order('created_at', { ascending: false });
 
@@ -374,42 +378,24 @@ export async function listarSoportes(
     subido_por: string | null;
     storage_key: string;
     created_at: string;
+    subido_por_perfil: { nombre: string | null; apellido: string | null } | null;
   }>;
 
-  // Resolver nombres de quienes subieron — query única.
-  const userIds = [...new Set(docsTyped.map((d) => d.subido_por).filter(Boolean) as string[])];
-  const nombresMap = new Map<string, string>();
-  if (userIds.length > 0) {
-    const { data: perfiles } = await (supabase
-      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-      .select('id, nombre, apellido')
-      .in('id', userIds);
-    if (perfiles) {
-      for (const p of perfiles as unknown as Array<{ id: string; nombre: string; apellido: string }>) {
-        nombresMap.set(p.id, `${p.nombre} ${p.apellido}`.trim());
-      }
-    }
-  }
-
-  // Generar signed URLs para todos en paralelo.
-  const result = await Promise.all(
-    docsTyped.map(async (d) => {
-      const { data: urlData } = await supabase.storage
-        .from(BUCKET_NAME)
-        .createSignedUrl(d.storage_key, 3600);
-      return {
-        id: d.id,
-        proposito: d.proposito,
-        nombre_original: d.nombre_original,
-        tipo_mime: d.tipo_mime,
-        tamano_bytes: d.tamano_bytes,
-        subido_por: d.subido_por,
-        subido_por_nombre: d.subido_por ? nombresMap.get(d.subido_por) || null : null,
-        created_at: d.created_at,
-        archivo_url: urlData?.signedUrl || null,
-      };
-    }),
-  );
+  // Nombre de quien subió por embed y todas las URLs en una sola firma.
+  const urls = await firmarUrlsVista(docsTyped.map((d) => d.storage_key));
+  const result = docsTyped.map((d) => ({
+    id: d.id,
+    proposito: d.proposito,
+    nombre_original: d.nombre_original,
+    tipo_mime: d.tipo_mime,
+    tamano_bytes: d.tamano_bytes,
+    subido_por: d.subido_por,
+    subido_por_nombre: d.subido_por_perfil
+      ? `${d.subido_por_perfil.nombre ?? ''} ${d.subido_por_perfil.apellido ?? ''}`.trim() || null
+      : null,
+    created_at: d.created_at,
+    archivo_url: urls.get(d.storage_key) ?? null,
+  }));
 
   // Hush unused warning: supabaseAuth es importable aunque no lo usemos aquí.
   void supabaseAuth;
