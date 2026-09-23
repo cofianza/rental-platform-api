@@ -211,8 +211,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     max: 50,
     entero: false,
     seccion: 'Contratos comercial §3.3.2 / §12.2',
-    descripcion: 'Tarifa general de IVA (%). Se suma a la tarifa mensual de la fianza y, en arrendamiento comercial, al canon.',
-    advertencia: 'Es la tarifa legal: cambiarla solo si cambia la ley. Aplica a lo que se emita desde el cambio (hasta 60 s de cache). La facturacion electronica usa configuracion_sistema.iva_concepto_garantia (hoy 0, exento): pendiente de Gerencia.',
+    descripcion: 'Tarifa general de IVA (%). Se suma a la prima de vinculación y a la tarifa mensual de la fianza (Adenda 1 de contratos §1.1) y, en arrendamiento comercial, al canon.',
+    advertencia: 'Es la tarifa legal: cambiarla solo si cambia la ley. Aplica a lo que se emita desde el cambio (hasta 60 s de cache). La factura electrónica de la garantía toma su tasa de configuracion_sistema.iva_concepto_garantia: si esta cambia, hay que cambiar las dos.',
   },
   // Contratos V3 §14. Rigen SOLO para el asistente de contratos: el motor sigue
   // con su 40% (scorecard.ts) y la reasignacion con su 15% (portabilidad.ts).
@@ -265,8 +265,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     max: 60,
     entero: true,
     seccion: 'Contratos V3 §14.8 / §15.1',
-    descripcion: 'Dias que el proceso de firma queda abierto en Auco. Al vencer, el contrato pasa a FIRMA INCOMPLETA: la fianza no opera y hay que reenviarlo.',
-    advertencia: 'Auco exige mas de 3 dias. Un plazo largo no amplia la vigencia del estudio: para reenviar, el CRC debe seguir vigente.',
+    descripcion: 'Días calendario para firmar desde el envío, hasta la medianoche del último día. Admite una sola prórroga de otros tantos y el proceso nunca pasa la vigencia del CRC (Adenda 1 de contratos, respuesta 10). Al vencer, el contrato pasa a FIRMA INCOMPLETA: la fianza no opera y hay que reenviarlo.',
+    advertencia: 'Auco exige más de 3 días. Un plazo largo no amplía la vigencia del estudio: para reenviar, el CRC debe seguir vigente.',
   },
   {
     clave: 'DIAS_RESERVA_INMUEBLE',
@@ -296,6 +296,7 @@ const OPERATIVOS: ReadonlySet<ClaveCalibracion> = new Set<ClaveCalibracion>([
   'DIAS_EXPIRACION_ESTUDIO', // plazo del prospecto para autorizar
   'VIGENCIA_MESES_DEFECTO', // solo precarga el asistente; cada contrato fija la suya
   'DIAS_EXPIRACION_FIRMA',
+  'DIAS_RESERVA_INMUEBLE', // respuesta 15: plazo del borrador para enviar a firma
 ]);
 
 export type NivelParametro = 'riesgo' | 'operativo';

@@ -49,7 +49,7 @@ beforeEach(() => {
 describe('clasificación riesgo / operativo', () => {
   it('solo los plazos operativos quedan fuera de la Gerencia General; en la duda, riesgo', () => {
     const operativos = PARAMETROS.filter((p) => nivelDe(p.clave) === 'operativo').map((p) => p.clave);
-    expect(operativos).toEqual(['DIAS_EXPIRACION_ESTUDIO', 'VIGENCIA_MESES_DEFECTO', 'DIAS_EXPIRACION_FIRMA']);
+    expect(operativos).toEqual(['DIAS_EXPIRACION_ESTUDIO', 'VIGENCIA_MESES_DEFECTO', 'DIAS_EXPIRACION_FIRMA', 'DIAS_RESERVA_INMUEBLE']);
     for (const clave of ['CANON_MAX_TRANSITORIO', 'TOPE_CANON_COMERCIAL', 'UMBRAL_SCORE_RECHAZO', 'VIGENCIA_CRC_DIAS'])
       expect(nivelDe(clave)).toBe('riesgo');
     expect(nivelDe('NO_EXISTE')).toBe('riesgo');
