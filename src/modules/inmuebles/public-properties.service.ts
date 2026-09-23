@@ -91,7 +91,7 @@ const LOGO_BUCKET = 'documentos-expedientes';
 const LOGO_URL_TTL_SECONDS = 60 * 60;
 const logoUrls = new Map<string, { url: string; vence: number }>();
 
-async function urlLogo(key: string): Promise<string | null> {
+export async function urlLogo(key: string): Promise<string | null> {
   const guardada = logoUrls.get(key);
   if (guardada && guardada.vence > Date.now()) return guardada.url;
   const { data: signed } = await supabase.storage.from(LOGO_BUCKET).createSignedUrl(key, LOGO_URL_TTL_SECONDS);

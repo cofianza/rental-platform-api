@@ -3,6 +3,7 @@ import { resolveOrgCanonicalPerfilId, resolveRolMiembro } from '@/lib/tenantScop
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { urlLogo } from '@/modules/inmuebles/public-properties.service';
 import type { UpdatePerfilArrendadorInput } from './perfil-arrendador.schema';
 
 const LOGO_BUCKET = 'documentos-expedientes';
@@ -139,8 +140,17 @@ export async function getMiPerfilArrendador(userId: string) {
   if (error || !data) throw AppError.notFound('Perfil no encontrado');
   // `puede_editar`: solo el titular edita los datos compartidos (los miembros
   // los ven de solo lectura). El propietario individual siempre puede.
-  const puedeEditar = await usuarioPuedeEditarDatosContrato(userId);
-  return { ...(data as Record<string, unknown>), puede_editar: puedeEditar };
+  // El logo_url guardado vence a los 30 días: con llave se firma de nuevo.
+  const logoKey = (data as { logo_storage_key?: string | null }).logo_storage_key;
+  const [puedeEditar, logoUrl] = await Promise.all([
+    usuarioPuedeEditarDatosContrato(userId),
+    logoKey ? urlLogo(logoKey) : null,
+  ]);
+  return {
+    ...(data as Record<string, unknown>),
+    ...(logoKey ? { logo_url: logoUrl } : {}),
+    puede_editar: puedeEditar,
+  };
 }
 
 /**
@@ -303,8 +313,8 @@ export async function uploadLogo(
     throw new AppError(500, 'STORAGE_ERROR', 'No se pudo subir el logo');
   }
 
-  // Cacheamos URL firmada larga; si expira, la regeneramos al generar
-  // el contrato (contratos.service tiene fallback a createSignedUrl).
+  // URL firmada para la respuesta inmediata; vence a los 30 días, así que quien
+  // lee el logo después (contrato, Datos para contrato) firma por la llave.
   const { data: signed } = await supabase.storage
     .from(LOGO_BUCKET)
     .createSignedUrl(storageKey, LOGO_URL_TTL_SECONDS);

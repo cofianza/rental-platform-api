@@ -712,17 +712,17 @@ async function buildContratoContext(
   const razonSocialArrendador = arrendador?.razon_social
     || `${arrendador?.nombre || ''} ${arrendador?.apellido || ''}`.trim();
 
-  // Resolver URL pública del logo: priorizamos logo_url si ya está
-  // cacheado. Si solo hay storage_key, asumimos el bucket de documentos
-  // (cuando agreguemos UI de subida en Fase 3 podemos cambiar de bucket
-  // — por ahora la inmobiliaria pega la URL directa o sube por aquí).
-  let logoUrl = arrendador?.logo_url || null;
-  if (!logoUrl && esInmobiliaria && arrendador?.logo_storage_key) {
+  // Logo: el logo_url guardado es una URL firmada que vence a los 30 días, así
+  // que con llave se firma de nuevo (30 días, porque la vista de verificación
+  // re-renderiza desde datos_variables). La URL guardada queda de respaldo.
+  let logoUrl: string | null = null;
+  if (esInmobiliaria && arrendador?.logo_storage_key) {
     const { data: signed } = await supabase.storage
       .from(BUCKET_NAME)
-      .createSignedUrl(arrendador.logo_storage_key, 60 * 60);
+      .createSignedUrl(arrendador.logo_storage_key, 60 * 60 * 24 * 30);
     logoUrl = signed?.signedUrl ?? null;
   }
+  logoUrl ||= arrendador?.logo_url || null;
 
   // ── Fase 3 (contrato V4) ──────────────────────────────────────────
   // Cobertura (cob.*) según la modalidad; co-titular y reparto de servicios
