@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Permisos de citas. Mismo mock de Supabase con colas por tabla que moras.
 // ============================================================
 
-const { mockFrom, enqueue, resetQueues, mockAllowedExp, mockAllowedInm } = vi.hoisted(() => {
+const { mockFrom, enqueue, resetQueues, mockAllowedExp } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const next = (table: string): Res => {
@@ -26,7 +26,6 @@ const { mockFrom, enqueue, resetQueues, mockAllowedExp, mockAllowedInm } = vi.ho
     },
     resetQueues: () => queues.clear(),
     mockAllowedExp: vi.fn(),
-    mockAllowedInm: vi.fn(),
   };
 });
 
@@ -34,11 +33,10 @@ vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) 
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/lib/tenantScope', () => ({
   resolveAllowedExpedienteIds: (...a: unknown[]) => mockAllowedExp(...a),
-  resolveAllowedInmuebleIds: (...a: unknown[]) => mockAllowedInm(...a),
   resolveMembershipInmobiliariaIds: async () => [],
 }));
 
-import { assertCitaPermission } from '../citas.permissions';
+import { assertCitaPermission, resolveAccessibleExpedienteIds } from '../citas.permissions';
 
 const expedienteDelArrendatario = {
   id: 'exp1',
@@ -53,7 +51,6 @@ const expedienteDelArrendatario = {
 beforeEach(() => {
   resetQueues();
   mockAllowedExp.mockReset();
-  mockAllowedInm.mockReset();
 });
 
 describe('assertCitaPermission — solicitante', () => {
@@ -76,5 +73,16 @@ describe('assertCitaPermission — solicitante', () => {
     await expect(
       assertCitaPermission({ userId: 'otro', userRol: 'solicitante', expedienteId: 'exp1', action: 'cancelar' }),
     ).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe('resolveAccessibleExpedienteIds — inmobiliaria', () => {
+  it('incluye los estudios asignados al miembro restringido (el alcance de tenantScope)', async () => {
+    mockAllowedExp.mockResolvedValue(['exp-de-su-inmueble', 'exp-asignado']);
+    await expect(resolveAccessibleExpedienteIds('miembro', 'inmobiliaria')).resolves.toEqual([
+      'exp-de-su-inmueble',
+      'exp-asignado',
+    ]);
+    expect(mockAllowedExp).toHaveBeenCalledWith('miembro', 'inmobiliaria');
   });
 });

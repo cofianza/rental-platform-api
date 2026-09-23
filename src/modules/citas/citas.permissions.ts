@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { UserRole } from '@/types/auth';
-import { resolveAllowedInmuebleIds, resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
 
 export type CitaAction =
   | 'create'
@@ -177,16 +177,10 @@ export async function resolveAccessibleExpedienteIds(
   }
 
   if (PROPIETARIO_LIKE_ROLES.includes(userRol)) {
-    // Org-aware: la inmobiliaria ve la cartera de toda su organización.
-    const inmuebleIds = await resolveAllowedInmuebleIds(userId, userRol);
-    if (inmuebleIds === null) return null;
-    if (inmuebleIds.length === 0) return [];
-
-    const { data: exps } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .in('inmueble_id', inmuebleIds);
-    return ((exps as { id: string }[] | null) || []).map((e) => e.id);
+    // El mismo alcance que el estudio (tenantScope): la copia por inmuebles
+    // dejaba fuera los estudios asignados al miembro restringido, que abría el
+    // estudio pero recibía 403 al listar sus citas.
+    return resolveAllowedExpedienteIds(userId, userRol);
   }
 
   if (userRol === 'solicitante') {
