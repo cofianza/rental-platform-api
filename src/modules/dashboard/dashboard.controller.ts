@@ -6,6 +6,7 @@ import { Request, Response } from 'express';
 import { sendSuccess } from '@/utils/response';
 import * as dashboardService from './dashboard.service';
 import * as seccionesService from './dashboard-secciones.service';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import type { DashboardQuery, UpdateTesoreriaInput } from './dashboard.schema';
 
 // El navegador pregunta siempre: con max-age=300 reusaba la respuesta 5
@@ -93,7 +94,17 @@ export async function getTesoreria(_req: Request, res: Response) {
 // Tesorería — actualizar capital disponible y reserva mínima (admin).
 export async function updateTesoreria(req: Request, res: Response) {
   const body = req.body as UpdateTesoreriaInput;
+  const antes = await dashboardService.getTesoreria();
   const tesoreria = await dashboardService.updateTesoreria(body);
+  // El capital alimenta el KPI «Capital libre»: queda quién lo movió y desde qué valor.
+  logAudit({
+    usuarioId: req.user!.id,
+    accion: AUDIT_ACTIONS.CONFIG_CHANGED,
+    entidad: AUDIT_ENTITIES.CONFIG,
+    entidadId: 'tesoreria',
+    detalle: { antes, despues: tesoreria },
+    ip: req.ip,
+  });
   sendSuccess(res, tesoreria);
 }
 

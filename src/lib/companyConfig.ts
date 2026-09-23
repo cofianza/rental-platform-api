@@ -77,7 +77,10 @@ export async function getCompany(): Promise<CompanyInfo> {
   }
 }
 
-export async function setCompany(partial: Partial<CompanyInfo>): Promise<CompanyInfo> {
+/** Devuelve también el valor anterior, para que la bitácora guarde qué cambió. */
+export async function setCompany(
+  partial: Partial<CompanyInfo>,
+): Promise<{ antes: CompanyInfo; despues: CompanyInfo }> {
   // Se lee la fila, no el caché: si el caché trae los defaults por una lectura
   // fallida, el cambio parcial los guardaría encima de los datos reales.
   const current = await leerFila();
@@ -100,5 +103,5 @@ export async function setCompany(partial: Partial<CompanyInfo>): Promise<Company
 
   invalidateCompanyCache();
   ultimoBueno = value;
-  return value;
+  return { antes: current, despues: value };
 }
