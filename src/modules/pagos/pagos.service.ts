@@ -1455,6 +1455,9 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
     .in('estado', ['pendiente', 'procesando', 'fallido'])
     .gte('created_at', desde)
     .lte('created_at', hasta)
+    // Los más recientes primero: sin orden, 50 cobros abandonados o fallidos
+    // de la semana podían dejar fuera el pago que acaba de entrar.
+    .order('created_at', { ascending: false })
     .limit(50);
 
   if (error) {
@@ -1465,6 +1468,9 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
   const pendientes = (data ?? []) as Array<{
     id: string; expediente_id: string; concepto: string; estado: string; transaction_ref: string | null;
   }>;
+  if (pendientes.length === 50) {
+    logger.warn('reconcilePendingPagos: se llegó al tope de 50 pagos; los más viejos quedan para otra corrida');
+  }
 
   let conciliados = 0;
   for (const p of pendientes) {
@@ -1513,6 +1519,7 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
     .eq('estado', 'pendiente')
     .gte('created_at', desde)
     .lte('created_at', hasta)
+    .order('created_at', { ascending: false })
     .limit(50);
 
   if (comprasError) {
@@ -1520,6 +1527,9 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
   }
 
   const compras = (comprasData ?? []) as Array<{ id: string; estado: string }>;
+  if (compras.length === 50) {
+    logger.warn('reconcilePendingPagos: se llegó al tope de 50 compras de créditos; las más viejas quedan para otra corrida');
+  }
   let comprasConciliadas = 0;
   for (const c of compras) {
     try {
