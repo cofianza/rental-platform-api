@@ -671,8 +671,7 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
 
 /**
  * Si TODAS las filas de contrato_firmantes están 'firmado', marca el sobre como
- * firmado e intenta activar el contrato. El paso pendiente_firma → firmado lo
- * hace el auto-heal al listar contratos (maybeAutoTransicionarFirmado).
+ * firmado y lleva el contrato pendiente_firma → firmado → vigente.
  * Idempotente. Compartido por la reconciliación por poll y por webhook.
  */
 async function cerrarSobreSiTodasFirmaron(
@@ -701,18 +700,19 @@ async function cerrarSobreSiTodasFirmaron(
     detalle: { solicitud_id: sobre.id, multiparte: true },
   });
 
-  // Cierre SÍNCRONO del pipeline tras firma: contrato firmado → vigente,
-  // expediente → cerrado, inmueble → ocupado (fuera de vitrina). Antes esto solo
-  // ocurría de forma DIFERIDA (auto-heal al listar contratos), lo que dejaba el
-  // stepper "trabado" en Firma y el inmueble sin marcar como ocupado hasta un
-  // refresco posterior. Idempotente (maybeAutoActivarVigente guarda por estado).
+  // Cierre SÍNCRONO del pipeline tras firma: contrato pendiente_firma → firmado
+  // → vigente, expediente → cerrado, inmueble → ocupado (fuera de vitrina).
+  // Antes el paso a 'firmado' solo lo daba el auto-heal al listar contratos del
+  // estudio, así que maybeAutoActivarVigente salía sin hacer nada y todo quedaba
+  // trabado hasta que alguien abriera el estudio. Ambas funciones guardan por estado.
   try {
     const { data: cRow } = await db('contratos')
       .select('expediente_id')
       .eq('id', contratoId)
       .single() as { data: { expediente_id: string } | null };
     if (cRow?.expediente_id) {
-      const { maybeAutoActivarVigente } = await import('@/modules/contratos/contratos.service');
+      const { maybeAutoTransicionarFirmado, maybeAutoActivarVigente } = await import('@/modules/contratos/contratos.service');
+      await maybeAutoTransicionarFirmado(contratoId);
       await maybeAutoActivarVigente(contratoId, cRow.expediente_id);
     }
   } catch (err) {

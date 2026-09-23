@@ -1082,7 +1082,9 @@ export async function listContratosByExpediente(
     // solicitudes firmadas. Solo necesitamos mirar el contrato mas reciente.
     const pendienteFirma = lista.find((c) => c.estado === 'pendiente_firma');
     if (pendienteFirma) {
-      void maybeAutoTransicionarFirmado(pendienteFirma.id);
+      // Encadenado: si pasa a 'firmado', se activa en esta misma carga.
+      void maybeAutoTransicionarFirmado(pendienteFirma.id)
+        .then(() => maybeAutoActivarVigente(pendienteFirma.id, expedienteId));
     }
     // Caso 4: contrato en 'firmado' (post-firma exitosa) -> activar a
     // 'vigente' y cerrar el expediente.
@@ -1099,15 +1101,14 @@ export async function listContratosByExpediente(
 }
 
 /**
- * Si el contrato esta en 'pendiente_firma' pero TODAS las solicitudes_firma
- * asociadas ya estan en estado 'firmado', transicionamos el contrato a
- * 'firmado'. Esto cubre el caso en el que post-firma.executePostFirma
- * fallo silenciosamente al ejecutar el RPC transicionar_contrato (eg.
- * por algun error transitorio o race condition con la inserción del
- * historial). Idempotente — re-llamar es seguro porque el guard inicial
- * verifica el estado actual.
+ * Si el contrato esta en 'pendiente_firma' y su sobre MAS RECIENTE ya esta
+ * 'firmado', lo pasa a 'firmado'. Lo llama el webhook/poll de Auco al cerrar el
+ * sobre (firma-multiparte) y, como red de seguridad, el listado de contratos.
+ * Solo cuenta el ultimo sobre: uno anterior cancelado o vencido (reenvio) no
+ * traba el contrato. fecha_firma = hora en que se cerro el sobre, no la de la
+ * visita. Idempotente — el guard inicial verifica el estado actual.
  */
-async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
+export async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
   if (autoGenInflight.has(contratoId)) return;
 
   // 1. Confirmar estado actual del contrato.
@@ -1119,21 +1120,21 @@ async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
   const c = contratoRow as { id: string; estado: string; expediente_id: string } | null;
   if (!c || c.estado !== 'pendiente_firma') return;
 
-  // 2. Listar solicitudes de firma del contrato.
-  const { data: solicitudesRow } = await (supabase
+  // 2. El sobre vigente es el mas reciente.
+  const { data: sobreRow } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado')
-    .eq('contrato_id', contratoId);
-  const solicitudes = (solicitudesRow as Array<{ id: string; estado: string }> | null) || [];
-  if (solicitudes.length === 0) return;
-
-  const todasFirmadas = solicitudes.every((s) => s.estado === 'firmado');
-  if (!todasFirmadas) return;
+    .select('id, estado, firmado_en')
+    .eq('contrato_id', contratoId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const sobre = sobreRow as { id: string; estado: string; firmado_en: string | null } | null;
+  if (sobre?.estado !== 'firmado') return;
 
   autoGenInflight.add(contratoId);
   logger.info(
-    { contratoId, totalSolicitudes: solicitudes.length },
-    'Auto-heal: contrato en pendiente_firma con todas firmas completas — transicionando a firmado',
+    { contratoId, sobreId: sobre.id },
+    'Auto-heal: contrato en pendiente_firma con el sobre firmado — transicionando a firmado',
   );
 
   try {
@@ -1141,9 +1142,9 @@ async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
     const { error } = await (supabase as any).rpc('transicionar_contrato', {
       p_contrato_id: contratoId,
       p_nuevo_estado: 'firmado',
-      p_descripcion: 'Auto-heal: post-firma no transiciono el contrato — sincronizando estado',
+      p_descripcion: 'Firma electrónica completa: todas las partes firmaron',
       p_usuario_id: null,
-      p_comentario: 'Transicion automatica detectada en list de contratos',
+      p_comentario: null,
       p_motivo: null,
     });
 
@@ -1157,7 +1158,7 @@ async function maybeAutoTransicionarFirmado(contratoId: string): Promise<void> {
 
     await (supabase
       .from('contratos' as string) as ReturnType<typeof supabase.from>)
-      .update({ fecha_firma: new Date().toISOString() } as never)
+      .update({ fecha_firma: sobre.firmado_en ?? new Date().toISOString() } as never)
       .eq('id', contratoId);
 
     logger.info({ contratoId }, 'Auto-heal: contrato transicionado a firmado');
