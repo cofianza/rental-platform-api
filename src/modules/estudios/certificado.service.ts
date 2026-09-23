@@ -49,6 +49,10 @@ function formatCurrency(value: number): string {
   return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(value);
 }
 
+function formatPct(value: number): string {
+  return `${value.toLocaleString('es-CO', { maximumFractionDigits: 2 })}%`;
+}
+
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('es-CO', {
     timeZone: 'America/Bogota',
@@ -164,6 +168,10 @@ export interface CertificatePdfData {
   decisionCascada: string | null;
   // Adenda 2 §4.3: denominador del puntaje y variables que participaron.
   denominadorPuntaje?: string | null;
+  // Adenda 1 contratos, respuesta 19: relacion canon/ingreso de la evaluacion,
+  // con el ingreso que dio la central. null = no verificable (TransUnion no lo
+  // da y el declarado nunca la alimenta).
+  canonIngresoPct: number | null;
   /** Adenda 1 contratos, respuesta 5: versión sin puntaje ni observaciones (ver sinPuntaje). */
   paraFirmantes?: boolean;
 }
@@ -374,8 +382,10 @@ export async function generateCertificatePdf(
       // saber antes de firmar.
       doc.fontSize(7).font('Helvetica').fillColor('#6b7280');
       doc.text(
-        `Este certificado ampara contratos cuyo canon no supere en más de ${PORTABILIDAD_TOLERANCIA_PCT}% el canon evaluado, ` +
-          'siempre que la relación canon/ingreso recalculada se mantenga en o por debajo del 40%. ' +
+        `Este certificado ampara contratos cuyo canon no supere en más de ${PORTABILIDAD_TOLERANCIA_PCT}% el canon evaluado` +
+          (data.canonIngresoPct == null
+            ? '. La relación canon/ingreso no se recalcula porque no fue verificable. '
+            : ', siempre que la relación canon/ingreso recalculada se mantenga en o por debajo del 40%. ') +
           'Si el canon excede esa tolerancia se requiere una nueva evaluación.',
         50,
         y + 4,
@@ -396,6 +406,14 @@ export async function generateCertificatePdf(
     if (data.fuentesConsultadas) trazaRows.push(['Fuentes consultadas', data.fuentesConsultadas]);
     if (data.decisionCascada) trazaRows.push(['Decisión de cascada', data.decisionCascada]);
     if (data.denominadorPuntaje) trazaRows.push(['Denominador del puntaje', `${data.denominadorPuntaje} (Adenda 2 §4.3)`]);
+    // Adenda 1 contratos, respuesta 19: que la decision quede trazada tambien
+    // sin ingreso verificado. La cifra deja ver el ingreso del arrendatario:
+    // la version para firmantes no la lleva.
+    if (data.canonIngresoPct == null) {
+      trazaRows.push(['Relación canon/ingreso', 'No verificable (no se contó con ingreso verificado)']);
+    } else if (!data.paraFirmantes) {
+      trazaRows.push(['Relación canon/ingreso', formatPct(data.canonIngresoPct)]);
+    }
     if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {
       trazaRows.push(['Factor de ajuste de ingreso', `x${data.factorAjusteIngreso} (Adenda 1 §1.1)`]);
     }
@@ -505,16 +523,22 @@ function drawTable(doc: PDFKit.PDFDocument, rows: string[][], startY: number, wi
  */
 export async function leerSombraDelEstudio(
   estudioId: string,
-): Promise<{ puntaje: number | null; factor: number | null; modeloVersion: string | null; denominador: string | null } | null> {
+): Promise<{
+  puntaje: number | null;
+  factor: number | null;
+  modeloVersion: string | null;
+  denominador: string | null;
+  canonIngresoPct: number | null;
+} | null> {
   try {
     const { data } = await (supabase
       .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-      .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version, features_crudas')
+      .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version, features_crudas, canon_ingreso_pct, canon_ingreso_ajustado_pct')
       .eq('estudio_id', estudioId)
       .order('fecha_calculo', { ascending: false })
       .limit(1)
       .maybeSingle();
-    const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null } | null;
+    const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null; canon_ingreso_pct?: number | string | null; canon_ingreso_ajustado_pct?: number | string | null } | null;
     if (!row) return null;
     const num = (v: unknown) => {
       const n = typeof v === 'string' ? Number(v) : v;
@@ -530,7 +554,15 @@ export async function leerSombraDelEstudio(
       ? `${den} puntos (${vars.join(', ')})${rm ? ' — recalculado en revisión manual' : ''}`
       : null;
     const puntaje = rm ? num(rm.puntaje_normalizado) : num(row.puntaje_normalizado);
-    return { puntaje, factor: num(row.factor_ajuste_ingreso), modeloVersion: row.modelo_version ?? null, denominador };
+    return {
+      puntaje,
+      factor: num(row.factor_ajuste_ingreso),
+      modeloVersion: row.modelo_version ?? null,
+      denominador,
+      // Con el ingreso ajustado es con el que decide el motor (Adenda 1 §1.1);
+      // las corridas anteriores al factor solo tienen el crudo.
+      canonIngresoPct: num(row.canon_ingreso_ajustado_pct) ?? num(row.canon_ingreso_pct),
+    };
   } catch {
     return null;
   }
@@ -944,6 +976,7 @@ async function datosDelCrc(
     fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
     denominadorPuntaje: sombra?.denominador ?? null,
     decisionCascada,
+    canonIngresoPct: sombra?.canonIngresoPct ?? null,
   };
 }
 

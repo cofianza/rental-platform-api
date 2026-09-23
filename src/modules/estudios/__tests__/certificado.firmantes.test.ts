@@ -86,6 +86,7 @@ import {
   generarCertificado,
   generateCertificatePdf,
   generateQrCode,
+  leerSombraDelEstudio,
   llaveFirmantes,
   sinPuntaje,
   type CertificatePdfData,
@@ -140,6 +141,7 @@ const DATOS: CertificatePdfData = {
   fuentesConsultadas: 'DataCrédito',
   decisionCascada: 'puntaje 92 >= 90 con la primaria: aprobado sin consultar la segunda central',
   denominadorPuntaje: '105 puntos (V1, V2, V3)',
+  canonIngresoPct: null,
 };
 
 const CERT = {
@@ -205,6 +207,48 @@ describe('el PDF sin puntaje', () => {
     for (const s of ['CERT-2026-00042', 'APROBADO', 'Presentar el contrato laboral', 'Tarifa mensual de la fianza', 'Prima de vinculación']) {
       expect(firmantes).toContain(s);
     }
+  });
+});
+
+// Adenda 1 del módulo de contratos, respuesta 19: "El certificado debe registrar
+// expresamente que la relación canon/ingreso no fue verificable".
+describe('relación canon/ingreso', () => {
+  const NO_VERIFICABLE = 'No verificable (no se contó con ingreso verificado)';
+
+  it('sin ingreso verificado lo registra, en las dos versiones, y no promete el recálculo', async () => {
+    for (const d of [DATOS, sinPuntaje(DATOS)]) {
+      textos.mockClear();
+      await generateCertificatePdf(d, QR);
+      const t = impreso();
+      expect(t).toContain('Relación canon/ingreso');
+      expect(t).toContain(NO_VERIFICABLE);
+      expect(t).toContain('La relación canon/ingreso no se recalcula porque no fue verificable.');
+      expect(t).not.toContain('se mantenga en o por debajo del 40%');
+    }
+  });
+
+  it('con ingreso, el completo imprime la cifra; el de firmantes no (deja ver el ingreso)', async () => {
+    const conIngreso = { ...DATOS, canonIngresoPct: 28.57 };
+    await generateCertificatePdf(conIngreso, QR);
+    const completo = impreso();
+    expect(completo).toContain('28,57%');
+    expect(completo).not.toContain(NO_VERIFICABLE);
+    expect(completo).toContain('se mantenga en o por debajo del 40%');
+
+    textos.mockClear();
+    await generateCertificatePdf(sinPuntaje(conIngreso), QR);
+    const firmantes = impreso();
+    expect(firmantes).not.toContain('28,57');
+    expect(firmantes).not.toContain(NO_VERIFICABLE);
+  });
+
+  it('se lee de la corrida del motor: el ajustado por el factor y, si no lo hay, el crudo', async () => {
+    enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: '40.00', canon_ingreso_ajustado_pct: '34.78' }, error: null });
+    expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBe(34.78);
+    enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: '74.60', canon_ingreso_ajustado_pct: null }, error: null });
+    expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBe(74.6);
+    enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: null, canon_ingreso_ajustado_pct: null }, error: null });
+    expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBeNull();
   });
 });
 
