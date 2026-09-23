@@ -32,6 +32,7 @@ import {
   reservarInmuebleParaContrato,
   type ReservaInmuebleResult,
 } from '@/modules/inmuebles/inmuebles.service';
+import { escalarTopeCanon } from '../tope-coafianzamiento';
 import type {
   AceptacionClausulas,
   ClausulaEnContrato,
@@ -570,7 +571,19 @@ export async function obtenerEstado(
   if (vista) return estadoDeEnviado(vista);
   if (!env.CONTRATOS_V3_ENABLED) return DESHABILITADO;
   const c = await cargarFuentes(expedienteId);
-  return c ? armarEstado(c, hoyBogota()) : DESHABILITADO;
+  if (!c) return DESHABILITADO;
+  await escalarSiTope(c);
+  return armarEstado(c, hoyBogota());
+}
+
+/**
+ * Adenda 1 contratos §2.4: el canon pactado en el paso 1 choca con el tope →
+ * además del bloqueo, aviso a la Gerencia General (una vez por estudio; nunca lanza).
+ */
+async function escalarSiTope({ f, cal }: Cargadas): Promise<void> {
+  const canonCop = f.v3?.datos_variables?.asistente?.paso1?.canonCop;
+  const v = canonCop ? evaluarCanon(f, canonCop, cal) : null;
+  if (canonCop && v?.bloqueo?.codigo === 'CANON_EXCEDE_TOPE') await escalarTopeCanon(f.expediente.id, canonCop, v.topeCop);
 }
 
 function avisarAfectados(reserva: ReservaInmuebleResult, expedienteId: string) {
@@ -880,7 +893,9 @@ export async function guardarPaso(
     }
   }
 
-  return armarEstado(await cargar(expedienteId), hoy);
+  const nueva = await cargar(expedienteId);
+  await escalarSiTope(nueva);
+  return armarEstado(nueva, hoy);
 }
 
 // ── §5.6 Generar (vista previa en modo revisión, D6) ──

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // El contrato no puede afianzar un canon que el estudio no evaluó: máximo =
 // canon evaluado + TOLERANCIA_CANON, sin pasar el tope (y nunca menos que lo evaluado).
-const { resultado } = vi.hoisted(() => ({ resultado: { data: null as unknown } }));
+const { resultado, mockEscalar } = vi.hoisted(() => ({ resultado: { data: null as unknown }, mockEscalar: vi.fn() }));
 vi.mock('@/lib/supabase', () => {
   const chain: Record<string, unknown> = {};
   for (const m of ['select', 'eq', 'order', 'limit']) chain[m] = () => chain;
@@ -17,26 +17,34 @@ vi.mock('@/lib/calibracion', async (orig) => {
   return { ...actual, getCalibracion: async () => ({ ...actual.CALIBRACION_DEFAULT, TOLERANCIA_CANON: 15 }) };
 });
 
+// Adenda 1 contratos §2.4: el aviso a la Gerencia se prueba en tope-coafianzamiento.test.ts.
+vi.mock('../tope-coafianzamiento', () => ({ escalarTopeCanon: (...a: unknown[]) => mockEscalar(...a) }));
+
 import { assertCanonContratable } from '../contratos.service';
 
 beforeEach(() => {
   resultado.data = null;
+  mockEscalar.mockReset();
 });
 
 describe('assertCanonContratable', () => {
-  it('hasta lo evaluado + 15 % pasa; un peso más, 409', async () => {
+  it('hasta lo evaluado + 15 % pasa; un peso más, 409 (nueva evaluación, sin escalar)', async () => {
     resultado.data = { canon_evaluado: 2_000_000 };
     await expect(assertCanonContratable('e1', 2_300_000, 'vivienda')).resolves.toBeUndefined();
     await expect(assertCanonContratable('e1', 2_300_001, 'vivienda')).rejects.toMatchObject({
       errorCode: 'CANON_REQUIERE_NUEVA_EVALUACION',
       statusCode: 409,
     });
+    expect(mockEscalar).not.toHaveBeenCalled();
   });
 
-  it('el tope de vivienda manda aunque la tolerancia dé más', async () => {
+  it('el tope de vivienda manda aunque la tolerancia dé más: bloquea y escala a la Gerencia General', async () => {
     resultado.data = { canon_evaluado: 2_800_000 };
     await expect(assertCanonContratable('e1', 3_000_000, 'vivienda')).resolves.toBeUndefined();
-    await expect(assertCanonContratable('e1', 3_000_001, 'vivienda')).rejects.toMatchObject({ statusCode: 409 });
+    const e = await assertCanonContratable('e1', 3_000_001, 'vivienda').catch((x: unknown) => x);
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CANON_EXCEDE_TOPE' });
+    expect((e as Error).message).toContain('se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento');
+    expect(mockEscalar).toHaveBeenCalledWith('e1', 3_000_001, 3_000_000);
   });
 
   it('sin canon evaluado (estudio anterior al congelado) no bloquea', async () => {

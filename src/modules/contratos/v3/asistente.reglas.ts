@@ -434,6 +434,10 @@ export function maximoSinNuevaEvaluacionCop(f: Fuentes, cal: Calibracion): numbe
   return Math.max(ev, Math.floor(Math.min(canonMaximoTolerado(ev, cal.TOLERANCIA_CANON), tope)));
 }
 
+/** Adenda 1 contratos §2.4: el bloqueo del tope dice que el caso pasó a la Gerencia General. */
+const ESCALADO_TOPE =
+  ' El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.';
+
 /** B2 sobre el canon del contrato. null si no hay canon evaluado (CANON_SIN_EVALUADO ya bloquea). */
 export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): VeredictoCanon | null {
   const ev = f.estudio?.canonEvaluadoCop ?? null;
@@ -458,9 +462,10 @@ export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): Ve
 
   const cop = formatearCOP;
   const motivos: Partial<Record<MotivoNoPortable, [string, string]>> = {
+    // Adenda 1 contratos §2.4: bloquear y escalar a la Gerencia General (el aviso lo manda el service).
     excede_tope_canon: [
       'CANON_EXCEDE_TOPE',
-      `El canon pactado (${cop(canonCop)}) supera el tope de ${cop(base.topeCop)} para vivienda. Se requiere nueva evaluación.`,
+      `El canon pactado (${cop(canonCop)}) supera el tope de ${cop(base.topeCop)} que Cofianza afianza para vivienda sin coafianzamiento.${ESCALADO_TOPE}`,
     ],
     excede_tolerancia: [
       'CANON_FUERA_DE_TOLERANCIA',
@@ -479,7 +484,8 @@ export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): Ve
   ];
   return {
     ...base,
-    bloqueo: { codigo, mensaje, paso: 1, accion: 'estudio' },
+    // Por encima del tope una evaluación nueva no sirve: se pacta uno menor o decide la Gerencia.
+    bloqueo: { codigo, mensaje, paso: 1, ...(codigo !== 'CANON_EXCEDE_TOPE' && { accion: 'estudio' as const }) },
     veredicto: null,
     canonIngreso: v.veredictoCanonIngreso,
   };
@@ -487,7 +493,9 @@ export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): Ve
 
 /** Antes de guardar el paso 1 el canon del registro solo avisa: aún se puede pactar uno menor. */
 export const avisoCanon = (bloqueo: Bloqueo) =>
-  `${bloqueo.mensaje.replace(/ Se requiere nueva evaluación\.$/, '')} Puedes pactar un canon menor en el paso 1; si no, se requerirá nueva evaluación.`;
+  bloqueo.codigo === 'CANON_EXCEDE_TOPE'
+    ? `${bloqueo.mensaje.replace(ESCALADO_TOPE, '')} Puedes pactar un canon menor en el paso 1; si pactas uno por encima del tope, el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.`
+    : `${bloqueo.mensaje.replace(/ Se requiere nueva evaluación\.$/, '')} Puedes pactar un canon menor en el paso 1; si no, se requerirá nueva evaluación.`;
 
 // ── §5.4 Prefill, faltantes, imprimibles, avisos ──
 

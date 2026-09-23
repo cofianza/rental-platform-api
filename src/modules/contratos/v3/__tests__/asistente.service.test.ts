@@ -128,6 +128,9 @@ vi.mock('../firma/firma.service', () => ({
   actualizarFirma: vi.fn(),
 }));
 vi.mock('../firma/reconciliar', () => ({ ultimoSobre: vi.fn(async () => null) }));
+// Adenda 1 contratos §2.4: el aviso a la Gerencia se prueba en tope-coafianzamiento.test.ts.
+const mockEscalar = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+vi.mock('../../tope-coafianzamiento', () => ({ escalarTopeCanon: mockEscalar }));
 const mockNotificar = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: mockNotificar }));
 // Sin Chromium: el PDF es un buffer falso, los pendientes salen de la plantilla real.
@@ -744,6 +747,37 @@ describe('guardarPaso', () => {
     );
     expect(e).toMatchObject({ statusCode: 400, errorCode: 'VALIDATION_ERROR' });
     expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+});
+
+describe('tope de canon: bloqueo y escalamiento a la Gerencia General (Adenda 1 contratos §2.4)', () => {
+  const PASO1_ALTO = { ...COMPLETO.paso1!, canonCop: 3_100_000 };
+
+  it('guardar el paso 1 por encima del tope bloquea con el mensaje de la Gerencia y escala el caso', async () => {
+    encolarCarga({ contratos: [fila()] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: PASO1_ALTO } } })] });
+
+    const e = await guardarPaso(EXP, { paso: 1, datos: PASO1_ALTO }, USER, ROL);
+
+    const b = e.bloqueos.find((x) => x.codigo === 'CANON_EXCEDE_TOPE');
+    expect(b?.mensaje).toContain('El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento');
+    expect(mockEscalar).toHaveBeenCalledWith(EXP, 3_100_000, 3_000_000);
+  });
+
+  it('el GET con el paso 1 guardado por encima del tope también escala (el aviso se deduplica por estudio)', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: PASO1_ALTO } } })] });
+    await obtener();
+    expect(mockEscalar).toHaveBeenCalledTimes(1);
+  });
+
+  it('dentro del tope (o sin paso 1 guardado) no escala', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: COMPLETO.paso1 } } })] });
+    await obtener();
+    // Sin paso 1 guardado no hay canon pactado: el del registro, a lo sumo, avisa.
+    encolarCarga({ contratos: [fila()] });
+    await obtener();
+    expect(mockEscalar).not.toHaveBeenCalled();
   });
 });
 

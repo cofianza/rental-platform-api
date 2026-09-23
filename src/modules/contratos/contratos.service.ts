@@ -14,6 +14,7 @@ import { checkPerfilCompletitud, usuarioPuedeEditarDatosContrato } from '../perf
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
 import { canonMaximoTolerado } from '../estudios/portabilidad';
+import { escalarTopeCanon } from './tope-coafianzamiento';
 import { getCalibracion } from '@/lib/calibracion';
 import type {
   GenerarContratoInput,
@@ -1894,9 +1895,19 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
   const tolerado = canonMaximoTolerado(evaluado, cal.TOLERANCIA_CANON);
   const tope = Number(topeCanonPara(uso, cal).topeCop);
   // Un tope mal leído no apaga el control: queda la tolerancia.
-  const maximo = Math.max(evaluado, Math.floor(Number.isFinite(tope) && tope > 0 ? Math.min(tolerado, tope) : tolerado));
+  const topeValido = Number.isFinite(tope) && tope > 0;
+  const maximo = Math.max(evaluado, Math.floor(topeValido ? Math.min(tolerado, tope) : tolerado));
   if (canonCop > maximo) {
     const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+    // Adenda 1 contratos §2.4: por encima del tope no sirve una nueva evaluación; se escala a la Gerencia General.
+    if (topeValido && canonCop > tope) {
+      await escalarTopeCanon(expedienteId, canonCop, tope);
+      throw AppError.conflict(
+        `El canon del contrato (${cop(canonCop)}) supera el tope de ${cop(tope)} que Cofianza afianza sin coafianzamiento. ` +
+          'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.',
+        'CANON_EXCEDE_TOPE',
+      );
+    }
     throw AppError.conflict(
       `El canon del contrato (${cop(canonCop)}) supera lo evaluado (${cop(evaluado)}); el máximo sin una nueva evaluación es ${cop(maximo)}. ` +
         'Ajusta el canon del inmueble o habilita una nueva evaluación desde el estudio.',
