@@ -126,6 +126,7 @@ import {
   onCoarrendatarioEstudioCompletado,
   construirCorreoCoarrendatario,
   rechazarInvitacion,
+  aceptarInvitacion,
 } from '../coarrendatarios.service';
 
 // ============================================================
@@ -313,6 +314,44 @@ describe('acceso de la inmobiliaria por cartera', () => {
 
     const coa = await getCoarrendatarioPorExpediente(EXPEDIENTE_ID, MIEMBRO_ID, 'inmobiliaria');
     expect(coa?.id).toBe(COA_ID);
+  });
+});
+
+// ============================================================
+// Aceptar: si el estudio no se puede crear, la invitacion vuelve a quedar
+// pendiente (antes quedaba 'aceptado' sin estudio y sin salida).
+// ============================================================
+
+describe('aceptarInvitacion — fallo al crear el estudio', () => {
+  it('revierte el claim y deja la autorizacion como esta', async () => {
+    enqueue(
+      'expediente_coarrendatarios',
+      {
+        data: {
+          id: COA_ID,
+          expediente_id: EXPEDIENTE_ID,
+          estado: 'pendiente_aceptacion',
+          token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+          nombre: 'Luis',
+          apellido: 'Gómez',
+          tipo_documento: 'cc',
+          numero_documento: '7654321',
+          email: 'luis@correo.co',
+        },
+        error: null,
+      },
+      { data: [{ id: COA_ID }], error: null }, // claim
+    );
+    enqueue('autorizaciones_habeas_data', { data: { id: 'aut-1' }, error: null });
+    enqueue('estudios', { data: null, error: null }, { data: null, error: { message: 'timeout' } });
+
+    await expect(aceptarInvitacion('t'.repeat(64), '1.1.1.1', 'ua', {} as never)).rejects.toMatchObject({
+      statusCode: 500,
+    });
+
+    const updates = ops.filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
+    expect((updates.at(-1)!.args[0] as { estado: string }).estado).toBe('pendiente_aceptacion');
+    expect(ops.some((o) => o.table === 'autorizaciones_habeas_data' && o.method === 'update')).toBe(false);
   });
 });
 

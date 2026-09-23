@@ -680,6 +680,33 @@ export interface AceptarResult {
   mensaje: string;
 }
 
+/**
+ * Devuelve la invitación a 'pendiente_aceptacion' cuando la aceptación falla
+ * después del claim. Sin esto la invitación queda consumida sin estudio y no
+ * hay salida: el invitado reintenta y ve COARRENDATARIO_YA_PROCESADA, el
+ * gestor no puede reenviar (exige 'pendiente_aceptacion') ni invitar a otro
+ * (índice único por expediente).
+ */
+async function revertirClaim(coaId: string): Promise<void> {
+  const { error } = await (supabase
+    .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estado: 'pendiente_aceptacion',
+      aceptado_at: null,
+      aceptado_ip: null,
+      aceptado_user_agent: null,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', coaId)
+    .eq('estado', 'aceptado');
+  if (error) {
+    logger.error(
+      { error: error.message, coarrendatarioId: coaId },
+      'No se pudo revertir la aceptación del co-arrendatario — la invitación queda consumida (requiere intervención manual)',
+    );
+  }
+}
+
 export async function aceptarInvitacion(
   token: string,
   ip: string,
@@ -835,28 +862,7 @@ export async function aceptarInvitacion(
       { error: autErr?.message, coarrendatarioId: coa.id },
       'No se pudo registrar la autorización habeas data del co-arrendatario',
     );
-    // REVERTIR EL CLAIM. El claim de arriba ya marcó la invitación 'aceptado';
-    // si nos vamos con un 500 sin deshacerlo, la invitación queda consumida sin
-    // autorización y sin estudio, y no hay salida: el invitado reintenta y ve
-    // COARRENDATARIO_YA_PROCESADA, el gestor no puede reenviar (exige
-    // 'pendiente_aceptacion') ni invitar a otro (índice único por expediente).
-    const { error: revertErr } = await (supabase
-      .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
-      .update({
-        estado: 'pendiente_aceptacion',
-        aceptado_at: null,
-        aceptado_ip: null,
-        aceptado_user_agent: null,
-        updated_at: new Date().toISOString(),
-      } as never)
-      .eq('id', coa.id)
-      .eq('estado', 'aceptado');
-    if (revertErr) {
-      logger.error(
-        { error: revertErr.message, coarrendatarioId: coa.id },
-        'No se pudo revertir la aceptación del co-arrendatario — la invitación queda consumida sin autorización (requiere intervención manual)',
-      );
-    }
+    await revertirClaim(coa.id);
     throw new AppError(
       500,
       'AUTORIZACION_CREATE_ERROR',
@@ -932,6 +938,9 @@ export async function aceptarInvitacion(
       { error: estErr?.message, coarrendatarioId: coa.id },
       'Error al crear estudio para coarrendatario',
     );
+    // La autorización se queda: es evidencia (la persona sí aceptó) y el
+    // reintento crea otra fila sin chocar con nada.
+    await revertirClaim(coa.id);
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al iniciar el estudio crediticio');
   }
 
