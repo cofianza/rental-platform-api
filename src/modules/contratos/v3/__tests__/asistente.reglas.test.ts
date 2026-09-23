@@ -566,10 +566,6 @@ describe('avisosDePendientes', () => {
       'Documento distinto de cédula de ciudadanía: su mención en las firmas está pendiente de aprobación.',
       CIERRE,
     ]);
-    expect(avisos('k-dia1')).toEqual([
-      'Documento fechado el día 1.º: esa redacción está pendiente; generarlo otro día la resuelve.',
-      CIERRE,
-    ]);
   });
 });
 
@@ -682,9 +678,9 @@ describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () =>
 });
 
 describe('textosPendientesPrevistos', () => {
-  const sinAprobar = new Set(['b', 'd', 'c-01', 'c-02', 'j-firma-arrendatario', 'k-dia1']);
+  const sinAprobar = new Set(['b', 'd', 'c-01', 'c-02', 'j-firma-arrendatario']);
   it('solo los que aplican a lo guardado', () => {
-    // Con coarrendatario, PH, Trasladada y todo C.C.: nada previsto (k-dia1 depende del día).
+    // Con coarrendatario, PH, Trasladada y todo C.C.: nada previsto.
     expect(textosPendientesPrevistos(fuentes(), PASOS, sinAprobar)).toEqual([]);
     const solo = textosPendientesPrevistos(fuentes({ coarrendatario: null }), PASOS_SOLO, sinAprobar);
     expect(solo).toEqual([

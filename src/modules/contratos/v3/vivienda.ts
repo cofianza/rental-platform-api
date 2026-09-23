@@ -65,6 +65,8 @@ export interface DatosVivienda {
   crc: { numero: string; fecha: string };
   primaPct: number;
   tarifaPct: number;
+  /** TARIFA_IVA de calibración: la prima causa IVA (Adenda 1 §1.1). */
+  ivaPct: number;
   cashbackPct: number;
   comisionPct: number;
   /** null ⇔ el inmueble no es de propiedad horizontal. */
@@ -179,6 +181,9 @@ const con = (prefijo: string, o: Record<string, string | number>) =>
 
 const MODALIDAD = { trasladada: 'Trasladada', tradicional: 'Tradicional' } as const;
 
+/** Con IVA sobre la cifra ya redondeada, como tarifa_mensual_con_iva_cop (tarifas.ts). */
+const conIva = (cop: number, ivaPct: number) => Math.round(cop * (1 + ivaPct / 100));
+
 /**
  * Condiciones y valores del contrato (catálogo §3.4). Un campo sin dato (usos
  * en NO, coarrendatario ausente, administración sin PH) no se pone: si la
@@ -199,6 +204,7 @@ export function contexto(d: DatosVivienda): Contexto {
     cop(d.primaPct),
     cop(d.tarifaPct),
   ];
+  const primaIvaCop = conIva(primaCop, d.ivaPct);
 
   let fechaVencimiento: string;
   try {
@@ -221,7 +227,6 @@ export function contexto(d: DatosVivienda): Contexto {
       util: usos.util !== null,
       'arrendatario.cc': d.arrendatario.tipoDocumento === 'cc',
       ...(coa && { 'coa.cc': coa.tipoDocumento === 'cc' }),
-      diaPlural: !d.fechaDocumento.endsWith('-01'),
     },
     valores: {
       // solo lo imprime el Anexo (su cuadro trae el "Contrato asociado N°"); la
@@ -254,11 +259,12 @@ export function contexto(d: DatosVivienda): Contexto {
       comisionPct: d.comisionPct,
       comisionCop,
       primaPct: d.primaPct,
-      primaCop,
+      primaCop, // sin IVA: no se imprime, va a la bitácora de la vista previa
+      primaIvaCop,
       tarifaPct: d.tarifaPct,
       tarifaCop,
       ...(adm && { adminCop: adm.valorCop }),
-      totalIngreso: d.canonCop + (comision ? comisionCop : 0) + (trasladada ? primaCop : 0),
+      totalIngreso: d.canonCop + (comision ? comisionCop : 0) + (trasladada ? primaIvaCop : 0),
       totalMensual: d.canonCop + (trasladada ? tarifaCop : 0) + (adminAparte ? adm!.valorCop : 0),
     },
     roles: {
@@ -270,12 +276,15 @@ export function contexto(d: DatosVivienda): Contexto {
   };
 }
 
-/** Las cifras del resumen que no están en ninguna cláusula se recalculan sobre lo impreso. */
-export const DERIVADAS: Record<string, (v: (c: string) => number) => number> = {
+/**
+ * Las cifras del resumen que no están en ninguna cláusula se recalculan sobre
+ * lo impreso. El porcentaje de IVA no se imprime: entra con los datos.
+ */
+export const derivadas = (ivaPct: number): Record<string, (v: (c: string) => number) => number> => ({
   comisionCop: (v) => pctDe(v('canon'), v('comisionPct'))!,
-  primaCop: (v) => pctDe(v('canon'), v('primaPct'))!,
+  primaIvaCop: (v) => conIva(pctDe(v('canon'), v('primaPct'))!, ivaPct),
   tarifaCop: (v) => pctDe(v('canon'), v('tarifaPct'))!,
-};
+});
 
 /** Todo menos el PDF (puro, sin Chromium): lo usan las pruebas y generarContratoVivienda. */
 export function renderizarVivienda(d: DatosVivienda, o: OpcionesVivienda): Resultado {
@@ -285,7 +294,7 @@ export function renderizarVivienda(d: DatosVivienda, o: OpcionesVivienda): Resul
     adicionales: o.adicionales,
     aprobados: APROBACIONES,
   });
-  verificarCoherencia(r.asientos, DERIVADAS);
+  verificarCoherencia(r.asientos, derivadas(d.ivaPct));
   return r;
 }
 
@@ -321,7 +330,7 @@ export async function generarContratoVivienda(
 export function renderizarAnexo(d: DatosVivienda, o: OpcionesVivienda): Resultado {
   validarDatos(d, o);
   const r = renderizar(PLANTILLA_ANEXO, contexto(d), { modo: o.modo, aprobados: APROBACIONES });
-  verificarCoherencia(r.asientos, DERIVADAS);
+  verificarCoherencia(r.asientos, derivadas(d.ivaPct));
   return r;
 }
 

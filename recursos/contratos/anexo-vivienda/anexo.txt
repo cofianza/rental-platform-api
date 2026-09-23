@@ -73,7 +73,8 @@ Aun cuando el contrato de arrendamiento las contenga, las siguientes estipulacio
 @clausula valores
 **{N}: VALORES DE LA FIANZA**
 Conforme al CRC identificado en el cuadro inicial, se causan los siguientes valores:
-+ PRIMA DE VINCULACIÓN: {pctLetras:primaPct} por ciento ({pct:primaPct}%) del canon mensual, equivalente a la fecha de suscripción a la suma de ${pesos:primaCop}, pagadera por una sola vez al momento de la activación de la fianza.
+# La prima en pesos va con IVA (Adenda 1 §1.1): el Word no repite "más IVA" tras la suma.
++ PRIMA DE VINCULACIÓN: {pctLetras:primaPct} por ciento ({pct:primaPct}%) del canon mensual más el Impuesto sobre las Ventas (IVA), equivalente a la fecha de suscripción a la suma de ${pesos:primaIvaCop}, pagadera por una sola vez al momento de la activación de la fianza.
 + TARIFA MENSUAL: {pctLetras:tarifaPct} por ciento ({pct:tarifaPct}%) del canon de arrendamiento más el Impuesto sobre las Ventas (IVA), equivalente a la fecha de suscripción a la suma de ${pesos:tarifaCop} más IVA, pagadera junto con cada canon durante toda la vigencia del contrato y sus prórrogas.
 > **{P:actualizacion}:** Los porcentajes señalados son los que rigen jurídicamente y se aplican sobre el canon vigente, de modo que los valores en pesos se actualizan automáticamente cuando el canon se incrementa. Las sumas expresadas en pesos son informativas y corresponden al canon vigente a la fecha de suscripción.
 > **{P:recibo}:** Estos valores no hacen parte del canon de arrendamiento y serán referenciados de manera independiente en el correspondiente recibo de caja o documento de cobro.

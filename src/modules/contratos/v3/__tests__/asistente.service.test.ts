@@ -1424,19 +1424,10 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect((await obtener()).contrato?.documento?.desactualizado).toBe(true);
   });
 
-  it('con textos pendientes de aprobación no se envía; el día 1.º tiene su propio mensaje', async () => {
+  it('con textos pendientes de aprobación no se envía', async () => {
     const doc = await documentoRevisado(PASOS);
     encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, pendientes: ['c-01'] })] });
     expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({ errorCode: 'TEXTOS_PENDIENTES' });
-
-    encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
-    vi.mocked(generarContratoVivienda).mockRejectedValueOnce(
-      new AppError(422, 'PLANTILLA_TEXTO_PENDIENTE', 'x', { pendientes: [{ id: 'k-dia1', tipo: 'borrador' }] }),
-    );
-    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
-      statusCode: 409,
-      errorCode: 'ENVIO_DIA_1',
-    });
   });
 
   it('CAS perdido: borra el PDF final y no llama a Auco', async () => {

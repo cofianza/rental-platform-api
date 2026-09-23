@@ -79,6 +79,7 @@ function datos(o: { coa?: boolean; trasladada?: boolean } = {}): DatosVivienda {
     crc: { numero: 'CRC-2026-0042', fecha: '2026-09-15' },
     primaPct: 10,
     tarifaPct: 2.5,
+    ivaPct: 19,
     cashbackPct: 30,
     comisionPct: 0,
     administracion: null,
@@ -165,6 +166,17 @@ describe('el cuadro inicial', () => {
     const sin = textos(revision(datos({ coa: false })));
     expect(sin.filter((t) => /coarrendatari/i.test(t))).toEqual([]);
     expect(ids(revision(datos({ coa: false })))).toEqual(A_C_IDS);
+  });
+});
+
+describe('valores de la fianza', () => {
+  it('la prima se imprime con IVA (Adenda 1 §1.1) y la tarifa sigue "$X más IVA"', () => {
+    const items = deKind(revision(datos()), 'item').map((l) => l.texto);
+    // 10 % de 2.500.000 = 250.000; × 1,19 = 297.500
+    expect(items).toContainEqual(
+      expect.stringContaining('del canon mensual más el Impuesto sobre las Ventas (IVA), equivalente a la fecha de suscripción a la suma de $297.500, pagadera'),
+    );
+    expect(items).toContainEqual(expect.stringContaining('a la suma de $62.500 más IVA, pagadera'));
   });
 });
 

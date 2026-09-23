@@ -12,8 +12,8 @@ import {
 } from '../motor';
 import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
 import {
-  DERIVADAS,
   contexto,
+  derivadas,
   renderizarVivienda,
   type DatosVivienda,
   type OpcionesVivienda,
@@ -103,6 +103,7 @@ function datos(c: Caso): DatosVivienda {
     crc: { numero: 'CRC-2026-0042', fecha: '2026-09-15' },
     primaPct: c.coa ? 10 : 20,
     tarifaPct: 2.5,
+    ivaPct: IVA,
     cashbackPct: 30,
     comisionPct: c.comision ? 8 : 0,
     administracion: c.ph
@@ -112,6 +113,7 @@ function datos(c: Caso): DatosVivienda {
 }
 
 const COMPLETO: Caso = { coa: true, comision: true, ph: true, trasladada: true };
+const IVA = 19;
 const ADICIONALES = [
   { titulo: 'Cláusula adicional de prueba uno', texto: 'Texto de ejemplo del arrendador.' },
   { titulo: 'Cláusula adicional de prueba dos', texto: 'Otro texto de ejemplo del arrendador.' },
@@ -201,7 +203,7 @@ const SUPRESIONES_AUTORIZADAS: Record<string, string[]> = {
   ],
   // V3 §7.4–7.5, §3.4.5: en Tradicional EL ARRENDATARIO no paga prima ni tarifa
   trasladada: [
-    'Prima de la fianza ({pct:primaPct}% del canon) | ${pesos:primaCop}',
+    'Prima de la fianza ({pct:primaPct}% del canon + IVA) | ${pesos:primaIvaCop}',
     'Tarifa de la fianza ({pct:tarifaPct}% + IVA) | ${pesos:tarifaCop}',
     '> Los porcentajes señalados son los que rigen jurídicamente y se aplican sobre el canon vigente, de modo que los valores en pesos se actualizan automáticamente cuando el canon se incrementa. Las sumas expresadas en pesos son informativas y corresponden al canon vigente a la fecha de suscripción. Estos valores no hacen parte del canon de arrendamiento y serán referenciados de manera independiente en el correspondiente recibo de caja.',
     '+ Tarifa mensual de la fianza COFIANZA.',
@@ -233,8 +235,9 @@ const CADA_COARRENDATARIO = [
 ];
 
 // Cada referencia numerada del Word en el caso completo (diseño §3.4, tabla de
-// 19): origen → destino y el texto que imprime. La 12 es la desviación (f):
-// el Word dice "Trigésima", la cláusula de notificaciones es la Vigésima Octava.
+// 19, más la del cierre que trae el Word corregido de la Adenda 1): origen →
+// destino y el texto que imprime. La 12 es la desviación (f): el Word dice
+// "Trigésima", la cláusula de notificaciones es la Vigésima Octava.
 const REFS_COMPLETO: [origen: string, destino: string, texto: string][] = [
   ['fianza', 'fianza/faltantes', 'Parágrafo Segundo'],
   ['fianza', 'fianza/valores', 'Parágrafo Primero'],
@@ -255,6 +258,8 @@ const REFS_COMPLETO: [origen: string, destino: string, texto: string][] = [
   ['cesion', 'fianza/terminacion', 'Parágrafo Sexto de la Cláusula Cuarta'],
   ['aceptacion', 'fianza', 'Cláusula Cuarta'],
   ['aceptacion', 'fianza', 'Cláusula Cuarta'],
+  // el cierre (bloque XI) está fuera de toda cláusula
+  ['', 'totalidad/firma', 'Parágrafo Primero de la Cláusula Trigésima Tercera'],
 ];
 // Las únicas referencias cuyo origen puede no imprimirse: la cláusula SEXTA
 // (comisión) y el numeral 2 de DÉCIMA CUARTA (solo en Trasladada).
@@ -388,10 +393,10 @@ describe('matriz: coarrendatario × comisión × PH × modalidad, con 0 y 2 adic
     );
 
     // las cifras impresas cuadran (leídas del HTML)
-    expect(() => verificarCoherencia(asientosDeHtml(r.html), DERIVADAS)).not.toThrow();
+    expect(() => verificarCoherencia(asientosDeHtml(r.html), derivadas(IVA))).not.toThrow();
   });
 
-  it('el caso completo trae las 19 referencias numeradas del Word', () => {
+  it('el caso completo trae las 20 referencias numeradas del Word', () => {
     expect(revision(datos(COMPLETO)).refs.map((x) => [x.origen, x.destino, x.texto])).toEqual(
       REFS_COMPLETO,
     );
@@ -491,19 +496,41 @@ describe('rechazos', () => {
     expect(falla(final(d))?.code).toBe('PLANTILLA_TEXTO_PENDIENTE');
   });
 
-  it('fechado el día 1 → k-dia1 "al primer ( 1 ) día"', () => {
+  it('fechado el día 1 no deja pendientes: el cierre del Word corregido no lleva ciudad ni fecha', () => {
     const r = revision({ ...completo, fechaDocumento: '2026-10-01' });
-    expect(ids(r)).toEqual(['k-dia1']);
-    expect(r.lineas.map((l) => l.texto).join('\n')).toContain(
-      'al primer ( 1 ) día del mes de octubre de 2026.',
+    expect(ids(r)).toEqual([]);
+    expect(r.lineas.map((l) => l.texto)).toContain(
+      'El presente contrato se perfecciona con la firma de LAS PARTES. Cuando se suscriba de manera física, se firma en dos (2) ejemplares del mismo tenor y a un solo efecto, uno para cada parte. Cuando se suscriba mediante firma electrónica, se otorga en un único ejemplar electrónico del cual cada parte recibirá copia, en los términos del Parágrafo Primero de la Cláusula Trigésima Tercera.',
     );
+    // la fecha va solo en el cuadro, con el día en número
+    expect(r.lineas.map((l) => l.texto)).toContain('Medellín, 1 de octubre de 2026');
+  });
+});
+
+describe('prima con IVA (Adenda 1 §1.1)', () => {
+  // canon impar: la base se redondea primero y el IVA va sobre ella, como la tarifa con IVA del CRC
+  const r = revision({ ...datos(COMPLETO), canonCop: 2_345_678 });
+  const texto = r.lineas.map((l) => l.texto).join('\n');
+
+  it('la CUARTA y el resumen imprimen la prima con IVA; la tarifa sigue "$X más IVA"', () => {
+    // 10 % de 2.345.678 = 234.568; × 1,19 = 279.135,92 → 279.136
+    expect(texto).toContain(
+      'diez por ciento (10%) del canon mensual más el Impuesto sobre las Ventas (IVA), equivalente a la fecha de suscripción a la suma de $279.136, pagadera',
+    );
+    expect(texto).toContain('Prima de la fianza (10% del canon + IVA)\n$279.136');
+    expect(texto).toContain('a la suma de $58.642 más IVA, pagadera');
+  });
+
+  it('el total al ingreso suma la prima con IVA', () => {
+    // 2.345.678 + comisión 8 % (187.654) + 279.136
+    expect(texto).toContain('**TOTAL APROXIMADO AL INGRESO**\n**$2.812.468**');
   });
 });
 
 describe('coherencia de las cifras impresas', () => {
   const r = revision(datos(COMPLETO));
   const incoherente = (html: string) =>
-    falla(() => verificarCoherencia(asientosDeHtml(html), DERIVADAS));
+    falla(() => verificarCoherencia(asientosDeHtml(html), derivadas(IVA)));
 
   it('cuadra en el caso completo', () => {
     expect(incoherente(r.html)).toBeUndefined();
@@ -520,18 +547,19 @@ describe('coherencia de las cifras impresas', () => {
       code: 'CONTRATO_RESUMEN_INCOHERENTE',
       details: { campo: 'canon' },
     });
-    // la prima cambiada en todas partes: ya no es primaPct del canon
+    // la prima cambiada en todas partes: ya no es primaPct del canon más IVA
     const prima = r.html.replace(
-      /(data-campo="primaCop"[^>]*>)250\.000</g,
-      (_, a: string) => `${a}260.000<`,
+      /(data-campo="primaIvaCop"[^>]*>)297\.500</g,
+      (_, a: string) => `${a}250.000<`,
     );
+    expect(prima).not.toBe(r.html);
     expect(incoherente(prima)).toMatchObject({
       code: 'CONTRATO_RESUMEN_INCOHERENTE',
-      details: { campo: 'primaCop' },
+      details: { campo: 'primaIvaCop' },
     });
     const total = r.html.replace(
-      /(data-campo="totalIngreso"[^>]*>)2\.950\.000</,
-      (_, a: string) => `${a}2.960.000<`,
+      /(data-campo="totalIngreso"[^>]*>)2\.997\.500</,
+      (_, a: string) => `${a}2.950.000<`,
     );
     expect(total).not.toBe(r.html);
     expect(incoherente(total)).toMatchObject({

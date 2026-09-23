@@ -45,7 +45,7 @@ const CIFRAS = [
   'comisionPct',
   'comisionCop',
   'primaPct',
-  'primaCop',
+  'primaIvaCop', // la prima con IVA (Adenda 1 §1.1): la suma que imprime el Word
   'tarifaPct',
   'tarifaCop',
   'adminCop',
@@ -82,7 +82,6 @@ const DEF: DefPlantilla = {
     'arrendatario.cc',
     'coa.cc',
     'parte.cc',
-    'diaPlural', // el día del documento no es 1
   ],
   roles: ['coarrendatario'],
 };
@@ -121,7 +120,7 @@ const DEF_ANEXO: DefPlantilla = {
       ].map((c) => [c, 'texto' as const]),
     ),
     ...Object.fromEntries(
-      ['canon', 'vigenciaMeses', 'primaPct', 'primaCop', 'tarifaPct', 'tarifaCop'].map((c) => [
+      ['canon', 'vigenciaMeses', 'primaPct', 'primaIvaCop', 'tarifaPct', 'tarifaCop'].map((c) => [
         c,
         'numero' as const,
       ]),
@@ -131,7 +130,7 @@ const DEF_ANEXO: DefPlantilla = {
     fechaVencimiento: 'fecha',
     'crc.fecha': 'fecha',
   },
-  cifras: ['canon', 'primaPct', 'primaCop', 'tarifaPct', 'tarifaCop'],
+  cifras: ['canon', 'primaPct', 'primaIvaCop', 'tarifaPct', 'tarifaCop'],
   condiciones: [
     'coa', // hay coarrendatario
     'trasladada', // modalidad Trasladada

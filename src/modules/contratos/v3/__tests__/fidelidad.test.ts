@@ -68,15 +68,24 @@ const DOCUMENTOS: Documento[] = [
   {
     nombre: 'vivienda',
     docx: fuente('CONTRATO_ARRENDAMIENTO_VIVIENDA_COFIANZA_INTEGRADO.docx'),
-    sha256: '083eeabb0836b4a79663d7542d40c857803956af06fffc32b9462346ac6bdc5e',
+    sha256: '5644da08f023781c1d069becfe9c021494ed46e322a72a9021b11692b680bd3f',
     plantilla: PLANTILLA_VIVIENDA,
     partes: [
       { n: 1, desde: 0, hasta: 134 },
       { n: 2, desde: 135, hasta: 195 },
       { n: 3, desde: 196, hasta: 306 },
-      { n: 4, desde: 307, hasta: 361 },
+      { n: 4, desde: 307, hasta: 362 },
     ],
     cuerpo: [
+      {
+        parrafo: 40,
+        word: '% del canon)',
+        motor: '% del canon + IVA)',
+        motivo:
+          'Adenda 1 §1.1: la prima causa IVA siempre. El resumen del Word de vivienda no se ' +
+          'actualizó (el comercial sí dice "% del canon + IVA"); la fila imprime la prima con ' +
+          'IVA, la misma suma del Parágrafo Primero de la CUARTA',
+      },
       {
         parrafo: 242,
         word: 'Cláusula Trigésima,',
@@ -91,7 +100,7 @@ const DOCUMENTOS: Documento[] = [
   {
     nombre: 'anexo',
     docx: fuente('ANEXO_CONDICIONES_AFIANZAMIENTO_COFIANZA_V3.docx'),
-    sha256: '9bd779a4c3e2c1a026ca18b82251b5275df3e7be2559cf3aeb0f2a5a987a02c0',
+    sha256: '5f16d3411805a8aef746ab6a5756234737fc9ed4f6db103bdf1fdafbede75d93',
     plantilla: PLANTILLA_ANEXO,
     partes: [{ n: 1, desde: 0, hasta: 157 }],
     cuerpo: [

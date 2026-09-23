@@ -1057,6 +1057,7 @@ export async function generarVistaPrevia(
       cop: {
         comisionCop: valores.comisionCop,
         primaCop: valores.primaCop,
+        primaIvaCop: valores.primaIvaCop,
         tarifaCop: valores.tarifaCop,
         totalIngreso: valores.totalIngreso,
         totalMensual: valores.totalMensual,
@@ -1470,29 +1471,15 @@ export async function enviarAFirma(
   // 2. Render final y PDF unido.
   const logoInmobiliaria = await leerLogo(f.arrendador.logo_storage_key);
   const adicionales = ruta === 'A' ? clausulasDe(completo.paso4) : [];
-  let final: { pdf: Buffer };
-  try {
-    final =
-      ruta === 'B'
-        ? await generarAnexoVivienda(d, { modo: 'final', logoInmobiliaria, anclas: true })
-        : await generarContratoVivienda(d, {
-            modo: 'final',
-            logoInmobiliaria,
-            adicionales: adicionales.map(({ titulo, texto }) => ({ titulo, texto })),
-            anclas: true,
-          });
-  } catch (e) {
-    const pend = e instanceof AppError && e.errorCode === 'PLANTILLA_TEXTO_PENDIENTE'
-      ? ((e.details as { pendientes?: { id: string }[] } | undefined)?.pendientes ?? [])
-      : null;
-    // Con la vista previa sin pendientes, lo único que cambia al enviar es la fecha (§ k-dia1).
-    if (pend?.length && pend.every((x) => x.id === 'k-dia1'))
-      throw AppError.conflict(
-        'Hoy es día 1.º y la redacción de esa fecha está pendiente de aprobación de Cofianza. Envíalo a partir de mañana.',
-        'ENVIO_DIA_1',
-      );
-    throw e;
-  }
+  const final =
+    ruta === 'B'
+      ? await generarAnexoVivienda(d, { modo: 'final', logoInmobiliaria, anclas: true })
+      : await generarContratoVivienda(d, {
+          modo: 'final',
+          logoInmobiliaria,
+          adicionales: adicionales.map(({ titulo, texto }) => ({ titulo, texto })),
+          anclas: true,
+        });
   const crcPdf = await bajar(crcKey, 'el PDF del CRC');
   let piezas: Buffer[] = [final.pdf, crcPdf];
   if (ruta === 'B') {

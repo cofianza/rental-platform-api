@@ -686,10 +686,6 @@ export function avisosDePendientes(pendientes: { id: string }[]): string[] {
     avisos.push(
       'Documento distinto de cédula de ciudadanía: su mención en las firmas está pendiente de aprobación.',
     );
-  if (ids.includes('k-dia1'))
-    avisos.push(
-      'Documento fechado el día 1.º: esa redacción está pendiente; generarlo otro día la resuelve.',
-    );
   if (ids.length) avisos.push('Mientras haya textos pendientes, el contrato no se puede enviar a firma.');
   return avisos;
 }
@@ -698,7 +694,7 @@ export function avisosDePendientes(pendientes: { id: string }[]): string[] {
  * Los textos sin aprobar que el documento va a llevar, previstos con lo guardado
  * (la vista previa los confirma). `sinAprobar` = los ids que el motor marcaría en
  * la plantilla de la ruta (PENDIENTE(x) y borradores sin aprobación): cuando se
- * aprueban, el aviso desaparece solo. k-dia1 depende del día en que se genere.
+ * aprueban, el aviso desaparece solo.
  */
 export function textosPendientesPrevistos(f: Fuentes, a: Asistente, sinAprobar: ReadonlySet<string>): string[] {
   const docs = [f.solicitante.tipo_documento, f.coarrendatario?.tipo_documento];
@@ -788,6 +784,7 @@ export function armarDatosVivienda(
     crc: { numero: crc?.codigo ?? '', fecha: crc ? fechaBogota(crc.fecha_emision) : '' },
     primaPct: t?.prima_vinculacion_pct ?? 0,
     tarifaPct: t?.tarifa_mensual_pct ?? 0,
+    ivaPct: t?.iva_pct ?? 0,
     cashbackPct: t?.cashback_pct ?? 0,
     comisionPct: a.paso3.comisionPct,
     administracion: a.paso3.administracion,

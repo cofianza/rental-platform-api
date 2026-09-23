@@ -26,13 +26,14 @@ Este apartado resume, en lenguaje claro, los puntos más importantes del contrat
 **Alcance de este resumen.** Forma parte integral del presente contrato y se firma con él. Sin embargo, tiene carácter explicativo: en caso de diferencia entre lo expresado en este resumen y lo dispuesto en las cláusulas, prevalecen las cláusulas. Le recomendamos leer también el texto completo antes de firmar.
 @seccion {S}.  ¿Cuánto tengo que pagar?
 @subtitulo Al momento de ingresar
-# Tablas de dinero (V3 §3.4.3–3.4.5, §3.4.7): filas sin IVA, iguales a las
-# cifras de las cláusulas; el total es la suma de las filas impresas (pendiente g).
+# Tablas de dinero (V3 §3.4.3–3.4.5, §3.4.7): filas iguales a las cifras de las
+# cláusulas; el total es la suma de las filas impresas (pendiente g). La prima va
+# con IVA (Adenda 1 §1.1), como en la CUARTA; "+ IVA" es desviación del Word.
 @dinero
 **Concepto** | **Valor**
 Primer canon de arrendamiento | ${pesos:canon}
 ?comision Comisión de intermediación ({pct:comisionPct}% + IVA) | ${pesos:comisionCop}
-?trasladada Prima de la fianza ({pct:primaPct}% del canon) | ${pesos:primaCop}
+?trasladada Prima de la fianza ({pct:primaPct}% del canon + IVA) | ${pesos:primaIvaCop}
 **TOTAL APROXIMADO AL INGRESO** | **${pesos:totalIngreso}**
 @fin
 @subtitulo Cada mes

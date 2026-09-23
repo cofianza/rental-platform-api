@@ -116,6 +116,7 @@ const COMPLETO: DatosVivienda = {
   crc: { numero: 'CRC-2026-0042', fecha: '2026-09-15' },
   primaPct: 10,
   tarifaPct: 2.5,
+  ivaPct: 19,
   cashbackPct: 30,
   comisionPct: 8,
   administracion: { aCargoDe: 'arrendatario', valorCop: 350_000, incluidaEnCanon: false },
