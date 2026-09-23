@@ -18,7 +18,13 @@ export const liberarEstudioCreditoSchema = z.object({
 
 export const createPaqueteSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
-  descripcion: z.string().max(500, 'Descripción muy larga').optional(),
+  // Vacía = quitarla (null). Con undefined el JSON perdía la clave y la vieja seguía.
+  descripcion: z
+    .string()
+    .trim()
+    .max(500, 'Descripción muy larga')
+    .optional()
+    .transform((v) => (v === '' ? null : v)),
   cantidad_estudios: z.coerce.number().int().min(1, 'Cantidad mínima es 1').max(1000, 'Máximo 1000'),
   precio_cop: z.coerce.number().int().min(1000, 'Precio mínimo es $1.000').max(99999999, 'Precio muy alto'),
   vence_en_dias: z.coerce.number().int().positive().nullable().optional(),
