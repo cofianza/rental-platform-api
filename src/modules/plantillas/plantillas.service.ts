@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
+import { renderTemplate } from '@/lib/templateEngine';
 import type {
   CreatePlantillaInput,
   UpdatePlantillaInput,
@@ -23,10 +24,6 @@ function extractVariables(contenido: string): string[] {
     found.add(match[1]);
   }
   return Array.from(found);
-}
-
-function compileTemplate(contenido: string, variables: Record<string, string>): string {
-  return contenido.replace(/\{\{(\w+)\}\}/g, (full, name) => variables[name] ?? full);
 }
 
 function buildSampleData(overrides?: Record<string, string>): Record<string, string> {
@@ -314,8 +311,19 @@ export async function previewPlantilla(id: string, input: PreviewPlantillaInput)
   const plantilla = await getPlantillaById(id);
   const row = plantilla as unknown as { contenido: string; nombre: string; variables: string[] };
 
-  const sampleData = buildSampleData(input.variables);
-  const html = compileTemplate(row.contenido, sampleData);
+  // Con el motor real (variables con punto y {{#if}} de la V4): cada variable
+  // sin dato de ejemplo sale como [nombre.del.campo], en vez de las llaves.
+  const ctx: Record<string, unknown> = {};
+  for (const v of extractVariables(row.contenido)) {
+    const partes = v.split('.');
+    let nodo = ctx;
+    for (const p of partes.slice(0, -1)) {
+      if (typeof nodo[p] !== 'object' || nodo[p] === null) nodo[p] = {};
+      nodo = nodo[p] as Record<string, unknown>;
+    }
+    nodo[partes[partes.length - 1]] ??= `[${v}]`;
+  }
+  const html = renderTemplate(row.contenido, { ...ctx, ...buildSampleData(input.variables) });
 
   return {
     nombre: row.nombre,
