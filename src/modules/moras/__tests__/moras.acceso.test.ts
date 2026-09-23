@@ -47,6 +47,8 @@ const { mockFrom, ops, enqueue, resetQueues, mockEnviarTemplate, mockAssertAcces
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('../../whatsapp', () => ({ enviarTemplate: mockEnviarTemplate }));
+vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn() }));
+vi.mock('@/modules/users/users.service', () => ({ listOperators: async () => [] }));
 vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: (...a: unknown[]) => mockAssertAccess(...a),
   resolveAllowedExpedienteIds: (...a: unknown[]) => mockAllowed(...a),

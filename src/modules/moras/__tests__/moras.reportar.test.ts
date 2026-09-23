@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mismo mock de Supabase con colas por tabla que moras.acceso.test.
 // ============================================================
 
-const { mockFrom, ops, enqueue, resetQueues, mockEnviarTemplate, mockAssertAccess } = vi.hoisted(() => {
+const { mockFrom, ops, enqueue, resetQueues, mockEnviarTemplate, mockAssertAccess, mockNotificar, mockListOperators } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -38,6 +38,8 @@ const { mockFrom, ops, enqueue, resetQueues, mockEnviarTemplate, mockAssertAcces
     resetQueues: () => queues.clear(),
     mockEnviarTemplate: vi.fn(),
     mockAssertAccess: vi.fn(),
+    mockNotificar: vi.fn(),
+    mockListOperators: vi.fn(),
   };
 });
 
@@ -48,8 +50,12 @@ vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: (...a: unknown[]) => mockAssertAccess(...a),
   resolveAllowedExpedienteIds: async () => null,
 }));
+vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
+  notificarUsuario: (...a: unknown[]) => mockNotificar(...a),
+}));
+vi.mock('@/modules/users/users.service', () => ({ listOperators: () => mockListOperators() }));
 
-import { reportarMora, escalarMora } from '../moras.service';
+import { reportarMora, escalarMora, autoEscalar } from '../moras.service';
 import { reportarMoraSchema } from '../moras.schema';
 
 const INPUT = { contrato_id: 'c1', monto_mora: 1_500_000, fecha_vencimiento_canon: '2026-09-05' };
@@ -82,6 +88,8 @@ beforeEach(() => {
   ops.length = 0;
   mockEnviarTemplate.mockReset();
   mockAssertAccess.mockReset().mockResolvedValue(undefined);
+  mockNotificar.mockReset().mockResolvedValue(undefined);
+  mockListOperators.mockReset().mockResolvedValue([]);
 });
 
 describe('reportarMora — el aviso al inquilino', () => {
@@ -201,5 +209,58 @@ describe('fechas de la mora', () => {
     );
     await escalarMora('m1', {}, 'op', 'operador_analista');
     expect((mockEnviarTemplate.mock.calls[0][0] as { variables: string[] }).variables[3]).toBe('25');
+  });
+});
+
+describe('aviso al equipo de Cofianza', () => {
+  const moraEnFase = (estado: string) => ({
+    data: {
+      id: 'm1', ticket_numero: 'MOR-2026-007', estado, expediente_id: 'exp1', reportado_por: 'dueno',
+      reportado_at: new Date().toISOString(), fecha_vencimiento_canon: '2026-09-05',
+      inquilino_telefono: '573001112233', inquilino_nombre: 'Ana Pérez', inmueble_direccion: 'Cra 7', monto_mora: 1_500_000,
+    },
+    error: null,
+  });
+  const avisos = () => mockNotificar.mock.calls.map((c) => c[0] as { userId: string; tipo: string; link: string; titulo: string });
+
+  it('al reportar se avisa a los internos, menos a quien reportó', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    mockListOperators.mockResolvedValue([{ id: 'op1' }, { id: 'admin1' }]);
+    prepararReporte();
+    await reportarMora(INPUT as never, 'op1', 'operador_analista');
+    expect(avisos()).toEqual([
+      expect.objectContaining({ userId: 'admin1', tipo: 'mora.reportada', link: '/moras', titulo: 'Nueva mora reportada — MOR-2026-001' }),
+    ]);
+  });
+
+  it('el escalado a Fase 3 avisa (el inquilino espera contacto); el de Fase 2 no', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    mockListOperators.mockResolvedValue([{ id: 'op1' }]);
+    enqueue('moras_tickets', moraEnFase('fase_1'), { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    await escalarMora('m1', {}, 'dueno', 'propietario');
+    expect(avisos()).toEqual([]);
+
+    enqueue('moras_tickets', moraEnFase('fase_2'), { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    await escalarMora('m1', {}, 'dueno', 'propietario');
+    expect(avisos()).toEqual([expect.objectContaining({ userId: 'op1', tipo: 'mora.fase_3', titulo: 'Mora en Fase 3 — MOR-2026-007' })]);
+  });
+
+  it('el escalado automático a Fase 3 también avisa', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    mockListOperators.mockResolvedValue([{ id: 'op1' }]);
+    enqueue('moras_tickets',
+      { data: [], error: null }, // nada en fase_1
+      { data: [moraEnFase('fase_2').data], error: null },
+      { data: [{ id: 'm1' }], error: null }, // update → fase_3
+    );
+    await expect(autoEscalar()).resolves.toEqual({ aFase2: 0, aFase3: 1 });
+    expect(avisos()).toEqual([expect.objectContaining({ userId: 'op1', tipo: 'mora.fase_3' })]);
+  });
+
+  it('si no se pueden listar los internos, el reporte sigue', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    mockListOperators.mockRejectedValue(new Error('boom'));
+    prepararReporte();
+    await expect(reportarMora(INPUT as never, 'u1', 'inmobiliaria')).resolves.toMatchObject({ id: 'm1' });
   });
 });

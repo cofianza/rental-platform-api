@@ -14,6 +14,7 @@ import { fetchAll } from '@/lib/fetchAll';
 import { logger } from '@/lib/logger';
 import { enviarTemplate as enviarTemplateWhatsApp, type EstadoEnvioWhatsApp } from '../whatsapp';
 import { assertExpedienteAccess, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
+import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import type {
   ReportarMoraInput,
   ListMorasQuery,
@@ -54,6 +55,46 @@ function avisoWhatsApp(estado: EstadoEnvioWhatsApp): string {
   if (estado === 'sin_telefono') return 'No se pudo avisar por WhatsApp: el inquilino no tiene teléfono registrado.';
   if (estado === 'mock') return 'WhatsApp en modo de prueba: no se envió al inquilino.';
   return 'El WhatsApp al inquilino falló; avísale por otro medio.';
+}
+
+/**
+ * Aviso in-app al equipo de Cofianza (administrador + operador_analista). El
+ * botón dice «Reportar a Cofianza» y la Fase 3 le promete al inquilino contacto
+ * «en las próximas horas», pero nadie de Cofianza se enteraba si no abría
+ * /moras. Quien hizo la acción no se avisa a sí mismo. Best-effort: nunca lanza.
+ */
+async function avisarCofianza(params: {
+  moraId: string;
+  actorId: string | null;
+  tipo: string;
+  titulo: string;
+  mensaje: string;
+}): Promise<void> {
+  try {
+    const { listOperators } = await import('@/modules/users/users.service');
+    const internos = await listOperators().catch(() => []);
+    await Promise.all(
+      internos
+        .filter((o) => o.id !== params.actorId)
+        .map((o) =>
+          notificarUsuario({
+            userId: o.id,
+            tipo: params.tipo,
+            titulo: params.titulo,
+            mensaje: params.mensaje,
+            link: '/moras',
+            payload: { mora_id: params.moraId },
+          }),
+        ),
+    );
+  } catch (err) {
+    logger.warn({ err, moraId: params.moraId }, 'No se pudo avisar a Cofianza de la mora');
+  }
+}
+
+/** Texto del aviso de Fase 3 al equipo: el inquilino ya espera la llamada. */
+function mensajeFase3(m: { inquilino_nombre: string; inmueble_direccion: string | null; monto_mora: number }, aviso: string) {
+  return `${m.inquilino_nombre} · ${m.inmueble_direccion ?? 'inmueble'} · $${formatCOP(m.monto_mora)}. Cofianza asume el cobro y el inquilino espera contacto en las próximas horas. ${aviso}`;
 }
 
 interface ContratoSnapshot {
@@ -155,6 +196,7 @@ async function snapshotContrato(contratoId: string): Promise<ContratoSnapshot> {
  */
 interface MoraAccessRow {
   id: string;
+  ticket_numero: string;
   estado: MoraEstado;
   expediente_id: string | null;
   reportado_por: string;
@@ -173,7 +215,7 @@ async function assertMoraAccess(
 ): Promise<MoraAccessRow> {
   const { data: mora, error } = (await db('moras_tickets')
     .select(`
-      id, estado, expediente_id, reportado_por, reportado_at, fecha_vencimiento_canon,
+      id, ticket_numero, estado, expediente_id, reportado_por, reportado_at, fecha_vencimiento_canon,
       inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora
     `)
     .eq('id', moraId)
@@ -288,6 +330,13 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
     null,
     `Mora reportada — Fase 1 (Recordatorio). ${avisoWhatsApp(whatsapp_estado)}`,
   );
+  await avisarCofianza({
+    moraId: ticket.id,
+    actorId: userId,
+    tipo: 'mora.reportada',
+    titulo: `Nueva mora reportada — ${ticket.ticket_numero}`,
+    mensaje: `${ticket.inquilino_nombre} · ${ticket.inmueble_direccion ?? 'inmueble'} · $${formatCOP(ticket.monto_mora)}. ${avisoWhatsApp(whatsapp_estado)}`,
+  });
 
   logger.info({ moraId: ticket.id, ticket: ticket.ticket_numero }, 'Ticket de mora creado');
 
@@ -409,6 +458,15 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
       input.notas ? ` Notas del asesor: ${input.notas}` : ''
     }`,
   );
+  if (proximoEstado === 'fase_3') {
+    await avisarCofianza({
+      moraId: id,
+      actorId: userId,
+      tipo: 'mora.fase_3',
+      titulo: `Mora en Fase 3 — ${mora.ticket_numero}`,
+      mensaje: mensajeFase3(mora, avisoWhatsApp(whatsapp_estado)),
+    });
+  }
 
   return { ...(await getMoraById(id)), whatsapp_estado };
 }
@@ -656,13 +714,14 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
   // fase_2. La segunda condición es la que evita el salto 1 → 3 en una sola
   // corrida; `fase_2_at` lo escriben tanto este cron como el escalado manual.
   const { data: aSubirF3 } = await db('moras_tickets')
-    .select('id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
+    .select('id, ticket_numero, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
     .eq('estado', 'fase_2')
     .lte('reportado_at', limiteFase3)
     .lte('fase_2_at', limiteEnFase2)
     .limit(100) as unknown as {
       data: Array<{
         id: string;
+        ticket_numero: string;
         inquilino_telefono: string | null;
         inquilino_nombre: string;
         inmueble_direccion: string | null;
@@ -686,7 +745,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
       null,
       'Escalado automático a Fase 3 (Legal) — 10 días sin pago. Cofianza toma control.',
     );
-    await enviarTemplateWhatsApp({
+    const whatsapp_estado = await enviarTemplateWhatsApp({
       to: m.inquilino_telefono,
       template: 'MORA_FASE_3',
       variables: [
@@ -696,6 +755,13 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
         diasEnMora(m.fecha_vencimiento_canon),
       ],
       context: { mora_id: m.id },
+    });
+    await avisarCofianza({
+      moraId: m.id,
+      actorId: null,
+      tipo: 'mora.fase_3',
+      titulo: `Mora en Fase 3 — ${m.ticket_numero}`,
+      mensaje: mensajeFase3(m, avisoWhatsApp(whatsapp_estado)),
     });
     aFase3++;
   }
