@@ -26,10 +26,19 @@ expedientePagosRouter.get(
   pagosController.listByExpediente,
 );
 
+// Enlaces de cobro genéricos, cancelar y reenviar: solo el equipo de Cofianza,
+// como en la web (PagosSection, canManage). Aquí el monto, el concepto y el
+// correo los pone quien llama, y el cobro pagado se factura solo ante la DIAN;
+// la inmobiliaria y el propietario cobran la evaluación por /pago-estudio/*.
+// Cancelar y reenviar pedían 'pagos','update', que el operador no tiene: la web
+// le mostraba los botones y respondía 403.
+const ROLES_COBRO = ['administrador', 'operador_analista'];
+
 // POST /expedientes/:expedienteId/pagos — Create payment link
 expedientePagosRouter.post(
   '/',
   authorize('pagos', 'create'),
+  roleGuard(ROLES_COBRO),
   validate({ params: expedienteIdParamsSchema, body: createPaymentLinkSchema }),
   pagosController.createPaymentLink,
 );
@@ -46,7 +55,7 @@ expedientePagosRouter.post(
 expedientePagosRouter.post(
   '/manual',
   authorize('pagos', 'create'),
-  roleGuard(['administrador', 'operador_analista']),
+  roleGuard(ROLES_COBRO),
   validate({ params: expedienteIdParamsSchema, body: registerManualPaymentSchema }),
   pagosController.registerManualPayment,
 );
@@ -90,7 +99,7 @@ pagosRouter.get(
 // PATCH /pagos/:pagoId/cancelar — Cancel pending payment
 pagosRouter.patch(
   '/:pagoId/cancelar',
-  authorize('pagos', 'update'),
+  roleGuard(ROLES_COBRO),
   validate({ params: pagoIdParamsSchema }),
   pagosController.cancel,
 );
@@ -98,7 +107,7 @@ pagosRouter.patch(
 // POST /pagos/:pagoId/reenviar-link — Resend payment link email
 pagosRouter.post(
   '/:pagoId/reenviar-link',
-  authorize('pagos', 'update'),
+  roleGuard(ROLES_COBRO),
   validate({ params: pagoIdParamsSchema }),
   pagosController.resendLink,
 );
