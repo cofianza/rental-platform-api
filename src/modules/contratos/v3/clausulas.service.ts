@@ -29,7 +29,6 @@ import type {
   UsoClausula,
 } from './asistente.types';
 import { campos, REGLAS_VERSION, shaClausula, validarClausula } from './clausulas.reglas';
-import { validarTexto } from './clausulas.ia';
 import { mayus, ordinal } from './formato';
 import type { CambiarEstadoBody, ClausulaBody, EditarClausulaBody, RegistroQuery } from './clausulas.schema';
 
@@ -40,7 +39,6 @@ const POR_PAGINA = 50;
 // En el catálogo no hay contrato: el coarrendatario se juzga en el paso 4, con el contrato real.
 const VIVIENDA = { destinacion: 'vivienda', sinCoarrendatario: false } as const;
 
-type Ia = ClausulaEnContrato['ia'];
 interface Fila {
   id: string;
   inmobiliaria_id: string | null;
@@ -48,7 +46,7 @@ interface Fila {
   texto: string;
   version: number;
   estado: ClausulaRegistro['estado'];
-  validacion: { reglas: string; ia: Ia } | null;
+  validacion: { reglas: string; ia: ClausulaEnContrato['ia'] } | null;
   inhabilitada_motivo: string | null;
   updated_at: string;
 }
@@ -124,14 +122,13 @@ function auditar(userId: string, id: string, detalle: Record<string, unknown>, i
 // ── Validación y escritura compartidas (org = null → biblioteca) ──
 
 /**
- * Propias: reglas y, si está encendida, la IA (puede dar 503 sin guardar nada).
- * Biblioteca: reglas con [[campo]] permitidos, sin IA (§5.1). Cualquier hallazgo
- * → 422 con todos; a pino van solo los códigos y el sha256, nunca el texto.
+ * Solo las reglas (biblioteca: con [[campo]] permitidos, §5.1). La IA nunca
+ * corre para la inmobiliaria (Adenda 1 del módulo de contratos, respuesta 13
+ * bis), aunque CLAUSULAS_IA_ENABLED esté encendido. Cualquier hallazgo → 422
+ * con todos; a pino van solo los códigos y el sha256, nunca el texto.
  */
-async function validar(c: ClausulaBody, org: string | null, iaPrevia?: Ia) {
-  const r = org
-    ? await validarTexto(c, { ...VIVIENDA, conIA: true, iaPrevia })
-    : { ...validarClausula(c, { ...VIVIENDA, biblioteca: true }), ia: null };
+function validar(c: ClausulaBody, org: string | null) {
+  const r = { ...validarClausula(c, { ...VIVIENDA, biblioteca: !org }), ia: null };
   if (r.hallazgos.length) {
     logger.info(
       { codigos: r.hallazgos.map((h) => h.codigo), sha256: shaClausula(c) },
@@ -146,7 +143,7 @@ async function validar(c: ClausulaBody, org: string | null, iaPrevia?: Ia) {
 }
 
 async function crearEn(userId: string, org: string | null, c: ClausulaBody, ip?: string): Promise<ClausulaGuardada> {
-  const r = await validar(c, org);
+  const r = validar(c, org);
   const fila = dato<Fila>(
     await db(TABLA)
       .insert({
@@ -185,7 +182,7 @@ async function editarEn(
   if (!antes || antes.version !== b.version) throw cambiada();
 
   const c = { titulo: b.titulo, texto: b.texto };
-  const r = await validar(c, org, antes.validacion?.ia);
+  const r = validar(c, org);
   const cas = db(TABLA)
     .update({
       titulo: c.titulo,

@@ -128,9 +128,11 @@ const clausulasPaso4 = z
       .min(1, 'Agrega al menos una cláusula o continúa sin ellas')
       .max(25, 'Máximo 25 cláusulas adicionales por contrato')
       .refine((cs) => new Set(cs.map((c) => c.clausulaId)).size === cs.length, 'Una cláusula está repetida'),
-    // Solo se exige con cláusulas propias (Adenda 1 contratos, resp. 13): lo decide el service.
+    // Solo se exige con propias o con datos en los modelos (Adenda 1 contratos, resp. 13): lo decide el service.
     aceptoResponsabilidad: z
-      .literal(true, { error: 'Acepta el aviso de responsabilidad para incorporar tus cláusulas propias' })
+      .literal(true, {
+        error: 'Acepta el aviso de responsabilidad para incorporar tus cláusulas propias y los datos que completaste',
+      })
       .optional(),
     avisoVersion: z.string({ error: 'Falta la versión del aviso de responsabilidad' }).min(1).max(40),
   })

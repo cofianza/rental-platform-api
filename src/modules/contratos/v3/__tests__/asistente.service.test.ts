@@ -167,7 +167,7 @@ import { crearSobre, estadoEnviado } from '../firma/firma.service';
 import { ultimoSobre } from '../firma/reconciliar';
 import { guardarPasoSchema } from '../asistente.schema';
 import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, Paso4 } from '../asistente.types';
-import { AVISO_VERSION, huella, shaClausula } from '../clausulas.reglas';
+import { AVISO_VERSION, huella } from '../clausulas.reglas';
 import { contarClausulas } from '../motor';
 import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
 import { generarAnexoVivienda, generarContratoVivienda } from '../vivienda';
@@ -971,9 +971,15 @@ const BIBLIO = cl('bib-1', {
   version: 2,
 });
 const PROPIA = cl('pro-1');
+/** Un modelo sin [[campos]]: sin cambios es solo texto de Cofianza (resp. 13). */
+const MODELO = cl('bib-2', {
+  inmobiliaria_id: null,
+  titulo: 'Zonas comunes',
+  texto: 'EL ARRENDATARIO respetará el reglamento de las zonas comunes del edificio.',
+});
 /** BIBLIO como queda en el paso 4, con su [[campo]] lleno. */
 const BIBLIO_12 = { texto: 'EL ARRENDATARIO usará el parqueadero 12 del edificio y lo mantendrá despejado.', valores: { 'número del parqueadero': '12' } };
-/** La aceptación sin su huella: la huella es la de las propias de cada lista (resp. 13). */
+/** La aceptación sin su huella: la huella es la de lo que cubre en cada lista (resp. 13). */
 const ACEPTACION: Omit<AceptacionClausulas, 'huella'> = {
   usuarioId: USER,
   nombre: 'Laura Gómez',
@@ -994,9 +1000,10 @@ const snap = (f: FilaCl, o: Partial<ClausulaEnContrato> = {}): ClausulaEnContrat
   ia: null,
   ...o,
 });
+/** Resp. 13: la aceptación cubre las propias y los modelos con datos (los datos son de la inmobiliaria). */
 const aceptacionDe = (cs: ClausulaEnContrato[]): AceptacionClausulas | null => {
-  const propias = cs.filter((c) => c.origen === 'propia');
-  return propias.length ? { ...ACEPTACION, huella: huella(propias) } : null;
+  const cubiertas = cs.filter((c) => c.origen === 'propia' || c.valores !== null);
+  return cubiertas.length ? { ...ACEPTACION, huella: huella(cubiertas) } : null;
 };
 const paso4De = (cs: ClausulaEnContrato[]): Paso4 => ({ clausulas: cs, huella: huella(cs), aceptacion: aceptacionDe(cs) });
 const catalogoDe = (fs: FilaCl[]) =>
@@ -1088,25 +1095,52 @@ describe('paso 4: validación al guardar', () => {
     expect(opsDe('contratos', 'update')).toHaveLength(0);
   });
 
-  it('resp. 13: solo modelos sin cambios se guardan sin aceptación (texto de Cofianza), aunque el aviso sea viejo', async () => {
+  it('resp. 13: solo modelos sin datos se guardan sin aceptación (texto de Cofianza), aunque el aviso sea viejo, y sin bitácora de aceptación', async () => {
     encolarCarga({ contratos: [fila()] });
-    enqueue('clausulas_adicionales', { data: [BIBLIO], error: null });
+    enqueue('clausulas_adicionales', { data: [MODELO], error: null });
     enqueue('perfiles', { data: { nombre: 'Laura', apellido: 'Gómez' }, error: null }); // se lee en paralelo; no hace falta
     enqueue('contratos', { data: [{ id: CTO }], error: null });
     encolarCarga({ contratos: [fila()] });
 
-    const soloModelo = {
-      paso: 4 as const,
-      datos: { clausulas: [{ clausulaId: 'bib-1', valores: BIBLIO_12.valores }], avisoVersion: '2026-01-01' },
-    };
+    const soloModelo = { paso: 4 as const, datos: { clausulas: [{ clausulaId: 'bib-2' }], avisoVersion: '2026-01-01' } };
     await guardarPaso(EXP, soloModelo, USER, ROL, '10.0.0.1', 'laura@inmo.co');
 
     const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente } };
-    const esperadas = [snap(BIBLIO, BIBLIO_12)];
+    const esperadas = [snap(MODELO)];
     expect(upd.datos_variables.asistente.paso4).toEqual({ clausulas: esperadas, huella: huella(esperadas), aceptacion: null });
-    expect(mockLogAudit.mock.calls[0][0]).toMatchObject({
-      detalle: { aviso_version: null, clausulas: [{ id: 'bib-1', version: 2, origen: 'biblioteca' }] },
+    // No se aceptó nada: no hay CONTRATO_CLAUSULAS_ACEPTADAS.
+    expect(mockLogAudit).not.toHaveBeenCalled();
+  });
+
+  it('resp. 13: los datos que la inmobiliaria completa en un modelo son suyos: sin aceptar → 400; aceptados, la huella los cubre', async () => {
+    const soloBiblio = (acepto: boolean, valor = '12') => ({
+      paso: 4 as const,
+      datos: {
+        clausulas: [{ clausulaId: 'bib-1', valores: { 'número del parqueadero': valor } }],
+        ...(acepto ? { aceptoResponsabilidad: true as const } : {}),
+        avisoVersion: AVISO_VERSION,
+      },
     });
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [BIBLIO], error: null });
+    const e = await error(guardarPaso(EXP, soloBiblio(false), USER, ROL));
+    expect(e).toMatchObject({ statusCode: 400, errorCode: 'ACEPTACION_REQUERIDA' });
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [BIBLIO], error: null });
+    enqueue('perfiles', { data: { nombre: 'Laura', apellido: 'Gómez' }, error: null });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+    await guardarPaso(EXP, soloBiblio(true), USER, ROL, '10.0.0.1', 'laura@inmo.co');
+
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: { paso4: Paso4 } } };
+    const p4 = upd.datos_variables.asistente.paso4 as Extract<Paso4, { clausulas: unknown }>;
+    expect(p4.clausulas[0].origen).toBe('biblioteca'); // el texto sigue siendo de Cofianza
+    expect(p4.aceptacion?.huella).toBe(huella([snap(BIBLIO, BIBLIO_12)]));
+    expect(p4.aceptacion?.huella).not.toBe(
+      huella([snap(BIBLIO, { ...BIBLIO_12, texto: BIBLIO_12.texto.replace('12', '14') })]),
+    );
   });
 
   it('una cláusula de otra org → 422 CLAUSULA_NO_DISPONIBLE con su índice y sin su título', async () => {
@@ -1182,8 +1216,8 @@ describe('paso 4: validación al guardar', () => {
     expect(upd.datos_variables.asistente.paso4).toEqual({
       clausulas: esperadas,
       huella: huella(esperadas),
-      // Resp. 13: la aceptación cubre solo la propia, no el modelo sugerido.
-      aceptacion: { ...ACEPTACION, en: '2026-09-15T15:00:00.000Z', huella: huella([snap(PROPIA)]) },
+      // Resp. 13: la aceptación cubre la propia y el modelo, por el dato que completó la inmobiliaria.
+      aceptacion: { ...ACEPTACION, en: '2026-09-15T15:00:00.000Z', huella: huella(esperadas) },
     });
     expect(mockLogAudit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1267,16 +1301,30 @@ describe('paso 4: estado (GET) y bloqueos', () => {
     expect(codigos(await obtener())).toEqual([]);
   });
 
-  it('resp. 13: una aceptación que no cubre exactamente las propias bloquea; sin propias no hace falta', async () => {
+  it('resp. 13: una aceptación que no cubre exactamente lo que debe, o de un aviso anterior, bloquea; solo modelos sin datos no la necesitan', async () => {
     const cs = [snap(BIBLIO, BIBLIO_12), snap(PROPIA)];
-    const vieja = { ...paso4De(cs), aceptacion: { ...ACEPTACION } as AceptacionClausulas }; // anterior a la regla: sin huella
-    encolarCarga({ contratos: [conPaso4(vieja)], catalogo: catalogoDe([BIBLIO, PROPIA]) });
+    const sinHuella = { ...paso4De(cs), aceptacion: { ...ACEPTACION } as AceptacionClausulas }; // anterior a la regla
+    encolarCarga({ contratos: [conPaso4(sinHuella)], catalogo: catalogoDe([BIBLIO, PROPIA]) });
     expect(codigos(await obtener())).toEqual(['ACEPTACION_PENDIENTE']);
 
-    encolarCarga({ contratos: [conPaso4(paso4De([snap(BIBLIO, BIBLIO_12)]))], catalogo: catalogoDe([BIBLIO]) });
+    const soloPropia = { ...paso4De(cs), aceptacion: { ...ACEPTACION, huella: huella([snap(PROPIA)]) } }; // sin el modelo con datos
+    encolarCarga({ contratos: [conPaso4(soloPropia)], catalogo: catalogoDe([BIBLIO, PROPIA]) });
+    expect(codigos(await obtener())).toEqual(['ACEPTACION_PENDIENTE']);
+
+    // El aviso cambió después de aceptar: generar y enviar esperan una aceptación nueva.
+    const p4 = paso4De(cs);
+    const avisoViejo = { ...p4, aceptacion: { ...p4.aceptacion!, avisoVersion: '2026-09-21' } };
+    encolarCarga({ contratos: [conPaso4(avisoViejo)], catalogo: catalogoDe([BIBLIO, PROPIA]) });
+    expect(codigos(await obtener())).toEqual(['ACEPTACION_PENDIENTE']);
+
+    encolarCarga({ contratos: [conPaso4(paso4De([snap(MODELO)]))], catalogo: catalogoDe([MODELO]) });
     const e = await obtener();
     expect(codigos(e)).toEqual([]);
-    expect(e.contrato!.adicionales.aviso).toMatchObject({ version: AVISO_VERSION, modelos: expect.stringContaining('texto de COFIANZA') });
+    expect(e.contrato!.adicionales.aviso).toMatchObject({
+      version: AVISO_VERSION,
+      modelos: expect.stringContaining('Los datos que la inmobiliaria completa en un modelo sí son de su responsabilidad'),
+      texto: expect.stringContaining('los datos que la inmobiliaria completa en los modelos'),
+    });
   });
 
   it('un error al leer el catálogo es 503 (fail-closed)', async () => {
@@ -1286,14 +1334,20 @@ describe('paso 4: estado (GET) y bloqueos', () => {
     expect(e).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 
-  it('IA encendida: una propia sin veredicto vigente bloquea; con el veredicto de su texto, no', async () => {
+  it('resp. 13 bis: con CLAUSULAS_IA_ENABLED encendido la IA nunca bloquea a la inmobiliaria', async () => {
     mockEnv.CLAUSULAS_IA_ENABLED = true;
     encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA)]))], catalogo: catalogoDe([PROPIA]) });
-    expect(codigos(await obtener())).toEqual(['REVISION_AUTOMATICA_PENDIENTE']);
-
-    const ia = { sha256: shaClausula(PROPIA), modelo: 'claude-opus-5', en: '2026-09-15T14:00:00.000Z' };
-    encolarCarga({ contratos: [conPaso4(paso4De([snap(PROPIA, { ia })]))], catalogo: catalogoDe([PROPIA]) });
     expect(codigos(await obtener())).toEqual([]);
+
+    // Guardar tampoco la llama (sin llave, antes era 503).
+    encolarCarga({ contratos: [fila()] });
+    enqueue('clausulas_adicionales', { data: [PROPIA], error: null });
+    enqueue('perfiles', { data: { nombre: 'Laura', apellido: 'Gómez' }, error: null });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+    await guardarPaso(EXP, entrada([{ clausulaId: 'pro-1' }]), USER, ROL, '10.0.0.1', 'laura@inmo.co');
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: { paso4: Paso4 } } };
+    expect(upd.datos_variables.asistente.paso4).toMatchObject({ clausulas: [{ clausulaId: 'pro-1', ia: null }] });
   });
 
   it('una regla endurecida frena el borrador: el coarrendatario mencionado sin coarrendatario', async () => {

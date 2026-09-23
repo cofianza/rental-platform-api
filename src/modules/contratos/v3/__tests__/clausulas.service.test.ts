@@ -9,7 +9,8 @@ import type { NextFunction, Request, Response } from 'express';
 // `await` directo consumen el siguiente resultado de la cola de esa tabla. Una
 // tabla sin cola responde { data: null, error: null }. Todo queda en `ops` para
 // afirmar QUÉ se escribió y con qué filtros (la org sale de la membresía).
-// La IA se simula apagada: validarTexto = reglas reales, ia null.
+// Sin mock de la IA: la inmobiliaria nunca pasa por ella (Adenda 1 del módulo
+// de contratos, respuesta 13 bis), ni con el flag encendido y sin llave.
 // ============================================================
 
 const { mockEnv, mockFrom, ops, queues, enqueue, mockOrg, mockLogAudit } = vi.hoisted(() => {
@@ -57,20 +58,10 @@ vi.mock('@/lib/auditLog', () => ({
   AUDIT_ENTITIES: { CLAUSULA_ADICIONAL: 'clausula_adicional' },
 }));
 vi.mock('@/lib/tenantScope', () => ({ resolveInmobiliariaIdForPerfil: () => mockOrg() }));
-vi.mock('../clausulas.ia', async () => {
-  const { validarClausula } = await import('../clausulas.reglas');
-  return {
-    validarTexto: vi.fn(async (c: { titulo: string; texto: string }, o: Parameters<typeof validarClausula>[1]) => ({
-      ...validarClausula(c, o),
-      ia: null,
-    })),
-  };
-});
 
 // Import AFTER mocks
 import { AppError } from '@/lib/errors';
 import { validate } from '@/middleware/validate';
-import { validarTexto } from '../clausulas.ia';
 import { cambiarEstadoSchema, registroQuerySchema } from '../clausulas.schema';
 import * as svc from '../clausulas.service';
 import { REGLAS_VERSION } from '../clausulas.reglas';
@@ -110,16 +101,15 @@ beforeEach(() => {
   mockLogAudit.mockClear();
   mockOrg.mockResolvedValue('org-1');
   mockEnv.CONTRATOS_V3_ENABLED = true;
-  vi.mocked(validarTexto).mockClear();
+  mockEnv.CLAUSULAS_IA_ENABLED = false;
 });
 
 describe('inmobiliaria', () => {
-  it('crea en su propia org (de la membresía) con reglas + IA pedida y bitácora', async () => {
+  it('crea en su propia org (de la membresía) con las reglas y bitácora', async () => {
     enqueue(T, { data: fila(), error: null });
     const r = await svc.crear('u-1', BIEN, '1.2.3.4');
 
     expect(op('insert')?.[0]).toMatchObject({ inmobiliaria_id: 'org-1', creado_por: 'u-1', ...BIEN, validacion: { reglas: REGLAS_VERSION, ia: null } });
-    expect(vi.mocked(validarTexto).mock.calls[0][1]).toMatchObject({ destinacion: 'vivienda', conIA: true });
     expect(r).toMatchObject({ origen: 'propia', campos: [], avisos: [] });
     expect(mockLogAudit).toHaveBeenCalledWith(
       expect.objectContaining({ accion: 'clausula_adicional_guardada', entidadId: ID, ip: '1.2.3.4', detalle: expect.objectContaining({ op: 'crear' }) }),
@@ -145,11 +135,11 @@ describe('inmobiliaria', () => {
     expect((e.details as { hallazgos: { codigo: string }[] }).hallazgos[0].codigo).toBe('no_imprimible');
   });
 
-  it('503 de la revisión automática se propaga y no guarda nada', async () => {
-    vi.mocked(validarTexto).mockRejectedValueOnce(new AppError(503, 'REVISION_AUTOMATICA_NO_DISPONIBLE', 'x'));
-    const e = await error(svc.crear('u-1', BIEN));
-    expect(e.statusCode).toBe(503);
-    expect(op('insert')).toBeUndefined();
+  it('resp. 13 bis: con CLAUSULAS_IA_ENABLED encendido (y sin llave) la IA no corre: ni 503 ni bloqueo', async () => {
+    mockEnv.CLAUSULAS_IA_ENABLED = true;
+    enqueue(T, { data: fila(), error: null });
+    await expect(svc.crear('u-1', BIEN)).resolves.toMatchObject({ origen: 'propia' });
+    expect(op('insert')?.[0]).toMatchObject({ validacion: { reglas: REGLAS_VERSION, ia: null } });
   });
 
   it('PUT sube la versión con CAS (version, org, activa) y registra antes/después', async () => {
@@ -169,7 +159,6 @@ describe('inmobiliaria', () => {
     enqueue(T, { data: fila({ version: 3 }), error: null });
     const e = await error(svc.editar('u-1', ID, { ...BIEN, version: 2 }));
     expect([e.statusCode, e.errorCode]).toEqual([409, 'CLAUSULA_CAMBIADA']);
-    expect(validarTexto).not.toHaveBeenCalled();
     expect(op('update')).toBeUndefined();
   });
 
@@ -217,7 +206,6 @@ describe('administrador', () => {
     enqueue(T, { data: fila({ ...c, inmobiliaria_id: null }), error: null });
     const r = await svc.crearBiblioteca('admin-1', c);
     expect(op('insert')?.[0]).toMatchObject({ inmobiliaria_id: null, texto: c.texto });
-    expect(validarTexto).not.toHaveBeenCalled();
     expect(r).toMatchObject({ origen: 'biblioteca', campos: ['número del parqueadero'] });
   });
 

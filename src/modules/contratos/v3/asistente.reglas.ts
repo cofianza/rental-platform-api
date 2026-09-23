@@ -30,7 +30,7 @@ import type {
   Paso4,
   Paso5,
 } from './asistente.types';
-import { categoriaClausula, huella, shaClausula, validarClausula } from './clausulas.reglas';
+import { AVISO_VERSION, categoriaClausula, huella, requiereAceptacion, validarClausula } from './clausulas.reglas';
 import { fechaBogota } from './formato';
 import { MARCADOR } from './motor';
 import type { DatosVivienda, Persona } from './vivienda';
@@ -823,7 +823,7 @@ export interface FilaCatalogoAdicional {
 export function bloqueosAdicionales(
   a: Asistente,
   catalogo: FilaCatalogoAdicional[],
-  o: { maximo: number; sinCoarrendatario: boolean; iaEncendida: boolean },
+  o: { maximo: number; sinCoarrendatario: boolean },
 ): { bloqueos: Bloqueo[]; avisos: string[] } {
   const bloqueos: Bloqueo[] = [];
   const avisos: string[] = [];
@@ -832,7 +832,6 @@ export function bloqueosAdicionales(
   const b = (codigo: string, mensaje: string, detalle?: string[]) =>
     bloqueos.push({ codigo, mensaje, paso: 4, ...(detalle && { detalle }) });
 
-  let sinRevision = false;
   for (const c of p4.clausulas) {
     const fila = catalogo.find((x) => x.id === c.clausulaId);
     // Eliminada = ausente: guardar el paso 4 ya la rechaza (prepararPaso4 exige 'activa').
@@ -852,21 +851,18 @@ export function bloqueosAdicionales(
 
     const h = validarClausula(c, { destinacion: 'vivienda', sinCoarrendatario: o.sinCoarrendatario }).hallazgos[0];
     if (h) b('CLAUSULA_NO_PERMITIDA', `«${c.titulo}»: ${h.mensaje}`, h.norma ? [h.norma] : undefined);
-
-    // Misma regla que al guardar: la IA revisa lo que escribió la inmobiliaria y la biblioteca ya llena.
-    if (o.iaEncendida && (c.origen === 'propia' || c.valores) && c.ia?.sha256 !== shaClausula(c)) sinRevision = true;
+    // La IA no revisa lo de la inmobiliaria (respuesta 13 bis): sin bloqueo por revisión automática.
   }
-  if (sinRevision)
-    b(
-      'REVISION_AUTOMATICA_PENDIENTE',
-      'Las cláusulas adicionales deben pasar la revisión automática: vuelve a guardar el paso 4.',
-    );
-  // La aceptación cubre exactamente las propias (resp. 13); una anterior a esa regla no las cubre.
-  const propias = p4.clausulas.filter((c) => c.origen === 'propia');
-  if (propias.length && p4.aceptacion?.huella !== huella(propias))
+  // La aceptación cubre exactamente las propias y los modelos con datos (resp. 13), con el
+  // aviso vigente: si el aviso cambia, generar y enviar esperan a que se acepte de nuevo.
+  const cubiertas = p4.clausulas.filter(requiereAceptacion);
+  if (
+    cubiertas.length &&
+    (p4.aceptacion?.huella !== huella(cubiertas) || p4.aceptacion?.avisoVersion !== AVISO_VERSION)
+  )
     b(
       'ACEPTACION_PENDIENTE',
-      'Acepta el aviso de responsabilidad de tus cláusulas propias: vuelve a guardar el paso 4.',
+      'Acepta el aviso de responsabilidad vigente para tus cláusulas propias y los datos que completaste en los modelos: vuelve a guardar el paso 4.',
     );
 
   const n = p4.clausulas.length;

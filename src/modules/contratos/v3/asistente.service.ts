@@ -70,7 +70,6 @@ import {
   type PerfilArrendador,
   type PropioGuardado,
 } from './asistente.reglas';
-import { validarTexto } from './clausulas.ia';
 import {
   AVISO_MODELOS,
   AVISO_PREVALENCIA,
@@ -80,7 +79,9 @@ import {
   categoriaClausula,
   huella,
   llenar,
+  requiereAceptacion,
   shaClausula,
+  validarClausula,
 } from './clausulas.reglas';
 import type { LogoPdf } from './documento';
 import { fechaBogota, mayus, ordinal, sumarMeses } from './formato';
@@ -369,7 +370,6 @@ const primeraAdicional = (f: Fuentes, a: Asistente) =>
 const opcionesAdicionales = (f: Fuentes, cal: Calibracion) => ({
   maximo: cal.MAX_CLAUSULAS_ADICIONALES,
   sinCoarrendatario: f.coarrendatario === null,
-  iaEncendida: env.CLAUSULAS_IA_ENABLED,
 });
 
 /**
@@ -684,15 +684,15 @@ interface FilaClausula {
   texto: string;
   version: number;
   estado: string;
-  validacion: { reglas: string; ia: ClausulaEnContrato['ia'] } | null;
 }
 
 /**
  * Quién (D5), el aviso vigente, que cada cláusula siga disponible para la org
- * del contrato, sus [[campos]] y las reglas (y la IA, si está encendida) sobre
+ * del contrato, sus [[campos]] y las reglas (nunca la IA, resp. 13 bis) sobre
  * el texto FINAL. Devuelve el Paso4 a guardar; ninguna falla escribe nada.
  * Pasar el máximo no impide guardar: queda como bloqueo (D6). La aceptación
- * se exige y cubre solo las propias (Adenda 1 contratos, resp. 13).
+ * se exige y cubre solo las propias y los modelos con datos (Adenda 1
+ * contratos, resp. 13).
  */
 async function prepararPaso4(
   f: Fuentes,
@@ -710,13 +710,12 @@ async function prepararPaso4(
 
   const ids = e.clausulas.map((c) => c.clausulaId);
   const [filasR, perfilR, rolMiembro] = await Promise.all([
-    db('clausulas_adicionales').select('id, inmobiliaria_id, titulo, texto, version, estado, validacion').in('id', ids),
+    db('clausulas_adicionales').select('id, inmobiliaria_id, titulo, texto, version, estado').in('id', ids),
     db('perfiles').select('nombre, apellido').eq('id', u.id).maybeSingle(),
     resolveRolMiembro(u.id),
   ]);
   const filas = dato<FilaClausula[] | null>(filasR, exp, 'cláusulas adicionales') ?? [];
   const perfil = dato<{ nombre: string | null; apellido: string | null } | null>(perfilR, exp, 'perfil de quien acepta');
-  const anteriores = clausulasDe(f.v3?.datos_variables?.asistente?.paso4);
 
   const clausulas: ClausulaEnContrato[] = [];
   const hallazgos: Hallazgo[] = [];
@@ -732,9 +731,8 @@ async function prepararPaso4(
         'Una de las cláusulas elegidas ya no está disponible. Quítala del contrato.',
         { indice },
       );
-    const deModelo = fila.inmobiliaria_id === null;
     // Solo los modelos sugeridos llevan [[campos]]; una propia no puede traer valores.
-    const nombres = deModelo ? campos(fila.texto) : [];
+    const nombres = fila.inmobiliaria_id === null ? campos(fila.texto) : [];
     const valores = item.valores ?? {};
     const faltan = nombres.filter((n) => !Object.hasOwn(valores, n));
     const sobran = Object.keys(valores).filter((n) => !nombres.includes(n));
@@ -753,18 +751,10 @@ async function prepararPaso4(
         indice,
       });
 
-    // Veredicto IA reutilizable: el de este mismo texto en el paso 4 anterior o en el catálogo.
-    // ponytail: en serie; con la IA encendida, n cláusulas de biblioteca con datos nuevos son n
-    // llamadas seguidas (hasta ~50 s cada una). Paralelizar con un límite si llega a pesar.
+    // Solo las reglas: la IA nunca bloquea a la inmobiliaria (Adenda 1 del módulo de
+    // contratos, respuesta 13 bis), aunque CLAUSULAS_IA_ENABLED esté encendido.
     const sha = shaClausula(c);
-    const iaPrevia =
-      [anteriores.find((x) => x.clausulaId === fila.id)?.ia, fila.validacion?.ia].find((x) => x?.sha256 === sha) ?? null;
-    const r = await validarTexto(c, {
-      destinacion: 'vivienda',
-      sinCoarrendatario: f.coarrendatario === null,
-      conIA: !deModelo || nombres.length > 0,
-      iaPrevia,
-    });
+    const r = validarClausula(c, { destinacion: 'vivienda', sinCoarrendatario: f.coarrendatario === null });
     if (r.hallazgos.length) bloqueadas.push(sha);
     hallazgos.push(...r.hallazgos.map((h) => ({ ...h, indice })));
     avisos.push(...r.avisos.map((h) => ({ ...h, indice })));
@@ -775,7 +765,7 @@ async function prepararPaso4(
       version: fila.version,
       ...c,
       valores: vals,
-      ia: r.ia,
+      ia: null,
     });
   }
   if (hallazgos.length) {
@@ -787,12 +777,13 @@ async function prepararPaso4(
     throw new AppError(422, 'CLAUSULA_NO_PERMITIDA', hallazgos[0].mensaje, { hallazgos, avisos });
   }
 
-  // Solo modelos sin cambios: son texto de Cofianza y no hay nada propio que aceptar.
-  const propias = clausulas.filter((x) => x.origen === 'propia');
-  if (!propias.length) return { clausulas, huella: huella(clausulas), aceptacion: null };
+  // La aceptación cubre las propias y los datos que la inmobiliaria completó en los
+  // modelos (resp. 13). Solo modelos sin datos: texto de Cofianza, nada que aceptar.
+  const cubiertas = clausulas.filter(requiereAceptacion);
+  if (!cubiertas.length) return { clausulas, huella: huella(clausulas), aceptacion: null };
   if (!e.aceptoResponsabilidad)
     throw AppError.badRequest(
-      'Acepta el aviso de responsabilidad para incorporar tus cláusulas propias.',
+      'Acepta el aviso de responsabilidad para incorporar tus cláusulas propias y los datos que completaste en los modelos.',
       'ACEPTACION_REQUERIDA',
     );
   if (e.avisoVersion !== AVISO_VERSION)
@@ -806,7 +797,7 @@ async function prepararPaso4(
     en: new Date().toISOString(),
     ip: u.ip ?? null,
     avisoVersion: e.avisoVersion,
-    huella: huella(propias),
+    huella: huella(cubiertas),
   };
   return { clausulas, huella: huella(clausulas), aceptacion };
 }
@@ -861,7 +852,8 @@ export async function guardarPaso(
   }
   if (!(data as unknown[] | null)?.length) throw borradorCambiado();
 
-  if (paso4)
+  // Sin aceptación (solo modelos sin datos) no hubo nada que aceptar: no se registra.
+  if (paso4?.aceptacion)
     logAudit({
       usuarioId: userId,
       accion: AUDIT_ACTIONS.CONTRATO_CLAUSULAS_ACEPTADAS,
@@ -871,7 +863,7 @@ export async function guardarPaso(
         expediente_id: expedienteId,
         huella: paso4.huella,
         clausulas: paso4.clausulas.map((x) => ({ id: x.clausulaId, version: x.version, origen: x.origen })),
-        aviso_version: paso4.aceptacion?.avisoVersion ?? null,
+        aviso_version: paso4.aceptacion.avisoVersion,
         email,
       },
       ip,
