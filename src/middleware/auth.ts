@@ -86,6 +86,19 @@ export function invalidateAuthCache(userId: string): void {
   }
 }
 
+/**
+ * Cierra TODAS las sesiones de un usuario (access y refresh) y vacía su caché.
+ * auth.admin.signOut() de supabase-js pide el JWT del usuario, no su id: con
+ * el id GoTrue respondía 401 y no se cerraba nada. La RPC borra sus filas de
+ * auth.sessions (migración 20260929000024) y el siguiente getUser(token) ya no
+ * lo acepta. Best-effort: si falla queda en el log y el flujo sigue.
+ */
+export async function cerrarSesionesDe(userId: string): Promise<void> {
+  const { error } = await supabase.rpc('cerrar_sesiones_usuario' as never, { p_user_id: userId } as never);
+  if (error) logger.warn({ error: error.message, userId }, 'No se pudieron cerrar las sesiones del usuario');
+  invalidateAuthCache(userId);
+}
+
 async function resolveAuth(token: string): Promise<AuthResolved> {
   const now = Date.now();
   const cached = authCache.get(token);

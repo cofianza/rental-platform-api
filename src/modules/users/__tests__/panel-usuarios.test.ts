@@ -4,10 +4,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // /usuarios frente a la organización: borrar al titular principal de una
 // agencia con equipo se llevaba la inmobiliaria (owner_perfil_id ON DELETE
 // CASCADE) y cambiarle el rol a un miembro lo sacaba sin los guardas del
-// equipo. Tampoco nadie se cambia su propio rol. Mock con colas por tabla.
+// equipo. Tampoco nadie se cambia su propio rol. Y restablecer la contraseña
+// cierra las sesiones abiertas. Mock con colas por tabla.
 // ============================================================
 
-const { ops, enqueue, queues, rpc, auth, mockMembresias, chainFor } = vi.hoisted(() => {
+const { ops, enqueue, queues, rpc, auth, mockMembresias, mockCerrar, chainFor } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -35,7 +36,11 @@ const { ops, enqueue, queues, rpc, auth, mockMembresias, chainFor } = vi.hoisted
     enqueue,
     queues,
     rpc: vi.fn(),
-    auth: { deleteUser: vi.fn(async () => ({ error: null })) },
+    auth: {
+      deleteUser: vi.fn(async () => ({ error: null })),
+      updateUserById: vi.fn(async () => ({ error: null })),
+    },
+    mockCerrar: vi.fn(async (_id: string) => {}),
     mockMembresias: vi.fn(async (_id: string): Promise<string[]> => []),
     chainFor,
   };
@@ -48,14 +53,17 @@ vi.mock('@/lib/supabase', () => ({
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/email', () => ({ sendWelcomeEmail: vi.fn() }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
-vi.mock('@/middleware/auth', () => ({ invalidateAuthCache: vi.fn() }));
+vi.mock('@/middleware/auth', () => ({
+  invalidateAuthCache: vi.fn(),
+  cerrarSesionesDe: (id: string) => mockCerrar(id),
+}));
 vi.mock('@/lib/tenantScope', () => ({
   ensureOrgConOwner: vi.fn(),
   resolveInmobiliariaIdForPerfil: vi.fn(async () => 'org-1'),
   resolveMembershipInmobiliariaIds: (id: string) => mockMembresias(id),
 }));
 
-import { deleteUser, updateUser } from '../users.service';
+import { deleteUser, updateUser, resetPasswordByAdmin } from '../users.service';
 
 const perfil = (rol: string) => ({ data: [{ id: 'u1', email: 'u@x.co', rol, nombre: 'Ana', apellido: 'Ruiz' }], error: null });
 const escribioPerfil = () => ops.some((o) => o.table === 'perfiles' && o.method === 'update');
@@ -65,6 +73,7 @@ beforeEach(() => {
   queues.clear();
   rpc.mockReset();
   auth.deleteUser.mockClear();
+  mockCerrar.mockClear();
   mockMembresias.mockReset();
   mockMembresias.mockResolvedValue([]);
 });
@@ -110,5 +119,14 @@ describe('cambiar el rol desde /usuarios', () => {
     rpc.mockResolvedValue(perfil('administrador'));
     await updateUser('u1', { nombre: 'Ana', rol: 'administrador' } as never, 'u1');
     expect(escribioPerfil()).toBe(true);
+  });
+});
+
+describe('restablecer la contraseña desde el panel', () => {
+  it('cierra todas las sesiones abiertas de la cuenta', async () => {
+    rpc.mockResolvedValueOnce(perfil('propietario'));
+    await resetPasswordByAdmin('u1', { password: 'Nueva1234' }, 'admin');
+    expect(auth.updateUserById).toHaveBeenCalledWith('u1', { password: 'Nueva1234' });
+    expect(mockCerrar).toHaveBeenCalledWith('u1');
   });
 });

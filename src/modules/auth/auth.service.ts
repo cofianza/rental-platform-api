@@ -6,7 +6,7 @@ import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendPasswordResetEmail } from '@/lib/email';
 import { resolveRolMiembro } from '@/lib/tenantScope';
-import { invalidateAuthCache } from '@/middleware/auth';
+import { invalidateAuthCache, cerrarSesionesDe } from '@/middleware/auth';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
 
 export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
@@ -531,8 +531,7 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
     .eq('id', tokenData.id);
 
   // Revocar todas las sesiones del usuario
-  await supabaseAuth.auth.admin.signOut(tokenData.user_id, 'global');
-  invalidateAuthCache(tokenData.user_id);
+  await cerrarSesionesDe(tokenData.user_id);
 
   logAudit({
     usuarioId: tokenData.user_id,

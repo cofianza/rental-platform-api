@@ -8,21 +8,23 @@ import type { Request, Response } from 'express';
 // request no vuelve a validar.
 // ============================================================
 
-const { mockGetUser, mockPerfil } = vi.hoisted(() => ({
+const { mockGetUser, mockPerfil, mockRpc } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockPerfil: vi.fn(),
+  mockRpc: vi.fn(async (..._a: unknown[]) => ({ data: null, error: null })),
 }));
 
 vi.mock('@/lib/supabase', () => ({
   supabaseAuth: { auth: { getUser: (t: string) => mockGetUser(t) } },
   supabase: {
     from: () => ({ select: () => ({ eq: (_c: string, id: string) => ({ single: () => mockPerfil(id) }) }) }),
+    rpc: (...a: unknown[]) => mockRpc(...a),
   },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/tenantScope', () => ({ resolveRolMiembro: vi.fn(async () => 'owner') }));
 
-import { authMiddleware, invalidateAuthCache } from '../auth';
+import { authMiddleware, invalidateAuthCache, cerrarSesionesDe } from '../auth';
 
 const ID = '11111111-2222-4333-8444-555555555555';
 const OTRO = '99999999-2222-4333-8444-555555555555';
@@ -72,5 +74,16 @@ describe('authMiddleware', () => {
     await authMiddleware(r, {} as Response, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(mockGetUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('cerrarSesionesDe', () => {
+  it('borra sus sesiones por id (signOut pedía el JWT y no cerraba nada) y vacía su caché', async () => {
+    const t = jwt(ID);
+    await authMiddleware(req(t), {} as Response, vi.fn());
+    await cerrarSesionesDe(ID);
+    expect(mockRpc).toHaveBeenCalledWith('cerrar_sesiones_usuario', { p_user_id: ID });
+    await authMiddleware(req(t), {} as Response, vi.fn());
+    expect(mockGetUser).toHaveBeenCalledTimes(2); // el token vuelve a GoTrue
   });
 });

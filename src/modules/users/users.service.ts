@@ -4,7 +4,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendWelcomeEmail } from '@/lib/email';
-import { invalidateAuthCache } from '@/middleware/auth';
+import { invalidateAuthCache, cerrarSesionesDe } from '@/middleware/auth';
 import { ensureOrgConOwner, resolveInmobiliariaIdForPerfil, resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
 import type { CreateUserInput, UpdateUserInput, ListUsersQuery, ResetPasswordByAdminInput } from './users.schema';
 
@@ -280,15 +280,10 @@ export async function deactivateUser(userId: string, requestingUserId: string, i
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al desactivar el usuario');
   }
 
-  // Revocar todas las sesiones del usuario
-  try {
-    await supabaseAuth.auth.admin.signOut(userId, 'global');
-  } catch (signOutError) {
-    logger.warn({ error: signOutError, userId }, 'Error al revocar sesiones del usuario');
-  }
+  // Revocar todas las sesiones del usuario (y su caché de auth)
+  await cerrarSesionesDe(userId);
 
   // Registrar en bitacora
-  invalidateAuthCache(userId); // rol o estado nuevos: que valgan ya, no al vencer el caché de auth
   logAudit({
     usuarioId: requestingUserId,
     accion: AUDIT_ACTIONS.USER_DEACTIVATED,
@@ -607,8 +602,8 @@ export async function deleteUser(
  * email. La contrasena ya viene validada por el schema (8+ chars,
  * mayuscula/minuscula/numero).
  *
- * Nota de seguridad: no cierra sesiones activas del usuario. Si esto se
- * requiere, agregar supabaseAuth.auth.admin.signOut(userId) despues.
+ * Cierra todas sus sesiones: si el reset es para sacar a quien usa la cuenta
+ * (comprometida, exempleado con el celular de la oficina), no sigue adentro.
  */
 export async function resetPasswordByAdmin(
   userId: string,
@@ -638,7 +633,7 @@ export async function resetPasswordByAdmin(
     'Contrasena reseteada por administrador',
   );
 
-  invalidateAuthCache(userId);
+  await cerrarSesionesDe(userId);
   logAudit({
     usuarioId: requestingUserId,
     accion: AUDIT_ACTIONS.PASSWORD_RESET_BY_ADMIN,
