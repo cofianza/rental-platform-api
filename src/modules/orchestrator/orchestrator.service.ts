@@ -337,7 +337,9 @@ export async function onHabeasDataAutorizado(params: {
       // estado es quien reevalua.
       const senalPost = aparcar ? await leerSenalPagoEstudio(expedienteId) : senalPago;
       if (senalPost === 'pagado') {
-        await onEstudioPagado(expedienteId, solicitanteId);
+        // Sin usuario: solicitanteId es de `solicitantes`, no de `perfiles`, y
+        // la bitácora (FK a perfiles) perdía la consulta.
+        await onEstudioPagado(expedienteId, null);
         return;
       }
       await pedirPagoTrasAutorizacion({
@@ -357,7 +359,9 @@ export async function onHabeasDataAutorizado(params: {
     const { ejecutarEstudio } = await import('@/modules/estudios/estudios.service');
 
     try {
-      await ejecutarEstudio(estudio.id as string, solicitanteId);
+      // Ejecución de sistema ('' → usuario_id NULL en la bitácora): con el id
+      // de `solicitantes` el insert chocaba con la FK a perfiles y se perdía.
+      await ejecutarEstudio(estudio.id as string, '');
       logger.info({ estudioId: estudio.id }, 'Orchestrator: estudio disparado en background');
     } catch (providerError) {
       // Si TransUnion no esta configurado o falla, el estudio queda como 'fallido'

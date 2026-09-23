@@ -190,7 +190,9 @@ export function logAudit(params: AuditLogParams): void {
   (supabase
     .from('bitacora' as string) as ReturnType<typeof supabase.from>)
     .insert({
-      usuario_id: usuarioId,
+      // '' = ejecución de sistema: usuario_id es uuid con FK a perfiles, y con
+      // '' el insert fallaba y la fila se perdía en silencio.
+      usuario_id: usuarioId || null,
       accion,
       entidad,
       entidad_id: entidadId || null,
