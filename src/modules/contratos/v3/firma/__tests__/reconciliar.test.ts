@@ -970,7 +970,18 @@ describe('acuse del aviso de firma incompleta', () => {
     enqueue('contrato_partes', ok(PARTES));
     const e = (await estadoEnviado('c1'))!;
     expect(e.aviso).toEqual({ texto: AVISO.texto, entregadoEn: HOY, aceptado: { nombre: 'Carla Ríos', en: HOY } });
+    expect(e.acuseDisponible).toBe(true);
     expect(e.prorroga).toBeNull();
+  });
+
+  it('sin la migración la vista dice que el acuse no está disponible (la web no bloquea ni ofrece el botón)', async () => {
+    enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(incompleto()), ok({ id: 's1' }), ok(incompleto()), SIN_MIGRACION);
+    enqueue('contrato_partes', ok(PARTES));
+    const e = (await estadoEnviado('c1'))!;
+    expect(e.acuseDisponible).toBe(false);
+    expect(e.aviso).toMatchObject({ texto: AVISO.texto, aceptado: null });
   });
 
   describe('sin acuse, la inmobiliaria no reenvía, no cancela ni cierra el estudio', () => {
@@ -1011,10 +1022,22 @@ describe('acuse del aviso de firma incompleta', () => {
       expect(ops).toEqual([]);
     });
 
-    it('con el aviso todavía sin entregar pide esperar, no el acuse', async () => {
+    it('con el aviso todavía sin entregar pide esperar, no el acuse; sin la migración no pide nada', async () => {
       estadoIncompleto();
-      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto({ aviso_entregado_en: null, aviso_detalle: null })));
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto({ aviso_entregado_en: null, aviso_detalle: null })), ok(ADENDA));
       await expect(reenviar('c1', 'm1', 'inmobiliaria')).rejects.toMatchObject({ errorCode: 'AVISO_NO_ENTREGADO' });
+
+      estadoIncompleto();
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto({ aviso_entregado_en: null, aviso_detalle: null })), SIN_MIGRACION);
+      enqueue('rpc:transicionar_contrato', { data: null, error: { message: 'Transicion no permitida' } });
+      await expect(reenviar('c1', 'm1', 'inmobiliaria')).rejects.toMatchObject({ errorCode: 'CONTRATO_ESTADO_CAMBIADO' }); // pasó la puerta
+    });
+
+    it('si no se puede leer el sobre del aviso, falla cerrado (503), nunca deja pasar sin acuse', async () => {
+      estadoIncompleto();
+      enqueue('contrato_v3_sobres', { data: null, error: { message: 'timeout' } });
+      await expect(reenviar('c1', 'm1', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+      expect(mockRpc).not.toHaveBeenCalled();
     });
   });
 });

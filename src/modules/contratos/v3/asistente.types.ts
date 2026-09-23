@@ -136,6 +136,8 @@ export interface EnvioV3 {
    * acuse (Adenda 1, respuesta 11): hasta que la inmobiliaria lo acepte, ella no reenvía ni cancela.
    */
   aviso: null | { texto: string; entregadoEn: string; aceptado: null | { nombre: string; en: string } };
+  /** FIRMA INCOMPLETA: si el acuse se puede registrar (sin la migración 20260930000001, no, y nada lo exige). */
+  acuseDisponible: boolean;
   /**
    * EN FIRMA con el proceso vivo: la única prórroga del plazo (Adenda 1, respuesta 10).
    * `hasta` = el plazo nuevo si se prorroga ahora; `usadaEn` = cuándo se prorrogó.

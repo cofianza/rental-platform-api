@@ -576,6 +576,8 @@ export async function exigirAcuseAviso(contratoId: string, rol: string): Promise
   if (rol !== 'inmobiliaria') return;
   const s = await ultimoIncompleto(contratoId);
   if (!s) return;
+  const adenda = await leerAdenda(s.id);
+  if (!adenda) return; // sin la migración no hay dónde registrar el acuse: sigue como antes
   if (!avisoEntregado(s)) {
     if (s.aviso_entregado_en) return; // constancia de "omitido": no hubo aviso que aceptar
     throw AppError.conflict(
@@ -583,8 +585,6 @@ export async function exigirAcuseAviso(contratoId: string, rol: string): Promise
       'AVISO_NO_ENTREGADO',
     );
   }
-  const adenda = await leerAdenda(s.id);
-  if (!adenda) return; // sin la migración no hay dónde registrar el acuse: sigue como antes
   if (!adenda.aviso_aceptado_en)
     throw AppError.conflict(
       'Antes de seguir, lee y acepta el aviso de firma incompleta en el contrato: la fianza no está operando.',
@@ -645,7 +645,7 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
   const vivo = c.estado === 'pendiente_firma' && s?.estado === 'en_firma' ? s : null;
   const [adendaVivo, adendaAviso, cal] = await Promise.all([
     vivo ? leerAdenda(vivo.id) : null,
-    aviso ? leerAdenda(aviso.id) : null,
+    incompleto ? leerAdenda(incompleto.id) : null,
     vivo ? getCalibracion() : null,
   ]);
   const acuse = adendaAviso?.aviso_aceptado_en
@@ -699,6 +699,8 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
     aviso: aviso
       ? { texto: String(aviso.aviso_detalle?.texto), entregadoEn: aviso.aviso_entregado_en!, aceptado: acuse }
       : null,
+    // Sin la migración 20260930000001 el acuse no se puede registrar y nada lo exige.
+    acuseDisponible: !!adendaAviso,
     prorroga: vivo && cal ? prorrogaVista(vivo, adendaVivo, vig, cal.DIAS_EXPIRACION_FIRMA) : null,
     identidadPendientes: pendientes,
     // Las mismas puertas que reenviar/reintentar (y la ruta del flag): un botón habilitado nunca recibe un 409.
@@ -735,14 +737,16 @@ function vigenciaDe(c: { fecha_inicio: string | null; duracion_meses: number | n
   };
 }
 
+/** El último sobre incompleto (el del aviso). Falla cerrado: sin leerlo no se sabe si falta el acuse. */
 async function ultimoIncompleto(contratoId: string): Promise<Sobre | null> {
-  const { data } = await db('contrato_v3_sobres')
+  const { data, error } = await db('contrato_v3_sobres')
     .select('id')
     .eq('contrato_id', contratoId)
     .eq('estado', 'incompleto')
     .order('intento', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (error) throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el proceso de firma. Intenta de nuevo en un momento.');
   const fila = data as { id: string } | null;
   return fila ? leerSobre(fila.id) : null;
 }
