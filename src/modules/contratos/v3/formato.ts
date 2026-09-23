@@ -162,7 +162,6 @@ export const FORMATOS: Record<string, Formato> = Object.assign(Object.create(nul
   mm2: { tipo: 'fecha', fn: (iso: string) => dos(fecha(iso).mes) },
   mes: { tipo: 'fecha', fn: (iso: string) => MESES[fecha(iso).mes - 1] },
   anio: { tipo: 'fecha', fn: (iso: string) => String(fecha(iso).anio) },
-  diaLetras: { tipo: 'fecha', fn: (iso: string) => letras(fecha(iso).dia) },
   doc: { tipo: 'texto', fn: (t: string) => doc(t)[0] },
   docLargo: { tipo: 'texto', fn: (t: string) => doc(t)[1] },
 } satisfies Record<string, Formato>);

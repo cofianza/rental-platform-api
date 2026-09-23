@@ -73,10 +73,9 @@ describe('FORMATOS', () => {
     expect(f('pctLetras', 21)).toBe('veintiuno');
   });
 
-  it('letras y diaLetras con apócope', () => {
+  it('letras con apócope', () => {
     expect(f('letras', 21)).toBe('veintiún');
     expect(f('letras', 31)).toBe('treinta y un');
-    expect(f('diaLetras', '2026-10-21')).toBe('veintiún');
     expect(f('meses', 12)).toBe('doce (12) meses');
   });
 
