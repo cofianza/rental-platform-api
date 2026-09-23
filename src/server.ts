@@ -31,6 +31,16 @@ if (env.CONTRATO_VENCIMIENTO_JOB_ENABLED) {
   setInterval(runVencimiento, VENCIMIENTO_INTERVAL_MS).unref();
 }
 
+// Estudios colgados en 'en_proceso' (la API se reinició a mitad de la consulta
+// al buró o falló el registro del resultado). Al arrancar y cada 15 min.
+const ESTUDIOS_COLGADOS_INTERVAL_MS = 15 * 60 * 1000;
+const runEstudiosColgados = () =>
+  import('@/modules/estudios/estudios.service')
+    .then(({ barrerEstudiosEnProcesoColgados }) => barrerEstudiosEnProcesoColgados())
+    .catch((err) => logger.warn({ err }, 'barrerEstudiosEnProcesoColgados: ciclo fallido'));
+runEstudiosColgados();
+setInterval(runEstudiosColgados, ESTUDIOS_COLGADOS_INTERVAL_MS).unref();
+
 // Firma de contratos V3: barrido de respaldo del webhook de Auco (vencimientos,
 // rechazos y firmas cuyo aviso se perdió, procesos cortados por un redeploy,
 // avisos sin entregar). Atado a los datos y NO a CONTRATOS_V3_ENABLED: los

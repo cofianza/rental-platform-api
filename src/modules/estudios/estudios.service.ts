@@ -2440,9 +2440,8 @@ export async function ejecutarEstudio(
 
   // 6. Disparar el provider en background. El frontend hace polling sobre
   //    el estudio (cada 5s) y detecta cuando pase a 'completado' o
-  //    'fallido'. Si el async crash sin manejar, el estudio queda en
-  //    'en_proceso' indefinido — el catch global cubre eso marcándolo
-  //    como fallido para que el solicitante pueda reintentar.
+  //    'fallido'. Si el proceso muere a mitad (reinicio) o el registro falla,
+  //    el estudio queda en 'en_proceso': lo recoge barrerEstudiosEnProcesoColgados.
   procesarEstudioAsync({
     estudioId,
     proveedor: proveedorFinal,
@@ -2599,7 +2598,7 @@ async function procesarEstudioAsync(args: {
         const errMsg = postErr instanceof Error ? postErr.message : String(postErr);
         logger.error(
           { error: errMsg, estudioId },
-          'Falló el registro automático del resultado — el estudio queda en en_proceso, el frontend puede disparar consultarEstadoProveedor',
+          'Falló el registro automático del resultado — el estudio queda en en_proceso hasta el barrido de colgados',
         );
       }
     }
@@ -2767,9 +2766,12 @@ async function avisarEstudioFallido(args: {
   estudioId: string;
   expedienteId: string;
   observaciones: string;
+  titulo?: string;
+  /** Solo a los internos: sin timeline ni responsable (nada que hacer para la agencia). */
+  soloInternos?: boolean;
 }): Promise<void> {
   const { estudioId, expedienteId, observaciones } = args;
-  const titulo = 'Evaluación fallida — requiere revisión';
+  const titulo = args.titulo ?? 'Evaluación fallida — requiere revisión';
   const link = `/expedientes/${expedienteId}`;
   const payload = { estudio_id: estudioId, expediente_id: expedienteId };
   const intentar = async (paso: string, fn: () => Promise<void>) => {
@@ -2784,7 +2786,7 @@ async function avisarEstudioFallido(args: {
   };
 
   // (a) Timeline del expediente, mismo patron que el resto del archivo.
-  await intentar('timeline', async () => {
+  if (!args.soloInternos) await intentar('timeline', async () => {
     const { error } = await (supabase
       .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .insert({
@@ -2798,7 +2800,7 @@ async function avisarEstudioFallido(args: {
   });
 
   // (b) Miembro responsable del expediente (no-op si no hay).
-  await intentar('responsable', () =>
+  if (!args.soloInternos) await intentar('responsable', () =>
     notificarResponsableExpediente({ expedienteId, tipo: 'estudio.fallido', titulo, mensaje: observaciones, link, payload }),
   );
 
@@ -2815,6 +2817,66 @@ async function avisarEstudioFallido(args: {
       ids.map((userId) => notificarUsuario({ userId, tipo: 'estudio.fallido', titulo, mensaje: observaciones, link, payload })),
     );
   });
+}
+
+/** Sin movimiento en este tiempo, una consulta 'en_proceso' se da por cortada (el buró tarda segundos). */
+const MINUTOS_EN_PROCESO_COLGADO = 10;
+const OBS_CONSULTA_INTERRUMPIDA =
+  'La consulta al buró se interrumpió. No es un rechazo de crédito: vuelve a intentarla.';
+const OBS_RESULTADO_SIN_REGISTRAR =
+  'El buró respondió, pero el resultado no se registró solo. Un analista de Cofianza lo registra con «Registrar resultado».';
+
+/**
+ * Red de seguridad de procesarEstudioAsync (corre desde server.ts). Un reinicio
+ * de la API a mitad de la consulta (cada push a main deploya) o un fallo al
+ * registrar el resultado dejaban el estudio en 'en_proceso' para siempre: sin
+ * aviso, sin reintento (ESTADOS_PERMITIDOS_EJECUCION no lo incluye) y con la
+ * tarjeta prometiendo el resultado "en minutos".
+ *  - Sin respuesta del buró guardada: pasa a 'fallido' y se avisa, así el
+ *    gestor puede reintentar.
+ *  - Con respuesta guardada: se queda en 'en_proceso' (reintentar facturaría
+ *    otra consulta) y se avisa UNA vez a los internos para registrarlo a mano.
+ * Los dos UPDATE son CAS: una API que termina tarde o dos instancias no pisan nada.
+ */
+export async function barrerEstudiosEnProcesoColgados(): Promise<void> {
+  const limite = new Date(Date.now() - MINUTOS_EN_PROCESO_COLGADO * 60 * 1000).toISOString();
+  const tabla = () => supabase.from('estudios' as string) as ReturnType<typeof supabase.from>;
+  const { data, error } = await tabla()
+    .select('id, expediente_id, updated_at, observaciones, respuesta_proveedor')
+    .eq('estado', 'en_proceso')
+    .lt('updated_at', limite);
+  if (error) {
+    logger.warn({ error: error.message }, 'barrerEstudiosEnProcesoColgados: no se pudo leer');
+    return;
+  }
+
+  const filas = (data ?? []) as Array<{
+    id: string;
+    expediente_id: string;
+    updated_at: string;
+    observaciones: string | null;
+    respuesta_proveedor: unknown;
+  }>;
+  for (const e of filas) {
+    const conRespuesta = e.respuesta_proveedor !== null && e.respuesta_proveedor !== undefined;
+    if (conRespuesta && e.observaciones === OBS_RESULTADO_SIN_REGISTRAR) continue; // ya avisado
+
+    const observaciones = conRespuesta ? OBS_RESULTADO_SIN_REGISTRAR : OBS_CONSULTA_INTERRUMPIDA;
+    let cas = tabla()
+      .update((conRespuesta ? { observaciones } : { estado: 'fallido', observaciones }) as never)
+      .eq('id', e.id)
+      .eq('estado', 'en_proceso');
+    if (conRespuesta) cas = cas.eq('updated_at', e.updated_at);
+    const { data: tomadas, error: casErr } = await cas.select('id');
+    if (casErr || !tomadas || tomadas.length === 0) continue;
+
+    logger.warn({ estudioId: e.id, conRespuesta }, 'Estudio colgado en en_proceso: barrido');
+    await avisarEstudioFallido(
+      conRespuesta
+        ? { estudioId: e.id, expedienteId: e.expediente_id, observaciones, titulo: 'Evaluación sin registrar — requiere revisión', soloInternos: true }
+        : { estudioId: e.id, expedienteId: e.expediente_id, observaciones },
+    );
+  }
 }
 
 // ============================================================
