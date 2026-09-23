@@ -143,7 +143,7 @@ interface CertificatePdfData {
   score: number | null;
   proveedor: string;
   fechaEstudio: string;
-  duracionContrato: number;
+  duracionContrato: number | null;
   observaciones: string | null;
   condiciones: string | null;
   // §10.1 — "Certificado de Riesgo Cofianza (CRC) descargable, con su numero,
@@ -222,7 +222,7 @@ export async function generateCertificatePdf(
     // documento, que es donde el documento los pone.
     doc.roundedRect(50, y, contentWidth, 46, 4).fill('#f0fdfa');
     doc.fontSize(8).font('Helvetica').fillColor('#6b7280');
-    doc.text('NUMERO DEL CERTIFICADO', 60, y + 8);
+    doc.text('NÚMERO DEL CERTIFICADO', 60, y + 8);
     doc.text('VIGENTE HASTA', 60 + contentWidth / 2, y + 8);
     doc.fontSize(13).font('Helvetica-Bold').fillColor(TEAL as unknown as string);
     doc.text(data.codigo, 60, y + 21);
@@ -230,7 +230,7 @@ export async function generateCertificatePdf(
     y += 54;
 
     doc.fontSize(9).font('Helvetica').fillColor('#374151');
-    doc.text(`Fecha de emision: ${formatDate(data.fechaEmision)}`, 50, y, {
+    doc.text(`Fecha de emisión: ${formatDate(data.fechaEmision)}`, 50, y, {
       width: contentWidth,
       align: 'right',
     });
@@ -241,10 +241,10 @@ export async function generateCertificatePdf(
     y = drawSectionTitle(doc, 'DATOS DEL SOLICITANTE', y, contentWidth);
     const solicitanteRows = [
       ['Nombre completo', `${data.solicitanteNombre} ${data.solicitanteApellido}`],
-      ['Tipo de documento', data.solicitanteTipoDoc],
-      ['Numero de documento', data.solicitanteNumDoc],
+      ['Tipo de documento', data.solicitanteTipoDoc.toUpperCase()],
+      ['Número de documento', data.solicitanteNumDoc],
       ['Email', data.solicitanteEmail],
-      ['Telefono', data.solicitanteTelefono],
+      ['Teléfono', data.solicitanteTelefono],
       ['Tipo de estudio', data.tipoEstudio === 'individual' ? 'Individual' : 'Con coarrendatario'],
     ];
     y = drawTable(doc, solicitanteRows, y, contentWidth);
@@ -254,15 +254,15 @@ export async function generateCertificatePdf(
     // ---- SECTION: INMUEBLE ----
     y = drawSectionTitle(doc, 'DATOS DEL INMUEBLE', y, contentWidth);
     const inmuebleRows = [
-      ['Direccion', data.inmuebleDireccion],
+      ['Dirección', data.inmuebleDireccion],
       ['Ciudad / Departamento', `${data.inmuebleCiudad}, ${data.inmuebleDepartamento}`],
       ['Tipo', data.inmuebleTipo],
       ['Uso', data.inmuebleUso],
     ];
     if (data.inmuebleEstrato) inmuebleRows.push(['Estrato', String(data.inmuebleEstrato)]);
     if (data.inmuebleValorArriendo) inmuebleRows.push(['Canon de arriendo', formatCurrency(data.inmuebleValorArriendo)]);
-    if (data.inmuebleArea) inmuebleRows.push(['Area (m²)', String(data.inmuebleArea)]);
-    if (data.inmuebleCodigo) inmuebleRows.push(['Codigo inmueble', data.inmuebleCodigo]);
+    if (data.inmuebleArea) inmuebleRows.push(['Área (m²)', String(data.inmuebleArea)]);
+    if (data.inmuebleCodigo) inmuebleRows.push(['Código del inmueble', data.inmuebleCodigo]);
     y = drawTable(doc, inmuebleRows, y, contentWidth);
 
     y += 10;
@@ -279,9 +279,9 @@ export async function generateCertificatePdf(
 
     const resultRows = [];
     if (data.score != null) resultRows.push(['Score', String(data.score)]);
-    resultRows.push(['Proveedor', data.proveedor.toUpperCase()]);
+    resultRows.push(['Proveedor', data.proveedor]);
     resultRows.push(['Fecha del estudio', formatDate(data.fechaEstudio)]);
-    resultRows.push(['Duracion contrato', `${data.duracionContrato} meses`]);
+    if (data.duracionContrato != null) resultRows.push(['Duración del contrato', `${data.duracionContrato} meses`]);
     if (data.rutaEtiqueta) resultRows.push(['Perfil', data.rutaEtiqueta]);
     if (data.observaciones) resultRows.push(['Observaciones', data.observaciones]);
     if (data.condiciones) resultRows.push(['Condiciones', data.condiciones]);
@@ -304,10 +304,10 @@ export async function generateCertificatePdf(
         ['Canon evaluado', formatCurrency(data.canonEvaluado)],
       ];
       if (data.canonMaximoTolerado != null) {
-        condRows.push(['Canon maximo amparado', formatCurrency(data.canonMaximoTolerado)]);
+        condRows.push(['Canon máximo amparado', formatCurrency(data.canonMaximoTolerado)]);
       }
       condRows.push([
-        'Acompanante',
+        'Acompañante',
         data.coarrendatarioVinculado
           ? 'Vinculado: este CRC ampara el contrato presentado con coarrendatario'
           : data.requiereAcompanante
@@ -319,19 +319,19 @@ export async function generateCertificatePdf(
         const t = data.tarifas;
         const via =
           t.via === 'automatica'
-            ? 'aprobacion automatica'
+            ? 'aprobación automática'
             : t.via === 'condicionada_coarrendatario'
-              ? 'aprobacion condicionada con coarrendatario'
-              : 'aprobacion tras revision manual';
+              ? 'aprobación condicionada con coarrendatario'
+              : 'aprobación tras revisión manual';
         condRows.push([
           'Tarifa mensual de la fianza',
-          `${t.tarifa_mensual_pct}% del canon mas IVA (${via})` +
+          `${t.tarifa_mensual_pct}% del canon más IVA (${via})` +
             (t.tarifa_mensual_cop != null ? ` = ${formatCurrency(t.tarifa_mensual_cop)} + IVA` : '') +
             (t.negociada ? ' — condiciones especiales autorizadas' : ''),
         ]);
         condRows.push([
-          'Prima de vinculacion',
-          `${t.prima_vinculacion_pct}% del canon, pago unico al activar` +
+          'Prima de vinculación',
+          `${t.prima_vinculacion_pct}% del canon, pago único al activar` +
             (t.prima_vinculacion_cop != null ? ` = ${formatCurrency(t.prima_vinculacion_cop)}` : ''),
         ]);
         condRows.push([
@@ -347,9 +347,9 @@ export async function generateCertificatePdf(
       // saber antes de firmar.
       doc.fontSize(7).font('Helvetica').fillColor('#6b7280');
       doc.text(
-        `Este certificado ampara contratos cuyo canon no supere en mas de ${PORTABILIDAD_TOLERANCIA_PCT}% el canon evaluado, ` +
-          'siempre que la relacion canon/ingreso recalculada se mantenga en o por debajo del 40%. ' +
-          'Si el canon excede esa tolerancia se requiere una nueva evaluacion.',
+        `Este certificado ampara contratos cuyo canon no supere en más de ${PORTABILIDAD_TOLERANCIA_PCT}% el canon evaluado, ` +
+          'siempre que la relación canon/ingreso recalculada se mantenga en o por debajo del 40%. ' +
+          'Si el canon excede esa tolerancia se requiere una nueva evaluación.',
         50,
         y + 4,
         { width: contentWidth },
@@ -367,14 +367,14 @@ export async function generateCertificatePdf(
     // CRC emitido". Ahora imprime siempre.
     const trazaRows: string[][] = [];
     if (data.fuentesConsultadas) trazaRows.push(['Fuentes consultadas', data.fuentesConsultadas]);
-    if (data.decisionCascada) trazaRows.push(['Decision de cascada', data.decisionCascada]);
+    if (data.decisionCascada) trazaRows.push(['Decisión de cascada', data.decisionCascada]);
     if (data.denominadorPuntaje) trazaRows.push(['Denominador del puntaje', `${data.denominadorPuntaje} (Adenda 2 §4.3)`]);
     if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {
       trazaRows.push(['Factor de ajuste de ingreso', `x${data.factorAjusteIngreso} (Adenda 1 §1.1)`]);
     }
-    trazaRows.push(['Version del modelo', data.modeloVersion]);
+    trazaRows.push(['Versión del modelo', data.modeloVersion]);
     y = asegurarEspacio(doc, y, 22 + trazaRows.length * 22);
-    y = drawSectionTitle(doc, 'TRAZABILIDAD DE LA EVALUACION', y, contentWidth);
+    y = drawSectionTitle(doc, 'TRAZABILIDAD DE LA EVALUACIÓN', y, contentWidth);
     y = drawTable(doc, trazaRows, y, contentWidth);
 
     y += 15;
@@ -385,10 +385,10 @@ export async function generateCertificatePdf(
     doc.image(qrBuffer, 50, y, { width: 100, height: 100 });
 
     doc.fontSize(9).font('Helvetica-Bold').fillColor('#374151');
-    doc.text('Verificacion de autenticidad', 165, y);
+    doc.text('Verificación de autenticidad', 165, y);
     doc.fontSize(8).font('Helvetica').fillColor('#6b7280');
     doc.text(
-      'Escanee el codigo QR o visite la siguiente URL para verificar la autenticidad de este certificado:',
+      'Escanee el código QR o visite la siguiente URL para verificar la autenticidad de este certificado:',
       165,
       y + 14,
       { width: contentWidth - 115 },
@@ -403,12 +403,12 @@ export async function generateCertificatePdf(
     y += 10;
 
     doc.fontSize(7).font('Helvetica').fillColor('#9ca3af');
-    doc.text(`Valido hasta: ${formatDate(data.fechaVencimiento)}`, 50, y);
+    doc.text(`Válido hasta: ${formatDate(data.fechaVencimiento)}`, 50, y);
     y += 12;
     doc.text(
-      'Este certificado es generado electronicamente por Cofianza S.A.S. y tiene validez como documento informativo. ' +
-      'La informacion contenida proviene de centrales de riesgo crediticio autorizadas. ' +
-      'Para verificar su autenticidad, escanee el codigo QR o visite la URL indicada.',
+      'Este certificado es generado electrónicamente por Cofianza S.A.S. y tiene validez como documento informativo. ' +
+      'La información contenida proviene de centrales de riesgo crediticio autorizadas. ' +
+      'Para verificar su autenticidad, escanee el código QR o visite la URL indicada.',
       50,
       y,
       { width: contentWidth },
@@ -551,7 +551,7 @@ export async function generarCertificado(
     .select(`
       *,
       expedientes!estudios_expediente_id_fkey(
-        numero, estado,
+        numero, estado, duracion_contrato_meses,
         solicitantes!expedientes_solicitante_id_fkey(
           nombre, apellido, tipo_documento, numero_documento, email, telefono
         ),
@@ -734,7 +734,7 @@ export async function generarCertificado(
   // `decision_cascada` es la traza que escribe decidirConCascada (Adenda §2);
   // `decision` (la del modelo) queda de respaldo para trazas anteriores.
   const etiquetaBuro = (id: unknown) =>
-    id === 'datacredito' ? 'DataCredito' : id === 'transunion' ? 'TransUnion' : id ? String(id) : null;
+    id === 'datacredito' ? 'DataCrédito' : id === 'transunion' ? 'TransUnion' : id ? String(id) : null;
   const fuentes = [etiquetaBuro(e.proveedor), etiquetaBuro(e.proveedor_secundario)].filter((x): x is string => !!x);
   const cascada = (e.cascada && typeof e.cascada === 'object' ? (e.cascada as Record<string, unknown>) : null);
   const decisionCascada =
@@ -772,9 +772,10 @@ export async function generarCertificado(
     inmuebleCodigo: (inmueble.codigo as string) || null,
     resultado: resultadoEfectivo,
     score: (e.score as number) ?? null,
-    proveedor: e.proveedor as string,
+    proveedor: e.proveedor === 'manual' ? 'Registro manual' : (etiquetaBuro(e.proveedor) ?? ''),
     fechaEstudio: (e.fecha_completado as string) || (e.created_at as string),
-    duracionContrato: e.duracion_contrato_meses as number,
+    // El asistente de habilitación guarda la duración solo en el expediente.
+    duracionContrato: (e.duracion_contrato_meses as number | null) ?? (expediente.duracion_contrato_meses as number | null) ?? null,
     observaciones: (e.observaciones as string) || null,
     condiciones: (e.condiciones as string) || null,
     // §10.1 — condiciones economicas. El canon evaluado es el CONGELADO con el
