@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { assertStorageKeyPropia } from '@/lib/storageKey';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -256,7 +257,8 @@ export async function confirmarSubida(
     );
   }
 
-  // 3. Verify file exists in storage
+  // 3. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio)
+  assertStorageKeyPropia(input.storage_key, `expedientes/${input.expediente_id}/documents/`);
   const { error: verifyError } = await supabase.storage
     .from(BUCKET_NAME)
     .createSignedUrl(input.storage_key, 60);
@@ -1104,7 +1106,8 @@ export async function confirmarReemplazo(
   // (no-op para roles internos / llamadas sin identidad).
   await assertExpedienteAccess(doc.expediente_id, userId, userRol);
 
-  // 2. Verify file exists in storage
+  // 2. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio)
+  assertStorageKeyPropia(input.storage_key, `expedientes/${doc.expediente_id}/documents/`);
   const { error: verifyError } = await supabase.storage
     .from(BUCKET_NAME)
     .createSignedUrl(input.storage_key, 60);

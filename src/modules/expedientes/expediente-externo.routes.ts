@@ -19,7 +19,7 @@ router.post(
   async (req: Request, res: Response) => {
     const input = req.body as CrearExpedienteExternoInput;
     const ip = req.ip;
-    const expediente = await crearExpedienteExterno(input, req.user!.id, ip);
+    const expediente = await crearExpedienteExterno(input, req.user!.id, req.user!.rol, ip);
     sendCreated(res, expediente);
   },
 );

@@ -50,7 +50,6 @@ import reportesRouter from '@/modules/reportes/reportes.routes';
 import adminToolsRouter from '@/modules/admin-tools/admin-tools.routes';
 import calibracionRouter from '@/modules/calibracion/calibracion.routes';
 import documentosLegalesRouter from '@/modules/documentos-legales/documentos-legales.routes';
-import whatsappRouter from '@/modules/whatsapp/whatsapp.routes';
 import morasRouter, { morasCronRouter } from '@/modules/moras/moras.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
 import { interesadosRouter } from '@/modules/interesados/interesados.routes';
@@ -203,9 +202,8 @@ app.use('/api/v1/soporte', soporteRouter);
 // RUT, matricula, cedula RL, poder, poliza, contrato marco).
 app.use('/api/v1/documentos-legales', documentosLegalesRouter);
 
-// WhatsApp (Meta Business Cloud) — provider mock por ahora, integracion
-// real pendiente. (Mario 12-may-2026)
-app.use('/api/v1/whatsapp', whatsappRouter);
+// WhatsApp: sin ruta pública. Se envía solo desde los flujos del API (enviarTemplate);
+// el antiguo POST /whatsapp/enviar dejaba mandar cualquier plantilla a cualquier número.
 
 // Reportar Mora — modulo de 3 fases (Mario 12-may-2026, mockup 13_*propietario.html).
 app.use('/api/v1/moras', morasRouter);

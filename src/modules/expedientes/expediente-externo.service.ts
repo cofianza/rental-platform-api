@@ -5,7 +5,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendExpedienteInvitacionEmail } from '../orchestrator/orchestrator.emails';
-import { esMiembroNoOwnerDeOrg } from '@/lib/tenantScope';
+import { assertInmuebleAccess, esMiembroNoOwnerDeOrg } from '@/lib/tenantScope';
 import type { CrearExpedienteExternoInput } from './expediente-externo.schema';
 
 // ── Type-safe Supabase helper (same pattern as rest of project) ──
@@ -15,8 +15,17 @@ const db = (table: string) => (supabase.from(table as string) as ReturnType<type
 // Crear Expediente Externo (invitacion)
 // ============================================================
 
-export async function crearExpedienteExterno(input: CrearExpedienteExternoInput, userId: string, ip?: string) {
+export async function crearExpedienteExterno(
+  input: CrearExpedienteExternoInput,
+  userId: string,
+  userRol?: string,
+  ip?: string,
+) {
   const { inmueble_id, email_invitacion, notas } = input;
+
+  // Solo sobre inmuebles de la cartera propia: el estudio hereda su inmobiliaria_id
+  // y el correo lleva la dirección exacta (la vitrina la oculta). Mismo guard que createExpediente.
+  await assertInmuebleAccess(inmueble_id, userId, userRol);
 
   // 1. Validar que el inmueble existe
   const { data: inmueble, error: inmuebleError } = await db('inmuebles')

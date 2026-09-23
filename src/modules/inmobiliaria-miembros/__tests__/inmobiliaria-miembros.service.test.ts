@@ -43,7 +43,7 @@ vi.mock('@/lib/auditLog', () => ({
 vi.mock('../../orchestrator/orchestrator.emails', () => ({ sendInvitacionMiembroEmail: vi.fn() }));
 vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(async () => {}) }));
 
-import { cambiarRolMiembro, salirDeOrg, revocarMiembro } from '../inmobiliaria-miembros.service';
+import { adminRevocarMiembro, cambiarRolMiembro, salirDeOrg, revocarMiembro } from '../inmobiliaria-miembros.service';
 
 const ownerMembership = {
   data: {
@@ -125,5 +125,46 @@ describe('revocarMiembro — protección del último titular', () => {
       { count: 1 }, // contarOwnersActivos
     );
     await expect(revocarMiembro('p-self', 'm-owner2')).rejects.toMatchObject({ errorCode: 'ULTIMO_OWNER' });
+  });
+});
+
+describe('quitar un miembro le quita la cartera (sus inmuebles pasan a la titular)', () => {
+  const updates = () =>
+    (chain.update as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as Record<string, unknown>);
+
+  it('desde el panel de Cofianza también reapunta sus inmuebles, y renombra el código que choca', async () => {
+    enqueue(
+      { data: { id: 'org1', nombre: 'X' } }, // getOrgOrThrow
+      { data: { id: 'm-x', rol_miembro: 'miembro', perfil_id: 'p-x', estado: 'activo', inmobiliaria_id: 'org1' } },
+      { error: null }, // update estado revocado
+      { error: null }, // liberar inmuebles
+      { error: null }, // liberar expedientes
+      { data: { owner_perfil_id: 'p-owner' } }, // titular de la org
+      { data: [{ id: 'aaaaaaaa-1', codigo: 'APT-1' }, { id: 'bbbbbbbb-2', codigo: 'APT-9' }] }, // los del saliente
+      { data: [{ codigo: 'APT-1' }] }, // los de la titular
+      { error: null }, // update inmueble 1
+      { error: null }, // update inmueble 2
+    );
+    await adminRevocarMiembro('admin', 'org1', 'm-x');
+    const reapuntados = updates().filter((u) => u.propietario_id === 'p-owner');
+    expect(reapuntados).toEqual([
+      { propietario_id: 'p-owner', codigo: 'APT-1-aaaa' },
+      { propietario_id: 'p-owner' },
+    ]);
+  });
+
+  it('si no se pueden mover sus inmuebles, falla en vez de decir que quedó fuera', async () => {
+    enqueue(
+      { data: { id: 'org1', nombre: 'X' } },
+      { data: { id: 'm-x', rol_miembro: 'miembro', perfil_id: 'p-x', estado: 'activo', inmobiliaria_id: 'org1' } },
+      { error: null },
+      { error: null },
+      { error: null },
+      { data: { owner_perfil_id: 'p-owner' } },
+      { data: [{ id: 'aaaaaaaa-1', codigo: 'APT-1' }] },
+      { data: [] },
+      { error: { message: 'caída' } },
+    );
+    await expect(adminRevocarMiembro('admin', 'org1', 'm-x')).rejects.toMatchObject({ errorCode: 'INMUEBLES_NO_REASIGNADOS' });
   });
 });

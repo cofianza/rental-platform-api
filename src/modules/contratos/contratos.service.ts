@@ -11,7 +11,8 @@ import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notific
 import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
 import { checkPerfilCompletitud } from '../perfil-arrendador/perfil-arrendador.service';
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
-import { destinacionParaContrato } from '../inmuebles/destinacion';
+import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
+import { canonMaximoTolerado } from '../estudios/portabilidad';
 import { getCalibracion } from '@/lib/calibracion';
 import type {
   GenerarContratoInput,
@@ -1767,6 +1768,42 @@ async function tarifasParaContrato(expedienteId: string): Promise<Tarifas> {
   });
 }
 
+/**
+ * El canon que se contrata no puede pasar el canon con el que se hizo la
+ * evaluación más la tolerancia (TOLERANCIA_CANON: la misma del CRC y del
+ * asistente V3), ni el tope de la destinación. Sin esto, subir el canon del
+ * inmueble entre la aprobación y el contrato afianzaba un canon que nunca pasó
+ * por el buró ni por la regla canon/ingreso. Estudios anteriores al canon
+ * congelado (canon_evaluado NULL): no hay con qué comparar y no se bloquean.
+ */
+export async function assertCanonContratable(expedienteId: string, canonCop: number, uso: string | null | undefined): Promise<void> {
+  const [{ data }, cal] = await Promise.all([
+    (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('canon_evaluado')
+      .eq('expediente_id', expedienteId)
+      .eq('tipo', 'individual')
+      .eq('estado', 'completado')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    getCalibracion(),
+  ]);
+  const evaluado = Number((data as { canon_evaluado?: unknown } | null)?.canon_evaluado) || 0;
+  if (evaluado <= 0) return;
+  const tolerado = canonMaximoTolerado(evaluado, cal.TOLERANCIA_CANON);
+  const tope = Number(topeCanonPara(uso, cal).topeCop);
+  // Un tope mal leído no apaga el control: queda la tolerancia.
+  const maximo = Math.max(evaluado, Math.floor(Number.isFinite(tope) && tope > 0 ? Math.min(tolerado, tope) : tolerado));
+  if (canonCop > maximo) {
+    const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+    throw AppError.conflict(
+      `El canon del contrato (${cop(canonCop)}) supera lo evaluado (${cop(evaluado)}); el máximo sin una nueva evaluación es ${cop(maximo)}. ` +
+        'Ajusta el canon del inmueble o habilita una nueva evaluación desde el estudio.',
+      'CANON_REQUIERE_NUEVA_EVALUACION',
+    );
+  }
+}
+
 /** Regex UUID v4 — para evitar que strings como 'system' rompan la FK a perfiles. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function uuidOrNull(v: string | null | undefined): string | null {
@@ -1924,6 +1961,9 @@ export async function generarContrato(
   // ABORTA (la funcion lanza). Ese es el punto donde vive ahora la proteccion
   // contra el doble arriendo, despues de que §4.2 quitara el bloqueo del
   // inicio del flujo.
+  // Antes de reservar: un canon que no se evaluó no llega a apartar el inmueble.
+  await assertCanonContratable(expedienteId, Number(expData.inmueble.valor_arriendo) || 0, expData.inmueble.uso);
+
   const { reservarInmuebleParaContrato } = await import('@/modules/inmuebles/inmuebles.service');
   const reserva = await reservarInmuebleParaContrato(expedienteId);
 
@@ -2616,6 +2656,9 @@ export async function regenerarContrato(
       );
     }
   }
+
+  // Además del 10 %: nunca por encima de lo evaluado + tolerancia ni del tope.
+  if (input.valor_arriendo) await assertCanonContratable(row.expediente_id, input.valor_arriendo, expData.inmueble?.uso);
 
   // Canon efectivo: si el caller NO reenvía valor_arriendo, conservamos el canon
   // ya pactado en el contrato (row.valor_arriendo) en vez de revertir al valor

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { assertStorageKeyPropia } from '@/lib/storageKey';
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -1586,8 +1587,9 @@ export async function registrarResultado(
     );
   }
 
-  // 2. If certificado_storage_key provided, verify it exists in storage
+  // 2. If certificado_storage_key provided, verify it exists in storage (y que sea de este estudio)
   if (input.certificado_storage_key) {
+    assertStorageKeyPropia(input.certificado_storage_key, `estudios/${estudioId}/certificado/`);
     const { error: storageError } = await supabase.storage
       .from(BUCKET_NAME)
       .createSignedUrl(input.certificado_storage_key, 60);
@@ -2928,7 +2930,8 @@ export async function confirmarSoporteUpload(
     );
   }
 
-  // 2. Verify file exists in storage
+  // 2. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio)
+  assertStorageKeyPropia(input.storage_key, `estudios/${estudioId}/soporte/`);
   const { error: storageError } = await supabase.storage
     .from(BUCKET_NAME)
     .createSignedUrl(input.storage_key, 60);

@@ -16,6 +16,7 @@
 // ============================================================
 
 import crypto from 'crypto';
+import { assertStorageKeyPropia } from '@/lib/storageKey';
 import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -256,7 +257,8 @@ export async function confirmarSoporte(
   }
 
   // Verificar que el archivo realmente existe en storage (anti-spoof: el
-  // cliente podría confirmar sin haber subido nada).
+  // cliente podría confirmar sin haber subido nada) y que sea de este estudio.
+  assertStorageKeyPropia(input.storage_key, `expedientes/${expedienteId}/soportes/`);
   const { error: existsErr } = await supabase.storage
     .from(BUCKET_NAME)
     .createSignedUrl(input.storage_key, 60);
@@ -584,6 +586,7 @@ export async function confirmarSoportePublico(
     throw AppError.badRequest('Este estudio ya no admite cargar documentos.', 'EXPEDIENTE_NO_CONDICIONADO');
   }
 
+  assertStorageKeyPropia(input.storage_key, `expedientes/${ctx.expedienteId}/soportes/`);
   const { error: existsErr } = await supabase.storage.from(BUCKET_NAME).createSignedUrl(input.storage_key, 60);
   if (existsErr) {
     throw AppError.badRequest('El archivo no se encontró en storage. Súbelo primero antes de confirmar.', 'ARCHIVO_NOT_FOUND');

@@ -140,7 +140,12 @@ async function liberarResponsablesDeMiembro(orgId: string, perfilId: string): Pr
  * perfil canónico de la org, que se resuelve por membresía ACTIVA; al salir el
  * miembro ya no la tiene, así que sin esto sus inmuebles quedarían "huérfanos"
  * de datos de contrato. El inmueble sigue en la cartera (inmobiliaria_id intacto).
- * NO se llama en cambios de rol (el miembro sigue activo). Best-effort.
+ * NO se llama en cambios de rol (el miembro sigue activo).
+ *
+ * Además es lo que le QUITA la cartera: con propietario_id = él, tenantScope le
+ * seguiría dando esos inmuebles y sus estudios. Por eso no es best-effort: si no
+ * se puede, lanza. El código es único por propietario (UNIQUE propietario_id,
+ * codigo): uno que choque con los de la titular se renombra con un sufijo.
  */
 async function reapuntarInmueblesDeMiembroSaliente(orgId: string, perfilId: string): Promise<void> {
   const { data: orgRow } = await db('inmobiliarias')
@@ -151,12 +156,31 @@ async function reapuntarInmueblesDeMiembroSaliente(orgId: string, perfilId: stri
   // Si el saliente ERA el titular principal, reapuntarTitularPrincipalSiNecesario
   // ya movió owner_perfil_id a otro owner antes de llamarnos.
   if (!ownerId || ownerId === perfilId) return;
-  const { error } = await db('inmuebles')
-    .update({ propietario_id: ownerId } as never)
-    .eq('inmobiliaria_id', orgId)
-    .eq('propietario_id', perfilId);
-  if (error) {
-    logger.warn({ error: error.message, orgId, perfilId }, 'No se pudieron reapuntar inmuebles del miembro saliente');
+  const falla = () =>
+    new AppError(
+      500,
+      'INMUEBLES_NO_REASIGNADOS',
+      'La persona quedó fuera del equipo, pero no se pudieron pasar sus inmuebles a la titular. Intenta de nuevo.',
+    );
+  const [suyosR, titularR] = await Promise.all([
+    db('inmuebles').select('id, codigo').eq('inmobiliaria_id', orgId).eq('propietario_id', perfilId),
+    db('inmuebles').select('codigo').eq('propietario_id', ownerId),
+  ]);
+  if (suyosR.error || titularR.error) throw falla();
+  const suyos = (suyosR.data as { id: string; codigo: string | null }[] | null) ?? [];
+  const usados = new Set(((titularR.data as { codigo: string | null }[] | null) ?? []).map((i) => i.codigo));
+  for (const inm of suyos) {
+    let codigo = inm.codigo;
+    for (let n = 4; codigo !== null && usados.has(codigo); n += 2) codigo = `${inm.codigo}-${inm.id.slice(0, n)}`;
+    usados.add(codigo);
+    const { error } = await db('inmuebles')
+      .update({ propietario_id: ownerId, ...(codigo !== inm.codigo ? { codigo } : {}) } as never)
+      .eq('id', inm.id)
+      .eq('propietario_id', perfilId);
+    if (error) {
+      logger.error({ error: error.message, orgId, perfilId, inmuebleId: inm.id }, 'No se pudo reapuntar un inmueble del miembro saliente');
+      throw falla();
+    }
   }
 }
 
@@ -1179,6 +1203,9 @@ export async function adminRevocarMiembro(
     if (row.rol_miembro === 'owner') {
       await reapuntarTitularPrincipalSiNecesario(orgId, row.perfil_id);
     }
+    // Igual que revocarMiembro y salirDeOrg: sin esto el exmiembro seguía viendo y
+    // editando los inmuebles que registró (propietario_id = él) y sus estudios.
+    await reapuntarInmueblesDeMiembroSaliente(orgId, row.perfil_id);
   }
 
   logAudit({
