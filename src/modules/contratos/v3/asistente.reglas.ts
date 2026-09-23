@@ -670,12 +670,6 @@ export const bloqueoNoImprimible = (rutas: string[]): Bloqueo => ({
 export function avisosDePendientes(pendientes: { id: string }[]): string[] {
   const ids = pendientes.map((p) => p.id);
   const avisos: string[] = [];
-  if (ids.includes('b'))
-    avisos.push('Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de aprobación de Cofianza.');
-  if (ids.includes('d'))
-    avisos.push(
-      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de aprobación de Cofianza.',
-    );
   // a-… son los del Anexo de la Ruta B.
   const singulares = ids.filter((i) => /^(a-)?c-/.test(i)).length;
   if (singulares)
@@ -699,15 +693,13 @@ export function avisosDePendientes(pendientes: { id: string }[]): string[] {
 export function textosPendientesPrevistos(f: Fuentes, a: Asistente, sinAprobar: ReadonlySet<string>): string[] {
   const docs = [f.solicitante.tipo_documento, f.coarrendatario?.tipo_documento];
   const ids = [...sinAprobar].filter((id) =>
-    id === 'b'
+    /^b-/.test(id)
       ? a.paso1?.modalidad === 'tradicional'
-      : id === 'd'
-        ? a.paso2?.propiedadHorizontal === false
-        : /^(a-)?c-/.test(id)
-          ? !f.coarrendatario
-          : /^(a-)?j-/.test(id)
-            ? docs.some((t) => !!t && t !== 'cc')
-            : false,
+      : /^(a-)?c-/.test(id)
+        ? !f.coarrendatario
+        : /^(a-)?j-/.test(id)
+          ? docs.some((t) => !!t && t !== 'cc')
+          : false,
   );
   return avisosDePendientes(ids.map((id) => ({ id })));
 }

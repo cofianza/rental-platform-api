@@ -409,7 +409,6 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
       guardados: pasosDe(a),
       prefill: prefill(f, hoy, cal),
       textosPendientes: textosPendientesPrevistos(f, a, SIN_APROBAR[a.paso1?.ruta ?? 'A']),
-      textosSinAprobar: { tradicional: SIN_APROBAR.A.has('b'), sinPropiedadHorizontal: SIN_APROBAR.A.has('d') },
       modalidadConvenio: f.modalidadFianzaDefecto,
       faltantes: falta,
       documento: doc

@@ -460,10 +460,11 @@ describe('armarDatosVivienda → renderizarVivienda (revisión, sin Chromium)', 
     expect(render(fuentes(), PASOS).pendientes).toEqual([]);
   });
 
-  it('sin coarrendatario + sin PH + Tradicional → pendientes b, d y c-*', () => {
-    const ids = render(fuentes(SOLO), PASOS_SOLO).pendientes.map((p) => p.id);
-    expect(ids).toEqual(expect.arrayContaining(['b', 'd']));
-    expect(ids.some((i) => i.startsWith('c-'))).toBe(true);
+  it('sin coarrendatario + sin PH + Tradicional → pendientes b-* y c-*, sin PENDIENTE de texto', () => {
+    const { pendientes } = render(fuentes(SOLO), PASOS_SOLO);
+    expect(pendientes.some((p) => p.id.startsWith('b-'))).toBe(true);
+    expect(pendientes.some((p) => p.id.startsWith('c-'))).toBe(true);
+    expect(pendientes.every((p) => p.tipo === 'borrador')).toBe(true);
   });
 
   it('la cuenta sale "de ahorros" y el NIT con su DV una sola vez', () => {
@@ -544,14 +545,6 @@ describe('avisosDePendientes', () => {
   });
 
   it('un aviso por prefijo, más el cierre', () => {
-    expect(avisos('b')).toEqual([
-      'Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de aprobación de Cofianza.',
-      CIERRE,
-    ]);
-    expect(avisos('d')).toEqual([
-      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de aprobación de Cofianza.',
-      CIERRE,
-    ]);
     // Los del Anexo (Ruta B) llevan el prefijo a-.
     expect(avisos('a-c-01', 'a-j-firma-coa')).toEqual([
       'Sin coarrendatario: 1 ajustes de redacción en singular pendientes de aprobación.',
@@ -678,17 +671,17 @@ describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () =>
 });
 
 describe('textosPendientesPrevistos', () => {
-  const sinAprobar = new Set(['b', 'd', 'c-01', 'c-02', 'j-firma-arrendatario']);
+  const sinAprobar = new Set(['b-01', 'c-01', 'c-02', 'j-firma-arrendatario']);
+  const CIERRE = 'Mientras haya textos pendientes, el contrato no se puede enviar a firma.';
   it('solo los que aplican a lo guardado', () => {
     // Con coarrendatario, PH, Trasladada y todo C.C.: nada previsto.
     expect(textosPendientesPrevistos(fuentes(), PASOS, sinAprobar)).toEqual([]);
     const solo = textosPendientesPrevistos(fuentes({ coarrendatario: null }), PASOS_SOLO, sinAprobar);
-    expect(solo).toEqual([
-      'Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de aprobación de Cofianza.',
-      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de aprobación de Cofianza.',
-      'Sin coarrendatario: 2 ajustes de redacción en singular pendientes de aprobación.',
-      'Mientras haya textos pendientes, el contrato no se puede enviar a firma.',
-    ]);
+    expect(solo).toEqual(['Sin coarrendatario: 2 ajustes de redacción en singular pendientes de aprobación.', CIERRE]);
+    // Los b-* son de Tradicional; sin PH ya no hay texto que aprobar (se suprime la cláusula).
+    const tradicional = { ...PASOS, paso1: { ...PASOS.paso1, modalidad: 'tradicional' as const } };
+    expect(textosPendientesPrevistos(fuentes(), tradicional, new Set(['b-01']))).toEqual([CIERRE]);
+    expect(textosPendientesPrevistos(fuentes(), PASOS, new Set(['b-01']))).toEqual([]);
   });
   it('aprobados todos, no hay aviso', () => {
     expect(textosPendientesPrevistos(fuentes({ coarrendatario: null }), PASOS_SOLO, new Set())).toEqual([]);

@@ -58,8 +58,6 @@ export interface EstadoAsistente {
     };
     /** Textos sin aprobar que llevará el documento, previstos con lo guardado (bloquean el envío). */
     textosPendientes: string[];
-    /** Elecciones que hoy imprimen un texto sin aprobar (Ruta A): la web avisa al elegirlas. */
-    textosSinAprobar: { tradicional: boolean; sinPropiedadHorizontal: boolean };
     /** §7.2: la modalidad que fija el convenio de la inmobiliaria (null = no fija). */
     modalidadConvenio: Paso1['modalidad'] | null;
     faltantes: { paso: NumeroPaso; mensaje: string }[];

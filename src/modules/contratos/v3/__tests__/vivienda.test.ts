@@ -138,6 +138,8 @@ const ids = (r: { pendientes: { id: string }[] }) => r.pendientes.map((p) => p.i
 // Los borradores en singular sin coarrendatario (V3 §9.4). El diseño contaba
 // 19; los conversores hallaron 5 tramos más con concordancia plural (c-20…c-24).
 const C_IDS = Array.from({ length: 24 }, (_, k) => `c-${String(k + 1).padStart(2, '0')}`);
+// Tradicional (Adenda 1 contratos, resp. 2): b-04 está en la sección del coarrendatario.
+const B_IDS = (coa: boolean) => ['b-01', 'b-02', 'b-03', ...(coa ? ['b-04'] : []), 'b-05'];
 
 // ── Lectura de lo impreso, por origen en la plantilla ──
 
@@ -201,10 +203,13 @@ const SUPRESIONES_AUTORIZADAS: Record<string, string[]> = {
     '@seccion {S}.  Si usted firma como coarrendatario, esto es lo que asume (7 líneas)',
     '@clausula coarrendatario (9 líneas)',
   ],
-  // V3 §7.4–7.5, §3.4.5: en Tradicional EL ARRENDATARIO no paga prima ni tarifa
+  // V3 §7.4–7.5, §3.4.5: en Tradicional EL ARRENDATARIO no paga prima ni tarifa; Adenda 1
+  // contratos, resp. 2: del resumen sale el bloque del cashback de EL ARRENDATARIO
   trasladada: [
     'Prima de la fianza ({pct:primaPct}% del canon + IVA) | ${pesos:primaIvaCop}',
     'Tarifa de la fianza ({pct:tarifaPct}% + IVA) | ${pesos:tarifaCop}',
+    '**Cashback del 30%.** Si al terminar el contrato usted no tuvo ni una sola mora, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.',
+    '@recuadro (7 líneas)',
     '> Los porcentajes señalados son los que rigen jurídicamente y se aplican sobre el canon vigente, de modo que los valores en pesos se actualizan automáticamente cuando el canon se incrementa. Las sumas expresadas en pesos son informativas y corresponden al canon vigente a la fecha de suscripción. Estos valores no hacen parte del canon de arrendamiento y serán referenciados de manera independiente en el correspondiente recibo de caja.',
     '+ Tarifa mensual de la fianza COFIANZA.',
     '+ Pagar oportunamente la tarifa mensual de la fianza, junto con el canon, cuando la modalidad aplicable sea Trasladada, en los términos de la {ref:fianza}.',
@@ -214,7 +219,7 @@ const SUPRESIONES_AUTORIZADAS: Record<string, string[]> = {
     'Comisión de intermediación ({pct:comisionPct}% + IVA) | ${pesos:comisionCop}',
     '@clausula comision (1 línea)',
   ],
-  // V3 §13.2 + pendiente (d): sin propiedad horizontal no hay cuota de administración
+  // V3 §13.2 + Adenda 1 contratos, resp. 3: sin propiedad horizontal la cláusula se suprime
   ph: ['@clausula administracion (3 líneas)'],
   // V3 §3.4.3: incluida en el canon (o a cargo del arrendador) no se suma aparte
   adminAparte: ['Cuota de administración, si está a su cargo | ${pesos:adminCop}'],
@@ -383,13 +388,14 @@ describe('matriz: coarrendatario × comisión × PH × modalidad, con 0 y 2 adic
       r.lineas.filter((l) => l.kind === 'firma').map((l) => /^\*\*([^*]+)\*\*/.exec(l.texto)?.[1]),
     ).toEqual(['EL ARRENDATARIO', ...(c.coa ? ['EL COARRENDATARIO'] : []), 'EL ARRENDADOR']);
 
-    // pendientes: c-* sin coarrendatario, b en Tradicional, d sin PH
+    // pendientes: c-* sin coarrendatario, b-* en Tradicional
     expect(r.pendientes.map((x) => `${x.tipo}:${x.id}`).sort()).toEqual(
       [
-        ...(c.coa ? [] : C_IDS.map((id) => `borrador:${id}`)),
-        ...(c.trasladada ? [] : ['texto:b']),
-        ...(c.ph ? [] : ['texto:d']),
-      ].sort(),
+        ...(c.coa ? [] : C_IDS),
+        ...(c.trasladada ? [] : B_IDS(c.coa)),
+      ]
+        .map((id) => `borrador:${id}`)
+        .sort(),
     );
 
     // las cifras impresas cuadran (leídas del HTML)
@@ -504,6 +510,33 @@ describe('rechazos', () => {
     );
     // la fecha va solo en el cuadro, con el día en número
     expect(r.lineas.map((l) => l.texto)).toContain('Medellín, 1 de octubre de 2026');
+  });
+});
+
+describe('modalidad Tradicional (Adenda 1 contratos, resp. 2)', () => {
+  const r = revision(datos({ ...COMPLETO, trasladada: false }));
+  const resumen = r.lineas.filter((_, k) => r.origenes[k].startsWith('1-preliminar.txt:')).map((l) => l.texto);
+
+  it('la CUARTA dice que EL ARRENDADOR asume prima y tarifa y que EL ARRENDATARIO no debe nada', () => {
+    expect(impresa(r, PARRAFO.get('fianza/valores'))).toBe(
+      '**PARÁGRAFO PRIMERO — VALORES DE LA FIANZA:** Conforme al Certificado de Riesgo COFIANZA (CRC) N° CRC-2026-0042 del 15 de septiembre de 2026, la prima de vinculación, de diez por ciento (10%) del canon mensual más el Impuesto sobre las Ventas (IVA), y la tarifa mensual, de dos coma cinco por ciento (2,5%) del canon de arrendamiento más el Impuesto sobre las Ventas (IVA), son asumidas por EL ARRENDADOR, y EL ARRENDATARIO no debe suma alguna por concepto de fianza.',
+    );
+    // CONTINUIDAD remite a ese parágrafo por el porcentaje de la tarifa
+    expect(r.refs).toContainEqual({ origen: 'fianza', destino: 'fianza/valores', texto: 'Parágrafo Primero' });
+  });
+
+  it('el resumen cambia el cashback por la línea de la fianza asumida y no le cobra tarifa', () => {
+    expect(resumen).toContain('**La fianza es asumida por la inmobiliaria.** Usted no debe suma alguna por concepto de fianza.');
+    expect(resumen.join('\n')).not.toMatch(/cashback|tarifa/i);
+    expect(resumen).toContain('• Si el pago que hace no alcanza para cubrir todo, primero se abona al canon.');
+    expect(resumen).toContain(
+      '**• Responde por todo,** no solo por el canon: también por la administración, servicios, daños, intereses, gastos de cobranza y la cláusula penal.',
+    );
+    expect(resumen).toContain('• Pagar el canon incompleto. Así falten pocos pesos, se considera mora.');
+  });
+
+  it('la cláusula de cashback del contrato no se toca (está preguntada a Gerencia)', () => {
+    expect(impresa(r, PARRAFO.get('fianza/beneficios'))).toContain('CASHBACK. Si a la terminación del presente contrato');
   });
 });
 

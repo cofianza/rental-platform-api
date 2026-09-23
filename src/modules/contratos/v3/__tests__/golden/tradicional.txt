@@ -56,26 +56,18 @@
 [subtitulo] **¿El canon sube?**
 [p] Sí. Cada doce meses aumenta automáticamente en el mismo porcentaje en que haya subido el Índice de Precios al Consumidor del año anterior, dentro del límite legal. No requiere aviso previo: al firmar queda notificado de ese aumento.
 [seccion] **2. ¿Qué es la fianza de Cofianza y para qué sirve?**
-[p] ⟦PENDIENTE: b⟧
 [p] Cofianza es la afianzadora que respalda su contrato. Gracias a ella usted no necesitó presentar un fiador o codeudor con finca raíz.
 [p] **Lo que hace:** si usted deja de pagar el canon, Cofianza le paga al arrendador para que el arriendo no se caiga de inmediato.
 [p] **Lo que NO hace:** la fianza no es un seguro a su favor. No lo exonera de pagar. Si Cofianza paga por usted, esa deuda pasa a ser con Cofianza, que se la va a cobrar directamente, incluso por vía judicial.
 [p] **Qué cubre:** únicamente el canon de arrendamiento, hasta un máximo de dieciocho meses.
 [p] **Qué NO cubre:** la administración, los servicios públicos, los daños al inmueble, los faltantes de inventario ni las multas. Todo eso lo paga usted.
 [recuadro] **Si paga de menos, así sea por poco**
-[recuadro] • Si el pago que hace no alcanza para cubrir todo, primero se abona al canon y después a la tarifa de la fianza.
+[recuadro] • Si el pago que hace no alcanza para cubrir todo, primero se abona al canon.
 [recuadro] • Lo que quede faltando lo puede cubrir Cofianza, y en ese momento usted queda debiéndole esa suma a Cofianza, no al arrendador.
 [recuadro] • Esa deuda se le suma al pago del mes siguiente y se le cobra con la misma firmeza, sin importar si son mil pesos o un millón.
 [seccion] **3. El beneficio de pagar a tiempo, y lo fácil que es perderlo**
-[p] **Cashback del 30%.** Si al terminar el contrato usted no tuvo ni una sola mora, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.
+[p] **La fianza es asumida por la inmobiliaria.** Usted no debe suma alguna por concepto de fianza.
 [p] **Reporte positivo.** Su buen comportamiento de pago se puede reportar a las centrales de información, lo que le ayuda a construir historial crediticio.
-[recuadro] **Lea esto con atención: pierde el cashback si se atrasa en CUALQUIERA de estos pagos**
-[recuadro] • El canon de arrendamiento.
-[recuadro] • La tarifa mensual de la fianza.
-[recuadro] • Los servicios públicos que estén a su cargo.
-[recuadro] • La cuota de administración, si está a su cargo.
-[recuadro] • Cualquier otra obligación económica del contrato.
-[recuadro] • Un solo pago incompleto, así sea de pocos pesos y así Cofianza lo haya cubierto, le hace perder el beneficio completo.
 [seccion] **4. ¿Quién paga las reparaciones?**
 [subtitulo] **Las paga usted**
 [p] Todo lo que se desgasta por usar la vivienda: chapas y cerraduras, vidrios, bombillos e interruptores, resane y pintura por rayones o huecos de clavos, destape de lavamanos y sanitarios, grifería y duchas, mallas y angeos, mantenimiento del calentador y la estufa, control de plagas, y reposición de llaves y controles.
@@ -114,7 +106,7 @@
 [p] **El acta de entrega es su mejor defensa.** Al recibir el inmueble se firma un acta con el inventario y el estado del bien. Es el documento que determina, cuando usted entregue, qué deterioros son del uso normal y cuáles le cobran. Revísela bien y quédese con una copia.
 [seccion] **7. Si usted firma como coarrendatario, esto es lo que asume**
 [p] Si además del arrendatario firma un coarrendatario, esta es su situación:
-[vineta] **• Responde por todo,** no solo por el canon: también por la tarifa de la fianza, administración, servicios, daños, intereses, gastos de cobranza y la cláusula penal.
+[vineta] **• Responde por todo,** no solo por el canon: también por la administración, servicios, daños, intereses, gastos de cobranza y la cláusula penal.
 [vineta] **• Le pueden cobrar a usted primero.** No puede exigir que se persiga antes al arrendatario ni que se agoten sus bienes.
 [vineta] **• No tiene derecho a usar el inmueble.** Su firma es una garantía de pago, no un derecho de habitación.
 [vineta] **• Su obligación sigue en las prórrogas,** aunque el canon suba o aunque el arrendador y el arrendatario hagan acuerdos entre ellos. Solo queda liberado cuando se paguen todas las obligaciones o con una liberación por escrito.
@@ -124,7 +116,7 @@
 [p] **Mantenga sus datos actualizados.** La dirección, el correo y el celular del contrato son los que producen efectos legales: mientras no informe un cambio, todo lo que le envíen a esos datos se entiende recibido.
 [seccion] **Las cinco cosas que más reclamos generan**
 [recuadro] **Si solo va a leer una parte de este resumen, lea esta**
-[recuadro] • Pagar el canon incompleto. Así falten pocos pesos, se considera mora y le cuesta el cashback.
+[recuadro] • Pagar el canon incompleto. Así falten pocos pesos, se considera mora.
 [recuadro] • Creer que la fianza lo exonera de pagar. No lo exonera: la deuda pasa a ser con Cofianza.
 [recuadro] • Creer que la fianza cubre administración, servicios o daños. No los cubre.
 [recuadro] • Descontar del canon una reparación o un reclamo. No se puede: el canon se paga completo y el reclamo se tramita aparte.
@@ -147,7 +139,7 @@
 [p] **CUARTA: FIANZA COFIANZA**
 [p] Las obligaciones de pago derivadas del presente contrato se encuentran respaldadas por la fianza otorgada por COFIANZA S.A.S., sociedad comercial identificada con NIT 902.038.122-7, con domicilio en Itagüí (Antioquia), quien actúa como FIADOR de EL ARRENDATARIO frente a EL ARRENDADOR. La fianza opera en el marco del convenio vigente suscrito entre EL ARRENDADOR y COFIANZA S.A.S., el cual forma parte integral del presente contrato.
 [sangria] **MODALIDAD APLICABLE:** Tradicional (Tradicional o Trasladada). En modalidad Trasladada la tarifa mensual de la fianza es asumida por EL ARRENDATARIO y se paga junto con el canon. En modalidad Tradicional la tarifa mensual es asumida íntegramente por EL ARRENDADOR y EL ARRENDATARIO no debe suma alguna por concepto de fianza.
-[sangria] **PARÁGRAFO PRIMERO — VALORES DE LA FIANZA:** ⟦PENDIENTE: b⟧
+[sangria] **PARÁGRAFO PRIMERO — VALORES DE LA FIANZA:** Conforme al Certificado de Riesgo COFIANZA (CRC) N° CRC-2026-0042 del 15 de septiembre de 2026, la prima de vinculación, de diez por ciento (10%) del canon mensual más el Impuesto sobre las Ventas (IVA), y la tarifa mensual, de dos coma cinco por ciento (2,5%) del canon de arrendamiento más el Impuesto sobre las Ventas (IVA), son asumidas por EL ARRENDADOR, y EL ARRENDATARIO no debe suma alguna por concepto de fianza.
 [sangria] **PARÁGRAFO SEGUNDO — COBERTURA DE FALTANTES:** Si el pago que realice EL ARRENDATARIO resultare insuficiente, COFIANZA S.A.S. podrá cubrir a EL ARRENDADOR la diferencia faltante, con lo cual EL ARRENDATARIO quedará obligado por esa suma directamente frente a COFIANZA S.A.S. y no frente a EL ARRENDADOR. Las sumas así cubiertas constituyen una obligación de EL ARRENDATARIO a favor de COFIANZA S.A.S., se acumulan al valor a pagar del período siguiente y serán exigibles en los mismos términos y con el mismo alcance que las demás obligaciones del presente contrato, sin consideración a su cuantía. El presente contrato presta mérito ejecutivo a favor de COFIANZA S.A.S. para su cobro.
 [sangria] **PARÁGRAFO TERCERO — BENEFICIOS POR BUEN COMPORTAMIENTO DE PAGO:** CASHBACK. Si a la terminación del presente contrato EL ARRENDATARIO no hubiere incurrido en mora por ningún concepto durante la vigencia de la fianza, COFIANZA S.A.S. le reintegrará el treinta por ciento (30%) del valor total de las tarifas mensuales efectivamente pagadas. Este reintegro no aplica sobre la prima de vinculación y se liquida a la terminación del contrato.
 [sangria] Para efectos de este beneficio se entiende que existe mora cuando EL ARRENDATARIO hubiere incurrido en pago tardío, parcial o incompleto de cualquiera de los siguientes conceptos: canon de arrendamiento, tarifa mensual de la fianza, servicios públicos a su cargo, cuota de administración a su cargo, o cualquier otra obligación económica derivada del presente contrato. Cualquier faltante cubierto por COFIANZA S.A.S. conforme al Parágrafo Segundo de esta cláusula, sin importar su cuantía, se computa como mora para efectos de este beneficio.

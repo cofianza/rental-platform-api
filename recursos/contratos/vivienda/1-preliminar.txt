@@ -52,8 +52,6 @@ El canon se paga por adelantado, el primer día de cada mes. A partir del día s
 @subtitulo ¿El canon sube?
 Sí. Cada doce meses aumenta automáticamente en el mismo porcentaje en que haya subido el Índice de Precios al Consumidor del año anterior, dentro del límite legal. No requiere aviso previo: al firmar queda notificado de ese aumento.
 @seccion {S}.  ¿Qué es la fianza de Cofianza y para qué sirve?
-# Tradicional (V3 §3.4.5): falta el texto de que la fianza la asume la inmobiliaria (pendiente b)
-?!trasladada PENDIENTE(b)
 Cofianza es la afianzadora que respalda su contrato. Gracias a ella usted no necesitó presentar un fiador o codeudor con finca raíz.
 **Lo que hace:** si usted deja de pagar el canon, Cofianza le paga al arrendador para que el arriendo no se caiga de inmediato.
 **Lo que NO hace:** la fianza no es un seguro a su favor. No lo exonera de pagar. Si Cofianza paga por usted, esa deuda pasa a ser con Cofianza, que se la va a cobrar directamente, incluso por vía judicial.
@@ -61,14 +59,18 @@ Cofianza es la afianzadora que respalda su contrato. Gracias a ella usted no nec
 **Qué NO cubre:** la administración, los servicios públicos, los daños al inmueble, los faltantes de inventario ni las multas. Todo eso lo paga usted.
 @recuadro
 **Si paga de menos, así sea por poco**
-- Si el pago que hace no alcanza para cubrir todo, primero se abona al canon y después a la tarifa de la fianza.
+# Tradicional (V3 §3.4.5): EL ARRENDATARIO no paga tarifa, no se le imputa nada a ella
+- Si el pago que hace no alcanza para cubrir todo, primero se abona al [[trasladada: canon y después a la tarifa de la fianza | #b-03: canon]].
 - Lo que quede faltando lo puede cubrir Cofianza, y en ese momento usted queda debiéndole esa suma a Cofianza, no al arrendador.
 - Esa deuda se le suma al pago del mes siguiente y se le cobra con la misma firmeza, sin importar si son mil pesos o un millón.
 @fin
 @seccion {S}.  El beneficio de pagar a tiempo, y lo fácil que es perderlo
-**Cashback del 30%.** Si al terminar el contrato usted no tuvo ni una sola mora, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.
+# Tradicional (Adenda 1 contratos, resp. 2): el bloque del cashback de EL ARRENDATARIO se
+# reemplaza por una línea que dice que la fianza la asume la inmobiliaria
+?trasladada **Cashback del 30%.** Si al terminar el contrato usted no tuvo ni una sola mora, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.
+?!trasladada #b-02: **La fianza es asumida por la inmobiliaria.** Usted no debe suma alguna por concepto de fianza.
 **Reporte positivo.** Su buen comportamiento de pago se puede reportar a las centrales de información, lo que le ayuda a construir historial crediticio.
-@recuadro
+?trasladada @recuadro
 **Lea esto con atención: pierde el cashback si se atrasa en CUALQUIERA de estos pagos**
 - El canon de arrendamiento.
 - La tarifa mensual de la fianza.
@@ -119,7 +121,7 @@ Puede hacerlo, pero debe pagar una indemnización equivalente a tres meses de ar
 # V3 §3.4.6: sin coarrendatario la sección 7 no se imprime y las siguientes se renumeran
 ?coa @seccion {S}.  Si usted firma como coarrendatario, esto es lo que asume
 Si además del arrendatario firma un coarrendatario, esta es su situación:
-- **Responde por todo,** no solo por el canon: también por la tarifa de la fianza, administración, servicios, daños, intereses, gastos de cobranza y la cláusula penal.
+- **Responde por todo,** no solo por el canon: también por [[trasladada: la tarifa de la fianza, administración | #b-04: la administración]], servicios, daños, intereses, gastos de cobranza y la cláusula penal.
 - **Le pueden cobrar a usted primero.** No puede exigir que se persiga antes al arrendatario ni que se agoten sus bienes.
 - **No tiene derecho a usar el inmueble.** Su firma es una garantía de pago, no un derecho de habitación.
 - **Su obligación sigue en las prórrogas,** aunque el canon suba o aunque el arrendador y el arrendatario hagan acuerdos entre ellos. Solo queda liberado cuando se paguen todas las obligaciones o con una liberación por escrito.
@@ -130,7 +132,7 @@ Al firmar autoriza a la inmobiliaria y a Cofianza a consultar y reportar su comp
 @seccion Las cinco cosas que más reclamos generan
 @recuadro
 **Si solo va a leer una parte de este resumen, lea esta**
-- Pagar el canon incompleto. Así falten pocos pesos, se considera mora y le cuesta el cashback.
+- Pagar el canon incompleto. Así falten pocos pesos, se considera [[trasladada: mora y le cuesta el cashback | #b-05: mora]].
 - Creer que la fianza lo exonera de pagar. No lo exonera: la deuda pasa a ser con Cofianza.
 - Creer que la fianza cubre administración, servicios o daños. No los cubre.
 - Descontar del canon una reparación o un reclamo. No se puede: el canon se paga completo y el reclamo se tramita aparte.
