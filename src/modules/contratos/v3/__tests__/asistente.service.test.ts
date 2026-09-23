@@ -459,7 +459,8 @@ describe('obtenerEstado', () => {
     // La lectura liviana (E5/E6): el V3 más reciente no cancelado; un borrador cae al asistente.
     expect(opsDe('contratos', 'not')[0].args).toEqual(['destinacion', 'is', null]);
     expect(opsDe('contratos', 'neq')[0].args).toEqual(['estado', 'cancelado']);
-    expect(opsDe('contratos', 'not')[1].args).toEqual(['estado', 'in', '(cancelado,finalizado)']);
+    // La carga del asistente trae también los cancelados (el último V3 precarga el borrador nuevo).
+    expect(opsDe('contratos', 'neq')[1].args).toEqual(['estado', 'finalizado']);
   });
 
   it('con un contrato TERMINADO (el más reciente) muestra el contrato, no "Iniciar contrato"', async () => {

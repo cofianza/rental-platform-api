@@ -982,9 +982,10 @@ export async function listAllContratos(
       q = q.in('expediente_id', query.expediente_ids.split(','));
     }
     if (query.search) {
-      // Nombre de archivo O cualquier contrato de los expedientes que hicieron
+      // Nombre de archivo, número O cualquier contrato de los expedientes que hicieron
       // match por arrendatario / cédula / dirección / código / número.
-      const ors = [`nombre_archivo.ilike.%${searchEscapado}%`];
+      // El número del contrato (CTO-…) también: es lo que el gestor tiene a mano.
+      const ors = [`nombre_archivo.ilike.%${searchEscapado}%`, `numero.ilike.%${searchEscapado}%`];
       if (searchExpedienteIds && searchExpedienteIds.length > 0) {
         ors.push(`expediente_id.in.(${searchExpedienteIds.join(',')})`);
       }

@@ -45,13 +45,23 @@ export interface EstadoAsistente {
   contrato: null | {
     id: string; numero: string; estado: 'borrador';
     guardados: Partial<Pasos>;
-    /** Paso 3: de la cuota de administración solo se precarga el valor (§1.3). */
+    /**
+     * Paso 3: de la cuota de administración solo se precarga el valor (§1.3). Si el
+     * estudio tuvo un contrato cancelado, sus pasos mandan (el 4 solo trae la lista).
+     */
     prefill: {
       1: Partial<Paso1>;
       2: Partial<Paso2>;
       3: Partial<Omit<Paso3, 'administracion'>> & { administracion?: Partial<NonNullable<Paso3['administracion']>> };
+      4?: { clausulas: { clausulaId: string; valores?: Record<string, string> }[] };
       5: Partial<Paso5>;
     };
+    /** Textos sin aprobar que llevará el documento, previstos con lo guardado (bloquean el envío). */
+    textosPendientes: string[];
+    /** Elecciones que hoy imprimen un texto sin aprobar (Ruta A): la web avisa al elegirlas. */
+    textosSinAprobar: { tradicional: boolean; sinPropiedadHorizontal: boolean };
+    /** §7.2: la modalidad que fija el convenio de la inmobiliaria (null = no fija). */
+    modalidadConvenio: Paso1['modalidad'] | null;
     faltantes: { paso: NumeroPaso; mensaje: string }[];
     documento: null | { generacion: number; generadoEn: string; avisos: string[]; pendientes: string[]; desactualizado: boolean };
     /** Ruta B: el contrato propio de la inmobiliaria, tal como se cargó (sin modificar, §4.4). */
@@ -108,6 +118,9 @@ export interface EnvioV3 {
     firmantes: {
       rol: 'arrendatario' | 'coarrendatario' | 'arrendador';
       nombre: string;
+      /** A donde Auco manda el enlace (WhatsApp) y el correo: para revisar si la firma no llega. */
+      telefono: string | null;
+      email: string | null;
       orden: number;
       estado: EstadoFirmanteV3;
       firmadoEn: string | null;

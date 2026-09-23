@@ -57,6 +57,7 @@ import {
   maximoSinNuevaEvaluacionCop,
   noImprimibles,
   prefill,
+  textosPendientesPrevistos,
   type Asistente,
   type AsistenteCompleto,
   type ContratoV3,
@@ -78,8 +79,9 @@ import {
 } from './clausulas.reglas';
 import type { LogoPdf } from './documento';
 import { fechaBogota, mayus, ordinal, sumarMeses } from './formato';
-import { contarClausulas } from './motor';
-import { PLANTILLA_VIVIENDA } from './plantilla-vivienda';
+import { APROBACIONES } from './aprobaciones';
+import { contarClausulas, type Plantilla } from './motor';
+import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 import { contexto, generarAnexoVivienda, generarContratoVivienda, type DatosVivienda } from './vivienda';
 import { validarFirmantes, type ParteFirmante } from './firma/reglas';
 import { actualizarFirma, crearSobre, estadoEnviado, reenviar, reintentar } from './firma/firma.service';
@@ -211,10 +213,11 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
       .limit(1)
       .maybeSingle(),
     db('inmobiliarias').select('owner_perfil_id, modalidad_fianza_defecto').eq('id', inm.inmobiliaria_id).maybeSingle(),
+    // Los cancelados también: el último V3 cancelado precarga el borrador nuevo.
     db('contratos')
       .select(CONTRATO_V3_SELECT)
       .eq('expediente_id', expedienteId)
-      .not('estado', 'in', '(cancelado,finalizado)'),
+      .neq('estado', 'finalizado'),
     getCalibracion(),
   ]);
   const est = dato<{ id: string; resultado: string | null; fecha_completado: string | null; canon_evaluado: unknown } | null>(
@@ -228,7 +231,8 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
     expedienteId,
     'inmobiliaria',
   );
-  const contratos = dato<(ContratoV3 & { destinacion: string | null })[] | null>(contratosR, expedienteId, 'contratos') ?? [];
+  const filas = dato<(ContratoV3 & { destinacion: string | null })[] | null>(contratosR, expedienteId, 'contratos') ?? [];
+  const contratos = filas.filter((c) => c.estado !== 'cancelado');
   if (!org) throw noVerificable(expedienteId, 'inmobiliaria sin titular');
   const ownerId = org.owner_perfil_id;
   const v3 = contratos.find((c) => c.destinacion) ?? null;
@@ -318,6 +322,11 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
     completitudFaltantes: completitud.faltantes.map((x) => x.etiqueta),
     legacyVivos: contratos.filter((c) => !c.destinacion).length,
     v3,
+    anterior: v3
+      ? null
+      : (filas
+          .filter((c) => c.estado === 'cancelado' && c.destinacion)
+          .sort((x, y) => y.updated_at.localeCompare(x.updated_at))[0]?.datos_variables?.asistente ?? null),
   };
   const catalogo = dato<FilaCatalogoAdicional[] | null>(catalogoR, expedienteId, 'cláusulas adicionales') ?? [];
   return { f, cal, catalogo };
@@ -346,6 +355,19 @@ const opcionesAdicionales = (f: Fuentes, cal: Calibracion) => ({
   sinCoarrendatario: f.coarrendatario === null,
   iaEncendida: env.CLAUSULAS_IA_ENABLED,
 });
+
+/**
+ * Ids que el motor marcaría como pendientes en cada plantilla (diseño §6.c): los
+ * PENDIENTE(x) (texto que todavía no existe) y los borradores sin aprobación en
+ * aprobaciones.ts. Se calcula al cargar: aprobar un texto es un despliegue.
+ */
+const sinAprobarDe = (p: Plantilla): ReadonlySet<string> =>
+  new Set([
+    ...p.borradores.filter((b) => APROBACIONES[b.id]?.sha256 !== b.sha256).map((b) => b.id),
+    // Los nodos PENDIENTE(x) son { t: 'pendiente', id } dentro del árbol.
+    ...[...JSON.stringify(p.nodos).matchAll(/"t":"pendiente","id":"([\w-]+)"/g)].map((m) => m[1]),
+  ]);
+const SIN_APROBAR = { A: sinAprobarDe(PLANTILLA_VIVIENDA), B: sinAprobarDe(PLANTILLA_ANEXO) };
 
 function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsistente {
   const bloqueos = evaluarBloqueos(f, hoy, cal);
@@ -386,6 +408,9 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
       estado: 'borrador',
       guardados: pasosDe(a),
       prefill: prefill(f, hoy, cal),
+      textosPendientes: textosPendientesPrevistos(f, a, SIN_APROBAR[a.paso1?.ruta ?? 'A']),
+      textosSinAprobar: { tradicional: SIN_APROBAR.A.has('b'), sinPropiedadHorizontal: SIN_APROBAR.A.has('d') },
+      modalidadConvenio: f.modalidadFianzaDefecto,
       faltantes: falta,
       documento: doc
         ? {

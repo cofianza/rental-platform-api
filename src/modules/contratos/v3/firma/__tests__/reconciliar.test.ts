@@ -41,7 +41,7 @@ const { mockEnv, ops, queues, enqueue, mockRpc, chainFor, download, auco, efecto
       ops.push({ table, method, args });
     });
   return {
-    mockEnv: { AUCO_SENDER_EMAIL: 'firma@cofianza.co', AUCO_WEBHOOK_SECRET: undefined as string | undefined, FIRMA_BIOMETRIA_ENABLED: false },
+    mockEnv: { CONTRATOS_V3_ENABLED: true, AUCO_SENDER_EMAIL: 'firma@cofianza.co', AUCO_WEBHOOK_SECRET: undefined as string | undefined, FIRMA_BIOMETRIA_ENABLED: false },
     ops,
     queues,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),

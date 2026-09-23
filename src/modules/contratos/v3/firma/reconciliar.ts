@@ -492,7 +492,7 @@ export async function cancelarEnAuco(s: Sobre, code: string, motivo: string): Pr
         tipo: 'firma.conflicto',
         titulo: 'Proceso de firma completo que se debía anular',
         mensaje: `Auco reporta firmado por todas las partes el proceso ${code}, que Cofianza había anulado. Revísalo.`,
-        link: '/contratos',
+        link: `/contratos/${s.contrato_id}`,
         payload: { contrato_id: s.contrato_id, sobre_id: s.id },
       }).catch((err) => logger.warn({ err }, 'Firma V3: no se pudo avisar el conflicto'));
       await marcar('Auco lo reporta firmado: no se pudo anular.');
@@ -512,7 +512,7 @@ async function avisarBloqueados(antes: FirmanteSobre[], despues: FirmanteSobre[]
     tipo: 'firma.bloqueada',
     titulo: 'Firmante bloqueado en Auco',
     mensaje: `Un firmante del proceso ${s.auco_code} quedó bloqueado tras varios intentos fallidos. Desbloquéalo en el panel de Auco para que la firma siga.`,
-    link: '/contratos',
+    link: `/contratos/${s.contrato_id}`,
     payload: { contrato_id: s.contrato_id, sobre_id: s.id },
   }).catch((e) => logger.warn({ e }, 'Firma V3: no se pudo avisar el bloqueo'));
 }

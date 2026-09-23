@@ -21,6 +21,7 @@ import {
   noImprimibles,
   partirNit,
   prefill,
+  textosPendientesPrevistos,
   type AsistenteCompleto,
   type Fuentes,
   type PerfilArrendador,
@@ -151,6 +152,7 @@ function fuentes(o: Partial<Fuentes> = {}): Fuentes {
     completitudFaltantes: [],
     legacyVivos: 0,
     v3: null,
+    anterior: null,
     ...o,
   };
 }
@@ -322,8 +324,8 @@ describe('B4 — estado del inmueble', () => {
     expect(bloqueos(inm('ocupado', EXP))).toEqual([]);
   });
 
-  it('ocupado por otro, o sin titular, bloquea con INMUEBLE_OCUPADO', () => {
-    expect(codigos(bloqueos(inm('ocupado', 'exp-otro')))).toEqual(['INMUEBLE_OCUPADO']);
+  it('reservado por otro estudio bloquea con INMUEBLE_RESERVADO; ocupado sin titular, con INMUEBLE_OCUPADO', () => {
+    expect(codigos(bloqueos(inm('ocupado', 'exp-otro')))).toEqual(['INMUEBLE_RESERVADO']);
     expect(codigos(bloqueos(inm('ocupado', null)))).toEqual(['INMUEBLE_OCUPADO']);
   });
 
@@ -542,9 +544,18 @@ describe('avisosDePendientes', () => {
   });
 
   it('un aviso por prefijo, más el cierre', () => {
-    expect(avisos('b')).toEqual(['Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de Gerencia.', CIERRE]);
+    expect(avisos('b')).toEqual([
+      'Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de aprobación de Cofianza.',
+      CIERRE,
+    ]);
     expect(avisos('d')).toEqual([
-      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de Gerencia.',
+      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de aprobación de Cofianza.',
+      CIERRE,
+    ]);
+    // Los del Anexo (Ruta B) llevan el prefijo a-.
+    expect(avisos('a-c-01', 'a-j-firma-coa')).toEqual([
+      'Sin coarrendatario: 1 ajustes de redacción en singular pendientes de aprobación.',
+      'Documento distinto de cédula de ciudadanía: su mención en las firmas está pendiente de aprobación.',
       CIERRE,
     ]);
     expect(avisos('c-01', 'c-02', 'c-07')).toEqual([
@@ -636,6 +647,30 @@ describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () =>
     expect(p[5].contactos?.coarrendatario).toMatchObject({ direccion: 'Carrera 70 # 1-2', municipio: 'Envigado' });
   });
 
+  it('con un contrato cancelado: sus pasos mandan; fechas vencidas y coarrendatario desvinculado no se copian', () => {
+    const anterior = {
+      ...PASOS,
+      paso3: { ...PASOS.paso3, fechaInicio: '2026-09-01', fechaEntrega: '2026-09-01' },
+      paso4: {
+        clausulas: [
+          { clausulaId: 'cl-1', origen: 'biblioteca' as const, version: 2, titulo: 'T', texto: 'x', valores: { dia: '5' }, ia: null },
+        ],
+        huella: 'h',
+        aceptacion: {} as never,
+      },
+    };
+    const p = prefill(fuentes({ anterior, coarrendatario: null }), HOY, CALIBRACION_DEFAULT);
+    expect(p[1]).toEqual(PASOS.paso1);
+    expect(p[2]).toEqual(PASOS.paso2);
+    expect(p[3]).toMatchObject({ vigenciaMeses: 12, comisionPct: 8, administracion: PASOS.paso3.administracion });
+    expect(p[3].fechaInicio).toBeUndefined();
+    expect(p[4]).toEqual({ clausulas: [{ clausulaId: 'cl-1', valores: { dia: '5' } }] });
+    expect(p[5].contactos?.arrendatario).toEqual(PASOS.paso5.contactos.arrendatario);
+    expect(p[5].contactos?.coarrendatario).toBeNull();
+    // Fechas vigentes sí se copian.
+    expect(prefill(fuentes({ anterior: PASOS }), HOY, CALIBRACION_DEFAULT)[3].fechaInicio).toBe('2026-10-01');
+  });
+
   it('sin propiedad horizontal no precarga copropiedad ni cuota', () => {
     const f = fuentes({
       inmueble: { ...fuentes().inmueble, propiedad_horizontal: false, nombre_copropiedad: 'X', administracionCop: 350_000 },
@@ -643,5 +678,23 @@ describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () =>
     const p = prefill(f, HOY, CALIBRACION_DEFAULT);
     expect(p[2]).not.toHaveProperty('nombreCopropiedad');
     expect(p[3]).not.toHaveProperty('administracion');
+  });
+});
+
+describe('textosPendientesPrevistos', () => {
+  const sinAprobar = new Set(['b', 'd', 'c-01', 'c-02', 'j-firma-arrendatario', 'k-dia1']);
+  it('solo los que aplican a lo guardado', () => {
+    // Con coarrendatario, PH, Trasladada y todo C.C.: nada previsto (k-dia1 depende del día).
+    expect(textosPendientesPrevistos(fuentes(), PASOS, sinAprobar)).toEqual([]);
+    const solo = textosPendientesPrevistos(fuentes({ coarrendatario: null }), PASOS_SOLO, sinAprobar);
+    expect(solo).toEqual([
+      'Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de aprobación de Cofianza.',
+      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de aprobación de Cofianza.',
+      'Sin coarrendatario: 2 ajustes de redacción en singular pendientes de aprobación.',
+      'Mientras haya textos pendientes, el contrato no se puede enviar a firma.',
+    ]);
+  });
+  it('aprobados todos, no hay aviso', () => {
+    expect(textosPendientesPrevistos(fuentes({ coarrendatario: null }), PASOS_SOLO, new Set())).toEqual([]);
   });
 });

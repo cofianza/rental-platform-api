@@ -202,6 +202,12 @@ export interface Fuentes {
   legacyVivos: number;
   /** La fila V3 viva del estudio (una sola, índice contratos_v3_vivo_uq). */
   v3: ContratoV3 | null;
+  /**
+   * Los pasos del último contrato V3 cancelado del estudio: precargan el siguiente
+   * borrador, para que corregir un dato (p. ej. un celular que Auco no acepta) no
+   * obligue a llenar los cinco pasos otra vez. null si no hubo.
+   */
+  anterior: Asistente | null;
 }
 
 // ── Helpers ──
@@ -269,11 +275,17 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
   } catch (e) {
     b('DESTINACION_NO_HABILITADA', (e as Error).message);
   }
-  // Un 'ocupado' sin titular también es de otro (arrendado por fuera del flujo).
-  if (inm.estado === 'ocupado' && inm.reservado_por_expediente_id !== exp.id)
+  // Reservado por el contrato de otro estudio: se libera si ese contrato se cancela.
+  if (inm.estado === 'ocupado' && inm.reservado_por_expediente_id && inm.reservado_por_expediente_id !== exp.id)
+    b(
+      'INMUEBLE_RESERVADO',
+      'El inmueble está reservado para el contrato de otro estudio. Si ese contrato se cancela, el inmueble vuelve a quedar disponible y podrás crear este.',
+    );
+  // Un 'ocupado' sin titular está arrendado por fuera del flujo.
+  if (inm.estado === 'ocupado' && !inm.reservado_por_expediente_id)
     b(
       'INMUEBLE_OCUPADO',
-      'El inmueble figura como ocupado por otro estudio o contrato. Los inmuebles ya arrendados se incorporan por migración de cartera, que todavía no está disponible: escríbenos para revisar el caso.',
+      'El inmueble figura como arrendado. Los inmuebles ya arrendados se incorporan por migración de cartera, que todavía no está disponible: escríbenos para revisar el caso.',
     );
   if (inm.estado === 'inactivo')
     b('INMUEBLE_INACTIVO', 'El inmueble está inactivo. Actívalo antes de crear el contrato.', {
@@ -296,6 +308,7 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
       b(
         'ESTUDIO_VENCIDO',
         'La evaluación no tiene fecha de completado y no se puede verificar su vigencia. Se requiere nueva evaluación.',
+        { accion: 'estudio' },
       );
     } else {
       const completado = fechaBogota(est.fecha_completado);
@@ -303,6 +316,7 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
         b(
           'ESTUDIO_VENCIDO',
           `La evaluación se completó el ${ddmmaaaa(completado)} y ya tiene más de ${cal.VIGENCIA_CRC_DIAS} días calendario. Se requiere nueva evaluación.`,
+          { accion: 'estudio' },
         );
     }
     if (!crc)
@@ -382,6 +396,7 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
     b(
       'CANON_SIN_EVALUADO',
       'La evaluación no registró el canon con el que se hizo, así que no se puede verificar la tolerancia del canon. Se requiere nueva evaluación.',
+      { accion: 'estudio' },
     );
 
   return out;
@@ -452,7 +467,12 @@ export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): Ve
     'CANON_SIN_EVALUADO',
     'La evaluación no registró el canon con el que se hizo, así que no se puede verificar la tolerancia del canon. Se requiere nueva evaluación.',
   ];
-  return { ...base, bloqueo: { codigo, mensaje, paso: 1 }, veredicto: null, canonIngreso: v.veredictoCanonIngreso };
+  return {
+    ...base,
+    bloqueo: { codigo, mensaje, paso: 1, accion: 'estudio' },
+    veredicto: null,
+    canonIngreso: v.veredictoCanonIngreso,
+  };
 }
 
 /** Antes de guardar el paso 1 el canon del registro solo avisa: aún se puede pactar uno menor. */
@@ -463,8 +483,56 @@ export const avisoCanon = (bloqueo: Bloqueo) =>
 
 type Prefill = NonNullable<EstadoAsistente['contrato']>['prefill'];
 
-/** Solo valores con fuente; lo demás arranca vacío (la comisión nunca se adivina, A12). */
+/**
+ * Lo que un borrador nuevo ya trae: los pasos del contrato cancelado del estudio
+ * (si hubo) y, debajo, lo que dicen el registro, el estudio y el perfil. Las
+ * fechas que ya pasaron no se copian; el coarrendatario, solo si sigue vinculado.
+ */
 export function prefill(f: Fuentes, hoy: string, cal: Calibracion): Prefill {
+  const base = prefillDelRegistro(f, hoy, cal);
+  const a = f.anterior;
+  if (!a) return base;
+  const c5 = a.paso5?.contactos;
+  let p3 = base[3];
+  if (a.paso3) {
+    // Sin PH la cuota se guarda null; en el prefill va ausente.
+    const { administracion, fechaInicio, fechaEntrega, ...resto } = a.paso3;
+    p3 = {
+      ...resto,
+      ...(administracion ? { administracion } : {}),
+      ...(fechaInicio >= hoy && fechaEntrega >= hoy
+        ? { fechaInicio, fechaEntrega }
+        : { fechaInicio: base[3].fechaInicio, fechaEntrega: base[3].fechaEntrega }),
+    };
+  }
+  return {
+    1: { ...base[1], ...a.paso1 },
+    2: a.paso2 ?? base[2],
+    3: p3,
+    ...(a.paso4 && 'clausulas' in a.paso4
+      ? {
+          4: {
+            clausulas: a.paso4.clausulas.map((c) => ({
+              clausulaId: c.clausulaId,
+              ...(c.valores ? { valores: c.valores } : {}),
+            })),
+          },
+        }
+      : {}),
+    5: a.paso5 && c5
+      ? {
+          ...a.paso5,
+          contactos: {
+            ...c5,
+            coarrendatario: f.coarrendatario ? (c5.coarrendatario ?? base[5].contactos?.coarrendatario ?? null) : null,
+          },
+        }
+      : base[5],
+  };
+}
+
+/** Solo valores con fuente; lo demás arranca vacío (la comisión nunca se adivina, A12). */
+function prefillDelRegistro(f: Fuentes, hoy: string, cal: Calibracion): Prefill {
   const { inmueble: inm, arrendador: p, solicitante: s, coarrendatario: coa } = f;
   const inicio = f.expediente.fecha_inicio_contrato?.slice(0, 10);
   const inicioVigente = inicio && inicio >= hoy ? inicio : null;
@@ -603,17 +671,18 @@ export function avisosDePendientes(pendientes: { id: string }[]): string[] {
   const ids = pendientes.map((p) => p.id);
   const avisos: string[] = [];
   if (ids.includes('b'))
-    avisos.push('Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de Gerencia.');
+    avisos.push('Modalidad Tradicional: el texto de la cláusula CUARTA está pendiente de aprobación de Cofianza.');
   if (ids.includes('d'))
     avisos.push(
-      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de Gerencia.',
+      'Inmueble sin propiedad horizontal: el texto de la cláusula de administración está pendiente de aprobación de Cofianza.',
     );
-  const singulares = ids.filter((i) => i.startsWith('c-')).length;
+  // a-… son los del Anexo de la Ruta B.
+  const singulares = ids.filter((i) => /^(a-)?c-/.test(i)).length;
   if (singulares)
     avisos.push(
       `Sin coarrendatario: ${singulares} ajustes de redacción en singular pendientes de aprobación.`,
     );
-  if (ids.some((i) => i.startsWith('j-')))
+  if (ids.some((i) => /^(a-)?j-/.test(i)))
     avisos.push(
       'Documento distinto de cédula de ciudadanía: su mención en las firmas está pendiente de aprobación.',
     );
@@ -623,6 +692,28 @@ export function avisosDePendientes(pendientes: { id: string }[]): string[] {
     );
   if (ids.length) avisos.push('Mientras haya textos pendientes, el contrato no se puede enviar a firma.');
   return avisos;
+}
+
+/**
+ * Los textos sin aprobar que el documento va a llevar, previstos con lo guardado
+ * (la vista previa los confirma). `sinAprobar` = los ids que el motor marcaría en
+ * la plantilla de la ruta (PENDIENTE(x) y borradores sin aprobación): cuando se
+ * aprueban, el aviso desaparece solo. k-dia1 depende del día en que se genere.
+ */
+export function textosPendientesPrevistos(f: Fuentes, a: Asistente, sinAprobar: ReadonlySet<string>): string[] {
+  const docs = [f.solicitante.tipo_documento, f.coarrendatario?.tipo_documento];
+  const ids = [...sinAprobar].filter((id) =>
+    id === 'b'
+      ? a.paso1?.modalidad === 'tradicional'
+      : id === 'd'
+        ? a.paso2?.propiedadHorizontal === false
+        : /^(a-)?c-/.test(id)
+          ? !f.coarrendatario
+          : /^(a-)?j-/.test(id)
+            ? docs.some((t) => !!t && t !== 'cc')
+            : false,
+  );
+  return avisosDePendientes(ids.map((id) => ({ id })));
 }
 
 // ── §5.7 Pasos + fuentes → DatosVivienda ──

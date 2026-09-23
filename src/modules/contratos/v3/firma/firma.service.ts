@@ -300,7 +300,7 @@ export async function continuarTrasIdentidad(contratoId: string, userId: string 
         tipo: 'firma.envio_fallido',
         titulo: 'No se pudo enviar el contrato a firma',
         mensaje: 'La verificación de identidad terminó, pero Auco no aceptó el envío. Revísalo y reintenta desde el contrato.',
-        link: '/contratos',
+        link: `/expedientes/${c.expediente_id}/contrato`,
         payload: { contrato_id: contratoId },
       });
   }
@@ -429,9 +429,12 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
       motivoDetalle: s.motivo_detalle,
       firmantes: s.firmantes.map((f) => {
         const p = parte.get(f.parteId);
+        const d = p ? datosDeFirma(p) : null;
         return {
           rol: p?.rol ?? 'arrendatario',
-          nombre: p ? datosDeFirma(p).nombre : '—',
+          nombre: d?.nombre ?? '—',
+          telefono: d?.telefono ?? null,
+          email: d?.email ?? null,
           orden: p?.orden ?? 0,
           estado: f.estado,
           firmadoEn: f.firmadoEn ?? null,
@@ -443,13 +446,25 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
         ? { texto: textoAviso, entregadoEn: incompleto.aviso_entregado_en }
         : null,
     identidadPendientes: pendientes,
+    // Las mismas puertas que reenviar/reintentar (y la ruta del flag): un botón habilitado nunca recibe un 409.
     reenvio:
       c.estado !== 'firma_incompleta'
         ? { puede: false, motivo: null }
-        : vig?.vigente
-          ? { puede: true, motivo: null }
-          : { puede: false, motivo: 'El estudio ya no está vigente: se requiere una nueva evaluación.' },
-    reintento: c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0,
+        : !env.CONTRATOS_V3_ENABLED
+          ? { puede: false, motivo: 'El envío a firma está desactivado por ahora. Escríbenos si necesitas reenviarlo.' }
+          : c.expedienteEstado === 'cerrado' || c.expedienteEstado === 'rechazado'
+            ? {
+                puede: false,
+                motivo: `El estudio está ${c.expedienteEstado === 'rechazado' ? 'marcado como no aprobable' : 'cerrado'}: el contrato ya no se puede reenviar a firma.`,
+              }
+            : vig?.vigente
+              ? { puede: true, motivo: null }
+              : {
+                  puede: false,
+                  motivo:
+                    'El estudio ya no está vigente: para reenviarlo se requiere una nueva evaluación. Si no la vas a hacer, cancela el contrato para liberar el inmueble.',
+                },
+    reintento: env.CONTRATOS_V3_ENABLED && c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0,
   };
 }
 
