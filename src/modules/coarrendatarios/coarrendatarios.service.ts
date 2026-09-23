@@ -55,6 +55,13 @@ const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 const TOKEN_EXPIRY_DAYS = 7;
 
+// Columnas que SÍ pueden llegar al cliente (las de `Coarrendatario`). Nunca
+// '*': el token de la invitación en la respuesta dejaba al titular o al gestor
+// aceptar la autorización de habeas data en nombre del invitado. Tampoco
+// salen aceptado_ip, aceptado_user_agent ni invitado_por.
+const COLUMNAS_COA_PUBLICAS =
+  'id, expediente_id, nombre, apellido, tipo_documento, numero_documento, email, telefono, estado, estudio_id, aceptado_at, rechazado_at, created_at, updated_at';
+
 /** Enlace público de la invitación. Compartido por el correo y el WhatsApp. */
 function urlInvitacionCoarrendatario(token: string): string {
   return `${env.FRONTEND_URL}/coarrendatario/${token}`;
@@ -372,7 +379,7 @@ export async function invitarCoarrendatario(
       estado: 'pendiente_aceptacion',
       invitado_por: userId,
     } as never)
-    .select('*')
+    .select(COLUMNAS_COA_PUBLICAS)
     .single();
 
   if (error) {
@@ -453,7 +460,7 @@ export async function getCoarrendatarioPorExpediente(
 
   const { data } = await (supabase
     .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
-    .select('*')
+    .select(COLUMNAS_COA_PUBLICAS)
     .eq('expediente_id', expedienteId)
     .neq('estado', 'rechazado_invitacion')
     .order('created_at', { ascending: false })
@@ -544,7 +551,7 @@ export async function reenviarInvitacionCoarrendatario(
     } as never)
     .eq('id', coa.id)
     .eq('estado', 'pendiente_aceptacion')
-    .select('*')
+    .select(COLUMNAS_COA_PUBLICAS)
     .single();
 
   if (updError || !updRow) {

@@ -52,6 +52,21 @@ function getExtensionFromMime(mime: string): string {
   return map[mime] || 'bin';
 }
 
+type EstudioEmbed = { id: string; created_at: string; tipo: string | null };
+
+/**
+ * Estudio activo = el más reciente DEL TITULAR. El 'con_coarrendatario' se crea
+ * después, cuando el invitado acepta: si contara, los soportes del titular
+ * dejaban de listarse y las cargas nuevas quedaban colgadas del estudio del
+ * co-arrendatario.
+ */
+export function estudioActivoDelTitular(estudios: EstudioEmbed[] | null): EstudioEmbed | null {
+  const delTitular = (estudios ?? []).filter((e) => e.tipo !== 'con_coarrendatario');
+  return (
+    delTitular.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null
+  );
+}
+
 interface SoporteAccessCtx {
   expedienteId: string;
   estudioActivoId: string;
@@ -88,7 +103,7 @@ async function assertSoporteAccess(
       'id, estado, creado_por, ' +
         'inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), ' +
         'solicitantes(creado_por), ' +
-        'estudios(id, created_at)',
+        'estudios(id, created_at, tipo)',
     )
     .eq('id', expedienteId)
     .single();
@@ -107,21 +122,17 @@ async function assertSoporteAccess(
     creado_por: string | null;
     inmuebles: { propietario_id: string; inmobiliaria_id: string | null } | null;
     solicitantes: { creado_por: string | null } | null;
-    estudios: Array<{ id: string; created_at: string }> | null;
+    estudios: EstudioEmbed[] | null;
   };
 
-  // Estudio activo = el más reciente. Si no hay estudios todavía, no
-  // tiene sentido subir soportes — se aborta.
-  const estudios = row.estudios ?? [];
-  if (estudios.length === 0) {
+  // Si no hay estudio del titular todavía, no tiene sentido subir soportes.
+  const estudioActivo = estudioActivoDelTitular(row.estudios);
+  if (!estudioActivo) {
     throw AppError.badRequest(
       'Este estudio aún no tiene una evaluación crediticia habilitada.',
       'SIN_ESTUDIO',
     );
   }
-  const estudioActivo = [...estudios].sort((a, b) =>
-    new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  )[0];
 
   const esAdmin = userRol === 'administrador' || userRol === 'operador_analista';
   const esPropietarioRol = userRol === 'propietario' || userRol === 'inmobiliaria';
@@ -430,7 +441,7 @@ interface TokenDocsCtx {
 async function resolveExpedientePorTokenDocumentos(token: string): Promise<TokenDocsCtx> {
   const { data } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_documentos_expiracion, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at)')
+    .select('id, estado, token_documentos_expiracion, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at, tipo)')
     .eq('token_documentos', token)
     .maybeSingle();
 
@@ -440,18 +451,15 @@ async function resolveExpedientePorTokenDocumentos(token: string): Promise<Token
     token_documentos_expiracion: string | null;
     inmuebles: { propietario_id: string | null; direccion: string | null; ciudad: string | null } | null;
     solicitantes: { nombre: string | null; apellido: string | null } | null;
-    estudios: Array<{ id: string; created_at: string }> | null;
+    estudios: EstudioEmbed[] | null;
   } | null;
 
   if (!row) throw AppError.notFound('Enlace de carga no válido', 'TOKEN_INVALIDO');
   if (row.token_documentos_expiracion && new Date(row.token_documentos_expiracion) < new Date()) {
     throw AppError.badRequest('El enlace de carga ha expirado. Pide uno nuevo a la inmobiliaria.', 'TOKEN_EXPIRADO');
   }
-  const estudios = row.estudios ?? [];
-  if (estudios.length === 0) throw AppError.badRequest('El estudio aún no tiene evaluación.', 'SIN_ESTUDIO');
-  const estudioActivo = [...estudios].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  )[0];
+  const estudioActivo = estudioActivoDelTitular(row.estudios);
+  if (!estudioActivo) throw AppError.badRequest('El estudio aún no tiene evaluación.', 'SIN_ESTUDIO');
 
   return {
     expedienteId: row.id,

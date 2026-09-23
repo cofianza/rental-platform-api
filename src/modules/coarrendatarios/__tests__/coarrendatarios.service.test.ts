@@ -116,6 +116,8 @@ vi.mock('@/modules/estudios/reglas-duras', () => ({
 // Import AFTER mocks
 import {
   invitarCoarrendatario,
+  getCoarrendatarioPorExpediente,
+  reenviarInvitacionCoarrendatario,
   onCoarrendatarioEstudioCompletado,
   construirCorreoCoarrendatario,
   rechazarInvitacion,
@@ -184,6 +186,52 @@ describe('invitarCoarrendatario — Politica §5 (mismo afianzado bajo otro nomb
 
     expect(coa.id).toBe(COA_ID);
     expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(true);
+  });
+});
+
+// ============================================================
+// Ley 1581: el token de la invitacion nunca viaja al cliente. Con el, el
+// titular o el gestor podian aceptar el habeas data en nombre del invitado.
+// ============================================================
+
+describe('respuestas al cliente sin el token de la invitacion', () => {
+  const PRIVADAS = /\*|token|aceptado_ip|aceptado_user_agent|invitado_por/;
+  // Selects cuyo resultado se devuelve: los que van tras insert/update y el
+  // de la consulta. El select('*') interno del reenvio no sale de la API.
+  const selectsDevueltos = () =>
+    ops
+      .filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'select')
+      .map((o) => String(o.args[0]));
+
+  it('invitar y consultar piden solo columnas publicas', async () => {
+    enqueue('expedientes', ctxRow(), ctxRow());
+    enqueue(
+      'expediente_coarrendatarios',
+      { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' }, error: null },
+      { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, estado: 'pendiente_aceptacion', estudio_id: null }, error: null },
+    );
+
+    await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
+    await getCoarrendatarioPorExpediente(EXPEDIENTE_ID, GESTOR_ID, 'administrador');
+
+    const selects = selectsDevueltos();
+    expect(selects).toHaveLength(2);
+    for (const cols of selects) expect(cols).not.toMatch(PRIVADAS);
+  });
+
+  it('reenviar devuelve la fila actualizada sin el token nuevo', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue(
+      'expediente_coarrendatarios',
+      { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, estado: 'pendiente_aceptacion', token: 'viejo' }, error: null },
+      { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', email: 'luis@correo.co', estado: 'pendiente_aceptacion' }, error: null },
+    );
+
+    await reenviarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', {});
+
+    const i = ops.findIndex((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
+    const trasUpdate = ops.slice(i).find((o) => o.table === 'expediente_coarrendatarios' && o.method === 'select');
+    expect(String(trasUpdate?.args[0])).not.toMatch(PRIVADAS);
   });
 });
 
