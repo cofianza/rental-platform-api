@@ -254,7 +254,7 @@ describe('Reportes Service', () => {
 
       const result = await reportesService.getTiemposPorEtapa('2026-01-01', '2026-03-31');
 
-      expect(result.etapas.map((e) => [e.etapa, e.promedio_dias])).toEqual([['Borrador', 2], ['En Revision', 1]]);
+      expect(result.etapas.map((e) => [e.etapa, e.promedio_dias])).toEqual([['Borrador', 2], ['En revisión', 1]]);
       expect(result.resumen.tiempo_total_promedio_dias).toBe(3);
     });
 

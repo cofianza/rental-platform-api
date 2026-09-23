@@ -440,7 +440,7 @@ const WORKFLOW_ORDER = [
 
 const ESTADO_LABELS: Record<string, string> = {
   borrador: 'Borrador',
-  en_revision: 'En Revision',
+  en_revision: 'En revisión',
   informacion_incompleta: 'Info. Incompleta',
   aprobado: 'Aprobado',
   rechazado: 'Rechazado',
