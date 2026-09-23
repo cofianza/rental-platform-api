@@ -16,7 +16,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { perfilEsDuenoDeInmueble, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
 
@@ -82,6 +82,11 @@ export async function listPaquetesActivos(): Promise<PaqueteRow[]> {
 
 // ============================================================
 // Saldo + lotes activos
+//
+// Los créditos son de la ORGANIZACIÓN, no de quien los compró: viven a nombre
+// del titular principal (perfil canónico). Las funciones de abajo reciben el
+// perfil de quien llama y lo resuelven al canónico; sin eso un miembro veía
+// saldo 0 con el paquete del titular sin usar y volvía a pagar.
 // ============================================================
 
 export interface SaldoCreditos {
@@ -101,11 +106,12 @@ export interface SaldoCreditos {
 
 export async function getSaldoCreditos(perfilId: string): Promise<SaldoCreditos> {
   const nowIso = new Date().toISOString();
+  const dueno = await resolveOrgCanonicalPerfilId(perfilId);
 
   const { data, error } = await (supabase
     .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .select('id, cantidad_disponible, cantidad_inicial, vence_en, origen, created_at')
-    .eq('perfil_id', perfilId)
+    .eq('perfil_id', dueno)
     .gt('cantidad_disponible', 0)
     .or(`vence_en.is.null,vence_en.gt.${nowIso}`)
     .order('created_at', { ascending: true });
@@ -153,6 +159,7 @@ export async function listMovimientos(perfilId: string, query: ListMovimientosQu
   const page = query.page ?? 1;
   const limit = query.limit ?? 20;
   const offset = (page - 1) * limit;
+  const dueno = await resolveOrgCanonicalPerfilId(perfilId);
 
   let q = (supabase
     .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
@@ -160,7 +167,7 @@ export async function listMovimientos(perfilId: string, query: ListMovimientosQu
       'id, tipo, cantidad, saldo_resultante, expediente_id, solicitante_id, lote_id, notas, created_at',
       { count: 'exact' },
     )
-    .eq('perfil_id', perfilId);
+    .eq('perfil_id', dueno);
 
   if (query.tipo) q = q.eq('tipo', query.tipo);
 
@@ -234,13 +241,14 @@ export async function listMovimientos(perfilId: string, query: ListMovimientosQu
 // ============================================================
 
 export async function listCompras(perfilId: string) {
+  const dueno = await resolveOrgCanonicalPerfilId(perfilId);
   const { data, error } = await (supabase
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, paquete_id, cantidad_estudios, precio_cop, vence_en_dias,
       estado, stripe_session_id, payment_link_url, completed_at, created_at
     `)
-    .eq('perfil_id', perfilId)
+    .eq('perfil_id', dueno)
     .order('created_at', { ascending: false })
     .limit(50);
 
@@ -271,12 +279,15 @@ export async function comprarPaquete(
   }
 
   const paquete = pkgData as PaqueteRow;
+  // La compra (y el lote que acredita el webhook) queda a nombre de la
+  // organización; creado_por guarda quién la hizo.
+  const dueno = await resolveOrgCanonicalPerfilId(perfilId);
 
   // 2. Crear registro de compra (estado pendiente)
   const { data: compraData, error: compraErr } = await (supabase
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .insert({
-      perfil_id: perfilId,
+      perfil_id: dueno,
       paquete_id: paquete.id,
       cantidad_estudios: paquete.cantidad_estudios,
       precio_cop: paquete.precio_cop,
@@ -311,7 +322,7 @@ export async function comprarPaquete(
       metadata: {
         concepto: 'creditos_estudios',
         compra_id: compra.id,
-        perfil_id: perfilId,
+        perfil_id: dueno,
         paquete_id: paquete.id,
       },
       successUrl,
@@ -485,6 +496,21 @@ export async function acreditarCompraDesdeWebhook(
     'Compra de creditos acreditada',
   );
 
+  // Factura electrónica del paquete, fire-and-forget como la del pago del
+  // estudio (orchestrator.onPagoConfirmado). Antes solo salía si el comprador
+  // pulsaba "Facturar": ingreso cobrado sin factura DIAN. Si falla (Factus o
+  // datos fiscales incompletos) la compra sigue en Pendientes de facturación.
+  import('@/modules/facturacion/facturacion.service')
+    .then(({ crearFacturaDesdeCompraCreditos }) =>
+      crearFacturaDesdeCompraCreditos(compra.id, null, undefined, null),
+    )
+    .catch((err) =>
+      logger.warn(
+        { error: err instanceof Error ? err.message : String(err), compraId: compra.id },
+        'Facturación automática de la compra de créditos falló — pendiente de facturar a mano',
+      ),
+    );
+
   return { ok: true, lote_id: lote.id };
 }
 
@@ -536,6 +562,9 @@ export async function liberarEstudioConCredito(
   if (!esDueno) {
     throw AppError.forbidden('Este inmueble no le pertenece', 'INMUEBLE_NO_PROPIO');
   }
+  // El crédito sale del saldo de la organización (perfil canónico); el
+  // movimiento guarda en usuario_id quién lo liberó.
+  const dueno = await resolveOrgCanonicalPerfilId(perfilId);
 
   // 2.5. TOPE DE CANON — flujo §4.4: "no se cobra el estudio". Descontar un
   //      credito ES el cobro (es un estudio ya pagado que se consume), asi que
@@ -607,7 +636,7 @@ export async function liberarEstudioConCredito(
       error: { code?: string; message?: string } | null;
     }>;
   }).rpc('consume_credito_estudio', {
-    p_perfil_id: perfilId,
+    p_perfil_id: dueno,
     p_expediente_id: expedienteId,
     p_solicitante_id: exp.solicitante_id,
     p_pago_id: pago.id,

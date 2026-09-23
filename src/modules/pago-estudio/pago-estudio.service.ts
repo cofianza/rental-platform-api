@@ -838,7 +838,7 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
     throw AppError.badRequest('Solo se puede cancelar un pago pendiente', 'PAGO_NO_CANCELABLE');
   }
 
-  // perfilId = userId: la inmobiliaria dueña del inmueble es dueña de los créditos.
+  // perfilId = userId: el service de créditos lo resuelve al saldo de la organización.
   const { liberarEstudioConCredito, getSaldoCreditos } = await import('@/modules/creditos-estudios/creditos-estudios.service');
 
   // Verificar saldo ANTES de cancelar el link: sin esto, una inmobiliaria sin

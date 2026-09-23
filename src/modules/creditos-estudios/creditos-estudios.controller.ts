@@ -56,9 +56,12 @@ export async function facturarCompra(req: Request, res: Response) {
   const { id } = req.params as unknown as CompraIdParams;
   const override = (req.body || {}) as FacturarCompraInput;
   const { crearFacturaDesdeCompraCreditos } = await import('@/modules/facturacion/facturacion.service');
+  // Cofianza (admin/operador) factura desde Pendientes de facturación la compra
+  // de cualquier organización: null = sin chequeo de pertenencia.
+  const interno = req.user!.rol === 'administrador' || req.user!.rol === 'operador_analista';
   const result = await crearFacturaDesdeCompraCreditos(
     id,
-    req.user!.id,
+    interno ? null : req.user!.id,
     override,
     req.user!.id,
     req.ip,

@@ -57,10 +57,11 @@ creditosEstudiosRouter.post(
   controller.comprarPaquete,
 );
 
-// Facturar compra de paquete — datos fiscales opcionales en el body
+// Facturar compra de paquete — datos fiscales opcionales en el body.
+// Admin/operador la facturan desde Pendientes de facturación (cualquier org).
 creditosEstudiosRouter.post(
   '/me/compras/:id/facturar',
-  roleGuard(['inmobiliaria']),
+  roleGuard(['inmobiliaria', 'administrador', 'operador_analista']),
   validate({ params: compraIdParamsSchema, body: facturarCompraSchema }),
   controller.facturarCompra,
 );

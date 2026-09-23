@@ -107,7 +107,23 @@ async function reapuntarTitularPrincipalSiNecesario(orgId: string, salientePerfi
     .eq('id', orgId);
   if (error) {
     logger.warn({ error: error.message, orgId }, 'No se pudo re-apuntar owner_perfil_id');
+    return;
   }
+
+  // Los créditos de estudios de la org viven a nombre del titular principal:
+  // si no se mueven con él, el equipo queda con saldo 0 y el paquete varado.
+  const tablas = ['lotes_creditos_estudios', 'compras_creditos_estudios', 'movimientos_creditos_estudios'];
+  const resultados = await Promise.all(
+    tablas.map((t) => db(t).update({ perfil_id: nuevoTitular } as never).eq('perfil_id', salientePerfilId)),
+  );
+  resultados.forEach(({ error: errCred }, i) => {
+    if (errCred) {
+      logger.error(
+        { error: errCred.message, orgId, tabla: tablas[i], salientePerfilId, nuevoTitular },
+        'No se pudieron mover los créditos de estudios al nuevo titular — moverlos a mano',
+      );
+    }
+  });
 }
 
 /**

@@ -147,6 +147,32 @@ async function clientePagador(ctx: PagoConContexto, solEmail: string | null): Pr
   return clienteDesdePerfil(data as unknown as PerfilFiscal, emailCreador);
 }
 
+/**
+ * Pagos de estudio que salieron de un crédito prepagado (liberarEstudioConCredito):
+ * el `pagos` del consumo no se distingue de una transferencia; la marca es su
+ * movimiento en movimientos_creditos_estudios. Ese dinero ya se factura en la
+ * compra del paquete — facturar el consumo le mandaba al arrendatario una
+ * factura DIAN por un estudio que pagó la inmobiliaria, y duplicaba el ingreso.
+ */
+async function pagosConsumoDeCredito(pagoIds: string[]): Promise<Set<string>> {
+  if (pagoIds.length === 0) return new Set();
+  const { data } = await (supabase
+    .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('pago_id')
+    .in('pago_id', pagoIds);
+  return new Set(((data || []) as Array<{ pago_id: string }>).map((m) => m.pago_id));
+}
+
+async function assertNoEsConsumoDeCredito(pagoId: string): Promise<void> {
+  if ((await pagosConsumoDeCredito([pagoId])).has(pagoId)) {
+    throw new AppError(
+      409,
+      'PAGO_CON_CREDITO',
+      'Esta evaluación se pagó con un crédito prepagado: se facturó con la compra del paquete.',
+    );
+  }
+}
+
 async function findFacturaExistente(pagoId: string) {
   const { data } = await (supabase
     .from('facturas' as string) as ReturnType<typeof supabase.from>)
@@ -320,6 +346,7 @@ export async function previewFacturaPago(pagoId: string): Promise<{
     };
   }
 
+  await assertNoEsConsumoDeCredito(pagoId);
   const ctx = await fetchPagoContext(pagoId);
   const sol = ctx.expediente?.solicitante;
   if (!sol) {
@@ -360,6 +387,7 @@ export async function crearFacturaDesdePago(
   }
 
   // 2. Cargar pago + expediente + solicitante.
+  await assertNoEsConsumoDeCredito(pagoId);
   const ctx = await fetchPagoContext(pagoId);
   const sol = ctx.expediente?.solicitante;
   if (!sol) {
@@ -670,9 +698,10 @@ async function findFacturaExistentePorCompra(compraId: string) {
 
 export async function crearFacturaDesdeCompraCreditos(
   compraId: string,
-  perfilId: string,
+  /** Quien la pide; null = sistema (webhook) o rol interno: sin chequeo de pertenencia. */
+  perfilId: string | null,
   override: DatosFiscalesInmobiliaria | undefined,
-  userId: string,
+  userId: string | null,
   ip?: string,
 ): Promise<{ id: string; factus_number: string | null; cufe: string | null; estado: string }> {
   // 1. Idempotencia: si ya hay factura emitida para esta compra, devolverla.
@@ -709,7 +738,9 @@ export async function crearFacturaDesdeCompraCreditos(
     paquete_id: string;
   };
 
-  if (compra.perfil_id !== perfilId) {
+  // La compra es de la organización (perfil canónico): cualquier miembro la
+  // factura, y la factura sale con los datos fiscales de la organización.
+  if (perfilId && compra.perfil_id !== (await resolveOrgCanonicalPerfilId(perfilId))) {
     throw AppError.forbidden('Esta compra no le pertenece', 'NOT_OWNER');
   }
   if (compra.estado !== 'completado') {
@@ -727,7 +758,7 @@ export async function crearFacturaDesdeCompraCreditos(
       razon_social, nit, direccion, direccion_comercial, ciudad,
       nombre_representante, telefono, email_recaudo, municipio_codigo, municipio_nombre
     `)
-    .eq('id', perfilId)
+    .eq('id', compra.perfil_id)
     .single();
   if (perfErr || !perfilRow) {
     throw AppError.notFound('Perfil no encontrado', 'PERFIL_NOT_FOUND');
@@ -751,7 +782,7 @@ export async function crearFacturaDesdeCompraCreditos(
     municipio_nombre: string | null;
   };
 
-  const { data: authUserData } = await supabase.auth.admin.getUserById(perfilId);
+  const { data: authUserData } = await supabase.auth.admin.getUserById(compra.perfil_id);
   const emailAuth = authUserData?.user?.email || null;
 
   // 4. Combinar perfil + override. El override gana (lo que el usuario
@@ -856,7 +887,7 @@ export async function crearFacturaDesdeCompraCreditos(
     ],
   };
 
-  logger.info({ compraId, referenceCode, perfilId }, 'Factus: enviando factura de compra de creditos');
+  logger.info({ compraId, referenceCode, perfilId: compra.perfil_id }, 'Factus: enviando factura de compra de creditos');
 
   // 7. Llamar a Factus.
   let factusRes: factus.CreateBillResponse;
@@ -1120,13 +1151,21 @@ export async function listFacturas(query: ListFacturasQuery, userId: string, use
 // ── Pendientes de facturar ────────────────────────────────────────
 // Lista pagos en estado 'completado' que aun NO tienen factura emitida.
 // Filtrado por rol:
-// - admin/operador: todos los pagos completados sin factura.
+// - admin/operador: todos los pagos completados sin factura, y además las
+//   compras de paquetes de créditos sin factura (no viven en `pagos`).
 // - inmobiliaria/propietario: pagos de expedientes asociados a sus inmuebles.
 // - solicitante: pagos de sus propios expedientes.
+// Los pagos de estudios liberados con crédito no se listan: ese dinero se
+// factura en la compra del paquete.
 
 export interface PagoPendienteFacturar {
-  pago_id: string;
-  expediente_id: string;
+  /** null en una compra de créditos (ver compra_id). */
+  pago_id: string | null;
+  /** Compra de paquete de créditos; null en un pago. */
+  compra_id: string | null;
+  /** En una compra: el nombre de la organización que compró. */
+  cliente_nombre: string | null;
+  expediente_id: string | null;
   expediente_numero: string;
   concepto: string;
   monto: number;
@@ -1193,14 +1232,17 @@ export async function listPendientesFacturar(
       expediente: { numero: string } | null;
     }>) || [];
 
-  if (pagosTyped.length === 0) return [];
-
-  // 3. Cruzar con facturas para excluir las que ya estan emitidas.
+  // 3. Cruzar con facturas (excluir las emitidas) y con los consumos de crédito.
   const pagoIds = pagosTyped.map((p) => p.id);
-  const { data: facturasRows } = await (supabase
-    .from('facturas' as string) as ReturnType<typeof supabase.from>)
-    .select('pago_id, estado, error_mensaje')
-    .in('pago_id', pagoIds);
+  const [{ data: facturasRows }, conCredito] = pagoIds.length
+    ? await Promise.all([
+        (supabase
+          .from('facturas' as string) as ReturnType<typeof supabase.from>)
+          .select('pago_id, estado, error_mensaje')
+          .in('pago_id', pagoIds),
+        pagosConsumoDeCredito(pagoIds),
+      ])
+    : [{ data: [] }, new Set<string>()];
 
   const facturasByPago = new Map<string, { estado: string; error_mensaje: string | null }>();
   for (const f of (facturasRows as Array<{ pago_id: string; estado: string; error_mensaje: string | null }> | null) || []) {
@@ -1210,21 +1252,84 @@ export async function listPendientesFacturar(
     facturasByPago.set(f.pago_id, { estado: f.estado, error_mensaje: f.error_mensaje });
   }
 
-  return pagosTyped
+  const pendientes: PagoPendienteFacturar[] = pagosTyped
     .filter((p) => {
       const f = facturasByPago.get(p.id);
-      // Excluir si ya hay factura emitida.
-      return !f || f.estado !== 'emitida';
+      // Excluir si ya hay factura emitida o si salió de un crédito prepagado.
+      return (!f || f.estado !== 'emitida') && !conCredito.has(p.id);
     })
     .map((p) => {
       const f = facturasByPago.get(p.id);
       return {
         pago_id: p.id,
+        compra_id: null,
+        cliente_nombre: null,
         expediente_id: p.expediente_id,
         expediente_numero: p.expediente?.numero || '',
         concepto: p.concepto,
         monto: Number(p.monto) || 0,
         fecha_pago: p.fecha_pago,
+        factura_estado: f?.estado ?? null,
+        factura_error: f?.error_mensaje ?? null,
+      };
+    });
+
+  // 4. Roles internos: también las compras de paquetes sin factura emitida.
+  //    Sin esto una compra cuya factura automática falló (Factus, datos
+  //    fiscales incompletos) solo la veía el comprador.
+  if (expedienteIdsScope === null) {
+    pendientes.push(...(await comprasPendientesFacturar()));
+    pendientes.sort((a, b) => (b.fecha_pago ?? '').localeCompare(a.fecha_pago ?? ''));
+  }
+
+  return pendientes;
+}
+
+async function comprasPendientesFacturar(): Promise<PagoPendienteFacturar[]> {
+  const { data: comprasRows, error } = await (supabase
+    .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, perfil_id, precio_cop, completed_at')
+    .eq('estado', 'completado');
+  if (error) {
+    logger.error({ error: error.message }, 'Error listando compras de créditos pendientes de facturar');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar pagos pendientes de facturacion');
+  }
+  const compras = (comprasRows || []) as Array<{ id: string; perfil_id: string; precio_cop: number | string; completed_at: string | null }>;
+  if (compras.length === 0) return [];
+
+  const [{ data: facturasRows }, { data: perfilesRows }] = await Promise.all([
+    (supabase
+      .from('facturas' as string) as ReturnType<typeof supabase.from>)
+      .select('compra_creditos_id, estado, error_mensaje')
+      .in('compra_creditos_id', compras.map((c) => c.id)),
+    (supabase
+      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('id, nombre, apellido, razon_social')
+      .in('id', [...new Set(compras.map((c) => c.perfil_id))]),
+  ]);
+
+  const facturaByCompra = new Map(
+    ((facturasRows || []) as Array<{ compra_creditos_id: string; estado: string; error_mensaje: string | null }>)
+      .map((f) => [f.compra_creditos_id, f]),
+  );
+  const nombreByPerfil = new Map(
+    ((perfilesRows || []) as Array<{ id: string; nombre: string | null; apellido: string | null; razon_social: string | null }>)
+      .map((p) => [p.id, p.razon_social?.trim() || `${p.nombre ?? ''} ${p.apellido ?? ''}`.trim()]),
+  );
+
+  return compras
+    .filter((c) => facturaByCompra.get(c.id)?.estado !== 'emitida')
+    .map((c) => {
+      const f = facturaByCompra.get(c.id);
+      return {
+        pago_id: null,
+        compra_id: c.id,
+        cliente_nombre: nombreByPerfil.get(c.perfil_id) || null,
+        expediente_id: null,
+        expediente_numero: '',
+        concepto: 'creditos_estudios',
+        monto: Number(c.precio_cop) || 0,
+        fecha_pago: c.completed_at,
         factura_estado: f?.estado ?? null,
         factura_error: f?.error_mensaje ?? null,
       };

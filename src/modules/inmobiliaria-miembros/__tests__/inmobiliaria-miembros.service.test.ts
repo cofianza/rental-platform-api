@@ -168,3 +168,30 @@ describe('quitar un miembro le quita la cartera (sus inmuebles pasan a la titula
     await expect(adminRevocarMiembro('admin', 'org1', 'm-x')).rejects.toMatchObject({ errorCode: 'INMUEBLES_NO_REASIGNADOS' });
   });
 });
+
+describe('cambio de titular principal: los créditos de estudios se van con la titularidad', () => {
+  it('al degradar al titular principal, sus lotes/compras/movimientos pasan al nuevo titular', async () => {
+    enqueue(
+      ownerMembership, // assertOwner
+      { data: { id: 'm-self', rol_miembro: 'owner', perfil_id: 'p-self', estado: 'activo', inmobiliaria_id: 'org1' } },
+      { count: 2 }, // hay otro titular
+      { error: null }, // update rol
+      { data: { owner_perfil_id: 'p-self' } }, // era el principal
+      { data: { perfil_id: 'p-owner2' } }, // co-titular que queda
+      { error: null }, // update owner_perfil_id
+      { error: null }, { error: null }, { error: null }, // créditos
+    );
+
+    await cambiarRolMiembro('p-self', 'm-self', 'miembro');
+
+    const tablas = mockFrom.mock.calls.map((c) => (c as unknown[])[0]);
+    expect(tablas).toEqual(expect.arrayContaining([
+      'lotes_creditos_estudios', 'compras_creditos_estudios', 'movimientos_creditos_estudios',
+    ]));
+    const movidos = (chain.update as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => (c[0] as Record<string, unknown>).perfil_id === 'p-owner2',
+    );
+    expect(movidos).toHaveLength(3);
+    expect(chain.eq).toHaveBeenCalledWith('perfil_id', 'p-self');
+  });
+});
