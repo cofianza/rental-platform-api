@@ -41,7 +41,13 @@ vi.mock('@/lib/logger', () => ({
 }));
 vi.mock('@/config', () => ({ env: { CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 } }));
 
-import { setParametro, invalidateCalibracionCache, getCalibracion } from '@/lib/calibracion';
+import {
+  setParametro,
+  invalidateCalibracionCache,
+  getCalibracion,
+  validarCoherencia,
+  CALIBRACION_DEFAULT,
+} from '@/lib/calibracion';
 
 const USER = '660e8400-e29b-41d4-a716-446655440000';
 const opsDe = (table: string, method: string) =>
@@ -170,5 +176,41 @@ describe('lectura fallida — no se queda un minuto con los defaults', () => {
     });
     expect(opsDe('parametros_calibracion_historial', 'insert')).toHaveLength(0);
     expect(opsDe('parametros_calibracion', 'upsert')).toHaveLength(0);
+  });
+});
+
+describe('umbrales cruzados — el panel no deja guardarlos', () => {
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    invalidateCalibracionCache();
+  });
+
+  it('rechaza una zona gris en o por encima de la aprobacion automatica (400) sin tocar la base', async () => {
+    enqueue('parametros_calibracion', { data: [], error: null }); // vigentes: 70 / 85
+
+    await expect(setParametro('UMBRAL_ZONA_GRIS', 85, USER)).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'PARAMETRO_INVALIDO',
+    });
+    expect(opsDe('parametros_calibracion_historial', 'insert')).toHaveLength(0);
+    expect(opsDe('parametros_calibracion', 'upsert')).toHaveLength(0);
+  });
+
+  it('compara contra el valor guardado de la pareja: bajar la aprobacion en cascada por debajo del rechazo', async () => {
+    enqueue('parametros_calibracion', { data: [{ clave: 'UMBRAL_CASCADA_RECHAZO', valor: 60 }], error: null });
+
+    await expect(setParametro('UMBRAL_CASCADA_APROBACION', 55, USER)).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'PARAMETRO_INVALIDO',
+    });
+  });
+
+  it('validarCoherencia solo mira la pareja de la clave que cambia', () => {
+    const cruzada = { ...CALIBRACION_DEFAULT, UMBRAL_ZONA_GRIS: 90 };
+    expect(validarCoherencia(cruzada, 'UMBRAL_ZONA_GRIS')).toMatch(/zona gris/);
+    expect(validarCoherencia(cruzada, 'UMBRAL_APROBACION_AUTOMATICA')).toMatch(/zona gris/);
+    expect(validarCoherencia(cruzada, 'DIAS_EXPIRACION_ESTUDIO')).toBeNull();
+    expect(validarCoherencia(CALIBRACION_DEFAULT, 'UMBRAL_CASCADA_RECHAZO')).toBeNull();
   });
 });

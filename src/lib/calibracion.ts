@@ -344,6 +344,24 @@ async function leerCalibracion(): Promise<Calibracion> {
   }
 }
 
+// Parejas de umbrales que no pueden cruzarse: con la zona gris en o por encima
+// de la aprobación nadie cae en zona gris, y con la cascada invertida se
+// rechaza sin consultar la segunda central lo que debía aprobarse.
+const PAREJAS_ORDENADAS: Array<[bajo: ClaveCalibracion, alto: ClaveCalibracion, nombreBajo: string, nombreAlto: string]> = [
+  ['UMBRAL_ZONA_GRIS', 'UMBRAL_APROBACION_AUTOMATICA', 'La zona gris', 'la aprobación automática'],
+  ['UMBRAL_CASCADA_RECHAZO', 'UMBRAL_CASCADA_APROBACION', 'El rechazo en cascada', 'la aprobación en cascada'],
+];
+
+/** Pura: revisa que el cambio de `clave` no cruce su pareja. Devuelve el motivo o null. */
+export function validarCoherencia(c: Calibracion, clave: string): string | null {
+  for (const [bajo, alto, nombreBajo, nombreAlto] of PAREJAS_ORDENADAS) {
+    if ((clave === bajo || clave === alto) && c[bajo] >= c[alto]) {
+      return `${nombreBajo} (${c[bajo]}) debe quedar por debajo de ${nombreAlto} (${c[alto]})`;
+    }
+  }
+  return null;
+}
+
 export interface FilaParametro extends DefinicionParametro {
   valor: number;
   actualizado_en: string | null;
@@ -398,6 +416,9 @@ export async function setParametro(
       `No se pudo leer el valor vigente de ${clave}; el valor no se modificó. ${e instanceof Error ? e.message : ''}`.trim(),
     );
   }
+  const incoherencia = validarCoherencia({ ...vigente, [clave]: valor }, clave);
+  if (incoherencia) throw AppError.badRequest(incoherencia, 'PARAMETRO_INVALIDO');
+
   const anterior = vigente[clave as ClaveCalibracion];
   const ahora = new Date().toISOString();
 
