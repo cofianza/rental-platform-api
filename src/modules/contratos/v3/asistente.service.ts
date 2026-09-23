@@ -435,6 +435,7 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
       textosPendientes: textosPendientesPrevistos(f, a, SIN_APROBAR[a.paso1?.ruta ?? 'A']),
       modalidadConvenio: f.modalidadFianzaDefecto,
       reservadoHasta: reservaHasta(f.v3.created_at, cal.DIAS_RESERVA_INMUEBLE),
+      reservaDiasHabiles: cal.DIAS_RESERVA_INMUEBLE,
       faltantes: falta,
       documento: doc
         ? {

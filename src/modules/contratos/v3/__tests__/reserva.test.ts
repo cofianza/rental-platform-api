@@ -30,7 +30,7 @@ const { mockEnv, mockFrom, ops, queues, enqueue, mockCancelar, mockAvisar } = vi
     return chain;
   };
   return {
-    mockEnv: { CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 },
+    mockEnv: { CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000, CONTRATOS_V3_ENABLED: true },
     mockFrom: vi.fn((table: string) => chainFor(table)),
     ops,
     queues,
@@ -67,7 +67,12 @@ const borrador = (o: Record<string, unknown> = {}) => ({
   created_at: '2026-09-14T15:00:00Z',
   ...o,
 });
-const EXP = { numero: 'EXP-2026-0100', inmobiliaria_id: 'org-1', miembro_responsable_id: 'u-resp' };
+const EXP = {
+  numero: 'EXP-2026-0100',
+  inmobiliaria_id: 'org-1',
+  miembro_responsable_id: 'u-resp',
+  inmuebles: { estado: 'disponible', reservado_por_expediente_id: null },
+};
 const MIEMBROS = [
   { perfil_id: 'u-creador', rol_miembro: 'miembro' },
   { perfil_id: 'u-resp', rol_miembro: 'miembro' },
@@ -80,6 +85,7 @@ beforeEach(() => {
   ops.length = 0;
   vi.clearAllMocks();
   mockCancelar.mockResolvedValue(true);
+  mockEnv.CONTRATOS_V3_ENABLED = true;
 });
 
 describe('reservaHasta', () => {
@@ -113,7 +119,30 @@ describe('barrerReservasV3', () => {
     const { mensaje } = mockAvisar.mock.calls[0][0] as { mensaje: string };
     expect(mensaje).toContain('EXP-2026-0100');
     expect(mensaje).toContain('21/09/2026');
+    expect(mensaje).toContain('el inmueble quedó libre');
     expect(mensaje).toContain('el asistente trae lo que ya llenaste');
+    // El inmueble se lee con la pista de la FK (dos relaciones expedientes↔inmuebles).
+    expect(String(ops.find((o) => o.table === 'expedientes' && o.method === 'select')?.args[0])).toContain(
+      'inmuebles!expedientes_inmueble_id_fkey(estado, reservado_por_expediente_id)',
+    );
+  });
+
+  it('si no se comprobó que el inmueble quedó libre, el aviso no lo afirma', async () => {
+    enqueue('contratos', { data: [borrador()], error: null });
+    enqueue('expedientes', { data: { ...EXP, inmuebles: { estado: 'ocupado', reservado_por_expediente_id: 'exp-1' } }, error: null });
+    enqueue('inmobiliaria_miembros', { data: MIEMBROS, error: null });
+    await barrerReservasV3(new Date('2026-09-22T15:00:00Z'));
+    const { mensaje } = mockAvisar.mock.calls[0][0] as { mensaje: string };
+    expect(mensaje).toContain('El borrador se canceló. Si el arriendo sigue');
+    expect(mensaje).not.toContain('libre');
+  });
+
+  it('con CONTRATOS_V3_ENABLED apagado no hace nada (ni lee)', async () => {
+    mockEnv.CONTRATOS_V3_ENABLED = false;
+    enqueue('contratos', { data: [borrador()], error: null });
+    await barrerReservasV3(new Date('2026-09-22T15:00:00Z'));
+    expect(ops).toEqual([]);
+    expect(mockCancelar).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -549,6 +549,7 @@ describe('iniciarContrato', () => {
     expect(r.estado.contrato!.id).toBe(CTO);
     // Adenda 1 contratos, respuesta 15: iniciado el lunes 14, la reserva va hasta el lunes 21.
     expect(r.estado.contrato!.reservadoHasta).toBe('2026-09-21');
+    expect(r.estado.contrato!.reservaDiasHabiles).toBe(5);
     expect(mockReservar).not.toHaveBeenCalled();
     expect(opsDe('contratos', 'insert')).toHaveLength(0);
   });

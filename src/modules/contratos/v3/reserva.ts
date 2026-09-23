@@ -10,6 +10,7 @@
  * Al volver a iniciar, el asistente precarga lo que llevaba (Fuentes.anterior).
  */
 
+import { env } from '@/config';
 import { getCalibracion } from '@/lib/calibracion';
 import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
@@ -29,8 +30,13 @@ interface Borrador {
   created_at: string;
 }
 
-/** Cada hora (server.ts). Idempotente: la cancelación es un CAS sobre el estado. */
+/**
+ * Cada hora (server.ts). Idempotente: la cancelación es un CAS sobre el estado.
+ * Con CONTRATOS_V3_ENABLED apagado no hace nada: nadie puede volver a iniciar el
+ * contrato que cancelaría.
+ */
 export async function barrerReservasV3(ahora = new Date()): Promise<void> {
+  if (!env.CONTRATOS_V3_ENABLED) return;
   const dias = (await getCalibracion()).DIAS_RESERVA_INMUEBLE;
   const hoy = fechaBogota(ahora);
   // n días hábiles son al menos n calendario: lo iniciado después no puede estar vencido.
@@ -66,12 +72,19 @@ export async function barrerReservasV3(ahora = new Date()): Promise<void> {
  */
 async function avisar(c: Borrador, hasta: string, plazo: string): Promise<void> {
   try {
+    // El inmueble se lee DESPUÉS de cancelar: el aviso solo dice que quedó libre si lo está.
     const { data: exp } = await db('expedientes')
-      .select('numero, inmobiliaria_id, miembro_responsable_id')
+      .select('numero, inmobiliaria_id, miembro_responsable_id, inmuebles!expedientes_inmueble_id_fkey(estado, reservado_por_expediente_id)')
       .eq('id', c.expediente_id)
       .maybeSingle();
-    const e = exp as { numero: string; inmobiliaria_id: string | null; miembro_responsable_id: string | null } | null;
+    const e = exp as {
+      numero: string;
+      inmobiliaria_id: string | null;
+      miembro_responsable_id: string | null;
+      inmuebles: { estado: string; reservado_por_expediente_id: string | null } | null;
+    } | null;
     if (!e?.inmobiliaria_id) return;
+    const libre = e.inmuebles?.estado === 'disponible' && !e.inmuebles.reservado_por_expediente_id;
     const { data: miembros } = await db('inmobiliaria_miembros')
       .select('perfil_id, rol_miembro')
       .eq('inmobiliaria_id', e.inmobiliaria_id)
@@ -88,7 +101,8 @@ async function avisar(c: Borrador, hasta: string, plazo: string): Promise<void> 
         titulo: `Se venció la reserva del inmueble — contrato ${c.numero}`,
         mensaje:
           `El contrato ${c.numero} del estudio ${e.numero} no se envió a firma en ${plazo} (la reserva iba hasta el ${ddmmaaaa(hasta)}). ` +
-          'El borrador se canceló y el inmueble quedó libre, fuera de la vitrina. Si el arriendo sigue, inicia el contrato de nuevo: el asistente trae lo que ya llenaste.',
+          (libre ? 'El borrador se canceló y el inmueble quedó libre, fuera de la vitrina. ' : 'El borrador se canceló. ') +
+          'Si el arriendo sigue, inicia el contrato de nuevo: el asistente trae lo que ya llenaste.',
         link: `/expedientes/${c.expediente_id}/contrato`,
         payload: { contrato_id: c.id, expediente_id: c.expediente_id },
       });

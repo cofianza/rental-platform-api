@@ -58,7 +58,8 @@ if (env.FIRMA_V3_BARRIDO_ENABLED) {
 }
 
 // Contratos V3: reserva del inmueble vencida (Adenda 1 contratos, respuesta 15).
-// Escribe en la base: RESERVA_V3_BARRIDO_ENABLED=false en una API local.
+// Escribe en la base: RESERVA_V3_BARRIDO_ENABLED=false en una API local. Con
+// CONTRATOS_V3_ENABLED apagado no hace nada.
 const RESERVA_V3_INTERVAL_MS = 60 * 60 * 1000;
 if (env.RESERVA_V3_BARRIDO_ENABLED) {
   const runReservaV3 = () =>
