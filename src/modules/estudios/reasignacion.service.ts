@@ -220,7 +220,11 @@ async function assertEstudioPagado(expedienteId: string, expedienteNumero: strin
 }
 
 /**
- * Ingreso mensual inferido de la corrida original.
+ * Ingreso mensual inferido de la corrida original, AJUSTADO (Adenda §1.1): la
+ * regla dura del 40% se evaluó sobre ingreso × FACTOR_AJUSTE_INGRESO. Con el
+ * crudo, la reasignación exigía el 40% del crudo (34,8% del ajustado) y pedía
+ * una evaluación nueva incluso para una propiedad más barata. Las filas
+ * anteriores a la Adenda no tienen ajustado (factor 1): para ellas vale el crudo.
  *
  * Vive en `estudios_scorecard_sombra.ingreso_inferido_cop`, que es la tabla del
  * motor sombra. Leerla para DECIDIR es incomodo a proposito (el nombre lleva
@@ -241,11 +245,11 @@ async function assertEstudioPagado(expedienteId: string, expedienteNumero: strin
  * se lee de aqui y se persiste el veredicto en la traza para que la decision
  * sea auditable aunque la fila sombra cambie despues.
  */
-async function leerIngresoInferidoOriginal(estudioId: string): Promise<number | null> {
+export async function leerIngresoInferidoOriginal(estudioId: string): Promise<number | null> {
   try {
     const { data, error } = await (supabase
       .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-      .select('ingreso_inferido_cop')
+      .select('ingreso_inferido_cop, ingreso_inferido_ajustado_cop')
       .eq('estudio_id', estudioId)
       .order('fecha_calculo', { ascending: false })
       .limit(1)
@@ -259,8 +263,11 @@ async function leerIngresoInferidoOriginal(estudioId: string): Promise<number | 
       return null;
     }
 
-    const bruto = (data as { ingreso_inferido_cop?: number | string | null } | null)
-      ?.ingreso_inferido_cop;
+    const fila = data as {
+      ingreso_inferido_cop?: number | string | null;
+      ingreso_inferido_ajustado_cop?: number | string | null;
+    } | null;
+    const bruto = fila?.ingreso_inferido_ajustado_cop ?? fila?.ingreso_inferido_cop;
     const n = typeof bruto === 'string' ? Number(bruto) : bruto;
     return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null;
   } catch (err) {
