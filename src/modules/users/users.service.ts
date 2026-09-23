@@ -5,7 +5,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendWelcomeEmail } from '@/lib/email';
 import { invalidateAuthCache } from '@/middleware/auth';
-import { ensureOrgConOwner, resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
+import { ensureOrgConOwner, resolveInmobiliariaIdForPerfil, resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
 import type { CreateUserInput, UpdateUserInput, ListUsersQuery, ResetPasswordByAdminInput } from './users.schema';
 
 interface UserRow {
@@ -178,9 +178,44 @@ async function asegurarOrgPropia(userId: string, nombre: string): Promise<void> 
   }
 }
 
+/**
+ * ¿Alguna de estas organizaciones tiene otro miembro activo además de userId?
+ * Borrar o cambiarle el rol desde /usuarios a quien tiene equipo lo saca de la
+ * agencia sin pasar por los guardas de Miembros de inmobiliarias (último
+ * titular, responsables, re-apuntar el titular principal). Una agencia de una
+ * sola persona sí puede: no deja a nadie sin titular.
+ */
+async function tieneEquipo(orgIds: string[], userId: string): Promise<boolean> {
+  if (!orgIds.length) return false;
+  const { count, error } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .in('inmobiliaria_id', orgIds)
+    .eq('estado', 'activo')
+    .neq('perfil_id', userId);
+  if (error) {
+    logger.error({ error: error.message, userId }, 'Error al contar el equipo de la inmobiliaria');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al revisar el equipo de la inmobiliaria');
+  }
+  return (count ?? 0) > 0;
+}
+
 export async function updateUser(userId: string, input: UpdateUserInput, updatedBy: string, ip?: string) {
   // Obtener estado anterior para diff en bitacora
   const previousUser = await getUserById(userId);
+
+  const cambiaRol = input.rol !== undefined && input.rol !== previousUser.rol;
+  if (cambiaRol && userId === updatedBy) {
+    // El único administrador que se quita el rol pierde el panel y solo se
+    // recupera por base de datos.
+    throw AppError.badRequest('No puedes cambiar tu propio rol', 'SELF_ROLE_CHANGE');
+  }
+  if (cambiaRol && (await tieneEquipo(await resolveMembershipInmobiliariaIds(userId), userId))) {
+    throw AppError.conflict(
+      'Pertenece al equipo de una inmobiliaria: primero sácalo del equipo (o pasa la titularidad a otra persona) desde Miembros de inmobiliarias.',
+      'MIEMBRO_CON_EQUIPO',
+    );
+  }
 
   const updateData: Record<string, unknown> = {};
   if (input.nombre !== undefined) updateData.nombre = input.nombre;
@@ -494,6 +529,27 @@ export async function deleteUser(
   // equivocó (o quedó vieja), una cuenta real no se borra desde ahí.
   if (options.soloHuerfano && !esHuerfano) {
     throw AppError.conflict('Esta cuenta sí tiene perfil; no es huérfana. Gestiónala desde Usuarios.', 'USER_NOT_ORPHAN');
+  }
+
+  // Titular principal con equipo: owner_perfil_id es ON DELETE CASCADE, así
+  // que el borrado se llevaría la organización y las membresías de todos. Ni
+  // con force: primero se pasa la titularidad desde Miembros de inmobiliarias.
+  if (!esHuerfano) {
+    const { data: orgs, error: orgsError } = await (supabase
+      .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('owner_perfil_id', userId);
+    if (orgsError) {
+      logger.error({ error: orgsError.message, userId }, 'Error al buscar inmobiliarias del usuario');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al revisar las inmobiliarias del usuario');
+    }
+    const orgIds = ((orgs as unknown as Array<{ id: string }>) ?? []).map((o) => o.id);
+    if (await tieneEquipo(orgIds, userId)) {
+      throw AppError.conflict(
+        'Es titular principal de una inmobiliaria con equipo: borrarlo borraría la inmobiliaria. Primero pasa la titularidad a otra persona desde Miembros de inmobiliarias.',
+        'USER_IS_ORG_OWNER',
+      );
+    }
   }
 
   // 2. Pre-flight check de relaciones bloqueantes — solo aplica si tiene

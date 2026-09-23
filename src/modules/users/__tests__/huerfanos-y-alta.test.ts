@@ -41,6 +41,7 @@ vi.mock('@/middleware/auth', () => ({ invalidateAuthCache: vi.fn() }));
 vi.mock('@/lib/tenantScope', () => ({
   ensureOrgConOwner: mockEnsureOrg,
   resolveInmobiliariaIdForPerfil: vi.fn(async () => null),
+  resolveMembershipInmobiliariaIds: vi.fn(async () => []),
 }));
 
 import { listOrphanAuthUsers, deleteUser, createUser, updateUser } from '../users.service';
