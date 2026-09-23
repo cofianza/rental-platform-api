@@ -226,17 +226,63 @@ export async function resolveOrgMemberPerfilIds(orgId: string): Promise<string[]
 }
 
 /**
- * Inmuebles que el perfil "posee" en el modo restringido (own): los que
- * registró (propietario_id) MÁS los que tiene asignados como responsable
- * (miembro_responsable_id, Fase 3). perfilId viene del JWT (UUID validado),
- * seguro de interpolar en el .or().
+ * La cartera de un perfil como CONDICIÓN (no como lista de ids), para decidir
+ * en una sola consulta. Es la misma regla de siempre:
+ *  - inmueble visible: lo registró él (propietario_id), o lo tiene asignado
+ *    (miembro_responsable_id, salvo el propietario por rol), o es de una org
+ *    que ve completa (owner, o miembro con miembros_ven_todo);
+ *  - expediente visible: su inmueble es visible, o (modo restringido /
+ *    propietario) se lo asignaron a él como responsable.
+ * null = el rol no tiene cartera (no ve nada por aquí).
  */
-async function resolveOwnInmuebleIds(perfilId: string): Promise<string[]> {
-  const { data } = await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .or(`propietario_id.eq.${perfilId},miembro_responsable_id.eq.${perfilId}`);
-  return ((data as Array<{ id: string }> | null) || []).map((i) => i.id);
+interface Cartera {
+  perfilId: string;
+  orgIds: string[];
+  inmueblesAsignados: boolean;
+  expedientesAsignados: boolean;
+}
+
+async function carteraDe(perfilId: string, rol: 'inmobiliaria' | 'propietario' | 'portafolio'): Promise<Cartera | null> {
+  if (rol === 'propietario') return { perfilId, orgIds: [], inmueblesAsignados: false, expedientesAsignados: true };
+  // 'inmobiliaria' y 'portafolio' (resolvePortfolioInmuebleIds, agnóstico de rol) siguen la membresía.
+  const m = await getActiveMembership(perfilId);
+  const completa = !!m && (m.rolMiembro === 'owner' || m.venTodo);
+  return { perfilId, orgIds: completa ? [m!.orgId] : [], inmueblesAsignados: true, expedientesAsignados: !completa };
+}
+
+/**
+ * La condición de inmueble visible en sintaxis de PostgREST (`.or()`). perfilId
+ * viene del JWT y orgIds de la BD (UUID), seguros de interpolar.
+ */
+function filtroInmuebles(c: Cartera): string {
+  return [
+    `propietario_id.eq.${c.perfilId}`,
+    ...(c.inmueblesAsignados ? [`miembro_responsable_id.eq.${c.perfilId}`] : []),
+    ...(c.orgIds.length ? [`inmobiliaria_id.in.(${c.orgIds.join(',')})`] : []),
+  ].join(',');
+}
+
+interface FilaInmuebleScope {
+  propietario_id: string | null;
+  inmobiliaria_id: string | null;
+  miembro_responsable_id: string | null;
+}
+
+/** La misma condición que filtroInmuebles, evaluada sobre una fila (para los guards por id). */
+export function inmuebleVisible(c: Cartera, i: FilaInmuebleScope): boolean {
+  return (
+    i.propietario_id === c.perfilId ||
+    (c.inmueblesAsignados && i.miembro_responsable_id === c.perfilId) ||
+    (!!i.inmobiliaria_id && c.orgIds.includes(i.inmobiliaria_id))
+  );
+}
+
+/** ¿Ve el expediente? Mismo criterio que resolveAllowedExpedienteIds, sin traer la cartera entera. */
+export function expedienteVisible(
+  c: Cartera,
+  e: { miembro_responsable_id: string | null; inmueble: FilaInmuebleScope | null },
+): boolean {
+  return (!!e.inmueble && inmuebleVisible(c, e.inmueble)) || (c.expedientesAsignados && e.miembro_responsable_id === c.perfilId);
 }
 
 /**
@@ -247,22 +293,12 @@ async function resolveOwnInmuebleIds(perfilId: string): Promise<string[]> {
  * a los endpoints "mis-*" del dashboard.
  */
 export async function resolvePortfolioInmuebleIds(perfilId: string): Promise<string[]> {
-  const m = await getActiveMembership(perfilId);
-
-  // Miembro restringido (miembros_ven_todo=false) o propietario individual.
-  if (!m || (m.rolMiembro !== 'owner' && !m.venTodo)) {
-    return resolveOwnInmuebleIds(perfilId);
-  }
-
-  // Ve toda la cartera de la organización (+ propios, defensivo).
-  const ids = new Set<string>();
-  const { data: porOrg } = await (supabase
+  const c = (await carteraDe(perfilId, 'portafolio'))!;
+  const { data } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
     .select('id')
-    .in('inmobiliaria_id', [m.orgId]);
-  ((porOrg as Array<{ id: string }> | null) || []).forEach((i) => ids.add(i.id));
-  (await resolveOwnInmuebleIds(perfilId)).forEach((id) => ids.add(id));
-  return Array.from(ids);
+    .or(filtroInmuebles(c));
+  return ((data as Array<{ id: string }> | null) || []).map((i) => i.id);
 }
 
 /**
@@ -306,39 +342,33 @@ export async function resolveAllowedInmuebleIds(
  *  - []    -> respuesta vacía.
  *  - [...] -> expediente IDs accesibles.
  *
- * Mantiene la firma `(userId?, userRol?)` y el contrato (null | [] | ids) de
- * las antiguas copias locales para no tocar los call-sites de estudios /
- * contratos / citas.
+ * Una sola ida a la BD: los expedientes cuyo inmueble cumple la condición de
+ * cartera (join con el inmueble) y, en paralelo, los asignados como responsable.
+ * Antes eran tres consultas en serie (inmuebles de la org, los propios y los
+ * expedientes de esa lista de ids).
  */
 export async function resolveAllowedExpedienteIds(
   userId?: string,
   userRol?: string,
 ): Promise<string[] | null> {
-  const inmuebleIds = await resolveAllowedInmuebleIds(userId, userRol);
-  if (inmuebleIds === null) return null; // rol interno: sin filtro
+  if (!userId || !userRol) return null;
+  if (INTERNAL_ROLES.includes(userRol)) return null;
+  if (userRol !== 'inmobiliaria' && userRol !== 'propietario') return [];
 
+  const c = (await carteraDe(userId, userRol))!;
+  const [porInmueble, asignados] = await Promise.all([
+    (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id, inmuebles!expedientes_inmueble_id_fkey!inner(id)')
+      .or(filtroInmuebles(c), { referencedTable: 'inmuebles' }),
+    c.expedientesAsignados
+      ? (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+          .select('id')
+          .eq('miembro_responsable_id', userId)
+      : Promise.resolve({ data: [] }),
+  ]);
   const ids = new Set<string>();
-
-  // Expedientes de los inmuebles visibles (cartera de la org, o propios).
-  if (inmuebleIds.length > 0) {
-    const { data } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .in('inmueble_id', inmuebleIds);
-    ((data as Array<{ id: string }> | null) || []).forEach((e) => ids.add(e.id));
-  }
-
-  // Modo restringido (Fase 3.1): sumar los expedientes asignados directamente
-  // al miembro como responsable, aunque el inmueble no sea suyo.
-  const scope = await resolveVisibilityScope(userId, userRol);
-  if (scope.kind === 'own') {
-    const { data } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .eq('miembro_responsable_id', scope.perfilId);
-    ((data as Array<{ id: string }> | null) || []).forEach((e) => ids.add(e.id));
-  }
-
+  for (const r of [porInmueble, asignados])
+    ((r.data as Array<{ id: string }> | null) || []).forEach((e) => ids.add(e.id));
   return Array.from(ids);
 }
 
@@ -448,9 +478,21 @@ export async function assertExpedienteAccess(
     throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 
-  // propietario / inmobiliaria: cartera de inmuebles (+ responsable asignado).
-  const allowed = await resolveAllowedExpedienteIds(userId, userRol);
-  if (allowed !== null && !allowed.includes(expedienteId)) {
+  // propietario / inmobiliaria: se decide sobre ESTE expediente (una consulta,
+  // en paralelo con la membresía), no trayendo la cartera entera.
+  if (userRol !== 'inmobiliaria' && userRol !== 'propietario')
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  const [c, { data }] = await Promise.all([
+    carteraDe(userId, userRol),
+    (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select(
+        'miembro_responsable_id, inmueble:inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, miembro_responsable_id)',
+      )
+      .eq('id', expedienteId)
+      .maybeSingle(),
+  ]);
+  const fila = data as { miembro_responsable_id: string | null; inmueble: FilaInmuebleScope | null } | null;
+  if (!c || !fila || !expedienteVisible(c, fila)) {
     throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
 }
