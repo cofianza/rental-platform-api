@@ -999,20 +999,14 @@ export async function listAllContratos(
     return q;
   }
 
-  // Count
-  const countQb = (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id', { count: 'exact', head: true });
-  const { count } = await applyFilters(countQb);
-  const total = count || 0;
-
-  // Data
+  // La página y el total en una sola consulta (antes eran dos seguidas).
   const dataQb = (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select(CONTRATO_LIST_WITH_RELATIONS)
+    .select(CONTRATO_LIST_WITH_RELATIONS, { count: 'exact' })
     .order(sortBy, { ascending: sortDir === 'asc' })
     .range(offset, offset + limit - 1);
-  const { data, error } = await applyFilters(dataQb);
+  const { data, error, count } = await applyFilters(dataQb);
+  const total = count || 0;
 
   if (error) {
     logger.error({ error: error.message }, 'Error al listar contratos (global)');
@@ -1041,31 +1035,25 @@ export async function listContratosByExpediente(
   userId?: string,
   userRol?: string,
 ) {
-  // Ownership: sin esto cualquier rol con contratos:read listaba los contratos
-  // de un estudio ajeno por UUID. No-op para roles internos.
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
   const page = Number(query.page) || 1;
   const limit = Number(query.limit) || 10;
   const sortBy = query.sortBy || 'created_at';
   const sortDir = query.sortDir || 'desc';
   const offset = (page - 1) * limit;
 
-  // Count
-  const { count } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id', { count: 'exact', head: true })
-    .eq('expediente_id', expedienteId);
-
+  // A la vez: el guard de tenant y la página con su total. Si el guard falla,
+  // Promise.all rechaza y la página leída se descarta (el 404 es el mismo).
+  const [, { data, error, count }] = await Promise.all([
+    // Ownership: sin esto cualquier rol con contratos:read listaba los contratos
+    // de un estudio ajeno por UUID. No-op para roles internos.
+    assertExpedienteAccess(expedienteId, userId, userRol),
+    (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select(CONTRATO_LIST_SELECT, { count: 'exact' })
+      .eq('expediente_id', expedienteId)
+      .order(sortBy, { ascending: sortDir === 'asc' })
+      .range(offset, offset + limit - 1),
+  ]);
   const total = count || 0;
-
-  // Data
-  const { data, error } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select(CONTRATO_LIST_SELECT)
-    .eq('expediente_id', expedienteId)
-    .order(sortBy, { ascending: sortDir === 'asc' })
-    .range(offset, offset + limit - 1);
 
   if (error) {
     logger.error({ error: error.message }, 'Error al listar contratos');

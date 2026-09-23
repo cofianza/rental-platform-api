@@ -83,80 +83,59 @@ export interface PublicPropertyFilters {
 }
 
 // El logo vive en un bucket PRIVADO; el logo_url guardado es una URL firmada con
-// TTL (se vence). Para la vitrina pública generamos una URL firmada FRESCA por
-// request (la vitrina se sirve no-store, así que se regenera en cada carga).
+// TTL (se vence). Para la vitrina pública se firma una URL por clave y se
+// reutiliza 50 de sus 60 minutos: el cliente siempre recibe una que vale al
+// menos 10 min más, y la vitrina no paga un viaje a Storage por carga.
 const LOGO_BUCKET = 'documentos-expedientes';
 const LOGO_URL_TTL_SECONDS = 60 * 60;
+const logoUrls = new Map<string, { url: string; vence: number }>();
 
-const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
+async function urlLogo(key: string): Promise<string | null> {
+  const guardada = logoUrls.get(key);
+  if (guardada && guardada.vence > Date.now()) return guardada.url;
+  const { data: signed } = await supabase.storage.from(LOGO_BUCKET).createSignedUrl(key, LOGO_URL_TTL_SECONDS);
+  if (!signed?.signedUrl) return null;
+  if (logoUrls.size > 500) logoUrls.clear();
+  logoUrls.set(key, { url: signed.signedUrl, vence: Date.now() + (LOGO_URL_TTL_SECONDS - 600) * 1000 });
+  return signed.signedUrl;
+}
 
 /**
- * Resuelve la identidad PÚBLICA (nombre comercial + logo) de la inmobiliaria
- * dueña de cada inmueble, vía `inmobiliaria_id → inmobiliarias.owner_perfil_id →
- * perfiles` (el perfil canónico de la org, que tiene razón social + logo). NO
- * expone propietario_id ni inmobiliaria_id (se eliminan del objeto devuelto).
- * Los inmuebles de propietario individual quedan con `inmobiliaria: null`.
+ * La dueña de cada inmueble viene embebida en la misma consulta (antes eran dos
+ * consultas más en serie): `inmobiliaria_id → inmobiliarias.owner_perfil_id →
+ * perfiles`, el perfil canónico de la org con razón social + logo.
+ */
+const EMBED_INMOBILIARIA =
+  'org:inmobiliarias!inmuebles_inmobiliaria_id_fkey(owner:perfiles!inmobiliarias_owner_perfil_id_fkey(razon_social, nombre, apellido, logo_storage_key))';
+
+type OrgEmbebida = {
+  owner: { razon_social: string | null; nombre: string | null; apellido: string | null; logo_storage_key: string | null } | null;
+} | null;
+
+/**
+ * Identidad PÚBLICA (nombre comercial + logo) de la inmobiliaria dueña de cada
+ * inmueble, a partir del embed. NO expone propietario_id, inmobiliaria_id ni el
+ * embed (se eliminan del objeto devuelto). Los inmuebles de propietario
+ * individual quedan con `inmobiliaria: null`.
  */
 async function attachInmobiliarias(
   rows: Array<Record<string, unknown>>,
 ): Promise<Array<Record<string, unknown>>> {
-  const ids = [
-    ...new Set(rows.map((r) => r.inmobiliaria_id).filter((x): x is string => typeof x === 'string')),
-  ];
-  const byInmoId = new Map<string, InmobiliariaPublica>();
+  const owners = rows.map((r) => (r.org as OrgEmbebida)?.owner ?? null);
+  const keys = [...new Set(owners.map((o) => o?.logo_storage_key).filter((x): x is string => typeof x === 'string'))];
+  const urlPorKey = new Map(await Promise.all(keys.map(async (k) => [k, await urlLogo(k)] as const)));
 
-  if (ids.length > 0) {
-    const { data: orgs } = await db('inmobiliarias').select('id, owner_perfil_id').in('id', ids);
-    const orgRows = (orgs ?? []) as Array<{ id: string; owner_perfil_id: string | null }>;
-    const ownerIds = [
-      ...new Set(orgRows.map((o) => o.owner_perfil_id).filter((x): x is string => typeof x === 'string')),
-    ];
-
-    const ownerById = new Map<
-      string,
-      { razon_social: string | null; nombre: string | null; apellido: string | null; logo_storage_key: string | null }
-    >();
-    if (ownerIds.length > 0) {
-      const { data: perfiles } = await db('perfiles')
-        .select('id, razon_social, nombre, apellido, logo_storage_key')
-        .in('id', ownerIds);
-      for (const p of (perfiles ?? []) as Array<{
-        id: string; razon_social: string | null; nombre: string | null; apellido: string | null; logo_storage_key: string | null;
-      }>) {
-        ownerById.set(p.id, p);
-      }
-    }
-
-    // URL firmada fresca por cada logo distinto (en paralelo).
-    const keys = [
-      ...new Set(
-        [...ownerById.values()].map((p) => p.logo_storage_key).filter((x): x is string => typeof x === 'string'),
-      ),
-    ];
-    const signedByKey = new Map<string, string>();
-    await Promise.all(
-      keys.map(async (key) => {
-        const { data: signed } = await supabase.storage.from(LOGO_BUCKET).createSignedUrl(key, LOGO_URL_TTL_SECONDS);
-        if (signed?.signedUrl) signedByKey.set(key, signed.signedUrl);
-      }),
-    );
-
-    for (const o of orgRows) {
-      const owner = o.owner_perfil_id ? ownerById.get(o.owner_perfil_id) : undefined;
-      if (!owner) continue;
-      const nombre =
-        owner.razon_social?.trim() || `${owner.nombre ?? ''} ${owner.apellido ?? ''}`.trim() || null;
-      const logo_url = owner.logo_storage_key ? signedByKey.get(owner.logo_storage_key) ?? null : null;
-      byInmoId.set(o.id, { nombre, logo_url });
-    }
-  }
-
-  return rows.map((row) => {
-    const { inmobiliaria_id, ...rest } = row as Record<string, unknown> & { inmobiliaria_id?: string | null };
-    const inmo = typeof inmobiliaria_id === 'string' ? byInmoId.get(inmobiliaria_id) ?? null : null;
+  return rows.map((row, i) => {
+    const rest = { ...row };
+    delete rest.inmobiliaria_id;
+    delete rest.org;
+    const owner = owners[i];
+    const nombre = owner
+      ? owner.razon_social?.trim() || `${owner.nombre ?? ''} ${owner.apellido ?? ''}`.trim() || null
+      : null;
+    const logo_url = owner?.logo_storage_key ? urlPorKey.get(owner.logo_storage_key) ?? null : null;
     // Solo exponemos el bloque si hay algo que mostrar (nombre o logo).
-    const inmobiliaria = inmo && (inmo.nombre || inmo.logo_url) ? inmo : null;
-    return { ...rest, inmobiliaria };
+    return { ...rest, inmobiliaria: nombre || logo_url ? { nombre, logo_url } : null };
   });
 }
 
@@ -181,7 +160,7 @@ export async function listPublicProperties(query: ListPublicPropertiesQuery) {
 
   let qb = supabase
     .from('inmuebles')
-    .select(`${PUBLIC_FIELDS}, inmobiliaria_id`, { count: 'exact' });
+    .select(`${PUBLIC_FIELDS}, inmobiliaria_id, ${EMBED_INMOBILIARIA}`, { count: 'exact' });
 
   // Always apply public conditions
   qb = applyPublicConditions(qb);
@@ -233,11 +212,24 @@ export async function getPublicPropertyById(id: string) {
   // Fetch the property with public fields only
   let qb = supabase
     .from('inmuebles')
-    .select(`${PUBLIC_DETAIL_FIELDS}, inmobiliaria_id`);
+    .select(`${PUBLIC_DETAIL_FIELDS}, inmobiliaria_id, ${EMBED_INMOBILIARIA}`);
 
   qb = applyPublicConditions(qb);
 
-  const { data, error } = await qb.eq('id', id).single();
+  // El inmueble y sus fotos a la vez; si el inmueble no es público, las fotos
+  // leídas se descartan con el 404.
+  // Fotos: primero la de fachada (es_fachada DESC) y después el orden manual.
+  // Sin este sort, el frontend caia a comparar URLs para reordenar — fragil
+  // con signed URLs que tienen timestamps cambiantes.
+  const [{ data, error }, { data: fotos }] = await Promise.all([
+    qb.eq('id', id).single(),
+    supabase
+      .from('fotos_inmueble')
+      .select('id, url, descripcion, orden, es_fachada')
+      .eq('inmueble_id', id)
+      .order('es_fachada', { ascending: false })
+      .order('orden', { ascending: true }),
+  ]);
 
   if (error) {
     if (error.code === 'PGRST116') {
@@ -245,18 +237,6 @@ export async function getPublicPropertyById(id: string) {
     }
     throw fromSupabaseError(error);
   }
-
-  // Fetch photos for this property. Ordenamos primero por es_fachada DESC
-  // para que la foto marcada como fachada siempre aparezca en posicion 1
-  // (independientemente de su 'orden'), y como tiebreaker el orden manual.
-  // Sin este sort, el frontend caia a comparar URLs para reordenar — fragil
-  // con signed URLs que tienen timestamps cambiantes.
-  const { data: fotos } = await supabase
-    .from('fotos_inmueble')
-    .select('id, url, descripcion, orden, es_fachada')
-    .eq('inmueble_id', id)
-    .order('es_fachada', { ascending: false })
-    .order('orden', { ascending: true });
 
   const [withInmo] = await attachInmobiliarias([data as Record<string, unknown>]);
   return {

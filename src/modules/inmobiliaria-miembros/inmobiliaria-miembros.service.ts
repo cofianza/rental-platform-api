@@ -255,37 +255,45 @@ export async function listMiembros(userId: string): Promise<{
     return { organizacion: { id: '', nombre: '' }, soy_owner: false, miembros_ven_todo: true, miembros: [] };
   }
 
-  // Limpieza perezosa: purga invitaciones vencidas antes de listar (sin cron).
-  await limpiarInvitacionesExpiradas(m.inmobiliaria_id);
+  // Limpieza perezosa de invitaciones vencidas (sin cron), sin esperarla: las
+  // vencidas se filtran abajo con el mismo criterio.
+  void limpiarInvitacionesExpiradas(m.inmobiliaria_id).catch(() => undefined);
+  const ahora = Date.now();
 
-  const { data, error } = await db('inmobiliaria_miembros')
-    // FK explícito: inmobiliaria_miembros tiene 2 FKs a perfiles (perfil_id e
-    // invitado_por), así que hay que desambiguar el embed o PostgREST falla con
-    // "more than one relationship was found".
-    .select('id, email, rol_miembro, estado, perfil_id, created_at, perfiles!inmobiliaria_miembros_perfil_id_fkey(nombre, apellido)')
-    .eq('inmobiliaria_id', m.inmobiliaria_id)
-    .neq('estado', 'revocado')
-    .order('created_at', { ascending: true });
+  // La lista y la carga de trabajo, a la vez.
+  const [{ data, error }, cargaPorMiembro] = await Promise.all([
+    db('inmobiliaria_miembros')
+      // FK explícito: inmobiliaria_miembros tiene 2 FKs a perfiles (perfil_id e
+      // invitado_por), así que hay que desambiguar el embed o PostgREST falla con
+      // "more than one relationship was found".
+      .select('id, email, rol_miembro, estado, perfil_id, created_at, token_expiracion, perfiles!inmobiliaria_miembros_perfil_id_fkey(nombre, apellido)')
+      .eq('inmobiliaria_id', m.inmobiliaria_id)
+      .neq('estado', 'revocado')
+      .order('created_at', { ascending: true }),
+    // Carga de trabajo por miembro: sin esto el titular que reparte estudios no
+    // tenía forma de ver quién lleva 12 y quién 2. Una sola consulta y el conteo
+    // se hace en memoria (el volumen por org es pequeño).
+    contarEstudiosActivosPorMiembro(m.inmobiliaria_id),
+  ]);
 
   if (error) {
     logger.error({ error: error.message, userId }, 'Error al listar miembros');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener los miembros');
   }
 
-  const rows = (data as unknown as Array<{
+  const rows = ((data as unknown as Array<{
     id: string;
     email: string | null;
     rol_miembro: RolMiembro;
     estado: 'activo' | 'invitado' | 'revocado';
     perfil_id: string | null;
     created_at: string;
+    token_expiracion: string | null;
     perfiles: { nombre: string; apellido: string } | null;
-  }>) || [];
-
-  // Carga de trabajo por miembro: sin esto el titular que reparte estudios no
-  // tenía forma de ver quién lleva 12 y quién 2. Una sola consulta y el conteo
-  // se hace en memoria (el volumen por org es pequeño).
-  const cargaPorMiembro = await contarEstudiosActivosPorMiembro(m.inmobiliaria_id);
+  }>) || []).filter(
+    // Lo mismo que borra limpiarInvitacionesExpiradas.
+    (r) => !(r.estado === 'invitado' && !r.perfil_id && r.token_expiracion && Date.parse(r.token_expiracion) < ahora),
+  );
 
   return {
     organizacion: { id: m.inmobiliaria_id, nombre: m.nombre_organizacion },

@@ -27,7 +27,7 @@ export async function logout(req: Request, res: Response) {
 }
 
 export async function me(req: Request, res: Response) {
-  const profile = await authService.getProfile(req.user!.id);
+  const profile = await authService.getProfile(req.user!.id, req.user!.email, req.user!.rol);
   sendSuccess(res, profile);
 }
 

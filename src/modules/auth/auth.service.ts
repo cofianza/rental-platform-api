@@ -6,6 +6,7 @@ import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendPasswordResetEmail } from '@/lib/email';
 import { resolveRolMiembro } from '@/lib/tenantScope';
+import { invalidateAuthCache } from '@/middleware/auth';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
 
 export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
@@ -107,6 +108,8 @@ export async function refreshSession({ refresh_token }: RefreshInput) {
 
 export async function logout(accessToken: string, userId?: string, ip?: string) {
   const { error } = await supabaseAuth.auth.admin.signOut(accessToken);
+  // El token deja de valer ya, no cuando venza el caché de auth.
+  if (userId) invalidateAuthCache(userId);
 
   if (error) {
     logger.warn({ error: error.message }, 'Error al cerrar sesion');
@@ -123,34 +126,34 @@ export async function logout(accessToken: string, userId?: string, ip?: string) 
   }
 }
 
-export async function getProfile(userId: string) {
-  // Obtener perfil de la tabla perfiles. Incluimos telefono + documento para
-  // poder calcular `perfil_completo` (los datos personales minimos que un
-  // miembro debe tener antes de poder administrar un expediente asignado).
-  const { data: perfil, error: perfilError } = await supabase
-    .from('perfiles' as string)
-    .select('id, nombre, apellido, rol, estado, telefono, tipo_documento, numero_documento, created_at, updated_at')
-    .eq('id', userId)
-    .single<{
-      id: string; nombre: string; apellido: string; rol: string; estado: string;
-      telefono: string | null; tipo_documento: string | null; numero_documento: string | null;
-      created_at: string; updated_at: string;
-    }>();
+/**
+ * GET /auth/me. `email` y `rol` vienen de req.user (el middleware ya los
+ * validó con getUser): el perfil y el rol en la organización se leen a la vez,
+ * una sola espera a Supabase.
+ */
+export async function getProfile(userId: string, email: string, rolSesion: string) {
+  // Incluimos telefono + documento para poder calcular `perfil_completo` (los
+  // datos personales minimos que un miembro debe tener antes de poder
+  // administrar un expediente asignado).
+  // rol_miembro: solo aplica a inmobiliaria (owner/miembro/solo_lectura);
+  // null para roles internos, propietario o solicitante.
+  const [{ data: perfil, error: perfilError }, rolMiembroSesion] = await Promise.all([
+    supabase
+      .from('perfiles' as string)
+      .select('id, nombre, apellido, rol, estado, telefono, tipo_documento, numero_documento, created_at, updated_at')
+      .eq('id', userId)
+      .single<{
+        id: string; nombre: string; apellido: string; rol: string; estado: string;
+        telefono: string | null; tipo_documento: string | null; numero_documento: string | null;
+        created_at: string; updated_at: string;
+      }>(),
+    rolSesion === 'inmobiliaria' ? resolveRolMiembro(userId) : Promise.resolve(null),
+  ]);
 
   if (perfilError || !perfil) {
     throw AppError.notFound('Perfil no encontrado');
   }
-
-  // Obtener email de auth.users
-  const { data: { user }, error: userError } = await supabaseAuth.auth.admin.getUserById(userId);
-
-  if (userError || !user) {
-    throw AppError.notFound('Usuario no encontrado');
-  }
-
-  // rol_miembro: solo aplica a inmobiliaria (owner/miembro/solo_lectura);
-  // null para roles internos, propietario o solicitante.
-  const rolMiembro = perfil.rol === 'inmobiliaria' ? await resolveRolMiembro(userId) : null;
+  const rolMiembro = perfil.rol === 'inmobiliaria' ? rolMiembroSesion : null;
 
   // Perfil personal "completo": nombre, apellido, telefono y documento. Si
   // falta cualquiera, el front bloquea la gestion de expedientes a los
@@ -166,7 +169,7 @@ export async function getProfile(userId: string) {
   // Construir respuesta con datos combinados
   return {
     id: perfil.id,
-    email: user.email || '',
+    email,
     nombre_completo: `${perfil.nombre} ${perfil.apellido}`.trim(),
     rol: perfil.rol,
     rol_miembro: rolMiembro,
@@ -529,6 +532,7 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
 
   // Revocar todas las sesiones del usuario
   await supabaseAuth.auth.admin.signOut(tokenData.user_id, 'global');
+  invalidateAuthCache(tokenData.user_id);
 
   logAudit({
     usuarioId: tokenData.user_id,

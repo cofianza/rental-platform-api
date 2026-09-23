@@ -297,7 +297,17 @@ export function validarParametro(clave: string, valor: unknown): { def: Definici
  */
 export async function getCalibracion(): Promise<Calibracion> {
   if (cache && cache.expiresAt > Date.now()) return cache.value;
+  // Varias llamadas a la vez con el caché vencido (p. ej. una por estudio de un
+  // listado) comparten la misma lectura.
+  leyendo ??= leerCalibracion().finally(() => {
+    leyendo = null;
+  });
+  return leyendo;
+}
 
+let leyendo: Promise<Calibracion> | null = null;
+
+async function leerCalibracion(): Promise<Calibracion> {
   const value: Calibracion = { ...CALIBRACION_DEFAULT };
   try {
     const { data, error } = await db('parametros_calibracion').select('clave, valor');

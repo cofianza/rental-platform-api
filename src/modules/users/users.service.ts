@@ -4,6 +4,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendWelcomeEmail } from '@/lib/email';
+import { invalidateAuthCache } from '@/middleware/auth';
 import type { CreateUserInput, UpdateUserInput, ListUsersQuery, ResetPasswordByAdminInput } from './users.schema';
 
 interface UserRow {
@@ -176,6 +177,7 @@ export async function updateUser(userId: string, input: UpdateUserInput, updated
   }
 
   // Registrar en bitacora con before/after
+  invalidateAuthCache(userId); // rol o estado nuevos: que valgan ya, no al vencer el caché de auth
   logAudit({
     usuarioId: updatedBy,
     accion: AUDIT_ACTIONS.USER_UPDATED,
@@ -215,6 +217,7 @@ export async function deactivateUser(userId: string, requestingUserId: string, i
   }
 
   // Registrar en bitacora
+  invalidateAuthCache(userId); // rol o estado nuevos: que valgan ya, no al vencer el caché de auth
   logAudit({
     usuarioId: requestingUserId,
     accion: AUDIT_ACTIONS.USER_DEACTIVATED,
@@ -241,6 +244,7 @@ export async function activateUser(userId: string, requestingUserId: string, ip?
   }
 
   // Registrar en bitacora
+  invalidateAuthCache(userId); // rol o estado nuevos: que valgan ya, no al vencer el caché de auth
   logAudit({
     usuarioId: requestingUserId,
     accion: AUDIT_ACTIONS.USER_ACTIVATED,
@@ -482,6 +486,7 @@ export async function deleteUser(
 
   // 4. Auditoría — el registro queda aunque el perfil desaparezca, porque
   //    bitacora.usuario_id apunta al ADMIN que ejecuta, no al borrado.
+  invalidateAuthCache(userId);
   logAudit({
     usuarioId: requestingUserId,
     accion: AUDIT_ACTIONS.USER_DELETED,
@@ -537,6 +542,7 @@ export async function resetPasswordByAdmin(
     'Contrasena reseteada por administrador',
   );
 
+  invalidateAuthCache(userId);
   logAudit({
     usuarioId: requestingUserId,
     accion: AUDIT_ACTIONS.PASSWORD_RESET_BY_ADMIN,

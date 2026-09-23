@@ -47,20 +47,35 @@ async function perfilPersonalIncompleto(userId: string): Promise<boolean> {
 }
 
 // ── Caché de autenticación por token (perf) ────────────────────────────────
-// Cada request autenticado costaba 2 round-trips SECUENCIALES a Supabase
-// (getUser remoto + query a perfiles). Como el front dispara varias llamadas a
-// la vez por pantalla, eso multiplicaba la latencia de TODA la app. Cacheamos el
-// resultado (user + perfil) por token con TTL corto y deduplicamos peticiones
-// concurrentes con el mismo token (evita el "thundering herd" en la ráfaga
-// inicial de una pantalla). TTL corto = un cambio de rol/desactivación se
-// refleja en ≤TTL; se puede invalidar explícitamente con invalidateAuthCache.
+// Cada request autenticado cuesta getUser (remoto) + la fila de perfiles; hoy
+// van en paralelo (ver resolveAuth). Cacheamos el resultado por token y
+// deduplicamos peticiones concurrentes con el mismo token (evita el "thundering
+// herd" en la ráfaga inicial de una pantalla). 5 min: el primer clic tras leer
+// una pantalla ya no paga la validación. Cambiar rol o estado, resetear la
+// clave o cerrar sesión invalidan el caché del usuario (invalidateAuthCache);
+// solo un cambio hecho a mano en la base tarda hasta el TTL.
 interface AuthResolved {
   userId: string;
   email: string;
   rol: UserRole;
   estado: string;
 }
-const AUTH_CACHE_TTL_MS = 30_000;
+const AUTH_CACHE_TTL_MS = 5 * 60_000;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `sub` del JWT SIN verificar: solo sirve para adelantar la lectura del perfil
+ * mientras getUser valida el token. El perfil se usa únicamente si getUser
+ * confirma ese mismo id.
+ */
+function subSinVerificar(token: string): string | null {
+  try {
+    const sub: unknown = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8'))?.sub;
+    return typeof sub === 'string' && UUID.test(sub) ? sub : null;
+  } catch {
+    return null;
+  }
+}
 const authCache = new Map<string, { value: AuthResolved; expiresAt: number }>();
 const authInflight = new Map<string, Promise<AuthResolved>>();
 
@@ -80,17 +95,17 @@ async function resolveAuth(token: string): Promise<AuthResolved> {
   if (existing) return existing;
 
   const promise = (async (): Promise<AuthResolved> => {
-    const { data: { user }, error } = await supabaseAuth.auth.getUser(token);
-    if (error || !user) {
+    const sub = subSinVerificar(token);
+    if (!sub) throw AppError.unauthorized('Token invalido o expirado');
+    // En paralelo: una sola espera a Supabase en vez de dos seguidas.
+    const [{ data: { user }, error }, { data: perfil, error: perfilError }] = await Promise.all([
+      supabaseAuth.auth.getUser(token),
+      supabase.from('perfiles').select('id, rol, estado').eq('id', sub).single(),
+    ]);
+    if (error || !user || user.id !== sub) {
       logger.warn({ error }, 'Token invalido o expirado');
       throw AppError.unauthorized('Token invalido o expirado');
     }
-
-    const { data: perfil, error: perfilError } = await supabase
-      .from('perfiles')
-      .select('id, rol, estado')
-      .eq('id', user.id)
-      .single();
 
     if (perfilError || !perfil) {
       logger.warn({ userId: user.id, error: perfilError }, 'Perfil no encontrado para usuario autenticado');
@@ -120,6 +135,11 @@ async function resolveAuth(token: string): Promise<AuthResolved> {
  * y adjunta la info del usuario a req.user.
  */
 export async function authMiddleware(req: Request, _res: Response, next: NextFunction) {
+  // Varios routers montados en el mismo prefijo lo corren cada uno (hasta 7
+  // veces en /expedientes/:id/*). Solo este middleware asigna req.user, y lo
+  // hace al final de todos sus chequeos: si ya está, este request ya pasó.
+  if (req.user) return next();
+
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith('Bearer ')) {
@@ -134,8 +154,9 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
 
-  // El email viene de auth.users (del token JWT), no de perfiles
-  req.user = {
+  // El email viene de auth.users (del token JWT), no de perfiles. Se asigna a
+  // req.user recién después de los bloqueos de abajo (ver el primer `if`).
+  const user = {
     id: auth.userId,
     email: auth.email,
     rol: auth.rol,
@@ -147,14 +168,14 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
   // la allowlist (las lecturas y otros roles no pagan el query extra). La
   // allowlist deja siempre pasar la autogestión de la cuenta — incluido
   // completar el propio perfil — para que el miembro pueda desbloquearse.
-  if (req.user.rol === 'inmobiliaria' && MUTATING_METHODS.has(req.method)) {
+  if (user.rol === 'inmobiliaria' && MUTATING_METHODS.has(req.method)) {
     const path = req.originalUrl.split('?')[0];
     if (!viewerPuedeMutar(path)) {
-      const rolMiembro = await resolveRolMiembro(req.user.id);
+      const rolMiembro = await resolveRolMiembro(user.id);
 
       // 1. Viewer (solo_lectura): nunca puede mutar datos de la org.
       if (rolMiembro === 'solo_lectura') {
-        logger.warn({ userId: req.user.id, method: req.method, path }, 'Escritura bloqueada para miembro solo_lectura');
+        logger.warn({ userId: user.id, method: req.method, path }, 'Escritura bloqueada para miembro solo_lectura');
         throw AppError.forbidden(
           'Tu rol en la inmobiliaria es de sólo lectura: no puedes crear ni modificar datos.',
           'MIEMBRO_SOLO_LECTURA',
@@ -163,8 +184,8 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
 
       // 2. Miembro (staff, no titular) con perfil personal incompleto: no puede
       // administrar hasta completar sus datos. El titular (owner) no se bloquea.
-      if (rolMiembro === 'miembro' && (await perfilPersonalIncompleto(req.user.id))) {
-        logger.warn({ userId: req.user.id, method: req.method, path }, 'Escritura bloqueada para miembro con perfil incompleto');
+      if (rolMiembro === 'miembro' && (await perfilPersonalIncompleto(user.id))) {
+        logger.warn({ userId: user.id, method: req.method, path }, 'Escritura bloqueada para miembro con perfil incompleto');
         throw AppError.forbidden(
           'Completá tus datos personales (nombre, apellido, teléfono y documento) en tu perfil antes de administrar expedientes.',
           'PERFIL_PERSONAL_INCOMPLETO',
@@ -173,6 +194,7 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
     }
   }
 
+  req.user = user;
   next();
 }
 

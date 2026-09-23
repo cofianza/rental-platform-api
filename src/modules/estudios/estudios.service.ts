@@ -186,38 +186,26 @@ export async function listEstudios(
   userId?: string,
   userRol?: string,
 ) {
-  // Verify expediente exists
-  const { data: expediente, error: expError } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('id', expedienteId)
-    .single();
-
-  if (expError || !expediente) {
-    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
-  }
-
-  // Tenant guard: propietario/inmobiliaria/solicitante solo listan los estudios
-  // de expedientes de su cartera. Sin esto, cualquier rol con expedientes:read
-  // enumeraba los estudios de OTRA agencia por expedienteId (IDOR).
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
   const page = query.page;
   const limit = query.limit;
   const offset = (page - 1) * limit;
 
-  // Count total
-  const { count } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id', { count: 'exact', head: true })
-    .eq('expediente_id', expedienteId);
-
-  const total = count || 0;
-
-  // Fetch estudios
-  const { data, error } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select(`
+  // Todo a la vez (las tarjetas lo consultan cada 5-8 s): que el expediente
+  // exista, el guard de tenant, la página con su total y la autorización del
+  // titular. Si el guard o la existencia fallan, Promise.all rechaza y lo leído
+  // se descarta: el 404 es el mismo de antes.
+  const [{ data: expediente, error: expError }, , { data, error, count }, autorizacion] = await Promise.all([
+    (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('id', expedienteId)
+      .maybeSingle(),
+    // Tenant guard: propietario/inmobiliaria/solicitante solo listan los estudios
+    // de expedientes de su cartera. Sin esto, cualquier rol con expedientes:read
+    // enumeraba los estudios de OTRA agencia por expedienteId (IDOR).
+    assertExpedienteAccess(expedienteId, userId, userRol),
+    (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select(
+        `
       id, tipo, proveedor, estado, resultado, score, observaciones,
       motivo_rechazo, condiciones,
       duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
@@ -225,10 +213,19 @@ export async function listEstudios(
       created_at, updated_at,
       canon_evaluado, canon_evaluado_origen, regla_dura_activada,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
-    `)
-    .eq('expediente_id', expedienteId)
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
+    `,
+        { count: 'exact' },
+      )
+      .eq('expediente_id', expedienteId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1),
+    leerAutorizacionTitular(expedienteId),
+  ]);
+
+  if (expError || !expediente) {
+    throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  }
+  const total = count || 0;
 
   if (error) {
     logger.error({ error, expedienteId }, 'Error al listar estudios');
@@ -242,7 +239,7 @@ export async function listEstudios(
   // expiracion con UNA lectura de la autorizacion del titular para todas.
   const filas = (data || []) as unknown as Record<string, unknown>[];
   const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila)));
-  const conDerivados = await adjuntarExpiracionALista(conRuta, expedienteId);
+  const conDerivados = await adjuntarExpiracionALista(conRuta, expedienteId, autorizacion);
 
   return {
     estudios: redactarEstudiosSegunRol(conDerivados, userRol),
@@ -557,9 +554,14 @@ async function adjuntarExpiracion<T extends Record<string, unknown>>(
 async function adjuntarExpiracionALista<T extends Record<string, unknown>>(
   rows: T[],
   expedienteId: string,
+  /** Ya leída por el llamador (en paralelo con el resto); si no, se lee aquí. */
+  autorizacion?: AutorizacionTitular,
 ): Promise<(T & { expiracion: VeredictoExpiracion })[]> {
   if (rows.length === 0) return [];
-  const [aut, cal] = await Promise.all([leerAutorizacionTitular(expedienteId), getCalibracion()]);
+  const [aut, cal] = await Promise.all([
+    autorizacion !== undefined ? autorizacion : leerAutorizacionTitular(expedienteId),
+    getCalibracion(),
+  ]);
   return rows.map((row) => ({ ...row, expiracion: veredictoExpiracion(row, aut, cal.DIAS_EXPIRACION_ESTUDIO) }));
 }
 
