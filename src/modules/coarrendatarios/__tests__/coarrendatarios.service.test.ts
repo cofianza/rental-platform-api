@@ -236,6 +236,54 @@ describe('respuestas al cliente sin el token de la invitacion', () => {
 });
 
 // ============================================================
+// Ley 1266: lo que el titular (o la agencia) ve de la otra persona
+// ============================================================
+
+describe('getCoarrendatarioPorExpediente / invitar — datos del co-arrendatario', () => {
+  const TITULAR_ID = 'bb0e8400-e29b-41d4-a716-446655440000';
+  const ctxTitular = () => {
+    const r = ctxRow();
+    r.data.solicitantes.creado_por = TITULAR_ID as never;
+    return r;
+  };
+  const coaRow = { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, estado: 'estudio_completado', estudio_id: COA_ESTUDIO_ID }, error: null };
+  const selectsCoa = () =>
+    ops.filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'select').map((o) => String(o.args[0]));
+
+  it('al titular no le embebe el estudio (score/observaciones) ni le devuelve el token', async () => {
+    enqueue('expedientes', ctxTitular());
+    enqueue('expediente_coarrendatarios', coaRow);
+    enqueue('estudios', { data: { id: COA_ESTUDIO_ID, score: 780, observaciones: 'saldos' }, error: null });
+
+    const coa = await getCoarrendatarioPorExpediente(EXPEDIENTE_ID, TITULAR_ID, 'solicitante');
+
+    expect(coa?.estudio).toBeNull();
+    expect(ops.some((o) => o.table === 'estudios')).toBe(false);
+    expect(selectsCoa().every((c) => c !== '*' && !/\btoken\b/.test(c))).toBe(true);
+  });
+
+  it('al gestor si le embebe el estudio', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', coaRow);
+    enqueue('estudios', { data: { id: COA_ESTUDIO_ID, score: 780 }, error: null });
+
+    const coa = await getCoarrendatarioPorExpediente(EXPEDIENTE_ID, GESTOR_ID, 'operador_analista');
+
+    expect(coa?.estudio).toMatchObject({ score: 780 });
+  });
+
+  it('la invitacion recien creada tampoco devuelve el token', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: { id: COA_ID }, error: null });
+
+    await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
+
+    expect(selectsCoa().length).toBeGreaterThan(0);
+    expect(selectsCoa().every((c) => c !== '*' && !/\btoken\b/.test(c))).toBe(true);
+  });
+});
+
+// ============================================================
 // Politica §5, ultima fila de la tabla: regla dura del coarrendatario
 // ============================================================
 

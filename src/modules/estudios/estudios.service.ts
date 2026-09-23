@@ -19,6 +19,7 @@ import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente }
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
+import { assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
 // Motor de scorecard V4.1. Sigue en SOMBRA para todo el scorecard (puntajes,
 // umbrales 85/70, resto de reglas duras): calcula y guarda en paralelo lo que
 // la politica HABRIA decidido. registrarScorecardSombra es best-effort y no
@@ -149,18 +150,6 @@ function redactarEstudioParaProspecto<T extends Record<string, unknown>>(row: T)
     respuesta_proveedor: null,
     token_self_service: null,
   };
-}
-
-/**
- * El estudio 'con_coarrendatario' cuelga del expediente del titular, pero es
- * de OTRA persona: su reporte de buro y su formulario (Ley 1266).
- * assertExpedienteAccess autoriza al titular por expediente, asi que sin esto
- * lo leia por id. 404, como si no existiera: ninguna pantalla suya lo usa.
- */
-function assertNoEsEstudioDeOtraPersona(tipo: unknown, userRol?: string): void {
-  if (userRol === 'solicitante' && tipo === 'con_coarrendatario') {
-    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
-  }
 }
 
 /**
@@ -1914,7 +1903,7 @@ export async function getCertificadoPresignedUrl(
 export async function getCertificadoViewUrl(estudioId: string, userId?: string, userRol?: string) {
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, certificado_url, expediente_id')
+    .select('id, certificado_url, expediente_id, tipo')
     .eq('id', estudioId)
     .single();
 
@@ -1922,12 +1911,15 @@ export async function getCertificadoViewUrl(estudioId: string, userId?: string, 
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; certificado_url: string | null; expediente_id: string };
+  const est = estudio as unknown as { id: string; certificado_url: string | null; expediente_id: string; tipo: string };
 
   // Tenant guard: devuelve una URL firmada al PDF del certificado. Sin scoping,
   // un rol externo con expedientes:read descargaba el certificado de OTRA
   // agencia por UUID (IDOR de lectura).
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
+  // El PDF que un analista adjunta al registrar el resultado es el reporte de
+  // buro de esa persona: el titular no baja el de su co-arrendatario.
+  assertNoEsEstudioDeOtraPersona(est.tipo, userRol);
 
   if (!est.certificado_url) {
     throw AppError.notFound('Este estudio no tiene certificado adjunto', 'CERTIFICADO_NOT_FOUND');
@@ -4158,6 +4150,8 @@ export async function buscarEstudioVigentePorDocumento(
     .limit(25);
 
   if (allowed !== null) query = query.in('expediente_id', allowed);
+  // Con la cedula del co-arrendatario el titular leeria su resultado.
+  if (userRol === 'solicitante') query = query.neq('tipo', 'con_coarrendatario');
 
   const { data, error } = await query as {
     data:

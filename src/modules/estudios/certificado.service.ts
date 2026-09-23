@@ -15,7 +15,7 @@ import { MODELO_VERSION } from './motor';
 import { calcularTarifas, leerTarifaOverride, viaPorRutaDeAprobacion, type Tarifas, type ViaAprobacion } from './tarifas';
 // Adenda §5.2: la prima baja al 10% cuando HAY coarrendatario vinculado al
 // expediente — no cuando el tipo de esta fila es 'con_coarrendatario'.
-import { coarrendatarioVinculado } from './coarrendatario-vinculado';
+import { coarrendatarioVinculado, assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
 import { getCalibracion } from '@/lib/calibracion';
 import { getCompany } from '@/lib/companyConfig';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
@@ -945,7 +945,7 @@ export async function descargarCertificado(estudioId: string, userId?: string, u
   // expedientes:read descargaba el certificado de OTRA agencia por UUID (IDOR).
   const { data: estRow, error: estErr } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('expediente_id')
+    .select('expediente_id, tipo')
     .eq('id', estudioId)
     .single();
 
@@ -953,7 +953,9 @@ export async function descargarCertificado(estudioId: string, userId?: string, u
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  await assertExpedienteAccess((estRow as { expediente_id: string }).expediente_id, userId, userRol);
+  const est = estRow as { expediente_id: string; tipo: string };
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
+  assertNoEsEstudioDeOtraPersona(est.tipo, userRol);
 
   const { data: cert, error: certErr } = await (supabase
     .from('estudios_certificados' as string) as ReturnType<typeof supabase.from>)

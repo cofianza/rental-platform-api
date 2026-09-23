@@ -15,6 +15,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
+import { AppError } from '@/lib/errors';
 
 export interface CoarrendatarioVinculado {
   /** Fila de expediente_coarrendatarios. */
@@ -29,6 +30,20 @@ export interface CoarrendatarioVinculado {
    * automatico", que es lo que la fila de 2,5% exige).
    */
   puntaje: number | null;
+}
+
+/**
+ * El estudio 'con_coarrendatario' cuelga del expediente del titular, pero es
+ * de OTRA persona: su reporte de buro y su formulario (Ley 1266).
+ * assertExpedienteAccess autoriza al titular por expediente, asi que sin esto
+ * lo leia por id. 404, como si no existiera: ninguna pantalla suya lo usa.
+ * Va en toda ruta por id que el solicitante alcance (detalle, ejecutar,
+ * estado-proveedor, historial, certificado, tarifa).
+ */
+export function assertNoEsEstudioDeOtraPersona(tipo: unknown, userRol?: string): void {
+  if (userRol === 'solicitante' && tipo === 'con_coarrendatario') {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
 }
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;

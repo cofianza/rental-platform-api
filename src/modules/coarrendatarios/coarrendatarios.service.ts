@@ -471,8 +471,10 @@ export async function getCoarrendatarioPorExpediente(
   if (!coa) return null;
 
   // Embebemos el estudio asociado (si ya existe) para que el card del
-  // propietario muestre resultado/score sin un round-trip adicional.
-  if (coa.estudio_id) {
+  // propietario muestre resultado/score sin un round-trip adicional. Al
+  // titular no: resultado, score y observaciones (datos del buro) son de otra
+  // persona (Ley 1266), y su tarjeta solo usa `estado`.
+  if (coa.estudio_id && userRol !== 'solicitante') {
     const { data: estudioRow } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .select('id, estado, resultado, score, observaciones, fecha_completado')

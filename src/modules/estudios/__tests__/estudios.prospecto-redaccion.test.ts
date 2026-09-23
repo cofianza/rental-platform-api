@@ -16,7 +16,7 @@ const { mockEnv, ops, queues, enqueue, mockFrom } = vi.hoisted(() => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null, count: null };
   };
-  const PASSTHROUGH = ['select', 'eq', 'neq', 'is', 'in', 'or', 'order', 'limit', 'range'];
+  const PASSTHROUGH = ['select', 'eq', 'neq', 'is', 'in', 'or', 'gte', 'order', 'limit', 'range'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -66,8 +66,12 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
 
-import { getEstudioById, listEstudios } from '../estudios.service';
+import { getEstudioById, listEstudios, getCertificadoViewUrl, buscarEstudioVigentePorDocumento } from '../estudios.service';
+import { descargarCertificado } from '../certificado.service';
+import { tarifasDelEstudio } from '../tarifa-override.service';
 import { contrasteIngresoProspecto } from '@/modules/autorizaciones/ingreso-declarado';
+import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
+import { getCalibracion } from '@/lib/calibracion';
 
 const fila = (tipo: string) => ({
   id: 'est-1',
@@ -116,6 +120,38 @@ describe('estudios del expediente vistos por el titular', () => {
     enqueue('expedientes', { data: { id: 'exp-1' }, error: null });
     await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-2', 'inmobiliaria');
     expect(ops.some((o) => o.method === 'neq')).toBe(false);
+  });
+});
+
+describe('las demas rutas por id que el titular alcanza', () => {
+  // El 404 del guard, no el de "no hay certificado".
+  const OCULTO = { statusCode: 404, errorCode: 'ESTUDIO_NOT_FOUND' };
+  // El id le llega por GET /expedientes/:id/coarrendatario y por la notificacion.
+  it('certificado (url y descarga) y tarifa del estudio del co-arrendatario: 404', async () => {
+    enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
+    await expect(getCertificadoViewUrl('est-1', 'u-1', 'solicitante')).rejects.toMatchObject(OCULTO);
+
+    enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
+    await expect(descargarCertificado('est-1', 'u-1', 'solicitante')).rejects.toMatchObject(OCULTO);
+    expect(ops.some((o) => o.table === 'estudios_certificados')).toBe(false);
+
+    enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
+    await expect(tarifasDelEstudio('est-1', 'u-1', 'solicitante')).rejects.toMatchObject(OCULTO);
+  });
+
+  it('el gestor si baja el certificado del co-arrendatario', async () => {
+    enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
+    // Pasa el guard y llega a buscar el certificado (no hay: 404 de certificado).
+    await expect(descargarCertificado('est-1', 'u-1', 'operador_analista')).rejects.toMatchObject({
+      errorCode: 'CERTIFICADO_NOT_FOUND',
+    });
+  });
+
+  it('/vigente con la cedula del co-arrendatario no le trae su estudio', async () => {
+    vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(['exp-1']);
+    vi.mocked(getCalibracion).mockResolvedValueOnce({ VIGENCIA_CRC_DIAS: 60 } as never);
+    await buscarEstudioVigentePorDocumento('cc', '123', 'u-1', 'solicitante');
+    expect(ops).toContainEqual({ table: 'estudios', method: 'neq', args: ['tipo', 'con_coarrendatario'] });
   });
 });
 

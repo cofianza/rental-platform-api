@@ -25,7 +25,7 @@ import {
   type TarifaOverride,
 } from './tarifas';
 import { generarCertificado, viaDelEstudio } from './certificado.service';
-import { coarrendatarioVinculado } from './coarrendatario-vinculado';
+import { coarrendatarioVinculado, assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
 import type { TarifaOverrideInput } from './estudios.schema';
 
 interface FilaEstudio {
@@ -112,6 +112,8 @@ async function armar(e: FilaEstudio): Promise<TarifaEstudio> {
 export async function tarifasDelEstudio(estudioId: string, userId?: string, userRol?: string): Promise<TarifaEstudio> {
   const e = await leerFila(estudioId);
   await assertExpedienteAccess(e.expediente_id, userId, userRol);
+  // Resultado y via de aprobacion del co-arrendatario: no son del titular.
+  assertNoEsEstudioDeOtraPersona(e.tipo, userRol);
   return armar(e);
 }
 
