@@ -1572,7 +1572,21 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(storageApi.remove).not.toHaveBeenCalledWith([KEY_FINAL]);
   });
 
-  it('Ruta B: sin paso 4, sin el PDF propio no sale; con él, se une [propio, Anexo, CRC] sin tocarlo', async () => {
+  it('Ruta B: no sale a firma hasta ubicar las firmas sobre las líneas del PDF propio (Adenda 1, respuesta 6)', async () => {
+    const doc = await documentoRevisado(PASOS_B);
+    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: 1, sha256: 'a'.repeat(64), subidoEn: LEIDO, subidoPor: USER };
+    encolarCarga({ contratos: [conDocumento(PASOS_B, doc, { propio })] });
+    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: propio.sha256 }, USER, ROL))).toMatchObject({
+      statusCode: 409,
+      errorCode: 'RUTA_B_SIN_FIRMA',
+    });
+    expect(storageApi.upload).not.toHaveBeenCalled();
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+    expect(crearSobre).not.toHaveBeenCalled();
+  });
+
+  // Se reactiva al quitar exigirRutaConFirmas (asistente.service.ts).
+  it.skip('Ruta B: sin paso 4, sin el PDF propio no sale; con él, se une [propio, Anexo, CRC] sin tocarlo', async () => {
     const doc = await documentoRevisado(PASOS_B);
     expect(vi.mocked(generarAnexoVivienda)).toHaveBeenCalled();
     // sin el PDF propio
