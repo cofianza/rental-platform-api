@@ -251,7 +251,16 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
   // para llamadas de sistema (sin userId/userRol) y roles internos; 404 si el
   // usuario no puede acceder al expediente. Cubre propietario/inmobiliaria y
   // solicitante (vía solicitantes.creado_por) — única fuente de verdad del scope.
-  await assertExpedienteAccess(id, userId, userRol);
+  // En paralelo con la lectura (antes 2 idas en serie): si el guard falla,
+  // Promise.all rechaza con su 404 y la fila leída se descarta sin salir.
+  const [, { data, error }] = await Promise.all([
+    assertExpedienteAccess(id, userId, userRol),
+    (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select(EXPEDIENTE_DETAIL_SELECT)
+      .eq('id', id)
+      .single(),
+  ]);
 
   // Auto-heal de firmas (FALLBACK): si hay un contrato en `pendiente_firma`,
   // reconcilia con Auco. Es un respaldo — la fuente de verdad es el webhook de
@@ -259,6 +268,7 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
   // se dispara FIRE-AND-FORGET (sin await): antes este sync bloqueaba CADA GET de
   // expediente hasta 5s esperando a Auco, lo que hacía lentísimo abrir un
   // expediente. El front además refresca el panel de firmas (poll + onAllSigned).
+  // Va después del guard: solo con el acceso ya comprobado.
   void (async () => {
     try {
       const { syncFirmaConAucoForExpediente } = await import('@/modules/firma/firma.service');
@@ -267,12 +277,6 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
       logger.error({ error: err, expedienteId: id }, 'Error en syncFirmaConAucoForExpediente (background)');
     }
   })();
-
-  const { data, error } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select(EXPEDIENTE_DETAIL_SELECT)
-    .eq('id', id)
-    .single();
 
   if (error || !data) {
     if (error?.code === 'PGRST116') {

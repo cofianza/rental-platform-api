@@ -414,14 +414,16 @@ export async function getTransitionsForExpediente(expedienteId: string, userId?:
   // Guard multi-tenant: roles internos y llamadas de sistema pasan (no-op);
   // propietario/inmobiliaria/solicitante solo ven las transiciones de sus
   // expedientes. 404 (no 403) para no revelar existencia cross-tenant.
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
-  const expediente = await fetchExpediente(expedienteId);
+  // Todo en paralelo (antes 3 idas en serie antes de pintar el detalle): si el
+  // guard falla, Promise.all rechaza con su 404 y el resto se descarta.
+  const [, expediente, conFianzaV3] = await Promise.all([
+    assertExpedienteAccess(expedienteId, userId, userRol),
+    fetchExpediente(expedienteId),
+    tieneFianzaV3(expedienteId),
+  ]);
   let transiciones = getAvailableTransitions(expediente.estado);
   // Con una fianza V3 activa o terminada no se ofrece "Cancelar estudio" (executeTransition la rechaza).
-  if (transiciones.some((t) => t.label === 'Cancelar estudio') && (await tieneFianzaV3(expedienteId))) {
-    transiciones = transiciones.filter((t) => t.label !== 'Cancelar estudio');
-  }
+  if (conFianzaV3) transiciones = transiciones.filter((t) => t.label !== 'Cancelar estudio');
 
   // Solo lectura (Gerencia y el miembro 'solo_lectura' de una inmobiliaria):
   // el POST de transiciones los rechaza siempre, asi que ofrecerles transiciones
