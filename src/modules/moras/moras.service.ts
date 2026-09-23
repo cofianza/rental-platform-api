@@ -12,7 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
 import { logger } from '@/lib/logger';
-import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
+import { enviarTemplate as enviarTemplateWhatsApp, type EstadoEnvioWhatsApp } from '../whatsapp';
 import { assertExpedienteAccess, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 import type {
   ReportarMoraInput,
@@ -40,6 +40,15 @@ function diasDesde(date: string | Date): number {
 
 function formatCOP(monto: number): string {
   return new Intl.NumberFormat('es-CO').format(monto);
+}
+
+// Lo que queda en el chat según lo que pasó con el WhatsApp: antes decía «se
+// notifica al inquilino» aunque no tuviera teléfono o Meta rechazara el envío.
+function avisoWhatsApp(estado: EstadoEnvioWhatsApp): string {
+  if (estado === 'aceptado') return 'Se envió el WhatsApp al inquilino.';
+  if (estado === 'sin_telefono') return 'No se pudo avisar por WhatsApp: el inquilino no tiene teléfono registrado.';
+  if (estado === 'mock') return 'WhatsApp en modo de prueba: no se envió al inquilino.';
+  return 'El WhatsApp al inquilino falló; avísale por otro medio.';
 }
 
 interface ContratoSnapshot {
@@ -231,16 +240,8 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
     monto_mora: number;
   };
 
-  // Mensaje sistema en el chat
-  await agregarMensajeInterno(
-    ticket.id,
-    'sistema',
-    null,
-    `Mora reportada — Fase 1 (Recordatorio). Se notifica al inquilino vía WhatsApp.`,
-  );
-
-  // WhatsApp Fase 1 al inquilino (fire-and-forget)
-  await enviarTemplateWhatsApp({
+  // WhatsApp Fase 1 al inquilino (nunca lanza) y, según cómo salió, el mensaje de sistema.
+  const whatsapp_estado = await enviarTemplateWhatsApp({
     to: ticket.inquilino_telefono,
     template: 'MORA_FASE_1',
     variables: [
@@ -253,10 +254,16 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
     ],
     context: { mora_id: ticket.id },
   });
+  await agregarMensajeInterno(
+    ticket.id,
+    'sistema',
+    null,
+    `Mora reportada — Fase 1 (Recordatorio). ${avisoWhatsApp(whatsapp_estado)}`,
+  );
 
   logger.info({ moraId: ticket.id, ticket: ticket.ticket_numero }, 'Ticket de mora creado');
 
-  return getMoraById(ticket.id);
+  return { ...(await getMoraById(ticket.id)), whatsapp_estado };
 }
 
 // ============================================================
@@ -354,17 +361,8 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
   const { error } = await db('moras_tickets').update(updates as never).eq('id', id);
   if (error) throw fromSupabaseError(error);
 
-  await agregarMensajeInterno(
-    id,
-    'sistema',
-    null,
-    `Escalado a ${proximoEstado === 'fase_2' ? 'Fase 2 (Urgencia)' : 'Fase 3 (Legal)'}${
-      input.notas ? `. Notas del asesor: ${input.notas}` : ''
-    }`,
-  );
-
   const diasMora = String(diasDesde(mora.reportado_at));
-  await enviarTemplateWhatsApp({
+  const whatsapp_estado = await enviarTemplateWhatsApp({
     to: mora.inquilino_telefono,
     template: templateKey,
     variables: [
@@ -375,8 +373,16 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
     ],
     context: { mora_id: id },
   });
+  await agregarMensajeInterno(
+    id,
+    'sistema',
+    null,
+    `Escalado a ${proximoEstado === 'fase_2' ? 'Fase 2 (Urgencia)' : 'Fase 3 (Legal)'}. ${avisoWhatsApp(whatsapp_estado)}${
+      input.notas ? ` Notas del asesor: ${input.notas}` : ''
+    }`,
+  );
 
-  return getMoraById(id);
+  return { ...(await getMoraById(id)), whatsapp_estado };
 }
 
 // ============================================================

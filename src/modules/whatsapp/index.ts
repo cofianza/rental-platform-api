@@ -83,11 +83,15 @@ function registrarResultado(
   });
 }
 
+/** Qué pasó con el envío, para quien necesite decírselo a la persona. */
+export type EstadoEnvioWhatsApp = WhatsAppSendResult['estado'] | 'sin_telefono';
+
 /**
  * Helper tipado para disparar un template. Devuelve siempre — los
  * errores se loguean pero NO se propagan, así un fallo del provider
  * jamás bloquea el flujo de negocio (confirmar cita, aprobar estudio,
- * etc.) que lo invoca. El emisor es siempre "fire-and-forget".
+ * etc.) que lo invoca. El emisor es siempre "fire-and-forget"; el estado
+ * devuelto sirve para no afirmar "se le avisó" cuando no salió nada.
  */
 export async function enviarTemplate(args: {
   to: string | null | undefined;
@@ -101,12 +105,12 @@ export async function enviarTemplate(args: {
     mora_id?: string;
     estudio_id?: string;
   };
-}): Promise<void> {
+}): Promise<EstadoEnvioWhatsApp> {
   const { to, template, variables, urlButtons, context } = args;
 
   if (!to) {
     logger.debug({ template }, 'WhatsApp omitido: sin telefono destinatario');
-    return;
+    return 'sin_telefono';
   }
 
   const tpl = WHATSAPP_TEMPLATES[template];
@@ -122,6 +126,7 @@ export async function enviarTemplate(args: {
     });
     // Deja rastro del resultado (enviado/fallido/mock + error) en log + bitácora.
     registrarResultado(template, tpl.id, to, result, context, urlButtons);
+    return result.estado;
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     logger.warn(
@@ -130,5 +135,6 @@ export async function enviarTemplate(args: {
     );
     // Registrar también el fallo inesperado (excepción) en la bitácora.
     registrarResultado(template, tpl.id, to, { message_id: null, estado: 'fallido', error }, context, urlButtons);
+    return 'fallido';
   }
 }
