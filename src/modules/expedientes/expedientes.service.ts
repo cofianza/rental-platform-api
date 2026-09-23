@@ -133,6 +133,30 @@ export async function listExpedientes(
   if (allowedExpedienteIds && allowedExpedienteIds.length > 0) {
     rpcParams.p_allowed_expediente_ids = allowedExpedienteIds;
   }
+  // "Sin asignar": los ids sin analista entran por el mismo filtro de ids del
+  // RPC, cruzados con el scope. Antes la web pedía 30 y filtraba en el
+  // navegador: con los 30 más viejos ya asignados decía que no había huérfanos.
+  // ponytail: la lista se corta en 1000 filas (max_rows de PostgREST); si la
+  // cola sin asignar llega a eso, pasar a un p_sin_analista en el RPC.
+  if (query.sin_analista === 'true') {
+    let q = (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .is('analista_id', null);
+    if (estados) q = q.in('estado', estados);
+    const { data: sinAnalista, error: saError } = await q;
+    if (saError) {
+      logger.error({ error: saError.message }, 'Error al listar estudios sin analista');
+      throw new AppError(500, 'INTERNAL_ERROR', 'Error al obtener la lista de estudios');
+    }
+    const permitidos = allowedExpedienteIds ? new Set(allowedExpedienteIds) : null;
+    const ids = ((sinAnalista ?? []) as Array<{ id: string }>)
+      .map((e) => e.id)
+      .filter((id) => !permitidos || permitidos.has(id));
+    if (ids.length === 0) {
+      return { expedientes: [], pagination: { total: 0, page, limit, totalPages: 0 } };
+    }
+    rpcParams.p_allowed_expediente_ids = ids;
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any).rpc('list_expedientes_with_relations', rpcParams);

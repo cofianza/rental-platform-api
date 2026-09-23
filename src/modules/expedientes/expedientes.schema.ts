@@ -64,6 +64,8 @@ export const listExpedientesQuerySchema = z.object({
   // fusionada de la inmobiliaria). Chips: aprobado/rechazado/condicionado/
   // en_proceso/sin_estudio. 'todos' o ausente = sin filtro.
   estudio_filtro: z.enum(['todos', 'aprobado', 'rechazado', 'condicionado', 'en_proceso', 'sin_estudio', 'requiere_accion']).optional(),
+  // "Sin asignar" del dashboard del analista: solo los que no tienen analista.
+  sin_analista: z.enum(['true', 'false']).optional(),
   sortBy: z.enum(['created_at', 'numero', 'estado', 'updated_at']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
