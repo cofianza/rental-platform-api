@@ -555,14 +555,15 @@ export async function cancelPago(pagoId: string, userId: string, userRol?: strin
  * contrato ya terminado. LOG-ONLY: nunca lanza — la transición del contrato ya
  * quedó confirmada. Un pago 'procesando' (PSE) que luego aprueba cae a
  * pagos_no_conciliados (fail-safe existente) para conciliación/reembolso manual.
- * Expira además el link en la pasarela (best-effort).
+ * Expira además el link en la pasarela (best-effort). Devuelve cuántos anuló.
  */
 export async function cancelarPagosPendientesDeExpediente(
   expedienteId: string,
   motivo: string,
   /** Solo estos conceptos (p. ej. garantía y primer canon en FIRMA INCOMPLETA); sin él, todos. */
   conceptos?: string[],
-): Promise<void> {
+): Promise<number> {
+  let cancelados = 0;
   try {
     let q = (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
@@ -582,6 +583,7 @@ export async function cancelarPagosPendientesDeExpediente(
           detalles: { motivo, cancelado_por: 'sistema' },
           userId: null,
         });
+        cancelados++;
         // Expirar el link en la pasarela (best-effort): un pago cancelado no
         // debe seguir siendo pagable desde el email del arrendatario.
         if (pago.metodo === 'pasarela' && pago.external_id) {
@@ -597,11 +599,12 @@ export async function cancelarPagosPendientesDeExpediente(
       }
     }
     if (pagos.length > 0) {
-      logger.info({ expedienteId, cancelados: pagos.length, motivo }, 'Pagos pendientes cancelados');
+      logger.info({ expedienteId, cancelados, motivo }, 'Pagos pendientes cancelados');
     }
   } catch (err) {
     logger.error({ err, expedienteId }, 'Error cancelando pagos pendientes del estudio');
   }
+  return cancelados;
 }
 
 /**

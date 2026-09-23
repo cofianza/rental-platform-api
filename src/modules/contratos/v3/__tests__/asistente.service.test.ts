@@ -136,6 +136,9 @@ const { mockEscalar, mockYaEscalado } = vi.hoisted(() => ({
 vi.mock('../../tope-coafianzamiento', () => ({ escalarTopeCanon: mockEscalar, topeYaEscalado: mockYaEscalado }));
 const mockNotificar = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: mockNotificar }));
+// Adenda 1 (respuesta 12): al iniciar se anulan los enlaces de garantía y primer canon; devuelve cuántos.
+const mockCancelarPagos = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => 0));
+vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: mockCancelarPagos }));
 // Sin Chromium: el PDF es un buffer falso, los pendientes salen de la plantilla real.
 vi.mock('../vivienda', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../vivienda')>();
@@ -540,6 +543,19 @@ describe('iniciarContrato', () => {
     expect(mockLogAudit).toHaveBeenCalledWith(
       expect.objectContaining({ detalle: expect.objectContaining({ v3: true, fase: 'iniciado', numero: 'CTO-2026-0007' }) }),
     );
+    // Adenda 1 (respuesta 12): los enlaces de garantía y primer canon emitidos antes se anulan; sin ninguno, nada en la línea de tiempo.
+    expect(mockCancelarPagos).toHaveBeenCalledWith(EXP, expect.stringContaining('firmen todas las partes'), ['garantia', 'primer_canon']);
+    expect(opsDe('eventos_timeline', 'insert')).toHaveLength(0);
+  });
+
+  it('Adenda 1 (respuesta 12): si había enlaces de garantía o primer canon vivos, se anulan y queda en la línea de tiempo', async () => {
+    mockCancelarPagos.mockResolvedValueOnce(2);
+    encolarCarga();
+    enqueue('contratos', { data: fila(), error: null });
+    await iniciar();
+    const ev = opsDe('eventos_timeline', 'insert')[0].args[0] as { tipo: string; descripcion: string; metadata: Record<string, unknown> };
+    expect(ev).toMatchObject({ tipo: 'pago', metadata: { contrato_id: CTO, anulados: 2 } });
+    expect(ev.descripcion).toContain('Se anularon 2 enlaces de pago de garantía o primer canon');
   });
 
   it('con un borrador vivo devuelve su estado sin reservar ni insertar', async () => {
@@ -552,6 +568,7 @@ describe('iniciarContrato', () => {
     expect(r.estado.contrato!.reservaDiasHabiles).toBe(5);
     expect(mockReservar).not.toHaveBeenCalled();
     expect(opsDe('contratos', 'insert')).toHaveLength(0);
+    expect(mockCancelarPagos).not.toHaveBeenCalled();
   });
 
   it('tras cancelarse por reserva vencida, el contrato nuevo precarga lo que llevaba', async () => {

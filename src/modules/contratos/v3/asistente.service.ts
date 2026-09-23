@@ -673,6 +673,26 @@ export async function iniciarContrato(
   avisarAfectados(reserva, expedienteId);
 
   const fila = data as unknown as ContratoV3;
+  // Adenda 1, respuesta 12: la garantía y el primer canon se cobran con la firma completa. Un enlace
+  // emitido antes de iniciar el contrato seguiría pagable en borrador y EN FIRMA: se anula (nunca lanza).
+  const { cancelarPagosPendientesDeExpediente } = await import('@/modules/pagos/pagos.service');
+  const anulados = await cancelarPagosPendientesDeExpediente(
+    expedienteId,
+    'Contrato iniciado: la garantía y el primer canon se cobran cuando firmen todas las partes',
+    ['garantia', 'primer_canon'],
+  );
+  if (anulados)
+    await Promise.resolve(
+      db('eventos_timeline').insert({
+        expediente_id: expedienteId,
+        tipo: 'pago',
+        descripcion:
+          `${anulados === 1 ? 'Se anuló 1 enlace de pago' : `Se anularon ${anulados} enlaces de pago`} de garantía o ` +
+          `primer canon: se cobran cuando todas las partes firmen el contrato ${fila.numero}`,
+        usuario_id: userId,
+        metadata: { contrato_id: fila.id, anulados },
+      } as never),
+    ).catch(() => undefined);
   logAudit({
     usuarioId: userId,
     accion: AUDIT_ACTIONS.CONTRATO_GENERATED,
