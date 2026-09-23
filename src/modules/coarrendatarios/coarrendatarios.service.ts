@@ -56,6 +56,11 @@ const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 const TOKEN_EXPIRY_DAYS = 7;
 
+/** Correo al titular cuando la ponderación rechaza el conjunto (Flujo §10, sin cifras). */
+const MOTIVO_TITULAR_RECHAZO_CONJUNTO =
+  'No aprobable por ahora. La evaluación conjunta con tu co-arrendatario no cumplió los requisitos que exige nuestra política para respaldar este contrato. ' +
+  'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante o escribirnos para revisar tu caso.';
+
 // Columnas que SÍ pueden llegar al cliente (las de `Coarrendatario`). Nunca
 // '*': el token de la invitación en la respuesta dejaba al titular o al gestor
 // aceptar la autorización de habeas data en nombre del invitado. Tampoco
@@ -1288,9 +1293,11 @@ export async function onCoarrendatarioEstudioCompletado(
 
     // Al titular se le avisa con honestidad: hizo la gestión de invitar y
     // quedarse sin respuesta sería peor que un mensaje que no promete nada.
-    if (ctxSin.solicitante_creado_por) {
-      notificarUsuario({
-        userId: ctxSin.solicitante_creado_por,
+    // Por su correo, no por creado_por (que casi siempre es el gestor).
+    void findPerfilIdByEmail(ctxSin.solicitante_email).then((titularId) => {
+      if (!titularId) return;
+      return notificarUsuario({
+        userId: titularId,
         tipo: 'estudio.condicionado',
         titulo: 'Tu co-arrendatario completó su estudio',
         mensaje: sinInfo
@@ -1302,8 +1309,8 @@ export async function onCoarrendatarioEstudioCompletado(
           via,
           coarrendatario_id: coa?.id,
         },
-      }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion sin evaluar (titular)'));
-    }
+      });
+    }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion sin evaluar (titular)'));
 
     return;
   }
@@ -1390,27 +1397,19 @@ export async function onCoarrendatarioEstudioCompletado(
       logger.warn({ error: e, expedienteId: est.expediente_id, estudioId: titular.id }, 'Ponderación: no se pudo emitir el CRC automático'),
     );
   }
-  const tituloAprobado = 'Solicitud aprobada';
-  const tituloRechazado = 'Solicitud no aprobada';
-  const titulo = nuevoEstadoExpediente === 'aprobado' ? tituloAprobado : tituloRechazado;
-  const mensajeAprobado = `El estudio combinado tuyo y de tu co-arrendatario fue aprobado. Te avisaremos cuando el contrato esté listo para firmar.`;
-  const mensajeRechazado = `El estudio combinado tuyo y de tu co-arrendatario no fue aprobado. Si tienes dudas, escríbenos.`;
-  const mensaje = nuevoEstadoExpediente === 'aprobado' ? mensajeAprobado : mensajeRechazado;
-
-  if (ctx.solicitante_creado_por) {
-    notificarUsuario({
-      userId: ctx.solicitante_creado_por,
-      tipo: nuevoEstadoExpediente === 'aprobado' ? 'estudio.aprobado' : 'estudio.rechazado',
-      titulo,
-      mensaje,
-      link: `/expedientes/${est.expediente_id}`,
-      payload: {
-        expediente_id: est.expediente_id,
-        via: 'coarrendatario_ponderado',
-        coarrendatario_id: coa?.id,
-      },
-    }).catch((e) => logger.warn({ error: e }, 'Error notif ponderacion coarrendatario'));
-  }
+  // Al prospecto, por correo (con el derecho de apelación §11 si no se aprobó)
+  // y en la app si tiene cuenta. Antes iba solo a quien creó la ficha, casi
+  // siempre el gestor. El motivo es del conjunto: nunca las reglas duras del
+  // co-arrendatario, que son datos del buró de otra persona.
+  void import('@/modules/expedientes/expediente-habilitacion.service')
+    .then((m) =>
+      m.avisarSolicitanteDecision(
+        est.expediente_id,
+        nuevoEstadoExpediente,
+        nuevoEstadoExpediente === 'rechazado' ? MOTIVO_TITULAR_RECHAZO_CONJUNTO : undefined,
+      ),
+    )
+    .catch((e) => logger.warn({ error: e }, 'Error aviso al prospecto de la ponderacion'));
 
   if (ctx.inmueble_propietario_id) {
     const titProp =

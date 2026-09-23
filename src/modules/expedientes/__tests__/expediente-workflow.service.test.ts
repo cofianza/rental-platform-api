@@ -62,9 +62,11 @@ vi.mock('../expedientes.service', () => ({
 
 // Adenda 2 §4.3: aprobar una revision manual recalcula el puntaje (habilitacion).
 const mockRatificar = vi.fn();
+const mockAvisarSolicitante = vi.fn(async (..._args: unknown[]) => undefined);
 vi.mock('../expediente-habilitacion.service', () => ({
   ratificarRevisionManual: (...args: unknown[]) => mockRatificar(...args),
   avisarDuenoDecisionRevisionManual: vi.fn(async () => undefined),
+  avisarSolicitanteDecision: (...args: unknown[]) => mockAvisarSolicitante(...args),
 }));
 vi.mock('@/lib/auditLog', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auditLog')>()),
@@ -341,6 +343,8 @@ describe('expediente-workflow.service', () => {
       expect(mockUpdate).toHaveBeenCalledWith({
         metadata: expect.objectContaining({ fundamento: 'Soportes revisados', puntaje_revision_manual: recalculo }),
       });
+      // El prospecto también se entera de la decisión.
+      await vi.waitFor(() => expect(mockAvisarSolicitante).toHaveBeenCalledWith('exp-uuid', 'aprobado'));
     });
   });
 

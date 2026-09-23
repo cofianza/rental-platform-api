@@ -8,6 +8,7 @@ import {
   sendEstudioHabilitadoEmail,
   sendEstudioNoHabilitadoEmail,
   sendEstudioAprobadoEmail,
+  sendEstudioRechazadoEmail,
 } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
 import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
@@ -744,6 +745,60 @@ export async function avisarDuenoDecisionRevisionManual(
     await notificarResponsableExpediente({ expedienteId, excluirPerfilId: duenoId, ...aviso });
   } catch (err) {
     logger.warn({ error: err, expedienteId }, 'No se pudo avisar al dueño la decisión de la revisión manual');
+  }
+}
+
+/**
+ * Al prospecto también se le cuenta cómo terminó su estudio condicionado, por
+ * "Cambiar estado" o por la ponderación con el co-arrendatario. Antes solo se
+ * avisaba (en la app) a quien creó la ficha, que casi siempre es el gestor: el
+ * prospecto no se enteraba ni recibía el derecho de apelación (Política §11),
+ * que viaja en sendEstudioRechazadoEmail. Best-effort.
+ */
+export async function avisarSolicitanteDecision(
+  expedienteId: string,
+  decision: 'aprobado' | 'rechazado',
+  motivoGeneral?: string,
+): Promise<void> {
+  try {
+    const { data } = await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('solicitantes(email, nombre, apellido), inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad)')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const e = data as {
+      solicitantes: { email: string | null; nombre: string; apellido: string } | null;
+      inmuebles: { direccion: string | null; ciudad: string | null } | null;
+    } | null;
+    const sol = e?.solicitantes;
+    if (!sol?.email) return;
+    const nombre = `${sol.nombre} ${sol.apellido}`.trim();
+
+    await (decision === 'aprobado'
+      ? sendEstudioAprobadoEmail({
+          email: sol.email,
+          nombre,
+          inmueble: e?.inmuebles?.direccion ?? '',
+          ciudad: e?.inmuebles?.ciudad ?? '',
+          score: null,
+        })
+      : sendEstudioRechazadoEmail({ email: sol.email, nombre, motivoGeneral })
+    ).catch((err) => logger.warn({ error: err, expedienteId }, 'No se pudo enviar al prospecto el correo de la decisión'));
+
+    const perfilId = await findPerfilIdByEmail(sol.email);
+    if (!perfilId) return;
+    await notificarUsuario({
+      userId: perfilId,
+      tipo: decision === 'aprobado' ? 'estudio.aprobado' : 'estudio.rechazado',
+      titulo: decision === 'aprobado' ? 'Solicitud aprobada' : 'Solicitud no aprobada',
+      mensaje:
+        decision === 'aprobado'
+          ? 'Cofianza revisó tu solicitud y la aprobó. Te avisaremos cuando el contrato esté listo para firmar.'
+          : 'Cofianza revisó tu solicitud y no la aprobó. Te escribimos al correo el motivo y cómo presentar una apelación.',
+      link: `/expedientes/${expedienteId}`,
+      payload: { expediente_id: expedienteId, decision },
+    });
+  } catch (err) {
+    logger.warn({ error: err, expedienteId }, 'No se pudo avisar al prospecto la decisión de su estudio');
   }
 }
 

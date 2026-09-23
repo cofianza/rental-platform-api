@@ -85,6 +85,10 @@ vi.mock('@/lib/tenantScope', () => ({
   // Membresía de la org: dejaba pasar a cualquier miembro (no debe decidir aquí).
   perfilEsDuenoDeInmueble: vi.fn(async () => true),
 }));
+const mockAvisarSolicitante = vi.fn(async (..._args: unknown[]) => undefined);
+vi.mock('@/modules/expedientes/expediente-habilitacion.service', () => ({
+  avisarSolicitanteDecision: (...args: unknown[]) => mockAvisarSolicitante(...args),
+}));
 const mockListOperators = vi.fn(async () => [{ id: 'analista-1' }]);
 vi.mock('@/modules/users/users.service', () => ({ listOperators: () => mockListOperators() }));
 vi.mock('resend', () => ({
@@ -383,6 +387,22 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     expect(payload.motivo_rechazo).toContain('DTI > 65%');
     expect(mockLiberarReserva).toHaveBeenCalledWith(EXPEDIENTE_ID);
     expect(mockEmitirCrc).not.toHaveBeenCalled();
+  });
+
+  it('Politica §11: el rechazo le llega al prospecto (no al gestor) sin las reglas del co-arrendatario', async () => {
+    enqueue('estudios', coaEstudio('rechazado'), titularRows('aprobado'));
+    enqueue('expediente_coarrendatarios', coaRow);
+    const ctxGestor = ctxRow();
+    ctxGestor.data.solicitantes.creado_por = GESTOR_ID as never;
+    enqueue('expedientes', { data: [{ id: EXPEDIENTE_ID }], error: null }, ctxGestor);
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: ['dti_mayor_65'] });
+
+    await vi.waitFor(() =>
+      expect(mockAvisarSolicitante).toHaveBeenCalledWith(EXPEDIENTE_ID, 'rechazado', expect.stringContaining('evaluación conjunta')),
+    );
+    expect(String(mockAvisarSolicitante.mock.calls[0][2])).not.toMatch(/DTI|mora/i);
+    expect(mockNotificarUsuario).not.toHaveBeenCalledWith(expect.objectContaining({ userId: GESTOR_ID }));
   });
 
   it('titular aprobado + coarrendatario rechazado por SCORE sigue aprobado (fila sin definir en la Politica)', async () => {
