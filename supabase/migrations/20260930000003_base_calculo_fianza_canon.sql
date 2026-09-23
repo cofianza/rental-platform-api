@@ -17,7 +17,11 @@
 -- vistas, funciones ni índices que dependan de ella (solo su propia
 -- expresión); 7 contratos, 0 V3, 0 con iva_canon_pct distinto de NULL/0.
 -- ALTER COLUMN ... SET EXPRESSION exige PostgreSQL 17 (producción: 17.6).
+-- Todo va en una transacción: si la guarda aborta, el ALTER no corre, también
+-- con psql -f sin ON_ERROR_STOP.
 -- ============================================================
+
+BEGIN;
 
 DO $$
 BEGIN
@@ -37,6 +41,8 @@ COMMENT ON COLUMN public.contratos.base_calculo_fianza_cop IS
   'Base de prima, tarifa y cobertura: el canon SIN IVA en toda destinación (Adenda 1 del módulo de contratos §1.2 y §1.5; ya no es canon + IVA en comercial). NULL en legacy V1/V4.';
 COMMENT ON COLUMN public.contratos.valor_arriendo IS
   'Canon mensual SIN IVA: base de prima, tarifa y cobertura (tope de 18 cánones) en toda destinación (Adenda 1 del módulo de contratos §1.2).';
+
+COMMIT;
 
 -- Verificación (solo lectura, después de correrla):
 --   SELECT generation_expression FROM information_schema.columns
