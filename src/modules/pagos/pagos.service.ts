@@ -1109,10 +1109,15 @@ async function processMercadoPagoWebhook(
   const pagoIdRef = refParts[2] ?? '';
 
   // 2. Mapear estado normalizado del adapter → estado del pago (solo terminales).
+  // 'cancelled' es un INTENTO vencido (PSE o efectivo sin pagar), no el cobro:
+  // la preference sigue viva y el prospecto puede volver al enlace y pagar con
+  // tarjeta. Con 'cancelado' (estado final) ese pago aprobado chocaba contra
+  // la máquina de estados y el estudio no avanzaba. 'fallido' admite pasar a
+  // completado, entra en la reconciliación y el panel ofrece reenviar el link.
   const estadoMap: Record<string, EstadoPago | undefined> = {
     completed: 'completado',
     failed: 'fallido',
-    cancelled: 'cancelado',
+    cancelled: 'fallido',
     refunded: 'reembolsado',
   };
   const targetEstado = estadoMap[status.status];
