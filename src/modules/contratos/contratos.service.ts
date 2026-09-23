@@ -10,7 +10,7 @@ import { renderTemplate, renderTemplateHighlighted } from '@/lib/templateEngine'
 import { numeroALetras, numeroAPesosLetras, formatearPesos } from '@/lib/numerosEnLetras';
 import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
 import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
-import { checkPerfilCompletitud } from '../perfil-arrendador/perfil-arrendador.service';
+import { checkPerfilCompletitud, usuarioPuedeEditarDatosContrato } from '../perfil-arrendador/perfil-arrendador.service';
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
 import { canonMaximoTolerado } from '../estudios/portabilidad';
@@ -2346,6 +2346,21 @@ export async function previewFirmantesContrato(contratoId: string, userId?: stri
   }
   const { previewFirmantesMultiparte } = await import('@/modules/firma/firma-multiparte.service');
   const r = await previewFirmantesMultiparte(contratoId);
+  // «Editar» el WhatsApp del arrendador guarda en el perfil de QUIEN edita: solo
+  // sirve a su titular. Al admin le escribía su propio perfil y al operador o al
+  // miembro no titular le daba un 403; a ellos se les muestra sin «Editar».
+  const arrendador = r.firmantes.find((f) => f.rol_firmante === 'arrendador');
+  if (
+    arrendador?.origen &&
+    !(
+      userId &&
+      (await resolveOrgCanonicalPerfilId(userId)) === arrendador.origen_id &&
+      (await usuarioPuedeEditarDatosContrato(userId))
+    )
+  ) {
+    arrendador.origen = undefined;
+    arrendador.origen_id = null;
+  }
   // biometria: el modal avisa que primero va el correo de verificación de identidad (Adenda 2 §9).
   return { aplica: true as const, biometria: env.FIRMA_BIOMETRIA_ENABLED, ...r };
 }

@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // contratos-v3-guards.test.
 // ============================================================
 
-const { mockEnv, mockFrom, ops, queues, enqueue } = vi.hoisted(() => {
+const { mockEnv, mockFrom, ops, queues, enqueue, mockPreview, mockPuedeEditar } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string }> = [];
@@ -31,6 +31,8 @@ const { mockEnv, mockFrom, ops, queues, enqueue } = vi.hoisted(() => {
     return chain;
   };
   return {
+    mockPreview: vi.fn(),
+    mockPuedeEditar: vi.fn(),
     mockEnv: { FIRMA_MULTIPARTE_ENABLED: false, CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 },
     mockFrom: vi.fn((table: string) => chainFor(table)),
     ops,
@@ -55,14 +57,22 @@ vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: vi.fn(async () => undefined),
   assertInmuebleAccess: vi.fn(async () => undefined),
   resolveAllowedExpedienteIds: vi.fn(async () => null),
-  resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
+  // El miembro de la org resuelve al perfil canónico (el titular).
+  resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => (id === 'miembro-1' ? 'titular-1' : id)),
+}));
+vi.mock('@/modules/firma/firma-multiparte.service', () => ({
+  previewFirmantesMultiparte: (...a: unknown[]) => mockPreview(...a),
+}));
+vi.mock('@/modules/perfil-arrendador/perfil-arrendador.service', () => ({
+  checkPerfilCompletitud: vi.fn(),
+  usuarioPuedeEditarDatosContrato: (...a: unknown[]) => mockPuedeEditar(...a),
 }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarUsuario: vi.fn(async () => undefined),
   findPerfilIdByEmail: vi.fn(async () => null),
 }));
 
-import { enviarContratoAFirma, camposDesactualizadosParaFirma } from '../contratos.service';
+import { enviarContratoAFirma, camposDesactualizadosParaFirma, previewFirmantesContrato } from '../contratos.service';
 
 const snapshot = {
   arrendatario: { celular: '3001112233', correo: 'juan@x.co' },
@@ -127,5 +137,44 @@ describe('enviarContratoAFirma con datos que cambiaron', () => {
       errorCode: 'CONTRATO_DATOS_DESACTUALIZADOS',
     });
     expect(ops.filter((o) => ['insert', 'update'].includes(o.method))).toEqual([]);
+  });
+});
+
+describe('previewFirmantesContrato — «Editar» del arrendador', () => {
+  const firmantes = () => ({
+    firmantes: [
+      { rol_firmante: 'arrendatario', origen: 'solicitante', origen_id: 'sol-1' },
+      { rol_firmante: 'arrendador', origen: 'arrendador', origen_id: 'titular-1', duplicado: true },
+    ],
+    puede_enviar: false,
+  });
+  const origenArrendador = (r: { firmantes: Array<{ rol_firmante: string; origen?: string }> }) =>
+    r.firmantes.find((f) => f.rol_firmante === 'arrendador')?.origen;
+
+  beforeEach(() => {
+    queues.clear();
+    mockEnv.FIRMA_MULTIPARTE_ENABLED = true;
+    mockPreview.mockImplementation(async () => firmantes());
+  });
+
+  it('el titular lo edita', async () => {
+    enqueue('contratos', { data: { id: 'cto-1', expediente_id: 'exp-1' }, error: null });
+    mockPuedeEditar.mockResolvedValue(true);
+    expect(origenArrendador(await previewFirmantesContrato('cto-1', 'titular-1', 'inmobiliaria'))).toBe('arrendador');
+  });
+
+  it('el admin no: guardaría en su propio perfil', async () => {
+    enqueue('contratos', { data: { id: 'cto-1', expediente_id: 'exp-1' }, error: null });
+    mockPuedeEditar.mockResolvedValue(true);
+    expect(origenArrendador(await previewFirmantesContrato('cto-1', 'admin-1', 'administrador'))).toBeUndefined();
+  });
+
+  it('el miembro no titular tampoco', async () => {
+    enqueue('contratos', { data: { id: 'cto-1', expediente_id: 'exp-1' }, error: null });
+    mockPuedeEditar.mockResolvedValue(false);
+    const r = await previewFirmantesContrato('cto-1', 'miembro-1', 'inmobiliaria');
+    expect(origenArrendador(r)).toBeUndefined();
+    // El arrendatario sigue editable.
+    expect(r.firmantes.find((f) => f.rol_firmante === 'arrendatario')?.origen).toBe('solicitante');
   });
 });

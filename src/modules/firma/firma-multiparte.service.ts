@@ -292,7 +292,10 @@ export async function derivarFirmantes(contratoId: string): Promise<FirmanteDeri
     orden: 2,
     // El teléfono del arrendador (inmobiliaria) es su whatsapp_recaudo, editable
     // desde el perfil-arrendador del propio usuario ("Mi Inmobiliaria").
+    // origenId = perfil canónico: el preview lo usa para ofrecer «Editar» solo
+    // a su titular (PUT /perfil-arrendador/me escribe en el perfil de quien edita).
     origen: 'arrendador',
+    origenId: arrendadorPerfilId,
   });
 
   // ── Cofianza (orden 3): afianzadora ──
