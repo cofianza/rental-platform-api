@@ -53,6 +53,12 @@ const ITEM_DEFAULTS = {
   taxes: [{ is_excluded: true }] as { is_excluded: boolean }[],
 };
 
+// Adenda 1 del modulo de contratos §1.6: la prima (el cobro 'garantia') y la
+// tarifa se facturan GRAVADAS. La tasa sigue saliendo de iva_concepto_<concepto>
+// (migracion 20260930000004), pero en 0 no se emite ni se guarda: una factura
+// DIAN emitida como excluida solo se corrige con nota credito.
+const CONCEPTOS_GRAVADOS = new Set(['garantia']);
+
 // ── Tipos para la integración ──────────────────────────────────────
 
 interface PagoConContexto {
@@ -298,6 +304,12 @@ export async function updateTarifasIva(
     if (typeof item.tasa !== 'number' || item.tasa < 0 || item.tasa > 100) {
       throw AppError.badRequest('La tasa debe estar entre 0 y 100', 'TASA_INVALIDA');
     }
+    if (item.tasa === 0 && CONCEPTOS_GRAVADOS.has(item.concepto)) {
+      throw AppError.badRequest(
+        'La garantía (prima de vinculación) se factura con IVA (Adenda 1 de contratos §1.6): su tasa no puede ser 0.',
+        'CONCEPTO_GRAVADO',
+      );
+    }
   }
 
   for (const item of input) {
@@ -459,6 +471,12 @@ export async function crearFacturaDesdePago(
   // /facturacion). Si tasa>0, monto del pago es total con IVA incluido y
   // calculamos el price (base) para Factus. Si tasa=0, price = monto.
   const tasaIva = await getTarifaIvaPorConcepto(ctx.concepto);
+  if (tasaIva === 0 && CONCEPTOS_GRAVADOS.has(ctx.concepto)) {
+    throw AppError.conflict(
+      'La garantía se factura con IVA (Adenda 1 de contratos §1.6) y su tasa está en 0 %. Corrígela en Facturación → Tarifas de IVA y vuelve a facturar.',
+      'IVA_CONCEPTO_GRAVADO_EN_CERO',
+    );
+  }
   const priceBase = tasaIva > 0 ? monto / (1 + tasaIva / 100) : monto;
   const priceStr = priceBase.toFixed(2);
 

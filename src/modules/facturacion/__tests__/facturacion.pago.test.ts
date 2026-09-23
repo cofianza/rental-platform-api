@@ -55,16 +55,16 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 
-import { crearFacturaDesdePago, previewFacturaPago } from '../facturacion.service';
+import { crearFacturaDesdePago, previewFacturaPago, updateTarifasIva } from '../facturacion.service';
 
 const solicitante = {
   id: 'sol-1', tipo_persona: 'natural', nombre: 'Juan', apellido: 'Pérez', razon_social: null,
   email: 'juan@correo.co', telefono: '3001234567', tipo_documento: 'CC', numero_documento: '1020304050',
   digito_verificacion: null, direccion: 'Calle 1 # 2-3', municipio_id: '11001', municipio_nombre: 'Bogotá', tribute_code: null,
 };
-const pago = (estado: string) => ({
+const pago = (estado: string, concepto = 'estudio', monto = 80000) => ({
   data: {
-    id: 'pago-1', expediente_id: 'exp-1', concepto: 'estudio', monto: 80000, estado,
+    id: 'pago-1', expediente_id: 'exp-1', concepto, monto, estado,
     email_pagador: 'juan@correo.co', nombre_pagador: 'Juan Pérez', creado_por: 'gestor-1',
     expediente: { numero: 'EXP-1', solicitante },
   },
@@ -118,5 +118,57 @@ describe('carrera entre el disparo automático y el clic manual', () => {
 
     expect(ops.some((o) => o.table === 'facturas' && o.method === 'update')).toBe(true);
     expect(ops.find((o) => o.table === 'facturas' && o.method === 'neq')?.args).toEqual(['estado', 'emitida']);
+  });
+});
+
+// Adenda 1 del módulo de contratos §1.6: la prima (cobro 'garantia') se
+// factura gravada; el estudio no cambia.
+describe('IVA por concepto', () => {
+  const tasa = (valor: string) => enqueue('configuracion_sistema', { data: { valor }, error: null });
+  const facturaEmitida = () => {
+    enqueue('facturas', { data: null, error: null }, { data: null, error: null }, { data: { id: 'fac-1' }, error: null });
+    mockCreateBill.mockResolvedValueOnce({ data: { bill: { id: 1, number: 'FE1', cufe: 'cufe-1', total: '357000.00', tax_amount: '57000.00' } } });
+  };
+  const item = () => mockCreateBill.mock.calls[0][0].items[0];
+
+  it('garantía al 19 %: los $357.000 cobrados son base $300.000 + IVA 01 al 19 %', async () => {
+    facturaEmitida();
+    enqueue('pagos', pago('completado', 'garantia', 357_000));
+    tasa('19');
+
+    await crearFacturaDesdePago('pago-1', null);
+
+    expect(item().price).toBe('300000.00');
+    expect(item().taxes).toEqual([{ code: '01', rate: '19.00' }]);
+    expect(mockCreateBill.mock.calls[0][0].payment_details[0].amount).toBe('357000.00');
+  });
+
+  it('garantía con la tasa en 0: no se emite como excluida', async () => {
+    enqueue('pagos', pago('completado', 'garantia', 357_000));
+    tasa('0');
+
+    await expect(crearFacturaDesdePago('pago-1', null)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'IVA_CONCEPTO_GRAVADO_EN_CERO',
+    });
+    expect(mockCreateBill).not.toHaveBeenCalled();
+  });
+
+  it('el estudio sigue excluido de IVA', async () => {
+    facturaEmitida();
+    enqueue('pagos', pago('completado'));
+    tasa('0');
+
+    await crearFacturaDesdePago('pago-1', null);
+
+    expect(item().price).toBe('80000.00');
+    expect(item().taxes).toEqual([{ is_excluded: true }]);
+  });
+
+  it('la tasa de la garantía no se puede dejar en 0', async () => {
+    await expect(updateTarifasIva([{ concepto: 'garantia', tasa: 0 }], 'admin-1')).rejects.toMatchObject({
+      errorCode: 'CONCEPTO_GRAVADO',
+    });
+    expect(ops.some((o) => o.table === 'configuracion_sistema')).toBe(false);
   });
 });
