@@ -274,7 +274,13 @@ export const CALIBRACION_DEFAULT: Calibracion = Object.fromEntries(
 ) as Calibracion;
 
 const CACHE_TTL_MS = 60_000;
+// Si la lectura falla, el respaldo se cachea poco: un corte breve no debe dejar
+// un minuto entero los valores de respaldo a todos los consumidores.
+const CACHE_TTL_FALLO_MS = 5_000;
 let cache: { value: Calibracion; expiresAt: number } | null = null;
+// Última lectura buena: es el respaldo si la base falla (los defaults solo si
+// nunca se pudo leer).
+let ultimoBueno: Calibracion | null = null;
 
 const db = (tabla: string) => supabase.from(tabla as string) as ReturnType<typeof supabase.from>;
 
@@ -307,26 +313,35 @@ export async function getCalibracion(): Promise<Calibracion> {
 
 let leyendo: Promise<Calibracion> | null = null;
 
-async function leerCalibracion(): Promise<Calibracion> {
+/** Lee la tabla directo (sin caché). Lanza si la base falla. */
+async function leerTabla(): Promise<Calibracion> {
   const value: Calibracion = { ...CALIBRACION_DEFAULT };
+  const { data, error } = await db('parametros_calibracion').select('clave, valor');
+  if (error) throw new Error(error.message);
+  for (const row of (data ?? []) as Array<{ clave: string; valor: number | string }>) {
+    const n = typeof row.valor === 'string' ? Number(row.valor) : row.valor;
+    const v = validarParametro(row.clave, n);
+    if (v && !v.error) value[row.clave as ClaveCalibracion] = n;
+    else if (v) logger.warn({ clave: row.clave, valor: row.valor, error: v.error }, 'Calibracion: valor guardado invalido — se usa el default');
+  }
+  return value;
+}
+
+async function leerCalibracion(): Promise<Calibracion> {
   try {
-    const { data, error } = await db('parametros_calibracion').select('clave, valor');
-    if (error) throw new Error(error.message);
-    for (const row of (data ?? []) as Array<{ clave: string; valor: number | string }>) {
-      const n = typeof row.valor === 'string' ? Number(row.valor) : row.valor;
-      const v = validarParametro(row.clave, n);
-      if (v && !v.error) value[row.clave as ClaveCalibracion] = n;
-      else if (v) logger.warn({ clave: row.clave, valor: row.valor, error: v.error }, 'Calibracion: valor guardado invalido — se usa el default');
-    }
+    const value = await leerTabla();
+    ultimoBueno = value;
+    cache = { value, expiresAt: Date.now() + CACHE_TTL_MS };
+    return value;
   } catch (e) {
     logger.warn(
       { error: e instanceof Error ? e.message : String(e) },
-      'getCalibracion: no se pudo leer parametros_calibracion; usando defaults',
+      'getCalibracion: no se pudo leer parametros_calibracion; se usa la ultima lectura buena o los defaults',
     );
+    const value = ultimoBueno ?? { ...CALIBRACION_DEFAULT };
+    cache = { value, expiresAt: Date.now() + CACHE_TTL_FALLO_MS };
+    return value;
   }
-
-  cache = { value, expiresAt: Date.now() + CACHE_TTL_MS };
-  return value;
 }
 
 export interface FilaParametro extends DefinicionParametro {
@@ -371,7 +386,19 @@ export async function setParametro(
   if (!v) throw new Error(`Parametro desconocido: ${clave}`);
   if (v.error) throw new Error(`${clave}: ${v.error}`);
 
-  const anterior = (await getCalibracion())[clave as ClaveCalibracion];
+  // Se lee la tabla, no el caché: si el caché trae el respaldo de una lectura
+  // fallida, el historial registraría como «anterior» un valor que no regía.
+  let vigente: Calibracion;
+  try {
+    vigente = await leerTabla();
+  } catch (e) {
+    throw new AppError(
+      500,
+      'CALIBRACION_LECTURA_ERROR',
+      `No se pudo leer el valor vigente de ${clave}; el valor no se modificó. ${e instanceof Error ? e.message : ''}`.trim(),
+    );
+  }
+  const anterior = vigente[clave as ClaveCalibracion];
   const ahora = new Date().toISOString();
 
   // SIN HISTORIAL NO HAY CAMBIO. La Adenda §11 exige el rastro de cada cambio;
@@ -422,6 +449,7 @@ export async function setParametro(
   }
 
   invalidateCalibracionCache();
+  ultimoBueno = { ...vigente, [clave]: valor };
   logger.info({ clave, anterior, nuevo: valor, usuarioId, motivo }, 'Calibracion: parametro actualizado');
 
   return {

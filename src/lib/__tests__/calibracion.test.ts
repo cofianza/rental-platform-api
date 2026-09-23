@@ -3,7 +3,7 @@
  * SIN HISTORIAL NO HAY CAMBIO: el rastro se escribe primero; si falla, el valor
  * no se toca. Si el valor falla despues, el rastro recien escrito se retira.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockFrom, ops, queues, enqueue } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
@@ -41,7 +41,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 vi.mock('@/config', () => ({ env: { CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 } }));
 
-import { setParametro, invalidateCalibracionCache } from '@/lib/calibracion';
+import { setParametro, invalidateCalibracionCache, getCalibracion } from '@/lib/calibracion';
 
 const USER = '660e8400-e29b-41d4-a716-446655440000';
 const opsDe = (table: string, method: string) =>
@@ -118,5 +118,57 @@ describe('setParametro — sin historial no hay cambio (Adenda §11)', () => {
       /Fuera de rango/,
     );
     expect(opsDe('parametros_calibracion_historial', 'insert')).toHaveLength(0);
+  });
+});
+
+describe('lectura fallida — no se queda un minuto con los defaults', () => {
+  let ahora = 1_000_000;
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    invalidateCalibracionCache();
+    vi.spyOn(Date, 'now').mockImplementation(() => ahora);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('si la base falla usa la ultima lectura buena, y reintenta a los pocos segundos', async () => {
+    enqueue('parametros_calibracion', { data: [{ clave: 'DIAS_EXPIRACION_ESTUDIO', valor: 30 }], error: null });
+    expect((await getCalibracion()).DIAS_EXPIRACION_ESTUDIO).toBe(30);
+
+    ahora += 61_000;
+    enqueue('parametros_calibracion', { data: null, error: { message: 'timeout' } });
+    expect((await getCalibracion()).DIAS_EXPIRACION_ESTUDIO).toBe(30); // no el default (15)
+
+    ahora += 6_000;
+    enqueue('parametros_calibracion', { data: [{ clave: 'DIAS_EXPIRACION_ESTUDIO', valor: 40 }], error: null });
+    expect((await getCalibracion()).DIAS_EXPIRACION_ESTUDIO).toBe(40);
+  });
+
+  it('setParametro registra como anterior el valor de la tabla, no el respaldo del cache', async () => {
+    enqueue('parametros_calibracion', { data: null, error: { message: 'timeout' } });
+    await getCalibracion(); // deja el respaldo en cache
+    enqueue('parametros_calibracion', { data: [{ clave: 'DIAS_EXPIRACION_ESTUDIO', valor: 20 }], error: null });
+    enqueue('parametros_calibracion_historial', { data: { id: 'h1' }, error: null });
+    enqueue('parametros_calibracion', { error: null });
+
+    await setParametro('DIAS_EXPIRACION_ESTUDIO', 25, USER);
+
+    expect(opsDe('parametros_calibracion_historial', 'insert')[0].args[0]).toMatchObject({
+      valor_anterior: 20,
+      valor_nuevo: 25,
+    });
+  });
+
+  it('setParametro no escribe nada si no puede leer el valor vigente', async () => {
+    enqueue('parametros_calibracion', { data: null, error: { message: 'timeout' } });
+
+    await expect(setParametro('DIAS_EXPIRACION_ESTUDIO', 25, USER)).rejects.toMatchObject({
+      statusCode: 500,
+      errorCode: 'CALIBRACION_LECTURA_ERROR',
+    });
+    expect(opsDe('parametros_calibracion_historial', 'insert')).toHaveLength(0);
+    expect(opsDe('parametros_calibracion', 'upsert')).toHaveLength(0);
   });
 });
