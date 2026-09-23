@@ -4,7 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import { env } from '@/config';
-import { logger } from '@/lib/logger';
+import { logger, httpLogSerializers } from '@/lib/logger';
 import { errorHandler } from '@/middleware/errorHandler';
 import { generalLimiter } from '@/middleware/rateLimiter';
 import healthRouter from '@/modules/health/health.routes';
@@ -92,6 +92,7 @@ app.use(
     logger,
     // Nunca a los logs: el JWT de cada usuario, la cookie de sesión y el secreto del webhook de Auco.
     redact: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-webhook-secret"]'],
+    serializers: httpLogSerializers,
     genReqId: (req) => {
       const existing = req.headers['x-request-id'];
       return typeof existing === 'string' ? existing : crypto.randomUUID();
