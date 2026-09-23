@@ -96,9 +96,10 @@ td{padding:0;vertical-align:top;border:.5pt solid #BFBFBF}
 .linea+br{display:none}
 .casilla{display:inline-block;box-sizing:border-box;width:9pt;height:9pt;border:.75pt solid;font-size:7pt;line-height:7.5pt;text-align:center;vertical-align:-1pt}
 .pendiente{background:#FFF3B0}
-.marca{position:fixed;top:4.59in;left:3.306in;transform:translate(-50%,-50%) rotate(-50deg);white-space:nowrap;font-size:24pt;font-weight:700;color:rgba(192,0,0,.13)}`;
+.marca{position:fixed;top:4.59in;left:3.306in;transform:translate(-50%,-50%) rotate(-50deg);white-space:nowrap;font-size:24pt;font-weight:700;color:rgba(192,0,0,.13)}
+.divisoria{break-after:page;padding-top:2.5in}`;
 
-const esc = (s: string) =>
+export const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /**

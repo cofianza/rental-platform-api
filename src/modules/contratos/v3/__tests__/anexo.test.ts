@@ -1,13 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AppError } from '@/lib/errors';
-import { anclarFirmas, pieTexto } from '../documento';
+import { anclarFirmas, pdfContrato, pieTexto } from '../documento';
 import { verificarSinMarcadores, type Resultado } from '../motor';
 import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
-import { renderizarAnexo, type DatosVivienda, type Persona } from '../vivienda';
+import { generarAnexoVivienda, paginaDivisoria, renderizarAnexo, type DatosVivienda, type Persona } from '../vivienda';
 
 // vivienda.ts → documento.ts → pdfRenderer → logger → env, que exige las variables de entorno
 vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
+// Sin Chromium: el PDF del Anexo se revisa por el HTML que recibe.
+vi.mock('../documento', async (orig) => ({
+  ...(await orig<typeof import('../documento')>()),
+  pdfContrato: vi.fn(async () => Buffer.from('%PDF-')),
 }));
 
 // ============================================================
@@ -253,5 +258,30 @@ describe('el pie', () => {
     expect(pieTexto(PLANTILLA_VIVIENDA.pie, 'fidelidad')).toBe(
       'Contrato de arrendamiento de vivienda urbana · N° ▢ · Iniciales: ▢ Página ▢ de ▢',
     );
+  });
+});
+
+describe('página divisoria de la Ruta B (Adenda 1 del módulo de contratos, respuesta 6)', () => {
+  it('dice dónde termina el contrato de la inmobiliaria y dónde empieza el Anexo, con el N° del contrato', () => {
+    const h = paginaDivisoria(datos());
+    expect(h).toMatch(/^<section class="divisoria">[\s\S]*<\/section>$/);
+    expect(h).toContain('Contrato de arrendamiento N° CTO-2026-0001');
+    expect(h).toContain('Aquí termina el contrato de arrendamiento aportado por EL ARRENDADOR, INMOBILIARIA EJEMPLO S.A.S.');
+    expect(h).toContain('empieza el ANEXO DE CONDICIONES DE AFIANZAMIENTO COFIANZA');
+  });
+
+  it('escapa lo que viene del perfil', () => {
+    const d = datos();
+    d.arrendador = { ...d.arrendador, nombre: 'A & B <S.A.S.>' };
+    expect(paginaDivisoria(d)).toContain('A &amp; B &lt;S.A.S.&gt;');
+  });
+
+  it('va primero en el PDF del Anexo, sin bloques de firma: las anclas siguen siendo una por parte', async () => {
+    const d = datos();
+    await generarAnexoVivienda(d, { modo: 'final', logoInmobiliaria: null, anclas: true });
+    const [html, o] = vi.mocked(pdfContrato).mock.calls.at(-1)!;
+    expect(html.startsWith(paginaDivisoria(d))).toBe(true);
+    expect(html.match(/\{\{signature:\d\}\}/g)).toEqual(['{{signature:0}}', '{{signature:1}}', '{{signature:2}}']);
+    expect(o).toMatchObject({ rotulo: 'CRC N°', numero: 'CRC-2026-0042', iniciales: false });
   });
 });

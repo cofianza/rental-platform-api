@@ -13,7 +13,7 @@
 import { AppError } from '@/lib/errors';
 import { pctDe } from '@/modules/estudios/tarifas';
 import { APROBACIONES } from './aprobaciones';
-import { anclarFirmas, pdfContrato, type LogoPdf } from './documento';
+import { anclarFirmas, esc, pdfContrato, type LogoPdf } from './documento';
 import { sumarMeses } from './formato';
 import {
   renderizar,
@@ -334,13 +334,31 @@ export function renderizarAnexo(d: DatosVivienda, o: OpcionesVivienda): Resultad
   return r;
 }
 
-/** PDF del Anexo. El pie lleva el CRC, no el número del contrato ni iniciales. */
+/**
+ * Página divisoria de la Ruta B (Adenda 1 del módulo de contratos, respuesta 6):
+ * el PDF de la inmobiliaria va antes, intacto, y esta página de Cofianza, con el
+ * formato del Anexo, marca dónde termina ese contrato y dónde empieza el Anexo.
+ * Va como primera página del PDF del Anexo: así también sale en la vista previa.
+ */
+export function paginaDivisoria(d: DatosVivienda): string {
+  return (
+    '<section class="divisoria">' +
+    '<p class="k-titulo">PÁGINA DIVISORIA</p>' +
+    `<p class="k-nota">Contrato de arrendamiento N° ${esc(d.numero)}</p>` +
+    `<p class="k-p">Aquí termina el contrato de arrendamiento aportado por EL ARRENDADOR, ${esc(d.arrendador.nombre)}, ` +
+    'que ocupa las páginas anteriores tal como lo cargó, sin modificaciones de COFIANZA S.A.S.</p>' +
+    '<p class="k-p">En la página siguiente empieza el ANEXO DE CONDICIONES DE AFIANZAMIENTO COFIANZA de este contrato.</p>' +
+    '</section>'
+  );
+}
+
+/** PDF del Anexo, precedido de la página divisoria. El pie lleva el CRC, no el número del contrato ni iniciales. */
 export async function generarAnexoVivienda(
   d: DatosVivienda,
   o: OpcionesVivienda,
 ): Promise<{ pdf: Buffer; pendientes: Pendiente[]; version: string; lineas: Linea[] }> {
   const r = renderizarAnexo(d, o);
-  const pdf = await pdfContrato(conAnclas(r.html, d, o), {
+  const pdf = await pdfContrato(paginaDivisoria(d) + conAnclas(r.html, d, o), {
     pie: PLANTILLA_ANEXO.pie,
     rotulo: 'CRC N°',
     numero: d.crc.numero,

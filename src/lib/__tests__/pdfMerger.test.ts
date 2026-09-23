@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { describe, it, expect, vi } from 'vitest';
-import { PDFDocument, PDFName, PDFString } from 'pdf-lib';
+import { PDFArray, PDFDocument, PDFName, PDFRawStream, PDFString } from 'pdf-lib';
 
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
@@ -43,6 +43,21 @@ describe('mergePdfs', () => {
 
   it('con `estricto` relanza: el sobre de firma nunca sale incompleto en silencio', async () => {
     await expect(mergePdfs([await pdf(1), Buffer.from('no soy un pdf')], { estricto: true })).rejects.toThrow();
+  });
+
+  it('las páginas de la inmobiliaria pasan intactas: mismo contenido y tamaño, sin nada estampado ni repaginado (Adenda 1, respuesta 6)', async () => {
+    /** Los flujos de contenido de una página, tal como están en el archivo. */
+    const contenido = (d: PDFDocument, i: number) => {
+      const c = d.getPage(i).node.Contents();
+      const flujos = c instanceof PDFArray ? c.asArray().map((r) => d.context.lookup(r)) : [c];
+      return flujos.map((f) => Buffer.from((f as PDFRawStream).getContents()).toString('latin1'));
+    };
+    const propio = await PDFDocument.load(await pdf(2, 'inmobiliaria'));
+    const unido = await PDFDocument.load(await mergePdfs([Buffer.from(await propio.save()), await pdf(1, 'anexo')], { estricto: true }));
+    for (const i of [0, 1]) {
+      expect(contenido(unido, i)).toEqual(contenido(propio, i));
+      expect(unido.getPage(i).getSize()).toEqual(propio.getPage(i).getSize());
+    }
   });
 
   it('un solo buffer se devuelve tal cual', async () => {
