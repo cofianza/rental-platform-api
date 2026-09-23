@@ -60,3 +60,22 @@ describe('estudio del co-arrendatario', () => {
     expect(mockBiometria).toHaveBeenCalledWith('exp-1');
   });
 });
+
+describe('resultado registrado a mano por un analista', () => {
+  // Cedula de extranjeria (§15) y score digitado en la banda 450-599 (Adenda 2 §2).
+  const manual = { proveedor: 'manual', respuesta_proveedor: null, score: null, datos_formulario: { tipo_documento: 'ce' }, tipo: 'individual' };
+
+  it('su aprobado queda aprobado; los motivos van como nota', async () => {
+    filaEstudio.current = manual;
+    const r = await resolverResultadoEstudio({ ...base, score: 520, decidePersona: true });
+    expect(r.resultado).toBe('aprobado');
+    expect(r.revisionManual).toBeTruthy();
+    expect(r.observaciones).toMatch(/§15/);
+  });
+
+  it('el mismo caso por un camino automatico sigue bajando a condicionado', async () => {
+    filaEstudio.current = manual;
+    const r = await resolverResultadoEstudio({ ...base, score: 520 });
+    expect(r.resultado).toBe('condicionado');
+  });
+});

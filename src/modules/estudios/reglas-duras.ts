@@ -584,6 +584,13 @@ export interface ArgsResolverResultado {
    * expediente, o sea del TITULAR, no de la persona evaluada.
    */
   tipoEstudio?: string | null;
+  /**
+   * El resultado lo registra a mano un analista de Cofianza. Los motivos de
+   * revision manual (§14, §15, Adenda 2 §2…) prohiben la aprobacion AUTOMATICA:
+   * aqui la revision ES la decision humana, asi que su 'aprobado' no se baja a
+   * 'condicionado'; los motivos quedan como nota. Las reglas duras aplican igual.
+   */
+  decidePersona?: boolean;
 }
 
 export interface ResolucionEstudio {
@@ -786,7 +793,7 @@ export async function resolverResultadoEstudio(
 
       const obs = (args.observaciones ?? '').trim();
       const observaciones = obs ? `${obs} ${motivoRevision}` : motivoRevision;
-      const baja = args.resultadoPropuesto === 'aprobado';
+      const baja = args.resultadoPropuesto === 'aprobado' && !args.decidePersona;
       if (baja) {
         logger.warn(
           {

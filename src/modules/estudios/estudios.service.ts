@@ -1721,6 +1721,8 @@ export async function registrarResultado(
     score: input.score ?? null,
     observaciones: input.observaciones,
     motivoRechazo: input.motivo_rechazo ?? null,
+    // Lo registra un analista: su aprobado no vuelve a la cola de revision.
+    decidePersona: true,
   });
 
   // Adenda 1 §2/§3 con MOTOR_DECIDE_ENABLED — mismo helper que los caminos
