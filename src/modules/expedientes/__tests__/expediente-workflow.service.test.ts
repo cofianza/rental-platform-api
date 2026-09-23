@@ -27,9 +27,8 @@ const mockEq: ReturnType<typeof vi.fn> = vi.fn((): Record<string, unknown> => ({
 const mockSelect = vi.fn((_cols?: string, _opts?: Record<string, unknown>) => ({
   eq: mockEq,
 }));
-const mockFrom = vi.fn((_table?: string) => ({
-  select: mockSelect,
-}));
+const fromPorDefecto = (_table?: string): Record<string, unknown> => ({ select: mockSelect });
+const mockFrom = vi.fn(fromPorDefecto);
 const mockRpc = vi.fn();
 
 vi.mock('@/lib/supabase', () => ({
@@ -62,11 +61,17 @@ vi.mock('../expedientes.service', () => ({
 
 // Adenda 2 §4.3: aprobar una revision manual recalcula el puntaje (habilitacion).
 const mockRatificar = vi.fn();
+const mockAprobarCondicionado = vi.fn();
+const mockAvisarDueno = vi.fn(async (..._a: unknown[]) => undefined);
 const mockAvisarSolicitante = vi.fn(async (..._args: unknown[]) => undefined);
 vi.mock('../expediente-habilitacion.service', () => ({
   ratificarRevisionManual: (...args: unknown[]) => mockRatificar(...args),
-  avisarDuenoDecisionRevisionManual: vi.fn(async () => undefined),
+  aprobarCondicionado: (...args: unknown[]) => mockAprobarCondicionado(...args),
+  avisarDuenoDecisionRevisionManual: (...args: unknown[]) => mockAvisarDueno(...args),
   avisarSolicitanteDecision: (...args: unknown[]) => mockAvisarSolicitante(...args),
+}));
+vi.mock('@/modules/coarrendatarios/coarrendatarios.service', () => ({
+  avisarCoarrendatarioDecision: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/auditLog', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auditLog')>()),
@@ -126,6 +131,7 @@ function setupPreconditionCount(count: number | null, error: Record<string, unkn
 describe('expediente-workflow.service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFrom.mockImplementation(fromPorDefecto);
     mockGetExpedienteById.mockResolvedValue(mockFullExpediente);
   });
 
@@ -310,7 +316,7 @@ describe('expediente-workflow.service', () => {
   // ================================================================
   // Adenda 2 §4.3 — aprobar una revision manual por "Cambiar estado"
   // ================================================================
-  describe('executeTransition - revision manual (condicionado → aprobado)', () => {
+  describe('executeTransition - revision manual (resolver un condicionado)', () => {
     const evaluacion = { estabilidad_laboral: 'empleado_mas_12m', arrendamiento_previo: 'sin_historial' } as const;
 
     it('sin V7/V9 del analista no se aprueba: 400 antes de mover el estado', async () => {
@@ -322,29 +328,55 @@ describe('expediente-workflow.service', () => {
       expect(mockRpc).not.toHaveBeenCalled();
     });
 
-    it('con V7/V9: recalcula el puntaje y lo deja en el timeline', async () => {
+    it('con V7/V9: va por el mismo camino que la card (avisos al titular incluidos), no por la RPC', async () => {
       setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
-      mockRpc.mockResolvedValueOnce({
-        data: { expediente_id: 'exp-uuid', estado_anterior: 'condicionado', estado_nuevo: 'aprobado', evento_timeline_id: 'evt-uuid', updated_at: '2026-09-11T10:00:00Z' },
-        error: null,
-      });
       const recalculo = { puntaje_normalizado: 90.1, denominador: 111 };
-      mockRatificar.mockResolvedValueOnce(recalculo);
-      const mockUpdate = vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) }));
-      mockFrom.mockReturnValueOnce({ update: mockUpdate } as never);
+      mockAprobarCondicionado.mockResolvedValueOnce({ puntaje_revision_manual: recalculo });
 
-      await executeTransition(
+      const r = await executeTransition(
         'exp-uuid',
-        { nuevo_estado: 'aprobado', comentario: 'Soportes revisados', evaluacion },
+        { nuevo_estado: 'aprobado', comentario: 'Soportes revisados', evaluacion, documentos_consultados: ['PILA'] },
         adminUser,
       );
 
-      expect(mockRatificar).toHaveBeenCalledWith('exp-uuid', 'admin-uuid', evaluacion);
-      expect(mockUpdate).toHaveBeenCalledWith({
-        metadata: expect.objectContaining({ fundamento: 'Soportes revisados', puntaje_revision_manual: recalculo }),
+      expect(mockAprobarCondicionado).toHaveBeenCalledWith('exp-uuid', 'admin-uuid', 'administrador', undefined, {
+        fundamento: 'Soportes revisados',
+        documentos_consultados: ['PILA'],
+        evaluacion,
       });
-      // El prospecto también se entera de la decisión.
-      await vi.waitFor(() => expect(mockAvisarSolicitante).toHaveBeenCalledWith('exp-uuid', 'aprobado'));
+      expect(mockRpc).not.toHaveBeenCalled();
+      expect(r.puntaje_revision_manual).toBe(recalculo);
+    });
+
+    const conTimeline = () => {
+      const mockUpdate = vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) }));
+      mockFrom.mockImplementation((t?: string) =>
+        t === 'eventos_timeline' || t === 'expedientes' ? { update: mockUpdate } : fromPorDefecto(t),
+      );
+      mockRpc.mockResolvedValueOnce({
+        data: { expediente_id: 'exp-uuid', estado_anterior: 'condicionado', evento_timeline_id: 'evt-uuid', updated_at: '2026-09-23T10:00:00Z' },
+        error: null,
+      });
+    };
+
+    it('rechazar: se le avisa al prospecto (con la apelación) y al dueño', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      conTimeline();
+      await executeTransition('exp-uuid', { nuevo_estado: 'rechazado', comentario: 'Ingresos no soportados' }, adminUser);
+      await vi.waitFor(() => expect(mockAvisarSolicitante).toHaveBeenCalledWith('exp-uuid', 'rechazado'));
+      expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'rechazado');
+    });
+
+    it('cancelar: se le avisa al dueño (la guía del condicionado se lo promete)', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      conTimeline();
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'cerrado', comentario: 'El prospecto desistió', etiqueta: 'Cancelar estudio' } as never,
+        adminUser,
+      );
+      await vi.waitFor(() => expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'cancelado'));
+      expect(mockAvisarSolicitante).not.toHaveBeenCalled();
     });
   });
 

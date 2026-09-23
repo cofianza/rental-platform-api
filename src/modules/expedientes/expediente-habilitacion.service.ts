@@ -720,7 +720,7 @@ async function aprobarYGenerarContrato(params: {
  */
 export async function avisarDuenoDecisionRevisionManual(
   expedienteId: string,
-  decision: 'aprobado' | 'rechazado',
+  decision: 'aprobado' | 'rechazado' | 'cancelado',
 ): Promise<void> {
   try {
     const { data } = await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -732,11 +732,16 @@ export async function avisarDuenoDecisionRevisionManual(
     const donde = e.inmuebles?.direccion ? ` (${e.inmuebles.direccion})` : '';
     const aviso = {
       tipo: 'estudio.revision_manual',
-      titulo: decision === 'aprobado' ? 'Cofianza aprobó el estudio condicionado' : 'Cofianza no aprobó el estudio condicionado',
-      mensaje:
-        decision === 'aprobado'
-          ? `El estudio ${e.numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puedes crear el contrato.`
-          : `El estudio ${e.numero}${donde} quedó no aprobable tras la revisión de Cofianza.`,
+      titulo: {
+        aprobado: 'Cofianza aprobó el estudio condicionado',
+        rechazado: 'Cofianza no aprobó el estudio condicionado',
+        cancelado: 'Cofianza canceló el estudio condicionado',
+      }[decision],
+      mensaje: {
+        aprobado: `El estudio ${e.numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puedes crear el contrato.`,
+        rechazado: `El estudio ${e.numero}${donde} quedó no aprobable tras la revisión de Cofianza.`,
+        cancelado: `Cofianza canceló el estudio condicionado ${e.numero}${donde}. Sale del flujo y no se puede reabrir.`,
+      }[decision],
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, decision },
     };

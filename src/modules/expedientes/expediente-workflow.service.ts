@@ -94,6 +94,23 @@ export async function executeTransition(
     );
   }
 
+  // Mismo camino que la card «Aprobar estudio»: por aquí el titular no se
+  // enteraba (ni correo ni aviso en la app) de que podía seguir al contrato.
+  if (currentState === 'condicionado' && targetState === 'aprobado') {
+    const { aprobarCondicionado } = await import('./expediente-habilitacion.service');
+    const r = await aprobarCondicionado(expedienteId, user.id, user.rol, undefined, {
+      fundamento: input.comentario,
+      documentos_consultados: input.documentos_consultados ?? [],
+      evaluacion: input.evaluacion!,
+    });
+    return {
+      ...(await getExpedienteById(expedienteId)),
+      estado_anterior: currentState,
+      evento_timeline_id: null,
+      puntaje_revision_manual: r.puntaje_revision_manual,
+    };
+  }
+
   // Si la transicion es "Cancelar expediente" (cualquier estado activo →
   // cerrado con esa etiqueta), despues de la RPC se persisten las columnas de
   // cancelacion para que el UI distinga entre cierre natural y abandono mid-flow. Si la
@@ -221,13 +238,9 @@ export async function executeTransition(
   // Adenda 2 §5.1: salir de 'condicionado' es resolver una revision manual.
   // Queda en el timeline (usuario y fecha los pone el RPC; el comentario es el
   // fundamento) con los documentos consultados, y en la bitacora.
-  let puntajeRevisionManual: Awaited<ReturnType<typeof import("./expediente-habilitacion.service").ratificarRevisionManual>> | null = null;
+  // (Aprobar ya salió arriba por aprobarCondicionado.)
   if (currentState === 'condicionado') {
     const documentos = input.documentos_consultados ?? [];
-    // Aprobar: mismo cierre que la card (recálculo §4.3, analista §9, CRC).
-    puntajeRevisionManual = targetState === 'aprobado'
-      ? await (await import('./expediente-habilitacion.service')).ratificarRevisionManual(expedienteId, user.id, input.evaluacion)
-      : null;
     const { error: metaErr } = await (supabase
       .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .update({
@@ -236,25 +249,30 @@ export async function executeTransition(
           origen: 'analista_revision_manual',
           fundamento: input.comentario,
           documentos_consultados: documentos,
-          puntaje_revision_manual: puntajeRevisionManual,
         },
       } as never)
       .eq('id', result.evento_timeline_id);
     if (metaErr) logger.warn({ expedienteId, err: metaErr.message }, 'No se pudieron guardar los documentos consultados en el timeline');
-    // Mismo aviso por correo al coarrendatario (y al dueño) que en la card de
-    // aprobar, y al prospecto (el rechazo le lleva el derecho de apelación §11).
-    if (targetState === 'aprobado' || targetState === 'rechazado') {
+    // Rechazo: avisan al co-arrendatario, al dueño y al prospecto (Política §11:
+    // motivo general y derecho de apelación). Cancelación: al dueño, a quien la
+    // guía del condicionado le promete que se enterará. (Aprobar ya salió arriba
+    // por aprobarCondicionado, con sus avisos.)
+    if (targetState === 'rechazado') {
       void import('@/modules/coarrendatarios/coarrendatarios.service')
         .then((m) => m.avisarCoarrendatarioDecision(expedienteId, targetState))
         .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al coarrendatario'));
       void import('./expediente-habilitacion.service')
         .then((m) =>
           Promise.all([
-            m.avisarDuenoDecisionRevisionManual(expedienteId, targetState),
-            m.avisarSolicitanteDecision(expedienteId, targetState),
+            m.avisarDuenoDecisionRevisionManual(expedienteId, 'rechazado'),
+            m.avisarSolicitanteDecision(expedienteId, 'rechazado'),
           ]),
         )
         .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al dueño o al prospecto'));
+    } else if (targetState === 'cerrado') {
+      void import('./expediente-habilitacion.service')
+        .then((m) => m.avisarDuenoDecisionRevisionManual(expedienteId, 'cancelado'))
+        .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al dueño'));
     }
 
     logAudit({
@@ -266,7 +284,6 @@ export async function executeTransition(
         decision: targetState,
         fundamento: input.comentario,
         documentos_consultados: documentos,
-        puntaje_revision_manual: puntajeRevisionManual,
       },
     });
   }
@@ -283,9 +300,8 @@ export async function executeTransition(
     ...expedienteActualizado,
     estado_anterior: result.estado_anterior,
     evento_timeline_id: result.evento_timeline_id,
-    // La card lo devuelve y lo muestra en el toast; por "Cambiar estado" se
-    // calculaba y se tiraba, asi que el analista no sabia en cuanto quedo.
-    puntaje_revision_manual: puntajeRevisionManual,
+    // Solo lo trae la aprobación de un condicionado (sale arriba).
+    puntaje_revision_manual: null,
   };
 }
 
