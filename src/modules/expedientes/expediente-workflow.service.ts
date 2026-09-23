@@ -246,9 +246,9 @@ export async function executeTransition(
       void import('@/modules/coarrendatarios/coarrendatarios.service')
         .then((m) => m.avisarCoarrendatarioDecision(expedienteId, targetState))
         .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al coarrendatario'));
-      void import('./expediente-habilitacion.service').then((m) =>
-        m.avisarDuenoDecisionRevisionManual(expedienteId, targetState),
-      );
+      void import('./expediente-habilitacion.service')
+        .then((m) => m.avisarDuenoDecisionRevisionManual(expedienteId, targetState))
+        .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al dueño'));
     }
 
     logAudit({
