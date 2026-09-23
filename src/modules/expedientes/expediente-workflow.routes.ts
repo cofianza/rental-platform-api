@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { expedienteIdParamsSchema, transitionBodySchema } from './expediente-workflow.schema';
+import { cerrarSinActaBodySchema, expedienteIdParamsSchema, transitionBodySchema } from './expediente-workflow.schema';
 import * as workflowController from './expediente-workflow.controller';
 
 const router = Router();
@@ -18,6 +18,15 @@ router.post(
   roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
   validate({ params: expedienteIdParamsSchema, body: transitionBodySchema }),
   workflowController.transition,
+);
+
+// POST /api/v1/expedientes/:id/cerrar-sin-acta — Adenda 1 contratos (respuesta 21):
+// solo un administrador cierra sin acta de entrega, con motivo registrado.
+router.post(
+  '/:id/cerrar-sin-acta',
+  roleGuard(['administrador']),
+  validate({ params: expedienteIdParamsSchema, body: cerrarSinActaBodySchema }),
+  workflowController.cerrarSinActa,
 );
 
 // GET /api/v1/expedientes/:id/available-transitions — Transiciones disponibles

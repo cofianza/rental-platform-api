@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // por tabla; `ops` registra lo que se consultó.
 // ============================================================
 
-const { queues, ops, enqueue, chainFor, mockSignedUrl, mockRemove, mockAcceso } = vi.hoisted(() => {
+const { queues, ops, enqueue, chainFor, mockSignedUrl, mockRemove, mockUpload, mockAcceso } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string }> = [];
@@ -30,6 +30,7 @@ const { queues, ops, enqueue, chainFor, mockSignedUrl, mockRemove, mockAcceso } 
     chainFor,
     mockSignedUrl: vi.fn(async () => ({ data: { signedUrl: 'https://firmada' }, error: null })),
     mockRemove: vi.fn(async () => ({ error: null })),
+    mockUpload: vi.fn(async () => ({ error: null })),
     // Solo el estudio exp-propio es visible para el usuario de prueba.
     mockAcceso: vi.fn(async (expedienteId: string) => {
       if (expedienteId !== 'exp-propio') throw new Error('Estudio no encontrado');
@@ -38,7 +39,10 @@ const { queues, ops, enqueue, chainFor, mockSignedUrl, mockRemove, mockAcceso } 
 });
 
 vi.mock('@/lib/supabase', () => ({
-  supabase: { from: (t: string) => chainFor(t), storage: { from: () => ({ createSignedUrl: mockSignedUrl, remove: mockRemove }) } },
+  supabase: {
+    from: (t: string) => chainFor(t),
+    storage: { from: () => ({ createSignedUrl: mockSignedUrl, remove: mockRemove, upload: mockUpload }) },
+  },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/auditLog', () => ({
@@ -48,7 +52,7 @@ vi.mock('@/lib/auditLog', () => ({
 }));
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: (id: string) => mockAcceso(id) }));
 
-import { descargarArchivo, eliminarArchivo, listarArchivos } from '../contrato-archivos.service';
+import { descargarArchivo, eliminarArchivo, listarArchivos, subirArchivo } from '../contrato-archivos.service';
 
 const contrato = (expediente_id: string) => ({ data: { id: 'c1', expediente_id, estado: 'vigente' }, error: null });
 
@@ -104,5 +108,40 @@ describe('borrar el acta de entrega (V3 §12.2)', () => {
     enqueue('contrato_archivos', { ...acta, data: { ...acta.data, tipo_archivo: 'inventario' } }, { data: null, error: { message: 'caída' } });
     await expect(eliminarArchivo('c1', 'a1', 'admin')).rejects.toMatchObject({ statusCode: 500 });
     expect(mockRemove).not.toHaveBeenCalled();
+  });
+});
+
+describe('cargar el acta de entrega de un V3 (Adenda 1 contratos, respuesta 21)', () => {
+  const archivo = { buffer: Buffer.from('%PDF-1.4'), originalname: 'acta.pdf', size: 8, mimetype: 'application/pdf' };
+  const fila = (destinacion: string | null) => ({
+    data: { id: 'c1', expediente_id: 'exp-propio', estado: 'vigente', destinacion },
+    error: null,
+  });
+
+  it.each(['administrador', 'operador_analista'])('%s no la carga en nombre de la inmobiliaria: 403, sin subir nada', async (rol) => {
+    enqueue('contratos', fila('vivienda'));
+    await expect(subirArchivo('c1', 'acta_entrega', archivo, 'u-cofianza', rol)).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'ACTA_SOLO_INMOBILIARIA',
+    });
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(ops.some((o) => o.method === 'insert')).toBe(false);
+  });
+
+  it('la inmobiliaria sí la carga', async () => {
+    enqueue('contratos', fila('vivienda'));
+    enqueue('contrato_archivos', { data: { id: 'a1' }, error: null });
+    await subirArchivo('c1', 'acta_entrega', archivo, 'u-inmo', 'inmobiliaria');
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['otro tipo de archivo de un V3', 'inventario', 'vivienda'],
+    ['el acta de un contrato del flujo anterior', 'acta_entrega', null],
+  ] as const)('Cofianza sí carga %s', async (_caso, tipo, destinacion) => {
+    enqueue('contratos', fila(destinacion));
+    enqueue('contrato_archivos', { data: { id: 'a1' }, error: null });
+    await subirArchivo('c1', tipo, archivo, 'u-cofianza', 'administrador');
+    expect(mockUpload).toHaveBeenCalledTimes(1);
   });
 });

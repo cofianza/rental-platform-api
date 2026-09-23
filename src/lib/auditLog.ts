@@ -33,6 +33,8 @@ export const AUDIT_ACTIONS = {
   EXPEDIENTE_UPDATED: 'expediente_updated',
   // Adenda 2 §5.1: decision de un analista sobre un caso en revision manual.
   REVISION_MANUAL_DECIDIDA: 'revision_manual_decidida',
+  // Adenda 1 contratos (respuesta 21): un administrador cierra el estudio sin acta de entrega.
+  EXPEDIENTE_CERRADO_SIN_ACTA: 'expediente_cerrado_sin_acta',
   // Comentarios
   COMMENT_CREATED: 'comment_created',
   COMMENT_UPDATED: 'comment_updated',

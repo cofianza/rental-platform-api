@@ -39,5 +39,10 @@ export const transitionBodySchema = z.object({
   evaluacion: evaluacionRevisionManualSchema.optional(),
 });
 
+/** Adenda 1 contratos (respuesta 21): el motivo del cierre sin acta queda registrado. */
+export const cerrarSinActaBodySchema = z.object({
+  motivo: z.string().trim().min(10, { error: 'Escribe el motivo (mínimo 10 caracteres).' }).max(1000),
+});
+
 export type TransitionInput = z.infer<typeof transitionBodySchema>;
 export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;

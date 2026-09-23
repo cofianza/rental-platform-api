@@ -10,6 +10,13 @@ export async function transition(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+export async function cerrarSinActa(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const { motivo } = req.body as { motivo: string };
+  const result = await workflowService.cerrarSinActa(id, motivo, req.user!, req.ip);
+  sendSuccess(res, result);
+}
+
 export async function getAvailableTransitions(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
   const result = await workflowService.getTransitionsForExpediente(id, req.user?.id, req.user?.rol);

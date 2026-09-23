@@ -61,6 +61,15 @@ export async function subirArchivo(
 ) {
   const contrato = await contratoVisible(contratoId, userId, userRol);
 
+  // Adenda 1 contratos (respuesta 21): el acta de un V3 la carga la inmobiliaria.
+  // Si la cargara Cofianza, avalaría un documento que no presenció.
+  if (contrato.destinacion && tipoArchivo === 'acta_entrega' && userRol !== 'inmobiliaria') {
+    throw AppError.forbidden(
+      'El acta de entrega la carga la inmobiliaria: Cofianza no la carga en su nombre. Si no la hay, un administrador puede cerrar el estudio sin acta, con motivo.',
+      'ACTA_SOLO_INMOBILIARIA',
+    );
+  }
+
   if (!ESTADOS_CON_ARCHIVOS.includes(contrato.estado)) {
     throw AppError.badRequest(
       'Solo se pueden subir archivos cuando el contrato esta en estado Firmado o posterior',

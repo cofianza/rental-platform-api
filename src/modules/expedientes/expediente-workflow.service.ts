@@ -317,6 +317,100 @@ export async function executeTransition(
 }
 
 // ============================================================
+// Cierre sin acta de entrega (Adenda 1 contratos, respuesta 21)
+// ============================================================
+
+/**
+ * Un administrador de Cofianza no carga el acta de entrega (avalaría un
+ * documento que no presenció), pero sí puede cerrar el estudio SIN ACTA, con
+ * motivo: la ausencia de acta es evidencia y el riesgo es de la inmobiliaria.
+ * Quién, cuándo y por qué van en el MISMO UPDATE que cierra: así el trigger de
+ * §12.2 lo deja pasar (migración 20260930000002) y nada queda a medias. CAS
+ * sobre el estado leído. Es el cierre natural de un arriendo firmado: suelta la
+ * reserva si ya no queda contrato vivo, igual que «Cerrar estudio».
+ */
+export async function cerrarSinActa(expedienteId: string, motivo: string, user: AuthUser, ip?: string) {
+  if (user.rol !== 'administrador')
+    throw AppError.forbidden('Solo un administrador de Cofianza puede cerrar un estudio sin acta de entrega.');
+  const expediente = await fetchExpediente(expedienteId);
+  if (!isTransitionValid(expediente.estado, 'cerrado'))
+    throw AppError.conflict('El estudio ya está cerrado.', 'EXPEDIENTE_ESTADO_CAMBIADO');
+  if (!(await faltaActaV3(expedienteId)))
+    throw AppError.conflict(
+      'Este estudio no tiene un contrato esperando el acta de entrega: ciérralo con «Cambiar estado».',
+      'CIERRE_SIN_ACTA_NO_APLICA',
+    );
+
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      estado: 'cerrado',
+      cierre_sin_acta_en: new Date().toISOString(),
+      cierre_sin_acta_por: user.id,
+      cierre_sin_acta_motivo: motivo,
+    } as never)
+    .eq('id', expedienteId)
+    .eq('estado', expediente.estado)
+    .select('id');
+  if (error) {
+    if (String(error.message ?? '').includes('CONTRATO_EN_FIRMA'))
+      throw AppError.conflict('El contrato de este estudio está en firma. Cancélalo antes de cerrar el estudio.', 'CONTRATO_EN_FIRMA');
+    logger.error({ expedienteId, error: error.message }, 'No se pudo cerrar el estudio sin acta');
+    throw new AppError(500, 'CIERRE_SIN_ACTA_ERROR', 'No se pudo cerrar el estudio. Intenta de nuevo.');
+  }
+  if (!(data as unknown[] | null)?.length)
+    throw AppError.conflict('El estudio cambió de estado mientras tanto. Recarga la página.', 'EXPEDIENTE_ESTADO_CAMBIADO');
+
+  // Lo que transicionar_expediente deja en el timeline, con la marca del cierre sin acta.
+  const { error: tlError } = await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'estado',
+      descripcion: `Estudio cerrado sin acta de entrega por ${user.email} (administrador de Cofianza). Motivo: ${motivo}`,
+      usuario_id: user.id,
+      estado_anterior: expediente.estado,
+      estado_nuevo: 'cerrado',
+      comentario: motivo,
+      metadata: { cierre_sin_acta: true },
+    } as never);
+  if (tlError) logger.warn({ expedienteId, error: tlError.message }, 'Cierre sin acta sin evento en el timeline (queda en el estudio y la bitácora)');
+  logAudit({
+    usuarioId: user.id,
+    accion: AUDIT_ACTIONS.EXPEDIENTE_CERRADO_SIN_ACTA,
+    entidad: AUDIT_ENTITIES.EXPEDIENTE,
+    entidadId: expedienteId,
+    detalle: { motivo, estado_anterior: expediente.estado },
+    ip,
+  });
+  void liberarReservaSiNoQuedaContratoVivo(expedienteId, 'cerrado', user.id).catch((e) =>
+    logger.warn({ e, expedienteId }, 'No se pudo liberar la reserva del inmueble tras el cierre sin acta'),
+  );
+  return { ...(await getExpedienteById(expedienteId)), estado_anterior: expediente.estado };
+}
+
+/** ¿Algún contrato V3 del estudio con la fianza activa o terminada sigue sin acta de entrega? */
+async function faltaActaV3(expedienteId: string): Promise<boolean> {
+  const { data, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .not('destinacion', 'is', null)
+    .in('estado', ['vigente', 'finalizado']);
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el contrato del estudio');
+  const ids = ((data as { id: string }[] | null) ?? []).map((c) => c.id);
+  if (!ids.length) return false;
+  const { data: actas, error: actasError } = await (supabase
+    .from('contrato_archivos' as string) as ReturnType<typeof supabase.from>)
+    .select('contrato_id')
+    .in('contrato_id', ids)
+    .eq('tipo_archivo', 'acta_entrega');
+  if (actasError) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el acta de entrega');
+  const conActa = new Set(((actas as { contrato_id: string }[] | null) ?? []).map((a) => a.contrato_id));
+  return ids.some((id) => !conActa.has(id));
+}
+
+// ============================================================
 // Liberación de la reserva al rechazar/cerrar el expediente
 // ============================================================
 
