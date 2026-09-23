@@ -9,11 +9,14 @@ const mockGt = vi.fn(() => ({ single: mockSingle }));
 // `not → in → limit`: la consulta de fianza V3 (tieneFianzaV3); por defecto, sin contratos V3.
 const mockFianzaV3 = vi.fn(async () => ({ data: [] as unknown[], error: null }));
 const filtrosFianza: unknown[][] = [];
+// `in → limit`: ¿contrato firmado? (tieneContratoFirmado); por defecto, ninguno.
+const mockContratoFirmado = vi.fn(async () => ({ data: [] as unknown[], error: null }));
 const mockEq: ReturnType<typeof vi.fn> = vi.fn((): Record<string, unknown> => ({
   eq: mockEq,
   single: mockSingle,
   order: mockOrder,
   gt: mockGt,
+  in: () => ({ limit: mockContratoFirmado }),
   not: (...a: unknown[]) => {
     filtrosFianza.push(['not', ...a]);
     return {
@@ -441,6 +444,45 @@ describe('expediente-workflow.service', () => {
   });
 
   // ================================================================
+  // «Cerrar estudio» desde aprobado sin contrato firmado
+  // ================================================================
+  describe('cerrar un aprobado', () => {
+    const cerrar = { nuevo_estado: 'cerrado', comentario: 'El candidato desistió del arriendo', etiqueta: 'Cerrar estudio' } as never;
+    const conUpdate = () => {
+      const mockUpdate = vi.fn(() => ({ eq: vi.fn().mockResolvedValue({ error: null }) }));
+      mockFrom.mockImplementation((t?: string) => (t === 'expedientes' ? { update: mockUpdate } : fromPorDefecto(t)));
+      mockRpc.mockResolvedValueOnce({
+        data: { expediente_id: 'exp-uuid', estado_anterior: 'aprobado', evento_timeline_id: 'evt-uuid', updated_at: '2026-09-23T10:00:00Z' },
+        error: null,
+      });
+      return mockUpdate;
+    };
+
+    it('sin contrato firmado queda como cancelación, no como cierre exitoso', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      const mockUpdate = conUpdate();
+      await executeTransition('exp-uuid', cerrar, adminUser);
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ cancelado_at: expect.any(String), estado_pre_cancelacion: 'aprobado' }),
+      );
+    });
+
+    it('con el contrato firmado es el cierre natural (sin marca de cancelación)', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockContratoFirmado.mockResolvedValueOnce({ data: [{ id: 'c1' }], error: null });
+      const mockUpdate = conUpdate();
+      await executeTransition('exp-uuid', cerrar, adminUser);
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('sin contrato firmado no se ofrece «Cerrar estudio», solo «Cancelar estudio»', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      const r = await getTransitionsForExpediente('exp-uuid', 'admin-uuid', 'administrador');
+      expect(r.transiciones_disponibles).toEqual([{ estado: 'cerrado', label: 'Cancelar estudio' }]);
+    });
+  });
+
+  // ================================================================
   // getTransitionsForExpediente - retorna { estado, label }[]
   // ================================================================
   describe('getTransitionsForExpediente', () => {
@@ -482,6 +524,7 @@ describe('expediente-workflow.service', () => {
     it('V3 §12.2: con una fianza activa o terminada no se ofrece "Cancelar estudio" (sí "Cerrar estudio")', async () => {
       setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
       mockFianzaV3.mockResolvedValueOnce({ data: [{ id: 'c1' }], error: null });
+      mockContratoFirmado.mockResolvedValueOnce({ data: [{ id: 'c1' }], error: null });
       const r = await getTransitionsForExpediente('exp-uuid', 'admin-uuid', 'administrador');
       const labels = r.transiciones_disponibles.map((t) => t.label);
       expect(labels).toContain('Cerrar estudio');

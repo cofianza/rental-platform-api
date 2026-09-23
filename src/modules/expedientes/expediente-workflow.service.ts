@@ -137,7 +137,11 @@ export async function executeTransition(
     targetState === 'cerrado' &&
     // 'Cancelar expediente' = etiqueta vieja (web sin redeploy aun); se acepta igual.
     (input.etiqueta === 'Cancelar estudio' || input.etiqueta === 'Cancelar expediente' ||
-      (!input.etiqueta && ESTADOS_CANCELABLES.includes(currentState) && !!input.comentario));
+      (!input.etiqueta && ESTADOS_CANCELABLES.includes(currentState) && !!input.comentario) ||
+      // «Cerrar estudio» desde 'aprobado' es el cierre del arriendo firmado. Sin
+      // contrato firmado no hubo arriendo: queda como cancelación, no como
+      // «¡Estudio finalizado!».
+      (currentState === 'aprobado' && !(await tieneContratoFirmado(expedienteId))));
 
   // V3 §12.2: un estudio con la fianza activa o terminada no se cancela (eso
   // marcaría abandono sobre un arriendo en curso): se cierra con el acta.
@@ -432,14 +436,19 @@ export async function getTransitionsForExpediente(expedienteId: string, userId?:
   // expedientes. 404 (no 403) para no revelar existencia cross-tenant.
   // Todo en paralelo (antes 3 idas en serie antes de pintar el detalle): si el
   // guard falla, Promise.all rechaza con su 404 y el resto se descarta.
-  const [, expediente, conFianzaV3] = await Promise.all([
+  const [, expediente, conFianzaV3, conContratoFirmado] = await Promise.all([
     assertExpedienteAccess(expedienteId, userId, userRol),
     fetchExpediente(expedienteId),
     tieneFianzaV3(expedienteId),
+    tieneContratoFirmado(expedienteId),
   ]);
   let transiciones = getAvailableTransitions(expediente.estado);
   // Con una fianza V3 activa o terminada no se ofrece "Cancelar estudio" (executeTransition la rechaza).
   if (conFianzaV3) transiciones = transiciones.filter((t) => t.label !== 'Cancelar estudio');
+  // Sin contrato firmado, cerrar un aprobado es cancelarlo: no se ofrece «Cerrar estudio».
+  if (expediente.estado === 'aprobado' && !conContratoFirmado) {
+    transiciones = transiciones.filter((t) => t.label !== 'Cerrar estudio');
+  }
 
   // Solo lectura (Gerencia y el miembro 'solo_lectura' de una inmobiliaria):
   // el POST de transiciones los rechaza siempre, asi que ofrecerles transiciones
@@ -478,6 +487,18 @@ async function tieneFianzaV3(expedienteId: string): Promise<boolean> {
     .eq('expediente_id', expedienteId)
     .not('destinacion', 'is', null)
     .in('estado', ['vigente', 'finalizado'])
+    .limit(1);
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el contrato del estudio');
+  return !!(data as unknown[] | null)?.length;
+}
+
+/** ¿El estudio tiene un contrato firmado (o ya vigente o finalizado)? */
+async function tieneContratoFirmado(expedienteId: string): Promise<boolean> {
+  const { data, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .in('estado', ['firmado', 'vigente', 'finalizado'])
     .limit(1);
   if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el contrato del estudio');
   return !!(data as unknown[] | null)?.length;
