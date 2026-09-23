@@ -19,12 +19,12 @@ const ESTADOS_CONTRATO_ACTIVO = ['firmado', 'vigente'] as const;
 const ESTADOS_MORA_ACTIVA = ['fase_1', 'fase_2', 'fase_3'] as const;
 const POR_VENCER_DIAS = 60;
 
-// ── Helper de agregación por perfil (propietario o inmobiliaria) ────
+// ── Helper de agregación por dueño (propietario o inmobiliaria) ────
 //
-// Para un conjunto de perfiles (dueños de inmuebles), calcula #contratos
-// activos, canon total y #moras activas. Cadena:
-//   perfil → inmuebles.propietario_id → expedientes.inmueble_id →
-//   contratos.expediente_id → moras_tickets.contrato_id
+// #contratos activos, canon total y #moras activas por dueño del inmueble, en
+// UNA consulta sin listas de ids: antes eran 4 idas en serie (inmuebles →
+// expedientes → contratos → moras) con los ids de toda la plataforma en la
+// URL, que se rompe al crecer.
 
 interface PerfilAgregado {
   contratosActivos: number;
@@ -32,74 +32,45 @@ interface PerfilAgregado {
   moraActivaCount: number;
 }
 
-async function agregarPorPerfil(perfilIds: string[]): Promise<Map<string, PerfilAgregado>> {
+interface InmuebleDueno {
+  propietario_id: string;
+  inmobiliaria_id: string | null;
+}
+
+interface ContratoConDueno {
+  valor_arriendo: number | string | null;
+  expedientes: { inmuebles: InmuebleDueno | null } | null;
+  moras_tickets: Array<{ estado: string }> | null;
+}
+
+async function fetchContratosActivosConDueno(): Promise<ContratoConDueno[]> {
+  // ponytail: tope de 1000 filas de PostgREST (contratos activos de toda la
+  // plataforma); paginar con range() o agregar en un RPC si se supera.
+  const { data, error } = await (
+    supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
+  )
+    .select('valor_arriendo, expedientes(inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)), moras_tickets(estado)')
+    .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[])
+    .in('moras_tickets.estado', ESTADOS_MORA_ACTIVA as unknown as string[]);
+  if (error) throw fromSupabaseError(error);
+  return (data ?? []) as unknown as ContratoConDueno[];
+}
+
+function agregarPorPerfil(
+  perfilIds: string[],
+  contratos: ContratoConDueno[],
+  duenoDe: (i: InmuebleDueno) => string,
+): Map<string, PerfilAgregado> {
   const out = new Map<string, PerfilAgregado>();
   for (const id of perfilIds) out.set(id, { contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 });
-  if (perfilIds.length === 0) return out;
-
-  // 1) inmuebles del perfil
-  const { data: inmuebles, error: e1 } = await supabase
-    .from('inmuebles')
-    .select('id, propietario_id')
-    .in('propietario_id', perfilIds);
-  if (e1) throw fromSupabaseError(e1);
-
-  const inmuebleToPerfil = new Map<string, string>();
-  for (const i of (inmuebles ?? []) as Array<{ id: string; propietario_id: string }>) {
-    inmuebleToPerfil.set(i.id, i.propietario_id);
-  }
-  const inmuebleIds = [...inmuebleToPerfil.keys()];
-  if (inmuebleIds.length === 0) return out;
-
-  // 2) expedientes de esos inmuebles
-  const { data: expedientes, error: e2 } = await supabase
-    .from('expedientes')
-    .select('id, inmueble_id')
-    .in('inmueble_id', inmuebleIds);
-  if (e2) throw fromSupabaseError(e2);
-
-  const expedienteToPerfil = new Map<string, string>();
-  for (const ex of (expedientes ?? []) as Array<{ id: string; inmueble_id: string }>) {
-    const perfil = inmuebleToPerfil.get(ex.inmueble_id);
-    if (perfil) expedienteToPerfil.set(ex.id, perfil);
-  }
-  const expedienteIds = [...expedienteToPerfil.keys()];
-  if (expedienteIds.length === 0) return out;
-
-  // 3) contratos activos de esos expedientes
-  const { data: contratos, error: e3 } = await supabase
-    .from('contratos')
-    .select('id, expediente_id, valor_arriendo, estado')
-    .in('expediente_id', expedienteIds)
-    .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);
-  if (e3) throw fromSupabaseError(e3);
-
-  const contratoToPerfil = new Map<string, string>();
-  for (const c of (contratos ?? []) as Array<{ id: string; expediente_id: string; valor_arriendo: number | string | null }>) {
-    const perfil = expedienteToPerfil.get(c.expediente_id);
-    if (!perfil) continue;
-    contratoToPerfil.set(c.id, perfil);
-    const agg = out.get(perfil)!;
+  for (const c of contratos) {
+    const inm = c.expedientes?.inmuebles;
+    const agg = inm ? out.get(duenoDe(inm)) : undefined;
+    if (!agg) continue;
     agg.contratosActivos += 1;
     agg.canonTotal += Number(c.valor_arriendo ?? 0);
+    agg.moraActivaCount += c.moras_tickets?.length ?? 0;
   }
-  const contratoIds = [...contratoToPerfil.keys()];
-  if (contratoIds.length === 0) return out;
-
-  // 4) moras activas de esos contratos
-  const { data: moras, error: e4 } = await (
-    supabase.from('moras_tickets' as string) as ReturnType<typeof supabase.from>
-  )
-    .select('contrato_id, estado')
-    .in('contrato_id', contratoIds)
-    .in('estado', ESTADOS_MORA_ACTIVA as unknown as string[]);
-  if (e4) throw fromSupabaseError(e4);
-
-  for (const m of (moras ?? []) as Array<{ contrato_id: string; estado: string }>) {
-    const perfil = contratoToPerfil.get(m.contrato_id);
-    if (perfil) out.get(perfil)!.moraActivaCount += 1;
-  }
-
   return out;
 }
 
@@ -121,15 +92,18 @@ export interface InmobiliariaRow {
 }
 
 export async function listInmobiliarias(): Promise<InmobiliariaRow[]> {
-  const { data, error } = await supabase
-    .from('perfiles')
-    .select('id, razon_social, nombre, apellido, nit, nombre_representante, telefono, ciudad, estado, created_at')
-    .eq('rol', 'inmobiliaria')
-    .order('created_at', { ascending: false });
+  const [{ data, error }, contratos] = await Promise.all([
+    supabase
+      .from('perfiles')
+      .select('id, razon_social, nombre, apellido, nit, nombre_representante, telefono, ciudad, estado, created_at')
+      .eq('rol', 'inmobiliaria')
+      .order('created_at', { ascending: false }),
+    fetchContratosActivosConDueno(),
+  ]);
   if (error) throw fromSupabaseError(error);
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
-  const agg = await agregarPorPerfil(rows.map((r) => r.id as string));
+  const agg = agregarPorPerfil(rows.map((r) => r.id as string), contratos, (i) => i.propietario_id);
 
   return rows.map((r) => {
     const a = agg.get(r.id as string) ?? { contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 };
@@ -167,15 +141,18 @@ export interface PropietarioRow {
 }
 
 export async function listPropietarios(): Promise<PropietarioRow[]> {
-  const { data, error } = await supabase
-    .from('perfiles')
-    .select('id, nombre, apellido, numero_documento, telefono, ciudad, estado, created_at')
-    .eq('rol', 'propietario')
-    .order('created_at', { ascending: false });
+  const [{ data, error }, contratos] = await Promise.all([
+    supabase
+      .from('perfiles')
+      .select('id, nombre, apellido, numero_documento, telefono, ciudad, estado, created_at')
+      .eq('rol', 'propietario')
+      .order('created_at', { ascending: false }),
+    fetchContratosActivosConDueno(),
+  ]);
   if (error) throw fromSupabaseError(error);
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
-  const agg = await agregarPorPerfil(rows.map((r) => r.id as string));
+  const agg = agregarPorPerfil(rows.map((r) => r.id as string), contratos, (i) => i.propietario_id);
 
   return rows.map((r) => {
     const a = agg.get(r.id as string) ?? { contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 };

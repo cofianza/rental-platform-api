@@ -328,4 +328,33 @@ describe('listInmobiliarias() / listPropietarios()', () => {
     expect(rows[0].ciudad).toBe('Bogotá D.C.');
     expect(rows[0].moraActivaCount).toBe(0);
   });
+
+  it('propietario: contratos, canon y moras en una sola consulta a contratos, por dueño del inmueble', async () => {
+    const contrato = (canon: string, propietario: string, moras: number) => ({
+      valor_arriendo: canon,
+      expedientes: { inmuebles: { propietario_id: propietario, inmobiliaria_id: null } },
+      moras_tickets: Array.from({ length: moras }, () => ({ estado: 'fase_1' })),
+    });
+    byTable({
+      perfiles: {
+        data: [
+          { id: 'p1', nombre: 'Ana', apellido: 'Uno', estado: 'activo', created_at: '2026-01-01' },
+          { id: 'p2', nombre: 'Beto', apellido: 'Dos', estado: 'activo', created_at: '2026-01-02' },
+        ],
+      },
+      contratos: {
+        data: [contrato('1000000', 'p1', 1), contrato('2000000', 'p1', 0), contrato('500000', 'otro', 2)],
+      },
+    });
+
+    const rows = await secciones.listPropietarios();
+    const p1 = rows.find((r) => r.id === 'p1')!;
+    const p2 = rows.find((r) => r.id === 'p2')!;
+    expect(p1).toMatchObject({ contratosActivos: 2, canonTotal: 3000000, moraActivaCount: 1 });
+    expect(p2).toMatchObject({ contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 });
+    // Sin la cadena inmuebles → expedientes → moras con listas de ids en la URL.
+    expect(mockFrom).not.toHaveBeenCalledWith('inmuebles');
+    expect(mockFrom).not.toHaveBeenCalledWith('expedientes');
+    expect(mockFrom).not.toHaveBeenCalledWith('moras_tickets');
+  });
 });
