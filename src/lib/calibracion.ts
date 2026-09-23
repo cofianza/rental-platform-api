@@ -273,6 +273,38 @@ export const CALIBRACION_DEFAULT: Calibracion = Object.fromEntries(
   PARAMETROS.map((p) => [p.clave, p.valorDefault]),
 ) as Calibracion;
 
+/**
+ * Adenda 1 del módulo de contratos, respuesta 17 (esquema escalonado): los
+ * parámetros que afectan el riesgo —topes de canon, umbrales de score,
+ * cobertura, vigencia del certificado, base de cálculo— solo los cambia la
+ * Gerencia General; los operativos —días de firma, de reserva, de registro—
+ * cualquier administrador. ÚNICA lista: lo que no está aquí es de riesgo (en
+ * la duda, riesgo).
+ */
+const OPERATIVOS: ReadonlySet<ClaveCalibracion> = new Set<ClaveCalibracion>([
+  'DIAS_EXPIRACION_ESTUDIO', // plazo del prospecto para autorizar
+  'VIGENCIA_MESES_DEFECTO', // solo precarga el asistente; cada contrato fija la suya
+  'DIAS_EXPIRACION_FIRMA',
+]);
+
+export type NivelParametro = 'riesgo' | 'operativo';
+
+export const nivelDe = (clave: string): NivelParametro =>
+  OPERATIVOS.has(clave as ClaveCalibracion) ? 'operativo' : 'riesgo';
+
+/**
+ * Gerencia General = administrador con el correo en GERENCIA_GENERAL_EMAILS.
+ * Con la lista vacía, cualquier administrador (lo de antes de la Adenda).
+ */
+export function esGerenciaGeneral(u: { rol: string; email: string }): boolean {
+  const lista = env.GERENCIA_GENERAL_EMAILS;
+  return u.rol === 'administrador' && (lista.length === 0 || lista.includes(u.email.trim().toLowerCase()));
+}
+
+/** Pura: los operativos, cualquier administrador; los de riesgo, solo la Gerencia General. */
+export const puedeEditarParametro = (clave: string, u: { rol: string; email: string }): boolean =>
+  u.rol === 'administrador' && (nivelDe(clave) === 'operativo' || esGerenciaGeneral(u));
+
 const CACHE_TTL_MS = 60_000;
 // Si la lectura falla, el respaldo se cachea poco: un corte breve no debe dejar
 // un minuto entero los valores de respaldo a todos los consumidores.
@@ -392,14 +424,15 @@ export async function listarParametros(): Promise<FilaParametro[]> {
  * Cambia un parametro dejando el rastro que exige la Adenda §11 (fecha, valor
  * anterior, valor nuevo, usuario). Lanza si la clave no existe o el valor esta
  * fuera de rango — aqui SI se lanza: es una escritura de Gerencia, no un
- * camino caliente.
+ * camino caliente. Quién puede cambiar cada uno lo decide el llamador
+ * (puedeEditarParametro).
  */
 export async function setParametro(
   clave: string,
   valor: number,
   usuarioId: string,
   motivo?: string,
-): Promise<FilaParametro> {
+): Promise<FilaParametro & { valor_anterior: number }> {
   const v = validarParametro(clave, valor);
   if (!v) throw new Error(`Parametro desconocido: ${clave}`);
   if (v.error) throw new Error(`${clave}: ${v.error}`);
@@ -476,6 +509,7 @@ export async function setParametro(
   return {
     ...v.def,
     valor,
+    valor_anterior: anterior,
     actualizado_en: ahora,
     actualizado_por: usuarioId,
   };

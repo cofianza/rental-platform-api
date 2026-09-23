@@ -6,6 +6,12 @@
 // lectura), asi que el gate es rol='administrador' — el mismo que administra
 // paquetes y organizaciones. Cada cambio queda con usuario, fecha, valor
 // anterior y nuevo en parametros_calibracion_historial.
+//
+// Adenda 1 del módulo de contratos, respuesta 17: esquema escalonado. Los
+// parámetros de riesgo solo los cambia la Gerencia General (administrador con
+// el correo en GERENCIA_GENERAL_EMAILS; vacía = cualquier administrador); los
+// operativos, cualquier administrador. El controller lo exige (403) y el GET
+// dice qué puede editar cada quien.
 // ============================================================
 
 import { Router } from 'express';

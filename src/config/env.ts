@@ -139,6 +139,22 @@ const envSchema = z.object({
   // distintas, con fuentes distintas, y no se fusionan.
   CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: z.coerce.number().int().positive().default(3_000_000),
 
+  // Adenda 1 del módulo de contratos, respuesta 17: los parámetros de
+  // calibración que afectan el riesgo solo los cambia la Gerencia General; los
+  // operativos, cualquier administrador (la lista está en lib/calibracion.ts).
+  // La plataforma no tiene ese rol: correos separados por coma, sin distinguir
+  // mayúsculas, que además deben ser de un administrador. Vacía = como antes
+  // de la Adenda: cualquier administrador (con advertencia al arrancar).
+  GERENCIA_GENERAL_EMAILS: z
+    .string()
+    .default('')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+
   // TransUnion Colombia (Basic Auth — Combo CreditVision + Info Comercial 1901)
   TRANSUNION_API_URL: z.string().url().default('https://tucoapplicationserviceuat.transunion.co/ws/v1/rest/consultarCombo'),
   TRANSUNION_USERNAME: z.string().optional(),
@@ -294,6 +310,15 @@ if (env.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/.test(env.FRONTEND_
     `[CONFIG] ADVERTENCIA CRÍTICA: FRONTEND_URL="${env.FRONTEND_URL}" en producción — ` +
       'los enlaces de los correos (verificación, firma, pago, etc.) saldrán rotos. ' +
       'Configura FRONTEND_URL=https://www.cofianza.co en las variables del servicio.',
+  );
+}
+
+// Adenda 1 del módulo de contratos, respuesta 17: sin la lista, cualquier
+// administrador cambia también los parámetros de riesgo de la calibración.
+if (env.GERENCIA_GENERAL_EMAILS.length === 0) {
+  console.warn(
+    '[CONFIG] ADVERTENCIA: GERENCIA_GENERAL_EMAILS vacía — cualquier administrador puede cambiar los ' +
+      'parámetros de riesgo de la calibración. Configura los correos de la Gerencia General.',
   );
 }
 
