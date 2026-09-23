@@ -385,6 +385,14 @@ const sinAprobarDe = (p: Plantilla): ReadonlySet<string> =>
   ]);
 const SIN_APROBAR = { A: sinAprobarDe(PLANTILLA_VIVIENDA), B: sinAprobarDe(PLANTILLA_ANEXO) };
 
+/**
+ * La vista previa salió de otro texto: otra versión de la plantilla de su ruta,
+ * o con un borrador que ya se aprobó (seguiría marcado como pendiente).
+ */
+const textoCambio = (doc: DocumentoV3, ruta: 'A' | 'B') =>
+  doc.plantillaVersion !== (ruta === 'B' ? PLANTILLA_ANEXO : PLANTILLA_VIVIENDA).version ||
+  doc.pendientes.some((id) => !SIN_APROBAR[ruta].has(id));
+
 function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsistente {
   const bloqueos = evaluarBloqueos(f, hoy, cal);
   const avisos: string[] = [];
@@ -434,9 +442,11 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
             generadoEn: doc.generadoEn,
             avisos: doc.avisos,
             pendientes: doc.pendientes,
-            // Lo mismo que rechaza enviarAFirma: pasos guardados después, o perfil, estudio, CRC o logo distintos.
+            // Lo mismo que rechaza enviarAFirma: pasos guardados después, otro texto de la
+            // plantilla, o perfil, estudio, CRC o logo distintos.
             desactualizado:
               (!!a.actualizadoEn && a.actualizadoEn > doc.generadoEn) ||
+              textoCambio(doc, a.paso1?.ruta ?? 'A') ||
               (!!datos && difiereDeVistaPrevia(datos, doc, f.arrendador.logo_storage_key)),
           }
         : null,
@@ -1498,15 +1508,21 @@ export async function enviarAFirma(
   if (!doc) throw AppError.conflict('Genera la vista previa antes de enviar a firma.', 'VISTA_PREVIA_REQUERIDA');
   const desactualizada = () =>
     AppError.conflict(
-      'Cambiaron datos del contrato, del perfil, del estudio o del CRC después de la vista previa. Genérala de nuevo y revísala.',
+      'Cambiaron datos del contrato, del perfil, del estudio o del CRC, o el texto del contrato, después de la vista previa. Genérala de nuevo y revísala.',
       'VISTA_PREVIA_DESACTUALIZADA',
     );
-  if ((a.actualizadoEn && a.actualizadoEn > doc.generadoEn) || doc.generacion !== body.generacion) throw desactualizada();
+  // Antes que los pendientes: una vista previa vieja puede listar un texto que ya se aprobó.
+  if (
+    (a.actualizadoEn && a.actualizadoEn > doc.generadoEn) ||
+    doc.generacion !== body.generacion ||
+    textoCambio(doc, ruta) ||
+    difiereDeVistaPrevia(d, doc, f.arrendador.logo_storage_key)
+  )
+    throw desactualizada();
   if (doc.pendientes.length)
     throw new AppError(409, 'TEXTOS_PENDIENTES', 'El contrato tiene textos pendientes de aprobación de Cofianza.', {
       avisos: doc.avisos,
     });
-  if (difiereDeVistaPrevia(d, doc, f.arrendador.logo_storage_key)) throw desactualizada();
 
   assertFirmantes(v3.id, d, f);
   const crcCompleto = f.crc?.pdf_storage_key;

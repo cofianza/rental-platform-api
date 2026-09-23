@@ -136,15 +136,17 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsu
 // Sin Chromium: el PDF es un buffer falso, los pendientes salen de la plantilla real.
 vi.mock('../vivienda', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../vivienda')>();
+  // La versión real: una vista previa de otra plantilla cuenta como desactualizada.
+  const { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } = await import('../plantilla-vivienda');
   return {
     ...actual,
     generarContratoVivienda: vi.fn(async (d: Parameters<typeof actual.renderizarVivienda>[0], o: Parameters<typeof actual.renderizarVivienda>[1]) => {
       const r = actual.renderizarVivienda(d, o);
-      return { pdf: Buffer.from('%PDF-1.4 prueba'), pendientes: r.pendientes, version: 'vivienda-prueba', lineas: r.lineas };
+      return { pdf: Buffer.from('%PDF-1.4 prueba'), pendientes: r.pendientes, version: PLANTILLA_VIVIENDA.version, lineas: r.lineas };
     }),
     generarAnexoVivienda: vi.fn(async (d: Parameters<typeof actual.renderizarAnexo>[0], o: Parameters<typeof actual.renderizarAnexo>[1]) => {
       const r = actual.renderizarAnexo(d, o);
-      return { pdf: Buffer.from('%PDF-1.4 anexo'), pendientes: r.pendientes, version: 'anexo-prueba', lineas: r.lineas };
+      return { pdf: Buffer.from('%PDF-1.4 anexo'), pendientes: r.pendientes, version: PLANTILLA_ANEXO.version, lineas: r.lineas };
     }),
   };
 });
@@ -1608,8 +1610,27 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
 
   it('con textos pendientes de aprobación no se envía', async () => {
     const doc = await documentoRevisado(PASOS);
-    encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, pendientes: ['c-01'] })] });
+    // b-06 (el cashback de Tradicional) sigue sin aprobar
+    encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, pendientes: ['b-06'] })] });
     expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({ errorCode: 'TEXTOS_PENDIENTES' });
+  });
+
+  it('una vista previa de otra versión de la plantilla, o con un texto ya aprobado, está desactualizada', async () => {
+    const doc = await documentoRevisado(PASOS);
+    for (const vieja of [
+      { ...doc, plantillaVersion: 'otra-version' },
+      // c-01 ya está aprobado: esa vista previa lo seguiría marcando como pendiente
+      { ...doc, pendientes: ['c-01'] },
+    ]) {
+      encolarCarga({ contratos: [conDocumento(PASOS, vieja)] });
+      expect((await obtener()).contrato?.documento?.desactualizado).toBe(true);
+      encolarCarga({ contratos: [conDocumento(PASOS, vieja)] });
+      expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
+        statusCode: 409,
+        errorCode: 'VISTA_PREVIA_DESACTUALIZADA',
+      });
+    }
+    expect(storageApi.upload).not.toHaveBeenCalled();
   });
 
   it('CAS perdido: borra el PDF final y no llama a Auco', async () => {
