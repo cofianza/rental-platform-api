@@ -2140,7 +2140,7 @@ export async function ejecutarEstudio(
       'Evaluación asociada al estudio no encontrada al ejecutar',
     );
     throw AppError.notFound(
-      'Evaluación asociada al estudio no encontrada',
+      'No encontramos el estudio de esta evaluación',
       'EXPEDIENTE_NOT_FOUND',
     );
   }
@@ -2285,9 +2285,11 @@ export async function ejecutarEstudio(
     : ESTADOS_PERMITIDOS_EJECUCION;
 
   if (!estadosPermitidos.includes(est.estado)) {
+    // El estado crudo va en details: el mensaje termina en un toast.
     throw AppError.badRequest(
-      `Solo se puede ejecutar via proveedor en estados: ${ESTADOS_PERMITIDOS_EJECUCION.join(', ')}. Estado actual: ${est.estado}`,
+      'Esta evaluación no se puede ejecutar en su estado actual. Recarga la página para ver en qué va.',
       'ESTUDIO_ESTADO_INVALIDO',
+      { estado: est.estado, permitidos: estadosPermitidos },
     );
   }
 
