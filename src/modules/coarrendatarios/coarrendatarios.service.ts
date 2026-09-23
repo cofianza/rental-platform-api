@@ -1588,7 +1588,11 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
       <p style="color: #6b7280;">Te escribimos a este mismo correo en cuanto haya respuesta. No tienes que hacer nada más.</p>
     `;
   } else if (input.decisionExpediente === 'aprobado') {
-    subject = `Tu evaluación se aprobó — arrendamiento con ${titular} (Cofianza)`;
+    // Tras revision manual (Adenda 2 §5) su evaluacion pudo quedar condicionada
+    // o sin informacion: lo aprobado es el arrendamiento, no su evaluacion.
+    subject = input.coarrendatarioResultado === 'aprobado'
+      ? `Tu evaluación se aprobó — arrendamiento con ${titular} (Cofianza)`
+      : `Se aprobó el arrendamiento con ${titular} (Cofianza)`;
     cuerpoPrincipal = `
       <p style="color: #374151; font-size: 16px;">¡Buenas noticias, <strong>${nombre}</strong>!</p>
       <p style="color: #6b7280;">${input.coarrendatarioResultado === 'aprobado'

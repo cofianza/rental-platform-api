@@ -523,11 +523,13 @@ describe('construirCorreoCoarrendatario', () => {
   });
 
   it('aprobado con su evaluación condicionada: no le dice que su evaluación quedó aprobada', () => {
-    const { html } = construirCorreoCoarrendatario({
+    const { subject, html } = construirCorreoCoarrendatario({
       ...base,
       coarrendatarioResultado: 'condicionado',
       decisionExpediente: 'aprobado',
     });
+    expect(subject).toContain('Se aprobó el arrendamiento');
+    expect(subject).not.toContain('Tu evaluación se aprobó');
     expect(html).toContain('aprobó');
     expect(html).not.toContain('Tu evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong>');
   });
