@@ -346,6 +346,12 @@ export async function resolveAllowedInmuebleIds(
 
 /**
  * Expediente IDs accesibles por el usuario (scoping vía inmueble).
+ * ponytail: la lista viaja en la URL (.in()) en contratos, estudios, moras,
+ * citas, facturas, dashboard y export; a ~39 bytes por uuid PostgREST la
+ * rechaza hacia 200-400 ids (y sin paginar se corta en 1000 filas). Producción
+ * está muy lejos (2026-09-23: 6 estudios en la org más grande). Antes de ese
+ * tamaño: filtrar en la misma consulta con un embed !inner a inmuebles +
+ * .or(filtroInmuebles) (como hace esta función) o con un RPC.
  *  - null  -> sin filtro (rol interno).
  *  - []    -> respuesta vacía.
  *  - [...] -> expediente IDs accesibles.

@@ -48,8 +48,8 @@ export async function exportExpedientes(req: Request, res: Response) {
   // Tenant (el cliente es service_role: no hay RLS). Sin esto cualquier rol con
   // expedientes:read —propietario, inmobiliaria, solicitante— descargaba los
   // estudios de TODA la plataforma, con el nombre de cada prospecto.
-  // ponytail: .in() con la lista de ids, igual que el resto de tenantScope; si
-  // una organización llega a miles de estudios, filtrar en SQL (RPC).
+  // ponytail: .in() con la lista de ids, igual que el resto de tenantScope. El
+  // techo es el largo de la URL (~200-400 ids), no miles: ver tenantScope.
   const allowed = await resolveAllowedExpedienteIds(req.user?.id, req.user?.rol);
 
   const pagina = (desde: number, hasta: number) => {

@@ -630,8 +630,9 @@ export async function updateExpediente(
  * null = sin filtro (rol interno), [] = nada visible, [...] = solo esos.
  * Un HEAD count por estado en paralelo: no se transfieren filas y no aplica
  * el max-rows (1000) de PostgREST, que truncaba el conteo en JS.
- * ponytail: 7 requests con la lista de ids en la URL; si una org pasa de
- * ~1000 expedientes, mover a un RPC con GROUP BY.
+ * ponytail: 7 requests con la lista de ids en la URL. El techo real es el
+ * largo de la URL (~39 bytes por uuid: falla hacia 200-400 ids), no las 1000
+ * filas; antes de eso, mover a un RPC con GROUP BY (ver tenantScope).
  */
 export async function getExpedienteStats(allowedIds: string[] | null = null) {
   const stats = await Promise.all(
