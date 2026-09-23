@@ -54,10 +54,31 @@ const ITEM_DEFAULTS = {
 };
 
 // Adenda 1 del modulo de contratos §1.6: la prima (el cobro 'garantia') y la
-// tarifa se facturan GRAVADAS. La tasa sigue saliendo de iva_concepto_<concepto>
-// (migracion 20260930000004), pero en 0 no se emite ni se guarda: una factura
-// DIAN emitida como excluida solo se corrige con nota credito.
+// tarifa se facturan GRAVADAS, con TARIFA_IVA: la misma tasa con la que se
+// cobraron (§1.1). Su fila iva_concepto_garantia es solo reflejo. En 0 no se
+// emite: una factura DIAN emitida como excluida solo se corrige con nota credito.
 const CONCEPTOS_GRAVADOS = new Set(['garantia']);
+
+async function tarifaIvaGravados(): Promise<number> {
+  const { getCalibracion } = await import('@/lib/calibracion');
+  return (await getCalibracion()).TARIFA_IVA;
+}
+
+/**
+ * Parte un total cobrado (IVA incluido) como lo pide Factus V2: price sin
+ * impuestos con 2 decimales, y Factus le calcula el IVA redondeado a 2. En
+ * ~16 % de los montos enteros no cuadra (53.000 -> 44.537,82 + 8.462,19 =
+ * 53.000,01): la diferencia va en cash_rounding_amount (pagado - total, ±500),
+ * el campo de Factus que "reconcilia la diferencia entre la suma de los montos
+ * en payment_details y el total" (en la DIAN, PayableRoundingAmount).
+ * OJO: probarlo en el sandbox de Factus antes del primer cobro real de la prima.
+ */
+export function partirTotalConIva(monto: number, tasaIva: number): { price: string; cashRounding: string | null } {
+  const totalCent = Math.round(monto * 100);
+  const priceCent = Math.round(totalCent / (1 + tasaIva / 100));
+  const ajusteCent = totalCent - priceCent - Math.round((priceCent * tasaIva) / 100);
+  return { price: (priceCent / 100).toFixed(2), cashRounding: ajusteCent === 0 ? null : (ajusteCent / 100).toFixed(2) };
+}
 
 // ── Tipos para la integración ──────────────────────────────────────
 
@@ -274,17 +295,21 @@ async function getTarifaIvaPorConcepto(concepto: string): Promise<number> {
   return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 0;
 }
 
-export async function listTarifasIva(): Promise<{ concepto: string; tasa: number }[]> {
+/** `derivada`: la tasa no se edita aquí, sale de TARIFA_IVA (la prima). */
+export async function listTarifasIva(): Promise<{ concepto: string; tasa: number; derivada?: boolean }[]> {
   const conceptos = ['estudio', 'garantia', 'primer_canon', 'deposito', 'otro'];
-  const { data } = await (supabase
-    .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
-    .select('clave, valor')
-    .in('clave', conceptos.map((c) => `iva_concepto_${c}`));
+  const [{ data }, tasaGravados] = await Promise.all([
+    (supabase.from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
+      .select('clave, valor')
+      .in('clave', conceptos.map((c) => `iva_concepto_${c}`)),
+    tarifaIvaGravados(),
+  ]);
   const map = new Map<string, string>();
   for (const row of (data || []) as { clave: string; valor: string }[]) {
     map.set(row.clave, row.valor);
   }
   return conceptos.map((c) => {
+    if (CONCEPTOS_GRAVADOS.has(c)) return { concepto: c, tasa: tasaGravados, derivada: true };
     const raw = map.get(`iva_concepto_${c}`) ?? '0';
     const n = Number(raw);
     return { concepto: c, tasa: Number.isFinite(n) ? n : 0 };
@@ -297,6 +322,7 @@ export async function updateTarifasIva(
   ip?: string,
 ): Promise<{ concepto: string; tasa: number }[]> {
   const allowedConceptos = new Set(['estudio', 'garantia', 'primer_canon', 'deposito', 'otro']);
+  const tasaGravados = input.some((i) => CONCEPTOS_GRAVADOS.has(i.concepto)) ? await tarifaIvaGravados() : null;
   for (const item of input) {
     if (!allowedConceptos.has(item.concepto)) {
       throw AppError.badRequest(`Concepto inválido: ${item.concepto}`, 'CONCEPTO_INVALIDO');
@@ -304,9 +330,13 @@ export async function updateTarifasIva(
     if (typeof item.tasa !== 'number' || item.tasa < 0 || item.tasa > 100) {
       throw AppError.badRequest('La tasa debe estar entre 0 y 100', 'TASA_INVALIDA');
     }
-    if (item.tasa === 0 && CONCEPTOS_GRAVADOS.has(item.concepto)) {
+    // Factus recibe la tasa con 2 decimales: 0,001 viajaría como "0.00".
+    if (Math.round(item.tasa * 100) / 100 !== item.tasa) {
+      throw AppError.badRequest('La tasa admite máximo 2 decimales (0 o desde 0,01).', 'TASA_INVALIDA');
+    }
+    if (tasaGravados !== null && CONCEPTOS_GRAVADOS.has(item.concepto) && item.tasa !== tasaGravados) {
       throw AppError.badRequest(
-        'La garantía (prima de vinculación) se factura con IVA (Adenda 1 de contratos §1.6): su tasa no puede ser 0.',
+        `La prima de vinculación se factura con TARIFA_IVA (hoy ${tasaGravados} %), la misma tasa con la que se cobra: cámbiala en Calibración, no aquí.`,
         'CONCEPTO_GRAVADO',
       );
     }
@@ -320,7 +350,9 @@ export async function updateTarifasIva(
         {
           clave,
           valor: String(item.tasa),
-          descripcion: `Tasa de IVA (%) para ${item.concepto}. 0 = exento.`,
+          descripcion: CONCEPTOS_GRAVADOS.has(item.concepto)
+            ? 'Tasa de IVA (%) de la prima de vinculación (concepto garantia): gravada, la fija TARIFA_IVA (Adenda 1 de contratos §1.6).'
+            : `Tasa de IVA (%) para ${item.concepto}. 0 = exento.`,
         } as never,
         { onConflict: 'clave' },
       );
@@ -341,7 +373,7 @@ export async function updateTarifasIva(
 function inferConceptoLabel(concepto: string): string {
   switch (concepto) {
     case 'estudio': return 'Estudio crediticio de arrendamiento';
-    case 'garantia': return 'Garantía de arrendamiento';
+    case 'garantia': return 'Prima de vinculación de la fianza';
     case 'primer_canon': return 'Primer canon de arrendamiento';
     case 'deposito': return 'Depósito de arrendamiento';
     default: return `Servicio Cofianza (${concepto})`;
@@ -467,18 +499,27 @@ export async function crearFacturaDesdePago(
   const conceptoLabel = inferConceptoLabel(ctx.concepto);
   const monto = Number(ctx.monto) || VALOR_ESTUDIO_DEFAULT;
 
-  // Lee la tasa de IVA configurada para este concepto (admin la edita en
-  // /facturacion). Si tasa>0, monto del pago es total con IVA incluido y
+  // La tasa: la prima, TARIFA_IVA; lo demás, la de su concepto (admin la edita
+  // en /facturacion). Si tasa>0, monto del pago es total con IVA incluido y
   // calculamos el price (base) para Factus. Si tasa=0, price = monto.
-  const tasaIva = await getTarifaIvaPorConcepto(ctx.concepto);
-  if (tasaIva === 0 && CONCEPTOS_GRAVADOS.has(ctx.concepto)) {
-    throw AppError.conflict(
-      'La garantía se factura con IVA (Adenda 1 de contratos §1.6) y su tasa está en 0 %. Corrígela en Facturación → Tarifas de IVA y vuelve a facturar.',
-      'IVA_CONCEPTO_GRAVADO_EN_CERO',
-    );
+  const gravado = CONCEPTOS_GRAVADOS.has(ctx.concepto);
+  const tasaIva = gravado ? await tarifaIvaGravados() : await getTarifaIvaPorConcepto(ctx.concepto);
+  if (tasaIva === 0 && gravado) {
+    // Queda el intento con el motivo, para que «Pendientes de facturar» lo muestre.
+    const error =
+      'La prima de vinculación se factura con IVA (Adenda 1 de contratos §1.6) y TARIFA_IVA está en 0 %. Corrígela en Calibración y vuelve a facturar.';
+    await persistFailedAttempt({
+      pagoId,
+      expedienteId: ctx.expediente_id,
+      referenceCode,
+      concepto: ctx.concepto,
+      total: monto,
+      error,
+      respuestaProveedor: null,
+    });
+    throw AppError.conflict(error, 'IVA_CONCEPTO_GRAVADO_EN_CERO');
   }
-  const priceBase = tasaIva > 0 ? monto / (1 + tasaIva / 100) : monto;
-  const priceStr = priceBase.toFixed(2);
+  const { price: priceStr, cashRounding } = partirTotalConIva(monto, tasaIva);
 
   const payload: factus.CreateBillInput = {
     reference_code: referenceCode,
@@ -494,6 +535,7 @@ export async function crearFacturaDesdePago(
         amount: monto.toFixed(2), // total con IVA si aplica
       },
     ],
+    ...(cashRounding ? { cash_rounding_amount: cashRounding } : {}),
     customer: {
       identification: cliente.numero_documento,
       // Persona juridica: company + trade_name + dv (DV del NIT). Persona
@@ -888,8 +930,7 @@ export async function crearFacturaDesdeCompraCreditos(
   // (reuso la convencion del estudio que tambien va exento). Si en
   // el futuro se decide cargar IVA, se configura via configuracion_sistema.
   const tasaIva = await getTarifaIvaPorConcepto('creditos_estudios');
-  const priceBase = tasaIva > 0 ? monto / (1 + tasaIva / 100) : monto;
-  const priceStr = priceBase.toFixed(2);
+  const { price: priceStr, cashRounding } = partirTotalConIva(monto, tasaIva);
 
   // legal_organization_code: si tipo_documento es NIT (31) -> juridica (1).
   const isJuridica = datos.tipo_documento === '31';
@@ -908,6 +949,7 @@ export async function crearFacturaDesdeCompraCreditos(
         amount: monto.toFixed(2),
       },
     ],
+    ...(cashRounding ? { cash_rounding_amount: cashRounding } : {}),
     customer: {
       identification: datos.nit,
       ...(isJuridica

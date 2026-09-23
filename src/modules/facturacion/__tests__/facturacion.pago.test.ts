@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // entre el disparo automático y el clic manual) no pisa la factura emitida.
 // Mock de Supabase con colas por tabla, como facturacion.creditos.test.ts.
 
-const { mockFrom, ops, queues, enqueue, mockCreateBill } = vi.hoisted(() => {
+const { mockFrom, ops, queues, enqueue, mockCreateBill, calibracion } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -12,7 +12,7 @@ const { mockFrom, ops, queues, enqueue, mockCreateBill } = vi.hoisted(() => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -33,6 +33,7 @@ const { mockFrom, ops, queues, enqueue, mockCreateBill } = vi.hoisted(() => {
     queues,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockCreateBill: vi.fn(),
+    calibracion: { TARIFA_IVA: 19 },
   };
 });
 
@@ -46,6 +47,7 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 vi.mock('@/lib/companyConfig', () => ({ getCompany: vi.fn() }));
 vi.mock('@/lib/factus', () => ({ createBill: mockCreateBill, discoverNumberingRangeId: vi.fn(async () => null) }));
+vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => calibracion) }));
 vi.mock('@/lib/tenantScope', () => ({
   resolveAllowedExpedienteIds: vi.fn(async () => null),
   assertExpedienteAccess: vi.fn(async () => undefined),
@@ -55,7 +57,7 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 
-import { crearFacturaDesdePago, previewFacturaPago, updateTarifasIva } from '../facturacion.service';
+import { crearFacturaDesdePago, previewFacturaPago, updateTarifasIva, listTarifasIva } from '../facturacion.service';
 
 const solicitante = {
   id: 'sol-1', tipo_persona: 'natural', nombre: 'Juan', apellido: 'Pérez', razon_social: null,
@@ -75,6 +77,7 @@ beforeEach(() => {
   queues.clear();
   ops.length = 0;
   vi.clearAllMocks();
+  calibracion.TARIFA_IVA = 19;
 });
 
 describe('facturar un pago que no está completado', () => {
@@ -122,36 +125,58 @@ describe('carrera entre el disparo automático y el clic manual', () => {
 });
 
 // Adenda 1 del módulo de contratos §1.6: la prima (cobro 'garantia') se
-// factura gravada; el estudio no cambia.
+// factura gravada con TARIFA_IVA, la misma tasa con la que se cobró (§1.1);
+// el estudio no cambia.
 describe('IVA por concepto', () => {
   const tasa = (valor: string) => enqueue('configuracion_sistema', { data: { valor }, error: null });
   const facturaEmitida = () => {
     enqueue('facturas', { data: null, error: null }, { data: null, error: null }, { data: { id: 'fac-1' }, error: null });
     mockCreateBill.mockResolvedValueOnce({ data: { bill: { id: 1, number: 'FE1', cufe: 'cufe-1', total: '357000.00', tax_amount: '57000.00' } } });
   };
-  const item = () => mockCreateBill.mock.calls[0][0].items[0];
+  const payload = () => mockCreateBill.mock.calls[0][0];
 
-  it('garantía al 19 %: los $357.000 cobrados son base $300.000 + IVA 01 al 19 %', async () => {
+  // Factus calcula el IVA sobre el price redondeado a 2 decimales; lo que no
+  // cuadra con lo pagado va en cash_rounding_amount (pagado - total).
+  it.each([
+    [357_000, '300000.00', undefined], // 300.000 + 57.000: exacto
+    [53_000, '44537.82', '-0.01'], // 44.537,82 + 8.462,19 = 53.000,01
+    [71_414, '60011.76', '0.01'], // 60.011,76 + 11.402,23 = 71.413,99
+  ])('prima de $%i: price %s (IVA 01 al 19) y cash_rounding_amount %s', async (monto, price, ajuste) => {
     facturaEmitida();
-    enqueue('pagos', pago('completado', 'garantia', 357_000));
-    tasa('19');
+    enqueue('pagos', pago('completado', 'garantia', monto));
 
     await crearFacturaDesdePago('pago-1', null);
 
-    expect(item().price).toBe('300000.00');
-    expect(item().taxes).toEqual([{ code: '01', rate: '19.00' }]);
-    expect(mockCreateBill.mock.calls[0][0].payment_details[0].amount).toBe('357000.00');
+    expect(payload().items[0].price).toBe(price);
+    expect(payload().items[0].taxes).toEqual([{ code: '01', rate: '19.00' }]);
+    expect(payload().items[0].name).toBe('Prima de vinculación de la fianza - EXP-1');
+    expect(payload().payment_details[0].amount).toBe(`${monto}.00`);
+    expect(payload().cash_rounding_amount).toBe(ajuste);
   });
 
-  it('garantía con la tasa en 0: no se emite como excluida', async () => {
+  it('la tasa de la prima es TARIFA_IVA, no la fila iva_concepto_garantia', async () => {
+    facturaEmitida();
     enqueue('pagos', pago('completado', 'garantia', 357_000));
-    tasa('0');
+    tasa('0'); // una fila vieja en 0 ya no manda
+
+    await crearFacturaDesdePago('pago-1', null);
+
+    expect(payload().items[0].taxes).toEqual([{ code: '01', rate: '19.00' }]);
+    expect(ops.some((o) => o.table === 'configuracion_sistema')).toBe(false);
+  });
+
+  it('con TARIFA_IVA en 0 no se emite como excluida, y el intento queda con el motivo', async () => {
+    calibracion.TARIFA_IVA = 0;
+    enqueue('pagos', pago('completado', 'garantia', 357_000));
 
     await expect(crearFacturaDesdePago('pago-1', null)).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'IVA_CONCEPTO_GRAVADO_EN_CERO',
     });
     expect(mockCreateBill).not.toHaveBeenCalled();
+    const intento = ops.find((o) => o.table === 'facturas' && o.method === 'insert')?.args[0] as Record<string, unknown>;
+    expect(intento).toMatchObject({ pago_id: 'pago-1', estado: 'solicitada' });
+    expect(intento.error_mensaje).toContain('TARIFA_IVA');
   });
 
   it('el estudio sigue excluido de IVA', async () => {
@@ -161,14 +186,37 @@ describe('IVA por concepto', () => {
 
     await crearFacturaDesdePago('pago-1', null);
 
-    expect(item().price).toBe('80000.00');
-    expect(item().taxes).toEqual([{ is_excluded: true }]);
+    expect(payload().items[0].price).toBe('80000.00');
+    expect(payload().items[0].taxes).toEqual([{ is_excluded: true }]);
+    expect(payload().cash_rounding_amount).toBeUndefined();
+  });
+});
+
+describe('Tarifas de IVA', () => {
+  it('la prima se muestra con TARIFA_IVA y marcada como derivada', async () => {
+    enqueue('configuracion_sistema', { data: [{ clave: 'iva_concepto_garantia', valor: '0' }], error: null });
+
+    expect((await listTarifasIva()).find((t) => t.concepto === 'garantia')).toEqual({ concepto: 'garantia', tasa: 19, derivada: true });
   });
 
-  it('la tasa de la garantía no se puede dejar en 0', async () => {
-    await expect(updateTarifasIva([{ concepto: 'garantia', tasa: 0 }], 'admin-1')).rejects.toMatchObject({
+  it.each([0, 16])('la prima no se puede poner en %s si TARIFA_IVA es 19', async (t) => {
+    await expect(updateTarifasIva([{ concepto: 'garantia', tasa: t }], 'admin-1')).rejects.toMatchObject({
       errorCode: 'CONCEPTO_GRAVADO',
     });
-    expect(ops.some((o) => o.table === 'configuracion_sistema')).toBe(false);
+    expect(ops.some((o) => o.method === 'upsert')).toBe(false);
+  });
+
+  it.each([0.001, 19.005])('la tasa %s se rechaza: Factus solo lee 2 decimales', async (t) => {
+    await expect(updateTarifasIva([{ concepto: 'otro', tasa: t }], 'admin-1')).rejects.toMatchObject({
+      errorCode: 'TASA_INVALIDA',
+    });
+  });
+
+  it('guardar la prima con TARIFA_IVA no le pone «0 = exento» a su descripción', async () => {
+    await updateTarifasIva([{ concepto: 'garantia', tasa: 19 }, { concepto: 'otro', tasa: 0 }], 'admin-1');
+
+    const filas = ops.filter((o) => o.method === 'upsert').map((o) => o.args[0] as { clave: string; descripcion: string });
+    expect(filas.find((f) => f.clave === 'iva_concepto_garantia')?.descripcion).not.toContain('exento');
+    expect(filas.find((f) => f.clave === 'iva_concepto_otro')?.descripcion).toContain('0 = exento');
   });
 });
