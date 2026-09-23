@@ -8,7 +8,10 @@ import * as dashboardService from './dashboard.service';
 import * as seccionesService from './dashboard-secciones.service';
 import type { DashboardQuery, UpdateTesoreriaInput } from './dashboard.schema';
 
-const CACHE_CONTROL_HEADER = 'public, max-age=300'; // 5 minutes
+// El navegador pregunta siempre: con max-age=300 reusaba la respuesta 5
+// minutos y no se veían altas, desactivaciones ni "Actualizar". private:
+// son datos de la cuenta, ningún proxy los guarda.
+const CACHE_CONTROL_HEADER = 'private, no-cache';
 
 export async function getSummary(req: Request, res: Response) {
   const query = (req as Request & { validatedQuery: DashboardQuery }).validatedQuery || req.query;

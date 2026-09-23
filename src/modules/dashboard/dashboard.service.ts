@@ -78,10 +78,6 @@ function getDefaultDateRange(): { dateFrom: string; dateTo: string } {
   return { dateFrom, dateTo };
 }
 
-function buildCacheKey(prefix: string, dateFrom: string, dateTo: string): string {
-  return `${prefix}:${dateFrom}:${dateTo}`;
-}
-
 // ── Estado terminal (para tasa de aprobación y tiempo resolución) ──
 
 const ESTADOS_TERMINALES = ['aprobado', 'rechazado', 'condicionado', 'cerrado'];
@@ -96,14 +92,9 @@ export async function getSummary(
     ? { dateFrom, dateTo }
     : getDefaultDateRange();
 
-  const cacheKey = buildCacheKey('summary', range.dateFrom, range.dateTo);
-  const cached = getCached<DashboardSummary>(cacheKey);
-  if (cached) {
-    logger.debug({ cacheKey }, 'Dashboard summary served from cache');
-    return cached;
-  }
-
-  // Run all queries in parallel
+  // Sin caché de servidor: dateTo es "ahora" en cada consulta, así que la clave
+  // casi nunca se repetía (el Map solo crecía) y, cuando se repetía,
+  // "Actualizar" devolvía los mismos números.
   const [
     expedientesActivos,
     porEstado,
@@ -124,16 +115,13 @@ export async function getSummary(
     estadoRecord[item.estado] = item.count;
   }
 
-  const summary: DashboardSummary = {
+  return {
     totalExpedientesActivos: expedientesActivos,
     expedientesPorEstado: estadoRecord,
     tasaAprobacion: tasaAprobacionData,
     tiempoPromedioResolucionDias: tiempoPromedio,
     ingresosDelPeriodo: ingresos,
   };
-
-  setCache(cacheKey, summary);
-  return summary;
 }
 
 export async function getExpedientesPorEstado(
@@ -144,16 +132,7 @@ export async function getExpedientesPorEstado(
     ? { dateFrom, dateTo }
     : getDefaultDateRange();
 
-  const cacheKey = buildCacheKey('por-estado', range.dateFrom, range.dateTo);
-  const cached = getCached<ExpedientesPorEstado[]>(cacheKey);
-  if (cached) {
-    logger.debug({ cacheKey }, 'Dashboard expedientes-por-estado served from cache');
-    return cached;
-  }
-
-  const result = await queryExpedientesPorEstado(range.dateFrom, range.dateTo);
-  setCache(cacheKey, result);
-  return result;
+  return queryExpedientesPorEstado(range.dateFrom, range.dateTo);
 }
 
 // ── Query: Expedientes activos (no cancelados) ─────────────
