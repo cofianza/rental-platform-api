@@ -135,7 +135,9 @@ export async function crearExpedienteExterno(
 // Vincular Expediente Externo (token → solicitante)
 // ============================================================
 
-export async function vincularExpedienteExterno(token: string, solicitanteId: string) {
+// perfilId = quien canjea (perfiles.id). eventos_timeline.usuario_id tiene FK a
+// perfiles: con el id de `solicitantes` el insert fallaba y el evento se perdía.
+export async function vincularExpedienteExterno(token: string, solicitanteId: string, perfilId: string) {
   // 1. Buscar expediente por token_invitacion
   const { data: expediente, error: findError } = await db('expedientes')
     .select('id, numero, estado, solicitante_id, token_invitacion, email_invitacion')
@@ -175,14 +177,17 @@ export async function vincularExpedienteExterno(token: string, solicitanteId: st
   }
 
   // 4. Registrar evento en timeline
-  await db('eventos_timeline')
+  const { error: timelineError } = await db('eventos_timeline')
     .insert({
       expediente_id: exp.id,
       tipo: 'estado',
-      descripcion: `Solicitante vinculado via invitacion externa. Evaluación habilitada.`,
-      usuario_id: solicitanteId,
-      metadata: { via: 'invitacion_externa', email_invitacion: exp.email_invitacion },
+      descripcion: `Solicitante vinculado vía invitación externa. Evaluación habilitada.`,
+      usuario_id: perfilId,
+      metadata: { via: 'invitacion_externa', email_invitacion: exp.email_invitacion, solicitante_id: solicitanteId },
     } as never);
+  if (timelineError) {
+    logger.error({ error: timelineError.message, expedienteId: exp.id }, 'Error al registrar vinculación en timeline');
+  }
 
   logger.info({ expedienteId: exp.id, solicitanteId }, 'Estudio externo vinculado con solicitante');
 

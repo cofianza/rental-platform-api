@@ -264,7 +264,7 @@ export async function canjearInvitacion(token: string, user: AuthUser): Promise<
 
   // 4. Vincular (reutiliza la función existente). Maneja su propia timeline
   //    event con metadata { via, email_invitacion }.
-  const updated = await vincularExpedienteExterno(token, solicitanteId);
+  const updated = await vincularExpedienteExterno(token, solicitanteId, user.id);
 
   const updatedExp = updated as unknown as {
     id: string;
