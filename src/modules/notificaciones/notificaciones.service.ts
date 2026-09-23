@@ -209,16 +209,17 @@ export async function notificarResponsableExpediente(params: {
 export async function findPerfilIdByEmail(email: string | null | undefined): Promise<string | null> {
   if (!email) return null;
   try {
-    // listUsers + filter local. Para volumenes grandes conviene cachear o
-    // exponer un RPC server-side, pero para el flujo actual (decenas de
-    // usuarios activos) es aceptable y se invoca solo en fan-out de eventos.
-    const { data, error } = await supabase.auth.admin.listUsers({ page: 1, perPage: 200 });
+    // RPC server-side (auth.users ⋈ perfiles). Antes era listUsers de la
+    // primera página (200): pasadas 200 cuentas, las más viejas se quedaban
+    // sin aviso sin dejar rastro. Auth guarda el correo en minúsculas.
+    const { data, error } = await supabase
+      .rpc('find_user_by_email' as never, { user_email: email.trim().toLowerCase() } as never)
+      .maybeSingle<{ id: string }>();
     if (error) {
-      logger.warn({ error: error.message, email }, 'findPerfilIdByEmail listUsers fallo');
+      logger.warn({ error: error.message, email }, 'findPerfilIdByEmail rpc fallo');
       return null;
     }
-    const match = data.users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
-    return match?.id ?? null;
+    return data?.id ?? null;
   } catch (e) {
     logger.warn({ error: e, email }, 'findPerfilIdByEmail excepcion');
     return null;
