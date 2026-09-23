@@ -4239,9 +4239,10 @@ export async function getProviderHealth(): Promise<ProviderHealthInfo[]> {
  * certificado (`certificateValidityDays`, hoy 60), porque son la misma
  * vigencia: el §4.3 dice que "el estudio conserva su vigencia original".
  *
- * ponytail: filtra en memoria por (tipo, número) tras acotar por los
- * expedientes visibles. Con carteras de este tamaño no compensa un índice
- * nuevo ni un RPC; si algún día pesa, el sitio a mover es esta query.
+ * El número se filtra en SQL, ANTES del limit: filtrado en memoria sobre los
+ * 25 más recientes, una cartera con más de 25 evaluaciones en la ventana (o un
+ * rol interno, que ve toda la plataforma) perdía el estudio vigente y se
+ * cobraba otro. El tipo se sigue comparando en memoria (seleccionarEstudioVigente).
  */
 export async function buscarEstudioVigentePorDocumento(
   tipoDocumento: string,
@@ -4272,6 +4273,8 @@ export async function buscarEstudioVigentePorDocumento(
     .select('id, expediente_id, resultado, fecha_completado, datos_formulario, expedientes(numero)')
     .eq('estado', 'completado')
     .gte('fecha_completado', desde)
+    // `->>` devuelve texto aunque el JSON guarde un número.
+    .eq('datos_formulario->>numero_documento', numeroDocumento.trim())
     .order('fecha_completado', { ascending: false })
     .limit(25);
 

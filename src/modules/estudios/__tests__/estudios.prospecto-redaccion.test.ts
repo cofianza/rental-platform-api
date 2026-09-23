@@ -155,6 +155,15 @@ describe('las demas rutas por id que el titular alcanza', () => {
   });
 });
 
+describe('§5.2 estudio vigente por documento', () => {
+  it('filtra el numero en SQL antes del limit (con mas de 25 evaluaciones en la ventana no se pierde)', async () => {
+    vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(null);
+    vi.mocked(getCalibracion).mockResolvedValueOnce({ VIGENCIA_CRC_DIAS: 60 } as never);
+    await buscarEstudioVigentePorDocumento('cc', ' 123 ', 'u-1', 'operador_analista');
+    expect(ops).toContainEqual({ table: 'estudios', method: 'eq', args: ['datos_formulario->>numero_documento', '123'] });
+  });
+});
+
 describe('contraste de ingreso (Adenda §8) sin cifras', () => {
   it('el motivo que va a observaciones no lleva el declarado, el estimado ni el umbral', async () => {
     enqueue('autorizacion_perfil_prospecto', { data: { ingreso_declarado_cop: 9_000_000 }, error: null });
