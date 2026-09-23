@@ -8,11 +8,16 @@ const mockEq = vi.fn();
 const mockGte = vi.fn();
 const mockLte = vi.fn();
 const mockIn = vi.fn();
+const mockOrder = vi.fn();
+const mockRange = vi.fn();
+const mockNot = vi.fn();
 
 function createChain(finalData: unknown) {
   const chain: Record<string, unknown> = {};
-  // order/range: las consultas paginan con fetchAll.
-  const methods = { select: mockSelect, eq: mockEq, gte: mockGte, lte: mockLte, in: mockIn, order: vi.fn(), range: vi.fn() };
+  const methods = {
+    select: mockSelect, eq: mockEq, gte: mockGte, lte: mockLte, in: mockIn,
+    order: mockOrder, range: mockRange, not: mockNot,
+  };
 
   for (const [name, fn] of Object.entries(methods)) {
     fn.mockImplementation(() => chain);
@@ -90,10 +95,10 @@ describe('Reportes Service', () => {
             { id: '5', estado: 'rechazado', created_at: '2026-03-01T10:00:00Z' },
           ]);
         }
-        // Cerrados query
+        // Cerrados: primer evento a un estado final, del timeline
         return createChain([
-          { id: '3', estado: 'aprobado', updated_at: '2026-02-20T10:00:00Z' },
-          { id: '5', estado: 'rechazado', updated_at: '2026-03-10T10:00:00Z' },
+          { expediente_id: '3', created_at: '2026-02-20T10:00:00Z' },
+          { expediente_id: '5', created_at: '2026-03-10T10:00:00Z' },
         ]);
       });
 
@@ -147,7 +152,7 @@ describe('Reportes Service', () => {
           ]);
         }
         return createChain([
-          { id: '1', estado: 'aprobado', updated_at: '2026-01-20T10:00:00Z' },
+          { expediente_id: '1', created_at: '2026-01-20T10:00:00Z' },
         ]);
       });
 
@@ -161,6 +166,7 @@ describe('Reportes Service', () => {
       expect(result.total_cerrados).toBe(1);
       // Verify .eq was called for estado filter
       expect(mockEq).toHaveBeenCalledWith('estado', 'aprobado');
+      expect(mockEq).toHaveBeenCalledWith('expedientes.estado', 'aprobado');
     });
 
     it('"Hasta" incluye el día elegido completo en hora Colombia', async () => {
@@ -194,6 +200,26 @@ describe('Reportes Service', () => {
       expect(result.meses[2].creados).toBe(1);
     });
 
+    it('un cierre cuenta en el mes de su PRIMER estado final, no cuando se volvió a tocar', async () => {
+      let callIndex = 0;
+      mockFrom.mockImplementation((tabla: string) => {
+        callIndex++;
+        if (callIndex === 1) return createChain([]);
+        expect(tabla).toBe('eventos_timeline');
+        // 'a' se aprobó en enero y se cerró en marzo; 'b' se aprobó en marzo.
+        return createChain([
+          { expediente_id: 'a', created_at: '2026-01-15T15:00:00Z' },
+          { expediente_id: 'a', created_at: '2026-03-02T15:00:00Z' },
+          { expediente_id: 'b', created_at: '2026-03-05T15:00:00Z' },
+        ]);
+      });
+
+      const result = await reportesService.getVolumenExpedientes('2026-03-01', '2026-03-31');
+
+      expect(result.total_cerrados).toBe(1);
+      expect(mockGte).not.toHaveBeenCalledWith('updated_at', expect.anything());
+    });
+
     it('deberia formatear periodos en espanol', async () => {
       let callIndex = 0;
       mockFrom.mockImplementation(() => {
@@ -212,6 +238,39 @@ describe('Reportes Service', () => {
       const periodos = result.meses.map((m) => m.periodo);
       expect(periodos).toContain('Junio 2026');
       expect(periodos).toContain('Diciembre 2026');
+    });
+  });
+  describe('getTiemposPorEtapa()', () => {
+    const ev = (id: string, de: string, a: string, fecha: string, creado = '2026-01-01T00:00:00Z') => ({
+      expediente_id: id, estado_anterior: de, estado_nuevo: a, created_at: fecha, expedientes: { created_at: creado },
+    });
+
+    it('mide borrador desde la creación, no mide estados finales y el total es creación → decisión', async () => {
+      mockFrom.mockImplementation(() => createChain([
+        ev('e1', 'borrador', 'en_revision', '2026-01-03T00:00:00Z'),
+        ev('e1', 'en_revision', 'aprobado', '2026-01-04T00:00:00Z'),
+        ev('e1', 'aprobado', 'cerrado', '2026-03-01T00:00:00Z'),
+      ]));
+
+      const result = await reportesService.getTiemposPorEtapa('2026-01-01', '2026-03-31');
+
+      expect(result.etapas.map((e) => [e.etapa, e.promedio_dias])).toEqual([['Borrador', 2], ['En Revision', 1]]);
+      expect(result.resumen.tiempo_total_promedio_dias).toBe(3);
+    });
+
+    it('trae todas las páginas del timeline (PostgREST corta en 1000)', async () => {
+      const pagina1 = Array.from({ length: 1000 }, (_, i) => ev(`e${i}`, 'borrador', 'en_revision', '2026-01-02T00:00:00Z'));
+      let callIndex = 0;
+      mockFrom.mockImplementation(() => {
+        callIndex++;
+        return createChain(callIndex === 1 ? pagina1 : [ev('ultimo', 'borrador', 'en_revision', '2026-01-02T00:00:00Z')]);
+      });
+
+      const result = await reportesService.getTiemposPorEtapa('2026-01-01', '2026-01-31');
+
+      expect(mockRange).toHaveBeenCalledWith(0, 999);
+      expect(mockRange).toHaveBeenCalledWith(1000, 1999);
+      expect(result.resumen.total_expedientes_analizados).toBe(1001);
     });
   });
 });

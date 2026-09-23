@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
+import type { PostgrestError } from '@supabase/supabase-js';
 import { desdeBogota, hastaBogota, mesBogota } from '@/lib/fechaBogota';
 
 // ── Types ───────────────────────────────────────────────────
@@ -76,6 +77,15 @@ function generateMonthKeys(dateFrom: string, dateTo: string): string[] {
   return keys;
 }
 
+/** PostgREST corta en 1000 filas por respuesta: fetchAll pagina (con orden estable); aquí además lanza el error. */
+async function todasLasFilas<T>(
+  pagina: (desde: number, hasta: number) => PromiseLike<{ data: unknown; error: PostgrestError | null }>,
+): Promise<T[]> {
+  const { data, error } = await fetchAll(pagina as (d: number, h: number) => PromiseLike<{ data: T[] | null; error: PostgrestError | null }>);
+  if (error) throw fromSupabaseError(error);
+  return data;
+}
+
 // ── Service Function ────────────────────────────────────────
 
 export async function getVolumenExpedientes(
@@ -99,28 +109,36 @@ export async function getVolumenExpedientes(
     return q.order('id').range(desde, hasta);
   };
 
-  // Query 2: expedientes that reached terminal state in range (for "cerrados" count)
+  // Query 2: "cerrado" = la PRIMERA vez que el estudio llegó a un estado final,
+  // según el timeline. Antes se usaba updated_at, que cambia con cualquier
+  // edición (generar el contrato, p.ej.): un estudio aprobado en marzo y tocado
+  // en abril contaba como cerrado en abril. Sin límite inferior para saber
+  // cuál fue la primera; se cuenta solo si cae en el rango.
+  type EventoCierre = { expediente_id: string; created_at: string };
   const cerradosQuery = (desde: number, hasta: number) => {
     let q = supabase
-      .from('expedientes')
-      .select('id, estado, updated_at')
-      .in('estado', ESTADOS_CERRADOS)
-      .gte('updated_at', range.dateFrom)
-      .lte('updated_at', range.dateTo);
-    if (estado) q = q.eq('estado', estado);
-    return q.order('id').range(desde, hasta);
+      .from('eventos_timeline')
+      .select('expediente_id, created_at, expedientes!inner(estado)')
+      .in('estado_nuevo', ESTADOS_CERRADOS)
+      .lte('created_at', range.dateTo);
+    if (estado) q = q.eq('expedientes.estado', estado);
+    return q.order('created_at', { ascending: true }).order('id', { ascending: true }).range(desde, hasta);
   };
 
-  const [creadosResult, cerradosResult] = await Promise.all([
+  const [creadosResult, eventosCierre] = await Promise.all([
     fetchAll(creadosQuery),
-    fetchAll(cerradosQuery),
+    todasLasFilas<EventoCierre>(cerradosQuery),
   ]);
 
   if (creadosResult.error) throw fromSupabaseError(creadosResult.error);
-  if (cerradosResult.error) throw fromSupabaseError(cerradosResult.error);
 
   const creadosData = creadosResult.data ?? [];
-  const cerradosData = cerradosResult.data ?? [];
+  const primerCierre = new Map<string, string>();
+  for (const ev of eventosCierre) {
+    if (!primerCierre.has(ev.expediente_id)) primerCierre.set(ev.expediente_id, ev.created_at);
+  }
+  const desdeMs = new Date(range.dateFrom).getTime();
+  const cerradosData = [...primerCierre.values()].filter((f) => new Date(f).getTime() >= desdeMs);
 
   // Build month map with all months in range
   const monthKeys = generateMonthKeys(range.dateFrom, range.dateTo);
@@ -142,10 +160,9 @@ export async function getVolumenExpedientes(
     }
   }
 
-  // Count cerrados per month (by updated_at)
-  for (const row of cerradosData) {
-    const r = row as { id: string; estado: string; updated_at: string };
-    const key = mesBogota(r.updated_at);
+  // Count cerrados per month (por la fecha del primer cierre)
+  for (const fecha of cerradosData) {
+    const key = mesBogota(fecha);
     const entry = monthMap.get(key);
     if (entry) {
       entry.cerrados++;
@@ -439,53 +456,62 @@ export async function getTiemposPorEtapa(
 
   logger.debug({ range }, 'Fetching tiempos por etapa');
 
-  // 1. Fetch all timeline events with state transitions in range
-  // Paginado: al pasar de 1000 transiciones se descartaban las MAS recientes.
-  const { data, error } = await fetchAll((desde, hasta) =>
+  // 1. Transiciones de estado en el rango, paginadas (PostgREST corta en 1000
+  //    filas y, en orden ascendente, se perdían las más recientes), con la
+  //    creación del estudio: es el inicio de 'borrador' y del tiempo total.
+  type Evento = {
+    expediente_id: string;
+    estado_anterior: string;
+    estado_nuevo: string;
+    created_at: string;
+    expedientes: { created_at: string } | null;
+  };
+  const rows = await todasLasFilas<Evento>((desde, hasta) =>
     supabase
       .from('eventos_timeline')
-      .select('expediente_id, estado_anterior, estado_nuevo, created_at')
+      .select('expediente_id, estado_anterior, estado_nuevo, created_at, expedientes(created_at)')
       .not('estado_anterior', 'is', null)
       .not('estado_nuevo', 'is', null)
       .gte('created_at', range.dateFrom)
       .lte('created_at', range.dateTo)
       .order('created_at', { ascending: true })
-      .order('id')
+      .order('id', { ascending: true })
       .range(desde, hasta),
   );
 
-  if (error) throw fromSupabaseError(error);
-
-  const rows = data ?? [];
-
   // 2. Group by expediente_id
-  const byExpediente = new Map<string, Array<{ estado_anterior: string; estado_nuevo: string; created_at: string }>>();
+  const byExpediente = new Map<string, { creado: string | null; events: Evento[] }>();
 
-  for (const row of rows) {
-    const r = row as { expediente_id: string; estado_anterior: string; estado_nuevo: string; created_at: string };
-    let list = byExpediente.get(r.expediente_id);
-    if (!list) {
-      list = [];
-      byExpediente.set(r.expediente_id, list);
+  for (const r of rows) {
+    let entry = byExpediente.get(r.expediente_id);
+    if (!entry) {
+      entry = { creado: r.expedientes?.created_at ?? null, events: [] };
+      byExpediente.set(r.expediente_id, entry);
     }
-    list.push({ estado_anterior: r.estado_anterior, estado_nuevo: r.estado_nuevo, created_at: r.created_at });
+    entry.events.push(r);
   }
 
-  // 3. For each expediente's events, calculate duration in each state
-  // Each event means: estado_anterior ended at this event's created_at.
-  // Time in estado_anterior = this_event.created_at - previous_event.created_at (same expediente).
-  // For the first event we don't know when the state was entered, so skip it.
+  // 3. Tiempo en cada estado = de la transición que lo abrió a la que lo cerró.
+  //    'borrador' (visita, documentos y pago) se abre con la creación del
+  //    estudio: no hay evento que entre a él. La permanencia en un estado final
+  //    no es una etapa (aprobado → cerrado es todo el arriendo): no se mide.
+  //    Tiempo total por estudio = de la creación a su primera decisión
+  //    (aprobado o rechazado); antes se sumaban los promedios de cada etapa,
+  //    que salían de estudios distintos e incluían los estados finales.
   const durationsMap = new Map<string, number[]>();
   const expedientesPerEstado = new Map<string, Set<string>>();
+  const totales: number[] = [];
+  const DIA_MS = 1000 * 60 * 60 * 24;
 
-  for (const [expedienteId, events] of byExpediente) {
+  for (const [expedienteId, { creado, events }] of byExpediente) {
     // events are already sorted by created_at (query ORDER BY)
-    for (let i = 1; i < events.length; i++) {
-      const prev = events[i - 1];
+    for (let i = 0; i < events.length; i++) {
       const curr = events[i];
       const estado = curr.estado_anterior;
-      const durationMs = new Date(curr.created_at).getTime() - new Date(prev.created_at).getTime();
-      const durationDays = durationMs / (1000 * 60 * 60 * 24);
+      if (ESTADOS_CERRADOS.includes(estado)) continue;
+      const inicio = i > 0 ? events[i - 1].created_at : estado === 'borrador' ? creado : null;
+      if (!inicio) continue; // entró a este estado antes del rango
+      const durationDays = (new Date(curr.created_at).getTime() - new Date(inicio).getTime()) / DIA_MS;
 
       if (durationDays < 0) continue; // safety check
 
@@ -502,6 +528,12 @@ export async function getTiemposPorEtapa(
         expedientesPerEstado.set(estado, expSet);
       }
       expSet.add(expedienteId);
+    }
+
+    const decision = events.find((e) => e.estado_nuevo === 'aprobado' || e.estado_nuevo === 'rechazado');
+    if (decision && creado) {
+      const dias = (new Date(decision.created_at).getTime() - new Date(creado).getTime()) / DIA_MS;
+      if (dias >= 0) totales.push(dias);
     }
   }
 
@@ -554,7 +586,7 @@ export async function getTiemposPorEtapa(
     ? etapas.reduce((prev, curr) => curr.promedio_dias < prev.promedio_dias ? curr : prev).etapa
     : 'N/A';
 
-  const tiempoTotalPromedio = etapas.reduce((sum, e) => sum + e.promedio_dias, 0);
+  const tiempoTotalPromedio = totales.length ? totales.reduce((a, b) => a + b, 0) / totales.length : 0;
 
   return {
     etapas,
