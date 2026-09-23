@@ -6,7 +6,9 @@ export const listUsersQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(10),
   search: z.string().optional(),
-  role: z.enum(ROLES_USUARIO).optional(),
+  // El listado trae también a los arrendatarios: el filtro tiene que poder buscarlos.
+  // Asignar 'solicitante' desde el panel sigue sin estar permitido (update/create).
+  role: z.enum([...ROLES_USUARIO, 'solicitante']).optional(),
   is_active: z.enum(['true', 'false']).optional(),
   sortBy: z.enum(['created_at', 'nombre', 'email']).default('created_at'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
