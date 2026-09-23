@@ -8,6 +8,7 @@ import {
   esMiembroNoOwnerDeOrg,
   esOwnerDeOrg,
   resolveOrgMemberPerfilIds,
+  esMiembroSoloLectura,
   assertExpedienteAccess,
   assertInmuebleAccess,
   resolveAllowedInmuebleIds,
@@ -445,6 +446,12 @@ export async function createExpediente(
         if (!memberIds.includes(input.miembro_responsable_id)) {
           throw AppError.badRequest('El responsable seleccionado no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
         }
+        if (await esMiembroSoloLectura(input.miembro_responsable_id)) {
+          throw AppError.badRequest(
+            'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Elige a otra.',
+            'MIEMBRO_SOLO_LECTURA',
+          );
+        }
         insertData.miembro_responsable_id = input.miembro_responsable_id;
       }
     } else if (await esMiembroNoOwnerDeOrg(createdBy, inmuebleInmobiliariaId)) {
@@ -683,6 +690,13 @@ export async function asignarMiembroResponsableExpediente(
     const memberIds = await resolveOrgMemberPerfilIds(exp.inmobiliaria_id);
     if (!memberIds.includes(miembroId)) {
       throw AppError.badRequest('La persona seleccionada no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+    }
+    // Un miembro «Sólo lectura» no puede gestionar lo que se le asigna.
+    if (await esMiembroSoloLectura(miembroId)) {
+      throw AppError.badRequest(
+        'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Cámbiale el rol en Equipo o elige a otra.',
+        'MIEMBRO_SOLO_LECTURA',
+      );
     }
   }
 

@@ -238,7 +238,10 @@ export async function reenviar(contratoId: string, userId: string): Promise<void
   // Con FIRMA INCOMPLETA el estudio se puede cerrar o rechazar; reenviar lo
   // activaría (y ocuparía el inmueble) sobre un estudio terminado.
   if (c.expedienteEstado === 'cerrado' || c.expedienteEstado === 'rechazado')
-    throw AppError.conflict(`El estudio está ${c.expedienteEstado}: el contrato ya no se puede reenviar a firma.`, 'EXPEDIENTE_CERRADO');
+    throw AppError.conflict(
+      `El estudio está ${c.expedienteEstado === 'rechazado' ? 'marcado como no aprobable' : 'cerrado'}: el contrato ya no se puede reenviar a firma.`,
+      'EXPEDIENTE_CERRADO',
+    );
   const vig = await vigenciaEstudio(c);
   if (!vig?.vigente)
     throw AppError.conflict('El estudio ya no está vigente: se requiere una nueva evaluación.', 'CRC_VENCIDO');

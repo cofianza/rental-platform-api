@@ -6,13 +6,14 @@ import type { AssignBodyInput } from './expediente-assignments.schema';
 
 export async function assign(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const { analista_id } = req.body as AssignBodyInput;
+  const { analista_id, solo_si_libre } = req.body as AssignBodyInput;
   const result = await assignmentsService.assignResponsable(
     id,
     analista_id,
     req.user!.id,
     req.user!.email,
     req.ip,
+    solo_si_libre,
   );
   sendCreated(res, result);
 }

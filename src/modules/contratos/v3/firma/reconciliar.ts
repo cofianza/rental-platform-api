@@ -43,6 +43,16 @@ import {
   type ParteFirmante,
 } from './reglas';
 
+// Estados del contrato como los lee un operador (no el valor interno).
+const ETIQUETA_ESTADO: Record<string, string> = {
+  borrador: 'en borrador',
+  pendiente_firma: 'en firma',
+  firma_incompleta: 'con firma incompleta',
+  vigente: 'con fianza activa',
+  cancelado: 'cancelado',
+  finalizado: 'terminado',
+};
+
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
 
 // ── Lectura ──
@@ -331,8 +341,8 @@ export async function activarContrato(s: Sobre): Promise<void> {
     const admins = (await listOperators()).filter((o) => o.rol === 'administrador').map((o) => o.id);
     await notificar(admins, {
       tipo: 'firma.conflicto',
-      titulo: `Firma completa en un contrato ${c.estado}`,
-      mensaje: `Auco reporta firmado el contrato ${c.numero}, que en la plataforma está en «${c.estado}». Revísalo.`,
+      titulo: `Firma completa en un contrato ${ETIQUETA_ESTADO[c.estado] ?? c.estado}`,
+      mensaje: `Auco reporta firmado el contrato ${c.numero}, que en la plataforma está «${ETIQUETA_ESTADO[c.estado] ?? c.estado}». Revísalo.`,
       link: linkAsistente(c),
       payload: { contrato_id: c.id, sobre_id: s.id },
     }).catch((e) => logger.warn({ e }, 'Firma V3: no se pudo avisar el conflicto'));

@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, resolveOrgMemberPerfilIds, perfilEsDuenoDeInmueble, assertInmuebleAccess } from '@/lib/tenantScope';
+import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, esMiembroSoloLectura, resolveOrgMemberPerfilIds, perfilEsDuenoDeInmueble, assertInmuebleAccess } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import { errorReservaPerdida } from '../estudios/estudios-simultaneos.guard';
 import type {
@@ -1067,6 +1067,13 @@ export async function asignarMiembroResponsable(
     const memberIds = await resolveOrgMemberPerfilIds(inm.inmobiliaria_id);
     if (!memberIds.includes(miembroId)) {
       throw AppError.badRequest('La persona seleccionada no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+    }
+    // Un miembro «Sólo lectura» no puede gestionar lo que se le asigna.
+    if (await esMiembroSoloLectura(miembroId)) {
+      throw AppError.badRequest(
+        'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Cámbiale el rol en Equipo o elige a otra.',
+        'MIEMBRO_SOLO_LECTURA',
+      );
     }
   }
 

@@ -40,8 +40,26 @@ export async function assignResponsable(
   userId: string,
   userEmail: string,
   ip?: string,
+  soloSiLibre = false,
 ) {
   const descripcion = `Responsable asignado por ${userEmail}`;
+
+  // «Tomar» desde una bandeja que lleva rato abierta: si otro analista ya lo
+  // tomó, antes se lo quitaba en silencio.
+  // ponytail: chequeo previo, no CAS en la RPC; dos «Tomar» en el mismo
+  // instante aún pueden cruzarse (pasar p_analista_esperado a la RPC si pasa).
+  if (soloSiLibre) {
+    const { data: actual } = await supabase
+      .from('expedientes')
+      .select('analista_id, analista:perfiles!expedientes_analista_id_fkey(nombre, apellido)')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const a = actual as { analista_id: string | null; analista: { nombre: string; apellido: string } | null } | null;
+    if (a?.analista_id && a.analista_id !== analistaId) {
+      const quien = a.analista ? `${a.analista.nombre} ${a.analista.apellido}`.trim() : 'otro analista';
+      throw AppError.conflict(`Este estudio ya lo tomó ${quien}.`, 'EXPEDIENTE_YA_ASIGNADO');
+    }
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any).rpc('asignar_responsable_expediente', {

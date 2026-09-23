@@ -187,7 +187,7 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
       if (rolMiembro === 'miembro' && (await perfilPersonalIncompleto(user.id))) {
         logger.warn({ userId: user.id, method: req.method, path }, 'Escritura bloqueada para miembro con perfil incompleto');
         throw AppError.forbidden(
-          'Completá tus datos personales (nombre, apellido, teléfono y documento) en tu perfil antes de administrar expedientes.',
+          'Completa tus datos personales (nombre, apellido, teléfono y documento) en tu perfil antes de administrar estudios.',
           'PERFIL_PERSONAL_INCOMPLETO',
         );
       }
