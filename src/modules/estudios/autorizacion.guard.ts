@@ -98,12 +98,12 @@ export type VeredictoAutorizacion =
   | { ok: false; motivo: MotivoRechazoAutorizacion; detalle: string };
 
 /** Cedulas y NITs se comparan sin puntos, guiones ni espacios. */
-function normalizarDocumento(valor: string | null | undefined): string {
+export function normalizarDocumento(valor: string | null | undefined): string {
   return (valor ?? '').replace(/[^0-9a-zA-Z]/g, '').toUpperCase();
 }
 
 /** El tipo es un enum de la base ('cc', 'ce', 'ti', 'pasaporte', 'nit'). */
-function normalizarTipoDocumento(valor: string | null | undefined): string {
+export function normalizarTipoDocumento(valor: string | null | undefined): string {
   return (valor ?? '').trim().toLowerCase();
 }
 

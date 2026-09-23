@@ -8,6 +8,7 @@ import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { estudioYaCobrado as estudioPagado } from '@/modules/estudios/pago.guard';
+import { normalizarDocumento, normalizarTipoDocumento } from '@/modules/estudios/autorizacion.guard';
 import { env } from '@/config';
 import { getCalibracion } from '@/lib/calibracion';
 import type {
@@ -263,9 +264,9 @@ export async function enviarEnlaceAutorizacion(
   expedienteId: string,
   userId: string,
   ip?: string,
-  // Corrección del contacto del solicitante: si viene y difiere, se persiste
-  // en `solicitantes` y el enlace (email + WhatsApp) va al corregido.
-  contacto?: { email?: string; telefono?: string },
+  // Corrección del contacto (y del documento) del solicitante: si viene y
+  // difiere, se persiste en `solicitantes` y el enlace va al corregido.
+  contacto?: { email?: string; telefono?: string; tipo_documento?: string; numero_documento?: string },
   userRol?: string,
 ) {
   // 1. Get expediente with solicitante + inmueble
@@ -328,6 +329,33 @@ export async function enviarEnlaceAutorizacion(
     if (cambiaTel && exp.solicitantes) exp.solicitantes.telefono = telNuevo!;
   }
 
+  // 1a-bis. Documento corregido desde "Reintentar consulta". La firma congela
+  // el documento de la ficha, así que se corrige ahí ANTES del enlace: si no,
+  // la nueva firma volvía a guardar el documento mal digitado. Aquí sí se
+  // lanza si falla: emitir el enlace con el documento viejo sería el mismo bucle.
+  const numeroNuevo = contacto?.numero_documento?.trim();
+  const tipoNuevo = contacto?.tipo_documento;
+  const cambiaNumero = !!numeroNuevo && numeroNuevo !== (exp.solicitantes?.numero_documento ?? '');
+  const cambiaTipo = !!tipoNuevo && tipoNuevo !== (exp.solicitantes?.tipo_documento ?? '');
+  if ((cambiaNumero || cambiaTipo) && exp.solicitante_id && exp.solicitantes) {
+    const { error: docError } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        ...(cambiaNumero ? { numero_documento: numeroNuevo } : {}),
+        ...(cambiaTipo ? { tipo_documento: tipoNuevo } : {}),
+      } as never)
+      .eq('id', exp.solicitante_id);
+    if (docError) {
+      logger.warn({ error: docError.message, expedienteId }, 'No se pudo corregir el documento del solicitante');
+      throw AppError.badRequest(
+        'No se pudo corregir el documento del solicitante. Revísalo en su ficha y vuelve a intentarlo.',
+        'DOCUMENTO_NO_ACTUALIZADO',
+      );
+    }
+    if (cambiaNumero) exp.solicitantes.numero_documento = numeroNuevo!;
+    if (cambiaTipo) exp.solicitantes.tipo_documento = tipoNuevo!;
+  }
+
   if (!exp.solicitantes?.email) {
     throw AppError.badRequest('El solicitante no tiene email registrado', 'SOLICITANTE_SIN_EMAIL');
   }
@@ -348,7 +376,7 @@ export async function enviarEnlaceAutorizacion(
   //     expediente_id) bloqueaba el enlace del titular de inmediato.
   const { data: yaAutorizada } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, numero_documento_aceptante, tipo_documento_aceptante')
     .eq('expediente_id', expedienteId)
     .is('coarrendatario_id', null)
     .eq('estado', 'autorizado')
@@ -358,7 +386,23 @@ export async function enviarEnlaceAutorizacion(
     .limit(1)
     .maybeSingle();
 
-  if (yaAutorizada) {
+  // Salvo que se haya firmado con OTRO documento que el de la ficha (cédula mal
+  // digitada y corregida): esa firma no ampara la consulta del documento bueno
+  // (el gate responde documento_distinto) y la única salida era revocar, es
+  // decir registrar una revocación que el titular nunca hizo. La firma vieja
+  // queda como evidencia; el gate acepta cualquiera de las últimas que sirva.
+  // Sin documento congelado (firmas anteriores al 2026-09-03) se trata como
+  // el mismo.
+  const firmada = yaAutorizada as {
+    numero_documento_aceptante: string | null;
+    tipo_documento_aceptante: string | null;
+  } | null;
+  const firmoOtroDocumento =
+    !!firmada?.numero_documento_aceptante &&
+    (normalizarDocumento(firmada.numero_documento_aceptante) !== normalizarDocumento(exp.solicitantes.numero_documento) ||
+      (!!firmada.tipo_documento_aceptante &&
+        normalizarTipoDocumento(firmada.tipo_documento_aceptante) !== normalizarTipoDocumento(exp.solicitantes.tipo_documento)));
+  if (firmada && !firmoOtroDocumento) {
     throw AppError.badRequest(
       'Este estudio ya tiene una autorizacion firmada vigente.',
       'AUTORIZACION_YA_FIRMADA',

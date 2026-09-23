@@ -327,6 +327,38 @@ describe('autorizaciones.service', () => {
       expect(mockSendAutorizacionEmail).not.toHaveBeenCalled();
     });
 
+    it('firma vigente con el MISMO documento de la ficha: sigue sin re-crear el enlace', async () => {
+      enqueue('expedientes', { data: expedienteConSolicitante });
+      enqueue('autorizaciones_habeas_data', {
+        data: { id: 'firmada-uuid', numero_documento_aceptante: '123.456.789', tipo_documento_aceptante: 'cc' },
+      });
+
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
+        errorCode: 'AUTORIZACION_YA_FIRMADA',
+      });
+    });
+
+    it('cédula mal digitada y corregida: corrige la ficha y emite un enlace nuevo sin tocar la firma vieja', async () => {
+      enqueue('expedientes', { data: expedienteConSolicitante });
+      enqueue(
+        'autorizaciones_habeas_data',
+        // Firmó con la cédula errada que tenía la ficha.
+        { data: { id: 'firmada-uuid', numero_documento_aceptante: '123456789', tipo_documento_aceptante: 'cc' } },
+        { error: null },
+        { data: { id: AUTORIZACION_ID } },
+      );
+
+      const result = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, {
+        tipo_documento: 'cc',
+        numero_documento: '923456789',
+      });
+
+      expect(result).toMatchObject({ id: AUTORIZACION_ID, estado: 'pendiente' });
+      expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '923456789' });
+      // La firma vieja no se toca (solo se expiran las pendientes).
+      expect(opsDe('autorizaciones_habeas_data', 'update').map((o) => o.args[0])).toEqual([{ estado: 'expirado' }]);
+    });
+
     it('debe lanzar error si expediente no existe', async () => {
       enqueue('expedientes', { data: null, error: { message: 'not found' } });
       await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({

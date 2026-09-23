@@ -39,8 +39,9 @@ expedienteAutorizacionRouter.get(
 // roleGuard (no authorize('expedientes','update')): el propietario gestiona el
 // estudio de su candidato y su UI ofrece "Enviar/Reenviar enlace", pero darle
 // expedientes:update abriría una docena de rutas que no le corresponden.
-// Body opcional { email?, telefono? }: corrige el contacto del solicitante si
-// estaba mal escrito (se persiste server-side y el enlace va al corregido).
+// Body opcional { email?, telefono?, tipo_documento?, numero_documento? }:
+// corrige el contacto o el documento del solicitante si estaba mal escrito (se
+// persiste server-side y el enlace va al corregido).
 expedienteAutorizacionRouter.post(
   '/enviar-enlace',
   roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
