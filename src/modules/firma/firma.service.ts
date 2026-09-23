@@ -608,9 +608,10 @@ export async function reenviarSolicitudFirma(
       throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el tipo de firma del contrato. Intenta de nuevo.');
     }
     if ((firmantesMultiparte ?? 0) > 0) {
+      // Lo lee sobre todo el arrendatario (su tarjeta): sin jerga interna.
       throw AppError.badRequest(
-        'Este contrato usa firma multi-parte (un solo sobre para todos los firmantes). ' +
-          'No se puede cambiar el correo de un firmante por esta vía — contacta a soporte para recrear el sobre.',
+        'No se puede cambiar el correo de firma desde aquí. Pide a la inmobiliaria o al propietario ' +
+          'que actualice tus datos y vuelva a enviar el contrato a firma.',
         'FIRMA_MULTIPARTE_NO_EMAIL_OVERRIDE',
       );
     }
@@ -773,7 +774,7 @@ export async function reenviarSolicitudFirmaSelf(
   // 1. Verificar que la solicitud existe y traer la cadena hasta solicitante.
   const { data: solRow, error: solError } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, contrato_id, contratos!inner(expediente_id, expedientes!inner(solicitante_id))')
+    .select('id, contrato_id, envios_realizados, max_envios, contratos!inner(expediente_id, expedientes!inner(solicitante_id))')
     .eq('id', solicitudId)
     .single();
 
@@ -784,6 +785,8 @@ export async function reenviarSolicitudFirmaSelf(
   const sol = solRow as unknown as {
     id: string;
     contrato_id: string;
+    envios_realizados: number;
+    max_envios: number;
     contratos: {
       expediente_id: string;
       expedientes: { solicitante_id: string | null };
@@ -813,6 +816,16 @@ export async function reenviarSolicitudFirmaSelf(
     throw AppError.forbidden(
       'No tienes permisos para reenviar esta solicitud de firma',
       'NOT_OWNER',
+    );
+  }
+
+  // 2.5. El cupo de envíos es uno solo por sobre (y el recordatorio avisa a
+  //      todas las partes): el último queda para la inmobiliaria o el
+  //      propietario, que si no se quedaban sin su botón de recordatorio.
+  if (sol.envios_realizados >= sol.max_envios - 1) {
+    throw AppError.badRequest(
+      'Ya pediste el reenvío varias veces. Si todavía no te llega, pide a la inmobiliaria o al propietario que te lo reenvíe.',
+      'MAX_ENVIOS_SELF',
     );
   }
 
