@@ -13,6 +13,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
+import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
 
 // Estados de contrato considerados "activos" (firmado = listo, vigente = corriendo).
 const ESTADOS_CONTRATO_ACTIVO = ['firmado', 'vigente'] as const;
@@ -91,19 +92,46 @@ export interface InmobiliariaRow {
   moraActivaCount: number;
 }
 
+// Una fila por ORGANIZACIÓN, no por persona: todos los miembros de un equipo
+// tienen rol 'inmobiliaria', así que listar perfiles mostraba a cada empleado
+// como un aliado y partía el canon según quién cargó cada inmueble. Se lista
+// el titular principal (inmobiliarias.owner_perfil_id) con la cartera de la
+// organización (inmuebles.inmobiliaria_id), más las cuentas sin equipo.
 export async function listInmobiliarias(): Promise<InmobiliariaRow[]> {
-  const [{ data, error }, contratos] = await Promise.all([
+  const [{ data, error }, orgsRes, miembrosRes, contratos] = await Promise.all([
     supabase
       .from('perfiles')
       .select('id, razon_social, nombre, apellido, nit, nombre_representante, telefono, ciudad, estado, created_at')
       .eq('rol', 'inmobiliaria')
       .order('created_at', { ascending: false }),
+    (supabase.from('inmobiliarias' as string) as ReturnType<typeof supabase.from>).select('id, owner_perfil_id'),
+    (supabase.from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+      .select('perfil_id')
+      .eq('estado', 'activo'),
     fetchContratosActivosConDueno(),
   ]);
   if (error) throw fromSupabaseError(error);
+  if (orgsRes.error) throw fromSupabaseError(orgsRes.error);
+  if (miembrosRes.error) throw fromSupabaseError(miembrosRes.error);
 
-  const rows = (data ?? []) as Array<Record<string, unknown>>;
-  const agg = agregarPorPerfil(rows.map((r) => r.id as string), contratos, (i) => i.propietario_id);
+  const titularDeOrg = new Map<string, string>();
+  for (const o of (orgsRes.data ?? []) as Array<{ id: string; owner_perfil_id: string }>) {
+    titularDeOrg.set(o.id, o.owner_perfil_id);
+  }
+  const titulares = new Set(titularDeOrg.values());
+  const conEquipo = new Set(
+    ((miembrosRes.data ?? []) as Array<{ perfil_id: string | null }>).map((m) => m.perfil_id),
+  );
+
+  const rows = ((data ?? []) as Array<Record<string, unknown>>).filter(
+    (r) => titulares.has(r.id as string) || !conEquipo.has(r.id as string),
+  );
+  // Inmueble sin organización (legado) → a quien lo registró.
+  const agg = agregarPorPerfil(
+    rows.map((r) => r.id as string),
+    contratos,
+    (i) => (i.inmobiliaria_id && titularDeOrg.get(i.inmobiliaria_id)) || i.propietario_id,
+  );
 
   return rows.map((r) => {
     const a = agg.get(r.id as string) ?? { contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 };
@@ -698,9 +726,10 @@ export interface PerfilDetalle {
 }
 
 export async function getPerfilDetalle(id: string): Promise<PerfilDetalle> {
-  // 1+2) Perfil e inmuebles son consultas independientes (ambas indexadas por
-  // id / propietario_id) → se ejecutan en paralelo para evitar un waterfall
-  // (regla async-parallel / server-parallel-fetching de Supabase/Vercel).
+  // 1+2) Perfil e inmuebles son consultas independientes → en paralelo. La
+  // cartera del titular de una inmobiliaria es la de su organización
+  // (inmuebles.inmobiliaria_id), no solo lo que él registró; se suma lo
+  // registrado a su nombre por si quedó alguna fila sin organización.
   const [perfilRes, inmueblesRes] = await Promise.all([
     (supabase.from('perfiles' as string) as ReturnType<typeof supabase.from>)
       .select(
@@ -711,10 +740,13 @@ export async function getPerfilDetalle(id: string): Promise<PerfilDetalle> {
       )
       .eq('id', id)
       .single(),
-    (supabase.from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .select('id, codigo, direccion, ciudad, estado, created_at')
-      .eq('propietario_id', id)
-      .order('created_at', { ascending: false }),
+    // id llega validado como UUID (perfilIdParamsSchema): seguro de interpolar.
+    resolveInmobiliariaIdForPerfil(id).then((orgId) =>
+      (supabase.from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+        .select('id, codigo, direccion, ciudad, estado, created_at')
+        .or(orgId ? `inmobiliaria_id.eq.${orgId},propietario_id.eq.${id}` : `propietario_id.eq.${id}`)
+        .order('created_at', { ascending: false }),
+    ),
   ]);
 
   if (perfilRes.error) throw fromSupabaseError(perfilRes.error);

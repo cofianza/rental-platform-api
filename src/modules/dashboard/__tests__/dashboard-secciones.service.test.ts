@@ -16,7 +16,7 @@ interface ChainResult {
 
 function createChain(result: ChainResult) {
   const chain: Record<string, unknown> = {};
-  const methods = ['select', 'eq', 'neq', 'gte', 'lte', 'in', 'order', 'range', 'limit', 'is', 'not'];
+  const methods = ['select', 'eq', 'neq', 'gte', 'lte', 'in', 'order', 'range', 'limit', 'is', 'not', 'or'];
   for (const m of methods) chain[m] = vi.fn(() => chain);
   chain.single = vi.fn(() => chain);
   chain.maybeSingle = vi.fn(() => chain);
@@ -264,6 +264,28 @@ describe('getPerfilDetalle()', () => {
     expect(d.inmuebles[0].codigo).toBe('APT-001');
   });
 
+  it('titular de una inmobiliaria: la cartera es la de su organización', async () => {
+    let inmueblesChain: Record<string, ReturnType<typeof vi.fn>> | null = null;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'inmobiliaria_miembros') {
+        return createChain({
+          data: [{ inmobiliaria_id: 'o1', rol_miembro: 'owner', inmobiliarias: { miembros_ven_todo: true } }],
+        });
+      }
+      if (table === 'perfiles') return createChain({ data: { ...perfilPropietario, id: 't1', rol: 'inmobiliaria' } });
+      if (table === 'inmuebles') {
+        const chain = createChain({ data: [] });
+        inmueblesChain = chain as unknown as Record<string, ReturnType<typeof vi.fn>>;
+        return chain;
+      }
+      return createChain({ data: [] });
+    });
+
+    await secciones.getPerfilDetalle('t1');
+
+    expect(inmueblesChain!.or).toHaveBeenCalledWith('inmobiliaria_id.eq.o1,propietario_id.eq.t1');
+  });
+
   it('lanza error 404 cuando el perfil no existe', async () => {
     byTable({ perfiles: { data: null }, inmuebles: { data: [] } });
     await expect(secciones.getPerfilDetalle('no-existe')).rejects.toMatchObject({ statusCode: 404 });
@@ -301,6 +323,38 @@ describe('listInmobiliarias() / listPropietarios()', () => {
     expect(rows[0].cargoContacto).toBeNull();
     expect(rows[0].ciudad).toBe('Cali');
     expect(rows[0].contratosActivos).toBe(0);
+  });
+
+  it('inmobiliaria: una fila por organización (el titular) con la cartera de todo el equipo', async () => {
+    const contrato = (canon: string, propietario: string, org: string | null, moras: number) => ({
+      valor_arriendo: canon,
+      expedientes: { inmuebles: { propietario_id: propietario, inmobiliaria_id: org } },
+      moras_tickets: Array.from({ length: moras }, () => ({ estado: 'fase_2' })),
+    });
+    byTable({
+      perfiles: {
+        data: [
+          { id: 't1', razon_social: 'Inmo Uno SAS', estado: 'activo', created_at: '2026-01-01' },
+          { id: 'm1', nombre: 'Empleado', apellido: 'Uno', estado: 'activo', created_at: '2026-02-01' },
+          { id: 'l1', razon_social: 'Suelta SAS', estado: 'activo', created_at: '2026-03-01' },
+        ],
+      },
+      inmobiliarias: { data: [{ id: 'o1', owner_perfil_id: 't1' }] },
+      inmobiliaria_miembros: { data: [{ perfil_id: 't1' }, { perfil_id: 'm1' }] },
+      contratos: {
+        data: [
+          contrato('1000000', 'm1', 'o1', 1), // lo cargó el empleado: es de la organización
+          contrato('2000000', 't1', 'o1', 0),
+          contrato('500000', 'l1', null, 0), // cuenta sin equipo (legado)
+        ],
+      },
+    });
+
+    const rows = await secciones.listInmobiliarias();
+
+    expect(rows.map((r) => r.id)).toEqual(['t1', 'l1']); // el empleado no es un aliado
+    expect(rows[0]).toMatchObject({ contratosActivos: 2, canonTotal: 3000000, moraActivaCount: 1 });
+    expect(rows[1]).toMatchObject({ contratosActivos: 1, canonTotal: 500000, moraActivaCount: 0 });
   });
 
   it('propietario: incluye ciudad (Ronda 2) y cédula', async () => {

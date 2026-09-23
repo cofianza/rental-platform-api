@@ -1184,12 +1184,14 @@ async function fetchConfigDashboard(): Promise<AdminOverviewConfig & { capitalDi
   };
 }
 
+// Organizaciones, no personas: cada miembro de un equipo tiene rol
+// 'inmobiliaria' y contaba como un aliado más.
 async function countInmobiliariasActivas(): Promise<number> {
-  const { count, error } = await supabase
-    .from('perfiles')
+  const { count, error } = await (
+    supabase.from('inmobiliarias' as string) as ReturnType<typeof supabase.from>
+  )
     .select('*', { count: 'exact', head: true })
-    .eq('rol', 'inmobiliaria')
-    .eq('estado', 'activo');
+    .eq('estado', 'activa');
 
   if (error) throw fromSupabaseError(error);
   return count ?? 0;
