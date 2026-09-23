@@ -66,7 +66,8 @@ vi.mock('@/lib/tenantScope', () => ({
 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 
-import { pagarGestor, cancelarYLiberarCredito } from '../pago-estudio.service';
+import { pagarGestor, cancelarYLiberarCredito, getEstadoPagoEstudio } from '../pago-estudio.service';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
 
@@ -196,5 +197,38 @@ describe('cancelarYLiberarCredito', () => {
     });
     expect(mockTransition).not.toHaveBeenCalled();
     expect(mockCancelLink).not.toHaveBeenCalled();
+  });
+});
+
+describe('getEstadoPagoEstudio', () => {
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('lanza las lecturas sin esperar al guard (antes 5 idas en serie)', async () => {
+    let soltarGuard!: () => void;
+    vi.mocked(assertExpedienteAccess).mockReturnValueOnce(new Promise<void>((r) => (soltarGuard = r)));
+    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
+    enqueue('pagos', { data: [], error: null });
+    enqueue('estudios', { data: { pago_por: 'arrendatario' }, error: null });
+
+    const estado = getEstadoPagoEstudio(EXP, 'user-1', 'inmobiliaria');
+    // Con el guard aun pendiente, las cuatro consultas ya salieron.
+    const tablas = new Set(ops.map((o) => o.table));
+    for (const t of ['configuracion_sistema', 'pagos', 'autorizaciones_habeas_data', 'estudios']) {
+      expect(tablas.has(t)).toBe(true);
+    }
+    soltarGuard();
+
+    await expect(estado).resolves.toMatchObject({ estado: 'esperando_autorizacion', autorizado: false, monto: 80000 });
+  });
+
+  it('si el guard da 404 no devuelve nada de lo leido', async () => {
+    vi.mocked(assertExpedienteAccess).mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404 }));
+    enqueue('pagos', { data: [{ id: 'p1', estado: 'completado', metodo: 'pasarela', monto: 80000, email_pagador: 'x@y.co' }], error: null });
+
+    await expect(getEstadoPagoEstudio(EXP, 'intruso', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
   });
 });

@@ -188,28 +188,32 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
   // Tenant guard (404 fuera de scope): esta respuesta lleva el objeto `pago`
   // completo —con email_pagador/nombre_pagador del prospecto— y, desde el
   // §6.3, tambien `autorizado`, o sea si un tercero ya firmo su habeas data.
-  await assertExpedienteAccess(expedienteId, userId, userRol);
-
-  const monto = await getMontoEstudio();
-  const pago = await findPagoEstudio(expedienteId);
-  // `autorizado` es lo unico que le permite al panel (y a la vista del
-  // prospecto) distinguir "esperando que autorice" de "autorizado, falta
-  // cobrar". Sin el, con el orden del §6.3 la ventana entre habilitar y firmar
-  // se veia igual que "el gestor no ha decidido nada".
-  const autorizado = await titularYaAutorizo(expedienteId);
-
-  if (!pago) {
-    // Opcion C con el orden nuevo: el gestor ya eligio "enviar link al
-    // arrendatario", pero todavia no existe fila de pago porque el cobro se
-    // crea al firmar. No es 'sin_definir': la decision ya esta tomada.
-    const { data: estRow } = await (supabase
+  // Las lecturas van en paralelo con el guard (antes 5 idas en serie): si el
+  // guard da 404, Promise.all rechaza y lo leido se descarta.
+  const [, monto, pago, autorizado, { data: estRow }] = await Promise.all([
+    assertExpedienteAccess(expedienteId, userId, userRol),
+    getMontoEstudio(),
+    findPagoEstudio(expedienteId),
+    // `autorizado` es lo unico que le permite al panel (y a la vista del
+    // prospecto) distinguir "esperando que autorice" de "autorizado, falta
+    // cobrar". Sin el, con el orden del §6.3 la ventana entre habilitar y
+    // firmar se veia igual que "el gestor no ha decidido nada".
+    titularYaAutorizo(expedienteId),
+    // pago_por solo se usa si no hay fila de pago (rama de abajo).
+    (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .select('pago_por')
       .eq('expediente_id', expedienteId)
       .neq('tipo', 'con_coarrendatario')
       .order('created_at', { ascending: false })
       .limit(1)
-      .maybeSingle();
+      .maybeSingle(),
+  ]);
+
+  if (!pago) {
+    // Opcion C con el orden nuevo: el gestor ya eligio "enviar link al
+    // arrendatario", pero todavia no existe fila de pago porque el cobro se
+    // crea al firmar. No es 'sin_definir': la decision ya esta tomada.
     const esperandoAutorizacion =
       !autorizado && (estRow as { pago_por?: string | null } | null)?.pago_por === 'arrendatario';
 
