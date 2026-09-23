@@ -109,7 +109,7 @@ async function resolveAuth(token: string): Promise<AuthResolved> {
 
   const promise = (async (): Promise<AuthResolved> => {
     const sub = subSinVerificar(token);
-    if (!sub) throw AppError.unauthorized('Token invalido o expirado');
+    if (!sub) throw AppError.unauthorized('Tu sesión venció. Vuelve a iniciar sesión.');
     // En paralelo: una sola espera a Supabase en vez de dos seguidas.
     const [{ data: { user }, error }, { data: perfil, error: perfilError }] = await Promise.all([
       supabaseAuth.auth.getUser(token),
@@ -117,7 +117,7 @@ async function resolveAuth(token: string): Promise<AuthResolved> {
     ]);
     if (error || !user || user.id !== sub) {
       logger.warn({ error }, 'Token invalido o expirado');
-      throw AppError.unauthorized('Token invalido o expirado');
+      throw AppError.unauthorized('Tu sesión venció. Vuelve a iniciar sesión.');
     }
 
     if (perfilError || !perfil) {
