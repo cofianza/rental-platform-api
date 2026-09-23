@@ -945,7 +945,7 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
   // el estado, no la pertenencia.
   const { data: estudioRow, error: estudioErr } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id')
+    .select('id, expediente_id, estado')
     .eq('id', estudioId)
     .single();
 
@@ -953,11 +953,35 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  await assertExpedienteAccess(
-    (estudioRow as { expediente_id: string }).expediente_id,
-    userId,
-    userRol,
-  );
+  const { expediente_id: expedienteId, estado } = estudioRow as { expediente_id: string; estado: string };
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+
+  // La consulta al buró ya salió (y se factura): cancelar ahora dejaba su
+  // respuesta sin poder registrarse.
+  if (estado === 'en_proceso') {
+    throw AppError.conflict(
+      'La evaluación se está consultando con el buró. Espera el resultado antes de cancelarla.',
+      'ESTUDIO_EN_PROCESO',
+    );
+  }
+
+  // Esperando el pago: si el prospecto ya lo inició (PSE o efectivo), cancelar
+  // no lo detiene y se cobraría una evaluación cancelada (ver pagarGestor).
+  if (estado === ESTADO_ESPERANDO_PAGO) {
+    const { data: enCurso } = await (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .eq('concepto', 'estudio')
+      .eq('estado', 'procesando')
+      .limit(1);
+    if (enCurso && enCurso.length > 0) {
+      throw AppError.conflict(
+        'El prospecto ya inició el pago por PSE o en efectivo. Espera a que se confirme o venza para cancelar la evaluación.',
+        'PAGO_EN_PROCESO',
+      );
+    }
+  }
 
   // Atomic: cancel estudio + revert inmueble via RPC
   // RPC validates estado === 'solicitado' and handles row locking
@@ -978,6 +1002,22 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
       );
     }
     throw AppError.badRequest('Error al cancelar el estudio', 'ESTUDIO_CANCEL_ERROR');
+  }
+
+  // El enlace de pago de la evaluación cancelada no debe quedar cobrable. El
+  // pago es por expediente: solo se cancela si no queda otra evaluación viva
+  // (la del co-arrendatario comparte expediente y pago).
+  if (estado === ESTADO_ESPERANDO_PAGO) {
+    const { data: vivos } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .not('estado', 'in', `(${ESTADOS_ESTUDIO_FINALIZADOS.join(',')})`)
+      .limit(1);
+    if (!vivos || vivos.length === 0) {
+      const { cancelarPagosPendientesDeExpediente } = await import('@/modules/pagos/pagos.service');
+      await cancelarPagosPendientesDeExpediente(expedienteId, 'Evaluación cancelada', ['estudio']);
+    }
   }
 
   // Audit
@@ -1031,6 +1071,18 @@ export async function sendSelfServiceLink(
     throw AppError.badRequest(
       'El formulario ya fue completado por el solicitante. No se puede reenviar el enlace.',
       'FORMULARIO_YA_COMPLETADO',
+    );
+  }
+
+  // Volver a 'formulario_enviado' desde aquí rompía el flujo: en 'pago_pendiente'
+  // el pago ya no despierta el estudio (onEstudioPagado hace CAS sobre ese
+  // estado) y en 'en_proceso' el resultado del buró no se puede registrar.
+  if (est.estado === 'pago_pendiente' || est.estado === 'en_proceso') {
+    throw AppError.conflict(
+      est.estado === 'en_proceso'
+        ? 'La evaluación ya se está consultando con el buró. Espera el resultado.'
+        : 'La evaluación está esperando el pago. Se ejecuta sola cuando se confirme.',
+      'ESTUDIO_ESTADO_INVALIDO',
     );
   }
 
@@ -1106,19 +1158,25 @@ export async function sendSelfServiceLink(
   const token = crypto.randomBytes(32).toString('hex');
   const expiration = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
 
-  // 4. Update estudio with token
-  const { error: updateError } = await (supabase
+  // 4. Update estudio with token. CAS sobre el estado leído: si entretanto se
+  //    pagó o se ejecutó, no se lo devuelve a 'formulario_enviado'.
+  const { data: actualizados, error: updateError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .update({
       token_self_service: token,
       expiracion_token: expiration.toISOString(),
       estado: 'formulario_enviado',
     } as never)
-    .eq('id', estudioId);
+    .eq('id', estudioId)
+    .eq('estado', est.estado)
+    .select('id');
 
   if (updateError) {
     logger.error({ error: updateError, estudioId }, 'Error al generar token self-service');
     throw AppError.badRequest('Error al generar enlace', 'TOKEN_GENERATION_ERROR');
+  }
+  if (!actualizados || actualizados.length === 0) {
+    throw AppError.conflict('La evaluación cambió de estado. Actualiza la página y vuelve a intentarlo.', 'ESTUDIO_ESTADO_CAMBIO');
   }
 
   // 5. Build URL and send email
@@ -2683,17 +2741,23 @@ async function procesarEstudioAsync(args: {
         ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió (Adenda §2.3 → Política §14: sin centrales no hay decisión automática). ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintenta eligiendo TransUnion.' : ''}`
         : `Error de proveedor (${buroLabel}): ${errorMsg}. Puede reintentar o contactar a soporte.`;
 
-    const { error: failError } = await (supabase
+    // CAS: si lo cancelaron mientras se consultaba, no se resucita como 'fallido'
+    // (reintentable) ni se avisa de un fallo.
+    const { data: marcados, error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({ estado: 'fallido', observaciones } as never)
-      .eq('id', estudioId);
+      .eq('id', estudioId)
+      .eq('estado', 'en_proceso')
+      .select('id');
 
     if (failError) {
       logger.error({ error: failError, estudioId }, 'Error al marcar estudio como fallido');
     }
 
     // Politica §14: que alguien se entere (timeline + responsable + internos).
-    await avisarEstudioFallido({ estudioId, expedienteId, observaciones });
+    if (failError || (marcados && marcados.length > 0)) {
+      await avisarEstudioFallido({ estudioId, expedienteId, observaciones });
+    }
 
     logAudit({
       usuarioId: userId,
