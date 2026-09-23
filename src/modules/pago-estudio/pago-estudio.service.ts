@@ -343,7 +343,7 @@ async function crearCobroPasarela(args: {
 
   const exp = await getExpedienteWithInmueble(expedienteId);
   const monto = await getMontoEstudio();
-  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || `Exp. ${exp.numero}`}${args.sufijoConcepto ?? ''}`;
+  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || exp.numero}${args.sufijoConcepto ?? ''}`;
 
   // El id va PRE-generado y viaja en las URLs de retorno: el arrendatario que
   // cancela o al que le rechazan el pago no tiene sesión, así que sin el
@@ -686,8 +686,8 @@ export async function enviarLinkPago(
     return notificarUsuario({
       userId: solicitanteUserId,
       tipo: 'pago.disponible',
-      titulo: 'Pago de estudio disponible',
-      mensaje: `Ya autorizaste el tratamiento de datos. Paga el estudio crediticio (${formatCOP(monto)}) y ejecutamos la consulta en centrales automáticamente.`,
+      titulo: 'Pago de la evaluación disponible',
+      mensaje: `Ya autorizaste el tratamiento de datos. Paga la evaluación crediticia (${formatCOP(monto)}) y ejecutamos la consulta en centrales automáticamente.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, pago_id: pago.id },
     });

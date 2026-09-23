@@ -313,7 +313,7 @@ export async function getPagoEventos(pagoId: string, userId?: string, userRol?: 
 // Side effects: notifications
 // ============================================================
 
-const CONCEPTO_LABELS: Record<string, string> = {
+export const CONCEPTO_LABELS: Record<string, string> = {
   estudio: 'Evaluación crediticia',
   garantia: 'Garantía de arrendamiento',
   primer_canon: 'Primer canon de arrendamiento',

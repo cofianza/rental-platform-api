@@ -6,7 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { sendPaymentLinkEmail } from '@/lib/email';
 import { getPaymentGateway } from './gateway';
-import { transitionPagoState, transitionPagoStateChecked, isValidTransition } from './pago-state-machine';
+import { transitionPagoState, transitionPagoStateChecked, isValidTransition, CONCEPTO_LABELS } from './pago-state-machine';
 import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
@@ -92,14 +92,6 @@ async function recordEvent(
 function formatCOP(amount: number): string {
   return `$${amount.toLocaleString('es-CO')}`;
 }
-
-const CONCEPTO_LABELS: Record<string, string> = {
-  estudio: 'Evaluación crediticia',
-  garantia: 'Garantía de arrendamiento',
-  primer_canon: 'Primer canon de arrendamiento',
-  deposito: 'Depósito de garantía',
-  otro: 'Otro concepto',
-};
 
 // ============================================================
 // List pagos by expediente
@@ -344,7 +336,7 @@ export async function createPaymentLink(
   try {
     linkResult = await gateway.createPaymentLink({
       amount: monto,
-      concept: `${conceptLabel} - Exp. ${expNumero}`,
+      concept: `${conceptLabel} - Estudio ${expNumero}`,
       description: input.descripcion,
       metadata: {
         expediente_id: expedienteId,
