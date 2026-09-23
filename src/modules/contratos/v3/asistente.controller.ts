@@ -65,3 +65,14 @@ export async function reintentar(req: Request, res: Response) {
 export async function actualizarFirma(req: Request, res: Response) {
   sendSuccess(res, await asistente.actualizarFirmaV3(expedienteId(req), req.user!.id, req.user!.rol));
 }
+
+// ── Adenda 1 del módulo de contratos ──
+
+export async function prorrogarPlazo(req: Request, res: Response) {
+  sendSuccess(res, await asistente.prorrogarPlazoFirma(expedienteId(req), req.user!.id, req.user!.rol));
+}
+
+export async function aceptarAviso(req: Request, res: Response) {
+  const u = req.user!;
+  sendSuccess(res, await asistente.aceptarAvisoFirma(expedienteId(req), { id: u.id, rol: u.rol, email: u.email }, req.ip));
+}

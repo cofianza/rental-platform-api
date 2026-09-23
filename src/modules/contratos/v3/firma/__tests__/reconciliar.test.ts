@@ -79,8 +79,19 @@ vi.mock('@/config', () => ({ env: mockEnv }));
 vi.mock('@/config/env', () => ({ env: mockEnv }));
 vi.mock('@/lib/auditLog', () => ({
   logAudit: efectos.logAudit,
-  AUDIT_ACTIONS: { FIRMA_COMPLETADA: 'firma_completada', FIRMA_SOLICITUD_CREATED: 'firma_solicitud_created' },
+  AUDIT_ACTIONS: {
+    FIRMA_COMPLETADA: 'firma_completada',
+    FIRMA_SOLICITUD_CREATED: 'firma_solicitud_created',
+    FIRMA_PLAZO_PRORROGADO: 'firma_plazo_prorrogado',
+    FIRMA_AVISO_ACEPTADO: 'firma_aviso_aceptado',
+  },
   AUDIT_ENTITIES: { CONTRATO: 'contrato' },
+}));
+// El acuse: m1 es titular de org1 (la inmobiliaria del contrato).
+vi.mock('@/lib/tenantScope', async (orig) => ({
+  ...(await orig<typeof import('@/lib/tenantScope')>()),
+  resolveMembershipInmobiliariaIds: vi.fn(async (id: string) => (id === 'm1' ? ['org1'] : ['otra-org'])),
+  resolveRolMiembro: vi.fn(async () => 'owner'),
 }));
 vi.mock('@/lib/auco', async (orig) => ({ ...(await orig<typeof import('@/lib/auco')>()), ...auco }));
 vi.mock('@/lib/calibracion', () => ({ getCalibracion: async () => ({ DIAS_EXPIRACION_FIRMA: 15, VIGENCIA_CRC_DIAS: 60 }) }));
@@ -93,19 +104,32 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 vi.mock('@/modules/users/users.service', () => ({ listOperators: efectos.listOperators }));
 vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: efectos.cancelarPagos }));
 
-import { cancelarFirmaV3, crearSobre, estadoEnviado, reenviar, reintentar } from '../firma.service';
+import {
+  aceptarAviso,
+  cancelarFirmaV3,
+  crearSobre,
+  estadoEnviado,
+  exigirAcuseDelEstudio,
+  prorrogarPlazo,
+  reenviar,
+  reintentar,
+} from '../firma.service';
 import { reconciliarSobre, webhookAucoV3 } from '../reconciliar';
+import { finDelDia } from '../reglas';
+import { fechaBogota } from '../../formato';
 
 // ── Datos ──
 
 const HOY = new Date().toISOString();
+/** Un proceso vivo todavía no vence: su plazo es a futuro. */
+const EN_10_DIAS = new Date(Date.now() + 10 * 86_400_000).toISOString();
 const PARTES = [
   { id: 'p1', rol: 'arrendatario', orden: 1, nombre: 'Ana', tipo_documento: 'cc', numero_documento: '1', email: 'ana@x.co', telefono: '3001112233' },
   { id: 'p2', rol: 'arrendador', orden: 2, nombre: 'Inmo', tipo_documento: 'nit', numero_documento: '9', email: 'inmo@x.co', telefono: '3004445566',
     representante_legal_nombre: 'Caro', representante_legal_tipo_documento: 'cc', representante_legal_documento: '5' },
 ];
 const sobre = (x: Record<string, unknown> = {}) => ({
-  id: 's1', contrato_id: 'c1', intento: 1, estado: 'en_firma', auco_code: 'AUCO1', expira_en: HOY,
+  id: 's1', contrato_id: 'c1', intento: 1, estado: 'en_firma', auco_code: 'AUCO1', expira_en: EN_10_DIAS,
   firmantes: [{ parteId: 'p1', estado: 'notificado' }, { parteId: 'p2', estado: 'pendiente' }],
   motivo: null, motivo_detalle: null, cerrado_en: null, auco_cancelado_en: null, aviso_entregado_en: null,
   aviso_detalle: null, enviado_por: 'u1', created_at: HOY, updated_at: '2026-09-22T10:00:00.000001+00:00', ...x,
@@ -136,6 +160,12 @@ const roadmap = (n: number) => ({
   ].slice(0, n),
 });
 const statusFinish = { status: 'FINISH', signProfile: [{ id: 'G1', email: 'ana@x.co', status: 'FINISH' }, { id: 'G2', email: 'inmo@x.co', status: 'FINISH' }] };
+
+const DIA = 86_400_000;
+/** 'AAAA-MM-DD' + n días. */
+const masDiasIso = (f: string, n: number) => new Date(Date.parse(`${f}T00:00:00Z`) + n * DIA).toISOString().slice(0, 10);
+/** Medianoche (Bogotá) del día que cae dentro de n días: así vencen los plazos de firma. */
+const finDeDiaEn = (n: number, desde = Date.now()) => new Date(finDelDia(fechaBogota(new Date(desde + n * DIA)))).toISOString();
 
 const escrituras = () => ops.filter((o) => ['insert', 'update', 'delete'].includes(o.method) || o.table.startsWith('rpc:') || o.table === 'efecto' || o.table === 'auco');
 const tabla = (t: string, m: string) => ops.filter((o) => o.table === t && o.method === m);
@@ -235,7 +265,7 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     // Las respuestas "Once" que un test no consuma no deben pasar al siguiente.
     beforeEach(() => auco.getDocumentStatus.mockReset());
 
-    it('una hora después del plazo: se anula en Auco y después queda FIRMA INCOMPLETA con su aviso', async () => {
+    it('vencido el plazo: se anula en Auco y después queda FIRMA INCOMPLETA con su aviso', async () => {
       enqueue(
         'contrato_v3_sobres',
         ok(sobre({ expira_en: vencido(120) })), // lectura
@@ -276,15 +306,19 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
       expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(0);
     });
 
-    it('dentro de la hora de margen no toca nada (Auco suele marcarlo solo)', async () => {
-      enqueue('contrato_v3_sobres', ok(sobre({ expira_en: vencido(30) })));
+    it('antes del plazo no toca nada; vencido, cierra sin esperar a Auco (allá vence después, Adenda 1)', async () => {
+      enqueue('contrato_v3_sobres', ok(sobre({ expira_en: vencido(-5) })));
       enqueue('contrato_partes', ok(PARTES));
       auco.getDocumentStatus.mockResolvedValueOnce(pendiente);
-
       await reconciliarSobre('s1');
-
       expect(tabla('auco', 'cancel')).toHaveLength(0);
       expect(escrituras()).toEqual([]);
+
+      enqueue('contrato_v3_sobres', ok(sobre({ expira_en: vencido(1) })));
+      enqueue('contrato_partes', ok(PARTES));
+      auco.getDocumentStatus.mockResolvedValueOnce(pendiente).mockResolvedValueOnce({ status: 'REJECTED', signProfile: [] });
+      await reconciliarSobre('s1');
+      expect(tabla('auco', 'cancel')).toHaveLength(1);
     });
   });
 
@@ -590,9 +624,34 @@ describe('crearSobre', () => {
     expect(input.custom).toEqual({ cofianza_sobre: 's1' });
     const perfiles = input.signProfile as Array<{ order: string; label: boolean; name: string }>;
     expect(perfiles.map((p) => [p.name, p.order, p.label])).toEqual([['Ana', '1', true], ['Caro', '2', true]]);
-    const dias = (Date.parse(String(input.expiredDate)) - Date.now()) / 86_400_000;
-    expect(dias).toBeGreaterThan(14.9);
+    // Adenda 1 (respuesta 10): 15 días hasta la medianoche; Auco, el máximo con la prórroga (30).
+    const insertado = tabla('contrato_v3_sobres', 'insert')[0].args[0] as { expira_en: string };
+    expect(insertado.expira_en).toBe(finDeDiaEn(15));
+    expect(input.expiredDate).toBe(finDeDiaEn(30));
+    expect(input.message).toContain(`Tienes hasta el ${fechaBogota(finDeDiaEn(15)).split('-').reverse().join('/')}`);
     expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toEqual({ auco_code: 'AUCO9', estado: 'en_firma' });
+  });
+
+  it('el plazo nunca pasa la vigencia del CRC (Adenda 1, respuesta 10)', async () => {
+    const completado = new Date(Date.now() - 50 * DIA).toISOString(); // al CRC le quedan ~10 días
+    enqueue('contratos', ok(contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: completado } } } } })), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([{ id: 's1' }]), ok(sobre()));
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
+    await crearSobre('c1', 'u1');
+    const finCrc = new Date(finDelDia(masDiasIso(fechaBogota(completado), 60))).toISOString();
+    expect((tabla('contrato_v3_sobres', 'insert')[0].args[0] as { expira_en: string }).expira_en).toBe(finCrc);
+    expect((auco.uploadDocumentForSignature.mock.calls[0] as [Record<string, unknown>])[0].expiredDate).toBe(finCrc);
+  });
+
+  it('con el CRC vencido no se abre el proceso: 409 CRC_VENCIDO sin sobre ni Auco', async () => {
+    enqueue('contratos', ok(contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: '2020-01-01' } } } } })), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_partes', ok(PARTES));
+    await expect(crearSobre('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CRC_VENCIDO' });
+    expect(tabla('contrato_v3_sobres', 'insert')).toEqual([]);
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
   });
 
   it('dos clics: el índice de sobre vivo responde 409', async () => {
@@ -763,5 +822,174 @@ describe('activación: §12.1', () => {
     expect(eventos.some((ev) => ev.metadata.acta === 'pendiente' && ev.descripcion.startsWith('Acta de entrega e inventario pendiente'))).toBe(true);
     const aviso = (tabla('notificaciones', 'insert')[0].args[0] as Array<{ mensaje: string }>)[0];
     expect(aviso.mensaje).toContain('acta de entrega e inventario');
+  });
+});
+
+// ── Adenda 1 del módulo de contratos: prórroga (respuesta 10) y acuse (respuesta 11) ──
+
+const ADENDA = { plazo_prorrogado_en: null, aviso_aceptado_en: null, aviso_aceptado_detalle: null };
+const SIN_MIGRACION = { data: null, error: { code: '42703', message: 'column contrato_v3_sobres.plazo_prorrogado_en does not exist' } };
+const AVISO = { texto_version: 'e5-11.7.4-v2', texto: 'La fianza de COFIANZA S.A.S. NO está operando…', destinatarios: ['m1'] };
+const incompleto = (x: Record<string, unknown> = {}) =>
+  sobre({ estado: 'incompleto', motivo: 'EXPIRED', aviso_entregado_en: HOY, aviso_detalle: AVISO, ...x });
+
+describe('prorrogarPlazo', () => {
+  const preparar = (s = sobre(), adenda: Record<string, unknown> = ok(ADENDA), c = contrato()) => {
+    enqueue('contratos', ok(c));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(s), adenda);
+  };
+
+  it('una vez, otros 15 días hasta la medianoche, con la marca como candado y en la línea de tiempo', async () => {
+    preparar();
+    enqueue('contrato_v3_sobres', ok([{ id: 's1' }]));
+    await prorrogarPlazo('c1', 'u1');
+    const upd = tabla('contrato_v3_sobres', 'update')[0].args[0] as Record<string, unknown>;
+    expect(upd).toMatchObject({ expira_en: finDeDiaEn(15, Date.parse(EN_10_DIAS)), plazo_prorrogado_por: 'u1' });
+    const filtros = ops.filter((o) => o.table === 'contrato_v3_sobres' && (o.method === 'is' || o.method === 'eq')).map((o) => o.args);
+    expect(filtros).toContainEqual(['plazo_prorrogado_en', null]);
+    expect(filtros).toContainEqual(['estado', 'en_firma']);
+    expect((tabla('eventos_timeline', 'insert')[0].args[0] as { descripcion: string }).descripcion).toContain('prorrogado hasta el');
+    expect(efectos.logAudit).toHaveBeenCalledWith(expect.objectContaining({ accion: 'firma_plazo_prorrogado' }));
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled(); // Auco ya vence en el máximo
+  });
+
+  it('la segunda vez responde 409 sin tocar el plazo', async () => {
+    preparar(sobre(), ok({ ...ADENDA, plazo_prorrogado_en: HOY }));
+    await expect(prorrogarPlazo('c1', 'u1')).rejects.toMatchObject({ errorCode: 'PRORROGA_YA_USADA' });
+    expect(tabla('contrato_v3_sobres', 'update')).toEqual([]);
+  });
+
+  it('sin margen de CRC no hay prórroga, y dice por qué', async () => {
+    const completado = new Date(Date.now() - 55 * DIA).toISOString(); // el CRC vence antes que el plazo actual
+    preparar(sobre(), ok(ADENDA), contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: completado } } } } }));
+    const e = await prorrogarPlazo('c1', 'u1').catch((x: unknown) => x);
+    expect(e).toMatchObject({ errorCode: 'PRORROGA_NO_PERMITIDA', message: expect.stringContaining('vigencia del certificado de riesgo') });
+    expect(tabla('contrato_v3_sobres', 'update')).toEqual([]);
+  });
+
+  it('fuera de EN FIRMA, o sin la migración, no prorroga', async () => {
+    enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    await expect(prorrogarPlazo('c1', 'u1')).rejects.toMatchObject({ errorCode: 'SIN_SOBRE_ACTIVO' });
+    preparar(sobre(), SIN_MIGRACION);
+    await expect(prorrogarPlazo('c1', 'u1')).rejects.toMatchObject({ statusCode: 503, errorCode: 'PRORROGA_NO_DISPONIBLE' });
+    expect(tabla('contrato_v3_sobres', 'update')).toEqual([]);
+  });
+
+  it('la vista ofrece la prórroga con el plazo nuevo; usada, dice cuándo', async () => {
+    const vista = async (adenda: Record<string, unknown>) => {
+      enqueue('contratos', ok(contrato()));
+      enqueue('expedientes', EXPEDIENTE);
+      enqueue('contrato_v3_sobres', ok(sobre()), adenda);
+      enqueue('contrato_partes', ok(PARTES));
+      return (await estadoEnviado('c1'))!.prorroga;
+    };
+    expect(await vista(ok(ADENDA))).toEqual({ puede: true, motivo: null, hasta: finDeDiaEn(15, Date.parse(EN_10_DIAS)), usadaEn: null });
+    expect(await vista(ok({ ...ADENDA, plazo_prorrogado_en: HOY }))).toEqual({ puede: false, motivo: null, hasta: null, usadaEn: HOY });
+    expect(await vista(SIN_MIGRACION)).toMatchObject({ puede: false, motivo: expect.stringContaining('no está disponible') });
+  });
+});
+
+describe('acuse del aviso de firma incompleta', () => {
+  const MIEMBRO = { id: 'm1', rol: 'inmobiliaria', email: 'carla@inmo.co', ip: '1.2.3.4' };
+  const preparar = (s = incompleto()) => {
+    enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(s)); // ultimoIncompleto: id y sobre
+  };
+
+  it('un miembro de la inmobiliaria lo acepta: queda quién, cuándo, desde dónde y qué texto', async () => {
+    preparar();
+    enqueue('perfiles', ok({ nombre: 'Carla', apellido: 'Ríos' }));
+    enqueue('contrato_v3_sobres', ok([{ id: 's1' }]));
+    await aceptarAviso('c1', MIEMBRO);
+    const upd = tabla('contrato_v3_sobres', 'update')[0].args[0] as Record<string, unknown>;
+    expect(upd).toMatchObject({
+      aviso_aceptado_por: 'm1',
+      aviso_aceptado_en: expect.any(String),
+      aviso_aceptado_detalle: { nombre: 'Carla Ríos', email: 'carla@inmo.co', rolMiembro: 'owner', ip: '1.2.3.4', textoVersion: 'e5-11.7.4-v2' },
+    });
+    // Nunca se reescribe el acuse de otro miembro.
+    expect(ops.filter((o) => o.table === 'contrato_v3_sobres' && o.method === 'is').map((o) => o.args)).toContainEqual(['aviso_aceptado_en', null]);
+    expect((tabla('eventos_timeline', 'insert')[0].args[0] as { descripcion: string }).descripcion).toContain('Carla Ríos aceptó el aviso');
+  });
+
+  it('Cofianza o alguien de otra inmobiliaria no lo aceptan por ella: 403', async () => {
+    preparar();
+    await expect(aceptarAviso('c1', { ...MIEMBRO, id: 'ad1', rol: 'administrador' })).rejects.toMatchObject({ statusCode: 403 });
+    preparar();
+    await expect(aceptarAviso('c1', { ...MIEMBRO, id: 'x9' })).rejects.toMatchObject({ errorCode: 'AVISO_SOLO_INMOBILIARIA' });
+    expect(tabla('contrato_v3_sobres', 'update')).toEqual([]);
+  });
+
+  it('sin el aviso entregado todavía no hay nada que aceptar; sin la migración, 503', async () => {
+    preparar(incompleto({ aviso_entregado_en: null, aviso_detalle: null }));
+    await expect(aceptarAviso('c1', MIEMBRO)).rejects.toMatchObject({ errorCode: 'AVISO_NO_ENTREGADO' });
+    preparar();
+    enqueue('perfiles', ok({ nombre: 'Carla', apellido: 'Ríos' }));
+    enqueue('contrato_v3_sobres', { data: null, error: { code: 'PGRST204', message: "Could not find the 'aviso_aceptado_en' column" } });
+    await expect(aceptarAviso('c1', MIEMBRO)).rejects.toMatchObject({ statusCode: 503, errorCode: 'ACUSE_NO_DISPONIBLE' });
+  });
+
+  it('la vista muestra quién lo aceptó y cuándo', async () => {
+    enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue(
+      'contrato_v3_sobres',
+      ok(incompleto()), // último sobre
+      ok({ id: 's1' }),
+      ok(incompleto()), // último incompleto
+      ok({ ...ADENDA, aviso_aceptado_en: HOY, aviso_aceptado_detalle: { nombre: 'Carla Ríos' } }),
+    );
+    enqueue('contrato_partes', ok(PARTES));
+    const e = (await estadoEnviado('c1'))!;
+    expect(e.aviso).toEqual({ texto: AVISO.texto, entregadoEn: HOY, aceptado: { nombre: 'Carla Ríos', en: HOY } });
+    expect(e.prorroga).toBeNull();
+  });
+
+  describe('sin acuse, la inmobiliaria no reenvía, no cancela ni cierra el estudio', () => {
+    const estadoIncompleto = () => {
+      enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })));
+      enqueue('expedientes', EXPEDIENTE);
+    };
+
+    it('reenviar: 409 AVISO_SIN_ACUSE antes de tocar el contrato', async () => {
+      estadoIncompleto();
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto()), ok(ADENDA));
+      await expect(reenviar('c1', 'm1', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 409, errorCode: 'AVISO_SIN_ACUSE' });
+      expect(mockRpc).not.toHaveBeenCalled();
+    });
+
+    it('con el acuse, o si actúa Cofianza, sigue (la transición es lo siguiente)', async () => {
+      estadoIncompleto();
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto()), ok({ ...ADENDA, aviso_aceptado_en: HOY }));
+      enqueue('rpc:transicionar_contrato', { data: null, error: { message: 'Transicion no permitida' } });
+      await expect(reenviar('c1', 'm1', 'inmobiliaria')).rejects.toMatchObject({ errorCode: 'CONTRATO_ESTADO_CAMBIADO' });
+      estadoIncompleto();
+      enqueue('rpc:transicionar_contrato', { data: null, error: { message: 'Transicion no permitida' } });
+      await expect(reenviar('c1', 'ad1', 'administrador')).rejects.toMatchObject({ errorCode: 'CONTRATO_ESTADO_CAMBIADO' });
+      expect(mockRpc).toHaveBeenCalledTimes(2);
+    });
+
+    it('cerrar el estudio: la misma puerta; sin la migración no frena (sigue como antes)', async () => {
+      enqueue('contratos', ok([{ id: 'c1', estado: 'firma_incompleta' }]));
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto()), ok(ADENDA));
+      await expect(exigirAcuseDelEstudio('e1', 'inmobiliaria')).rejects.toMatchObject({ errorCode: 'AVISO_SIN_ACUSE' });
+
+      enqueue('contratos', ok([{ id: 'c1', estado: 'firma_incompleta' }]));
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto()), SIN_MIGRACION);
+      await exigirAcuseDelEstudio('e1', 'inmobiliaria');
+
+      ops.length = 0;
+      await exigirAcuseDelEstudio('e1', 'operador_analista');
+      expect(ops).toEqual([]);
+    });
+
+    it('con el aviso todavía sin entregar pide esperar, no el acuse', async () => {
+      estadoIncompleto();
+      enqueue('contrato_v3_sobres', ok({ id: 's1' }), ok(incompleto({ aviso_entregado_en: null, aviso_detalle: null })));
+      await expect(reenviar('c1', 'm1', 'inmobiliaria')).rejects.toMatchObject({ errorCode: 'AVISO_NO_ENTREGADO' });
+    });
   });
 });

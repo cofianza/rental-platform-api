@@ -87,7 +87,15 @@ import { contarClausulas, type Plantilla } from './motor';
 import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 import { contexto, generarAnexoVivienda, generarContratoVivienda, type DatosVivienda } from './vivienda';
 import { validarFirmantes, type ParteFirmante } from './firma/reglas';
-import { actualizarFirma, crearSobre, estadoEnviado, reenviar, reintentar } from './firma/firma.service';
+import {
+  aceptarAviso,
+  actualizarFirma,
+  crearSobre,
+  estadoEnviado,
+  prorrogarPlazo,
+  reenviar,
+  reintentar,
+} from './firma/firma.service';
 import { ultimoSobre } from './firma/reconciliar';
 
 const BUCKET = 'documentos-expedientes';
@@ -1664,7 +1672,28 @@ async function estadoTras(contratoId: string, expedienteId: string): Promise<Est
 export async function reenviarFirma(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   const id = await enviadoOError(expedienteId, userId, userRol);
-  await reenviar(id, userId);
+  await reenviar(id, userId, userRol);
+  return estadoTras(id, expedienteId);
+}
+
+/** La única prórroga del plazo de firma (Adenda 1, respuesta 10). No llama a Auco: también con el flag apagado. */
+export async function prorrogarPlazoFirma(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
+  const id = await enviadoOError(expedienteId, userId, userRol);
+  await prorrogarPlazo(id, userId);
+  return estadoTras(id, expedienteId);
+}
+
+/**
+ * Acuse del aviso de firma incompleta (Adenda 1, respuesta 11). También con el
+ * flag apagado: sin él la inmobiliaria no podría ni cancelar.
+ */
+export async function aceptarAvisoFirma(
+  expedienteId: string,
+  user: { id: string; rol: string; email: string },
+  ip?: string,
+): Promise<EstadoAsistente> {
+  const id = await enviadoOError(expedienteId, user.id, user.rol);
+  await aceptarAviso(id, { ...user, ip });
   return estadoTras(id, expedienteId);
 }
 

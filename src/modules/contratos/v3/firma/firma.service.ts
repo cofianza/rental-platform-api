@@ -2,7 +2,9 @@
  * Contratos V3 — firma: acciones sobre el proceso de firma (Entrega 5, diseño
  * §3.6 y §7). Crear el sobre en Auco, reenviarlo desde FIRMA INCOMPLETA,
  * reintentar un envío fallido, cancelar antes de que se complete y armar la
- * vista del contrato fuera de borrador.
+ * vista del contrato fuera de borrador. Adenda 1 del módulo de contratos:
+ * prorrogar el plazo una vez (respuesta 10) y el acuse del aviso de firma
+ * incompleta (respuesta 11).
  *
  * Sin guard de flag aquí: las rutas del asistente ya exigen
  * CONTRATOS_V3_ENABLED; la cancelación entra por el workflow de contratos y
@@ -16,10 +18,19 @@ import { getCalibracion } from '@/lib/calibracion';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
+import { resolveMembershipInmobiliariaIds, resolveRolMiembro } from '@/lib/tenantScope';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import type { EnvioV3 } from '../asistente.types';
 import { fechaBogota, periodoVigente, sumarMeses } from '../formato';
-import { construirSignProfile, datosDeFirma, partesCompletas, validarFirmantes, type FirmanteSobre } from './reglas';
+import {
+  construirSignProfile,
+  datosDeFirma,
+  partesCompletas,
+  plazoDeFirma,
+  prorrogaDelPlazo,
+  validarFirmantes,
+  type FirmanteSobre,
+} from './reglas';
 import {
   activarContrato,
   leerContrato,
@@ -77,6 +88,38 @@ async function exigirSinFirmaCompleta(contratoId: string): Promise<void> {
 /** Solo se reintenta si no hubo proceso o el último no llegó a Auco (fallido) o se anuló. */
 const reintentable = (s: Sobre | null) => !s || s.estado === 'fallido' || s.estado === 'cancelado';
 
+/** 'AAAA-MM-DD' (o un instante, en Bogotá) → 'dd/mm/aaaa'. */
+const ddmmaaaa = (x: string | number) =>
+  (typeof x === 'number' ? fechaBogota(new Date(x)) : x).split('-').reverse().join('/');
+
+/**
+ * Prórroga y acuse (Adenda 1), en un SELECT aparte y tolerante: si la
+ * migración 20260930000001 no corrió, nombrar esas columnas haría fallar
+ * entera la lectura del sobre (42703) y con ella toda la firma. Sin la
+ * migración devuelve null; cualquier otro error, 503.
+ */
+interface Adenda {
+  plazo_prorrogado_en: string | null;
+  aviso_aceptado_en: string | null;
+  aviso_aceptado_detalle: { nombre?: string } | null;
+}
+
+/** Columna que no existe (42703 al leer, PGRST204 al escribir): falta la migración 20260930000001. */
+const sinMigracion = (error: unknown) => ['42703', 'PGRST204'].includes((error as { code?: string } | null)?.code ?? '');
+
+async function leerAdenda(sobreId: string): Promise<Adenda | null> {
+  const { data, error } = await db('contrato_v3_sobres')
+    .select('plazo_prorrogado_en, aviso_aceptado_en, aviso_aceptado_detalle')
+    .eq('id', sobreId)
+    .maybeSingle();
+  if (sinMigracion(error)) return null;
+  if (error) throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el proceso de firma. Intenta de nuevo en un momento.');
+  return (data as Adenda | null) ?? null;
+}
+
+/** El aviso de §11.7.4 que de verdad se entregó (no una constancia de "omitido"). */
+const avisoEntregado = (s: Sobre) => !!s.aviso_entregado_en && typeof s.aviso_detalle?.texto === 'string';
+
 /**
  * Crea el proceso de firma en Auco para un contrato V3 en EN FIRMA con su PDF
  * final ya congelado en `storage_key` (contrato + CRC en la Ruta A; PDF de la
@@ -107,8 +150,11 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   if ((await identidadPendientes(contratoId)) > 0)
     throw AppError.conflict('Falta que los firmantes verifiquen su identidad.', 'IDENTIDAD_PENDIENTE');
 
-  const cal = await getCalibracion();
-  const expira = new Date(Date.now() + cal.DIAS_EXPIRACION_FIRMA * 86_400_000);
+  // Adenda 1, respuesta 10: el proceso de firma nunca pasa la vigencia del CRC.
+  const [cal, vig] = await Promise.all([getCalibracion(), vigenciaEstudio(c)]);
+  const plazo = vig && plazoDeFirma(Date.now(), cal.DIAS_EXPIRACION_FIRMA, vig.fin);
+  if (!plazo) throw AppError.conflict('El estudio ya no está vigente: se requiere una nueva evaluación.', 'CRC_VENCIDO');
+  const expira = new Date(plazo.expiraEn);
   const ultimo = await ultimoSobre(contratoId);
   const firmantes: FirmanteSobre[] = partes.map((p) => ({ parteId: p.id, estado: 'pendiente' }));
   const { data: creado, error: errIns } = await db('contrato_v3_sobres')
@@ -148,7 +194,13 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
       accion: AUDIT_ACTIONS.FIRMA_SOLICITUD_CREATED,
       entidad: AUDIT_ENTITIES.CONTRATO,
       entidadId: contratoId,
-      detalle: { v3: true, intento: sobre.intento, auco_code: auco, expira: expira.toISOString() },
+      detalle: {
+        v3: true,
+        intento: sobre.intento,
+        auco_code: auco,
+        expira: expira.toISOString(),
+        auco_expira: new Date(plazo.aucoExpira).toISOString(),
+      },
     });
   };
 
@@ -165,10 +217,11 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
             ? `${c.numero} · Contrato, Anexo de Condiciones y CRC`
             : `${c.numero} · Contrato de arrendamiento y CRC`,
         subject: `Firma del contrato de arrendamiento ${c.numero}`,
-        message: 'Te invitamos a firmar electrónicamente el contrato de arrendamiento. Recibirás un código por WhatsApp.',
+        // Auco vence después (el máximo con la prórroga): el plazo que cuenta se dice aquí.
+        message: `Te invitamos a firmar electrónicamente el contrato de arrendamiento. Tienes hasta el ${ddmmaaaa(plazo.expiraEn)} para firmar. Recibirás un código por WhatsApp.`,
         file: Buffer.from(await pdf.arrayBuffer()).toString('base64'),
         signProfile: construirSignProfile(partes),
-        expiredDate: expira.toISOString(),
+        expiredDate: new Date(plazo.aucoExpira).toISOString(),
         custom: { cofianza_sobre: sobre.id },
       },
       TIMEOUT_UPLOAD_MS,
@@ -229,8 +282,9 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
  * congelado, mientras el estudio siga vigente. Todos vuelven a firmar y cuesta
  * un crédito de Auco, pero el vencimiento lo fijamos nosotros y los eventos
  * del sobre anterior no tocan el nuevo. Si falla, vuelve a FIRMA INCOMPLETA.
+ * `rol` = el de quien reenvía: la inmobiliaria primero acepta el aviso (Adenda 1, respuesta 11).
  */
-export async function reenviar(contratoId: string, userId: string): Promise<void> {
+export async function reenviar(contratoId: string, userId: string, rol?: string): Promise<void> {
   const c = await leerContrato(contratoId);
   if (!c) throw AppError.notFound('Contrato no encontrado.');
   if (c.estado !== 'firma_incompleta')
@@ -245,6 +299,7 @@ export async function reenviar(contratoId: string, userId: string): Promise<void
   const vig = await vigenciaEstudio(c);
   if (!vig?.vigente)
     throw AppError.conflict('El estudio ya no está vigente: se requiere una nueva evaluación.', 'CRC_VENCIDO');
+  if (rol) await exigirAcuseAviso(contratoId, rol);
   // La transición es el mutex: el segundo clic recibe "Transicion no permitida".
   const { error } = await (supabase as unknown as {
     rpc: (f: string, a: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
@@ -362,6 +417,193 @@ export async function actualizarFirma(contratoId: string): Promise<void> {
   await reconciliarSobre(s.id);
 }
 
+// ── Adenda 1 del módulo de contratos: prórroga del plazo (respuesta 10) ──
+
+const motivoSinProrroga = (m: 'vencido' | 'crc', crcHasta?: string) =>
+  m === 'vencido'
+    ? 'El plazo para firmar ya venció: en unos minutos el contrato queda con la firma incompleta.'
+    : `El proceso de firma no puede pasar la vigencia del certificado de riesgo${crcHasta ? ` (hasta el ${ddmmaaaa(crcHasta)})` : ''}: ya no admite prórroga.`;
+
+/**
+ * Una sola prórroga del plazo por proceso de firma, EN FIRMA y antes de que
+ * venza: otros DIAS_EXPIRACION_FIRMA, sin pasar la vigencia del CRC. Solo
+ * mueve expira_en: en Auco el proceso ya vence en el máximo (crearSobre).
+ */
+export async function prorrogarPlazo(contratoId: string, userId: string): Promise<void> {
+  const c = await leerContrato(contratoId);
+  if (!c) throw AppError.notFound('Contrato no encontrado.');
+  const s = c.estado === 'pendiente_firma' ? await ultimoSobre(contratoId) : null;
+  if (s?.estado !== 'en_firma')
+    throw AppError.conflict('Solo se prorroga el plazo de un proceso de firma en curso.', 'SIN_SOBRE_ACTIVO');
+  const adenda = await leerAdenda(s.id);
+  if (!adenda)
+    throw new AppError(503, 'PRORROGA_NO_DISPONIBLE', 'La prórroga del plazo todavía no está disponible. Intenta más tarde.');
+  if (adenda.plazo_prorrogado_en)
+    throw AppError.conflict('El plazo de este proceso de firma ya se prorrogó: solo se permite una vez.', 'PRORROGA_YA_USADA');
+  const [cal, vig] = await Promise.all([getCalibracion(), vigenciaEstudio(c)]);
+  const p = prorrogaDelPlazo(Date.parse(s.expira_en), cal.DIAS_EXPIRACION_FIRMA, vig?.fin ?? 0, Date.now());
+  if ('motivo' in p) throw AppError.conflict(motivoSinProrroga(p.motivo, vig?.hasta), 'PRORROGA_NO_PERMITIDA');
+
+  const hasta = new Date(p.hasta).toISOString();
+  // La marca es el mutex: dos clics (o dos miembros) prorrogan una sola vez.
+  const { data, error } = await db('contrato_v3_sobres')
+    .update({ expira_en: hasta, plazo_prorrogado_en: new Date().toISOString(), plazo_prorrogado_por: userId } as never)
+    .eq('id', s.id)
+    .eq('estado', 'en_firma')
+    .is('plazo_prorrogado_en', null)
+    .select('id');
+  if (error) {
+    logger.error({ contratoId, error: error.message }, 'Firma V3: no se pudo prorrogar el plazo');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo prorrogar el plazo. Intenta de nuevo.');
+  }
+  if (!(data as unknown[] | null)?.length)
+    throw AppError.conflict('El proceso de firma cambió; recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
+
+  await Promise.resolve(
+    db('eventos_timeline').insert({
+      expediente_id: c.expediente_id,
+      tipo: 'contrato',
+      descripcion: `Plazo para firmar el contrato ${c.numero} prorrogado hasta el ${ddmmaaaa(p.hasta)} (única prórroga)`,
+      usuario_id: userId,
+      metadata: { contrato_id: contratoId, sobre_id: s.id, antes: s.expira_en, despues: hasta },
+    } as never),
+  ).catch(() => undefined);
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.FIRMA_PLAZO_PRORROGADO,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: contratoId,
+    detalle: { v3: true, sobre_id: s.id, intento: s.intento, antes: s.expira_en, despues: hasta },
+  });
+}
+
+/** La prórroga como la ve la pantalla: las mismas puertas que prorrogarPlazo. */
+function prorrogaVista(
+  s: Sobre,
+  adenda: Adenda | null,
+  vig: { hasta: string; fin: number } | null,
+  dias: number,
+): NonNullable<EnvioV3['prorroga']> {
+  if (!adenda) return { puede: false, motivo: 'La prórroga del plazo todavía no está disponible.', hasta: null, usadaEn: null };
+  if (adenda.plazo_prorrogado_en) return { puede: false, motivo: null, hasta: null, usadaEn: adenda.plazo_prorrogado_en };
+  const p = prorrogaDelPlazo(Date.parse(s.expira_en), dias, vig?.fin ?? 0, Date.now());
+  return 'motivo' in p
+    ? { puede: false, motivo: motivoSinProrroga(p.motivo, vig?.hasta), hasta: null, usadaEn: null }
+    : { puede: true, motivo: null, hasta: new Date(p.hasta).toISOString(), usadaEn: null };
+}
+
+// ── Adenda 1 del módulo de contratos: acuse del aviso de firma incompleta (respuesta 11) ──
+
+/**
+ * El aviso de §11.7.4 exige acuse, con valor probatorio. Lo acepta un miembro de
+ * la inmobiliaria del contrato (a ella se le advierte; el mismo criterio que el
+ * aviso de las cláusulas adicionales): queda quién, cuándo y desde qué IP, en el
+ * mismo sobre que guarda el texto exacto entregado. Si otro miembro ya lo
+ * aceptó, no se reescribe.
+ */
+export async function aceptarAviso(
+  contratoId: string,
+  u: { id: string; rol: string; email: string; ip?: string },
+): Promise<void> {
+  const c = await leerContrato(contratoId);
+  if (!c) throw AppError.notFound('Contrato no encontrado.');
+  if (c.estado !== 'firma_incompleta')
+    throw AppError.conflict('Este contrato no tiene un aviso de firma incompleta por aceptar.', 'SIN_AVISO_PENDIENTE');
+  const s = await ultimoIncompleto(contratoId);
+  if (!s || !avisoEntregado(s))
+    throw AppError.conflict(
+      'El aviso de firma incompleta todavía se está entregando. Intenta de nuevo en unos minutos.',
+      'AVISO_NO_ENTREGADO',
+    );
+  const miembro =
+    u.rol === 'inmobiliaria' &&
+    (c.orgId ? (await resolveMembershipInmobiliariaIds(u.id)).includes(c.orgId) : s.enviado_por === u.id);
+  if (!miembro)
+    throw AppError.forbidden('El aviso lo acepta un miembro de la inmobiliaria del contrato.', 'AVISO_SOLO_INMOBILIARIA');
+
+  const [perfilR, rolMiembro] = await Promise.all([
+    db('perfiles').select('nombre, apellido').eq('id', u.id).maybeSingle(),
+    resolveRolMiembro(u.id),
+  ]);
+  const perfil = perfilR.data as { nombre: string | null; apellido: string | null } | null;
+  const nombre = `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim() || u.email;
+  const textoVersion = (s.aviso_detalle?.texto_version as string | undefined) ?? null;
+  const { data, error } = await db('contrato_v3_sobres')
+    .update({
+      aviso_aceptado_en: new Date().toISOString(),
+      aviso_aceptado_por: u.id,
+      aviso_aceptado_detalle: { nombre, email: u.email, rolMiembro, ip: u.ip ?? null, textoVersion },
+    } as never)
+    .eq('id', s.id)
+    .is('aviso_aceptado_en', null)
+    .select('id');
+  if (sinMigracion(error))
+    throw new AppError(503, 'ACUSE_NO_DISPONIBLE', 'El registro del acuse todavía no está disponible. Intenta más tarde.');
+  if (error) {
+    logger.error({ contratoId, error: error.message }, 'Firma V3: no se pudo registrar el acuse del aviso');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la aceptación. Intenta de nuevo.');
+  }
+  if (!(data as unknown[] | null)?.length) return; // ya lo aceptó otro miembro: queda el primero
+
+  await Promise.resolve(
+    db('eventos_timeline').insert({
+      expediente_id: c.expediente_id,
+      tipo: 'contrato',
+      descripcion: `${nombre} aceptó el aviso de firma incompleta del contrato ${c.numero}: la fianza no está operando`,
+      usuario_id: u.id,
+      metadata: { contrato_id: contratoId, sobre_id: s.id, texto_version: textoVersion },
+    } as never),
+  ).catch(() => undefined);
+  logAudit({
+    usuarioId: u.id,
+    accion: AUDIT_ACTIONS.FIRMA_AVISO_ACEPTADO,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: contratoId,
+    detalle: { v3: true, sobre_id: s.id, texto_version: textoVersion, email: u.email },
+    ip: u.ip,
+  });
+}
+
+/**
+ * Con la firma incompleta, la inmobiliaria no reenvía, no cancela ni cierra el
+ * estudio sin haber aceptado antes el aviso: el acuse es la prueba de que supo
+ * que la fianza no estaba operando. No frena a Cofianza (p. ej., la cancelación
+ * por suplantación de identidad): el aviso es para la inmobiliaria.
+ * La llaman con el contrato en FIRMA INCOMPLETA.
+ */
+export async function exigirAcuseAviso(contratoId: string, rol: string): Promise<void> {
+  if (rol !== 'inmobiliaria') return;
+  const s = await ultimoIncompleto(contratoId);
+  if (!s) return;
+  if (!avisoEntregado(s)) {
+    if (s.aviso_entregado_en) return; // constancia de "omitido": no hubo aviso que aceptar
+    throw AppError.conflict(
+      'El aviso de firma incompleta todavía se está entregando. En unos minutos podrás leerlo y aceptarlo en el contrato.',
+      'AVISO_NO_ENTREGADO',
+    );
+  }
+  const adenda = await leerAdenda(s.id);
+  if (!adenda) return; // sin la migración no hay dónde registrar el acuse: sigue como antes
+  if (!adenda.aviso_aceptado_en)
+    throw AppError.conflict(
+      'Antes de seguir, lee y acepta el aviso de firma incompleta en el contrato: la fianza no está operando.',
+      'AVISO_SIN_ACUSE',
+    );
+}
+
+/** Cerrar el estudio cancela su contrato V3 con la firma incompleta: la misma puerta. */
+export async function exigirAcuseDelEstudio(expedienteId: string, rol: string): Promise<void> {
+  if (rol !== 'inmobiliaria') return;
+  const { data, error } = await db('contratos')
+    .select('id, estado')
+    .eq('expediente_id', expedienteId)
+    .not('destinacion', 'is', null);
+  if (error)
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el contrato del estudio. Intenta de nuevo en un momento.');
+  for (const c of (data as { id: string; estado: string }[] | null) ?? [])
+    if (c.estado === 'firma_incompleta') await exigirAcuseAviso(c.id, rol);
+}
+
 /** Las actas de entrega del contrato (§12.2: con una basta para cerrar el estudio), la más reciente primero. */
 async function actasDeEntrega(contratoId: string): Promise<{ id: string; nombre: string; subidoEn: string }[]> {
   const { data, error } = await db('contrato_archivos')
@@ -396,7 +638,16 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
   const parte = new Map(partes.map((p) => [p.id, p]));
   // El aviso es el del último sobre incompleto: tras un reenvío fallido el último queda 'fallido'.
   const incompleto = c.estado === 'firma_incompleta' ? await ultimoIncompleto(contratoId) : null;
-  const textoAviso = incompleto?.aviso_detalle?.texto;
+  const aviso = incompleto && avisoEntregado(incompleto) ? incompleto : null;
+  const vivo = c.estado === 'pendiente_firma' && s?.estado === 'en_firma' ? s : null;
+  const [adendaVivo, adendaAviso, cal] = await Promise.all([
+    vivo ? leerAdenda(vivo.id) : null,
+    aviso ? leerAdenda(aviso.id) : null,
+    vivo ? getCalibracion() : null,
+  ]);
+  const acuse = adendaAviso?.aviso_aceptado_en
+    ? { nombre: adendaAviso.aviso_aceptado_detalle?.nombre ?? '—', en: adendaAviso.aviso_aceptado_en }
+    : null;
   return {
     id: c.id,
     numero: c.numero,
@@ -441,10 +692,10 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
         };
       }),
     },
-    aviso:
-      incompleto?.aviso_entregado_en && typeof textoAviso === 'string'
-        ? { texto: textoAviso, entregadoEn: incompleto.aviso_entregado_en }
-        : null,
+    aviso: aviso
+      ? { texto: String(aviso.aviso_detalle?.texto), entregadoEn: aviso.aviso_entregado_en!, aceptado: acuse }
+      : null,
+    prorroga: vivo && cal ? prorrogaVista(vivo, adendaVivo, vig, cal.DIAS_EXPIRACION_FIRMA) : null,
     identidadPendientes: pendientes,
     // Las mismas puertas que reenviar/reintentar (y la ruta del flag): un botón habilitado nunca recibe un 409.
     reenvio:

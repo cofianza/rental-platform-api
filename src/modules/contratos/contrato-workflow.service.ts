@@ -79,9 +79,11 @@ export async function executeContratoTransition(
 
   // V3: anular el proceso de firma en Auco ANTES de cancelar. Si todas las
   // partes ya firmaron lanza 409 y el contrato no se cancela. Al terminar una
-  // fianza activa no hay proceso que anular.
+  // fianza activa no hay proceso que anular. Con la firma incompleta, la
+  // inmobiliaria acepta antes el aviso (Adenda 1 del módulo de contratos, respuesta 11).
   if (contrato.destinacion && targetState === 'cancelado') {
-    const { cancelarFirmaV3 } = await import('./v3/firma/firma.service');
+    const { cancelarFirmaV3, exigirAcuseAviso } = await import('./v3/firma/firma.service');
+    if (currentState === 'firma_incompleta') await exigirAcuseAviso(contratoId, user.rol);
     await cancelarFirmaV3(contratoId);
   }
 

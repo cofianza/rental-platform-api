@@ -16,6 +16,7 @@
 import type { AucoDocumentInfo, AucoRoadmap, AucoSignerStatus, AucoSignProfile } from '@/lib/auco';
 import { normalizePhoneToInternational } from '@/lib/auco';
 import { aucoDeriveCountry, mapTipoDocumentoToAuco } from '@/modules/firma/firma-multiparte.service';
+import { fechaBogota } from '../formato';
 
 /** Fila de `contrato_partes` (congelada fuera de borrador) en lo que la firma necesita. */
 export interface ParteFirmante {
@@ -256,6 +257,50 @@ export function decidir(
   if (info.status === 'EXPIRED' || info.status === 'REJECTED') return 'incompleta';
   if (firmantes.some((f) => f.estado === 'rechazado')) return 'incompleta';
   return 'nada';
+}
+
+// ── Plazo de firma (Adenda 1 del módulo de contratos, respuesta 10) ──
+
+const DIA_MS = 86_400_000;
+/** Auco rechaza un vencimiento a 3 días o menos de la creación (EXPIRED_DATE_INVALID): una hora de holgura. */
+const MINIMO_AUCO_MS = 3 * DIA_MS + 3_600_000;
+
+/** Último instante del día AAAA-MM-DD en Bogotá: un plazo en días corre hasta la medianoche del último día. */
+export const finDelDia = (fecha: string): number => Date.parse(`${fecha}T23:59:59-05:00`);
+
+const masPlazo = (desde: number, dias: number) => finDelDia(fechaBogota(new Date(desde + dias * DIA_MS)));
+
+/**
+ * Plazo de un proceso de firma nuevo: DIAS_EXPIRACION_FIRMA sin pasar el fin
+ * de la vigencia del CRC. Auco no deja mover el vencimiento de un proceso vivo:
+ * a Auco va lo máximo que el proceso puede durar con su única prórroga (tope
+ * CRC) y el plazo de Cofianza (expira_en) lo cierra el barrido. null = el CRC
+ * ya no está vigente: no se abre el proceso.
+ * ponytail: si al CRC le quedan menos de 3 días, Auco vence después que el CRC
+ * y el cierre depende del barrido (hasta 15 min tarde).
+ */
+export function plazoDeFirma(
+  ahora: number,
+  dias: number,
+  finCrc: number,
+): { expiraEn: number; aucoExpira: number } | null {
+  if (finCrc <= ahora) return null;
+  return {
+    expiraEn: Math.min(masPlazo(ahora, dias), finCrc),
+    aucoExpira: Math.max(Math.min(masPlazo(ahora, 2 * dias), finCrc), ahora + MINIMO_AUCO_MS),
+  };
+}
+
+/** La única prórroga: otros `dias` sobre el plazo vigente, sin pasar el CRC. Solo antes de que venza. */
+export function prorrogaDelPlazo(
+  expiraEn: number,
+  dias: number,
+  finCrc: number,
+  ahora: number,
+): { hasta: number } | { motivo: 'vencido' | 'crc' } {
+  if (expiraEn <= ahora) return { motivo: 'vencido' };
+  const hasta = Math.min(masPlazo(expiraEn, dias), finCrc);
+  return hasta > expiraEn ? { hasta } : { motivo: 'crc' };
 }
 
 /**

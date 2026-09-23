@@ -54,6 +54,12 @@ vi.mock('@/lib/logger', () => ({
 vi.mock('@/lib/tenantScope', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/tenantScope')>()),
   assertExpedienteAccess: vi.fn().mockResolvedValue(undefined),
+  perfilEsDuenoDeInmueble: vi.fn().mockResolvedValue(true),
+}));
+// Adenda 1 del módulo de contratos (respuesta 11): el acuse del aviso de firma incompleta.
+const mockExigirAcuse = vi.fn(async (..._a: unknown[]) => undefined);
+vi.mock('@/modules/contratos/v3/firma/firma.service', () => ({
+  exigirAcuseDelEstudio: (...a: unknown[]) => mockExigirAcuse(...a),
 }));
 
 // Mock getExpedienteById from expedientes.service
@@ -431,6 +437,17 @@ describe('expediente-workflow.service', () => {
         statusCode: 409,
         errorCode: 'CONTRATO_EN_FIRMA',
       });
+    });
+
+    it('la inmobiliaria no cierra el estudio de un contrato con la firma incompleta sin aceptar el aviso', async () => {
+      const inmobiliaria: AuthUser = { id: 'inmo-uuid', email: 'inmo@test.com', rol: 'inmobiliaria', activo: true };
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockExigirAcuse.mockRejectedValueOnce(Object.assign(new Error('acepta el aviso'), { statusCode: 409, errorCode: 'AVISO_SIN_ACUSE' }));
+      await expect(executeTransition('exp-uuid', cierre('Cancelar estudio'), inmobiliaria)).rejects.toMatchObject({
+        errorCode: 'AVISO_SIN_ACUSE',
+      });
+      expect(mockExigirAcuse).toHaveBeenCalledWith('exp-uuid', 'inmobiliaria');
+      expect(mockRpc).not.toHaveBeenCalled();
     });
 
     it('"Cerrar estudio" sin acta: el trigger de la BD rechaza y se responde 409 con el motivo', async () => {

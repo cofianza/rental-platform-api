@@ -14,8 +14,11 @@ import {
   datosDeFirma,
   decidir,
   fechasDeFirma,
+  finDelDia,
   mapEstadoFirmante,
   partesCompletas,
+  plazoDeFirma,
+  prorrogaDelPlazo,
   sobreIdDeCustom,
   textoAvisoFirmaIncompleta,
   ultimaFirma,
@@ -280,5 +283,48 @@ describe('textoAvisoFirmaIncompleta', () => {
     // Sin fecha de vigencia el estudio ya venció: no se promete un reenvío que da CRC_VENCIDO.
     expect(rechazo).not.toContain('Puedes reenviarlo');
     expect(rechazo).toContain('se requiere una nueva evaluación');
+  });
+});
+
+describe('plazo de firma (Adenda 1 del módulo de contratos, respuesta 10)', () => {
+  // Enviado el 23/09/2026 a las 3:07 p. m. en Bogotá.
+  const AHORA = Date.parse('2026-09-23T15:07:00-05:00');
+  const HORA = 3_600_000;
+
+  it('el plazo corre hasta la medianoche del último día, en Bogotá', () => {
+    expect(finDelDia('2026-10-08')).toBe(Date.parse('2026-10-09T04:59:59Z'));
+  });
+
+  it('15 días; a Auco va el máximo con la prórroga (30), porque allá no se puede mover', () => {
+    const p = plazoDeFirma(AHORA, 15, finDelDia('2026-11-20'))!;
+    expect(p.expiraEn).toBe(finDelDia('2026-10-08'));
+    expect(p.aucoExpira).toBe(finDelDia('2026-10-23'));
+  });
+
+  it('nunca pasa la vigencia del CRC, ni en Cofianza ni en Auco', () => {
+    const p = plazoDeFirma(AHORA, 15, finDelDia('2026-10-01'))!;
+    expect(p).toEqual({ expiraEn: finDelDia('2026-10-01'), aucoExpira: finDelDia('2026-10-01') });
+  });
+
+  it('con menos de 3 días de CRC, Auco recibe su mínimo y el plazo de Cofianza sigue siendo el CRC', () => {
+    const p = plazoDeFirma(AHORA, 15, finDelDia('2026-09-24'))!;
+    expect(p.expiraEn).toBe(finDelDia('2026-09-24'));
+    expect(p.aucoExpira).toBe(AHORA + 3 * 24 * HORA + HORA);
+  });
+
+  it('con el CRC vencido no hay proceso de firma', () => {
+    expect(plazoDeFirma(AHORA, 15, AHORA - 1)).toBeNull();
+  });
+
+  it('la prórroga suma otros 15 días al plazo vigente, sin pasar el CRC', () => {
+    const plazo = finDelDia('2026-10-08');
+    expect(prorrogaDelPlazo(plazo, 15, finDelDia('2026-11-20'), AHORA)).toEqual({ hasta: finDelDia('2026-10-23') });
+    expect(prorrogaDelPlazo(plazo, 15, finDelDia('2026-10-15'), AHORA)).toEqual({ hasta: finDelDia('2026-10-15') });
+  });
+
+  it('sin margen de CRC, o con el plazo ya vencido, no hay prórroga', () => {
+    const plazo = finDelDia('2026-10-08');
+    expect(prorrogaDelPlazo(plazo, 15, plazo, AHORA)).toEqual({ motivo: 'crc' });
+    expect(prorrogaDelPlazo(plazo, 15, finDelDia('2026-11-20'), plazo + 1)).toEqual({ motivo: 'vencido' });
   });
 });

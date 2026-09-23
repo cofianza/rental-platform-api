@@ -152,6 +152,13 @@ export async function executeTransition(
     );
   }
 
+  // Cerrar el estudio cancela su contrato V3 con la firma incompleta: la
+  // inmobiliaria acepta antes el aviso (Adenda 1 del módulo de contratos, respuesta 11).
+  if (targetState === 'cerrado' && user.rol === 'inmobiliaria') {
+    const { exigirAcuseDelEstudio } = await import('@/modules/contratos/v3/firma/firma.service');
+    await exigirAcuseDelEstudio(expedienteId, user.rol);
+  }
+
   // Construir descripcion del evento
   const descripcion = buildTimelineDescription(currentState, targetState, user, input);
 

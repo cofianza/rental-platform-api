@@ -111,6 +111,10 @@ export const AUDIT_ACTIONS = {
   FIRMA_COMPLETADA: 'firma_completada',
   FIRMA_EVIDENCIA_CONSULTED: 'firma_evidencia_consulted',
   FIRMA_ACUSE_DOWNLOADED: 'firma_acuse_downloaded',
+  // Contratos V3, Adenda 1 del módulo: la única prórroga del plazo de firma
+  // {sobre_id, antes, despues} y el acuse del aviso de firma incompleta {sobre_id, texto_version}.
+  FIRMA_PLAZO_PRORROGADO: 'firma_plazo_prorrogado',
+  FIRMA_AVISO_ACEPTADO: 'firma_aviso_aceptado',
   // Adenda 2 §9: verificacion de identidad antes de la firma
   FIRMA_IDENTIDAD_CONSENTIMIENTO: 'firma_identidad_consentimiento',
   FIRMA_IDENTIDAD_BIOMETRIA: 'firma_identidad_biometria',

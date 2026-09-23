@@ -205,6 +205,19 @@ describe('fila V3 en el flujo legacy', () => {
     },
   );
 
+  it('Adenda 1 (respuesta 11): con la firma incompleta, la inmobiliaria no cancela sin aceptar el aviso', async () => {
+    enqueue('contratos', { data: filaV3({ estado: 'firma_incompleta' }), error: null });
+    enqueue(
+      'contrato_v3_sobres',
+      { data: { id: 's1' }, error: null },
+      { data: { id: 's1', contrato_id: CTO, estado: 'incompleto', aviso_entregado_en: '2026-09-22T10:00:00Z', aviso_detalle: { texto: 'NO está operando' } }, error: null },
+      { data: { plazo_prorrogado_en: null, aviso_aceptado_en: null, aviso_aceptado_detalle: null }, error: null },
+    );
+    const miembro = { id: 'miembro-1', rol: 'inmobiliaria' } as AuthUser;
+    expect(await error(executeContratoTransition(CTO, cancelar, miembro))).toMatchObject({ statusCode: 409, errorCode: 'AVISO_SIN_ACUSE' });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('vigente (FIANZA ACTIVA) → cancelado: 400 sin hook ni RPC (§11.5: solo antes de la firma)', async () => {
     enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null });
     const e = await error(executeContratoTransition(CTO, cancelar, ADMIN));

@@ -125,8 +125,16 @@ export interface EnvioV3 {
       firmadoEn: string | null;
     }[];
   };
-  /** Aviso de firma incompleta (§11.7.4) ya entregado, con su texto exacto. */
-  aviso: null | { texto: string; entregadoEn: string };
+  /**
+   * Aviso de firma incompleta (§11.7.4) ya entregado, con su texto exacto, y su
+   * acuse (Adenda 1, respuesta 11): hasta que la inmobiliaria lo acepte, ella no reenvía ni cancela.
+   */
+  aviso: null | { texto: string; entregadoEn: string; aceptado: null | { nombre: string; en: string } };
+  /**
+   * EN FIRMA con el proceso vivo: la única prórroga del plazo (Adenda 1, respuesta 10).
+   * `hasta` = el plazo nuevo si se prorroga ahora; `usadaEn` = cuándo se prorrogó.
+   */
+  prorroga: null | { puede: boolean; motivo: string | null; hasta: string | null; usadaEn: string | null };
   /** Verificaciones de identidad que faltan antes de crear el sobre (0 sin biometría). */
   identidadPendientes: number;
   /** FIRMA INCOMPLETA + estudio vigente (§11.7.5). */

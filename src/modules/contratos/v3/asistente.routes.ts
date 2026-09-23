@@ -114,3 +114,21 @@ asistenteV3Router.post(
   validate({ params: expedienteIdParamsSchema }),
   asistenteController.actualizarFirma,
 );
+
+// ── Adenda 1 del módulo de contratos ──
+
+// POST /firma/prorrogar — la única prórroga del plazo para firmar (respuesta 10).
+asistenteV3Router.post(
+  '/firma/prorrogar',
+  authorize('contratos', 'create'),
+  validate({ params: expedienteIdParamsSchema }),
+  asistenteController.prorrogarPlazo,
+);
+
+// POST /firma/aceptar-aviso — acuse del aviso de firma incompleta (respuesta 11); solo la inmobiliaria.
+asistenteV3Router.post(
+  '/firma/aceptar-aviso',
+  authorize('contratos', 'create'),
+  validate({ params: expedienteIdParamsSchema }),
+  asistenteController.aceptarAviso,
+);
