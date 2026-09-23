@@ -218,7 +218,7 @@ export async function transitionPagoStateChecked(
   const concepto = (pago as { concepto: string }).concepto;
 
   if (targetEstado === 'completado') {
-    notifyPaymentCompleted(pagoId, expedienteId, concepto).catch(() => {});
+    notifyPaymentCompleted(pagoId, expedienteId, concepto, updated as Pagador).catch(() => {});
   }
 
   if (targetEstado === 'fallido') {
@@ -314,14 +314,17 @@ export async function getPagoEventos(pagoId: string, userId?: string, userRol?: 
 // ============================================================
 
 const CONCEPTO_LABELS: Record<string, string> = {
-  estudio: 'Estudio de riesgo crediticio',
-  garantia: 'Garantia de arrendamiento',
+  estudio: 'Evaluación crediticia',
+  garantia: 'Garantía de arrendamiento',
   primer_canon: 'Primer canon de arrendamiento',
-  deposito: 'Deposito de garantia',
+  deposito: 'Depósito de garantía',
   otro: 'Otro concepto',
 };
 
-async function notifyPaymentCompleted(pagoId: string, expedienteId: string, concepto: string) {
+/** Quién pagó, tal como quedó en el pago (PAGO_SELECT). */
+type Pagador = { email_pagador?: string | null; nombre_pagador?: string | null } | null;
+
+async function notifyPaymentCompleted(pagoId: string, expedienteId: string, concepto: string, pagador: Pagador) {
   try {
     const conceptLabel = CONCEPTO_LABELS[concepto] || concepto;
 
@@ -351,7 +354,7 @@ async function notifyPaymentCompleted(pagoId: string, expedienteId: string, conc
 
     // Resolver al propietario (via inmuebles.propietario_id) y al solicitante
     // (via solicitantes.creado_por) para notificarlos por separado en su panel.
-    await notifyPagoConfirmado(pagoId, expedienteId, conceptLabel);
+    await notifyPagoConfirmado(pagoId, expedienteId, conceptLabel, pagador);
 
     logger.info({ pagoId, expedienteId, concepto }, 'Payment completed notification sent');
   } catch (error) {
@@ -359,7 +362,7 @@ async function notifyPaymentCompleted(pagoId: string, expedienteId: string, conc
   }
 }
 
-async function notifyPagoConfirmado(pagoId: string, expedienteId: string, conceptLabel: string) {
+async function notifyPagoConfirmado(pagoId: string, expedienteId: string, conceptLabel: string, pagador: Pagador) {
   // Cargar expediente con sus FKs hacia propietario y solicitante.
   const { data } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -378,16 +381,24 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
   const direccion = data.inmuebles?.direccion ?? 'el inmueble';
   const link = `/expedientes/${expedienteId}`;
   const payload = { pago_id: pagoId, expediente_id: expedienteId };
+  const concepto = conceptLabel.toLowerCase();
 
-  // Propietario: aviso "tu solicitante pago".
+  // Quién pagó: en la opción B paga el gestor con su propio correo, así que el
+  // solicitante no pagó nada aunque el cobro sea de su estudio.
+  const solEmail = data.solicitantes?.email?.trim().toLowerCase();
+  const pagoPropio = !!solEmail && pagador?.email_pagador?.trim().toLowerCase() === solEmail;
+  const quien =
+    pagador?.nombre_pagador?.trim() ||
+    (pagoPropio && data.solicitantes ? `${data.solicitantes.nombre} ${data.solicitantes.apellido}` : null);
+  const mensajeDueno = `Pago de ${concepto} de ${direccion} confirmado${quien ? ` (pagó ${quien})` : ''}.`;
+
+  // Propietario (y miembro responsable): quién pagó y de qué inmueble.
   if (data.inmuebles?.propietario_id) {
     await notificarUsuario({
       userId: data.inmuebles.propietario_id,
       tipo: 'pago.confirmado',
       titulo: 'Pago confirmado',
-      mensaje: data.solicitantes
-        ? `${data.solicitantes.nombre} ${data.solicitantes.apellido} pagó el ${conceptLabel.toLowerCase()} de ${direccion}.`
-        : `Se confirmó el pago del ${conceptLabel.toLowerCase()} de ${direccion}.`,
+      mensaje: mensajeDueno,
       link,
       payload,
     });
@@ -396,15 +407,13 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
       excluirPerfilId: data.inmuebles.propietario_id,
       tipo: 'pago.confirmado',
       titulo: 'Pago confirmado',
-      mensaje: data.solicitantes
-        ? `${data.solicitantes.nombre} ${data.solicitantes.apellido} pagó el ${conceptLabel.toLowerCase()} de ${direccion}.`
-        : `Se confirmó el pago del ${conceptLabel.toLowerCase()} de ${direccion}.`,
+      mensaje: mensajeDueno,
       link,
       payload,
     });
   }
 
-  // Solicitante: confirmacion "tu pago se proceso".
+  // Solicitante: "recibimos tu pago" solo si pagó él.
   if (data.solicitantes?.email) {
     const solicitanteUserId = await findPerfilIdByEmail(data.solicitantes.email);
     if (solicitanteUserId) {
@@ -412,7 +421,9 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
         userId: solicitanteUserId,
         tipo: 'pago.confirmado',
         titulo: 'Pago confirmado',
-        mensaje: `Recibimos tu pago del ${conceptLabel.toLowerCase()}. Ya puedes continuar.`,
+        mensaje: pagoPropio
+          ? `Recibimos tu pago de ${concepto}.`
+          : `Se confirmó el pago de ${concepto} de tu estudio.`,
         link,
         payload,
       });

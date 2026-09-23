@@ -9,7 +9,7 @@ import { getPaymentGateway } from './gateway';
 import { transitionPagoState, transitionPagoStateChecked, isValidTransition } from './pago-state-machine';
 import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
-import { notificarUsuario, notificarYCorreo, findPerfilIdByEmail } from '../notificaciones/notificaciones.service';
+import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 // Tope de canon (flujo del modulo de estudios §4.4): este endpoint generico
 // tambien puede cobrar el estudio (concepto='estudio'), asi que necesita el
@@ -94,10 +94,10 @@ function formatCOP(amount: number): string {
 }
 
 const CONCEPTO_LABELS: Record<string, string> = {
-  estudio: 'Estudio de riesgo crediticio',
-  garantia: 'Garantia de arrendamiento',
+  estudio: 'Evaluación crediticia',
+  garantia: 'Garantía de arrendamiento',
   primer_canon: 'Primer canon de arrendamiento',
-  deposito: 'Deposito de garantia',
+  deposito: 'Depósito de garantía',
   otro: 'Otro concepto',
 };
 
@@ -1062,8 +1062,8 @@ export async function processWebhookEvent(
 
 /**
  * Despacha el orquestador tras un pago que ACABA de transicionar a 'completado'
- * (estudio automático + auto-envío del link de autorización + facturación) y
- * notifica al solicitante. Best-effort: registra el error pero nunca relanza
+ * (estudio automático + auto-envío del link de autorización + facturación). El
+ * aviso in-app lo manda la máquina de estados (notifyPagoConfirmado). Best-effort: registra el error pero nunca relanza
  * (un 500 al webhook dispararía retry de Stripe). Llamar SOLO en la primera
  * transición a 'completado' para no duplicar el dispatch.
  */
@@ -1085,11 +1085,6 @@ export async function dispatchPagoCompletado(pagoId: string): Promise<void> {
     // Import dinámico: evita el ciclo pagos ↔ orchestrator.
     const { onPagoConfirmado } = await import('@/modules/orchestrator/orchestrator.service');
     await onPagoConfirmado({ pagoId: p.id, expedienteId: p.expediente_id, concepto: p.concepto });
-
-    // Notificación in-app al solicitante. Fire-and-forget.
-    notificarSolicitantePagoCompletado(p.id, p.expediente_id, p.concepto).catch((e) =>
-      logger.warn({ error: e, pagoId: p.id }, 'Error notificando pago completado'),
-    );
   } catch (err) {
     logger.error({ pagoId, err }, 'dispatchPagoCompletado: onPagoConfirmado falló — requiere intervención manual');
   }
@@ -1586,50 +1581,4 @@ export function getGatewayConfig() {
 export async function getGatewayStatus() {
   const gateway = getPaymentGateway();
   return gateway.healthCheck();
-}
-
-// ============================================================
-// Notificacion in-app del pago completado
-// ============================================================
-
-/**
- * Notifica al solicitante que su pago fue confirmado. Resolucion de userId
- * por email (perfiles no almacena email — vive en auth.users). Tolera la
- * ausencia del perfil silenciosamente.
- */
-async function notificarSolicitantePagoCompletado(
-  pagoId: string,
-  expedienteId: string,
-  concepto: string,
-): Promise<void> {
-  const { data: exp } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, solicitante_id')
-    .eq('id', expedienteId)
-    .single() as { data: { id: string; numero: string | null; solicitante_id: string | null } | null };
-
-  if (!exp?.solicitante_id) return;
-
-  const { data: sol } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('email')
-    .eq('id', exp.solicitante_id)
-    .single() as { data: { email: string } | null };
-
-  const userId = await findPerfilIdByEmail(sol?.email);
-  if (!userId) return;
-
-  const titulo = concepto === 'estudio' ? 'Pago del estudio confirmado' : 'Pago confirmado';
-  const mensaje = concepto === 'estudio'
-    ? `Recibimos tu pago. Iniciamos el estudio crediticio de la solicitud ${exp.numero ?? ''}.`
-    : `Tu pago de la solicitud ${exp.numero ?? ''} fue confirmado.`;
-
-  await notificarUsuario({
-    userId,
-    tipo: 'pago.confirmado',
-    titulo,
-    mensaje,
-    link: `/expedientes/${expedienteId}`,
-    payload: { pago_id: pagoId, expediente_id: expedienteId, concepto },
-  });
 }
