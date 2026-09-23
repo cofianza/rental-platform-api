@@ -128,9 +128,15 @@ function formatDateCO(date: Date): string {
   }).format(date);
 }
 
-function addMonths(date: Date, months: number): Date {
+// Si el mes de llegada no tiene el día, el último del mes (art. 67 C.C., como
+// sumarMeses de V3): setMonth solo se desbordaba (31-ago + 6 → 3-mar).
+export function addMonths(date: Date, months: number): Date {
   const result = new Date(date);
+  const dia = result.getDate();
+  result.setDate(1);
   result.setMonth(result.getMonth() + months);
+  const ultimo = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+  result.setDate(Math.min(dia, ultimo));
   return result;
 }
 
