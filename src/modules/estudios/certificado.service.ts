@@ -116,7 +116,7 @@ export async function generateQrCode(url: string): Promise<Buffer> {
 // generateCertificatePdf
 // ============================================================
 
-interface CertificatePdfData {
+export interface CertificatePdfData {
   codigo: string;
   fechaEmision: string;
   fechaVencimiento: string;
@@ -164,6 +164,27 @@ interface CertificatePdfData {
   decisionCascada: string | null;
   // Adenda 2 §4.3: denominador del puntaje y variables que participaron.
   denominadorPuntaje?: string | null;
+  /** Adenda 1 contratos, respuesta 5: versión sin puntaje ni observaciones (ver sinPuntaje). */
+  paraFirmantes?: boolean;
+}
+
+/**
+ * Adenda 1 del módulo de contratos, respuesta 5: el CRC que va al paquete de
+ * firma, y el que baja el arrendatario, no lleva puntaje ni observaciones.
+ * Sale todo lo que lo revela: el score del buró, el perfil ("Aprobado
+ * automatico (87 pts)"), la decisión de cascada ("puntaje 92 >= 90…") y el
+ * denominador. Mismo criterio que redactarEstudioParaProspecto.
+ */
+export function sinPuntaje(data: CertificatePdfData): CertificatePdfData {
+  return {
+    ...data,
+    score: null,
+    observaciones: null,
+    rutaEtiqueta: null,
+    decisionCascada: null,
+    denominadorPuntaje: null,
+    paraFirmantes: true,
+  };
 }
 
 export async function generateCertificatePdf(
@@ -236,6 +257,12 @@ export async function generateCertificatePdf(
     });
 
     y += 20;
+
+    if (data.paraFirmantes) {
+      doc.fontSize(8).font('Helvetica-Oblique').fillColor('#6b7280');
+      doc.text('Esta versión no incluye el puntaje ni las observaciones de la evaluación.', 50, y, { width: contentWidth });
+      y += 16;
+    }
 
     // ---- SECTION: SOLICITANTE ----
     y = drawSectionTitle(doc, 'DATOS DEL SOLICITANTE', y, contentWidth);
@@ -546,28 +573,7 @@ export async function generarCertificado(
   userRol?: string,
 ) {
   // 1. Deep join: estudio → expediente → solicitante + inmueble
-  const { data: estudio, error: estudioErr } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select(`
-      *,
-      expedientes!estudios_expediente_id_fkey(
-        numero, estado, duracion_contrato_meses,
-        solicitantes!expedientes_solicitante_id_fkey(
-          nombre, apellido, tipo_documento, numero_documento, email, telefono
-        ),
-        inmuebles!expedientes_inmueble_id_fkey(
-          direccion, ciudad, departamento, tipo, uso, estrato, valor_arriendo, area_m2, codigo
-        )
-      )
-    `)
-    .eq('id', estudioId)
-    .single();
-
-  if (estudioErr || !estudio) {
-    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
-  }
-
-  const e = estudio as Record<string, unknown>;
+  const e = await leerEstudioCrc(estudioId);
 
   // Tenant guard: genera + persiste el PDF del certificado (con datos del
   // solicitante y del inmueble) para este estudio. Sin scoping, la inmobiliaria
@@ -629,13 +635,9 @@ export async function generarCertificado(
     );
   }
 
-  const expediente = e.expedientes as Record<string, unknown> | null;
-  if (!expediente) {
+  if (!e.expedientes) {
     throw AppError.badRequest('La evaluación no tiene estudio asociado', 'ESTUDIO_SIN_EXPEDIENTE');
   }
-
-  const solicitante = (expediente.solicitantes as Record<string, unknown>) || {};
-  const inmueble = (expediente.inmuebles as Record<string, unknown>) || {};
 
   // 3. Check if certificate already exists (regenerate)
   const { data: existing } = await (supabase
@@ -685,132 +687,11 @@ export async function generarCertificado(
   const fechaEmision = new Date(fechaEmisionMs).toISOString();
   const fechaVencimiento = new Date(inicioVigenciaMs + validezMs).toISOString();
 
-  // 6. Generate PDF
-  // §10 — la ruta del resultado, para imprimir el perfil y saber si el CRC
-  // ampara un contrato con acompañante. Sin puntaje: el scorecard sigue en
-  // sombra (ver adjuntarRuta en estudios.service.ts).
-  const reglasDuras = e.regla_dura_activada;
-  const cal = await getCalibracion();
-  // Corrida del motor de ESTE estudio: puntaje (solo cuando el motor decide),
-  // factor de ajuste aplicado y fuente del score. La ultima por fecha.
-  const sombra = await leerSombraDelEstudio(estudioId);
-  const usaPuntaje = env.MOTOR_DECIDE_ENABLED || env.MOTOR_RUTA_USA_SCORECARD;
-  const puntajeCrc = usaPuntaje ? (sombra?.puntaje ?? null) : null;
-  // Adenda §5.2 / §3: el coarrendatario es una fila de expediente_coarrendatarios
-  // con su propio estudio, no el `tipo` de esta fila (ver coarrendatario-vinculado.ts).
-  const coa = await coarrendatarioVinculado(e.expediente_id as string);
-  const conCoarrendatario = coa !== null;
-  const puntajeCoa = usaPuntaje ? (coa?.puntaje ?? null) : null;
-  // El estudio guarda lo que dijo el buro/motor; la decision de Cofianza es
-  // la del expediente. Un 'condicionado' cuyo expediente ya esta 'aprobado'
-  // (analista en revision manual, o ponderacion con coarrendatario) se
-  // certifica como aprobado: un CRC que diga CONDICIONADO / "en revision"
-  // sobre un contrato que Cofianza ya respalda es un documento que miente.
-  const resultadoEfectivo: 'aprobado' | 'condicionado' =
-    e.resultado === 'condicionado' && expediente.estado === 'aprobado' ? 'aprobado' : (e.resultado as 'aprobado' | 'condicionado');
-  const umbrales = {
-    aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
-    zonaGris: cal.UMBRAL_ZONA_GRIS,
-    coarrendatario: cal.UMBRAL_COARRENDATARIO,
-  };
-  const rutaCrc = resolverRuta({
-    puntaje: puntajeCrc,
-    resultadoVigente: resultadoEfectivo,
-    reglaDuraActivada: Array.isArray(reglasDuras) ? reglasDuras.length > 0 : Boolean(reglasDuras),
-    coarrendatarioVinculado: conCoarrendatario,
-    puntajeCoarrendatario: puntajeCoa,
-    umbrales,
-  });
-
-  // Adenda 2 §6: la fila de la tabla de tarifas segun la ruta de aprobacion.
-  const via = await viaDelEstudio({
-    expediente_id: e.expediente_id as string,
-    resultado: e.resultado as string | null,
-    referencia_proveedor: e.referencia_proveedor as string | null,
-    cascada: e.cascada,
-  });
-
-  // Adenda §2.4: que centrales se consultaron y cual fue la decision de cascada.
-  // `decision_cascada` es la traza que escribe decidirConCascada (Adenda §2);
-  // `decision` (la del modelo) queda de respaldo para trazas anteriores.
-  const etiquetaBuro = (id: unknown) =>
-    id === 'datacredito' ? 'DataCrédito' : id === 'transunion' ? 'TransUnion' : id ? String(id) : null;
-  const fuentes = [etiquetaBuro(e.proveedor), etiquetaBuro(e.proveedor_secundario)].filter((x): x is string => !!x);
-  const cascada = (e.cascada && typeof e.cascada === 'object' ? (e.cascada as Record<string, unknown>) : null);
-  const decisionCascada =
-    typeof cascada?.decision_cascada === 'string'
-      ? cascada.decision_cascada
-      : typeof cascada?.decision === 'string'
-        ? cascada.decision
-        : null;
-
-  const canonEvaluadoRaw = e.canon_evaluado;
-  const canonEvaluadoCop =
-    canonEvaluadoRaw === null || canonEvaluadoRaw === undefined
-      ? ((inmueble.valor_arriendo as number | null) ?? null)
-      : Number(canonEvaluadoRaw);
-
-  const pdfData: CertificatePdfData = {
-    codigo,
-    fechaEmision,
-    fechaVencimiento,
-    solicitanteNombre: (solicitante.nombre as string) || '',
-    solicitanteApellido: (solicitante.apellido as string) || '',
-    solicitanteTipoDoc: (solicitante.tipo_documento as string) || '',
-    solicitanteNumDoc: (solicitante.numero_documento as string) || '',
-    solicitanteEmail: (solicitante.email as string) || '',
-    solicitanteTelefono: (solicitante.telefono as string) || '',
-    tipoEstudio: conCoarrendatario ? 'con_coarrendatario' : 'individual',
-    inmuebleDireccion: (inmueble.direccion as string) || '',
-    inmuebleCiudad: (inmueble.ciudad as string) || '',
-    inmuebleDepartamento: (inmueble.departamento as string) || '',
-    inmuebleTipo: (inmueble.tipo as string) || '',
-    inmuebleUso: (inmueble.uso as string) || '',
-    inmuebleEstrato: (inmueble.estrato as number) || null,
-    inmuebleValorArriendo: (inmueble.valor_arriendo as number) || null,
-    inmuebleArea: (inmueble.area_m2 as number) || null,
-    inmuebleCodigo: (inmueble.codigo as string) || null,
-    resultado: resultadoEfectivo,
-    score: (e.score as number) ?? null,
-    proveedor: e.proveedor === 'manual' ? 'Registro manual' : (etiquetaBuro(e.proveedor) ?? ''),
-    fechaEstudio: (e.fecha_completado as string) || (e.created_at as string),
-    // El asistente de habilitación guarda la duración solo en el expediente.
-    duracionContrato: (e.duracion_contrato_meses as number | null) ?? (expediente.duracion_contrato_meses as number | null) ?? null,
-    observaciones: (e.observaciones as string) || null,
-    condiciones: (e.condiciones as string) || null,
-    // §10.1 — condiciones economicas. El canon evaluado es el CONGELADO con el
-    // que se corrio el estudio (portabilidad.ts lo explica): si el inmueble
-    // cambia de precio despues, el CRC sigue amparando lo que se evaluo, no lo
-    // que valga hoy.
-    canonEvaluado: canonEvaluadoCop,
-    canonMaximoTolerado:
-      canonEvaluadoCop === null
-        ? null
-        : canonMaximoTolerado(canonEvaluadoCop, PORTABILIDAD_TOLERANCIA_PCT),
-    requiereAcompanante: rutaCrc.coarrendatarioObligatorio || conCoarrendatario,
-    coarrendatarioVinculado: conCoarrendatario,
-    rutaEtiqueta: rutaCrc.etiquetaGestor,
-    // La Politica V4.1 §8 lo exige: "Version del modelo aplicable — registrada
-    // en cada CRC emitido", para poder reproducir cualquier evaluacion pasada.
-    modeloVersion: sombra?.modeloVersion ?? MODELO_VERSION,
-    // Adenda §5: la tabla de tarifas "va en la Politica y en el CRC" — para
-    // TODO resultado certificable, no solo el aprobado. Un condicionado en
-    // revision imprime la fila que le aplicaria al aprobarse (revision manual,
-    // 2,7%, o la condicionada si su coarrendatario ya alcanza el umbral).
-    tarifas: calcularTarifas({
-      via,
-      conCoarrendatario,
-      canonCop: canonEvaluadoCop,
-      ivaPct: cal.TARIFA_IVA,
-      override: leerTarifaOverride(e.tarifa_override),
-    }),
-    factorAjusteIngreso: sombra?.factor ?? null,
-    fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
-    denominadorPuntaje: sombra?.denominador ?? null,
-    decisionCascada,
-  };
+  // 6. Generate PDF: el completo y, con los mismos datos, el de los firmantes.
+  const pdfData = await datosDelCrc(e, { codigo, fecha_emision: fechaEmision, fecha_vencimiento: fechaVencimiento });
 
   const pdfBuffer = await generateCertificatePdf(pdfData, qrBuffer);
+  const pdfFirmantes = await generateCertificatePdf(sinPuntaje(pdfData), qrBuffer);
 
   // 7. Upload to storage
   const storageKey = `estudios/${estudioId}/certificado/${crypto.randomUUID()}.pdf`;
@@ -824,6 +705,14 @@ export async function generarCertificado(
   if (uploadErr) {
     logger.error({ error: uploadErr, estudioId }, 'Error uploading certificate PDF');
     throw new AppError(500, 'INTERNAL_ERROR','Error al subir el certificado PDF');
+  }
+
+  // Si esta falla, crcParaFirmantes la genera cuando alguien la pida.
+  const { error: uploadFirmantesErr } = await supabase.storage
+    .from(BUCKET_NAME)
+    .upload(llaveFirmantes(storageKey), pdfFirmantes, { contentType: 'application/pdf', upsert: false });
+  if (uploadFirmantesErr) {
+    logger.warn({ error: uploadFirmantesErr, estudioId }, 'CRC: no se subió la versión para firmantes; se generará al pedirla');
   }
 
   // 8. Upsert estudios_certificados
@@ -892,6 +781,172 @@ export async function generarCertificado(
   };
 }
 
+/** Deep join: estudio → expediente → solicitante + inmueble. */
+async function leerEstudioCrc(estudioId: string): Promise<Record<string, unknown>> {
+  const { data: estudio, error: estudioErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select(`
+      *,
+      expedientes!estudios_expediente_id_fkey(
+        numero, estado, duracion_contrato_meses,
+        solicitantes!expedientes_solicitante_id_fkey(
+          nombre, apellido, tipo_documento, numero_documento, email, telefono
+        ),
+        inmuebles!expedientes_inmueble_id_fkey(
+          direccion, ciudad, departamento, tipo, uso, estrato, valor_arriendo, area_m2, codigo
+        )
+      )
+    `)
+    .eq('id', estudioId)
+    .single();
+
+  if (estudioErr || !estudio) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+  return estudio as Record<string, unknown>;
+}
+
+/**
+ * Lo que imprime el CRC, del estudio leido con leerEstudioCrc. Lo usan la
+ * emision y la version para firmantes que se genera a demanda.
+ */
+async function datosDelCrc(
+  e: Record<string, unknown>,
+  cert: { codigo: string; fecha_emision: string; fecha_vencimiento: string },
+): Promise<CertificatePdfData> {
+  const estudioId = e.id as string;
+  const expediente = e.expedientes as Record<string, unknown> | null;
+  if (!expediente) {
+    throw AppError.badRequest('La evaluación no tiene estudio asociado', 'ESTUDIO_SIN_EXPEDIENTE');
+  }
+  const solicitante = (expediente.solicitantes as Record<string, unknown>) || {};
+  const inmueble = (expediente.inmuebles as Record<string, unknown>) || {};
+
+  // §10 — la ruta del resultado, para imprimir el perfil y saber si el CRC
+  // ampara un contrato con acompañante. Sin puntaje: el scorecard sigue en
+  // sombra (ver adjuntarRuta en estudios.service.ts).
+  const reglasDuras = e.regla_dura_activada;
+  const cal = await getCalibracion();
+  // Corrida del motor de ESTE estudio: puntaje (solo cuando el motor decide),
+  // factor de ajuste aplicado y fuente del score. La ultima por fecha.
+  const sombra = await leerSombraDelEstudio(estudioId);
+  const usaPuntaje = env.MOTOR_DECIDE_ENABLED || env.MOTOR_RUTA_USA_SCORECARD;
+  const puntajeCrc = usaPuntaje ? (sombra?.puntaje ?? null) : null;
+  // Adenda §5.2 / §3: el coarrendatario es una fila de expediente_coarrendatarios
+  // con su propio estudio, no el `tipo` de esta fila (ver coarrendatario-vinculado.ts).
+  const coa = await coarrendatarioVinculado(e.expediente_id as string);
+  const conCoarrendatario = coa !== null;
+  const puntajeCoa = usaPuntaje ? (coa?.puntaje ?? null) : null;
+  // El estudio guarda lo que dijo el buro/motor; la decision de Cofianza es
+  // la del expediente. Un 'condicionado' cuyo expediente ya esta 'aprobado'
+  // (analista en revision manual, o ponderacion con coarrendatario) se
+  // certifica como aprobado: un CRC que diga CONDICIONADO / "en revision"
+  // sobre un contrato que Cofianza ya respalda es un documento que miente.
+  const resultadoEfectivo: 'aprobado' | 'condicionado' =
+    e.resultado === 'condicionado' && expediente.estado === 'aprobado' ? 'aprobado' : (e.resultado as 'aprobado' | 'condicionado');
+  const umbrales = {
+    aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
+    zonaGris: cal.UMBRAL_ZONA_GRIS,
+    coarrendatario: cal.UMBRAL_COARRENDATARIO,
+  };
+  const rutaCrc = resolverRuta({
+    puntaje: puntajeCrc,
+    resultadoVigente: resultadoEfectivo,
+    reglaDuraActivada: Array.isArray(reglasDuras) ? reglasDuras.length > 0 : Boolean(reglasDuras),
+    coarrendatarioVinculado: conCoarrendatario,
+    puntajeCoarrendatario: puntajeCoa,
+    umbrales,
+  });
+
+  // Adenda 2 §6: la fila de la tabla de tarifas segun la ruta de aprobacion.
+  const via = await viaDelEstudio({
+    expediente_id: e.expediente_id as string,
+    resultado: e.resultado as string | null,
+    referencia_proveedor: e.referencia_proveedor as string | null,
+    cascada: e.cascada,
+  });
+
+  // Adenda §2.4: que centrales se consultaron y cual fue la decision de cascada.
+  // `decision_cascada` es la traza que escribe decidirConCascada (Adenda §2);
+  // `decision` (la del modelo) queda de respaldo para trazas anteriores.
+  const etiquetaBuro = (id: unknown) =>
+    id === 'datacredito' ? 'DataCrédito' : id === 'transunion' ? 'TransUnion' : id ? String(id) : null;
+  const fuentes = [etiquetaBuro(e.proveedor), etiquetaBuro(e.proveedor_secundario)].filter((x): x is string => !!x);
+  const cascada = (e.cascada && typeof e.cascada === 'object' ? (e.cascada as Record<string, unknown>) : null);
+  const decisionCascada =
+    typeof cascada?.decision_cascada === 'string'
+      ? cascada.decision_cascada
+      : typeof cascada?.decision === 'string'
+        ? cascada.decision
+        : null;
+
+  const canonEvaluadoRaw = e.canon_evaluado;
+  const canonEvaluadoCop =
+    canonEvaluadoRaw === null || canonEvaluadoRaw === undefined
+      ? ((inmueble.valor_arriendo as number | null) ?? null)
+      : Number(canonEvaluadoRaw);
+
+  return {
+    codigo: cert.codigo,
+    fechaEmision: cert.fecha_emision,
+    fechaVencimiento: cert.fecha_vencimiento,
+    solicitanteNombre: (solicitante.nombre as string) || '',
+    solicitanteApellido: (solicitante.apellido as string) || '',
+    solicitanteTipoDoc: (solicitante.tipo_documento as string) || '',
+    solicitanteNumDoc: (solicitante.numero_documento as string) || '',
+    solicitanteEmail: (solicitante.email as string) || '',
+    solicitanteTelefono: (solicitante.telefono as string) || '',
+    tipoEstudio: conCoarrendatario ? 'con_coarrendatario' : 'individual',
+    inmuebleDireccion: (inmueble.direccion as string) || '',
+    inmuebleCiudad: (inmueble.ciudad as string) || '',
+    inmuebleDepartamento: (inmueble.departamento as string) || '',
+    inmuebleTipo: (inmueble.tipo as string) || '',
+    inmuebleUso: (inmueble.uso as string) || '',
+    inmuebleEstrato: (inmueble.estrato as number) || null,
+    inmuebleValorArriendo: (inmueble.valor_arriendo as number) || null,
+    inmuebleArea: (inmueble.area_m2 as number) || null,
+    inmuebleCodigo: (inmueble.codigo as string) || null,
+    resultado: resultadoEfectivo,
+    score: (e.score as number) ?? null,
+    proveedor: e.proveedor === 'manual' ? 'Registro manual' : (etiquetaBuro(e.proveedor) ?? ''),
+    fechaEstudio: (e.fecha_completado as string) || (e.created_at as string),
+    // El asistente de habilitación guarda la duración solo en el expediente.
+    duracionContrato: (e.duracion_contrato_meses as number | null) ?? (expediente.duracion_contrato_meses as number | null) ?? null,
+    observaciones: (e.observaciones as string) || null,
+    condiciones: (e.condiciones as string) || null,
+    // §10.1 — condiciones economicas. El canon evaluado es el CONGELADO con el
+    // que se corrio el estudio (portabilidad.ts lo explica): si el inmueble
+    // cambia de precio despues, el CRC sigue amparando lo que se evaluo, no lo
+    // que valga hoy.
+    canonEvaluado: canonEvaluadoCop,
+    canonMaximoTolerado:
+      canonEvaluadoCop === null
+        ? null
+        : canonMaximoTolerado(canonEvaluadoCop, PORTABILIDAD_TOLERANCIA_PCT),
+    requiereAcompanante: rutaCrc.coarrendatarioObligatorio || conCoarrendatario,
+    coarrendatarioVinculado: conCoarrendatario,
+    rutaEtiqueta: rutaCrc.etiquetaGestor,
+    // La Politica V4.1 §8 lo exige: "Version del modelo aplicable — registrada
+    // en cada CRC emitido", para poder reproducir cualquier evaluacion pasada.
+    modeloVersion: sombra?.modeloVersion ?? MODELO_VERSION,
+    // Adenda §5: la tabla de tarifas "va en la Politica y en el CRC" — para
+    // TODO resultado certificable, no solo el aprobado. Un condicionado en
+    // revision imprime la fila que le aplicaria al aprobarse (revision manual,
+    // 2,7%, o la condicionada si su coarrendatario ya alcanza el umbral).
+    tarifas: calcularTarifas({
+      via,
+      conCoarrendatario,
+      canonCop: canonEvaluadoCop,
+      ivaPct: cal.TARIFA_IVA,
+      override: leerTarifaOverride(e.tarifa_override),
+    }),
+    factorAjusteIngreso: sombra?.factor ?? null,
+    fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
+    denominadorPuntaje: sombra?.denominador ?? null,
+    decisionCascada,
+  };
+}
+
 /**
  * Flujo §10/§11: el CRC es un ENTREGABLE del resultado, no un boton. Se emite
  * apenas el expediente avanza a aprobado/condicionado (orquestador) y se
@@ -947,6 +1002,46 @@ export async function emitirCertificadoAutomatico(
 }
 
 // ============================================================
+// Version para firmantes (Adenda 1 contratos, respuesta 5)
+// ============================================================
+
+/** Vive al lado del completo: misma llave con sufijo, sin columna nueva. */
+export function llaveFirmantes(llaveCompleta: string): string {
+  return `${llaveCompleta.replace(/\.pdf$/i, '')}-firmantes.pdf`;
+}
+
+/**
+ * El CRC sin puntaje ni observaciones: el que va al paquete de firma y el que
+ * baja el arrendatario. El completo queda solo en el panel de la inmobiliaria,
+ * del propietario y de Cofianza. Se emite junto al completo; el de un CRC
+ * anterior se genera aqui una vez, con su numero y sus fechas, y queda
+ * guardado. Sale de los datos de hoy del estudio: si algo cambio desde la
+ * emision, lo refleja. No verifica acceso: el llamador ya paso por
+ * assertExpedienteAccess.
+ */
+export async function crcParaFirmantes(cert: {
+  estudio_id: string;
+  codigo: string;
+  pdf_storage_key: string;
+  fecha_emision: string;
+  fecha_vencimiento: string;
+}): Promise<{ key: string; pdf: Buffer }> {
+  const key = llaveFirmantes(cert.pdf_storage_key);
+  const { data } = await supabase.storage.from(BUCKET_NAME).download(key);
+  if (data) return { key, pdf: Buffer.from(await data.arrayBuffer()) };
+
+  const datos = await datosDelCrc(await leerEstudioCrc(cert.estudio_id), cert);
+  const pdf = await generateCertificatePdf(sinPuntaje(datos), await generateQrCode(`${env.FRONTEND_URL}/verificar/${cert.codigo}`));
+  // Sin upsert: si ya existia (una lectura que fallo), no se pisa; se reintenta.
+  const { error } = await supabase.storage.from(BUCKET_NAME).upload(key, pdf, { contentType: 'application/pdf', upsert: false });
+  if (error) {
+    logger.error({ error, key }, 'CRC: no se pudo guardar la versión para firmantes');
+    throw new AppError(503, 'CRC_NO_DISPONIBLE', 'No pudimos preparar el certificado. Intenta de nuevo en un momento.');
+  }
+  return { key, pdf };
+}
+
+// ============================================================
 // descargarCertificado
 // ============================================================
 
@@ -979,10 +1074,13 @@ export async function descargarCertificado(estudioId: string, userId?: string, u
   }
 
   const c = cert as { id: string; codigo: string; pdf_storage_key: string; version: number; fecha_emision: string; fecha_vencimiento: string };
+  // Adenda 1 contratos, respuesta 5: el arrendatario baja la version sin puntaje.
+  const key =
+    userRol === 'solicitante' ? (await crcParaFirmantes({ ...c, estudio_id: estudioId })).key : c.pdf_storage_key;
 
   const { data: signedData, error: signErr } = await supabase.storage
     .from(BUCKET_NAME)
-    .createSignedUrl(c.pdf_storage_key, 3600);
+    .createSignedUrl(key, 3600);
 
   if (signErr || !signedData) {
     logger.error({ error: signErr, estudioId }, 'Error creating signed URL for certificate');

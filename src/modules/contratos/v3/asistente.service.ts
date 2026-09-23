@@ -24,6 +24,7 @@ import { assertExpedienteAccess, resolveMembershipInmobiliariaIds, resolveRolMie
 import { getCalibracion, type Calibracion } from '@/lib/calibracion';
 import { checkPerfilCompletitud } from '@/modules/perfil-arrendador/perfil-arrendador.service';
 import { tarifasDelEstudio } from '@/modules/estudios/tarifa-override.service';
+import { crcParaFirmantes } from '@/modules/estudios/certificado.service';
 import { ESTADOS_VINCULADO } from '@/modules/estudios/coarrendatario-vinculado';
 import { avisarCandidatosDeReserva, cancelarVisitasDeOtros } from '@/modules/estudios/reserva-inmueble.notificaciones';
 import {
@@ -1458,8 +1459,8 @@ export async function enviarAFirma(
   if (difiereDeVistaPrevia(d, doc, f.arrendador.logo_storage_key)) throw desactualizada();
 
   assertFirmantes(v3.id, d, f);
-  const crcKey = f.crc?.pdf_storage_key;
-  if (!crcKey) throw AppError.conflict('El estudio no tiene el PDF del CRC emitido.', 'CRC_NO_EMITIDO');
+  const crcCompleto = f.crc?.pdf_storage_key;
+  if (!crcCompleto) throw AppError.conflict('El estudio no tiene el PDF del CRC emitido.', 'CRC_NO_EMITIDO');
   const propio = dv.propio;
   if (ruta === 'B') {
     if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
@@ -1479,7 +1480,12 @@ export async function enviarAFirma(
           adicionales: adicionales.map(({ titulo, texto }) => ({ titulo, texto })),
           anclas: true,
         });
-  const crcPdf = await bajar(crcKey, 'el PDF del CRC');
+  // Adenda 1, respuesta 5: a la firma va el CRC sin puntaje ni observaciones.
+  const { key: crcKey, pdf: crcPdf } = await crcParaFirmantes({
+    ...f.crc!,
+    pdf_storage_key: crcCompleto,
+    estudio_id: f.estudio!.id,
+  });
   let piezas: Buffer[] = [final.pdf, crcPdf];
   if (ruta === 'B') {
     const propioPdf = await bajar(propio!.key, 'el contrato de la inmobiliaria');

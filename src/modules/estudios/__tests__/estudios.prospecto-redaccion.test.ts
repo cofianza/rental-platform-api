@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // TABLA y `ops` para afirmar el filtro de la consulta.
 // ============================================================
 
-const { mockEnv, ops, queues, enqueue, mockFrom } = vi.hoisted(() => {
+const { mockEnv, ops, queues, enqueue, mockFrom, storageApi } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -40,12 +40,16 @@ const { mockEnv, ops, queues, enqueue, mockFrom } = vi.hoisted(() => {
     queues,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockFrom: vi.fn((table: string) => chainFor(table)),
+    storageApi: {
+      download: vi.fn(async () => ({ data: new Blob(['%PDF']), error: null })),
+      createSignedUrl: vi.fn(async (key: string) => ({ data: { signedUrl: `https://storage.test/${key}` }, error: null })),
+    },
   };
 });
 
 vi.mock('@/config', () => ({ env: mockEnv }));
 vi.mock('@/config/env', () => ({ env: mockEnv }));
-vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t), rpc: vi.fn(), storage: { from: vi.fn() } } }));
+vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t), rpc: vi.fn(), storage: { from: () => storageApi } } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/lib/auditLog', () => ({
   logAudit: vi.fn(),
@@ -137,6 +141,20 @@ describe('las demas rutas por id que el titular alcanza', () => {
 
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     await expect(tarifasDelEstudio('est-1', 'u-1', 'solicitante')).rejects.toMatchObject(OCULTO);
+  });
+
+  // Adenda 1 del módulo de contratos, respuesta 5: certificado_url es el CRC
+  // completo (o el reporte del buró adjunto), y los dos traen el puntaje.
+  it('/certificado/url del titular: el CRC sin puntaje, no lo que haya en certificado_url', async () => {
+    const completo = 'estudios/est-1/certificado/uuid-1.pdf';
+    enqueue('estudios', { data: { ...fila('individual'), certificado_url: completo }, error: null });
+    enqueue('estudios', { data: fila('individual'), error: null });
+    enqueue('estudios_certificados', {
+      data: { id: 'c-1', codigo: 'CERT-2026-00001', version: 1, pdf_storage_key: completo, fecha_emision: '2026-09-01', fecha_vencimiento: '2026-10-31' },
+      error: null,
+    });
+    const r = await getCertificadoViewUrl('est-1', 'u-1', 'solicitante');
+    expect(r.url).toBe('https://storage.test/estudios/est-1/certificado/uuid-1-firmantes.pdf');
   });
 
   it('el gestor si baja el certificado del co-arrendatario', async () => {

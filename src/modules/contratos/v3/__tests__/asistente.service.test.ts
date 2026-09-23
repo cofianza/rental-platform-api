@@ -1322,7 +1322,8 @@ describe('generar con adicionales', () => {
 describe('enviar a firma y Ruta B (Entrega 5)', () => {
   const OK = { data: null, error: null };
   const KEY_PREVIA = `contratos/${EXP}/${CTO}/revision-1-1.pdf`;
-  const CRC_KEY = 'certificados/est-1.pdf';
+  // A la firma va el CRC sin puntaje (Adenda 1, respuesta 5), no el completo 'certificados/est-1.pdf'.
+  const CRC_KEY = 'certificados/est-1-firmantes.pdf';
   const AHORA = Date.parse('2026-09-15T15:00:00Z');
   const KEY_FINAL = `contratos/${EXP}/${CTO}/final-${AHORA}.pdf`;
 

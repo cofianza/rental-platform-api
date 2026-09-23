@@ -21,6 +21,7 @@ import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
+import { descargarCertificado } from './certificado.service';
 // Motor de scorecard V4.1. Sigue en SOMBRA para todo el scorecard (puntajes,
 // umbrales 85/70, resto de reglas duras): calcula y guarda en paralelo lo que
 // la politica HABRIA decidido. registrarScorecardSombra es best-effort y no
@@ -2021,6 +2022,10 @@ export async function getCertificadoViewUrl(estudioId: string, userId?: string, 
   // El PDF que un analista adjunta al registrar el resultado es el reporte de
   // buro de esa persona: el titular no baja el de su co-arrendatario.
   assertNoEsEstudioDeOtraPersona(est.tipo, userRol);
+  // certificado_url es el CRC completo o el reporte del buró que adjuntó el
+  // analista: los dos traen el puntaje. El titular baja el CRC sin puntaje
+  // (Adenda 1 del módulo de contratos, respuesta 5).
+  if (userRol === 'solicitante') return descargarCertificado(estudioId, userId, userRol);
 
   if (!est.certificado_url) {
     throw AppError.notFound('Este estudio no tiene certificado adjunto', 'CERTIFICADO_NOT_FOUND');
