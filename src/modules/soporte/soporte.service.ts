@@ -6,6 +6,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 import type {
   CreateTicketSoporteInput,
   ListTicketsSoporteQuery,
@@ -85,7 +86,41 @@ export async function createTicket(
 
   if (error) throw fromSupabaseError(error);
   if (!data) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo crear el ticket');
-  return mapTicket(data as unknown as TicketRow);
+  const ticket = mapTicket(data as unknown as TicketRow);
+  void avisarAdministradores(ticket);
+  return ticket;
+}
+
+/**
+ * Solo el administrador ve /soporte: sin este aviso un ticket (p. ej. la
+ * revisión de cláusulas adicionales que frena un contrato V3) esperaba a que
+ * alguien abriera la pantalla. Best-effort: nunca frena la creación.
+ */
+async function avisarAdministradores(ticket: TicketSoporte): Promise<void> {
+  try {
+    const { data, error } = await (supabase.from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('rol', 'administrador')
+      .eq('estado', 'activo');
+    if (error) throw new Error(error.message);
+    const ids = ((data as Array<{ id: string }> | null) ?? []).map((p) => p.id).filter((id) => id !== ticket.remitenteId);
+    if (ids.length === 0) return;
+    const { notificarUsuario } = await import('@/modules/notificaciones/notificaciones.service');
+    await Promise.all(
+      ids.map((userId) =>
+        notificarUsuario({
+          userId,
+          tipo: 'ticket_soporte',
+          titulo: 'Nuevo ticket de soporte',
+          mensaje: `${ticket.ticketNumero}: ${ticket.asunto}`,
+          link: '/soporte',
+          payload: { ticket_id: ticket.id, tipo: ticket.tipo },
+        }),
+      ),
+    );
+  } catch (err) {
+    logger.warn({ error: err, ticketId: ticket.id }, 'No se pudo avisar el ticket de soporte a los administradores');
+  }
 }
 
 export async function listTickets(

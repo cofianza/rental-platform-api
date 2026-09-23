@@ -128,6 +128,8 @@ vi.mock('../firma/firma.service', () => ({
   actualizarFirma: vi.fn(),
 }));
 vi.mock('../firma/reconciliar', () => ({ ultimoSobre: vi.fn(async () => null) }));
+const mockNotificar = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: mockNotificar }));
 // Sin Chromium: el PDF es un buffer falso, los pendientes salen de la plantilla real.
 vi.mock('../vivienda', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../vivienda')>();
@@ -1206,6 +1208,21 @@ describe('autorizarExceso (D6)', () => {
     expect(estado.contrato!.adicionales.excesoAutorizado).toEqual({ huella: P4.huella, cantidad: 11, en: autorizado.en });
     expect(mockLogAudit).toHaveBeenCalledWith(
       expect.objectContaining({ accion: 'contrato_clausulas_exceso_autorizado', usuarioId: 'admin-1', ip: '10.0.0.9' }),
+    );
+  });
+
+  it('avisa a quien inició el contrato y al responsable (sin repetir): la inmobiliaria no ve Soporte', async () => {
+    encolarCarga({ contratos: [conPaso4(P4)], catalogo: catalogoDe(ONCE) });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [conPaso4(P4)], catalogo: catalogoDe(ONCE) });
+    enqueue('contratos', { data: { generado_por: 'gestor-1' }, error: null });
+    enqueue('expedientes', { data: { miembro_responsable_id: 'gestor-1' }, error: null });
+
+    await autorizarExceso(EXP, P4.huella, 'admin-1', 'administrador');
+
+    expect(mockNotificar).toHaveBeenCalledTimes(1);
+    expect(mockNotificar).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'gestor-1', link: `/expedientes/${EXP}/contrato` }),
     );
   });
 

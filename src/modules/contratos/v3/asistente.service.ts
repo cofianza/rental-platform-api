@@ -1194,7 +1194,45 @@ export async function autorizarExceso(
     detalle: { expediente_id: expedienteId, huella: p4.huella, cantidad, maximo: c.cal.MAX_CLAUSULAS_ADICIONALES },
     ip,
   });
-  return armarEstado(await cargar(expedienteId), hoyBogota());
+  const estado = armarEstado(await cargar(expedienteId), hoyBogota());
+  await avisarExcesoAutorizado(expedienteId, v3.id, c.f.expediente.numero, userId);
+  return estado;
+}
+
+/**
+ * La inmobiliaria pidió la revisión por un ticket de Soporte que no puede ver:
+ * se le avisa a quien inició el contrato y al miembro responsable del estudio.
+ * Best-effort: la autorización ya quedó guardada.
+ */
+async function avisarExcesoAutorizado(expedienteId: string, contratoId: string, numero: string, autorId: string): Promise<void> {
+  try {
+    const [cto, exp] = await Promise.all([
+      db('contratos').select('generado_por').eq('id', contratoId).maybeSingle(),
+      db('expedientes').select('miembro_responsable_id').eq('id', expedienteId).maybeSingle(),
+    ]);
+    const ids = new Set(
+      [
+        (cto.data as { generado_por?: string | null } | null)?.generado_por,
+        (exp.data as { miembro_responsable_id?: string | null } | null)?.miembro_responsable_id,
+      ].filter((id): id is string => !!id && id !== autorId),
+    );
+    if (ids.size === 0) return;
+    const { notificarUsuario } = await import('@/modules/notificaciones/notificaciones.service');
+    await Promise.all(
+      [...ids].map((userId) =>
+        notificarUsuario({
+          userId,
+          tipo: 'contrato.clausulas_autorizadas',
+          titulo: 'Cofianza autorizó tus cláusulas adicionales',
+          mensaje: `Ya puedes continuar el contrato del estudio ${numero}.`,
+          link: `/expedientes/${expedienteId}/contrato`,
+          payload: { expediente_id: expedienteId, contrato_id: contratoId },
+        }),
+      ),
+    );
+  } catch (err) {
+    logger.warn({ error: err, expedienteId }, 'Asistente V3: no se pudo avisar la autorización de cláusulas');
+  }
 }
 
 // ── Entrega 5: Ruta B — el contrato propio de la inmobiliaria (§4.4-4.5) ──
