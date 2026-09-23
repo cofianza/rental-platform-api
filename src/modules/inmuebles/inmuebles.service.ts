@@ -57,7 +57,7 @@ interface InmuebleWithOwnerRow extends InmuebleRow {
   perfiles: { id: string; nombre: string; apellido: string; telefono: string | null } | null;
 }
 
-const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, inmobiliaria_id, miembro_responsable_id, reservado_por_expediente_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
+const INMUEBLE_FIELDS = `id, codigo, direccion, ciudad, barrio, departamento, tipo, uso, destinacion, estrato, valor_arriendo, valor_comercial, administracion, area_m2, habitaciones, banos, parqueadero, parqueaderos, piso, codigo_postal, latitud, longitud, descripcion, notas_internas, estado, propietario_id, inmobiliaria_id, miembro_responsable_id, reservado_por_expediente_id, visible_vitrina, foto_fachada_url, propiedad_horizontal, cuarto_util, ubicacion_detallada, matricula_inmobiliaria, created_at, updated_at, contrato_tipo_storage_key, contrato_tipo_nombre_archivo, contrato_tipo_tamano_bytes, contrato_tipo_subido_por, contrato_tipo_subido_en`;
 
 const INMUEBLE_WITH_OWNER = `${INMUEBLE_FIELDS}, perfiles!inmuebles_propietario_id_fkey(id, nombre, apellido, telefono)`;
 
@@ -444,11 +444,16 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
     }
   }
 
+  // La matrícula inmobiliaria no está en update_inmueble_con_cambios: una clave
+  // que la RPC no conoce no se guarda y deja un cambio falso en el historial.
+  // Va aparte, con su propia fila de historial.
+  const { matricula_inmobiliaria: matriculaInput, ...datosRpc } = updateData;
+
   // Update atomico via RPC: actualiza inmueble + registra cambios por campo en una transaccion
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rpcResult, error: rpcError } = await (supabase as any).rpc('update_inmueble_con_cambios', {
     p_id: id,
-    p_data: updateData,
+    p_data: datosRpc,
     p_user_id: updatedBy,
   });
 
@@ -466,6 +471,27 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
       );
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el inmueble');
+  }
+
+  if (matriculaInput !== undefined) {
+    const nueva = (matriculaInput as string | null)?.trim() || null;
+    const anterior = (prevRow.matricula_inmobiliaria as string | null) ?? null;
+    if (nueva !== anterior) {
+      const { error: matErr } = await (supabase
+        .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+        .update({ matricula_inmobiliaria: nueva } as never)
+        .eq('id', id);
+      if (matErr) {
+        logger.error({ error: matErr.message, id }, 'Error al guardar la matrícula inmobiliaria');
+        throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar el inmueble');
+      }
+      await (supabase
+        .from('cambios_inmuebles' as string) as ReturnType<typeof supabase.from>)
+        .insert({
+          inmueble_id: id, usuario_id: updatedBy, campo: 'matricula_inmobiliaria',
+          valor_anterior: anterior, valor_nuevo: nueva,
+        } as never);
+    }
   }
 
   // Multi-tenant: si cambió el propietario, recalcular y persistir la

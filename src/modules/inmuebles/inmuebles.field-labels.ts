@@ -28,6 +28,7 @@ export const INMUEBLE_FIELD_LABELS: Record<string, string> = {
   propiedad_horizontal: 'Propiedad horizontal',
   cuarto_util: 'Cuarto útil',
   ubicacion_detallada: 'Ubicación detallada',
+  matricula_inmobiliaria: 'Matrícula inmobiliaria',
 };
 
 export function getFieldLabel(campo: string): string {

@@ -77,12 +77,19 @@ function fechaCompleta(date: Date): string {
   return `${date.getDate()} de ${nombreMes(date)} de ${date.getFullYear()}`;
 }
 
+// Abreviatura como se escribe en el contrato («C.C.: 123»). Sin tipo = cédula.
 function tipoDocumentoLabel(tipo: string | null | undefined): string {
-  if (!tipo) return 'CC';
+  if (!tipo) return 'C.C.';
   const map: Record<string, string> = {
-    cc: 'CC', ce: 'CE', ti: 'TI', nit: 'NIT', pasaporte: 'PASAPORTE', pas: 'PASAPORTE',
+    cc: 'C.C.', ce: 'C.E.', ti: 'T.I.', nit: 'NIT', pasaporte: 'Pasaporte', pas: 'Pasaporte',
   };
   return map[tipo.toLowerCase()] || tipo.toUpperCase();
+}
+
+/** La fecha de la matrícula llega del <input type="date"> (AAAA-MM-DD); en el contrato va en letras. */
+function fechaMatricula(v: string | null | undefined): string {
+  if (!v) return '';
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? fechaCompleta(new Date(`${v}T00:00:00`)) : v;
 }
 
 interface ConfiguracionSistemaRow {
@@ -734,6 +741,7 @@ async function buildContratoContext(
   const cotitular = cotitularNombre
     ? {
         nombre_completo: cotitularNombre,
+        tipo_documento_label: tipoDocumentoLabel(exp.cotitular_tipo_documento as string | null),
         cedula: (exp.cotitular_documento as string | null) || '',
         celular: (exp.cotitular_celular as string | null) || '',
         correo: (exp.cotitular_correo as string | null) || '',
@@ -809,7 +817,7 @@ async function buildContratoContext(
       nit: arrendador?.nit || arrendador?.numero_documento || '',
       matricula_arrendador: esInmobiliaria ? (arrendador?.matricula_arrendador || '') : '',
       matricula_expedida_por: arrendador?.matricula_expedida_por || '',
-      matricula_fecha: arrendador?.matricula_fecha || '',
+      matricula_fecha: fechaMatricula(arrendador?.matricula_fecha),
       representante_legal: arrendador?.representante_legal || '',
       direccion: arrendador?.domicilio_direccion || '',
       correo: arrendador?.email_recaudo || '',
@@ -817,6 +825,8 @@ async function buildContratoContext(
       banco: arrendador?.cuenta_recaudo_banco || '',
       tipo_cuenta: arrendador?.cuenta_recaudo_tipo || 'ahorros',
       numero_cuenta: arrendador?.cuenta_recaudo_numero || '',
+      // Titular real de la cuenta (la pantalla lo exige); si falta, el arrendador.
+      cuenta_titular_nombre: arrendador?.cuenta_recaudo_titular_nombre || razonSocialArrendador,
       whatsapp_cartera: arrendador?.whatsapp_recaudo || '',
       correo_cartera: arrendador?.email_recaudo || '',
       comision_porcentaje: `${comisionPct}%`,
@@ -830,6 +840,7 @@ async function buildContratoContext(
       email: solicitante.email || '',
       celular: solicitante.telefono || '',
       // Alias para el contrato V4.
+      tipo_documento_label: tipoDocumentoLabel(solicitante.tipo_documento),
       cedula: solicitante.numero_documento || '',
       correo: solicitante.email || '',
       direccion_notificacion: solicitante.direccion || '',

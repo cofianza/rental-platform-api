@@ -53,6 +53,7 @@ export const createInmuebleSchema = z.object({
   propiedad_horizontal: z.boolean().nullable().optional(),
   cuarto_util: z.boolean().default(false),
   ubicacion_detallada: z.string().max(1000, 'Ubicación detallada muy larga').nullable().optional(),
+  matricula_inmobiliaria: z.string().max(40, 'Matrícula inmobiliaria muy larga').nullable().optional(),
 });
 
 export const updateInmuebleSchema = z.object({
@@ -92,6 +93,7 @@ export const updateInmuebleSchema = z.object({
   propiedad_horizontal: z.boolean().nullable().optional(),
   cuarto_util: z.boolean().nullable().optional(),
   ubicacion_detallada: z.string().max(1000, 'Ubicación detallada muy larga').nullable().optional(),
+  matricula_inmobiliaria: z.string().max(40, 'Matrícula inmobiliaria muy larga').nullable().optional(),
 });
 
 export const listInmueblesQuerySchema = z.object({
