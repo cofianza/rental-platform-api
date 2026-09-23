@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { UserRole } from '@/types/auth';
-import { resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 export interface HabilitacionContext {
   expedienteId: string;
@@ -92,16 +92,15 @@ export async function assertHabilitacionPermission(params: {
   }
 
   if (PROPIETARIO_LIKE_ROLES.includes(userRol)) {
-    // Org-aware: dueño directo del inmueble, o miembro activo de la
-    // organización dueña del inmueble.
-    let pertenece = ctx.inmueblePropietarioId === userId;
-    if (!pertenece && userRol === 'inmobiliaria' && row.inmuebles?.inmobiliaria_id) {
-      const orgIds = await resolveMembershipInmobiliariaIds(userId);
-      pertenece = orgIds.includes(row.inmuebles.inmobiliaria_id);
-    }
+    // El estudio tiene que estar en su cartera: un miembro restringido de la
+    // organización solo ve lo suyo o lo que le asignaron.
+    const pertenece = await assertExpedienteAccess(expedienteId, userId, userRol).then(
+      () => true,
+      () => false,
+    );
     if (!pertenece) {
       logger.warn(
-        { userId, userRol, expedienteId, reason: 'inmueble no pertenece al usuario ni a su organización' },
+        { userId, userRol, expedienteId, reason: 'el estudio no está en la cartera del usuario' },
         'Habilitación denegada',
       );
       throw AppError.forbidden(

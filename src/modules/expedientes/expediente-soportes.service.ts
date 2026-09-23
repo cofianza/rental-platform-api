@@ -22,7 +22,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 const BUCKET_NAME = 'documentos-expedientes';
 const MAX_SOPORTE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -85,7 +85,7 @@ interface SoporteAccessCtx {
  *
  * Reglas:
  *   - admin / operador → pasa siempre.
- *   - propietario / inmobiliaria → debe ser dueño del inmueble.
+ *   - propietario / inmobiliaria → el estudio debe estar en su cartera.
  *   - solicitante → debe ser el creador del expediente o el solicitante asociado.
  *   - otros roles (gerencia_consulta) → 403.
  *
@@ -139,18 +139,15 @@ async function assertSoporteAccess(
   const esSolicitanteRol = userRol === 'solicitante';
 
   const propietarioId = row.inmuebles?.propietario_id ?? null;
-  const inmobiliariaId = row.inmuebles?.inmobiliaria_id ?? null;
   const solicitanteUserId = row.solicitantes?.creado_por ?? row.creado_por ?? null;
 
-  // Org-aware: el propietario/inmobiliaria accede si es dueño directo o
-  // miembro de la organización dueña del inmueble.
+  // El propietario/inmobiliaria accede si el estudio está en su cartera (un
+  // miembro restringido solo ve lo suyo o lo que le asignaron).
   const esDuenoOrg = esPropietarioRol
-    ? await perfilEsDuenoDeInmueble({
-        userId,
-        userRol,
-        inmueblePropietarioId: propietarioId,
-        inmuebleInmobiliariaId: inmobiliariaId,
-      })
+    ? await assertExpedienteAccess(expedienteId, userId, userRol).then(
+        () => true,
+        () => false,
+      )
     : false;
 
   let allowed = false;

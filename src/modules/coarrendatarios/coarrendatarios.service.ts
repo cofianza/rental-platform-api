@@ -21,7 +21,7 @@ import {
   findPerfilIdByEmail,
   notificarResponsableExpediente,
 } from '../notificaciones/notificaciones.service';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 // Tope de canon (flujo del modulo de estudios §4.4). El estudio del
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
@@ -189,8 +189,9 @@ function tokenExpiracion(): string {
 
 /**
  * Acceso al coarrendatario de un expediente: admin/operador siempre; el
- * solicitante dueño del expediente; propietario/inmobiliaria dueños del
- * inmueble. Compartido por invitar / get / reenviar.
+ * solicitante dueño del expediente; propietario/inmobiliaria con el estudio en
+ * su cartera (assertExpedienteAccess: un miembro restringido solo ve lo suyo).
+ * Compartido por invitar / get / reenviar.
  */
 async function tieneAccesoExpediente(
   ctx: ExpedienteCtx,
@@ -200,12 +201,10 @@ async function tieneAccesoExpediente(
   if (userRol === 'administrador' || userRol === 'operador_analista') return true;
   if (userRol === 'solicitante') return ctx.solicitante_creado_por === userId;
   if (userRol === 'propietario' || userRol === 'inmobiliaria') {
-    return perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: ctx.inmueble_propietario_id,
-      inmuebleInmobiliariaId: ctx.inmueble_inmobiliaria_id,
-    });
+    return assertExpedienteAccess(ctx.id, userId, userRol).then(
+      () => true,
+      () => false,
+    );
   }
   return false;
 }

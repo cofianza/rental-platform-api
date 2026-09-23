@@ -40,7 +40,7 @@ vi.mock('@/lib/supabase', () => ({
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
-vi.mock('@/lib/tenantScope', () => ({ perfilEsDuenoDeInmueble: vi.fn(async () => true) }));
+vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: vi.fn(async () => undefined) }));
 vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(async () => undefined) }));
 
 import { listarSoportes, getContextoDocumentosPublico } from '../expediente-soportes.service';

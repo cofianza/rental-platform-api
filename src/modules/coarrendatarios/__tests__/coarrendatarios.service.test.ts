@@ -79,7 +79,12 @@ vi.mock('@/config/env', () => ({ env: mockEnv }));
 vi.mock('@/lib/calibracion', () => ({
   getCalibracion: vi.fn(async () => ({ UMBRAL_ZONA_GRIS: 70, UMBRAL_APROBACION_AUTOMATICA: 85, UMBRAL_COARRENDATARIO: 80 })),
 }));
-vi.mock('@/lib/tenantScope', () => ({ perfilEsDuenoDeInmueble: vi.fn(async () => true) }));
+const mockAssertExpedienteAccess = vi.fn(async (..._args: unknown[]) => undefined);
+vi.mock('@/lib/tenantScope', () => ({
+  assertExpedienteAccess: (...args: unknown[]) => mockAssertExpedienteAccess(...args),
+  // Membresía de la org: dejaba pasar a cualquier miembro (no debe decidir aquí).
+  perfilEsDuenoDeInmueble: vi.fn(async () => true),
+}));
 const mockListOperators = vi.fn(async () => [{ id: 'analista-1' }]);
 vi.mock('@/modules/users/users.service', () => ({ listOperators: () => mockListOperators() }));
 vi.mock('resend', () => ({
@@ -280,6 +285,34 @@ describe('getCoarrendatarioPorExpediente / invitar — datos del co-arrendatario
 
     expect(selectsCoa().length).toBeGreaterThan(0);
     expect(selectsCoa().every((c) => c !== '*' && !/\btoken\b/.test(c))).toBe(true);
+  });
+});
+
+// ============================================================
+// Cartera: un miembro restringido de la inmobiliaria no ve el co-arrendatario
+// de un estudio ajeno solo por ser de la misma organizacion.
+// ============================================================
+
+describe('acceso de la inmobiliaria por cartera', () => {
+  const MIEMBRO_ID = 'cc0e8400-e29b-41d4-a716-446655440000';
+
+  it('fuera de su cartera: 403 y no lee la fila del co-arrendatario', async () => {
+    mockAssertExpedienteAccess.mockRejectedValueOnce(new Error('404'));
+    enqueue('expedientes', ctxRow());
+
+    await expect(getCoarrendatarioPorExpediente(EXPEDIENTE_ID, MIEMBRO_ID, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(mockAssertExpedienteAccess).toHaveBeenCalledWith(EXPEDIENTE_ID, MIEMBRO_ID, 'inmobiliaria');
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios')).toBe(false);
+  });
+
+  it('en su cartera: lo ve', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, estado: 'pendiente_aceptacion', estudio_id: null }, error: null });
+
+    const coa = await getCoarrendatarioPorExpediente(EXPEDIENTE_ID, MIEMBRO_ID, 'inmobiliaria');
+    expect(coa?.id).toBe(COA_ID);
   });
 });
 
