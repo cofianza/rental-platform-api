@@ -885,7 +885,8 @@ async function buildContratoContext(
       municipio: inmueble.ciudad,
       matricula_inmobiliaria: inmueble.matricula_inmobiliaria || '',
       canon_numero: formatearPesos(monto),
-      canon_letras: numeroALetras(monto).toUpperCase(),
+      // La plantilla añade « pesos M/CTE»: sin la «DE» salía «DOS MILLONES pesos».
+      canon_letras: numeroAPesosLetras(monto).replace(/ PESOS M\/CTE$/, ''),
       propiedad_horizontal: esPH ? 'Sí' : 'No',
       parqueadero: tieneParqueadero ? 'Sí' : 'No',
       cuarto_util: inmueble.cuarto_util ? 'Sí' : 'No',
