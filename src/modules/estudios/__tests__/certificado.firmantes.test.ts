@@ -262,6 +262,26 @@ describe('filas del certificado', () => {
   });
 });
 
+// Adenda 1 del módulo de contratos §1.1: "La prima y la tarifa causan IVA, siempre."
+describe('IVA de la prima y la tarifa', () => {
+  it('las dos llevan su IVA, con la tarifa del panel, en las dos versiones', async () => {
+    for (const d of [DATOS, sinPuntaje(DATOS)]) {
+      textos.mockClear();
+      await generateCertificatePdf(d, QR);
+      const t = impreso();
+      expect(t).toMatch(/2% del canon más IVA \(aprobación automática\): \$\s40\.000 \+ IVA del 19% = \$\s47\.600/);
+      expect(t).toMatch(/20% del canon más IVA, pago único al activar: \$\s400\.000 \+ IVA del 19% = \$\s476\.000/);
+    }
+
+    textos.mockClear();
+    const tarifas = calcularTarifas({ via: 'condicionada_coarrendatario', conCoarrendatario: true, canonCop: 2_000_000, ivaPct: 16 });
+    await generateCertificatePdf({ ...DATOS, tarifas }, QR);
+    const t = impreso();
+    expect(t).toMatch(/2,5% del canon más IVA \(aprobación condicionada con coarrendatario\): \$\s50\.000 \+ IVA del 16% = \$\s58\.000/);
+    expect(t).toMatch(/10% del canon más IVA, pago único al activar: \$\s200\.000 \+ IVA del 16% = \$\s232\.000/);
+  });
+});
+
 describe('quién recibe cuál', () => {
   const FIRMANTES = llaveFirmantes(CERT.pdf_storage_key);
 

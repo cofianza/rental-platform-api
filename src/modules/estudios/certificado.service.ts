@@ -358,16 +358,24 @@ export async function generateCertificatePdf(
             : t.via === 'condicionada_coarrendatario'
               ? 'aprobación condicionada con coarrendatario'
               : 'aprobación tras revisión manual';
+        // Adenda 1 contratos §1.1: la prima y la tarifa causan IVA, siempre
+        // (TARIFA_IVA del panel), sobre el canon sin IVA.
+        const masIva = (base: number | null, conIva: number | null) =>
+          base == null || conIva == null
+            ? ''
+            : `: ${formatCurrency(base)} + IVA del ${formatPct(t.iva_pct)} = ${formatCurrency(conIva)}`;
+        const primaConIva =
+          t.prima_vinculacion_cop == null ? null : Math.round(t.prima_vinculacion_cop * (1 + t.iva_pct / 100));
         condRows.push([
           'Tarifa mensual de la fianza',
-          `${t.tarifa_mensual_pct}% del canon más IVA (${via})` +
-            (t.tarifa_mensual_cop != null ? ` = ${formatCurrency(t.tarifa_mensual_cop)} + IVA` : '') +
+          `${formatPct(t.tarifa_mensual_pct)} del canon más IVA (${via})` +
+            masIva(t.tarifa_mensual_cop, t.tarifa_mensual_con_iva_cop) +
             (t.negociada ? ' — condiciones especiales autorizadas' : ''),
         ]);
         condRows.push([
           'Prima de vinculación',
-          `${t.prima_vinculacion_pct}% del canon, pago único al activar` +
-            (t.prima_vinculacion_cop != null ? ` = ${formatCurrency(t.prima_vinculacion_cop)}` : ''),
+          `${formatPct(t.prima_vinculacion_pct)} del canon más IVA, pago único al activar` +
+            masIva(t.prima_vinculacion_cop, primaConIva),
         ]);
         condRows.push([
           'Cashback',
