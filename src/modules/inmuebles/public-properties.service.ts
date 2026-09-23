@@ -9,6 +9,7 @@ import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { buildPaginationMeta } from '@/utils/pagination';
 import type { ListPublicPropertiesQuery } from './public-properties.schema';
+import { TIPOS_INMUEBLE } from './inmuebles.schema';
 
 // ── Public-safe fields (NEVER include direccion, propietario_id, notas_internas) ──
 
@@ -185,11 +186,21 @@ export async function listPublicProperties(query: ListPublicPropertiesQuery) {
     qb = qb.gte('habitaciones', habitaciones);
   }
 
-  // Text search (case insensitive across barrio, ciudad, tipo, descripcion)
+  // Búsqueda de texto. `tipo` es un enum y Postgres no tiene ILIKE para enums
+  // (42883: tumbaba TODA búsqueda y la vitrina decía «No hay resultados»), así
+  // que el tipo va por igualdad. Las comas separan términos que deben cumplirse
+  // todos («Laureles, Medellín»); cada término se limpia de lo que rompe la
+  // sintaxis de .or() de PostgREST.
   if (search) {
-    qb = qb.or(
-      `barrio.ilike.%${search}%,ciudad.ilike.%${search}%,tipo.ilike.%${search}%,descripcion.ilike.%${search}%`,
-    );
+    const terminos = search
+      .split(',')
+      .map((t) => t.replace(/[()*%"\\]/g, ' ').trim())
+      .filter(Boolean);
+    for (const term of terminos) {
+      const tipoTerm = term.toLowerCase().replace(/\s+/g, '_');
+      const porTipo = (TIPOS_INMUEBLE as readonly string[]).includes(tipoTerm) ? `,tipo.eq.${tipoTerm}` : '';
+      qb = qb.or(`barrio.ilike.%${term}%,ciudad.ilike.%${term}%,descripcion.ilike.%${term}%${porTipo}`);
+    }
   }
 
   // Sort and paginate

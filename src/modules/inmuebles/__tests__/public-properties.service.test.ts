@@ -107,6 +107,31 @@ describe('Public Properties Service', () => {
         expect.stringContaining('laureles'),
       );
     });
+
+    // tipo es un enum: ILIKE sobre él da 42883 y tumba toda la búsqueda.
+    it('no usa ILIKE sobre tipo; un tipo conocido va por igualdad', async () => {
+      await service.listPublicProperties({
+        page: 1, limit: 12, search: 'Casa Finca',
+        sortBy: 'created_at', sortOrder: 'desc',
+      });
+
+      const filtro = (mockChain.or as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+      expect(filtro).not.toContain('tipo.ilike');
+      expect(filtro).toContain('tipo.eq.casa_finca');
+    });
+
+    it('separa por comas y limpia lo que rompe el or() de PostgREST', async () => {
+      await service.listPublicProperties({
+        page: 1, limit: 12, search: 'Laureles, (Medellín)*,  ',
+        sortBy: 'created_at', sortOrder: 'desc',
+      });
+
+      const filtros = (mockChain.or as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
+      expect(filtros).toEqual([
+        'barrio.ilike.%Laureles%,ciudad.ilike.%Laureles%,descripcion.ilike.%Laureles%',
+        'barrio.ilike.%Medellín%,ciudad.ilike.%Medellín%,descripcion.ilike.%Medellín%',
+      ]);
+    });
   });
 
   describe('getPublicPropertyById()', () => {

@@ -24,6 +24,10 @@ export const INMUEBLE_FIELD_LABELS: Record<string, string> = {
   propietario_id: 'Propietario',
   visible_vitrina: 'Visible en vitrina',
   foto_fachada_url: 'Foto de fachada',
+  codigo: 'Código',
+  propiedad_horizontal: 'Propiedad horizontal',
+  cuarto_util: 'Cuarto útil',
+  ubicacion_detallada: 'Ubicación detallada',
 };
 
 export function getFieldLabel(campo: string): string {

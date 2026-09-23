@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const TIPOS_INMUEBLE = [
+export const TIPOS_INMUEBLE = [
   'apartamento', 'casa', 'oficina', 'local', 'bodega',
   'apartaestudio', 'casa_finca', 'finca', 'lote', 'parqueadero',
 ] as const;
