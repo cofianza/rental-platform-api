@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
+import { resolveInmobiliariaIdForPerfil, resolveVisibilityScope, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 import type {
   CreateApplicantInput,
   UpdateApplicantInput,
@@ -277,6 +277,24 @@ export async function updateApplicant(id: string, input: UpdateApplicantInput, u
   // confirmar que existe. Dentro, el titular y los compañeros corrigen la
   // ficha aunque la haya registrado otro miembro.
   const previous = await getApplicantById(id, updatedBy, userRol) as { creado_por?: string | null; inmobiliaria_id?: string | null } & Record<string, unknown>;
+
+  // Miembro restringido (miembros_ven_todo=false): ve la organización, pero edita
+  // solo las fichas que registró o las de sus estudios (el alcance 'own' de tenantScope).
+  if (userRol === 'inmobiliaria' && previous.creado_por !== updatedBy) {
+    const scope = await resolveVisibilityScope(updatedBy, userRol);
+    if (scope.kind === 'own') {
+      const permitidos = (await resolveAllowedExpedienteIds(updatedBy, userRol)) ?? [];
+      const { count } = permitidos.length
+        ? await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+            .select('id', { count: 'exact', head: true })
+            .eq('solicitante_id', id)
+            .in('id', permitidos)
+        : { count: 0 };
+      if (!count) {
+        throw AppError.forbidden('Solo puedes editar las fichas que registraste o las de tus estudios.', 'FICHA_DE_OTRO_MIEMBRO');
+      }
+    }
+  }
 
   // Construir solo campos definidos
   const updateData: Record<string, unknown> = {};

@@ -317,7 +317,7 @@ export async function listOrphanAuthUsers(): Promise<OrphanAuthUser[]> {
   // perfil. Antes se traían todos los perfiles en una consulta, pero PostgREST
   // corta en 1000 filas: pasado ese número, cuentas reales salían como
   // huérfanas (y el panel las borra). Un lote de 200 nunca llega al tope.
-  const PAGE_SIZE = 200;
+  const PAGE_SIZE = 100; // .in() de 100 UUID: la URL queda lejos del tope de ~8 KB del gateway
   const orphans: OrphanAuthUser[] = [];
   let page = 1;
    

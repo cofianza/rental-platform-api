@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // corregir la de un compañero. Mock de Supabase con colas por tabla + `ops`.
 // ============================================================
 
-const { ops, enqueue, queues, mockOrg, chainFor } = vi.hoisted(() => {
+const { ops, enqueue, queues, mockOrg, mockScope, mockPermitidos, chainFor } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -32,13 +32,25 @@ const { ops, enqueue, queues, mockOrg, chainFor } = vi.hoisted(() => {
   const enqueue = (table: string, ...items: Res[]) => {
     queues.set(table, [...(queues.get(table) ?? []), ...items]);
   };
-  return { ops, enqueue, queues, mockOrg: vi.fn(async (_id: string): Promise<string | null> => null), chainFor };
+  return {
+    ops,
+    enqueue,
+    queues,
+    mockOrg: vi.fn(async (_id: string): Promise<string | null> => null),
+    mockScope: vi.fn(async (_id: string): Promise<{ kind: string }> => ({ kind: 'org' })),
+    mockPermitidos: vi.fn((): string[] => []),
+    chainFor,
+  };
 });
 
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => chainFor(t) } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
-vi.mock('@/lib/tenantScope', () => ({ resolveInmobiliariaIdForPerfil: (id: string) => mockOrg(id) }));
+vi.mock('@/lib/tenantScope', () => ({
+  resolveInmobiliariaIdForPerfil: (id: string) => mockOrg(id),
+  resolveVisibilityScope: (id: string) => mockScope(id),
+  resolveAllowedExpedienteIds: async () => mockPermitidos(),
+}));
 
 import { listApplicants, updateApplicant, searchByDocument } from '../solicitantes.service';
 
@@ -49,6 +61,8 @@ beforeEach(() => {
   queues.clear();
   mockOrg.mockReset();
   mockOrg.mockResolvedValue(null);
+  mockScope.mockResolvedValue({ kind: 'org' });
+  mockPermitidos.mockReturnValue([]);
 });
 
 describe('alcance de fichas', () => {
@@ -84,5 +98,16 @@ describe('alcance de fichas', () => {
     await updateApplicant('s-1', { telefono: '3000000000' } as never, 'titular', undefined, 'inmobiliaria');
     expect(ors()[0]).toBe('inmobiliaria_id.eq.org-A');
     expect(ops.some((o) => o.table === 'solicitantes' && o.method === 'update')).toBe(true);
+  });
+
+  it('un miembro restringido no edita la ficha que registró otro si no es de sus estudios', async () => {
+    mockOrg.mockResolvedValue('org-A');
+    mockScope.mockResolvedValue({ kind: 'own' });
+    mockPermitidos.mockReturnValue([]);
+    enqueue('solicitantes', { data: { id: 's-1', creado_por: 'otro', inmobiliaria_id: 'org-A' }, error: null });
+    await expect(
+      updateApplicant('s-1', { telefono: '3000000000' } as never, 'restringido', undefined, 'inmobiliaria'),
+    ).rejects.toMatchObject({ errorCode: 'FICHA_DE_OTRO_MIEMBRO' });
+    expect(ops.some((o) => o.table === 'solicitantes' && o.method === 'update')).toBe(false);
   });
 });
