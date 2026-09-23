@@ -575,6 +575,16 @@ export async function generarCertificado(
   // OTRA agencia por UUID (write-IDOR). No-op para roles internos.
   await assertExpedienteAccess(e.expediente_id as string, userId, userRol);
 
+  // Los datos de la persona salen del expediente (el titular): con la fila del
+  // co-arrendatario salia un CRC a nombre del titular con el resultado y el
+  // score de otra persona, verificable por QR.
+  if (e.tipo === 'con_coarrendatario') {
+    throw AppError.conflict(
+      'El certificado se emite sobre el estudio del titular; la evaluación del co-arrendatario ya se refleja en él.',
+      'ESTUDIO_COARRENDATARIO_NO_CERTIFICABLE',
+    );
+  }
+
   // 2. Validate
   if (e.estado !== 'completado') {
     throw AppError.conflict('El estudio debe estar completado para generar certificado', 'ESTUDIO_NO_COMPLETADO');

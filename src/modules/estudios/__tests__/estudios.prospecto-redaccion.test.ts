@@ -67,7 +67,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
 
 import { getEstudioById, listEstudios, getCertificadoViewUrl, buscarEstudioVigentePorDocumento } from '../estudios.service';
-import { descargarCertificado } from '../certificado.service';
+import { descargarCertificado, generarCertificado } from '../certificado.service';
 import { tarifasDelEstudio } from '../tarifa-override.service';
 import { contrasteIngresoProspecto } from '@/modules/autorizaciones/ingreso-declarado';
 import { resolveAllowedExpedienteIds } from '@/lib/tenantScope';
@@ -179,6 +179,17 @@ describe('ruta del §10 cuando el analista ya decidio el condicionado', () => {
     enqueue('expedientes', { data: { estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, error: null });
     const e = (await getEstudioById('est-1', 'u-1', 'solicitante')) as { ruta: { ruta: string } };
     expect(e.ruta.ruta).not.toBe('no_aprobable');
+  });
+});
+
+describe('CRC del estudio del co-arrendatario', () => {
+  it('no se emite, ni siquiera por un operador: saldria a nombre del titular con el resultado de otra persona', async () => {
+    enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
+    await expect(generarCertificado('est-1', 'u-1', undefined, 'operador_analista')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'ESTUDIO_COARRENDATARIO_NO_CERTIFICABLE',
+    });
+    expect(ops.some((o) => o.table === 'estudios_certificados')).toBe(false);
   });
 });
 
