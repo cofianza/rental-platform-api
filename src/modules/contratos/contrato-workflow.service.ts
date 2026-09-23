@@ -199,8 +199,8 @@ export async function executeContratoTransition(
 // Transicion automatica del sistema (cron de vencimiento)
 // ============================================================
 
-const MOTIVO_VENCIMIENTO = 'Vencimiento automatico: se alcanzo la fecha de fin del contrato.';
-const COMENTARIO_VENCIMIENTO = 'Finalizacion automatica por vencimiento del plazo.';
+const MOTIVO_VENCIMIENTO = 'Vencimiento automático: se alcanzó la fecha de fin del contrato.';
+const COMENTARIO_VENCIMIENTO = 'Finalización automática por vencimiento del plazo.';
 
 /**
  * Finaliza un contrato VENCIDO como accion del sistema (sin usuario HTTP).
@@ -231,7 +231,7 @@ export async function finalizarContratoVencido(contratoId: string): Promise<bool
   const transitionDef = getContratoTransitionDef('vigente', 'finalizado')!;
   await checkPreconditions(transitionDef.preconditions, contrato, input);
 
-  const descripcion = `Estado cambiado de 'vigente' a 'finalizado' por el sistema (vencimiento automatico). Motivo: ${MOTIVO_VENCIMIENTO}`;
+  const descripcion = `Estado cambiado de 'vigente' a 'finalizado' por el sistema (vencimiento automático). Motivo: ${MOTIVO_VENCIMIENTO}`;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any).rpc('transicionar_contrato', {

@@ -634,7 +634,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
       'Intento de crear cita con una activa ya existente',
     );
     throw AppError.conflict(
-      `Ya existe una cita ${existentes[0].estado} para este estudio. Cancelala antes de agendar otra.`,
+      `Ya existe una cita ${existentes[0].estado} para este estudio. Cancélala antes de agendar otra.`,
       'CITA_ACTIVA_EXISTE',
     );
   }

@@ -483,7 +483,7 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
             <p style="color: #065f46; margin: 4px 0 0;">${fechaFormateada}</p>
             ${notas_propietario ? `<p style="color: #065f46; margin: 8px 0 0;"><strong>Notas:</strong> ${escapeHtml(notas_propietario)}</p>` : ''}
           </div>
-          <p style="color: #6b7280;">Después de la visita, el propietario habilitará tu evaluación crediticia.</p>
+          <p style="color: #6b7280;">Después de la visita, se habilitará tu evaluación crediticia.</p>
           ${enlaces ? `<p style="color: #6b7280;">¿No puedes ir? Reprograma o cancela la visita aquí:</p>${enlacesVisitaHtml(enlaces)}` : ''}
           ${footerHtml(company)}
         </div>
@@ -564,7 +564,8 @@ export async function sendCitaCanceladaEmail(params: {
   const { email, nombre_destinatario, inmueble, ciudad, fecha_cita, motivo, cancelado_por, url_citas } = params;
   const fechaFormateada = formatFechaColombia(fecha_cita);
 
-  const quienCancelo = cancelado_por === 'propietario' ? 'El propietario' : 'El solicitante';
+  // 'propietario' agrupa al dueño, la inmobiliaria y Cofianza: texto neutro.
+  const quienCancelo = cancelado_por === 'propietario' ? 'Quien publicó el inmueble' : 'El solicitante';
 
   const company = await getCompany();
 
@@ -579,7 +580,7 @@ export async function sendCitaCanceladaEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_destinatario)}</strong>,</p>
-          <p style="color: #6b7280;">${quienCancelo} cancelo la visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
+          <p style="color: #6b7280;">${quienCancelo} canceló la visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
           <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #991b1b; margin: 0; font-size: 13px;">Fecha que estaba agendada:</p>
             <p style="color: #991b1b; margin: 2px 0 12px;">${fechaFormateada}</p>
