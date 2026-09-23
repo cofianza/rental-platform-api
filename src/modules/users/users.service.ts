@@ -408,7 +408,7 @@ export async function listOrphanAuthUsers(): Promise<OrphanAuthUser[]> {
 // ============================================================
 
 interface DeleteCheck {
-  /** Tabla → cantidad de filas que apuntan al usuario. */
+  /** Etiqueta legible (se muestra al admin) → filas que apuntan al usuario. */
   blockers: Record<string, number>;
   /** Si true, podemos borrar sin riesgo de FK violation. */
   safe: boolean;
@@ -418,49 +418,49 @@ async function checkDeleteBlockers(userId: string): Promise<DeleteCheck> {
   // Solo chequeamos las tablas con FKs NOT NULL sin policy de delete:
   // estas son las que bloquearán el DELETE en Postgres.
   const checks: Array<[string, () => Promise<number>]> = [
-    ['inmuebles (como propietario)', async () => {
+    ['Inmuebles a su nombre', async () => {
       const { count } = await (supabase
         .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('propietario_id', userId);
       return count || 0;
     }],
-    ['pagos (creados por)', async () => {
+    ['Pagos que registró', async () => {
       const { count } = await (supabase
         .from('pagos' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('creado_por', userId);
       return count || 0;
     }],
-    ['lotes_creditos_estudios (perfil)', async () => {
+    ['Paquetes de créditos', async () => {
       const { count } = await (supabase
         .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('perfil_id', userId);
       return count || 0;
     }],
-    ['compras_creditos_estudios (perfil)', async () => {
+    ['Compras de créditos', async () => {
       const { count } = await (supabase
         .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('perfil_id', userId);
       return count || 0;
     }],
-    ['movimientos_creditos_estudios (perfil)', async () => {
+    ['Movimientos de créditos', async () => {
       const { count } = await (supabase
         .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('perfil_id', userId);
       return count || 0;
     }],
-    ['cambios_inmuebles (autor)', async () => {
+    ['Cambios en inmuebles', async () => {
       const { count } = await (supabase
         .from('cambios_inmuebles' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
         .eq('usuario_id', userId);
       return count || 0;
     }],
-    ['comentarios', async () => {
+    ['Comentarios', async () => {
       const { count } = await (supabase
         .from('comentarios' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
