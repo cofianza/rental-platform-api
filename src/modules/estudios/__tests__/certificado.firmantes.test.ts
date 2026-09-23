@@ -270,6 +270,28 @@ describe('filas del certificado', () => {
   });
 });
 
+describe('QR y pie', () => {
+  // Estudio sin canon congelado y con el inmueble a medio llenar: la trazabilidad
+  // cabe al fondo de la página 1 y el QR (y=720) con el pie se salían de la hoja.
+  it('van juntos en la misma página', async () => {
+    const corto = {
+      ...DATOS,
+      canonEvaluado: null,
+      canonMaximoTolerado: null,
+      inmuebleEstrato: null,
+      inmuebleValorArriendo: null,
+      inmuebleArea: null,
+      inmuebleCodigo: null,
+      observaciones: null,
+      condiciones: null,
+    };
+    await generateCertificatePdf(sinPuntaje(corto), QR);
+    // Carta: 792 de alto y 50 de margen; lo que pase de 742 pdfkit lo lleva a otra hoja.
+    const pie = textos.mock.calls.find((c) => String(c[0]).startsWith('COFIANZA S.A.S. | NIT'));
+    expect(pie?.[2] as number).toBeLessThanOrEqual(742 - 9);
+  });
+});
+
 // Adenda 1 del módulo de contratos §1.1: "La prima y la tarifa causan IVA, siempre."
 describe('IVA de la prima y la tarifa', () => {
   it('las dos llevan su IVA, con la tarifa del panel, en las dos versiones', async () => {

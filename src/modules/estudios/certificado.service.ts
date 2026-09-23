@@ -442,6 +442,9 @@ export async function generateCertificatePdf(
     y += 15;
 
     // ---- SECTION: QR + VERIFICACION ----
+    // QR (110) y pie (~70) van juntos: sin esto el pie se partia y quedaba una
+    // pagina con una sola linea.
+    y = asegurarEspacio(doc, y, 180);
     const verificationUrl = `${env.FRONTEND_URL}/verificar/${data.codigo}`;
 
     doc.image(qrBuffer, 50, y, { width: 100, height: 100 });
