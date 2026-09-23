@@ -533,9 +533,10 @@ function drawTable(doc: PDFKit.PDFDocument, rows: string[][], startY: number, wi
 // ============================================================
 
 /**
- * Ultima corrida del motor para el estudio. Best-effort: sin fila (estudio
- * anterior al motor, o migracion sin correr) el CRC sale igual, sin factor
- * ni puntaje.
+ * Ultima corrida del motor para el estudio. Sin fila (estudio anterior al
+ * motor) el CRC sale igual, sin factor ni puntaje. Un error de lectura se
+ * lanza: con null el CRC diria "no verificable" y quitaria el 40% por un
+ * fallo de la base, no porque no hubiera ingreso.
  */
 export async function leerSombraDelEstudio(
   estudioId: string,
@@ -546,42 +547,42 @@ export async function leerSombraDelEstudio(
   denominador: string | null;
   canonIngresoPct: number | null;
 } | null> {
-  try {
-    const { data } = await (supabase
-      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-      .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version, features_crudas, canon_ingreso_pct, canon_ingreso_ajustado_pct')
-      .eq('estudio_id', estudioId)
-      .order('fecha_calculo', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null; canon_ingreso_pct?: number | string | null; canon_ingreso_ajustado_pct?: number | string | null } | null;
-    if (!row) return null;
-    const num = (v: unknown) => {
-      const n = typeof v === 'string' ? Number(v) : v;
-      return typeof n === 'number' && Number.isFinite(n) ? n : null;
-    };
-    // Adenda 2 §4.3: "el CRC [...] debe indicar el denominador aplicado y que
-    // variables participaron". Las corridas anteriores a la Adenda 2 no lo traen.
-    // Si un analista resolvio la revision manual, manda su recalculo (con V7/V9).
-    const rm = row.features_crudas?.revision_manual as Record<string, unknown> | undefined;
-    const den = num(rm?.denominador ?? row.features_crudas?.denominador_normalizacion);
-    const vars = rm?.variables_participantes ?? row.features_crudas?.variables_participantes;
-    const denominador = den && Array.isArray(vars)
-      ? `${den} puntos (${vars.join(', ')})${rm ? ' — recalculado en revisión manual' : ''}`
-      : null;
-    const puntaje = rm ? num(rm.puntaje_normalizado) : num(row.puntaje_normalizado);
-    return {
-      puntaje,
-      factor: num(row.factor_ajuste_ingreso),
-      modeloVersion: row.modelo_version ?? null,
-      denominador,
-      // Con el ingreso ajustado es con el que decide el motor (Adenda 1 §1.1);
-      // las corridas anteriores al factor solo tienen el crudo.
-      canonIngresoPct: num(row.canon_ingreso_ajustado_pct) ?? num(row.canon_ingreso_pct),
-    };
-  } catch {
-    return null;
+  const { data, error } = await (supabase
+    .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+    .select('puntaje_normalizado, factor_ajuste_ingreso, modelo_version, features_crudas, canon_ingreso_pct, canon_ingreso_ajustado_pct')
+    .eq('estudio_id', estudioId)
+    .order('fecha_calculo', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    logger.error({ estudioId, error: error.message }, 'CRC: no se pudo leer la corrida del motor');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del estudio. Intenta de nuevo en un momento.');
   }
+  const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null; canon_ingreso_pct?: number | string | null; canon_ingreso_ajustado_pct?: number | string | null } | null;
+  if (!row) return null;
+  const num = (v: unknown) => {
+    const n = typeof v === 'string' ? Number(v) : v;
+    return typeof n === 'number' && Number.isFinite(n) ? n : null;
+  };
+  // Adenda 2 §4.3: "el CRC [...] debe indicar el denominador aplicado y que
+  // variables participaron". Las corridas anteriores a la Adenda 2 no lo traen.
+  // Si un analista resolvio la revision manual, manda su recalculo (con V7/V9).
+  const rm = row.features_crudas?.revision_manual as Record<string, unknown> | undefined;
+  const den = num(rm?.denominador ?? row.features_crudas?.denominador_normalizacion);
+  const vars = rm?.variables_participantes ?? row.features_crudas?.variables_participantes;
+  const denominador = den && Array.isArray(vars)
+    ? `${den} puntos (${vars.join(', ')})${rm ? ' — recalculado en revisión manual' : ''}`
+    : null;
+  const puntaje = rm ? num(rm.puntaje_normalizado) : num(row.puntaje_normalizado);
+  return {
+    puntaje,
+    factor: num(row.factor_ajuste_ingreso),
+    modeloVersion: row.modelo_version ?? null,
+    denominador,
+    // Con el ingreso ajustado es con el que decide el motor (Adenda 1 §1.1);
+    // las corridas anteriores al factor solo tienen el crudo.
+    canonIngresoPct: num(row.canon_ingreso_ajustado_pct) ?? num(row.canon_ingreso_pct),
+  };
 }
 
 /**

@@ -242,6 +242,14 @@ describe('relación canon/ingreso', () => {
     expect(firmantes).not.toContain(NO_VERIFICABLE);
   });
 
+  it('un error leyendo la corrida se lanza: no se imprime «no verificable» por un fallo de la base', async () => {
+    enqueue('estudios_scorecard_sombra', { data: null, error: { message: 'canceling statement due to statement timeout' } });
+    await expect(leerSombraDelEstudio('est-1')).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+    // Sin fila (estudio anterior al motor) sí es legítimo: sale sin cifra.
+    enqueue('estudios_scorecard_sombra', { data: null, error: null });
+    await expect(leerSombraDelEstudio('est-1')).resolves.toBeNull();
+  });
+
   it('se lee de la corrida del motor: el ajustado por el factor y, si no lo hay, el crudo', async () => {
     enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: '40.00', canon_ingreso_ajustado_pct: '34.78' }, error: null });
     expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBe(34.78);
