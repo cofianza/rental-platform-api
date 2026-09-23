@@ -106,6 +106,9 @@ export function validarDatos(
   d: DatosVivienda,
   o: Pick<OpcionesVivienda, 'modo' | 'logoInmobiliaria'>,
 ): void {
+  // Sin las tarifas del CRC no hay fianza que liquidar: mejor fallar que imprimir 0 % o la prima sin IVA.
+  if (![d.primaPct, d.tarifaPct, d.cashbackPct, d.ivaPct].every((n) => Number.isFinite(n) && n >= 0))
+    throw faltante('tarifas', 'Faltan las tarifas del CRC (prima, tarifa, cashback o IVA) para liquidar la fianza');
   const logo = o.logoInmobiliaria;
   const reglas: [regla: string, falla: boolean, msg: string][] = [
     [

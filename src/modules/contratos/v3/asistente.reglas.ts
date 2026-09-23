@@ -731,7 +731,8 @@ const TIPO_CUENTA: Record<string, string> = { ahorros: 'de ahorros', corriente: 
 
 /**
  * Supone los bloqueos resueltos (G1: NIT con DV; G2: CRC; tarifas). Si no lo
- * están, el motor falla con PLANTILLA_DATO_FALTANTE en vez de imprimir basura.
+ * están, el motor falla con PLANTILLA_DATO_FALTANTE en vez de imprimir basura
+ * (sin tarifas van NaN, que validarDatos rechaza: nunca 0 % ni la prima sin IVA).
  */
 export function armarDatosVivienda(
   f: Fuentes,
@@ -795,10 +796,10 @@ export function armarDatosVivienda(
     },
     modalidad: a.paso1.modalidad,
     crc: { numero: crc?.codigo ?? '', fecha: crc ? fechaBogota(crc.fecha_emision) : '' },
-    primaPct: t?.prima_vinculacion_pct ?? 0,
-    tarifaPct: t?.tarifa_mensual_pct ?? 0,
-    ivaPct: t?.iva_pct ?? 0,
-    cashbackPct: t?.cashback_pct ?? 0,
+    primaPct: t?.prima_vinculacion_pct ?? NaN,
+    tarifaPct: t?.tarifa_mensual_pct ?? NaN,
+    ivaPct: t?.iva_pct ?? NaN,
+    cashbackPct: t?.cashback_pct ?? NaN,
     comisionPct: a.paso3.comisionPct,
     administracion: a.paso3.administracion,
   };

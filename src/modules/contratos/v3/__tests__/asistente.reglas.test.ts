@@ -474,6 +474,26 @@ describe('armarDatosVivienda → renderizarVivienda (revisión, sin Chromium)', 
     expect(render(fuentes(), PASOS).pendientes).toEqual([]);
   });
 
+  it('el IVA de calibración (tarifas.iva_pct = TARIFA_IVA) llega a la prima impresa', () => {
+    const texto = (iva: number) =>
+      render(fuentes({ tarifas: { ...TARIFAS, iva_pct: iva } }), PASOS)
+        .lineas.map((l) => l.texto)
+        .join('\n');
+    // 10 % de 2.000.000 = 200.000
+    expect(texto(19)).toContain('a la suma de $238.000, pagadera');
+    expect(texto(5)).toContain('a la suma de $210.000, pagadera');
+  });
+
+  it('sin tarifas falla en vez de imprimir 0 % o la prima sin IVA', () => {
+    let e: unknown;
+    try {
+      render(fuentes({ tarifas: null }), PASOS);
+    } catch (x) {
+      e = x;
+    }
+    expect(e).toMatchObject({ errorCode: 'PLANTILLA_DATO_FALTANTE', details: { campo: 'tarifas' } });
+  });
+
   it('sin coarrendatario + sin PH + Tradicional → solo queda pendiente el cashback (b-06)', () => {
     expect(render(fuentes(SOLO), PASOS_SOLO).pendientes).toEqual([{ id: 'b-06', tipo: 'borrador' }]);
   });
