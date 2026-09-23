@@ -2,11 +2,13 @@ import { randomBytes } from 'crypto';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { env } from '@/config';
 import {
   sendCitaSolicitadaPropietarioEmail,
   sendCitaConfirmadaSolicitanteEmail,
   sendCitaReprogramadaSolicitanteEmail,
   sendCitaCanceladaEmail,
+  type EnlacesVisita,
 } from '../orchestrator/orchestrator.emails';
 import { assertCitaPermission, assertInmuebleAdmiteVisitas, resolveAccessibleExpedienteIds } from './citas.permissions';
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
@@ -158,6 +160,15 @@ export async function ensureCitaToken(citaId: string): Promise<string | null> {
   return token;
 }
 
+// Los enlaces del correo son los mismos de los botones del WhatsApp.
+const enlacesVisita = (token: string | null): EnlacesVisita | undefined =>
+  token
+    ? {
+        reprogramar: `${env.FRONTEND_URL}/visita/reprogramar/${token}`,
+        cancelar: `${env.FRONTEND_URL}/visita/cancelar/${token}`,
+      }
+    : undefined;
+
 export async function obtenerContextoExpediente(expedienteId: string): Promise<ExpedienteContexto | null> {
   // Obtener expediente con FKs
   const { data: exp } = await db('expedientes')
@@ -290,7 +301,11 @@ export async function notificarCitaCreada(
   const notaSuffix = notaTrim ? ` Nota del anunciante: ${notaTrim}` : '';
 
   if (autoConfirm) {
-    // Cita creada ya confirmada por propietario/inmobiliaria → notificar al solicitante
+    // Cita creada ya confirmada por propietario/inmobiliaria → notificar al solicitante.
+    // Plantilla v2 con botones Reprogramar/Cancelar → token de la cita (este es
+    // el camino de "creada ya confirmada" por inmobiliaria/dueño); el correo
+    // lleva los mismos enlaces.
+    const token = await ensureCitaToken(citaId);
     if (ctx.solicitanteEmail) {
       await sendCitaConfirmadaSolicitanteEmail({
         email: ctx.solicitanteEmail,
@@ -299,6 +314,7 @@ export async function notificarCitaCreada(
         ciudad: ctx.inmuebleCiudad,
         fecha_confirmada: fechaPropuesta,
         notas_propietario: notaTrim,
+        enlaces: enlacesVisita(token),
       });
     }
     notificarUsuario({
@@ -309,9 +325,6 @@ export async function notificarCitaCreada(
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaPropuesta },
     });
-    // Plantilla v2 con botones Reprogramar/Cancelar → inyectar el token de la
-    // cita (este es el camino de "creada ya confirmada" por inmobiliaria/dueño).
-    const token = await ensureCitaToken(citaId);
     await enviarTemplateWhatsApp({
       to: ctx.solicitanteTelefono,
       template: 'CITA_CONFIRMADA',
@@ -331,6 +344,7 @@ export async function notificarCitaCreada(
         inmueble: ctx.inmuebleDireccion,
         ciudad: ctx.inmuebleCiudad,
         fecha_propuesta: fechaPropuesta,
+        url_visita: `${env.FRONTEND_URL}/citas#cita-${citaId}`,
       });
     }
     notificarUsuario({
@@ -414,6 +428,10 @@ async function notificarCitaConfirmada(
   // Reusa el helper de módulo (misma sanitización y plantilla CITA_NOTA_VISITA).
   const enviarNotaWhatsApp = () => enviarNotaVisitaWhatsApp(ctx, primerNombre, notasPropietario);
 
+  // Token de la cita para los botones Reprogramar/Cancelar del WhatsApp v2 y
+  // los mismos enlaces en el correo.
+  const token = await ensureCitaToken(citaId);
+
   if (reprogramada) {
     await sendCitaReprogramadaSolicitanteEmail({
       email: ctx.solicitanteEmail,
@@ -423,6 +441,7 @@ async function notificarCitaConfirmada(
       fecha_propuesta: fechaPropuesta,
       fecha_confirmada: fechaConfirmada,
       notas_propietario: notasPropietario,
+      enlaces: enlacesVisita(token),
     });
     notificarUsuario({
       userId: ctx.solicitanteUserId ?? '',
@@ -434,12 +453,11 @@ async function notificarCitaConfirmada(
     });
     // WhatsApp al solicitante. La plantilla v2 lleva los mismos botones
     // Reprogramar/Cancelar que la de confirmada → inyectar el token.
-    const tokenReprog = await ensureCitaToken(citaId);
     await enviarTemplateWhatsApp({
       to: ctx.solicitanteTelefono,
       template: 'CITA_REPROGRAMADA',
       variables: [primerNombre, ctx.inmuebleDireccion, fechaPropuestaLegible, fechaConfirmadaLegible],
-      urlButtons: tokenReprog ? [tokenReprog, tokenReprog] : undefined,
+      urlButtons: token ? [token, token] : undefined,
       context: { expediente_id: ctx.expedienteId },
     });
     await enviarNotaWhatsApp();
@@ -453,6 +471,7 @@ async function notificarCitaConfirmada(
     ciudad: ctx.inmuebleCiudad,
     fecha_confirmada: fechaConfirmada,
     notas_propietario: notasPropietario,
+    enlaces: enlacesVisita(token),
   });
   notificarUsuario({
     userId: ctx.solicitanteUserId ?? '',
@@ -465,7 +484,6 @@ async function notificarCitaConfirmada(
   // WhatsApp al solicitante via Meta. La plantilla v2 lleva 2 botones URL
   // (Reprogramar / Cancelar) que abren cofianza.co/visita/<accion>/<token>;
   // el token de la cita se inyecta como sufijo de ambos botones.
-  const token = await ensureCitaToken(citaId);
   await enviarTemplateWhatsApp({
     to: ctx.solicitanteTelefono,
     template: 'CITA_CONFIRMADA',
@@ -550,6 +568,7 @@ export async function notificarCitaCancelada(
         fecha_cita: fechaCita,
         motivo,
         cancelado_por: 'solicitante',
+        url_citas: `${env.FRONTEND_URL}/citas`,
       });
     }
     notificarUsuario({

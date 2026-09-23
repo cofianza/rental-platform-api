@@ -20,6 +20,16 @@ const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 const footerHtml = (c: CompanyInfo) =>
   `<p style="color:#9ca3af;font-size:12px;margin-top:24px;">Correo automático de Cofianza. ¿Dudas? Escríbenos por WhatsApp al ${c.phone} o a ${c.email}.</p>`;
 
+// Botón de los correos de visita (mismo estilo que «Ver en Cofianza»).
+const botonHtml = (url: string, texto: string, color = '#0d9488') =>
+  `<a href="${url}" style="background: ${color}; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; margin: 4px;">${texto}</a>`;
+
+// Enlaces públicos de la visita (/visita/<accion>/<token>), los mismos de los
+// botones del WhatsApp: el prospecto sin WhatsApp ni cuenta también puede actuar.
+export type EnlacesVisita = { reprogramar: string; cancelar: string };
+const enlacesVisitaHtml = (e: EnlacesVisita) =>
+  `<div style="text-align: center; margin: 24px 0;">${botonHtml(e.reprogramar, 'Reprogramar')}${botonHtml(e.cancelar, 'Cancelar la visita', '#6b7280')}</div>`;
+
 // Todos los emails que muestran fechas de citas usan hora Colombia (UTC-5),
 // sin importar la timezone del servidor. Antes de fijar `timeZone` aquí,
 // los correos enviados desde Railway (UTC) mostraban la hora 5 horas
@@ -405,8 +415,10 @@ export async function sendCitaSolicitadaPropietarioEmail(params: {
   inmueble: string;
   ciudad: string;
   fecha_propuesta: string;
+  /** /citas#cita-<id>: la lista de visitas se desplaza hasta esta. */
+  url_visita?: string;
 }) {
-  const { email, nombre_propietario, nombre_solicitante, inmueble, ciudad, fecha_propuesta } = params;
+  const { email, nombre_propietario, nombre_solicitante, inmueble, ciudad, fecha_propuesta, url_visita } = params;
   const fechaFormateada = formatFechaColombia(fecha_propuesta);
 
   const company = await getCompany();
@@ -428,6 +440,7 @@ export async function sendCitaSolicitadaPropietarioEmail(params: {
             <p style="color: #155e75; margin: 4px 0 0;">${fechaFormateada}</p>
           </div>
           <p style="color: #6b7280;">Ingresa a la plataforma para confirmar o ajustar la fecha de la visita.</p>
+          ${url_visita ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(url_visita, 'Ver la visita')}</div>` : ''}
           ${footerHtml(company)}
         </div>
       </div>
@@ -446,8 +459,9 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
   ciudad: string;
   fecha_confirmada: string;
   notas_propietario?: string;
+  enlaces?: EnlacesVisita;
 }) {
-  const { email, nombre_solicitante, inmueble, ciudad, fecha_confirmada, notas_propietario } = params;
+  const { email, nombre_solicitante, inmueble, ciudad, fecha_confirmada, notas_propietario, enlaces } = params;
   const fechaFormateada = formatFechaColombia(fecha_confirmada);
 
   const company = await getCompany();
@@ -470,6 +484,7 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
             ${notas_propietario ? `<p style="color: #065f46; margin: 8px 0 0;"><strong>Notas:</strong> ${escapeHtml(notas_propietario)}</p>` : ''}
           </div>
           <p style="color: #6b7280;">Después de la visita, el propietario habilitará tu evaluación crediticia.</p>
+          ${enlaces ? `<p style="color: #6b7280;">¿No puedes ir? Reprograma o cancela la visita aquí:</p>${enlacesVisitaHtml(enlaces)}` : ''}
           ${footerHtml(company)}
         </div>
       </div>
@@ -489,8 +504,9 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
   fecha_propuesta: string;
   fecha_confirmada: string;
   notas_propietario?: string;
+  enlaces?: EnlacesVisita;
 }) {
-  const { email, nombre_solicitante, inmueble, ciudad, fecha_propuesta, fecha_confirmada, notas_propietario } = params;
+  const { email, nombre_solicitante, inmueble, ciudad, fecha_propuesta, fecha_confirmada, notas_propietario, enlaces } = params;
   const fechaOriginal = formatFechaColombia(fecha_propuesta);
   const fechaNueva = formatFechaColombia(fecha_confirmada);
 
@@ -515,7 +531,9 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
             <p style="color: #92400e; margin: 4px 0 0; font-weight: bold; font-size: 16px;">${fechaNueva}</p>
             ${notas_propietario ? `<p style="color: #92400e; margin: 12px 0 0;"><strong>Notas del propietario:</strong> ${escapeHtml(notas_propietario)}</p>` : ''}
           </div>
-          <p style="color: #6b7280;">Si el nuevo horario no te sirve, contacta al propietario desde tu panel para reagendar.</p>
+          ${enlaces
+            ? `<p style="color: #6b7280;">Si el nuevo horario no te sirve, reprograma o cancela la visita aquí:</p>${enlacesVisitaHtml(enlaces)}`
+            : '<p style="color: #6b7280;">Si el nuevo horario no te sirve, comunícate con quien publicó el inmueble para reagendar.</p>'}
           ${footerHtml(company)}
         </div>
       </div>
@@ -540,8 +558,10 @@ export async function sendCitaCanceladaEmail(params: {
   fecha_cita: string;
   motivo: string;
   cancelado_por: 'propietario' | 'solicitante';
+  /** /citas, solo para el dueño (el prospecto no tiene panel de visitas). */
+  url_citas?: string;
 }) {
-  const { email, nombre_destinatario, inmueble, ciudad, fecha_cita, motivo, cancelado_por } = params;
+  const { email, nombre_destinatario, inmueble, ciudad, fecha_cita, motivo, cancelado_por, url_citas } = params;
   const fechaFormateada = formatFechaColombia(fecha_cita);
 
   const quienCancelo = cancelado_por === 'propietario' ? 'El propietario' : 'El solicitante';
@@ -566,7 +586,9 @@ export async function sendCitaCanceladaEmail(params: {
             <p style="color: #991b1b; margin: 0; font-weight: bold;">Motivo:</p>
             <p style="color: #991b1b; margin: 4px 0 0;">${escapeHtml(motivo)}</p>
           </div>
-          <p style="color: #6b7280;">Puedes coordinar una nueva fecha desde tu panel en Cofianza.</p>
+          ${cancelado_por === 'solicitante'
+            ? `<p style="color: #6b7280;">Si agenda una nueva fecha, te llegará el aviso para confirmarla.</p>${url_citas ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(url_citas, 'Ver mis visitas')}</div>` : ''}`
+            : '<p style="color: #6b7280;">Si todavía te interesa el inmueble, comunícate con quien lo publicó para coordinar una nueva fecha.</p>'}
           ${footerHtml(company)}
         </div>
       </div>
