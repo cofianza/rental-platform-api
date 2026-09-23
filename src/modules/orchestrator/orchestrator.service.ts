@@ -367,7 +367,7 @@ export async function onHabeasDataAutorizado(params: {
       await registrarTimeline(
         expedienteId,
         'estudio',
-        'Falló el inicio automático del estudio tras la autorización — requiere atención (el solicitante puede reintentar desde su panel)',
+        'Falló el inicio automático de la evaluación tras la autorización — ejecutarla desde la evaluación en el estudio',
       ).catch(() => {});
     }
 
@@ -378,7 +378,7 @@ export async function onHabeasDataAutorizado(params: {
     await registrarTimeline(
       expedienteId,
       'estudio',
-      'Falló el inicio automático del estudio tras la autorización — iniciar manualmente o pedir al solicitante reintentar',
+      'Falló el inicio automático de la evaluación tras la autorización — ejecutarla desde la evaluación en el estudio',
     ).catch(() => {});
   }
 }
@@ -610,7 +610,7 @@ export async function onEstudioPagado(expedienteId: string, userId?: string | nu
       await registrarTimeline(
         expedienteId,
         'estudio',
-        'Falló el inicio automático del estudio tras confirmarse el pago — iniciar manualmente desde el estudio.',
+        'Falló el inicio automático de la evaluación tras confirmarse el pago — ejecutarla desde la evaluación en el estudio',
       ).catch(() => {});
     }
   }
