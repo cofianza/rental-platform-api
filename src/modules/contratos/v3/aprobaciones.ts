@@ -28,6 +28,12 @@ const adenda1 = (resp: 1 | 2 | 4): Omit<Aprobacion, 'sha256'> => ({
   fecha: '2026-09-23',
 });
 
+/** Recortes que Desarrollo dedujo de la resp. 2 con V3 §3.4.5 (no los redactó Mario): se le informan. */
+const derivadoResp2: Omit<Aprobacion, 'sha256'> = {
+  aprobadoPor: 'Desarrollo, por V3 §3.4.5 y Adenda 1 contratos resp. 2 (informado a Mario Vélez)',
+  fecha: '2026-09-23',
+};
+
 /** id del borrador → aprobación. */
 export const APROBACIONES: Readonly<Record<string, Aprobacion>> = {
   // resp. 2 — Tradicional: EL ARRENDADOR asume prima y tarifa (b-01, CUARTA) y el resumen
@@ -35,9 +41,9 @@ export const APROBACIONES: Readonly<Record<string, Aprobacion>> = {
   // resumen lo que le atribuía tarifa o cashback (V3 §3.4.5): se le informan a Gerencia.
   'b-01': { sha256: '2486f537350cdc14b3d2dfc974441df3e2daa71358dfa5942e437011a0ca9f81', ...adenda1(2) },
   'b-02': { sha256: 'fcba65662f2e58be93637d0c4638cc63d22e25d2a804bea8e24ae184bac3570c', ...adenda1(2) },
-  'b-03': { sha256: '7a5356659c5b128bf2a1cfa958aca12b66573ecc89e0089dd5a74018541868aa', ...adenda1(2) },
-  'b-04': { sha256: '21e98de4bff8ba65839db50a88e4d319b496f84a5c44e55f68c0d5f7ccac2876', ...adenda1(2) },
-  'b-05': { sha256: 'faf4cec4bc508b56f1caec91198c3272a833310be34f481f21f471b40bf23b43', ...adenda1(2) },
+  'b-03': { sha256: '7a5356659c5b128bf2a1cfa958aca12b66573ecc89e0089dd5a74018541868aa', ...derivadoResp2 },
+  'b-04': { sha256: '21e98de4bff8ba65839db50a88e4d319b496f84a5c44e55f68c0d5f7ccac2876', ...derivadoResp2 },
+  'b-05': { sha256: 'faf4cec4bc508b56f1caec91198c3272a833310be34f481f21f471b40bf23b43', ...derivadoResp2 },
   // resp. 1 — singular sin coarrendatario, con las dos supresiones autorizadas: c-13 quita
   // «de manera solidaria» y a-c-02 la activación condicionada a la firma del coarrendatario.
   'c-01': { sha256: '7e60cb84684a44d89f4ed34a5e8ed3e9e5b5eff909d34bb52d9a5b66b84b57c9', ...adenda1(1) },
