@@ -205,7 +205,7 @@ describe('invitarCoarrendatario — Politica §5 (mismo afianzado bajo otro nomb
 // ============================================================
 
 describe('respuestas al cliente sin el token de la invitacion', () => {
-  const PRIVADAS = /\*|token|aceptado_ip|aceptado_user_agent|invitado_por/;
+  const PRIVADAS = /\*|\btoken\b|aceptado_ip|aceptado_user_agent|invitado_por/;
   // Selects cuyo resultado se devuelve: los que van tras insert/update y el
   // de la consulta. El select('*') interno del reenvio no sale de la API.
   const selectsDevueltos = () =>
@@ -227,6 +227,8 @@ describe('respuestas al cliente sin el token de la invitacion', () => {
     const selects = selectsDevueltos();
     expect(selects).toHaveLength(2);
     for (const cols of selects) expect(cols).not.toMatch(PRIVADAS);
+    // El vencimiento sí: la tarjeta avisa cuando la invitación venció.
+    expect(selects[1]).toContain('token_expiracion');
   });
 
   it('reenviar devuelve la fila actualizada sin el token nuevo', async () => {

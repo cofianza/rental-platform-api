@@ -64,9 +64,10 @@ const MOTIVO_TITULAR_RECHAZO_CONJUNTO =
 // Columnas que SÍ pueden llegar al cliente (las de `Coarrendatario`). Nunca
 // '*': el token de la invitación en la respuesta dejaba al titular o al gestor
 // aceptar la autorización de habeas data en nombre del invitado. Tampoco
-// salen aceptado_ip, aceptado_user_agent ni invitado_por.
+// salen aceptado_ip, aceptado_user_agent ni invitado_por. token_expiracion sí:
+// con ella la tarjeta dice que la invitación venció.
 const COLUMNAS_COA_PUBLICAS =
-  'id, expediente_id, nombre, apellido, tipo_documento, numero_documento, email, telefono, estado, estudio_id, aceptado_at, rechazado_at, created_at, updated_at';
+  'id, expediente_id, nombre, apellido, tipo_documento, numero_documento, email, telefono, estado, estudio_id, token_expiracion, aceptado_at, rechazado_at, created_at, updated_at';
 
 /** Enlace público de la invitación. Compartido por el correo y el WhatsApp. */
 function urlInvitacionCoarrendatario(token: string): string {
@@ -88,6 +89,7 @@ export interface Coarrendatario {
   telefono: string | null;
   estado: 'pendiente_aceptacion' | 'aceptado' | 'rechazado_invitacion' | 'estudio_completado';
   estudio_id: string | null;
+  token_expiracion: string;
   aceptado_at: string | null;
   rechazado_at: string | null;
   created_at: string;
