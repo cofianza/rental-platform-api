@@ -103,6 +103,8 @@ const ddmmaaaa = (ms: number) => fechaBogota(new Date(ms)).split('-').reverse().
  */
 interface Adenda {
   plazo_prorrogado_en: string | null;
+  /** El vencimiento que se le mandó a Auco: la prórroga no lo pasa. */
+  auco_expira_en: string | null;
   aviso_aceptado_en: string | null;
   aviso_aceptado_detalle: { nombre?: string } | null;
 }
@@ -112,13 +114,16 @@ const sinMigracion = (error: unknown) => ['42703', 'PGRST204'].includes((error a
 
 async function leerAdenda(sobreId: string): Promise<Adenda | null> {
   const { data, error } = await db('contrato_v3_sobres')
-    .select('plazo_prorrogado_en, aviso_aceptado_en, aviso_aceptado_detalle')
+    .select('plazo_prorrogado_en, auco_expira_en, aviso_aceptado_en, aviso_aceptado_detalle')
     .eq('id', sobreId)
     .maybeSingle();
   if (sinMigracion(error)) return null;
   if (error) throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el proceso de firma. Intenta de nuevo en un momento.');
   return (data as Adenda | null) ?? null;
 }
+
+/** El vencimiento que se le mandó a Auco (null = sobre anterior a la columna: sin ese tope). */
+const topeAuco = (a: Adenda) => (a.auco_expira_en ? Date.parse(a.auco_expira_en) : null);
 
 /** El aviso de §11.7.4 que de verdad se entregó (no una constancia de "omitido"). */
 const avisoEntregado = (s: Sobre) => !!s.aviso_entregado_en && typeof s.aviso_detalle?.texto === 'string';
@@ -159,17 +164,18 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   const expira = new Date(plazo.expiraEn);
   const ultimo = await ultimoSobre(contratoId);
   const firmantes: FirmanteSobre[] = partes.map((p) => ({ parteId: p.id, estado: 'pendiente' }));
-  const { data: creado, error: errIns } = await db('contrato_v3_sobres')
-    .insert({
-      contrato_id: contratoId,
-      intento: (ultimo?.intento ?? 0) + 1,
-      estado: 'creando',
-      expira_en: expira.toISOString(),
-      firmantes,
-      enviado_por: userId,
-    } as never)
-    .select('id')
-    .single();
+  const nuevo = {
+    contrato_id: contratoId,
+    intento: (ultimo?.intento ?? 0) + 1,
+    estado: 'creando',
+    expira_en: expira.toISOString(),
+    firmantes,
+    enviado_por: userId,
+  };
+  const insertar = (f: Record<string, unknown>) => db('contrato_v3_sobres').insert(f as never).select('id').single();
+  // El vencimiento de Auco queda para topar la prórroga; sin la migración 20260930000001, sin él.
+  let { data: creado, error: errIns } = await insertar({ ...nuevo, auco_expira_en: new Date(plazo.aucoExpira).toISOString() });
+  if (sinMigracion(errIns)) ({ data: creado, error: errIns } = await insertar(nuevo));
   if (errIns) {
     if ((errIns as { code?: string }).code === '23505')
       throw AppError.conflict('Ya hay un envío a firma en curso para este contrato.', 'FIRMA_YA_EN_CURSO');
@@ -443,16 +449,18 @@ export async function prorrogarPlazo(contratoId: string, userId: string): Promis
   if (adenda.plazo_prorrogado_en)
     throw AppError.conflict('El plazo de este proceso de firma ya se prorrogó: solo se permite una vez.', 'PRORROGA_YA_USADA');
   const [cal, vig] = await Promise.all([getCalibracion(), vigenciaEstudio(c)]);
-  const p = prorrogaDelPlazo(Date.parse(s.expira_en), cal.DIAS_EXPIRACION_FIRMA, vig?.fin ?? 0, Date.now());
+  const ahora = Date.now();
+  const p = prorrogaDelPlazo(Date.parse(s.expira_en), cal.DIAS_EXPIRACION_FIRMA, vig?.fin ?? 0, ahora, topeAuco(adenda));
   if ('motivo' in p) throw AppError.conflict(motivoSinProrroga(p.motivo, vig?.fin), 'PRORROGA_NO_PERMITIDA');
 
   const hasta = new Date(p.hasta).toISOString();
-  // La marca es el mutex: dos clics (o dos miembros) prorrogan una sola vez.
+  // La marca es el mutex: dos clics (o dos miembros) prorrogan una sola vez, y nunca un plazo ya vencido.
   const { data, error } = await db('contrato_v3_sobres')
-    .update({ expira_en: hasta, plazo_prorrogado_en: new Date().toISOString(), plazo_prorrogado_por: userId } as never)
+    .update({ expira_en: hasta, plazo_prorrogado_en: new Date(ahora).toISOString(), plazo_prorrogado_por: userId } as never)
     .eq('id', s.id)
     .eq('estado', 'en_firma')
     .is('plazo_prorrogado_en', null)
+    .gt('expira_en', new Date(ahora).toISOString())
     .select('id');
   if (error) {
     logger.error({ contratoId, error: error.message }, 'Firma V3: no se pudo prorrogar el plazo');
@@ -488,7 +496,7 @@ function prorrogaVista(
 ): NonNullable<EnvioV3['prorroga']> {
   if (!adenda) return { puede: false, motivo: 'La prórroga del plazo todavía no está disponible.', hasta: null, usadaEn: null };
   if (adenda.plazo_prorrogado_en) return { puede: false, motivo: null, hasta: null, usadaEn: adenda.plazo_prorrogado_en };
-  const p = prorrogaDelPlazo(Date.parse(s.expira_en), dias, vig?.fin ?? 0, Date.now());
+  const p = prorrogaDelPlazo(Date.parse(s.expira_en), dias, vig?.fin ?? 0, Date.now(), topeAuco(adenda));
   return 'motivo' in p
     ? { puede: false, motivo: motivoSinProrroga(p.motivo, vig?.fin), hasta: null, usadaEn: null }
     : { puede: true, motivo: null, hasta: new Date(p.hasta).toISOString(), usadaEn: null };

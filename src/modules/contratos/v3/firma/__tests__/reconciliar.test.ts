@@ -18,7 +18,7 @@ const { mockEnv, ops, queues, enqueue, mockRpc, chainFor, download, auco, efecto
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null, count: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'or', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'or', 'order', 'limit', 'gt'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH)
@@ -627,10 +627,11 @@ describe('crearSobre', () => {
     expect(input.custom).toEqual({ cofianza_sobre: 's1' });
     const perfiles = input.signProfile as Array<{ order: string; label: boolean; name: string }>;
     expect(perfiles.map((p) => [p.name, p.order, p.label])).toEqual([['Ana', '1', true], ['Caro', '2', true]]);
-    // Adenda 1 (respuesta 10): 15 días hasta la medianoche; Auco, el máximo con la prórroga (30).
-    const insertado = tabla('contrato_v3_sobres', 'insert')[0].args[0] as { expira_en: string };
+    // Adenda 1 (respuesta 10): 15 días hasta la medianoche; Auco, el máximo con la prórroga (30), que queda guardado.
+    const insertado = tabla('contrato_v3_sobres', 'insert')[0].args[0] as { expira_en: string; auco_expira_en: string };
     expect(insertado.expira_en).toBe(finDeDiaEn(15));
     expect(input.expiredDate).toBe(finDeDiaEn(30));
+    expect(insertado.auco_expira_en).toBe(finDeDiaEn(30));
     expect(input.message).toContain(`Tienes hasta el ${fechaBogota(finDeDiaEn(15)).split('-').reverse().join('/')}`);
     expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toEqual({ auco_code: 'AUCO9', estado: 'en_firma' });
   });
@@ -680,6 +681,25 @@ describe('crearSobre', () => {
     await expect(crearSobre('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CRC_VENCIDO' });
     expect(tabla('contrato_v3_sobres', 'insert')).toEqual([]);
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+  });
+
+  it('sin la migración 20260930000001 registra el sobre sin el vencimiento de Auco (tolerante)', async () => {
+    preparar();
+    enqueue(
+      'contrato_v3_sobres',
+      ok(null),
+      { data: null, error: { code: 'PGRST204', message: "Could not find the 'auco_expira_en' column" } },
+      ok({ id: 's1' }),
+      ok(sobre({ estado: 'creando', auco_code: null })),
+      ok([{ id: 's1' }]),
+      ok(sobre()),
+    );
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
+    await crearSobre('c1', 'u1');
+    const inserts = tabla('contrato_v3_sobres', 'insert').map((o) => o.args[0] as Record<string, unknown>);
+    expect(inserts).toHaveLength(2);
+    expect(inserts[1]).not.toHaveProperty('auco_expira_en');
+    expect(auco.uploadDocumentForSignature).toHaveBeenCalledTimes(1);
   });
 
   it('dos clics: el índice de sobre vivo responde 409', async () => {
@@ -880,7 +900,7 @@ describe('activación: §12.1', () => {
 
 // ── Adenda 1 del módulo de contratos: prórroga (respuesta 10) y acuse (respuesta 11) ──
 
-const ADENDA = { plazo_prorrogado_en: null, aviso_aceptado_en: null, aviso_aceptado_detalle: null };
+const ADENDA = { plazo_prorrogado_en: null, auco_expira_en: null, aviso_aceptado_en: null, aviso_aceptado_detalle: null };
 const SIN_MIGRACION = { data: null, error: { code: '42703', message: 'column contrato_v3_sobres.plazo_prorrogado_en does not exist' } };
 const AVISO = { texto_version: 'e5-11.7.4-v2', texto: 'La fianza de COFIANZA S.A.S. NO está operando…', destinatarios: ['m1'] };
 const incompleto = (x: Record<string, unknown> = {}) =>
@@ -899,12 +919,22 @@ describe('prorrogarPlazo', () => {
     await prorrogarPlazo('c1', 'u1');
     const upd = tabla('contrato_v3_sobres', 'update')[0].args[0] as Record<string, unknown>;
     expect(upd).toMatchObject({ expira_en: finDeDiaEn(15, Date.parse(EN_10_DIAS)), plazo_prorrogado_por: 'u1' });
-    const filtros = ops.filter((o) => o.table === 'contrato_v3_sobres' && (o.method === 'is' || o.method === 'eq')).map((o) => o.args);
-    expect(filtros).toContainEqual(['plazo_prorrogado_en', null]);
-    expect(filtros).toContainEqual(['estado', 'en_firma']);
+    const filtros = ops.filter((o) => o.table === 'contrato_v3_sobres' && ['is', 'eq', 'gt'].includes(o.method)).map((o) => [o.method, ...o.args]);
+    expect(filtros).toContainEqual(['is', 'plazo_prorrogado_en', null]);
+    expect(filtros).toContainEqual(['eq', 'estado', 'en_firma']);
+    // Nunca sobre un plazo que venció entre la lectura y la escritura.
+    expect(filtros).toContainEqual(['gt', 'expira_en', expect.any(String)]);
     expect((tabla('eventos_timeline', 'insert')[0].args[0] as { descripcion: string }).descripcion).toContain('prorrogado hasta el');
     expect(efectos.logAudit).toHaveBeenCalledWith(expect.objectContaining({ accion: 'firma_plazo_prorrogado' }));
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled(); // Auco ya vence en el máximo
+  });
+
+  it('tampoco pasa el vencimiento que se le mandó a Auco (allá no se puede mover)', async () => {
+    const vencimientoAuco = new Date(Date.parse(EN_10_DIAS) + 3 * DIA).toISOString();
+    preparar(sobre(), ok({ ...ADENDA, auco_expira_en: vencimientoAuco }));
+    enqueue('contrato_v3_sobres', ok([{ id: 's1' }]));
+    await prorrogarPlazo('c1', 'u1');
+    expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toMatchObject({ expira_en: vencimientoAuco });
   });
 
   it('la segunda vez responde 409 sin tocar el plazo', async () => {

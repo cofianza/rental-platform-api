@@ -349,15 +349,19 @@ export function fueraDePlazo(ultimaFirma: string, expiraEn: string, finCrc: numb
   return Date.parse(ultimaFirma) > Math.min(Date.parse(expiraEn) + TOLERANCIA_RELOJ_MS, finCrc ?? Infinity);
 }
 
-/** La única prórroga: otros `dias` sobre el plazo vigente, sin pasar el CRC. Solo antes de que venza. */
+/**
+ * La única prórroga: otros `dias` sobre el plazo vigente, sin pasar el CRC ni
+ * el vencimiento que se le mandó a Auco (allá no se puede mover). Solo antes de que venza.
+ */
 export function prorrogaDelPlazo(
   expiraEn: number,
   dias: number,
   finCrc: number,
   ahora: number,
+  topeAuco: number | null = null,
 ): { hasta: number } | { motivo: 'vencido' | 'crc' } {
   if (expiraEn <= ahora) return { motivo: 'vencido' };
-  const hasta = Math.min(masPlazo(expiraEn, dias), finCrc);
+  const hasta = Math.min(masPlazo(expiraEn, dias), finCrc, topeAuco ?? Infinity);
   return hasta > expiraEn ? { hasta } : { motivo: 'crc' };
 }
 
