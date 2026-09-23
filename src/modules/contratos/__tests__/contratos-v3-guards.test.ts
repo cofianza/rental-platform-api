@@ -456,3 +456,27 @@ describe('descargarContrato: el arrendatario (solicitante)', () => {
     });
   });
 });
+
+describe('descargarContrato: firmado subido a mano', () => {
+  it('«Descargar PDF» entrega el escaneado subido, no la plantilla sin firmas (el mismo PDF del visor)', async () => {
+    const { supabase } = await import('@/lib/supabase');
+    const createSignedUrl = vi.fn(async () => ({ data: { signedUrl: 'https://escaneado' }, error: null }));
+    vi.mocked(supabase.storage.from).mockReturnValue({ createSignedUrl } as never);
+    enqueue('contratos', {
+      data: filaV3({
+        estado: 'cancelado',
+        nombre_archivo: 'c.pdf',
+        firmado_storage_key: `contratos/${EXP}/${CTO}/firmado-papel.pdf`,
+        firmado_nombre_archivo: 'firmado-papel.pdf',
+      }),
+      error: null,
+    });
+
+    const r = await descargarContrato(CTO, ADMIN.id, undefined, undefined, ADMIN.rol);
+
+    expect(createSignedUrl).toHaveBeenCalledWith(`contratos/${EXP}/${CTO}/firmado-papel.pdf`, expect.any(Number), {
+      download: 'firmado-papel.pdf',
+    });
+    expect(r).toMatchObject({ nombre_archivo: 'firmado-papel.pdf', firmado: true });
+  });
+});

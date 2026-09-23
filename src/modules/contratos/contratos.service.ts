@@ -37,6 +37,7 @@ const CONTRATO_SELECT = `
   datos_variables, generado_por, fecha_generacion,
   storage_key, nombre_archivo, plantilla_version,
   storage_key_firmado, nombre_archivo_firmado,
+  firmado_storage_key, firmado_nombre_archivo,
   destinacion, numero,
   created_at, updated_at
 `;
@@ -2942,6 +2943,8 @@ export async function descargarContrato(
     nombre_archivo: string;
     storage_key_firmado: string | null;
     nombre_archivo_firmado: string | null;
+    firmado_storage_key: string | null;
+    firmado_nombre_archivo: string | null;
   };
   if (esArrendatario) {
     const noEncontrado = AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
@@ -2965,7 +2968,14 @@ export async function descargarContrato(
 
   // Un contrato terminado también se firmó (V3 pasa de vigente a finalizado).
   const esFirmado = ['firmado', 'vigente', 'finalizado'].includes(row.estado);
-  if (esFirmado && !row.storage_key_firmado) {
+  // El firmado subido a mano (escaneado en papel) gana, como en
+  // descargarContratoFirmado: es el que muestra el visor del detalle.
+  // El 'firmado-combinado.pdf' es una caché vieja, no una subida.
+  const manualKey = row.firmado_storage_key?.endsWith('firmado-combinado.pdf') ? null : row.firmado_storage_key;
+  if (manualKey) {
+    storageKey = manualKey;
+    nombreArchivo = row.firmado_nombre_archivo || nombreArchivo;
+  } else if (esFirmado && !row.storage_key_firmado) {
     try {
       const { archivarPdfFirmadoEnStorage } = await import('@/modules/firma/firma.service');
       await archivarPdfFirmadoEnStorage(id);
