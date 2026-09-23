@@ -2056,47 +2056,9 @@ export async function generarContrato(
   // Antes de reservar: un canon que no se evaluó no llega a apartar el inmueble.
   await assertCanonContratable(expedienteId, Number(expData.inmueble.valor_arriendo) || 0, expData.inmueble.uso);
 
-  const { reservarInmuebleParaContrato } = await import('@/modules/inmuebles/inmuebles.service');
-  const reserva = await reservarInmuebleParaContrato(expedienteId);
-
-  // §4.2: "Al aprobarse uno. Los demas estudios en curso sobre esa propiedad se
-  // notifican al solicitante". Solo lo hace el GANADOR (en el camino
-  // idempotente `afectados` viene vacio), y es best-effort: la reserva ya esta
-  // confirmada en la base y no se revierte porque un correo falle. La
-  // REASIGNACION del estudio es el §4.3 y no se implementa aqui.
-  if (reserva.afectados.length > 0) {
-    const { avisarCandidatosDeReserva } = await import('@/modules/estudios/reserva-inmueble.notificaciones');
-    avisarCandidatosDeReserva({
-      afectados: reserva.afectados,
-      inmuebleCodigo: reserva.inmueble_codigo ?? null,
-      inmuebleDireccion: reserva.inmueble_direccion ?? null,
-      expedienteGanadorId: expedienteId,
-    }).catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar a los demas candidatos'));
-  }
-  // Las visitas de los demás (también de quien solo pidió visita, sin estudio)
-  // se cancelan; `afectados` no los incluye. Best-effort, nunca lanza.
-  if (reserva.reservado && reserva.inmueble_id) {
-    const { cancelarVisitasDeOtros } = await import('@/modules/estudios/reserva-inmueble.notificaciones');
-    void cancelarVisitasDeOtros(reserva.inmueble_id, expedienteId);
-  }
-
-  const now = new Date();
-  // Prioridad: input del caller > datos persistidos en el expediente al
-  // habilitar estudio > defaults (hoy + 12 meses). Asi el operador no tiene
-  // que volver a digitarlos cuando el propietario ya los capturo.
-  const expRecord = expRow as Record<string, unknown>;
-  const fechaInicioExp = (expRecord.fecha_inicio_contrato as string | null) || null;
-  const duracionMesesExp = (expRecord.duracion_contrato_meses as number | null) || null;
-
-  const fechaInicio = input.fecha_inicio
-    ? new Date(input.fecha_inicio + 'T00:00:00')
-    : fechaInicioExp
-      ? new Date(fechaInicioExp + 'T00:00:00')
-      : new Date();
-  const duracionMeses = input.duracion_meses || duracionMesesExp || 12;
-
   // 2. Resolver plantilla: si el caller pasó plantilla_id usamos esa, si
   //    no buscamos la única activa (V2 prevé una sola plantilla maestra).
+  //    Antes de reservar: sin plantilla no se aparta el inmueble.
   type PlantillaRow = {
     id: string; nombre: string; contenido: string | null; contenido_html: string | null;
     variables: unknown; activa: boolean; version: number;
@@ -2124,138 +2086,187 @@ export async function generarContrato(
     throw AppError.badRequest('La plantilla no esta activa', 'PLANTILLA_INACTIVE');
   }
 
-  // 3. Construir contexto y renderizar HTML + PDF.
-  // Fase 3: si el caller (modal) envía condiciones de fianza, se persisten en el
-  // expediente para que esta generación y futuras regeneraciones las usen.
-  const condicionesUpdate: Record<string, unknown> = {};
-  if (input.modalidad_fianza) condicionesUpdate.modalidad_fianza = input.modalidad_fianza;
-  if (input.servicios_reparto) condicionesUpdate.servicios_reparto = input.servicios_reparto;
-  if (input.cotitular) {
-    const c = input.cotitular;
-    condicionesUpdate.cotitular_nombre = c.nombre ?? null;
-    condicionesUpdate.cotitular_tipo_documento = c.tipo_documento ?? null;
-    condicionesUpdate.cotitular_documento = c.documento ?? null;
-    condicionesUpdate.cotitular_celular = c.celular ?? null;
-    condicionesUpdate.cotitular_correo = c.correo ?? null;
-    condicionesUpdate.cotitular_direccion = c.direccion ?? null;
-    condicionesUpdate.cotitular_municipio = c.municipio ?? null;
-  }
-  if (Object.keys(condicionesUpdate).length > 0) {
-    await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .update(condicionesUpdate as never)
-      .eq('id', expedienteId);
-    Object.assign(expRecord, condicionesUpdate); // reflejar en el contexto de esta generación
-  }
+  const { reservarInmuebleParaContrato, liberarReservaDeExpediente } = await import('@/modules/inmuebles/inmuebles.service');
+  const reserva = await reservarInmuebleParaContrato(expedienteId);
 
-  const modalidad = await fetchModalidadFianza(expRecord.modalidad_fianza as string | null | undefined);
-  const context = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses, {
-    modalidad,
-    expediente: expRecord,
-    tarifas: await tarifasParaContrato(expedienteId),
-  });
+  // Si algo falla antes de que el contrato quede guardado con su PDF, la reserva
+  // que hizo ESTA llamada se suelta (mismo patrón del asistente V3): si no, el
+  // inmueble quedaba fuera de la vitrina, reservado para un contrato inexistente.
+  let created: { id: string };
+  try {
+    const now = new Date();
+    // Prioridad: input del caller > datos persistidos en el expediente al
+    // habilitar estudio > defaults (hoy + 12 meses). Asi el operador no tiene
+    // que volver a digitarlos cuando el propietario ya los capturo.
+    const expRecord = expRow as Record<string, unknown>;
+    const fechaInicioExp = (expRecord.fecha_inicio_contrato as string | null) || null;
+    const duracionMesesExp = (expRecord.duracion_contrato_meses as number | null) || null;
 
-  // 4.1e: solo el contexto derivado del expediente/inmueble, sin overrides
-  // libres — el antiguo escape hatch `variables` permitía blanquear/alterar
-  // identidad del arrendatario y canon en el PDF legal. Los ajustes permitidos
-  // ya viajan por campos tipados (fecha, duración, modalidad, cotitular,
-  // servicios_reparto). Mismo cierre que en regenerar/renovar.
-  const finalVariables: Record<string, unknown> = { ...context };
+    const fechaInicio = input.fecha_inicio
+      ? new Date(input.fecha_inicio + 'T00:00:00')
+      : fechaInicioExp
+        ? new Date(fechaInicioExp + 'T00:00:00')
+        : new Date();
+    const duracionMeses = input.duracion_meses || duracionMesesExp || 12;
 
-  let pdfBuffer: Buffer;
-  let nombreArchivoContrato: string;
+    // 3. Construir contexto y renderizar HTML + PDF.
+    // Fase 3: si el caller (modal) envía condiciones de fianza, se persisten en el
+    // expediente para que esta generación y futuras regeneraciones las usen.
+    const condicionesUpdate: Record<string, unknown> = {};
+    if (input.modalidad_fianza) condicionesUpdate.modalidad_fianza = input.modalidad_fianza;
+    if (input.servicios_reparto) condicionesUpdate.servicios_reparto = input.servicios_reparto;
+    if (input.cotitular) {
+      const c = input.cotitular;
+      condicionesUpdate.cotitular_nombre = c.nombre ?? null;
+      condicionesUpdate.cotitular_tipo_documento = c.tipo_documento ?? null;
+      condicionesUpdate.cotitular_documento = c.documento ?? null;
+      condicionesUpdate.cotitular_celular = c.celular ?? null;
+      condicionesUpdate.cotitular_correo = c.correo ?? null;
+      condicionesUpdate.cotitular_direccion = c.direccion ?? null;
+      condicionesUpdate.cotitular_municipio = c.municipio ?? null;
+    }
+    if (Object.keys(condicionesUpdate).length > 0) {
+      await (supabase
+        .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .update(condicionesUpdate as never)
+        .eq('id', expedienteId);
+      Object.assign(expRecord, condicionesUpdate); // reflejar en el contexto de esta generación
+    }
 
-  if (plantillaRow.contenido_html) {
-    // Plantilla V2 (HTML rico) → Puppeteer. Inyectamos las anclas de firma para
-    // que cada parte firme en su línea (ver inyectarAnclasFirmaMultiparte).
-    const renderedHtml = inyectarAnclasFirmaMultiparte(
-      renderTemplate(plantillaRow.contenido_html, finalVariables),
-    );
-    pdfBuffer = await renderHtmlToPdf(renderedHtml);
-    nombreArchivoContrato = `contrato-${expedienteNumero}-v1.pdf`;
-  } else {
-    // Fallback: plantilla legacy con `contenido` y vars planas → pdfkit.
-    // Convertimos el contexto anidado a un map plano para que las viejas
-    // referencias `{{arrendador_nombre}}` sigan funcionando.
-    const flatVars = flattenForLegacyTemplate(context);
-    const compiledHtml = compileTemplate(plantillaRow.contenido || '', flatVars);
-    pdfBuffer = await generateContractPdf(compiledHtml, {
-      titulo: plantillaRow.nombre,
-      fecha: formatDateCO(now),
-      version: 1,
-    });
-    nombreArchivoContrato = `contrato-${plantillaRow.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`;
-  }
-
-  // Insert contrato first to get ID. Si el caller no es un usuario real
-  // (ej. orchestrator pasa userId='system' o null), guardamos null en
-  // generado_por: la columna es FK a perfiles(id) y un literal no-UUID
-  // rompe el constraint y aborta la generacion automatica del contrato.
-  const generadoPor = uuidOrNull(userId);
-  const { data: contrato, error: insertError } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      expediente_id: expedienteId,
-      plantilla_id: plantillaRow?.id ?? null,
-      version: 1,
-      estado: 'borrador',
-      fecha_inicio: input.fecha_inicio || now.toISOString().split('T')[0],
-      fecha_fin: addMonths(fechaInicio, duracionMeses).toISOString().split('T')[0],
-      duracion_meses: duracionMeses,
-      valor_arriendo: expData.inmueble.valor_arriendo || 0,
-      datos_variables: finalVariables,
-      generado_por: generadoPor,
-      fecha_generacion: now.toISOString(),
-      plantilla_version: plantillaRow?.version ?? null,
-      nombre_archivo: nombreArchivoContrato,
-    } as never)
-    .select('id')
-    .single();
-
-  if (insertError || !contrato) {
-    logger.error({ error: insertError?.message, expedienteId, userId }, 'Error al crear contrato');
-    throw AppError.badRequest('Error al crear el contrato', 'CONTRATO_CREATE_ERROR');
-  }
-
-  const created = contrato as unknown as { id: string };
-
-  // Upload PDF to storage
-  const storageKey = `contratos/${expedienteId}/${created.id}/v1.pdf`;
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET_NAME)
-    .upload(storageKey, pdfBuffer, {
-      contentType: 'application/pdf',
-      upsert: false,
+    const modalidad = await fetchModalidadFianza(expRecord.modalidad_fianza as string | null | undefined);
+    const context = await buildContratoContext(expData, expedienteNumero, fechaInicio, duracionMeses, {
+      modalidad,
+      expediente: expRecord,
+      tarifas: await tarifasParaContrato(expedienteId),
     });
 
-  if (uploadError) {
-    logger.error({ error: uploadError.message }, 'Error al subir PDF');
+    // 4.1e: solo el contexto derivado del expediente/inmueble, sin overrides
+    // libres — el antiguo escape hatch `variables` permitía blanquear/alterar
+    // identidad del arrendatario y canon en el PDF legal. Los ajustes permitidos
+    // ya viajan por campos tipados (fecha, duración, modalidad, cotitular,
+    // servicios_reparto). Mismo cierre que en regenerar/renovar.
+    const finalVariables: Record<string, unknown> = { ...context };
+
+    let pdfBuffer: Buffer;
+    let nombreArchivoContrato: string;
+
+    if (plantillaRow.contenido_html) {
+      // Plantilla V2 (HTML rico) → Puppeteer. Inyectamos las anclas de firma para
+      // que cada parte firme en su línea (ver inyectarAnclasFirmaMultiparte).
+      const renderedHtml = inyectarAnclasFirmaMultiparte(
+        renderTemplate(plantillaRow.contenido_html, finalVariables),
+      );
+      pdfBuffer = await renderHtmlToPdf(renderedHtml);
+      nombreArchivoContrato = `contrato-${expedienteNumero}-v1.pdf`;
+    } else {
+      // Fallback: plantilla legacy con `contenido` y vars planas → pdfkit.
+      // Convertimos el contexto anidado a un map plano para que las viejas
+      // referencias `{{arrendador_nombre}}` sigan funcionando.
+      const flatVars = flattenForLegacyTemplate(context);
+      const compiledHtml = compileTemplate(plantillaRow.contenido || '', flatVars);
+      pdfBuffer = await generateContractPdf(compiledHtml, {
+        titulo: plantillaRow.nombre,
+        fecha: formatDateCO(now),
+        version: 1,
+      });
+      nombreArchivoContrato = `contrato-${plantillaRow.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`;
+    }
+
+    // Insert contrato first to get ID. Si el caller no es un usuario real
+    // (ej. orchestrator pasa userId='system' o null), guardamos null en
+    // generado_por: la columna es FK a perfiles(id) y un literal no-UUID
+    // rompe el constraint y aborta la generacion automatica del contrato.
+    const generadoPor = uuidOrNull(userId);
+    const { data: contrato, error: insertError } = await (supabase
+      .from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: expedienteId,
+        plantilla_id: plantillaRow?.id ?? null,
+        version: 1,
+        estado: 'borrador',
+        fecha_inicio: input.fecha_inicio || now.toISOString().split('T')[0],
+        fecha_fin: addMonths(fechaInicio, duracionMeses).toISOString().split('T')[0],
+        duracion_meses: duracionMeses,
+        valor_arriendo: expData.inmueble.valor_arriendo || 0,
+        datos_variables: finalVariables,
+        generado_por: generadoPor,
+        fecha_generacion: now.toISOString(),
+        plantilla_version: plantillaRow?.version ?? null,
+        nombre_archivo: nombreArchivoContrato,
+      } as never)
+      .select('id')
+      .single();
+
+    if (insertError || !contrato) {
+      logger.error({ error: insertError?.message, expedienteId, userId }, 'Error al crear contrato');
+      throw AppError.badRequest('Error al crear el contrato', 'CONTRATO_CREATE_ERROR');
+    }
+
+    created = contrato as unknown as { id: string };
+
+    // Upload PDF to storage
+    const storageKey = `contratos/${expedienteId}/${created.id}/v1.pdf`;
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET_NAME)
+      .upload(storageKey, pdfBuffer, {
+        contentType: 'application/pdf',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      logger.error({ error: uploadError.message }, 'Error al subir PDF');
+      await (supabase
+        .from('contratos' as string) as ReturnType<typeof supabase.from>)
+        .delete()
+        .eq('id', created.id);
+      throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF');
+    }
+
     await (supabase
       .from('contratos' as string) as ReturnType<typeof supabase.from>)
-      .delete()
+      .update({ storage_key: storageKey } as never)
       .eq('id', created.id);
-    throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF');
+
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.CONTRATO_GENERATED,
+      entidad: AUDIT_ENTITIES.CONTRATO,
+      entidadId: created.id,
+      detalle: {
+        expediente_id: expedienteId,
+        origen: 'plantilla',
+        plantilla_id: plantillaRow?.id ?? null,
+        plantilla_nombre: plantillaRow?.nombre ?? null,
+        arrendador_es_inmobiliaria: (context.arrendador as { es_inmobiliaria: boolean }).es_inmobiliaria,
+      },
+      ip,
+    });
+  } catch (err) {
+    if (reserva.reservado) await liberarReservaDeExpediente(expedienteId);
+    throw err;
   }
 
-  await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .update({ storage_key: storageKey } as never)
-    .eq('id', created.id);
-
-  logAudit({
-    usuarioId: userId,
-    accion: AUDIT_ACTIONS.CONTRATO_GENERATED,
-    entidad: AUDIT_ENTITIES.CONTRATO,
-    entidadId: created.id,
-    detalle: {
-      expediente_id: expedienteId,
-      origen: 'plantilla',
-      plantilla_id: plantillaRow?.id ?? null,
-      plantilla_nombre: plantillaRow?.nombre ?? null,
-      arrendador_es_inmobiliaria: (context.arrendador as { es_inmobiliaria: boolean }).es_inmobiliaria,
-    },
-    ip,
-  });
+  // §4.2: "Al aprobarse uno. Los demas estudios en curso sobre esa propiedad se
+  // notifican al solicitante". Va después de guardar el contrato: nadie recibe
+  // el aviso por un contrato que no llegó a existir. Solo lo hace el GANADOR (en
+  // el camino idempotente `afectados` viene vacio), y es best-effort: un correo
+  // que falle no revierte nada. La REASIGNACION del estudio es el §4.3 y no se
+  // implementa aqui.
+  if (reserva.afectados.length > 0) {
+    const { avisarCandidatosDeReserva } = await import('@/modules/estudios/reserva-inmueble.notificaciones');
+    avisarCandidatosDeReserva({
+      afectados: reserva.afectados,
+      inmuebleCodigo: reserva.inmueble_codigo ?? null,
+      inmuebleDireccion: reserva.inmueble_direccion ?? null,
+      expedienteGanadorId: expedienteId,
+    }).catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar a los demas candidatos'));
+  }
+  // Las visitas de los demás (también de quien solo pidió visita, sin estudio)
+  // se cancelan; `afectados` no los incluye. Best-effort, nunca lanza.
+  if (reserva.reservado && reserva.inmueble_id) {
+    const { cancelarVisitasDeOtros } = await import('@/modules/estudios/reserva-inmueble.notificaciones');
+    void cancelarVisitasDeOtros(reserva.inmueble_id, expedienteId);
+  }
 
   return getContratoById(created.id);
 }
