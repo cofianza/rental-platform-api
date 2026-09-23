@@ -58,19 +58,15 @@ export function senalDiscrepanciaIngreso(
   };
 }
 
-/** Motivo para el gestor. Pura, para poder probar el texto. */
-export function motivoContrasteIngreso(
-  declaradoCop: number,
-  estimadoCop: number,
-  senal: { desviacion_pct: number; umbral_pct: number },
-): string {
-  const cop = (n: number) => `$${new Intl.NumberFormat('es-CO').format(Math.round(n))}`;
-  const direccion = declaradoCop > estimadoCop ? 'por encima' : 'por debajo';
-  return (
-    `Revision manual (Adenda §8): el ingreso declarado por el prospecto (${cop(declaradoCop)}) esta ${senal.desviacion_pct}% ${direccion} ` +
-    `del estimado por la central (${cop(estimadoCop)}); el umbral es ${senal.umbral_pct}%. La bandera no rechaza: un analista contrasta las dos cifras.`
-  );
-}
+/**
+ * Motivo de revision. SIN cifras: `observaciones` le llega a la inmobiliaria,
+ * al propietario y al CRC, y el Flujo §8.2 le promete al prospecto que su
+ * ingreso declarado solo lo ve Cofianza. El analista ve las dos cifras y la
+ * desviacion en la autorizacion (leerPerfilProspecto, solo roles internos).
+ */
+export const MOTIVO_CONTRASTE_INGRESO =
+  'Revision manual (Adenda §8): el ingreso declarado por el prospecto difiere del estimado por la central mas de lo permitido. ' +
+  'La bandera no rechaza: un analista de Cofianza contrasta las dos cifras en la autorizacion.';
 
 /**
  * Adenda §8 en produccion: lee el declarado del expediente y lo contrasta con
@@ -100,7 +96,7 @@ export async function contrasteIngresoProspecto(
     const declarado = typeof bruto === 'string' ? Number(bruto) : bruto;
     const senal = senalDiscrepanciaIngreso(declarado ?? null, estimadoCrudoCop, umbralPct);
     if (!senal || !senal.hay) return null;
-    return motivoContrasteIngreso(declarado as number, estimadoCrudoCop, senal);
+    return MOTIVO_CONTRASTE_INGRESO;
   } catch (err) {
     logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'Contraste de ingreso: excepcion');
     return null;

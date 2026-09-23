@@ -144,7 +144,23 @@ function redactarEstudioParaProspecto<T extends Record<string, unknown>>(row: T)
     score: null,
     // Ni el background check (listas, flags, afiliacion): es insumo del modelo.
     antecedentes: null,
+    // El crudo del buro trae el mismo score (y todo el reporte); el token es
+    // del enlace del formulario, no de la sesion del prospecto.
+    respuesta_proveedor: null,
+    token_self_service: null,
   };
+}
+
+/**
+ * El estudio 'con_coarrendatario' cuelga del expediente del titular, pero es
+ * de OTRA persona: su reporte de buro y su formulario (Ley 1266).
+ * assertExpedienteAccess autoriza al titular por expediente, asi que sin esto
+ * lo leia por id. 404, como si no existiera: ninguna pantalla suya lo usa.
+ */
+function assertNoEsEstudioDeOtraPersona(tipo: unknown, userRol?: string): void {
+  if (userRol === 'solicitante' && tipo === 'con_coarrendatario') {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
 }
 
 /**
@@ -196,6 +212,23 @@ export async function listEstudios(
   // exista, el guard de tenant, la página con su total y la autorización del
   // titular. Si el guard o la existencia fallan, Promise.all rechaza y lo leído
   // se descarta: el 404 es el mismo de antes.
+  let estudiosQuery = (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select(
+      `
+      id, tipo, proveedor, estado, resultado, score, observaciones,
+      motivo_rechazo, condiciones,
+      duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
+      referencia_proveedor, certificado_url, datos_formulario,
+      created_at, updated_at,
+      canon_evaluado, canon_evaluado_origen, regla_dura_activada,
+      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
+    `,
+      { count: 'exact' },
+    )
+    .eq('expediente_id', expedienteId);
+  // Ver assertNoEsEstudioDeOtraPersona: el titular no lista el del co-arrendatario.
+  if (userRol === 'solicitante') estudiosQuery = estudiosQuery.neq('tipo', 'con_coarrendatario');
+
   const [{ data: expediente, error: expError }, , { data, error, count }, autorizacion] = await Promise.all([
     (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('id')
@@ -205,22 +238,7 @@ export async function listEstudios(
     // de expedientes de su cartera. Sin esto, cualquier rol con expedientes:read
     // enumeraba los estudios de OTRA agencia por expedienteId (IDOR).
     assertExpedienteAccess(expedienteId, userId, userRol),
-    (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .select(
-        `
-      id, tipo, proveedor, estado, resultado, score, observaciones,
-      motivo_rechazo, condiciones,
-      duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
-      referencia_proveedor, certificado_url, datos_formulario,
-      created_at, updated_at,
-      canon_evaluado, canon_evaluado_origen, regla_dura_activada,
-      solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
-    `,
-        { count: 'exact' },
-      )
-      .eq('expediente_id', expedienteId)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1),
+    estudiosQuery.order('created_at', { ascending: false }).range(offset, offset + limit - 1),
     leerAutorizacionTitular(expedienteId),
   ]);
 
@@ -516,6 +534,7 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
   // expedientes:read leía el estudio de OTRA agencia por UUID (IDOR). No-op para
   // roles internos y para llamadas internas sin identidad (userId/userRol undefined).
   await assertExpedienteAccess((data as { expediente_id: string }).expediente_id, userId, userRol);
+  assertNoEsEstudioDeOtraPersona((data as { tipo?: string }).tipo, userRol);
 
   const conRuta = await adjuntarRuta(data as unknown as Record<string, unknown>);
   const conDerivados = await adjuntarExpiracion(conRuta);
@@ -1984,6 +2003,7 @@ export async function ejecutarEstudio(
         'ESTUDIO_FORBIDDEN',
       );
     }
+    assertNoEsEstudioDeOtraPersona(est.tipo, userRol);
   }
 
   // 1.3. Ownership guard para inmobiliaria / propietario: solo pueden ejecutar
@@ -2449,7 +2469,8 @@ export async function ejecutarEstudio(
   });
 
   // 7. Responder inmediatamente con el estudio actualizado (estado=en_proceso).
-  return getEstudioById(estudioId);
+  //    Con el rol: sin el, al solicitante le volvia el score y el crudo del buro.
+  return getEstudioById(estudioId, userId, userRol);
 }
 
 /**
@@ -3190,7 +3211,7 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
   // esto, un rol externo con expedientes:read leía la cadena de OTRA agencia (IDOR).
   const { data: baseRow, error: baseErr } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('expediente_id')
+    .select('expediente_id, tipo')
     .eq('id', estudioId)
     .single();
 
@@ -3199,6 +3220,7 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
   }
 
   await assertExpedienteAccess((baseRow as { expediente_id: string }).expediente_id, userId, userRol);
+  assertNoEsEstudioDeOtraPersona((baseRow as { tipo?: string }).tipo, userRol);
 
   // 1. Walk up to find root (the one without estudio_padre_id)
   let rootId = estudioId;
@@ -3308,7 +3330,8 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
   return {
     total_en_cadena: totalEnCadena,
     puede_reevaluar: puedeReevaluar,
-    historial,
+    // Mismas reglas que el detalle: al prospecto no le viajan score ni motivo.
+    historial: redactarEstudiosSegunRol(historial as Record<string, unknown>[], userRol),
   };
 }
 
@@ -3874,7 +3897,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, proveedor, referencia_proveedor, expediente_id')
+    .select('id, estado, proveedor, referencia_proveedor, expediente_id, tipo')
     .eq('id', estudioId)
     .single();
 
@@ -3888,6 +3911,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
     proveedor: string;
     referencia_proveedor: string | null;
     expediente_id: string;
+    tipo: string;
   };
 
   // Tenant guard: además de exponer el detalle del estudio, este endpoint puede
@@ -3895,6 +3919,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
   // scoping, un rol externo con estudios:read leía/avanzaba estudios de OTRA
   // agencia por UUID (IDOR). Se gatea ANTES de tocar el proveedor.
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
+  assertNoEsEstudioDeOtraPersona(est.tipo, userRol);
 
   // Estudios finalizados: responder desde BD SIN consultar al provider. El
   // cache del provider vive en memoria — tras un restart respondería 'failed'
@@ -3910,7 +3935,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
         mensaje: null,
         progreso_porcentaje: null,
       },
-      estudio: await getEstudioById(estudioId),
+      estudio: await getEstudioById(estudioId, userId, userRol),
     };
   }
 
@@ -4028,7 +4053,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
 
     return {
       provider_status: statusResponse,
-      estudio: await getEstudioById(estudioId),
+      estudio: await getEstudioById(estudioId, userId, userRol),
     };
   }
 
@@ -4052,7 +4077,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
 
   return {
     provider_status: statusResponse,
-    estudio: await getEstudioById(estudioId),
+    estudio: await getEstudioById(estudioId, userId, userRol),
   };
 }
 
