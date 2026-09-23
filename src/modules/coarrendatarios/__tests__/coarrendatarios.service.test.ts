@@ -514,20 +514,20 @@ describe('construirCorreoCoarrendatario', () => {
       coarrendatarioResultado: 'aprobado',
       decisionExpediente: 'en_revision',
     });
-    expect(subject).toContain('ya está listo');
+    expect(subject).toContain('Tu evaluación ya está lista');
     expect(html).toContain('analista de Cofianza');
     // El score solo va con una decision final.
     expect(html).not.toContain('720');
   });
 
-  it('aprobado con su estudio condicionado: no le dice que su estudio quedó aprobado', () => {
+  it('aprobado con su evaluación condicionada: no le dice que su evaluación quedó aprobada', () => {
     const { html } = construirCorreoCoarrendatario({
       ...base,
       coarrendatarioResultado: 'condicionado',
       decisionExpediente: 'aprobado',
     });
     expect(html).toContain('aprobó');
-    expect(html).not.toContain('Tu estudio crediticio quedó <strong style="color: #047857;">aprobado</strong>');
+    expect(html).not.toContain('Tu evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong>');
   });
 
   it('el nombre y el titular no inyectan HTML en el cuerpo; el asunto va en texto plano', () => {
