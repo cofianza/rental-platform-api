@@ -41,9 +41,24 @@ vi.mock('@/lib/supabase', () => ({
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: vi.fn(async () => undefined) }));
-vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(async () => undefined) }));
+const { mockNotificarUsuario, mockNotificarResponsable } = vi.hoisted(() => ({
+  mockNotificarUsuario: vi.fn(async (_: Record<string, unknown>) => undefined),
+  mockNotificarResponsable: vi.fn(async (_: Record<string, unknown>) => undefined),
+}));
+vi.mock('../../notificaciones/notificaciones.service', () => ({
+  notificarUsuario: mockNotificarUsuario,
+  notificarResponsableExpediente: mockNotificarResponsable,
+}));
+vi.mock('@/modules/users/users.service', () => ({
+  listOperators: vi.fn(async () => [{ id: 'analista-1' }, { id: 'analista-2' }]),
+}));
 
-import { listarSoportes, getContextoDocumentosPublico } from '../expediente-soportes.service';
+import {
+  listarSoportes,
+  getContextoDocumentosPublico,
+  confirmarSoporte,
+  confirmarSoportePublico,
+} from '../expediente-soportes.service';
 
 const EXP = '550e8400-e29b-41d4-a716-446655440000';
 const TITULAR = '880e8400-e29b-41d4-a716-446655440000';
@@ -61,6 +76,8 @@ const estudioListado = () =>
 beforeEach(() => {
   queues.clear();
   ops.length = 0;
+  mockNotificarUsuario.mockClear();
+  mockNotificarResponsable.mockClear();
 });
 
 describe('soportes del condicionado con co-arrendatario', () => {
@@ -92,5 +109,55 @@ describe('soportes del condicionado con co-arrendatario', () => {
     ]);
 
     await expect(listarSoportes(EXP, 'analista-1', 'operador_analista')).rejects.toMatchObject({ errorCode: 'SIN_ESTUDIO' });
+  });
+});
+
+// ============================================================
+// En el condicionado decide un analista de Cofianza: un soporte nuevo le
+// tiene que llegar. Antes solo se avisaba al dueño del inmueble.
+// ============================================================
+
+describe('soporte nuevo del solicitante', () => {
+  const PROP = 'prop-1';
+  const input = {
+    storage_key: `expedientes/${EXP}/soportes/a.pdf`,
+    nombre_original: 'a.pdf',
+    tipo_mime: 'application/pdf' as const,
+    tamano_bytes: 100,
+    proposito: 'extractos_bancarios' as const,
+  };
+  const avisados = () => mockNotificarUsuario.mock.calls.map((c) => c[0]);
+
+  it('por el enlace publico avisa a los analistas, al dueño y al responsable', async () => {
+    queues.set('expedientes', [
+      {
+        data: { id: EXP, estado: 'condicionado', token_documentos_expiracion: null, inmuebles: { propietario_id: PROP, direccion: 'Cra 7', ciudad: null }, solicitantes: null, estudios },
+        error: null,
+      },
+    ]);
+    queues.set('estudios_documentos_soporte', [{ data: { id: 'doc-1', proposito: 'extractos_bancarios', nombre_original: 'a.pdf' }, error: null }]);
+
+    await confirmarSoportePublico('tok', input);
+
+    await vi.waitFor(() => expect(mockNotificarResponsable).toHaveBeenCalled());
+    const analistas = avisados().filter((a) => a.tipo === 'estudio.revision_manual').map((a) => a.userId);
+    expect(analistas).toEqual(['analista-1', 'analista-2']);
+    const alDueno = avisados().find((a) => a.userId === PROP);
+    expect(alDueno?.mensaje).not.toContain('antes de aprobar');
+    expect(mockNotificarResponsable.mock.calls[0][0]).toMatchObject({ expedienteId: EXP, excluirPerfilId: PROP });
+  });
+
+  it('el solicitante con cuenta tambien avisa a los analistas', async () => {
+    queues.set('expedientes', [
+      { data: { id: EXP, estado: 'condicionado', creado_por: null, inmuebles: { propietario_id: PROP }, solicitantes: { creado_por: 'sol-1' }, estudios }, error: null },
+    ]);
+    queues.set('estudios_documentos_soporte', [
+      { data: { id: 'doc-2', proposito: 'extractos_bancarios', nombre_original: 'a.pdf', storage_key: input.storage_key }, error: null },
+    ]);
+
+    await confirmarSoporte(EXP, 'sol-1', 'solicitante', input);
+
+    await vi.waitFor(() => expect(mockNotificarResponsable).toHaveBeenCalled());
+    expect(avisados().filter((a) => a.tipo === 'estudio.revision_manual')).toHaveLength(2);
   });
 });

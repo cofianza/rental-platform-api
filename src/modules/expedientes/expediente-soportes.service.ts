@@ -21,7 +21,7 @@ import { supabase, supabaseAuth } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config';
-import { notificarUsuario } from '../notificaciones/notificaciones.service';
+import { notificarUsuario, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { firmarUrlsVista } from '../documentos/documentos.service';
 
@@ -305,16 +305,9 @@ export async function confirmarSoporte(
     storage_key: string;
   };
 
-  // Notificar al propietario que el solicitante subió un documento — fire and forget.
-  if (ctx.esSolicitante && ctx.propietarioId) {
-    notificarUsuario({
-      userId: ctx.propietarioId,
-      tipo: 'soporte.subido',
-      titulo: 'Nuevo documento del solicitante',
-      mensaje: `El solicitante subió un documento (${input.proposito.replace(/_/g, ' ')}). Revísalo antes de aprobar.`,
-      link: `/expedientes/${expedienteId}`,
-      payload: { expediente_id: expedienteId, soporte_id: docTyped.id, proposito: input.proposito },
-    }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error notificando soporte subido'));
+  // Avisar que el solicitante subió un documento — fire and forget.
+  if (ctx.esSolicitante) {
+    avisarSoporteNuevo(expedienteId, ctx.propietarioId, docTyped.id, input.proposito, '');
   }
 
   // Generar URL view para devolverla al cliente (1h).
@@ -328,6 +321,50 @@ export async function confirmarSoporte(
     nombre_original: docTyped.nombre_original,
     archivo_url: urlData?.signedUrl || null,
   };
+}
+
+/**
+ * Aviso de un soporte nuevo del solicitante. En el condicionado decide un
+ * analista de Cofianza (Adenda 2 §5): sin su aviso el caso quedaba quieto
+ * hasta que alguien lo reabriera. El dueño y el miembro responsable se
+ * enteran, pero no aprueban.
+ */
+function avisarSoporteNuevo(
+  expedienteId: string,
+  propietarioId: string | null,
+  soporteId: string,
+  proposito: Proposito,
+  dondeInmueble: string,
+): void {
+  const doc = proposito.replace(/_/g, ' ');
+  const link = `/expedientes/${expedienteId}`;
+  const payload = { expediente_id: expedienteId, soporte_id: soporteId, proposito };
+  const alGestor = {
+    tipo: 'soporte.subido',
+    titulo: 'Nuevo documento del solicitante',
+    mensaje: `El solicitante subió un documento (${doc})${dondeInmueble}. Cofianza lo tendrá en cuenta al decidir.`,
+    link,
+    payload,
+  };
+
+  void (async () => {
+    const { listOperators } = await import('@/modules/users/users.service');
+    const analistas = await listOperators().catch(() => []);
+    await Promise.all([
+      ...analistas.map((a) =>
+        notificarUsuario({
+          userId: a.id,
+          tipo: 'estudio.revision_manual',
+          titulo: 'Nuevo soporte en un estudio condicionado',
+          mensaje: `El solicitante subió un documento (${doc}). Tenlo en cuenta al decidir la revisión manual.`,
+          link,
+          payload,
+        }),
+      ),
+      propietarioId ? notificarUsuario({ userId: propietarioId, ...alGestor }) : undefined,
+      notificarResponsableExpediente({ expedienteId, excluirPerfilId: propietarioId, ...alGestor }),
+    ]);
+  })().catch((e) => logger.warn({ error: e, expedienteId }, 'Error notificando soporte subido'));
 }
 
 // ============================================================
@@ -603,17 +640,14 @@ export async function confirmarSoportePublico(
   }
   const docTyped = doc as unknown as { id: string; proposito: Proposito; nombre_original: string };
 
-  // Avisar al propietario/inmobiliaria que el solicitante subió un documento.
-  if (ctx.propietarioId) {
-    notificarUsuario({
-      userId: ctx.propietarioId,
-      tipo: 'soporte.subido',
-      titulo: 'Nuevo documento del solicitante',
-      mensaje: `El solicitante subió un documento (${input.proposito.replace(/_/g, ' ')}) para ${ctx.inmuebleDireccion || 'el inmueble'}. Revísalo antes de aprobar.`,
-      link: `/expedientes/${ctx.expedienteId}`,
-      payload: { expediente_id: ctx.expedienteId, soporte_id: docTyped.id, proposito: input.proposito },
-    }).catch((e) => logger.warn({ error: e, expedienteId: ctx.expedienteId }, 'Error notificando soporte público'));
-  }
+  // Avisar que el solicitante subió un documento — fire and forget.
+  avisarSoporteNuevo(
+    ctx.expedienteId,
+    ctx.propietarioId,
+    docTyped.id,
+    input.proposito,
+    ` para ${ctx.inmuebleDireccion || 'el inmueble'}`,
+  );
 
   return { id: docTyped.id, proposito: docTyped.proposito, nombre_original: docTyped.nombre_original };
 }
