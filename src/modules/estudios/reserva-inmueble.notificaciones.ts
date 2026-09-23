@@ -175,3 +175,63 @@ export async function avisarCandidatosDeReserva(input: AvisoReservaInput): Promi
     }
   }
 }
+
+export const MOTIVO_VISITA_INMUEBLE_RESERVADO = 'El inmueble fue reservado para otro candidato';
+
+/**
+ * Cancela las visitas vivas (solicitada/confirmada) de los DEMAS estudios sobre
+ * el inmueble recien reservado y avisa a cada solicitante. Cubre a quien solo
+ * pidio visita desde la vitrina (expediente sin estudio), que no entra en
+ * `afectados`. La del ganador no se toca. Best-effort: nunca lanza.
+ */
+export async function cancelarVisitasDeOtros(inmuebleId: string, expedienteGanadorId: string): Promise<void> {
+  try {
+    const { data: exps, error: expErr } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('inmueble_id', inmuebleId)
+      .neq('id', expedienteGanadorId);
+    if (expErr) throw expErr;
+    const ids = ((exps ?? []) as { id: string }[]).map((e) => e.id);
+    if (ids.length === 0) return;
+
+    const { data: canceladas, error } = await (supabase
+      .from('citas' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        estado: 'cancelada',
+        motivo_cancelacion: MOTIVO_VISITA_INMUEBLE_RESERVADO,
+        updated_at: new Date().toISOString(),
+      } as never)
+      .in('expediente_id', ids)
+      .in('estado', ['solicitada', 'confirmada'])
+      .select('id, expediente_id, fecha_propuesta, fecha_confirmada');
+    if (error) throw error;
+    const filas = (canceladas ?? []) as Array<{
+      id: string; expediente_id: string; fecha_propuesta: string; fecha_confirmada: string | null;
+    }>;
+    if (filas.length === 0) return;
+
+    logger.info(
+      { expedienteGanadorId, inmuebleId, visitas: filas.length },
+      'Flujo 4.2: visitas de los demas candidatos canceladas por la reserva',
+    );
+    const { notificarCitaCancelada } = await import('../citas/citas.service');
+    for (const c of filas) {
+      await (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>).insert({
+        expediente_id: c.expediente_id,
+        tipo: 'cita',
+        descripcion: `Cita cancelada: ${MOTIVO_VISITA_INMUEBLE_RESERVADO}`,
+        metadata: { cita_id: c.id, motivo: 'inmueble_reservado_por_otro_candidato', expediente_ganador_id: expedienteGanadorId },
+      } as never);
+      // 'administrador' = la cancela Cofianza, así que el aviso va al solicitante.
+      await notificarCitaCancelada(
+        c.expediente_id,
+        c.fecha_confirmada || c.fecha_propuesta,
+        MOTIVO_VISITA_INMUEBLE_RESERVADO,
+        'administrador',
+      ).catch((err) => logger.warn({ err, citaId: c.id }, 'No se pudo avisar la visita cancelada por la reserva'));
+    }
+  } catch (err) {
+    logger.warn({ err, inmuebleId, expedienteGanadorId }, 'No se pudieron cancelar las visitas de los demas candidatos');
+  }
+}

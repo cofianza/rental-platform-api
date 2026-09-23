@@ -25,7 +25,7 @@ import { getCalibracion, type Calibracion } from '@/lib/calibracion';
 import { checkPerfilCompletitud } from '@/modules/perfil-arrendador/perfil-arrendador.service';
 import { tarifasDelEstudio } from '@/modules/estudios/tarifa-override.service';
 import { ESTADOS_VINCULADO } from '@/modules/estudios/coarrendatario-vinculado';
-import { avisarCandidatosDeReserva } from '@/modules/estudios/reserva-inmueble.notificaciones';
+import { avisarCandidatosDeReserva, cancelarVisitasDeOtros } from '@/modules/estudios/reserva-inmueble.notificaciones';
 import {
   liberarReservaDeExpediente,
   reservarInmuebleParaContrato,
@@ -559,6 +559,8 @@ export async function obtenerEstado(
 }
 
 function avisarAfectados(reserva: ReservaInmuebleResult, expedienteId: string) {
+  // Las visitas de los demás (también de quien solo pidió visita) se cancelan al reservar.
+  if (reserva.reservado && reserva.inmueble_id) void cancelarVisitasDeOtros(reserva.inmueble_id, expedienteId);
   if (!reserva.afectados.length) return;
   avisarCandidatosDeReserva({
     afectados: reserva.afectados,

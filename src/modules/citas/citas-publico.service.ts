@@ -21,6 +21,7 @@ import {
   notificarCitaCancelada,
   notificarPropietarioConfirmacionAsistencia,
 } from './citas.service';
+import { assertInmuebleAdmiteVisitas } from './citas.permissions';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
@@ -35,7 +36,10 @@ interface CitaPublicaRow {
   acuse_solicitante_at: string | null;
   expediente_id: string;
   expediente: {
-    inmueble: { id: string; direccion: string; ciudad: string; propietario_id: string } | null;
+    inmueble: {
+      id: string; direccion: string; ciudad: string; propietario_id: string;
+      estado: string | null; reservado_por_expediente_id: string | null;
+    } | null;
     solicitante: { nombre: string; apellido: string } | null;
   } | null;
 }
@@ -45,7 +49,7 @@ async function fetchCitaByToken(token: string): Promise<CitaPublicaRow> {
     .select(`
       id, estado, fecha_propuesta, fecha_confirmada, acuse_solicitante_at, expediente_id,
       expediente:expedientes (
-        inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad, propietario_id),
+        inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad, propietario_id, estado, reservado_por_expediente_id),
         solicitante:solicitantes (nombre, apellido)
       )
     `)
@@ -112,6 +116,8 @@ export async function reprogramarCitaPublica(token: string, fechaIso: string): P
   if (!ACCIONABLES.includes(c.estado)) {
     throw AppError.badRequest('Esta visita ya no se puede reprogramar', 'CITA_NO_ACCIONABLE');
   }
+  const inm = c.expediente?.inmueble;
+  assertInmuebleAdmiteVisitas(c.expediente_id, inm?.estado, inm?.reservado_por_expediente_id);
 
   const propietarioId = c.expediente?.inmueble?.propietario_id;
   if (propietarioId) {

@@ -2062,6 +2062,12 @@ export async function generarContrato(
       expedienteGanadorId: expedienteId,
     }).catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar a los demas candidatos'));
   }
+  // Las visitas de los demás (también de quien solo pidió visita, sin estudio)
+  // se cancelan; `afectados` no los incluye. Best-effort, nunca lanza.
+  if (reserva.reservado && reserva.inmueble_id) {
+    const { cancelarVisitasDeOtros } = await import('@/modules/estudios/reserva-inmueble.notificaciones');
+    void cancelarVisitasDeOtros(reserva.inmueble_id, expedienteId);
+  }
 
   const now = new Date();
   // Prioridad: input del caller > datos persistidos en el expediente al

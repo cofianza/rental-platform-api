@@ -19,6 +19,8 @@ export interface CitaPermissionContext {
   expedienteEstado: string;
   inmueblePropietarioId: string | null;
   inmuebleInmobiliariaId: string | null;
+  inmuebleEstado: string | null;
+  inmuebleReservadoPor: string | null;
   solicitanteCreadoPor: string | null;
 }
 
@@ -41,7 +43,12 @@ interface ExpedienteOwnershipRow {
   estado: string;
   solicitante_id: string | null;
   inmueble_id: string;
-  inmuebles: { propietario_id: string; inmobiliaria_id: string | null } | null;
+  inmuebles: {
+    propietario_id: string;
+    inmobiliaria_id: string | null;
+    estado: string | null;
+    reservado_por_expediente_id: string | null;
+  } | null;
   solicitantes: { creado_por: string } | null;
 }
 
@@ -49,7 +56,7 @@ async function fetchExpedienteOwnership(expedienteId: string): Promise<Expedient
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
-      'id, numero, estado, solicitante_id, inmueble_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes(creado_por)',
+      'id, numero, estado, solicitante_id, inmueble_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, estado, reservado_por_expediente_id), solicitantes(creado_por)',
     )
     .eq('id', expedienteId)
     .single();
@@ -72,8 +79,30 @@ function toContext(row: ExpedienteOwnershipRow): CitaPermissionContext {
     expedienteEstado: row.estado,
     inmueblePropietarioId: row.inmuebles?.propietario_id ?? null,
     inmuebleInmobiliariaId: row.inmuebles?.inmobiliaria_id ?? null,
+    inmuebleEstado: row.inmuebles?.estado ?? null,
+    inmuebleReservadoPor: row.inmuebles?.reservado_por_expediente_id ?? null,
     solicitanteCreadoPor: row.solicitantes?.creado_por ?? null,
   };
+}
+
+/**
+ * Solo se agenda o reprograma una visita sobre un inmueble que todavía se le
+ * puede arrendar a ESTE estudio. Reservado para otro candidato, arrendado o
+ * inactivo -> 409 (misma regla que crear un estudio). Al reservar, las visitas
+ * de los demás se cancelan (cancelarVisitasDeOtros).
+ */
+export function assertInmuebleAdmiteVisitas(
+  expedienteId: string,
+  estado: string | null | undefined,
+  reservadoPor: string | null | undefined,
+): void {
+  if (reservadoPor && reservadoPor === expedienteId) return;
+  if (reservadoPor) {
+    throw AppError.conflict('El inmueble ya fue reservado para otro candidato.', 'INMUEBLE_RESERVADO');
+  }
+  if (estado === 'ocupado' || estado === 'inactivo') {
+    throw AppError.conflict('El inmueble ya no está disponible para visitas.', 'INMUEBLE_NO_DISPONIBLE');
+  }
 }
 
 function denyAndThrow(

@@ -113,6 +113,7 @@ vi.mock('@/modules/estudios/tarifa-override.service', () => ({
 }));
 vi.mock('@/modules/estudios/reserva-inmueble.notificaciones', () => ({
   avisarCandidatosDeReserva: (...args: unknown[]) => mockAvisar(...args),
+  cancelarVisitasDeOtros: vi.fn(async () => undefined),
 }));
 vi.mock('@/modules/inmuebles/inmuebles.service', () => ({
   reservarInmuebleParaContrato: (...args: unknown[]) => mockReservar(...args),

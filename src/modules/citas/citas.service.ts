@@ -8,7 +8,7 @@ import {
   sendCitaReprogramadaSolicitanteEmail,
   sendCitaCanceladaEmail,
 } from '../orchestrator/orchestrator.emails';
-import { assertCitaPermission, resolveAccessibleExpedienteIds } from './citas.permissions';
+import { assertCitaPermission, assertInmuebleAdmiteVisitas, resolveAccessibleExpedienteIds } from './citas.permissions';
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
 import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
@@ -597,6 +597,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
     expedienteId: input.expediente_id,
     action: 'create',
   });
+  assertInmuebleAdmiteVisitas(expediente.expedienteId, expediente.inmuebleEstado, expediente.inmuebleReservadoPor);
 
   // Guard: no permitir crear una nueva cita si ya existe una activa para
   // este expediente (solicitada o confirmada). Defensa server-side aunque
@@ -893,6 +894,7 @@ export async function reprogramarCita(
     expedienteId: cita.expediente_id as string,
     action: 'reprogramar',
   });
+  assertInmuebleAdmiteVisitas(expediente.expedienteId, expediente.inmuebleEstado, expediente.inmuebleReservadoPor);
 
   // Solo aplica a citas que estan vivas (solicitada o confirmada). Cualquier
   // otro estado (realizada/cancelada/no_asistio) no debe reprogramarse — el

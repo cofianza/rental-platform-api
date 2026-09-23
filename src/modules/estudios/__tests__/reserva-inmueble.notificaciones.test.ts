@@ -5,19 +5,33 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // quien ya tuvo contrato sobre ese estudio (revisión V3, 2026-09-22).
 // ============================================================
 
-const { queues, inserts, mockNotificar } = vi.hoisted(() => {
+const { queues, inserts, updates, filtros, mockNotificar, mockCitaCancelada } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const inserts: Array<{ table: string; row: Record<string, unknown> }> = [];
-  return { queues, inserts, mockNotificar: vi.fn(async () => undefined) };
+  const updates: Array<{ table: string; row: Record<string, unknown> }> = [];
+  const filtros: Array<{ table: string; m: string; args: unknown[] }> = [];
+  return {
+    queues, inserts, updates, filtros,
+    mockNotificar: vi.fn(async () => undefined),
+    mockCitaCancelada: vi.fn(async () => undefined),
+  };
 });
 
 vi.mock('@/lib/supabase', () => {
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'in', 'neq', 'eq']) chain[m] = () => chain;
+    for (const m of ['select', 'in', 'neq', 'eq'])
+      chain[m] = (...args: unknown[]) => {
+        filtros.push({ table, m, args });
+        return chain;
+      };
     chain.insert = (row: Record<string, unknown>) => {
       inserts.push({ table, row });
+      return chain;
+    };
+    chain.update = (row: Record<string, unknown>) => {
+      updates.push({ table, row });
       return chain;
     };
     chain.then = (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) =>
@@ -32,7 +46,14 @@ vi.mock('../../notificaciones/notificaciones.service', () => ({
   findPerfilIdByEmail: async (email: string | null) => (email ? `perfil-${email}` : null),
 }));
 
-import { avisarCandidatosDeReserva, type CandidatoAfectado } from '../reserva-inmueble.notificaciones';
+vi.mock('../../citas/citas.service', () => ({ notificarCitaCancelada: mockCitaCancelada }));
+
+import {
+  avisarCandidatosDeReserva,
+  cancelarVisitasDeOtros,
+  MOTIVO_VISITA_INMUEBLE_RESERVADO,
+  type CandidatoAfectado,
+} from '../reserva-inmueble.notificaciones';
 
 const cand = (expediente_id: string): CandidatoAfectado => ({
   expediente_id,
@@ -48,6 +69,8 @@ const aviso = (...ids: string[]) =>
 beforeEach(() => {
   queues.clear();
   inserts.length = 0;
+  updates.length = 0;
+  filtros.length = 0;
   vi.clearAllMocks();
 });
 
@@ -65,5 +88,36 @@ describe('avisarCandidatosDeReserva', () => {
     await aviso('candidato');
     expect(inserts).toHaveLength(0);
     expect(mockNotificar).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancelarVisitasDeOtros', () => {
+  it('cancela las visitas vivas de los demás estudios del inmueble y avisa a cada solicitante', async () => {
+    queues.set('expedientes', [{ data: [{ id: 'solo-visita' }], error: null }]);
+    queues.set('citas', [{
+      data: [{ id: 'c1', expediente_id: 'solo-visita', fecha_propuesta: '2026-10-01T15:00:00Z', fecha_confirmada: null }],
+      error: null,
+    }]);
+    await cancelarVisitasDeOtros('inm-1', 'ganador');
+
+    const exp = filtros.filter((f) => f.table === 'expedientes');
+    expect(exp).toContainEqual({ table: 'expedientes', m: 'eq', args: ['inmueble_id', 'inm-1'] });
+    expect(exp).toContainEqual({ table: 'expedientes', m: 'neq', args: ['id', 'ganador'] });
+    expect(updates).toEqual([
+      { table: 'citas', row: expect.objectContaining({ estado: 'cancelada', motivo_cancelacion: MOTIVO_VISITA_INMUEBLE_RESERVADO }) },
+    ]);
+    const citas = filtros.filter((f) => f.table === 'citas');
+    expect(citas).toContainEqual({ table: 'citas', m: 'in', args: ['expediente_id', ['solo-visita']] });
+    expect(citas).toContainEqual({ table: 'citas', m: 'in', args: ['estado', ['solicitada', 'confirmada']] });
+    expect(mockCitaCancelada).toHaveBeenCalledWith(
+      'solo-visita', '2026-10-01T15:00:00Z', MOTIVO_VISITA_INMUEBLE_RESERVADO, 'administrador',
+    );
+  });
+
+  it('sin otros estudios sobre el inmueble no toca las citas', async () => {
+    queues.set('expedientes', [{ data: [], error: null }]);
+    await cancelarVisitasDeOtros('inm-1', 'ganador');
+    expect(updates).toEqual([]);
+    expect(mockCitaCancelada).not.toHaveBeenCalled();
   });
 });
