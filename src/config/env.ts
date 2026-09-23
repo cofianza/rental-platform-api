@@ -278,8 +278,9 @@ const envSchema = z.object({
   // (src/modules/contratos/v3/clausulas.ia.ts). OFF por defecto: con el flag
   // apagado nunca se construye el cliente ni se llama a Anthropic. Encendido
   // pero sin llave (o con Anthropic caído), guardar cláusulas responde 503
-  // (fail-closed). Encender solo con visto bueno de Mario (Ley 1581: el texto
-  // sale al exterior) y tras correr la tabla §8 desde la Console de Railway.
+  // (fail-closed). NO SE ENCIENDE: la Adenda 1 del módulo de contratos
+  // (respuesta 13 bis) no la habilita, y encendida le muestra bloqueos a la
+  // inmobiliaria; una IA futura solo puede ser alerta interna de Cofianza.
   CLAUSULAS_IA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Llave de la API de Anthropic. Nunca se loguea. Vacía = sin configurar
   // (no tumba el arranque: un `ANTHROPIC_API_KEY=` copiado del ejemplo no

@@ -29,7 +29,7 @@ import type {
   Paso4,
   Paso5,
 } from './asistente.types';
-import { shaClausula, validarClausula } from './clausulas.reglas';
+import { categoriaClausula, huella, shaClausula, validarClausula } from './clausulas.reglas';
 import { fechaBogota } from './formato';
 import { MARCADOR } from './motor';
 import type { DatosVivienda, Persona } from './vivienda';
@@ -80,8 +80,8 @@ export interface DocumentoV3 {
   logoStorageKey: string | null;
   fijos: { diaPago: 1; puntosIpc: 0; servicios: 'arrendatario_todos' };
   snapshot: Record<string, unknown>;
-  /** Las adicionales impresas (Entrega 4): su huella, la aceptación y el número de la primera. */
-  adicionales: { huella: string; aceptacion: AceptacionClausulas; primera: number } | null;
+  /** Las adicionales impresas (Entrega 4): su huella, la aceptación (null = solo modelos) y el número de la primera. */
+  adicionales: { huella: string; aceptacion: AceptacionClausulas | null; primera: number } | null;
   /**
    * El PDF que se envió a firma (Entrega 5): se escribe en el mismo UPDATE que
    * saca la fila de borrador, así que queda congelado con ella.
@@ -514,6 +514,7 @@ export function prefill(f: Fuentes, hoy: string, cal: Calibracion): Prefill {
           4: {
             clausulas: a.paso4.clausulas.map((c) => ({
               clausulaId: c.clausulaId,
+              origen: c.origen, // la web decide con esto si pide la aceptación (resp. 13)
               ...(c.valores ? { valores: c.valores } : {}),
             })),
           },
@@ -788,6 +789,9 @@ export function armarDatosVivienda(
 /** Lo que cargarFuentes lee del catálogo para las cláusulas del paso 4. */
 export interface FilaCatalogoAdicional {
   id: string;
+  inmobiliaria_id: string | null;
+  titulo: string;
+  texto: string;
   estado: string;
   version: number;
   inhabilitada_motivo: string | null;
@@ -823,6 +827,10 @@ export function bloqueosAdicionales(
       );
     else if (fila.version > c.version)
       avisos.push(`Hay una versión más reciente de «${c.titulo}». Si vuelves a guardar el paso 4, el contrato usará la nueva.`);
+    // Resp. 13: un modelo sin cambios es texto de Cofianza y queda fuera de la aceptación. Con la
+    // misma versión se vuelve a comparar con el modelo: si ya no coincide, la aceptación no lo cubre.
+    else if (c.origen === 'biblioteca' && categoriaClausula(c, fila) !== 'biblioteca')
+      b('CLAUSULA_MODELO_ALTERADO', `«${c.titulo}» ya no coincide con el modelo sugerido por Cofianza: vuelve a guardar el paso 4.`);
 
     const h = validarClausula(c, { destinacion: 'vivienda', sinCoarrendatario: o.sinCoarrendatario }).hallazgos[0];
     if (h) b('CLAUSULA_NO_PERMITIDA', `«${c.titulo}»: ${h.mensaje}`, h.norma ? [h.norma] : undefined);
@@ -834,6 +842,13 @@ export function bloqueosAdicionales(
     b(
       'REVISION_AUTOMATICA_PENDIENTE',
       'Las cláusulas adicionales deben pasar la revisión automática: vuelve a guardar el paso 4.',
+    );
+  // La aceptación cubre exactamente las propias (resp. 13); una anterior a esa regla no las cubre.
+  const propias = p4.clausulas.filter((c) => c.origen === 'propia');
+  if (propias.length && p4.aceptacion?.huella !== huella(propias))
+    b(
+      'ACEPTACION_PENDIENTE',
+      'Acepta el aviso de responsabilidad de tus cláusulas propias: vuelve a guardar el paso 4.',
     );
 
   const n = p4.clausulas.length;

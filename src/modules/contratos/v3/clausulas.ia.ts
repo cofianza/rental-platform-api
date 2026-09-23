@@ -4,6 +4,13 @@
  * APAGADO por defecto (CLAUSULAS_IA_ENABLED=false). Con el flag apagado nunca
  * se construye el cliente ni se llama a la API, y no hace falta ANTHROPIC_API_KEY.
  *
+ * NO SE HABILITA (Adenda 1 del módulo de contratos, respuesta 13 bis): encendida,
+ * sus hallazgos le BLOQUEAN la cláusula a la inmobiliaria, y una revisión
+ * probabilística visible crea la apariencia de revisión sin la responsabilidad y
+ * debilita la indemnidad. Si algún día se enciende, solo puede ser una alerta
+ * interna de Cofianza, nunca visible a la inmobiliaria como aprobación ni como
+ * bloqueo: eso exige rehacer este flujo, no solo cambiar el flag.
+ *
  * Defensa ante inyección: las reglas (clausulas.reglas.ts) corren primero y la
  * IA solo corre si pasan, así que solo puede AGREGAR hallazgos. La cláusula
  * viaja como JSON con `<` escapado dentro de <clausula>; la salida es un enum

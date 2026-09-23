@@ -651,7 +651,7 @@ describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () =>
     expect(p[2]).toEqual(PASOS.paso2);
     expect(p[3]).toMatchObject({ vigenciaMeses: 12, comisionPct: 8, administracion: PASOS.paso3.administracion });
     expect(p[3].fechaInicio).toBeUndefined();
-    expect(p[4]).toEqual({ clausulas: [{ clausulaId: 'cl-1', valores: { dia: '5' } }] });
+    expect(p[4]).toEqual({ clausulas: [{ clausulaId: 'cl-1', origen: 'biblioteca', valores: { dia: '5' } }] });
     expect(p[5].contactos?.arrendatario).toEqual(PASOS.paso5.contactos.arrendatario);
     expect(p[5].contactos?.coarrendatario).toBeNull();
     // Fechas vigentes sí se copian.

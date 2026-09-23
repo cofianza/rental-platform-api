@@ -24,16 +24,21 @@
 
 import { createHash } from 'crypto';
 import { AppError } from '@/lib/errors';
-import type { CodigoHallazgo, Hallazgo } from './asistente.types';
+import type { CodigoHallazgo, Hallazgo, OrigenClausula } from './asistente.types';
 import { mayus } from './formato';
 import { MARCADOR } from './motor';
 
 /** Sube cuando cambie cualquier regla (se guarda con cada validación). */
 export const REGLAS_VERSION = 'v2';
 
-export const AVISO_VERSION = '2026-09-21';
+// Adenda 1 del módulo de contratos, respuesta 13: dos categorías con responsabilidad
+// distinta. La aceptación (AVISO_RESPONSABILIDAD) cubre solo las propias; los
+// modelos sugeridos sin cambios son texto de Cofianza (AVISO_MODELOS).
+export const AVISO_VERSION = '2026-09-23';
 export const AVISO_RESPONSABILIDAD =
-  'Las cláusulas adicionales son de autoría, iniciativa y responsabilidad exclusiva de la inmobiliaria, que las incorpora como EL ARRENDADOR. COFIANZA S.A.S. no las redacta, no las revisa, no las aprueba y no las avala; la validación automática solo detecta algunos contenidos prohibidos y no es una revisión jurídica. La inmobiliaria asume de manera íntegra y exclusiva las consecuencias y los costos que se deriven de ellas y mantendrá indemne a COFIANZA S.A.S., en los términos de la cláusula «Totalidad del acuerdo y cláusulas adicionales».';
+  'Las cláusulas propias —las que redacta la inmobiliaria y los modelos sugeridos por Cofianza que ella modifica— son de autoría, iniciativa y responsabilidad exclusiva de la inmobiliaria, que las incorpora como EL ARRENDADOR. COFIANZA S.A.S. no las revisa, no las aprueba y no las avala; la validación automática solo detecta algunos contenidos prohibidos y no es una revisión jurídica. La inmobiliaria asume de manera íntegra y exclusiva las consecuencias y los costos que se deriven de ellas y mantendrá indemne a COFIANZA S.A.S., en los términos de la cláusula «Totalidad del acuerdo y cláusulas adicionales».';
+export const AVISO_MODELOS =
+  'Las cláusulas tomadas sin cambios de los Modelos sugeridos por Cofianza son texto de COFIANZA S.A.S.: no son de autoría exclusiva de la inmobiliaria y no quedan cubiertas por la indemnidad de la cláusula «Totalidad del acuerdo y cláusulas adicionales». Un modelo que la inmobiliaria modifica pasa a ser una cláusula propia.';
 export const AVISO_PREVALENCIA =
   'Las condiciones de la fianza de COFIANZA S.A.S. prevalecen: si una cláusula adicional las contradice, se entiende no escrita en aquello que las contradiga.';
 
@@ -174,6 +179,26 @@ export function campos(texto: string): string[] {
 /** Reemplaza cada [[campo]] por su valor; el que no tenga valor queda tal cual. */
 export function llenar(texto: string, valores: Record<string, string>): string {
   return texto.replace(CAMPO, (m, n: string) => (Object.hasOwn(valores, n) ? valores[n] : m));
+}
+
+/** Forma Unicode y espacios: lo único que se ignora al comparar con el modelo. */
+const normalizar = (s: string) => s.normalize('NFC').replace(/\s+/g, ' ').trim();
+
+/**
+ * Adenda 1 del módulo de contratos, respuesta 13: una cláusula es texto de
+ * Cofianza ('biblioteca') solo si es un modelo sugerido SIN cambios: título y
+ * texto, con sus [[campo]] llenos, iguales a los del modelo. Todo lo demás —las
+ * propias y un modelo editado— es autoría exclusiva del arrendador ('propia').
+ */
+export function categoriaClausula(
+  c: { titulo: string; texto: string; valores: Record<string, string> | null },
+  modelo: { inmobiliaria_id: string | null; titulo: string; texto: string } | undefined,
+): OrigenClausula {
+  return modelo?.inmobiliaria_id === null &&
+    normalizar(modelo.titulo) === normalizar(c.titulo) &&
+    normalizar(llenar(modelo.texto, c.valores ?? {})) === normalizar(c.texto)
+    ? 'biblioteca'
+    : 'propia';
 }
 
 // ── Mini-lenguaje de reglas sobre texto plegado (solo [a-z0-9%$ ]) ──

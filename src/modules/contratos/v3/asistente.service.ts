@@ -70,10 +70,12 @@ import {
 } from './asistente.reglas';
 import { validarTexto } from './clausulas.ia';
 import {
+  AVISO_MODELOS,
   AVISO_PREVALENCIA,
   AVISO_RESPONSABILIDAD,
   AVISO_VERSION,
   campos,
+  categoriaClausula,
   huella,
   llenar,
   shaClausula,
@@ -265,9 +267,12 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
     checkPerfilCompletitud(ownerId).catch((e: unknown) => {
       throw noVerificable(expedienteId, 'completitud', e);
     }),
-    // Entrega 4: el estado vigente de las adicionales guardadas (inhabilitada, versión nueva).
+    // Entrega 4: el estado vigente de las adicionales guardadas (inhabilitada, versión nueva) y,
+    // para los modelos, su texto (resp. 13: un modelo sin cambios sigue siendo texto de Cofianza).
     idsAdicionales.length
-      ? db('clausulas_adicionales').select('id, estado, version, inhabilitada_motivo').in('id', idsAdicionales)
+      ? db('clausulas_adicionales')
+          .select('id, inmobiliaria_id, titulo, texto, estado, version, inhabilitada_motivo')
+          .in('id', idsAdicionales)
       : null,
   ]);
   const perfil = dato<PerfilArrendador | null>(perfilR, expedienteId, 'perfil del arrendador');
@@ -429,7 +434,7 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
         maximo: cal.MAX_CLAUSULAS_ADICIONALES,
         // primera ≤ 34 y 34 + 24 = 58: dentro de lo que ordinal() sabe escribir.
         ordinales: Array.from({ length: 25 }, (_, i) => mayus(ordinal(primera + i))),
-        aviso: { version: AVISO_VERSION, texto: AVISO_RESPONSABILIDAD },
+        aviso: { version: AVISO_VERSION, texto: AVISO_RESPONSABILIDAD, modelos: AVISO_MODELOS },
         prevalencia: AVISO_PREVALENCIA,
         excesoAutorizado: a.excesoAutorizado
           ? { huella: a.excesoAutorizado.huella, cantidad: a.excesoAutorizado.cantidad, en: a.excesoAutorizado.en }
@@ -663,7 +668,8 @@ interface FilaClausula {
  * Quién (D5), el aviso vigente, que cada cláusula siga disponible para la org
  * del contrato, sus [[campos]] y las reglas (y la IA, si está encendida) sobre
  * el texto FINAL. Devuelve el Paso4 a guardar; ninguna falla escribe nada.
- * Pasar el máximo no impide guardar: queda como bloqueo (D6).
+ * Pasar el máximo no impide guardar: queda como bloqueo (D6). La aceptación
+ * se exige y cubre solo las propias (Adenda 1 contratos, resp. 13).
  */
 async function prepararPaso4(
   f: Fuentes,
@@ -678,8 +684,6 @@ async function prepararPaso4(
       'Las cláusulas adicionales las incorpora y acepta un miembro de la inmobiliaria del contrato.',
       'CLAUSULAS_SOLO_INMOBILIARIA',
     );
-  if (e.avisoVersion !== AVISO_VERSION)
-    throw AppError.conflict('El aviso de responsabilidad cambió. Léelo de nuevo y acéptalo.', 'AVISO_CAMBIADO');
 
   const ids = e.clausulas.map((c) => c.clausulaId);
   const [filasR, perfilR, rolMiembro] = await Promise.all([
@@ -705,9 +709,9 @@ async function prepararPaso4(
         'Una de las cláusulas elegidas ya no está disponible. Quítala del contrato.',
         { indice },
       );
-    const origen = fila.inmobiliaria_id ? 'propia' : 'biblioteca';
-    // Solo la biblioteca lleva [[campos]]; una propia no puede traer valores.
-    const nombres = origen === 'biblioteca' ? campos(fila.texto) : [];
+    const deModelo = fila.inmobiliaria_id === null;
+    // Solo los modelos sugeridos llevan [[campos]]; una propia no puede traer valores.
+    const nombres = deModelo ? campos(fila.texto) : [];
     const valores = item.valores ?? {};
     const faltan = nombres.filter((n) => !Object.hasOwn(valores, n));
     const sobran = Object.keys(valores).filter((n) => !nombres.includes(n));
@@ -735,18 +739,19 @@ async function prepararPaso4(
     const r = await validarTexto(c, {
       destinacion: 'vivienda',
       sinCoarrendatario: f.coarrendatario === null,
-      conIA: origen === 'propia' || nombres.length > 0,
+      conIA: !deModelo || nombres.length > 0,
       iaPrevia,
     });
     if (r.hallazgos.length) bloqueadas.push(sha);
     hallazgos.push(...r.hallazgos.map((h) => ({ ...h, indice })));
     avisos.push(...r.avisos.map((h) => ({ ...h, indice })));
+    const vals = nombres.length ? valores : null;
     clausulas.push({
       clausulaId: fila.id,
-      origen,
+      origen: categoriaClausula({ ...c, valores: vals }, fila),
       version: fila.version,
       ...c,
-      valores: nombres.length ? valores : null,
+      valores: vals,
       ia: r.ia,
     });
   }
@@ -759,6 +764,16 @@ async function prepararPaso4(
     throw new AppError(422, 'CLAUSULA_NO_PERMITIDA', hallazgos[0].mensaje, { hallazgos, avisos });
   }
 
+  // Solo modelos sin cambios: son texto de Cofianza y no hay nada propio que aceptar.
+  const propias = clausulas.filter((x) => x.origen === 'propia');
+  if (!propias.length) return { clausulas, huella: huella(clausulas), aceptacion: null };
+  if (!e.aceptoResponsabilidad)
+    throw AppError.badRequest(
+      'Acepta el aviso de responsabilidad para incorporar tus cláusulas propias.',
+      'ACEPTACION_REQUERIDA',
+    );
+  if (e.avisoVersion !== AVISO_VERSION)
+    throw AppError.conflict('El aviso de responsabilidad cambió. Léelo de nuevo y acéptalo.', 'AVISO_CAMBIADO');
   if (!perfil) throw noVerificable(exp, 'perfil de quien acepta');
   const aceptacion: AceptacionClausulas = {
     usuarioId: u.id,
@@ -768,6 +783,7 @@ async function prepararPaso4(
     en: new Date().toISOString(),
     ip: u.ip ?? null,
     avisoVersion: e.avisoVersion,
+    huella: huella(propias),
   };
   return { clausulas, huella: huella(clausulas), aceptacion };
 }
@@ -832,7 +848,7 @@ export async function guardarPaso(
         expediente_id: expedienteId,
         huella: paso4.huella,
         clausulas: paso4.clausulas.map((x) => ({ id: x.clausulaId, version: x.version, origen: x.origen })),
-        aviso_version: paso4.aceptacion.avisoVersion,
+        aviso_version: paso4.aceptacion?.avisoVersion ?? null,
         email,
       },
       ip,

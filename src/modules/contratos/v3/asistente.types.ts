@@ -53,7 +53,7 @@ export interface EstadoAsistente {
       1: Partial<Paso1>;
       2: Partial<Paso2>;
       3: Partial<Omit<Paso3, 'administracion'>> & { administracion?: Partial<NonNullable<Paso3['administracion']>> };
-      4?: { clausulas: { clausulaId: string; valores?: Record<string, string> }[] };
+      4?: { clausulas: { clausulaId: string; origen: OrigenClausula; valores?: Record<string, string> }[] };
       5: Partial<Paso5>;
     };
     /** Textos sin aprobar que llevará el documento, previstos con lo guardado (bloquean el envío). */
@@ -66,7 +66,8 @@ export interface EstadoAsistente {
     propio: PdfPropio | null;
     adicionales: {
       maximo: number; ordinales: string[] /* 25, desde la 1.ª adicional de ESTE contrato */;
-      aviso: { version: string; texto: string }; prevalencia: string;
+      /** texto = responsabilidad (solo propias); modelos = los modelos sin cambios son texto de Cofianza (Adenda 1 contratos, resp. 13). */
+      aviso: { version: string; texto: string; modelos: string }; prevalencia: string;
       excesoAutorizado: { huella: string; cantidad: number; en: string } | null;
     };
   };
@@ -163,7 +164,9 @@ export interface UsoClausula {
   version: number; numero: string /* ordinal impreso, p. ej. "TRIGÉSIMA CUARTA" */; en: string;
 }
 export interface ClausulaEnContrato {
-  clausulaId: string; origen: OrigenClausula; version: number;
+  clausulaId: string;
+  origen: OrigenClausula;         // categoría (resp. 13): 'biblioteca' = modelo sin cambios; 'propia' = del arrendador, o un modelo editado
+  version: number;
   titulo: string; texto: string;  // tal como se imprime (campos ya llenos)
   valores: Record<string, string> | null;
   ia: { sha256: string; modelo: string; en: string } | null;
@@ -171,9 +174,12 @@ export interface ClausulaEnContrato {
 export interface AceptacionClausulas {
   usuarioId: string; nombre: string; email: string; rolMiembro: string | null;
   en: string; ip: string | null; avisoVersion: string;
+  huella: string;                 // de las propias que cubre: los modelos sin cambios quedan fuera (resp. 13)
 }
-export type Paso4 = { omitir: true } | { clausulas: ClausulaEnContrato[]; huella: string; aceptacion: AceptacionClausulas };
+/** aceptacion null = solo modelos sin cambios: no hay nada propio que aceptar. */
+export type Paso4 = { omitir: true } | { clausulas: ClausulaEnContrato[]; huella: string; aceptacion: AceptacionClausulas | null };
 export type Paso4Entrada = { omitir: true } | {
   clausulas: { clausulaId: string; valores?: Record<string, string> }[];
-  aceptoResponsabilidad: true; avisoVersion: string;
+  aceptoResponsabilidad?: true;   // obligatoria si hay al menos una propia
+  avisoVersion: string;
 };

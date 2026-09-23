@@ -5,6 +5,7 @@ import {
   CATALOGO,
   REGLAS,
   campos,
+  categoriaClausula,
   huella,
   llenar,
   plegar,
@@ -304,6 +305,38 @@ describe('campos, llenar y huellas', () => {
     expect(huella([a, b])).toMatch(/^[0-9a-f]{64}$/);
     expect(shaClausula(a)).toBe(shaClausula({ ...a }));
     expect(shaClausula(a)).not.toBe(shaClausula(b));
+  });
+});
+
+// Adenda 1 del módulo de contratos, respuesta 13: texto de Cofianza solo el modelo sin cambios.
+describe('categoriaClausula', () => {
+  const MODELO = {
+    inmobiliaria_id: null,
+    titulo: 'Parqueadero asignado',
+    texto: 'EL ARRENDATARIO usará el parqueadero [[número]] y lo mantendrá despejado.',
+  };
+  const valores = { número: '12' };
+  const tal = { titulo: MODELO.titulo, texto: 'EL ARRENDATARIO usará el parqueadero 12 y lo mantendrá despejado.', valores };
+
+  it('un modelo sin cambios (sus datos llenos) es texto de Cofianza', () => {
+    expect(categoriaClausula(tal, MODELO)).toBe('biblioteca');
+  });
+
+  it('espacios o forma Unicode distintos no lo vuelven propio', () => {
+    const nfd = { ...tal, titulo: ' Parqueadero  asignado ', texto: tal.texto.normalize('NFD') };
+    expect(nfd.texto).not.toBe(tal.texto);
+    expect(categoriaClausula(nfd, MODELO)).toBe('biblioteca');
+  });
+
+  it('un modelo editado (texto o título) pasa a propia', () => {
+    expect(categoriaClausula({ ...tal, texto: `${tal.texto} Pagará $50.000 al mes.` }, MODELO)).toBe('propia');
+    expect(categoriaClausula({ ...tal, texto: tal.texto.replace('usará', 'no usará') }, MODELO)).toBe('propia');
+    expect(categoriaClausula({ ...tal, titulo: 'Parqueadero' }, MODELO)).toBe('propia');
+  });
+
+  it('una cláusula de la inmobiliaria es propia aunque copie el texto; sin modelo, propia', () => {
+    expect(categoriaClausula(tal, { ...MODELO, inmobiliaria_id: 'org-1' })).toBe('propia');
+    expect(categoriaClausula(tal, undefined)).toBe('propia');
   });
 });
 
