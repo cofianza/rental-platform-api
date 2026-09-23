@@ -11,6 +11,12 @@
  *
  * La aprobación queda atada al TEXTO: si el borrador se edita, su sha256 cambia
  * y vuelve a quedar pendiente (el motor compara `sha256`, nada más).
+ *
+ * Única excepción a «lo aprueba Gerencia»: un recorte que Desarrollo deduce de
+ * un documento de Gerencia (hoy b-03…b-05, por V3 §3.4.5 aplicada a la Adenda 1
+ * de contratos, resp. 2). Solo puede QUITAR palabras del Word, nunca redactar;
+ * su `aprobadoPor` dice que lo dedujo Desarrollo y se le informa a Gerencia.
+ * Todo texto redactado (p. ej. b-06) espera la aprobación de Gerencia.
  */
 
 export interface Aprobacion {
@@ -39,6 +45,7 @@ export const APROBACIONES: Readonly<Record<string, Aprobacion>> = {
   // resp. 2 — Tradicional: EL ARRENDADOR asume prima y tarifa (b-01, CUARTA) y el resumen
   // cambia el cashback de EL ARRENDATARIO por la fianza asumida (b-02). b-03…b-05 sacan del
   // resumen lo que le atribuía tarifa o cashback (V3 §3.4.5): se le informan a Gerencia.
+  // b-06 (el cashback de la CUARTA en Tradicional) no está: espera a Gerencia.
   'b-01': { sha256: '2486f537350cdc14b3d2dfc974441df3e2daa71358dfa5942e437011a0ca9f81', ...adenda1(2) },
   'b-02': { sha256: 'fcba65662f2e58be93637d0c4638cc63d22e25d2a804bea8e24ae184bac3570c', ...adenda1(2) },
   'b-03': { sha256: '7a5356659c5b128bf2a1cfa958aca12b66573ecc89e0089dd5a74018541868aa', ...derivadoResp2 },
