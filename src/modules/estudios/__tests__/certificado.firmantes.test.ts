@@ -252,6 +252,16 @@ describe('relación canon/ingreso', () => {
   });
 });
 
+describe('filas del certificado', () => {
+  it('un valor de varias líneas empuja la fila siguiente en vez de montarse', async () => {
+    // Dos líneas (~150 caracteres): la fila siguiente baja más de los 16 puntos de una.
+    await generateCertificatePdf({ ...DATOS, observaciones: 'Una observación larga del analista. '.repeat(4) }, QR);
+    const y = (etiqueta: string) => textos.mock.calls.find((c) => c[0] === etiqueta)?.[2] as number;
+    expect(y('Condiciones') - y('Observaciones')).toBeGreaterThan(20);
+    expect(y('Fecha del estudio') - y('Proveedor')).toBe(16);
+  });
+});
+
 describe('quién recibe cuál', () => {
   const FIRMANTES = llaveFirmantes(CERT.pdf_storage_key);
 

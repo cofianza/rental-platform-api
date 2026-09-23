@@ -506,7 +506,8 @@ function drawTable(doc: PDFKit.PDFDocument, rows: string[][], startY: number, wi
     doc.text(label, 58, y, { width: labelWidth });
     doc.fontSize(8).font('Helvetica').fillColor('#374151');
     doc.text(value || '-', 58 + labelWidth, y, { width: width - labelWidth - 16 });
-    y += 16;
+    // Un valor de dos o mas lineas empuja la fila siguiente (antes se montaban).
+    y = Math.max(y + 16, doc.y + 6);
   }
 
   return y;
