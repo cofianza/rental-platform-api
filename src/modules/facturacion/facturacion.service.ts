@@ -163,12 +163,30 @@ async function clientePagador(ctx: PagoConContexto, solEmail: string | null): Pr
  * factura DIAN por un estudio que pagó la inmobiliaria, y duplicaba el ingreso.
  */
 async function pagosConsumoDeCredito(pagoIds: string[]): Promise<Set<string>> {
-  if (pagoIds.length === 0) return new Set();
-  const { data } = await (supabase
-    .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('pago_id')
-    .in('pago_id', pagoIds);
-  return new Set(((data || []) as Array<{ pago_id: string }>).map((m) => m.pago_id));
+  const filas = await selectInEnLotes<{ pago_id: string }>('movimientos_creditos_estudios', 'pago_id', 'pago_id', pagoIds);
+  return new Set(filas.map((m) => m.pago_id));
+}
+
+/**
+ * `.select(columnas).in(columna, ids)` en lotes: con cientos de UUID la URL de
+ * PostgREST pasa del límite y la consulta falla. El error se lanza: devolver
+ * vacío hacía ver como pendientes (o facturables) pagos ya facturados o de crédito.
+ */
+const IN_LOTE = 150;
+async function selectInEnLotes<T>(tabla: string, columnas: string, columna: string, ids: string[]): Promise<T[]> {
+  const lotes: string[][] = [];
+  for (let i = 0; i < ids.length; i += IN_LOTE) lotes.push(ids.slice(i, i + IN_LOTE));
+  const res = await Promise.all(
+    lotes.map((lote) =>
+      (supabase.from(tabla as string) as ReturnType<typeof supabase.from>).select(columnas).in(columna, lote),
+    ),
+  );
+  const conError = res.find((r) => r.error);
+  if (conError?.error) {
+    logger.error({ error: conError.error.message, tabla }, 'Error consultando en lotes');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al consultar la facturación de los pagos');
+  }
+  return res.flatMap((r) => (r.data || []) as T[]);
 }
 
 async function assertNoEsConsumoDeCredito(pagoId: string): Promise<void> {
@@ -1229,6 +1247,9 @@ export async function listPendientesFacturar(
   }
 
   // 2. Pagos completados en el alcance.
+  // ponytail: trae todos los completados (PostgREST corta en 1.000 filas).
+  // Excluir los ya facturados en la BD pide la FK facturas.pago_id → pagos,
+  // que en producción no existe; agregarla cuando el volumen lo pida.
   let qb = (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select(
@@ -1259,18 +1280,15 @@ export async function listPendientesFacturar(
 
   // 3. Cruzar con facturas (excluir las emitidas) y con los consumos de crédito.
   const pagoIds = pagosTyped.map((p) => p.id);
-  const [{ data: facturasRows }, conCredito] = pagoIds.length
-    ? await Promise.all([
-        (supabase
-          .from('facturas' as string) as ReturnType<typeof supabase.from>)
-          .select('pago_id, estado, error_mensaje')
-          .in('pago_id', pagoIds),
-        pagosConsumoDeCredito(pagoIds),
-      ])
-    : [{ data: [] }, new Set<string>()];
+  const [facturasRows, conCredito] = await Promise.all([
+    selectInEnLotes<{ pago_id: string; estado: string; error_mensaje: string | null }>(
+      'facturas', 'pago_id, estado, error_mensaje', 'pago_id', pagoIds,
+    ),
+    pagosConsumoDeCredito(pagoIds),
+  ]);
 
   const facturasByPago = new Map<string, { estado: string; error_mensaje: string | null }>();
-  for (const f of (facturasRows as Array<{ pago_id: string; estado: string; error_mensaje: string | null }> | null) || []) {
+  for (const f of facturasRows) {
     // Si hay multiples filas (caso reintento), nos quedamos con la mas
     // "fuerte": emitida > pendiente > fallida. Aqui basta con guardarla,
     // un pago con factura emitida lo excluimos de todas formas.
@@ -1322,21 +1340,17 @@ async function comprasPendientesFacturar(): Promise<PagoPendienteFacturar[]> {
   const compras = (comprasRows || []) as Array<{ id: string; perfil_id: string; precio_cop: number | string; completed_at: string | null }>;
   if (compras.length === 0) return [];
 
-  const [{ data: facturasRows }, { data: perfilesRows }] = await Promise.all([
-    (supabase
-      .from('facturas' as string) as ReturnType<typeof supabase.from>)
-      .select('compra_creditos_id, estado, error_mensaje')
-      .in('compra_creditos_id', compras.map((c) => c.id)),
+  const [facturasRows, { data: perfilesRows }] = await Promise.all([
+    selectInEnLotes<{ compra_creditos_id: string; estado: string; error_mensaje: string | null }>(
+      'facturas', 'compra_creditos_id, estado, error_mensaje', 'compra_creditos_id', compras.map((c) => c.id),
+    ),
     (supabase
       .from('perfiles' as string) as ReturnType<typeof supabase.from>)
       .select('id, nombre, apellido, razon_social')
       .in('id', [...new Set(compras.map((c) => c.perfil_id))]),
   ]);
 
-  const facturaByCompra = new Map(
-    ((facturasRows || []) as Array<{ compra_creditos_id: string; estado: string; error_mensaje: string | null }>)
-      .map((f) => [f.compra_creditos_id, f]),
-  );
+  const facturaByCompra = new Map(facturasRows.map((f) => [f.compra_creditos_id, f]));
   const nombreByPerfil = new Map(
     ((perfilesRows || []) as Array<{ id: string; nombre: string | null; apellido: string | null; razon_social: string | null }>)
       .map((p) => [p.id, p.razon_social?.trim() || `${p.nombre ?? ''} ${p.apellido ?? ''}`.trim()]),

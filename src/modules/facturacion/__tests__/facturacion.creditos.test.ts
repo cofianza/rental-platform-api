@@ -112,6 +112,18 @@ describe('listPendientesFacturar', () => {
     expect(r[0]).toMatchObject({ pago_id: null, compra_id: 'compra-1', cliente_nombre: 'Inmo SAS', monto: 1400000 });
   });
 
+  it('cruza las facturas en lotes y un error no hace ver como pendientes pagos ya facturados', async () => {
+    const pagos = Array.from({ length: 151 }, (_, i) => ({
+      id: `pago-${i}`, expediente_id: 'e1', concepto: 'estudio', monto: 80000, fecha_pago: '2026-09-01', expediente: { numero: 'EXP-1' },
+    }));
+    enqueue('pagos', { data: pagos, error: null });
+    enqueue('facturas', { data: [], error: null }, { data: null, error: { message: 'URI too long' } });
+
+    await expect(listPendientesFacturar('admin-1', 'administrador')).rejects.toMatchObject({ statusCode: 500 });
+    const lotes = ops.filter((o) => o.table === 'facturas' && o.method === 'in');
+    expect(lotes.map((o) => (o.args[1] as string[]).length)).toEqual([150, 1]);
+  });
+
   it('inmobiliaria: no ve compras (las factura desde Configuración › Créditos)', async () => {
     const { resolveAllowedExpedienteIds } = await import('@/lib/tenantScope');
     vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(['e1']);
