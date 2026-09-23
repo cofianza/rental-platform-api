@@ -76,18 +76,10 @@ export async function registerSolicitante(
     }
   }
 
-  const { data: solicitantesByEmail } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('email', email)
-    .limit(1);
-
-  if (solicitantesByEmail && solicitantesByEmail.length > 0) {
-    throw AppError.conflict(
-      'Ya existe una cuenta de solicitante con este email. Inicia sesión.',
-      'EMAIL_ALREADY_EXISTS',
-    );
-  }
+  // El correo NO se valida contra `solicitantes`: las fichas que arman las
+  // agencias llevan el correo de la persona sin crearle cuenta, y bloquearla
+  // aquí la mandaba a "Inicia sesión" sin tener contraseña. La cuenta repetida
+  // de verdad la detecta createUser (EMAIL_ALREADY_EXISTS) antes de crear nada.
 
   // 1. Create Supabase Auth user (auto-confirmed, no email verification for solicitante)
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
@@ -101,7 +93,7 @@ export async function registerSolicitante(
   if (authError) {
     logger.error({ error: authError.message, email }, 'Error al crear usuario solicitante');
     if (authError.message.includes('already') || authError.message.includes('duplicate')) {
-      throw AppError.conflict('Ya existe un usuario con este email', 'EMAIL_ALREADY_EXISTS');
+      throw AppError.conflict('Ya existe una cuenta con este correo. Inicia sesión.', 'EMAIL_ALREADY_EXISTS');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el usuario');
   }
