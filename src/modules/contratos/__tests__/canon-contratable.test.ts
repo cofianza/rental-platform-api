@@ -41,10 +41,19 @@ describe('assertCanonContratable', () => {
   it('el tope de vivienda manda aunque la tolerancia dé más: bloquea y escala a la Gerencia General', async () => {
     resultado.data = { canon_evaluado: 2_800_000 };
     await expect(assertCanonContratable('e1', 3_000_000, 'vivienda')).resolves.toBeUndefined();
+    mockEscalar.mockResolvedValueOnce(true);
     const e = await assertCanonContratable('e1', 3_000_001, 'vivienda').catch((x: unknown) => x);
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CANON_EXCEDE_TOPE' });
     expect((e as Error).message).toContain('se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento');
-    expect(mockEscalar).toHaveBeenCalledWith('e1', 3_000_001, 3_000_000);
+    expect(mockEscalar).toHaveBeenCalledWith('e1', 3_000_001, 3_000_000, 'contrato');
+  });
+
+  it('si el aviso a la Gerencia no quedó registrado, el mensaje no dice que se envió', async () => {
+    resultado.data = { canon_evaluado: 2_800_000 };
+    mockEscalar.mockResolvedValueOnce(false);
+    const e = await assertCanonContratable('e1', 3_000_001, 'vivienda').catch((x: unknown) => x);
+    expect((e as Error).message).toContain('Escríbele a Cofianza para evaluar un coafianzamiento');
+    expect((e as Error).message).not.toContain('se envió');
   });
 
   it('sin canon evaluado (estudio anterior al congelado) no bloquea', async () => {

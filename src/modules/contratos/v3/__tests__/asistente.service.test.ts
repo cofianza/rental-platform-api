@@ -129,8 +129,11 @@ vi.mock('../firma/firma.service', () => ({
 }));
 vi.mock('../firma/reconciliar', () => ({ ultimoSobre: vi.fn(async () => null) }));
 // Adenda 1 contratos §2.4: el aviso a la Gerencia se prueba en tope-coafianzamiento.test.ts.
-const mockEscalar = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
-vi.mock('../../tope-coafianzamiento', () => ({ escalarTopeCanon: mockEscalar }));
+const { mockEscalar, mockYaEscalado } = vi.hoisted(() => ({
+  mockEscalar: vi.fn(async (..._a: unknown[]) => true),
+  mockYaEscalado: vi.fn(async (..._a: unknown[]) => false),
+}));
+vi.mock('../../tope-coafianzamiento', () => ({ escalarTopeCanon: mockEscalar, topeYaEscalado: mockYaEscalado }));
 const mockNotificar = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: mockNotificar }));
 // Sin Chromium: el PDF es un buffer falso, los pendientes salen de la plantilla real.
@@ -754,32 +757,52 @@ describe('guardarPaso', () => {
 
 describe('tope de canon: bloqueo y escalamiento a la Gerencia General (Adenda 1 contratos §2.4)', () => {
   const PASO1_ALTO = { ...COMPLETO.paso1!, canonCop: 3_100_000 };
+  const ALTO = { ...COMPLETO, paso1: PASO1_ALTO };
+  const tope = (e: EstadoAsistente) => e.bloqueos.find((x) => x.codigo === 'CANON_EXCEDE_TOPE')?.mensaje;
 
-  it('guardar el paso 1 por encima del tope bloquea con el mensaje de la Gerencia y escala el caso', async () => {
+  it('guardar el paso 1 por encima del tope bloquea, pero NO escala (un error de digitación no avisa a nadie)', async () => {
     encolarCarga({ contratos: [fila()] });
     enqueue('contratos', { data: [{ id: CTO }], error: null });
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: PASO1_ALTO } } })] });
 
     const e = await guardarPaso(EXP, { paso: 1, datos: PASO1_ALTO }, USER, ROL);
 
-    const b = e.bloqueos.find((x) => x.codigo === 'CANON_EXCEDE_TOPE');
-    expect(b?.mensaje).toContain('El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento');
-    expect(mockEscalar).toHaveBeenCalledWith(EXP, 3_100_000, 3_000_000);
+    expect(tope(e)).toContain('genera la vista previa y el caso pasará a la Gerencia General');
+    expect(mockEscalar).not.toHaveBeenCalled();
   });
 
-  it('el GET con el paso 1 guardado por encima del tope también escala (el aviso se deduplica por estudio)', async () => {
+  it('el GET no escala: solo dice si el caso ya está en la Gerencia', async () => {
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: PASO1_ALTO } } })] });
-    await obtener();
-    expect(mockEscalar).toHaveBeenCalledTimes(1);
+    expect(tope(await obtener())).toContain('genera la vista previa');
+    mockYaEscalado.mockResolvedValueOnce(true);
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: PASO1_ALTO } } })] });
+    expect(tope(await obtener())).toContain('El caso se envió a la Gerencia General de Cofianza');
+    expect(mockEscalar).not.toHaveBeenCalled();
+    expect(mockYaEscalado).toHaveBeenCalledWith(EXP);
   });
 
-  it('dentro del tope (o sin paso 1 guardado) no escala', async () => {
+  it('dentro del tope ni se consulta la marca', async () => {
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: COMPLETO.paso1 } } })] });
     await obtener();
-    // Sin paso 1 guardado no hay canon pactado: el del registro, a lo sumo, avisa.
-    encolarCarga({ contratos: [fila()] });
-    await obtener();
+    expect(mockYaEscalado).not.toHaveBeenCalled();
     expect(mockEscalar).not.toHaveBeenCalled();
+  });
+
+  it('generar la vista previa con el canon sobre el tope escala y responde 409 «se envió a la Gerencia»', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: ALTO } })] });
+    const e = await error(generarVistaPrevia(EXP, USER, ROL));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BLOQUEADO' });
+    expect(e.message).toContain('El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento');
+    expect(mockEscalar).toHaveBeenCalledWith(EXP, 3_100_000, 3_000_000, 'contrato');
+  });
+
+  it('si el aviso no quedó registrado, el bloqueo no dice «se envió»: «escríbele a Cofianza»', async () => {
+    mockEscalar.mockResolvedValueOnce(false);
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: ALTO } })] });
+    const e = await error(enviarAFirma(EXP, { generacion: 1 }, USER, ROL));
+    expect(e.message).toContain('Escríbele a Cofianza para evaluar un coafianzamiento');
+    expect(e.message).not.toContain('se envió');
+    expect(mockEscalar).toHaveBeenCalledTimes(1);
   });
 });
 

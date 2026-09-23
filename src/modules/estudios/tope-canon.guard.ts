@@ -175,12 +175,15 @@ export function evaluarTopeCanon(contexto: ContextoTopeCanon): VeredictoTopeCano
  * y el tono de portazo): dice cuanto es el canon, cuanto es el tope, que NO se
  * cobro nada, y cual es la salida.
  */
-export function mensajeTopeExcedido(canonCop: number, topeCop: number): string {
+export function mensajeTopeExcedido(canonCop: number, topeCop: number, escalado = false): string {
   return (
     `El canon de este inmueble (${formatearCOP(canonCop)}) excede el maximo que Cofianza puede ` +
     `afianzar hoy sin un acuerdo de coafianzamiento (${formatearCOP(topeCop)}). ` +
     'No se genero ningun cobro ni se descuento ningun credito. ' +
-    'Puedes continuar con un inmueble dentro del tope, o escribirnos para revisar el caso.'
+    // Adenda 1 contratos §2.4: solo si el aviso a la Gerencia quedó registrado.
+    (escalado
+      ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes continuar con un inmueble dentro del tope.'
+      : 'Puedes continuar con un inmueble dentro del tope, o escribirnos para revisar el caso.')
   );
 }
 
@@ -195,9 +198,11 @@ export function errorTopeExcedido(
   veredicto: Extract<VeredictoTopeCanon, { ok: false }>,
   /** Clave del tope que se aplico (vivienda o comercial). */
   codigoPolitica: string = CODIGO_POLITICA_TOPE_CANON,
+  /** El caso quedó en la Gerencia General (escalarTopeCanon). */
+  escalado = false,
 ): AppError {
   return AppError.badRequest(
-    mensajeTopeExcedido(veredicto.canonCop, veredicto.topeCop),
+    mensajeTopeExcedido(veredicto.canonCop, veredicto.topeCop, escalado),
     CANON_EXCEDE_TOPE_ERROR_CODE,
     {
       motivo: veredicto.motivo,
@@ -352,7 +357,17 @@ export async function assertCanonDentroDelTope(
         : 'Tope 4.4: estudio bloqueado — el canon del inmueble supera el maximo afianzable sin coafianzamiento',
     );
     if (!args.soloAdvertir) {
-      throw errorTopeExcedido(veredicto, clave);
+      // Adenda 1 contratos §2.4: bloquear y escalar a la Gerencia General, una vez por estudio.
+      // Sin estudio todavía (se crea desde el inmueble) no hay caso que escalar.
+      const escalado = args.expedienteId
+        ? await (await import('@/modules/contratos/tope-coafianzamiento')).escalarTopeCanon(
+            args.expedienteId,
+            veredicto.canonCop,
+            veredicto.topeCop,
+            'estudio',
+          )
+        : false;
+      throw errorTopeExcedido(veredicto, clave, escalado);
     }
     return { canonCop: veredicto.canonCop };
   }

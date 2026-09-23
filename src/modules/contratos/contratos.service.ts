@@ -1901,10 +1901,12 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
     const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
     // Adenda 1 contratos §2.4: por encima del tope no sirve una nueva evaluación; se escala a la Gerencia General.
     if (topeValido && canonCop > tope) {
-      await escalarTopeCanon(expedienteId, canonCop, tope);
+      const enviado = await escalarTopeCanon(expedienteId, canonCop, tope, 'contrato');
       throw AppError.conflict(
         `El canon del contrato (${cop(canonCop)}) supera el tope de ${cop(tope)} que Cofianza afianza sin coafianzamiento. ` +
-          'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.',
+          (enviado
+            ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'
+            : 'Escríbele a Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'),
         'CANON_EXCEDE_TOPE',
       );
     }

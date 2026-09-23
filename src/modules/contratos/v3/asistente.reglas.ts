@@ -211,6 +211,12 @@ export interface Fuentes {
    * obligue a llenar los cinco pasos otra vez. null si no hubo.
    */
   anterior: Asistente | null;
+  /**
+   * Adenda 1 contratos §2.4, con el canon pactado sobre el tope: 'enviado' = el caso
+   * está en la Gerencia General; 'fallido' = se intentó y no se registró; ausente =
+   * nadie ha intentado generar ni enviar con ese canon. Lo pone el service.
+   */
+  topeEscalado?: 'enviado' | 'fallido';
 }
 
 // ── Helpers ──
@@ -434,9 +440,17 @@ export function maximoSinNuevaEvaluacionCop(f: Fuentes, cal: Calibracion): numbe
   return Math.max(ev, Math.floor(Math.min(canonMaximoTolerado(ev, cal.TOLERANCIA_CANON), tope)));
 }
 
-/** Adenda 1 contratos §2.4: el bloqueo del tope dice que el caso pasó a la Gerencia General. */
-const ESCALADO_TOPE =
-  ' El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.';
+/**
+ * Adenda 1 contratos §2.4: cómo termina el bloqueo del tope según el escalamiento
+ * (Fuentes.topeEscalado). Solo dice «se envió» si el aviso a la Gerencia quedó registrado.
+ */
+const TOPE_PENDIENTE =
+  ' Pacta un canon dentro del tope; si necesitas este canon, genera la vista previa y el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.';
+const TOPE_SEGUN_ESCALAMIENTO = {
+  enviado:
+    ' El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.',
+  fallido: ' Escríbele a Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.',
+};
 
 /** B2 sobre el canon del contrato. null si no hay canon evaluado (CANON_SIN_EVALUADO ya bloquea). */
 export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): VeredictoCanon | null {
@@ -462,10 +476,12 @@ export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): Ve
 
   const cop = formatearCOP;
   const motivos: Partial<Record<MotivoNoPortable, [string, string]>> = {
-    // Adenda 1 contratos §2.4: bloquear y escalar a la Gerencia General (el aviso lo manda el service).
+    // Adenda 1 contratos §2.4: bloquear y escalar a la Gerencia General (escala el service al generar o enviar).
     excede_tope_canon: [
       'CANON_EXCEDE_TOPE',
-      `El canon pactado (${cop(canonCop)}) supera el tope de ${cop(base.topeCop)} que Cofianza afianza para vivienda sin coafianzamiento.${ESCALADO_TOPE}`,
+      `El canon pactado (${cop(canonCop)}) supera el tope de ${cop(base.topeCop)} que Cofianza afianza para vivienda sin coafianzamiento.${
+        f.topeEscalado ? TOPE_SEGUN_ESCALAMIENTO[f.topeEscalado] : TOPE_PENDIENTE
+      }`,
     ],
     excede_tolerancia: [
       'CANON_FUERA_DE_TOLERANCIA',
@@ -494,7 +510,10 @@ export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): Ve
 /** Antes de guardar el paso 1 el canon del registro solo avisa: aún se puede pactar uno menor. */
 export const avisoCanon = (bloqueo: Bloqueo) =>
   bloqueo.codigo === 'CANON_EXCEDE_TOPE'
-    ? `${bloqueo.mensaje.replace(ESCALADO_TOPE, '')} Puedes pactar un canon menor en el paso 1; si pactas uno por encima del tope, el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.`
+    ? bloqueo.mensaje.replace(
+        TOPE_PENDIENTE,
+        ' Puedes pactar un canon menor en el paso 1; si necesitas este canon, al generar la vista previa el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
+      )
     : `${bloqueo.mensaje.replace(/ Se requiere nueva evaluación\.$/, '')} Puedes pactar un canon menor en el paso 1; si no, se requerirá nueva evaluación.`;
 
 // ── §5.4 Prefill, faltantes, imprimibles, avisos ──

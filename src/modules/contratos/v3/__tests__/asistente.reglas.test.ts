@@ -290,19 +290,30 @@ describe('evaluarCanon — canon pactado (B2)', () => {
   it('evaluado 2.900.000 y pactado 3.100.000 → CANON_EXCEDE_TOPE (el tope va primero)', () => {
     const v = evaluarCanon(f(2_900_000), 3_100_000, cal)!;
     expect(v.bloqueo).toMatchObject({ codigo: 'CANON_EXCEDE_TOPE', paso: 1 });
-    // Adenda 1 contratos §2.4: bloquea y escala; una evaluación nueva no lo resuelve (sin acción al estudio).
+    // Adenda 1 contratos §2.4: una evaluación nueva no lo resuelve (sin acción al estudio).
+    // Nadie ha intentado generar con ese canon: todavía no se escaló.
     expect(v.bloqueo!.mensaje).toBe(
-      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.',
+      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. Pacta un canon dentro del tope; si necesitas este canon, genera la vista previa y el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
     );
     expect(v.bloqueo!.accion).toBeUndefined();
     expect(v.topeCop).toBe(3_000_000);
+  });
+
+  it('«se envió a la Gerencia» solo si el escalamiento quedó registrado; si falló, «escríbele a Cofianza»', () => {
+    const conEscalamiento = (topeEscalado: 'enviado' | 'fallido') =>
+      evaluarCanon({ ...f(2_900_000), topeEscalado }, 3_100_000, cal)!.bloqueo!.mensaje;
+    expect(conEscalamiento('enviado')).toContain(
+      'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.',
+    );
+    expect(conEscalamiento('fallido')).toContain('Escríbele a Cofianza para evaluar un coafianzamiento');
+    expect(conEscalamiento('fallido')).not.toContain('se envió');
   });
 
   it('antes de guardar el paso 1, el aviso del tope no dice que ya se escaló', () => {
     const aviso = avisoCanon(evaluarCanon(f(2_900_000), 3_100_000, cal)!.bloqueo!);
     expect(aviso).not.toContain('se envió');
     expect(aviso).toBe(
-      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. Puedes pactar un canon menor en el paso 1; si pactas uno por encima del tope, el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
+      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. Puedes pactar un canon menor en el paso 1; si necesitas este canon, al generar la vista previa el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
     );
   });
 

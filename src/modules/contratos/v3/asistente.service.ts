@@ -32,7 +32,7 @@ import {
   reservarInmuebleParaContrato,
   type ReservaInmuebleResult,
 } from '@/modules/inmuebles/inmuebles.service';
-import { escalarTopeCanon } from '../tope-coafianzamiento';
+import { escalarTopeCanon, topeYaEscalado } from '../tope-coafianzamiento';
 import type {
   AceptacionClausulas,
   ClausulaEnContrato,
@@ -556,12 +556,30 @@ async function contratoEnviado(expedienteId: string): Promise<{ id: string } | n
 
 const estadoDeEnviado = (enviado: EnvioV3): EstadoAsistente => ({ ...DESHABILITADO, habilitado: true, enviado });
 
-/** Fuentes de un estudio con asistente, o 404 si no aplica. Sin verificar acceso: lo hace el caller. */
-async function cargar(expedienteId: string): Promise<Cargadas> {
+/**
+ * Fuentes de un estudio con asistente, o 404 si no aplica. Sin verificar acceso: lo hace el caller.
+ * `escalarTope`: solo generar y enviar a firma escalan el canon sobre el tope (Adenda 1 contratos §2.4).
+ */
+async function cargar(expedienteId: string, escalarTope = false): Promise<Cargadas> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   const c = await cargarFuentes(expedienteId);
   if (!c) throw noHabilitado();
-  return c;
+  return conTope(c, escalarTope);
+}
+
+/**
+ * Adenda 1 contratos §2.4: con el canon del paso 1 sobre el tope, el bloqueo dice si el
+ * caso ya está en la Gerencia General. Con `escalar` (generar o enviar a firma; nunca al
+ * consultar ni al guardar un paso: un error de digitación no avisa a nadie) lo envía.
+ */
+async function conTope(c: Cargadas, escalar = false): Promise<Cargadas> {
+  const canonCop = c.f.v3?.datos_variables?.asistente?.paso1?.canonCop;
+  const v = canonCop ? evaluarCanon(c.f, canonCop, c.cal) : null;
+  if (!canonCop || v?.bloqueo?.codigo !== 'CANON_EXCEDE_TOPE') return c;
+  const enviado = escalar
+    ? await escalarTopeCanon(c.f.expediente.id, canonCop, v.topeCop, 'contrato')
+    : await topeYaEscalado(c.f.expediente.id);
+  return { ...c, f: { ...c.f, topeEscalado: enviado ? 'enviado' : escalar ? 'fallido' : undefined } };
 }
 
 /**
@@ -581,19 +599,7 @@ export async function obtenerEstado(
   if (vista) return estadoDeEnviado(vista);
   if (!env.CONTRATOS_V3_ENABLED) return DESHABILITADO;
   const c = await cargarFuentes(expedienteId);
-  if (!c) return DESHABILITADO;
-  await escalarSiTope(c);
-  return armarEstado(c, hoyBogota());
-}
-
-/**
- * Adenda 1 contratos §2.4: el canon pactado en el paso 1 choca con el tope →
- * además del bloqueo, aviso a la Gerencia General (una vez por estudio; nunca lanza).
- */
-async function escalarSiTope({ f, cal }: Cargadas): Promise<void> {
-  const canonCop = f.v3?.datos_variables?.asistente?.paso1?.canonCop;
-  const v = canonCop ? evaluarCanon(f, canonCop, cal) : null;
-  if (canonCop && v?.bloqueo?.codigo === 'CANON_EXCEDE_TOPE') await escalarTopeCanon(f.expediente.id, canonCop, v.topeCop);
+  return c ? armarEstado(await conTope(c), hoyBogota()) : DESHABILITADO;
 }
 
 function avisarAfectados(reserva: ReservaInmuebleResult, expedienteId: string) {
@@ -895,9 +901,7 @@ export async function guardarPaso(
     }
   }
 
-  const nueva = await cargar(expedienteId);
-  await escalarSiTope(nueva);
-  return armarEstado(nueva, hoy);
+  return armarEstado(await cargar(expedienteId), hoy);
 }
 
 // ── §5.6 Generar (vista previa en modo revisión, D6) ──
@@ -1013,7 +1017,7 @@ export async function generarVistaPrevia(
 ): Promise<EstadoAsistente> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
-  const c = await cargar(expedienteId);
+  const c = await cargar(expedienteId, true);
   const { f, cal, catalogo } = c;
   const v3 = borradorEditable(f);
   const hoy = hoyBogota();
@@ -1479,7 +1483,7 @@ export async function enviarAFirma(
 ): Promise<EstadoAsistente> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
-  const c = await cargar(expedienteId);
+  const c = await cargar(expedienteId, true);
   const { f, cal, catalogo } = c;
   const v3 = borradorEditable(f);
   const hoy = hoyBogota();
