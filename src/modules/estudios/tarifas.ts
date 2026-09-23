@@ -19,6 +19,9 @@
 //   sobrescribir la tarifa con autorizacion de Gerencia General, dejando
 //   registro de quien autorizo y cuando.
 //
+// Adenda 1 del modulo de contratos §1.1: "La prima y la tarifa causan IVA,
+// siempre. En vivienda y en comercial." (la version anterior omitia el de la prima).
+//
 // Funcion PURA: recibe la via de aprobacion, el canon y el IVA, devuelve las cifras.
 // El override (estudios.tarifa_override) se aplica encima y se marca.
 // ============================================================
@@ -60,7 +63,10 @@ export interface Tarifas {
   iva_pct: number;
   tarifa_mensual_con_iva_cop: number | null;
   prima_vinculacion_pct: number;
+  /** Base, sin IVA. */
   prima_vinculacion_cop: number | null;
+  /** Lo que se cobra: la prima mas IVA (Adenda 1 contratos §1.1). */
+  prima_vinculacion_con_iva_cop: number | null;
   cashback_pct: number;
   /** true cuando alguna cifra viene de un override autorizado. */
   negociada: boolean;
@@ -82,19 +88,31 @@ export function calcularTarifas(e: EntradaTarifas): Tarifas {
   const cashbackPct = o?.cashback_pct ?? CASHBACK_PCT;
 
   const tarifaCop = pctDe(e.canonCop, tarifaPct);
+  const primaCop = pctDe(e.canonCop, primaPct);
+  const conIva = (n: number | null) => (n === null ? null : redondear(n * (1 + e.ivaPct / 100)));
   return {
     via: e.via,
     con_coarrendatario: e.conCoarrendatario,
     tarifa_mensual_pct: tarifaPct,
     tarifa_mensual_cop: tarifaCop,
     iva_pct: e.ivaPct,
-    tarifa_mensual_con_iva_cop: tarifaCop === null ? null : redondear(tarifaCop * (1 + e.ivaPct / 100)),
+    tarifa_mensual_con_iva_cop: conIva(tarifaCop),
     prima_vinculacion_pct: primaPct,
-    prima_vinculacion_cop: pctDe(e.canonCop, primaPct),
+    prima_vinculacion_cop: primaCop,
+    prima_vinculacion_con_iva_cop: conIva(primaCop),
     cashback_pct: cashbackPct,
     negociada: !!o && (o.tarifa_mensual_pct != null || o.prima_vinculacion_pct != null || o.cashback_pct != null),
     override: o,
   };
+}
+
+/**
+ * Las mismas tarifas sobre otro canon. Adenda 1 contratos, respuesta 9: "El
+ * porcentaje del certificado es lo que rige; la base es el canon efectivamente
+ * pactado", no el evaluado con el que se calcularon.
+ */
+export function sobreCanon(t: Tarifas, canonCop: number | null): Tarifas {
+  return calcularTarifas({ via: t.via, conCoarrendatario: t.con_coarrendatario, canonCop, ivaPct: t.iva_pct, override: t.override });
 }
 
 const pctTexto = (n: number, minDecimales: number) =>
@@ -104,13 +122,14 @@ const pctTexto = (n: number, minDecimales: number) =>
  * Lo que imprime el contrato V4 (paragrafos tercero y cuarto de la clausula
  * tercera): "...segun la modalidad aprobada: {comision_texto} del canon
  * vigente" y "...equivalente al {prima_texto} del canon mensual". Mismas
- * cifras que el CRC. Sin tarifas (vista previa sin estudio) salen marcadores.
+ * cifras que el CRC, y las dos con IVA (Adenda 1 contratos §1.1). Sin tarifas
+ * (vista previa sin estudio) salen marcadores.
  */
 export function textosTarifaContrato(t: Tarifas | null): { comision_texto: string; prima_texto: string } {
-  if (!t) return { comision_texto: '[tarifa mensual + IVA]', prima_texto: '[prima de vinculación]' };
+  if (!t) return { comision_texto: '[tarifa mensual + IVA]', prima_texto: '[prima de vinculación + IVA]' };
   return {
     comision_texto: `el ${pctTexto(t.tarifa_mensual_pct, 1)} (más IVA)`,
-    prima_texto: pctTexto(t.prima_vinculacion_pct, 0),
+    prima_texto: `${pctTexto(t.prima_vinculacion_pct, 0)} (más IVA)`,
   };
 }
 
