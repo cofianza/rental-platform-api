@@ -20,6 +20,7 @@ vi.mock('@/lib/supabase', () => {
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/email', () => ({ sendWelcomeEmail: vi.fn() }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
+vi.mock('@/config', () => ({ env: { GERENCIA_GENERAL_EMAILS: [] } }));
 
 import { buscarPerfilesActivos, terminoBusqueda } from '../users.service';
 

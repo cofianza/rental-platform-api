@@ -142,16 +142,17 @@ const envSchema = z.object({
   // Adenda 1 del módulo de contratos, respuesta 17: los parámetros de
   // calibración que afectan el riesgo solo los cambia la Gerencia General; los
   // operativos, cualquier administrador (la lista está en lib/calibracion.ts).
-  // La plataforma no tiene ese rol: correos separados por coma, sin distinguir
-  // mayúsculas, que además deben ser de un administrador. Vacía = como antes
-  // de la Adenda: cualquier administrador (con advertencia al arrancar).
+  // La plataforma no tiene ese rol: correos separados por coma (también sirven
+  // punto y coma o espacios), sin distinguir mayúsculas, que además deben ser
+  // de un administrador; sus cuentas solo las gestiona la Gerencia. Vacía =
+  // como antes de la Adenda: cualquier administrador (advertencia al arrancar).
   GERENCIA_GENERAL_EMAILS: z
     .string()
     .default('')
     .transform((v) =>
       v
-        .split(',')
-        .map((s) => s.trim().toLowerCase())
+        .split(/[\s,;]+/)
+        .map((s) => s.toLowerCase())
         .filter(Boolean),
     ),
 
@@ -280,12 +281,11 @@ const envSchema = z.object({
   // una API LOCAL (su .env.local apunta a la base de producción).
   RESERVA_V3_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
-  // (src/modules/contratos/v3/clausulas.ia.ts). OFF por defecto: con el flag
-  // apagado nunca se construye el cliente ni se llama a Anthropic. Encendido
-  // pero sin llave (o con Anthropic caído), guardar cláusulas responde 503
-  // (fail-closed). NO SE ENCIENDE: la Adenda 1 del módulo de contratos
-  // (respuesta 13 bis) no la habilita, y encendida le muestra bloqueos a la
-  // inmobiliaria; una IA futura solo puede ser alerta interna de Cofianza.
+  // (src/modules/contratos/v3/clausulas.ia.ts). SIN EFECTO: la Adenda 1 del
+  // módulo de contratos (respuesta 13 bis) no la habilita y ningún camino de la
+  // inmobiliaria la llama, así que nunca bloquea ni da 503 (en true queda una
+  // advertencia al arrancar). Una IA futura solo podría ser alerta interna de
+  // Cofianza.
   CLAUSULAS_IA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Llave de la API de Anthropic. Nunca se loguea. Vacía = sin configurar
   // (no tumba el arranque: un `ANTHROPIC_API_KEY=` copiado del ejemplo no
@@ -320,20 +320,28 @@ if (env.NODE_ENV === 'production' && /localhost|127\.0\.0\.1/.test(env.FRONTEND_
 }
 
 // Adenda 1 del módulo de contratos, respuesta 17: sin la lista, cualquier
-// administrador cambia también los parámetros de riesgo de la calibración.
+// administrador cambia también los parámetros de riesgo de la calibración. Una
+// entrada que no parece correo no coincide con ninguna cuenta (no se descarta:
+// si todas estuvieran mal, la lista no debe quedar vacía y abrirle todo a todos).
 if (env.GERENCIA_GENERAL_EMAILS.length === 0) {
   console.warn(
     '[CONFIG] ADVERTENCIA: GERENCIA_GENERAL_EMAILS vacía — cualquier administrador puede cambiar los ' +
       'parámetros de riesgo de la calibración. Configura los correos de la Gerencia General.',
   );
 }
+const correosInvalidos = env.GERENCIA_GENERAL_EMAILS.filter((c) => !z.email().safeParse(c).success);
+if (correosInvalidos.length > 0) {
+  console.warn(
+    `[CONFIG] ADVERTENCIA: GERENCIA_GENERAL_EMAILS tiene entradas que no parecen correos (${correosInvalidos.join(', ')}); ` +
+      'no coinciden con ninguna cuenta. Corrígelas.',
+  );
+}
 
-// Mismo criterio: el clasificador IA encendido sin llave no aborta el arranque,
-// pero todo guardado de cláusulas adicionales responderá 503 (fail-closed).
-if (env.CLAUSULAS_IA_ENABLED && !env.ANTHROPIC_API_KEY) {
-  console.error(
-    '[CONFIG] ADVERTENCIA: CLAUSULAS_IA_ENABLED=true sin ANTHROPIC_API_KEY — ' +
-      'guardar cláusulas adicionales responderá 503 (revisión automática no disponible). ' +
-      'Configura ANTHROPIC_API_KEY o apaga CLAUSULAS_IA_ENABLED.',
+// Adenda 1 del módulo de contratos, respuesta 13 bis: la IA no revisa las
+// cláusulas de la inmobiliaria; el flag encendido no hace nada.
+if (env.CLAUSULAS_IA_ENABLED) {
+  console.warn(
+    '[CONFIG] ADVERTENCIA: CLAUSULAS_IA_ENABLED=true no tiene efecto: la Adenda 1 del módulo de contratos ' +
+      '(respuesta 13 bis) no habilita la revisión con IA de las cláusulas adicionales. Apágalo.',
   );
 }

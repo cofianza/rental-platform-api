@@ -1,15 +1,7 @@
 import type { Request, Response } from 'express';
 import { sendSuccess } from '@/lib/response';
-import { AppError } from '@/lib/errors';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import {
-  listarParametros,
-  listarHistorial,
-  nivelDe,
-  puedeEditarParametro,
-  setParametro,
-  validarParametro,
-} from '@/lib/calibracion';
+import { listarParametros, listarHistorial, nivelDe, puedeEditarParametro, setParametro } from '@/lib/calibracion';
 import { resumenCascada, resumenRevisionManual } from './calibracion.service';
 
 export async function listar(req: Request, res: Response) {
@@ -40,16 +32,8 @@ export async function actualizar(req: Request, res: Response) {
   const { clave } = req.params as { clave: string };
   const { valor, motivo } = req.body as { valor: number; motivo?: string };
 
-  const v = validarParametro(clave, valor);
-  if (!v) throw AppError.notFound(`Parametro desconocido: ${clave}`, 'PARAMETRO_NOT_FOUND');
-  if (!puedeEditarParametro(clave, req.user!))
-    throw AppError.forbidden(
-      'Este parámetro afecta el riesgo: solo la Gerencia General puede cambiarlo.',
-      'SOLO_GERENCIA_GENERAL',
-    );
-  if (v.error) throw AppError.badRequest(v.error, 'PARAMETRO_INVALIDO');
-
-  const fila = await setParametro(clave, valor, req.user!.id, motivo);
+  // setParametro responde 404 (clave), 403 (nivel, resp. 17) y 400 (valor) sin escribir nada.
+  const fila = await setParametro(clave, valor, req.user!, motivo);
 
   // Traza completa (resp. 17): valor anterior, nuevo, usuario (id y correo) y fecha (la de la fila).
   logAudit({

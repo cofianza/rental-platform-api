@@ -24,20 +24,20 @@ export async function getById(req: Request, res: Response) {
 
 export async function create(req: Request, res: Response) {
   const input = req.body as CreateUserInput;
-  const user = await usersService.createUser(input, req.user!.id, req.ip);
+  const user = await usersService.createUser(input, req.user!, req.ip);
   sendCreated(res, user);
 }
 
 export async function update(req: Request, res: Response) {
   const { id } = req.params as unknown as UserIdParams;
   const input = req.body as UpdateUserInput;
-  const user = await usersService.updateUser(id, input, req.user!.id, req.ip);
+  const user = await usersService.updateUser(id, input, req.user!, req.ip);
   sendSuccess(res, user);
 }
 
 export async function deactivate(req: Request, res: Response) {
   const { id } = req.params as unknown as UserIdParams;
-  const user = await usersService.deactivateUser(id, req.user!.id, req.ip);
+  const user = await usersService.deactivateUser(id, req.user!, req.ip);
   sendSuccess(res, user);
 }
 
@@ -51,7 +51,7 @@ export async function remove(req: Request, res: Response) {
   const { id } = req.params as unknown as UserIdParams;
   const force = req.query.force === 'true' || req.query.force === '1';
   const soloHuerfano = req.query.solo_huerfano === 'true';
-  const result = await usersService.deleteUser(id, req.user!.id, { force, soloHuerfano }, req.ip);
+  const result = await usersService.deleteUser(id, req.user!, { force, soloHuerfano }, req.ip);
   sendSuccess(res, result);
 }
 
@@ -73,6 +73,6 @@ export async function listOperators(_req: Request, res: Response) {
 export async function resetPassword(req: Request, res: Response) {
   const { id } = req.params as unknown as UserIdParams;
   const input = req.body as ResetPasswordByAdminInput;
-  const result = await usersService.resetPasswordByAdmin(id, input, req.user!.id, req.ip);
+  const result = await usersService.resetPasswordByAdmin(id, input, req.user!, req.ip);
   sendSuccess(res, result);
 }

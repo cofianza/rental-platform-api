@@ -62,19 +62,11 @@ describe('clasificación riesgo / operativo', () => {
 });
 
 describe('PATCH /admin/calibracion/:clave', () => {
-  it('un administrador fuera de la lista no cambia uno de riesgo: 403 y nada se escribe', async () => {
-    await expect(actualizar(patch(ADMIN, 'UMBRAL_ZONA_GRIS', 72), res)).rejects.toMatchObject({
-      statusCode: 403,
-      errorCode: 'SOLO_GERENCIA_GENERAL',
-    });
-    expect(setParametro).not.toHaveBeenCalled();
-    expect(logAudit).not.toHaveBeenCalled();
-  });
-
-  it('sí cambia un operativo, y la bitácora queda con valor anterior, nuevo, nivel y correo', async () => {
+  // El permiso por nivel (403) lo exige setParametro: lib/__tests__/calibracion.test.ts.
+  it('pasa el usuario completo a setParametro y la bitácora queda con valor anterior, nuevo, nivel y correo', async () => {
     await actualizar(patch(ADMIN, 'DIAS_EXPIRACION_FIRMA', 20), res);
 
-    expect(setParametro).toHaveBeenCalledWith('DIAS_EXPIRACION_FIRMA', 20, 'u-admin', 'prueba');
+    expect(setParametro).toHaveBeenCalledWith('DIAS_EXPIRACION_FIRMA', 20, ADMIN, 'prueba');
     expect(logAudit.mock.calls[0][0]).toMatchObject({
       usuarioId: 'u-admin',
       entidadId: 'DIAS_EXPIRACION_FIRMA',
@@ -82,19 +74,10 @@ describe('PATCH /admin/calibracion/:clave', () => {
     });
   });
 
-  it('la Gerencia General cambia uno de riesgo; el correo no distingue mayúsculas', async () => {
-    await actualizar(patch({ ...GERENTE, email: 'Mario@Cofianza.co' }, 'UMBRAL_ZONA_GRIS', 72), res);
-    expect(setParametro).toHaveBeenCalledWith('UMBRAL_ZONA_GRIS', 72, 'u-mario', 'prueba');
-  });
-
-  it('sin GERENCIA_GENERAL_EMAILS, cualquier administrador cambia todo (como antes)', async () => {
-    mockEnv.GERENCIA_GENERAL_EMAILS = [];
-    await actualizar(patch(ADMIN, 'CANON_MAX_TRANSITORIO', 3_500_000), res);
-    expect(setParametro).toHaveBeenCalledWith('CANON_MAX_TRANSITORIO', 3_500_000, 'u-admin', 'prueba');
-  });
-
-  it('una clave desconocida sigue siendo 404, antes que el permiso', async () => {
-    await expect(actualizar(patch(ADMIN, 'NO_EXISTE', 1), res)).rejects.toMatchObject({ statusCode: 404 });
+  it('si setParametro rechaza (403), no queda bitácora', async () => {
+    setParametro.mockRejectedValueOnce(Object.assign(new Error('x'), { statusCode: 403 }));
+    await expect(actualizar(patch(ADMIN, 'UMBRAL_ZONA_GRIS', 72), res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(logAudit).not.toHaveBeenCalled();
   });
 });
 

@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockFrom, ops, queues, enqueue } = vi.hoisted(() => {
+const { mockFrom, ops, queues, enqueue, mockEnv } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -32,14 +32,15 @@ const { mockFrom, ops, queues, enqueue } = vi.hoisted(() => {
   const enqueue = (table: string, ...items: Res[]) => {
     queues.set(table, [...(queues.get(table) ?? []), ...items]);
   };
-  return { mockFrom, ops, queues, enqueue };
+  const mockEnv = { CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000, GERENCIA_GENERAL_EMAILS: [] as string[] };
+  return { mockFrom, ops, queues, enqueue, mockEnv };
 });
 
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
-vi.mock('@/config', () => ({ env: { CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 } }));
+vi.mock('@/config', () => ({ env: mockEnv }));
 
 import {
   setParametro,
@@ -49,7 +50,8 @@ import {
   CALIBRACION_DEFAULT,
 } from '@/lib/calibracion';
 
-const USER = '660e8400-e29b-41d4-a716-446655440000';
+const USER_ID = '660e8400-e29b-41d4-a716-446655440000';
+const USER = { id: USER_ID, email: 'admin@cofianza.co', rol: 'administrador' };
 const opsDe = (table: string, method: string) =>
   ops.filter((o) => o.table === table && o.method === method);
 
@@ -71,7 +73,7 @@ describe('setParametro — sin historial no hay cambio (Adenda §11)', () => {
     expect(fila).toMatchObject({
       clave: 'DIAS_EXPIRACION_ESTUDIO',
       valor: 20,
-      actualizado_por: USER,
+      actualizado_por: USER_ID,
     });
     const iHist = ops.findIndex(
       (o) => o.table === 'parametros_calibracion_historial' && o.method === 'insert',
@@ -85,7 +87,7 @@ describe('setParametro — sin historial no hay cambio (Adenda §11)', () => {
       clave: 'DIAS_EXPIRACION_ESTUDIO',
       valor_anterior: 15,
       valor_nuevo: 20,
-      usuario_id: USER,
+      usuario_id: USER_ID,
       motivo: 'prueba',
     });
     expect(opsDe('parametros_calibracion_historial', 'delete')).toHaveLength(0);
@@ -212,5 +214,58 @@ describe('umbrales cruzados — el panel no deja guardarlos', () => {
     expect(validarCoherencia(cruzada, 'UMBRAL_APROBACION_AUTOMATICA')).toMatch(/zona gris/);
     expect(validarCoherencia(cruzada, 'DIAS_EXPIRACION_ESTUDIO')).toBeNull();
     expect(validarCoherencia(CALIBRACION_DEFAULT, 'UMBRAL_CASCADA_RECHAZO')).toBeNull();
+  });
+});
+
+// Adenda 1 del módulo de contratos, respuesta 17: el permiso por nivel lo exige
+// setParametro (no solo la ruta), antes de leer o escribir nada.
+describe('setParametro — riesgo solo la Gerencia General', () => {
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    invalidateCalibracionCache();
+    mockEnv.GERENCIA_GENERAL_EMAILS = ['mario@cofianza.co'];
+  });
+  afterEach(() => {
+    mockEnv.GERENCIA_GENERAL_EMAILS = [];
+  });
+
+  it('un administrador fuera de la lista: 403 en uno de riesgo, sin leer ni escribir la base', async () => {
+    await expect(setParametro('UMBRAL_ZONA_GRIS', 72, USER)).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'SOLO_GERENCIA_GENERAL',
+    });
+    expect(ops).toHaveLength(0);
+  });
+
+  it('el mismo administrador sí cambia un operativo', async () => {
+    enqueue('parametros_calibracion', { data: [], error: null });
+    enqueue('parametros_calibracion_historial', { data: { id: 'h1' }, error: null });
+    enqueue('parametros_calibracion', { error: null });
+    await expect(setParametro('DIAS_EXPIRACION_FIRMA', 20, USER)).resolves.toMatchObject({ valor: 20, valor_anterior: 15 });
+  });
+
+  it('la Gerencia General (correo sin distinguir mayúsculas) cambia uno de riesgo', async () => {
+    enqueue('parametros_calibracion', { data: [], error: null });
+    enqueue('parametros_calibracion_historial', { data: { id: 'h1' }, error: null });
+    enqueue('parametros_calibracion', { error: null });
+    await setParametro('UMBRAL_ZONA_GRIS', 72, { ...USER, email: 'Mario@Cofianza.co' });
+    expect(opsDe('parametros_calibracion', 'upsert')).toHaveLength(1);
+  });
+
+  it('con el correo de la lista pero sin ser administrador, no; una clave desconocida es 404 antes que el permiso', async () => {
+    await expect(
+      setParametro('UMBRAL_ZONA_GRIS', 72, { ...USER, email: 'mario@cofianza.co', rol: 'gerencia_consulta' }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(setParametro('NO_EXISTE', 1, USER)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('con la lista vacía, cualquier administrador cambia uno de riesgo (como antes)', async () => {
+    mockEnv.GERENCIA_GENERAL_EMAILS = [];
+    enqueue('parametros_calibracion', { data: [], error: null });
+    enqueue('parametros_calibracion_historial', { data: { id: 'h1' }, error: null });
+    enqueue('parametros_calibracion', { error: null });
+    await setParametro('CANON_MAX_TRANSITORIO', 3_500_000, USER);
+    expect(opsDe('parametros_calibracion', 'upsert')).toHaveLength(1);
   });
 });

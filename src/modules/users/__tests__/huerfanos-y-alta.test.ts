@@ -35,6 +35,7 @@ vi.mock('@/lib/supabase', () => {
   };
 });
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock('@/config', () => ({ env: { GERENCIA_GENERAL_EMAILS: [] } }));
 vi.mock('@/lib/email', () => ({ sendWelcomeEmail: vi.fn() }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 vi.mock('@/middleware/auth', () => ({ invalidateAuthCache: vi.fn() }));
@@ -45,6 +46,8 @@ vi.mock('@/lib/tenantScope', () => ({
 }));
 
 import { listOrphanAuthUsers, deleteUser, createUser, updateUser } from '../users.service';
+
+const ADMIN = { id: 'admin', email: 'admin@cofianza.co', rol: 'administrador' };
 
 beforeEach(() => {
   ins.length = 0;
@@ -65,7 +68,7 @@ describe('huérfanos', () => {
 
   it('desde el panel de huérfanos no borra una cuenta con perfil', async () => {
     rpc.mockResolvedValueOnce({ data: [{ id: 'real-1', email: 'a@b.co' }], error: null });
-    await expect(deleteUser('real-1', 'admin', { force: true, soloHuerfano: true }))
+    await expect(deleteUser('real-1', ADMIN, { force: true, soloHuerfano: true }))
       .rejects.toMatchObject({ statusCode: 409, errorCode: 'USER_NOT_ORPHAN' });
     expect(auth.deleteUser).not.toHaveBeenCalled();
   });
@@ -77,14 +80,14 @@ describe('alta desde el panel', () => {
       .mockReturnValueOnce({ single: async () => ({ data: null }) }) // find_user_by_email
       .mockResolvedValueOnce({ data: [{ id: 'nuevo' }], error: null }); // get_user_with_email
     auth.createUser.mockResolvedValueOnce({ data: { user: { id: 'nuevo' } }, error: null });
-    await createUser({ email: 'i@x.co', nombre: 'Casa', apellido: 'Sur', rol: 'inmobiliaria' } as never, 'admin');
+    await createUser({ email: 'i@x.co', nombre: 'Casa', apellido: 'Sur', rol: 'inmobiliaria' } as never, ADMIN);
     expect(mockEnsureOrg).toHaveBeenCalledWith('nuevo', 'Casa Sur');
   });
 
   it('un propietario que pasa a inmobiliaria se lleva sus fichas sin organización', async () => {
     const antes = { data: [{ id: 'p1', rol: 'propietario', nombre: 'Ana', apellido: 'Ruiz' }], error: null };
     rpc.mockResolvedValueOnce(antes).mockResolvedValueOnce(antes); // get_user_with_email antes y después
-    await updateUser('p1', { rol: 'inmobiliaria' } as never, 'admin');
+    await updateUser('p1', { rol: 'inmobiliaria' } as never, ADMIN);
     expect(mockEnsureOrg).toHaveBeenCalledWith('p1', 'Ana Ruiz');
     const i = ops.findIndex((o) => o[0] === 'from' && o[1] === 'solicitantes');
     expect(ops.slice(i, i + 4)).toEqual([

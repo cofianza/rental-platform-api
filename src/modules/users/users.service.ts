@@ -6,7 +6,15 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendWelcomeEmail } from '@/lib/email';
 import { invalidateAuthCache, cerrarSesionesDe } from '@/middleware/auth';
 import { ensureOrgConOwner, resolveInmobiliariaIdForPerfil, resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
+import { assertCuentaDeGerencia } from '@/lib/gerenciaGeneral';
 import type { CreateUserInput, UpdateUserInput, ListUsersQuery, ResetPasswordByAdminInput } from './users.schema';
+
+/** Quien hace el cambio: el correo y el rol deciden si puede tocar una cuenta de la Gerencia General. */
+export interface Solicitante {
+  id: string;
+  email: string;
+  rol: string;
+}
 
 interface UserRow {
   id: string;
@@ -79,8 +87,9 @@ export async function getUserById(userId: string) {
   return rows[0];
 }
 
-export async function createUser(input: CreateUserInput, createdBy: string, ip?: string) {
+export async function createUser(input: CreateUserInput, solicitante: Solicitante, ip?: string) {
   const { email, nombre, apellido, telefono, rol } = input;
+  assertCuentaDeGerencia(email, solicitante, 'crearla');
 
   // Verificar que el email no exista
   const { data: existing } = await supabase
@@ -129,7 +138,7 @@ export async function createUser(input: CreateUserInput, createdBy: string, ip?:
 
   // Registrar en bitacora
   logAudit({
-    usuarioId: createdBy,
+    usuarioId: solicitante.id,
     accion: AUDIT_ACTIONS.USER_CREATED,
     entidad: AUDIT_ENTITIES.USER,
     entidadId: userId,
@@ -200,11 +209,13 @@ async function tieneEquipo(orgIds: string[], userId: string): Promise<boolean> {
   return (count ?? 0) > 0;
 }
 
-export async function updateUser(userId: string, input: UpdateUserInput, updatedBy: string, ip?: string) {
+export async function updateUser(userId: string, input: UpdateUserInput, solicitante: Solicitante, ip?: string) {
+  const updatedBy = solicitante.id;
   // Obtener estado anterior para diff en bitacora
   const previousUser = await getUserById(userId);
 
   const cambiaRol = input.rol !== undefined && input.rol !== previousUser.rol;
+  if (cambiaRol) assertCuentaDeGerencia(previousUser.email, solicitante, 'cambiarle el rol');
   if (cambiaRol && userId === updatedBy) {
     // El único administrador que se quita el rol pierde el panel y solo se
     // recupera por base de datos.
@@ -261,13 +272,15 @@ export async function updateUser(userId: string, input: UpdateUserInput, updated
   return getUserById(userId);
 }
 
-export async function deactivateUser(userId: string, requestingUserId: string, ip?: string) {
+export async function deactivateUser(userId: string, solicitante: Solicitante, ip?: string) {
+  const requestingUserId = solicitante.id;
   if (userId === requestingUserId) {
     throw AppError.badRequest('No puedes desactivar tu propia cuenta', 'SELF_DEACTIVATION');
   }
 
   // Verificar que el usuario existe
-  await getUserById(userId);
+  const objetivo = await getUserById(userId);
+  assertCuentaDeGerencia(objetivo.email, solicitante, 'desactivarla');
 
   // Cambiar estado a inactivo
   const { error } = await (supabase
@@ -490,10 +503,11 @@ export interface DeleteUserResult {
 
 export async function deleteUser(
   userId: string,
-  requestingUserId: string,
+  solicitante: Solicitante,
   options: { force?: boolean; soloHuerfano?: boolean } = {},
   ip?: string,
 ): Promise<DeleteUserResult> {
+  const requestingUserId = solicitante.id;
   if (userId === requestingUserId) {
     throw AppError.badRequest('No puedes eliminar tu propia cuenta', 'SELF_DELETION');
   }
@@ -519,6 +533,9 @@ export async function deleteUser(
     email = authResult.user.email ?? null;
     esHuerfano = true;
   }
+
+  // También un huérfano con el correo de la Gerencia: su alta queda para ella.
+  assertCuentaDeGerencia(email, solicitante, 'eliminarla');
 
   // El panel de huérfanos solo debe poder borrar huérfanos: si la lista se
   // equivocó (o quedó vieja), una cuenta real no se borra desde ahí.
@@ -608,12 +625,14 @@ export async function deleteUser(
 export async function resetPasswordByAdmin(
   userId: string,
   input: ResetPasswordByAdminInput,
-  requestingUserId: string,
+  solicitante: Solicitante,
   ip?: string,
 ) {
+  const requestingUserId = solicitante.id;
   // 1. Verificar que el usuario existe en perfiles. getUserById ya tira
   //    404 limpio si no existe.
   const user = await getUserById(userId);
+  assertCuentaDeGerencia(user.email, solicitante, 'restablecer su contraseña');
 
   // 2. Actualizar la contrasena via Supabase Auth admin API.
   const { error } = await supabaseAuth.auth.admin.updateUserById(userId, {

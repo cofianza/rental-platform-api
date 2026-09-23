@@ -19,6 +19,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
+import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { env } from '@/config';
 
 export type ClaveCalibracion =
@@ -304,15 +305,6 @@ export type NivelParametro = 'riesgo' | 'operativo';
 export const nivelDe = (clave: string): NivelParametro =>
   OPERATIVOS.has(clave as ClaveCalibracion) ? 'operativo' : 'riesgo';
 
-/**
- * Gerencia General = administrador con el correo en GERENCIA_GENERAL_EMAILS.
- * Con la lista vacía, cualquier administrador (lo de antes de la Adenda).
- */
-export function esGerenciaGeneral(u: { rol: string; email: string }): boolean {
-  const lista = env.GERENCIA_GENERAL_EMAILS;
-  return u.rol === 'administrador' && (lista.length === 0 || lista.includes(u.email.trim().toLowerCase()));
-}
-
 /** Pura: los operativos, cualquier administrador; los de riesgo, solo la Gerencia General. */
 export const puedeEditarParametro = (clave: string, u: { rol: string; email: string }): boolean =>
   u.rol === 'administrador' && (nivelDe(clave) === 'operativo' || esGerenciaGeneral(u));
@@ -434,20 +426,27 @@ export async function listarParametros(): Promise<FilaParametro[]> {
 
 /**
  * Cambia un parametro dejando el rastro que exige la Adenda §11 (fecha, valor
- * anterior, valor nuevo, usuario). Lanza si la clave no existe o el valor esta
- * fuera de rango — aqui SI se lanza: es una escritura de Gerencia, no un
- * camino caliente. Quién puede cambiar cada uno lo decide el llamador
- * (puedeEditarParametro).
+ * anterior, valor nuevo, usuario). Lanza si la clave no existe (404), si el
+ * usuario no puede cambiar ese nivel (403, Adenda 1 del módulo de contratos,
+ * respuesta 17: aquí y no solo en la ruta, para todo el que escriba) o si el
+ * valor esta fuera de rango (400) — aqui SI se lanza: es una escritura de
+ * Gerencia, no un camino caliente.
  */
 export async function setParametro(
   clave: string,
   valor: number,
-  usuarioId: string,
+  usuario: { id: string; email: string; rol: string },
   motivo?: string,
 ): Promise<FilaParametro & { valor_anterior: number }> {
+  const usuarioId = usuario.id;
   const v = validarParametro(clave, valor);
-  if (!v) throw new Error(`Parametro desconocido: ${clave}`);
-  if (v.error) throw new Error(`${clave}: ${v.error}`);
+  if (!v) throw AppError.notFound(`Parametro desconocido: ${clave}`, 'PARAMETRO_NOT_FOUND');
+  if (!puedeEditarParametro(clave, usuario))
+    throw AppError.forbidden(
+      'Este parámetro afecta el riesgo: solo la Gerencia General puede cambiarlo.',
+      'SOLO_GERENCIA_GENERAL',
+    );
+  if (v.error) throw AppError.badRequest(v.error, 'PARAMETRO_INVALIDO');
 
   // Se lee la tabla, no el caché: si el caché trae el respaldo de una lectura
   // fallida, el historial registraría como «anterior» un valor que no regía.
