@@ -474,7 +474,7 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
   const { data, error } = await (supabase
     .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, estado_anterior, estado_nuevo, comentario, descripcion, created_at,
+      id, estado_anterior, estado_nuevo, comentario, descripcion, created_at, metadata,
       usuario:perfiles!eventos_timeline_usuario_id_fkey(id, nombre, apellido)
     `)
     .eq('expediente_id', expedienteId)
@@ -493,13 +493,20 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
     comentario: string | null;
     descripcion: string;
     created_at: string;
+    metadata: { origen?: string } | null;
     usuario: { id: string; nombre: string; apellido: string } | null;
   }>) || [];
 
   return {
     expediente_id: expedienteId,
     estado_actual: expediente.estado,
-    historial: rows,
+    // Al titular (solicitante), la ponderación no le cuenta el resultado ni las
+    // reglas duras de su co-arrendatario: son datos de buró de otra persona (Ley 1266).
+    historial: rows.map(({ metadata, ...r }) =>
+      userRol === 'solicitante' && metadata?.origen === 'ponderacion_coarrendatario'
+        ? { ...r, descripcion: `Resultado combinado con el co-arrendatario: ${r.estado_nuevo ?? 'sin cambio'}.` }
+        : r,
+    ),
   };
 }
 

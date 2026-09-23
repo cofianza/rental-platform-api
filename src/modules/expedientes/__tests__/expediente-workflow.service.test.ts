@@ -522,6 +522,41 @@ describe('expediente-workflow.service', () => {
       });
     });
 
+    it('al titular no le cuenta el resultado ni las reglas duras de su co-arrendatario', async () => {
+      setupFetchExpediente(mockExpediente);
+      const fila = (origen: string | null, descripcion: string) => ({
+        id: `evt-${origen}`,
+        estado_anterior: 'condicionado',
+        estado_nuevo: 'rechazado',
+        comentario: null,
+        descripcion,
+        created_at: '2026-09-23T10:00:00Z',
+        metadata: origen ? { origen } : null,
+        usuario: null,
+      });
+      mockFrom.mockReturnValueOnce({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              order: vi.fn().mockResolvedValue({
+                data: [
+                  fila('ponderacion_coarrendatario', 'Titular condicionado + coarrendatario rechazado. Regla dura del co-arrendatario (listas restrictivas)'),
+                  fila(null, 'Cambio manual'),
+                ],
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      });
+
+      const r = await getTransitionHistory('exp-uuid', 'titular', 'solicitante');
+
+      expect(r.historial[0].descripcion).toBe('Resultado combinado con el co-arrendatario: rechazado.');
+      expect(r.historial[1].descripcion).toBe('Cambio manual');
+      expect(JSON.stringify(r.historial)).not.toContain('listas restrictivas');
+    });
+
     it('debe retornar 404 si el expediente no existe', async () => {
       mockFrom.mockReturnValueOnce({
         select: vi.fn().mockReturnValue({

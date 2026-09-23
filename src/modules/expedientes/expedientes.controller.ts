@@ -55,7 +55,13 @@ export async function list(req: Request, res: Response) {
   }
 
   const result = await expedientesService.listExpedientes(query, allowedExpedienteIds);
-  sendSuccess(res, result.expedientes, 200, result.pagination);
+  // El RPC arma estudio_vigente con el estudio más reciente (también el del
+  // co-arrendatario) y su score: al titular no le llega (Ley 1266). Su lista no lo usa.
+  const expedientes =
+    rol === 'solicitante'
+      ? result.expedientes.map((e) => ({ ...e, estudio_vigente: null }))
+      : result.expedientes;
+  sendSuccess(res, expedientes, 200, result.pagination);
 }
 
 export async function getById(req: Request, res: Response) {
