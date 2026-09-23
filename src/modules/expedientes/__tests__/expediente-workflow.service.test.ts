@@ -64,6 +64,7 @@ vi.mock('../expedientes.service', () => ({
 const mockRatificar = vi.fn();
 vi.mock('../expediente-habilitacion.service', () => ({
   ratificarRevisionManual: (...args: unknown[]) => mockRatificar(...args),
+  avisarDuenoDecisionRevisionManual: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/auditLog', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auditLog')>()),
