@@ -5,6 +5,7 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { hasPermission } from '@/config/permissions';
 import type {
   PresignedUrlInput,
   ConfirmarSubidaInput,
@@ -742,7 +743,9 @@ export async function rechazarDocumento(
  * Sin este aviso el rechazo solo quedaba en la bitácora y el documento
  * esperaba la resubida hasta que alguien abriera el estudio. Avisa (in-app +
  * correo) a quien lo subió, al dueño del inmueble y al miembro responsable,
- * sin repetir a nadie ni avisar a quien rechazó. Nunca lanza.
+ * sin repetir a nadie ni avisar a quien rechazó. Solo a quien puede resubir
+ * (documentos:create): el propietario individual no puede y el aviso lo
+ * mandaba a un 403. Nunca lanza.
  */
 async function avisarRechazoDocumento(doc: DocumentoRow, motivo: string, revisorId: string): Promise<void> {
   try {
@@ -763,6 +766,15 @@ async function avisarRechazoDocumento(doc: DocumentoRow, motivo: string, revisor
     );
     if (destinatarios.size === 0) return;
 
+    const { data: perfiles } = await (supabase
+      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+      .select('id, rol')
+      .in('id', [...destinatarios]);
+    const puedenResubir = ((perfiles ?? []) as Array<{ id: string; rol: string }>)
+      .filter((p) => hasPermission(p.rol, 'documentos', 'create'))
+      .map((p) => p.id);
+    if (puedenResubir.length === 0) return;
+
     const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
     const aviso = {
       tipo: 'documento.rechazado',
@@ -773,7 +785,7 @@ async function avisarRechazoDocumento(doc: DocumentoRow, motivo: string, revisor
       link: `/expedientes/${doc.expediente_id}`,
       payload: { expediente_id: doc.expediente_id, documento_id: doc.id },
     };
-    for (const userId of destinatarios) await notificarYCorreo({ userId, ...aviso });
+    for (const userId of puedenResubir) await notificarYCorreo({ userId, ...aviso });
   } catch (err) {
     logger.warn({ error: err, documentoId: doc.id }, 'No se pudo avisar el rechazo del documento');
   }

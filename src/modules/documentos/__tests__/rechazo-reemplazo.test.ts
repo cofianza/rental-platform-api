@@ -13,7 +13,7 @@ vi.mock('@/lib/supabase', () => {
   const next = (t: string) => queues.get(t)?.shift() ?? { data: null, error: null };
   const from = (t: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'update', 'eq', 'order']) chain[m] = () => chain;
+    for (const m of ['select', 'update', 'eq', 'in', 'order']) chain[m] = () => chain;
     chain.single = chain.maybeSingle = async () => next(t);
     chain.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(next(t)).then(res, rej);
     return chain;
@@ -54,6 +54,7 @@ describe('rechazar documento', () => {
       data: { numero: 'EXP-1', miembro_responsable_id: 'gestor-1', inmuebles: { propietario_id: 'dueno-1' } },
       error: null,
     }]);
+    queues.set('perfiles', [{ data: [{ id: 'gestor-1', rol: 'inmobiliaria' }, { id: 'dueno-1', rol: 'inmobiliaria' }], error: null }]);
 
     await rechazarDocumento('d1', 'Ilegible', 'analista-1');
 
@@ -64,6 +65,25 @@ describe('rechazar documento', () => {
       mensaje: expect.stringContaining('Ilegible'),
       link: '/expedientes/e1',
     });
+  });
+
+  it('no avisa al propietario individual: no puede resubir y el enlace lo llevaba a un 403', async () => {
+    queues.set('documentos', [
+      { data: doc({ subido_por: 'analista-2' }), error: null },
+      { data: doc({ estado: 'rechazado' }), error: null },
+    ]);
+    queues.set('expedientes', [{
+      data: { numero: 'EXP-2', miembro_responsable_id: null, inmuebles: { propietario_id: 'dueno-1' } },
+      error: null,
+    }]);
+    queues.set('perfiles', [{ data: [{ id: 'analista-2', rol: 'operador_analista' }, { id: 'dueno-1', rol: 'propietario' }], error: null }]);
+
+    await rechazarDocumento('d1', 'Ilegible', 'analista-1');
+
+    await vi.waitFor(() => expect(notificar).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 10));
+    const ids = notificar.mock.calls.map((c) => (c as unknown as [{ userId: string }])[0].userId);
+    expect(ids).toEqual(['analista-2']);
   });
 });
 
