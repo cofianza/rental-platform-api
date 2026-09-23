@@ -7,8 +7,9 @@
  *   2. Auto: orchestrator.onPagoConfirmado, fire-and-forget al confirmar el
  *      pago de Stripe.
  *
- * Idempotencia: usamos pago.id como referencia única por pago. Si Factus
- * responde 409 (documento duplicado), buscamos por reference_code y vinculamos.
+ * Idempotencia: el reference_code sale fijo del pago.id (UNIQUE en facturas) y
+ * Factus rechaza uno repetido. Si el disparo automático y el clic manual se
+ * cruzan, el que falla no pisa la factura emitida y devuelve la que ya quedó.
  */
 
 import { supabase } from '@/lib/supabase';
@@ -59,6 +60,7 @@ interface PagoConContexto {
   expediente_id: string;
   concepto: string;
   monto: number;
+  estado: string;
   email_pagador: string | null;
   nombre_pagador: string | null;
   /** Quien creó el cobro. En la opción B es el gestor que pagó. */
@@ -93,7 +95,7 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
   const { data, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, expediente_id, concepto, monto, email_pagador, nombre_pagador, creado_por,
+      id, expediente_id, concepto, monto, estado, email_pagador, nombre_pagador, creado_por,
       expediente:expedientes(
         numero,
         solicitante:solicitantes(
@@ -109,6 +111,12 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
 
   if (error || !data) {
     throw AppError.notFound('Pago no encontrado', 'PAGO_NOT_FOUND');
+  }
+  // Solo se factura dinero que entró: el id de un pago pendiente viaja en la
+  // URL de retorno de la pasarela, y una factura DIAN "contado" por él sería
+  // un comprobante de un pago que nunca ocurrió.
+  if ((data as { estado: string }).estado !== 'completado') {
+    throw AppError.conflict('Solo se puede facturar un pago completado.', 'PAGO_NO_COMPLETADO');
   }
   return data as unknown as PagoConContexto;
 }
@@ -497,6 +505,13 @@ export async function crearFacturaDesdePago(
   try {
     factusRes = await factus.createBill(payload);
   } catch (err) {
+    // Carrera con el otro disparo (automático o manual) del mismo pago: Factus
+    // rechaza el reference_code repetido, pero la factura ya quedó emitida.
+    const yaEmitida = await findFacturaExistente(pagoId);
+    if (yaEmitida?.estado === 'emitida') {
+      return { id: yaEmitida.id, factus_number: yaEmitida.factus_number, cufe: yaEmitida.cufe, estado: yaEmitida.estado };
+    }
+
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ pagoId, error: msg }, 'Factus: error al crear factura');
 
@@ -894,6 +909,12 @@ export async function crearFacturaDesdeCompraCreditos(
   try {
     factusRes = await factus.createBill(payload);
   } catch (err) {
+    // Misma carrera que en crearFacturaDesdePago (webhook + clic manual).
+    const yaEmitida = await findFacturaExistentePorCompra(compraId);
+    if (yaEmitida?.estado === 'emitida') {
+      return { id: yaEmitida.id, factus_number: yaEmitida.factus_number, cufe: yaEmitida.cufe, estado: yaEmitida.estado };
+    }
+
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ compraId, error: msg }, 'Factus: error al crear factura de compra');
     await persistFailedAttemptCompra({
@@ -1036,10 +1057,12 @@ async function persistFailedAttemptCompra(params: {
     respuesta_proveedor: params.respuestaProveedor,
   };
   if (existente) {
+    // Un intento fallido nunca pisa una factura ya emitida.
     await (supabase
       .from('facturas' as string) as ReturnType<typeof supabase.from>)
       .update(data as never)
-      .eq('id', existente.id);
+      .eq('id', existente.id)
+      .neq('estado', 'emitida');
     return;
   }
   await (supabase
@@ -1070,10 +1093,12 @@ async function persistFailedAttempt(params: {
   };
 
   if (existente) {
+    // Un intento fallido nunca pisa una factura ya emitida.
     await (supabase
       .from('facturas' as string) as ReturnType<typeof supabase.from>)
       .update(data as never)
-      .eq('id', existente.id);
+      .eq('id', existente.id)
+      .neq('estado', 'emitida');
     return;
   }
 
