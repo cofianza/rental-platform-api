@@ -483,6 +483,9 @@ export async function reembolsarEnMercadoPago(filaId: string, user: { id: string
  * (devolución hecha a mano o desde el panel de Mercado Pago, pago conciliado a
  * mano, caso revisado). Si la fila era la evaluación de un estudio que terminó
  * sin consulta, su cobro pasa a reembolsado.
+ * ponytail: no hay herramienta para devolver o restituir créditos a mano (fila
+ * dudosa pagada con crédito, contracargo ganado de una compra): se ajustan en
+ * la base. Agregarla si deja de ser raro.
  */
 export async function resolverReembolso(filaId: string, nota: string, user: { id: string; email?: string }, ip?: string) {
   const fila = await leerFila(filaId);

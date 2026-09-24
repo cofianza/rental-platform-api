@@ -983,6 +983,10 @@ export async function devolverCreditoDePago(
   if (!lote) throw new AppError(500, 'CREDITO_NO_DEVUELTO', 'El lote del crédito ya no existe: hay que devolverlo a mano.');
   const deuda = await compraConDeuda(lote.compra_id);
 
+  // ponytail: sin transacción. Si la API se reinicia entre pasar el pago a
+  // reembolsado (abajo) y devolver el crédito, el crédito no vuelve y el
+  // reintento responde «ya devuelto»; se corrige a mano en la base. Pasarlo a
+  // una RPC transaccional si ocurre.
   // Import dinámico: la máquina de estados arrastra las notificaciones.
   const { transitionPagoStateChecked } = await import('@/modules/pagos/pago-state-machine');
   const { transitioned } = await transitionPagoStateChecked({
@@ -1092,6 +1096,10 @@ export async function revertirCompraCreditos(compraId: string): Promise<CompraRe
     .select('id');
   if (cErr) throw fromSupabaseError(cErr);
   if (!(cancelada as unknown[] | null)?.length) return null;
+  // ponytail: sin transacción. Si la API se reinicia entre cancelar la compra y
+  // retirar el lote (o dejar el saldo en contra), el reintento ve la compra ya
+  // cancelada y no hace nada: los créditos quedan sin retirar y se ajustan a
+  // mano. Pasarlo a una RPC transaccional si ocurre.
 
   const resultado: CompraRevertida = {
     compra_id: compraId,
