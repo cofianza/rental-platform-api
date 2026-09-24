@@ -139,6 +139,16 @@ describe('la decisión de Cofianza en la tarjeta', () => {
     expect(await ruta()).toBe('perfil_medio');
   });
 
+  it('la tarjeta recibe la decisión: un condicionado cancelado en revisión es sin_aprobar', async () => {
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'cerrado', estado_pre_cancelacion: 'condicionado' }, error: null });
+    expect(await getEstudioById('est-1', 'u-1', 'solicitante')).toMatchObject({ decision_cofianza: 'sin_aprobar' });
+
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'condicionado', estado_pre_cancelacion: null }, error: null });
+    expect(await getEstudioById('est-1', 'u-1', 'solicitante')).toMatchObject({ decision_cofianza: 'en_curso' });
+  });
+
   it('cerrado sin marca: aprobado solo con la prueba del cierre natural', async () => {
     enqueue('estudios', { data: condicionado, error: null });
     enqueue('expedientes', { data: { id: 'exp-1', estado: 'cerrado', estado_pre_cancelacion: null }, error: null });

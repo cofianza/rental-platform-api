@@ -700,7 +700,7 @@ async function adjuntarRuta<T extends Record<string, unknown>>(
   row: T,
   /** Lo que decidió Cofianza (decisionDeCofianza): con ello un condicionado ya decidido deja de verse "en revisión". */
   decision?: DecisionCofianza,
-): Promise<T & { ruta: Ruta; certificado_sin_efecto: boolean }> {
+): Promise<T & { ruta: Ruta; certificado_sin_efecto: boolean; decision_cofianza: DecisionCofianza | null }> {
   let puntaje: number | null = null;
   const cal = await getCalibracion();
 
@@ -737,7 +737,14 @@ async function adjuntarRuta<T extends Record<string, unknown>>(
 
   // P32: el CRC del caso quedó sin efecto (misma regla que /verificar y las
   // compuertas): la web no ofrece descargarlo ni generarlo para no dar un 409.
-  return { ...row, ruta, certificado_sin_efecto: !!decision && quedoSinEfecto(decision) };
+  // decision_cofianza: con 'sin_aprobar' (cancelado sin aprobarse) la tarjeta
+  // del prospecto no dice «Estamos revisando» debajo de «Estudio cancelado».
+  return {
+    ...row,
+    ruta,
+    certificado_sin_efecto: !!decision && quedoSinEfecto(decision),
+    decision_cofianza: decision ?? null,
+  };
 }
 
 // ============================================================
