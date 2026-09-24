@@ -24,6 +24,7 @@ import {
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { diaBogota, momentoDeCobro } from './horario-cobranza';
+import { telefonoNormalizado } from '@/lib/telefono';
 import type {
   ReportarMoraInput,
   ListMorasQuery,
@@ -214,12 +215,6 @@ async function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
   return enviarTemplateWhatsApp({ to: m.inquilino_telefono, template, variables, context: { mora_id: m.id } });
 }
 
-/** Solo dígitos y con indicativo: «300 111 2233», «+57 300 1112233» y «573001112233» son el mismo deudor. */
-function telefonoDeudor(telefono: string): string {
-  const digitos = telefono.replace(/\D/g, '');
-  return digitos.length === 10 ? `57${digitos}` : digitos;
-}
-
 // Sin la migración 20261001000007 no existen la columna ni la tabla del
 // horario de cobranza; así lo dicen PostgREST y Postgres.
 const faltaEnLaBase = (e: { code?: string } | null) =>
@@ -236,7 +231,7 @@ async function tomarGestionDelDia(
   ahora: Date,
 ): Promise<'libre' | 'usada' | 'sin_tabla' | 'error'> {
   const { error } = await db('moras_gestiones_diarias').insert({
-    telefono: telefonoDeudor(telefono),
+    telefono: telefonoNormalizado(telefono),
     dia: diaBogota(ahora),
     mora_id: moraId,
   } as never);

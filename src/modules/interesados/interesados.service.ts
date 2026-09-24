@@ -14,6 +14,7 @@ import { buildPaginationMeta } from '@/utils/pagination';
 import { resolveAllowedInmuebleIds, resolveOrgCanonicalPerfilId, resolveNombreDueno } from '@/lib/tenantScope';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { sendNuevoInteresadoEmail, sendInteresadoConfirmacionEmail } from '@/lib/email';
+import { telefonoNormalizado } from '@/lib/telefono';
 import type { ListInteresadosQuery, RegistrarInteresInput } from './interesados.schema';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
@@ -85,18 +86,22 @@ export async function registrarInteresPublico(
   const telefono = input.telefono.trim();
 
   // 2. ¿Ya dejó sus datos para este inmueble en las últimas 24 h (mismo correo o
-  // WhatsApp)? El lead se guarda igual, pero no se vuelve a avisar al dueño ni a
-  // mandar la confirmación: el formulario anónimo servía para enviar en serie.
-  // Dos .eq y no un .or(): el teléfono es texto libre y rompería el filtro.
+  // mismo WhatsApp, comparado por dígitos: «300 111 2233» = «+573001112233»)?
+  // El lead se guarda igual, pero no se vuelve a avisar al dueño ni a mandar la
+  // confirmación: el formulario anónimo servía para enviar en serie.
+  // ponytail: mira los 200 leads más recientes del inmueble; con más en 24 h,
+  // un repetido más viejo volvería a avisar (columna normalizada si pasa).
   const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const reciente = (campo: 'email' | 'telefono', valor: string) =>
-    db('inmueble_interesados')
-      .select('id', { count: 'exact', head: true })
-      .eq('inmueble_id', inmuebleId)
-      .eq(campo, valor)
-      .gte('created_at', hace24h);
-  const [porEmail, porTelefono] = await Promise.all([reciente('email', emailNorm), reciente('telefono', telefono)]);
-  const repetido = (porEmail.count ?? 0) + (porTelefono.count ?? 0) > 0;
+  const { data: recientes } = await db('inmueble_interesados')
+    .select('email, telefono')
+    .eq('inmueble_id', inmuebleId)
+    .gte('created_at', hace24h)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  const telNorm = telefonoNormalizado(telefono);
+  const repetido = ((recientes as Array<{ email: string | null; telefono: string | null }> | null) ?? []).some(
+    (r) => r.email === emailNorm || (!!r.telefono && telefonoNormalizado(r.telefono) === telNorm),
+  );
 
   // 3. Guardar el lead: cada interés queda registrado, aunque se repita.
   const now = new Date().toISOString();

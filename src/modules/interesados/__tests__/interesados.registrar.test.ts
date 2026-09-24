@@ -17,7 +17,7 @@ const { mockFrom, ops, enqueue, resetQueues, mocks } = vi.hoisted(() => {
   };
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'insert', 'eq', 'gte']) {
+    for (const m of ['select', 'insert', 'eq', 'gte', 'order', 'limit']) {
       chain[m] = (...args: unknown[]) => {
         ops.push({ table, method: m, args });
         return chain;
@@ -77,7 +77,7 @@ beforeEach(() => {
 
 describe('registrarInteresPublico', () => {
   it('la confirmación al interesado no lleva la dirección; el aviso al dueño sí', async () => {
-    enqueue('inmueble_interesados', { count: 0 }, { count: 0 }, { error: null });
+    enqueue('inmueble_interesados', { data: [], error: null }, { error: null }); // sin leads en 24 h, insert
 
     await registrarInteresPublico('inm1', INPUT, META);
 
@@ -88,8 +88,9 @@ describe('registrarInteresPublico', () => {
     expect(mocks.avisoDueno.mock.calls[0][1].inmuebleLabel).toContain('Calle 60 # 9-20');
   });
 
-  it('el mismo correo o WhatsApp en 24 h se guarda, pero sin volver a avisar ni confirmar', async () => {
-    enqueue('inmueble_interesados', { count: 0 }, { count: 1 }, { error: null });
+  it('el mismo WhatsApp en 24 h (escrito distinto) se guarda, pero sin volver a avisar ni confirmar', async () => {
+    // Mismo número por dígitos: «+57 300 111 2233» = «3001112233».
+    enqueue('inmueble_interesados', { data: [{ email: 'otra@correo.co', telefono: '+57 300 111 2233' }], error: null }, { error: null });
 
     await registrarInteresPublico('inm1', INPUT, META);
 
@@ -104,16 +105,25 @@ describe('registrarInteresPublico', () => {
 });
 
 describe('registrarInteresSchema', () => {
-  it('rechaza etiquetas, enlaces y dominios sueltos; el teléfono solo con dígitos', () => {
+  it('rechaza etiquetas, enlaces y dominios con cualquier terminación; el teléfono solo con dígitos', () => {
     const ok = (campos: Record<string, string>) => registrarInteresSchema.safeParse({ ...INPUT, ...campos }).success;
-    expect(ok({ nombre: '<a href="https://falso.co">Paga aquí</a>' })).toBe(false);
-    expect(ok({ nombre: 'Visita www.falso.co' })).toBe(false);
-    expect(ok({ nombre: 'Paga en pagos-cofianza.com' })).toBe(false);
-    expect(ok({ mensaje: 'Reserva aquí: bit.ly/abc123' })).toBe(false);
-    expect(ok({ mensaje: 'Consigna en falso.xyz/pago' })).toBe(false);
+    // Se rechazan, en el nombre y en el mensaje.
+    for (const falso of ['pago-seguro.info', 'FALSO．CO', 'is.gd/x', 'hxxps://falso.xyz', 'falso。app', 'reserva.click', '<b>Paga</b>']) {
+      expect(ok({ nombre: `Ana ${falso}` }), `nombre: ${falso}`).toBe(false);
+      expect(ok({ mensaje: `Paga en ${falso}` }), `mensaje: ${falso}`).toBe(false);
+    }
     expect(ok({ telefono: 'http://falso.co' })).toBe(false);
     expect(ok({ telefono: '300 111 2233 falso.co' })).toBe(false);
-    expect(ok({ nombre: 'María José Pérez-Gómez', mensaje: 'Hola. ¿Está disponible? Me interesa ver el apto.' })).toBe(true);
-    expect(ok({ nombre: 'Ana M. Pérez', telefono: '+57 300-111-2233' })).toBe(true);
+    // El nombre solo con letras: sin números ni símbolos.
+    expect(ok({ nombre: 'Ana 3001112233' })).toBe(false);
+    expect(ok({ nombre: 'Ana @falso' })).toBe(false);
+    // Pasan.
+    for (const nombre of ['María José', "O'Neil", 'O’Neil', 'J.R.', 'Ana M. Pérez-Gómez']) {
+      expect(ok({ nombre }), nombre).toBe(true);
+    }
+    for (const mensaje of ['8 a.m a 5 p.m', 'No.301 Torre 2', 'Hola. ¿Está disponible? Me interesa.', 'Canon de $1.500.000']) {
+      expect(ok({ mensaje }), mensaje).toBe(true);
+    }
+    expect(ok({ telefono: '+57 300-111-2233' })).toBe(true);
   });
 });

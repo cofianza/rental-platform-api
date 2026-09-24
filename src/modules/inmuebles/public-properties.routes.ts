@@ -44,10 +44,11 @@ router.post(
 );
 
 // POST /api/v1/public/properties/:id/interes — interesado sin cuenta (lead vitrina)
+// Primero la validación y después el tope: los inválidos no cuentan.
 router.post(
   '/:id/interes',
-  interesLimiter,
   validate({ params: propertyIdParamsSchema, body: registrarInteresSchema }),
+  interesLimiter,
   interesadosController.registrarInteres,
 );
 

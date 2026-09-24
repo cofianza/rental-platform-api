@@ -91,14 +91,15 @@ export const passwordResetLimiter = rateLimit({
 
 /**
  * «Me interesa» de la vitrina (sin cuenta): cada envío dispara WhatsApp y
- * correos. Por IP y sumando inmuebles (una oficina o un celular comparten IP);
- * solo cuentan los envíos válidos. El freno fino es el de 24 h por correo o
- * WhatsApp e inmueble, en el servicio.
+ * correos. Por IP y sumando inmuebles (una oficina o un celular comparten IP).
+ * Va DESPUÉS de validate en la ruta: los inválidos no cuentan y todo lo válido
+ * sí (con skipFailedRequests, cortar la conexión descontaba la petición aunque
+ * el aviso saliera). El freno fino es el de 24 h por correo o WhatsApp e
+ * inmueble, en el servicio.
  */
 export const interesLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 20,
-  skipFailedRequests: true,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: {
