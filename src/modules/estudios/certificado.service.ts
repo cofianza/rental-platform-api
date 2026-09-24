@@ -408,9 +408,13 @@ export async function generateCertificatePdf(
           `${formatPct(t.prima_vinculacion_pct)} del canon más IVA, pago único al activar` +
             masIva(t.prima_vinculacion_cop, primaConIva),
         ]);
+        // A1 (Adenda 1 contratos §3.4.2, §3.4.4, §5.9 y respuesta 2): se pierde
+        // si Cofianza cubrió sumas o el arrendador no reportó; es de quien pagó.
         condRows.push([
           'Cashback',
-          `${t.cashback_pct}% de las tarifas mensuales pagadas, al terminar sin moras (no aplica sobre la prima)`,
+          `${formatPct(t.cashback_pct)} de las tarifas mensuales pagadas, a favor de quien las pagó, si al terminar ` +
+            'el contrato Cofianza no tuvo que cubrir sumas y el arrendador cumplió sus obligaciones de reporte; ' +
+            'no aplica sobre la prima',
         ]);
       }
       y = drawTable(doc, condRows, y, contentWidth);

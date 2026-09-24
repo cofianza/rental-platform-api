@@ -343,6 +343,23 @@ describe('IVA de la prima y la tarifa', () => {
   });
 });
 
+// A1: regla del cashback de la Adenda 1 del módulo de contratos (§3.4.2, §3.4.4, §5.9).
+describe('cashback', () => {
+  const REGLA =
+    '30% de las tarifas mensuales pagadas, a favor de quien las pagó, si al terminar el contrato Cofianza no tuvo que ' +
+    'cubrir sumas y el arrendador cumplió sus obligaciones de reporte; no aplica sobre la prima';
+
+  it('imprime la condición nueva, en las tres versiones, y no la vieja de «sin moras»', async () => {
+    for (const d of [DATOS, sinPuntaje(DATOS), paraArrendatario(DATOS)]) {
+      textos.mockClear();
+      await generateCertificatePdf(d, QR);
+      const t = impreso();
+      expect(t).toContain(REGLA);
+      expect(t).not.toContain('sin moras');
+    }
+  });
+});
+
 describe('quién recibe cuál', () => {
   const FIRMANTES = llaveDeVersion(CERT.pdf_storage_key, 'firmantes');
   const ARRENDATARIO = llaveDeVersion(CERT.pdf_storage_key, 'arrendatario');
