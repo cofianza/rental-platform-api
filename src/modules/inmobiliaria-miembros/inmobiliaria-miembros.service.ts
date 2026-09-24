@@ -918,20 +918,24 @@ const yaEnOtra = () =>
  * a una sola inmobiliaria a la vez: activa en dos, el alcance, el rol y la
  * organización de lo que crea salían de la más antigua (tenantScope) y se
  * mezclaban las carteras. Sin caché, como todo camino que modifica datos.
- * El titular no puede salir de su inmobiliaria: si es el único y está vacía,
- * se cierra al aceptar (cerrarInmobiliariaVacia).
+ * No cierra ni cambia nada de la otra: el titular recibe un 409 que dice qué
+ * hacer (si la suya está vacía, la cierra él al salir: salirDeOrg).
  */
 async function vincularMiembro(miembroId: string, perfilId: string, inmobiliariaId: string): Promise<void> {
-  const { data: otra } = await db('inmobiliaria_miembros')
-    .select('id, inmobiliaria_id, rol_miembro')
+  const { data: otra, error: errOtra } = await db('inmobiliaria_miembros')
+    .select('id, inmobiliaria_id, rol_miembro, inmobiliarias(nombre)')
     .eq('perfil_id', perfilId)
     .eq('estado', 'activo')
     .neq('inmobiliaria_id', inmobiliariaId)
     .limit(1)
     .maybeSingle();
+  // Sin poder verificarlo no se une (fallar cerrado).
+  if (errOtra) {
+    logger.error({ error: errOtra.message, perfilId }, 'No se pudo verificar si ya pertenece a otra inmobiliaria');
+    throw noVerificable();
+  }
   const previa = otra as MembresiaPrevia | null;
-  if (previa && previa.rol_miembro !== 'owner') throw yaEnOtra();
-  if (previa) await cerrarInmobiliariaVacia(previa, perfilId);
+  if (previa) throw previa.rol_miembro === 'owner' ? await errorTitularDeOtra(previa, perfilId) : yaEnOtra();
 
   // Condicional: si entretanto la invitación se aceptó o se revocó, no se toca.
   const { data: activada, error } = await db('inmobiliaria_miembros')
@@ -946,90 +950,87 @@ async function vincularMiembro(miembroId: string, perfilId: string, inmobiliaria
     .or(`perfil_id.is.null,perfil_id.eq.${perfilId}`)
     .select('id')
     .maybeSingle();
-  if (error || !activada) {
-    if (previa) await reabrirInmobiliaria(previa);
-    // Dos aceptaciones a la vez: el índice único de la migración 20261001000008 frena la segunda.
-    if (error?.code === '23505' && error.message?.includes('una_activa_por_perfil')) throw yaEnOtra();
-    if (error) {
-      logger.error({ error: error.message, miembroId }, 'Error al vincular miembro');
-      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar la aceptación');
-    }
-    throw AppError.conflict('Esta invitación ya no está vigente. Pide que te la envíen de nuevo.', 'INVITACION_NO_VIGENTE');
+  if (activada) return;
+  // Dos aceptaciones a la vez: el índice único de la migración 20261001000008 frena la segunda.
+  if (error?.code === '23505' && error.message?.includes('una_activa_por_perfil')) throw yaEnOtra();
+  if (error) {
+    logger.error({ error: error.message, miembroId }, 'Error al vincular miembro');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar la aceptación');
   }
-
-  if (previa) {
-    logAudit({
-      usuarioId: perfilId,
-      accion: AUDIT_ACTIONS.INMOBILIARIA_CERRADA,
-      entidad: AUDIT_ENTITIES.INMOBILIARIA,
-      entidadId: previa.inmobiliaria_id,
-      detalle: { motivo: 'su titular se unió a otra inmobiliaria', nueva_inmobiliaria_id: inmobiliariaId },
-    });
-  }
+  // No tocó filas: si otra petición igual ya la aceptó (doble clic), es éxito.
+  const { data: fila } = await db('inmobiliaria_miembros').select('estado, perfil_id').eq('id', miembroId).maybeSingle();
+  const f = fila as { estado: string; perfil_id: string | null } | null;
+  if (f?.estado === 'activo' && f.perfil_id === perfilId) return;
+  throw AppError.conflict('Esta invitación ya no está vigente. Pide que te la envíen de nuevo.', 'INVITACION_NO_VIGENTE');
 }
 
 interface MembresiaPrevia {
   id: string;
   inmobiliaria_id: string;
   rol_miembro: RolMiembro;
+  inmobiliarias?: { nombre: string | null } | null;
 }
 
+const noVerificable = () =>
+  new AppError(503, 'MEMBRESIA_NO_VERIFICABLE', 'No pudimos revisar tu inmobiliaria actual. Intenta de nuevo en un momento.');
+
 /**
- * El titular único de una inmobiliaria sin equipo ni cartera (inmuebles,
- * estudios en curso o créditos) se une a otra: la suya se cierra. Su membresía
- * y las invitaciones pendientes quedan revocadas y la inmobiliaria 'cerrada',
- * sin borrar filas. Con equipo o cartera, 409: traspasa la titularidad o la
- * cierra Cofianza.
+ * La inmobiliaria del titular que quiere irse: ¿hay otros titulares? ¿está
+ * vacía? Vacía = sin otros miembros activos, inmuebles (de la org o a su
+ * nombre), estudios en curso, fichas de solicitantes, créditos sin usar ni
+ * compras de créditos pendientes. Solo una vacía se puede cerrar (salirDeOrg).
  */
-async function cerrarInmobiliariaVacia(previa: MembresiaPrevia, perfilId: string): Promise<void> {
+async function revisarInmobiliariaDelTitular(
+  previa: { id: string; inmobiliaria_id: string },
+  perfilId: string,
+): Promise<{ otrosTitulares: number; vacia: boolean }> {
   const orgId = previa.inmobiliaria_id;
-  const conteos = await Promise.all([
-    db('inmobiliaria_miembros').select('id', { count: 'exact', head: true }).eq('inmobiliaria_id', orgId).eq('estado', 'activo').neq('id', previa.id),
-    db('inmuebles').select('id', { count: 'exact', head: true }).or(`inmobiliaria_id.eq.${orgId},propietario_id.eq.${perfilId}`),
+  const contar = { count: 'exact' as const, head: true };
+  const [equipo, ...cartera] = await Promise.all([
+    db('inmobiliaria_miembros').select('rol_miembro').eq('inmobiliaria_id', orgId).eq('estado', 'activo').neq('id', previa.id),
+    db('inmuebles').select('id', contar).or(`inmobiliaria_id.eq.${orgId},propietario_id.eq.${perfilId}`),
     db('expedientes')
-      .select('id', { count: 'exact', head: true })
+      .select('id', contar)
       .eq('inmobiliaria_id', orgId)
       .not('estado', 'in', '(cerrado,rechazado)')
       .is('cancelado_at', null),
-    db('lotes_creditos_estudios').select('id', { count: 'exact', head: true }).eq('perfil_id', perfilId).gt('cantidad_disponible', 0),
+    db('solicitantes').select('id', contar).eq('inmobiliaria_id', orgId),
+    db('lotes_creditos_estudios').select('id', contar).eq('perfil_id', perfilId).gt('cantidad_disponible', 0),
+    db('compras_creditos_estudios').select('id', contar).eq('perfil_id', perfilId).eq('estado', 'pendiente'),
   ]);
-  if (conteos.some((r) => r.error)) {
-    logger.error({ orgId, perfilId }, 'No se pudo revisar la inmobiliaria del titular que acepta otra invitación');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar la aceptación');
+  if ([equipo, ...cartera].some((r) => r.error)) {
+    logger.error({ orgId, perfilId }, 'No se pudo revisar la inmobiliaria del titular');
+    throw noVerificable();
   }
-  if (conteos.some((r) => (r.count ?? 0) > 0)) {
-    throw AppError.conflict(
-      'Eres titular de otra inmobiliaria con cartera activa. Traspasa la titularidad o pide a Cofianza que la cierre antes de aceptar esta invitación.',
+  const otros = (equipo.data as Array<{ rol_miembro: string }> | null) ?? [];
+  return {
+    otrosTitulares: otros.filter((o) => o.rol_miembro === 'owner').length,
+    vacia: otros.length === 0 && cartera.every((r) => (r.count ?? 0) === 0),
+  };
+}
+
+/** El 409 para el titular de otra inmobiliaria, con lo que puede hacer en su caso. */
+async function errorTitularDeOtra(previa: MembresiaPrevia, perfilId: string): Promise<AppError> {
+  const r = await revisarInmobiliariaDelTitular(previa, perfilId);
+  if (r.otrosTitulares > 0) {
+    return AppError.conflict(
+      'Eres cotitular de otra inmobiliaria. Cambia tu rol a miembro en su equipo y sal de ella antes de aceptar esta invitación.',
       'TITULAR_DE_OTRA_INMOBILIARIA',
     );
   }
-
-  const { error } = await db('inmobiliaria_miembros')
-    .update({ estado: 'revocado', token: null, token_expiracion: null } as never)
-    .eq('inmobiliaria_id', orgId)
-    .or(`id.eq.${previa.id},estado.eq.invitado`);
-  if (error) {
-    logger.error({ error: error.message, orgId }, 'No se pudo cerrar la inmobiliaria vacía');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar la aceptación');
-  }
-  // Sin la migración 20261001000008 el CHECK aún no admite 'cerrada': queda la
-  // membresía revocada (lo que importa) y la constancia en la bitácora.
-  const { error: errOrg } = await db('inmobiliarias').update({ estado: 'cerrada' } as never).eq('id', orgId);
-  if (errOrg) logger.warn({ error: errOrg.message, orgId }, 'No se pudo marcar la inmobiliaria como cerrada');
-}
-
-/** Si la aceptación falla después de cerrarla, la inmobiliaria vuelve a quedar como estaba. */
-async function reabrirInmobiliaria(previa: MembresiaPrevia): Promise<void> {
-  const [m, o] = await Promise.all([
-    db('inmobiliaria_miembros').update({ estado: 'activo' } as never).eq('id', previa.id),
-    db('inmobiliarias').update({ estado: 'activa' } as never).eq('id', previa.inmobiliaria_id),
-  ]);
-  if (m.error || o.error) {
-    logger.error(
-      { orgId: previa.inmobiliaria_id, miembroId: previa.id },
-      'Falló la aceptación y no se pudo reabrir la inmobiliaria del titular: reactivar su membresía a mano',
+  if (!r.vacia) {
+    return AppError.conflict(
+      'Eres titular de otra inmobiliaria con equipo o cartera activa. Traspasa la titularidad o pide a Cofianza que la cierre antes de aceptar esta invitación.',
+      'TITULAR_DE_OTRA_INMOBILIARIA',
     );
   }
+  const nombre = previa.inmobiliarias?.nombre?.trim() || 'tu inmobiliaria';
+  return new AppError(
+    409,
+    'TITULAR_DE_OTRA_INMOBILIARIA',
+    `Eres titular de ${nombre}, que no tiene equipo ni cartera. Ciérrala para aceptar esta invitación.`,
+    { puede_cerrar: true, inmobiliaria: nombre },
+  );
 }
 
 /**

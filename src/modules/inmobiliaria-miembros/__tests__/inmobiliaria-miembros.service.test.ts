@@ -77,7 +77,6 @@ import {
   listMiembros,
 } from '../inmobiliaria-miembros.service';
 import { invalidateMembresiasCache, resolveRolMiembro } from '@/lib/tenantScope';
-import { logAudit } from '@/lib/auditLog';
 
 const ownerMembership = {
   data: {
@@ -255,8 +254,6 @@ describe('listMiembros — la tarjeta del responsable no paga otra ida por la me
   });
 });
 
-const updates = () => (chain.update as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as Record<string, unknown>);
-
 const invitacionDeB = {
   data: {
     id: 'm-b',
@@ -301,7 +298,7 @@ describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
   });
 
   it('la activación es condicional: sigue pendiente y es para esta persona; si no, 409', async () => {
-    enqueue(invitacionDeB, { data: null }, { data: null, error: null });
+    enqueue(invitacionDeB, { data: null }, { data: null, error: null }, { data: { estado: 'revocado', perfil_id: null } });
     await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'INVITACION_NO_VIGENTE',
@@ -321,57 +318,88 @@ describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
     });
   });
 
+  it('doble clic: la segunda no toca filas, relee y ve que ya es suya: éxito, no 409', async () => {
+    enqueue(invitacionDeB, { data: null }, { data: null, error: null }, { data: { estado: 'activo', perfil_id: 'p-asesora' } });
+    await expect(aceptarInvitacionMiembro('tok', asesora)).resolves.toMatchObject({ redirect: '/dashboard' });
+  });
+
+  it('activa con OTRO perfil no cuenta como suya: 409', async () => {
+    enqueue(invitacionDeB, { data: null }, { data: null, error: null }, { data: { estado: 'activo', perfil_id: 'p-otra' } });
+    await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({ errorCode: 'INVITACION_NO_VIGENTE' });
+  });
+
+  it('si no se puede verificar la otra membresía, no se une (503)', async () => {
+    enqueue(invitacionDeB, { data: null, error: { message: 'caída' } });
+    await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({
+      statusCode: 503,
+      errorCode: 'MEMBRESIA_NO_VERIFICABLE',
+    });
+    expect(chain.update).not.toHaveBeenCalled();
+  });
+
   it('el exmiembro reinvitado (conserva su perfil_id) puede volver a aceptar', async () => {
     enqueue({ data: { ...invitacionDeB.data, perfil_id: 'p-asesora' }, error: null }, { data: null }, activada);
     await expect(aceptarInvitacionMiembro('tok', asesora)).resolves.toMatchObject({ redirect: '/dashboard' });
   });
 });
 
-describe('titular de otra inmobiliaria que acepta una invitación', () => {
+describe('titular de otra inmobiliaria que acepta una invitación: 409 según su caso, sin tocar nada', () => {
   const titular = { id: 'p-titular', email: 'asesora@correo.co', rol: 'inmobiliaria' } as never;
-  const suInmobiliaria = { data: { id: 'm-a', inmobiliaria_id: 'org-a', rol_miembro: 'owner' } };
-  // equipo, inmuebles, estudios en curso, créditos
-  const vacia = () => [{ count: 0 }, { count: 0 }, { count: 0 }, { count: 0 }];
-  const cartera =
-    'Eres titular de otra inmobiliaria con cartera activa. Traspasa la titularidad o pide a Cofianza que la cierre antes de aceptar esta invitación.';
+  const suInmobiliaria = {
+    data: { id: 'm-a', inmobiliaria_id: 'org-a', rol_miembro: 'owner', inmobiliarias: { nombre: 'Inmobiliaria A' } },
+  };
+  // equipo (otros activos), inmuebles, estudios en curso, fichas, créditos, compras pendientes
+  const vacia = () => [{ data: [] }, { count: 0 }, { count: 0 }, { count: 0 }, { count: 0 }, { count: 0 }];
 
-  it('única titular de una inmobiliaria vacía: se cierra (sin borrar nada) y se une, con constancia en la bitácora', async () => {
-    enqueue(invitacionDeB, suInmobiliaria, ...vacia(), { error: null }, { error: null }, activada);
-    await expect(aceptarInvitacionMiembro('tok', titular)).resolves.toMatchObject({ redirect: '/dashboard' });
-    expect(updates()).toEqual([
-      { estado: 'revocado', token: null, token_expiracion: null }, // su membresía y las invitaciones pendientes
-      { estado: 'cerrada' },
-      expect.objectContaining({ perfil_id: 'p-titular', estado: 'activo' }),
-    ]);
-    expect(chain.or).toHaveBeenCalledWith('id.eq.m-a,estado.eq.invitado');
-    expect(chain.delete).not.toHaveBeenCalled();
-    expect(logAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ accion: 'inmobiliaria_cerrada', entidadId: 'org-a', detalle: expect.objectContaining({ nueva_inmobiliaria_id: 'org-b' }) }),
-    );
-  });
-
-  it.each([
-    ['otro miembro activo', 0],
-    ['inmuebles', 1],
-    ['estudios en curso', 2],
-    ['créditos sin usar', 3],
-  ])('con %s: 409 con otro mensaje, y no toca nada', async (_caso, i) => {
-    const conteos = vacia();
-    conteos[i as number] = { count: 1 };
-    enqueue(invitacionDeB, suInmobiliaria, ...conteos);
+  it('única titular de una inmobiliaria vacía: 409 con puede_cerrar y el nombre, y no cierra nada', async () => {
+    enqueue(invitacionDeB, suInmobiliaria, ...vacia());
     await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'TITULAR_DE_OTRA_INMOBILIARIA',
-      message: cartera,
+      message: 'Eres titular de Inmobiliaria A, que no tiene equipo ni cartera. Ciérrala para aceptar esta invitación.',
+      details: { puede_cerrar: true, inmobiliaria: 'Inmobiliaria A' },
     });
     expect(chain.update).not.toHaveBeenCalled();
   });
 
-  it('si la aceptación falla después de cerrarla, la reabre y no queda en la bitácora', async () => {
-    enqueue(invitacionDeB, suInmobiliaria, ...vacia(), { error: null }, { error: null }, { data: null, error: null }, { error: null }, { error: null });
-    await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({ statusCode: 409, errorCode: 'INVITACION_NO_VIGENTE' });
-    expect(updates().slice(-2)).toEqual([{ estado: 'activo' }, { estado: 'activa' }]);
-    expect(logAudit).not.toHaveBeenCalledWith(expect.objectContaining({ accion: 'inmobiliaria_cerrada' }));
+  it.each([
+    ['otro miembro activo', 0, { data: [{ rol_miembro: 'miembro' }] }],
+    ['inmuebles', 1, { count: 1 }],
+    ['estudios en curso', 2, { count: 1 }],
+    ['fichas de solicitantes', 3, { count: 1 }],
+    ['créditos sin usar', 4, { count: 1 }],
+    ['una compra de créditos pendiente', 5, { count: 1 }],
+  ])('con %s: 409 de traspasar la titularidad, sin puede_cerrar', async (_caso, i, valor) => {
+    const r = vacia();
+    r[i as number] = valor as never;
+    enqueue(invitacionDeB, suInmobiliaria, ...r);
+    const e = await aceptarInvitacionMiembro('tok', titular).catch((x: unknown) => x as { details?: unknown });
+    expect(e).toMatchObject({
+      statusCode: 409,
+      errorCode: 'TITULAR_DE_OTRA_INMOBILIARIA',
+      message:
+        'Eres titular de otra inmobiliaria con equipo o cartera activa. Traspasa la titularidad o pide a Cofianza que la cierre antes de aceptar esta invitación.',
+    });
+    expect(e.details).toBeUndefined();
+    expect(chain.update).not.toHaveBeenCalled();
+  });
+
+  it('cotitular: no se le habla de traspasar la titularidad', async () => {
+    const r = vacia();
+    r[0] = { data: [{ rol_miembro: 'owner' }] } as never;
+    enqueue(invitacionDeB, suInmobiliaria, ...r);
+    await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'TITULAR_DE_OTRA_INMOBILIARIA',
+      message: 'Eres cotitular de otra inmobiliaria. Cambia tu rol a miembro en su equipo y sal de ella antes de aceptar esta invitación.',
+    });
+  });
+
+  it('si no se puede revisar su inmobiliaria: 503', async () => {
+    const r = vacia();
+    r[3] = { count: null, error: { message: 'caída' } } as never;
+    enqueue(invitacionDeB, suInmobiliaria, ...r);
+    await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({ statusCode: 503 });
   });
 });
 
