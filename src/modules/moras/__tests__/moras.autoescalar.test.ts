@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Cron de auto-escalado de moras. Lo que se cuida aquí es que un inquilino
@@ -62,10 +62,14 @@ const mora = (id: string, diasDesdeReporte: number) => ({
 });
 
 beforeEach(() => {
+  // Martes 10 a. m. en Colombia: dentro del horario de cobranza (Ley 2300).
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-29T10:00:00-05:00'));
   resetQueues();
   ops.length = 0;
   mockEnviarTemplate.mockClear();
 });
+afterEach(() => vi.useRealTimers());
 
 describe('autoEscalar', () => {
   it('una mora vieja en fase_1 sube a fase_2 y NO salta a fase_3 en la misma corrida', async () => {
@@ -73,15 +77,17 @@ describe('autoEscalar', () => {
     // días, así que sin el filtro por fase_2_at saldría también en la consulta
     // de fase 3.
     enqueue('moras_tickets',
+      { data: [], error: null },                      // WhatsApp programados → ninguno
       { data: [mora('m1', 12)], error: null },        // select fase_1
       { data: [{ id: 'm1' }], error: null },          // update → fase_2 (1 fila)
-      { data: null, error: null },                    // agregarMensajeInterno
+      { data: [], error: null },                      // moras del teléfono (sin gestión previa)
+      { data: null, error: null },                    // whatsapp_programado_para → null
       { data: [], error: null },                      // select fase_2 → vacío
     );
 
     const r = await autoEscalar();
 
-    expect(r).toEqual({ aFase2: 1, aFase3: 0 });
+    expect(r).toEqual({ aFase2: 1, aFase3: 0, cobrosProgramados: 0 });
     expect(mockEnviarTemplate).toHaveBeenCalledTimes(1);
     expect(mockEnviarTemplate.mock.calls[0][0]).toMatchObject({ template: 'MORA_FASE_2' });
 
@@ -92,6 +98,7 @@ describe('autoEscalar', () => {
 
   it('el UPDATE es condicional al estado: si no afectó filas no manda WhatsApp', async () => {
     enqueue('moras_tickets',
+      { data: [], error: null },                      // WhatsApp programados → ninguno
       { data: [mora('m2', 5)], error: null },         // select fase_1
       { data: [], error: null },                      // update no afectó nada (otra corrida ya la movió)
       { data: [], error: null },                      // select fase_2 → vacío
@@ -99,7 +106,7 @@ describe('autoEscalar', () => {
 
     const r = await autoEscalar();
 
-    expect(r).toEqual({ aFase2: 0, aFase3: 0 });
+    expect(r).toEqual({ aFase2: 0, aFase3: 0, cobrosProgramados: 0 });
     expect(mockEnviarTemplate).not.toHaveBeenCalled();
 
     const updateEqs = ops
@@ -110,15 +117,16 @@ describe('autoEscalar', () => {
 
   it('una mora con 6 días en fase_2 sí escala a fase_3', async () => {
     enqueue('moras_tickets',
+      { data: [], error: null },                      // WhatsApp programados → ninguno
       { data: [], error: null },                      // select fase_1 → vacío
       { data: [mora('m3', 12)], error: null },        // select fase_2
       { data: [{ id: 'm3' }], error: null },          // update → fase_3 (1 fila)
-      { data: null, error: null },                    // agregarMensajeInterno
+      { data: [], error: null },                      // moras del teléfono (sin gestión previa)
     );
 
     const r = await autoEscalar();
 
-    expect(r).toEqual({ aFase2: 0, aFase3: 1 });
+    expect(r).toEqual({ aFase2: 0, aFase3: 1, cobrosProgramados: 0 });
     expect(mockEnviarTemplate).toHaveBeenCalledTimes(1);
     expect(mockEnviarTemplate.mock.calls[0][0]).toMatchObject({ template: 'MORA_FASE_3' });
   });

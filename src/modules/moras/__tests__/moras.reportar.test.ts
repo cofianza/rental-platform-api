@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Reportar y escalar moras: lo que queda escrito y lo que se le dice a la
@@ -84,6 +84,9 @@ const mensajesDeSistema = () =>
     .map((o) => (o.args[0] as { mensaje: string }).mensaje);
 
 beforeEach(() => {
+  // Martes 10 a. m. en Colombia: dentro del horario de cobranza (Ley 2300).
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-29T10:00:00-05:00'));
   resetQueues();
   ops.length = 0;
   mockEnviarTemplate.mockReset();
@@ -91,6 +94,7 @@ beforeEach(() => {
   mockNotificar.mockReset().mockResolvedValue(undefined);
   mockListOperators.mockReset().mockResolvedValue([]);
 });
+afterEach(() => vi.useRealTimers());
 
 describe('reportarMora — el aviso al inquilino', () => {
   it('sin teléfono no afirma que se le avisó y devuelve el estado del WhatsApp', async () => {
@@ -205,6 +209,8 @@ describe('fechas de la mora', () => {
         error: null,
       },
       { data: [{ id: 'm1' }], error: null },
+      { data: [], error: null }, // moras del teléfono (sin gestión previa)
+      { data: null, error: null }, // whatsapp_programado_para → null
       { data: { id: 'm1' }, error: null },
     );
     await escalarMora('m1', {}, 'op', 'operador_analista');
@@ -237,11 +243,12 @@ describe('aviso al equipo de Cofianza', () => {
     mockEnviarTemplate.mockResolvedValue('aceptado');
     mockListOperators.mockResolvedValue([{ id: 'op1' }]);
     // Las dos las escala Cofianza: el dueño no adelanta la Fase 2 ni pide la 3 (P27).
-    enqueue('moras_tickets', moraEnFase('fase_1'), { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
+    const escalado = [{ data: [{ id: 'm1' }], error: null }, { data: [], error: null }, { data: null, error: null }, { data: { id: 'm1' }, error: null }];
+    enqueue('moras_tickets', moraEnFase('fase_1'), ...escalado);
     await escalarMora('m1', {}, 'op2', 'operador_analista');
     expect(avisos()).toEqual([]);
 
-    enqueue('moras_tickets', moraEnFase('fase_2'), { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
+    enqueue('moras_tickets', moraEnFase('fase_2'), ...escalado);
     await escalarMora('m1', {}, 'op2', 'operador_analista');
     expect(avisos()).toEqual([expect.objectContaining({ userId: 'op1', tipo: 'mora.fase_3', titulo: 'Mora en Fase 3 — MOR-2026-007' })]);
   });
@@ -250,11 +257,12 @@ describe('aviso al equipo de Cofianza', () => {
     mockEnviarTemplate.mockResolvedValue('aceptado');
     mockListOperators.mockResolvedValue([{ id: 'op1' }]);
     enqueue('moras_tickets',
+      { data: [], error: null }, // ningún WhatsApp programado
       { data: [], error: null }, // nada en fase_1
       { data: [moraEnFase('fase_2').data], error: null },
       { data: [{ id: 'm1' }], error: null }, // update → fase_3
     );
-    await expect(autoEscalar()).resolves.toEqual({ aFase2: 0, aFase3: 1 });
+    await expect(autoEscalar()).resolves.toEqual({ aFase2: 0, aFase3: 1, cobrosProgramados: 0 });
     expect(avisos()).toEqual([expect.objectContaining({ userId: 'op1', tipo: 'mora.fase_3' })]);
   });
 

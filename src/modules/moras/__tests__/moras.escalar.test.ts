@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Escalado manual y cola de moras. El escalado escribe condicionado a la fase
@@ -65,10 +65,14 @@ const mora = (estado: string, reportado_at = '2026-09-01T00:00:00Z') => ({
 });
 
 beforeEach(() => {
+  // Martes 10 a. m. en Colombia: dentro del horario de cobranza (Ley 2300).
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-09-29T10:00:00-05:00'));
   resetQueues();
   ops.length = 0;
   mockEnviarTemplate.mockClear();
 });
+afterEach(() => vi.useRealTimers());
 
 describe('escalarMora', () => {
   it('si otro ya movió la fila (update sin filas), responde 409 y no manda el WhatsApp', async () => {
@@ -92,6 +96,8 @@ describe('escalarMora', () => {
     enqueue('moras_tickets',
       mora('fase_1'),
       { data: [{ id: 'm1' }], error: null },   // update → 1 fila
+      { data: [], error: null },               // moras del teléfono (sin gestión previa)
+      { data: null, error: null },             // whatsapp_programado_para → null
       { data: { id: 'm1' }, error: null },     // getMoraById
     );
     await escalarMora('m1', { desde: 'fase_1' }, 'op', 'operador_analista');
