@@ -497,8 +497,14 @@ describe('quién recibe cuál', () => {
       expedientes: { ...ESTUDIO.expedientes, estado: 'cerrado', estado_pre_cancelacion: 'condicionado' },
     };
 
-    enqueue('estudios', { data: cancelado, error: null });
+    // Regenerar uno emitido: ya no tiene efecto. Emitir uno que nunca existió: no hay vigente.
+    enqueue('estudios', { data: { ...cancelado, certificado_url: CERT.pdf_storage_key }, error: null });
     await expect(generarCertificado('est-1', 'u-1', undefined, 'operador_analista')).rejects.toMatchObject(SIN_EFECTO);
+    enqueue('estudios', { data: cancelado, error: null });
+    await expect(generarCertificado('est-1', 'u-1', undefined, 'operador_analista')).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Este estudio no tiene un certificado vigente.',
+    });
     enqueue('estudios', { data: cancelado, error: null });
     await expect(crcParaFirmantes(CERT)).rejects.toMatchObject(SIN_EFECTO);
     enqueue('estudios', { data: cancelado, error: null });

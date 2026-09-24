@@ -934,7 +934,11 @@ async function estadoAntesDelCierre(expedienteId: string): Promise<string | null
  * generan a demanda: con el estudio de hoy pendiente, rechazado, negado por el
  * analista o cerrado sin aprobarse, regenerar imprimiria un resultado que ya no es.
  */
-async function assertCertificable(e: Record<string, unknown>): Promise<DecisionCofianza> {
+async function assertCertificable(
+  e: Record<string, unknown>,
+  /** Hay un certificado emitido: decide el mensaje si el caso quedó sin efecto. */
+  emitido = !!e.certificado_url,
+): Promise<DecisionCofianza> {
   // Los datos de la persona salen del expediente (el titular): con la fila del
   // co-arrendatario salia un CRC a nombre del titular con el resultado y el
   // score de otra persona, verificable por QR.
@@ -959,8 +963,12 @@ async function assertCertificable(e: Record<string, unknown>): Promise<DecisionC
   const exp = e.expedientes as Omit<ExpedienteDecision, 'id'> | null;
   const decision = await decisionDeCofianza(exp && { ...exp, id: e.expediente_id as string });
   if (quedoSinEfecto(decision)) {
-    // Neutro: una cancelación no es un «no se aprobó».
-    throw AppError.conflict('Este certificado ya no tiene efecto.', 'ESTUDIO_NO_CERTIFICABLE');
+    // Neutro: una cancelación no es un «no se aprobó». Si nunca se emitió, no
+    // hay un certificado que haya perdido efecto.
+    throw AppError.conflict(
+      emitido ? 'Este certificado ya no tiene efecto.' : 'Este estudio no tiene un certificado vigente.',
+      'ESTUDIO_NO_CERTIFICABLE',
+    );
   }
   return decision;
 }
@@ -1233,7 +1241,7 @@ export function llaveDeVersion(llaveCompleta: string, version: VersionReducida):
  */
 async function crcReducido(cert: CertGuardado, version: VersionReducida): Promise<{ key: string; pdf: Buffer }> {
   const e = await leerEstudioCrc(cert.estudio_id);
-  const decision = await assertCertificable(e);
+  const decision = await assertCertificable(e, true);
   const key = llaveDeVersion(cert.pdf_storage_key, version);
   const { data } = await supabase.storage.from(BUCKET_NAME).download(key);
   if (data) return { key, pdf: Buffer.from(await data.arrayBuffer()) };
