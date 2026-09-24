@@ -13,6 +13,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
+import { ESTADOS_VINCULADO, evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
 import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
 import {
   countVitrinaVisitasMes,
@@ -271,18 +272,28 @@ async function fetchContratoIdsConMora(contratoIds: string[]): Promise<Set<strin
   return out;
 }
 
-// Mapa expediente_id → nombre del coarrendatario.
+// Mapa expediente_id → nombre del coarrendatario que cuenta (P2: aceptó y su
+// evaluación terminó sin salir rechazada). Uno que declinó o salió rechazado
+// no está en el contrato.
 async function fetchCoarrendatariosPorExpediente(expedienteIds: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (expedienteIds.length === 0) return out;
   const { data, error } = await (
     supabase.from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>
   )
-    .select('expediente_id, nombre, apellido')
-    .in('expediente_id', expedienteIds);
+    .select('expediente_id, nombre, apellido, estudios(estado, resultado)')
+    .in('expediente_id', expedienteIds)
+    .in('estado', ESTADOS_VINCULADO);
   if (error) throw fromSupabaseError(error);
-  for (const c of (data ?? []) as Array<{ expediente_id: string; nombre: string | null; apellido: string | null }>) {
-    if (!out.has(c.expediente_id)) out.set(c.expediente_id, `${c.nombre ?? ''} ${c.apellido ?? ''}`.trim());
+  for (const c of (data ?? []) as Array<{
+    expediente_id: string;
+    nombre: string | null;
+    apellido: string | null;
+    estudios: { estado: string | null; resultado: string | null } | null;
+  }>) {
+    if (evaluacionCuenta(c.estudios) && !out.has(c.expediente_id)) {
+      out.set(c.expediente_id, `${c.nombre ?? ''} ${c.apellido ?? ''}`.trim());
+    }
   }
   return out;
 }

@@ -179,7 +179,9 @@ describe('listInquilinos()', () => {
       contratos: { data: [contratoConSolicitante] },
       estudios: { data: [{ expediente_id: 'e1', score: 80, resultado: 'aprobado', created_at: '2026-01-01' }] },
       moras_tickets: { data: [] },
-      expediente_coarrendatarios: { data: [{ expediente_id: 'e1', nombre: 'Pedro', apellido: 'Gómez' }] },
+      expediente_coarrendatarios: {
+        data: [{ expediente_id: 'e1', nombre: 'Pedro', apellido: 'Gómez', estudios: { estado: 'completado', resultado: 'aprobado' } }],
+      },
     });
 
     const rows = await secciones.listInquilinos();
@@ -221,6 +223,19 @@ describe('listInquilinos()', () => {
 
     expect(estudiosChain!.neq).toHaveBeenCalledWith('tipo', 'con_coarrendatario');
     expect(estudiosChain!.neq).toHaveBeenCalledWith('resultado', 'pendiente');
+  });
+
+  it('P2: un coarrendatario con la evaluación rechazada no figura (no está en el contrato)', async () => {
+    byTable({
+      contratos: { data: [contratoConSolicitante] },
+      estudios: { data: [] },
+      moras_tickets: { data: [] },
+      expediente_coarrendatarios: {
+        data: [{ expediente_id: 'e1', nombre: 'Pedro', apellido: 'Gómez', estudios: { estado: 'completado', resultado: 'rechazado' } }],
+      },
+    });
+
+    expect((await secciones.listInquilinos())[0].coarrendatario).toBeNull();
   });
 
   it('marca pago=mora cuando el contrato tiene mora activa', async () => {
