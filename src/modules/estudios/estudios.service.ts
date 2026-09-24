@@ -1672,7 +1672,7 @@ export async function registrarResultado(
   // 1. Get estudio — verify exists, estado, and resultado still pendiente
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, expediente_id, canon_evaluado, proveedor')
+    .select('id, estado, resultado, expediente_id, canon_evaluado, proveedor, tipo')
     .eq('id', estudioId)
     .single();
 
@@ -1687,6 +1687,7 @@ export async function registrarResultado(
     expediente_id: string;
     canon_evaluado: number | string | null;
     proveedor: string | null;
+    tipo: string | null;
   };
 
   // Tenant guard: registrar (irreversiblemente) el resultado es una mutación
@@ -1753,6 +1754,26 @@ export async function registrarResultado(
     datosCrudos: null,
     decision,
   });
+
+  // 2.55. P33 (Adenda 2 §5/§5.1): un estudio condicionado se aprueba solo por la
+  //       revisión manual, que pide V7/V9, fundamento y documentos consultados.
+  //       Sin esto, una re-evaluación hija (o cualquier registro a mano)
+  //       aprobada lo sacaba de condicionado por la puerta lateral. El estudio
+  //       del co-arrendatario no cuenta: su resultado no aprueba el caso, lo
+  //       pondera la revisión.
+  if (final.resultado === 'aprobado' && est.tipo !== 'con_coarrendatario') {
+    const { data: exp } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('estado')
+      .eq('id', est.expediente_id)
+      .maybeSingle();
+    if ((exp as { estado?: string } | null)?.estado === 'condicionado') {
+      throw AppError.badRequest(
+        'Este estudio está en revisión manual: se aprueba con «Aprobar estudio», que pide la puntuación, el fundamento y los documentos consultados.',
+        'EVALUACION_REQUERIDA',
+      );
+    }
+  }
 
   // 2.6. CANON CONGELADO — el otro camino que llega a 'completado'.
   //
@@ -3024,7 +3045,12 @@ export async function barrerEstudiosEnProcesoColgados(): Promise<void> {
 // Re-evaluacion: get presigned URL for soporte upload
 // ============================================================
 
-const RESULTADOS_REEVALUABLES = ['rechazado', 'condicionado'];
+// P33 (Adenda 2 §5/§5.1): la re-evaluación con soportes es la apelación del no
+// aprobado. El condicionado se resuelve solo con la revisión manual («Aprobar
+// estudio» o «Cambiar estado»), que pide V7/V9, fundamento y documentos.
+const RESULTADOS_REEVALUABLES = ['rechazado'];
+const MENSAJE_NO_REEVALUABLE =
+  'Solo se re-evalúa una evaluación completada y rechazada. Un estudio condicionado se resuelve con la revisión manual («Aprobar estudio» o «Cambiar estado»).';
 const MAX_REEVALUACIONES = 2;
 /** Politica §8: "plazo para reevaluar si el solicitante subsana inconsistencias: 15 dias habiles". */
 const PLAZO_REEVALUACION_DIAS_HABILES = 15;
@@ -3094,10 +3120,7 @@ export async function getSoportePresignedUrl(
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
-    throw AppError.badRequest(
-      'Solo se pueden subir documentos soporte para estudios completados con resultado rechazado o condicionado',
-      'ESTUDIO_NO_REEVALUABLE',
-    );
+    throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
   }
 
   // Los soportes solo sirven para re-evaluar: fuera del plazo no se firma la
@@ -3162,10 +3185,7 @@ export async function confirmarSoporteUpload(
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
   if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
-    throw AppError.badRequest(
-      'Solo se pueden subir documentos soporte para estudios rechazados o condicionados',
-      'ESTUDIO_NO_REEVALUABLE',
-    );
+    throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
   }
 
   // 2. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio)
@@ -3237,7 +3257,7 @@ export async function solicitarReEvaluacion(
   ip?: string,
   userRol?: string,
 ) {
-  // 1. Validate estudio completado + rechazado/condicionado
+  // 1. Validate estudio completado + rechazado
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado, resultado, tipo, proveedor, expediente_id, duracion_contrato_meses, pago_por, estudio_padre_id, fecha_completado')
@@ -3266,8 +3286,8 @@ export async function solicitarReEvaluacion(
   // volver a consultar el buro por el.
   //
   // Salvo que el estudio YA se haya cobrado, que es el caso normal aqui: la
-  // re-evaluacion se le ofrece al gestor sobre un estudio condicionado o
-  // rechazado — o sea despues del pago — y no genera un cobro nuevo (no crea
+  // re-evaluacion se le ofrece al gestor sobre un estudio rechazado — o sea
+  // despues del pago — y no genera un cobro nuevo (no crea
   // ningun pago; solo inserta el estudio hijo). Bloquearla despues de que el
   // gestor subio los soportes seria cobrar y no entregar. Ver estudioYaCobrado.
   await assertCanonDentroDelTope({
@@ -3277,10 +3297,7 @@ export async function solicitarReEvaluacion(
   });
 
   if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
-    throw AppError.badRequest(
-      'Solo se puede solicitar re-evaluacion para estudios completados con resultado rechazado o condicionado',
-      'ESTUDIO_NO_REEVALUABLE',
-    );
+    throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
   }
 
   // Politica §8: pasados 15 dias habiles desde que se completo, ya no es una
@@ -3362,7 +3379,7 @@ export async function solicitarReEvaluacion(
       resultado: 'pendiente',
       duracion_contrato_meses: est.duracion_contrato_meses,
       pago_por: est.pago_por,
-      observaciones: input.observaciones || null,
+      observaciones: input.observaciones,
       solicitado_por: userId,
       estudio_padre_id: estudioId,
     } as never)
@@ -3388,6 +3405,7 @@ export async function solicitarReEvaluacion(
         estudio_id: newId,
         estudio_padre_id: estudioId,
         numero_reevaluacion: depth + 1,
+        fundamento: input.observaciones,
       },
     } as never);
 
@@ -3405,6 +3423,7 @@ export async function solicitarReEvaluacion(
       estudio_padre_id: estudioId,
       expediente_id: est.expediente_id,
       numero_reevaluacion: depth + 1,
+      fundamento: input.observaciones,
     },
     ip,
   });

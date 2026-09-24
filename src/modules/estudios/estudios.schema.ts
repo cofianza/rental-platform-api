@@ -215,8 +215,14 @@ export const reasignarEstudioSchema = z.object({
   inmueble_id_destino: z.string().uuid('ID de inmueble inválido'),
 });
 
+// P33: la re-evaluación es la apelación del no aprobado y exige fundamento
+// (mismo mínimo que el de la revisión manual).
 export const reEvaluarSchema = z.object({
-  observaciones: z.string().max(2000, 'Observaciones no deben exceder 2000 caracteres').optional(),
+  observaciones: z
+    .string()
+    .trim()
+    .min(10, 'Escribe el fundamento de la reevaluación (mínimo 10 caracteres).')
+    .max(2000, 'El fundamento no debe exceder 2000 caracteres'),
 });
 
 // Body opcional para POST /estudios/:id/enviar-enlace — permite corregir el

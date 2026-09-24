@@ -1,13 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // ============================================================
 // Politica §8: 15 dias habiles para re-evaluar. solicitarReEvaluacion ya lo
 // validaba, pero el historial seguia diciendo `puede_reevaluar: true` y la
 // URL de subida de soportes se firmaba igual: el gestor subia documentos y el
 // 400 llegaba al final. Mock de Supabase con colas por tabla.
+//
+// P33: la re-evaluacion es solo del no aprobado y exige fundamento; el
+// condicionado se resuelve con la revision manual.
 // ============================================================
 
-const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom } = vi.hoisted(() => {
+const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const next = (table: string): Res => {
@@ -33,6 +36,16 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom } = vi.hoisted(() =>
     mockFrom: vi.fn((table: string) => chainFor(table)),
     mockStorageFrom: vi.fn(() => ({
       createSignedUploadUrl: vi.fn(async () => ({ data: { signedUrl: 'https://up', token: 't' }, error: null })),
+    })),
+    // Lo que el analista registra pasa tal cual (sin reglas duras ni motor).
+    mockResolver: vi.fn(async (a: { resultadoPropuesto: string }) => ({
+      resultado: a.resultadoPropuesto,
+      observaciones: null,
+      motivoRechazo: null,
+      salida: null,
+      veredicto: { rechaza: false, reglas: [] },
+      apisFallidas: [],
+      revisionManual: null,
     })),
   };
 });
@@ -61,8 +74,14 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarResponsableExpediente: vi.fn(),
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
+vi.mock('../reglas-duras', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../reglas-duras')>()),
+  resolverResultadoEstudio: mockResolver,
+}));
 
-import { getHistorialReEvaluacion, getSoportePresignedUrl } from '../estudios.service';
+import { supabase } from '@/lib/supabase';
+import { getHistorialReEvaluacion, getSoportePresignedUrl, registrarResultado } from '../estudios.service';
+import { reEvaluarSchema } from '../estudios.schema';
 
 const hace = (dias: number) => new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
 
@@ -89,6 +108,7 @@ function encolarHistorial(fechaCompletado: string) {
 beforeEach(() => {
   queues.clear();
   mockStorageFrom.mockClear();
+  (supabase.rpc as unknown as Mock).mockReset();
 });
 
 describe('plazo de re-evaluacion (Politica §8)', () => {
@@ -117,5 +137,61 @@ describe('plazo de re-evaluacion (Politica §8)', () => {
       ),
     ).rejects.toMatchObject({ statusCode: 400, errorCode: 'REEVALUACION_FUERA_DE_PLAZO' });
     expect(mockStorageFrom).not.toHaveBeenCalled();
+  });
+});
+
+describe('condicionado: se resuelve con la revision manual (P33)', () => {
+  const condicionado = { ...rechazado(hace(1)), resultado: 'condicionado' };
+  const soporte = { nombre_original: 'a.pdf', tipo_mime: 'application/pdf', tamano_bytes: 10, proposito: 'otros_soportes' };
+
+  it('no se firman soportes ni el historial ofrece re-evaluar', async () => {
+    enqueue('estudios', { data: condicionado, error: null });
+    await expect(getSoportePresignedUrl('est-1', soporte as never, 'u-1', 'operador_analista'))
+      .rejects.toMatchObject({ statusCode: 400, errorCode: 'ESTUDIO_NO_REEVALUABLE' });
+    expect(mockStorageFrom).not.toHaveBeenCalled();
+
+    enqueue(
+      'estudios',
+      { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null },
+      { data: { id: 'est-1', estudio_padre_id: null }, error: null },
+      { data: [condicionado], error: null },
+    );
+    enqueue('estudios_documentos_soporte', { data: [], error: null });
+    expect((await getHistorialReEvaluacion('est-1', 'u-1', 'operador_analista')).puede_reevaluar).toBe(false);
+  });
+
+  it('la re-evaluacion exige fundamento', () => {
+    expect(reEvaluarSchema.safeParse({}).success).toBe(false);
+    expect(reEvaluarSchema.safeParse({ observaciones: '   corto  ' }).success).toBe(false);
+    expect(reEvaluarSchema.safeParse({ observaciones: 'Nuevo certificado laboral con ingresos' }).success).toBe(true);
+  });
+
+  const hija = (tipo: string) => ({
+    id: 'est-2', estado: 'en_proceso', resultado: 'pendiente', expediente_id: 'exp-1',
+    canon_evaluado: 2_000_000, proveedor: 'manual', tipo,
+  });
+  const aprobar = () =>
+    registrarResultado('est-2', { resultado: 'aprobado', score: 700 } as never, 'u-1', undefined, 'operador_analista');
+  // Error del RPC: prueba que el registro paso el guard y llego a escribir.
+  const rpcLlega = () =>
+    (supabase.rpc as unknown as Mock).mockResolvedValue({ error: { message: 'Solo se puede registrar resultado' } });
+
+  it('un aprobado registrado a mano no saca al titular de condicionado', async () => {
+    enqueue('estudios', { data: hija('individual'), error: null });
+    enqueue('expedientes', { data: { estado: 'condicionado' }, error: null });
+    await expect(aprobar()).rejects.toMatchObject({ statusCode: 400, errorCode: 'EVALUACION_REQUERIDA' });
+    expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('la apelacion de un rechazado y el estudio del co-arrendatario si se registran', async () => {
+    rpcLlega();
+    enqueue('estudios', { data: hija('individual'), error: null });
+    enqueue('expedientes', { data: { estado: 'rechazado' }, error: null });
+    await expect(aprobar()).rejects.toMatchObject({ errorCode: 'ESTUDIO_ESTADO_INVALIDO' });
+
+    enqueue('estudios', { data: hija('con_coarrendatario'), error: null });
+    enqueue('expedientes', { data: { estado: 'condicionado' }, error: null });
+    await expect(aprobar()).rejects.toMatchObject({ errorCode: 'ESTUDIO_ESTADO_INVALIDO' });
+    expect(supabase.rpc).toHaveBeenCalledTimes(2);
   });
 });
