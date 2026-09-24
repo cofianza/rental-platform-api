@@ -270,10 +270,12 @@ export const proveedoresRiesgoRouter = Router();
 
 proveedoresRiesgoRouter.use(authMiddleware);
 
-// GET /proveedores-riesgo/salud
+// GET /proveedores-riesgo/salud — lanza consultas en vivo contra los burós:
+// solo Cofianza. configuracion:read no basta, porque también lo tienen el
+// propietario, la inmobiliaria y el prospecto.
 proveedoresRiesgoRouter.get(
   '/salud',
-  authorize('configuracion', 'read'),
+  roleGuard(['administrador', 'operador_analista']),
   estudiosController.getProviderHealth,
 );
 
