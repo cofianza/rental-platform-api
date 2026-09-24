@@ -6,6 +6,7 @@
  * esto lo dice.
  */
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { renderTemplate } from '@/lib/templateEngine';
@@ -64,6 +65,14 @@ describe('migración 20261001000006 sobre la plantilla V4 de producción', () =>
     for (const viejo of pares) expect(vigente).toContain(viejo);
     expect(nueva).not.toBe(vigente);
     expect(aplicar(nueva, MIGRACION)).toBe(nueva);
+  });
+
+  it('el bloque final exige exactamente el md5 que da la migración sobre la plantilla de producción', () => {
+    const md5 = (h: string) => createHash('md5').update(h, 'utf8').digest('hex');
+    expect(md5(vigente)).toBe('70ea97d587db21c2c4b8c9aa8a8a6b4b'); // la de producción el 2026-09-24
+    const exigido = /IS DISTINCT FROM '([0-9a-f]{32})'/.exec(MIGRACION)?.[1];
+    expect(exigido).toBe(md5(nueva));
+    expect(md5(aplicar(nueva, MIGRACION))).toBe(exigido); // correrla dos veces pasa
   });
 
   it('P12, inmobiliaria con comisión: la cláusula 21 y la numeración de siempre', () => {

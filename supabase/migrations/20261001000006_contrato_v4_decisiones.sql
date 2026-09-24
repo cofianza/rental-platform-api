@@ -188,3 +188,19 @@ SET contenido_html = REPLACE(
   '<p>El presente contrato se perfecciona con la firma de LAS PARTES. Cuando se suscriba de manera física, se firma en tantos ejemplares del mismo tenor como partes firmantes, uno para cada una. Cuando se suscriba mediante firma electrónica, se otorga en un único ejemplar electrónico del cual cada parte recibirá copia, en los términos de la Cláusula {{#if inmobiliaria.comision_porcentaje}}Vigésima Octava{{else}}Vigésima Séptima{{/if}}.</p>'
 )
 WHERE position('<p>En señal de conformidad con todo lo anterior, las partes suscriben el presente contrato en {{contrato.domicilio_contractual}}, a los {{contrato.fecha_firma_dia}} días del mes de {{contrato.fecha_firma_mes}} de {{contrato.fecha_firma_ano}}.</p>' in contenido_html) > 0;
+
+-- 7. Si la plantilla de producción no quedó exactamente como se probó (p. ej.
+--    alguien la editó antes desde la UI), se deshace toda la migración: el
+--    editor la corre en una transacción y nada queda a medias. Correrla otra vez
+--    no cambia nada y pasa. En una base sin esa fila (local) no aplica.
+DO $$
+DECLARE
+  v_md5 text;
+BEGIN
+  SELECT md5(contenido_html) INTO v_md5
+  FROM plantillas_contrato
+  WHERE id = 'bcee268f-290d-444b-b134-212cd9d485bc';
+  IF FOUND AND v_md5 IS DISTINCT FROM 'f07505fb01154b4403427c2bca54a8cb' THEN
+    RAISE EXCEPTION 'Plantilla V4 (bcee268f) con md5 % después de la migración; se esperaba f07505fb01154b4403427c2bca54a8cb. ¿Se editó antes? Revisarla antes de volver a correr la migración.', v_md5;
+  END IF;
+END $$;
