@@ -82,17 +82,30 @@ export async function registrarInteresPublico(
   }
 
   const emailNorm = input.email.trim().toLowerCase();
+  const telefono = input.telefono.trim();
 
-  // 2. Guardar el lead. Permitimos que el mismo interesado escriba varias veces
-  // por el mismo inmueble (sin tope): cada interés es un lead nuevo y vuelve a
-  // avisar al dueño.
+  // 2. ¿Ya dejó sus datos para este inmueble en las últimas 24 h (mismo correo o
+  // WhatsApp)? El lead se guarda igual, pero no se vuelve a avisar al dueño ni a
+  // mandar la confirmación: el formulario anónimo servía para enviar en serie.
+  // Dos .eq y no un .or(): el teléfono es texto libre y rompería el filtro.
+  const hace24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const reciente = (campo: 'email' | 'telefono', valor: string) =>
+    db('inmueble_interesados')
+      .select('id', { count: 'exact', head: true })
+      .eq('inmueble_id', inmuebleId)
+      .eq(campo, valor)
+      .gte('created_at', hace24h);
+  const [porEmail, porTelefono] = await Promise.all([reciente('email', emailNorm), reciente('telefono', telefono)]);
+  const repetido = (porEmail.count ?? 0) + (porTelefono.count ?? 0) > 0;
+
+  // 3. Guardar el lead: cada interés queda registrado, aunque se repita.
   const now = new Date().toISOString();
   const { error } = await db('inmueble_interesados').insert({
     inmueble_id: inmuebleId,
     propietario_id: inm.propietario_id,
     inmobiliaria_id: inm.inmobiliaria_id,
     nombre: input.nombre.trim(),
-    telefono: input.telefono.trim(),
+    telefono,
     email: emailNorm,
     mensaje: input.mensaje?.trim() || null,
     acepta_datos: true,
@@ -102,16 +115,22 @@ export async function registrarInteresPublico(
     estado: 'nuevo',
   } as never);
   if (error) throw fromSupabaseError(error);
+  if (repetido) {
+    logger.info({ inmuebleId }, 'Interés repetido en 24 h: guardado sin avisar de nuevo');
+    return;
+  }
 
-  // 3. Avisar al dueño. Best-effort: si falla, el lead ya quedó guardado.
+  // 4. Avisar al dueño. Best-effort: si falla, el lead ya quedó guardado.
   await notificarDueno(inm, input).catch((err) =>
     logger.warn({ err, inmuebleId }, 'No se pudo notificar al dueño del nuevo interesado'),
   );
 
-  // 4. Confirmación al interesado (best-effort; cierra el loop y da confianza).
-  await sendInteresadoConfirmacionEmail(input.email.trim().toLowerCase(), {
+  // 5. Confirmación al interesado (best-effort; cierra el loop y da confianza).
+  // Sin la dirección (P9): tipo, barrio, ciudad y código; la dirección exacta
+  // llega con la visita confirmada. Los avisos al dueño sí la llevan.
+  await sendInteresadoConfirmacionEmail(emailNorm, {
     nombre: input.nombre.trim(),
-    inmuebleLabel: inmuebleLabel(inm),
+    inmuebleLabel: inmuebleLabel({ ...inm, direccion: null }),
   });
 }
 

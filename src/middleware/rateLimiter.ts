@@ -89,6 +89,19 @@ export const passwordResetLimiter = rateLimit({
   },
 });
 
+/** «Me interesa» de la vitrina (sin cuenta): cada envío dispara WhatsApp y correos. */
+export const interesLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Ya registraste varios intereses desde tu red. Inténtalo de nuevo en una hora.',
+  },
+});
+
 export const publicFormLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 60,

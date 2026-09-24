@@ -450,7 +450,8 @@ function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): strin
               </p>
               <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
                 El anunciante (propietario o inmobiliaria) te contactará pronto por WhatsApp o correo
-                para coordinar una visita. Por ahora no necesitas hacer nada más.
+                para coordinar una visita; la dirección exacta te llega cuando la visita quede
+                confirmada. Por ahora no necesitas hacer nada más.
               </p>
               <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #6b7280;">
                 Si el inmueble te convence tras la visita, podrás continuar con Cofianza como tu fiador

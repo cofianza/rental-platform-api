@@ -4,9 +4,13 @@ import { z } from 'zod';
  * Formulario público "Me interesa este inmueble" para visitantes SIN cuenta.
  * Solo datos de contacto (no sensibles) + autorización de tratamiento de datos.
  */
+// Nombre y teléfono llegan tal cual al WhatsApp y al correo del dueño: sin
+// etiquetas ni enlaces (el formulario anónimo servía para mandar phishing).
+const SIN_ENLACES = /^(?!.*(?:[<>]|https?:|www\.)).*$/i;
+
 export const registrarInteresSchema = z.object({
-  nombre: z.string().trim().min(2, 'Ingresa tu nombre').max(150),
-  telefono: z.string().trim().min(7, 'Ingresa un teléfono válido').max(30),
+  nombre: z.string().trim().min(2, 'Ingresa tu nombre').max(150).regex(SIN_ENLACES, 'Escribe solo tu nombre'),
+  telefono: z.string().trim().min(7, 'Ingresa un teléfono válido').max(30).regex(SIN_ENLACES, 'Ingresa un teléfono válido'),
   email: z.string().trim().email('Correo inválido').max(255),
   // Mensaje opcional del interesado (contexto para el dueño). No sensible.
   mensaje: z.string().trim().max(500, 'Mensaje muy largo').optional(),

@@ -4,7 +4,7 @@
 // ============================================================
 
 import { Router } from 'express';
-import { publicFormLimiter } from '@/middleware/rateLimiter';
+import { interesLimiter, publicFormLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
 import { listPublicPropertiesSchema, propertyIdParamsSchema } from './public-properties.schema';
 import * as controller from './public-properties.controller';
@@ -46,6 +46,7 @@ router.post(
 // POST /api/v1/public/properties/:id/interes — interesado sin cuenta (lead vitrina)
 router.post(
   '/:id/interes',
+  interesLimiter,
   validate({ params: propertyIdParamsSchema, body: registrarInteresSchema }),
   interesadosController.registrarInteres,
 );
