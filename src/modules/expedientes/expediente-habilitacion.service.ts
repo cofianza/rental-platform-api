@@ -661,11 +661,12 @@ async function aprobarYGenerarContrato(params: {
       // qué — y volviendo a pulsar el botón para siempre. El expediente queda
       // aprobado (correcto: el candidato sigue siendo apto) y el mensaje le
       // dice que puede usarlo para otra propiedad. Igual con la destinación no
-      // habilitada (Contratos V3): salta antes de la reserva, sin efectos.
+      // habilitada (Contratos V3) y con co-arrendatario (P6): saltan antes de
+      // la reserva, sin efectos.
       if (
         err instanceof AppError &&
         (err.errorCode === 'INMUEBLE_YA_RESERVADO' || err.errorCode === 'RESERVA_NO_VERIFICABLE'
-          || err.errorCode === DESTINACION_NO_HABILITADA)
+          || err.errorCode === DESTINACION_NO_HABILITADA || err.errorCode === 'CONTRATO_REQUIERE_COARRENDATARIO')
       ) {
         logger.warn(
           { expedienteId, fromState, errorCode: err.errorCode },

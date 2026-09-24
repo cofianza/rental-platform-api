@@ -12,6 +12,7 @@ import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notific
 import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess, assertInmuebleAccess, puedeVerFilaExpediente } from '@/lib/tenantScope';
 import { checkPerfilCompletitud, usuarioPuedeEditarDatosContrato } from '../perfil-arrendador/perfil-arrendador.service';
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
+import { coarrendatarioVinculado } from '../estudios/coarrendatario-vinculado';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
 import { canonMaximoTolerado } from '../estudios/portabilidad';
 import { escalarTopeCanon } from './tope-coafianzamiento';
@@ -465,7 +466,6 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, numero, estado, inmueble_id, solicitante_id,
-      coarrendatario_nombre, coarrendatario_tipo_documento, coarrendatario_documento, coarrendatario_parentesco,
       duracion_contrato_meses, fecha_inicio_contrato,
       modalidad_fianza, servicios_reparto,
       cotitular_nombre, cotitular_tipo_documento, cotitular_documento,
@@ -494,10 +494,6 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     estado: string;
     inmueble_id: string;
     solicitante_id: string;
-    coarrendatario_nombre: string | null;
-    coarrendatario_tipo_documento: string | null;
-    coarrendatario_documento: string | null;
-    coarrendatario_parentesco: string | null;
     inmuebles: {
       id: string;
       direccion: string;
@@ -583,22 +579,10 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     cuenta_recaudo_titular_nit: string | null;
   };
 
-  // 3. Co-arrendatario del flujo nuevo (Mario, 5-may-2026): si el solicitante
-  //    invitó a alguien y su estudio quedó APROBADO, ese par es el que
-  //    apalancó la aprobación del expediente — el contrato debe llevar sus
-  //    datos como co-arrendatario. Cae al campo legacy (codeudor renombrado)
-  //    solo si no hay coa nuevo válido.
-  const coarrendatarioNuevo = await fetchCoarrendatarioParaContrato(expedienteId);
-
-  const coarrendatarioFinal: CodeudorData | null = coarrendatarioNuevo
-    ?? (exp.coarrendatario_nombre
-      ? {
-          nombre: exp.coarrendatario_nombre,
-          tipo_documento: exp.coarrendatario_tipo_documento,
-          numero_documento: exp.coarrendatario_documento,
-          parentesco: exp.coarrendatario_parentesco,
-        }
-      : null);
+  // 3. Co-arrendatario: solo el que decide la función compartida (P2). Sin el
+  //    respaldo a expedientes.coarrendatario_*: esas columnas se llenan al
+  //    aceptar la invitación y metían también al que después salió rechazado.
+  const coarrendatarioFinal = await fetchCoarrendatarioParaContrato(expedienteId);
 
   return {
     expediente: expediente as Record<string, unknown>,
@@ -617,21 +601,20 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
 }
 
 /**
- * Carga el co-arrendatario del flujo nuevo (tabla expediente_coarrendatarios)
- * solo si su estudio TransUnion quedó APROBADO. Esa es la condición que
- * justifica incluirlo en el contrato — si declinó, está pendiente, o salió
- * condicionado/rechazado, no participa del contrato.
+ * El co-arrendatario del contrato lo decide la misma función que la prima del
+ * CRC y el asistente V3 (coarrendatario-vinculado.ts, P2); de su fila salen los
+ * datos. Sin ella (lectura fallida) queda el nombre: igual cuenta como parte.
  */
 async function fetchCoarrendatarioParaContrato(
   expedienteId: string,
 ): Promise<CodeudorData | null> {
+  const vinculado = await coarrendatarioVinculado(expedienteId);
+  if (!vinculado) return null;
+
   const { data: coaRow } = await (supabase
     .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
-    .select('nombre, apellido, tipo_documento, numero_documento, email, telefono, estudio_id, estado')
-    .eq('expediente_id', expedienteId)
-    .eq('estado', 'estudio_completado')
-    .order('created_at', { ascending: false })
-    .limit(1)
+    .select('nombre, apellido, tipo_documento, numero_documento, email, telefono')
+    .eq('id', vinculado.id)
     .maybeSingle();
 
   const coa = coaRow as unknown as {
@@ -641,29 +624,29 @@ async function fetchCoarrendatarioParaContrato(
     numero_documento: string;
     email: string;
     telefono: string | null;
-    estudio_id: string | null;
-    estado: string;
   } | null;
 
-  if (!coa || !coa.estudio_id) return null;
-
-  const { data: estudioRow } = await (supabase
-    .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('resultado')
-    .eq('id', coa.estudio_id)
-    .maybeSingle();
-
-  const resultado = (estudioRow as { resultado?: string } | null)?.resultado;
-  if (resultado !== 'aprobado') return null;
-
   return {
-    nombre: `${coa.nombre} ${coa.apellido}`.trim(),
-    tipo_documento: coa.tipo_documento,
-    numero_documento: coa.numero_documento,
+    nombre: coa ? `${coa.nombre} ${coa.apellido}`.trim() : vinculado.nombre,
+    tipo_documento: coa?.tipo_documento ?? null,
+    numero_documento: coa?.numero_documento ?? null,
     parentesco: 'Co-arrendatario',
-    email: coa.email,
-    telefono: coa.telefono,
+    email: coa?.email ?? null,
+    telefono: coa?.telefono ?? null,
   };
+}
+
+/**
+ * P6 (plantilla vigente, Décima Quinta Parágrafo Primero; V3 §6.3): este
+ * contrato no incluye co-arrendatario ni co-titular como partes que firman.
+ * Esos estudios se contratan con el contrato nuevo.
+ */
+function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: boolean): void {
+  if (!conCoarrendatario && !conCotitular) return;
+  throw AppError.conflict(
+    `Este estudio tiene ${conCoarrendatario ? 'co-arrendatario' : 'co-titular de la fianza'} y este contrato no lo incluye como parte que firma. Hazlo con el contrato nuevo de Cofianza.`,
+    'CONTRATO_REQUIERE_COARRENDATARIO',
+  );
 }
 
 /**
@@ -1528,6 +1511,12 @@ export async function enviarContratoAFirma(
     return { ok: true, message: 'El contrato ya está en proceso de firma.' };
   }
 
+  // P6: tampoco sale a firma con co-arrendatario o con el co-titular impreso.
+  assertSinPartesAdicionales(
+    (await coarrendatarioVinculado(c.expediente_id)) !== null,
+    !!(c.datos_variables as { cotitular?: { nombre_completo?: string } } | null)?.cotitular?.nombre_completo,
+  );
+
   // El PDF que va a Auco es el del borrador; si después se corrigió el teléfono
   // (modal de firma) o la cuenta de recaudo, el sobre saldría con los datos
   // nuevos y el documento firmado con los viejos. El borrador se regenera; otro
@@ -2037,6 +2026,12 @@ export async function generarContrato(
       'CONTRATO_USA_ASISTENTE',
     );
   }
+
+  // P6: con co-arrendatario o co-titular (el del formulario o el ya guardado) no se genera.
+  const cotitularNombre = input.cotitular
+    ? input.cotitular.nombre
+    : (expRow as { cotitular_nombre?: string | null }).cotitular_nombre;
+  assertSinPartesAdicionales(!!expData.coarrendatario, !!cotitularNombre);
 
   // 1b. Bloqueo: el arrendador debe tener completos los datos del contrato.
   // Si falta cualquiera (domicilio, cuenta de recaudo, contacto, matricula /
