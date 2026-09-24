@@ -21,7 +21,8 @@
 --
 -- P31 — Fecha: la plantilla imprimía como fecha de suscripción la de
 -- generación. Se reemplaza por el cierre del bloque XI del contrato vigente
--- (el V3 tampoco imprime fecha), remitiendo a la cláusula de firma de este.
+-- (el V3 tampoco imprime fecha), remitiendo a la cláusula de firma de este y
+-- con tantos ejemplares como partes firmantes (aquí también firma COFIANZA).
 --
 -- Idempotente: cada REPLACE solo actúa si encuentra el texto viejo, y los que
 -- envuelven un texto que sigue presente llevan su guarda. Solo afecta
@@ -178,6 +179,6 @@ UPDATE plantillas_contrato
 SET contenido_html = REPLACE(
   contenido_html,
   '<p>En señal de conformidad con todo lo anterior, las partes suscriben el presente contrato en {{contrato.domicilio_contractual}}, a los {{contrato.fecha_firma_dia}} días del mes de {{contrato.fecha_firma_mes}} de {{contrato.fecha_firma_ano}}.</p>',
-  '<p>El presente contrato se perfecciona con la firma de LAS PARTES. Cuando se suscriba de manera física, se firma en dos (2) ejemplares del mismo tenor y a un solo efecto, uno para cada parte. Cuando se suscriba mediante firma electrónica, se otorga en un único ejemplar electrónico del cual cada parte recibirá copia, en los términos de la Cláusula {{#if inmobiliaria.comision_porcentaje}}Vigésima Octava{{else}}Vigésima Séptima{{/if}}.</p>'
+  '<p>El presente contrato se perfecciona con la firma de LAS PARTES. Cuando se suscriba de manera física, se firma en tantos ejemplares del mismo tenor como partes firmantes, uno para cada una. Cuando se suscriba mediante firma electrónica, se otorga en un único ejemplar electrónico del cual cada parte recibirá copia, en los términos de la Cláusula {{#if inmobiliaria.comision_porcentaje}}Vigésima Octava{{else}}Vigésima Séptima{{/if}}.</p>'
 )
 WHERE position('<p>En señal de conformidad con todo lo anterior, las partes suscriben el presente contrato en {{contrato.domicilio_contractual}}, a los {{contrato.fecha_firma_dia}} días del mes de {{contrato.fecha_firma_mes}} de {{contrato.fecha_firma_ano}}.</p>' in contenido_html) > 0;
