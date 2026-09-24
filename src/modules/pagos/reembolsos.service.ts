@@ -73,24 +73,19 @@ export async function huboConsultaAlBuro(expedienteId: string): Promise<Consulta
 
 /**
  * Cancela, con compare-and-set, las evaluaciones del expediente que todavía no
- * llegaron al buró, y la fallida sin referencia (así no se reintenta después de
- * devolverla): es lo que excluye a ejecutarEstudio, cuyo bloqueo a 'en_proceso'
- * falla si la evaluación ya se movió. Si alguna se movió mientras tanto se
- * vuelve a leer; si nunca se estabiliza, queda como dudosa. La fallida sigue
- * siendo dudosa aunque ya esté cancelada: no se sabe si la central cobró.
+ * llegaron al buró: es lo que excluye a ejecutarEstudio, cuyo bloqueo a
+ * 'en_proceso' falla si la evaluación ya se movió. Si alguna se movió mientras
+ * tanto se vuelve a leer; si nunca se estabiliza, queda como dudosa. La fallida
+ * no se cancela: es la marca de «dudosa» (no se sabe si la central cobró), y su
+ * reintento ya lo impide ejecutarEstudio con el estudio cerrado o rechazado.
  */
 async function cancelarEvaluacionesSinConsulta(expedienteId: string): Promise<Consulta> {
-  let huboFallida = false;
   for (let intento = 0; intento < 3; intento++) {
     const estudios = await leerEstudios(expedienteId);
     const consulta = consultaDe(estudios);
     if (consulta === 'si') return consulta;
-    if (consulta === 'dudosa') huboFallida = true;
     let seMovio = false;
-    const sinConsulta = estudios.filter(
-      (x) => ESTADOS_PREVIOS_A_LA_CONSULTA.includes(x.estado) || (x.estado === 'fallido' && !x.referencia_proveedor),
-    );
-    for (const e of sinConsulta) {
+    for (const e of estudios.filter((x) => ESTADOS_PREVIOS_A_LA_CONSULTA.includes(x.estado))) {
       const { data } = await db('estudios')
         .update({ estado: 'cancelado' } as never)
         .eq('id', e.id)
@@ -98,7 +93,7 @@ async function cancelarEvaluacionesSinConsulta(expedienteId: string): Promise<Co
         .select('id');
       if (!(data as unknown[] | null)?.length) seMovio = true;
     }
-    if (!seMovio) return huboFallida ? 'dudosa' : consulta;
+    if (!seMovio) return consulta;
   }
   return 'dudosa';
 }
@@ -177,6 +172,15 @@ export async function devolverEvaluacionSinConsulta(
     if (error) throw fromSupabaseError(error);
     const pago = data as PagoEstudio | null;
     if (!pago) return;
+    // Ya está en la cola (una pasada anterior: rechazado y después cerrado, o el
+    // barrido): la decide un administrador; no se vuelve a decidir sola.
+    const { data: fila, error: filaErr } = await db('pagos_no_conciliados')
+      .select('id')
+      .in('provider_payment_id', [`pago:${pago.id}`, ...(pago.transaction_ref ? [pago.transaction_ref] : [])])
+      .limit(1)
+      .maybeSingle();
+    if (filaErr) throw fromSupabaseError(filaErr);
+    if (fila) return;
 
     const consulta = await cancelarEvaluacionesSinConsulta(expedienteId);
     if (consulta === 'si') return;

@@ -164,7 +164,7 @@ describe('al cerrar o rechazar el estudio', () => {
     sinCobrosVivos();
     enqueue('pagos', { data: pagoMp, error: null });
     enqueue('estudios', { data: [], error: null });
-    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    enqueue('pagos_no_conciliados', { data: null, error: null }, { data: [{ id: FILA }], error: null }); // sin fila → upsert
     admins();
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
@@ -193,7 +193,7 @@ describe('al cerrar o rechazar el estudio', () => {
     sinCobrosVivos();
     enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
     enqueue('estudios', { data: [], error: null });
-    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    enqueue('pagos_no_conciliados', { data: null, error: null }, { data: [{ id: FILA }], error: null }); // sin fila → upsert
     admins();
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
@@ -204,37 +204,31 @@ describe('al cerrar o rechazar el estudio', () => {
   it('P11: si la única evaluación falló (no se sabe si la central cobró), queda en la cola para revisión', async () => {
     sinCobrosVivos();
     enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
-    enqueue(
-      'estudios',
-      { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null },
-      { data: [{ id: 'est-1' }], error: null }, // CAS a cancelado
-    );
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null });
     mockEsCredito.mockResolvedValueOnce(true);
-    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    enqueue('pagos_no_conciliados', { data: null, error: null }, { data: [{ id: FILA }], error: null });
     admins();
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio rechazado', 'user-1');
 
     expect(upsertNoConciliado()).toMatchObject({ proveedor: 'credito', provider_payment_id: `pago:${PAGO}`, motivo: 'estudio_fallido_revisar' });
     expect(mockDevolverCredito).not.toHaveBeenCalled();
-    // Q5b-2: la fallida sin referencia se cancela (CAS) para que no se reintente
-    // una evaluación que se está devolviendo; sigue siendo dudosa.
-    expect(updates('estudios')).toEqual([{ estado: 'cancelado' }]);
-    expect(ops.some((o) => o.table === 'estudios' && o.method === 'eq' && o.args[0] === 'estado' && o.args[1] === 'fallido')).toBe(true);
+    // Q5c-1: la fallida no se cancela: es la marca de «dudosa» (el reintento ya
+    // lo impide ejecutarEstudio con el estudio rechazado o cerrado).
+    expect(updates('estudios')).toEqual([]);
   });
 
-  it('Q5b-2: si la fallida se reintentó antes del CAS y ya está en el buró, no se devuelve', async () => {
+  it('Q5c-1: una segunda pasada (rechazado y después cerrado) no vuelve a decidir: el cobro ya está en la cola', async () => {
     sinCobrosVivos();
-    enqueue('pagos', { data: pagoMp, error: null });
-    enqueue(
-      'estudios',
-      { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null },
-      { data: [], error: null }, // CAS perdido: el reintento la tomó
-      { data: [{ id: 'est-1', estado: 'en_proceso', referencia_proveedor: null }], error: null },
-    );
+    enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
+    enqueue('pagos_no_conciliados', { data: { id: FILA }, error: null }); // la fila dudosa de la primera pasada
+    mockDevolverCredito.mockResolvedValue('devuelto'); // lo que haría si se volviera a decidir
 
-    await devolverEvaluacionSinConsulta(EXP, 'Estudio rechazado', 'user-1');
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
 
+    expect(ops.find((o) => o.table === 'pagos_no_conciliados' && o.method === 'in')?.args).toEqual(['provider_payment_id', [`pago:${PAGO}`]]);
+    expect(mockDevolverCredito).not.toHaveBeenCalled();
+    expect(ops.some((o) => o.table === 'estudios')).toBe(false);
     expect(upsertNoConciliado()).toBeUndefined();
   });
 
@@ -658,7 +652,7 @@ describe('P10: red de seguridad', () => {
     sinCobrosVivos();
     enqueue('pagos', { data: pagoMp, error: null });
     enqueue('estudios', { data: [], error: null });
-    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    enqueue('pagos_no_conciliados', { data: null, error: null }, { data: [{ id: FILA }], error: null });
     admins();
 
     expect(await barrerDevolucionesPendientes()).toBe(1);
