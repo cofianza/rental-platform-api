@@ -276,9 +276,10 @@ export async function resolveOrgMemberPerfilIds(orgId: string): Promise<string[]
  *    que ve completa (owner, o miembro con miembros_ven_todo);
  *  - expediente visible: su inmueble es visible, o (modo restringido /
  *    propietario) se lo asignaron a él como responsable.
- * Lo asignado cuenta solo si el inmueble es de su organización activa: no
- * depende de que liberarResponsablesDeMiembro haya limpiado la asignación
- * cuando salió o lo quitaron del equipo.
+ * Lo registrado y lo asignado cuentan solo en su organización activa (lo
+ * registrado, también si no tiene organización): un exmiembro no sigue viendo
+ * la cartera anterior aunque conserve propietario_id o una asignación (no
+ * depende de reapuntarInmueblesDeMiembroSaliente ni de liberarResponsablesDeMiembro).
  * null = el rol no tiene cartera (no ve nada por aquí).
  */
 interface Cartera {
@@ -311,7 +312,9 @@ async function carteraDe(perfilId: string, rol: 'inmobiliaria' | 'propietario' |
  */
 function filtroInmuebles(c: Cartera): string {
   return [
-    `propietario_id.eq.${c.perfilId}`,
+    c.orgActiva
+      ? `and(propietario_id.eq.${c.perfilId},or(inmobiliaria_id.is.null,inmobiliaria_id.eq.${c.orgActiva}))`
+      : `and(propietario_id.eq.${c.perfilId},inmobiliaria_id.is.null)`,
     ...(c.inmueblesAsignados && c.orgActiva
       ? [`and(miembro_responsable_id.eq.${c.perfilId},inmobiliaria_id.eq.${c.orgActiva})`]
       : []),
@@ -328,7 +331,7 @@ interface FilaInmuebleScope {
 /** La misma condición que filtroInmuebles, evaluada sobre una fila (para los guards por id). */
 export function inmuebleVisible(c: Cartera, i: FilaInmuebleScope): boolean {
   return (
-    i.propietario_id === c.perfilId ||
+    (i.propietario_id === c.perfilId && (i.inmobiliaria_id === null || i.inmobiliaria_id === c.orgActiva)) ||
     (c.inmueblesAsignados && !!c.orgActiva && i.miembro_responsable_id === c.perfilId && i.inmobiliaria_id === c.orgActiva) ||
     (!!i.inmobiliaria_id && c.orgIds.includes(i.inmobiliaria_id))
   );
@@ -378,11 +381,10 @@ export async function filtroPortafolio(perfilId: string): Promise<string> {
  *  - []    -> propietario/inmobiliaria sin inmuebles: respuesta vacía.
  *  - [...] -> inmueble IDs accesibles.
  *
- * `inmobiliaria`: ve la cartera de TODAS sus organizaciones
- *   (inmuebles.inmobiliaria_id) más, defensivamente, los inmuebles
- *   registrados directamente a su propio perfil (propietario_id) por si
- *   quedara alguna fila sin etiquetar tras el backfill.
- * `propietario`: ve solo sus inmuebles (propietario_id = userId).
+ * `inmobiliaria`: su cartera (filtroPortafolio): la de su organización si la
+ *   ve completa, más lo que registró o le asignaron dentro de ella (y lo
+ *   registrado sin organización, por si quedara alguna fila sin etiquetar).
+ * `propietario`: ve solo sus inmuebles sin organización (propietario_id = userId).
  * Otros roles (p.ej. solicitante) no se scopean por inmueble aquí -> [].
  */
 export async function resolveAllowedInmuebleIds(
@@ -398,10 +400,11 @@ export async function resolveAllowedInmuebleIds(
   }
 
   if (userRol === 'propietario') {
+    // La misma condición que su detalle (assertInmuebleAccess): los suyos sin organización.
     const { data } = await (supabase
       .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
       .select('id')
-      .eq('propietario_id', userId);
+      .or(filtroInmuebles((await carteraDe(userId, 'propietario'))!));
     return ((data as Array<{ id: string }> | null) || []).map((i) => i.id);
   }
 

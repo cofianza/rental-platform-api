@@ -52,7 +52,7 @@ import {
 const YO = 'yo';
 const ORG = 'org-1';
 
-/** La regla por conjuntos, para UNA fila. Lo asignado solo cuenta dentro de su organización activa. */
+/** La regla por conjuntos, para UNA fila. Lo registrado y lo asignado cuentan solo en su organización activa. */
 function reglaAnterior(
   rol: 'inmobiliaria' | 'propietario',
   membresia: 'ninguna' | 'owner' | 'miembro_ve_todo' | 'miembro_restringido',
@@ -61,10 +61,11 @@ function reglaAnterior(
   const completa = membresia === 'owner' || membresia === 'miembro_ve_todo';
   const miOrg = rol === 'inmobiliaria' && membresia !== 'ninguna' ? ORG : null;
   const enMiOrg = !!miOrg && fila.org === miOrg;
+  const registrado = fila.propietario === YO && (fila.org === null || enMiOrg);
   let inmuebleVisible: boolean;
-  if (rol === 'propietario') inmuebleVisible = fila.propietario === YO;
+  if (rol === 'propietario') inmuebleVisible = registrado;
   else {
-    const propio = fila.propietario === YO || (fila.inmAsignado === YO && enMiOrg);
+    const propio = registrado || (fila.inmAsignado === YO && enMiOrg);
     inmuebleVisible = completa ? fila.org === ORG || propio : propio;
   }
   const modoRestringido = rol === 'propietario' || !completa;
@@ -125,7 +126,7 @@ describe('resolveAllowedExpedienteIds: la condición que va a PostgREST', () => 
     const exp = ops.filter((o) => o.tabla === 'expedientes');
     expect(exp.find((o) => o.metodo === 'select')?.args[0]).toContain('inmuebles!expedientes_inmueble_id_fkey!inner');
     expect(exp.find((o) => o.metodo === 'or')?.args).toEqual([
-      `propietario_id.eq.${YO},and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG}),inmobiliaria_id.in.(${ORG})`,
+      `and(propietario_id.eq.${YO},or(inmobiliaria_id.is.null,inmobiliaria_id.eq.${ORG})),and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG}),inmobiliaria_id.in.(${ORG})`,
       { referencedTable: 'inmuebles' },
     ]);
     expect(exp.filter((o) => o.metodo === 'eq')).toEqual([]);
@@ -136,7 +137,7 @@ describe('resolveAllowedExpedienteIds: la condición que va a PostgREST', () => 
     await resolveAllowedExpedienteIds(YO, 'inmobiliaria');
     const exp = ops.filter((o) => o.tabla === 'expedientes');
     expect(exp.find((o) => o.metodo === 'or')?.args[0]).toBe(
-      `propietario_id.eq.${YO},and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG})`,
+      `and(propietario_id.eq.${YO},or(inmobiliaria_id.is.null,inmobiliaria_id.eq.${ORG})),and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG})`,
     );
     expect(exp.filter((o) => o.metodo === 'eq').map((o) => o.args)).toEqual([
       ['miembro_responsable_id', YO],
@@ -147,7 +148,7 @@ describe('resolveAllowedExpedienteIds: la condición que va a PostgREST', () => 
   it('sin membresía activa (lo quitaron del equipo), lo que siguiera asignado no cuenta', async () => {
     await resolveAllowedExpedienteIds(YO, 'inmobiliaria');
     const exp = ops.filter((o) => o.tabla === 'expedientes');
-    expect(exp.find((o) => o.metodo === 'or')?.args[0]).toBe(`propietario_id.eq.${YO}`);
+    expect(exp.find((o) => o.metodo === 'or')?.args[0]).toBe(`and(propietario_id.eq.${YO},inmobiliaria_id.is.null)`);
     expect(exp.filter((o) => o.metodo === 'eq')).toEqual([]);
   });
 
@@ -158,6 +159,11 @@ describe('resolveAllowedExpedienteIds: la condición que va a PostgREST', () => 
     expect(ops).toEqual([]);
     // Sin rol sí es el sistema: sin filtro.
     expect(await resolveAllowedExpedienteIds(undefined, undefined)).toBeNull();
+  });
+
+  it('propietario: la lista de inmuebles usa la misma condición que su detalle (los suyos sin organización)', async () => {
+    await resolveAllowedInmuebleIds(YO, 'propietario');
+    expect(ops.find((o) => o.tabla === 'inmuebles' && o.metodo === 'or')?.args[0]).toBe(`and(propietario_id.eq.${YO},inmobiliaria_id.is.null)`);
   });
 
   it('otros roles no tienen cartera: [] sin consultar; los internos, sin filtro', async () => {
@@ -177,17 +183,17 @@ describe('filtroPortafolio: la lista de inmuebles filtra en su propia consulta',
   it('titular: propios, asignados y la org; sin consultar inmuebles', async () => {
     filas.push({ inmobiliaria_id: ORG, rol_miembro: 'owner', inmobiliarias: { miembros_ven_todo: false } });
     expect(await filtroPortafolio(YO)).toBe(
-      `propietario_id.eq.${YO},and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG}),inmobiliaria_id.in.(${ORG})`,
+      `and(propietario_id.eq.${YO},or(inmobiliaria_id.is.null,inmobiliaria_id.eq.${ORG})),and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG}),inmobiliaria_id.in.(${ORG})`,
     );
     expect(ops.filter((o) => o.tabla === 'inmuebles')).toEqual([]);
   });
 
   it('miembro restringido: propios y asignados en su org; sin org (propietario o exmiembro): solo propios', async () => {
     filas.push({ inmobiliaria_id: ORG, rol_miembro: 'miembro', inmobiliarias: { miembros_ven_todo: false } });
-    expect(await filtroPortafolio(YO)).toBe(`propietario_id.eq.${YO},and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG})`);
+    expect(await filtroPortafolio(YO)).toBe(`and(propietario_id.eq.${YO},or(inmobiliaria_id.is.null,inmobiliaria_id.eq.${ORG})),and(miembro_responsable_id.eq.${YO},inmobiliaria_id.eq.${ORG})`);
     invalidateMembresiasCache();
     filas.length = 0;
-    expect(await filtroPortafolio(YO)).toBe(`propietario_id.eq.${YO}`);
+    expect(await filtroPortafolio(YO)).toBe(`and(propietario_id.eq.${YO},inmobiliaria_id.is.null)`);
   });
 
   it('es la misma condición que usa resolvePortfolioInmuebleIds', async () => {
@@ -256,10 +262,11 @@ describe('assertInmuebleAccess: por enlace se abre lo mismo que muestra la lista
 
   /** La regla de la lista (filtroPortafolio), por conjuntos: lo asignado, solo dentro de su organización. */
   const esperado = (rol: string, m: string, f: { propietario: string | null; org: string | null; responsable: string | null }) => {
-    if (rol === 'propietario') return f.propietario === YO;
+    if (rol === 'propietario') return f.propietario === YO && f.org === null;
     const completa = m === 'owner' || m === 'miembro_ve_todo';
     const miOrg = m === 'ninguna' ? null : ORG;
-    return f.propietario === YO || (f.responsable === YO && !!miOrg && f.org === miOrg) || (completa && f.org === ORG);
+    const registrado = f.propietario === YO && (f.org === null || (!!miOrg && f.org === miOrg));
+    return registrado || (f.responsable === YO && !!miOrg && f.org === miOrg) || (completa && f.org === ORG);
   };
 
   it('coincide con la lista en todas las combinaciones de rol, membresía y dueño/asignado', async () => {
@@ -319,6 +326,19 @@ describe('assertInmuebleAccess: por enlace se abre lo mismo que muestra la lista
     await expect(assertInmuebleAccess('inm-1', undefined, 'propietario')).rejects.toMatchObject({ statusCode: 404 });
     await expect(assertExpedienteAccess('exp-1', '', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
     await expect(assertExpedienteAccess('exp-1', undefined, undefined)).resolves.toBeUndefined();
+  });
+
+  it('exmiembro que conserva propietario_id en un inmueble de su organización anterior: no lo abre', async () => {
+    conMembresia('ninguna');
+    inmueble.fila = { propietario_id: YO, inmobiliaria_id: ORG, miembro_responsable_id: null };
+    expect(await abre('inmobiliaria')).toBe(false);
+    // Ya en otra organización (org-2 en la fila, la suya es ORG): tampoco.
+    conMembresia('miembro_restringido');
+    inmueble.fila = { propietario_id: YO, inmobiliaria_id: 'org-2', miembro_responsable_id: null };
+    expect(await abre('inmobiliaria')).toBe(false);
+    // Lo suyo sin organización sí.
+    inmueble.fila = { propietario_id: YO, inmobiliaria_id: null, miembro_responsable_id: null };
+    expect(await abre('inmobiliaria')).toBe(true);
   });
 
   it('asignado a quien ya no es del equipo o de otra organización: no lo abre', async () => {
