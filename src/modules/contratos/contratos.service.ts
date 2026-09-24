@@ -616,6 +616,16 @@ function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: bo
   );
 }
 
+/** Sin «Cofianza Compartida» en este contrato: su co-titular no firma (P6). */
+function assertModalidadDisponible(modalidad: unknown): void {
+  if (modalidad === 'compartida') {
+    throw AppError.badRequest(
+      '«Cofianza Compartida» necesita un co-titular que este contrato no incluye como parte que firma. Elige Plena o Plus, o hazlo con el contrato nuevo.',
+      'MODALIDAD_NO_DISPONIBLE',
+    );
+  }
+}
+
 /** El co-titular que imprimió el contrato (snapshot). */
 const tieneCotitular = (datosVariables: unknown) =>
   !!(datosVariables as { cotitular?: { nombre_completo?: string } } | null)?.cotitular?.nombre_completo;
@@ -2091,6 +2101,7 @@ export async function generarContrato(
     ? input.cotitular.nombre
     : (expRow as { cotitular_nombre?: string | null }).cotitular_nombre;
   assertSinPartesAdicionales(!!expData.coarrendatario, !!cotitularNombre);
+  assertModalidadDisponible(input.modalidad_fianza ?? (expRow as { modalidad_fianza?: string | null }).modalidad_fianza);
   await assertEvaluacionVigente(expedienteId);
 
   // 1b. Bloqueo: el arrendador debe tener completos los datos del contrato.
@@ -2734,6 +2745,7 @@ export async function regenerarContrato(
     .eq('id', row.expediente_id)
     .single();
   const expRecordRegen = (expRowRegen as Record<string, unknown> | null) ?? {};
+  assertModalidadDisponible(expRecordRegen.modalidad_fianza);
 
   // 4.1e — Distribución de obligaciones (servicios_reparto): MERGE — solo
   // sobrescribimos las claves que el usuario cambió, conservando el resto de la

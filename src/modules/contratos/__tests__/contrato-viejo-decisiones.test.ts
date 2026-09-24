@@ -90,6 +90,7 @@ import {
   generarContrato,
   plazoFirmaContrato,
   previewPlantillaParaInmueble,
+  regenerarContrato,
   renovarContrato,
 } from '../contratos.service';
 import { prorrogarContratosVencidos } from '../contrato-vencimiento.service';
@@ -175,6 +176,29 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     const e = await error(generar({ modalidad_fianza: 'compartida', cotitular: { nombre: 'Lucía Díaz' } }));
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
     expect(e.message).toContain('co-titular');
+    expect(escrituras()).toEqual([]);
+  });
+
+  it('«Cofianza Compartida» sin co-titular (pedida o ya guardada) → 400 antes de reservar o escribir', async () => {
+    prepararGenerar();
+    const e = await error(generar({ modalidad_fianza: 'compartida' }));
+    expect(e).toMatchObject({ statusCode: 400, errorCode: 'MODALIDAD_NO_DISPONIBLE' });
+    expect(escrituras()).toEqual([]);
+
+    prepararGenerar({ modalidad_fianza: 'compartida' });
+    expect(await error(generar())).toMatchObject({ statusCode: 400, errorCode: 'MODALIDAD_NO_DISPONIBLE' });
+  });
+
+  it('regenerar un borrador con «Cofianza Compartida» guardada → 400 sin escribir', async () => {
+    enqueue('contratos', {
+      data: { id: CTO, expediente_id: EXP, estado: 'borrador', destinacion: null, plantilla_id: 'pl-1', version: 1, datos_variables: {}, _scope: {} },
+      error: null,
+    });
+    enqueue('expedientes', expediente(), { data: { numero: 'EXP-2026-0100', modalidad_fianza: 'compartida' }, error: null });
+    enqueue('perfiles', PROPIETARIO);
+    enqueue('plantillas_contrato', { data: { id: 'pl-1', nombre: 'V4', contenido: null, contenido_html: '<p></p>', variables: [], version: 1 }, error: null });
+    const e = await error(regenerarContrato(CTO, {}, ADMIN.id, undefined, ADMIN.rol));
+    expect(e).toMatchObject({ statusCode: 400, errorCode: 'MODALIDAD_NO_DISPONIBLE' });
     expect(escrituras()).toEqual([]);
   });
 
