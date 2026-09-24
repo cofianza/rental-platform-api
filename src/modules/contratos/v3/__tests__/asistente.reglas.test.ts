@@ -580,6 +580,7 @@ describe('faltantes', () => {
 // 12. avisosDePendientes
 describe('avisosDePendientes', () => {
   const CIERRE = 'Mientras haya textos pendientes, el contrato no se puede enviar a firma.';
+  const TRADICIONAL = 'Modalidad Tradicional: hay textos pendientes de aprobación de Cofianza.';
   const avisos = (...ids: string[]) => avisosDePendientes(ids.map((id) => ({ id })));
 
   it('sin pendientes no hay avisos', () => {
@@ -587,6 +588,7 @@ describe('avisosDePendientes', () => {
   });
 
   it('un aviso por prefijo, más el cierre', () => {
+    expect(avisos('b-01', 'b-05')).toEqual([TRADICIONAL, CIERRE]);
     // Los del Anexo (Ruta B) llevan el prefijo a-.
     expect(avisos('a-c-01', 'a-j-firma-coa')).toEqual([
       'Sin coarrendatario: 1 ajustes de redacción en singular pendientes de aprobación.',
@@ -715,14 +717,20 @@ describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () =>
 describe('textosPendientesPrevistos', () => {
   const sinAprobar = new Set(['b-01', 'c-01', 'c-02', 'j-firma-arrendatario']);
   const CIERRE = 'Mientras haya textos pendientes, el contrato no se puede enviar a firma.';
+  const TRADICIONAL = 'Modalidad Tradicional: hay textos pendientes de aprobación de Cofianza.';
   it('solo los que aplican a lo guardado', () => {
     // Con coarrendatario, PH, Trasladada y todo C.C.: nada previsto.
     expect(textosPendientesPrevistos(fuentes(), PASOS, sinAprobar)).toEqual([]);
     const solo = textosPendientesPrevistos(fuentes({ coarrendatario: null }), PASOS_SOLO, sinAprobar);
-    expect(solo).toEqual(['Sin coarrendatario: 2 ajustes de redacción en singular pendientes de aprobación.', CIERRE]);
+    // PASOS_SOLO es Tradicional: b-01 también aplica.
+    expect(solo).toEqual([
+      TRADICIONAL,
+      'Sin coarrendatario: 2 ajustes de redacción en singular pendientes de aprobación.',
+      CIERRE,
+    ]);
     // Los b-* son de Tradicional; sin PH ya no hay texto que aprobar (se suprime la cláusula).
     const tradicional = { ...PASOS, paso1: { ...PASOS.paso1, modalidad: 'tradicional' as const } };
-    expect(textosPendientesPrevistos(fuentes(), tradicional, new Set(['b-01']))).toEqual([CIERRE]);
+    expect(textosPendientesPrevistos(fuentes(), tradicional, new Set(['b-01']))).toEqual([TRADICIONAL, CIERRE]);
     expect(textosPendientesPrevistos(fuentes(), PASOS, new Set(['b-01']))).toEqual([]);
   });
   it('aprobados todos, no hay aviso', () => {

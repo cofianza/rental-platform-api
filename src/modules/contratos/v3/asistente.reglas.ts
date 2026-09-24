@@ -708,6 +708,9 @@ export const bloqueoNoImprimible = (rutas: string[]): Bloqueo => ({
 export function avisosDePendientes(pendientes: { id: string }[]): string[] {
   const ids = pendientes.map((p) => p.id);
   const avisos: string[] = [];
+  // b-… son de Tradicional (hoy todos aprobados): si uno cambia, el aviso dice por qué no se firma.
+  if (ids.some((i) => i.startsWith('b-')))
+    avisos.push('Modalidad Tradicional: hay textos pendientes de aprobación de Cofianza.');
   // a-… son los del Anexo de la Ruta B.
   const singulares = ids.filter((i) => /^(a-)?c-/.test(i)).length;
   if (singulares)
