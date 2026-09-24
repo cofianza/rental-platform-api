@@ -656,9 +656,21 @@ export async function reenviarSolicitudFirma(
     const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
     await assertPuedeAbrirSobre(row.contrato_id, row.contratos.expediente_id, row.contratos.datos_variables, solicitudId);
     nuevaExpiracion = await plazoFirmaContrato(row.contratos.expediente_id);
-    if (row.auco_document_code) {
-      await cerrarDocumentoAnterior(row.contrato_id, row.contratos.expediente_id, row.auco_document_code);
+    // Reenvio a otro correo: mantenemos el telefono original (el que
+    // sirvio en la creacion) para que Auco mande el WhatsApp al mismo
+    // numero pero con la nueva direccion de correo asociada al firmante.
+    // Mario (7-may-2026): el proceso es 100% WhatsApp; sin telefono valido
+    // no se puede reenviar. Se valida antes de anular el documento anterior.
+    const phoneInternational = aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined);
+    if (!phoneInternational) {
+      throw AppError.badRequest(
+        'No se puede reenviar la firma a otro correo porque la solicitud original no tiene un telefono valido. La firma se hace por WhatsApp.',
+        'TELEFONO_REQUERIDO_PARA_FIRMA',
+      );
     }
+    const cerradoComo = row.auco_document_code
+      ? await cerrarDocumentoAnterior(row.contrato_id, row.contratos.expediente_id, row.auco_document_code)
+      : null;
     // Re-upload a Auco con nuevo firmante.
     try {
       const { data: pdfData, error: downloadError } = await supabase.storage
@@ -674,19 +686,6 @@ export async function reenviarSolicitudFirma(
       const direccion = row.contratos?.expedientes?.inmuebles?.direccion || 'N/A';
       const ciudad = row.contratos?.expedientes?.inmuebles?.ciudad || '';
       const processName = `Contrato - ${row.contratos?.expedientes?.numero || row.contrato_id}`;
-
-      // Reenvio a otro correo: mantenemos el telefono original (el que
-      // sirvio en la creacion) para que Auco mande el WhatsApp al mismo
-      // numero pero con la nueva direccion de correo asociada al firmante.
-      // Mario (7-may-2026): el proceso es 100% WhatsApp; sin telefono valido
-      // no se puede reenviar.
-      const phoneInternational = aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined);
-      if (!phoneInternational) {
-        throw AppError.badRequest(
-          'No se puede reenviar la firma a otro correo porque la solicitud original no tiene un telefono valido. La firma se hace por WhatsApp.',
-          'TELEFONO_REQUERIDO_PARA_FIRMA',
-        );
-      }
 
       const baseReuploadInput = {
         email: env.AUCO_SENDER_EMAIL,
@@ -720,6 +719,15 @@ export async function reenviarSolicitudFirma(
         { error: aucoError, solicitudId, emailNuevo: emailNuevoNormalizado },
         'Error al re-subir documento a Auco con nuevo email',
       );
+      // El documento anterior ya quedó anulado: la solicitud no sigue «enviado» apuntándole.
+      if (cerradoComo) {
+        const { error: cierreError } = await (supabase
+          .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+          .update({ estado: cerradoComo, updated_at: new Date().toISOString() } as never)
+          .eq('id', solicitudId)
+          .eq('auco_document_code', row.auco_document_code);
+        if (cierreError) logger.error({ solicitudId, error: cierreError.message }, 'Reenvío a otro correo: no se pudo cerrar la solicitud anulada');
+      }
       const detalle = aucoError instanceof Error ? aucoError.message : String(aucoError);
       throw AppError.badRequest(
         `No fue posible reenviar el contrato a firma por WhatsApp con el nuevo correo. Verifica el estado de la cuenta de Auco y reintenta. Detalle: ${detalle}`,
@@ -753,14 +761,24 @@ export async function reenviarSolicitudFirma(
     if (nuevaExpiracion) updatePayload.token_expiracion = nuevaExpiracion;
   }
 
-  const { data: updated, error: updateError } = await (supabase
+  let actualizar = (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
     .update(updatePayload as never)
-    .eq('id', solicitudId)
-    .select(SOLICITUD_SELECT)
-    .single();
+    .eq('id', solicitudId);
+  // Con documento nuevo, CAS sobre el anterior: si otro reenvío la cambió
+  // mientras tanto, el documento que se acaba de subir no queda huérfano y vivo.
+  if (cambiaEmail) {
+    actualizar = row.auco_document_code
+      ? actualizar.eq('auco_document_code', row.auco_document_code)
+      : actualizar.is('auco_document_code', null);
+  }
+  const { data: updated, error: updateError } = await actualizar.select(SOLICITUD_SELECT).maybeSingle();
 
   if (updateError || !updated) {
+    if (cambiaEmail && nuevoAucoDocumentCode) await anularDocumentoHuerfano(nuevoAucoDocumentCode, row.contrato_id);
+    if (!updateError && cambiaEmail) {
+      throw AppError.conflict('Otro reenvío cambió esta solicitud mientras tanto. Actualiza la página.', 'FIRMA_YA_EN_CURSO');
+    }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al reenviar la solicitud');
   }
 

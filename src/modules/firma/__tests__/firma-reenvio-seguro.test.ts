@@ -392,6 +392,40 @@ describe('un firmante: reenviar a otro correo sube un documento nuevo (revisión
     expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-VIEJO', expect.anything());
     expect(auco.uploadDocumentForSignature).toHaveBeenCalledWith(expect.objectContaining({ expiredDate: '2026-10-10T04:59:59.000Z' }));
     expect(de('solicitudes_firma', 'update')[0].args[0]).toMatchObject({ auco_document_code: 'DOC-NUEVO', email_firmante: 'otro@x.co' });
+    // CAS sobre el documento anterior (revisión 3, B2).
+    expect(de('solicitudes_firma', 'eq').map((o) => o.args)).toContainEqual(['auco_document_code', 'DOC-VIEJO']);
+  });
+
+  it('si la subida del nuevo falla después de anular el anterior, la solicitud queda «cancelado» (no «enviado» con un documento anulado)', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
+    vi.mocked(auco.uploadDocumentForSignature).mockRejectedValueOnce(new Error('Auco API error (502)'));
+    enqueue('solicitudes_firma', solicitud);
+    enqueue('contrato_firmantes', { count: 0, error: null });
+
+    await expect(reenviar()).rejects.toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
+    expect(de('solicitudes_firma', 'update').map((o) => o.args[0])).toEqual([expect.objectContaining({ estado: 'cancelado' })]);
+    expect(de('solicitudes_firma', 'eq').map((o) => o.args)).toContainEqual(['auco_document_code', 'DOC-VIEJO']);
+  });
+
+  it('si otro reenvío cambió la solicitud mientras tanto (el CAS no la encuentra): anula el documento nuevo y 409', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
+    enqueue('solicitudes_firma', solicitud, { data: null, error: null });
+    enqueue('contrato_firmantes', { count: 0, error: null });
+
+    await expect(reenviar()).rejects.toMatchObject({ statusCode: 409, errorCode: 'FIRMA_YA_EN_CURSO' });
+    expect(vi.mocked(auco.cancelDocument).mock.calls.map((c) => c[0])).toEqual(['DOC-VIEJO', 'DOC-NUEVO']);
+  });
+
+  it('sin teléfono válido no anula el documento anterior: 400 antes de tocar Auco', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
+    enqueue('solicitudes_firma', { ...solicitud, data: { ...solicitud.data, telefono_firmante: null } });
+    enqueue('contrato_firmantes', { count: 0, error: null });
+
+    await expect(reenviar()).rejects.toMatchObject({ statusCode: 400, errorCode: 'TELEFONO_REQUERIDO_PARA_FIRMA' });
+    expect(auco.cancelDocument).not.toHaveBeenCalled();
+    expect(de('solicitudes_firma', 'update')).toEqual([]);
   });
 });
 
