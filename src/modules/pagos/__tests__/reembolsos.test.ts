@@ -87,6 +87,7 @@ import {
   reembolsarEnMercadoPago,
   resolverReembolso,
   revisarReembolsosEnProceso,
+  barrerDevolucionesPendientes,
 } from '../reembolsos.service';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
@@ -513,5 +514,28 @@ describe('P12: reembolsos que quedaron en proceso', () => {
 
     expect(await revisarReembolsosEnProceso()).toBe(0);
     expect(updates('pagos_no_conciliados')).toEqual([]);
+  });
+});
+
+describe('P10: red de seguridad', () => {
+  it('encola la evaluación pagada de un estudio cerrado que no llegó a la cola', async () => {
+    enqueue('pagos', { data: [{ id: PAGO, expediente_id: EXP, transaction_ref: 'mp-77' }], error: null }); // candidatos
+    enqueue('pagos_no_conciliados', { data: null, error: null }); // sin fila
+    sinCobrosVivos();
+    enqueue('pagos', { data: pagoMp, error: null });
+    enqueue('estudios', { data: [], error: null });
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    admins();
+
+    expect(await barrerDevolucionesPendientes()).toBe(1);
+    expect(upsertNoConciliado()).toMatchObject({ provider_payment_id: 'mp-77', motivo: 'estudio_cerrado_sin_consulta' });
+  });
+
+  it('si ya tiene fila en la cola, no la vuelve a revisar', async () => {
+    enqueue('pagos', { data: [{ id: PAGO, expediente_id: EXP, transaction_ref: 'mp-77' }], error: null });
+    enqueue('pagos_no_conciliados', { data: { id: FILA }, error: null });
+
+    expect(await barrerDevolucionesPendientes()).toBe(0);
+    expect(ops.filter((o) => o.table === 'pagos' && o.method === 'select')).toHaveLength(1);
   });
 });

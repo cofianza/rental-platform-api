@@ -506,7 +506,7 @@ export async function resolverReembolso(filaId: string, nota: string, user: { id
 }
 
 // ============================================================
-// Barrido (corre con la conciliación de pagos)
+// Barridos (corren con la conciliación de pagos)
 // ============================================================
 
 /**
@@ -558,4 +558,42 @@ export async function revisarReembolsosEnProceso(): Promise<number> {
     }
   }
   return revisadas;
+}
+
+/**
+ * Red de seguridad de P1: estudios cerrados o rechazados hace poco con la
+ * evaluación pagada, sin consulta al buró y sin fila en la cola (el gancho del
+ * cierre se cayó o el estudio se cerró antes de este cambio). Idempotente.
+ * ponytail: mira los estudios tocados en los últimos 30 días; uno más viejo se
+ * revisa a mano.
+ */
+export async function barrerDevolucionesPendientes(): Promise<number> {
+  const desde = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await db('pagos')
+    .select('id, expediente_id, transaction_ref, expedientes!inner(estado, updated_at)')
+    .eq('concepto', 'estudio')
+    .eq('estado', 'completado')
+    .in('expedientes.estado', ['cerrado', 'rechazado'])
+    .gte('expedientes.updated_at', desde)
+    .limit(200);
+  if (error) {
+    logger.error({ error: error.message }, 'barrerDevolucionesPendientes: no se pudieron leer los pagos');
+    return 0;
+  }
+  let revisados = 0;
+  for (const p of (data ?? []) as Array<{ id: string; expediente_id: string; transaction_ref: string | null }>) {
+    try {
+      const { data: fila } = await db('pagos_no_conciliados')
+        .select('id')
+        .in('provider_payment_id', [`pago:${p.id}`, ...(p.transaction_ref ? [p.transaction_ref] : [])])
+        .limit(1)
+        .maybeSingle();
+      if (fila) continue;
+      await devolverEvaluacionSinConsulta(p.expediente_id, 'Estudio terminado sin consulta al buró', null);
+      revisados++;
+    } catch (err) {
+      logger.warn({ err, pagoId: p.id }, 'barrerDevolucionesPendientes: no se pudo revisar el pago');
+    }
+  }
+  return revisados;
 }

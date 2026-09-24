@@ -18,11 +18,14 @@ if (env.PAYMENT_GATEWAY_PROVIDER === 'mercadopago') {
   }, RECONCILE_INTERVAL_MS).unref();
 }
 
-// P1: reembolsos que quedaron en proceso en Mercado Pago (los cierra o los
-// devuelve a la cola si se rechazaron).
+// P1: reembolsos que quedaron en proceso y evaluaciones de estudios terminados
+// sin consulta al buró que no llegaron a la cola (red de seguridad del cierre).
 setInterval(() => {
   import('@/modules/pagos/reembolsos.service')
-    .then(({ revisarReembolsosEnProceso }) => revisarReembolsosEnProceso())
+    .then(async ({ revisarReembolsosEnProceso, barrerDevolucionesPendientes }) => {
+      await revisarReembolsosEnProceso();
+      await barrerDevolucionesPendientes();
+    })
     .catch((err) => logger.warn({ err }, 'barrido de reembolsos: ciclo fallido'));
 }, RECONCILE_INTERVAL_MS).unref();
 
