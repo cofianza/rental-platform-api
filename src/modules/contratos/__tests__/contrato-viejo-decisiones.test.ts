@@ -233,3 +233,34 @@ describe('P21: vigencia de la evaluación (60 días) también en el contrato vie
     expect(escrituras()).toEqual([]);
   });
 });
+
+describe('P14: matrícula de arrendador de la inmobiliaria', () => {
+  const inmobiliaria = (matricula: Record<string, unknown>) => ({
+    data: { id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'inmobiliaria', matricula_arrendador: 'M-77', ...matricula },
+    error: null,
+  });
+  const preparar = (arrendador: Record<string, unknown>) => {
+    enqueue('expedientes', expediente());
+    enqueue('perfiles', arrendador);
+    enqueue('contratos', { data: [], error: null });
+    mockCompletitud.mockResolvedValue({ completo: true, faltantes: [], rol: 'inmobiliaria' });
+  };
+
+  it('sin «expedida por» → 400 antes de reservar o escribir', async () => {
+    preparar(inmobiliaria({ matricula_expedida_por: '  ', matricula_fecha: '2021-03-15' }));
+    const e = await error(generar());
+    expect(e).toMatchObject({ statusCode: 400, errorCode: 'PERFIL_ARRENDADOR_INCOMPLETO' });
+    expect(e.message).toContain('Matrícula expedida por');
+    expect(escrituras()).toEqual([]);
+  });
+
+  it('con «expedida por» y sin fecha sigue (cae en el paso siguiente: la plantilla)', async () => {
+    preparar(inmobiliaria({ matricula_expedida_por: 'Alcaldía de Medellín', matricula_fecha: null }));
+    expect((await error(generar())).errorCode).toBe('PLANTILLA_NOT_FOUND');
+  });
+
+  it('un propietario directo no la necesita', async () => {
+    preparar(PROPIETARIO);
+    expect((await error(generar())).errorCode).toBe('PLANTILLA_NOT_FOUND');
+  });
+});

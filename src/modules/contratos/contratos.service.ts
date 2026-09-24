@@ -2086,6 +2086,14 @@ export async function generarContrato(
       'PERFIL_ARRENDADOR_INCOMPLETO',
     );
   }
+  // P14: la inmobiliaria imprime su matrícula completa. El número ya lo exige la
+  // completitud; «expedida por» solo este contrato; la fecha no (sale si existe).
+  if (expData.arrendador?.rol === 'inmobiliaria' && !expData.arrendador.matricula_expedida_por?.trim()) {
+    throw AppError.badRequest(
+      'No se puede generar el contrato: falta «Matrícula expedida por» del arrendador. Complétala en Configuración → Datos para contrato.',
+      'PERFIL_ARRENDADOR_INCOMPLETO',
+    );
+  }
 
   // 1c. RESERVA DE LA PROPIEDAD (Flujo de Gerencia §4.2).
   //
