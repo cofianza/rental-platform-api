@@ -3400,7 +3400,9 @@ export async function solicitarReEvaluacion(
       resultado: 'pendiente',
       duracion_contrato_meses: est.duracion_contrato_meses,
       pago_por: est.pago_por,
-      observaciones: input.observaciones,
+      // El fundamento es interno (P33): va al timeline y a la bitácora, no a
+      // `observaciones`, que ve el gestor y el resultado sobrescribe.
+      observaciones: null,
       solicitado_por: userId,
       estudio_padre_id: estudioId,
     } as never)

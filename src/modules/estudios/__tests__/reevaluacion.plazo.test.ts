@@ -82,6 +82,14 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioCompletado: mockOnEstudio }));
+vi.mock('../tope-canon.guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../tope-canon.guard')>()),
+  assertCanonDentroDelTope: vi.fn(async () => undefined),
+}));
+vi.mock('../pago.guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../pago.guard')>()),
+  estudioYaCobrado: vi.fn(async () => true),
+}));
 vi.mock('../reglas-duras', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../reglas-duras')>()),
   resolverResultadoEstudio: mockResolver,
@@ -89,7 +97,7 @@ vi.mock('../reglas-duras', async (importOriginal) => ({
 
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/auditLog';
-import { getHistorialReEvaluacion, getSoportePresignedUrl, registrarResultado } from '../estudios.service';
+import { getHistorialReEvaluacion, getSoportePresignedUrl, registrarResultado, solicitarReEvaluacion } from '../estudios.service';
 import { reEvaluarSchema, registrarResultadoSchema } from '../estudios.schema';
 
 const hace = (dias: number) => new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
@@ -240,5 +248,29 @@ describe('registrar un rechazo a mano (P34)', () => {
     await vi.waitFor(() =>
       expect(mockOnEstudio).toHaveBeenCalledWith(expect.objectContaining({ motivoAnalista: 'No cumple la política de Cofianza' })),
     );
+  });
+});
+
+// P33: el fundamento de la re-evaluación es interno. Iba a `observaciones` del
+// estudio hijo, que ve el gestor y que después sobrescribe el resultado.
+describe('fundamento de la re-evaluación', () => {
+  it('queda en el timeline y la bitácora, no en el estudio', async () => {
+    enqueue(
+      'estudios',
+      { data: { ...rechazado(hace(1)), proveedor: 'manual', duracion_contrato_meses: 12, pago_por: 'inmobiliaria' }, error: null },
+      { data: null, error: null }, // sin re-evaluación previa
+      { data: { id: 'est-2' }, error: null }, // hijo creado
+    );
+    enqueue('estudios_documentos_soporte', { data: null, error: null, count: 1 });
+
+    await solicitarReEvaluacion('est-1', { observaciones: 'Certificado laboral nuevo' }, 'u-1', undefined, 'operador_analista').catch(() => undefined);
+
+    const hijo = inserts.find((i) => i.table === 'estudios')?.fila;
+    expect(hijo).toMatchObject({ estudio_padre_id: 'est-1', observaciones: null });
+    expect(inserts).toContainEqual({
+      table: 'eventos_timeline',
+      fila: expect.objectContaining({ metadata: expect.objectContaining({ fundamento: 'Certificado laboral nuevo' }) }),
+    });
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ detalle: expect.objectContaining({ fundamento: 'Certificado laboral nuevo' }) }));
   });
 });
