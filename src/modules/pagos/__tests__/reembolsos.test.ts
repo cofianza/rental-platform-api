@@ -343,6 +343,24 @@ describe('P1: webhook de un reembolso', () => {
   });
 });
 
+describe('Q5b-5: pago sin cobro que entró pendiente y después se aprobó', () => {
+  it('su fila pasa a aprobada (aparece en la cola) y se avisa', async () => {
+    mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-77', rawResponse: { external_reference: '', transaction_amount: 5000 } });
+    enqueue('pagos_no_conciliados', { data: [], error: null }, { data: [{ id: FILA }], error: null }); // ya existía (pendiente) → pasa a completed
+    admins();
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(updates('pagos_no_conciliados')[0]).toMatchObject({ estado_proveedor: 'completed', monto: 5000 });
+    expect(ops.some((o) => o.table === 'pagos_no_conciliados' && o.method === 'eq' && o.args[0] === 'resuelto' && o.args[1] === false)).toBe(true);
+    await vi.waitFor(() =>
+      expect(mockNotificarYCorreo).toHaveBeenCalledWith(
+        expect.objectContaining({ tipo: 'pago.no_conciliado', mensaje: expect.stringContaining('(aprobado)') }),
+      ),
+    );
+  });
+});
+
 describe('«Reembolsar en Mercado Pago» (administrador)', () => {
   const fila = (extra: Record<string, unknown> = {}) =>
     enqueue('pagos_no_conciliados', {

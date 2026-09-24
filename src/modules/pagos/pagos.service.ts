@@ -1570,7 +1570,25 @@ export async function registrarPagoNoConciliado(
   // Solo la primera vez: un reintento del webhook cae en ignoreDuplicates y no
   // devuelve fila. Sin este aviso la plata quedaba en la tabla sin que nadie lo
   // supiera.
-  const filaId = (data as Array<{ id: string }> | null)?.[0]?.id;
+  let filaId = (data as Array<{ id: string }> | null)?.[0]?.id;
+  if (!filaId && status.status === 'completed') {
+    // Ya estaba registrada sin aprobar (PSE o efectivo que entraron como
+    // pendientes, o rechazados): ahora es plata, pasa a la cola con su aviso.
+    const { data: aprobada } = await (supabase
+      .from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        estado_proveedor: 'completed',
+        monto: typeof mpAmount === 'number' ? mpAmount : null,
+        raw_response: status.rawResponse,
+        updated_at: new Date().toISOString(),
+      } as never)
+      .eq('proveedor', proveedor)
+      .eq('provider_payment_id', paymentId)
+      .eq('resuelto', false)
+      .in('estado_proveedor', ['pending', 'processing', 'failed', 'cancelled'])
+      .select('id');
+    filaId = (aprobada as Array<{ id: string }> | null)?.[0]?.id;
+  }
   if (filaId) {
     avisarPagoNoConciliado({ filaId, paymentId, externalReference, estado: status.status, motivo, monto: mpAmount, proveedor }).catch((err) =>
       logger.warn({ err, paymentId }, 'No se pudo avisar del pago no conciliado'),
