@@ -96,6 +96,15 @@ export function generateCertificateCode(): string {
   return `CERT-${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}`;
 }
 
+/**
+ * El código es aleatorio (60 bits): chocar con uq_estudios_certificados_codigo
+ * es casi imposible, y si pasa se reintenta una vez con otro. El 23505 de
+ * estudio_id es otra emisión en paralelo del mismo estudio: otro código no lo arregla.
+ */
+function esChoqueDeCodigo(error: { code?: string; message?: string; details?: string } | null): boolean {
+  return error?.code === '23505' && /codigo/.test(`${error.message ?? ''} ${error.details ?? ''}`);
+}
+
 // ============================================================
 // generateQrCode
 // ============================================================
@@ -646,6 +655,8 @@ export async function generarCertificado(
   userId: string,
   ip?: string,
   userRol?: string,
+  /** Uso interno: segundo intento tras un código repetido (ver esChoqueDeCodigo). */
+  reintento = false,
 ) {
   // 1. Deep join: estudio → expediente → solicitante + inmueble
   const e = await leerEstudioCrc(estudioId);
@@ -775,6 +786,13 @@ export async function generarCertificado(
     }
   }
 
+  // Sin registro, los PDF recién subidos quedarían huérfanos.
+  const quitarSubidos = async () => {
+    const llaves = [storageKey, ...VERSIONES_REDUCIDAS.map((v) => llaveDeVersion(storageKey, v))];
+    const { error } = await supabase.storage.from(BUCKET_NAME).remove(llaves);
+    if (error) logger.warn({ error, llaves }, 'CRC: no se pudieron borrar los PDF de una emisión fallida');
+  };
+
   // 8. Upsert estudios_certificados
   const certData = {
     estudio_id: estudioId,
@@ -795,6 +813,7 @@ export async function generarCertificado(
       .eq('id', existingCert.id);
 
     if (updateErr) {
+      await quitarSubidos();
       logger.error({ error: updateErr, estudioId }, 'Error updating certificate record');
       throw new AppError(500, 'INTERNAL_ERROR','Error al actualizar el registro del certificado');
     }
@@ -807,6 +826,9 @@ export async function generarCertificado(
       .single();
 
     if (insertErr || !inserted) {
+      await quitarSubidos();
+      // El PDF lleva el código y el QR: el segundo intento se hace desde cero.
+      if (!reintento && esChoqueDeCodigo(insertErr)) return generarCertificado(estudioId, userId, ip, userRol, true);
       logger.error({ error: insertErr, estudioId }, 'Error inserting certificate record');
       throw new AppError(500, 'INTERNAL_ERROR','Error al crear el registro del certificado');
     }

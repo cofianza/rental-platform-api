@@ -39,6 +39,10 @@ const { queues, enqueue, mockFrom, storage, archivos } = vi.hoisted(() => {
       return { data: {}, error: null };
     }),
     createSignedUrl: vi.fn(async (key: string) => ({ data: { signedUrl: `https://storage.test/${key}` }, error: null })),
+    remove: vi.fn(async (keys: string[]) => {
+      for (const k of keys) archivos.delete(k);
+      return { data: [], error: null };
+    }),
   };
   return {
     queues,
@@ -533,6 +537,71 @@ describe('quién recibe cuál', () => {
     enqueue('estudios', { data: cancelado, error: null });
     await expect(crcParaArrendatario(CERT)).rejects.toMatchObject({ statusCode: 409, message: 'Este certificado ya no tiene efecto.' });
     expect(storage.download).not.toHaveBeenCalled();
+  });
+});
+
+// P10: si el código aleatorio choca con el índice único, otro intento con otro
+// código; y sin registro no quedan PDF huérfanos en storage.
+describe('emisión que no se registra', () => {
+  const choque = (restriccion: string, clave: string) => ({
+    code: '23505',
+    message: `duplicate key value violates unique constraint "${restriccion}"`,
+    details: `Key (${clave}) already exists.`,
+  });
+  const CHOQUE_CODIGO = choque('uq_estudios_certificados_codigo', 'codigo');
+  const codigosImpresos = () =>
+    new Set(textos.mock.calls.map((c) => String(c[0])).filter((t) => /^CERT-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/.test(t)));
+  const emitir = () => generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
+
+  it('con el código repetido reintenta una vez con otro y borra los PDF del intento fallido', async () => {
+    enqueue('estudios', { data: ESTUDIO, error: null }, { data: ESTUDIO, error: null });
+    enqueue(
+      'estudios_certificados',
+      { data: null, error: null },
+      { data: null, error: CHOQUE_CODIGO },
+      { data: null, error: null },
+      { data: { id: 'cert-9' }, error: null },
+    );
+
+    const cert = await emitir();
+
+    const subidas = storage.upload.mock.calls.map((c) => c[0] as string);
+    expect(subidas).toHaveLength(6);
+    expect(storage.remove).toHaveBeenCalledWith(subidas.slice(0, 3));
+    expect([...archivos.keys()]).toEqual(subidas.slice(3));
+    expect(cert.pdf_storage_key).toBe(subidas[3]);
+    // Cada intento imprime su código; el registrado es el segundo.
+    const codigos = codigosImpresos();
+    expect(codigos.size).toBe(2);
+    expect(codigos.has(cert.codigo)).toBe(true);
+  });
+
+  it('un segundo choque, el UNIQUE del estudio u otro error: falla sin dejar PDF', async () => {
+    enqueue('estudios', { data: ESTUDIO, error: null }, { data: ESTUDIO, error: null });
+    enqueue(
+      'estudios_certificados',
+      { data: null, error: null },
+      { data: null, error: CHOQUE_CODIGO },
+      { data: null, error: null },
+      { data: null, error: CHOQUE_CODIGO },
+    );
+    await expect(emitir()).rejects.toMatchObject({ statusCode: 500 });
+    expect(storage.upload).toHaveBeenCalledTimes(6);
+    expect(archivos.size).toBe(0);
+
+    // Otra emisión en paralelo del mismo estudio: otro código no lo arregla.
+    storage.upload.mockClear();
+    enqueue('estudios', { data: ESTUDIO, error: null });
+    enqueue('estudios_certificados', { data: null, error: null }, { data: null, error: choque('uq_estudios_certificados_estudio', 'estudio_id') });
+    await expect(emitir()).rejects.toMatchObject({ statusCode: 500 });
+    expect(storage.upload).toHaveBeenCalledTimes(3);
+    expect(archivos.size).toBe(0);
+
+    // Regenerar y que falle el registro.
+    enqueue('estudios', { data: ESTUDIO, error: null });
+    enqueue('estudios_certificados', { data: CERT, error: null }, { data: null, error: { message: 'timeout' } });
+    await expect(emitir()).rejects.toMatchObject({ statusCode: 500 });
+    expect(archivos.size).toBe(0);
   });
 });
 
