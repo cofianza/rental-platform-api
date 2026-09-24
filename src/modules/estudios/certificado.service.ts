@@ -982,9 +982,14 @@ async function leerEstudioCrc(estudioId: string): Promise<Record<string, unknown
       )
     `)
     .eq('id', estudioId)
-    .single();
+    .maybeSingle();
 
-  if (estudioErr || !estudio) {
+  // Un error de la base no es «no existe»: con 404 el gestor buscaría otro estudio.
+  if (estudioErr) {
+    logger.error({ estudioId, error: estudioErr.message }, 'CRC: no se pudo leer el estudio');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el estudio. Intenta de nuevo en un momento.');
+  }
+  if (!estudio) {
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
   return estudio as Record<string, unknown>;

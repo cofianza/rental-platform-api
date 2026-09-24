@@ -508,6 +508,13 @@ describe('quién recibe cuál', () => {
     expect(textos).not.toHaveBeenCalled();
   });
 
+  it('un estudio que no existe es 404; un error de la base leyéndolo, 503', async () => {
+    enqueue('estudios', { data: null, error: null });
+    await expect(crcParaArrendatario(CERT)).rejects.toMatchObject({ statusCode: 404, errorCode: 'ESTUDIO_NOT_FOUND' });
+    enqueue('estudios', { data: null, error: { message: 'canceling statement due to statement timeout' } });
+    await expect(crcParaArrendatario(CERT)).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+  });
+
   it('el generador no pone APROBADO a un resultado sin sello', async () => {
     await expect(generateCertificatePdf({ ...DATOS, resultado: 'rechazado' }, QR)).rejects.toMatchObject({
       statusCode: 409,
