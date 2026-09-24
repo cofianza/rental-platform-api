@@ -1,0 +1,62 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// P2 (decisión 2026-09-24): el coarrendatario cuenta —prima 10 %, firma, tarifa
+// 2,5 %— solo si su evaluación terminó y no salió rechazada. Mock de Supabase con
+// colas por tabla (una tabla sin cola responde { data: null, error: null }).
+
+const { mockFrom, enqueue, queues } = vi.hoisted(() => {
+  type Res = Record<string, unknown>;
+  const queues = new Map<string, Res[]>();
+  const next = (table: string): Res => queues.get(table)?.shift() ?? { data: null, error: null };
+  const chainFor = (table: string) => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'in', 'order', 'limit']) chain[m] = () => chain;
+    chain.maybeSingle = async () => next(table);
+    return chain;
+  };
+  return {
+    mockFrom: vi.fn((table: string) => chainFor(table)),
+    queues,
+    enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
+  };
+});
+
+vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
+vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
+
+import { coarrendatarioVinculado } from '../coarrendatario-vinculado';
+
+const EXP = 'exp-1';
+const fila = { data: { id: 'coa-1', nombre: 'Luis', estudio_id: 'est-coa' }, error: null };
+
+beforeEach(() => queues.clear());
+
+describe('coarrendatarioVinculado — P2', () => {
+  it.each([
+    ['rechazada', { estado: 'completado', resultado: 'rechazado' }],
+    ['fallida', { estado: 'fallido', resultado: 'pendiente' }],
+    ['sin pagar', { estado: 'pago_pendiente', resultado: 'pendiente' }],
+    ['en curso', { estado: 'en_proceso', resultado: 'pendiente' }],
+  ])('con la evaluación %s no cuenta (20 % y contrato sin él)', async (_, estudio) => {
+    enqueue('expediente_coarrendatarios', fila);
+    enqueue('estudios', { data: estudio, error: null });
+
+    expect(await coarrendatarioVinculado(EXP)).toBeNull();
+  });
+
+  it('con la evaluación terminada y no rechazada cuenta, con su puntaje', async () => {
+    enqueue('expediente_coarrendatarios', fila);
+    enqueue('estudios', { data: { estado: 'completado', resultado: 'condicionado' }, error: null });
+    enqueue('estudios_scorecard_sombra', { data: { puntaje_normalizado: '82.5' }, error: null });
+
+    expect(await coarrendatarioVinculado(EXP)).toEqual({ id: 'coa-1', nombre: 'Luis', estudioId: 'est-coa', puntaje: 82.5 });
+  });
+
+  it('un error de lectura es «solo»; en modo estricto se propaga', async () => {
+    enqueue('expediente_coarrendatarios', fila, fila);
+    enqueue('estudios', { data: null, error: { message: 'timeout' } }, { data: null, error: { message: 'timeout' } });
+
+    expect(await coarrendatarioVinculado(EXP)).toBeNull();
+    await expect(coarrendatarioVinculado(EXP, { estricto: true })).rejects.toThrow('timeout');
+  });
+});

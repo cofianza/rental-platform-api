@@ -16,7 +16,7 @@ import { assertExpedienteAccess } from '@/lib/tenantScope';
 // mismo guard que /pago-estudio. Ver tope-canon.guard.ts.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { sobreCanon } from '@/modules/estudios/tarifas';
-import { ESTADOS_VINCULADO } from '@/modules/estudios/coarrendatario-vinculado';
+import { coarrendatarioVinculado } from '@/modules/estudios/coarrendatario-vinculado';
 
 // ============================================================
 // Helpers
@@ -229,19 +229,18 @@ export async function getPrimaSugerida(expedienteId: string, userId?: string, us
       .limit(1)
       .maybeSingle(),
     // tarifasParaContrato da "firma solo" (20 %) si no logra leer el
-    // coarrendatario; aquí se relee para no sugerir el doble del 10 %.
-    db('expediente_coarrendatarios')
-      .select('id')
-      .eq('expediente_id', expedienteId)
-      .in('estado', ESTADOS_VINCULADO)
-      .limit(1),
+    // coarrendatario; aquí se relee estricto (null = no se pudo leer) para no
+    // sugerir el doble del 10 %.
+    coarrendatarioVinculado(expedienteId, { estricto: true }).then(
+      (c) => c !== null,
+      () => null,
+    ),
   ]);
   if (error) throw fromSupabaseError(error);
   const canonContrato = Number((contrato as { valor_arriendo?: unknown } | null)?.valor_arriendo) || null;
   const t = canonContrato ? sobreCanon(tarifas, canonContrato) : tarifas;
   // Con la prima negociada por Gerencia el coarrendatario ya no cambia la cifra.
-  const vinculado = ((coa.data as unknown[] | null)?.length ?? 0) > 0;
-  const coaConfirmado = t.override?.prima_vinculacion_pct != null || (!coa.error && vinculado === t.con_coarrendatario);
+  const coaConfirmado = t.override?.prima_vinculacion_pct != null || coa === t.con_coarrendatario;
   const sinSugerencia = !coaConfirmado
     ? 'No se pudo confirmar si el estudio tiene coarrendatario, y con él la prima baja del 20 % al 10 %: escribe el monto a mano.'
     : t.prima_vinculacion_con_iva_cop === null

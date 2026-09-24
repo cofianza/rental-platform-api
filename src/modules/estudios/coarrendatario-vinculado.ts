@@ -21,14 +21,9 @@ export interface CoarrendatarioVinculado {
   /** Fila de expediente_coarrendatarios. */
   id: string;
   nombre: string;
-  /** Su estudio propio (tipo='con_coarrendatario'); null si aun no se creo. */
-  estudioId: string | null;
-  /**
-   * Ultimo puntaje normalizado del scorecard de SU estudio. null si no hay
-   * corrida, si su estudio no termino, o si termino rechazado (un
-   * coarrendatario rechazado no es "coarrendatario >= 80 por flujo
-   * automatico", que es lo que la fila de 2,5% exige).
-   */
+  /** Su estudio propio (tipo='con_coarrendatario'), ya completado y no rechazado. */
+  estudioId: string;
+  /** Ultimo puntaje normalizado del scorecard de SU estudio; null si no hay corrida. */
   puntaje: number | null;
 }
 
@@ -49,19 +44,34 @@ export function assertNoEsEstudioDeOtraPersona(tipo: unknown, userRol?: string):
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
 
 /**
- * Estados de expediente_coarrendatarios que cuentan como vinculado. El
- * asistente de contratos V3 lee con los MISMOS estados, para que la prima del
- * CRC y las partes del contrato no se contradigan.
+ * Estados de la invitacion que la dejan en pie (aceptada, no declinada ni
+ * cancelada). Por si solos ya NO vinculan: falta evaluacionCuenta.
  */
 export const ESTADOS_VINCULADO = ['aceptado', 'estudio_completado'] as const;
 
 /**
- * El coarrendatario vinculado al expediente: acepto la invitacion (tiene su
- * propia autorizacion y su estudio) y no la declino. Una invitacion todavia
- * pendiente NO vincula a nadie. Best-effort: ante un error de lectura devuelve
- * null (= "solo"), que es la cifra conservadora, y lo deja en el log.
+ * P2 (decision 2026-09-24; Adenda 2 §6, Flujo §12): el coarrendatario cuenta
+ * —prima 10 %, firma, tarifa 2,5 %— solo si su evaluacion termino y no salio
+ * rechazada. Rechazada, fallida, sin pagar o en curso: 20 % y contrato sin el.
+ * Una sola regla para el CRC, las tarifas, la prima sugerida y los dos contratos.
  */
-export async function coarrendatarioVinculado(expedienteId: string): Promise<CoarrendatarioVinculado | null> {
+export function evaluacionCuenta(
+  estudio: { estado?: string | null; resultado?: string | null } | null | undefined,
+): boolean {
+  return estudio?.estado === 'completado' && (estudio.resultado === 'aprobado' || estudio.resultado === 'condicionado');
+}
+
+/**
+ * El coarrendatario que cuenta en el expediente: acepto la invitacion (tiene
+ * su propia autorizacion y su estudio) y su evaluacion cuenta (evaluacionCuenta).
+ * Best-effort: ante un error de lectura devuelve null (= "solo"), la cifra
+ * conservadora, y lo deja en el log; con `estricto` lanza el error, para quien
+ * necesita distinguir "no hay" de "no se pudo leer".
+ */
+export async function coarrendatarioVinculado(
+  expedienteId: string,
+  opts: { estricto?: boolean } = {},
+): Promise<CoarrendatarioVinculado | null> {
   try {
     const { data, error } = await db('expediente_coarrendatarios')
       .select('id, nombre, estudio_id')
@@ -70,38 +80,33 @@ export async function coarrendatarioVinculado(expedienteId: string): Promise<Coa
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (error) {
-      logger.warn({ expedienteId, error: error.message }, 'No se pudo leer el coarrendatario vinculado — se asume sin coarrendatario');
-      return null;
-    }
+    if (error) throw new Error(error.message);
     const row = data as { id: string; nombre: string; estudio_id: string | null } | null;
-    if (!row) return null;
+    if (!row?.estudio_id) return null;
 
-    let puntaje: number | null = null;
-    if (row.estudio_id) {
-      const { data: est } = await db('estudios')
-        .select('estado, resultado')
-        .eq('id', row.estudio_id)
-        .maybeSingle();
-      const e = est as { estado?: string | null; resultado?: string | null } | null;
-      if (e?.estado === 'completado' && e.resultado !== 'rechazado') {
-        const { data: sombra } = await db('estudios_scorecard_sombra')
-          .select('puntaje_normalizado')
-          .eq('estudio_id', row.estudio_id)
-          .order('fecha_calculo', { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        const raw = (sombra as { puntaje_normalizado?: number | string | null } | null)?.puntaje_normalizado;
-        const n = raw === null || raw === undefined ? null : Number(raw);
-        puntaje = n !== null && Number.isFinite(n) ? n : null;
-      }
-    }
+    const { data: est, error: estError } = await db('estudios')
+      .select('estado, resultado')
+      .eq('id', row.estudio_id)
+      .maybeSingle();
+    if (estError) throw new Error(estError.message);
+    if (!evaluacionCuenta(est as { estado?: string | null; resultado?: string | null } | null)) return null;
+
+    const { data: sombra } = await db('estudios_scorecard_sombra')
+      .select('puntaje_normalizado')
+      .eq('estudio_id', row.estudio_id)
+      .order('fecha_calculo', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const raw = (sombra as { puntaje_normalizado?: number | string | null } | null)?.puntaje_normalizado;
+    const n = raw === null || raw === undefined ? null : Number(raw);
+    const puntaje = n !== null && Number.isFinite(n) ? n : null;
 
     return { id: row.id, nombre: row.nombre, estudioId: row.estudio_id, puntaje };
   } catch (err) {
+    if (opts.estricto) throw err;
     logger.warn(
       { expedienteId, err: err instanceof Error ? err.message : String(err) },
-      'Excepcion leyendo el coarrendatario vinculado — se asume sin coarrendatario',
+      'No se pudo leer el coarrendatario vinculado — se asume sin coarrendatario',
     );
     return null;
   }

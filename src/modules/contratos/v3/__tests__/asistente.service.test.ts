@@ -515,6 +515,24 @@ describe('obtenerEstado', () => {
     const e = await error(obtener());
     expect(e).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
+
+  it('P2: coarrendatario aceptado con la evaluación rechazada no entra al contrato (tarifa «solo», sin bloqueo)', async () => {
+    encolarCarga();
+    queues.set('expediente_coarrendatarios', [
+      {
+        data: {
+          id: 'coa-1', nombre: 'Luis', apellido: 'Gómez', tipo_documento: 'cc', numero_documento: '7654321',
+          email: 'luis@correo.co', telefono: '3005556677', estado: 'estudio_completado', estudio_id: 'est-coa',
+          direccion: null, municipio: null,
+        },
+        error: null,
+      },
+    ]);
+    // Segunda lectura de estudios: la del coarrendatario (la primera es la del titular).
+    enqueue('estudios', { data: { estado: 'completado', resultado: 'rechazado' }, error: null });
+    const e = await obtener();
+    expect(e.bloqueos).toEqual([]);
+  });
 });
 
 // ============================================================

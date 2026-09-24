@@ -95,9 +95,22 @@ describe('getPrimaSugerida', () => {
   });
 
   it('la tarifa dice «solo» pero hay coarrendatario vinculado: tampoco sugiere', async () => {
-    enqueue('expediente_coarrendatarios', { data: [{ id: 'coa-1' }], error: null });
+    enqueue('expediente_coarrendatarios', { data: { id: 'coa-1', nombre: 'Luis', estudio_id: 'est-coa' }, error: null });
+    enqueue('estudios', { data: { estado: 'completado', resultado: 'condicionado' }, error: null });
 
     expect((await getPrimaSugerida(EXP, 'op-1', 'operador_analista')).sin_sugerencia).toMatch(/coarrendatario/);
+  });
+
+  // P2 (2026-09-24): un coarrendatario con la evaluación rechazada no cuenta, y la
+  // relectura estricta coincide con la tarifa («solo»): sugiere el 20 %.
+  it('coarrendatario aceptado con la evaluación rechazada: sugiere el 20 %', async () => {
+    enqueue('expediente_coarrendatarios', { data: { id: 'coa-1', nombre: 'Luis', estudio_id: 'est-coa' }, error: null });
+    enqueue('estudios', { data: { estado: 'completado', resultado: 'rechazado' }, error: null });
+
+    const r = await getPrimaSugerida(EXP, 'op-1', 'operador_analista');
+
+    expect(r.sin_sugerencia).toBeNull();
+    expect(r.prima_vinculacion_pct).toBe(20);
   });
 
   it('con la prima negociada por Gerencia el coarrendatario no importa', async () => {

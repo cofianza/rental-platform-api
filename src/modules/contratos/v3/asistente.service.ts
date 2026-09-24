@@ -25,7 +25,7 @@ import { getCalibracion, type Calibracion } from '@/lib/calibracion';
 import { checkPerfilCompletitud } from '@/modules/perfil-arrendador/perfil-arrendador.service';
 import { tarifasDelEstudio } from '@/modules/estudios/tarifa-override.service';
 import { crcParaFirmantes } from '@/modules/estudios/certificado.service';
-import { ESTADOS_VINCULADO } from '@/modules/estudios/coarrendatario-vinculado';
+import { ESTADOS_VINCULADO, evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
 import { avisarCandidatosDeReserva, cancelarVisitasDeOtros } from '@/modules/estudios/reserva-inmueble.notificaciones';
 import {
   liberarReservaDeExpediente,
@@ -291,12 +291,17 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
   if (!perfil || (!completitud.completo && completitud.faltantes.length === 0))
     throw noVerificable(expedienteId, 'perfil del arrendador');
 
+  // P2: entra al contrato solo si su evaluación terminó y no salió rechazada, la misma
+  // regla de la tarifa (coarrendatarioVinculado); si no, el contrato va sin él.
+  const coaEstudio = dato<{ estado: string; resultado: string | null } | null>(coaEstR, expedienteId, 'estudio del coarrendatario');
+  const coarrendatario = coa && evaluacionCuenta(coaEstudio) ? { ...coa, estudio: coaEstudio } : null;
+
   // El coarrendatario se lee ESTRICTO: la prima del CRC (tarifas, lectura
   // best-effort que ante error dice "solo") y las partes deben decir lo mismo.
-  if (tarifa && tarifa.tarifas.con_coarrendatario !== (coa !== null))
+  if (tarifa && tarifa.tarifas.con_coarrendatario !== (coarrendatario !== null))
     throw noVerificable(expedienteId, 'coarrendatario inconsistente con la tarifa', {
       tarifa: tarifa.tarifas.con_coarrendatario,
-      coarrendatario: coa?.id ?? null,
+      coarrendatario: coarrendatario?.id ?? null,
     });
 
   const f: Fuentes = {
@@ -328,12 +333,7 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
       dato<{ ingreso_inferido_ajustado_cop: unknown } | null>(sombraR, expedienteId, 'ingreso')
         ?.ingreso_inferido_ajustado_cop,
     ),
-    coarrendatario: coa
-      ? {
-          ...coa,
-          estudio: dato<{ estado: string; resultado: string | null } | null>(coaEstR, expedienteId, 'estudio del coarrendatario'),
-        }
-      : null,
+    coarrendatario,
     arrendador: perfil,
     modalidadFianzaDefecto: org.modalidad_fianza_defecto ?? null,
     completitudFaltantes: completitud.faltantes.map((x) => x.etiqueta),
