@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
-import { authMiddleware, authorize } from '@/middleware/auth';
+import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import {
   listAdminTiposQuerySchema,
   tipoDocumentoIdSchema,
@@ -13,8 +13,10 @@ import * as adminTiposController from './admin-tipos-documento.controller';
 
 const router = Router();
 
-// All routes require authentication + configuracion:update (admin only)
+// Solo el administrador: el catálogo es global. configuracion:update solo no
+// basta, porque también lo tienen propietario e inmobiliaria (para sus datos).
 router.use(authMiddleware);
+router.use(roleGuard(['administrador']));
 router.use(authorize('configuracion', 'update'));
 
 // PATCH /reordenar must be BEFORE :id routes
