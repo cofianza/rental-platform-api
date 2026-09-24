@@ -162,8 +162,3 @@ export async function aucoWebhook(req: Request, res: Response) {
   }
 }
 
-export async function expirarCron(req: Request, res: Response) {
-  const result = await firmaService.expirarSolicitudesVencidas();
-  sendSuccess(res, result);
-}
-

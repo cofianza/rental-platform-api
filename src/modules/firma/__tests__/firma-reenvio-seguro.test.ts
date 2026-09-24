@@ -464,3 +464,9 @@ describe('cancelaciones manuales con la firma completa en Auco (revisión 3, M2)
     await expect(exigirSinFirmaCompleta('c1', 'e1')).rejects.toMatchObject({ statusCode: 503, errorCode: 'AUCO_NO_VERIFICABLE' });
   });
 });
+
+describe('sin vencimiento en bloque (revisión 3, B3)', () => {
+  it('no queda un barrido que marque «expirado» sin preguntar a Auco: vence Auco (expiredDate) y lo avisa por webhook', async () => {
+    expect('expirarSolicitudesVencidas' in (await import('../firma.service'))).toBe(false);
+  });
+});
