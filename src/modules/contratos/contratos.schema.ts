@@ -22,7 +22,7 @@ export const generarContratoSchema = z.object({
   plantilla_id: z.string().uuid('ID de plantilla inválido').optional(),
   // 4.1e: sin escape hatch `variables` (z.record libre) — permitía sobreescribir
   // cualquier placeholder del contrato (identidad del arrendatario, canon).
-  // Mismo cierre que en regenerar/renovar; los ajustes van por campos tipados.
+  // Mismo cierre que en regenerar; los ajustes van por campos tipados.
   fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)').optional(),
   duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
   // Condiciones de fianza del contrato V4 — se persisten en el expediente.
@@ -40,18 +40,6 @@ export const generarContratoSchema = z.object({
   // P12: comisión de intermediación que fija la inmobiliaria en este contrato;
   // 0 o vacía suprime la cláusula. Al propietario directo nunca se le imprime.
   comision_pct: z.coerce.number().min(0, 'La comisión no puede ser negativa').max(100, 'La comisión no puede pasar de 100 %').optional(),
-});
-
-// ============================================================
-// Renovar contrato (desde vigente)
-// ============================================================
-
-export const renovarContratoSchema = z.object({
-  fecha_inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de fecha inválido (YYYY-MM-DD)').optional(),
-  duracion_meses: z.coerce.number().int().min(1).max(120).optional(),
-  // 4.1e: se eliminó el escape hatch `variables` — la renovación renderiza con
-  // plantilla legacy plana y un override libre permitía alterar la identidad
-  // del arrendatario y el canon (mismo cierre que en regenerar).
 });
 
 // ============================================================
@@ -121,7 +109,6 @@ export const compararVersionesQuerySchema = z.object({
 export type ContratoIdParams = z.infer<typeof contratoIdParamsSchema>;
 export type ExpedienteIdParams = z.infer<typeof expedienteIdParamsSchema>;
 export type GenerarContratoInput = z.infer<typeof generarContratoSchema>;
-export type RenovarContratoInput = z.infer<typeof renovarContratoSchema>;
 export type ReGenerarContratoInput = z.infer<typeof regenerarContratoSchema>;
 export type ListContratosQuery = z.infer<typeof listContratosQuerySchema>;
 export type ListAllContratosQuery = z.infer<typeof listAllContratosQuerySchema>;

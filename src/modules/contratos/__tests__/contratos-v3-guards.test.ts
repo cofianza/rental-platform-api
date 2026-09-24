@@ -96,11 +96,10 @@ import {
 import {
   cancelarBorradorV3PorSistema,
   executeContratoTransition,
-  finalizarContratoVencido,
   getContratoTransitions,
 } from '../contrato-workflow.service';
-import { finalizarContratosVencidos } from '../contrato-vencimiento.service';
-import type { GenerarContratoInput, ReGenerarContratoInput, RenovarContratoInput } from '../contratos.schema';
+import { prorrogarContratosVencidos } from '../contrato-vencimiento.service';
+import type { GenerarContratoInput, ReGenerarContratoInput } from '../contratos.schema';
 import { crearSolicitudFirmaMultiparte } from '@/modules/firma/firma-multiparte.service';
 import { archivarPdfFirmadoEnStorage, crearSolicitudFirma } from '@/modules/firma/firma.service';
 import { createPaymentLink, registerManualPayment, resendPaymentLink } from '@/modules/pagos/pagos.service';
@@ -294,21 +293,15 @@ describe('fila V3 en el flujo legacy', () => {
 });
 
 describe('guards de la Entrega 5 sobre filas V3', () => {
-  it('finalizarContratoVencido no finaliza un V3 aunque le llegue (se prorroga solo)', async () => {
-    enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null });
-    expect(await finalizarContratoVencido(CTO)).toBe(false);
-    expect(mockRpc).not.toHaveBeenCalled();
-  });
-
   it('el job de vencimiento no toca contratos V3', async () => {
     enqueue('contratos', { data: [], error: null });
-    await finalizarContratosVencidos();
+    await prorrogarContratosVencidos();
     expect(ops.filter((o) => o.table === 'contratos' && o.method === 'is').map((o) => o.args)).toContainEqual(['destinacion', null]);
   });
 
   it('renovarContrato con un V3 → 400 CONTRATO_V3_NO_RENOVABLE, sin escribir', async () => {
     enqueue('contratos', { data: filaV3({ estado: 'vigente' }), error: null });
-    const e = await error(renovarContrato(CTO, {} as RenovarContratoInput, ADMIN.id, undefined, ADMIN.rol));
+    const e = await error(renovarContrato(CTO, ADMIN.id, ADMIN.rol));
     expect(e).toMatchObject({ statusCode: 400, errorCode: 'CONTRATO_V3_NO_RENOVABLE' });
     expect(escrituras()).toEqual([]);
   });

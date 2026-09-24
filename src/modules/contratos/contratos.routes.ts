@@ -5,7 +5,6 @@ import {
   contratoIdParamsSchema,
   expedienteIdParamsSchema,
   generarContratoSchema,
-  renovarContratoSchema,
   regenerarContratoSchema,
   listContratosQuerySchema,
   listAllContratosQuerySchema,
@@ -104,11 +103,11 @@ contratosRouter.get(
   contratosController.firmantesPreview,
 );
 
-// POST /:id/renovar — Create renewal contract (vigente only)
+// POST /:id/renovar — ya no renueva: el contrato se prorroga solo (P11/P20) → 409
 contratosRouter.post(
   '/:id/renovar',
   authorize('contratos', 'create'),
-  validate({ params: contratoIdParamsSchema, body: renovarContratoSchema }),
+  validate({ params: contratoIdParamsSchema }),
   contratosController.renovar,
 );
 

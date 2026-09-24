@@ -101,6 +101,8 @@ export const AUDIT_ACTIONS = {
   CONTRATO_FIRMADO_DOWNLOADED: 'contrato_firmado_downloaded',
   CONTRATO_FIRMADO_VERIFIED: 'contrato_firmado_verified',
   CONTRATO_RENEWED: 'contrato_renewed',
+  // P11/P20: prórroga automática al vencer {fecha_fin_anterior, fecha_fin, prorrogas}.
+  CONTRATO_PRORROGADO: 'contrato_prorrogado',
   // Archivos asociados al contrato
   CONTRATO_ARCHIVO_UPLOADED: 'contrato_archivo_uploaded',
   CONTRATO_ARCHIVO_DOWNLOADED: 'contrato_archivo_downloaded',

@@ -84,7 +84,10 @@ vi.mock('@/modules/firma/firma-multiparte.service', () => ({
 }));
 
 import { AppError } from '@/lib/errors';
-import { enviarContratoAFirma, generarContrato, plazoFirmaContrato, previewPlantillaParaInmueble } from '../contratos.service';
+import { enviarContratoAFirma, generarContrato, plazoFirmaContrato, previewPlantillaParaInmueble, renovarContrato } from '../contratos.service';
+import { prorrogarContratosVencidos } from '../contrato-vencimiento.service';
+import { logAudit } from '@/lib/auditLog';
+import { findPerfilIdByEmail, notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import type { GenerarContratoInput } from '../contratos.schema';
 
 const EXP = 'exp-1';
@@ -389,5 +392,77 @@ describe('P5: plazo de firma del contrato viejo', () => {
       expect((await enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol)).message).toBe('El contrato ya está en proceso de firma.');
       expect(mockCrearSobre).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('P11 y P20: al vencer, el contrato viejo se prorroga por el mismo término', () => {
+  const HOY = new Date('2026-09-24T15:00:00Z');
+  const vigente = (o: Record<string, unknown> = {}) => ({
+    id: CTO, expediente_id: EXP, fecha_inicio: '2025-09-15', fecha_fin: '2026-09-15', duracion_meses: 12, ...o,
+  });
+  const de = (table: string, method: string) => ops.filter((o) => o.table === table && o.method === method);
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(HOY);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('corre fecha_fin (CAS), deja constancia, avisa y NO finaliza ni libera el inmueble', async () => {
+    enqueue('contratos', { data: [vigente()], error: null }, { data: [{ id: CTO }], error: null });
+    enqueue('expedientes', { data: { solicitante_id: 'sol-1', inmueble_id: 'inm-1' }, error: null });
+    enqueue('inmuebles', { data: { direccion: 'Calle 1', propietario_id: 'prop-1' }, error: null });
+    enqueue('solicitantes', { data: { email: 'juan@x.co' }, error: null });
+    vi.mocked(findPerfilIdByEmail).mockResolvedValueOnce('user-juan');
+
+    expect(await prorrogarContratosVencidos()).toEqual({ revisados: 1, prorrogados: 1 });
+
+    expect(de('contratos', 'lt').map((o) => o.args)).toEqual([['fecha_fin', '2026-09-24']]);
+    expect(de('contratos', 'update').map((o) => o.args[0])).toEqual([{ fecha_fin: '2027-09-15' }]);
+    const cas = de('contratos', 'eq').map((o) => o.args);
+    expect(cas).toContainEqual(['estado', 'vigente']);
+    expect(cas).toContainEqual(['fecha_fin', '2026-09-15']);
+    expect(de('contrato_historial_estados', 'insert')[0].args[0]).toMatchObject({
+      estado_anterior: 'vigente',
+      estado_nuevo: 'vigente',
+      usuario_id: null,
+      comentario: expect.stringContaining('Prórroga automática por el mismo término (12 meses): el contrato vence ahora el 15/09/2027.'),
+    });
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ accion: 'contrato_prorrogado', entidadId: CTO }));
+    expect(mockRpc).not.toHaveBeenCalled(); // sin transición a 'finalizado'
+    await vi.waitFor(() => expect(notificarUsuario).toHaveBeenCalledTimes(2));
+    expect(notificarUsuario).toHaveBeenCalledWith(expect.objectContaining({ userId: 'prop-1', tipo: 'contrato.prorrogado', titulo: 'Contrato prorrogado' }));
+    expect(notificarUsuario).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-juan', tipo: 'contrato.prorrogado' }));
+  });
+
+  it('cuenta desde el inicio, no encadena: 31-ene + 1 mes vence el 28-feb y el siguiente, el 31-mar', async () => {
+    vi.setSystemTime(new Date('2026-03-15T15:00:00Z'));
+    enqueue('contratos', { data: [vigente({ fecha_inicio: '2026-01-31', fecha_fin: '2026-02-28', duracion_meses: 1 })], error: null }, { data: [{ id: CTO }], error: null });
+    await prorrogarContratosVencidos();
+    expect(de('contratos', 'update').map((o) => o.args[0])).toEqual([{ fecha_fin: '2026-03-31' }]);
+  });
+
+  it('si entretanto lo terminaron (el CAS no encuentra la fila), ni constancia ni aviso', async () => {
+    enqueue('contratos', { data: [vigente()], error: null }, { data: [], error: null });
+    expect(await prorrogarContratosVencidos()).toEqual({ revisados: 1, prorrogados: 0 });
+    expect(de('contrato_historial_estados', 'insert')).toEqual([]);
+    expect(notificarUsuario).not.toHaveBeenCalled();
+  });
+
+  it('sin término válido no lo toca (y tampoco lo finaliza)', async () => {
+    enqueue('contratos', { data: [vigente({ duracion_meses: null })], error: null });
+    expect(await prorrogarContratosVencidos()).toEqual({ revisados: 1, prorrogados: 0 });
+    expect(de('contratos', 'update')).toEqual([]);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('«Renovar contrato» en el viejo → 409 sin escribir (antes daba 500)', async () => {
+    enqueue('contratos', { data: { id: CTO, expediente_id: EXP, destinacion: null }, error: null });
+    const e = await error(renovarContrato(CTO, ADMIN.id, ADMIN.rol));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_SE_PRORROGA' });
+    expect(e.message).toContain('se prorroga automáticamente por el mismo término');
+    expect(escrituras()).toEqual([]);
   });
 });

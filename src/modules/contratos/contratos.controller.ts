@@ -3,7 +3,6 @@ import { sendSuccess, sendCreated } from '@/lib/response';
 import * as contratosService from './contratos.service';
 import type {
   GenerarContratoInput,
-  RenovarContratoInput,
   ReGenerarContratoInput,
   ListContratosQuery,
   ListAllContratosQuery,
@@ -125,9 +124,8 @@ export async function compararVersiones(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
-export async function renovar(req: Request, res: Response) {
+// P11/P20: ya no hay renovación; el servicio responde el motivo (409, o 400 para un V3).
+export async function renovar(req: Request, _res: Response) {
   const { id } = req.params as unknown as { id: string };
-  const input = req.body as RenovarContratoInput;
-  const contrato = await contratosService.renovarContrato(id, input, req.user!.id, req.ip, req.user?.rol);
-  sendCreated(res, contrato);
+  await contratosService.renovarContrato(id, req.user!.id, req.user?.rol);
 }

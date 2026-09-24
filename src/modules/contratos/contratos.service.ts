@@ -21,7 +21,6 @@ import { fechaBogota } from './v3/formato';
 import { getCalibracion } from '@/lib/calibracion';
 import type {
   GenerarContratoInput,
-  RenovarContratoInput,
   ReGenerarContratoInput,
   ListContratosQuery,
   ListAllContratosQuery,
@@ -112,15 +111,6 @@ async function getConfigValores(claves: string[]): Promise<Record<string, string
     out[row.clave] = row.valor;
   }
   return out;
-}
-
-function formatCurrencyCOP(value: number): string {
-  return new Intl.NumberFormat('es-CO', {
-    style: 'currency',
-    currency: 'COP',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
 }
 
 function formatDateCO(date: Date): string {
@@ -431,31 +421,6 @@ interface ExpedienteData {
   // `coarrendatario` reemplazó a `codeudor` (5-may-2026). Misma estructura
   // de datos — solo cambió el nombre del rol contractual.
   coarrendatario?: CodeudorData | null;
-}
-
-function buildVariablesFromExpediente(
-  data: ExpedienteData,
-  fechaInicio: Date,
-  duracionMeses: number,
-): Record<string, string> {
-  const fechaFin = addMonths(fechaInicio, duracionMeses);
-
-  return {
-    arrendador_nombre: `${data.propietario.nombre} ${data.propietario.apellido}`,
-    arrendador_documento: data.propietario.numero_documento || '',
-    arrendatario_nombre: `${data.solicitante.nombre} ${data.solicitante.apellido}`,
-    arrendatario_documento: data.solicitante.numero_documento || '',
-    coarrendatario_nombre: data.coarrendatario?.nombre || '',
-    coarrendatario_documento: data.coarrendatario?.numero_documento || '',
-    inmueble_direccion: data.inmueble.direccion,
-    inmueble_ciudad: data.inmueble.ciudad,
-    canon_mensual: formatCurrencyCOP(data.inmueble.valor_arriendo || 0),
-    fecha_inicio: formatDateCO(fechaInicio),
-    fecha_fin: formatDateCO(fechaFin),
-    duracion_meses: String(duracionMeses),
-    deposito: formatCurrencyCOP(data.inmueble.valor_arriendo || 0),
-    clausulas_adicionales: '',
-  };
 }
 
 async function fetchExpedienteData(expedienteId: string): Promise<{
@@ -2273,7 +2238,8 @@ export async function generarContrato(
         plantilla_id: plantillaRow?.id ?? null,
         version: 1,
         estado: 'borrador',
-        fecha_inicio: input.fecha_inicio || now.toISOString().split('T')[0],
+        // La misma fecha con que se calcula fecha_fin: la prórroga (P11/P20) cuenta desde aquí.
+        fecha_inicio: input.fecha_inicio || fechaInicioExp || now.toISOString().split('T')[0],
         fecha_fin: addMonths(fechaInicio, duracionMeses).toISOString().split('T')[0],
         duracion_meses: duracionMeses,
         valor_arriendo: expData.inmueble.valor_arriendo || 0,
@@ -2604,184 +2570,31 @@ function flattenForLegacyTemplate(ctx: Record<string, unknown>): Record<string, 
 }
 
 // ============================================================
-// Renovar contrato (desde vigente)
+// Renovar contrato: no hay (P11/P20)
 // ============================================================
 
-export async function renovarContrato(
-  contratoId: string,
-  input: RenovarContratoInput,
-  userId: string,
-  ip?: string,
-  userRol?: string,
-) {
-  // 1. Fetch parent contract
-  const { data: parent, error: parentError } = await (supabase
+/**
+ * P11/P20: el contrato del flujo anterior no se renueva: al vencer se prorroga
+ * solo por el mismo término (job de vencimiento) y terminarlo es una transición
+ * con motivo. El V3 tampoco (prórroga automática). Antes daba 500.
+ */
+export async function renovarContrato(contratoId: string, userId: string, userRol?: string): Promise<never> {
+  const { data } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, plantilla_id, estado, duracion_meses, datos_variables, plantilla_version, destinacion')
+    .select('id, expediente_id, destinacion')
     .eq('id', contratoId)
-    .single();
-
-  if (parentError || !parent) {
-    throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
-  }
-
-  const p = parent as unknown as {
-    id: string;
-    expediente_id: string;
-    plantilla_id: string;
-    estado: string;
-    duracion_meses: number;
-    datos_variables: Record<string, string> | null;
-    plantilla_version: number;
-    destinacion: string | null;
-  };
-  // Ownership (mismo cierre de IDOR que enviar a firma): no se renueva el
-  // contrato de otra organización por UUID.
+    .maybeSingle();
+  const p = data as { expediente_id: string; destinacion: string | null } | null;
+  if (!p) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
+  // Ownership (mismo cierre de IDOR que enviar a firma): no confirma contratos ajenos.
   await assertExpedienteAccess(p.expediente_id, userId, userRol);
-
-  // Contratos V3: tienen prórroga automática, y la renovación legacy lee una
-  // plantilla y un `contenido` que un V3 no tiene.
   if (p.destinacion) {
     throw AppError.badRequest('Los contratos del asistente no se renuevan desde aquí.', 'CONTRATO_V3_NO_RENOVABLE');
   }
-
-  if (p.estado !== 'vigente') {
-    throw AppError.badRequest(
-      'Solo se puede renovar un contrato en estado vigente',
-      'CONTRATO_NO_RENOVABLE',
-    );
-  }
-
-  // 2. Check no existing renewal already exists. Las renovaciones CANCELADAS
-  // no bloquean: sin este filtro, una renovación cancelada (p. ej. la
-  // auto-cancelación al terminar el padre, o un borrador descartado) impedía
-  // para siempre crear una nueva. Una renovación finalizada SÍ bloquea (el
-  // ciclo ya ocurrió).
-  const { data: existingRenewal } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('contrato_padre_id', contratoId)
-    .neq('estado', 'cancelado')
-    .limit(1)
-    .maybeSingle();
-
-  if (existingRenewal) {
-    throw AppError.conflict(
-      'Ya existe una renovacion para este contrato',
-      'RENOVACION_YA_EXISTENTE',
-    );
-  }
-
-  // 3. Fetch expediente data and plantilla (reuse generarContrato pattern)
-  const { data: expData } = await fetchExpedienteData(p.expediente_id);
-
-  const { data: plantilla, error: plantillaError } = await (supabase
-    .from('plantillas_contrato' as string) as ReturnType<typeof supabase.from>)
-    .select('id, nombre, contenido, variables, activa, version')
-    .eq('id', p.plantilla_id)
-    .single();
-
-  if (plantillaError || !plantilla) {
-    throw AppError.notFound('Plantilla del contrato original no encontrada', 'PLANTILLA_NOT_FOUND');
-  }
-
-  const pl = plantilla as unknown as {
-    id: string; nombre: string; contenido: string;
-    variables: string[]; activa: boolean; version: number;
-  };
-
-  // 4. Build variables — start from parent variables, override with new ones
-  const duracionMeses = input.duracion_meses || p.duracion_meses || 12;
-  const fechaInicio = input.fecha_inicio
-    ? new Date(input.fecha_inicio + 'T00:00:00')
-    : new Date();
-
-  const autoVariables = buildVariablesFromExpediente(expData, fechaInicio, duracionMeses);
-  const parentVars = p.datos_variables || {};
-  // 4.1e: sin escape hatch `variables` — la plantilla legacy de renovación usa
-  // claves planas (arrendatario_nombre, canon_mensual...) y un override libre
-  // permitiría alterar la identidad del arrendatario y el canon sin tope.
-  const finalVariables = { ...parentVars, ...autoVariables };
-
-  // 5. Compile HTML and generate PDF
-  const compiledHtml = compileTemplate(pl.contenido, finalVariables);
-  const now = new Date();
-  const pdfBuffer = await generateContractPdf(compiledHtml, {
-    titulo: pl.nombre,
-    fecha: formatDateCO(now),
-    version: 1,
-  });
-
-  // 6. Insert new contract with contrato_padre_id
-  const { data: newContrato, error: insertError } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .insert({
-      expediente_id: p.expediente_id,
-      plantilla_id: p.plantilla_id,
-      version: 1,
-      estado: 'borrador',
-      fecha_inicio: input.fecha_inicio || now.toISOString().split('T')[0],
-      fecha_fin: addMonths(fechaInicio, duracionMeses).toISOString().split('T')[0],
-      duracion_meses: duracionMeses,
-      valor_arriendo: expData.inmueble.valor_arriendo || 0,
-      datos_variables: finalVariables,
-      generado_por: uuidOrNull(userId),
-      fecha_generacion: now.toISOString(),
-      plantilla_version: pl.version,
-      nombre_archivo: `contrato-renovacion-${pl.nombre.toLowerCase().replace(/\s+/g, '-')}-v1.pdf`,
-      contrato_padre_id: contratoId,
-    } as never)
-    .select('id')
-    .single();
-
-  if (insertError || !newContrato) {
-    logger.error({ error: insertError?.message }, 'Error al crear contrato de renovacion');
-    throw AppError.badRequest('Error al crear el contrato de renovacion', 'RENOVACION_CREATE_ERROR');
-  }
-
-  const created = newContrato as unknown as { id: string };
-
-  // 7. Upload PDF
-  const storageKey = `contratos/${p.expediente_id}/${created.id}/v1.pdf`;
-
-  const { error: uploadError } = await supabase.storage
-    .from(BUCKET_NAME)
-    .upload(storageKey, pdfBuffer, {
-      contentType: 'application/pdf',
-      upsert: false,
-    });
-
-  if (uploadError) {
-    logger.error({ error: uploadError.message }, 'Error al subir PDF de renovacion');
-    await (supabase
-      .from('contratos' as string) as ReturnType<typeof supabase.from>)
-      .delete()
-      .eq('id', created.id);
-    throw new AppError(500, 'STORAGE_ERROR', 'Error al almacenar el PDF de renovacion');
-  }
-
-  // 8. Update contrato with storage_key
-  await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .update({ storage_key: storageKey } as never)
-    .eq('id', created.id);
-
-  // 9. Audit
-  logAudit({
-    usuarioId: userId,
-    accion: AUDIT_ACTIONS.CONTRATO_RENEWED,
-    entidad: AUDIT_ENTITIES.CONTRATO,
-    entidadId: created.id,
-    detalle: {
-      contrato_padre_id: contratoId,
-      expediente_id: p.expediente_id,
-      plantilla_id: p.plantilla_id,
-      duracion_meses: duracionMeses,
-    },
-    ip,
-  });
-
-  return getContratoById(created.id);
+  throw AppError.conflict(
+    'Este contrato no se renueva: al vencer se prorroga automáticamente por el mismo término. Si no debe continuar, finalízalo indicando el motivo.',
+    'CONTRATO_SE_PRORROGA',
+  );
 }
 
 // ============================================================
