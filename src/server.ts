@@ -18,6 +18,14 @@ if (env.PAYMENT_GATEWAY_PROVIDER === 'mercadopago') {
   }, RECONCILE_INTERVAL_MS).unref();
 }
 
+// P1: reembolsos que quedaron en proceso en Mercado Pago (los cierra o los
+// devuelve a la cola si se rechazaron).
+setInterval(() => {
+  import('@/modules/pagos/reembolsos.service')
+    .then(({ revisarReembolsosEnProceso }) => revisarReembolsosEnProceso())
+    .catch((err) => logger.warn({ err }, 'barrido de reembolsos: ciclo fallido'));
+}, RECONCILE_INTERVAL_MS).unref();
+
 // Vencimiento de contratos del flujo anterior: los vigentes cuya fecha_fin ya
 // pasó se prorrogan por el mismo término (P11/P20). Corre al arrancar (atrapa
 // los que vencieron mientras el server estuvo caído) y cada 6 h.

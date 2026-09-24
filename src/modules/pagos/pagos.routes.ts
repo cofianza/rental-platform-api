@@ -9,6 +9,7 @@ import {
   comprobantePresignedUrlSchema,
   listPagosQuerySchema,
   reembolsoIdParamsSchema,
+  resolverReembolsoSchema,
 } from './pagos.schema';
 import * as pagosController from './pagos.controller';
 
@@ -108,6 +109,13 @@ pagosRouter.post(
   roleGuard(['administrador']),
   validate({ params: reembolsoIdParamsSchema }),
   pagosController.reembolsar,
+);
+// «Marcar resuelto» con una nota, sin llamar a Mercado Pago.
+pagosRouter.post(
+  '/reembolsos/:id/resolver',
+  roleGuard(['administrador']),
+  validate({ params: reembolsoIdParamsSchema, body: resolverReembolsoSchema }),
+  pagosController.resolverReembolso,
 );
 
 // GET /pagos/:pagoId — Detail with events

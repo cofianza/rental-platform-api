@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
   mockFrom, ops, queues, enqueue, mockStatus, mockRefund, mockTransitionChecked, mockTransition,
-  mockOnPagoConfirmado, mockNotificarYCorreo, mockDevolverCredito,
+  mockOnPagoConfirmado, mockNotificarYCorreo, mockDevolverCredito, mockEsCredito,
 } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
@@ -44,6 +44,7 @@ const {
     mockOnPagoConfirmado: vi.fn(async () => undefined),
     mockNotificarYCorreo: vi.fn(async () => undefined),
     mockDevolverCredito: vi.fn(async () => 'no_es_credito'),
+    mockEsCredito: vi.fn(async () => false),
   };
 });
 
@@ -61,7 +62,10 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarResponsableExpediente: vi.fn(async () => undefined),
 }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onPagoConfirmado: mockOnPagoConfirmado }));
-vi.mock('@/modules/creditos-estudios/creditos-estudios.service', () => ({ devolverCreditoDePago: mockDevolverCredito }));
+vi.mock('@/modules/creditos-estudios/creditos-estudios.service', () => ({
+  devolverCreditoDePago: mockDevolverCredito,
+  esPagoConCredito: mockEsCredito,
+}));
 vi.mock('../gateway', () => ({
   getPaymentGateway: () => ({
     provider: 'mercadopago',
@@ -78,7 +82,12 @@ vi.mock('../pago-state-machine', async (importOriginal) => ({
 }));
 
 import { processWebhookEvent, createPaymentLink, registerManualPayment, reconcileMercadoPagoPayment } from '../pagos.service';
-import { devolverEvaluacionSinConsulta, reembolsarEnMercadoPago } from '../reembolsos.service';
+import {
+  devolverEvaluacionSinConsulta,
+  reembolsarEnMercadoPago,
+  resolverReembolso,
+  revisarReembolsosEnProceso,
+} from '../reembolsos.service';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
 const PAGO = '22222222-2222-2222-2222-222222222222';
@@ -93,6 +102,7 @@ const pagoMp = {
 const admins = () => enqueue('perfiles', { data: [{ id: 'admin-1' }], error: null });
 const upsertNoConciliado = () => ops.find((o) => o.table === 'pagos_no_conciliados' && o.method === 'upsert')?.args[0];
 const updates = (table: string) => ops.filter((o) => o.table === table && o.method === 'update').map((o) => o.args[0] as Record<string, unknown>);
+const sinCobrosVivos = () => enqueue('pagos', { data: [], error: null });
 
 beforeEach(() => {
   queues.clear();
@@ -100,11 +110,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockTransitionChecked.mockResolvedValue({ pago: null, transitioned: true });
   mockDevolverCredito.mockResolvedValue('no_es_credito');
+  mockEsCredito.mockResolvedValue(false);
 });
 
 describe('al cerrar o rechazar el estudio', () => {
   it('cancela los cobros vivos de la evaluación, incluido el fallido (Mercado Pago deja reintentar)', async () => {
-    enqueue('pagos', { data: [], error: null }); // cobros vivos
+    sinCobrosVivos();
     enqueue('pagos', { data: null, error: null }); // sin pago completado
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
@@ -114,21 +125,42 @@ describe('al cerrar o rechazar el estudio', () => {
     expect(mockDevolverCredito).not.toHaveBeenCalled();
   });
 
-  it('pagado con crédito y sin consulta al buró: el crédito vuelve solo al saldo', async () => {
-    enqueue('pagos', { data: [], error: null });
+  it('pagado con crédito y sin consulta al buró: cancela la evaluación (CAS) y el crédito vuelve solo', async () => {
+    sinCobrosVivos();
     enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
-    enqueue('estudios', { data: [{ estado: 'formulario_completado', referencia_proveedor: null }], error: null });
+    enqueue(
+      'estudios',
+      { data: [{ id: 'est-1', estado: 'formulario_completado', referencia_proveedor: null }], error: null },
+      { data: [{ id: 'est-1' }], error: null }, // CAS a cancelado
+    );
     mockDevolverCredito.mockResolvedValueOnce('devuelto');
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
 
+    expect(updates('estudios')).toEqual([{ estado: 'cancelado' }]);
+    expect(ops.some((o) => o.table === 'estudios' && o.method === 'eq' && o.args[0] === 'estado' && o.args[1] === 'formulario_completado')).toBe(true);
     expect(mockDevolverCredito).toHaveBeenCalledWith(PAGO, 'Estudio cerrado', 'user-1');
-    expect(ops.some((o) => o.table === 'eventos_timeline' && o.method === 'insert')).toBe(true);
+    expect(upsertNoConciliado()).toBeUndefined();
+  });
+
+  it('P3: si ejecutarEstudio tomó la evaluación antes del CAS, no se devuelve', async () => {
+    sinCobrosVivos();
+    enqueue('pagos', { data: pagoMp, error: null });
+    enqueue(
+      'estudios',
+      { data: [{ id: 'est-1', estado: 'formulario_completado', referencia_proveedor: null }], error: null },
+      { data: [], error: null }, // CAS perdido: se movió
+      { data: [{ id: 'est-1', estado: 'en_proceso', referencia_proveedor: null }], error: null }, // relectura
+    );
+
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
+
+    expect(mockDevolverCredito).not.toHaveBeenCalled();
     expect(upsertNoConciliado()).toBeUndefined();
   });
 
   it('pagado por Mercado Pago y sin consulta: queda como reembolso pendiente y se avisa, sin reembolsar solo', async () => {
-    enqueue('pagos', { data: [], error: null });
+    sinCobrosVivos();
     enqueue('pagos', { data: pagoMp, error: null });
     enqueue('estudios', { data: [], error: null });
     enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
@@ -137,6 +169,7 @@ describe('al cerrar o rechazar el estudio', () => {
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
 
     expect(upsertNoConciliado()).toMatchObject({
+      proveedor: 'mercadopago',
       provider_payment_id: 'mp-77',
       motivo: 'estudio_cerrado_sin_consulta',
       estado_proveedor: 'completed',
@@ -145,15 +178,46 @@ describe('al cerrar o rechazar el estudio', () => {
     expect(mockRefund).not.toHaveBeenCalled();
     await vi.waitFor(() =>
       expect(mockNotificarYCorreo).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'admin-1', titulo: 'Evaluación por devolver en Mercado Pago', mensaje: expect.stringContaining('Reembolsar en Mercado Pago') }),
+        expect.objectContaining({
+          userId: 'admin-1',
+          titulo: 'Evaluación por devolver en Mercado Pago',
+          link: '/facturacion?tab=reembolsos',
+          mensaje: expect.stringContaining('Reembolsar en Mercado Pago'),
+        }),
       ),
     );
   });
 
+  it('pagado a mano: también va a la cola (se devuelve por el mismo medio y se marca resuelto)', async () => {
+    sinCobrosVivos();
+    enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
+    enqueue('estudios', { data: [], error: null });
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    admins();
+
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
+
+    expect(upsertNoConciliado()).toMatchObject({ proveedor: 'manual', provider_payment_id: `pago:${PAGO}`, motivo: 'estudio_cerrado_sin_consulta' });
+  });
+
+  it('P11: si la única evaluación falló (no se sabe si la central cobró), queda en la cola para revisión', async () => {
+    sinCobrosVivos();
+    enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null });
+    mockEsCredito.mockResolvedValueOnce(true);
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    admins();
+
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
+
+    expect(upsertNoConciliado()).toMatchObject({ proveedor: 'credito', provider_payment_id: `pago:${PAGO}`, motivo: 'estudio_fallido_revisar' });
+    expect(mockDevolverCredito).not.toHaveBeenCalled();
+  });
+
   it('con consulta al buró no se devuelve nada (para conservarlo está la reasignación)', async () => {
-    enqueue('pagos', { data: [], error: null });
+    sinCobrosVivos();
     enqueue('pagos', { data: pagoMp, error: null });
-    enqueue('estudios', { data: [{ estado: 'completado', referencia_proveedor: 'tu-1' }], error: null });
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'completado', referencia_proveedor: 'tu-1' }], error: null });
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio rechazado', 'user-1');
 
@@ -256,57 +320,87 @@ describe('P1: webhook de un reembolso', () => {
 });
 
 describe('«Reembolsar en Mercado Pago» (administrador)', () => {
-  const fila = (resuelto = false) =>
+  const fila = (extra: Record<string, unknown> = {}) =>
     enqueue('pagos_no_conciliados', {
       data: {
         id: FILA, proveedor: 'mercadopago', provider_payment_id: 'mp-77', external_reference: `estudio:${EXP}:${PAGO}`,
-        monto: 80000, motivo: 'estudio_cerrado_sin_consulta', notas: null, resuelto, created_at: '2026-09-24',
+        monto: 80000, motivo: 'estudio_cerrado_sin_consulta', notas: null, resuelto: false, estado_proveedor: 'completed',
+        created_at: '2026-09-24', ...extra,
       },
       error: null,
     });
+  const cobro = () => enqueue('pagos', { data: { id: PAGO, expediente_id: EXP, estado: 'completado' }, error: null });
+  const sinConsulta = () => enqueue('estudios', { data: [{ id: 'est-1', estado: 'cancelado', referencia_proveedor: null }], error: null });
   const admin = { id: 'admin-1', email: 'admin@cofianza.co' };
 
-  it('reembolsa una sola vez, deja el registro y pasa el cobro a reembolsado', async () => {
+  it('reembolsa una sola vez, deja el registro, pasa el cobro a reembolsado y avisa la nota crédito', async () => {
     fila();
+    cobro();
+    sinConsulta();
     enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null }); // CAS
     mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-77', rawResponse: {} });
     mockRefund.mockResolvedValueOnce({ refundId: 'r-1', status: 'succeeded', rawResponse: {} });
-    enqueue('pagos', { data: { id: PAGO, expediente_id: EXP, estado: 'completado' }, error: null });
-    enqueue('facturas', { data: { factus_number: 'FE-12' }, error: null });
+    enqueue('facturas', { data: { id: 'fac-1', factus_number: 'FE-12' }, error: null });
+    admins();
 
     const r = await reembolsarEnMercadoPago(FILA, admin);
 
     expect(r).toEqual({ estado: 'reembolsado', refund_id: 'r-1', factura_numero: 'FE-12' });
     expect(mockRefund).toHaveBeenCalledTimes(1);
     expect(mockRefund).toHaveBeenCalledWith('mp-77');
-    expect(ops.some((o) => o.table === 'pagos_no_conciliados' && o.method === 'eq' && o.args[0] === 'resuelto' && o.args[1] === false)).toBe(true);
-    const notas = ops.filter((o) => o.table === 'pagos_no_conciliados' && o.method === 'update').map((o) => (o.args[0] as { notas?: string }).notas);
-    expect(notas.at(-1)).toContain('admin@cofianza.co');
-    expect(notas.at(-1)).toContain('r-1');
-    expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'reembolsado' }));
-    expect(ops.some((o) => o.table === 'pagos' && o.method === 'eq' && o.args[0] === 'transaction_ref' && o.args[1] === 'mp-77')).toBe(true);
+    const [tomada, final] = updates('pagos_no_conciliados');
+    expect(tomada).toMatchObject({ estado_proveedor: 'reembolso_en_proceso' });
+    expect(final).toMatchObject({ resuelto: true, estado_proveedor: 'refunded', notas: expect.stringContaining('r-1') });
+    expect(final.notas).toContain('admin@cofianza.co');
+    expect(mockTransitionChecked).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'reembolsado' }));
+    expect(mockNotificarYCorreo).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'factura.nota_credito' }));
+  });
+
+  it('P12: si el reembolso queda en proceso, la fila no se resuelve ni el cobro cambia (lo cierra el webhook)', async () => {
+    fila();
+    cobro();
+    sinConsulta();
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-77', rawResponse: {} });
+    mockRefund.mockResolvedValueOnce({ refundId: 'r-3', status: 'pending', rawResponse: {} });
+
+    expect(await reembolsarEnMercadoPago(FILA, admin)).toMatchObject({ estado: 'en_proceso', refund_id: 'r-3' });
+    const final = updates('pagos_no_conciliados').at(-1)!;
+    expect(final.resuelto).toBeUndefined();
+    expect(final.notas).toContain('en proceso');
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+  });
+
+  it('P3: si la evaluación llegó al buró después de encolarse, no se devuelve', async () => {
+    fila();
+    cobro();
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'completado', referencia_proveedor: 'tu-1' }], error: null });
+
+    await expect(reembolsarEnMercadoPago(FILA, admin)).rejects.toMatchObject({ statusCode: 409, errorCode: 'CONSULTA_AL_BURO' });
+    expect(mockRefund).not.toHaveBeenCalled();
   });
 
   it('un pago duplicado se reembolsa sin tocar el cobro que sí se pagó con el primero', async () => {
-    enqueue('pagos_no_conciliados', {
-      data: {
-        id: FILA, proveedor: 'mercadopago', provider_payment_id: 'mp-dup', external_reference: `estudio:${EXP}:${PAGO}`,
-        monto: 80000, motivo: 'pago_duplicado', notas: null, resuelto: false, created_at: '2026-06-22',
-      },
-      error: null,
-    });
+    fila({ provider_payment_id: 'mp-dup', motivo: 'pago_duplicado', created_at: '2026-06-22' });
+    enqueue('pagos', { data: null, error: null }); // ningún cobro se pagó con mp-dup
     enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
     mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-dup', rawResponse: {} });
     mockRefund.mockResolvedValueOnce({ refundId: 'r-2', status: 'succeeded', rawResponse: {} });
-    enqueue('pagos', { data: null, error: null }); // ningún cobro se pagó con mp-dup
 
     expect(await reembolsarEnMercadoPago(FILA, admin)).toEqual({ estado: 'reembolsado', refund_id: 'r-2', factura_numero: null });
     expect(mockRefund).toHaveBeenCalledWith('mp-dup');
-    expect(mockTransition).not.toHaveBeenCalled();
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+  });
+
+  it('P9: lo que no se reembolsa completo (transición fallida, reembolso parcial) no ofrece Reembolsar', async () => {
+    fila({ motivo: 'transicion_fallida' });
+
+    await expect(reembolsarEnMercadoPago(FILA, admin)).rejects.toMatchObject({ errorCode: 'REEMBOLSO_NO_APLICA' });
+    expect(mockRefund).not.toHaveBeenCalled();
   });
 
   it('ya resuelto: 409 sin llamar a Mercado Pago', async () => {
-    fila(true);
+    fila({ resuelto: true });
 
     await expect(reembolsarEnMercadoPago(FILA, admin)).rejects.toMatchObject({ statusCode: 409, errorCode: 'REEMBOLSO_RESUELTO' });
     expect(mockRefund).not.toHaveBeenCalled();
@@ -314,6 +408,8 @@ describe('«Reembolsar en Mercado Pago» (administrador)', () => {
 
   it('otro administrador lo tomó primero: 409 sin reembolsar', async () => {
     fila();
+    cobro();
+    sinConsulta();
     mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-77', rawResponse: {} });
     enqueue('pagos_no_conciliados', { data: [], error: null }); // CAS perdido
 
@@ -321,23 +417,101 @@ describe('«Reembolsar en Mercado Pago» (administrador)', () => {
     expect(mockRefund).not.toHaveBeenCalled();
   });
 
-  it('si Mercado Pago falla, la fila vuelve a quedar pendiente con el motivo', async () => {
+  it('si Mercado Pago falla, la fila vuelve a quedar por resolver con el motivo', async () => {
     fila();
+    cobro();
+    sinConsulta();
     enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
     mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-77', rawResponse: {} });
     mockRefund.mockRejectedValueOnce(new Error('Error de pasarela: saldo insuficiente'));
 
     await expect(reembolsarEnMercadoPago(FILA, admin)).rejects.toMatchObject({ statusCode: 502, errorCode: 'REEMBOLSO_FALLIDO' });
-    const ultimo = ops.filter((o) => o.table === 'pagos_no_conciliados' && o.method === 'update').at(-1)?.args[0];
-    expect(ultimo).toMatchObject({ resuelto: false, notas: expect.stringContaining('saldo insuficiente') });
-    expect(mockTransition).not.toHaveBeenCalled();
+    expect(updates('pagos_no_conciliados').at(-1)).toMatchObject({ estado_proveedor: 'completed', notas: expect.stringContaining('saldo insuficiente') });
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
   });
 
-  it('si Mercado Pago ya lo devolvió, no se vuelve a reembolsar', async () => {
+  it('si Mercado Pago ya lo devolvió, no se vuelve a reembolsar: se procesa como su webhook (fila y cobro)', async () => {
     fila();
-    mockStatus.mockResolvedValueOnce({ status: 'refunded', transactionRef: 'mp-77', rawResponse: {} });
+    cobro();
+    sinConsulta();
+    const devuelto = { status: 'refunded', transactionRef: 'mp-77', rawResponse: { status: 'refunded', external_reference: `estudio:${EXP}:${PAGO}` } };
+    mockStatus.mockResolvedValueOnce(devuelto).mockResolvedValueOnce(devuelto);
+    enqueue('pagos_no_conciliados', { data: { id: FILA, notas: null }, error: null });
+    enqueue('pagos', { data: { id: PAGO, estado: 'completado', monto: 80000, expediente_id: EXP, transaction_ref: 'mp-77' }, error: null });
 
     expect(await reembolsarEnMercadoPago(FILA, admin)).toMatchObject({ estado: 'ya_reembolsado' });
     expect(mockRefund).not.toHaveBeenCalled();
+    expect(updates('pagos_no_conciliados')[0]).toMatchObject({ resuelto: true, estado_proveedor: 'refunded' });
+    expect(mockTransitionChecked).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'reembolsado' }));
+  });
+});
+
+describe('P9: «Marcar resuelto» (administrador)', () => {
+  const admin = { id: 'admin-1', email: 'admin@cofianza.co' };
+
+  it('la evaluación devuelta a mano: la fila se cierra con la nota y el cobro pasa a reembolsado', async () => {
+    enqueue('pagos_no_conciliados', {
+      data: {
+        id: FILA, proveedor: 'manual', provider_payment_id: `pago:${PAGO}`, external_reference: `estudio:${EXP}:${PAGO}`,
+        monto: 80000, motivo: 'estudio_cerrado_sin_consulta', notas: null, resuelto: false, estado_proveedor: 'completed',
+        created_at: '2026-09-24',
+      },
+      error: null,
+    });
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null }); // CAS
+    enqueue('pagos', { data: { id: PAGO, expediente_id: EXP, estado: 'completado' }, error: null });
+
+    expect(await resolverReembolso(FILA, 'Transferencia devuelta el 24/09', admin)).toEqual({ estado: 'resuelto', factura_numero: null });
+
+    expect(updates('pagos_no_conciliados')[0]).toMatchObject({ resuelto: true, notas: expect.stringContaining('Transferencia devuelta el 24/09') });
+    expect(ops.some((o) => o.table === 'pagos' && o.method === 'eq' && o.args[0] === 'id' && o.args[1] === PAGO)).toBe(true);
+    expect(mockTransitionChecked).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'reembolsado' }));
+    expect(mockRefund).not.toHaveBeenCalled();
+  });
+
+  it('un pago que no se pudo asociar: se cierra con la nota y ningún cobro cambia', async () => {
+    enqueue('pagos_no_conciliados', {
+      data: {
+        id: FILA, proveedor: 'mercadopago', provider_payment_id: 'mp-9', external_reference: 'x', monto: 150,
+        motivo: 'referencia_desconocida', notas: null, resuelto: false, estado_proveedor: 'completed', created_at: '2026-09-24',
+      },
+      error: null,
+    });
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+
+    await resolverReembolso(FILA, 'Conciliado con el extracto', admin);
+
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+  });
+});
+
+describe('P12: reembolsos que quedaron en proceso', () => {
+  const enProceso = () =>
+    enqueue('pagos_no_conciliados', {
+      data: [{
+        id: FILA, proveedor: 'mercadopago', provider_payment_id: 'mp-77', external_reference: `estudio:${EXP}:${PAGO}`,
+        monto: 80000, motivo: 'estudio_cerrado_sin_consulta', notas: 'Reembolso en proceso', resuelto: false,
+        estado_proveedor: 'reembolso_en_proceso', created_at: '2026-09-24',
+      }],
+      error: null,
+    });
+
+  it('si Mercado Pago lo rechazó, la fila vuelve a quedar por resolver y se avisa', async () => {
+    enProceso();
+    mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-77', rawResponse: { refunds: [{ id: 'r-3', status: 'rejected' }] } });
+    admins();
+
+    expect(await revisarReembolsosEnProceso()).toBe(1);
+
+    expect(updates('pagos_no_conciliados')[0]).toMatchObject({ estado_proveedor: 'completed', notas: expect.stringContaining('rechazó') });
+    expect(mockNotificarYCorreo).toHaveBeenCalledWith(expect.objectContaining({ titulo: 'Un reembolso no se completó' }));
+  });
+
+  it('si sigue en proceso, no se toca', async () => {
+    enProceso();
+    mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-77', rawResponse: { refunds: [{ id: 'r-3', status: 'in_process' }] } });
+
+    expect(await revisarReembolsosEnProceso()).toBe(0);
+    expect(updates('pagos_no_conciliados')).toEqual([]);
   });
 });

@@ -70,6 +70,12 @@ export async function reembolsar(req: Request, res: Response) {
   sendSuccess(res, await reembolsos.reembolsarEnMercadoPago(id, { id: req.user!.id, email: req.user!.email }, req.ip));
 }
 
+export async function resolverReembolso(req: Request, res: Response) {
+  const { id } = req.params as unknown as { id: string };
+  const { nota } = req.body as { nota: string };
+  sendSuccess(res, await reembolsos.resolverReembolso(id, nota, { id: req.user!.id, email: req.user!.email }, req.ip));
+}
+
 // ============================================================
 // PATCH /api/v1/pagos/:pagoId/cancelar — Cancel pending payment
 // ============================================================
