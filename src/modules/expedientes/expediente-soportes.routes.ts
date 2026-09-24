@@ -121,10 +121,11 @@ publicCargarDocumentosRouter.post(
 );
 
 // P18: el prospecto invita a su co-arrendatario desde su enlace (mismos guards que el panel).
+// La validación va antes del límite por enlace: un error de digitación no gasta intentos.
 publicCargarDocumentosRouter.post(
   '/:token/coarrendatario',
   publicFormLimiter,
-  invitacionPorTokenLimiter,
   validate({ params: tokenParamSchema, body: invitarCoarrendatarioPublicoSchema }),
+  invitacionPorTokenLimiter,
   controller.invitarCoarrendatarioPublico,
 );

@@ -452,11 +452,9 @@ async function crearInvitacion(
     soloAdvertir: await estudioYaCobrado(expedienteId),
   });
 
-  // 3. Ni el correo ni el documento del titular (Politica §5, NOTA).
-  assertNoEsElTitular(ctx, input);
-
-  // 3b. Tope anti-abuso. Cancelar o declinar libera el cupo del índice único,
-  //     no este.
+  // 3. Tope anti-abuso. Cancelar o declinar libera el cupo del índice único,
+  //    no este. Va antes de mirar al titular: desde el enlace público, el orden
+  //    de los errores no debe revelar si el documento o el correo son los suyos.
   const { count, error: countError } = await (supabase
     .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
     .select('id', { count: 'exact', head: true })
@@ -468,6 +466,9 @@ async function crearInvitacion(
       'COARRENDATARIO_TOPE_INVITACIONES',
     );
   }
+
+  // 3b. Ni el correo ni el documento del titular (Politica §5, NOTA).
+  assertNoEsElTitular(ctx, input);
 
   // 4. Insert. El unique index parcial bloquea duplicados activos — error
   //    23505 lo mapeamos a un mensaje claro.

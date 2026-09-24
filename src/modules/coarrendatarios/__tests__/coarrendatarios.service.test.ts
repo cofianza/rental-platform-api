@@ -633,6 +633,15 @@ describe('invitar desde el enlace del prospecto — P18', () => {
     expect(e.message).not.toMatch(/cancélala|correo|solicitante/i);
   });
 
+  it('tope por estudio antes de mirar al titular: con su propio documento responde el tope, no lo delata', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: null, error: null, count: 5 });
+
+    await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('1234567'))).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_TOPE_INVITACIONES',
+    });
+  });
+
   it('tope por estudio: con 5 invitaciones (también canceladas) no crea otra', async () => {
     enqueue('expedientes', ctxRow());
     enqueue('expediente_coarrendatarios', { data: null, error: null, count: 5 });
