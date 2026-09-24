@@ -318,8 +318,13 @@ async function getTarifaIvaPorConcepto(concepto: string): Promise<number> {
   return Number.isFinite(n) && n >= 0 && n <= 100 ? n : 0;
 }
 
-/** `derivada`: la tasa no se edita aquí, sale de TARIFA_IVA (la prima). */
-export async function listTarifasIva(): Promise<{ concepto: string; tasa: number; derivada?: boolean }[]> {
+/**
+ * `derivada`: la tasa no se edita aquí. La prima sale de TARIFA_IVA; los
+ * paquetes de créditos (`derivada_de: 'estudio'`) llevan la de la evaluación.
+ */
+export async function listTarifasIva(): Promise<
+  { concepto: string; tasa: number; derivada?: boolean; derivada_de?: 'estudio' }[]
+> {
   const conceptos = ['estudio', 'garantia', 'primer_canon', 'deposito', 'otro'];
   const [{ data }, tasaGravados] = await Promise.all([
     (supabase.from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
@@ -331,12 +336,14 @@ export async function listTarifasIva(): Promise<{ concepto: string; tasa: number
   for (const row of (data || []) as { clave: string; valor: string }[]) {
     map.set(row.clave, row.valor);
   }
-  return conceptos.map((c) => {
+  const tarifas = conceptos.map((c) => {
     if (CONCEPTOS_GRAVADOS.has(c)) return { concepto: c, tasa: tasaGravados, derivada: true };
     const raw = map.get(`iva_concepto_${c}`) ?? '0';
     const n = Number(raw);
     return { concepto: c, tasa: Number.isFinite(n) ? n : 0 };
   });
+  const estudio = tarifas.find((t) => t.concepto === 'estudio')?.tasa ?? 0;
+  return [...tarifas, { concepto: 'creditos_estudios', tasa: estudio, derivada: true, derivada_de: 'estudio' as const }];
 }
 
 export async function updateTarifasIva(
@@ -950,10 +957,10 @@ export async function crearFacturaDesdeCompraCreditos(
   const referenceCode = existente?.factus_reference_code || `CR-${compraId.replace(/-/g, '').slice(0, 12).toUpperCase()}`;
   const monto = Number(compra.precio_cop);
 
-  // Para creditos de estudios consideramos el servicio exento de IVA
-  // (reuso la convencion del estudio que tambien va exento). Si en
-  // el futuro se decide cargar IVA, se configura via configuracion_sistema.
-  const tasaIva = await getTarifaIvaPorConcepto('creditos_estudios');
+  // El paquete es el pago anticipado de evaluaciones: lleva el IVA de la
+  // evaluación (ET art. 429, el anticipo causa el IVA del servicio), así que
+  // lee la tasa del estudio y no una propia.
+  const tasaIva = await getTarifaIvaPorConcepto('estudio');
   const { price: priceStr, cashRounding } = partirTotalConIva(monto, tasaIva);
 
   // legal_organization_code: si tipo_documento es NIT (31) -> juridica (1).

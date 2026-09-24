@@ -186,9 +186,10 @@ describe('crearFacturaDesdeCompraCreditos: la compra es de la organización', ()
   });
 });
 
-// P39: la factura del paquete lleva el medio de pago de Mercado Pago.
-describe('crearFacturaDesdeCompraCreditos: medio de pago', () => {
-  it('PSE: medio 47', async () => {
+// P39: la factura del paquete lleva el medio de pago de Mercado Pago; P44: y el
+// IVA de la evaluación (iva_concepto_estudio), no una fila propia.
+describe('crearFacturaDesdeCompraCreditos: medio de pago e IVA', () => {
+  it('PSE: medio 47, y la tasa sale de iva_concepto_estudio', async () => {
     enqueue('facturas', { data: null, error: null }, { data: null, error: null }, { data: { id: 'fac-1' }, error: null });
     enqueue('compras_creditos_estudios', {
       data: {
@@ -213,5 +214,6 @@ describe('crearFacturaDesdeCompraCreditos: medio de pago', () => {
 
     const payload = mockCreateBill.mock.calls[0][0];
     expect(payload.payment_details[0].payment_method_code).toBe('47');
+    expect(ops.find((o) => o.table === 'configuracion_sistema' && o.method === 'eq')?.args).toEqual(['clave', 'iva_concepto_estudio']);
   });
 });

@@ -249,3 +249,18 @@ describe('medio de pago DIAN', () => {
     expect(mockCreateBill.mock.calls[0][0].payment_details[0].payment_method_code).toBe('48');
   });
 });
+
+// P44 (parte resuelta): el paquete de créditos es el pago anticipado de
+// evaluaciones y lleva el IVA de la evaluación; se muestra así, sin editarse aparte.
+describe('Tarifas de IVA: paquetes de créditos', () => {
+  it('se listan con la tasa de la evaluación, como derivada', async () => {
+    enqueue('configuracion_sistema', { data: [{ clave: 'iva_concepto_estudio', valor: '19' }], error: null });
+
+    expect((await listTarifasIva()).find((t) => t.concepto === 'creditos_estudios')).toEqual({
+      concepto: 'creditos_estudios',
+      tasa: 19,
+      derivada: true,
+      derivada_de: 'estudio',
+    });
+  });
+});
