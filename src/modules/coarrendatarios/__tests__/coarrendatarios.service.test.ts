@@ -118,7 +118,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 // falta sus tres funciones puras, con stand-ins deterministas.
 vi.mock('@/modules/estudios/reglas-duras', () => ({
   etiquetaReglaDura: (c: string) => (c === 'dti_mayor_65' ? 'DTI > 65%' : c),
-  inferirReglasDurasDesdeMotivo: () => [],
+  inferirReglasDurasDesdeMotivo: (m: string | null) => (m?.includes('[regla dura]') ? ['dti_mayor_65'] : []),
   motivoProspectoReglasDuras: () => 'No aprobable por ahora.',
 }));
 
@@ -135,6 +135,7 @@ import {
   aceptarInvitacion,
   getPublicByToken,
   cancelarInvitacionCoarrendatario,
+  avisarCoarrendatarioDecision,
 } from '../coarrendatarios.service';
 
 // ============================================================
@@ -750,7 +751,9 @@ describe('construirCorreoCoarrendatario', () => {
     titularNombre: 'Juan Pérez',
     inmuebleDireccion: 'Cra 7 # 45-10',
     inmuebleCiudad: 'Bogotá',
+    emailApelacion: 'hola@cofianza.co',
   } as const;
+  const APELACION = /hola@cofianza\.co[\s\S]*15 días hábiles[\s\S]*10 días hábiles/;
 
   it('en revisión manual: ni aprobado ni rechazado, y sin score', () => {
     const { subject, html } = construirCorreoCoarrendatario({
@@ -797,5 +800,52 @@ describe('construirCorreoCoarrendatario', () => {
       decisionExpediente: 'rechazado',
     });
     expect(html).toContain('El proceso queda cerrado');
+  });
+
+  // P38 (Política §1, §2, §11): no aprobado → sin puntaje y con su derecho de
+  // apelación; aprobado → puede ver su score.
+  it('no aprobado: sin score y con la apelación (hola@cofianza.co, 15 días hábiles, respuesta en 10)', () => {
+    const { html } = construirCorreoCoarrendatario({ ...base, coarrendatarioResultado: 'rechazado', decisionExpediente: 'rechazado' });
+    expect(html).not.toContain('720');
+    expect(html).toMatch(APELACION);
+  });
+
+  it('aprobado: ve su score y no hay nada que apelar', () => {
+    const { html } = construirCorreoCoarrendatario({ ...base, coarrendatarioResultado: 'aprobado', decisionExpediente: 'aprobado' });
+    expect(html).toContain('Score crediticio: <strong>720</strong>');
+    expect(html).not.toMatch(APELACION);
+  });
+
+  it('estudio aprobado pero su evaluación rechazada (P2, queda fuera): no le dice que se aprobó', () => {
+    const { subject, html } = construirCorreoCoarrendatario({
+      ...base,
+      coarrendatarioResultado: 'rechazado',
+      decisionExpediente: 'aprobado',
+    });
+    expect(subject).not.toMatch(/aprob/i);
+    expect(html).toContain('no podemos respaldarte como co-arrendatario');
+    expect(html).not.toContain('720');
+    expect(html).toMatch(APELACION);
+  });
+
+  it('su evaluación aprobada aunque el estudio no: ve su score, sin apelación', () => {
+    const { html } = construirCorreoCoarrendatario({ ...base, coarrendatarioResultado: 'aprobado', decisionExpediente: 'rechazado' });
+    expect(html).toContain('720');
+    expect(html).not.toMatch(APELACION);
+  });
+});
+
+describe('avisarCoarrendatarioDecision — decisión del analista', () => {
+  it('si su evaluación se rechazó por regla dura no lo manda a la central de riesgo', async () => {
+    enqueue('expediente_coarrendatarios', { data: { id: COA_ID, nombre: 'Luis', email: 'luis@correo.co', estudio_id: COA_ESTUDIO_ID }, error: null });
+    enqueue('estudios', { data: { resultado: 'rechazado', score: 790, motivo_rechazo: 'DTI [regla dura]' }, error: null });
+    enqueue('expedientes', ctxRow('rechazado'));
+
+    await avisarCoarrendatarioDecision(EXPEDIENTE_ID, 'rechazado');
+
+    const { html } = (mockResendSend.mock.calls[0] as unknown as [{ html: string }])[0];
+    expect(html).not.toContain('central de riesgo');
+    expect(html).not.toContain('790');
+    expect(html).toMatch(/15 días hábiles/);
   });
 });

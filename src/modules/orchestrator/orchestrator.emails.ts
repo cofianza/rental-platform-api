@@ -82,6 +82,16 @@ export async function sendEstudioAprobadoEmail(params: {
 
 // ── Estudio Rechazado ───────────────────────────────────────
 
+/**
+ * Politica §11: derecho de apelacion del evaluado no aprobado. Lo usan el
+ * correo del titular y el del co-arrendatario (P38).
+ */
+export const apelacionHtml = (email: string) =>
+  `<div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="color: #374151; margin: 0; font-weight: bold;">¿No estás de acuerdo con esta decisión?</p>
+            <p style="color: #4b5563; margin: 4px 0 0;">Puedes presentar una apelación escribiendo a <a href="mailto:${email}" style="color: #0d9488;">${email}</a> dentro de los <strong>15 días hábiles</strong> siguientes a esta notificación. Cofianza te responde en un máximo de <strong>10 días hábiles</strong>. La apelación no suspende el proceso de arrendamiento del inmueble.</p>
+          </div>`;
+
 export async function sendEstudioRechazadoEmail(params: {
   email: string;
   nombre: string;
@@ -123,10 +133,7 @@ export async function sendEstudioRechazadoEmail(params: {
               ? 'Si quieres, escríbenos y revisamos juntos tu caso.'
               : 'Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al día.'}</p>
           </div>
-          <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #374151; margin: 0; font-weight: bold;">¿No estás de acuerdo con esta decisión?</p>
-            <p style="color: #4b5563; margin: 4px 0 0;">Puedes presentar una apelación escribiendo a <a href="mailto:${company.email}" style="color: #0d9488;">${company.email}</a> dentro de los <strong>15 días hábiles</strong> siguientes a esta notificación. Cofianza te responde en un máximo de <strong>10 días hábiles</strong>. La apelación no suspende el proceso de arrendamiento del inmueble.</p>
-          </div>
+          ${apelacionHtml(company.email)}
           ${footerHtml(company)}
         </div>
       </div>

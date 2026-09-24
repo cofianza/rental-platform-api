@@ -23,6 +23,8 @@ import {
 } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { escapeHtml } from '@/lib/escapeHtml';
+import { getCompany } from '@/lib/companyConfig';
+import { apelacionHtml } from '@/modules/orchestrator/orchestrator.emails';
 // Tope de canon (flujo del modulo de estudios §4.4). El estudio del
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
@@ -1672,15 +1674,19 @@ export async function avisarCoarrendatarioDecision(
 
     let resultado: 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente' = 'pendiente';
     let score: number | null = null;
+    let reglasDuras = reglasDurasCoarrendatario;
     if (coa.estudio_id) {
       const { data: estRow } = await (supabase
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
-        .select('resultado, score')
+        .select('resultado, score, motivo_rechazo')
         .eq('id', coa.estudio_id)
         .maybeSingle();
-      const est = estRow as { resultado?: typeof resultado | null; score?: number | null } | null;
+      const est = estRow as { resultado?: typeof resultado | null; score?: number | null; motivo_rechazo?: string | null } | null;
       resultado = est?.resultado ?? 'pendiente';
       score = est?.score ?? null;
+      // Sin el veredicto en memoria (decisión del analista), del motivo: un rechazo por
+      // regla dura no se manda a revisar el reporte a la central de riesgo.
+      reglasDuras ??= inferirReglasDurasDesdeMotivo(est?.motivo_rechazo ?? null);
     }
 
     const ctx = await fetchExpedienteCtx(expedienteId);
@@ -1693,7 +1699,7 @@ export async function avisarCoarrendatarioDecision(
       inmuebleDireccion: ctx.inmueble_direccion,
       inmuebleCiudad: ctx.inmueble_ciudad,
       decisionExpediente: decision,
-      reglasDurasCoarrendatario,
+      reglasDurasCoarrendatario: reglasDuras,
     });
   } catch (err) {
     logger.warn(
@@ -1722,13 +1728,22 @@ interface SendResultadoEmailInput {
 }
 
 /** Puro: el asunto y el cuerpo segun la decision y el resultado propio del coa. */
-export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): { subject: string; html: string } {
+export function construirCorreoCoarrendatario(
+  input: SendResultadoEmailInput & { /** Canal de apelación (Politica §11). */ emailApelacion: string },
+): { subject: string; html: string } {
   // Texto de personas escapado en el cuerpo; el asunto (titular) va en texto plano.
   const inmuebleStr = escapeHtml(`${input.inmuebleDireccion}${input.inmuebleCiudad ? `, ${input.inmuebleCiudad}` : ''}`);
   const titular = input.titularNombre || 'el titular';
   const titularHtml = escapeHtml(titular);
   const nombre = escapeHtml(input.nombre);
   const porReglaDura = (input.reglasDurasCoarrendatario?.length ?? 0) > 0;
+  // P38 (Politica §1, §2, §11): aprobado = su evaluación salió aprobada, o el
+  // arrendamiento se aprobó con él adentro (su evaluación cuenta, P2). Solo
+  // entonces ve su score; si no, sin puntaje y con su derecho de apelación.
+  // Nunca los motivos del titular.
+  const cuenta = input.coarrendatarioResultado === 'aprobado' || input.coarrendatarioResultado === 'condicionado';
+  const aprobado =
+    input.coarrendatarioResultado === 'aprobado' || (input.decisionExpediente === 'aprobado' && cuenta);
 
   // El subject y el cuerpo dependen de la decisión final del expediente.
   // No le mostramos el detalle de la ponderación al coa (es info entre el
@@ -1749,7 +1764,7 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
       No es un rechazo: un analista de Cofianza está revisando el caso junto con el de ${titularHtml} y es quien toma la decisión.</p>
       <p style="color: #6b7280;">Te escribimos a este mismo correo en cuanto haya respuesta. No tienes que hacer nada más.</p>
     `;
-  } else if (input.decisionExpediente === 'aprobado') {
+  } else if (input.decisionExpediente === 'aprobado' && cuenta) {
     // Tras revision manual (Adenda 2 §5) su evaluacion pudo quedar condicionada
     // o sin informacion: lo aprobado es el arrendamiento, no su evaluacion.
     subject = input.coarrendatarioResultado === 'aprobado'
@@ -1765,8 +1780,9 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
     `;
     badgeColor = '#047857'; // green
   } else {
-    // Rechazo definitivo del expediente. Distinguimos la causa para que el
-    // coa entienda si fue su parte o la del titular.
+    // No aprobado para él: el estudio se rechazó o, aprobado, él quedó fuera
+    // (su evaluación no cuenta, P2). Distinguimos la causa para que entienda
+    // si fue su parte o la del titular, sin contarle nada del titular.
     subject = `Resultado de tu evaluación — ${titular} (Cofianza)`;
     if (input.coarrendatarioResultado === 'aprobado') {
       cuerpoPrincipal = `
@@ -1786,12 +1802,12 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
         ? `
         <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
         <p style="color: #6b7280;">${motivoProspectoReglasDuras(input.reglasDurasCoarrendatario ?? [])}</p>
-        <p style="color: #6b7280;">Por esta razón no podemos respaldar el arrendamiento del inmueble en <strong>${inmuebleStr}</strong>.</p>
+        <p style="color: #6b7280;">Por esta razón no podemos respaldarte como co-arrendatario del inmueble en <strong>${inmuebleStr}</strong>.</p>
       `
         : `
         <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
         <p style="color: #6b7280;">Tu evaluación crediticia quedó <strong style="color: #b91c1c;">no aprobada</strong>.
-        Por esta razón no podemos respaldar el arrendamiento del inmueble en <strong>${inmuebleStr}</strong>.</p>
+        Por esta razón no podemos respaldarte como co-arrendatario del inmueble en <strong>${inmuebleStr}</strong>.</p>
         <p style="color: #6b7280;">Si tienes dudas sobre tu reporte, puedes consultarlo directamente con la central de riesgo.</p>
       `;
       badgeColor = '#b91c1c'; // red
@@ -1808,14 +1824,15 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
     }
   }
 
-  // Con regla dura NO se imprime el score: mostrar "Score crediticio: 773"
-  // debajo de "no aprobado" contradice el propio mensaje y no explica nada
-  // (Politica §3: las reglas duras anulan el puntaje).
+  // El score solo con una decisión final que lo aprueba (P38). Con regla dura
+  // nunca: las reglas duras anulan el puntaje (Politica §3).
   const scoreLine =
     input.decisionExpediente !== 'en_revision' &&
+    aprobado &&
     !porReglaDura && typeof input.coarrendatarioScore === 'number' && input.coarrendatarioScore > 0
       ? `<p style="color: #6b7280; font-size: 13px; margin: 4px 0;">Score crediticio: <strong>${input.coarrendatarioScore}</strong></p>`
       : '';
+  const apelacion = input.decisionExpediente !== 'en_revision' && !aprobado ? apelacionHtml(input.emailApelacion) : '';
 
   return {
     subject,
@@ -1827,6 +1844,7 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           ${cuerpoPrincipal}
           ${scoreLine}
+          ${apelacion}
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
           <p style="color: #9ca3af; font-size: 12px;">
             Recibiste este correo porque ${titularHtml} te invitó a ser su co-arrendatario en Cofianza y autorizaste la evaluación crediticia.
@@ -1839,7 +1857,8 @@ export function construirCorreoCoarrendatario(input: SendResultadoEmailInput): {
 }
 
 async function sendCoarrendatarioResultadoEmail(input: SendResultadoEmailInput): Promise<void> {
-  const { subject, html } = construirCorreoCoarrendatario(input);
+  const { email: emailApelacion } = await getCompany();
+  const { subject, html } = construirCorreoCoarrendatario({ ...input, emailApelacion });
   await resend.emails.send({ from: FROM, to: input.email, subject, html });
 
   logger.info(
