@@ -13,7 +13,7 @@ vi.mock('@/lib/supabase', () => {
   const next = (t: string) => queues.get(t)?.shift() ?? { data: null, error: null };
   const from = (t: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'update', 'delete', 'eq', 'neq', 'in', 'order', 'limit']) chain[m] = () => chain;
+    for (const m of ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'order', 'limit']) chain[m] = () => chain;
     chain.single = chain.maybeSingle = async () => next(t);
     chain.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(next(t)).then(res, rej);
     return chain;
@@ -30,7 +30,7 @@ vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_E
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: (...a: unknown[]) => assertAccess(...(a as [])) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarYCorreo: notificar }));
 
-import { rechazarDocumento, iniciarReemplazo, deleteDocumento } from '../documentos.service';
+import { rechazarDocumento, iniciarReemplazo, deleteDocumento, confirmarSubida } from '../documentos.service';
 
 const doc = (o: Record<string, unknown> = {}) => ({
   id: 'd1',
@@ -155,5 +155,38 @@ describe('eliminar documento', () => {
     queues.set('expedientes', [{ data: { estado: 'aprobado' }, error: null }]);
     queues.set('contratos', [{ data: [], error: null }]);
     await expect(borrar()).resolves.toBeUndefined();
+  });
+});
+
+// Subir otro del mismo tipo marca el anterior 'reemplazado'; sobre uno ya
+// aprobado, eso solo lo hace quien valida documentos.
+describe('subir sobre un documento aprobado', () => {
+  const input = {
+    expediente_id: 'e1', tipo_documento_id: 't1', nombre_original: 'cedula2.pdf', nombre_archivo: 'b.pdf',
+    storage_key: 'expedientes/e1/documents/b.pdf', tipo_mime: 'application/pdf', tamano_bytes: 1000,
+  };
+  const encolar = () => {
+    queues.set('expedientes', [{ data: { id: 'e1', estado: 'en_revision' }, error: null }]);
+    queues.set('tipos_documento', [{ data: { id: 't1', nombre: 'Cédula' }, error: null }]);
+  };
+
+  it('el propietario no reemplaza lo que Cofianza ya aprobó', async () => {
+    encolar();
+    queues.set('documentos', [{ data: null, error: null, count: 1 }]);
+    await expect(confirmarSubida(input as never, 'dueno-1', 'propietario')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'DOCUMENTO_YA_APROBADO',
+    });
+  });
+
+  it('el operador sí (es quien valida)', async () => {
+    encolar();
+    queues.set('documentos', [
+      { data: null, error: null, count: 1 }, // versión
+      { data: doc({ id: 'd2', estado: 'pendiente', subido_por: 'op-1' }), error: null }, // insert
+      { data: [{ id: 'd1' }], error: null }, // anteriores
+      { data: null, error: null }, // marcar reemplazado
+    ]);
+    await expect(confirmarSubida(input as never, 'op-1', 'operador_analista')).resolves.toMatchObject({ id: 'd2', eliminable: true });
   });
 });

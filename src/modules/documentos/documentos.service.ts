@@ -309,6 +309,25 @@ export async function confirmarSubida(
     );
   }
 
+  // 2b. Subir otro del mismo tipo marca el anterior 'reemplazado' (paso 6),
+  // también si Cofianza ya lo aprobó. Eso solo lo hace quien valida documentos
+  // (administrador u operador): el propietario, la inmobiliaria o el prospecto
+  // no reemplazan lo aprobado.
+  if (!hasPermission(userRol ?? '', 'documentos', 'validar')) {
+    const { count: aprobados } = await (supabase
+      .from('documentos' as string) as ReturnType<typeof supabase.from>)
+      .select('id', { count: 'exact', head: true })
+      .eq('expediente_id', input.expediente_id)
+      .eq('tipo_documento_id', input.tipo_documento_id)
+      .eq('estado', 'aprobado');
+    if (aprobados) {
+      throw AppError.conflict(
+        'Cofianza ya aprobó este documento: no se puede reemplazar.',
+        'DOCUMENTO_YA_APROBADO',
+      );
+    }
+  }
+
   // 3. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio)
   assertStorageKeyPropia(input.storage_key, `expedientes/${input.expediente_id}/documents/`);
   const { error: verifyError } = await supabase.storage
