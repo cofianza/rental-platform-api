@@ -46,8 +46,9 @@ async function loadMembresiasActivas(perfilId: string): Promise<FilaMembresia[]>
     // Postgres no garantiza estable: un perfil en dos organizaciones obtendria
     // un rol_miembro / venTodo / orgId distinto entre peticiones, y los bugs de
     // permisos saldrian irreproducibles. Gana la membresia mas antigua.
-    // Hoy ningun perfil tiene dos (verificado en produccion, 2026-09-15); si
-    // eso cambia y hace falta priorizar 'owner', se ordena aqui.
+    // Ningun perfil tiene dos (verificado en produccion, 2026-09-24) y ya no
+    // puede tenerlas: vincularMiembro lo rechaza y la migracion
+    // 20261001000008 lo garantiza en la BD. El orden queda por si acaso.
     .order('created_at', { ascending: true })
     .order('id', { ascending: true });
   const filas = (data as unknown as FilaMembresia[] | null) ?? [];

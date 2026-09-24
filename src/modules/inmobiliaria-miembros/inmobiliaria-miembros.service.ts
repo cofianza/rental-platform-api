@@ -858,7 +858,7 @@ export async function aceptarInvitacionMiembro(
     );
   }
 
-  await vincularMiembro(inv.id, user.id);
+  await vincularMiembro(inv.id, user.id, inv.inmobiliaria_id);
 
   notificarOwnerNuevoMiembro(inv, user.email);
   logAudit({
@@ -873,8 +873,27 @@ export async function aceptarInvitacionMiembro(
   return { message: 'Te uniste a la inmobiliaria', redirect: '/dashboard' };
 }
 
-/** Vincula el perfil a la fila de invitación y la activa. */
-async function vincularMiembro(miembroId: string, perfilId: string): Promise<void> {
+/**
+ * Vincula el perfil a la fila de invitación y la activa. Una persona pertenece
+ * a una sola inmobiliaria a la vez: activa en dos, el alcance, el rol y la
+ * organización de lo que crea salían de la más antigua (tenantScope) y se
+ * mezclaban las carteras. Sin caché, como todo camino que modifica datos.
+ */
+async function vincularMiembro(miembroId: string, perfilId: string, inmobiliariaId: string): Promise<void> {
+  const { data: otra } = await db('inmobiliaria_miembros')
+    .select('id')
+    .eq('perfil_id', perfilId)
+    .eq('estado', 'activo')
+    .neq('inmobiliaria_id', inmobiliariaId)
+    .limit(1)
+    .maybeSingle();
+  if (otra) {
+    throw AppError.conflict(
+      'Ya perteneces a otra inmobiliaria. Sal de ella antes de aceptar esta invitación.',
+      'YA_PERTENECE_A_OTRA_INMOBILIARIA',
+    );
+  }
+
   const { error } = await db('inmobiliaria_miembros')
     .update({
       perfil_id: perfilId,
@@ -958,7 +977,7 @@ export async function registrarMiembro(
     logger.error({ error: updateError.message, userId }, 'Error al activar perfil de miembro');
   }
 
-  await vincularMiembro(inv.id, userId);
+  await vincularMiembro(inv.id, userId, inv.inmobiliaria_id);
 
   const nombreMiembro = `${input.nombre ?? ''} ${input.apellido ?? ''}`.trim() || inv.email;
   notificarOwnerNuevoMiembro(inv, nombreMiembro);

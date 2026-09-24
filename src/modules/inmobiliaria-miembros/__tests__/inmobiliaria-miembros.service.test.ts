@@ -43,7 +43,14 @@ vi.mock('@/lib/auditLog', () => ({
 vi.mock('../../orchestrator/orchestrator.emails', () => ({ sendInvitacionMiembroEmail: vi.fn() }));
 vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(async () => {}) }));
 
-import { adminRevocarMiembro, cambiarRolMiembro, salirDeOrg, revocarMiembro, listMiembros } from '../inmobiliaria-miembros.service';
+import {
+  adminRevocarMiembro,
+  aceptarInvitacionMiembro,
+  cambiarRolMiembro,
+  salirDeOrg,
+  revocarMiembro,
+  listMiembros,
+} from '../inmobiliaria-miembros.service';
 import { invalidateMembresiasCache, resolveRolMiembro } from '@/lib/tenantScope';
 
 const ownerMembership = {
@@ -219,5 +226,39 @@ describe('listMiembros — la tarjeta del responsable no paga otra ida por la me
     expect(r).toMatchObject({ organizacion: { id: 'org1', nombre: 'Inmobiliaria X' }, soy_owner: true, miembros_ven_todo: false });
     const selects = (chain.select as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     expect(selects.some((s) => s.includes('rol_miembro, inmobiliarias('))).toBe(false);
+  });
+});
+
+describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
+  const invitacionDeB = {
+    data: {
+      id: 'm-b',
+      email: 'asesora@correo.co',
+      estado: 'invitado',
+      perfil_id: null,
+      token_expiracion: null,
+      inmobiliaria_id: 'org-b',
+      invitado_por: 'p-owner-b',
+      inmobiliarias: { nombre: 'Inmobiliaria B' },
+    },
+    error: null,
+  };
+  const asesora = { id: 'p-asesora', email: 'asesora@correo.co', rol: 'inmobiliaria' } as never;
+
+  it('activa en otra inmobiliaria: 409 y no se une', async () => {
+    enqueue(invitacionDeB, { data: { id: 'm-a' } }); // la invitación, y su membresía activa en A
+    await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'YA_PERTENECE_A_OTRA_INMOBILIARIA',
+      message: 'Ya perteneces a otra inmobiliaria. Sal de ella antes de aceptar esta invitación.',
+    });
+    expect(chain.update).not.toHaveBeenCalled();
+    expect(chain.neq).toHaveBeenCalledWith('inmobiliaria_id', 'org-b');
+  });
+
+  it('sin otra membresía activa, se une', async () => {
+    enqueue(invitacionDeB, { data: null }, { error: null });
+    await expect(aceptarInvitacionMiembro('tok', asesora)).resolves.toMatchObject({ redirect: '/dashboard' });
+    expect(chain.update).toHaveBeenCalledWith(expect.objectContaining({ perfil_id: 'p-asesora', estado: 'activo' }));
   });
 });
