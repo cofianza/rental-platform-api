@@ -382,7 +382,8 @@ export async function invitarCoarrendatario(
     );
   }
 
-  return crearInvitacion(ctx, input, userId);
+  // El tope de invitaciones no aplica a Cofianza: es a quien se le escribe para superarlo.
+  return crearInvitacion(ctx, input, userId, { sinTope: userRol === 'administrador' || userRol === 'operador_analista' });
 }
 
 /** Errores que, desde un enlace público, confirmarían datos del titular o de otra invitación. */
@@ -422,6 +423,7 @@ async function crearInvitacion(
   ctx: ExpedienteCtx,
   input: InvitarCoarrendatarioInput,
   invitadoPor: string | null,
+  opts: { sinTope?: boolean } = {},
 ): Promise<Coarrendatario> {
   const expedienteId = ctx.id;
 
@@ -460,7 +462,7 @@ async function crearInvitacion(
     .select('id', { count: 'exact', head: true })
     .eq('expediente_id', expedienteId);
   if (countError) throw fromSupabaseError(countError);
-  if ((count ?? 0) >= MAX_INVITACIONES_POR_ESTUDIO) {
+  if (!opts.sinTope && (count ?? 0) >= MAX_INVITACIONES_POR_ESTUDIO) {
     throw AppError.conflict(
       `Este estudio ya tuvo ${MAX_INVITACIONES_POR_ESTUDIO} invitaciones de co-arrendatario. Escríbenos a ${(await getCompany()).email} si necesitas invitar a alguien más.`,
       'COARRENDATARIO_TOPE_INVITACIONES',

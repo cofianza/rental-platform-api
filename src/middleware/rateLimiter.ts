@@ -192,6 +192,9 @@ export const reenvioCoarrendatarioLimiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => `reenvio-coarrendatario:${(req.params as { id?: string })?.id ?? req.ip ?? 'unknown'}`,
+  // Solo cuentan los reenvíos que salieron: un 403 de quien no tiene acceso o un
+  // 400 (ya no está pendiente) no le gastan el cupo al gestor. La ruta exige sesión.
+  skipFailedRequests: true,
   validate: false,
   message: {
     success: false,

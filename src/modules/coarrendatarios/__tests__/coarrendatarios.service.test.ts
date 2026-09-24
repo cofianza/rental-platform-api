@@ -643,6 +643,13 @@ describe('invitar desde el enlace del prospecto — P18', () => {
     });
   });
 
+  it('el tope no aplica a Cofianza (es a quien se le escribe para superarlo)', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: null, error: null, count: 5 });
+    const e = await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321')).catch((x) => x);
+    expect(e?.errorCode).not.toBe('COARRENDATARIO_TOPE_INVITACIONES');
+  });
+
   it('tope por estudio: con 5 invitaciones (también canceladas) no crea otra', async () => {
     enqueue('expedientes', ctxRow());
     enqueue('expediente_coarrendatarios', { data: null, error: null, count: 5 });
