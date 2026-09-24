@@ -424,6 +424,7 @@ export async function invitarMiembro(
   if (ex && ex.estado === 'activo') {
     throw AppError.conflict('Esa persona ya es miembro de tu inmobiliaria', 'MIEMBRO_YA_ACTIVO');
   }
+  await assertCorreoPuedeUnirse(email);
 
   const { token, expiracion } = nuevoToken();
   let reenviada = false;
@@ -538,6 +539,7 @@ export async function reenviarInvitacion(userId: string, miembroId: string): Pro
   if (!row.email) {
     throw AppError.badRequest('La invitación no tiene email asociado', 'MIEMBRO_SIN_EMAIL');
   }
+  await assertCorreoPuedeUnirse(row.email);
 
   const { token, expiracion } = nuevoToken();
   const { error } = await db('inmobiliaria_miembros')
@@ -760,6 +762,7 @@ export interface InvitacionMiembroPublicInfo {
   organizacion: string;
   invitador: string | null;
   tiene_cuenta: boolean; // true -> debe iniciar sesión; false -> debe registrarse
+  cuenta_otro_rol: boolean; // true -> el correo es de un propietario o arrendatario: no puede unirse
 }
 
 interface InvitacionRow {
@@ -801,12 +804,31 @@ function assertInvitacionVigente(inv: InvitacionRow): void {
   }
 }
 
-/** ¿Existe ya un usuario auth con ese email? (decide registrar vs iniciar sesión). */
-async function emailTieneCuenta(email: string): Promise<boolean> {
+/**
+ * La cuenta que ya usa ese correo (con su rol), o null si no hay: decide
+ * registrar vs iniciar sesión, y si puede unirse a un equipo.
+ */
+async function cuentaDelCorreo(email: string): Promise<{ rol: string | null } | null> {
   const { data } = await supabase
     .rpc('find_user_by_email' as never, { user_email: email } as never)
     .maybeSingle<{ id: string }>();
-  return !!data;
+  if (!data) return null;
+  const { data: perfil } = await db('perfiles').select('rol').eq('id', data.id).maybeSingle();
+  return { rol: (perfil as { rol: string } | null)?.rol ?? null };
+}
+
+// Solo una cuenta de inmobiliaria (o una nueva) se une a un equipo: la de un
+// propietario o arrendatario no cambia de rol, y aceptar la invitación con
+// ella quedaba en un callejón sin salida.
+const esCuentaDeOtroRol = (c: { rol: string | null } | null): boolean => !!c && c.rol !== 'inmobiliaria';
+
+async function assertCorreoPuedeUnirse(email: string): Promise<void> {
+  if (esCuentaDeOtroRol(await cuentaDelCorreo(email))) {
+    throw AppError.conflict(
+      'Ese correo ya tiene una cuenta de propietario o arrendatario en Cofianza y no puede unirse a un equipo. Invita otro correo.',
+      'EMAIL_OTRO_ROL',
+    );
+  }
 }
 
 export async function getInvitacionMiembroPublic(token: string): Promise<InvitacionMiembroPublicInfo> {
@@ -825,14 +847,17 @@ export async function getInvitacionMiembroPublic(token: string): Promise<Invitac
     }
   }
 
-  const tieneCuenta = inv.email ? await emailTieneCuenta(inv.email) : false;
+  // Cubre también las invitaciones enviadas antes de que el correo fuera de
+  // un propietario o arrendatario: la página lo explica en vez de atascarse.
+  const cuenta = inv.email ? await cuentaDelCorreo(inv.email) : null;
 
   return {
     email: inv.email ?? '',
     estado: inv.estado,
     organizacion: inv.inmobiliarias?.nombre ?? 'la inmobiliaria',
     invitador,
-    tiene_cuenta: tieneCuenta,
+    tiene_cuenta: !!cuenta,
+    cuenta_otro_rol: esCuentaDeOtroRol(cuenta),
   };
 }
 

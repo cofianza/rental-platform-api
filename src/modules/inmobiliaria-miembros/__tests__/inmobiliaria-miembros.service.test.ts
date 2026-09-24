@@ -25,7 +25,8 @@ chain.then = (resolve: (v: Record<string, unknown>) => unknown) => resolve(nextR
 const mockFrom = vi.fn(() => chain);
 
 vi.mock('@/lib/supabase', () => ({
-  supabase: { from: (t: string) => mockFrom(t) },
+  // rpc (find_user_by_email) también consume la cola con su maybeSingle.
+  supabase: { from: (t: string) => mockFrom(t), rpc: () => chain },
   supabaseAuth: { auth: { admin: {} } },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -40,12 +41,15 @@ vi.mock('@/lib/auditLog', () => ({
   },
   AUDIT_ENTITIES: { INMOBILIARIA_MIEMBRO: 'inmobiliaria_miembro' },
 }));
-vi.mock('../../orchestrator/orchestrator.emails', () => ({ sendInvitacionMiembroEmail: vi.fn() }));
+const { mockEnviarInvitacion } = vi.hoisted(() => ({ mockEnviarInvitacion: vi.fn() }));
+vi.mock('../../orchestrator/orchestrator.emails', () => ({ sendInvitacionMiembroEmail: mockEnviarInvitacion }));
 vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(async () => {}) }));
 
 import {
   adminRevocarMiembro,
   aceptarInvitacionMiembro,
+  getInvitacionMiembroPublic,
+  invitarMiembro,
   cambiarRolMiembro,
   salirDeOrg,
   revocarMiembro,
@@ -260,5 +264,67 @@ describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
     enqueue(invitacionDeB, { data: null }, { error: null });
     await expect(aceptarInvitacionMiembro('tok', asesora)).resolves.toMatchObject({ redirect: '/dashboard' });
     expect(chain.update).toHaveBeenCalledWith(expect.objectContaining({ perfil_id: 'p-asesora', estado: 'activo' }));
+  });
+});
+
+describe('un correo de propietario o arrendatario no se une a un equipo', () => {
+  const MENSAJE =
+    'Ese correo ya tiene una cuenta de propietario o arrendatario en Cofianza y no puede unirse a un equipo. Invita otro correo.';
+
+  it.each(['propietario', 'solicitante'])('invitar un correo con cuenta de %s: 409 y no sale la invitación', async (rol) => {
+    enqueue(
+      ownerMembership, // assertOwner
+      { data: null }, // no hay fila previa para (org, email)
+      { data: { id: 'p-otro' } }, // find_user_by_email
+      { data: { rol } }, // su perfil
+    );
+    await expect(invitarMiembro('p-self', { email: 'dueno@correo.co', rol_miembro: 'miembro' })).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'EMAIL_OTRO_ROL',
+      message: MENSAJE,
+    });
+    expect(chain.insert).not.toHaveBeenCalled();
+    expect(chain.update).not.toHaveBeenCalled();
+    expect(mockEnviarInvitacion).not.toHaveBeenCalled();
+  });
+
+  it('un correo sin cuenta sí se invita', async () => {
+    enqueue(
+      ownerMembership,
+      { data: null }, // no hay fila previa
+      { data: null }, // find_user_by_email: sin cuenta
+      { data: { id: 'm-nuevo' }, error: null }, // insert ... select('id')
+      { data: null }, // perfil del invitador (correo)
+    );
+    await expect(invitarMiembro('p-self', { email: 'nueva@correo.co', rol_miembro: 'miembro' })).resolves.toMatchObject({
+      reenviada: false,
+    });
+    expect(mockEnviarInvitacion).toHaveBeenCalledTimes(1);
+  });
+
+  const invitacion = {
+    data: {
+      id: 'm-b',
+      email: 'dueno@correo.co',
+      estado: 'invitado',
+      perfil_id: null,
+      token_expiracion: null,
+      inmobiliaria_id: 'org1',
+      invitado_por: null,
+      inmobiliarias: { nombre: 'Inmobiliaria X' },
+    },
+    error: null,
+  };
+
+  it('la página de una invitación ya enviada lo sabe: cuenta_otro_rol', async () => {
+    enqueue(invitacion, { data: { id: 'p-otro' } }, { data: { rol: 'propietario' } });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: true });
+  });
+
+  it('una cuenta de inmobiliaria o un correo sin cuenta no lo son', async () => {
+    enqueue(invitacion, { data: { id: 'p-inmo' } }, { data: { rol: 'inmobiliaria' } });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: false });
+    enqueue(invitacion, { data: null });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: false, cuenta_otro_rol: false });
   });
 });
