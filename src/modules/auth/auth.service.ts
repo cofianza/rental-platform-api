@@ -80,20 +80,6 @@ export async function loginWithEmail({ email, password }: LoginInput, ip?: strin
   };
 }
 
-export function getGoogleOAuthUrl() {
-  const redirectTo = `${env.CORS_ORIGIN}/auth/callback`;
-
-  // Supabase genera la URL de OAuth para Google
-  // El frontend redirige al usuario a esta URL
-  return {
-    provider: 'google' as const,
-    redirectTo,
-    // La URL real se construye en el frontend con supabase.auth.signInWithOAuth()
-    // En el backend solo documentamos la configuracion necesaria
-    instructions: 'Usar supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo } }) desde el frontend',
-  };
-}
-
 export async function refreshSession({ refresh_token }: RefreshInput) {
   const { data, error } = await supabaseAuth.auth.refreshSession({ refresh_token });
 

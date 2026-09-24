@@ -10,11 +10,6 @@ export async function login(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
-export async function googleOAuth(_req: Request, res: Response) {
-  const result = authService.getGoogleOAuthUrl();
-  sendSuccess(res, result);
-}
-
 export async function refresh(req: Request, res: Response) {
   const result = await authService.refreshSession(req.body as RefreshInput);
   sendSuccess(res, result);

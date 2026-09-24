@@ -9,7 +9,6 @@ const router = Router();
 
 // Rutas publicas (login con rate limit agresivo)
 router.post('/login', authLimiter, validate({ body: loginSchema }), authController.login);
-router.post('/login/google', authLimiter, authController.googleOAuth);
 router.post('/refresh', validate({ body: refreshSchema }), authController.refresh);
 
 // Recuperacion de contrasena
