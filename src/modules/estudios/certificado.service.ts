@@ -165,10 +165,11 @@ export interface CertificatePdfData {
   // da y el declarado nunca la alimenta).
   canonIngresoPct: number | null;
   /**
-   * Adenda 1 contratos, respuesta 5: versión sin puntaje ni observaciones (ver
-   * sinPuntaje). La del arrendatario también la lleva, con su score (P13).
+   * Versión reducida; sin ella, el completo. firmantes: sin puntaje ni
+   * observaciones (Adenda 1 contratos, respuesta 5; ver sinPuntaje).
+   * arrendatario: la misma con su score (P13; ver paraArrendatario).
    */
-  paraFirmantes?: boolean;
+  version?: VersionReducida;
 }
 
 /**
@@ -188,17 +189,17 @@ export function sinPuntaje(data: CertificatePdfData): CertificatePdfData {
     rutaEtiqueta: null,
     decisionCascada: null,
     denominadorPuntaje: null,
-    paraFirmantes: true,
+    version: 'firmantes',
   };
 }
 
 /**
  * P13 (Ley 1266): el arrendatario conoce SU puntaje. Baja la versión para
- * firmantes con su score y sus condiciones, que ya ve en la plataforma. El
- * perfil con puntos, la cascada, el denominador y las observaciones siguen fuera.
+ * firmantes con su score; lo demás sigue fuera: condiciones y observaciones
+ * (A10), perfil con puntos, cascada y denominador.
  */
 export function paraArrendatario(data: CertificatePdfData): CertificatePdfData {
-  return { ...sinPuntaje(data), score: data.score, condiciones: data.condiciones };
+  return { ...sinPuntaje(data), score: data.score, version: 'arrendatario' };
 }
 
 export async function generateCertificatePdf(
@@ -280,11 +281,11 @@ export async function generateCertificatePdf(
 
     y += 20;
 
-    if (data.paraFirmantes) {
+    if (data.version) {
       doc.fontSize(8).font('Helvetica-Oblique').fillColor('#6b7280');
       // La del arrendatario lleva su score (P13): no se dice que falta.
       doc.text(
-        data.score != null
+        data.version === 'arrendatario'
           ? 'Esta versión no incluye las observaciones de la evaluación.'
           : 'Esta versión no incluye el puntaje ni las observaciones de la evaluación.',
         50,
@@ -373,8 +374,8 @@ export async function generateCertificatePdf(
       // Adenda §5 — tarifas y primas por ruta de aprobacion.
       if (data.tarifas) {
         const t = data.tarifas;
-        // La via deja inferir la banda del puntaje: la version para firmantes no la lleva.
-        const via = data.paraFirmantes
+        // La via deja inferir la banda del puntaje: las versiones reducidas no la llevan.
+        const via = data.version
           ? ''
           : t.via === 'automatica'
             ? ' (aprobación automática)'
@@ -443,10 +444,10 @@ export async function generateCertificatePdf(
     if (data.denominadorPuntaje) trazaRows.push(['Denominador del puntaje', `${data.denominadorPuntaje} (Adenda 2 §4.3)`]);
     // Adenda 1 contratos, respuesta 19: que la decision quede trazada tambien
     // sin ingreso verificado. La cifra deja ver el ingreso del arrendatario:
-    // la version para firmantes no la lleva.
+    // las versiones reducidas no la llevan.
     if (data.canonIngresoPct == null) {
       trazaRows.push(['Relación canon/ingreso', 'No verificable (no se contó con ingreso verificado)']);
-    } else if (!data.paraFirmantes) {
+    } else if (!data.version) {
       trazaRows.push(['Relación canon/ingreso', formatPct(data.canonIngresoPct)]);
     }
     if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {

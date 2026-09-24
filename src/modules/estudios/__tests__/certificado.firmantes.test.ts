@@ -213,29 +213,38 @@ describe('el PDF sin puntaje', () => {
     }
   });
 
-  // P13 (Ley 1266): la de firmantes más su propio puntaje; nada del modelo de Cofianza.
-  it('la del arrendatario trae su puntaje y sus condiciones; ni observaciones, ni perfil, ni cascada, ni denominador', async () => {
+  // P13 (Ley 1266): la de firmantes más su propio puntaje; nada más.
+  it('la del arrendatario trae su puntaje; ni condiciones, ni observaciones, ni perfil, ni cascada, ni denominador', async () => {
     await generateCertificatePdf(paraArrendatario(DATOS), QR);
     const t = impreso();
     expect(t).toContain('Score');
     expect(t).toContain('773');
-    expect(t).toContain('Presentar el contrato laboral');
-    for (const s of ['Observaciones', 'Nota interna del analista', '87 pts', 'puntaje 92', 'Denominador']) expect(t).not.toContain(s);
+    for (const s of ['Presentar el contrato laboral', 'Observaciones', 'Nota interna del analista', '87 pts', 'puntaje 92', 'Denominador']) {
+      expect(t).not.toContain(s);
+    }
     expect(t).not.toMatch(/aprobación (automática|condicionada|tras)/);
     expect(t).toContain('Esta versión no incluye las observaciones de la evaluación.');
     expect(t).not.toContain(NOTA);
   });
 
   // A10: las condiciones del analista cuentan como observaciones.
-  it('las condiciones del analista van en el completo y no en el de firmantes', async () => {
+  it('las condiciones del analista van en el completo y no en las versiones reducidas', async () => {
     await generateCertificatePdf(DATOS, QR);
     expect(impreso()).toContain('Presentar el contrato laboral');
 
-    textos.mockClear();
-    await generateCertificatePdf(sinPuntaje(DATOS), QR);
-    const firmantes = impreso();
-    expect(firmantes).not.toContain('Presentar el contrato laboral');
-    expect(textos.mock.calls.some((c) => c[0] === 'Condiciones')).toBe(false);
+    for (const reducida of [sinPuntaje(DATOS), paraArrendatario(DATOS)]) {
+      textos.mockClear();
+      await generateCertificatePdf(reducida, QR);
+      expect(impreso()).not.toContain('Presentar el contrato laboral');
+      expect(textos.mock.calls.some((c) => c[0] === 'Condiciones')).toBe(false);
+    }
+  });
+
+  // La nota depende de la versión, no de si hay score.
+  it('la del arrendatario sin score (registro manual) dice lo que falta en su versión', async () => {
+    await generateCertificatePdf(paraArrendatario({ ...DATOS, score: null }), QR);
+    expect(impreso()).toContain('Esta versión no incluye las observaciones de la evaluación.');
+    expect(impreso()).not.toContain(NOTA);
   });
 });
 
