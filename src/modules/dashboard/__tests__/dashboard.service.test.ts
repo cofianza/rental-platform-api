@@ -290,6 +290,8 @@ describe('Dashboard Service', () => {
       const r = await dashboardService.getAdminOverview();
 
       expect(r.kpis.inmobiliariasActivas).toBe(2); // t1 y l1
+      // Sin dónde registrar el desembolso (P41), el KPI sale como «sin data».
+      expect(r.meta.metricasNoDisponibles).toContain('desembolsado');
     });
 
     it('«Ingresos fianzas»: la tarifa de cada contrato sobre su canon, más IVA (no $20.000 × contratos)', async () => {

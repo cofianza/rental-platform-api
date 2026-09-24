@@ -1128,7 +1128,9 @@ export async function getAdminOverview(): Promise<AdminOverview> {
     meta: {
       // Si una métrica no tiene fuente (p. ej. capital sin configurar),
       // se reporta aquí para que el frontend la atenúe.
-      metricasNoDisponibles: capitalLibre === null ? ['capital_libre'] : [],
+      // 'desembolsado': todavía no hay cómo registrar lo que Cofianza paga
+      // (P41, se construye con el primer siniestro); un $0 afirmaría que no pagó.
+      metricasNoDisponibles: capitalLibre === null ? ['capital_libre', 'desembolsado'] : ['desembolsado'],
     },
   };
 
