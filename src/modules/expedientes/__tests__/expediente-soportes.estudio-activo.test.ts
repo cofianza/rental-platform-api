@@ -200,6 +200,20 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
     expect(mockEnviarCorreoEnlace).toHaveBeenCalledWith(expect.objectContaining({ link: `/cargar-documentos/${nuevo}` }));
   });
 
+  it('si el correo no sale después de rotar, responde el error (el enlace anterior ya no sirve)', async () => {
+    mockEnviarCorreoEnlace.mockRejectedValueOnce(new Error('resend caído'));
+    queues.set('expedientes', [
+      { data: { id: EXP, estado: 'condicionado', creado_por: null, inmuebles: null, solicitantes: null, estudios }, error: null },
+      { data: { solicitantes: { nombre: 'Ana', apellido: 'Pérez', email: 'ana@correo.co' }, inmuebles: { direccion: 'Cra 7' } }, error: null },
+    ]);
+
+    await expect(enviarEnlaceDocumentos(EXP, 'analista-1', 'operador_analista')).rejects.toMatchObject({
+      statusCode: 502,
+      errorCode: 'CORREO_NO_ENVIADO',
+      message: expect.stringContaining('el enlace anterior ya no sirve'),
+    });
+  });
+
   it('vencido, uno nuevo', async () => {
     queues.set('expedientes', [
       { data: { token_documentos: 'b'.repeat(64), token_documentos_expiracion: '2020-01-01T00:00:00Z' }, error: null },

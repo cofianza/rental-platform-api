@@ -577,7 +577,14 @@ export async function enviarEnlaceDocumentos(
       frontend_url: env.FRONTEND_URL,
     });
   } catch (err) {
-    logger.warn({ error: (err as Error).message, expedienteId }, 'No se pudo enviar email de enlace de documentos (token ya guardado)');
+    // El token ya rotó: el enlace anterior no sirve y el nuevo no llegó. Decirlo,
+    // para que se reintente, en vez de responder que se envió.
+    logger.warn({ error: (err as Error).message, expedienteId }, 'No se pudo enviar email de enlace de documentos (token ya rotado)');
+    throw new AppError(
+      502,
+      'CORREO_NO_ENVIADO',
+      'No pudimos enviar el correo; el enlace anterior ya no sirve. Reintenta.',
+    );
   }
 
   logger.info({ expedienteId, email }, 'Enlace de carga de documentos enviado al solicitante');
