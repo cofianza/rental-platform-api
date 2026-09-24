@@ -13,12 +13,13 @@ vi.mock('@/lib/supabase', () => {
   const next = (t: string) => queues.get(t)?.shift() ?? { data: null, error: null };
   const from = (t: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'update', 'eq', 'in', 'order']) chain[m] = () => chain;
+    for (const m of ['select', 'update', 'delete', 'eq', 'neq', 'in', 'order', 'limit']) chain[m] = () => chain;
     chain.single = chain.maybeSingle = async () => next(t);
     chain.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(next(t)).then(res, rej);
     return chain;
   };
   const bucket = {
+    remove: async () => ({ error: null }),
     createSignedUrl: async () => ({ data: { signedUrl: 'https://ver' }, error: null }),
     createSignedUploadUrl: async () => ({ data: { signedUrl: 'https://subir', token: 't' }, error: null }),
   };
@@ -29,7 +30,7 @@ vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_E
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: (...a: unknown[]) => assertAccess(...(a as [])) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarYCorreo: notificar }));
 
-import { rechazarDocumento, iniciarReemplazo } from '../documentos.service';
+import { rechazarDocumento, iniciarReemplazo, deleteDocumento } from '../documentos.service';
 
 const doc = (o: Record<string, unknown> = {}) => ({
   id: 'd1',
@@ -111,5 +112,48 @@ describe('reemplazar documento rechazado', () => {
     assertAccess.mockRejectedValueOnce(Object.assign(new Error('no'), { statusCode: 404 }));
 
     await expect(iniciarReemplazo('d1', input as never, 'otra-agencia', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+// P19: el propietario y la inmobiliaria borran sus documentos pendientes, pero
+// solo en su cartera y mientras el estudio no esté decidido.
+describe('eliminar documento', () => {
+  const borrar = (userId = 'gestor-1', rol = 'inmobiliaria') => deleteDocumento('d1', userId, rol);
+
+  it('pendiente y propio, con el estudio en curso: se borra', async () => {
+    queues.set('documentos', [{ data: doc(), error: null }]);
+    queues.set('expedientes', [{ data: { estado: 'en_revision' }, error: null }]);
+    await expect(borrar()).resolves.toBeUndefined();
+    expect(assertAccess).toHaveBeenCalledWith('e1', 'gestor-1', 'inmobiliaria');
+  });
+
+  it('de otra agencia: el 404 del guard, antes de revelar nada', async () => {
+    queues.set('documentos', [{ data: doc({ subido_por: 'otro' }), error: null }]);
+    assertAccess.mockRejectedValueOnce(Object.assign(new Error('no'), { statusCode: 404 }));
+    await expect(borrar('otra-agencia')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('subido por otra persona: 403', async () => {
+    queues.set('documentos', [{ data: doc({ subido_por: 'otro' }), error: null }]);
+    await expect(borrar()).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('con el estudio no aprobable, cerrado o aprobado con contrato: no se borra', async () => {
+    for (const estado of ['rechazado', 'cerrado']) {
+      queues.set('documentos', [{ data: doc(), error: null }]);
+      queues.set('expedientes', [{ data: { estado }, error: null }]);
+      await expect(borrar()).rejects.toMatchObject({ statusCode: 400, errorCode: 'EXPEDIENTE_TERMINAL' });
+    }
+    queues.set('documentos', [{ data: doc(), error: null }]);
+    queues.set('expedientes', [{ data: { estado: 'aprobado' }, error: null }]);
+    queues.set('contratos', [{ data: [{ id: 'c1' }], error: null }]);
+    await expect(borrar()).rejects.toMatchObject({ statusCode: 400, errorCode: 'EXPEDIENTE_TERMINAL' });
+  });
+
+  it('aprobado sin contrato todavía se puede corregir', async () => {
+    queues.set('documentos', [{ data: doc(), error: null }]);
+    queues.set('expedientes', [{ data: { estado: 'aprobado' }, error: null }]);
+    queues.set('contratos', [{ data: [], error: null }]);
+    await expect(borrar()).resolves.toBeUndefined();
   });
 });

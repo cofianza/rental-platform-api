@@ -131,6 +131,41 @@ async function addSignedUrls<T extends DocumentoRow>(docs: T[]): Promise<T[]> {
   return docs.map((doc) => ({ ...doc, archivo_url: doc.storage_key ? urls.get(doc.storage_key) ?? null : null }));
 }
 
+/**
+ * P19: con el estudio decidido sus documentos son la evidencia de esa decisión
+ * y ya no se borran: rechazado o cerrado (los estados en que tampoco se sube ni
+ * se reemplaza) o aprobado con un contrato que no esté cancelado. Sin estado o
+ * si la consulta del contrato falla, se bloquea: un borrado no se deshace.
+ */
+async function borradoBloqueadoPorEstudio(expedienteId: string, estadoConocido?: string): Promise<boolean> {
+  let estado = estadoConocido;
+  if (estado === undefined) {
+    const { data } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('estado')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    estado = (data as { estado?: string } | null)?.estado;
+  }
+  if (!estado || ESTADOS_TERMINALES.includes(estado)) return true;
+  if (estado !== 'aprobado') return false;
+  const { data, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .neq('estado', 'cancelado')
+    .limit(1);
+  return !!error || (data ?? []).length > 0;
+}
+
+/** P19: ¿quien lo pide puede eliminar este documento? La regla de deleteDocumento, para la web. */
+function esEliminable(doc: DocumentoRow, userId: string | undefined, userRol: string | undefined, estudioBloqueado: boolean): boolean {
+  return (
+    !!userId && !!userRol && !estudioBloqueado && hasPermission(userRol, 'documentos', 'delete') &&
+    doc.estado === 'pendiente' && (doc.subido_por === userId || userRol === 'administrador')
+  );
+}
+
 // ============================================================
 // generatePresignedUrl
 // ============================================================
@@ -366,10 +401,14 @@ export async function confirmarSubida(
     ip,
   });
 
-  // Add signed URL for immediate viewing
-  const archivo_url = await generateViewUrl(created.storage_key);
+  // Add signed URL for immediate viewing (y `eliminable`: quien sube un
+  // archivo equivocado lo borra enseguida, P19)
+  const [archivo_url, bloqueado] = await Promise.all([
+    generateViewUrl(created.storage_key),
+    borradoBloqueadoPorEstudio(input.expediente_id, exp.estado),
+  ]);
 
-  return { ...created, archivo_url };
+  return { ...created, archivo_url, eliminable: esEliminable(created, userId, userRol, bloqueado) };
 }
 
 // ============================================================
@@ -418,7 +457,7 @@ export async function listDocumentosByExpediente(
   // del listado sale.
   const [{ data: expediente, error: expError }, , { data, error, count }] = await Promise.all([
     (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
+      .select('id, estado')
       .eq('id', expedienteId)
       .single(),
     assertExpedienteAccess(expedienteId, userId, userRol),
@@ -437,8 +476,17 @@ export async function listDocumentosByExpediente(
   const total = count ?? 0;
   const rawDocs = (data as unknown as DocumentoRow[]) || [];
 
+  // P19: la web ofrece «Eliminar» con la misma regla que deleteDocumento (sin
+  // pendientes no hace falta mirar el contrato).
+  const bloqueado =
+    !rawDocs.some((d) => d.estado === 'pendiente') ||
+    (await borradoBloqueadoPorEstudio(expedienteId, (expediente as { estado?: string }).estado ?? ''));
+
   // Generate signed URLs for viewing
-  const documentos = await addSignedUrls(rawDocs);
+  const documentos = (await addSignedUrls(rawDocs)).map((d) => ({
+    ...d,
+    eliminable: esEliminable(d, userId, userRol, bloqueado),
+  }));
 
   return {
     documentos,
@@ -513,6 +561,10 @@ export async function deleteDocumento(
 
   const doc = existing as unknown as DocumentoRow;
 
+  // 1b. Tenant guard (como la subida y el reemplazo): 404 fuera de la cartera;
+  // no-op para roles internos.
+  await assertExpedienteAccess(doc.expediente_id, userId, userRole);
+
   // 2. Only allow delete if estado = 'pendiente'
   if (doc.estado !== 'pendiente') {
     throw AppError.badRequest(
@@ -525,6 +577,14 @@ export async function deleteDocumento(
   if (doc.subido_por !== userId && userRole !== 'administrador') {
     throw AppError.forbidden(
       'Solo el propietario del documento o un administrador puede eliminarlo',
+    );
+  }
+
+  // 3b. P19: ni con el estudio decidido (ver borradoBloqueadoPorEstudio).
+  if (await borradoBloqueadoPorEstudio(doc.expediente_id)) {
+    throw AppError.badRequest(
+      'No se pueden eliminar documentos de un estudio cerrado, no aprobable o con contrato en curso.',
+      'EXPEDIENTE_TERMINAL',
     );
   }
 
@@ -1244,9 +1304,12 @@ export async function confirmarReemplazo(
     ip,
   });
 
-  // 5. Return with signed URL
-  const archivo_url = await generateViewUrl(created.storage_key);
-  return { ...created, archivo_url };
+  // 5. Return with signed URL (y `eliminable`, P19)
+  const [archivo_url, bloqueado] = await Promise.all([
+    generateViewUrl(created.storage_key),
+    borradoBloqueadoPorEstudio(doc.expediente_id),
+  ]);
+  return { ...created, archivo_url, eliminable: esEliminable(created, userId, userRol, bloqueado) };
 }
 
 // ============================================================
