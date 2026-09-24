@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import * as service from './creditos-estudios.service';
 import type {
   ComprarPaqueteInput,
@@ -76,6 +77,10 @@ export async function facturarCompra(req: Request, res: Response) {
 export async function liberarEstudio(req: Request, res: Response) {
   const expedienteId = (req.params as { expedienteId: string }).expedienteId;
   const input = (req.body || {}) as LiberarEstudioCreditoInput;
+  // El estudio tiene que estar en su cartera, como en cancelarYLiberarCredito
+  // (404 fuera de ella): el asesor restringido no gasta créditos en estudios de
+  // sus compañeros. El servicio solo mira la organización del inmueble.
+  await assertExpedienteAccess(expedienteId, req.user!.id, req.user!.rol);
   const result = await service.liberarEstudioConCredito(
     expedienteId,
     req.user!.id,
