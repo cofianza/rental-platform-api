@@ -11,12 +11,13 @@ const mockIn = vi.fn();
 const mockOrder = vi.fn();
 const mockRange = vi.fn();
 const mockNot = vi.fn();
+const mockNeq = vi.fn();
 
 function createChain(finalData: unknown) {
   const chain: Record<string, unknown> = {};
   const methods = {
     select: mockSelect, eq: mockEq, gte: mockGte, lte: mockLte, in: mockIn,
-    order: mockOrder, range: mockRange, not: mockNot,
+    order: mockOrder, range: mockRange, not: mockNot, neq: mockNeq,
   };
 
   for (const [name, fn] of Object.entries(methods)) {
@@ -271,6 +272,52 @@ describe('Reportes Service', () => {
       expect(mockRange).toHaveBeenCalledWith(0, 999);
       expect(mockRange).toHaveBeenCalledWith(1000, 1999);
       expect(result.resumen.total_expedientes_analizados).toBe(1001);
+    });
+  });
+  // P26: la decisión vigente sale de la línea de tiempo; el condicionado que el
+  // analista aprueba después cuenta como aprobado, desglosado por ruta, y el
+  // que sigue sin decidir va aparte («en decisión»), fuera de la tasa.
+  describe('getAprobacionExpedientes()', () => {
+    const decision = (id: string, estado_nuevo: string, estado: string, origen?: string) => ({
+      expediente_id: id,
+      estado_nuevo,
+      metadata: origen ? { origen } : null,
+      expedientes: { created_at: '2026-03-02T15:00:00Z', estado },
+    });
+    const eventos = [
+      decision('e1', 'aprobado', 'cerrado'), // el buró aprobó y firmó contrato
+      decision('e2', 'condicionado', 'aprobado'),
+      decision('e2', 'aprobado', 'aprobado', 'analista_aprobar_condicionado'),
+      decision('e3', 'condicionado', 'aprobado'),
+      decision('e3', 'aprobado', 'aprobado', 'ponderacion_coarrendatario'),
+      decision('e4', 'rechazado', 'rechazado'),
+      decision('e5', 'condicionado', 'condicionado'), // en decisión
+      decision('e6', 'condicionado', 'cerrado'), // cancelado sin decidir
+    ];
+    const estudios = [
+      { expediente_id: 'e1', resultado: 'aprobado', referencia_proveedor: 'tu-1', cascada: null },
+      { expediente_id: 'e2', resultado: 'condicionado', referencia_proveedor: 'tu-2', cascada: null },
+      { expediente_id: 'e3', resultado: 'condicionado', referencia_proveedor: 'tu-3', cascada: null },
+    ];
+
+    it('cuenta la última decisión, desglosa los aprobados por ruta y deja «en decisión» fuera de la tasa', async () => {
+      mockFrom.mockImplementation((table: string) => createChain(table === 'estudios' ? estudios : eventos));
+
+      const r = await reportesService.getAprobacionExpedientes('2026-03-01', '2026-03-31');
+
+      expect(r.totales).toEqual({
+        total_aprobados: 3,
+        total_aprobados_automatica: 1,
+        total_aprobados_coarrendatario: 1,
+        total_aprobados_revision_manual: 1,
+        total_rechazados: 1,
+        total_condicionados: 1,
+        total_resueltos: 4,
+        tasa_global: 75,
+      });
+      expect(r.meses.find((m) => m.periodo === 'Marzo 2026')).toMatchObject({ aprobados: 3, rechazados: 1, condicionados: 1, total: 4, tasa: 75 });
+      expect(mockFrom).toHaveBeenCalledWith('eventos_timeline');
+      expect(mockNeq).toHaveBeenCalledWith('tipo', 'con_coarrendatario');
     });
   });
 });

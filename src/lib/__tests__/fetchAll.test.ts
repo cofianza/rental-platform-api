@@ -10,7 +10,7 @@ const { paginas, rangos } = vi.hoisted(() => ({
 
 vi.mock('@/lib/supabase', () => {
   const chain: Record<string, unknown> = {};
-  for (const m of ['select', 'in', 'order', 'gte', 'lte']) chain[m] = () => chain;
+  for (const m of ['select', 'eq', 'neq', 'in', 'order', 'gte', 'lte']) chain[m] = () => chain;
   chain.range = (desde: number, hasta: number) => {
     rangos.push([desde, hasta]);
     return Promise.resolve(paginas.shift() ?? { data: [], error: null });
@@ -57,10 +57,16 @@ describe('fetchAll', () => {
 describe('reporte de aprobacion con mas de 1000 estudios resueltos', () => {
   it('el total no se congela en 1000', async () => {
     const { getAprobacionExpedientes } = await import('@/modules/reportes/reportes.service');
-    const fila = (estado: string) => ({ id: 'x', estado, created_at: '2026-09-10T12:00:00Z' });
+    // Sale de las decisiones de la línea de tiempo: una por estudio.
+    const decision = (i: number, estado: string) => ({
+      expediente_id: `e${i}`,
+      estado_nuevo: estado,
+      metadata: null,
+      expedientes: { created_at: '2026-09-10T12:00:00Z', estado },
+    });
     paginas.push(
-      { data: Array.from({ length: 1000 }, () => fila('aprobado')), error: null },
-      { data: [fila('rechazado')], error: null },
+      { data: Array.from({ length: 1000 }, (_, i) => decision(i, 'aprobado')), error: null },
+      { data: [decision(1000, 'rechazado')], error: null },
     );
     const r = await getAprobacionExpedientes('2026-09-01T00:00:00Z', '2026-09-30T23:59:59Z');
     expect(r.totales.total_resueltos).toBe(1001);

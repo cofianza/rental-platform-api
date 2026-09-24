@@ -129,6 +129,19 @@ describe('Dashboard Service', () => {
       expect(mockNeq).not.toHaveBeenCalledWith('estado', 'cerrado');
     });
 
+    it('un condicionado que sigue sin decidir va aparte: no baja la tasa (P26)', async () => {
+      mockTablas();
+      eventos.push({ expediente_id: 'e4', estado_nuevo: 'condicionado', created_at: '2026-03-07T00:00:00Z', expedientes: { created_at: '2026-03-06T00:00:00Z' } });
+
+      try {
+        const result = await dashboardService.getSummary('2026-03-01', '2026-03-31');
+        // Aprobado, aprobado, rechazado: 2 de 3 decididos. e4 no cuenta.
+        expect(result.tasaAprobacion).toBe(66.67);
+      } finally {
+        eventos.pop();
+      }
+    });
+
     it('sin decisiones en el periodo: tasa y tiempo en 0', async () => {
       mockFrom.mockImplementation((table: string) =>
         table === 'expedientes' ? createChain(null, 0) : createChain([]),

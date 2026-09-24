@@ -230,11 +230,16 @@ async function queryDecisiones(dateFrom: string, dateTo: string): Promise<Decisi
   return [...porExpediente.values()];
 }
 
-/** % de estudios decididos cuya decisión vigente es 'aprobado' (2 decimales). */
+/**
+ * % de estudios decididos cuya decisión vigente es 'aprobado' (2 decimales).
+ * P26: el condicionado que sigue sin decidir va aparte («en decisión») y no
+ * entra en la cuenta; el que el analista aprueba después ya es 'aprobado'.
+ */
 function tasaAprobacion(decisiones: Decision[]): number {
-  if (decisiones.length === 0) return 0;
-  const aprobados = decisiones.filter((d) => d.ultima === 'aprobado').length;
-  return Math.round((aprobados / decisiones.length) * 10000) / 100;
+  const decididos = decisiones.filter((d) => d.ultima !== 'condicionado');
+  if (decididos.length === 0) return 0;
+  const aprobados = decididos.filter((d) => d.ultima === 'aprobado').length;
+  return Math.round((aprobados / decididos.length) * 10000) / 100;
 }
 
 /** Días promedio entre la creación y la primera decisión (2 decimales). */

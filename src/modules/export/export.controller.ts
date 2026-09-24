@@ -149,12 +149,17 @@ export async function exportVolumen(req: Request, res: Response) {
 
 // ── Reporte: Aprobacion ─────────────────────────────────────
 
+// P26: aprobados por ruta de aprobación; «En decisión» (condicionados sin
+// resolver) va aparte y la tasa es sobre los decididos.
 const APROBACION_COLS: ExportColumn[] = [
   { header: 'Periodo', key: 'periodo', width: 18 },
   { header: 'Aprobados', key: 'aprobados', width: 12 },
-  { header: 'Rechazados', key: 'rechazados', width: 12 },
-  { header: 'Condicionados', key: 'condicionados', width: 14 },
-  { header: 'Total', key: 'total', width: 10 },
+  { header: 'Aprobación automática', key: 'aprobados_automatica', width: 22 },
+  { header: 'Con coarrendatario', key: 'aprobados_coarrendatario', width: 20 },
+  { header: 'Revisión manual', key: 'aprobados_revision_manual', width: 16 },
+  { header: 'No aprobables', key: 'rechazados', width: 14 },
+  { header: 'En decisión', key: 'condicionados', width: 13 },
+  { header: 'Decididos', key: 'total', width: 11 },
   { header: 'Tasa (%)', key: 'tasa', width: 12 },
 ];
 
