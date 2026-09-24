@@ -744,11 +744,12 @@ export async function generarCertificado(
   const fechaEmision = new Date(fechaEmisionMs).toISOString();
   const fechaVencimiento = new Date(inicioVigenciaMs + validezMs).toISOString();
 
-  // 6. Generate PDF: el completo y, con los mismos datos, el de los firmantes.
+  // 6. Generate PDF: el completo y, con los mismos datos, las versiones reducidas.
   const pdfData = await datosDelCrc(e, { codigo, fecha_emision: fechaEmision, fecha_vencimiento: fechaVencimiento }, decision);
 
   const pdfBuffer = await generateCertificatePdf(pdfData, qrBuffer);
-  const pdfFirmantes = await generateCertificatePdf(sinPuntaje(pdfData), qrBuffer);
+  const reducidas: Array<[VersionReducida, Buffer]> = [];
+  for (const v of VERSIONES_REDUCIDAS) reducidas.push([v, await generateCertificatePdf(reducir(pdfData, v), qrBuffer)]);
 
   // 7. Upload to storage
   const storageKey = `estudios/${estudioId}/certificado/${crypto.randomUUID()}.pdf`;
@@ -764,12 +765,14 @@ export async function generarCertificado(
     throw new AppError(500, 'INTERNAL_ERROR','Error al subir el certificado PDF');
   }
 
-  // Si esta falla, crcParaFirmantes la genera cuando alguien la pida.
-  const { error: uploadFirmantesErr } = await supabase.storage
-    .from(BUCKET_NAME)
-    .upload(llaveDeVersion(storageKey, 'firmantes'), pdfFirmantes, { contentType: 'application/pdf', upsert: false });
-  if (uploadFirmantesErr) {
-    logger.warn({ error: uploadFirmantesErr, estudioId }, 'CRC: no se subió la versión para firmantes; se generará al pedirla');
+  // Si alguna falla, crcReducido la genera cuando la pidan.
+  for (const [v, pdf] of reducidas) {
+    const { error: uploadReducidaErr } = await supabase.storage
+      .from(BUCKET_NAME)
+      .upload(llaveDeVersion(storageKey, v), pdf, { contentType: 'application/pdf', upsert: false });
+    if (uploadReducidaErr) {
+      logger.warn({ error: uploadReducidaErr, estudioId, version: v }, 'CRC: no se subió una versión reducida; se generará al pedirla');
+    }
   }
 
   // 8. Upsert estudios_certificados
@@ -1170,6 +1173,12 @@ export async function emitirCertificadoAutomatico(
 
 type VersionReducida = 'firmantes' | 'arrendatario';
 
+const VERSIONES_REDUCIDAS: readonly VersionReducida[] = ['firmantes', 'arrendatario'];
+
+function reducir(datos: CertificatePdfData, version: VersionReducida): CertificatePdfData {
+  return version === 'firmantes' ? sinPuntaje(datos) : paraArrendatario(datos);
+}
+
 type CertGuardado = {
   estudio_id: string;
   codigo: string;
@@ -1186,23 +1195,22 @@ export function llaveDeVersion(llaveCompleta: string, version: VersionReducida):
 /**
  * El CRC reducido: el de firmantes (sin puntaje ni observaciones) va al paquete
  * de firma; el del arrendatario es ese mismo con su score. El completo queda
- * solo en el panel de la inmobiliaria, del propietario y de Cofianza. El de
- * firmantes se emite junto al completo; el del arrendatario, y el de firmantes
- * de un CRC anterior, se generan aqui una vez, con su numero y sus fechas, y
- * quedan guardados. Salen de los datos de hoy del estudio: si algo cambio desde
- * la emision, lo reflejan. No verifica acceso: el llamador ya paso por
- * assertExpedienteAccess.
+ * solo en el panel de la inmobiliaria, del propietario y de Cofianza. Los dos
+ * se emiten junto al completo, con los mismos datos; aqui se generan solo de
+ * respaldo (una subida que fallo, un CRC anterior), una vez, con su numero y sus
+ * fechas y con los datos de hoy del estudio. Antes de entregar uno guardado pasa
+ * las compuertas: el de un certificado sin efecto no se entrega (P32). No
+ * verifica acceso: el llamador ya paso por assertExpedienteAccess.
  */
 async function crcReducido(cert: CertGuardado, version: VersionReducida): Promise<{ key: string; pdf: Buffer }> {
+  const e = await leerEstudioCrc(cert.estudio_id);
+  const decision = await assertCertificable(e);
   const key = llaveDeVersion(cert.pdf_storage_key, version);
   const { data } = await supabase.storage.from(BUCKET_NAME).download(key);
   if (data) return { key, pdf: Buffer.from(await data.arrayBuffer()) };
 
-  const e = await leerEstudioCrc(cert.estudio_id);
-  const decision = await assertCertificable(e);
   const datos = await datosDelCrc(e, cert, decision);
-  const reducido = version === 'firmantes' ? sinPuntaje(datos) : paraArrendatario(datos);
-  const pdf = await generateCertificatePdf(reducido, await generateQrCode(`${env.FRONTEND_URL}/verificar/${cert.codigo}`));
+  const pdf = await generateCertificatePdf(reducir(datos, version), await generateQrCode(`${env.FRONTEND_URL}/verificar/${cert.codigo}`));
   // Sin upsert: si ya existia (una lectura que fallo), no se pisa; se reintenta.
   const { error } = await supabase.storage.from(BUCKET_NAME).upload(key, pdf, { contentType: 'application/pdf', upsert: false });
   if (error) {

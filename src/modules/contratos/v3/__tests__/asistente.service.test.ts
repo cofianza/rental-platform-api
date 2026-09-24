@@ -1600,6 +1600,21 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
   }
   const conDocumento = (a: Asistente, documento: DocumentoV3, extra: Record<string, unknown> = {}) =>
     fila({ storage_key: KEY_PREVIA, datos_variables: { asistente: a, documento, ...extra } });
+  // El CRC guardado para firmantes también pasa las compuertas antes de
+  // entregarse (P32): el estudio de hoy, certificable. Va después de
+  // encolarCarga, que lee 'estudios' primero.
+  const estudioDelCrc = () =>
+    enqueue('estudios', {
+      data: {
+        id: 'est-1',
+        expediente_id: EXP,
+        tipo: 'individual',
+        estado: 'completado',
+        resultado: 'aprobado',
+        expedientes: { estado: 'aprobado', estado_pre_cancelacion: null },
+      },
+      error: null,
+    });
 
   it('Ruta A: final, partes, CAS fuera de borrador, sobre y recién ahí se borra la vista previa', async () => {
     const doc = await documentoRevisado(PASOS);
@@ -1607,6 +1622,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(3), pendientes: [], version: 'v', lineas: [] });
     vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO, estado: 'pendiente_firma' } as never);
     encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    estudioDelCrc();
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [{ id: CTO }], error: null });
 
@@ -1700,6 +1716,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     archivos[CRC_KEY] = await pdfReal(1);
     vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
     encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    estudioDelCrc();
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [], error: null });
 
@@ -1716,6 +1733,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
     vi.mocked(crearSobre).mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
     encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    estudioDelCrc();
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [{ id: CTO }], error: null }, { data: [{ id: CTO }], error: null }, OK);
 
@@ -1737,6 +1755,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
     vi.mocked(crearSobre).mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
     encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    estudioDelCrc();
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [{ id: CTO }], error: null }, { data: [], error: null });
 
@@ -1754,6 +1773,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     vi.mocked(ultimoSobre).mockResolvedValueOnce({ estado: 'en_firma', auco_code: 'AUCO1' } as never);
     vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO, estado: 'pendiente_firma' } as never);
     encolarCarga({ contratos: [conDocumento(PASOS, doc)] });
+    estudioDelCrc();
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [{ id: CTO }], error: null });
 
@@ -1798,6 +1818,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
       errorCode: 'PDF_PROPIO_ALTERADO',
     });
     encolarCarga({ contratos: [conDocumento(PASOS_B, doc, { propio })] });
+    estudioDelCrc();
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [{ id: CTO }], error: null });
     vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO } as never);

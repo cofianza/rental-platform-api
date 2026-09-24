@@ -385,7 +385,8 @@ describe('quién recibe cuál', () => {
     archivos.set(FIRMANTES, Buffer.from('%PDF firmantes'));
     archivos.set(ARRENDATARIO, Buffer.from('%PDF arrendatario'));
 
-    enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null });
+    // La guardada también pasa las compuertas: se lee el estudio de hoy.
+    enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null }, { data: ESTUDIO, error: null });
     enqueue('estudios_certificados', { data: CERT, error: null });
     const delSolicitante = await descargarCertificado('est-1', 'u-1', 'solicitante');
     expect(delSolicitante.url).toBe(`https://storage.test/${ARRENDATARIO}`);
@@ -397,7 +398,7 @@ describe('quién recibe cuál', () => {
   });
 
   it('un CRC emitido antes sin versión para firmantes: se genera una vez, con su número y sus fechas', async () => {
-    enqueue('estudios', { data: ESTUDIO, error: null });
+    enqueue('estudios', { data: ESTUDIO, error: null }, { data: ESTUDIO, error: null });
 
     const r = await crcParaFirmantes(CERT);
 
@@ -503,15 +504,35 @@ describe('quién recibe cuál', () => {
     expect(textos).not.toHaveBeenCalled();
   });
 
-  it('al emitir el CRC se suben los dos: el completo y, al lado, el de firmantes', async () => {
+  it('al emitir el CRC se suben los tres: el completo y, al lado, el de firmantes y el del arrendatario', async () => {
     enqueue('estudios', { data: ESTUDIO, error: null });
     enqueue('estudios_certificados', { data: null, error: null }, { data: { id: 'cert-9' }, error: null });
 
     const cert = await generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
 
     const subidas = storage.upload.mock.calls.map((c) => c[0]);
-    // La del arrendatario no: se genera cuando la pida.
-    expect(subidas).toEqual([cert.pdf_storage_key, llaveDeVersion(cert.pdf_storage_key, 'firmantes')]);
+    expect(subidas).toEqual([
+      cert.pdf_storage_key,
+      llaveDeVersion(cert.pdf_storage_key, 'firmantes'),
+      llaveDeVersion(cert.pdf_storage_key, 'arrendatario'),
+    ]);
+    // Con los mismos datos: la del arrendatario lleva su score y su nota.
+    const texto = impreso();
+    expect(texto).toContain('Esta versión no incluye las observaciones de la evaluación.');
+    expect(texto).toContain(NOTA);
+  });
+
+  // P32: una versión ya guardada tampoco se entrega si el certificado quedó sin efecto.
+  it('no entrega una versión guardada de un certificado sin efecto', async () => {
+    archivos.set(ARRENDATARIO, Buffer.from('%PDF arrendatario'));
+    const cancelado = {
+      ...ESTUDIO,
+      resultado: 'condicionado',
+      expedientes: { ...ESTUDIO.expedientes, estado: 'cerrado', estado_pre_cancelacion: 'condicionado' },
+    };
+    enqueue('estudios', { data: cancelado, error: null });
+    await expect(crcParaArrendatario(CERT)).rejects.toMatchObject({ statusCode: 409, message: 'Este certificado ya no tiene efecto.' });
+    expect(storage.download).not.toHaveBeenCalled();
   });
 });
 

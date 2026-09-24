@@ -195,8 +195,9 @@ describe('las demas rutas por id que el titular alcanza', () => {
   // versión, la de firmantes con su puntaje.
   it('/certificado/url del titular: su versión del CRC, no lo que haya en certificado_url', async () => {
     const completo = 'estudios/est-1/certificado/uuid-1.pdf';
+    // getCertificadoViewUrl, descargarCertificado y las compuertas de su versión.
     enqueue('estudios', { data: { ...fila('individual'), certificado_url: completo }, error: null });
-    enqueue('estudios', { data: fila('individual'), error: null });
+    enqueue('estudios', { data: fila('individual'), error: null }, { data: fila('individual'), error: null });
     enqueue('estudios_certificados', {
       data: { id: 'c-1', codigo: 'CERT-2026-00001', version: 1, pdf_storage_key: completo, fecha_emision: '2026-09-01', fecha_vencimiento: '2026-10-31' },
       error: null,
