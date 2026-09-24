@@ -158,6 +158,24 @@ async function borradoBloqueadoPorEstudio(expedienteId: string, estadoConocido?:
   return !!error || (data ?? []).length > 0;
 }
 
+/**
+ * Un archivo es de un solo documento: con la misma clave en dos filas, borrar
+ * la propia borraba también el archivo de la otra (uno ya aprobado, por
+ * ejemplo), y la ruta sale en el listado. Si la consulta falla, no se registra.
+ */
+async function assertStorageKeyLibre(storageKey: string): Promise<void> {
+  const { count, error } = await (supabase
+    .from('documentos' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .eq('storage_key', storageKey);
+  if (error) {
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el archivo subido. Intenta de nuevo en un momento.');
+  }
+  if (count) {
+    throw AppError.conflict('Ese archivo ya está registrado en otro documento. Súbelo de nuevo.', 'STORAGE_KEY_EN_USO');
+  }
+}
+
 /** P19: ¿quien lo pide puede eliminar este documento? La regla de deleteDocumento, para la web. */
 function esEliminable(doc: DocumentoRow, userId: string | undefined, userRol: string | undefined, estudioBloqueado: boolean): boolean {
   return (
@@ -328,8 +346,10 @@ export async function confirmarSubida(
     }
   }
 
-  // 3. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio)
+  // 3. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio,
+  // sin otro documento que ya la use)
   assertStorageKeyPropia(input.storage_key, `expedientes/${input.expediente_id}/documents/`);
+  await assertStorageKeyLibre(input.storage_key);
   const { error: verifyError } = await supabase.storage
     .from(BUCKET_NAME)
     .createSignedUrl(input.storage_key, 60);
@@ -614,17 +634,31 @@ export async function deleteDocumento(
     .update({ estado: 'rechazado', reemplazado_por: null } as never)
     .eq('reemplazado_por', id);
 
-  // 5. Delete from storage
+  // 5. Delete from storage, salvo que otra fila use el mismo archivo (o no se
+  //    pueda saber): el de otro documento no se borra.
   if (doc.storage_key) {
-    const { error: storageError } = await supabase.storage
-      .from(BUCKET_NAME)
-      .remove([doc.storage_key]);
+    const { count: otras, error: otrasError } = await (supabase
+      .from('documentos' as string) as ReturnType<typeof supabase.from>)
+      .select('id', { count: 'exact', head: true })
+      .eq('storage_key', doc.storage_key)
+      .neq('id', id);
 
-    if (storageError) {
+    if (otrasError || otras) {
       logger.warn(
-        { error: storageError.message, storage_key: doc.storage_key },
-        'Error al eliminar archivo del storage',
+        { error: otrasError?.message, storage_key: doc.storage_key, id },
+        'El archivo lo usa otro documento (o no se pudo verificar): no se borra del storage',
       );
+    } else {
+      const { error: storageError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .remove([doc.storage_key]);
+
+      if (storageError) {
+        logger.warn(
+          { error: storageError.message, storage_key: doc.storage_key },
+          'Error al eliminar archivo del storage',
+        );
+      }
     }
   }
 
@@ -1247,8 +1281,10 @@ export async function confirmarReemplazo(
   // (no-op para roles internos / llamadas sin identidad).
   await assertExpedienteAccess(doc.expediente_id, userId, userRol);
 
-  // 2. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio)
+  // 2. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio,
+  // sin otro documento que ya la use)
   assertStorageKeyPropia(input.storage_key, `expedientes/${doc.expediente_id}/documents/`);
+  await assertStorageKeyLibre(input.storage_key);
   const { error: verifyError } = await supabase.storage
     .from(BUCKET_NAME)
     .createSignedUrl(input.storage_key, 60);
