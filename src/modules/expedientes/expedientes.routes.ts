@@ -9,7 +9,6 @@ import {
   asignarResponsableExpedienteSchema,
 } from './expedientes.schema';
 import * as expedientesController from './expedientes.controller';
-import * as auditoriaController from './expediente-auditoria.controller';
 
 const router = Router();
 
@@ -79,15 +78,6 @@ router.patch(
   authorize('expedientes', 'update'),
   validate({ params: expedienteIdParamsSchema, body: asignarResponsableExpedienteSchema }),
   expedientesController.asignarResponsable,
-);
-
-// GET /:id/auditoria-score — reporte de cumplimiento con la politica de
-// score. Solo administrador, ya que expone la logica interna del modelo.
-router.get(
-  '/:id/auditoria-score',
-  roleGuard(['administrador']),
-  validate({ params: expedienteIdParamsSchema }),
-  auditoriaController.getAuditoriaScore,
 );
 
 export default router;
