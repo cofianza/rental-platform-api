@@ -403,7 +403,8 @@ export async function sendResponsableAsignadoEmail(params: {
 
   const company = await getCompany();
 
-  await resend.emails.send({
+  // Resend no lanza: devuelve { error }. Quien rota un enlace necesita saber si salió.
+  const enviado = await resend.emails.send({
     from: FROM,
     to: email,
     subject: params.titulo,
@@ -423,6 +424,7 @@ export async function sendResponsableAsignadoEmail(params: {
       </div>
     `,
   });
+  if (enviado?.error) throw new Error(`Resend: ${enviado.error.message}`);
 
   logger.info({ email, titulo: params.titulo }, 'Orchestrator email: responsable asignado enviado');
 }

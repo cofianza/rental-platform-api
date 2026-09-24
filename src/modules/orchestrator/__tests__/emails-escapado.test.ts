@@ -22,6 +22,7 @@ import {
   sendDocumentosRequeridosEmail,
   sendEstudioRechazadoEmail,
   sendCitaCanceladaEmail,
+  sendResponsableAsignadoEmail,
   sendCitaConfirmadaSolicitanteEmail,
   sendCitaReprogramadaSolicitanteEmail,
   sendCitaSolicitadaPropietarioEmail,
@@ -134,5 +135,16 @@ describe('correo de no aprobable', () => {
   it('la evaluación del buró conserva su asunto', async () => {
     await sendEstudioRechazadoEmail({ email: 'ana@correo.co', nombre: 'Ana' });
     expect(asunto()).toBe('Resultado de tu evaluación crediticia - Cofianza');
+  });
+});
+
+// Resend no lanza: devuelve { error }. Quien rota el enlace del prospecto
+// (expediente-soportes) necesita el error para no responder «enviado».
+describe('correo del responsable / enlace del prospecto', () => {
+  it('si Resend devuelve error, el helper lanza', async () => {
+    mockSend.mockResolvedValueOnce({ data: null, error: { message: 'domain not verified' } } as never);
+    await expect(
+      sendResponsableAsignadoEmail({ email: 'p@correo.co', nombre: 'Ana', titulo: 'Carga tus documentos', mensaje: 'x', link: '/cargar-documentos/t', frontend_url: 'https://cofianza.co' }),
+    ).rejects.toThrow('domain not verified');
   });
 });
