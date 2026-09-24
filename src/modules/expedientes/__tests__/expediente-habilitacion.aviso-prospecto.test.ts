@@ -49,7 +49,12 @@ describe('avisarSolicitanteDecision', () => {
   it('rechazo: correo con apelación al correo del prospecto y aviso a su perfil', async () => {
     await avisarSolicitanteDecision('exp-1', 'rechazado', 'Motivo del conjunto');
 
-    expect(mockRechazado).toHaveBeenCalledWith({ email: 'ana@correo.co', nombre: 'Ana Pérez', motivoGeneral: 'Motivo del conjunto' });
+    expect(mockRechazado).toHaveBeenCalledWith({
+      email: 'ana@correo.co',
+      nombre: 'Ana Pérez',
+      motivoGeneral: 'Motivo del conjunto',
+      decisionDeCofianza: false,
+    });
     expect(mockAprobado).not.toHaveBeenCalled();
     expect(mockFindPerfil).toHaveBeenCalledWith('ana@correo.co');
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'perfil-prospecto', tipo: 'estudio.rechazado' }));
@@ -62,6 +67,7 @@ describe('avisarSolicitanteDecision', () => {
       email: 'ana@correo.co',
       nombre: 'Ana Pérez',
       motivoGeneral: MOTIVO_PROSPECTO_DECISION_COFIANZA,
+      decisionDeCofianza: true,
     });
   });
 

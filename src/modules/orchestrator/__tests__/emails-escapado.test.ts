@@ -20,6 +20,7 @@ vi.mock('@/modules/estudios/rutas-resultado', () => ({ resolverRuta: vi.fn() }))
 import { resolverRuta } from '@/modules/estudios/rutas-resultado';
 import {
   sendDocumentosRequeridosEmail,
+  sendEstudioRechazadoEmail,
   sendCitaCanceladaEmail,
   sendCitaConfirmadaSolicitanteEmail,
   sendCitaReprogramadaSolicitanteEmail,
@@ -116,5 +117,22 @@ describe('correos de visita con enlaces', () => {
       ciudad: 'Medellín', fecha_propuesta: '2026-09-30T15:00:00Z', url_visita: 'https://cofianza.co/citas#cita-c1',
     });
     expect(html()).toContain('href="https://cofianza.co/citas#cita-c1"');
+  });
+});
+
+// Si el no aprobable lo decidió un analista, el correo no lo atribuye a la
+// evaluación crediticia (P34).
+describe('correo de no aprobable', () => {
+  const asunto = () => (mockSend.mock.calls.at(-1)![0] as { subject: string }).subject;
+
+  it('decisión de un analista: «Resultado de tu estudio»', async () => {
+    await sendEstudioRechazadoEmail({ email: 'ana@correo.co', nombre: 'Ana', motivoGeneral: 'No aprobable por ahora.', decisionDeCofianza: true });
+    expect(asunto()).toBe('Resultado de tu estudio - Cofianza');
+    expect(html()).not.toContain('Resultado de la evaluación');
+  });
+
+  it('la evaluación del buró conserva su asunto', async () => {
+    await sendEstudioRechazadoEmail({ email: 'ana@correo.co', nombre: 'Ana' });
+    expect(asunto()).toBe('Resultado de tu evaluación crediticia - Cofianza');
   });
 });

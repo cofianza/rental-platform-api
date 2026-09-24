@@ -104,8 +104,11 @@ export async function sendEstudioRechazadoEmail(params: {
    * historial impecable y aun asi no caber en ESTE canon.
    */
   motivoGeneral?: string | null;
+  /** El no aprobable lo decidió un analista de Cofianza, no la evaluación: el asunto no la nombra. */
+  decisionDeCofianza?: boolean;
 }) {
-  const { email, nombre, motivoGeneral } = params;
+  const { email, nombre, motivoGeneral, decisionDeCofianza } = params;
+  const titulo = decisionDeCofianza ? 'Resultado de tu estudio' : 'Resultado de tu evaluación crediticia';
 
   const company = await getCompany();
 
@@ -119,11 +122,11 @@ export async function sendEstudioRechazadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Resultado de tu evaluación crediticia - Cofianza',
+    subject: `${titulo} - Cofianza`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #111827; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Resultado de la evaluación</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">${decisionDeCofianza ? 'Resultado de tu estudio' : 'Resultado de la evaluación'}</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre)}</strong>,</p>

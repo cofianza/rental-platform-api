@@ -850,6 +850,7 @@ export async function onEstudioCompletado(params: {
             : params.motivoAnalista
               ? MOTIVO_PROSPECTO_DECISION_COFIANZA
               : null,
+          decisionDeCofianza: !!params.motivoAnalista,
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email rechazado'));
       }
 

@@ -792,7 +792,12 @@ export async function avisarSolicitanteDecision(
           score: null,
         })
       // Sin motivo lo decidió un analista (P34): texto neutro, no el de «tu evaluación crediticia no cumplió».
-      : sendEstudioRechazadoEmail({ email: sol.email, nombre, motivoGeneral: motivoGeneral ?? MOTIVO_PROSPECTO_DECISION_COFIANZA })
+      : sendEstudioRechazadoEmail({
+          email: sol.email,
+          nombre,
+          motivoGeneral: motivoGeneral ?? MOTIVO_PROSPECTO_DECISION_COFIANZA,
+          decisionDeCofianza: !motivoGeneral,
+        })
     ).catch((err) => logger.warn({ error: err, expedienteId }, 'No se pudo enviar al prospecto el correo de la decisión'));
 
     const perfilId = await findPerfilIdByEmail(sol.email);

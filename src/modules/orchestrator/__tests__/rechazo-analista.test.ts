@@ -86,7 +86,9 @@ describe('rechazo registrado por un analista', () => {
     });
 
     expect(motivoDelBanner()).toBe('No cumple la política de Cofianza.');
-    expect(mockRechazado).toHaveBeenCalledWith(expect.objectContaining({ motivoGeneral: MOTIVO_PROSPECTO_DECISION_COFIANZA }));
+    expect(mockRechazado).toHaveBeenCalledWith(
+      expect.objectContaining({ motivoGeneral: MOTIVO_PROSPECTO_DECISION_COFIANZA, decisionDeCofianza: true }),
+    );
     // Al dueño: el estudio fue rechazado, con el motivo; no «la evaluación crediticia».
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'dueno-1',
@@ -99,7 +101,7 @@ describe('rechazo registrado por un analista', () => {
     await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'rechazado', score: 380, solicitanteId: '' });
 
     expect(motivoDelBanner()).toMatch(/evaluación crediticia del titular/);
-    expect(mockRechazado).toHaveBeenCalledWith(expect.objectContaining({ motivoGeneral: null }));
+    expect(mockRechazado).toHaveBeenCalledWith(expect.objectContaining({ motivoGeneral: null, decisionDeCofianza: false }));
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ mensaje: expect.stringMatching(/^La evaluación crediticia de Ana Pérez/) }));
   });
 });
