@@ -48,7 +48,7 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/config', () => ({
   env: { AUCO_SENDER_EMAIL: 'sender@cofianza.com', FIRMA_BIOMETRIA_ENABLED: false, COFIANZA_AUTOFIRMA_ENABLED: true },
 }));
-vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
+vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: { FIRMA_AUCO_SIGNED: 'FIRMA_AUCO_SIGNED' }, AUDIT_ENTITIES: {} }));
 vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: vi.fn(async () => undefined),
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
@@ -68,13 +68,22 @@ vi.mock('@/lib/auco', () => ({
   bufferToBase64: vi.fn(() => 'JVBERg=='),
   uploadDocumentForSignature: vi.fn(async () => 'DOC-NUEVO'),
   getDocumentStatus: vi.fn(),
+  getDocumentRoadmap: vi.fn(async () => ({})),
   sendReminder: vi.fn(),
   cancelDocument: vi.fn(),
 }));
 
 import * as auco from '@/lib/auco';
+import { logAudit } from '@/lib/auditLog';
 import { crearSolicitudFirmaMultiparte } from '../firma-multiparte.service';
-import { cancelarSolicitud, crearSolicitudFirma, exigirSinFirmaCompleta, reenviarSolicitudFirma, YA_FIRMADO_NO_SE_CANCELA } from '../firma.service';
+import {
+  cancelarSolicitud,
+  crearSolicitudFirma,
+  exigirSinFirmaCompleta,
+  handleAucoWebhook,
+  reenviarSolicitudFirma,
+  YA_FIRMADO_NO_SE_CANCELA,
+} from '../firma.service';
 import { assertPuedeAbrirSobre, plazoFirmaContrato } from '@/modules/contratos/contratos.service';
 import { AppError } from '@/lib/errors';
 
@@ -468,5 +477,62 @@ describe('cancelaciones manuales con la firma completa en Auco (revisión 3, M2)
 describe('sin vencimiento en bloque (revisión 3, B3)', () => {
   it('no queda un barrido que marque «expirado» sin preguntar a Auco: vence Auco (expiredDate) y lo avisa por webhook', async () => {
     expect('expirarSolicitudesVencidas' in (await import('../firma.service'))).toBe(false);
+  });
+});
+
+describe('la conciliación registra la hora real de la firma y una sola auditoría (revisión 3, B4)', () => {
+  const ROADMAP = {
+    activityLog: [
+      { action: 'PARTICIPANT_SIGN', participant: 'p1', timestamp: '2026-09-20T15:00:00.000Z' },
+      { action: 'PARTICIPANT_SIGN', participant: 'p2', timestamp: '2026-09-21T16:30:00.000Z' },
+      { action: 'DOCUMENT_VIEW', participant: 'p2', timestamp: '2026-09-22T09:00:00.000Z' },
+    ],
+  };
+  const sobreDelCodigo = (estado: string) =>
+    ({ data: { id: 's-viejo', contrato_id: 'c1', estado, nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
+  const firmasAuditadas = () => vi.mocked(logAudit).mock.calls.filter(([a]) => (a as { accion?: string }).accion === 'FIRMA_AUCO_SIGNED');
+
+  beforeEach(() => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'FINISH', url: 'https://auco/f.pdf', signProfile: [] } as never);
+    vi.mocked(auco.getDocumentRoadmap).mockResolvedValue(ROADMAP as never);
+  });
+
+  it('multi-parte: sobre y firmantes con la hora de la última firma; el webhook que llega después no audita otra vez', async () => {
+    prepararReenvio();
+    enqueue('solicitudes_firma', sobreDelCodigo('enviado'), { data: [{ id: 's-viejo' }], error: null });
+    enqueue('contrato_firmantes', { data: [{ id: 'f1' }], error: null }, { data: null, error: null }, { data: [{ estado: 'firmado' }, { estado: 'firmado' }], error: null });
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CONTRATO_YA_FIRMADO' });
+
+    expect(de('contrato_firmantes', 'update')[0].args[0]).toMatchObject({ estado: 'firmado', firmado_en: '2026-09-21T16:30:00.000Z' });
+    expect(de('solicitudes_firma', 'update')[0].args[0]).toMatchObject({ estado: 'firmado', firmado_en: '2026-09-21T16:30:00.000Z' });
+    expect(firmasAuditadas()).toHaveLength(1);
+
+    // Llega el FINISH real (reintento de Auco): el sobre ya está 'firmado'.
+    enqueue('solicitudes_firma', sobreDelCodigo('firmado'));
+    enqueue('contrato_firmantes', { data: [{ id: 'f1' }], error: null }, { data: null, error: null }, { data: [{ estado: 'firmado' }, { estado: 'firmado' }], error: null });
+    enqueue('contratos', { data: { expediente_id: 'e1' }, error: null });
+    await handleAucoWebhook({ code: 'DOC-VIEJO', name: '', status: 'FINISH', url: 'https://auco/f.pdf' });
+    expect(firmasAuditadas()).toHaveLength(1);
+  });
+
+  it('un firmante: la solicitud queda firmada con la hora de la última firma', async () => {
+    enqueue('solicitudes_firma', {
+      data: { id: 's1', contrato_id: 'c1', estado: 'enviado', auco_document_code: 'DOC-VIEJO', contratos: { expediente_id: 'e1' } },
+      error: null,
+    }, sobreDelCodigo('enviado'));
+    await expect(cancelarSolicitud('s1', 'u1', 'administrador')).rejects.toMatchObject({ errorCode: 'CONTRATO_YA_FIRMADO' });
+    expect(de('solicitudes_firma', 'update')[0].args[0]).toMatchObject({ estado: 'firmado', firmado_en: '2026-09-21T16:30:00.000Z' });
+  });
+
+  it('sin roadmap (Auco no lo da), la hora de ahora', async () => {
+    vi.mocked(auco.getDocumentRoadmap).mockRejectedValue(new Error('Auco API error (500)'));
+    enqueue('solicitudes_firma', {
+      data: { id: 's1', contrato_id: 'c1', estado: 'enviado', auco_document_code: 'DOC-VIEJO', contratos: { expediente_id: 'e1' } },
+      error: null,
+    }, sobreDelCodigo('enviado'));
+    const antes = Date.now();
+    await expect(cancelarSolicitud('s1', 'u1', 'administrador')).rejects.toMatchObject({ errorCode: 'CONTRATO_YA_FIRMADO' });
+    const firmadoEn = (de('solicitudes_firma', 'update')[0].args[0] as { firmado_en: string }).firmado_en;
+    expect(Date.parse(firmadoEn)).toBeGreaterThanOrEqual(antes);
   });
 });

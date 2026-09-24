@@ -1126,7 +1126,10 @@ async function leerDocumentoEnAuco(
     throw auco503();
   });
   if (info?.status === 'FINISH') {
-    await handleAucoWebhook({ code, name: info.name ?? '', status: 'FINISH', url: info.url });
+    // Con la hora real de la última firma (roadmap, como el V3); si no la da, la de ahora.
+    const roadmap = await aucoClient.getDocumentRoadmap(code).catch(() => null);
+    const { ultimaFirma } = await import('@/modules/contratos/v3/firma/reglas');
+    await handleAucoWebhook({ code, name: info.name ?? '', status: 'FINISH', url: info.url }, ultimaFirma(roadmap, 1) ?? undefined);
     await yaFirmado(contratoId, expedienteId, opts.mensaje);
   }
   return info;
@@ -1287,8 +1290,9 @@ export async function cancelarSolicitud(
  *   REJECTED     → cancelado (signer rejected)
  *   BLOCKED      → sin cambio: sigue en firma y se avisa a Cofianza para desbloquear
  *   EXPIRED      → expirado (past deadline)
+ * `firmadoEn`: la hora real de la firma cuando se concilia leyendo Auco (el webhook no la trae).
  */
-export async function handleAucoWebhook(payload: AucoWebhookPayload) {
+export async function handleAucoWebhook(payload: AucoWebhookPayload, firmadoEn?: string) {
   const { code, status, url: signedUrl } = payload;
 
   logger.info({ code, status }, 'Auco webhook received');
@@ -1339,6 +1343,7 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
       row.contrato_id,
       { id: row.id, estado: row.estado },
       payload,
+      firmadoEn,
     ).catch((err) =>
       logger.error({ error: err, contratoId: row.contrato_id }, 'Auco webhook: error reconciliando multi-parte (payload)'),
     );
@@ -1365,7 +1370,7 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
 
     case 'FINISH':
       newEstado = 'firmado';
-      updateFields.firmado_en = now;
+      updateFields.firmado_en = firmadoEn ?? now;
       if (signedUrl) {
         updateFields.auco_signed_url = signedUrl;
       }

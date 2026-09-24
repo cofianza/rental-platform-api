@@ -730,6 +730,7 @@ async function cerrarSobreSiTodasFirmaron(
   contratoId: string,
   sobre: { id: string; estado: string },
   signedUrl: string | null,
+  firmadoEn?: string,
 ): Promise<void> {
   const now = new Date().toISOString();
   const { data: refrescadas } = await db('contrato_firmantes')
@@ -739,19 +740,27 @@ async function cerrarSobreSiTodasFirmaron(
   const todas = (refrescadas as Array<{ estado: string }> | null) ?? [];
   if (!todasFirmaron(todas)) return;
 
+  // CAS: la firma se registra (y se audita) una sola vez, aunque después llegue
+  // el webhook de un sobre que ya se concilió leyendo Auco.
+  let cerrado = false;
   if (sobre.estado !== 'firmado') {
-    await db('solicitudes_firma')
-      .update({ estado: 'firmado', firmado_en: now, auco_signed_url: signedUrl, updated_at: now } as never)
-      .eq('id', sobre.id);
+    const { data } = await db('solicitudes_firma')
+      .update({ estado: 'firmado', firmado_en: firmadoEn ?? now, auco_signed_url: signedUrl, updated_at: now } as never)
+      .eq('id', sobre.id)
+      .neq('estado', 'firmado')
+      .select('id');
+    cerrado = !!(data as unknown[] | null)?.length;
   }
 
-  logAudit({
-    usuarioId: null,
-    accion: AUDIT_ACTIONS.FIRMA_AUCO_SIGNED,
-    entidad: AUDIT_ENTITIES.CONTRATO,
-    entidadId: contratoId,
-    detalle: { solicitud_id: sobre.id, multiparte: true },
-  });
+  if (cerrado) {
+    logAudit({
+      usuarioId: null,
+      accion: AUDIT_ACTIONS.FIRMA_AUCO_SIGNED,
+      entidad: AUDIT_ENTITIES.CONTRATO,
+      entidadId: contratoId,
+      detalle: { solicitud_id: sobre.id, multiparte: true },
+    });
+  }
 
   // Cierre SÍNCRONO del pipeline tras firma: contrato pendiente_firma → firmado
   // → vigente, expediente → cerrado, inmueble → ocupado (fuera de vitrina).
@@ -813,6 +822,8 @@ export async function reconciliarFirmantesPorWebhook(
   contratoId: string,
   sobre: { id: string; estado: string },
   payload: { status: string; code?: string; url?: string; signer?: { id?: string; email?: string | null } | null },
+  /** La hora real de la firma cuando se concilia leyendo Auco; si no, la de ahora. */
+  firmadoEn?: string,
 ): Promise<void> {
   const now = new Date().toISOString();
   const status = payload.status;
@@ -852,7 +863,7 @@ export async function reconciliarFirmantesPorWebhook(
     return;
   } else if (status === 'FINISH') {
     await db('contrato_firmantes')
-      .update({ estado: 'firmado', firmado_en: now, updated_at: now } as never)
+      .update({ estado: 'firmado', firmado_en: firmadoEn ?? now, updated_at: now } as never)
       .eq('contrato_id', contratoId)
       .eq('solicitud_firma_id', sobre.id)
       .neq('estado', 'firmado')
@@ -862,5 +873,5 @@ export async function reconciliarFirmantesPorWebhook(
     return;
   }
 
-  await cerrarSobreSiTodasFirmaron(contratoId, sobre, payload.url ?? null);
+  await cerrarSobreSiTodasFirmaron(contratoId, sobre, payload.url ?? null, firmadoEn);
 }
