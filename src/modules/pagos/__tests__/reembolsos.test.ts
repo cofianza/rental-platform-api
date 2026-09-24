@@ -365,6 +365,27 @@ describe('P1: webhook de un reembolso', () => {
     );
   });
 
+  it('Q5b-10: reembolso parcial de un cobro: a la cola con aviso, el cobro sigue como está', async () => {
+    mockStatus.mockResolvedValueOnce({
+      status: 'completed',
+      transactionRef: 'mp-77',
+      rawResponse: { status: 'approved', status_detail: 'partially_refunded', external_reference: `estudio:${EXP}:${PAGO}`, transaction_amount: 80000 },
+    });
+    cobro();
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    admins();
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(upsertNoConciliado()).toMatchObject({ provider_payment_id: 'mp-77', motivo: 'reembolso_parcial' });
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(mockNotificarYCorreo).toHaveBeenCalledWith(
+        expect.objectContaining({ titulo: 'Reembolso parcial de un pago', link: '/facturacion?tab=reembolsos' }),
+      ),
+    );
+  });
+
   it('el reembolso del payment del cobro lo pasa a reembolsado y, si tenía factura, avisa la nota crédito', async () => {
     reembolso('mp-77');
     cobro();

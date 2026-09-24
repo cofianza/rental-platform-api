@@ -1300,6 +1300,13 @@ async function processMercadoPagoWebhook(
     return { received: true };
   }
 
+  // Reembolso parcial (Mercado Pago devolvió una parte del pago): el cobro no se
+  // ajusta solo. Queda en la cola con aviso, como en las compras de créditos, y
+  // el pago sigue su curso normal.
+  if (targetEstado === 'completado' && rawMp.status_detail === 'partially_refunded') {
+    await registrarPagoNoConciliado(paymentId, externalReference, status, 'reembolso_parcial');
+  }
+
   // 3c. Estado no terminal 'pending' (PSE/efectivo): persistir el payment_id y
   // pasar a 'procesando' para que la reconciliación periódica pueda seguirlo.
   if (!targetEstado) {
@@ -1621,7 +1628,7 @@ export const MOTIVO_NO_CONCILIADO: Record<string, string> = {
   estudio_cerrado_sin_consulta: 'es la evaluación de un estudio que terminó sin consultar el buró, y se devuelve',
   estudio_fallido_revisar:
     'es la evaluación de un estudio que terminó con la consulta al buró fallida: no se sabe si la central la cobró',
-  reembolso_parcial: 'Mercado Pago reembolsó una parte del pago de una compra de créditos, y los créditos no se ajustan solos',
+  reembolso_parcial: 'Mercado Pago reembolsó una parte del pago, y ni el cobro ni los créditos se ajustan solos',
   contracargo_ganado: 'Mercado Pago volvió a aprobar un pago que se había contracargado: el cobro quedó reembolsado y no se restituye solo',
 };
 
@@ -1689,7 +1696,9 @@ async function avisarPagoNoConciliado(args: {
   const titulos: Record<string, string> = {
     estudio_cerrado_sin_consulta: enMp ? 'Evaluación por devolver en Mercado Pago' : 'Evaluación por devolver a mano',
     estudio_fallido_revisar: 'Revisar la devolución de una evaluación',
-    reembolso_parcial: 'Reembolso parcial de una compra de créditos',
+    reembolso_parcial: args.externalReference.startsWith('creditos_estudios:')
+      ? 'Reembolso parcial de una compra de créditos'
+      : 'Reembolso parcial de un pago',
     contracargo_ganado: 'Contracargo ganado: restituir a mano',
   };
   const accion = MOTIVOS_SIN_REEMBOLSO.includes(args.motivo) || !enMp
