@@ -332,12 +332,16 @@ export async function confirmarSubida(
   // (administrador u operador): el propietario, la inmobiliaria o el prospecto
   // no reemplazan lo aprobado.
   if (!hasPermission(userRol ?? '', 'documentos', 'validar')) {
-    const { count: aprobados } = await (supabase
+    const { count: aprobados, error: aprobadosError } = await (supabase
       .from('documentos' as string) as ReturnType<typeof supabase.from>)
       .select('id', { count: 'exact', head: true })
       .eq('expediente_id', input.expediente_id)
       .eq('tipo_documento_id', input.tipo_documento_id)
       .eq('estado', 'aprobado');
+    // Sin poder contarlos no se sube: podría reemplazar uno aprobado.
+    if (aprobadosError) {
+      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los documentos del estudio. Intenta de nuevo en un momento.');
+    }
     if (aprobados) {
       throw AppError.conflict(
         'Cofianza ya aprobó este documento: no se puede reemplazar.',

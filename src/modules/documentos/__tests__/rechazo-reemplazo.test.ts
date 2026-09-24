@@ -180,6 +180,15 @@ describe('subir sobre un documento aprobado', () => {
     });
   });
 
+  it('si no se pueden contar los aprobados, no se sube (503)', async () => {
+    encolar();
+    queues.set('documentos', [{ data: null, error: { message: 'timeout' }, count: null }]);
+    await expect(confirmarSubida(input as never, 'dueno-1', 'propietario')).rejects.toMatchObject({
+      statusCode: 503,
+      errorCode: 'LECTURA_NO_VERIFICABLE',
+    });
+  });
+
   it('el operador sí (es quien valida)', async () => {
     encolar();
     queues.set('documentos', [
