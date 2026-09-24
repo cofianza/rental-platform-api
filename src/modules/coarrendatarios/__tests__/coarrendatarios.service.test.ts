@@ -402,7 +402,8 @@ describe('aceptarInvitacion — fallo al crear el estudio', () => {
       },
       { data: [{ id: COA_ID }], error: null }, // claim
     );
-    enqueue('expedientes', ctxRow());
+    // Antes del claim y otra vez después (P3: pudo resolverse entre los dos).
+    enqueue('expedientes', ctxRow(), ctxRow());
     enqueue('autorizaciones_habeas_data', { data: { id: 'aut-1' }, error: null });
     enqueue('estudios', { data: null, error: null }, { data: null, error: { message: 'timeout' } });
 
@@ -413,6 +414,50 @@ describe('aceptarInvitacion — fallo al crear el estudio', () => {
     const updates = ops.filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
     expect((updates.at(-1)!.args[0] as { estado: string }).estado).toBe('pendiente_aceptacion');
     expect(ops.some((o) => o.table === 'autorizaciones_habeas_data' && o.method === 'update')).toBe(false);
+  });
+});
+
+// ============================================================
+// Carrera aceptar vs. reenviar/decidir: el claim exige el mismo token y, tras
+// él, el estudio todavía en revisión.
+// ============================================================
+
+describe('aceptarInvitacion — carrera del claim', () => {
+  const TOKEN = 't'.repeat(64);
+  const pendiente = {
+    data: {
+      id: COA_ID,
+      expediente_id: EXPEDIENTE_ID,
+      estado: 'pendiente_aceptacion',
+      token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+      numero_documento: '7654321',
+    },
+    error: null,
+  };
+
+  it('el claim exige el token del enlace: si se reenvió con otro documento, no se acepta', async () => {
+    enqueue('expediente_coarrendatarios', pendiente, { data: [], error: null });
+    enqueue('expedientes', ctxRow());
+
+    await expect(aceptarInvitacion(TOKEN, '1.1.1.1', 'ua', {} as never)).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_YA_PROCESADA',
+    });
+    // El filtro va en el UPDATE del claim, no solo en la lectura inicial.
+    const claim = ops.findIndex((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
+    expect(ops.slice(claim)).toContainEqual({ table: 'expediente_coarrendatarios', method: 'eq', args: ['token', TOKEN] });
+    expect(ops.some((o) => o.table === 'autorizaciones_habeas_data' || o.table === 'estudios')).toBe(false);
+  });
+
+  it('si el estudio se resolvió entre la lectura y el claim, devuelve la invitación y no consulta el buró', async () => {
+    enqueue('expediente_coarrendatarios', pendiente, { data: [{ id: COA_ID }], error: null });
+    enqueue('expedientes', ctxRow(), ctxRow('aprobado'));
+
+    await expect(aceptarInvitacion(TOKEN, '1.1.1.1', 'ua', {} as never)).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_INVITACION_NO_VIGENTE',
+    });
+    const updates = ops.filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
+    expect((updates.at(-1)!.args[0] as { estado: string }).estado).toBe('pendiente_aceptacion');
+    expect(ops.some((o) => o.table === 'autorizaciones_habeas_data' || o.table === 'estudios')).toBe(false);
   });
 });
 

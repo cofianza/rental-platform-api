@@ -966,6 +966,8 @@ export async function aceptarInvitacion(
   //    pasen ambos el check en memoria y creen DOS estudios TransUnion (coste
   //    real) para el mismo co-arrendatario. El estudio se crea DESPUÉS del
   //    claim, así que el perdedor de la carrera aborta sin crear nada.
+  //    También exige el MISMO token: si el gestor la reenvió corrigiendo el
+  //    documento entre la lectura y el claim, este enlace ya no vale (P4).
   const aceptadoAt = new Date().toISOString();
   const { data: claimRows, error: claimErr } = await (supabase
     .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
@@ -981,6 +983,7 @@ export async function aceptarInvitacion(
     } as never)
     .eq('id', coa.id)
     .eq('estado', 'pendiente_aceptacion')
+    .eq('token', token)
     .select('id');
 
   if (claimErr) {
@@ -990,6 +993,20 @@ export async function aceptarInvitacion(
   if (!claimRows || (claimRows as unknown[]).length === 0) {
     // Otra request ya ganó la carrera y procesó la invitación.
     throw AppError.badRequest('Esta invitación ya fue procesada', 'COARRENDATARIO_YA_PROCESADA');
+  }
+
+  // P3: el estudio pudo resolverse entre la lectura y el claim. Se devuelve la
+  // invitación y no se consulta el buró.
+  let estadoTrasClaim: string;
+  try {
+    estadoTrasClaim = (await fetchExpedienteCtx(coa.expediente_id)).estado;
+  } catch (e) {
+    await revertirClaim(coa.id);
+    throw e;
+  }
+  if (estadoTrasClaim !== 'condicionado') {
+    await revertirClaim(coa.id);
+    assertInvitacionVigente(estadoTrasClaim);
   }
 
   // 2b. Autorización habeas data PROPIA del co-arrendatario.
