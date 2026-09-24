@@ -1,7 +1,8 @@
 /**
  * Contratos V3 — borradores aprobados (Entrega 2, diseño §6.c).
  *
- * Todo texto que no está en el Word va en la plantilla como borrador
+ * Todo texto que no está en el Word (salvo el que Gerencia ya decidió en un
+ * documento: ver al final) va en la plantilla como borrador
  * `[[cond: texto Word | #id: borrador]]` y bloquea el modo final hasta que
  * alguien con autoridad (Mario / Gerencia) lo apruebe. Aprobarlo = agregar aquí
  * su entrada, en un commit propio, con el sha256 que imprime borradores.txt
@@ -17,6 +18,11 @@
  * de contratos, resp. 2). Solo puede QUITAR palabras del Word, nunca redactar;
  * su `aprobadoPor` dice que lo dedujo Desarrollo y se le informa a Gerencia.
  * Todo texto redactado espera la aprobación de Gerencia.
+ *
+ * El otro camino, sin borrador: el texto que Gerencia ya decidió en un documento
+ * (p. ej. el cashback de la Adenda 1 de contratos §3.4.2, §3.4.4, §5.9) reemplaza
+ * en la plantilla al del Word y queda como desviación registrada en
+ * fidelidad.test.ts, citando ese documento. No pasa por aquí ni bloquea el modo final.
  */
 
 export interface Aprobacion {
