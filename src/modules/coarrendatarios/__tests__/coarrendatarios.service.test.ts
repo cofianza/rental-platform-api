@@ -76,6 +76,8 @@ vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) 
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/config', () => ({ env: mockEnv }));
 vi.mock('@/config/env', () => ({ env: mockEnv }));
+const mockGetCompany = vi.hoisted(() => vi.fn(async () => ({ email: 'hola@cofianza.co' })));
+vi.mock('@/lib/companyConfig', () => ({ getCompany: () => mockGetCompany() }));
 vi.mock('@/lib/calibracion', () => ({
   getCalibracion: vi.fn(async () => ({ UMBRAL_ZONA_GRIS: 70, UMBRAL_APROBACION_AUTOMATICA: 85, UMBRAL_COARRENDATARIO: 80 })),
 }));
@@ -727,24 +729,38 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
     expect((mockResendSend.mock.calls[0] as unknown as [{ subject: string }])[0].subject).toContain('se aprobó');
   });
 
-  it('con un contrato ya generado sin él: no regenera el CRC, avisa al gestor y al co-arrendatario le dice que no hace parte', async () => {
-    enqueue('estudios', coaEstudio('aprobado'), titularCondicionado);
-    enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
-    enqueue('expedientes', ctxRow('aprobado'));
-    // Contrato anterior vivo, generado sin coarrendatario.
-    enqueue('contratos', { data: [{ id: 'cto-1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null });
-    encolarAvisoCoa('aprobado', 'aprobado');
+  // Con el asistente de contratos (flag + inmueble de inmobiliaria) se puede rehacer
+  // con él; sin él, el contrato anterior no admite co-arrendatario (P6): se mantiene.
+  it.each([
+    ['con el asistente de contratos', true, 'org-1', 'cancela el contrato y genera uno nuevo desde el asistente'],
+    ['sin el asistente (propietario directo)', true, null, 'El contrato actual se mantiene sin él. Si debe entrar, escríbenos a soporte@cofianza.co'],
+    ['sin el asistente (flag apagado)', false, 'org-1', 'El contrato actual se mantiene sin él'],
+  ])('con un contrato ya generado sin él, %s: no regenera el CRC, avisa al gestor la salida que aplica', async (_, flag, inmobiliaria, salida) => {
+    mockEnv.CONTRATOS_V3_ENABLED = flag as never;
+    mockGetCompany.mockResolvedValueOnce({ email: 'soporte@cofianza.co' });
+    try {
+      enqueue('estudios', coaEstudio('aprobado'), titularCondicionado);
+      enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
+      const ctx = ctxRow('aprobado');
+      ctx.data.inmuebles.inmobiliaria_id = inmobiliaria as never;
+      enqueue('expedientes', ctx);
+      // Contrato anterior vivo, generado sin coarrendatario.
+      enqueue('contratos', { data: [{ id: 'cto-1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null });
+      encolarAvisoCoa('aprobado', 'aprobado');
 
-    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+      await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
-    expect(mockEmitirCrc).not.toHaveBeenCalled();
-    expect(mockNotificarUsuario).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: PROPIETARIO_ID, mensaje: expect.stringContaining('cancela el contrato y genera uno nuevo') }),
-    );
-    const { html } = (mockResendSend.mock.calls[0] as unknown as [{ html: string }])[0];
-    expect(html).toContain('no haces parte');
-    expect(html).not.toContain('Buenas noticias');
+      await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
+      expect(mockEmitirCrc).not.toHaveBeenCalled();
+      expect(mockNotificarUsuario).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: PROPIETARIO_ID, mensaje: expect.stringContaining(salida) }),
+      );
+      const { html } = (mockResendSend.mock.calls[0] as unknown as [{ html: string }])[0];
+      expect(html).toContain('no haces parte');
+      expect(html).not.toContain('Buenas noticias');
+    } finally {
+      delete (mockEnv as Record<string, unknown>).CONTRATOS_V3_ENABLED;
+    }
   });
 
   it('estudio cerrado mientras se evaluaba: el co-arrendatario recibe el correo de cierre', async () => {

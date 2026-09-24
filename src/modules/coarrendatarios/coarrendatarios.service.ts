@@ -1745,7 +1745,7 @@ function decisionYaTomada(
   if (ctx.estado === 'aprobado' && evaluacionCuenta(estudioCoa)) {
     void contratoFijoSinCoarrendatario(ctx.id)
       .then(async (sinEl) => {
-        if (sinEl) avisarContratoSinCoarrendatario(ctx, coa);
+        if (sinEl) await avisarContratoSinCoarrendatario(ctx, coa);
         else await emitirCertificadoAutomatico(titularEstudioId, ctx.creado_por, { regenerar: true });
         await avisarCoa(sinEl);
       })
@@ -1758,14 +1758,22 @@ function decisionYaTomada(
   void avisarCoa();
 }
 
-/** Al gestor (dueño y responsable): el contrato ya salió sin el co-arrendatario evaluado. */
-function avisarContratoSinCoarrendatario(ctx: ExpedienteCtx, coa: { id: string; nombre: string } | null): void {
+/**
+ * Al gestor (dueño y responsable): el contrato ya salió sin el co-arrendatario
+ * evaluado. Rehacerlo con él solo se puede con el asistente de contratos (mismo
+ * criterio que generarContrato): el contrato anterior no admite co-arrendatario.
+ */
+async function avisarContratoSinCoarrendatario(ctx: ExpedienteCtx, coa: { id: string; nombre: string } | null): Promise<void> {
+  const conAsistente = env.CONTRATOS_V3_ENABLED && !!ctx.inmueble_inmobiliaria_id;
+  const salida = conAsistente
+    ? 'Si debe entrar, cancela el contrato y genera uno nuevo desde el asistente de contratos.'
+    : `El contrato actual se mantiene sin él. Si debe entrar, escríbenos a ${(await getCompany()).email}.`;
   const aviso = {
     tipo: 'coarrendatario.rechazo',
     titulo: 'Co-arrendatario evaluado después del contrato',
     mensaje:
       `La evaluación de ${coa?.nombre || 'el co-arrendatario'} terminó después de generar el contrato del estudio ${ctx.numero}, que va sin él (prima del 20 %). ` +
-      'Si debe entrar, cancela el contrato y genera uno nuevo.',
+      salida,
     link: `/expedientes/${ctx.id}`,
     payload: { expediente_id: ctx.id, via: 'coarrendatario_fuera_del_contrato', coarrendatario_id: coa?.id },
   };
