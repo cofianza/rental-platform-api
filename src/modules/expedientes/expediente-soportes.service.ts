@@ -497,21 +497,29 @@ export async function resolveExpedientePorTokenDocumentos(token: string): Promis
 
 /**
  * Token del enlace público del prospecto: sus soportes y, desde P18, su
- * co-arrendatario. El vigente se conserva (con el plazo renovado), así el
- * enlace del correo del condicionado y el que envía la inmobiliaria son el
- * mismo y ninguno deja muerto al otro.
+ * co-arrendatario. El envío explícito del gestor lo ROTA (`rotar`): así se
+ * revoca un enlace que llegó a quien no era. El correo automático del
+ * condicionado reutiliza el vigente (con el plazo renovado) para no dejar muerto
+ * el que el gestor ya mandó. Cambiar el correo del solicitante lo invalida
+ * (trigger de la migración 20261001000003).
  */
-export async function emitirTokenDocumentos(expedienteId: string): Promise<string> {
-  const { data } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('token_documentos, token_documentos_expiracion')
-    .eq('id', expedienteId)
-    .maybeSingle();
-  const actual = data as { token_documentos: string | null; token_documentos_expiracion: string | null } | null;
-  const vigente =
-    !!actual?.token_documentos &&
-    (!actual.token_documentos_expiracion || new Date(actual.token_documentos_expiracion) > new Date());
-  const token = vigente ? actual!.token_documentos! : crypto.randomBytes(32).toString('hex');
+export async function emitirTokenDocumentos(expedienteId: string, opts: { rotar?: boolean } = {}): Promise<string> {
+  let token: string | null = null;
+  if (!opts.rotar) {
+    const { data } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('token_documentos, token_documentos_expiracion')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const actual = data as { token_documentos: string | null; token_documentos_expiracion: string | null } | null;
+    if (
+      actual?.token_documentos &&
+      (!actual.token_documentos_expiracion || new Date(actual.token_documentos_expiracion) > new Date())
+    ) {
+      token = actual.token_documentos;
+    }
+  }
+  token ??= crypto.randomBytes(32).toString('hex');
   const expiracion = new Date(Date.now() + TOKEN_DOCS_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
   const { error } = await (supabase
@@ -556,7 +564,8 @@ export async function enviarEnlaceDocumentos(
   const nombre = `${e?.solicitantes?.nombre ?? ''} ${e?.solicitantes?.apellido ?? ''}`.trim() || 'Solicitante';
   const direccion = e?.inmuebles?.direccion ?? 'tu inmueble';
 
-  const link = `/cargar-documentos/${await emitirTokenDocumentos(expedienteId)}`;
+  // Envío explícito: enlace nuevo; el anterior (si llegó a otra persona) deja de servir.
+  const link = `/cargar-documentos/${await emitirTokenDocumentos(expedienteId, { rotar: true })}`;
   try {
     const { sendResponsableAsignadoEmail } = await import('../orchestrator/orchestrator.emails');
     await sendResponsableAsignadoEmail({
@@ -582,8 +591,10 @@ export async function enviarEnlaceDocumentos(
  */
 interface CoarrendatarioDelProspecto {
   puede_invitar: boolean;
-  invitado: { nombre: string; estado: string } | null;
-  sugerido: { nombre: string; apellido: string; email?: string; telefono?: string } | null;
+  /** `vencida`: la invitación pendiente pasó su plazo sin respuesta. */
+  invitado: { nombre: string; estado: string; vencida: boolean } | null;
+  /** Solo nombre y apellido: nunca el correo ni el WhatsApp del tercero. */
+  sugerido: { nombre: string; apellido: string } | null;
 }
 
 /** Contexto público (sin auth): qué inmueble/solicitante, qué ya subió y su co-arrendatario. */
@@ -605,7 +616,7 @@ export async function getContextoDocumentosPublico(token: string): Promise<{
       .order('created_at', { ascending: false }),
     // Una sola activa por estudio (índice único): no hace falta limit.
     (supabase.from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
-      .select('nombre, estado')
+      .select('nombre, estado, token_expiracion')
       .eq('expediente_id', ctx.expedienteId)
       .in('estado', ['pendiente_aceptacion', 'aceptado', 'estudio_completado'])
       .maybeSingle(),
@@ -616,8 +627,17 @@ export async function getContextoDocumentosPublico(token: string): Promise<{
           .maybeSingle()
       : Promise.resolve({ data: null }),
   ]);
-  const invitado = (coa as { nombre: string; estado: string } | null) ?? null;
+  const fila = coa as { nombre: string; estado: string; token_expiracion: string | null } | null;
+  const invitado = fila
+    ? {
+        nombre: fila.nombre,
+        estado: fila.estado,
+        vencida: fila.estado === 'pendiente_aceptacion' && !!fila.token_expiracion && new Date(fila.token_expiracion) < new Date(),
+      }
+    : null;
   const puedeInvitar = condicionado && !invitado;
+  const intencion = (perfil as { coarrendatario_intencion?: { nombre?: string; apellido?: string } | null } | null)
+    ?.coarrendatario_intencion;
 
   return {
     solicitante: ctx.solicitanteNombre,
@@ -628,9 +648,10 @@ export async function getContextoDocumentosPublico(token: string): Promise<{
     coarrendatario: {
       puede_invitar: puedeInvitar,
       invitado,
-      sugerido: puedeInvitar
-        ? ((perfil as { coarrendatario_intencion?: CoarrendatarioDelProspecto['sugerido'] } | null)?.coarrendatario_intencion ?? null)
-        : null,
+      sugerido:
+        puedeInvitar && intencion?.nombre
+          ? { nombre: intencion.nombre, apellido: intencion.apellido ?? '' }
+          : null,
     },
   };
 }

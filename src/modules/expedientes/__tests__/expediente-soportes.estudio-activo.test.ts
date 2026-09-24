@@ -49,6 +49,8 @@ vi.mock('../../notificaciones/notificaciones.service', () => ({
   notificarUsuario: mockNotificarUsuario,
   notificarResponsableExpediente: mockNotificarResponsable,
 }));
+const mockEnviarCorreoEnlace = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+vi.mock('@/modules/orchestrator/orchestrator.emails', () => ({ sendResponsableAsignadoEmail: mockEnviarCorreoEnlace }));
 vi.mock('@/modules/users/users.service', () => ({
   listOperators: vi.fn(async () => [{ id: 'analista-1' }, { id: 'analista-2' }]),
 }));
@@ -59,6 +61,7 @@ import {
   confirmarSoporte,
   confirmarSoportePublico,
   emitirTokenDocumentos,
+  enviarEnlaceDocumentos,
 } from '../expediente-soportes.service';
 
 const EXP = '550e8400-e29b-41d4-a716-446655440000';
@@ -130,7 +133,8 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
 
     const ctx = await getContextoDocumentosPublico('tok');
 
-    expect(ctx.coarrendatario).toEqual({ puede_invitar: true, invitado: null, sugerido: intencion });
+    // Solo nombre y apellido: nunca el correo ni el WhatsApp del tercero.
+    expect(ctx.coarrendatario).toEqual({ puede_invitar: true, invitado: null, sugerido: { nombre: 'Luis', apellido: 'Gómez' } });
   });
 
   it('con una invitación activa: solo su nombre y en qué va, sin prellenado', async () => {
@@ -140,7 +144,24 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
 
     const ctx = await getContextoDocumentosPublico('tok');
 
-    expect(ctx.coarrendatario).toEqual({ puede_invitar: false, invitado: { nombre: 'Luis', estado: 'aceptado' }, sugerido: null });
+    expect(ctx.coarrendatario).toEqual({
+      puede_invitar: false,
+      invitado: { nombre: 'Luis', estado: 'aceptado', vencida: false },
+      sugerido: null,
+    });
+  });
+
+  it('invitación pendiente que pasó su plazo: vencida', async () => {
+    queues.set('expedientes', [expediente()]);
+    queues.set('expediente_coarrendatarios', [
+      { data: { nombre: 'Luis', estado: 'pendiente_aceptacion', token_expiracion: '2020-01-01T00:00:00Z' }, error: null },
+    ]);
+
+    expect((await getContextoDocumentosPublico('tok')).coarrendatario.invitado).toEqual({
+      nombre: 'Luis',
+      estado: 'pendiente_aceptacion',
+      vencida: true,
+    });
   });
 
   it('fuera de condicionado no se puede invitar', async () => {
@@ -149,7 +170,7 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
     expect((await getContextoDocumentosPublico('tok')).coarrendatario.puede_invitar).toBe(false);
   });
 
-  it('el token vigente se conserva (el correo del condicionado y el de la inmobiliaria son el mismo enlace)', async () => {
+  it('el correo automático del condicionado reutiliza el enlace vigente (no deja muerto el que mandó el gestor)', async () => {
     const vigente = 'b'.repeat(64);
     queues.set('expedientes', [
       { data: { token_documentos: vigente, token_documentos_expiracion: '2099-01-01T00:00:00Z' }, error: null },
@@ -159,6 +180,24 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
     expect(await emitirTokenDocumentos(EXP)).toBe(vigente);
     const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
     expect((update!.args[0] as { token_documentos: string }).token_documentos).toBe(vigente);
+  });
+
+  it('el envío explícito del gestor ROTA el enlace: el anterior deja de servir', async () => {
+    const viejo = 'b'.repeat(64);
+    queues.set('expedientes', [
+      { data: { id: EXP, estado: 'condicionado', creado_por: null, inmuebles: null, solicitantes: null, estudios }, error: null },
+      { data: { solicitantes: { nombre: 'Ana', apellido: 'Pérez', email: 'ana@correo.co' }, inmuebles: { direccion: 'Cra 7' } }, error: null },
+      // Si se leyera el token vigente, este sería el que se reusa.
+      { data: { token_documentos: viejo, token_documentos_expiracion: '2099-01-01T00:00:00Z' }, error: null },
+    ]);
+
+    await enviarEnlaceDocumentos(EXP, 'analista-1', 'operador_analista');
+
+    const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
+    const nuevo = (update!.args[0] as { token_documentos: string }).token_documentos;
+    expect(nuevo).toMatch(/^[a-f0-9]{64}$/);
+    expect(nuevo).not.toBe(viejo);
+    expect(mockEnviarCorreoEnlace).toHaveBeenCalledWith(expect.objectContaining({ link: `/cargar-documentos/${nuevo}` }));
   });
 
   it('vencido, uno nuevo', async () => {
