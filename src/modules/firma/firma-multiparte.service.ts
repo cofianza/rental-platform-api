@@ -29,7 +29,6 @@ import { resolveOrgCanonicalPerfilId, assertExpedienteAccess } from '@/lib/tenan
 import * as aucoClient from '@/lib/auco';
 import type { AucoSignerStatus } from '@/lib/auco';
 
-const TOKEN_EXPIRY_HOURS = 72;
 const MAX_ENVIOS_DEFAULT = 5;
 const BUCKET_NAME = 'documentos-expedientes';
 
@@ -501,6 +500,10 @@ export async function crearSolicitudFirmaMultiparte(
     );
   }
 
+  // P5: plazo de firma (15 días sin pasar el CRC), antes de gastar un documento de Auco.
+  const { plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+  const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
+
   // 3. Descargar PDF y subir UN documento con N firmantes
   const { data: pdfData, error: downloadError } = await supabase.storage
     .from(BUCKET_NAME)
@@ -511,7 +514,6 @@ export async function crearSolicitudFirmaMultiparte(
   const pdfBase64 = aucoClient.bufferToBase64(Buffer.from(await pdfData.arrayBuffer()));
 
   const token = crypto.randomBytes(32).toString('hex');
-  const tokenExpiracion = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
 
   const signProfile = aucoSigners.map((x) => buildSignProfileMultiparte(x.f, x.phone as string));
 
@@ -647,6 +649,10 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
     return;
   }
   const aucoSigners = info.signProfile ?? [];
+  // contratos-firma-2: aunque el webhook se haya perdido, al consultar se ve el vencimiento o el rechazo.
+  if (info.status === 'EXPIRED' || info.status === 'REJECTED') {
+    await cerrarSobreSinFirmas(sobre.id, info.status === 'EXPIRED' ? 'expirado' : 'cancelado');
+  }
 
   // 3. Filas locales
   const { data: filasRow } = await db('contrato_firmantes')
@@ -671,6 +677,18 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
 
   // 4. ¿Todas firmaron? → cerrar sobre + activar
   await cerrarSobreSiTodasFirmaron(contratoId, { id: sobre.id, estado: sobre.estado }, info.url ?? null);
+}
+
+/**
+ * contratos-firma-2: un sobre vencido o rechazado en Auco deja de estar activo,
+ * así el dueño ve el aviso y lo reenvía a firma (antes seguía «esperando firma»
+ * y el recordatorio no le llegaba a nadie).
+ */
+async function cerrarSobreSinFirmas(sobreId: string, estado: 'expirado' | 'cancelado'): Promise<void> {
+  await db('solicitudes_firma')
+    .update({ estado, updated_at: new Date().toISOString() } as never)
+    .eq('id', sobreId)
+    .in('estado', ['enviado', 'abierto']);
 }
 
 /**
@@ -729,7 +747,9 @@ async function cerrarSobreSiTodasFirmaron(
  * llamar a getDocumentStatus (que en stage devuelve 401 y rompía la sync).
  * Eventos Auco (docs/api/webhooks/document):
  *   - NOTIFICATION (+ signer): ese participante COMPLETÓ su firma → 'firmado'
- *   - REJECTED / BLOCKED (+ signer): ese firmante rechazó/bloqueó → 'cancelado'
+ *   - REJECTED / BLOCKED (+ signer): ese firmante rechazó/bloqueó → 'cancelado',
+ *     y el sobre también (contratos-firma-2)
+ *   - EXPIRED: venció el plazo → el sobre queda 'expirado'
  *   - FINISH (sin signer): TODAS las partes firmaron → marca pendientes 'firmado'
  * Cuando todas quedan 'firmado', cierra el sobre e intenta activar el contrato.
  */
@@ -749,12 +769,16 @@ export async function reconciliarFirmantesPorWebhook(
       .eq('email', signerEmail)
       .neq('estado', 'firmado');
     logger.info({ contratoId, email: signerEmail }, 'Firma multi-parte: firmante firmado (webhook)');
-  } else if (signerEmail && (status === 'REJECTED' || status === 'BLOCKED')) {
-    await db('contrato_firmantes')
-      .update({ estado: 'cancelado', updated_at: now } as never)
-      .eq('contrato_id', contratoId)
-      .eq('email', signerEmail);
-    logger.info({ contratoId, email: signerEmail, status }, 'Firma multi-parte: firmante cancelado (webhook)');
+  } else if (status === 'REJECTED' || status === 'BLOCKED' || status === 'EXPIRED') {
+    if (signerEmail && status !== 'EXPIRED') {
+      await db('contrato_firmantes')
+        .update({ estado: 'cancelado', updated_at: now } as never)
+        .eq('contrato_id', contratoId)
+        .eq('email', signerEmail);
+      logger.info({ contratoId, email: signerEmail, status }, 'Firma multi-parte: firmante cancelado (webhook)');
+    }
+    await cerrarSobreSinFirmas(sobre.id, status === 'EXPIRED' ? 'expirado' : 'cancelado');
+    return;
   } else if (status === 'FINISH') {
     await db('contrato_firmantes')
       .update({ estado: 'firmado', firmado_en: now, updated_at: now } as never)

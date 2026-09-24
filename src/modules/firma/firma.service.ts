@@ -58,7 +58,6 @@ async function buildDebugPdf(params: {
 // Constants
 // ============================================================
 
-const TOKEN_EXPIRY_HOURS = 72;
 const MAX_ENVIOS_DEFAULT = 5;
 const BUCKET_NAME = 'documentos-expedientes';
 
@@ -328,9 +327,10 @@ export async function crearSolicitudFirma(
     solicitantes: { tipo_documento: string | null; numero_documento: string | null } | null;
   } | null;
 
-  // 3. Generate secure token
+  // 3. Generate secure token. P5: plazo de firma de 15 días sin pasar el CRC.
   const token = crypto.randomBytes(32).toString('hex');
-  const tokenExpiracion = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
+  const { plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+  const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
 
   // 4. Download PDF from storage and upload to Auco
   let aucoDocumentCode: string | null = null;
@@ -573,6 +573,13 @@ export async function reenviarSolicitudFirma(
       'INVALID_SOLICITUD_STATE',
     );
   }
+  // contratos-firma-2: un recordatorio no revive un proceso vencido en Auco.
+  if (row.estado === 'expirado' || Date.parse(row.token_expiracion) <= Date.now()) {
+    throw AppError.conflict(
+      'Venció el plazo para firmar este contrato. Reenvíalo a firma para abrir un plazo nuevo.',
+      'FIRMA_VENCIDA',
+    );
+  }
 
   // Check max envios
   if (row.envios_realizados >= row.max_envios) {
@@ -618,6 +625,8 @@ export async function reenviarSolicitudFirma(
   }
 
   let nuevoAucoDocumentCode: string | null = row.auco_document_code;
+  // Solo un documento nuevo en Auco (otro correo) trae plazo nuevo; un recordatorio no lo mueve.
+  let nuevaExpiracion: string | null = null;
   // Para decidir si enviar email de fallback al final: si Auco WhatsApp
   // sigue activo, no enviamos. Por defecto asumimos activo si la solicitud
   // tenia auco_document_code (creacion previa exitosa) Y el telefono se
@@ -627,6 +636,9 @@ export async function reenviarSolicitudFirma(
     && Boolean(aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined));
 
   if (cambiaEmail && row.contratos?.storage_key) {
+    // P5: el documento nuevo lleva el plazo de firma (sin pasar el CRC).
+    const { plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+    nuevaExpiracion = await plazoFirmaContrato(row.contratos.expediente_id);
     // Re-upload a Auco con nuevo firmante. Si el documento Auco previo
     // sigue activo, queda obsoleto pero no lo cancelamos explicitamente
     // (Auco lo invalida por expiracion del token y el OTP del nuevo
@@ -675,7 +687,7 @@ export async function reenviarSolicitudFirma(
             country: 'CO',
           }),
         ],
-        expiredDate: new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString(),
+        expiredDate: nuevaExpiracion,
         // webhooks se configuran a nivel de cuenta en el panel de Auco.
       };
 
@@ -699,21 +711,21 @@ export async function reenviarSolicitudFirma(
     }
   } else if (row.auco_document_code) {
     // Caso normal (mismo email): pedirle a Auco que reenvie recordatorio.
+    // Si falla se dice: antes el toast decía «Recordatorio enviado» sin que saliera nada.
     try {
       await aucoClient.sendReminder(row.auco_document_code);
     } catch (aucoError) {
       logger.error({ error: aucoError, solicitudId }, 'Error al enviar recordatorio via Auco');
+      throw new AppError(502, 'AUCO_RECORDATORIO_FALLIDO', 'No se pudo enviar el recordatorio. Intenta de nuevo en unos minutos.');
     }
   }
 
   // Generate new token
   const newToken = crypto.randomBytes(32).toString('hex');
-  const newExpiration = new Date(Date.now() + TOKEN_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
 
-  // Update — incluye email_firmante nuevo y auco_document_code nuevo si aplica.
+  // Update — incluye email_firmante nuevo, auco_document_code y plazo nuevos si aplica.
   const updatePayload: Record<string, unknown> = {
     token: newToken,
-    token_expiracion: newExpiration,
     estado: 'enviado',
     envios_realizados: row.envios_realizados + 1,
     updated_at: new Date().toISOString(),
@@ -721,6 +733,7 @@ export async function reenviarSolicitudFirma(
   if (cambiaEmail) {
     updatePayload.email_firmante = emailNuevoNormalizado;
     updatePayload.auco_document_code = nuevoAucoDocumentCode;
+    if (nuevaExpiracion) updatePayload.token_expiracion = nuevaExpiracion;
   }
 
   const { data: updated, error: updateError } = await (supabase

@@ -683,6 +683,22 @@ async function assertEvaluacionVigente(expedienteId: string): Promise<void> {
 }
 
 /**
+ * P5 (Adenda 1 contratos, respuesta 10): el plazo para firmar es
+ * DIAS_EXPIRACION_FIRMA sin pasar la vigencia del CRC, y con menos de tres días
+ * de CRC no se abre (409), como en el V3. Sin fecha de evaluación, sin ese tope.
+ * Lo usan la firma multi-parte y la de un firmante.
+ */
+export async function plazoFirmaContrato(expedienteId: string): Promise<string> {
+  const [{ exigirPlazoDeFirma, finDelCrc }, completadoEn, cal] = await Promise.all([
+    import('./v3/firma/reglas'),
+    evaluacionCompletadaEn(expedienteId),
+    getCalibracion(),
+  ]);
+  const finCrc = finDelCrc(null, completadoEn, cal.VIGENCIA_CRC_DIAS) ?? Infinity;
+  return new Date(exigirPlazoDeFirma(finCrc, cal.DIAS_EXPIRACION_FIRMA).expiraEn).toISOString();
+}
+
+/**
  * Construye el contexto anidado que consume la plantilla HTML V2.
  * Resuelve: arrendador, arrendatario, coarrendatario, inmueble, contrato,
  * canon, config — todo listo para `renderTemplate`.
@@ -1541,14 +1557,18 @@ export async function enviarContratoAFirma(
     throw AppError.badRequest('El contrato no tiene PDF generado para enviar a firma.', 'NO_PDF');
   }
 
-  // Idempotencia: si ya hay una solicitud de firma activa, no duplicamos.
-  const { data: activa } = await (supabase
+  // Idempotencia: si ya hay una solicitud de firma activa, no duplicamos. Una
+  // cuyo plazo ya pasó no cuenta aunque el aviso de Auco no haya llegado: así
+  // se reenvía a firma al vencer (contratos-firma-2).
+  const { data: activas } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, token_expiracion')
     .eq('contrato_id', contratoId)
-    .in('estado', ['enviado', 'abierto'])
-    .maybeSingle();
-  if (activa) {
+    .in('estado', ['enviado', 'abierto']);
+  const vigentes = ((activas as Array<{ token_expiracion: string | null }> | null) ?? []).filter(
+    (s) => !(Date.parse(s.token_expiracion ?? '') <= Date.now()),
+  );
+  if (vigentes.length > 0) {
     return { ok: true, message: 'El contrato ya está en proceso de firma.' };
   }
 

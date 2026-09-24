@@ -78,9 +78,13 @@ vi.mock('@/modules/inmuebles/inmuebles.service', () => ({
   liberarReservaDeExpediente: vi.fn(async () => true),
 }));
 vi.mock('@/lib/pdfRenderer', () => ({ renderHtmlToPdf: vi.fn(async () => Buffer.from('%PDF')) }));
+const { mockCrearSobre } = vi.hoisted(() => ({ mockCrearSobre: vi.fn(async () => ({ solicitud_id: 's-nuevo' })) }));
+vi.mock('@/modules/firma/firma-multiparte.service', () => ({
+  crearSolicitudFirmaMultiparte: (...a: unknown[]) => mockCrearSobre(...(a as [])),
+}));
 
 import { AppError } from '@/lib/errors';
-import { enviarContratoAFirma, generarContrato, previewPlantillaParaInmueble } from '../contratos.service';
+import { enviarContratoAFirma, generarContrato, plazoFirmaContrato, previewPlantillaParaInmueble } from '../contratos.service';
 import type { GenerarContratoInput } from '../contratos.schema';
 
 const EXP = 'exp-1';
@@ -338,5 +342,52 @@ describe('P12: comisión de intermediación por contrato', () => {
     const dv = await generarYLeerSnapshot({ id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'propietario' }, 10);
     expect(dv.inmobiliaria.comision_porcentaje).toBe('');
     expect(dv.config.comision_porcentaje).toBe(0);
+  });
+});
+
+describe('P5: plazo de firma del contrato viejo', () => {
+  const HOY = new Date('2026-09-24T15:00:00Z'); // 10:00 en Bogotá
+  const evaluacion = (fecha_completado: string | null) => ({ data: { fecha_completado }, error: null });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(HOY);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('15 días (DIAS_EXPIRACION_FIRMA) hasta la medianoche de Bogotá, no 72 horas', async () => {
+    enqueue('estudios', evaluacion(null));
+    expect(await plazoFirmaContrato(EXP)).toBe('2026-10-10T04:59:59.000Z'); // 9 de octubre, 23:59:59 en Bogotá
+  });
+
+  it('sin pasar la vigencia del CRC (60 días desde la evaluación)', async () => {
+    enqueue('estudios', evaluacion('2026-08-01T15:00:00Z'));
+    expect(await plazoFirmaContrato(EXP)).toBe('2026-09-30T15:00:00.000Z');
+  });
+
+  it('con menos de tres días de CRC no se abre el proceso (409)', async () => {
+    enqueue('estudios', evaluacion('2026-07-27T15:00:00Z'));
+    await expect(plazoFirmaContrato(EXP)).rejects.toMatchObject({ statusCode: 409, errorCode: 'CRC_SIN_MARGEN' });
+  });
+
+  describe('reenviar a firma cuando venció el plazo (contratos-firma-2)', () => {
+    const enFirma = { data: { id: CTO, estado: 'pendiente_firma', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables: null }, error: null };
+
+    it('un sobre «enviado» con el plazo vencido no cuenta como activo: sale uno nuevo', async () => {
+      enqueue('contratos', enFirma);
+      enqueue('solicitudes_firma', { data: [{ id: 's-viejo', token_expiracion: '2026-09-20T04:59:59Z' }], error: null });
+      const r = await enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol);
+      expect(r.message).toBe('Contrato enviado a firma.');
+      expect(mockCrearSobre).toHaveBeenCalledWith(CTO, ADMIN.id);
+    });
+
+    it('con el sobre aún vigente no duplica', async () => {
+      enqueue('contratos', enFirma);
+      enqueue('solicitudes_firma', { data: [{ id: 's-vivo', token_expiracion: '2026-10-01T04:59:59Z' }], error: null });
+      expect((await enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol)).message).toBe('El contrato ya está en proceso de firma.');
+      expect(mockCrearSobre).not.toHaveBeenCalled();
+    });
   });
 });
