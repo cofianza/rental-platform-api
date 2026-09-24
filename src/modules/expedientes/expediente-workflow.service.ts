@@ -691,11 +691,13 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
   }>) || [];
 
   // P34: fuera de Cofianza no salen el comentario (el fundamento interno del
-  // analista) ni la descripción (quién cambió el estado y, en filas viejas, el
-  // mismo comentario): solo los estados. El gestor ve además el motivo que el
-  // analista escribió para él; el prospecto, ninguno. Tampoco la ponderación
-  // cuenta el resultado ni las reglas duras del co-arrendatario (Ley 1266).
-  const deCofianza = !userRol || ROLES_COFIANZA.includes(userRol);
+  // analista), la descripción (quién cambió el estado y, en filas viejas, el
+  // mismo comentario) ni el usuario que lo cambió: solo los estados. El gestor
+  // ve además el motivo que el analista escribió para él; el prospecto,
+  // ninguno. Tampoco la ponderación cuenta el resultado ni las reglas duras del
+  // co-arrendatario (Ley 1266). Cierra por defecto: sin rol no es de Cofianza.
+  const deCofianza = !!userRol && ROLES_COFIANZA.includes(userRol);
+  const esGestor = userRol === 'inmobiliaria' || userRol === 'propietario';
 
   return {
     expediente_id: expedienteId,
@@ -709,7 +711,8 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
               metadata?.origen === 'ponderacion_coarrendatario'
                 ? `Resultado combinado con el co-arrendatario: ${r.estado_nuevo ?? 'sin cambio'}.`
                 : `Estado cambiado de '${r.estado_anterior ?? 'sin estado'}' a '${r.estado_nuevo ?? 'sin estado'}'.`,
-            comentario: userRol === 'solicitante' ? null : (metadata?.motivo_gestor ?? null),
+            comentario: esGestor ? (metadata?.motivo_gestor ?? null) : null,
+            usuario: null,
           },
     ),
   };

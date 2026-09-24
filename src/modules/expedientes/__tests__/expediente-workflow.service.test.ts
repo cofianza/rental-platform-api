@@ -694,7 +694,7 @@ describe('expediente-workflow.service', () => {
         }),
       });
 
-      const result = await getTransitionHistory('exp-uuid');
+      const result = await getTransitionHistory('exp-uuid', 'admin-uuid', 'administrador');
 
       expect(result).toEqual({
         expediente_id: 'exp-uuid',
@@ -764,15 +764,41 @@ describe('expediente-workflow.service', () => {
 
       const cofianza = await historial('analista-uuid', 'operador_analista');
       expect(cofianza.comentario).toBe(fila.comentario);
+      expect(cofianza.usuario).toEqual(fila.usuario);
 
       const gestor = await historial('dueno-uuid', 'inmobiliaria');
       expect(gestor.comentario).toBe('No cumple la política de Cofianza.');
       expect(gestor.descripcion).toBe("Estado cambiado de 'condicionado' a 'rechazado'.");
-      expect(JSON.stringify(gestor)).not.toMatch(/DTI|ana@cofianza/);
+      expect(gestor.usuario).toBeNull();
+      expect(JSON.stringify(gestor)).not.toMatch(/DTI|ana@cofianza|López/);
 
       const prospecto = await historial('titular', 'solicitante');
       expect(prospecto.comentario).toBeNull();
-      expect(JSON.stringify(prospecto)).not.toMatch(/DTI|ana@cofianza|No cumple la política/);
+      expect(prospecto.usuario).toBeNull();
+      expect(JSON.stringify(prospecto)).not.toMatch(/DTI|ana@cofianza|No cumple la política|López/);
+    });
+
+    it('sin rol cierra por defecto: solo los estados', async () => {
+      setupFetchExpediente(mockExpediente);
+      mockFrom.mockReturnValueOnce({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              order: vi.fn().mockResolvedValue({
+                data: [{
+                  id: 'evt-1', estado_anterior: 'condicionado', estado_nuevo: 'rechazado', comentario: 'Fundamento interno',
+                  descripcion: "Estado cambiado de 'condicionado' a 'rechazado' por ana@cofianza.co", created_at: '2026-09-24T10:00:00Z',
+                  metadata: { motivo_gestor: 'No cumple la política.' }, usuario: { id: 'a', nombre: 'Ana', apellido: 'López' },
+                }],
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      });
+
+      const r = (await getTransitionHistory('exp-uuid')).historial[0] as Record<string, unknown>;
+      expect(r).toMatchObject({ comentario: null, usuario: null, descripcion: "Estado cambiado de 'condicionado' a 'rechazado'." });
     });
 
     it('debe retornar 404 si el expediente no existe', async () => {
