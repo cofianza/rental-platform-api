@@ -3,7 +3,7 @@ import { validate } from '@/middleware/validate';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { uploadPdf } from '@/middleware/upload';
 import { expedienteIdParamsSchema } from '../contratos.schema';
-import { autorizarExcesoSchema, enviarSchema, guardarPasoSchema } from './asistente.schema';
+import { autorizarExcesoSchema, enviarSchema, firmasPropioSchema, guardarPasoSchema } from './asistente.schema';
 import * as asistenteController from './asistente.controller';
 
 // ============================================================
@@ -65,6 +65,14 @@ asistenteV3Router.post(
   validate({ params: expedienteIdParamsSchema }),
   uploadPdf,
   asistenteController.cargarPropio,
+);
+
+// PUT /propio/firmas — Ruta B: dónde firma cada parte sobre el contrato propio (Adenda 1 contratos, respuesta 6).
+asistenteV3Router.put(
+  '/propio/firmas',
+  authorize('contratos', 'create'),
+  validate({ params: expedienteIdParamsSchema, body: firmasPropioSchema }),
+  asistenteController.guardarFirmasPropio,
 );
 
 // GET /propio — URL firmada del contrato propio (1 h), en cualquier estado.

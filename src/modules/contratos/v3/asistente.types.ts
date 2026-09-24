@@ -79,7 +79,23 @@ export interface EstadoAsistente {
   enviado: EnvioV3 | null;
 }
 
-export interface PdfPropio { nombre: string; paginas: number; bytes: number; sha256: string; subidoEn: string }
+export interface PdfPropio {
+  nombre: string; paginas: number; bytes: number; sha256: string; subidoEn: string;
+  /** Dónde firma cada parte sobre este PDF (Adenda 1 contratos, respuesta 6). Cargar otro PDF las borra. */
+  firmas: MarcaFirma[];
+  /** Cada parte que firma tiene al menos una marca: sin eso la Ruta B no sale a firma. */
+  firmasCompletas: boolean;
+  partesSinFirma: string[];                            // legibles: «Arrendatario (Juan Pérez)»
+}
+/**
+ * El punto de la raya donde se apoya la firma de una parte en el PDF propio.
+ * pagina desde 1; x, y en [0,1] con origen ARRIBA-IZQUIERDA de la página tal como se ve.
+ */
+export interface MarcaFirma {
+  parte: 'arrendatario' | 'coarrendatario' | 'arrendador';
+  indice?: number;                                     // solo coarrendatarios, desde 0
+  pagina: number; x: number; y: number;
+}
 
 // ── Firma (Entrega 5) ──
 export type EstadoSobreV3 = 'creando' | 'en_firma' | 'completo' | 'incompleto' | 'cancelado' | 'fallido';

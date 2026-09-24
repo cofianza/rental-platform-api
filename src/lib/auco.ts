@@ -51,6 +51,11 @@ export interface AucoSignProfile {
   order?: string;
   /** Coloca la firma sobre el ancla `{{signature:N}}` del PDF (N = indice en signProfile). */
   label?: boolean;
+  /**
+   * Firmas en coordenadas (una por elemento): página desde 1, x/y relativos (0-1) y
+   * w/h en puntos. Cómo las mide Auco: v3/firma/reglas.ts, posicionAuco.
+   */
+  position?: { page: number; x: number; y: number; w: number; h: number }[];
   /** false = Auco no le avisa; el integrador lo notifica (plan B si `order` falla). */
   notification?: boolean;
   /** Auco exige al menos uno de [type, label, position] por firmante. 'signature'

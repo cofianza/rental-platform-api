@@ -23,6 +23,7 @@ import type {
   AceptacionClausulas,
   Bloqueo,
   EstadoAsistente,
+  MarcaFirma,
   NumeroPaso,
   Paso1,
   Paso2,
@@ -30,6 +31,7 @@ import type {
   Paso4,
   Paso5,
 } from './asistente.types';
+import type { FirmasPropio } from './firma/reglas';
 import { AVISO_VERSION, categoriaClausula, huella, requiereAceptacion, validarClausula } from './clausulas.reglas';
 import { fechaBogota } from './formato';
 import { MARCADOR } from './motor';
@@ -96,6 +98,8 @@ export interface DocumentoV3 {
     crcKey: string;
     propioKey: string | null;
     fechaDocumento: string;
+    /** Ruta B: las marcas de firma sobre el PDF propio y la geometría de sus páginas (el reenvío usa estas). */
+    firmasPropio?: FirmasPropio;
   };
 }
 
@@ -108,6 +112,8 @@ export interface PropioGuardado {
   sha256: string;
   subidoEn: string;
   subidoPor: string;
+  /** Dónde firma cada parte sobre ESTE PDF: cargar otro las borra. */
+  firmas?: MarcaFirma[];
 }
 
 export interface ContratoV3 {

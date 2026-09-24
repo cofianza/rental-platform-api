@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/lib/response';
 import * as asistente from './asistente.service';
-import type { GuardarPasoBody } from './asistente.types';
+import type { GuardarPasoBody, MarcaFirma } from './asistente.types';
 
 // Cada acción devuelve el estado completo del asistente: la web solo pinta la última respuesta.
 
@@ -39,6 +39,11 @@ export async function autorizarExceso(req: Request, res: Response) {
 
 export async function cargarPropio(req: Request, res: Response) {
   sendSuccess(res, await asistente.cargarPropio(expedienteId(req), req.file, req.user!.id, req.user!.rol));
+}
+
+export async function guardarFirmasPropio(req: Request, res: Response) {
+  const body = req.body as { propioSha256: string; firmas: MarcaFirma[] };
+  sendSuccess(res, await asistente.guardarFirmasPropio(expedienteId(req), body, req.user!.id, req.user!.rol, req.ip));
 }
 
 export async function propioUrl(req: Request, res: Response) {

@@ -13,10 +13,12 @@
  *   §11.7.2   la fecha de activación es la de la ÚLTIMA firma que reporta Auco.
  */
 
+import type { PDFDocument, PDFPage } from 'pdf-lib';
 import type { AucoDocumentInfo, AucoRoadmap, AucoSignerStatus, AucoSignProfile } from '@/lib/auco';
 import { normalizePhoneToInternational } from '@/lib/auco';
 import { AppError } from '@/lib/errors';
 import { aucoDeriveCountry, mapTipoDocumentoToAuco } from '@/modules/firma/firma-multiparte.service';
+import type { MarcaFirma } from '../asistente.types';
 import { fechaBogota } from '../formato';
 
 /** Fila de `contrato_partes` (congelada fuera de borrador) en lo que la firma necesita. */
@@ -106,15 +108,19 @@ export function partesCompletas(partes: ParteFirmante[], coarrendatarios: number
   );
 }
 
+/** Las partes en orden de firma: el índice es el del firmante en signProfile. */
+const enOrden = (partes: ParteFirmante[]) => [...partes].sort((a, b) => a.orden - b.orden);
+
 /**
  * signProfile de Auco: `order` da el turno (el siguiente se notifica cuando
  * firma el anterior) y `label` coloca la firma sobre el ancla `{{signature:i}}`
  * del PDF, donde i es la posición en este arreglo. El canal es WhatsApp + OTP,
  * como el flujo anterior. Cofianza no va (§6.4).
+ * `posiciones[i]` (Ruta B): además, las firmas del firmante i sobre el PDF de
+ * la inmobiliaria (posicionesDeFirma).
  */
-export function construirSignProfile(partes: ParteFirmante[]): AucoSignProfile[] {
-  return [...partes]
-    .sort((a, b) => a.orden - b.orden)
+export function construirSignProfile(partes: ParteFirmante[], posiciones?: PosicionAuco[][]): AucoSignProfile[] {
+  return enOrden(partes)
     .map((p, i) => {
       const d = datosDeFirma(p);
       const telefono = normalizePhoneToInternational(d.telefono);
@@ -135,6 +141,7 @@ export function construirSignProfile(partes: ParteFirmante[]): AucoSignProfile[]
         perfil.identificationType = tipo;
         if (pais) perfil.country = pais;
       }
+      if (posiciones?.[i]?.length) perfil.position = posiciones[i];
       return perfil;
     });
 }
@@ -261,20 +268,144 @@ export function decidir(
 }
 
 // ── Ruta B (Adenda 1 del módulo de contratos, respuesta 6, condición 3) ──
+//
+// En la Ruta B las firmas van sobre las líneas de firma de CADA documento. El
+// Anexo de Cofianza lleva sus anclas {{signature:N}} (label: true); el PDF de la
+// inmobiliaria no se toca: ella marca dónde firma cada parte
+// (datos_variables.propio.firmas) y esas marcas van a Auco como `position`, así
+// que cada firmante lleva las dos cosas. Al enviar a firma se congelan con la
+// geometría de sus páginas en documento.final.firmasPropio: el reenvío y el
+// reintento usan exactamente esas, sobre el mismo PDF unido.
+
+/** Caja visible de una página (CropBox, o MediaBox) en puntos y su /Rotate normalizado. */
+export interface PaginaPdf {
+  ancho: number;
+  alto: number;
+  rotacion: 0 | 90 | 180 | 270;
+}
+
+/** Lo que se congela al enviar: las marcas y la geometría de cada página marcada (clave: su número). */
+export interface FirmasPropio {
+  marcas: MarcaFirma[];
+  paginas: Record<string, PaginaPdf>;
+}
+
+/** Un elemento de `position` de Auco: página desde 1, x/y relativos (0-1), w/h en puntos. */
+export interface PosicionAuco {
+  page: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** El recuadro que ocupa una firma en Auco, en puntos (el mismo que dibuja la web). */
+export const RECUADRO_FIRMA = { w: 150, h: 50 } as const;
 
 /**
- * En la Ruta B las firmas van sobre las líneas de firma de CADA documento,
- * también las del PDF de la inmobiliaria. Hoy solo se anclan ({{signature:N}})
- * en lo que genera Cofianza, así que la Ruta B no sale a firma por ningún
- * camino (enviar, reenviar, reintentar ni tras la verificación de identidad).
- * Para habilitarla: marcar dónde firma cada parte en el PDF propio, mandarlo a
- * Auco con `position` y borrar esto y sus usos (grep RUTA_B_SIN_FIRMA, también en la web).
+ * La geometría de una página como la muestra un visor (pdf.js): el CropBox (o
+ * el MediaBox) y el /Rotate; uno que no es múltiplo de 90 se ignora, como en pdf.js.
+ * ponytail: el CropBox no se recorta contra el MediaBox (pdf.js sí); uno que se sale es rarísimo.
  */
-export const RUTA_B_SIN_FIRMA =
-  'La Ruta B todavía no se puede enviar a firma: falta ubicar las firmas sobre las líneas de firma del contrato de la inmobiliaria. Por ahora usa la Ruta A.';
+export function paginaPdf(p: PDFPage): PaginaPdf {
+  const { width, height } = p.getCropBox();
+  const r = p.getRotation().angle;
+  const rotacion = (r % 90 ? 0 : ((r % 360) + 360) % 360) as PaginaPdf['rotacion'];
+  return { ancho: Math.abs(width), alto: Math.abs(height), rotacion };
+}
 
-export function exigirRutaConFirmas(ruta: 'A' | 'B' | undefined): void {
-  if (ruta === 'B') throw AppError.conflict(RUTA_B_SIN_FIRMA, 'RUTA_B_SIN_FIRMA');
+/** Lo que se congela al enviar: las marcas y la geometría de las páginas marcadas, leída del PDF que se firma. */
+export function congelarFirmas(doc: PDFDocument, marcas: MarcaFirma[]): FirmasPropio {
+  const usadas = [...new Set(marcas.map((m) => m.pagina))];
+  return { marcas, paginas: Object.fromEntries(usadas.map((n) => [n, paginaPdf(doc.getPage(n - 1))])) };
+}
+
+/**
+ * Una marca → un `position` de Auco. La marca es el punto de la raya donde se
+ * apoya la firma: el recuadro (w×h puntos) va centrado en ella y con su borde
+ * inferior encima.
+ *
+ * SUPUESTO, a verificar con scripts/sonda-auco-ruta-b.ts: Auco mide sobre la
+ * página tal como se ve (CropBox y /Rotate aplicados), con el origen arriba a
+ * la izquierda, y su (x, y) es la esquina INFERIOR DERECHA del recuadro:
+ * x = (firmaX + w) / ancho, y = (firmaY + h) / alto. Si la sonda dice otra
+ * cosa se corrige solo aquí: lo congelado son las marcas y la geometría.
+ */
+export function posicionAuco(
+  m: Pick<MarcaFirma, 'pagina' | 'x' | 'y'>,
+  pagina: PaginaPdf,
+  { w, h }: { w: number; h: number } = RECUADRO_FIRMA,
+): PosicionAuco {
+  const [ancho, alto] = pagina.rotacion % 180 ? [pagina.alto, pagina.ancho] : [pagina.ancho, pagina.alto];
+  const firmaX = m.x * ancho - w / 2; // borde izquierdo del recuadro, desde la izquierda
+  const firmaY = m.y * alto - h; // borde superior del recuadro, desde arriba
+  const rel = (n: number) => Math.round(Math.min(1, Math.max(0, n)) * 1e4) / 1e4;
+  return { page: m.pagina, x: rel((firmaX + w) / ancho), y: rel((firmaY + h) / alto), w, h };
+}
+
+type RolFirmante = ParteFirmante['rol'];
+const ROL_LEGIBLE: Record<RolFirmante, string> = {
+  arrendatario: 'Arrendatario',
+  coarrendatario: 'Coarrendatario',
+  arrendador: 'Arrendador',
+};
+
+/** «Arrendatario (Juan Pérez)»: así se dice qué parte falta. */
+export const nombreFirmante = (rol: RolFirmante, nombre: string | null | undefined) =>
+  nombre?.trim() ? `${ROL_LEGIBLE[rol]} (${nombre.trim()})` : ROL_LEGIBLE[rol];
+
+/** De quién es una marca: el coarrendatario, con su índice. */
+const claveMarca = (m: Pick<MarcaFirma, 'parte' | 'indice'>) =>
+  m.parte === 'coarrendatario' ? `coarrendatario:${m.indice ?? 0}` : m.parte;
+
+/** La clave de cada firmante, en orden de firma: arrendatario, coarrendatario:0…, arrendador. */
+function claves(roles: RolFirmante[]): string[] {
+  let k = 0;
+  return roles.map((r) => (r === 'coarrendatario' ? `coarrendatario:${k++}` : r));
+}
+
+/** Marcas de una parte que no firma este contrato. */
+export function marcasAjenas(roles: RolFirmante[], marcas: MarcaFirma[]): MarcaFirma[] {
+  const firman = new Set(claves(roles));
+  return marcas.filter((m) => !firman.has(claveMarca(m)));
+}
+
+/** Los firmantes (en orden de firma, con su nombre legible) que no tienen ninguna marca. */
+export function faltanMarcas(firmantes: { rol: RolFirmante; etiqueta: string }[], marcas: MarcaFirma[] = []): string[] {
+  const marcadas = new Set(marcas.map(claveMarca));
+  const c = claves(firmantes.map((f) => f.rol));
+  return firmantes.filter((_, i) => !marcadas.has(c[i])).map((f) => f.etiqueta);
+}
+
+export const motivoSinMarcas = (faltan: string[]) =>
+  `Falta ubicar en el contrato de la inmobiliaria dónde firma: ${faltan.join(', ')}.`;
+
+/** 409 si alguna parte que firma no tiene dónde firmar en el PDF propio. */
+export function exigirMarcas(firmantes: { rol: RolFirmante; etiqueta: string }[], marcas: MarcaFirma[] | undefined): void {
+  const faltan = faltanMarcas(firmantes, marcas);
+  if (faltan.length) throw new AppError(409, 'RUTA_B_FIRMAS_INCOMPLETAS', motivoSinMarcas(faltan), { partes: faltan });
+}
+
+/** Los firmantes de contrato_partes, en orden de firma: el arrendador, por su representante legal. */
+export const firmantesDePartes = (partes: ParteFirmante[]) =>
+  enOrden(partes).map((p) => ({ rol: p.rol, etiqueta: nombreFirmante(p.rol, datosDeFirma(p).nombre) }));
+
+/**
+ * Ruta B: las posiciones de cada firmante (índice = orden de firma) sobre el
+ * PDF propio, con las marcas congeladas al enviar; 409 si a alguno le falta.
+ * Ruta A: undefined (solo las anclas).
+ */
+export function posicionesDeFirma(
+  partes: ParteFirmante[],
+  final: { ruta?: 'A' | 'B'; firmasPropio?: FirmasPropio } | undefined,
+): PosicionAuco[][] | undefined {
+  if (final?.ruta !== 'B') return undefined;
+  const marcas = final.firmasPropio?.marcas;
+  exigirMarcas(firmantesDePartes(partes), marcas);
+  const paginas = final.firmasPropio!.paginas;
+  return claves(enOrden(partes).map((p) => p.rol)).map((clave) =>
+    marcas!.filter((m) => claveMarca(m) === clave).map((m) => posicionAuco(m, paginas[m.pagina])),
+  );
 }
 
 // ── Plazo de firma (Adenda 1 del módulo de contratos, respuesta 10) ──

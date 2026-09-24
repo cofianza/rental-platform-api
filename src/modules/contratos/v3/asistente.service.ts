@@ -40,6 +40,7 @@ import type {
   EstadoAsistente,
   GuardarPasoBody,
   Hallazgo,
+  MarcaFirma,
   NumeroPaso,
   Paso4,
   Paso4Entrada,
@@ -89,7 +90,18 @@ import { APROBACIONES } from './aprobaciones';
 import { contarClausulas, type Plantilla } from './motor';
 import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 import { contexto, generarAnexoVivienda, generarContratoVivienda, type DatosVivienda } from './vivienda';
-import { exigirPlazoDeFirma, exigirRutaConFirmas, finDelCrc, validarFirmantes, type ParteFirmante } from './firma/reglas';
+import {
+  congelarFirmas,
+  exigirMarcas,
+  exigirPlazoDeFirma,
+  faltanMarcas,
+  finDelCrc,
+  marcasAjenas,
+  nombreFirmante,
+  validarFirmantes,
+  type FirmasPropio,
+  type ParteFirmante,
+} from './firma/reglas';
 import {
   aceptarAviso,
   actualizarFirma,
@@ -456,7 +468,7 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
               (!!datos && difiereDeVistaPrevia(datos, doc, f.arrendador.logo_storage_key)),
           }
         : null,
-      propio: propioVisible(f.v3.datos_variables?.propio),
+      propio: propioVisible(f.v3.datos_variables?.propio, f),
       adicionales: {
         maximo: cal.MAX_CLAUSULAS_ADICIONALES,
         // primera ≤ 34 y 34 + 24 = 58: dentro de lo que ordinal() sabe escribir.
@@ -535,8 +547,25 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
   };
 }
 
-const propioVisible = (p: PropioGuardado | undefined): NonNullable<EstadoAsistente['contrato']>['propio'] =>
-  p ? { nombre: p.nombre, paginas: p.paginas, bytes: p.bytes, sha256: p.sha256, subidoEn: p.subidoEn } : null;
+/**
+ * Quién firma este contrato, en orden de firma (Cofianza no firma, §6.4): las
+ * mismas partes que escribe `partes()`; el arrendador, por su representante legal.
+ */
+const firmantesDe = (f: Fuentes) => [
+  { rol: 'arrendatario' as const, etiqueta: nombreFirmante('arrendatario', `${f.solicitante.nombre} ${f.solicitante.apellido}`) },
+  ...(f.coarrendatario
+    ? [{ rol: 'coarrendatario' as const, etiqueta: nombreFirmante('coarrendatario', `${f.coarrendatario.nombre} ${f.coarrendatario.apellido}`) }]
+    : []),
+  { rol: 'arrendador' as const, etiqueta: nombreFirmante('arrendador', f.arrendador.representante_legal ?? f.arrendador.razon_social) },
+];
+
+function propioVisible(p: PropioGuardado | undefined, f: Fuentes): NonNullable<EstadoAsistente['contrato']>['propio'] {
+  if (!p) return null;
+  const firmas = p.firmas ?? [];
+  const partesSinFirma = faltanMarcas(firmantesDe(f), firmas);
+  const { nombre, paginas, bytes, sha256, subidoEn } = p;
+  return { nombre, paginas, bytes, sha256, subidoEn, firmas, firmasCompletas: !partesSinFirma.length, partesSinFirma };
+}
 
 /**
  * El V3 que ya salió de borrador (EN FIRMA, FIRMA INCOMPLETA, FIANZA ACTIVA o
@@ -1411,9 +1440,74 @@ export async function cargarPropio(
       bytes: propio.bytes,
       paginas: propio.paginas,
       reemplaza: dv.propio?.sha256 ?? null,
+      // Las marcas de firma eran de ese PDF: con el nuevo se ubican otra vez.
+      firmas_descartadas: dv.propio?.firmas?.length ?? 0,
     },
   });
   if (dv.propio?.key) await supabase.storage.from(BUCKET).remove([dv.propio.key]);
+  return armarEstado(await cargar(expedienteId), hoyBogota());
+}
+
+/**
+ * Ruta B (Adenda 1 contratos, respuesta 6): dónde firma cada parte sobre el
+ * contrato propio, que no se modifica. Reemplaza todas las marcas; valen para
+ * el PDF de ese sha256 y cargar otro las borra. Se puede guardar a medias: el
+ * envío a firma exige al menos una por parte. No toca `actualizadoEn`: el Anexo
+ * no depende de ellas.
+ */
+export async function guardarFirmasPropio(
+  expedienteId: string,
+  body: { propioSha256: string; firmas: MarcaFirma[] },
+  userId: string,
+  userRol: string,
+  ip?: string,
+): Promise<EstadoAsistente> {
+  if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
+  await assertExpedienteAccess(expedienteId, userId, userRol);
+  const c = await cargar(expedienteId);
+  const v3 = borradorEditable(c.f);
+  const dv = v3.datos_variables ?? {};
+  if (dv.asistente?.paso1?.ruta !== 'B')
+    throw AppError.conflict('El contrato propio solo se carga en la Ruta B.', 'RUTA_NO_ES_B');
+  const propio = dv.propio;
+  if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
+  if (body.propioSha256 !== propio.sha256)
+    throw AppError.conflict('El contrato de la inmobiliaria cambió. Ubica las firmas sobre el PDF actual.', 'PDF_PROPIO_ALTERADO');
+  const fuera = body.firmas.find((m) => m.pagina > propio.paginas);
+  if (fuera)
+    throw AppError.badRequest(
+      `El contrato de la inmobiliaria tiene ${propio.paginas} ${propio.paginas === 1 ? 'página' : 'páginas'}: no existe la página ${fuera.pagina}.`,
+      'MARCA_FIRMA_INVALIDA',
+    );
+  if (marcasAjenas(firmantesDe(c.f).map((x) => x.rol), body.firmas).length)
+    throw AppError.badRequest('Una de las firmas es de una parte que no firma este contrato.', 'MARCA_FIRMA_INVALIDA');
+
+  const { data, error } = await db('contratos')
+    .update({ datos_variables: { ...dv, propio: { ...propio, firmas: body.firmas } } } as never)
+    .eq('id', v3.id)
+    .eq('estado', 'borrador')
+    .eq('updated_at', v3.updated_at)
+    .select('id');
+  if (error) {
+    logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se guardaron las firmas del contrato propio');
+    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la ubicación de las firmas. Intenta de nuevo.');
+  }
+  if (!(data as unknown[] | null)?.length) throw borradorCambiado();
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.CONTRATO_GENERATED,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: v3.id,
+    detalle: {
+      expediente_id: expedienteId,
+      v3: true,
+      fase: 'firmas_contrato_propio',
+      sha256: propio.sha256,
+      marcas: body.firmas.length,
+      antes: propio.firmas?.length ?? 0,
+    },
+    ip,
+  });
   return armarEstado(await cargar(expedienteId), hoyBogota());
 }
 
@@ -1476,11 +1570,13 @@ async function paginasDe(pdf: Buffer): Promise<number> {
  *
  * Orden (el congelamiento de V3 no revisa el UPDATE que saca la fila de
  * borrador, así que todo lo que queda congelado se escribe ahí):
- *   1. compuertas de generar + vista previa vigente + firmantes válidos;
+ *   1. compuertas de generar + vista previa vigente + firmantes válidos y, en
+ *      la Ruta B, dónde firma cada parte sobre el PDF propio;
  *   2. render FINAL (sin marca de agua, con anclas de firma) y PDF unido
  *      (Ruta A: contrato + CRC; Ruta B: propio intacto + Anexo + CRC);
  *   3. partes y registro de adicionales (en borrador: el trigger lo exige);
- *   4. un UPDATE con CAS: borrador → pendiente_firma + storage_key + documento.final;
+ *   4. un UPDATE con CAS: borrador → pendiente_firma + storage_key + documento.final
+ *      (en la B, con las marcas y la geometría de sus páginas: firmasPropio);
  *   5. el sobre en Auco (o la verificación de identidad, si está encendida).
  * Si 5 falla, vuelve a borrador con su vista previa (salvo que el sobre sí haya salido).
  */
@@ -1500,7 +1596,6 @@ export async function enviarAFirma(
   const dv = v3.datos_variables ?? {};
   const a: Asistente = dv.asistente ?? {};
   const ruta = a.paso1?.ruta ?? 'A';
-  exigirRutaConFirmas(ruta); // antes de generar nada (crearSobre lo repite)
 
   // 1. Las mismas compuertas que generar.
   const bloqueos = evaluarBloqueos(f, hoy, cal);
@@ -1548,6 +1643,8 @@ export async function enviarAFirma(
     if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
     if (body.propioSha256 !== propio.sha256)
       throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
+    // Adenda 1 contratos, respuesta 6: cada parte firma también sobre las rayas del PDF propio (crearSobre lo repite).
+    exigirMarcas(firmantesDe(f), propio.firmas);
   }
 
   // 2. Render final y PDF unido.
@@ -1569,11 +1666,14 @@ export async function enviarAFirma(
     estudio_id: f.estudio!.id,
   });
   let piezas: Buffer[] = [final.pdf, crcPdf];
+  let firmasPropio: FirmasPropio | undefined;
   if (ruta === 'B') {
     const propioPdf = await bajar(propio!.key, 'el contrato de la inmobiliaria');
     if (sha256(propioPdf) !== propio!.sha256)
       throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
     piezas = [propioPdf, final.pdf, crcPdf];
+    // Va primero en el PDF unido: sus páginas conservan el número.
+    firmasPropio = congelarFirmas(await PDFDocument.load(propioPdf), propio!.firmas!);
   }
   const unido = await mergePdfs(piezas, { estricto: true });
   if (unido.length > MAX_BYTES_SOBRE)
@@ -1602,7 +1702,16 @@ export async function enviarAFirma(
   const ahora = new Date().toISOString();
   const documento: DocumentoV3 = {
     ...doc,
-    final: { ruta, sha256: sha256(unido), bytes: unido.length, paginas, crcKey, propioKey: propio?.key ?? null, fechaDocumento: hoy },
+    final: {
+      ruta,
+      sha256: sha256(unido),
+      bytes: unido.length,
+      paginas,
+      crcKey,
+      propioKey: propio?.key ?? null,
+      fechaDocumento: hoy,
+      ...(firmasPropio && { firmasPropio }),
+    },
   };
   const { data, error } = await db('contratos')
     .update({

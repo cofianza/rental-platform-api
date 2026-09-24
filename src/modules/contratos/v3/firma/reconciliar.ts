@@ -43,6 +43,7 @@ import {
   textoAvisoFirmaIncompleta,
   ultimaFirma,
   type FirmanteSobre,
+  type FirmasPropio,
   type ParteFirmante,
 } from './reglas';
 
@@ -134,7 +135,7 @@ interface ContratoCtx {
     documento?: {
       entrada?: { inmueble?: { direccion?: string; municipio?: string } };
       snapshot?: { estudio?: { fechaCompletado?: string | null }; crc?: { fechaVencimiento?: string | null } | null };
-      final?: { ruta?: 'A' | 'B' };
+      final?: { ruta?: 'A' | 'B'; firmasPropio?: FirmasPropio };
     };
   } | null;
   inmuebleId: string | null;

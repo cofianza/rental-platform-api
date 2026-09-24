@@ -170,6 +170,43 @@ export const autorizarExcesoSchema = z
   .object({ huella: z.string({ error: 'Falta la huella' }).regex(/^[0-9a-f]{64}$/, 'Huella inválida') })
   .strict();
 
+/** Tope de marcas de firma sobre el PDF propio (firma e iniciales en varias páginas caben de sobra). */
+export const MAX_MARCAS_FIRMA = 30;
+
+const coordenada = z
+  .number({ error: 'Coordenada inválida' })
+  .min(0, 'La firma queda fuera de la página')
+  .max(1, 'La firma queda fuera de la página');
+
+/**
+ * Ruta B: dónde firma cada parte sobre el PDF propio (Adenda 1 contratos,
+ * respuesta 6), ligado al PDF por su sha256. Que la página exista y que la
+ * parte firme este contrato lo revisa el service.
+ */
+export const firmasPropioSchema = z
+  .object({
+    propioSha256: z.string().regex(/^[0-9a-f]{64}$/, 'Huella del PDF inválida'),
+    firmas: z
+      .array(
+        z
+          .object({
+            parte: z.enum(['arrendatario', 'coarrendatario', 'arrendador'], { error: 'Parte inválida' }),
+            indice: z.number().int().min(0).max(9).optional(),
+            pagina: z.number({ error: 'Página inválida' }).int('Página inválida').min(1, 'Página inválida'),
+            x: coordenada,
+            y: coordenada,
+          })
+          .strict()
+          .refine((m) => (m.parte === 'coarrendatario') === (m.indice !== undefined), {
+            message: 'Solo la firma del coarrendatario lleva su número',
+            path: ['indice'],
+          }),
+        { error: 'Faltan las firmas' },
+      )
+      .max(MAX_MARCAS_FIRMA, `Máximo ${MAX_MARCAS_FIRMA} firmas sobre el contrato`),
+  })
+  .strict();
+
 /** Enviar a firma: la vista previa que se revisó y, en la Ruta B, el PDF propio que se vio. */
 export const enviarSchema = z
   .object({

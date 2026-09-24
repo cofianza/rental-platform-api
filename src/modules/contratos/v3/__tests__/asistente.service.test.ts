@@ -166,12 +166,13 @@ vi.mock('../vivienda', async (importOriginal) => {
 // Import AFTER mocks
 import { AppError } from '@/lib/errors';
 import type { Tarifas } from '@/modules/estudios/tarifas';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import {
   autorizarExceso,
   cargarPropio,
   enviarAFirma,
   generarVistaPrevia,
+  guardarFirmasPropio,
   guardarPaso,
   iniciarContrato,
   obtenerEstado,
@@ -179,8 +180,8 @@ import {
 import type { Asistente, DocumentoV3 } from '../asistente.reglas';
 import { crearSobre, estadoEnviado } from '../firma/firma.service';
 import { ultimoSobre } from '../firma/reconciliar';
-import { guardarPasoSchema } from '../asistente.schema';
-import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, Paso4 } from '../asistente.types';
+import { firmasPropioSchema, guardarPasoSchema } from '../asistente.schema';
+import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, MarcaFirma, Paso4 } from '../asistente.types';
 import { AVISO_VERSION, huella } from '../clausulas.reglas';
 import { contarClausulas } from '../motor';
 import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
@@ -1820,21 +1821,24 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(storageApi.remove).not.toHaveBeenCalledWith([KEY_FINAL]);
   });
 
-  it('Ruta B: no sale a firma hasta ubicar las firmas sobre las líneas del PDF propio (Adenda 1, respuesta 6)', async () => {
+  it('Ruta B: sin ubicar dónde firma cada parte sobre el PDF propio no sale (409 con quién falta), antes de generar nada', async () => {
     const doc = await documentoRevisado(PASOS_B);
-    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: 1, sha256: 'a'.repeat(64), subidoEn: LEIDO, subidoPor: USER };
+    const firmas: MarcaFirma[] = [{ parte: 'arrendatario', pagina: 4, x: 0.3, y: 0.9 }];
+    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: 1, sha256: 'a'.repeat(64), subidoEn: LEIDO, subidoPor: USER, firmas };
     encolarCarga({ contratos: [conDocumento(PASOS_B, doc, { propio })] });
+    const renders = vi.mocked(generarAnexoVivienda).mock.calls.length;
     expect(await error(enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: propio.sha256 }, USER, ROL))).toMatchObject({
       statusCode: 409,
-      errorCode: 'RUTA_B_SIN_FIRMA',
+      errorCode: 'RUTA_B_FIRMAS_INCOMPLETAS',
+      details: { partes: ['Arrendador (Ana María Gómez Restrepo)'] },
     });
+    expect(vi.mocked(generarAnexoVivienda).mock.calls.length).toBe(renders);
     expect(storageApi.upload).not.toHaveBeenCalled();
     expect(opsDe('contratos', 'update')).toHaveLength(0);
     expect(crearSobre).not.toHaveBeenCalled();
   });
 
-  // Se reactiva al quitar exigirRutaConFirmas (asistente.service.ts).
-  it.skip('Ruta B: sin paso 4, sin el PDF propio no sale; con él, se une [propio, Anexo, CRC] sin tocarlo', async () => {
+  it('Ruta B: sin paso 4, sin el PDF propio no sale; con él, se une [propio, Anexo, CRC] sin tocarlo y se congelan sus firmas', async () => {
     const doc = await documentoRevisado(PASOS_B);
     expect(vi.mocked(generarAnexoVivienda)).toHaveBeenCalled();
     // sin el PDF propio
@@ -1842,10 +1846,19 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
       errorCode: 'CONTRATO_PROPIO_REQUERIDO',
     });
-    // con el PDF propio
-    const propioPdf = await pdfReal(4);
+    // con el PDF propio: la pág. 1 con CropBox y la 4 girada 90° (así la ve quien marca las firmas)
+    const pdf = await PDFDocument.create();
+    for (let i = 0; i < 4; i++) pdf.addPage([600, 800]);
+    pdf.getPage(0).setCropBox(50, 50, 500, 700);
+    pdf.getPage(3).setRotation(degrees(90));
+    const propioPdf = Buffer.from(await pdf.save());
     const sha = (await import('crypto')).createHash('sha256').update(propioPdf).digest('hex');
-    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: propioPdf.length, sha256: sha, subidoEn: LEIDO, subidoPor: USER };
+    const firmas: MarcaFirma[] = [
+      { parte: 'arrendatario', pagina: 4, x: 0.2, y: 0.9 },
+      { parte: 'arrendatario', pagina: 1, x: 0.5, y: 0.95 },
+      { parte: 'arrendador', pagina: 4, x: 0.7, y: 0.9 },
+    ];
+    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: propioPdf.length, sha256: sha, subidoEn: LEIDO, subidoPor: USER, firmas };
     archivos['propio.pdf'] = propioPdf;
     archivos[CRC_KEY] = await pdfReal(1);
     vi.mocked(generarAnexoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
@@ -1861,6 +1874,12 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     await enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: sha }, USER, ROL);
     const upd = opsDe('contratos', 'update').at(-1)!.args[0] as { datos_variables: { documento: DocumentoV3 } };
     expect(upd.datos_variables.documento.final).toMatchObject({ ruta: 'B', paginas: [4, 2, 1], propioKey: 'propio.pdf' });
+    // Las marcas y la geometría de las páginas marcadas, leídas del PDF que se firma: el reenvío usa estas.
+    expect(upd.datos_variables.documento.final!.firmasPropio).toEqual({
+      marcas: firmas,
+      paginas: { 1: { ancho: 500, alto: 700, rotacion: 0 }, 4: { ancho: 600, alto: 800, rotacion: 90 } },
+    });
+    expect(crearSobre).toHaveBeenCalledWith(CTO, USER);
     expect(vi.mocked(generarAnexoVivienda).mock.calls.at(-1)![1]).toMatchObject({ modo: 'final', anclas: true });
     // el registro de adicionales queda vacío en B
     expect(opsDe('contrato_clausulas_adicionales', 'insert')).toHaveLength(0);
@@ -1876,7 +1895,8 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     const noPdf = await error(cargarPropio(EXP, { buffer: Buffer.from('hola'), originalname: 'x.pdf' }, USER, ROL));
     expect(noPdf).toMatchObject({ statusCode: 422, errorCode: 'PDF_PROPIO_INVALIDO', details: { motivo: 'no_es_pdf' } });
 
-    const viejo = { key: 'viejo.pdf', nombre: 'v.pdf', paginas: 1, bytes: 1, sha256: 'a'.repeat(64), subidoEn: LEIDO, subidoPor: USER };
+    const firmasViejas: MarcaFirma[] = [{ parte: 'arrendatario', pagina: 1, x: 0.5, y: 0.5 }];
+    const viejo = { key: 'viejo.pdf', nombre: 'v.pdf', paginas: 1, bytes: 1, sha256: 'a'.repeat(64), subidoEn: LEIDO, subidoPor: USER, firmas: firmasViejas };
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B, propio: viejo } })] });
     enqueue('contratos', { data: [{ id: CTO }], error: null });
     encolarCarga({ contratos: [fila()] });
@@ -1885,6 +1905,9 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(upd.datos_variables.propio).toMatchObject({ nombre: 'contrato.pdf', paginas: 2, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
     expect(upd.datos_variables.asistente.actualizadoEn).toBe(PASOS_B.actualizadoEn);
     expect(storageApi.remove).toHaveBeenCalledWith(['viejo.pdf']);
+    // Las marcas de firma eran del PDF anterior: se ubican otra vez sobre el nuevo.
+    expect(upd.datos_variables.propio).not.toHaveProperty('firmas');
+    expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({ detalle: expect.objectContaining({ fase: 'contrato_propio', firmas_descartadas: 1 }) }));
   });
 
   it('cargarPropio con el CAS perdido borra lo que subió', async () => {
@@ -1895,5 +1918,104 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     });
     const subida = (storageApi.upload.mock.calls[0] as unknown[])[0];
     expect(storageApi.remove).toHaveBeenCalledWith([subida]);
+  });
+});
+
+describe('Ruta B: dónde firma cada parte sobre el PDF propio (Adenda 1 contratos, respuesta 6)', () => {
+  const PASOS_B: Asistente = { ...COMPLETO, paso1: { ...COMPLETO.paso1!, ruta: 'B' }, paso4: undefined };
+  const SHA = 'a'.repeat(64);
+  const PROPIO = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 3, bytes: 1, sha256: SHA, subidoEn: LEIDO, subidoPor: USER };
+  const ARR: MarcaFirma = { parte: 'arrendatario', pagina: 3, x: 0.25, y: 0.8 };
+  const ADOR: MarcaFirma = { parte: 'arrendador', pagina: 3, x: 0.75, y: 0.8 };
+  const conPropio = (propio: Record<string, unknown> = PROPIO, a: Asistente = PASOS_B) => fila({ datos_variables: { asistente: a, propio } });
+  const guardar = (firmas: MarcaFirma[], sha = SHA) => guardarFirmasPropio(EXP, { propioSha256: sha, firmas }, USER, ROL, '10.0.0.1');
+
+  it('guarda las marcas con CAS, sin tocar actualizadoEn, y el estado dice qué parte falta', async () => {
+    encolarCarga({ contratos: [conPropio()] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [conPropio({ ...PROPIO, firmas: [ARR] })] });
+
+    const e = await guardar([ARR]);
+
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente; propio: Record<string, unknown> } };
+    expect(upd.datos_variables.propio).toEqual({ ...PROPIO, firmas: [ARR] });
+    expect(upd.datos_variables.asistente.actualizadoEn).toBe(PASOS_B.actualizadoEn);
+    const eqs = opsDe('contratos', 'eq').map((o) => o.args);
+    expect(eqs).toContainEqual(['estado', 'borrador']);
+    expect(eqs).toContainEqual(['updated_at', LEIDO]);
+    expect(e.contrato?.propio).toMatchObject({
+      sha256: SHA,
+      firmas: [ARR],
+      firmasCompletas: false,
+      partesSinFirma: ['Arrendador (Ana María Gómez Restrepo)'],
+    });
+    expect(mockLogAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ detalle: expect.objectContaining({ fase: 'firmas_contrato_propio', marcas: 1, sha256: SHA }), ip: '10.0.0.1' }),
+    );
+  });
+
+  it('con una marca por parte el estado queda completo; sin marcas, faltan todas', async () => {
+    encolarCarga({ contratos: [conPropio({ ...PROPIO, firmas: [ARR, ADOR] })] });
+    expect((await obtener()).contrato?.propio).toMatchObject({ firmasCompletas: true, partesSinFirma: [] });
+    encolarCarga({ contratos: [conPropio()] });
+    expect((await obtener()).contrato?.propio).toMatchObject({
+      firmas: [],
+      firmasCompletas: false,
+      partesSinFirma: ['Arrendatario (Juan Carlos Pérez Mejía)', 'Arrendador (Ana María Gómez Restrepo)'],
+    });
+  });
+
+  it('solo en Ruta B, con el PDF cargado y sobre ese mismo PDF (sha256): 409 sin escribir', async () => {
+    encolarCarga({ contratos: [conPropio(PROPIO, COMPLETO)] });
+    expect(await error(guardar([ARR]))).toMatchObject({ statusCode: 409, errorCode: 'RUTA_NO_ES_B' });
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B } })] });
+    expect(await error(guardar([ARR]))).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_PROPIO_REQUERIDO' });
+    encolarCarga({ contratos: [conPropio()] });
+    expect(await error(guardar([ARR], 'b'.repeat(64)))).toMatchObject({ statusCode: 409, errorCode: 'PDF_PROPIO_ALTERADO' });
+    encolarCarga({ contratos: [fila({ estado: 'pendiente_firma', datos_variables: { asistente: PASOS_B, propio: PROPIO } })] });
+    expect(await error(guardar([ARR]))).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_NO_EDITABLE' });
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+    expect(mockAssertAccess).toHaveBeenCalledWith(EXP, USER, ROL);
+  });
+
+  it('una página que no existe, o una parte que no firma este contrato (aquí no hay coarrendatario): 400 sin escribir', async () => {
+    encolarCarga({ contratos: [conPropio()] });
+    expect(await error(guardar([{ ...ARR, pagina: 4 }]))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'MARCA_FIRMA_INVALIDA',
+      message: expect.stringContaining('no existe la página 4'),
+    });
+    encolarCarga({ contratos: [conPropio()] });
+    expect(await error(guardar([ARR, { parte: 'coarrendatario', indice: 0, pagina: 1, x: 0.5, y: 0.5 }]))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'MARCA_FIRMA_INVALIDA',
+    });
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
+  it('con el CAS perdido: 409 CONTRATO_BORRADOR_CAMBIADO; con el flag apagado, 404 sin leer nada', async () => {
+    encolarCarga({ contratos: [conPropio()] });
+    enqueue('contratos', { data: [], error: null });
+    expect(await error(guardar([ARR]))).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BORRADOR_CAMBIADO' });
+    mockEnv.CONTRATOS_V3_ENABLED = false;
+    mockFrom.mockClear();
+    expect(await error(guardar([ARR]))).toMatchObject({ statusCode: 404, errorCode: 'CONTRATOS_V3_NO_HABILITADO' });
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it('el esquema: coordenadas fuera de [0,1], página 0, más de 30 marcas o el índice mal puesto no pasan', () => {
+    const pasa = (firmas: unknown[]) => firmasPropioSchema.safeParse({ propioSha256: SHA, firmas }).success;
+    expect(pasa([ARR, ADOR, { parte: 'coarrendatario', indice: 0, pagina: 1, x: 0, y: 1 }])).toBe(true);
+    expect(pasa([])).toBe(true); // se puede guardar a medias (o borrar todas)
+    expect(pasa([{ ...ARR, x: 1.01 }])).toBe(false);
+    expect(pasa([{ ...ARR, y: -0.1 }])).toBe(false);
+    expect(pasa([{ ...ARR, pagina: 0 }])).toBe(false);
+    expect(pasa([{ ...ARR, pagina: 1.5 }])).toBe(false);
+    expect(pasa(Array.from({ length: 30 }, () => ARR))).toBe(true);
+    expect(pasa(Array.from({ length: 31 }, () => ARR))).toBe(false);
+    expect(pasa([{ parte: 'coarrendatario', pagina: 1, x: 0.5, y: 0.5 }])).toBe(false); // sin su número
+    expect(pasa([{ ...ARR, indice: 0 }])).toBe(false);
+    expect(pasa([{ ...ARR, parte: 'cofianza' }])).toBe(false);
+    expect(firmasPropioSchema.safeParse({ propioSha256: 'x', firmas: [ARR] }).success).toBe(false);
   });
 });

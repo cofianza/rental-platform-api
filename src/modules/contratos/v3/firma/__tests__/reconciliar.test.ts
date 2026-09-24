@@ -1190,34 +1190,103 @@ describe('Adenda 1 (respuesta 10): una firma fuera del plazo no activa la fianza
   });
 });
 
-describe('Adenda 1 (respuesta 6, condición 3): la Ruta B no sale a firma por ningún camino', () => {
-  const rutaB = (x: Record<string, unknown> = {}) =>
-    contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: HOY } }, final: { ruta: 'B' } } }, ...x });
+describe('Ruta B con firmas (Adenda 1, respuesta 6): label + position con las marcas congeladas', () => {
+  const PAG = { ancho: 500, alto: 750, rotacion: 0 };
+  /** Congeladas al enviar: el arrendatario en la pág. 2 (y sus iniciales en la 1), el arrendador en la 2. */
+  const CONGELADAS = {
+    marcas: [
+      { parte: 'arrendatario', pagina: 2, x: 0.2, y: 0.9 },
+      { parte: 'arrendatario', pagina: 1, x: 0.5, y: 0.95 },
+      { parte: 'arrendador', pagina: 2, x: 0.7, y: 0.9 },
+    ],
+    paginas: { 1: PAG, 2: PAG },
+  };
+  /** firmasPropio null = sin marcas congeladas. */
+  const rutaB = (x: Record<string, unknown> = {}, firmasPropio: unknown = CONGELADAS) =>
+    contrato({
+      datos_variables: {
+        documento: { snapshot: { estudio: { fechaCompletado: HOY } }, final: { ruta: 'B', firmasPropio } },
+        // Las del borrador no cuentan fuera de borrador: manda lo congelado en documento.final.
+        propio: { firmas: [{ parte: 'arrendatario', pagina: 1, x: 0.1, y: 0.1 }] },
+      },
+      ...x,
+    });
+  const pos = (page: number, x: number, y: number) => ({ page, x, y, w: 150, h: 50 });
+  const POSICIONES = [[pos(2, 0.35, 0.9), pos(1, 0.65, 0.95)], [pos(2, 0.85, 0.9)]];
+  const subido = () => (auco.uploadDocumentForSignature.mock.calls[0] as [{ signProfile: Array<{ name: string; label: boolean; position?: unknown }> }])[0];
 
-  it('crearSobre (reintentar y la verificación de identidad pasan por aquí): 409 sin sobre ni Auco', async () => {
+  it('crearSobre: cada firmante con label (anclas del Anexo) y position (sus rayas del PDF propio)', async () => {
     enqueue('contratos', ok(rutaB()), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
     enqueue('expedientes', EXPEDIENTE);
-    await expect(crearSobre('c1', 'u1')).rejects.toMatchObject({ statusCode: 409, errorCode: 'RUTA_B_SIN_FIRMA' });
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([{ id: 's1' }]), ok(sobre()));
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
+    await crearSobre('c1', 'u1');
+    expect(subido().signProfile.map((p) => [p.name, p.label, p.position])).toEqual([
+      ['Ana', true, POSICIONES[0]],
+      ['Caro', true, POSICIONES[1]],
+    ]);
+  });
+
+  it('crearSobre sin las marcas congeladas (o incompletas): 409 con quién falta, sin sobre ni Auco', async () => {
+    for (const congeladas of [null, { ...CONGELADAS, marcas: CONGELADAS.marcas.filter((m) => m.parte !== 'arrendador') }]) {
+      enqueue('contratos', ok(rutaB({}, congeladas)), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+      enqueue('expedientes', EXPEDIENTE);
+      enqueue('contrato_partes', ok(PARTES));
+      await expect(crearSobre('c1', 'u1')).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'RUTA_B_FIRMAS_INCOMPLETAS',
+        message: expect.stringContaining('Arrendador (Caro)'),
+      });
+    }
     expect(tabla('contrato_v3_sobres', 'insert')).toEqual([]);
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
   });
 
-  it('reenviar: 409 antes de tocar el contrato; la vista no ofrece reenviar ni reintentar', async () => {
+  it('reenviar: el proceso nuevo lleva exactamente las posiciones congeladas', async () => {
     enqueue('contratos', ok(rutaB({ estado: 'firma_incompleta' })));
-    enqueue('expedientes', EXPEDIENTE);
-    await expect(reenviar('c1', 'ad1', 'administrador')).rejects.toMatchObject({ errorCode: 'RUTA_B_SIN_FIRMA' });
-    expect(mockRpc).not.toHaveBeenCalled();
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
+    enqueue('contratos', ok(rutaB()), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('contrato_partes', ok(PARTES), ok(PARTES)); // la revisión previa del reenvío y la de crearSobre
+    enqueue(
+      'contrato_v3_sobres',
+      ok(sobre({ estado: 'incompleto' })),
+      ok({ id: 's2' }),
+      ok(sobre({ id: 's2', intento: 2, estado: 'creando', auco_code: null })),
+      ok([{ id: 's2' }]),
+      ok(sobre({ id: 's2', intento: 2 })),
+    );
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO10');
+    await reenviar('c1', 'u1');
+    expect(subido().signProfile.map((p) => p.position)).toEqual(POSICIONES);
+  });
 
-    enqueue('contratos', ok(rutaB({ estado: 'firma_incompleta' })));
+  it('reenviar sin las marcas congeladas: 409 antes de tocar el contrato', async () => {
+    enqueue('contratos', ok(rutaB({ estado: 'firma_incompleta' }, null)));
     enqueue('expedientes', EXPEDIENTE);
-    enqueue('contrato_v3_sobres', ok(incompleto()), ok({ id: 's1' }), ok(incompleto()), ok(ADENDA));
     enqueue('contrato_partes', ok(PARTES));
-    expect((await estadoEnviado('c1'))!.reenvio).toEqual({ puede: false, motivo: expect.stringContaining('Ruta B todavía no se puede enviar') });
+    await expect(reenviar('c1', 'ad1', 'administrador')).rejects.toMatchObject({ errorCode: 'RUTA_B_FIRMAS_INCOMPLETAS' });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('la vista ofrece reenviar y reintentar con las marcas completas; sin ellas, dice qué falta', async () => {
+    const vista = async (c: ReturnType<typeof contrato>) => {
+      enqueue('contratos', ok(c));
+      enqueue('expedientes', EXPEDIENTE);
+      enqueue('contrato_v3_sobres', ok(incompleto()), ok({ id: 's1' }), ok(incompleto()), ok(ADENDA));
+      enqueue('contrato_partes', ok(PARTES));
+      return (await estadoEnviado('c1'))!;
+    };
+    expect((await vista(rutaB({ estado: 'firma_incompleta' }))).reenvio).toEqual({ puede: true, motivo: null });
+    expect((await vista(rutaB({ estado: 'firma_incompleta' }, null))).reenvio).toEqual({
+      puede: false,
+      motivo: expect.stringContaining('Falta ubicar en el contrato de la inmobiliaria dónde firma: Arrendatario (Ana), Arrendador (Caro)'),
+    });
 
     enqueue('contratos', ok(rutaB()));
     enqueue('expedientes', EXPEDIENTE);
     enqueue('contrato_v3_sobres', ok(sobre({ estado: 'fallido', auco_code: null })));
     enqueue('contrato_partes', ok(PARTES));
-    expect((await estadoEnviado('c1'))!.reintento).toBe(false);
+    expect((await estadoEnviado('c1'))!.reintento).toBe(true);
   });
 });

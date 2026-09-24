@@ -8,20 +8,27 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/config', () => ({ env: { AUCO_SENDER_EMAIL: 'firma@cofianza.co' } }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 
+import { PDFDocument, PDFName, PDFNumber, degrees } from 'pdf-lib';
 import {
   actualizarFirmantes,
   construirSignProfile,
   datosDeFirma,
   decidir,
   exigirPlazoDeFirma,
+  faltanMarcas,
   fechaHora,
   fechasDeFirma,
   finDelCrc,
   finDelDia,
+  firmantesDePartes,
   fueraDePlazo,
   mapEstadoFirmante,
+  marcasAjenas,
+  paginaPdf,
   partesCompletas,
   plazoDeFirma,
+  posicionAuco,
+  posicionesDeFirma,
   prorrogaDelPlazo,
   sobreIdDeCustom,
   textoAvisoFirmaIncompleta,
@@ -30,6 +37,7 @@ import {
   type FirmanteSobre,
   type ParteFirmante,
 } from '../reglas';
+import type { MarcaFirma } from '../../asistente.types';
 
 // ============================================================
 // Reglas puras de la firma V3 (Entrega 5): quién firma y en qué orden, qué
@@ -367,5 +375,111 @@ describe('plazo de firma (Adenda 1 del módulo de contratos, respuesta 10)', () 
     const plazo = finDelDia('2026-10-08');
     expect(prorrogaDelPlazo(plazo, 15, plazo, AHORA)).toEqual({ motivo: 'crc' });
     expect(prorrogaDelPlazo(plazo, 15, finDelDia('2026-11-20'), plazo + 1)).toEqual({ motivo: 'vencido' });
+  });
+});
+
+// ── Ruta B: firmas sobre el PDF de la inmobiliaria (Adenda 1 contratos, respuesta 6) ──
+
+/** El error que lanza f (para afirmar código y detalle). */
+function lanzado(f: () => unknown): unknown {
+  try {
+    f();
+  } catch (e) {
+    return e;
+  }
+  throw new Error('se esperaba un error');
+}
+
+describe('posicionAuco (supuesto de Auco a verificar con scripts/sonda-auco-ruta-b.ts)', () => {
+  // 75 / 500 = 0,15 y 75 / 750 = 0,1: medio recuadro (150 pt) en relativo, según qué lado se ve de ancho.
+  const PAGINA = { ancho: 500, alto: 750 };
+
+  it('el recuadro de 150×50 pt va centrado en la marca con el borde inferior encima: (x, y) = su esquina inferior derecha', () => {
+    expect(posicionAuco({ pagina: 3, x: 0.5, y: 0.8 }, { ...PAGINA, rotacion: 0 })).toEqual({ page: 3, x: 0.65, y: 0.8, w: 150, h: 50 });
+  });
+
+  it('con /Rotate 90 o 270 el ancho que se ve es el alto de la caja; con 180, el mismo', () => {
+    const marca = { pagina: 1, x: 0.5, y: 0.5 };
+    expect(posicionAuco(marca, { ...PAGINA, rotacion: 90 })).toMatchObject({ x: 0.6, y: 0.5 });
+    expect(posicionAuco(marca, { ...PAGINA, rotacion: 270 })).toMatchObject({ x: 0.6, y: 0.5 });
+    expect(posicionAuco(marca, { ...PAGINA, rotacion: 180 })).toMatchObject({ x: 0.65, y: 0.5 });
+  });
+
+  it('una marca pegada al borde derecho no se sale de la página', () => {
+    expect(posicionAuco({ pagina: 1, x: 0.95, y: 1 }, { ...PAGINA, rotacion: 0 })).toMatchObject({ x: 1, y: 1 });
+  });
+
+  it('paginaPdf lee el CropBox (si no hay, el MediaBox) y el /Rotate como pdf.js: negativo normalizado, no múltiplo de 90 = 0', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]);
+    doc.addPage([612, 792]).setCropBox(36, 36, 540, 720);
+    doc.addPage([612, 792]).setRotation(degrees(-90));
+    doc.addPage([612, 792]).node.set(PDFName.of('Rotate'), PDFNumber.of(45));
+    const leido = await PDFDocument.load(await doc.save());
+    expect(leido.getPages().map(paginaPdf)).toEqual([
+      { ancho: 612, alto: 792, rotacion: 0 },
+      { ancho: 540, alto: 720, rotacion: 0 },
+      { ancho: 612, alto: 792, rotacion: 270 },
+      { ancho: 612, alto: 792, rotacion: 0 },
+    ]);
+    // Girada, lo que se ve tiene 792 pt de ancho; recortada, 540.
+    const marca = { pagina: 3, x: 0.5, y: 0.5 };
+    expect(posicionAuco(marca, paginaPdf(leido.getPage(2))).x).toBe(Math.round((0.5 + 75 / 792) * 1e4) / 1e4);
+    expect(posicionAuco(marca, paginaPdf(leido.getPage(1))).x).toBe(Math.round((0.5 + 75 / 540) * 1e4) / 1e4);
+  });
+});
+
+describe('posicionesDeFirma y construirSignProfile con posiciones', () => {
+  const PAG = { ancho: 500, alto: 750, rotacion: 0 as const };
+  const final = (marcas: MarcaFirma[]) => ({ ruta: 'B' as const, firmasPropio: { marcas, paginas: { 1: PAG, 4: PAG } } });
+  const MARCAS: MarcaFirma[] = [
+    { parte: 'arrendador', pagina: 4, x: 0.7, y: 0.9 },
+    { parte: 'arrendatario', pagina: 4, x: 0.2, y: 0.9 },
+    { parte: 'arrendatario', pagina: 1, x: 0.85, y: 0.95 }, // iniciales
+    { parte: 'coarrendatario', indice: 0, pagina: 4, x: 0.45, y: 0.9 },
+  ];
+  const pos = (page: number, x: number, y: number) => ({ page, x, y, w: 150, h: 50 });
+
+  it('cada firmante (en orden de firma) lleva todas sus marcas como position, y conserva label', () => {
+    const posiciones = posicionesDeFirma([ARRENDADOR, ARRENDATARIO, COARRENDATARIO], final(MARCAS))!;
+    expect(posiciones).toEqual([
+      [pos(4, 0.35, 0.9), pos(1, 1, 0.95)],
+      [pos(4, 0.6, 0.9)],
+      [pos(4, 0.85, 0.9)],
+    ]);
+    const perfiles = construirSignProfile([ARRENDADOR, ARRENDATARIO, COARRENDATARIO], posiciones);
+    expect(perfiles.map((p) => [p.name, p.order, p.label, p.position])).toEqual([
+      ['Ana Ruiz', '1', true, posiciones[0]],
+      ['Beto Díaz', '2', true, posiciones[1]],
+      ['Caro Gómez', '3', true, posiciones[2]],
+    ]);
+  });
+
+  it('Ruta A: sin posiciones, solo las anclas', () => {
+    expect(posicionesDeFirma(TRES, { ruta: 'A' })).toBeUndefined();
+    expect(construirSignProfile(TRES).some((p) => 'position' in p)).toBe(false);
+  });
+
+  it('a una parte sin marca (o sin marcas congeladas): 409 RUTA_B_FIRMAS_INCOMPLETAS con quién falta', () => {
+    const sinCoa = MARCAS.filter((m) => m.parte !== 'coarrendatario');
+    expect(lanzado(() => posicionesDeFirma(TRES, final(sinCoa)))).toMatchObject({
+      statusCode: 409,
+      errorCode: 'RUTA_B_FIRMAS_INCOMPLETAS',
+      message: expect.stringContaining('Coarrendatario (Beto Díaz)'),
+      details: { partes: ['Coarrendatario (Beto Díaz)'] },
+    });
+    expect(lanzado(() => posicionesDeFirma(TRES, { ruta: 'B' }))).toMatchObject({
+      details: { partes: ['Arrendatario (Ana Ruiz)', 'Coarrendatario (Beto Díaz)', 'Arrendador (Caro Gómez)'] },
+    });
+  });
+
+  it('faltanMarcas y marcasAjenas: el coarrendatario cuenta por su índice; sin él, su marca es ajena', () => {
+    expect(faltanMarcas(firmantesDePartes(TRES), MARCAS)).toEqual([]);
+    const otroCoa: MarcaFirma = { parte: 'coarrendatario', indice: 1, pagina: 1, x: 0.5, y: 0.5 };
+    expect(faltanMarcas(firmantesDePartes(TRES), [...MARCAS.filter((m) => m.parte !== 'coarrendatario'), otroCoa])).toEqual([
+      'Coarrendatario (Beto Díaz)',
+    ]);
+    expect(marcasAjenas(['arrendatario', 'coarrendatario', 'arrendador'], [...MARCAS, otroCoa])).toEqual([otroCoa]);
+    expect(marcasAjenas(['arrendatario', 'arrendador'], MARCAS)).toEqual([MARCAS[3]]);
   });
 });
