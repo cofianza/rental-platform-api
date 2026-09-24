@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // deshace el lock (nadie consultó el buró) y se revisa la devolución. Mismo
 // mock de Supabase que estudios.enlace-cancelar.test.ts: colas por tabla + `ops`.
 
-const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar } = vi.hoisted(() => {
+const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar, mockSinEfecto } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -40,6 +40,7 @@ const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar } =
     // Por defecto el buró no contesta nunca (lo que corre tras el lock queda en
     // vuelo); cada prueba que lo necesita lo hace fallar.
     mockSolicitar: vi.fn((): Promise<unknown> => new Promise(() => {})),
+    mockSinEfecto: vi.fn(async () => undefined),
   };
 });
 
@@ -67,6 +68,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
 vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: vi.fn() }));
 vi.mock('@/modules/pagos/reembolsos.service', () => ({ devolverEvaluacionSinConsulta: mockDevolver }));
+vi.mock('@/modules/coarrendatarios/coarrendatarios.service', () => ({ avisarInvitacionSinEfecto: mockSinEfecto }));
 vi.mock('../tope-canon.guard', () => ({
   assertCanonDentroDelTope: vi.fn(async () => ({ canonCop: 1_500_000 })),
   leerCanonDelInmueble: vi.fn(),
@@ -214,5 +216,20 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     const [lock, fallo] = actualizaciones();
     expect(lock).toMatchObject({ estado: 'en_proceso', resultado: 'pendiente', referencia_proveedor: null });
     expect(fallo).toEqual(previo);
+  });
+
+  it('Q5c-5: la evaluación del co-arrendatario con el estudio rechazado se cancela y se le avisa (P3), no solo 409', async () => {
+    enqueue(
+      'estudios',
+      estudio({ tipo: 'con_coarrendatario', estado: 'formulario_completado' }),
+      { data: [{ id: 'est-1' }], error: null }, // cancelada
+    );
+    enqueue('expedientes', expediente('rechazado'), { data: { estado: 'rechazado' }, error: null });
+
+    await expect(ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador')).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_ESTUDIO_NO_VIGENTE',
+    });
+    expect(actualizaciones()[0]).toMatchObject({ estado: 'cancelado' });
+    await vi.waitFor(() => expect(mockSinEfecto).toHaveBeenCalledWith('est-1'));
   });
 });

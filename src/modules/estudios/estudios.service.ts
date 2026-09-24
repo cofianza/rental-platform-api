@@ -2224,7 +2224,9 @@ export async function ejecutarEstudio(
   // rechazado: es su apelación, y el resultado lo reabre.
   const estudioTerminado = (estado: string | undefined) =>
     estado === 'cerrado' || (estado === 'rechazado' && !est.estudio_padre_id);
-  if (estudioTerminado(expediente.estado)) {
+  // La del co-arrendatario sigue al paso 1.5b: con el estudio resuelto se
+  // cancela y se le avisa que su invitación quedó sin efecto (P3).
+  if (est.tipo !== 'con_coarrendatario' && estudioTerminado(expediente.estado)) {
     throw AppError.conflict(`El estudio está ${expediente.estado}: no se consulta el buró.`, 'EXPEDIENTE_CERRADO');
   }
 
