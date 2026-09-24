@@ -276,6 +276,16 @@ describe('reenviar a firma con el sobre anterior sin firmar', () => {
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
   });
 
+  it('Auco no conoce el documento anterior (404: de stage u otra cuenta) → se toma como cerrado y sale el nuevo', async () => {
+    vi.mocked(auco.getDocumentStatus).mockRejectedValue(new Error('Auco API error (404): document not found'));
+    prepararReenvio(2);
+    sobreNuevo();
+    await crearSolicitudFirmaMultiparte('c1', 'u1');
+    expect(auco.cancelDocument).not.toHaveBeenCalled();
+    expect(marcado('cancelado')).toBe(true);
+    expect(auco.uploadDocumentForSignature).toHaveBeenCalledTimes(1);
+  });
+
   it('los firmantes del sobre anterior no quedan «cancelado» (se leería como un rechazo)', async () => {
     vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'EXPIRED', signProfile: [] } as never);
     prepararReenvio(2);

@@ -1074,14 +1074,20 @@ async function yaFirmado(contratoId: string, expedienteId: string): Promise<neve
 /**
  * Lo que dice Auco del documento de un envío, solo lectura. Si ya lo firmaron
  * todos y el aviso se perdió, se concilia por el camino del webhook y 409
- * CONTRATO_YA_FIRMADO. Si Auco no responde, 503.
+ * CONTRATO_YA_FIRMADO. Si Auco no lo conoce (404: creado en stage o en otra
+ * cuenta), null: no hay nada vivo que cerrar. Si Auco no responde, 503.
  */
-async function leerDocumentoEnAuco(contratoId: string, expedienteId: string, code: string): Promise<aucoClient.AucoDocumentInfo> {
+async function leerDocumentoEnAuco(contratoId: string, expedienteId: string, code: string): Promise<aucoClient.AucoDocumentInfo | null> {
   const info = await aucoClient.getDocumentStatus(code).catch((err: unknown) => {
-    logger.error({ contratoId, code, error: err instanceof Error ? err.message : String(err) }, 'Firma: no se pudo consultar en Auco el documento de un envío');
+    const detalle = err instanceof Error ? err.message : String(err);
+    if (detalle.startsWith('Auco API error (404)')) {
+      logger.warn({ contratoId, code, error: detalle }, 'Firma: Auco no conoce el documento (stage u otra cuenta); se toma como cerrado');
+      return null;
+    }
+    logger.error({ contratoId, code, error: detalle }, 'Firma: no se pudo consultar en Auco el documento de un envío');
     throw auco503();
   });
-  if (info.status === 'FINISH') {
+  if (info?.status === 'FINISH') {
     await handleAucoWebhook({ code, name: info.name ?? '', status: 'FINISH', url: info.url });
     await yaFirmado(contratoId, expedienteId);
   }
@@ -1098,7 +1104,8 @@ async function leerDocumentoEnAuco(contratoId: string, expedienteId: string, cod
 async function cerrarDocumentoAnterior(contratoId: string, expedienteId: string, code: string): Promise<'expirado' | 'cancelado'> {
   const cerrado = (status: string) => (status === 'EXPIRED' ? 'expirado' : status === 'REJECTED' ? 'cancelado' : null);
 
-  const antes = cerrado((await leerDocumentoEnAuco(contratoId, expedienteId, code)).status);
+  const info = await leerDocumentoEnAuco(contratoId, expedienteId, code);
+  const antes = info ? cerrado(info.status) : 'cancelado';
   if (antes) return antes;
 
   const anulado = await aucoClient
@@ -1107,9 +1114,9 @@ async function cerrarDocumentoAnterior(contratoId: string, expedienteId: string,
     .catch(() => false);
   if (anulado) return 'cancelado';
   const despues = await leerDocumentoEnAuco(contratoId, expedienteId, code);
-  const ya = cerrado(despues.status);
+  const ya = despues ? cerrado(despues.status) : 'cancelado';
   if (ya) return ya;
-  logger.error({ contratoId, code, status: despues.status }, 'Reenvío a firma: Auco no anuló el documento anterior');
+  logger.error({ contratoId, code, status: despues?.status }, 'Reenvío a firma: Auco no anuló el documento anterior');
   throw auco503();
 }
 
