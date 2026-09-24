@@ -290,6 +290,13 @@ const envSchema = z.object({
   // firma), libera el inmueble y avisa. Mismo criterio que el de firma: false en
   // una API LOCAL (su .env.local apunta a la base de producción).
   RESERVA_V3_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  // P1: barrido de reembolsos cada 15 min (reembolsos en proceso en Mercado
+  // Pago y red de seguridad de la devolución de la evaluación). Escribe en la
+  // base y avisa: false en una API LOCAL (su .env.local apunta a producción).
+  REEMBOLSOS_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  // Estudios colgados en 'en_proceso' (al arrancar y cada 15 min): los marca
+  // fallidos o registra el resultado. Mismo criterio: false en una API LOCAL.
+  ESTUDIOS_COLGADOS_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). SIN EFECTO: la Adenda 1 del
   // módulo de contratos (respuesta 13 bis) no la habilita y ningún camino de la

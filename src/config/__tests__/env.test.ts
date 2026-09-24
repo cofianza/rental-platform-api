@@ -62,3 +62,14 @@ describe('CLAUSULAS_IA_ENABLED (respuesta 13 bis)', () => {
     expect(avisos.some((a) => a.includes('CLAUSULAS_IA_ENABLED=true no tiene efecto'))).toBe(true);
   });
 });
+
+describe('barridos que escriben en la base (P1): se apagan en una API local', () => {
+  it('encendidos por defecto; «false» los apaga', async () => {
+    const porDefecto = (await arrancar({})).env;
+    expect(porDefecto.REEMBOLSOS_BARRIDO_ENABLED).toBe(true);
+    expect(porDefecto.ESTUDIOS_COLGADOS_BARRIDO_ENABLED).toBe(true);
+    const local = (await arrancar({ REEMBOLSOS_BARRIDO_ENABLED: 'false', ESTUDIOS_COLGADOS_BARRIDO_ENABLED: 'false' })).env;
+    expect(local.REEMBOLSOS_BARRIDO_ENABLED).toBe(false);
+    expect(local.ESTUDIOS_COLGADOS_BARRIDO_ENABLED).toBe(false);
+  });
+});

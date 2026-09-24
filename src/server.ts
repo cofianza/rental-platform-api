@@ -20,14 +20,17 @@ if (env.PAYMENT_GATEWAY_PROVIDER === 'mercadopago') {
 
 // P1: reembolsos que quedaron en proceso y evaluaciones de estudios terminados
 // sin consulta al buró que no llegaron a la cola (red de seguridad del cierre).
-setInterval(() => {
-  import('@/modules/pagos/reembolsos.service')
-    .then(async ({ revisarReembolsosEnProceso, barrerDevolucionesPendientes }) => {
-      await revisarReembolsosEnProceso();
-      await barrerDevolucionesPendientes();
-    })
-    .catch((err) => logger.warn({ err }, 'barrido de reembolsos: ciclo fallido'));
-}, RECONCILE_INTERVAL_MS).unref();
+// Escribe en la base: REEMBOLSOS_BARRIDO_ENABLED=false en una API local.
+if (env.REEMBOLSOS_BARRIDO_ENABLED) {
+  setInterval(() => {
+    import('@/modules/pagos/reembolsos.service')
+      .then(async ({ revisarReembolsosEnProceso, barrerDevolucionesPendientes }) => {
+        await revisarReembolsosEnProceso();
+        await barrerDevolucionesPendientes();
+      })
+      .catch((err) => logger.warn({ err }, 'barrido de reembolsos: ciclo fallido'));
+  }, RECONCILE_INTERVAL_MS).unref();
+}
 
 // Vencimiento de contratos del flujo anterior: los vigentes cuya fecha_fin ya
 // pasó se prorrogan por el mismo término (P11/P20). Corre al arrancar (atrapa
@@ -44,13 +47,16 @@ if (env.CONTRATO_VENCIMIENTO_JOB_ENABLED) {
 
 // Estudios colgados en 'en_proceso' (la API se reinició a mitad de la consulta
 // al buró o falló el registro del resultado). Al arrancar y cada 15 min.
+// Escribe en la base: ESTUDIOS_COLGADOS_BARRIDO_ENABLED=false en una API local.
 const ESTUDIOS_COLGADOS_INTERVAL_MS = 15 * 60 * 1000;
-const runEstudiosColgados = () =>
-  import('@/modules/estudios/estudios.service')
-    .then(({ barrerEstudiosEnProcesoColgados }) => barrerEstudiosEnProcesoColgados())
-    .catch((err) => logger.warn({ err }, 'barrerEstudiosEnProcesoColgados: ciclo fallido'));
-runEstudiosColgados();
-setInterval(runEstudiosColgados, ESTUDIOS_COLGADOS_INTERVAL_MS).unref();
+if (env.ESTUDIOS_COLGADOS_BARRIDO_ENABLED) {
+  const runEstudiosColgados = () =>
+    import('@/modules/estudios/estudios.service')
+      .then(({ barrerEstudiosEnProcesoColgados }) => barrerEstudiosEnProcesoColgados())
+      .catch((err) => logger.warn({ err }, 'barrerEstudiosEnProcesoColgados: ciclo fallido'));
+  runEstudiosColgados();
+  setInterval(runEstudiosColgados, ESTUDIOS_COLGADOS_INTERVAL_MS).unref();
+}
 
 // Firma de contratos V3: barrido de respaldo del webhook de Auco (vencimientos,
 // rechazos y firmas cuyo aviso se perdió, procesos cortados por un redeploy,
