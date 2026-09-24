@@ -191,8 +191,9 @@ WHERE position('<p>En señal de conformidad con todo lo anterior, las partes sus
 
 -- 7. Si la plantilla de producción no quedó exactamente como se probó (p. ej.
 --    alguien la editó antes desde la UI), se deshace toda la migración: el
---    editor la corre en una transacción y nada queda a medias. Correrla otra vez
---    no cambia nada y pasa. En una base sin esa fila (local) no aplica.
+--    editor y db push la corren en una transacción (por eso no lleva BEGIN ni
+--    COMMIT) y nada queda a medias. Correrla otra vez no cambia nada y pasa. En
+--    una base sin esa fila (local) no aplica, y lo avisa.
 DO $$
 DECLARE
   v_md5 text;
@@ -200,7 +201,9 @@ BEGIN
   SELECT md5(contenido_html) INTO v_md5
   FROM plantillas_contrato
   WHERE id = 'bcee268f-290d-444b-b134-212cd9d485bc';
-  IF FOUND AND v_md5 IS DISTINCT FROM 'f07505fb01154b4403427c2bca54a8cb' THEN
+  IF NOT FOUND THEN
+    RAISE NOTICE 'No está la plantilla V4 (bcee268f): esta base no tenía el texto a cambiar; el resto de la migración sí se aplicó.';
+  ELSIF v_md5 IS DISTINCT FROM 'f07505fb01154b4403427c2bca54a8cb' THEN
     RAISE EXCEPTION 'Plantilla V4 (bcee268f) con md5 % después de la migración; se esperaba f07505fb01154b4403427c2bca54a8cb. ¿Se editó antes? Revisarla antes de volver a correr la migración.', v_md5;
   END IF;
 END $$;

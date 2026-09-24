@@ -75,6 +75,11 @@ describe('migración 20261001000006 sobre la plantilla V4 de producción', () =>
     expect(md5(aplicar(nueva, MIGRACION))).toBe(exigido); // correrla dos veces pasa
   });
 
+  it('sin la plantilla bcee268f avisa (NOTICE) en vez de callar, y no abre ni cierra la transacción', () => {
+    expect(MIGRACION).toMatch(/IF NOT FOUND THEN\s+RAISE NOTICE '[^']*bcee268f/);
+    expect(MIGRACION).not.toMatch(/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/im);
+  });
+
   it('P12, inmobiliaria con comisión: la cláusula 21 y la numeración de siempre', () => {
     const out = renderTemplate(nueva, INMOBILIARIA);
     expect(out).toContain('<h2>Cláusula Vigésima Primera. Comisión inmobiliaria</h2>');
