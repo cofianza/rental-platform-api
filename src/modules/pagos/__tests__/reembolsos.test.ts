@@ -592,6 +592,23 @@ describe('P9: «Marcar resuelto» (administrador)', () => {
     expect(mockTransitionChecked).not.toHaveBeenCalled();
   });
 
+  it('Q5c-4: si no se puede leer la consulta al buró, la fila no se resuelve (se puede reintentar)', async () => {
+    enqueue('pagos_no_conciliados', {
+      data: {
+        id: FILA, proveedor: 'manual', provider_payment_id: `pago:${PAGO}`, external_reference: `estudio:${EXP}:${PAGO}`,
+        monto: 80000, motivo: 'estudio_cerrado_sin_consulta', notas: null, resuelto: false, estado_proveedor: 'completed',
+        created_at: '2026-09-24',
+      },
+      error: null,
+    });
+    enqueue('pagos', { data: { id: PAGO, expediente_id: EXP, estado: 'completado' }, error: null });
+    enqueue('estudios', { data: null, error: { message: 'timeout', code: '57014' } });
+
+    await expect(resolverReembolso(FILA, 'Transferencia devuelta', admin)).rejects.toBeTruthy();
+    expect(updates('pagos_no_conciliados')).toEqual([]);
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+  });
+
   it('un pago que no se pudo asociar: se cierra con la nota y ningún cobro cambia', async () => {
     enqueue('pagos_no_conciliados', {
       data: {

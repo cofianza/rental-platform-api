@@ -345,7 +345,8 @@ async function leerFila(filaId: string): Promise<FilaReembolso> {
 async function pagoDeLaFila(f: FilaReembolso) {
   const pagoId = f.provider_payment_id.startsWith('pago:') ? f.provider_payment_id.slice(5) : null;
   const q = db('pagos').select('id, expediente_id, estado');
-  const { data } = await (pagoId ? q.eq('id', pagoId) : q.eq('transaction_ref', f.provider_payment_id)).limit(1).maybeSingle();
+  const { data, error } = await (pagoId ? q.eq('id', pagoId) : q.eq('transaction_ref', f.provider_payment_id)).limit(1).maybeSingle();
+  if (error) throw fromSupabaseError(error);
   return data as { id: string; expediente_id: string; estado: string } | null;
 }
 
@@ -493,6 +494,13 @@ export async function reembolsarEnMercadoPago(filaId: string, user: { id: string
  */
 export async function resolverReembolso(filaId: string, nota: string, user: { id: string; email?: string }, ip?: string) {
   const fila = await leerFila(filaId);
+  // Se decide ANTES de tomar la fila: si una lectura falla, la fila sigue
+  // abierta y se puede reintentar (no queda resuelta con el cobro sin tocar).
+  // El cobro pasa a reembolsado solo si es la evaluación de un estudio que no
+  // llegó al buró: si al final se consultó, la fila se cierra y el cobro queda.
+  const pago = await pagoDeLaFila(fila);
+  const devolvioLaEvaluacion =
+    !!pago && fila.motivo === 'estudio_cerrado_sin_consulta' && (await consultaDeLaFila(fila, pago)) !== 'si';
   const quien = user.email ?? user.id;
   const { data: tomada } = await db('pagos_no_conciliados')
     .update({
@@ -507,7 +515,6 @@ export async function resolverReembolso(filaId: string, nota: string, user: { id
   if (!(tomada as unknown[] | null)?.length) {
     throw AppError.conflict('Otro administrador ya está resolviendo este pago.', 'REEMBOLSO_EN_CURSO');
   }
-  const pago = await pagoDeLaFila(fila);
   logAudit({
     usuarioId: user.id,
     accion: AUDIT_ACTIONS.PAGO_REEMBOLSO_RESUELTO,
@@ -516,10 +523,6 @@ export async function resolverReembolso(filaId: string, nota: string, user: { id
     detalle: { pago_no_conciliado_id: fila.id, motivo: fila.motivo, nota },
     ip,
   });
-  // El cobro pasa a reembolsado solo si es la evaluación de un estudio que no
-  // llegó al buró: si al final se consultó, la fila se cierra y el cobro queda.
-  const devolvioLaEvaluacion =
-    !!pago && fila.motivo === 'estudio_cerrado_sin_consulta' && (await consultaDeLaFila(fila, pago)) !== 'si';
   const facturaNumero =
     pago && devolvioLaEvaluacion
       ? await reembolsarCobro(
