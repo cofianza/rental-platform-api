@@ -598,7 +598,7 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
   // Contratos activos (con sus moras activas) y evaluaciones del portafolio, en
   // paralelo y con el expediente embebido: antes eran 4 idas en serie.
   let conts: Array<{ valor_arriendo: number | string | null; moras_tickets: Array<{ reportado_at: string }> | null }> = [];
-  let ests: Array<{ resultado: string | null; score: number | null; created_at: string; fecha_completado: string | null }> = [];
+  let ests: Array<{ expediente_id: string; resultado: string | null; score: number | null; created_at: string; fecha_completado: string | null }> = [];
   let decisiones: UltimaDecision[] = [];
   if (inmuebleIds.length) {
     const [contRes, estRes, ultimas] = await Promise.all([
@@ -608,7 +608,7 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
         .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[])
         .in('moras_tickets.estado', ESTADOS_MORA_ACTIVA as unknown as string[]),
       (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
-        .select('resultado, score, created_at, fecha_completado, expedientes!inner(inmueble_id)')
+        .select('expediente_id, resultado, score, created_at, fecha_completado, expedientes!inner(inmueble_id)')
         .in('expedientes.inmueble_id', inmuebleIds)
         // Solo la del titular: la del coarrendatario es parte del mismo estudio
         // y sumaba un "estudio" más al total y al score.
@@ -663,7 +663,9 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
   return {
     salud: { contratosActivos, morosidadPct, moraActiva, diasPromedioMora, canonGestionado },
     estudios: {
-      total: ests.length,
+      // Estudios, no evaluaciones: la que se repitió (p. ej. tras fallar) cuenta
+      // una vez, en la misma unidad que los aprobados.
+      total: new Set(ests.map((e) => e.expediente_id)).size,
       aprobados: resumirDecisiones(decisiones).aprobados,
       scorePromedio: scoreN ? Math.round(scoreSum / scoreN) : null,
       decisiones30d: {

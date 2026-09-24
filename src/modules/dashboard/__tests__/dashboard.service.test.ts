@@ -210,6 +210,25 @@ describe('Dashboard Service', () => {
       expect(r.estudios).toMatchObject({ total: 1, scorePromedio: 800 });
     });
 
+    it('P26: «de N en total» cuenta estudios, como los aprobados (la evaluación repetida cuenta una vez)', async () => {
+      const hoy = new Date().toISOString();
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'expedientes') return createChain([{ id: 'e1' }]);
+        if (table === 'estudios') {
+          return createChain([
+            { expediente_id: 'e1', resultado: null, score: null, created_at: hoy, fecha_completado: null },
+            { expediente_id: 'e1', resultado: 'aprobado', score: 800, created_at: hoy, fecha_completado: hoy },
+            { expediente_id: 'e2', resultado: 'rechazado', score: 400, created_at: hoy, fecha_completado: hoy },
+          ]);
+        }
+        return createChain([]);
+      });
+
+      const r = await dashboardService.getMiCarteraAnalitica('p1');
+
+      expect(r.estudios.total).toBe(2);
+    });
+
     it('P26: la tasa usa la decisión efectiva, como el informe y el dashboard', async () => {
       const hace = (dias: number) => new Date(Date.now() - dias * 86_400_000).toISOString();
       const ev = (id: string, estado_nuevo: string, dias: number, estado: string) => ({
