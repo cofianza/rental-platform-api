@@ -483,7 +483,7 @@ describe('aceptarInvitacion — carrera del claim', () => {
       errorCode: 'COARRENDATARIO_INVITACION_NO_VIGENTE',
     });
     const updates = ops.filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
-    expect((updates.at(-1)!.args[0] as { estado: string }).estado).toBe('pendiente_aceptacion');
+    expect(updates.at(-1)!.args[0]).toMatchObject({ estado: 'pendiente_aceptacion', direccion: null, municipio: null });
     expect(ops.some((o) => o.table === 'autorizaciones_habeas_data' || o.table === 'estudios')).toBe(false);
   });
 });
@@ -1100,5 +1100,21 @@ describe('avisarCoarrendatarioDecision — decisión del analista', () => {
     expect(html).not.toContain('central de riesgo');
     expect(html).not.toContain('790');
     expect(html).toMatch(/15 días hábiles/);
+  });
+});
+
+// ============================================================
+// El correo de contacto sale de la configuración de la empresa, no fijo.
+// ============================================================
+
+describe('correo de contacto de la empresa', () => {
+  it('el mensaje del tope de invitaciones lo usa', async () => {
+    mockGetCompany.mockResolvedValueOnce({ email: 'soporte@cofianza.co' });
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: null, error: null, count: 5 });
+
+    await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('7654321'))).rejects.toMatchObject({
+      message: expect.stringContaining('soporte@cofianza.co'),
+    });
   });
 });

@@ -462,7 +462,7 @@ async function crearInvitacion(
   if (countError) throw fromSupabaseError(countError);
   if ((count ?? 0) >= MAX_INVITACIONES_POR_ESTUDIO) {
     throw AppError.conflict(
-      `Este estudio ya tuvo ${MAX_INVITACIONES_POR_ESTUDIO} invitaciones de co-arrendatario. Escríbenos a hola@cofianza.co si necesitas invitar a alguien más.`,
+      `Este estudio ya tuvo ${MAX_INVITACIONES_POR_ESTUDIO} invitaciones de co-arrendatario. Escríbenos a ${(await getCompany()).email} si necesitas invitar a alguien más.`,
       'COARRENDATARIO_TOPE_INVITACIONES',
     );
   }
@@ -881,6 +881,9 @@ async function revertirClaim(coaId: string): Promise<void> {
       aceptado_at: null,
       aceptado_ip: null,
       aceptado_user_agent: null,
+      // Los escribió el claim fallido (§8.7.2): no quedan a medias.
+      direccion: null,
+      municipio: null,
       updated_at: new Date().toISOString(),
     } as never)
     .eq('id', coaId)
