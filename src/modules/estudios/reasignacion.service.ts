@@ -409,11 +409,10 @@ async function assertExpedienteSinCitasVivas(
  * Regenera el certificado del estudio DESPUES del traslado, si habia uno.
  *
  * El PDF es inmutable y lleva impresos la direccion, el codigo y el canon del
- * inmueble ORIGEN; `verificarCertificado`, en cambio, deriva la propiedad de
- * `expedientes.inmueble_id` en tiempo de lectura. Sin esto, el MISMO codigo de
- * certificado describia dos propiedades distintas segun por donde se lo mirara
- * —el PDF una y el QR otra—, que es exactamente el aspecto de un documento
- * adulterado.
+ * inmueble ORIGEN: sin esto, el certificado seguia nombrando la propiedad
+ * anterior. `verificarCertificado` ya no muestra la propiedad (P10, sin
+ * direccion): del expediente solo lee el estado, para decir si el certificado
+ * sigue con efecto.
  *
  * Regenerar conserva `codigo` (sube `version`) y, como la vigencia esta anclada
  * en `estudios.fecha_completado`, reimprime el MISMO `fecha_vencimiento`: no se
