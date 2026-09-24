@@ -37,6 +37,9 @@ export const generarContratoSchema = z.object({
     municipio: z.string().optional(),
   }).optional(),
   servicios_reparto: z.record(z.string(), z.enum(['arrendatario', 'arrendador'])).optional(),
+  // P12: comisión de intermediación que fija la inmobiliaria en este contrato;
+  // 0 o vacía suprime la cláusula. Al propietario directo nunca se le imprime.
+  comision_pct: z.coerce.number().min(0, 'La comisión no puede ser negativa').max(100, 'La comisión no puede pasar de 100 %').optional(),
 });
 
 // ============================================================

@@ -73,6 +73,11 @@ vi.mock('@/modules/perfil-arrendador/perfil-arrendador.service', () => ({
 vi.mock('@/modules/estudios/coarrendatario-vinculado', () => ({
   coarrendatarioVinculado: (...args: unknown[]) => mockCoa(...args),
 }));
+vi.mock('@/modules/inmuebles/inmuebles.service', () => ({
+  reservarInmuebleParaContrato: vi.fn(async () => ({ reservado: true, ya_reservado: false, afectados: [] })),
+  liberarReservaDeExpediente: vi.fn(async () => true),
+}));
+vi.mock('@/lib/pdfRenderer', () => ({ renderHtmlToPdf: vi.fn(async () => Buffer.from('%PDF')) }));
 
 import { AppError } from '@/lib/errors';
 import { enviarContratoAFirma, generarContrato, previewPlantillaParaInmueble } from '../contratos.service';
@@ -285,5 +290,53 @@ describe('P42: cuota de administración en el contrato viejo', () => {
   it('sin cuota registrada dice solo quién la paga; sin propiedad horizontal, no aplica', async () => {
     expect(await cargo({ propiedad_horizontal: true, administracion: null })).toBe('A cargo del arrendatario');
     expect(await cargo({ propiedad_horizontal: false, administracion: 0 })).toBe('No aplica');
+  });
+});
+
+describe('P12: comisión de intermediación por contrato', () => {
+  /** Genera hasta guardar el contrato y devuelve el snapshot (datos_variables) que se insertó. */
+  async function generarYLeerSnapshot(arrendador: Record<string, unknown>, comision_pct?: number) {
+    const { supabase } = await import('@/lib/supabase');
+    vi.mocked(supabase.storage.from).mockReturnValue({ upload: async () => ({ error: null }) } as never);
+    mockCompletitud.mockResolvedValue({ completo: true, faltantes: [], rol: arrendador.rol });
+    enqueue('expedientes', expediente());
+    enqueue('perfiles', { data: arrendador, error: null });
+    enqueue(
+      'contratos',
+      { data: [], error: null }, // sin contrato V3
+      { data: { id: 'cto-nuevo' }, error: null }, // insert
+      { data: null, error: null }, // storage_key
+      { data: { id: 'cto-nuevo', _scope: {} }, error: null }, // getContratoById
+    );
+    enqueue('plantillas_contrato', {
+      data: { id: 'pl-1', nombre: 'V4', contenido: null, contenido_html: '<p>{{inmobiliaria.comision_porcentaje}}</p>', variables: [], activa: true, version: 1 },
+      error: null,
+    });
+    await generar(comision_pct === undefined ? {} : { comision_pct });
+    const insert = ops.find((o) => o.table === 'contratos' && o.method === 'insert');
+    return (insert?.args[0] as { datos_variables: { inmobiliaria: { comision_porcentaje: string }; config: { comision_porcentaje: number } } })
+      .datos_variables;
+  }
+
+  const INMOBILIARIA = { id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'inmobiliaria', matricula_arrendador: 'M-77', matricula_expedida_por: 'Alcaldía' };
+
+  it('la inmobiliaria pone su porcentaje en el contrato (no el 20 % global)', async () => {
+    const dv = await generarYLeerSnapshot(INMOBILIARIA, 8.5);
+    expect(dv.inmobiliaria.comision_porcentaje).toBe('8,5%');
+    expect(dv.config.comision_porcentaje).toBe(8.5);
+    const claves = ops.filter((o) => o.table === 'configuracion_sistema' && o.method === 'in').map((o) => o.args[1]);
+    expect(claves.flat()).not.toContain('comision_intermediacion_porcentaje');
+  });
+
+  it('sin porcentaje, o en 0, la cláusula queda vacía (se suprime)', async () => {
+    expect((await generarYLeerSnapshot(INMOBILIARIA)).inmobiliaria.comision_porcentaje).toBe('');
+    ops.length = 0;
+    expect((await generarYLeerSnapshot(INMOBILIARIA, 0)).inmobiliaria.comision_porcentaje).toBe('');
+  });
+
+  it('el propietario directo nunca la lleva, aunque llegue un porcentaje', async () => {
+    const dv = await generarYLeerSnapshot({ id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'propietario' }, 10);
+    expect(dv.inmobiliaria.comision_porcentaje).toBe('');
+    expect(dv.config.comision_porcentaje).toBe(0);
   });
 });

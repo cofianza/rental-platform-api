@@ -710,21 +710,27 @@ async function buildContratoContext(
   // reparto de servicios). Opcional para no romper los otros callers.
   // `tarifas`: comisión mensual y prima (Adenda 1 §5 / Adenda 2 §6); sin ellas
   // (vista previa) el contrato muestra marcadores.
-  opts?: { modalidad?: ModalidadFianza | null; expediente?: Record<string, unknown>; tarifas?: Tarifas | null },
+  // `comisionPct`: comisión de intermediación de este contrato (P12).
+  opts?: {
+    modalidad?: ModalidadFianza | null;
+    expediente?: Record<string, unknown>;
+    tarifas?: Tarifas | null;
+    comisionPct?: number | null;
+  },
 ): Promise<Record<string, unknown>> {
   const { arrendador, solicitante, inmueble, coarrendatario } = data;
   const fechaFin = addMonths(fechaInicio, duracionMeses);
   const ahora = new Date();
   const monto = Number(inmueble.valor_arriendo) || 0;
 
-  const cfg = await getConfigValores([
-    'valor_afianzamiento_mensual',
-    'comision_intermediacion_porcentaje',
-  ]);
+  const cfg = await getConfigValores(['valor_afianzamiento_mensual']);
   const afianzamiento = Number(cfg.valor_afianzamiento_mensual) || 20000;
-  const comisionPct = Number(cfg.comision_intermediacion_porcentaje) || 20;
 
   const esInmobiliaria = arrendador?.rol === 'inmobiliaria';
+  // P12 (V3 §8.3.6; Adenda 1 contratos §3.6.5): la comisión la fija cada
+  // inmobiliaria en el contrato; 0 o vacía suprime la cláusula (vacío en la
+  // plantilla) y el propietario directo nunca la cobra.
+  const comisionPct = esInmobiliaria ? Number(opts?.comisionPct) || 0 : 0;
 
   // Propiedad horizontal: explícito en el inmueble, o heurística (paga admin).
   // Se reutiliza para el booleano (plantilla V2) y para el texto Sí/No (V4).
@@ -855,7 +861,7 @@ async function buildContratoContext(
       cuenta_titular_nombre: arrendador?.cuenta_recaudo_titular_nombre || razonSocialArrendador,
       whatsapp_cartera: arrendador?.whatsapp_recaudo || '',
       correo_cartera: arrendador?.email_recaudo || '',
-      comision_porcentaje: `${comisionPct}%`,
+      comision_porcentaje: comisionPct > 0 ? `${comisionPct.toLocaleString('es-CO', { maximumFractionDigits: 2 })}%` : '',
       logo_url: esInmobiliaria ? (logoUrl || '') : '',
     },
     arrendatario: {
@@ -2200,6 +2206,7 @@ export async function generarContrato(
       modalidad,
       expediente: expRecord,
       tarifas: await tarifasParaContrato(expedienteId),
+      comisionPct: input.comision_pct,
     });
 
     // 4.1e: solo el contexto derivado del expediente/inmueble, sin overrides
@@ -2883,6 +2890,8 @@ export async function regenerarContrato(
     modalidad: modalidadRegen,
     expediente: expRecordRegen,
     tarifas: await tarifasParaContrato(row.expediente_id),
+    // P12: se conserva la comisión con que se generó.
+    comisionPct: Number((row.datos_variables as { config?: { comision_porcentaje?: unknown } } | null)?.config?.comision_porcentaje) || 0,
   });
   // 4.1e: solo el contexto derivado del expediente/inmueble; sin overrides
   // libres (el escape hatch `variables` se eliminó para no poder alterar la
