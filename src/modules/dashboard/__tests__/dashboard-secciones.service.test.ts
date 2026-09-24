@@ -176,12 +176,10 @@ describe('listInquilinos()', () => {
 
   it('mapea los campos nuevos del solicitante y marca al_dia sin mora', async () => {
     byTable({
-      contratos: { data: [contratoConSolicitante] },
+      // Contrato anterior: el coarrendatario es el que imprimió (datos_variables).
+      contratos: { data: [{ ...contratoConSolicitante, coa_anidado: { nombre_completo: 'Pedro Gómez' } }] },
       estudios: { data: [{ expediente_id: 'e1', score: 80, resultado: 'aprobado', created_at: '2026-01-01' }] },
       moras_tickets: { data: [] },
-      expediente_coarrendatarios: {
-        data: [{ expediente_id: 'e1', nombre: 'Pedro', apellido: 'Gómez', estudios: { estado: 'completado', resultado: 'aprobado' } }],
-      },
     });
 
     const rows = await secciones.listInquilinos();
@@ -225,17 +223,19 @@ describe('listInquilinos()', () => {
     expect(estudiosChain!.neq).toHaveBeenCalledWith('resultado', 'pendiente');
   });
 
-  it('P2: un coarrendatario con la evaluación rechazada no figura (no está en el contrato)', async () => {
+  it('P2: figura el coarrendatario que está en el contrato, no el invitado que quedó fuera', async () => {
     byTable({
-      contratos: { data: [contratoConSolicitante] },
+      // Contrato anterior sin coarrendatario y uno V3 con él en sus partes.
+      contratos: { data: [contratoConSolicitante, { ...contratoConSolicitante, id: 'c2', destinacion: 'vivienda' }] },
       estudios: { data: [] },
       moras_tickets: { data: [] },
-      expediente_coarrendatarios: {
-        data: [{ expediente_id: 'e1', nombre: 'Pedro', apellido: 'Gómez', estudios: { estado: 'completado', resultado: 'rechazado' } }],
-      },
+      contrato_partes: { data: [{ contrato_id: 'c2', nombre: 'Luis Gómez' }] },
+      expediente_coarrendatarios: { data: [{ expediente_id: 'e1', nombre: 'Pedro', apellido: 'Gómez' }] },
     });
 
-    expect((await secciones.listInquilinos())[0].coarrendatario).toBeNull();
+    const rows = await secciones.listInquilinos();
+    expect(rows.find((r) => r.contratoId === 'c1')?.coarrendatario).toBeNull();
+    expect(rows.find((r) => r.contratoId === 'c2')?.coarrendatario).toBe('Luis Gómez');
   });
 
   it('marca pago=mora cuando el contrato tiene mora activa', async () => {

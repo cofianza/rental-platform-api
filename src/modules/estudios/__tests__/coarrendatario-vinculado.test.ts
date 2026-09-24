@@ -10,8 +10,10 @@ const { mockFrom, enqueue, queues } = vi.hoisted(() => {
   const next = (table: string): Res => queues.get(table)?.shift() ?? { data: null, error: null };
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'eq', 'in', 'order', 'limit']) chain[m] = () => chain;
+    for (const m of ['select', 'eq', 'in', 'not', 'order', 'limit']) chain[m] = () => chain;
     chain.maybeSingle = async () => next(table);
+    chain.then = (resolve: (v: Res) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(next(table)).then(resolve, reject);
     return chain;
   };
   return {
@@ -50,6 +52,35 @@ describe('coarrendatarioVinculado — P2', () => {
     enqueue('estudios_scorecard_sombra', { data: { puntaje_normalizado: '82.5' }, error: null });
 
     expect(await coarrendatarioVinculado(EXP)).toEqual({ id: 'coa-1', nombre: 'Luis', estudioId: 'est-coa', puntaje: 82.5 });
+  });
+
+  // Revisión 2026-09-24 (plata): un contrato fijo sin él manda sobre la evaluación.
+  const cuenta = () => {
+    enqueue('expediente_coarrendatarios', fila);
+    enqueue('estudios', { data: { estado: 'completado', resultado: 'aprobado' }, error: null });
+  };
+
+  it.each([
+    ['anterior vivo que no lo imprimió', [{ id: 'c1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], []],
+    ['V3 enviado a firma sin él en sus partes', [{ id: 'c3', estado: 'pendiente_firma', destinacion: 'vivienda' }], []],
+  ])('contrato %s: no cuenta aunque su evaluación terminó bien', async (_, contratos, partes) => {
+    enqueue('contratos', { data: contratos, error: null });
+    enqueue('contrato_partes', { data: partes, error: null });
+    cuenta();
+
+    expect(await coarrendatarioVinculado(EXP)).toBeNull();
+  });
+
+  it.each([
+    ['borrador V3 (se regenera con lo vivo)', [{ id: 'c3', estado: 'borrador', destinacion: 'vivienda' }], []],
+    ['V3 en firma con él en sus partes', [{ id: 'c3', estado: 'pendiente_firma', destinacion: 'vivienda' }], [{ contrato_id: 'c3' }]],
+    ['anterior que sí lo imprimió', [{ id: 'c1', estado: 'vigente', destinacion: null, coa_anidado: { nombre_completo: 'Luis Gómez' } }], []],
+  ])('contrato %s: sigue la regla de su evaluación', async (_, contratos, partes) => {
+    enqueue('contratos', { data: contratos, error: null });
+    enqueue('contrato_partes', { data: partes, error: null });
+    cuenta();
+
+    expect(await coarrendatarioVinculado(EXP)).toMatchObject({ id: 'coa-1' });
   });
 
   it('un error de lectura es «solo»; en modo estricto se propaga', async () => {

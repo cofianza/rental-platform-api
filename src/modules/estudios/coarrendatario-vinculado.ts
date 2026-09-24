@@ -61,9 +61,51 @@ export function evaluacionCuenta(
   return estudio?.estado === 'completado' && (estudio.resultado === 'aprobado' || estudio.resultado === 'condicionado');
 }
 
+/** Nombre del coarrendatario que imprimio un contrato anterior (V4 anidado o V2 plano), o null. */
+export function coarrendatarioImpreso(anidado: unknown, plano: unknown): string | null {
+  const n = (anidado as { nombre_completo?: unknown } | null)?.nombre_completo;
+  if (typeof n === 'string' && n.trim()) return n.trim();
+  return typeof plano === 'string' && plano.trim() ? plano.trim() : null;
+}
+
+/**
+ * P2 + contrato (plata): si el estudio ya tiene un contrato FIJO —el anterior
+ * ya generado o el V3 que salio de borrador, sin cancelar ni terminar— que no
+ * lleva al coarrendatario, manda el contrato: una evaluacion que termina
+ * despues no lo mete (ni prima del 10 % ni CRC). Para meterlo se cancela ese
+ * contrato y se genera otro. El borrador V3 no fija nada: se regenera con lo
+ * vivo. Lanza si no puede leer.
+ */
+export async function contratoFijoSinCoarrendatario(expedienteId: string): Promise<boolean> {
+  const { data, error } = await db('contratos')
+    .select('id, estado, destinacion, coa_anidado:datos_variables->coarrendatario, coa_plano:datos_variables->>coarrendatario_nombre')
+    .eq('expediente_id', expedienteId)
+    .not('estado', 'in', '(cancelado,finalizado)');
+  if (error) throw new Error(error.message);
+  const fijos = ((data ?? []) as Array<{
+    id: string;
+    estado: string;
+    destinacion: string | null;
+    coa_anidado: unknown;
+    coa_plano: unknown;
+  }>).filter((c) => !c.destinacion || c.estado !== 'borrador');
+  if (fijos.some((c) => !c.destinacion && !coarrendatarioImpreso(c.coa_anidado, c.coa_plano))) return true;
+
+  const v3 = fijos.filter((c) => c.destinacion).map((c) => c.id);
+  if (v3.length === 0) return false;
+  const { data: partes, error: partesError } = await db('contrato_partes')
+    .select('contrato_id')
+    .in('contrato_id', v3)
+    .eq('rol', 'coarrendatario');
+  if (partesError) throw new Error(partesError.message);
+  const conCoa = new Set(((partes ?? []) as Array<{ contrato_id: string }>).map((x) => x.contrato_id));
+  return v3.some((id) => !conCoa.has(id));
+}
+
 /**
  * El coarrendatario que cuenta en el expediente: acepto la invitacion (tiene
- * su propia autorizacion y su estudio) y su evaluacion cuenta (evaluacionCuenta).
+ * su propia autorizacion y su estudio), su evaluacion cuenta (evaluacionCuenta)
+ * y ningun contrato fijo va sin el (contratoFijoSinCoarrendatario).
  * Best-effort: ante un error de lectura devuelve null (= "solo"), la cifra
  * conservadora, y lo deja en el log; con `estricto` lanza el error, para quien
  * necesita distinguir "no hay" de "no se pudo leer".
@@ -73,6 +115,8 @@ export async function coarrendatarioVinculado(
   opts: { estricto?: boolean } = {},
 ): Promise<CoarrendatarioVinculado | null> {
   try {
+    if (await contratoFijoSinCoarrendatario(expedienteId)) return null;
+
     const { data, error } = await db('expediente_coarrendatarios')
       .select('id, nombre, estudio_id')
       .eq('expediente_id', expedienteId)

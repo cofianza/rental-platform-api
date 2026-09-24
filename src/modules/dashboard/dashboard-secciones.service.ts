@@ -13,7 +13,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { conFinVigente } from '@/modules/contratos/v3/formato';
-import { ESTADOS_VINCULADO, evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
+import { coarrendatarioImpreso } from '@/modules/estudios/coarrendatario-vinculado';
 import { resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
 import {
   countVitrinaVisitasMes,
@@ -194,6 +194,9 @@ interface ContratoRowDB {
   duracion_meses: number | null;
   motivo_cancelacion: string | null;
   expediente_id: string;
+  /** Solo INQUILINO_SELECT: el coarrendatario que imprimió un contrato anterior. */
+  coa_anidado?: unknown;
+  coa_plano?: unknown;
   expedientes: {
     id: string;
     ciudad?: string | null;
@@ -272,28 +275,26 @@ async function fetchContratoIdsConMora(contratoIds: string[]): Promise<Set<strin
   return out;
 }
 
-// Mapa expediente_id → nombre del coarrendatario que cuenta (P2: aceptó y su
-// evaluación terminó sin salir rechazada). Uno que declinó o salió rechazado
-// no está en el contrato.
-async function fetchCoarrendatariosPorExpediente(expedienteIds: string[]): Promise<Map<string, string>> {
+// Mapa contrato_id → nombre del coarrendatario QUE ESTÁ EN EL CONTRATO: en el V3,
+// sus partes; en el anterior, lo que imprimió. Quien declinó, salió rechazado o
+// terminó su evaluación después de generar el contrato no figura (P2).
+async function fetchCoarrendatariosPorContrato(rows: ContratoRowDB[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  if (expedienteIds.length === 0) return out;
+  for (const r of rows) {
+    const nombre = r.destinacion ? null : coarrendatarioImpreso(r.coa_anidado, r.coa_plano);
+    if (nombre) out.set(r.id, nombre);
+  }
+  const v3 = rows.filter((r) => r.destinacion).map((r) => r.id);
+  if (v3.length === 0) return out;
   const { data, error } = await (
-    supabase.from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>
+    supabase.from('contrato_partes' as string) as ReturnType<typeof supabase.from>
   )
-    .select('expediente_id, nombre, apellido, estudios(estado, resultado)')
-    .in('expediente_id', expedienteIds)
-    .in('estado', ESTADOS_VINCULADO);
+    .select('contrato_id, nombre')
+    .in('contrato_id', v3)
+    .eq('rol', 'coarrendatario');
   if (error) throw fromSupabaseError(error);
-  for (const c of (data ?? []) as Array<{
-    expediente_id: string;
-    nombre: string | null;
-    apellido: string | null;
-    estudios: { estado: string | null; resultado: string | null } | null;
-  }>) {
-    if (evaluacionCuenta(c.estudios) && !out.has(c.expediente_id)) {
-      out.set(c.expediente_id, `${c.nombre ?? ''} ${c.apellido ?? ''}`.trim());
-    }
+  for (const p of (data ?? []) as Array<{ contrato_id: string; nombre: string | null }>) {
+    if (p.nombre && !out.has(p.contrato_id)) out.set(p.contrato_id, p.nombre);
   }
   return out;
 }
@@ -350,6 +351,7 @@ const CONTRATO_SELECT =
 // Variante con datos extra del solicitante (ficha de detalle en Inquilinos).
 const INQUILINO_SELECT =
   'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, motivo_cancelacion, expediente_id, ' +
+  'coa_anidado:datos_variables->coarrendatario, coa_plano:datos_variables->>coarrendatario_nombre, ' +
   'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(' +
   'nombre, apellido, numero_documento, telefono, email, ocupacion, actividad_economica, ingresos_mensuales, empresa, tipo_persona))';
 
@@ -394,7 +396,7 @@ export async function listInquilinos(): Promise<InquilinoRow[]> {
   const [estudios, conMora, coarr] = await Promise.all([
     fetchEstudiosPorExpediente(expedienteIds),
     fetchContratoIdsConMora(contratoIds),
-    fetchCoarrendatariosPorExpediente(expedienteIds),
+    fetchCoarrendatariosPorContrato(rows),
   ]);
 
   const now = new Date();
@@ -402,7 +404,7 @@ export async function listInquilinos(): Promise<InquilinoRow[]> {
     const sol = r.expedientes?.solicitantes ?? null;
     const inm = r.expedientes?.inmuebles ?? null;
     const est = estudios.get(r.expediente_id);
-    const coa = coarr.get(r.expediente_id);
+    const coa = coarr.get(r.id);
     return {
       contratoId: r.id,
       expedienteId: r.expediente_id,

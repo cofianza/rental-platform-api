@@ -697,9 +697,44 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
 
     expect(ops.some((o) => o.table === 'eventos_timeline')).toBe(false);
     expect(mockNotificarUsuario).not.toHaveBeenCalled();
-    expect(mockEmitirCrc).toHaveBeenCalledWith(TITULAR_ESTUDIO_ID, GESTOR_ID, { regenerar: true });
+    // Sin contrato generado todavía: el CRC se regenera con el acompañante.
+    await vi.waitFor(() => expect(mockEmitirCrc).toHaveBeenCalledWith(TITULAR_ESTUDIO_ID, GESTOR_ID, { regenerar: true }));
     await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
     expect((mockResendSend.mock.calls[0] as unknown as [{ subject: string }])[0].subject).toContain('se aprobó');
+  });
+
+  it('con un contrato ya generado sin él: no regenera el CRC, avisa al gestor y al co-arrendatario le dice que no hace parte', async () => {
+    enqueue('estudios', coaEstudio('aprobado'), titularCondicionado);
+    enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
+    enqueue('expedientes', ctxRow('aprobado'));
+    // Contrato anterior vivo, generado sin coarrendatario.
+    enqueue('contratos', { data: [{ id: 'cto-1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null });
+    encolarAvisoCoa('aprobado', 'aprobado');
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
+    expect(mockEmitirCrc).not.toHaveBeenCalled();
+    expect(mockNotificarUsuario).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: PROPIETARIO_ID, mensaje: expect.stringContaining('cancela el contrato y genera uno nuevo') }),
+    );
+    const { html } = (mockResendSend.mock.calls[0] as unknown as [{ html: string }])[0];
+    expect(html).toContain('no haces parte');
+    expect(html).not.toContain('Buenas noticias');
+  });
+
+  it('estudio cerrado mientras se evaluaba: el co-arrendatario recibe el correo de cierre', async () => {
+    enqueue('estudios', coaEstudio('aprobado'), titularCondicionado);
+    enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
+    enqueue('expedientes', ctxRow('cerrado'));
+    encolarAvisoCoa('aprobado', 'cerrado');
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
+    const { subject } = (mockResendSend.mock.calls[0] as unknown as [{ subject: string }])[0];
+    expect(subject).toContain('Se cerró el estudio');
+    expect(mockEmitirCrc).not.toHaveBeenCalled();
   });
 
   it('regla dura (listas) después de aprobar: la aprobación se mantiene, queda fuera y se avisa a los analistas', async () => {
@@ -953,6 +988,33 @@ describe('construirCorreoCoarrendatario', () => {
     expect(html).toContain('no podemos respaldarte como co-arrendatario');
     expect(html).not.toContain('720');
     expect(html).toMatch(APELACION);
+  });
+
+  it('cierre sin decidir: no es una decisión sobre él (sin apelación); con su evaluación aprobada ve su score', () => {
+    const { subject, html } = construirCorreoCoarrendatario({ ...base, coarrendatarioResultado: 'aprobado', decisionExpediente: 'cerrado' });
+    expect(subject).toContain('Se cerró el estudio');
+    expect(html).toContain('No es una decisión sobre ti');
+    expect(html).toContain('720');
+    expect(html).not.toMatch(APELACION);
+  });
+
+  it('cierre con su evaluación no aprobada: sin score y con la apelación', () => {
+    const { html } = construirCorreoCoarrendatario({ ...base, coarrendatarioResultado: 'rechazado', decisionExpediente: 'cerrado' });
+    expect(html).not.toContain('720');
+    expect(html).toMatch(APELACION);
+  });
+
+  it('aprobado con el contrato ya generado sin él: no le dice que se aprobó con él ni le da score', () => {
+    const { subject, html } = construirCorreoCoarrendatario({
+      ...base,
+      coarrendatarioResultado: 'condicionado',
+      decisionExpediente: 'aprobado',
+      contratoSinEl: true,
+    });
+    expect(subject).not.toMatch(/aprob/i);
+    expect(html).toContain('no haces parte');
+    expect(html).not.toContain('720');
+    expect(html).not.toMatch(APELACION);
   });
 
   it('su evaluación aprobada aunque el estudio no: ve su score, sin apelación', () => {

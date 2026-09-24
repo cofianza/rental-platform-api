@@ -516,22 +516,40 @@ describe('obtenerEstado', () => {
     expect(e).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 
-  it('P2: coarrendatario aceptado con la evaluación rechazada no entra al contrato (tarifa «solo», sin bloqueo)', async () => {
-    encolarCarga();
+  const conCoa = (estado: string, estudio: { estado: string; resultado: string }) => {
     queues.set('expediente_coarrendatarios', [
       {
         data: {
           id: 'coa-1', nombre: 'Luis', apellido: 'Gómez', tipo_documento: 'cc', numero_documento: '7654321',
-          email: 'luis@correo.co', telefono: '3005556677', estado: 'estudio_completado', estudio_id: 'est-coa',
+          email: 'luis@correo.co', telefono: '3005556677', estado, estudio_id: 'est-coa',
           direccion: null, municipio: null,
         },
         error: null,
       },
     ]);
     // Segunda lectura de estudios: la del coarrendatario (la primera es la del titular).
-    enqueue('estudios', { data: { estado: 'completado', resultado: 'rechazado' }, error: null });
+    enqueue('estudios', { data: estudio, error: null });
+  };
+
+  it('P2: coarrendatario aceptado con la evaluación rechazada no entra al contrato (tarifa «solo», sin bloqueo)', async () => {
+    encolarCarga();
+    conCoa('estudio_completado', { estado: 'completado', resultado: 'rechazado' });
     const e = await obtener();
     expect(e.bloqueos).toEqual([]);
+  });
+
+  it('P2: coarrendatario con la evaluación en curso tampoco (ni bloqueo «sin evaluar» ni 503)', async () => {
+    encolarCarga();
+    conCoa('aceptado', { estado: 'en_proceso', resultado: 'pendiente' });
+    const e = await obtener();
+    expect(e.bloqueos).toEqual([]);
+  });
+
+  it('con un contrato anterior vivo que va sin él: sale su bloqueo, no un 503 por la tarifa', async () => {
+    encolarCarga({ contratos: [fila({ id: 'ant-1', destinacion: null, datos_variables: { coarrendatario: null } })] });
+    conCoa('estudio_completado', { estado: 'completado', resultado: 'aprobado' });
+    const e = await obtener();
+    expect(e.bloqueos.map((b) => b.codigo)).toContain('CONTRATO_YA_EXISTE');
   });
 });
 

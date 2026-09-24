@@ -94,6 +94,7 @@ import {
 } from '../expediente-workflow.service';
 import { transitionBodySchema } from '../expediente-workflow.schema';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { avisarCoarrendatarioDecision } from '@/modules/coarrendatarios/coarrendatarios.service';
 
 // Helpers
 const adminUser: AuthUser = { id: 'admin-uuid', email: 'admin@test.com', rol: 'administrador', activo: true };
@@ -456,6 +457,8 @@ describe('expediente-workflow.service', () => {
       );
       await vi.waitFor(() => expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'cancelado'));
       expect(mockAvisarSolicitante).not.toHaveBeenCalled();
+      // El co-arrendatario ya evaluado recibe su correo de cierre.
+      await vi.waitFor(() => expect(avisarCoarrendatarioDecision).toHaveBeenCalledWith('exp-uuid', 'cerrado'));
     });
   });
 

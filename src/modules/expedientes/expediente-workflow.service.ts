@@ -319,6 +319,10 @@ export async function executeTransition(
       void import('./expediente-habilitacion.service')
         .then((m) => m.avisarDuenoDecisionRevisionManual(expedienteId, 'cancelado'))
         .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al dueño'));
+      // El co-arrendatario ya evaluado también se entera del cierre.
+      void import('@/modules/coarrendatarios/coarrendatarios.service')
+        .then((m) => m.avisarCoarrendatarioDecision(expedienteId, 'cerrado'))
+        .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al coarrendatario'));
     }
 
     logAudit({

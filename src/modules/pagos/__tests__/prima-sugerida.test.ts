@@ -13,7 +13,7 @@ const { mockFrom, ops, queues, enqueue, mockTarifasParaContrato } = vi.hoisted((
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'eq', 'neq', 'in', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'eq', 'neq', 'in', 'not', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -106,6 +106,21 @@ describe('getPrimaSugerida', () => {
   it('coarrendatario aceptado con la evaluación rechazada: sugiere el 20 %', async () => {
     enqueue('expediente_coarrendatarios', { data: { id: 'coa-1', nombre: 'Luis', estudio_id: 'est-coa' }, error: null });
     enqueue('estudios', { data: { estado: 'completado', resultado: 'rechazado' }, error: null });
+
+    const r = await getPrimaSugerida(EXP, 'op-1', 'operador_analista');
+
+    expect(r.sin_sugerencia).toBeNull();
+    expect(r.prima_vinculacion_pct).toBe(20);
+  });
+
+  it('con un contrato ya generado sin él manda el contrato: 20 % aunque su evaluación terminó bien', async () => {
+    enqueue(
+      'contratos',
+      { data: { valor_arriendo: '1600000.00' }, error: null },
+      { data: [{ id: 'c1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null },
+    );
+    enqueue('expediente_coarrendatarios', { data: { id: 'coa-1', nombre: 'Luis', estudio_id: 'est-coa' }, error: null });
+    enqueue('estudios', { data: { estado: 'completado', resultado: 'aprobado' }, error: null });
 
     const r = await getPrimaSugerida(EXP, 'op-1', 'operador_analista');
 

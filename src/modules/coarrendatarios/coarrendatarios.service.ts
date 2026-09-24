@@ -48,7 +48,7 @@ import {
 } from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
 import { ponderarConCoarrendatario } from './ponderacion';
-import { evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
+import { evaluacionCuenta, contratoFijoSinCoarrendatario } from '@/modules/estudios/coarrendatario-vinculado';
 import type {
   InvitarCoarrendatarioInput,
   AceptarCoarrendatarioInput,
@@ -1401,7 +1401,7 @@ export async function onCoarrendatarioEstudioCompletado(
     // no hay revisión que avisar (ni timeline ni «sigue en revisión»).
     const ctxSin = await fetchExpedienteCtx(est.expediente_id);
     if (ctxSin.estado !== 'condicionado') {
-      decisionYaTomada(ctxSin, titular.id, est, coa?.id, reglasDurasCoa);
+      decisionYaTomada(ctxSin, titular.id, est, coa, reglasDurasCoa);
       return;
     }
 
@@ -1556,7 +1556,7 @@ export async function onCoarrendatarioEstudioCompletado(
       { expedienteId: est.expediente_id, estudioId },
       'Ponderación coarrendatario: el estudio ya no estaba condicionado — se omiten los efectos',
     );
-    decisionYaTomada(await fetchExpedienteCtx(est.expediente_id), titular.id, est, coa?.id, reglasDurasCoa);
+    decisionYaTomada(await fetchExpedienteCtx(est.expediente_id), titular.id, est, coa, reglasDurasCoa);
     return;
   }
 
@@ -1697,20 +1697,27 @@ export async function onCoarrendatarioEstudioCompletado(
 /**
  * P3 (2026-09-24): el estudio se decidió por otra vía (el analista, un cierre)
  * mientras se evaluaba al co-arrendatario. La decisión se mantiene y el
- * co-arrendatario recibe la real. Sobre un estudio aprobado:
+ * co-arrendatario recibe la real (también el cierre). Sobre un estudio aprobado:
  *  - con regla dura (p. ej. listas) queda fuera (P2: ni CRC ni contrato, prima
  *    20 %) y se avisa a los analistas, que la revierten con «Cambiar estado»
  *    antes de la firma si hace falta;
- *  - si su evaluación cuenta, el CRC se regenera con el acompañante.
+ *  - si su evaluación cuenta, el CRC se regenera con el acompañante, salvo que
+ *    ya haya un contrato generado sin él: ese manda (plata) y se le avisa al
+ *    gestor que, si debe entrar, cancele el contrato y genere otro.
  * Fire-and-forget: nunca lanza.
  */
 function decisionYaTomada(
   ctx: ExpedienteCtx,
   titularEstudioId: string,
   estudioCoa: { estado: string; resultado: string },
-  coaId: string | undefined,
+  coa: { id: string; nombre: string } | null,
   reglasDurasCoa: readonly ReglaDuraActiva[],
 ): void {
+  const avisarCoa = (contratoSinEl = false) =>
+    ctx.estado === 'aprobado' || ctx.estado === 'rechazado' || ctx.estado === 'cerrado'
+      ? avisarCoarrendatarioDecision(ctx.id, ctx.estado, { reglasDuras: reglasDurasCoa, contratoSinEl })
+      : Promise.resolve();
+
   if (ctx.estado === 'aprobado' && reglasDurasCoa.length > 0) {
     void (async () => {
       const { listOperators } = await import('@/modules/users/users.service');
@@ -1726,19 +1733,50 @@ function decisionYaTomada(
               'La aprobación se mantiene y el co-arrendatario queda fuera: no va al CRC ni al contrato y la prima es del 20 %. ' +
               'Si hay que revertirla, usa «Cambiar estado» antes de la firma.',
             link: `/expedientes/${ctx.id}`,
-            payload: { expediente_id: ctx.id, via: 'coarrendatario_regla_dura_tras_aprobacion', coarrendatario_id: coaId },
+            payload: { expediente_id: ctx.id, via: 'coarrendatario_regla_dura_tras_aprobacion', coarrendatario_id: coa?.id },
           }),
         ),
       );
     })().catch((e) => logger.warn({ error: e, expedienteId: ctx.id }, 'Error avisando a analistas: regla dura del co-arrendatario tras aprobar'));
-  } else if (ctx.estado === 'aprobado' && evaluacionCuenta(estudioCoa)) {
-    emitirCertificadoAutomatico(titularEstudioId, ctx.creado_por, { regenerar: true }).catch((e) =>
-      logger.warn({ error: e, expedienteId: ctx.id }, 'No se pudo regenerar el CRC con el co-arrendatario'),
+    void avisarCoa();
+    return;
+  }
+
+  if (ctx.estado === 'aprobado' && evaluacionCuenta(estudioCoa)) {
+    void contratoFijoSinCoarrendatario(ctx.id)
+      .then(async (sinEl) => {
+        if (sinEl) avisarContratoSinCoarrendatario(ctx, coa);
+        else await emitirCertificadoAutomatico(titularEstudioId, ctx.creado_por, { regenerar: true });
+        await avisarCoa(sinEl);
+      })
+      .catch((e) =>
+        logger.warn({ error: e, expedienteId: ctx.id }, 'No se pudo resolver el co-arrendatario evaluado tras la aprobación'),
+      );
+    return;
+  }
+
+  void avisarCoa();
+}
+
+/** Al gestor (dueño y responsable): el contrato ya salió sin el co-arrendatario evaluado. */
+function avisarContratoSinCoarrendatario(ctx: ExpedienteCtx, coa: { id: string; nombre: string } | null): void {
+  const aviso = {
+    tipo: 'coarrendatario.rechazo',
+    titulo: 'Co-arrendatario evaluado después del contrato',
+    mensaje:
+      `La evaluación de ${coa?.nombre || 'el co-arrendatario'} terminó después de generar el contrato del estudio ${ctx.numero}, que va sin él (prima del 20 %). ` +
+      'Si debe entrar, cancela el contrato y genera uno nuevo.',
+    link: `/expedientes/${ctx.id}`,
+    payload: { expediente_id: ctx.id, via: 'coarrendatario_fuera_del_contrato', coarrendatario_id: coa?.id },
+  };
+  if (ctx.inmueble_propietario_id) {
+    notificarUsuario({ userId: ctx.inmueble_propietario_id, ...aviso }).catch((e) =>
+      logger.warn({ error: e, expedienteId: ctx.id }, 'Error avisando al dueño: co-arrendatario fuera del contrato'),
     );
   }
-  if (ctx.estado === 'aprobado' || ctx.estado === 'rechazado') {
-    void avisarCoarrendatarioDecision(ctx.id, ctx.estado, reglasDurasCoa);
-  }
+  notificarResponsableExpediente({ expedienteId: ctx.id, excluirPerfilId: ctx.inmueble_propietario_id, ...aviso }).catch((e) =>
+    logger.warn({ error: e, expedienteId: ctx.id }, 'Error avisando al responsable: co-arrendatario fuera del contrato'),
+  );
 }
 
 /**
@@ -1753,8 +1791,13 @@ function decisionYaTomada(
  */
 export async function avisarCoarrendatarioDecision(
   expedienteId: string,
-  decision: 'aprobado' | 'rechazado' | 'en_revision',
-  reglasDurasCoarrendatario?: readonly ReglaDuraActiva[],
+  decision: 'aprobado' | 'rechazado' | 'en_revision' | 'cerrado',
+  opts: {
+    /** Reglas duras de SU estudio; sin ellas se deducen del motivo guardado. */
+    reglasDuras?: readonly ReglaDuraActiva[];
+    /** Aprobado, pero con un contrato ya generado sin él (decisionYaTomada). */
+    contratoSinEl?: boolean;
+  } = {},
 ): Promise<void> {
   try {
     const { data: coaRow } = await (supabase
@@ -1770,7 +1813,7 @@ export async function avisarCoarrendatarioDecision(
 
     let resultado: 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente' = 'pendiente';
     let score: number | null = null;
-    let reglasDuras = reglasDurasCoarrendatario;
+    let reglasDuras = opts.reglasDuras;
     if (coa.estudio_id) {
       const { data: estRow } = await (supabase
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -1796,6 +1839,7 @@ export async function avisarCoarrendatarioDecision(
       inmuebleCiudad: ctx.inmueble_ciudad,
       decisionExpediente: decision,
       reglasDurasCoarrendatario: reglasDuras,
+      contratoSinEl: opts.contratoSinEl,
     });
   } catch (err) {
     logger.warn(
@@ -1817,10 +1861,15 @@ interface SendResultadoEmailInput {
   titularNombre: string | null;
   inmuebleDireccion: string;
   inmuebleCiudad: string;
-  /** 'en_revision': su estudio termino y el caso lo decide un analista (Adenda 2 §5). */
-  decisionExpediente: 'aprobado' | 'rechazado' | 'en_revision';
+  /**
+   * 'en_revision': su estudio termino y el caso lo decide un analista (Adenda 2 §5).
+   * 'cerrado': el estudio se cerro sin decidir.
+   */
+  decisionExpediente: 'aprobado' | 'rechazado' | 'en_revision' | 'cerrado';
   /** Reglas duras V4.1 que decidieron SU estudio. Vacio = no fue por regla. */
   reglasDurasCoarrendatario?: readonly ReglaDuraActiva[];
+  /** Aprobado, pero el contrato ya se habia generado sin el (P2, contrato fijo). */
+  contratoSinEl?: boolean;
 }
 
 /** Puro: el asunto y el cuerpo segun la decision y el resultado propio del coa. */
@@ -1839,7 +1888,13 @@ export function construirCorreoCoarrendatario(
   // Nunca los motivos del titular.
   const cuenta = input.coarrendatarioResultado === 'aprobado' || input.coarrendatarioResultado === 'condicionado';
   const aprobado =
-    input.coarrendatarioResultado === 'aprobado' || (input.decisionExpediente === 'aprobado' && cuenta);
+    input.coarrendatarioResultado === 'aprobado' ||
+    (input.decisionExpediente === 'aprobado' && cuenta && !input.contratoSinEl);
+  // Sin decisión adversa sobre él (no hay nada que apelar): el estudio se
+  // cerró sin decidir, o el contrato ya iba sin él.
+  const neutral =
+    (input.decisionExpediente === 'cerrado' && input.coarrendatarioResultado !== 'rechazado') ||
+    (input.decisionExpediente === 'aprobado' && !!input.contratoSinEl);
 
   // El subject y el cuerpo dependen de la decisión final del expediente.
   // No le mostramos el detalle de la ponderación al coa (es info entre el
@@ -1860,6 +1915,23 @@ export function construirCorreoCoarrendatario(
       No es un rechazo: un analista de Cofianza está revisando el caso junto con el de ${titularHtml} y es quien toma la decisión.</p>
       <p style="color: #6b7280;">Te escribimos a este mismo correo en cuanto haya respuesta. No tienes que hacer nada más.</p>
     `;
+  } else if (input.decisionExpediente === 'aprobado' && input.contratoSinEl) {
+    subject = `Tu evaluación ya está lista — arrendamiento con ${titular} (Cofianza)`;
+    cuerpoPrincipal = `
+      <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
+      <p style="color: #6b7280;">Ya terminamos tu evaluación crediticia, pero el contrato del arrendamiento del inmueble en
+      <strong>${inmuebleStr}</strong> ya se había generado sin co-arrendatario, así que por ahora no haces parte de él.</p>
+      <p style="color: #6b7280;">Si deciden incluirte, te escribimos a este mismo correo. No tienes que hacer nada más.</p>
+    `;
+  } else if (input.decisionExpediente === 'cerrado' && input.coarrendatarioResultado !== 'rechazado') {
+    subject = `Se cerró el estudio de arrendamiento con ${titular} (Cofianza)`;
+    cuerpoPrincipal = `
+      <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
+      <p style="color: #6b7280;">El estudio de arrendamiento del inmueble en <strong>${inmuebleStr}</strong> se cerró sin continuar,
+      así que tu evaluación como co-arrendatario no sigue. No es una decisión sobre ti.</p>
+      <p style="color: #6b7280;">El proceso queda cerrado. Si en el futuro hay otra oportunidad con Cofianza, con gusto te evaluamos de nuevo.</p>
+    `;
+    badgeColor = '#6b7280'; // gris
   } else if (input.decisionExpediente === 'aprobado' && cuenta) {
     // Tras revision manual (Adenda 2 §5) su evaluacion pudo quedar condicionada
     // o sin informacion: lo aprobado es el arrendamiento, no su evaluacion.
@@ -1928,7 +2000,8 @@ export function construirCorreoCoarrendatario(
     !porReglaDura && typeof input.coarrendatarioScore === 'number' && input.coarrendatarioScore > 0
       ? `<p style="color: #6b7280; font-size: 13px; margin: 4px 0;">Score crediticio: <strong>${input.coarrendatarioScore}</strong></p>`
       : '';
-  const apelacion = input.decisionExpediente !== 'en_revision' && !aprobado ? apelacionHtml(input.emailApelacion) : '';
+  const apelacion =
+    input.decisionExpediente !== 'en_revision' && !aprobado && !neutral ? apelacionHtml(input.emailApelacion) : '';
 
   return {
     subject,

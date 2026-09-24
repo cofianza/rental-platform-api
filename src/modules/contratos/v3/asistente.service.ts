@@ -25,7 +25,7 @@ import { getCalibracion, type Calibracion } from '@/lib/calibracion';
 import { checkPerfilCompletitud } from '@/modules/perfil-arrendador/perfil-arrendador.service';
 import { tarifasDelEstudio } from '@/modules/estudios/tarifa-override.service';
 import { crcParaFirmantes } from '@/modules/estudios/certificado.service';
-import { ESTADOS_VINCULADO, evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
+import { ESTADOS_VINCULADO, coarrendatarioImpreso, evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
 import { avisarCandidatosDeReserva, cancelarVisitasDeOtros } from '@/modules/estudios/reserva-inmueble.notificaciones';
 import {
   liberarReservaDeExpediente,
@@ -291,10 +291,15 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
   if (!perfil || (!completitud.completo && completitud.faltantes.length === 0))
     throw noVerificable(expedienteId, 'perfil del arrendador');
 
-  // P2: entra al contrato solo si su evaluación terminó y no salió rechazada, la misma
-  // regla de la tarifa (coarrendatarioVinculado); si no, el contrato va sin él.
+  // P2: entra al contrato solo si su evaluación terminó y no salió rechazada y
+  // ningún contrato anterior vivo va sin él: la misma regla de la tarifa
+  // (coarrendatarioVinculado). Así, con uno anterior vivo, sale su bloqueo y no un 503.
   const coaEstudio = dato<{ estado: string; resultado: string | null } | null>(coaEstR, expedienteId, 'estudio del coarrendatario');
-  const coarrendatario = coa && evaluacionCuenta(coaEstudio) ? { ...coa, estudio: coaEstudio } : null;
+  const anteriorSinCoa = contratos.some((c) => {
+    const v = c.destinacion ? null : (c.datos_variables as Record<string, unknown> | null);
+    return !c.destinacion && !coarrendatarioImpreso(v?.coarrendatario, v?.coarrendatario_nombre);
+  });
+  const coarrendatario = coa && evaluacionCuenta(coaEstudio) && !anteriorSinCoa ? { ...coa, estudio: coaEstudio } : null;
 
   // El coarrendatario se lee ESTRICTO: la prima del CRC (tarifas, lectura
   // best-effort que ante error dice "solo") y las partes deben decir lo mismo.
