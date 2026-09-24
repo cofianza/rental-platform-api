@@ -276,21 +276,33 @@ export async function resolveOrgMemberPerfilIds(orgId: string): Promise<string[]
  *    que ve completa (owner, o miembro con miembros_ven_todo);
  *  - expediente visible: su inmueble es visible, o (modo restringido /
  *    propietario) se lo asignaron a él como responsable.
+ * Lo asignado cuenta solo si el inmueble es de su organización activa: no
+ * depende de que liberarResponsablesDeMiembro haya limpiado la asignación
+ * cuando salió o lo quitaron del equipo.
  * null = el rol no tiene cartera (no ve nada por aquí).
  */
 interface Cartera {
   perfilId: string;
   orgIds: string[];
+  /** Su organización activa (null sin membresía): lo asignado solo cuenta dentro de ella. */
+  orgActiva: string | null;
   inmueblesAsignados: boolean;
   expedientesAsignados: boolean;
 }
 
 async function carteraDe(perfilId: string, rol: 'inmobiliaria' | 'propietario' | 'portafolio'): Promise<Cartera | null> {
-  if (rol === 'propietario') return { perfilId, orgIds: [], inmueblesAsignados: false, expedientesAsignados: true };
+  if (rol === 'propietario')
+    return { perfilId, orgIds: [], orgActiva: null, inmueblesAsignados: false, expedientesAsignados: true };
   // 'inmobiliaria' y 'portafolio' (resolvePortfolioInmuebleIds, agnóstico de rol) siguen la membresía.
   const m = await getActiveMembership(perfilId);
   const completa = !!m && (m.rolMiembro === 'owner' || m.venTodo);
-  return { perfilId, orgIds: completa ? [m!.orgId] : [], inmueblesAsignados: true, expedientesAsignados: !completa };
+  return {
+    perfilId,
+    orgIds: completa ? [m!.orgId] : [],
+    orgActiva: m?.orgId ?? null,
+    inmueblesAsignados: true,
+    expedientesAsignados: !completa,
+  };
 }
 
 /**
@@ -300,7 +312,9 @@ async function carteraDe(perfilId: string, rol: 'inmobiliaria' | 'propietario' |
 function filtroInmuebles(c: Cartera): string {
   return [
     `propietario_id.eq.${c.perfilId}`,
-    ...(c.inmueblesAsignados ? [`miembro_responsable_id.eq.${c.perfilId}`] : []),
+    ...(c.inmueblesAsignados && c.orgActiva
+      ? [`and(miembro_responsable_id.eq.${c.perfilId},inmobiliaria_id.eq.${c.orgActiva})`]
+      : []),
     ...(c.orgIds.length ? [`inmobiliaria_id.in.(${c.orgIds.join(',')})`] : []),
   ].join(',');
 }
@@ -315,7 +329,7 @@ interface FilaInmuebleScope {
 export function inmuebleVisible(c: Cartera, i: FilaInmuebleScope): boolean {
   return (
     i.propietario_id === c.perfilId ||
-    (c.inmueblesAsignados && i.miembro_responsable_id === c.perfilId) ||
+    (c.inmueblesAsignados && !!c.orgActiva && i.miembro_responsable_id === c.perfilId && i.inmobiliaria_id === c.orgActiva) ||
     (!!i.inmobiliaria_id && c.orgIds.includes(i.inmobiliaria_id))
   );
 }
@@ -325,7 +339,13 @@ export function expedienteVisible(
   c: Cartera,
   e: { miembro_responsable_id: string | null; inmueble: FilaInmuebleScope | null },
 ): boolean {
-  return (!!e.inmueble && inmuebleVisible(c, e.inmueble)) || (c.expedientesAsignados && e.miembro_responsable_id === c.perfilId);
+  return (
+    (!!e.inmueble && inmuebleVisible(c, e.inmueble)) ||
+    (c.expedientesAsignados &&
+      !!c.orgActiva &&
+      e.miembro_responsable_id === c.perfilId &&
+      e.inmueble?.inmobiliaria_id === c.orgActiva)
+  );
 }
 
 /**
@@ -418,10 +438,11 @@ export async function resolveAllowedExpedienteIds(
     (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('id, inmuebles!expedientes_inmueble_id_fkey!inner(id)')
       .or(filtroInmuebles(c), { referencedTable: 'inmuebles' }),
-    c.expedientesAsignados
+    c.expedientesAsignados && c.orgActiva
       ? (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
-          .select('id')
+          .select('id, inmuebles!expedientes_inmueble_id_fkey!inner(id)')
           .eq('miembro_responsable_id', userId)
+          .eq('inmuebles.inmobiliaria_id', c.orgActiva)
       : Promise.resolve({ data: [] }),
   ]);
   const ids = new Set<string>();
