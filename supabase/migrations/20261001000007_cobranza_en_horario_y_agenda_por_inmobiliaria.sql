@@ -6,15 +6,37 @@
 --    Los WhatsApp de cobro solo salen de lunes a viernes de 7 a. m. a 7 p. m.
 --    y los sábados de 8 a. m. a 3 p. m. (sin domingos ni festivos), y una sola
 --    gestión por día al mismo deudor. Lo que cae fuera queda programado en
---    whatsapp_programado_para y lo manda el barrido horario de moras
---    (MORAS_AUTOESCALAR_ENABLED). Sin esta columna el API envía en el acto,
---    como antes.
+--    whatsapp_programado_para y lo manda su propio barrido
+--    (MORAS_COBROS_PROGRAMADOS_ENABLED, cada 15 min). La gestión del día se
+--    toma ANTES de enviar en moras_gestiones_diarias: la llave única
+--    (teléfono normalizado, día en Colombia) impide dos el mismo día aunque
+--    el barrido y un escalado a mano corran a la vez. Sin estas piezas el API
+--    envía en el acto, como antes.
+--    P27: whatsapp_pausado_at = el dueño reportó un pago en Fase 3 y el
+--    WhatsApp pendiente espera la revisión de Cofianza.
 -- ============================================================
 
 ALTER TABLE moras_tickets ADD COLUMN IF NOT EXISTS whatsapp_programado_para TIMESTAMPTZ;
+ALTER TABLE moras_tickets ADD COLUMN IF NOT EXISTS whatsapp_pausado_at TIMESTAMPTZ;
 
 COMMENT ON COLUMN moras_tickets.whatsapp_programado_para IS
   'Cuándo sale el WhatsApp de cobro de la fase actual que la Ley 2300 dejó esperando (fuera de horario o con otra gestión ese día). NULL = nada pendiente.';
+COMMENT ON COLUMN moras_tickets.whatsapp_pausado_at IS
+  'El dueño reportó un pago en Fase 3: el WhatsApp pendiente no sale hasta que Cofianza lo reanude. NULL = sin pausa.';
+
+CREATE TABLE IF NOT EXISTS public.moras_gestiones_diarias (
+  telefono   TEXT NOT NULL,                -- solo dígitos, con indicativo (57…)
+  dia        DATE NOT NULL,                -- día civil en Colombia
+  mora_id    UUID REFERENCES moras_tickets(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (telefono, dia)
+);
+
+COMMENT ON TABLE public.moras_gestiones_diarias IS
+  'Ley 2300 de 2023: una gestión de cobranza por día al mismo deudor. El API inserta antes de enviar; el choque de llave (23505) significa que ya hubo una ese día.';
+
+ALTER TABLE public.moras_gestiones_diarias ENABLE ROW LEVEL SECURITY;  -- teléfonos; sin policies = solo service_role
+REVOKE ALL ON TABLE public.moras_gestiones_diarias FROM PUBLIC, anon, authenticated;
 
 -- ============================================================
 -- 2) Agenda de visitas por inmobiliaria (P37).

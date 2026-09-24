@@ -69,6 +69,12 @@ export async function cancelar(req: Request, res: Response) {
   sendSuccess(res, mora);
 }
 
+export async function reanudarWhatsApp(req: Request, res: Response) {
+  const user = userOr401(req);
+  const mora = await morasService.reanudarWhatsApp(String(req.params.id), user.id, user.rol);
+  sendSuccess(res, mora);
+}
+
 export async function postMensaje(req: Request, res: Response) {
   const user = userOr401(req);
   const mensaje = await morasService.agregarMensaje(

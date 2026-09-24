@@ -228,6 +228,11 @@ const envSchema = z.object({
   // WhatsApp MORA_FASE_2/3. Encender cuando esas plantillas esten aprobadas en
   // Meta; mientras tanto el operador escala a mano desde /moras.
   MORAS_AUTOESCALAR_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Ley 2300: barrido que manda los WhatsApp de cobro que quedaron para el
+  // horario permitido (cada 15 min). Aparte del autoescalado: apagarlo deja la
+  // cola quieta y los avisos dicen que no sale. En una API LOCAL (apunta a la
+  // base de producción) ponerlo en false.
+  MORAS_COBROS_PROGRAMADOS_ENABLED: z.string().default('true').transform((v) => v === 'true'),
   // P28: plantillas v2 de mora (MORA_FASE_1/2/3_V2): el comprobante va al
   // arrendador por su WhatsApp de recaudo y, en Fase 3, al correo de soporte.
   // OFF = siguen las v1 («envíanos el comprobante por aquí»). Encender solo

@@ -23,7 +23,7 @@ import {
 } from '@/lib/tenantScope';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { momentoDeCobro } from './horario-cobranza';
+import { diaBogota, momentoDeCobro } from './horario-cobranza';
 import type {
   ReportarMoraInput,
   ListMorasQuery,
@@ -67,9 +67,13 @@ function formatCOP(monto: number): string {
   return new Intl.NumberFormat('es-CO').format(monto);
 }
 
-/** Lo que pasó con el WhatsApp de cobro: lo que respondió el envío, o que quedó programado. */
+/**
+ * Lo que pasó con el WhatsApp de cobro: lo que respondió el envío, o que quedó
+ * para el horario permitido ('programado'; 'retenido' si el envío automático
+ * está apagado y nada lo va a mandar solo).
+ */
 interface ResultadoCobro {
-  estado: EstadoEnvioWhatsApp | 'programado';
+  estado: EstadoEnvioWhatsApp | 'programado' | 'retenido';
   programado_para?: string;
 }
 
@@ -84,13 +88,16 @@ function avisoWhatsApp(r: ResultadoCobro): string {
   if (r.estado === 'programado') {
     return `El WhatsApp al inquilino sale el ${fechaHoraBogota(r.programado_para!)}: fuera del horario de cobranza o ya tuvo una gestión hoy (Ley 2300 de 2023).`;
   }
+  if (r.estado === 'retenido') {
+    return 'El WhatsApp al inquilino quedó en espera por el horario de cobranza (Ley 2300 de 2023), pero el envío automático está apagado: no sale hasta que lo enciendan. Si es urgente, avísale por otro medio dentro del horario.';
+  }
   if (r.estado === 'aceptado') return 'Se envió el WhatsApp al inquilino.';
   if (r.estado === 'sin_telefono') return 'No se pudo avisar por WhatsApp: el inquilino no tiene teléfono registrado.';
   if (r.estado === 'mock') return 'WhatsApp en modo de prueba: no se envió al inquilino.';
   return 'El WhatsApp al inquilino falló; avísale por otro medio.';
 }
 
-/** Cuenta como gestión de cobranza del día (Ley 2300) el WhatsApp que salió. */
+/** El WhatsApp de cobro salió de verdad (así queda marcado en el historial). */
 const salioPorWhatsApp = (r: ResultadoCobro) => r.estado === 'aceptado' || r.estado === 'mock';
 
 /**
@@ -136,7 +143,9 @@ function mensajeFase3(m: { inquilino_nombre: string; inmueble_direccion: string 
 // ============================================================
 // WhatsApp de cobro (Ley 2300 de 2023): fuera de la franja, o si el deudor ya
 // tuvo una gestión hoy, queda en moras_tickets.whatsapp_programado_para y lo
-// manda el barrido horario (enviarCobrosProgramados), sin perderse.
+// manda su propio barrido (enviarCobrosProgramados, MORAS_COBROS_PROGRAMADOS_ENABLED),
+// sin perderse. La gestión del día se toma ANTES de enviar, en
+// moras_gestiones_diarias (llave única teléfono + día).
 // ============================================================
 
 type FaseActiva = 'fase_1' | 'fase_2' | 'fase_3';
@@ -192,33 +201,50 @@ async function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
       template = 'MORA_FASE_3_V2';
       variables.push((await getCompany()).email);
     } else {
+      // Sin número del arrendador, al correo de soporte; nunca «por aquí».
       const arrendador = await arrendadorDeMora(m.expediente_id);
-      if (arrendador?.whatsapp) {
-        template = m.estado === 'fase_1' ? 'MORA_FASE_1_V2' : 'MORA_FASE_2_V2';
-        variables.push(arrendador.nombre ?? 'tu arrendador', arrendador.whatsapp);
-      } else {
-        logger.warn({ moraId: m.id }, 'Arrendador sin WhatsApp de recaudo ni teléfono: se usa la plantilla de mora v1');
-      }
+      template = m.estado === 'fase_1' ? 'MORA_FASE_1_V2' : 'MORA_FASE_2_V2';
+      variables.push(
+        ...(arrendador?.whatsapp
+          ? [arrendador.nombre ?? 'tu arrendador', `WhatsApp ${arrendador.whatsapp}`]
+          : ['Cofianza', `correo ${(await getCompany()).email}`]),
+      );
     }
   }
   return enviarTemplateWhatsApp({ to: m.inquilino_telefono, template, variables, context: { mora_id: m.id } });
 }
 
-/** Cuándo salió la última gestión de cobro a este teléfono, en cualquiera de sus moras. */
-async function ultimaGestion(telefono: string): Promise<Date | null> {
-  const { data: moras } = await db('moras_tickets').select('id').eq('inquilino_telefono', telefono);
-  const ids = ((moras as Array<{ id: string }> | null) ?? []).map((x) => x.id);
-  if (!ids.length) return null;
-  const { data } = await db('moras_mensajes')
-    .select('created_at')
-    .in('mora_id', ids)
-    .eq('autor_tipo', 'sistema')
-    .eq('via_whatsapp', true)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const ultima = (data as { created_at: string } | null)?.created_at;
-  return ultima ? new Date(ultima) : null;
+/** Solo dígitos y con indicativo: «300 111 2233», «+57 300 1112233» y «573001112233» son el mismo deudor. */
+function telefonoDeudor(telefono: string): string {
+  const digitos = telefono.replace(/\D/g, '');
+  return digitos.length === 10 ? `57${digitos}` : digitos;
+}
+
+// Sin la migración 20261001000007 no existen la columna ni la tabla del
+// horario de cobranza; así lo dicen PostgREST y Postgres.
+const faltaEnLaBase = (e: { code?: string } | null) =>
+  !!e && ['PGRST204', 'PGRST205', '42703', '42P01'].includes(e.code ?? '');
+
+/**
+ * Toma la gestión del día del deudor ANTES de enviar: la llave única
+ * (teléfono, día) hace que entre el barrido y un escalado a mano solo uno
+ * escriba ese día. 'usada' = ya hubo una hoy.
+ */
+async function tomarGestionDelDia(
+  telefono: string,
+  moraId: string,
+  ahora: Date,
+): Promise<'libre' | 'usada' | 'sin_tabla' | 'error'> {
+  const { error } = await db('moras_gestiones_diarias').insert({
+    telefono: telefonoDeudor(telefono),
+    dia: diaBogota(ahora),
+    mora_id: moraId,
+  } as never);
+  if (!error) return 'libre';
+  if (error.code === '23505') return 'usada';
+  if (faltaEnLaBase(error)) return 'sin_tabla';
+  logger.error({ error: error.message, moraId }, 'No se pudo tomar la gestión de cobranza del día');
+  return 'error';
 }
 
 /**
@@ -226,31 +252,51 @@ async function ultimaGestion(telefono: string): Promise<Date | null> {
  * no tuvo otra gestión hoy; si no, queda programado. Nunca lanza.
  */
 async function cobrarPorWhatsApp(m: MoraCobro, ahora = new Date()): Promise<ResultadoCobro> {
-  if (m.inquilino_telefono) {
-    const cuando = momentoDeCobro(ahora, await ultimaGestion(m.inquilino_telefono));
-    const programado_para = cuando > ahora ? cuando.toISOString() : null;
-    // Sale ya: se descarta lo que hubiera programado de la fase anterior, o el
-    // barrido lo mandaría otra vez. Sin la migración 20261001000007 la columna
-    // no existe y este update falla sin consecuencias.
-    const { error } = await db('moras_tickets')
-      .update({ whatsapp_programado_para: programado_para } as never)
-      .eq('id', m.id);
-    if (programado_para && !error) return { estado: 'programado', programado_para };
-    if (programado_para) {
-      logger.warn({ error: error?.message, moraId: m.id }, 'No se pudo programar el WhatsApp de cobro: sale ya');
+  // Sin teléfono no hay a quién escribirle: enviarCobro devuelve 'sin_telefono'.
+  if (!m.inquilino_telefono) return { estado: await enviarCobro(m) };
+
+  let cuando = momentoDeCobro(ahora, null);
+  if (cuando <= ahora) {
+    const gestion = await tomarGestionDelDia(m.inquilino_telefono, m.id, ahora);
+    if (gestion === 'error') return { estado: 'fallido' };
+    if (gestion !== 'usada') {
+      // Sale ya: se descarta lo que hubiera programado de una fase anterior.
+      await db('moras_tickets').update({ whatsapp_programado_para: null } as never).eq('id', m.id);
+      return { estado: await enviarCobro(m) };
     }
+    cuando = momentoDeCobro(ahora, ahora); // ya tuvo su gestión hoy: mañana
   }
-  return { estado: await enviarCobro(m) };
+
+  const programado_para = cuando.toISOString();
+  const { error } = await db('moras_tickets')
+    .update({ whatsapp_programado_para: programado_para } as never)
+    .eq('id', m.id);
+  if (faltaEnLaBase(error)) {
+    // Sin la migración no hay cola: sale ya, como antes. Solo en ese caso; un
+    // error de red no puede mandar un cobro de noche.
+    logger.warn({ moraId: m.id }, 'Sin la migración 20261001000007: el WhatsApp de cobro sale fuera del horario');
+    return { estado: await enviarCobro(m) };
+  }
+  if (error) {
+    logger.error({ error: error.message, moraId: m.id }, 'No se pudo programar el WhatsApp de cobro');
+    return { estado: 'fallido' };
+  }
+  return { estado: env.MORAS_COBROS_PROGRAMADOS_ENABLED ? 'programado' : 'retenido', programado_para };
 }
 
-/** Barrido: manda los WhatsApp de cobro programados que ya pueden salir (el de la fase en que esté hoy la mora). */
-async function enviarCobrosProgramados(ahora: Date): Promise<number> {
+/**
+ * Barrido de la Ley 2300: manda los WhatsApp de cobro programados que ya pueden
+ * salir, con la plantilla de la fase en que esté hoy la mora. Va aparte del
+ * autoescalado: apagar el escalado no apaga esta cola.
+ */
+export async function enviarCobrosProgramados(ahora = new Date()): Promise<number> {
   const { data, error } = await db('moras_tickets')
     .select(
-      'id, estado, expediente_id, whatsapp_programado_para, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, fecha_vencimiento_canon',
+      'id, ticket_numero, estado, expediente_id, whatsapp_programado_para, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, fecha_vencimiento_canon',
     )
     .in('estado', ESTADOS_ACTIVOS as unknown as string[])
     .lte('whatsapp_programado_para', ahora.toISOString())
+    .is('whatsapp_pausado_at', null)
     .limit(100);
   if (error) {
     logger.warn({ error: error.message }, 'No se pudieron leer los WhatsApp de cobro programados');
@@ -258,27 +304,38 @@ async function enviarCobrosProgramados(ahora: Date): Promise<number> {
   }
 
   let enviados = 0;
-  for (const m of (data ?? []) as Array<MoraCobro & { whatsapp_programado_para: string }>) {
-    // Mientras esperaba pudo salir otra gestión al mismo deudor (otra mora).
-    const cuando = momentoDeCobro(ahora, m.inquilino_telefono ? await ultimaGestion(m.inquilino_telefono) : null);
-    const siguiente = cuando > ahora ? cuando.toISOString() : null;
-    // Condicionado a lo leído: dos corridas a la vez no mandan dos veces.
+  for (const m of (data ?? []) as Array<MoraCobro & { ticket_numero: string; whatsapp_programado_para: string }>) {
+    // Tomar la fila, condicionado a lo leído: dos corridas a la vez no la mandan dos veces.
     const { data: tomada } = await db('moras_tickets')
-      .update({ whatsapp_programado_para: siguiente } as never)
+      .update({ whatsapp_programado_para: null } as never)
       .eq('id', m.id)
       .eq('estado', m.estado)
       .eq('whatsapp_programado_para', m.whatsapp_programado_para)
+      .is('whatsapp_pausado_at', null)
       .select('id');
-    if (!tomada?.length || siguiente) continue;
-    const cobro: ResultadoCobro = { estado: await enviarCobro(m) };
+    if (!tomada?.length) continue;
+    // Horario y gestión del día otra vez: si no puede salir, vuelve a quedar programado.
+    const cobro = await cobrarPorWhatsApp(m, ahora);
+    if (cobro.estado === 'programado' || cobro.estado === 'retenido') continue;
     await agregarMensajeInterno(
       m.id,
       'sistema',
       null,
-      `WhatsApp de ${NOMBRE_FASE[m.estado]} enviado en el horario de cobranza. ${avisoWhatsApp(cobro)}`,
+      `WhatsApp programado de ${NOMBRE_FASE[m.estado]}: ${avisoWhatsApp(cobro)}`,
       salioPorWhatsApp(cobro),
     );
-    enviados++;
+    if (salioPorWhatsApp(cobro)) {
+      enviados++;
+      continue;
+    }
+    // No salió: que Cofianza lo sepa, el caso no puede quedar esperando en silencio.
+    await avisarCofianza({
+      moraId: m.id,
+      actorId: null,
+      tipo: 'mora.whatsapp_fallido',
+      titulo: `No salió el WhatsApp de cobro — ${m.ticket_numero}`,
+      mensaje: `${m.inquilino_nombre} · ${m.inmueble_direccion ?? 'inmueble'}. ${avisoWhatsApp(cobro)}`,
+    });
   }
   return enviados;
 }
@@ -822,10 +879,63 @@ export async function agregarMensaje(
     );
   }
 
+  // P27: en Fase 3 el caso es de Cofianza y el dueño solo anota en el historial;
+  // esa nota (p. ej. «ya me pagó») le tiene que llegar a alguien. Si reporta un
+  // pago, el WhatsApp de Fase 3 que esté esperando queda en pausa hasta que
+  // Cofianza lo revise (reanudarWhatsApp o marcar pagada).
+  if (mora.estado === 'fase_3' && !esInterno(rol)) {
+    let pausado = false;
+    if (input.reporta_pago) {
+      const { data: enPausa } = await db('moras_tickets')
+        .update({ whatsapp_pausado_at: new Date().toISOString() } as never)
+        .eq('id', moraId)
+        .eq('estado', 'fase_3')
+        .not('whatsapp_programado_para', 'is', null)
+        .select('id');
+      pausado = !!enPausa?.length;
+      if (pausado) {
+        await agregarMensajeInterno(
+          moraId,
+          'sistema',
+          userId,
+          'El WhatsApp de Fase 3 quedó en pausa: el dueño reporta un pago y Cofianza lo revisa.',
+        );
+      }
+    }
+    await avisarCofianza({
+      moraId,
+      actorId: userId,
+      tipo: input.reporta_pago ? 'mora.pago_reportado' : 'mora.nota_dueno',
+      titulo: `${input.reporta_pago ? 'Pago reportado por el dueño' : 'Nota del dueño'} — ${mora.ticket_numero}`,
+      mensaje: `${mora.inquilino_nombre} · ${mora.inmueble_direccion ?? 'inmueble'}: «${input.mensaje}»${
+        pausado ? ' El WhatsApp de Fase 3 quedó en pausa hasta que lo revises.' : ''
+      }`,
+    });
+  }
+
   return data;
 }
 
-/** `viaWhatsapp`: el mensaje registra un WhatsApp de cobro que salió (cuenta como la gestión del día). */
+/** Cofianza revisó el pago reportado y el cobro sigue: el WhatsApp de Fase 3 sale en el horario de cobranza. */
+export async function reanudarWhatsApp(id: string, userId: string, rol: string) {
+  await assertMoraAccess(id, userId, rol);
+  const { data, error } = await db('moras_tickets')
+    .update({ whatsapp_pausado_at: null } as never)
+    .eq('id', id)
+    .not('whatsapp_pausado_at', 'is', null)
+    .select('id');
+  if (error) throw fromSupabaseError(error);
+  if (!data?.length) throw AppError.conflict('El WhatsApp de esta mora no está en pausa.', 'MORA_SIN_PAUSA');
+  await agregarMensajeInterno(
+    id,
+    'sistema',
+    userId,
+    'Cofianza revisó el pago reportado y el cobro sigue: el WhatsApp de Fase 3 sale en el horario de cobranza.',
+  );
+  return getMoraById(id);
+}
+
+/** `viaWhatsapp`: el mensaje registra un WhatsApp de cobro que salió. */
 async function agregarMensajeInterno(
   moraId: string,
   autorTipo: 'sistema' | 'asesor' | 'inquilino' | 'propietario',
@@ -909,11 +1019,8 @@ const DIAS_FASE_3 = 10;
 // mandando los dos WhatsApp seguidos al inquilino.
 const DIAS_EN_FASE_2 = DIAS_FASE_3 - DIAS_FASE_2;
 
-export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number; cobrosProgramados: number }> {
+export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }> {
   const ahora = new Date();
-  // Primero lo que la Ley 2300 dejó esperando; así lo que escale hoy ve esa
-  // gestión y no le escribe dos veces el mismo día al mismo deudor.
-  const cobrosProgramados = await enviarCobrosProgramados(ahora);
   const limiteFase2 = new Date(ahora.getTime() - DIAS_FASE_2 * 24 * 60 * 60 * 1000).toISOString();
   const limiteFase3 = new Date(ahora.getTime() - DIAS_FASE_3 * 24 * 60 * 60 * 1000).toISOString();
   const limiteEnFase2 = new Date(ahora.getTime() - DIAS_EN_FASE_2 * 24 * 60 * 60 * 1000).toISOString();
@@ -1006,8 +1113,8 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number; c
     aFase3++;
   }
 
-  logger.info({ aFase2, aFase3, cobrosProgramados }, 'Auto-escalado de moras ejecutado');
-  return { aFase2, aFase3, cobrosProgramados };
+  logger.info({ aFase2, aFase3 }, 'Auto-escalado de moras ejecutado');
+  return { aFase2, aFase3 };
 }
 
 // ============================================================

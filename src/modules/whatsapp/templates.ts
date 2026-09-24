@@ -109,21 +109,25 @@ export const WHATSAPP_TEMPLATES = {
   // v2 de las tres de mora (P28), detrás de WHATSAPP_MORA_PLANTILLAS_V2: la v1
   // pide «envíanos el comprobante por aquí» a un número que nadie lee. Mismo
   // encabezado, pie y categoría que su v1; solo cambia el cierre del cuerpo.
-  /** Fase 1 v2 — el comprobante va al arrendador (quien recibe el canon). */
+  /**
+   * Fase 1 v2 — el comprobante va al arrendador (quien recibe el canon) o, si no
+   * tiene número, a Cofianza por correo. {{6}} lleva el canal: «WhatsApp +57…»
+   * o «correo hola@…».
+   */
   MORA_FASE_1_V2: {
     id: 'cofianza_mora_fase1_v2',
     language: 'es_CO',
-    // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} fecha_vencimiento, {{5}} arrendador, {{6}} WhatsApp de recaudo
+    // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} fecha_vencimiento, {{5}} a quién, {{6}} canal
     description:
-      'Hola *{{1}}*, te recordamos que el canon del inmueble *{{2}}* por *${{3}}* venció el *{{4}}*.\n\n¿Ya realizaste el pago? Si es así, envíale el comprobante a *{{5}}* al WhatsApp *{{6}}* para que lo registre.',
+      'Hola *{{1}}*, te recordamos que el canon del inmueble *{{2}}* por *${{3}}* venció el *{{4}}*.\n\n¿Ya realizaste el pago? Si es así, envíale el comprobante a *{{5}}* al *{{6}}* para que lo registre.',
   },
-  /** Fase 2 v2 — el comprobante va al arrendador (quien recibe el canon). */
+  /** Fase 2 v2 — mismo destino del comprobante que la Fase 1 v2. */
   MORA_FASE_2_V2: {
     id: 'cofianza_mora_fase2_v2',
     language: 'es_CO',
-    // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora, {{5}} arrendador, {{6}} WhatsApp de recaudo
+    // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora, {{5}} a quién, {{6}} canal
     description:
-      'Hola *{{1}}*, el canon del inmueble *{{2}}* por *${{3}}* lleva *{{4}} días* en mora.\n\nTe invitamos a regularizar el pago lo antes posible para evitar que el caso escale a Cofianza como respaldo legal.\n\nSi ya realizaste el pago, envíale el comprobante a *{{5}}* al WhatsApp *{{6}}* para que lo registre.',
+      'Hola *{{1}}*, el canon del inmueble *{{2}}* por *${{3}}* lleva *{{4}} días* en mora.\n\nTe invitamos a regularizar el pago lo antes posible para evitar que el caso escale a Cofianza como respaldo legal.\n\nSi ya realizaste el pago, envíale el comprobante a *{{5}}* al *{{6}}* para que lo registre.',
   },
   /** Fase 3 v2 — el caso ya es de Cofianza: el comprobante va al correo de soporte. */
   MORA_FASE_3_V2: {

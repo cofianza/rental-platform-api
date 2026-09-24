@@ -54,6 +54,15 @@ router.patch(
   controller.cancelar,
 );
 
+// PATCH /moras/:id/reanudar-whatsapp — Cofianza revisó el pago que reportó el
+// dueño y el cobro sigue (P27). Solo Cofianza.
+router.patch(
+  '/:id/reanudar-whatsapp',
+  roleGuard(['administrador', 'operador_analista']),
+  validate({ params: moraIdParamsSchema }),
+  controller.reanudarWhatsApp,
+);
+
 // POST /moras/:id/mensajes — agregar mensaje al chat
 router.post(
   '/:id/mensajes',

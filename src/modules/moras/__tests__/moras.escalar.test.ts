@@ -97,8 +97,7 @@ describe('escalarMora', () => {
     enqueue('moras_tickets',
       mora('fase_1'),
       { data: [{ id: 'm1' }], error: null },   // update → 1 fila
-      { data: [], error: null },               // moras del teléfono (sin gestión previa)
-      { data: null, error: null },             // whatsapp_programado_para → null
+      { data: null, error: null },             // whatsapp_programado_para → null (sale ya)
       { data: { id: 'm1' }, error: null },     // getMoraById
     );
     await escalarMora('m1', { desde: 'fase_1' }, 'op', 'operador_analista');

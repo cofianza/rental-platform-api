@@ -71,5 +71,7 @@ export type CancelarMoraInput = z.infer<typeof cancelarMoraSchema>;
 export const agregarMensajeSchema = z.object({
   mensaje: z.string().min(1, 'Mensaje requerido').max(2000),
   via_whatsapp: z.boolean().optional().default(false),
+  // P27: el dueño anota en Fase 3 que el inquilino le pagó (Cofianza lo revisa).
+  reporta_pago: z.boolean().optional().default(false),
 });
 export type AgregarMensajeInput = z.infer<typeof agregarMensajeSchema>;

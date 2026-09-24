@@ -70,6 +70,19 @@ if (env.RESERVA_V3_BARRIDO_ENABLED) {
   setInterval(runReservaV3, RESERVA_V3_INTERVAL_MS).unref();
 }
 
+// Ley 2300: los WhatsApp de cobro que quedaron para el horario permitido. Aparte
+// del autoescalado: apagar el escalado no apaga esta cola. En una API LOCAL
+// (apunta a la base de producción) MORAS_COBROS_PROGRAMADOS_ENABLED=false.
+const COBROS_PROGRAMADOS_INTERVAL_MS = 15 * 60 * 1000;
+if (env.MORAS_COBROS_PROGRAMADOS_ENABLED) {
+  const runCobros = () =>
+    import('@/modules/moras/moras.service')
+      .then(({ enviarCobrosProgramados }) => enviarCobrosProgramados())
+      .catch((err) => logger.warn({ err }, 'enviarCobrosProgramados: ciclo fallido'));
+  runCobros();
+  setInterval(runCobros, COBROS_PROGRAMADOS_INTERVAL_MS).unref();
+}
+
 // Escalada automatica de mora. Antes solo existia como POST /cron/moras/
 // auto-escalar protegido por CRON_SECRET, que no esta configurado: nunca corria
 // y la pantalla de moras prometia una escalada que no pasaba. Mismo patron que

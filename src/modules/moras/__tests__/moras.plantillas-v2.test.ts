@@ -60,8 +60,7 @@ function prepararEscalado(estado: 'fase_1' | 'fase_2') {
       error: null,
     },
     { data: [{ id: 'm1' }], error: null }, // update de fase
-    { data: [], error: null }, // moras del teléfono: sin gestión previa
-    { data: null, error: null }, // whatsapp_programado_para
+    { data: null, error: null }, // whatsapp_programado_para → null (sale ya)
     { data: { id: 'm1' }, error: null }, // getMoraById
   );
   enqueue('expedientes', { data: { inmuebles: { propietario_id: 'p1', inmobiliaria_id: 'org1' } }, error: null });
@@ -83,7 +82,7 @@ describe('plantillas de mora v2 (P28)', () => {
     prepararEscalado('fase_1');
     await escalarMora('m1', {}, 'op', 'operador_analista');
     expect(envio().template).toBe('MORA_FASE_2_V2');
-    expect(envio().variables.slice(4)).toEqual(['Inmobiliaria Norte', '+573015556677']);
+    expect(envio().variables.slice(4)).toEqual(['Inmobiliaria Norte', 'WhatsApp +573015556677']);
   });
 
   it('Fase 3: el comprobante va al correo de soporte de Cofianza', async () => {
@@ -93,12 +92,19 @@ describe('plantillas de mora v2 (P28)', () => {
     expect(envio().variables[4]).toBe('hola@cofianza.co');
   });
 
-  it('sin WhatsApp del arrendador, o con la variable apagada, sigue la v1', async () => {
+  it('sin WhatsApp del arrendador va al correo de soporte, nunca a la v1 («por aquí»)', async () => {
     mockContacto.mockResolvedValueOnce({ nombre: 'Juan Pérez', whatsapp: null });
     prepararEscalado('fase_1');
     await escalarMora('m1', {}, 'op', 'operador_analista');
-    expect(envio()).toMatchObject({ template: 'MORA_FASE_2' });
-    expect(envio().variables).toHaveLength(4);
+    expect(envio().template).toBe('MORA_FASE_2_V2');
+    expect(envio().variables.slice(4)).toEqual(['Cofianza', 'correo hola@cofianza.co']);
+  });
+
+  it('sin nombre del arrendador no sale «Hola»; con la variable apagada, la v1', async () => {
+    mockContacto.mockResolvedValueOnce({ nombre: null, whatsapp: '3015556677' });
+    prepararEscalado('fase_1');
+    await escalarMora('m1', {}, 'op', 'operador_analista');
+    expect(envio().variables[4]).toBe('tu arrendador');
 
     mockEnviarTemplate.mockClear();
     mockEnv.WHATSAPP_MORA_PLANTILLAS_V2 = false;
