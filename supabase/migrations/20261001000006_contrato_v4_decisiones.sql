@@ -10,6 +10,16 @@
 -- De paso, el bloque del arrendador y su firma no le ponen NIT ni
 -- representante legal a un propietario persona natural.
 --
+-- Cobertura [PLATA]: la plantilla imprimía la cobertura según
+-- modalidades_fianza (servicios, administración, cláusula penal; Plus también
+-- daños). La documentación vigente dice que la fianza cubre SOLO el canon
+-- (plantilla vigente, CUARTA Parágrafo Cuarto; Anexo §12; Adenda 1 contratos
+-- §1.4): se cambian el texto y la tabla.
+--
+-- P31 — Fecha: la plantilla imprimía como fecha de suscripción la de
+-- generación. Se reemplaza por el cierre del bloque XI del contrato vigente
+-- (el V3 tampoco imprime fecha), remitiendo a la cláusula de firma de este.
+--
 -- Idempotente: cada REPLACE solo actúa si encuentra el texto viejo, y los que
 -- envuelven un texto que sigue presente llevan su guarda. Solo afecta
 -- contratos generados o regenerados después.
@@ -115,3 +125,39 @@ SET contenido_html = REPLACE(
   '<br>{{#if arrendador.es_inmobiliaria}}NIT: {{inmobiliaria.nit}}<br>{{inmobiliaria.representante_legal}} — Representante Legal{{else}}{{arrendador.tipo_documento_label}}: {{arrendador.numero_documento}}{{/if}}</p>'
 )
 WHERE position('<br>NIT: {{inmobiliaria.nit}}<br>{{inmobiliaria.representante_legal}} — Representante Legal</p>' in contenido_html) > 0;
+
+-- 4. Cobertura: solo el canon (texto de la plantilla vigente y del Anexo §12).
+UPDATE plantillas_contrato
+SET contenido_html = REPLACE(
+  contenido_html,
+  '<p class="par"><span class="par-label">PARÁGRAFO PRIMERO — Alcance de la cobertura:</span> La fianza de COFIANZA S.A.S. cubre los siguientes conceptos dentro del periodo de vigencia del contrato y hasta el límite establecido en la modalidad de fianza aprobada según el Certificado de Riesgo COFIANZA (CRC):</p>
+<table>
+  <tr><th>Concepto</th><th>Cubierto por la fianza</th></tr>
+  <tr><td>Cánones de arrendamiento impagos</td><td>{{cob.canones}}</td></tr>
+  <tr><td>Servicios públicos domiciliarios impagos</td><td>{{cob.servicios}}</td></tr>
+  <tr><td>Cuotas de administración de propiedad horizontal</td><td>{{cob.admin_ph}}</td></tr>
+  <tr><td>Daños al inmueble imputables al arrendatario</td><td>{{cob.danos}}</td></tr>
+  <tr><td>Cláusula penal por incumplimiento</td><td>{{cob.penal}}</td></tr>
+</table>
+<p>Los conceptos no marcados como cubiertos en la tabla anterior NO están incluidos en la fianza. COFIANZA S.A.S. no responderá por obligaciones que no hayan sido expresamente pactadas. Cualquier ampliación de cobertura deberá constar en el CRC correspondiente.</p>',
+  '<p class="par"><span class="par-label">PARÁGRAFO PRIMERO — Alcance de la cobertura:</span> La fianza cubre el pago del canon de arrendamiento desde la fecha de mora hasta la restitución material del inmueble, con un tope máximo de dieciocho (18) cánones de arrendamiento, lo que ocurra primero. La cobertura comprende únicamente el canon de arrendamiento. NO están cubiertas las cuotas de administración, los servicios públicos, los daños al inmueble, los faltantes de inventario, la cláusula penal, los intereses moratorios, los gastos de cobranza, ni ningún otro concepto, salvo que se contraten expresamente como amparo adicional y así conste por escrito.</p>'
+)
+WHERE position('La fianza de COFIANZA S.A.S. cubre los siguientes conceptos dentro del periodo de vigencia del contrato' in contenido_html) > 0;
+
+-- 5. Cobertura en la tabla: todas las modalidades cubren solo el canon (la
+--    tabla de la plantilla, si alguien la conserva, y cualquier lectura futura).
+UPDATE modalidades_fianza
+SET cubre_canones = true, cubre_servicios = false, cubre_admin_ph = false,
+    cubre_danos = false, cubre_penal = false, updated_at = now()
+WHERE NOT cubre_canones OR cubre_servicios OR cubre_admin_ph OR cubre_danos OR cubre_penal;
+
+ALTER TABLE modalidades_fianza ALTER COLUMN cubre_penal SET DEFAULT false;
+
+-- 6. P31: sin fecha de suscripción; el cierre del bloque XI del contrato vigente.
+UPDATE plantillas_contrato
+SET contenido_html = REPLACE(
+  contenido_html,
+  '<p>En señal de conformidad con todo lo anterior, las partes suscriben el presente contrato en {{contrato.domicilio_contractual}}, a los {{contrato.fecha_firma_dia}} días del mes de {{contrato.fecha_firma_mes}} de {{contrato.fecha_firma_ano}}.</p>',
+  '<p>El presente contrato se perfecciona con la firma de LAS PARTES. Cuando se suscriba de manera física, se firma en dos (2) ejemplares del mismo tenor y a un solo efecto, uno para cada parte. Cuando se suscriba mediante firma electrónica, se otorga en un único ejemplar electrónico del cual cada parte recibirá copia, en los términos de la Cláusula {{#if inmobiliaria.comision_porcentaje}}Vigésima Octava{{else}}Vigésima Séptima{{/if}}.</p>'
+)
+WHERE position('<p>En señal de conformidad con todo lo anterior, las partes suscriben el presente contrato en {{contrato.domicilio_contractual}}, a los {{contrato.fecha_firma_dia}} días del mes de {{contrato.fecha_firma_mes}} de {{contrato.fecha_firma_ano}}.</p>' in contenido_html) > 0;

@@ -89,4 +89,27 @@ describe('migración 20261001000006 sobre la plantilla V4 de producción', () =>
     // Las anclas de firma de Auco siguen encontrando la línea del arrendador.
     expect(out).toMatch(/<div class="firma-line"><\/div>\s*<p>\s*<strong>EL ARRENDADOR<\/strong>/);
   });
+
+  it('cobertura: la fianza cubre solo el canon, sin tabla por modalidad', () => {
+    const out = renderTemplate(nueva, { ...INMOBILIARIA, cob: { canones: 'Sí', servicios: 'Sí', admin_ph: 'Sí', danos: 'Sí', penal: 'Sí' } });
+    expect(out).toContain('con un tope máximo de dieciocho (18) cánones de arrendamiento, lo que ocurra primero.');
+    expect(out).toContain('La cobertura comprende únicamente el canon de arrendamiento. NO están cubiertas las cuotas de administración, los servicios públicos, los daños al inmueble');
+    expect(out).not.toContain('Cubierto por la fianza');
+    expect(out).not.toContain('Sí</td>');
+    expect(out).not.toContain('Cualquier ampliación de cobertura deberá constar en el CRC');
+  });
+
+  it('P31: sin fecha de suscripción; cierre del bloque XI que remite a la cláusula de firma, con su número', () => {
+    const cierre = (n: string) =>
+      'El presente contrato se perfecciona con la firma de LAS PARTES. Cuando se suscriba de manera física, se firma en dos (2) ejemplares del mismo tenor y a un solo efecto, uno para cada parte. ' +
+      `Cuando se suscriba mediante firma electrónica, se otorga en un único ejemplar electrónico del cual cada parte recibirá copia, en los términos de la Cláusula ${n}.`;
+    const conComision = renderTemplate(nueva, INMOBILIARIA);
+    expect(conComision).toContain(cierre('Vigésima Octava'));
+    expect(conComision).toContain('<h2>Cláusula Vigésima Octava. Firma y perfeccionamiento del contrato</h2>');
+    const sinComision = renderTemplate(nueva, PROPIETARIO);
+    expect(sinComision).toContain(cierre('Vigésima Séptima'));
+    expect(sinComision).toContain('<h2>Cláusula Vigésima Séptima. Firma y perfeccionamiento del contrato</h2>');
+    expect(nueva).not.toContain('fecha_firma');
+    expect(nueva).not.toContain('En señal de conformidad');
+  });
 });
