@@ -73,17 +73,24 @@ export async function huboConsultaAlBuro(expedienteId: string): Promise<Consulta
 
 /**
  * Cancela, con compare-and-set, las evaluaciones del expediente que todavía no
- * llegaron al buró: es lo que excluye a ejecutarEstudio, cuyo bloqueo a
- * 'en_proceso' falla si la evaluación ya se movió. Si alguna se movió mientras
- * tanto se vuelve a leer; si nunca se estabiliza, queda como dudosa.
+ * llegaron al buró, y la fallida sin referencia (así no se reintenta después de
+ * devolverla): es lo que excluye a ejecutarEstudio, cuyo bloqueo a 'en_proceso'
+ * falla si la evaluación ya se movió. Si alguna se movió mientras tanto se
+ * vuelve a leer; si nunca se estabiliza, queda como dudosa. La fallida sigue
+ * siendo dudosa aunque ya esté cancelada: no se sabe si la central cobró.
  */
 async function cancelarEvaluacionesSinConsulta(expedienteId: string): Promise<Consulta> {
+  let huboFallida = false;
   for (let intento = 0; intento < 3; intento++) {
     const estudios = await leerEstudios(expedienteId);
     const consulta = consultaDe(estudios);
     if (consulta === 'si') return consulta;
+    if (consulta === 'dudosa') huboFallida = true;
     let seMovio = false;
-    for (const e of estudios.filter((x) => ESTADOS_PREVIOS_A_LA_CONSULTA.includes(x.estado))) {
+    const sinConsulta = estudios.filter(
+      (x) => ESTADOS_PREVIOS_A_LA_CONSULTA.includes(x.estado) || (x.estado === 'fallido' && !x.referencia_proveedor),
+    );
+    for (const e of sinConsulta) {
       const { data } = await db('estudios')
         .update({ estado: 'cancelado' } as never)
         .eq('id', e.id)
@@ -91,7 +98,7 @@ async function cancelarEvaluacionesSinConsulta(expedienteId: string): Promise<Co
         .select('id');
       if (!(data as unknown[] | null)?.length) seMovio = true;
     }
-    if (!seMovio) return consulta;
+    if (!seMovio) return huboFallida ? 'dudosa' : consulta;
   }
   return 'dudosa';
 }
@@ -335,6 +342,12 @@ async function pagoDeLaFila(f: FilaReembolso) {
   return data as { id: string; expediente_id: string; estado: string } | null;
 }
 
+/** La consulta al buró del estudio de la fila; sin estudio que mirar, se asume que sí hubo. */
+async function consultaDeLaFila(f: FilaReembolso, pago: { expediente_id: string } | null): Promise<Consulta> {
+  const expedienteId = pago?.expediente_id ?? f.external_reference?.split(':')[1];
+  return expedienteId && UUID.test(expedienteId) ? huboConsultaAlBuro(expedienteId) : 'si';
+}
+
 /** El cobro pasa a 'reembolsado'; si ya tenía factura, queda el aviso de su nota crédito. */
 async function reembolsarCobro(
   pago: { id: string; expediente_id: string; estado: string },
@@ -372,10 +385,11 @@ export async function reembolsarEnMercadoPago(filaId: string, user: { id: string
     throw AppError.conflict('Este pago no se reembolsa por Mercado Pago: resuélvelo a mano y márcalo resuelto.', 'REEMBOLSO_NO_APLICA');
   }
   const pago = await pagoDeLaFila(fila);
-  // Si la evaluación llegó al buró después de encolarse, ya no se devuelve.
-  if (fila.motivo === 'estudio_cerrado_sin_consulta') {
-    const expedienteId = pago?.expediente_id ?? fila.external_reference?.split(':')[1];
-    if (!expedienteId || (await huboConsultaAlBuro(expedienteId)) !== 'no') {
+  // Si la evaluación llegó al buró después de encolarse, ya no se devuelve. La
+  // dudosa (la única consulta había fallido) tampoco si al final sí se consultó.
+  if (fila.motivo === 'estudio_cerrado_sin_consulta' || fila.motivo === 'estudio_fallido_revisar') {
+    const consulta = await consultaDeLaFila(fila, pago);
+    if (consulta === 'si' || (fila.motivo === 'estudio_cerrado_sin_consulta' && consulta !== 'no')) {
       throw AppError.conflict(
         'La evaluación de este estudio llegó al buró: no se devuelve. Revísalo y márcalo resuelto con una nota.',
         'CONSULTA_AL_BURO',
@@ -492,8 +506,12 @@ export async function resolverReembolso(filaId: string, nota: string, user: { id
     detalle: { pago_no_conciliado_id: fila.id, motivo: fila.motivo, nota },
     ip,
   });
+  // El cobro pasa a reembolsado solo si es la evaluación de un estudio que no
+  // llegó al buró: si al final se consultó, la fila se cierra y el cobro queda.
+  const devolvioLaEvaluacion =
+    !!pago && fila.motivo === 'estudio_cerrado_sin_consulta' && (await consultaDeLaFila(fila, pago)) !== 'si';
   const facturaNumero =
-    pago && fila.motivo === 'estudio_cerrado_sin_consulta'
+    pago && devolvioLaEvaluacion
       ? await reembolsarCobro(
           pago,
           { resuelto_a_mano_por: user.id, nota },

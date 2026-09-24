@@ -204,15 +204,38 @@ describe('al cerrar o rechazar el estudio', () => {
   it('P11: si la única evaluación falló (no se sabe si la central cobró), queda en la cola para revisión', async () => {
     sinCobrosVivos();
     enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
-    enqueue('estudios', { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null });
+    enqueue(
+      'estudios',
+      { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null },
+      { data: [{ id: 'est-1' }], error: null }, // CAS a cancelado
+    );
     mockEsCredito.mockResolvedValueOnce(true);
     enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
     admins();
 
-    await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio rechazado', 'user-1');
 
     expect(upsertNoConciliado()).toMatchObject({ proveedor: 'credito', provider_payment_id: `pago:${PAGO}`, motivo: 'estudio_fallido_revisar' });
     expect(mockDevolverCredito).not.toHaveBeenCalled();
+    // Q5b-2: la fallida sin referencia se cancela (CAS) para que no se reintente
+    // una evaluación que se está devolviendo; sigue siendo dudosa.
+    expect(updates('estudios')).toEqual([{ estado: 'cancelado' }]);
+    expect(ops.some((o) => o.table === 'estudios' && o.method === 'eq' && o.args[0] === 'estado' && o.args[1] === 'fallido')).toBe(true);
+  });
+
+  it('Q5b-2: si la fallida se reintentó antes del CAS y ya está en el buró, no se devuelve', async () => {
+    sinCobrosVivos();
+    enqueue('pagos', { data: pagoMp, error: null });
+    enqueue(
+      'estudios',
+      { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null },
+      { data: [], error: null }, // CAS perdido: el reintento la tomó
+      { data: [{ id: 'est-1', estado: 'en_proceso', referencia_proveedor: null }], error: null },
+    );
+
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio rechazado', 'user-1');
+
+    expect(upsertNoConciliado()).toBeUndefined();
   });
 
   it('con consulta al buró no se devuelve nada (para conservarlo está la reasignación)', async () => {
@@ -381,6 +404,15 @@ describe('«Reembolsar en Mercado Pago» (administrador)', () => {
     expect(mockRefund).not.toHaveBeenCalled();
   });
 
+  it('Q5b-2: la fila dudosa (la única consulta falló) no se reembolsa si al final la evaluación sí llegó al buró', async () => {
+    fila({ motivo: 'estudio_fallido_revisar' });
+    cobro();
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'completado', referencia_proveedor: 'TU-123' }], error: null });
+
+    await expect(reembolsarEnMercadoPago(FILA, admin)).rejects.toMatchObject({ statusCode: 409, errorCode: 'CONSULTA_AL_BURO' });
+    expect(mockRefund).not.toHaveBeenCalled();
+  });
+
   it('un pago duplicado se reembolsa sin tocar el cobro que sí se pagó con el primero', async () => {
     fila({ provider_payment_id: 'mp-dup', motivo: 'pago_duplicado', created_at: '2026-06-22' });
     enqueue('pagos', { data: null, error: null }); // ningún cobro se pagó con mp-dup
@@ -461,6 +493,7 @@ describe('P9: «Marcar resuelto» (administrador)', () => {
     });
     enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null }); // CAS
     enqueue('pagos', { data: { id: PAGO, expediente_id: EXP, estado: 'completado' }, error: null });
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'cancelado', referencia_proveedor: null }], error: null });
 
     expect(await resolverReembolso(FILA, 'Transferencia devuelta el 24/09', admin)).toEqual({ estado: 'resuelto', factura_numero: null });
 
@@ -468,6 +501,25 @@ describe('P9: «Marcar resuelto» (administrador)', () => {
     expect(ops.some((o) => o.table === 'pagos' && o.method === 'eq' && o.args[0] === 'id' && o.args[1] === PAGO)).toBe(true);
     expect(mockTransitionChecked).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'reembolsado' }));
     expect(mockRefund).not.toHaveBeenCalled();
+  });
+
+  it('Q5b-8: la evaluación que al final sí llegó al buró: la fila se cierra con la nota y el cobro no se reembolsa', async () => {
+    enqueue('pagos_no_conciliados', {
+      data: {
+        id: FILA, proveedor: 'manual', provider_payment_id: `pago:${PAGO}`, external_reference: `estudio:${EXP}:${PAGO}`,
+        monto: 80000, motivo: 'estudio_cerrado_sin_consulta', notas: null, resuelto: false, estado_proveedor: 'completed',
+        created_at: '2026-09-24',
+      },
+      error: null,
+    });
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null }); // CAS
+    enqueue('pagos', { data: { id: PAGO, expediente_id: EXP, estado: 'completado' }, error: null });
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'completado', referencia_proveedor: 'TU-9' }], error: null });
+
+    expect(await resolverReembolso(FILA, 'Revisado: sí se consultó, no se devuelve', admin)).toEqual({ estado: 'resuelto', factura_numero: null });
+
+    expect(updates('pagos_no_conciliados')[0]).toMatchObject({ resuelto: true });
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
   });
 
   it('un pago que no se pudo asociar: se cierra con la nota y ningún cobro cambia', async () => {

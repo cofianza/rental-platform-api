@@ -1187,7 +1187,7 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
 /** El historial cuando la evaluación no arranca sola; en un estudio cerrado no se invita a ejecutarla. */
 function textoInicioFallido(err: unknown, cuando: string): string {
   return (err as { errorCode?: string } | null)?.errorCode === 'EXPEDIENTE_CERRADO'
-    ? 'El estudio está cerrado: la evaluación no se ejecuta.'
+    ? 'El estudio ya terminó (cerrado o rechazado): la evaluación no se ejecuta.'
     : `Falló el inicio automático de la evaluación ${cuando} — ejecutarla desde la evaluación en el estudio`;
 }
 

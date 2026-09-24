@@ -2124,7 +2124,7 @@ export async function ejecutarEstudio(
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, score, proveedor, tipo, datos_formulario, expediente_id')
+    .select('id, estado, resultado, score, proveedor, tipo, datos_formulario, expediente_id, estudio_padre_id, referencia_proveedor, respuesta_proveedor')
     .eq('id', estudioId)
     .single();
 
@@ -2141,6 +2141,9 @@ export async function ejecutarEstudio(
     tipo: string;
     datos_formulario: Record<string, unknown> | null;
     expediente_id: string;
+    estudio_padre_id?: string | null;
+    referencia_proveedor?: string | null;
+    respuesta_proveedor?: unknown;
   };
 
   // 1.2. Ownership guard para solicitante: solo puede ejecutar estudios
@@ -2210,9 +2213,13 @@ export async function ejecutarEstudio(
     inmueble_id: string | null;
   };
 
-  // P1: un estudio cerrado no consulta el buró: su evaluación pagada se devuelve.
-  if (expediente.estado === 'cerrado') {
-    throw AppError.conflict('El estudio está cerrado: no se consulta el buró.', 'EXPEDIENTE_CERRADO');
+  // P1: un estudio cerrado o rechazado no consulta el buró: su evaluación pagada
+  // se devuelve. La re-evaluación con soportes (estudio hijo) sí corre sobre el
+  // rechazado: es su apelación, y el resultado lo reabre.
+  const estudioTerminado = (estado: string | undefined) =>
+    estado === 'cerrado' || (estado === 'rechazado' && !est.estudio_padre_id);
+  if (estudioTerminado(expediente.estado)) {
+    throw AppError.conflict(`El estudio está ${expediente.estado}: no se consulta el buró.`, 'EXPEDIENTE_CERRADO');
   }
 
   if (!expediente.estudio_habilitado) {
@@ -2628,25 +2635,36 @@ export async function ejecutarEstudio(
     );
   }
 
-  // P1: el cierre pudo llegar entre el guard de arriba y el lock. Con el estudio
-  // ya cerrado se deshace el lock (nadie consultó) y la evaluación pagada se
-  // devuelve. No aplica a la re-consulta al otro buró: ese estudio ya se consultó.
+  // P1: el cierre o el rechazo pudo llegar entre el guard de arriba y el lock.
+  // Con el estudio ya terminado se deshace el lock (nadie consultó) y la
+  // evaluación pagada se devuelve. No aplica a la re-consulta al otro buró: ese
+  // estudio ya se consultó.
   if (!reconsultaOtroBuro) {
     const { data: expAhora } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('estado')
       .eq('id', est.expediente_id)
       .maybeSingle();
-    if ((expAhora as { estado?: string } | null)?.estado === 'cerrado') {
+    const estadoAhora = (expAhora as { estado?: string } | null)?.estado;
+    if (estudioTerminado(estadoAhora)) {
       await (supabase
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
-        .update({ estado: est.estado } as never)
+        .update({
+          estado: est.estado,
+          // El cambio de buró limpió la referencia y la respuesta del anterior:
+          // vuelven, son la prueba de que ese buró sí se consultó.
+          ...(cambioProveedor
+            ? { proveedor: est.proveedor, referencia_proveedor: est.referencia_proveedor ?? null, respuesta_proveedor: est.respuesta_proveedor ?? null }
+            : {}),
+        } as never)
         .eq('id', estudioId)
         .eq('estado', 'en_proceso');
       void import('@/modules/pagos/reembolsos.service')
-        .then((m) => m.devolverEvaluacionSinConsulta(est.expediente_id, 'Estudio cerrado', null))
+        .then((m) =>
+          m.devolverEvaluacionSinConsulta(est.expediente_id, estadoAhora === 'rechazado' ? 'Estudio rechazado' : 'Estudio cerrado', null),
+        )
         .catch((e) => logger.warn({ e, estudioId }, 'No se pudo revisar la devolución tras deshacer la ejecución'));
-      throw AppError.conflict('El estudio está cerrado: no se consulta el buró.', 'EXPEDIENTE_CERRADO');
+      throw AppError.conflict(`El estudio está ${estadoAhora}: no se consulta el buró.`, 'EXPEDIENTE_CERRADO');
     }
   }
 
