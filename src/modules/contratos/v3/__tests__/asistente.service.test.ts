@@ -179,6 +179,7 @@ import {
 } from '../asistente.service';
 import type { Asistente, DocumentoV3 } from '../asistente.reglas';
 import { crearSobre, estadoEnviado } from '../firma/firma.service';
+import { huellaMarcas } from '../firma/reglas';
 import { ultimoSobre } from '../firma/reconciliar';
 import { firmasPropioSchema, guardarPasoSchema } from '../asistente.schema';
 import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, MarcaFirma, Paso4 } from '../asistente.types';
@@ -1840,6 +1841,26 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(crearSobre).not.toHaveBeenCalled();
   });
 
+  it('Ruta B: se envía lo que se revisó: sin la huella de las firmas en pantalla, o con otra, 409 FIRMAS_CAMBIARON antes de generar nada', async () => {
+    const doc = await documentoRevisado(PASOS_B);
+    const arr: MarcaFirma = { parte: 'arrendatario', pagina: 4, x: 0.3, y: 0.9 };
+    const ador: MarcaFirma = { parte: 'arrendador', pagina: 4, x: 0.7, y: 0.9 };
+    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: 1, sha256: 'a'.repeat(64), subidoEn: LEIDO, subidoPor: USER, firmas: [ador, arr] };
+    // El estado da la huella de las marcas vigentes, sin importar el orden en que se guardaron.
+    encolarCarga({ contratos: [conDocumento(PASOS_B, doc, { propio })] });
+    expect((await obtener()).contrato?.propio?.firmasHuella).toBe(huellaMarcas([arr, ador]));
+    const renders = vi.mocked(generarAnexoVivienda).mock.calls.length;
+    for (const firmasHuella of [undefined, huellaMarcas([arr, { ...ador, x: 0.71 }])]) {
+      encolarCarga({ contratos: [conDocumento(PASOS_B, doc, { propio })] });
+      expect(
+        await error(enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: propio.sha256, firmasHuella }, USER, ROL)),
+      ).toMatchObject({ statusCode: 409, errorCode: 'FIRMAS_CAMBIARON' });
+    }
+    expect(vi.mocked(generarAnexoVivienda).mock.calls.length).toBe(renders);
+    expect(storageApi.upload).not.toHaveBeenCalled();
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
   it('Ruta B: sin paso 4, sin el PDF propio no sale; con él, se une [propio, Anexo, CRC] sin tocarlo y se congelan sus firmas', async () => {
     const doc = await documentoRevisado(PASOS_B);
     expect(vi.mocked(generarAnexoVivienda)).toHaveBeenCalled();
@@ -1875,7 +1896,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [{ id: CTO }], error: null });
     vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO } as never);
-    await enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: sha }, USER, ROL);
+    await enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: sha, firmasHuella: huellaMarcas(firmas) }, USER, ROL);
     const upd = opsDe('contratos', 'update').at(-1)!.args[0] as { datos_variables: { documento: DocumentoV3 } };
     expect(upd.datos_variables.documento.final).toMatchObject({ ruta: 'B', paginas: [4, 2, 1], propioKey: 'propio.pdf' });
     // Las marcas y la geometría de las páginas marcadas, leídas del PDF que se firma: el reenvío usa estas.

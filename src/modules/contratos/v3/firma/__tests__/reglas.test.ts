@@ -22,6 +22,7 @@ import {
   deFirmantes,
   finDelDia,
   firmantesDePartes,
+  huellaMarcas,
   fueraDePlazo,
   mapEstadoFirmante,
   paginaPdf,
@@ -500,6 +501,16 @@ describe('posicionesDeFirma y construirSignProfile con posiciones', () => {
     expect(lanzado(() => posicionesDeFirma(TRES, { ruta: 'B' }))).toMatchObject({
       details: { partes: ['Arrendatario (Ana Ruiz)', 'Coarrendatario (Beto Díaz)', 'Arrendador (Caro Gómez)'] },
     });
+  });
+
+  it('huellaMarcas: la misma sin importar el orden; distinta si cambia una coordenada, la página o la parte', () => {
+    const h = huellaMarcas(MARCAS);
+    expect(h).toMatch(/^[0-9a-f]{64}$/);
+    expect(huellaMarcas([...MARCAS].reverse())).toBe(h);
+    expect(huellaMarcas([{ ...MARCAS[0], x: 0.7001 }, ...MARCAS.slice(1)])).not.toBe(h);
+    expect(huellaMarcas([{ ...MARCAS[0], pagina: 1 }, ...MARCAS.slice(1)])).not.toBe(h);
+    expect(huellaMarcas([{ ...MARCAS[0], parte: 'arrendatario' }, ...MARCAS.slice(1)])).not.toBe(h);
+    expect(huellaMarcas(MARCAS.slice(1))).not.toBe(h);
   });
 
   it('faltanMarcas y deFirmantes: el coarrendatario cuenta por su índice; sin él, su marca se descarta', () => {

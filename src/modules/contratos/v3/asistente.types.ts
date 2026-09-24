@@ -88,6 +88,8 @@ export interface PdfPropio {
   /** Cada parte que firma tiene al menos una marca: sin eso la Ruta B no sale a firma. */
   firmasCompletas: boolean;
   partesSinFirma: string[];                            // legibles: «Arrendatario (Juan Pérez)»
+  /** sha256 de estas marcas normalizadas: el envío la devuelve (firmasHuella) para firmar lo que se revisó. */
+  firmasHuella: string;
 }
 /**
  * El punto de la raya donde se apoya la firma de una parte en el PDF propio.

@@ -98,6 +98,7 @@ import {
   faltanMarcas,
   finDelCrc,
   deFirmantes,
+  huellaMarcas,
   nombreFirmante,
   validarFirmantes,
   type FirmasPropio,
@@ -569,7 +570,17 @@ function propioVisible(p: PropioGuardado | undefined, f: Fuentes): NonNullable<E
   const firmas = marcasVigentes(p, f);
   const partesSinFirma = faltanMarcas(firmantesDe(f), firmas);
   const { nombre, paginas, bytes, sha256, subidoEn } = p;
-  return { nombre, paginas, bytes, sha256, subidoEn, firmas, firmasCompletas: !partesSinFirma.length, partesSinFirma };
+  return {
+    nombre,
+    paginas,
+    bytes,
+    sha256,
+    subidoEn,
+    firmas,
+    firmasCompletas: !partesSinFirma.length,
+    partesSinFirma,
+    firmasHuella: huellaMarcas(firmas),
+  };
 }
 
 /**
@@ -1588,7 +1599,7 @@ async function paginasDe(pdf: Buffer): Promise<number> {
  */
 export async function enviarAFirma(
   expedienteId: string,
-  body: { generacion: number; propioSha256?: string },
+  body: { generacion: number; propioSha256?: string; firmasHuella?: string },
   userId: string,
   userRol: string,
   ip?: string,
@@ -1650,8 +1661,12 @@ export async function enviarAFirma(
     if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
     if (body.propioSha256 !== propio.sha256)
       throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
-    // Adenda 1 contratos, respuesta 6: cada parte firma también sobre las rayas del PDF propio (crearSobre lo repite).
-    exigirMarcas(firmantesDe(f), marcasVigentes(propio, f));
+    // Adenda 1 contratos, respuesta 6: cada parte firma también sobre las rayas del PDF propio (crearSobre lo repite),
+    // y en las que se revisaron: otra sesión pudo moverlas.
+    const marcas = marcasVigentes(propio, f);
+    exigirMarcas(firmantesDe(f), marcas);
+    if (body.firmasHuella !== huellaMarcas(marcas))
+      throw AppError.conflict('La ubicación de las firmas cambió. Revísala de nuevo antes de enviar.', 'FIRMAS_CAMBIARON');
   }
 
   // 2. Render final y PDF unido.

@@ -55,7 +55,7 @@ export async function crcUrl(req: Request, res: Response) {
 }
 
 export async function enviar(req: Request, res: Response) {
-  const body = req.body as { generacion: number; propioSha256?: string };
+  const body = req.body as { generacion: number; propioSha256?: string; firmasHuella?: string };
   sendSuccess(res, await asistente.enviarAFirma(expedienteId(req), body, req.user!.id, req.user!.rol, req.ip));
 }
 

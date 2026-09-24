@@ -207,10 +207,14 @@ export const firmasPropioSchema = z
   })
   .strict();
 
-/** Enviar a firma: la vista previa que se revisó y, en la Ruta B, el PDF propio que se vio. */
+/**
+ * Enviar a firma: la vista previa que se revisó y, en la Ruta B, el PDF propio que se vio y
+ * la huella de las firmas ubicadas sobre él (propio.firmasHuella del estado).
+ */
 export const enviarSchema = z
   .object({
     generacion: z.number({ error: 'Falta la vista previa' }).int().min(1),
     propioSha256: z.string().regex(/^[0-9a-f]{64}$/, 'Huella del PDF inválida').optional(),
+    firmasHuella: z.string().regex(/^[0-9a-f]{64}$/, 'Huella de las firmas inválida').optional(),
   })
   .strict();

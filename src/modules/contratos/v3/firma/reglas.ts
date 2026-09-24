@@ -13,6 +13,7 @@
  *   §11.7.2   la fecha de activación es la de la ÚLTIMA firma que reporta Auco.
  */
 
+import { createHash } from 'crypto';
 import type { PDFDocument, PDFPage } from 'pdf-lib';
 import type { AucoDocumentInfo, AucoRoadmap, AucoSignerStatus, AucoSignProfile } from '@/lib/auco';
 import { normalizePhoneToInternational } from '@/lib/auco';
@@ -401,6 +402,15 @@ export function faltanMarcas(firmantes: { rol: RolFirmante; etiqueta: string }[]
   const marcadas = new Set(marcas.map(claveMarca));
   const c = claves(firmantes.map((f) => f.rol));
   return firmantes.filter((_, i) => !marcadas.has(c[i])).map((f) => f.etiqueta);
+}
+
+/**
+ * Huella de las firmas ubicadas: sha256 de las marcas normalizadas (de quién, página,
+ * x, y), sin importar el orden en que se ubicaron. El envío la exige: se firma lo que se revisó.
+ */
+export function huellaMarcas(marcas: MarcaFirma[]): string {
+  const filas = marcas.map((m) => JSON.stringify([claveMarca(m), m.pagina, m.x, m.y])).sort();
+  return createHash('sha256').update(JSON.stringify(filas)).digest('hex');
 }
 
 export const motivoSinMarcas = (faltan: string[]) =>
