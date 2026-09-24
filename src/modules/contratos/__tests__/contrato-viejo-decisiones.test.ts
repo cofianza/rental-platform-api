@@ -209,12 +209,34 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     enqueue('plantillas_contrato', { data: { id: 'pl-1', nombre: 'V4', contenido: null, contenido_html: '<p></p>', variables: [], version: 1 }, error: null });
     const e = await error(regenerarContrato(CTO, {}, ADMIN.id, undefined, ADMIN.rol));
     expect(e).toMatchObject({ statusCode: 400, errorCode: 'MODALIDAD_NO_DISPONIBLE' });
+    expect(e.message).toContain('Cancélalo y genera uno nuevo eligiendo Plena o Plus');
     expect(escrituras()).toEqual([]);
   });
 
-  it('con co-titular ya guardado en el estudio → 409', async () => {
-    prepararGenerar({ cotitular_nombre: 'Lucía Díaz' });
-    expect(await error(generar())).toMatchObject({ errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
+  it('el co-titular guardado de una «Compartida» anterior no bloquea: se genera con Plena y se borra', async () => {
+    const { supabase } = await import('@/lib/supabase');
+    vi.mocked(supabase.storage.from).mockReturnValue({ upload: async () => ({ error: null }) } as never);
+    mockCompletitud.mockResolvedValue({ completo: true, faltantes: [], rol: 'propietario' });
+    enqueue('expedientes', expediente({ modalidad_fianza: 'compartida', cotitular_nombre: 'Lucía Díaz', cotitular_documento: '99' }));
+    enqueue('perfiles', PROPIETARIO);
+    enqueue(
+      'contratos',
+      { data: [], error: null },
+      { data: { id: 'cto-nuevo' }, error: null },
+      { data: null, error: null },
+      { data: { id: 'cto-nuevo', _scope: {} }, error: null },
+    );
+    enqueue('plantillas_contrato', {
+      data: { id: 'pl-1', nombre: 'V4', contenido: null, contenido_html: '<p>{{cotitular.nombre_completo}}</p>', variables: [], activa: true, version: 1 },
+      error: null,
+    });
+
+    await generar({ modalidad_fianza: 'plena' });
+
+    const guardado = ops.find((o) => o.table === 'expedientes' && o.method === 'update')?.args[0];
+    expect(guardado).toMatchObject({ modalidad_fianza: 'plena', cotitular_nombre: null, cotitular_documento: null });
+    const insert = ops.find((o) => o.table === 'contratos' && o.method === 'insert');
+    expect((insert?.args[0] as { datos_variables: { cotitular: unknown } }).datos_variables.cotitular).toEqual({});
   });
 
   it('sin co-arrendatario para la función compartida, las columnas viejas del estudio no lo reviven', async () => {

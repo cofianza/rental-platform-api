@@ -629,13 +629,11 @@ function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: bo
 }
 
 /** Sin «Cofianza Compartida» en este contrato: su co-titular no firma (P6). */
-function assertModalidadDisponible(modalidad: unknown): void {
-  if (modalidad === 'compartida') {
-    throw AppError.badRequest(
-      '«Cofianza Compartida» necesita un co-titular que este contrato no incluye como parte que firma. Elige Plena o Plus, o hazlo con el contrato nuevo.',
-      'MODALIDAD_NO_DISPONIBLE',
-    );
-  }
+function assertModalidadDisponible(
+  modalidad: unknown,
+  mensaje = '«Cofianza Compartida» necesita un co-titular que este contrato no incluye como parte que firma. Elige Plena o Plus, o hazlo con el contrato nuevo.',
+): void {
+  if (modalidad === 'compartida') throw AppError.badRequest(mensaje, 'MODALIDAD_NO_DISPONIBLE');
 }
 
 /** El co-titular que imprimió el contrato (snapshot). */
@@ -2116,11 +2114,10 @@ export async function generarContrato(
     );
   }
 
-  // P6: con co-arrendatario o co-titular (el del formulario o el ya guardado) no se genera.
-  const cotitularNombre = input.cotitular
-    ? input.cotitular.nombre
-    : (expRow as { cotitular_nombre?: string | null }).cotitular_nombre;
-  assertSinPartesAdicionales(!!expData.coarrendatario, !!cotitularNombre);
+  // P6: con co-arrendatario, o con co-titular en el formulario, no se genera. El
+  // co-titular que haya quedado guardado era de una «Compartida» que ya no se
+  // admite: no bloquea y se borra al guardar la modalidad (más abajo).
+  assertSinPartesAdicionales(!!expData.coarrendatario, !!input.cotitular?.nombre?.trim());
   assertModalidadDisponible(input.modalidad_fianza ?? (expRow as { modalidad_fianza?: string | null }).modalidad_fianza);
   await assertEvaluacionVigente(expedienteId);
 
@@ -2231,15 +2228,17 @@ export async function generarContrato(
     const condicionesUpdate: Record<string, unknown> = {};
     if (input.modalidad_fianza) condicionesUpdate.modalidad_fianza = input.modalidad_fianza;
     if (input.servicios_reparto) condicionesUpdate.servicios_reparto = input.servicios_reparto;
-    if (input.cotitular) {
-      const c = input.cotitular;
-      condicionesUpdate.cotitular_nombre = c.nombre ?? null;
-      condicionesUpdate.cotitular_tipo_documento = c.tipo_documento ?? null;
-      condicionesUpdate.cotitular_documento = c.documento ?? null;
-      condicionesUpdate.cotitular_celular = c.celular ?? null;
-      condicionesUpdate.cotitular_correo = c.correo ?? null;
-      condicionesUpdate.cotitular_direccion = c.direccion ?? null;
-      condicionesUpdate.cotitular_municipio = c.municipio ?? null;
+    // Sin «Compartida» este contrato no lleva co-titular (P6): el guardado se borra.
+    if (expRecord.cotitular_nombre) {
+      Object.assign(condicionesUpdate, {
+        cotitular_nombre: null,
+        cotitular_tipo_documento: null,
+        cotitular_documento: null,
+        cotitular_celular: null,
+        cotitular_correo: null,
+        cotitular_direccion: null,
+        cotitular_municipio: null,
+      });
     }
     if (Object.keys(condicionesUpdate).length > 0) {
       await (supabase
@@ -2760,7 +2759,10 @@ export async function regenerarContrato(
     expData.inmueble.valor_arriendo = canonEfectivo;
   }
 
-  assertModalidadDisponible(expRecordRegen.modalidad_fianza);
+  assertModalidadDisponible(
+    expRecordRegen.modalidad_fianza,
+    'Este borrador quedó con «Cofianza Compartida», que este contrato ya no admite. Cancélalo y genera uno nuevo eligiendo Plena o Plus.',
+  );
 
   // 4.1e — Distribución de obligaciones (servicios_reparto): MERGE — solo
   // sobrescribimos las claves que el usuario cambió, conservando el resto de la
