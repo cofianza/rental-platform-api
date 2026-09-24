@@ -1858,6 +1858,39 @@ export async function avisarCoarrendatarioDecision(
   }
 }
 
+/**
+ * P3: su evaluación no llegó a terminar y el estudio ya se resolvió
+ * (ejecutarEstudio la canceló). Se le avisa que su invitación quedó sin efecto.
+ * Best-effort: nunca lanza.
+ */
+export async function avisarInvitacionSinEfecto(estudioId: string): Promise<void> {
+  try {
+    const { data } = await (supabase
+      .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+      .select('nombre, email, expediente_id')
+      .eq('estudio_id', estudioId)
+      .maybeSingle();
+    const coa = data as { nombre: string; email: string | null; expediente_id: string } | null;
+    if (!coa?.email) return;
+    const ctx = await fetchExpedienteCtx(coa.expediente_id);
+    await sendCoarrendatarioResultadoEmail({
+      email: coa.email,
+      nombre: coa.nombre,
+      coarrendatarioResultado: 'pendiente',
+      coarrendatarioScore: null,
+      titularNombre: ctx.solicitante_nombre,
+      inmuebleDireccion: ctx.inmueble_direccion,
+      inmuebleCiudad: ctx.inmueble_ciudad,
+      decisionExpediente: 'sin_efecto',
+    });
+  } catch (err) {
+    logger.warn(
+      { estudioId, err: err instanceof Error ? err.message : String(err) },
+      'No se pudo avisar al coarrendatario que su invitación quedó sin efecto',
+    );
+  }
+}
+
 // ============================================================
 // Email — resultado del estudio del coarrendatario
 // ============================================================
@@ -1873,8 +1906,9 @@ interface SendResultadoEmailInput {
   /**
    * 'en_revision': su estudio termino y el caso lo decide un analista (Adenda 2 §5).
    * 'cerrado': el estudio se cerro sin decidir.
+   * 'sin_efecto': el estudio se resolvio antes de que terminara su evaluacion.
    */
-  decisionExpediente: 'aprobado' | 'rechazado' | 'en_revision' | 'cerrado';
+  decisionExpediente: 'aprobado' | 'rechazado' | 'en_revision' | 'cerrado' | 'sin_efecto';
   /** Reglas duras V4.1 que decidieron SU estudio. Vacio = no fue por regla. */
   reglasDurasCoarrendatario?: readonly ReglaDuraActiva[];
   /** Aprobado, pero el contrato ya se habia generado sin el (P2, contrato fijo). */
@@ -1902,6 +1936,7 @@ export function construirCorreoCoarrendatario(
   // Sin decisión adversa sobre él (no hay nada que apelar): el estudio se
   // cerró sin decidir, o el contrato ya iba sin él.
   const neutral =
+    input.decisionExpediente === 'sin_efecto' ||
     (input.decisionExpediente === 'cerrado' && input.coarrendatarioResultado !== 'rechazado') ||
     (input.decisionExpediente === 'aprobado' && !!input.contratoSinEl);
 
@@ -1912,8 +1947,19 @@ export function construirCorreoCoarrendatario(
   let subject: string;
   let cuerpoPrincipal: string;
   let badgeColor = '#0d9488'; // teal Cofianza por defecto
+  let encabezado = 'Resultado de tu evaluación';
 
-  if (input.decisionExpediente === 'en_revision') {
+  if (input.decisionExpediente === 'sin_efecto') {
+    subject = `Tu invitación como co-arrendatario quedó sin efecto — ${titular} (Cofianza)`;
+    encabezado = 'Tu invitación quedó sin efecto';
+    cuerpoPrincipal = `
+      <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
+      <p style="color: #6b7280;">El estudio de arrendamiento del inmueble en <strong>${inmuebleStr}</strong> se resolvió antes de
+      terminar tu evaluación, así que tu invitación como co-arrendatario quedó sin efecto y no seguimos con ella.</p>
+      <p style="color: #6b7280;">No tienes que hacer nada más.</p>
+    `;
+    badgeColor = '#6b7280'; // gris
+  } else if (input.decisionExpediente === 'en_revision') {
     // Adenda 2 §5: la decision es de un analista de Cofianza y puede tardar.
     // Sin este correo el coarrendatario se quedaba sin respuesta despues de
     // haber hecho su parte.
@@ -2017,7 +2063,7 @@ export function construirCorreoCoarrendatario(
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: ${badgeColor}; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 22px;">Resultado de tu evaluación</h1>
+          <h1 style="color: white; margin: 0; font-size: 22px;">${encabezado}</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           ${cuerpoPrincipal}

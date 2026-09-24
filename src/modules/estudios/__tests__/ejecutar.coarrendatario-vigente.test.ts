@@ -10,17 +10,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockEnv, queues, enqueue, ops, mockFrom } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
-  const ops: Array<{ table: string; method: string }> = [];
+  const ops: Array<{ table: string; method: string; args?: unknown[] }> = [];
   const next = (table: string): Res => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null, count: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'neq', 'is', 'in', 'or', 'gte', 'order', 'limit', 'range'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'neq', 'is', 'not', 'in', 'or', 'gte', 'order', 'limit', 'range'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH)
-      chain[m] = () => {
-        ops.push({ table, method: m });
+      chain[m] = (...args: unknown[]) => {
+        ops.push({ table, method: m, args });
         return chain;
       };
     chain.maybeSingle = async () => next(table);
@@ -62,6 +62,8 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarResponsableExpediente: vi.fn(),
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
+const mockAvisarSinEfecto = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
+vi.mock('@/modules/coarrendatarios/coarrendatarios.service', () => ({ avisarInvitacionSinEfecto: mockAvisarSinEfecto }));
 
 import { ejecutarEstudio } from '../estudios.service';
 
@@ -86,18 +88,34 @@ const expedienteHabilitado = {
 beforeEach(() => {
   queues.clear();
   ops.length = 0;
+  mockAvisarSinEfecto.mockClear();
 });
 
 describe('ejecutarEstudio — evaluación del co-arrendatario', () => {
-  it.each(['aprobado', 'rechazado', 'cerrado'])('con el estudio %s: 409 y no sigue al tope ni al buró', async (estado) => {
-    enqueue('estudios', estudioCoa);
+  it.each(['aprobado', 'rechazado', 'cerrado'])('con el estudio %s: 409, lo cancela, le avisa y no sigue al tope ni al buró', async (estado) => {
+    enqueue('estudios', estudioCoa, { data: [{ id: 'est-coa' }], error: null });
     enqueue('expedientes', expedienteHabilitado, { data: { estado }, error: null });
 
     await expect(ejecutarEstudio('est-coa', 'admin-1', '1.1.1.1', 'administrador')).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'COARRENDATARIO_ESTUDIO_NO_VIGENTE',
     });
-    expect(ops.some((o) => o.table === 'inmuebles' || o.method === 'update')).toBe(false);
+    // Estado final: no queda en formulario_completado o pago_pendiente bloqueando otros estudios.
+    const cancelacion = ops.find((o) => o.table === 'estudios' && o.method === 'update');
+    expect(cancelacion?.args?.[0]).toMatchObject({ estado: 'cancelado' });
+    expect(ops).toContainEqual({ table: 'estudios', method: 'not', args: ['estado', 'in', '(completado,cancelado,en_proceso)'] });
+    await vi.waitFor(() => expect(mockAvisarSinEfecto).toHaveBeenCalledWith('est-coa'));
+    expect(ops.some((o) => o.table === 'inmuebles')).toBe(false);
+  });
+
+  it('si ya estaba en consulta o completado, no lo cancela ni avisa', async () => {
+    enqueue('estudios', estudioCoa, { data: [], error: null });
+    enqueue('expedientes', expedienteHabilitado, { data: { estado: 'aprobado' }, error: null });
+
+    await expect(ejecutarEstudio('est-coa', 'admin-1', '1.1.1.1', 'administrador')).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_ESTUDIO_NO_VIGENTE',
+    });
+    expect(mockAvisarSinEfecto).not.toHaveBeenCalled();
   });
 
   it('con el estudio condicionado este guard lo deja seguir', async () => {

@@ -2231,6 +2231,23 @@ export async function ejecutarEstudio(
       .eq('id', est.expediente_id)
       .maybeSingle();
     if ((expEstado as { estado?: string } | null)?.estado !== 'condicionado') {
+      // Se cancela (estado final: no queda en formulario_completado o
+      // pago_pendiente bloqueando otros estudios) y se le avisa que su
+      // invitación quedó sin efecto. Una consulta en curso no se toca.
+      const { data: cancelado } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update({
+          estado: 'cancelado',
+          observaciones: 'El estudio se resolvió antes de terminar la evaluación del co-arrendatario: su invitación quedó sin efecto.',
+        } as never)
+        .eq('id', estudioId)
+        .not('estado', 'in', '(completado,cancelado,en_proceso)')
+        .select('id');
+      if ((cancelado as unknown[] | null)?.length) {
+        void import('@/modules/coarrendatarios/coarrendatarios.service')
+          .then((m) => m.avisarInvitacionSinEfecto(estudioId))
+          .catch((e) => logger.warn({ error: e, estudioId }, 'No se pudo avisar al co-arrendatario que su invitación quedó sin efecto'));
+      }
       throw AppError.conflict(
         'El estudio ya se resolvió: la evaluación del co-arrendatario ya no se ejecuta.',
         'COARRENDATARIO_ESTUDIO_NO_VIGENTE',

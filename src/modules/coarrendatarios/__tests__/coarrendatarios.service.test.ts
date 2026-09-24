@@ -148,6 +148,7 @@ import {
   cancelarInvitacionCoarrendatario,
   avisarCoarrendatarioDecision,
   invitarCoarrendatarioPorToken,
+  avisarInvitacionSinEfecto,
 } from '../coarrendatarios.service';
 
 // ============================================================
@@ -1070,6 +1071,20 @@ describe('construirCorreoCoarrendatario', () => {
     const { html } = construirCorreoCoarrendatario({ ...base, coarrendatarioResultado: 'aprobado', decisionExpediente: 'rechazado' });
     expect(html).toContain('720');
     expect(html).not.toMatch(APELACION);
+  });
+});
+
+describe('avisarInvitacionSinEfecto — P3', () => {
+  it('le escribe que su invitación quedó sin efecto, sin score ni apelación', async () => {
+    enqueue('expediente_coarrendatarios', { data: { nombre: 'Luis', email: 'luis@correo.co', expediente_id: EXPEDIENTE_ID }, error: null });
+    enqueue('expedientes', ctxRow('aprobado'));
+
+    await avisarInvitacionSinEfecto(COA_ESTUDIO_ID);
+
+    const { to, subject, html } = (mockResendSend.mock.calls[0] as unknown as [{ to: string; subject: string; html: string }])[0];
+    expect(to).toBe('luis@correo.co');
+    expect(subject).toContain('quedó sin efecto');
+    expect(html).not.toMatch(/Score|15 días hábiles/);
   });
 });
 
