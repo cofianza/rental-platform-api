@@ -11,8 +11,8 @@ router.use(authMiddleware);
 
 // POST /api/v1/contratos/:id/archivos — Subir archivo asociado. El arrendador
 // (inmobiliaria o propietario directo) sube el acta de entrega de sus contratos
-// (V3 §12.3, A9); el servicio exige ver el estudio y el middleware ya frena a
-// los miembros de solo lectura.
+// (V3 §12.3, A9; el propietario, solo el acta); el servicio exige ver el
+// estudio y el middleware ya frena a los miembros de solo lectura.
 router.post(
   '/:id/archivos',
   roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),

@@ -61,6 +61,12 @@ export async function subirArchivo(
 ) {
   const contrato = await contratoVisible(contratoId, userId, userRol);
 
+  // El propietario entra a esta ruta solo por el acta (A9); el resto de
+  // archivos los siguen cargando Cofianza y la inmobiliaria.
+  if (userRol === 'propietario' && tipoArchivo !== 'acta_entrega') {
+    throw AppError.forbidden('Como propietario solo puedes cargar el acta de entrega de tu contrato.', 'ARCHIVO_NO_PERMITIDO');
+  }
+
   // Adenda 1 contratos (respuesta 21) y A9: el acta la carga el arrendador (la
   // inmobiliaria; en el contrato viejo, también el propietario directo), nunca
   // Cofianza: avalaría un documento que no presenció.

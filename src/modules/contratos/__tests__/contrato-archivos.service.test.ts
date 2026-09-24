@@ -170,6 +170,15 @@ describe('A9: el acta de un contrato del flujo anterior la carga el arrendador',
     expect(mockUpload).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['inventario', 'documento_identidad'] as const)('el propietario no carga %s (solo el acta): 403 sin subir nada', async (tipo) => {
+    enqueue('contratos', viejo);
+    await expect(subirArchivo('c1', tipo, archivo, 'u-prop', 'propietario')).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'ARCHIVO_NO_PERMITIDO',
+    });
+    expect(mockUpload).not.toHaveBeenCalled();
+  });
+
   it('Cofianza sigue cargando el inventario o el documento de identidad', async () => {
     enqueue('contratos', viejo);
     enqueue('contrato_archivos', { data: { id: 'a1' }, error: null });
