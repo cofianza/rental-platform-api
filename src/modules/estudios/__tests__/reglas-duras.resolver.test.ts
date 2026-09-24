@@ -35,7 +35,7 @@ vi.mock('@/modules/autorizaciones/biometria', () => ({
   requiereRevisionManualPorBiometria: () => null,
 }));
 
-import { resolverResultadoEstudio } from '../reglas-duras';
+import { resolverResultadoEstudio, motivoProspectoReglasDuras, REGLAS_DURAS_ACTIVAS } from '../reglas-duras';
 
 const base = { estudioId: 'est-1', expedienteId: 'exp-1', resultadoPropuesto: 'aprobado', antecedentes: null };
 
@@ -77,5 +77,24 @@ describe('resultado registrado a mano por un analista', () => {
     filaEstudio.current = manual;
     const r = await resolverResultadoEstudio({ ...base, score: 520 });
     expect(r.resultado).toBe('condicionado');
+  });
+});
+
+describe('motivo para el prospecto (P30)', () => {
+  it('ninguna regla dura le sugiere un co-arrendatario: no cambia el resultado (§5)', () => {
+    for (const regla of REGLAS_DURAS_ACTIVAS) {
+      expect(motivoProspectoReglasDuras([regla])).not.toMatch(/co-?arrendatario/i);
+    }
+    expect(motivoProspectoReglasDuras(['dti_mayor_65', 'canon_ingreso_mayor_40'])).not.toMatch(/co-?arrendatario/i);
+  });
+
+  it('la salida sigue a la causa', () => {
+    expect(motivoProspectoReglasDuras(['canon_ingreso_mayor_40'])).toMatch(/canon menor/);
+    const dti = motivoProspectoReglasDuras(['dti_mayor_65']);
+    expect(dti).toMatch(/reduzcas tus compromisos/);
+    expect(dti).not.toMatch(/canon menor/);
+    expect(motivoProspectoReglasDuras(['dti_mayor_65', 'canon_ingreso_mayor_40'])).toMatch(/reduzcas tus compromisos.*canon menor/);
+    expect(motivoProspectoReglasDuras(['mora_vigente'])).toMatch(/al día/);
+    expect(motivoProspectoReglasDuras(['score_menor_450'])).toMatch(/más adelante/);
   });
 });

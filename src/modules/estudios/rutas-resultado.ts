@@ -114,17 +114,6 @@ export interface Ruta {
   etiquetaGestor: string;
 }
 
-/**
- * "Nunca es un portazo": el §10 exige decir QUE PUEDE MEJORAR. Estas son
- * mejoras genericas y accionables — no revelan el modelo, los umbrales ni el
- * puntaje, que el prospecto no puede ver (ver redactarEstudioParaProspecto).
- */
-export const MEJORAS_SUGERIDAS: readonly string[] = [
-  'Sumar un coarrendatario con ingresos propios: no necesita finca raiz.',
-  'Ponerte al dia en las obligaciones que tengas en mora.',
-  'Buscar un inmueble con un canon mas bajo frente a tus ingresos.',
-];
-
 const NO_APROBABLE = {
   titulo: 'Por ahora no podemos activar la fianza',
   mensaje:

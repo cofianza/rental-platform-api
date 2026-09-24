@@ -392,9 +392,9 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
   // canon/coarrendatario no aplican, asi que el cierre es distinto.
   if (reglas.includes('listas_restrictivas')) {
     return (
-      'No aprobable por ahora. Con la informacion disponible hoy, no pudimos completar las verificaciones ' +
+      'No aprobable por ahora. Con la información disponible hoy, no pudimos completar las verificaciones ' +
       'de identidad y cumplimiento que la ley nos exige para respaldar un contrato. ' +
-      'No es una decision definitiva sobre ti: puedes volver a solicitarlo mas adelante o escribirnos para revisar tu caso.'
+      'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante o escribirnos para revisar tu caso.'
     );
   }
 
@@ -402,9 +402,9 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
   // montos. La salida natural es ponerse al dia.
   if (reglas.includes('mora_vigente') || reglas.includes('mora_mayor_30d_6m')) {
     return (
-      'No aprobable por ahora. Con la informacion disponible hoy, las centrales de riesgo reportan ' +
+      'No aprobable por ahora. Con la información disponible hoy, las centrales de riesgo reportan ' +
       'obligaciones en mora recientes o vigentes a tu nombre. ' +
-      'No es una decision definitiva sobre ti: cuando esten al dia puedes volver a solicitarlo, o escribirnos para revisar tu caso.'
+      'No es una decisión definitiva sobre ti: cuando estén al día puedes volver a solicitarlo, o escribirnos para revisar tu caso.'
     );
   }
 
@@ -412,9 +412,9 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
   // coarrendatario (§5), asi que no se le ofrece esa salida.
   if (reglas.includes('score_menor_450')) {
     return (
-      'No aprobable por ahora. Con la informacion disponible hoy, tu historial en las centrales de riesgo ' +
-      'no alcanza el minimo que exige nuestra politica para respaldar un contrato. ' +
-      'No es una decision definitiva sobre ti: puedes volver a solicitarlo mas adelante o escribirnos para revisar tu caso.'
+      'No aprobable por ahora. Con la información disponible hoy, tu historial en las centrales de riesgo ' +
+      'no alcanza el mínimo que exige nuestra política para respaldar un contrato. ' +
+      'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante o escribirnos para revisar tu caso.'
     );
   }
 
@@ -427,10 +427,18 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
       ? 'el canon de este inmueble y los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar'
       : 'los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar';
 
+  // P30: tampoco aqui se ofrece co-arrendatario (la regla dura lo anula, §5).
+  // La salida sigue a la causa: canon menor si solo pesa el canon; si pesan los
+  // compromisos (DTI), reducirlos, que un canon menor solo no lo resuelve.
+  const salida = soloCanon
+    ? 'puedes intentarlo con un inmueble de canon menor o volver a solicitarlo más adelante.'
+    : reglas.includes('canon_ingreso_mayor_40')
+      ? 'cuando reduzcas tus compromisos financieros actuales puedes volver a solicitarlo, idealmente para un inmueble de canon menor.'
+      : 'cuando reduzcas tus compromisos financieros actuales puedes volver a solicitarlo.';
+
   return (
-    `No aprobable por ahora. Con la informacion disponible hoy, ${causa}. ` +
-    'No es una decision definitiva sobre ti: puedes intentarlo con un inmueble de canon menor, ' +
-    'presentar un co-arrendatario o volver a solicitarlo mas adelante.'
+    `No aprobable por ahora. Con la información disponible hoy, ${causa}. ` +
+    `No es una decisión definitiva sobre ti: ${salida}`
   );
 }
 

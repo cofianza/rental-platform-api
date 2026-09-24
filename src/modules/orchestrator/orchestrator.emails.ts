@@ -104,6 +104,8 @@ export async function sendEstudioRechazadoEmail(params: {
   // crediticio: N", que la API ya le redacta en pantalla) — y su derecho de
   // apelacion: 15 dias habiles para presentarla, respuesta de Cofianza en 10
   // dias habiles, y la apelacion no suspende el proceso de arrendamiento.
+  // Con motivoGeneral no se sugiere nada mas (P30): el motivo ya trae la salida
+  // de su causa, y un co-arrendatario no cambia un rechazo por regla dura (§5).
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -118,7 +120,7 @@ export async function sendEstudioRechazadoEmail(params: {
           <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu evaluación crediticia no cumplió con los requisitos mínimos para el arrendamiento en esta oportunidad.'}</p>
           <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #991b1b; margin: 0;">${motivoGeneral
-              ? 'Si quieres, escríbenos y revisamos juntos qué opciones tienes: un inmueble de canon menor o un co-arrendatario suelen ser el camino.'
+              ? 'Si quieres, escríbenos y revisamos juntos tu caso.'
               : 'Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al día.'}</p>
           </div>
           <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
