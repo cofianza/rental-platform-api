@@ -40,6 +40,16 @@ function diasDesde(date: string | Date): number {
   return Math.floor((Date.now() - start) / (1000 * 60 * 60 * 24));
 }
 
+/** Cofianza (administrador u operador); el resto es el dueño del inmueble. */
+const esInterno = (rol: string) => rol === 'administrador' || rol === 'operador_analista';
+
+// P27: en Fase 3 el caso es de Cofianza (CUARTA, Parágrafos Quinto y Sexto).
+const casoDeCofianza = () =>
+  AppError.forbidden(
+    'El caso ya lo gestiona Cofianza. Si el inquilino te pagó, anótalo en el historial del caso.',
+    'MORA_EN_FASE_3',
+  );
+
 /** Días en mora del canon (desde su vencimiento, en hora de Colombia), no desde el reporte. */
 function diasEnMora(fechaVencimientoCanon: string): string {
   return String(Math.max(0, diasDesde(`${fechaVencimientoCanon}T00:00:00-05:00`)));
@@ -439,6 +449,20 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
   // La pantalla estaba vieja (otro ya la escaló): sin esto la llevaba a la
   // fase siguiente y le mandaba al inquilino una plantilla que nadie pidió.
   if (input.desde && input.desde !== mora.estado) throw moraYaCambio();
+  // P27: la Fase 3 la decide Cofianza (o el escalado automático del día 10), y
+  // el dueño no adelanta la Fase 2: el inquilino recibía «escalado a Cofianza»
+  // el mismo día del reporte sin que Cofianza lo decidiera.
+  if (!esInterno(rol)) {
+    if (mora.estado === 'fase_2') {
+      throw AppError.forbidden('El paso a Fase 3 lo decide Cofianza.', 'MORA_FASE_3_SOLO_COFIANZA');
+    }
+    if (mora.estado === 'fase_1' && diasDesde(mora.reportado_at) < DIAS_FASE_2) {
+      throw AppError.badRequest(
+        `Podrás escalar a Fase 2 a los ${DIAS_FASE_2} días del reporte.`,
+        'MORA_FASE_2_ANTICIPADA',
+      );
+    }
+  }
 
   let proximoEstado: MoraEstado;
   let templateKey: 'MORA_FASE_2' | 'MORA_FASE_3';
@@ -529,6 +553,7 @@ export async function marcarPagada(id: string, input: MarcarPagadaInput, userId:
       'MORA_ESTADO_INVALIDO',
     );
   }
+  if (mora.estado === 'fase_3' && !esInterno(rol)) throw casoDeCofianza();
 
   const { error } = await db('moras_tickets')
     .update({
@@ -576,6 +601,7 @@ export async function cancelarMora(id: string, input: CancelarMoraInput, userId:
       'MORA_ESTADO_INVALIDO',
     );
   }
+  if (mora.estado === 'fase_3' && !esInterno(rol)) throw casoDeCofianza();
 
   const { error } = await db('moras_tickets')
     .update({
@@ -611,8 +637,7 @@ export async function agregarMensaje(
 ) {
   const mora = await assertMoraAccess(moraId, userId, rol);
 
-  const autorTipo: 'asesor' | 'propietario' =
-    rol === 'administrador' || rol === 'operador_analista' ? 'asesor' : 'propietario';
+  const autorTipo: 'asesor' | 'propietario' = esInterno(rol) ? 'asesor' : 'propietario';
 
   const { data, error } = await db('moras_mensajes')
     .insert({

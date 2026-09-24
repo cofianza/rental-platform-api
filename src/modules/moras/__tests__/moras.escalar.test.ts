@@ -52,12 +52,12 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveAllowedExpedienteIds: async () => null,
 }));
 
-import { escalarMora, listMoras } from '../moras.service';
+import { escalarMora, listMoras, marcarPagada, cancelarMora } from '../moras.service';
 
-const mora = (estado: string) => ({
+const mora = (estado: string, reportado_at = '2026-09-01T00:00:00Z') => ({
   data: {
     id: 'm1', ticket_numero: 'MOR-1', estado, expediente_id: 'exp1', reportado_por: 'u1',
-    reportado_at: '2026-09-01T00:00:00Z', fecha_vencimiento_canon: '2026-09-05',
+    reportado_at, fecha_vencimiento_canon: '2026-09-05',
     inquilino_telefono: '573001112233', inquilino_nombre: 'Ana Pérez',
     inmueble_direccion: 'Cra 7 # 45-10', monto_mora: 1500000,
   },
@@ -96,6 +96,42 @@ describe('escalarMora', () => {
     );
     await escalarMora('m1', { desde: 'fase_1' }, 'op', 'operador_analista');
     expect(mockEnviarTemplate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('P27: qué decide el dueño y qué decide Cofianza', () => {
+  const hace = (dias: number) => new Date(Date.now() - dias * 86_400_000).toISOString();
+  const updates = () => ops.filter((o) => o.method === 'update');
+
+  it('el dueño no escala a Fase 3', async () => {
+    enqueue('moras_tickets', mora('fase_2'));
+    await expect(escalarMora('m1', {}, 'p1', 'propietario')).rejects.toMatchObject({ statusCode: 403 });
+    expect(updates()).toEqual([]);
+    expect(mockEnviarTemplate).not.toHaveBeenCalled();
+  });
+
+  it('el dueño escala a Fase 2 desde el día 4 del reporte; Cofianza cuando quiera', async () => {
+    enqueue('moras_tickets', mora('fase_1', hace(2)));
+    await expect(escalarMora('m1', {}, 'p1', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 400 });
+    expect(updates()).toEqual([]);
+
+    // Estos pasan la regla y llegan al UPDATE (que aquí no mueve filas → 409).
+    enqueue('moras_tickets', mora('fase_1', hace(5)), { data: [], error: null });
+    await expect(escalarMora('m1', {}, 'p1', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 409 });
+    enqueue('moras_tickets', mora('fase_1', hace(0)), { data: [], error: null });
+    await expect(escalarMora('m1', {}, 'op', 'operador_analista')).rejects.toMatchObject({ statusCode: 409 });
+    expect(updates()).toHaveLength(2);
+  });
+
+  it('en Fase 3 el dueño no la marca pagada ni la cancela; Cofianza sí', async () => {
+    enqueue('moras_tickets', mora('fase_3'), mora('fase_3'));
+    await expect(marcarPagada('m1', {}, 'p1', 'propietario')).rejects.toMatchObject({ statusCode: 403 });
+    await expect(cancelarMora('m1', { motivo: 'pagó' }, 'p1', 'propietario')).rejects.toMatchObject({ statusCode: 403 });
+    expect(updates()).toEqual([]);
+
+    enqueue('moras_tickets', mora('fase_3'), { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    await marcarPagada('m1', {}, 'op', 'operador_analista');
+    expect(updates()).toHaveLength(1);
   });
 });
 

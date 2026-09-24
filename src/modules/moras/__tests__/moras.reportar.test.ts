@@ -236,12 +236,13 @@ describe('aviso al equipo de Cofianza', () => {
   it('el escalado a Fase 3 avisa (el inquilino espera contacto); el de Fase 2 no', async () => {
     mockEnviarTemplate.mockResolvedValue('aceptado');
     mockListOperators.mockResolvedValue([{ id: 'op1' }]);
+    // Las dos las escala Cofianza: el dueño no adelanta la Fase 2 ni pide la 3 (P27).
     enqueue('moras_tickets', moraEnFase('fase_1'), { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
-    await escalarMora('m1', {}, 'dueno', 'propietario');
+    await escalarMora('m1', {}, 'op2', 'operador_analista');
     expect(avisos()).toEqual([]);
 
     enqueue('moras_tickets', moraEnFase('fase_2'), { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
-    await escalarMora('m1', {}, 'dueno', 'propietario');
+    await escalarMora('m1', {}, 'op2', 'operador_analista');
     expect(avisos()).toEqual([expect.objectContaining({ userId: 'op1', tipo: 'mora.fase_3', titulo: 'Mora en Fase 3 — MOR-2026-007' })]);
   });
 
@@ -278,17 +279,18 @@ describe('rastro de quién gestionó la mora', () => {
     ops.filter((o) => o.table === table && o.method === 'insert').map((o) => o.args[0] as Record<string, unknown>);
 
   it.each([
-    ['pagada', () => marcarPagada('m1', { notas: 'pagó en efectivo' }, 'miembro1', 'inmobiliaria'), 'mora_pagada'],
-    ['cancelada', () => cancelarMora('m1', { motivo: 'error de registro' }, 'miembro1', 'inmobiliaria'), 'mora_cancelada'],
-    ['escalada', () => escalarMora('m1', {}, 'miembro1', 'inmobiliaria'), 'mora_escalada'],
-  ])('la mora %s deja autor en el chat y registro en la bitácora', async (_n, accion, esperada) => {
+    ['pagada', () => marcarPagada('m1', { notas: 'pagó en efectivo' }, 'miembro1', 'inmobiliaria'), 'mora_pagada', 'miembro1'],
+    ['cancelada', () => cancelarMora('m1', { motivo: 'error de registro' }, 'miembro1', 'inmobiliaria'), 'mora_cancelada', 'miembro1'],
+    // De Fase 2 a Fase 3 solo escala Cofianza (P27).
+    ['escalada', () => escalarMora('m1', {}, 'op1', 'operador_analista'), 'mora_escalada', 'op1'],
+  ])('la mora %s deja autor en el chat y registro en la bitácora', async (_n, accion, esperada, autor) => {
     mockEnviarTemplate.mockResolvedValue('sin_telefono');
     enqueue('moras_tickets', moraActiva, { data: [{ id: 'm1' }], error: null }, { data: { id: 'm1' }, error: null });
     await accion();
-    expect(inserts('moras_mensajes')[0]).toMatchObject({ autor_tipo: 'sistema', autor_id: 'miembro1' });
+    expect(inserts('moras_mensajes')[0]).toMatchObject({ autor_tipo: 'sistema', autor_id: autor });
     expect(inserts('bitacora')).toEqual([
       expect.objectContaining({
-        usuario_id: 'miembro1',
+        usuario_id: autor,
         accion: esperada,
         entidad: 'mora',
         entidad_id: 'm1',
