@@ -432,6 +432,8 @@ async function finalizar(v: VerificacionRow, resumen: ResumenBiometria): Promise
       await crearSolicitudFirmaMultiparte(v.contrato_id, v.enviado_por ?? '');
     }
   } catch (err) {
+    // El reenvío encontró el envío anterior ya firmado en Auco y lo concilió: no es un fallo.
+    if ((err as { errorCode?: string }).errorCode === 'CONTRATO_YA_FIRMADO') return;
     const detalle = err instanceof Error ? err.message : String(err);
     logger.error({ contratoId: v.contrato_id, error: detalle }, 'Verificacion de identidad: no se pudo crear el sobre de Auco');
     if (v.enviado_por) {

@@ -292,6 +292,16 @@ describe('pagina publica: cotejo (umbral del panel, nunca rechaza)', () => {
     expect(mockCrearSobre).toHaveBeenCalledWith('c1', 'gestor-1');
   });
 
+  it('si el envío anterior ya estaba firmado en Auco (CONTRATO_YA_FIRMADO), no se avisa un fallo', async () => {
+    enqueue(T, fila({ opcion: 'autoriza' }), { data: [{ id: 'v1' }], error: null });
+    mockCotejar.mockResolvedValue(resumen('verificada', 95));
+    mockCrearSobre.mockRejectedValueOnce(Object.assign(new Error('Este contrato ya estaba firmado'), { errorCode: 'CONTRATO_YA_FIRMADO' }));
+    const r = await verificarBiometriaFirma(TOKEN, imgs);
+
+    expect(r.completada).toBe(true);
+    expect(mockNotificar).not.toHaveBeenCalledWith(expect.objectContaining({ tipo: 'contrato.firma_error' }));
+  });
+
   it('si Auco falla al crear el sobre, la persona no se entera: se le avisa a quien envio el contrato', async () => {
     enqueue(T, fila({ opcion: 'autoriza' }), { data: [{ id: 'v1' }], error: null });
     mockCotejar.mockResolvedValue(resumen('verificada', 95));
