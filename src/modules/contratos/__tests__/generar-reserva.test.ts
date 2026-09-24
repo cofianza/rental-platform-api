@@ -42,6 +42,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsu
 vi.mock('@/modules/estudios/coarrendatario-vinculado', async (orig) => ({
   ...(await orig<typeof import('@/modules/estudios/coarrendatario-vinculado')>()),
   coarrendatarioVinculado: vi.fn(async () => null),
+  coarrendatarioVinculadoVerificado: vi.fn(async () => null),
 }));
 vi.mock('@/modules/perfil-arrendador/perfil-arrendador.service', () => ({
   checkPerfilCompletitud: vi.fn(async () => ({ completo: true, faltantes: [] })),

@@ -81,6 +81,7 @@ vi.mock('@/lib/auco', async (orig) => ({
 vi.mock('@/modules/estudios/coarrendatario-vinculado', async (orig) => ({
   ...(await orig<typeof import('@/modules/estudios/coarrendatario-vinculado')>()),
   coarrendatarioVinculado: vi.fn(async () => null),
+  coarrendatarioVinculadoVerificado: vi.fn(async () => null),
 }));
 vi.mock('@/modules/perfil-arrendador/perfil-arrendador.service', () => ({
   checkPerfilCompletitud: (...args: unknown[]) => mockCompletitud(...args),

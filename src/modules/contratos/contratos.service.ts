@@ -12,7 +12,7 @@ import { notificarUsuario, findPerfilIdByEmail } from '../notificaciones/notific
 import { resolveAllowedExpedienteIds, resolveOrgCanonicalPerfilId, assertExpedienteAccess, assertInmuebleAccess, puedeVerFilaExpediente } from '@/lib/tenantScope';
 import { checkPerfilCompletitud, usuarioPuedeEditarDatosContrato } from '../perfil-arrendador/perfil-arrendador.service';
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
-import { coarrendatarioVinculado } from '../estudios/coarrendatario-vinculado';
+import { coarrendatarioVinculadoVerificado } from '../estudios/coarrendatario-vinculado';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
 import { canonMaximoTolerado } from '../estudios/portabilidad';
 import { escalarTopeCanon } from './tope-coafianzamiento';
@@ -575,7 +575,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
 async function fetchCoarrendatarioParaContrato(
   expedienteId: string,
 ): Promise<CodeudorData | null> {
-  const vinculado = await coarrendatarioLeido(expedienteId);
+  const vinculado = await coarrendatarioVinculadoVerificado(expedienteId);
   if (!vinculado) return null;
 
   const { data: coaRow } = await (supabase
@@ -601,18 +601,6 @@ async function fetchCoarrendatarioParaContrato(
     email: coa?.email ?? null,
     telefono: coa?.telefono ?? null,
   };
-}
-
-/**
- * P6 y la prima dependen de si hay co-arrendatario: si no se puede leer, 503
- * en vez de seguir como «sin co-arrendatario».
- */
-async function coarrendatarioLeido(expedienteId: string) {
-  try {
-    return await coarrendatarioVinculado(expedienteId, { estricto: true });
-  } catch {
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el co-arrendatario del estudio. Intenta de nuevo en un momento.');
-  }
 }
 
 /**
@@ -672,7 +660,7 @@ export async function assertPuedeAbrirSobre(
   datosVariables: unknown,
   excepto?: string,
 ): Promise<void> {
-  assertSinPartesAdicionales((await coarrendatarioLeido(expedienteId)) !== null, tieneCotitular(datosVariables));
+  assertSinPartesAdicionales((await coarrendatarioVinculadoVerificado(expedienteId)) !== null, tieneCotitular(datosVariables));
   if (await haySobreVivo(contratoId, excepto)) {
     throw AppError.conflict('Este contrato ya tiene un envío a firma en curso.', 'FIRMA_YA_EN_CURSO');
   }
@@ -1601,7 +1589,7 @@ export async function enviarContratoAFirma(
 
   // P6: tampoco sale a firma con co-arrendatario o con el co-titular impreso.
   // Aquí también porque la verificación de identidad arranca antes del sobre.
-  assertSinPartesAdicionales((await coarrendatarioLeido(c.expediente_id)) !== null, tieneCotitular(c.datos_variables));
+  assertSinPartesAdicionales((await coarrendatarioVinculadoVerificado(c.expediente_id)) !== null, tieneCotitular(c.datos_variables));
   await assertEvaluacionVigente(c.expediente_id);
 
   // El PDF que va a Auco es el del borrador; si después se corrigió el teléfono

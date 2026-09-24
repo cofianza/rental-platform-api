@@ -69,9 +69,11 @@ vi.mock('@/modules/perfil-arrendador/perfil-arrendador.service', () => ({
   checkPerfilCompletitud: (...args: unknown[]) => mockCompletitud(...args),
   usuarioPuedeEditarDatosContrato: vi.fn(async () => false),
 }));
-// La función compartida (P2): su semántica es de otro cambio; aquí solo importa que el contrato la use.
+// La función compartida (P2), en su lectura verificada (503 si no se puede leer):
+// su semántica se prueba aparte; aquí solo importa que el contrato la use.
 vi.mock('@/modules/estudios/coarrendatario-vinculado', () => ({
   coarrendatarioVinculado: (...args: unknown[]) => mockCoa(...args),
+  coarrendatarioVinculadoVerificado: (...args: unknown[]) => mockCoa(...args),
 }));
 vi.mock('@/modules/inmuebles/inmuebles.service', () => ({
   reservarInmuebleParaContrato: vi.fn(async () => ({ reservado: true, ya_reservado: false, afectados: [] })),
@@ -166,13 +168,14 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
 
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
     expect(e.message).toContain('Hazlo con el contrato nuevo');
-    expect(mockCoa).toHaveBeenCalledWith(EXP, { estricto: true });
+    expect(mockCoa).toHaveBeenCalledWith(EXP);
     expect(mockCompletitud).not.toHaveBeenCalled();
     expect(escrituras()).toEqual([]);
   });
 
   it('si no se puede leer el co-arrendatario → 503, sin generar ni abrir el sobre (no es «sin co-arrendatario»)', async () => {
-    mockCoa.mockRejectedValue(new Error('timeout'));
+    // Lo que responde coarrendatarioVinculadoVerificado cuando la lectura falla.
+    mockCoa.mockRejectedValue(new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar si el estudio tiene co-arrendatario.'));
     prepararGenerar();
     expect(await error(generar())).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
     expect(mockCompletitud).not.toHaveBeenCalled();
