@@ -1217,7 +1217,7 @@ export async function verificarCertificado(codigo: string) {
       estudios!estudios_certificados_estudio_id_fkey(
         resultado,
         expedientes!estudios_expediente_id_fkey(
-          estado,
+          estado, estado_pre_cancelacion,
           solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, numero_documento)
         )
       )
@@ -1247,16 +1247,24 @@ export async function verificarCertificado(codigo: string) {
     ? (expediente.solicitantes as Record<string, unknown> | null)
     : null;
 
-  // Determine status
-  const now = new Date();
-  const vencimiento = new Date(c.fecha_vencimiento as string);
-  const status = now <= vencimiento ? 'valido_vigente' : 'valido_vencido';
-
-  // Mismo criterio que el PDF (ver resultadoEfectivo en generarCertificado):
-  // un condicionado cuyo expediente ya esta aprobado se verifica como aprobado.
+  // Mismo criterio que el PDF (ver resultadoEfectivo en datosDelCrc): un
+  // condicionado cuyo expediente ya está aprobado se verifica como aprobado. De
+  // un cerrado cuenta el estado previo; sin él, lo cerró el contrato firmado,
+  // que exige el estudio aprobado.
   const resultadoEstudio = (estudio?.resultado as string) || '';
+  const cerrado = expediente?.estado === 'cerrado';
+  const decision = cerrado ? ((expediente.estado_pre_cancelacion as string | null) ?? 'aprobado') : expediente?.estado;
   const resultadoVerificado =
-    resultadoEstudio === 'condicionado' && expediente?.estado === 'aprobado' ? 'aprobado' : resultadoEstudio;
+    resultadoEstudio === 'condicionado' && decision === 'aprobado' ? 'aprobado' : resultadoEstudio;
+  // P32: el CRC «en revisión» de un estudio que Cofianza negó, o que se cerró
+  // sin aprobarse, es auténtico pero ya no respalda ningún arrendamiento.
+  const sinEfecto =
+    resultadoEstudio === 'condicionado' && (decision === 'rechazado' || (cerrado && decision !== 'aprobado'));
+  const status = sinEfecto
+    ? 'sin_efecto'
+    : new Date() <= new Date(c.fecha_vencimiento as string)
+      ? 'valido_vigente'
+      : 'valido_vencido';
 
   // P10 (Ley 1581 art. 4): lo justo para cotejar el papel; sin dirección.
   return {
@@ -1265,7 +1273,8 @@ export async function verificarCertificado(codigo: string) {
     nombre_masked: solicitante
       ? iniciales(solicitante.nombre as string | null, solicitante.apellido as string | null)
       : '',
-    resultado: resultadoVerificado,
+    // Sin efecto no dice por qué: ni «rechazado» ni el resultado que ya no vale.
+    resultado: sinEfecto ? '' : resultadoVerificado,
     fecha_emision: c.fecha_emision as string,
     fecha_vencimiento: c.fecha_vencimiento as string,
     empresa: company.name,

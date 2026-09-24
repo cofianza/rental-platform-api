@@ -514,6 +514,41 @@ describe('verificación pública', () => {
     for (const s of ['Ana', 'María', 'Pérez', 'Gómez', 'Calle', 'Medellín', '102613']) expect(json).not.toContain(s);
   });
 
+  // P32: el analista negó el caso o se cerró sin aprobarse.
+  it('un CRC en revisión que Cofianza negó o que se cerró sin aprobarse queda sin efecto, sin decir por qué', async () => {
+    const casos: Array<Record<string, unknown>> = [
+      { estado: 'rechazado', estado_pre_cancelacion: null },
+      { estado: 'cerrado', estado_pre_cancelacion: 'rechazado' },
+      { estado: 'cerrado', estado_pre_cancelacion: 'condicionado' },
+    ];
+    for (const exp of casos) {
+      enqueue('estudios_certificados', fila(exp, 'condicionado'));
+      const v = await verificarCertificado(CODIGO);
+      expect(v).toMatchObject({ status: 'sin_efecto', resultado: '', fecha_emision: '2026-09-01T16:00:00Z' });
+    }
+    // Aunque además haya vencido: sin efecto dice más.
+    enqueue('estudios_certificados', fila({ estado: 'rechazado' }, 'condicionado', '2026-01-01T00:00:00Z'));
+    expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'sin_efecto' });
+  });
+
+  it('en revisión, o aprobado aunque después se cierre, sigue con efecto y dice lo mismo que el PDF', async () => {
+    const casos: Array<[Record<string, unknown>, string]> = [
+      [{ estado: 'condicionado', estado_pre_cancelacion: null }, 'condicionado'],
+      [{ estado: 'aprobado', estado_pre_cancelacion: null }, 'aprobado'],
+      // Aprobado y después cancelado (la persona desistió): el CRC aprobado sigue.
+      [{ estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, 'aprobado'],
+      // El contrato firmado cierra el estudio sin estado previo.
+      [{ estado: 'cerrado', estado_pre_cancelacion: null }, 'aprobado'],
+    ];
+    for (const [exp, resultado] of casos) {
+      enqueue('estudios_certificados', fila(exp, 'condicionado'));
+      expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vigente', resultado });
+    }
+    // Un aprobado por el buró no depende del expediente.
+    enqueue('estudios_certificados', fila({ estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, 'aprobado'));
+    expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vigente', resultado: 'aprobado' });
+  });
+
   it('vencido y no encontrado', async () => {
     enqueue('estudios_certificados', fila({ estado: 'aprobado' }, 'aprobado', '2026-01-01T00:00:00Z'));
     expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vencido', resultado: 'aprobado' });
