@@ -77,7 +77,7 @@ vi.mock('../pago-state-machine', async (importOriginal) => ({
   transitionPagoState: mockTransition,
 }));
 
-import { processWebhookEvent, createPaymentLink } from '../pagos.service';
+import { processWebhookEvent, createPaymentLink, registerManualPayment, reconcileMercadoPagoPayment } from '../pagos.service';
 import { devolverEvaluacionSinConsulta, reembolsarEnMercadoPago } from '../reembolsos.service';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
@@ -92,6 +92,7 @@ const pagoMp = {
 };
 const admins = () => enqueue('perfiles', { data: [{ id: 'admin-1' }], error: null });
 const upsertNoConciliado = () => ops.find((o) => o.table === 'pagos_no_conciliados' && o.method === 'upsert')?.args[0];
+const updates = (table: string) => ops.filter((o) => o.table === table && o.method === 'update').map((o) => o.args[0] as Record<string, unknown>);
 
 beforeEach(() => {
   queues.clear();
@@ -175,6 +176,20 @@ describe('no se cobra la evaluación de un estudio cerrado', () => {
     ).rejects.toMatchObject({ statusCode: 409, errorCode: 'EXPEDIENTE_CERRADO' });
     expect(ops.some((o) => o.table === 'pagos' && o.method === 'insert')).toBe(false);
   });
+
+  it('P8: el pago manual de la evaluación: 409 sin registrarlo', async () => {
+    enqueue('expedientes', { data: { id: EXP, estado: 'cerrado' }, error: null });
+
+    await expect(
+      registerManualPayment(
+        EXP,
+        { concepto: 'estudio', monto: 80000, metodo: 'transferencia', fecha_pago: '2026-09-20' } as never,
+        'admin-1',
+        'administrador',
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, errorCode: 'EXPEDIENTE_CERRADO' });
+    expect(ops.some((o) => o.table === 'pagos' && o.method === 'insert')).toBe(false);
+  });
 });
 
 describe('pago que entra después del cierre', () => {
@@ -200,6 +215,43 @@ describe('pago que entra después del cierre', () => {
     expect(mockTransitionChecked).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'completado' }));
     expect(mockOnPagoConfirmado).not.toHaveBeenCalled();
     expect(upsertNoConciliado()).toMatchObject({ provider_payment_id: 'mp-77', motivo: 'estudio_cerrado_sin_consulta' });
+  });
+});
+
+describe('P1: webhook de un reembolso', () => {
+  const reembolso = (transactionRef: string) =>
+    mockStatus.mockResolvedValueOnce({
+      status: 'refunded',
+      transactionRef,
+      rawResponse: { status: 'refunded', external_reference: `estudio:${EXP}:${PAGO}` },
+    });
+  const cobro = () =>
+    enqueue('pagos', { data: { id: PAGO, estado: 'completado', monto: 80000, expediente_id: EXP, transaction_ref: 'mp-77' }, error: null });
+
+  it('el reembolso de OTRO payment (un duplicado) cierra su fila y no toca el cobro legítimo', async () => {
+    reembolso('mp-dup');
+    enqueue('pagos_no_conciliados', { data: { id: FILA, notas: 'Pago duplicado' }, error: null });
+    cobro();
+
+    await reconcileMercadoPagoPayment('mp-dup');
+
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+    expect(updates('pagos_no_conciliados')[0]).toMatchObject({ resuelto: true, estado_proveedor: 'refunded' });
+    expect(ops.some((o) => o.table === 'pagos_no_conciliados' && o.method === 'eq' && o.args[1] === 'mp-dup')).toBe(true);
+  });
+
+  it('el reembolso del payment del cobro lo pasa a reembolsado y, si tenía factura, avisa la nota crédito', async () => {
+    reembolso('mp-77');
+    cobro();
+    enqueue('facturas', { data: { id: 'fac-1', factus_number: 'FE-12' }, error: null });
+    admins();
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(mockTransitionChecked).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'reembolsado' }));
+    expect(mockNotificarYCorreo).toHaveBeenCalledWith(
+      expect.objectContaining({ tipo: 'factura.nota_credito', mensaje: expect.stringContaining('Emitir nota crédito en Factus para la factura FE-12') }),
+    );
   });
 });
 

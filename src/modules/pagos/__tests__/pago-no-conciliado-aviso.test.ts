@@ -88,7 +88,7 @@ describe('pago no conciliado: aviso a los administradores', () => {
       expect.objectContaining({
         userId: 'admin-1',
         tipo: 'pago.no_conciliado',
-        link: `/expedientes/${EXP}`,
+        link: '/facturacion?tab=reembolsos',
         mensaje: expect.stringMatching(/\$150 .*el monto no coincide.*mp-pay-9/),
         payload: expect.objectContaining({ pago_no_conciliado_id: 'pnc-1', provider_payment_id: 'mp-pay-9' }),
       }),

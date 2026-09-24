@@ -128,6 +128,10 @@ export const AUDIT_ACTIONS = {
   PAGO_MANUAL_REGISTERED: 'pago_manual_registered',
   PAGO_COMPLETED: 'pago_completed',
   PAGO_REFUNDED: 'pago_refunded',
+  // P1: reembolsado un cobro que ya tenía factura: falta su nota crédito en Factus.
+  PAGO_NOTA_CREDITO_PENDIENTE: 'pago_nota_credito_pendiente',
+  // P1: un administrador resolvió a mano una fila de la cola de reembolsos {nota, motivo}.
+  PAGO_REEMBOLSO_RESUELTO: 'pago_reembolso_resuelto',
   PAGO_CANCELLED: 'pago_cancelled',
   PAGO_LINK_RESENT: 'pago_link_resent',
   PAGO_WEBHOOK_PROCESSED: 'pago_webhook_processed',

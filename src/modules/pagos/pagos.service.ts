@@ -793,9 +793,9 @@ export async function registerManualPayment(
   ip?: string,
 ) {
   // Verify expediente exists
-  const { error: expError } = await (supabase
+  const { data: expRow, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, estado')
     .eq('id', expedienteId)
     .single();
 
@@ -806,6 +806,10 @@ export async function registerManualPayment(
   // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo
   // registran pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
+  // P1: la evaluación de un estudio cerrado no se cobra (se tendría que devolver).
+  if (input.concepto === 'estudio' && (expRow as { estado?: string } | null)?.estado === 'cerrado') {
+    throw AppError.conflict('El estudio está cerrado: no se cobra la evaluación.', 'EXPEDIENTE_CERRADO');
+  }
   // §11.7.3: la misma puerta que el link de pago; a mano tampoco se cobra con la firma incompleta.
   await assertFianzaOperando(expedienteId, input.concepto);
 
@@ -1219,29 +1223,13 @@ async function processMercadoPagoWebhook(
 
   // 3a. Compra de créditos de estudios (no usa la tabla pagos).
   if (concepto === 'creditos_estudios') {
-    if (targetEstado === 'reembolsado') {
-      await contracargoDeCompra(refId, paymentId, (status.rawResponse as { status?: string }).status);
-      return { received: true };
-    }
-    if (targetEstado !== 'completado') return { received: true };
-    try {
-      const { data: compra } = await (supabase
-        .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-        .select('stripe_session_id')
-        .eq('id', refId)
-        .single();
-      const sessionId = (compra as { stripe_session_id?: string } | null)?.stripe_session_id;
-      if (!sessionId) {
-        logger.warn({ refId, paymentId }, 'MP webhook: compra de créditos no encontrada');
-        return { received: true };
-      }
-      const { acreditarCompraDesdeWebhook } = await import('@/modules/creditos-estudios/creditos-estudios.service');
-      await acreditarCompraDesdeWebhook(sessionId, paymentId, status.rawResponse);
-    } catch (err) {
-      logger.error({ err, refId, paymentId }, 'MP webhook: error acreditando compra de créditos');
-    }
+    await webhookCompraCreditos(refId, paymentId, externalReference, status);
     return { received: true };
   }
+
+  // P1: un payment reembolsado cierra su fila de la cola de reembolsos, venga
+  // de la plataforma o del panel de Mercado Pago.
+  if (targetEstado === 'reembolsado') await cerrarFilaReembolsada(paymentId);
 
   // 3b. Localizar NUESTRO pago. Preferimos el match exacto por pago_id (3er
   // segmento de external_reference); el fallback legacy filtra también por
@@ -1282,6 +1270,13 @@ async function processMercadoPagoWebhook(
       .limit(1)
       .maybeSingle();
     pago = pagoRow as PagoLookup | null;
+  }
+
+  // El reembolso de OTRO payment con la misma referencia (un pago duplicado que
+  // se devolvió) no es del cobro: el cobro legítimo no se toca.
+  if (targetEstado === 'reembolsado' && (!pago || pago.transaction_ref !== status.transactionRef)) {
+    logger.info({ paymentId, pagoId: pago?.id }, 'MP webhook: reembolso de un payment que no es el del cobro — el cobro no cambia');
+    return { received: true };
   }
 
   if (!pago) {
@@ -1390,8 +1385,146 @@ async function processMercadoPagoWebhook(
   if (targetEstado === 'completado' && transitioned) {
     await dispatchPagoCompletado(pago.id);
   }
+  // P1: el cobro reembolsado que ya tenía factura necesita su nota crédito.
+  if (targetEstado === 'reembolsado' && transitioned) {
+    await avisarNotaCredito(pago.id, null).catch((err) => logger.warn({ err, pagoId: pago.id }, 'No se pudo avisar la nota crédito'));
+  }
 
   return { received: true };
+}
+
+/**
+ * Webhook de una compra de créditos. Solo el payment que acreditó la compra la
+ * mueve (queda en stripe_payment_intent_id):
+ * - aprobado, con la compra sin acreditar → se acredita;
+ * - aprobado con otro payment → a la cola como pago duplicado (P22), no se absorbe;
+ * - aprobado con un reembolso parcial → a la cola para manejarlo a mano (P22);
+ * - reembolsado o contracargado el que acreditó → se revierte la compra (P22);
+ *   el de otro payment no revierte nada: solo se cierra su fila de la cola.
+ */
+async function webhookCompraCreditos(
+  compraId: string,
+  paymentId: string,
+  externalReference: string,
+  status: { status: string; transactionRef: string | null; rawResponse: Record<string, unknown> },
+): Promise<void> {
+  try {
+    const { data, error } = await (supabase
+      .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id, estado, stripe_session_id, stripe_payment_intent_id')
+      .eq('id', compraId)
+      .maybeSingle();
+    if (error) throw error;
+    const compra = data as {
+      id: string;
+      estado: string;
+      stripe_session_id: string | null;
+      stripe_payment_intent_id: string | null;
+    } | null;
+    if (!compra) {
+      logger.warn({ compraId, paymentId }, 'MP webhook: compra de créditos no encontrada');
+      if (status.status === 'completed') await registrarPagoNoConciliado(paymentId, externalReference, status, 'referencia_desconocida');
+      return;
+    }
+    const raw = status.rawResponse as { status?: string; status_detail?: string };
+
+    if (status.status === 'refunded') {
+      await cerrarFilaReembolsada(paymentId);
+      if (compra.stripe_payment_intent_id === paymentId) await contracargoDeCompra(compra.id, paymentId, raw.status);
+      else logger.info({ compraId, paymentId }, 'MP webhook: reembolso de un payment que no acreditó la compra — no se revierte');
+      return;
+    }
+    if (status.status !== 'completed') return;
+
+    if (raw.status_detail === 'partially_refunded') {
+      await registrarPagoNoConciliado(paymentId, externalReference, status, 'reembolso_parcial');
+      return;
+    }
+    if (compra.estado === 'cancelado' && compra.stripe_payment_intent_id === paymentId) {
+      // ponytail: la compra ya se revirtió por el contracargo; si Mercado Pago
+      // vuelve a aprobar el payment (contracargo ganado) no se restituye sola.
+      logger.warn({ compraId, paymentId }, 'MP webhook: payment aprobado de una compra revertida — revisar a mano');
+      return;
+    }
+    if (compra.estado !== 'pendiente' && compra.stripe_payment_intent_id !== paymentId) {
+      await registrarPagoNoConciliado(paymentId, externalReference, status, 'pago_duplicado');
+      return;
+    }
+    if (!compra.stripe_session_id) {
+      logger.warn({ compraId, paymentId }, 'MP webhook: compra de créditos sin sesión de pasarela');
+      return;
+    }
+    // ponytail: dos payments aprobados de la misma compra procesados a la vez
+    // pueden dejar registrado el segundo; el uq del lote evita el doble crédito.
+    const { acreditarCompraDesdeWebhook } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+    await acreditarCompraDesdeWebhook(compra.stripe_session_id, paymentId, status.rawResponse);
+  } catch (err) {
+    logger.error({ err, compraId, paymentId }, 'MP webhook: error procesando la compra de créditos');
+  }
+}
+
+/**
+ * P1: el payment se reembolsó en Mercado Pago; su fila de la cola de
+ * reembolsos, si la tenía, queda resuelta. Nunca lanza.
+ */
+export async function cerrarFilaReembolsada(paymentId: string): Promise<void> {
+  try {
+    const { data } = await (supabase
+      .from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
+      .select('id, notas')
+      .eq('proveedor', 'mercadopago')
+      .eq('provider_payment_id', paymentId)
+      .eq('resuelto', false)
+      .maybeSingle();
+    const fila = data as { id: string; notas: string | null } | null;
+    if (!fila) return;
+    const fecha = new Date().toLocaleString('es-CO', { timeZone: 'America/Bogota' });
+    await (supabase
+      .from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
+      .update({
+        resuelto: true,
+        estado_proveedor: 'refunded',
+        notas: `${fila.notas ? `${fila.notas} ` : ''}Mercado Pago confirmó el reembolso el ${fecha}.`,
+        updated_at: new Date().toISOString(),
+      } as never)
+      .eq('id', fila.id)
+      .eq('resuelto', false);
+  } catch (err) {
+    logger.warn({ err, paymentId }, 'No se pudo cerrar la fila del pago reembolsado');
+  }
+}
+
+/**
+ * P1: el cobro reembolsado que ya tenía factura DIAN necesita nota crédito en
+ * Factus (se hace a mano). Deja rastro en la bitácora y en las notificaciones
+ * de los administradores. Devuelve el número de la factura, si la había.
+ */
+export async function avisarNotaCredito(pagoId: string, usuarioId: string | null): Promise<string | null> {
+  const { data } = await (supabase
+    .from('facturas' as string) as ReturnType<typeof supabase.from>)
+    .select('id, factus_number')
+    .eq('pago_id', pagoId)
+    .eq('estado', 'emitida')
+    .limit(1)
+    .maybeSingle();
+  const factura = data as { id: string; factus_number: string | null } | null;
+  if (!factura) return null;
+  const numero = factura.factus_number ?? factura.id;
+  logAudit({
+    usuarioId,
+    accion: AUDIT_ACTIONS.PAGO_NOTA_CREDITO_PENDIENTE,
+    entidad: AUDIT_ENTITIES.PAGO,
+    entidadId: pagoId,
+    detalle: { factura_id: factura.id, factura_numero: factura.factus_number },
+  });
+  await avisarAdministradores({
+    tipo: 'factura.nota_credito',
+    titulo: 'Emitir nota crédito en Factus',
+    mensaje: `Emitir nota crédito en Factus para la factura ${numero}: el pago se reembolsó.`,
+    link: `/facturacion/${factura.id}`,
+    payload: { factura_id: factura.id, pago_id: pagoId },
+  });
+  return numero;
 }
 
 /**
@@ -1407,13 +1540,15 @@ export async function registrarPagoNoConciliado(
   externalReference: string,
   status: { status: string; rawResponse: Record<string, unknown> },
   motivo: string,
+  /** 'mercadopago', o 'manual'/'credito' para un cobro que no pasó por la pasarela (id `pago:<uuid>`). */
+  proveedor = 'mercadopago',
 ): Promise<boolean> {
   const mpAmount = (status.rawResponse as { transaction_amount?: number }).transaction_amount;
   const { data, error } = await (supabase
     .from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
     .upsert(
       {
-        proveedor: 'mercadopago',
+        proveedor,
         provider_payment_id: paymentId,
         external_reference: externalReference || null,
         monto: typeof mpAmount === 'number' ? mpAmount : null,
@@ -1433,7 +1568,7 @@ export async function registrarPagoNoConciliado(
   // supiera.
   const filaId = (data as Array<{ id: string }> | null)?.[0]?.id;
   if (filaId) {
-    avisarPagoNoConciliado({ filaId, paymentId, externalReference, estado: status.status, motivo, monto: mpAmount }).catch((err) =>
+    avisarPagoNoConciliado({ filaId, paymentId, externalReference, estado: status.status, motivo, monto: mpAmount, proveedor }).catch((err) =>
       logger.warn({ err, paymentId }, 'No se pudo avisar del pago no conciliado'),
     );
   }
@@ -1449,7 +1584,13 @@ export const MOTIVO_NO_CONCILIADO: Record<string, string> = {
   transicion_invalida: 'el cobro ya estaba cancelado o reembolsado',
   transicion_fallida: 'no se pudo marcar el cobro como pagado',
   estudio_cerrado_sin_consulta: 'es la evaluación de un estudio que terminó sin consultar el buró, y se devuelve',
+  estudio_fallido_revisar:
+    'es la evaluación de un estudio que terminó con la consulta al buró fallida: no se sabe si la central la cobró',
+  reembolso_parcial: 'Mercado Pago reembolsó una parte del pago de una compra de créditos, y los créditos no se ajustan solos',
 };
+
+/** Motivos que no se resuelven reembolsando el pago completo: se cierran a mano. */
+export const MOTIVOS_SIN_REEMBOLSO = ['transicion_fallida', 'reembolso_parcial'];
 
 const ESTADO_MP: Record<string, string> = {
   completed: 'aprobado',
@@ -1482,24 +1623,29 @@ async function avisarPagoNoConciliado(args: {
   estado: string;
   motivo: string;
   monto: number | undefined;
+  proveedor: string;
 }): Promise<void> {
-  const expedienteId = args.externalReference.split(':')[1] ?? '';
-  const link = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(expedienteId)
-    ? `/expedientes/${expedienteId}`
-    : undefined;
   const monto = typeof args.monto === 'number' ? formatCOP(args.monto) : 'monto desconocido';
-  const devolver = args.motivo === 'estudio_cerrado_sin_consulta';
+  const porque = MOTIVO_NO_CONCILIADO[args.motivo] ?? args.motivo;
+  const enMp = args.proveedor === 'mercadopago';
+  const titulos: Record<string, string> = {
+    estudio_cerrado_sin_consulta: enMp ? 'Evaluación por devolver en Mercado Pago' : 'Evaluación por devolver a mano',
+    estudio_fallido_revisar: 'Revisar la devolución de una evaluación',
+    reembolso_parcial: 'Reembolso parcial de una compra de créditos',
+  };
+  const accion = MOTIVOS_SIN_REEMBOLSO.includes(args.motivo) || !enMp
+    ? 'Resuélvelo a mano y márcalo resuelto en Pagos a Cofianza › Reembolsos.'
+    : 'Reembólsalo con «Reembolsar en Mercado Pago» en Pagos a Cofianza › Reembolsos, o márcalo resuelto con una nota.';
   const mensaje =
-    `Mercado Pago tiene un pago de ${monto} (${ESTADO_MP[args.estado] ?? args.estado}) ` +
-    `${devolver ? 'por devolver' : 'que no se pudo asociar a un cobro'}: ${MOTIVO_NO_CONCILIADO[args.motivo] ?? args.motivo}. ` +
-    `ID del pago en Mercado Pago: ${args.paymentId}; referencia: ${args.externalReference || 'sin referencia'}. ` +
-    'Reembólsalo con «Reembolsar en Mercado Pago» en Pagos a Cofianza › Reembolsos, o concílialo a mano.';
+    `${enMp ? `Pago de ${monto} en Mercado Pago (${ESTADO_MP[args.estado] ?? args.estado})` : `Pago de ${monto}`}: ${porque}. ` +
+    (enMp ? `ID del pago en Mercado Pago: ${args.paymentId}; referencia: ${args.externalReference || 'sin referencia'}. ` : '') +
+    accion;
 
   await avisarAdministradores({
     tipo: 'pago.no_conciliado',
-    titulo: devolver ? 'Evaluación por devolver en Mercado Pago' : 'Pago sin conciliar en Mercado Pago',
+    titulo: titulos[args.motivo] ?? 'Pago sin conciliar en Mercado Pago',
     mensaje,
-    link,
+    link: '/facturacion?tab=reembolsos',
     payload: {
       pago_no_conciliado_id: args.filaId,
       provider_payment_id: args.paymentId,
@@ -1671,6 +1817,13 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
   for (const c of compras) {
     try {
       const found = await gateway.searchPaymentsByReference(`creditos_estudios:${c.id}`);
+      // P22: acredita el primer payment aprobado (el que queda registrado en la
+      // compra); los otros aprobados caen como duplicados en la cola.
+      const fecha = (p: { rawResponse: Record<string, unknown> }) => String(p.rawResponse.date_created ?? '');
+      found.sort(
+        (a, b) =>
+          (a.status === 'completed' ? 0 : 1) - (b.status === 'completed' ? 0 : 1) || fecha(a).localeCompare(fecha(b)),
+      );
       for (const payment of found) {
         if (payment.transactionRef) {
           await processMercadoPagoWebhook(payment.transactionRef, 'payment', gateway);
