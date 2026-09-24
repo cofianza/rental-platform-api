@@ -119,7 +119,7 @@ export const WHATSAPP_TEMPLATES = {
     language: 'es_CO',
     // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} fecha_vencimiento, {{5}} a quién, {{6}} canal
     description:
-      'Hola *{{1}}*, te recordamos que el canon del inmueble *{{2}}* por *${{3}}* venció el *{{4}}*.\n\n¿Ya realizaste el pago? Si es así, envíale el comprobante a *{{5}}* al *{{6}}* para que lo registre.',
+      'Buen día, *{{1}}*. Le recordamos que el canon de arrendamiento del inmueble ubicado en *{{2}}*, por valor de *${{3}}*, venció el *{{4}}*.\n\nSi ya realizó el pago, le agradecemos enviar el comprobante a *{{5}}* al *{{6}}* para su registro.',
   },
   /** Fase 2 v2 — mismo destino del comprobante que la Fase 1 v2. */
   MORA_FASE_2_V2: {
@@ -127,7 +127,7 @@ export const WHATSAPP_TEMPLATES = {
     language: 'es_CO',
     // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora, {{5}} a quién, {{6}} canal
     description:
-      'Hola *{{1}}*, el canon del inmueble *{{2}}* por *${{3}}* lleva *{{4}} días* en mora.\n\nTe invitamos a regularizar el pago lo antes posible para evitar que el caso escale a Cofianza como respaldo legal.\n\nSi ya realizaste el pago, envíale el comprobante a *{{5}}* al *{{6}}* para que lo registre.',
+      'Buen día, *{{1}}*. El canon de arrendamiento del inmueble ubicado en *{{2}}*, por valor de *${{3}}*, registra *{{4}} días* de mora.\n\nLe invitamos a ponerse al día a la mayor brevedad. Si el saldo continúa pendiente, la gestión del cobro pasará a Cofianza S.A.S., en su calidad de fiador del contrato.\n\nSi ya realizó el pago, le agradecemos enviar el comprobante a *{{5}}* al *{{6}}* para su registro.',
   },
   /** Fase 3 v2 — el caso ya es de Cofianza: el comprobante va al correo de soporte. */
   MORA_FASE_3_V2: {
@@ -135,7 +135,7 @@ export const WHATSAPP_TEMPLATES = {
     language: 'es_CO',
     // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora, {{5}} correo de soporte de Cofianza
     description:
-      'Hola *{{1}}*, el caso de mora del inmueble *{{2}}* por *${{3}}* (*{{4}} días*) fue escalado formalmente a Cofianza.\n\nA partir de ahora, Cofianza asume la gestión del cobro como garante. Nuestro equipo se comunicará contigo para coordinar la regularización.\n\nSi ya realizaste el pago, envía el comprobante al correo *{{5}}* para que lo registremos.',
+      'Buen día, *{{1}}*. Le informamos que el cobro del canon de arrendamiento del inmueble ubicado en *{{2}}*, por valor de *${{3}}* (*{{4}} días* de mora), pasó a ser gestionado por Cofianza S.A.S., en su calidad de fiador del contrato.\n\nUn asesor de Cofianza se comunicará con usted para acordar la forma de pago.\n\nSi ya realizó el pago, le agradecemos enviar el comprobante al correo *{{5}}* para su registro.',
   },
   /**
    * Link de autorización de tratamiento de datos (categoría UTILITY en Meta).
