@@ -174,6 +174,22 @@ describe('valores de la fianza', () => {
   });
 });
 
+describe('cashback con la regla de la Adenda 1 de contratos (§3.4.2, §3.4.4, §5.9)', () => {
+  it.each([
+    ['Trasladada', true],
+    ['Tradicional', false],
+  ])('%s: se pierde si COFIANZA cubrió sumas o EL ARRENDADOR no reportó, no por la mora', (_m, trasladada) => {
+    const t = textos(revision(datos({ trasladada })));
+    expect(t).toContain(
+      '**VIGÉSIMA SEGUNDA: CASHBACK.** Si a la terminación del contrato de arrendamiento COFIANZA no hubiere tenido que cubrir sumas a cargo de EL ARRENDATARIO durante la vigencia de la fianza, y EL ARRENDADOR hubiere cumplido sus obligaciones de reporte frente a COFIANZA derivadas del convenio vigente, COFIANZA reintegrará el TREINTA POR CIENTO (30%) del valor total de las tarifas mensuales efectivamente pagadas. Este reintegro no aplica sobre la prima de vinculación y se liquida a la terminación del contrato.',
+    );
+    expect(t).toContain(
+      '**PARÁGRAFO PRIMERO — FALTANTES CUBIERTOS:** Cualquier faltante cubierto por COFIANZA conforme al Parágrafo de la Cláusula Décima, sin importar su cuantía, hace perder este beneficio.',
+    );
+    expect(t.join('\n')).not.toMatch(/DEFINICIÓN DE MORA|incurrido en mora por ningún concepto/);
+  });
+});
+
 describe('las cláusulas se numeran y se remiten solas', () => {
   const r = revision(datos());
 

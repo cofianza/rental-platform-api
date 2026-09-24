@@ -201,6 +201,33 @@ const DOCUMENTOS: Documento[] = [
           '@adicionales, que no se imprime cuando no hay cláusulas adicionales. @titulo da el ' +
           'mismo centrado en negrita (13 pt) y el texto queda idéntico',
       },
+      // VIGÉSIMA SEGUNDA y su Parágrafo Primero
+      {
+        parrafo: 117,
+        word:
+          'EL ARRENDATARIO no hubiere incurrido en mora por ningún concepto durante la vigencia de ' +
+          'la fianza,',
+        motor:
+          'COFIANZA no hubiere tenido que cubrir sumas a cargo de EL ARRENDATARIO durante la ' +
+          'vigencia de la fianza, y EL ARRENDADOR hubiere cumplido sus obligaciones de reporte ' +
+          'frente a COFIANZA derivadas del convenio vigente,',
+        motivo: CASHBACK,
+      },
+      {
+        parrafo: 118,
+        word:
+          'DEFINICIÓN DE MORA PARA ESTE EFECTO:** Se entiende que existe mora cuando hubiere ' +
+          'ocurrido pago tardío, parcial o incompleto de cualquiera de los siguientes conceptos: ' +
+          'canon de arrendamiento, tarifa mensual de la fianza, servicios públicos a cargo de EL ' +
+          'ARRENDATARIO, cuota de administración a su cargo, o cualquier otra obligación económica ' +
+          'derivada del contrato de arrendamiento. Cualquier faltante cubierto por COFIANZA ' +
+          'conforme al Parágrafo de la Cláusula Décima, sin importar su cuantía, se computa como ' +
+          'mora para efectos de este beneficio.',
+        motor:
+          'FALTANTES CUBIERTOS:** Cualquier faltante cubierto por COFIANZA conforme al Parágrafo ' +
+          'de la Cláusula Décima, sin importar su cuantía, hace perder este beneficio.',
+        motivo: `${CASHBACK}: sale la definición de mora`,
+      },
     ],
     encabezado: LOGOS,
     pie: { rotulo: 'CRC N°', iniciales: false },
