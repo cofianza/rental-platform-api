@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // deshace el lock (nadie consultó el buró) y se revisa la devolución. Mismo
 // mock de Supabase que estudios.enlace-cancelar.test.ts: colas por tabla + `ops`.
 
-const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver } = vi.hoisted(() => {
+const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -37,6 +37,9 @@ const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver } = vi.hoisted(() 
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockFrom: vi.fn((table: string) => chainFor(table)),
     mockDevolver: vi.fn(async () => undefined),
+    // Por defecto el buró no contesta nunca (lo que corre tras el lock queda en
+    // vuelo); cada prueba que lo necesita lo hace fallar.
+    mockSolicitar: vi.fn((): Promise<unknown> => new Promise(() => {})),
   };
 });
 
@@ -72,11 +75,8 @@ vi.mock('../autorizacion.guard', () => ({
   assertAutorizacionVigente: vi.fn(async () => ({ autorizacionId: 'aut-1' })),
   AUTORIZACION_PREVIA_ERROR_CODE: 'AUTORIZACION_PREVIA_REQUERIDA',
 }));
-// Sin buró en la prueba: lo que corre en segundo plano tras el lock falla y se registra.
 vi.mock('../providers/factory', () => ({
-  getProvider: vi.fn(() => {
-    throw new Error('sin buró en la prueba');
-  }),
+  getProvider: vi.fn(() => ({ solicitar: mockSolicitar, obtenerResultado: vi.fn() })),
   getAllProviderIds: vi.fn(() => ['transunion', 'datacredito']),
 }));
 vi.mock('../pago.guard', () => ({
@@ -177,5 +177,42 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     expect(lock).toMatchObject({ estado: 'en_proceso', proveedor: 'datacredito', referencia_proveedor: null });
     expect(deshacer).toEqual({ estado: 'fallido', proveedor: 'transunion', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } });
     await vi.waitFor(() => expect(mockDevolver).toHaveBeenCalledWith('exp-1', 'Estudio rechazado', null));
+  });
+
+  const actualizaciones = () => ops.filter((o) => o.table === 'estudios' && o.method === 'update').map((o) => o.args[0] as Record<string, unknown>);
+
+  it('Q5c-2: si el reintento con otro buró falla sin dejar referencia, vuelve la prueba de la consulta anterior', async () => {
+    mockSolicitar.mockRejectedValueOnce(new Error('HTTP 503'));
+    enqueue(
+      'estudios',
+      estudio({ estado: 'fallido', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } }),
+      { data: [{ id: 'est-1' }], error: null }, // lock
+    );
+    enqueue('expedientes', expediente('en_revision'), { data: { estado: 'en_revision' }, error: null });
+
+    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }).catch(() => undefined);
+
+    await vi.waitFor(() => expect(actualizaciones()).toHaveLength(2));
+    const [lock, fallo] = actualizaciones();
+    expect(lock).toMatchObject({ estado: 'en_proceso', proveedor: 'datacredito', referencia_proveedor: null });
+    expect(fallo).toMatchObject({ estado: 'fallido', proveedor: 'transunion', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } });
+  });
+
+  it('Q5c-2: la re-consulta de un condicionado sin score que falla conserva el resultado del estudio', async () => {
+    mockSolicitar.mockRejectedValueOnce(new Error('HTTP 503'));
+    const previo = {
+      estado: 'completado', resultado: 'condicionado', score: null, proveedor: 'transunion', referencia_proveedor: 'TU-5',
+      respuesta_proveedor: { codigo: 14 }, observaciones: 'El buró no pudo evaluar', autorizacion_habeas_data_id: 'aut-0',
+      canon_evaluado: 1_400_000, canon_evaluado_origen: 'inmueble',
+    };
+    enqueue('estudios', estudio(previo), { data: [{ id: 'est-1' }], error: null });
+    enqueue('expedientes', expediente('condicionado'));
+
+    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }).catch(() => undefined);
+
+    await vi.waitFor(() => expect(actualizaciones()).toHaveLength(2));
+    const [lock, fallo] = actualizaciones();
+    expect(lock).toMatchObject({ estado: 'en_proceso', resultado: 'pendiente', referencia_proveedor: null });
+    expect(fallo).toEqual(previo);
   });
 });

@@ -2124,7 +2124,9 @@ export async function ejecutarEstudio(
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, score, proveedor, tipo, datos_formulario, expediente_id, estudio_padre_id, referencia_proveedor, respuesta_proveedor')
+    .select(
+      'id, estado, resultado, score, proveedor, tipo, datos_formulario, expediente_id, estudio_padre_id, referencia_proveedor, respuesta_proveedor, observaciones, autorizacion_habeas_data_id, canon_evaluado, canon_evaluado_origen',
+    )
     .eq('id', estudioId)
     .single();
 
@@ -2144,6 +2146,10 @@ export async function ejecutarEstudio(
     estudio_padre_id?: string | null;
     referencia_proveedor?: string | null;
     respuesta_proveedor?: unknown;
+    observaciones?: string | null;
+    autorizacion_habeas_data_id?: string | null;
+    canon_evaluado?: number | null;
+    canon_evaluado_origen?: string | null;
   };
 
   // 1.2. Ownership guard para solicitante: solo puede ejecutar estudios
@@ -2676,6 +2682,25 @@ export async function ejecutarEstudio(
     estudioId,
     proveedor: proveedorFinal,
     proveedorAnterior: cambioProveedor ? proveedorAnterior : undefined,
+    // Si el buró nuevo falla sin dejar referencia, vuelve lo que el lock pisó:
+    // la prueba de la consulta anterior y, en la re-consulta de un condicionado
+    // sin score, su resultado.
+    restaurarSiFalla: reconsultaOtroBuro
+      ? {
+          estado: est.estado,
+          resultado: est.resultado,
+          score: est.score,
+          observaciones: est.observaciones ?? null,
+          proveedor: est.proveedor,
+          referencia_proveedor: est.referencia_proveedor ?? null,
+          respuesta_proveedor: est.respuesta_proveedor ?? null,
+          autorizacion_habeas_data_id: est.autorizacion_habeas_data_id ?? null,
+          canon_evaluado: est.canon_evaluado ?? null,
+          canon_evaluado_origen: est.canon_evaluado_origen ?? null,
+        }
+      : cambioProveedor
+        ? { proveedor: est.proveedor, referencia_proveedor: est.referencia_proveedor ?? null, respuesta_proveedor: est.respuesta_proveedor ?? null }
+        : undefined,
     expedienteId: est.expediente_id,
     providerInput,
     userId,
@@ -2716,8 +2741,14 @@ async function procesarEstudioAsync(args: {
   centralCaida?: string;
   /** Background check ya lanzado en el intento anterior: no se vuelve a pedir a Auco. */
   antecedentesPrevios?: Promise<ResumenAntecedentes> | null;
+  /**
+   * Lo que el lock pisó y vuelve si el buró falla sin dejar referencia. Con
+   * `estado`, es una re-consulta: el estudio vuelve entero a su resultado.
+   */
+  restaurarSiFalla?: Record<string, unknown> & { estado?: string };
 }): Promise<void> {
   const { estudioId, proveedor, proveedorAnterior, expedienteId, providerInput, userId, ip, sessionId, inicioMs } = args;
+  let referenciaNueva: string | null = null;
   const provider = getProvider(proveedor as 'transunion' | 'sifin' | 'datacredito');
   // Nombre legible del buró para los mensajes que ve el gestor: con dos
   // proveedores activos, hardcodear "TransUnion" muestra el buró equivocado.
@@ -2763,6 +2794,7 @@ async function procesarEstudioAsync(args: {
     });
 
     const response = await provider.solicitar(providerInput);
+    referenciaNueva = response.referencia_proveedor ?? null;
 
     // Persistir la referencia con error-check: sin ella no hay forma de
     // recuperar/consultar el estudio después (consulta facturada perdida).
@@ -2922,10 +2954,13 @@ async function procesarEstudioAsync(args: {
         : `${buroLabel} no pudo completar la consulta. No es un rechazo de crédito: vuelve a intentarlo o escribe a soporte.`;
 
     // CAS: si lo cancelaron mientras se consultaba, no se resucita como 'fallido'
-    // (reintentable) ni se avisa de un fallo.
+    // (reintentable) ni se avisa de un fallo. Si el buró nuevo no dejó
+    // referencia, vuelve lo que el lock pisó (la prueba de la consulta anterior
+    // o, en una re-consulta, el resultado que el estudio ya tenía).
+    const restaurar = !referenciaNueva ? args.restaurarSiFalla : undefined;
     const { data: marcados, error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .update({ estado: 'fallido', observaciones } as never)
+      .update((restaurar?.estado ? restaurar : { ...restaurar, estado: 'fallido', observaciones }) as never)
       .eq('id', estudioId)
       .eq('estado', 'en_proceso')
       .select('id');
@@ -2936,7 +2971,13 @@ async function procesarEstudioAsync(args: {
 
     // Politica §14: que alguien se entere (timeline + responsable + internos).
     if (failError || (marcados && marcados.length > 0)) {
-      await avisarEstudioFallido({ estudioId, expedienteId, observaciones, detalleTecnico: observaciones === errorMsg ? undefined : errorMsg });
+      await avisarEstudioFallido({
+        estudioId,
+        expedienteId,
+        observaciones,
+        ...(restaurar?.estado ? { titulo: 'La consulta al otro buró falló: el estudio conserva su resultado' } : {}),
+        detalleTecnico: observaciones === errorMsg ? undefined : errorMsg,
+      });
     }
 
     logAudit({
