@@ -4,9 +4,11 @@
 -- P12 — Comisión de intermediación (V3 §8.3.6; Adenda 1 contratos §3.6.5): la
 -- fija cada inmobiliaria en el contrato; 0 o vacía suprime la cláusula con
 -- renumeración, y el propietario directo nunca la lleva. El API deja
--- inmobiliaria.comision_porcentaje vacío en esos casos. Con el API anterior
--- ese campo siempre traía el 20 % global, así que la plantilla imprime lo
--- mismo que hoy hasta que salga el API nuevo (funciona antes y después).
+-- inmobiliaria.comision_porcentaje vacío en esos casos.
+-- ORDEN: correr esta migración ANTES de desplegar el API. Con el API anterior
+-- ese campo siempre trae el 20 % global y la plantilla imprime lo mismo que
+-- hoy; el API nuevo sin esta migración dejaría la cláusula 21 con el
+-- porcentaje en blanco.
 -- De paso, el bloque del arrendador y su firma no le ponen NIT ni
 -- representante legal a un propietario persona natural.
 --
