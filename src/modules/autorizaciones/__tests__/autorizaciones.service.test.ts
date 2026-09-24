@@ -379,6 +379,22 @@ describe('autorizaciones.service', () => {
       expect(opsDe('autorizaciones_habeas_data', 'update').map((o) => o.args[0])).toEqual([{ estado: 'expirado' }]);
     });
 
+    // Con «cada miembro ve solo lo suyo»: el estudio NO asignado de un compañero.
+    // Antes bastaba ser de la organización (perfilEsDuenoDeInmueble en true).
+    it('el asesor restringido no envía la autorización de un estudio de un compañero: 403 sin crear nada', async () => {
+      mockAssertAccess.mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404, errorCode: 'EXPEDIENTE_NOT_FOUND' }));
+      enqueue('expedientes', { data: expedienteConSolicitante });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+
+      await expect(
+        enviarEnlaceAutorizacion(EXPEDIENTE_ID, 'asesor', undefined, { email: 'desvio@correo.co' }, 'inmobiliaria'),
+      ).rejects.toMatchObject({ statusCode: 403, errorCode: 'AUTORIZACION_FORBIDDEN' });
+      expect(mockAssertAccess).toHaveBeenCalledWith(EXPEDIENTE_ID, 'asesor', 'inmobiliaria');
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toHaveLength(0);
+      expect(opsDe('solicitantes', 'update')).toHaveLength(0);
+      expect(mockSendAutorizacionEmail).not.toHaveBeenCalled();
+    });
+
     it('debe lanzar error si expediente no existe', async () => {
       enqueue('expedientes', { data: null, error: { message: 'not found' } });
       await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({

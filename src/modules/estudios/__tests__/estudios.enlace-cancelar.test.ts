@@ -67,7 +67,8 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
 vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: mockCancelarPagos }));
 
-import { sendSelfServiceLink, cancelEstudio } from '../estudios.service';
+import { sendSelfServiceLink, cancelEstudio, ejecutarEstudio } from '../estudios.service';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 const fila = (estado: string) => ({ id: 'est-1', expediente_id: 'exp-1', tipo: 'individual', estado, resultado: 'pendiente' });
 
@@ -132,5 +133,52 @@ describe('cancelar la evaluacion', () => {
     enqueue('pagos', { data: [], error: null });
     await cancelEstudio('est-1', 'u-1', undefined, 'administrador');
     expect(mockCancelarPagos).not.toHaveBeenCalled();
+  });
+});
+
+// Con «cada miembro ve solo lo suyo», el asesor restringido tiene el id del
+// estudio NO asignado de un compañero: assertExpedienteAccess lo niega. Antes
+// bastaba ser de la organización (perfilEsDuenoDeInmueble, aquí en true).
+describe('estudio de un compañero, para el asesor restringido', () => {
+  const fueraDeCartera = () => vi.mocked(assertExpedienteAccess).mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404, errorCode: 'EXPEDIENTE_NOT_FOUND' }));
+
+  it('enviar el enlace del formulario: 403 sin reescribir el correo ni tocar el estudio', async () => {
+    fueraDeCartera();
+    enqueue('estudios', { data: fila('solicitado'), error: null });
+    enqueue('expedientes', {
+      data: { solicitante_id: 's-1', solicitantes: { nombre: 'A', apellido: 'B', email: 'a@b.co' } },
+      error: null,
+    });
+    await expect(sendSelfServiceLink('est-1', 'asesor', undefined, 'desvio@correo.co', 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'ESTUDIO_FORBIDDEN',
+    });
+    expect(assertExpedienteAccess).toHaveBeenCalledWith('exp-1', 'asesor', 'inmobiliaria');
+    expect(ops.some((o) => o.method === 'update')).toBe(false);
+  });
+
+  it('en su cartera sí pasa el guard (llega al CAS del estudio)', async () => {
+    enqueue('estudios', { data: fila('solicitado'), error: null }, { data: [], error: null });
+    enqueue('expedientes', {
+      data: { solicitante_id: 's-1', solicitantes: { nombre: 'A', apellido: 'B', email: 'a@b.co' } },
+      error: null,
+    });
+    await expect(sendSelfServiceLink('est-1', 'asesor', undefined, undefined, 'inmobiliaria')).rejects.toMatchObject({
+      errorCode: 'ESTUDIO_ESTADO_CAMBIO',
+    });
+  });
+
+  it('ejecutar la consulta al buró (facturable): 403 sin leer nada más', async () => {
+    fueraDeCartera();
+    enqueue('estudios', { data: fila('solicitado'), error: null });
+    // Lo que leía la regla anterior para dejarlo pasar.
+    enqueue('expedientes', { data: { inmueble_id: 'inm-1' }, error: null });
+    enqueue('inmuebles', { data: { propietario_id: 'companero', inmobiliaria_id: 'org-1' }, error: null });
+    await expect(ejecutarEstudio('est-1', 'asesor', undefined, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'ESTUDIO_FORBIDDEN',
+    });
+    expect(assertExpedienteAccess).toHaveBeenCalledWith('exp-1', 'asesor', 'inmobiliaria');
+    expect(ops.filter((o) => o.table !== 'estudios')).toEqual([]);
   });
 });

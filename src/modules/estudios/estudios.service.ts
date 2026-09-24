@@ -19,7 +19,7 @@ import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from 
 import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
-import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
 import { assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
 import {
   decisionDeCofianza,
@@ -1118,10 +1118,10 @@ export async function sendSelfServiceLink(
     );
   }
 
-  // 2. Get solicitante email from expediente (+ inmueble para tenant guard)
+  // 2. Get solicitante email from expediente
   const { data: expediente } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('solicitante_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id), solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email)')
+    .select('solicitante_id, solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, email)')
     .eq('id', est.expediente_id)
     .single();
 
@@ -1131,21 +1131,18 @@ export async function sendSelfServiceLink(
 
   const exp = expediente as unknown as {
     solicitante_id: string;
-    inmuebles: { propietario_id: string | null; inmobiliaria_id: string | null } | null;
     solicitantes: { nombre: string; apellido: string; email: string };
   };
 
   // 2b. Tenant guard (mismo criterio que ejecutarEstudio): inmobiliaria/
-  // propietario solo sobre estudios de inmuebles que administran — sin esto,
-  // el override de email permitía reescribir el contacto de solicitantes
-  // ajenos y desviar el enlace. Admin/operador pasan.
+  // propietario solo sobre estudios de su cartera (el miembro restringido, los
+  // suyos o asignados) — sin esto, el override de email permitía reescribir el
+  // contacto de solicitantes ajenos y desviar el enlace. Admin/operador pasan.
   if (userRol === 'inmobiliaria' || userRol === 'propietario') {
-    const esDueno = await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
-      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
-    });
+    const esDueno = await assertExpedienteAccess(est.expediente_id, userId, userRol).then(
+      () => true,
+      () => false,
+    );
     if (!esDueno) {
       throw AppError.forbidden(
         'No tienes permisos para enviar el enlace de este estudio',
@@ -2137,33 +2134,15 @@ export async function ejecutarEstudio(
   }
 
   // 1.3. Ownership guard para inmobiliaria / propietario: solo pueden ejecutar
-  //      (o reintentar) estudios de expedientes de un inmueble que administran.
-  //      La inmobiliaria es quien paga el estudio, así que debe poder
-  //      relanzarlo si la consulta falló. Admin/operador pasan sin chequeo.
+  //      (o reintentar) estudios de su cartera; el miembro restringido, los
+  //      suyos o asignados (es una consulta facturable al buró). La inmobiliaria
+  //      es quien paga el estudio, así que debe poder relanzarlo si la consulta
+  //      falló. Admin/operador pasan sin chequeo.
   if (userRol === 'inmobiliaria' || userRol === 'propietario') {
-    const { data: expInmRow } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('inmueble_id')
-      .eq('id', est.expediente_id)
-      .single();
-    const inmuebleId = (expInmRow as { inmueble_id?: string | null } | null)?.inmueble_id ?? null;
-    let esDueno = false;
-    if (inmuebleId) {
-      const { data: inmRow } = await (supabase
-        .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-        .select('propietario_id, inmobiliaria_id')
-        .eq('id', inmuebleId)
-        .single();
-      const inm = inmRow as { propietario_id?: string | null; inmobiliaria_id?: string | null } | null;
-      if (inm) {
-        esDueno = await perfilEsDuenoDeInmueble({
-          userId,
-          userRol,
-          inmueblePropietarioId: inm.propietario_id,
-          inmuebleInmobiliariaId: inm.inmobiliaria_id,
-        });
-      }
-    }
+    const esDueno = await assertExpedienteAccess(est.expediente_id, userId, userRol).then(
+      () => true,
+      () => false,
+    );
     if (!esDueno) {
       throw AppError.forbidden('No tienes permisos para ejecutar este estudio', 'ESTUDIO_FORBIDDEN');
     }

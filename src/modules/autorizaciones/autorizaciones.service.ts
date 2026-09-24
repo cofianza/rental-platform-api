@@ -6,7 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
-import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { estudioYaCobrado as estudioPagado } from '@/modules/estudios/pago.guard';
 import { normalizarDocumento, normalizarTipoDocumento } from '@/modules/estudios/autorizacion.guard';
 import { env } from '@/config';
@@ -285,16 +285,15 @@ export async function enviarEnlaceAutorizacion(
   const exp = expediente as unknown as ExpedienteInfo;
 
   // 0b. Tenant guard: propietario/inmobiliaria solo pueden operar sobre
-  // expedientes de un inmueble que administran. Sin esto, cualquier usuario
-  // con ese rol podía redirigir el enlace (y ahora reescribir el contacto)
-  // de solicitantes ajenos conociendo el expedienteId. Admin/operador pasan.
+  // estudios de su cartera (el miembro restringido, los suyos o asignados).
+  // Sin esto, cualquier usuario con ese rol podía redirigir el enlace (y ahora
+  // reescribir el contacto) de solicitantes ajenos conociendo el expedienteId.
+  // Admin/operador pasan.
   if (userRol === 'propietario' || userRol === 'inmobiliaria') {
-    const esDueno = await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: exp.inmuebles?.propietario_id ?? null,
-      inmuebleInmobiliariaId: exp.inmuebles?.inmobiliaria_id ?? null,
-    });
+    const esDueno = await assertExpedienteAccess(expedienteId, userId, userRol).then(
+      () => true,
+      () => false,
+    );
     if (!esDueno) {
       throw AppError.forbidden(
         'No tienes permisos para enviar la autorización de este estudio',

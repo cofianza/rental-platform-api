@@ -9,7 +9,7 @@ import {
   type PreconditionId,
 } from './expediente-state-machine';
 import { getExpedienteById } from './expedientes.service';
-import { perfilEsDuenoDeInmueble, assertExpedienteAccess, resolveRolMiembro } from '@/lib/tenantScope';
+import { assertExpedienteAccess, resolveRolMiembro } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import type { TransitionInput } from './expediente-workflow.schema';
@@ -759,13 +759,12 @@ async function checkPermissions(
   // No tienen permiso para hacer transiciones intermedias (las del analista).
   const isPropietarioRol = user.rol === 'propietario' || user.rol === 'inmobiliaria';
   if (isPropietarioRol) {
-    // Org-aware: dueño directo o miembro de la organización dueña del inmueble.
-    const esDueno = await perfilEsDuenoDeInmueble({
-      userId: user.id,
-      userRol: user.rol,
-      inmueblePropietarioId: expediente.propietario_id,
-      inmuebleInmobiliariaId: expediente.inmobiliaria_id,
-    });
+    // El estudio tiene que estar en su cartera: el miembro restringido de la
+    // organización, solo lo suyo o lo que le asignaron.
+    const esDueno = await assertExpedienteAccess(expediente.id, user.id, user.rol).then(
+      () => true,
+      () => false,
+    );
     if (!esDueno) {
       throw AppError.forbidden(
         'Solo el dueño del inmueble puede cambiar el estado de este estudio',

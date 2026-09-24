@@ -66,7 +66,7 @@ vi.mock('@/lib/tenantScope', () => ({
 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 
-import { pagarGestor, cancelarYLiberarCredito, getEstadoPagoEstudio } from '../pago-estudio.service';
+import { pagarGestor, cancelarYLiberarCredito, getEstadoPagoEstudio, reenviarLink } from '../pago-estudio.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
@@ -230,5 +230,31 @@ describe('getEstadoPagoEstudio', () => {
     enqueue('pagos', { data: [{ id: 'p1', estado: 'completado', metodo: 'pasarela', monto: 80000, email_pagador: 'x@y.co' }], error: null });
 
     await expect(getEstadoPagoEstudio(EXP, 'intruso', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('reenviarLink', () => {
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    vi.clearAllMocks();
+  });
+
+  // Con «cada miembro ve solo lo suyo»: el estudio NO asignado de un compañero.
+  // Antes bastaba ser de la organización (perfilEsDuenoDeInmueble en true).
+  it('el asesor restringido no reenvía (ni desvía) el link de pago de un estudio de un compañero: 403', async () => {
+    vi.mocked(assertExpedienteAccess).mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404, errorCode: 'EXPEDIENTE_NOT_FOUND' }));
+    enqueue('expedientes', { data: { inmuebles: { propietario_id: 'companero', inmobiliaria_id: 'org-1' } }, error: null });
+    enqueue('pagos', {
+      data: [{ id: 'p1', estado: 'pendiente', metodo: 'pasarela', email_pagador: 'prospecto@x.co', payment_link_url: 'https://mp.test/1' }],
+      error: null,
+    });
+
+    await expect(reenviarLink(EXP, 'asesor', undefined, { email: 'desvio@correo.co' } as never, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'PAGO_ESTUDIO_FORBIDDEN',
+    });
+    expect(assertExpedienteAccess).toHaveBeenCalledWith(EXP, 'asesor', 'inmobiliaria');
+    expect(ops.filter((o) => o.table === 'pagos')).toEqual([]);
   });
 });

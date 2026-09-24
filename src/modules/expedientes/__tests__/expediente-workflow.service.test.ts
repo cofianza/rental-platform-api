@@ -93,6 +93,7 @@ import {
   getTransitionHistory,
 } from '../expediente-workflow.service';
 import { transitionBodySchema } from '../expediente-workflow.schema';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 
 // Helpers
 const adminUser: AuthUser = { id: 'admin-uuid', email: 'admin@test.com', rol: 'administrador', activo: true };
@@ -206,6 +207,20 @@ describe('expediente-workflow.service', () => {
           p_comentario: 'Listo para revision',
         }),
       );
+    });
+
+    // Con «cada miembro ve solo lo suyo»: el estudio NO asignado de un compañero.
+    // Antes bastaba ser de la organización (perfilEsDuenoDeInmueble en true).
+    it('el asesor restringido no cierra el estudio de un compañero: 403 sin llamar a la RPC', async () => {
+      const asesor: AuthUser = { id: 'asesor-uuid', email: 'asesor@test.com', rol: 'inmobiliaria', activo: true };
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      vi.mocked(assertExpedienteAccess).mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404, errorCode: 'EXPEDIENTE_NOT_FOUND' }));
+
+      await expect(
+        executeTransition('exp-uuid', { nuevo_estado: 'cerrado', comentario: 'Cierre del estudio de prueba', etiqueta: 'Cancelar estudio' } as never, asesor),
+      ).rejects.toMatchObject({ statusCode: 403, errorCode: 'EXPEDIENTE_FORBIDDEN' });
+      expect(assertExpedienteAccess).toHaveBeenCalledWith('exp-uuid', 'asesor-uuid', 'inmobiliaria');
+      expect(mockRpc).not.toHaveBeenCalled();
     });
 
     it('debe permitir al analista asignado transicionar', async () => {

@@ -20,7 +20,7 @@ import { transitionPagoState } from '@/modules/pagos/pago-state-machine';
 import { attachFacturas } from '@/modules/pagos/pagos.service';
 import { notificarUsuario, findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
-import { perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
+import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type { EnviarLinkInput, ReenviarLinkInput } from './pago-estudio.schema';
 
@@ -711,22 +711,15 @@ export async function reenviarLink(
   input?: ReenviarLinkInput,
   userRol?: string,
 ) {
-  // Tenant guard: propietario/inmobiliaria solo sobre expedientes de inmuebles
-  // que administran — sin esto, el override permitía reescribir el email del
-  // pagador de otro tenant y desviar su link de pago. Admin/operador pasan.
+  // Tenant guard: propietario/inmobiliaria solo sobre estudios de su cartera
+  // (el miembro restringido, los suyos o asignados) — sin esto, el override
+  // permitía reescribir el email del pagador de otro tenant y desviar su link
+  // de pago. Admin/operador pasan.
   if (userRol === 'propietario' || userRol === 'inmobiliaria') {
-    const { data: expRow } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)')
-      .eq('id', expedienteId)
-      .maybeSingle();
-    const inm = (expRow as { inmuebles?: { propietario_id: string | null; inmobiliaria_id: string | null } } | null)?.inmuebles;
-    const esDueno = await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: inm?.propietario_id ?? null,
-      inmuebleInmobiliariaId: inm?.inmobiliaria_id ?? null,
-    });
+    const esDueno = await assertExpedienteAccess(expedienteId, userId, userRol).then(
+      () => true,
+      () => false,
+    );
     if (!esDueno) {
       throw AppError.forbidden(
         'No tienes permisos para reenviar el link de pago de este estudio',
