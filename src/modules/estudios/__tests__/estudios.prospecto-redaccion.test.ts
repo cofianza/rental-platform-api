@@ -152,6 +152,28 @@ describe('la decisión de Cofianza en la tarjeta', () => {
   });
 });
 
+// P32: la web no ofrece descargar ni generar un certificado que quedó sin
+// efecto (cada clic daba 409). Misma regla que /verificar.
+describe('certificado sin efecto en el estudio', () => {
+  it('el listado lo marca según cómo terminó el caso', async () => {
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'cerrado', estado_pre_cancelacion: 'condicionado' }, error: null });
+    enqueue('estudios', { data: [{ ...fila('individual'), resultado: 'condicionado', certificado_url: 'k.pdf' }], error: null, count: 1 });
+    const cancelado = await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-1', 'solicitante');
+    expect(cancelado.estudios[0]).toMatchObject({ certificado_sin_efecto: true });
+
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'aprobado', estado_pre_cancelacion: null }, error: null });
+    enqueue('estudios', { data: [{ ...fila('individual'), certificado_url: 'k.pdf' }], error: null, count: 1 });
+    const aprobado = await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-1', 'solicitante');
+    expect(aprobado.estudios[0]).toMatchObject({ certificado_sin_efecto: false });
+  });
+
+  it('el detalle también, aunque el estudio diga aprobado', async () => {
+    enqueue('estudios', { data: { ...fila('individual'), certificado_url: 'k.pdf' }, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'rechazado', estado_pre_cancelacion: null }, error: null });
+    expect(await getEstudioById('est-1', 'u-1', 'solicitante')).toMatchObject({ certificado_sin_efecto: true });
+  });
+});
+
 describe('las demas rutas por id que el titular alcanza', () => {
   // El 404 del guard, no el de "no hay certificado".
   const OCULTO = { statusCode: 404, errorCode: 'ESTUDIO_NOT_FOUND' };

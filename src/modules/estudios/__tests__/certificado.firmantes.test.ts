@@ -477,7 +477,7 @@ describe('quién recibe cuál', () => {
   // P32: condicionado cancelado en revisión. Ninguna versión nueva: el PDF diría
   // CONDICIONADO sobre un certificado que /verificar da por sin efecto.
   it('de un certificado sin efecto no se genera ninguna versión: ni el completo, ni el de firmantes, ni el del arrendatario', async () => {
-    const SIN_EFECTO = { statusCode: 409, message: 'Este certificado quedó sin efecto: el estudio no se aprobó.' };
+    const SIN_EFECTO = { statusCode: 409, message: 'Este certificado ya no tiene efecto.' };
     const cancelado = {
       ...ESTUDIO,
       resultado: 'condicionado',

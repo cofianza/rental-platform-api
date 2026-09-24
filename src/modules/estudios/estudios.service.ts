@@ -21,7 +21,13 @@ import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
-import { decisionDeCofianza, descargarCertificado, type DecisionCofianza, type ExpedienteDecision } from './certificado.service';
+import {
+  decisionDeCofianza,
+  descargarCertificado,
+  quedoSinEfecto,
+  type DecisionCofianza,
+  type ExpedienteDecision,
+} from './certificado.service';
 // Motor de scorecard V4.1. Sigue en SOMBRA para todo el scorecard (puntajes,
 // umbrales 85/70, resto de reglas duras): calcula y guarda en paralelo lo que
 // la politica HABRIA decidido. registrarScorecardSombra es best-effort y no
@@ -529,9 +535,10 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
   await assertExpedienteAccess((data as { expediente_id: string }).expediente_id, userId, userRol);
   assertNoEsEstudioDeOtraPersona((data as { tipo?: string }).tipo, userRol);
 
-  // Solo un condicionado necesita el expediente (ver resultadoEfectivo).
+  // El condicionado necesita el expediente para la ruta (ver resultadoEfectivo)
+  // y los dos certificables, para saber si su CRC quedó sin efecto.
   const row = data as unknown as Record<string, unknown>;
-  const exp = row.resultado === 'condicionado'
+  const exp = row.resultado === 'condicionado' || row.resultado === 'aprobado'
     ? ((await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
         .select('id, estado, estado_pre_cancelacion')
         .eq('id', row.expediente_id as string)
@@ -670,7 +677,7 @@ async function adjuntarRuta<T extends Record<string, unknown>>(
   row: T,
   /** Lo que decidió Cofianza (decisionDeCofianza): con ello un condicionado ya decidido deja de verse "en revisión". */
   decision?: DecisionCofianza,
-): Promise<T & { ruta: Ruta }> {
+): Promise<T & { ruta: Ruta; certificado_sin_efecto: boolean }> {
   let puntaje: number | null = null;
   const cal = await getCalibracion();
 
@@ -705,7 +712,9 @@ async function adjuntarRuta<T extends Record<string, unknown>>(
     },
   });
 
-  return { ...row, ruta };
+  // P32: el CRC del caso quedó sin efecto (misma regla que /verificar y las
+  // compuertas): la web no ofrece descargarlo ni generarlo para no dar un 409.
+  return { ...row, ruta, certificado_sin_efecto: !!decision && quedoSinEfecto(decision) };
 }
 
 // ============================================================

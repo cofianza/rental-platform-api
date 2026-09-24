@@ -932,7 +932,8 @@ async function assertCertificable(e: Record<string, unknown>): Promise<DecisionC
   const exp = e.expedientes as Omit<ExpedienteDecision, 'id'> | null;
   const decision = await decisionDeCofianza(exp && { ...exp, id: e.expediente_id as string });
   if (quedoSinEfecto(decision)) {
-    throw AppError.conflict('Este certificado quedó sin efecto: el estudio no se aprobó.', 'ESTUDIO_NO_CERTIFICABLE');
+    // Neutro: una cancelación no es un «no se aprobó».
+    throw AppError.conflict('Este certificado ya no tiene efecto.', 'ESTUDIO_NO_CERTIFICABLE');
   }
   return decision;
 }
