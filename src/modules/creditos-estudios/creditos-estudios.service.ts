@@ -511,8 +511,17 @@ export async function acreditarCompraDesdeWebhook(
 
   const compra = compraData as CompraRow;
 
-  // 2. Idempotencia: si ya esta completada, no hacer nada
+  // 2. Idempotencia: si ya esta completada, no hacer nada. Si la completó OTRO
+  //    payment (terminó entre la lectura del webhook y esta), este es un pago
+  //    duplicado: queda para devolver, no se absorbe como «ya acreditado».
   if (compra.estado === 'completado') {
+    if (paymentIntentId && compra.stripe_payment_intent_id !== paymentIntentId) {
+      logger.warn(
+        { compraId: compra.id, paymentIntentId, acredito: compra.stripe_payment_intent_id },
+        'Compra de créditos completada por otro payment — pago duplicado',
+      );
+      return { ok: false, duplicado: true };
+    }
     logger.info({ compraId: compra.id }, 'Compra ya estaba completada — idempotent skip');
     return { ok: true, ya_acreditado: true };
   }

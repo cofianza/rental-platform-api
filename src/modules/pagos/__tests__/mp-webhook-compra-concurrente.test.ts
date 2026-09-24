@@ -99,3 +99,24 @@ it('el segundo payment aprobado que llega a la vez queda en la cola como duplica
   const marcas = ops.filter((o) => o.table === 'compras_creditos_estudios' && o.method === 'update').map((o) => o.args[0]);
   expect(marcas).toEqual([{ stripe_payment_intent_id: 'mp-B' }]); // solo el intento de reclamo; la compra no se completa con B
 });
+
+it('Q5c-3: si el otro payment terminó de acreditar entre las dos lecturas, este también queda como duplicado', async () => {
+  mockStatus.mockResolvedValueOnce({
+    status: 'completed',
+    transactionRef: 'mp-B',
+    rawResponse: { external_reference: 'creditos_estudios:compra-1', status: 'approved', status_detail: 'accredited', transaction_amount: 350000 },
+  });
+  enqueue(
+    'compras_creditos_estudios',
+    // webhookCompraCreditos: todavía 'pendiente'
+    { data: { id: 'compra-1', estado: 'pendiente', stripe_session_id: 'pref-1', stripe_payment_intent_id: null }, error: null },
+    // acreditarCompraDesdeWebhook: A ya la completó entre las dos lecturas
+    { data: { id: 'compra-1', perfil_id: 'org-1', estado: 'completado', stripe_payment_intent_id: 'mp-A', cantidad_estudios: 10, vence_en_dias: null }, error: null },
+  );
+  enqueue('pagos_no_conciliados', { data: [{ id: 'fila-1' }], error: null });
+
+  await processWebhookEvent(Buffer.from('{}'), {});
+
+  const cola = ops.filter((o) => o.table === 'pagos_no_conciliados' && o.method === 'upsert').map((o) => o.args[0]);
+  expect(cola).toEqual([expect.objectContaining({ provider_payment_id: 'mp-B', motivo: 'pago_duplicado' })]);
+});

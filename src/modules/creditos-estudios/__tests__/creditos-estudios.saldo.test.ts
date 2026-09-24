@@ -273,6 +273,16 @@ describe('Q5b-3: la compra se reclama para un payment antes de crear el lote', (
     expect(updates('compras_creditos_estudios')).toEqual([{ stripe_payment_intent_id: 'mp-B' }]); // solo el intento de reclamo
   });
 
+  it('Q5c-3: la compra ya completada por otro payment: este es un pago duplicado, no «ya acreditado»', async () => {
+    enqueue('compras_creditos_estudios', {
+      data: { id: 'compra-3', perfil_id: 'owner-1', estado: 'completado', stripe_payment_intent_id: 'mp-A', cantidad_estudios: 5 },
+      error: null,
+    });
+
+    expect(await acreditarCompraDesdeWebhook('pref-3', 'mp-B', {})).toEqual({ ok: false, duplicado: true });
+    expect(updates('compras_creditos_estudios')).toEqual([]);
+  });
+
   it('el reintento del mismo payment pasa aunque ya la haya reclamado', async () => {
     enqueue(
       'compras_creditos_estudios',

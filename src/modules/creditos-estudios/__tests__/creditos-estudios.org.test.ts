@@ -105,7 +105,10 @@ describe('créditos de la organización', () => {
   });
 
   it('un reintento del webhook sobre una compra ya acreditada no vuelve a facturar', async () => {
-    enqueue('compras_creditos_estudios', { data: { id: 'compra-1', perfil_id: 'owner-1', estado: 'completado' }, error: null });
+    enqueue('compras_creditos_estudios', {
+      data: { id: 'compra-1', perfil_id: 'owner-1', estado: 'completado', stripe_payment_intent_id: 'mp-1' },
+      error: null,
+    });
 
     expect(await acreditarCompraDesdeWebhook('pref-1', 'mp-1', {})).toEqual({ ok: true, ya_acreditado: true });
     await new Promise((r) => setTimeout(r, 0));
