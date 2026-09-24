@@ -19,11 +19,11 @@ import {
   fechaHora,
   fechasDeFirma,
   finDelCrc,
+  deFirmantes,
   finDelDia,
   firmantesDePartes,
   fueraDePlazo,
   mapEstadoFirmante,
-  marcasAjenas,
   paginaPdf,
   partesCompletas,
   plazoDeFirma,
@@ -473,13 +473,13 @@ describe('posicionesDeFirma y construirSignProfile con posiciones', () => {
     });
   });
 
-  it('faltanMarcas y marcasAjenas: el coarrendatario cuenta por su índice; sin él, su marca es ajena', () => {
+  it('faltanMarcas y deFirmantes: el coarrendatario cuenta por su índice; sin él, su marca se descarta', () => {
     expect(faltanMarcas(firmantesDePartes(TRES), MARCAS)).toEqual([]);
     const otroCoa: MarcaFirma = { parte: 'coarrendatario', indice: 1, pagina: 1, x: 0.5, y: 0.5 };
     expect(faltanMarcas(firmantesDePartes(TRES), [...MARCAS.filter((m) => m.parte !== 'coarrendatario'), otroCoa])).toEqual([
       'Coarrendatario (Beto Díaz)',
     ]);
-    expect(marcasAjenas(['arrendatario', 'coarrendatario', 'arrendador'], [...MARCAS, otroCoa])).toEqual([otroCoa]);
-    expect(marcasAjenas(['arrendatario', 'arrendador'], MARCAS)).toEqual([MARCAS[3]]);
+    expect(deFirmantes(['arrendatario', 'coarrendatario', 'arrendador'], [...MARCAS, otroCoa])).toEqual(MARCAS);
+    expect(deFirmantes(['arrendatario', 'arrendador'], MARCAS)).toEqual(MARCAS.slice(0, 3));
   });
 });

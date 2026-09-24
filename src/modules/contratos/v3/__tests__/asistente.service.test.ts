@@ -1860,7 +1860,9 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
       { parte: 'arrendatario', pagina: 1, x: 0.5, y: 0.95 },
       { parte: 'arrendador', pagina: 4, x: 0.7, y: 0.9 },
     ];
-    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: propioPdf.length, sha256: sha, subidoEn: LEIDO, subidoPor: USER, firmas };
+    // La de un coarrendatario que ya no está en el contrato no se congela.
+    const huerfana: MarcaFirma = { parte: 'coarrendatario', indice: 0, pagina: 2, x: 0.5, y: 0.5 };
+    const propio = { key: 'propio.pdf', nombre: 'mio.pdf', paginas: 4, bytes: propioPdf.length, sha256: sha, subidoEn: LEIDO, subidoPor: USER, firmas: [...firmas, huerfana] };
     archivos['propio.pdf'] = propioPdf;
     archivos[CRC_KEY] = await pdfReal(1);
     vi.mocked(generarAnexoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(2), pendientes: [], version: 'v', lineas: [] });
@@ -1980,19 +1982,28 @@ describe('Ruta B: dónde firma cada parte sobre el PDF propio (Adenda 1 contrato
     expect(mockAssertAccess).toHaveBeenCalledWith(EXP, USER, ROL);
   });
 
-  it('una página que no existe, o una parte que no firma este contrato (aquí no hay coarrendatario): 400 sin escribir', async () => {
+  it('una página que no existe: 400 sin escribir', async () => {
     encolarCarga({ contratos: [conPropio()] });
     expect(await error(guardar([{ ...ARR, pagina: 4 }]))).toMatchObject({
       statusCode: 400,
       errorCode: 'MARCA_FIRMA_INVALIDA',
       message: expect.stringContaining('no existe la página 4'),
     });
-    encolarCarga({ contratos: [conPropio()] });
-    expect(await error(guardar([ARR, { parte: 'coarrendatario', indice: 0, pagina: 1, x: 0.5, y: 0.5 }]))).toMatchObject({
-      statusCode: 400,
-      errorCode: 'MARCA_FIRMA_INVALIDA',
-    });
     expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
+  it('las marcas de un coarrendatario que no firma este contrato se descartan sin error, al guardar y en el estado', async () => {
+    const huerfana: MarcaFirma = { parte: 'coarrendatario', indice: 0, pagina: 1, x: 0.5, y: 0.5 };
+    encolarCarga({ contratos: [conPropio()] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [conPropio({ ...PROPIO, firmas: [ARR] })] });
+    await guardar([ARR, huerfana]);
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { propio: { firmas: MarcaFirma[] } } };
+    expect(upd.datos_variables.propio.firmas).toEqual([ARR]);
+    expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({ detalle: expect.objectContaining({ marcas: 1, descartadas: 1 }) }));
+    // Guardada antes de que el coarrendatario saliera: el estado no la muestra ni la cuenta.
+    encolarCarga({ contratos: [conPropio({ ...PROPIO, firmas: [ARR, huerfana, ADOR] })] });
+    expect((await obtener()).contrato?.propio).toMatchObject({ firmas: [ARR, ADOR], firmasCompletas: true, partesSinFirma: [] });
   });
 
   it('con el CAS perdido: 409 CONTRATO_BORRADOR_CAMBIADO; con el flag apagado, 404 sin leer nada', async () => {

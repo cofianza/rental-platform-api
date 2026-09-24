@@ -97,7 +97,7 @@ import {
   exigirPlazoDeFirma,
   faltanMarcas,
   finDelCrc,
-  marcasAjenas,
+  deFirmantes,
   nombreFirmante,
   validarFirmantes,
   type FirmasPropio,
@@ -561,9 +561,12 @@ const firmantesDe = (f: Fuentes) => [
   { rol: 'arrendador' as const, etiqueta: nombreFirmante('arrendador', f.arrendador.representante_legal ?? f.arrendador.razon_social) },
 ];
 
+/** Las marcas guardadas de las partes que hoy firman (sin las de un coarrendatario que ya no está). */
+const marcasVigentes = (p: PropioGuardado, f: Fuentes) => deFirmantes(firmantesDe(f).map((x) => x.rol), p.firmas ?? []);
+
 function propioVisible(p: PropioGuardado | undefined, f: Fuentes): NonNullable<EstadoAsistente['contrato']>['propio'] {
   if (!p) return null;
-  const firmas = p.firmas ?? [];
+  const firmas = marcasVigentes(p, f);
   const partesSinFirma = faltanMarcas(firmantesDe(f), firmas);
   const { nombre, paginas, bytes, sha256, subidoEn } = p;
   return { nombre, paginas, bytes, sha256, subidoEn, firmas, firmasCompletas: !partesSinFirma.length, partesSinFirma };
@@ -1481,11 +1484,11 @@ export async function guardarFirmasPropio(
       `El contrato de la inmobiliaria tiene ${propio.paginas} ${propio.paginas === 1 ? 'página' : 'páginas'}: no existe la página ${fuera.pagina}.`,
       'MARCA_FIRMA_INVALIDA',
     );
-  if (marcasAjenas(firmantesDe(c.f).map((x) => x.rol), body.firmas).length)
-    throw AppError.badRequest('Una de las firmas es de una parte que no firma este contrato.', 'MARCA_FIRMA_INVALIDA');
+  // Las de una parte que ya no firma (un coarrendatario que salió) se descartan sin error.
+  const firmas = deFirmantes(firmantesDe(c.f).map((x) => x.rol), body.firmas);
 
   const { data, error } = await db('contratos')
-    .update({ datos_variables: { ...dv, propio: { ...propio, firmas: body.firmas } } } as never)
+    .update({ datos_variables: { ...dv, propio: { ...propio, firmas } } } as never)
     .eq('id', v3.id)
     .eq('estado', 'borrador')
     .eq('updated_at', v3.updated_at)
@@ -1505,7 +1508,8 @@ export async function guardarFirmasPropio(
       v3: true,
       fase: 'firmas_contrato_propio',
       sha256: propio.sha256,
-      marcas: body.firmas.length,
+      marcas: firmas.length,
+      descartadas: body.firmas.length - firmas.length,
       antes: propio.firmas?.length ?? 0,
     },
     ip,
@@ -1647,7 +1651,7 @@ export async function enviarAFirma(
     if (body.propioSha256 !== propio.sha256)
       throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
     // Adenda 1 contratos, respuesta 6: cada parte firma también sobre las rayas del PDF propio (crearSobre lo repite).
-    exigirMarcas(firmantesDe(f), propio.firmas);
+    exigirMarcas(firmantesDe(f), marcasVigentes(propio, f));
   }
 
   // 2. Render final y PDF unido.
@@ -1676,7 +1680,7 @@ export async function enviarAFirma(
       throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
     piezas = [propioPdf, final.pdf, crcPdf];
     // Va primero en el PDF unido: sus páginas conservan el número.
-    firmasPropio = congelarFirmas(await PDFDocument.load(propioPdf), propio!.firmas!);
+    firmasPropio = congelarFirmas(await PDFDocument.load(propioPdf), marcasVigentes(propio!, f));
   }
   const unido = await mergePdfs(piezas, { estricto: true });
   if (unido.length > MAX_BYTES_SOBRE)

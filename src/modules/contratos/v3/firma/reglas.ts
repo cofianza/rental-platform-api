@@ -375,10 +375,13 @@ function claves(roles: RolFirmante[]): string[] {
   return roles.map((r) => (r === 'coarrendatario' ? `coarrendatario:${k++}` : r));
 }
 
-/** Marcas de una parte que no firma este contrato. */
-export function marcasAjenas(roles: RolFirmante[], marcas: MarcaFirma[]): MarcaFirma[] {
+/**
+ * Solo las marcas de partes que firman este contrato: las de un coarrendatario que
+ * ya no está (o de un índice que no existe) se descartan sin error.
+ */
+export function deFirmantes(roles: RolFirmante[], marcas: MarcaFirma[]): MarcaFirma[] {
   const firman = new Set(claves(roles));
-  return marcas.filter((m) => !firman.has(claveMarca(m)));
+  return marcas.filter((m) => firman.has(claveMarca(m)));
 }
 
 /** Los firmantes (en orden de firma, con su nombre legible) que no tienen ninguna marca. */
