@@ -1588,8 +1588,14 @@ export async function enviarContratoAFirma(
   }
   // Una firma completa que llegó sin aviso se descubre antes de las guardas de
   // abajo (P6, P21, datos, firmantes, CRC), que si no la taparían con otro error.
+  // También la de un contrato hermano en firma, que el superseder cancelaría.
   const { exigirSinFirmaCompleta } = await import('@/modules/firma/firma.service');
   await exigirSinFirmaCompleta(contratoId, c.expediente_id);
+  for (const hermano of await hermanosEnFirma(c.expediente_id, contratoId)) {
+    await exigirSinFirmaCompleta(hermano, c.expediente_id, {
+      mensaje: 'Otro contrato de este estudio ya lo firmaron todas las partes: quedó firmado. Actualiza la página.',
+    });
+  }
 
   // P6: tampoco sale a firma con co-arrendatario o con el co-titular impreso.
   // Aquí también porque la verificación de identidad arranca antes del sobre.
@@ -1747,25 +1753,44 @@ async function camposDesactualizadosDelContrato(c: {
   }
 }
 
+/** Los otros contratos del flujo anterior del estudio que están en firma. Lanza si no puede leer. */
+async function hermanosEnFirma(expedienteId: string, exceptContratoId: string): Promise<string[]> {
+  const { data, error } = await (supabase
+    .from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .neq('id', exceptContratoId)
+    .eq('estado', 'pendiente_firma')
+    // Un V3 en firma no se toca: este UPDATE directo se saltaría la RPC y su sobre V3.
+    .is('destinacion', null);
+  if (error) {
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los otros contratos del estudio. Intenta de nuevo en un momento.');
+  }
+  return ((data as Array<{ id: string }> | null) ?? []).map((h) => h.id);
+}
+
 export async function supersederContratosEnFirma(
   expedienteId: string,
   exceptContratoId: string,
   userId: string,
 ): Promise<void> {
   try {
-    const { data: hermanos } = await (supabase
-      .from('contratos' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
-      .eq('expediente_id', expedienteId)
-      .neq('id', exceptContratoId)
-      .eq('estado', 'pendiente_firma')
-      // Un V3 en firma no se toca: este UPDATE directo se saltaría la RPC y su sobre V3.
-      .is('destinacion', null);
-    const ids = ((hermanos as Array<{ id: string }> | null) ?? []).map((h) => h.id);
+    const ids = await hermanosEnFirma(expedienteId, exceptContratoId);
     if (ids.length === 0) return;
 
-    const { cancelarSolicitudesDeContrato } = await import('@/modules/firma/firma.service');
+    const { cancelarSolicitudesDeContrato, exigirSinFirmaCompleta } = await import('@/modules/firma/firma.service');
     for (const id of ids) {
+      // Uno que todas las partes ya firmaron (queda conciliado) o que Auco no
+      // deja confirmar no se cancela: espera.
+      try {
+        await exigirSinFirmaCompleta(id, expedienteId);
+      } catch (e) {
+        logger.error(
+          { contratoId: id, expedienteId, error: e instanceof Error ? e.message : String(e) },
+          'Superseder: el contrato anterior no se cancela (firmado o sin confirmar en Auco)',
+        );
+        continue;
+      }
       // Cancelar sobres/solicitudes en Auco (best-effort; en local Auco puede fallar).
       try {
         await cancelarSolicitudesDeContrato(id);

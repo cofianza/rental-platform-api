@@ -29,7 +29,7 @@ vi.mock('@/lib/supabase', () => {
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/config', () => ({ env: { AUCO_SENDER_EMAIL: 'sender@cofianza.com' } }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
-vi.mock('@/lib/auco', () => ({ cancelDocument }));
+vi.mock('@/lib/auco', () => ({ cancelDocument, getDocumentStatus: vi.fn(async () => ({ status: 'CREATED', signProfile: [] })) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(), findPerfilIdByEmail: vi.fn() }));
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: vi.fn() }));
 

@@ -74,7 +74,7 @@ vi.mock('@/lib/auco', () => ({
 
 import * as auco from '@/lib/auco';
 import { crearSolicitudFirmaMultiparte } from '../firma-multiparte.service';
-import { crearSolicitudFirma, reenviarSolicitudFirma } from '../firma.service';
+import { cancelarSolicitud, crearSolicitudFirma, exigirSinFirmaCompleta, reenviarSolicitudFirma, YA_FIRMADO_NO_SE_CANCELA } from '../firma.service';
 import { assertPuedeAbrirSobre, plazoFirmaContrato } from '@/modules/contratos/contratos.service';
 import { AppError } from '@/lib/errors';
 
@@ -392,5 +392,41 @@ describe('un firmante: reenviar a otro correo sube un documento nuevo (revisión
     expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-VIEJO', expect.anything());
     expect(auco.uploadDocumentForSignature).toHaveBeenCalledWith(expect.objectContaining({ expiredDate: '2026-10-10T04:59:59.000Z' }));
     expect(de('solicitudes_firma', 'update')[0].args[0]).toMatchObject({ auco_document_code: 'DOC-NUEVO', email_firmante: 'otro@x.co' });
+  });
+});
+
+describe('cancelaciones manuales con la firma completa en Auco (revisión 3, M2)', () => {
+  const solicitud = { data: { id: 's1', contrato_id: 'c1', estado: 'enviado', auco_document_code: 'DOC-VIEJO', contratos: { expediente_id: 'e1' } }, error: null };
+
+  it('«Cancelar solicitud»: si Auco dice que todos firmaron → concilia y 409, sin anular ni marcar cancelada', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'FINISH', url: 'https://auco/f.pdf', signProfile: [] } as never);
+    enqueue('solicitudes_firma', solicitud, { data: { id: 's1', contrato_id: 'c1', estado: 'enviado', nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
+
+    await expect(cancelarSolicitud('s1', 'u1', 'administrador')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'CONTRATO_YA_FIRMADO',
+      message: YA_FIRMADO_NO_SE_CANCELA,
+    });
+    expect(auco.cancelDocument).not.toHaveBeenCalled();
+    expect(marcado('cancelado')).toBe(false);
+    expect(marcado('firmado')).toBe(true);
+    expect(mockTransicionar).toHaveBeenCalledWith('c1');
+  });
+
+  it('«Cancelar solicitud» con Auco caído: no se frena, se cancela como siempre', async () => {
+    vi.mocked(auco.getDocumentStatus).mockRejectedValue(new Error('timeout'));
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
+    enqueue('solicitudes_firma', solicitud);
+
+    await cancelarSolicitud('s1', 'u1', 'administrador');
+    expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-VIEJO', expect.anything());
+    expect(marcado('cancelado')).toBe(true);
+  });
+
+  it('exigirSinFirmaCompleta: con «seguir», Auco caído no frena; por defecto, 503', async () => {
+    vi.mocked(auco.getDocumentStatus).mockRejectedValue(new Error('timeout'));
+    enqueue('solicitudes_firma', { data: [VIEJO], error: null }, { data: [VIEJO], error: null });
+    await expect(exigirSinFirmaCompleta('c1', 'e1', { siAucoNoResponde: 'seguir' })).resolves.toBeUndefined();
+    await expect(exigirSinFirmaCompleta('c1', 'e1')).rejects.toMatchObject({ statusCode: 503, errorCode: 'AUCO_NO_VERIFICABLE' });
   });
 });

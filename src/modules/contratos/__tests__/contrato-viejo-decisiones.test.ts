@@ -599,6 +599,8 @@ describe('Enviar a firma: si falla, solo revierte lo que sigue en «pendiente_fi
     ops
       .filter((o) => o.table === 'contrato_historial_estados' && o.method === 'insert')
       .map((o) => (o.args[0] as { estado_nuevo: string }).estado_nuevo);
+  /** Otros contratos del estudio en firma: ninguno. */
+  const SIN_HERMANOS = { data: [], error: null };
 
   const reversiones = () =>
     ops.filter((o) => o.table === 'contratos' && o.method === 'update' && (o.args[0] as { estado?: string }).estado !== 'pendiente_firma');
@@ -608,7 +610,7 @@ describe('Enviar a firma: si falla, solo revierte lo que sigue en «pendiente_fi
     ['otro envío abrió el sobre al mismo tiempo (dos pestañas)', AppError.conflict('Ya hay un envío a firma en curso para este contrato.', 'FIRMA_YA_EN_CURSO')],
   ])('%s → no lo devuelve a «aprobado»', async (_caso, err) => {
     // Lectura y paso a pendiente_firma. La fila sí está en pendiente_firma (la dejó el otro envío o la conciliación).
-    enqueue('contratos', aprobado, { data: null, error: null }, { data: [{ id: CTO }], error: null });
+    enqueue('contratos', aprobado, SIN_HERMANOS, { data: null, error: null }, { data: [{ id: CTO }], error: null });
     mockCrearSobre.mockRejectedValueOnce(err);
 
     expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ errorCode: err.errorCode });
@@ -617,7 +619,7 @@ describe('Enviar a firma: si falla, solo revierte lo que sigue en «pendiente_fi
   });
 
   it('lo que otro camino movió entretanto no se deshace: la reversión va con CAS sobre «pendiente_firma»', async () => {
-    enqueue('contratos', aprobado, { data: null, error: null }, { data: [], error: null });
+    enqueue('contratos', aprobado, SIN_HERMANOS, { data: null, error: null }, { data: [], error: null });
     mockCrearSobre.mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
 
     expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
@@ -626,7 +628,7 @@ describe('Enviar a firma: si falla, solo revierte lo que sigue en «pendiente_fi
   });
 
   it('un fallo común sí lo devuelve a «aprobado», con su historial', async () => {
-    enqueue('contratos', aprobado, { data: null, error: null }, { data: [{ id: CTO }], error: null });
+    enqueue('contratos', aprobado, SIN_HERMANOS, { data: null, error: null }, { data: [{ id: CTO }], error: null });
     mockCrearSobre.mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
 
     expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });

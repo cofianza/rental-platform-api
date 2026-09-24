@@ -86,6 +86,13 @@ export async function executeContratoTransition(
     if (currentState === 'firma_incompleta') await exigirAcuseAviso(contratoId, user.rol);
     await cancelarFirmaV3(contratoId);
   }
+  // Flujo anterior: si todas las partes ya firmaron y el aviso de Auco se
+  // perdió, se concilia y 409 en vez de cancelar un contrato firmado. Con Auco
+  // caído la cancelación manual sigue (queda en el log).
+  if (!contrato.destinacion && targetState === 'cancelado' && currentState === 'pendiente_firma') {
+    const { exigirSinFirmaCompleta, YA_FIRMADO_NO_SE_CANCELA } = await import('@/modules/firma/firma.service');
+    await exigirSinFirmaCompleta(contratoId, contrato.expediente_id, { mensaje: YA_FIRMADO_NO_SE_CANCELA, siAucoNoResponde: 'seguir' });
+  }
 
   // 4.2 — "Enviar a firma" NO es una transicion pasiva: marcar pendiente_firma
   // sin crear el sobre dejaria el contrato "enviado" sin que ningun firmante

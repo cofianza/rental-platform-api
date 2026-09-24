@@ -1063,21 +1063,40 @@ export async function anularDocumentoHuerfano(code: string, contratoId: string):
 const auco503 = () =>
   new AppError(503, 'AUCO_NO_VERIFICABLE', 'No pudimos confirmar en Auco qué pasó con el envío anterior. Intenta de nuevo en unos minutos.');
 
+/**
+ * Cómo se lee una firma completa según quién pregunta. `mensaje`: el del 409.
+ * `siAucoNoResponde`: 'seguir' para una cancelación manual (no se frena por
+ * Auco caído; queda en el log); por defecto, 503.
+ */
+interface OpcionesFirmaCompleta {
+  mensaje?: string;
+  siAucoNoResponde?: 'error' | 'seguir';
+}
+
 /** Todas las partes ya firmaron: el contrato se lleva a firmado (y vigente) y 409. */
-async function yaFirmado(contratoId: string, expedienteId: string): Promise<never> {
+async function yaFirmado(contratoId: string, expedienteId: string, mensaje?: string): Promise<never> {
   const { maybeAutoTransicionarFirmado, maybeAutoActivarVigente } = await import('@/modules/contratos/contratos.service');
   await maybeAutoTransicionarFirmado(contratoId);
   await maybeAutoActivarVigente(contratoId, expedienteId);
-  throw AppError.conflict('Este contrato ya estaba firmado: todas las partes firmaron el envío anterior. Actualiza la página.', 'CONTRATO_YA_FIRMADO');
+  throw AppError.conflict(
+    mensaje ?? 'Este contrato ya estaba firmado: todas las partes firmaron el envío anterior. Actualiza la página.',
+    'CONTRATO_YA_FIRMADO',
+  );
 }
 
 /**
  * Lo que dice Auco del documento de un envío, solo lectura. Si ya lo firmaron
  * todos y el aviso se perdió, se concilia por el camino del webhook y 409
  * CONTRATO_YA_FIRMADO. Si Auco no lo conoce (404: creado en stage o en otra
- * cuenta), null: no hay nada vivo que cerrar. Si Auco no responde, 503.
+ * cuenta), null: no hay nada vivo que cerrar. Si Auco no responde, 503 (o
+ * null con 'seguir').
  */
-async function leerDocumentoEnAuco(contratoId: string, expedienteId: string, code: string): Promise<aucoClient.AucoDocumentInfo | null> {
+async function leerDocumentoEnAuco(
+  contratoId: string,
+  expedienteId: string,
+  code: string,
+  opts: OpcionesFirmaCompleta = {},
+): Promise<aucoClient.AucoDocumentInfo | null> {
   const info = await aucoClient.getDocumentStatus(code).catch((err: unknown) => {
     const detalle = err instanceof Error ? err.message : String(err);
     if (detalle.startsWith('Auco API error (404)')) {
@@ -1085,11 +1104,12 @@ async function leerDocumentoEnAuco(contratoId: string, expedienteId: string, cod
       return null;
     }
     logger.error({ contratoId, code, error: detalle }, 'Firma: no se pudo consultar en Auco el documento de un envío');
+    if (opts.siAucoNoResponde === 'seguir') return null;
     throw auco503();
   });
   if (info?.status === 'FINISH') {
     await handleAucoWebhook({ code, name: info.name ?? '', status: 'FINISH', url: info.url });
-    await yaFirmado(contratoId, expedienteId);
+    await yaFirmado(contratoId, expedienteId, opts.mensaje);
   }
   return info;
 }
@@ -1121,7 +1141,7 @@ async function cerrarDocumentoAnterior(contratoId: string, expedienteId: string,
 }
 
 /** Los envíos del contrato que no están cerrados. Si alguno ya quedó firmado (el contrato no llegó a pasar), 409. */
-async function sobresSinCerrar(contratoId: string, expedienteId: string) {
+async function sobresSinCerrar(contratoId: string, expedienteId: string, mensaje?: string) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado, auco_document_code')
@@ -1131,20 +1151,25 @@ async function sobresSinCerrar(contratoId: string, expedienteId: string) {
     throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma anterior. Intenta de nuevo en un momento.');
   }
   const sobres = (data as Array<{ id: string; estado: string; auco_document_code: string | null }> | null) ?? [];
-  if (sobres.some((s) => s.estado === 'firmado')) await yaFirmado(contratoId, expedienteId);
+  if (sobres.some((s) => s.estado === 'firmado')) await yaFirmado(contratoId, expedienteId, mensaje);
   return sobres;
 }
 
 /**
- * Antes de las guardas del envío a firma (P6, P21, datos, firmantes, CRC), que
- * con otro error taparían una firma completa que llegó sin aviso: si algún
- * envío del contrato ya quedó firmado, o Auco lo dice, se concilia y 409. Solo lee.
+ * Si algún envío del contrato ya quedó firmado, o Auco lo dice (el aviso se
+ * perdió), se concilia y 409, como exigirSinFirmaCompleta del V3. Solo lee. Va
+ * antes de las guardas del envío a firma (P6, P21, datos, firmantes, CRC), que
+ * con otro error la taparían, y antes de cancelar el contrato, un envío suyo o
+ * un contrato hermano (superseder).
  */
-export async function exigirSinFirmaCompleta(contratoId: string, expedienteId: string): Promise<void> {
-  for (const s of await sobresSinCerrar(contratoId, expedienteId)) {
-    if (s.auco_document_code) await leerDocumentoEnAuco(contratoId, expedienteId, s.auco_document_code);
+export async function exigirSinFirmaCompleta(contratoId: string, expedienteId: string, opts: OpcionesFirmaCompleta = {}): Promise<void> {
+  for (const s of await sobresSinCerrar(contratoId, expedienteId, opts.mensaje)) {
+    if (s.auco_document_code) await leerDocumentoEnAuco(contratoId, expedienteId, s.auco_document_code, opts);
   }
 }
+
+/** El 409 de las cancelaciones manuales (contrato o envío) cuando todas las partes ya firmaron. */
+export const YA_FIRMADO_NO_SE_CANCELA = 'Todas las partes ya firmaron este contrato: quedó firmado y no se puede cancelar. Actualiza la página.';
 
 /**
  * Antes de abrir un sobre nuevo (reenvío a firma): cada envío anterior sin
@@ -1196,8 +1221,13 @@ export async function cancelarSolicitud(
     throw AppError.badRequest('No se puede cancelar esta solicitud', 'INVALID_STATE');
   }
 
-  // Cancel in Auco if document code exists
+  // Cancel in Auco if document code exists. Antes, si todas las partes ya
+  // firmaron (el aviso se perdió), se concilia y 409; si Auco no responde, sigue.
   if (row.auco_document_code) {
+    await leerDocumentoEnAuco(row.contrato_id, row.contratos?.expediente_id ?? '', row.auco_document_code, {
+      mensaje: YA_FIRMADO_NO_SE_CANCELA,
+      siAucoNoResponde: 'seguir',
+    });
     try {
       await cancelarSobreEnAuco(row.auco_document_code);
     } catch (aucoError) {
