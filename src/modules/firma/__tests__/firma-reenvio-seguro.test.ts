@@ -109,6 +109,22 @@ beforeEach(() => {
   vi.mocked(auco.cancelDocument).mockReset();
 });
 
+describe('un sobre del contrato ya quedó «firmado» y el contrato no pasó (revisión 3, M3)', () => {
+  it('no abre otro: lleva el contrato a firmado y responde 409, sin tocar Auco', async () => {
+    prepararReenvio();
+    queues.set('solicitudes_firma', [{ data: [{ ...VIEJO, estado: 'firmado' }], error: null }]);
+
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_YA_FIRMADO' });
+
+    expect(mockTransicionar).toHaveBeenCalledWith('c1');
+    expect(mockActivar).toHaveBeenCalledWith('c1', 'e1');
+    expect(de('solicitudes_firma', 'not').map((o) => o.args)).toContainEqual(['estado', 'in', '("cancelado","expirado")']);
+    expect(auco.getDocumentStatus).not.toHaveBeenCalled();
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+    expect(de('solicitudes_firma', 'update')).toEqual([]);
+  });
+});
+
 describe('reenviar a firma con el sobre anterior ya firmado en Auco (webhook perdido)', () => {
   beforeEach(() => {
     vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'FINISH', url: 'https://auco/firmado.pdf', signProfile: [] } as never);

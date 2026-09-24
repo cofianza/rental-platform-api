@@ -1674,9 +1674,11 @@ export async function enviarContratoAFirma(
       );
     }
   } catch (sendErr) {
-    // Solo si sigue en 'pendiente_firma': el sobre anterior pudo resultar
-    // firmado en Auco y quedar conciliado (CONTRATO_YA_FIRMADO); eso no se deshace.
-    const { data: revertido } = estadoPrevio !== 'pendiente_firma'
+    // No se revierte si la firma ya estaba completa (quedó conciliada) ni si otro
+    // envío abrió el sobre (FIRMA_YA_EN_CURSO: su contrato va en firma). Y solo
+    // lo que sigue en 'pendiente_firma': lo conciliado entretanto no se deshace.
+    const quedaEnFirma = sendErr instanceof AppError && ['FIRMA_YA_EN_CURSO', 'CONTRATO_YA_FIRMADO'].includes(sendErr.errorCode);
+    const { data: revertido } = estadoPrevio !== 'pendiente_firma' && !quedaEnFirma
       ? await (supabase
         .from('contratos' as string) as ReturnType<typeof supabase.from>)
         .update({ estado: estadoPrevio, updated_at: new Date().toISOString() } as never)
@@ -1696,8 +1698,8 @@ export async function enviarContratoAFirma(
         } as never);
     }
     logger.warn(
-      { contratoId, userId, error: sendErr instanceof Error ? sendErr.message : String(sendErr) },
-      'Enviar a firma: envío falló, estado revertido',
+      { contratoId, userId, revertido: !!(revertido as unknown[] | null)?.length, error: sendErr instanceof Error ? sendErr.message : String(sendErr) },
+      'Enviar a firma: el envío falló',
     );
     throw sendErr;
   }
