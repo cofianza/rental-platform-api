@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock de Supabase con colas por tabla; `ops` registra lo que se escribió.
 // ============================================================
 
-const { ops, enqueue, queues, mockPlazo } = vi.hoisted(() => {
+const { ops, enqueue, queues, mockPlazo, mockPuedeAbrir } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -16,6 +16,7 @@ const { ops, enqueue, queues, mockPlazo } = vi.hoisted(() => {
     queues,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockPlazo: vi.fn(),
+    mockPuedeAbrir: vi.fn(),
   };
 });
 
@@ -55,7 +56,10 @@ vi.mock('@/lib/companyConfig', () => ({
   getCompany: vi.fn(async () => ({ name: 'COFIANZA S.A.S.', email: 'hola@cofianza.co', phone: '3169724813', nit: '902.038.122-7' })),
 }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(), findPerfilIdByEmail: vi.fn() }));
-vi.mock('@/modules/contratos/contratos.service', () => ({ plazoFirmaContrato: (...a: unknown[]) => mockPlazo(...a) }));
+vi.mock('@/modules/contratos/contratos.service', () => ({
+  plazoFirmaContrato: (...a: unknown[]) => mockPlazo(...a),
+  assertPuedeAbrirSobre: (...a: unknown[]) => mockPuedeAbrir(...a),
+}));
 vi.mock('@/lib/auco', () => ({
   normalizePhoneToInternational: vi.fn((t?: string | null) => (t ? `+57${t}` : null)),
   bufferToBase64: vi.fn(() => 'JVBERg=='),
@@ -77,11 +81,15 @@ beforeEach(() => {
   ops.length = 0;
   vi.clearAllMocks();
   mockPlazo.mockResolvedValue(PLAZO);
+  mockPuedeAbrir.mockResolvedValue(undefined);
 });
 
 describe('P5: el sobre multi-parte sale con el plazo de la Adenda (no 72 horas)', () => {
   function prepararSobre() {
-    enqueue('contratos', { data: { id: 'c1', estado: 'pendiente_firma', expediente_id: 'e1', storage_key: 'k.pdf', destinacion: null }, error: null });
+    enqueue('contratos', {
+      data: { id: 'c1', estado: 'pendiente_firma', expediente_id: 'e1', storage_key: 'k.pdf', destinacion: null, datos_variables: { v: 1 } },
+      error: null,
+    });
     enqueue('contratos', { data: { id: 'c1', expediente_id: 'e1' }, error: null }); // derivarFirmantes
     enqueue('expedientes', {
       data: {
@@ -101,6 +109,15 @@ describe('P5: el sobre multi-parte sale con el plazo de la Adenda (no 72 horas)'
     expect(mockPlazo).toHaveBeenCalledWith('e1');
     expect(auco.uploadDocumentForSignature).toHaveBeenCalledWith(expect.objectContaining({ expiredDate: PLAZO }));
     expect(de('solicitudes_firma', 'insert')[0].args[0]).toMatchObject({ token_expiracion: PLAZO });
+  });
+
+  it('P6 y un solo sobre vivo también aquí (POST /firma/solicitudes, tras verificar la identidad)', async () => {
+    prepararSobre();
+    mockPuedeAbrir.mockRejectedValue(AppError.conflict('Este contrato ya tiene un envío a firma en curso.', 'FIRMA_YA_EN_CURSO'));
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ errorCode: 'FIRMA_YA_EN_CURSO' });
+    expect(mockPuedeAbrir).toHaveBeenCalledWith('c1', 'e1', { v: 1 });
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+    expect(de('solicitudes_firma', 'insert')).toEqual([]);
   });
 
   it('sin margen de CRC no se sube nada a Auco', async () => {

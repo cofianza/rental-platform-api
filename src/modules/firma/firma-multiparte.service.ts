@@ -420,11 +420,12 @@ export async function crearSolicitudFirmaMultiparte(
 ) {
   // 1. Validar contrato + PDF
   const { data: contrato } = await db('contratos')
-    .select('id, estado, expediente_id, storage_key, destinacion')
+    .select('id, estado, expediente_id, storage_key, destinacion, datos_variables')
     .eq('id', contratoId)
     .single();
   const c = contrato as {
     id: string; estado: string; expediente_id: string; storage_key: string | null; destinacion: string | null;
+    datos_variables: unknown;
   } | null;
   if (!c) throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
 
@@ -500,8 +501,11 @@ export async function crearSolicitudFirmaMultiparte(
     );
   }
 
-  // P5: plazo de firma (15 días sin pasar el CRC), antes de gastar un documento de Auco.
-  const { plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+  // Antes de gastar un documento de Auco, por cualquier camino (también POST
+  // /firma/solicitudes y tras verificar la identidad): sin co-arrendatario ni
+  // co-titular (P6), sin otro sobre vivo, y el plazo de firma (P5).
+  const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+  await assertPuedeAbrirSobre(contratoId, c.expediente_id, c.datos_variables);
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
 
   // 3. Descargar PDF y subir UN documento con N firmantes

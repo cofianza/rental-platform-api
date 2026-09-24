@@ -84,7 +84,14 @@ vi.mock('@/modules/firma/firma-multiparte.service', () => ({
 }));
 
 import { AppError } from '@/lib/errors';
-import { enviarContratoAFirma, generarContrato, plazoFirmaContrato, previewPlantillaParaInmueble, renovarContrato } from '../contratos.service';
+import {
+  assertPuedeAbrirSobre,
+  enviarContratoAFirma,
+  generarContrato,
+  plazoFirmaContrato,
+  previewPlantillaParaInmueble,
+  renovarContrato,
+} from '../contratos.service';
 import { prorrogarContratosVencidos } from '../contrato-vencimiento.service';
 import { logAudit } from '@/lib/auditLog';
 import { findPerfilIdByEmail, notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
@@ -181,6 +188,30 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     // Pasa el guard y cae en el paso siguiente.
     expect((await error(generar())).errorCode).toBe('PERFIL_ARRENDADOR_INCOMPLETO');
     expect(ops.some((o) => o.table === 'expediente_coarrendatarios')).toBe(false);
+  });
+
+  describe('al abrir el sobre, por cualquier camino (POST /firma/solicitudes, tras verificar la identidad)', () => {
+    const vivo = { token_expiracion: new Date(Date.now() + 86_400_000).toISOString() };
+
+    it('con co-arrendatario o con el co-titular impreso → 409', async () => {
+      mockCoa.mockResolvedValueOnce(COA);
+      await expect(assertPuedeAbrirSobre(CTO, EXP, {})).rejects.toMatchObject({ errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
+      await expect(assertPuedeAbrirSobre(CTO, EXP, { cotitular: { nombre_completo: 'Lucía Díaz' } })).rejects.toMatchObject({
+        errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO',
+      });
+    });
+
+    it('con otro sobre vivo → 409 FIRMA_YA_EN_CURSO; uno vencido no cuenta', async () => {
+      enqueue('solicitudes_firma', { data: [vivo], error: null });
+      await expect(assertPuedeAbrirSobre(CTO, EXP, {})).rejects.toMatchObject({ statusCode: 409, errorCode: 'FIRMA_YA_EN_CURSO' });
+      enqueue('solicitudes_firma', { data: [{ token_expiracion: '2026-01-01T04:59:59Z' }], error: null });
+      await expect(assertPuedeAbrirSobre(CTO, EXP, {})).resolves.toBeUndefined();
+    });
+
+    it('sin poder leer los sobres → 503', async () => {
+      enqueue('solicitudes_firma', { data: null, error: { message: 'timeout' } });
+      await expect(assertPuedeAbrirSobre(CTO, EXP, {})).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+    });
   });
 
   it('enviar a firma: con co-arrendatario o con el co-titular impreso → 409 sin tocar el contrato', async () => {

@@ -275,7 +275,7 @@ export async function crearSolicitudFirma(
   // 1. Validate contrato exists and is in valid state
   const { data: contrato, error: contratoError } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, expediente_id, storage_key, nombre_archivo, destinacion')
+    .select('id, estado, expediente_id, storage_key, nombre_archivo, destinacion, datos_variables')
     .eq('id', input.contrato_id)
     .single();
 
@@ -286,6 +286,7 @@ export async function crearSolicitudFirma(
   const c = contrato as unknown as {
     id: string; estado: string; expediente_id: string;
     storage_key: string | null; nombre_archivo: string | null; destinacion: string | null;
+    datos_variables: unknown;
   };
 
   // Guard de pertenencia (IDOR): no-op para roles internos / sin identidad;
@@ -327,9 +328,11 @@ export async function crearSolicitudFirma(
     solicitantes: { tipo_documento: string | null; numero_documento: string | null } | null;
   } | null;
 
-  // 3. Generate secure token. P5: plazo de firma de 15 días sin pasar el CRC.
+  // 3. Generate secure token. Sin co-arrendatario ni co-titular (P6), sin otro
+  // sobre vivo, y el plazo de firma de 15 días sin pasar el CRC (P5).
   const token = crypto.randomBytes(32).toString('hex');
-  const { plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+  const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+  await assertPuedeAbrirSobre(c.id, c.expediente_id, c.datos_variables);
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
 
   // 4. Download PDF from storage and upload to Auco

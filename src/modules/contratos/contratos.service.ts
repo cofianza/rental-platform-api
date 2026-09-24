@@ -616,6 +616,40 @@ function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: bo
   );
 }
 
+/** El co-titular que imprimió el contrato (snapshot). */
+const tieneCotitular = (datosVariables: unknown) =>
+  !!(datosVariables as { cotitular?: { nombre_completo?: string } } | null)?.cotitular?.nombre_completo;
+
+/**
+ * ¿Hay un sobre de firma vivo? En curso y con plazo: uno vencido no cuenta
+ * aunque el aviso de Auco no haya llegado (contratos-firma-2).
+ */
+async function haySobreVivo(contratoId: string): Promise<boolean> {
+  const { data, error } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('token_expiracion')
+    .eq('contrato_id', contratoId)
+    .in('estado', ['enviado', 'abierto']);
+  if (error) {
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma. Intenta de nuevo en un momento.');
+  }
+  return ((data as Array<{ token_expiracion: string | null }> | null) ?? []).some(
+    (s) => !(Date.parse(s.token_expiracion ?? '') <= Date.now()),
+  );
+}
+
+/**
+ * Antes de abrir un sobre de firma del contrato viejo, lo abra quien lo abra
+ * (enviar a firma, POST /firma/solicitudes, la continuación tras verificar la
+ * identidad): sin co-arrendatario ni co-titular (P6) y sin otro sobre vivo.
+ */
+export async function assertPuedeAbrirSobre(contratoId: string, expedienteId: string, datosVariables: unknown): Promise<void> {
+  assertSinPartesAdicionales((await coarrendatarioVinculado(expedienteId)) !== null, tieneCotitular(datosVariables));
+  if (await haySobreVivo(contratoId)) {
+    throw AppError.conflict('Este contrato ya tiene un envío a firma en curso.', 'FIRMA_YA_EN_CURSO');
+  }
+}
+
 /**
  * fecha_completado de la última evaluación del titular (la que lee el asistente
  * V3); null si no hay o no tiene fecha. Si no se puede leer, 503: ni se genera
@@ -1531,26 +1565,15 @@ export async function enviarContratoAFirma(
     throw AppError.badRequest('El contrato no tiene PDF generado para enviar a firma.', 'NO_PDF');
   }
 
-  // Idempotencia: si ya hay una solicitud de firma activa, no duplicamos. Una
-  // cuyo plazo ya pasó no cuenta aunque el aviso de Auco no haya llegado: así
-  // se reenvía a firma al vencer (contratos-firma-2).
-  const { data: activas } = await (supabase
-    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select('id, token_expiracion')
-    .eq('contrato_id', contratoId)
-    .in('estado', ['enviado', 'abierto']);
-  const vigentes = ((activas as Array<{ token_expiracion: string | null }> | null) ?? []).filter(
-    (s) => !(Date.parse(s.token_expiracion ?? '') <= Date.now()),
-  );
-  if (vigentes.length > 0) {
+  // Idempotencia: si ya hay un sobre vivo, no duplicamos (uno vencido no
+  // cuenta: así se reenvía a firma al vencer, contratos-firma-2).
+  if (await haySobreVivo(contratoId)) {
     return { ok: true, message: 'El contrato ya está en proceso de firma.' };
   }
 
   // P6: tampoco sale a firma con co-arrendatario o con el co-titular impreso.
-  assertSinPartesAdicionales(
-    (await coarrendatarioVinculado(c.expediente_id)) !== null,
-    !!(c.datos_variables as { cotitular?: { nombre_completo?: string } } | null)?.cotitular?.nombre_completo,
-  );
+  // Aquí también porque la verificación de identidad arranca antes del sobre.
+  assertSinPartesAdicionales((await coarrendatarioVinculado(c.expediente_id)) !== null, tieneCotitular(c.datos_variables));
   await assertEvaluacionVigente(c.expediente_id);
 
   // El PDF que va a Auco es el del borrador; si después se corrigió el teléfono
