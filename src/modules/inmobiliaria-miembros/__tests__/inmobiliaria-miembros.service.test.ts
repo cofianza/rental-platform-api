@@ -5,28 +5,47 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Cada método de filtro devuelve el mismo builder; los terminales
 // (maybeSingle/single) y el `await` directo del builder (count/update/delete)
 // consumen el siguiente resultado de la cola, en orden de llamada.
+// Un resultado puede ser una función de la consulta que lo pide (tabla y
+// filtros), para probar QUÉ se filtró; solo en consultas que no van en paralelo.
 // ============================================================
 
-let queue: Array<Record<string, unknown>> = [];
-const enqueue = (...items: Array<Record<string, unknown>>) => queue.push(...items);
-const nextResult = (): Record<string, unknown> =>
-  queue.length ? queue.shift()! : { data: null, error: null, count: null };
+type Resultado = Record<string, unknown>;
+type Consulta = { tabla: string; filtros: unknown[][] };
+let queue: Array<Resultado | ((c: Consulta) => Resultado)> = [];
+const enqueue = (...items: Array<Resultado | ((c: Consulta) => Resultado)>) => queue.push(...items);
+let consulta: Consulta = { tabla: '', filtros: [] };
+const nextResult = (): Resultado => {
+  const r = queue.length ? queue.shift()! : { data: null, error: null, count: null };
+  return typeof r === 'function' ? r(consulta) : r;
+};
 
 const chain: Record<string, unknown> = {};
-const passthrough = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'lt', 'gt', 'gte', 'lte', 'order', 'limit'];
+const passthrough = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'or', 'lt', 'gt', 'gte', 'lte', 'order', 'limit'];
 passthrough.forEach((m) => {
-  chain[m] = vi.fn(() => chain);
+  chain[m] = vi.fn((...args: unknown[]) => {
+    consulta.filtros.push([m, ...args]);
+    return chain;
+  });
 });
 chain.maybeSingle = vi.fn(async () => nextResult());
 chain.single = vi.fn(async () => nextResult());
 // Hace al builder "thenable" para los queries que se await-ean sin maybeSingle.
 chain.then = (resolve: (v: Record<string, unknown>) => unknown) => resolve(nextResult());
 
-const mockFrom = vi.fn(() => chain);
+const mockFrom = vi.fn((t: string) => {
+  consulta = { tabla: t, filtros: [] };
+  return chain;
+});
 
 vi.mock('@/lib/supabase', () => ({
   // rpc (find_user_by_email) también consume la cola con su maybeSingle.
-  supabase: { from: (t: string) => mockFrom(t), rpc: () => chain },
+  supabase: {
+    from: (t: string) => mockFrom(t),
+    rpc: (fn: string) => {
+      consulta = { tabla: `rpc:${fn}`, filtros: [] };
+      return chain;
+    },
+  },
   supabaseAuth: { auth: { admin: {} } },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -38,8 +57,9 @@ vi.mock('@/lib/auditLog', () => ({
     MIEMBRO_REVOCADO: 'miembro_revocado',
     MIEMBRO_ACEPTO: 'miembro_acepto',
     MIEMBRO_ROL_CAMBIADO: 'miembro_rol_cambiado',
+    INMOBILIARIA_CERRADA: 'inmobiliaria_cerrada',
   },
-  AUDIT_ENTITIES: { INMOBILIARIA_MIEMBRO: 'inmobiliaria_miembro' },
+  AUDIT_ENTITIES: { INMOBILIARIA_MIEMBRO: 'inmobiliaria_miembro', INMOBILIARIA: 'inmobiliaria' },
 }));
 const { mockEnviarInvitacion } = vi.hoisted(() => ({ mockEnviarInvitacion: vi.fn() }));
 vi.mock('../../orchestrator/orchestrator.emails', () => ({ sendInvitacionMiembroEmail: mockEnviarInvitacion }));
@@ -57,6 +77,7 @@ import {
   listMiembros,
 } from '../inmobiliaria-miembros.service';
 import { invalidateMembresiasCache, resolveRolMiembro } from '@/lib/tenantScope';
+import { logAudit } from '@/lib/auditLog';
 
 const ownerMembership = {
   data: {
@@ -234,24 +255,27 @@ describe('listMiembros — la tarjeta del responsable no paga otra ida por la me
   });
 });
 
-describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
-  const invitacionDeB = {
-    data: {
-      id: 'm-b',
-      email: 'asesora@correo.co',
-      estado: 'invitado',
-      perfil_id: null,
-      token_expiracion: null,
-      inmobiliaria_id: 'org-b',
-      invitado_por: 'p-owner-b',
-      inmobiliarias: { nombre: 'Inmobiliaria B' },
-    },
-    error: null,
-  };
-  const asesora = { id: 'p-asesora', email: 'asesora@correo.co', rol: 'inmobiliaria' } as never;
+const updates = () => (chain.update as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as Record<string, unknown>);
 
-  it('activa en otra inmobiliaria: 409 y no se une', async () => {
-    enqueue(invitacionDeB, { data: { id: 'm-a' } }); // la invitación, y su membresía activa en A
+const invitacionDeB = {
+  data: {
+    id: 'm-b',
+    email: 'asesora@correo.co',
+    estado: 'invitado',
+    perfil_id: null,
+    token_expiracion: null,
+    inmobiliaria_id: 'org-b',
+    invitado_por: 'p-owner-b',
+    inmobiliarias: { nombre: 'Inmobiliaria B' },
+  },
+  error: null,
+};
+const asesora = { id: 'p-asesora', email: 'asesora@correo.co', rol: 'inmobiliaria' } as never;
+const activada = { data: { id: 'm-b' }, error: null };
+
+describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
+  it('miembro activo de otra inmobiliaria: 409 y no se une', async () => {
+    enqueue(invitacionDeB, { data: { id: 'm-a', inmobiliaria_id: 'org-a', rol_miembro: 'miembro' } });
     await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'YA_PERTENECE_A_OTRA_INMOBILIARIA',
@@ -262,9 +286,92 @@ describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
   });
 
   it('sin otra membresía activa, se une', async () => {
-    enqueue(invitacionDeB, { data: null }, { error: null });
+    enqueue(invitacionDeB, { data: null }, activada);
     await expect(aceptarInvitacionMiembro('tok', asesora)).resolves.toMatchObject({ redirect: '/dashboard' });
     expect(chain.update).toHaveBeenCalledWith(expect.objectContaining({ perfil_id: 'p-asesora', estado: 'activo' }));
+  });
+
+  it('una membresía revocada en otra inmobiliaria no cuenta: la consulta es de las activas', async () => {
+    const soloRevocadaEnA = (c: Consulta) =>
+      c.filtros.some(([m, col, v]) => m === 'eq' && col === 'estado' && v === 'activo')
+        ? { data: null }
+        : { data: { id: 'm-vieja', inmobiliaria_id: 'org-a', rol_miembro: 'miembro' } };
+    enqueue(invitacionDeB, soloRevocadaEnA, activada);
+    await expect(aceptarInvitacionMiembro('tok', asesora)).resolves.toMatchObject({ redirect: '/dashboard' });
+  });
+
+  it('la activación es condicional: sigue pendiente y es para esta persona; si no, 409', async () => {
+    enqueue(invitacionDeB, { data: null }, { data: null, error: null });
+    await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'INVITACION_NO_VIGENTE',
+    });
+    expect(chain.eq).toHaveBeenCalledWith('estado', 'invitado');
+    expect(chain.or).toHaveBeenCalledWith('perfil_id.is.null,perfil_id.eq.p-asesora');
+  });
+
+  it('dos aceptaciones a la vez: el 23505 del índice único es el mismo 409, no un 500', async () => {
+    enqueue(invitacionDeB, { data: null }, {
+      data: null,
+      error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_inmob_miembro_una_activa_por_perfil"' },
+    });
+    await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'YA_PERTENECE_A_OTRA_INMOBILIARIA',
+    });
+  });
+
+  it('el exmiembro reinvitado (conserva su perfil_id) puede volver a aceptar', async () => {
+    enqueue({ data: { ...invitacionDeB.data, perfil_id: 'p-asesora' }, error: null }, { data: null }, activada);
+    await expect(aceptarInvitacionMiembro('tok', asesora)).resolves.toMatchObject({ redirect: '/dashboard' });
+  });
+});
+
+describe('titular de otra inmobiliaria que acepta una invitación', () => {
+  const titular = { id: 'p-titular', email: 'asesora@correo.co', rol: 'inmobiliaria' } as never;
+  const suInmobiliaria = { data: { id: 'm-a', inmobiliaria_id: 'org-a', rol_miembro: 'owner' } };
+  // equipo, inmuebles, estudios en curso, créditos
+  const vacia = () => [{ count: 0 }, { count: 0 }, { count: 0 }, { count: 0 }];
+  const cartera =
+    'Eres titular de otra inmobiliaria con cartera activa. Traspasa la titularidad o pide a Cofianza que la cierre antes de aceptar esta invitación.';
+
+  it('única titular de una inmobiliaria vacía: se cierra (sin borrar nada) y se une, con constancia en la bitácora', async () => {
+    enqueue(invitacionDeB, suInmobiliaria, ...vacia(), { error: null }, { error: null }, activada);
+    await expect(aceptarInvitacionMiembro('tok', titular)).resolves.toMatchObject({ redirect: '/dashboard' });
+    expect(updates()).toEqual([
+      { estado: 'revocado', token: null, token_expiracion: null }, // su membresía y las invitaciones pendientes
+      { estado: 'cerrada' },
+      expect.objectContaining({ perfil_id: 'p-titular', estado: 'activo' }),
+    ]);
+    expect(chain.or).toHaveBeenCalledWith('id.eq.m-a,estado.eq.invitado');
+    expect(chain.delete).not.toHaveBeenCalled();
+    expect(logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ accion: 'inmobiliaria_cerrada', entidadId: 'org-a', detalle: expect.objectContaining({ nueva_inmobiliaria_id: 'org-b' }) }),
+    );
+  });
+
+  it.each([
+    ['otro miembro activo', 0],
+    ['inmuebles', 1],
+    ['estudios en curso', 2],
+    ['créditos sin usar', 3],
+  ])('con %s: 409 con otro mensaje, y no toca nada', async (_caso, i) => {
+    const conteos = vacia();
+    conteos[i as number] = { count: 1 };
+    enqueue(invitacionDeB, suInmobiliaria, ...conteos);
+    await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'TITULAR_DE_OTRA_INMOBILIARIA',
+      message: cartera,
+    });
+    expect(chain.update).not.toHaveBeenCalled();
+  });
+
+  it('si la aceptación falla después de cerrarla, la reabre y no queda en la bitácora', async () => {
+    enqueue(invitacionDeB, suInmobiliaria, ...vacia(), { error: null }, { error: null }, { data: null, error: null }, { error: null }, { error: null });
+    await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({ statusCode: 409, errorCode: 'INVITACION_NO_VIGENTE' });
+    expect(updates().slice(-2)).toEqual([{ estado: 'activo' }, { estado: 'activa' }]);
+    expect(logAudit).not.toHaveBeenCalledWith(expect.objectContaining({ accion: 'inmobiliaria_cerrada' }));
   });
 });
 
