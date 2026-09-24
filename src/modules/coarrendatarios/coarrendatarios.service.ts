@@ -10,7 +10,7 @@
 
 import crypto from 'node:crypto';
 import { supabase } from '@/lib/supabase';
-import { AppError } from '@/lib/errors';
+import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
 import { getCalibracion } from '@/lib/calibracion';
@@ -58,6 +58,11 @@ import type {
 const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 const TOKEN_EXPIRY_DAYS = 7;
+/**
+ * Tope de invitaciones por estudio (todas, también canceladas o declinadas):
+ * cada una manda correo y WhatsApp de Cofianza a quien se escriba.
+ */
+const MAX_INVITACIONES_POR_ESTUDIO = 5;
 
 /** Correo al titular cuando la ponderación rechaza el conjunto (Flujo §10, sin cifras). */
 const MOTIVO_TITULAR_RECHAZO_CONJUNTO =
@@ -380,6 +385,9 @@ export async function invitarCoarrendatario(
   return crearInvitacion(ctx, input, userId);
 }
 
+/** Errores que, desde un enlace público, confirmarían datos del titular o de otra invitación. */
+const CODIGOS_NO_REVELAR = ['COARRENDATARIO_MISMO_DOCUMENTO', 'COARRENDATARIO_MISMO_EMAIL', 'COARRENDATARIO_DUPLICADO'];
+
 /**
  * P18 (2026-09-24, Flujo §2 y §8.3-8.4): el prospecto invita él mismo a su
  * co-arrendatario desde su enlace personal (el de soportes), sin cuenta. El
@@ -392,9 +400,22 @@ export async function invitarCoarrendatarioPorToken(
 ): Promise<{ nombre: string; estado: Coarrendatario['estado'] }> {
   const { resolveExpedientePorTokenDocumentos } = await import('@/modules/expedientes/expediente-soportes.service');
   const { expedienteId } = await resolveExpedientePorTokenDocumentos(token);
-  const coa = await crearInvitacion(await fetchExpedienteCtx(expedienteId), input, null);
-  return { nombre: coa.nombre, estado: coa.estado };
+  try {
+    const coa = await crearInvitacion(await fetchExpedienteCtx(expedienteId), input, null);
+    return { nombre: coa.nombre, estado: coa.estado };
+  } catch (e) {
+    // El enlace pudo reenviarse a un tercero: no se confirma a tanteo el
+    // documento o el correo del titular, ni que ya hay otra invitación.
+    if (e instanceof AppError && CODIGOS_NO_REVELAR.includes(e.errorCode)) {
+      throw AppError.badRequest(
+        'No pudimos enviar la invitación con esos datos. Revisa que sean los de la persona con quien vas a vivir.',
+        'COARRENDATARIO_NO_INVITABLE',
+      );
+    }
+    throw e;
+  }
 }
+
 
 /** La invitación y sus guards. `invitadoPor` null = la envió el prospecto desde su enlace (P18). */
 async function crearInvitacion(
@@ -433,6 +454,20 @@ async function crearInvitacion(
 
   // 3. Ni el correo ni el documento del titular (Politica §5, NOTA).
   assertNoEsElTitular(ctx, input);
+
+  // 3b. Tope anti-abuso. Cancelar o declinar libera el cupo del índice único,
+  //     no este.
+  const { count, error: countError } = await (supabase
+    .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .select('id', { count: 'exact', head: true })
+    .eq('expediente_id', expedienteId);
+  if (countError) throw fromSupabaseError(countError);
+  if ((count ?? 0) >= MAX_INVITACIONES_POR_ESTUDIO) {
+    throw AppError.conflict(
+      `Este estudio ya tuvo ${MAX_INVITACIONES_POR_ESTUDIO} invitaciones de co-arrendatario. Escríbenos a hola@cofianza.co si necesitas invitar a alguien más.`,
+      'COARRENDATARIO_TOPE_INVITACIONES',
+    );
+  }
 
   // 4. Insert. El unique index parcial bloquea duplicados activos — error
   //    23505 lo mapeamos a un mensaje claro.

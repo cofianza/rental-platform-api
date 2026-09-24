@@ -4,9 +4,14 @@ import { z } from 'zod';
 // Incluye 'ti': el form web la ofrece y TransUnion la soporta (map tipo '4').
 const TIPO_DOCUMENTO = ['cc', 'ce', 'ti', 'pasaporte', 'nit'] as const;
 
+// Solo letras (con tildes), espacios, apóstrofo, punto y guion: el nombre va en
+// el correo y en el WhatsApp que Cofianza le manda a un tercero, y un enlace ahí
+// sería phishing con su marca.
+const NOMBRE_PERSONA = /^\p{L}[\p{L}\p{M} '’.-]*$/u;
+
 export const invitarCoarrendatarioSchema = z.object({
-  nombre: z.string().min(1, 'Nombre requerido').max(100),
-  apellido: z.string().min(1, 'Apellido requerido').max(100),
+  nombre: z.string().trim().min(1, 'Nombre requerido').max(100).regex(NOMBRE_PERSONA, 'El nombre solo puede tener letras'),
+  apellido: z.string().trim().min(1, 'Apellido requerido').max(100).regex(NOMBRE_PERSONA, 'El apellido solo puede tener letras'),
   tipo_documento: z.enum(TIPO_DOCUMENTO),
   numero_documento: z.string().min(1, 'Documento requerido').max(20),
   email: z.email('Email inválido'),
@@ -22,6 +27,12 @@ export const invitarCoarrendatarioSchema = z.object({
 // contacto y, desde P4 (2026-09-24), también el nombre y el documento. Todo
 // opcional: sin body = reenviar a la misma persona.
 export const reenviarCoarrendatarioSchema = invitarCoarrendatarioSchema.partial();
+
+// P18: desde el enlace del prospecto, solo cédula de ciudadanía o de extranjería
+// (el co-arrendatario es una persona natural mayor de edad).
+export const invitarCoarrendatarioPublicoSchema = invitarCoarrendatarioSchema.extend({
+  tipo_documento: z.enum(['cc', 'ce']),
+});
 
 export const tokenParamSchema = z.object({
   token: z.string().min(32, 'Token inválido').max(128),

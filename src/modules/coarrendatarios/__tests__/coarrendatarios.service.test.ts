@@ -168,6 +168,9 @@ const ctxRow = (estado = 'condicionado') => ({
   error: null,
 });
 
+// Conteo del tope de invitaciones por estudio: crearInvitacion lo lee antes del INSERT.
+const cupo = { data: null, error: null, count: 0 };
+
 const invitacion = (numeroDocumento: string) => ({
   nombre: 'Luis',
   apellido: 'Gómez',
@@ -199,7 +202,7 @@ describe('invitarCoarrendatario — Politica §5 (mismo afianzado bajo otro nomb
 
   it('deja pasar un documento distinto y crea la invitacion', async () => {
     enqueue('expedientes', ctxRow());
-    enqueue('expediente_coarrendatarios', {
+    enqueue('expediente_coarrendatarios', cupo, {
       data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' },
       error: null,
     });
@@ -220,7 +223,7 @@ describe('tope de canon — P36', () => {
   it.each([true, false])('invitar: soloAdvertir = estudio ya cobrado (%s)', async (cobrado) => {
     vi.mocked(estudioYaCobrado).mockResolvedValueOnce(cobrado);
     enqueue('expedientes', ctxRow());
-    enqueue('expediente_coarrendatarios', { data: { id: COA_ID }, error: null });
+    enqueue('expediente_coarrendatarios', cupo, { data: { id: COA_ID }, error: null });
 
     await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
 
@@ -260,13 +263,14 @@ describe('respuestas al cliente sin el token de la invitacion', () => {
   // de la consulta. El select('*') interno del reenvio no sale de la API.
   const selectsDevueltos = () =>
     ops
-      .filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'select')
+      .filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'select' && !(o.args[1] as { head?: boolean })?.head)
       .map((o) => String(o.args[0]));
 
   it('invitar y consultar piden solo columnas publicas', async () => {
     enqueue('expedientes', ctxRow(), ctxRow());
     enqueue(
       'expediente_coarrendatarios',
+      cupo,
       { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' }, error: null },
       { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, estado: 'pendiente_aceptacion', estudio_id: null }, error: null },
     );
@@ -336,7 +340,7 @@ describe('getCoarrendatarioPorExpediente / invitar — datos del co-arrendatario
 
   it('la invitacion recien creada tampoco devuelve el token', async () => {
     enqueue('expedientes', ctxRow());
-    enqueue('expediente_coarrendatarios', { data: { id: COA_ID }, error: null });
+    enqueue('expediente_coarrendatarios', cupo, { data: { id: COA_ID }, error: null });
 
     await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
 
@@ -480,7 +484,7 @@ describe('reemplazar al co-arrendatario — P4', () => {
 
   it('invitar con otra ya activa: el 23505 dice cómo salir', async () => {
     enqueue('expedientes', ctxRow());
-    enqueue('expediente_coarrendatarios', { data: null, error: { code: '23505', message: 'duplicate' } });
+    enqueue('expediente_coarrendatarios', cupo, { data: null, error: { code: '23505', message: 'duplicate' } });
 
     await expect(invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'))).rejects.toMatchObject({
       statusCode: 409,
@@ -519,7 +523,7 @@ describe('reemplazar al co-arrendatario — P4', () => {
 describe('invitar desde el enlace del prospecto — P18', () => {
   it('crea la invitación sin gestor (invitado_por null), avisa al responsable y le devuelve solo nombre y estado', async () => {
     enqueue('expedientes', ctxRow());
-    enqueue('expediente_coarrendatarios', {
+    enqueue('expediente_coarrendatarios', cupo, {
       data: { id: COA_ID, nombre: 'Luis', email: 'luis@correo.co', numero_documento: '7654321', estado: 'pendiente_aceptacion' },
       error: null,
     });
@@ -535,13 +539,39 @@ describe('invitar desde el enlace del prospecto — P18', () => {
     );
   });
 
-  it('mismos guards que el panel: su propio documento no', async () => {
+  it('mismos guards que el panel: su propio documento no, con un mensaje que no lo confirma', async () => {
     enqueue('expedientes', ctxRow());
 
-    await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('1234567'))).rejects.toMatchObject({
-      errorCode: 'COARRENDATARIO_MISMO_DOCUMENTO',
+    const e = await invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('1234567')).catch((x) => x);
+
+    expect(e).toMatchObject({ statusCode: 400, errorCode: 'COARRENDATARIO_NO_INVITABLE' });
+    expect(e.message).not.toMatch(/documento|titular|solicitante/i);
+    expect(ops.some((o) => o.method === 'insert')).toBe(false);
+  });
+
+  it.each([
+    ['el correo del titular', { ...invitacion('7654321'), email: 'ana@correo.co' }, null],
+    ['otra invitación activa (23505)', invitacion('7654321'), { data: null, error: { code: '23505', message: 'duplicate' } }],
+  ])('%s: el mismo mensaje genérico, sin «cancélala»', async (_, datos, insert) => {
+    enqueue('expedientes', ctxRow());
+    if (insert) enqueue('expediente_coarrendatarios', cupo, insert);
+
+    const e = await invitarCoarrendatarioPorToken('t'.repeat(64), datos).catch((x) => x);
+
+    expect(e).toMatchObject({ errorCode: 'COARRENDATARIO_NO_INVITABLE' });
+    expect(e.message).not.toMatch(/cancélala|correo|solicitante/i);
+  });
+
+  it('tope por estudio: con 5 invitaciones (también canceladas) no crea otra', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: null, error: null, count: 5 });
+
+    await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('7654321'))).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'COARRENDATARIO_TOPE_INVITACIONES',
     });
     expect(ops.some((o) => o.method === 'insert')).toBe(false);
+    expect(mockResendSend).not.toHaveBeenCalled();
   });
 
   it('mismos guards que el panel: solo con el estudio condicionado', async () => {

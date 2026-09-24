@@ -161,6 +161,25 @@ export const otpSendByTokenLimiter = rateLimit({
   },
 });
 
+/**
+ * Invitar al co-arrendatario desde el enlace del prospecto (P18): máx 3 por día
+ * para un mismo enlace. Cada intento manda correo y WhatsApp a un tercero, y
+ * los fallidos cuentan: así no se tantea el documento del titular.
+ */
+export const invitacionPorTokenLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  limit: 3,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.params as { token?: string })?.token ?? req.ip ?? 'unknown',
+  validate: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Ya enviaste varias invitaciones desde este enlace. Inténtalo de nuevo mañana.',
+  },
+});
+
 /** Verificación de OTP: máx 8 por 15 min para un mismo enlace (anti fuerza bruta). */
 export const otpVerifyByTokenLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

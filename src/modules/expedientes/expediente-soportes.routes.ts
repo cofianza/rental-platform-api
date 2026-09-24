@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
-import { publicFormLimiter } from '@/middleware/rateLimiter';
+import { publicFormLimiter, invitacionPorTokenLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from './expedientes.schema';
-import { invitarCoarrendatarioSchema } from '../coarrendatarios/coarrendatarios.schema';
+import { invitarCoarrendatarioPublicoSchema } from '../coarrendatarios/coarrendatarios.schema';
 import * as controller from './expediente-soportes.controller';
 
 const router = Router();
@@ -124,6 +124,7 @@ publicCargarDocumentosRouter.post(
 publicCargarDocumentosRouter.post(
   '/:token/coarrendatario',
   publicFormLimiter,
-  validate({ params: tokenParamSchema, body: invitarCoarrendatarioSchema }),
+  invitacionPorTokenLimiter,
+  validate({ params: tokenParamSchema, body: invitarCoarrendatarioPublicoSchema }),
   controller.invitarCoarrendatarioPublico,
 );
