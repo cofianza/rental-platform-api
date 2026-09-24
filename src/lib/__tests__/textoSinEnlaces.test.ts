@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { esNombrePersona, sinEnlaces } from '../textoSinEnlaces';
 
 describe('textoSinEnlaces', () => {
-  it.each(['María José', "O'Neil", 'O’Neil', 'J.R.', 'Ana-María', 'Núñez Peña'])('«%s» es un nombre', (v) => {
+  it.each(['María José', "O'Neil", 'O’Neil', 'D´Alessandro', 'J.R.', 'Ana-María', 'Núñez Peña'])('«%s» es un nombre', (v) => {
     expect(esNombrePersona(v)).toBe(true);
   });
 

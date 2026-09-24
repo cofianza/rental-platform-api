@@ -220,6 +220,21 @@ describe('invitarCoarrendatario — Politica §5 (mismo afianzado bajo otro nomb
   });
 });
 
+describe('invitación: el nombre del titular que se reenvía al invitado', () => {
+  it('si trae un enlace (lo pudo escribir el prospecto), el WhatsApp dice «El solicitante»', async () => {
+    const ctx = ctxRow();
+    (ctx.data.solicitantes as { nombre: string }).nombre = 'Ana entra a pagos-cofianza.co';
+    enqueue('expedientes', ctx);
+    enqueue('expediente_coarrendatarios', cupo, { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' }, error: null });
+
+    await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', { ...invitacion('7654321'), telefono: '+573001112233' });
+
+    const vars = (mockEnviarTemplate.mock.calls.at(-1)?.[0] as { variables: string[] }).variables;
+    expect(vars[1]).toBe('El solicitante');
+    expect(JSON.stringify(mockEnviarTemplate.mock.calls)).not.toContain('pagos-cofianza');
+  });
+});
+
 // ============================================================
 // P36: con el estudio ya cobrado, el tope de canon que bajó después solo
 // advierte (el estudio pagado se termina); sin cobro, sigue bloqueando.

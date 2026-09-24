@@ -49,11 +49,15 @@ import {
 import { enviarTemplate } from '../whatsapp';
 import { ponderarConCoarrendatario } from './ponderacion';
 import { evaluacionCuenta, contratoFijoSinCoarrendatario } from '@/modules/estudios/coarrendatario-vinculado';
+import { esNombrePersona } from '@/lib/textoSinEnlaces';
 import type {
   InvitarCoarrendatarioInput,
   AceptarCoarrendatarioInput,
   ReenviarCoarrendatarioInput,
 } from './coarrendatarios.schema';
+
+// El nombre que Cofianza le reenvía a un tercero: sin enlaces, o null (el genérico).
+const nombreSinEnlaces = (n: string): string | null => (n && esNombrePersona(n) ? n : null);
 
 const resend = new Resend(env.RESEND_API_KEY);
 const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
@@ -180,8 +184,10 @@ async function fetchExpedienteCtx(expedienteId: string): Promise<ExpedienteCtx> 
     inmueble_direccion: row.inmuebles?.direccion ?? '',
     inmueble_ciudad: row.inmuebles?.ciudad ?? '',
     solicitante_email: row.solicitantes?.email ?? null,
+    // Va en el correo y el WhatsApp que Cofianza le manda al invitado (P18: el
+    // prospecto puede escribir su propio nombre): sin enlaces, o el genérico.
     solicitante_nombre: row.solicitantes
-      ? `${row.solicitantes.nombre} ${row.solicitantes.apellido}`.trim()
+      ? nombreSinEnlaces(`${row.solicitantes.nombre} ${row.solicitantes.apellido}`.trim())
       : null,
     solicitante_numero_documento: row.solicitantes?.numero_documento ?? null,
   };
