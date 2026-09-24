@@ -20,6 +20,10 @@ export const expedienteIdParamsSchema = z.object({
   expedienteId: z.uuid({ error: 'ID de estudio inválido' }),
 });
 
+export const reembolsoIdParamsSchema = z.object({
+  id: z.uuid({ error: 'ID de reembolso inválido' }),
+});
+
 // ============================================================
 // Create payment link (via gateway) — POST /expedientes/:expedienteId/pagos
 // ============================================================

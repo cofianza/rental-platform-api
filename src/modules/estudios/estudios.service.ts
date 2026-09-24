@@ -2186,7 +2186,7 @@ export async function ejecutarEstudio(
   //      el que se usa en el form (ver paso 3).
   const { data: expedienteRow, error: expErr } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estudio_habilitado, solicitante_id, inmueble_id')
+    .select('id, numero, estado, estudio_habilitado, solicitante_id, inmueble_id')
     .eq('id', est.expediente_id)
     .single();
 
@@ -2204,10 +2204,16 @@ export async function ejecutarEstudio(
   const expediente = expedienteRow as unknown as {
     id: string;
     numero: string;
+    estado: string;
     estudio_habilitado: boolean;
     solicitante_id: string | null;
     inmueble_id: string | null;
   };
+
+  // P1: un estudio cerrado no consulta el buró: su evaluación pagada se devuelve.
+  if (expediente.estado === 'cerrado') {
+    throw AppError.conflict('El estudio está cerrado: no se consulta el buró.', 'EXPEDIENTE_CERRADO');
+  }
 
   if (!expediente.estudio_habilitado) {
     logger.warn(

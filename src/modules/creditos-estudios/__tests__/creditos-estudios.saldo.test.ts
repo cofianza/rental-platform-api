@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// P1: el crédito de una evaluación que no llegó al buró vuelve al saldo.
 // P22: el contracargo de una compra retira lo no usado; lo usado queda como
 // saldo en contra, que bloquea pagar con créditos y se descuenta de la próxima
 // compra. Mock de Supabase con colas por tabla, como creditos-estudios.org.
 
-const { mockFrom, mockRpc, ops, queues, enqueue } = vi.hoisted(() => {
+const { mockFrom, mockRpc, ops, queues, enqueue, mockTransition } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -33,6 +34,7 @@ const { mockFrom, mockRpc, ops, queues, enqueue } = vi.hoisted(() => {
     ops,
     queues,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
+    mockTransition: vi.fn(async () => ({ pago: null, transitioned: true })),
   };
 });
 
@@ -41,6 +43,7 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: vi.fn() }));
+vi.mock('@/modules/pagos/pago-state-machine', () => ({ transitionPagoStateChecked: mockTransition }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioPagado: vi.fn(async () => undefined) }));
 vi.mock('@/modules/facturacion/facturacion.service', () => ({ crearFacturaDesdeCompraCreditos: vi.fn(async () => ({})) }));
@@ -49,7 +52,12 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 
-import { revertirCompraCreditos, liberarEstudioConCredito, acreditarCompraDesdeWebhook } from '../creditos-estudios.service';
+import {
+  devolverCreditoDePago,
+  revertirCompraCreditos,
+  liberarEstudioConCredito,
+  acreditarCompraDesdeWebhook,
+} from '../creditos-estudios.service';
 
 const updates = (table: string) => ops.filter((o) => o.table === table && o.method === 'update').map((o) => o.args[0]);
 const inserts = (table: string) => ops.filter((o) => o.table === table && o.method === 'insert').map((o) => o.args[0]);
@@ -58,6 +66,65 @@ beforeEach(() => {
   queues.clear();
   ops.length = 0;
   vi.clearAllMocks();
+  mockTransition.mockResolvedValue({ pago: null, transitioned: true });
+});
+
+describe('P1: devolver el crédito de una evaluación sin consulta al buró', () => {
+  const consumo = () =>
+    enqueue('movimientos_creditos_estudios', {
+      data: { perfil_id: 'owner-1', lote_id: 'lote-1', expediente_id: 'exp-1', solicitante_id: 'sol-1' },
+      error: null,
+    });
+
+  it('vuelve al lote de donde salió, con un movimiento de ajuste, y el pago queda reembolsado', async () => {
+    consumo();
+    enqueue('lotes_creditos_estudios', { data: { compra_id: 'compra-1' }, error: null });
+    enqueue('compras_creditos_estudios', { data: { id: 'compra-1', estado: 'completado', creditos_en_contra: 0 }, error: null });
+    enqueue(
+      'lotes_creditos_estudios',
+      { data: { cantidad_disponible: 4, cantidad_inicial: 10 }, error: null }, // lectura para el CAS
+      { data: [{ id: 'lote-1' }], error: null }, // CAS
+      { data: [{ cantidad_disponible: 5 }], error: null }, // saldo vigente
+    );
+
+    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('devuelto');
+
+    expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: 'pago-1', targetEstado: 'reembolsado' }));
+    expect(updates('lotes_creditos_estudios')).toEqual([{ cantidad_disponible: 5 }]);
+    expect(ops.some((o) => o.table === 'lotes_creditos_estudios' && o.method === 'eq' && o.args[0] === 'cantidad_disponible' && o.args[1] === 4)).toBe(true);
+    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ tipo: 'ajuste', cantidad: 1, pago_id: 'pago-1', saldo_resultante: 5 });
+  });
+
+  it('un pago que no fue con crédito no se toca', async () => {
+    expect(await devolverCreditoDePago('pago-mp', 'Estudio cerrado', 'user-1')).toBe('no_es_credito');
+    expect(mockTransition).not.toHaveBeenCalled();
+  });
+
+  it('si otra llamada ya lo devolvió (CAS del pago), no se devuelve dos veces', async () => {
+    consumo();
+    enqueue('lotes_creditos_estudios', { data: { compra_id: null }, error: null });
+    mockTransition.mockResolvedValueOnce({ pago: null, transitioned: false });
+
+    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('ya_devuelto');
+    expect(updates('lotes_creditos_estudios')).toEqual([]);
+    expect(inserts('movimientos_creditos_estudios')).toEqual([]);
+  });
+
+  it('si la compra del lote se contracargó y todavía debe créditos, la devolución baja esa deuda', async () => {
+    consumo();
+    enqueue('lotes_creditos_estudios', { data: { compra_id: 'compra-cb' }, error: null });
+    enqueue(
+      'compras_creditos_estudios',
+      { data: { id: 'compra-cb', estado: 'cancelado', creditos_en_contra: 2 }, error: null },
+      { data: [{ id: 'compra-cb' }], error: null }, // CAS de la deuda
+    );
+
+    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('devuelto');
+
+    expect(updates('compras_creditos_estudios')).toEqual([{ creditos_en_contra: 1 }]);
+    expect(updates('lotes_creditos_estudios')).toEqual([]);
+    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ tipo: 'ajuste', notas: expect.stringContaining('saldo en contra') });
+  });
 });
 
 describe('P22: contracargo de una compra de créditos', () => {
@@ -147,5 +214,14 @@ describe('P22: contracargo de una compra de créditos', () => {
     const movs = inserts('movimientos_creditos_estudios');
     expect(movs[0]).toMatchObject({ tipo: 'compra', cantidad: 10, saldo_resultante: 10 });
     expect(movs[1]).toMatchObject({ tipo: 'ajuste', cantidad: -3, saldo_resultante: 7 });
+  });
+});
+
+describe('P1: no se cobra la evaluación de un estudio cerrado', () => {
+  it('liberar con crédito sobre un estudio cerrado: 409 sin gastar el crédito', async () => {
+    enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado: 'cerrado', inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
+
+    await expect(liberarEstudioConCredito('exp-1', 'owner-1', 'owner-1')).rejects.toMatchObject({ errorCode: 'EXPEDIENTE_CERRADO' });
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });

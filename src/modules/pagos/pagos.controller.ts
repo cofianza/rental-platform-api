@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import * as pagosService from './pagos.service';
 import * as stateMachine from './pago-state-machine';
+import * as reembolsos from './reembolsos.service';
 import type {
   CreatePaymentLinkInput,
   RegisterManualPaymentInput,
@@ -53,6 +54,20 @@ export async function getById(req: Request, res: Response) {
   const { pagoId } = req.params as unknown as PagoIdParams;
   const pago = await pagosService.getPagoDetailWithEvents(pagoId, req.user?.id, req.user?.rol);
   sendSuccess(res, pago);
+}
+
+// ============================================================
+// P1: cola de reembolsos — GET /api/v1/pagos/reembolsos y
+// POST /api/v1/pagos/reembolsos/:id/reembolsar (administrador)
+// ============================================================
+
+export async function listReembolsos(_req: Request, res: Response) {
+  sendSuccess(res, await reembolsos.listReembolsosPendientes());
+}
+
+export async function reembolsar(req: Request, res: Response) {
+  const { id } = req.params as unknown as { id: string };
+  sendSuccess(res, await reembolsos.reembolsarEnMercadoPago(id, { id: req.user!.id, email: req.user!.email }, req.ip));
 }
 
 // ============================================================

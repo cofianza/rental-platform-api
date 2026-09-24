@@ -280,6 +280,16 @@ export async function executeTransition(
     })().catch((e) => logger.warn({ e, expedienteId }, 'No se pudo liberar la reserva del inmueble tras rechazo/cierre'));
   }
 
+  // P1: al cerrar o rechazar, los cobros vivos de la evaluación se cancelan y lo
+  // ya pagado sin consulta al buró se le devuelve a quien pagó. Fire-and-forget.
+  if (targetState === 'rechazado' || targetState === 'cerrado') {
+    void import('@/modules/pagos/reembolsos.service')
+      .then((m) =>
+        m.devolverEvaluacionSinConsulta(expedienteId, targetState === 'rechazado' ? 'Estudio rechazado' : 'Estudio cerrado', user.id),
+      )
+      .catch((e) => logger.warn({ e, expedienteId }, 'No se pudo revisar la devolución de la evaluación'));
+  }
+
   // Adenda 2 §5.1: salir de 'condicionado' es resolver una revision manual.
   // Queda en el timeline (usuario y fecha los pone el RPC; el comentario es el
   // fundamento) con los documentos consultados, y en la bitacora.

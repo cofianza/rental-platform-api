@@ -82,6 +82,11 @@ vi.mock('../expediente-habilitacion.service', () => ({
 vi.mock('@/modules/coarrendatarios/coarrendatarios.service', () => ({
   avisarCoarrendatarioDecision: vi.fn(async () => undefined),
 }));
+// P1: al cerrar o rechazar se revisa si hay que devolver la evaluación.
+const mockDevolverEvaluacion = vi.fn(async (..._a: unknown[]) => undefined);
+vi.mock('@/modules/pagos/reembolsos.service', () => ({
+  devolverEvaluacionSinConsulta: (...a: unknown[]) => mockDevolverEvaluacion(...a),
+}));
 vi.mock('@/lib/auditLog', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auditLog')>()),
   logAudit: vi.fn(),
@@ -459,6 +464,22 @@ describe('expediente-workflow.service', () => {
       expect(mockAvisarSolicitante).not.toHaveBeenCalled();
       // El co-arrendatario ya evaluado recibe su correo de cierre.
       await vi.waitFor(() => expect(avisarCoarrendatarioDecision).toHaveBeenCalledWith('exp-uuid', 'cerrado'));
+    });
+
+    it('P1: al cerrar o rechazar se revisa la devolución de la evaluación pagada', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      conTimeline();
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'cerrado', comentario: 'El prospecto desistió', etiqueta: 'Cancelar estudio' } as never,
+        adminUser,
+      );
+      await vi.waitFor(() => expect(mockDevolverEvaluacion).toHaveBeenCalledWith('exp-uuid', 'Estudio cerrado', 'admin-uuid'));
+
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      conTimeline();
+      await executeTransition('exp-uuid', { nuevo_estado: 'rechazado', comentario: 'Ingresos no soportados' }, adminUser);
+      await vi.waitFor(() => expect(mockDevolverEvaluacion).toHaveBeenCalledWith('exp-uuid', 'Estudio rechazado', 'admin-uuid'));
     });
   });
 

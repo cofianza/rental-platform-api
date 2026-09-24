@@ -182,3 +182,17 @@ describe('estudio de un compañero, para el asesor restringido', () => {
     expect(ops.filter((o) => o.table !== 'estudios')).toEqual([]);
   });
 });
+
+// P1: el estudio cerrado no consulta el buró (su evaluación pagada se devuelve).
+describe('ejecutar la evaluación de un estudio cerrado', () => {
+  it('409 antes de tomar el lock: no hay consulta facturable', async () => {
+    enqueue('estudios', { data: { ...fila('formulario_completado'), proveedor: 'transunion', score: null, datos_formulario: {} }, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado: 'cerrado', estudio_habilitado: true, solicitante_id: 'sol-1', inmueble_id: 'inm-1' }, error: null });
+
+    await expect(ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'EXPEDIENTE_CERRADO',
+    });
+    expect(ops.some((o) => o.table === 'estudios' && o.method === 'update')).toBe(false);
+  });
+});

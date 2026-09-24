@@ -8,6 +8,7 @@ import {
   registerManualPaymentSchema,
   comprobantePresignedUrlSchema,
   listPagosQuerySchema,
+  reembolsoIdParamsSchema,
 } from './pagos.schema';
 import * as pagosController from './pagos.controller';
 
@@ -96,6 +97,17 @@ pagosRouter.post(
   authorize('pagos', 'create'),
   validate({ body: comprobantePresignedUrlSchema }),
   pagosController.comprobantePresignedUrl,
+);
+
+// P1: cola de reembolsos de Mercado Pago (evaluaciones de estudios que
+// terminaron sin consulta al buró y pagos que entraron sin cobro). Devolver
+// plata es una decisión de Cofianza: solo administradores.
+pagosRouter.get('/reembolsos', roleGuard(['administrador']), pagosController.listReembolsos);
+pagosRouter.post(
+  '/reembolsos/:id/reembolsar',
+  roleGuard(['administrador']),
+  validate({ params: reembolsoIdParamsSchema }),
+  pagosController.reembolsar,
 );
 
 // GET /pagos/:pagoId — Detail with events

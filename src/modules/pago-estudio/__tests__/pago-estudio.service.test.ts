@@ -164,6 +164,19 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     expect(pago.id).toBe('pago-nuevo');
   });
 
+  it('P1: con el estudio cerrado no abre el cobro (se tendría que devolver): 409', async () => {
+    datosComunes();
+    enqueue('pagos', { data: [], error: null });
+    enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado: 'cerrado', inmueble_id: null }, error: null });
+
+    await expect(pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'EXPEDIENTE_CERRADO',
+    });
+    expect(ops.some((o) => o.table === 'pagos' && o.method === 'insert')).toBe(false);
+    expect(mockCreateLink).not.toHaveBeenCalled();
+  });
+
   it("con el pago del prospecto 'procesando' (PSE/efectivo en curso) no lo cancela ni con la bandera: 409", async () => {
     // Expirar la preference no detiene un PSE o un recibo de efectivo ya
     // generado: si se aprueba despues cae sobre un pago cancelado y el estudio

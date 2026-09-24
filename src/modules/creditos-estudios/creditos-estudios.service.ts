@@ -625,12 +625,16 @@ export async function liberarEstudioConCredito(
   // 1. Obtener expediente y verificar inmueble
   const { data: expData, error: expErr } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, inmueble_id, solicitante_id')
+    .select('id, numero, estado, inmueble_id, solicitante_id')
     .eq('id', expedienteId)
     .single();
 
   if (expErr || !expData) throw AppError.notFound('Estudio no encontrado');
-  const exp = expData as { id: string; numero: string; inmueble_id: string | null; solicitante_id: string | null };
+  const exp = expData as { id: string; numero: string; estado: string; inmueble_id: string | null; solicitante_id: string | null };
+  // P1: un estudio cerrado no se cobra (el crédito no se podría usar ni devolver).
+  if (exp.estado === 'cerrado') {
+    throw AppError.conflict('El estudio está cerrado: no se cobra la evaluación.', 'EXPEDIENTE_CERRADO');
+  }
 
   // 2. Validar que el inmueble pertenece al perfil que libera (la inmobiliaria figura como propietario_id)
   if (!exp.inmueble_id) {
@@ -837,7 +841,7 @@ export async function liberarEstudioConCredito(
 }
 
 // ============================================================
-// Contracargo de una compra (P22)
+// Devolución y contracargo (P1, P22)
 // ============================================================
 
 /**
@@ -869,6 +873,99 @@ async function cubrirSaldoEnContra(perfilId: string, cantidad: number): Promise<
     logger.error({ err, perfilId, cubiertos, cantidad }, 'No se pudo cubrir todo el saldo en contra con la compra');
   }
   return cubiertos;
+}
+
+/**
+ * ¿La compra del lote se contracargó y todavía debe créditos? Entonces un
+ * crédito devuelto baja esa deuda en vez de volver a un lote que no se pagó.
+ */
+async function compraConDeuda(loteId: string): Promise<{ id: string; creditos_en_contra: number } | null> {
+  const { data: lote, error } = await db('lotes_creditos_estudios').select('compra_id').eq('id', loteId).maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  const compraId = (lote as { compra_id?: string | null } | null)?.compra_id;
+  if (!compraId) return null;
+  const { data, error: cErr } = await db('compras_creditos_estudios')
+    .select('id, estado, creditos_en_contra')
+    .eq('id', compraId)
+    .maybeSingle();
+  if (cErr) {
+    if (faltaColumna(cErr)) return null;
+    throw fromSupabaseError(cErr);
+  }
+  const c = data as { id: string; estado: string; creditos_en_contra: number } | null;
+  return c && c.estado === 'cancelado' && c.creditos_en_contra > 0 ? c : null;
+}
+
+export type DevolucionCredito = 'no_es_credito' | 'devuelto' | 'ya_devuelto';
+
+/**
+ * P1: el crédito con que se pagó una evaluación que no llegó al buró vuelve al
+ * saldo de la organización, con un movimiento de ajuste, al lote de donde
+ * salió (devolverlo es deshacer el consumo, con su vencimiento). El pago pasa a
+ * 'reembolsado' con compare-and-set: solo una llamada devuelve el crédito.
+ */
+export async function devolverCreditoDePago(
+  pagoId: string,
+  motivo: string,
+  usuarioId: string | null,
+): Promise<DevolucionCredito> {
+  const { data, error } = await db('movimientos_creditos_estudios')
+    .select('perfil_id, lote_id, expediente_id, solicitante_id')
+    .eq('pago_id', pagoId)
+    .eq('tipo', 'consumo')
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  const consumo = data as {
+    perfil_id: string;
+    lote_id: string | null;
+    expediente_id: string | null;
+    solicitante_id: string | null;
+  } | null;
+  if (!consumo) return 'no_es_credito';
+  if (!consumo.lote_id) {
+    throw new AppError(500, 'CREDITO_NO_DEVUELTO', 'El consumo del crédito no conserva su lote: hay que devolverlo a mano.');
+  }
+  // Se decide antes de escribir nada: si la lectura falla, el pago no cambia.
+  const deuda = await compraConDeuda(consumo.lote_id);
+
+  // Import dinámico: la máquina de estados arrastra las notificaciones.
+  const { transitionPagoStateChecked } = await import('@/modules/pagos/pago-state-machine');
+  const { transitioned } = await transitionPagoStateChecked({
+    pagoId,
+    targetEstado: 'reembolsado',
+    origen: 'system',
+    detalles: { motivo, devolucion: 'credito' },
+    userId: usuarioId,
+  });
+  if (!transitioned) return 'ya_devuelto';
+
+  let aDeuda = false;
+  if (deuda) {
+    const { data: ok } = await db('compras_creditos_estudios')
+      .update({ creditos_en_contra: deuda.creditos_en_contra - 1 } as never)
+      .eq('id', deuda.id)
+      .eq('creditos_en_contra', deuda.creditos_en_contra)
+      .select('id');
+    aDeuda = !!(ok as unknown[] | null)?.length;
+  }
+  if (!aDeuda && !(await moverDisponible(consumo.lote_id, 1))) {
+    logger.error({ pagoId, loteId: consumo.lote_id }, 'CRITICO: el pago quedó reembolsado pero el crédito no volvió al lote');
+    throw new AppError(500, 'CREDITO_NO_DEVUELTO', 'El pago quedó reembolsado pero el crédito no volvió al saldo: hay que devolverlo a mano.');
+  }
+
+  await db('movimientos_creditos_estudios').insert({
+    perfil_id: consumo.perfil_id,
+    lote_id: consumo.lote_id,
+    tipo: 'ajuste',
+    cantidad: 1,
+    saldo_resultante: await saldoVigente(consumo.perfil_id),
+    expediente_id: consumo.expediente_id,
+    solicitante_id: consumo.solicitante_id,
+    pago_id: pagoId,
+    usuario_id: usuarioId,
+    notas: aDeuda ? `Devolución: ${motivo}. Se descontó del saldo en contra.` : `Devolución: ${motivo}.`,
+  } as never);
+  return 'devuelto';
 }
 
 export interface CompraRevertida {

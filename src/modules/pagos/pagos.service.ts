@@ -282,6 +282,11 @@ export async function createPaymentLink(
   // pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
 
+  // P1: la evaluación de un estudio cerrado no se cobra (se tendría que devolver).
+  if (input.concepto === 'estudio' && (expediente as { estado: string }).estado === 'cerrado') {
+    throw AppError.conflict('El estudio está cerrado: no se cobra la evaluación.', 'EXPEDIENTE_CERRADO');
+  }
+
   // 1a. FIRMA INCOMPLETA (contratos V3, §11.7.3).
   await assertFianzaOperando(expedienteId, input.concepto);
 
@@ -561,6 +566,8 @@ export async function cancelarPagosPendientesDeExpediente(
   motivo: string,
   /** Solo estos conceptos (p. ej. garantía y primer canon en FIRMA INCOMPLETA); sin él, todos. */
   conceptos?: string[],
+  /** 'fallido' también se puede pagar después: Mercado Pago deja reintentar en el mismo checkout. */
+  estados: string[] = ['pendiente', 'procesando'],
 ): Promise<number> {
   let cancelados = 0;
   try {
@@ -568,7 +575,7 @@ export async function cancelarPagosPendientesDeExpediente(
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
       .select('id, estado, metodo, external_id')
       .eq('expediente_id', expedienteId)
-      .in('estado', ['pendiente', 'procesando']);
+      .in('estado', estados);
     if (conceptos) q = q.in('concepto', conceptos);
     const { data } = await q;
     const pagos = (data as Array<{ id: string; estado: string; metodo: string | null; external_id: string | null }> | null) ?? [];
@@ -1141,6 +1148,13 @@ export async function dispatchPagoCompletado(pagoId: string): Promise<void> {
 
     const p = pagoFull as unknown as { id: string; expediente_id: string; concepto: string };
 
+    // P1: la evaluación que se paga con el estudio ya cerrado o rechazado, sin
+    // consulta al buró, queda para devolver: ni se factura ni se ejecuta.
+    if (p.concepto === 'estudio') {
+      const { retenerPagoTardio } = await import('./reembolsos.service');
+      if (await retenerPagoTardio(p.id, p.expediente_id)) return;
+    }
+
     // Import dinámico: evita el ciclo pagos ↔ orchestrator.
     const { onPagoConfirmado } = await import('@/modules/orchestrator/orchestrator.service');
     await onPagoConfirmado({ pagoId: p.id, expedienteId: p.expediente_id, concepto: p.concepto });
@@ -1382,15 +1396,18 @@ async function processMercadoPagoWebhook(
 
 /**
  * Registra un pago del proveedor que no se pudo conciliar con un pago en BD
- * (link cancelado pagado, monto distinto, referencia desconocida). Idempotente
- * por (proveedor, provider_payment_id) — los retries del webhook no duplican.
+ * (link cancelado pagado, monto distinto, referencia desconocida) o que hay que
+ * devolver (P1: evaluación de un estudio cerrado sin consulta al buró). Es la
+ * cola de «Reembolsos» del administrador. Idempotente por (proveedor,
+ * provider_payment_id) — los retries del webhook no duplican. false si no se
+ * pudo registrar.
  */
-async function registrarPagoNoConciliado(
+export async function registrarPagoNoConciliado(
   paymentId: string,
   externalReference: string,
   status: { status: string; rawResponse: Record<string, unknown> },
   motivo: string,
-): Promise<void> {
+): Promise<boolean> {
   const mpAmount = (status.rawResponse as { transaction_amount?: number }).transaction_amount;
   const { data, error } = await (supabase
     .from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
@@ -1409,20 +1426,21 @@ async function registrarPagoNoConciliado(
     .select('id');
   if (error) {
     logger.error({ error: error.message, paymentId, motivo }, 'No se pudo registrar el pago no conciliado');
-    return;
+    return false;
   }
   // Solo la primera vez: un reintento del webhook cae en ignoreDuplicates y no
   // devuelve fila. Sin este aviso la plata quedaba en la tabla sin que nadie lo
-  // supiera (no hay pantalla que la lea).
+  // supiera.
   const filaId = (data as Array<{ id: string }> | null)?.[0]?.id;
   if (filaId) {
     avisarPagoNoConciliado({ filaId, paymentId, externalReference, estado: status.status, motivo, monto: mpAmount }).catch((err) =>
       logger.warn({ err, paymentId }, 'No se pudo avisar del pago no conciliado'),
     );
   }
+  return true;
 }
 
-const MOTIVO_NO_CONCILIADO: Record<string, string> = {
+export const MOTIVO_NO_CONCILIADO: Record<string, string> = {
   referencia_desconocida: 'la referencia no corresponde a ningún estudio',
   pago_id_expediente_mismatch: 'el cobro de la referencia es de otro estudio',
   pago_no_encontrado: 'no hay un cobro abierto con esa referencia (enlace cancelado o viejo)',
@@ -1430,6 +1448,7 @@ const MOTIVO_NO_CONCILIADO: Record<string, string> = {
   pago_duplicado: 'es un segundo pago sobre un cobro que ya estaba pagado',
   transicion_invalida: 'el cobro ya estaba cancelado o reembolsado',
   transicion_fallida: 'no se pudo marcar el cobro como pagado',
+  estudio_cerrado_sin_consulta: 'es la evaluación de un estudio que terminó sin consultar el buró, y se devuelve',
 };
 
 const ESTADO_MP: Record<string, string> = {
@@ -1452,12 +1471,9 @@ export async function avisarAdministradores(aviso: Omit<NotificarUsuarioInput, '
 }
 
 /**
- * Aviso a los administradores (in-app + correo) de un pago que entró a Mercado
- * Pago sin cobro que le corresponda. El reembolso o la conciliación se hacen
- * desde el panel de Mercado Pago.
- *
- * ponytail: solo aviso; el listado para marcar resuelto/notas llega cuando el
- * volumen lo justifique.
+ * Aviso a los administradores (in-app + correo) de un pago de Mercado Pago que
+ * quedó en la cola de reembolsos: se devuelve con «Reembolsar en Mercado Pago»
+ * (Pagos a Cofianza › Reembolsos) o se concilia a mano.
  */
 async function avisarPagoNoConciliado(args: {
   filaId: string;
@@ -1472,14 +1488,16 @@ async function avisarPagoNoConciliado(args: {
     ? `/expedientes/${expedienteId}`
     : undefined;
   const monto = typeof args.monto === 'number' ? formatCOP(args.monto) : 'monto desconocido';
+  const devolver = args.motivo === 'estudio_cerrado_sin_consulta';
   const mensaje =
-    `Mercado Pago reportó un pago de ${monto} (${ESTADO_MP[args.estado] ?? args.estado}) que no se pudo asociar ` +
-    `a un cobro: ${MOTIVO_NO_CONCILIADO[args.motivo] ?? args.motivo}. ID del pago en Mercado Pago: ${args.paymentId}; ` +
-    `referencia: ${args.externalReference || 'sin referencia'}. Revísalo en el panel de Mercado Pago para reembolsarlo o conciliarlo.`;
+    `Mercado Pago tiene un pago de ${monto} (${ESTADO_MP[args.estado] ?? args.estado}) ` +
+    `${devolver ? 'por devolver' : 'que no se pudo asociar a un cobro'}: ${MOTIVO_NO_CONCILIADO[args.motivo] ?? args.motivo}. ` +
+    `ID del pago en Mercado Pago: ${args.paymentId}; referencia: ${args.externalReference || 'sin referencia'}. ` +
+    'Reembólsalo con «Reembolsar en Mercado Pago» en Pagos a Cofianza › Reembolsos, o concílialo a mano.';
 
   await avisarAdministradores({
     tipo: 'pago.no_conciliado',
-    titulo: 'Pago sin conciliar en Mercado Pago',
+    titulo: devolver ? 'Evaluación por devolver en Mercado Pago' : 'Pago sin conciliar en Mercado Pago',
     mensaje,
     link,
     payload: {
