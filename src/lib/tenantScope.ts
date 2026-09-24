@@ -292,8 +292,13 @@ interface Cartera {
 }
 
 async function carteraDe(perfilId: string, rol: 'inmobiliaria' | 'propietario' | 'portafolio'): Promise<Cartera | null> {
-  if (rol === 'propietario')
-    return { perfilId, orgIds: [], orgActiva: null, inmueblesAsignados: false, expedientesAsignados: true };
+  if (rol === 'propietario') {
+    // Sin equipo, pero una inmobiliaria de una sola persona a la que un
+    // administrador le cambió el rol conserva su membresía y sus filas con
+    // inmobiliaria_id: lo que registró sigue contando dentro de esa org.
+    const m = await getActiveMembership(perfilId);
+    return { perfilId, orgIds: [], orgActiva: m?.orgId ?? null, inmueblesAsignados: false, expedientesAsignados: true };
+  }
   // 'inmobiliaria' y 'portafolio' (resolvePortfolioInmuebleIds, agnóstico de rol) siguen la membresía.
   const m = await getActiveMembership(perfilId);
   const completa = !!m && (m.rolMiembro === 'owner' || m.venTodo);
@@ -384,7 +389,8 @@ export async function filtroPortafolio(perfilId: string): Promise<string> {
  * `inmobiliaria`: su cartera (filtroPortafolio): la de su organización si la
  *   ve completa, más lo que registró o le asignaron dentro de ella (y lo
  *   registrado sin organización, por si quedara alguna fila sin etiquetar).
- * `propietario`: ve solo sus inmuebles sin organización (propietario_id = userId).
+ * `propietario`: sus inmuebles (propietario_id = userId) sin organización o de la
+ *   suya (la inmobiliaria de una sola persona que pasó a propietario).
  * Otros roles (p.ej. solicitante) no se scopean por inmueble aquí -> [].
  */
 export async function resolveAllowedInmuebleIds(
@@ -400,7 +406,7 @@ export async function resolveAllowedInmuebleIds(
   }
 
   if (userRol === 'propietario') {
-    // La misma condición que su detalle (assertInmuebleAccess): los suyos sin organización.
+    // La misma condición que su detalle (assertInmuebleAccess).
     const { data } = await (supabase
       .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
       .select('id')

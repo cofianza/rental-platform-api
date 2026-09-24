@@ -341,6 +341,20 @@ describe('assertInmuebleAccess: por enlace se abre lo mismo que muestra la lista
     expect(await abre('inmobiliaria')).toBe(true);
   });
 
+  it('propietario que fue inmobiliaria de una sola persona (conserva su membresía): abre y lista lo suyo de su org', async () => {
+    conMembresia('owner');
+    inmueble.fila = { propietario_id: YO, inmobiliaria_id: ORG, miembro_responsable_id: null };
+    expect(await abre('propietario')).toBe(true);
+    ops.length = 0;
+    await resolveAllowedInmuebleIds(YO, 'propietario');
+    expect(ops.find((o) => o.tabla === 'inmuebles' && o.metodo === 'or')?.args[0]).toBe(
+      `and(propietario_id.eq.${YO},or(inmobiliaria_id.is.null,inmobiliaria_id.eq.${ORG}))`,
+    );
+    // Lo de otra organización, no.
+    inmueble.fila = { propietario_id: YO, inmobiliaria_id: 'org-2', miembro_responsable_id: null };
+    expect(await abre('propietario')).toBe(false);
+  });
+
   it('asignado a quien ya no es del equipo o de otra organización: no lo abre', async () => {
     // Lo quitaron del equipo y la asignación quedó (liberarResponsablesDeMiembro es best-effort).
     conMembresia('ninguna');
