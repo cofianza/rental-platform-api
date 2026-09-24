@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { UserRole } from '@/types/auth';
-import { resolveAllowedExpedienteIds, resolveMembershipInmobiliariaIds } from '@/lib/tenantScope';
+import { puedeVerFilaExpediente, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
 
 export type CitaAction =
   | 'create'
@@ -43,9 +43,11 @@ interface ExpedienteOwnershipRow {
   estado: string;
   solicitante_id: string | null;
   inmueble_id: string;
+  miembro_responsable_id: string | null;
   inmuebles: {
     propietario_id: string;
     inmobiliaria_id: string | null;
+    miembro_responsable_id: string | null;
     estado: string | null;
     reservado_por_expediente_id: string | null;
   } | null;
@@ -56,7 +58,7 @@ async function fetchExpedienteOwnership(expedienteId: string): Promise<Expedient
   const { data, error } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select(
-      'id, numero, estado, solicitante_id, inmueble_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, estado, reservado_por_expediente_id), solicitantes(creado_por)',
+      'id, numero, estado, solicitante_id, inmueble_id, miembro_responsable_id, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, miembro_responsable_id, estado, reservado_por_expediente_id), solicitantes(creado_por)',
     )
     .eq('id', expedienteId)
     .single();
@@ -125,8 +127,8 @@ function denyAndThrow(
  * Reglas:
  * - administrador, operador_analista: acceso total.
  * - gerencia_consulta: solo action='read'.
- * - propietario, inmobiliaria: cualquier acción sobre citas cuyo expediente
- *   apunte a un inmueble de su propiedad.
+ * - propietario, inmobiliaria: cualquier acción sobre citas de estudios de su
+ *   cartera (tenantScope; el miembro restringido, lo suyo y lo asignado).
  * - solicitante: create/read/cancelar/reprogramar sobre expedientes donde
  *   sea dueño vía solicitantes.creado_por, aunque la cita la haya agendado
  *   la inmobiliaria (el enlace del WhatsApp ya lo dejaba). Nunca puede
@@ -162,15 +164,13 @@ export async function assertCitaPermission(params: {
   const row = await fetchExpedienteOwnership(expedienteId);
 
   if (PROPIETARIO_LIKE_ROLES.includes(userRol)) {
-    // Dueño directo del inmueble (propietario individual o inmobiliaria de un
-    // solo usuario), o miembro activo de la organización dueña del inmueble.
-    let pertenece = row.inmuebles?.propietario_id === userId;
-    if (!pertenece && userRol === 'inmobiliaria' && row.inmuebles?.inmobiliaria_id) {
-      const orgIds = await resolveMembershipInmobiliariaIds(userId);
-      pertenece = orgIds.includes(row.inmuebles.inmobiliaria_id);
-    }
-    if (!pertenece) {
-      denyAndThrow(userId, userRol, expedienteId, action, 'inmueble no pertenece al usuario ni a su organización');
+    // El estudio tiene que estar en su cartera, la misma regla que la lista de
+    // citas: la organización para el titular (o si los miembros ven todo); lo
+    // suyo y lo asignado para el miembro restringido. Antes bastaba ser de la
+    // organización y el restringido tocaba las visitas de sus compañeros.
+    const fila = { miembro_responsable_id: row.miembro_responsable_id, inmueble: row.inmuebles };
+    if (!(await puedeVerFilaExpediente(userId, userRol, fila))) {
+      denyAndThrow(userId, userRol, expedienteId, action, 'estudio fuera de la cartera del usuario');
     }
     logger.debug({ userId, userRol, expedienteId, action }, 'Cita autorizada (propietario/inmobiliaria)');
     return toContext(row);

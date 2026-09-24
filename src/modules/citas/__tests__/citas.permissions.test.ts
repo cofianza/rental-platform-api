@@ -13,7 +13,7 @@ const { mockFrom, enqueue, resetQueues, mockAllowedExp } = vi.hoisted(() => {
   };
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'eq', 'in', 'or']) chain[m] = () => chain;
+    for (const m of ['select', 'eq', 'in', 'or', 'order']) chain[m] = () => chain;
     chain.single = async () => next(table);
     chain.then = (resolve: (v: Res) => unknown, reject?: (e: unknown) => unknown) =>
       Promise.resolve(next(table)).then(resolve, reject);
@@ -31,12 +31,14 @@ const { mockFrom, enqueue, resetQueues, mockAllowedExp } = vi.hoisted(() => {
 
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
-vi.mock('@/lib/tenantScope', () => ({
+// La cartera por fila (puedeVerFilaExpediente) es la real: lee la membresía de la cola.
+vi.mock('@/lib/tenantScope', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tenantScope')>()),
   resolveAllowedExpedienteIds: (...a: unknown[]) => mockAllowedExp(...a),
-  resolveMembershipInmobiliariaIds: async () => [],
 }));
 
 import { assertCitaPermission, resolveAccessibleExpedienteIds } from '../citas.permissions';
+import { invalidateMembresiasCache } from '@/lib/tenantScope';
 
 const expedienteDelArrendatario = {
   id: 'exp1',
@@ -51,6 +53,7 @@ const expedienteDelArrendatario = {
 beforeEach(() => {
   resetQueues();
   mockAllowedExp.mockReset();
+  invalidateMembresiasCache();
 });
 
 describe('assertCitaPermission — solicitante', () => {
@@ -84,5 +87,51 @@ describe('resolveAccessibleExpedienteIds — inmobiliaria', () => {
       'exp-asignado',
     ]);
     expect(mockAllowedExp).toHaveBeenCalledWith('miembro', 'inmobiliaria');
+  });
+});
+
+describe('assertCitaPermission — inmobiliaria: la misma cartera que la lista de citas', () => {
+  const miembro = (rol_miembro: string, miembros_ven_todo: boolean) =>
+    enqueue('inmobiliaria_miembros', {
+      data: [{ inmobiliaria_id: 'org1', rol_miembro, inmobiliarias: { nombre: 'Org', miembros_ven_todo } }],
+      error: null,
+    });
+  const estudioDeCompanero = (asignadoA: string | null) => ({
+    ...expedienteDelArrendatario,
+    miembro_responsable_id: asignadoA,
+    inmuebles: { propietario_id: 'companero', inmobiliaria_id: 'org1', miembro_responsable_id: null },
+  });
+  const pedir = () =>
+    assertCitaPermission({ userId: 'asesor', userRol: 'inmobiliaria', expedienteId: 'exp1', action: 'confirmar' });
+
+  it('el miembro restringido no toca las visitas del estudio de un compañero', async () => {
+    enqueue('expedientes', { data: estudioDeCompanero(null), error: null });
+    miembro('miembro', false);
+    await expect(pedir()).rejects.toMatchObject({ statusCode: 403, errorCode: 'CITA_FORBIDDEN' });
+  });
+
+  it('sí las del estudio que le asignaron', async () => {
+    enqueue('expedientes', { data: estudioDeCompanero('asesor'), error: null });
+    miembro('miembro', false);
+    await expect(pedir()).resolves.toMatchObject({ expedienteId: 'exp1' });
+  });
+
+  it('el titular y el miembro que ve todo, las de toda la organización', async () => {
+    enqueue('expedientes', { data: estudioDeCompanero(null), error: null });
+    miembro('owner', false);
+    await expect(pedir()).resolves.toMatchObject({ expedienteId: 'exp1' });
+    invalidateMembresiasCache();
+    enqueue('expedientes', { data: estudioDeCompanero(null), error: null });
+    miembro('miembro', true);
+    await expect(pedir()).resolves.toMatchObject({ expedienteId: 'exp1' });
+  });
+
+  it('nunca las de otra organización', async () => {
+    enqueue('expedientes', {
+      data: { ...estudioDeCompanero(null), inmuebles: { propietario_id: 'otra', inmobiliaria_id: 'org2', miembro_responsable_id: null } },
+      error: null,
+    });
+    miembro('owner', false);
+    await expect(pedir()).rejects.toMatchObject({ statusCode: 403 });
   });
 });
