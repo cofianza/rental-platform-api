@@ -11,6 +11,8 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { getCompany } from '@/lib/companyConfig';
+import { resolveContactoDueno, resolvePerfilCanonicoDeInmueble } from '@/lib/tenantScope';
 import {
   slotEstaDisponible,
   getSlotsPorInmueble,
@@ -74,6 +76,8 @@ export interface CitaPublicaDTO {
   nombre: string;
   /** Solo aplica a citas 'confirmada': true si el solicitante ya confirmó que asistirá. */
   confirmada_asistencia: boolean;
+  /** P17: a quién escribirle si no hay horarios o la visita ya no se puede cambiar. */
+  contacto?: { nombre: string; whatsapp: string | null; email: string | null };
 }
 
 function toDTO(c: CitaPublicaRow): CitaPublicaDTO {
@@ -89,9 +93,25 @@ function toDTO(c: CitaPublicaRow): CitaPublicaDTO {
   };
 }
 
+/**
+ * P17: el contacto del dueño de la visita (el WhatsApp de la inmobiliaria o del
+ * propietario); solo si no tiene, el correo de soporte de Cofianza. Nunca el
+ * número de la Cloud API, que nadie lee.
+ */
+async function contactoDeLaVisita(
+  inm: { propietario_id: string; inmobiliaria_id: string | null } | null | undefined,
+): Promise<NonNullable<CitaPublicaDTO['contacto']>> {
+  if (inm) {
+    const dueno = await resolveContactoDueno(await resolvePerfilCanonicoDeInmueble(inm));
+    if (dueno.whatsapp) return { nombre: dueno.nombre, whatsapp: dueno.whatsapp, email: null };
+  }
+  return { nombre: 'Cofianza', whatsapp: null, email: (await getCompany()).email };
+}
+
 /** Detalle público de la visita (para mostrar en la página). */
 export async function getCitaPublica(token: string): Promise<CitaPublicaDTO> {
-  return toDTO(await fetchCitaByToken(token));
+  const c = await fetchCitaByToken(token);
+  return { ...toDTO(c), contacto: await contactoDeLaVisita(c.expediente?.inmueble) };
 }
 
 /** Slots disponibles del inmueble de la visita, para reprogramar. */
