@@ -49,9 +49,9 @@ describe('mapAucoSignerStatusToEstado', () => {
   it('FINISH → firmado', () => {
     expect(mapAucoSignerStatusToEstado('FINISH')).toBe('firmado');
   });
-  it('REJECT → cancelado; BLOCK no es final (sigue en firma, Cofianza desbloquea) → sin cambio', () => {
+  it('REJECT → cancelado; BLOCK → bloqueado (no es final: sigue en firma y Cofianza desbloquea)', () => {
     expect(mapAucoSignerStatusToEstado('REJECT')).toBe('cancelado');
-    expect(mapAucoSignerStatusToEstado('BLOCK')).toBeNull();
+    expect(mapAucoSignerStatusToEstado('BLOCK')).toBe('bloqueado');
   });
   it('NOTIFICATION → abierto, PENDING → enviado', () => {
     expect(mapAucoSignerStatusToEstado('NOTIFICATION')).toBe('abierto');

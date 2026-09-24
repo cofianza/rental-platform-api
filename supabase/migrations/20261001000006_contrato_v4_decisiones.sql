@@ -24,10 +24,16 @@
 -- (el V3 tampoco imprime fecha), remitiendo a la cláusula de firma de este y
 -- con tantos ejemplares como partes firmantes (aquí también firma COFIANZA).
 --
+-- Firma: un firmante bloqueado en Auco (3 códigos fallidos) queda 'bloqueado'
+-- (no es final: Cofianza lo desbloquea). Sin este valor el API solo avisa.
+--
 -- Idempotente: cada REPLACE solo actúa si encuentra el texto viejo, y los que
 -- envuelven un texto que sigue presente llevan su guarda. Solo afecta
 -- contratos generados o regenerados después.
 -- ============================================================
+
+-- 0. Estado de firmante 'bloqueado' (contrato_firmantes y solicitudes_firma comparten el enum).
+ALTER TYPE estado_solicitud_firma ADD VALUE IF NOT EXISTS 'bloqueado';
 
 -- 1. P12: la cláusula de comisión solo con porcentaje (título y párrafo).
 UPDATE plantillas_contrato

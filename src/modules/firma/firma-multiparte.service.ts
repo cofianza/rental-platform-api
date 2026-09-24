@@ -86,8 +86,9 @@ export function mapAucoSignerStatusToEstado(status: AucoSignerStatus | string): 
       return 'firmado';
     case 'REJECT':
       return 'cancelado';
-    // BLOCK (3 OTP fallidos) no es final, como en el V3: sigue en firma y
-    // Cofianza desbloquea al firmante en Auco.
+    case 'BLOCK':
+      // 3 códigos fallidos: no es final, como en el V3 (Cofianza lo desbloquea).
+      return 'bloqueado';
     case 'NOTIFICATION':
       return 'abierto';
     case 'PENDING':
@@ -800,7 +801,8 @@ export async function avisarFirmanteBloqueado(contratoId: string, code: string |
  *   - NOTIFICATION (+ signer): ese participante COMPLETÓ su firma → 'firmado'
  *   - REJECTED (+ signer): ese firmante rechazó → 'cancelado', y el sobre
  *     también (contratos-firma-2)
- *   - BLOCKED: nada cambia (sigue en firma); se avisa a Cofianza para desbloquear
+ *   - BLOCKED (+ signer): ese firmante queda 'bloqueado' (no es final: sigue en
+ *     firma) y se avisa a Cofianza para desbloquearlo
  *   - EXPIRED: venció el plazo → el sobre queda 'expirado'
  *   - FINISH (sin signer): TODAS las partes firmaron → marca pendientes 'firmado'
  * Cuando todas quedan 'firmado', cierra el sobre e intenta activar el contrato.
@@ -823,6 +825,16 @@ export async function reconciliarFirmantesPorWebhook(
       .neq('estado', 'firmado');
     logger.info({ contratoId, email: signerEmail }, 'Firma multi-parte: firmante firmado (webhook)');
   } else if (status === 'BLOCKED') {
+    if (signerEmail) {
+      const { error: bloqueoError } = await db('contrato_firmantes')
+        .update({ estado: 'bloqueado', updated_at: now } as never)
+        .eq('contrato_id', contratoId)
+        .eq('solicitud_firma_id', sobre.id)
+        .eq('email', signerEmail)
+        .neq('estado', 'firmado');
+      // Sin la migración 20261001000006 el estado no existe: queda el aviso.
+      if (bloqueoError) logger.warn({ contratoId, error: bloqueoError.message }, 'Firma multi-parte: no se pudo marcar el firmante bloqueado');
+    }
     await avisarFirmanteBloqueado(contratoId, payload.code ?? null);
     return;
   } else if (status === 'REJECTED' || status === 'EXPIRED') {

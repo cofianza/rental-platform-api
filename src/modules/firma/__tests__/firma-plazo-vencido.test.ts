@@ -173,9 +173,10 @@ describe('contratos-firma-2: el sobre vencido o rechazado deja de estar activo',
     expect(eqs.filter((a) => a[0] === 'solicitud_firma_id' && a[1] === 's-viejo')).toHaveLength(porContrato);
   });
 
-  it('BLOCKED (3 OTP fallidos) no es final: nada se cancela y se avisa a Cofianza para desbloquear', async () => {
+  it('BLOCKED (3 OTP fallidos) no es final: el firmante queda «bloqueado» (no cancelado), el sobre sigue y se avisa a Cofianza', async () => {
     await reconciliarFirmantesPorWebhook('c1', { id: 's1', estado: 'enviado' }, { status: 'BLOCKED', code: 'DOC1', signer: { email: 'ana@x.co' } });
-    expect(de('contrato_firmantes', 'update')).toEqual([]);
+    expect(de('contrato_firmantes', 'update').map((o) => o.args[0])).toEqual([expect.objectContaining({ estado: 'bloqueado' })]);
+    expect(de('contrato_firmantes', 'eq').map((o) => o.args)).toContainEqual(['solicitud_firma_id', 's1']);
     expect(sobreCerrado()).toEqual([]);
     expect(mockNotificar).toHaveBeenCalledTimes(2);
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'op-1', tipo: 'firma.bloqueada', link: '/contratos/c1' }));
