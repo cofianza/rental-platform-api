@@ -616,9 +616,13 @@ function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: bo
   );
 }
 
-/** fecha_completado de la última evaluación del titular (la que lee el asistente V3); null si no hay o no tiene fecha. */
+/**
+ * fecha_completado de la última evaluación del titular (la que lee el asistente
+ * V3); null si no hay o no tiene fecha. Si no se puede leer, 503: ni se genera
+ * ni se envía a firma sin saber si la evaluación sigue vigente.
+ */
 async function evaluacionCompletadaEn(expedienteId: string): Promise<string | null> {
-  const { data } = await (supabase
+  const { data, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select('fecha_completado')
     .eq('expediente_id', expedienteId)
@@ -627,6 +631,10 @@ async function evaluacionCompletadaEn(expedienteId: string): Promise<string | nu
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (error) {
+    logger.error({ expedienteId, error: error.message }, 'No se pudo leer la evaluación del estudio');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar la evaluación del estudio. Intenta de nuevo en un momento.');
+  }
   return (data as { fecha_completado?: string | null } | null)?.fecha_completado ?? null;
 }
 
@@ -659,6 +667,7 @@ export async function plazoFirmaContrato(expedienteId: string): Promise<string> 
     evaluacionCompletadaEn(expedienteId),
     getCalibracion(),
   ]);
+  // Sin fecha de evaluación no hay tope de CRC (P21); una lectura fallida ya lanzó 503.
   const finCrc = finDelCrc(null, completadoEn, cal.VIGENCIA_CRC_DIAS) ?? Infinity;
   return new Date(exigirPlazoDeFirma(finCrc, cal.DIAS_EXPIRACION_FIRMA).expiraEn).toISOString();
 }

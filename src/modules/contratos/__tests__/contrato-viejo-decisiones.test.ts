@@ -235,6 +235,22 @@ describe('P21: vigencia de la evaluación (60 días) también en el contrato vie
     expect((await error(generar())).errorCode).toBe('PERFIL_ARRENDADOR_INCOMPLETO');
   });
 
+  it('si no se puede leer la evaluación → 503, sin generar ni enviar (no es «sin fecha»)', async () => {
+    const caida = { data: null, error: { message: 'timeout' } };
+    prepararGenerar();
+    enqueue('estudios', caida);
+    expect(await error(generar())).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+    expect(mockCompletitud).not.toHaveBeenCalled();
+
+    enqueue('contratos', {
+      data: { id: CTO, estado: 'borrador', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables: {} },
+      error: null,
+    });
+    enqueue('estudios', caida);
+    expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+    expect(escrituras()).toEqual([]);
+  });
+
   it('enviar a firma un borrador viejo con la evaluación vencida → 409 sin tocar el contrato', async () => {
     enqueue('contratos', {
       data: { id: CTO, estado: 'borrador', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables: {} },
@@ -368,6 +384,11 @@ describe('P5: plazo de firma del contrato viejo', () => {
   it('sin pasar la vigencia del CRC (60 días desde la evaluación)', async () => {
     enqueue('estudios', evaluacion('2026-08-01T15:00:00Z'));
     expect(await plazoFirmaContrato(EXP)).toBe('2026-09-30T15:00:00.000Z');
+  });
+
+  it('si no se puede leer la evaluación, no queda sin tope: 503', async () => {
+    enqueue('estudios', { data: null, error: { message: 'timeout' } });
+    await expect(plazoFirmaContrato(EXP)).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 
   it('con menos de tres días de CRC no se abre el proceso (409)', async () => {
