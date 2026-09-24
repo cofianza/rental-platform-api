@@ -838,6 +838,21 @@ export async function generarCertificado(
 }
 
 /**
+ * Cofianza aprobó el caso: el expediente está aprobado o se cerró desde
+ * aprobado. Un cierre sin estado previo es el natural (contrato firmado), que
+ * exige la aprobación. Lo usan el PDF y /verificar, que deben decir lo mismo.
+ *
+ * ponytail: si falla la marca de una cancelación (executeTransition deja un
+ * warn), ese cierre se lee como natural. Si pasa, decidir con el contrato
+ * firmado (tieneContratoFirmado en expediente-workflow).
+ */
+function aprobadoPorCofianza(exp: { estado?: unknown; estado_pre_cancelacion?: unknown } | null | undefined): boolean {
+  return exp?.estado === 'cerrado'
+    ? (exp.estado_pre_cancelacion ?? 'aprobado') === 'aprobado'
+    : exp?.estado === 'aprobado';
+}
+
+/**
  * Compuertas de la emision. Tambien las pasa la version para firmantes que se
  * genera a demanda: con el estudio de hoy pendiente, rechazado o negado por el
  * analista, regenerar imprimiria un resultado que ya no es.
@@ -933,8 +948,10 @@ async function datosDelCrc(
   // (analista en revision manual, o ponderacion con coarrendatario) se
   // certifica como aprobado: un CRC que diga CONDICIONADO / "en revision"
   // sobre un contrato que Cofianza ya respalda es un documento que miente.
+  // También después de cerrarse: la versión del arrendatario se genera cuando
+  // la pide, y puede ser con el contrato ya firmado.
   const resultadoEfectivo: 'aprobado' | 'condicionado' =
-    e.resultado === 'condicionado' && expediente.estado === 'aprobado' ? 'aprobado' : (e.resultado as 'aprobado' | 'condicionado');
+    e.resultado === 'condicionado' && aprobadoPorCofianza(expediente) ? 'aprobado' : (e.resultado as 'aprobado' | 'condicionado');
   const umbrales = {
     aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
     zonaGris: cal.UMBRAL_ZONA_GRIS,
@@ -1248,18 +1265,16 @@ export async function verificarCertificado(codigo: string) {
     : null;
 
   // Mismo criterio que el PDF (ver resultadoEfectivo en datosDelCrc): un
-  // condicionado cuyo expediente ya está aprobado se verifica como aprobado. De
-  // un cerrado cuenta el estado previo; sin él, lo cerró el contrato firmado,
-  // que exige el estudio aprobado.
+  // condicionado que Cofianza aprobó se verifica como aprobado.
   const resultadoEstudio = (estudio?.resultado as string) || '';
-  const cerrado = expediente?.estado === 'cerrado';
-  const decision = cerrado ? ((expediente.estado_pre_cancelacion as string | null) ?? 'aprobado') : expediente?.estado;
-  const resultadoVerificado =
-    resultadoEstudio === 'condicionado' && decision === 'aprobado' ? 'aprobado' : resultadoEstudio;
+  const aprobado = aprobadoPorCofianza(expediente);
+  const resultadoVerificado = resultadoEstudio === 'condicionado' && aprobado ? 'aprobado' : resultadoEstudio;
   // P32: el CRC «en revisión» de un estudio que Cofianza negó, o que se cerró
   // sin aprobarse, es auténtico pero ya no respalda ningún arrendamiento.
   const sinEfecto =
-    resultadoEstudio === 'condicionado' && (decision === 'rechazado' || (cerrado && decision !== 'aprobado'));
+    resultadoEstudio === 'condicionado' &&
+    !aprobado &&
+    (expediente?.estado === 'rechazado' || expediente?.estado === 'cerrado');
   const status = sinEfecto
     ? 'sin_efecto'
     : new Date() <= new Date(c.fecha_vencimiento as string)

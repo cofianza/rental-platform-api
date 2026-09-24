@@ -445,6 +445,20 @@ describe('quién recibe cuál', () => {
     expect(storage.upload).not.toHaveBeenCalled();
   });
 
+  // El contrato firmado cierra el expediente sin estado previo; cancelar deja
+  // el estado del que venía. Un condicionado que Cofianza aprobó sigue
+  // aprobado en la versión que se genera después, igual que en /verificar.
+  it('la del arrendatario pedida con el estudio ya cerrado conserva la aprobación de Cofianza', async () => {
+    for (const pre of [null, 'aprobado']) {
+      textos.mockClear();
+      const expedientes = { ...ESTUDIO.expedientes, estado: 'cerrado', estado_pre_cancelacion: pre };
+      enqueue('estudios', { data: { ...ESTUDIO, resultado: 'condicionado', expedientes }, error: null });
+      await crcParaArrendatario({ ...CERT, pdf_storage_key: `estudios/est-1/certificado/cierre-${pre}.pdf` });
+      expect(impreso()).toContain('APROBADO');
+      expect(impreso()).not.toContain('CONDICIONADO');
+    }
+  });
+
   it('el generador no pone APROBADO a un resultado sin sello', async () => {
     await expect(generateCertificatePdf({ ...DATOS, resultado: 'rechazado' }, QR)).rejects.toMatchObject({
       statusCode: 409,
