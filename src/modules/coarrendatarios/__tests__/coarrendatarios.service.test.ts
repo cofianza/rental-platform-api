@@ -98,6 +98,8 @@ vi.mock('resend', () => ({
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: (...args: unknown[]) => mockEnviarTemplate(...args) }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
+// El guard real (P36) escala a la Gerencia al bloquear: aquí no se escala nada.
+vi.mock('@/modules/contratos/tope-coafianzamiento', () => ({ escalarTopeCanon: vi.fn(async () => false) }));
 vi.mock('@/modules/estudios/pago.guard', () => ({
   estudioYaCobrado: vi.fn(async () => true),
   ESTADO_ESPERANDO_PAGO: 'pago_pendiente',
@@ -130,6 +132,7 @@ vi.mock('@/modules/expedientes/expediente-soportes.service', () => ({
 
 // Import AFTER mocks
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { getCalibracion } from '@/lib/calibracion';
 import { estudioYaCobrado } from '@/modules/estudios/pago.guard';
 import {
   invitarCoarrendatario,
@@ -230,6 +233,27 @@ describe('tope de canon — P36', () => {
     expect(assertCanonDentroDelTope).toHaveBeenCalledWith(
       expect.objectContaining({ expedienteId: EXPEDIENTE_ID, soloAdvertir: cobrado }),
     );
+  });
+
+  // El guard real, no solo la llamada: canon 3.500.000 sobre un tope de 3.000.000.
+  it.each([
+    [true, 'invita (solo advierte)'],
+    [false, 'bloquea con CANON_EXCEDE_TOPE'],
+  ])('con el tope real: estudio cobrado = %s → %s', async (cobrado) => {
+    const real = await vi.importActual<typeof import('@/modules/estudios/tope-canon.guard')>('@/modules/estudios/tope-canon.guard');
+    vi.mocked(assertCanonDentroDelTope).mockImplementationOnce(real.assertCanonDentroDelTope);
+    vi.mocked(getCalibracion).mockResolvedValueOnce({ CANON_MAX_TRANSITORIO: 3_000_000 } as never);
+    vi.mocked(estudioYaCobrado).mockResolvedValueOnce(cobrado);
+    // ctx, y el inmueble del estudio para el guard.
+    enqueue('expedientes', ctxRow(), { data: { inmueble_id: 'inm-1' }, error: null });
+    enqueue('inmuebles', { data: { valor_arriendo: '3500000', uso: 'vivienda' }, error: null });
+    enqueue('expediente_coarrendatarios', cupo, { data: { id: COA_ID }, error: null });
+
+    const r = invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
+
+    if (cobrado) await expect(r).resolves.toMatchObject({ id: COA_ID });
+    else await expect(r).rejects.toMatchObject({ statusCode: 400, errorCode: 'CANON_EXCEDE_TOPE' });
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(cobrado);
   });
 
   it('aceptar: con el estudio cobrado solo advierte', async () => {
