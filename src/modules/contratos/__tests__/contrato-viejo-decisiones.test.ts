@@ -166,9 +166,18 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
 
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
     expect(e.message).toContain('Hazlo con el contrato nuevo');
-    expect(mockCoa).toHaveBeenCalledWith(EXP);
+    expect(mockCoa).toHaveBeenCalledWith(EXP, { estricto: true });
     expect(mockCompletitud).not.toHaveBeenCalled();
     expect(escrituras()).toEqual([]);
+  });
+
+  it('si no se puede leer el co-arrendatario → 503, sin generar ni abrir el sobre (no es «sin co-arrendatario»)', async () => {
+    mockCoa.mockRejectedValue(new Error('timeout'));
+    prepararGenerar();
+    expect(await error(generar())).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
+    expect(mockCompletitud).not.toHaveBeenCalled();
+    expect(escrituras()).toEqual([]);
+    await expect(assertPuedeAbrirSobre(CTO, EXP, {})).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 
   it('con co-titular en el formulario (Cofianza Compartida) → 409', async () => {
