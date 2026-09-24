@@ -657,11 +657,14 @@ describe('P12: reembolsos que quedaron en proceso', () => {
 });
 
 describe('P10: red de seguridad', () => {
-  const candidato = (estudios: unknown[]) =>
+  const cierre = () => enqueue('eventos_timeline', { data: [{ expediente_id: EXP }], error: null });
+  const candidato = (estudios: unknown[]) => {
+    cierre();
     enqueue('pagos', {
-      data: [{ id: PAGO, expediente_id: EXP, transaction_ref: 'mp-77', expedientes: { estado: 'cerrado', updated_at: '2026-09-24T12:00:00Z', estudios } }],
+      data: [{ id: PAGO, expediente_id: EXP, transaction_ref: 'mp-77', expedientes: { estado: 'cerrado', estudios } }],
       error: null,
     });
+  };
 
   it('encola la evaluación pagada de un estudio cerrado que no llegó a la cola', async () => {
     candidato([{ estado: 'cancelado', referencia_proveedor: null }]);
@@ -691,14 +694,26 @@ describe('P10: red de seguridad', () => {
     expect(ops.some((o) => o.table === 'pagos_no_conciliados' || o.table === 'estudios')).toBe(false);
   });
 
-  it('Q5b-6: no actúa hacia atrás (corte del cambio) y revisa primero los más recientes', async () => {
+  it('Q5c-6: la fecha es la del cierre o el rechazo en la línea de tiempo (no updated_at), desde el corte y lo más reciente primero', async () => {
+    cierre();
     enqueue('pagos', { data: [], error: null });
 
     await barrerDevolucionesPendientes();
 
-    const desde = ops.find((o) => o.table === 'pagos' && o.method === 'gte')?.args[1] as string;
+    const eventos = ops.filter((o) => o.table === 'eventos_timeline');
+    expect(eventos).toContainEqual(expect.objectContaining({ method: 'in', args: ['estado_nuevo', ['cerrado', 'rechazado']] }));
+    const desde = eventos.find((o) => o.method === 'gte' && o.args[0] === 'created_at')?.args[1] as string;
     expect(desde >= '2026-09-24T05:00:00.000Z').toBe(true);
-    expect(ops.find((o) => o.table === 'pagos' && o.method === 'order')?.args).toEqual(['expedientes(updated_at)', { ascending: false }]);
+    expect(eventos.find((o) => o.method === 'order')?.args).toEqual(['created_at', { ascending: false }]);
+    expect(ops.find((o) => o.table === 'pagos' && o.method === 'in' && o.args[0] === 'expediente_id')?.args[1]).toEqual([EXP]);
+    expect(ops.some((o) => String(o.args[0]).includes('updated_at'))).toBe(false);
+  });
+
+  it('sin cierres recientes no lee los pagos', async () => {
+    enqueue('eventos_timeline', { data: [], error: null });
+
+    expect(await barrerDevolucionesPendientes()).toBe(0);
+    expect(ops.some((o) => o.table === 'pagos')).toBe(false);
   });
 
   it('Q5b-6: si la devolución falla en el barrido no avisa (lo reintentaría cada 15 min)', async () => {
@@ -713,4 +728,5 @@ describe('P10: red de seguridad', () => {
     expect(mockNotificarYCorreo).not.toHaveBeenCalled();
   });
 });
+
 

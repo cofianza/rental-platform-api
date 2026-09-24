@@ -591,29 +591,41 @@ export async function revisarReembolsosEnProceso(): Promise<number> {
   return revisadas;
 }
 
-/** Q5b-6: el barrido no actúa hacia atrás: solo estudios terminados desde este cambio. */
+/** El barrido no actúa hacia atrás: solo estudios terminados desde este cambio. */
 const CORTE_BARRIDO = '2026-09-24T00:00:00-05:00';
 
 /**
  * Red de seguridad de P1: estudios cerrados o rechazados hace poco con la
  * evaluación pagada, sin consulta al buró y sin fila en la cola (el gancho del
- * cierre se cayó). Idempotente. Los que sí consultaron y los que ya tienen fila
- * se descartan con dos consultas en total, no con varias por estudio.
- * ponytail: mira los estudios tocados en los últimos 30 días (y no antes del
- * corte), por su updated_at; uno más viejo, o uno que alguien tocó después, se
- * revisa a mano o entra igual.
+ * cierre se cayó). Idempotente. La fecha del cierre o del rechazo es la del
+ * evento de estado en la línea de tiempo (la escriben la transición, el cierre
+ * sin acta y el orquestador); los que sí consultaron y los que ya tienen fila
+ * se descartan con una consulta cada uno, no con varias por estudio.
+ * ponytail: mira los terminados en los últimos 30 días (y no antes del corte),
+ * hasta 100 estudios por vuelta; uno más viejo se revisa a mano.
  */
 export async function barrerDevolucionesPendientes(): Promise<number> {
   const hace30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
   const desde = new Date(Math.max(hace30, Date.parse(CORTE_BARRIDO))).toISOString();
+  const { data: eventos, error: evErr } = await db('eventos_timeline')
+    .select('expediente_id')
+    .eq('tipo', 'estado')
+    .in('estado_nuevo', ['cerrado', 'rechazado'])
+    .gte('created_at', desde)
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (evErr) {
+    logger.error({ error: evErr.message }, 'barrerDevolucionesPendientes: no se pudieron leer los cierres');
+    return 0;
+  }
+  const expedienteIds = [...new Set(((eventos ?? []) as Array<{ expediente_id: string }>).map((e) => e.expediente_id))].slice(0, 100);
+  if (expedienteIds.length === 0) return 0;
   const { data, error } = await db('pagos')
-    .select('id, expediente_id, transaction_ref, expedientes!inner(estado, updated_at, estudios(estado, referencia_proveedor))')
+    .select('id, expediente_id, transaction_ref, expedientes!inner(estado, estudios(estado, referencia_proveedor))')
     .eq('concepto', 'estudio')
     .eq('estado', 'completado')
-    .in('expedientes.estado', ['cerrado', 'rechazado'])
-    .gte('expedientes.updated_at', desde)
-    .order('expedientes(updated_at)', { ascending: false })
-    .limit(200);
+    .in('expediente_id', expedienteIds)
+    .in('expedientes.estado', ['cerrado', 'rechazado']);
   if (error) {
     logger.error({ error: error.message }, 'barrerDevolucionesPendientes: no se pudieron leer los pagos');
     return 0;
