@@ -11,17 +11,23 @@ import PDFDocument from 'pdfkit';
 // Supabase con colas POR TABLA, como estudios.prospecto-redaccion.test.
 // ============================================================
 
-const { queues, enqueue, mockFrom, storage, archivos } = vi.hoisted(() => {
+const { queues, enqueue, mockFrom, storage, archivos, ops } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
+  const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
   const next = (table: string): Res => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'in', 'like', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'in', 'or', 'like', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of PASSTHROUGH) chain[m] = () => chain;
+    for (const m of PASSTHROUGH) {
+      chain[m] = (...args: unknown[]) => {
+        ops.push({ table, method: m, args });
+        return chain;
+      };
+    }
     chain.maybeSingle = async () => next(table);
     chain.single = async () => next(table);
     chain.then = (resolve: (v: Res) => unknown, reject?: (e: unknown) => unknown) =>
@@ -46,6 +52,7 @@ const { queues, enqueue, mockFrom, storage, archivos } = vi.hoisted(() => {
   };
   return {
     queues,
+    ops,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockFrom: vi.fn((table: string) => chainFor(table)),
     storage,
@@ -194,6 +201,7 @@ let QR: Buffer;
 
 beforeEach(async () => {
   queues.clear();
+  ops.length = 0;
   archivos.clear();
   vi.clearAllMocks();
   QR ??= await generateQrCode('https://www.cofianza.co/verificar/CERT-2026-00042');
@@ -731,6 +739,25 @@ describe('verificación pública', () => {
       enqueue('estudios_certificados', fila(CERRADO, 'condicionado'));
       expect(await verificarCertificado(CODIGO), nombre).toMatchObject({ status });
     }
+  });
+
+  // El flujo anterior cierra el expediente con un UPDATE directo al activar el
+  // contrato (sin marca ni evento), y el contrato puede cancelarse después.
+  it('aprobado, cerrado sin marca y con un contrato que se firmó y después se canceló: sigue válido', async () => {
+    const CERRADO = { estado: 'cerrado', estado_pre_cancelacion: null };
+    enqueue('contratos', { data: [{ id: 'k-1' }], error: null });
+    enqueue('estudios_certificados', fila(CERRADO, 'aprobado'));
+    expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vigente', resultado: 'aprobado' });
+    // La prueba es la fecha de firma, esté el contrato en el estado que esté.
+    expect(ops).toContainEqual({
+      table: 'contratos',
+      method: 'or',
+      args: ['fecha_firma.not.is.null,estado.in.(firmado,vigente,finalizado)'],
+    });
+
+    // Sin contrato firmado ni el paso a cerrado del RPC: no hay prueba.
+    enqueue('estudios_certificados', fila(CERRADO, 'aprobado'));
+    expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'sin_efecto', resultado: '' });
   });
 
   it('si no se puede leer cómo se cerró, no publica nada: 503', async () => {

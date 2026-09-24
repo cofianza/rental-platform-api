@@ -898,10 +898,12 @@ export function quedoSinEfecto(decision: DecisionCofianza): boolean {
 /**
  * Desde que estado se cerro un expediente sin la marca: estado_pre_cancelacion
  * va en un UPDATE aparte del RPC (si falla, no queda) y el cierre natural no la
- * pone. Sin prueba positiva no es aprobado. Valen un contrato firmado (exige el
- * estudio aprobado; mismo criterio que tieneContratoFirmado) o el paso a
- * 'cerrado' que transicionar_expediente escribe en el timeline en la misma
- * transaccion. Un error de lectura se lanza: con null, un caso aprobado saldria
+ * pone. Sin prueba positiva no es aprobado. Valen un contrato que se firmo (los
+ * contratos exigen el estudio aprobado) o el paso a 'cerrado' que
+ * transicionar_expediente escribe en el timeline en la misma transaccion. El
+ * contrato cuenta con fecha_firma aunque despues se haya cancelado: el flujo
+ * anterior cierra el expediente con un UPDATE directo al activarlo, sin marca
+ * ni evento. Un error de lectura se lanza: con null, un caso aprobado saldria
  * sin efecto en un documento publico por un fallo de la base.
  */
 async function estadoAntesDelCierre(expedienteId: string): Promise<string | null> {
@@ -909,7 +911,7 @@ async function estadoAntesDelCierre(expedienteId: string): Promise<string | null
     (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
       .select('id')
       .eq('expediente_id', expedienteId)
-      .in('estado', ['firmado', 'vigente', 'finalizado'])
+      .or('fecha_firma.not.is.null,estado.in.(firmado,vigente,finalizado)')
       .limit(1),
     (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .select('estado_anterior')
