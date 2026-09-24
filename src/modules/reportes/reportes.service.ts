@@ -9,6 +9,7 @@ import { fetchAll } from '@/lib/fetchAll';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { desdeBogota, hastaBogota, mesBogota } from '@/lib/fechaBogota';
 import { viaPorRutaDeAprobacion, type ViaAprobacion } from '@/modules/estudios/tarifas';
+import { decisionEfectiva, resumirDecisiones, ultimasDecisiones, type UltimaDecision } from '@/modules/dashboard/dashboard.service';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -29,7 +30,6 @@ export interface VolumenExpedientesResult {
 // ── Constants ───────────────────────────────────────────────
 
 const ESTADOS_CERRADOS = ['aprobado', 'rechazado', 'cerrado'];
-const ESTADOS_RESUELTOS = ['aprobado', 'rechazado', 'condicionado'];
 
 const MESES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -237,26 +237,6 @@ export interface AprobacionResult {
   };
 }
 
-type Conteo = Omit<AprobacionMes, 'periodo' | 'total' | 'tasa'>;
-
-const CONTEO_VACIO: Conteo = {
-  aprobados: 0,
-  aprobados_automatica: 0,
-  aprobados_coarrendatario: 0,
-  aprobados_revision_manual: 0,
-  rechazados: 0,
-  condicionados: 0,
-};
-
-const CAMPO_VIA: Record<ViaAprobacion, keyof Conteo> = {
-  automatica: 'aprobados_automatica',
-  condicionada_coarrendatario: 'aprobados_coarrendatario',
-  revision_manual: 'aprobados_revision_manual',
-};
-
-const tasaDe = (aprobados: number, decididos: number) =>
-  decididos > 0 ? Math.round((aprobados / decididos) * 10000) / 100 : 0;
-
 /**
  * Vía de aprobación de cada estudio aprobado, con los insumos de
  * viaPorRutaDeAprobacion (el mismo criterio del CRC): la última evaluación del
@@ -303,84 +283,52 @@ export async function getAprobacionExpedientes(
 
   logger.debug({ range }, 'Fetching aprobacion estudios');
 
-  type EventoDecision = {
-    expediente_id: string;
-    estado_nuevo: string;
-    metadata: { origen?: string } | null;
-    expedientes: { created_at: string; estado: string } | null;
-  };
-  const eventos = await todasLasFilas<EventoDecision>((desde, hasta) =>
-    (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
-      .select('expediente_id, estado_nuevo, metadata, expedientes!inner(created_at, estado)')
-      .eq('tipo', 'estado')
-      .in('estado_nuevo', ESTADOS_RESUELTOS)
-      .gte('expedientes.created_at', range.dateFrom)
-      .lte('expedientes.created_at', range.dateTo)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(desde, hasta),
-  );
-
-  // Orden ascendente: la última decisión gana.
-  const decisiones = new Map<string, { ultima: string; mes: string; estado: string; ponderacion: boolean }>();
-  for (const ev of eventos) {
-    if (!ev.expedientes) continue;
-    const d = decisiones.get(ev.expediente_id) ?? {
-      ultima: ev.estado_nuevo,
-      mes: mesBogota(ev.expedientes.created_at),
-      estado: ev.expedientes.estado,
-      ponderacion: false,
-    };
-    d.ultima = ev.estado_nuevo;
-    if (ev.estado_nuevo === 'aprobado' && ev.metadata?.origen === 'ponderacion_coarrendatario') d.ponderacion = true;
-    decisiones.set(ev.expediente_id, d);
-  }
-
+  const decisiones = await ultimasDecisiones({ creadoDesde: range.dateFrom, creadoHasta: range.dateTo });
   const vias = await viasDeAprobacion(
-    [...decisiones].filter(([, d]) => d.ultima === 'aprobado').map(([id, d]) => ({ id, ponderacion: d.ponderacion })),
+    decisiones.filter((d) => d.ultima === 'aprobado').map((d) => ({ id: d.expedienteId, ponderacion: d.ponderacion })),
   );
 
-  const monthMap = new Map<string, Conteo>();
-  for (const key of generateMonthKeys(range.dateFrom, range.dateTo)) monthMap.set(key, { ...CONTEO_VACIO });
-
-  for (const [id, d] of decisiones) {
-    // Un condicionado que se canceló sin decidir ya no está «en decisión»: no cuenta.
-    if (d.ultima === 'condicionado' && d.estado !== 'condicionado') continue;
-    const e = monthMap.get(d.mes) ?? { ...CONTEO_VACIO };
-    monthMap.set(d.mes, e);
-    if (d.ultima === 'aprobado') {
-      e.aprobados++;
-      e[CAMPO_VIA[vias.get(id) ?? 'revision_manual']]++;
-    } else if (d.ultima === 'rechazado') e.rechazados++;
-    else e.condicionados++;
+  const porMes = new Map<string, UltimaDecision[]>();
+  for (const key of generateMonthKeys(range.dateFrom, range.dateTo)) porMes.set(key, []);
+  for (const d of decisiones) {
+    const key = mesBogota(d.creadoEn);
+    porMes.set(key, [...(porMes.get(key) ?? []), d]);
   }
 
-  const meses: AprobacionMes[] = [...monthMap.keys()].sort().map((key) => {
-    const e = monthMap.get(key)!;
-    const total = e.aprobados + e.rechazados;
-    return { periodo: formatPeriodo(key), ...e, total, tasa: tasaDe(e.aprobados, total) };
+  const contar = (ds: UltimaDecision[]) => {
+    const r = resumirDecisiones(ds);
+    const porRuta = { automatica: 0, condicionada_coarrendatario: 0, revision_manual: 0 };
+    for (const d of ds) if (decisionEfectiva(d) === 'aprobado') porRuta[vias.get(d.expedienteId) ?? 'revision_manual']++;
+    return { r, porRuta };
+  };
+
+  const meses: AprobacionMes[] = [...porMes.keys()].sort().map((key) => {
+    const { r, porRuta } = contar(porMes.get(key)!);
+    return {
+      periodo: formatPeriodo(key),
+      aprobados: r.aprobados,
+      aprobados_automatica: porRuta.automatica,
+      aprobados_coarrendatario: porRuta.condicionada_coarrendatario,
+      aprobados_revision_manual: porRuta.revision_manual,
+      rechazados: r.rechazados,
+      condicionados: r.en_decision,
+      total: r.decididos,
+      tasa: r.tasa,
+    };
   });
 
-  const t = meses.reduce<Conteo>(
-    (acc, m) => {
-      for (const k of Object.keys(CONTEO_VACIO) as Array<keyof Conteo>) acc[k] += m[k];
-      return acc;
-    },
-    { ...CONTEO_VACIO },
-  );
-  const total_resueltos = t.aprobados + t.rechazados;
-
+  const { r, porRuta } = contar(decisiones);
   return {
     meses,
     totales: {
-      total_aprobados: t.aprobados,
-      total_aprobados_automatica: t.aprobados_automatica,
-      total_aprobados_coarrendatario: t.aprobados_coarrendatario,
-      total_aprobados_revision_manual: t.aprobados_revision_manual,
-      total_rechazados: t.rechazados,
-      total_condicionados: t.condicionados,
-      total_resueltos,
-      tasa_global: tasaDe(t.aprobados, total_resueltos),
+      total_aprobados: r.aprobados,
+      total_aprobados_automatica: porRuta.automatica,
+      total_aprobados_coarrendatario: porRuta.condicionada_coarrendatario,
+      total_aprobados_revision_manual: porRuta.revision_manual,
+      total_rechazados: r.rechazados,
+      total_condicionados: r.en_decision,
+      total_resueltos: r.decididos,
+      tasa_global: r.tasa,
     },
   };
 }

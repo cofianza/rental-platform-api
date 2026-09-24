@@ -207,7 +207,33 @@ describe('Dashboard Service', () => {
       const r = await dashboardService.getMiCarteraAnalitica('p1');
 
       expect(mockNeq).toHaveBeenCalledWith('tipo', 'con_coarrendatario');
-      expect(r.estudios).toMatchObject({ total: 1, aprobados: 1, scorePromedio: 800 });
+      expect(r.estudios).toMatchObject({ total: 1, scorePromedio: 800 });
+    });
+
+    it('P26: la tasa usa la decisión efectiva, como el informe y el dashboard', async () => {
+      const hace = (dias: number) => new Date(Date.now() - dias * 86_400_000).toISOString();
+      const ev = (id: string, estado_nuevo: string, dias: number, estado: string) => ({
+        expediente_id: id, estado_nuevo, metadata: null, created_at: hace(dias), expedientes: { created_at: hace(40), estado },
+      });
+      mockFrom.mockImplementation((table: string) =>
+        table === 'eventos_timeline'
+          ? createChain([
+              // e1: condicionado y luego aprobado por el analista → aprobado.
+              ev('e1', 'condicionado', 5, 'aprobado'),
+              ev('e1', 'aprobado', 3, 'aprobado'),
+              // e2: sigue condicionado → en decisión, fuera de la tasa.
+              ev('e2', 'condicionado', 2, 'condicionado'),
+              ev('e3', 'rechazado', 1, 'rechazado'),
+              // e4: aprobado hace 60 días → no entra en los 30, sí en el total.
+              ev('e4', 'aprobado', 60, 'cerrado'),
+            ])
+          : createChain([]),
+      );
+
+      const r = await dashboardService.getMiCarteraAnalitica('p1');
+
+      expect(r.estudios.aprobados).toBe(2);
+      expect(r.estudios.decisiones30d).toEqual({ aprobados: 1, condicionados: 1, rechazados: 1, total: 2, tasaAprobacion: 50 });
     });
 
     it('salud de cartera: contratos y moras activas en la misma consulta (sin idas en serie)', async () => {

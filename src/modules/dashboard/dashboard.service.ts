@@ -107,7 +107,7 @@ export async function getSummary(
   ] = await Promise.all([
     queryExpedientesActivos(),
     queryExpedientesPorEstado(range.dateFrom, range.dateTo),
-    queryDecisiones(range.dateFrom, range.dateTo),
+    ultimasDecisiones({ creadoDesde: range.dateFrom, creadoHasta: range.dateTo }),
     queryIngresosDelPeriodo(range.dateFrom, range.dateTo),
   ]);
 
@@ -120,7 +120,7 @@ export async function getSummary(
   return {
     totalExpedientesActivos: expedientesActivos,
     expedientesPorEstado: estadoRecord,
-    tasaAprobacion: tasaAprobacion(decisiones),
+    tasaAprobacion: resumirDecisiones(decisiones).tasa,
     tiempoPromedioResolucionDias: tiempoPromedioResolucion(decisiones),
     ingresosDelPeriodo: ingresos,
   };
@@ -187,64 +187,106 @@ async function queryExpedientesPorEstado(
 // aprobado que llega a contrato termina 'cerrado', así que el mejor resultado
 // contaba como no aprobado y el tiempo medía "creación → firma".
 
-interface Decision {
-  creado: number; // created_at del expediente
-  primera: number; // primera decisión = momento de resolución
-  ultima: string; // decisión vigente
+/**
+ * La última decisión de cada estudio según la línea de tiempo. P26: la misma
+ * fuente para el dashboard, el informe de aprobación y la analítica de la
+ * inmobiliaria.
+ */
+export interface UltimaDecision {
+  expedienteId: string;
+  /** aprobado, rechazado o condicionado. */
+  ultima: string;
+  primeraEn: string;
+  ultimaEn: string;
+  creadoEn: string;
+  /** Estado actual del estudio. */
+  estado: string | null;
+  /** Alguna aprobación vino de la ponderación con coarrendatario. */
+  ponderacion: boolean;
 }
 
-async function queryDecisiones(dateFrom: string, dateTo: string): Promise<Decision[]> {
+export async function ultimasDecisiones(filtro: {
+  creadoDesde?: string;
+  creadoHasta?: string;
+  inmuebleIds?: string[];
+}): Promise<UltimaDecision[]> {
   // Paginado (fetchAll): sin tope silencioso de 1000 filas. Orden por fecha con
   // id de desempate para que las páginas no se pisen y la última decisión gane.
-  const { data, error } = await fetchAll((desde, hasta) =>
-    (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
-      .select('expediente_id, estado_nuevo, created_at, expedientes!inner(created_at)')
+  const { data, error } = await fetchAll((desde, hasta) => {
+    let q = (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .select('expediente_id, estado_nuevo, metadata, created_at, expedientes!inner(created_at, estado, inmueble_id)')
       .eq('tipo', 'estado')
-      .in('estado_nuevo', ESTADOS_DECISION)
-      .gte('expedientes.created_at', dateFrom)
-      .lte('expedientes.created_at', dateTo)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(desde, hasta),
-  );
+      .in('estado_nuevo', ESTADOS_DECISION);
+    if (filtro.creadoDesde) q = q.gte('expedientes.created_at', filtro.creadoDesde);
+    if (filtro.creadoHasta) q = q.lte('expedientes.created_at', filtro.creadoHasta);
+    if (filtro.inmuebleIds) q = q.in('expedientes.inmueble_id', filtro.inmuebleIds);
+    return q.order('created_at', { ascending: true }).order('id', { ascending: true }).range(desde, hasta);
+  });
 
   if (error) throw fromSupabaseError(error);
 
-  const porExpediente = new Map<string, Decision>();
+  const porExpediente = new Map<string, UltimaDecision>();
   for (const ev of (data ?? []) as Array<{
     expediente_id: string;
     estado_nuevo: string;
+    metadata: { origen?: string } | null;
     created_at: string;
-    expedientes: { created_at: string } | null;
+    expedientes: { created_at: string; estado?: string | null } | null;
   }>) {
-    const d = porExpediente.get(ev.expediente_id);
-    if (d) d.ultima = ev.estado_nuevo; // orden ascendente: la última gana
-    else if (ev.expedientes) {
-      porExpediente.set(ev.expediente_id, {
-        creado: new Date(ev.expedientes.created_at).getTime(),
-        primera: new Date(ev.created_at).getTime(),
-        ultima: ev.estado_nuevo,
-      });
-    }
+    if (!ev.expedientes) continue;
+    const d = porExpediente.get(ev.expediente_id) ?? {
+      expedienteId: ev.expediente_id,
+      ultima: ev.estado_nuevo,
+      primeraEn: ev.created_at,
+      ultimaEn: ev.created_at,
+      creadoEn: ev.expedientes.created_at,
+      estado: ev.expedientes.estado ?? null,
+      ponderacion: false,
+    };
+    d.ultima = ev.estado_nuevo; // orden ascendente: la última gana
+    d.ultimaEn = ev.created_at;
+    if (ev.estado_nuevo === 'aprobado' && ev.metadata?.origen === 'ponderacion_coarrendatario') d.ponderacion = true;
+    porExpediente.set(ev.expediente_id, d);
   }
   return [...porExpediente.values()];
 }
 
 /**
- * % de estudios decididos cuya decisión vigente es 'aprobado' (2 decimales).
- * P26: el condicionado que sigue sin decidir va aparte («en decisión») y no
- * entra en la cuenta; el que el analista aprueba después ya es 'aprobado'.
+ * P26: la decisión efectiva. Un condicionado que el analista aprobó ya es
+ * 'aprobado' (su última decisión); el que sigue condicionado está «en
+ * decisión»; el que se canceló sin decidir no cuenta.
  */
-function tasaAprobacion(decisiones: Decision[]): number {
-  const decididos = decisiones.filter((d) => d.ultima !== 'condicionado');
-  if (decididos.length === 0) return 0;
-  const aprobados = decididos.filter((d) => d.ultima === 'aprobado').length;
-  return Math.round((aprobados / decididos.length) * 10000) / 100;
+export function decisionEfectiva(d: { ultima: string; estado?: string | null }): 'aprobado' | 'rechazado' | 'en_decision' | null {
+  if (d.ultima === 'aprobado' || d.ultima === 'rechazado') return d.ultima;
+  return d.ultima === 'condicionado' && (d.estado == null || d.estado === 'condicionado') ? 'en_decision' : null;
+}
+
+/** P26: la tasa de aprobación es aprobados sobre decididos (2 decimales); lo en decisión va aparte. */
+export function resumirDecisiones(ds: Array<{ ultima: string; estado?: string | null }>) {
+  let aprobados = 0;
+  let rechazados = 0;
+  let enDecision = 0;
+  for (const d of ds) {
+    const e = decisionEfectiva(d);
+    if (e === 'aprobado') aprobados++;
+    else if (e === 'rechazado') rechazados++;
+    else if (e === 'en_decision') enDecision++;
+  }
+  const decididos = aprobados + rechazados;
+  return {
+    aprobados,
+    rechazados,
+    en_decision: enDecision,
+    decididos,
+    tasa: decididos > 0 ? Math.round((aprobados / decididos) * 10000) / 100 : 0,
+  };
 }
 
 /** Días promedio entre la creación y la primera decisión (2 decimales). */
-function tiempoPromedioResolucion(decisiones: Decision[]): number {
-  const dias = decisiones.map((d) => (d.primera - d.creado) / 86_400_000).filter((x) => x >= 0);
+function tiempoPromedioResolucion(decisiones: UltimaDecision[]): number {
+  const dias = decisiones
+    .map((d) => (Date.parse(d.primeraEn) - Date.parse(d.creadoEn)) / 86_400_000)
+    .filter((x) => x >= 0);
   if (dias.length === 0) return 0;
   return Math.round((dias.reduce((s, x) => s + x, 0) / dias.length) * 100) / 100;
 }
@@ -540,8 +582,10 @@ export interface MiCarteraAnalitica {
     scorePromedio: number | null;
     decisiones30d: {
       aprobados: number;
+      /** En decisión: condicionados que el analista todavía no resuelve (fuera de la tasa). */
       condicionados: number;
       rechazados: number;
+      /** Decididos: aprobados + rechazados. */
       total: number;
       tasaAprobacion: number;
     };
@@ -555,8 +599,9 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
   // paralelo y con el expediente embebido: antes eran 4 idas en serie.
   let conts: Array<{ valor_arriendo: number | string | null; moras_tickets: Array<{ reportado_at: string }> | null }> = [];
   let ests: Array<{ resultado: string | null; score: number | null; created_at: string; fecha_completado: string | null }> = [];
+  let decisiones: UltimaDecision[] = [];
   if (inmuebleIds.length) {
-    const [contRes, estRes] = await Promise.all([
+    const [contRes, estRes, ultimas] = await Promise.all([
       (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
         .select('valor_arriendo, expedientes!inner(inmueble_id), moras_tickets(reportado_at, estado)')
         .in('expedientes.inmueble_id', inmuebleIds)
@@ -566,13 +611,16 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
         .select('resultado, score, created_at, fecha_completado, expedientes!inner(inmueble_id)')
         .in('expedientes.inmueble_id', inmuebleIds)
         // Solo la del titular: la del coarrendatario es parte del mismo estudio
-        // y sumaba un "estudio" más al total, al score y a las decisiones.
+        // y sumaba un "estudio" más al total y al score.
         .neq('tipo', 'con_coarrendatario'),
+      // P26: las decisiones, con la misma definición que el informe y el dashboard.
+      ultimasDecisiones({ inmuebleIds }),
     ]);
     if (contRes.error) throw fromSupabaseError(contRes.error);
     if (estRes.error) throw fromSupabaseError(estRes.error);
     conts = (contRes.data ?? []) as unknown as typeof conts;
     ests = (estRes.data ?? []) as unknown as typeof ests;
+    decisiones = ultimas;
   }
 
   // Contratos activos + canon
@@ -598,43 +646,32 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
   }
   const morosidadPct = contratosActivos ? Math.round((moraActiva / contratosActivos) * 1000) / 10 : 0;
 
-  // Estudios → aprobados, score promedio, decisiones últimos 30 días
-  let total = 0;
-  let aprobados = 0;
+  // Estudios → total y score promedio; aprobados y decisiones de los últimos 30
+  // días con la decisión efectiva (P26): el condicionado que el analista aprobó
+  // es aprobado y el que sigue sin decidir va aparte, fuera de la tasa.
   let scoreSum = 0;
   let scoreN = 0;
-  let d30Ap = 0;
-  let d30Co = 0;
-  let d30Re = 0;
-  const treintaDias = Date.now() - 30 * 86_400_000;
   for (const e of ests) {
-    total += 1;
-    if (e.resultado === 'aprobado') aprobados += 1;
     if (e.score != null) {
       scoreSum += e.score;
       scoreN += 1;
     }
-    const fecha = e.fecha_completado || e.created_at;
-    if (fecha && new Date(fecha).getTime() >= treintaDias) {
-      if (e.resultado === 'aprobado') d30Ap += 1;
-      else if (e.resultado === 'condicionado') d30Co += 1;
-      else if (e.resultado === 'rechazado') d30Re += 1;
-    }
   }
-  const d30Total = d30Ap + d30Co + d30Re;
+  const treintaDias = Date.now() - 30 * 86_400_000;
+  const d30 = resumirDecisiones(decisiones.filter((d) => Date.parse(d.ultimaEn) >= treintaDias));
 
   return {
     salud: { contratosActivos, morosidadPct, moraActiva, diasPromedioMora, canonGestionado },
     estudios: {
-      total,
-      aprobados,
+      total: ests.length,
+      aprobados: resumirDecisiones(decisiones).aprobados,
       scorePromedio: scoreN ? Math.round(scoreSum / scoreN) : null,
       decisiones30d: {
-        aprobados: d30Ap,
-        condicionados: d30Co,
-        rechazados: d30Re,
-        total: d30Total,
-        tasaAprobacion: d30Total ? Math.round((d30Ap / d30Total) * 1000) / 10 : 0,
+        aprobados: d30.aprobados,
+        condicionados: d30.en_decision,
+        rechazados: d30.rechazados,
+        total: d30.decididos,
+        tasaAprobacion: d30.tasa,
       },
     },
   };
