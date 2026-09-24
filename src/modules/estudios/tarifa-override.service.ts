@@ -117,6 +117,40 @@ export async function tarifasDelEstudio(estudioId: string, userId?: string, user
   return armar(e);
 }
 
+const CONTRATO_EN_FIRMA = ['pendiente_firma', 'firma_incompleta'];
+const CONTRATO_FIRMADO = ['firmado', 'vigente', 'finalizado'];
+
+/**
+ * P35: la tarifa especial se pacta en el estudio del TITULAR (la del
+ * co-arrendatario no se aplica a nada) y antes de firmar. Firmado el contrato,
+ * rige lo que firmaron las partes (C. Civil 1602): el cambio va en un otrosí.
+ * En firma, el documento ya salió con la tarifa anterior: se cancela el envío
+ * y se regenera.
+ */
+async function assertTarifaEditable(e: FilaEstudio): Promise<void> {
+  if (e.tipo === 'con_coarrendatario') {
+    throw AppError.conflict('Las condiciones especiales se ponen en el estudio del titular.', 'TARIFA_SOLO_TITULAR');
+  }
+  const { data, error } = await (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+    .select('estado')
+    .eq('expediente_id', e.expediente_id)
+    .in('estado', [...CONTRATO_EN_FIRMA, ...CONTRATO_FIRMADO]);
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el contrato del estudio');
+  const estados = ((data as Array<{ estado: string }> | null) ?? []).map((c) => c.estado);
+  if (estados.some((x) => CONTRATO_FIRMADO.includes(x))) {
+    throw AppError.conflict(
+      'El contrato ya está firmado: la tarifa especial no se cambia aquí. Formalízala con un otrosí firmado por las partes.',
+      'TARIFA_CONTRATO_FIRMADO',
+    );
+  }
+  if (estados.length > 0) {
+    throw AppError.conflict(
+      'El contrato está en firma con la tarifa anterior: cancela el envío a firma, cambia la tarifa y regenera el contrato.',
+      'TARIFA_CONTRATO_EN_FIRMA',
+    );
+  }
+}
+
 async function guardar(
   e: FilaEstudio,
   nuevo: TarifaOverride | null,
@@ -171,6 +205,7 @@ export async function setTarifaOverride(
   if (e.estado === 'cancelado') {
     throw AppError.conflict('El estudio esta cancelado', 'ESTUDIO_CANCELADO');
   }
+  await assertTarifaEditable(e);
   const nuevo: TarifaOverride = {
     tarifa_mensual_pct: input.tarifa_mensual_pct,
     prima_vinculacion_pct: input.prima_vinculacion_pct,
@@ -192,5 +227,6 @@ export async function quitarTarifaOverride(
   if (!leerTarifaOverride(e.tarifa_override)) {
     throw AppError.conflict('Este estudio no tiene condiciones especiales', 'SIN_TARIFA_OVERRIDE');
   }
+  await assertTarifaEditable(e);
   return guardar(e, null, userId, userRol, ip);
 }
