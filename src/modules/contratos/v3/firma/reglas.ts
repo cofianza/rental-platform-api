@@ -277,6 +277,17 @@ export function decidir(
 // geometría de sus páginas en documento.final.firmasPropio: el reenvío y el
 // reintento usan exactamente esas, sobre el mismo PDF unido.
 
+/**
+ * Compuerta temporal (RUTA_B_FIRMA_ENABLED): la Ruta B no sale a firma hasta que
+ * la sonda confirme cómo ubica Auco las firmas por coordenadas. Mismo texto en la web.
+ */
+export const RUTA_B_FIRMA_NO_HABILITADA =
+  'La firma de la Ruta B se habilita después de la prueba con Auco. Por ahora usa la Ruta A.';
+
+export function exigirFirmaRutaB(ruta: 'A' | 'B' | undefined, habilitada: boolean): void {
+  if (ruta === 'B' && !habilitada) throw AppError.conflict(RUTA_B_FIRMA_NO_HABILITADA, 'RUTA_B_FIRMA_NO_HABILITADA');
+}
+
 /** Caja visible de una página (CropBox, o MediaBox) en puntos y su /Rotate normalizado. */
 export interface PaginaPdf {
   ancho: number;

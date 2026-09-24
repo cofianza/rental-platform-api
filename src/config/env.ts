@@ -279,6 +279,11 @@ const envSchema = z.object({
   // sigue en el flujo anterior. Para QA local: CONTRATOS_V3_ENABLED=true en el
   // .env.local de la API (ojo: la base es la de produccion).
   CONTRATOS_V3_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Contratos V3 · Ruta B con firmas (Adenda 1 contratos, respuesta 6): compuerta
+  // temporal hasta verificar con scripts/sonda-auco-ruta-b.ts cómo ubica Auco las
+  // firmas por coordenadas. Apagada, la Ruta B no sale a firma por ningún camino
+  // (409 RUTA_B_FIRMA_NO_HABILITADA); ubicar y guardar las firmas sí funciona.
+  RUTA_B_FIRMA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 5: barrido de respaldo de la firma (server.ts, cada
   // 15 min). Encendido por defecto y SIN depender de CONTRATOS_V3_ENABLED
   // (producción recibe los webhooks de los sobres de QA). Apagarlo en una API

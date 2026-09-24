@@ -92,6 +92,7 @@ import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 import { contexto, generarAnexoVivienda, generarContratoVivienda, type DatosVivienda } from './vivienda';
 import {
   congelarFirmas,
+  exigirFirmaRutaB,
   exigirMarcas,
   exigirPlazoDeFirma,
   faltanMarcas,
@@ -469,6 +470,7 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
           }
         : null,
       propio: propioVisible(f.v3.datos_variables?.propio, f),
+      rutaBFirmaHabilitada: env.RUTA_B_FIRMA_ENABLED,
       adicionales: {
         maximo: cal.MAX_CLAUSULAS_ADICIONALES,
         // primera ≤ 34 y 34 + 24 = 58: dentro de lo que ordinal() sabe escribir.
@@ -1596,6 +1598,7 @@ export async function enviarAFirma(
   const dv = v3.datos_variables ?? {};
   const a: Asistente = dv.asistente ?? {};
   const ruta = a.paso1?.ruta ?? 'A';
+  exigirFirmaRutaB(ruta, env.RUTA_B_FIRMA_ENABLED); // antes de generar nada (crearSobre lo repite)
 
   // 1. Las mismas compuertas que generar.
   const bloqueos = evaluarBloqueos(f, hoy, cal);

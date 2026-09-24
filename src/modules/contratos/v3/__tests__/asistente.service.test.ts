@@ -56,7 +56,7 @@ const {
       return res;
     });
   return {
-    mockEnv: { CONTRATOS_V3_ENABLED: true, CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000, CLAUSULAS_IA_ENABLED: false },
+    mockEnv: { CONTRATOS_V3_ENABLED: true, CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000, CLAUSULAS_IA_ENABLED: false, RUTA_B_FIRMA_ENABLED: true },
     mockFrom: vi.fn((table: string) => chainFor(table)),
     ops,
     queues,
@@ -392,6 +392,7 @@ beforeEach(() => {
   ops.length = 0;
   vi.clearAllMocks();
   mockEnv.CONTRATOS_V3_ENABLED = true;
+  mockEnv.RUTA_B_FIRMA_ENABLED = true;
   mockTarifas.mockResolvedValue({ tarifas: TARIFAS });
   mockCompletitud.mockResolvedValue({ completo: true, faltantes: [], rol: 'inmobiliaria' });
   mockReservar.mockImplementation(async () => {
@@ -1654,6 +1655,7 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     });
 
   it('Ruta A: final, partes, CAS fuera de borrador, sobre y recién ahí se borra la vista previa', async () => {
+    mockEnv.RUTA_B_FIRMA_ENABLED = false; // la compuerta es solo de la Ruta B
     const doc = await documentoRevisado(PASOS);
     archivos[CRC_KEY] = await pdfReal(1);
     vi.mocked(generarContratoVivienda).mockResolvedValueOnce({ pdf: await pdfReal(3), pendientes: [], version: 'v', lineas: [] });
@@ -2001,6 +2003,30 @@ describe('Ruta B: dónde firma cada parte sobre el PDF propio (Adenda 1 contrato
     mockFrom.mockClear();
     expect(await error(guardar([ARR]))).toMatchObject({ statusCode: 404, errorCode: 'CONTRATOS_V3_NO_HABILITADO' });
     expect(mockFrom).not.toHaveBeenCalled();
+  });
+
+  it('RUTA_B_FIRMA_ENABLED apagada: enviar en Ruta B es 409 antes de todo; ubicar y guardar las firmas sí funciona', async () => {
+    mockEnv.RUTA_B_FIRMA_ENABLED = false;
+    encolarCarga({ contratos: [conPropio({ ...PROPIO, firmas: [ARR, ADOR] })] });
+    expect(await error(enviarAFirma(EXP, { generacion: 1, propioSha256: SHA }, USER, ROL))).toMatchObject({
+      statusCode: 409,
+      errorCode: 'RUTA_B_FIRMA_NO_HABILITADA',
+      message: 'La firma de la Ruta B se habilita después de la prueba con Auco. Por ahora usa la Ruta A.',
+    });
+    expect(vi.mocked(generarAnexoVivienda)).not.toHaveBeenCalled();
+    expect(storageApi.upload).not.toHaveBeenCalled();
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+
+    encolarCarga({ contratos: [conPropio()] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [conPropio({ ...PROPIO, firmas: [ARR] })] });
+    const e = await guardar([ARR]);
+    expect(opsDe('contratos', 'update')).toHaveLength(1);
+    expect(e.contrato).toMatchObject({ rutaBFirmaHabilitada: false, propio: { firmas: [ARR] } });
+
+    mockEnv.RUTA_B_FIRMA_ENABLED = true;
+    encolarCarga({ contratos: [conPropio()] });
+    expect((await obtener()).contrato?.rutaBFirmaHabilitada).toBe(true);
   });
 
   it('el esquema: coordenadas fuera de [0,1], página 0, más de 30 marcas o el índice mal puesto no pasan', () => {

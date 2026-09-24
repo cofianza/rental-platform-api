@@ -68,6 +68,8 @@ export interface EstadoAsistente {
     documento: null | { generacion: number; generadoEn: string; avisos: string[]; pendientes: string[]; desactualizado: boolean };
     /** Ruta B: el contrato propio de la inmobiliaria, tal como se cargó (sin modificar, §4.4). */
     propio: PdfPropio | null;
+    /** RUTA_B_FIRMA_ENABLED: sin ella la Ruta B no sale a firma (ubicar las firmas sí se puede). */
+    rutaBFirmaHabilitada: boolean;
     adicionales: {
       maximo: number; ordinales: string[] /* 25, desde la 1.ª adicional de ESTE contrato */;
       /** texto = responsabilidad (solo propias); modelos = los modelos sin cambios son texto de Cofianza (Adenda 1 contratos, resp. 13). */

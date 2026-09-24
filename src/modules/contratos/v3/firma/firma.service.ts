@@ -24,8 +24,10 @@ import { notificarUsuario } from '@/modules/notificaciones/notificaciones.servic
 import type { EnvioV3 } from '../asistente.types';
 import { fechaBogota, periodoVigente, sumarMeses } from '../formato';
 import {
+  RUTA_B_FIRMA_NO_HABILITADA,
   construirSignProfile,
   datosDeFirma,
+  exigirFirmaRutaB,
   exigirPlazoDeFirma,
   faltanMarcas,
   fechaHora,
@@ -150,6 +152,8 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   if (c.estado !== 'pendiente_firma')
     throw AppError.conflict('El contrato no está en firma.', 'CONTRATO_ESTADO_CAMBIADO');
   if (!extra.storage_key) throw new AppError(500, 'CONTRATO_SIN_DOCUMENTO', 'El contrato no tiene documento para firmar.');
+  // Todos los caminos a Auco pasan por aquí: enviar, reenviar, reintentar y la verificación de identidad.
+  exigirFirmaRutaB(c.datos_variables?.documento?.final?.ruta, env.RUTA_B_FIRMA_ENABLED);
 
   const partes = await leerPartes(contratoId);
   const coarrendatarios = partes.filter((p) => p.rol === 'coarrendatario').length;
@@ -304,8 +308,9 @@ export async function reenviar(contratoId: string, userId: string, rol?: string)
   if (!c) throw AppError.notFound('Contrato no encontrado.');
   if (c.estado !== 'firma_incompleta')
     throw AppError.conflict('Solo se reenvía un contrato con la firma incompleta.', 'ESTADO_NO_PERMITE_REENVIO');
-  // Ruta B: las marcas congeladas, antes de tocar el contrato (crearSobre lo repite).
+  // Ruta B: la compuerta y las marcas congeladas, antes de tocar el contrato (crearSobre lo repite).
   const final = c.datos_variables?.documento?.final;
+  exigirFirmaRutaB(final?.ruta, env.RUTA_B_FIRMA_ENABLED);
   if (final?.ruta === 'B') posicionesDeFirma(await leerPartes(contratoId), final);
   // Con FIRMA INCOMPLETA el estudio se puede cerrar o rechazar; reenviar lo
   // activaría (y ocuparía el inmueble) sobre un estudio terminado.
@@ -732,7 +737,9 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
         ? { puede: false, motivo: null }
         : !env.CONTRATOS_V3_ENABLED
           ? { puede: false, motivo: 'El envío a firma está desactivado por ahora. Escríbenos si necesitas reenviarlo.' }
-          : sinMarcas.length
+          : ruta === 'B' && !env.RUTA_B_FIRMA_ENABLED
+            ? { puede: false, motivo: RUTA_B_FIRMA_NO_HABILITADA }
+            : sinMarcas.length
             ? { puede: false, motivo: motivoSinMarcas(sinMarcas) }
             : c.expedienteEstado === 'cerrado' || c.expedienteEstado === 'rechazado'
             ? {
@@ -745,7 +752,13 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
                   puede: false,
                   motivo: `${motivoSinPlazo(sinPlazo.motivo, vig?.fin)} Si no la vas a renovar, cancela el contrato para liberar el inmueble.`,
                 },
-    reintento: env.CONTRATOS_V3_ENABLED && c.estado === 'pendiente_firma' && reintentable(s) && pendientes === 0 && !sinMarcas.length,
+    reintento:
+      env.CONTRATOS_V3_ENABLED &&
+      c.estado === 'pendiente_firma' &&
+      reintentable(s) &&
+      pendientes === 0 &&
+      (ruta === 'A' || env.RUTA_B_FIRMA_ENABLED) &&
+      !sinMarcas.length,
   };
 }
 

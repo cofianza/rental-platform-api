@@ -41,7 +41,7 @@ const { mockEnv, ops, queues, enqueue, mockRpc, chainFor, download, auco, efecto
       ops.push({ table, method, args });
     });
   return {
-    mockEnv: { CONTRATOS_V3_ENABLED: true, AUCO_SENDER_EMAIL: 'firma@cofianza.co', AUCO_WEBHOOK_SECRET: undefined as string | undefined, FIRMA_BIOMETRIA_ENABLED: false },
+    mockEnv: { CONTRATOS_V3_ENABLED: true, AUCO_SENDER_EMAIL: 'firma@cofianza.co', AUCO_WEBHOOK_SECRET: undefined as string | undefined, FIRMA_BIOMETRIA_ENABLED: false, RUTA_B_FIRMA_ENABLED: true },
     ops,
     queues,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
@@ -173,6 +173,7 @@ beforeEach(() => {
   queues.clear();
   vi.clearAllMocks();
   mockEnv.AUCO_WEBHOOK_SECRET = undefined;
+  mockEnv.RUTA_B_FIRMA_ENABLED = true;
 });
 
 // ── Activación ──
@@ -1267,6 +1268,41 @@ describe('Ruta B con firmas (Adenda 1, respuesta 6): label + position con las ma
     enqueue('contrato_partes', ok(PARTES));
     await expect(reenviar('c1', 'ad1', 'administrador')).rejects.toMatchObject({ errorCode: 'RUTA_B_FIRMAS_INCOMPLETAS' });
     expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('RUTA_B_FIRMA_ENABLED apagada: crearSobre (todas las vías) y reenviar son 409 sin sobre, sin Auco y sin tocar el contrato', async () => {
+    mockEnv.RUTA_B_FIRMA_ENABLED = false;
+    const noHabilitada = { statusCode: 409, errorCode: 'RUTA_B_FIRMA_NO_HABILITADA', message: expect.stringContaining('después de la prueba con Auco') };
+    enqueue('contratos', ok(rutaB()), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE);
+    await expect(crearSobre('c1', 'u1')).rejects.toMatchObject(noHabilitada);
+    enqueue('contratos', ok(rutaB({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    await expect(reenviar('c1', 'ad1', 'administrador')).rejects.toMatchObject(noHabilitada);
+    expect(tabla('contrato_v3_sobres', 'insert')).toEqual([]);
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+
+    // La vista no ofrece reenviar ni reintentar, y dice por qué.
+    enqueue('contratos', ok(rutaB({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(incompleto()), ok({ id: 's1' }), ok(incompleto()), ok(ADENDA));
+    enqueue('contrato_partes', ok(PARTES));
+    expect((await estadoEnviado('c1'))!.reenvio).toEqual({ puede: false, motivo: expect.stringContaining('después de la prueba con Auco') });
+    enqueue('contratos', ok(rutaB()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'fallido', auco_code: null })));
+    enqueue('contrato_partes', ok(PARTES));
+    expect((await estadoEnviado('c1'))!.reintento).toBe(false);
+
+    // La Ruta A sale igual.
+    enqueue('contratos', ok(contrato()), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_partes', ok(PARTES));
+    enqueue('contrato_v3_sobres', ok(null), ok({ id: 's1' }), ok(sobre({ estado: 'creando', auco_code: null })), ok([{ id: 's1' }]), ok(sobre()));
+    auco.uploadDocumentForSignature.mockResolvedValue('AUCO9');
+    await crearSobre('c1', 'u1');
+    expect(auco.uploadDocumentForSignature).toHaveBeenCalledTimes(1);
   });
 
   it('la vista ofrece reenviar y reintentar con las marcas completas; sin ellas, dice qué falta', async () => {
