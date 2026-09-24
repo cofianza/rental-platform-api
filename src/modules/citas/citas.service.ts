@@ -241,7 +241,7 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
     solicitanteTelefono,
     solicitanteUserId,
     propietarioEmail,
-    propietarioNombre: contacto.nombre,
+    propietarioNombre: contacto.nombre ?? '',
     propietarioTelefono: contacto.whatsapp,
     propietarioUserId: duenoId,
     responsableId: exp.miembro_responsable_id ?? inm.miembro_responsable_id ?? null,

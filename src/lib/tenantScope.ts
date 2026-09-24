@@ -118,6 +118,11 @@ export async function resolveOrgCanonicalPerfilId(perfilId: string): Promise<str
  * que es lo correcto (es una persona, no una empresa).
  */
 export async function resolveNombreDueno(perfilId: string): Promise<string> {
+  return (await nombreDelDueno(perfilId)) || 'Hola';
+}
+
+/** El nombre de resolveNombreDueno, o '' si el perfil no tiene ninguno. */
+async function nombreDelDueno(perfilId: string): Promise<string> {
   const { data: p } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select('nombre, apellido, razon_social')
@@ -139,7 +144,7 @@ export async function resolveNombreDueno(perfilId: string): Promise<string> {
     if (nombreOrg) return nombreOrg;
   }
 
-  return `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim() || 'Hola';
+  return `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim();
 }
 
 /**
@@ -160,15 +165,21 @@ export async function resolvePerfilCanonicoDeInmueble(inm: {
   return (data as { owner_perfil_id?: string | null } | null)?.owner_perfil_id ?? inm.propietario_id;
 }
 
-/** Nombre y WhatsApp (el de recaudo o, si no hay, el teléfono) del dueño, para escribirle. */
-export async function resolveContactoDueno(perfilId: string): Promise<{ nombre: string; whatsapp: string | null }> {
+/**
+ * Nombre y WhatsApp (el de recaudo o, si no hay, el teléfono) del dueño, para
+ * escribirle. `nombre` null si no tiene ninguno: el llamador pone su texto
+ * (nunca el «Hola» de resolveNombreDueno, que es para saludos).
+ */
+export async function resolveContactoDueno(
+  perfilId: string,
+): Promise<{ nombre: string | null; whatsapp: string | null }> {
   const { data } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
     .select('whatsapp_recaudo, telefono')
     .eq('id', perfilId)
     .maybeSingle();
   const p = data as { whatsapp_recaudo?: string | null; telefono?: string | null } | null;
-  return { nombre: await resolveNombreDueno(perfilId), whatsapp: p?.whatsapp_recaudo || p?.telefono || null };
+  return { nombre: (await nombreDelDueno(perfilId)) || null, whatsapp: p?.whatsapp_recaudo || p?.telefono || null };
 }
 
 export type VisibilityScope =

@@ -194,6 +194,17 @@ describe('cambio de titular principal: los créditos de estudios se van con la t
     );
     expect(movidos).toHaveLength(3);
     expect(chain.eq).toHaveBeenCalledWith('perfil_id', 'p-self');
+
+    // La agenda de visitas de la organización también se va con él (P37).
+    const agenda = (chain.update as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c) => (c[0] as Record<string, unknown>).propietario_id === 'p-owner2',
+    );
+    expect(agenda).toHaveLength(3);
+    expect(tablas).toEqual(expect.arrayContaining([
+      'disponibilidad_propietario', 'configuracion_disponibilidad', 'disponibilidad_fechas_bloqueadas',
+    ]));
+    expect(chain.delete).toHaveBeenCalledTimes(3); // la agenda personal del nuevo, que ya no se usa
+    expect(chain.eq).toHaveBeenCalledWith('propietario_id', 'p-self');
   });
 });
 

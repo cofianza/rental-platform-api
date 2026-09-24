@@ -76,8 +76,8 @@ export interface CitaPublicaDTO {
   nombre: string;
   /** Solo aplica a citas 'confirmada': true si el solicitante ya confirmó que asistirá. */
   confirmada_asistencia: boolean;
-  /** P17: a quién escribirle si no hay horarios o la visita ya no se puede cambiar. */
-  contacto?: { nombre: string; whatsapp: string | null; email: string | null };
+  /** P17: a quién escribirle si no hay horarios o la visita ya no se puede cambiar (nombre null: sin nombre). */
+  contacto?: { nombre: string | null; whatsapp: string | null; email: string | null };
 }
 
 function toDTO(c: CitaPublicaRow): CitaPublicaDTO {

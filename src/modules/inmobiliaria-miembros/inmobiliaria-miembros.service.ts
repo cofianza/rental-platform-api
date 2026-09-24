@@ -131,6 +131,23 @@ async function reapuntarTitularPrincipalSiNecesario(orgId: string, salientePerfi
       );
     }
   });
+
+  // La agenda de visitas de la organización (P37) también vive a nombre del
+  // titular principal: se va con él. Antes se borra la personal que el nuevo
+  // hubiera guardado (de cuando cada asesor tenía la suya), que ya no se usa y
+  // chocaría con los índices únicos por propietario.
+  for (const t of ['disponibilidad_propietario', 'configuracion_disponibilidad', 'disponibilidad_fechas_bloqueadas']) {
+    const { error: errBorrar } = await db(t).delete().eq('propietario_id', nuevoTitular);
+    const { error: errAgenda } = errBorrar
+      ? { error: errBorrar }
+      : await db(t).update({ propietario_id: nuevoTitular } as never).eq('propietario_id', salientePerfilId);
+    if (errAgenda) {
+      logger.error(
+        { error: errAgenda.message, orgId, tabla: t, salientePerfilId, nuevoTitular },
+        'No se pudo mover la agenda de visitas al nuevo titular — moverla a mano',
+      );
+    }
+  }
 }
 
 /**

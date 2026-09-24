@@ -195,7 +195,7 @@ async function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
       const arrendador = await arrendadorDeMora(m.expediente_id);
       if (arrendador?.whatsapp) {
         template = m.estado === 'fase_1' ? 'MORA_FASE_1_V2' : 'MORA_FASE_2_V2';
-        variables.push(arrendador.nombre, arrendador.whatsapp);
+        variables.push(arrendador.nombre ?? 'tu arrendador', arrendador.whatsapp);
       } else {
         logger.warn({ moraId: m.id }, 'Arrendador sin WhatsApp de recaudo ni teléfono: se usa la plantilla de mora v1');
       }
