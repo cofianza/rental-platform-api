@@ -84,6 +84,12 @@ const { mockCrearSobre } = vi.hoisted(() => ({ mockCrearSobre: vi.fn(async () =>
 vi.mock('@/modules/firma/firma-multiparte.service', () => ({
   crearSolicitudFirmaMultiparte: (...a: unknown[]) => mockCrearSobre(...(a as [])),
 }));
+// Lo que el envío revisa en Auco antes de las guardas (se prueba en firma-reenvio-seguro).
+const { mockExigirSinFirma } = vi.hoisted(() => ({ mockExigirSinFirma: vi.fn(async () => undefined) }));
+vi.mock('@/modules/firma/firma.service', () => ({
+  exigirSinFirmaCompleta: (...a: unknown[]) => mockExigirSinFirma(...(a as [])),
+  cancelarSolicitudesDeContrato: vi.fn(async () => undefined),
+}));
 
 import { AppError } from '@/lib/errors';
 import {
@@ -625,5 +631,20 @@ describe('Enviar a firma: si falla, solo revierte lo que sigue en «pendiente_fi
 
     expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
     expect(historial()).toEqual(['pendiente_firma', 'aprobado']);
+  });
+});
+
+describe('Enviar a firma: una firma completa sin aviso se descubre antes de las guardas (revisión 3, M1)', () => {
+  it('con co-arrendatario (P6), si Auco dice que ya firmaron todos → 409 CONTRATO_YA_FIRMADO, sin escribir', async () => {
+    mockCoa.mockResolvedValue(COA);
+    enqueue('contratos', {
+      data: { id: CTO, estado: 'pendiente_firma', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables: {} },
+      error: null,
+    });
+    mockExigirSinFirma.mockRejectedValueOnce(AppError.conflict('Este contrato ya estaba firmado.', 'CONTRATO_YA_FIRMADO'));
+
+    expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_YA_FIRMADO' });
+    expect(mockExigirSinFirma).toHaveBeenCalledWith(CTO, EXP);
+    expect(escrituras()).toEqual([]);
   });
 });

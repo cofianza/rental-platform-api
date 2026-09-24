@@ -109,9 +109,15 @@ describe('P5: el sobre multi-parte sale con el plazo de la Adenda (no 72 horas)'
     });
     enqueue('perfiles', { data: { id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'propietario', whatsapp_recaudo: '3104445566', email_recaudo: 'ana@x.co' }, error: null });
   }
-  /** Lo que cancela del sobre anterior y el sobre nuevo que inserta. */
+  /** Los sobres anteriores (leídos al empezar y al anularlos), lo que cancela de ellos y el sobre nuevo que inserta. */
   const sobres = (anteriores: Array<Record<string, unknown>> = []) =>
-    enqueue('solicitudes_firma', { data: anteriores, error: null }, ...anteriores.map(() => ({ data: null, error: null })), { data: { id: 's1' }, error: null });
+    enqueue(
+      'solicitudes_firma',
+      { data: anteriores, error: null },
+      { data: anteriores, error: null },
+      ...anteriores.map(() => ({ data: null, error: null })),
+      { data: { id: 's1' }, error: null },
+    );
 
   it('Auco y el sobre llevan el plazo calculado (15 días sin pasar el CRC)', async () => {
     prepararSobre();
@@ -132,7 +138,9 @@ describe('P5: el sobre multi-parte sale con el plazo de la Adenda (no 72 horas)'
   });
 
   it('reenviar: el sobre anterior (vivo en Auco) se anula y se cierra ANTES de abrir el nuevo', async () => {
-    vi.mocked(auco.getDocumentStatus).mockResolvedValueOnce({ status: 'CREATED', signProfile: [] } as never);
+    vi.mocked(auco.getDocumentStatus)
+      .mockResolvedValueOnce({ status: 'CREATED', signProfile: [] } as never) // antes de las guardas
+      .mockResolvedValueOnce({ status: 'CREATED', signProfile: [] } as never); // al cerrarlo
     prepararSobre();
     sobres([{ id: 's-viejo', estado: 'enviado', auco_document_code: 'DOC-VIEJO' }]);
     await crearSolicitudFirmaMultiparte('c1', 'u1');

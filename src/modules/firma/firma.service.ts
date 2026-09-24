@@ -311,6 +311,8 @@ export async function crearSolicitudFirma(
       'NO_PDF',
     );
   }
+  // Una firma completa que llegó sin aviso, antes de que otra guarda la tape.
+  await exigirSinFirmaCompleta(c.id, c.expediente_id);
 
   // 2. Fetch expediente + inmueble + solicitante data
   // El solicitante es necesario para Auco: identification, identificationType
@@ -650,6 +652,7 @@ export async function reenviarSolicitudFirma(
     // Un documento nuevo en Auco: las mismas guardas que abrir un sobre (P6 y
     // ningún otro sobre vivo aparte de este), el plazo de firma (P5) y el
     // documento anterior cerrado sin perder una firma que llegó sin aviso.
+    if (row.auco_document_code) await leerDocumentoEnAuco(row.contrato_id, row.contratos.expediente_id, row.auco_document_code);
     const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
     await assertPuedeAbrirSobre(row.contrato_id, row.contratos.expediente_id, row.contratos.datos_variables, solicitudId);
     nuevaExpiracion = await plazoFirmaContrato(row.contratos.expediente_id);
@@ -1069,29 +1072,33 @@ async function yaFirmado(contratoId: string, expedienteId: string): Promise<neve
 }
 
 /**
- * El documento de Auco de un envío anterior, antes de abrir otro (contratos-
- * firma-2). Si ya lo firmaron todos y el aviso se perdió, se reconcilia como
- * firmado por el camino del webhook y responde 409. Si sigue vivo, se anula;
- * si Auco no lo anula, se relee (como cancelarEnAuco del V3): vencido o
- * rechazado ya está cerrado. Si no se puede leer o sigue vivo, 503: ni un
- * firmado dado por cancelado ni dos documentos vivos. Devuelve su estado local.
+ * Lo que dice Auco del documento de un envío, solo lectura. Si ya lo firmaron
+ * todos y el aviso se perdió, se concilia por el camino del webhook y 409
+ * CONTRATO_YA_FIRMADO. Si Auco no responde, 503.
  */
-async function cerrarDocumentoAnterior(contratoId: string, expedienteId: string, code: string): Promise<'expirado' | 'cancelado'> {
-  const leer = () =>
-    aucoClient.getDocumentStatus(code).catch((err: unknown) => {
-      logger.error({ contratoId, code, error: err instanceof Error ? err.message : String(err) }, 'Reenvío a firma: no se pudo consultar en Auco el documento anterior');
-      throw auco503();
-    });
-  const siFirmado = async (info: { status: string; url?: string; name?: string }) => {
-    if (info.status !== 'FINISH') return;
+async function leerDocumentoEnAuco(contratoId: string, expedienteId: string, code: string): Promise<aucoClient.AucoDocumentInfo> {
+  const info = await aucoClient.getDocumentStatus(code).catch((err: unknown) => {
+    logger.error({ contratoId, code, error: err instanceof Error ? err.message : String(err) }, 'Firma: no se pudo consultar en Auco el documento de un envío');
+    throw auco503();
+  });
+  if (info.status === 'FINISH') {
     await handleAucoWebhook({ code, name: info.name ?? '', status: 'FINISH', url: info.url });
     await yaFirmado(contratoId, expedienteId);
-  };
+  }
+  return info;
+}
+
+/**
+ * El documento de Auco de un envío anterior, antes de abrir otro (contratos-
+ * firma-2). Si ya lo firmaron todos, 409 (leerDocumentoEnAuco). Si sigue vivo,
+ * se anula; si Auco no lo anula, se relee (como cancelarEnAuco del V3):
+ * vencido o rechazado ya está cerrado. Si no se puede leer o sigue vivo, 503:
+ * ni un firmado dado por cancelado ni dos documentos vivos. Devuelve su estado local.
+ */
+async function cerrarDocumentoAnterior(contratoId: string, expedienteId: string, code: string): Promise<'expirado' | 'cancelado'> {
   const cerrado = (status: string) => (status === 'EXPIRED' ? 'expirado' : status === 'REJECTED' ? 'cancelado' : null);
 
-  const info = await leer();
-  await siFirmado(info);
-  const antes = cerrado(info.status);
+  const antes = cerrado((await leerDocumentoEnAuco(contratoId, expedienteId, code)).status);
   if (antes) return antes;
 
   const anulado = await aucoClient
@@ -1099,23 +1106,15 @@ async function cerrarDocumentoAnterior(contratoId: string, expedienteId: string,
     .then((r) => r?.success !== false && !((r?.errors?.cant ?? 0) > 0))
     .catch(() => false);
   if (anulado) return 'cancelado';
-  const despues = await leer();
-  await siFirmado(despues);
+  const despues = await leerDocumentoEnAuco(contratoId, expedienteId, code);
   const ya = cerrado(despues.status);
   if (ya) return ya;
   logger.error({ contratoId, code, status: despues.status }, 'Reenvío a firma: Auco no anuló el documento anterior');
   throw auco503();
 }
 
-/**
- * Antes de abrir un sobre nuevo (reenvío a firma): cada envío anterior sin
- * terminar se cierra con cerrarDocumentoAnterior y solo después se marca. Si
- * alguno ya quedó firmado (el contrato no llegó a pasar), se lleva a firmado y
- * 409. Los firmantes no se tocan: el sobre nuevo los reemplaza, y en
- * «cancelado» se leerían como un rechazo. «Cancelar contrato» sigue con
- * cancelarSolicitudesDeContrato.
- */
-export async function anularSobresAnteriores(contratoId: string, expedienteId: string): Promise<void> {
+/** Los envíos del contrato que no están cerrados. Si alguno ya quedó firmado (el contrato no llegó a pasar), 409. */
+async function sobresSinCerrar(contratoId: string, expedienteId: string) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado, auco_document_code')
@@ -1126,7 +1125,29 @@ export async function anularSobresAnteriores(contratoId: string, expedienteId: s
   }
   const sobres = (data as Array<{ id: string; estado: string; auco_document_code: string | null }> | null) ?? [];
   if (sobres.some((s) => s.estado === 'firmado')) await yaFirmado(contratoId, expedienteId);
-  for (const s of sobres) {
+  return sobres;
+}
+
+/**
+ * Antes de las guardas del envío a firma (P6, P21, datos, firmantes, CRC), que
+ * con otro error taparían una firma completa que llegó sin aviso: si algún
+ * envío del contrato ya quedó firmado, o Auco lo dice, se concilia y 409. Solo lee.
+ */
+export async function exigirSinFirmaCompleta(contratoId: string, expedienteId: string): Promise<void> {
+  for (const s of await sobresSinCerrar(contratoId, expedienteId)) {
+    if (s.auco_document_code) await leerDocumentoEnAuco(contratoId, expedienteId, s.auco_document_code);
+  }
+}
+
+/**
+ * Antes de abrir un sobre nuevo (reenvío a firma): cada envío anterior sin
+ * terminar se cierra con cerrarDocumentoAnterior y solo después se marca. Los
+ * firmantes no se tocan: el sobre nuevo los reemplaza, y en «cancelado» se
+ * leerían como un rechazo. «Cancelar contrato» sigue con
+ * cancelarSolicitudesDeContrato.
+ */
+export async function anularSobresAnteriores(contratoId: string, expedienteId: string): Promise<void> {
+  for (const s of await sobresSinCerrar(contratoId, expedienteId)) {
     const estado = s.auco_document_code ? await cerrarDocumentoAnterior(contratoId, expedienteId, s.auco_document_code) : 'cancelado';
     const { error: updError } = await (supabase
       .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)

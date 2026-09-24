@@ -16,6 +16,12 @@ vi.mock('@/lib/auco', () => ({
   uploadDocumentForSignature: vi.fn(),
   getDocumentStatus: vi.fn(),
 }));
+// La revisión de envíos anteriores (primer paso del envío) se prueba en firma-reenvio-seguro.
+vi.mock('../firma.service', () => ({
+  exigirSinFirmaCompleta: vi.fn(async () => undefined),
+  anularSobresAnteriores: vi.fn(async () => undefined),
+  anularDocumentoHuerfano: vi.fn(async () => undefined),
+}));
 
 import { mapAucoSignerStatusToEstado, todasFirmaron, crearSolicitudFirmaMultiparte, listarFirmantes } from '../firma-multiparte.service';
 import { supabase } from '@/lib/supabase';

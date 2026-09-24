@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Reenviar a firma sin perder una firma (revisión 2 de Q6, punto 1): antes de
@@ -75,14 +75,19 @@ vi.mock('@/lib/auco', () => ({
 import * as auco from '@/lib/auco';
 import { crearSolicitudFirmaMultiparte } from '../firma-multiparte.service';
 import { crearSolicitudFirma, reenviarSolicitudFirma } from '../firma.service';
-import { assertPuedeAbrirSobre } from '@/modules/contratos/contratos.service';
+import { assertPuedeAbrirSobre, plazoFirmaContrato } from '@/modules/contratos/contratos.service';
+import { AppError } from '@/lib/errors';
 
 const VIEJO = { id: 's-viejo', estado: 'enviado', auco_document_code: 'DOC-VIEJO' };
 const de = (table: string, method: string) => ops.filter((o) => o.table === table && o.method === method);
 const marcado = (estado: string) => de('solicitudes_firma', 'update').some((o) => (o.args[0] as { estado?: string }).estado === estado);
 
-/** Lo que lee crearSolicitudFirmaMultiparte antes de revisar el sobre anterior. */
-function prepararReenvio() {
+/**
+ * Lo que lee crearSolicitudFirmaMultiparte antes de revisar el sobre anterior.
+ * `lecturas`: cuántas veces se leen los sobres (al empezar, antes de las
+ * guardas; y al anularlos, si llega).
+ */
+function prepararReenvio(lecturas = 1) {
   enqueue(
     'contratos',
     { data: { id: 'c1', estado: 'pendiente_firma', expediente_id: 'e1', storage_key: 'k.pdf', destinacion: null, datos_variables: {} }, error: null },
@@ -97,7 +102,7 @@ function prepararReenvio() {
     error: null,
   });
   enqueue('perfiles', { data: { id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'propietario', whatsapp_recaudo: '3104445566', email_recaudo: 'ana@x.co' }, error: null });
-  enqueue('solicitudes_firma', { data: [VIEJO], error: null });
+  for (let i = 0; i < lecturas; i++) enqueue('solicitudes_firma', { data: [VIEJO], error: null });
 }
 
 beforeEach(() => {
@@ -169,13 +174,55 @@ describe('reenviar a firma con el sobre anterior ya firmado en Auco (webhook per
   });
 });
 
+describe('la firma completa se descubre antes de las guardas que la taparían (revisión 3, M1)', () => {
+  /** handleAucoWebhook: el sobre por su código, sus firmantes (multi-parte) y el cierre. */
+  function webhookDelViejo() {
+    enqueue('solicitudes_firma', { data: { id: 's-viejo', contrato_id: 'c1', estado: 'enviado', nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
+    enqueue('contrato_firmantes', { data: [{ id: 'f1' }], error: null }, { data: null, error: null }, { data: [{ estado: 'firmado' }], error: null });
+  }
+  beforeEach(() => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'FINISH', url: 'https://auco/f.pdf', signProfile: [] } as never);
+  });
+  afterEach(() => {
+    // El rechazo «una vez» del plazo no se consume si la firma se descubre antes.
+    vi.mocked(plazoFirmaContrato).mockReset().mockResolvedValue('2026-10-10T04:59:59.000Z');
+  });
+
+  it('con el CRC vencido (el plazo no alcanza) → 409 CONTRATO_YA_FIRMADO, no CRC_VENCIDO', async () => {
+    vi.mocked(plazoFirmaContrato).mockRejectedValueOnce(AppError.conflict('El certificado venció', 'CRC_VENCIDO'));
+    prepararReenvio();
+    webhookDelViejo();
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CONTRATO_YA_FIRMADO' });
+    expect(mockTransicionar).toHaveBeenCalledWith('c1');
+    expect(plazoFirmaContrato).not.toHaveBeenCalled();
+  });
+
+  it('con un firmante sin teléfono (la validación de firmantes) → 409 CONTRATO_YA_FIRMADO', async () => {
+    prepararReenvio();
+    queues.set('perfiles', [{ data: { id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'propietario', whatsapp_recaudo: null, email_recaudo: 'ana@x.co' }, error: null }]);
+    webhookDelViejo();
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CONTRATO_YA_FIRMADO' });
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+  });
+
+  it('solo lee: un sobre anterior vivo no se anula antes de las guardas', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
+    vi.mocked(plazoFirmaContrato).mockRejectedValueOnce(AppError.conflict('El certificado venció', 'CRC_VENCIDO'));
+    prepararReenvio();
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CRC_VENCIDO' });
+    expect(auco.getDocumentStatus).toHaveBeenCalledWith('DOC-VIEJO');
+    expect(auco.cancelDocument).not.toHaveBeenCalled();
+    expect(de('solicitudes_firma', 'update')).toEqual([]);
+  });
+});
+
 describe('reenviar a firma con el sobre anterior sin firmar', () => {
   const sobreNuevo = () => enqueue('solicitudes_firma', { data: null, error: null }, { data: { id: 's-nuevo' }, error: null });
 
   it('vivo en Auco: se anula, se cierra y recién entonces sale el nuevo', async () => {
     vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
     vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
-    prepararReenvio();
+    prepararReenvio(2);
     sobreNuevo();
     await crearSolicitudFirmaMultiparte('c1', 'u1');
     expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-VIEJO', expect.objectContaining({ email: 'sender@cofianza.com' }));
@@ -187,7 +234,7 @@ describe('reenviar a firma con el sobre anterior sin firmar', () => {
 
   it('ya vencido en Auco: no hace falta anularlo; queda vencido y sale el nuevo', async () => {
     vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'EXPIRED', signProfile: [] } as never);
-    prepararReenvio();
+    prepararReenvio(2);
     sobreNuevo();
     await crearSolicitudFirmaMultiparte('c1', 'u1');
     expect(auco.cancelDocument).not.toHaveBeenCalled();
@@ -198,7 +245,7 @@ describe('reenviar a firma con el sobre anterior sin firmar', () => {
   it('Auco no lo anula (errors.cant) y sigue vivo al releerlo → 503, sin marcarlo ni subir otro', async () => {
     vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
     vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true, errors: { cant: 1 } });
-    prepararReenvio();
+    prepararReenvio(2);
     await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ statusCode: 503, errorCode: 'AUCO_NO_VERIFICABLE' });
     expect(de('solicitudes_firma', 'update')).toEqual([]);
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
@@ -206,10 +253,11 @@ describe('reenviar a firma con el sobre anterior sin firmar', () => {
 
   it('la anulación falla por red pero al releerlo ya está cerrado (rechazado) → sigue', async () => {
     vi.mocked(auco.getDocumentStatus)
-      .mockResolvedValueOnce({ status: 'CREATED', signProfile: [] } as never)
-      .mockResolvedValueOnce({ status: 'REJECTED', signProfile: [] } as never);
+      .mockResolvedValueOnce({ status: 'CREATED', signProfile: [] } as never) // antes de las guardas
+      .mockResolvedValueOnce({ status: 'CREATED', signProfile: [] } as never) // al cerrarlo
+      .mockResolvedValueOnce({ status: 'REJECTED', signProfile: [] } as never); // al releerlo
     vi.mocked(auco.cancelDocument).mockRejectedValue(new Error('ECONNRESET'));
-    prepararReenvio();
+    prepararReenvio(2);
     sobreNuevo();
     await crearSolicitudFirmaMultiparte('c1', 'u1');
     expect(marcado('cancelado')).toBe(true);
@@ -230,7 +278,7 @@ describe('reenviar a firma con el sobre anterior sin firmar', () => {
 
   it('los firmantes del sobre anterior no quedan «cancelado» (se leería como un rechazo)', async () => {
     vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'EXPIRED', signProfile: [] } as never);
-    prepararReenvio();
+    prepararReenvio(2);
     sobreNuevo();
     await crearSolicitudFirmaMultiparte('c1', 'u1');
     expect(de('contrato_firmantes', 'update')).toEqual([]);
@@ -244,7 +292,7 @@ describe('reenviar a firma con el sobre anterior sin firmar', () => {
       error: null,
     });
     enqueue('expedientes', { data: { numero: 'EXP-1', inmuebles: null, solicitantes: null }, error: null });
-    enqueue('solicitudes_firma', { data: [VIEJO], error: null });
+    enqueue('solicitudes_firma', { data: [VIEJO], error: null }, { data: [VIEJO], error: null });
     await expect(
       crearSolicitudFirma({ contrato_id: 'c1', nombre_firmante: 'Juan', email_firmante: 'juan@x.co', telefono_firmante: '3001112233' } as never, 'u1'),
     ).rejects.toMatchObject({ statusCode: 503 });
@@ -256,7 +304,7 @@ describe('si el sobre no queda registrado después de subir el documento (revisi
   /** Primer envío: sin sobres anteriores. */
   function prepararPrimerEnvio() {
     prepararReenvio();
-    queues.set('solicitudes_firma', [{ data: [], error: null }]);
+    queues.set('solicitudes_firma', [{ data: [], error: null }, { data: [], error: null }]);
   }
 
   it('doble clic contra el índice de un solo sobre activo → anula el documento recién subido y 409', async () => {
@@ -284,7 +332,7 @@ describe('si el sobre no queda registrado después de subir el documento (revisi
       error: null,
     });
     enqueue('expedientes', { data: { numero: 'EXP-1', inmuebles: null, solicitantes: null }, error: null });
-    enqueue('solicitudes_firma', { data: [], error: null }, { data: null, error: { code: '23505', message: 'duplicate key' } });
+    enqueue('solicitudes_firma', { data: [], error: null }, { data: [], error: null }, { data: null, error: { code: '23505', message: 'duplicate key' } });
     vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
     await expect(
       crearSolicitudFirma({ contrato_id: 'c1', nombre_firmante: 'Juan', email_firmante: 'juan@x.co', telefono_firmante: '3001112233' } as never, 'u1'),
@@ -310,7 +358,8 @@ describe('un firmante: reenviar a otro correo sube un documento nuevo (revisión
     enqueue('solicitudes_firma', solicitud, { data: { id: 's1', contrato_id: 'c1', estado: 'enviado', nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
     enqueue('contrato_firmantes', { count: 0, error: null }, { data: [], error: null });
     await expect(reenviar()).rejects.toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_YA_FIRMADO' });
-    expect(assertPuedeAbrirSobre).toHaveBeenCalledWith('c1', 'e1', { v: 1 }, 's1');
+    // La firma completa se descubre antes de las guardas (revisión 3, M1).
+    expect(assertPuedeAbrirSobre).not.toHaveBeenCalled();
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
     expect(marcado('firmado')).toBe(true);
   });

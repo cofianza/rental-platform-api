@@ -450,6 +450,9 @@ export async function crearSolicitudFirmaMultiparte(
   if (!c.storage_key) {
     throw AppError.badRequest('El contrato no tiene PDF generado para enviar a firma', 'NO_PDF');
   }
+  // Una firma completa que llegó sin aviso, antes de que otra guarda (firmantes, CRC) la tape.
+  const { exigirSinFirmaCompleta, anularSobresAnteriores, anularDocumentoHuerfano } = await import('./firma.service');
+  await exigirSinFirmaCompleta(contratoId, c.expediente_id);
 
   // Adenda 2 §9: con la biometría encendida, el sobre sale solo después de que
   // el arrendatario pase por la verificación de identidad (con cualquier
@@ -511,7 +514,6 @@ export async function crearSolicitudFirmaMultiparte(
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
   // El sobre anterior se cierra antes de abrir el nuevo (contratos-firma-2): si
   // en Auco ya estaba firmado, 409; si no se puede confirmar, 503 sin subir nada.
-  const { anularSobresAnteriores, anularDocumentoHuerfano } = await import('./firma.service');
   await anularSobresAnteriores(contratoId, c.expediente_id);
 
   // 3. Descargar PDF y subir UN documento con N firmantes

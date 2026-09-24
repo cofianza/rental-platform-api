@@ -1586,6 +1586,10 @@ export async function enviarContratoAFirma(
   if (await haySobreVivo(contratoId)) {
     return { ok: true, message: 'El contrato ya está en proceso de firma.' };
   }
+  // Una firma completa que llegó sin aviso se descubre antes de las guardas de
+  // abajo (P6, P21, datos, firmantes, CRC), que si no la taparían con otro error.
+  const { exigirSinFirmaCompleta } = await import('@/modules/firma/firma.service');
+  await exigirSinFirmaCompleta(contratoId, c.expediente_id);
 
   // P6: tampoco sale a firma con co-arrendatario o con el co-titular impreso.
   // Aquí también porque la verificación de identidad arranca antes del sobre.
