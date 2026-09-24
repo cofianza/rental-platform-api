@@ -17,7 +17,7 @@ import type {
 // ── Autenticado (owner / miembro de la inmobiliaria) ──────────
 
 export async function list(req: Request, res: Response) {
-  const data = await service.listMiembros(req.user!.id);
+  const data = await service.listMiembros(req.user!.id, { conCierre: req.query.puede_cerrar === '1' });
   sendSuccess(res, data);
 }
 

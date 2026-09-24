@@ -311,11 +311,11 @@ async function contarEstudiosActivosPorMiembro(orgId: string): Promise<Map<strin
   return carga;
 }
 
-export async function listMiembros(userId: string): Promise<{
+export async function listMiembros(userId: string, opts: { conCierre?: boolean } = {}): Promise<{
   organizacion: { id: string; nombre: string };
   soy_owner: boolean;
   miembros_ven_todo: boolean;
-  /** Titular único de una inmobiliaria vacía: «Salir» la cierra. */
+  /** Titular único de una inmobiliaria vacía: «Salir» la cierra. Solo con `conCierre` (la página de Equipo). */
   puede_cerrar: boolean;
   miembros: MiembroView[];
 }> {
@@ -369,9 +369,11 @@ export async function listMiembros(userId: string): Promise<{
     (r) => !(r.estado === 'invitado' && !r.perfil_id && r.token_expiracion && Date.parse(r.token_expiracion) < ahora),
   );
 
-  // Solo se revisa la cartera del titular que está solo (si falla, no se ofrece).
+  // Solo se revisa la cartera del titular que está solo (si falla, no se ofrece),
+  // y solo si la pide la página de Equipo: la tarjeta del responsable, las listas
+  // y el asistente cargan esta lista en cada pantalla y no la usan.
   const yo = rows.find((r) => r.perfil_id === userId && r.estado === 'activo');
-  const solo = !!yo && m.rolMiembro === 'owner' && rows.every((r) => r === yo || r.estado !== 'activo');
+  const solo = !!opts.conCierre && !!yo && m.rolMiembro === 'owner' && rows.every((r) => r === yo || r.estado !== 'activo');
   const puedeCerrar = solo
     ? await revisarInmobiliariaDelTitular({ id: yo!.id, inmobiliaria_id: m.orgId }, userId).then(
         (r) => r.vacia && r.otrosTitulares === 0,

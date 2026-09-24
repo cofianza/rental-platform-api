@@ -572,7 +572,13 @@ describe('listMiembros — puede_cerrar', () => {
     invalidateMembresiasCache();
     // membresía, limpieza de vencidas, carga por miembro, la lista (en ese orden de resolución)
     enqueue(membresia, { error: null, count: 0 }, { data: [] }, soloYo, ...inmobiliariaVacia());
-    await expect(listMiembros('p-self')).resolves.toMatchObject({ soy_owner: true, puede_cerrar: true });
+    await expect(listMiembros('p-self', { conCierre: true })).resolves.toMatchObject({ soy_owner: true, puede_cerrar: true });
+  });
+
+  it('sin pedirlo (tarjeta del responsable, listas): false sin revisar la cartera', async () => {
+    invalidateMembresiasCache();
+    enqueue(membresia, { error: null, count: 0 }, { data: [] }, soloYo);
+    await expect(listMiembros('p-self')).resolves.toMatchObject({ soy_owner: true, puede_cerrar: false });
   });
 
   it('con cartera: false', async () => {
@@ -580,6 +586,6 @@ describe('listMiembros — puede_cerrar', () => {
     const r = inmobiliariaVacia();
     r[1] = { count: 2 };
     enqueue(membresia, { error: null, count: 0 }, { data: [] }, soloYo, ...r);
-    await expect(listMiembros('p-self')).resolves.toMatchObject({ puede_cerrar: false });
+    await expect(listMiembros('p-self', { conCierre: true })).resolves.toMatchObject({ puede_cerrar: false });
   });
 });
