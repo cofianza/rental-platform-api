@@ -163,6 +163,8 @@ export async function devolverEvaluacionSinConsulta(
   expedienteId: string,
   motivo: string,
   usuarioId: string | null,
+  /** El barrido no avisa si falla (lo reintentaría y avisaría cada 15 min): solo lo registra. */
+  avisarSiFalla = true,
 ): Promise<void> {
   try {
     await cancelarPagosPendientesDeExpediente(expedienteId, motivo, ['estudio'], ['pendiente', 'procesando', 'fallido']);
@@ -213,6 +215,7 @@ export async function devolverEvaluacionSinConsulta(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err, expedienteId }, 'No se pudo revisar la devolución de la evaluación del estudio');
+    if (!avisarSiFalla) return;
     await avisarAdministradores({
       tipo: 'pago.reembolso_pendiente',
       titulo: 'Revisar la devolución de una evaluación',
@@ -578,40 +581,55 @@ export async function revisarReembolsosEnProceso(): Promise<number> {
   return revisadas;
 }
 
+/** Q5b-6: el barrido no actúa hacia atrás: solo estudios terminados desde este cambio. */
+const CORTE_BARRIDO = '2026-09-24T00:00:00-05:00';
+
 /**
  * Red de seguridad de P1: estudios cerrados o rechazados hace poco con la
  * evaluación pagada, sin consulta al buró y sin fila en la cola (el gancho del
- * cierre se cayó o el estudio se cerró antes de este cambio). Idempotente.
- * ponytail: mira los estudios tocados en los últimos 30 días; uno más viejo se
- * revisa a mano.
+ * cierre se cayó). Idempotente. Los que sí consultaron y los que ya tienen fila
+ * se descartan con dos consultas en total, no con varias por estudio.
+ * ponytail: mira los estudios tocados en los últimos 30 días (y no antes del
+ * corte), por su updated_at; uno más viejo, o uno que alguien tocó después, se
+ * revisa a mano o entra igual.
  */
 export async function barrerDevolucionesPendientes(): Promise<number> {
-  const desde = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const hace30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const desde = new Date(Math.max(hace30, Date.parse(CORTE_BARRIDO))).toISOString();
   const { data, error } = await db('pagos')
-    .select('id, expediente_id, transaction_ref, expedientes!inner(estado, updated_at)')
+    .select('id, expediente_id, transaction_ref, expedientes!inner(estado, updated_at, estudios(estado, referencia_proveedor))')
     .eq('concepto', 'estudio')
     .eq('estado', 'completado')
     .in('expedientes.estado', ['cerrado', 'rechazado'])
     .gte('expedientes.updated_at', desde)
+    .order('expedientes(updated_at)', { ascending: false })
     .limit(200);
   if (error) {
     logger.error({ error: error.message }, 'barrerDevolucionesPendientes: no se pudieron leer los pagos');
     return 0;
   }
+  type Candidato = {
+    id: string;
+    expediente_id: string;
+    transaction_ref: string | null;
+    expedientes: { estudios?: Array<{ estado: string; referencia_proveedor: string | null }> | null } | null;
+  };
+  const sinConsulta = ((data ?? []) as Candidato[]).filter((p) => consultaDe(p.expedientes?.estudios ?? []) !== 'si');
+  if (sinConsulta.length === 0) return 0;
+
+  const ids = sinConsulta.flatMap((p) => [`pago:${p.id}`, ...(p.transaction_ref ? [p.transaction_ref] : [])]);
+  const { data: filas, error: filasErr } = await db('pagos_no_conciliados').select('provider_payment_id').in('provider_payment_id', ids);
+  if (filasErr) {
+    logger.error({ error: filasErr.message }, 'barrerDevolucionesPendientes: no se pudo leer la cola');
+    return 0;
+  }
+  const enCola = new Set(((filas ?? []) as Array<{ provider_payment_id: string }>).map((f) => f.provider_payment_id));
+
   let revisados = 0;
-  for (const p of (data ?? []) as Array<{ id: string; expediente_id: string; transaction_ref: string | null }>) {
-    try {
-      const { data: fila } = await db('pagos_no_conciliados')
-        .select('id')
-        .in('provider_payment_id', [`pago:${p.id}`, ...(p.transaction_ref ? [p.transaction_ref] : [])])
-        .limit(1)
-        .maybeSingle();
-      if (fila) continue;
-      await devolverEvaluacionSinConsulta(p.expediente_id, 'Estudio terminado sin consulta al buró', null);
-      revisados++;
-    } catch (err) {
-      logger.warn({ err, pagoId: p.id }, 'barrerDevolucionesPendientes: no se pudo revisar el pago');
-    }
+  for (const p of sinConsulta) {
+    if (enCola.has(`pago:${p.id}`) || (p.transaction_ref && enCola.has(p.transaction_ref))) continue;
+    await devolverEvaluacionSinConsulta(p.expediente_id, 'Estudio terminado sin consulta al buró', null, false);
+    revisados++;
   }
   return revisados;
 }

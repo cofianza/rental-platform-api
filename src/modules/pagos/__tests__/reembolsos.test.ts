@@ -588,9 +588,15 @@ describe('P12: reembolsos que quedaron en proceso', () => {
 });
 
 describe('P10: red de seguridad', () => {
+  const candidato = (estudios: unknown[]) =>
+    enqueue('pagos', {
+      data: [{ id: PAGO, expediente_id: EXP, transaction_ref: 'mp-77', expedientes: { estado: 'cerrado', updated_at: '2026-09-24T12:00:00Z', estudios } }],
+      error: null,
+    });
+
   it('encola la evaluación pagada de un estudio cerrado que no llegó a la cola', async () => {
-    enqueue('pagos', { data: [{ id: PAGO, expediente_id: EXP, transaction_ref: 'mp-77' }], error: null }); // candidatos
-    enqueue('pagos_no_conciliados', { data: null, error: null }); // sin fila
+    candidato([{ estado: 'cancelado', referencia_proveedor: null }]);
+    enqueue('pagos_no_conciliados', { data: [], error: null }); // sin fila en la cola
     sinCobrosVivos();
     enqueue('pagos', { data: pagoMp, error: null });
     enqueue('estudios', { data: [], error: null });
@@ -602,10 +608,40 @@ describe('P10: red de seguridad', () => {
   });
 
   it('si ya tiene fila en la cola, no la vuelve a revisar', async () => {
-    enqueue('pagos', { data: [{ id: PAGO, expediente_id: EXP, transaction_ref: 'mp-77' }], error: null });
-    enqueue('pagos_no_conciliados', { data: { id: FILA }, error: null });
+    candidato([]);
+    enqueue('pagos_no_conciliados', { data: [{ provider_payment_id: 'mp-77' }], error: null });
 
     expect(await barrerDevolucionesPendientes()).toBe(0);
     expect(ops.filter((o) => o.table === 'pagos' && o.method === 'select')).toHaveLength(1);
   });
+
+  it('Q5b-6: los que sí consultaron el buró se descartan sin una consulta por estudio', async () => {
+    candidato([{ estado: 'completado', referencia_proveedor: 'TU-1' }]);
+
+    expect(await barrerDevolucionesPendientes()).toBe(0);
+    expect(ops.some((o) => o.table === 'pagos_no_conciliados' || o.table === 'estudios')).toBe(false);
+  });
+
+  it('Q5b-6: no actúa hacia atrás (corte del cambio) y revisa primero los más recientes', async () => {
+    enqueue('pagos', { data: [], error: null });
+
+    await barrerDevolucionesPendientes();
+
+    const desde = ops.find((o) => o.table === 'pagos' && o.method === 'gte')?.args[1] as string;
+    expect(desde >= '2026-09-24T05:00:00.000Z').toBe(true);
+    expect(ops.find((o) => o.table === 'pagos' && o.method === 'order')?.args).toEqual(['expedientes(updated_at)', { ascending: false }]);
+  });
+
+  it('Q5b-6: si la devolución falla en el barrido no avisa (lo reintentaría cada 15 min)', async () => {
+    candidato([]);
+    enqueue('pagos_no_conciliados', { data: [], error: null });
+    sinCobrosVivos();
+    enqueue('pagos', { data: null, error: { message: 'dos cobros completados', code: 'PGRST116' } });
+    admins();
+
+    expect(await barrerDevolucionesPendientes()).toBe(1);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockNotificarYCorreo).not.toHaveBeenCalled();
+  });
 });
+
