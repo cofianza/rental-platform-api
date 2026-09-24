@@ -504,33 +504,40 @@ export async function resolveExpedientePorTokenDocumentos(token: string): Promis
  * (trigger de la migración 20261001000003).
  */
 export async function emitirTokenDocumentos(expedienteId: string, opts: { rotar?: boolean } = {}): Promise<string> {
-  let token: string | null = null;
-  if (!opts.rotar) {
-    const { data } = await (supabase
-      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-      .select('token_documentos, token_documentos_expiracion')
-      .eq('id', expedienteId)
-      .maybeSingle();
-    const actual = data as { token_documentos: string | null; token_documentos_expiracion: string | null } | null;
-    if (
-      actual?.token_documentos &&
-      (!actual.token_documentos_expiracion || new Date(actual.token_documentos_expiracion) > new Date())
-    ) {
-      token = actual.token_documentos;
-    }
-  }
-  token ??= crypto.randomBytes(32).toString('hex');
   const expiracion = new Date(Date.now() + TOKEN_DOCS_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const db = () => supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>;
 
-  const { error } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .update({ token_documentos: token, token_documentos_expiracion: expiracion } as never)
-    .eq('id', expedienteId);
-  if (error) {
-    logger.error({ error: error.message, expedienteId }, 'Error al guardar token de documentos');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo generar el enlace');
+  if (opts.rotar) {
+    const token = crypto.randomBytes(32).toString('hex');
+    const { error } = await db()
+      .update({ token_documentos: token, token_documentos_expiracion: expiracion } as never)
+      .eq('id', expedienteId);
+    if (error) throw errorTokenDocumentos(error.message, expedienteId);
+    return token;
+  }
+
+  const { data } = await db().select('token_documentos, token_documentos_expiracion').eq('id', expedienteId).maybeSingle();
+  const actual = data as { token_documentos: string | null; token_documentos_expiracion: string | null } | null;
+  const leido = actual?.token_documentos ?? null;
+  const vigente =
+    !!leido && (!actual?.token_documentos_expiracion || new Date(actual.token_documentos_expiracion) > new Date());
+  const token = vigente && leido ? leido : crypto.randomBytes(32).toString('hex');
+
+  // Solo si el token no cambió desde la lectura: si entretanto el gestor lo rotó
+  // o un cambio de correo lo invalidó (trigger), no se revive el viejo ni se pisa
+  // el nuevo.
+  const q = db().update({ token_documentos: token, token_documentos_expiracion: expiracion } as never).eq('id', expedienteId);
+  const { data: filas, error } = await (leido ? q.eq('token_documentos', leido) : q.is('token_documentos', null)).select('id');
+  if (error) throw errorTokenDocumentos(error.message, expedienteId);
+  if (!filas || (filas as unknown[]).length === 0) {
+    throw AppError.conflict('El enlace del solicitante cambió mientras se generaba.', 'ENLACE_DOCUMENTOS_CAMBIO');
   }
   return token;
+}
+
+function errorTokenDocumentos(detalle: string, expedienteId: string): AppError {
+  logger.error({ error: detalle, expedienteId }, 'Error al guardar token de documentos');
+  return new AppError(500, 'INTERNAL_ERROR', 'No se pudo generar el enlace');
 }
 
 /** Genera+persiste el token y envía el enlace público de carga al solicitante. */

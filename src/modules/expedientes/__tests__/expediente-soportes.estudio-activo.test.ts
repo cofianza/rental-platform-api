@@ -17,7 +17,7 @@ const { ops, queues, mockFrom } = vi.hoisted(() => {
   };
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'insert', 'update', 'eq', 'in', 'order']) {
+    for (const m of ['select', 'insert', 'update', 'eq', 'is', 'in', 'order']) {
       chain[m] = (...args: unknown[]) => {
         ops.push({ table, method: m, args });
         return chain;
@@ -174,12 +174,34 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
     const vigente = 'b'.repeat(64);
     queues.set('expedientes', [
       { data: { token_documentos: vigente, token_documentos_expiracion: '2099-01-01T00:00:00Z' }, error: null },
-      { data: null, error: null },
+      { data: [{ id: EXP }], error: null },
     ]);
 
     expect(await emitirTokenDocumentos(EXP)).toBe(vigente);
     const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
     expect((update!.args[0] as { token_documentos: string }).token_documentos).toBe(vigente);
+    // Solo si sigue siendo el mismo token.
+    expect(ops).toContainEqual({ table: 'expedientes', method: 'eq', args: ['token_documentos', vigente] });
+  });
+
+  it('si entretanto lo rotaron o lo invalidó un cambio de correo, no revive el viejo', async () => {
+    const viejo = 'b'.repeat(64);
+    queues.set('expedientes', [
+      { data: { token_documentos: viejo, token_documentos_expiracion: '2099-01-01T00:00:00Z' }, error: null },
+      { data: [], error: null }, // el UPDATE condicional no encuentra el token leído
+    ]);
+
+    await expect(emitirTokenDocumentos(EXP)).rejects.toMatchObject({ errorCode: 'ENLACE_DOCUMENTOS_CAMBIO' });
+  });
+
+  it('sin enlace previo, crea uno solo si sigue sin haber', async () => {
+    queues.set('expedientes', [
+      { data: { token_documentos: null, token_documentos_expiracion: null }, error: null },
+      { data: [{ id: EXP }], error: null },
+    ]);
+
+    expect(await emitirTokenDocumentos(EXP)).toMatch(/^[a-f0-9]{64}$/);
+    expect(ops).toContainEqual({ table: 'expedientes', method: 'is', args: ['token_documentos', null] });
   });
 
   it('el envío explícito del gestor ROTA el enlace: el anterior deja de servir', async () => {
@@ -217,7 +239,7 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
   it('vencido, uno nuevo', async () => {
     queues.set('expedientes', [
       { data: { token_documentos: 'b'.repeat(64), token_documentos_expiracion: '2020-01-01T00:00:00Z' }, error: null },
-      { data: null, error: null },
+      { data: [{ id: EXP }], error: null },
     ]);
 
     const token = await emitirTokenDocumentos(EXP);
