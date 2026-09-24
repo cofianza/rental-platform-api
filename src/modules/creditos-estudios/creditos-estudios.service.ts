@@ -467,6 +467,7 @@ export async function comprarPaquete(
 /**
  * Marca una compra como completada (idempotente: solo toca filas no completadas).
  * Si `throwOnError`, propaga el fallo para que el retry del webhook lo repare.
+ * Sin payment no se toca el registrado (P22: es el que acreditó la compra).
  */
 async function marcarCompraCompletada(
   compraId: string,
@@ -478,7 +479,7 @@ async function marcarCompraCompletada(
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .update({
       estado: 'completado',
-      stripe_payment_intent_id: paymentIntentId,
+      ...(paymentIntentId ? { stripe_payment_intent_id: paymentIntentId } : {}),
       gateway_response: rawResponse,
       completed_at: new Date().toISOString(),
     } as never)
@@ -495,7 +496,7 @@ export async function acreditarCompraDesdeWebhook(
   stripeSessionId: string,
   paymentIntentId: string | null,
   rawResponse: Record<string, unknown>,
-): Promise<{ ok: boolean; ya_acreditado?: boolean; lote_id?: string }> {
+): Promise<{ ok: boolean; ya_acreditado?: boolean; lote_id?: string; duplicado?: boolean }> {
   // 1. Buscar compra por session ID
   const { data: compraData, error: findErr } = await (supabase
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
@@ -514,6 +515,31 @@ export async function acreditarCompraDesdeWebhook(
   if (compra.estado === 'completado') {
     logger.info({ compraId: compra.id }, 'Compra ya estaba completada — idempotent skip');
     return { ok: true, ya_acreditado: true };
+  }
+
+  // 2.5. P22: la compra se reclama para ESTE payment antes de crear el lote. Con
+  //      dos payments aprobados a la vez (dos pestañas; webhook y conciliación)
+  //      el segundo chocaba con el lote y salía como «ya acreditado», sin
+  //      quedar para devolver. El reintento del mismo payment pasa; el de otro,
+  //      es un pago duplicado.
+  if (paymentIntentId) {
+    const { data: reclamada } = await db('compras_creditos_estudios')
+      .update({ stripe_payment_intent_id: paymentIntentId } as never)
+      .eq('id', compra.id)
+      .is('stripe_payment_intent_id', null)
+      .select('id');
+    if (!(reclamada as unknown[] | null)?.length) {
+      const { data: fresca, error: frescaErr } = await db('compras_creditos_estudios')
+        .select('stripe_payment_intent_id')
+        .eq('id', compra.id)
+        .maybeSingle();
+      if (frescaErr) throw fromSupabaseError(frescaErr);
+      const acredito = (fresca as { stripe_payment_intent_id: string | null } | null)?.stripe_payment_intent_id;
+      if (acredito !== paymentIntentId) {
+        logger.warn({ compraId: compra.id, paymentIntentId, acredito }, 'Compra de créditos reclamada por otro payment — pago duplicado');
+        return { ok: false, duplicado: true };
+      }
+    }
   }
 
   // 3. Calcular vencimiento del lote
@@ -546,7 +572,8 @@ export async function acreditarCompraDesdeWebhook(
     // Reparar la compra si quedó sin marcar y salir idempotente (sin duplicar créditos).
     if (loteErr?.code === '23505') {
       logger.info({ compraId: compra.id }, 'Lote ya existía (retry concurrente) — idempotent skip');
-      await marcarCompraCompletada(compra.id, paymentIntentId, rawResponse);
+      // Sin pisar el payment registrado: es el que creó el lote.
+      await marcarCompraCompletada(compra.id, null, rawResponse);
       return { ok: true, ya_acreditado: true };
     }
     logger.error({ loteErr, compraId: compra.id }, 'Error creando lote tras pago confirmado');

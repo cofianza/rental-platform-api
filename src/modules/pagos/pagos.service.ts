@@ -1454,10 +1454,11 @@ async function webhookCompraCreditos(
       logger.warn({ compraId, paymentId }, 'MP webhook: compra de créditos sin sesión de pasarela');
       return;
     }
-    // ponytail: dos payments aprobados de la misma compra procesados a la vez
-    // pueden dejar registrado el segundo; el uq del lote evita el doble crédito.
+    // La compra se reclama para este payment antes de crear el lote: si otro
+    // payment aprobado la tomó a la vez, este es un pago duplicado.
     const { acreditarCompraDesdeWebhook } = await import('@/modules/creditos-estudios/creditos-estudios.service');
-    await acreditarCompraDesdeWebhook(compra.stripe_session_id, paymentId, status.rawResponse);
+    const r = await acreditarCompraDesdeWebhook(compra.stripe_session_id, paymentId, status.rawResponse);
+    if (r.duplicado) await registrarPagoNoConciliado(paymentId, externalReference, status, 'pago_duplicado');
   } catch (err) {
     logger.error({ err, compraId, paymentId }, 'MP webhook: error procesando la compra de créditos');
   }

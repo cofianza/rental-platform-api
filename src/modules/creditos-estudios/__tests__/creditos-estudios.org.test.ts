@@ -11,7 +11,7 @@ const { mockFrom, mockRpc, ops, queues, enqueue, mockEsDueno, mockFactura } = vi
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'gt', 'or', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'is', 'gt', 'or', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -90,10 +90,11 @@ describe('créditos de la organización', () => {
   });
 
   it('al acreditar una compra pagada se dispara su factura electrónica', async () => {
-    enqueue('compras_creditos_estudios', {
-      data: { id: 'compra-1', perfil_id: 'owner-1', estado: 'pendiente', cantidad_estudios: 25, vence_en_dias: null },
-      error: null,
-    });
+    enqueue(
+      'compras_creditos_estudios',
+      { data: { id: 'compra-1', perfil_id: 'owner-1', estado: 'pendiente', cantidad_estudios: 25, vence_en_dias: null }, error: null },
+      { data: [{ id: 'compra-1' }], error: null }, // se reclama para el payment
+    );
     enqueue('lotes_creditos_estudios', { data: { id: 'lote-1' }, error: null }); // insert
     enqueue('lotes_creditos_estudios', { data: [{ cantidad_disponible: 25 }], error: null }); // saldo
 

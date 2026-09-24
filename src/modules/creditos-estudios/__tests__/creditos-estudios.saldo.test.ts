@@ -13,7 +13,7 @@ const { mockFrom, mockRpc, ops, queues, enqueue, mockTransition } = vi.hoisted((
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'gt', 'or', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'is', 'gt', 'or', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -240,6 +240,7 @@ describe('P22: contracargo de una compra de créditos', () => {
     enqueue(
       'compras_creditos_estudios',
       { data: { id: 'compra-2', perfil_id: 'owner-1', estado: 'pendiente', cantidad_estudios: 10, vence_en_dias: null }, error: null },
+      { data: [{ id: 'compra-2' }], error: null }, // se reclama para el payment
       { data: [{ creditos_en_contra: 3 }], error: null }, // saldo en contra
       { data: [{ id: 'compra-1', creditos_en_contra: 3 }], error: null }, // deudas a cubrir
       { data: [{ id: 'compra-1' }], error: null }, // CAS de la deuda
@@ -253,6 +254,47 @@ describe('P22: contracargo de una compra de créditos', () => {
     const movs = inserts('movimientos_creditos_estudios');
     expect(movs[0]).toMatchObject({ tipo: 'compra', cantidad: 10, saldo_resultante: 10 });
     expect(movs[1]).toMatchObject({ tipo: 'ajuste', cantidad: -3, saldo_resultante: 7 });
+  });
+});
+
+describe('Q5b-3: la compra se reclama para un payment antes de crear el lote', () => {
+  const compraPendiente = { data: { id: 'compra-3', perfil_id: 'owner-1', estado: 'pendiente', cantidad_estudios: 5, vence_en_dias: null }, error: null };
+
+  it('otro payment aprobado a la vez: no crea lote ni completa la compra, es un pago duplicado', async () => {
+    enqueue(
+      'compras_creditos_estudios',
+      compraPendiente,
+      { data: [], error: null }, // el reclamo no pasa: ya la tiene otro payment
+      { data: { stripe_payment_intent_id: 'mp-A' }, error: null },
+    );
+
+    expect(await acreditarCompraDesdeWebhook('pref-3', 'mp-B', {})).toEqual({ ok: false, duplicado: true });
+    expect(inserts('lotes_creditos_estudios')).toEqual([]);
+    expect(updates('compras_creditos_estudios')).toEqual([{ stripe_payment_intent_id: 'mp-B' }]); // solo el intento de reclamo
+  });
+
+  it('el reintento del mismo payment pasa aunque ya la haya reclamado', async () => {
+    enqueue(
+      'compras_creditos_estudios',
+      compraPendiente,
+      { data: [], error: null },
+      { data: { stripe_payment_intent_id: 'mp-B' }, error: null },
+      { data: [], error: null }, // saldo en contra
+    );
+    enqueue('lotes_creditos_estudios', { data: { id: 'lote-3' }, error: null }, { data: [{ cantidad_disponible: 5 }], error: null });
+
+    expect(await acreditarCompraDesdeWebhook('pref-3', 'mp-B', {})).toEqual({ ok: true, lote_id: 'lote-3' });
+    expect(inserts('lotes_creditos_estudios')[0]).toMatchObject({ compra_id: 'compra-3', cantidad_inicial: 5 });
+  });
+
+  it('si el lote ya existía (23505), completa la compra sin pisar el payment que lo creó', async () => {
+    enqueue('compras_creditos_estudios', compraPendiente, { data: [{ id: 'compra-3' }], error: null }, { data: [], error: null });
+    enqueue('lotes_creditos_estudios', { data: null, error: { code: '23505', message: 'duplicate key uq_lotes_creditos_compra' } });
+
+    expect(await acreditarCompraDesdeWebhook('pref-3', 'mp-B', {})).toEqual({ ok: true, ya_acreditado: true });
+    const marca = updates('compras_creditos_estudios').at(-1) as Record<string, unknown>;
+    expect(marca).toMatchObject({ estado: 'completado' });
+    expect(marca).not.toHaveProperty('stripe_payment_intent_id');
   });
 });
 
