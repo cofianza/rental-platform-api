@@ -79,6 +79,7 @@ vi.mock('@/modules/solicitantes/solicitantes.service', () => ({
 
 import { createExpediente } from '../expedientes.service';
 import { createEstudioFromInmueble } from '@/modules/estudios/estudios.service';
+import { assertInmuebleAccess } from '@/lib/tenantScope';
 
 const INMUEBLE = '22222222-2222-2222-2222-222222222222';
 const AJENO = '33333333-3333-3333-3333-333333333333';
@@ -104,13 +105,25 @@ describe('solicitante de otra agencia al crear el estudio', () => {
   });
 
   it('createEstudioFromInmueble: 404 antes de llamar al RPC', async () => {
-    queues.set('inmuebles', [{ data: { propietario_id: null, inmobiliaria_id: 'org-b' }, error: null }]);
-
     await expect(
       createEstudioFromInmueble(INMUEBLE, { solicitante_id: AJENO } as never, 'user-b', undefined, 'inmobiliaria'),
     ).rejects.toMatchObject({ statusCode: 404 });
 
     expect(mockGetApplicant).toHaveBeenCalledWith(AJENO, 'user-b', 'inmobiliaria');
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('inmueble fuera de la cartera al crear el estudio desde el inmueble', () => {
+  it('el de un compañero, para el miembro restringido: 404 con el mismo guard que createExpediente', async () => {
+    vi.mocked(assertInmuebleAccess).mockRejectedValueOnce(
+      Object.assign(new Error('Inmueble no encontrado'), { statusCode: 404, errorCode: 'INMUEBLE_NOT_FOUND' }),
+    );
+    await expect(
+      createEstudioFromInmueble(INMUEBLE, { solicitante_id: AJENO } as never, 'asesor', undefined, 'inmobiliaria'),
+    ).rejects.toMatchObject({ statusCode: 404, errorCode: 'INMUEBLE_NOT_FOUND' });
+    expect(assertInmuebleAccess).toHaveBeenCalledWith(INMUEBLE, 'asesor', 'inmobiliaria');
+    expect(mockGetApplicant).not.toHaveBeenCalled();
     expect(mockRpc).not.toHaveBeenCalled();
   });
 });

@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { perfilEsDuenoDeInmueble } from '@/lib/tenantScope';
+import { assertInmuebleAccess } from '@/lib/tenantScope';
 import type { UserRole } from '@/types/auth';
 
 const BUCKET_NAME = 'documentos-expedientes';
@@ -49,25 +49,14 @@ async function fetchInmuebleOrThrow(inmuebleId: string): Promise<InmuebleContrat
 }
 
 /**
- * Ownership guard: propietario/inmobiliaria solo pueden operar sobre
- * inmuebles propios. Admin/operador pasan sin chequeo.
+ * Ownership guard: propietario/inmobiliaria solo operan sobre inmuebles de su
+ * cartera (el miembro restringido, lo suyo o lo asignado). Admin/operador
+ * pasan sin chequeo.
  */
 async function assertOwnership(inmueble: InmuebleContratoTipoRow, userId: string, userRol: UserRole): Promise<void> {
   if (userRol === 'administrador' || userRol === 'operador_analista') return;
   if (userRol === 'propietario' || userRol === 'inmobiliaria') {
-    // Org-aware: dueño directo o miembro de la organización dueña del inmueble.
-    const esDueno = await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: inmueble.propietario_id,
-      inmuebleInmobiliariaId: inmueble.inmobiliaria_id,
-    });
-    if (!esDueno) {
-      throw AppError.forbidden(
-        'No tienes permisos sobre este inmueble',
-        'INMUEBLE_FORBIDDEN',
-      );
-    }
+    await assertInmuebleAccess(inmueble.id, userId, userRol);
     return;
   }
   throw AppError.forbidden('Rol no autorizado', 'ROLE_NOT_ALLOWED');

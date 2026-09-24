@@ -440,11 +440,13 @@ export async function resolveInmobiliariaIdForPerfil(perfilId: string): Promise<
 }
 
 /**
- * ¿El perfil puede acceder a un inmueble como "dueño"? True si es el
+ * ¿El perfil es "dueño" del inmueble a nivel de ORGANIZACIÓN? True si es el
  * propietario_id directo, o (rol 'inmobiliaria') si es miembro activo de la
- * organización dueña del inmueble. Única fuente de verdad del chequeo de
- * ownership que antes estaba duplicado como `propietario_id === userId` en
- * cada guard (citas, habilitación, soportes, workflow, contratos, etc.).
+ * organización dueña, sin mirar miembros_ven_todo. Solo para guards que ya
+ * pasaron por assertExpedienteAccess o que por diseño son de toda la org
+ * (liberar con crédito). Para abrir o tocar un inmueble por id, usar
+ * assertInmuebleAccess: esta dejaba al miembro restringido abrir la cartera
+ * de sus compañeros.
  */
 export async function perfilEsDuenoDeInmueble(params: {
   userId: string;
@@ -462,11 +464,14 @@ export async function perfilEsDuenoDeInmueble(params: {
 }
 
 /**
- * Guard de propiedad a nivel INMUEBLE para endpoints por-id (detalle, update,
- * fotos, cambios, contrato-vigente...). Lanza 404 si el usuario NO es dueño del
- * inmueble (propietario directo o miembro de la org dueña). No-op para roles
- * internos y llamadas sin identidad. Es la contraparte a nivel-inmueble de
- * assertExpedienteAccess; usa perfilEsDuenoDeInmueble como única fuente de verdad.
+ * Guard a nivel INMUEBLE para endpoints por-id (detalle, edición, fotos,
+ * cambios, contrato vigente, vitrina, contrato tipo, crear estudios...). Lanza
+ * 404 si el inmueble no está en la cartera del usuario: la misma regla que la
+ * lista, decidida sobre ESTA fila (una consulta, en paralelo con la membresía).
+ * Así el miembro restringido (miembros_ven_todo = false) tampoco abre por
+ * enlace lo que su lista le oculta: solo lo que registró o le asignaron.
+ * No-op para roles internos y llamadas sin identidad. Contraparte a
+ * nivel-inmueble de assertExpedienteAccess.
  */
 export async function assertInmuebleAccess(
   inmuebleId: string,
@@ -475,20 +480,17 @@ export async function assertInmuebleAccess(
 ): Promise<void> {
   if (!userId || !userRol) return; // sin identidad: no gatear (sistema)
   if (INTERNAL_ROLES.includes(userRol)) return; // ve todo
-  const { data } = await (supabase
-    .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('propietario_id, inmobiliaria_id')
-    .eq('id', inmuebleId)
-    .maybeSingle();
-  const row = data as { propietario_id: string | null; inmobiliaria_id: string | null } | null;
-  if (!row) throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
-  const ok = await perfilEsDuenoDeInmueble({
-    userId,
-    userRol,
-    inmueblePropietarioId: row.propietario_id,
-    inmuebleInmobiliariaId: row.inmobiliaria_id,
-  });
-  if (!ok) throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
+  if (userRol !== 'inmobiliaria' && userRol !== 'propietario')
+    throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
+  const [c, { data }] = await Promise.all([
+    carteraDe(userId, userRol),
+    (supabase.from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('propietario_id, inmobiliaria_id, miembro_responsable_id')
+      .eq('id', inmuebleId)
+      .maybeSingle(),
+  ]);
+  if (!c || !data || !inmuebleVisible(c, data as FilaInmuebleScope))
+    throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
 }
 
 /**

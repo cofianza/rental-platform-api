@@ -11,15 +11,18 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { filas, ops } = vi.hoisted(() => ({
+const { filas, ops, inmueble } = vi.hoisted(() => ({
   filas: [] as Array<Record<string, unknown>>,
   ops: [] as Array<{ tabla: string; metodo: string; args: unknown[] }>,
+  // La fila que lee assertInmuebleAccess (null = no existe).
+  inmueble: { fila: null as Record<string, unknown> | null },
 }));
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     from: (tabla: string) => {
       const chain: Record<string, unknown> = {
         then: (resolve: (v: unknown) => void) => resolve({ data: tabla === 'inmobiliaria_miembros' ? [...filas] : [], error: null }),
+        maybeSingle: async () => ({ data: tabla === 'inmuebles' ? inmueble.fila : null, error: null }),
       };
       for (const m of ['select', 'eq', 'or', 'order', 'in'])
         chain[m] = (...args: unknown[]) => {
@@ -32,6 +35,7 @@ vi.mock('@/lib/supabase', () => ({
 }));
 
 import {
+  assertInmuebleAccess,
   expedienteVisible,
   filtroPortafolio,
   invalidateMembresiasCache,
@@ -181,6 +185,87 @@ describe('puedeVerFilaExpediente: el guard del detalle del contrato', () => {
     expect(await puedeVerFilaExpediente(YO, 'administrador', null)).toBe(true);
     expect(await puedeVerFilaExpediente(undefined, undefined, null)).toBe(true);
     expect(await puedeVerFilaExpediente(YO, 'solicitante', fila(ORG))).toBe(false);
+    expect(ops).toEqual([]);
+  });
+});
+
+describe('assertInmuebleAccess: por enlace se abre lo mismo que muestra la lista', () => {
+  beforeEach(() => {
+    invalidateMembresiasCache();
+    filas.length = 0;
+    ops.length = 0;
+    inmueble.fila = null;
+  });
+
+  const MEMBRESIAS: Record<string, { rol_miembro: string; venTodo: boolean } | null> = {
+    ninguna: null,
+    owner: { rol_miembro: 'owner', venTodo: false },
+    miembro_ve_todo: { rol_miembro: 'miembro', venTodo: true },
+    miembro_restringido: { rol_miembro: 'miembro', venTodo: false },
+    lectura_restringido: { rol_miembro: 'solo_lectura', venTodo: false },
+  };
+  const conMembresia = (m: string) => {
+    invalidateMembresiasCache();
+    filas.length = 0;
+    const mm = MEMBRESIAS[m];
+    if (mm) filas.push({ inmobiliaria_id: ORG, rol_miembro: mm.rol_miembro, inmobiliarias: { miembros_ven_todo: mm.venTodo } });
+  };
+  const abre = (rol: string) => assertInmuebleAccess('inm-1', YO, rol).then(() => true, () => false);
+
+  /** La regla de la lista (filtroPortafolio), por conjuntos. */
+  const esperado = (rol: string, m: string, f: { propietario: string | null; org: string | null; responsable: string | null }) => {
+    if (rol === 'propietario') return f.propietario === YO;
+    const completa = m === 'owner' || m === 'miembro_ve_todo';
+    return f.propietario === YO || f.responsable === YO || (completa && f.org === ORG);
+  };
+
+  it('coincide con la lista en todas las combinaciones de rol, membresía y dueño/asignado', async () => {
+    const quien = [YO, 'otro', null];
+    const distintos: unknown[] = [];
+    const roles: Array<[string, string[]]> = [['inmobiliaria', Object.keys(MEMBRESIAS)], ['propietario', ['ninguna']]];
+    for (const [rol, membresias] of roles)
+      for (const m of membresias)
+        for (const propietario of quien)
+          for (const org of [ORG, 'org-2', null])
+            for (const responsable of quien) {
+              conMembresia(m);
+              inmueble.fila = { propietario_id: propietario, inmobiliaria_id: org, miembro_responsable_id: responsable };
+              if ((await abre(rol)) !== esperado(rol, m, { propietario, org, responsable }))
+                distintos.push({ rol, m, propietario, org, responsable });
+            }
+    expect(distintos).toEqual([]);
+  });
+
+  it('el miembro restringido no abre el inmueble de un compañero; sí el suyo y el que le asignaron', async () => {
+    conMembresia('miembro_restringido');
+    inmueble.fila = { propietario_id: 'companero', inmobiliaria_id: ORG, miembro_responsable_id: null };
+    await expect(assertInmuebleAccess('inm-1', YO, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 404,
+      errorCode: 'INMUEBLE_NOT_FOUND',
+    });
+    inmueble.fila = { propietario_id: 'companero', inmobiliaria_id: ORG, miembro_responsable_id: YO };
+    await expect(assertInmuebleAccess('inm-1', YO, 'inmobiliaria')).resolves.toBeUndefined();
+    inmueble.fila = { propietario_id: YO, inmobiliaria_id: ORG, miembro_responsable_id: null };
+    await expect(assertInmuebleAccess('inm-1', YO, 'inmobiliaria')).resolves.toBeUndefined();
+  });
+
+  it('el titular y el miembro que ve todo abren toda la organización, no otra', async () => {
+    for (const m of ['owner', 'miembro_ve_todo']) {
+      conMembresia(m);
+      inmueble.fila = { propietario_id: 'companero', inmobiliaria_id: ORG, miembro_responsable_id: null };
+      expect(await abre('inmobiliaria')).toBe(true);
+      inmueble.fila = { propietario_id: 'otro', inmobiliaria_id: 'org-2', miembro_responsable_id: null };
+      expect(await abre('inmobiliaria')).toBe(false);
+    }
+  });
+
+  it('no existe: 404; internos y llamadas sin identidad no consultan; solicitante 404 sin consultar', async () => {
+    conMembresia('owner');
+    await expect(assertInmuebleAccess('inm-1', YO, 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
+    ops.length = 0;
+    await expect(assertInmuebleAccess('inm-1', YO, 'administrador')).resolves.toBeUndefined();
+    await expect(assertInmuebleAccess('inm-1', undefined, undefined)).resolves.toBeUndefined();
+    await expect(assertInmuebleAccess('inm-1', YO, 'solicitante')).rejects.toMatchObject({ statusCode: 404 });
     expect(ops).toEqual([]);
   });
 });

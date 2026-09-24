@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, esMiembroSoloLectura, resolveOrgMemberPerfilIds, perfilEsDuenoDeInmueble, assertInmuebleAccess } from '@/lib/tenantScope';
+import { resolveInmobiliariaIdForPerfil, esOwnerDeOrg, esMiembroSoloLectura, resolveOrgMemberPerfilIds, assertInmuebleAccess } from '@/lib/tenantScope';
 import { notificarYCorreo } from '../notificaciones/notificaciones.service';
 import { errorReservaPerdida } from '../estudios/estudios-simultaneos.guard';
 import type {
@@ -928,24 +928,12 @@ export async function toggleVisibility(
   userRol?: string,
   ip?: string,
 ) {
-  // Verify inmueble exists
+  // Ownership: inmobiliaria/propietario solo pausan/publican lo que está en su
+  // cartera (el miembro restringido, lo suyo o lo asignado). Admin/operador
+  // pasan. Antes de leerlo: 404 igual si no existe o si es ajeno.
+  await assertInmuebleAccess(id, userId, userRol);
   const inmueble = await getInmuebleById(id);
-  const row = inmueble as unknown as Record<string, unknown>;
-  const estado = row.estado as string;
-
-  // Ownership: inmobiliaria/propietario solo pueden pausar/publicar inmuebles
-  // que administran (el endpoint ya no es admin-only). Admin/operador pasan.
-  if (userRol === 'inmobiliaria' || userRol === 'propietario') {
-    const esDueno = await perfilEsDuenoDeInmueble({
-      userId,
-      userRol,
-      inmueblePropietarioId: (row.propietario_id as string | null) ?? null,
-      inmuebleInmobiliariaId: (row.inmobiliaria_id as string | null) ?? null,
-    });
-    if (!esDueno) {
-      throw AppError.forbidden('No tienes permisos sobre este inmueble', 'INMUEBLE_FORBIDDEN');
-    }
-  }
+  const estado = (inmueble as unknown as Record<string, unknown>).estado as string;
 
   // Only available inmuebles can be published
   if (visible_vitrina && estado !== 'disponible') {

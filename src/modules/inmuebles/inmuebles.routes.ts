@@ -102,7 +102,7 @@ router.patch(
 // Toggle vitrina visibility — HP-369. Antes era admin-only, lo que hacía que
 // "Pausar" fallara con 403 para el dueño (inmobiliaria/propietario) y el front
 // revirtiera el cambio (parecía "no hace nada"). Ahora lo pueden usar los
-// dueños; el ownership fino (perfilEsDuenoDeInmueble) va en el service, y los
+// dueños; el ownership fino (assertInmuebleAccess) va en el service, y los
 // viewers solo_lectura siguen bloqueados por el write-block de auth.ts.
 router.patch(
   '/:id/visibility',

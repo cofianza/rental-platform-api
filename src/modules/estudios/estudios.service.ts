@@ -19,7 +19,7 @@ import type { ProviderSolicitudInput, ProviderHealthInfo, ProviderResult } from 
 import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
-import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
+import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
 import { assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
 import {
   decisionDeCofianza,
@@ -894,30 +894,12 @@ export async function createEstudioFromInmueble(
   userRol?: string,
 ) {
   // Tenant guard: la inmobiliaria/propietario solo crea estudios (auto-creando
-  // el expediente) sobre inmuebles que administra. El expediente aún no existe,
-  // así que el scoping es a nivel INMUEBLE (mismo criterio que ejecutarEstudio).
-  // Sin esto, un rol externo con expedientes:update adjuntaba un estudio +
-  // expediente a un inmueble de OTRA agencia por UUID (write-IDOR). 404 para no
-  // filtrar existencia cross-tenant. Roles internos pasan sin chequeo.
-  if (userRol === 'inmobiliaria' || userRol === 'propietario') {
-    const { data: inmRow } = await (supabase
-      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-      .select('propietario_id, inmobiliaria_id')
-      .eq('id', inmuebleId)
-      .maybeSingle();
-    const inm = inmRow as { propietario_id?: string | null; inmobiliaria_id?: string | null } | null;
-    const esDueno = inm
-      ? await perfilEsDuenoDeInmueble({
-          userId,
-          userRol,
-          inmueblePropietarioId: inm.propietario_id,
-          inmuebleInmobiliariaId: inm.inmobiliaria_id,
-        })
-      : false;
-    if (!esDueno) {
-      throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
-    }
-  }
+  // el expediente) sobre inmuebles de su cartera; el miembro restringido, sobre
+  // los suyos o asignados (mismo guard que createExpediente). Sin esto, un rol
+  // externo con expedientes:update adjuntaba un estudio + expediente a un
+  // inmueble de OTRA agencia por UUID (write-IDOR). 404 para no filtrar
+  // existencia cross-tenant. Roles internos pasan sin chequeo.
+  await assertInmuebleAccess(inmuebleId, userId, userRol);
 
   // Tope de canon (flujo §4.4). Aqui el expediente todavia no existe, asi que
   // se contrasta directo contra el inmueble — que es justamente el sujeto de la
