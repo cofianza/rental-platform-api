@@ -424,23 +424,6 @@ export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string
 
   const userId = userResult.id;
 
-  // Verificar si es cuenta Google-only (sin password)
-  const { data: userData, error: userError } = await supabaseAuth.auth.admin.getUserById(userId);
-
-  if (userError || !userData?.user) {
-    logger.error({ userId, error: userError?.message }, 'Error al obtener usuario');
-    return;
-  }
-
-  const identities = userData.user.identities ?? [];
-  const hasEmailIdentity = identities.some((i) => i.provider === 'email');
-
-  if (!hasEmailIdentity && identities.length > 0) {
-    // Usuario registrado solo con Google, no tiene contrasena
-    logger.info({ email }, 'Solicitud de reset para cuenta Google-only');
-    return; // No revelar informacion sobre el tipo de cuenta
-  }
-
   // Invalidar todos los tokens previos del usuario
   await (supabase
     .from('password_reset_tokens' as string) as ReturnType<typeof supabase.from>)
