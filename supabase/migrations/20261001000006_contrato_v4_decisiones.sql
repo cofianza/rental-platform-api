@@ -9,8 +9,9 @@
 -- ese campo siempre trae el 20 % global y la plantilla imprime lo mismo que
 -- hoy; el API nuevo sin esta migración dejaría la cláusula 21 con el
 -- porcentaje en blanco.
--- De paso, el bloque del arrendador y su firma no le ponen NIT ni
--- representante legal a un propietario persona natural.
+-- De paso, el bloque del arrendador, su firma y la cláusula de datos
+-- personales no le ponen NIT ni representante legal a un propietario persona
+-- natural: va con su documento.
 --
 -- Cobertura [PLATA]: la plantilla imprimía la cobertura según
 -- modalidades_fianza (servicios, administración, cláusula penal; Plus también
@@ -111,7 +112,8 @@ SET contenido_html = REPLACE(
 )
 WHERE position('<h2>Cláusula Vigésima Novena. Integralidad del acuerdo</h2>' in contenido_html) > 0;
 
--- 3. Propietario directo: se identifica con su documento, sin NIT ni representante legal.
+-- 3. Propietario directo: se identifica con su documento, sin NIT ni
+--    representante legal (cuadro de partes, firma y cláusula de datos personales).
 UPDATE plantillas_contrato
 SET contenido_html = REPLACE(
   contenido_html,
@@ -127,6 +129,22 @@ SET contenido_html = REPLACE(
   '<br>{{#if arrendador.es_inmobiliaria}}NIT: {{inmobiliaria.nit}}<br>{{inmobiliaria.representante_legal}} — Representante Legal{{else}}{{arrendador.tipo_documento_label}}: {{arrendador.numero_documento}}{{/if}}</p>'
 )
 WHERE position('<br>NIT: {{inmobiliaria.nit}}<br>{{inmobiliaria.representante_legal}} — Representante Legal</p>' in contenido_html) > 0;
+
+UPDATE plantillas_contrato
+SET contenido_html = REPLACE(
+  contenido_html,
+  '{{#if inmobiliaria.representante_legal}}representada legalmente por {{inmobiliaria.representante_legal}}. {{/if}}Domicilio:',
+  '{{#if arrendador.es_inmobiliaria}}{{#if inmobiliaria.representante_legal}}representada legalmente por {{inmobiliaria.representante_legal}}. {{/if}}{{/if}}Domicilio:'
+)
+WHERE position('{{#if inmobiliaria.representante_legal}}representada legalmente por {{inmobiliaria.representante_legal}}. {{/if}}Domicilio:' in contenido_html) > 0;
+
+UPDATE plantillas_contrato
+SET contenido_html = REPLACE(
+  contenido_html,
+  'autorizan a {{inmobiliaria.razon_social}} (NIT {{inmobiliaria.nit}}) y a COFIANZA S.A.S.',
+  'autorizan a {{inmobiliaria.razon_social}} ({{#if arrendador.es_inmobiliaria}}NIT {{inmobiliaria.nit}}{{else}}{{arrendador.tipo_documento_label}} {{arrendador.numero_documento}}{{/if}}) y a COFIANZA S.A.S.'
+)
+WHERE position('autorizan a {{inmobiliaria.razon_social}} (NIT {{inmobiliaria.nit}}) y a COFIANZA S.A.S.' in contenido_html) > 0;
 
 -- 4. Cobertura: solo el canon (texto de la plantilla vigente y del Anexo §12).
 UPDATE plantillas_contrato

@@ -41,7 +41,8 @@ const INMOBILIARIA = {
   arrendador: { es_inmobiliaria: true, tipo_documento_label: 'NIT', numero_documento: '900123456' },
 };
 const PROPIETARIO = {
-  inmobiliaria: { razon_social: 'Juan Pérez', nit: '1020', representante_legal: '', direccion: 'Calle 5', comision_porcentaje: '' },
+  // Con representante en su perfil, igual no lo imprime: es persona natural.
+  inmobiliaria: { razon_social: 'Juan Pérez', nit: '1020', representante_legal: 'Pedro Pérez', direccion: 'Calle 5', comision_porcentaje: '' },
   arrendador: { es_inmobiliaria: false, tipo_documento_label: 'C.C.', numero_documento: '1020' },
 };
 const TITULOS = [
@@ -71,6 +72,7 @@ describe('migración 20261001000006 sobre la plantilla V4 de producción', () =>
     expect(out).toContain('un porcentaje equivalente al 8% más IVA sobre el canon acordado');
     TITULOS.forEach((t, i) => expect(out).toContain(`<h2>Cláusula Vigésima ${ORDINALES[i + 1]}. ${t}</h2>`));
     expect(out).toContain('Arriendos SAS, NIT 900.123.456-7, representada legalmente por Luisa Gómez. Domicilio: Calle 9.');
+    expect(out).toContain('autorizan a Arriendos SAS (NIT 900.123.456-7) y a COFIANZA S.A.S.');
     expect(out).toMatch(/<strong>EL ARRENDADOR<\/strong><br>Arriendos SAS<br>NIT: 900\.123\.456-7<br>Luisa Gómez — Representante Legal<\/p>/);
   });
 
@@ -86,6 +88,10 @@ describe('migración 20261001000006 sobre la plantilla V4 de producción', () =>
     const out = renderTemplate(nueva, PROPIETARIO);
     expect(out).toContain('Juan Pérez, identificado(a) con C.C. 1020, Domicilio: Calle 5.');
     expect(out).toContain('<strong>EL ARRENDADOR</strong><br>Juan Pérez<br>C.C.: 1020</p>');
+    expect(out).toContain('autorizan a Juan Pérez (C.C. 1020) y a COFIANZA S.A.S.');
+    expect(out).not.toContain('NIT 1020');
+    expect(out).not.toContain('representada legalmente por');
+    expect(out).not.toContain('Pedro Pérez');
     // Las anclas de firma de Auco siguen encontrando la línea del arrendador.
     expect(out).toMatch(/<div class="firma-line"><\/div>\s*<p>\s*<strong>EL ARRENDADOR<\/strong>/);
   });
