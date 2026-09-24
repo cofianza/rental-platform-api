@@ -803,11 +803,13 @@ async function buildContratoContext(
         : ladosPublicos.every((l) => l === 'arrendador')
           ? 'A cargo del arrendador'
           : 'Según reparto (ver detalle)';
+  // P42 (V3 §8.4.1): con la cuota vigente en cifras y letras junto a quién la paga.
+  const cuotaAdmin = Number(inmueble.administracion) || 0;
   const administracionPhCargo = !esPH
     ? 'No aplica'
-    : reparto.admin_ph === 'arrendador'
-      ? 'A cargo del arrendador'
-      : 'A cargo del arrendatario';
+    : `${reparto.admin_ph === 'arrendador' ? 'A cargo del arrendador' : 'A cargo del arrendatario'}${
+        cuotaAdmin > 0 ? ` — cuota actual $ ${formatearPesos(cuotaAdmin)} (${numeroAPesosLetras(cuotaAdmin)})` : ''
+      }`;
 
   return {
     cob,

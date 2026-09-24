@@ -75,7 +75,7 @@ vi.mock('@/modules/estudios/coarrendatario-vinculado', () => ({
 }));
 
 import { AppError } from '@/lib/errors';
-import { enviarContratoAFirma, generarContrato } from '../contratos.service';
+import { enviarContratoAFirma, generarContrato, previewPlantillaParaInmueble } from '../contratos.service';
 import type { GenerarContratoInput } from '../contratos.schema';
 
 const EXP = 'exp-1';
@@ -262,5 +262,28 @@ describe('P14: matrícula de arrendador de la inmobiliaria', () => {
   it('un propietario directo no la necesita', async () => {
     preparar(PROPIETARIO);
     expect((await error(generar())).errorCode).toBe('PLANTILLA_NOT_FOUND');
+  });
+});
+
+describe('P42: cuota de administración en el contrato viejo', () => {
+  const cargo = async (inmueble: Record<string, unknown>) => {
+    enqueue('inmuebles', {
+      data: { id: 'inm-1', direccion: 'Calle 1', ciudad: 'Medellín', valor_arriendo: 2_000_000, propietario_id: 'prop-1', uso: 'vivienda', ...inmueble },
+      error: null,
+    });
+    enqueue('perfiles', PROPIETARIO);
+    enqueue('plantillas_contrato', { data: { contenido_html: '{{contrato.administracion_ph_cargo}}' }, error: null });
+    return previewPlantillaParaInmueble('inm-1', ADMIN.id, ADMIN.rol);
+  };
+
+  it('en propiedad horizontal imprime la cuota vigente en cifras y letras junto a quién la paga', async () => {
+    expect(await cargo({ propiedad_horizontal: true, administracion: 250_000 })).toBe(
+      'A cargo del arrendatario — cuota actual $ 250.000 (DOSCIENTOS CINCUENTA MIL PESOS M/CTE)',
+    );
+  });
+
+  it('sin cuota registrada dice solo quién la paga; sin propiedad horizontal, no aplica', async () => {
+    expect(await cargo({ propiedad_horizontal: true, administracion: null })).toBe('A cargo del arrendatario');
+    expect(await cargo({ propiedad_horizontal: false, administracion: 0 })).toBe('No aplica');
   });
 });
