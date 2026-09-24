@@ -136,6 +136,11 @@ async function reapuntarTitularPrincipalSiNecesario(orgId: string, salientePerfi
   // titular principal: se va con él. Antes se borra la personal que el nuevo
   // hubiera guardado (de cuando cada asesor tenía la suya), que ya no se usa y
   // chocaría con los índices únicos por propietario.
+  // ponytail: no es atómico: tres tablas, cada una con borrado y actualización
+  // aparte; si algo falla a mitad, la org queda con la agenda por defecto o
+  // mezclada hasta que el titular la vuelva a guardar en /disponibilidad (queda
+  // el log de error). Mejora: una función SQL que mueva las tres tablas en una
+  // sola transacción.
   for (const t of ['disponibilidad_propietario', 'configuracion_disponibilidad', 'disponibilidad_fechas_bloqueadas']) {
     const { error: errBorrar } = await db(t).delete().eq('propietario_id', nuevoTitular);
     const { error: errAgenda } = errBorrar
