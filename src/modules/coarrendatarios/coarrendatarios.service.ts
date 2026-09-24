@@ -46,6 +46,7 @@ import {
 } from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
 import { ponderarConCoarrendatario } from './ponderacion';
+import { evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
 import type {
   InvitarCoarrendatarioInput,
   AceptarCoarrendatarioInput,
@@ -193,6 +194,20 @@ function generateToken(): string {
 
 function tokenExpiracion(): string {
   return new Date(Date.now() + TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * P3 (2026-09-24): fuera de 'condicionado' la invitación pendiente queda sin
+ * efecto. Sin esto se aceptaba y se consultaba el buró de un tercero sobre un
+ * estudio ya decidido (cobro y datos sin finalidad, Ley 1581).
+ */
+function assertInvitacionVigente(estadoExpediente: string): void {
+  if (estadoExpediente !== 'condicionado') {
+    throw AppError.badRequest(
+      'Esta invitación ya no está vigente: el estudio ya se resolvió.',
+      'COARRENDATARIO_INVITACION_NO_VIGENTE',
+    );
+  }
 }
 
 /**
@@ -528,6 +543,7 @@ export async function reenviarInvitacionCoarrendatario(
       'COARRENDATARIO_FORBIDDEN',
     );
   }
+  assertInvitacionVigente(ctx.estado);
 
   // La invitación debe existir y seguir pendiente de aceptación.
   const { data: coaRow } = await (supabase
@@ -671,6 +687,8 @@ export async function getPublicByToken(token: string): Promise<CoarrendatarioPub
 
   // Cargar contexto del expediente para mostrar al invitado de qué se trata.
   const ctx = await fetchExpedienteCtx(coa.expediente_id);
+  // P3: una invitación pendiente de un estudio ya resuelto no se muestra para aceptar.
+  if (coa.estado === 'pendiente_aceptacion') assertInvitacionVigente(ctx.estado);
 
   return {
     nombre: coa.nombre,
@@ -763,6 +781,10 @@ export async function aceptarInvitacion(
       { estado: coa.estado },
     );
   }
+
+  // P3: antes del tope, del claim y de la consulta al buró.
+  const ctx = await fetchExpedienteCtx(coa.expediente_id);
+  assertInvitacionVigente(ctx.estado);
 
   // 1b. TOPE DE CANON — flujo §4.4. Va ANTES del claim y ANTES del INSERT del
   //     estudio. Sin esto, el único control era el ejecutarEstudio
@@ -1022,7 +1044,6 @@ export async function aceptarInvitacion(
   }
 
   // 5. Notificar al titular.
-  const ctx = await fetchExpedienteCtx(coa.expediente_id);
   if (ctx.solicitante_creado_por) {
     notificarUsuario({
       userId: ctx.solicitante_creado_por,
@@ -1108,7 +1129,7 @@ export async function onCoarrendatarioEstudioCompletado(
   // 1. Cargar el estudio del coarrendatario.
   const { data: estudioRow } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, tipo, resultado, score, motivo_rechazo')
+    .select('id, expediente_id, tipo, estado, resultado, score, motivo_rechazo')
     .eq('id', estudioId)
     .maybeSingle();
 
@@ -1121,6 +1142,7 @@ export async function onCoarrendatarioEstudioCompletado(
     id: string;
     expediente_id: string;
     tipo: string;
+    estado: string;
     resultado: 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente';
     score: number | null;
     motivo_rechazo: string | null;
@@ -1210,6 +1232,14 @@ export async function onCoarrendatarioEstudioCompletado(
   //      timeline y se avisa (dueño, responsable, titular y analistas), pero
   //      no se toca el estado ni se libera el inmueble.
   if (resultadoCombinado === 'revision_manual') {
+    // P3: si el estudio ya se decidió mientras se evaluaba al co-arrendatario,
+    // no hay revisión que avisar (ni timeline ni «sigue en revisión»).
+    const ctxSin = await fetchExpedienteCtx(est.expediente_id);
+    if (ctxSin.estado !== 'condicionado') {
+      decisionYaTomada(ctxSin, titular.id, est, coa?.id, reglasDurasCoa);
+      return;
+    }
+
     // Ninguno de los dos pudo ser evaluado por el buro (sin historial): se
     // explica distinto que "el coarrendatario ya tiene resultado".
     const sinInfo = !fueEvaluadoPorElBuro(titular) || !fueEvaluadoPorElBuro(est);
@@ -1244,7 +1274,6 @@ export async function onCoarrendatarioEstudioCompletado(
         },
       } as never);
 
-    const ctxSin = await fetchExpedienteCtx(est.expediente_id);
     const msgGestor = sinInfo
       ? `El co-arrendatario ${coa?.nombre ?? ''} completó su evaluación, pero ni él ni ${ctxSin.solicitante_nombre || 'el solicitante'} ` +
         'tienen historial crediticio suficiente para que el buró los evalúe. No es un rechazo: un analista de Cofianza revisa el caso con los documentos de soporte.'
@@ -1362,6 +1391,7 @@ export async function onCoarrendatarioEstudioCompletado(
       { expedienteId: est.expediente_id, estudioId },
       'Ponderación coarrendatario: el estudio ya no estaba condicionado — se omiten los efectos',
     );
+    decisionYaTomada(await fetchExpedienteCtx(est.expediente_id), titular.id, est, coa?.id, reglasDurasCoa);
     return;
   }
 
@@ -1494,6 +1524,53 @@ export async function onCoarrendatarioEstudioCompletado(
 }
 
 /**
+ * P3 (2026-09-24): el estudio se decidió por otra vía (el analista, un cierre)
+ * mientras se evaluaba al co-arrendatario. La decisión se mantiene y el
+ * co-arrendatario recibe la real. Sobre un estudio aprobado:
+ *  - con regla dura (p. ej. listas) queda fuera (P2: ni CRC ni contrato, prima
+ *    20 %) y se avisa a los analistas, que la revierten con «Cambiar estado»
+ *    antes de la firma si hace falta;
+ *  - si su evaluación cuenta, el CRC se regenera con el acompañante.
+ * Fire-and-forget: nunca lanza.
+ */
+function decisionYaTomada(
+  ctx: ExpedienteCtx,
+  titularEstudioId: string,
+  estudioCoa: { estado: string; resultado: string },
+  coaId: string | undefined,
+  reglasDurasCoa: readonly ReglaDuraActiva[],
+): void {
+  if (ctx.estado === 'aprobado' && reglasDurasCoa.length > 0) {
+    void (async () => {
+      const { listOperators } = await import('@/modules/users/users.service');
+      const analistas = await listOperators().catch(() => []);
+      await Promise.all(
+        analistas.map((a) =>
+          notificarUsuario({
+            userId: a.id,
+            tipo: 'estudio.revision_manual',
+            titulo: `Co-arrendatario con regla dura en un estudio aprobado — ${ctx.numero}`,
+            mensaje:
+              `El co-arrendatario salió con una regla dura (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}) después de que se aprobó el estudio. ` +
+              'La aprobación se mantiene y el co-arrendatario queda fuera: no va al CRC ni al contrato y la prima es del 20 %. ' +
+              'Si hay que revertirla, usa «Cambiar estado» antes de la firma.',
+            link: `/expedientes/${ctx.id}`,
+            payload: { expediente_id: ctx.id, via: 'coarrendatario_regla_dura_tras_aprobacion', coarrendatario_id: coaId },
+          }),
+        ),
+      );
+    })().catch((e) => logger.warn({ error: e, expedienteId: ctx.id }, 'Error avisando a analistas: regla dura del co-arrendatario tras aprobar'));
+  } else if (ctx.estado === 'aprobado' && evaluacionCuenta(estudioCoa)) {
+    emitirCertificadoAutomatico(titularEstudioId, ctx.creado_por, { regenerar: true }).catch((e) =>
+      logger.warn({ error: e, expedienteId: ctx.id }, 'No se pudo regenerar el CRC con el co-arrendatario'),
+    );
+  }
+  if (ctx.estado === 'aprobado' || ctx.estado === 'rechazado') {
+    void avisarCoarrendatarioDecision(ctx.id, ctx.estado, reglasDurasCoa);
+  }
+}
+
+/**
  * Aviso al coarrendatario de lo que paso con el caso. El coarrendatario no
  * tiene cuenta en Cofianza: su unico canal es el correo que registro al
  * aceptar. Hasta ahora solo se le escribia cuando la ponderacion decidia sola
@@ -1506,6 +1583,7 @@ export async function onCoarrendatarioEstudioCompletado(
 export async function avisarCoarrendatarioDecision(
   expedienteId: string,
   decision: 'aprobado' | 'rechazado' | 'en_revision',
+  reglasDurasCoarrendatario?: readonly ReglaDuraActiva[],
 ): Promise<void> {
   try {
     const { data: coaRow } = await (supabase
@@ -1542,6 +1620,7 @@ export async function avisarCoarrendatarioDecision(
       inmuebleDireccion: ctx.inmueble_direccion,
       inmuebleCiudad: ctx.inmueble_ciudad,
       decisionExpediente: decision,
+      reglasDurasCoarrendatario,
     });
   } catch (err) {
     logger.warn(

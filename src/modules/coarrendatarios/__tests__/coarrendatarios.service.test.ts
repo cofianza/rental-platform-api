@@ -133,6 +133,7 @@ import {
   construirCorreoCoarrendatario,
   rechazarInvitacion,
   aceptarInvitacion,
+  getPublicByToken,
 } from '../coarrendatarios.service';
 
 // ============================================================
@@ -388,6 +389,7 @@ describe('aceptarInvitacion — fallo al crear el estudio', () => {
       },
       { data: [{ id: COA_ID }], error: null }, // claim
     );
+    enqueue('expedientes', ctxRow());
     enqueue('autorizaciones_habeas_data', { data: { id: 'aut-1' }, error: null });
     enqueue('estudios', { data: null, error: null }, { data: null, error: { message: 'timeout' } });
 
@@ -398,6 +400,105 @@ describe('aceptarInvitacion — fallo al crear el estudio', () => {
     const updates = ops.filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
     expect((updates.at(-1)!.args[0] as { estado: string }).estado).toBe('pendiente_aceptacion');
     expect(ops.some((o) => o.table === 'autorizaciones_habeas_data' && o.method === 'update')).toBe(false);
+  });
+});
+
+// ============================================================
+// P3: fuera de 'condicionado' la invitación pendiente queda sin efecto
+// ============================================================
+
+describe('invitación fuera de condicionado — P3', () => {
+  const pendiente = {
+    data: {
+      id: COA_ID,
+      expediente_id: EXPEDIENTE_ID,
+      nombre: 'Luis',
+      apellido: 'Gómez',
+      email: 'luis@correo.co',
+      estado: 'pendiente_aceptacion',
+      token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+    },
+    error: null,
+  };
+  const noVigente = { statusCode: 400, errorCode: 'COARRENDATARIO_INVITACION_NO_VIGENTE' };
+
+  it('aceptar: no reclama la invitación ni crea la evaluación', async () => {
+    enqueue('expediente_coarrendatarios', pendiente);
+    enqueue('expedientes', ctxRow('aprobado'));
+
+    await expect(aceptarInvitacion('t'.repeat(64), '1.1.1.1', 'ua', {} as never)).rejects.toMatchObject(noVigente);
+
+    expect(ops.some((o) => o.method === 'update' || o.method === 'insert')).toBe(false);
+  });
+
+  it('la vista pública no la ofrece para aceptar', async () => {
+    enqueue('expediente_coarrendatarios', pendiente);
+    enqueue('expedientes', ctxRow('rechazado'));
+
+    await expect(getPublicByToken('t'.repeat(64))).rejects.toMatchObject(noVigente);
+  });
+
+  it('reenviar tampoco', async () => {
+    enqueue('expedientes', ctxRow('aprobado'));
+
+    await expect(reenviarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', {})).rejects.toMatchObject(noVigente);
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios')).toBe(false);
+  });
+});
+
+describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
+  const coaEstudio = (resultado: string) => ({
+    data: { id: COA_ESTUDIO_ID, expediente_id: EXPEDIENTE_ID, tipo: 'con_coarrendatario', estado: 'completado', resultado, score: 700, motivo_rechazo: null },
+    error: null,
+  });
+  // Lectura por estudio_id + el UPDATE a 'estudio_completado' (su await consume la cola).
+  const coaRow = { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' }, error: null };
+  const marcaCompletado = { data: null, error: null };
+  const titularCondicionado = { data: [{ id: TITULAR_ESTUDIO_ID, resultado: 'condicionado', score: 720 }], error: null };
+  // Lecturas del aviso final al co-arrendatario (avisarCoarrendatarioDecision).
+  const encolarAvisoCoa = (resultado: string, estado: string) => {
+    enqueue('expediente_coarrendatarios', { data: { id: COA_ID, nombre: 'Luis', email: 'luis@correo.co', estudio_id: COA_ESTUDIO_ID }, error: null });
+    enqueue('estudios', { data: { resultado, score: 700, motivo_rechazo: null }, error: null });
+    enqueue('expedientes', ctxRow(estado));
+  };
+
+  it('ya aprobado por el analista: sin «sigue en revisión», CRC regenerado y el co-arrendatario recibe la decisión real', async () => {
+    enqueue('estudios', coaEstudio('aprobado'), titularCondicionado);
+    enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
+    enqueue('expedientes', ctxRow('aprobado'));
+    encolarAvisoCoa('aprobado', 'aprobado');
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+    expect(ops.some((o) => o.table === 'eventos_timeline')).toBe(false);
+    expect(mockNotificarUsuario).not.toHaveBeenCalled();
+    expect(mockEmitirCrc).toHaveBeenCalledWith(TITULAR_ESTUDIO_ID, GESTOR_ID, { regenerar: true });
+    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
+    expect((mockResendSend.mock.calls[0] as unknown as [{ subject: string }])[0].subject).toContain('se aprobó');
+  });
+
+  it('regla dura (listas) después de aprobar: la aprobación se mantiene, queda fuera y se avisa a los analistas', async () => {
+    enqueue('estudios', coaEstudio('rechazado'), titularCondicionado);
+    enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
+    // El UPDATE race-safe no encuentra el estudio en 'condicionado' (0 filas).
+    enqueue('expedientes', { data: [], error: null }, ctxRow('aprobado'));
+    encolarAvisoCoa('rechazado', 'aprobado');
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: ['listas_restrictivas' as never] });
+
+    await vi.waitFor(() =>
+      expect(mockNotificarUsuario).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'analista-1',
+          titulo: expect.stringContaining('regla dura'),
+          mensaje: expect.stringContaining('«Cambiar estado»'),
+        }),
+      ),
+    );
+    expect(mockLiberarReserva).not.toHaveBeenCalled();
+    expect(mockAvisarSolicitante).not.toHaveBeenCalled();
+    expect(mockEmitirCrc).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
   });
 });
 
