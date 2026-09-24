@@ -37,7 +37,7 @@ interface CitaPublicaRow {
   expediente_id: string;
   expediente: {
     inmueble: {
-      id: string; direccion: string; ciudad: string; propietario_id: string;
+      id: string; direccion: string; ciudad: string; propietario_id: string; inmobiliaria_id: string | null;
       estado: string | null; reservado_por_expediente_id: string | null;
     } | null;
     solicitante: { nombre: string; apellido: string } | null;
@@ -49,7 +49,7 @@ async function fetchCitaByToken(token: string): Promise<CitaPublicaRow> {
     .select(`
       id, estado, fecha_propuesta, fecha_confirmada, acuse_solicitante_at, expediente_id,
       expediente:expedientes (
-        inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad, propietario_id, estado, reservado_por_expediente_id),
+        inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad, propietario_id, inmobiliaria_id, estado, reservado_por_expediente_id),
         solicitante:solicitantes (nombre, apellido)
       )
     `)
@@ -119,9 +119,8 @@ export async function reprogramarCitaPublica(token: string, fechaIso: string): P
   const inm = c.expediente?.inmueble;
   assertInmuebleAdmiteVisitas(c.expediente_id, inm?.estado, inm?.reservado_por_expediente_id);
 
-  const propietarioId = c.expediente?.inmueble?.propietario_id;
-  if (propietarioId) {
-    const disponible = await slotEstaDisponible(propietarioId, fechaIso);
+  if (inm) {
+    const disponible = await slotEstaDisponible(inm, fechaIso);
     if (!disponible) {
       throw AppError.badRequest(
         'El horario seleccionado ya no está disponible. Elige otro.',

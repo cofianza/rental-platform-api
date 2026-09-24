@@ -1,6 +1,11 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import {
+  getActiveMembership,
+  resolveOrgCanonicalPerfilId,
+  resolvePerfilCanonicoDeInmueble,
+} from '@/lib/tenantScope';
 import type { UpsertDisponibilidadInput } from './disponibilidad.schema';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
@@ -91,6 +96,39 @@ export async function getDisponibilidad(propietarioId: string): Promise<
     fechas_bloqueadas,
     tiene_config_explicita: horarios.length > 0,
   };
+}
+
+// ============================================================
+// Mi agenda (P37): una sola por inmobiliaria, la del titular principal. Los
+// miembros la ven; solo los titulares (owner, también co-titulares) la editan.
+// El propietario individual tiene la suya.
+// ============================================================
+
+async function resolverMiAgenda(userId: string) {
+  const m = await getActiveMembership(userId);
+  return m
+    ? { agendaId: await resolveOrgCanonicalPerfilId(userId), puedeEditar: m.rolMiembro === 'owner', deInmobiliaria: true }
+    : { agendaId: userId, puedeEditar: true, deInmobiliaria: false };
+}
+
+export async function getMiDisponibilidad(userId: string) {
+  const agenda = await resolverMiAgenda(userId);
+  return {
+    ...(await getDisponibilidad(agenda.agendaId)),
+    puede_editar: agenda.puedeEditar,
+    agenda_de_inmobiliaria: agenda.deInmobiliaria,
+  };
+}
+
+export async function guardarMiDisponibilidad(userId: string, input: UpsertDisponibilidadInput) {
+  const agenda = await resolverMiAgenda(userId);
+  if (!agenda.puedeEditar) {
+    throw AppError.forbidden(
+      'La agenda de visitas es una sola para toda la inmobiliaria y solo los titulares la pueden cambiar.',
+      'AGENDA_SOLO_TITULAR',
+    );
+  }
+  return upsertDisponibilidad(agenda.agendaId, input);
 }
 
 // ============================================================
@@ -242,9 +280,9 @@ export async function getSlotsPorInmueble(
   desde: string,
   hasta: string,
 ): Promise<SlotsPorInmuebleResponse> {
-  // Resolver propietario del inmueble.
+  // Resolver de quién es la agenda del inmueble (P37: la de su inmobiliaria).
   const { data: inmuebleRow, error: inmErr } = await db('inmuebles')
-    .select('propietario_id')
+    .select('propietario_id, inmobiliaria_id')
     .eq('id', inmuebleId)
     .maybeSingle();
 
@@ -257,7 +295,9 @@ export async function getSlotsPorInmueble(
     throw AppError.notFound('Inmueble no encontrado');
   }
 
-  const { propietario_id } = inmuebleRow as { propietario_id: string };
+  const propietario_id = await resolvePerfilCanonicoDeInmueble(
+    inmuebleRow as { propietario_id: string; inmobiliaria_id: string | null },
+  );
 
   // Antelación mínima del propietario — la necesita el front para arrancar la
   // grilla en el primer día permitido (mismo día / 24h / 48h). Mismo default
@@ -301,9 +341,11 @@ export async function getSlotsPorInmueble(
 // ============================================================
 
 export async function slotEstaDisponible(
-  propietarioId: string,
+  inmueble: { propietario_id: string; inmobiliaria_id: string | null },
   inicioIso: string,
 ): Promise<boolean> {
+  // La misma agenda que ofrece los horarios (P37: la de la inmobiliaria).
+  const propietarioId = await resolvePerfilCanonicoDeInmueble(inmueble);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase as any).rpc('fn_slot_esta_disponible', {
     p_propietario_id: propietarioId,

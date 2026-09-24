@@ -7,16 +7,16 @@ import type {
   SlotsQuery,
 } from './disponibilidad.schema';
 
-// ── Propietario autenticado: su propia disponibilidad ──────
+// ── Propietario / inmobiliaria: su agenda (la de la inmobiliaria, P37) ──
 
 export async function getMiDisponibilidad(req: Request, res: Response) {
-  const result = await service.getDisponibilidad(req.user!.id);
+  const result = await service.getMiDisponibilidad(req.user!.id);
   sendSuccess(res, result);
 }
 
 export async function putMiDisponibilidad(req: Request, res: Response) {
   const input = req.body as UpsertDisponibilidadInput;
-  const result = await service.upsertDisponibilidad(req.user!.id, input);
+  const result = await service.guardarMiDisponibilidad(req.user!.id, input);
   sendSuccess(res, result);
 }
 

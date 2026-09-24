@@ -145,6 +145,8 @@ export async function enviarCorreoNotificacion(input: NotificarUsuarioInput): Pr
  */
 export async function notificarResponsableExpediente(params: {
   expedienteId: string;
+  /** Responsable ya resuelto (citas: el del inmueble si el estudio no tiene); si falta, el del estudio. */
+  miembroId?: string | null;
   excluirPerfilId?: string | null;
   tipo: string;
   titulo: string;
@@ -154,11 +156,14 @@ export async function notificarResponsableExpediente(params: {
   whatsapp?: { template: WhatsappTemplateKey; variables: string[] };
 }): Promise<void> {
   try {
-    const { data: exp } = await db('expedientes')
-      .select('miembro_responsable_id')
-      .eq('id', params.expedienteId)
-      .maybeSingle();
-    const miembroId = (exp as { miembro_responsable_id?: string | null } | null)?.miembro_responsable_id ?? null;
+    let miembroId = params.miembroId;
+    if (miembroId === undefined) {
+      const { data: exp } = await db('expedientes')
+        .select('miembro_responsable_id')
+        .eq('id', params.expedienteId)
+        .maybeSingle();
+      miembroId = (exp as { miembro_responsable_id?: string | null } | null)?.miembro_responsable_id ?? null;
+    }
     if (!miembroId || miembroId === params.excluirPerfilId) return;
 
     const { data: perfilRow } = await db('perfiles')

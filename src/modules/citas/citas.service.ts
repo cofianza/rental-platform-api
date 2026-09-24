@@ -14,6 +14,7 @@ import { assertCitaPermission, assertInmuebleAdmiteVisitas, resolveAccessibleExp
 import { slotEstaDisponible } from '../disponibilidad/disponibilidad.service';
 import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
+import { resolveContactoDueno, resolvePerfilCanonicoDeInmueble } from '@/lib/tenantScope';
 import type { UserRole } from '@/types/auth';
 import type {
   CreateCitaInput,
@@ -129,9 +130,13 @@ interface ExpedienteContexto {
   solicitanteUserId: string | null;
   propietarioEmail: string | null;
   propietarioNombre: string;
+  // WhatsApp de la organización (su WhatsApp de recaudo o su teléfono).
   propietarioTelefono: string | null;
-  // Perfil-id del propietario. Sale directo de inmueble.propietario_id.
+  // P37: el titular de la inmobiliaria del inmueble o, sin organización, el
+  // propietario; no quien registró el inmueble.
   propietarioUserId: string;
+  // Responsable que recibe copia: el del estudio o, si no tiene, el del inmueble.
+  responsableId: string | null;
   inmuebleDireccion: string;
   inmuebleCiudad: string;
 }
@@ -172,9 +177,11 @@ const enlacesVisita = (token: string | null): EnlacesVisita | undefined =>
 export async function obtenerContextoExpediente(expedienteId: string): Promise<ExpedienteContexto | null> {
   // Obtener expediente con FKs
   const { data: exp } = await db('expedientes')
-    .select('id, solicitante_id, inmueble_id')
+    .select('id, solicitante_id, inmueble_id, miembro_responsable_id')
     .eq('id', expedienteId)
-    .single() as { data: { id: string; solicitante_id: string | null; inmueble_id: string } | null };
+    .single() as {
+      data: { id: string; solicitante_id: string | null; inmueble_id: string; miembro_responsable_id: string | null } | null;
+    };
 
   if (!exp) return null;
 
@@ -196,39 +203,30 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
 
   // Inmueble + propietario
   const { data: inm } = await db('inmuebles')
-    .select('direccion, ciudad, propietario_id, inmobiliaria_id')
+    .select('direccion, ciudad, propietario_id, inmobiliaria_id, miembro_responsable_id')
     .eq('id', exp.inmueble_id)
-    .single() as { data: { direccion: string; ciudad: string; propietario_id: string; inmobiliaria_id: string | null } | null };
+    .single() as {
+      data: {
+        direccion: string; ciudad: string; propietario_id: string; inmobiliaria_id: string | null;
+        miembro_responsable_id: string | null;
+      } | null;
+    };
 
   if (!inm) return null;
 
-  const { data: perfil } = await db('perfiles')
-    .select('nombre, apellido, razon_social, telefono')
-    .eq('id', inm.propietario_id)
-    .single() as { data: { nombre: string; apellido: string; razon_social: string | null; telefono: string | null } | null };
+  // P37: los avisos del dueño van a la organización (su titular y su WhatsApp),
+  // no al asesor que registró el inmueble: si ese asesor no tenía teléfono, la
+  // solicitud de visita no le llegaba a nadie de la agencia. El nombre sale de
+  // la razón social, luego el de la inmobiliaria y por último el del titular.
+  const duenoId = await resolvePerfilCanonicoDeInmueble(inm);
+  const contacto = await resolveContactoDueno(duenoId);
 
   let propietarioEmail: string | null = null;
   try {
-    const { data: authData } = await supabase.auth.admin.getUserById(inm.propietario_id);
+    const { data: authData } = await supabase.auth.admin.getUserById(duenoId);
     propietarioEmail = authData?.user?.email || null;
   } catch (e) {
-    logger.warn({ error: e, propietarioId: inm.propietario_id }, 'Error al obtener email de propietario');
-  }
-
-  // Nombre del dueño en los avisos: prioriza la razón social del perfil (si la
-  // editó en "Datos para contrato"); si no, el nombre de la INMOBILIARIA
-  // (inmobiliarias.nombre, fijado al registrarse) — así no cae al nombre
-  // personal del titular; por último, nombre + apellido.
-  let propietarioNombre = (perfil?.razon_social || '').trim();
-  if (!propietarioNombre && inm.inmobiliaria_id) {
-    const { data: org } = await db('inmobiliarias')
-      .select('nombre')
-      .eq('id', inm.inmobiliaria_id)
-      .maybeSingle() as { data: { nombre: string | null } | null };
-    propietarioNombre = (org?.nombre || '').trim();
-  }
-  if (!propietarioNombre) {
-    propietarioNombre = `${perfil?.nombre || ''} ${perfil?.apellido || ''}`.trim();
+    logger.warn({ error: e, propietarioId: duenoId }, 'Error al obtener email de propietario');
   }
 
   // Perfil-id del solicitante: lookup por email contra auth.users. Puede no
@@ -243,9 +241,10 @@ export async function obtenerContextoExpediente(expedienteId: string): Promise<E
     solicitanteTelefono,
     solicitanteUserId,
     propietarioEmail,
-    propietarioNombre,
-    propietarioTelefono: perfil?.telefono ?? null,
-    propietarioUserId: inm.propietario_id,
+    propietarioNombre: contacto.nombre,
+    propietarioTelefono: contacto.whatsapp,
+    propietarioUserId: duenoId,
+    responsableId: exp.miembro_responsable_id ?? inm.miembro_responsable_id ?? null,
     inmuebleDireccion: inm.direccion,
     inmuebleCiudad: inm.ciudad,
   };
@@ -369,6 +368,7 @@ export async function notificarCitaCreada(
     // misma plantilla _DUENO). No-op si no hay responsable o si es el dueño.
     await notificarResponsableExpediente({
       expedienteId: ctx.expedienteId,
+      miembroId: ctx.responsableId,
       excluirPerfilId: ctx.propietarioUserId,
       tipo: esReprogramacion ? 'cita.reprogramada' : 'cita.solicitada',
       titulo: esReprogramacion ? 'Visita reprogramada' : 'Nueva solicitud de visita',
@@ -583,6 +583,7 @@ export async function notificarCitaCancelada(
     // usa la plantilla genérica CITA_CANCELADA, no una _DUENO).
     await notificarResponsableExpediente({
       expedienteId: ctx.expedienteId,
+      miembroId: ctx.responsableId,
       excluirPerfilId: ctx.propietarioUserId,
       tipo: 'cita.cancelada',
       titulo: 'Visita cancelada por el solicitante',
@@ -647,7 +648,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
   // crear citas fuera de horario (casos excepcionales — operador, override).
   if (userRol === 'solicitante' && expediente.inmueblePropietarioId) {
     const disponible = await slotEstaDisponible(
-      expediente.inmueblePropietarioId,
+      { propietario_id: expediente.inmueblePropietarioId, inmobiliaria_id: expediente.inmuebleInmobiliariaId },
       input.fecha_propuesta,
     );
     if (!disponible) {
@@ -926,10 +927,10 @@ export async function reprogramarCita(
     );
   }
 
-  // Validar que el slot pertenezca a la disponibilidad del propietario.
+  // Validar que el slot pertenezca a la agenda del inmueble (la de su inmobiliaria).
   if (expediente.inmueblePropietarioId) {
     const disponible = await slotEstaDisponible(
-      expediente.inmueblePropietarioId,
+      { propietario_id: expediente.inmueblePropietarioId, inmobiliaria_id: expediente.inmuebleInmobiliariaId },
       input.fecha_confirmada,
     );
     if (!disponible) {
@@ -1092,6 +1093,7 @@ async function notificarPropietarioAcuse(expedienteId: string, fechaConfirmada: 
   // manda WhatsApp). No-op si no hay responsable o si es el dueño.
   void notificarResponsableExpediente({
     expedienteId: ctx.expedienteId,
+    miembroId: ctx.responsableId,
     excluirPerfilId: ctx.propietarioUserId,
     tipo: 'cita.acuse_solicitante',
     titulo: 'Horario aceptado por el solicitante',
@@ -1136,6 +1138,7 @@ export async function notificarPropietarioConfirmacionAsistencia(expedienteId: s
   // misma plantilla _DUENO). No-op si no hay responsable o si es el dueño.
   notificarResponsableExpediente({
     expedienteId: ctx.expedienteId,
+    miembroId: ctx.responsableId,
     excluirPerfilId: ctx.propietarioUserId,
     tipo: 'cita.confirmacion_asistencia',
     titulo: 'Asistencia confirmada',
