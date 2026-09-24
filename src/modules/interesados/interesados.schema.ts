@@ -1,19 +1,13 @@
 import { z } from 'zod';
+import { esNombrePersona, sinEnlaces } from '@/lib/textoSinEnlaces';
 
 /**
  * Formulario público "Me interesa este inmueble" para visitantes SIN cuenta.
  * Solo datos de contacto (no sensibles) + autorización de tratamiento de datos.
  */
 // Nombre y mensaje llegan tal cual al WhatsApp y al correo del dueño: sin
-// etiquetas ni enlaces. Cualquier punto (también ．。｡) pegado a dos o más letras
-// es un dominio («pago-seguro.info», «is.gd/x», «FALSO．CO»), sea cual sea la
-// terminación; los de «J.R.», «8 a.m.» o «No.301» no lo son. El formulario
-// anónimo servía para mandar phishing con la marca de Cofianza.
-const CON_ENLACE = /[<>]|h(?:tt|xx)ps?:|[\p{L}\d-][.．。｡]\p{L}{2,}/iu;
-const sinEnlaces = (v: string) => !CON_ENLACE.test(v);
-// El nombre, además, solo con letras, espacios, puntos, guiones y apóstrofos
-// (también el ’ que ponen los teclados de celular).
-const SOLO_NOMBRE = /^[\p{L}\p{M}'’ .-]+$/u;
+// etiquetas ni enlaces (el formulario anónimo servía para mandar phishing con la
+// marca de Cofianza).
 
 export const registrarInteresSchema = z.object({
   nombre: z
@@ -21,7 +15,7 @@ export const registrarInteresSchema = z.object({
     .trim()
     .min(2, 'Ingresa tu nombre')
     .max(150)
-    .refine((v) => SOLO_NOMBRE.test(v) && sinEnlaces(v), 'Escribe solo tu nombre, sin enlaces ni números'),
+    .refine(esNombrePersona, 'Escribe solo tu nombre, sin enlaces ni números'),
   // Mismo patrón que whatsapp.schema.ts: dígitos, espacios o guiones y '+' inicial.
   telefono: z.string().trim().min(7, 'Ingresa un teléfono válido').max(30).regex(/^\+?[\d\s-]+$/, 'Ingresa un teléfono válido'),
   email: z.string().trim().email('Correo inválido').max(255),

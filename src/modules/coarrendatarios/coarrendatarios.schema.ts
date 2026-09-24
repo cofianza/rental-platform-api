@@ -1,17 +1,16 @@
 import { z } from 'zod';
+import { esNombrePersona } from '@/lib/textoSinEnlaces';
 
 // Tipos de documento aceptados — alineado con tipo_documento_id del DB.
 // Incluye 'ti': el form web la ofrece y TransUnion la soporta (map tipo '4').
 const TIPO_DOCUMENTO = ['cc', 'ce', 'ti', 'pasaporte', 'nit'] as const;
 
-// Solo letras (con tildes), espacios, apóstrofo, punto y guion: el nombre va en
-// el correo y en el WhatsApp que Cofianza le manda a un tercero, y un enlace ahí
-// sería phishing con su marca.
-const NOMBRE_PERSONA = /^\p{L}[\p{L}\p{M} '’.-]*$/u;
+// El nombre va en el correo y en el WhatsApp que Cofianza le manda a un tercero:
+// solo letras y sin dominios (esNombrePersona), o sería phishing con su marca.
 
 export const invitarCoarrendatarioSchema = z.object({
-  nombre: z.string().trim().min(1, 'Nombre requerido').max(100).regex(NOMBRE_PERSONA, 'El nombre solo puede tener letras'),
-  apellido: z.string().trim().min(1, 'Apellido requerido').max(100).regex(NOMBRE_PERSONA, 'El apellido solo puede tener letras'),
+  nombre: z.string().trim().min(1, 'Nombre requerido').max(100).refine(esNombrePersona, 'El nombre solo puede tener letras'),
+  apellido: z.string().trim().min(1, 'Apellido requerido').max(100).refine(esNombrePersona, 'El apellido solo puede tener letras'),
   tipo_documento: z.enum(TIPO_DOCUMENTO),
   numero_documento: z.string().min(1, 'Documento requerido').max(20),
   email: z.email('Email inválido'),
