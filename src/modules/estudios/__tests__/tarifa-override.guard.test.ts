@@ -46,6 +46,7 @@ vi.mock('../certificado.service', () => ({
 }));
 vi.mock('../coarrendatario-vinculado', () => ({
   coarrendatarioVinculado: vi.fn(async () => null),
+  coarrendatarioVinculadoVerificado: vi.fn(async () => null),
   assertNoEsEstudioDeOtraPersona: vi.fn(),
 }));
 
