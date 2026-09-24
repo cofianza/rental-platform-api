@@ -722,6 +722,8 @@ async function aprobarYGenerarContrato(params: {
 export async function avisarDuenoDecisionRevisionManual(
   expedienteId: string,
   decision: 'aprobado' | 'rechazado' | 'cancelado',
+  /** P34: al rechazar, el motivo que el analista escribió para el gestor. */
+  motivoGestor?: string,
 ): Promise<void> {
   try {
     const { data } = await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -740,7 +742,7 @@ export async function avisarDuenoDecisionRevisionManual(
       }[decision],
       mensaje: {
         aprobado: `El estudio ${e.numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puedes crear el contrato.`,
-        rechazado: `El estudio ${e.numero}${donde} quedó no aprobable tras la revisión de Cofianza.`,
+        rechazado: `El estudio ${e.numero}${donde} fue rechazado tras la revisión de Cofianza.${motivoGestor ? ` Motivo: ${motivoGestor}` : ''}`,
         cancelado: `Cofianza canceló el estudio condicionado ${e.numero}${donde}. Sale del flujo y no se puede reabrir.`,
       }[decision],
       link: `/expedientes/${expedienteId}`,

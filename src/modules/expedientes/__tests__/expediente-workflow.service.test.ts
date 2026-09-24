@@ -372,9 +372,13 @@ describe('expediente-workflow.service', () => {
     it('rechazar: se le avisa al prospecto (con la apelación) y al dueño', async () => {
       setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
       conTimeline();
-      await executeTransition('exp-uuid', { nuevo_estado: 'rechazado', comentario: 'Ingresos no soportados' }, adminUser);
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'rechazado', comentario: 'Ingresos no soportados', motivo: 'No cumple la política de Cofianza.' },
+        adminUser,
+      );
       await vi.waitFor(() => expect(mockAvisarSolicitante).toHaveBeenCalledWith('exp-uuid', 'rechazado'));
-      expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'rechazado');
+      expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'rechazado', 'No cumple la política de Cofianza.');
     });
 
     it('rechazar (P34): el gestor ve el motivo corto; el fundamento queda interno', async () => {
@@ -412,6 +416,10 @@ describe('expediente-workflow.service', () => {
       // El evento guarda el motivo para el gestor junto al resto de la revisión manual.
       const aTimeline = updates.filter(([t]) => t === 'eventos_timeline').map(([, v]) => v.metadata);
       expect(aTimeline).toContainEqual(expect.objectContaining({ motivo_gestor: 'El caso no cumple la política de Cofianza.' }));
+      // Y al dueño le llega en el aviso.
+      await vi.waitFor(() =>
+        expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'rechazado', 'El caso no cumple la política de Cofianza.'),
+      );
     });
 
     it('rechazar (P34): sin el motivo para el gestor el body no pasa la validación', () => {

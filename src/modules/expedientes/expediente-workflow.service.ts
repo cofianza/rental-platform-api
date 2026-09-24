@@ -310,7 +310,7 @@ export async function executeTransition(
       void import('./expediente-habilitacion.service')
         .then((m) =>
           Promise.all([
-            m.avisarDuenoDecisionRevisionManual(expedienteId, 'rechazado'),
+            m.avisarDuenoDecisionRevisionManual(expedienteId, 'rechazado', input.motivo),
             m.avisarSolicitanteDecision(expedienteId, 'rechazado'),
           ]),
         )

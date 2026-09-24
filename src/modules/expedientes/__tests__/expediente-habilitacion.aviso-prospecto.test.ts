@@ -39,7 +39,8 @@ vi.mock('../../notificaciones/notificaciones.service', () => ({
   findPerfilIdByEmail: (...a: unknown[]) => mockFindPerfil(...a),
 }));
 
-import { avisarSolicitanteDecision } from '../expediente-habilitacion.service';
+import { avisarSolicitanteDecision, avisarDuenoDecisionRevisionManual } from '../expediente-habilitacion.service';
+import { notificarResponsableExpediente } from '../../notificaciones/notificaciones.service';
 import { MOTIVO_PROSPECTO_DECISION_COFIANZA } from '../../estudios/rutas-resultado';
 
 beforeEach(() => vi.clearAllMocks());
@@ -70,5 +71,15 @@ describe('avisarSolicitanteDecision', () => {
 
     expect(mockAprobado).toHaveBeenCalledWith(expect.objectContaining({ email: 'ana@correo.co', score: null }));
     expect(mockNotificar).not.toHaveBeenCalled();
+  });
+});
+
+describe('avisarDuenoDecisionRevisionManual', () => {
+  it('rechazo manual: «fue rechazado» con el motivo para el gestor', async () => {
+    await avisarDuenoDecisionRevisionManual('exp-1', 'rechazado', 'No cumple la política de Cofianza.');
+
+    expect(notificarResponsableExpediente).toHaveBeenCalledWith(expect.objectContaining({
+      mensaje: expect.stringMatching(/fue rechazado tras la revisión de Cofianza\. Motivo: No cumple la política de Cofianza\.$/),
+    }));
   });
 });

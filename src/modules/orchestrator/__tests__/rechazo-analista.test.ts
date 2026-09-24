@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // crediticia del titular fue rechazada…») y al prospecto le llega el texto
 // neutro, no el de «mejora tu perfil crediticio». Colas de Supabase por tabla.
 
-const { ops, queues, enqueue, mockRechazado } = vi.hoisted(() => {
+const { ops, queues, enqueue, mockRechazado, mockNotificar } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -14,6 +14,7 @@ const { ops, queues, enqueue, mockRechazado } = vi.hoisted(() => {
     queues,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockRechazado: vi.fn(async (..._a: unknown[]) => undefined),
+    mockNotificar: vi.fn(async (..._a: unknown[]) => undefined),
   };
 });
 
@@ -39,7 +40,7 @@ vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/config/env', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('../orchestrator.emails', () => ({ sendEstudioRechazadoEmail: mockRechazado }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
-  notificarUsuario: vi.fn(async () => undefined),
+  notificarUsuario: mockNotificar,
   notificarResponsableExpediente: vi.fn(async () => undefined),
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
@@ -86,6 +87,11 @@ describe('rechazo registrado por un analista', () => {
 
     expect(motivoDelBanner()).toBe('No cumple la política de Cofianza.');
     expect(mockRechazado).toHaveBeenCalledWith(expect.objectContaining({ motivoGeneral: MOTIVO_PROSPECTO_DECISION_COFIANZA }));
+    // Al dueño: el estudio fue rechazado, con el motivo; no «la evaluación crediticia».
+    expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 'dueno-1',
+      mensaje: 'El estudio de Ana Pérez para Calle 1 fue rechazado. Motivo: No cumple la política de Cofianza.',
+    }));
   });
 
   it('el rechazo automático del buró sigue como siempre', async () => {
@@ -94,5 +100,6 @@ describe('rechazo registrado por un analista', () => {
 
     expect(motivoDelBanner()).toMatch(/evaluación crediticia del titular/);
     expect(mockRechazado).toHaveBeenCalledWith(expect.objectContaining({ motivoGeneral: null }));
+    expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ mensaje: expect.stringMatching(/^La evaluación crediticia de Ana Pérez/) }));
   });
 });

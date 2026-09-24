@@ -854,13 +854,18 @@ export async function onEstudioCompletado(params: {
       }
 
       // Notificacion in-app al propietario: el estudio fue rechazado, el flujo
-      // termina aqui (no hay accion del propietario). Fire-and-forget.
+      // termina aqui (no hay accion del propietario). Fire-and-forget. Si lo
+      // rechazó un analista a mano no fue «la evaluación crediticia» (P34): va
+      // el motivo que escribió para el gestor.
       if (inm?.propietario_id && sol) {
+        const mensajeDueno = params.motivoAnalista
+          ? `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. Motivo: ${params.motivoAnalista}`
+          : `La evaluación crediticia de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazada. El estudio no avanza al contrato.`;
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.rechazado.propietario',
           titulo: 'Estudio del arrendatario rechazado',
-          mensaje: `La evaluación crediticia de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazada. El estudio no avanza al contrato.`,
+          mensaje: mensajeDueno,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario rechazado'));
@@ -871,7 +876,7 @@ export async function onEstudioCompletado(params: {
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.rechazado.propietario',
           titulo: 'Estudio del arrendatario rechazado',
-          mensaje: `La evaluación crediticia de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazada. El estudio no avanza al contrato.`,
+          mensaje: mensajeDueno,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable rechazado'));
