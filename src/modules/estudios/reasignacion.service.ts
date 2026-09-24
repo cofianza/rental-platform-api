@@ -56,9 +56,9 @@
 //   - una visita viva bloquea hasta que el gestor la cancele o reprograme (si
 //     no, el solicitante recibiria una direccion que nadie acordo);
 //   - el certificado emitido se REGENERA con la propiedad nueva (mismo codigo,
-//     mismo vencimiento), porque el PDF es inmutable y /verificar deriva la
-//     propiedad del expediente: sin regenerarlo, un mismo codigo describiria
-//     dos propiedades distintas;
+//     mismo vencimiento), porque el PDF es inmutable y nombra la propiedad:
+//     sin regenerarlo seguiria nombrando la anterior (/verificar ya no la
+//     muestra, P10);
 //   - el destino tiene que ser de la MISMA cartera: de la propiedad se deriva
 //     quien ve el expediente, asi que cruzar de agencia mudaria datos
 //     personales de cartera.
@@ -190,8 +190,7 @@ export interface ResultadoReasignacion {
   se_cobro: boolean;
   /**
    * Que paso con el certificado ya emitido, si lo habia. El PDF es inmutable y
-   * nombra la propiedad ORIGEN, mientras /verificar deriva la propiedad del
-   * expediente: sin regenerarlo, el mismo codigo describia dos propiedades.
+   * nombra la propiedad ORIGEN: sin regenerarlo seguiria nombrandola.
    *
    *   'sin_certificado' -> no habia ninguno emitido; nada que hacer.
    *   'regenerado'      -> mismo codigo, version+1, mismo vencimiento.
