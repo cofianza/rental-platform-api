@@ -35,12 +35,14 @@ vi.mock('@/lib/supabase', () => ({
 }));
 
 import {
+  assertExpedienteAccess,
   assertInmuebleAccess,
   expedienteVisible,
   filtroPortafolio,
   invalidateMembresiasCache,
   puedeVerFilaExpediente,
   resolveAllowedExpedienteIds,
+  resolveAllowedInmuebleIds,
   resolvePortfolioInmuebleIds,
 } from '@/lib/tenantScope';
 
@@ -126,6 +128,15 @@ describe('resolveAllowedExpedienteIds: la condición que va a PostgREST', () => 
     expect(exp.filter((o) => o.metodo === 'eq').map((o) => o.args)).toEqual([['miembro_responsable_id', YO]]);
   });
 
+  it('un rol de cliente sin id no es una llamada de sistema: nada, sin consultar', async () => {
+    expect(await resolveAllowedExpedienteIds('', 'inmobiliaria')).toEqual([]);
+    expect(await resolveAllowedExpedienteIds(undefined, 'propietario')).toEqual([]);
+    expect(await resolveAllowedInmuebleIds('', 'inmobiliaria')).toEqual([]);
+    expect(ops).toEqual([]);
+    // Sin rol sí es el sistema: sin filtro.
+    expect(await resolveAllowedExpedienteIds(undefined, undefined)).toBeNull();
+  });
+
   it('otros roles no tienen cartera: [] sin consultar; los internos, sin filtro', async () => {
     expect(await resolveAllowedExpedienteIds(YO, 'solicitante')).toEqual([]);
     expect(await resolveAllowedExpedienteIds(YO, 'administrador')).toBeNull();
@@ -186,6 +197,12 @@ describe('puedeVerFilaExpediente: el guard del detalle del contrato', () => {
     expect(await puedeVerFilaExpediente(undefined, undefined, null)).toBe(true);
     expect(await puedeVerFilaExpediente(YO, 'solicitante', fila(ORG))).toBe(false);
     expect(ops).toEqual([]);
+  });
+
+  it('un rol de cliente sin id no ve nada (no es una llamada de sistema)', async () => {
+    filas.push({ inmobiliaria_id: ORG, rol_miembro: 'owner', inmobiliarias: { miembros_ven_todo: false } });
+    expect(await puedeVerFilaExpediente('', 'inmobiliaria', fila(ORG))).toBe(false);
+    expect(await puedeVerFilaExpediente(undefined, 'propietario', fila(ORG))).toBe(false);
   });
 });
 
@@ -267,5 +284,14 @@ describe('assertInmuebleAccess: por enlace se abre lo mismo que muestra la lista
     await expect(assertInmuebleAccess('inm-1', undefined, undefined)).resolves.toBeUndefined();
     await expect(assertInmuebleAccess('inm-1', YO, 'solicitante')).rejects.toMatchObject({ statusCode: 404 });
     expect(ops).toEqual([]);
+  });
+
+  it('un rol de cliente sin id se niega, no se trata como el sistema', async () => {
+    conMembresia('owner');
+    inmueble.fila = { propietario_id: '', inmobiliaria_id: ORG, miembro_responsable_id: null };
+    await expect(assertInmuebleAccess('inm-1', '', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
+    await expect(assertInmuebleAccess('inm-1', undefined, 'propietario')).rejects.toMatchObject({ statusCode: 404 });
+    await expect(assertExpedienteAccess('exp-1', '', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
+    await expect(assertExpedienteAccess('exp-1', undefined, undefined)).resolves.toBeUndefined();
   });
 });

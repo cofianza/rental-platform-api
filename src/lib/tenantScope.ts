@@ -369,8 +369,9 @@ export async function resolveAllowedInmuebleIds(
   userId?: string,
   userRol?: string,
 ): Promise<string[] | null> {
-  if (!userId || !userRol) return null;
+  if (!userRol) return null; // sin rol: llamada de sistema
   if (INTERNAL_ROLES.includes(userRol)) return null;
+  if (!userId) return []; // un rol de cliente sin id no es el sistema: no ve nada
 
   if (userRol === 'inmobiliaria') {
     return resolvePortfolioInmuebleIds(userId);
@@ -408,9 +409,9 @@ export async function resolveAllowedExpedienteIds(
   userId?: string,
   userRol?: string,
 ): Promise<string[] | null> {
-  if (!userId || !userRol) return null;
+  if (!userRol) return null; // sin rol: llamada de sistema
   if (INTERNAL_ROLES.includes(userRol)) return null;
-  if (userRol !== 'inmobiliaria' && userRol !== 'propietario') return [];
+  if (!userId || (userRol !== 'inmobiliaria' && userRol !== 'propietario')) return [];
 
   const c = (await carteraDe(userId, userRol))!;
   const [porInmueble, asignados] = await Promise.all([
@@ -471,17 +472,17 @@ export async function perfilEsDuenoDeInmueble(params: {
  * lista, decidida sobre ESTA fila (una consulta, en paralelo con la membresía).
  * Así el miembro restringido (miembros_ven_todo = false) tampoco abre por
  * enlace lo que su lista le oculta: solo lo que registró o le asignaron.
- * No-op para roles internos y llamadas sin identidad. Contraparte a
- * nivel-inmueble de assertExpedienteAccess.
+ * No-op para roles internos y llamadas de sistema (sin rol); un rol de cliente
+ * sin id se niega. Contraparte a nivel-inmueble de assertExpedienteAccess.
  */
 export async function assertInmuebleAccess(
   inmuebleId: string,
   userId?: string,
   userRol?: string,
 ): Promise<void> {
-  if (!userId || !userRol) return; // sin identidad: no gatear (sistema)
+  if (!userRol) return; // sin rol: llamada de sistema, no se gatea
   if (INTERNAL_ROLES.includes(userRol)) return; // ve todo
-  if (userRol !== 'inmobiliaria' && userRol !== 'propietario')
+  if (!userId || (userRol !== 'inmobiliaria' && userRol !== 'propietario'))
     throw AppError.notFound('Inmueble no encontrado', 'INMUEBLE_NOT_FOUND');
   const [c, { data }] = await Promise.all([
     carteraDe(userId, userRol),
@@ -497,9 +498,9 @@ export async function assertInmuebleAccess(
 /**
  * Guard de propiedad a nivel EXPEDIENTE para endpoints por-id. Lanza 404 si el
  * usuario NO puede acceder al expediente (mismo trato que "no existe", para no
- * filtrar existencia cross-tenant). No hace nada para llamadas SIN identidad
- * (procesos internos/sistema que pasan userId/userRol undefined) ni para roles
- * internos (admin/operador/gerencia: ven todo).
+ * filtrar existencia cross-tenant). No hace nada para llamadas de sistema (sin
+ * rol) ni para roles internos (admin/operador/gerencia: ven todo); un rol de
+ * cliente sin id se niega.
  *
  * Es la contraparte a nivel-expediente de getContratoById(id, userId, userRol):
  * úsalo en cualquier endpoint por-id que devuelva o mute un recurso ligado a un
@@ -512,8 +513,9 @@ export async function assertExpedienteAccess(
   userId?: string,
   userRol?: string,
 ): Promise<void> {
-  if (!userId || !userRol) return; // sin identidad: no gatear (llamadas de sistema)
+  if (!userRol) return; // sin rol: llamada de sistema, no se gatea
   if (INTERNAL_ROLES.includes(userRol)) return; // ve todo
+  if (!userId) throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
 
   // Solicitante: dueño vía solicitantes.creado_por → expedientes.solicitante_id
   // (mismo criterio que list()/getMyExpedienteByInmueble; resolveAllowedExpedienteIds
@@ -559,16 +561,16 @@ export async function assertExpedienteAccess(
 /**
  * ¿Ve el expediente de una fila ya leída (p.ej. embebida en el contrato)? Mismo
  * criterio que resolveAllowedExpedienteIds, sin bajar la cartera entera: true
- * sin identidad o rol interno; false para roles sin cartera (solicitante
- * incluido, a diferencia de assertExpedienteAccess).
+ * sin rol (sistema) o rol interno; false para roles sin cartera (solicitante
+ * incluido, a diferencia de assertExpedienteAccess) y para un rol sin id.
  */
 export async function puedeVerFilaExpediente(
   userId: string | undefined,
   userRol: string | undefined,
   fila: { miembro_responsable_id: string | null; inmueble: FilaInmuebleScope | null } | null,
 ): Promise<boolean> {
-  if (!userId || !userRol || INTERNAL_ROLES.includes(userRol)) return true;
-  if (userRol !== 'inmobiliaria' && userRol !== 'propietario') return false;
+  if (!userRol || INTERNAL_ROLES.includes(userRol)) return true;
+  if (!userId || (userRol !== 'inmobiliaria' && userRol !== 'propietario')) return false;
   const c = await carteraDe(userId, userRol);
   return !!c && !!fila && expedienteVisible(c, fila);
 }
