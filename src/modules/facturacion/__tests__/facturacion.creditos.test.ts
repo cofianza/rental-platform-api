@@ -112,6 +112,24 @@ describe('listPendientesFacturar', () => {
     expect(r[0]).toMatchObject({ pago_id: null, compra_id: 'compra-1', cliente_nombre: 'Inmo SAS', monto: 1400000 });
   });
 
+  it('P1: un pago que quedó para devolver (estudio terminado sin consulta al buró) no se ofrece para facturar', async () => {
+    enqueue('pagos', {
+      data: [
+        { id: 'pago-mp', expediente_id: 'e1', concepto: 'estudio', monto: 80000, fecha_pago: '2026-09-01', expediente: { numero: 'EXP-1' } },
+        { id: 'pago-tarde', expediente_id: 'e2', concepto: 'estudio', monto: 80000, fecha_pago: '2026-09-03', expediente: { numero: 'EXP-2' } },
+      ],
+      error: null,
+    });
+    enqueue('facturas', { data: [], error: null });
+    enqueue('movimientos_creditos_estudios', { data: [], error: null });
+    enqueue('pagos_no_conciliados', { data: [{ external_reference: 'estudio:e2:pago-tarde' }], error: null });
+    enqueue('compras_creditos_estudios', { data: [], error: null });
+
+    const r = await listPendientesFacturar('admin-1', 'administrador');
+
+    expect(r.map((p) => p.pago_id)).toEqual(['pago-mp']);
+  });
+
   it('cruza las facturas en lotes y un error no hace ver como pendientes pagos ya facturados', async () => {
     const pagos = Array.from({ length: 151 }, (_, i) => ({
       id: `pago-${i}`, expediente_id: 'e1', concepto: 'estudio', monto: 80000, fecha_pago: '2026-09-01', expediente: { numero: 'EXP-1' },

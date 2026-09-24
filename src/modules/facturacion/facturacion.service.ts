@@ -218,6 +218,27 @@ async function pagosConsumoDeCredito(pagoIds: string[]): Promise<Set<string>> {
 }
 
 /**
+ * P1: pagos de la evaluación que quedaron para devolver (el estudio terminó sin
+ * consulta al buró y el pago entró después): no se facturan. Son pocos, así
+ * que se lee la cola entera en vez de cruzar por lotes.
+ */
+async function pagosPorDevolver(): Promise<Set<string>> {
+  const { data, error } = await (supabase.from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
+    .select('external_reference')
+    .eq('resuelto', false)
+    .eq('motivo', 'estudio_cerrado_sin_consulta');
+  if (error) {
+    logger.error({ error: error.message }, 'Error leyendo los pagos por devolver');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al consultar la facturación de los pagos');
+  }
+  return new Set(
+    ((data ?? []) as Array<{ external_reference: string | null }>)
+      .map((r) => r.external_reference?.split(':')[2])
+      .filter((id): id is string => !!id),
+  );
+}
+
+/**
  * `.select(columnas).in(columna, ids)` en lotes: con cientos de UUID la URL de
  * PostgREST pasa del límite y la consulta falla. El error se lanza: devolver
  * vacío hacía ver como pendientes (o facturables) pagos ya facturados o de crédito.
@@ -1371,11 +1392,12 @@ export async function listPendientesFacturar(
 
   // 3. Cruzar con facturas (excluir las emitidas) y con los consumos de crédito.
   const pagoIds = pagosTyped.map((p) => p.id);
-  const [facturasRows, conCredito] = await Promise.all([
+  const [facturasRows, conCredito, porDevolver] = await Promise.all([
     selectInEnLotes<{ pago_id: string; estado: string; error_mensaje: string | null }>(
       'facturas', 'pago_id, estado, error_mensaje', 'pago_id', pagoIds,
     ),
     pagosConsumoDeCredito(pagoIds),
+    pagoIds.length > 0 ? pagosPorDevolver() : Promise.resolve(new Set<string>()),
   ]);
 
   const facturasByPago = new Map<string, { estado: string; error_mensaje: string | null }>();
@@ -1389,8 +1411,9 @@ export async function listPendientesFacturar(
   const pendientes: PagoPendienteFacturar[] = pagosTyped
     .filter((p) => {
       const f = facturasByPago.get(p.id);
-      // Excluir si ya hay factura emitida o si salió de un crédito prepagado.
-      return (!f || f.estado !== 'emitida') && !conCredito.has(p.id);
+      // Excluir si ya hay factura emitida, si salió de un crédito prepagado o
+      // si se va a devolver.
+      return (!f || f.estado !== 'emitida') && !conCredito.has(p.id) && !porDevolver.has(p.id);
     })
     .map((p) => {
       const f = facturasByPago.get(p.id);
