@@ -349,7 +349,14 @@ export async function invitarCoarrendatario(
   //     autorización de habeas data para una consulta imposible. Es el mismo
   //     argumento de finalidad (Ley 1581) con el que el guard justifica ir
   //     antes del gate 8.4.
-  await assertCanonDentroDelTope({ expedienteId, origen: 'invitarCoarrendatario' });
+  //     P36 (2026-09-24): si el estudio ya se cobró, un tope que bajó después
+  //     solo advierte: el estudio pagado se termina (Flujo §4.4, Adenda 1
+  //     contratos §2.4); el contrato aplica el tope vigente.
+  await assertCanonDentroDelTope({
+    expedienteId,
+    origen: 'invitarCoarrendatario',
+    soloAdvertir: await estudioYaCobrado(expedienteId),
+  });
 
   // 3. No reinvitar el mismo email del titular (no tiene sentido).
   if (ctx.solicitante_email && input.email.toLowerCase() === ctx.solicitante_email.toLowerCase()) {
@@ -776,9 +783,12 @@ export async function aceptarInvitacion(
   //     invitado no tiene nada que ver con el cobro del titular): el estudio se
   //     crea EN ESPERA DE PAGO y arranca solo cuando el pago entre. Ver el
   //     bloque 4.
+  //
+  //     P36: con el estudio ya cobrado, el tope que bajó después solo advierte.
   await assertCanonDentroDelTope({
     expedienteId: coa.expediente_id,
     origen: 'aceptarInvitacionCoarrendatario',
+    soloAdvertir: await estudioYaCobrado(coa.expediente_id),
   });
 
   // 2. CLAIM atómico: marcar aceptado SOLO si sigue 'pendiente_aceptacion'.

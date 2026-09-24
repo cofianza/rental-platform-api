@@ -123,6 +123,8 @@ vi.mock('@/modules/estudios/reglas-duras', () => ({
 }));
 
 // Import AFTER mocks
+import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { estudioYaCobrado } from '@/modules/estudios/pago.guard';
 import {
   invitarCoarrendatario,
   getCoarrendatarioPorExpediente,
@@ -196,6 +198,44 @@ describe('invitarCoarrendatario — Politica §5 (mismo afianzado bajo otro nomb
 
     expect(coa.id).toBe(COA_ID);
     expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(true);
+  });
+});
+
+// ============================================================
+// P36: con el estudio ya cobrado, el tope de canon que bajó después solo
+// advierte (el estudio pagado se termina); sin cobro, sigue bloqueando.
+// ============================================================
+
+describe('tope de canon — P36', () => {
+  it.each([true, false])('invitar: soloAdvertir = estudio ya cobrado (%s)', async (cobrado) => {
+    vi.mocked(estudioYaCobrado).mockResolvedValueOnce(cobrado);
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: { id: COA_ID }, error: null });
+
+    await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
+
+    expect(assertCanonDentroDelTope).toHaveBeenCalledWith(
+      expect.objectContaining({ expedienteId: EXPEDIENTE_ID, soloAdvertir: cobrado }),
+    );
+  });
+
+  it('aceptar: con el estudio cobrado solo advierte', async () => {
+    enqueue('expediente_coarrendatarios', {
+      data: {
+        id: COA_ID,
+        expediente_id: EXPEDIENTE_ID,
+        estado: 'pendiente_aceptacion',
+        token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+      },
+      error: null,
+    });
+    enqueue('expedientes', ctxRow());
+
+    await aceptarInvitacion('t'.repeat(64), '1.1.1.1', 'ua', {} as never).catch(() => undefined);
+
+    expect(assertCanonDentroDelTope).toHaveBeenCalledWith(
+      expect.objectContaining({ expedienteId: EXPEDIENTE_ID, origen: 'aceptarInvitacionCoarrendatario', soloAdvertir: true }),
+    );
   });
 });
 
