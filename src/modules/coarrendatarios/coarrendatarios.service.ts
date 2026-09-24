@@ -1529,14 +1529,20 @@ export async function onCoarrendatarioEstudioCompletado(
     .catch((e) => logger.warn({ error: e }, 'Error aviso al prospecto de la ponderacion'));
 
   if (ctx.inmueble_propietario_id) {
+    // P2: con la evaluación rechazada el co-arrendatario no entra al contrato.
+    const coaCuenta = evaluacionCuenta(est);
     const titProp =
-      nuevoEstadoExpediente === 'aprobado'
-        ? 'Aprobado con co-arrendatario'
-        : 'Solicitante no aprobado';
+      nuevoEstadoExpediente !== 'aprobado'
+        ? 'Solicitante no aprobado'
+        : coaCuenta
+          ? 'Aprobado con co-arrendatario'
+          : 'Solicitante aprobado';
     const msgProp =
-      nuevoEstadoExpediente === 'aprobado'
-        ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario ${coa?.nombre ?? ''} aprobaron la evaluación combinada. Genera el contrato para continuar.`
-        : `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario no aprobaron la evaluación combinada. El inmueble vuelve a estar disponible.`;
+      nuevoEstadoExpediente !== 'aprobado'
+        ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario no aprobaron la evaluación combinada. El inmueble vuelve a estar disponible.`
+        : coaCuenta
+          ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario ${coa?.nombre ?? ''} aprobaron la evaluación combinada. Genera el contrato para continuar.`
+          : `${ctx.solicitante_nombre || 'El solicitante'} quedó aprobado. La evaluación de su co-arrendatario no fue favorable, así que el contrato va sin él (prima del 20 %). Genera el contrato para continuar.`;
     notificarUsuario({
       userId: ctx.inmueble_propietario_id,
       tipo: nuevoEstadoExpediente === 'aprobado' ? 'estudio.aprobado' : 'estudio.rechazado',

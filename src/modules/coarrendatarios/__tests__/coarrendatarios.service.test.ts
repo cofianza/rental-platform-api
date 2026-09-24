@@ -610,7 +610,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
 
 describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
   const coaEstudio = (resultado: string) => ({
-    data: { id: COA_ESTUDIO_ID, expediente_id: EXPEDIENTE_ID, tipo: 'con_coarrendatario', resultado, score: 700, motivo_rechazo: null },
+    data: { id: COA_ESTUDIO_ID, expediente_id: EXPEDIENTE_ID, tipo: 'con_coarrendatario', estado: 'completado', resultado, score: 700, motivo_rechazo: null },
     error: null,
   });
   const coaRow = { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' }, error: null };
@@ -660,6 +660,10 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
     expect((update!.args[0] as { estado: string }).estado).toBe('aprobado');
     expect(mockLiberarReserva).not.toHaveBeenCalled();
+    // P2: con la evaluación rechazada no entra al contrato; el dueño no lee «con co-arrendatario».
+    expect(mockNotificarUsuario).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'Solicitante aprobado', mensaje: expect.stringContaining('va sin él') }),
+    );
   });
 
   it('Adenda 2 §5: titular condicionado + coarrendatario aprobado ya NO se aprueba solo (decide el analista)', async () => {
