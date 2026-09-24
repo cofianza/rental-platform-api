@@ -334,6 +334,8 @@ export async function crearSolicitudFirma(
   const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
   await assertPuedeAbrirSobre(c.id, c.expediente_id, c.datos_variables);
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
+  // La solicitud anterior (vencida o rechazada) se anula en Auco y se cierra antes de abrir la nueva.
+  await cancelarSolicitudesDeContrato(c.id);
 
   // 4. Download PDF from storage and upload to Auco
   let aucoDocumentCode: string | null = null;
@@ -1096,7 +1098,7 @@ export async function cancelarSolicitud(
  *   NOTIFICATION → abierto (signer was notified / opened)
  *   FINISH       → firmado (all signers completed)
  *   REJECTED     → cancelado (signer rejected)
- *   BLOCKED      → cancelado (too many failed attempts)
+ *   BLOCKED      → sin cambio: sigue en firma y se avisa a Cofianza para desbloquear
  *   EXPIRED      → expirado (past deadline)
  */
 export async function handleAucoWebhook(payload: AucoWebhookPayload) {
@@ -1182,9 +1184,15 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
 
     case 'REJECTED':
     case 'REJECT':
-    case 'BLOCKED':
       newEstado = 'cancelado';
       break;
+
+    case 'BLOCKED': {
+      // No es final (como en el V3): sigue en firma y Cofianza desbloquea en Auco.
+      const { avisarFirmanteBloqueado } = await import('./firma-multiparte.service');
+      await avisarFirmanteBloqueado(row.contrato_id, code);
+      return;
+    }
 
     case 'EXPIRED':
       newEstado = 'expirado';

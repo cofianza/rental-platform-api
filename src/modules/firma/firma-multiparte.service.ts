@@ -85,8 +85,9 @@ export function mapAucoSignerStatusToEstado(status: AucoSignerStatus | string): 
     case 'FINISH':
       return 'firmado';
     case 'REJECT':
-    case 'BLOCK':
       return 'cancelado';
+    // BLOCK (3 OTP fallidos) no es final, como en el V3: sigue en firma y
+    // Cofianza desbloquea al firmante en Auco.
     case 'NOTIFICATION':
       return 'abierto';
     case 'PENDING':
@@ -507,6 +508,10 @@ export async function crearSolicitudFirmaMultiparte(
   const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
   await assertPuedeAbrirSobre(contratoId, c.expediente_id, c.datos_variables);
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
+  // El sobre anterior (vencido o rechazado) se anula en Auco y se cierra antes
+  // de abrir el nuevo (contratos-firma-2).
+  const { cancelarSolicitudesDeContrato } = await import('./firma.service');
+  await cancelarSolicitudesDeContrato(contratoId);
 
   // 3. Descargar PDF y subir UN documento con N firmantes
   const { data: pdfData, error: downloadError } = await supabase.storage
@@ -658,10 +663,11 @@ export async function reconciliarFirmantesConAuco(contratoId: string): Promise<v
     await cerrarSobreSinFirmas(sobre.id, info.status === 'EXPIRED' ? 'expirado' : 'cancelado');
   }
 
-  // 3. Filas locales
+  // 3. Filas locales (las de ESTE sobre)
   const { data: filasRow } = await db('contrato_firmantes')
     .select('id, rol_firmante, email, estado, orden')
-    .eq('contrato_id', contratoId);
+    .eq('contrato_id', contratoId)
+    .eq('solicitud_firma_id', sobre.id);
   const filas = (filasRow as FirmanteRow[] | null) ?? [];
   if (filas.length === 0) return;
 
@@ -708,7 +714,8 @@ async function cerrarSobreSiTodasFirmaron(
   const now = new Date().toISOString();
   const { data: refrescadas } = await db('contrato_firmantes')
     .select('estado')
-    .eq('contrato_id', contratoId);
+    .eq('contrato_id', contratoId)
+    .eq('solicitud_firma_id', sobre.id);
   const todas = (refrescadas as Array<{ estado: string }> | null) ?? [];
   if (!todasFirmaron(todas)) return;
 
@@ -747,12 +754,36 @@ async function cerrarSobreSiTodasFirmaron(
 }
 
 /**
+ * BLOCK (3 OTP fallidos) no es final, como en el V3: el sobre sigue en firma y
+ * Cofianza desbloquea al firmante en el panel de Auco. Se avisa a los operadores.
+ */
+export async function avisarFirmanteBloqueado(contratoId: string, code: string | null): Promise<void> {
+  logger.warn({ contratoId, code }, 'Firma: firmante bloqueado en Auco (3 OTP fallidos)');
+  const [{ listOperators }, { notificarUsuario }] = await Promise.all([
+    import('@/modules/users/users.service'),
+    import('@/modules/notificaciones/notificaciones.service'),
+  ]);
+  for (const o of await listOperators()) {
+    await notificarUsuario({
+      userId: o.id,
+      tipo: 'firma.bloqueada',
+      titulo: 'Firmante bloqueado en Auco',
+      mensaje: `Un firmante del proceso ${code ?? ''} quedó bloqueado tras varios intentos fallidos. Desbloquéalo en el panel de Auco para que la firma siga.`,
+      link: `/contratos/${contratoId}`,
+      payload: { contrato_id: contratoId },
+    });
+  }
+}
+
+/**
  * Reconcilia los firmantes multi-parte desde el PAYLOAD del webhook de Auco, SIN
  * llamar a getDocumentStatus (que en stage devuelve 401 y rompía la sync).
- * Eventos Auco (docs/api/webhooks/document):
+ * Solo toca los firmantes de ESTE sobre: un evento tardío de un documento
+ * anterior no marca los del nuevo. Eventos Auco (docs/api/webhooks/document):
  *   - NOTIFICATION (+ signer): ese participante COMPLETÓ su firma → 'firmado'
- *   - REJECTED / BLOCKED (+ signer): ese firmante rechazó/bloqueó → 'cancelado',
- *     y el sobre también (contratos-firma-2)
+ *   - REJECTED (+ signer): ese firmante rechazó → 'cancelado', y el sobre
+ *     también (contratos-firma-2)
+ *   - BLOCKED: nada cambia (sigue en firma); se avisa a Cofianza para desbloquear
  *   - EXPIRED: venció el plazo → el sobre queda 'expirado'
  *   - FINISH (sin signer): TODAS las partes firmaron → marca pendientes 'firmado'
  * Cuando todas quedan 'firmado', cierra el sobre e intenta activar el contrato.
@@ -760,7 +791,7 @@ async function cerrarSobreSiTodasFirmaron(
 export async function reconciliarFirmantesPorWebhook(
   contratoId: string,
   sobre: { id: string; estado: string },
-  payload: { status: string; url?: string; signer?: { id?: string; email?: string | null } | null },
+  payload: { status: string; code?: string; url?: string; signer?: { id?: string; email?: string | null } | null },
 ): Promise<void> {
   const now = new Date().toISOString();
   const status = payload.status;
@@ -770,14 +801,19 @@ export async function reconciliarFirmantesPorWebhook(
     await db('contrato_firmantes')
       .update({ estado: 'firmado', firmado_en: now, auco_signer_id: payload.signer?.id ?? null, updated_at: now } as never)
       .eq('contrato_id', contratoId)
+      .eq('solicitud_firma_id', sobre.id)
       .eq('email', signerEmail)
       .neq('estado', 'firmado');
     logger.info({ contratoId, email: signerEmail }, 'Firma multi-parte: firmante firmado (webhook)');
-  } else if (status === 'REJECTED' || status === 'BLOCKED' || status === 'EXPIRED') {
-    if (signerEmail && status !== 'EXPIRED') {
+  } else if (status === 'BLOCKED') {
+    await avisarFirmanteBloqueado(contratoId, payload.code ?? null);
+    return;
+  } else if (status === 'REJECTED' || status === 'EXPIRED') {
+    if (signerEmail && status === 'REJECTED') {
       await db('contrato_firmantes')
         .update({ estado: 'cancelado', updated_at: now } as never)
         .eq('contrato_id', contratoId)
+        .eq('solicitud_firma_id', sobre.id)
         .eq('email', signerEmail);
       logger.info({ contratoId, email: signerEmail, status }, 'Firma multi-parte: firmante cancelado (webhook)');
     }
@@ -787,6 +823,7 @@ export async function reconciliarFirmantesPorWebhook(
     await db('contrato_firmantes')
       .update({ estado: 'firmado', firmado_en: now, updated_at: now } as never)
       .eq('contrato_id', contratoId)
+      .eq('solicitud_firma_id', sobre.id)
       .neq('estado', 'firmado')
       .neq('estado', 'cancelado');
     logger.info({ contratoId }, 'Firma multi-parte: todas firmadas (webhook FINISH)');

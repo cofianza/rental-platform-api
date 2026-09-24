@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock de Supabase con colas por tabla; `ops` registra lo que se escribió.
 // ============================================================
 
-const { ops, enqueue, queues, mockPlazo, mockPuedeAbrir } = vi.hoisted(() => {
+const { ops, enqueue, queues, mockPlazo, mockPuedeAbrir, mockNotificar } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -17,6 +17,7 @@ const { ops, enqueue, queues, mockPlazo, mockPuedeAbrir } = vi.hoisted(() => {
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockPlazo: vi.fn(),
     mockPuedeAbrir: vi.fn(),
+    mockNotificar: vi.fn(async () => undefined),
   };
 });
 
@@ -55,7 +56,13 @@ vi.mock('@/lib/tenantScope', () => ({
 vi.mock('@/lib/companyConfig', () => ({
   getCompany: vi.fn(async () => ({ name: 'COFIANZA S.A.S.', email: 'hola@cofianza.co', phone: '3169724813', nit: '902.038.122-7' })),
 }));
-vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(), findPerfilIdByEmail: vi.fn() }));
+vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
+  notificarUsuario: (...a: unknown[]) => mockNotificar(...(a as [])),
+  findPerfilIdByEmail: vi.fn(),
+}));
+vi.mock('@/modules/users/users.service', () => ({
+  listOperators: vi.fn(async () => [{ id: 'op-1', rol: 'operador_analista' }, { id: 'admin-1', rol: 'administrador' }]),
+}));
 vi.mock('@/modules/contratos/contratos.service', () => ({
   plazoFirmaContrato: (...a: unknown[]) => mockPlazo(...a),
   assertPuedeAbrirSobre: (...a: unknown[]) => mockPuedeAbrir(...a),
@@ -66,12 +73,13 @@ vi.mock('@/lib/auco', () => ({
   uploadDocumentForSignature: vi.fn(async () => 'DOC-NUEVO'),
   getDocumentStatus: vi.fn(),
   sendReminder: vi.fn(),
+  cancelDocument: vi.fn(async () => ({ success: true })),
 }));
 
 import { AppError } from '@/lib/errors';
 import * as auco from '@/lib/auco';
 import { crearSolicitudFirmaMultiparte, reconciliarFirmantesConAuco, reconciliarFirmantesPorWebhook } from '../firma-multiparte.service';
-import { reenviarSolicitudFirma } from '../firma.service';
+import { handleAucoWebhook, reenviarSolicitudFirma } from '../firma.service';
 
 const PLAZO = '2026-10-10T04:59:59.000Z';
 const de = (table: string, method: string) => ops.filter((o) => o.table === table && o.method === method);
@@ -100,11 +108,14 @@ describe('P5: el sobre multi-parte sale con el plazo de la Adenda (no 72 horas)'
       error: null,
     });
     enqueue('perfiles', { data: { id: 'prop-1', nombre: 'Ana', apellido: 'Gómez', rol: 'propietario', whatsapp_recaudo: '3104445566', email_recaudo: 'ana@x.co' }, error: null });
-    enqueue('solicitudes_firma', { data: { id: 's1' }, error: null });
   }
+  /** Lo que cancela del sobre anterior y el sobre nuevo que inserta. */
+  const sobres = (anteriores: Array<Record<string, unknown>> = []) =>
+    enqueue('solicitudes_firma', { data: anteriores, error: null }, ...anteriores.map(() => ({ data: null, error: null })), { data: { id: 's1' }, error: null });
 
   it('Auco y el sobre llevan el plazo calculado (15 días sin pasar el CRC)', async () => {
     prepararSobre();
+    sobres();
     await crearSolicitudFirmaMultiparte('c1', 'u1');
     expect(mockPlazo).toHaveBeenCalledWith('e1');
     expect(auco.uploadDocumentForSignature).toHaveBeenCalledWith(expect.objectContaining({ expiredDate: PLAZO }));
@@ -118,6 +129,17 @@ describe('P5: el sobre multi-parte sale con el plazo de la Adenda (no 72 horas)'
     expect(mockPuedeAbrir).toHaveBeenCalledWith('c1', 'e1', { v: 1 });
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
     expect(de('solicitudes_firma', 'insert')).toEqual([]);
+  });
+
+  it('reenviar: el sobre anterior (vencido) se anula en Auco y se cierra ANTES de abrir el nuevo', async () => {
+    prepararSobre();
+    sobres([{ id: 's-viejo', estado: 'enviado', auco_document_code: 'DOC-VIEJO' }]);
+    await crearSolicitudFirmaMultiparte('c1', 'u1');
+    expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-VIEJO', expect.objectContaining({ email: 'sender@cofianza.com' }));
+    expect(vi.mocked(auco.cancelDocument).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(auco.uploadDocumentForSignature).mock.invocationCallOrder[0],
+    );
+    expect(de('solicitudes_firma', 'update')[0].args[0]).toMatchObject({ estado: 'cancelado' });
   });
 
   it('sin margen de CRC no se sube nada a Auco', async () => {
@@ -138,6 +160,32 @@ describe('contratos-firma-2: el sobre vencido o rechazado deja de estar activo',
     await reconciliarFirmantesPorWebhook('c1', { id: 's1', estado: 'enviado' }, { status: 'EXPIRED' });
     expect(sobreCerrado()).toEqual([expect.objectContaining({ estado: 'expirado' })]);
     soloSiSigueActivo();
+  });
+
+  it('un evento de un sobre anterior solo toca SUS firmantes, no los del sobre nuevo', async () => {
+    await reconciliarFirmantesPorWebhook('c1', { id: 's-viejo', estado: 'enviado' }, { status: 'NOTIFICATION', signer: { email: 'ana@x.co' } });
+    await reconciliarFirmantesPorWebhook('c1', { id: 's-viejo', estado: 'enviado' }, { status: 'FINISH' });
+    // Cada escritura o relectura de firmantes (las dos marcas y los dos cierres) va atada al sobre del evento.
+    const eqs = de('contrato_firmantes', 'eq').map((o) => o.args);
+    const porContrato = eqs.filter((a) => a[0] === 'contrato_id').length;
+    expect(porContrato).toBe(4);
+    expect(eqs.filter((a) => a[0] === 'solicitud_firma_id' && a[1] === 's-viejo')).toHaveLength(porContrato);
+  });
+
+  it('BLOCKED (3 OTP fallidos) no es final: nada se cancela y se avisa a Cofianza para desbloquear', async () => {
+    await reconciliarFirmantesPorWebhook('c1', { id: 's1', estado: 'enviado' }, { status: 'BLOCKED', code: 'DOC1', signer: { email: 'ana@x.co' } });
+    expect(de('contrato_firmantes', 'update')).toEqual([]);
+    expect(sobreCerrado()).toEqual([]);
+    expect(mockNotificar).toHaveBeenCalledTimes(2);
+    expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'op-1', tipo: 'firma.bloqueada', link: '/contratos/c1' }));
+  });
+
+  it('BLOCKED en el flujo de un firmante tampoco cancela la solicitud', async () => {
+    enqueue('solicitudes_firma', { data: { id: 's1', contrato_id: 'c1', estado: 'enviado', nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
+    enqueue('contrato_firmantes', { data: [], error: null });
+    await handleAucoWebhook({ code: 'DOC1', name: 'x', status: 'BLOCKED' });
+    expect(de('solicitudes_firma', 'update')).toEqual([]);
+    expect(mockNotificar).toHaveBeenCalled();
   });
 
   it('webhook REJECTED de una parte → esa parte y el sobre quedan cancelados', async () => {
