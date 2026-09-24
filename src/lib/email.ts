@@ -382,8 +382,10 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
 </html>`;
 }
 
+// Sin el nombre que escribió el visitante: el correo va a una dirección que
+// nadie verificó y el nombre servía para meter texto propio en un correo de
+// Cofianza. El inmueble sale de la base.
 interface InteresadoConfirmacionParams {
-  nombre: string;
   inmuebleLabel: string;
 }
 
@@ -446,7 +448,7 @@ function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): strin
                 Recibimos tu interés
               </h1>
               <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(p.nombre)}, gracias por tu interés en <strong>${escapeHtml(p.inmuebleLabel)}</strong>.
+                Hola, gracias por tu interés en <strong>${escapeHtml(p.inmuebleLabel)}</strong>.
               </p>
               <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
                 El anunciante (propietario o inmobiliaria) te contactará pronto por WhatsApp o correo

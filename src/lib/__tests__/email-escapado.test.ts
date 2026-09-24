@@ -23,10 +23,11 @@ const html = () => (mockSend.mock.calls.at(-1)![0] as { html: string }).html;
 beforeEach(() => mockSend.mockClear());
 
 describe('correos del interesado de la vitrina (ruta anónima)', () => {
-  it('la confirmación al interesado escapa el nombre', async () => {
-    await sendInteresadoConfirmacionEmail('victima@correo.co', { nombre: PHISHING, inmuebleLabel: 'Calle 1' });
+  it('la confirmación al interesado no lleva texto que haya escrito el visitante', async () => {
+    // Va a una dirección sin verificar: solo el inmueble (de la base), escapado.
+    await sendInteresadoConfirmacionEmail('victima@correo.co', { inmuebleLabel: PHISHING });
     expect(html()).not.toContain('<a href="https://evil.co"');
-    expect(html()).toContain('&lt;a href=');
+    expect(html()).toContain('Hola, gracias por tu interés');
   });
 
   it('el aviso al dueño escapa nombre y mensaje', async () => {

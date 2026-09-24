@@ -129,7 +129,6 @@ export async function registrarInteresPublico(
   // Sin la dirección (P9): tipo, barrio, ciudad y código; la dirección exacta
   // llega con la visita confirmada. Los avisos al dueño sí la llevan.
   await sendInteresadoConfirmacionEmail(emailNorm, {
-    nombre: input.nombre.trim(),
     inmuebleLabel: inmuebleLabel({ ...inm, direccion: null }),
   });
 }
