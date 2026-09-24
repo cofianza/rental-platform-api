@@ -334,8 +334,8 @@ export async function crearSolicitudFirma(
   const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
   await assertPuedeAbrirSobre(c.id, c.expediente_id, c.datos_variables);
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
-  // La solicitud anterior (vencida o rechazada) se anula en Auco y se cierra antes de abrir la nueva.
-  await cancelarSolicitudesDeContrato(c.id);
+  // La solicitud anterior se cierra antes de abrir la nueva, sin perder una firma que llegó sin aviso.
+  await anularSobresAnteriores(c.id, c.expediente_id);
 
   // 4. Download PDF from storage and upload to Auco
   let aucoDocumentCode: string | null = null;
@@ -1025,6 +1025,84 @@ export async function cancelarSolicitudesDeContrato(contratoId: string): Promise
     }
   } catch (err) {
     logger.error({ err, contratoId }, 'Error cancelando solicitudes de firma del contrato');
+  }
+}
+
+// ============================================================
+// Reenvío a firma: cerrar el envío anterior sin perder una firma
+// ============================================================
+
+const auco503 = () =>
+  new AppError(503, 'AUCO_NO_VERIFICABLE', 'No pudimos confirmar en Auco qué pasó con el envío anterior. Intenta de nuevo en unos minutos.');
+
+/**
+ * El documento de Auco de un envío anterior, antes de abrir otro (contratos-
+ * firma-2). Si ya lo firmaron todos y el aviso se perdió, se reconcilia como
+ * firmado por el camino del webhook y responde 409. Si sigue vivo, se anula;
+ * si Auco no lo anula, se relee (como cancelarEnAuco del V3): vencido o
+ * rechazado ya está cerrado. Si no se puede leer o sigue vivo, 503: ni un
+ * firmado dado por cancelado ni dos documentos vivos. Devuelve su estado local.
+ */
+async function cerrarDocumentoAnterior(contratoId: string, expedienteId: string, code: string): Promise<'expirado' | 'cancelado'> {
+  const leer = () =>
+    aucoClient.getDocumentStatus(code).catch((err: unknown) => {
+      logger.error({ contratoId, code, error: err instanceof Error ? err.message : String(err) }, 'Reenvío a firma: no se pudo consultar en Auco el documento anterior');
+      throw auco503();
+    });
+  const siFirmado = async (info: { status: string; url?: string; name?: string }) => {
+    if (info.status !== 'FINISH') return;
+    await handleAucoWebhook({ code, name: info.name ?? '', status: 'FINISH', url: info.url });
+    const { maybeAutoTransicionarFirmado, maybeAutoActivarVigente } = await import('@/modules/contratos/contratos.service');
+    await maybeAutoTransicionarFirmado(contratoId);
+    await maybeAutoActivarVigente(contratoId, expedienteId);
+    throw AppError.conflict('Este contrato ya estaba firmado: todas las partes firmaron el envío anterior. Actualiza la página.', 'CONTRATO_YA_FIRMADO');
+  };
+  const cerrado = (status: string) => (status === 'EXPIRED' ? 'expirado' : status === 'REJECTED' ? 'cancelado' : null);
+
+  const info = await leer();
+  await siFirmado(info);
+  const antes = cerrado(info.status);
+  if (antes) return antes;
+
+  const anulado = await aucoClient
+    .cancelDocument(code, { message: 'Reenviado a firma en Cofianza', email: env.AUCO_SENDER_EMAIL })
+    .then((r) => r?.success !== false && !((r?.errors?.cant ?? 0) > 0))
+    .catch(() => false);
+  if (anulado) return 'cancelado';
+  const despues = await leer();
+  await siFirmado(despues);
+  const ya = cerrado(despues.status);
+  if (ya) return ya;
+  logger.error({ contratoId, code, status: despues.status }, 'Reenvío a firma: Auco no anuló el documento anterior');
+  throw auco503();
+}
+
+/**
+ * Antes de abrir un sobre nuevo (reenvío a firma): cada envío anterior sin
+ * terminar se cierra con cerrarDocumentoAnterior y solo después se marca. Los
+ * firmantes no se tocan: el sobre nuevo los reemplaza, y en «cancelado» se
+ * leerían como un rechazo. «Cancelar contrato» sigue con
+ * cancelarSolicitudesDeContrato.
+ */
+export async function anularSobresAnteriores(contratoId: string, expedienteId: string): Promise<void> {
+  const { data, error } = await (supabase
+    .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+    .select('id, auco_document_code')
+    .eq('contrato_id', contratoId)
+    .not('estado', 'in', '("firmado","cancelado","expirado")');
+  if (error) {
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma anterior. Intenta de nuevo en un momento.');
+  }
+  for (const s of (data as Array<{ id: string; auco_document_code: string | null }> | null) ?? []) {
+    const estado = s.auco_document_code ? await cerrarDocumentoAnterior(contratoId, expedienteId, s.auco_document_code) : 'cancelado';
+    const { error: updError } = await (supabase
+      .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
+      .update({ estado, updated_at: new Date().toISOString() } as never)
+      .eq('id', s.id);
+    if (updError) {
+      logger.error({ contratoId, solicitudId: s.id, error: updError.message }, 'Reenvío a firma: no se pudo cerrar el envío anterior');
+      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo cerrar el envío a firma anterior. Intenta de nuevo.');
+    }
   }
 }
 

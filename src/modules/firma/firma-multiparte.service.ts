@@ -508,10 +508,10 @@ export async function crearSolicitudFirmaMultiparte(
   const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
   await assertPuedeAbrirSobre(contratoId, c.expediente_id, c.datos_variables);
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
-  // El sobre anterior (vencido o rechazado) se anula en Auco y se cierra antes
-  // de abrir el nuevo (contratos-firma-2).
-  const { cancelarSolicitudesDeContrato } = await import('./firma.service');
-  await cancelarSolicitudesDeContrato(contratoId);
+  // El sobre anterior se cierra antes de abrir el nuevo (contratos-firma-2): si
+  // en Auco ya estaba firmado, 409; si no se puede confirmar, 503 sin subir nada.
+  const { anularSobresAnteriores } = await import('./firma.service');
+  await anularSobresAnteriores(contratoId, c.expediente_id);
 
   // 3. Descargar PDF y subir UN documento con N firmantes
   const { data: pdfData, error: downloadError } = await supabase.storage

@@ -131,7 +131,8 @@ describe('P5: el sobre multi-parte sale con el plazo de la Adenda (no 72 horas)'
     expect(de('solicitudes_firma', 'insert')).toEqual([]);
   });
 
-  it('reenviar: el sobre anterior (vencido) se anula en Auco y se cierra ANTES de abrir el nuevo', async () => {
+  it('reenviar: el sobre anterior (vivo en Auco) se anula y se cierra ANTES de abrir el nuevo', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValueOnce({ status: 'CREATED', signProfile: [] } as never);
     prepararSobre();
     sobres([{ id: 's-viejo', estado: 'enviado', auco_document_code: 'DOC-VIEJO' }]);
     await crearSolicitudFirmaMultiparte('c1', 'u1');
