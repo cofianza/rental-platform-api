@@ -1233,15 +1233,17 @@ export async function handleAucoWebhook(payload: AucoWebhookPayload) {
     return;
   }
 
-  // Multi-parte (M1): si el contrato tiene firmantes registrados, el estado por
-  // parte vive en contrato_firmantes. Actualizamos DIRECTO desde el PAYLOAD del
-  // webhook (signer + status) — NO por poll a getDocumentStatus, que en stage
-  // devuelve 401 y dejaba el panel congelado en "0/3". NOTIFICATION(+signer) =
-  // ese firmante firmó; FINISH = todas firmaron.
+  // Multi-parte (M1): si ESTE sobre tiene firmantes registrados (no otro del
+  // mismo contrato), el estado por parte vive en contrato_firmantes.
+  // Actualizamos DIRECTO desde el PAYLOAD del webhook (signer + status) — NO
+  // por poll a getDocumentStatus, que en stage devuelve 401 y dejaba el panel
+  // congelado en "0/3". NOTIFICATION(+signer) = ese firmante firmó; FINISH =
+  // todas firmaron.
   const { data: cfRows } = await (supabase
     .from('contrato_firmantes' as string) as ReturnType<typeof supabase.from>)
     .select('id')
     .eq('contrato_id', row.contrato_id)
+    .eq('solicitud_firma_id', row.id)
     .limit(1);
   if (cfRows && (cfRows as unknown[]).length > 0) {
     const { reconciliarFirmantesPorWebhook } = await import('./firma-multiparte.service');

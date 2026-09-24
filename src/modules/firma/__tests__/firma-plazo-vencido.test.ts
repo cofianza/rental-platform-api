@@ -181,6 +181,14 @@ describe('contratos-firma-2: el sobre vencido o rechazado deja de estar activo',
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'op-1', tipo: 'firma.bloqueada', link: '/contratos/c1' }));
   });
 
+  it('el webhook decide «multi-parte» por los firmantes del sobre del evento, no por los del contrato', async () => {
+    enqueue('solicitudes_firma', { data: { id: 's-viejo', contrato_id: 'c1', estado: 'enviado', nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
+    await handleAucoWebhook({ code: 'DOC-VIEJO', name: 'x', status: 'NOTIFICATION' });
+    const deteccion = ops.filter((o) => o.table === 'contrato_firmantes' && o.method === 'eq').map((o) => o.args);
+    expect(deteccion).toContainEqual(['contrato_id', 'c1']);
+    expect(deteccion).toContainEqual(['solicitud_firma_id', 's-viejo']);
+  });
+
   it('BLOCKED en el flujo de un firmante tampoco cancela la solicitud', async () => {
     enqueue('solicitudes_firma', { data: { id: 's1', contrato_id: 'c1', estado: 'enviado', nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
     enqueue('contrato_firmantes', { data: [], error: null });
