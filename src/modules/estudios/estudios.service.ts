@@ -21,7 +21,7 @@ import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
 import { resolveAllowedExpedienteIds, perfilEsDuenoDeInmueble, assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
-import { descargarCertificado } from './certificado.service';
+import { decisionDeCofianza, descargarCertificado, type DecisionCofianza, type ExpedienteDecision } from './certificado.service';
 // Motor de scorecard V4.1. Sigue en SOMBRA para todo el scorecard (puntajes,
 // umbrales 85/70, resto de reglas duras): calcula y guarda en paralelo lo que
 // la politica HABRIA decidido. registrarScorecardSombra es best-effort y no
@@ -249,7 +249,8 @@ export async function listEstudios(
   // listado POR EXPEDIENTE (pocas filas): la ruta va fila a fila y la
   // expiracion con UNA lectura de la autorizacion del titular para todas.
   const filas = (data || []) as unknown as Record<string, unknown>[];
-  const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila, expediente as ExpedienteDecision)));
+  const decision = await decisionDeCofianza(expediente as ExpedienteDecision);
+  const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila, decision)));
   const conDerivados = await adjuntarExpiracionALista(conRuta, expedienteId, autorizacion);
 
   return {
@@ -532,11 +533,11 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
   const row = data as unknown as Record<string, unknown>;
   const exp = row.resultado === 'condicionado'
     ? ((await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
-        .select('estado, estado_pre_cancelacion')
+        .select('id, estado, estado_pre_cancelacion')
         .eq('id', row.expediente_id as string)
         .maybeSingle()) as { data: ExpedienteDecision | null }).data
     : null;
-  const conRuta = await adjuntarRuta(row, exp);
+  const conRuta = await adjuntarRuta(row, exp ? await decisionDeCofianza(exp) : undefined);
   const conDerivados = await adjuntarExpiracion(conRuta);
 
   // Mismo criterio que en los listados: al prospecto no le viajan ni el motivo
@@ -624,21 +625,19 @@ function veredictoExpiracion(
   });
 }
 
-type ExpedienteDecision = { estado: string | null; estado_pre_cancelacion: string | null };
-
 /**
  * El analista decide un condicionado del TITULAR cambiando solo el estado del
  * expediente (aprobarCondicionado / transicionar_expediente): `estudios.resultado`
  * se queda en 'condicionado' y la tarjeta del prospecto seguía en "Estamos
- * revisando tu solicitud" con el caso ya aprobado o negado. Mismo criterio que
- * `resultadoEfectivo` del CRC. `cerrado` solo cuenta como negado si venía de
- * 'rechazado': un aprobado que luego se cierra no es "no aprobable".
+ * revisando tu solicitud" con el caso ya aprobado o negado. La decisión sale de
+ * decisionDeCofianza, la misma regla del CRC. Cerrado sin aprobarse no es
+ * "no aprobable": una cancelación no es un rechazo.
  */
-function resultadoEfectivo(row: Record<string, unknown>, exp?: ExpedienteDecision | null): EntradaRuta['resultadoVigente'] {
+function resultadoEfectivo(row: Record<string, unknown>, decision?: DecisionCofianza): EntradaRuta['resultadoVigente'] {
   const r = (row.resultado as EntradaRuta['resultadoVigente'] | null) ?? 'pendiente';
-  if (r !== 'condicionado' || !exp || row.tipo === 'con_coarrendatario') return r;
-  if (exp.estado === 'aprobado') return 'aprobado';
-  if (exp.estado === 'rechazado' || (exp.estado === 'cerrado' && exp.estado_pre_cancelacion === 'rechazado')) return 'rechazado';
+  if (r !== 'condicionado' || !decision || row.tipo === 'con_coarrendatario') return r;
+  if (decision === 'aprobado') return 'aprobado';
+  if (decision === 'negado') return 'rechazado';
   return r;
 }
 
@@ -669,8 +668,8 @@ function resultadoEfectivo(row: Record<string, unknown>, exp?: ExpedienteDecisio
  */
 async function adjuntarRuta<T extends Record<string, unknown>>(
   row: T,
-  /** El expediente del estudio: con él un condicionado ya decidido deja de verse "en revisión". */
-  exp?: ExpedienteDecision | null,
+  /** Lo que decidió Cofianza (decisionDeCofianza): con ello un condicionado ya decidido deja de verse "en revisión". */
+  decision?: DecisionCofianza,
 ): Promise<T & { ruta: Ruta }> {
   let puntaje: number | null = null;
   const cal = await getCalibracion();
@@ -692,7 +691,7 @@ async function adjuntarRuta<T extends Record<string, unknown>>(
   const reglas = row.regla_dura_activada;
   const ruta = resolverRuta({
     puntaje,
-    resultadoVigente: resultadoEfectivo(row, exp),
+    resultadoVigente: resultadoEfectivo(row, decision),
     reglaDuraActivada: Array.isArray(reglas) ? reglas.length > 0 : Boolean(reglas),
     // El coarrendatario se evalua en su propio estudio hijo. Se resuelve con el
     // `tipo` que ya viaja en la fila: 'con_coarrendatario' significa que este

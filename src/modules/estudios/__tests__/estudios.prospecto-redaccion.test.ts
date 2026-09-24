@@ -127,6 +127,31 @@ describe('estudios del expediente vistos por el titular', () => {
   });
 });
 
+// La tarjeta y el CRC leen la decisión de Cofianza con la misma regla
+// (decisionDeCofianza): no se contradicen.
+describe('la decisión de Cofianza en la tarjeta', () => {
+  const condicionado = { ...fila('individual'), resultado: 'condicionado' };
+  const ruta = async () => ((await getEstudioById('est-1', 'u-1', 'operador_analista')) as { ruta: { ruta: string } }).ruta.ruta;
+
+  it('un condicionado aprobado y después cerrado se ve aprobado, como en el certificado', async () => {
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, error: null });
+    expect(await ruta()).toBe('perfil_medio');
+  });
+
+  it('cerrado sin marca: aprobado solo con la prueba del cierre natural', async () => {
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'cerrado', estado_pre_cancelacion: null }, error: null });
+    enqueue('contratos', { data: [{ id: 'k-1' }], error: null });
+    expect(await ruta()).toBe('perfil_medio');
+
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'cerrado', estado_pre_cancelacion: null }, error: null });
+    enqueue('eventos_timeline', { data: [{ estado_anterior: 'rechazado' }], error: null });
+    expect(await ruta()).toBe('no_aprobable');
+  });
+});
+
 describe('las demas rutas por id que el titular alcanza', () => {
   // El 404 del guard, no el de "no hay certificado".
   const OCULTO = { statusCode: 404, errorCode: 'ESTUDIO_NOT_FOUND' };

@@ -657,7 +657,7 @@ export async function generarCertificado(
   await assertExpedienteAccess(e.expediente_id as string, userId, userRol);
 
   // 2. Validate
-  assertCertificable(e);
+  const decision = await assertCertificable(e);
 
   // 2.b VIGENCIA DEL ESTUDIO — el guard que faltaba.
   //
@@ -745,7 +745,7 @@ export async function generarCertificado(
   const fechaVencimiento = new Date(inicioVigenciaMs + validezMs).toISOString();
 
   // 6. Generate PDF: el completo y, con los mismos datos, el de los firmantes.
-  const pdfData = await datosDelCrc(e, { codigo, fecha_emision: fechaEmision, fecha_vencimiento: fechaVencimiento });
+  const pdfData = await datosDelCrc(e, { codigo, fecha_emision: fechaEmision, fecha_vencimiento: fechaVencimiento }, decision);
 
   const pdfBuffer = await generateCertificatePdf(pdfData, qrBuffer);
   const pdfFirmantes = await generateCertificatePdf(sinPuntaje(pdfData), qrBuffer);
@@ -838,30 +838,68 @@ export async function generarCertificado(
   };
 }
 
-type ExpedienteDecision = { estado?: unknown; estado_pre_cancelacion?: unknown } | null | undefined;
+// ============================================================
+// Decision de Cofianza sobre el caso
+// ============================================================
+
+/** Lo que hace falta del expediente para saber que decidio Cofianza. */
+export type ExpedienteDecision = { id: string; estado: string | null; estado_pre_cancelacion: string | null };
 
 /**
- * Cofianza aprobó el caso: el expediente está aprobado o se cerró desde
- * aprobado. Un cierre sin estado previo es el natural (contrato firmado), que
- * exige la aprobación. Lo usan el PDF y /verificar, que deben decir lo mismo.
- *
- * ponytail: si falla la marca de una cancelación (executeTransition deja un
- * warn), ese cierre se lee como natural. Si pasa, decidir con el contrato
- * firmado (tieneContratoFirmado en expediente-workflow).
+ * Que decidio Cofianza sobre el caso, leido del expediente. Una sola regla para
+ * el CRC (PDF, compuertas y /verificar) y la tarjeta del estudio (resultadoEfectivo
+ * de estudios.service), para que no se contradigan:
+ *   aprobado     el expediente esta aprobado o se cerro desde aprobado;
+ *   negado       rechazado, o cerrado desde rechazado;
+ *   sin_aprobar  cerrado desde otro estado (cancelado en revision) o sin prueba
+ *                de desde donde;
+ *   en_curso     cualquier otro.
  */
-function aprobadoPorCofianza(exp: ExpedienteDecision): boolean {
-  return exp?.estado === 'cerrado'
-    ? (exp.estado_pre_cancelacion ?? 'aprobado') === 'aprobado'
-    : exp?.estado === 'aprobado';
+export type DecisionCofianza = 'aprobado' | 'negado' | 'sin_aprobar' | 'en_curso';
+
+export async function decisionDeCofianza(exp: ExpedienteDecision | null | undefined): Promise<DecisionCofianza> {
+  if (exp?.estado === 'aprobado') return 'aprobado';
+  if (exp?.estado === 'rechazado') return 'negado';
+  if (!exp || exp.estado !== 'cerrado') return 'en_curso';
+  const previo = exp.estado_pre_cancelacion ?? (await estadoAntesDelCierre(exp.id));
+  return previo === 'aprobado' ? 'aprobado' : previo === 'rechazado' ? 'negado' : 'sin_aprobar';
+}
+
+/** P32: el certificado es autentico, pero ya no respalda ningun arrendamiento. */
+export function quedoSinEfecto(decision: DecisionCofianza): boolean {
+  return decision === 'negado' || decision === 'sin_aprobar';
 }
 
 /**
- * P32: el caso terminó (negado o cerrado) sin que Cofianza lo aprobara. El
- * certificado es auténtico, pero ya no respalda ningún arrendamiento:
- * /verificar lo dice y assertCertificable no genera ninguna versión nueva.
+ * Desde que estado se cerro un expediente sin la marca: estado_pre_cancelacion
+ * va en un UPDATE aparte del RPC (si falla, no queda) y el cierre natural no la
+ * pone. Sin prueba positiva no es aprobado. Valen un contrato firmado (exige el
+ * estudio aprobado; mismo criterio que tieneContratoFirmado) o el paso a
+ * 'cerrado' que transicionar_expediente escribe en el timeline en la misma
+ * transaccion. Un error de lectura se lanza: con null, un caso aprobado saldria
+ * sin efecto en un documento publico por un fallo de la base.
  */
-function quedoSinEfecto(exp: ExpedienteDecision): boolean {
-  return (exp?.estado === 'rechazado' || exp?.estado === 'cerrado') && !aprobadoPorCofianza(exp);
+async function estadoAntesDelCierre(expedienteId: string): Promise<string | null> {
+  const [contrato, cierre] = await Promise.all([
+    (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('expediente_id', expedienteId)
+      .in('estado', ['firmado', 'vigente', 'finalizado'])
+      .limit(1),
+    (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .select('estado_anterior')
+      .eq('expediente_id', expedienteId)
+      .eq('tipo', 'estado')
+      .eq('estado_nuevo', 'cerrado')
+      .limit(1),
+  ]);
+  const error = contrato.error ?? cierre.error;
+  if (error) {
+    logger.error({ expedienteId, error: error.message }, 'CRC: no se pudo leer desde donde se cerro el estudio');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el estado del estudio. Intenta de nuevo en un momento.');
+  }
+  if ((contrato.data as unknown[] | null)?.length) return 'aprobado';
+  return (cierre.data as { estado_anterior: string | null }[] | null)?.[0]?.estado_anterior ?? null;
 }
 
 /**
@@ -869,7 +907,7 @@ function quedoSinEfecto(exp: ExpedienteDecision): boolean {
  * generan a demanda: con el estudio de hoy pendiente, rechazado, negado por el
  * analista o cerrado sin aprobarse, regenerar imprimiria un resultado que ya no es.
  */
-function assertCertificable(e: Record<string, unknown>): void {
+async function assertCertificable(e: Record<string, unknown>): Promise<DecisionCofianza> {
   // Los datos de la persona salen del expediente (el titular): con la fila del
   // co-arrendatario salia un CRC a nombre del titular con el resultado y el
   // score de otra persona, verificable por QR.
@@ -891,9 +929,12 @@ function assertCertificable(e: Record<string, unknown>): void {
   // El analista niega un condicionado cambiando solo el expediente: el estudio
   // se queda 'condicionado'. Negado o cerrado sin aprobarse, el certificado
   // quedó sin efecto (P32): un PDF nuevo contradiría a /verificar.
-  if (quedoSinEfecto(e.expedientes as ExpedienteDecision)) {
+  const exp = e.expedientes as Omit<ExpedienteDecision, 'id'> | null;
+  const decision = await decisionDeCofianza(exp && { ...exp, id: e.expediente_id as string });
+  if (quedoSinEfecto(decision)) {
     throw AppError.conflict('Este certificado quedó sin efecto: el estudio no se aprobó.', 'ESTUDIO_NO_CERTIFICABLE');
   }
+  return decision;
 }
 
 /** Deep join: estudio → expediente → solicitante + inmueble. */
@@ -922,12 +963,14 @@ async function leerEstudioCrc(estudioId: string): Promise<Record<string, unknown
 }
 
 /**
- * Lo que imprime el CRC, del estudio leido con leerEstudioCrc. Lo usan la
- * emision y la version para firmantes que se genera a demanda.
+ * Lo que imprime el CRC, del estudio leido con leerEstudioCrc y la decision que
+ * devolvio assertCertificable. Lo usan la emision y las versiones reducidas que
+ * se generan a demanda.
  */
 async function datosDelCrc(
   e: Record<string, unknown>,
   cert: { codigo: string; fecha_emision: string; fecha_vencimiento: string },
+  decision: DecisionCofianza,
 ): Promise<CertificatePdfData> {
   const estudioId = e.id as string;
   const expediente = e.expedientes as Record<string, unknown> | null;
@@ -957,10 +1000,10 @@ async function datosDelCrc(
   // (analista en revision manual, o ponderacion con coarrendatario) se
   // certifica como aprobado: un CRC que diga CONDICIONADO / "en revision"
   // sobre un contrato que Cofianza ya respalda es un documento que miente.
-  // También después de cerrarse: la versión del arrendatario se genera cuando
-  // la pide, y puede ser con el contrato ya firmado.
+  // También después de cerrarse (decisionDeCofianza): una versión reducida
+  // puede generarse con el contrato ya firmado.
   const resultadoEfectivo: 'aprobado' | 'condicionado' =
-    e.resultado === 'condicionado' && aprobadoPorCofianza(expediente) ? 'aprobado' : (e.resultado as 'aprobado' | 'condicionado');
+    e.resultado === 'condicionado' && decision === 'aprobado' ? 'aprobado' : (e.resultado as 'aprobado' | 'condicionado');
   const umbrales = {
     aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
     zonaGris: cal.UMBRAL_ZONA_GRIS,
@@ -1155,8 +1198,8 @@ async function crcReducido(cert: CertGuardado, version: VersionReducida): Promis
   if (data) return { key, pdf: Buffer.from(await data.arrayBuffer()) };
 
   const e = await leerEstudioCrc(cert.estudio_id);
-  assertCertificable(e);
-  const datos = await datosDelCrc(e, cert);
+  const decision = await assertCertificable(e);
+  const datos = await datosDelCrc(e, cert, decision);
   const reducido = version === 'firmantes' ? sinPuntaje(datos) : paraArrendatario(datos);
   const pdf = await generateCertificatePdf(reducido, await generateQrCode(`${env.FRONTEND_URL}/verificar/${cert.codigo}`));
   // Sin upsert: si ya existia (una lectura que fallo), no se pisa; se reintenta.
@@ -1241,7 +1284,7 @@ export async function verificarCertificado(codigo: string) {
     .select(`
       codigo, fecha_emision, fecha_vencimiento,
       estudios!estudios_certificados_estudio_id_fkey(
-        resultado,
+        resultado, expediente_id,
         expedientes!estudios_expediente_id_fkey(
           estado, estado_pre_cancelacion,
           solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, numero_documento)
@@ -1276,12 +1319,13 @@ export async function verificarCertificado(codigo: string) {
   // Mismo criterio que el PDF (ver resultadoEfectivo en datosDelCrc): un
   // condicionado que Cofianza aprobó se verifica como aprobado.
   const resultadoEstudio = (estudio?.resultado as string) || '';
-  const resultadoVerificado =
-    resultadoEstudio === 'condicionado' && aprobadoPorCofianza(expediente) ? 'aprobado' : resultadoEstudio;
+  const exp = expediente as Omit<ExpedienteDecision, 'id'> | null;
+  const decision = await decisionDeCofianza(exp && { ...exp, id: estudio?.expediente_id as string });
+  const resultadoVerificado = resultadoEstudio === 'condicionado' && decision === 'aprobado' ? 'aprobado' : resultadoEstudio;
   // P32: el CRC «en revisión» de un estudio que Cofianza negó, o que se cerró
   // sin aprobarse, es auténtico pero ya no respalda ningún arrendamiento. Misma
   // regla que assertCertificable: de un certificado sin efecto no sale otro PDF.
-  const sinEfecto = quedoSinEfecto(expediente);
+  const sinEfecto = quedoSinEfecto(decision);
   const status = sinEfecto
     ? 'sin_efecto'
     : new Date() <= new Date(c.fecha_vencimiento as string)

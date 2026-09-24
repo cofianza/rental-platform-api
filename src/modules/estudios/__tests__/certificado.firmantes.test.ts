@@ -18,7 +18,7 @@ const { queues, enqueue, mockFrom, storage, archivos } = vi.hoisted(() => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'like', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'in', 'like', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) chain[m] = () => chain;
@@ -458,8 +458,14 @@ describe('quién recibe cuál', () => {
   // el estado del que venía. Un condicionado que Cofianza aprobó sigue
   // aprobado en la versión que se genera después, igual que en /verificar.
   it('la del arrendatario pedida con el estudio ya cerrado conserva la aprobación de Cofianza', async () => {
-    for (const pre of [null, 'aprobado']) {
+    const casos: Array<[string | null, () => void]> = [
+      ['aprobado', () => undefined],
+      // Sin marca, con la prueba del cierre natural: el contrato firmado.
+      [null, () => enqueue('contratos', { data: [{ id: 'k-1' }], error: null })],
+    ];
+    for (const [pre, prueba] of casos) {
       textos.mockClear();
+      prueba();
       const expedientes = { ...ESTUDIO.expedientes, estado: 'cerrado', estado_pre_cancelacion: pre };
       enqueue('estudios', { data: { ...ESTUDIO, resultado: 'condicionado', expedientes }, error: null });
       await crcParaArrendatario({ ...CERT, pdf_storage_key: `estudios/est-1/certificado/cierre-${pre}.pdf` });
@@ -533,6 +539,7 @@ describe('verificación pública', () => {
       fecha_vencimiento: vence,
       estudios: {
         resultado,
+        expediente_id: 'exp-1',
         expedientes: {
           solicitantes: { nombre: 'Ana María', apellido: 'Pérez Gómez', numero_documento: '1026130143' },
           inmuebles: { direccion: 'Calle 1 # 2-3', ciudad: 'Medellín' },
@@ -581,10 +588,11 @@ describe('verificación pública', () => {
       [{ estado: 'aprobado', estado_pre_cancelacion: null }, 'aprobado'],
       // Aprobado y después cancelado (la persona desistió): el CRC aprobado sigue.
       [{ estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, 'aprobado'],
-      // El contrato firmado cierra el estudio sin estado previo.
-      [{ estado: 'cerrado', estado_pre_cancelacion: null }, 'aprobado'],
+      // El contrato firmado cierra el estudio sin estado previo (con la prueba).
+      [{ estado: 'cerrado', estado_pre_cancelacion: null, contrato: true }, 'aprobado'],
     ];
-    for (const [exp, resultado] of casos) {
+    for (const [{ contrato, ...exp }, resultado] of casos) {
+      if (contrato) enqueue('contratos', { data: [{ id: 'k-1' }], error: null });
       enqueue('estudios_certificados', fila(exp, 'condicionado'));
       expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vigente', resultado });
     }
@@ -599,20 +607,46 @@ describe('verificación pública', () => {
       [{ estado: 'cerrado', estado_pre_cancelacion: 'rechazado' }, true],
       [{ estado: 'cerrado', estado_pre_cancelacion: 'condicionado' }, true],
       [{ estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, false],
-      [{ estado: 'cerrado', estado_pre_cancelacion: null }, false],
+      [{ estado: 'cerrado', estado_pre_cancelacion: null }, true],
+      [{ estado: 'cerrado', estado_pre_cancelacion: null, contrato: true }, false],
       [{ estado: 'aprobado', estado_pre_cancelacion: null }, false],
       [{ estado: 'condicionado', estado_pre_cancelacion: null }, false],
     ];
-    for (const [exp, sinEfecto] of casos) {
+    for (const [{ contrato, ...exp }, sinEfecto] of casos) {
+      if (contrato) enqueue('contratos', { data: [{ id: 'k-1' }], error: null }, { data: [{ id: 'k-1' }], error: null });
       enqueue('estudios_certificados', fila(exp, 'condicionado'));
       expect((await verificarCertificado(CODIGO)).status === 'sin_efecto').toBe(sinEfecto);
 
       const expedientes = { ...ESTUDIO.expedientes, ...exp };
       enqueue('estudios', { data: { ...ESTUDIO, resultado: 'condicionado', expedientes }, error: null });
-      const generar = crcParaArrendatario({ ...CERT, pdf_storage_key: `estudios/est-1/certificado/${String(exp.estado)}-${String(exp.estado_pre_cancelacion)}.pdf` });
+      const generar = crcParaArrendatario({ ...CERT, pdf_storage_key: `estudios/est-1/certificado/${String(exp.estado)}-${String(exp.estado_pre_cancelacion)}-${String(contrato)}.pdf` });
       if (sinEfecto) await expect(generar).rejects.toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_CERTIFICABLE' });
       else await expect(generar).resolves.toMatchObject({ key: expect.stringContaining('-arrendatario.pdf') });
     }
+  });
+
+  // La marca va en un UPDATE aparte del RPC: si falla, un caso cancelado o
+  // negado no puede salir «Válido — Aprobado» en un documento público.
+  it('cerrado sin marca: aprobado solo con prueba positiva (contrato firmado o el paso a cerrado del RPC)', async () => {
+    const CERRADO = { estado: 'cerrado', estado_pre_cancelacion: null };
+    const casos: Array<[string, () => void, string]> = [
+      ['sin prueba', () => undefined, 'sin_efecto'],
+      ['contrato firmado', () => enqueue('contratos', { data: [{ id: 'k-1' }], error: null }), 'valido_vigente'],
+      ['RPC desde aprobado', () => enqueue('eventos_timeline', { data: [{ estado_anterior: 'aprobado' }], error: null }), 'valido_vigente'],
+      ['RPC desde revisión', () => enqueue('eventos_timeline', { data: [{ estado_anterior: 'condicionado' }], error: null }), 'sin_efecto'],
+      ['RPC desde rechazado', () => enqueue('eventos_timeline', { data: [{ estado_anterior: 'rechazado' }], error: null }), 'sin_efecto'],
+    ];
+    for (const [nombre, prueba, status] of casos) {
+      prueba();
+      enqueue('estudios_certificados', fila(CERRADO, 'condicionado'));
+      expect(await verificarCertificado(CODIGO), nombre).toMatchObject({ status });
+    }
+  });
+
+  it('si no se puede leer cómo se cerró, no publica nada: 503', async () => {
+    enqueue('contratos', { data: null, error: { message: 'canceling statement due to statement timeout' } });
+    enqueue('estudios_certificados', fila({ estado: 'cerrado', estado_pre_cancelacion: null }, 'condicionado'));
+    await expect(verificarCertificado(CODIGO)).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
   });
 
   it('vencido y no encontrado', async () => {
