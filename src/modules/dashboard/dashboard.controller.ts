@@ -56,16 +56,6 @@ export async function getMisInmuebles(req: Request, res: Response) {
   sendSuccess(res, data);
 }
 
-// Pagos a Cofianza (inmobiliaria) — comisión por contrato del propio aliado.
-export async function getMisPagosCofianza(req: Request, res: Response) {
-  if (!req.user) {
-    res.status(401).json({ success: false, message: 'Autenticacion requerida' });
-    return;
-  }
-  const data = await dashboardService.getMisPagosCofianza(req.user.id);
-  sendSuccess(res, data);
-}
-
 // Analítica de cartera (inmobiliaria) — salud + desempeño de estudios.
 export async function getMiCarteraAnalitica(req: Request, res: Response) {
   if (!req.user) {

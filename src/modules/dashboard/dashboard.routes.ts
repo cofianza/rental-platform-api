@@ -31,13 +31,6 @@ router.get(
   controller.getMisInmuebles,
 );
 
-// Pagos a Cofianza — comisión por contrato del aliado (inmobiliaria).
-router.get(
-  '/mis-pagos-cofianza',
-  roleGuard(['inmobiliaria', 'administrador', 'operador_analista']),
-  controller.getMisPagosCofianza,
-);
-
 // Analítica de cartera del aliado (inmobiliaria).
 router.get(
   '/mi-cartera-analitica',
