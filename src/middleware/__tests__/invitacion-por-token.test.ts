@@ -7,10 +7,10 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@/config', () => ({ env: { NODE_ENV: 'production', RATE_LIMIT_MAX: 300 } }));
 
-import { invitacionPorTokenLimiter } from '../rateLimiter';
+import { invitacionPorTokenLimiter, reenvioCoarrendatarioLimiter } from '../rateLimiter';
 import { invitarCoarrendatarioPublicoSchema } from '@/modules/coarrendatarios/coarrendatarios.schema';
 
-async function invitar(token: string) {
+async function llamar(limiter: typeof invitacionPorTokenLimiter, params: Record<string, string>) {
   const res = {
     headersSent: false,
     writableEnded: false,
@@ -25,9 +25,10 @@ async function invitar(token: string) {
     send: vi.fn(),
   };
   const next = vi.fn();
-  await invitacionPorTokenLimiter({ params: { token }, ip: '1.1.1.1', headers: {} } as never, res as never, next);
+  await limiter({ params, ip: '1.1.1.1', headers: {} } as never, res as never, next);
   return { res, next };
 }
+const invitar = (token: string) => llamar(invitacionPorTokenLimiter, { token });
 
 describe('invitacionPorTokenLimiter', () => {
   it('3 invitaciones por enlace al día; la 4.ª es 429 y otro enlace sigue libre', async () => {
@@ -40,6 +41,19 @@ describe('invitacionPorTokenLimiter', () => {
     expect(cuarta.res.send).toHaveBeenCalledWith(expect.objectContaining({ errorCode: 'RATE_LIMIT_EXCEEDED' }));
 
     expect((await invitar('b'.repeat(64))).next).toHaveBeenCalled();
+  });
+});
+
+describe('reenvioCoarrendatarioLimiter', () => {
+  it('5 reenvíos por estudio al día; el 6.º es 429 y otro estudio sigue libre', async () => {
+    const reenviar = (id: string) => llamar(reenvioCoarrendatarioLimiter, { id });
+    for (let i = 0; i < 5; i++) expect((await reenviar('exp-1')).next).toHaveBeenCalled();
+
+    const sexto = await reenviar('exp-1');
+    expect(sexto.next).not.toHaveBeenCalled();
+    expect(sexto.res.statusCode).toBe(429);
+
+    expect((await reenviar('exp-2')).next).toHaveBeenCalled();
   });
 });
 

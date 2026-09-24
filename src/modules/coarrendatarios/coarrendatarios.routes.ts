@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
-import { publicFormLimiter } from '@/middleware/rateLimiter';
+import { publicFormLimiter, reenvioCoarrendatarioLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from '../expedientes/expedientes.schema';
 import {
@@ -25,12 +25,13 @@ expedienteCoarrendatariosRouter.post(
 );
 
 // POST /api/v1/expedientes/:id/coarrendatario/reenviar — reenviar la invitación
-// pendiente, corrigiendo email/teléfono si venían mal escritos.
+// pendiente, corrigiendo lo que venía mal escrito. Con su propio tope por estudio.
 expedienteCoarrendatariosRouter.post(
   '/:id/coarrendatario/reenviar',
   authMiddleware,
   roleGuard(['solicitante', 'propietario', 'inmobiliaria', 'administrador', 'operador_analista']),
   validate({ params: expedienteIdParamsSchema, body: reenviarCoarrendatarioSchema }),
+  reenvioCoarrendatarioLimiter,
   controller.reenviar,
 );
 

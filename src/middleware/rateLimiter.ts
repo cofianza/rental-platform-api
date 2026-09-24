@@ -181,6 +181,25 @@ export const invitacionPorTokenLimiter = rateLimit({
   },
 });
 
+/**
+ * Reenviar la invitación del co-arrendatario desde el panel: máx 5 al día por
+ * estudio. Cada reenvío manda correo y WhatsApp y puede cambiar a quién (correo,
+ * teléfono o nombre), así que tiene su propio tope, aparte del de invitaciones.
+ */
+export const reenvioCoarrendatarioLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => `reenvio-coarrendatario:${(req.params as { id?: string })?.id ?? req.ip ?? 'unknown'}`,
+  validate: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Ya reenviaste varias veces esta invitación hoy. Inténtalo de nuevo mañana.',
+  },
+});
+
 /** Verificación de OTP: máx 8 por 15 min para un mismo enlace (anti fuerza bruta). */
 export const otpVerifyByTokenLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
