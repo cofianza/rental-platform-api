@@ -2221,6 +2221,23 @@ export async function ejecutarEstudio(
     );
   }
 
+  // 1.5b. P3: la evaluación del co-arrendatario solo corre con el estudio en
+  //       revisión (condicionado). Decidido el caso, reintentarla consultaría el
+  //       buró de un tercero sin finalidad (Ley 1581).
+  if (est.tipo === 'con_coarrendatario') {
+    const { data: expEstado } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('estado')
+      .eq('id', est.expediente_id)
+      .maybeSingle();
+    if ((expEstado as { estado?: string } | null)?.estado !== 'condicionado') {
+      throw AppError.conflict(
+        'El estudio ya se resolvió: la evaluación del co-arrendatario ya no se ejecuta.',
+        'COARRENDATARIO_ESTUDIO_NO_VIGENTE',
+      );
+    }
+  }
+
   // 1.6. TOPE DE CANON — flujo §4.4.
   //
   //      Última barrera antes del buró, y la que cubre los caminos que no
