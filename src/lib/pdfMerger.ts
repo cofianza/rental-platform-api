@@ -15,22 +15,25 @@ import { logger } from '@/lib/logger';
  * Concatena varios PDFs respetando el orden del array.
  * Cada buffer debe ser un PDF binario valido. Si alguno falla en parse,
  * se omite y se loggea warning — el resultado sigue siendo valido aunque
- * incompleto.
+ * incompleto. Tambien acepta documentos ya cargados con pdf-lib, para no
+ * volver a parsear lo que el caller ya leyo.
  *
  * `estricto` invierte eso y relanza: lo usa el sobre de firma de contratos V3,
  * donde perder en silencio el contrato de la inmobiliaria o el CRC seria grave.
  */
-export async function mergePdfs(buffers: Buffer[], o?: { estricto?: boolean }): Promise<Buffer> {
+export async function mergePdfs(buffers: Array<Buffer | PDFDocument>, o?: { estricto?: boolean }): Promise<Buffer> {
   if (buffers.length === 0) {
     throw new Error('mergePdfs: no se recibieron buffers para concatenar');
   }
-  if (buffers.length === 1) return buffers[0];
+  const [unico] = buffers;
+  if (buffers.length === 1 && Buffer.isBuffer(unico)) return unico;
 
   const merged = await PDFDocument.create();
 
   for (let i = 0; i < buffers.length; i++) {
     try {
-      const src = await PDFDocument.load(buffers[i]);
+      const b = buffers[i];
+      const src = b instanceof PDFDocument ? b : await PDFDocument.load(b);
       const pages = await merged.copyPages(src, src.getPageIndices());
       pages.forEach((p) => merged.addPage(p));
     } catch (err) {

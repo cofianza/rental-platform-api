@@ -1896,7 +1896,12 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     enqueue('contrato_partes', OK, OK);
     enqueue('contratos', { data: [{ id: CTO }], error: null });
     vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO } as never);
+    const load = vi.spyOn(PDFDocument, 'load');
     await enviarAFirma(EXP, { generacion: doc.generacion, propioSha256: sha, firmasHuella: huellaMarcas(firmas) }, USER, ROL);
+    // El PDF propio se lee una sola vez: para unirlo, contar sus páginas y congelar su geometría.
+    const esPropio = (b: unknown) => Buffer.isBuffer(b) && b.equals(propioPdf);
+    expect(load.mock.calls.filter(([b]) => esPropio(b))).toHaveLength(1);
+    load.mockRestore();
     const upd = opsDe('contratos', 'update').at(-1)!.args[0] as { datos_variables: { documento: DocumentoV3 } };
     expect(upd.datos_variables.documento.final).toMatchObject({ ruta: 'B', paginas: [4, 2, 1], propioKey: 'propio.pdf' });
     // Las marcas y la geometría de las páginas marcadas, leídas del PDF que se firma: el reenvío usa estas.

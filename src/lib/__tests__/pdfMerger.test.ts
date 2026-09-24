@@ -36,6 +36,15 @@ describe('mergePdfs', () => {
     expect((await PDFDocument.load(out)).getPageCount()).toBe(5);
   });
 
+  it('acepta documentos ya cargados con pdf-lib, mezclados con buffers, sin volver a leerlos', async () => {
+    const cargado = await PDFDocument.load(await pdf(2));
+    const load = vi.spyOn(PDFDocument, 'load');
+    const out = await mergePdfs([cargado, await pdf(3)], { estricto: true });
+    expect(load).toHaveBeenCalledTimes(1); // solo el buffer
+    load.mockRestore();
+    expect((await PDFDocument.load(out)).getPageCount()).toBe(5);
+  });
+
   it('sin `estricto` sigue omitiendo el PDF ilegible (flujo anterior)', async () => {
     const out = await mergePdfs([await pdf(2), Buffer.from('no soy un pdf'), await pdf(1)]);
     expect((await PDFDocument.load(out)).getPageCount()).toBe(3);

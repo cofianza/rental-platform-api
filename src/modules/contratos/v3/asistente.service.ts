@@ -1576,10 +1576,6 @@ function difiereDeVistaPrevia(d: DatosVivienda, doc: DocumentoV3, logo: string |
   return !isDeepStrictEqual(sinFecha(d), sinFecha(doc.entrada)) || (logo ?? null) !== (doc.logoStorageKey ?? null);
 }
 
-async function paginasDe(pdf: Buffer): Promise<number> {
-  return (await PDFDocument.load(pdf)).getPageCount();
-}
-
 /**
  * Saca el contrato de borrador y lo manda a Auco. Lo que se firma es lo que se
  * revisó: se exige la vista previa vigente (misma generación y mismos datos,
@@ -1688,19 +1684,20 @@ export async function enviarAFirma(
     estudio_id: f.estudio!.id,
   });
   let piezas: Buffer[] = [final.pdf, crcPdf];
-  let firmasPropio: FirmasPropio | undefined;
   if (ruta === 'B') {
     const propioPdf = await bajar(propio!.key, 'el contrato de la inmobiliaria');
     if (sha256(propioPdf) !== propio!.sha256)
       throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
     piezas = [propioPdf, final.pdf, crcPdf];
-    // Va primero en el PDF unido: sus páginas conservan el número.
-    firmasPropio = congelarFirmas(await PDFDocument.load(propioPdf), marcasVigentes(propio!, f));
   }
-  const unido = await mergePdfs(piezas, { estricto: true });
+  // Cada pieza se lee una sola vez con pdf-lib: para unir, contar páginas y, en la B, congelar la geometría.
+  const docs = await Promise.all(piezas.map((b) => PDFDocument.load(b)));
+  // El propio va primero en el PDF unido: sus páginas conservan el número.
+  const firmasPropio: FirmasPropio | undefined = ruta === 'B' ? congelarFirmas(docs[0], marcasVigentes(propio!, f)) : undefined;
+  const unido = await mergePdfs(docs, { estricto: true });
   if (unido.length > MAX_BYTES_SOBRE)
     throw new AppError(413, 'PDF_SOBRE_DEMASIADO_GRANDE', 'El documento para firmar supera 8 MB. Reduce el PDF de la inmobiliaria.');
-  const paginas = await Promise.all(piezas.map(paginasDe));
+  const paginas = docs.map((d) => d.getPageCount());
   const keyFinal = `contratos/${expedienteId}/${v3.id}/final-${Date.now()}.pdf`;
   const { error: upError } = await supabase.storage
     .from(BUCKET)
