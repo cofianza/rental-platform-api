@@ -53,7 +53,7 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveAllowedExpedienteIds: async () => null,
 }));
 
-import { reportarMora, enviarCobrosProgramados } from '../moras.service';
+import { reportarMora, enviarCobrosProgramados, autoEscalar } from '../moras.service';
 
 const co = (fechaHora: string) => new Date(`${fechaHora}:00-05:00`);
 const INPUT = { contrato_id: 'c1', monto_mora: 1_500_000, fecha_vencimiento_canon: '2026-09-05' };
@@ -212,8 +212,40 @@ describe('enviarCobrosProgramados — el barrido de la Ley 2300', () => {
     await expect(enviarCobrosProgramados()).resolves.toBe(0);
 
     expect(mockEnviarTemplate).not.toHaveBeenCalled();
-    expect(updatesCola()).toEqual([null, co('2026-09-29T07:00').toISOString()]);
+    // Se toma con una reserva de 30 min (no null) y luego se corre a mañana.
+    expect(updatesCola()).toEqual([co('2026-09-28T08:00').toISOString(), co('2026-09-29T07:00').toISOString()]);
     expect(mensajes()).toEqual([]);
+  });
+
+  it('toma la fila con una reserva de 30 min: si la API se reinicia antes de enviar, el cobro vuelve a la cola', async () => {
+    vi.setSystemTime(co('2026-09-28T07:30'));
+    prepararBarrido({ data: [{ id: 'm1' }], error: null });
+
+    await enviarCobrosProgramados();
+
+    const [tomar, despues] = updatesCola();
+    expect(tomar).toBe(co('2026-09-28T08:00').toISOString());
+    expect(despues).toBeNull(); // salió: se limpia
+  });
+
+  it('la franja se mira con la hora de cada envío, no la de inicio del lote', async () => {
+    vi.setSystemTime(co('2026-09-28T18:59'));
+    enqueue('moras_tickets',
+      { data: [programada, { ...programada, id: 'm2', inquilino_telefono: '3009998877' }], error: null },
+      { data: [{ id: 'm1' }], error: null }, // tomar m1
+      { data: null, error: null }, // m1 sale: se limpia la cola
+      { data: [{ id: 'm2' }], error: null }, // tomar m2
+    );
+    // El primer envío tarda y el reloj pasa las 7 p. m.
+    mockEnviarTemplate.mockImplementationOnce(async () => {
+      vi.setSystemTime(co('2026-09-28T19:00'));
+      return 'aceptado';
+    });
+
+    await expect(enviarCobrosProgramados()).resolves.toBe(1);
+
+    expect(mockEnviarTemplate).toHaveBeenCalledTimes(1);
+    expect(updatesCola().at(-1)).toBe(co('2026-09-29T07:00').toISOString()); // m2, a mañana
   });
 
   it('si otra corrida ya lo tomó, no lo manda otra vez', async () => {
@@ -236,6 +268,49 @@ describe('enviarCobrosProgramados — el barrido de la Ley 2300', () => {
     expect(mensajes()[0]).toMatchObject({ via_whatsapp: false });
     expect(mensajes()[0].mensaje).toContain('falló');
     expect(mensajes()[0].mensaje).not.toMatch(/enviado|Se envió/);
+    expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'op1', tipo: 'mora.whatsapp_fallido' }));
+  });
+});
+
+describe('autoEscalar — el WhatsApp de Fase 2', () => {
+  const mora = (id: string, telefono: string) => ({
+    id, ticket_numero: `MOR-${id}`, expediente_id: 'exp1', inquilino_telefono: telefono, inquilino_nombre: 'Ana Pérez',
+    inmueble_direccion: 'Cra 7', monto_mora: 1_500_000, reportado_at: '2026-09-20T12:00:00Z', fecha_vencimiento_canon: '2026-09-05',
+  });
+
+  it('la franja se mira con la hora de cada envío, no la de inicio de la corrida', async () => {
+    vi.setSystemTime(co('2026-09-28T18:59'));
+    enqueue('moras_tickets',
+      { data: [mora('m1', '3001112233'), mora('m2', '3009998877')], error: null }, // en fase_1
+      { data: [{ id: 'm1' }], error: null }, // m1 → fase_2
+      { data: null, error: null }, // m1 sale: se limpia la cola
+      { data: [{ id: 'm2' }], error: null }, // m2 → fase_2
+      { data: null, error: null }, // m2: se programa
+      { data: [], error: null }, // nada en fase_2
+    );
+    mockEnviarTemplate.mockImplementationOnce(async () => {
+      vi.setSystemTime(co('2026-09-28T19:00'));
+      return 'aceptado';
+    });
+
+    await expect(autoEscalar()).resolves.toEqual({ aFase2: 2, aFase3: 0 });
+
+    expect(mockEnviarTemplate).toHaveBeenCalledTimes(1);
+    expect(updatesCola().at(-1)).toBe(co('2026-09-29T07:00').toISOString());
+  });
+
+  it('si falla, avisa a Cofianza como el barrido', async () => {
+    vi.setSystemTime(co('2026-09-29T10:00'));
+    enqueue('moras_tickets',
+      { data: [mora('m1', '3001112233')], error: null },
+      { data: [{ id: 'm1' }], error: null },
+      { data: null, error: null },
+      { data: [], error: null },
+    );
+    mockEnviarTemplate.mockResolvedValueOnce('fallido');
+
+    await autoEscalar();
+
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'op1', tipo: 'mora.whatsapp_fallido' }));
   });
 });

@@ -279,6 +279,25 @@ async function cobrarPorWhatsApp(m: MoraCobro, ahora = new Date()): Promise<Resu
   return { estado: env.MORAS_COBROS_PROGRAMADOS_ENABLED ? 'programado' : 'retenido', programado_para };
 }
 
+/** El WhatsApp de cobro no salió ni quedó en la cola: que Cofianza lo sepa, el caso no puede esperar en silencio. */
+async function avisarSiNoSalio(
+  m: { id: string; ticket_numero: string; inquilino_nombre: string; inmueble_direccion: string | null },
+  cobro: ResultadoCobro,
+): Promise<void> {
+  if (salioPorWhatsApp(cobro) || cobro.estado === 'programado' || cobro.estado === 'retenido') return;
+  await avisarCofianza({
+    moraId: m.id,
+    actorId: null,
+    tipo: 'mora.whatsapp_fallido',
+    titulo: `No salió el WhatsApp de cobro — ${m.ticket_numero}`,
+    mensaje: `${m.inquilino_nombre} · ${m.inmueble_direccion ?? 'inmueble'}. ${avisoWhatsApp(cobro)}`,
+  });
+}
+
+// El barrido toma la fila dejándole esta reserva y no null: si la API se
+// reinicia antes de enviar, la reserva vence y el cobro vuelve a la cola.
+const RESERVA_COBRO_MS = 30 * 60 * 1000;
+
 /**
  * Barrido de la Ley 2300: manda los WhatsApp de cobro programados que ya pueden
  * salir, con la plantilla de la fase en que esté hoy la mora. Va aparte del
@@ -300,17 +319,19 @@ export async function enviarCobrosProgramados(ahora = new Date()): Promise<numbe
 
   let enviados = 0;
   for (const m of (data ?? []) as Array<MoraCobro & { ticket_numero: string; whatsapp_programado_para: string }>) {
-    // Tomar la fila, condicionado a lo leído: dos corridas a la vez no la mandan dos veces.
+    // Tomar la fila con la reserva, condicionado a lo leído: dos corridas a la
+    // vez no la mandan dos veces.
     const { data: tomada } = await db('moras_tickets')
-      .update({ whatsapp_programado_para: null } as never)
+      .update({ whatsapp_programado_para: new Date(Date.now() + RESERVA_COBRO_MS).toISOString() } as never)
       .eq('id', m.id)
       .eq('estado', m.estado)
       .eq('whatsapp_programado_para', m.whatsapp_programado_para)
       .is('whatsapp_pausado_at', null)
       .select('id');
     if (!tomada?.length) continue;
-    // Horario y gestión del día otra vez: si no puede salir, vuelve a quedar programado.
-    const cobro = await cobrarPorWhatsApp(m, ahora);
+    // Horario (con la hora de ESTE envío, no la de inicio del lote) y gestión
+    // del día otra vez: si no puede salir, vuelve a quedar programado.
+    const cobro = await cobrarPorWhatsApp(m);
     if (cobro.estado === 'programado' || cobro.estado === 'retenido') continue;
     await agregarMensajeInterno(
       m.id,
@@ -319,18 +340,8 @@ export async function enviarCobrosProgramados(ahora = new Date()): Promise<numbe
       `WhatsApp programado de ${NOMBRE_FASE[m.estado]}: ${avisoWhatsApp(cobro)}`,
       salioPorWhatsApp(cobro),
     );
-    if (salioPorWhatsApp(cobro)) {
-      enviados++;
-      continue;
-    }
-    // No salió: que Cofianza lo sepa, el caso no puede quedar esperando en silencio.
-    await avisarCofianza({
-      moraId: m.id,
-      actorId: null,
-      tipo: 'mora.whatsapp_fallido',
-      titulo: `No salió el WhatsApp de cobro — ${m.ticket_numero}`,
-      mensaje: `${m.inquilino_nombre} · ${m.inmueble_direccion ?? 'inmueble'}. ${avisoWhatsApp(cobro)}`,
-    });
+    if (salioPorWhatsApp(cobro)) enviados++;
+    else await avisarSiNoSalio(m, cobro);
   }
   return enviados;
 }
@@ -1022,12 +1033,13 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
 
   // Fase 1 → 2 (lleva al menos 4 días en fase_1)
   const { data: aSubirF2 } = await db('moras_tickets')
-    .select('id, expediente_id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
+    .select('id, ticket_numero, expediente_id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
     .eq('estado', 'fase_1')
     .lte('reportado_at', limiteFase2)
     .limit(100) as unknown as {
       data: Array<{
         id: string;
+        ticket_numero: string;
         expediente_id: string | null;
         inquilino_telefono: string | null;
         inquilino_nombre: string;
@@ -1049,7 +1061,8 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
       .eq('estado', 'fase_1')
       .select('id') as unknown as { data: Array<{ id: string }> | null };
     if (!movida || movida.length === 0) continue;
-    const cobro = await cobrarPorWhatsApp({ ...m, estado: 'fase_2' }, ahora);
+    // La franja con la hora de este envío, no la de inicio de la corrida.
+    const cobro = await cobrarPorWhatsApp({ ...m, estado: 'fase_2' });
     await agregarMensajeInterno(
       m.id,
       'sistema',
@@ -1057,6 +1070,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
       `Escalado automático a Fase 2 (Urgencia) — 4 días sin pago. ${avisoWhatsApp(cobro)}`,
       salioPorWhatsApp(cobro),
     );
+    await avisarSiNoSalio(m, cobro);
     aFase2++;
   }
 
@@ -1090,7 +1104,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number }>
       .eq('estado', 'fase_2')
       .select('id') as unknown as { data: Array<{ id: string }> | null };
     if (!movida || movida.length === 0) continue;
-    const cobro = await cobrarPorWhatsApp({ ...m, estado: 'fase_3' }, ahora);
+    const cobro = await cobrarPorWhatsApp({ ...m, estado: 'fase_3' });
     await agregarMensajeInterno(
       m.id,
       'sistema',
