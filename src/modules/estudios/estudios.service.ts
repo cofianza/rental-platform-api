@@ -2023,8 +2023,8 @@ export async function getCertificadoViewUrl(estudioId: string, userId?: string, 
   // buro de esa persona: el titular no baja el de su co-arrendatario.
   assertNoEsEstudioDeOtraPersona(est.tipo, userRol);
   // certificado_url es el CRC completo o el reporte del buró que adjuntó el
-  // analista: los dos traen el puntaje. El titular baja el CRC sin puntaje
-  // (Adenda 1 del módulo de contratos, respuesta 5).
+  // analista: los dos traen observaciones y datos del modelo. El titular baja
+  // su versión del CRC: la de firmantes con su puntaje (P13, Ley 1266).
   if (userRol === 'solicitante') return descargarCertificado(estudioId, userId, userRol);
 
   if (!est.certificado_url) {

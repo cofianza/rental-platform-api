@@ -143,9 +143,10 @@ describe('las demas rutas por id que el titular alcanza', () => {
     await expect(tarifasDelEstudio('est-1', 'u-1', 'solicitante')).rejects.toMatchObject(OCULTO);
   });
 
-  // Adenda 1 del módulo de contratos, respuesta 5: certificado_url es el CRC
-  // completo (o el reporte del buró adjunto), y los dos traen el puntaje.
-  it('/certificado/url del titular: el CRC sin puntaje, no lo que haya en certificado_url', async () => {
+  // certificado_url es el CRC completo (o el reporte del buró adjunto), con
+  // observaciones y datos del modelo. P13 (Ley 1266): el titular baja su
+  // versión, la de firmantes con su puntaje.
+  it('/certificado/url del titular: su versión del CRC, no lo que haya en certificado_url', async () => {
     const completo = 'estudios/est-1/certificado/uuid-1.pdf';
     enqueue('estudios', { data: { ...fila('individual'), certificado_url: completo }, error: null });
     enqueue('estudios', { data: fila('individual'), error: null });
@@ -154,7 +155,7 @@ describe('las demas rutas por id que el titular alcanza', () => {
       error: null,
     });
     const r = await getCertificadoViewUrl('est-1', 'u-1', 'solicitante');
-    expect(r.url).toBe('https://storage.test/estudios/est-1/certificado/uuid-1-firmantes.pdf');
+    expect(r.url).toBe('https://storage.test/estudios/est-1/certificado/uuid-1-arrendatario.pdf');
   });
 
   it('el gestor si baja el certificado del co-arrendatario', async () => {

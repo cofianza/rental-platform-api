@@ -172,13 +172,16 @@ export interface CertificatePdfData {
   // con el ingreso que dio la central. null = no verificable (TransUnion no lo
   // da y el declarado nunca la alimenta).
   canonIngresoPct: number | null;
-  /** Adenda 1 contratos, respuesta 5: versión sin puntaje ni observaciones (ver sinPuntaje). */
+  /**
+   * Adenda 1 contratos, respuesta 5: versión sin puntaje ni observaciones (ver
+   * sinPuntaje). La del arrendatario también la lleva, con su score (P13).
+   */
   paraFirmantes?: boolean;
 }
 
 /**
  * Adenda 1 del módulo de contratos, respuesta 5: el CRC que va al paquete de
- * firma, y el que baja el arrendatario, no lleva puntaje ni observaciones.
+ * firma no lleva puntaje ni observaciones.
  * Sale todo lo que lo revela: el score del buró, el perfil ("Aprobado
  * automatico (87 pts)"), la decisión de cascada ("puntaje 92 >= 90…") y el
  * denominador. Mismo criterio que redactarEstudioParaProspecto. Las
@@ -195,6 +198,15 @@ export function sinPuntaje(data: CertificatePdfData): CertificatePdfData {
     denominadorPuntaje: null,
     paraFirmantes: true,
   };
+}
+
+/**
+ * P13 (Ley 1266): el arrendatario conoce SU puntaje. Baja la versión para
+ * firmantes con su score y sus condiciones, que ya ve en la plataforma. El
+ * perfil con puntos, la cascada, el denominador y las observaciones siguen fuera.
+ */
+export function paraArrendatario(data: CertificatePdfData): CertificatePdfData {
+  return { ...sinPuntaje(data), score: data.score, condiciones: data.condiciones };
 }
 
 export async function generateCertificatePdf(
@@ -278,7 +290,15 @@ export async function generateCertificatePdf(
 
     if (data.paraFirmantes) {
       doc.fontSize(8).font('Helvetica-Oblique').fillColor('#6b7280');
-      doc.text('Esta versión no incluye el puntaje ni las observaciones de la evaluación.', 50, y, { width: contentWidth });
+      // La del arrendatario lleva su score (P13): no se dice que falta.
+      doc.text(
+        data.score != null
+          ? 'Esta versión no incluye las observaciones de la evaluación.'
+          : 'Esta versión no incluye el puntaje ni las observaciones de la evaluación.',
+        50,
+        y,
+        { width: contentWidth },
+      );
       y += 16;
     }
 
@@ -750,7 +770,7 @@ export async function generarCertificado(
   // Si esta falla, crcParaFirmantes la genera cuando alguien la pida.
   const { error: uploadFirmantesErr } = await supabase.storage
     .from(BUCKET_NAME)
-    .upload(llaveFirmantes(storageKey), pdfFirmantes, { contentType: 'application/pdf', upsert: false });
+    .upload(llaveDeVersion(storageKey, 'firmantes'), pdfFirmantes, { contentType: 'application/pdf', upsert: false });
   if (uploadFirmantesErr) {
     logger.warn({ error: uploadFirmantesErr, estudioId }, 'CRC: no se subió la versión para firmantes; se generará al pedirla');
   }
@@ -1078,45 +1098,60 @@ export async function emitirCertificadoAutomatico(
 }
 
 // ============================================================
-// Version para firmantes (Adenda 1 contratos, respuesta 5)
+// Versiones reducidas: firmantes (Adenda 1 contratos, respuesta 5) y
+// arrendatario (P13)
 // ============================================================
 
-/** Vive al lado del completo: misma llave con sufijo, sin columna nueva. */
-export function llaveFirmantes(llaveCompleta: string): string {
-  return `${llaveCompleta.replace(/\.pdf$/i, '')}-firmantes.pdf`;
-}
+type VersionReducida = 'firmantes' | 'arrendatario';
 
-/**
- * El CRC sin puntaje ni observaciones: el que va al paquete de firma y el que
- * baja el arrendatario. El completo queda solo en el panel de la inmobiliaria,
- * del propietario y de Cofianza. Se emite junto al completo; el de un CRC
- * anterior se genera aqui una vez, con su numero y sus fechas, y queda
- * guardado. Sale de los datos de hoy del estudio: si algo cambio desde la
- * emision, lo refleja. No verifica acceso: el llamador ya paso por
- * assertExpedienteAccess.
- */
-export async function crcParaFirmantes(cert: {
+type CertGuardado = {
   estudio_id: string;
   codigo: string;
   pdf_storage_key: string;
   fecha_emision: string;
   fecha_vencimiento: string;
-}): Promise<{ key: string; pdf: Buffer }> {
-  const key = llaveFirmantes(cert.pdf_storage_key);
+};
+
+/** Vive al lado del completo: misma llave con sufijo, sin columna nueva. */
+export function llaveDeVersion(llaveCompleta: string, version: VersionReducida): string {
+  return `${llaveCompleta.replace(/\.pdf$/i, '')}-${version}.pdf`;
+}
+
+/**
+ * El CRC reducido: el de firmantes (sin puntaje ni observaciones) va al paquete
+ * de firma; el del arrendatario es ese mismo con su score. El completo queda
+ * solo en el panel de la inmobiliaria, del propietario y de Cofianza. El de
+ * firmantes se emite junto al completo; el del arrendatario, y el de firmantes
+ * de un CRC anterior, se generan aqui una vez, con su numero y sus fechas, y
+ * quedan guardados. Salen de los datos de hoy del estudio: si algo cambio desde
+ * la emision, lo reflejan. No verifica acceso: el llamador ya paso por
+ * assertExpedienteAccess.
+ */
+async function crcReducido(cert: CertGuardado, version: VersionReducida): Promise<{ key: string; pdf: Buffer }> {
+  const key = llaveDeVersion(cert.pdf_storage_key, version);
   const { data } = await supabase.storage.from(BUCKET_NAME).download(key);
   if (data) return { key, pdf: Buffer.from(await data.arrayBuffer()) };
 
   const e = await leerEstudioCrc(cert.estudio_id);
   assertCertificable(e);
   const datos = await datosDelCrc(e, cert);
-  const pdf = await generateCertificatePdf(sinPuntaje(datos), await generateQrCode(`${env.FRONTEND_URL}/verificar/${cert.codigo}`));
+  const reducido = version === 'firmantes' ? sinPuntaje(datos) : paraArrendatario(datos);
+  const pdf = await generateCertificatePdf(reducido, await generateQrCode(`${env.FRONTEND_URL}/verificar/${cert.codigo}`));
   // Sin upsert: si ya existia (una lectura que fallo), no se pisa; se reintenta.
   const { error } = await supabase.storage.from(BUCKET_NAME).upload(key, pdf, { contentType: 'application/pdf', upsert: false });
   if (error) {
-    logger.error({ error, key }, 'CRC: no se pudo guardar la versión para firmantes');
+    logger.error({ error, key }, `CRC: no se pudo guardar la versión ${version}`);
     throw new AppError(503, 'CRC_NO_DISPONIBLE', 'No pudimos preparar el certificado. Intenta de nuevo en un momento.');
   }
   return { key, pdf };
+}
+
+export function crcParaFirmantes(cert: CertGuardado) {
+  return crcReducido(cert, 'firmantes');
+}
+
+export function crcParaArrendatario(cert: CertGuardado) {
+  return crcReducido(cert, 'arrendatario');
 }
 
 // ============================================================
@@ -1152,9 +1187,9 @@ export async function descargarCertificado(estudioId: string, userId?: string, u
   }
 
   const c = cert as { id: string; codigo: string; pdf_storage_key: string; version: number; fecha_emision: string; fecha_vencimiento: string };
-  // Adenda 1 contratos, respuesta 5: el arrendatario baja la version sin puntaje.
+  // P13 (Ley 1266): el arrendatario baja la version para firmantes con SU puntaje.
   const key =
-    userRol === 'solicitante' ? (await crcParaFirmantes({ ...c, estudio_id: estudioId })).key : c.pdf_storage_key;
+    userRol === 'solicitante' ? (await crcParaArrendatario({ ...c, estudio_id: estudioId })).key : c.pdf_storage_key;
 
   const { data: signedData, error: signErr } = await supabase.storage
     .from(BUCKET_NAME)

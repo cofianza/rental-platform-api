@@ -81,13 +81,15 @@ vi.mock('@/lib/companyConfig', () => ({
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: vi.fn(async () => undefined) }));
 
 import {
+  crcParaArrendatario,
   crcParaFirmantes,
   descargarCertificado,
   generarCertificado,
   generateCertificatePdf,
   generateQrCode,
   leerSombraDelEstudio,
-  llaveFirmantes,
+  llaveDeVersion,
+  paraArrendatario,
   sinPuntaje,
   type CertificatePdfData,
 } from '../certificado.service';
@@ -207,6 +209,19 @@ describe('el PDF sin puntaje', () => {
     for (const s of ['CERT-2026-00042', 'APROBADO', 'Tarifa mensual de la fianza', 'Prima de vinculación']) {
       expect(firmantes).toContain(s);
     }
+  });
+
+  // P13 (Ley 1266): la de firmantes más su propio puntaje; nada del modelo de Cofianza.
+  it('la del arrendatario trae su puntaje y sus condiciones; ni observaciones, ni perfil, ni cascada, ni denominador', async () => {
+    await generateCertificatePdf(paraArrendatario(DATOS), QR);
+    const t = impreso();
+    expect(t).toContain('Score');
+    expect(t).toContain('773');
+    expect(t).toContain('Presentar el contrato laboral');
+    for (const s of ['Observaciones', 'Nota interna del analista', '87 pts', 'puntaje 92', 'Denominador']) expect(t).not.toContain(s);
+    expect(t).not.toMatch(/aprobación (automática|condicionada|tras)/);
+    expect(t).toContain('Esta versión no incluye las observaciones de la evaluación.');
+    expect(t).not.toContain(NOTA);
   });
 
   // A10: las condiciones del analista cuentan como observaciones.
@@ -329,19 +344,23 @@ describe('IVA de la prima y la tarifa', () => {
 });
 
 describe('quién recibe cuál', () => {
-  const FIRMANTES = llaveFirmantes(CERT.pdf_storage_key);
+  const FIRMANTES = llaveDeVersion(CERT.pdf_storage_key, 'firmantes');
+  const ARRENDATARIO = llaveDeVersion(CERT.pdf_storage_key, 'arrendatario');
 
-  it('la llave de firmantes vive al lado de la del completo', () => {
+  it('las llaves de firmantes y del arrendatario viven al lado de la del completo', () => {
     expect(FIRMANTES).toBe('estudios/est-1/certificado/uuid-1-firmantes.pdf');
+    expect(ARRENDATARIO).toBe('estudios/est-1/certificado/uuid-1-arrendatario.pdf');
   });
 
-  it('el arrendatario (solicitante) baja la versión sin puntaje; la inmobiliaria, la completa', async () => {
+  // P13 (Ley 1266): el arrendatario conoce su puntaje.
+  it('el arrendatario (solicitante) baja su versión, con su puntaje; la inmobiliaria, la completa', async () => {
     archivos.set(FIRMANTES, Buffer.from('%PDF firmantes'));
+    archivos.set(ARRENDATARIO, Buffer.from('%PDF arrendatario'));
 
     enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null });
     enqueue('estudios_certificados', { data: CERT, error: null });
     const delSolicitante = await descargarCertificado('est-1', 'u-1', 'solicitante');
-    expect(delSolicitante.url).toBe(`https://storage.test/${FIRMANTES}`);
+    expect(delSolicitante.url).toBe(`https://storage.test/${ARRENDATARIO}`);
 
     enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null });
     enqueue('estudios_certificados', { data: CERT, error: null });
@@ -386,6 +405,27 @@ describe('quién recibe cuál', () => {
     expect(textos).not.toHaveBeenCalled();
   });
 
+  it('la del arrendatario se genera una vez, a pedido, con las mismas compuertas', async () => {
+    enqueue('estudios', { data: ESTUDIO, error: null });
+
+    const r = await crcParaArrendatario(CERT);
+
+    expect(r.key).toBe(ARRENDATARIO);
+    expect(storage.upload).toHaveBeenCalledWith(ARRENDATARIO, r.pdf, expect.objectContaining({ upsert: false }));
+    const texto = impreso();
+    expect(texto).toContain('773');
+    for (const s of ['Nota interna del analista', 'puntaje 92']) expect(texto).not.toContain(s);
+
+    // Con el estudio de hoy no certificable, otra versión no se genera.
+    storage.upload.mockClear();
+    enqueue('estudios', { data: { ...ESTUDIO, resultado: 'rechazado' }, error: null });
+    await expect(crcParaArrendatario({ ...CERT, pdf_storage_key: 'estudios/est-1/certificado/uuid-2.pdf' })).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'ESTUDIO_NO_CERTIFICABLE',
+    });
+    expect(storage.upload).not.toHaveBeenCalled();
+  });
+
   it('el generador no pone APROBADO a un resultado sin sello', async () => {
     await expect(generateCertificatePdf({ ...DATOS, resultado: 'rechazado' }, QR)).rejects.toMatchObject({
       statusCode: 409,
@@ -401,6 +441,7 @@ describe('quién recibe cuál', () => {
     const cert = await generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
 
     const subidas = storage.upload.mock.calls.map((c) => c[0]);
-    expect(subidas).toEqual([cert.pdf_storage_key, llaveFirmantes(cert.pdf_storage_key)]);
+    // La del arrendatario no: se genera cuando la pida.
+    expect(subidas).toEqual([cert.pdf_storage_key, llaveDeVersion(cert.pdf_storage_key, 'firmantes')]);
   });
 });
