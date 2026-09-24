@@ -369,22 +369,14 @@ export async function onHabeasDataAutorizado(params: {
       // pero el flujo no se bloquea. Dejar rastro VISIBLE en el expediente: sin
       // esto, el equipo no se entera de que el inicio automático falló.
       logger.warn({ error: providerError, estudioId: estudio.id }, 'Orchestrator: provider no disponible, estudio requiere atencion manual');
-      await registrarTimeline(
-        expedienteId,
-        'estudio',
-        'Falló el inicio automático de la evaluación tras la autorización — ejecutarla desde la evaluación en el estudio',
-      ).catch(() => {});
+      await registrarTimeline(expedienteId, 'estudio', textoInicioFallido(providerError, 'tras la autorización')).catch(() => {});
     }
 
     logger.info({ estudioId: estudio.id, expedienteId }, 'Orchestrator: flujo automatico de estudio ejecutado');
   } catch (error) {
     // Error duro (BD caída, update fallido): rastro visible en el expediente.
     logger.error({ error, expedienteId }, 'Orchestrator: error en onHabeasDataAutorizado');
-    await registrarTimeline(
-      expedienteId,
-      'estudio',
-      'Falló el inicio automático de la evaluación tras la autorización — ejecutarla desde la evaluación en el estudio',
-    ).catch(() => {});
+    await registrarTimeline(expedienteId, 'estudio', textoInicioFallido(error, 'tras la autorización')).catch(() => {});
   }
 }
 
@@ -612,11 +604,7 @@ export async function onEstudioPagado(expedienteId: string, userId?: string | nu
       logger.info({ estudioId: id, expedienteId }, 'Orchestrator: estudio disparado tras confirmarse el pago');
     } catch (err) {
       logger.warn({ error: err, estudioId: id }, 'Orchestrator: falló el arranque del estudio tras el pago');
-      await registrarTimeline(
-        expedienteId,
-        'estudio',
-        'Falló el inicio automático de la evaluación tras confirmarse el pago — ejecutarla desde la evaluación en el estudio',
-      ).catch(() => {});
+      await registrarTimeline(expedienteId, 'estudio', textoInicioFallido(err, 'tras confirmarse el pago')).catch(() => {});
     }
   }
   return alguno;
@@ -1194,6 +1182,13 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
 
   logger.info({ expedienteId, from: exp.estado, to: estadoDestino }, 'Orchestrator: estudio transicionado');
   return true;
+}
+
+/** El historial cuando la evaluación no arranca sola; en un estudio cerrado no se invita a ejecutarla. */
+function textoInicioFallido(err: unknown, cuando: string): string {
+  return (err as { errorCode?: string } | null)?.errorCode === 'EXPEDIENTE_CERRADO'
+    ? 'El estudio está cerrado: la evaluación no se ejecuta.'
+    : `Falló el inicio automático de la evaluación ${cuando} — ejecutarla desde la evaluación en el estudio`;
 }
 
 async function registrarTimeline(expedienteId: string, tipo: string, descripcion: string) {

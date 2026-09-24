@@ -2628,6 +2628,28 @@ export async function ejecutarEstudio(
     );
   }
 
+  // P1: el cierre pudo llegar entre el guard de arriba y el lock. Con el estudio
+  // ya cerrado se deshace el lock (nadie consultó) y la evaluación pagada se
+  // devuelve. No aplica a la re-consulta al otro buró: ese estudio ya se consultó.
+  if (!reconsultaOtroBuro) {
+    const { data: expAhora } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('estado')
+      .eq('id', est.expediente_id)
+      .maybeSingle();
+    if ((expAhora as { estado?: string } | null)?.estado === 'cerrado') {
+      await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update({ estado: est.estado } as never)
+        .eq('id', estudioId)
+        .eq('estado', 'en_proceso');
+      void import('@/modules/pagos/reembolsos.service')
+        .then((m) => m.devolverEvaluacionSinConsulta(est.expediente_id, 'Estudio cerrado', null))
+        .catch((e) => logger.warn({ e, estudioId }, 'No se pudo revisar la devolución tras deshacer la ejecución'));
+      throw AppError.conflict('El estudio está cerrado: no se consulta el buró.', 'EXPEDIENTE_CERRADO');
+    }
+  }
+
   // 6. Disparar el provider en background. El frontend hace polling sobre
   //    el estudio (cada 5s) y detecta cuando pase a 'completado' o
   //    'fallido'. Si el proceso muere a mitad (reinicio) o el registro falla,
