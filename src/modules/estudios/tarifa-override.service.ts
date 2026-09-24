@@ -141,7 +141,8 @@ async function guardar(
   });
 
   // El CRC ya emitido imprime las cifras viejas: se regenera con las nuevas
-  // (generarCertificado borra el PDF anterior y reemplaza el codigo). Es
+  // (generarCertificado sube una version nueva con el mismo codigo; la anterior
+  // se conserva porque un contrato puede citarla). Es
   // best-effort: si no se puede (p. ej. el estudio ya vencio), la tarifa queda
   // guardada igual y se le dice al usuario por que.
   let crcRegenerado = false;

@@ -707,7 +707,7 @@ describe('verificación pública', () => {
       enqueue('estudios_certificados', fila(exp, 'condicionado'));
       expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vigente', resultado });
     }
-    // Un aprobado por el buró no depende del expediente.
+    // Aprobado por el buró y cerrado después de aprobarse: sigue válido.
     enqueue('estudios_certificados', fila({ estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, 'aprobado'));
     expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vigente', resultado: 'aprobado' });
   });

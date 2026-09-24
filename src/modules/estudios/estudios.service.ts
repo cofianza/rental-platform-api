@@ -736,7 +736,8 @@ async function adjuntarRuta<T extends Record<string, unknown>>(
   });
 
   // P32: el CRC del caso quedó sin efecto (misma regla que /verificar y las
-  // compuertas): la web no ofrece descargarlo ni generarlo para no dar un 409.
+  // compuertas): la web no ofrece generarlo ni, al prospecto, descargarlo
+  // (darían 409). Los gestores siguen bajando el completo ya emitido.
   // decision_cofianza: con 'sin_aprobar' (cancelado sin aprobarse) la tarjeta
   // del prospecto no dice «Estamos revisando» debajo de «Estudio cancelado».
   return {
