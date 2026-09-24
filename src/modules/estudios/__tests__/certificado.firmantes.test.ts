@@ -459,6 +459,27 @@ describe('quién recibe cuál', () => {
     }
   });
 
+  // P32: condicionado cancelado en revisión. Ninguna versión nueva: el PDF diría
+  // CONDICIONADO sobre un certificado que /verificar da por sin efecto.
+  it('de un certificado sin efecto no se genera ninguna versión: ni el completo, ni el de firmantes, ni el del arrendatario', async () => {
+    const SIN_EFECTO = { statusCode: 409, message: 'Este certificado quedó sin efecto: el estudio no se aprobó.' };
+    const cancelado = {
+      ...ESTUDIO,
+      resultado: 'condicionado',
+      expedientes: { ...ESTUDIO.expedientes, estado: 'cerrado', estado_pre_cancelacion: 'condicionado' },
+    };
+
+    enqueue('estudios', { data: cancelado, error: null });
+    await expect(generarCertificado('est-1', 'u-1', undefined, 'operador_analista')).rejects.toMatchObject(SIN_EFECTO);
+    enqueue('estudios', { data: cancelado, error: null });
+    await expect(crcParaFirmantes(CERT)).rejects.toMatchObject(SIN_EFECTO);
+    enqueue('estudios', { data: cancelado, error: null });
+    await expect(crcParaArrendatario(CERT)).rejects.toMatchObject(SIN_EFECTO);
+
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(textos).not.toHaveBeenCalled();
+  });
+
   it('el generador no pone APROBADO a un resultado sin sello', async () => {
     await expect(generateCertificatePdf({ ...DATOS, resultado: 'rechazado' }, QR)).rejects.toMatchObject({
       statusCode: 409,
@@ -561,6 +582,28 @@ describe('verificación pública', () => {
     // Un aprobado por el buró no depende del expediente.
     enqueue('estudios_certificados', fila({ estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, 'aprobado'));
     expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vigente', resultado: 'aprobado' });
+  });
+
+  it('se genera una versión nueva si y solo si /verificar no la da por sin efecto', async () => {
+    const casos: Array<[Record<string, unknown>, boolean]> = [
+      [{ estado: 'rechazado', estado_pre_cancelacion: null }, true],
+      [{ estado: 'cerrado', estado_pre_cancelacion: 'rechazado' }, true],
+      [{ estado: 'cerrado', estado_pre_cancelacion: 'condicionado' }, true],
+      [{ estado: 'cerrado', estado_pre_cancelacion: 'aprobado' }, false],
+      [{ estado: 'cerrado', estado_pre_cancelacion: null }, false],
+      [{ estado: 'aprobado', estado_pre_cancelacion: null }, false],
+      [{ estado: 'condicionado', estado_pre_cancelacion: null }, false],
+    ];
+    for (const [exp, sinEfecto] of casos) {
+      enqueue('estudios_certificados', fila(exp, 'condicionado'));
+      expect((await verificarCertificado(CODIGO)).status === 'sin_efecto').toBe(sinEfecto);
+
+      const expedientes = { ...ESTUDIO.expedientes, ...exp };
+      enqueue('estudios', { data: { ...ESTUDIO, resultado: 'condicionado', expedientes }, error: null });
+      const generar = crcParaArrendatario({ ...CERT, pdf_storage_key: `estudios/est-1/certificado/${String(exp.estado)}-${String(exp.estado_pre_cancelacion)}.pdf` });
+      if (sinEfecto) await expect(generar).rejects.toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_CERTIFICABLE' });
+      else await expect(generar).resolves.toMatchObject({ key: expect.stringContaining('-arrendatario.pdf') });
+    }
   });
 
   it('vencido y no encontrado', async () => {

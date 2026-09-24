@@ -837,6 +837,8 @@ export async function generarCertificado(
   };
 }
 
+type ExpedienteDecision = { estado?: unknown; estado_pre_cancelacion?: unknown } | null | undefined;
+
 /**
  * Cofianza aprobó el caso: el expediente está aprobado o se cerró desde
  * aprobado. Un cierre sin estado previo es el natural (contrato firmado), que
@@ -846,16 +848,25 @@ export async function generarCertificado(
  * warn), ese cierre se lee como natural. Si pasa, decidir con el contrato
  * firmado (tieneContratoFirmado en expediente-workflow).
  */
-function aprobadoPorCofianza(exp: { estado?: unknown; estado_pre_cancelacion?: unknown } | null | undefined): boolean {
+function aprobadoPorCofianza(exp: ExpedienteDecision): boolean {
   return exp?.estado === 'cerrado'
     ? (exp.estado_pre_cancelacion ?? 'aprobado') === 'aprobado'
     : exp?.estado === 'aprobado';
 }
 
 /**
- * Compuertas de la emision. Tambien las pasa la version para firmantes que se
- * genera a demanda: con el estudio de hoy pendiente, rechazado o negado por el
- * analista, regenerar imprimiria un resultado que ya no es.
+ * P32: el caso terminó (negado o cerrado) sin que Cofianza lo aprobara. El
+ * certificado es auténtico, pero ya no respalda ningún arrendamiento:
+ * /verificar lo dice y assertCertificable no genera ninguna versión nueva.
+ */
+function quedoSinEfecto(exp: ExpedienteDecision): boolean {
+  return (exp?.estado === 'rechazado' || exp?.estado === 'cerrado') && !aprobadoPorCofianza(exp);
+}
+
+/**
+ * Compuertas de la emision. Tambien las pasan las versiones reducidas que se
+ * generan a demanda: con el estudio de hoy pendiente, rechazado, negado por el
+ * analista o cerrado sin aprobarse, regenerar imprimiria un resultado que ya no es.
  */
 function assertCertificable(e: Record<string, unknown>): void {
   // Los datos de la persona salen del expediente (el titular): con la fila del
@@ -877,13 +888,10 @@ function assertCertificable(e: Record<string, unknown>): void {
     );
   }
   // El analista niega un condicionado cambiando solo el expediente: el estudio
-  // se queda 'condicionado' (mismo criterio que resultadoEfectivo de estudios.service).
-  const exp = e.expedientes as { estado?: string | null; estado_pre_cancelacion?: string | null } | null;
-  if (exp?.estado === 'rechazado' || (exp?.estado === 'cerrado' && exp.estado_pre_cancelacion === 'rechazado')) {
-    throw AppError.conflict(
-      'El estudio quedó no aprobable tras la revisión de Cofianza, así que no se genera certificado.',
-      'ESTUDIO_NO_CERTIFICABLE',
-    );
+  // se queda 'condicionado'. Negado o cerrado sin aprobarse, el certificado
+  // quedó sin efecto (P32): un PDF nuevo contradiría a /verificar.
+  if (quedoSinEfecto(e.expedientes as ExpedienteDecision)) {
+    throw AppError.conflict('Este certificado quedó sin efecto: el estudio no se aprobó.', 'ESTUDIO_NO_CERTIFICABLE');
   }
 }
 
@@ -1267,14 +1275,12 @@ export async function verificarCertificado(codigo: string) {
   // Mismo criterio que el PDF (ver resultadoEfectivo en datosDelCrc): un
   // condicionado que Cofianza aprobó se verifica como aprobado.
   const resultadoEstudio = (estudio?.resultado as string) || '';
-  const aprobado = aprobadoPorCofianza(expediente);
-  const resultadoVerificado = resultadoEstudio === 'condicionado' && aprobado ? 'aprobado' : resultadoEstudio;
+  const resultadoVerificado =
+    resultadoEstudio === 'condicionado' && aprobadoPorCofianza(expediente) ? 'aprobado' : resultadoEstudio;
   // P32: el CRC «en revisión» de un estudio que Cofianza negó, o que se cerró
-  // sin aprobarse, es auténtico pero ya no respalda ningún arrendamiento.
-  const sinEfecto =
-    resultadoEstudio === 'condicionado' &&
-    !aprobado &&
-    (expediente?.estado === 'rechazado' || expediente?.estado === 'cerrado');
+  // sin aprobarse, es auténtico pero ya no respalda ningún arrendamiento. Misma
+  // regla que assertCertificable: de un certificado sin efecto no sale otro PDF.
+  const sinEfecto = quedoSinEfecto(expediente);
   const status = sinEfecto
     ? 'sin_efecto'
     : new Date() <= new Date(c.fecha_vencimiento as string)
