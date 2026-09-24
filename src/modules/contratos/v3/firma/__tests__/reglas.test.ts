@@ -423,6 +423,21 @@ describe('posicionAuco (supuesto de Auco a verificar con scripts/sonda-auco-ruta
     }
   });
 
+  it('paginaPdf recorta el CropBox contra el MediaBox, como pdf.js (si no se cruzan, el MediaBox)', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]).setCropBox(-100, -100, 900, 1100); // más grande que el MediaBox
+    doc.addPage([612, 792]).setCropBox(300, 400, 500, 600); // se sale por arriba y por la derecha
+    doc.addPage([612, 792]).setCropBox(1000, 1000, 50, 50); // no se cruzan
+    doc.addPage([612, 792]).setCropBox(500, 700, -400, -600); // al revés (esquinas invertidas)
+    const leido = await PDFDocument.load(await doc.save());
+    expect(leido.getPages().map(paginaPdf)).toEqual([
+      { ancho: 612, alto: 792, rotacion: 0 },
+      { ancho: 312, alto: 392, rotacion: 0 },
+      { ancho: 612, alto: 792, rotacion: 0 },
+      { ancho: 400, alto: 600, rotacion: 0 },
+    ]);
+  });
+
   it('paginaPdf lee el CropBox (si no hay, el MediaBox) y el /Rotate como pdf.js: negativo normalizado, no múltiplo de 90 = 0', async () => {
     const doc = await PDFDocument.create();
     doc.addPage([612, 792]);

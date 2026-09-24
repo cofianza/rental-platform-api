@@ -314,15 +314,24 @@ export interface PosicionAuco {
 export const RECUADRO_FIRMA = { w: 150, h: 50 } as const;
 
 /**
- * La geometría de una página como la muestra un visor (pdf.js): el CropBox (o
- * el MediaBox) y el /Rotate; uno que no es múltiplo de 90 se ignora, como en pdf.js.
- * ponytail: el CropBox no se recorta contra el MediaBox (pdf.js sí); uno que se sale es rarísimo.
+ * La geometría de una página como la muestra un visor (pdf.js): el CropBox
+ * recortado contra el MediaBox (si no se cruzan, el MediaBox) y el /Rotate; uno
+ * que no es múltiplo de 90 se ignora, como en pdf.js.
  */
 export function paginaPdf(p: PDFPage): PaginaPdf {
-  const { width, height } = p.getCropBox();
+  const caja = ({ x, y, width, height }: { x: number; y: number; width: number; height: number }) => ({
+    x0: Math.min(x, x + width),
+    y0: Math.min(y, y + height),
+    x1: Math.max(x, x + width),
+    y1: Math.max(y, y + height),
+  });
+  const m = caja(p.getMediaBox());
+  const c = caja(p.getCropBox());
+  const ancho = Math.min(m.x1, c.x1) - Math.max(m.x0, c.x0);
+  const alto = Math.min(m.y1, c.y1) - Math.max(m.y0, c.y0);
   const r = p.getRotation().angle;
   const rotacion = (r % 90 ? 0 : ((r % 360) + 360) % 360) as PaginaPdf['rotacion'];
-  return { ancho: Math.abs(width), alto: Math.abs(height), rotacion };
+  return ancho > 0 && alto > 0 ? { ancho, alto, rotacion } : { ancho: m.x1 - m.x0, alto: m.y1 - m.y0, rotacion };
 }
 
 /** Lo que se congela al enviar: las marcas y la geometría de las páginas marcadas, leída del PDF que se firma. */
