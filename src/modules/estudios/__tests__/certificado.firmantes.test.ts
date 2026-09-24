@@ -19,7 +19,8 @@ const { queues, enqueue, mockFrom, storage, archivos, ops } = vi.hoisted(() => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'in', 'or', 'like', 'order', 'limit'];
+  // `in`/`not`: la lectura del coarrendatario (coarrendatarioVinculadoVerificado), que ahora falla cerrado.
+  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'in', 'not', 'or', 'like', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {

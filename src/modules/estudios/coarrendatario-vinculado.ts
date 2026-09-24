@@ -155,3 +155,23 @@ export async function coarrendatarioVinculado(
     return null;
   }
 }
+
+/**
+ * Para lo que imprime o cobra la prima (CRC y tarifa): la lectura estricta. Si
+ * no se puede leer, 503 en vez de imprimir un 20 % que puede ser falso.
+ */
+export async function coarrendatarioVinculadoVerificado(expedienteId: string): Promise<CoarrendatarioVinculado | null> {
+  try {
+    return await coarrendatarioVinculado(expedienteId, { estricto: true });
+  } catch (err) {
+    logger.error(
+      { expedienteId, err: err instanceof Error ? err.message : String(err) },
+      'No se pudo verificar el coarrendatario del estudio — no se calcula la prima',
+    );
+    throw new AppError(
+      503,
+      'LECTURA_NO_VERIFICABLE',
+      'No pudimos verificar si el estudio tiene co-arrendatario, y con él cambia la prima. Intenta de nuevo en un momento.',
+    );
+  }
+}

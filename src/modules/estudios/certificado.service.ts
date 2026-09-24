@@ -16,7 +16,7 @@ import { MODELO_VERSION } from './motor';
 import { calcularTarifas, leerTarifaOverride, viaPorRutaDeAprobacion, type Tarifas, type ViaAprobacion } from './tarifas';
 // Adenda §5.2: la prima baja al 10% cuando HAY coarrendatario vinculado al
 // expediente — no cuando el tipo de esta fila es 'con_coarrendatario'.
-import { coarrendatarioVinculado, assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
+import { coarrendatarioVinculadoVerificado, assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
 import { getCalibracion } from '@/lib/calibracion';
 import { getCompany } from '@/lib/companyConfig';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
@@ -1033,7 +1033,7 @@ async function datosDelCrc(
   const puntajeCrc = usaPuntaje ? (sombra?.puntaje ?? null) : null;
   // Adenda §5.2 / §3: el coarrendatario es una fila de expediente_coarrendatarios
   // con su propio estudio, no el `tipo` de esta fila (ver coarrendatario-vinculado.ts).
-  const coa = await coarrendatarioVinculado(e.expediente_id as string);
+  const coa = await coarrendatarioVinculadoVerificado(e.expediente_id as string);
   const conCoarrendatario = coa !== null;
   const puntajeCoa = usaPuntaje ? (coa?.puntaje ?? null) : null;
   // El estudio guarda lo que dijo el buro/motor; la decision de Cofianza es

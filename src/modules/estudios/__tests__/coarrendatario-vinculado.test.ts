@@ -26,7 +26,7 @@ const { mockFrom, enqueue, queues } = vi.hoisted(() => {
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
-import { coarrendatarioVinculado } from '../coarrendatario-vinculado';
+import { coarrendatarioVinculado, coarrendatarioVinculadoVerificado } from '../coarrendatario-vinculado';
 
 const EXP = 'exp-1';
 const fila = { data: { id: 'coa-1', nombre: 'Luis', estudio_id: 'est-coa' }, error: null };
@@ -81,6 +81,16 @@ describe('coarrendatarioVinculado — P2', () => {
     cuenta();
 
     expect(await coarrendatarioVinculado(EXP)).toMatchObject({ id: 'coa-1' });
+  });
+
+  it('para el CRC y la tarifa: un error de lectura es 503, no «solo» (no imprime un 20 % falso)', async () => {
+    enqueue('expediente_coarrendatarios', fila);
+    enqueue('estudios', { data: null, error: { message: 'timeout' } });
+
+    await expect(coarrendatarioVinculadoVerificado(EXP)).rejects.toMatchObject({
+      statusCode: 503,
+      errorCode: 'LECTURA_NO_VERIFICABLE',
+    });
   });
 
   it('un error de lectura es «solo»; en modo estricto se propaga', async () => {

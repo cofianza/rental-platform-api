@@ -25,7 +25,7 @@ import {
   type TarifaOverride,
 } from './tarifas';
 import { generarCertificado, viaDelEstudio } from './certificado.service';
-import { coarrendatarioVinculado, assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
+import { coarrendatarioVinculadoVerificado, assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
 import type { TarifaOverrideInput } from './estudios.schema';
 
 interface FilaEstudio {
@@ -71,7 +71,7 @@ async function leerFila(estudioId: string): Promise<FilaEstudio> {
 async function armar(e: FilaEstudio): Promise<TarifaEstudio> {
   // Mismo criterio que el CRC (Adenda §5.2 / §3): el coarrendatario es la fila
   // vinculada al expediente, no el `tipo` de este estudio (prima 10%).
-  const coa = await coarrendatarioVinculado(e.expediente_id);
+  const coa = await coarrendatarioVinculadoVerificado(e.expediente_id);
   const conCoarrendatario = coa !== null;
   const override = leerTarifaOverride(e.tarifa_override);
   // Mismo canon que el CRC: el congelado al ejecutar; si no lo hay, el del inmueble.
