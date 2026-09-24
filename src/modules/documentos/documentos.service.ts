@@ -746,8 +746,8 @@ export async function rechazarDocumento(
  * esperaba la resubida hasta que alguien abriera el estudio. Avisa (in-app +
  * correo) a quien lo subió, al dueño del inmueble y al miembro responsable,
  * sin repetir a nadie ni avisar a quien rechazó. Solo a quien puede resubir
- * (documentos:create): el propietario individual no puede y el aviso lo
- * mandaba a un 403. Nunca lanza.
+ * (documentos:create): a quien no puede, el aviso lo mandaba a un 403.
+ * Nunca lanza.
  */
 async function avisarRechazoDocumento(doc: DocumentoRow, motivo: string, revisorId: string): Promise<void> {
   try {

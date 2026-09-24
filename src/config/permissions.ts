@@ -134,7 +134,10 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     // estaba escrito en solicitantes.service.ts —nombrando explicitamente al
     // rol 'propietario'— y era codigo inalcanzable.
     solicitantes: ['create', 'read', 'update'],
-    documentos: ['read', 'descargar'],
+    // P19 (Adenda 2 §5.1): sube los documentos del estudio de su candidato y
+    // borra los suyos pendientes (deleteDocumento exige subido_por); no
+    // decide: sin 'validar'.
+    documentos: ['create', 'read', 'update', 'delete', 'descargar'],
     // create/update: el propietario gestiona el pago del estudio de su
     // candidato (enviar link al arrendatario, asumir, cancelar-y-asumir).
     pagos: ['read', 'create', 'update'],
@@ -159,7 +162,8 @@ export const ROLE_PERMISSIONS: Record<InternalRole, PermissionMap> = {
     bitacora: [],
     dashboard: ['read'],
     solicitantes: ['create', 'read', 'update'],
-    documentos: ['create', 'read', 'update', 'descargar'],
+    // 'delete': corrige su propio archivo equivocado mientras está pendiente.
+    documentos: ['create', 'read', 'update', 'delete', 'descargar'],
     // 'update' para reenviar/cancelar el link de pago del estudio (igual que propietario).
     pagos: ['create', 'read', 'update'],
     facturas: ['create', 'read'],

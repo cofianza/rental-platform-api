@@ -67,23 +67,30 @@ describe('rechazar documento', () => {
     });
   });
 
-  it('no avisa al propietario individual: no puede resubir y el enlace lo llevaba a un 403', async () => {
+  it('avisa al propietario directo (P19: ya puede resubir), no a quien no puede subir', async () => {
     queues.set('documentos', [
       { data: doc({ subido_por: 'analista-2' }), error: null },
       { data: doc({ estado: 'rechazado' }), error: null },
     ]);
     queues.set('expedientes', [{
-      data: { numero: 'EXP-2', miembro_responsable_id: null, inmuebles: { propietario_id: 'dueno-1' } },
+      data: { numero: 'EXP-2', miembro_responsable_id: 'consulta-3', inmuebles: { propietario_id: 'dueno-1' } },
       error: null,
     }]);
-    queues.set('perfiles', [{ data: [{ id: 'analista-2', rol: 'operador_analista' }, { id: 'dueno-1', rol: 'propietario' }], error: null }]);
+    queues.set('perfiles', [{
+      data: [
+        { id: 'analista-2', rol: 'operador_analista' },
+        { id: 'dueno-1', rol: 'propietario' },
+        { id: 'consulta-3', rol: 'gerencia_consulta' },
+      ],
+      error: null,
+    }]);
 
     await rechazarDocumento('d1', 'Ilegible', 'analista-1');
 
     await vi.waitFor(() => expect(notificar).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 10));
     const ids = notificar.mock.calls.map((c) => (c as unknown as [{ userId: string }])[0].userId);
-    expect(ids).toEqual(['analista-2']);
+    expect(ids).toEqual(['analista-2', 'dueno-1']);
   });
 });
 
