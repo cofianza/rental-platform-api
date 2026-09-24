@@ -405,8 +405,22 @@ describe('posicionAuco (supuesto de Auco a verificar con scripts/sonda-auco-ruta
     expect(posicionAuco(marca, { ...PAGINA, rotacion: 180 })).toMatchObject({ x: 0.65, y: 0.5 });
   });
 
-  it('una marca pegada al borde derecho no se sale de la página', () => {
-    expect(posicionAuco({ pagina: 1, x: 0.95, y: 1 }, { ...PAGINA, rotacion: 0 })).toMatchObject({ x: 1, y: 1 });
+  it('el recuadro cabe entero: con la marca pegada a un borde se corre lo justo hacia adentro', () => {
+    const pagina = { ...PAGINA, rotacion: 0 as const };
+    // derecha y abajo: el recuadro toca el borde, sin salirse
+    expect(posicionAuco({ pagina: 1, x: 0.95, y: 1 }, pagina)).toMatchObject({ x: 1, y: 1 });
+    // izquierda: la marca a 25 pt del borde se corre a 75 (medio recuadro): recuadro de 0 a 150 pt
+    expect(posicionAuco({ pagina: 1, x: 0.05, y: 0.5 }, pagina)).toMatchObject({ x: 0.3, y: 0.5 });
+    // arriba: la marca a 15 pt del borde baja a 50 (el alto del recuadro): recuadro de 0 a 50 pt
+    expect(posicionAuco({ pagina: 1, x: 0.5, y: 0.02 }, pagina)).toMatchObject({ x: 0.65, y: 0.0667 });
+    // en ninguna esquina se sale
+    for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      const p = posicionAuco({ pagina: 1, x, y }, pagina);
+      expect(p.x * 500 - p.w).toBeGreaterThanOrEqual(0);
+      expect(p.x).toBeLessThanOrEqual(1);
+      expect(p.y * 750 - p.h).toBeGreaterThanOrEqual(-0.1);
+      expect(p.y).toBeLessThanOrEqual(1);
+    }
   });
 
   it('paginaPdf lee el CropBox (si no hay, el MediaBox) y el /Rotate como pdf.js: negativo normalizado, no múltiplo de 90 = 0', async () => {

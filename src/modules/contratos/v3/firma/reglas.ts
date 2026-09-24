@@ -334,7 +334,9 @@ export function congelarFirmas(doc: PDFDocument, marcas: MarcaFirma[]): FirmasPr
 /**
  * Una marca → un `position` de Auco. La marca es el punto de la raya donde se
  * apoya la firma: el recuadro (w×h puntos) va centrado en ella y con su borde
- * inferior encima.
+ * inferior encima. Tiene que caber entero en la página: con la marca pegada a
+ * un borde, se corre lo justo hacia adentro (la web aplica la misma regla al
+ * marcar, así que el recuadro que se vio es el que va).
  *
  * SUPUESTO, a verificar con scripts/sonda-auco-ruta-b.ts: Auco mide sobre la
  * página tal como se ve (CropBox y /Rotate aplicados), con el origen arriba a
@@ -348,8 +350,9 @@ export function posicionAuco(
   { w, h }: { w: number; h: number } = RECUADRO_FIRMA,
 ): PosicionAuco {
   const [ancho, alto] = pagina.rotacion % 180 ? [pagina.alto, pagina.ancho] : [pagina.ancho, pagina.alto];
-  const firmaX = m.x * ancho - w / 2; // borde izquierdo del recuadro, desde la izquierda
-  const firmaY = m.y * alto - h; // borde superior del recuadro, desde arriba
+  const dentro = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
+  const firmaX = dentro(m.x * ancho, w / 2, ancho - w / 2) - w / 2; // borde izquierdo del recuadro, desde la izquierda
+  const firmaY = dentro(m.y * alto, h, alto) - h; // borde superior del recuadro, desde arriba
   const rel = (n: number) => Math.round(Math.min(1, Math.max(0, n)) * 1e4) / 1e4;
   return { page: m.pagina, x: rel((firmaX + w) / ancho), y: rel((firmaY + h) / alto), w, h };
 }
