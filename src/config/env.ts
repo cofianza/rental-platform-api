@@ -225,7 +225,8 @@ const envSchema = z.object({
   // Escalada automatica de mora (Fase 1 -> 2 a los 4 dias, 2 -> 3 a los 10).
   // OFF por defecto: cada escalada le envia al inquilino la plantilla de
   // WhatsApp MORA_FASE_2/3. Encender cuando esas plantillas esten aprobadas en
-  // Meta; mientras tanto el operador escala a mano desde /moras.
+  // Meta; mientras tanto el operador escala a mano desde /moras. Solo controla
+  // el escalado: la cola de la Ley 2300 es MORAS_COBROS_PROGRAMADOS_ENABLED.
   MORAS_AUTOESCALAR_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Ley 2300: barrido que manda los WhatsApp de cobro que quedaron para el
   // horario permitido (cada 15 min). Aparte del autoescalado: apagarlo deja la
