@@ -25,7 +25,9 @@ export const transitionBodySchema = z.object({
   // (expediente-habilitacion.routes.ts) y es la misma decision de la Adenda 2
   // §5.1. Un solo caracter no es un fundamento escrito.
   comentario: z.string().trim().min(10, { error: 'Escribe el motivo (mínimo 10 caracteres).' }).max(1000),
-  motivo: z.string().max(500).optional(),
+  /** P34: al rechazar, el motivo corto para la inmobiliaria o el propietario
+   *  (el comentario es el fundamento interno). Obligatorio para 'rechazado'. */
+  motivo: z.string().trim().max(500).optional(),
   /** Etiqueta de la transicion elegida (eg. "Cerrar expediente",
    *  "Cancelar expediente"). Permite distinguir intenciones cuando dos
    *  transiciones convergen al mismo destino (aprobado → cerrado tiene
@@ -37,6 +39,14 @@ export const transitionBodySchema = z.object({
   documentos_consultados: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
   /** Obligatoria para condicionado → aprobado (la exige el service). */
   evaluacion: evaluacionRevisionManualSchema.optional(),
+}).superRefine((d, ctx) => {
+  if (d.nuevo_estado === 'rechazado' && (d.motivo ?? '').length < 10) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['motivo'],
+      message: 'Escribe el motivo para la inmobiliaria o el propietario (mínimo 10 caracteres).',
+    });
+  }
 });
 
 /** Adenda 1 contratos (respuesta 21): el motivo del cierre sin acta queda registrado. */

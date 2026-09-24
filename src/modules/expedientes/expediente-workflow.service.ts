@@ -200,6 +200,21 @@ export async function executeTransition(
 
   const result = data as TransitionRpcResult;
 
+  // P34 (Política §9/§11/§13, Adenda 2 §5.1): al rechazar, el gestor ve en el
+  // banner el motivo corto que el analista escribió para él, sin cifras del
+  // buró ni datos del co-arrendatario; el comentario queda como fundamento
+  // interno (timeline y bitácora). Al prospecto no le llega: se lo redacta
+  // getExpedienteById. Best-effort, como los vecinos: la transición ya quedó.
+  if (targetState === 'rechazado' && input.motivo) {
+    const { error: motivoErr } = await (supabase
+      .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .update({ motivo_rechazo: input.motivo } as never)
+      .eq('id', expedienteId);
+    if (motivoErr) {
+      logger.warn({ expedienteId, err: motivoErr.message }, 'No se pudo guardar el motivo del rechazo para el gestor');
+    }
+  }
+
   if (fueCancelacion) {
     const { error: updErr } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)

@@ -92,6 +92,7 @@ import {
   getTransitionsForExpediente,
   getTransitionHistory,
 } from '../expediente-workflow.service';
+import { transitionBodySchema } from '../expediente-workflow.schema';
 
 // Helpers
 const adminUser: AuthUser = { id: 'admin-uuid', email: 'admin@test.com', rol: 'administrador', activo: true };
@@ -374,6 +375,44 @@ describe('expediente-workflow.service', () => {
       await executeTransition('exp-uuid', { nuevo_estado: 'rechazado', comentario: 'Ingresos no soportados' }, adminUser);
       await vi.waitFor(() => expect(mockAvisarSolicitante).toHaveBeenCalledWith('exp-uuid', 'rechazado'));
       expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'rechazado');
+    });
+
+    it('rechazar (P34): el gestor ve el motivo corto; el fundamento queda interno', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      const updates: Array<[string | undefined, Record<string, unknown>]> = [];
+      mockFrom.mockImplementation((t?: string) =>
+        t === 'eventos_timeline' || t === 'expedientes'
+          ? {
+              update: (v: Record<string, unknown>) => {
+                updates.push([t, v]);
+                return { eq: vi.fn().mockResolvedValue({ error: null }) };
+              },
+            }
+          : fromPorDefecto(t),
+      );
+      mockRpc.mockResolvedValueOnce({
+        data: { expediente_id: 'exp-uuid', estado_anterior: 'condicionado', evento_timeline_id: 'evt-uuid', updated_at: '2026-09-24T10:00:00Z' },
+        error: null,
+      });
+
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'rechazado', comentario: 'DTI del co-arrendatario 71 %', motivo: 'El caso no cumple la política de Cofianza.' },
+        adminUser,
+      );
+
+      const aExpedientes = updates.filter(([t]) => t === 'expedientes').map(([, v]) => v);
+      expect(aExpedientes).toContainEqual({ motivo_rechazo: 'El caso no cumple la política de Cofianza.' });
+      expect(JSON.stringify(aExpedientes)).not.toContain('DTI');
+    });
+
+    it('rechazar (P34): sin el motivo para el gestor el body no pasa la validación', () => {
+      const base = { nuevo_estado: 'rechazado', comentario: 'Fundamento interno del analista' };
+      expect(transitionBodySchema.safeParse(base).success).toBe(false);
+      expect(transitionBodySchema.safeParse({ ...base, motivo: '  corto  ' }).success).toBe(false);
+      expect(transitionBodySchema.safeParse({ ...base, motivo: 'No cumple la política de Cofianza' }).success).toBe(true);
+      // Las demás transiciones no lo piden.
+      expect(transitionBodySchema.safeParse({ nuevo_estado: 'cerrado', comentario: 'El prospecto desistió' }).success).toBe(true);
     });
 
     it('cancelar: se le avisa al dueño (la guía del condicionado se lo promete)', async () => {
