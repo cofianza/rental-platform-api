@@ -16,6 +16,8 @@ import { coarrendatarioVinculado } from '../estudios/coarrendatario-vinculado';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
 import { canonMaximoTolerado } from '../estudios/portabilidad';
 import { escalarTopeCanon } from './tope-coafianzamiento';
+import { diasCalendario } from './v3/asistente.reglas';
+import { fechaBogota } from './v3/formato';
 import { getCalibracion } from '@/lib/calibracion';
 import type {
   GenerarContratoInput,
@@ -647,6 +649,37 @@ function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: bo
     `Este estudio tiene ${conCoarrendatario ? 'co-arrendatario' : 'co-titular de la fianza'} y este contrato no lo incluye como parte que firma. Hazlo con el contrato nuevo de Cofianza.`,
     'CONTRATO_REQUIERE_COARRENDATARIO',
   );
+}
+
+/** fecha_completado de la última evaluación del titular (la que lee el asistente V3); null si no hay o no tiene fecha. */
+async function evaluacionCompletadaEn(expedienteId: string): Promise<string | null> {
+  const { data } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('fecha_completado')
+    .eq('expediente_id', expedienteId)
+    .eq('tipo', 'individual')
+    .eq('estado', 'completado')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as { fecha_completado?: string | null } | null)?.fecha_completado ?? null;
+}
+
+/**
+ * P21 (Adenda 1 de la Política §6): tampoco se genera ni se envía a firma con
+ * una evaluación de más de VIGENCIA_CRC_DIAS (el día 60 pasa y el 61 bloquea,
+ * como en el asistente V3). Sin fecha (registros manuales antiguos) no bloquea.
+ */
+async function assertEvaluacionVigente(expedienteId: string): Promise<void> {
+  const [completadoEn, cal] = await Promise.all([evaluacionCompletadaEn(expedienteId), getCalibracion()]);
+  if (!completadoEn) return;
+  const completado = fechaBogota(completadoEn);
+  if (diasCalendario(completado, fechaBogota(new Date())) > cal.VIGENCIA_CRC_DIAS) {
+    throw AppError.conflict(
+      `La evaluación se completó el ${completado.split('-').reverse().join('/')} y ya tiene más de ${cal.VIGENCIA_CRC_DIAS} días calendario. Se requiere una nueva evaluación.`,
+      'ESTUDIO_VENCIDO',
+    );
+  }
 }
 
 /**
@@ -1516,6 +1549,7 @@ export async function enviarContratoAFirma(
     (await coarrendatarioVinculado(c.expediente_id)) !== null,
     !!(c.datos_variables as { cotitular?: { nombre_completo?: string } } | null)?.cotitular?.nombre_completo,
   );
+  await assertEvaluacionVigente(c.expediente_id);
 
   // El PDF que va a Auco es el del borrador; si después se corrigió el teléfono
   // (modal de firma) o la cuenta de recaudo, el sobre saldría con los datos
@@ -2032,6 +2066,7 @@ export async function generarContrato(
     ? input.cotitular.nombre
     : (expRow as { cotitular_nombre?: string | null }).cotitular_nombre;
   assertSinPartesAdicionales(!!expData.coarrendatario, !!cotitularNombre);
+  await assertEvaluacionVigente(expedienteId);
 
   // 1b. Bloqueo: el arrendador debe tener completos los datos del contrato.
   // Si falta cualquiera (domicilio, cuenta de recaudo, contacto, matricula /

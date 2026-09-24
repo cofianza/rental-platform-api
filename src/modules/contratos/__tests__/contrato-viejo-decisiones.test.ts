@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Contrato del flujo anterior (plantilla V4): decisiones del 2026-09-24.
@@ -188,6 +188,48 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({
       errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO',
     });
+    expect(escrituras()).toEqual([]);
+  });
+});
+
+describe('P21: vigencia de la evaluación (60 días) también en el contrato viejo', () => {
+  const HOY = new Date('2026-09-24T15:00:00Z'); // 10:00 en Bogotá
+  const evaluacion = (fecha_completado: string | null) => ({ data: { fecha_completado }, error: null });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(HOY);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('evaluación de hace 61 días → 409 ESTUDIO_VENCIDO antes de reservar o escribir', async () => {
+    prepararGenerar();
+    enqueue('estudios', evaluacion('2026-07-25T20:00:00Z'));
+    const e = await error(generar());
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_VENCIDO' });
+    expect(e.message).toBe('La evaluación se completó el 25/07/2026 y ya tiene más de 60 días calendario. Se requiere una nueva evaluación.');
+    expect(mockCompletitud).not.toHaveBeenCalled();
+    expect(escrituras()).toEqual([]);
+  });
+
+  it.each([
+    ['el día 60 pasa', '2026-07-26T20:00:00Z'],
+    ['sin fecha (registro manual antiguo) no bloquea', null],
+  ])('%s', async (_caso, fecha) => {
+    prepararGenerar();
+    enqueue('estudios', evaluacion(fecha));
+    expect((await error(generar())).errorCode).toBe('PERFIL_ARRENDADOR_INCOMPLETO');
+  });
+
+  it('enviar a firma un borrador viejo con la evaluación vencida → 409 sin tocar el contrato', async () => {
+    enqueue('contratos', {
+      data: { id: CTO, estado: 'borrador', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables: {} },
+      error: null,
+    });
+    enqueue('estudios', evaluacion('2026-07-01T20:00:00Z'));
+    expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_VENCIDO' });
     expect(escrituras()).toEqual([]);
   });
 });
