@@ -1,7 +1,10 @@
 -- ============================================================
 -- Equipos: una persona pertenece a una sola inmobiliaria a la vez.
 --
--- Opcional: el API funciona igual con o sin esta migración. Idempotente.
+-- SE DEBE CORRER. El API funciona antes y después, pero sin ella el chequeo de
+-- la API no frena dos aceptaciones simultáneas (una persona puede quedar en
+-- dos inmobiliarias) y el cierre no queda marcado (la inmobiliaria cerrada
+-- sigue contando en el dashboard). Idempotente.
 --
 -- 1. Índice único parcial. vincularMiembro (aceptar o registrarse con una
 --    invitación) ya responde 409 YA_PERTENECE_A_OTRA_INMOBILIARIA si la persona
@@ -18,10 +21,11 @@
 --      GROUP BY perfil_id HAVING count(*) > 1;
 --
 -- 2. Estado 'cerrada'. Cuando el titular único de una inmobiliaria vacía (sin
---    equipo, inmuebles, estudios en curso ni créditos) acepta unirse a otra, la
---    API revoca su membresía y marca la suya 'cerrada', sin borrar filas. Sin
---    esta parte la marca falla con un aviso en el log y quedan la membresía
---    revocada y la constancia en la bitácora.
+--    equipo, inmuebles, estudios en curso, fichas, créditos ni compras
+--    pendientes) la cierra al salir (salirDeOrg), la API revoca su membresía y
+--    las invitaciones pendientes y la marca 'cerrada', sin borrar filas. Sin
+--    esta parte la marca falla con un aviso en el log (quedan la membresía
+--    revocada y la constancia en la bitácora).
 -- ============================================================
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_inmob_miembro_una_activa_por_perfil
