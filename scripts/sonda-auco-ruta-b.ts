@@ -8,11 +8,12 @@
  *   1. si Auco acepta label y position a la vez, y varias posiciones por firmante;
  *   2. el origen de (x, y) —suponemos arriba a la izquierda— y que (x, y) es la
  *      esquina INFERIOR DERECHA del recuadro de 150×50 pt;
- *   3. si mide sobre la página como se ve: con /Rotate (pág. 3) y con CropBox (pág. 4).
+ *   3. si mide sobre la página como se ve: con /Rotate (pág. 3) y con CropBox (pág. 4);
+ *   4. que `page` cuente desde 1 y que w/h sean puntos.
  *
  * Arma su propio PDF (no toca la base de datos): pág. 1 con dos rayas rotuladas;
  * pág. 2 con las anclas {{signature:0}} y {{signature:1}} como en el Anexo; pág. 3
- * girada 90° y pág. 4 con CropBox, con dos rayas cada una. Las posiciones salen de
+ * girada 90° y pág. 4 con un CropBox grande y asimétrico, con dos rayas cada una. Las posiciones salen de
  * las MISMAS funciones del envío: congelarFirmas (geometría leída del PDF),
  * posicionesDeFirma (posicionAuco) y construirSignProfile.
  *
@@ -22,7 +23,8 @@
  *   railway run npx ts-node -r tsconfig-paths/register scripts/sonda-auco-ruta-b.ts \
  *     "Ana Pérez|ana@correo.co|3001112233" "Beto Díaz|beto@correo.co|3004445566" [--confirmar]
  *
- * Luego, para seguir el proceso: SONDA_ACCION=ver SONDA_CODE=<código> (src/scripts/sonda-auco-v3.ts).
+ * Para seguir el proceso y anularlo al terminar: src/scripts/sonda-auco-v3.ts con SONDA_ACCION=ver o
+ * SONDA_ACCION=cancelar SONDA_CONFIRMAR=si (lo imprime esta sonda con el código).
  */
 
 import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
@@ -30,10 +32,12 @@ import { env } from '@/config';
 import { uploadDocumentForSignature } from '@/lib/auco';
 import type { MarcaFirma } from '@/modules/contratos/v3/asistente.types';
 import {
+  RECUADRO_FIRMA,
   congelarFirmas,
   construirSignProfile,
   posicionesDeFirma,
   type ParteFirmante,
+  type PosicionAuco,
 } from '@/modules/contratos/v3/firma/reglas';
 
 /**
@@ -50,6 +54,8 @@ export const RAYAS: MarcaFirma[] = [
 ];
 /** Largo de cada raya, relativo al ancho que se ve. */
 export const LARGO = 0.3;
+/** Pág. 4: CropBox grande y asimétrico (x, y, ancho, alto en pt) sobre un MediaBox de 612×792. */
+export const RECORTE = [150, 200, 400, 500] as const;
 
 /** Un punto de la página como se ve (relativo, origen arriba-izquierda) → coordenadas del PDF. Solo /Rotate 0 y 90 (los de la sonda). */
 function aPdf(p: PDFPage, vx: number, vy: number): { x: number; y: number } {
@@ -71,30 +77,43 @@ function raya(p: PDFPage, font: PDFFont, x: number, y: number, rotulo: string, c
   escribir(p, font, x - LARGO / 2, y + 0.025, rotulo, 7);
 }
 
+/**
+ * Pág. 4: si Auco midiera sobre el MediaBox y no sobre el CropBox, cuánto se correría la
+ * firma (centro del borde inferior del recuadro) respecto de su marca, en pt: + = a la
+ * derecha / hacia abajo, en la página como se ve.
+ */
+function corrimientoSiMediaBox(p: PDFPage, m: MarcaFirma, pos: PosicionAuco): { derecha: number; abajo: number } {
+  const c = p.getCropBox();
+  const mb = p.getMediaBox();
+  const marcaX = c.x - mb.x + m.x * c.width; // desde el borde izquierdo del MediaBox
+  const marcaY = mb.y + mb.height - (c.y + c.height) + m.y * c.height; // desde el borde superior del MediaBox
+  return { derecha: Math.round(pos.x * mb.width - pos.w / 2 - marcaX), abajo: Math.round(pos.y * mb.height - marcaY) };
+}
+
 export async function pdfDePrueba(nombres: string[]): Promise<Buffer> {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const [p1, p2, p3, p4] = [1, 2, 3, 4].map(() => doc.addPage([612, 792]));
   p3.setRotation(degrees(90));
-  p4.setCropBox(36, 36, 540, 720);
+  p4.setCropBox(...RECORTE);
   const titulos = [
-    'Pág. 1: firmas por position sobre las rayas (sin girar, sin recorte).',
-    'Pág. 2: firmas por ancla (label), como en el Anexo de condiciones.',
-    'Pág. 3: girada 90° (/Rotate). Firmas por position.',
-    'Pág. 4: con CropBox (36 pt de recorte por lado). Firmas por position.',
+    'Pág. 1: por position. Cada firma, sobre su raya y centrada en la marca roja.',
+    'Pág. 2: por ancla (label), como en el Anexo. Cada firma, sobre su raya.',
+    'Pág. 3: girada 90° (/Rotate). Cada firma, sobre su raya.',
+    'Pág. 4: con CropBox (se ve solo una parte). Cada firma, sobre su raya.',
   ];
   [p1, p2, p3, p4].forEach((p, i) => {
-    escribir(p, font, 0.08, 0.1, 'SONDA RUTA B · COFIANZA · documento de prueba sin efectos jurídicos', 11);
-    escribir(p, font, 0.08, 0.14, titulos[i]);
+    escribir(p, font, 0.08, 0.1, 'SONDA RUTA B · COFIANZA · prueba sin efectos jurídicos', 10);
+    escribir(p, font, 0.08, 0.14, titulos[i], 8);
   });
   for (const r of RAYAS) {
     const n = r.parte === 'arrendatario' ? 0 : 1;
-    raya([p1, p2, p3, p4][r.pagina - 1], font, r.x, r.y, `Firmante ${n + 1} (${nombres[n]}): su firma va sobre esta raya, centrada en la marca roja`);
+    raya([p1, p2, p3, p4][r.pagina - 1], font, r.x, r.y, `Firmante ${n + 1} (${nombres[n]})`);
   }
   // Pág. 2: el ancla va oculta (texto blanco y diminuto) al inicio de cada raya, como en el Anexo.
   for (const n of [0, 1]) {
     const y = 0.45 + n * 0.25;
-    raya(p2, font, 0.5, y, `Firmante ${n + 1} (${nombres[n]}): su firma va sobre el ancla oculta al inicio de esta raya`, false);
+    raya(p2, font, 0.5, y, `Firmante ${n + 1} (${nombres[n]}): ancla oculta al inicio de la raya`, false);
     escribir(p2, font, 0.5 - LARGO / 2, y - 0.004, `{{signature:${n}}}`, 2, rgb(1, 1, 1));
   }
   return Buffer.from(await doc.save());
@@ -128,8 +147,17 @@ async function main() {
 
   const pdf = await pdfDePrueba(partes.map((p) => p.nombre));
   // Como el envío: la geometría se lee del PDF que se manda y se congela con las marcas.
-  const firmasPropio = congelarFirmas(await PDFDocument.load(pdf), RAYAS);
-  const signProfile = construirSignProfile(partes, posicionesDeFirma(partes, { ruta: 'B', firmasPropio }));
+  const doc = await PDFDocument.load(pdf);
+  const firmasPropio = congelarFirmas(doc, RAYAS);
+  const posiciones = posicionesDeFirma(partes, { ruta: 'B', firmasPropio })!;
+  const signProfile = construirSignProfile(partes, posiciones);
+  const siMediaBox = RAYAS.filter((r) => r.pagina === 4).map((r) => {
+    const n = r.parte === 'arrendatario' ? 0 : 1;
+    const { derecha, abajo } = corrimientoSiMediaBox(doc.getPage(3), r, posiciones[n].find((q) => q.page === 4)!);
+    const horizontal = derecha ? `${Math.abs(derecha)} pt a la ${derecha > 0 ? 'derecha' : 'izquierda'}` : 'sin corrimiento horizontal';
+    return `firmante ${n + 1}: ${horizontal} y ${Math.abs(abajo)} pt ${abajo > 0 ? 'más abajo' : 'más arriba'}`;
+  });
+  const cm = (pt: number) => (pt * 2.54 / 72).toFixed(1).replace('.', ',');
   console.log(`Auco: ${env.AUCO_API_URL}`);
   console.log(`\n== Geometría congelada\n${JSON.stringify(firmasPropio.paginas, null, 2)}`);
   console.log(`\n== signProfile\n${mask(JSON.stringify(signProfile, null, 2))}`);
@@ -152,17 +180,33 @@ async function main() {
     },
     120_000,
   );
+  const { w, h } = RECUADRO_FIRMA;
   console.log(`\nCREADO. SONDA_CODE=${code}`);
   console.log(`
-Qué mirar al firmar (y en el PDF firmado que devuelve Auco):
+Qué mirar al firmar (y en el PDF firmado que devuelve Auco). Todo se corrige en posicionAuco
+(v3/firma/reglas.ts), con firmaX/firmaY = esquina superior izquierda del recuadro que queremos:
   Pág. 1: cada firma apoyada SOBRE su raya y centrada en la marca roja: el supuesto se cumple.
-    - Corrida ~150 pt a la izquierda o ~50 pt hacia arriba: (x, y) no es la esquina inferior derecha
-      (¿es la superior izquierda? corregir posicionAuco).
-    - Reflejada en vertical (la de abajo arriba y viceversa): el origen de y es abajo; usar 1 - y.
+    Si Auco toma (x, y) como otra esquina del recuadro, la firma se corre a la DERECHA y/o hacia ABAJO:
+    - ${w} pt (${cm(w)} cm) a la derecha y ${h} pt (${cm(h)} cm) hacia abajo: es la esquina superior izquierda
+      → x = firmaX / ancho, y = firmaY / alto.
+    - ${w} pt a la derecha, a la altura de la raya: es la esquina inferior izquierda → x = firmaX / ancho.
+    - ${h} pt hacia abajo, centrada: es la esquina superior derecha → y = firmaY / alto.
+    - ${w / 2} pt a la derecha y ${h / 2} pt hacia abajo: es el centro → x = (firmaX + w/2) / ancho, y = (firmaY + h/2) / alto.
+    - Reflejada en vertical (la del firmante 2, con la raya al 80 % de la altura, cae cerca del 20 %):
+      Auco mide y desde abajo → y = 1 − (firmaY + h) / alto.
+    - Una página más adelante (las de la pág. 1 en la 2, las de la 3 en la 4; las de la 4, perdidas):
+      Auco cuenta las páginas desde 0 → page = pagina − 1.
+    - El recuadro no mide ~${cm(w)} × ${cm(h)} cm (${w} × ${h} pt): w/h no son puntos → ajustar RECUADRO_FIRMA.
   Pág. 2: cada firma sobre su ancla: label sigue funcionando junto con position.
   Pág. 3 (girada): igual que la 1. Si solo aquí falla, Auco no aplica /Rotate como un visor.
-  Pág. 4 (recortada): igual que la 1. Si solo aquí queda corrida ~36 pt, Auco mide sobre el MediaBox.
-  Si Auco rechazó el envío con un 400, lea el mensaje: puede que no acepte label y position juntos.`);
+  Pág. 4 (recortada): igual que la 1. Si Auco midiera sobre el MediaBox, se correrían así:
+    ${siMediaBox.join('; ')}.
+  Si Auco rechazó el envío con un 400, lea el mensaje: puede que no acepte label y position juntos.
+
+Para seguirlo y, al terminar (o si algo sale mal), anularlo:
+  SONDA_ACCION=ver SONDA_CODE=${code} railway run npx ts-node -r tsconfig-paths/register src/scripts/sonda-auco-v3.ts
+  SONDA_ACCION=cancelar SONDA_CODE=${code} SONDA_CONFIRMAR=si railway run npx ts-node -r tsconfig-paths/register src/scripts/sonda-auco-v3.ts
+  (desde la Console de Railway: las mismas variables con node dist/scripts/sonda-auco-v3.js). Si nadie firma, vence solo en 4 días.`);
 }
 
 // Solo al correrla como script: importarla (para revisar el PDF) no llama a nada.
