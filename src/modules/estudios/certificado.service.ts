@@ -181,13 +181,15 @@ export interface CertificatePdfData {
  * firma, y el que baja el arrendatario, no lleva puntaje ni observaciones.
  * Sale todo lo que lo revela: el score del buró, el perfil ("Aprobado
  * automatico (87 pts)"), la decisión de cascada ("puntaje 92 >= 90…") y el
- * denominador. Mismo criterio que redactarEstudioParaProspecto.
+ * denominador. Mismo criterio que redactarEstudioParaProspecto. Las
+ * condiciones del analista cuentan como observaciones (A10).
  */
 export function sinPuntaje(data: CertificatePdfData): CertificatePdfData {
   return {
     ...data,
     score: null,
     observaciones: null,
+    condiciones: null,
     rutaEtiqueta: null,
     decisionCascada: null,
     denominadorPuntaje: null,

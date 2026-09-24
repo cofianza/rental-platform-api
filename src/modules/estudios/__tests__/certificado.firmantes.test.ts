@@ -203,10 +203,22 @@ describe('el PDF sin puntaje', () => {
     const firmantes = impreso();
     for (const s of SENSIBLE) expect(firmantes).not.toContain(s);
     expect(firmantes).toContain(NOTA);
-    // Lo demás del certificado sigue: número, resultado, condiciones y tarifas.
-    for (const s of ['CERT-2026-00042', 'APROBADO', 'Presentar el contrato laboral', 'Tarifa mensual de la fianza', 'Prima de vinculación']) {
+    // Lo demás del certificado sigue: número, resultado y tarifas.
+    for (const s of ['CERT-2026-00042', 'APROBADO', 'Tarifa mensual de la fianza', 'Prima de vinculación']) {
       expect(firmantes).toContain(s);
     }
+  });
+
+  // A10: las condiciones del analista cuentan como observaciones.
+  it('las condiciones del analista van en el completo y no en el de firmantes', async () => {
+    await generateCertificatePdf(DATOS, QR);
+    expect(impreso()).toContain('Presentar el contrato laboral');
+
+    textos.mockClear();
+    await generateCertificatePdf(sinPuntaje(DATOS), QR);
+    const firmantes = impreso();
+    expect(firmantes).not.toContain('Presentar el contrato laboral');
+    expect(textos.mock.calls.some((c) => c[0] === 'Condiciones')).toBe(false);
   });
 });
 
