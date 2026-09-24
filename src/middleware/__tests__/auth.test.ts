@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Request, Response } from 'express';
 
 // ============================================================
@@ -25,6 +25,7 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/lib/tenantScope', () => ({ resolveRolMiembro: vi.fn(async () => 'owner') }));
 
 import { authMiddleware, invalidateAuthCache, cerrarSesionesDe } from '../auth';
+import { resolveRolMiembro } from '@/lib/tenantScope';
 
 const ID = '11111111-2222-4333-8444-555555555555';
 const OTRO = '99999999-2222-4333-8444-555555555555';
@@ -74,6 +75,47 @@ describe('authMiddleware', () => {
     await authMiddleware(r, {} as Response, next);
     expect(next).toHaveBeenCalledTimes(1);
     expect(mockGetUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('bloqueo de escritura de miembros de una inmobiliaria', () => {
+  const rolMiembro = vi.mocked(resolveRolMiembro);
+  const post = (path: string) =>
+    ({ headers: { authorization: `Bearer ${jwt(ID)}` }, method: 'POST', originalUrl: path }) as unknown as Request;
+  const ACEPTAR = '/api/v1/public/invitacion-miembro/tok123/aceptar';
+
+  beforeEach(() => {
+    mockPerfil.mockImplementation(async (id: string) => ({ data: { id, rol: 'inmobiliaria', estado: 'activo' }, error: null }));
+  });
+  afterEach(() => rolMiembro.mockResolvedValue('owner'));
+
+  it('el de sólo lectura puede aceptar una invitación a otro equipo (el servicio responde el 409 claro); lo demás sigue bloqueado', async () => {
+    rolMiembro.mockResolvedValue('solo_lectura');
+    const next = vi.fn();
+    await authMiddleware(post(ACEPTAR), {} as Response, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    for (const path of [
+      '/api/v1/inmuebles',
+      `${ACEPTAR}/otra`,
+      '/api/v1/inmobiliaria/miembros/invitar',
+      '/api/v1/public/invitacion-miembro/tok123/registrar',
+    ]) {
+      await expect(authMiddleware(post(path), {} as Response, vi.fn())).rejects.toMatchObject({
+        statusCode: 403,
+        errorCode: 'MIEMBRO_SOLO_LECTURA',
+      });
+    }
+  });
+
+  it('el miembro con perfil incompleto también puede aceptar; lo demás sigue bloqueado', async () => {
+    rolMiembro.mockResolvedValue('miembro');
+    const next = vi.fn();
+    await authMiddleware(post(ACEPTAR), {} as Response, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    await expect(authMiddleware(post('/api/v1/expedientes'), {} as Response, vi.fn())).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'PERFIL_PERSONAL_INCOMPLETO',
+    });
   });
 });
 

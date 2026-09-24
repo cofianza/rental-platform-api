@@ -20,7 +20,10 @@ function viewerPuedeMutar(path: string): boolean {
     path.startsWith('/api/v1/notificaciones') || // marcar leídas
     path.startsWith('/api/v1/auth') || // logout, cambio de contraseña, refresh, perfil propio (/auth/me/perfil)
     path.startsWith('/api/v1/users') || // perfil propio (con RBAC adicional)
-    path === '/api/v1/inmobiliaria/miembros/salir' // salir de la organización
+    path === '/api/v1/inmobiliaria/miembros/salir' || // salir de la organización
+    // aceptar una invitación a otro equipo: el servicio responde el 409 claro
+    // (ya perteneces a otra, eres titular de otra) y no este bloqueo genérico
+    /^\/api\/v1\/public\/invitacion-miembro\/[^/]+\/aceptar$/.test(path)
   );
 }
 
