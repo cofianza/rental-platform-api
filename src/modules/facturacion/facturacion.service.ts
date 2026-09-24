@@ -92,6 +92,8 @@ interface PagoConContexto {
   nombre_pagador: string | null;
   /** Quien creó el cobro. En la opción B es el gestor que pagó. */
   creado_por: string | null;
+  metodo: string | null;
+  gateway_response: unknown;
   expediente: {
     numero: string;
     // municipio_id: código DANE (5 dígitos, ej. "11001").
@@ -100,6 +102,26 @@ interface PagoConContexto {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
+
+/**
+ * Medio de pago de la factura (tabla de medios de pago del anexo técnico DIAN)
+ * según cómo entró la plata: tarjeta crédito 48, débito 49, PSE 47, Efecty 10,
+ * transferencia 47, cheque 20, efectivo 10; cualquier otro, 1 (instrumento no
+ * definido). En la pasarela lo dice el payment_type_id de Mercado Pago.
+ */
+export function medioPagoDian(metodo: string | null | undefined, gatewayResponse: unknown): string {
+  if (metodo === 'transferencia') return '47';
+  if (metodo === 'cheque') return '20';
+  if (metodo === 'efectivo') return '10';
+  if (metodo !== 'pasarela') return '1';
+  switch ((gatewayResponse as { payment_type_id?: unknown } | null)?.payment_type_id) {
+    case 'credit_card': return '48';
+    case 'debit_card': return '49';
+    case 'bank_transfer': return '47'; // PSE
+    case 'ticket': return '10'; // Efecty: efectivo en un punto de pago
+    default: return '1';
+  }
+}
 
 function mapTipoDocumentoToFactus(tipo: string): string {
   // V2 usa códigos DIAN estándar:
@@ -123,6 +145,7 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, expediente_id, concepto, monto, estado, email_pagador, nombre_pagador, creado_por,
+      metodo, gateway_response,
       expediente:expedientes(
         numero,
         solicitante:solicitantes(
@@ -530,7 +553,7 @@ export async function crearFacturaDesdePago(
     payment_details: [
       {
         payment_form: 1, // contado
-        payment_method_code: '10', // efectivo (Stripe procesó por fuera)
+        payment_method_code: medioPagoDian(ctx.metodo, ctx.gateway_response),
         reference_code: pagoId.replace(/-/g, '').slice(0, 12).toUpperCase(),
         amount: monto.toFixed(2), // total con IVA si aplica
       },
@@ -811,7 +834,7 @@ export async function crearFacturaDesdeCompraCreditos(
   // 2. Cargar la compra y validar pertenencia + estado.
   const { data: compraRow, error: compraErr } = await (supabase
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, perfil_id, cantidad_estudios, precio_cop, estado, stripe_session_id, stripe_payment_intent_id, completed_at, paquete_id')
+    .select('id, perfil_id, cantidad_estudios, precio_cop, estado, stripe_session_id, stripe_payment_intent_id, completed_at, paquete_id, gateway_response')
     .eq('id', compraId)
     .single();
 
@@ -829,6 +852,7 @@ export async function crearFacturaDesdeCompraCreditos(
     stripe_payment_intent_id: string | null;
     completed_at: string | null;
     paquete_id: string;
+    gateway_response: unknown;
   };
 
   // La compra es de la organización (perfil canónico): cualquier miembro la
@@ -944,7 +968,7 @@ export async function crearFacturaDesdeCompraCreditos(
     payment_details: [
       {
         payment_form: 1,
-        payment_method_code: '10',
+        payment_method_code: medioPagoDian('pasarela', compra.gateway_response),
         reference_code: (compra.stripe_session_id || compraId).replace(/[^A-Z0-9]/gi, '').slice(0, 12).toUpperCase(),
         amount: monto.toFixed(2),
       },

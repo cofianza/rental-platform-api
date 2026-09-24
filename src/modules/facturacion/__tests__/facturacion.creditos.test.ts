@@ -185,3 +185,33 @@ describe('crearFacturaDesdeCompraCreditos: la compra es de la organización', ()
     expect(mockCanonical).not.toHaveBeenCalled();
   });
 });
+
+// P39: la factura del paquete lleva el medio de pago de Mercado Pago.
+describe('crearFacturaDesdeCompraCreditos: medio de pago', () => {
+  it('PSE: medio 47', async () => {
+    enqueue('facturas', { data: null, error: null }, { data: null, error: null }, { data: { id: 'fac-1' }, error: null });
+    enqueue('compras_creditos_estudios', {
+      data: {
+        id: 'compra-1', perfil_id: 'owner-1', cantidad_estudios: 25, precio_cop: 1400000, estado: 'completado',
+        stripe_session_id: 'pref-1', stripe_payment_intent_id: 'mp-1', completed_at: '2026-09-02', paquete_id: 'paq-25',
+        gateway_response: { payment_type_id: 'bank_transfer' },
+      },
+      error: null,
+    });
+    enqueue('perfiles', {
+      data: {
+        id: 'owner-1', nombre: 'Ana', apellido: 'Titular', rol: 'inmobiliaria', tipo_documento: 'NIT', numero_documento: null,
+        razon_social: 'Inmo SAS', nit: '900123456', direccion: 'Calle 1', direccion_comercial: null, ciudad: 'Bogotá',
+        nombre_representante: null, telefono: '3000000000', email_recaudo: null, municipio_codigo: '11001', municipio_nombre: 'Bogotá',
+      },
+      error: null,
+    });
+    enqueue('configuracion_sistema', { data: { valor: '0' }, error: null });
+    mockCreateBill.mockResolvedValueOnce({ data: { bill: { id: 1, number: 'FE9', cufe: 'c', total: '1400000.00', tax_amount: '0' } } });
+
+    await crearFacturaDesdeCompraCreditos('compra-1', null, undefined, null);
+
+    const payload = mockCreateBill.mock.calls[0][0];
+    expect(payload.payment_details[0].payment_method_code).toBe('47');
+  });
+});

@@ -57,7 +57,7 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 
-import { crearFacturaDesdePago, previewFacturaPago, updateTarifasIva, listTarifasIva } from '../facturacion.service';
+import { crearFacturaDesdePago, previewFacturaPago, updateTarifasIva, listTarifasIva, medioPagoDian } from '../facturacion.service';
 
 const solicitante = {
   id: 'sol-1', tipo_persona: 'natural', nombre: 'Juan', apellido: 'Pérez', razon_social: null,
@@ -218,5 +218,34 @@ describe('Tarifas de IVA', () => {
     const filas = ops.filter((o) => o.method === 'upsert').map((o) => o.args[0] as { clave: string; descripcion: string });
     expect(filas.find((f) => f.clave === 'iva_concepto_garantia')?.descripcion).not.toContain('exento');
     expect(filas.find((f) => f.clave === 'iva_concepto_otro')?.descripcion).toContain('0 = exento');
+  });
+});
+
+// P39: el medio de pago de la factura es el de la plata que entró (tabla de
+// medios de pago del anexo técnico DIAN), no 'efectivo' para todo.
+describe('medio de pago DIAN', () => {
+  it.each([
+    ['pasarela', { payment_type_id: 'credit_card' }, '48'],
+    ['pasarela', { payment_type_id: 'debit_card' }, '49'],
+    ['pasarela', { payment_type_id: 'bank_transfer', payment_method_id: 'pse' }, '47'],
+    ['pasarela', { payment_type_id: 'ticket', payment_method_id: 'efecty' }, '10'],
+    ['transferencia', null, '47'],
+    ['cheque', null, '20'],
+    ['efectivo', null, '10'],
+    ['pasarela', { payment_type_id: 'account_money' }, '1'],
+    ['pasarela', null, '1'],
+  ])('%s %j → %s', (metodo, gw, codigo) => {
+    expect(medioPagoDian(metodo, gw)).toBe(codigo);
+  });
+
+  it('la factura de un pago con tarjeta de crédito por Mercado Pago lleva 48', async () => {
+    enqueue('facturas', { data: null, error: null }, { data: null, error: null }, { data: { id: 'fac-1' }, error: null });
+    mockCreateBill.mockResolvedValueOnce({ data: { bill: { id: 1, number: 'FE1', cufe: 'cufe-1', total: '80000.00', tax_amount: '0' } } });
+    const p = pago('completado');
+    enqueue('pagos', { ...p, data: { ...p.data, metodo: 'pasarela', gateway_response: { payment_type_id: 'credit_card' } } });
+
+    await crearFacturaDesdePago('pago-1', null);
+
+    expect(mockCreateBill.mock.calls[0][0].payment_details[0].payment_method_code).toBe('48');
   });
 });
