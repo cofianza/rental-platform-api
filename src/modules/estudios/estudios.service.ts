@@ -255,7 +255,7 @@ export async function listEstudios(
   // listado POR EXPEDIENTE (pocas filas): la ruta va fila a fila y la
   // expiracion con UNA lectura de la autorizacion del titular para todas.
   const filas = (data || []) as unknown as Record<string, unknown>[];
-  const decision = await decisionDeCofianza(expediente as ExpedienteDecision);
+  const decision = await decisionParaLectura(expediente as ExpedienteDecision, filas);
   const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila, decision)));
   const conDerivados = await adjuntarExpiracionALista(conRuta, expedienteId, autorizacion);
 
@@ -544,7 +544,7 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
         .eq('id', row.expediente_id as string)
         .maybeSingle()) as { data: ExpedienteDecision | null }).data
     : null;
-  const conRuta = await adjuntarRuta(row, exp ? await decisionDeCofianza(exp) : undefined);
+  const conRuta = await adjuntarRuta(row, await decisionParaLectura(exp, [row]));
   const conDerivados = await adjuntarExpiracion(conRuta);
 
   // Mismo criterio que en los listados: al prospecto no le viajan ni el motivo
@@ -630,6 +630,29 @@ function veredictoExpiracion(
     ahoraMs: Date.now(),
     plazoDias: plazoDelEnlace ?? plazoDias,
   });
+}
+
+/**
+ * La decisión de Cofianza para las lecturas (ruta y certificado_sin_efecto),
+ * solo si alguna fila es aprobado o condicionado. Si la prueba del cierre no se
+ * puede leer, degrada a sin decisión (la ruta con el resultado del estudio, el
+ * certificado sin marcar) en vez de tumbar la lectura: la descarga y la
+ * generación del certificado fallan cerradas con 503 por su cuenta.
+ */
+async function decisionParaLectura(
+  exp: ExpedienteDecision | null,
+  filas: Record<string, unknown>[],
+): Promise<DecisionCofianza | undefined> {
+  if (!exp || !filas.some((f) => f.resultado === 'aprobado' || f.resultado === 'condicionado')) return undefined;
+  try {
+    return await decisionDeCofianza(exp);
+  } catch (err) {
+    logger.warn(
+      { expedienteId: exp.id, err: err instanceof Error ? err.message : String(err) },
+      'Estudios: no se pudo leer la decisión de Cofianza; va el resultado del estudio',
+    );
+    return undefined;
+  }
 }
 
 /**

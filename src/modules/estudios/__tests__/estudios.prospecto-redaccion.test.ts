@@ -174,6 +174,33 @@ describe('certificado sin efecto en el estudio', () => {
   });
 });
 
+// Las lecturas no se caen si la prueba del cierre no se puede leer: la
+// descarga y la generación del certificado ya fallan cerradas con 503.
+describe('la decisión de Cofianza en las lecturas', () => {
+  const CERRADO_SIN_MARCA = { id: 'exp-1', estado: 'cerrado', estado_pre_cancelacion: null };
+  const FALLA = { data: null, error: { message: 'canceling statement due to statement timeout' } };
+
+  it('si falla la lectura de la prueba, el listado y el detalle degradan: sin marca de sin efecto', async () => {
+    enqueue('expedientes', { data: CERRADO_SIN_MARCA, error: null });
+    enqueue('estudios', { data: [{ ...fila('individual'), certificado_url: 'k.pdf' }], error: null, count: 1 });
+    enqueue('contratos', FALLA);
+    const lista = await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-1', 'solicitante');
+    expect(lista.estudios[0]).toMatchObject({ certificado_sin_efecto: false, ruta: { ruta: 'perfil_medio' } });
+
+    enqueue('estudios', { data: { ...fila('individual'), certificado_url: 'k.pdf' }, error: null });
+    enqueue('expedientes', { data: CERRADO_SIN_MARCA, error: null });
+    enqueue('contratos', FALLA);
+    expect(await getEstudioById('est-1', 'u-1', 'solicitante')).toMatchObject({ certificado_sin_efecto: false });
+  });
+
+  it('sin filas aprobadas ni condicionadas no busca la prueba', async () => {
+    enqueue('expedientes', { data: CERRADO_SIN_MARCA, error: null });
+    enqueue('estudios', { data: [{ ...fila('individual'), resultado: 'rechazado' }], error: null, count: 1 });
+    await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-2', 'inmobiliaria');
+    expect(ops.some((o) => o.table === 'contratos' || o.table === 'eventos_timeline')).toBe(false);
+  });
+});
+
 describe('las demas rutas por id que el titular alcanza', () => {
   // El 404 del guard, no el de "no hay certificado".
   const OCULTO = { statusCode: 404, errorCode: 'ESTUDIO_NOT_FOUND' };
