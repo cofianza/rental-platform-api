@@ -762,7 +762,7 @@ export interface InvitacionMiembroPublicInfo {
   organizacion: string;
   invitador: string | null;
   tiene_cuenta: boolean; // true -> debe iniciar sesión; false -> debe registrarse
-  cuenta_otro_rol: boolean; // true -> el correo es de un propietario o arrendatario: no puede unirse
+  cuenta_otro_rol: CuentaOtroRol; // no null -> el correo ya tiene otra cuenta: no puede unirse
 }
 
 interface InvitacionRow {
@@ -818,14 +818,23 @@ async function cuentaDelCorreo(email: string): Promise<{ rol: string | null } | 
 }
 
 // Solo una cuenta de inmobiliaria (o una nueva) se une a un equipo: la de un
-// propietario o arrendatario no cambia de rol, y aceptar la invitación con
-// ella quedaba en un callejón sin salida.
-const esCuentaDeOtroRol = (c: { rol: string | null } | null): boolean => !!c && c.rol !== 'inmobiliaria';
+// propietario, un arrendatario o del equipo de Cofianza no cambia de rol, y
+// aceptar la invitación con ella quedaba en un callejón sin salida.
+type CuentaOtroRol = 'interna' | 'propietario_o_arrendatario' | null;
+const ROLES_COFIANZA = ['administrador', 'operador_analista', 'gerencia_consulta'];
+
+function cuentaDeOtroRol(c: { rol: string | null } | null): CuentaOtroRol {
+  if (!c || c.rol === 'inmobiliaria') return null;
+  return ROLES_COFIANZA.includes(c.rol ?? '') ? 'interna' : 'propietario_o_arrendatario';
+}
 
 async function assertCorreoPuedeUnirse(email: string): Promise<void> {
-  if (esCuentaDeOtroRol(await cuentaDelCorreo(email))) {
+  const otra = cuentaDeOtroRol(await cuentaDelCorreo(email));
+  if (otra) {
     throw AppError.conflict(
-      'Ese correo ya tiene una cuenta de propietario o arrendatario en Cofianza y no puede unirse a un equipo. Invita otro correo.',
+      otra === 'interna'
+        ? 'Ese correo ya tiene una cuenta en Cofianza con otro tipo de acceso y no puede unirse a un equipo. Invita otro correo.'
+        : 'Ese correo ya tiene una cuenta de propietario o arrendatario en Cofianza y no puede unirse a un equipo. Invita otro correo.',
       'EMAIL_OTRO_ROL',
     );
   }
@@ -857,7 +866,7 @@ export async function getInvitacionMiembroPublic(token: string): Promise<Invitac
     organizacion: inv.inmobiliarias?.nombre ?? 'la inmobiliaria',
     invitador,
     tiene_cuenta: !!cuenta,
-    cuenta_otro_rol: esCuentaDeOtroRol(cuenta),
+    cuenta_otro_rol: cuentaDeOtroRol(cuenta),
   };
 }
 

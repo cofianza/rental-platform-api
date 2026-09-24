@@ -288,6 +288,16 @@ describe('un correo de propietario o arrendatario no se une a un equipo', () => 
     expect(mockEnviarInvitacion).not.toHaveBeenCalled();
   });
 
+  it('con una cuenta del equipo de Cofianza el mensaje no habla de propietario ni arrendatario', async () => {
+    enqueue(ownerMembership, { data: null }, { data: { id: 'p-staff' } }, { data: { rol: 'operador_analista' } });
+    await expect(invitarMiembro('p-self', { email: 'analista@cofianza.co', rol_miembro: 'miembro' })).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'EMAIL_OTRO_ROL',
+      message: 'Ese correo ya tiene una cuenta en Cofianza con otro tipo de acceso y no puede unirse a un equipo. Invita otro correo.',
+    });
+    expect(mockEnviarInvitacion).not.toHaveBeenCalled();
+  });
+
   it('un correo sin cuenta sí se invita', async () => {
     enqueue(
       ownerMembership,
@@ -316,15 +326,20 @@ describe('un correo de propietario o arrendatario no se une a un equipo', () => 
     error: null,
   };
 
-  it('la página de una invitación ya enviada lo sabe: cuenta_otro_rol', async () => {
+  it('la página de una invitación ya enviada lo sabe: cuenta_otro_rol dice cuál', async () => {
     enqueue(invitacion, { data: { id: 'p-otro' } }, { data: { rol: 'propietario' } });
-    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: true });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({
+      tiene_cuenta: true,
+      cuenta_otro_rol: 'propietario_o_arrendatario',
+    });
+    enqueue(invitacion, { data: { id: 'p-staff' } }, { data: { rol: 'administrador' } });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: 'interna' });
   });
 
   it('una cuenta de inmobiliaria o un correo sin cuenta no lo son', async () => {
     enqueue(invitacion, { data: { id: 'p-inmo' } }, { data: { rol: 'inmobiliaria' } });
-    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: false });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: null });
     enqueue(invitacion, { data: null });
-    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: false, cuenta_otro_rol: false });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: false, cuenta_otro_rol: null });
   });
 });
