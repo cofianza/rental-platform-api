@@ -457,8 +457,11 @@ interface TokenDocsCtx {
   inmuebleCiudad: string;
 }
 
-/** Resuelve el expediente a partir del token público de carga (valida vigencia). */
-async function resolveExpedientePorTokenDocumentos(token: string): Promise<TokenDocsCtx> {
+/**
+ * Resuelve el expediente a partir del token público de carga (valida vigencia).
+ * También lo usa la invitación del co-arrendatario desde el enlace (P18).
+ */
+export async function resolveExpedientePorTokenDocumentos(token: string): Promise<TokenDocsCtx> {
   const { data } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('id, estado, token_documentos_expiracion, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at, tipo)')
@@ -492,6 +495,36 @@ async function resolveExpedientePorTokenDocumentos(token: string): Promise<Token
   };
 }
 
+/**
+ * Token del enlace público del prospecto: sus soportes y, desde P18, su
+ * co-arrendatario. El vigente se conserva (con el plazo renovado), así el
+ * enlace del correo del condicionado y el que envía la inmobiliaria son el
+ * mismo y ninguno deja muerto al otro.
+ */
+export async function emitirTokenDocumentos(expedienteId: string): Promise<string> {
+  const { data } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('token_documentos, token_documentos_expiracion')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  const actual = data as { token_documentos: string | null; token_documentos_expiracion: string | null } | null;
+  const vigente =
+    !!actual?.token_documentos &&
+    (!actual.token_documentos_expiracion || new Date(actual.token_documentos_expiracion) > new Date());
+  const token = vigente ? actual!.token_documentos! : crypto.randomBytes(32).toString('hex');
+  const expiracion = new Date(Date.now() + TOKEN_DOCS_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const { error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .update({ token_documentos: token, token_documentos_expiracion: expiracion } as never)
+    .eq('id', expedienteId);
+  if (error) {
+    logger.error({ error: error.message, expedienteId }, 'Error al guardar token de documentos');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo generar el enlace');
+  }
+  return token;
+}
+
 /** Genera+persiste el token y envía el enlace público de carga al solicitante. */
 export async function enviarEnlaceDocumentos(
   expedienteId: string,
@@ -523,26 +556,14 @@ export async function enviarEnlaceDocumentos(
   const nombre = `${e?.solicitantes?.nombre ?? ''} ${e?.solicitantes?.apellido ?? ''}`.trim() || 'Solicitante';
   const direccion = e?.inmuebles?.direccion ?? 'tu inmueble';
 
-  const token = crypto.randomBytes(32).toString('hex');
-  const expiracion = new Date(Date.now() + TOKEN_DOCS_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
-
-  const { error: updErr } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .update({ token_documentos: token, token_documentos_expiracion: expiracion } as never)
-    .eq('id', expedienteId);
-  if (updErr) {
-    logger.error({ error: updErr.message, expedienteId }, 'Error al guardar token de documentos');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo generar el enlace');
-  }
-
-  const link = `/cargar-documentos/${token}`;
+  const link = `/cargar-documentos/${await emitirTokenDocumentos(expedienteId)}`;
   try {
     const { sendResponsableAsignadoEmail } = await import('../orchestrator/orchestrator.emails');
     await sendResponsableAsignadoEmail({
       email,
       nombre,
       titulo: 'Carga tus documentos',
-      mensaje: `Para continuar con tu solicitud de arriendo del inmueble en ${direccion}, sube los documentos solicitados desde el siguiente enlace personal.`,
+      mensaje: `Para continuar con tu solicitud de arriendo del inmueble en ${direccion}, sube los documentos solicitados desde el siguiente enlace personal. Desde ahí también puedes invitar a tu co-arrendatario.`,
       link,
       frontend_url: env.FRONTEND_URL,
     });
@@ -554,28 +575,63 @@ export async function enviarEnlaceDocumentos(
   return { ok: true, email_destino: email };
 }
 
-/** Contexto público (sin auth): qué inmueble/solicitante y qué ya subió. */
+/**
+ * P18: lo que el prospecto ve de su co-arrendatario en su enlace. De la persona
+ * invitada, solo el nombre y en qué va (Ley 1266: su resultado no es suyo); lo
+ * sugerido es lo que él mismo declaró al autorizar (§8.3), para no repetirlo.
+ */
+interface CoarrendatarioDelProspecto {
+  puede_invitar: boolean;
+  invitado: { nombre: string; estado: string } | null;
+  sugerido: { nombre: string; apellido: string; email?: string; telefono?: string } | null;
+}
+
+/** Contexto público (sin auth): qué inmueble/solicitante, qué ya subió y su co-arrendatario. */
 export async function getContextoDocumentosPublico(token: string): Promise<{
   solicitante: string;
   inmueble: { direccion: string; ciudad: string };
   estado: string;
   puede_subir: boolean;
   soportes: Array<{ id: string; proposito: Proposito; nombre_original: string; created_at: string }>;
+  coarrendatario: CoarrendatarioDelProspecto;
 }> {
   const ctx = await resolveExpedientePorTokenDocumentos(token);
+  const condicionado = ctx.estado === 'condicionado';
 
-  const { data: docs } = await (supabase
-    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
-    .select('id, proposito, nombre_original, created_at')
-    .eq('estudio_id', ctx.estudioActivoId)
-    .order('created_at', { ascending: false });
+  const [{ data: docs }, { data: coa }, { data: perfil }] = await Promise.all([
+    (supabase.from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
+      .select('id, proposito, nombre_original, created_at')
+      .eq('estudio_id', ctx.estudioActivoId)
+      .order('created_at', { ascending: false }),
+    // Una sola activa por estudio (índice único): no hace falta limit.
+    (supabase.from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+      .select('nombre, estado')
+      .eq('expediente_id', ctx.expedienteId)
+      .in('estado', ['pendiente_aceptacion', 'aceptado', 'estudio_completado'])
+      .maybeSingle(),
+    condicionado
+      ? (supabase.from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+          .select('coarrendatario_intencion')
+          .eq('expediente_id', ctx.expedienteId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+  const invitado = (coa as { nombre: string; estado: string } | null) ?? null;
+  const puedeInvitar = condicionado && !invitado;
 
   return {
     solicitante: ctx.solicitanteNombre,
     inmueble: { direccion: ctx.inmuebleDireccion, ciudad: ctx.inmuebleCiudad },
     estado: ctx.estado,
-    puede_subir: ctx.estado === 'condicionado',
+    puede_subir: condicionado,
     soportes: (docs as Array<{ id: string; proposito: Proposito; nombre_original: string; created_at: string }> | null) ?? [],
+    coarrendatario: {
+      puede_invitar: puedeInvitar,
+      invitado,
+      sugerido: puedeInvitar
+        ? ((perfil as { coarrendatario_intencion?: CoarrendatarioDelProspecto['sugerido'] } | null)?.coarrendatario_intencion ?? null)
+        : null,
+    },
   };
 }
 

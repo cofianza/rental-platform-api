@@ -10,12 +10,16 @@ vi.mock('resend', () => ({
     emails = { send: (...args: unknown[]) => mockSend(...args) };
   },
 }));
-vi.mock('@/config/env', () => ({ env: { RESEND_API_KEY: 're_test', RESEND_FROM_EMAIL: 'no-reply@cofianza.co' } }));
+vi.mock('@/config/env', () => ({
+  env: { RESEND_API_KEY: 're_test', RESEND_FROM_EMAIL: 'no-reply@cofianza.co', FRONTEND_URL: 'https://cofianza.co' },
+}));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/lib/companyConfig', () => ({ getCompany: vi.fn(async () => ({ phone: '300', email: 'hola@cofianza.co' })) }));
 vi.mock('@/modules/estudios/rutas-resultado', () => ({ resolverRuta: vi.fn() }));
 
+import { resolverRuta } from '@/modules/estudios/rutas-resultado';
 import {
+  sendDocumentosRequeridosEmail,
   sendCitaCanceladaEmail,
   sendCitaConfirmadaSolicitanteEmail,
   sendCitaReprogramadaSolicitanteEmail,
@@ -26,6 +30,27 @@ const PHISHING = '<a href="https://evil.co">Paga aquí</a>';
 const html = () => (mockSend.mock.calls.at(-1)![0] as { html: string }).html;
 
 beforeEach(() => mockSend.mockClear());
+
+// P18: el prospecto casi nunca tiene panel; el correo del condicionado lleva su
+// enlace personal para invitar al co-arrendatario sin cuenta.
+describe('correo del condicionado', () => {
+  beforeEach(() => {
+    vi.mocked(resolverRuta).mockReturnValue({ titulo: 'Tu estudio está en revisión', mensaje: 'Un analista revisa tu caso.' } as never);
+  });
+
+  it('lleva el enlace personal para invitar al co-arrendatario, sin mandarlo a un panel', async () => {
+    await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640, tokenDocumentos: 'a'.repeat(64) });
+    expect(html()).toContain(`href="https://cofianza.co/cargar-documentos/${'a'.repeat(64)}"`);
+    expect(html()).toContain('Invitar a mi co-arrendatario');
+    expect(html()).not.toContain('Ingresa a tu panel');
+  });
+
+  it('sin enlace le dice a quién pedírselo', async () => {
+    await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640 });
+    expect(html()).toContain('Pídele a quien te pidió el estudio');
+    expect(html()).not.toContain('cargar-documentos');
+  });
+});
 
 describe('correos de visita', () => {
   it('el motivo de cancelación (enlace público) no inyecta HTML', async () => {

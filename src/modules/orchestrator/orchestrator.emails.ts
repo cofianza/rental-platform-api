@@ -155,8 +155,14 @@ export async function sendDocumentosRequeridosEmail(params: {
   email: string;
   nombre: string;
   score: number | null;
+  /**
+   * P18: token del enlace personal del prospecto (/cargar-documentos): desde ahí
+   * invita a su co-arrendatario sin cuenta. Sin él, se le dice a quién pedírselo.
+   */
+  tokenDocumentos?: string | null;
 }) {
-  const { email, nombre } = params;
+  const { email, nombre, tokenDocumentos } = params;
+  const enlace = tokenDocumentos ? `${env.FRONTEND_URL}/cargar-documentos/${tokenDocumentos}` : null;
 
   const company = await getCompany();
 
@@ -187,10 +193,13 @@ export async function sendDocumentosRequeridosEmail(params: {
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre)}</strong>,</p>
           <p style="color: #6b7280;">${ruta.mensaje}</p>
           <p style="color: #6b7280;">Mientras tanto, puedes sumar un co-arrendatario. En Cofianza <strong>no pedimos fiador</strong>: invita a la persona con quien vas a vivir y evaluamos a los dos como un solo arrendatario.</p>
+          ${enlace ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(enlace, 'Invitar a mi co-arrendatario')}</div>` : ''}
           <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #92400e; margin: 0; font-weight: bold;">¿Cómo funciona?</p>
             <ul style="color: #92400e; margin: 8px 0 0; padding-left: 20px;">
-              <li>Ingresa a tu panel y captura los datos de tu co-arrendatario.</li>
+              <li>${enlace
+                ? 'Abre tu enlace personal (el botón de arriba) y escribe los datos de la persona con quien vas a vivir. Desde ahí también puedes subir documentos que respalden tus ingresos.'
+                : 'Pídele a quien te pidió el estudio (tu inmobiliaria o el propietario) que le envíe la invitación desde su panel.'}</li>
               <li>Le enviamos una invitación por correo.</li>
               <li>Cuando acepte, evaluamos su perfil y lo combinamos con el tuyo.</li>
               <li>Si juntos cumplen, los respaldamos como un solo arrendatario.</li>

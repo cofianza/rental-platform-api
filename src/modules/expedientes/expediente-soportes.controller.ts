@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/lib/response';
 import * as service from './expediente-soportes.service';
+import { invitarCoarrendatarioPorToken } from '../coarrendatarios/coarrendatarios.service';
 import type { ExpedienteIdParams } from './expedientes.schema';
 
 export async function presignedUrl(req: Request, res: Response) {
@@ -54,5 +55,11 @@ export async function presignedUrlPublico(req: Request, res: Response) {
 export async function confirmarPublico(req: Request, res: Response) {
   const { token } = req.params as { token: string };
   const result = await service.confirmarSoportePublico(token, req.body);
+  sendSuccess(res, result);
+}
+
+export async function invitarCoarrendatarioPublico(req: Request, res: Response) {
+  const { token } = req.params as { token: string };
+  const result = await invitarCoarrendatarioPorToken(token, req.body);
   sendSuccess(res, result);
 }

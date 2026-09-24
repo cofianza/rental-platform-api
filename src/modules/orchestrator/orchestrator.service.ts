@@ -912,7 +912,16 @@ export async function onEstudioCompletado(params: {
       }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error aviso revisión manual a analistas'));
 
       if (sol?.email) {
-        sendDocumentosRequeridosEmail({ email: sol.email, nombre: `${sol.nombre} ${sol.apellido}`, score })
+        // P18: el correo lleva el enlace personal del prospecto para invitar a su
+        // co-arrendatario sin cuenta (el mismo de sus soportes). Si no se pudo
+        // generar, el correo le dice a quién pedírselo.
+        const tokenDocumentos = await import('@/modules/expedientes/expediente-soportes.service')
+          .then((m) => m.emitirTokenDocumentos(expedienteId))
+          .catch((e) => {
+            logger.warn({ error: e, expedienteId }, 'Orchestrator: sin enlace del prospecto para el correo del condicionado');
+            return null;
+          });
+        sendDocumentosRequeridosEmail({ email: sol.email, nombre: `${sol.nombre} ${sol.apellido}`, score, tokenDocumentos })
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error email condicionado'));
       }
 

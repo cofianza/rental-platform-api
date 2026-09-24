@@ -58,6 +58,7 @@ import {
   getContextoDocumentosPublico,
   confirmarSoporte,
   confirmarSoportePublico,
+  emitirTokenDocumentos,
 } from '../expediente-soportes.service';
 
 const EXP = '550e8400-e29b-41d4-a716-446655440000';
@@ -109,6 +110,66 @@ describe('soportes del condicionado con co-arrendatario', () => {
     ]);
 
     await expect(listarSoportes(EXP, 'analista-1', 'operador_analista')).rejects.toMatchObject({ errorCode: 'SIN_ESTUDIO' });
+  });
+});
+
+// ============================================================
+// P18: el enlace del prospecto también sirve para invitar a su co-arrendatario
+// ============================================================
+
+describe('enlace del prospecto — co-arrendatario (P18)', () => {
+  const expediente = (estado = 'condicionado') => ({
+    data: { id: EXP, estado, token_documentos_expiracion: null, inmuebles: null, solicitantes: null, estudios },
+    error: null,
+  });
+  const intencion = { nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' };
+
+  it('sin invitación: puede invitar, prellenado con lo que declaró al autorizar', async () => {
+    queues.set('expedientes', [expediente()]);
+    queues.set('autorizacion_perfil_prospecto', [{ data: { coarrendatario_intencion: intencion }, error: null }]);
+
+    const ctx = await getContextoDocumentosPublico('tok');
+
+    expect(ctx.coarrendatario).toEqual({ puede_invitar: true, invitado: null, sugerido: intencion });
+  });
+
+  it('con una invitación activa: solo su nombre y en qué va, sin prellenado', async () => {
+    queues.set('expedientes', [expediente()]);
+    queues.set('expediente_coarrendatarios', [{ data: { nombre: 'Luis', estado: 'aceptado' }, error: null }]);
+    queues.set('autorizacion_perfil_prospecto', [{ data: { coarrendatario_intencion: intencion }, error: null }]);
+
+    const ctx = await getContextoDocumentosPublico('tok');
+
+    expect(ctx.coarrendatario).toEqual({ puede_invitar: false, invitado: { nombre: 'Luis', estado: 'aceptado' }, sugerido: null });
+  });
+
+  it('fuera de condicionado no se puede invitar', async () => {
+    queues.set('expedientes', [expediente('aprobado')]);
+
+    expect((await getContextoDocumentosPublico('tok')).coarrendatario.puede_invitar).toBe(false);
+  });
+
+  it('el token vigente se conserva (el correo del condicionado y el de la inmobiliaria son el mismo enlace)', async () => {
+    const vigente = 'b'.repeat(64);
+    queues.set('expedientes', [
+      { data: { token_documentos: vigente, token_documentos_expiracion: '2099-01-01T00:00:00Z' }, error: null },
+      { data: null, error: null },
+    ]);
+
+    expect(await emitirTokenDocumentos(EXP)).toBe(vigente);
+    const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
+    expect((update!.args[0] as { token_documentos: string }).token_documentos).toBe(vigente);
+  });
+
+  it('vencido, uno nuevo', async () => {
+    queues.set('expedientes', [
+      { data: { token_documentos: 'b'.repeat(64), token_documentos_expiracion: '2020-01-01T00:00:00Z' }, error: null },
+      { data: null, error: null },
+    ]);
+
+    const token = await emitirTokenDocumentos(EXP);
+    expect(token).toMatch(/^[a-f0-9]{64}$/);
+    expect(token).not.toBe('b'.repeat(64));
   });
 });
 

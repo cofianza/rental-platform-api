@@ -122,6 +122,12 @@ vi.mock('@/modules/estudios/reglas-duras', () => ({
   motivoProspectoReglasDuras: () => 'No aprobable por ahora.',
 }));
 
+// P18: el enlace del prospecto resuelve su estudio (el mismo EXPEDIENTE_ID de los fixtures).
+const mockResolverToken = vi.fn(async (..._args: unknown[]) => ({ expedienteId: '550e8400-e29b-41d4-a716-446655440000' }));
+vi.mock('@/modules/expedientes/expediente-soportes.service', () => ({
+  resolveExpedientePorTokenDocumentos: (...args: unknown[]) => mockResolverToken(...args),
+}));
+
 // Import AFTER mocks
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { estudioYaCobrado } from '@/modules/estudios/pago.guard';
@@ -136,6 +142,7 @@ import {
   getPublicByToken,
   cancelarInvitacionCoarrendatario,
   avisarCoarrendatarioDecision,
+  invitarCoarrendatarioPorToken,
 } from '../coarrendatarios.service';
 
 // ============================================================
@@ -502,6 +509,47 @@ describe('reemplazar al co-arrendatario — P4', () => {
 
     expect(vista.documento).toBe('CC ••••4321');
     expect(JSON.stringify(vista)).not.toContain('017654321');
+  });
+});
+
+// ============================================================
+// P18: el prospecto invita a su co-arrendatario desde su enlace personal
+// ============================================================
+
+describe('invitar desde el enlace del prospecto — P18', () => {
+  it('crea la invitación sin gestor (invitado_por null), avisa al responsable y le devuelve solo nombre y estado', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', {
+      data: { id: COA_ID, nombre: 'Luis', email: 'luis@correo.co', numero_documento: '7654321', estado: 'pendiente_aceptacion' },
+      error: null,
+    });
+
+    const r = await invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('7654321'));
+
+    expect(mockResolverToken).toHaveBeenCalledWith('t'.repeat(64));
+    expect(r).toEqual({ nombre: 'Luis', estado: 'pendiente_aceptacion' });
+    const insert = ops.find((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert');
+    expect(insert!.args[0]).toMatchObject({ expediente_id: EXPEDIENTE_ID, invitado_por: null });
+    expect(mockNotificarResponsable).toHaveBeenCalledWith(
+      expect.objectContaining({ expedienteId: EXPEDIENTE_ID, titulo: 'El solicitante invitó a su co-arrendatario' }),
+    );
+  });
+
+  it('mismos guards que el panel: su propio documento no', async () => {
+    enqueue('expedientes', ctxRow());
+
+    await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('1234567'))).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_MISMO_DOCUMENTO',
+    });
+    expect(ops.some((o) => o.method === 'insert')).toBe(false);
+  });
+
+  it('mismos guards que el panel: solo con el estudio condicionado', async () => {
+    enqueue('expedientes', ctxRow('aprobado'));
+
+    await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('7654321'))).rejects.toMatchObject({
+      errorCode: 'EXPEDIENTE_NO_CONDICIONADO',
+    });
   });
 });
 

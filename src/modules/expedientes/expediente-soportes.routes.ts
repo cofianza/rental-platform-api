@@ -4,6 +4,7 @@ import { authMiddleware, roleGuard } from '@/middleware/auth';
 import { publicFormLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from './expedientes.schema';
+import { invitarCoarrendatarioSchema } from '../coarrendatarios/coarrendatarios.schema';
 import * as controller from './expediente-soportes.controller';
 
 const router = Router();
@@ -117,4 +118,12 @@ publicCargarDocumentosRouter.post(
   publicFormLimiter,
   validate({ params: tokenParamSchema, body: confirmarBody }),
   controller.confirmarPublico,
+);
+
+// P18: el prospecto invita a su co-arrendatario desde su enlace (mismos guards que el panel).
+publicCargarDocumentosRouter.post(
+  '/:token/coarrendatario',
+  publicFormLimiter,
+  validate({ params: tokenParamSchema, body: invitarCoarrendatarioSchema }),
+  controller.invitarCoarrendatarioPublico,
 );

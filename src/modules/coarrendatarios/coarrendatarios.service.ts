@@ -377,6 +377,33 @@ export async function invitarCoarrendatario(
     );
   }
 
+  return crearInvitacion(ctx, input, userId);
+}
+
+/**
+ * P18 (2026-09-24, Flujo §2 y §8.3-8.4): el prospecto invita él mismo a su
+ * co-arrendatario desde su enlace personal (el de soportes), sin cuenta. El
+ * token es la credencial; los guards son los mismos de invitarCoarrendatario.
+ * Al prospecto le vuelve lo mismo que muestra su página: nombre y estado.
+ */
+export async function invitarCoarrendatarioPorToken(
+  token: string,
+  input: InvitarCoarrendatarioInput,
+): Promise<{ nombre: string; estado: Coarrendatario['estado'] }> {
+  const { resolveExpedientePorTokenDocumentos } = await import('@/modules/expedientes/expediente-soportes.service');
+  const { expedienteId } = await resolveExpedientePorTokenDocumentos(token);
+  const coa = await crearInvitacion(await fetchExpedienteCtx(expedienteId), input, null);
+  return { nombre: coa.nombre, estado: coa.estado };
+}
+
+/** La invitación y sus guards. `invitadoPor` null = la envió el prospecto desde su enlace (P18). */
+async function crearInvitacion(
+  ctx: ExpedienteCtx,
+  input: InvitarCoarrendatarioInput,
+  invitadoPor: string | null,
+): Promise<Coarrendatario> {
+  const expedienteId = ctx.id;
+
   // 2. Estado del expediente debe ser 'condicionado' — única ventana donde
   //    tiene sentido invitar. En otros estados o ya está aprobado o el
   //    estudio aún no se ejecutó.
@@ -423,7 +450,7 @@ export async function invitarCoarrendatario(
       token,
       token_expiracion: tokenExpiracion(),
       estado: 'pendiente_aceptacion',
-      invitado_por: userId,
+      invitado_por: invitadoPor,
     } as never)
     .select(COLUMNAS_COA_PUBLICAS)
     .single();
@@ -470,16 +497,27 @@ export async function invitarCoarrendatario(
     context: { expediente_id: expedienteId },
   });
 
-  // 6. Notificar al titular para que vea que la invitación se envió.
+  // 6. Aviso a quien creó la ficha del solicitante (casi siempre el gestor).
+  //    Si invitó el prospecto desde su enlace (P18), también al responsable.
+  const porElProspecto = invitadoPor === null;
+  const aviso = {
+    tipo: 'coarrendatario.invitado',
+    titulo: porElProspecto ? 'El solicitante invitó a su co-arrendatario' : 'Invitación enviada',
+    mensaje: porElProspecto
+      ? `${ctx.solicitante_nombre || 'El solicitante'} invitó a ${input.nombre} como co-arrendatario desde su enlace.`
+      : `Enviamos a ${input.nombre} la invitación como co-arrendatario. Te avisaremos cuando responda.`,
+    link: `/expedientes/${expedienteId}`,
+    payload: { expediente_id: expedienteId, coarrendatario_id: coa.id },
+  };
   if (ctx.solicitante_creado_por) {
-    notificarUsuario({
-      userId: ctx.solicitante_creado_por,
-      tipo: 'coarrendatario.invitado',
-      titulo: 'Invitación enviada',
-      mensaje: `Enviamos a ${input.nombre} la invitación como co-arrendatario. Te avisaremos cuando responda.`,
-      link: `/expedientes/${expedienteId}`,
-      payload: { expediente_id: expedienteId, coarrendatario_id: coa.id },
-    }).catch((e) => logger.warn({ error: e }, 'Error notif coarrendatario invitado'));
+    notificarUsuario({ userId: ctx.solicitante_creado_por, ...aviso }).catch((e) =>
+      logger.warn({ error: e }, 'Error notif coarrendatario invitado'),
+    );
+  }
+  if (porElProspecto) {
+    notificarResponsableExpediente({ expedienteId, excluirPerfilId: ctx.solicitante_creado_por, ...aviso }).catch((e) =>
+      logger.warn({ error: e }, 'Error notif responsable coarrendatario invitado'),
+    );
   }
 
   logger.info(
