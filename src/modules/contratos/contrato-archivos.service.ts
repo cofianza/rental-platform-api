@@ -61,12 +61,19 @@ export async function subirArchivo(
 ) {
   const contrato = await contratoVisible(contratoId, userId, userRol);
 
-  // Adenda 1 contratos (respuesta 21): el acta de un V3 la carga la inmobiliaria.
-  // Si la cargara Cofianza, avalaría un documento que no presenció.
-  if (contrato.destinacion && tipoArchivo === 'acta_entrega' && userRol !== 'inmobiliaria') {
+  // Adenda 1 contratos (respuesta 21) y A9: el acta la carga el arrendador (la
+  // inmobiliaria; en el contrato viejo, también el propietario directo), nunca
+  // Cofianza: avalaría un documento que no presenció.
+  if (tipoArchivo === 'acta_entrega' && contrato.destinacion && userRol !== 'inmobiliaria') {
     throw AppError.forbidden(
       'El acta de entrega la carga la inmobiliaria: Cofianza no la carga en su nombre. Si no la hay, un administrador puede cerrar el estudio sin acta, con motivo.',
       'ACTA_SOLO_INMOBILIARIA',
+    );
+  }
+  if (tipoArchivo === 'acta_entrega' && !contrato.destinacion && userRol !== 'inmobiliaria' && userRol !== 'propietario') {
+    throw AppError.forbidden(
+      'El acta de entrega la carga el arrendador (la inmobiliaria o el propietario): Cofianza no la carga en su nombre.',
+      'ACTA_SOLO_ARRENDADOR',
     );
   }
 

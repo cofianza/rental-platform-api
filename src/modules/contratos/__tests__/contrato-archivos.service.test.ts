@@ -135,13 +135,45 @@ describe('cargar el acta de entrega de un V3 (Adenda 1 contratos, respuesta 21)'
     expect(mockUpload).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ['otro tipo de archivo de un V3', 'inventario', 'vivienda'],
-    ['el acta de un contrato del flujo anterior', 'acta_entrega', null],
-  ] as const)('Cofianza sí carga %s', async (_caso, tipo, destinacion) => {
-    enqueue('contratos', fila(destinacion));
+  it('Cofianza sí carga otro tipo de archivo de un V3', async () => {
+    enqueue('contratos', fila('vivienda'));
     enqueue('contrato_archivos', { data: { id: 'a1' }, error: null });
-    await subirArchivo('c1', tipo, archivo, 'u-cofianza', 'administrador');
+    await subirArchivo('c1', 'inventario', archivo, 'u-cofianza', 'administrador');
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('un propietario no carga el acta de un V3 (el arrendador del V3 es la inmobiliaria)', async () => {
+    enqueue('contratos', fila('vivienda'));
+    await expect(subirArchivo('c1', 'acta_entrega', archivo, 'u-prop', 'propietario')).rejects.toMatchObject({ errorCode: 'ACTA_SOLO_INMOBILIARIA' });
+    expect(mockUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe('A9: el acta de un contrato del flujo anterior la carga el arrendador', () => {
+  const archivo = { buffer: Buffer.from('%PDF-1.4'), originalname: 'acta.pdf', size: 8, mimetype: 'application/pdf' };
+  const viejo = { data: { id: 'c1', expediente_id: 'exp-propio', estado: 'vigente', destinacion: null }, error: null };
+
+  it.each(['administrador', 'operador_analista', 'gerencia_consulta'])('%s no la carga: 403 sin subir nada', async (rol) => {
+    enqueue('contratos', viejo);
+    await expect(subirArchivo('c1', 'acta_entrega', archivo, 'u-cofianza', rol)).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'ACTA_SOLO_ARRENDADOR',
+    });
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(ops.some((o) => o.method === 'insert')).toBe(false);
+  });
+
+  it.each(['inmobiliaria', 'propietario'])('%s (el arrendador) sí la carga', async (rol) => {
+    enqueue('contratos', viejo);
+    enqueue('contrato_archivos', { data: { id: 'a1' }, error: null });
+    await subirArchivo('c1', 'acta_entrega', archivo, 'u-arrendador', rol);
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cofianza sigue cargando el inventario o el documento de identidad', async () => {
+    enqueue('contratos', viejo);
+    enqueue('contrato_archivos', { data: { id: 'a1' }, error: null });
+    await subirArchivo('c1', 'inventario', archivo, 'u-cofianza', 'administrador');
     expect(mockUpload).toHaveBeenCalledTimes(1);
   });
 });
