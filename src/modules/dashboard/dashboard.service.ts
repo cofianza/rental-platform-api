@@ -1215,7 +1215,8 @@ async function fetchConfigDashboard(): Promise<{ capitalDisponible: number; rese
 
 // Las cuentas que /inmobiliarias lista, una por organización: el titular
 // principal (inmobiliarias.owner_perfil_id) más las cuentas sin equipo. Cada
-// miembro de un equipo tiene rol 'inmobiliaria' y no es un aliado aparte.
+// miembro de un equipo tiene rol 'inmobiliaria' y no es un aliado aparte. Las
+// organizaciones cerradas no cuentan, ni su extitular mientras no tenga otra.
 export async function fetchPerfilesInmobiliaria(): Promise<{
   rows: Array<Record<string, unknown>>;
   titularDeOrg: Map<string, string>;
@@ -1226,7 +1227,7 @@ export async function fetchPerfilesInmobiliaria(): Promise<{
       .select('id, razon_social, nombre, apellido, nit, nombre_representante, telefono, ciudad, estado, created_at')
       .eq('rol', 'inmobiliaria')
       .order('created_at', { ascending: false }),
-    (supabase.from('inmobiliarias' as string) as ReturnType<typeof supabase.from>).select('id, owner_perfil_id'),
+    (supabase.from('inmobiliarias' as string) as ReturnType<typeof supabase.from>).select('id, owner_perfil_id, estado'),
     (supabase.from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
       .select('perfil_id')
       .eq('estado', 'activo'),
@@ -1236,21 +1237,24 @@ export async function fetchPerfilesInmobiliaria(): Promise<{
   if (miembrosRes.error) throw fromSupabaseError(miembrosRes.error);
 
   const titularDeOrg = new Map<string, string>();
-  for (const o of (orgsRes.data ?? []) as Array<{ id: string; owner_perfil_id: string }>) {
-    titularDeOrg.set(o.id, o.owner_perfil_id);
+  const deCerrada = new Set<string>();
+  for (const o of (orgsRes.data ?? []) as Array<{ id: string; owner_perfil_id: string; estado: string }>) {
+    if (o.estado === 'cerrada') deCerrada.add(o.owner_perfil_id);
+    else titularDeOrg.set(o.id, o.owner_perfil_id);
   }
   const titulares = new Set(titularDeOrg.values());
   const conEquipo = new Set(
     ((miembrosRes.data ?? []) as Array<{ perfil_id: string | null }>).map((m) => m.perfil_id),
   );
   const rows = ((data ?? []) as Array<Record<string, unknown>>).filter(
-    (r) => titulares.has(r.id as string) || !conEquipo.has(r.id as string),
+    (r) => titulares.has(r.id as string) || (!conEquipo.has(r.id as string) && !deCerrada.has(r.id as string)),
   );
   return { rows, titularDeOrg };
 }
 
-// Las filas activas de esa misma lista. inmobiliarias.estado no sirve: nadie
-// la escribe; desactivar una inmobiliaria pone inactivo el perfil del titular.
+// Las filas activas de esa misma lista (las cerradas ya no están). Desactivar
+// una inmobiliaria pone inactivo el perfil del titular; inmobiliarias.estado
+// solo marca las que su titular cerró (salirDeOrg).
 async function countInmobiliariasActivas(): Promise<number> {
   const { rows } = await fetchPerfilesInmobiliaria();
   return rows.filter((r) => r.estado === 'activo').length;

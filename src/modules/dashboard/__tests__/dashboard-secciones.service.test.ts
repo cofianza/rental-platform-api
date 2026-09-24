@@ -463,6 +463,31 @@ describe('listInmobiliarias() / listPropietarios()', () => {
     expect(rows[1]).toMatchObject({ contratosActivos: 1, canonTotal: 500000, moraActivaCount: 0 });
   });
 
+  it('inmobiliaria: las organizaciones cerradas no son aliados (ni su extitular sin otra)', async () => {
+    byTable({
+      perfiles: {
+        data: [
+          { id: 't1', razon_social: 'Inmo Uno SAS', estado: 'activo', created_at: '2026-01-01' },
+          { id: 'c1', razon_social: 'Cerrada SAS', estado: 'activo', created_at: '2026-02-01' },
+          { id: 'c2', razon_social: 'Cerrada y ya en Uno', estado: 'activo', created_at: '2026-02-15' },
+        ],
+      },
+      inmobiliarias: {
+        data: [
+          { id: 'o1', owner_perfil_id: 't1', estado: 'activa' },
+          { id: 'oc', owner_perfil_id: 'c1', estado: 'cerrada' },
+          { id: 'oc2', owner_perfil_id: 'c2', estado: 'cerrada' },
+        ],
+      },
+      inmobiliaria_miembros: { data: [{ perfil_id: 't1' }, { perfil_id: 'c2' }] },
+      contratos: { data: [] },
+    });
+
+    const rows = await secciones.listInmobiliarias();
+
+    expect(rows.map((r) => r.id)).toEqual(['t1']);
+  });
+
   it('propietario: incluye ciudad (Ronda 2) y cédula', async () => {
     byTable({
       perfiles: {
