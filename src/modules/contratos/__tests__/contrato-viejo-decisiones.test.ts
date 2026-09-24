@@ -203,7 +203,8 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
       data: { id: CTO, expediente_id: EXP, estado: 'borrador', destinacion: null, plantilla_id: 'pl-1', version: 1, datos_variables: {}, _scope: {} },
       error: null,
     });
-    enqueue('expedientes', expediente(), { data: { numero: 'EXP-2026-0100', modalidad_fianza: 'compartida' }, error: null });
+    // Una sola lectura del estudio (la estricta de fetchExpedienteData), con la modalidad guardada.
+    enqueue('expedientes', expediente({ modalidad_fianza: 'compartida' }));
     enqueue('perfiles', PROPIETARIO);
     enqueue('plantillas_contrato', { data: { id: 'pl-1', nombre: 'V4', contenido: null, contenido_html: '<p></p>', variables: [], version: 1 }, error: null });
     const e = await error(regenerarContrato(CTO, {}, ADMIN.id, undefined, ADMIN.rol));

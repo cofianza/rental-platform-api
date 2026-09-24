@@ -2698,8 +2698,9 @@ export async function regenerarContrato(
     );
   }
 
-  // 2. Fetch expediente data
-  const { data: expData } = await fetchExpedienteData(row.expediente_id);
+  // 2. Fetch expediente data. `expRecordRegen` es la misma fila (número,
+  // modalidad, reparto, co-titular), leída estricta: sin ella no se regenera.
+  const { expediente: expRecordRegen, data: expData } = await fetchExpedienteData(row.expediente_id);
 
   // 3. Fetch plantilla (incluyendo el HTML V2 si existe).
   const { data: plantilla } = await (supabase
@@ -2759,12 +2760,6 @@ export async function regenerarContrato(
     expData.inmueble.valor_arriendo = canonEfectivo;
   }
 
-  const { data: expRowRegen } = await (supabase
-    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero, modalidad_fianza, servicios_reparto, cotitular_nombre, cotitular_tipo_documento, cotitular_documento, cotitular_celular, cotitular_correo, cotitular_direccion, cotitular_municipio')
-    .eq('id', row.expediente_id)
-    .single();
-  const expRecordRegen = (expRowRegen as Record<string, unknown> | null) ?? {};
   assertModalidadDisponible(expRecordRegen.modalidad_fianza);
 
   // 4.1e — Distribución de obligaciones (servicios_reparto): MERGE — solo
