@@ -1,5 +1,6 @@
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
+import { randomBytes } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
@@ -62,10 +63,13 @@ function formatDate(dateStr: string): string {
   });
 }
 
-function maskName(nombre: string, apellido: string): string {
-  const parts = nombre.split(' ');
-  const first = parts[0] || '';
-  return `${first} ****** ${apellido}`;
+/** P10: la verificación pública solo muestra iniciales ("A. M. P. G."). */
+function iniciales(nombre: string | null, apellido: string | null): string {
+  return `${nombre ?? ''} ${apellido ?? ''}`
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((p) => `${p[0].toUpperCase()}.`)
+    .join(' ');
 }
 
 function maskDocumento(numero: string): string {
@@ -73,35 +77,23 @@ function maskDocumento(numero: string): string {
   return '****' + numero.slice(-4);
 }
 
-function maskAddress(direccion: string): string {
-  const parts = direccion.split(' ');
-  if (parts.length <= 2) return '***';
-  return parts[0] + ' ***';
-}
-
 // ============================================================
 // generateCertificateCode
 // ============================================================
 
-export async function generateCertificateCode(): Promise<string> {
-  const year = new Date().getFullYear();
-  const prefix = `CERT-${year}-`;
+// Sin 0/O ni 1/I, que se confunden al leerlos o dictarlos. Son 32 símbolos:
+// cada byte aleatorio elige uno sin sesgo (b & 31).
+const ALFABETO_CODIGO = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
-  const { data } = await (supabase
-    .from('estudios_certificados' as string) as ReturnType<typeof supabase.from>)
-    .select('codigo')
-    .like('codigo', `${prefix}%`)
-    .order('codigo', { ascending: false })
-    .limit(1);
-
-  let nextNum = 1;
-  if (data && data.length > 0) {
-    const lastCode = (data[0] as { codigo: string }).codigo;
-    const lastNum = parseInt(lastCode.replace(prefix, ''), 10);
-    if (!isNaN(lastNum)) nextNum = lastNum + 1;
-  }
-
-  return `${prefix}${String(nextNum).padStart(5, '0')}`;
+/**
+ * P10 (Ley 1581 art. 4): aleatorio, no consecutivo. Con CERT-2026-00001,
+ * 00002… cualquiera recorría /verificar y listaba a las personas evaluadas.
+ * CERT-XXXX-XXXX-XXXX: 60 bits en 19 caracteres, dentro de la columna
+ * (varchar 20) y del zod del endpoint público.
+ */
+export function generateCertificateCode(): string {
+  const s = Array.from(randomBytes(12), (b) => ALFABETO_CODIGO[b & 31]).join('');
+  return `CERT-${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8)}`;
 }
 
 // ============================================================
@@ -722,7 +714,7 @@ export async function generarCertificado(
     // guarda pdf_storage_key. Cada version tiene su propia llave (uuid), asi que
     // conservarlo no pisa nada.
   } else {
-    codigo = await generateCertificateCode();
+    codigo = generateCertificateCode();
     version = 1;
   }
 
@@ -1221,17 +1213,12 @@ export async function verificarCertificado(codigo: string) {
   const { data: cert, error: certErr } = await (supabase
     .from('estudios_certificados' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, codigo, fecha_emision, fecha_vencimiento, version,
+      codigo, fecha_emision, fecha_vencimiento,
       estudios!estudios_certificados_estudio_id_fkey(
-        resultado, score, proveedor,
+        resultado,
         expedientes!estudios_expediente_id_fkey(
-          numero, estado,
-          solicitantes!expedientes_solicitante_id_fkey(
-            nombre, apellido, tipo_documento, numero_documento
-          ),
-          inmuebles!expedientes_inmueble_id_fkey(
-            direccion, ciudad
-          )
+          estado,
+          solicitantes!expedientes_solicitante_id_fkey(nombre, apellido, numero_documento)
         )
       )
     `)
@@ -1244,7 +1231,6 @@ export async function verificarCertificado(codigo: string) {
       codigo,
       nombre_masked: '',
       resultado: '',
-      direccion_masked: '',
       fecha_emision: '',
       fecha_vencimiento: '',
       empresa: company.name,
@@ -1260,9 +1246,6 @@ export async function verificarCertificado(codigo: string) {
   const solicitante = expediente
     ? (expediente.solicitantes as Record<string, unknown> | null)
     : null;
-  const inmueble = expediente
-    ? (expediente.inmuebles as Record<string, unknown> | null)
-    : null;
 
   // Determine status
   const now = new Date();
@@ -1275,16 +1258,14 @@ export async function verificarCertificado(codigo: string) {
   const resultadoVerificado =
     resultadoEstudio === 'condicionado' && expediente?.estado === 'aprobado' ? 'aprobado' : resultadoEstudio;
 
+  // P10 (Ley 1581 art. 4): lo justo para cotejar el papel; sin dirección.
   return {
     status,
     codigo: c.codigo as string,
     nombre_masked: solicitante
-      ? maskName(solicitante.nombre as string, solicitante.apellido as string)
+      ? iniciales(solicitante.nombre as string | null, solicitante.apellido as string | null)
       : '',
     resultado: resultadoVerificado,
-    direccion_masked: inmueble
-      ? maskAddress(inmueble.direccion as string)
-      : '',
     fecha_emision: c.fecha_emision as string,
     fecha_vencimiento: c.fecha_vencimiento as string,
     empresa: company.name,

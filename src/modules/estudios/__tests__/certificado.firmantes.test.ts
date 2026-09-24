@@ -85,12 +85,14 @@ import {
   crcParaFirmantes,
   descargarCertificado,
   generarCertificado,
+  generateCertificateCode,
   generateCertificatePdf,
   generateQrCode,
   leerSombraDelEstudio,
   llaveDeVersion,
   paraArrendatario,
   sinPuntaje,
+  verificarCertificado,
   type CertificatePdfData,
 } from '../certificado.service';
 import { calcularTarifas } from '../tarifas';
@@ -453,12 +455,72 @@ describe('quién recibe cuál', () => {
 
   it('al emitir el CRC se suben los dos: el completo y, al lado, el de firmantes', async () => {
     enqueue('estudios', { data: ESTUDIO, error: null });
-    enqueue('estudios_certificados', { data: null, error: null }, { data: null, error: null }, { data: { id: 'cert-9' }, error: null });
+    enqueue('estudios_certificados', { data: null, error: null }, { data: { id: 'cert-9' }, error: null });
 
     const cert = await generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
 
     const subidas = storage.upload.mock.calls.map((c) => c[0]);
     // La del arrendatario no: se genera cuando la pida.
     expect(subidas).toEqual([cert.pdf_storage_key, llaveDeVersion(cert.pdf_storage_key, 'firmantes')]);
+  });
+});
+
+// P10 (Ley 1581 art. 4): el código no se puede recorrer y la verificación
+// pública muestra lo justo para cotejar el papel.
+describe('código del certificado', () => {
+  it('es aleatorio, cabe en la columna (20) y no usa 0/O ni 1/I', () => {
+    const codigos = Array.from({ length: 50 }, () => generateCertificateCode());
+    for (const c of codigos) {
+      expect(c).toMatch(/^CERT-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
+      expect(c.length).toBeLessThanOrEqual(20);
+    }
+    expect(new Set(codigos).size).toBe(codigos.length);
+    // Ya no lee el último emitido.
+    expect(mockFrom).not.toHaveBeenCalled();
+  });
+});
+
+describe('verificación pública', () => {
+  const CODIGO = 'CERT-7KQ4-M9XH-2RPA';
+  const fila = (expediente: Record<string, unknown>, resultado = 'aprobado', vence = '2999-01-01T00:00:00Z') => ({
+    data: {
+      codigo: CODIGO,
+      fecha_emision: '2026-09-01T16:00:00Z',
+      fecha_vencimiento: vence,
+      estudios: {
+        resultado,
+        expedientes: {
+          solicitantes: { nombre: 'Ana María', apellido: 'Pérez Gómez', numero_documento: '1026130143' },
+          inmuebles: { direccion: 'Calle 1 # 2-3', ciudad: 'Medellín' },
+          ...expediente,
+        },
+      },
+    },
+    error: null,
+  });
+
+  it('identidad reducida a iniciales y últimos 4 del documento; sin dirección', async () => {
+    enqueue('estudios_certificados', fila({ estado: 'aprobado' }));
+    const v = await verificarCertificado(CODIGO);
+    expect(v).toMatchObject({
+      status: 'valido_vigente',
+      resultado: 'aprobado',
+      nombre_masked: 'A. M. P. G.',
+      numero_documento_masked: '****0143',
+      fecha_emision: '2026-09-01T16:00:00Z',
+    });
+    expect(v).not.toHaveProperty('direccion_masked');
+    const json = JSON.stringify(v);
+    for (const s of ['Ana', 'María', 'Pérez', 'Gómez', 'Calle', 'Medellín', '102613']) expect(json).not.toContain(s);
+  });
+
+  it('vencido y no encontrado', async () => {
+    enqueue('estudios_certificados', fila({ estado: 'aprobado' }, 'aprobado', '2026-01-01T00:00:00Z'));
+    expect(await verificarCertificado(CODIGO)).toMatchObject({ status: 'valido_vencido', resultado: 'aprobado' });
+
+    enqueue('estudios_certificados', { data: null, error: { code: 'PGRST116' } });
+    const v = await verificarCertificado(CODIGO);
+    expect(v).toMatchObject({ status: 'invalido', nombre_masked: '', numero_documento_masked: '' });
+    expect(v).not.toHaveProperty('direccion_masked');
   });
 });
