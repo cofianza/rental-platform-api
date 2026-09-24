@@ -142,6 +142,35 @@ export async function resolveNombreDueno(perfilId: string): Promise<string> {
   return `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim() || 'Hola';
 }
 
+/**
+ * Perfil canónico del INMUEBLE: el titular principal de su inmobiliaria o, sin
+ * organización, su propietario. Va por el inmueble y no por quien lo registró:
+ * un asesor que sale del equipo no se lleva la agenda ni los avisos.
+ */
+export async function resolvePerfilCanonicoDeInmueble(inm: {
+  propietario_id: string;
+  inmobiliaria_id: string | null;
+}): Promise<string> {
+  if (!inm.inmobiliaria_id) return inm.propietario_id;
+  const { data } = await (supabase
+    .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+    .select('owner_perfil_id')
+    .eq('id', inm.inmobiliaria_id)
+    .maybeSingle();
+  return (data as { owner_perfil_id?: string | null } | null)?.owner_perfil_id ?? inm.propietario_id;
+}
+
+/** Nombre y WhatsApp (el de recaudo o, si no hay, el teléfono) del dueño, para escribirle. */
+export async function resolveContactoDueno(perfilId: string): Promise<{ nombre: string; whatsapp: string | null }> {
+  const { data } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('whatsapp_recaudo, telefono')
+    .eq('id', perfilId)
+    .maybeSingle();
+  const p = data as { whatsapp_recaudo?: string | null; telefono?: string | null } | null;
+  return { nombre: await resolveNombreDueno(perfilId), whatsapp: p?.whatsapp_recaudo || p?.telefono || null };
+}
+
 export type VisibilityScope =
   | { kind: 'all' } // rol interno: ve todo
   | { kind: 'org'; orgIds: string[] } // owner, o miembro con miembros_ven_todo=true

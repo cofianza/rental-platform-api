@@ -228,6 +228,11 @@ const envSchema = z.object({
   // WhatsApp MORA_FASE_2/3. Encender cuando esas plantillas esten aprobadas en
   // Meta; mientras tanto el operador escala a mano desde /moras.
   MORAS_AUTOESCALAR_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // P28: plantillas v2 de mora (MORA_FASE_1/2/3_V2): el comprobante va al
+  // arrendador por su WhatsApp de recaudo y, en Fase 3, al correo de soporte.
+  // OFF = siguen las v1 («envíanos el comprobante por aquí»). Encender solo
+  // cuando Meta haya aprobado las tres.
+  WHATSAPP_MORA_PLANTILLAS_V2: z.string().default('false').transform((v) => v === 'true'),
 
   // Firma multi-parte (arrendatario + arrendador + Cofianza) en un solo sobre Auco.
   // OFF por defecto: mientras siga en false, la firma usa el flujo de un solo

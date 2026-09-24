@@ -9,11 +9,18 @@
 // ============================================================
 
 import { supabase } from '@/lib/supabase';
+import { env } from '@/config';
+import { getCompany } from '@/lib/companyConfig';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
 import { logger } from '@/lib/logger';
-import { enviarTemplate as enviarTemplateWhatsApp, type EstadoEnvioWhatsApp } from '../whatsapp';
-import { assertExpedienteAccess, resolveAllowedExpedienteIds } from '@/lib/tenantScope';
+import { enviarTemplate as enviarTemplateWhatsApp, type EstadoEnvioWhatsApp, type WhatsappTemplateKey } from '../whatsapp';
+import {
+  assertExpedienteAccess,
+  resolveAllowedExpedienteIds,
+  resolveContactoDueno,
+  resolvePerfilCanonicoDeInmueble,
+} from '@/lib/tenantScope';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { momentoDeCobro } from './horario-cobranza';
@@ -143,6 +150,7 @@ const NOMBRE_FASE: Record<FaseActiva, string> = {
 interface MoraCobro {
   id: string;
   estado: FaseActiva;
+  expediente_id: string | null;
   inquilino_telefono: string | null;
   inquilino_nombre: string;
   inmueble_direccion: string | null;
@@ -150,25 +158,50 @@ interface MoraCobro {
   fecha_vencimiento_canon: string;
 }
 
+/** El arrendador de la mora (quien recibe el canon): su nombre y su WhatsApp de recaudo. */
+async function arrendadorDeMora(expedienteId: string | null) {
+  if (!expedienteId) return null;
+  const { data } = await db('expedientes')
+    .select('inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  const inm = (data as { inmuebles: { propietario_id: string; inmobiliaria_id: string | null } | null } | null)?.inmuebles;
+  return inm ? resolveContactoDueno(await resolvePerfilCanonicoDeInmueble(inm)) : null;
+}
+
 /** El WhatsApp de la fase en que está la mora. La 4.ª variable es el vencimiento en Fase 1 y los días en mora después. */
-function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
-  return enviarTemplateWhatsApp({
-    to: m.inquilino_telefono,
-    template: m.estado === 'fase_1' ? 'MORA_FASE_1' : m.estado === 'fase_2' ? 'MORA_FASE_2' : 'MORA_FASE_3',
-    variables: [
-      m.inquilino_nombre.split(' ')[0] || 'Hola',
-      m.inmueble_direccion ?? 'tu inmueble',
-      formatCOP(m.monto_mora),
-      m.estado === 'fase_1'
-        // La fecha llega sin hora (medianoche UTC): formatearla en UTC evita que
-        // un servidor con otra zona la corra un día.
-        ? new Date(m.fecha_vencimiento_canon).toLocaleDateString('es-CO', {
-            day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
-          })
-        : diasEnMora(m.fecha_vencimiento_canon),
-    ],
-    context: { mora_id: m.id },
-  });
+async function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
+  let template: WhatsappTemplateKey = m.estado === 'fase_1' ? 'MORA_FASE_1' : m.estado === 'fase_2' ? 'MORA_FASE_2' : 'MORA_FASE_3';
+  const variables = [
+    m.inquilino_nombre.split(' ')[0] || 'Hola',
+    m.inmueble_direccion ?? 'tu inmueble',
+    formatCOP(m.monto_mora),
+    m.estado === 'fase_1'
+      // La fecha llega sin hora (medianoche UTC): formatearla en UTC evita que
+      // un servidor con otra zona la corra un día.
+      ? new Date(m.fecha_vencimiento_canon).toLocaleDateString('es-CO', {
+          day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC',
+        })
+      : diasEnMora(m.fecha_vencimiento_canon),
+  ];
+  // P28: la v1 pide el comprobante «por aquí», un número que nadie lee. La v2
+  // lo manda al arrendador por su WhatsApp de recaudo y, en Fase 3, al correo
+  // de soporte de Cofianza. Sin WhatsApp del arrendador se queda en la v1.
+  if (env.WHATSAPP_MORA_PLANTILLAS_V2) {
+    if (m.estado === 'fase_3') {
+      template = 'MORA_FASE_3_V2';
+      variables.push((await getCompany()).email);
+    } else {
+      const arrendador = await arrendadorDeMora(m.expediente_id);
+      if (arrendador?.whatsapp) {
+        template = m.estado === 'fase_1' ? 'MORA_FASE_1_V2' : 'MORA_FASE_2_V2';
+        variables.push(arrendador.nombre, arrendador.whatsapp);
+      } else {
+        logger.warn({ moraId: m.id }, 'Arrendador sin WhatsApp de recaudo ni teléfono: se usa la plantilla de mora v1');
+      }
+    }
+  }
+  return enviarTemplateWhatsApp({ to: m.inquilino_telefono, template, variables, context: { mora_id: m.id } });
 }
 
 /** Cuándo salió la última gestión de cobro a este teléfono, en cualquiera de sus moras. */
@@ -214,7 +247,7 @@ async function cobrarPorWhatsApp(m: MoraCobro, ahora = new Date()): Promise<Resu
 async function enviarCobrosProgramados(ahora: Date): Promise<number> {
   const { data, error } = await db('moras_tickets')
     .select(
-      'id, estado, whatsapp_programado_para, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, fecha_vencimiento_canon',
+      'id, estado, expediente_id, whatsapp_programado_para, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, fecha_vencimiento_canon',
     )
     .in('estado', ESTADOS_ACTIVOS as unknown as string[])
     .lte('whatsapp_programado_para', ahora.toISOString())
@@ -466,6 +499,7 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
   const cobro = await cobrarPorWhatsApp({
     ...ticket,
     estado: 'fase_1',
+    expediente_id: snap.expediente_id,
     fecha_vencimiento_canon: input.fecha_vencimiento_canon,
   });
   const whatsapp_estado = cobro.estado;
@@ -886,12 +920,13 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number; c
 
   // Fase 1 → 2 (lleva al menos 4 días en fase_1)
   const { data: aSubirF2 } = await db('moras_tickets')
-    .select('id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
+    .select('id, expediente_id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
     .eq('estado', 'fase_1')
     .lte('reportado_at', limiteFase2)
     .limit(100) as unknown as {
       data: Array<{
         id: string;
+        expediente_id: string | null;
         inquilino_telefono: string | null;
         inquilino_nombre: string;
         inmueble_direccion: string | null;
@@ -927,7 +962,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number; c
   // fase_2. La segunda condición es la que evita el salto 1 → 3 en una sola
   // corrida; `fase_2_at` lo escriben tanto este cron como el escalado manual.
   const { data: aSubirF3 } = await db('moras_tickets')
-    .select('id, ticket_numero, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
+    .select('id, ticket_numero, expediente_id, inquilino_telefono, inquilino_nombre, inmueble_direccion, monto_mora, reportado_at, fecha_vencimiento_canon')
     .eq('estado', 'fase_2')
     .lte('reportado_at', limiteFase3)
     .lte('fase_2_at', limiteEnFase2)
@@ -935,6 +970,7 @@ export async function autoEscalar(): Promise<{ aFase2: number; aFase3: number; c
       data: Array<{
         id: string;
         ticket_numero: string;
+        expediente_id: string | null;
         inquilino_telefono: string | null;
         inquilino_nombre: string;
         inmueble_direccion: string | null;

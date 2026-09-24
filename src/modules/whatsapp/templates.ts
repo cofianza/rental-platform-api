@@ -106,6 +106,33 @@ export const WHATSAPP_TEMPLATES = {
     description:
       'Hola *{{1}}*, el caso de mora del inmueble *{{2}}* por *${{3}}* (*{{4}} días*) fue escalado formalmente a Cofianza.\n\nA partir de ahora, Cofianza asume la gestión del cobro como garante. Nuestro equipo se comunicará contigo en las próximas horas para coordinar la regularización.',
   },
+  // v2 de las tres de mora (P28), detrás de WHATSAPP_MORA_PLANTILLAS_V2: la v1
+  // pide «envíanos el comprobante por aquí» a un número que nadie lee. Mismo
+  // encabezado, pie y categoría que su v1; solo cambia el cierre del cuerpo.
+  /** Fase 1 v2 — el comprobante va al arrendador (quien recibe el canon). */
+  MORA_FASE_1_V2: {
+    id: 'cofianza_mora_fase1_v2',
+    language: 'es_CO',
+    // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} fecha_vencimiento, {{5}} arrendador, {{6}} WhatsApp de recaudo
+    description:
+      'Hola *{{1}}*, te recordamos que el canon del inmueble *{{2}}* por *${{3}}* venció el *{{4}}*.\n\n¿Ya realizaste el pago? Si es así, envíale el comprobante a *{{5}}* al WhatsApp *{{6}}* para que lo registre.',
+  },
+  /** Fase 2 v2 — el comprobante va al arrendador (quien recibe el canon). */
+  MORA_FASE_2_V2: {
+    id: 'cofianza_mora_fase2_v2',
+    language: 'es_CO',
+    // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora, {{5}} arrendador, {{6}} WhatsApp de recaudo
+    description:
+      'Hola *{{1}}*, el canon del inmueble *{{2}}* por *${{3}}* lleva *{{4}} días* en mora.\n\nTe invitamos a regularizar el pago lo antes posible para evitar que el caso escale a Cofianza como respaldo legal.\n\nSi ya realizaste el pago, envíale el comprobante a *{{5}}* al WhatsApp *{{6}}* para que lo registre.',
+  },
+  /** Fase 3 v2 — el caso ya es de Cofianza: el comprobante va al correo de soporte. */
+  MORA_FASE_3_V2: {
+    id: 'cofianza_mora_fase3_v2',
+    language: 'es_CO',
+    // {{1}} inquilino, {{2}} inmueble, {{3}} monto, {{4}} dias_mora, {{5}} correo de soporte de Cofianza
+    description:
+      'Hola *{{1}}*, el caso de mora del inmueble *{{2}}* por *${{3}}* (*{{4}} días*) fue escalado formalmente a Cofianza.\n\nA partir de ahora, Cofianza asume la gestión del cobro como garante. Nuestro equipo se comunicará contigo para coordinar la regularización.\n\nSi ya realizaste el pago, envía el comprobante al correo *{{5}}* para que lo registremos.',
+  },
   /**
    * Link de autorización de tratamiento de datos (categoría UTILITY en Meta).
    * Se envía al inquilino para que abra la pantalla y firme con OTP al final.
