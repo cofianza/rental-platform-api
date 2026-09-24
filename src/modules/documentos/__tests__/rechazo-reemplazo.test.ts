@@ -246,3 +246,19 @@ describe('un archivo es de un solo documento', () => {
     expect(removeArchivo).toHaveBeenCalledWith(['expedientes/e1/documents/a.pdf']);
   });
 });
+
+// Entre iniciar y confirmar el reemplazo el estudio pudo cerrarse o quedar no
+// aprobable: confirmar vuelve a mirar, como iniciarReemplazo.
+describe('confirmar reemplazo', () => {
+  it('con el estudio cerrado o no aprobable: 400, sin registrar nada', async () => {
+    for (const estado of ['cerrado', 'rechazado']) {
+      queues.set('documentos', [{ data: doc({ estado: 'rechazado' }), error: null }]);
+      queues.set('expedientes', [{ data: { estado }, error: null }]);
+      const input = { nombre_original: 'x.pdf', nombre_archivo: 'x.pdf', storage_key: 'expedientes/e1/documents/n.pdf', tipo_mime: 'application/pdf', tamano_bytes: 1 };
+      await expect(confirmarReemplazo('d1', input as never, 'gestor-1', 'inmobiliaria')).rejects.toMatchObject({
+        statusCode: 400,
+        errorCode: 'EXPEDIENTE_TERMINAL',
+      });
+    }
+  });
+});

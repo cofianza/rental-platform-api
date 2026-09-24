@@ -1281,6 +1281,22 @@ export async function confirmarReemplazo(
   // (no-op para roles internos / llamadas sin identidad).
   await assertExpedienteAccess(doc.expediente_id, userId, userRol);
 
+  // 1c. Mismo chequeo que iniciarReemplazo: entre el inicio y la confirmación
+  // el estudio pudo quedar cerrado o no aprobable.
+  const { data: expediente } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('estado')
+    .eq('id', doc.expediente_id)
+    .single();
+  const estadoEstudio = (expediente as { estado?: string } | null)?.estado;
+  if (!estadoEstudio) throw AppError.notFound('Estudio no encontrado');
+  if (ESTADOS_TERMINALES.includes(estadoEstudio)) {
+    throw AppError.badRequest(
+      'No se pueden subir documentos a un estudio en estado terminal',
+      'EXPEDIENTE_TERMINAL',
+    );
+  }
+
   // 2. Verify file exists in storage (y que sea la clave que emitimos para ESTE estudio,
   // sin otro documento que ya la use)
   assertStorageKeyPropia(input.storage_key, `expedientes/${doc.expediente_id}/documents/`);
@@ -1362,7 +1378,7 @@ export async function confirmarReemplazo(
   // 5. Return with signed URL (y `eliminable`, P19)
   const [archivo_url, bloqueado] = await Promise.all([
     generateViewUrl(created.storage_key),
-    borradoBloqueadoPorEstudio(doc.expediente_id),
+    borradoBloqueadoPorEstudio(doc.expediente_id, estadoEstudio),
   ]);
   return { ...created, archivo_url, eliminable: esEliminable(created, userId, userRol, bloqueado) };
 }
