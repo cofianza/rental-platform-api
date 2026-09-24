@@ -388,8 +388,8 @@ export function motivoGestorReglasDuras(
  * de variables: son parametros internos del modelo que §2 manda no revelar.
  */
 export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): string {
-  // Listas restrictivas: sin nombrar la lista ni la fuente. Las mejoras de
-  // canon/coarrendatario no aplican, asi que el cierre es distinto.
+  // Listas restrictivas: sin nombrar la lista ni la fuente. Ninguna mejora
+  // propia la levanta, asi que el cierre es distinto y manda sobre las demas.
   if (reglas.includes('listas_restrictivas')) {
     return (
       'No aprobable por ahora. Con la información disponible hoy, no pudimos completar las verificaciones ' +
@@ -398,48 +398,38 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
     );
   }
 
-  // Mora (Politica §11: "Mora vigente detectada"): sin entidad, fechas ni
-  // montos. La salida natural es ponerse al dia.
-  if (reglas.includes('mora_vigente') || reglas.includes('mora_mayor_30d_6m')) {
-    return (
-      'No aprobable por ahora. Con la información disponible hoy, las centrales de riesgo reportan ' +
-      'obligaciones en mora recientes o vigentes a tu nombre. ' +
-      'No es una decisión definitiva sobre ti: cuando estén al día puedes volver a solicitarlo, o escribirnos para revisar tu caso.'
-    );
-  }
+  const mora = reglas.includes('mora_vigente') || reglas.includes('mora_mayor_30d_6m');
+  const score = reglas.includes('score_menor_450');
+  const dti = reglas.includes('dti_mayor_65');
+  const canon = reglas.includes('canon_ingreso_mayor_40');
 
-  // Score bajo: sin nombrar el score ni el corte (§2). La regla dura anula al
-  // coarrendatario (§5), asi que no se le ofrece esa salida.
-  if (reglas.includes('score_menor_450')) {
-    return (
-      'No aprobable por ahora. Con la información disponible hoy, tu historial en las centrales de riesgo ' +
-      'no alcanza el mínimo que exige nuestra política para respaldar un contrato. ' +
-      'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante o escribirnos para revisar tu caso.'
-    );
-  }
-
-  const soloCanon =
-    reglas.includes('canon_ingreso_mayor_40') && !reglas.includes('dti_mayor_65');
-
-  const causa = soloCanon
-    ? 'el canon de este inmueble representa una parte demasiado alta de los ingresos que pudimos verificar'
-    : reglas.includes('canon_ingreso_mayor_40')
-      ? 'el canon de este inmueble y los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar'
-      : 'los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar';
-
-  // P30: tampoco aqui se ofrece co-arrendatario (la regla dura lo anula, §5).
-  // La salida sigue a la causa: canon menor si solo pesa el canon; si pesan los
-  // compromisos (DTI), reducirlos, que un canon menor solo no lo resuelve.
-  const salida = soloCanon
-    ? 'puedes intentarlo con un inmueble de canon menor o volver a solicitarlo más adelante.'
-    : reglas.includes('canon_ingreso_mayor_40')
-      ? 'cuando reduzcas tus compromisos financieros actuales puedes volver a solicitarlo, idealmente para un inmueble de canon menor.'
-      : 'cuando reduzcas tus compromisos financieros actuales puedes volver a solicitarlo.';
+  // P30: una causa y una salida por cada regla que se activó, en el orden de
+  // la Política, y nunca un co-arrendatario (la regla dura lo anula, §5).
+  // Mora (§11 «Mora vigente detectada») sin entidad, fechas ni montos; score
+  // sin nombrar el score ni el corte (§2).
+  const causas = [
+    mora && 'las centrales de riesgo reportan obligaciones en mora recientes o vigentes a tu nombre',
+    score && 'tu historial en las centrales de riesgo no alcanza el mínimo que exige nuestra política para respaldar un contrato',
+    canon && !dti && 'el canon de este inmueble representa una parte demasiado alta de los ingresos que pudimos verificar',
+    canon && dti && 'el canon de este inmueble y los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar',
+    dti && !canon && 'los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar',
+  ].filter((c): c is string => !!c);
+  const salidas = [
+    mora && 'ponerte al día en tus obligaciones',
+    dti && 'reducir tus compromisos financieros actuales',
+    canon && 'buscar un inmueble de canon menor',
+    score ? 'volver a solicitarlo más adelante' : 'volver a solicitarlo',
+  ].filter((c): c is string => !!c);
 
   return (
-    `No aprobable por ahora. Con la información disponible hoy, ${causa}. ` +
-    `No es una decisión definitiva sobre ti: ${salida}`
+    `No aprobable por ahora. Con la información disponible hoy, ${enumerar(causas)}. ` +
+    `No es una decisión definitiva sobre ti: puedes ${enumerar(salidas)}, o escribirnos para revisar tu caso.`
   );
+}
+
+/** «a», «a y b», «a, b y c». */
+function enumerar(partes: readonly string[]): string {
+  return partes.length > 1 ? `${partes.slice(0, -1).join(', ')} y ${partes[partes.length - 1]}` : (partes[0] ?? '');
 }
 
 // ============================================================

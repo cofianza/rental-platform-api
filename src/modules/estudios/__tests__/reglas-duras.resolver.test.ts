@@ -89,12 +89,20 @@ describe('motivo para el prospecto (P30)', () => {
   });
 
   it('la salida sigue a la causa', () => {
-    expect(motivoProspectoReglasDuras(['canon_ingreso_mayor_40'])).toMatch(/canon menor/);
+    const canon = motivoProspectoReglasDuras(['canon_ingreso_mayor_40']);
+    expect(canon).toMatch(/canon menor/);
+    expect(canon).not.toMatch(/compromisos/);
     const dti = motivoProspectoReglasDuras(['dti_mayor_65']);
-    expect(dti).toMatch(/reduzcas tus compromisos/);
+    expect(dti).toMatch(/reducir tus compromisos/);
     expect(dti).not.toMatch(/canon menor/);
-    expect(motivoProspectoReglasDuras(['dti_mayor_65', 'canon_ingreso_mayor_40'])).toMatch(/reduzcas tus compromisos.*canon menor/);
-    expect(motivoProspectoReglasDuras(['mora_vigente'])).toMatch(/al día/);
-    expect(motivoProspectoReglasDuras(['score_menor_450'])).toMatch(/más adelante/);
+    expect(motivoProspectoReglasDuras(['mora_vigente'])).toMatch(/ponerte al día/);
+    expect(motivoProspectoReglasDuras(['score_menor_450'])).toMatch(/volver a solicitarlo más adelante/);
+  });
+
+  it('con varias causas, las salidas de todas', () => {
+    const m = motivoProspectoReglasDuras(['mora_vigente', 'dti_mayor_65', 'canon_ingreso_mayor_40']);
+    expect(m).toMatch(/en mora/);
+    expect(m).toMatch(/ponerte al día en tus obligaciones, reducir tus compromisos financieros actuales, buscar un inmueble de canon menor y volver a solicitarlo/);
+    expect(motivoProspectoReglasDuras(['score_menor_450', 'mora_mayor_30d_6m'])).toMatch(/ponerte al día.* y volver a solicitarlo más adelante/);
   });
 });
