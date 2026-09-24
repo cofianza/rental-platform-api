@@ -29,6 +29,12 @@ export async function reenviar(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+export async function cancelar(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const result = await service.cancelarInvitacionCoarrendatario(id, req.user!.id, req.user!.rol);
+  sendSuccess(res, result);
+}
+
 // ── Público: el invitado abre el link y decide ─────────────────────
 
 export async function getPublic(req: Request, res: Response) {

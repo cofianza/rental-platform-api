@@ -34,6 +34,16 @@ expedienteCoarrendatariosRouter.post(
   controller.reenviar,
 );
 
+// POST /api/v1/expedientes/:id/coarrendatario/cancelar — cancelar la invitación
+// antes de que la acepte (P4): libera el cupo para invitar a otra persona.
+expedienteCoarrendatariosRouter.post(
+  '/:id/coarrendatario/cancelar',
+  authMiddleware,
+  roleGuard(['solicitante', 'propietario', 'inmobiliaria', 'administrador', 'operador_analista']),
+  validate({ params: expedienteIdParamsSchema }),
+  controller.cancelar,
+);
+
 // GET /api/v1/expedientes/:id/coarrendatario — ver el coarrendatario actual.
 expedienteCoarrendatariosRouter.get(
   '/:id/coarrendatario',

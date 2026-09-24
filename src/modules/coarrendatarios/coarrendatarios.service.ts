@@ -188,6 +188,35 @@ function normalizarDocumento(numero: string | null | undefined): string {
   return (numero ?? '').replace(/[.\s-]/g, '').trim().toUpperCase();
 }
 
+/**
+ * Politica V4.1 §5, NOTA: "El coarrendatario no puede ser el mismo afianzado
+ * bajo otro nombre". El correo se cambia en un minuto; el documento no: se
+ * compara normalizado. Lo usan invitar y reenviar (que desde P4 corrige el
+ * documento).
+ */
+function assertNoEsElTitular(ctx: ExpedienteCtx, datos: { email?: string; numero_documento?: string }): void {
+  if (datos.email && ctx.solicitante_email && datos.email.trim().toLowerCase() === ctx.solicitante_email.toLowerCase()) {
+    throw AppError.badRequest(
+      'El co-arrendatario no puede ser la misma persona que el solicitante',
+      'COARRENDATARIO_MISMO_EMAIL',
+    );
+  }
+  const docTitular = normalizarDocumento(ctx.solicitante_numero_documento);
+  if (datos.numero_documento && docTitular && normalizarDocumento(datos.numero_documento) === docTitular) {
+    throw AppError.badRequest(
+      'El co-arrendatario no puede ser la misma persona que el solicitante: el número de documento coincide con el del titular del estudio.',
+      'COARRENDATARIO_MISMO_DOCUMENTO',
+    );
+  }
+}
+
+const TIPO_DOC_CORTO: Record<string, string> = { cc: 'CC', ce: 'CE', ti: 'TI', pasaporte: 'Pasaporte', nit: 'NIT' };
+
+/** P4: el invitado reconoce su documento sin verlo completo («CC ••••5678»). */
+function documentoEnmascarado(tipo: string, numero: string): string {
+  return `${TIPO_DOC_CORTO[tipo] ?? tipo.toUpperCase()} ••••${normalizarDocumento(numero).slice(-4)}`;
+}
+
 function generateToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -373,26 +402,8 @@ export async function invitarCoarrendatario(
     soloAdvertir: await estudioYaCobrado(expedienteId),
   });
 
-  // 3. No reinvitar el mismo email del titular (no tiene sentido).
-  if (ctx.solicitante_email && input.email.toLowerCase() === ctx.solicitante_email.toLowerCase()) {
-    throw AppError.badRequest(
-      'El co-arrendatario no puede ser la misma persona que el solicitante',
-      'COARRENDATARIO_MISMO_EMAIL',
-    );
-  }
-
-  // 3b. Politica V4.1 §5, NOTA: "El coarrendatario no puede ser el mismo
-  //     afianzado bajo otro nombre". El correo se cambia en un minuto; el
-  //     documento no. Se compara normalizado (sin puntos ni espacios). El
-  //     reenvio (reenviarInvitacionCoarrendatario) no admite cambiar el
-  //     documento, asi que este es el unico punto de entrada.
-  const docTitular = normalizarDocumento(ctx.solicitante_numero_documento);
-  if (docTitular && normalizarDocumento(input.numero_documento) === docTitular) {
-    throw AppError.badRequest(
-      'El co-arrendatario no puede ser la misma persona que el solicitante: el número de documento coincide con el del titular del estudio.',
-      'COARRENDATARIO_MISMO_DOCUMENTO',
-    );
-  }
+  // 3. Ni el correo ni el documento del titular (Politica §5, NOTA).
+  assertNoEsElTitular(ctx, input);
 
   // 4. Insert. El unique index parcial bloquea duplicados activos — error
   //    23505 lo mapeamos a un mensaje claro.
@@ -417,8 +428,9 @@ export async function invitarCoarrendatario(
 
   if (error) {
     if ((error as { code?: string }).code === '23505') {
+      // P4: antes de aceptar se cancela y se invita a otra; después, uno por estudio.
       throw AppError.conflict(
-        'Ya hay un co-arrendatario activo invitado para este estudio. Si quieres invitar a otra persona, primero rechaza la invitación actual.',
+        'Ya hay un co-arrendatario invitado para este estudio. Si su invitación sigue pendiente, cancélala para invitar a otra persona; si ya la aceptó, no se puede reemplazar: se admite uno por estudio.',
         'COARRENDATARIO_DUPLICADO',
       );
     }
@@ -565,12 +577,7 @@ export async function reenviarInvitacionCoarrendatario(
 
   // Mismo guard que al invitar: el coarrendatario no puede ser el titular.
   const nuevoEmail = input.email?.trim().toLowerCase();
-  if (nuevoEmail && ctx.solicitante_email && nuevoEmail === ctx.solicitante_email.toLowerCase()) {
-    throw AppError.badRequest(
-      'El co-arrendatario no puede ser la misma persona que el solicitante',
-      'COARRENDATARIO_MISMO_EMAIL',
-    );
-  }
+  assertNoEsElTitular(ctx, { email: nuevoEmail, numero_documento: input.numero_documento });
 
   // UPDATE in-place (no insert: el unique index parcial sigue intacto).
   // Regenerar el token invalida el enlace anterior — si el correo viejo era
@@ -581,6 +588,11 @@ export async function reenviarInvitacionCoarrendatario(
     .update({
       ...(nuevoEmail ? { email: nuevoEmail } : {}),
       ...(input.telefono ? { telefono: input.telefono } : {}),
+      // P4: corregir a la persona antes de que acepte (nombre o documento mal escritos).
+      ...(input.nombre ? { nombre: input.nombre } : {}),
+      ...(input.apellido ? { apellido: input.apellido } : {}),
+      ...(input.tipo_documento ? { tipo_documento: input.tipo_documento } : {}),
+      ...(input.numero_documento ? { numero_documento: input.numero_documento } : {}),
       token,
       token_expiracion: tokenExpiracion(),
       updated_at: new Date().toISOString(),
@@ -633,12 +645,70 @@ export async function reenviarInvitacionCoarrendatario(
 }
 
 // ============================================================
+// 2c. Cancelar la invitación antes de que la acepte (P4)
+// ============================================================
+//
+// Flujo §12 (decisión 2026-09-24): antes de aceptar se puede cancelar,
+// corregir y reenviar o invitar a otra persona, sin costo. Después de
+// consultado el buró ya no: un co-arrendatario por estudio.
+
+export async function cancelarInvitacionCoarrendatario(
+  expedienteId: string,
+  userId: string,
+  userRol: string,
+): Promise<{ ok: true }> {
+  const ctx = await fetchExpedienteCtx(expedienteId);
+
+  if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
+    throw AppError.forbidden('No tienes permisos para cancelar esta invitación', 'COARRENDATARIO_FORBIDDEN');
+  }
+
+  // Solo la pendiente. Rotar el token deja muerto el enlace que ya recibió, y
+  // el estado libera el cupo del índice único para invitar a otra persona.
+  const ahora = new Date().toISOString();
+  const { data, error } = await (supabase
+    .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'rechazado_invitacion', rechazado_at: ahora, token: generateToken(), updated_at: ahora } as never)
+    .eq('expediente_id', expedienteId)
+    .eq('estado', 'pendiente_aceptacion')
+    .select('id, nombre');
+
+  if (error) {
+    logger.error({ error: error.message, expedienteId }, 'Error al cancelar la invitación de coarrendatario');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al cancelar la invitación');
+  }
+  const cancelada = (data as Array<{ id: string; nombre: string }> | null)?.[0];
+  if (!cancelada) {
+    throw AppError.badRequest(
+      'Solo se puede cancelar una invitación que todavía no se ha aceptado. Después de la evaluación no se puede reemplazar al co-arrendatario: se admite uno por estudio.',
+      'COARRENDATARIO_NO_PENDIENTE',
+    );
+  }
+
+  await (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'estudio',
+      descripcion: `Se canceló la invitación a ${cancelada.nombre} como co-arrendatario antes de que la aceptara.`,
+      usuario_id: userId,
+      metadata: { origen: 'coarrendatario_cancelado', coarrendatario_id: cancelada.id },
+    } as never)
+    .then(() => undefined, () => undefined);
+
+  logger.info({ expedienteId, coarrendatarioId: cancelada.id }, 'Invitación de coarrendatario cancelada');
+  return { ok: true };
+}
+
+// ============================================================
 // 3. Vista pública — el invitado abre /coarrendatario/[token]
 // ============================================================
 
 export interface CoarrendatarioPublicView {
   nombre: string;
   apellido: string;
+  /** Enmascarado («CC ••••5678»): si no es el suyo, puede declinar (P4). */
+  documento: string;
   email: string;
   estado: Coarrendatario['estado'];
   expediente: {
@@ -661,7 +731,7 @@ export interface CoarrendatarioPublicView {
 export async function getPublicByToken(token: string): Promise<CoarrendatarioPublicView> {
   const { data: coaRow, error } = await (supabase
     .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, nombre, apellido, email, estado, token_expiracion')
+    .select('id, expediente_id, nombre, apellido, tipo_documento, numero_documento, email, estado, token_expiracion')
     .eq('token', token)
     .maybeSingle();
 
@@ -674,6 +744,8 @@ export async function getPublicByToken(token: string): Promise<CoarrendatarioPub
     expediente_id: string;
     nombre: string;
     apellido: string;
+    tipo_documento: string;
+    numero_documento: string;
     email: string;
     estado: Coarrendatario['estado'];
     token_expiracion: string;
@@ -693,6 +765,7 @@ export async function getPublicByToken(token: string): Promise<CoarrendatarioPub
   return {
     nombre: coa.nombre,
     apellido: coa.apellido,
+    documento: documentoEnmascarado(coa.tipo_documento, coa.numero_documento),
     email: coa.email,
     estado: coa.estado,
     expediente: {

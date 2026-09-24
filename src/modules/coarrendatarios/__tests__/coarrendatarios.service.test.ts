@@ -134,6 +134,7 @@ import {
   rechazarInvitacion,
   aceptarInvitacion,
   getPublicByToken,
+  cancelarInvitacionCoarrendatario,
 } from '../coarrendatarios.service';
 
 // ============================================================
@@ -400,6 +401,106 @@ describe('aceptarInvitacion — fallo al crear el estudio', () => {
     const updates = ops.filter((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
     expect((updates.at(-1)!.args[0] as { estado: string }).estado).toBe('pendiente_aceptacion');
     expect(ops.some((o) => o.table === 'autorizaciones_habeas_data' && o.method === 'update')).toBe(false);
+  });
+});
+
+// ============================================================
+// P4: antes de aceptar se cancela o se corrige y reenvía; después, uno por estudio
+// ============================================================
+
+describe('reemplazar al co-arrendatario — P4', () => {
+  it('cancelar: solo la pendiente, rota el token (el enlace viejo muere) y deja rastro', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: [{ id: COA_ID, nombre: 'Luis' }], error: null });
+
+    await expect(cancelarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador')).resolves.toEqual({ ok: true });
+
+    const update = ops.find((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
+    const payload = update!.args[0] as { estado: string; token: string };
+    expect(payload.estado).toBe('rechazado_invitacion');
+    expect(payload.token).toMatch(/^[a-f0-9]{64}$/);
+    expect(ops).toContainEqual({ table: 'expediente_coarrendatarios', method: 'eq', args: ['estado', 'pendiente_aceptacion'] });
+    expect(ops.some((o) => o.table === 'eventos_timeline' && o.method === 'insert')).toBe(true);
+  });
+
+  it('cancelar una ya aceptada: 400, uno por estudio', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: [], error: null });
+
+    await expect(cancelarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador')).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'COARRENDATARIO_NO_PENDIENTE',
+      message: expect.stringContaining('uno por estudio'),
+    });
+  });
+
+  it('cancelar fuera de la cartera: 403 sin tocar la invitación', async () => {
+    mockAssertExpedienteAccess.mockRejectedValueOnce(new Error('404'));
+    enqueue('expedientes', ctxRow());
+
+    await expect(cancelarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'inmobiliaria')).rejects.toMatchObject({ statusCode: 403 });
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios')).toBe(false);
+  });
+
+  it('reenviar corrige nombre y documento', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue(
+      'expediente_coarrendatarios',
+      { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, estado: 'pendiente_aceptacion' }, error: null },
+      { data: { id: COA_ID, nombre: 'Luisa', email: 'luis@correo.co', estado: 'pendiente_aceptacion' }, error: null },
+    );
+
+    await reenviarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', {
+      nombre: 'Luisa',
+      tipo_documento: 'ce',
+      numero_documento: '7654329',
+    });
+
+    const update = ops.find((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update');
+    expect(update!.args[0]).toMatchObject({ nombre: 'Luisa', tipo_documento: 'ce', numero_documento: '7654329' });
+  });
+
+  it('reenviar con el documento del titular: 400, igual que al invitar', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, estado: 'pendiente_aceptacion' }, error: null });
+
+    await expect(
+      reenviarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', { numero_documento: '1234567' }),
+    ).rejects.toMatchObject({ statusCode: 400, errorCode: 'COARRENDATARIO_MISMO_DOCUMENTO' });
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'update')).toBe(false);
+  });
+
+  it('invitar con otra ya activa: el 23505 dice cómo salir', async () => {
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', { data: null, error: { code: '23505', message: 'duplicate' } });
+
+    await expect(invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'))).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringContaining('cancélala para invitar a otra persona'),
+    });
+  });
+
+  it('la vista pública muestra el documento enmascarado', async () => {
+    enqueue('expediente_coarrendatarios', {
+      data: {
+        id: COA_ID,
+        expediente_id: EXPEDIENTE_ID,
+        nombre: 'Luis',
+        apellido: 'Gómez',
+        tipo_documento: 'cc',
+        numero_documento: '1.017.654.321',
+        email: 'luis@correo.co',
+        estado: 'pendiente_aceptacion',
+        token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+      },
+      error: null,
+    });
+    enqueue('expedientes', ctxRow());
+
+    const vista = await getPublicByToken('t'.repeat(64));
+
+    expect(vista.documento).toBe('CC ••••4321');
+    expect(JSON.stringify(vista)).not.toContain('017654321');
   });
 });
 

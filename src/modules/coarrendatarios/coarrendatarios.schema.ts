@@ -18,17 +18,10 @@ export const invitarCoarrendatarioSchema = z.object({
     .optional(),
 });
 
-// Reenviar la invitación pendiente, corrigiendo el contacto si venía mal
-// escrito. Ambos campos opcionales: sin body = reenviar al mismo contacto.
-export const reenviarCoarrendatarioSchema = z.object({
-  email: z.email('Email inválido').optional(),
-  telefono: z
-    .string()
-    .min(10, 'Teléfono debe tener al menos 10 dígitos')
-    .max(20)
-    .regex(/^\+\d{1,4}[\s-]?\d{7,15}$/, 'Formato internacional requerido (+57…)')
-    .optional(),
-});
+// Reenviar la invitación pendiente, corrigiendo lo que venía mal escrito: el
+// contacto y, desde P4 (2026-09-24), también el nombre y el documento. Todo
+// opcional: sin body = reenviar a la misma persona.
+export const reenviarCoarrendatarioSchema = invitarCoarrendatarioSchema.partial();
 
 export const tokenParamSchema = z.object({
   token: z.string().min(32, 'Token inválido').max(128),
