@@ -1686,11 +1686,17 @@ export async function enviarContratoAFirma(
       );
     }
   } catch (sendErr) {
-    if (estadoPrevio !== 'pendiente_firma') {
-      await (supabase
+    // Solo si sigue en 'pendiente_firma': el sobre anterior pudo resultar
+    // firmado en Auco y quedar conciliado (CONTRATO_YA_FIRMADO); eso no se deshace.
+    const { data: revertido } = estadoPrevio !== 'pendiente_firma'
+      ? await (supabase
         .from('contratos' as string) as ReturnType<typeof supabase.from>)
         .update({ estado: estadoPrevio, updated_at: new Date().toISOString() } as never)
-        .eq('id', contratoId);
+        .eq('id', contratoId)
+        .eq('estado', 'pendiente_firma')
+        .select('id')
+      : { data: null };
+    if ((revertido as unknown[] | null)?.length) {
       await (supabase
         .from('contrato_historial_estados' as string) as ReturnType<typeof supabase.from>)
         .insert({

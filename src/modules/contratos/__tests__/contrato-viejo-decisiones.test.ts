@@ -580,3 +580,32 @@ describe('P11 y P20: al vencer, el contrato viejo se prorroga por el mismo térm
     expect(escrituras()).toEqual([]);
   });
 });
+
+describe('Enviar a firma: si falla, solo revierte lo que sigue en «pendiente_firma»', () => {
+  const aprobado = {
+    data: { id: CTO, estado: 'aprobado', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables: null },
+    error: null,
+  };
+  const historial = () =>
+    ops
+      .filter((o) => o.table === 'contrato_historial_estados' && o.method === 'insert')
+      .map((o) => (o.args[0] as { estado_nuevo: string }).estado_nuevo);
+
+  it('el sobre anterior resultó firmado y quedó conciliado → no lo devuelve a «aprobado»', async () => {
+    // Lectura, paso a pendiente_firma y la reversión, que ya no encuentra la fila (quedó firmado).
+    enqueue('contratos', aprobado, { data: null, error: null }, { data: [], error: null });
+    mockCrearSobre.mockRejectedValueOnce(AppError.conflict('Este contrato ya estaba firmado.', 'CONTRATO_YA_FIRMADO'));
+
+    expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ errorCode: 'CONTRATO_YA_FIRMADO' });
+    expect(ops.filter((o) => o.table === 'contratos' && o.method === 'eq').map((o) => o.args)).toContainEqual(['estado', 'pendiente_firma']);
+    expect(historial()).toEqual(['pendiente_firma']);
+  });
+
+  it('un fallo común sí lo devuelve a «aprobado», con su historial', async () => {
+    enqueue('contratos', aprobado, { data: null, error: null }, { data: [{ id: CTO }], error: null });
+    mockCrearSobre.mockRejectedValueOnce(new AppError(502, 'AUCO_UPLOAD_FAILED', 'Auco no aceptó el envío'));
+
+    expect(await error(enviarContratoAFirma(CTO, ADMIN.id, ADMIN.rol))).toMatchObject({ errorCode: 'AUCO_UPLOAD_FAILED' });
+    expect(historial()).toEqual(['pendiente_firma', 'aprobado']);
+  });
+});
