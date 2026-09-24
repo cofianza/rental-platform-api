@@ -111,7 +111,10 @@ export const registrarResultadoSchema = z.object({
     .string()
     .min(10, 'Las observaciones deben tener al menos 10 caracteres')
     .max(3000, 'Las observaciones no deben exceder 3000 caracteres'),
-  motivo_rechazo: z.string().min(10, 'El motivo debe tener al menos 10 caracteres').max(2000).optional(),
+  // P34: al rechazar, `motivo_rechazo` es el motivo corto que ven la
+  // inmobiliaria o el propietario; `fundamento`, el interno (solo Cofianza).
+  motivo_rechazo: z.string().trim().min(10, 'El motivo debe tener al menos 10 caracteres').max(500).optional(),
+  fundamento: z.string().trim().min(10, 'El fundamento debe tener al menos 10 caracteres').max(2000).optional(),
   condiciones: z.string().min(10, 'Las condiciones deben tener al menos 10 caracteres').max(2000).optional(),
   certificado_storage_key: z.string().max(500).optional(),
 }).superRefine((data, ctx) => {
@@ -119,7 +122,14 @@ export const registrarResultadoSchema = z.object({
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['motivo_rechazo'],
-      message: 'El motivo de rechazo es requerido cuando el resultado es rechazado',
+      message: 'Escribe el motivo para la inmobiliaria o el propietario',
+    });
+  }
+  if (data.resultado === 'rechazado' && !data.fundamento) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['fundamento'],
+      message: 'Escribe el fundamento interno del rechazo',
     });
   }
   if (data.resultado === 'condicionado' && !data.condiciones) {

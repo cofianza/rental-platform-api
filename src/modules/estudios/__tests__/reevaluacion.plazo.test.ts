@@ -10,17 +10,22 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 // condicionado se resuelve con la revision manual.
 // ============================================================
 
-const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver } = vi.hoisted(() => {
+const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockOnEstudio, inserts } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
+  const inserts: Array<{ table: string; fila: Res }> = [];
   const next = (table: string): Res => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null, count: null };
   };
-  const PASSTHROUGH = ['select', 'eq', 'neq', 'is', 'in', 'or', 'gte', 'order', 'limit', 'range'];
+  const PASSTHROUGH = ['select', 'insert', 'eq', 'neq', 'is', 'in', 'or', 'gte', 'order', 'limit', 'range'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) chain[m] = () => chain;
+    chain.insert = (fila: Res) => {
+      inserts.push({ table, fila });
+      return chain;
+    };
     chain.maybeSingle = async () => next(table);
     chain.single = async () => next(table);
     chain.then = (resolve: (v: Res) => unknown, reject?: (e: unknown) => unknown) =>
@@ -28,6 +33,7 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver } = vi
     return chain;
   };
   return {
+    inserts,
     mockEnv: new Proxy({} as Record<string, unknown>, {
       get: (_t, k) => (typeof k === 'string' && (k.endsWith('_ENABLED') || k.startsWith('MOTOR_')) ? false : 'x'),
     }),
@@ -37,11 +43,12 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver } = vi
     mockStorageFrom: vi.fn(() => ({
       createSignedUploadUrl: vi.fn(async () => ({ data: { signedUrl: 'https://up', token: 't' }, error: null })),
     })),
+    mockOnEstudio: vi.fn(async (..._a: unknown[]) => undefined),
     // Lo que el analista registra pasa tal cual (sin reglas duras ni motor).
-    mockResolver: vi.fn(async (a: { resultadoPropuesto: string }) => ({
+    mockResolver: vi.fn(async (a: { resultadoPropuesto: string; motivoRechazo?: string | null }) => ({
       resultado: a.resultadoPropuesto,
       observaciones: null,
-      motivoRechazo: null,
+      motivoRechazo: a.motivoRechazo ?? null,
       salida: null,
       veredicto: { rechaza: false, reglas: [] },
       apisFallidas: [],
@@ -74,14 +81,16 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarResponsableExpediente: vi.fn(),
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
+vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioCompletado: mockOnEstudio }));
 vi.mock('../reglas-duras', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../reglas-duras')>()),
   resolverResultadoEstudio: mockResolver,
 }));
 
 import { supabase } from '@/lib/supabase';
+import { logAudit } from '@/lib/auditLog';
 import { getHistorialReEvaluacion, getSoportePresignedUrl, registrarResultado } from '../estudios.service';
-import { reEvaluarSchema } from '../estudios.schema';
+import { reEvaluarSchema, registrarResultadoSchema } from '../estudios.schema';
 
 const hace = (dias: number) => new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
 
@@ -107,6 +116,7 @@ function encolarHistorial(fechaCompletado: string) {
 
 beforeEach(() => {
   queues.clear();
+  inserts.length = 0;
   mockStorageFrom.mockClear();
   (supabase.rpc as unknown as Mock).mockReset();
 });
@@ -193,5 +203,42 @@ describe('condicionado: se resuelve con la revision manual (P33)', () => {
     enqueue('expedientes', { data: { estado: 'condicionado' }, error: null });
     await expect(aprobar()).rejects.toMatchObject({ errorCode: 'ESTUDIO_ESTADO_INVALIDO' });
     expect(supabase.rpc).toHaveBeenCalledTimes(2);
+  });
+});
+
+// P34 por «Registrar resultado»: el rechazo del analista lleva un fundamento
+// interno y un motivo corto; el gestor solo ve el motivo.
+describe('registrar un rechazo a mano (P34)', () => {
+  const base = { resultado: 'rechazado', observaciones: 'Reporte SIFIN revisado' };
+
+  it('pide el fundamento interno y un motivo corto para el gestor', () => {
+    expect(registrarResultadoSchema.safeParse({ ...base, motivo_rechazo: 'No cumple la política de Cofianza' }).success).toBe(false);
+    expect(registrarResultadoSchema.safeParse({ ...base, fundamento: 'Dos obligaciones castigadas' }).success).toBe(false);
+    const ok = { ...base, fundamento: 'Dos obligaciones castigadas', motivo_rechazo: 'No cumple la política de Cofianza' };
+    expect(registrarResultadoSchema.safeParse(ok).success).toBe(true);
+    expect(registrarResultadoSchema.safeParse({ ...ok, motivo_rechazo: 'x'.repeat(501) }).success).toBe(false);
+  });
+
+  it('el fundamento va al timeline y a la bitácora; el motivo, al banner (vía el orquestador)', async () => {
+    (supabase.rpc as unknown as Mock).mockResolvedValue({ error: null });
+    enqueue(
+      'estudios',
+      { data: { id: 'est-2', estado: 'en_proceso', resultado: 'pendiente', expediente_id: 'exp-1', canon_evaluado: 2_000_000, proveedor: 'manual', tipo: 'individual' }, error: null },
+      { data: { tipo: 'individual' }, error: null }, // hook post-resultado
+    );
+    const input = { ...base, fundamento: 'Dos obligaciones castigadas', motivo_rechazo: 'No cumple la política de Cofianza' };
+    await registrarResultado('est-2', input as never, 'u-1', undefined, 'operador_analista').catch(() => undefined);
+
+    const rpc = (supabase.rpc as unknown as Mock).mock.calls[0][1] as Record<string, unknown>;
+    expect(rpc.p_motivo_rechazo).toBe('No cumple la política de Cofianza');
+    expect(JSON.stringify(rpc)).not.toContain('castigadas');
+    expect(inserts).toContainEqual({
+      table: 'eventos_timeline',
+      fila: expect.objectContaining({ metadata: { estudio_id: 'est-2', fundamento: 'Dos obligaciones castigadas' } }),
+    });
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ detalle: expect.objectContaining({ fundamento: 'Dos obligaciones castigadas' }) }));
+    await vi.waitFor(() =>
+      expect(mockOnEstudio).toHaveBeenCalledWith(expect.objectContaining({ motivoAnalista: 'No cumple la política de Cofianza' })),
+    );
   });
 });

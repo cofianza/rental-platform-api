@@ -13,6 +13,7 @@ import {
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
 import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
 import { DESTINACION_NO_HABILITADA } from '../inmuebles/destinacion';
+import { MOTIVO_PROSPECTO_DECISION_COFIANZA } from '../estudios/rutas-resultado';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
 import {
   notificarUsuario,
@@ -786,7 +787,8 @@ export async function avisarSolicitanteDecision(
           ciudad: e?.inmuebles?.ciudad ?? '',
           score: null,
         })
-      : sendEstudioRechazadoEmail({ email: sol.email, nombre, motivoGeneral })
+      // Sin motivo lo decidió un analista (P34): texto neutro, no el de «tu evaluación crediticia no cumplió».
+      : sendEstudioRechazadoEmail({ email: sol.email, nombre, motivoGeneral: motivoGeneral ?? MOTIVO_PROSPECTO_DECISION_COFIANZA })
     ).catch((err) => logger.warn({ error: err, expedienteId }, 'No se pudo enviar al prospecto el correo de la decisión'));
 
     const perfilId = await findPerfilIdByEmail(sol.email);

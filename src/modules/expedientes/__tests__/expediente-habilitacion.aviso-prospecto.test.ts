@@ -40,6 +40,7 @@ vi.mock('../../notificaciones/notificaciones.service', () => ({
 }));
 
 import { avisarSolicitanteDecision } from '../expediente-habilitacion.service';
+import { MOTIVO_PROSPECTO_DECISION_COFIANZA } from '../../estudios/rutas-resultado';
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -51,6 +52,16 @@ describe('avisarSolicitanteDecision', () => {
     expect(mockAprobado).not.toHaveBeenCalled();
     expect(mockFindPerfil).toHaveBeenCalledWith('ana@correo.co');
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'perfil-prospecto', tipo: 'estudio.rechazado' }));
+  });
+
+  it('rechazo de un analista (sin motivo): el texto neutro, no «tu evaluación crediticia no cumplió»', async () => {
+    await avisarSolicitanteDecision('exp-1', 'rechazado');
+
+    expect(mockRechazado).toHaveBeenCalledWith({
+      email: 'ana@correo.co',
+      nombre: 'Ana Pérez',
+      motivoGeneral: MOTIVO_PROSPECTO_DECISION_COFIANZA,
+    });
   });
 
   it('aprobado: correo de aprobado sin score', async () => {

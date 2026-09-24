@@ -114,6 +114,16 @@ export interface Ruta {
   etiquetaGestor: string;
 }
 
+/**
+ * Motivo general para el prospecto cuando el no aprobable lo decidió un
+ * analista de Cofianza (P34): nunca su fundamento ni el motivo del gestor, y
+ * sin atribuirlo a la evaluación crediticia. El correo añade el «escríbenos» y
+ * el derecho de apelación (Política §11).
+ */
+export const MOTIVO_PROSPECTO_DECISION_COFIANZA =
+  'No aprobable por ahora. Cofianza revisó tu solicitud y en este momento no podemos respaldarla. ' +
+  'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante.';
+
 const NO_APROBABLE = {
   titulo: 'Por ahora no podemos activar la fianza',
   mensaje:

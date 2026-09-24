@@ -1625,6 +1625,8 @@ async function dispararHookPostResultado(
   resultado: string,
   score: number | null,
   veredicto?: VeredictoReglasDuras,
+  /** P34: rechazo que registró un analista, con su motivo para el gestor. */
+  motivoAnalista?: string,
 ): Promise<void> {
   const reglasDuras = veredicto?.rechaza ? veredicto.reglas : [];
   const motivoGestorReglaDura = veredicto?.rechaza ? veredicto.motivoGestor : null;
@@ -1654,6 +1656,7 @@ async function dispararHookPostResultado(
           solicitanteId: '',
           reglasDuras,
           motivoGestorReglaDura,
+          motivoAnalista,
         }),
       )
       .catch((err) => logger.warn({ error: err, estudioId }, 'Orchestrator hook post-estudio falló'));
@@ -1866,9 +1869,25 @@ export async function registrarResultado(
       score: input.score,
       has_certificado: !!input.certificado_storage_key,
       expediente_id: est.expediente_id,
+      ...(input.fundamento ? { fundamento: input.fundamento } : {}),
     },
     ip,
   });
+
+  // 4b. P34: el fundamento interno del rechazo queda en el timeline, que solo
+  // lee Cofianza; nunca en el estudio, que ven la inmobiliaria o el propietario.
+  if (input.fundamento) {
+    const { error: fundErr } = await (supabase
+      .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: est.expediente_id,
+        tipo: 'estudio',
+        descripcion: 'Fundamento interno del resultado registrado',
+        usuario_id: userId,
+        metadata: { estudio_id: estudioId, fundamento: input.fundamento },
+      } as never);
+    if (fundErr) logger.warn({ estudioId, error: fundErr.message }, 'No se pudo guardar el fundamento del resultado en el timeline');
+  }
 
   // 5. Notificacion in-app al solicitante (fire-and-forget). Empuja el
   // campanario y badges en tiempo real; el correo formal lo manda el hook.
@@ -1885,6 +1904,8 @@ export async function registrarResultado(
     final.resultado,
     input.score ?? null,
     final.veredicto,
+    // P34: si lo rechazó el analista (no una regla dura), su motivo corto.
+    final.resultado === 'rechazado' && !final.veredicto.rechaza ? input.motivo_rechazo : undefined,
   );
 
   // 7. Registro sombra del scorecard completo. Va despues del RPC y de su

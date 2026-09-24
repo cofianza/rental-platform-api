@@ -10,6 +10,7 @@ import { sendEstudioAprobadoEmail, sendEstudioRechazadoEmail, sendDocumentosRequ
 import { notificarUsuario, notificarResponsableExpediente } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
 import { resolveNombreDueno } from '@/lib/tenantScope';
+import { MOTIVO_PROSPECTO_DECISION_COFIANZA } from '@/modules/estudios/rutas-resultado';
 import {
   motivoProspectoReglasDuras,
   inferirReglasDurasDesdeMotivo,
@@ -638,6 +639,12 @@ export async function onEstudioCompletado(params: {
   reglasDuras?: readonly ReglaDuraActiva[];
   /** Motivo con cifras para el gestor. Acompaña a `reglasDuras`. */
   motivoGestorReglaDura?: string | null;
+  /**
+   * P34: rechazo registrado a mano por un analista, con el motivo corto que
+   * escribió para la inmobiliaria o el propietario. Va al banner en lugar del
+   * texto genérico, y al prospecto le llega el texto neutro.
+   */
+  motivoAnalista?: string;
 }) {
   const { estudioId, expedienteId, resultado, score } = params;
 
@@ -816,7 +823,7 @@ export async function onEstudioCompletado(params: {
           motivo_rechazo:
             porReglaDura && reglaDura.motivoGestor
               ? reglaDura.motivoGestor
-              : 'La evaluación crediticia del titular fue rechazada. La solicitud no procede.',
+              : params.motivoAnalista ?? 'La evaluación crediticia del titular fue rechazada. La solicitud no procede.',
         } as never)
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');
@@ -838,7 +845,11 @@ export async function onEstudioCompletado(params: {
         sendEstudioRechazadoEmail({
           email: sol.email,
           nombre: `${sol.nombre} ${sol.apellido}`,
-          motivoGeneral: porReglaDura ? motivoProspectoReglasDuras(reglaDura.reglas) : null,
+          motivoGeneral: porReglaDura
+            ? motivoProspectoReglasDuras(reglaDura.reglas)
+            : params.motivoAnalista
+              ? MOTIVO_PROSPECTO_DECISION_COFIANZA
+              : null,
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email rechazado'));
       }
 
