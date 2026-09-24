@@ -16,7 +16,7 @@ vi.mock('@/lib/supabase', () => {
   const next = (t: string) => queues.get(t)?.shift() ?? { data: null, error: null };
   const from = (t: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'eq', 'neq', 'order', 'range', 'limit']) chain[m] = () => chain;
+    for (const m of ['select', 'eq', 'order', 'range']) chain[m] = () => chain;
     chain.single = async () => next(t);
     chain.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(next(t)).then(res, rej);
     return chain;
@@ -71,10 +71,9 @@ describe('eliminable', () => {
     { id: 'p2', estado: 'pendiente', subido_por: 'otro', storage_key: null },
     { id: 'a1', estado: 'aprobado', subido_por: 'u1', storage_key: null },
   ];
-  const listar = async (estado: string, rol = 'propietario', contratos: unknown[] = []) => {
+  const listar = async (estado: string, rol = 'propietario') => {
     queues.set('expedientes', [{ data: { id: 'e1', estado }, error: null }]);
     queues.set('documentos', [{ data: docs, error: null, count: 3 }]);
-    queues.set('contratos', [{ data: contratos, error: null }]);
     const r = await listDocumentosByExpediente('e1', {} as never, 'u1', rol);
     return Object.fromEntries(r.documentos.map((d) => [d.id, (d as { eliminable: boolean }).eliminable]));
   };
@@ -83,10 +82,14 @@ describe('eliminable', () => {
     expect(await listar('en_revision')).toEqual({ p1: true, p2: false, a1: false });
   });
 
-  it('nada con el estudio no aprobable, cerrado o aprobado con contrato', async () => {
-    expect(await listar('rechazado')).toEqual({ p1: false, p2: false, a1: false });
-    expect(await listar('cerrado')).toEqual({ p1: false, p2: false, a1: false });
-    expect(await listar('aprobado', 'propietario', [{ id: 'c1' }])).toEqual({ p1: false, p2: false, a1: false });
+  it('nada desde condicionado ni con el estudio decidido', async () => {
+    for (const estado of ['condicionado', 'aprobado', 'rechazado', 'cerrado']) {
+      expect(await listar(estado)).toEqual({ p1: false, p2: false, a1: false });
+    }
+  });
+
+  it('el administrador, sin la regla de estado: cualquier pendiente', async () => {
+    expect(await listar('cerrado', 'administrador')).toEqual({ p1: true, p2: true, a1: false });
   });
 
   it('sin permiso de borrado (Gerencia) nada', async () => {

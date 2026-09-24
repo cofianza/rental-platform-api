@@ -131,13 +131,21 @@ async function addSignedUrls<T extends DocumentoRow>(docs: T[]): Promise<T[]> {
   return docs.map((doc) => ({ ...doc, archivo_url: doc.storage_key ? urls.get(doc.storage_key) ?? null : null }));
 }
 
+/** Estados en que el propietario, la inmobiliaria o el prospecto aún borran sus documentos. */
+const ESTADOS_CON_BORRADO = ['borrador', 'en_revision', 'informacion_incompleta'];
+
 /**
- * P19: con el estudio decidido sus documentos son la evidencia de esa decisión
- * y ya no se borran: rechazado o cerrado (los estados en que tampoco se sube ni
- * se reemplaza) o aprobado con un contrato que no esté cancelado. Sin estado o
- * si la consulta del contrato falla, se bloquea: un borrado no se deshace.
+ * P19: fuera de Cofianza un documento propio se borra solo mientras el estudio
+ * se arma o se revisa. Desde condicionado es la evidencia de la revisión
+ * manual, y desde la decisión, de la decisión. El administrador y el operador
+ * no tienen esta regla. Sin estado, se bloquea: un borrado no se deshace.
  */
-async function borradoBloqueadoPorEstudio(expedienteId: string, estadoConocido?: string): Promise<boolean> {
+async function borradoBloqueadoPorEstudio(
+  expedienteId: string,
+  userRol: string | undefined,
+  estadoConocido?: string,
+): Promise<boolean> {
+  if (userRol === 'administrador' || userRol === 'operador_analista') return false;
   let estado = estadoConocido;
   if (estado === undefined) {
     const { data } = await (supabase
@@ -147,15 +155,7 @@ async function borradoBloqueadoPorEstudio(expedienteId: string, estadoConocido?:
       .maybeSingle();
     estado = (data as { estado?: string } | null)?.estado;
   }
-  if (!estado || ESTADOS_TERMINALES.includes(estado)) return true;
-  if (estado !== 'aprobado') return false;
-  const { data, error } = await (supabase
-    .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('expediente_id', expedienteId)
-    .neq('estado', 'cancelado')
-    .limit(1);
-  return !!error || (data ?? []).length > 0;
+  return !estado || !ESTADOS_CON_BORRADO.includes(estado);
 }
 
 /**
@@ -448,7 +448,7 @@ export async function confirmarSubida(
   // archivo equivocado lo borra enseguida, P19)
   const [archivo_url, bloqueado] = await Promise.all([
     generateViewUrl(created.storage_key),
-    borradoBloqueadoPorEstudio(input.expediente_id, exp.estado),
+    borradoBloqueadoPorEstudio(input.expediente_id, userRol, exp.estado),
   ]);
 
   return { ...created, archivo_url, eliminable: esEliminable(created, userId, userRol, bloqueado) };
@@ -523,7 +523,7 @@ export async function listDocumentosByExpediente(
   // pendientes no hace falta mirar el contrato).
   const bloqueado =
     !rawDocs.some((d) => d.estado === 'pendiente') ||
-    (await borradoBloqueadoPorEstudio(expedienteId, (expediente as { estado?: string }).estado ?? ''));
+    (await borradoBloqueadoPorEstudio(expedienteId, userRol, (expediente as { estado?: string }).estado ?? ''));
 
   // Generate signed URLs for viewing
   const documentos = (await addSignedUrls(rawDocs)).map((d) => ({
@@ -623,11 +623,11 @@ export async function deleteDocumento(
     );
   }
 
-  // 3b. P19: ni con el estudio decidido (ver borradoBloqueadoPorEstudio).
-  if (await borradoBloqueadoPorEstudio(doc.expediente_id)) {
+  // 3b. P19: fuera de Cofianza, solo mientras el estudio se arma o se revisa.
+  if (await borradoBloqueadoPorEstudio(doc.expediente_id, userRole)) {
     throw AppError.badRequest(
-      'No se pueden eliminar documentos de un estudio cerrado, no aprobable o con contrato en curso.',
-      'EXPEDIENTE_TERMINAL',
+      'Los documentos se pueden eliminar solo mientras el estudio está en preparación, en revisión o con información incompleta.',
+      'DOCUMENTO_NO_ELIMINABLE',
     );
   }
 
@@ -1382,7 +1382,7 @@ export async function confirmarReemplazo(
   // 5. Return with signed URL (y `eliminable`, P19)
   const [archivo_url, bloqueado] = await Promise.all([
     generateViewUrl(created.storage_key),
-    borradoBloqueadoPorEstudio(doc.expediente_id, estadoEstudio),
+    borradoBloqueadoPorEstudio(doc.expediente_id, userRol, estadoEstudio),
   ]);
   return { ...created, archivo_url, eliminable: esEliminable(created, userId, userRol, bloqueado) };
 }

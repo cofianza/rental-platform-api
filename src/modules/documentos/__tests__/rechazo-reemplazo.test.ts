@@ -139,23 +139,29 @@ describe('eliminar documento', () => {
     await expect(borrar()).rejects.toMatchObject({ statusCode: 403 });
   });
 
-  it('con el estudio no aprobable, cerrado o aprobado con contrato: no se borra', async () => {
-    for (const estado of ['rechazado', 'cerrado']) {
+  it('desde condicionado (evidencia de la revisión manual) o con el estudio decidido: no se borra', async () => {
+    for (const estado of ['condicionado', 'aprobado', 'rechazado', 'cerrado']) {
       queues.set('documentos', [{ data: doc(), error: null }]);
       queues.set('expedientes', [{ data: { estado }, error: null }]);
-      await expect(borrar()).rejects.toMatchObject({ statusCode: 400, errorCode: 'EXPEDIENTE_TERMINAL' });
+      await expect(borrar()).rejects.toMatchObject({ statusCode: 400, errorCode: 'DOCUMENTO_NO_ELIMINABLE' });
     }
-    queues.set('documentos', [{ data: doc(), error: null }]);
-    queues.set('expedientes', [{ data: { estado: 'aprobado' }, error: null }]);
-    queues.set('contratos', [{ data: [{ id: 'c1' }], error: null }]);
-    await expect(borrar()).rejects.toMatchObject({ statusCode: 400, errorCode: 'EXPEDIENTE_TERMINAL' });
   });
 
-  it('aprobado sin contrato todavía se puede corregir', async () => {
+  it('en preparación o con información incompleta sí', async () => {
+    for (const estado of ['borrador', 'informacion_incompleta']) {
+      queues.set('documentos', [{ data: doc(), error: null }]);
+      queues.set('expedientes', [{ data: { estado }, error: null }]);
+      await expect(borrar()).resolves.toBeUndefined();
+    }
+  });
+
+  it('el operador y el administrador no tienen la regla de estado', async () => {
+    queues.set('documentos', [{ data: doc({ subido_por: 'op-1' }), error: null }]);
+    queues.set('expedientes', [{ data: { estado: 'cerrado' }, error: null }]);
+    await expect(borrar('op-1', 'operador_analista')).resolves.toBeUndefined();
     queues.set('documentos', [{ data: doc(), error: null }]);
     queues.set('expedientes', [{ data: { estado: 'aprobado' }, error: null }]);
-    queues.set('contratos', [{ data: [], error: null }]);
-    await expect(borrar()).resolves.toBeUndefined();
+    await expect(borrar('admin-1', 'administrador')).resolves.toBeUndefined();
   });
 });
 
