@@ -77,6 +77,7 @@ import {
   listMiembros,
 } from '../inmobiliaria-miembros.service';
 import { invalidateMembresiasCache, resolveRolMiembro } from '@/lib/tenantScope';
+import { logAudit } from '@/lib/auditLog';
 
 const ownerMembership = {
   data: {
@@ -124,12 +125,34 @@ describe('cambiarRolMiembro — protección del último titular', () => {
   });
 });
 
+// Revisión de la inmobiliaria del titular: equipo (otros activos), inmuebles,
+// estudios en curso, fichas, créditos sin usar, compras de créditos pendientes.
+const inmobiliariaVacia = () => [{ data: [] }, { count: 0 }, { count: 0 }, { count: 0 }, { count: 0 }, { count: 0 }];
+const updates = () => (chain.update as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as Record<string, unknown>);
+
 describe('salirDeOrg — protección del último titular', () => {
-  // Un titular no "renuncia" a su org (sea o no el único): primero transfiere
-  // la titularidad. Por eso ya no se cuenta owners aquí.
-  it('rechaza que un owner salga (TITULAR_NO_PUEDE_SALIR)', async () => {
-    enqueue(ownerMembership);
-    await expect(salirDeOrg('p-self')).rejects.toMatchObject({ errorCode: 'TITULAR_NO_PUEDE_SALIR' });
+  // Un titular no "renuncia" a una org con equipo o cartera: primero deja de
+  // ser titular (traspasa la titularidad o se pasa a miembro).
+  it('el titular de una inmobiliaria con equipo no sale: TITULAR_NO_PUEDE_SALIR con traspasar la titularidad', async () => {
+    const r = inmobiliariaVacia();
+    r[0] = { data: [{ rol_miembro: 'miembro' }] };
+    enqueue(ownerMembership, ...r);
+    await expect(salirDeOrg('p-self')).rejects.toMatchObject({
+      errorCode: 'TITULAR_NO_PUEDE_SALIR',
+      message: 'Eres el titular de la inmobiliaria y tiene equipo o cartera: traspasa la titularidad a otro miembro o pide a Cofianza que la cierre.',
+    });
+    expect(chain.update).not.toHaveBeenCalled();
+  });
+
+  it('el cotitular no sale: primero se pasa a miembro', async () => {
+    const r = inmobiliariaVacia();
+    r[0] = { data: [{ rol_miembro: 'owner' }] };
+    enqueue(ownerMembership, ...r);
+    await expect(salirDeOrg('p-self')).rejects.toMatchObject({
+      errorCode: 'TITULAR_NO_PUEDE_SALIR',
+      message: 'Eres cotitular de la inmobiliaria: primero cambia tu rol a miembro y luego sal.',
+    });
+    expect(chain.update).not.toHaveBeenCalled();
   });
 
   it('permite salir a un miembro no-titular', async () => {
@@ -481,5 +504,82 @@ describe('un correo con una cuenta que no es de inmobiliaria no se une a un equi
     await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: false });
     enqueue(invitacion, { data: null });
     await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: false, cuenta_otro_rol: false });
+  });
+});
+
+describe('el titular único de una inmobiliaria vacía la cierra al salir', () => {
+  it('revoca su membresía y las invitaciones pendientes, la marca cerrada (sin borrar nada) y queda en la bitácora', async () => {
+    enqueue(ownerMembership, ...inmobiliariaVacia(), { error: null }, { error: null }, { count: 0 });
+    await expect(salirDeOrg('p-self')).resolves.toEqual({ message: 'Cerraste tu inmobiliaria' });
+    expect(updates()).toEqual([{ estado: 'revocado', token: null, token_expiracion: null }, { estado: 'cerrada' }]);
+    expect(chain.or).toHaveBeenCalledWith('id.eq.m-self,estado.eq.invitado');
+    expect(chain.eq).toHaveBeenCalledWith('estado', 'activa'); // solo cierra una activa
+    expect(chain.delete).not.toHaveBeenCalled();
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ accion: 'inmobiliaria_cerrada', entidadId: 'org1' }));
+  });
+
+  it('con cartera (p. ej. una ficha de solicitante) no la cierra', async () => {
+    const r = inmobiliariaVacia();
+    r[3] = { count: 1 };
+    enqueue(ownerMembership, ...r);
+    await expect(salirDeOrg('p-self')).rejects.toMatchObject({ errorCode: 'TITULAR_NO_PUEDE_SALIR' });
+    expect(chain.update).not.toHaveBeenCalled();
+  });
+
+  it('si alguien aceptó entre la revisión y la revocación: la reabre y responde 409', async () => {
+    enqueue(
+      ownerMembership,
+      ...inmobiliariaVacia(),
+      { error: null }, // revoca
+      { error: null }, // cerrada
+      { count: 1 }, // recuento: apareció un miembro
+      { data: null }, // ¿ya está activa en otra? no
+      { error: null }, // reactiva su membresía
+      { error: null }, // la inmobiliaria vuelve a activa
+    );
+    await expect(salirDeOrg('p-self')).rejects.toMatchObject({ statusCode: 409, errorCode: 'INMOBILIARIA_CON_EQUIPO' });
+    expect(updates().slice(-2)).toEqual([{ estado: 'activo' }, { estado: 'activa' }]);
+    // Solo deshace lo que hizo el cierre: una membresía revocada y una inmobiliaria cerrada.
+    expect(chain.eq).toHaveBeenCalledWith('estado', 'revocado');
+    expect(chain.eq).toHaveBeenCalledWith('estado', 'cerrada');
+    expect(logAudit).not.toHaveBeenCalledWith(expect.objectContaining({ accion: 'inmobiliaria_cerrada' }));
+  });
+
+  it('al reabrir, si la persona ya está activa en otra inmobiliaria no se reactiva su membresía', async () => {
+    enqueue(
+      ownerMembership,
+      ...inmobiliariaVacia(),
+      { error: null },
+      { error: null },
+      { count: 1 },
+      { data: { id: 'm-b' } }, // ya está activa en otra
+      { error: null }, // solo la inmobiliaria vuelve a activa
+    );
+    await expect(salirDeOrg('p-self')).rejects.toMatchObject({ errorCode: 'INMOBILIARIA_CON_EQUIPO' });
+    expect(updates()).not.toContainEqual({ estado: 'activo' });
+    expect(updates().at(-1)).toEqual({ estado: 'activa' });
+  });
+});
+
+describe('listMiembros — puede_cerrar', () => {
+  const soloYo = {
+    data: [{ id: 'm-self', email: 'yo@correo.co', rol_miembro: 'owner', estado: 'activo', perfil_id: 'p-self', created_at: '2026-09-01', token_expiracion: null, perfiles: null }],
+    error: null,
+  };
+  const membresia = { data: [{ inmobiliaria_id: 'org1', rol_miembro: 'owner', inmobiliarias: { nombre: 'Inmobiliaria X', miembros_ven_todo: true } }], error: null };
+
+  it('titular único de una inmobiliaria vacía: true', async () => {
+    invalidateMembresiasCache();
+    // membresía, limpieza de vencidas, carga por miembro, la lista (en ese orden de resolución)
+    enqueue(membresia, { error: null, count: 0 }, { data: [] }, soloYo, ...inmobiliariaVacia());
+    await expect(listMiembros('p-self')).resolves.toMatchObject({ soy_owner: true, puede_cerrar: true });
+  });
+
+  it('con cartera: false', async () => {
+    invalidateMembresiasCache();
+    const r = inmobiliariaVacia();
+    r[1] = { count: 2 };
+    enqueue(membresia, { error: null, count: 0 }, { data: [] }, soloYo, ...r);
+    await expect(listMiembros('p-self')).resolves.toMatchObject({ puede_cerrar: false });
   });
 });

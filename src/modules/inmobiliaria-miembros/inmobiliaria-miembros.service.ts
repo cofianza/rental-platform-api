@@ -315,6 +315,8 @@ export async function listMiembros(userId: string): Promise<{
   organizacion: { id: string; nombre: string };
   soy_owner: boolean;
   miembros_ven_todo: boolean;
+  /** Titular único de una inmobiliaria vacía: «Salir» la cierra. */
+  puede_cerrar: boolean;
   miembros: MiembroView[];
 }> {
   // Membresía cacheada de tenantScope: la tarjeta del responsable se monta en
@@ -324,7 +326,7 @@ export async function listMiembros(userId: string): Promise<{
   if (!m) {
     // Inmobiliaria sin org (no debería pasar tras ensureOrgConOwner, pero es
     // defensivo): no hay equipo que mostrar.
-    return { organizacion: { id: '', nombre: '' }, soy_owner: false, miembros_ven_todo: true, miembros: [] };
+    return { organizacion: { id: '', nombre: '' }, soy_owner: false, miembros_ven_todo: true, puede_cerrar: false, miembros: [] };
   }
 
   // Limpieza perezosa de invitaciones vencidas (sin cron), sin esperarla: las
@@ -367,10 +369,21 @@ export async function listMiembros(userId: string): Promise<{
     (r) => !(r.estado === 'invitado' && !r.perfil_id && r.token_expiracion && Date.parse(r.token_expiracion) < ahora),
   );
 
+  // Solo se revisa la cartera del titular que está solo (si falla, no se ofrece).
+  const yo = rows.find((r) => r.perfil_id === userId && r.estado === 'activo');
+  const solo = !!yo && m.rolMiembro === 'owner' && rows.every((r) => r === yo || r.estado !== 'activo');
+  const puedeCerrar = solo
+    ? await revisarInmobiliariaDelTitular({ id: yo!.id, inmobiliaria_id: m.orgId }, userId).then(
+        (r) => r.vacia && r.otrosTitulares === 0,
+        () => false,
+      )
+    : false;
+
   return {
     organizacion: { id: m.orgId, nombre: m.nombreOrg ?? 'Tu organización' },
     soy_owner: m.rolMiembro === 'owner',
     miembros_ven_todo: m.venTodo,
+    puede_cerrar: puedeCerrar,
     miembros: rows.map((r) => ({
       id: r.id,
       perfil_id: r.perfil_id,
@@ -696,15 +709,9 @@ export async function salirDeOrg(userId: string): Promise<{ message: string }> {
   if (!m) {
     throw AppError.badRequest('No perteneces a ninguna inmobiliaria', 'SIN_ORGANIZACION');
   }
-  // Un titular NO puede salir de su propia inmobiliaria: primero debe dejar de
-  // ser titular (otro titular lo cambia a 'miembro', o transfiere la titularidad).
-  // Aplica a cualquier owner, no solo al único — un dueño no "renuncia" a su org.
-  if (m.rol_miembro === 'owner') {
-    throw AppError.badRequest(
-      'Eres titular de la inmobiliaria: no puedes salir de tu propia organización. Primero deja de ser titular (transfiere la titularidad a otro miembro).',
-      'TITULAR_NO_PUEDE_SALIR',
-    );
-  }
+  // Un titular no "renuncia" a una inmobiliaria con equipo o cartera: primero
+  // deja de ser titular. Si es el único y está vacía, salir la cierra.
+  if (m.rol_miembro === 'owner') return cerrarInmobiliariaPropia(m, userId);
 
   const { error } = await db('inmobiliaria_miembros')
     .update({ estado: 'revocado', token: null, token_expiracion: null } as never)
@@ -733,6 +740,98 @@ export async function salirDeOrg(userId: string): Promise<{ message: string }> {
 
   logger.info({ inmobiliariaId: m.inmobiliaria_id, userId }, 'Miembro salió de la organización');
   return { message: 'Saliste de la inmobiliaria' };
+}
+
+/**
+ * Salir del titular: con otro titular, primero se pasa a miembro; con equipo o
+ * cartera, traspasa la titularidad o la cierra Cofianza. El único titular de
+ * una vacía (revisarInmobiliariaDelTitular) la cierra: su membresía y las
+ * invitaciones pendientes quedan revocadas y la inmobiliaria 'cerrada', sin
+ * borrar filas. Si entre la revisión y la revocación alguien aceptó una
+ * invitación, se reabre: una inmobiliaria con equipo no queda sin titular.
+ */
+async function cerrarInmobiliariaPropia(m: OrgMembership, userId: string): Promise<{ message: string }> {
+  const orgId = m.inmobiliaria_id;
+  const r = await revisarInmobiliariaDelTitular({ id: m.miembro_id, inmobiliaria_id: orgId }, userId);
+  if (r.otrosTitulares > 0) {
+    throw AppError.badRequest(
+      'Eres cotitular de la inmobiliaria: primero cambia tu rol a miembro y luego sal.',
+      'TITULAR_NO_PUEDE_SALIR',
+    );
+  }
+  if (!r.vacia) {
+    throw AppError.badRequest(
+      'Eres el titular de la inmobiliaria y tiene equipo o cartera: traspasa la titularidad a otro miembro o pide a Cofianza que la cierre.',
+      'TITULAR_NO_PUEDE_SALIR',
+    );
+  }
+
+  const { error } = await db('inmobiliaria_miembros')
+    .update({ estado: 'revocado', token: null, token_expiracion: null } as never)
+    .eq('inmobiliaria_id', orgId)
+    .or(`id.eq.${m.miembro_id},estado.eq.invitado`);
+  if (error) {
+    logger.error({ error: error.message, orgId }, 'No se pudo cerrar la inmobiliaria');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo cerrar la inmobiliaria');
+  }
+  // Sin la migración 20261001000008 el CHECK no admite 'cerrada': queda la
+  // membresía revocada y la constancia en la bitácora.
+  const { error: errOrg } = await db('inmobiliarias')
+    .update({ estado: 'cerrada' } as never)
+    .eq('id', orgId)
+    .eq('estado', 'activa');
+  if (errOrg) logger.warn({ error: errOrg.message, orgId }, 'No se pudo marcar la inmobiliaria como cerrada');
+
+  const { count, error: errRecuento } = await db('inmobiliaria_miembros')
+    .select('id', { count: 'exact', head: true })
+    .eq('inmobiliaria_id', orgId)
+    .eq('estado', 'activo')
+    .neq('id', m.miembro_id);
+  if (errRecuento || (count ?? 0) > 0) {
+    await reabrirInmobiliaria(m.miembro_id, orgId, userId);
+    throw AppError.conflict(
+      'Alguien se unió a tu inmobiliaria mientras la cerrabas, así que sigue abierta. Traspasa la titularidad o pide a Cofianza que la cierre.',
+      'INMOBILIARIA_CON_EQUIPO',
+    );
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.INMOBILIARIA_CERRADA,
+    entidad: AUDIT_ENTITIES.INMOBILIARIA,
+    entidadId: orgId,
+    detalle: { motivo: 'su titular única la cerró al salir', perfil_id: userId },
+  });
+  logger.info({ inmobiliariaId: orgId, userId }, 'Inmobiliaria vacía cerrada por su titular');
+  return { message: 'Cerraste tu inmobiliaria' };
+}
+
+/**
+ * Deshace el cierre. No vuelve a activar la membresía si la persona ya está
+ * activa en otra (no quedaría en dos), ni pisa un estado de la inmobiliaria
+ * que no puso el cierre.
+ */
+async function reabrirInmobiliaria(miembroId: string, orgId: string, perfilId: string): Promise<void> {
+  const { data: otra, error } = await db('inmobiliaria_miembros')
+    .select('id')
+    .eq('perfil_id', perfilId)
+    .eq('estado', 'activo')
+    .neq('inmobiliaria_id', orgId)
+    .limit(1)
+    .maybeSingle();
+  const reactivar = !error && !otra;
+  const [mem, org] = await Promise.all([
+    reactivar
+      ? db('inmobiliaria_miembros').update({ estado: 'activo' } as never).eq('id', miembroId).eq('estado', 'revocado')
+      : Promise.resolve({ error: null }),
+    db('inmobiliarias').update({ estado: 'activa' } as never).eq('id', orgId).eq('estado', 'cerrada'),
+  ]);
+  if (!reactivar || mem.error || org.error) {
+    logger.error(
+      { orgId, miembroId, perfilId, yaEnOtra: !!otra },
+      'La inmobiliaria quedó con equipo y sin titular tras un cierre interrumpido: revisarla a mano',
+    );
+  }
 }
 
 /** Notifica (in-app) a todos los owners activos de una org, excepto a `exceptoPerfilId`. */
