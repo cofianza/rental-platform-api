@@ -232,6 +232,25 @@ describe('«Reembolsar en Mercado Pago» (administrador)', () => {
     expect(notas.at(-1)).toContain('admin@cofianza.co');
     expect(notas.at(-1)).toContain('r-1');
     expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: PAGO, targetEstado: 'reembolsado' }));
+    expect(ops.some((o) => o.table === 'pagos' && o.method === 'eq' && o.args[0] === 'transaction_ref' && o.args[1] === 'mp-77')).toBe(true);
+  });
+
+  it('un pago duplicado se reembolsa sin tocar el cobro que sí se pagó con el primero', async () => {
+    enqueue('pagos_no_conciliados', {
+      data: {
+        id: FILA, proveedor: 'mercadopago', provider_payment_id: 'mp-dup', external_reference: `estudio:${EXP}:${PAGO}`,
+        monto: 80000, motivo: 'pago_duplicado', notas: null, resuelto: false, created_at: '2026-06-22',
+      },
+      error: null,
+    });
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    mockStatus.mockResolvedValueOnce({ status: 'completed', transactionRef: 'mp-dup', rawResponse: {} });
+    mockRefund.mockResolvedValueOnce({ refundId: 'r-2', status: 'succeeded', rawResponse: {} });
+    enqueue('pagos', { data: null, error: null }); // ningún cobro se pagó con mp-dup
+
+    expect(await reembolsarEnMercadoPago(FILA, admin)).toEqual({ estado: 'reembolsado', refund_id: 'r-2', factura_numero: null });
+    expect(mockRefund).toHaveBeenCalledWith('mp-dup');
+    expect(mockTransition).not.toHaveBeenCalled();
   });
 
   it('ya resuelto: 409 sin llamar a Mercado Pago', async () => {

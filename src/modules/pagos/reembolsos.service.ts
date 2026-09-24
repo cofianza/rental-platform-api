@@ -231,11 +231,15 @@ export async function listReembolsosPendientes() {
   });
 }
 
-/** El cobro que casa con la fila: el pago_id de la referencia o, en las viejas, el payment id. */
+/**
+ * El cobro que se pagó con ESTE payment de Mercado Pago. Un pago duplicado o de
+ * otro estudio trae en la referencia un cobro que se pagó con otro payment: ese
+ * cobro no se toca.
+ */
 async function pagoDeLaFila(f: FilaReembolso) {
-  const pagoId = f.external_reference?.split(':')[2];
-  const q = db('pagos').select('id, expediente_id, estado');
-  const { data } = await (pagoId && UUID.test(pagoId) ? q.eq('id', pagoId) : q.eq('transaction_ref', f.provider_payment_id))
+  const { data } = await db('pagos')
+    .select('id, expediente_id, estado')
+    .eq('transaction_ref', f.provider_payment_id)
     .limit(1)
     .maybeSingle();
   return data as { id: string; expediente_id: string; estado: string } | null;
