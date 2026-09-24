@@ -128,6 +128,12 @@ vi.mock('../firma/firma.service', () => ({
   actualizarFirma: vi.fn(),
 }));
 vi.mock('../firma/reconciliar', () => ({ ultimoSobre: vi.fn(async () => null) }));
+// La plantilla ya no tiene borradores sin aprobar (el cashback salió con la Adenda 1 de contratos
+// §3.4.2): para probar TEXTOS_PENDIENTES se deja uno sin aprobar que aquí nadie usa (todos son C.C.).
+vi.mock('../aprobaciones', async (orig) => {
+  const { APROBACIONES } = await orig<typeof import('../aprobaciones')>();
+  return { APROBACIONES: Object.fromEntries(Object.entries(APROBACIONES).filter(([id]) => id !== 'j-firma-coa')) };
+});
 // Adenda 1 contratos §2.4: el aviso a la Gerencia se prueba en tope-coafianzamiento.test.ts.
 const { mockEscalar, mockYaEscalado } = vi.hoisted(() => ({
   mockEscalar: vi.fn(async (..._a: unknown[]) => true),
@@ -1666,8 +1672,8 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
 
   it('con textos pendientes de aprobación no se envía', async () => {
     const doc = await documentoRevisado(PASOS);
-    // b-06 (el cashback de Tradicional) sigue sin aprobar
-    encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, pendientes: ['b-06'] })] });
+    // j-firma-coa: sin aprobar en este archivo (ver el mock de ../aprobaciones)
+    encolarCarga({ contratos: [conDocumento(PASOS, { ...doc, pendientes: ['j-firma-coa'] })] });
     expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({ errorCode: 'TEXTOS_PENDIENTES' });
   });
 

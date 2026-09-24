@@ -708,8 +708,6 @@ export const bloqueoNoImprimible = (rutas: string[]): Bloqueo => ({
 export function avisosDePendientes(pendientes: { id: string }[]): string[] {
   const ids = pendientes.map((p) => p.id);
   const avisos: string[] = [];
-  if (ids.includes('b-06'))
-    avisos.push('Modalidad Tradicional: el texto del cashback está pendiente de aprobación de Cofianza.');
   // a-… son los del Anexo de la Ruta B.
   const singulares = ids.filter((i) => /^(a-)?c-/.test(i)).length;
   if (singulares)

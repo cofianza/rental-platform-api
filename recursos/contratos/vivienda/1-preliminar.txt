@@ -66,19 +66,16 @@ Cofianza es la afianzadora que respalda su contrato. Gracias a ella usted no nec
 @fin
 @seccion {S}.  El beneficio de pagar a tiempo, y lo fácil que es perderlo
 # Tradicional (Adenda 1 contratos, resp. 2): el bloque del cashback de EL ARRENDATARIO se
-# reemplaza por una línea que dice que la fianza la asume la inmobiliaria
-?trasladada **Cashback del 30%.** Si al terminar el contrato usted no tuvo ni una sola mora, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.
+# reemplaza por una línea que dice que la fianza la asume la inmobiliaria.
+# Trasladada: el cashback se pierde si Cofianza cubrió sumas o la inmobiliaria no reportó a
+# tiempo, no por la mora (Adenda 1 contratos §3.4.2, §3.4.4, §5.9): desviación del Word.
+?trasladada **Cashback del 30%.** Si al terminar el contrato Cofianza nunca tuvo que pagar por usted, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.
 ?!trasladada #b-02: **La fianza es asumida por la inmobiliaria.** Usted no debe suma alguna por concepto de fianza.
 **Reporte positivo.** Su buen comportamiento de pago se puede reportar a las centrales de información, lo que le ayuda a construir historial crediticio.
 ?trasladada @recuadro
-**Lea esto con atención: pierde el cashback si se atrasa en CUALQUIERA de estos pagos**
-- El canon de arrendamiento.
-- La tarifa mensual de la fianza.
-- Los servicios públicos que estén a su cargo.
-# V3 §3.4.7: sin cuota a cargo de EL ARRENDATARIO no hace perder el cashback
-?adminArrendatario - La cuota de administración, si está a su cargo.
-- Cualquier otra obligación económica del contrato.
-- Un solo pago incompleto, así sea de pocos pesos y así Cofianza lo haya cubierto, le hace perder el beneficio completo.
+**Lea esto con atención: así pierde el cashback**
+- Si Cofianza tiene que pagar por usted cualquier suma, aunque sea una sola vez y de pocos pesos, pierde el beneficio completo.
+- Si la inmobiliaria no cumple a tiempo sus obligaciones de reporte con Cofianza, también lo pierde, aunque Cofianza no haya tenido que pagar nada.
 @fin
 @seccion {S}.  ¿Quién paga las reparaciones?
 @subtitulo Las paga usted
@@ -132,7 +129,7 @@ Al firmar autoriza a la inmobiliaria y a Cofianza a consultar y reportar su comp
 @seccion Las cinco cosas que más reclamos generan
 @recuadro
 **Si solo va a leer una parte de este resumen, lea esta**
-- Pagar el canon incompleto. Así falten pocos pesos, se considera [[trasladada: mora y le cuesta el cashback | #b-05: mora]].
+- Pagar el canon incompleto. Así falten pocos pesos, se considera [[trasladada: mora y, si Cofianza lo cubre, le cuesta el cashback | #b-05: mora]].
 - Creer que la fianza lo exonera de pagar. No lo exonera: la deuda pasa a ser con Cofianza.
 - Creer que la fianza cubre administración, servicios o daños. No los cubre.
 - Descontar del canon una reparación o un reclamo. No se puede: el canon se paga completo y el reclamo se tramita aparte.

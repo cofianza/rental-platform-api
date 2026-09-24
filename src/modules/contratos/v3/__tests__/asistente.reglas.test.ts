@@ -505,8 +505,8 @@ describe('armarDatosVivienda → renderizarVivienda (revisión, sin Chromium)', 
     expect(e).toMatchObject({ errorCode: 'PLANTILLA_DATO_FALTANTE', details: { campo: 'tarifas' } });
   });
 
-  it('sin coarrendatario + sin PH + Tradicional → solo queda pendiente el cashback (b-06)', () => {
-    expect(render(fuentes(SOLO), PASOS_SOLO).pendientes).toEqual([{ id: 'b-06', tipo: 'borrador' }]);
+  it('sin coarrendatario + sin PH + Tradicional → sin pendientes (el cashback ya no es borrador)', () => {
+    expect(render(fuentes(SOLO), PASOS_SOLO).pendientes).toEqual([]);
   });
 
   it('la cuenta sale "de ahorros" y el NIT con su DV una sola vez', () => {
@@ -587,10 +587,6 @@ describe('avisosDePendientes', () => {
   });
 
   it('un aviso por prefijo, más el cierre', () => {
-    expect(avisos('b-06')).toEqual([
-      'Modalidad Tradicional: el texto del cashback está pendiente de aprobación de Cofianza.',
-      CIERRE,
-    ]);
     // Los del Anexo (Ruta B) llevan el prefijo a-.
     expect(avisos('a-c-01', 'a-j-firma-coa')).toEqual([
       'Sin coarrendatario: 1 ajustes de redacción en singular pendientes de aprobación.',
@@ -726,11 +722,8 @@ describe('textosPendientesPrevistos', () => {
     expect(solo).toEqual(['Sin coarrendatario: 2 ajustes de redacción en singular pendientes de aprobación.', CIERRE]);
     // Los b-* son de Tradicional; sin PH ya no hay texto que aprobar (se suprime la cláusula).
     const tradicional = { ...PASOS, paso1: { ...PASOS.paso1, modalidad: 'tradicional' as const } };
-    expect(textosPendientesPrevistos(fuentes(), tradicional, new Set(['b-06']))).toEqual([
-      'Modalidad Tradicional: el texto del cashback está pendiente de aprobación de Cofianza.',
-      CIERRE,
-    ]);
-    expect(textosPendientesPrevistos(fuentes(), PASOS, new Set(['b-06']))).toEqual([]);
+    expect(textosPendientesPrevistos(fuentes(), tradicional, new Set(['b-01']))).toEqual([CIERRE]);
+    expect(textosPendientesPrevistos(fuentes(), PASOS, new Set(['b-01']))).toEqual([]);
   });
   it('aprobados todos, no hay aviso', () => {
     expect(textosPendientesPrevistos(fuentes({ coarrendatario: null }), PASOS_SOLO, new Set())).toEqual([]);

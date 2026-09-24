@@ -39,7 +39,8 @@ interface Parte {
 /**
  * Diferencia autorizada contra el Word; cada una tiene que ocurrir exactamente
  * una vez: `word`→`motor` cambia el texto, `kindWord`→`kindMotor` el tipo de
- * párrafo (lo que el motor no sabe emitir igual).
+ * párrafo (lo que el motor no sabe emitir igual). Con el párrafo entero en
+ * `word` y `motor: ''`, el párrafo sale: el motor ya no lo imprime.
  */
 interface Desviacion {
   parrafo: number;
@@ -64,6 +65,12 @@ interface Documento {
 
 const LOGOS = ['*[ espacio para logo de la inmobiliaria ]*', '*[ espacio para logo de COFIANZA ]*'];
 
+// Decisión A1 (2026-09-24): las plantillas corregidas de la Adenda quedaron con la regla vieja
+// del cashback (se perdía con la mora); el texto nuevo se armó con frases de Gerencia.
+const CASHBACK =
+  'Adenda 1 contratos §3.4.2, §3.4.4 y §5.9: el cashback se pierde si COFIANZA tuvo que cubrir ' +
+  'sumas o EL ARRENDADOR no cumplió sus obligaciones de reporte, no por la mora';
+
 const DOCUMENTOS: Documento[] = [
   {
     nombre: 'vivienda',
@@ -85,6 +92,87 @@ const DOCUMENTOS: Documento[] = [
           'Adenda 1 §1.1: la prima causa IVA siempre. El resumen del Word de vivienda no se ' +
           'actualizó (el comercial sí dice "% del canon + IVA"); la fila imprime la prima con ' +
           'IVA, la misma suma del Parágrafo Primero de la CUARTA',
+      },
+      // Resumen, Trasladada (en Tradicional el bloque ya lo reemplaza b-02)
+      {
+        parrafo: 73,
+        word: 'usted no tuvo ni una sola mora',
+        motor: 'Cofianza nunca tuvo que pagar por usted',
+        motivo: CASHBACK,
+      },
+      {
+        parrafo: 75,
+        word: 'pierde el cashback si se atrasa en CUALQUIERA de estos pagos',
+        motor: 'así pierde el cashback',
+        motivo: `${CASHBACK}: el recuadro deja la lista de pagos y dice las dos causas`,
+      },
+      {
+        parrafo: 76,
+        word: 'El canon de arrendamiento.',
+        motor:
+          'Si Cofianza tiene que pagar por usted cualquier suma, aunque sea una sola vez y de ' +
+          'pocos pesos, pierde el beneficio completo.',
+        motivo: `${CASHBACK} (§3.4.2)`,
+      },
+      {
+        parrafo: 77,
+        word: 'La tarifa mensual de la fianza.',
+        motor:
+          'Si la inmobiliaria no cumple a tiempo sus obligaciones de reporte con Cofianza, ' +
+          'también lo pierde, aunque Cofianza no haya tenido que pagar nada.',
+        motivo: `${CASHBACK} (§3.4.4)`,
+      },
+      ...[
+        '• Los servicios públicos que estén a su cargo.',
+        '• La cuota de administración, si está a su cargo.',
+        '• Cualquier otra obligación económica del contrato.',
+        '• Un solo pago incompleto, así sea de pocos pesos y así Cofianza lo haya cubierto, le ' +
+          'hace perder el beneficio completo.',
+      ].map((word, k) => ({
+        parrafo: 78 + k,
+        word,
+        motor: '',
+        motivo: `${CASHBACK}: el pago tardío ya no hace perder el cashback`,
+      })),
+      {
+        parrafo: 130,
+        word: 'mora y le cuesta el cashback',
+        motor: 'mora y, si Cofianza lo cubre, le cuesta el cashback',
+        motivo: CASHBACK,
+      },
+      // CUARTA, Parágrafo Tercero: la misma cláusula en las dos modalidades (sin b-06)
+      {
+        parrafo: 156,
+        word:
+          'EL ARRENDATARIO no hubiere incurrido en mora por ningún concepto durante la vigencia de ' +
+          'la fianza, COFIANZA S.A.S. le reintegrará el treinta por ciento (30%) del valor total de ' +
+          'las tarifas mensuales efectivamente pagadas. Este reintegro no aplica sobre la prima de ' +
+          'vinculación y se liquida a la terminación del contrato.',
+        motor:
+          'COFIANZA S.A.S. no hubiere tenido que cubrir sumas a cargo de EL ARRENDATARIO durante la ' +
+          'vigencia de la fianza, y EL ARRENDADOR hubiere cumplido sus obligaciones de reporte ' +
+          'frente a COFIANZA S.A.S. derivadas del convenio vigente, COFIANZA S.A.S. reintegrará el ' +
+          'treinta por ciento (30%) del valor total de las tarifas mensuales efectivamente pagadas. ' +
+          'Este reintegro no aplica sobre la prima de vinculación y se liquida a la terminación del ' +
+          'contrato. El cashback se liquida a favor de quien hubiere pagado efectivamente las ' +
+          'tarifas mensuales: EL ARRENDATARIO en modalidad Trasladada, y EL ARRENDADOR en ' +
+          'modalidad Tradicional.',
+        motivo: `${CASHBACK}; es de quien pagó las tarifas (Anexo, BENEFICIARIO)`,
+      },
+      {
+        parrafo: 157,
+        word:
+          'Para efectos de este beneficio se entiende que existe mora cuando EL ARRENDATARIO ' +
+          'hubiere incurrido en pago tardío, parcial o incompleto de cualquiera de los siguientes ' +
+          'conceptos: canon de arrendamiento, tarifa mensual de la fianza, servicios públicos a su ' +
+          'cargo, cuota de administración a su cargo, o cualquier otra obligación económica ' +
+          'derivada del presente contrato. Cualquier faltante cubierto por COFIANZA S.A.S. ' +
+          'conforme al Parágrafo Segundo de esta cláusula, sin importar su cuantía, se computa ' +
+          'como mora para efectos de este beneficio.',
+        motor:
+          'Cualquier faltante cubierto por COFIANZA S.A.S. conforme al Parágrafo Segundo de esta ' +
+          'cláusula, sin importar su cuantía, hace perder este beneficio.',
+        motivo: `${CASHBACK}: sale la definición de mora`,
       },
       {
         parrafo: 242,
@@ -217,7 +305,7 @@ function parrafosWord(xml: string): LineaWord[] {
 }
 
 function aplicarDesviaciones(lineas: LineaWord[], cuerpo: Desviacion[]): LineaWord[] {
-  return lineas.map((l) => {
+  const out = lineas.map((l) => {
     const d = cuerpo.find((x) => x.parrafo === l.parrafo);
     if (!d) return l;
     let { kind, texto } = l;
@@ -236,6 +324,7 @@ function aplicarDesviaciones(lineas: LineaWord[], cuerpo: Desviacion[]): LineaWo
     }
     return { ...l, kind, texto };
   });
+  return out.filter((l) => l.texto); // motor: '' con el párrafo entero → el párrafo sale
 }
 
 // ── Diferencias ──

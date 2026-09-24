@@ -1,12 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AppError } from '@/lib/errors';
 import { mayus, ordinal, titulo } from '../formato';
-import { APROBACIONES } from '../aprobaciones';
 import {
   asientosDeHtml,
   contarClausulas,
   inventarioSupresiones,
-  renderizar,
   verificarCoherencia,
   verificarSinMarcadores,
   type Nodo,
@@ -208,8 +206,8 @@ const SUPRESIONES_AUTORIZADAS: Record<string, string[]> = {
   trasladada: [
     'Prima de la fianza ({pct:primaPct}% del canon + IVA) | ${pesos:primaIvaCop}',
     'Tarifa de la fianza ({pct:tarifaPct}% + IVA) | ${pesos:tarifaCop}',
-    '**Cashback del 30%.** Si al terminar el contrato usted no tuvo ni una sola mora, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.',
-    '@recuadro (7 líneas)',
+    '**Cashback del 30%.** Si al terminar el contrato Cofianza nunca tuvo que pagar por usted, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.',
+    '@recuadro (3 líneas)',
     '> Los porcentajes señalados son los que rigen jurídicamente y se aplican sobre el canon vigente, de modo que los valores en pesos se actualizan automáticamente cuando el canon se incrementa. Las sumas expresadas en pesos son informativas y corresponden al canon vigente a la fecha de suscripción. Estos valores no hacen parte del canon de arrendamiento y serán referenciados de manera independiente en el correspondiente recibo de caja.',
     '+ Tarifa mensual de la fianza COFIANZA.',
     '+ Pagar oportunamente la tarifa mensual de la fianza, junto con el canon, cuando la modalidad aplicable sea Trasladada, en los términos de la {ref:fianza}.',
@@ -223,8 +221,6 @@ const SUPRESIONES_AUTORIZADAS: Record<string, string[]> = {
   ph: ['@clausula administracion (3 líneas)'],
   // V3 §3.4.3: incluida en el canon (o a cargo del arrendador) no se suma aparte
   adminAparte: ['Cuota de administración, si está a su cargo | ${pesos:adminCop}'],
-  // V3 §3.4.7: sin cuota a cargo de EL ARRENDATARIO no hace perder el cashback
-  adminArrendatario: ['- La cuota de administración, si está a su cargo.'],
   // V3 §8.2: el número de un uso conexo solo va si está declarado
   carro: ['[[, número {usos.carro}]]'],
   moto: ['[[, número {usos.moto}]]'],
@@ -272,6 +268,12 @@ const REFS_CONDICIONADAS: Record<string, keyof Caso> = {
   'comision→fianza': 'comision',
   'obligaciones-arrendatario→fianza': 'trasladada',
 };
+
+// El cashback de la CUARTA, igual en las dos modalidades (Adenda 1 contratos §3.4.2, §3.4.4, §5.9).
+const CASHBACK_CUARTA =
+  '**PARÁGRAFO TERCERO — BENEFICIOS POR BUEN COMPORTAMIENTO DE PAGO:** CASHBACK. Si a la terminación del presente contrato COFIANZA S.A.S. no hubiere tenido que cubrir sumas a cargo de EL ARRENDATARIO durante la vigencia de la fianza, y EL ARRENDADOR hubiere cumplido sus obligaciones de reporte frente a COFIANZA S.A.S. derivadas del convenio vigente, COFIANZA S.A.S. reintegrará el treinta por ciento (30%) del valor total de las tarifas mensuales efectivamente pagadas. Este reintegro no aplica sobre la prima de vinculación y se liquida a la terminación del contrato. El cashback se liquida a favor de quien hubiere pagado efectivamente las tarifas mensuales: EL ARRENDATARIO en modalidad Trasladada, y EL ARRENDADOR en modalidad Tradicional.';
+const FALTANTES_CUARTA =
+  'Cualquier faltante cubierto por COFIANZA S.A.S. conforme al Parágrafo Segundo de esta cláusula, sin importar su cuantía, hace perder este beneficio.';
 
 // ── Tests ──
 
@@ -388,9 +390,9 @@ describe('matriz: coarrendatario × comisión × PH × modalidad, con 0 y 2 adic
       r.lineas.filter((l) => l.kind === 'firma').map((l) => /^\*\*([^*]+)\*\*/.exec(l.texto)?.[1]),
     ).toEqual(['EL ARRENDATARIO', ...(c.coa ? ['EL COARRENDATARIO'] : []), 'EL ARRENDADOR']);
 
-    // la Adenda 1 de contratos aprobó los c-*, b-01…b-05 y j-*; en Tradicional falta el
-    // texto del cashback a favor de EL ARRENDADOR (b-06), que espera a Gerencia
-    expect(r.pendientes).toEqual(c.trasladada ? [] : [{ id: 'b-06', tipo: 'borrador' }]);
+    // la Adenda 1 de contratos aprobó los c-*, b-01…b-05 y j-*, y el cashback de la CUARTA
+    // es el mismo en las dos modalidades (§3.4.2, §3.4.4, §5.9): nada queda pendiente
+    expect(r.pendientes).toEqual([]);
 
     // las cifras impresas cuadran (leídas del HTML)
     expect(() => verificarCoherencia(asientosDeHtml(r.html), derivadas(IVA))).not.toThrow();
@@ -445,31 +447,14 @@ describe('modo final: coarrendatario × modalidad × PH (Adenda 1 de contratos)'
     [c.coa ? 'coa' : 'sin coa', c.trasladada ? 'Trasladada' : 'Tradicional', c.ph ? 'PH' : 'sin PH'].join(' · ');
 
   it.each(casos.map((c) => [nombre(c), c] as const))('%s', (_, c) => {
-    const final = () => renderizarVivienda(datos(c), { modo: 'final', logoInmobiliaria: null });
-    if (!c.trasladada) {
-      // Tradicional se bloquea solo por el cashback (b-06) hasta que Gerencia lo apruebe
-      expect(falla(final)).toMatchObject({
-        code: 'PLANTILLA_TEXTO_PENDIENTE',
-        details: { pendientes: [{ id: 'b-06', tipo: 'borrador' }] },
-      });
-      return;
-    }
-    const r = final();
+    // Tradicional ya no espera el cashback (b-06 salió con la Adenda §3.4.2, §3.4.4, §5.9)
+    const r = renderizarVivienda(datos(c), { modo: 'final', logoInmobiliaria: null });
     expect(r.pendientes).toEqual([]);
     expect(r.html).not.toMatch(/class="pendiente"|⟦/);
     expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: !c.coa })).not.toThrow();
-  });
-
-  it('aprobado b-06, Tradicional sale en final sin nada más pendiente ni marcadores', () => {
-    const b06 = PLANTILLA_VIVIENDA.borradores.find((b) => b.id === 'b-06')!;
-    for (const coa of [true, false]) {
-      const r = renderizar(PLANTILLA_VIVIENDA, contexto(datos({ ...COMPLETO, coa, trasladada: false, ph: false })), {
-        modo: 'final',
-        aprobados: { ...APROBACIONES, 'b-06': { sha256: b06.sha256 } },
-      });
-      expect(r.pendientes).toEqual([]);
-      expect(() => verificarSinMarcadores(r.lineas, { sinCoarrendatario: !coa })).not.toThrow();
-    }
+    // el cashback de la CUARTA, igual en todas: se pierde por lo cubierto, no por la mora
+    expect(impresa(r, PARRAFO.get('fianza/beneficios'))).toBe(CASHBACK_CUARTA);
+    expect(r.lineas.map((l) => l.texto)).toContain(FALTANTES_CUARTA);
   });
 });
 
@@ -548,12 +533,34 @@ describe('modalidad Tradicional (Adenda 1 contratos, resp. 2)', () => {
     expect(resumen).toContain('• Pagar el canon incompleto. Así falten pocos pesos, se considera mora.');
   });
 
-  it('el cashback de la CUARTA es de quien pagó, EL ARRENDADOR: borrador b-06 que espera a Gerencia', () => {
-    expect(impresa(r, PARRAFO.get('fianza/beneficios'))).toBe(
-      '**PARÁGRAFO TERCERO — BENEFICIOS POR BUEN COMPORTAMIENTO DE PAGO:** CASHBACK. Si a la terminación del presente contrato EL ARRENDATARIO no hubiere incurrido en mora por ningún concepto durante la vigencia de la fianza, COFIANZA S.A.S. reintegrará el treinta por ciento (30%) del valor total de las tarifas mensuales efectivamente pagadas. El cashback se liquida a favor de quien hubiere pagado efectivamente las tarifas mensuales, que en modalidad Tradicional es EL ARRENDADOR. Este reintegro no aplica sobre la prima de vinculación y se liquida a la terminación del contrato.',
+  it('el cashback de la CUARTA es de quien pagó, EL ARRENDADOR, y ya no queda nada pendiente', () => {
+    expect(impresa(r, PARRAFO.get('fianza/beneficios'))).toBe(CASHBACK_CUARTA);
+    expect(ids(r)).toEqual([]);
+    expect(PLANTILLA_VIVIENDA.borradores.map((b) => b.id)).not.toContain('b-06');
+  });
+});
+
+describe('cashback con la regla de la Adenda 1 de contratos (§3.4.2, §3.4.4, §5.9)', () => {
+  const resumen = (r: Resultado) => r.lineas.filter((_, k) => r.origenes[k].startsWith('1-preliminar.txt:'));
+
+  it.each([true, false])('el resumen de Trasladada dice cómo se pierde (coarrendatario: %s)', (coa) => {
+    const lineas = resumen(revision(datos({ ...COMPLETO, coa })));
+    const texto = lineas.map((l) => l.texto);
+    expect(texto).toContain(
+      '**Cashback del 30%.** Si al terminar el contrato Cofianza nunca tuvo que pagar por usted, Cofianza le devuelve el treinta por ciento de todo lo que pagó en tarifas mensuales de la fianza.',
     );
-    expect(ids(r)).toEqual(['b-06']);
-    expect(APROBACIONES['b-06']).toBeUndefined();
+    // el recuadro: su título y las dos causas, nada más
+    const k = texto.indexOf('**Lea esto con atención: así pierde el cashback**');
+    expect(texto.slice(k + 1, k + 3)).toEqual([
+      '• Si Cofianza tiene que pagar por usted cualquier suma, aunque sea una sola vez y de pocos pesos, pierde el beneficio completo.',
+      '• Si la inmobiliaria no cumple a tiempo sus obligaciones de reporte con Cofianza, también lo pierde, aunque Cofianza no haya tenido que pagar nada.',
+    ]);
+    expect(lineas.slice(k, k + 4).map((l) => l.kind)).toEqual(['recuadro', 'recuadro', 'recuadro', 'seccion']);
+    expect(texto).toContain(
+      '• Pagar el canon incompleto. Así falten pocos pesos, se considera mora y, si Cofianza lo cubre, le cuesta el cashback.',
+    );
+    // la regla vieja no queda en ninguna parte
+    expect(texto.join('\n')).not.toMatch(/ni una sola mora|se atrasa en|Un solo pago incompleto/);
   });
 });
 
