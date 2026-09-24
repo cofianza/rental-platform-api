@@ -180,6 +180,29 @@ describe('webhook de Mercado Pago: contracargo de una compra de créditos', () =
     );
   });
 
+  it('Q5b-7: contracargo ganado (charged_back + reimbursed): no revierte nada y avisa para restituir a mano', async () => {
+    pagoMp('refunded', { status: 'charged_back', status_detail: 'reimbursed' });
+    enqueue('perfiles', { data: [{ id: 'admin-1' }], error: null });
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(mockRevertirCompra).not.toHaveBeenCalled();
+    expect(mockNotificarYCorreo).toHaveBeenCalledWith(
+      expect.objectContaining({ tipo: 'pago.contracargo_ganado', mensaje: expect.stringContaining('restitúyela a mano') }),
+    );
+  });
+
+  it('Q5b-7: el payment que acreditó vuelve aprobado sobre la compra revertida: aviso persistente, sin acreditar', async () => {
+    pagoMp('completed');
+    compra('cancelado', 'mp-cb');
+    enqueue('perfiles', { data: [{ id: 'admin-1' }], error: null });
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(mockAcreditar).not.toHaveBeenCalled();
+    expect(mockNotificarYCorreo).toHaveBeenCalledWith(expect.objectContaining({ tipo: 'pago.contracargo_ganado', userId: 'admin-1' }));
+  });
+
   it('un reintento del webhook sobre una compra ya revertida no vuelve a avisar', async () => {
     pagoMp('refunded', { status: 'charged_back' });
     compra('cancelado', 'mp-cb');

@@ -1206,6 +1206,14 @@ async function processMercadoPagoWebhook(
   const refId = refParts[1] ?? '';
   const pagoIdRef = refParts[2] ?? '';
 
+  // Contracargo ganado: Mercado Pago le devolvió la plata a Cofianza. Ni la
+  // compra ni el cobro se restituyen solos: aviso persistente para hacerlo a mano.
+  const rawMp = status.rawResponse as { status?: string; status_detail?: string; transaction_amount?: number };
+  if (rawMp.status === 'charged_back' && rawMp.status_detail === 'reimbursed') {
+    await avisarContracargoGanado(paymentId, externalReference, rawMp.transaction_amount);
+    return { received: true };
+  }
+
   // 2. Mapear estado normalizado del adapter → estado del pago (solo terminales).
   // 'cancelled' es un INTENTO vencido (PSE o efectivo sin pagar), no el cobro:
   // la preference sigue viva y el prospecto puede volver al enlace y pagar con
@@ -1358,7 +1366,10 @@ async function processMercadoPagoWebhook(
       { pagoId: pago.id, paymentId, estadoActual: pago.estado },
       'MP webhook: payment aprobado sobre pago no completable — registrado para conciliación',
     );
-    await registrarPagoNoConciliado(paymentId, externalReference, status, 'transicion_invalida');
+    // El mismo payment del cobro reembolsado vuelve aprobado (contracargo
+    // ganado): va a la cola sin «Reembolsar» de un clic, para restituirlo a mano.
+    const vuelveAprobado = pago.estado === 'reembolsado' && !!pago.transaction_ref && pago.transaction_ref === status.transactionRef;
+    await registrarPagoNoConciliado(paymentId, externalReference, status, vuelveAprobado ? 'contracargo_ganado' : 'transicion_invalida');
     return { received: true };
   }
 
@@ -1445,8 +1456,10 @@ async function webhookCompraCreditos(
     }
     if (compra.estado === 'cancelado' && compra.stripe_payment_intent_id === paymentId) {
       // ponytail: la compra ya se revirtió por el contracargo; si Mercado Pago
-      // vuelve a aprobar el payment (contracargo ganado) no se restituye sola.
+      // vuelve a aprobar el payment (contracargo ganado) no se restituye sola:
+      // se avisa para hacerlo a mano. Automatizarlo si deja de ser raro.
       logger.warn({ compraId, paymentId }, 'MP webhook: payment aprobado de una compra revertida — revisar a mano');
+      await avisarContracargoGanado(paymentId, externalReference, (status.rawResponse as { transaction_amount?: number }).transaction_amount);
       return;
     }
     if (compra.estado !== 'pendiente' && compra.stripe_payment_intent_id !== paymentId) {
@@ -1609,10 +1622,11 @@ export const MOTIVO_NO_CONCILIADO: Record<string, string> = {
   estudio_fallido_revisar:
     'es la evaluación de un estudio que terminó con la consulta al buró fallida: no se sabe si la central la cobró',
   reembolso_parcial: 'Mercado Pago reembolsó una parte del pago de una compra de créditos, y los créditos no se ajustan solos',
+  contracargo_ganado: 'Mercado Pago volvió a aprobar un pago que se había contracargado: el cobro quedó reembolsado y no se restituye solo',
 };
 
 /** Motivos que no se resuelven reembolsando el pago completo: se cierran a mano. */
-export const MOTIVOS_SIN_REEMBOLSO = ['transicion_fallida', 'reembolso_parcial'];
+export const MOTIVOS_SIN_REEMBOLSO = ['transicion_fallida', 'reembolso_parcial', 'contracargo_ganado'];
 
 const ESTADO_MP: Record<string, string> = {
   completed: 'aprobado',
@@ -1621,6 +1635,28 @@ const ESTADO_MP: Record<string, string> = {
   cancelled: 'cancelado',
   refunded: 'reembolsado',
 };
+
+/**
+ * Contracargo ganado: Mercado Pago le devolvió a Cofianza un pago que se había
+ * contracargado (o lo volvió a aprobar). La compra o el cobro quedaron
+ * revertidos y no se restituyen solos: aviso persistente para hacerlo a mano.
+ */
+async function avisarContracargoGanado(paymentId: string, externalReference: string, monto: number | undefined): Promise<void> {
+  const [concepto, refId] = externalReference.split(':');
+  const esCompra = concepto === 'creditos_estudios';
+  await avisarAdministradores({
+    tipo: 'pago.contracargo_ganado',
+    titulo: 'Contracargo ganado: restituir a mano',
+    mensaje:
+      `Mercado Pago le devolvió a Cofianza el pago ${paymentId}${typeof monto === 'number' ? ` (${formatCOP(monto)})` : ''}, que se había contracargado. ` +
+      (esCompra
+        ? 'Revisa la compra de créditos: si quedó revertida, restitúyela a mano (créditos retirados y saldo en contra).'
+        : 'Revisa el cobro: si quedó reembolsado, restitúyelo a mano.') +
+      ` Referencia: ${externalReference || 'sin referencia'}.`,
+    link: !esCompra && refId ? `/expedientes/${refId}` : undefined,
+    payload: { provider_payment_id: paymentId, external_reference: externalReference || null },
+  }).catch((err) => logger.warn({ err, paymentId }, 'No se pudo avisar del contracargo ganado'));
+}
 
 /** Aviso in-app y por correo a cada administrador activo. */
 export async function avisarAdministradores(aviso: Omit<NotificarUsuarioInput, 'userId'>): Promise<void> {
@@ -1654,6 +1690,7 @@ async function avisarPagoNoConciliado(args: {
     estudio_cerrado_sin_consulta: enMp ? 'Evaluación por devolver en Mercado Pago' : 'Evaluación por devolver a mano',
     estudio_fallido_revisar: 'Revisar la devolución de una evaluación',
     reembolso_parcial: 'Reembolso parcial de una compra de créditos',
+    contracargo_ganado: 'Contracargo ganado: restituir a mano',
   };
   const accion = MOTIVOS_SIN_REEMBOLSO.includes(args.motivo) || !enMp
     ? 'Resuélvelo a mano y márcalo resuelto en Pagos a Cofianza › Reembolsos.'

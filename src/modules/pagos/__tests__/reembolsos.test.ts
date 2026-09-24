@@ -81,7 +81,7 @@ vi.mock('../pago-state-machine', async (importOriginal) => ({
   transitionPagoState: mockTransition,
 }));
 
-import { processWebhookEvent, createPaymentLink, registerManualPayment, reconcileMercadoPagoPayment } from '../pagos.service';
+import { processWebhookEvent, createPaymentLink, registerManualPayment, reconcileMercadoPagoPayment, MOTIVOS_SIN_REEMBOLSO } from '../pagos.service';
 import {
   devolverEvaluacionSinConsulta,
   reembolsarEnMercadoPago,
@@ -326,6 +326,43 @@ describe('P1: webhook de un reembolso', () => {
     expect(mockTransitionChecked).not.toHaveBeenCalled();
     expect(updates('pagos_no_conciliados')[0]).toMatchObject({ resuelto: true, estado_proveedor: 'refunded' });
     expect(ops.some((o) => o.table === 'pagos_no_conciliados' && o.method === 'eq' && o.args[1] === 'mp-dup')).toBe(true);
+  });
+
+  it('Q5b-7: el payment del cobro reembolsado vuelve aprobado (contracargo ganado): a la cola sin «Reembolsar» de un clic', async () => {
+    mockStatus.mockResolvedValueOnce({
+      status: 'completed',
+      transactionRef: 'mp-77',
+      rawResponse: { status: 'approved', external_reference: `estudio:${EXP}:${PAGO}`, transaction_amount: 80000 },
+    });
+    enqueue('pagos', { data: { id: PAGO, estado: 'reembolsado', monto: 80000, expediente_id: EXP, transaction_ref: 'mp-77' }, error: null });
+    enqueue('pagos_no_conciliados', { data: [{ id: FILA }], error: null });
+    admins();
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(upsertNoConciliado()).toMatchObject({ provider_payment_id: 'mp-77', motivo: 'contracargo_ganado' });
+    expect(MOTIVOS_SIN_REEMBOLSO).toContain('contracargo_ganado');
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(mockNotificarYCorreo).toHaveBeenCalledWith(expect.objectContaining({ titulo: 'Contracargo ganado: restituir a mano' })),
+    );
+  });
+
+  it('Q5b-7: contracargo ganado de un cobro (charged_back + reimbursed): no lo toca y avisa', async () => {
+    mockStatus.mockResolvedValueOnce({
+      status: 'refunded',
+      transactionRef: 'mp-77',
+      rawResponse: { status: 'charged_back', status_detail: 'reimbursed', external_reference: `estudio:${EXP}:${PAGO}` },
+    });
+    admins();
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(mockTransitionChecked).not.toHaveBeenCalled();
+    expect(ops.some((o) => o.table === 'pagos' || o.table === 'pagos_no_conciliados')).toBe(false);
+    expect(mockNotificarYCorreo).toHaveBeenCalledWith(
+      expect.objectContaining({ tipo: 'pago.contracargo_ganado', link: `/expedientes/${EXP}`, mensaje: expect.stringContaining('restitúyelo a mano') }),
+    );
   });
 
   it('el reembolso del payment del cobro lo pasa a reembolsado y, si tenía factura, avisa la nota crédito', async () => {
