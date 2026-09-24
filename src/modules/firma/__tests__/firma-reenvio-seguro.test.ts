@@ -74,7 +74,8 @@ vi.mock('@/lib/auco', () => ({
 
 import * as auco from '@/lib/auco';
 import { crearSolicitudFirmaMultiparte } from '../firma-multiparte.service';
-import { crearSolicitudFirma } from '../firma.service';
+import { crearSolicitudFirma, reenviarSolicitudFirma } from '../firma.service';
+import { assertPuedeAbrirSobre } from '@/modules/contratos/contratos.service';
 
 const VIEJO = { id: 's-viejo', estado: 'enviado', auco_document_code: 'DOC-VIEJO' };
 const de = (table: string, method: string) => ops.filter((o) => o.table === table && o.method === method);
@@ -273,5 +274,48 @@ describe('si el sobre no queda registrado después de subir el documento (revisi
       crearSolicitudFirma({ contrato_id: 'c1', nombre_firmante: 'Juan', email_firmante: 'juan@x.co', telefono_firmante: '3001112233' } as never, 'u1'),
     ).rejects.toMatchObject({ statusCode: 409, errorCode: 'FIRMA_YA_EN_CURSO' });
     expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-NUEVO', expect.anything());
+  });
+});
+
+describe('un firmante: reenviar a otro correo sube un documento nuevo (revisión 2, punto 9)', () => {
+  const solicitud = {
+    data: {
+      id: 's1', contrato_id: 'c1', nombre_firmante: 'Juan', email_firmante: 'juan@x.co', telefono_firmante: '3001112233',
+      estado: 'enviado', envios_realizados: 1, max_envios: 5, auco_document_code: 'DOC-VIEJO',
+      token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+      contratos: { expediente_id: 'e1', storage_key: 'k.pdf', nombre_archivo: null, datos_variables: { v: 1 }, expedientes: null },
+    },
+    error: null,
+  };
+  const reenviar = () => reenviarSolicitudFirma('s1', 'u1', 'propietario', undefined, 'otro@x.co');
+
+  it('con el documento anterior ya firmado en Auco → 409 y no sube otro', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'FINISH', url: 'https://auco/f.pdf', signProfile: [] } as never);
+    enqueue('solicitudes_firma', solicitud, { data: { id: 's1', contrato_id: 'c1', estado: 'enviado', nombre_firmante: 'Juan', email_firmante: 'juan@x.co' }, error: null });
+    enqueue('contrato_firmantes', { count: 0, error: null }, { data: [], error: null });
+    await expect(reenviar()).rejects.toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_YA_FIRMADO' });
+    expect(assertPuedeAbrirSobre).toHaveBeenCalledWith('c1', 'e1', { v: 1 }, 's1');
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+    expect(marcado('firmado')).toBe(true);
+  });
+
+  it('si Auco no anula el documento anterior → 503 y no sube otro', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: false, errors: { cant: 1 } });
+    enqueue('solicitudes_firma', solicitud);
+    enqueue('contrato_firmantes', { count: 0, error: null });
+    await expect(reenviar()).rejects.toMatchObject({ statusCode: 503 });
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+  });
+
+  it('con el anterior anulado, sube el nuevo con el plazo de firma', async () => {
+    vi.mocked(auco.getDocumentStatus).mockResolvedValue({ status: 'CREATED', signProfile: [] } as never);
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
+    enqueue('solicitudes_firma', solicitud, { data: { id: 's1' }, error: null });
+    enqueue('contrato_firmantes', { count: 0, error: null });
+    await reenviar();
+    expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-VIEJO', expect.anything());
+    expect(auco.uploadDocumentForSignature).toHaveBeenCalledWith(expect.objectContaining({ expiredDate: '2026-10-10T04:59:59.000Z' }));
+    expect(de('solicitudes_firma', 'update')[0].args[0]).toMatchObject({ auco_document_code: 'DOC-NUEVO', email_firmante: 'otro@x.co' });
   });
 });

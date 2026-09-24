@@ -550,7 +550,7 @@ export async function reenviarSolicitudFirma(
 ) {
   const { data, error } = await (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
-    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, storage_key, nombre_archivo, expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad), solicitantes(tipo_documento, numero_documento)))`)
+    .select(`${SOLICITUD_SELECT}, contratos(expediente_id, storage_key, nombre_archivo, datos_variables, expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad), solicitantes(tipo_documento, numero_documento)))`)
     .eq('id', solicitudId)
     .single();
 
@@ -563,6 +563,7 @@ export async function reenviarSolicitudFirma(
       expediente_id: string;
       storage_key: string | null;
       nombre_archivo: string | null;
+      datos_variables: unknown;
       expedientes: {
         numero: string;
         inmuebles: { direccion: string; ciudad: string } | null;
@@ -646,13 +647,16 @@ export async function reenviarSolicitudFirma(
     && Boolean(aucoClient.normalizePhoneToInternational(row.telefono_firmante || undefined));
 
   if (cambiaEmail && row.contratos?.storage_key) {
-    // P5: el documento nuevo lleva el plazo de firma (sin pasar el CRC).
-    const { plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+    // Un documento nuevo en Auco: las mismas guardas que abrir un sobre (P6 y
+    // ningún otro sobre vivo aparte de este), el plazo de firma (P5) y el
+    // documento anterior cerrado sin perder una firma que llegó sin aviso.
+    const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
+    await assertPuedeAbrirSobre(row.contrato_id, row.contratos.expediente_id, row.contratos.datos_variables, solicitudId);
     nuevaExpiracion = await plazoFirmaContrato(row.contratos.expediente_id);
-    // Re-upload a Auco con nuevo firmante. Si el documento Auco previo
-    // sigue activo, queda obsoleto pero no lo cancelamos explicitamente
-    // (Auco lo invalida por expiracion del token y el OTP del nuevo
-    // documento es lo unico que la persona usara).
+    if (row.auco_document_code) {
+      await cerrarDocumentoAnterior(row.contrato_id, row.contratos.expediente_id, row.auco_document_code);
+    }
+    // Re-upload a Auco con nuevo firmante.
     try {
       const { data: pdfData, error: downloadError } = await supabase.storage
         .from(BUCKET_NAME)

@@ -241,6 +241,12 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
       await expect(assertPuedeAbrirSobre(CTO, EXP, {})).resolves.toBeUndefined();
     });
 
+    it('al reenviar a otro correo (un firmante), su propio sobre no cuenta como «otro sobre vivo»', async () => {
+      enqueue('solicitudes_firma', { data: [], error: null });
+      await expect(assertPuedeAbrirSobre(CTO, EXP, {}, 's-propio')).resolves.toBeUndefined();
+      expect(ops.filter((o) => o.table === 'solicitudes_firma' && o.method === 'neq').map((o) => o.args)).toEqual([['id', 's-propio']]);
+    });
+
     it('sin poder leer los sobres → 503', async () => {
       enqueue('solicitudes_firma', { data: null, error: { message: 'timeout' } });
       await expect(assertPuedeAbrirSobre(CTO, EXP, {})).rejects.toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });

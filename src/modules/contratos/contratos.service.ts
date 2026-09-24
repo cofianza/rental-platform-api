@@ -646,12 +646,14 @@ const tieneCotitular = (datosVariables: unknown) =>
  * ¿Hay un sobre de firma vivo? En curso y con plazo: uno vencido no cuenta
  * aunque el aviso de Auco no haya llegado (contratos-firma-2).
  */
-async function haySobreVivo(contratoId: string): Promise<boolean> {
-  const { data, error } = await (supabase
+async function haySobreVivo(contratoId: string, excepto?: string): Promise<boolean> {
+  let q = (supabase
     .from('solicitudes_firma' as string) as ReturnType<typeof supabase.from>)
     .select('token_expiracion')
     .eq('contrato_id', contratoId)
     .in('estado', ['enviado', 'abierto']);
+  if (excepto) q = q.neq('id', excepto);
+  const { data, error } = await q;
   if (error) {
     throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma. Intenta de nuevo en un momento.');
   }
@@ -664,10 +666,16 @@ async function haySobreVivo(contratoId: string): Promise<boolean> {
  * Antes de abrir un sobre de firma del contrato viejo, lo abra quien lo abra
  * (enviar a firma, POST /firma/solicitudes, la continuación tras verificar la
  * identidad): sin co-arrendatario ni co-titular (P6) y sin otro sobre vivo.
+ * `excepto`: el sobre que se reenvía a otro correo (un firmante), que sí sigue vivo.
  */
-export async function assertPuedeAbrirSobre(contratoId: string, expedienteId: string, datosVariables: unknown): Promise<void> {
+export async function assertPuedeAbrirSobre(
+  contratoId: string,
+  expedienteId: string,
+  datosVariables: unknown,
+  excepto?: string,
+): Promise<void> {
   assertSinPartesAdicionales((await coarrendatarioLeido(expedienteId)) !== null, tieneCotitular(datosVariables));
-  if (await haySobreVivo(contratoId)) {
+  if (await haySobreVivo(contratoId, excepto)) {
     throw AppError.conflict('Este contrato ya tiene un envío a firma en curso.', 'FIRMA_YA_EN_CURSO');
   }
 }
