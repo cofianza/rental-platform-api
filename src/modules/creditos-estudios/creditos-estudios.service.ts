@@ -18,7 +18,10 @@ import { env } from '@/config';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
 import { perfilEsDuenoDeInmueble, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
+
+const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
 
 // ============================================================
 // Types
@@ -94,6 +97,8 @@ export interface SaldoCreditos {
   saldo_perpetuo: number;
   saldo_con_vencimiento: number;
   proximo_vencimiento: string | null;
+  /** P22: créditos usados de una compra contracargada; se descuentan de la próxima compra. */
+  creditos_en_contra: number;
   lotes: Array<{
     id: string;
     cantidad_disponible: number;
@@ -108,13 +113,20 @@ export async function getSaldoCreditos(perfilId: string): Promise<SaldoCreditos>
   const nowIso = new Date().toISOString();
   const dueno = await resolveOrgCanonicalPerfilId(perfilId);
 
-  const { data, error } = await (supabase
-    .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, cantidad_disponible, cantidad_inicial, vence_en, origen, created_at')
-    .eq('perfil_id', dueno)
-    .gt('cantidad_disponible', 0)
-    .or(`vence_en.is.null,vence_en.gt.${nowIso}`)
-    .order('created_at', { ascending: true });
+  const [{ data, error }, enContra] = await Promise.all([
+    (supabase
+      .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id, cantidad_disponible, cantidad_inicial, vence_en, origen, created_at')
+      .eq('perfil_id', dueno)
+      .gt('cantidad_disponible', 0)
+      .or(`vence_en.is.null,vence_en.gt.${nowIso}`)
+      .order('created_at', { ascending: true }),
+    // Solo se muestra: pagar con créditos lo vuelve a leer y ahí sí bloquea.
+    creditosEnContra(dueno).catch((err) => {
+      logger.warn({ err, dueno }, 'No se pudo leer el saldo en contra de créditos');
+      return 0;
+    }),
+  ]);
 
   if (error) throw fromSupabaseError(error);
 
@@ -147,8 +159,70 @@ export async function getSaldoCreditos(perfilId: string): Promise<SaldoCreditos>
     saldo_perpetuo: saldoPerpetuo,
     saldo_con_vencimiento: saldoConVencimiento,
     proximo_vencimiento: proximoVencimiento,
+    creditos_en_contra: enContra,
     lotes,
   };
+}
+
+/**
+ * P22: créditos usados de compras contracargadas que todavía no cubre una
+ * compra nueva (el saldo en contra de la organización). Sin la migración
+ * 20261001000005 no hay columna ni, por lo tanto, saldo en contra registrado.
+ */
+export async function creditosEnContra(perfilCanonico: string): Promise<number> {
+  const { data, error } = await db('compras_creditos_estudios')
+    .select('creditos_en_contra')
+    .eq('perfil_id', perfilCanonico)
+    .gt('creditos_en_contra', 0);
+  if (error) {
+    if (faltaColumna(error)) return 0;
+    throw fromSupabaseError(error);
+  }
+  return ((data ?? []) as Array<{ creditos_en_contra: number }>).reduce((s, c) => s + c.creditos_en_contra, 0);
+}
+
+/** P22: el 409 de quien intenta pagar con créditos teniendo saldo en contra. */
+export function errorCreditosEnContra(enContra: number): AppError {
+  const uno = enContra === 1;
+  return AppError.conflict(
+    `Tu organización tiene ${enContra} ${uno ? 'crédito' : 'créditos'} en contra por el contracargo de una compra: ` +
+      `se ${uno ? 'descuenta' : 'descuentan'} de tu próxima compra de créditos. Mientras tanto paga la evaluación de inmediato o envía el enlace al prospecto.`,
+    'CREDITOS_EN_CONTRA',
+  );
+}
+
+/** Saldo vigente del perfil (lotes sin vencer), el que queda en cada movimiento. */
+async function saldoVigente(perfilId: string): Promise<number> {
+  const { data } = await db('lotes_creditos_estudios')
+    .select('cantidad_disponible')
+    .eq('perfil_id', perfilId)
+    .or(`vence_en.is.null,vence_en.gt.${new Date().toISOString()}`);
+  return ((data || []) as Array<{ cantidad_disponible: number }>).reduce((sum, l) => sum + l.cantidad_disponible, 0);
+}
+
+/**
+ * Suma `delta` al disponible de un lote con compare-and-set (un consumo puede
+ * cruzarse). Devuelve false si tras unos reintentos no pudo, o si el resultado
+ * saldría del rango del lote.
+ */
+async function moverDisponible(loteId: string, delta: number): Promise<boolean> {
+  for (let intento = 0; intento < 5; intento++) {
+    const { data: lote } = await db('lotes_creditos_estudios')
+      .select('cantidad_disponible, cantidad_inicial')
+      .eq('id', loteId)
+      .maybeSingle();
+    const l = lote as { cantidad_disponible: number; cantidad_inicial: number } | null;
+    if (!l) return false;
+    const nuevo = l.cantidad_disponible + delta;
+    if (nuevo < 0 || nuevo > l.cantidad_inicial) return false;
+    const { data: ok } = await db('lotes_creditos_estudios')
+      .update({ cantidad_disponible: nuevo } as never)
+      .eq('id', loteId)
+      .eq('cantidad_disponible', l.cantidad_disponible)
+      .select('id');
+    if ((ok as unknown[] | null)?.length) return true;
+  }
+  return false;
 }
 
 // ============================================================
@@ -437,6 +511,11 @@ export async function acreditarCompraDesdeWebhook(
       ? new Date(Date.now() + compra.vence_en_dias * 24 * 60 * 60 * 1000).toISOString()
       : null;
 
+  // 3.5. P22: el saldo en contra (créditos usados de una compra contracargada)
+  //      se descuenta de esta compra. El lote nace ya descontado y la deuda se
+  //      cubre después: si el lote ya existía (reintento), no se descuenta dos veces.
+  const descuento = Math.min(await creditosEnContra(compra.perfil_id), compra.cantidad_estudios);
+
   // 4. Crear lote
   const { data: loteData, error: loteErr } = await (supabase
     .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
@@ -444,7 +523,7 @@ export async function acreditarCompraDesdeWebhook(
       perfil_id: compra.perfil_id,
       compra_id: compra.id,
       cantidad_inicial: compra.cantidad_estudios,
-      cantidad_disponible: compra.cantidad_estudios,
+      cantidad_disponible: compra.cantidad_estudios - descuento,
       vence_en: venceEn,
       origen: 'compra',
     } as never)
@@ -465,20 +544,23 @@ export async function acreditarCompraDesdeWebhook(
 
   const lote = loteData as LoteRow;
 
+  // 4.5. P22: se cubre la deuda con lo descontado. Si otra compra de la misma
+  //      organización cubrió una parte a la vez, lo que sobra vuelve al lote.
+  const descontados = descuento > 0 ? await cubrirSaldoEnContra(compra.perfil_id, descuento) : 0;
+  if (descontados < descuento && !(await moverDisponible(lote.id, descuento - descontados))) {
+    logger.error(
+      { compraId: compra.id, loteId: lote.id, faltan: descuento - descontados },
+      'CRITICO: se descontaron créditos del saldo en contra que no se cubrieron — devolverlos al lote a mano',
+    );
+  }
+
   // 5. Actualizar compra a completado. Si falla, lanzamos para que el retry del
   // webhook lo repare (el lote ya existe: el retry cae en el skip idempotente
   // de arriba, que vuelve a intentar marcar la compra).
   await marcarCompraCompletada(compra.id, paymentIntentId, rawResponse, true);
 
   // 6. Registrar movimiento
-  const { data: saldoAct } = await (supabase
-    .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('cantidad_disponible')
-    .eq('perfil_id', compra.perfil_id)
-    .or(`vence_en.is.null,vence_en.gt.${new Date().toISOString()}`);
-
-  const saldoTotal = ((saldoAct || []) as Array<{ cantidad_disponible: number }>)
-    .reduce((sum, l) => sum + l.cantidad_disponible, 0);
+  const saldoTotal = await saldoVigente(compra.perfil_id);
 
   await (supabase
     .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
@@ -487,9 +569,19 @@ export async function acreditarCompraDesdeWebhook(
       lote_id: lote.id,
       tipo: 'compra',
       cantidad: compra.cantidad_estudios,
-      saldo_resultante: saldoTotal,
+      saldo_resultante: saldoTotal + descontados,
       notas: `Compra de ${compra.cantidad_estudios} estudios — sesion ${stripeSessionId}`,
     } as never);
+  if (descontados > 0) {
+    await db('movimientos_creditos_estudios').insert({
+      perfil_id: compra.perfil_id,
+      lote_id: lote.id,
+      tipo: 'ajuste',
+      cantidad: -descontados,
+      saldo_resultante: saldoTotal,
+      notas: `Se descontaron ${descontados} créditos del saldo en contra (compra contracargada)`,
+    } as never);
+  }
 
   logger.info(
     { compraId: compra.id, perfilId: compra.perfil_id, cantidad: compra.cantidad_estudios },
@@ -572,6 +664,11 @@ export async function liberarEstudioConCredito(
   //      consume_credito_estudio. Si se bloquea aqui, el saldo de la
   //      inmobiliaria queda intacto.
   await assertCanonDentroDelTope({ expedienteId, origen: 'liberarEstudioConCredito' });
+
+  // P22: con saldo en contra no se paga con créditos hasta que una compra nueva
+  // lo cubra; pagar de inmediato y el enlace al prospecto siguen abiertos.
+  const enContra = await creditosEnContra(dueno);
+  if (enContra > 0) throw errorCreditosEnContra(enContra);
 
   // 3. Validar que no exista ya un pago de estudio completado
   const { data: existingPago } = await (supabase
@@ -737,6 +834,142 @@ export async function liberarEstudioConCredito(
     );
 
   return { pago_id: pago.id, saldo_restante, lote_id };
+}
+
+// ============================================================
+// Contracargo de una compra (P22)
+// ============================================================
+
+/**
+ * P22: cubre hasta `cantidad` del saldo en contra de la organización, las
+ * compras contracargadas más viejas primero (compare-and-set: otra compra puede
+ * cubrir la misma deuda a la vez). Devuelve cuánto cubrió. Nunca lanza.
+ */
+async function cubrirSaldoEnContra(perfilId: string, cantidad: number): Promise<number> {
+  let cubiertos = 0;
+  try {
+    const { data, error } = await db('compras_creditos_estudios')
+      .select('id, creditos_en_contra')
+      .eq('perfil_id', perfilId)
+      .gt('creditos_en_contra', 0)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    for (const d of (data ?? []) as Array<{ id: string; creditos_en_contra: number }>) {
+      const t = Math.min(d.creditos_en_contra, cantidad - cubiertos);
+      if (t <= 0) break;
+      const { data: ok, error: updErr } = await db('compras_creditos_estudios')
+        .update({ creditos_en_contra: d.creditos_en_contra - t } as never)
+        .eq('id', d.id)
+        .eq('creditos_en_contra', d.creditos_en_contra)
+        .select('id');
+      if (updErr) throw updErr;
+      if ((ok as unknown[] | null)?.length) cubiertos += t;
+    }
+  } catch (err) {
+    logger.error({ err, perfilId, cubiertos, cantidad }, 'No se pudo cubrir todo el saldo en contra con la compra');
+  }
+  return cubiertos;
+}
+
+export interface CompraRevertida {
+  compra_id: string;
+  perfil_id: string;
+  /** Créditos sin usar que se retiraron. */
+  retirados: number;
+  /** Créditos ya usados: quedan como saldo en contra. */
+  en_contra: number;
+  /** false: falta la migración 20261001000005 y los usados no quedaron registrados. */
+  en_contra_registrado: boolean;
+  /** Números de los estudios donde se usaron: el registro para disputar el contracargo. */
+  consumos: string[];
+}
+
+/**
+ * P22 (Adenda 2 §7: Cofianza no le da crédito a las inmobiliarias): si Mercado
+ * Pago reembolsa o contracarga una compra de créditos, se retiran los que no se
+ * usaron y los usados quedan como saldo en contra, que bloquea solo pagar con
+ * créditos y se descuenta de la próxima compra. La cuenta no se bloquea. Solo
+ * la primera llamada revierte (compare-and-set sobre el estado de la compra).
+ */
+export async function revertirCompraCreditos(compraId: string): Promise<CompraRevertida | null> {
+  const { data, error } = await db('compras_creditos_estudios')
+    .select('id, perfil_id, estado')
+    .eq('id', compraId)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  const compra = data as { id: string; perfil_id: string; estado: string } | null;
+  if (!compra || (compra.estado !== 'completado' && compra.estado !== 'pendiente')) return null;
+  const { data: cancelada, error: cErr } = await db('compras_creditos_estudios')
+    .update({ estado: 'cancelado' } as never)
+    .eq('id', compraId)
+    .eq('estado', compra.estado)
+    .select('id');
+  if (cErr) throw fromSupabaseError(cErr);
+  if (!(cancelada as unknown[] | null)?.length) return null;
+
+  const resultado: CompraRevertida = {
+    compra_id: compraId,
+    perfil_id: compra.perfil_id,
+    retirados: 0,
+    en_contra: 0,
+    en_contra_registrado: true,
+    consumos: [],
+  };
+  const { data: loteRow } = await db('lotes_creditos_estudios')
+    .select('id, cantidad_inicial, cantidad_disponible')
+    .eq('compra_id', compraId)
+    .maybeSingle();
+  const lote = loteRow as { id: string; cantidad_inicial: number; cantidad_disponible: number } | null;
+  if (!lote) return resultado; // no se alcanzó a acreditar: no hay nada que retirar
+
+  // Lo no usado se retira (compare-and-set: un consumo puede cruzarse).
+  let retirados = lote.cantidad_disponible;
+  for (let intento = 0; ; intento++) {
+    const { data: ok } = await db('lotes_creditos_estudios')
+      .update({ cantidad_disponible: 0 } as never)
+      .eq('id', lote.id)
+      .eq('cantidad_disponible', retirados)
+      .select('id');
+    if ((ok as unknown[] | null)?.length) break;
+    if (intento >= 4) throw new AppError(409, 'LOTE_CAMBIANDO', 'No se pudieron retirar los créditos: el lote cambió mientras tanto.');
+    const { data: fresco } = await db('lotes_creditos_estudios').select('cantidad_disponible').eq('id', lote.id).maybeSingle();
+    retirados = (fresco as { cantidad_disponible: number } | null)?.cantidad_disponible ?? 0;
+  }
+  resultado.retirados = retirados;
+  resultado.en_contra = lote.cantidad_inicial - retirados;
+
+  if (resultado.en_contra > 0) {
+    const { error: dErr } = await db('compras_creditos_estudios')
+      .update({ creditos_en_contra: resultado.en_contra } as never)
+      .eq('id', compraId);
+    if (dErr) {
+      if (!faltaColumna(dErr)) throw fromSupabaseError(dErr);
+      resultado.en_contra_registrado = false;
+    }
+  }
+  if (retirados > 0) {
+    await db('movimientos_creditos_estudios').insert({
+      perfil_id: compra.perfil_id,
+      lote_id: lote.id,
+      tipo: 'ajuste',
+      cantidad: -retirados,
+      saldo_resultante: await saldoVigente(compra.perfil_id),
+      notas: `Compra contracargada o reembolsada: se retiraron ${retirados} créditos sin usar`,
+    } as never);
+  }
+
+  const { data: movs } = await db('movimientos_creditos_estudios')
+    .select('expediente_id')
+    .eq('lote_id', lote.id)
+    .eq('tipo', 'consumo');
+  const ids = [...new Set(((movs ?? []) as Array<{ expediente_id: string | null }>).map((m) => m.expediente_id))].filter(
+    (id): id is string => !!id,
+  );
+  if (ids.length > 0) {
+    const { data: exps } = await db('expedientes').select('numero').in('id', ids.slice(0, 100));
+    resultado.consumos = ((exps ?? []) as Array<{ numero: string }>).map((e) => e.numero);
+  }
+  return resultado;
 }
 
 // ============================================================

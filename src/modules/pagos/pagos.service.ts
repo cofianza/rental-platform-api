@@ -9,7 +9,7 @@ import { getPaymentGateway } from './gateway';
 import { transitionPagoState, transitionPagoStateChecked, isValidTransition, CONCEPTO_LABELS } from './pago-state-machine';
 import type { EstadoPago } from './pago-state-machine';
 import type { CreatePaymentLinkInput, RegisterManualPaymentInput, ComprobantePresignedUrlInput, ListPagosQuery } from './pagos.schema';
-import { notificarYCorreo } from '../notificaciones/notificaciones.service';
+import { notificarYCorreo, type NotificarUsuarioInput } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 // Tope de canon (flujo del modulo de estudios §4.4): este endpoint generico
 // tambien puede cobrar el estudio (concepto='estudio'), asi que necesita el
@@ -1205,6 +1205,10 @@ async function processMercadoPagoWebhook(
 
   // 3a. Compra de créditos de estudios (no usa la tabla pagos).
   if (concepto === 'creditos_estudios') {
+    if (targetEstado === 'reembolsado') {
+      await contracargoDeCompra(refId, paymentId, (status.rawResponse as { status?: string }).status);
+      return { received: true };
+    }
     if (targetEstado !== 'completado') return { received: true };
     try {
       const { data: compra } = await (supabase
@@ -1436,6 +1440,17 @@ const ESTADO_MP: Record<string, string> = {
   refunded: 'reembolsado',
 };
 
+/** Aviso in-app y por correo a cada administrador activo. */
+export async function avisarAdministradores(aviso: Omit<NotificarUsuarioInput, 'userId'>): Promise<void> {
+  const { data } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('rol', 'administrador')
+    .eq('estado', 'activo');
+  const admins = ((data as Array<{ id: string }> | null) ?? []).map((p) => p.id);
+  await Promise.all(admins.map((userId) => notificarYCorreo({ userId, ...aviso })));
+}
+
 /**
  * Aviso a los administradores (in-app + correo) de un pago que entró a Mercado
  * Pago sin cobro que le corresponda. El reembolso o la conciliación se hacen
@@ -1452,14 +1467,6 @@ async function avisarPagoNoConciliado(args: {
   motivo: string;
   monto: number | undefined;
 }): Promise<void> {
-  const { data } = await (supabase
-    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
-    .eq('rol', 'administrador')
-    .eq('estado', 'activo');
-  const admins = ((data as Array<{ id: string }> | null) ?? []).map((p) => p.id);
-  if (admins.length === 0) return;
-
   const expedienteId = args.externalReference.split(':')[1] ?? '';
   const link = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(expedienteId)
     ? `/expedientes/${expedienteId}`
@@ -1470,23 +1477,74 @@ async function avisarPagoNoConciliado(args: {
     `a un cobro: ${MOTIVO_NO_CONCILIADO[args.motivo] ?? args.motivo}. ID del pago en Mercado Pago: ${args.paymentId}; ` +
     `referencia: ${args.externalReference || 'sin referencia'}. Revísalo en el panel de Mercado Pago para reembolsarlo o conciliarlo.`;
 
-  await Promise.all(
-    admins.map((userId) =>
-      notificarYCorreo({
-        userId,
-        tipo: 'pago.no_conciliado',
-        titulo: 'Pago sin conciliar en Mercado Pago',
-        mensaje,
-        link,
-        payload: {
-          pago_no_conciliado_id: args.filaId,
-          provider_payment_id: args.paymentId,
-          external_reference: args.externalReference || null,
-          motivo: args.motivo,
-        },
-      }),
-    ),
-  );
+  await avisarAdministradores({
+    tipo: 'pago.no_conciliado',
+    titulo: 'Pago sin conciliar en Mercado Pago',
+    mensaje,
+    link,
+    payload: {
+      pago_no_conciliado_id: args.filaId,
+      provider_payment_id: args.paymentId,
+      external_reference: args.externalReference || null,
+      motivo: args.motivo,
+    },
+  });
+}
+
+/**
+ * P22: Mercado Pago reembolsó o contracargó una compra de créditos. Se retiran
+ * los créditos (los usados quedan como saldo en contra) y se avisa a los
+ * administradores con el registro de consumos, para disputar el contracargo en
+ * Mercado Pago. Nunca lanza.
+ */
+async function contracargoDeCompra(compraId: string, paymentId: string, estadoMp: string | undefined): Promise<void> {
+  const que = estadoMp === 'charged_back' ? 'un contracargo' : 'un reembolso';
+  try {
+    const { revertirCompraCreditos } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+    const r = await revertirCompraCreditos(compraId);
+    if (!r) return; // ya revertida (reintento del webhook) o nunca acreditada
+    const [{ data: perfil }, { data: factura }] = await Promise.all([
+      (supabase.from('perfiles' as string) as ReturnType<typeof supabase.from>)
+        .select('razon_social, nombre, apellido')
+        .eq('id', r.perfil_id)
+        .maybeSingle(),
+      (supabase.from('facturas' as string) as ReturnType<typeof supabase.from>)
+        .select('factus_number')
+        .eq('compra_creditos_id', compraId)
+        .eq('estado', 'emitida')
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    const p = perfil as { razon_social: string | null; nombre: string | null; apellido: string | null } | null;
+    const quien = p?.razon_social || `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || r.perfil_id;
+    const numeroFactura = (factura as { factus_number: string | null } | null)?.factus_number;
+    const partes = [
+      `Mercado Pago reportó ${que} de la compra de créditos de ${quien} (pago ${paymentId}).`,
+      `Se retiraron ${r.retirados} créditos sin usar.`,
+      r.en_contra > 0
+        ? r.en_contra_registrado
+          ? `${r.en_contra} ya usados quedan como saldo en contra: bloquean pagar con créditos hasta la próxima compra, que los descuenta.`
+          : `${r.en_contra} ya usados NO quedaron como saldo en contra (falta la migración 20261001000005): descuéntalos a mano.`
+        : null,
+      r.consumos.length > 0 ? `Se usaron en los estudios ${r.consumos.join(', ')}: es el registro para disputarlo en Mercado Pago.` : null,
+      numeroFactura ? `Falta la nota crédito de la factura ${numeroFactura} en Factus.` : null,
+    ];
+    await avisarAdministradores({
+      tipo: 'creditos.contracargo',
+      titulo: `${estadoMp === 'charged_back' ? 'Contracargo' : 'Reembolso'} de una compra de créditos`,
+      mensaje: partes.filter(Boolean).join(' '),
+      payload: { compra_id: compraId, provider_payment_id: paymentId, retirados: r.retirados, en_contra: r.en_contra },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ err, compraId, paymentId }, 'Contracargo de compra de créditos: no se pudo revertir');
+    await avisarAdministradores({
+      tipo: 'creditos.contracargo',
+      titulo: 'Revisar un contracargo de créditos',
+      mensaje: `Mercado Pago reportó ${que} de la compra de créditos ${compraId} (pago ${paymentId}) y no se pudieron retirar los créditos: ${msg}. Revísalo a mano.`,
+      payload: { compra_id: compraId, provider_payment_id: paymentId },
+    }).catch((e) => logger.warn({ e, compraId }, 'No se pudo avisar del contracargo'));
+  }
 }
 
 /**

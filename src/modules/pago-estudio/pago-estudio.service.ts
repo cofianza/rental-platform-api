@@ -836,7 +836,9 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
   }
 
   // perfilId = userId: el service de créditos lo resuelve al saldo de la organización.
-  const { liberarEstudioConCredito, getSaldoCreditos } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+  const { liberarEstudioConCredito, getSaldoCreditos, errorCreditosEnContra } = await import(
+    '@/modules/creditos-estudios/creditos-estudios.service'
+  );
 
   // Verificar saldo ANTES de cancelar el link: sin esto, una inmobiliaria sin
   // créditos perdía el link ya enviado al arrendatario y quedaba sin pago.
@@ -848,6 +850,8 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
       'SIN_CREDITOS',
     );
   }
+  // P22: con saldo en contra tampoco (liberarEstudioConCredito lo vuelve a mirar).
+  if (saldo.creditos_en_contra > 0) throw errorCreditosEnContra(saldo.creditos_en_contra);
 
   await transitionPagoState({
     pagoId: pago.id as string,

@@ -12,7 +12,7 @@ const { mockFrom, ops, queues, enqueue, mockGetUser, mockCreateLink, mockCancelL
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'or', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'gt', 'or', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -63,6 +63,7 @@ vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn(async () => undefin
 vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: vi.fn(async () => undefined),
   perfilEsDuenoDeInmueble: vi.fn(async () => true),
+  resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 
@@ -186,6 +187,22 @@ describe('cancelarYLiberarCredito', () => {
     queues.clear();
     ops.length = 0;
     vi.clearAllMocks();
+  });
+
+  it('P22: con saldo en contra no cancela el enlace del prospecto: 409 antes de tocarlo', async () => {
+    enqueue('pagos', { data: [{ id: 'p-pros', estado: 'pendiente', metodo: 'pasarela', external_id: 'pref-pros' }], error: null });
+    enqueue('lotes_creditos_estudios', {
+      data: [{ id: 'lote-1', cantidad_disponible: 5, cantidad_inicial: 10, vence_en: null, origen: 'compra', created_at: '2026-09-01' }],
+      error: null,
+    });
+    enqueue('compras_creditos_estudios', { data: [{ creditos_en_contra: 2 }], error: null });
+
+    await expect(cancelarYLiberarCredito(EXP, 'user-1', undefined, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'CREDITOS_EN_CONTRA',
+    });
+    expect(mockTransition).not.toHaveBeenCalled();
+    expect(mockCancelLink).not.toHaveBeenCalled();
   });
 
   it("no cancela un pago 'procesando' para gastar un credito encima: 409", async () => {
