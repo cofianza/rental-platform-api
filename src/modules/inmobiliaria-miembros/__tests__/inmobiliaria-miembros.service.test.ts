@@ -50,6 +50,7 @@ import {
   aceptarInvitacionMiembro,
   getInvitacionMiembroPublic,
   invitarMiembro,
+  reenviarInvitacion,
   cambiarRolMiembro,
   salirDeOrg,
   revocarMiembro,
@@ -267,34 +268,43 @@ describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
   });
 });
 
-describe('un correo de propietario o arrendatario no se une a un equipo', () => {
+describe('un correo con una cuenta que no es de inmobiliaria no se une a un equipo', () => {
   const MENSAJE =
-    'Ese correo ya tiene una cuenta de propietario o arrendatario en Cofianza y no puede unirse a un equipo. Invita otro correo.';
+    'Ese correo ya tiene una cuenta en Cofianza que no es de inmobiliaria y no puede unirse a un equipo. Invita otro correo.';
 
-  it.each(['propietario', 'solicitante'])('invitar un correo con cuenta de %s: 409 y no sale la invitación', async (rol) => {
+  it.each(['propietario', 'solicitante', 'operador_analista'])(
+    'invitar un correo con cuenta de %s: 409 con el mismo mensaje (no dice qué cuenta es) y no sale la invitación',
+    async (rol) => {
+      enqueue(
+        ownerMembership, // assertOwner
+        { data: null }, // no hay fila previa para (org, email)
+        { data: { id: 'p-otro' } }, // find_user_by_email
+        { data: { rol } }, // su perfil
+      );
+      await expect(invitarMiembro('p-self', { email: 'otro@correo.co', rol_miembro: 'miembro' })).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'EMAIL_OTRO_ROL',
+        message: MENSAJE,
+      });
+      expect(chain.insert).not.toHaveBeenCalled();
+      expect(chain.update).not.toHaveBeenCalled();
+      expect(mockEnviarInvitacion).not.toHaveBeenCalled();
+    },
+  );
+
+  it('reenviar la invitación a un correo que ya tiene otra cuenta: el mismo 409 y no sale el correo', async () => {
     enqueue(
-      ownerMembership, // assertOwner
-      { data: null }, // no hay fila previa para (org, email)
-      { data: { id: 'p-otro' } }, // find_user_by_email
-      { data: { rol } }, // su perfil
+      ownerMembership,
+      { data: { id: 'm-x', email: 'otro@correo.co', estado: 'invitado', inmobiliaria_id: 'org1' } },
+      { data: { id: 'p-otro' } },
+      { data: { rol: 'propietario' } },
     );
-    await expect(invitarMiembro('p-self', { email: 'dueno@correo.co', rol_miembro: 'miembro' })).rejects.toMatchObject({
+    await expect(reenviarInvitacion('p-self', 'm-x')).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'EMAIL_OTRO_ROL',
       message: MENSAJE,
     });
-    expect(chain.insert).not.toHaveBeenCalled();
     expect(chain.update).not.toHaveBeenCalled();
-    expect(mockEnviarInvitacion).not.toHaveBeenCalled();
-  });
-
-  it('con una cuenta del equipo de Cofianza el mensaje no habla de propietario ni arrendatario', async () => {
-    enqueue(ownerMembership, { data: null }, { data: { id: 'p-staff' } }, { data: { rol: 'operador_analista' } });
-    await expect(invitarMiembro('p-self', { email: 'analista@cofianza.co', rol_miembro: 'miembro' })).rejects.toMatchObject({
-      statusCode: 409,
-      errorCode: 'EMAIL_OTRO_ROL',
-      message: 'Ese correo ya tiene una cuenta en Cofianza con otro tipo de acceso y no puede unirse a un equipo. Invita otro correo.',
-    });
     expect(mockEnviarInvitacion).not.toHaveBeenCalled();
   });
 
@@ -315,7 +325,7 @@ describe('un correo de propietario o arrendatario no se une a un equipo', () => 
   const invitacion = {
     data: {
       id: 'm-b',
-      email: 'dueno@correo.co',
+      email: 'otro@correo.co',
       estado: 'invitado',
       perfil_id: null,
       token_expiracion: null,
@@ -326,20 +336,15 @@ describe('un correo de propietario o arrendatario no se une a un equipo', () => 
     error: null,
   };
 
-  it('la página de una invitación ya enviada lo sabe: cuenta_otro_rol dice cuál', async () => {
-    enqueue(invitacion, { data: { id: 'p-otro' } }, { data: { rol: 'propietario' } });
-    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({
-      tiene_cuenta: true,
-      cuenta_otro_rol: 'propietario_o_arrendatario',
-    });
-    enqueue(invitacion, { data: { id: 'p-staff' } }, { data: { rol: 'administrador' } });
-    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: 'interna' });
+  it.each(['propietario', 'administrador'])('la página de una invitación ya enviada lo sabe (cuenta de %s)', async (rol) => {
+    enqueue(invitacion, { data: { id: 'p-otro' } }, { data: { rol } });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: true });
   });
 
   it('una cuenta de inmobiliaria o un correo sin cuenta no lo son', async () => {
     enqueue(invitacion, { data: { id: 'p-inmo' } }, { data: { rol: 'inmobiliaria' } });
-    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: null });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: false });
     enqueue(invitacion, { data: null });
-    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: false, cuenta_otro_rol: null });
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: false, cuenta_otro_rol: false });
   });
 });

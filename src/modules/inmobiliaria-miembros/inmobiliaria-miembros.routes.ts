@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { invalidateMembresiasCache } from '@/lib/tenantScope';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
-import { publicFormLimiter } from '@/middleware/rateLimiter';
+import { invitarMiembroLimiter, publicFormLimiter } from '@/middleware/rateLimiter';
 import { validate } from '@/middleware/validate';
 import {
   tokenParamSchema,
@@ -42,6 +42,7 @@ miembrosRouter.patch(
 
 miembrosRouter.post(
   '/invitar',
+  invitarMiembroLimiter,
   validate({ body: invitarMiembroSchema }),
   controller.invitar,
 );
@@ -52,6 +53,7 @@ miembrosRouter.post('/salir', controller.salir);
 
 miembrosRouter.post(
   '/:id/reenviar',
+  invitarMiembroLimiter,
   validate({ params: miembroIdParamSchema }),
   controller.reenviar,
 );

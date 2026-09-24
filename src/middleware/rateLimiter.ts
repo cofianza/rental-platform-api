@@ -108,6 +108,25 @@ export const interesLimiter = rateLimit({
   },
 });
 
+/**
+ * Invitar (o reenviar la invitación) al equipo: máx 20 por hora por usuario.
+ * Cada una sale como un correo de Cofianza a cualquier dirección, y responde si
+ * ese correo ya tiene una cuenta que no es de inmobiliaria.
+ */
+export const invitarMiembroLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id ?? req.ip ?? 'unknown',
+  validate: false,
+  message: {
+    success: false,
+    errorCode: 'RATE_LIMIT_EXCEEDED',
+    message: 'Enviaste muchas invitaciones en poco tiempo. Inténtalo de nuevo en una hora.',
+  },
+});
+
 export const publicFormLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 60,
