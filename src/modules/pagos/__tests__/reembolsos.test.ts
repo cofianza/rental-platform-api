@@ -250,9 +250,9 @@ describe('al cerrar o rechazar el estudio', () => {
   });
 });
 
-describe('no se cobra la evaluación de un estudio cerrado', () => {
-  it('el enlace genérico de cobro del estudio: 409 sin crear el pago', async () => {
-    enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado: 'cerrado' }, error: null });
+describe('no se cobra la evaluación de un estudio cerrado o rechazado', () => {
+  it.each(['cerrado', 'rechazado'])('el enlace genérico de cobro del estudio %s: 409 sin crear el pago', async (estado) => {
+    enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado }, error: null });
 
     await expect(
       createPaymentLink(
@@ -265,8 +265,8 @@ describe('no se cobra la evaluación de un estudio cerrado', () => {
     expect(ops.some((o) => o.table === 'pagos' && o.method === 'insert')).toBe(false);
   });
 
-  it('P8: el pago manual de la evaluación: 409 sin registrarlo', async () => {
-    enqueue('expedientes', { data: { id: EXP, estado: 'cerrado' }, error: null });
+  it.each(['cerrado', 'rechazado'])('P8: el pago manual de la evaluación de un estudio %s: 409 sin registrarlo', async (estado) => {
+    enqueue('expedientes', { data: { id: EXP, estado }, error: null });
 
     await expect(
       registerManualPayment(

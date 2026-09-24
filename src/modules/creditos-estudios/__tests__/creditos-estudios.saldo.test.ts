@@ -299,8 +299,8 @@ describe('Q5b-3: la compra se reclama para un payment antes de crear el lote', (
 });
 
 describe('P1: no se cobra la evaluación de un estudio cerrado', () => {
-  it('liberar con crédito sobre un estudio cerrado: 409 sin gastar el crédito', async () => {
-    enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado: 'cerrado', inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
+  it.each(['cerrado', 'rechazado'])('liberar con crédito sobre un estudio %s: 409 sin gastar el crédito', async (estado) => {
+    enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado, inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
 
     await expect(liberarEstudioConCredito('exp-1', 'owner-1', 'owner-1')).rejects.toMatchObject({ errorCode: 'EXPEDIENTE_CERRADO' });
     expect(mockRpc).not.toHaveBeenCalled();

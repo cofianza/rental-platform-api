@@ -164,10 +164,10 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     expect(pago.id).toBe('pago-nuevo');
   });
 
-  it('P1: con el estudio cerrado no abre el cobro (se tendría que devolver): 409', async () => {
+  it.each(['cerrado', 'rechazado'])('P1: con el estudio %s no abre el cobro (se tendría que devolver): 409', async (estado) => {
     datosComunes();
     enqueue('pagos', { data: [], error: null });
-    enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado: 'cerrado', inmueble_id: null }, error: null });
+    enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado, inmueble_id: null }, error: null });
 
     await expect(pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria')).rejects.toMatchObject({
       statusCode: 409,

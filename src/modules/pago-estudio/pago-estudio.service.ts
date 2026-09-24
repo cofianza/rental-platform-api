@@ -321,10 +321,10 @@ async function crearCobroPasarela(args: {
 }) {
   const { expedienteId, userId, emailPagador, nombrePagador } = args;
 
-  // P1: la evaluación de un estudio cerrado no se cobra (se tendría que devolver).
+  // P1: la evaluación de un estudio cerrado o rechazado no se cobra (se tendría que devolver).
   const exp = await getExpedienteWithInmueble(expedienteId);
-  if (exp.estado === 'cerrado') {
-    throw AppError.conflict('El estudio está cerrado: no se cobra la evaluación.', 'EXPEDIENTE_CERRADO');
+  if (exp.estado === 'cerrado' || exp.estado === 'rechazado') {
+    throw AppError.conflict(`El estudio está ${exp.estado}: no se cobra la evaluación.`, 'EXPEDIENTE_CERRADO');
   }
 
   // Check no existing active pago (pendiente or procesando)

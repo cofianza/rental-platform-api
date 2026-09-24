@@ -282,9 +282,11 @@ export async function createPaymentLink(
   // pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
 
-  // P1: la evaluación de un estudio cerrado no se cobra (se tendría que devolver).
-  if (input.concepto === 'estudio' && (expediente as { estado: string }).estado === 'cerrado') {
-    throw AppError.conflict('El estudio está cerrado: no se cobra la evaluación.', 'EXPEDIENTE_CERRADO');
+  // P1: la evaluación de un estudio cerrado o rechazado no se cobra (se tendría
+  // que devolver; la re-evaluación con soportes no genera cobro).
+  const estadoExp = (expediente as { estado: string }).estado;
+  if (input.concepto === 'estudio' && (estadoExp === 'cerrado' || estadoExp === 'rechazado')) {
+    throw AppError.conflict(`El estudio está ${estadoExp}: no se cobra la evaluación.`, 'EXPEDIENTE_CERRADO');
   }
 
   // 1a. FIRMA INCOMPLETA (contratos V3, §11.7.3).
@@ -806,9 +808,10 @@ export async function registerManualPayment(
   // Ownership multi-tenant (cierra IDOR): propietario/inmobiliaria solo
   // registran pagos sobre expedientes de su cartera. 404 fuera de scope.
   await assertExpedienteAccess(expedienteId, userId, userRol);
-  // P1: la evaluación de un estudio cerrado no se cobra (se tendría que devolver).
-  if (input.concepto === 'estudio' && (expRow as { estado?: string } | null)?.estado === 'cerrado') {
-    throw AppError.conflict('El estudio está cerrado: no se cobra la evaluación.', 'EXPEDIENTE_CERRADO');
+  // P1: la evaluación de un estudio cerrado o rechazado no se cobra (se tendría que devolver).
+  const estadoExp = (expRow as { estado?: string } | null)?.estado;
+  if (input.concepto === 'estudio' && (estadoExp === 'cerrado' || estadoExp === 'rechazado')) {
+    throw AppError.conflict(`El estudio está ${estadoExp}: no se cobra la evaluación.`, 'EXPEDIENTE_CERRADO');
   }
   // §11.7.3: la misma puerta que el link de pago; a mano tampoco se cobra con la firma incompleta.
   await assertFianzaOperando(expedienteId, input.concepto);

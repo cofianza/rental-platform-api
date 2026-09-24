@@ -669,9 +669,9 @@ export async function liberarEstudioConCredito(
 
   if (expErr || !expData) throw AppError.notFound('Estudio no encontrado');
   const exp = expData as { id: string; numero: string; estado: string; inmueble_id: string | null; solicitante_id: string | null };
-  // P1: un estudio cerrado no se cobra (el crédito no se podría usar ni devolver).
-  if (exp.estado === 'cerrado') {
-    throw AppError.conflict('El estudio está cerrado: no se cobra la evaluación.', 'EXPEDIENTE_CERRADO');
+  // P1: un estudio cerrado o rechazado no se cobra (el crédito no se podría usar ni devolver).
+  if (exp.estado === 'cerrado' || exp.estado === 'rechazado') {
+    throw AppError.conflict(`El estudio está ${exp.estado}: no se cobra la evaluación.`, 'EXPEDIENTE_CERRADO');
   }
 
   // 2. Validar que el inmueble pertenece al perfil que libera (la inmobiliaria figura como propietario_id)
