@@ -404,6 +404,14 @@ describe('expediente-workflow.service', () => {
       const aExpedientes = updates.filter(([t]) => t === 'expedientes').map(([, v]) => v);
       expect(aExpedientes).toContainEqual({ motivo_rechazo: 'El caso no cumple la política de Cofianza.' });
       expect(JSON.stringify(aExpedientes)).not.toContain('DTI');
+      // El fundamento va a `comentario` (interno), nunca a la descripción.
+      const rpc = mockRpc.mock.calls[0][1] as { p_descripcion: string; p_comentario: string };
+      expect(rpc.p_comentario).toBe('DTI del co-arrendatario 71 %');
+      expect(rpc.p_descripcion).not.toContain('DTI');
+      expect(rpc.p_descripcion).toContain('El caso no cumple la política de Cofianza.');
+      // El evento guarda el motivo para el gestor junto al resto de la revisión manual.
+      const aTimeline = updates.filter(([t]) => t === 'eventos_timeline').map(([, v]) => v.metadata);
+      expect(aTimeline).toContainEqual(expect.objectContaining({ motivo_gestor: 'El caso no cumple la política de Cofianza.' }));
     });
 
     it('rechazar (P34): sin el motivo para el gestor el body no pasa la validación', () => {
@@ -700,8 +708,45 @@ describe('expediente-workflow.service', () => {
       const r = await getTransitionHistory('exp-uuid', 'titular', 'solicitante');
 
       expect(r.historial[0].descripcion).toBe('Resultado combinado con el co-arrendatario: rechazado.');
-      expect(r.historial[1].descripcion).toBe('Cambio manual');
+      expect(r.historial[1].descripcion).toBe("Estado cambiado de 'condicionado' a 'rechazado'.");
       expect(JSON.stringify(r.historial)).not.toContain('listas restrictivas');
+    });
+
+    it('rechazo del analista (P34): Cofianza ve todo, el gestor solo su motivo y el prospecto solo los estados', async () => {
+      const fila = {
+        id: 'evt-r',
+        estado_anterior: 'condicionado',
+        estado_nuevo: 'rechazado',
+        comentario: 'Fundamento: DTI del co-arrendatario 71 %',
+        // Fila vieja: la descripción traía el correo del analista y el comentario.
+        descripcion: "Estado cambiado de 'condicionado' a 'rechazado' por ana@cofianza.co. Comentario: Fundamento: DTI del co-arrendatario 71 %",
+        created_at: '2026-09-24T10:00:00Z',
+        metadata: { origen: 'analista_revision_manual', fundamento: 'Fundamento: DTI del co-arrendatario 71 %', motivo_gestor: 'No cumple la política de Cofianza.' },
+        usuario: { id: 'analista-uuid', nombre: 'Ana', apellido: 'López' },
+      };
+      const historial = async (userId: string, rol: string) => {
+        setupFetchExpediente(mockExpediente);
+        mockFrom.mockReturnValueOnce({
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({ order: vi.fn().mockResolvedValue({ data: [fila], error: null }) }),
+            }),
+          }),
+        });
+        return (await getTransitionHistory('exp-uuid', userId, rol)).historial[0] as Record<string, unknown>;
+      };
+
+      const cofianza = await historial('analista-uuid', 'operador_analista');
+      expect(cofianza.comentario).toBe(fila.comentario);
+
+      const gestor = await historial('dueno-uuid', 'inmobiliaria');
+      expect(gestor.comentario).toBe('No cumple la política de Cofianza.');
+      expect(gestor.descripcion).toBe("Estado cambiado de 'condicionado' a 'rechazado'.");
+      expect(JSON.stringify(gestor)).not.toMatch(/DTI|ana@cofianza/);
+
+      const prospecto = await historial('titular', 'solicitante');
+      expect(prospecto.comentario).toBeNull();
+      expect(JSON.stringify(prospecto)).not.toMatch(/DTI|ana@cofianza|No cumple la política/);
     });
 
     it('debe retornar 404 si el expediente no existe', async () => {

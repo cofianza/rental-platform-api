@@ -46,6 +46,9 @@ const PROPIETARIO_TRANSITIONS: ReadonlyArray<{ from: EstadoExpediente; to: Estad
   { from: 'rechazado', to: 'cerrado' },
 ];
 
+/** Roles de Cofianza: ven el historial completo (P34). */
+const ROLES_COFIANZA = ['administrador', 'operador_analista', 'gerencia_consulta'];
+
 interface TransitionRpcResult {
   expediente_id: string;
   estado_anterior: EstadoExpediente;
@@ -213,6 +216,15 @@ export async function executeTransition(
     if (motivoErr) {
       logger.warn({ expedienteId, err: motivoErr.message }, 'No se pudo guardar el motivo del rechazo para el gestor');
     }
+    // En el evento también: es lo único del rechazo que getTransitionHistory le
+    // muestra al gestor. Desde condicionado lo guarda abajo la revisión manual.
+    if (currentState !== 'condicionado') {
+      const { error: metaErr } = await (supabase
+        .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+        .update({ metadata: { motivo_gestor: input.motivo } } as never)
+        .eq('id', result.evento_timeline_id);
+      if (metaErr) logger.warn({ expedienteId, err: metaErr.message }, 'No se pudo guardar el motivo del rechazo en el timeline');
+    }
   }
 
   if (fueCancelacion) {
@@ -282,6 +294,7 @@ export async function executeTransition(
           origen: 'analista_revision_manual',
           fundamento: input.comentario,
           documentos_consultados: documentos,
+          ...(targetState === 'rechazado' && input.motivo ? { motivo_gestor: input.motivo } : {}),
         },
       } as never)
       .eq('id', result.evento_timeline_id);
@@ -669,19 +682,31 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
     comentario: string | null;
     descripcion: string;
     created_at: string;
-    metadata: { origen?: string } | null;
+    metadata: { origen?: string; motivo_gestor?: string } | null;
     usuario: { id: string; nombre: string; apellido: string } | null;
   }>) || [];
+
+  // P34: fuera de Cofianza no salen el comentario (el fundamento interno del
+  // analista) ni la descripción (quién cambió el estado y, en filas viejas, el
+  // mismo comentario): solo los estados. El gestor ve además el motivo que el
+  // analista escribió para él; el prospecto, ninguno. Tampoco la ponderación
+  // cuenta el resultado ni las reglas duras del co-arrendatario (Ley 1266).
+  const deCofianza = !userRol || ROLES_COFIANZA.includes(userRol);
 
   return {
     expediente_id: expedienteId,
     estado_actual: expediente.estado,
-    // Al titular (solicitante), la ponderación no le cuenta el resultado ni las
-    // reglas duras de su co-arrendatario: son datos de buró de otra persona (Ley 1266).
     historial: rows.map(({ metadata, ...r }) =>
-      userRol === 'solicitante' && metadata?.origen === 'ponderacion_coarrendatario'
-        ? { ...r, descripcion: `Resultado combinado con el co-arrendatario: ${r.estado_nuevo ?? 'sin cambio'}.` }
-        : r,
+      deCofianza
+        ? r
+        : {
+            ...r,
+            descripcion:
+              metadata?.origen === 'ponderacion_coarrendatario'
+                ? `Resultado combinado con el co-arrendatario: ${r.estado_nuevo ?? 'sin cambio'}.`
+                : `Estado cambiado de '${r.estado_anterior ?? 'sin estado'}' a '${r.estado_nuevo ?? 'sin estado'}'.`,
+            comentario: userRol === 'solicitante' ? null : (metadata?.motivo_gestor ?? null),
+          },
     ),
   };
 }
@@ -937,7 +962,9 @@ function buildTimelineDescription(
   if (input.motivo) {
     desc += `. Motivo: ${input.motivo}`;
   }
-  if (input.comentario) {
+  // P34: el fundamento de un rechazo no va en la descripción; queda en
+  // `comentario`, que solo ve Cofianza.
+  if (input.comentario && to !== 'rechazado') {
     desc += `. Comentario: ${input.comentario}`;
   }
   return desc;
