@@ -855,8 +855,8 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
       'SIN_CREDITOS',
     );
   }
-  // P22: con saldo en contra tampoco (liberarEstudioConCredito lo vuelve a mirar).
-  if (saldo.creditos_en_contra > 0) throw errorCreditosEnContra(saldo.creditos_en_contra);
+  // P22: sin saldo efectivo tampoco (liberarEstudioConCredito lo vuelve a mirar).
+  if (saldo.creditos_en_contra > 0 && saldo.saldo_efectivo < 1) throw errorCreditosEnContra(saldo.creditos_en_contra);
 
   await transitionPagoState({
     pagoId: pago.id as string,

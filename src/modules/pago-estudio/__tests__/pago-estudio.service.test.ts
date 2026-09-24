@@ -202,10 +202,10 @@ describe('cancelarYLiberarCredito', () => {
     vi.clearAllMocks();
   });
 
-  it('P22: con saldo en contra no cancela el enlace del prospecto: 409 antes de tocarlo', async () => {
+  it('P22: sin saldo efectivo (lo disponible no alcanza lo que está en contra) no cancela el enlace: 409', async () => {
     enqueue('pagos', { data: [{ id: 'p-pros', estado: 'pendiente', metodo: 'pasarela', external_id: 'pref-pros' }], error: null });
     enqueue('lotes_creditos_estudios', {
-      data: [{ id: 'lote-1', cantidad_disponible: 5, cantidad_inicial: 10, vence_en: null, origen: 'compra', created_at: '2026-09-01' }],
+      data: [{ id: 'lote-1', cantidad_disponible: 2, cantidad_inicial: 10, vence_en: null, origen: 'compra', created_at: '2026-09-01' }],
       error: null,
     });
     enqueue('compras_creditos_estudios', { data: [{ creditos_en_contra: 2 }], error: null });

@@ -1516,6 +1516,8 @@ async function avisarPagoNoConciliado(args: {
  * Mercado Pago. Nunca lanza.
  */
 async function contracargoDeCompra(compraId: string, paymentId: string, estadoMp: string | undefined): Promise<void> {
+  // ponytail: un contracargo que Cofianza gana en la disputa no restituye los
+  // créditos solo (la compra queda cancelada con su saldo en contra): a mano.
   const que = estadoMp === 'charged_back' ? 'un contracargo' : 'un reembolso';
   try {
     const { revertirCompraCreditos } = await import('@/modules/creditos-estudios/creditos-estudios.service');
@@ -1540,9 +1542,9 @@ async function contracargoDeCompra(compraId: string, paymentId: string, estadoMp
       `Mercado Pago reportó ${que} de la compra de créditos de ${quien} (pago ${paymentId}).`,
       `Se retiraron ${r.retirados} créditos sin usar.`,
       r.en_contra > 0
-        ? r.en_contra_registrado
-          ? `${r.en_contra} ya usados quedan como saldo en contra: bloquean pagar con créditos hasta la próxima compra, que los descuenta.`
-          : `${r.en_contra} ya usados NO quedaron como saldo en contra (falta la migración 20261001000005): descuéntalos a mano.`
+        ? r.en_contra_error
+          ? `${r.en_contra} ya usados NO quedaron como saldo en contra (${r.en_contra_error}): descuéntalos a mano.`
+          : `${r.en_contra} ya usados quedan como saldo en contra: se restan del saldo para pagar con créditos y la próxima compra los descuenta.`
         : null,
       r.consumos.length > 0 ? `Se usaron en los estudios ${r.consumos.join(', ')}: es el registro para disputarlo en Mercado Pago.` : null,
       numeroFactura ? `Falta la nota crédito de la factura ${numeroFactura} en Factus.` : null,
@@ -1559,7 +1561,7 @@ async function contracargoDeCompra(compraId: string, paymentId: string, estadoMp
     await avisarAdministradores({
       tipo: 'creditos.contracargo',
       titulo: 'Revisar un contracargo de créditos',
-      mensaje: `Mercado Pago reportó ${que} de la compra de créditos ${compraId} (pago ${paymentId}) y no se pudieron retirar los créditos: ${msg}. Revísalo a mano.`,
+      mensaje: `Mercado Pago reportó ${que} de la compra de créditos ${compraId} (pago ${paymentId}) y no se pudo terminar de revertir la compra: ${msg}. Revisa a mano sus créditos y su estado.`,
       payload: { compra_id: compraId, provider_payment_id: paymentId },
     }).catch((e) => logger.warn({ e, compraId }, 'No se pudo avisar del contracargo'));
   }

@@ -77,7 +77,7 @@ describe('webhook de Mercado Pago: contracargo de una compra de créditos', () =
   it('revierte la compra y avisa a los administradores con el saldo en contra, los consumos y la factura', async () => {
     contracargo();
     mockRevertirCompra.mockResolvedValueOnce({
-      compra_id: 'compra-1', perfil_id: 'owner-1', retirados: 4, en_contra: 6, en_contra_registrado: true, consumos: ['EXP-1', 'EXP-2'],
+      compra_id: 'compra-1', perfil_id: 'owner-1', retirados: 4, en_contra: 6, en_contra_error: null, consumos: ['EXP-1', 'EXP-2'],
     });
     enqueue('perfiles', { data: { razon_social: 'Inmo SAS', nombre: null, apellido: null }, error: null }, { data: [{ id: 'admin-1' }], error: null });
     enqueue('facturas', { data: { factus_number: 'FE-30' }, error: null });
@@ -93,6 +93,20 @@ describe('webhook de Mercado Pago: contracargo de una compra de créditos', () =
         titulo: 'Contracargo de una compra de créditos',
         mensaje: expect.stringMatching(/contracargo.*Inmo SAS.*retiraron 4.*6 ya usados.*saldo en contra.*EXP-1, EXP-2.*FE-30/),
       }),
+    );
+  });
+
+  it('P4: si los usados no quedaron como saldo en contra, el aviso lo dice', async () => {
+    contracargo();
+    mockRevertirCompra.mockResolvedValueOnce({
+      compra_id: 'compra-1', perfil_id: 'owner-1', retirados: 0, en_contra: 3, en_contra_error: 'timeout', consumos: [],
+    });
+    enqueue('perfiles', { data: null, error: null }, { data: [{ id: 'admin-1' }], error: null });
+
+    await processWebhookEvent(Buffer.from('{}'), {});
+
+    expect(mockNotificarYCorreo).toHaveBeenCalledWith(
+      expect.objectContaining({ mensaje: expect.stringContaining('3 ya usados NO quedaron como saldo en contra (timeout): descuéntalos a mano') }),
     );
   });
 
@@ -112,7 +126,7 @@ describe('webhook de Mercado Pago: contracargo de una compra de créditos', () =
 
     await expect(processWebhookEvent(Buffer.from('{}'), {})).resolves.toEqual({ received: true });
     expect(mockNotificarYCorreo).toHaveBeenCalledWith(
-      expect.objectContaining({ tipo: 'creditos.contracargo', mensaje: expect.stringContaining('Revísalo a mano') }),
+      expect.objectContaining({ tipo: 'creditos.contracargo', mensaje: expect.stringContaining('Revisa a mano') }),
     );
   });
 });

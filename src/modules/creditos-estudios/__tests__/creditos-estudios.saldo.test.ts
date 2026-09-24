@@ -60,6 +60,7 @@ import {
 } from '../creditos-estudios.service';
 
 const updates = (table: string) => ops.filter((o) => o.table === table && o.method === 'update').map((o) => o.args[0]);
+const lote = (compraId: string | null) => ({ id: 'lote-1', compra_id: compraId, vence_en: null, created_at: '2026-09-01T00:00:00Z' });
 const inserts = (table: string) => ops.filter((o) => o.table === table && o.method === 'insert').map((o) => o.args[0]);
 
 beforeEach(() => {
@@ -78,7 +79,7 @@ describe('P1: devolver el crédito de una evaluación sin consulta al buró', ()
 
   it('vuelve al lote de donde salió, con un movimiento de ajuste, y el pago queda reembolsado', async () => {
     consumo();
-    enqueue('lotes_creditos_estudios', { data: { compra_id: 'compra-1' }, error: null });
+    enqueue('lotes_creditos_estudios', { data: lote('compra-1'), error: null });
     enqueue('compras_creditos_estudios', { data: { id: 'compra-1', estado: 'completado', creditos_en_contra: 0 }, error: null });
     enqueue(
       'lotes_creditos_estudios',
@@ -102,7 +103,7 @@ describe('P1: devolver el crédito de una evaluación sin consulta al buró', ()
 
   it('si otra llamada ya lo devolvió (CAS del pago), no se devuelve dos veces', async () => {
     consumo();
-    enqueue('lotes_creditos_estudios', { data: { compra_id: null }, error: null });
+    enqueue('lotes_creditos_estudios', { data: lote(null), error: null });
     mockTransition.mockResolvedValueOnce({ pago: null, transitioned: false });
 
     expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('ya_devuelto');
@@ -112,7 +113,7 @@ describe('P1: devolver el crédito de una evaluación sin consulta al buró', ()
 
   it('si la compra del lote se contracargó y todavía debe créditos, la devolución baja esa deuda', async () => {
     consumo();
-    enqueue('lotes_creditos_estudios', { data: { compra_id: 'compra-cb' }, error: null });
+    enqueue('lotes_creditos_estudios', { data: lote('compra-cb'), error: null });
     enqueue(
       'compras_creditos_estudios',
       { data: { id: 'compra-cb', estado: 'cancelado', creditos_en_contra: 2 }, error: null },
@@ -123,7 +124,24 @@ describe('P1: devolver el crédito de una evaluación sin consulta al buró', ()
 
     expect(updates('compras_creditos_estudios')).toEqual([{ creditos_en_contra: 1 }]);
     expect(updates('lotes_creditos_estudios')).toEqual([]);
-    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ tipo: 'ajuste', notas: expect.stringContaining('saldo en contra') });
+    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ tipo: 'ajuste', notas: expect.stringContaining('Bajó el saldo en contra') });
+  });
+
+  it('P11: si el lote ya venció, vuelve en un lote de 1 con la vigencia que tenía el original, desde hoy', async () => {
+    consumo();
+    const hace = (dias: number) => new Date(Date.now() - dias * 86_400_000).toISOString();
+    enqueue('lotes_creditos_estudios', { data: { ...lote(null), created_at: hace(100), vence_en: hace(10) }, error: null }); // 90 días de vigencia
+    enqueue('lotes_creditos_estudios', { data: { id: 'lote-nuevo' }, error: null }); // insert
+
+    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('devuelto');
+
+    const nuevo = inserts('lotes_creditos_estudios')[0] as { cantidad_inicial: number; cantidad_disponible: number; vence_en: string; origen: string };
+    expect(nuevo).toMatchObject({ cantidad_inicial: 1, cantidad_disponible: 1, origen: 'ajuste_admin' });
+    const dias = (Date.parse(nuevo.vence_en) - Date.now()) / 86_400_000;
+    expect(dias).toBeGreaterThan(89);
+    expect(dias).toBeLessThan(91);
+    expect(updates('lotes_creditos_estudios')).toEqual([]);
+    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ lote_id: 'lote-nuevo', notas: expect.stringContaining('vigencia nueva') });
   });
 });
 
@@ -153,7 +171,7 @@ describe('P22: contracargo de una compra de créditos', () => {
       perfil_id: 'owner-1',
       retirados: 4,
       en_contra: 6,
-      en_contra_registrado: true,
+      en_contra_error: null,
       consumos: ['EXP-1', 'EXP-2'],
     });
     expect(updates('compras_creditos_estudios')).toEqual([{ estado: 'cancelado' }, { creditos_en_contra: 6 }]);
@@ -180,10 +198,18 @@ describe('P22: contracargo de una compra de créditos', () => {
 
     const r = await revertirCompraCreditos('compra-1');
 
-    expect(r).toMatchObject({ retirados: 0, en_contra: 10, en_contra_registrado: false });
+    expect(r).toMatchObject({ retirados: 0, en_contra: 10, en_contra_error: 'falta la migración 20261001000005' });
   });
 
-  it('con saldo en contra no se paga una evaluación con créditos (las otras opciones siguen)', async () => {
+  it('P4: si no se puede leer el lote, la compra no se cancela (el reintento vuelve a empezar)', async () => {
+    enqueue('compras_creditos_estudios', { data: { id: 'compra-1', perfil_id: 'owner-1', estado: 'completado' }, error: null });
+    enqueue('lotes_creditos_estudios', { data: null, error: { code: '57014', message: 'timeout' } });
+
+    await expect(revertirCompraCreditos('compra-1')).rejects.toBeTruthy();
+    expect(updates('compras_creditos_estudios')).toEqual([]);
+  });
+
+  it('sin saldo efectivo (lo disponible no alcanza lo que está en contra) no se paga con créditos', async () => {
     enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado: 'en_revision', inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
     enqueue('inmuebles', { data: { propietario_id: 'owner-1', inmobiliaria_id: 'org-1', direccion: 'Calle 1', ciudad: 'Bogotá' }, error: null });
     enqueue('compras_creditos_estudios', { data: [{ creditos_en_contra: 2 }], error: null });
@@ -195,6 +221,19 @@ describe('P22: contracargo de una compra de créditos', () => {
     });
     expect(mockRpc).not.toHaveBeenCalled();
     expect(inserts('pagos')).toEqual([]);
+  });
+
+  it('P13: con saldo efectivo (5 disponibles, 2 en contra) sí se paga con créditos', async () => {
+    enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado: 'en_revision', inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
+    enqueue('inmuebles', { data: { propietario_id: 'owner-1', inmobiliaria_id: 'org-1', direccion: 'Calle 1', ciudad: 'Bogotá' }, error: null });
+    enqueue('compras_creditos_estudios', { data: [{ creditos_en_contra: 2 }], error: null });
+    enqueue('lotes_creditos_estudios', { data: [{ cantidad_disponible: 5 }], error: null });
+    enqueue('pagos', { data: [], error: null }, { data: { id: 'pago-1' }, error: null });
+    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
+    mockRpc.mockResolvedValueOnce({ data: [{ lote_id: 'lote-1', saldo_restante: 4 }], error: null });
+
+    expect(await liberarEstudioConCredito('exp-1', 'owner-1', 'owner-1')).toMatchObject({ pago_id: 'pago-1' });
+    expect(mockRpc).toHaveBeenCalledOnce();
   });
 
   it('la próxima compra descuenta el saldo en contra: el lote nace descontado y la deuda queda en 0', async () => {
