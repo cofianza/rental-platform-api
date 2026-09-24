@@ -100,6 +100,11 @@ import {
 import { transitionBodySchema } from '../expediente-workflow.schema';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { avisarCoarrendatarioDecision } from '@/modules/coarrendatarios/coarrendatarios.service';
+// Se carga antes de las pruebas a propósito: el cierre lo importa en segundo
+// plano y, si dos transiciones lo piden mientras vitest aún lo está trayendo
+// (máquina cargada), la segunda se salta el mock y carga el módulo real
+// (límite de vitest con import() concurrentes de un mismo mock).
+import '@/modules/pagos/reembolsos.service';
 
 // Helpers
 const adminUser: AuthUser = { id: 'admin-uuid', email: 'admin@test.com', rol: 'administrador', activo: true };
