@@ -510,7 +510,7 @@ export async function crearSolicitudFirmaMultiparte(
   const tokenExpiracion = await plazoFirmaContrato(c.expediente_id);
   // El sobre anterior se cierra antes de abrir el nuevo (contratos-firma-2): si
   // en Auco ya estaba firmado, 409; si no se puede confirmar, 503 sin subir nada.
-  const { anularSobresAnteriores } = await import('./firma.service');
+  const { anularSobresAnteriores, anularDocumentoHuerfano } = await import('./firma.service');
   await anularSobresAnteriores(contratoId, c.expediente_id);
 
   // 3. Descargar PDF y subir UN documento con N firmantes
@@ -567,16 +567,32 @@ export async function crearSolicitudFirmaMultiparte(
     .select('id')
     .single();
   if (sobreError || !sobre) {
+    // El documento ya está en Auco: si no queda registrado (doble clic contra el
+    // índice de un solo sobre activo, o la base falló), no puede quedar vivo.
+    await anularDocumentoHuerfano(aucoDocumentCode, contratoId);
+    if ((sobreError as { code?: string } | null)?.code === '23505') {
+      throw AppError.conflict('Ya hay un envío a firma en curso para este contrato.', 'FIRMA_YA_EN_CURSO');
+    }
     logger.error({ error: sobreError?.message, contratoId }, 'Firma multi-parte: error al crear el sobre');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear la solicitud de firma');
   }
   const sobreId = (sobre as { id: string }).id;
+  // Sin sus firmantes el sobre no sirve y bloquearía el reenvío: se deshace.
+  const deshacerSobre = async () => {
+    await anularDocumentoHuerfano(aucoDocumentCode, contratoId);
+    await db('solicitudes_firma').update({ estado: 'cancelado', updated_at: new Date().toISOString() } as never).eq('id', sobreId);
+  };
 
   // 5. (Re)insertar las N filas de contrato_firmantes. Un reenvío crea un sobre
   //    nuevo y supersede los firmantes previos; el índice único
   //    (contrato_id, rol_firmante) impide duplicar, así que borramos los
   //    anteriores primero (cancelar la solicitud no los borra).
-  await db('contrato_firmantes').delete().eq('contrato_id', contratoId);
+  const { error: borrarError } = await db('contrato_firmantes').delete().eq('contrato_id', contratoId);
+  if (borrarError) {
+    logger.error({ error: borrarError.message, contratoId }, 'Firma multi-parte: no se pudieron quitar los firmantes anteriores');
+    await deshacerSobre();
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al registrar los firmantes del contrato');
+  }
   // Guardamos el teléfono NORMALIZADO (el que de verdad recibe el WhatsApp por
   // Auco, +57.../+52...), no el crudo del perfil — así el panel muestra a qué
   // número llega el link de cada parte. Los firmantes AUTO (Cofianza) nacen
@@ -600,6 +616,7 @@ export async function crearSolicitudFirmaMultiparte(
   const { error: firmantesError } = await db('contrato_firmantes').insert(filas as never);
   if (firmantesError) {
     logger.error({ error: firmantesError.message, contratoId }, 'Firma multi-parte: error al crear firmantes');
+    await deshacerSobre();
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al registrar los firmantes del contrato');
   }
 

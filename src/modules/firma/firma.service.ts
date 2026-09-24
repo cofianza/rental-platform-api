@@ -480,6 +480,11 @@ export async function crearSolicitudFirma(
     .single();
 
   if (insertError || !solicitud) {
+    // El documento ya está en Auco: si no queda registrado, no puede quedar vivo.
+    if (aucoDocumentCode) await anularDocumentoHuerfano(aucoDocumentCode, c.id);
+    if ((insertError as { code?: string } | null)?.code === '23505') {
+      throw AppError.conflict('Ya hay un envío a firma en curso para este contrato.', 'FIRMA_YA_EN_CURSO');
+    }
     logger.error({ error: insertError?.message }, 'Error al crear solicitud de firma');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear la solicitud de firma');
   }
@@ -1025,6 +1030,22 @@ export async function cancelarSolicitudesDeContrato(contratoId: string): Promise
     }
   } catch (err) {
     logger.error({ err, contratoId }, 'Error cancelando solicitudes de firma del contrato');
+  }
+}
+
+/**
+ * Anula en Auco un documento recién subido cuyo registro no se completó (p. ej.
+ * doble clic contra el índice de un solo sobre activo): si no, quedaría un
+ * documento vivo que nadie ve. Mejor esfuerzo: si Auco no lo anula, al log.
+ */
+export async function anularDocumentoHuerfano(code: string, contratoId: string): Promise<void> {
+  try {
+    const r = await aucoClient.cancelDocument(code, { message: 'Envío a firma no registrado en Cofianza', email: env.AUCO_SENDER_EMAIL });
+    if (r?.success === false || (r?.errors?.cant ?? 0) > 0) {
+      logger.error({ contratoId, code, respuesta: r }, 'Auco no anuló el documento que no quedó registrado');
+    }
+  } catch (err) {
+    logger.error({ contratoId, code, error: err instanceof Error ? err.message : String(err) }, 'No se pudo anular en Auco el documento que no quedó registrado');
   }
 }
 

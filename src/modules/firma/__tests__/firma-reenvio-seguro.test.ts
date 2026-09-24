@@ -234,3 +234,44 @@ describe('reenviar a firma con el sobre anterior sin firmar', () => {
     expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
   });
 });
+
+describe('si el sobre no queda registrado después de subir el documento (revisión 2, punto 7)', () => {
+  /** Primer envío: sin sobres anteriores. */
+  function prepararPrimerEnvio() {
+    prepararReenvio();
+    queues.set('solicitudes_firma', [{ data: [], error: null }]);
+  }
+
+  it('doble clic contra el índice de un solo sobre activo → anula el documento recién subido y 409', async () => {
+    prepararPrimerEnvio();
+    enqueue('solicitudes_firma', { data: null, error: { code: '23505', message: 'duplicate key' } });
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ statusCode: 409, errorCode: 'FIRMA_YA_EN_CURSO' });
+    expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-NUEVO', expect.objectContaining({ email: 'sender@cofianza.com' }));
+  });
+
+  it('si no se pueden quitar los firmantes anteriores: 500, y el documento y su sobre se deshacen', async () => {
+    prepararPrimerEnvio();
+    enqueue('solicitudes_firma', { data: { id: 's-nuevo' }, error: null });
+    enqueue('contrato_firmantes', { data: null, error: { message: 'timeout' } });
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
+    await expect(crearSolicitudFirmaMultiparte('c1', 'u1')).rejects.toMatchObject({ statusCode: 500 });
+    expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-NUEVO', expect.anything());
+    expect(marcado('cancelado')).toBe(true);
+    expect(de('contrato_firmantes', 'insert')).toEqual([]);
+  });
+
+  it('un firmante: doble clic → anula el documento recién subido y 409', async () => {
+    enqueue('contratos', {
+      data: { id: 'c1', estado: 'pendiente_firma', expediente_id: 'e1', storage_key: 'k.pdf', nombre_archivo: 'c.pdf', destinacion: null, datos_variables: {} },
+      error: null,
+    });
+    enqueue('expedientes', { data: { numero: 'EXP-1', inmuebles: null, solicitantes: null }, error: null });
+    enqueue('solicitudes_firma', { data: [], error: null }, { data: null, error: { code: '23505', message: 'duplicate key' } });
+    vi.mocked(auco.cancelDocument).mockResolvedValue({ success: true });
+    await expect(
+      crearSolicitudFirma({ contrato_id: 'c1', nombre_firmante: 'Juan', email_firmante: 'juan@x.co', telefono_firmante: '3001112233' } as never, 'u1'),
+    ).rejects.toMatchObject({ statusCode: 409, errorCode: 'FIRMA_YA_EN_CURSO' });
+    expect(auco.cancelDocument).toHaveBeenCalledWith('DOC-NUEVO', expect.anything());
+  });
+});
