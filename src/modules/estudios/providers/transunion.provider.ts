@@ -23,6 +23,9 @@ const TIPO_DOCUMENTO_MAP: Record<string, string> = {
   ce: '3',
   ti: '4',
   pasaporte: '5',
+  // ppt/pep (A13): sin codigo documentado por TransUnion (no aparece en la
+  // documentacion del proyecto). No se adivina: solicitar() responde 400
+  // PROVIDER_INVALID_DOCUMENT_TYPE ANTES de llamar al buro (no se factura).
 };
 
 // ── Exclusiones CreditVision (no son errores) ───────────────
@@ -197,6 +200,13 @@ export class TransUnionProvider implements CreditRiskProvider {
     // Mapear tipo documento
     const tipoIdentificacion = TIPO_DOCUMENTO_MAP[input.tipo_documento.toLowerCase()];
     if (!tipoIdentificacion) {
+      const t = input.tipo_documento.toLowerCase();
+      if (t === 'ppt' || t === 'pep') {
+        throw AppError.badRequest(
+          `TransUnion no consulta ${t.toUpperCase()}: relance la evaluacion por DataCredito.`,
+          'PROVIDER_INVALID_DOCUMENT_TYPE',
+        );
+      }
       throw AppError.badRequest(
         `Tipo de documento "${input.tipo_documento}" no soportado por TransUnion. Tipos validos: ${Object.keys(TIPO_DOCUMENTO_MAP).join(', ')}`,
         'PROVIDER_INVALID_DOCUMENT_TYPE',

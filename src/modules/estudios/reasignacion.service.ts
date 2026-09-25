@@ -308,24 +308,32 @@ async function contarEstudiosEnCursoDelInmueble(inmuebleId: string): Promise<num
  * va con el (el dueño del inmueble original pierde el acceso a su contrato y el
  * del destino gana acceso a uno ajeno).
  *
- * Se mira en CUALQUIER estado, no solo en los activos, y por eso no basta con
- * los guards que ya existen: un contrato cancelado antes de firmar libera la
- * reserva (`reservado_por_expediente_id` deja de apuntar aqui) y no cambia el
- * estado del expediente, asi que se colaba entre los dos.
+ * Se mira en cualquier estado (terminado, finalizado, en firma...), MENOS el
+ * cancelado que nunca se firmó: ese borrador no documentó nada y es justo la
+ * salida que el guard de la reserva le indica al gestor ("cancela ese contrato
+ * y luego reasigna"); bloquearlo después era contradecirse. Firmado = tiene
+ * `fecha_firma` (la pone el paso a 'firmado' y el cierre del sobre de Auco);
+ * un V3 firmado y terminado queda 'finalizado', no 'cancelado', y sigue
+ * bloqueando.
  *
  * Fail closed: si la consulta falla no se reasigna. Es una lectura barata y el
  * daño de equivocarse es un contrato hablando de otra propiedad.
  */
+/** Pura: el primer contrato que impide mover el estudio (ver assertExpedienteSinContratos). */
+export function contratoQueBloqueaReasignacion<T extends { estado: string; fecha_firma: string | null }>(
+  contratos: T[],
+): T | null {
+  return contratos.find((c) => !(c.estado === 'cancelado' && !c.fecha_firma)) ?? null;
+}
+
 async function assertExpedienteSinContratos(
   expedienteId: string,
   expedienteNumero: string | null,
 ): Promise<void> {
   const { data, error } = await (supabase
     .from('contratos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado')
-    .eq('expediente_id', expedienteId)
-    .limit(1)
-    .maybeSingle();
+    .select('id, numero, estado, fecha_firma')
+    .eq('expediente_id', expedienteId);
 
   if (error) {
     logger.error(
@@ -340,7 +348,9 @@ async function assertExpedienteSinContratos(
     );
   }
 
-  const contrato = data as { id: string; numero: string | null; estado: string } | null;
+  const contrato = contratoQueBloqueaReasignacion(
+    (data as Array<{ id: string; numero: string | null; estado: string; fecha_firma: string | null }> | null) ?? [],
+  );
   if (contrato) {
     throw new AppError(
       409,

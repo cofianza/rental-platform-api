@@ -525,6 +525,19 @@ export function motivoRevisionIngresoNoInferible(salida: SalidaSombra | null): s
   return 'Revisión manual obligatoria (Política §6/§14, Adenda 2 §3): no se pudo inferir el ingreso de ninguna fuente de esta evaluación.';
 }
 
+/** Politica §4.3: canon/ingreso (sobre el ingreso ajustado) entre 35% y 40% va a revision manual. */
+export const CANON_INGRESO_REVISION_DESDE = 35;
+
+/**
+ * Politica §4.3: la banda >35% y <=40% no rechaza pero tampoco aprueba sola.
+ * Por encima del 40% ya es regla dura (rechazo), asi que aqui no se mira.
+ */
+export function motivoRevisionCanonIngreso(salida: SalidaSombra | null): string | null {
+  const pct = salida?.canon_ingreso_pct ?? null;
+  if (pct === null || pct <= CANON_INGRESO_REVISION_DESDE || pct > V3_CANON_INGRESO_MAXIMO) return null;
+  return `Revisión manual obligatoria (Política §4.3): la relación canon / ingreso es ${pct}% (entre ${CANON_INGRESO_REVISION_DESDE}% y ${V3_CANON_INGRESO_MAXIMO}%, sobre el ingreso ajustado).`;
+}
+
 /** Linea corta para anexar a `observaciones`, que es factual (score, saldos). */
 export function notaObservacionesReglasDuras(
   reglas: readonly ReglaDuraActiva[],
@@ -785,6 +798,8 @@ export async function resolverResultadoEstudio(
         salida.revision_obligatoria,
         // Adenda 2 §3: sin ingreso de ninguna fuente, nada de aprobacion automatica.
         motivoRevisionIngresoNoInferible(salida),
+        // Politica §4.3: canon/ingreso en la banda 35-40% -> revision manual.
+        motivoRevisionCanonIngreso(salida),
       ].filter((m): m is string => !!m);
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
       if (!motivoRevision) return { ...base, veredicto, salida, apisFallidas };

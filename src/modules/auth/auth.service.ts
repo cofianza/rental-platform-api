@@ -6,6 +6,7 @@ import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendPasswordResetEmail } from '@/lib/email';
 import { resolveRolMiembro } from '@/lib/tenantScope';
+import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { invalidateAuthCache, cerrarSesionesDe, primeAuthCache } from '@/middleware/auth';
 import { getPermissionsForRole } from '@/config/permissions';
 import type { UserRole } from '@/types/auth';
@@ -182,6 +183,9 @@ export async function getProfile(userId: string, email: string, rolSesion?: stri
     nombre_completo: `${perfil.nombre} ${perfil.apellido}`.trim(),
     rol: perfil.rol,
     rol_miembro: rolMiembro,
+    // La web esconde lo que solo autoriza la Gerencia General (tarifa negociada,
+    // exceso de cláusulas); el API igual responde 403 SOLO_GERENCIA_GENERAL.
+    es_gerencia_general: esGerenciaGeneral({ rol: perfil.rol, email }),
     perfil_completo: perfilCompleto,
     activo: perfil.estado === 'activo',
     created_at: perfil.created_at,

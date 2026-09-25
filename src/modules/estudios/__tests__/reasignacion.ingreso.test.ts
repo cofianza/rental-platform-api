@@ -16,7 +16,7 @@ vi.mock('@/lib/supabase', () => {
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('../certificado.service', () => ({ generarCertificado: vi.fn() }));
 
-import { leerIngresoInferidoOriginal } from '../reasignacion.service';
+import { leerIngresoInferidoOriginal, contratoQueBloqueaReasignacion } from '../reasignacion.service';
 import { evaluarPortabilidad } from '../portabilidad';
 
 beforeEach(() => {
@@ -43,5 +43,21 @@ describe('ingreso de la corrida original para la reasignacion', () => {
       canonDestino: 1_900_000,
     });
     expect(veredicto).toMatchObject({ portable: true });
+  });
+});
+
+describe('contratos que impiden reasignar (A12)', () => {
+  const c = (estado: string, fecha_firma: string | null = null) => ({ id: estado, estado, fecha_firma });
+
+  it('un contrato cancelado que nunca se firmó no bloquea (es la salida que se le indica al gestor)', () => {
+    expect(contratoQueBloqueaReasignacion([c('cancelado'), c('cancelado')])).toBeNull();
+    expect(contratoQueBloqueaReasignacion([])).toBeNull();
+  });
+
+  it('firmado y luego cancelado, o terminado (finalizado), o en firma: bloquea', () => {
+    expect(contratoQueBloqueaReasignacion([c('cancelado', '2026-09-01T00:00:00Z')])?.estado).toBe('cancelado');
+    expect(contratoQueBloqueaReasignacion([c('cancelado'), c('finalizado', '2026-09-01T00:00:00Z')])?.estado).toBe('finalizado');
+    expect(contratoQueBloqueaReasignacion([c('pendiente_firma')])?.estado).toBe('pendiente_firma');
+    expect(contratoQueBloqueaReasignacion([c('borrador')])?.estado).toBe('borrador');
   });
 });

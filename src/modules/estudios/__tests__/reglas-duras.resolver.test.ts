@@ -35,7 +35,8 @@ vi.mock('@/modules/autorizaciones/biometria', () => ({
   requiereRevisionManualPorBiometria: () => null,
 }));
 
-import { resolverResultadoEstudio, motivoProspectoReglasDuras, REGLAS_DURAS_ACTIVAS } from '../reglas-duras';
+import { resolverResultadoEstudio, motivoProspectoReglasDuras, REGLAS_DURAS_ACTIVAS, motivoRevisionCanonIngreso } from '../reglas-duras';
+import type { SalidaSombra } from '../motor';
 
 const base = { estudioId: 'est-1', expedienteId: 'exp-1', resultadoPropuesto: 'aprobado', antecedentes: null };
 
@@ -104,5 +105,18 @@ describe('motivo para el prospecto (P30)', () => {
     expect(m).toMatch(/en mora/);
     expect(m).toMatch(/ponerte al día en tus obligaciones, reducir tus compromisos financieros actuales, buscar un inmueble de canon menor y volver a solicitarlo/);
     expect(motivoProspectoReglasDuras(['score_menor_450', 'mora_mayor_30d_6m'])).toMatch(/ponerte al día.* y volver a solicitarlo más adelante/);
+  });
+});
+
+describe('Politica §4.3: canon/ingreso entre 35 % y 40 % va a revision manual (A5)', () => {
+  const salida = (pct: number | null) => ({ canon_ingreso_pct: pct }) as unknown as SalidaSombra;
+  it('solo la banda >35 y <=40 da motivo', () => {
+    expect(motivoRevisionCanonIngreso(salida(35))).toBeNull();
+    expect(motivoRevisionCanonIngreso(salida(35.01))).toMatch(/§4\.3/);
+    expect(motivoRevisionCanonIngreso(salida(40))).toMatch(/40%/);
+    // Por encima del 40 % ya es regla dura (rechazo), no revision.
+    expect(motivoRevisionCanonIngreso(salida(40.01))).toBeNull();
+    expect(motivoRevisionCanonIngreso(salida(null))).toBeNull();
+    expect(motivoRevisionCanonIngreso(null)).toBeNull();
   });
 });

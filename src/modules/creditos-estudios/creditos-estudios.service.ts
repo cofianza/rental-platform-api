@@ -722,22 +722,31 @@ export async function liberarEstudioConCredito(
   const enContra = await creditosEnContra(dueno);
   if (enContra > 0 && saldoEfectivo(await saldoVigente(dueno), enContra) < 1) throw errorCreditosEnContra(enContra);
 
-  // 3. Validar que no exista ya un pago de estudio completado
-  const { data: existingPago } = await (supabase
+  // 3. Validar que no exista ya un pago de estudio vivo. 'fallido' tambien
+  //    cuenta: no es terminal (fallido→completado, Mercado Pago deja reintentar
+  //    en el mismo checkout), asi que el prospecto aun podia pagar el enlace
+  //    viejo despues de consumido el credito = cobro doble. Se cierra con la
+  //    misma funcion que usa la pasarela antes de abrir otro cobro.
+  const { data: existingPago, error: existingErr } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado')
+    .select('id, estado, external_id, metodo')
     .eq('expediente_id', expedienteId)
     .eq('concepto', 'estudio')
-    .in('estado', ['completado', 'pendiente', 'procesando'])
-    .order('created_at', { ascending: false })
-    .limit(1);
+    .in('estado', ['completado', 'pendiente', 'procesando', 'fallido'])
+    .order('created_at', { ascending: false });
+  // Fail closed: sin saber si hay un cobro vivo no se consume el credito.
+  if (existingErr) throw fromSupabaseError(existingErr);
 
-  if (existingPago && existingPago.length > 0) {
-    const e = existingPago[0] as { estado: string };
-    if (e.estado === 'completado') {
-      throw AppError.conflict('Ya existe un pago de estudio completado', 'PAGO_ESTUDIO_YA_COMPLETADO');
-    }
+  const vivos = (existingPago as Array<{ id: string; estado: string }> | null) ?? [];
+  if (vivos.some((p) => p.estado === 'completado')) {
+    throw AppError.conflict('Ya existe un pago de estudio completado', 'PAGO_ESTUDIO_YA_COMPLETADO');
+  }
+  if (vivos.some((p) => p.estado !== 'fallido')) {
     throw AppError.conflict('Ya existe un pago de estudio pendiente — cancelelo primero', 'PAGO_ESTUDIO_PENDIENTE');
+  }
+  if (vivos.length > 0) {
+    const { cerrarCobroEstudioFallido } = await import('@/modules/pago-estudio/pago-estudio.service');
+    for (const fallido of vivos) await cerrarCobroEstudioFallido(fallido, userId);
   }
 
   // 4. Obtener monto del estudio

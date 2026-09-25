@@ -47,8 +47,9 @@ asistenteV3Router.post(
   asistenteController.generar,
 );
 
-// POST /clausulas/autorizar-exceso — un administrador autoriza el conjunto exacto
-// de adicionales que supera el máximo (Entrega 4, D6).
+// POST /clausulas/autorizar-exceso — la Gerencia General autoriza el conjunto exacto
+// de adicionales que supera el máximo (Entrega 4, D6; Adenda 1 resp. 14: el 403
+// SOLO_GERENCIA_GENERAL lo da el servicio).
 asistenteV3Router.post(
   '/clausulas/autorizar-exceso',
   roleGuard(['administrador']),
@@ -113,6 +114,14 @@ asistenteV3Router.post(
   authorize('contratos', 'create'),
   validate({ params: expedienteIdParamsSchema }),
   asistenteController.reintentar,
+);
+
+// POST /firma/identidad/reenviar — EN FIRMA con la biometría: enlace nuevo de verificación a quien no ha verificado.
+asistenteV3Router.post(
+  '/firma/identidad/reenviar',
+  authorize('contratos', 'create'),
+  validate({ params: expedienteIdParamsSchema }),
+  asistenteController.reenviarIdentidad,
 );
 
 // POST /firma/actualizar — pregunta a Auco el estado ya (sin esperar el webhook).

@@ -44,16 +44,23 @@ import type {
 // codigo 05/09 ("documento errado" / "no existe"). El reporte devuelve el
 // mismo personIdType que se envio, asi que este mapa tiene que ir en linea con
 // TIPOS_DOCUMENTO de rental-platform-web/components/estudios/DataCreditoReportDetail.tsx.
-// Solo los cinco tipos que acepta estudios.schema.ts; el resto de la Tabla 1
-// (6 PPT/CD, 8 DNI, 9 PEP) se agrega aqui cuando el schema los admita, para
-// que el mensaje de "tipos validos" no prometa lo que la API rechaza antes.
+// Solo los tipos que acepta estudios.schema.ts; el resto de la Tabla 1
+// (3 PJE, 8 DNI, CD dentro del 6) se agrega aqui cuando el schema los admita,
+// para que el mensaje de "tipos validos" no prometa lo que la API rechaza antes.
+// ppt/pep (A13, poblacion migrante): Tabla 1 del manual implementacion_HDC+PN_Rest.pdf.
 const TIPO_DOCUMENTO_MAP: Record<string, number> = {
   cc: 1,
   nit: 2,
   ce: 4,
   pasaporte: 5,
+  ppt: 6,
   ti: 7,
+  pep: 9,
 };
+
+// Manual HDC+PN §3: "Para el tipo de documento 6 PPT/CD ... longitudes de 7 o
+// inferior para PPT y de 10 para CD". Un PPT mas largo vuelve 05 (facturado).
+const PPT_MAX_LEN = 7;
 
 // ── Catalogo de responseCode (Tabla 13, pags. 28-29) ────────
 // `exito`      → la consulta se resolvio (con o sin datos).
@@ -392,6 +399,12 @@ export class DatacreditoProvider implements CreditRiskProvider {
     if (!/^\d{1,11}$/.test(numeroDocumento)) {
       throw AppError.badRequest(
         'El numero de documento debe ser numerico y de maximo 11 digitos para consultar DataCredito.',
+        'PROVIDER_INVALID_INPUT',
+      );
+    }
+    if (personIdType === 6 && numeroDocumento.length > PPT_MAX_LEN) {
+      throw AppError.badRequest(
+        `El numero de PPT debe tener maximo ${PPT_MAX_LEN} digitos para consultar DataCredito.`,
         'PROVIDER_INVALID_INPUT',
       );
     }

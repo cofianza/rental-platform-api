@@ -44,6 +44,8 @@ vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_E
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: vi.fn() }));
 vi.mock('@/modules/pagos/pago-state-machine', () => ({ transitionPagoStateChecked: mockTransition }));
+const { mockCerrarFallido } = vi.hoisted(() => ({ mockCerrarFallido: vi.fn(async () => undefined) }));
+vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ cerrarCobroEstudioFallido: mockCerrarFallido }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioPagado: vi.fn(async () => undefined) }));
 vi.mock('@/modules/facturacion/facturacion.service', () => ({ crearFacturaDesdeCompraCreditos: vi.fn(async () => ({})) }));
@@ -234,6 +236,33 @@ describe('P22: contracargo de una compra de créditos', () => {
 
     expect(await liberarEstudioConCredito('exp-1', 'owner-1', 'owner-1')).toMatchObject({ pago_id: 'pago-1' });
     expect(mockRpc).toHaveBeenCalledOnce();
+  });
+
+  it('A16: un cobro de pasarela fallido (aún pagable) se cierra antes de consumir el crédito', async () => {
+    enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado: 'en_revision', inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
+    enqueue('inmuebles', { data: { propietario_id: 'owner-1', inmobiliaria_id: 'org-1', direccion: 'Calle 1', ciudad: 'Bogotá' }, error: null });
+    enqueue('compras_creditos_estudios', { data: [], error: null });
+    const fallido = { id: 'pago-viejo', estado: 'fallido', external_id: 'pref-1', metodo: 'mercadopago' };
+    enqueue('pagos', { data: [fallido], error: null }, { data: { id: 'pago-1' }, error: null });
+    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
+    mockRpc.mockResolvedValueOnce({ data: [{ lote_id: 'lote-1', saldo_restante: 4 }], error: null });
+
+    expect(await liberarEstudioConCredito('exp-1', 'owner-1', 'gestor-1')).toMatchObject({ pago_id: 'pago-1' });
+    expect(mockCerrarFallido).toHaveBeenCalledWith(fallido, 'gestor-1');
+    const busqueda = ops.find((o) => o.table === 'pagos' && o.method === 'in');
+    expect(busqueda?.args[1]).toContain('fallido');
+  });
+
+  it('A16: con un cobro pendiente no se cierra nada y no se consume el crédito', async () => {
+    enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', estado: 'en_revision', inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
+    enqueue('inmuebles', { data: { propietario_id: 'owner-1', inmobiliaria_id: 'org-1', direccion: 'Calle 1', ciudad: 'Bogotá' }, error: null });
+    enqueue('compras_creditos_estudios', { data: [], error: null });
+    enqueue('pagos', { data: [{ id: 'p-2', estado: 'pendiente' }, { id: 'p-1', estado: 'fallido' }], error: null });
+
+    await expect(liberarEstudioConCredito('exp-1', 'owner-1', 'owner-1')).rejects.toMatchObject({ errorCode: 'PAGO_ESTUDIO_PENDIENTE' });
+    expect(mockCerrarFallido).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(inserts('pagos')).toEqual([]);
   });
 
   it('la próxima compra descuenta el saldo en contra: el lote nace descontado y la deuda queda en 0', async () => {

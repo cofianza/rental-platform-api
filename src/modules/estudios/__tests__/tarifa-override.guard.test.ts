@@ -40,6 +40,10 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: vi.fn(async () => undefined) }));
 vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => ({ TARIFA_IVA: 19 })) }));
+// Adenda 1 §5: solo la Gerencia General (GERENCIA_GENERAL_EMAILS).
+vi.mock('@/lib/gerenciaGeneral', () => ({
+  esGerenciaGeneral: (u: { rol: string; email: string }) => u.rol === 'administrador' && u.email === 'gg@cofianza.co',
+}));
 vi.mock('../certificado.service', () => ({
   generarCertificado: vi.fn(),
   viaDelEstudio: vi.fn(async () => 'automatica'),
@@ -75,7 +79,7 @@ describe('tarifa especial (P35)', () => {
   it('en el estudio del co-arrendatario: 409 TARIFA_SOLO_TITULAR', async () => {
     enqueue('estudios', fila('con_coarrendatario'));
 
-    await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador')).rejects.toMatchObject({
+    await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador', 'gg@cofianza.co')).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'TARIFA_SOLO_TITULAR',
     });
@@ -86,7 +90,7 @@ describe('tarifa especial (P35)', () => {
     enqueue('estudios', fila());
     contratos(estado);
 
-    await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador')).rejects.toMatchObject({
+    await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador', 'gg@cofianza.co')).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'TARIFA_CONTRATO_FIRMADO',
       message: expect.stringContaining('otrosí firmado por las partes'),
@@ -98,7 +102,7 @@ describe('tarifa especial (P35)', () => {
     enqueue('estudios', fila());
     contratos('pendiente_firma');
 
-    await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador')).rejects.toMatchObject({
+    await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador', 'gg@cofianza.co')).rejects.toMatchObject({
       errorCode: 'TARIFA_CONTRATO_EN_FIRMA',
       message: expect.stringContaining('cancela el envío a firma'),
     });
@@ -108,7 +112,7 @@ describe('tarifa especial (P35)', () => {
     enqueue('estudios', fila('individual', override));
     contratos('vigente');
 
-    await expect(quitarTarifaOverride('est-1', 'admin-1', 'administrador')).rejects.toMatchObject({
+    await expect(quitarTarifaOverride('est-1', 'admin-1', 'administrador', 'gg@cofianza.co')).rejects.toMatchObject({
       errorCode: 'TARIFA_CONTRATO_FIRMADO',
     });
     expect(guardoEnEstudio()).toBe(false);
@@ -118,12 +122,24 @@ describe('tarifa especial (P35)', () => {
     enqueue('estudios', fila(), { data: null, error: null }, fila('individual', override));
     contratos();
 
-    const r = await setTarifaOverride('est-1', input, 'admin-1', 'administrador');
+    const r = await setTarifaOverride('est-1', input, 'admin-1', 'administrador', 'gg@cofianza.co');
 
     expect(guardoEnEstudio()).toBe(true);
     expect(r.tarifas.tarifa_mensual_pct).toBe(1.5);
     expect(ops.find((o) => o.table === 'contratos' && o.method === 'in')?.args[1]).toEqual(
       expect.arrayContaining(['pendiente_firma', 'firmado', 'vigente']),
     );
+  });
+
+  it('otro administrador (no Gerencia General): 403 SOLO_GERENCIA_GENERAL al poner y al quitar', async () => {
+    await expect(setTarifaOverride('est-1', input, 'admin-2', 'administrador', 'otro@cofianza.co')).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'SOLO_GERENCIA_GENERAL',
+    });
+    await expect(quitarTarifaOverride('est-1', 'admin-2', 'administrador', 'otro@cofianza.co')).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'SOLO_GERENCIA_GENERAL',
+    });
+    expect(ops.length).toBe(0);
   });
 });

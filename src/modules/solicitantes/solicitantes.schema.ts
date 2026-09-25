@@ -4,7 +4,8 @@ import { z } from 'zod';
 // Constantes de enums
 // ============================================================
 
-export const TIPOS_DOCUMENTO = ['cc', 'ce', 'pasaporte', 'nit'] as const;
+// ppt/pep (A13, Flujo estudios §5.1): poblacion migrante. Migracion 20261001000009.
+export const TIPOS_DOCUMENTO = ['cc', 'ce', 'ppt', 'pep', 'pasaporte', 'nit'] as const;
 
 export const TIPOS_PERSONA = ['natural', 'juridica'] as const;
 

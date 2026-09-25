@@ -127,6 +127,8 @@ const DOC: Record<string, [corto: string, largo: string]> = {
   cc: ['C.C.', 'cédula de ciudadanía'],
   ce: ['C.E.', 'cédula de extranjería'],
   pasaporte: ['Pasaporte', 'pasaporte'],
+  ppt: ['P.P.T.', 'permiso por protección temporal'],
+  pep: ['P.E.P.', 'permiso especial de permanencia'],
   ti: ['T.I.', 'tarjeta de identidad'],
   nit: ['NIT', 'NIT'],
 };

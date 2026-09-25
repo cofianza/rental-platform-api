@@ -3,7 +3,8 @@ import { esNombrePersona } from '@/lib/textoSinEnlaces';
 
 // Tipos de documento aceptados — alineado con tipo_documento_id del DB.
 // Incluye 'ti': el form web la ofrece y TransUnion la soporta (map tipo '4').
-const TIPO_DOCUMENTO = ['cc', 'ce', 'ti', 'pasaporte', 'nit'] as const;
+// ppt/pep (A13): poblacion migrante; DataCredito los consulta (6/9), TransUnion no.
+const TIPO_DOCUMENTO = ['cc', 'ce', 'ppt', 'pep', 'ti', 'pasaporte', 'nit'] as const;
 
 // El nombre va en el correo y en el WhatsApp que Cofianza le manda a un tercero:
 // solo letras y sin dominios (esNombrePersona), o sería phishing con su marca.
@@ -27,10 +28,10 @@ export const invitarCoarrendatarioSchema = z.object({
 // opcional: sin body = reenviar a la misma persona.
 export const reenviarCoarrendatarioSchema = invitarCoarrendatarioSchema.partial();
 
-// P18: desde el enlace del prospecto, solo cédula de ciudadanía o de extranjería
-// (el co-arrendatario es una persona natural mayor de edad).
+// P18: desde el enlace del prospecto, solo documentos de persona natural mayor
+// de edad: cédula de ciudadanía o de extranjería, y PPT/PEP (A13, migrantes).
 export const invitarCoarrendatarioPublicoSchema = invitarCoarrendatarioSchema.extend({
-  tipo_documento: z.enum(['cc', 'ce']),
+  tipo_documento: z.enum(['cc', 'ce', 'ppt', 'pep']),
 });
 
 export const tokenParamSchema = z.object({

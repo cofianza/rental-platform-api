@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // crediticia del titular fue rechazada…») y al prospecto le llega el texto
 // neutro, no el de «mejora tu perfil crediticio». Colas de Supabase por tabla.
 
-const { ops, queues, enqueue, mockRechazado, mockNotificar } = vi.hoisted(() => {
+const { ops, queues, enqueue, mockRechazado, mockNotificar, mockEmitirCrc } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -15,6 +15,7 @@ const { ops, queues, enqueue, mockRechazado, mockNotificar } = vi.hoisted(() => 
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockRechazado: vi.fn(async (..._a: unknown[]) => undefined),
     mockNotificar: vi.fn(async (..._a: unknown[]) => undefined),
+    mockEmitirCrc: vi.fn(async (..._a: unknown[]) => true),
   };
 });
 
@@ -38,7 +39,11 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/config/env', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
-vi.mock('../orchestrator.emails', () => ({ sendEstudioRechazadoEmail: mockRechazado }));
+vi.mock('../orchestrator.emails', () => ({
+  sendEstudioRechazadoEmail: mockRechazado,
+  sendEstudioAprobadoEmail: vi.fn(async () => undefined),
+}));
+vi.mock('@/modules/estudios/certificado.service', () => ({ emitirCertificadoAutomatico: mockEmitirCrc }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarUsuario: mockNotificar,
   notificarResponsableExpediente: vi.fn(async () => undefined),
@@ -103,5 +108,31 @@ describe('rechazo registrado por un analista', () => {
     expect(motivoDelBanner()).toMatch(/evaluación crediticia del titular/);
     expect(mockRechazado).toHaveBeenCalledWith(expect.objectContaining({ motivoGeneral: null, decisionDeCofianza: false }));
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ mensaje: expect.stringMatching(/^La evaluación crediticia de Ana Pérez/) }));
+  });
+});
+
+// A1: aprobar un caso que venía de revisión manual reemite el CRC (decía CONDICIONADO).
+describe('aprobado', () => {
+  function encolarAprobado(estadoPrevio: string) {
+    enqueue(
+      'expedientes',
+      { data: { id: 'exp-1', numero: 'EXP-1', estado: estadoPrevio, inmueble_id: 'inm-1', solicitante_id: 'sol-1', creado_por: 'gestor-1' }, error: null },
+      { data: { estado: estadoPrevio }, error: null }, // → en_revision
+      { data: { estado: estadoPrevio }, error: null }, // → aprobado
+    );
+    enqueue('solicitantes', { data: { nombre: 'Ana', apellido: 'Pérez', email: null, telefono: null }, error: null });
+    enqueue('inmuebles', { data: { id: 'inm-1', direccion: 'Calle 1', ciudad: 'Cali', valor_arriendo: 1, propietario_id: null }, error: null });
+  }
+
+  it('desde condicionado, el CRC se regenera', async () => {
+    encolarAprobado('condicionado');
+    await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'aprobado', score: 700, solicitanteId: '' });
+    await vi.waitFor(() => expect(mockEmitirCrc).toHaveBeenCalledWith('est-1', 'gestor-1', { regenerar: true }));
+  });
+
+  it('desde en_revision, se emite sin regenerar', async () => {
+    encolarAprobado('en_revision');
+    await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'aprobado', score: 700, solicitanteId: '' });
+    await vi.waitFor(() => expect(mockEmitirCrc).toHaveBeenCalledWith('est-1', 'gestor-1', { regenerar: false }));
   });
 });

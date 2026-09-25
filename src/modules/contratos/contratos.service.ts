@@ -14,7 +14,7 @@ import { checkPerfilCompletitud, usuarioPuedeEditarDatosContrato } from '../perf
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
 import { coarrendatarioVinculadoVerificado } from '../estudios/coarrendatario-vinculado';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
-import { canonMaximoTolerado } from '../estudios/portabilidad';
+import { canonMaximoTolerado, evaluarPortabilidad } from '../estudios/portabilidad';
 import { escalarTopeCanon } from './tope-coafianzamiento';
 import { diasCalendario } from './v3/asistente.reglas';
 import { fechaBogota } from './v3/formato';
@@ -1982,7 +1982,7 @@ export async function tarifasParaContrato(expedienteId: string): Promise<Tarifas
 export async function assertCanonContratable(expedienteId: string, canonCop: number, uso: string | null | undefined): Promise<void> {
   const [{ data }, cal] = await Promise.all([
     (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .select('canon_evaluado')
+      .select('id, canon_evaluado')
       .eq('expediente_id', expedienteId)
       .eq('tipo', 'individual')
       .eq('estado', 'completado')
@@ -1991,6 +1991,7 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
       .maybeSingle(),
     getCalibracion(),
   ]);
+  const estudioId = (data as { id?: string } | null)?.id ?? null;
   const evaluado = Number((data as { canon_evaluado?: unknown } | null)?.canon_evaluado) || 0;
   if (evaluado <= 0) return;
   const tolerado = canonMaximoTolerado(evaluado, cal.TOLERANCIA_CANON);
@@ -2015,6 +2016,37 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
       `El canon del contrato (${cop(canonCop)}) supera lo evaluado (${cop(evaluado)}); el máximo sin una nueva evaluación es ${cop(maximo)}. ` +
         'Ajusta el canon del inmueble o habilita una nueva evaluación desde el estudio.',
       'CANON_REQUIERE_NUEVA_EVALUACION',
+    );
+  }
+
+  // Mismo recálculo del V3 (evaluarCanon): dentro de la tolerancia, un canon
+  // mayor al evaluado vuelve a medirse contra el ingreso AJUSTADO de la corrida
+  // (canon/ingreso ≤ TOPE_CANON_INGRESO_RECALCULO). Sin ingreso no se bloquea.
+  if (canonCop <= evaluado || !estudioId) return;
+  const { data: sombra, error: sombraError } = await (supabase
+    .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+    .select('ingreso_inferido_ajustado_cop')
+    .eq('estudio_id', estudioId)
+    .order('fecha_calculo', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (sombraError) {
+    logger.warn({ expedienteId, estudioId, error: sombraError.message }, 'assertCanonContratable: sin ingreso ajustado — no se recalcula canon/ingreso');
+    return;
+  }
+  const v = evaluarPortabilidad({
+    canonOriginal: evaluado,
+    ingresoOriginal: Number((sombra as { ingreso_inferido_ajustado_cop?: unknown } | null)?.ingreso_inferido_ajustado_cop) || null,
+    canonDestino: canonCop,
+    topeCop: topeValido ? tope : undefined,
+    toleranciaPct: cal.TOLERANCIA_CANON,
+    canonIngresoMaxPct: cal.TOPE_CANON_INGRESO_RECALCULO,
+  });
+  if (v.veredictoCanonIngreso === 'no_cumple') {
+    throw AppError.conflict(
+      `Con el canon del contrato, la relación canon/ingreso quedaría por encima del ${cal.TOPE_CANON_INGRESO_RECALCULO} %. ` +
+        'Ajusta el canon del inmueble o habilita una nueva evaluación desde el estudio.',
+      'CANON_INGRESO_EXCEDE',
     );
   }
 }

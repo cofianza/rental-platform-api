@@ -32,7 +32,7 @@ export async function generar(req: Request, res: Response) {
 
 export async function autorizarExceso(req: Request, res: Response) {
   const { huella } = req.body as { huella: string };
-  sendSuccess(res, await asistente.autorizarExceso(expedienteId(req), huella, req.user!.id, req.user!.rol, req.ip));
+  sendSuccess(res, await asistente.autorizarExceso(expedienteId(req), huella, req.user!.id, req.user!.rol, req.user!.email, req.ip));
 }
 
 // ── Entrega 5 ──
@@ -65,6 +65,10 @@ export async function reenviar(req: Request, res: Response) {
 
 export async function reintentar(req: Request, res: Response) {
   sendSuccess(res, await asistente.reintentarFirma(expedienteId(req), req.user!.id, req.user!.rol));
+}
+
+export async function reenviarIdentidad(req: Request, res: Response) {
+  sendSuccess(res, await asistente.reenviarIdentidadFirma(expedienteId(req), req.user!.id, req.user!.rol));
 }
 
 export async function actualizarFirma(req: Request, res: Response) {

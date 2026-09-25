@@ -103,18 +103,22 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: efectos.listOperators }));
 vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: efectos.cancelarPagos }));
+const { mockIniciarVerificacion } = vi.hoisted(() => ({ mockIniciarVerificacion: vi.fn(async () => ({ pendiente: true, message: '' })) }));
+vi.mock('@/modules/firma/verificacion-identidad.service', () => ({ iniciarVerificacionIdentidad: mockIniciarVerificacion }));
 
 import {
   aceptarAviso,
   cancelarFirmaV3,
+  continuarTrasIdentidad,
   crearSobre,
   estadoEnviado,
   exigirAcuseDelEstudio,
   prorrogarPlazo,
   reenviar,
+  reenviarIdentidad,
   reintentar,
 } from '../firma.service';
-import { reconciliarSobre, webhookAucoV3 } from '../reconciliar';
+import { cerrarSinProceso, reconciliarSobre, webhookAucoV3 } from '../reconciliar';
 import { AVISO_FIRMA_INCOMPLETA_VERSION, finDelDia } from '../reglas';
 import { fechaBogota } from '../../formato';
 
@@ -174,6 +178,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockEnv.AUCO_WEBHOOK_SECRET = undefined;
   mockEnv.RUTA_B_FIRMA_ENABLED = true;
+  mockEnv.FIRMA_BIOMETRIA_ENABLED = false;
 });
 
 // ── Activación ──
@@ -1324,5 +1329,141 @@ describe('Ruta B con firmas (Adenda 1, respuesta 6): label + position con las ma
     enqueue('contrato_v3_sobres', ok(sobre({ estado: 'fallido', auco_code: null })));
     enqueue('contrato_partes', ok(PARTES));
     expect((await estadoEnviado('c1'))!.reintento).toBe(true);
+  });
+});
+
+// ── Biometría de firma: EN FIRMA sin proceso en Auco (revisión 2026-09-25, A8) ──
+
+describe('cerrarSinProceso (barrido)', () => {
+  const haceDias = (n: number) => new Date(Date.now() - n * DIA).toISOString();
+  const VERIF = [
+    { nombre: 'Ana', estado: 'pendiente', enviado_por: 'u1' },
+    { nombre: 'Beto', estado: 'verificada', enviado_por: 'u1' },
+  ];
+  const cierre = (x: Record<string, unknown> = {}) =>
+    ok(sobre({ id: 's9', estado: 'incompleto', auco_code: null, firmantes: [], motivo: 'IDENTIDAD', motivo_detalle: 'Ana', ...x }));
+  /** El camino completo hasta el aviso: el sobre de cierre, el contrato y la inmobiliaria. */
+  const vencido = (c = contrato(), enviado = haceDias(20), verif = VERIF, previo: unknown = null) => {
+    enqueue('contrato_v3_sobres', ok(previo), ok({ id: 's9' }), cierre(), cierre());
+    enqueue('firma_verificacion_identidad', ok(verif));
+    enqueue('contratos', ok(c), ok(c), ok({ estado: 'firma_incompleta' }));
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
+    enqueue('contrato_historial_estados', ok({ created_at: enviado }));
+    org(true);
+  };
+
+  it('verificación sin terminar y plazo de firma vencido: FIRMA INCOMPLETA con el aviso de siempre, sin tocar Auco', async () => {
+    vencido();
+    await cerrarSinProceso('c1');
+
+    expect(tabla('contrato_v3_sobres', 'insert')[0].args[0]).toMatchObject({
+      contrato_id: 'c1', intento: 1, estado: 'incompleto', motivo: 'IDENTIDAD', motivo_detalle: 'Ana', enviado_por: 'u1',
+    });
+    expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
+    const aviso = (tabla('notificaciones', 'insert')[0].args[0] as Array<{ tipo: string; mensaje: string }>)[0];
+    expect(aviso.tipo).toBe('contrato.firma_incompleta');
+    expect(aviso.mensaje).toContain('sin que se completara la verificación de identidad previa (Ana)');
+    expect(aviso.mensaje).toContain('NO está operando');
+    expect(tabla('efecto', 'correo').length).toBeGreaterThan(0);
+    expect(tabla('contrato_v3_sobres', 'update').at(-1)!.args[0]).toMatchObject({ aviso_detalle: { texto_version: AVISO_FIRMA_INCOMPLETA_VERSION } });
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+    expect(tabla('auco', 'cancel')).toHaveLength(0);
+  });
+
+  it('dentro del plazo no escribe nada', async () => {
+    enqueue('contrato_v3_sobres', ok(null));
+    enqueue('firma_verificacion_identidad', ok(VERIF));
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_historial_estados', ok({ created_at: haceDias(2) }));
+    await cerrarSinProceso('c1');
+    expect(escrituras()).toEqual([]);
+  });
+
+  it('con el CRC vencido cierra aunque el plazo de firma no haya pasado; el límite es el fin del CRC', async () => {
+    const vence = haceDias(0.5);
+    vencido(
+      contrato({ datos_variables: { documento: { entrada: { inmueble: { direccion: 'Calle 1' } }, snapshot: { estudio: { fechaCompletado: HOY }, crc: { fechaVencimiento: vence } }, final: { ruta: 'A' } } } }),
+      haceDias(1),
+    );
+    await cerrarSinProceso('c1');
+    expect(tabla('contrato_v3_sobres', 'insert')[0].args[0]).toMatchObject({ estado: 'incompleto', expira_en: new Date(Date.parse(vence)).toISOString() });
+    expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
+  });
+
+  it('verificaron todos pero el proceso nunca salió (fallido): vence como plazo vencido, en el intento siguiente', async () => {
+    vencido(contrato(), haceDias(20), [{ nombre: 'Ana', estado: 'verificada', enviado_por: 'u1' }], sobre({ estado: 'fallido', auco_code: null }));
+    await cerrarSinProceso('c1');
+    expect(tabla('contrato_v3_sobres', 'insert')[0].args[0]).toMatchObject({ intento: 2, motivo: 'EXPIRED', motivo_detalle: null });
+  });
+
+  it('con un proceso vivo en Auco, o sin verificación de identidad, no hace nada', async () => {
+    enqueue('contrato_v3_sobres', ok(sobre()));
+    await cerrarSinProceso('c1');
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'fallido', auco_code: null })));
+    enqueue('firma_verificacion_identidad', ok([]));
+    await cerrarSinProceso('c1');
+    expect(escrituras()).toEqual([]);
+    expect(tabla('firma_verificacion_identidad', 'select')).toHaveLength(1);
+  });
+
+  it('si otro proceso ya registró el sobre (23505), no transiciona ni avisa', async () => {
+    enqueue('contrato_v3_sobres', ok(null), { data: null, error: { code: '23505', message: 'dup' } });
+    enqueue('firma_verificacion_identidad', ok(VERIF));
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_historial_estados', ok({ created_at: haceDias(20) }));
+    await cerrarSinProceso('c1');
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(tabla('notificaciones', 'insert')).toHaveLength(0);
+  });
+});
+
+describe('reenvío con la biometría de firma', () => {
+  it('reenviar desde FIRMA INCOMPLETA escribe a quien no verificó en vez de crear el sobre', async () => {
+    mockEnv.FIRMA_BIOMETRIA_ENABLED = true;
+    enqueue('contratos', ok(contrato({ estado: 'firma_incompleta' })));
+    enqueue('expedientes', EXPEDIENTE);
+    await reenviar('c1', 'u1');
+    expect(tabla('rpc:transicionar_contrato', 'pendiente_firma')).toHaveLength(1);
+    expect(mockIniciarVerificacion).toHaveBeenCalledWith('c1', 'u1');
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+  });
+
+  it('reenviarIdentidad: enlace nuevo a quien falta, sin tocar Auco ni el contrato', async () => {
+    mockEnv.FIRMA_BIOMETRIA_ENABLED = true;
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('firma_verificacion_identidad', { data: null, error: null, count: 1 });
+    await reenviarIdentidad('c1', 'u1');
+    expect(mockIniciarVerificacion).toHaveBeenCalledWith('c1', 'u1');
+    expect(escrituras()).toEqual([]);
+  });
+
+  it('reenviarIdentidad: sin nadie pendiente, 409; con el CRC vencido, 409 CRC_VENCIDO', async () => {
+    mockEnv.FIRMA_BIOMETRIA_ENABLED = true;
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('firma_verificacion_identidad', { data: null, error: null, count: 0 });
+    await expect(reenviarIdentidad('c1', 'u1')).rejects.toMatchObject({ errorCode: 'SIN_IDENTIDAD_PENDIENTE' });
+    enqueue('contratos', ok(contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: '2020-01-01' } } } } })));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('firma_verificacion_identidad', { data: null, error: null, count: 1 });
+    await expect(reenviarIdentidad('c1', 'u1')).rejects.toMatchObject({ errorCode: 'CRC_VENCIDO' });
+    expect(mockIniciarVerificacion).not.toHaveBeenCalled();
+  });
+
+  it('continuarTrasIdentidad con el CRC vencido avisa que hay que renovar la evaluación o cancelar, no "reintentar"', async () => {
+    mockEnv.FIRMA_BIOMETRIA_ENABLED = true;
+    const viejo = contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: '2020-01-01' } }, final: { ruta: 'A' } } } });
+    enqueue('contratos', ok(viejo), ok(viejo), ok({ destinacion: 'vivienda', storage_key: 'final.pdf' }));
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
+    enqueue('firma_verificacion_identidad', { data: null, error: null, count: 0 }, { data: null, error: null, count: 0 });
+    enqueue('contrato_partes', ok(PARTES));
+    await continuarTrasIdentidad('c1', 'u1');
+    const aviso = efectos.notificarUsuario.mock.calls[0][0] as unknown as { mensaje: string };
+    expect(aviso.mensaje).toContain('certificado de riesgo ya no está vigente');
+    expect(aviso.mensaje).toContain('cancela el contrato');
+    expect(aviso.mensaje).not.toContain('reintenta');
   });
 });

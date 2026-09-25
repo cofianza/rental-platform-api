@@ -336,7 +336,14 @@ export async function reenviar(contratoId: string, userId: string, rol?: string)
   });
   if (error) throw AppError.conflict('El contrato cambió; recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
   try {
-    await crearSobre(contratoId, userId);
+    // Con la biometría de firma, quien no verificó su identidad recibe un enlace nuevo
+    // (el sobre sale al terminar); si ya verificaron todos, sale el sobre aquí mismo.
+    if (env.FIRMA_BIOMETRIA_ENABLED) {
+      const { iniciarVerificacionIdentidad } = await import('@/modules/firma/verificacion-identidad.service');
+      await iniciarVerificacionIdentidad(contratoId, userId);
+    } else {
+      await crearSobre(contratoId, userId);
+    }
   } catch (e) {
     if (e instanceof AppError && e.errorCode === 'FIRMA_ENVIADA_SIN_REGISTRO') throw e;
     await transicionar(contratoId, 'firma_incompleta', `Reenvío fallido: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500), userId).catch(
@@ -358,6 +365,25 @@ export async function reintentar(contratoId: string, userId: string): Promise<vo
 }
 
 /**
+ * EN FIRMA esperando la verificación de identidad: le vuelve a escribir a quien
+ * no ha verificado, con un enlace nuevo (el anterior vence a las 72 h). No toca
+ * Auco ni mueve el plazo: si vence, el barrido deja el contrato en FIRMA
+ * INCOMPLETA (cerrarSinProceso).
+ */
+export async function reenviarIdentidad(contratoId: string, userId: string): Promise<void> {
+  const c = await leerContrato(contratoId);
+  if (!c) throw AppError.notFound('Contrato no encontrado.');
+  if (c.estado !== 'pendiente_firma') throw AppError.conflict('El contrato no está en firma.', 'CONTRATO_ESTADO_CAMBIADO');
+  if ((await identidadPendientes(contratoId)) === 0)
+    throw AppError.conflict('Nadie tiene pendiente la verificación de identidad.', 'SIN_IDENTIDAD_PENDIENTE');
+  // Sin CRC para un proceso nuevo, verificar no serviría: el sobre no podría salir.
+  const [vig, cal] = await Promise.all([vigenciaEstudio(c), getCalibracion()]);
+  exigirPlazoDeFirma(vig?.fin ?? null, cal.DIAS_EXPIRACION_FIRMA);
+  const { iniciarVerificacionIdentidad } = await import('@/modules/firma/verificacion-identidad.service');
+  await iniciarVerificacionIdentidad(contratoId, userId);
+}
+
+/**
  * La verificación de identidad de una persona se cerró (verificacion-identidad
  * .finalizar): si ya no queda ninguna pendiente, sale el sobre. Si Auco falla,
  * avisa a quien envió; el contrato queda EN FIRMA con "Reintentar".
@@ -372,12 +398,16 @@ export async function continuarTrasIdentidad(contratoId: string, userId: string 
   } catch (e) {
     if (e instanceof AppError && e.errorCode === 'FIRMA_YA_EN_CURSO') return;
     logger.error({ contratoId, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: no salió el sobre tras la verificación');
+    // Sin CRC para el proceso, reintentar no sirve: se renueva la evaluación o se cancela.
+    const sinCrc = e instanceof AppError && (e.errorCode === 'CRC_VENCIDO' || e.errorCode === 'CRC_SIN_MARGEN');
     if (userId)
       await notificarUsuario({
         userId,
         tipo: 'firma.envio_fallido',
         titulo: 'No se pudo enviar el contrato a firma',
-        mensaje: 'La verificación de identidad terminó, pero Auco no aceptó el envío. Revísalo y reintenta desde el contrato.',
+        mensaje: sinCrc
+          ? `La verificación de identidad terminó, pero el contrato no puede salir a firma: ${e.message} Si no la vas a renovar, cancela el contrato para liberar el inmueble.`
+          : 'La verificación de identidad terminó, pero Auco no aceptó el envío. Revísalo y reintenta desde el contrato.',
         link: `/expedientes/${c.expediente_id}/contrato`,
         payload: { contrato_id: contratoId },
       });

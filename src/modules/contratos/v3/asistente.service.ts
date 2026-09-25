@@ -18,6 +18,7 @@ import { env } from '@/config';
 import { mergePdfs, PdfInvalidoError, validarPdfPropio, type MotivoPdfInvalido } from '@/lib/pdfMerger';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
+import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { assertExpedienteAccess, resolveMembershipInmobiliariaIds, resolveRolMiembro } from '@/lib/tenantScope';
@@ -111,6 +112,7 @@ import {
   estadoEnviado,
   prorrogarPlazo,
   reenviar,
+  reenviarIdentidad,
   reintentar,
 } from './firma/firma.service';
 import { ultimoSobre } from './firma/reconciliar';
@@ -472,6 +474,7 @@ function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsisten
         : null,
       propio: propioVisible(f.v3.datos_variables?.propio, f),
       rutaBFirmaHabilitada: env.RUTA_B_FIRMA_ENABLED,
+      biometriaFirma: env.FIRMA_BIOMETRIA_ENABLED,
       adicionales: {
         maximo: cal.MAX_CLAUSULAS_ADICIONALES,
         // primera ≤ 34 y 34 + 24 = 58: dentro de lo que ordinal() sabe escribir.
@@ -1267,7 +1270,8 @@ export async function generarVistaPrevia(
 // ── Entrega 4: autorizar más adicionales que el máximo (D6) ──
 
 /**
- * Un administrador autoriza el conjunto EXACTO (huella) que la inmobiliaria
+ * La Gerencia General (Adenda 1 de contratos, resp. 14; no cualquier
+ * administrador) autoriza el conjunto EXACTO (huella) que la inmobiliaria
  * pidió revisar por Soporte. Cualquier cambio de la lista cambia la huella y
  * el bloqueo vuelve. No toca actualizadoEn: la vista previa no queda desactualizada.
  */
@@ -1276,9 +1280,15 @@ export async function autorizarExceso(
   huellaPedida: string,
   userId: string,
   userRol: string,
+  userEmail: string,
   ip?: string,
 ): Promise<EstadoAsistente> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
+  if (!esGerenciaGeneral({ rol: userRol, email: userEmail }))
+    throw AppError.forbidden(
+      'Autorizar más cláusulas adicionales que el máximo es decisión de la Gerencia General.',
+      'SOLO_GERENCIA_GENERAL',
+    );
   await assertExpedienteAccess(expedienteId, userId, userRol);
   const c = await cargar(expedienteId);
   const v3 = borradorEditable(c.f);
@@ -1888,6 +1898,13 @@ export async function reintentarFirma(expedienteId: string, userId: string, user
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   const id = await enviadoOError(expedienteId, userId, userRol);
   await reintentar(id, userId);
+  return estadoTras(id, expedienteId);
+}
+
+/** EN FIRMA esperando la verificación de identidad: enlace nuevo a quien no ha verificado (no toca Auco). */
+export async function reenviarIdentidadFirma(expedienteId: string, userId: string, userRol: string): Promise<EstadoAsistente> {
+  const id = await enviadoOError(expedienteId, userId, userRol);
+  await reenviarIdentidad(id, userId);
   return estadoTras(id, expedienteId);
 }
 

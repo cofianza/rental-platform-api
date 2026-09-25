@@ -6,7 +6,9 @@
 //    debe permitir sobrescribir la tarifa con autorizacion de Gerencia
 //    General, dejando registro de quien autorizo y cuando."
 //
-// Gerencia General = rol administrador (la ruta lo exige). El override vive
+// Gerencia General = administrador con el correo en GERENCIA_GENERAL_EMAILS
+// (esGerenciaGeneral, como los parametros de riesgo de calibracion); la ruta
+// solo exige administrador y el 403 SOLO_GERENCIA_GENERAL sale de aqui. El override vive
 // en estudios.tarifa_override (JSONB) y calcularTarifas() lo aplica encima de
 // la tabla estandar; el CRC ya lo imprimia como "condiciones especiales
 // autorizadas". Aqui esta lo que faltaba: leerlo, ponerlo y quitarlo.
@@ -18,6 +20,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { getCalibracion } from '@/lib/calibracion';
+import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import {
   calcularTarifas,
   leerTarifaOverride,
@@ -117,6 +120,15 @@ export async function tarifasDelEstudio(estudioId: string, userId?: string, user
   return armar(e);
 }
 
+/** Adenda 1 §5: la tarifa negociada la autoriza solo la Gerencia General. */
+function assertGerenciaGeneral(userRol: string | undefined, userEmail: string): void {
+  if (!esGerenciaGeneral({ rol: userRol ?? '', email: userEmail }))
+    throw AppError.forbidden(
+      'Las condiciones especiales de tarifa solo las autoriza la Gerencia General.',
+      'SOLO_GERENCIA_GENERAL',
+    );
+}
+
 const CONTRATO_EN_FIRMA = ['pendiente_firma', 'firma_incompleta'];
 const CONTRATO_FIRMADO = ['firmado', 'vigente', 'finalizado'];
 
@@ -199,8 +211,10 @@ export async function setTarifaOverride(
   input: TarifaOverrideInput,
   userId: string,
   userRol: string | undefined,
+  userEmail: string,
   ip?: string,
 ): Promise<TarifaEstudio> {
+  assertGerenciaGeneral(userRol, userEmail);
   const e = await leerFila(estudioId);
   if (e.estado === 'cancelado') {
     throw AppError.conflict('El estudio esta cancelado', 'ESTUDIO_CANCELADO');
@@ -221,8 +235,10 @@ export async function quitarTarifaOverride(
   estudioId: string,
   userId: string,
   userRol: string | undefined,
+  userEmail: string,
   ip?: string,
 ): Promise<TarifaEstudio> {
+  assertGerenciaGeneral(userRol, userEmail);
   const e = await leerFila(estudioId);
   if (!leerTarifaOverride(e.tarifa_override)) {
     throw AppError.conflict('Este estudio no tiene condiciones especiales', 'SIN_TARIFA_OVERRIDE');

@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 
 // P1/P3: el cierre del estudio y ejecutarEstudio se excluyen con la propia
 // evaluación. Si el cierre llega entre el guard y el lock a 'en_proceso', se
 // deshace el lock (nadie consultó el buró) y se revisa la devolución. Mismo
 // mock de Supabase que estudios.enlace-cancelar.test.ts: colas por tabla + `ops`.
 
-const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar, mockSinEfecto } = vi.hoisted(() => {
+const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar, mockObtener, mockSinEfecto } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -40,6 +40,7 @@ const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar, mo
     // Por defecto el buró no contesta nunca (lo que corre tras el lock queda en
     // vuelo); cada prueba que lo necesita lo hace fallar.
     mockSolicitar: vi.fn((): Promise<unknown> => new Promise(() => {})),
+    mockObtener: vi.fn(async (..._a: unknown[]): Promise<unknown> => undefined),
     mockSinEfecto: vi.fn(async () => undefined),
   };
 });
@@ -78,7 +79,7 @@ vi.mock('../autorizacion.guard', () => ({
   AUTORIZACION_PREVIA_ERROR_CODE: 'AUTORIZACION_PREVIA_REQUERIDA',
 }));
 vi.mock('../providers/factory', () => ({
-  getProvider: vi.fn(() => ({ solicitar: mockSolicitar, obtenerResultado: vi.fn() })),
+  getProvider: vi.fn(() => ({ solicitar: mockSolicitar, obtenerResultado: mockObtener })),
   getAllProviderIds: vi.fn(() => ['transunion', 'datacredito']),
 }));
 vi.mock('../pago.guard', () => ({
@@ -89,6 +90,7 @@ vi.mock('../pago.guard', () => ({
   ESTADO_ESPERANDO_PAGO: 'pago_pendiente',
 }));
 
+import { supabase } from '@/lib/supabase';
 import { ejecutarEstudio } from '../estudios.service';
 
 beforeEach(() => {
@@ -216,6 +218,37 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     const [lock, fallo] = actualizaciones();
     expect(lock).toMatchObject({ estado: 'en_proceso', resultado: 'pendiente', referencia_proveedor: null });
     expect(fallo).toEqual(previo);
+  });
+
+  const condicionadoSinInfo = {
+    estado: 'completado', resultado: 'condicionado', score: null, proveedor: 'transunion', referencia_proveedor: 'TU-5',
+  };
+
+  it('A1: con el caso ya decidido (expediente aprobado) no se consulta el otro buró', async () => {
+    enqueue('estudios', estudio(condicionadoSinInfo));
+    enqueue('expedientes', expediente('aprobado'));
+
+    await expect(
+      ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }),
+    ).rejects.toMatchObject({ errorCode: 'ESTUDIO_ESTADO_INVALIDO' });
+    expect(actualizaciones()).toHaveLength(0);
+    expect(mockSolicitar).not.toHaveBeenCalled();
+  });
+
+  it('A1: el «aprobado» del otro buró sobre un caso en revisión manual queda condicionado, con nota al analista', async () => {
+    mockSolicitar.mockResolvedValueOnce({ referencia_proveedor: 'DC-1', status: 'completed' });
+    mockObtener.mockResolvedValueOnce({ resultado: 'aprobado', score: 780, observaciones: 'ok', datos_crudos: null });
+    (supabase.rpc as unknown as Mock).mockResolvedValue({ error: null });
+    enqueue('estudios', estudio(condicionadoSinInfo), { data: [{ id: 'est-1' }], error: null });
+    // Cualquier lectura del expediente lo ve en revisión manual.
+    for (let i = 0; i < 10; i++) enqueue('expedientes', expediente('condicionado'));
+
+    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }).catch(() => undefined);
+
+    await vi.waitFor(() => expect(supabase.rpc).toHaveBeenCalledWith('fn_registrar_resultado_estudio', expect.anything()));
+    const args = (supabase.rpc as unknown as Mock).mock.calls.find((c) => c[0] === 'fn_registrar_resultado_estudio')![1];
+    expect(args.p_resultado).toBe('condicionado');
+    expect(args.p_observaciones).toMatch(/Para el analista/);
   });
 
   it('Q5c-5: la evaluación del co-arrendatario con el estudio rechazado se cancela y se le avisa (P3), no solo 409', async () => {

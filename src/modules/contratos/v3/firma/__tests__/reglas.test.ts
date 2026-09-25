@@ -24,6 +24,7 @@ import {
   firmantesDePartes,
   huellaMarcas,
   fueraDePlazo,
+  identidadVencida,
   mapEstadoFirmante,
   paginaPdf,
   partesCompletas,
@@ -521,5 +522,28 @@ describe('posicionesDeFirma y construirSignProfile con posiciones', () => {
     ]);
     expect(deFirmantes(['arrendatario', 'coarrendatario', 'arrendador'], [...MARCAS, otroCoa])).toEqual(MARCAS);
     expect(deFirmantes(['arrendatario', 'arrendador'], MARCAS)).toEqual(MARCAS.slice(0, 3));
+  });
+});
+
+describe('identidadVencida (biometría: EN FIRMA sin proceso en Auco)', () => {
+  // 2026-09-01 12:00 en Bogotá (17:00 UTC).
+  const ENVIO = Date.parse('2026-09-01T17:00:00Z');
+  const LIMITE = finDelDia('2026-09-16'); // 15 días: hasta la medianoche del último
+
+  it('vence con el plazo de firma contado desde el envío, hasta la medianoche del último día', () => {
+    expect(identidadVencida(ENVIO, 15, null, LIMITE)).toBeNull();
+    expect(identidadVencida(ENVIO, 15, null, LIMITE + 1)).toBe(LIMITE);
+  });
+
+  it('nunca después del fin del CRC', () => {
+    const finCrc = Date.parse('2026-09-05T12:00:00Z');
+    expect(identidadVencida(ENVIO, 15, finCrc, finCrc - 1)).toBeNull();
+    expect(identidadVencida(ENVIO, 15, finCrc, finCrc + 1)).toBe(finCrc);
+  });
+
+  it('el aviso dice que faltó la verificación de identidad y de quién', () => {
+    const t = textoAvisoFirmaIncompleta({ numero: 'CTO-1', direccion: 'Calle 1', motivo: 'IDENTIDAD', detalle: 'Ana' });
+    expect(t).toContain('sin que se completara la verificación de identidad previa (Ana)');
+    expect(t).not.toContain('rechazó');
   });
 });

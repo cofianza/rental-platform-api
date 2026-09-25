@@ -223,7 +223,7 @@ function assertNoEsElTitular(ctx: ExpedienteCtx, datos: { email?: string; numero
   }
 }
 
-const TIPO_DOC_CORTO: Record<string, string> = { cc: 'CC', ce: 'CE', ti: 'TI', pasaporte: 'Pasaporte', nit: 'NIT' };
+const TIPO_DOC_CORTO: Record<string, string> = { cc: 'CC', ce: 'CE', ppt: 'PPT', pep: 'PEP', ti: 'TI', pasaporte: 'Pasaporte', nit: 'NIT' };
 
 /** P4: el invitado reconoce su documento sin verlo completo («CC ••••5678»). */
 function documentoEnmascarado(tipo: string, numero: string): string {

@@ -56,7 +56,7 @@ const {
       return res;
     });
   return {
-    mockEnv: { CONTRATOS_V3_ENABLED: true, CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000, CLAUSULAS_IA_ENABLED: false, RUTA_B_FIRMA_ENABLED: true },
+    mockEnv: { CONTRATOS_V3_ENABLED: true, CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000, CLAUSULAS_IA_ENABLED: false, RUTA_B_FIRMA_ENABLED: true, GERENCIA_GENERAL_EMAILS: ['gg@cofianza.co'] as string[] },
     mockFrom: vi.fn((table: string) => chainFor(table)),
     ops,
     queues,
@@ -1454,9 +1454,15 @@ describe('paso 4: estado (GET) y bloqueos', () => {
 describe('autorizarExceso (D6)', () => {
   const P4 = paso4De(ONCE.map((f) => snap(f)));
 
+  it('otro administrador (no Gerencia General) → 403 SOLO_GERENCIA_GENERAL, sin leer ni escribir', async () => {
+    const e = await error(autorizarExceso(EXP, P4.huella, 'admin-2', 'administrador', 'otro@cofianza.co'));
+    expect(e).toMatchObject({ statusCode: 403, errorCode: 'SOLO_GERENCIA_GENERAL' });
+    expect(opsDe('contratos', 'update')).toHaveLength(0);
+  });
+
   it('una huella que no es la vigente → 409 CONTRATO_BORRADOR_CAMBIADO, sin escribir', async () => {
     encolarCarga({ contratos: [conPaso4(P4)], catalogo: catalogoDe(ONCE) });
-    const e = await error(autorizarExceso(EXP, 'f'.repeat(64), 'admin-1', 'administrador'));
+    const e = await error(autorizarExceso(EXP, 'f'.repeat(64), 'admin-1', 'administrador', 'gg@cofianza.co'));
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BORRADOR_CAMBIADO' });
     expect(opsDe('contratos', 'update')).toHaveLength(0);
   });
@@ -1467,7 +1473,7 @@ describe('autorizarExceso (D6)', () => {
     const autorizado = { huella: P4.huella, cantidad: 11, usuarioId: 'admin-1', en: '2026-09-15T15:00:00.000Z' };
     encolarCarga({ contratos: [conPaso4(P4, { excesoAutorizado: autorizado })], catalogo: catalogoDe(ONCE) });
 
-    const estado = await autorizarExceso(EXP, P4.huella, 'admin-1', 'administrador', '10.0.0.9');
+    const estado = await autorizarExceso(EXP, P4.huella, 'admin-1', 'administrador', 'gg@cofianza.co', '10.0.0.9');
 
     const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { asistente: Asistente } };
     expect(upd.datos_variables.asistente.excesoAutorizado).toEqual(autorizado);
@@ -1487,7 +1493,7 @@ describe('autorizarExceso (D6)', () => {
     enqueue('contratos', { data: { generado_por: 'gestor-1' }, error: null });
     enqueue('expedientes', { data: { miembro_responsable_id: 'gestor-1' }, error: null });
 
-    await autorizarExceso(EXP, P4.huella, 'admin-1', 'administrador');
+    await autorizarExceso(EXP, P4.huella, 'admin-1', 'administrador', 'gg@cofianza.co');
 
     expect(mockNotificar).toHaveBeenCalledTimes(1);
     expect(mockNotificar).toHaveBeenCalledWith(
@@ -1505,7 +1511,7 @@ describe('autorizarExceso (D6)', () => {
   it('sin pasar el máximo → 409 EXCESO_NO_APLICA', async () => {
     const dos = paso4De([snap(PROPIA), snap(BIBLIO, BIBLIO_12)]);
     encolarCarga({ contratos: [conPaso4(dos)], catalogo: catalogoDe([PROPIA, BIBLIO]) });
-    const e = await error(autorizarExceso(EXP, dos.huella, 'admin-1', 'administrador'));
+    const e = await error(autorizarExceso(EXP, dos.huella, 'admin-1', 'administrador', 'gg@cofianza.co'));
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'EXCESO_NO_APLICA' });
   });
 });

@@ -70,6 +70,8 @@ export interface EstadoAsistente {
     propio: PdfPropio | null;
     /** RUTA_B_FIRMA_ENABLED: sin ella la Ruta B no sale a firma (ubicar las firmas sí se puede). */
     rutaBFirmaHabilitada: boolean;
+    /** Adenda 2 §9: con la biometría de firma, primero va el correo de verificación de identidad y después Auco. */
+    biometriaFirma: boolean;
     adicionales: {
       maximo: number; ordinales: string[] /* 25, desde la 1.ª adicional de ESTE contrato */;
       /** texto = responsabilidad (solo propias); modelos = los modelos sin cambios son texto de Cofianza (Adenda 1 contratos, resp. 13). */

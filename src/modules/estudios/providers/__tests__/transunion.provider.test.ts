@@ -204,6 +204,13 @@ describe('TransUnionProvider', () => {
       await expect(provider.solicitar(input)).rejects.toThrow('no soportado');
     });
 
+    it('PPT/PEP (A13): rechaza sin llamar al buro y sugiere DataCredito', async () => {
+      for (const tipo of ['ppt', 'pep']) {
+        await expect(provider.solicitar({ ...baseInput, tipo_documento: tipo })).rejects.toThrow('DataCredito');
+      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
     it('deberia lanzar error si faltan datos de documento', async () => {
       const input = { ...baseInput, numero_documento: '' };
       await expect(provider.solicitar(input)).rejects.toThrow('requeridos');

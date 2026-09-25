@@ -26,7 +26,7 @@ export const enviarEnlaceAutorizacionSchema = z
     // Documento corregido (Reintentar consulta): la firma nueva congela el de
     // la ficha, así que se corrige ahí antes de emitir el enlace.
     // Mismos valores que el body de /estudios/:id/ejecutar (Reintentar consulta).
-    tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte']).optional(),
+    tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte', 'ppt', 'pep']).optional(),
     numero_documento: z.string().trim().min(5).max(20).optional(),
   })
   .optional();

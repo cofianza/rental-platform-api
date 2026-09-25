@@ -436,6 +436,22 @@ describe('autorizaciones.service', () => {
       expect(JSON.stringify(result)).not.toContain('@');
     });
 
+    // A11: el enlace creado con el interruptor apagado congelo el texto sin la
+    // clausula de datos sensibles; encender la biometria despues no puede
+    // pedirle la selfie con ese texto.
+    it('biometria requerida solo si el interruptor esta encendido Y el texto firmado es 3.0-biometria', async () => {
+      mockEnv.AUCO_BIOMETRIA_ENABLED = true;
+      enqueue('autorizaciones_habeas_data', { data: autorizacionPendiente });
+      expect((await getAutorizacionByToken(TOKEN)).biometria.requerida).toBe(false);
+
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, version_terminos: '3.0-biometria' } });
+      expect((await getAutorizacionByToken(TOKEN)).biometria.requerida).toBe(true);
+
+      mockEnv.AUCO_BIOMETRIA_ENABLED = false;
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, version_terminos: '3.0-biometria' } });
+      expect((await getAutorizacionByToken(TOKEN)).biometria.requerida).toBe(false);
+    });
+
     it('debe lanzar error si token no existe', async () => {
       enqueue('autorizaciones_habeas_data', { data: null });
       await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({

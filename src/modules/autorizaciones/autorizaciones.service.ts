@@ -18,7 +18,7 @@ import type {
   ReportarIdentidadInput,
 } from './autorizaciones.schema';
 import { senalDiscrepanciaIngreso } from './ingreso-declarado';
-import { textoLegalSolicitante } from './autorizaciones.texto';
+import { textoLegalSolicitante, VERSION_TERMINOS_BIOMETRIA } from './autorizaciones.texto';
 // Cotejo biometrico AucoFace (Politica Anexo A + §14). Apagado por
 // AUCO_BIOMETRIA_ENABLED no se pide nada y el texto legal no cambia.
 import {
@@ -602,7 +602,11 @@ export async function getAutorizacionByToken(token: string) {
     );
   }
 
-  const biometriaPrevia = env.AUCO_BIOMETRIA_ENABLED
+  // Solo se pide la selfie si el texto que el prospecto firma la incluye: los
+  // enlaces emitidos con el interruptor apagado congelaron el texto sin la
+  // clausula de datos sensibles (evidencia legal inconsistente si se cotejaba).
+  const biometriaRequerida = biometriaAplica(auth.version_terminos);
+  const biometriaPrevia = biometriaRequerida
     ? await leerBiometriaPorAutorizacion(auth.id)
     : null;
 
@@ -616,7 +620,7 @@ export async function getAutorizacionByToken(token: string) {
     // para que reabrir el enlace (gesto normalisimo: vive en WhatsApp) no
     // obligue a repetir el cotejo ni, peor, lo pise con uno nuevo.
     biometria: {
-      requerida: env.AUCO_BIOMETRIA_ENABLED,
+      requerida: biometriaRequerida,
       estado: biometriaPrevia?.estado ?? null,
     },
     solicitante: {
@@ -653,14 +657,20 @@ export async function getAutorizacionByToken(token: string) {
  * y es la unica defensa que necesita esta tabla (por eso no lleva trigger de
  * inmutabilidad — ver el encabezado de la migracion 20260907000001).
  */
+/** Biometria del prospecto: interruptor encendido Y texto firmado con la clausula. */
+function biometriaAplica(versionTerminos: string | null | undefined): boolean {
+  return env.AUCO_BIOMETRIA_ENABLED && versionTerminos === VERSION_TERMINOS_BIOMETRIA;
+}
+
 async function autorizacionPendientePorToken(token: string): Promise<{
   id: string;
   expediente_id: string | null;
   solicitante_id: string;
+  version_terminos: string | null;
 }> {
   const { data, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_expiracion, expediente_id, solicitante_id')
+    .select('id, estado, token_expiracion, expediente_id, solicitante_id, version_terminos')
     .eq('token', token)
     .maybeSingle();
 
@@ -677,6 +687,7 @@ async function autorizacionPendientePorToken(token: string): Promise<{
     token_expiracion: string;
     expediente_id: string | null;
     solicitante_id: string;
+    version_terminos: string | null;
   };
   if (new Date(auth.token_expiracion) < new Date()) {
     throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
@@ -684,7 +695,7 @@ async function autorizacionPendientePorToken(token: string): Promise<{
   if (auth.estado !== 'pendiente') {
     throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
-  return { id: auth.id, expediente_id: auth.expediente_id, solicitante_id: auth.solicitante_id };
+  return { id: auth.id, expediente_id: auth.expediente_id, solicitante_id: auth.solicitante_id, version_terminos: auth.version_terminos ?? null };
 }
 
 /**
@@ -838,7 +849,7 @@ export async function verificarBiometriaProspecto(
   const auth = await autorizacionPendientePorToken(token);
   const umbral = env.AUCO_BIOMETRIA_UMBRAL_SIMILITUD;
 
-  if (!env.AUCO_BIOMETRIA_ENABLED) {
+  if (!biometriaAplica(auth.version_terminos)) {
     // No es un error del cliente: el front puede tener el paso cacheado de
     // antes de apagar el interruptor. Se responde 'desactivada' y sigue.
     return { estado: 'desactivada' as const, similitud: null, umbral, motivo: null, guardado: false };

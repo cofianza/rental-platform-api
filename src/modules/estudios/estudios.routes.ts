@@ -129,7 +129,8 @@ estudiosRouter.patch(
 
 // Adenda §5 (nota): tarifa del estudio (tabla estandar + condiciones
 // especiales). Ver: cualquiera que vea el expediente. Poner/quitar: solo
-// Gerencia General (administrador), con registro de quien y cuando.
+// Gerencia General (administrador en GERENCIA_GENERAL_EMAILS; el servicio da
+// el 403 SOLO_GERENCIA_GENERAL), con registro de quien y cuando.
 estudiosRouter.get(
   '/:estudioId/tarifa',
   authorize('expedientes', 'read'),

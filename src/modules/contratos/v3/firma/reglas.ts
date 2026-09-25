@@ -521,6 +521,17 @@ export function finDelCrc(
   return Number.isFinite(completado) ? completado + vigenciaDias * DIA_MS : null;
 }
 
+/**
+ * Con la biometría de firma, el proceso de Auco sale cuando todos verificaron su
+ * identidad; si alguien no lo hace, el contrato no puede quedar EN FIRMA para
+ * siempre. Vence con el mismo plazo de firma contado desde el envío, y nunca
+ * después del fin del CRC. null = todavía no vence; si venció, el instante límite.
+ */
+export function identidadVencida(enviadoEn: number, dias: number, finCrc: number | null, ahora: number): number | null {
+  const limite = Math.min(masPlazo(enviadoEn, dias), finCrc ?? Infinity);
+  return ahora > limite ? limite : null;
+}
+
 /** Tolerancia de reloj entre Auco y Cofianza al comparar la última firma con el plazo. */
 export const TOLERANCIA_RELOJ_MS = 10 * 60_000;
 
@@ -572,7 +583,7 @@ export const AVISO_FIRMA_INCOMPLETA_VERSION = 'e5-11.7.4-v3';
 export function textoAvisoFirmaIncompleta(x: {
   numero: string;
   direccion: string;
-  motivo: 'EXPIRED' | 'REJECTED' | 'FUERA_PLAZO' | string | null;
+  motivo: 'EXPIRED' | 'REJECTED' | 'FUERA_PLAZO' | 'IDENTIDAD' | string | null;
   detalle?: string | null;
   /** Hasta cuándo va el CRC ('dd/mm/aaaa a las HH:MM'), si todavía alcanza para reenviar; null = no alcanza. */
   crcVigenteHasta?: string | null;
@@ -581,6 +592,8 @@ export function textoAvisoFirmaIncompleta(x: {
   const causa =
     x.motivo === 'EXPIRED'
       ? 'venció el plazo para firmar'
+      : x.motivo === 'IDENTIDAD'
+        ? `venció el plazo para firmar sin que se completara la verificación de identidad previa${detalle}`
       : x.motivo === 'FUERA_PLAZO'
         ? `las firmas se completaron después del plazo para firmar${detalle} y no cuentan`
         : `una de las partes rechazó la firma${detalle}`;

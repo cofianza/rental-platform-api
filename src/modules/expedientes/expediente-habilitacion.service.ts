@@ -54,10 +54,11 @@ export async function habilitarEstudio(
   userRol: string,
   /**
    * Buró con el que se creará el estudio. Solo los ejecutables por provider;
-   * el RPC valida de nuevo y rechaza cualquier otro. Por defecto TransUnion,
-   * que era el comportamiento fijo antes de que hubiera dos burós.
+   * el RPC valida de nuevo y rechaza cualquier otro. Por defecto DataCrédito:
+   * es la central primaria (Adenda 1 §2) y la que trae el ingreso con el que
+   * corren las reglas de DTI y canon/ingreso.
    */
-  proveedor: 'transunion' | 'datacredito' = 'transunion',
+  proveedor: 'transunion' | 'datacredito' = 'datacredito',
   /**
    * Si el llamador ya sabe quién paga, apaga el auto-cobro del propietario.
    * Lo usa `iniciarEstudio` (paso 3 del asistente, §6): ahí la forma de pago

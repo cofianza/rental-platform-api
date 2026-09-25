@@ -180,6 +180,24 @@ async function marcarPagoArrendatario(expedienteId: string): Promise<void> {
   }
 }
 
+/**
+ * Quien paga este cobro. Opcion B (pagarGestor): el checkout va a nombre del
+ * GESTOR — email_pagador es el correo de su cuenta y creado_por es el mismo
+ * usuario. Opcion C: email_pagador es el del prospecto. Los metodos que no son
+ * pasarela (credito, historicos) los cubre la agencia.
+ *
+ * La web decidia esto comparando email_pagador con el correo de quien mira: un
+ * miembro distinto de la agencia veia el cobro B como "Esperando pago del
+ * arrendatario" y al reenviar le mandaba al prospecto el checkout de la
+ * inmobiliaria.
+ */
+async function quienPaga(pago: Record<string, unknown>): Promise<'gestor' | 'arrendatario'> {
+  if (pago.metodo !== 'pasarela') return 'gestor';
+  if (!pago.email_pagador || !pago.creado_por) return 'arrendatario';
+  const perfilId = await findPerfilIdByEmail(pago.email_pagador as string);
+  return perfilId === pago.creado_por ? 'gestor' : 'arrendatario';
+}
+
 // ============================================================
 // Get estado del pago del estudio
 // ============================================================
@@ -224,18 +242,26 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
       monto,
       moneda: 'COP',
       monto_formateado: formatCOP(monto),
+      paga: esperandoAutorizacion ? ('arrendatario' as const) : null,
       pago: null,
     };
   }
 
   const estado = pago.estado as string;
   const metodo = pago.metodo as string;
+  const paga = await quienPaga(pago);
 
   // Adjuntar la factura emitida al pago para que el frontend pueda decidir
   // si mostrar "Facturar" vs "Ver factura" tras un refresh. Sin esto, el
   // boton "Facturar" reaparecia despues de emitir porque el local state
   // (facturaIdEmitida) se pierde al re-montar el componente.
-  const [pagoConFactura] = await attachFacturas([pago as Record<string, unknown> & { id: string }]);
+  const [conFactura] = await attachFacturas([pago as Record<string, unknown> & { id: string }]);
+  // El checkout de la agencia no es del prospecto: ni el enlace ni el correo
+  // del gestor le llegan al solicitante.
+  const pagoConFactura =
+    userRol === 'solicitante' && paga === 'gestor'
+      ? { ...conFactura, payment_link_url: null, email_pagador: null, nombre_pagador: null }
+      : conFactura;
 
   return {
     estado: estado === 'completado' && metodo !== 'pasarela' ? 'asumido_inmobiliaria' : estado,
@@ -244,6 +270,7 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
     monto: pago.monto as number,
     moneda: 'COP',
     monto_formateado: formatCOP(pago.monto as number),
+    paga,
     pago: pagoConFactura,
   };
 }
@@ -524,11 +551,14 @@ export async function pagarGestor(
 
   const existing = await findPagoEstudio(expedienteId);
   if (existing && ['pendiente', 'procesando'].includes(existing.estado as string)) {
-    const esSuyo =
+    // Tambien el checkout abierto por OTRO miembro de la agencia: el cobro es
+    // de la inmobiliaria, no se cancela para abrir uno igual.
+    const esDeLaAgencia =
       existing.metodo === 'pasarela' &&
-      String(existing.email_pagador ?? '').toLowerCase() === email.toLowerCase() &&
-      !!existing.payment_link_url;
-    if (esSuyo) return existing;
+      !!existing.payment_link_url &&
+      (String(existing.email_pagador ?? '').toLowerCase() === email.toLowerCase() ||
+        (await quienPaga(existing)) === 'gestor');
+    if (esDeLaAgencia) return existing;
     // 'procesando' = el pagador ya genero el recibo de efectivo o inicio el PSE.
     // Expirar la preference no detiene ese pago: si se aprueba despues, cae
     // sobre un pago cancelado (pagos_no_conciliados) y el estudio se cobra dos
@@ -740,6 +770,14 @@ export async function reenviarLink(
   }
   if (!pago.payment_link_url || !pago.email_pagador) {
     throw AppError.badRequest('Este pago no tiene link o email asociado', 'NO_PAYMENT_LINK');
+  }
+  // Opcion B: el checkout es de la agencia. Reenviarlo mandaba al PROSPECTO
+  // (WhatsApp al telefono del solicitante) el cobro de la inmobiliaria.
+  if ((await quienPaga(pago)) === 'gestor') {
+    throw AppError.badRequest(
+      'Este cobro lo paga la inmobiliaria, no el arrendatario: ábrelo desde el estudio para pagarlo.',
+      'PAGO_ES_DEL_GESTOR',
+    );
   }
 
   // Corrección del destinatario: si vienen email/nombre nuevos, se persisten

@@ -144,10 +144,15 @@ async function getSolicitanteDelExpediente(expedienteId: string) {
  * Import dinamico como el resto del archivo (evita cargar pdfkit en el ciclo
  * estudios -> orchestrator).
  */
-function emitirCrcAutomatico(estudioId: string, actorId: string | null, expedienteId: string): void {
+function emitirCrcAutomatico(
+  estudioId: string,
+  actorId: string | null,
+  expedienteId: string,
+  opts: { regenerar?: boolean } = {},
+): void {
   if (!estudioId) return;
   import('@/modules/estudios/certificado.service')
-    .then(({ emitirCertificadoAutomatico }) => emitirCertificadoAutomatico(estudioId, actorId))
+    .then(({ emitirCertificadoAutomatico }) => emitirCertificadoAutomatico(estudioId, actorId, opts))
     .catch((err) => logger.warn({ err, estudioId, expedienteId }, 'Orchestrator: no se pudo emitir el CRC automático'));
 }
 
@@ -642,11 +647,15 @@ export async function onEstudioCompletado(params: {
     // Obtener datos del expediente con joins
     // `creado_por` (perfil del gestor) firma la emision automatica del CRC.
     const { data: expediente } = await db('expedientes')
-      .select('id, numero, inmueble_id, solicitante_id, creado_por')
+      .select('id, numero, estado, inmueble_id, solicitante_id, creado_por')
       .eq('id', expedienteId)
       .single() as { data: Record<string, unknown> | null };
 
     if (!expediente) return;
+    // El CRC de un caso que venía de revisión manual ya existe y dice
+    // CONDICIONADO: al aprobarse hay que reemitirlo (si no, el contrato cobra
+    // la tarifa del aprobado con un certificado que dice otra).
+    const veniaDeCondicionado = expediente.estado === 'condicionado';
     const actorCrc = (expediente.creado_por as string | null) ?? null;
 
     // Obtener solicitante y inmueble por separado (evita joins complejos)
@@ -687,7 +696,7 @@ export async function onEstudioCompletado(params: {
       await registrarTimeline(expedienteId, 'estudio', `Evaluación crediticia aprobada (Score: ${score}). El propietario debe generar el contrato desde el panel.`);
 
       // Flujo §10/§11: el CRC sale CON el resultado. No bloquea las notificaciones.
-      emitirCrcAutomatico(estudioId, actorCrc, expedienteId);
+      emitirCrcAutomatico(estudioId, actorCrc, expedienteId, { regenerar: veniaDeCondicionado });
 
       if (sol?.email) {
         sendEstudioAprobadoEmail({
@@ -878,6 +887,15 @@ export async function onEstudioCompletado(params: {
 
       // Mismo criterio que las otras dos ramas: sin transición no hay efectos.
       if (!transiciono) {
+        // P33: la re-consulta al otro buró sobre un caso ya en revisión manual
+        // no lo mueve, pero el analista tiene que ver que llegó un resultado.
+        if (veniaDeCondicionado) {
+          await registrarTimeline(
+            expedienteId,
+            'estudio',
+            `Nueva consulta al buró recibida (Score: ${score ?? 's/d'}). El caso sigue en revisión manual: lo decide el analista.`,
+          ).catch(() => {});
+        }
         logger.warn(
           { expedienteId, resultado },
           'Orchestrator: resultado condicionado pero el estudio no transicionó — se omiten notificaciones',

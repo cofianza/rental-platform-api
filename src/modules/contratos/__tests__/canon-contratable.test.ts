@@ -2,12 +2,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // El contrato no puede afianzar un canon que el estudio no evaluó: máximo =
 // canon evaluado + TOLERANCIA_CANON, sin pasar el tope (y nunca menos que lo evaluado).
-const { resultado, mockEscalar } = vi.hoisted(() => ({ resultado: { data: null as unknown }, mockEscalar: vi.fn() }));
+const { resultado, mockEscalar } = vi.hoisted(() => ({
+  resultado: { data: null as unknown, sombra: null as unknown },
+  mockEscalar: vi.fn(),
+}));
 vi.mock('@/lib/supabase', () => {
-  const chain: Record<string, unknown> = {};
-  for (const m of ['select', 'eq', 'order', 'limit']) chain[m] = () => chain;
-  chain.maybeSingle = async () => ({ data: resultado.data, error: null });
-  return { supabase: { from: () => chain, storage: { from: () => ({}) } }, supabaseAuth: {} };
+  const chainDe = (tabla: string) => {
+    const chain: Record<string, unknown> = {};
+    for (const m of ['select', 'eq', 'order', 'limit']) chain[m] = () => chain;
+    chain.maybeSingle = async () => ({
+      data: tabla === 'estudios_scorecard_sombra' ? resultado.sombra : resultado.data,
+      error: null,
+    });
+    return chain;
+  };
+  return { supabase: { from: chainDe, storage: { from: () => ({}) } }, supabaseAuth: {} };
 });
 vi.mock('@/config', () => ({ env: { RESEND_API_KEY: 're_test', CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 } }));
 vi.mock('@/config/env', () => ({ env: { RESEND_API_KEY: 're_test', CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000 } }));
@@ -24,6 +33,7 @@ import { assertCanonContratable } from '../contratos.service';
 
 beforeEach(() => {
   resultado.data = null;
+  resultado.sombra = null;
   mockEscalar.mockReset();
 });
 
@@ -54,6 +64,26 @@ describe('assertCanonContratable', () => {
     const e = await assertCanonContratable('e1', 3_000_001, 'vivienda').catch((x: unknown) => x);
     expect((e as Error).message).toContain('Escríbele a Cofianza para evaluar un coafianzamiento');
     expect((e as Error).message).not.toContain('se envió');
+  });
+
+  it('A7: dentro de la tolerancia recalcula canon/ingreso con el ingreso ajustado (tope 40 %)', async () => {
+    resultado.data = { id: 'est1', canon_evaluado: 2_000_000 };
+    resultado.sombra = { ingreso_inferido_ajustado_cop: 5_500_000 };
+    // 2.200.000 / 5.500.000 = 40 % exacto: cumple.
+    await expect(assertCanonContratable('e1', 2_200_000, 'vivienda')).resolves.toBeUndefined();
+    await expect(assertCanonContratable('e1', 2_200_001, 'vivienda')).rejects.toMatchObject({
+      errorCode: 'CANON_INGRESO_EXCEDE',
+      statusCode: 409,
+    });
+    // Igual o menor a lo evaluado no se recalcula (V3: «sin restricción»).
+    resultado.sombra = { ingreso_inferido_ajustado_cop: 1_000_000 };
+    await expect(assertCanonContratable('e1', 2_000_000, 'vivienda')).resolves.toBeUndefined();
+  });
+
+  it('A7: sin ingreso ajustado de la corrida no bloquea', async () => {
+    resultado.data = { id: 'est1', canon_evaluado: 2_000_000 };
+    resultado.sombra = null;
+    await expect(assertCanonContratable('e1', 2_300_000, 'vivienda')).resolves.toBeUndefined();
   });
 
   it('sin canon evaluado (estudio anterior al congelado) no bloquea', async () => {

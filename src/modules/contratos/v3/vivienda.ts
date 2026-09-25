@@ -26,7 +26,7 @@ import {
 } from './motor';
 import { PLANTILLA_ANEXO, PLANTILLA_VIVIENDA } from './plantilla-vivienda';
 
-type TipoDoc = 'cc' | 'ce' | 'pasaporte' | 'nit' | 'ti';
+type TipoDoc = 'cc' | 'ce' | 'pasaporte' | 'nit' | 'ti' | 'ppt' | 'pep';
 
 /** Una fila de contrato_partes (Entrega 1) en camelCase. */
 export interface Persona {

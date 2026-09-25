@@ -11,7 +11,7 @@ export const registerSolicitanteSchema = z.object({
   apellido: z.string().min(1, 'Apellido es requerido').max(100),
   email: z.string().email('Email inválido'),
   telefono: z.string().min(10, 'Teléfono debe tener al menos 10 dígitos').max(20, 'Teléfono muy largo'),
-  tipo_documento: z.enum(['cc', 'ce', 'pasaporte', 'nit']),
+  tipo_documento: z.enum(['cc', 'ce', 'ppt', 'pep', 'pasaporte', 'nit']),
   numero_documento: z.string().min(1, 'Número de documento es requerido').max(20),
   // Municipio (código DANE 5 dígitos). Opcional en el registro: se pide
   // al momento de facturar el estudio crediticio (form de pago) para no

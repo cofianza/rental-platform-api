@@ -178,6 +178,30 @@ describe('condicionado: se resuelve con la revision manual (P33)', () => {
     expect((await getHistorialReEvaluacion('est-1', 'u-1', 'operador_analista')).puede_reevaluar).toBe(false);
   });
 
+  it('A4: si la revision manual lo nego (expediente rechazado), se re-evalua como un rechazo', async () => {
+    enqueue('estudios', { data: condicionado, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'rechazado', estado_pre_cancelacion: null }, error: null });
+    await getSoportePresignedUrl('est-1', soporte as never, 'u-1', 'operador_analista').catch(() => undefined);
+    expect(mockStorageFrom).toHaveBeenCalled();
+
+    enqueue(
+      'estudios',
+      { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null },
+      { data: { id: 'est-1', estudio_padre_id: null }, error: null },
+      { data: [condicionado], error: null },
+    );
+    enqueue('estudios_documentos_soporte', { data: [], error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'rechazado', estado_pre_cancelacion: null }, error: null });
+    expect((await getHistorialReEvaluacion('est-1', 'u-1', 'operador_analista')).puede_reevaluar).toBe(true);
+  });
+
+  it('A4: el condicionado del co-arrendatario no se re-evalua aunque el caso se haya negado', async () => {
+    enqueue('estudios', { data: { ...condicionado, tipo: 'con_coarrendatario' }, error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'rechazado', estado_pre_cancelacion: null }, error: null });
+    await expect(getSoportePresignedUrl('est-1', soporte as never, 'u-1', 'operador_analista'))
+      .rejects.toMatchObject({ errorCode: 'ESTUDIO_NO_REEVALUABLE' });
+  });
+
   it('la re-evaluacion exige fundamento', () => {
     expect(reEvaluarSchema.safeParse({}).success).toBe(false);
     expect(reEvaluarSchema.safeParse({ observaciones: '   corto  ' }).success).toBe(false);

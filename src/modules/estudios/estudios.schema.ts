@@ -247,9 +247,9 @@ export const enviarEnlaceBodySchema = z
 // Body opcional para POST /estudios/:id/ejecutar — permite al solicitante
 // enviar/corregir su documento justo antes de ejecutar el estudio.
 export const ejecutarEstudioBodySchema = z.object({
-  // Alineado con TIPO_DOCUMENTO_MAP del provider TransUnion (cc/nit/ce/ti/pasaporte)
-  // — los selects de la web ofrecen 'ti' y antes este enum la rechazaba con 400.
-  tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte']).optional(),
+  // Alineado con los TIPO_DOCUMENTO_MAP de los providers. ppt/pep (A13) solo
+  // los consulta DataCrédito (6/9); TransUnion no los tiene (ver refine abajo).
+  tipo_documento: z.enum(['cc', 'nit', 'ce', 'ppt', 'pep', 'ti', 'pasaporte']).optional(),
   numero_documento: z
     .string()
     .trim()
@@ -270,7 +270,10 @@ export const ejecutarEstudioBodySchema = z.object({
     .min(2, 'El apellido debe tener al menos 2 caracteres')
     .max(80, 'El apellido no debe exceder 80 caracteres')
     .optional(),
-}).optional();
+}).refine(
+  (b) => !(b.proveedor === 'transunion' && (b.tipo_documento === 'ppt' || b.tipo_documento === 'pep')),
+  { message: 'TransUnion no consulta PPT ni PEP: relance la evaluación por DataCrédito.', path: ['proveedor'] },
+).optional();
 
 // ============================================================
 // Type exports

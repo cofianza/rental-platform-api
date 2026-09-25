@@ -69,6 +69,9 @@ vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope
 
 import { pagarGestor, cancelarYLiberarCredito, getEstadoPagoEstudio, reenviarLink } from '../pago-estudio.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
+import { enviarTemplate } from '@/modules/whatsapp';
+import { sendPaymentLinkEmail } from '@/lib/email';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
 
@@ -286,5 +289,48 @@ describe('reenviarLink', () => {
     });
     expect(assertExpedienteAccess).toHaveBeenCalledWith(EXP, 'asesor', 'inmobiliaria');
     expect(ops.filter((o) => o.table === 'pagos')).toEqual([]);
+  });
+});
+
+// A10: el checkout de la opcion B (lo paga la agencia) no es un cobro al
+// arrendatario, lo mire quien lo mire.
+describe('A10 — quien paga el cobro pendiente', () => {
+  const pagoGestor = {
+    id: 'p-b', estado: 'pendiente', metodo: 'pasarela', monto: 80000,
+    email_pagador: 'titular@inmo.co', nombre_pagador: 'Inmo SAS', creado_por: 'titular',
+    payment_link_url: 'https://mp.test/checkout/b',
+  };
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('getEstadoPagoEstudio marca paga=gestor; al solicitante no le llega ni el enlace ni el correo', async () => {
+    vi.mocked(findPerfilIdByEmail).mockResolvedValue('titular');
+    enqueue('pagos', { data: [pagoGestor], error: null });
+    const r = await getEstadoPagoEstudio(EXP, 'otro-miembro', 'inmobiliaria');
+    expect(r).toMatchObject({ paga: 'gestor', pago: { payment_link_url: 'https://mp.test/checkout/b' } });
+
+    enqueue('pagos', { data: [pagoGestor], error: null });
+    const s = await getEstadoPagoEstudio(EXP, 'prospecto', 'solicitante');
+    expect(s).toMatchObject({ paga: 'gestor', pago: { payment_link_url: null, email_pagador: null } });
+  });
+
+  it('el enlace del prospecto (opcion C) queda paga=arrendatario', async () => {
+    vi.mocked(findPerfilIdByEmail).mockResolvedValue('prospecto');
+    enqueue('pagos', { data: [{ ...pagoGestor, email_pagador: 'prospecto@x.co' }], error: null });
+    const r = await getEstadoPagoEstudio(EXP, 'titular', 'inmobiliaria');
+    expect(r).toMatchObject({ paga: 'arrendatario' });
+  });
+
+  it('reenviarLink no le manda al prospecto el checkout de la agencia (ni correo ni WhatsApp)', async () => {
+    vi.mocked(findPerfilIdByEmail).mockResolvedValue('titular');
+    enqueue('pagos', { data: [pagoGestor], error: null });
+    await expect(reenviarLink(EXP, 'otro-miembro', undefined, undefined, 'inmobiliaria')).rejects.toMatchObject({
+      errorCode: 'PAGO_ES_DEL_GESTOR',
+    });
+    expect(enviarTemplate).not.toHaveBeenCalled();
+    expect(sendPaymentLinkEmail).not.toHaveBeenCalled();
   });
 });

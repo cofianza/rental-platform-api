@@ -2386,8 +2386,15 @@ export async function ejecutarEstudio(
   // Se abre SOLO para ese caso y SOLO si además se cambia de buró: re-ejecutar
   // un estudio aprobado o uno condicionado CON score (el buró sí evaluó y dio
   // banda media) seguiría prohibido.
+  //
+  // Y SOLO con el caso todavía en revisión manual (expediente 'condicionado'):
+  // si el analista ya decidió (aprobado/rechazado), otra consulta se cobra y,
+  // si sale rechazada, deja el estudio contradiciendo al expediente.
   const esCondicionadoSinInfo =
-    est.estado === 'completado' && est.resultado === 'condicionado' && est.score === null;
+    est.estado === 'completado' &&
+    est.resultado === 'condicionado' &&
+    est.score === null &&
+    expediente.estado === 'condicionado';
   const reconsultaOtroBuro =
     esCondicionadoSinInfo && !!overrideProveedor && overrideProveedor !== est.proveedor;
 
@@ -2542,8 +2549,11 @@ export async function ejecutarEstudio(
   // Adenda §2: con el motor decidiendo, Datacredito es SIEMPRE la central
   // primaria; TransUnion solo entra en cascada (o si el gestor la fuerza con
   // el override, p. ej. porque Datacredito esta caido — Adenda §2.3).
+  // TransUnion no consulta PPT ni PEP: sin override se van a DataCrédito (antes fallaba ya cobrado).
+  const sinTransUnion = ['ppt', 'pep'].includes(datos.tipo_documento ?? '');
   const proveedorFinal: string =
-    overrideProveedor ?? (env.MOTOR_DECIDE_ENABLED && est.proveedor === 'transunion' ? 'datacredito' : est.proveedor);
+    overrideProveedor ??
+    ((env.MOTOR_DECIDE_ENABLED || sinTransUnion) && est.proveedor === 'transunion' ? 'datacredito' : est.proveedor);
   const cambioProveedor = proveedorFinal !== proveedorAnterior;
 
   //      Guard: solo los burós reales son ejecutables. Sin esto, (a) un
@@ -3186,7 +3196,25 @@ export async function barrerEstudiosEnProcesoColgados(): Promise<void> {
 // estudio» o «Cambiar estado»), que pide V7/V9, fundamento y documentos.
 const RESULTADOS_REEVALUABLES = ['rechazado'];
 const MENSAJE_NO_REEVALUABLE =
-  'Solo se re-evalúa una evaluación completada y rechazada. Un estudio condicionado se resuelve con la revisión manual («Aprobar estudio» o «Cambiar estado»).';
+  'Solo se re-evalúa una evaluación completada y no aprobada. Un estudio condicionado se resuelve con la revisión manual («Aprobar estudio» o «Cambiar estado»).';
+
+/**
+ * Se re-evalúa el no aprobado por su resultado EFECTIVO: el rechazo del buró, o
+ * el condicionado del titular que la revisión manual terminó negando (el
+ * expediente queda 'rechazado' y `estudios.resultado` sigue en 'condicionado').
+ * Sin esto, a ese prospecto se le anunciaba el derecho a apelar sin salida.
+ */
+async function esReevaluable(est: { estado: string; resultado: string; tipo?: string | null; expediente_id: string }): Promise<boolean> {
+  if (est.estado !== 'completado') return false;
+  if (RESULTADOS_REEVALUABLES.includes(est.resultado)) return true;
+  if (est.resultado !== 'condicionado' || est.tipo === 'con_coarrendatario') return false;
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, estado_pre_cancelacion')
+    .eq('id', est.expediente_id)
+    .maybeSingle();
+  return (await decisionDeCofianza(exp as ExpedienteDecision | null)) === 'negado';
+}
 const MAX_REEVALUACIONES = 2;
 /** Politica §8: "plazo para reevaluar si el solicitante subsana inconsistencias: 15 dias habiles". */
 const PLAZO_REEVALUACION_DIAS_HABILES = 15;
@@ -3238,7 +3266,7 @@ export async function getSoportePresignedUrl(
   // 1. Validate estudio exists and is eligible for re-evaluation
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, expediente_id, fecha_completado')
+    .select('id, estado, resultado, tipo, expediente_id, fecha_completado')
     .eq('id', estudioId)
     .single();
 
@@ -3247,7 +3275,7 @@ export async function getSoportePresignedUrl(
   }
 
   const est = estudio as unknown as {
-    id: string; estado: string; resultado: string; expediente_id: string; fecha_completado: string | null;
+    id: string; estado: string; resultado: string; tipo: string | null; expediente_id: string; fecha_completado: string | null;
   };
 
   // Tenant guard: URL de subida firmada a estudios/<id>/soporte/… Sin scoping,
@@ -3255,7 +3283,7 @@ export async function getSoportePresignedUrl(
   // agencia por UUID (write-IDOR).
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
-  if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
+  if (!(await esReevaluable(est))) {
     throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
   }
 
@@ -3305,7 +3333,7 @@ export async function confirmarSoporteUpload(
   // 1. Re-validate eligibility (race-condition guard)
   const { data: estudio, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, expediente_id')
+    .select('id, estado, resultado, tipo, expediente_id')
     .eq('id', estudioId)
     .single();
 
@@ -3313,14 +3341,14 @@ export async function confirmarSoporteUpload(
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
   }
 
-  const est = estudio as unknown as { id: string; estado: string; resultado: string; expediente_id: string };
+  const est = estudio as unknown as { id: string; estado: string; resultado: string; tipo: string | null; expediente_id: string };
 
   // Tenant guard: registra una fila en estudios_documentos_soporte para este
   // estudio. Sin scoping, la inmobiliaria adjuntaba soportes a estudios de OTRA
   // agencia por UUID (write-IDOR).
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
 
-  if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
+  if (!(await esReevaluable(est))) {
     throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
   }
 
@@ -3432,7 +3460,7 @@ export async function solicitarReEvaluacion(
     soloAdvertir: await estudioYaCobrado(est.expediente_id),
   });
 
-  if (est.estado !== 'completado' || !RESULTADOS_REEVALUABLES.includes(est.resultado)) {
+  if (!(await esReevaluable(est))) {
     throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
   }
 
@@ -3690,16 +3718,16 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
 
   // 5. Determine if can re-evaluate
   const lastEstudio = estudiosChain[estudiosChain.length - 1] as unknown as
-    { estado: string; resultado: string; fecha_completado: string | null } | undefined;
+    { estado: string; resultado: string; tipo: string | null; expediente_id: string; fecha_completado: string | null } | undefined;
   const totalEnCadena = estudiosChain.length;
   // Mismo plazo que valida solicitarReEvaluacion: sin esto la UI dejaba subir
   // soportes y el 400 REEVALUACION_FUERA_DE_PLAZO llegaba al final.
   const plazoVencido = plazoReevaluacionVencido(lastEstudio?.fecha_completado);
   const puedeReevaluar =
     totalEnCadena <= MAX_REEVALUACIONES &&
-    lastEstudio?.estado === 'completado' &&
-    RESULTADOS_REEVALUABLES.includes(lastEstudio.resultado) &&
-    !plazoVencido;
+    !!lastEstudio &&
+    !plazoVencido &&
+    (await esReevaluable(lastEstudio));
 
   return {
     total_en_cadena: totalEnCadena,
@@ -3884,7 +3912,7 @@ async function registrarResultadoInline(
     salida: salidaFinal,
     veredicto: veredictoFinal,
     apisFallidas,
-  } = await aplicarMotorSiAplica({
+  } = await retenerAprobadoEnRevisionManual(expedienteId, providerInput?.tipo, await aplicarMotorSiAplica({
     estudioId,
     expedienteId,
     proveedor: proveedorId,
@@ -3894,7 +3922,7 @@ async function registrarResultadoInline(
     providerInput,
     antecedentes: antecedentes ?? null,
     ejecucion,
-  });
+  }));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
@@ -4027,6 +4055,30 @@ async function registrarResultadoInline(
       analista_responsable: 'AUTOMATICO',
     },
   }).catch(() => undefined);
+}
+
+/**
+ * P33 (Adenda 2 §5/§5.1) en los caminos automáticos: con el caso en revisión
+ * manual (expediente 'condicionado'), un «aprobado» del buró —la re-consulta
+ * al otro buró— no aprueba solo. Queda condicionado, con la nota para el
+ * analista, que lo aprueba con «Aprobar estudio». Mismo guard que
+ * registrarResultado; el co-arrendatario no cuenta (lo pondera la revisión).
+ */
+async function retenerAprobadoEnRevisionManual(
+  expedienteId: string,
+  tipoEstudio: string | null | undefined,
+  final: DecisionFinalEstudio,
+): Promise<DecisionFinalEstudio> {
+  if (final.resultado !== 'aprobado' || tipoEstudio === 'con_coarrendatario') return final;
+  const { data: exp } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('estado')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  if ((exp as { estado?: string } | null)?.estado !== 'condicionado') return final;
+  const nota =
+    'Para el analista: la nueva consulta dio APROBADO, pero el caso está en revisión manual (P33): se aprueba con «Aprobar estudio».';
+  return { ...final, resultado: 'condicionado', observaciones: [final.observaciones, nota].filter(Boolean).join(' ') };
 }
 
 /** Decision con la que los tres caminos llegan a fn_registrar_resultado_estudio. */
@@ -4344,14 +4396,14 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
 
     // Adenda 1 §2/§3 con MOTOR_DECIDE_ENABLED — mismo helper que el camino
     // inline. Sin providerInput: este camino no consulta la segunda central.
-    const final = await aplicarMotorSiAplica({
+    const final = await retenerAprobadoEnRevisionManual(est.expediente_id, est.tipo, await aplicarMotorSiAplica({
       estudioId,
       expedienteId: est.expediente_id,
       proveedor: est.proveedor,
       resultadoBuro: result.resultado,
       datosCrudos: result.datos_crudos,
       decision,
-    });
+    }));
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error: rpcError } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {

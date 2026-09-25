@@ -38,6 +38,7 @@ import {
   fechasDeFirma,
   finDelCrc,
   fueraDePlazo,
+  identidadVencida,
   plazoDeFirma,
   sobreIdDeCustom,
   textoAvisoFirmaIncompleta,
@@ -409,7 +410,7 @@ export async function cerrarIncompleto(s: Sobre): Promise<void> {
   }
   const c = await leerContrato(s.contrato_id);
   if (!c) return;
-  const motivo = s.motivo === 'EXPIRED' || s.motivo === 'FUERA_PLAZO' ? s.motivo : 'REJECTED';
+  const motivo = s.motivo === 'EXPIRED' || s.motivo === 'FUERA_PLAZO' || s.motivo === 'IDENTIDAD' ? s.motivo : 'REJECTED';
   if (c.estado === 'pendiente_firma')
     await transicionar(c.id, 'firma_incompleta', `Firma incompleta: ${motivo}${s.motivo_detalle ? ` — ${s.motivo_detalle}` : ''}`);
   const { data } = await db('contratos').select('estado').eq('id', c.id).maybeSingle();
@@ -659,6 +660,67 @@ async function cerrarPorVencimiento(s: Sobre, firmantes: FirmanteSobre[]): Promi
   return cerrarIncompleto({ ...actual, firmantes, ...cambio });
 }
 
+// ── EN FIRMA sin proceso en Auco (biometría de firma) ──
+
+/**
+ * Con la biometría de firma el proceso de Auco sale cuando todos verificaron su
+ * identidad (verificacion-identidad.service). Si alguien no abre su enlace (o
+ * Auco falló después y nadie reintentó), el contrato quedaba EN FIRMA sin
+ * proceso ni vencimiento, con el inmueble reservado. Vencido el plazo de firma
+ * contado desde el envío, o el CRC, pasa a FIRMA INCOMPLETA con el mismo aviso:
+ * lo lleva un sobre 'incompleto' sin código de Auco, así el acuse y el reenvío
+ * funcionan igual que con un proceso vencido.
+ */
+export async function cerrarSinProceso(contratoId: string, ahora = Date.now()): Promise<void> {
+  const ultimo = await ultimoSobre(contratoId);
+  // Proceso vivo o firmado: lo cierra reconciliarSobre. Incompleto sin aviso: lo cura el barrido.
+  if (ultimo && (['creando', 'en_firma', 'completo'].includes(ultimo.estado) || (ultimo.estado === 'incompleto' && !ultimo.aviso_entregado_en)))
+    return;
+  const { data: vs, error: vErr } = await db('firma_verificacion_identidad')
+    .select('nombre, estado, enviado_por')
+    .eq('contrato_id', contratoId);
+  if (vErr) falla('no se pudo leer la verificación de identidad', vErr);
+  const verificaciones = (vs as { nombre: string; estado: string; enviado_por: string | null }[] | null) ?? [];
+  // ponytail: solo contratos que pasaron por la verificación de identidad; sin ella, un EN FIRMA sin proceso tiene "Reintentar".
+  if (!verificaciones.length) return;
+  const c = await leerContrato(contratoId);
+  if (c?.estado !== 'pendiente_firma') return;
+  const { data: h, error: hErr } = await db('contrato_historial_estados')
+    .select('created_at')
+    .eq('contrato_id', contratoId)
+    .eq('estado_nuevo', 'pendiente_firma')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (hErr) falla('no se pudo leer cuándo se envió a firma', hErr);
+  const enviadoEn = Date.parse((h as { created_at?: string } | null)?.created_at ?? '');
+  if (!Number.isFinite(enviadoEn)) return;
+  const [vig, cal] = await Promise.all([vigenciaEstudio(c), getCalibracion()]);
+  const limite = identidadVencida(enviadoEn, cal.DIAS_EXPIRACION_FIRMA, vig?.fin ?? null, ahora);
+  if (limite === null) return;
+
+  const pendientes = verificaciones.filter((v) => v.estado === 'pendiente').map((v) => v.nombre);
+  const { data: creado, error: errIns } = await db('contrato_v3_sobres')
+    .insert({
+      contrato_id: contratoId,
+      intento: (ultimo?.intento ?? 0) + 1,
+      estado: 'incompleto',
+      expira_en: new Date(limite).toISOString(),
+      firmantes: [],
+      motivo: pendientes.length ? 'IDENTIDAD' : 'EXPIRED',
+      motivo_detalle: pendientes.length ? pendientes.join(', ').slice(0, 500) : null,
+      cerrado_en: new Date(ahora).toISOString(),
+      enviado_por: verificaciones.find((v) => v.enviado_por)?.enviado_por ?? null,
+    } as never)
+    .select('id')
+    .single();
+  if ((errIns as { code?: string } | null)?.code === '23505') return; // otro proceso (o el sobre de Auco) llegó primero
+  if (errIns) falla('no se pudo registrar el cierre sin proceso', errIns);
+  logger.warn({ contratoId, pendientes: pendientes.length }, 'Firma V3: EN FIRMA sin proceso en Auco y con el plazo vencido; queda firma incompleta');
+  const s = await leerSobre((creado as { id: string }).id);
+  if (s) await cerrarIncompleto(s);
+}
+
 // ── Webhook ──
 
 /** El sobre al que se refiere un evento de Auco: por `code` o, si no viene, por `custom`. */
@@ -741,7 +803,8 @@ function programarReconciliacion(id: string, evento: { code?: string; message?: 
 /**
  * Cada 15 min (server.ts): recupera webhooks perdidos (vencimientos, rechazos,
  * firmas), procesos que un redeploy cortó a medias, avisos sin entregar,
- * cancelaciones sin confirmar en Auco y PDFs firmados sin archivar.
+ * cancelaciones sin confirmar en Auco, contratos EN FIRMA que vencieron sin
+ * proceso (verificación de identidad sin terminar) y PDFs firmados sin archivar.
  */
 export async function barrerFirmasV3(): Promise<void> {
   const { data, error } = await db('contrato_v3_sobres')
@@ -760,6 +823,18 @@ export async function barrerFirmasV3(): Promise<void> {
   for (const { id } of (data as { id: string }[] | null) ?? []) {
     await reconciliarSobre(id).catch((e) =>
       logger.warn({ sobreId: id, error: e instanceof Error ? e.message : String(e) }, 'barrerFirmasV3: sobre sin reconciliar'),
+    );
+  }
+
+  const { data: sinProceso, error: spErr } = await db('contratos')
+    .select('id')
+    .not('destinacion', 'is', null)
+    .eq('estado', 'pendiente_firma')
+    .limit(50);
+  if (spErr) logger.warn({ error: spErr.message }, 'barrerFirmasV3: no se pudieron leer los contratos en firma');
+  for (const { id } of (sinProceso as { id: string }[] | null) ?? []) {
+    await cerrarSinProceso(id).catch((e) =>
+      logger.warn({ contratoId: id, error: e instanceof Error ? e.message : String(e) }, 'barrerFirmasV3: contrato sin proceso sin revisar'),
     );
   }
 
