@@ -20,6 +20,7 @@ import {
   maximoSinNuevaEvaluacionCop,
   noImprimibles,
   partirNit,
+  problemaNit,
   prefill,
   textosPendientesPrevistos,
   type AsistenteCompleto,
@@ -457,11 +458,32 @@ describe('G1 — perfil del arrendador', () => {
         detalle: [
           'Razón social',
           'Matrícula expedida por',
-          'NIT con dígito de verificación válido (ej. 900.123.456-8)',
+          'NIT 900123456: falta el dígito de verificación (con ese número sería 8; confírmalo en el RUT)',
           'Tipo y número de documento del representante legal',
         ],
       }),
     ]);
+  });
+
+  it('NIT con el dígito equivocado: dice cuál correspondería, sin dar el número por bueno', () => {
+    expect(bloqueos({ arrendador: { ...PERFIL, nit: '901.234.567-8' } })).toEqual([
+      expect.objectContaining({
+        codigo: 'PERFIL_ARRENDADOR_INCOMPLETO',
+        detalle: [
+          'NIT 901.234.567-8: el dígito de verificación no corresponde al número (con ese número sería 7); revisa ambos en el RUT',
+        ],
+      }),
+    ]);
+    expect(bloqueos({ arrendador: { ...PERFIL, nit: '901.234.567-7' } })).toEqual([]);
+  });
+
+  it('problemaNit: vacío y con letras piden el formato; bien escrito, null', () => {
+    expect(problemaNit(null)).toBe('NIT con dígito de verificación (ej. 900.123.456-8)');
+    expect(problemaNit('  ')).toBe('NIT con dígito de verificación (ej. 900.123.456-8)');
+    expect(problemaNit('90012345A-1')).toBe(
+      'NIT «90012345A-1»: escríbelo con números y el dígito de verificación (ej. 900.123.456-8)',
+    );
+    expect(problemaNit('900 123 456-8')).toBeNull();
   });
 
   it('bloquea antes de generar si la matrícula no cabe en contrato_partes (40)', () => {

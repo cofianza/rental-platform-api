@@ -18,7 +18,7 @@ import {
 } from '@/modules/estudios/portabilidad';
 import type { Tarifas } from '@/modules/estudios/tarifas';
 import { formatearCOP } from '@/modules/estudios/tope-canon.guard';
-import { validateNitModulo11 } from '@/modules/registration/registration.schema';
+import { digitoVerificacionNit, validateNitModulo11 } from '@/modules/registration/registration.schema';
 import type {
   AceptacionClausulas,
   Bloqueo,
@@ -273,6 +273,20 @@ export function partirNit(nit: string | null | undefined): { numero: string; dv:
   return m && validateNitModulo11(s) ? { numero: m[1], dv: m[2] } : null;
 }
 
+/** Qué tiene mal el NIT para el contrato, dicho con el dígito esperado; null si está bien. */
+export function problemaNit(nit: string | null | undefined): string | null {
+  if (partirNit(nit)) return null;
+  const escrito = (nit ?? '').trim();
+  const m = /^(\d{1,15})(?:-(\d))?$/.exec(escrito.replace(/[.\s]/g, ''));
+  if (!escrito) return 'NIT con dígito de verificación (ej. 900.123.456-8)';
+  if (!m) return `NIT «${escrito}»: escríbelo con números y el dígito de verificación (ej. 900.123.456-8)`;
+  const dv = digitoVerificacionNit(m[1]);
+  // Puede estar mal el número y no el dígito: se pide revisar ambos en el RUT, no copiar el dígito.
+  return m[2] === undefined
+    ? `NIT ${escrito}: falta el dígito de verificación (con ese número sería ${dv}; confírmalo en el RUT)`
+    : `NIT ${escrito}: el dígito de verificación no corresponde al número (con ese número sería ${dv}); revisa ambos en el RUT`;
+}
+
 const mismoDocumento = (
   a: { tipo_documento: string; numero_documento: string },
   b: { tipo_documento: string; numero_documento: string },
@@ -398,7 +412,8 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
   const p = f.arrendador;
   const faltan = [...f.completitudFaltantes];
   if (vacio(p.matricula_expedida_por)) faltan.push('Matrícula expedida por');
-  if (!partirNit(p.nit)) faltan.push('NIT con dígito de verificación válido (ej. 900.123.456-8)');
+  const nit = problemaNit(p.nit);
+  if (nit) faltan.push(nit);
   if (vacio(p.representante_legal_tipo_documento) || vacio(p.representante_legal_documento))
     faltan.push('Tipo y número de documento del representante legal');
   // Los anchos de contrato_partes (migración 20260921000001) son el límite real: el perfil
@@ -410,7 +425,8 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
   if (faltan.length)
     b(
       'PERFIL_ARRENDADOR_INCOMPLETO',
-      `Faltan datos del arrendador: ${faltan.join(', ')}. El titular de la inmobiliaria los completa en Configuración › Datos para contrato.`,
+      // La lista va en `detalle` (la web la pinta en viñetas): repetirla aquí la duplicaba en pantalla.
+      'Completa o corrige los datos del arrendador en Configuración › Datos para contrato.',
       { accion: 'datos_contrato', detalle: faltan },
     );
 

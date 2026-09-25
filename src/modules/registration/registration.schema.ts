@@ -9,17 +9,8 @@ export const passwordSchema = z
     'La contraseña debe contener al menos 1 mayúscula, 1 minúscula y 1 número',
   );
 
-/**
- * Valida el digito de verificacion del NIT colombiano con algoritmo modulo-11.
- * Formato esperado: "XXXXXXXXX-D" donde D es el digito de verificacion.
- */
-export function validateNitModulo11(nit: string): boolean {
-  const match = nit.match(/^(\d{1,15})-(\d)$/);
-  if (!match) return false;
-
-  const digits = match[1];
-  const expectedCheck = parseInt(match[2], 10);
-
+/** Dígito de verificación DIAN (módulo 11) de los dígitos de un NIT, sin el DV. */
+export function digitoVerificacionNit(digits: string): number {
   const weights = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71];
 
   let sum = 0;
@@ -29,9 +20,16 @@ export function validateNitModulo11(nit: string): boolean {
   }
 
   const remainder = sum % 11;
-  const checkDigit = remainder >= 2 ? 11 - remainder : remainder;
+  return remainder >= 2 ? 11 - remainder : remainder;
+}
 
-  return checkDigit === expectedCheck;
+/**
+ * Valida el digito de verificacion del NIT colombiano con algoritmo modulo-11.
+ * Formato esperado: "XXXXXXXXX-D" donde D es el digito de verificacion.
+ */
+export function validateNitModulo11(nit: string): boolean {
+  const match = nit.match(/^(\d{1,15})-(\d)$/);
+  return !!match && digitoVerificacionNit(match[1]) === parseInt(match[2], 10);
 }
 
 const phoneSchema = z
