@@ -32,6 +32,7 @@ export async function aprobarCondicionado(req: Request, res: Response) {
     fundamento: string;
     documentos_consultados: string[];
     evaluacion: service.DecisionRevisionManual['evaluacion'];
+    fuente_capacidad_verificada?: boolean;
   };
   // Datos del contrato opcionales: si no vienen, solo se aprueba (sin generar).
   const datosContrato =
@@ -42,6 +43,7 @@ export async function aprobarCondicionado(req: Request, res: Response) {
     fundamento: body.fundamento,
     documentos_consultados: body.documentos_consultados,
     evaluacion: body.evaluacion,
+    fuente_capacidad_verificada: body.fuente_capacidad_verificada,
   }, req.ip);
   sendSuccess(res, result);
 }

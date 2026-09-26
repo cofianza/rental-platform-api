@@ -5,10 +5,14 @@ import { supabase } from '@/lib/supabase';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import * as service from './facturacion.service';
 import * as factus from '@/lib/factus';
+import type { ListFacturasQuery } from './facturacion.schema';
 
 export async function list(req: Request, res: Response) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const result = await service.listFacturas(req.query as any, req.user!.id, req.user!.rol);
+  // El query ya validado (números y booleano convertidos, defaults puestos): el
+  // crudo trae strings — `nota_credito_pendiente=false` sería truthy y la página
+  // 2 pedía el rango 20..2019 ("20" + "20").
+  const query = (req as Request & { validatedQuery?: ListFacturasQuery }).validatedQuery ?? (req.query as unknown as ListFacturasQuery);
+  const result = await service.listFacturas(query, req.user!.id, req.user!.rol);
   sendSuccess(res, result.facturas, { pagination: result.pagination } as never);
 }
 

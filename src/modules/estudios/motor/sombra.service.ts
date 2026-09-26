@@ -150,6 +150,7 @@ export async function registrarScorecardSombra(args: ArgsScorecardSombra): Promi
       canon_mensual_cop: canon,
       score_persistido: scorePersistido,
       factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
+      iva_pct: cal.TARIFA_IVA,
       umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
       umbral_revision: cal.UMBRAL_ZONA_GRIS,
       umbral_score_rechazo: cal.UMBRAL_SCORE_RECHAZO,

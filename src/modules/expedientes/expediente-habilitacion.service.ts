@@ -341,7 +341,7 @@ export async function rechazarEstudio(
       return notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'estudio.rechazado',
-        titulo: 'Solicitud no continúa',
+        titulo: 'Estudio no continúa',
         mensaje: motivoNorm
           ? `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar la evaluación. Motivo: ${motivoNorm}`
           : `Tras la visita a ${ctx.inmuebleDireccion}, el propietario decidió no habilitar la evaluación.`,
@@ -451,6 +451,77 @@ export interface DecisionRevisionManual {
   documentos_consultados: string[];
   /** Adenda 2 §4.3: V7 y V9, con los que se recalcula el puntaje. */
   evaluacion: EvaluacionRevisionManual;
+  /** Politica §15 (thin-file sin ingreso de la central): el analista verifico una fuente de capacidad. */
+  fuente_capacidad_verificada?: boolean;
+}
+
+/** Politica §15, ultima fila: relacion canon/ingreso maxima del carril thin-file. */
+const THIN_FILE_CANON_INGRESO_MAX_PCT = 30;
+
+/**
+ * Politica §15, ultima fila — "sin historia en ninguna central": la aprobacion
+ * exige (i) una fuente de capacidad verificable, (ii) coarrendatario obligatorio
+ * con puntaje >= UMBRAL_COARRENDATARIO y (iii) canon/ingreso <= 30%. Solo aplica
+ * si el titular no tiene score de ninguna central; "ninguna central respondio"
+ * (traza sin centrales consultadas) es el §14, no esto. Lanza el 400 accionable.
+ */
+async function assertRequisitosThinFile(expedienteId: string, revision: DecisionRevisionManual | undefined): Promise<void> {
+  const { data, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, score, cascada')
+    .eq('expediente_id', expedienteId)
+    .neq('tipo', 'con_coarrendatario')
+    .eq('estado', 'completado')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    logger.error({ error: error.message, expedienteId }, 'Thin-file: no se pudo leer la evaluación del titular');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del titular. Intenta de nuevo en un momento.');
+  }
+  const est = data as { id: string; score: number | null; cascada: { score_secundaria?: number | null; centrales_consultadas?: unknown } | null } | null;
+  if (!est || est.score != null || est.cascada?.score_secundaria != null) return;
+  if (Array.isArray(est.cascada?.centrales_consultadas) && est.cascada.centrales_consultadas.length === 0) return;
+
+  const [{ getCalibracion }, { coarrendatarioVinculadoVerificado }, { leerSombraDelEstudio }] = await Promise.all([
+    import('@/lib/calibracion'),
+    import('../estudios/coarrendatario-vinculado'),
+    import('../estudios/certificado.service'),
+  ]);
+  const [cal, coa, sombra] = await Promise.all([
+    getCalibracion(),
+    coarrendatarioVinculadoVerificado(expedienteId),
+    leerSombraDelEstudio(est.id),
+  ]);
+
+  const umbral = cal.UMBRAL_COARRENDATARIO;
+  if (!coa || coa.puntaje === null || coa.puntaje < umbral) {
+    throw AppError.badRequest(
+      'El solicitante no tiene historial en ninguna central de riesgo. Para aprobarlo, la Política exige un co-arrendatario ' +
+        `evaluado con puntaje de ${umbral} o más` +
+        (coa
+          ? ` (el co-arrendatario vinculado tiene ${coa.puntaje === null ? 'una evaluación sin puntaje' : `${coa.puntaje} puntos`}).`
+          : ', y este estudio no tiene uno con la evaluación terminada.'),
+      'THIN_FILE_COARRENDATARIO_REQUERIDO',
+      { umbral, puntaje_coarrendatario: coa?.puntaje ?? null },
+    );
+  }
+  const canonIngreso = sombra?.canonIngresoPct ?? null;
+  if (canonIngreso !== null && canonIngreso > THIN_FILE_CANON_INGRESO_MAX_PCT) {
+    throw AppError.badRequest(
+      `El solicitante no tiene historial en ninguna central de riesgo y el canon es el ${canonIngreso.toLocaleString('es-CO')}% ` +
+        `de su ingreso: para aprobarlo, la Política exige que no pase del ${THIN_FILE_CANON_INGRESO_MAX_PCT}%.`,
+      'THIN_FILE_CANON_INGRESO',
+      { canon_ingreso_pct: canonIngreso, maximo_pct: THIN_FILE_CANON_INGRESO_MAX_PCT },
+    );
+  }
+  if (canonIngreso === null && !revision?.fuente_capacidad_verificada) {
+    throw AppError.badRequest(
+      'El solicitante no tiene historial en ninguna central y la central no dio su ingreso. Para aprobarlo, verifica al menos ' +
+        'una fuente de capacidad de pago (certificado laboral, extractos, declaración de renta…) y márcalo en «Aprobar estudio».',
+      'THIN_FILE_FUENTE_CAPACIDAD',
+    );
+  }
 }
 
 export async function aprobarCondicionado(
@@ -545,6 +616,10 @@ async function aprobarYGenerarContrato(params: {
     );
   }
 
+  // Politica §15: un titular sin historia en ninguna central no se aprueba sin
+  // los requisitos del carril thin-file. Antes de escribir nada.
+  if (fromState === 'condicionado') await assertRequisitosThinFile(expedienteId, params.revision);
+
   const nowIso = new Date().toISOString();
 
   // 2. Persistir datos del contrato en el expediente (para auditoría +
@@ -615,6 +690,7 @@ async function aprobarYGenerarContrato(params: {
           fundamento: params.revision?.fundamento ?? null,
           documentos_consultados: params.revision?.documentos_consultados ?? [],
           puntaje_revision_manual: puntajeRevisionManual,
+          ...(params.revision?.fuente_capacidad_verificada ? { fuente_capacidad_verificada: true } : {}),
         },
       } as never);
 
@@ -633,6 +709,7 @@ async function aprobarYGenerarContrato(params: {
         fundamento: params.revision?.fundamento ?? null,
         documentos_consultados: params.revision?.documentos_consultados ?? [],
         puntaje_revision_manual: puntajeRevisionManual,
+        fuente_capacidad_verificada: params.revision?.fuente_capacidad_verificada ?? false,
       },
       ip: params.ip,
     });
@@ -700,8 +777,8 @@ async function aprobarYGenerarContrato(params: {
       return notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'estudio.aprobado',
-        titulo: 'Solicitud aprobada',
-        mensaje: 'Cofianza revisó tu solicitud y la aprobó. Te avisaremos cuando el contrato esté listo para firmar.',
+        titulo: 'Estudio aprobado',
+        mensaje: 'Cofianza revisó tu estudio y lo aprobó. Te avisaremos cuando el contrato esté listo para firmar.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, contrato_id: contratoId, via: 'aprobacion_condicionado' },
       });
@@ -806,11 +883,11 @@ export async function avisarSolicitanteDecision(
     await notificarUsuario({
       userId: perfilId,
       tipo: decision === 'aprobado' ? 'estudio.aprobado' : 'estudio.rechazado',
-      titulo: decision === 'aprobado' ? 'Solicitud aprobada' : 'Solicitud no aprobada',
+      titulo: decision === 'aprobado' ? 'Estudio aprobado' : 'Estudio no aprobado',
       mensaje:
         decision === 'aprobado'
-          ? 'Cofianza revisó tu solicitud y la aprobó. Te avisaremos cuando el contrato esté listo para firmar.'
-          : 'Cofianza revisó tu solicitud y no la aprobó. Te escribimos al correo el motivo y cómo presentar una apelación.',
+          ? 'Cofianza revisó tu estudio y lo aprobó. Te avisaremos cuando el contrato esté listo para firmar.'
+          : 'Cofianza revisó tu estudio y no lo aprobó. Te escribimos al correo el motivo y cómo presentar una apelación.',
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, decision },
     });

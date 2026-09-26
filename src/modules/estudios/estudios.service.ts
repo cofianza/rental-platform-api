@@ -233,7 +233,7 @@ export async function listEstudios(
   // Ver assertNoEsEstudioDeOtraPersona: el titular no lista el del co-arrendatario.
   if (userRol === 'solicitante') estudiosQuery = estudiosQuery.neq('tipo', 'con_coarrendatario');
 
-  const [{ data: expediente, error: expError }, , { data, error, count }, autorizacion] = await Promise.all([
+  const [{ data: expediente, error: expError }, , { data, error, count }, autorizacion, reasignaciones] = await Promise.all([
     (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('id, estado, estado_pre_cancelacion')
       .eq('id', expedienteId)
@@ -244,6 +244,7 @@ export async function listEstudios(
     assertExpedienteAccess(expedienteId, userId, userRol),
     estudiosQuery.order('created_at', { ascending: false }).range(offset, offset + limit - 1),
     leerAutorizacionTitular(expedienteId),
+    leerReasignacionesDelExpediente(expedienteId),
   ]);
 
   if (expError || !expediente) {
@@ -264,7 +265,11 @@ export async function listEstudios(
   const filas = (data || []) as unknown as Record<string, unknown>[];
   const decision = await decisionParaLectura(expediente as ExpedienteDecision, filas);
   const conRuta = await Promise.all(filas.map((fila) => adjuntarRuta(fila, decision)));
-  const conDerivados = await adjuntarExpiracionALista(conRuta, expedienteId, autorizacion);
+  const conDerivados = (await adjuntarExpiracionALista(conRuta, expedienteId, autorizacion)).map((e) => ({
+    ...e,
+    // Flujo §11 "Reasignado": etiqueta derivada (ver reasignacion.service.ts).
+    reasignado_desde: reasignaciones.get(e.id as string) ?? null,
+  }));
 
   return {
     estudios: redactarEstudiosSegunRol(conDerivados, userRol),
@@ -275,6 +280,39 @@ export async function listEstudios(
       totalPages: Math.ceil(total / limit),
     },
   };
+}
+
+/**
+ * Flujo §11 "Reasignado": por estudio, la propiedad de la que vino en su
+ * ultima reasignacion (direccion, o codigo si no la hay). Best-effort: sin
+ * esto el listado sigue igual.
+ */
+async function leerReasignacionesDelExpediente(expedienteId: string): Promise<Map<string, string>> {
+  const porEstudio = new Map<string, string>();
+  try {
+    const { data } = await (supabase
+      .from('estudios_reasignaciones' as string) as ReturnType<typeof supabase.from>)
+      .select('estudio_id, inmueble_origen_id')
+      .eq('expediente_id', expedienteId)
+      .order('created_at', { ascending: true });
+    const filas = (data ?? []) as Array<{ estudio_id: string; inmueble_origen_id: string }>;
+    if (filas.length === 0) return porEstudio;
+    const { data: inm } = await (supabase
+      .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
+      .select('id, codigo, direccion')
+      .in('id', [...new Set(filas.map((f) => f.inmueble_origen_id))]);
+    const nombre = new Map(
+      ((inm ?? []) as Array<{ id: string; codigo: string | null; direccion: string | null }>).map((i) => [
+        i.id,
+        i.direccion?.trim() || i.codigo?.trim() || 'otra propiedad',
+      ]),
+    );
+    // Ascendente: la ultima reasignacion de cada estudio es la que queda.
+    for (const f of filas) porEstudio.set(f.estudio_id, nombre.get(f.inmueble_origen_id) ?? 'otra propiedad');
+  } catch (err) {
+    logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'No se pudieron leer las reasignaciones del estudio');
+  }
+  return porEstudio;
 }
 
 // ============================================================
@@ -636,6 +674,8 @@ function veredictoExpiracion(
     autorizacionFirmada: aut?.estado === 'autorizado',
     ahoraMs: Date.now(),
     plazoDias: plazoDelEnlace ?? plazoDias,
+    // «No soy yo» / documento que no coincide: enlace detenido antes del plazo.
+    autorizacionEstado: aut?.estado ?? null,
   });
 }
 
@@ -1682,6 +1722,73 @@ async function dispararHookPostResultado(
   }
 }
 
+/** Politica §8: "vigencia maxima del score externo para ser usado sin reconsulta: 30 dias calendario desde la consulta". */
+export const VIGENCIA_SCORE_EXTERNO_DIAS = 30;
+export const DATOS_BURO_VENCIDOS_ERROR_CODE = 'DATOS_BURO_VENCIDOS';
+
+interface PadreReevaluacion {
+  fecha_completado: string | null;
+  canon_evaluado: number | string | null;
+  canon_evaluado_origen: string | null;
+}
+
+async function leerPadreReevaluacion(padreId: string): Promise<PadreReevaluacion | null> {
+  const { data, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('fecha_completado, canon_evaluado, canon_evaluado_origen')
+    .eq('id', padreId)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  return data as PadreReevaluacion | null;
+}
+
+/**
+ * Fecha de la consulta al buro en la que se apoya un resultado registrado a
+ * mano, o null si no hubo consulta del sistema (el analista trae el resultado:
+ * su fecha es la del registro).
+ *
+ *  - Re-evaluacion (estudio hijo): la del padre. El hijo nace 'solicitado', no
+ *    es ejecutable, y el analista lo decide sobre el reporte del padre mas los
+ *    soportes. La fecha_completado del padre ES su consulta (el RPC la pone al
+ *    llegar el buro; si el padre tambien es hijo, ya quedo anclada asi).
+ *  - Estudio que si consulto al buro pero cuyo resultado no se registro solo
+ *    (barrerEstudiosEnProcesoColgados): la ejecucion que trajo el reporte, en
+ *    la bitacora. El payload del buro no trae fecha propia.
+ */
+async function fechaConsultaBuro(
+  est: { id: string; referencia_proveedor: string | null },
+  padre: PadreReevaluacion | null,
+): Promise<string | null> {
+  if (padre) return padre.fecha_completado;
+  if (!est.referencia_proveedor) return null;
+  const { data } = await (supabase
+    .from('bitacora' as string) as ReturnType<typeof supabase.from>)
+    .select('created_at')
+    .eq('entidad_id', est.id)
+    .eq('accion', AUDIT_ACTIONS.ESTUDIO_PROVIDER_EXECUTED)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as { created_at?: string } | null)?.created_at ?? null;
+}
+
+/** Pura (Politica §8): lanza si el reporte del buro tiene mas de 30 dias. */
+export function assertScoreExternoVigente(consultaIso: string | null, ahoraMs = Date.now()): void {
+  if (!consultaIso) return;
+  const t = new Date(consultaIso).getTime();
+  if (!Number.isFinite(t)) return;
+  const dias = Math.floor((ahoraMs - t) / (24 * 60 * 60 * 1000));
+  if (dias <= VIGENCIA_SCORE_EXTERNO_DIAS) return;
+  throw new AppError(
+    409,
+    DATOS_BURO_VENCIDOS_ERROR_CODE,
+    `El reporte del buró de esta evaluación es del ${new Date(t).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })} ` +
+      `(hace ${dias} días) y la Política (§8) solo permite usar el score externo ${VIGENCIA_SCORE_EXTERNO_DIAS} días desde la consulta. ` +
+      'Hace falta reconsultar el buró con una evaluación nueva antes de registrar un resultado.',
+    { fecha_consulta: consultaIso, dias, vigencia_dias: VIGENCIA_SCORE_EXTERNO_DIAS },
+  );
+}
+
 export async function registrarResultado(
   estudioId: string,
   input: RegistrarResultadoInput,
@@ -1692,7 +1799,7 @@ export async function registrarResultado(
   // 1. Get estudio — verify exists, estado, and resultado still pendiente
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, expediente_id, canon_evaluado, proveedor, tipo')
+    .select('id, estado, resultado, expediente_id, canon_evaluado, proveedor, tipo, estudio_padre_id, referencia_proveedor')
     .eq('id', estudioId)
     .single();
 
@@ -1708,6 +1815,8 @@ export async function registrarResultado(
     canon_evaluado: number | string | null;
     proveedor: string | null;
     tipo: string | null;
+    estudio_padre_id: string | null;
+    referencia_proveedor: string | null;
   };
 
   // Tenant guard: registrar (irreversiblemente) el resultado es una mutación
@@ -1728,6 +1837,14 @@ export async function registrarResultado(
       'RESULTADO_YA_REGISTRADO',
     );
   }
+
+  // 1.b Politica §8: el score externo sirve 30 dias desde la consulta. Un
+  //     resultado registrado a mano sobre un reporte del buro mas viejo no se
+  //     acepta (hace falta reconsultar), y la vigencia del CRC se ancla en esa
+  //     consulta, no en el dia en que el analista registra (ver 3.1).
+  const padre = est.estudio_padre_id ? await leerPadreReevaluacion(est.estudio_padre_id) : null;
+  const consultaBuro = await fechaConsultaBuro(est, padre);
+  assertScoreExternoVigente(consultaBuro);
 
   // 2. If certificado_storage_key provided, verify it exists in storage (y que sea de este estudio)
   if (input.certificado_storage_key) {
@@ -1816,12 +1933,15 @@ export async function registrarResultado(
   //      la columna queda NULL (el §4.3 lo dice con claridad).
   if (est.canon_evaluado === null || est.canon_evaluado === undefined) {
     try {
-      const bruto = await leerCanonDelInmueble({ expedienteId: est.expediente_id });
+      // Re-evaluacion: el canon evaluado es el del padre (mismo reporte del buro).
+      const heredado = padre?.canon_evaluado ?? null;
+      const bruto = heredado ?? (await leerCanonDelInmueble({ expedienteId: est.expediente_id }));
       const canon = typeof bruto === 'string' ? Number(bruto) : bruto;
       if (typeof canon === 'number' && Number.isFinite(canon) && canon > 0) {
+        const origen = heredado !== null ? (padre?.canon_evaluado_origen ?? 'manual') : 'manual';
         const { error: canonError } = await (supabase
           .from('estudios' as string) as ReturnType<typeof supabase.from>)
-          .update({ canon_evaluado: canon, canon_evaluado_origen: 'manual' } as never)
+          .update({ canon_evaluado: canon, canon_evaluado_origen: origen } as never)
           .eq('id', estudioId)
           .is('canon_evaluado', null);
         if (canonError) {
@@ -1868,6 +1988,25 @@ export async function registrarResultado(
       throw AppError.badRequest(rpcError.message, 'ESTUDIO_ESTADO_INVALIDO');
     }
     throw AppError.badRequest('Error al registrar el resultado', 'RESULTADO_UPDATE_ERROR');
+  }
+
+  // 3.1. VIGENCIA ANCLADA EN LA CONSULTA AL BURO. El RPC pone fecha_completado =
+  //      NOW(), y todo lo que mide la vigencia (CRC, §5.2, reasignacion,
+  //      contratos V3) la lee de ahi: registrar a mano una re-evaluacion le
+  //      regalaba 60 dias nuevos a un reporte viejo. Va antes del hook
+  //      post-resultado, que puede emitir el CRC.
+  if (consultaBuro) {
+    const { error: anclaErr } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({ fecha_completado: consultaBuro } as never)
+      .eq('id', estudioId)
+      .eq('estado', 'completado');
+    if (anclaErr) {
+      logger.error(
+        { estudioId, consultaBuro, error: anclaErr.message },
+        'registrarResultado: no se pudo anclar la vigencia en la consulta al buro — queda desde el registro',
+      );
+    }
   }
 
   // 3.5. Trazabilidad de la regla dura, antes del hook que la lee.
@@ -1978,10 +2117,10 @@ async function notificarSolicitanteResultadoEstudio(
       tipo: aprobado ? 'estudio.aprobado' : condicionado ? 'estudio.condicionado' : 'estudio.rechazado',
       titulo: aprobado ? 'Estudio aprobado' : condicionado ? 'Estudio condicionado' : 'Resultado de tu estudio',
       mensaje: aprobado
-        ? `Tu solicitud ${numeroExpediente} avanzó. Ya puedes continuar con el contrato.`
+        ? `Tu estudio ${numeroExpediente} avanzó. Ya puedes continuar con el contrato.`
         : condicionado
-          ? `Tu solicitud ${numeroExpediente} quedó condicionada. Invita a un co-arrendatario para continuar.`
-          : `Tu solicitud ${numeroExpediente} no fue aprobada. Revisa los detalles.`,
+          ? `Tu estudio ${numeroExpediente} quedó condicionado. Invita a un co-arrendatario para continuar.`
+          : `Tu estudio ${numeroExpediente} no fue aprobado. Revisa los detalles.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, resultado },
     });
@@ -3545,7 +3684,7 @@ export async function solicitarReEvaluacion(
   // 1. Validate estudio completado + rechazado
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, resultado, tipo, proveedor, expediente_id, duracion_contrato_meses, pago_por, estudio_padre_id, fecha_completado')
+    .select('id, estado, resultado, tipo, proveedor, expediente_id, duracion_contrato_meses, pago_por, estudio_padre_id, fecha_completado, canon_evaluado, canon_evaluado_origen, datos_formulario')
     .eq('id', estudioId)
     .single();
 
@@ -3559,6 +3698,9 @@ export async function solicitarReEvaluacion(
     duracion_contrato_meses: number; pago_por: string;
     estudio_padre_id: string | null;
     fecha_completado: string | null;
+    canon_evaluado: number | string | null;
+    canon_evaluado_origen: string | null;
+    datos_formulario: Record<string, unknown> | null;
   };
 
   // Tenant guard: crea un nuevo estudio (hijo) sobre el mismo expediente. Sin
@@ -3669,6 +3811,13 @@ export async function solicitarReEvaluacion(
       observaciones: null,
       solicitado_por: userId,
       estudio_padre_id: estudioId,
+      // Se re-evalua el MISMO reporte del buro: el canon con que se evaluo es
+      // el del padre (y el ingreso, via leerIngresoInferidoOriginal).
+      canon_evaluado: est.canon_evaluado,
+      canon_evaluado_origen: est.canon_evaluado_origen,
+      // Misma persona y mismo documento: sin esto el §5.2 (que busca por
+      // datos_formulario) no veia la re-evaluacion aprobada, solo al padre.
+      datos_formulario: est.datos_formulario,
     } as never)
     .select('id')
     .single();
@@ -4279,9 +4428,14 @@ async function aplicarMotorSiAplica(args: {
     antecedentes: args.antecedentes ?? null,
     centralCaida: args.ejecucion?.centralCaida ?? null,
   });
+  // El motivo de banda de la primaria ya no aplica (ver decidirConCascada):
+  // tampoco puede quedar en las observaciones que lee el gestor.
+  const obsBase = c.bandaDescartada && decision.observaciones
+    ? decision.observaciones.replace(c.bandaDescartada, '').replace(/\s{2,}/g, ' ').trim()
+    : decision.observaciones;
   return {
     resultado: c.resultado,
-    observaciones: [decision.observaciones, c.nota].filter(Boolean).join(' '),
+    observaciones: [obsBase, c.nota].filter(Boolean).join(' '),
     motivoRechazo: c.veredicto.rechaza
       ? c.veredicto.motivoGestor
       : c.resultado === 'rechazado'
@@ -4315,7 +4469,7 @@ export async function decidirConCascada(args: {
   antecedentes: ResumenAntecedentes | null;
   /** Adenda §2.3: central que ya no respondio en esta ejecucion; no se reconsulta. */
   centralCaida?: string | null;
-}): Promise<{ resultado: ResultadoDecidido; motivo: string; via: string | null; nota: string; salida: SalidaSombra; veredicto: VeredictoReglasDuras; apisFallidas: string[] }> {
+}): Promise<{ resultado: ResultadoDecidido; motivo: string; via: string | null; nota: string; salida: SalidaSombra; veredicto: VeredictoReglasDuras; apisFallidas: string[]; bandaDescartada: string | null }> {
   const { estudioId, expedienteId, proveedorPrimario } = args;
   const cal = await getCalibracion();
   const u: UmbralesDecision = {
@@ -4371,6 +4525,7 @@ export async function decidirConCascada(args: {
         umbral_score_revision: cal.UMBRAL_SCORE_REVISION,
         score_externo_secundario: scoreSecundario,
         proveedor_secundario: secundario,
+        iva_pct: cal.TARIFA_IVA,
       });
       veredicto = aplicarReglasDuras({ resultadoPropuesto: args.resultadoBuro, salida, umbralScoreRechazo: cal.UMBRAL_SCORE_RECHAZO });
       nota = `Cascada (Adenda §2): ${cascada.motivo}. ${BURO_LABELS[secundario] ?? secundario} respondio score ${scoreSecundario ?? 's/d'}; V1 = promedio de las dos centrales.`;
@@ -4384,6 +4539,13 @@ export async function decidirConCascada(args: {
     nota = `Cascada (Adenda §2): ${cascada.motivo}, pero no habia insumo para consultar la segunda central: se decide con la primaria como fuente unica.`;
   }
 
+  // Con la segunda central, V1 es el promedio: la banda 450-599 de la primaria
+  // ya no decide. Sin esto, un promedio fuera de la banda seguia en revision.
+  const bandaDescartada = secundario ? args.salidaPrimaria.revision_obligatoria : null;
+  const revisionManual = secundario
+    ? motivosRevisionTrasCascada(args.revisionManual, bandaDescartada, salida.revision_obligatoria)
+    : args.revisionManual;
+
   const d = decidirResultado({
     salida,
     reglasDurasActivas: veredicto.rechaza ? veredicto.reglas : [],
@@ -4391,7 +4553,7 @@ export async function decidirConCascada(args: {
     // El coarrendatario se evalua en su propio estudio y se pondera despues
     // (onCoarrendatarioEstudioCompletado). Aqui el titular se decide solo.
     coarrendatario: null,
-    motivosRevision: args.revisionManual ? [args.revisionManual] : [],
+    motivosRevision: revisionManual ? [revisionManual] : [],
   });
 
   const traza = construirTrazaCascada({
@@ -4426,7 +4588,27 @@ export async function decidirConCascada(args: {
     salida,
     veredicto,
     apisFallidas,
+    bandaDescartada,
   };
+}
+
+/**
+ * Pura (Adenda §2 + Politica §4.1): los motivos de revision despues de
+ * consultar la segunda central. Sale el de la banda de la primaria (mismo
+ * texto que resolverResultadoEstudio junto, igual que decision.ts lo separa) y
+ * entra el de la corrida con el promedio, si lo hay. Los demas motivos
+ * (listas, biometria, ingreso, perfil extranjero) no dependen del score.
+ */
+export function motivosRevisionTrasCascada(
+  revisionManual: string | null,
+  bandaPrimaria: string | null,
+  bandaFinal: string | null,
+): string | null {
+  const otros = bandaPrimaria && revisionManual
+    ? revisionManual.replace(bandaPrimaria, '').replace(/\s{2,}/g, ' ').trim()
+    : revisionManual;
+  const motivos = [otros, bandaFinal].filter((m): m is string => !!m);
+  return motivos.length > 0 ? motivos.join(' ') : null;
 }
 
 // ============================================================
@@ -4672,6 +4854,8 @@ export async function buscarEstudioVigentePorDocumento(
   numeroDocumento: string,
   userId: string,
   userRol: string,
+  /** Propiedad del paso 1: contra ella se mide la tolerancia del §4.3. */
+  inmuebleId?: string,
 ): Promise<{
   id: string;
   expediente_id: string;
@@ -4680,6 +4864,10 @@ export async function buscarEstudioVigentePorDocumento(
   fecha_completado: string | null;
   vigente_hasta: string;
   dias_restantes: number;
+  /** Se puede reasignar a la propiedad elegida sin volver a cobrar (§4.3). */
+  reutilizable: boolean;
+  /** Por qué no sirve para esta propiedad, si no sirve. */
+  motivo_no_reutilizable: string | null;
 } | null> {
   // Scoping: sólo estudios de expedientes que este usuario puede ver. `null`
   // = rol interno sin filtro; `[]` = no ve nada, así que ni consultamos.
@@ -4693,12 +4881,14 @@ export async function buscarEstudioVigentePorDocumento(
 
   let query = (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, resultado, fecha_completado, datos_formulario, expedientes(numero)')
+    .select('id, expediente_id, tipo, resultado, fecha_completado, canon_evaluado, datos_formulario, expedientes(numero)')
     .eq('estado', 'completado')
     .gte('fecha_completado', desde)
     // `->>` devuelve texto aunque el JSON guarde un número.
     .eq('datos_formulario->>numero_documento', numeroDocumento.trim())
     .order('fecha_completado', { ascending: false })
+    // Una re-evaluación comparte fecha_completado con su padre (la de la consulta al buró).
+    .order('created_at', { ascending: false })
     .limit(25);
 
   if (allowed !== null) query = query.in('expediente_id', allowed);
@@ -4710,8 +4900,10 @@ export async function buscarEstudioVigentePorDocumento(
       | {
           id: string;
           expediente_id: string;
+          tipo: string | null;
           resultado: string | null;
           fecha_completado: string | null;
+          canon_evaluado: number | string | null;
           datos_formulario: Record<string, unknown> | null;
           expedientes: { numero: string | null } | null;
         }[]
@@ -4725,13 +4917,34 @@ export async function buscarEstudioVigentePorDocumento(
     return null;
   }
 
-  const elegido = seleccionarEstudioVigente(data ?? [], tipoDocumento, numeroDocumento, validezMs, Date.now());
-  if (!elegido) return null;
+  // §5.2 promete reutilizar "sin volver a cobrarlo". Se prefiere el primero que
+  // de verdad se puede reasignar; si ninguno, se informa el más reciente y por
+  // qué no sirve para esta propiedad.
+  const filas = data ?? [];
+  const candidatos = estudiosVigentesDelDocumento(filas, tipoDocumento, numeroDocumento, validezMs, Date.now()).slice(0, 5);
+  if (candidatos.length === 0) return null;
 
-  return {
-    ...elegido,
-    expediente_numero: (data ?? []).find((e) => e.id === elegido.id)?.expedientes?.numero ?? null,
-  };
+  // La propiedad del paso 1 solo entra si este usuario la puede ver: el motivo
+  // del "no" cita su canon.
+  const destinoId = inmuebleId
+    ? await assertInmuebleAccess(inmuebleId, userId, userRol).then(() => inmuebleId, () => null)
+    : null;
+  // Diferido: la reasignacion arrastra certificado y pagos, que este modulo no necesita al cargar.
+  const { evaluarReutilizacion } = await import('./reasignacion.service');
+  let elegido: (EstudioVigente & { reutilizable: boolean; motivo_no_reutilizable: string | null }) | null = null;
+  for (const c of candidatos) {
+    const r = await evaluarReutilizacion(filas.find((e) => e.id === c.id)!, destinoId);
+    const evaluado = { ...c, reutilizable: r.reutilizable, motivo_no_reutilizable: r.motivo };
+    if (r.reutilizable) {
+      elegido = evaluado;
+      break;
+    }
+    elegido ??= evaluado;
+  }
+  if (!elegido) return null;
+  const { id } = elegido;
+
+  return { ...elegido, expediente_numero: filas.find((e) => e.id === id)?.expedientes?.numero ?? null };
 }
 
 /** Fila mínima que `seleccionarEstudioVigente` necesita. */
@@ -4760,39 +4973,50 @@ export function seleccionarEstudioVigente(
   numeroDocumento: string,
   validezMs: number,
   ahoraMs: number,
-): {
+): EstudioVigente | null {
+  return estudiosVigentesDelDocumento(filas, tipoDocumento, numeroDocumento, validezMs, ahoraMs)[0] ?? null;
+}
+
+interface EstudioVigente {
   id: string;
   expediente_id: string;
   resultado: string | null;
   fecha_completado: string | null;
   vigente_hasta: string;
   dias_restantes: number;
-} | null {
+}
+
+/** Todas las filas vigentes de ese documento, en el orden de la consulta. */
+export function estudiosVigentesDelDocumento(
+  filas: FilaEstudioVigente[],
+  tipoDocumento: string,
+  numeroDocumento: string,
+  validezMs: number,
+  ahoraMs: number,
+): EstudioVigente[] {
   const numero = numeroDocumento.trim();
   const tipo = tipoDocumento.trim().toLowerCase();
 
-  const hit = filas.find((e) => {
-    const f = e.datos_formulario ?? {};
-    return (
+  return filas.flatMap((hit) => {
+    const f = hit.datos_formulario ?? {};
+    const mismoDocumento =
       String(f.numero_documento ?? '').trim() === numero &&
-      String(f.tipo_documento ?? '').trim().toLowerCase() === tipo
-    );
+      String(f.tipo_documento ?? '').trim().toLowerCase() === tipo;
+    if (!mismoDocumento || !hit.fecha_completado) return [];
+
+    const venceMs = new Date(hit.fecha_completado).getTime() + validezMs;
+    // Ya vencido: no es "vigente", aunque la query lo haya traído (el filtro de
+    // SQL usa un `gte` sobre la misma ventana, pero el reloj puede correrse
+    // entre la consulta y este cálculo).
+    if (venceMs <= ahoraMs) return [];
+
+    return [{
+      id: hit.id,
+      expediente_id: hit.expediente_id,
+      resultado: hit.resultado,
+      fecha_completado: hit.fecha_completado,
+      vigente_hasta: new Date(venceMs).toISOString(),
+      dias_restantes: Math.max(0, Math.ceil((venceMs - ahoraMs) / (24 * 60 * 60 * 1000))),
+    }];
   });
-
-  if (!hit || !hit.fecha_completado) return null;
-
-  const venceMs = new Date(hit.fecha_completado).getTime() + validezMs;
-  // Ya vencido: no es "vigente", aunque la query lo haya traído (el filtro de
-  // SQL usa un `gte` sobre la misma ventana, pero el reloj puede correrse
-  // entre la consulta y este cálculo).
-  if (venceMs <= ahoraMs) return null;
-
-  return {
-    id: hit.id,
-    expediente_id: hit.expediente_id,
-    resultado: hit.resultado,
-    fecha_completado: hit.fecha_completado,
-    vigente_hasta: new Date(venceMs).toISOString(),
-    dias_restantes: Math.max(0, Math.ceil((venceMs - ahoraMs) / (24 * 60 * 60 * 1000))),
-  };
 }

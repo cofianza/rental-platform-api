@@ -51,6 +51,15 @@ export function veredictoScorecard(e: {
   coa?: FilaScorecard;
   coaConReglaDura: boolean;
   u: Pick<UmbralesDecision, 'zonaGris' | 'aprobacion' | 'coarrendatario'>;
+  /**
+   * Politica §5, nota: la aprobacion automatica condicionada solo vale si
+   * ambos se evaluaron integramente por flujo automatico y sin flags. Titular:
+   * `sin_flags` de su estudios.cascada (en revision SOLO por la banda 70-84).
+   * Coarrendatario: su estudio aprobado, o `sin_flags` en su traza. Sin el
+   * dato (traza anterior, motor apagado) no se aprueba solo: revision manual.
+   */
+  titularSinFlags?: boolean;
+  coaSinFlags?: boolean;
 }): VeredictoScorecard | null {
   const pT = puntajeDe(e.titular);
   const pC = puntajeDe(e.coa);
@@ -71,7 +80,7 @@ export function veredictoScorecard(e: {
     return v('sin_evaluar', r2 ? CONFLICTO_REGLAS_R2 : null);
   }
   const enZonaGris = pT >= u.zonaGris && pT < u.aprobacion;
-  if (enZonaGris && coaAprueba) return v('aprobado');
+  if (enZonaGris && coaAprueba) return e.titularSinFlags && e.coaSinFlags ? v('aprobado') : v('sin_evaluar');
   // Caso O: < 70 no compensa. Entre 70 y el umbral sigue en revision manual.
   // Coarrendatario con score 450-599 (su revision obligatoria, sin Caso G):
   // conflicto sin definir -> revision manual marcada, como R2.

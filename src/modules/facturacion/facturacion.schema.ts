@@ -13,6 +13,9 @@ export const listFacturasQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   estado: z.enum(['solicitada', 'emitida', 'cancelada']).optional(),
   expediente_id: z.string().uuid().optional(),
+  // Facturas emitidas cuyo pago se reembolsó o cuya compra de créditos se
+  // revirtió: les falta la nota crédito en Factus (se emite a mano).
+  nota_credito_pendiente: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
 });
 
 const conceptoFacturable = z.enum(['estudio', 'garantia', 'primer_canon', 'deposito', 'otro']);

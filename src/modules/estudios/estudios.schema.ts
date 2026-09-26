@@ -301,6 +301,8 @@ export type CodigoParams = z.infer<typeof codigoParamsSchema>;
 export const estudioVigenteQuerySchema = z.object({
   tipo_documento: z.string().min(2).max(20),
   numero_documento: z.string().min(3).max(30),
+  /** Propiedad elegida en el paso 1: decide si el estudio se puede reutilizar para ella. */
+  inmueble_id: z.string().uuid().optional(),
 });
 
 // ============================================================

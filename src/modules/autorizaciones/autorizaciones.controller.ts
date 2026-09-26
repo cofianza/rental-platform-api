@@ -9,6 +9,7 @@ import type {
   PerfilProspectoInput,
   ReportarIdentidadInput,
   BiometriaInput,
+  ConfirmarIdentidadInput,
 } from './autorizaciones.schema';
 
 // ============================================================
@@ -119,6 +120,19 @@ export async function reportarIdentidad(req: Request, res: Response) {
   const { token } = req.params as unknown as { token: string };
   const input = req.body as ReportarIdentidadInput;
   const result = await autorizacionesService.reportarIdentidadProspecto(
+    token,
+    input,
+    req.ip,
+    req.headers['user-agent'],
+  );
+  sendSuccess(res, result);
+}
+
+// §8.1: el prospecto escribe su documento; si no coincide, el enlace se detiene.
+export async function confirmarIdentidad(req: Request, res: Response) {
+  const { token } = req.params as unknown as { token: string };
+  const input = req.body as ConfirmarIdentidadInput;
+  const result = await autorizacionesService.confirmarIdentidadProspecto(
     token,
     input,
     req.ip,

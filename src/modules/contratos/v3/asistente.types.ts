@@ -24,6 +24,7 @@ export interface Bloqueo {
   paso?: NumeroPaso;                                   // se pinta arriba de ese paso
   accion?: 'datos_contrato' | 'estudio' | 'inmueble';
   detalle?: string[];
+  estudioId?: string;                                  // la evaluación sobre la que se actúa (emitir el CRC, reasignarla)
 }
 export interface EstadoAsistente {
   habilitado: boolean;

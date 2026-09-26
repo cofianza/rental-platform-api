@@ -16,6 +16,7 @@ import {
   perfilProspectoSchema,
   reportarIdentidadSchema,
   biometriaSchema,
+  confirmarIdentidadSchema,
 } from './autorizaciones.schema';
 import * as autorizacionesController from './autorizaciones.controller';
 
@@ -107,7 +108,17 @@ publicAutorizacionRouter.post(
   autorizacionesController.verificarOtp,
 );
 
-// POST /public/autorizar/:token/perfil — PASO 5 (Flujo §8.1/§8.2/§8.3).
+// POST /public/autorizar/:token/confirmar-identidad — §8.1: el prospecto
+// escribe su documento y se compara con la ficha sin revelarlo. No hace falta
+// un limitador por token: el primer numero que no coincide detiene el enlace.
+publicAutorizacionRouter.post(
+  '/:token/confirmar-identidad',
+  publicFormLimiter,
+  validate({ params: tokenParamsSchema, body: confirmarIdentidadSchema }),
+  autorizacionesController.confirmarIdentidad,
+);
+
+// POST /public/autorizar/:token/perfil — PASO 5 (Flujo §8.2/§8.3).
 // Una sola llamada, al salir del paso "Sobre ti" y ANTES del paso de firma:
 // el OTP se dispara al entrar a firma y caduca a los 5 minutos, asi que meter
 // formularios despues de ese disparo llevaria al prospecto a firmar con

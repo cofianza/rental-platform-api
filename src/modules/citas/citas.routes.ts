@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '@/middleware/validate';
-import { authMiddleware, authorize } from '@/middleware/auth';
+import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import {
   createCitaSchema,
   confirmarCitaSchema,
@@ -58,12 +58,14 @@ router.post(
 );
 
 // POST /:id/acusar-reprogramacion — Solicitante acepta la fecha reprogramada.
-// Usa 'read' (no 'update') porque solo el solicitante tiene este permiso, y
-// la accion semanticamente es "leer y aceptar". El service hace el check fino
-// de pertenencia al expediente.
+// Usa 'read' (no 'update') porque el solicitante no tiene 'update' en citas.
+// Pero 'read' también lo tienen Gerencia y el gestor, que así lo marcaban en
+// nombre del inquilino: solo lo acepta el propio solicitante. El service hace
+// el check fino de pertenencia al expediente.
 router.post(
   '/:id/acusar-reprogramacion',
   authorize('citas', 'read'),
+  roleGuard(['solicitante']),
   validate({ params: citaIdParamsSchema }),
   citasController.acusarReprogramacion,
 );

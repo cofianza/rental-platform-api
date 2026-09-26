@@ -57,6 +57,14 @@ export interface ContextoExpiracion {
   autorizacionSolicitadaEn: string | null;
   /** Si el titular ya firmo, el plazo dejo de correr: no hay nada que expirar. */
   autorizacionFirmada: boolean;
+  /**
+   * Estado de esa ultima autorizacion. 'expirado' antes del plazo = el enlace
+   * se DETUVO (el prospecto reporto sus datos, el documento escrito no
+   * coincidio o se invalido); 'revocado' = se revoco. En los dos el prospecto
+   * ya no puede firmar: le toca al gestor corregir y reenviar. Opcional: sin
+   * el, solo cuenta el reloj.
+   */
+  autorizacionEstado?: string | null;
   /** Momento de referencia, inyectado para poder ejercitarlo. */
   ahoraMs: number;
   /** Plazo en dias. Por defecto el del §14. */
@@ -65,6 +73,8 @@ export interface ContextoExpiracion {
 
 export interface VeredictoExpiracion {
   expirado: boolean;
+  /** true = el enlace se detuvo antes del plazo (no es el reloj): corregir y reenviar. */
+  detenida?: boolean;
   /** Dias que quedan. Negativo cuando ya expiro; null si el reloj no corre. */
   diasRestantes: number | null;
   /** Fecha en que expira (ISO), o null si el reloj no corre. */
@@ -131,6 +141,19 @@ export function evaluarExpiracion(ctx: ContextoExpiracion): VeredictoExpiracion 
 
   const venceMs = inicioMs + plazoDias * MS_POR_DIA;
   const restantesMs = venceMs - ctx.ahoraMs;
+
+  // Detenida antes del plazo: decir "esperando al prospecto" lo dejaba
+  // esperando una firma que el enlace ya no admite. (Vencido el plazo, el
+  // motivo es el reloj, aunque la fila tambien diga 'expirado'.)
+  if (restantesMs > 0 && (ctx.autorizacionEstado === 'expirado' || ctx.autorizacionEstado === 'revocado')) {
+    return {
+      expirado: true,
+      detenida: true,
+      diasRestantes: null,
+      expiraEn: null,
+      motivo: 'El enlace de autorizacion se detuvo y el prospecto ya no puede firmarlo. Corrige los datos del solicitante si hace falta y reenvia la solicitud.',
+    };
+  }
 
   return {
     expirado: restantesMs <= 0,

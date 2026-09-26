@@ -579,7 +579,7 @@ export async function enviarEnlaceDocumentos(
       email,
       nombre,
       titulo: 'Carga tus documentos',
-      mensaje: `Para continuar con tu solicitud de arriendo del inmueble en ${direccion}, sube los documentos solicitados desde el siguiente enlace personal. Desde ahí también puedes invitar a tu co-arrendatario.`,
+      mensaje: `Para continuar con tu estudio de arriendo del inmueble en ${direccion}, sube los documentos solicitados desde el siguiente enlace personal. Desde ahí también puedes invitar a tu co-arrendatario.`,
       link,
       frontend_url: env.FRONTEND_URL,
     });

@@ -14,7 +14,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { getCompany } from '@/lib/companyConfig';
-import { AppError } from '@/lib/errors';
+import { AppError, fromSupabaseError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import * as factus from '@/lib/factus';
@@ -94,6 +94,7 @@ interface PagoConContexto {
   creado_por: string | null;
   metodo: string | null;
   gateway_response: unknown;
+  transaction_ref: string | null;
   expediente: {
     numero: string;
     // municipio_id: código DANE (5 dígitos, ej. "11001").
@@ -145,7 +146,7 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, expediente_id, concepto, monto, estado, email_pagador, nombre_pagador, creado_por,
-      metodo, gateway_response,
+      metodo, gateway_response, transaction_ref,
       expediente:expedientes(
         numero,
         solicitante:solicitantes(
@@ -218,6 +219,13 @@ async function pagosConsumoDeCredito(pagoIds: string[]): Promise<Set<string>> {
 }
 
 /**
+ * P1: motivos de la cola de reembolsos que dejan un pago de evaluación para
+ * devolver (o en revisión para devolverlo): mientras la fila siga sin resolver
+ * no se factura — sería una factura DIAN que luego necesita nota crédito.
+ */
+const MOTIVOS_POR_DEVOLVER = ['estudio_cerrado_sin_consulta', 'estudio_fallido_revisar'];
+
+/**
  * P1: pagos de la evaluación que quedaron para devolver (el estudio terminó sin
  * consulta al buró y el pago entró después): no se facturan. Son pocos, así
  * que se lee la cola entera en vez de cruzar por lotes.
@@ -226,7 +234,7 @@ async function pagosPorDevolver(): Promise<Set<string>> {
   const { data, error } = await (supabase.from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
     .select('external_reference')
     .eq('resuelto', false)
-    .eq('motivo', 'estudio_cerrado_sin_consulta');
+    .in('motivo', MOTIVOS_POR_DEVOLVER);
   if (error) {
     logger.error({ error: error.message }, 'Error leyendo los pagos por devolver');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al consultar la facturación de los pagos');
@@ -258,6 +266,30 @@ async function selectInEnLotes<T>(tabla: string, columnas: string, columna: stri
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al consultar la facturación de los pagos');
   }
   return res.flatMap((r) => (r.data || []) as T[]);
+}
+
+/**
+ * El pago está en la cola de reembolsos para devolverse (o en revisión): 409.
+ * La fila se identifica como la encola reembolsos.service (encolar): por el
+ * payment de Mercado Pago o por `pago:<id>` si no pasó por la pasarela.
+ */
+async function assertNoEstaPorDevolver(ctx: PagoConContexto): Promise<void> {
+  const ids = [`pago:${ctx.id}`, ...(ctx.transaction_ref ? [ctx.transaction_ref] : [])];
+  const { data, error } = await (supabase.from('pagos_no_conciliados' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .in('provider_payment_id', ids)
+    .in('motivo', MOTIVOS_POR_DEVOLVER)
+    .eq('resuelto', false)
+    .limit(1)
+    .maybeSingle();
+  // Fail closed: sin saber si se devuelve, no se emite una factura DIAN.
+  if (error) throw fromSupabaseError(error);
+  if (data) {
+    throw AppError.conflict(
+      'Este pago está en la cola de reembolsos para devolverse: no se factura mientras Cofianza no lo resuelva.',
+      'PAGO_POR_DEVOLVER',
+    );
+  }
 }
 
 async function assertNoEsConsumoDeCredito(pagoId: string): Promise<void> {
@@ -469,6 +501,7 @@ export async function previewFacturaPago(pagoId: string): Promise<{
 
   await assertNoEsConsumoDeCredito(pagoId);
   const ctx = await fetchPagoContext(pagoId);
+  await assertNoEstaPorDevolver(ctx);
   const sol = ctx.expediente?.solicitante;
   if (!sol) {
     throw AppError.badRequest(
@@ -510,6 +543,7 @@ export async function crearFacturaDesdePago(
   // 2. Cargar pago + expediente + solicitante.
   await assertNoEsConsumoDeCredito(pagoId);
   const ctx = await fetchPagoContext(pagoId);
+  await assertNoEstaPorDevolver(ctx);
   const sol = ctx.expediente?.solicitante;
   if (!sol) {
     throw AppError.badRequest(
@@ -1239,6 +1273,34 @@ async function persistFailedAttempt(params: {
 
 // ── Listar / ver ───────────────────────────────────────────────────
 
+/**
+ * P1: una factura emitida cuyo pago quedó 'reembolsado' o cuya compra de
+ * créditos quedó 'cancelado' (contracargo o reembolso) necesita nota crédito en
+ * Factus. Sin columna nueva: se cruza al vuelo. Devuelve el filtro `.or()` de
+ * PostgREST, o null si no hay ninguna.
+ * ponytail: los ids van en la URL; son pocos (reembolsos y compras revertidas).
+ * Si crecen a cientos, pasarlo a una vista o RPC.
+ */
+async function filtroNotaCreditoPendiente(): Promise<string | null> {
+  const [pagos, compras] = await Promise.all([
+    (supabase.from('pagos' as string) as ReturnType<typeof supabase.from>).select('id').eq('estado', 'reembolsado'),
+    (supabase.from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id')
+      .eq('estado', 'cancelado'),
+  ]);
+  const conError = pagos.error ?? compras.error;
+  if (conError) {
+    logger.error({ error: conError.message }, 'Error leyendo los cobros reembolsados para las notas crédito');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar facturas');
+  }
+  const ids = (r: { data: unknown }) => ((r.data ?? []) as Array<{ id: string }>).map((x) => x.id);
+  const partes = [
+    ids(pagos).length ? `pago_id.in.(${ids(pagos).join(',')})` : null,
+    ids(compras).length ? `compra_creditos_id.in.(${ids(compras).join(',')})` : null,
+  ].filter(Boolean);
+  return partes.length ? partes.join(',') : null;
+}
+
 export async function listFacturas(query: ListFacturasQuery, userId: string, userRol: string) {
   const offset = (query.page - 1) * query.limit;
 
@@ -1253,6 +1315,11 @@ export async function listFacturas(query: ListFacturasQuery, userId: string, use
 
   if (query.estado) qb = qb.eq('estado', query.estado);
   if (query.expediente_id) qb = qb.eq('expediente_id', query.expediente_id);
+  if (query.nota_credito_pendiente) {
+    const filtro = await filtroNotaCreditoPendiente();
+    if (!filtro) return { facturas: [], pagination: { total: 0, page: query.page, limit: query.limit, totalPages: 0 } };
+    qb = qb.eq('estado', 'emitida').or(filtro);
+  }
 
   // Solicitante solo ve facturas de sus propios expedientes.
   if (userRol === 'solicitante') {

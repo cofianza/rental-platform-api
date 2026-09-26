@@ -1027,8 +1027,8 @@ export async function reprogramarCita(
 export async function acusarReprogramacion(id: string, userId: string, userRol: string) {
   const cita = await fetchCita(id);
 
-  // Solo el solicitante (creador del expediente) puede acusar. assertCitaPermission
-  // con action='read' valida pertenencia + admin/operador como fallback.
+  // Solo el solicitante (creador del expediente) puede acusar: la ruta exige el
+  // rol y assertCitaPermission con action='read' valida la pertenencia.
   await assertCitaPermission({
     userId,
     userRol: userRol as UserRole,

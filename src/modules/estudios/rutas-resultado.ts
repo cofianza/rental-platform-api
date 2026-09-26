@@ -121,13 +121,13 @@ export interface Ruta {
  * el derecho de apelación (Política §11).
  */
 export const MOTIVO_PROSPECTO_DECISION_COFIANZA =
-  'No aprobable por ahora. Cofianza revisó tu solicitud y en este momento no podemos respaldarla. ' +
+  'No aprobable por ahora. Cofianza revisó tu estudio y en este momento no podemos respaldarlo. ' +
   'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante.';
 
 const NO_APROBABLE = {
   titulo: 'Por ahora no podemos activar la fianza',
   mensaje:
-    'Revisamos tu solicitud y en este momento no podemos respaldarla. Esto puede cambiar: abajo te contamos que ayuda a que si podamos.',
+    'Revisamos tu estudio y en este momento no podemos respaldarlo. Esto puede cambiar: abajo te contamos que ayuda a que si podamos.',
   puedeContinuarSolo: false,
   coarrendatarioObligatorio: false,
   coarrendatarioAbarataPrima: false,
@@ -158,7 +158,7 @@ export function resolverRuta(e: EntradaRuta): Ruta {
   if (e.resultadoVigente === 'condicionado' || e.resultadoVigente === 'pendiente') {
     return {
       ruta: 'en_revision',
-      titulo: 'Estamos revisando tu solicitud',
+      titulo: 'Estamos revisando tu estudio',
       mensaje:
         'Una persona de nuestro equipo esta revisando tu caso. Te escribimos apenas tengamos la respuesta.',
       puedeContinuarSolo: false,
@@ -179,7 +179,7 @@ export function resolverRuta(e: EntradaRuta): Ruta {
   if (e.puntaje === null) {
     return {
       ruta: 'perfil_medio',
-      titulo: 'Tu solicitud fue aprobada',
+      titulo: 'Tu estudio fue aprobado',
       mensaje:
         'Puedes continuar solo. Si prefieres, tambien puedes sumar un coarrendatario y obtener una prima mas baja: no necesita finca raiz.',
       puedeContinuarSolo: true,
@@ -193,7 +193,7 @@ export function resolverRuta(e: EntradaRuta): Ruta {
   if (e.puntaje >= u.aprobacion) {
     return {
       ruta: 'perfil_fuerte',
-      titulo: 'Tu solicitud fue aprobada',
+      titulo: 'Tu estudio fue aprobado',
       mensaje:
         'Puedes firmar el contrato tu solo, sin acompañante. Si quieres, un coarrendatario te baja la prima de vinculacion: no necesita finca raiz.',
       puedeContinuarSolo: true,
@@ -214,7 +214,7 @@ export function resolverRuta(e: EntradaRuta): Ruta {
 
     return {
       ruta: 'coarrendatario_requerido',
-      titulo: yaLoTiene ? 'Tu solicitud fue aprobada con acompañante' : 'Casi listo: necesitas un acompañante',
+      titulo: yaLoTiene ? 'Tu estudio fue aprobado con acompañante' : 'Casi listo: necesitas un acompañante',
       mensaje: yaLoTiene
         ? 'Tu coarrendatario ya quedo vinculado y podemos respaldar el contrato.'
         : 'Podemos respaldar tu contrato si lo presentas junto a un coarrendatario. No necesita finca raiz: basta con que tenga ingresos propios.',

@@ -266,6 +266,20 @@ export async function executeTransition(
     }
   }
 
+  // Un estudio cerrado o rechazado no le pide nada más al prospecto: su enlace
+  // de autorización pendiente muere aquí (si no, lo firmaba y leía «seguimos
+  // con tu estudio»). 'expirado' es la única transición que el trigger de
+  // inalterabilidad permite sobre una fila pendiente. La página pública además
+  // lo rechaza por el estado del expediente, así que un fallo solo se registra.
+  if (targetState === 'rechazado' || targetState === 'cerrado') {
+    const { error: autErr } = await (supabase
+      .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+      .update({ estado: 'expirado' } as never)
+      .eq('expediente_id', expedienteId)
+      .eq('estado', 'pendiente');
+    if (autErr) logger.warn({ expedienteId, err: autErr.message }, 'No se pudieron expirar las autorizaciones pendientes del estudio');
+  }
+
   // Soltar la RESERVA del inmueble si este expediente era su titular. Corre en
   // TODO rechazo o cierre — no solo en cancelación: antes un
   // condicionado→rechazado manual dejaba el inmueble atascado para siempre.

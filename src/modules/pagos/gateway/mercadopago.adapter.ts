@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { env } from '@/config';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
+import { PLAZO_EXPIRACION_DIAS } from '@/modules/estudios/expiracion';
 import type {
   PaymentGatewayAdapter,
   CreatePaymentLinkParams,
@@ -94,6 +95,13 @@ export class MercadoPagoAdapter implements PaymentGatewayAdapter {
       ...(successUrl.startsWith('https://') ? { auto_return: 'approved' } : {}),
       ...(env.API_PUBLIC_URL
         ? { notification_url: `${env.API_PUBLIC_URL.replace(/\/$/, '')}/api/v1/webhooks/pagos` }
+        : {}),
+      // Cobro del estudio: el recibo de efectivo vence con el plazo del estudio
+      // (Flujo §12/§14: 15 días). Sin esto un recibo abandonado dejaba el cobro
+      // en 'procesando' sin fecha y al gestor sin poder abrir otro.
+      // ponytail: usa la constante, no DIAS_EXPIRACION_ESTUDIO de calibración.
+      ...(metadata.concepto === 'estudio'
+        ? { date_of_expiration: fechaBogota(Date.now() + PLAZO_EXPIRACION_DIAS * 24 * 60 * 60 * 1000) }
         : {}),
     };
 
@@ -316,6 +324,11 @@ export class MercadoPagoAdapter implements PaymentGatewayAdapter {
 // ----------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------
+
+/** ISO 8601 con la hora de Bogotá (UTC-5 fijo, sin horario de verano), como los ejemplos de Mercado Pago. */
+export function fechaBogota(ms: number): string {
+  return new Date(ms - 5 * 60 * 60 * 1000).toISOString().replace('Z', '-05:00');
+}
 
 function firstHeader(h: string | string[] | undefined): string | undefined {
   if (Array.isArray(h)) return h[0];

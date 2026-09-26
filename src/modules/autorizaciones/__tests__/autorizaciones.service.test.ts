@@ -133,8 +133,16 @@ import {
   verificarOtpCode,
   revocarAutorizacion,
   getPagoProspectoPorToken,
+  confirmarIdentidadProspecto,
+  reportarIdentidadProspecto,
+  documentoCoincide,
 } from '../autorizaciones.service';
 import { TEXTO_LEGAL, TEXTO_LEGAL_BIOMETRIA, VERSION_TERMINOS, VERSION_TERMINOS_BIOMETRIA } from '../autorizaciones.texto';
+// Precargados a proposito: el servicio los importa en segundo plano y, con dos
+// import() concurrentes del mismo mock, vitest puede saltarse el mock y cargar
+// el modulo real (mismo limite que en expediente-workflow.service.test).
+import '@/modules/notificaciones/notificaciones.service';
+import '@/modules/users/users.service';
 
 // ============================================================
 // Fixtures
@@ -188,8 +196,11 @@ const paraFirmar = {
 };
 
 const otpVerificado = { id: 'otp-uuid', codigo: '123456', expira_en: FUTURE_DATE, verificado: true };
-const CANVAS = { metodo_firma: 'canvas' as const, datos_firma: 'data:image/png;base64,AAA' };
-const OTP = { metodo_firma: 'otp' as const, codigo_otp: '123456' };
+// §8.1: toda firma lleva el documento que escribio el prospecto (el de la ficha).
+const DOC = { numero_documento: '123456789' };
+const CANVAS = { metodo_firma: 'canvas' as const, datos_firma: 'data:image/png;base64,AAA', ...DOC };
+const OTP = { metodo_firma: 'otp' as const, codigo_otp: '123456', ...DOC };
+const CASILLA = { metodo_firma: 'casilla' as const, ...DOC };
 
 const opsDe = (table: string, method: string) => ops.filter((o) => o.table === table && o.method === method);
 
@@ -410,6 +421,15 @@ describe('autorizaciones.service', () => {
         errorCode: 'SOLICITANTE_SIN_EMAIL',
       });
     });
+
+    it('estudio cerrado o rechazado: no se le pide la autorizacion al prospecto', async () => {
+      for (const estado of ['cerrado', 'rechazado']) {
+        enqueue('expedientes', { data: { ...expedienteConSolicitante, estado } });
+        await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({ errorCode: 'ESTUDIO_NO_ACTIVO' });
+      }
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toHaveLength(0);
+      expect(mockSendAutorizacionEmail).not.toHaveBeenCalled();
+    });
   });
 
   // ============================================================
@@ -428,11 +448,13 @@ describe('autorizaciones.service', () => {
         texto_legal: 'Texto legal de autorizacion',
         version_terminos: '2.0',
         biometria: { requerida: false, estado: null },
-        solicitante: { nombre: 'Juan', apellido: 'Perez', tipo_documento: 'cc', numero_documento_masked: '••••6789', telefono_masked: '••• ••33' },
+        solicitante: { nombre: 'Juan', apellido: 'Perez', tipo_documento: 'cc', telefono_masked: '••• ••33' },
         expediente: { numero_expediente: 'EXP-2026-0001', inmueble: { ciudad: 'Bogota' } },
       });
-      // Ni el email ni el documento completo viajan al portador del enlace.
+      // Ni el email ni el documento (tampoco enmascarado: lo escribe el prospecto, §8.1).
       expect(JSON.stringify(result)).not.toContain('123456789');
+      expect(JSON.stringify(result)).not.toContain('6789');
+      expect(result.solicitante).not.toHaveProperty('numero_documento_masked');
       expect(JSON.stringify(result)).not.toContain('@');
     });
 
@@ -484,6 +506,20 @@ describe('autorizaciones.service', () => {
         statusCode: 400,
         errorCode: 'AUTORIZACION_ESTADO_INVALIDO',
       });
+    });
+
+    it('estudio cancelado o rechazado con la autorizacion pendiente -> ESTUDIO_NO_ACTIVO (no se firma)', async () => {
+      for (const estado of ['cerrado', 'rechazado']) {
+        enqueue('autorizaciones_habeas_data', {
+          data: { ...autorizacionPendiente, expedientes: { ...autorizacionPendiente.expedientes, estado } },
+        });
+        await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({ statusCode: 400, errorCode: 'ESTUDIO_NO_ACTIVO' });
+      }
+      // Tambien con el enlace ya vencido: "pide otro" seria mandarlo a pedir algo que no existe.
+      enqueue('autorizaciones_habeas_data', {
+        data: { ...autorizacionPendiente, token_expiracion: PAST_DATE, expedientes: { ...autorizacionPendiente.expedientes, estado: 'cerrado' } },
+      });
+      await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({ errorCode: 'ESTUDIO_NO_ACTIVO' });
     });
 
     it('ya firmada Y vencida -> AUTORIZACION_YA_FIRMADA: reabrirla tarde no dice "pide otro"', async () => {
@@ -542,7 +578,7 @@ describe('autorizaciones.service', () => {
     it('casilla firma SIN OTP (Adenda §7) y congela la evidencia del §8.4', async () => {
       enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
 
-      const result = await firmarAutorizacion(TOKEN, { metodo_firma: 'casilla' }, '192.168.1.1', 'Mozilla/5.0');
+      const result = await firmarAutorizacion(TOKEN, CASILLA, '192.168.1.1', 'Mozilla/5.0');
 
       expect(result).toMatchObject({ estado: 'autorizado', pago_requerido: false });
       expect(mockFrom).not.toHaveBeenCalledWith('autorizacion_otps');
@@ -555,14 +591,14 @@ describe('autorizaciones.service', () => {
         numero_documento_aceptante: '123456789',
         tipo_documento_aceptante: 'cc',
       });
-      // Sin identidad_confirmada en el body no se toca el perfil del prospecto.
+      // Sin estudio no hay fila del perfil del prospecto donde marcar la identidad.
       expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
     });
 
-    it('identidad_confirmada en el body de la firma se registra en el perfil del prospecto (§8.1)', async () => {
+    it('el documento escrito coincide (con puntos y espacios): la identidad queda confirmada en el perfil (§8.1)', async () => {
       enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID } }, { data: [{ id: AUTORIZACION_ID }] });
 
-      const result = await firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', identidad_confirmada: true }, '1.1.1.1', 'UA');
+      const result = await firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', numero_documento: '123.456 789' }, '1.1.1.1', 'UA');
       expect(result.estado).toBe('autorizado');
 
       // Mismas columnas que el PASO 5 (/perfil), en la fila 1:1 del expediente.
@@ -579,12 +615,43 @@ describe('autorizaciones.service', () => {
       expect(mockFrom).not.toHaveBeenCalledWith('autorizacion_otps');
     });
 
-    it('identidad_confirmada NO se registra si la autorizacion no tiene estudio (no hay fila donde ponerla)', async () => {
-      enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
+    it('el documento escrito NO coincide: no firma, detiene el enlace y avisa como el reporte (§8.1/§12)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID } });
 
-      const result = await firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', identidad_confirmada: true });
-      expect(result.estado).toBe('autorizado');
-      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
+      await expect(
+        firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', numero_documento: '123456780' }, '1.1.1.1', 'UA'),
+      ).rejects.toMatchObject({ statusCode: 400, errorCode: 'DOCUMENTO_NO_COINCIDE' });
+
+      // Ni firma ni orquestador: la unica escritura sobre la autorizacion es expirarla.
+      const updates = opsDe('autorizaciones_habeas_data', 'update');
+      expect(updates).toHaveLength(1);
+      expect(updates[0].args[0]).toEqual({ estado: 'expirado' });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({
+        expediente_id: EXPEDIENTE_ID,
+        identidad_reporte: 'datos_incorrectos',
+      });
+      expect(mockOnHabeas).not.toHaveBeenCalled();
+      // El aviso al gestor dice que no coincidio, nunca el numero escrito.
+      // (Filtrado por tipo: los avisos fire-and-forget de otros tests pueden caer aqui.)
+      const avisoReporte = () =>
+        (mockNotificarResponsable.mock.calls as unknown as Array<[{ tipo: string; mensaje: string }]>)
+          .map((c) => c[0])
+          .find((a) => a.tipo === 'autorizacion.identidad_reportada');
+      await vi.waitFor(() => expect(avisoReporte()).toBeDefined());
+      const aviso = avisoReporte()!;
+      expect(aviso.mensaje).toContain('no coincide con el registrado');
+      expect(aviso.mensaje).not.toContain('123456780');
+    });
+
+    it('estudio cancelado o rechazado: no firma ni dispara nada (ESTUDIO_NO_ACTIVO)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID, expedientes: { estado: 'cerrado' } } });
+      await expect(firmarAutorizacion(TOKEN, CASILLA)).rejects.toMatchObject({ errorCode: 'ESTUDIO_NO_ACTIVO' });
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+      expect(mockOnHabeas).not.toHaveBeenCalled();
+
+      // Ya firmada antes del cierre: sigue siendo el exito idempotente.
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, estado: 'autorizado', expedientes: { estado: 'cerrado' } } });
+      await expect(firmarAutorizacion(TOKEN, CASILLA)).rejects.toMatchObject({ errorCode: 'AUTORIZACION_YA_FIRMADA' });
     });
 
     it('otp SIN OTP verificado NO firma (OTP_NO_VERIFICADO)', async () => {
@@ -702,6 +769,68 @@ describe('autorizaciones.service', () => {
         statusCode: 404,
         errorCode: 'AUTORIZACION_NOT_FOUND',
       });
+    });
+  });
+
+  // ============================================================
+  // confirmarIdentidadProspecto — §8.1: el prospecto escribe su documento
+  // ============================================================
+
+  describe('confirmarIdentidadProspecto', () => {
+    const pendiente = {
+      id: AUTORIZACION_ID,
+      estado: 'pendiente',
+      token_expiracion: FUTURE_DATE,
+      expediente_id: EXPEDIENTE_ID,
+      solicitante_id: 'sol-uuid',
+      version_terminos: '3.0',
+      solicitantes: { numero_documento: '1.023.456.789' },
+      expedientes: { estado: 'en_revision' },
+    };
+
+    it('coincide (normalizando puntos y espacios): confirma la identidad y no revela nada', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      const r = await confirmarIdentidadProspecto(TOKEN, { numero_documento: ' 1023 456789' });
+      expect(r).toEqual({ coincide: true });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({
+        expediente_id: EXPEDIENTE_ID,
+        autorizacion_id: AUTORIZACION_ID,
+        identidad_confirmada: true,
+        identidad_reporte: null,
+      });
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+    });
+
+    it('no coincide: mismo camino que "los datos estan mal" — detiene el enlace y avisa al gestor', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      const r = await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456788' }, '1.1.1.1', 'UA');
+      expect(r).toEqual({ coincide: false });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({ identidad_reporte: 'datos_incorrectos' });
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
+      await vi.waitFor(() => expect(mockNotificarResponsable).toHaveBeenCalled());
+    });
+
+    it('estudio cerrado: ESTUDIO_NO_ACTIVO sin tocar nada', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...pendiente, expedientes: { estado: 'cerrado' } } });
+      await expect(confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456789' })).rejects.toMatchObject({
+        errorCode: 'ESTUDIO_NO_ACTIVO',
+      });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
+    });
+
+    it('el reporte manual sigue igual (mismo camino)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      expect(await reportarIdentidadProspecto(TOKEN, { motivo: 'no_soy_yo' })).toEqual({ reportado: true });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({ identidad_reporte: 'no_soy_yo' });
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
+    });
+
+    it('documentoCoincide: sin numero en la ficha no hay nada que confirmar', () => {
+      expect(documentoCoincide('1.023.456.789', '1023456789')).toBe(true);
+      expect(documentoCoincide('ab-12 3', 'AB123')).toBe(true);
+      expect(documentoCoincide('1023456789', null)).toBe(false);
+      expect(documentoCoincide('', '')).toBe(false);
+      expect(documentoCoincide('102345678', '1023456789')).toBe(false);
     });
   });
 

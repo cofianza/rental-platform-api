@@ -70,7 +70,15 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
 
-import { getEstudioById, listEstudios, getCertificadoViewUrl, buscarEstudioVigentePorDocumento } from '../estudios.service';
+import {
+  getEstudioById,
+  listEstudios,
+  getCertificadoViewUrl,
+  buscarEstudioVigentePorDocumento,
+  registrarResultado,
+  assertScoreExternoVigente,
+  motivosRevisionTrasCascada,
+} from '../estudios.service';
 import { descargarCertificado, generarCertificado } from '../certificado.service';
 import { tarifasDelEstudio } from '../tarifa-override.service';
 import { contrasteIngresoProspecto } from '@/modules/autorizaciones/ingreso-declarado';
@@ -268,7 +276,7 @@ describe('ruta del §10 cuando el analista ya decidio el condicionado', () => {
     const { estudios } = await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-1', 'solicitante');
     const ruta = (estudios[0] as { ruta: { ruta: string; titulo: string } }).ruta;
     expect(ruta.ruta).not.toBe('en_revision');
-    expect(ruta.titulo).toMatch(/aprobada/);
+    expect(ruta.titulo).toMatch(/aprobado/);
   });
 
   it('negado por el analista: no aprobable, igual que el banner', async () => {
@@ -306,11 +314,83 @@ describe('§5.2 estudio vigente por documento', () => {
   });
 });
 
+describe('§5.2 solo promete reutilizar lo reutilizable', () => {
+  const vigente = (tipo: string) => ({
+    id: 'est-v', expediente_id: 'exp-v', tipo, resultado: 'aprobado', canon_evaluado: 2_000_000,
+    fecha_completado: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+    datos_formulario: { tipo_documento: 'cc', numero_documento: '123' }, expedientes: { numero: 'EXP-9' },
+  });
+
+  it('la evaluacion como co-arrendatario existe pero no se ofrece como reutilizable', async () => {
+    vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(null);
+    vi.mocked(getCalibracion).mockResolvedValueOnce({ VIGENCIA_CRC_DIAS: 60 } as never);
+    enqueue('estudios', { data: [vigente('con_coarrendatario')], error: null });
+    enqueue('expedientes', { data: { estado: 'aprobado', inmueble_id: null, inmobiliaria_id: null }, error: null });
+    enqueue('contratos', { data: [], error: null });
+    const r = await buscarEstudioVigentePorDocumento('cc', '123', 'u-1', 'operador_analista');
+    expect(r).toMatchObject({ id: 'est-v', expediente_numero: 'EXP-9', reutilizable: false });
+    expect(r?.motivo_no_reutilizable).toMatch(/co-arrendatario/);
+  });
+
+  it('aprobado, sin contrato: reutilizable', async () => {
+    vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(null);
+    vi.mocked(getCalibracion).mockResolvedValueOnce({ VIGENCIA_CRC_DIAS: 60 } as never);
+    enqueue('estudios', { data: [vigente('individual')], error: null });
+    enqueue('expedientes', { data: { estado: 'aprobado', inmueble_id: null, inmobiliaria_id: null }, error: null });
+    enqueue('contratos', { data: [], error: null });
+    const r = await buscarEstudioVigentePorDocumento('cc', '123', 'u-1', 'operador_analista');
+    expect(r).toMatchObject({ reutilizable: true, motivo_no_reutilizable: null });
+  });
+});
+
 describe('contraste de ingreso (Adenda §8) sin cifras', () => {
   it('el motivo que va a observaciones no lleva el declarado, el estimado ni el umbral', async () => {
     enqueue('autorizacion_perfil_prospecto', { data: { ingreso_declarado_cop: 9_000_000 }, error: null });
     const motivo = await contrasteIngresoProspecto('exp-1', 3_000_000, 50);
     expect(motivo).toMatch(/Revision manual \(Adenda §8\)/);
     expect(motivo).not.toMatch(/\d{3}|%/);
+  });
+});
+
+describe('Politica §8: vigencia del score externo en el registro manual', () => {
+  const DIA = 24 * 60 * 60 * 1000;
+  const ahora = Date.parse('2026-09-25T15:00:00Z');
+
+  it('hasta 30 dias desde la consulta se registra; despues pide reconsultar', () => {
+    expect(() => assertScoreExternoVigente(null, ahora)).not.toThrow();
+    expect(() => assertScoreExternoVigente(new Date(ahora - 30 * DIA).toISOString(), ahora)).not.toThrow();
+    expect(() => assertScoreExternoVigente(new Date(ahora - 31 * DIA).toISOString(), ahora)).toThrow(/reconsultar el buró/);
+  });
+
+  it('la re-evaluacion se mide contra la consulta del padre, no contra hoy', async () => {
+    enqueue(
+      'estudios',
+      {
+        data: {
+          id: 'hijo', estado: 'solicitado', resultado: 'pendiente', expediente_id: 'exp-1', canon_evaluado: null,
+          proveedor: 'datacredito', tipo: 'individual', estudio_padre_id: 'padre', referencia_proveedor: null,
+        },
+        error: null,
+      },
+      { data: { fecha_completado: new Date(Date.now() - 40 * DIA).toISOString(), canon_evaluado: 2_000_000, canon_evaluado_origen: 'inmueble' }, error: null },
+    );
+    await expect(
+      registrarResultado('hijo', { resultado: 'aprobado', observaciones: 'soportes ok' } as never, 'u-1', undefined, 'operador_analista'),
+    ).rejects.toMatchObject({ statusCode: 409, errorCode: 'DATOS_BURO_VENCIDOS' });
+  });
+});
+
+describe('cascada: la banda de revision se lee con el promedio de las dos centrales', () => {
+  const banda = 'Score externo 540 en la banda de revision manual obligatoria (450-599, Politica §3.1 / Adenda 2 §2)';
+
+  it('si el promedio sale de la banda, el motivo de la primaria no sigue', () => {
+    expect(motivosRevisionTrasCascada(banda, banda, null)).toBeNull();
+  });
+
+  it('los demas motivos (listas, ingreso) se quedan; la banda nueva entra si la hay', () => {
+    const otro = 'Revisión manual obligatoria (Política §4.3): la relación canon / ingreso es 38%.';
+    expect(motivosRevisionTrasCascada(`${banda} ${otro}`, banda, null)).toBe(otro);
+    expect(motivosRevisionTrasCascada(banda, banda, 'Score externo 580 en la banda')).toBe('Score externo 580 en la banda');
+    expect(motivosRevisionTrasCascada(otro, null, null)).toBe(otro);
   });
 });

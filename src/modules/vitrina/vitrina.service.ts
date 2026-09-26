@@ -391,7 +391,7 @@ async function notificarPropietarioNuevaSolicitud(
   await notificarUsuario({
     userId: propietarioId,
     tipo: 'solicitud.vitrina',
-    titulo: 'Nueva solicitud de arriendo',
+    titulo: 'Nuevo estudio de arriendo',
     mensaje: `${nombreInteresado} está interesado en ${direccion}.`,
     link: `/expedientes/${expedienteId}`,
     payload: { expediente_id: expedienteId, inmueble_id: propertyId },

@@ -53,8 +53,8 @@
 // certificado guardan el inmueble por su cuenta:
 //   - un expediente que ya genero contrato NO se reasigna (el contrato no puede
 //     cambiar de objeto despues de emitido);
-//   - una visita viva bloquea hasta que el gestor la cancele o reprograme (si
-//     no, el solicitante recibiria una direccion que nadie acordo);
+//   - una visita viva bloquea hasta que el gestor la cancele (reprogramarla la
+//     deja viva; si no, el solicitante recibiria una direccion que nadie acordo);
 //   - el certificado emitido se REGENERA con la propiedad nueva (mismo codigo,
 //     mismo vencimiento), porque el PDF es inmutable y nombra la propiedad:
 //     sin regenerarlo seguiria nombrando la anterior (/verificar ya no la
@@ -91,6 +91,7 @@ import {
   evaluarPortabilidad,
   errorNoPortable,
   type VeredictoCanonIngreso,
+  type VeredictoPortabilidad,
 } from './portabilidad';
 import { formatearCOP, getTopeCanonVigente } from './tope-canon.guard';
 import {
@@ -243,8 +244,24 @@ async function assertEstudioPagado(expedienteId: string, expedienteNumero: strin
  * queda para la iteracion que pueda tocar el punto de decision; hasta entonces
  * se lee de aqui y se persiste el veredicto en la traza para que la decision
  * sea auditable aunque la fila sombra cambie despues.
+ *
+ * Re-evaluacion (estudio hijo): el hijo no consulta el buro —nace 'solicitado'
+ * y lo registra el analista sobre el reporte del padre—, asi que no tiene fila
+ * sombra y hereda el ingreso del padre. Sin esto, el hijo aprobado salia de la
+ * portabilidad y del recalculo canon/ingreso como "no evaluable". Quien lea el
+ * ingreso de un estudio (CRC, contratos V3) deberia pasar por aqui.
+ *
+ * `estricto`: un error de lectura lanza 503 en vez de devolver null. Lo usan el
+ * CRC y el asistente V3, donde null significa "no verificable" y quitaria el
+ * recalculo del 40% por un fallo de la base, no por falta de ingreso.
+ * `padreId`: quien ya leyo la fila del estudio pasa su `estudio_padre_id`
+ * (null si no tiene) y se ahorra la lectura de `estudios`.
  */
-export async function leerIngresoInferidoOriginal(estudioId: string): Promise<number | null> {
+export async function leerIngresoInferidoOriginal(
+  estudioId: string,
+  opts: { estricto?: boolean; padreId?: string | null } = {},
+  saltos = 0,
+): Promise<number | null> {
   try {
     const { data, error } = await (supabase
       .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
@@ -253,14 +270,7 @@ export async function leerIngresoInferidoOriginal(estudioId: string): Promise<nu
       .order('fecha_calculo', { ascending: false })
       .limit(1)
       .maybeSingle();
-
-    if (error) {
-      logger.warn(
-        { estudioId, error: error.message },
-        'Reasignacion §4.3: no se pudo leer el ingreso inferido — la condicion canon/ingreso queda no evaluable',
-      );
-      return null;
-    }
+    if (error) throw error;
 
     const fila = data as {
       ingreso_inferido_cop?: number | string | null;
@@ -268,11 +278,31 @@ export async function leerIngresoInferidoOriginal(estudioId: string): Promise<nu
     } | null;
     const bruto = fila?.ingreso_inferido_ajustado_cop ?? fila?.ingreso_inferido_cop;
     const n = typeof bruto === 'string' ? Number(bruto) : bruto;
-    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null;
+    if (typeof n === 'number' && Number.isFinite(n) && n > 0) return n;
+
+    // La cadena de re-evaluaciones tiene como mucho 2 niveles (MAX_REEVALUACIONES).
+    if (saltos >= 2) return null;
+    let padreId = opts.padreId;
+    if (padreId === undefined) {
+      const { data: est, error: estError } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .select('estudio_padre_id')
+        .eq('id', estudioId)
+        .maybeSingle();
+      if (estError) throw estError;
+      padreId = (est as { estudio_padre_id?: string | null } | null)?.estudio_padre_id ?? null;
+    }
+    return padreId ? leerIngresoInferidoOriginal(padreId, { estricto: opts.estricto }, saltos + 1) : null;
   } catch (err) {
+    if (err instanceof AppError) throw err;
+    const detalle = (err as { message?: string } | null)?.message ?? String(err);
+    if (opts.estricto) {
+      logger.error({ estudioId, error: detalle }, 'No se pudo leer el ingreso inferido del estudio');
+      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del estudio. Intenta de nuevo en un momento.');
+    }
     logger.warn(
-      { estudioId, err: err instanceof Error ? err.message : String(err) },
-      'Reasignacion §4.3: excepcion leyendo el ingreso inferido — condicion no evaluable',
+      { estudioId, error: detalle },
+      'Reasignacion §4.3: no se pudo leer el ingreso inferido — la condicion canon/ingreso queda no evaluable',
     );
     return null;
   }
@@ -369,9 +399,8 @@ async function assertExpedienteSinContratos(
  *
  * Se BLOQUEA en vez de cancelar en cascada: cancelar aqui significaria mandar
  * notificaciones (WhatsApp con direccion) desde un servicio cuyo trabajo es
- * mover un expediente, y dejar al gestor sin decidir sobre una visita que quiza
- * quiere reprogramar en la propiedad nueva. El mensaje dice exactamente que
- * hacer.
+ * mover un expediente, y decidir por el gestor sobre una visita. El mensaje
+ * dice exactamente que hacer: cancelarla (reprogramarla la deja viva).
  *
  * Fail closed por el mismo motivo que los contratos: el daño de seguir es
  * mandar a alguien a una direccion que nadie acordo visitar.
@@ -408,7 +437,8 @@ async function assertExpedienteSinCitasVivas(
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       `El estudio ${expedienteNumero ?? ''} tiene una visita ${cita.estado} para la propiedad actual. ` +
         'Si la reasignas, esa visita pasaria a mostrar la direccion de la propiedad nueva sin que nadie ' +
-        'lo haya acordado. Cancelala o reprogramala primero y vuelve a intentarlo.',
+        // Reprogramar no la saca de 'solicitada'/'confirmada': seguiria bloqueando.
+        'lo haya acordado. Cancélala primero y vuelve a intentarlo.',
       { motivo: 'cita_viva', cita_id: cita.id, estado: cita.estado },
     );
   }
@@ -488,6 +518,154 @@ async function vigenciaOriginalISO(fechaCompletado: string | null): Promise<stri
   if (!Number.isFinite(base)) return null;
   const dias = (await getCalibracion()).VIGENCIA_CRC_DIAS;
   return new Date(base + dias * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * Pura: el destino es de la misma cartera que el expediente (guard 7.b de
+ * reasignarEstudio). Sin organizacion, el dueño de la cartera es el
+ * propietario individual.
+ */
+export function esMismaCartera(
+  orgExpediente: string | null,
+  origen: { inmobiliaria_id: string | null; propietario_id: string | null } | null,
+  destino: { inmobiliaria_id: string | null; propietario_id: string | null },
+): boolean {
+  const orgOrigen = origen?.inmobiliaria_id ?? null;
+  const orgDestino = destino.inmobiliaria_id ?? null;
+  const mismaOrg = orgDestino === orgOrigen && (orgExpediente === null || orgExpediente === orgDestino);
+  const mismoDuenio = orgDestino !== null || (destino.propietario_id ?? null) === (origen?.propietario_id ?? null);
+  return mismaOrg && mismoDuenio;
+}
+
+const CIERRE_ESTUDIO_NUEVO = 'Para esta propiedad hace falta un estudio nuevo.';
+
+/** Lo que decide si un estudio vigente se puede reutilizar (§5.2) — mismos guards que reasignarEstudio. */
+export interface InsumosReutilizacion {
+  tipo: string | null;
+  resultado: string | null;
+  expedienteEstado: string | null;
+  /** El expediente tiene reservada su propiedad actual para su contrato. */
+  titularDeReserva: boolean;
+  contratos: Array<{ numero: string | null; estado: string; fecha_firma: string | null }>;
+  /** La propiedad del paso 1 del asistente; null si no se conoce (no se evalua la tolerancia). */
+  destino: { mismaPropiedad: boolean; mismaCartera: boolean; veredicto: VeredictoPortabilidad | null } | null;
+}
+
+/**
+ * Pura: por que un estudio vigente NO se puede reutilizar para la propiedad
+ * elegida, o null si si se puede. §5.2 promete "reutilizarlo sin volver a
+ * cobrarlo", y la unica reutilizacion que existe es la reasignacion del §4.3:
+ * prometerla para un estudio que reasignarEstudio va a negar era un engaño.
+ */
+export function motivoNoReutilizable(i: InsumosReutilizacion): string | null {
+  if (i.tipo !== 'individual') {
+    return 'Es la evaluación de esta persona como co-arrendatario en el estudio de otra, así que no se traslada como estudio propio. ' + CIERRE_ESTUDIO_NUEVO;
+  }
+  if (i.resultado !== 'aprobado' && i.resultado !== 'condicionado') {
+    return `Ese estudio no quedó aprobado, así que no se reutiliza. ${CIERRE_ESTUDIO_NUEVO}`;
+  }
+  if (i.expedienteEstado && ESTADOS_TERMINALES_EXPEDIENTE.includes(i.expedienteEstado)) {
+    return `Ese estudio está ${i.expedienteEstado} y ya no se traslada a otra propiedad. ${CIERRE_ESTUDIO_NUEVO}`;
+  }
+  const contrato = contratoQueBloqueaReasignacion(i.contratos);
+  if (contrato) {
+    const numero = contrato.numero ? ` ${contrato.numero}` : '';
+    return `Ese estudio ya generó el contrato${numero} (${contrato.estado}) sobre su propiedad, así que no se traslada. ${CIERRE_ESTUDIO_NUEVO}`;
+  }
+  if (i.titularDeReserva) {
+    return 'Ese estudio tiene reservada su propiedad para su contrato: no se traslada mientras ese contrato siga en curso.';
+  }
+  if (!i.destino) return null;
+  if (i.destino.mismaPropiedad) return 'Ese estudio ya es de esta misma propiedad: ábrelo en vez de crear uno nuevo.';
+  if (!i.destino.mismaCartera) {
+    return `Ese estudio es de otra cartera y solo se reutiliza dentro de la misma agencia o del mismo propietario. ${CIERRE_ESTUDIO_NUEVO}`;
+  }
+  if (i.destino.veredicto && !i.destino.veredicto.portable) {
+    return `${i.destino.veredicto.detalle} ${CIERRE_ESTUDIO_NUEVO}`;
+  }
+  return null;
+}
+
+/**
+ * §5.2 con los insumos de la base. Nunca lanza: si algo no se puede leer, no
+ * se promete la reutilizacion (el aviso dice que existe y que se revise).
+ */
+export async function evaluarReutilizacion(
+  estudio: {
+    id: string;
+    expediente_id: string;
+    tipo: string | null;
+    resultado: string | null;
+    canon_evaluado: number | string | null;
+  },
+  inmuebleDestinoId?: string | null,
+): Promise<{ reutilizable: boolean; motivo: string | null }> {
+  const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
+  try {
+    const [{ data: expRow, error: expErr }, { data: contratos, error: conErr }] = await Promise.all([
+      db('expedientes').select('estado, inmueble_id, inmobiliaria_id').eq('id', estudio.expediente_id).maybeSingle(),
+      db('contratos').select('numero, estado, fecha_firma').eq('expediente_id', estudio.expediente_id),
+    ]);
+    if (expErr || conErr || !expRow) throw new Error(expErr?.message ?? conErr?.message ?? 'sin expediente');
+    const exp = expRow as { estado: string; inmueble_id: string | null; inmobiliaria_id: string | null };
+
+    const leerInmueble = async (id: string) => {
+      const { data, error } = await db('inmuebles')
+        .select('id, valor_arriendo, reservado_por_expediente_id, inmobiliaria_id, propietario_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data as {
+        id: string;
+        valor_arriendo: number | string | null;
+        reservado_por_expediente_id: string | null;
+        inmobiliaria_id: string | null;
+        propietario_id: string | null;
+      } | null;
+    };
+    const [origen, destinoRow] = await Promise.all([
+      exp.inmueble_id ? leerInmueble(exp.inmueble_id) : null,
+      inmuebleDestinoId ? leerInmueble(inmuebleDestinoId) : null,
+    ]);
+
+    let destino: InsumosReutilizacion['destino'] = null;
+    if (destinoRow) {
+      const mismaPropiedad = destinoRow.id === exp.inmueble_id;
+      const mismaCartera = esMismaCartera(exp.inmobiliaria_id, origen, destinoRow);
+      destino = {
+        mismaPropiedad,
+        mismaCartera,
+        veredicto:
+          mismaPropiedad || !mismaCartera
+            ? null
+            : evaluarPortabilidad({
+                topeCop: await getTopeCanonVigente(),
+                canonOriginal: estudio.canon_evaluado,
+                ingresoOriginal: await leerIngresoInferidoOriginal(estudio.id),
+                canonDestino: destinoRow.valor_arriendo,
+              }),
+      };
+    }
+
+    const motivo = motivoNoReutilizable({
+      tipo: estudio.tipo,
+      resultado: estudio.resultado,
+      expedienteEstado: exp.estado,
+      titularDeReserva: origen?.reservado_por_expediente_id === estudio.expediente_id,
+      contratos: (contratos as InsumosReutilizacion['contratos'] | null) ?? [],
+      destino,
+    });
+    return { reutilizable: motivo === null, motivo };
+  } catch (err) {
+    logger.warn(
+      { estudioId: estudio.id, err: err instanceof Error ? err.message : String(err) },
+      '§5.2: no se pudo verificar si el estudio vigente es reutilizable — no se promete',
+    );
+    return {
+      reutilizable: false,
+      motivo: 'No pudimos verificar si ese estudio sirve para esta propiedad. Ábrelo para revisarlo antes de crear uno nuevo.',
+    };
+  }
 }
 
 /**
@@ -684,13 +862,8 @@ export async function reasignarEstudio(args: {
   const orgDestino = destino.inmobiliaria_id ?? null;
   const duenioOrigen = origen?.propietario_id ?? null;
   const duenioDestino = destino.propietario_id ?? null;
-  const mismaOrg =
-    orgDestino === orgOrigen && (orgExpediente === null || orgExpediente === orgDestino);
-  // Sin organizacion, el dueño de la cartera es el propietario individual.
-  const mismoDuenio = orgDestino !== null || duenioDestino === duenioOrigen;
-  const mismaCartera = mismaOrg && mismoDuenio;
 
-  if (!mismaCartera) {
+  if (!esMismaCartera(orgExpediente, origen, destino)) {
     logger.warn(
       {
         estudioId: estudio.id,
@@ -844,6 +1017,10 @@ export async function reasignarEstudio(args: {
     ip,
   });
 
+  // 12. AVISO AL PROSPECTO. El §11 le muestra "Reasignado": que se entere por
+  //     correo (o in-app si tiene cuenta), no solo al abrir su estudio.
+  void avisarReasignacionAlSolicitante(expediente, destino, vigenciaHasta);
+
   logger.info(
     {
       estudioId: estudio.id,
@@ -859,6 +1036,39 @@ export async function reasignarEstudio(args: {
   );
 
   return resultado;
+}
+
+/** Correo (o in-app + correo con cuenta) al prospecto del estudio reasignado. Nunca lanza. */
+async function avisarReasignacionAlSolicitante(
+  expediente: Pick<ExpedienteParaReasignar, 'id' | 'numero' | 'solicitante_id'>,
+  destino: { codigo: string | null; direccion: string | null },
+  vigenciaHasta: string | null,
+): Promise<void> {
+  if (!expediente.solicitante_id) return;
+  try {
+    const { data } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('email, nombre, apellido')
+      .eq('id', expediente.solicitante_id)
+      .maybeSingle();
+    const s = data as { email: string | null; nombre: string | null; apellido: string | null } | null;
+    const vigencia = vigenciaHasta ? `, hasta el ${formatearFecha(vigenciaHasta)}` : '';
+    // Diferido: los avisos arrastran el cliente de correo y la config completa.
+    const { avisarAlSolicitante, referenciaInmueble } = await import('./reserva-inmueble.notificaciones');
+    await avisarAlSolicitante({
+      email: s?.email ?? null,
+      nombre: `${s?.nombre ?? ''} ${s?.apellido ?? ''}`.trim() || null,
+      tipo: 'estudio.reasignado',
+      titulo: 'Su estudio se trasladó a otra propiedad',
+      mensaje:
+        `Su estudio${expediente.numero ? ` ${expediente.numero}` : ''} se trasladó a la propiedad ${referenciaInmueble(destino.codigo, destino.direccion)} ` +
+        `sin costo adicional. Conserva su vigencia original${vigencia}.`,
+      link: `/expedientes/${expediente.id}`,
+      payload: { expediente_id: expediente.id },
+    });
+  } catch (err) {
+    logger.warn({ err, expedienteId: expediente.id }, 'Reasignacion §4.3: no se pudo avisar al prospecto');
+  }
 }
 
 /**

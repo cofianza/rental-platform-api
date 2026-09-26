@@ -30,7 +30,19 @@ const mockEq: ReturnType<typeof vi.fn> = vi.fn((): Record<string, unknown> => ({
 const mockSelect = vi.fn((_cols?: string, _opts?: Record<string, unknown>) => ({
   eq: mockEq,
 }));
-const fromPorDefecto = (_table?: string): Record<string, unknown> => ({ select: mockSelect });
+// `update → eq → eq`: expirar las autorizaciones pendientes al cerrar o rechazar.
+const autorizacionesExpiradas: unknown[][] = [];
+const fromPorDefecto = (table?: string): Record<string, unknown> => ({
+  select: mockSelect,
+  update: (valores: unknown) => ({
+    eq: (...a: unknown[]) => ({
+      eq: async (...b: unknown[]) => {
+        if (table === 'autorizaciones_habeas_data') autorizacionesExpiradas.push([valores, a, b]);
+        return { error: null };
+      },
+    }),
+  }),
+});
 const mockFrom = vi.fn(fromPorDefecto);
 const mockRpc = vi.fn();
 
@@ -469,6 +481,23 @@ describe('expediente-workflow.service', () => {
       expect(mockAvisarSolicitante).not.toHaveBeenCalled();
       // El co-arrendatario ya evaluado recibe su correo de cierre.
       await vi.waitFor(() => expect(avisarCoarrendatarioDecision).toHaveBeenCalledWith('exp-uuid', 'cerrado'));
+    });
+
+    it('al cerrar o rechazar, el enlace de autorización pendiente se expira (no se firma un estudio cancelado)', async () => {
+      autorizacionesExpiradas.length = 0;
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      conTimeline();
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'cerrado', comentario: 'El prospecto desistió', etiqueta: 'Cancelar estudio' } as never,
+        adminUser,
+      );
+      expect(autorizacionesExpiradas).toEqual([[{ estado: 'expirado' }, ['expediente_id', 'exp-uuid'], ['estado', 'pendiente']]]);
+
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      conTimeline();
+      await executeTransition('exp-uuid', { nuevo_estado: 'rechazado', comentario: 'Ingresos no soportados', motivo: 'No cumple la política.' }, adminUser);
+      expect(autorizacionesExpiradas).toHaveLength(2);
     });
 
     it('P1: al cerrar o rechazar se revisa la devolución de la evaluación pagada', async () => {

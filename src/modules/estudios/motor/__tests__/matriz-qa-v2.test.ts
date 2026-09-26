@@ -91,7 +91,7 @@ import { resolverResultadoEstudio } from '../../reglas-duras';
 import { decidirConCascada } from '../../estudios.service';
 import type { ProviderSolicitudInput } from '../../providers/types';
 import { ponderarConCoarrendatario, veredictoScorecard, type FilaScorecard } from '../../../coarrendatarios/ponderacion';
-import { calcularTarifas, viaPorRutaDeAprobacion } from '../../tarifas';
+import { calcularTarifas, masIva, pctDe, TARIFA_MENSUAL_PCT, viaPorRutaDeAprobacion } from '../../tarifas';
 import { CALIBRACION_DEFAULT as CAL } from '@/lib/calibracion';
 
 // ── Parametros vigentes (defaults del panel = los de la Adenda) ─────────────
@@ -120,6 +120,7 @@ interface PerfilDC {
   score: number;
   /** Pesos, multiplo de 1000. null = DW con reason 50 (ingreso no estimable). */
   ingresoCop?: number | null;
+  /** Por dc(): el DTI de la matriz en pesos (con la fianza); reporteDC() lo toma tal cual como cuota del buro. */
   cuotaCop: number;
   /** economicSector de cada obligacion ('1' financiero, '3' real, '4' telco). [] = sin historial. */
   sectores: string[];
@@ -182,9 +183,20 @@ function reporteTU(score: number): Record<string, unknown> {
   };
 }
 
+/**
+ * "DTI X%" de la matriz es el DTI de la Politica §4.2 = (cuotas del buro +
+ * cuota de la fianza con IVA) / ingreso. El perfil lo trae total (cuotaCop):
+ * el buro reporta el resto, en miles enteros como HDC Plus (hacia abajo, para
+ * no pasar el DTI de la matriz).
+ */
+const cuotaBuro = (p: PerfilDC, canonPct: number) => {
+  const fianza = masIva(pctDe(pctAjustado(canonPct), TARIFA_MENSUAL_PCT.automatica) ?? 0, CAL.TARIFA_IVA);
+  return Math.floor((p.cuotaCop - fianza) / 1000) * 1000;
+};
+
 const dc = (p: PerfilDC, canonPct: number): EntradaSombra => ({
   proveedor: 'datacredito',
-  payload: reporteDC(p),
+  payload: reporteDC({ ...p, cuotaCop: cuotaBuro(p, canonPct) }),
   canon_mensual_cop: pctAjustado(canonPct),
 });
 
@@ -277,6 +289,10 @@ function ponderar(r: Awaited<ReturnType<typeof decidir>>, coa: number | SalidaSo
     coa: typeof coa === 'number' ? { puntaje_normalizado: coa } : (construirFilaSombra('est-coa', coa, {}) as unknown as FilaScorecard),
     coaConReglaDura: false,
     u: U,
+    // Politica §5 nota: la traza REAL del titular (estudios.cascada.sin_flags);
+    // el coarrendatario "evaluado con N puntos" de la matriz, por flujo automatico sin flags.
+    titularSinFlags: r.traza?.sin_flags,
+    coaSinFlags: typeof coa === 'number',
   });
   const combinado = ponderarConCoarrendatario({ titular: r.d.resultado, coaConReglaDura: false, scorecard: v?.resultado ?? null });
   return { v, combinado };
@@ -602,7 +618,8 @@ describe('7.5 Motivos y traza', () => {
     expect.soft(r.d.resultado, 'decision').toBe('rechazado');
     expect.soft(r.veredicto.reglas, 'regla').toEqual(['canon_ingreso_mayor_40']);
     expect.soft(r.salida.canon_ingreso_pct, 'canon/ingreso sobre el ajustado').toBe(40.58);
-    expect.soft(r.salida.dti_pct, 'DTI sobre el ajustado (690.000 / 3.450.000)').toBe(20);
+    // §4.2: (690.000 + fianza 1.400.000 x 2% + IVA 19% = 33.320) / 3.450.000.
+    expect.soft(r.salida.dti_pct, 'DTI sobre el ajustado, con la cuota de la fianza').toBe(20.97);
     expect.soft(r.salida.features.ingreso_mensual_inferido_cop, 'traza: ingreso bruto').toBe(3_000_000);
     expect.soft(r.salida.ingreso_inferido_ajustado_cop, 'traza: ingreso ajustado').toBe(3_450_000);
     if (r.veredicto.rechaza) {

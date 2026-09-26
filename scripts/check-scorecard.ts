@@ -17,7 +17,7 @@
  *   - DataCredito HDC Plus, codigo 13, 2026-08-21
  *   - TransUnion Combo 1901, UAT, 2026-07-17
  * y contra los valores verificados a mano en el analisis de brecha: ingreso
- * 2.387.000, cuota 460.000, DTI 19,3%, bruto 96, normalizado 80,7.
+ * 2.387.000, cuota 460.000, DTI 19,8% (con la fianza), bruto 96, normalizado 80,7.
  *
  * El motor es puro: no toca Supabase ni env, asi que este check no necesita
  * credenciales de nada.
@@ -107,7 +107,8 @@ assert.strictEqual(dc.features.ingreso_mensual_inferido_cop, 2_387_000, 'ingreso
 assert.strictEqual(dc.features.cuota_mensual_vigente_cop, 460_000, 'valueMonthlyPayment: 460 MILES -> 460.000 pesos');
 // 2 decimales: los ratios se evaluan exactos y solo se redondean al publicar,
 // para casar con las columnas NUMERIC(12,2) generadas en la tabla.
-assert.strictEqual(dc.dti_pct, 19.27, 'DTI = 460.000 / 2.387.000');
+// Politica §4.2: con la cuota de la fianza (500.000 x 2% + IVA 19% = 11.900).
+assert.strictEqual(dc.dti_pct, 19.77, 'DTI = (460.000 + 11.900) / 2.387.000');
 assert.strictEqual(dc.features.score_externo, 972, 'score del modelCode DF');
 assert.strictEqual(dc.features.score_modelo, 'DF');
 assert.strictEqual(dc.features.saldo_total_cop, 1_545_000, 'totaldebtBalance 1545 MILES -> 1.545.000');
@@ -132,7 +133,7 @@ assert.strictEqual(dc.features.mora_vigente, false);
 // Puntajes.
 const casosDC: Array<[CodigoVariable, number]> = [
   ['V1', 50], // score 972 -> banda >= 800
-  ['V2', 15], // DTI 19.27% -> banda <= 25%
+  ['V2', 15], // DTI 19.77% (con la fianza) -> banda <= 25%
   ['V3', 10], // canon/ingreso 20.95% -> banda <= 25%
   ['V5', 6], //  sector financiero presente
   ['V6', 10], // 24 meses observados sin mora

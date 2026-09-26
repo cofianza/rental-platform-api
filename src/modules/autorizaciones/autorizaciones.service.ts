@@ -16,6 +16,7 @@ import type {
   RevocarInput,
   PerfilProspectoInput,
   ReportarIdentidadInput,
+  ConfirmarIdentidadInput,
 } from './autorizaciones.schema';
 import { senalDiscrepanciaIngreso } from './ingreso-declarado';
 import { textoLegalSolicitante, VERSION_TERMINOS_BIOMETRIA } from './autorizaciones.texto';
@@ -302,6 +303,10 @@ export async function enviarEnlaceAutorizacion(
     }
   }
 
+  // 0c. Un estudio cerrado o rechazado ya no le pide nada al prospecto: el
+  // enlace llegaria a una pantalla que no deja firmar (assertEstudioActivo).
+  assertEstudioActivo(exp.estado);
+
   // 1a. Aplicar la corrección de contacto si vino en el body. El teléfono
   // solo cuenta si trae dígitos reales (el PhoneInput de la web deja '+57 '
   // cuando se borra el número).
@@ -519,20 +524,29 @@ function maskTelefono(tel: string | null): string | null {
 }
 
 /**
- * Enmascara un documento dejando visibles solo los 4 ultimos digitos.
- *
- * §8.1 pide mostrar "el documento registrado" para que el prospecto lo
- * confirme, pero §12 dice que esa confirmacion ES la defensa contra el enlace
- * reenviado a un tercero: enseñarle el numero completo al portador del enlace
- * le regalaria la respuesta al impostor, y encima seria PII nueva sobre un
- * endpoint que hoy minimiza a proposito (quito el email, enmascara el
- * telefono). Mismo criterio que maskTelefono.
+ * Un expediente cerrado o rechazado ya no avanza: su enlace no se abre para
+ * firmar ni dispara nada (cancelado con la autorizacion pendiente, el
+ * prospecto firmaba y leia "seguimos con tu estudio"). executeTransition
+ * expira las pendientes al cerrar o rechazar; esto cubre los enlaces de antes
+ * y cualquier otro camino. El mensaje no dice "rechazado" (§13).
  */
-function maskDocumento(doc: string | null): string | null {
-  if (!doc) return null;
-  const digits = doc.replace(/[^A-Za-z0-9]/g, '');
-  if (digits.length < 4) return null;
-  return `••••${digits.slice(-4)}`;
+function assertEstudioActivo(estadoExpediente: string | null | undefined): void {
+  if (estadoExpediente === 'cerrado' || estadoExpediente === 'rechazado') {
+    throw AppError.badRequest('Este estudio ya no está activo.', 'ESTUDIO_NO_ACTIVO');
+  }
+}
+
+/**
+ * §8.1: el prospecto ESCRIBE su numero de documento y se compara aqui con el
+ * de la ficha, que nunca se le muestra (ni enmascarado: los 4 ultimos digitos
+ * eran media respuesta regalada al portador de un enlace reenviado, §12).
+ * TransUnion consulta solo por numero, asi que un digito mal puesto por el
+ * gestor consultaba a un tercero. Sin numero en la ficha no hay nada que
+ * confirmar: no coincide.
+ */
+export function documentoCoincide(escrito: string | null | undefined, registrado: string | null | undefined): boolean {
+  const ficha = normalizarDocumento(registrado);
+  return ficha.length > 0 && normalizarDocumento(escrito) === ficha;
 }
 
 export async function getAutorizacionByToken(token: string) {
@@ -540,8 +554,8 @@ export async function getAutorizacionByToken(token: string) {
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select(`
       id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma,
-      solicitantes(nombre, apellido, telefono, tipo_documento, numero_documento),
-      expedientes(numero, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, barrio))
+      solicitantes(nombre, apellido, telefono, tipo_documento),
+      expedientes(numero, estado, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, barrio))
     `)
     .eq('token', token)
     .maybeSingle();
@@ -566,9 +580,12 @@ export async function getAutorizacionByToken(token: string) {
       apellido: string;
       telefono: string | null;
       tipo_documento: string | null;
-      numero_documento: string | null;
     };
-    expedientes: { numero: string; inmuebles: { direccion: string; ciudad: string; barrio: string | null } };
+    expedientes: {
+      numero: string;
+      estado: string;
+      inmuebles: { direccion: string; ciudad: string; barrio: string | null };
+    };
   };
 
   // El trámite antes que la fecha: reabrir DESPUÉS del vencimiento un enlace
@@ -576,6 +593,10 @@ export async function getAutorizacionByToken(token: string) {
   if (auth.estado === 'autorizado') {
     throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
   }
+
+  // Antes que el vencimiento y el estado: con el estudio cancelado, "pide otro
+  // enlace" seria mandarlo a pedir algo que ya no existe.
+  assertEstudioActivo(auth.expedientes?.estado);
 
   // Check if expired
   if (new Date(auth.token_expiracion) < new Date()) {
@@ -629,10 +650,9 @@ export async function getAutorizacionByToken(token: string) {
       // PII minimizada para el portador del token: NO se devuelve el email completo
       // (la pantalla no lo usa) y el teléfono va enmascarado.
       telefono_masked: maskTelefono(auth.solicitantes.telefono),
-      // §8.1: el prospecto confirma su identidad. El documento va ENMASCARADO
-      // (ver maskDocumento) — nunca completo.
+      // §8.1: solo el TIPO. El numero lo escribe el prospecto y se compara en
+      // el servidor (confirmarIdentidadProspecto): nunca viaja al portador.
       tipo_documento: auth.solicitantes.tipo_documento,
-      numero_documento_masked: maskDocumento(auth.solicitantes.numero_documento),
     },
     expediente: {
       numero_expediente: auth.expedientes.numero,
@@ -662,15 +682,19 @@ function biometriaAplica(versionTerminos: string | null | undefined): boolean {
   return env.AUCO_BIOMETRIA_ENABLED && versionTerminos === VERSION_TERMINOS_BIOMETRIA;
 }
 
-async function autorizacionPendientePorToken(token: string): Promise<{
+interface AutorizacionPendiente {
   id: string;
   expediente_id: string | null;
   solicitante_id: string;
   version_terminos: string | null;
-}> {
+  /** Documento de la ficha: solo para compararlo, nunca sale del servidor. */
+  numero_documento: string | null;
+}
+
+async function autorizacionPendientePorToken(token: string): Promise<AutorizacionPendiente> {
   const { data, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_expiracion, expediente_id, solicitante_id, version_terminos')
+    .select('id, estado, token_expiracion, expediente_id, solicitante_id, version_terminos, solicitantes(numero_documento), expedientes(estado)')
     .eq('token', token)
     .maybeSingle();
 
@@ -688,21 +712,32 @@ async function autorizacionPendientePorToken(token: string): Promise<{
     expediente_id: string | null;
     solicitante_id: string;
     version_terminos: string | null;
+    solicitantes: { numero_documento: string | null } | null;
+    expedientes: { estado: string } | null;
   };
+  // Primero: la biometria que cuelga de aqui es una consulta FACTURABLE a Auco.
+  assertEstudioActivo(auth.expedientes?.estado);
   if (new Date(auth.token_expiracion) < new Date()) {
     throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
   }
   if (auth.estado !== 'pendiente') {
     throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
-  return { id: auth.id, expediente_id: auth.expediente_id, solicitante_id: auth.solicitante_id, version_terminos: auth.version_terminos ?? null };
+  return {
+    id: auth.id,
+    expediente_id: auth.expediente_id,
+    solicitante_id: auth.solicitante_id,
+    version_terminos: auth.version_terminos ?? null,
+    numero_documento: auth.solicitantes?.numero_documento ?? null,
+  };
 }
 
 /**
  * Columnas con las que se registra la confirmacion de identidad del §8.1 en
  * `autorizacion_perfil_prospecto`. UNA sola definicion para los dos caminos
- * que la escriben (el PASO 5 y la firma): si divergieran, el banner del
- * gestor diria una cosa segun por donde haya entrado la confirmacion.
+ * que la escriben (confirmar-identidad y la firma, ambos con el documento
+ * escrito y comparado): si divergieran, el banner del gestor diria una cosa
+ * segun por donde haya entrado la confirmacion.
  *
  * Limpia ademas el reporte anterior. La fila es 1:1 con el EXPEDIENTE, no con
  * el enlace: sin esto, un reporte de 'datos_incorrectos' que el gestor ya
@@ -723,8 +758,60 @@ function camposIdentidadConfirmada(ahora: string): Record<string, unknown> {
 }
 
 /**
- * Guarda lo que el prospecto declara en el PASO 5 (§8.1 confirmacion de
- * identidad, §8.2 laboral e ingreso, §8.3 solo/acompanado).
+ * Upsert de la confirmacion del §8.1 en la fila 1:1 del expediente.
+ * Best-effort: la firma vuelve a comparar el documento, asi que perder esta
+ * marca no abre nada; deshacer una firma por ella seria peor.
+ */
+async function registrarIdentidadConfirmada(expedienteId: string, autorizacionId: string, ahora: string): Promise<void> {
+  try {
+    const { error } = await (supabase
+      .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+      .upsert(
+        {
+          expediente_id: expedienteId,
+          autorizacion_id: autorizacionId,
+          updated_at: ahora,
+          ...camposIdentidadConfirmada(ahora),
+        } as never,
+        { onConflict: 'expediente_id' },
+      );
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), autorizacionId, expedienteId },
+      '§8.1: no se pudo registrar la confirmacion de identidad',
+    );
+  }
+}
+
+/**
+ * §8.1: el prospecto escribe su numero de documento y se compara con la
+ * ficha. Si coincide, queda confirmada su identidad; si no, es el MISMO
+ * camino que "los datos estan mal" (§12): el enlace muere, no se consulta
+ * ninguna central y el gestor corrige y reenvia. Un solo intento por enlace:
+ * no hay oraculo para adivinar el numero de otra persona.
+ */
+export async function confirmarIdentidadProspecto(
+  token: string,
+  input: ConfirmarIdentidadInput,
+  ip?: string,
+  userAgent?: string,
+): Promise<{ coincide: boolean }> {
+  const auth = await autorizacionPendientePorToken(token);
+  if (!documentoCoincide(input.numero_documento, auth.numero_documento)) {
+    await detenerAutorizacion(auth, { motivo: 'datos_incorrectos', origen: 'documento_no_coincide' }, ip, userAgent);
+    return { coincide: false };
+  }
+  if (auth.expediente_id) {
+    await registrarIdentidadConfirmada(auth.expediente_id, auth.id, new Date().toISOString());
+  }
+  return { coincide: true };
+}
+
+/**
+ * Guarda lo que el prospecto declara en el PASO 5 (§8.2 laboral e ingreso,
+ * §8.3 solo/acompanado). La identidad (§8.1) ya NO entra por aqui: exige el
+ * documento escrito (confirmarIdentidadProspecto).
  *
  * Va a `autorizacion_perfil_prospecto` y NO a otro sitio, a proposito:
  *   - NO a `autorizaciones_habeas_data`: su trigger es una allowlist y
@@ -754,9 +841,6 @@ export async function guardarPerfilProspecto(token: string, input: PerfilProspec
     autorizacion_id: auth.id,
     updated_at: ahora,
   };
-  if (input.identidad_confirmada) {
-    Object.assign(fila, camposIdentidadConfirmada(ahora));
-  }
   if (input.situacion_laboral !== undefined) fila.situacion_laboral = input.situacion_laboral;
   if (input.donde_labora !== undefined) fila.donde_labora = input.donde_labora;
   if (input.ingreso_declarado_cop !== undefined) fila.ingreso_declarado_cop = input.ingreso_declarado_cop;
@@ -908,7 +992,7 @@ function mensajeProspectoBiometria(estado: ResumenBiometria['estado']): string {
     case 'no_coincide':
       return 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puedes intentarlo de nuevo con mejor luz, o continuar: alguien de nuestro equipo revisara tu caso.';
     case 'omitida':
-      return 'Continuamos sin la verificacion con foto. Tu solicitud sigue: la revisara una persona de nuestro equipo.';
+      return 'Continuamos sin la verificacion con foto. Tu estudio sigue: lo revisara una persona de nuestro equipo.';
     default:
       return 'No pudimos completar la verificacion en este momento. Puedes continuar: alguien de nuestro equipo revisara tu caso.';
   }
@@ -948,10 +1032,6 @@ export async function omitirBiometriaProspecto(token: string) {
  * `identidad_confirmada` en la migracion 20260907000001. Confirmar o reportar,
  * dos salidas, ninguna escribe identidad. La correccion real la hace el gestor
  * en el dashboard —donde esta auditada y scopeada— y reenvia el enlace.
- *
- * ORDEN NO NEGOCIABLE: primero se guarda el reporte, DESPUES se expira la
- * autorizacion. Al reves, el chequeo de estado='pendiente' del propio servicio
- * rechazaria la escritura del reporte y se perderia el motivo.
  */
 export async function reportarIdentidadProspecto(
   token: string,
@@ -960,6 +1040,30 @@ export async function reportarIdentidadProspecto(
   userAgent?: string,
 ) {
   const auth = await autorizacionPendientePorToken(token);
+  await detenerAutorizacion(auth, { ...input, origen: 'reporte_identidad_prospecto' }, ip, userAgent);
+  return { reportado: true };
+}
+
+/** Por que se detiene el enlace: el reporte del prospecto o el documento que no coincide. */
+interface Detencion extends ReportarIdentidadInput {
+  origen: 'reporte_identidad_prospecto' | 'documento_no_coincide';
+}
+
+/**
+ * Camino UNICO para detener un enlace pendiente (§12): reporte + expirar +
+ * avisos. Lo usan el reporte del prospecto y el documento escrito que no
+ * coincide con la ficha (§8.1).
+ *
+ * ORDEN NO NEGOCIABLE: primero se guarda el reporte, DESPUES se expira la
+ * autorizacion. Al reves, el chequeo de estado='pendiente' del propio servicio
+ * rechazaria la escritura del reporte y se perderia el motivo.
+ */
+async function detenerAutorizacion(
+  auth: Pick<AutorizacionPendiente, 'id' | 'expediente_id' | 'solicitante_id'>,
+  input: Detencion,
+  ip?: string,
+  userAgent?: string,
+): Promise<void> {
   const ahora = new Date().toISOString();
 
   // 1. Traza del reporte (antes de expirar — ver el comentario de arriba).
@@ -1007,7 +1111,7 @@ export async function reportarIdentidadProspecto(
     entidad: AUDIT_ENTITIES.AUTORIZACION,
     entidadId: auth.id,
     detalle: {
-      origen: 'reporte_identidad_prospecto',
+      origen: input.origen,
       motivo: input.motivo,
       detalle: input.detalle ?? null,
       solicitante_id: auth.solicitante_id,
@@ -1022,14 +1126,16 @@ export async function reportarIdentidadProspecto(
       logger.warn({ error: err }, '§12: fallo el fan-out del reporte de identidad'),
     );
   }
-
-  return { reportado: true };
 }
 
 const MOTIVO_REPORTE_LABEL: Record<string, string> = {
   no_soy_yo: 'la persona que abrio el enlace dice que NO es el titular de esos datos',
   datos_incorrectos: 'los datos registrados no corresponden a esa persona',
 };
+
+/** El §8.1 nunca revela el numero: el aviso dice que no coincidio, no cual escribio. */
+const LABEL_DOCUMENTO_NO_COINCIDE =
+  'el numero de documento que escribio quien abrio el enlace no coincide con el registrado';
 
 /**
  * Evento de timeline + notificaciones del §12. Tipo 'estudio' a proposito: la
@@ -1044,7 +1150,7 @@ const MOTIVO_REPORTE_LABEL: Record<string, string> = {
  * esos datos no son de esa persona, ese correo y ese telefono son justamente
  * los que estan en duda.
  */
-async function avisarReporteIdentidad(expedienteId: string, input: ReportarIdentidadInput) {
+async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
   const [{ notificarUsuario, notificarYCorreo, notificarResponsableExpediente }, { listOperators }] =
     await Promise.all([
       import('@/modules/notificaciones/notificaciones.service'),
@@ -1074,8 +1180,10 @@ async function avisarReporteIdentidad(expedienteId: string, input: ReportarIdent
   // El detalle vive en UN solo sitio, con UN solo control de acceso:
   // autorizacion_perfil_prospecto.identidad_reporte_detalle, que AutorizacionSection
   // renderiza escapado por JSX y solo para roles internos.
+  const motivoLabel =
+    input.origen === 'documento_no_coincide' ? LABEL_DOCUMENTO_NO_COINCIDE : MOTIVO_REPORTE_LABEL[input.motivo];
   const mensaje =
-    `En el estudio ${exp?.numero || expedienteId}, ${MOTIVO_REPORTE_LABEL[input.motivo]}. ` +
+    `En el estudio ${exp?.numero || expedienteId}, ${motivoLabel}. ` +
     'Detuvimos el enlace de autorizacion y no se consultara ninguna central de riesgo. ' +
     'Revisa los datos del solicitante y, si corresponde, envia un enlace nuevo.' +
     (input.detalle ? ' Quien reporto dejo una nota: la ve el equipo de Cofianza en el estudio.' : '');
@@ -1087,8 +1195,8 @@ async function avisarReporteIdentidad(expedienteId: string, input: ReportarIdent
     .insert({
       expediente_id: expedienteId,
       tipo: 'estudio',
-      descripcion: `Autorizacion detenida: ${MOTIVO_REPORTE_LABEL[input.motivo]}. Marcado para revision.`,
-      metadata: { automatico: true, origen: 'reporte_identidad_prospecto', motivo: input.motivo },
+      descripcion: `Autorizacion detenida: ${motivoLabel}. Marcado para revision.`,
+      metadata: { automatico: true, origen: input.origen, motivo: input.motivo },
     } as never);
 
   const propietarioId = exp?.inmuebles?.propietario_id ?? null;
@@ -1186,7 +1294,7 @@ export async function firmarAutorizacion(
   // 1. Get autorizacion and validate
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_expiracion, texto_autorizado, solicitante_id, expediente_id, solicitantes(tipo_documento, numero_documento)')
+    .select('id, estado, token_expiracion, texto_autorizado, solicitante_id, expediente_id, solicitantes(tipo_documento, numero_documento), expedientes(estado)')
     .eq('token', token)
     .maybeSingle();
 
@@ -1202,7 +1310,12 @@ export async function firmarAutorizacion(
   const auth = autorizacion as unknown as AutorizacionRow & {
     expediente_id?: string;
     solicitantes?: { tipo_documento: string | null; numero_documento: string | null } | null;
+    expedientes?: { estado: string } | null;
   };
+
+  // Estudio cancelado o rechazado: no se firma (ni se dispara el orquestador).
+  // 'autorizado' sigue siendo exito idempotente: esa firma ya existe.
+  if (auth.estado !== 'autorizado') assertEstudioActivo(auth.expedientes?.estado);
 
   if (auth.estado !== 'pendiente') {
     // Diferenciar: 'autorizado' = ya firmada (el front puede mostrar éxito
@@ -1216,6 +1329,21 @@ export async function firmarAutorizacion(
 
   if (new Date(auth.token_expiracion) < new Date()) {
     throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
+  }
+
+  // 1b. §8.1: la firma lleva el documento que escribio el prospecto y se
+  // compara otra vez con la ficha (el paso de confirmar-identidad lo hace la
+  // web, pero un POST directo lo saltaria). Si no coincide: mismo camino que
+  // el reporte — el enlace muere y el gestor corrige. Sin esto, un digito mal
+  // puesto en la ficha terminaba en la consulta de un tercero.
+  if (!documentoCoincide(input.numero_documento, auth.solicitantes?.numero_documento)) {
+    await detenerAutorizacion(
+      { id: auth.id, expediente_id: auth.expediente_id ?? null, solicitante_id: auth.solicitante_id },
+      { motivo: 'datos_incorrectos', origen: 'documento_no_coincide' },
+      ip,
+      userAgent,
+    );
+    throw AppError.badRequest('El documento no coincide con el registrado', 'DOCUMENTO_NO_COINCIDE');
   }
 
   // 2. OTP — SOLO si el metodo declarado es 'otp' (Adenda 1 §7).
@@ -1283,13 +1411,8 @@ export async function firmarAutorizacion(
   // cada ejecucion (sincronizarDocumentoSolicitante), asi que leerlo por FK
   // mas tarde no prueba a quien se le pidio la autorizacion.
   const numeroDocumentoAceptante = auth.solicitantes?.numero_documento?.trim() || null;
+  // (Nunca vacio: sin numero en la ficha, documentoCoincide ya detuvo la firma.)
   const tipoDocumentoAceptante = auth.solicitantes?.tipo_documento?.trim().toLowerCase() || null;
-  if (!numeroDocumentoAceptante) {
-    logger.warn(
-      { autorizacionId: auth.id, solicitanteId: auth.solicitante_id },
-      'firmarAutorizacion: el solicitante no tiene numero_documento — la evidencia queda sin documento del aceptante',
-    );
-  }
 
   // 3c. Vigencia congelada. Se calcula una sola vez, aqui, para que un cambio
   // de politica no reescriba evidencia pasada.
@@ -1347,32 +1470,11 @@ export async function firmarAutorizacion(
     throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
-  // 4b. Flujo §8.1: la confirmacion de identidad puede venir tambien en el
-  // body de la firma. El PASO 5 la guarda por su propio endpoint, pero la web
-  // traga ese fallo y firma igual; si llego aqui se registra con las MISMAS
-  // columnas (camposIdentidadConfirmada), en la fila 1:1 del expediente.
-  // Best-effort: la firma ya quedo escrita; perder esta marca es malo,
-  // deshacer la firma por ella seria peor.
-  if (input.identidad_confirmada && auth.expediente_id) {
-    try {
-      const { error: perfilError } = await (supabase
-        .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
-        .upsert(
-          {
-            expediente_id: auth.expediente_id,
-            autorizacion_id: auth.id,
-            updated_at: autorizadoEn.toISOString(),
-            ...camposIdentidadConfirmada(autorizadoEn.toISOString()),
-          } as never,
-          { onConflict: 'expediente_id' },
-        );
-      if (perfilError) throw new Error(perfilError.message);
-    } catch (err) {
-      logger.warn(
-        { error: err instanceof Error ? err.message : String(err), autorizacionId: auth.id, expedienteId: auth.expediente_id },
-        '§8.1: no se pudo registrar la confirmacion de identidad que vino con la firma',
-      );
-    }
+  // 4b. Flujo §8.1: el documento ya coincidio arriba, asi que la identidad
+  // queda confirmada con las MISMAS columnas que confirmar-identidad
+  // (camposIdentidadConfirmada), por si ese paso no alcanzo a escribirla.
+  if (auth.expediente_id) {
+    await registrarIdentidadConfirmada(auth.expediente_id, auth.id, autorizadoEn.toISOString());
   }
 
   // 5. Audit
@@ -1384,7 +1486,7 @@ export async function firmarAutorizacion(
     detalle: {
       solicitante_id: auth.solicitante_id,
       metodo_firma: input.metodo_firma,
-      identidad_confirmada: input.identidad_confirmada === true,
+      documento_confirmado: true,
       hash_documento: hashDocumento,
       ip,
     },

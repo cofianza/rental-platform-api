@@ -13,6 +13,7 @@ import { getContratoById, enviarContratoAFirma, notificarPartesContratoTerminado
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import type { AuthUser } from '@/types/auth';
 import type { ContratoTransitionInput } from './contrato-workflow.schema';
+import { CONCEPTOS_PAGO } from '@/modules/pagos/pagos.schema';
 
 // ============================================================
 // Tipos internos
@@ -535,7 +536,7 @@ async function applySideEffects(
         .eq('id', contratoId);
       // El arriendo terminó: el inmueble vuelve a estar disponible (fuera de vitrina).
       const liberadoFin = await liberarInmuebleDelExpediente(expedienteId, contratoId);
-      await aplicarEfectosTerminacion(contratoId, expedienteId, 'finalizado', input, usuarioId, liberadoFin, avisar);
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'finalizado', input, usuarioId, liberadoFin, avisar, fromState === 'vigente');
       break;
     }
 
@@ -570,7 +571,7 @@ async function applySideEffects(
       } catch (err) {
         logger.error({ err, contratoId }, 'No se pudieron cancelar las solicitudes de firma del contrato cancelado');
       }
-      await aplicarEfectosTerminacion(contratoId, expedienteId, 'cancelado', input, usuarioId, liberadoCancel, avisar);
+      await aplicarEfectosTerminacion(contratoId, expedienteId, 'cancelado', input, usuarioId, liberadoCancel, avisar, fromState === 'vigente');
       break;
     }
   }
@@ -596,6 +597,8 @@ async function aplicarEfectosTerminacion(
   usuarioId: string | null,
   inmuebleLiberado: boolean,
   avisar = true,
+  /** El contrato llegó a FIANZA ACTIVA: la prima (cobro 'garantia') ya se causó y no se anula. */
+  fianzaActivada = false,
 ): Promise<void> {
   const automatico = usuarioId === null;
 
@@ -615,12 +618,14 @@ async function aplicarEfectosTerminacion(
   // arriendo terminó de verdad (inmuebleLiberado). Si hay una renovación en
   // curso (guard), los pagos pueden financiarla → NO se tocan. Sin esto, un
   // webhook tardío completaba el pago y facturaba sobre un contrato terminado.
+  // Con la fianza ya activada, el cobro de la prima se conserva: se debe aunque el contrato termine.
   if (inmuebleLiberado) {
     import('@/modules/pagos/pagos.service')
       .then((p) =>
         p.cancelarPagosPendientesDeExpediente(
           expedienteId,
           `Contrato ${targetState} — pagos pendientes cancelados`,
+          fianzaActivada ? CONCEPTOS_PAGO.filter((c) => c !== 'garantia') : undefined,
         ),
       )
       .catch((e) => logger.warn({ error: e, expedienteId }, 'Error cancelando pagos pendientes por terminación'));

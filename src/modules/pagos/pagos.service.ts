@@ -17,6 +17,7 @@ import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { sobreCanon } from '@/modules/estudios/tarifas';
 import { coarrendatarioVinculado } from '@/modules/estudios/coarrendatario-vinculado';
+import { destinacionDeUso } from '@/modules/inmuebles/destinacion';
 
 // ============================================================
 // Helpers
@@ -289,8 +290,9 @@ export async function createPaymentLink(
     throw AppError.conflict(`El estudio está ${estadoExp}: no se cobra la evaluación.`, 'EXPEDIENTE_CERRADO');
   }
 
-  // 1a. FIRMA INCOMPLETA (contratos V3, §11.7.3).
+  // 1a. FIRMA INCOMPLETA (contratos V3, §11.7.3). Depósito: no en vivienda.
   await assertFianzaOperando(expedienteId, input.concepto);
+  await assertDepositoPermitido(expedienteId, input.concepto);
 
   // 1b. TOPE DE CANON — flujo §4.4: "ANTES de avanzar y de generar cualquier
   //     cobro... no se cobra el estudio". Esta ruta generica es el OTRO camino
@@ -616,6 +618,30 @@ export async function cancelarPagosPendientesDeExpediente(
 }
 
 /**
+ * Ley 820 de 2003 art. 16 (Técnico V3 §2.5): en la vivienda urbana no se exige
+ * depósito ni garantía en dinero, así que ni se cobra ni se factura. La
+ * destinación sale de inmuebles.uso (destinacionDeUso). Solo lo comercial lo
+ * admite: mixto (tiene vivienda) o sin uso reconocido se trata como vivienda.
+ * Vale al crear el link, al reenviarlo y al registrar un pago a mano.
+ */
+async function assertDepositoPermitido(expedienteId: string, concepto: string): Promise<void> {
+  if (concepto !== 'deposito') return;
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('inmuebles!expedientes_inmueble_id_fkey(uso)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  const uso = (data as { inmuebles?: { uso?: string | null } | null } | null)?.inmuebles?.uso;
+  if (destinacionDeUso(uso) !== 'comercial') {
+    throw AppError.badRequest(
+      'En un arrendamiento de vivienda no se cobra depósito de garantía (Ley 820 de 2003, art. 16): el cumplimiento del arrendatario lo respalda la fianza.',
+      'DEPOSITO_NO_PERMITIDO_VIVIENDA',
+    );
+  }
+}
+
+/**
  * Contratos V3 (§11.7.1-11.7.3 y Adenda 1 del módulo de contratos, respuesta
  * 12): mientras el contrato no esté firmado por todas las partes (borrador, EN
  * FIRMA o FIRMA INCOMPLETA) la fianza no opera, así que no se cobra garantía
@@ -664,6 +690,7 @@ export async function resendPaymentLink(pagoId: string, userId: string, userRol?
   // reenviar el email y devolver el email_pagador. 404 fuera de scope.
   await assertExpedienteAccess(pago.expediente_id, userId, userRol);
   await assertFianzaOperando(pago.expediente_id, pago.concepto);
+  await assertDepositoPermitido(pago.expediente_id, pago.concepto);
 
   if (pago.estado !== 'pendiente') {
     throw AppError.badRequest(
@@ -815,6 +842,7 @@ export async function registerManualPayment(
   }
   // §11.7.3: la misma puerta que el link de pago; a mano tampoco se cobra con la firma incompleta.
   await assertFianzaOperando(expedienteId, input.concepto);
+  await assertDepositoPermitido(expedienteId, input.concepto);
 
   // Un enlace vivo del mismo concepto se podría pagar después: doble cobro y
   // doble factura (la del webhook sale sola). 'fallido' cuenta porque MP deja
@@ -1793,33 +1821,50 @@ export async function reconcilePendingPagos(): Promise<{ revisados: number; conc
     return { revisados: 0, conciliados: 0 };
   }
 
-  const desde = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const DIA_MS = 24 * 60 * 60 * 1000;
+  const desde = new Date(Date.now() - 7 * DIA_MS).toISOString();
   const hasta = new Date(Date.now() - 15 * 60 * 1000).toISOString(); // deja respirar a los recién creados
+  // Un PSE o un recibo de efectivo ('procesando') bloquea abrir otro cobro del
+  // mismo concepto: con la ventana de 7 días nadie lo volvía a mirar y el gestor
+  // quedaba sin salida. Se siguen hasta 30 días (el recibo del estudio vence a
+  // los 15: date_of_expiration en el adaptador de Mercado Pago).
+  const desdeProcesando = new Date(Date.now() - 30 * DIA_MS).toISOString();
+  const pagosPasarela = () =>
+    (supabase.from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('id, expediente_id, concepto, estado, transaction_ref, created_at')
+      .eq('metodo', 'pasarela');
 
   // Incluye 'fallido': MP permite reintentar en el mismo checkout — si el
   // reintento fue APROBADO y su webhook se perdió, el job lo rescata
   // (fallido→completado es transición válida).
-  const { data, error } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, expediente_id, concepto, estado, transaction_ref, created_at')
-    .eq('metodo', 'pasarela')
-    .in('estado', ['pendiente', 'procesando', 'fallido'])
-    .gte('created_at', desde)
-    .lte('created_at', hasta)
-    // Los más recientes primero: sin orden, 50 cobros abandonados o fallidos
-    // de la semana podían dejar fuera el pago que acaba de entrar.
-    .order('created_at', { ascending: false })
-    .limit(50);
+  const [recientes, viejos] = await Promise.all([
+    pagosPasarela()
+      .in('estado', ['pendiente', 'procesando', 'fallido'])
+      .gte('created_at', desde)
+      .lte('created_at', hasta)
+      // Los más recientes primero: sin orden, 50 cobros abandonados o fallidos
+      // de la semana podían dejar fuera el pago que acaba de entrar.
+      .order('created_at', { ascending: false })
+      .limit(50),
+    // Consulta aparte (con su propio tope) para que los recientes no los tapen.
+    pagosPasarela()
+      .eq('estado', 'procesando')
+      .gte('created_at', desdeProcesando)
+      .lt('created_at', desde)
+      .order('created_at', { ascending: false })
+      .limit(50),
+  ]);
 
-  if (error) {
-    logger.error({ error: error.message }, 'reconcilePendingPagos: error consultando pagos');
+  if (recientes.error || viejos.error) {
+    logger.error({ error: (recientes.error ?? viejos.error)?.message }, 'reconcilePendingPagos: error consultando pagos');
     return { revisados: 0, conciliados: 0 };
   }
 
-  const pendientes = (data ?? []) as Array<{
+  type PagoPorConciliar = {
     id: string; expediente_id: string; concepto: string; estado: string; transaction_ref: string | null;
-  }>;
-  if (pendientes.length === 50) {
+  };
+  const pendientes = [...(recientes.data ?? []), ...(viejos.data ?? [])] as PagoPorConciliar[];
+  if ((recientes.data ?? []).length === 50 || (viejos.data ?? []).length === 50) {
     logger.warn('reconcilePendingPagos: se llegó al tope de 50 pagos; los más viejos quedan para otra corrida');
   }
 

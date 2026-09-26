@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 const { mockFrom, ops } = vi.hoisted(() => {
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
-  const PASSTHROUGH = ['select', 'eq', 'in', 'gte', 'lte', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -42,10 +42,23 @@ import { reconcilePendingPagos } from '../pagos.service';
 
 describe('reconcilePendingPagos', () => {
   it('revisa primero los cobros y compras más recientes', async () => {
+    ops.length = 0;
     await reconcilePendingPagos();
-    for (const table of ['pagos', 'compras_creditos_estudios']) {
-      const orden = ops.filter((o) => o.table === table && o.method === 'order').map((o) => o.args);
-      expect(orden, table).toEqual([['created_at', { ascending: false }]]);
-    }
+    const orden = (table: string) => ops.filter((o) => o.table === table && o.method === 'order').map((o) => o.args);
+    // pagos: la ventana de 7 días y, aparte, los 'procesando' viejos.
+    expect(orden('pagos')).toEqual([['created_at', { ascending: false }], ['created_at', { ascending: false }]]);
+    expect(orden('compras_creditos_estudios')).toEqual([['created_at', { ascending: false }]]);
+  });
+
+  it("sigue los 'procesando' hasta 30 días, fuera de la ventana de 7", async () => {
+    ops.length = 0;
+    const antes = Date.now();
+    await reconcilePendingPagos();
+    const pagos = ops.filter((o) => o.table === 'pagos');
+    const dias = (iso: unknown) => Math.round((antes - Date.parse(String(iso))) / 86_400_000);
+
+    expect(pagos.filter((o) => o.method === 'eq' && o.args[0] === 'estado').map((o) => o.args[1])).toEqual(['procesando']);
+    expect(pagos.filter((o) => o.method === 'gte').map((o) => dias(o.args[1]))).toEqual([7, 30]);
+    expect(pagos.filter((o) => o.method === 'lt').map((o) => dias(o.args[1]))).toEqual([7]);
   });
 });

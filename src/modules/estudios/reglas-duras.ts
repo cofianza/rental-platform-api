@@ -154,6 +154,8 @@ export interface DetalleReglasDuras {
   ingreso_mensual_ajustado_cop: number | null;
   factor_ajuste_ingreso: number;
   cuota_mensual_vigente_cop: number | null;
+  /** Politica §4.2: cuota de la fianza con IVA que el DTI suma a la del buro. */
+  cuota_fianza_cop: number | null;
   canon_evaluado_cop: number | null;
   score_externo: number | null;
   /** Adenda 2 §2: corte vigente del score externo (UMBRAL_SCORE_RECHAZO). */
@@ -347,6 +349,7 @@ export function motivoGestorReglasDuras(
     partes.push(
       `Capacidad de endeudamiento (DTI, §4.2): ${pct(d.dti_pct)} supera el maximo de ${d.dti_umbral}% ` +
         `(cuota mensual comprometida ${d.cuota_mensual_vigente_cop === null ? 's/d' : formatearCOP(d.cuota_mensual_vigente_cop)} ` +
+        (d.cuota_fianza_cop ? `+ cuota de la fianza con IVA ${formatearCOP(d.cuota_fianza_cop)} ` : '') +
         `sobre ${textoIngreso(d)}).`,
     );
   }
@@ -485,6 +488,7 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
     ingreso_mensual_ajustado_cop: salida.ingreso_inferido_ajustado_cop,
     factor_ajuste_ingreso: salida.factor_ajuste_ingreso,
     cuota_mensual_vigente_cop: salida.features.cuota_mensual_vigente_cop,
+    cuota_fianza_cop: salida.cuota_fianza_cop ?? null,
     canon_evaluado_cop: salida.canon_evaluado_cop,
     score_externo: salida.features.score_externo,
     score_umbral_rechazo: entrada.umbralScoreRechazo ?? V1_RECHAZO_DURO,
@@ -748,6 +752,7 @@ export async function resolverResultadoEstudio(
       score_persistido: score,
       antecedentes,
       factor_ajuste_ingreso: cal.FACTOR_AJUSTE_INGRESO,
+      iva_pct: cal.TARIFA_IVA,
       umbral_aprobado: cal.UMBRAL_APROBACION_AUTOMATICA,
       umbral_revision: cal.UMBRAL_ZONA_GRIS,
       umbral_score_rechazo: cal.UMBRAL_SCORE_RECHAZO,

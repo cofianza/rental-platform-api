@@ -65,6 +65,8 @@ const mockEnv = vi.hoisted(() => ({
   FRONTEND_URL: 'https://www.cofianza.co',
   MOTOR_DECIDE_ENABLED: false,
   MOTOR_RUTA_USA_SCORECARD: false,
+  // Default del tope de vivienda del panel (CANON_MAX_TRANSITORIO).
+  CANON_MAXIMO_SIN_COAFIANZAMIENTO_COP: 3_000_000,
 }));
 vi.mock('@/config', () => ({ env: mockEnv }));
 vi.mock('@/config/env', () => ({ env: mockEnv }));
@@ -148,6 +150,9 @@ const DATOS: CertificatePdfData = {
   condiciones: 'Presentar el contrato laboral',
   canonEvaluado: 2_000_000,
   canonMaximoTolerado: 2_300_000,
+  topeCanonCop: 3_000_000,
+  toleranciaCanonPct: 15,
+  canonIngresoRecalculoPct: 40,
   requiereAcompanante: false,
   coarrendatarioVinculado: false,
   rutaEtiqueta: 'Aprobado automatico (87 pts)',
@@ -307,6 +312,28 @@ describe('relación canon/ingreso', () => {
     // Corrida anterior al factor (solo el crudo): el asistente no la recalcula, el CRC no la afirma.
     enqueue('estudios_scorecard_sombra', { data: { canon_ingreso_pct: '74.60', canon_ingreso_ajustado_pct: null }, error: null });
     expect((await leerSombraDelEstudio('est-1'))?.canonIngresoPct).toBeNull();
+  });
+});
+
+// Política §8 + tope §4.4 y panel de calibración (Contratos V3 §14).
+describe('tolerancia de canon del CRC', () => {
+  it('el canon máximo amparado no pasa del tope vigente, y el párrafo nombra el tope', async () => {
+    enqueue('estudios', { data: { ...ESTUDIO, canon_evaluado: '2900000' }, error: null });
+    enqueue('estudios_certificados', { data: null, error: null }, { data: { id: 'cert-9' }, error: null });
+    await generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
+    const t = impreso();
+    // 2.900.000 + 15% = 3.335.000 > tope de vivienda (3.000.000).
+    expect(t).toMatch(/\$\s3\.000\.000/);
+    expect(t).not.toMatch(/3\.335\.000/);
+    expect(t).toMatch(/ni el canon máximo sin coafianzamiento vigente para este inmueble \(\$\s3\.000\.000\)/);
+  });
+
+  it('la tolerancia y el tope canon/ingreso salen del panel, no fijos', async () => {
+    await generateCertificatePdf({ ...DATOS, canonIngresoPct: 28.57, toleranciaCanonPct: 10, canonIngresoRecalculoPct: 35 }, QR);
+    const t = impreso();
+    expect(t).toContain('no supere en más de 10% el canon evaluado');
+    expect(t).toContain('se mantenga en o por debajo del 35%');
+    expect(t).not.toContain('15%');
   });
 });
 

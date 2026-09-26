@@ -173,7 +173,8 @@ console.log(
 // Las cifras del caso, tal como el motor las lee del payload.
 assert.strictEqual(real.salida.features.ingreso_mensual_inferido_cop, 5_094_000);
 assert.strictEqual(real.salida.features.cuota_mensual_vigente_cop, 4_081_000);
-assert.strictEqual(real.salida.dti_pct, 80.11, 'DTI = 4.081.000 / 5.094.000');
+// Politica §4.2: con la cuota de la fianza (3.800.000 x 2% + IVA 19% = 90.440).
+assert.strictEqual(real.salida.dti_pct, 81.89, 'DTI = (4.081.000 + 90.440) / 5.094.000');
 assert.strictEqual(real.salida.canon_ingreso_pct, 74.6, 'canon/ingreso = 3.800.000 / 5.094.000');
 assert.strictEqual(real.salida.features.score_externo, 773);
 
@@ -194,7 +195,8 @@ assert.ok(real.veredicto.rechaza);
 const motivoGestor = real.veredicto.motivoGestor;
 console.log(`\n  motivo (gestor): ${motivoGestor}\n`);
 for (const [etiqueta, patron] of [
-  ['DTI real', /80\.11%/],
+  ['DTI real', /81\.89%/],
+  ['cuota de la fianza', /\$90\.440/],
   ['umbral DTI', /maximo de 65%/],
   ['canon/ingreso real', /74\.6%/],
   ['umbral canon/ingreso', /maximo de 40%/],
@@ -407,7 +409,7 @@ const scoreAltisimo = decidir({
   score: 900,
   resultadoPropuesto: 'aprobado',
 });
-assert.strictEqual(scoreAltisimo.salida.dti_pct, 80);
+assert.strictEqual(scoreAltisimo.salida.dti_pct, 80.48, 'DTI = (4.000.000 + fianza 23.800) / 5.000.000');
 assert.strictEqual(scoreAltisimo.salida.canon_ingreso_pct, 20);
 assert.strictEqual(scoreAltisimo.veredicto.rechaza, true, 'score 900 con DTI 80% se rechaza igual');
 assert.deepStrictEqual([...scoreAltisimo.veredicto.reglas], ['dti_mayor_65']);

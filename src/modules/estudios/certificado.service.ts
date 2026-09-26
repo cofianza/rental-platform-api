@@ -8,9 +8,10 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 // §10.1 — el CRC lleva "su numero, vigencia y condiciones economicas".
-import { canonMaximoTolerado, PORTABILIDAD_TOLERANCIA_PCT } from './portabilidad';
+import { canonMaximoTolerado } from './portabilidad';
+import { topeCanonPara } from '../inmuebles/destinacion';
 import { resolverRuta } from './rutas-resultado';
-import { MODELO_VERSION } from './motor';
+import { MODELO_VERSION, porcentaje, porcentajeParaMostrar } from './motor';
 // Adenda 1: tarifas por ruta (§5), factor de ajuste del ingreso (§1.1),
 // fuentes consultadas (§2.4) y vigencia del panel (§6, §11).
 import { calcularTarifas, leerTarifaOverride, viaPorRutaDeAprobacion, type Tarifas, type ViaAprobacion } from './tarifas';
@@ -154,7 +155,13 @@ export interface CertificatePdfData {
   // §10.1 — "Certificado de Riesgo Cofianza (CRC) descargable, con su numero,
   // vigencia y CONDICIONES ECONOMICAS."
   canonEvaluado: number | null;
+  /** min(canon evaluado + tolerancia, tope vigente del uso del inmueble). */
   canonMaximoTolerado: number | null;
+  /** Canon maximo sin coafianzamiento vigente para el uso del inmueble (topeCanonPara). */
+  topeCanonCop: number;
+  /** Panel de calibracion (Contratos V3 §14): lo que aplica el contrato al que se presenta el CRC. */
+  toleranciaCanonPct: number;
+  canonIngresoRecalculoPct: number;
   requiereAcompanante: boolean;
   /** Hay un coarrendatario que ya acepto y tiene su propio estudio (Adenda §5.2). */
   coarrendatarioVinculado: boolean;
@@ -426,17 +433,15 @@ export async function generateCertificatePdf(
       // certificado deja de servir, que es justo lo que el arrendador necesita
       // saber antes de firmar.
       doc.fontSize(7).font('Helvetica').fillColor('#6b7280');
-      doc.text(
-        `Este certificado ampara contratos cuyo canon no supere en más de ${PORTABILIDAD_TOLERANCIA_PCT}% el canon evaluado` +
-          (data.canonIngresoPct == null
-            ? '. La relación canon/ingreso no se recalcula porque no fue verificable. '
-            : ', siempre que la relación canon/ingreso recalculada se mantenga en o por debajo del 40%. ') +
-          'Si el canon excede esa tolerancia se requiere una nueva evaluación.',
-        50,
-        y + 4,
-        { width: contentWidth },
-      );
-      y += 32;
+      const tolerancia =
+        `Este certificado ampara contratos cuyo canon no supere en más de ${formatPct(data.toleranciaCanonPct)} el canon evaluado ` +
+        `ni el canon máximo sin coafianzamiento vigente para este inmueble (${formatCurrency(data.topeCanonCop)})` +
+        (data.canonIngresoPct == null
+          ? '. La relación canon/ingreso no se recalcula porque no fue verificable. '
+          : `, siempre que la relación canon/ingreso recalculada se mantenga en o por debajo del ${formatPct(data.canonIngresoRecalculoPct)}. `) +
+        'Si el canon excede esa tolerancia se requiere una nueva evaluación.';
+      doc.text(tolerancia, 50, y + 4, { width: contentWidth });
+      y += Math.max(32, doc.heightOfString(tolerancia, { width: contentWidth }) + 8);
     }
 
     y += 10;
@@ -613,9 +618,9 @@ export async function leerSombraDelEstudio(
     modeloVersion: row.modelo_version ?? null,
     denominador,
     // Sobre el ingreso ajustado por el factor (Adenda 1 §1.1): con el que decide
-    // el motor y el unico que usa el asistente de contratos al recalcular. Una
-    // corrida anterior al factor solo trae el crudo: sale no verificable, igual
-    // que en el asistente.
+    // el motor. Una corrida anterior al factor solo trae el crudo: aqui sale null
+    // y el CRC (datosDelCrc) lo recalcula con leerIngresoInferidoOriginal, que
+    // para esas filas usa el crudo (factor 1), igual que el asistente.
     canonIngresoPct: num(row.canon_ingreso_ajustado_pct),
   };
 }
@@ -1081,11 +1086,26 @@ async function datosDelCrc(
         ? cascada.decision
         : null;
 
+  const topeCanonCop = topeCanonPara(inmueble.uso as string | null, cal).topeCop;
   const canonEvaluadoRaw = e.canon_evaluado;
   const canonEvaluadoCop =
     canonEvaluadoRaw === null || canonEvaluadoRaw === undefined
       ? ((inmueble.valor_arriendo as number | null) ?? null)
       : Number(canonEvaluadoRaw);
+  // Una re-evaluacion (estudio hijo) no tiene corrida propia: hereda el ingreso
+  // del padre. Sin esto su CRC salia con la relacion canon/ingreso "no verificable".
+  // Import dinamico: reasignacion.service importa este modulo.
+  const canonIngresoPct =
+    sombra?.canonIngresoPct ??
+    porcentajeParaMostrar(
+      porcentaje(
+        canonEvaluadoCop,
+        await (await import('./reasignacion.service')).leerIngresoInferidoOriginal(estudioId, {
+          estricto: true,
+          padreId: (e.estudio_padre_id as string | null | undefined) ?? null,
+        }),
+      ),
+    );
 
   return {
     codigo: cert.codigo,
@@ -1120,10 +1140,15 @@ async function datosDelCrc(
     // cambia de precio despues, el CRC sigue amparando lo que se evaluo, no lo
     // que valga hoy.
     canonEvaluado: canonEvaluadoCop,
+    // Politica §8 + tope §4.4: el +15% nunca pasa del tope vigente del uso
+    // (mismo calculo que maximoSinNuevaEvaluacionCop del asistente V3).
     canonMaximoTolerado:
       canonEvaluadoCop === null
         ? null
-        : canonMaximoTolerado(canonEvaluadoCop, PORTABILIDAD_TOLERANCIA_PCT),
+        : Math.floor(Math.min(canonMaximoTolerado(canonEvaluadoCop, cal.TOLERANCIA_CANON), topeCanonCop)),
+    topeCanonCop,
+    toleranciaCanonPct: cal.TOLERANCIA_CANON,
+    canonIngresoRecalculoPct: cal.TOPE_CANON_INGRESO_RECALCULO,
     requiereAcompanante: rutaCrc.coarrendatarioObligatorio || conCoarrendatario,
     coarrendatarioVinculado: conCoarrendatario,
     rutaEtiqueta: rutaCrc.etiquetaGestor,
@@ -1145,7 +1170,7 @@ async function datosDelCrc(
     fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
     denominadorPuntaje: sombra?.denominador ?? null,
     decisionCascada,
-    canonIngresoPct: sombra?.canonIngresoPct ?? null,
+    canonIngresoPct,
   };
 }
 

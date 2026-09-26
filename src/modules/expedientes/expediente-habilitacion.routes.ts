@@ -79,6 +79,8 @@ const aprobarCondicionadoBody = z.object({
   documentos_consultados: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
   // Adenda 2 §4.3: el puntaje se recalcula con V7 y V9 que puntúa el analista.
   evaluacion: evaluacionRevisionManualSchema,
+  // Política §15 (thin-file sin ingreso de la central): el analista verificó una fuente de capacidad.
+  fuente_capacidad_verificada: z.boolean().optional(),
 });
 
 // POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la

@@ -692,8 +692,10 @@ async function evaluacionCompletadaEn(expedienteId: string): Promise<string | nu
  * P21 (Adenda 1 de la Política §6): tampoco se genera ni se envía a firma con
  * una evaluación de más de VIGENCIA_CRC_DIAS (el día 60 pasa y el 61 bloquea,
  * como en el asistente V3). Sin fecha (registros manuales antiguos) no bloquea.
+ * `alGenerar`: tampoco se genera con un CRC que ya no alcanza para el proceso de
+ * firma (CRC_SIN_MARGEN / CRC_VENCIDO, lo mismo que el envío), como en el V3.
  */
-async function assertEvaluacionVigente(expedienteId: string): Promise<void> {
+async function assertEvaluacionVigente(expedienteId: string, alGenerar = false): Promise<void> {
   const [completadoEn, cal] = await Promise.all([evaluacionCompletadaEn(expedienteId), getCalibracion()]);
   if (!completadoEn) return;
   const completado = fechaBogota(completadoEn);
@@ -702,6 +704,10 @@ async function assertEvaluacionVigente(expedienteId: string): Promise<void> {
       `La evaluación se completó el ${completado.split('-').reverse().join('/')} y ya tiene más de ${cal.VIGENCIA_CRC_DIAS} días calendario. Se requiere una nueva evaluación.`,
       'ESTUDIO_VENCIDO',
     );
+  }
+  if (alGenerar) {
+    const { exigirPlazoDeFirma, finDelCrc } = await import('./v3/firma/reglas');
+    exigirPlazoDeFirma(finDelCrc(null, completadoEn, cal.VIGENCIA_CRC_DIAS), cal.DIAS_EXPIRACION_FIRMA);
   }
 }
 
@@ -1982,7 +1988,7 @@ export async function tarifasParaContrato(expedienteId: string): Promise<Tarifas
 export async function assertCanonContratable(expedienteId: string, canonCop: number, uso: string | null | undefined): Promise<void> {
   const [{ data }, cal] = await Promise.all([
     (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .select('id, canon_evaluado')
+      .select('id, canon_evaluado, estudio_padre_id')
       .eq('expediente_id', expedienteId)
       .eq('tipo', 'individual')
       .eq('estado', 'completado')
@@ -1998,20 +2004,21 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
   const tope = Number(topeCanonPara(uso, cal).topeCop);
   // Un tope mal leído no apaga el control: queda la tolerancia.
   const topeValido = Number.isFinite(tope) && tope > 0;
+  const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+  // Adenda 1 contratos §2.4: por encima del tope no sirve una nueva evaluación; se escala a la Gerencia General.
+  // Va primero (P36): si el tope bajó, un canon igual o menor al evaluado tampoco lo pasa.
+  if (topeValido && canonCop > tope) {
+    const enviado = await escalarTopeCanon(expedienteId, canonCop, tope, 'contrato');
+    throw AppError.conflict(
+      `El canon del contrato (${cop(canonCop)}) supera el tope de ${cop(tope)} que Cofianza afianza sin coafianzamiento. ` +
+        (enviado
+          ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'
+          : 'Escríbele a Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'),
+      'CANON_EXCEDE_TOPE',
+    );
+  }
   const maximo = Math.max(evaluado, Math.floor(topeValido ? Math.min(tolerado, tope) : tolerado));
   if (canonCop > maximo) {
-    const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
-    // Adenda 1 contratos §2.4: por encima del tope no sirve una nueva evaluación; se escala a la Gerencia General.
-    if (topeValido && canonCop > tope) {
-      const enviado = await escalarTopeCanon(expedienteId, canonCop, tope, 'contrato');
-      throw AppError.conflict(
-        `El canon del contrato (${cop(canonCop)}) supera el tope de ${cop(tope)} que Cofianza afianza sin coafianzamiento. ` +
-          (enviado
-            ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'
-            : 'Escríbele a Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'),
-        'CANON_EXCEDE_TOPE',
-      );
-    }
     throw AppError.conflict(
       `El canon del contrato (${cop(canonCop)}) supera lo evaluado (${cop(evaluado)}); el máximo sin una nueva evaluación es ${cop(maximo)}. ` +
         'Ajusta el canon del inmueble o habilita una nueva evaluación desde el estudio.',
@@ -2023,20 +2030,14 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
   // mayor al evaluado vuelve a medirse contra el ingreso AJUSTADO de la corrida
   // (canon/ingreso ≤ TOPE_CANON_INGRESO_RECALCULO). Sin ingreso no se bloquea.
   if (canonCop <= evaluado || !estudioId) return;
-  const { data: sombra, error: sombraError } = await (supabase
-    .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-    .select('ingreso_inferido_ajustado_cop')
-    .eq('estudio_id', estudioId)
-    .order('fecha_calculo', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (sombraError) {
-    logger.warn({ expedienteId, estudioId, error: sombraError.message }, 'assertCanonContratable: sin ingreso ajustado — no se recalcula canon/ingreso');
-    return;
-  }
+  // Una re-evaluación (estudio hijo) hereda el ingreso del padre. Un error de
+  // lectura da null (y se registra): sin ingreso no se bloquea.
+  const { leerIngresoInferidoOriginal } = await import('@/modules/estudios/reasignacion.service');
   const v = evaluarPortabilidad({
     canonOriginal: evaluado,
-    ingresoOriginal: Number((sombra as { ingreso_inferido_ajustado_cop?: unknown } | null)?.ingreso_inferido_ajustado_cop) || null,
+    ingresoOriginal: await leerIngresoInferidoOriginal(estudioId, {
+      padreId: (data as { estudio_padre_id?: string | null } | null)?.estudio_padre_id ?? null,
+    }),
     canonDestino: canonCop,
     topeCop: topeValido ? tope : undefined,
     toleranciaPct: cal.TOLERANCIA_CANON,
@@ -2176,7 +2177,7 @@ export async function generarContrato(
   // admite: no bloquea y se borra al guardar la modalidad (más abajo).
   assertSinPartesAdicionales(!!expData.coarrendatario, !!input.cotitular?.nombre?.trim());
   assertModalidadDisponible(input.modalidad_fianza ?? (expRow as { modalidad_fianza?: string | null }).modalidad_fianza);
-  await assertEvaluacionVigente(expedienteId);
+  await assertEvaluacionVigente(expedienteId, true);
 
   // 1b. Bloqueo: el arrendador debe tener completos los datos del contrato.
   // Si falta cualquiera (domicilio, cuenta de recaudo, contacto, matricula /

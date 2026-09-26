@@ -820,7 +820,7 @@ export async function onEstudioCompletado(params: {
           motivo_rechazo:
             porReglaDura && reglaDura.motivoGestor
               ? reglaDura.motivoGestor
-              : params.motivoAnalista ?? 'La evaluación crediticia del titular fue rechazada. La solicitud no procede.',
+              : params.motivoAnalista ?? 'La evaluación crediticia del titular fue rechazada. El estudio no procede.',
         } as never)
         .eq('id', expedienteId)
         .eq('estado', 'rechazado');

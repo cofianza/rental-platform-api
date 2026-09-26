@@ -207,7 +207,9 @@ const SOLO: Partial<Fuentes> = {
 };
 
 const codigos = (bs: Bloqueo[]) => bs.map((b) => b.codigo);
-const bloqueos = (o: Partial<Fuentes>, hoy = HOY, c = cal) => evaluarBloqueos(fuentes(o), hoy, c);
+// Mediodía en Bogotá del día `hoy`, salvo que la prueba fije el instante.
+const bloqueos = (o: Partial<Fuentes>, hoy = HOY, c = cal, ahora = Date.parse(`${hoy}T12:00:00-05:00`)) =>
+  evaluarBloqueos(fuentes(o), hoy, c, ahora);
 
 describe('evaluarBloqueos — caso limpio', () => {
   it('el fixture base no tiene bloqueos', () => {
@@ -243,6 +245,33 @@ describe('B1 — vigencia de la evaluación (A4)', () => {
   });
 });
 
+describe('B1b — margen del CRC para firmar (Adenda 1 contratos, respuesta 10)', () => {
+  // CRC que vence el 18/09 a las 11:00 (Bogotá); las pruebas miden a mediodía de `hoy`.
+  const crcHasta = (fecha_vencimiento: string) => ({ crc: { ...fuentes().crc!, fecha_vencimiento } });
+
+  it('con más de tres días de CRC no bloquea; con menos, CRC_SIN_MARGEN (lo que rechazaría enviar a firma)', () => {
+    expect(bloqueos(crcHasta('2026-09-18T16:00:00Z'), '2026-09-14')).toEqual([]);
+    const b = bloqueos(crcHasta('2026-09-18T16:00:00Z'), '2026-09-15');
+    expect(b).toEqual([expect.objectContaining({ codigo: 'CRC_SIN_MARGEN', accion: 'estudio' })]);
+    expect(b[0].mensaje).toBe(
+      'Al certificado de riesgo (CRC) le quedan menos de tres días de vigencia (vence el 18/09/2026 a las 11:00): no alcanza para el proceso de firma. Se requiere nueva evaluación.',
+    );
+  });
+
+  it('el día 60 después de la hora de emisión: CRC_VENCIDO (ESTUDIO_VENCIDO aún no)', () => {
+    const b = bloqueos(crcHasta('2026-09-15T16:00:00Z'), HOY, cal, Date.parse('2026-09-15T12:00:00-05:00'));
+    expect(codigos(b)).toEqual(['CRC_VENCIDO']);
+  });
+
+  it('con la evaluación vencida sale solo ESTUDIO_VENCIDO (no se repite el motivo)', () => {
+    const b = bloqueos(
+      { estudio: { ...fuentes().estudio!, fecha_completado: '2026-07-01T15:00:00Z' }, ...crcHasta('2026-08-30T15:00:00Z') },
+      HOY,
+    );
+    expect(codigos(b)).toEqual(['ESTUDIO_VENCIDO']);
+  });
+});
+
 // 2. B2
 describe('evaluarCanon — canon pactado (B2)', () => {
   const f = (ev: number, ingreso: number | null = null) =>
@@ -258,10 +287,16 @@ describe('evaluarCanon — canon pactado (B2)', () => {
     expect(v.canonIngreso).toBeNull();
   });
 
-  it('menor o igual al evaluado pasa aunque supere el tope', () => {
-    const v = evaluarCanon(f(2_000_000), 1_900_000, { ...cal, CANON_MAX_TRANSITORIO: 1_500_000 })!;
-    expect(v.bloqueo).toBeNull();
-    expect(v.veredicto).toBe('igual_o_menor');
+  it('P36: si el tope bajó, un canon menor o igual al evaluado tampoco lo pasa (CANON_EXCEDE_TOPE, escala)', () => {
+    const bajo = { ...cal, CANON_MAX_TRANSITORIO: 1_500_000 };
+    const v = evaluarCanon(f(2_000_000), 1_900_000, bajo)!;
+    expect(v.bloqueo).toMatchObject({ codigo: 'CANON_EXCEDE_TOPE', paso: 1 });
+    expect(v.bloqueo!.accion).toBeUndefined();
+    expect(v.veredicto).toBeNull();
+    // Dentro del tope nuevo sigue siendo «igual o menor».
+    expect(evaluarCanon(f(2_000_000), 1_500_000, bajo)!.veredicto).toBe('igual_o_menor');
+    // El máximo sin nueva evaluación no pasa el tope, aunque lo evaluado sí.
+    expect(maximoSinNuevaEvaluacionCop(f(2_000_000), bajo)).toBe(1_500_000);
   });
 
   it('+15 % exacto (2.300.000) pasa; un peso más, CANON_FUERA_DE_TOLERANCIA', () => {
@@ -355,6 +390,12 @@ describe('B4 — estado del inmueble', () => {
     expect(codigos(bloqueos(inm('ocupado', null)))).toEqual(['INMUEBLE_OCUPADO']);
   });
 
+  it('si el contrato del otro estudio ya se firmó, no promete que se libere: INMUEBLE_ARRENDADO con la evaluación a reasignar', () => {
+    const b = bloqueos({ ...inm('ocupado', 'exp-otro'), arrendadoPorOtro: true });
+    expect(b).toEqual([expect.objectContaining({ codigo: 'INMUEBLE_ARRENDADO', accion: 'estudio', estudioId: 'est-1' })]);
+    expect(b[0].mensaje).not.toContain('se cancela');
+  });
+
   it('inactivo bloquea con INMUEBLE_INACTIVO y lleva al inmueble', () => {
     expect(bloqueos(inm('inactivo', null))).toEqual([
       expect.objectContaining({ codigo: 'INMUEBLE_INACTIVO', accion: 'inmueble' }),
@@ -427,9 +468,15 @@ describe('G4 / G2b — tarifa imprimible y CRC al día', () => {
     },
   });
 
-  it('override autorizado DESPUÉS de emitir el CRC → CRC_DESACTUALIZADO', () => {
+  it('override autorizado DESPUÉS de emitir el CRC → CRC_DESACTUALIZADO, con la evaluación para regenerarlo', () => {
     expect(bloqueos(override('2026-09-02T10:00:00Z'))).toEqual([
-      expect.objectContaining({ codigo: 'CRC_DESACTUALIZADO', accion: 'estudio' }),
+      expect.objectContaining({ codigo: 'CRC_DESACTUALIZADO', accion: 'estudio', estudioId: 'est-1' }),
+    ]);
+  });
+
+  it('sin CRC → CRC_NO_EMITIDO, con la evaluación para emitirlo desde el contrato', () => {
+    expect(bloqueos({ crc: null })).toEqual([
+      expect.objectContaining({ codigo: 'CRC_NO_EMITIDO', accion: 'estudio', estudioId: 'est-1' }),
     ]);
   });
 
@@ -724,6 +771,20 @@ describe('prefill: trazabilidad 2026-09-22 (§7.2, §1.3/§1.4, §8.7.2)', () =>
     expect(p[5].contactos?.coarrendatario).toBeNull();
     // Fechas vigentes sí se copian.
     expect(prefill(fuentes({ anterior: PASOS }), HOY, CALIBRACION_DEFAULT)[3].fechaInicio).toBe('2026-10-01');
+  });
+
+  it('si el contrato cancelado era de otro inmueble (estudio reasignado), lo del inmueble sale del registro del actual', () => {
+    const f = fuentes({
+      anterior: PASOS,
+      anteriorOtroInmueble: true,
+      inmueble: { ...fuentes().inmueble, valorArriendoCop: 1_800_000, administracionCop: 200_000 },
+    });
+    const p = prefill(f, HOY, CALIBRACION_DEFAULT);
+    // Ruta y modalidad son del contrato, no del inmueble: se conservan.
+    expect(p[1]).toEqual({ ...PASOS.paso1, canonCop: 1_800_000 });
+    expect(p[2]).toEqual(prefill(fuentes({ inmueble: f.inmueble }), HOY, CALIBRACION_DEFAULT)[2]);
+    expect(p[3]).toMatchObject({ vigenciaMeses: 12, comisionPct: 8, administracion: { valorCop: 200_000 } });
+    expect(p[5].contactos?.arrendatario).toEqual(PASOS.paso5.contactos.arrendatario);
   });
 
   it('sin propiedad horizontal no precarga copropiedad ni cuota', () => {

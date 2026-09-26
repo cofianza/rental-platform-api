@@ -221,11 +221,8 @@ export function puntajeV1ScoreExterno(score: number | null, rechazo: number = V1
  * Politica V4.1 §4.2 "Variable 2 — Capacidad de pago (DTI)" (15 pts).
  * Por encima del 65% es regla dura de rechazo.
  *
- * NOTA — el DTI que se calcula aqui es el del BURO: cuota reportada sobre
- * ingreso inferido. La politica pide sumar tambien la cuota de la fianza, que
- * hoy no esta cotizada en el momento del estudio. Queda documentado en las
- * advertencias en vez de estimarla: un DTI inflado con un supuesto es peor que
- * un DTI honesto y etiquetado.
+ * El DTI llega calculado (evaluarSombra): cuotas del buro + cuota de la fianza
+ * con IVA (canon x tarifa de la via automatica), sobre el ingreso ajustado.
  */
 export const TABLA_V2: readonly Banda[] = [
   { corte: 25, puntos: 15, etiqueta: '<= 25%' },

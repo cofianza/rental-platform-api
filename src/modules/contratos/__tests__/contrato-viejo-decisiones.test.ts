@@ -329,12 +329,20 @@ describe('P21: vigencia de la evaluación (60 días) también en el contrato vie
   });
 
   it.each([
-    ['el día 60 pasa', '2026-07-26T20:00:00Z'],
+    ['con más de tres días de CRC pasa', '2026-07-30T20:00:00Z'],
     ['sin fecha (registro manual antiguo) no bloquea', null],
   ])('%s', async (_caso, fecha) => {
     prepararGenerar();
     enqueue('estudios', evaluacion(fecha));
     expect((await error(generar())).errorCode).toBe('PERFIL_ARRENDADOR_INCOMPLETO');
+  });
+
+  it('el día 60, sin tres días de CRC para firmar, tampoco se genera: 409 CRC_SIN_MARGEN (como el V3)', async () => {
+    prepararGenerar();
+    enqueue('estudios', evaluacion('2026-07-26T20:00:00Z'));
+    expect(await error(generar())).toMatchObject({ statusCode: 409, errorCode: 'CRC_SIN_MARGEN' });
+    expect(mockCompletitud).not.toHaveBeenCalled();
+    expect(escrituras()).toEqual([]);
   });
 
   it('si no se puede leer la evaluación → 503, sin generar ni enviar (no es «sin fecha»)', async () => {

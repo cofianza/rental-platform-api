@@ -3,6 +3,7 @@ import {
   expedienteIdParamsSchema,
   tokenParamsSchema,
   firmarSchema,
+  confirmarIdentidadSchema,
   revocarSchema,
   verificarOtpSchema,
 } from '../autorizaciones.schema';
@@ -67,11 +68,15 @@ describe('tokenParamsSchema', () => {
 // firmarSchema
 // ============================================================
 
+// §8.1: la firma lleva el documento que escribio el prospecto.
+const DOC = { numero_documento: '1.023.456.789' };
+
 describe('firmarSchema', () => {
   it('debe aceptar firma canvas con datos_firma', () => {
     const result = firmarSchema.safeParse({
       metodo_firma: 'canvas',
       datos_firma: 'data:image/png;base64,' + 'A'.repeat(200),
+      ...DOC,
     });
     expect(result.success).toBe(true);
   });
@@ -79,6 +84,7 @@ describe('firmarSchema', () => {
   it('debe rechazar firma canvas sin datos_firma', () => {
     const result = firmarSchema.safeParse({
       metodo_firma: 'canvas',
+      ...DOC,
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -91,6 +97,7 @@ describe('firmarSchema', () => {
     const result = firmarSchema.safeParse({
       metodo_firma: 'otp',
       codigo_otp: '123456',
+      ...DOC,
     });
     expect(result.success).toBe(true);
   });
@@ -98,6 +105,7 @@ describe('firmarSchema', () => {
   it('debe rechazar firma otp sin codigo_otp', () => {
     const result = firmarSchema.safeParse({
       metodo_firma: 'otp',
+      ...DOC,
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -135,6 +143,7 @@ describe('firmarSchema', () => {
       metodo_firma: 'canvas',
       datos_firma: 'data:image/png;base64,' + 'A'.repeat(200),
       codigo_otp: '123456',
+      ...DOC,
     });
     expect(result.success).toBe(true);
   });
@@ -201,24 +210,25 @@ describe('verificarOtpSchema', () => {
 });
 
 // ============================================================
-// firmarSchema — identidad_confirmada (Flujo §8.1)
+// firmarSchema / confirmarIdentidadSchema — documento escrito (Flujo §8.1)
 // ============================================================
 
-describe('firmarSchema — identidad_confirmada (§8.1)', () => {
-  it('debe aceptar identidad_confirmada: true junto a la casilla', () => {
-    const result = firmarSchema.safeParse({ metodo_firma: 'casilla', identidad_confirmada: true });
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.identidad_confirmada).toBe(true);
-  });
-
-  it('debe seguir aceptando la casilla sin identidad_confirmada (es opcional)', () => {
+describe('documento escrito por el prospecto (§8.1)', () => {
+  it('la firma sin numero_documento no pasa (un cliente viejo no dispara el reporte)', () => {
     const result = firmarSchema.safeParse({ metodo_firma: 'casilla' });
-    expect(result.success).toBe(true);
-    if (result.success) expect(result.data.identidad_confirmada).toBeUndefined();
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error.issues.map((i) => i.path.join('.'))).toContain('numero_documento');
   });
 
-  it('debe rechazar identidad_confirmada: false (literal true o nada)', () => {
-    const result = firmarSchema.safeParse({ metodo_firma: 'casilla', identidad_confirmada: false });
-    expect(result.success).toBe(false);
+  it('la casilla con el documento pasa; los espacios de los extremos se recortan', () => {
+    const result = firmarSchema.safeParse({ metodo_firma: 'casilla', numero_documento: '  1023456789 ' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.numero_documento).toBe('1023456789');
+  });
+
+  it('confirmar-identidad exige el numero y rechaza uno vacio', () => {
+    expect(confirmarIdentidadSchema.safeParse({ numero_documento: '1.023.456.789' }).success).toBe(true);
+    expect(confirmarIdentidadSchema.safeParse({ numero_documento: '   ' }).success).toBe(false);
+    expect(confirmarIdentidadSchema.safeParse({}).success).toBe(false);
   });
 });

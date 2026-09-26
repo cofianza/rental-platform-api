@@ -128,8 +128,10 @@ vi.mock('@/modules/estudios/reglas-duras', () => ({
 
 // P18: el enlace del prospecto resuelve su estudio (el mismo EXPEDIENTE_ID de los fixtures).
 const mockResolverToken = vi.fn(async (..._args: unknown[]) => ({ expedienteId: '550e8400-e29b-41d4-a716-446655440000' }));
+const mockEmitirTokenDocumentos = vi.fn(async (..._args: unknown[]) => 'tok-docs');
 vi.mock('@/modules/expedientes/expediente-soportes.service', () => ({
   resolveExpedientePorTokenDocumentos: (...args: unknown[]) => mockResolverToken(...args),
+  emitirTokenDocumentos: (...args: unknown[]) => mockEmitirTokenDocumentos(...args),
 }));
 
 // Import AFTER mocks
@@ -844,7 +846,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     error: null,
   });
   const coaRow = { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' }, error: null };
-  const titularRows = (resultado: string) => ({ data: [{ id: TITULAR_ESTUDIO_ID, resultado, score: 720 }], error: null });
+  const titularRows = (resultado: string, cascada: unknown = null) => ({ data: [{ id: TITULAR_ESTUDIO_ID, resultado, score: 720, cascada }], error: null });
 
   it('regla dura del coarrendatario contamina el conjunto aunque el titular este aprobado', async () => {
     enqueue('estudios', coaEstudio('rechazado'), titularRows('aprobado'));
@@ -913,7 +915,8 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
   it('con el motor: 70-84 + coarrendatario >= 80 se aprueba solo y el CRC se regenera (Adenda 1 §3, Flujo §10/§11)', async () => {
     mockEnv.MOTOR_DECIDE_ENABLED = true;
     try {
-      enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado'));
+      // El titular quedó en revisión solo por la banda 70-84 (traza del motor).
+      enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado', { sin_flags: true }));
       enqueue('expediente_coarrendatarios', coaRow);
       enqueue('estudios_scorecard_sombra', {
         data: [
@@ -932,6 +935,62 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
       await vi.waitFor(() =>
         expect(mockEmitirCrc).toHaveBeenCalledWith(TITULAR_ESTUDIO_ID, GESTOR_ID, { regenerar: true }),
       );
+    } finally {
+      mockEnv.MOTOR_DECIDE_ENABLED = false;
+    }
+  });
+
+  // Política §5, nota: solo si los dos se evaluaron por flujo automático y sin flags.
+  it('con el motor: 70-84 + coarrendatario >= 80 NO se aprueba solo si el titular tiene otros motivos de revisión (o no hay traza)', async () => {
+    mockEnv.MOTOR_DECIDE_ENABLED = true;
+    try {
+      for (const cascada of [{ sin_flags: false }, null]) {
+        queues.clear();
+        ops.length = 0;
+        enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado', cascada));
+        enqueue('expediente_coarrendatarios', coaRow);
+        enqueue('estudios_scorecard_sombra', {
+          data: [
+            { estudio_id: TITULAR_ESTUDIO_ID, puntaje_normalizado: 75 },
+            { estudio_id: COA_ESTUDIO_ID, puntaje_normalizado: 85 },
+          ],
+          error: null,
+        });
+        enqueue('expedientes', ctxRow());
+
+        await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+        expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+        const timeline = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert');
+        expect((timeline!.args[0] as { metadata: { resultado: string } }).metadata.resultado).toBe('revision_manual');
+      }
+    } finally {
+      mockEnv.MOTOR_DECIDE_ENABLED = false;
+    }
+  });
+
+  it('con el motor: coarrendatario 80-84 en revisión solo por su banda también cuenta; con flags suyos, no', async () => {
+    mockEnv.MOTOR_DECIDE_ENABLED = true;
+    try {
+      for (const [coaCascada, aprueba] of [[{ sin_flags: true }, true], [{ sin_flags: false }, false]] as const) {
+        queues.clear();
+        ops.length = 0;
+        enqueue('estudios', { data: { ...coaEstudio('condicionado').data, cascada: coaCascada }, error: null }, titularRows('condicionado', { sin_flags: true }));
+        enqueue('expediente_coarrendatarios', coaRow);
+        enqueue('estudios_scorecard_sombra', {
+          data: [
+            { estudio_id: TITULAR_ESTUDIO_ID, puntaje_normalizado: 75 },
+            { estudio_id: COA_ESTUDIO_ID, puntaje_normalizado: 82 },
+          ],
+          error: null,
+        });
+        enqueue('expedientes', ...(aprueba ? [{ data: [{ id: EXPEDIENTE_ID }], error: null }, ctxRow('aprobado')] : [ctxRow()]));
+
+        await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+        const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
+        expect(update ? (update.args[0] as { estado: string }).estado : null).toBe(aprueba ? 'aprobado' : null);
+      }
     } finally {
       mockEnv.MOTOR_DECIDE_ENABLED = false;
     }
@@ -997,6 +1056,26 @@ describe('rechazarInvitacion — Flujo §12', () => {
     );
     // El prospecto sigue recibiendo su aviso (aqui via correo, porque no tiene perfil).
     expect(mockFindPerfilIdByEmail).toHaveBeenCalledWith('ana@correo.co');
+    // Y un correo a SU email (no al gestor que creó la ficha) con su enlace para invitar a otra persona.
+    await vi.waitFor(() =>
+      expect(mockResendSend).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'ana@correo.co', html: expect.stringContaining('/cargar-documentos/tok-docs') }),
+      ),
+    );
+    expect(mockEmitirTokenDocumentos).toHaveBeenCalledWith(EXPEDIENTE_ID);
+  });
+
+  it('con el estudio ya decidido no le ofrece invitar a otra persona', async () => {
+    enqueue('expediente_coarrendatarios', {
+      data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' },
+      error: null,
+    });
+    enqueue('expedientes', ctxRow('aprobado'));
+
+    await rechazarInvitacion('t'.repeat(64));
+
+    expect(mockFindPerfilIdByEmail).toHaveBeenCalledWith('ana@correo.co');
+    expect(mockEmitirTokenDocumentos).not.toHaveBeenCalled();
   });
 });
 

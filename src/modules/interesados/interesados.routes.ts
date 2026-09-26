@@ -4,7 +4,7 @@
 // ============================================================
 
 import { Router } from 'express';
-import { authMiddleware } from '@/middleware/auth';
+import { authMiddleware, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import {
   listInteresadosQuerySchema,
@@ -24,8 +24,11 @@ router.get('/count', controller.countNuevos);
 router.get('/', validate({ query: listInteresadosQuerySchema }), controller.list);
 
 // PATCH /api/v1/interesados/:id — cambiar estado (nuevo/contactado/descartado)
+// Gerencia (solo lectura) y el solicitante no gestionan leads; el service
+// scopea por cartera a propietario e inmobiliaria.
 router.patch(
   '/:id',
+  roleGuard(['administrador', 'operador_analista', 'propietario', 'inmobiliaria']),
   validate({ params: interesadoIdParamsSchema, body: updateInteresadoSchema }),
   controller.updateEstado,
 );

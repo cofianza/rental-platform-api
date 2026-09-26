@@ -153,6 +153,13 @@ export interface Decision {
   motivo: string;
   /** Fila de la tabla de tarifas (Adenda §5). */
   via: 'automatica' | 'condicionada_coarrendatario' | 'revision_manual' | null;
+  /**
+   * Decidido solo por el puntaje (pasos 6-7): sin regla dura, sin revision
+   * obligatoria (§3.1 / Caso G) ni motivos §14/§15/§8. Va a la traza
+   * (`sin_flags`): la ponderacion con el coarrendatario lo exige para aprobar
+   * sola (Politica §5, nota: "ambos evaluados por flujo automatico y sin flags").
+   */
+  sinFlags?: true;
 }
 
 /**
@@ -209,7 +216,7 @@ export function decidirResultado(e: EntradaDecision): Decision {
 
   // 6. >= 85: aprobado automatico.
   if (p >= u.aprobacion) {
-    return { resultado: 'aprobado', motivo: `Puntaje ${p} >= ${u.aprobacion}: aprobacion automatica`, via: 'automatica' };
+    return { resultado: 'aprobado', motivo: `Puntaje ${p} >= ${u.aprobacion}: aprobacion automatica`, via: 'automatica', sinFlags: true };
   }
 
   // 7. Zona gris 70-84: el coarrendatario es la palanca (Adenda §3).
@@ -219,6 +226,7 @@ export function decidirResultado(e: EntradaDecision): Decision {
       resultado: 'aprobado',
       motivo: `Puntaje ${p} en zona gris con coarrendatario ${coa.puntaje} >= ${u.coarrendatario}: aprobacion automatica condicionada (Adenda §3)`,
       via: 'condicionada_coarrendatario',
+      sinFlags: true,
     };
   }
   // Matriz QA V2, caso O: coarrendatario < 70 no compensa y el caso se rechaza.
@@ -229,12 +237,14 @@ export function decidirResultado(e: EntradaDecision): Decision {
         resultado: 'condicionado',
         motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris} con score en la banda de revision obligatoria: revision manual. ${CONFLICTO_REGLAS_COARRENDATARIO}`,
         via: 'revision_manual',
+        sinFlags: true,
       };
     }
     return {
       resultado: 'rechazado',
       motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris}: el coarrendatario no compensa (matriz QA V2, caso O)`,
       via: null,
+      sinFlags: true,
     };
   }
   return {
@@ -243,6 +253,7 @@ export function decidirResultado(e: EntradaDecision): Decision {
       ? `Puntaje ${p} en zona gris y coarrendatario ${coa.reglaDura ? 'con regla dura' : `${coa.puntaje ?? 's/p'} < ${u.coarrendatario}`}: revision manual`
       : `Puntaje ${p} en zona gris (${u.zonaGris}-${u.aprobacion - 1}) sin coarrendatario: revision manual, o coarrendatario >= ${u.coarrendatario}`,
     via: 'revision_manual',
+    sinFlags: true,
   };
 }
 
@@ -296,6 +307,8 @@ export function construirTrazaCascada(t: EntradaTrazaCascada) {
     resultado: t.decision.resultado,
     via: t.decision.via,
     decision: t.decision.motivo,
+    // Politica §5 nota: lo lee la ponderacion con el coarrendatario (ponderacion.ts).
+    sin_flags: t.decision.sinFlags === true,
     umbrales: t.u,
     decidido_en: t.decididoEn,
   };

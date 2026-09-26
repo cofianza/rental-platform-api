@@ -56,6 +56,9 @@ import type {
   TotalesScorecard,
 } from './scorecard';
 import { extraerFeatures, featuresVacias } from './features';
+// Politica §4.2: la cuota de la fianza entra al DTI con la tarifa de la via
+// automatica (Adenda 1 §5.1). tarifas.ts es puro: no rompe el aislamiento.
+import { TARIFA_MENSUAL_PCT, masIva, pctDe } from '../tarifas';
 import type { FeaturesBuro } from './features';
 // Solo TIPOS (el motor no habla con Auco): el resumen ya interpretado llega
 // por EntradaSombra.antecedentes desde quien si lo consulto.
@@ -78,7 +81,8 @@ export * from './features';
  */
 // 'adenda2' (11/09/2026): denominador dinamico (§4.3), corte 450/599 del panel
 // (§2). Un dato faltante de la persona cuenta 0; solo sale lo que no tiene fuente.
-export const MODELO_VERSION = 'v4.1-adenda2';
+// '-dti' (25/09/2026): el DTI suma la cuota de la fianza con IVA (Politica §4.2).
+export const MODELO_VERSION = 'v4.1-adenda2-dti';
 
 export interface EntradaSombra {
   /** 'datacredito' | 'transunion' | ... Decide el extractor. */
@@ -112,6 +116,11 @@ export interface EntradaSombra {
    */
   factor_ajuste_ingreso?: number | null;
   /**
+   * TARIFA_IVA del panel, para la cuota de la fianza del DTI (§4.2). Sin ella,
+   * IVA_PCT_DEFECTO (el default del panel; el motor no lee la tabla).
+   */
+  iva_pct?: number | null;
+  /**
    * Adenda §2 (cascada): score externo de la SEGUNDA central, cuando se
    * consulto. V1 pasa a ser el promedio simple de las dos (Politica §4.1) y se
    * evalua el Caso G (diferencia > 80 -> revision manual obligatoria).
@@ -125,6 +134,9 @@ export interface EntradaSombra {
   umbral_score_rechazo?: number | null;
   umbral_score_revision?: number | null;
 }
+
+/** Default de TARIFA_IVA (calibracion.ts) cuando el llamador no pasa el del panel. */
+const IVA_PCT_DEFECTO = 19;
 
 /** Lo que del resumen viaja en la salida (y a features_crudas): sin `raw`. */
 export type AntecedentesEvaluados = Omit<ResumenAntecedentes, 'raw'>;
@@ -160,6 +172,8 @@ export interface SalidaSombra {
 
   /** Ratios derivados, en % con un decimal. null cuando falta el ingreso. */
   dti_pct: number | null;
+  /** Politica §4.2: cuota de la fianza con IVA sumada al DTI. null sin canon. */
+  cuota_fianza_cop: number | null;
   canon_ingreso_pct: number | null;
   canon_evaluado_cop: number | null;
   antiguedad_historial_meses: number | null;
@@ -225,6 +239,7 @@ function salidaDegradada(proveedor: string, fecha: string, motivo: string): Sali
     puntaje_maximo_alcanzable: null,
     puntaje_topado: true,
     dti_pct: null,
+    cuota_fianza_cop: null,
     canon_ingreso_pct: null,
     canon_evaluado_cop: null,
     antiguedad_historial_meses: null,
@@ -338,7 +353,17 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
         `Ingreso ajustado x${factor} (Adenda §1.1): ${ingresoCrudo} -> ${ingreso}. DTI y canon/ingreso —y sus reglas duras— se evaluaron sobre el ajustado.`,
       );
     }
-    const dtiPct = porcentaje(features.cuota_mensual_vigente_cop, ingreso);
+    // Politica §4.2: "DTI = (suma de cuotas mensuales de obligaciones vigentes +
+    // cuota de fianza Cofianza con IVA) / ingreso mensual inferido x 100". La
+    // cuota de la fianza es canon x tarifa de la via automatica (2,0%) mas IVA,
+    // redondeada como la cobra el CRC (tarifas.ts). Sin canon no se puede
+    // cotizar: el DTI queda el del buro y la advertencia lo dice.
+    const ivaBruto = entrada?.iva_pct;
+    const ivaPct = typeof ivaBruto === 'number' && Number.isFinite(ivaBruto) && ivaBruto >= 0 ? ivaBruto : IVA_PCT_DEFECTO;
+    const tarifaFianza = pctDe(canon, TARIFA_MENSUAL_PCT.automatica);
+    const cuotaFianza = tarifaFianza === null ? null : masIva(tarifaFianza, ivaPct);
+    const cuotaBuro = features.cuota_mensual_vigente_cop;
+    const dtiPct = porcentaje(cuotaBuro === null ? null : cuotaBuro + (cuotaFianza ?? 0), ingreso);
     const canonIngresoPct = porcentaje(canon, ingreso);
 
     // Ancla de la antiguedad: el corte de los datos del buro, NO hoy. En la
@@ -470,7 +495,9 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     }
     if (dtiPct !== null) {
       advertencias.push(
-        'El DTI es el del buro (cuota reportada / ingreso inferido). La politica §4.2 pide sumar la cuota de la fianza, que no esta cotizada al momento del estudio.',
+        cuotaFianza === null
+          ? 'Sin canon: el DTI es el del buro (cuota reportada / ingreso), sin la cuota de la fianza que pide la Politica §4.2.'
+          : `DTI (Politica §4.2) = (cuota del buro ${cuotaBuro} + cuota de la fianza ${cuotaFianza}: canon x ${TARIFA_MENSUAL_PCT.automatica}% + IVA ${ivaPct}%) / ingreso ${ingreso}.`,
       );
     }
     if (canon === null) {
@@ -507,6 +534,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       // generadas de la tabla; las bandas y reglas duras ya se evaluaron
       // arriba sobre el ratio exacto.
       dti_pct: porcentajeParaMostrar(dtiPct),
+      cuota_fianza_cop: cuotaFianza,
       canon_ingreso_pct: porcentajeParaMostrar(canonIngresoPct),
       canon_evaluado_cop: canon,
       antiguedad_historial_meses: antiguedadMeses !== null && antiguedadMeses >= 0 ? antiguedadMeses : null,

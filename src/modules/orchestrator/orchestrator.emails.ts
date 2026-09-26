@@ -639,15 +639,15 @@ export async function sendEstudioHabilitadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: `Tu solicitud fue autorizada — ${expediente_numero}`,
+    subject: `Tu estudio fue autorizado — ${expediente_numero}`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Solicitud autorizada</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Estudio autorizado</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_solicitante)}</strong>,</p>
-          <p style="color: #6b7280;">Tu solicitud para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> fue <span style="color: #059669; font-weight: bold;">autorizada</span> por el propietario.</p>
+          <p style="color: #6b7280;">Tu estudio para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> fue <span style="color: #059669; font-weight: bold;">autorizado</span> por el propietario.</p>
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: firmar la autorización de datos</p>
             <p style="color: #065f46; margin: 8px 0 0;">Estudio: <strong>${expediente_numero}</strong></p>
@@ -682,15 +682,15 @@ export async function sendEstudioNoHabilitadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: `Actualización sobre tu solicitud — ${expediente_numero}`,
+    subject: `Actualización sobre tu estudio — ${expediente_numero}`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #6b7280; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Solicitud no continuará</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Estudio no continuará</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_solicitante)}</strong>,</p>
-          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>, el propietario decidió no continuar con la evaluación crediticia de tu solicitud (<strong>${expediente_numero}</strong>).</p>
+          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>, el propietario decidió no continuar con la evaluación crediticia de tu estudio (<strong>${expediente_numero}</strong>).</p>
           ${motivo ? `
           <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #374151; margin: 0; font-weight: bold;">Motivo del propietario:</p>

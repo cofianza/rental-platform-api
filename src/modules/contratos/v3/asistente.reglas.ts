@@ -31,7 +31,7 @@ import type {
   Paso4,
   Paso5,
 } from './asistente.types';
-import type { FirmasPropio } from './firma/reglas';
+import { fechaHora, finDelCrc, plazoDeFirma, type FirmasPropio } from './firma/reglas';
 import { AVISO_VERSION, categoriaClausula, huella, requiereAceptacion, validarClausula } from './clausulas.reglas';
 import { fechaBogota } from './formato';
 import { MARCADOR } from './motor';
@@ -217,6 +217,10 @@ export interface Fuentes {
    * obligue a llenar los cinco pasos otra vez. null si no hubo.
    */
   anterior: Asistente | null;
+  /** `anterior` se hizo sobre otro inmueble (el estudio se reasignó después): sus datos del inmueble no se copian. */
+  anteriorOtroInmueble?: boolean;
+  /** El estudio que reservó el inmueble ya tiene su contrato firmado o con la fianza activa: está arrendado. */
+  arrendadoPorOtro?: boolean;
   /**
    * Adenda 1 contratos §2.4, con el canon pactado sobre el tope: 'enviado' = el caso
    * está en la Gerencia General; 'fallido' = se intentó y no se registró; ausente =
@@ -297,8 +301,11 @@ const mismoDocumento = (
 
 // ── §5.2 Bloqueos ──
 
-/** Todo lo que impide iniciar o generar el contrato, salvo el canon pactado (evaluarCanon). */
-export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloqueo[] {
+/**
+ * Todo lo que impide iniciar o generar el contrato, salvo el canon pactado (evaluarCanon).
+ * `ahora` (ms): el plazo de firma se mide contra el instante exacto en que vence el CRC.
+ */
+export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora: number): Bloqueo[] {
   const out: Bloqueo[] = [];
   const b = (codigo: string, mensaje: string, extra?: Omit<Bloqueo, 'codigo' | 'mensaje'>) =>
     out.push({ codigo, mensaje, ...extra });
@@ -311,20 +318,29 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
   } catch (e) {
     b('DESTINACION_NO_HABILITADA', (e as Error).message);
   }
-  // Reservado por el contrato de otro estudio: se libera si ese contrato se cancela.
+  // Reservado por el contrato de otro estudio: se libera si ese contrato se cancela;
+  // si ya se firmó, el inmueble está arrendado y la salida es llevar la evaluación a otro.
   if (inm.estado === 'ocupado' && inm.reservado_por_expediente_id && inm.reservado_por_expediente_id !== exp.id)
-    b(
-      'INMUEBLE_RESERVADO',
-      'El inmueble está reservado para el contrato de otro estudio. Si ese contrato se cancela, el inmueble vuelve a quedar disponible y podrás crear este.',
-    );
+    if (f.arrendadoPorOtro)
+      b(
+        'INMUEBLE_ARRENDADO',
+        'El inmueble ya está arrendado: el contrato de otro estudio está firmado. Para usar esta evaluación, reasígnala a otro inmueble desde el estudio.',
+        { accion: 'estudio', ...(est && { estudioId: est.id }) },
+      );
+    else
+      b(
+        'INMUEBLE_RESERVADO',
+        'El inmueble está reservado para el contrato de otro estudio. Si ese contrato se cancela, el inmueble vuelve a quedar disponible y podrás crear este.',
+      );
   // Un 'ocupado' sin titular está arrendado por fuera del flujo.
   if (inm.estado === 'ocupado' && !inm.reservado_por_expediente_id)
     b(
       'INMUEBLE_OCUPADO',
       'El inmueble figura como arrendado. Los inmuebles ya arrendados se incorporan por migración de cartera, que todavía no está disponible: escríbenos para revisar el caso.',
     );
+  // Reactivarlo es del administrador de Cofianza (detalle del inmueble): la web dice a quién pedírselo.
   if (inm.estado === 'inactivo')
-    b('INMUEBLE_INACTIVO', 'El inmueble está inactivo. Actívalo antes de crear el contrato.', {
+    b('INMUEBLE_INACTIVO', 'El inmueble está inactivo: hay que reactivarlo antes de crear el contrato.', {
       accion: 'inmueble',
     });
   if (f.legacyVivos > 0)
@@ -355,11 +371,23 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
           { accion: 'estudio' },
         );
     }
+    // Adenda 1 contratos, respuesta 10: lo mismo que exige enviar a firma (exigirPlazoDeFirma).
+    // Entre los días 57 y 60 el CRC no alcanza para el proceso de firma: mejor no iniciar ni generar.
+    const fin = finDelCrc(crc?.fecha_vencimiento, est.fecha_completado, cal.VIGENCIA_CRC_DIAS);
+    const plazo = fin === null ? null : plazoDeFirma(ahora, cal.DIAS_EXPIRACION_FIRMA, fin);
+    if (fin !== null && plazo && 'motivo' in plazo && !out.some((x) => x.codigo === 'ESTUDIO_VENCIDO'))
+      b(
+        plazo.motivo === 'vencido' ? 'CRC_VENCIDO' : 'CRC_SIN_MARGEN',
+        plazo.motivo === 'vencido'
+          ? `El certificado de riesgo (CRC) venció el ${fechaHora(fin)}. Se requiere nueva evaluación.`
+          : `Al certificado de riesgo (CRC) le quedan menos de tres días de vigencia (vence el ${fechaHora(fin)}): no alcanza para el proceso de firma. Se requiere nueva evaluación.`,
+        { accion: 'estudio' },
+      );
     if (!crc)
       b(
         'CRC_NO_EMITIDO',
-        'La evaluación no tiene Certificado de Riesgo (CRC) emitido. Emítelo desde el estudio.',
-        { accion: 'estudio' },
+        'La evaluación no tiene Certificado de Riesgo (CRC) emitido. Emítelo para continuar.',
+        { accion: 'estudio', estudioId: est.id },
       );
   }
 
@@ -367,8 +395,8 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion): Bloq
   if (crc && autorizadoEn && Date.parse(autorizadoEn) > Date.parse(crc.fecha_emision))
     b(
       'CRC_DESACTUALIZADO',
-      'La tarifa negociada se autorizó después de emitir el CRC y el certificado no la refleja. Regenera el CRC desde el estudio.',
-      { accion: 'estudio' },
+      'La tarifa negociada se autorizó después de emitir el CRC y el certificado no la refleja. Regenera el CRC para continuar.',
+      { accion: 'estudio', ...(est && { estudioId: est.id }) },
     );
   if (t) {
     if (t.cashback_pct !== CASHBACK_DEL_CONTRATO)
@@ -454,12 +482,15 @@ export interface VeredictoCanon {
   toleranciaPct: number;
 }
 
-/** Hasta dónde se puede pactar sin nueva evaluación (sin mirar el ingreso, que no se revela). */
+/**
+ * Hasta dónde se puede pactar sin nueva evaluación (sin mirar el ingreso, que no se revela).
+ * Nunca por encima del tope vigente, aunque lo evaluado lo supere (el tope bajó, P36).
+ */
 export function maximoSinNuevaEvaluacionCop(f: Fuentes, cal: Calibracion): number | null {
   const ev = f.estudio?.canonEvaluadoCop ?? null;
   if (ev === null) return null;
   const tope = topeCanonPara(f.inmueble.uso, cal).topeCop;
-  return Math.max(ev, Math.floor(Math.min(canonMaximoTolerado(ev, cal.TOLERANCIA_CANON), tope)));
+  return Math.floor(Math.min(Math.max(ev, canonMaximoTolerado(ev, cal.TOLERANCIA_CANON)), tope));
 }
 
 /**
@@ -483,7 +514,9 @@ export function evaluarCanon(f: Fuentes, canonCop: number, cal: Calibracion): Ve
     toleranciaPct: cal.TOLERANCIA_CANON,
     canonIngresoPct: relacionCanonIngresoPct(canonCop, f.ingresoAjustadoCop),
   };
-  if (canonCop <= ev) return { ...base, bloqueo: null, veredicto: 'igual_o_menor', canonIngreso: null };
+  // P36 (Adenda 1 contratos §2.4): si el tope bajó, lo evaluado no lo salva; evaluarPortabilidad mira el tope primero.
+  if (canonCop <= ev && canonCop <= base.topeCop)
+    return { ...base, bloqueo: null, veredicto: 'igual_o_menor', canonIngreso: null };
 
   const v = evaluarPortabilidad({
     canonOriginal: ev,
@@ -546,27 +579,31 @@ type Prefill = NonNullable<EstadoAsistente['contrato']>['prefill'];
  * Lo que un borrador nuevo ya trae: los pasos del contrato cancelado del estudio
  * (si hubo) y, debajo, lo que dicen el registro, el estudio y el perfil. Las
  * fechas que ya pasaron no se copian; el coarrendatario, solo si sigue vinculado.
+ * Si aquel contrato era de otro inmueble (estudio reasignado), lo del inmueble
+ * (canon, paso 2, cuota de administración) sale del registro del actual.
  */
 export function prefill(f: Fuentes, hoy: string, cal: Calibracion): Prefill {
   const base = prefillDelRegistro(f, hoy, cal);
   const a = f.anterior;
   if (!a) return base;
+  const otro = !!f.anteriorOtroInmueble;
   const c5 = a.paso5?.contactos;
   let p3 = base[3];
   if (a.paso3) {
     // Sin PH la cuota se guarda null; en el prefill va ausente.
     const { administracion, fechaInicio, fechaEntrega, ...resto } = a.paso3;
+    const adm = otro ? base[3].administracion : administracion;
     p3 = {
       ...resto,
-      ...(administracion ? { administracion } : {}),
+      ...(adm ? { administracion: adm } : {}),
       ...(fechaInicio >= hoy && fechaEntrega >= hoy
         ? { fechaInicio, fechaEntrega }
         : { fechaInicio: base[3].fechaInicio, fechaEntrega: base[3].fechaEntrega }),
     };
   }
   return {
-    1: { ...base[1], ...a.paso1 },
-    2: a.paso2 ?? base[2],
+    1: { ...base[1], ...a.paso1, ...(otro && { canonCop: base[1].canonCop }) },
+    2: (!otro && a.paso2) || base[2],
     3: p3,
     ...(a.paso4 && 'clausulas' in a.paso4
       ? {

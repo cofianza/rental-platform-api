@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // El contrato no puede afianzar un canon que el estudio no evaluó: máximo =
-// canon evaluado + TOLERANCIA_CANON, sin pasar el tope (y nunca menos que lo evaluado).
+// canon evaluado + TOLERANCIA_CANON, sin pasar nunca el tope vigente (P36: ni siquiera con lo evaluado).
 const { resultado, mockEscalar } = vi.hoisted(() => ({
   resultado: { data: null as unknown, sombra: null as unknown },
   mockEscalar: vi.fn(),
@@ -56,6 +56,15 @@ describe('assertCanonContratable', () => {
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CANON_EXCEDE_TOPE' });
     expect((e as Error).message).toContain('se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento');
     expect(mockEscalar).toHaveBeenCalledWith('e1', 3_000_001, 3_000_000, 'contrato');
+  });
+
+  it('P36: si el tope bajó por debajo de lo evaluado, un canon igual o menor al evaluado también se bloquea y escala', async () => {
+    resultado.data = { canon_evaluado: 3_200_000 }; // evaluado con un tope anterior más alto
+    mockEscalar.mockResolvedValueOnce(true);
+    const e = await assertCanonContratable('e1', 3_100_000, 'vivienda').catch((x: unknown) => x);
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CANON_EXCEDE_TOPE' });
+    expect(mockEscalar).toHaveBeenCalledWith('e1', 3_100_000, 3_000_000, 'contrato');
+    await expect(assertCanonContratable('e1', 3_000_000, 'vivienda')).resolves.toBeUndefined();
   });
 
   it('si el aviso a la Gerencia no quedó registrado, el mensaje no dice que se envió', async () => {

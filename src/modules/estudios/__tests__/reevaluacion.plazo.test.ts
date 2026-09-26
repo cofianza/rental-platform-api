@@ -281,7 +281,13 @@ describe('fundamento de la re-evaluación', () => {
   it('queda en el timeline y la bitácora, no en el estudio', async () => {
     enqueue(
       'estudios',
-      { data: { ...rechazado(hace(1)), proveedor: 'manual', duracion_contrato_meses: 12, pago_por: 'inmobiliaria' }, error: null },
+      {
+        data: {
+          ...rechazado(hace(1)), proveedor: 'manual', duracion_contrato_meses: 12, pago_por: 'inmobiliaria',
+          canon_evaluado: 2_000_000, canon_evaluado_origen: 'inmueble', datos_formulario: { tipo_documento: 'cc', numero_documento: '123' },
+        },
+        error: null,
+      },
       { data: null, error: null }, // sin re-evaluación previa
       { data: { id: 'est-2' }, error: null }, // hijo creado
     );
@@ -291,6 +297,12 @@ describe('fundamento de la re-evaluación', () => {
 
     const hijo = inserts.find((i) => i.table === 'estudios')?.fila;
     expect(hijo).toMatchObject({ estudio_padre_id: 'est-1', observaciones: null });
+    // Re-evalúa el mismo reporte: hereda el canon evaluado y el documento (§5.2).
+    expect(hijo).toMatchObject({
+      canon_evaluado: 2_000_000,
+      canon_evaluado_origen: 'inmueble',
+      datos_formulario: { tipo_documento: 'cc', numero_documento: '123' },
+    });
     expect(inserts).toContainEqual({
       table: 'eventos_timeline',
       fila: expect.objectContaining({ metadata: expect.objectContaining({ fundamento: 'Certificado laboral nuevo' }) }),

@@ -874,8 +874,12 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
   // 'procesando' no se cancela a mano: el pago ya salio (PSE o efectivo) y
   // cancelarlo aqui lo cobraria dos veces (ver pagarGestor).
   if (pago.estado === 'procesando') throw errorPagoEnProceso('liberarlo con crédito');
-  if (pago.estado !== 'pendiente') {
-    throw AppError.badRequest('Solo se puede cancelar un pago pendiente', 'PAGO_NO_CANCELABLE');
+  // 'fallido' también (tarjeta rechazada): su link sigue pagable, así que se
+  // cierra, pero no aquí: lo hace liberarEstudioConCredito con
+  // cerrarCobroEstudioFallido DESPUÉS de sus propias validaciones (tope, saldo),
+  // para que un rechazo no deje al prospecto sin link.
+  if (pago.estado !== 'pendiente' && pago.estado !== 'fallido') {
+    throw AppError.badRequest('Solo se puede cancelar un pago pendiente o fallido', 'PAGO_NO_CANCELABLE');
   }
 
   // perfilId = userId: el service de créditos lo resuelve al saldo de la organización.
@@ -896,15 +900,17 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
   // P22: sin saldo efectivo tampoco (liberarEstudioConCredito lo vuelve a mirar).
   if (saldo.creditos_en_contra > 0 && saldo.saldo_efectivo < 1) throw errorCreditosEnContra(saldo.creditos_en_contra);
 
-  await transitionPagoState({
-    pagoId: pago.id as string,
-    targetEstado: 'cancelado',
-    origen: 'manual',
-    detalles: { cancelado_por: userId, motivo: 'inmobiliaria_libera_credito' },
-    userId,
-    ip,
-  });
-  invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
+  if (pago.estado === 'pendiente') {
+    await transitionPagoState({
+      pagoId: pago.id as string,
+      targetEstado: 'cancelado',
+      origen: 'manual',
+      detalles: { cancelado_por: userId, motivo: 'inmobiliaria_libera_credito' },
+      userId,
+      ip,
+    });
+    invalidarLinkPasarela(pago as { external_id?: string | null; metodo?: string | null });
+  }
 
   return liberarEstudioConCredito(expedienteId, userId, userId, ip);
 }

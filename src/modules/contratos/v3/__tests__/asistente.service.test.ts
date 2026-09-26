@@ -182,7 +182,7 @@ import { crearSobre, estadoEnviado } from '../firma/firma.service';
 import { huellaMarcas } from '../firma/reglas';
 import { ultimoSobre } from '../firma/reconciliar';
 import { firmasPropioSchema, guardarPasoSchema } from '../asistente.schema';
-import type { AceptacionClausulas, ClausulaEnContrato, EstadoAsistente, MarcaFirma, Paso4 } from '../asistente.types';
+import type { AceptacionClausulas, Bloqueo, ClausulaEnContrato, EstadoAsistente, MarcaFirma, Paso4 } from '../asistente.types';
 import { AVISO_VERSION, huella } from '../clausulas.reglas';
 import { contarClausulas } from '../motor';
 import { PLANTILLA_VIVIENDA } from '../plantilla-vivienda';
@@ -280,6 +280,8 @@ interface Carga {
   catalogo?: unknown[];
   /** inmuebles.nombre_copropiedad (§1.4). */
   copropiedad?: string | null;
+  /** Columnas del inmueble que cambian (estado, reserva). */
+  inmueble?: Record<string, unknown>;
 }
 
 /** Encola UNA lectura completa de cargarFuentes (cada tabla, en su orden). */
@@ -314,6 +316,7 @@ function encolarCarga(o: Carga = {}) {
               parqueadero_moto_numero: null,
               cuarto_util_numero: null,
               administracion: null,
+              ...o.inmueble,
             },
             solicitantes: {
               nombre: 'Juan Carlos',
@@ -487,6 +490,22 @@ describe('obtenerEstado', () => {
     expect(opsDe('contratos', 'neq')[1].args).toEqual(['estado', 'finalizado']);
   });
 
+  it('inmueble reservado por otro estudio: si su contrato ya se firmó, INMUEBLE_ARRENDADO; si no, INMUEBLE_RESERVADO', async () => {
+    const reservado = { inmueble: { estado: 'ocupado', reservado_por_expediente_id: 'exp-otro' } };
+    encolarCarga(reservado);
+    enqueue('contratos', { data: [{ id: 'cto-otro' }], error: null });
+    const e = await obtener();
+    expect(e.bloqueos.map((b) => b.codigo)).toEqual(['INMUEBLE_ARRENDADO']);
+    expect(e.bloqueos[0]).toMatchObject({ accion: 'estudio', estudioId: 'est-1' });
+    const eqs = opsDe('contratos', 'eq').map((o) => o.args);
+    expect(eqs).toContainEqual(['expediente_id', 'exp-otro']);
+    expect(opsDe('contratos', 'in').at(-1)!.args).toEqual(['estado', ['firmado', 'vigente']]);
+
+    encolarCarga(reservado);
+    enqueue('contratos', { data: [], error: null });
+    expect((await obtener()).bloqueos.map((b) => b.codigo)).toEqual(['INMUEBLE_RESERVADO']);
+  });
+
   it('con un contrato TERMINADO (el más reciente) muestra el contrato, no "Iniciar contrato"', async () => {
     queues.set('contratos', [{ data: { id: CTO, estado: 'finalizado' }, error: null }]);
     vi.mocked(estadoEnviado).mockResolvedValueOnce({ id: CTO, estado: 'finalizado' } as never);
@@ -632,6 +651,21 @@ describe('iniciarContrato', () => {
     expect(c.prefill[5]).toEqual(COMPLETO.paso5);
     // La reserva nueva corre desde el nuevo inicio.
     expect(c.reservadoHasta).toBe('2026-09-22');
+  });
+
+  it('si el estudio se reasignó después de ese contrato, no copia lo del inmueble anterior (canon, paso 2)', async () => {
+    const cancelado = fila({ estado: 'cancelado', datos_variables: { asistente: { ...COMPLETO, paso1: { ...COMPLETO.paso1, canonCop: 2_200_000 } } } });
+    encolarCarga({ contratos: [cancelado] });
+    enqueue('estudios_reasignaciones', { data: { inmueble_origen_id: 'inm-viejo' }, error: null });
+    enqueue('contratos', { data: fila({ id: 'cto-2', numero: 'CTO-2026-0008', created_at: '2026-09-15T15:00:00.000Z' }), error: null });
+
+    const c = (await iniciar()).estado.contrato!;
+
+    // La primera reasignación después de iniciar aquel contrato dice de qué inmueble era.
+    expect(opsDe('estudios_reasignaciones', 'gt')[0].args).toEqual(['created_at', cancelado.created_at]);
+    expect(c.prefill[1]).toEqual({ ...COMPLETO.paso1, canonCop: 2_000_000 }); // el canon del registro de este inmueble
+    expect(c.prefill[2]).not.toEqual(COMPLETO.paso2);
+    expect(c.prefill[5]).toEqual(COMPLETO.paso5); // lo que no es del inmueble sí se conserva
   });
 
   it('23505 (otra pestaña ganó): devuelve la fila existente, NO libera y avisa si esta petición reservó', async () => {
@@ -1697,10 +1731,10 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     const crc = queues.get('estudios_certificados')!.at(-1)! as { data: Record<string, unknown> };
     crc.data = { ...crc.data, fecha_vencimiento: '2026-09-17T12:00:00Z' }; // ahora: 15/09 15:00 UTC
     const renders = vi.mocked(generarContratoVivienda).mock.calls.length;
-    expect(await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL))).toMatchObject({
-      statusCode: 409,
-      errorCode: 'CRC_SIN_MARGEN',
-    });
+    // El mismo bloqueo que ya muestra el asistente (la web ofrece «Crear estudio nuevo»).
+    const e = await error(enviarAFirma(EXP, { generacion: doc.generacion }, USER, ROL));
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_BLOQUEADO' });
+    expect((e.details as { bloqueos: Bloqueo[] }).bloqueos.map((b) => b.codigo)).toEqual(['CRC_SIN_MARGEN']);
     expect(vi.mocked(generarContratoVivienda).mock.calls.length).toBe(renders); // ni el render final
     expect(storageApi.upload).not.toHaveBeenCalled();
     expect(opsDe('contratos', 'update')).toHaveLength(0);

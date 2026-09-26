@@ -35,6 +35,22 @@ export const enviarEnlaceAutorizacionSchema = z
 // POST /public/autorizar/:token/firmar
 // ============================================================
 
+// §8.1: el numero de documento que ESCRIBE el prospecto. Se compara en el
+// servidor con la ficha (normalizando puntos y espacios) y nunca se devuelve.
+const numeroDocumentoEscrito = z
+  .string()
+  .trim()
+  .min(1, 'Escribe tu número de documento')
+  .max(30, 'Número de documento demasiado largo');
+
+// ============================================================
+// POST /public/autorizar/:token/confirmar-identidad  (Flujo §8.1)
+// ============================================================
+
+export const confirmarIdentidadSchema = z.object({
+  numero_documento: numeroDocumentoEscrito,
+});
+
 // Adenda 1 §7 (Gerencia, 07/09/2026): "No se implementa OTP en el flujo de
 // autorizacion del estudio." El prospecto autoriza marcando las casillas
 // ('casilla', Decreto 1377/2013 art. 7). 'otp' sigue aceptado y, si viene,
@@ -48,10 +64,9 @@ export const firmarSchema = z.object({
   }),
   datos_firma: z.string().min(100, 'Firma inválida').max(500000, 'Firma demasiado grande').optional(),
   codigo_otp: z.string().length(6, 'Código OTP debe ser de 6 dígitos').optional(),
-  // Flujo §8.1: la web confirma la identidad por /perfil (fallo tragado) y
-  // repite la marca al firmar. Mismo contrato que perfilProspectoSchema:
-  // literal(true) o nada — un cliente no puede registrar "confirme" con false.
-  identidad_confirmada: z.literal(true).optional(),
+  // Flujo §8.1: la firma vuelve a comparar el documento escrito con la ficha
+  // (un POST directo se saltaria confirmar-identidad). Obligatorio.
+  numero_documento: numeroDocumentoEscrito,
   // Consentimientos opcionales (Paso 2 "Beneficios"). No condicionan el servicio.
   consentimientos_opcionales: z
     .object({
@@ -83,8 +98,8 @@ export const firmarSchema = z.object({
 
 // Todo opcional a proposito. §8.2 es, segun el propio documento, "donde mas
 // gente abandona": el boton Continuar nunca se deshabilita y un envio parcial
-// vale. `identidad_confirmada` es z.literal(true) cuando viene, para que un
-// cliente no pueda registrar "confirme" con false.
+// vale. La identidad (§8.1) ya no entra por aqui: exige el documento escrito
+// (confirmarIdentidadSchema); una clave `identidad_confirmada` se descarta.
 //
 // TOLERANCIA POR CAMPO (`.catch(undefined)`): los tres bloques del §8 viajan en
 // UN solo POST y `validate` rechaza el body ENTERO ante cualquier issue. Sin
@@ -92,11 +107,8 @@ export const firmarSchema = z.object({
 // ("maria@gmail") o un par de ceros de mas en el ingreso tiraban a la basura
 // tambien la confirmacion de identidad, la situacion laboral y el resto — todo
 // el PASO 5 perdido por el campo opcional de un tercero. Un campo malo se cae
-// solo; los demas se guardan. `identidad_confirmada` NO lleva catch: es
-// literal(true) o nada, y ahi si queremos el 400.
+// solo; los demas se guardan.
 export const perfilProspectoSchema = z.object({
-  // §8.1
-  identidad_confirmada: z.literal(true).optional(),
   // §8.2 — AUTORREPORTADO. No alimenta el scorecard (Politica V4.1 §4.2).
   situacion_laboral: z.enum(['empleado', 'independiente', 'pensionado', 'otro']).optional().catch(undefined),
   donde_labora: z.string().max(200).optional().catch(undefined),
@@ -197,3 +209,4 @@ export type VerificarOtpInput = z.infer<typeof verificarOtpSchema>;
 export type PerfilProspectoInput = z.infer<typeof perfilProspectoSchema>;
 export type ReportarIdentidadInput = z.infer<typeof reportarIdentidadSchema>;
 export type BiometriaInput = z.infer<typeof biometriaSchema>;
+export type ConfirmarIdentidadInput = z.infer<typeof confirmarIdentidadSchema>;

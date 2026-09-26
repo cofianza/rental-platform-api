@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // quien ya tuvo contrato sobre ese estudio (revisión V3, 2026-09-22).
 // ============================================================
 
-const { queues, inserts, updates, filtros, mockNotificar, mockCitaCancelada } = vi.hoisted(() => {
+const { queues, inserts, updates, filtros, mockNotificar, mockCitaCancelada, mockInApp, mockResponsable, mockCorreo } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const inserts: Array<{ table: string; row: Record<string, unknown> }> = [];
@@ -15,6 +15,9 @@ const { queues, inserts, updates, filtros, mockNotificar, mockCitaCancelada } = 
     queues, inserts, updates, filtros,
     mockNotificar: vi.fn(async () => undefined),
     mockCitaCancelada: vi.fn(async () => undefined),
+    mockInApp: vi.fn(async () => undefined),
+    mockResponsable: vi.fn(async () => undefined),
+    mockCorreo: vi.fn(async () => undefined),
   };
 });
 
@@ -43,8 +46,13 @@ vi.mock('@/lib/supabase', () => {
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('../../notificaciones/notificaciones.service', () => ({
   notificarYCorreo: mockNotificar,
-  findPerfilIdByEmail: async (email: string | null) => (email ? `perfil-${email}` : null),
+  notificarUsuario: mockInApp,
+  notificarResponsableExpediente: mockResponsable,
+  // Sin cuenta: los correos que empiezan por "sin-cuenta".
+  findPerfilIdByEmail: async (email: string | null) => (email && !email.startsWith('sin-cuenta') ? `perfil-${email}` : null),
 }));
+vi.mock('../../orchestrator/orchestrator.emails', () => ({ sendResponsableAsignadoEmail: mockCorreo }));
+vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'https://app.test' } }));
 
 vi.mock('../../citas/citas.service', () => ({ notificarCitaCancelada: mockCitaCancelada }));
 
@@ -81,6 +89,44 @@ describe('avisarCandidatosDeReserva', () => {
     expect(inserts.map((i) => i.row.expediente_id)).toEqual(['candidato']);
     expect(mockNotificar).toHaveBeenCalledTimes(1);
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'perfil-candidato@correo.co' }));
+  });
+
+  it('avisa al dueño del inmueble y al responsable de cada estudio afectado', async () => {
+    queues.set('contratos', [{ data: [], error: null }]);
+    queues.set('expedientes', [{
+      data: [{ id: 'candidato', miembro_responsable_id: 'miembro-1', inmuebles: { propietario_id: 'dueno-1' } }],
+      error: null,
+    }]);
+    await aviso('candidato');
+    expect(mockInApp).toHaveBeenCalledWith(expect.objectContaining({ userId: 'dueno-1', tipo: 'inmueble.reservado_por_otro' }));
+    expect(mockResponsable).toHaveBeenCalledWith(
+      expect.objectContaining({ expedienteId: 'candidato', miembroId: 'miembro-1', excluirPerfilId: 'dueno-1' }),
+    );
+  });
+
+  it('al prospecto sin cuenta le llega el correo igual', async () => {
+    queues.set('contratos', [{ data: [], error: null }]);
+    await avisarCandidatosDeReserva({
+      afectados: [{ ...cand('x'), solicitante_email: 'sin-cuenta@correo.co' }],
+      inmuebleCodigo: 'INM-1',
+      expedienteGanadorId: 'ganador',
+    });
+    expect(mockNotificar).not.toHaveBeenCalled();
+    expect(mockCorreo).toHaveBeenCalledWith(expect.objectContaining({ email: 'sin-cuenta@correo.co', link: '/vitrina' }));
+  });
+
+  it('solo al estudio con la evaluación completada le promete reasignarlo', async () => {
+    queues.set('contratos', [{ data: [], error: null }]);
+    queues.set('estudios', [{ data: [{ expediente_id: 'completo' }], error: null }]);
+    await aviso('completo', 'en-curso');
+    const mensaje = (id: string) =>
+      (mockNotificar.mock.calls as unknown as Array<[{ userId: string; mensaje: string }]>)
+        .find(([a]) => a.userId === `perfil-${id}@correo.co`)?.[0].mensaje;
+    expect(mensaje('completo')).toMatch(/puede usarse para otra propiedad/);
+    expect(mensaje('en-curso')).not.toMatch(/puede usarse|reasignarse/);
+    const timeline = (id: string) => inserts.find((i) => i.row.expediente_id === id)?.row.descripcion as string;
+    expect(timeline('completo')).toMatch(/puede reasignarse/);
+    expect(timeline('en-curso')).toMatch(/cuando su evaluación se complete/);
   });
 
   it('si no se pueden leer los contratos, no avisa a nadie', async () => {

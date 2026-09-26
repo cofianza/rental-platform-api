@@ -26,6 +26,7 @@ import { getCalibracion, type Calibracion } from '@/lib/calibracion';
 import { checkPerfilCompletitud } from '@/modules/perfil-arrendador/perfil-arrendador.service';
 import { tarifasDelEstudio } from '@/modules/estudios/tarifa-override.service';
 import { crcParaFirmantes } from '@/modules/estudios/certificado.service';
+import { leerIngresoInferidoOriginal } from '@/modules/estudios/reasignacion.service';
 import { ESTADOS_VINCULADO, coarrendatarioImpreso, evaluacionCuenta } from '@/modules/estudios/coarrendatario-vinculado';
 import { avisarCandidatosDeReserva, cancelarVisitasDeOtros } from '@/modules/estudios/reserva-inmueble.notificaciones';
 import {
@@ -228,7 +229,7 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
 
   const [estR, coaR, orgR, contratosR, cal] = await Promise.all([
     db('estudios')
-      .select('id, resultado, fecha_completado, canon_evaluado')
+      .select('id, resultado, fecha_completado, canon_evaluado, estudio_padre_id')
       .eq('expediente_id', expedienteId)
       .eq('tipo', 'individual')
       .eq('estado', 'completado')
@@ -250,7 +251,13 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
       .neq('estado', 'finalizado'),
     getCalibracion(),
   ]);
-  const est = dato<{ id: string; resultado: string | null; fecha_completado: string | null; canon_evaluado: unknown } | null>(
+  const est = dato<{
+    id: string;
+    resultado: string | null;
+    fecha_completado: string | null;
+    canon_evaluado: unknown;
+    estudio_padre_id?: string | null;
+  } | null>(
     estR,
     expedienteId,
     'estudio',
@@ -267,8 +274,15 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
   const ownerId = org.owner_perfil_id;
   const v3 = contratos.find((c) => c.destinacion) ?? null;
   const idsAdicionales = clausulasDe(v3?.datos_variables?.asistente?.paso4).map((c) => c.clausulaId);
+  const anteriorFila = v3
+    ? null
+    : (filas
+        .filter((c) => c.estado === 'cancelado' && c.destinacion)
+        .sort((x, y) => y.updated_at.localeCompare(x.updated_at))[0] ?? null);
+  const reservadoPor =
+    inm.estado === 'ocupado' && inm.reservado_por_expediente_id !== expedienteId ? inm.reservado_por_expediente_id : null;
 
-  const [crcR, tarifa, sombraR, coaEstR, perfilR, completitud, catalogoR] = await Promise.all([
+  const [crcR, tarifa, ingresoCop, coaEstR, perfilR, completitud, catalogoR, reasigR, firmadoR] = await Promise.all([
     est
       ? db('estudios_certificados')
           .select('id, codigo, version, fecha_emision, fecha_vencimiento, pdf_storage_key')
@@ -281,13 +295,11 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
           throw noVerificable(expedienteId, 'tarifas', e);
         })
       : null,
+    // Una re-evaluación (estudio hijo) no tiene corrida propia: hereda el ingreso del padre.
     est
-      ? db('estudios_scorecard_sombra')
-          .select('ingreso_inferido_ajustado_cop')
-          .eq('estudio_id', est.id)
-          .order('fecha_calculo', { ascending: false })
-          .limit(1)
-          .maybeSingle()
+      ? leerIngresoInferidoOriginal(est.id, { estricto: true, padreId: est.estudio_padre_id ?? null }).catch((e: unknown) => {
+          throw noVerificable(expedienteId, 'ingreso', e);
+        })
       : null,
     coa?.estudio_id ? db('estudios').select('estado, resultado').eq('id', coa.estudio_id).maybeSingle() : null,
     db('perfiles').select(PERFIL_SELECT).eq('id', ownerId).maybeSingle(),
@@ -301,7 +313,27 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
           .select('id, inmobiliaria_id, titulo, texto, estado, version, inhabilitada_motivo')
           .in('id', idsAdicionales)
       : null,
+    // contratos no guarda el inmueble: la primera reasignación después de iniciar el
+    // contrato cancelado sale del inmueble de ese contrato (con él vivo no se reasigna).
+    anteriorFila
+      ? db('estudios_reasignaciones')
+          .select('inmueble_origen_id')
+          .eq('expediente_id', expedienteId)
+          .gt('created_at', anteriorFila.created_at)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle()
+      : null,
+    // El contrato del estudio que reservó el inmueble, si ya se firmó: el inmueble está arrendado.
+    reservadoPor
+      ? db('contratos').select('id').eq('expediente_id', reservadoPor).in('estado', ['firmado', 'vigente']).limit(1)
+      : null,
   ]);
+  // Lecturas que solo afinan el prefill o el texto de un bloqueo: sin ellas no se da un 503.
+  // Sin saber de qué inmueble era el contrato cancelado, lo del inmueble no se copia.
+  const origenAnterior = (reasigR?.data as { inmueble_origen_id: string } | null | undefined)?.inmueble_origen_id;
+  const anteriorOtroInmueble = !!reasigR && (!!reasigR.error || (!!origenAnterior && origenAnterior !== inm.id));
+  const arrendadoPorOtro = !!(firmadoR?.data as unknown[] | null | undefined)?.length;
   const perfil = dato<PerfilArrendador | null>(perfilR, expedienteId, 'perfil del arrendador');
   // checkPerfilCompletitud no lanza: sin perfil devuelve incompleto SIN faltantes.
   if (!perfil || (!completitud.completo && completitud.faltantes.length === 0))
@@ -350,21 +382,16 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
       : null,
     crc: dato<Fuentes['crc']>(crcR, expedienteId, 'CRC'),
     tarifas: tarifa?.tarifas ?? null,
-    ingresoAjustadoCop: monto(
-      dato<{ ingreso_inferido_ajustado_cop: unknown } | null>(sombraR, expedienteId, 'ingreso')
-        ?.ingreso_inferido_ajustado_cop,
-    ),
+    ingresoAjustadoCop: ingresoCop,
     coarrendatario,
     arrendador: perfil,
     modalidadFianzaDefecto: org.modalidad_fianza_defecto ?? null,
     completitudFaltantes: completitud.faltantes.map((x) => x.etiqueta),
     legacyVivos: contratos.filter((c) => !c.destinacion).length,
     v3,
-    anterior: v3
-      ? null
-      : (filas
-          .filter((c) => c.estado === 'cancelado' && c.destinacion)
-          .sort((x, y) => y.updated_at.localeCompare(x.updated_at))[0]?.datos_variables?.asistente ?? null),
+    anterior: anteriorFila?.datos_variables?.asistente ?? null,
+    anteriorOtroInmueble,
+    arrendadoPorOtro,
   };
   const catalogo = dato<FilaCatalogoAdicional[] | null>(catalogoR, expedienteId, 'cláusulas adicionales') ?? [];
   return { f, cal, catalogo };
@@ -415,7 +442,7 @@ const textoCambio = (doc: DocumentoV3, ruta: 'A' | 'B') =>
   doc.pendientes.some((id) => !SIN_APROBAR[ruta].has(id));
 
 function armarEstado({ f, cal, catalogo }: Cargadas, hoy: string): EstadoAsistente {
-  const bloqueos = evaluarBloqueos(f, hoy, cal);
+  const bloqueos = evaluarBloqueos(f, hoy, cal, Date.now());
   const avisos: string[] = [];
   const a: Asistente = f.v3?.datos_variables?.asistente ?? {};
 
@@ -691,7 +718,7 @@ export async function iniciarContrato(
   const hoy = hoyBogota();
   if (c.f.v3) return { estado: armarEstado(c, hoy), creado: false };
 
-  const bloqueos = evaluarBloqueos(c.f, hoy, c.cal);
+  const bloqueos = evaluarBloqueos(c.f, hoy, c.cal, Date.now());
   if (bloqueos.length) throw bloqueado(bloqueos);
 
   // 409 INMUEBLE_YA_RESERVADO / 503 RESERVA_NO_VERIFICABLE pasan tal cual.
@@ -1101,7 +1128,7 @@ export async function generarVistaPrevia(
 
   const dv = v3.datos_variables ?? {};
   const a: Asistente = dv.asistente ?? {};
-  const bloqueos = evaluarBloqueos(f, hoy, cal);
+  const bloqueos = evaluarBloqueos(f, hoy, cal, Date.now());
   const canon = a.paso1 ? evaluarCanon(f, a.paso1.canonCop, cal) : null;
   if (canon?.bloqueo) bloqueos.push(canon.bloqueo);
   // Generar nunca llama a la IA: con el flag encendido, bloquea la cláusula sin veredicto vigente.
@@ -1622,7 +1649,7 @@ export async function enviarAFirma(
   exigirFirmaRutaB(ruta, env.RUTA_B_FIRMA_ENABLED); // antes de generar nada (crearSobre lo repite)
 
   // 1. Las mismas compuertas que generar.
-  const bloqueos = evaluarBloqueos(f, hoy, cal);
+  const bloqueos = evaluarBloqueos(f, hoy, cal, Date.now());
   const canon = a.paso1 ? evaluarCanon(f, a.paso1.canonCop, cal) : null;
   if (canon?.bloqueo) bloqueos.push(canon.bloqueo);
   if (ruta === 'A') bloqueos.push(...bloqueosAdicionales(a, catalogo, opcionesAdicionales(f, cal)).bloqueos);

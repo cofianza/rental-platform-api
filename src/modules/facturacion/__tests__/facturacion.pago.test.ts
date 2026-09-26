@@ -12,7 +12,7 @@ const { mockFrom, ops, queues, enqueue, mockCreateBill, calibracion } = vi.hoist
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'or', 'range', 'order', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -57,7 +57,14 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 
-import { crearFacturaDesdePago, previewFacturaPago, updateTarifasIva, listTarifasIva, medioPagoDian } from '../facturacion.service';
+import {
+  crearFacturaDesdePago,
+  previewFacturaPago,
+  updateTarifasIva,
+  listTarifasIva,
+  medioPagoDian,
+  listFacturas,
+} from '../facturacion.service';
 
 const solicitante = {
   id: 'sol-1', tipo_persona: 'natural', nombre: 'Juan', apellido: 'Pérez', razon_social: null,
@@ -262,5 +269,59 @@ describe('Tarifas de IVA: paquetes de créditos', () => {
       derivada: true,
       derivada_de: 'estudio',
     });
+  });
+});
+
+// P1: un pago en la cola de reembolsos (para devolver o en revisión) no se
+// factura: sería una factura DIAN que después necesita nota crédito.
+describe('pago en cola para devolverse', () => {
+  const pagoMp = () => ({ data: { ...pago('completado').data, metodo: 'pasarela', transaction_ref: 'mp-77' }, error: null });
+
+  it('crear y preview: 409 PAGO_POR_DEVOLVER sin tocar Factus', async () => {
+    enqueue('pagos', pagoMp(), pagoMp());
+    enqueue('pagos_no_conciliados', { data: { id: 'fila-1' }, error: null }, { data: { id: 'fila-1' }, error: null });
+
+    await expect(crearFacturaDesdePago('pago-1', 'admin-1')).rejects.toMatchObject({ statusCode: 409, errorCode: 'PAGO_POR_DEVOLVER' });
+    await expect(previewFacturaPago('pago-1')).rejects.toMatchObject({ errorCode: 'PAGO_POR_DEVOLVER' });
+    expect(mockCreateBill).not.toHaveBeenCalled();
+
+    const filtros = ops.filter((o) => o.table === 'pagos_no_conciliados');
+    expect(filtros.find((o) => o.method === 'in' && o.args[0] === 'provider_payment_id')?.args[1]).toEqual(['pago:pago-1', 'mp-77']);
+    expect(filtros.find((o) => o.method === 'in' && o.args[0] === 'motivo')?.args[1]).toEqual([
+      'estudio_cerrado_sin_consulta',
+      'estudio_fallido_revisar',
+    ]);
+    expect(filtros.find((o) => o.method === 'eq')?.args).toEqual(['resuelto', false]);
+  });
+});
+
+// Nota crédito pendiente: factura emitida con el pago reembolsado o la compra
+// de créditos revertida (cancelada). Sin columna nueva: se cruza al listar.
+describe('listFacturas con nota_credito_pendiente', () => {
+  const query = { page: 1, limit: 20, nota_credito_pendiente: true };
+
+  it('cruza emitidas con pagos reembolsados y compras canceladas', async () => {
+    enqueue('pagos', { data: [{ id: 'p1' }, { id: 'p2' }], error: null });
+    enqueue('compras_creditos_estudios', { data: [{ id: 'c1' }], error: null });
+    enqueue('facturas', { data: [{ id: 'f1' }], error: null, count: 1 });
+
+    const r = await listFacturas(query, 'admin-1', 'administrador');
+
+    expect(r.facturas).toEqual([{ id: 'f1' }]);
+    expect(ops.find((o) => o.table === 'pagos' && o.method === 'eq')?.args).toEqual(['estado', 'reembolsado']);
+    expect(ops.find((o) => o.table === 'compras_creditos_estudios' && o.method === 'eq')?.args).toEqual(['estado', 'cancelado']);
+    const facturas = ops.filter((o) => o.table === 'facturas');
+    expect(facturas.find((o) => o.method === 'eq')?.args).toEqual(['estado', 'emitida']);
+    expect(facturas.find((o) => o.method === 'or')?.args).toEqual(['pago_id.in.(p1,p2),compra_creditos_id.in.(c1)']);
+  });
+
+  it('sin reembolsos ni compras revertidas: lista vacía sin consultar facturas', async () => {
+    enqueue('pagos', { data: [], error: null });
+    enqueue('compras_creditos_estudios', { data: [], error: null });
+
+    const r = await listFacturas(query, 'admin-1', 'administrador');
+
+    expect(r.facturas).toEqual([]);
+    expect(ops.some((o) => o.table === 'facturas' && o.method === 'or')).toBe(false);
   });
 });
