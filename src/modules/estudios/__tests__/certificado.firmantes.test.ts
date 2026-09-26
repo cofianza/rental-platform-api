@@ -394,6 +394,35 @@ describe('IVA de la prima y la tarifa', () => {
   });
 });
 
+// Adenda 2 §9.3: la revisión manual la puso solo la identidad y decide el
+// analista; la tarifa es la de la vía sin identidad, pero no fue «automática».
+describe('tarifa por la vía sin identidad', () => {
+  const VIA_SIN_IDENTIDAD = { via: 'revision_manual', via_sin_identidad: 'automatica' };
+
+  it('aprobada por el analista: lo dice, con la tarifa de la vía sin identidad', async () => {
+    enqueue('estudios', { data: { ...ESTUDIO, cascada: VIA_SIN_IDENTIDAD }, error: null });
+    enqueue('estudios_certificados', { data: null, error: null }, { data: { id: 'cert-9' }, error: null });
+    await generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
+    const t = impreso();
+    expect(t).toMatch(
+      /2% del canon más IVA \(aprobado por el analista; la verificación de identidad no cambia la tarifa\): \$\s40\.000 \+ IVA/,
+    );
+    expect(t).not.toContain('aprobación automática');
+  });
+
+  it('todavía en revisión: no afirma la aprobación', async () => {
+    await generateCertificatePdf({ ...DATOS, resultado: 'condicionado', tarifaPorIdentidad: true }, QR);
+    expect(impreso()).toContain('2% del canon más IVA (si el analista lo aprueba; la verificación de identidad no cambia la tarifa)');
+  });
+
+  it('una revisión manual por otro motivo sigue siendo la fila de revisión manual', async () => {
+    enqueue('estudios', { data: { ...ESTUDIO, cascada: { via: 'revision_manual', via_sin_identidad: null } }, error: null });
+    enqueue('estudios_certificados', { data: null, error: null }, { data: { id: 'cert-9' }, error: null });
+    await generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
+    expect(impreso()).toMatch(/2,7% del canon más IVA \(aprobación tras revisión manual\)/);
+  });
+});
+
 // A1: regla del cashback de la Adenda 1 del módulo de contratos (§3.4.2, §3.4.4, §5.9).
 describe('cashback', () => {
   const REGLA =

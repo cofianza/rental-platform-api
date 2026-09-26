@@ -235,6 +235,11 @@ export const reEvaluarSchema = z.object({
     .max(2000, 'El fundamento no debe exceder 2000 caracteres'),
 });
 
+// Politica §11: dia (Bogota) en que el prospecto apelo por correo u otro canal; null lo borra.
+export const radicacionApelacionSchema = z.object({
+  fecha_radicacion_apelacion: z.iso.date('Fecha inválida (AAAA-MM-DD)').nullable(),
+});
+
 // Body opcional para POST /estudios/:id/enviar-enlace — permite corregir el
 // email del solicitante si estaba mal escrito (se persiste en `solicitantes`
 // y el enlace se envía al corregido).
@@ -294,6 +299,7 @@ export type SoportePresignedUrlInput = z.infer<typeof soportePresignedUrlSchema>
 export type EjecutarEstudioBody = z.infer<typeof ejecutarEstudioBodySchema>;
 export type ConfirmarSoporteInput = z.infer<typeof confirmarSoporteSchema>;
 export type ReEvaluarInput = z.infer<typeof reEvaluarSchema>;
+export type RadicacionApelacionInput = z.infer<typeof radicacionApelacionSchema>;
 export type ReasignarEstudioInput = z.infer<typeof reasignarEstudioSchema>;
 export type CodigoParams = z.infer<typeof codigoParamsSchema>;
 

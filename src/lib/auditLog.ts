@@ -74,6 +74,8 @@ export const AUDIT_ACTIONS = {
   // Re-evaluacion de estudios
   ESTUDIO_SOPORTE_UPLOADED: 'estudio_soporte_uploaded',
   ESTUDIO_REEVALUACION_SOLICITADA: 'estudio_reevaluacion_solicitada',
+  // Politica §11: el analista registra el dia en que el prospecto apelo fuera de la plataforma.
+  ESTUDIO_APELACION_RADICADA: 'estudio_apelacion_radicada',
   // Certificados
   CERTIFICADO_GENERATED: 'certificado_generated',
   // Autorizacion habeas data

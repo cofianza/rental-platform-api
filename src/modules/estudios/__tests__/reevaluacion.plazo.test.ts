@@ -10,10 +10,11 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vite
 // condicionado se resuelve con la revision manual.
 // ============================================================
 
-const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockOnEstudio, inserts, filtros } = vi.hoisted(() => {
+const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockOnEstudio, inserts, updates, filtros } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const inserts: Array<{ table: string; fila: Res }> = [];
+  const updates: Array<{ table: string; fila: Res }> = [];
   const filtros: Array<{ table: string; col: string; val: unknown }> = [];
   const next = (table: string): Res => {
     const q = queues.get(table);
@@ -25,6 +26,10 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockO
     for (const m of PASSTHROUGH) chain[m] = () => chain;
     chain.insert = (fila: Res) => {
       inserts.push({ table, fila });
+      return chain;
+    };
+    chain.update = (fila: Res) => {
+      updates.push({ table, fila });
       return chain;
     };
     chain.eq = (col: string, val: unknown) => {
@@ -39,6 +44,7 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockO
   };
   return {
     inserts,
+    updates,
     filtros,
     mockEnv: new Proxy({} as Record<string, unknown>, {
       get: (_t, k) => (typeof k === 'string' && (k.endsWith('_ENABLED') || k.startsWith('MOTOR_')) ? false : 'x'),
@@ -103,8 +109,15 @@ vi.mock('../reglas-duras', async (importOriginal) => ({
 
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/auditLog';
-import { getHistorialReEvaluacion, getSoportePresignedUrl, plazoApelacion, registrarResultado, solicitarReEvaluacion } from '../estudios.service';
-import { reEvaluarSchema, registrarResultadoSchema } from '../estudios.schema';
+import {
+  getHistorialReEvaluacion,
+  getSoportePresignedUrl,
+  plazoApelacion,
+  registrarRadicacionApelacion,
+  registrarResultado,
+  solicitarReEvaluacion,
+} from '../estudios.service';
+import { radicacionApelacionSchema, reEvaluarSchema, registrarResultadoSchema } from '../estudios.schema';
 
 const hace = (dias: number) => new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
 
@@ -131,6 +144,7 @@ function encolarHistorial(fechaCompletado: string) {
 beforeEach(() => {
   queues.clear();
   inserts.length = 0;
+  updates.length = 0;
   filtros.length = 0;
   mockStorageFrom.mockClear();
   (supabase.rpc as unknown as Mock).mockReset();
@@ -295,6 +309,7 @@ describe('fundamento de la re-evaluación', () => {
         },
         error: null,
       },
+      { data: null, error: null }, // sin radicación registrada
       { data: null, error: null }, // sin re-evaluación previa
       { data: { id: 'est-2' }, error: null }, // hijo creado
     );
@@ -374,7 +389,7 @@ describe('plazo de la apelacion: notificacion, festivos y radicacion (decision 7
     ]));
   });
 
-  const solicitarElDia20 = (primerSoporte: string | null) => {
+  const solicitarElDia20 = (primerSoporte: string | null, radicacion: Record<string, unknown> = { data: null, error: null }) => {
     hoyEs('2026-10-30T15:00:00Z'); // dia habil 20 desde la notificacion
     enqueue(
       'estudios',
@@ -382,6 +397,7 @@ describe('plazo de la apelacion: notificacion, festivos y radicacion (decision 7
         data: { ...rechazado(NOTIFICACION), proveedor: 'manual', duracion_contrato_meses: 12, pago_por: 'inmobiliaria' },
         error: null,
       },
+      radicacion, // fecha_radicacion_apelacion
       { data: null, error: null }, // sin re-evaluacion previa
       { data: { id: 'est-2' }, error: null }, // hijo creado
     );
@@ -401,5 +417,79 @@ describe('plazo de la apelacion: notificacion, festivos y radicacion (decision 7
     queues.clear();
     await expect(solicitarElDia20(null)).rejects.toMatchObject({ errorCode: 'REEVALUACION_FUERA_DE_PLAZO' });
     expect(inserts.some((i) => i.table === 'estudios')).toBe(false);
+  });
+
+  // El prospecto apelo por correo el dia 14 y el soporte se subio el dia 16.
+  it('radicacion registrada por el analista: manda sobre el primer soporte', async () => {
+    await solicitarElDia20('2026-10-26T15:00:00Z', { data: { fecha_radicacion_apelacion: '2026-10-22' }, error: null }).catch(() => undefined);
+    expect(inserts.find((i) => i.table === 'estudios')?.fila).toMatchObject({ estudio_padre_id: 'est-1' });
+  });
+
+  it('sin la migracion (42703) vale el primer soporte, como antes', async () => {
+    await solicitarElDia20('2026-10-22T15:00:00Z', { data: null, error: { code: '42703', message: 'column does not exist' } })
+      .catch(() => undefined);
+    expect(inserts.find((i) => i.table === 'estudios')?.fila).toMatchObject({ estudio_padre_id: 'est-1' });
+    queues.clear();
+    inserts.length = 0;
+    await expect(solicitarElDia20('2026-10-26T15:00:00Z', { data: null, error: { code: '42703' } }))
+      .rejects.toMatchObject({ errorCode: 'REEVALUACION_FUERA_DE_PLAZO' });
+  });
+
+  it('la fecha registrada (AAAA-MM-DD) es dia de Bogota: no se corre un dia', () => {
+    // 23-oct es el dia 15: a tiempo; Cofianza responde el 9-nov (2-nov festivo), no el 6.
+    expect(plazoApelacion(NOTIFICACION, '2026-10-23', new Date('2026-10-30T15:00:00Z'))).toEqual({
+      apelar_hasta: '2026-10-23', responder_hasta: '2026-11-09', vencido: false,
+    });
+    expect(plazoApelacion(NOTIFICACION, '2026-10-26').vencido).toBe(true);
+  });
+
+  it('el historial la usa y la devuelve para el formulario', async () => {
+    encolarHistorial(hace(40));
+    enqueue('estudios', { data: { fecha_radicacion_apelacion: hace(38).slice(0, 10) }, error: null });
+    const h = await getHistorialReEvaluacion('est-1', 'u-1', 'operador_analista');
+    expect(h).toMatchObject({ puede_reevaluar: true, plazo_vencido: false, fecha_radicacion_apelacion: hace(38).slice(0, 10) });
+  });
+});
+
+describe('registrar la fecha de radicacion (Politica §11)', () => {
+  const NOTIFICACION = '2026-10-01T15:00:00Z';
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-30T03:00:00Z')); // 29-oct en Bogota
+  });
+  afterEach(() => vi.useRealTimers());
+  const registrar = (fecha: string | null, update: Record<string, unknown> = { data: null, error: null }) => {
+    enqueue('estudios', { data: rechazado(NOTIFICACION), error: null }, update);
+    enqueue('eventos_timeline', { data: { created_at: NOTIFICACION }, error: null });
+    return registrarRadicacionApelacion('est-1', fecha, 'u-1', undefined, 'operador_analista');
+  };
+
+  it('guarda el dia y deja traza en la bitacora', async () => {
+    await expect(registrar('2026-10-22')).resolves.toEqual({ fecha_radicacion_apelacion: '2026-10-22' });
+    expect(updates).toContainEqual({ table: 'estudios', fila: { fecha_radicacion_apelacion: '2026-10-22' } });
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ entidadId: 'est-1', detalle: { fecha_radicacion_apelacion: '2026-10-22' } }));
+  });
+
+  it('no acepta fechas futuras (Bogota) ni anteriores a la notificacion', async () => {
+    // Hoy en Bogota es 29-oct aunque en UTC ya sea 30.
+    await expect(registrar('2026-10-30')).rejects.toMatchObject({ statusCode: 400, errorCode: 'FECHA_RADICACION_INVALIDA' });
+    queues.clear();
+    await expect(registrar('2026-09-30')).rejects.toMatchObject({ statusCode: 400, errorCode: 'FECHA_RADICACION_INVALIDA' });
+    expect(updates).toHaveLength(0);
+    queues.clear();
+    await expect(registrar('2026-10-29')).resolves.toBeTruthy();
+  });
+
+  it('null la borra; sin la migracion responde 503 en vez de romper', async () => {
+    await expect(registrar(null)).resolves.toEqual({ fecha_radicacion_apelacion: null });
+    await expect(registrar('2026-10-22', { data: null, error: { code: 'PGRST204' } }))
+      .rejects.toMatchObject({ statusCode: 503, errorCode: 'RADICACION_NO_DISPONIBLE' });
+  });
+
+  it('el esquema pide una fecha real o null', () => {
+    expect(radicacionApelacionSchema.safeParse({ fecha_radicacion_apelacion: '2026-02-31' }).success).toBe(false);
+    expect(radicacionApelacionSchema.safeParse({ fecha_radicacion_apelacion: '22/10/2026' }).success).toBe(false);
+    expect(radicacionApelacionSchema.safeParse({ fecha_radicacion_apelacion: '2026-10-22' }).success).toBe(true);
+    expect(radicacionApelacionSchema.safeParse({ fecha_radicacion_apelacion: null }).success).toBe(true);
   });
 });

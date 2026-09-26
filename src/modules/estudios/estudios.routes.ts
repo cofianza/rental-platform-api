@@ -20,6 +20,7 @@ import {
   soportePresignedUrlSchema,
   confirmarSoporteSchema,
   reEvaluarSchema,
+  radicacionApelacionSchema,
   reasignarEstudioSchema,
   codigoParamsSchema,
   estudioVigenteQuerySchema,
@@ -228,6 +229,15 @@ estudiosRouter.post(
   roleGuard(['administrador', 'operador_analista']),
   validate({ params: estudioIdParamsSchema, body: reEvaluarSchema }),
   estudiosController.reEvaluar,
+);
+
+// PATCH /estudios/:estudioId/apelacion — Politica §11: el analista registra el
+// dia en que el prospecto apelo por correo u otro canal. Solo Cofianza, como /re-evaluar.
+estudiosRouter.patch(
+  '/:estudioId/apelacion',
+  roleGuard(['administrador', 'operador_analista']),
+  validate({ params: estudioIdParamsSchema, body: radicacionApelacionSchema }),
+  estudiosController.registrarRadicacionApelacion,
 );
 
 // POST /estudios/:estudioId/reasignar — portabilidad del §4.3.

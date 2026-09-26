@@ -11,7 +11,7 @@ const { handler, HANDLERS } = vi.hoisted(() => ({
     'cancel', 'confirmarSoporte', 'create', 'createFromInmueble', 'descargarCertificado', 'ejecutarEstudio',
     'estudioVigentePorDocumento', 'generarCertificado', 'getById', 'getCertificadoPresignedUrl', 'getCertificadoUrl',
     'getEstadoProveedor', 'getFormulario', 'getHistorial', 'getProviderHealth', 'getSoportePresignedUrl', 'getTarifa',
-    'getTopeCanon', 'listAll', 'listByExpediente', 'quitarTarifaOverride', 'reasignar', 'reEvaluar', 'registrarResultado',
+    'getTopeCanon', 'listAll', 'listByExpediente', 'quitarTarifaOverride', 'reasignar', 'reEvaluar', 'registrarRadicacionApelacion', 'registrarResultado',
     'sendLink', 'setTarifaOverride', 'stats', 'submitFormulario', 'verificarCertificadoPublic',
   ],
 }));

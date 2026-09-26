@@ -169,6 +169,12 @@ export interface CertificatePdfData {
   modeloVersion: string;
   // Adenda §5: tarifa mensual, prima de vinculacion y cashback por ruta.
   tarifas: Tarifas | null;
+  /**
+   * Adenda 2 §9.3: la fila de tarifa salio de cascada.via_sin_identidad (la
+   * revision manual la puso solo la identidad y decide el analista). El nombre
+   * de la fila («aprobación automática») no es lo que paso.
+   */
+  tarifaPorIdentidad?: boolean;
   // Adenda §1.1: "el CRC [...] debe registrar el valor del factor aplicado".
   factorAjusteIngreso: number | null;
   // Adenda §2.4: "que centrales se consultaron y cual fue la decision de cascada".
@@ -393,11 +399,13 @@ export async function generateCertificatePdf(
         // La via deja inferir la banda del puntaje: las versiones reducidas no la llevan.
         const via = data.version
           ? ''
-          : t.via === 'automatica'
-            ? ' (aprobación automática)'
-            : t.via === 'condicionada_coarrendatario'
-              ? ' (aprobación condicionada con coarrendatario)'
-              : ' (aprobación tras revisión manual)';
+          : data.tarifaPorIdentidad
+            ? ` (${data.resultado === 'aprobado' ? 'aprobado por el analista' : 'si el analista lo aprueba'}; la verificación de identidad no cambia la tarifa)`
+            : t.via === 'automatica'
+              ? ' (aprobación automática)'
+              : t.via === 'condicionada_coarrendatario'
+                ? ' (aprobación condicionada con coarrendatario)'
+                : ' (aprobación tras revisión manual)';
         // Adenda 1 contratos §1.1: la prima y la tarifa causan IVA, siempre
         // (TARIFA_IVA del panel), sobre el canon sin IVA.
         const masIva = (base: number | null, conIva: number | null) =>
@@ -1167,6 +1175,8 @@ async function datosDelCrc(
       ivaPct: cal.TARIFA_IVA,
       override: leerTarifaOverride(e.tarifa_override),
     }),
+    // Misma condicion que la rama via_sin_identidad de viaPorRutaDeAprobacion.
+    tarifaPorIdentidad: cascada?.via === 'revision_manual' && via !== 'revision_manual' && via === cascada?.via_sin_identidad,
     factorAjusteIngreso: sombra?.factor ?? null,
     fuentesConsultadas: fuentes.length > 0 ? fuentes.join(' + ') : null,
     denominadorPuntaje: sombra?.denominador ?? null,

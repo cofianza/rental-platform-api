@@ -5,6 +5,7 @@ import { AppError, fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
 import { sumarDiasHabiles } from '@/lib/diasHabiles';
 import { fechaBogota } from '@/modules/contratos/v3/formato';
+import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
@@ -3495,6 +3496,9 @@ const MAX_REEVALUACIONES = 2;
 const PLAZO_REEVALUACION_DIAS_HABILES = 15;
 const PLAZO_RESPUESTA_DIAS_HABILES = 10;
 
+/** 'AAAA-MM-DD' ya es un día de Bogotá (la radicación que registra el analista); un instante se convierte. */
+const diaBogota = (d: string | Date) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : fechaBogota(d));
+
 /**
  * Pura. Días hábiles de Colombia (con festivos), por fecha de Bogotá. Sin
  * radicación cuenta la que se haría hoy. Radicada a tiempo no vence: el
@@ -3505,8 +3509,8 @@ export function plazoApelacion(notificacion: string | null, radicacion: string |
   const apelarHasta = notificacion ? sumarDiasHabiles(fechaBogota(notificacion), PLAZO_REEVALUACION_DIAS_HABILES) : null;
   return {
     apelar_hasta: apelarHasta,
-    responder_hasta: radicacion ? sumarDiasHabiles(fechaBogota(radicacion), PLAZO_RESPUESTA_DIAS_HABILES) : null,
-    vencido: !!apelarHasta && fechaBogota(radicacion ?? ahora) > apelarHasta,
+    responder_hasta: radicacion ? sumarDiasHabiles(diaBogota(radicacion), PLAZO_RESPUESTA_DIAS_HABILES) : null,
+    vencido: !!apelarHasta && diaBogota(radicacion ?? ahora) > apelarHasta,
   };
 }
 
@@ -3534,7 +3538,25 @@ async function fechaNotificacionNoAprobado(
   return (data as { created_at?: string } | null)?.created_at ?? est.fecha_completado ?? null;
 }
 
-/** La radicación de la apelación: no hay campo propio, vale el primer soporte subido. */
+/**
+ * La radicación de la apelación: el día que registró el analista (el prospecto
+ * apeló por correo u otro canal) y, sin él, el primer soporte subido. Se lee
+ * aparte y sin fallar: antes de la migración 20261001000014 la columna no
+ * existe (42703) y vale el primer soporte, como antes.
+ */
+async function fechaRadicacionRegistrada(estudioId: string): Promise<string | null> {
+  const { data, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('fecha_radicacion_apelacion')
+    .eq('id', estudioId)
+    .maybeSingle();
+  if (error) {
+    if (!faltaColumna(error)) logger.warn({ estudioId, error: error.message }, 'No se pudo leer la radicación de la apelación');
+    return null;
+  }
+  return (data as { fecha_radicacion_apelacion?: string | null } | null)?.fecha_radicacion_apelacion ?? null;
+}
+
 async function fechaPrimerSoporte(estudioId: string): Promise<string | null> {
   const { data } = await (supabase
     .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
@@ -3604,7 +3626,7 @@ export async function getSoportePresignedUrl(
   // Los soportes solo sirven para re-evaluar: fuera del plazo no se firma la
   // subida (antes el gestor subia archivos y el 400 llegaba al final). Con la
   // apelación ya radicada a tiempo se puede seguir completando.
-  await assertPlazoApelacion(est, await fechaPrimerSoporte(est.id));
+  await assertPlazoApelacion(est, (await fechaRadicacionRegistrada(est.id)) ?? (await fechaPrimerSoporte(est.id)));
 
   // 2. Generate storage key
   const ext = getExtensionFromMime(input.tipo_mime);
@@ -3721,6 +3743,75 @@ export async function confirmarSoporteUpload(
 }
 
 // ============================================================
+// Re-evaluacion: fecha de radicacion de la apelacion (Politica §11)
+// ============================================================
+
+/**
+ * El analista registra el día (Bogotá) en que el prospecto apeló por correo u
+ * otro canal; null lo borra. Desde ahí se mide el plazo en vez del primer
+ * soporte, que puede subirse después del día 15.
+ */
+export async function registrarRadicacionApelacion(
+  estudioId: string,
+  fecha: string | null,
+  userId: string,
+  ip?: string,
+  userRol?: string,
+) {
+  const { data: estudio, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, resultado, tipo, expediente_id, fecha_completado')
+    .eq('id', estudioId)
+    .single();
+  if (error || !estudio) {
+    throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
+  }
+  const est = estudio as unknown as {
+    id: string; estado: string; resultado: string; tipo: string | null; expediente_id: string; fecha_completado: string | null;
+  };
+  await assertExpedienteAccess(est.expediente_id, userId, userRol);
+  if (!(await esReevaluable(est))) {
+    throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
+  }
+
+  if (fecha) {
+    if (fecha > fechaBogota(new Date())) {
+      throw AppError.badRequest('La fecha de la apelación no puede ser futura.', 'FECHA_RADICACION_INVALIDA');
+    }
+    const notificacion = await fechaNotificacionNoAprobado(est);
+    if (notificacion && fecha < fechaBogota(notificacion)) {
+      throw AppError.badRequest(
+        `La apelación no puede ser anterior a la notificación del no aprobado (${fechaBogota(notificacion)}).`,
+        'FECHA_RADICACION_INVALIDA',
+      );
+    }
+  }
+
+  const { error: updErr } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .update({ fecha_radicacion_apelacion: fecha } as never)
+    .eq('id', estudioId);
+  if (faltaColumna(updErr)) {
+    throw new AppError(503, 'RADICACION_NO_DISPONIBLE', 'El registro de la fecha de apelación todavía no está disponible. Intenta más tarde.');
+  }
+  if (updErr) {
+    logger.error({ estudioId, error: updErr.message }, 'No se pudo registrar la radicación de la apelación');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la fecha de la apelación. Intenta de nuevo.');
+  }
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.ESTUDIO_APELACION_RADICADA,
+    entidad: AUDIT_ENTITIES.ESTUDIO,
+    entidadId: estudioId,
+    detalle: { fecha_radicacion_apelacion: fecha },
+    ip,
+  });
+
+  return { fecha_radicacion_apelacion: fecha };
+}
+
+// ============================================================
 // Re-evaluacion: solicitar re-evaluacion
 // ============================================================
 
@@ -3778,14 +3869,14 @@ export async function solicitarReEvaluacion(
   }
 
   // Politica §11: la apelacion se radica en 15 dias habiles desde la
-  // notificacion del no aprobado. Radicada a tiempo (primer soporte), el
-  // analista la registra aunque ya haya pasado el dia 15; pasado el plazo sin
-  // radicar hay que habilitar una evaluacion nueva.
-  const radicacion = await fechaPrimerSoporte(estudioId);
-  await assertPlazoApelacion(est, radicacion);
+  // notificacion del no aprobado. Radicada a tiempo (fecha registrada por el
+  // analista o primer soporte), se re-evalua aunque ya haya pasado el dia 15;
+  // pasado el plazo sin radicar hay que habilitar una evaluacion nueva.
+  const primerSoporte = await fechaPrimerSoporte(estudioId);
+  await assertPlazoApelacion(est, (await fechaRadicacionRegistrada(estudioId)) ?? primerSoporte);
 
   // 2. Verify at least 1 soporte doc exists
-  if (!radicacion) {
+  if (!primerSoporte) {
     throw AppError.badRequest(
       'Debe subir al menos un documento soporte antes de solicitar re-evaluacion',
       'SOPORTE_REQUERIDO',
@@ -4027,10 +4118,11 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
   // Mismo plazo que valida solicitarReEvaluacion: sin esto la UI dejaba subir
   // soportes y el 400 REEVALUACION_FUERA_DE_PLAZO llegaba al final.
   const reevaluable = !!lastEstudio && (await esReevaluable(lastEstudio));
+  const radicacionRegistrada = lastEstudio && reevaluable ? await fechaRadicacionRegistrada(lastEstudio.id) : null;
   const plazo = lastEstudio && reevaluable
     ? plazoApelacion(
         await fechaNotificacionNoAprobado(lastEstudio),
-        (docsByEstudio.get(lastEstudio.id)?.[0]?.created_at as string | undefined) ?? null,
+        radicacionRegistrada ?? (docsByEstudio.get(lastEstudio.id)?.[0]?.created_at as string | undefined) ?? null,
       )
     : { apelar_hasta: null, responder_hasta: null, vencido: false };
   const puedeReevaluar = totalEnCadena <= MAX_REEVALUACIONES && reevaluable && !plazo.vencido;
@@ -4043,6 +4135,8 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
     apelar_hasta: plazo.apelar_hasta,
     /** 'AAAA-MM-DD': ya radicada, último día para que Cofianza responda. */
     responder_hasta: plazo.responder_hasta,
+    /** 'AAAA-MM-DD': día en que el prospecto apeló fuera de la plataforma, registrado por el analista. */
+    fecha_radicacion_apelacion: radicacionRegistrada,
     // Mismas reglas que el detalle: al prospecto no le viajan score ni motivo.
     historial: redactarEstudiosSegunRol(historial as Record<string, unknown>[], userRol),
   };

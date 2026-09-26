@@ -16,6 +16,7 @@ import type {
   SoportePresignedUrlInput,
   ConfirmarSoporteInput,
   ReEvaluarInput,
+  RadicacionApelacionInput,
   ReasignarEstudioInput,
 } from './estudios.schema';
 
@@ -140,6 +141,15 @@ export async function reEvaluar(req: Request, res: Response) {
   const input = req.body as ReEvaluarInput;
   const result = await estudiosService.solicitarReEvaluacion(estudioId, input, req.user!.id, req.ip, req.user!.rol);
   sendCreated(res, result);
+}
+
+export async function registrarRadicacionApelacion(req: Request, res: Response) {
+  const { estudioId } = req.params as unknown as { estudioId: string };
+  const { fecha_radicacion_apelacion } = req.body as RadicacionApelacionInput;
+  const result = await estudiosService.registrarRadicacionApelacion(
+    estudioId, fecha_radicacion_apelacion, req.user!.id, req.ip, req.user!.rol,
+  );
+  sendSuccess(res, result);
 }
 
 /**
