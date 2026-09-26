@@ -982,14 +982,20 @@ export async function createEstudioFromInmueble(
   // existencia cross-tenant. Roles internos pasan sin chequeo.
   await assertInmuebleAccess(inmuebleId, userId, userRol);
 
-  // Tope de canon (flujo §4.4). Aqui el expediente todavia no existe, asi que
-  // se contrasta directo contra el inmueble — que es justamente el sujeto de la
-  // regla ("al seleccionar la propiedad").
-  await assertCanonDentroDelTope({ inmuebleId, origen: 'createEstudioFromInmueble' });
-
   // El solicitante tambien tiene que ser de SU cartera: el RPC solo comprueba
   // que exista (mismo hueco que createExpediente). 404 si es de otra agencia.
   await getApplicantById(input.solicitante_id, userId, userRol);
+
+  // Tope de canon (flujo §4.4). Aqui el expediente todavia no existe, asi que
+  // se contrasta directo contra el inmueble — que es justamente el sujeto de la
+  // regla ("al seleccionar la propiedad"). Tambien bloquea comercial/mixto y
+  // arrendatario persona juridica/NIT (ESTUDIO_NO_AFIANZABLE); va despues del
+  // scope del solicitante para no revelar su tipo de persona a otra cartera.
+  await assertCanonDentroDelTope({
+    inmuebleId,
+    solicitanteId: input.solicitante_id,
+    origen: 'createEstudioFromInmueble',
+  });
 
   // Atomic: create expediente + estudio + update inmueble via RPC
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -4458,6 +4464,7 @@ async function aplicarMotorSiAplica(args: {
     salidaPrimaria: decision.salida,
     veredictoPrimario: decision.veredicto,
     revisionManual: decision.revisionManual,
+    revisionIdentidad: decision.revisionIdentidad,
     providerInput: args.providerInput,
     antecedentes: args.antecedentes ?? null,
     centralCaida: args.ejecucion?.centralCaida ?? null,
@@ -4499,6 +4506,8 @@ export async function decidirConCascada(args: {
   salidaPrimaria: SalidaSombra;
   veredictoPrimario: VeredictoReglasDuras;
   revisionManual: string | null;
+  /** Adenda 2 §9.3: ResolucionEstudio.revisionIdentidad (va dentro de revisionManual). */
+  revisionIdentidad?: string | null;
   providerInput?: ProviderSolicitudInput;
   antecedentes: ResumenAntecedentes | null;
   /** Adenda §2.3: central que ya no respondio en esta ejecucion; no se reconsulta. */
@@ -4588,6 +4597,7 @@ export async function decidirConCascada(args: {
     // (onCoarrendatarioEstudioCompletado). Aqui el titular se decide solo.
     coarrendatario: null,
     motivosRevision: revisionManual ? [revisionManual] : [],
+    motivoIdentidad: args.revisionIdentidad ?? null,
   });
 
   const traza = construirTrazaCascada({

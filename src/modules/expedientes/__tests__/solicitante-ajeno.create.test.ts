@@ -80,6 +80,7 @@ vi.mock('@/modules/solicitantes/solicitantes.service', () => ({
 import { createExpediente } from '../expedientes.service';
 import { createEstudioFromInmueble } from '@/modules/estudios/estudios.service';
 import { assertInmuebleAccess } from '@/lib/tenantScope';
+import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 
 const INMUEBLE = '22222222-2222-2222-2222-222222222222';
 const AJENO = '33333333-3333-3333-3333-333333333333';
@@ -102,6 +103,8 @@ describe('solicitante de otra agencia al crear el estudio', () => {
 
     expect(mockGetApplicant).toHaveBeenCalledWith(AJENO, 'user-b', 'inmobiliaria');
     expect(ops.some((o) => o.table === 'expedientes' && o.method === 'insert')).toBe(false);
+    // El guard lee el tipo de persona del solicitante: no corre con uno ajeno.
+    expect(assertCanonDentroDelTope).not.toHaveBeenCalled();
   });
 
   it('createEstudioFromInmueble: 404 antes de llamar al RPC', async () => {
@@ -110,6 +113,43 @@ describe('solicitante de otra agencia al crear el estudio', () => {
     ).rejects.toMatchObject({ statusCode: 404 });
 
     expect(mockGetApplicant).toHaveBeenCalledWith(AJENO, 'user-b', 'inmobiliaria');
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(assertCanonDentroDelTope).not.toHaveBeenCalled();
+  });
+});
+
+// Punto 3 (2026-09-25): comercial/mixto o arrendatario persona juridica/NIT ->
+// el guard lanza ESTUDIO_NO_AFIANZABLE y el estudio no nace.
+describe('estudio no afianzable al crear', () => {
+  const PROPIO = '44444444-4444-4444-4444-444444444444';
+  const noAfianzable = Object.assign(new Error('persona juridica'), { statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE' });
+
+  it('createExpediente: el guard recibe el solicitante y el expediente no se inserta', async () => {
+    mockGetApplicant.mockResolvedValue({ id: PROPIO });
+    vi.mocked(assertCanonDentroDelTope).mockRejectedValueOnce(noAfianzable);
+    queues.set('inmuebles', [{ data: { id: INMUEBLE, codigo: 'INM-1', estado: 'disponible', inmobiliaria_id: 'org-b', reservado_por_expediente_id: null }, error: null }]);
+
+    await expect(
+      createExpediente({ inmueble_id: INMUEBLE, solicitante_id: PROPIO } as never, 'user-b', undefined, 'inmobiliaria'),
+    ).rejects.toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE' });
+
+    expect(assertCanonDentroDelTope).toHaveBeenCalledWith(
+      expect.objectContaining({ inmuebleId: INMUEBLE, solicitanteId: PROPIO, origen: 'createExpediente' }),
+    );
+    expect(ops.some((o) => o.table === 'expedientes' && o.method === 'insert')).toBe(false);
+  });
+
+  it('createEstudioFromInmueble: igual, antes del RPC', async () => {
+    mockGetApplicant.mockResolvedValue({ id: PROPIO });
+    vi.mocked(assertCanonDentroDelTope).mockRejectedValueOnce(noAfianzable);
+
+    await expect(
+      createEstudioFromInmueble(INMUEBLE, { solicitante_id: PROPIO } as never, 'user-b', undefined, 'inmobiliaria'),
+    ).rejects.toMatchObject({ statusCode: 409 });
+
+    expect(assertCanonDentroDelTope).toHaveBeenCalledWith(
+      expect.objectContaining({ inmuebleId: INMUEBLE, solicitanteId: PROPIO }),
+    );
     expect(mockRpc).not.toHaveBeenCalled();
   });
 });

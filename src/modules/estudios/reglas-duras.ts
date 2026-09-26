@@ -91,6 +91,10 @@ import type { ResumenAntecedentes } from './antecedentes';
 // cotejo ocurre AHI (pantalla del prospecto), mucho antes de que exista un
 // resultado de estudio.
 import { leerBiometriaDeExpediente, requiereRevisionManualPorBiometria } from '@/modules/autorizaciones/biometria';
+import type { EstadoBiometria } from '@/modules/autorizaciones/biometria';
+
+/** Adenda 2 §9.3: biometria omitida, bajo el umbral o sin verificar. Ver revisionIdentidad. */
+const ESTADOS_SOLO_IDENTIDAD: readonly EstadoBiometria[] = ['omitida', 'no_coincide', 'no_verificada'];
 // Adenda §8: el ingreso declarado contrasta con el estimado y puede escalar a
 // revision. Vive en autorizaciones porque este arbol no puede nombrarlo.
 import { contrasteIngresoProspecto } from '@/modules/autorizaciones/ingreso-declarado';
@@ -662,6 +666,13 @@ export interface ResolucionEstudio {
    */
   revisionManual: string | null;
   /**
+   * Adenda 2 §9.3 ("sin penalizacion alguna") y Decreto 1377/2013 art. 6: la
+   * parte de `revisionManual` que es SOLO de identidad (biometria omitida, no
+   * coincide o sin verificar). Manda al analista igual; decision.ts la separa
+   * para que no cambie la ruta de tarifa (`via_sin_identidad` en la traza).
+   */
+  revisionIdentidad: string | null;
+  /**
    * Politica §14 / §9 `apis_fallidas`: fuentes que no respondieron en ESTA
    * evaluacion, con los nombres que usa la Politica ('listas_restrictivas',
    * 'registraduria'). El call site agrega las centrales.
@@ -740,6 +751,7 @@ export async function resolverResultadoEstudio(
     veredicto: aplicarReglasDuras({ resultadoPropuesto: args.resultadoPropuesto, salida: null }),
     salida: null,
     revisionManual: null,
+    revisionIdentidad: null,
     apisFallidas: [],
   };
 
@@ -824,9 +836,14 @@ export async function resolverResultadoEstudio(
         antecedentes?.estado === 'no_verificado' ? 'listas_restrictivas' : null,
         biometria?.estado === 'no_verificada' ? 'registraduria' : null,
       ].filter((a): a is string => !!a);
+      const motivoBiometria = requiereRevisionManualPorBiometria(biometria);
+      // Adenda 2 §9.3: omitirla o no llegar al umbral no penaliza. El §7
+      // (cara bien, documento distinto) no es esto: es inconsistencia documental.
+      const revisionIdentidad =
+        biometria && ESTADOS_SOLO_IDENTIDAD.includes(biometria.estado) ? motivoBiometria : null;
       const motivos = [
         requiereRevisionManual(antecedentes),
-        requiereRevisionManualPorBiometria(biometria),
+        motivoBiometria,
         // Adenda §8: declarado vs estimado CRUDO de la central. El declarado es
         // del titular: contra el co-arrendatario seria comparar dos personas.
         esCoarrendatario
@@ -876,6 +893,7 @@ export async function resolverResultadoEstudio(
         veredicto,
         salida,
         revisionManual: motivoRevision,
+        revisionIdentidad,
         apisFallidas,
       };
     }
@@ -910,6 +928,7 @@ export async function resolverResultadoEstudio(
       veredicto,
       salida,
       revisionManual: null,
+      revisionIdentidad: null,
       apisFallidas: [],
     };
   } catch (err) {

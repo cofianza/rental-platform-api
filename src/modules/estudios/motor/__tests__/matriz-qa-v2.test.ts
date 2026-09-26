@@ -79,9 +79,10 @@ vi.mock('@/modules/estudios/providers/factory', () => ({
   getAllProviderIds: vi.fn(() => ['transunion', 'datacredito']),
 }));
 vi.mock('@/modules/autorizaciones/ingreso-declarado', () => ({ contrasteIngresoProspecto: vi.fn(async () => null) }));
-vi.mock('@/modules/autorizaciones/biometria', () => ({
+// Sin biometria por defecto (el motivo real con null es null); Adenda 2 §9.3 la pone por caso.
+vi.mock('@/modules/autorizaciones/biometria', async (importOriginal) => ({
   leerBiometriaDeExpediente: vi.fn(async () => null),
-  requiereRevisionManualPorBiometria: () => null,
+  requiereRevisionManualPorBiometria: (await importOriginal<typeof import('@/modules/autorizaciones/biometria')>()).requiereRevisionManualPorBiometria,
 }));
 
 import type { EntradaSombra, SalidaSombra, CodigoVariable } from '../index';
@@ -93,6 +94,8 @@ import type { ProviderSolicitudInput } from '../../providers/types';
 import { ponderarConCoarrendatario, veredictoScorecard, type FilaScorecard } from '../../../coarrendatarios/ponderacion';
 import { calcularTarifas, masIva, pctDe, TARIFA_MENSUAL_PCT, viaPorRutaDeAprobacion } from '../../tarifas';
 import { CALIBRACION_DEFAULT as CAL } from '@/lib/calibracion';
+import { leerBiometriaDeExpediente, type ResumenBiometria } from '@/modules/autorizaciones/biometria';
+import { contrasteIngresoProspecto } from '@/modules/autorizaciones/ingreso-declarado';
 
 // ── Parametros vigentes (defaults del panel = los de la Adenda) ─────────────
 const U: UmbralesDecision = {
@@ -248,6 +251,7 @@ async function decidir(primaria: EntradaSombra, o: { scoreSecundario?: number; i
     salidaPrimaria,
     veredictoPrimario: res.veredicto,
     revisionManual: res.revisionManual,
+    revisionIdentidad: res.revisionIdentidad,
     providerInput: o.insumo || o.scoreSecundario !== undefined ? INSUMO : undefined,
     antecedentes: null,
     centralCaida: o.centralCaida ?? null,
@@ -293,6 +297,7 @@ function ponderar(r: Awaited<ReturnType<typeof decidir>>, coa: number | SalidaSo
     // el coarrendatario "evaluado con N puntos" de la matriz, por flujo automatico sin flags.
     titularSinFlags: r.traza?.sin_flags,
     coaSinFlags: typeof coa === 'number',
+    titularSinFlagsSinIdentidad: r.traza?.sin_flags_sin_identidad,
   });
   const combinado = ponderarConCoarrendatario({ titular: r.d.resultado, coaConReglaDura: false, scorecard: v?.resultado ?? null });
   return { v, combinado };
@@ -655,4 +660,66 @@ it('R2 — score 520, normalizado 27,1, coarrendatario 95: REVISION MANUAL y tra
   expect.soft(v?.conflicto, 'ponderacion: conflicto de reglas').toBe(CONFLICTO_REGLAS_R2);
   // Sin coarrendatario alto no hay conflicto que registrar.
   expect.soft(conCoarrendatario(r, { puntaje: 75, reglaDura: false }).motivo, 'coarrendatario 75: sin conflicto').not.toContain(CONFLICTO_REGLAS_R2);
+});
+
+// ============================================================================
+// Adenda 2 §9.3 y Decreto 1377/2013 art. 6 (decision 2026-09-25, punto 8) —
+// fuera de la matriz. La identidad (biometria omitida, bajo el umbral o sin
+// verificar) manda al analista, pero no cambia la ruta de tarifa.
+// ============================================================================
+describe('Adenda 2 §9.3: la identidad no cambia la tarifa', () => {
+  const PERFIL_A: PerfilDC = { score: 820, cuotaCop: pctAjustado(20), sectores: ['1'], mesesObservados: 24, maturationSince: MAS_8_ANIOS };
+  const conBiometria = (estado: ResumenBiometria['estado']) =>
+    vi.mocked(leerBiometriaDeExpediente).mockResolvedValueOnce({ estado, similitud: 62, umbral: 80, motivo: null } as ResumenBiometria);
+  /** Lo que leen el CRC y el contrato (viaDelEstudio) cuando el analista aprueba. */
+  const tarifa = (traza: TrazaCascada, o: { viaSinIdentidad?: unknown; coa?: boolean } = {}) =>
+    calcularTarifas({
+      via: viaPorRutaDeAprobacion({
+        aprobadoPorPonderacion: false,
+        viaMotor: traza.via,
+        viaSinIdentidad: o.viaSinIdentidad ?? traza.via_sin_identidad,
+        resultadoEstudio: traza.resultado,
+        conReporteDeCentral: true,
+      }),
+      conCoarrendatario: !!o.coa,
+      canonCop: pctAjustado(25),
+      ivaPct: CAL.TARIFA_IVA,
+    });
+
+  it.each(['omitida', 'no_coincide', 'no_verificada'] as const)('solo identidad (A = 100, biometria %s): al analista, tarifa 2,0 %%', async (estado) => {
+    conBiometria(estado);
+    const r = await decidir(dc(PERFIL_A, 25));
+    expect.soft(r.d.resultado, 'no aprueba sola').toBe('condicionado');
+    expect.soft(r.traza, 'traza').toMatchObject({ via: 'revision_manual', sin_flags: false, via_sin_identidad: 'automatica' });
+    expect.soft(tarifa(r.traza).tarifa_mensual_pct, 'tarifa').toBe(2.0);
+  });
+
+  it('identidad + otro motivo (contraste de ingreso, Adenda §8): 2,7 %', async () => {
+    conBiometria('omitida');
+    vi.mocked(contrasteIngresoProspecto).mockResolvedValueOnce('Revision manual (Adenda §8): el ingreso declarado difiere del estimado.');
+    const r = await decidir(dc(PERFIL_A, 25));
+    expect.soft(r.d.resultado, 'no aprueba sola').toBe('condicionado');
+    expect.soft(r.traza, 'traza').toMatchObject({ via: 'revision_manual', via_sin_identidad: 'revision_manual' });
+    expect.soft(tarifa(r.traza).tarifa_mensual_pct, 'tarifa').toBe(2.7);
+  });
+
+  it('sin biometria y zona gris (B = 78,1): la de la zona — 2,7 % solo; 2,5 % con coarrendatario 85, que igual decide el analista', async () => {
+    conBiometria('omitida');
+    const r = await decidir(dc(PERFIL_B, 30));
+    expect.soft(r.traza, 'traza').toMatchObject({ via: 'revision_manual', sin_flags: false, via_sin_identidad: 'revision_manual', sin_flags_sin_identidad: true });
+    expect.soft(tarifa(r.traza).tarifa_mensual_pct, 'sin coarrendatario').toBe(2.7);
+    const { v, combinado } = ponderar(r, 85);
+    expect.soft(combinado, 'la ponderacion no la aprueba sola').toBe('revision_manual');
+    expect.soft(v?.viaSinIdentidad, 'via sin identidad (va a la traza del titular)').toBe('condicionada_coarrendatario');
+    const t = tarifa(r.traza, { viaSinIdentidad: v?.viaSinIdentidad, coa: true });
+    expect.soft([t.tarifa_mensual_pct, t.prima_vinculacion_pct], 'tarifa y prima con coarrendatario').toEqual([2.5, 10]);
+  });
+
+  it('trazas sin la marca (estudios anteriores o sin identidad): sin cambio', async () => {
+    const r = await decidir(dc(PERFIL_B, 30));
+    expect.soft(r.traza.via_sin_identidad, 'sin identidad no hay marca').toBeNull();
+    expect.soft(viaPorRutaDeAprobacion({ aprobadoPorPonderacion: false, viaMotor: 'revision_manual', resultadoEstudio: 'condicionado', conReporteDeCentral: true })).toBe('revision_manual');
+    // La marca nunca sube de ruta un caso que el motor ya dio por automatico.
+    expect.soft(viaPorRutaDeAprobacion({ aprobadoPorPonderacion: false, viaMotor: 'automatica', viaSinIdentidad: 'revision_manual', resultadoEstudio: 'aprobado', conReporteDeCentral: true })).toBe('automatica');
+  });
 });

@@ -11,6 +11,11 @@ import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { enviarTemplate } from '../whatsapp';
 import { resolveContactoDueno, resolvePerfilCanonicoDeInmueble } from '@/lib/tenantScope';
 import type { RegisterSolicitanteInput } from './vitrina.schema';
+import { errorNoAfianzable, motivoNoAfianzable, type ArrendatarioDelTope } from '../inmuebles/destinacion';
+
+/** Fila minima del solicitante: el id y lo que decide si el estudio puede nacer. */
+type SolicitanteVitrina = { id: string } & ArrendatarioDelTope;
+const SOLICITANTE_VITRINA_FIELDS = 'id, tipo_persona, tipo_documento';
 
 // ------------------------------------------------------------------
 // registerSolicitante
@@ -230,7 +235,7 @@ export async function createInterest(
   // 1. Validate property exists, is public, and is available
   const { data: inmueble, error: inmuebleError } = await supabase
     .from('inmuebles')
-    .select('id, visible_vitrina, estado, inmobiliaria_id')
+    .select('id, visible_vitrina, estado, inmobiliaria_id, uso')
     .eq('id', propertyId)
     .single();
 
@@ -238,7 +243,7 @@ export async function createInterest(
     throw AppError.notFound('Inmueble no encontrado');
   }
 
-  const inmuebleData = inmueble as { id: string; visible_vitrina: boolean; estado: string; inmobiliaria_id: string | null };
+  const inmuebleData = inmueble as { id: string; visible_vitrina: boolean; estado: string; inmobiliaria_id: string | null; uso?: string | null };
 
   if (!inmuebleData.visible_vitrina) {
     throw AppError.badRequest('Este inmueble no esta disponible en la vitrina publica', 'PROPERTY_NOT_PUBLIC');
@@ -251,21 +256,27 @@ export async function createInterest(
   // 2. Find solicitante record by user ID. Si no existe (usuarios legacy
   //    creados cuando el INSERT era log-only), auto-heal construyendo el
   //    registro a partir de auth.users + perfiles para no bloquear el flujo.
-  let solicitanteData: { id: string } | null = null;
+  let solicitanteData: SolicitanteVitrina | null = null;
   {
     const { data: solicitante } = await (supabase
       .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-      .select('id')
+      .select(SOLICITANTE_VITRINA_FIELDS)
       .eq('creado_por', userId)
       .single();
     if (solicitante) {
-      solicitanteData = solicitante as { id: string };
+      solicitanteData = solicitante as SolicitanteVitrina;
     }
   }
 
   if (!solicitanteData) {
     solicitanteData = await selfHealSolicitante(userId);
   }
+
+  // 2b. Punto 3 (2026-09-25): sin contrato comercial ni de persona juridica en
+  //     la plataforma, el estudio no nace (misma regla que createExpediente,
+  //     ver tope-canon.guard.ts).
+  const motivo = motivoNoAfianzable(inmuebleData.uso, solicitanteData);
+  if (motivo) throw errorNoAfianzable(motivo);
 
   // 3. Bloquear duplicados por (inmueble_id, solicitante_id) en estados activos.
   //    Un solicitante puede explorar varios inmuebles distintos en paralelo,
@@ -435,7 +446,7 @@ export async function notificarPropietarioNuevaSolicitud(
  * Si falta información esencial (email, nombre), no se puede sanar y
  * lanzamos el error original para que el frontend lo muestre.
  */
-async function selfHealSolicitante(userId: string): Promise<{ id: string }> {
+async function selfHealSolicitante(userId: string): Promise<SolicitanteVitrina> {
   // Auth user → email + user_metadata.{nombre,apellido}
   const { data: authResult, error: authError } = await supabaseAuth.auth.admin.getUserById(userId);
   if (authError || !authResult?.user) {
@@ -484,7 +495,7 @@ async function selfHealSolicitante(userId: string): Promise<{ id: string }> {
       numero_documento: perfilData.numero_documento || '',
       creado_por: userId,
     } as never)
-    .select('id')
+    .select(SOLICITANTE_VITRINA_FIELDS)
     .single();
 
   if (insertError || !inserted) {
@@ -499,5 +510,5 @@ async function selfHealSolicitante(userId: string): Promise<{ id: string }> {
   }
 
   logger.info({ userId, solicitanteId: (inserted as { id: string }).id }, 'Self-heal: solicitante creado on-the-fly');
-  return inserted as { id: string };
+  return inserted as SolicitanteVitrina;
 }

@@ -53,7 +53,12 @@ import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { env } from '@/config/env';
 import { getCalibracion } from '@/lib/calibracion';
-import { topeCanonPara } from '../inmuebles/destinacion';
+import {
+  errorNoAfianzable,
+  motivoNoAfianzable,
+  topeCanonPara,
+  type ArrendatarioDelTope,
+} from '../inmuebles/destinacion';
 
 /** Codigo de dominio unico del tope. La web lo usa para el mensaje accionable. */
 export const CANON_EXCEDE_TOPE_ERROR_CODE = 'CANON_EXCEDE_TOPE';
@@ -302,11 +307,57 @@ function errorCanonNoLegible(
   );
 }
 
+// ============================================================
+// Contrato que la plataforma todavia no tiene -> el estudio no nace ni se cobra.
+//
+// Punto 3 de revisiones/respuestas-por-documento-2026-09-25.md, Flujo §4.4
+// ("ANTES de avanzar y de generar cualquier cobro"), Tecnico V3 §2.3, Tecnico
+// comercial §1.3 y nota QA V2 §6.4: mientras el contrato comercial y el de
+// persona juridica no existan en la plataforma, no se estudia (ni se cobra):
+//   - un inmueble comercial o mixto (la destinacion sale de inmuebles.uso,
+//     destinacion.ts). Mixto bloquea siempre (§1.3); comercial, hasta que
+//     DESTINOS.comercial se habilite (Fase 2).
+//   - un arrendatario persona juridica o identificado con NIT.
+// Aplica igual a inmobiliaria y a propietario directo (los dos canales usan el
+// contrato de vivienda). Vive aqui porque assertCanonDentroDelTope ya es el
+// punto por el que pasan TODOS los sitios previos al cobro; lo ya cobrado
+// (soloAdvertir) no se toca.
+// ============================================================
+
+/** Tipo de persona y documento del arrendatario. Mismo fail-closed que el canon. */
+async function leerArrendatarioDelTope(args: {
+  expedienteId?: string | null;
+  solicitanteId?: string | null;
+}): Promise<ArrendatarioDelTope | null> {
+  if (args.solicitanteId) {
+    const { data, error } = await (supabase
+      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('tipo_persona, tipo_documento')
+      .eq('id', args.solicitanteId)
+      .maybeSingle();
+    if (error) throw errorCanonNoLegible(error.message, args);
+    return (data as ArrendatarioDelTope | null) ?? null;
+  }
+  if (!args.expedienteId) return null;
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('solicitantes(tipo_persona, tipo_documento)')
+    .eq('id', args.expedienteId)
+    .maybeSingle();
+  if (error) throw errorCanonNoLegible(error.message, args);
+  return (data as { solicitantes?: ArrendatarioDelTope | null } | null)?.solicitantes ?? null;
+}
+
 export interface AssertTopeArgs {
   /** Se resuelve el inmueble del expediente. Excluyente con inmuebleId. */
   expedienteId?: string | null;
   /** Camino directo cuando el expediente aun no existe (crear desde inmueble). */
   inmuebleId?: string | null;
+  /**
+   * Arrendatario cuando el expediente aun no existe. Con expedienteId se lee
+   * el del expediente. El caller ya comprobo que es de su cartera.
+   */
+  solicitanteId?: string | null;
   /** Nombre del call site. Solo para el log — deja ver por donde entro. */
   origen: string;
   /**
@@ -338,7 +389,20 @@ export interface AssertTopeArgs {
 export async function assertCanonDentroDelTope(
   args: AssertTopeArgs,
 ): Promise<{ canonCop: number | null }> {
-  const inm = await leerInmuebleDelTope(args);
+  const [inm, arrendatario] = await Promise.all([
+    leerInmuebleDelTope(args),
+    args.soloAdvertir ? null : leerArrendatarioDelTope(args),
+  ]);
+  // Antes que el tope: sin contrato para este caso el estudio no corre nunca,
+  // y escalar su canon a la Gerencia no tendria objeto.
+  const motivo = args.soloAdvertir ? null : motivoNoAfianzable(inm?.uso, arrendatario);
+  if (motivo) {
+    logger.warn(
+      { origen: args.origen, expedienteId: args.expedienteId, inmuebleId: args.inmuebleId, motivo, uso: inm?.uso },
+      'Estudio bloqueado antes del cobro: la plataforma aun no tiene el contrato para este caso',
+    );
+    throw errorNoAfianzable(motivo);
+  }
   const { topeCop, clave } = topeCanonPara(inm?.uso, await getCalibracion());
   const veredicto = evaluarTopeCanon({ canonCop: inm?.valor_arriendo, topeCop });
 

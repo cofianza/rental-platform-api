@@ -620,6 +620,9 @@ describe('iniciarContrato', () => {
     const ev = opsDe('eventos_timeline', 'insert')[0].args[0] as { tipo: string; descripcion: string; metadata: Record<string, unknown> };
     expect(ev).toMatchObject({ tipo: 'pago', metadata: { contrato_id: CTO, anulados: 2 } });
     expect(ev.descripcion).toContain('Se anularon 2 enlaces de pago de garantía o primer canon');
+    // Punto 6 (2026-09-25): la prima no la cobra Cofianza al firmar; se causa y la recauda la inmobiliaria.
+    expect(ev.descripcion).toContain('la prima de vinculación se causa con la firma completa');
+    expect(ev.descripcion).not.toContain('se cobran cuando');
   });
 
   it('con un borrador vivo devuelve su estado sin reservar ni insertar', async () => {

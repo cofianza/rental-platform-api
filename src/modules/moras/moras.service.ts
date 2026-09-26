@@ -6,6 +6,10 @@
 //   fase_2 (Urgencia)      →   reportado_at + 4 días (auto o manual)
 //   fase_3 (Legal)         →   reportado_at + 10 días (auto o manual)
 //   pagada / cancelada     →   estados terminales
+//
+// La fase cambia en su día; el WhatsApp de la fase sale cuando lo permite la
+// Ley 2300 (horario y DIAS_ENTRE_COBROS_WHATSAPP días desde el anterior a la
+// misma persona): el de Fase 2 del día 4 sale el día 7.
 // ============================================================
 
 import { supabase } from '@/lib/supabase';
@@ -23,7 +27,7 @@ import {
 } from '@/lib/tenantScope';
 import { notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
-import { diaBogota, momentoDeCobro } from './horario-cobranza';
+import { DIAS_ENTRE_COBROS_WHATSAPP, diaBogota, momentoDeCobro } from './horario-cobranza';
 import { telefonoNormalizado } from '@/lib/telefono';
 import type {
   ReportarMoraInput,
@@ -87,7 +91,7 @@ const fechaHoraBogota = (iso: string) =>
 // notifica al inquilino» aunque no tuviera teléfono o Meta rechazara el envío.
 function avisoWhatsApp(r: ResultadoCobro): string {
   if (r.estado === 'programado') {
-    return `El WhatsApp al inquilino sale el ${fechaHoraBogota(r.programado_para!)}: fuera del horario de cobranza o ya tuvo una gestión hoy (Ley 2300 de 2023).`;
+    return `El WhatsApp al inquilino sale el ${fechaHoraBogota(r.programado_para!)}: fuera del horario de cobranza o sin ${DIAS_ENTRE_COBROS_WHATSAPP} días desde su último WhatsApp de cobro (Ley 2300 de 2023).`;
   }
   if (r.estado === 'retenido') {
     return 'El WhatsApp al inquilino quedó en espera por el horario de cobranza (Ley 2300 de 2023), pero el envío automático está apagado: no sale hasta que lo enciendan. Si es urgente, avísale por otro medio dentro del horario.';
@@ -142,11 +146,13 @@ function mensajeFase3(m: { inquilino_nombre: string; inmueble_direccion: string 
 }
 
 // ============================================================
-// WhatsApp de cobro (Ley 2300 de 2023): fuera de la franja, o si el deudor ya
-// tuvo una gestión hoy, queda en moras_tickets.whatsapp_programado_para y lo
-// manda su propio barrido (enviarCobrosProgramados, MORAS_COBROS_PROGRAMADOS_ENABLED),
-// sin perderse. La gestión del día se toma ANTES de enviar, en
-// moras_gestiones_diarias (llave única teléfono + día).
+// WhatsApp de cobro (Ley 2300 de 2023): fuera de la franja, o si no han pasado
+// DIAS_ENTRE_COBROS_WHATSAPP días desde el último WhatsApp de cobro a ese
+// teléfono, queda en moras_tickets.whatsapp_programado_para y lo manda su propio
+// barrido (enviarCobrosProgramados, MORAS_COBROS_PROGRAMADOS_ENABLED), sin
+// perderse. Cada WhatsApp de cobro deja su fila en moras_gestiones_diarias
+// (llave única teléfono + día, tomada ANTES de enviar): de ahí sale el último.
+// Es el registro del canal WhatsApp; otro canal (correo) no cuenta aquí.
 // ============================================================
 
 type FaseActiva = 'fase_1' | 'fase_2' | 'fase_3';
@@ -242,15 +248,35 @@ async function tomarGestionDelDia(
   return 'error';
 }
 
+/** Cuándo salió el último WhatsApp de cobro a ese teléfono (de cualquier mora). */
+async function ultimoCobroWhatsApp(telefono: string): Promise<Date | null | 'error'> {
+  const { data, error } = (await db('moras_gestiones_diarias')
+    .select('created_at')
+    .eq('telefono', telefonoNormalizado(telefono))
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()) as { data: { created_at: string } | null; error: { code?: string; message: string } | null };
+  if (faltaEnLaBase(error)) return null; // sin la tabla, como antes: la toma avisa
+  if (error) {
+    logger.error({ error: error.message }, 'No se pudo leer el último WhatsApp de cobro');
+    return 'error';
+  }
+  return data ? new Date(data.created_at) : null;
+}
+
 /**
- * WhatsApp de cobro de la fase actual: sale ya si cae en la franja y el deudor
- * no tuvo otra gestión hoy; si no, queda programado. Nunca lanza.
+ * WhatsApp de cobro de la fase actual: sale ya si cae en la franja y pasaron
+ * DIAS_ENTRE_COBROS_WHATSAPP días desde el último a ese teléfono; si no, queda
+ * programado para el primer momento permitido. Nunca lanza.
  */
 async function cobrarPorWhatsApp(m: MoraCobro, ahora = new Date()): Promise<ResultadoCobro> {
   // Sin teléfono no hay a quién escribirle: enviarCobro devuelve 'sin_telefono'.
   if (!m.inquilino_telefono) return { estado: await enviarCobro(m) };
 
-  let cuando = momentoDeCobro(ahora, null);
+  const ultimo = await ultimoCobroWhatsApp(m.inquilino_telefono);
+  // Sin saber cuándo fue el último no se arriesga un cobro de más.
+  if (ultimo === 'error') return { estado: 'fallido' };
+  let cuando = momentoDeCobro(ahora, ultimo);
   if (cuando <= ahora) {
     const gestion = await tomarGestionDelDia(m.inquilino_telefono, m.id, ahora);
     if (gestion === 'error') return { estado: 'fallido' };
@@ -259,7 +285,7 @@ async function cobrarPorWhatsApp(m: MoraCobro, ahora = new Date()): Promise<Resu
       await db('moras_tickets').update({ whatsapp_programado_para: null } as never).eq('id', m.id);
       return { estado: await enviarCobro(m) };
     }
-    cuando = momentoDeCobro(ahora, ahora); // ya tuvo su gestión hoy: mañana
+    cuando = momentoDeCobro(ahora, ahora); // otro le ganó hoy: cuenta desde ahora
   }
 
   const programado_para = cuando.toISOString();

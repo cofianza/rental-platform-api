@@ -26,6 +26,11 @@ export interface VeredictoScorecard {
   conflicto: string | null;
   puntajeTitular: number;
   puntajeCoa: number;
+  /**
+   * Adenda 2 §9.3: sin el motivo de identidad del titular esto se habria
+   * aprobado solo. Sigue al analista, pero la tarifa es la de esta via.
+   */
+  viaSinIdentidad?: 'condicionada_coarrendatario';
 }
 
 /** Lo que se lee de estudios_scorecard_sombra (construirFilaSombra). */
@@ -60,6 +65,8 @@ export function veredictoScorecard(e: {
    */
   titularSinFlags?: boolean;
   coaSinFlags?: boolean;
+  /** `sin_flags_sin_identidad` de la traza del titular (Adenda 2 §9.3). */
+  titularSinFlagsSinIdentidad?: boolean;
 }): VeredictoScorecard | null {
   const pT = puntajeDe(e.titular);
   const pC = puntajeDe(e.coa);
@@ -80,7 +87,12 @@ export function veredictoScorecard(e: {
     return v('sin_evaluar', r2 ? CONFLICTO_REGLAS_R2 : null);
   }
   const enZonaGris = pT >= u.zonaGris && pT < u.aprobacion;
-  if (enZonaGris && coaAprueba) return e.titularSinFlags && e.coaSinFlags ? v('aprobado') : v('sin_evaluar');
+  if (enZonaGris && coaAprueba) {
+    if (e.titularSinFlags && e.coaSinFlags) return v('aprobado');
+    return e.titularSinFlagsSinIdentidad && e.coaSinFlags
+      ? { ...v('sin_evaluar'), viaSinIdentidad: 'condicionada_coarrendatario' }
+      : v('sin_evaluar');
+  }
   // Caso O: < 70 no compensa. Entre 70 y el umbral sigue en revision manual.
   // Coarrendatario con score 450-599 (su revision obligatoria, sin Caso G):
   // conflicto sin definir -> revision manual marcada, como R2.

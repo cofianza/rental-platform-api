@@ -1379,6 +1379,7 @@ async function ponderarConScorecard(
     u: { zonaGris: cal.UMBRAL_ZONA_GRIS, aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA, coarrendatario: cal.UMBRAL_COARRENDATARIO },
     titularSinFlags: sinFlags(flags.titularCascada),
     coaSinFlags: flags.coaResultado === 'aprobado' || sinFlags(flags.coaCascada),
+    titularSinFlagsSinIdentidad: (flags.titularCascada as { sin_flags_sin_identidad?: unknown } | null)?.sin_flags_sin_identidad === true,
   });
   return veredicto ? { ...veredicto, umbral: cal.UMBRAL_COARRENDATARIO } : null;
 }
@@ -1503,6 +1504,15 @@ export async function onCoarrendatarioEstudioCompletado(
       logger.info({ expedienteId: est.expediente_id, ...ponderado }, 'Adenda §3: ponderacion titular/coarrendatario con el scorecard');
       scorecard = ponderado.resultado;
       conflictoReglas = ponderado.conflicto;
+      // Adenda 2 §9.3: sin el motivo de identidad se habria aprobado solo. Sigue
+      // al analista, pero la tarifa (viaDelEstudio) queda en la de esta via.
+      // ponytail: no se revierte si luego cambia el co-arrendatario (igual que el evento de ponderacion).
+      if (ponderado.viaSinIdentidad) {
+        const { error } = await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+          .update({ cascada: { ...(titular.cascada as object), via_sin_identidad: ponderado.viaSinIdentidad } } as never)
+          .eq('id', titular.id);
+        if (error) logger.warn({ estudioId: titular.id, error: error.message }, 'Adenda 2 §9.3: no se pudo marcar via_sin_identidad del titular');
+      }
     }
   }
   const resultadoCombinado = ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura, scorecard });

@@ -23,10 +23,11 @@ import { AUDIT_ACTIONS, AUDIT_ENTITIES, logAudit } from '@/lib/auditLog';
 import { cancelDocument, getDocumentRoadmap, getDocumentStatus, type AucoRoadmap } from '@/lib/auco';
 import { getCalibracion } from '@/lib/calibracion';
 import { logger } from '@/lib/logger';
+import { formatearPesos } from '@/lib/numerosEnLetras';
 import { supabase } from '@/lib/supabase';
 import { archivarPdfFirmadoEnStorage } from '@/modules/firma/firma.service';
 import { bloquearInmuebleOcupado } from '@/modules/inmuebles/inmuebles.service';
-import { enviarCorreoNotificacion } from '@/modules/notificaciones/notificaciones.service';
+import { enviarCorreoNotificacion, notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import { listOperators } from '@/modules/users/users.service';
 import type { EstadoSobreV3 } from '../asistente.types';
 import { fechaBogota } from '../formato';
@@ -134,8 +135,13 @@ interface ContratoCtx {
   datos_variables: {
     asistente?: { paso2?: { amoblado?: boolean }; paso3?: { fechaEntrega?: string } };
     documento?: {
-      entrada?: { inmueble?: { direccion?: string; municipio?: string } };
-      snapshot?: { estudio?: { fechaCompletado?: string | null }; crc?: { fechaVencimiento?: string | null } | null };
+      entrada?: { inmueble?: { direccion?: string; municipio?: string }; modalidad?: 'trasladada' | 'tradicional' };
+      snapshot?: {
+        estudio?: { fechaCompletado?: string | null };
+        crc?: { fechaVencimiento?: string | null } | null;
+        /** Las cifras de la vista previa, iguales a las del PDF final (enviar exige que no difiera). */
+        cop?: { primaIvaCop?: number };
+      };
       final?: { ruta?: 'A' | 'B'; firmasPropio?: FirmasPropio };
     };
   } | null;
@@ -384,10 +390,70 @@ export async function activarContrato(s: Sobre): Promise<void> {
     entidadId: c.id,
     detalle: { v3: true, auco_code: s.auco_code, fecha_activacion: s.cerrado_en, intento: s.intento },
   });
-  await db('contrato_v3_sobres')
+  const { data: marcado } = await db('contrato_v3_sobres')
     .update({ aviso_entregado_en: new Date().toISOString(), aviso_detalle: { destinatarios } } as never)
     .eq('id', s.id)
-    .is('aviso_entregado_en', null);
+    .is('aviso_entregado_en', null)
+    .select('id');
+  // Solo quien dejó la constancia avisa la prima: una curación en paralelo no la repite.
+  if ((marcado as unknown[] | null)?.length)
+    await avisarPrimaPorCobrar(c).catch((e) =>
+      logger.warn({ contratoId: c.id, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: aviso de prima por cobrar fallido'),
+    );
+}
+
+// ── Prima de vinculación por cobrar ──
+
+/** Titulares activos de la org y el responsable del estudio, si sigue activo. */
+async function titularesYResponsable(c: ContratoCtx): Promise<string[]> {
+  if (!c.orgId) return [];
+  const { data, error } = await db('inmobiliaria_miembros')
+    .select('perfil_id, rol_miembro')
+    .eq('inmobiliaria_id', c.orgId)
+    .eq('estado', 'activo')
+    .not('perfil_id', 'is', null);
+  if (error) falla('no se pudieron leer los titulares de la inmobiliaria', error);
+  const miembros = (data as { perfil_id: string; rol_miembro: string }[] | null) ?? [];
+  return [...new Set(miembros.filter((m) => m.rol_miembro === 'owner' || m.perfil_id === c.responsableId).map((m) => m.perfil_id))];
+}
+
+/**
+ * Con la fianza activa la prima de vinculación queda causada y es cuenta por
+ * cobrar (Técnico V3 §11.7.1; Anexo, Décima Tercera). Trasladada: la paga el
+ * arrendatario y la recauda la inmobiliaria por cuenta de Cofianza (Anexo,
+ * Décima Primera); Tradicional: la asume la inmobiliaria. Solo avisa: no crea
+ * cobros, enlaces ni facturas. El monto es el del contrato firmado.
+ */
+async function avisarPrimaPorCobrar(c: ContratoCtx): Promise<void> {
+  const doc = c.datos_variables?.documento;
+  const prima = doc?.snapshot?.cop?.primaIvaCop;
+  const tradicional = doc?.entrada?.modalidad === 'tradicional';
+  const monto = typeof prima === 'number' ? `$${formatearPesos(prima)} (IVA incluido)` : 'el valor pactado en el contrato';
+  const causada = `Con la firma completa del contrato ${c.numero} quedó causada la prima de vinculación: ${monto}.`;
+  const quien = tradicional
+    ? 'Modalidad Tradicional: la asume la inmobiliaria.'
+    : 'Modalidad Trasladada: la paga el arrendatario y la recauda la inmobiliaria por cuenta de Cofianza.';
+  const payload = { contrato_id: c.id, prima_iva_cop: prima ?? null, modalidad: tradicional ? 'tradicional' : 'trasladada' };
+  const aviso = (titulo: string, mensaje: string) => ({ tipo: 'contrato.prima_por_cobrar', titulo, mensaje, link: linkAsistente(c), payload });
+  const avisoInmo = aviso(
+    `Prima de vinculación por cobrar — contrato ${c.numero}`,
+    `${causada} ${tradicional ? 'En la modalidad Tradicional está a cargo de la inmobiliaria.' : 'En la modalidad Trasladada la paga el arrendatario: recáudela del arrendatario y remítala a Cofianza.'}`,
+  );
+  const fallo = (a: string) => (e: unknown) =>
+    logger.warn({ contratoId: c.id, error: e instanceof Error ? e.message : String(e) }, `Firma V3: prima por cobrar sin avisar a ${a}`);
+
+  await timeline(c.expediente_id, `Prima de vinculación por cobrar — contrato ${c.numero}. ${causada} ${quien}`, { ...payload, prima: 'por_cobrar' });
+  await titularesYResponsable(c)
+    .then(async (ids) => {
+      for (const userId of ids) {
+        await notificarUsuario({ userId, ...avisoInmo });
+        await enviarCorreoNotificacion({ userId, ...avisoInmo });
+      }
+    })
+    .catch(fallo('la inmobiliaria'));
+  await listOperators()
+    .then((ops) => notificar(ops.map((o) => o.id), aviso(`Prima por cobrar — contrato ${c.numero}`, `${causada} Es cuenta por cobrar. ${quien}`)))
+    .catch(fallo('Cofianza'));
 }
 
 // ── FIRMA INCOMPLETA ──

@@ -760,7 +760,7 @@ export async function iniciarContrato(
   const { cancelarPagosPendientesDeExpediente } = await import('@/modules/pagos/pagos.service');
   const anulados = await cancelarPagosPendientesDeExpediente(
     expedienteId,
-    'Contrato iniciado: la garantía y el primer canon se cobran cuando firmen todas las partes',
+    'Contrato iniciado: la garantía y el primer canon no se cobran antes de que firmen todas las partes',
     ['garantia', 'primer_canon'],
   );
   if (anulados)
@@ -770,7 +770,8 @@ export async function iniciarContrato(
         tipo: 'pago',
         descripcion:
           `${anulados === 1 ? 'Se anuló 1 enlace de pago' : `Se anularon ${anulados} enlaces de pago`} de garantía o ` +
-          `primer canon: se cobran cuando todas las partes firmen el contrato ${fila.numero}`,
+          `primer canon: la prima de vinculación se causa con la firma completa del contrato ${fila.numero} ` +
+          'y la recauda la inmobiliaria (en la modalidad Tradicional, la asume ella)',
         usuario_id: userId,
         metadata: { contrato_id: fila.id, anulados },
       } as never),

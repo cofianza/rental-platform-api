@@ -650,6 +650,7 @@ export async function viaDelEstudio(e: {
   return viaPorRutaDeAprobacion({
     aprobadoPorPonderacion: Array.isArray(ponderacion) && ponderacion.length > 0,
     viaMotor: cascada?.via ?? null,
+    viaSinIdentidad: cascada?.via_sin_identidad ?? null,
     resultadoEstudio: e.resultado,
     conReporteDeCentral: !!e.referencia_proveedor,
   });

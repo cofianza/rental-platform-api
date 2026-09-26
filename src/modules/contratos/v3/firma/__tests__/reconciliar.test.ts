@@ -904,6 +904,77 @@ describe('activación: §12.1', () => {
   });
 });
 
+describe('activación: prima de vinculación por cobrar (punto 6, 2026-09-25)', () => {
+  const conPrima = (modalidad: 'trasladada' | 'tradicional') =>
+    contrato({
+      datos_variables: {
+        documento: {
+          entrada: { inmueble: { direccion: 'Calle 1' }, modalidad },
+          snapshot: { estudio: { fechaCompletado: HOY }, cop: { primaCop: 60000, primaIvaCop: 71400 } },
+          final: { ruta: 'A' },
+        },
+      },
+    });
+  const activar = async (modalidad: 'trasladada' | 'tradicional', constancia: unknown = [{ id: 's1' }]) => {
+    enqueue('contrato_v3_sobres', ok(sobre({ estado: 'completo', cerrado_en: '2026-09-21T15:30:00.000Z' })), ok(constancia));
+    enqueue('contratos', ok(conPrima(modalidad)), ok(null));
+    enqueue('expedientes', EXPEDIENTE);
+    org();
+    enqueue('inmobiliaria_miembros', ok(MIEMBROS)); // titulares y responsable
+    await reconciliarSobre('s1');
+  };
+  const inmo = () => tabla('efecto', 'notificar').map((o) => o.args[0] as { userId: string; tipo: string; titulo: string; mensaje: string });
+  const cofianza = () =>
+    tabla('notificaciones', 'insert')
+      .flatMap((o) => o.args[0] as Array<{ user_id: string; tipo: string; titulo: string; mensaje: string }>)
+      .filter((n) => n.tipo === 'contrato.prima_por_cobrar');
+
+  it('Trasladada: avisa a titular y responsable (in-app y correo) con la prima con IVA del contrato, que la recauden y la remitan', async () => {
+    await activar('trasladada');
+    expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(1);
+    expect(inmo().map((n) => n.userId)).toEqual(['m1', 'm2']); // ni m3 ni quien envió
+    expect(tabla('efecto', 'correo').map((o) => (o.args[0] as { userId: string }).userId)).toEqual(['m1', 'm2']);
+    const [n] = inmo();
+    expect(n).toMatchObject({ tipo: 'contrato.prima_por_cobrar', titulo: 'Prima de vinculación por cobrar — contrato CTO-2026-0001' });
+    expect(n.mensaje).toContain('$71.400 (IVA incluido)');
+    expect(n.mensaje).toContain('recáudela del arrendatario y remítala a Cofianza');
+    // Cofianza: administradores y operadores
+    const c = cofianza();
+    expect(c.map((x) => x.user_id)).toEqual(['op1', 'ad1']);
+    expect(c[0].titulo).toBe('Prima por cobrar — contrato CTO-2026-0001');
+    expect(c[0].mensaje).toContain('la recauda la inmobiliaria por cuenta de Cofianza');
+    // línea de tiempo del estudio
+    const ev = tabla('eventos_timeline', 'insert').map((o) => o.args[0] as { descripcion: string; metadata: Record<string, unknown> });
+    expect(ev.find((e) => e.metadata.prima === 'por_cobrar')).toMatchObject({
+      metadata: { contrato_id: 'c1', prima_iva_cop: 71400, modalidad: 'trasladada' },
+    });
+    // Solo avisa: ni cobros, ni enlaces, ni facturas.
+    expect(ops.some((o) => ['pagos', 'facturas'].includes(o.table))).toBe(false);
+    expect(efectos.cancelarPagos).not.toHaveBeenCalled();
+  });
+
+  it('Tradicional: dice que está a cargo de la inmobiliaria', async () => {
+    await activar('tradicional');
+    expect(inmo()[0].mensaje).toContain('En la modalidad Tradicional está a cargo de la inmobiliaria.');
+    expect(inmo()[0].mensaje).not.toContain('recáudela');
+    expect(cofianza()[0].mensaje).toContain('Modalidad Tradicional: la asume la inmobiliaria.');
+  });
+
+  it('si otro proceso ya dejó la constancia de la activación, no repite el aviso de la prima', async () => {
+    await activar('trasladada', []);
+    expect(inmo()).toEqual([]);
+    expect(cofianza()).toEqual([]);
+  });
+
+  it('si falla el aviso a Cofianza, la activación queda igual y la inmobiliaria sí recibe el suyo', async () => {
+    efectos.listOperators.mockRejectedValueOnce(new Error('perfiles caído'));
+    await activar('trasladada');
+    expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(1);
+    expect(inmo().map((n) => n.userId)).toEqual(['m1', 'm2']);
+    expect(cofianza()).toEqual([]);
+  });
+});
+
 // ── Adenda 1 del módulo de contratos: prórroga (respuesta 10) y acuse (respuesta 11) ──
 
 const ADENDA = { plazo_prorrogado_en: null, auco_expira_en: null, aviso_aceptado_en: null, aviso_aceptado_detalle: null };

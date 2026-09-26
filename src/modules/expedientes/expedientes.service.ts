@@ -444,18 +444,25 @@ export async function createExpediente(
     );
   }
 
-  // 1d. Flujo §4.4: el tope de canon detiene el flujo en el Paso 1, ANTES de
-  //     crear nada. Sin esto el expediente nacía igual y el tope recién
-  //     saltaba al habilitar el estudio, con un expediente huérfano de por
-  //     medio. Lanza CANON_EXCEDE_TOPE (400) con el mensaje accionable.
-  await assertCanonDentroDelTope({ inmuebleId: input.inmueble_id, origen: 'createExpediente' });
-
   // 2. El solicitante tiene que existir Y ser de SU cartera (mismo scope que la
   //    lista y el detalle de solicitantes). Antes bastaba con que existiera: con
   //    el UUID de un cliente de otra agencia, el estudio nacia en la cartera
   //    propia, mostraba su documento, correo y telefono, y le mandaba el habeas
   //    data a nombre de una agencia a la que nunca le pidio nada. 404 si es ajeno.
   await getApplicantById(input.solicitante_id, createdBy, userRol);
+
+  // 3. Flujo §4.4: el tope de canon detiene el flujo en el Paso 1, ANTES de
+  //    crear nada. Sin esto el expediente nacía igual y el tope recién
+  //    saltaba al habilitar el estudio, con un expediente huérfano de por
+  //    medio. Lanza CANON_EXCEDE_TOPE (400) con el mensaje accionable, o
+  //    ESTUDIO_NO_AFIANZABLE (409) si el inmueble es comercial/mixto o el
+  //    arrendatario es persona jurídica/NIT. Va después del scope del
+  //    solicitante: su tipo de persona no se revela a una cartera ajena.
+  await assertCanonDentroDelTope({
+    inmuebleId: input.inmueble_id,
+    solicitanteId: input.solicitante_id,
+    origen: 'createExpediente',
+  });
 
   // 4. Validar analista (si se proporciona)
   if (input.analista_id) {

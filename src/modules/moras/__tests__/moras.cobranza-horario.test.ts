@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Ley 2300 de 2023: el WhatsApp de cobro fuera de la franja (L-V 7-19, sáb
-// 8-15, sin domingos ni festivos) o con otra gestión ese día al mismo deudor
-// queda programado —no se pierde— y lo manda su propio barrido. La gestión del
-// día se toma ANTES de enviar (moras_gestiones_diarias, llave teléfono + día).
+// 8-15, sin domingos ni festivos) o antes de 7 días desde el último WhatsApp de
+// cobro a ese teléfono queda programado —no se pierde— y lo manda su propio
+// barrido. La gestión se toma ANTES de enviar (moras_gestiones_diarias, llave
+// teléfono + día); de ahí se lee el último.
 // Mismo mock de Supabase con colas por tabla que el resto de moras.
 // ============================================================
 
@@ -130,15 +131,18 @@ describe('reportarMora — horario de cobranza', () => {
     expect(mensajes()[0].via_whatsapp).toBe(true);
   });
 
-  it('si el deudor ya tuvo su gestión hoy (llave repetida), sale al día siguiente', async () => {
+  it('si otro envío le ganó hoy (llave repetida), sale a los 7 días', async () => {
     vi.setSystemTime(co('2026-09-29T10:00'));
     prepararReporte();
-    enqueue('moras_gestiones_diarias', { error: { code: '23505', message: 'duplicate key' } });
+    enqueue('moras_gestiones_diarias',
+      { data: null, error: null }, // último WhatsApp: ninguno al leer
+      { error: { code: '23505', message: 'duplicate key' } }, // pero otro lo tomó hoy
+    );
 
     const r = await reportarMora(INPUT as never, 'u1', 'inmobiliaria');
 
     expect(mockEnviarTemplate).not.toHaveBeenCalled();
-    expect(r).toMatchObject({ whatsapp_estado: 'programado', whatsapp_programado_para: co('2026-09-30T07:00').toISOString() });
+    expect(r).toMatchObject({ whatsapp_estado: 'programado', whatsapp_programado_para: co('2026-10-06T10:00').toISOString() });
   });
 
   it('sin la columna (migración sin correr) no se pierde: sale ya', async () => {
@@ -204,16 +208,16 @@ describe('enviarCobrosProgramados — el barrido de la Ley 2300', () => {
     expect(mensajes()[0].mensaje).toContain('Se envió el WhatsApp');
   });
 
-  it('si el deudor ya tuvo su gestión hoy, lo corre a mañana sin enviar', async () => {
+  it('si otro envío le ganó hoy, lo corre 7 días sin enviar', async () => {
     vi.setSystemTime(co('2026-09-28T07:30'));
     prepararBarrido({ data: [{ id: 'm1' }], error: null });
-    enqueue('moras_gestiones_diarias', { error: { code: '23505', message: 'duplicate key' } });
+    enqueue('moras_gestiones_diarias', { data: null, error: null }, { error: { code: '23505', message: 'duplicate key' } });
 
     await expect(enviarCobrosProgramados()).resolves.toBe(0);
 
     expect(mockEnviarTemplate).not.toHaveBeenCalled();
-    // Se toma con una reserva de 30 min (no null) y luego se corre a mañana.
-    expect(updatesCola()).toEqual([co('2026-09-28T08:00').toISOString(), co('2026-09-29T07:00').toISOString()]);
+    // Se toma con una reserva de 30 min (no null) y luego se corre 7 días.
+    expect(updatesCola()).toEqual([co('2026-09-28T08:00').toISOString(), co('2026-10-05T07:30').toISOString()]);
     expect(mensajes()).toEqual([]);
   });
 
@@ -312,5 +316,96 @@ describe('autoEscalar — el WhatsApp de Fase 2', () => {
     await autoEscalar();
 
     expect(mockNotificar).toHaveBeenCalledWith(expect.objectContaining({ userId: 'op1', tipo: 'mora.whatsapp_fallido' }));
+  });
+});
+
+describe('Ley 2300 — 7 días entre dos WhatsApp de cobro a la misma persona', () => {
+  const ultimoCobro = (fechaHora: string) =>
+    enqueue('moras_gestiones_diarias', { data: { created_at: co(fechaHora).toISOString() }, error: null });
+  const enFase1 = {
+    id: 'm1', ticket_numero: 'MOR-m1', expediente_id: 'exp1', inquilino_telefono: '3001112233', inquilino_nombre: 'Ana Pérez',
+    inmueble_direccion: 'Cra 7', monto_mora: 1_500_000, reportado_at: co('2026-09-21T10:00').toISOString(),
+    fecha_vencimiento_canon: '2026-09-05',
+  };
+
+  it('la Fase 2 cambia el día 4, pero su WhatsApp queda programado para el día 7', async () => {
+    vi.setSystemTime(co('2026-09-25T10:00')); // día 4 (viernes); la Fase 1 salió el lunes 21 a las 10
+    enqueue('moras_tickets',
+      { data: [enFase1], error: null }, // en fase_1 con 4 días
+      { data: [{ id: 'm1' }], error: null }, // → fase_2
+      { data: null, error: null }, // se programa
+      { data: [], error: null }, // nada en fase_2
+    );
+    ultimoCobro('2026-09-21T10:00');
+
+    await expect(autoEscalar()).resolves.toEqual({ aFase2: 1, aFase3: 0 });
+
+    const cambio = ops.find((o) => o.table === 'moras_tickets' && o.method === 'update');
+    expect(cambio?.args[0]).toMatchObject({ estado: 'fase_2' }); // la fase no espera
+    expect(mockEnviarTemplate).not.toHaveBeenCalled();
+    expect(gestiones()).toEqual([]);
+    expect(updatesCola().at(-1)).toBe(co('2026-09-28T10:00').toISOString()); // lunes 28 = día 7
+    expect(mensajes()[0].via_whatsapp).toBe(false);
+    expect(mensajes()[0].mensaje).toContain('sin 7 días desde su último WhatsApp de cobro');
+  });
+
+  it('el barrido lo manda el día 7, con la plantilla de la fase', async () => {
+    vi.setSystemTime(co('2026-09-28T10:15'));
+    enqueue('moras_tickets',
+      { data: [{ ...enFase1, estado: 'fase_2', whatsapp_programado_para: co('2026-09-28T10:00').toISOString() }], error: null },
+      { data: [{ id: 'm1' }], error: null }, // tomar la fila
+    );
+    ultimoCobro('2026-09-21T10:00');
+
+    await expect(enviarCobrosProgramados()).resolves.toBe(1);
+
+    expect(mockEnviarTemplate.mock.calls[0][0]).toMatchObject({ template: 'MORA_FASE_2' });
+    expect(gestiones()).toEqual([{ telefono: '573001112233', dia: '2026-09-28', mora_id: 'm1' }]);
+  });
+
+  it('si el séptimo día es festivo, sale el siguiente día hábil en la franja', async () => {
+    vi.setSystemTime(co('2026-10-08T10:00'));
+    prepararReporte();
+    ultimoCobro('2026-10-05T10:00'); // lunes; el lunes 12-oct es festivo
+
+    const r = await reportarMora(INPUT as never, 'u1', 'inmobiliaria');
+
+    expect(mockEnviarTemplate).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ whatsapp_estado: 'programado', whatsapp_programado_para: co('2026-10-13T07:00').toISOString() });
+  });
+
+  it('cuenta el último WhatsApp a ese teléfono aunque sea de otra mora, y solo el de ese canal', async () => {
+    vi.setSystemTime(co('2026-09-29T10:00'));
+    prepararReporte();
+    ultimoCobro('2026-09-26T09:00'); // otra mora del mismo inquilino, hace 3 días
+
+    const r = await reportarMora(INPUT as never, 'u1', 'inmobiliaria');
+
+    expect(r).toMatchObject({ whatsapp_estado: 'programado', whatsapp_programado_para: co('2026-10-03T09:00').toISOString() });
+    // La consulta va por el teléfono (WhatsApp), no por la mora ni por el correo.
+    const filtros = ops.filter((o) => o.table === 'moras_gestiones_diarias' && o.method === 'eq').map((o) => o.args);
+    expect(filtros).toEqual([['telefono', '573001112233']]);
+  });
+
+  it('pasados los 7 días sale ya', async () => {
+    vi.setSystemTime(co('2026-09-29T10:00'));
+    prepararReporte();
+    ultimoCobro('2026-09-22T09:59');
+
+    const r = await reportarMora(INPUT as never, 'u1', 'inmobiliaria');
+
+    expect(mockEnviarTemplate).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ whatsapp_estado: 'aceptado' });
+  });
+
+  it('si no puede leer el último WhatsApp, no lo manda', async () => {
+    vi.setSystemTime(co('2026-09-29T10:00'));
+    prepararReporte({ data: { id: 'm1' }, error: null }); // no se toca la cola: ese turno lo lee getMoraById
+    enqueue('moras_gestiones_diarias', { data: null, error: { message: 'TypeError: fetch failed' } });
+
+    const r = await reportarMora(INPUT as never, 'u1', 'inmobiliaria');
+
+    expect(mockEnviarTemplate).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ whatsapp_estado: 'fallido' });
   });
 });

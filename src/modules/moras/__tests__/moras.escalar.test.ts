@@ -16,7 +16,7 @@ const { mockFrom, ops, enqueue, resetQueues, mockEnviarTemplate } = vi.hoisted((
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null, count: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'in', 'order', 'range'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'eq', 'in', 'order', 'range', 'limit'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {

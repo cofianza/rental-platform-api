@@ -1,17 +1,25 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Fila que devuelve la lectura del inmueble (select/eq encadenan, maybeSingle resuelve).
 // Desde el estudio, primero se lee su inmueble_id.
-const { fila, mockFrom } = vi.hoisted(() => {
+// `arrendatario` es el solicitante: directo (solicitanteId) o embebido en el expediente.
+const { fila, arrendatario, mockFrom } = vi.hoisted(() => {
   const fila: { current: unknown } = { current: null };
+  const arrendatario: { current: unknown } = { current: null };
   const chainFor = (t: string) => {
     const chain: Record<string, unknown> = {};
     chain.select = () => chain;
     chain.eq = () => chain;
-    chain.maybeSingle = async () => ({ data: t === 'expedientes' ? { inmueble_id: 'inm-1' } : fila.current, error: null });
+    chain.maybeSingle = async () => ({
+      data:
+        t === 'expedientes' ? { inmueble_id: 'inm-1', solicitantes: arrendatario.current }
+        : t === 'solicitantes' ? arrendatario.current
+        : fila.current,
+      error: null,
+    });
     return chain;
   };
-  return { fila, mockFrom: vi.fn((t: string) => chainFor(t)) };
+  return { fila, arrendatario, mockFrom: vi.fn((t: string) => chainFor(t)) };
 });
 
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
@@ -31,6 +39,11 @@ import {
   CANON_EXCEDE_TOPE_ERROR_CODE,
   CODIGO_POLITICA_TOPE_CANON,
 } from '../tope-canon.guard';
+import { motivoNoAfianzable } from '../../inmuebles/destinacion';
+
+beforeEach(() => {
+  arrendatario.current = { tipo_persona: 'natural', tipo_documento: 'cc' };
+});
 
 // ============================================================
 // Politica V4.1 §6 llama a esta salida CANON_MAX_TRANSITORIO. El errorCode de
@@ -64,16 +77,16 @@ describe('tope de canon — codigo de la Politica §6', () => {
 
 // ============================================================
 // Contratos V3, Fase 1: el tope por destinacion esta cableado, pero mientras
-// el comercial no se habilite todo inmueble usa el de vivienda.
+// el comercial no se habilite todo inmueble usa el de vivienda. Solo se ve en
+// lo ya cobrado: lo nuevo comercial ni siquiera nace (punto 3, abajo).
 // ============================================================
 
 describe('assertCanonDentroDelTope — tope por destinacion', () => {
-  it('Fase 1: un comercial de 3.500.000 se bloquea con el tope de vivienda', async () => {
+  it('Fase 1: un comercial ya cobrado se contrasta con el tope de vivienda (solo advierte)', async () => {
     fila.current = { valor_arriendo: 3_500_000, uso: 'comercial' };
-    await expect(assertCanonDentroDelTope({ inmuebleId: 'inm-1', origen: 'test' })).rejects.toMatchObject({
-      errorCode: 'CANON_EXCEDE_TOPE',
-      details: { codigo_politica: 'CANON_MAX_TRANSITORIO', tope_cop: 3_000_000 },
-    });
+    await expect(
+      assertCanonDentroDelTope({ inmuebleId: 'inm-1', origen: 'test', soloAdvertir: true }),
+    ).resolves.toEqual({ canonCop: 3_500_000 });
     expect(mockFrom).toHaveBeenCalledWith('inmuebles');
   });
 
@@ -119,5 +132,77 @@ describe('assertCanonDentroDelTope — escalamiento a la Gerencia General', () =
       assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'solicitarReEvaluacion', soloAdvertir: true }),
     ).resolves.toEqual({ canonCop: 3_500_000 });
     expect(mockEscalar).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================
+// Punto 3 (respuestas-por-documento-2026-09-25): sin contrato comercial ni de
+// persona juridica en la plataforma, el estudio no nace ni se cobra.
+// ============================================================
+
+describe('motivoNoAfianzable — regla pura', () => {
+  it('vivienda con persona natural pasa', () => {
+    expect(motivoNoAfianzable('vivienda', { tipo_persona: 'natural', tipo_documento: 'cc' })).toBeNull();
+    expect(motivoNoAfianzable('vivienda', null)).toBeNull();
+  });
+
+  it('comercial, local_comercial y mixto: destinacion', () => {
+    for (const uso of ['comercial', 'local_comercial', 'mixto']) {
+      expect(motivoNoAfianzable(uso, { tipo_persona: 'natural', tipo_documento: 'cc' })).toBe('destinacion');
+    }
+  });
+
+  it('persona juridica o NIT (en cualquier caja): persona_juridica', () => {
+    expect(motivoNoAfianzable('vivienda', { tipo_persona: 'juridica', tipo_documento: 'cc' })).toBe('persona_juridica');
+    expect(motivoNoAfianzable('vivienda', { tipo_persona: 'natural', tipo_documento: 'nit' })).toBe('persona_juridica');
+    expect(motivoNoAfianzable('vivienda', { tipo_persona: null, tipo_documento: 'NIT' })).toBe('persona_juridica');
+  });
+
+  it('uso desconocido no bloquea (la regla es comercial o mixto)', () => {
+    expect(motivoNoAfianzable(null, null)).toBeNull();
+  });
+});
+
+describe('assertCanonDentroDelTope — estudio no afianzable', () => {
+  it('mixto: 409 antes del tope, sin escalar, y el mensaje dice que no se cobra', async () => {
+    mockEscalar.mockClear();
+    fila.current = { valor_arriendo: 3_500_000, uso: 'mixto' };
+    const e = await assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'habilitarEstudio' }).catch((x: unknown) => x);
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE', details: { motivo: 'destinacion' } });
+    expect((e as Error).message).toContain('uso comercial o mixto');
+    expect((e as Error).message).toContain('no se cobra el estudio');
+    expect((e as Error).message).toContain('hola@cofianza.co');
+    expect(mockEscalar).not.toHaveBeenCalled();
+  });
+
+  it('NIT del expediente: 409 persona_juridica', async () => {
+    fila.current = { valor_arriendo: 2_000_000, uso: 'vivienda' };
+    arrendatario.current = { tipo_persona: 'natural', tipo_documento: 'nit' };
+    await expect(assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'pagarGestor' })).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'ESTUDIO_NO_AFIANZABLE',
+      details: { motivo: 'persona_juridica' },
+    });
+  });
+
+  it('crear desde el inmueble: lee el solicitante que le pasan', async () => {
+    mockFrom.mockClear();
+    fila.current = { valor_arriendo: 2_000_000, uso: 'vivienda' };
+    arrendatario.current = { tipo_persona: 'juridica', tipo_documento: 'nit' };
+    await expect(
+      assertCanonDentroDelTope({ inmuebleId: 'inm-1', solicitanteId: 'sol-1', origen: 'createExpediente' }),
+    ).rejects.toMatchObject({ errorCode: 'ESTUDIO_NO_AFIANZABLE' });
+    expect(mockFrom).toHaveBeenCalledWith('solicitantes');
+  });
+
+  it('ya cobrado (soloAdvertir): no se toca, ni se lee el solicitante', async () => {
+    mockFrom.mockClear();
+    fila.current = { valor_arriendo: 2_000_000, uso: 'comercial' };
+    arrendatario.current = { tipo_persona: 'juridica', tipo_documento: 'nit' };
+    await expect(
+      assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'solicitarReEvaluacion', soloAdvertir: true }),
+    ).resolves.toEqual({ canonCop: 2_000_000 });
+    // Una sola lectura del expediente (la del inmueble): la del solicitante no corre.
+    expect(mockFrom.mock.calls.filter(([t]) => t === 'expedientes')).toHaveLength(1);
   });
 });

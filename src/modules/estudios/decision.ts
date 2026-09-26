@@ -145,14 +145,30 @@ export interface EntradaDecision {
   coarrendatario?: { puntaje: number | null; reglaDura: boolean; scoreEnBandaRevision?: boolean } | null;
   /** §14 / §16.5 / §8: motivos que impiden la aprobacion automatica. */
   motivosRevision: readonly string[];
+  /**
+   * Adenda 2 §9.3: el motivo de identidad (ResolucionEstudio.revisionIdentidad),
+   * que ya viene DENTRO de motivosRevision. Manda a revision igual; solo sirve
+   * para calcular `viaSinIdentidad`.
+   */
+  motivoIdentidad?: string | null;
 }
+
+type Via = 'automatica' | 'condicionada_coarrendatario' | 'revision_manual';
 
 export interface Decision {
   resultado: ResultadoDecidido;
   /** Para el gestor: la regla que decidio, con cifras. */
   motivo: string;
   /** Fila de la tabla de tarifas (Adenda §5). */
-  via: 'automatica' | 'condicionada_coarrendatario' | 'revision_manual' | null;
+  via: Via | null;
+  /**
+   * Adenda 2 §9.3 ("sin penalizacion alguna"): la via que habria tenido sin el
+   * motivo de identidad. Solo cuando la identidad fue motivo de revision. Es
+   * la que lee la tarifa (viaPorRutaDeAprobacion) si el analista aprueba.
+   */
+  viaSinIdentidad?: Via;
+  /** Sin el motivo de identidad habria sido `sinFlags` (lo lee la ponderacion). */
+  sinFlagsSinIdentidad?: true;
   /**
    * Decidido solo por el puntaje (pasos 6-7): sin regla dura, sin revision
    * obligatoria (§3.1 / Caso G) ni motivos §14/§15/§8. Va a la traza
@@ -164,8 +180,25 @@ export interface Decision {
 
 /**
  * Adenda §3 + Politica §3.1/§14 sobre la corrida FINAL. Orden = jerarquia.
+ *
+ * Adenda 2 §9.3 y Decreto 1377/2013 art. 6: la identidad (biometria omitida,
+ * bajo el umbral o sin verificar) manda al analista —nunca aprueba sola—, pero
+ * no cambia la ruta de tarifa: se decide otra vez sin ese motivo y la via que
+ * sale queda en `viaSinIdentidad` (si esa decision es un rechazo, lo que
+ * apruebe el analista es revision manual de verdad).
  */
 export function decidirResultado(e: EntradaDecision): Decision {
+  const d = decidirPorJerarquia(e);
+  const id = e.motivoIdentidad;
+  if (!id || d.via !== 'revision_manual') return d;
+  const sin = decidirPorJerarquia({
+    ...e,
+    motivosRevision: e.motivosRevision.map((m) => m.replace(id, '').replace(/\s{2,}/g, ' ').trim()).filter(Boolean),
+  });
+  return { ...d, viaSinIdentidad: sin.via ?? 'revision_manual', ...(sin.sinFlags ? { sinFlagsSinIdentidad: true as const } : {}) };
+}
+
+function decidirPorJerarquia(e: EntradaDecision): Decision {
   const { salida, u } = e;
   const p = salida.puntaje_normalizado;
 
@@ -309,6 +342,10 @@ export function construirTrazaCascada(t: EntradaTrazaCascada) {
     decision: t.decision.motivo,
     // Politica §5 nota: lo lee la ponderacion con el coarrendatario (ponderacion.ts).
     sin_flags: t.decision.sinFlags === true,
+    // Adenda 2 §9.3: null = la identidad no fue motivo de revision. Lo lee la
+    // tarifa (viaDelEstudio); la ponderacion puede subirlo a la condicionada.
+    via_sin_identidad: t.decision.viaSinIdentidad ?? null,
+    sin_flags_sin_identidad: t.decision.sinFlagsSinIdentidad === true,
     umbrales: t.u,
     decidido_en: t.decididoEn,
   };

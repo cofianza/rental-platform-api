@@ -1041,6 +1041,32 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     }
   });
 
+  // Adenda 2 §9.3: la identidad sigue mandando al analista, pero no cambia la ruta de tarifa.
+  it('con el motor: 70-84 + coarrendatario >= 80 con el titular en revisión solo por identidad: decide el analista y la traza queda en la vía condicionada', async () => {
+    mockEnv.MOTOR_DECIDE_ENABLED = true;
+    try {
+      const cascada = { via: 'revision_manual', sin_flags: false, via_sin_identidad: 'revision_manual', sin_flags_sin_identidad: true };
+      enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado', cascada));
+      enqueue('expediente_coarrendatarios', coaRow);
+      enqueue('estudios_scorecard_sombra', {
+        data: [
+          { estudio_id: TITULAR_ESTUDIO_ID, puntaje_normalizado: 75 },
+          { estudio_id: COA_ESTUDIO_ID, puntaje_normalizado: 85 },
+        ],
+        error: null,
+      });
+      enqueue('expedientes', ctxRow());
+
+      await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+      expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+      const marca = ops.find((o) => o.table === 'estudios' && o.method === 'update');
+      expect(marca?.args[0]).toEqual({ cascada: { ...cascada, via_sin_identidad: 'condicionada_coarrendatario' } });
+    } finally {
+      mockEnv.MOTOR_DECIDE_ENABLED = false;
+    }
+  });
+
   it('con el motor: coarrendatario 80-84 en revisión solo por su banda también cuenta; con flags suyos, no', async () => {
     mockEnv.MOTOR_DECIDE_ENABLED = true;
     try {

@@ -11,6 +11,7 @@
 // ============================================================
 
 import { AppError } from '@/lib/errors';
+import { COMPANY } from '@/config/company';
 import type { Calibracion } from '@/lib/calibracion';
 
 export type Destinacion = 'vivienda' | 'comercial';
@@ -64,4 +65,43 @@ export function topeCanonPara(
   // (nada cambia en Fase 1); Fase 2 = habilitar comercial en DESTINOS.
   const clave = d && destinos[d].habilitado ? destinos[d].claveTope : DESTINOS.vivienda.claveTope;
   return { topeCop: cal[clave], clave };
+}
+
+// ============================================================
+// Estudio que no puede nacer ni cobrarse (lo aplica tope-canon.guard en todos
+// los sitios previos al cobro, y vitrina.createInterest). Ver la nota alli.
+// ============================================================
+
+export const ESTUDIO_NO_AFIANZABLE_ERROR_CODE = 'ESTUDIO_NO_AFIANZABLE';
+export type MotivoNoAfianzable = 'destinacion' | 'persona_juridica';
+
+export interface ArrendatarioDelTope {
+  tipo_persona?: string | null;
+  tipo_documento?: string | null;
+}
+
+/** Regla pura. null = el estudio puede nacer. */
+export function motivoNoAfianzable(
+  uso: string | null | undefined,
+  arrendatario?: ArrendatarioDelTope | null,
+): MotivoNoAfianzable | null {
+  const d = destinacionDeUso(uso);
+  if (uso === 'mixto' || (d !== null && !DESTINOS[d].habilitado)) return 'destinacion';
+  if (arrendatario?.tipo_persona === 'juridica' || arrendatario?.tipo_documento?.toLowerCase() === 'nit') {
+    return 'persona_juridica';
+  }
+  return null;
+}
+
+const MENSAJES_NO_AFIANZABLE: Readonly<Record<MotivoNoAfianzable, string>> = {
+  destinacion:
+    'Este inmueble es de uso comercial o mixto: por ahora Cofianza no afianza ese contrato por la plataforma, ' +
+    `así que no se cobra el estudio. Escríbanos a ${COMPANY.email} para revisar el caso.`,
+  persona_juridica:
+    'El arrendatario es una persona jurídica o se identifica con NIT: por ahora Cofianza no afianza ese contrato ' +
+    `por la plataforma, así que no se cobra el estudio. Escríbanos a ${COMPANY.email} para revisar el caso.`,
+};
+
+export function errorNoAfianzable(motivo: MotivoNoAfianzable): AppError {
+  return new AppError(409, ESTUDIO_NO_AFIANZABLE_ERROR_CODE, MENSAJES_NO_AFIANZABLE[motivo], { motivo });
 }

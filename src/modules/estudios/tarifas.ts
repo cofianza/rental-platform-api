@@ -165,17 +165,25 @@ export function leerTarifaOverride(v: unknown): TarifaOverride | null {
  *     registrado a mano sin reporte de central            -> revision_manual (2,7%)
  * "Si un caso se aprueba de forma automatica consultando unicamente
  * Datacredito, la tarifa es 2,0%": por eso el puntaje del modelo ya no entra.
+ *
+ * Adenda 2 §9.3 ("sin penalizacion alguna") y Decreto 1377/2013 art. 6: si la
+ * revision manual la puso (tambien) la identidad, manda la via que habria
+ * tenido sin ella (estudios.cascada.via_sin_identidad). Trazas anteriores no
+ * la traen: sin cambio.
  */
 export function viaPorRutaDeAprobacion(e: {
   aprobadoPorPonderacion: boolean;
   viaMotor: unknown;
+  /** estudios.cascada.via_sin_identidad */
+  viaSinIdentidad?: unknown;
   resultadoEstudio: string | null;
   conReporteDeCentral: boolean;
 }): ViaAprobacion {
   if (e.aprobadoPorPonderacion) return 'condicionada_coarrendatario';
-  if (e.viaMotor === 'automatica' || e.viaMotor === 'condicionada_coarrendatario' || e.viaMotor === 'revision_manual') {
-    return e.viaMotor;
-  }
+  if (e.viaMotor === 'revision_manual' && esVia(e.viaSinIdentidad)) return e.viaSinIdentidad;
+  if (esVia(e.viaMotor)) return e.viaMotor;
   if (e.resultadoEstudio === 'aprobado' && e.conReporteDeCentral) return 'automatica';
   return 'revision_manual';
 }
+
+const esVia = (v: unknown): v is ViaAprobacion => typeof v === 'string' && Object.hasOwn(TARIFA_MENSUAL_PCT, v);
