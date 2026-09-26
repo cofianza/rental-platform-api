@@ -1397,14 +1397,74 @@ describe('cerrarSinProceso (barrido)', () => {
     expect(tabla('contrato_v3_sobres', 'insert')[0].args[0]).toMatchObject({ intento: 2, motivo: 'EXPIRED', motivo_detalle: null });
   });
 
-  it('con un proceso vivo en Auco, o sin verificación de identidad, no hace nada', async () => {
+  it('con un proceso vivo en Auco no hace nada', async () => {
     enqueue('contrato_v3_sobres', ok(sobre()));
     await cerrarSinProceso('c1');
+    expect(escrituras()).toEqual([]);
+    expect(tabla('firma_verificacion_identidad', 'select')).toHaveLength(0);
+  });
+
+  // Sin biometría (o sin filas de verificación): Auco no creó el proceso y nadie reintentó.
+  const sinVerificacion = (c = contrato(), enviado = haceDias(20), previo: unknown = sobre({ estado: 'fallido', auco_code: null })) => {
+    const cierreExpirado = cierre({ intento: 2, motivo: 'EXPIRED', motivo_detalle: null });
+    enqueue('contrato_v3_sobres', ok(previo), ok({ id: 's9' }), cierreExpirado, cierreExpirado);
+    enqueue('firma_verificacion_identidad', ok([]));
+    enqueue('contratos', ok(c), ok(c), ok({ estado: 'firma_incompleta' }));
+    enqueue('expedientes', EXPEDIENTE, EXPEDIENTE);
+    enqueue('contrato_historial_estados', ok({ created_at: enviado }));
+    org(true);
+  };
+
+  it('sin verificación de identidad y con el envío a Auco fallido: vencido el plazo, FIRMA INCOMPLETA por EXPIRED', async () => {
+    sinVerificacion();
+    await cerrarSinProceso('c1');
+    expect(tabla('contrato_v3_sobres', 'insert')[0].args[0]).toMatchObject({
+      contrato_id: 'c1', intento: 2, estado: 'incompleto', motivo: 'EXPIRED', motivo_detalle: null, enviado_por: 'u1',
+    });
+    expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
+    const aviso = (tabla('notificaciones', 'insert')[0].args[0] as Array<{ tipo: string; mensaje: string }>)[0];
+    expect(aviso.tipo).toBe('contrato.firma_incompleta');
+    expect(aviso.mensaje).toContain('venció el plazo para firmar');
+    expect(auco.uploadDocumentForSignature).not.toHaveBeenCalled();
+    expect(tabla('auco', 'cancel')).toHaveLength(0);
+  });
+
+  it('sin sobre ni verificación y con el CRC vencido: cierra en el primer intento, al fin del CRC', async () => {
+    const vence = haceDias(0.5);
+    sinVerificacion(
+      contrato({ datos_variables: { documento: { entrada: { inmueble: { direccion: 'Calle 1' } }, snapshot: { estudio: { fechaCompletado: HOY }, crc: { fechaVencimiento: vence } }, final: { ruta: 'A' } } } }),
+      haceDias(1),
+      null,
+    );
+    await cerrarSinProceso('c1');
+    expect(tabla('contrato_v3_sobres', 'insert')[0].args[0]).toMatchObject({ intento: 1, motivo: 'EXPIRED', expira_en: new Date(Date.parse(vence)).toISOString() });
+    expect(tabla('rpc:transicionar_contrato', 'firma_incompleta')).toHaveLength(1);
+  });
+
+  it('sin verificación y dentro del plazo no escribe nada', async () => {
     enqueue('contrato_v3_sobres', ok(sobre({ estado: 'fallido', auco_code: null })));
     enqueue('firma_verificacion_identidad', ok([]));
+    enqueue('contratos', ok(contrato()));
+    enqueue('expedientes', EXPEDIENTE);
+    enqueue('contrato_historial_estados', ok({ created_at: haceDias(10) }));
     await cerrarSinProceso('c1');
     expect(escrituras()).toEqual([]);
-    expect(tabla('firma_verificacion_identidad', 'select')).toHaveLength(1);
+  });
+
+  it('con el CRC vencido pero un envío o un intento de hace minutos, espera al próximo barrido', async () => {
+    const crcVencido = contrato({ datos_variables: { documento: { snapshot: { estudio: { fechaCompletado: HOY }, crc: { fechaVencimiento: haceDias(1) } } } } });
+    for (const [enviado, previo] of [
+      [new Date(Date.now() - 60_000).toISOString(), null], // recién pasó a EN FIRMA: el sobre está por nacer
+      [haceDias(20), sobre({ estado: 'fallido', auco_code: null, updated_at: new Date(Date.now() - 60_000).toISOString() })],
+    ] as const) {
+      enqueue('contrato_v3_sobres', ok(previo));
+      enqueue('firma_verificacion_identidad', ok([]));
+      enqueue('contratos', ok(crcVencido));
+      enqueue('expedientes', EXPEDIENTE);
+      enqueue('contrato_historial_estados', ok({ created_at: enviado }));
+      await cerrarSinProceso('c1');
+    }
+    expect(escrituras()).toEqual([]);
   });
 
   it('si otro proceso ya registró el sobre (23505), no transiciona ni avisa', async () => {

@@ -523,9 +523,10 @@ export function finDelCrc(
 
 /**
  * Con la biometría de firma, el proceso de Auco sale cuando todos verificaron su
- * identidad; si alguien no lo hace, el contrato no puede quedar EN FIRMA para
- * siempre. Vence con el mismo plazo de firma contado desde el envío, y nunca
- * después del fin del CRC. null = todavía no vence; si venció, el instante límite.
+ * identidad; si alguien no lo hace (o Auco no creó el proceso), el contrato no
+ * puede quedar EN FIRMA para siempre. Vence con el mismo plazo de firma contado
+ * desde el envío, y nunca después del fin del CRC. null = todavía no vence; si
+ * venció, el instante límite.
  */
 export function identidadVencida(enviadoEn: number, dias: number, finCrc: number | null, ahora: number): number | null {
   const limite = Math.min(masPlazo(enviadoEn, dias), finCrc ?? Infinity);

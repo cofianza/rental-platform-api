@@ -131,8 +131,9 @@ export function construirFilaSombra(
     session_id: contexto.session_id ?? null,
     analista_responsable: contexto.analista_responsable ?? 'AUTOMATICO',
     cuota_mensual_cop: monto(f.cuota_mensual_vigente_cop),
-    // (dti_pct de la tabla es GENERATED sobre la cuota del buro: la de la fianza,
-    // que el motor suma (Politica §4.2), queda en features_crudas.cuota_fianza_cop.)
+    // (La cuota de la fianza, que el motor suma al DTI (Politica §4.2), va en
+    // features_crudas.cuota_fianza_cop: las columnas GENERATED dti_pct y
+    // dti_ajustado_pct la suman desde la migracion 20261001000012.)
     canon_evaluado_cop: monto(salida.canon_evaluado_cop),
 
     saldo_total_cop: monto(f.saldo_total_cop),

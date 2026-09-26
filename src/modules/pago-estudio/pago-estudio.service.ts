@@ -160,19 +160,21 @@ async function titularYaAutorizo(expedienteId: string): Promise<boolean> {
 }
 
 /**
- * Deja anotado en el estudio que el pagador sera el ARRENDATARIO (opcion C).
- * Es lo que le permite al hook de la firma saber si tiene que generarle el
- * cobro al prospecto o si el gestor todavia no decidio y hay que esperarlo.
+ * Deja anotado en el estudio quién paga: 'arrendatario' (opcion C) o
+ * 'inmobiliaria' (el gestor, opcion B). Es lo que le permite al hook de la
+ * firma saber si tiene que generarle el cobro al prospecto o si el gestor
+ * todavia no decidio y hay que esperarlo; gana la ULTIMA decision del gestor.
+ * Sin la marca de la B, un gestor que eligio C y despues pago el mismo (y la
+ * tarjeta fallo) veia al prospecto cobrado al firmar, y la ficha seguia
+ * diciendo "Pago por: arrendatario".
  *
  * Best-effort: si falla, el estudio queda en espera y el gestor decide desde el
- * panel — el lado seguro (nunca se cobra de mas). Solo se escribe aqui: A y B
- * crean su fila de pago 'completado', y `pago_por` unicamente se consulta
- * cuando NO hay ninguna fila de pago.
+ * panel — el lado seguro (nunca se cobra de mas).
  */
-async function marcarPagoArrendatario(expedienteId: string): Promise<void> {
+async function marcarPagoPor(expedienteId: string, pagoPor: 'arrendatario' | 'inmobiliaria'): Promise<void> {
   const { error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .update({ pago_por: 'arrendatario' } as never)
+    .update({ pago_por: pagoPor } as never)
     .eq('expediente_id', expedienteId)
     .neq('tipo', 'con_coarrendatario');
   if (error) {
@@ -590,6 +592,7 @@ export async function pagarGestor(
     nombrePagador: nombre,
     sufijoConcepto: ` (pago de ${nombre})`,
   });
+  await marcarPagoPor(expedienteId, 'inmobiliaria');
 
   logAudit({
     usuarioId: userId,
@@ -655,7 +658,15 @@ export async function enviarLinkPago(
   if (!(await titularYaAutorizo(expedienteId))) {
     const { enviarEnlaceAutorizacion } = await import('@/modules/autorizaciones/autorizaciones.service');
     await enviarEnlaceAutorizacion(expedienteId, userId, ip, undefined, userRol);
-    await marcarPagoArrendatario(expedienteId);
+    // B fallida → C ("Mejor que pague el arrendatario"): el checkout rechazado
+    // de la agencia sigue pagable ('fallido' no es terminal) y, mientras exista,
+    // el panel sigue mostrando el pago fallido de la agencia en vez de la
+    // espera de la autorización. Se cierra ya; el cobro del prospecto nace al firmar.
+    const previo = await findPagoEstudio(expedienteId);
+    if (previo?.estado === 'fallido' && (await quienPaga(previo)) === 'gestor') {
+      await cerrarCobroEstudioFallido(previo, userId);
+    }
+    await marcarPagoPor(expedienteId, 'arrendatario');
     logger.info(
       { expedienteId },
       '§6.3: primero la autorización — el enlace de pago se le genera al arrendatario cuando firme',

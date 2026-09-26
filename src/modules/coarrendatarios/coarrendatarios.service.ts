@@ -1220,23 +1220,40 @@ export async function aceptarInvitacion(
       );
   }
 
-  // 5. Notificar al titular (prospecto). Por su correo, no por
+  // 5. Avisos. Al titular (prospecto) por su correo, no por
   //    solicitantes.creado_por: es quien creó la ficha (casi siempre el gestor).
-  if (ctx.solicitante_email) {
-    findPerfilIdByEmail(ctx.solicitante_email)
-      .then((titularId) => {
-        if (!titularId) return;
-        return notificarUsuario({
-          userId: titularId,
-          tipo: 'coarrendatario.acepto',
-          titulo: 'Co-arrendatario confirmado',
-          mensaje: `${coa.nombre} aceptó la invitación. Estamos procesando su evaluación crediticia; te avisaremos cuando esté listo.`,
-          link: `/expedientes/${coa.expediente_id}`,
-          payload: { expediente_id: coa.expediente_id, coarrendatario_id: coa.id, estudio_id: estudioId },
-        });
-      })
-      .catch((e) => logger.warn({ error: e }, 'Error notif coarrendatario acepto'));
-  }
+  //    Al gestor —dueño del inmueble y miembro responsable, como en «declinó»—
+  //    con su propio texto, y a nadie dos veces.
+  const link = `/expedientes/${coa.expediente_id}`;
+  const payload = { expediente_id: coa.expediente_id, coarrendatario_id: coa.id, estudio_id: estudioId };
+  const avisoGestor = {
+    tipo: 'coarrendatario.acepto',
+    titulo: 'Co-arrendatario confirmado',
+    mensaje:
+      `${coa.nombre} aceptó ser co-arrendatario del estudio ${ctx.numero}. ` +
+      (titularYaPago
+        ? 'Su evaluación crediticia está en proceso; te avisaremos con el resultado.'
+        : 'Su evaluación crediticia se hará cuando se confirme el pago del estudio.'),
+    link,
+    payload,
+  };
+  void (async () => {
+    const titularId = await findPerfilIdByEmail(ctx.solicitante_email);
+    if (titularId) {
+      await notificarUsuario({
+        userId: titularId,
+        tipo: 'coarrendatario.acepto',
+        titulo: 'Co-arrendatario confirmado',
+        mensaje: `${coa.nombre} aceptó la invitación. Estamos procesando su evaluación crediticia; te avisaremos cuando esté listo.`,
+        link,
+        payload,
+      });
+    }
+    if (ctx.inmueble_propietario_id && ctx.inmueble_propietario_id !== titularId) {
+      await notificarUsuario({ userId: ctx.inmueble_propietario_id, ...avisoGestor });
+    }
+    await notificarResponsableExpediente({ expedienteId: coa.expediente_id, excluirPerfilId: ctx.inmueble_propietario_id, ...avisoGestor });
+  })().catch((e) => logger.warn({ error: e }, 'Error notif coarrendatario acepto'));
 
   logger.info(
     { coarrendatarioId: coa.id, estudioId, expedienteId: coa.expediente_id },

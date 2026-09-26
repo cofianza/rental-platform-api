@@ -218,8 +218,12 @@ assert.ok(!/rechaz/i.test(motivoProspecto), 'Flujo §13: nunca la palabra "recha
 assert.ok(!/%/.test(motivoProspecto), '§2: sin porcentajes — son parametros internos del modelo');
 assert.ok(!/\b65\b|\b40\b|DTI/i.test(motivoProspecto), '§2: sin umbrales ni nombres de variables');
 assert.ok(!/\$/.test(motivoProspecto), 'sin cifras del buro');
-assert.ok(/no es una decision definitiva/i.test(motivoProspecto), '§10: "Nunca es un portazo"');
-assert.ok(/co-arrendatario/i.test(motivoProspecto), '§10: se indica que puede mejorar');
+assert.ok(/no es una decisión definitiva/i.test(motivoProspecto), '§10: "Nunca es un portazo"');
+assert.ok(
+  /reducir tus compromisos financieros/.test(motivoProspecto) && /canon menor/.test(motivoProspecto),
+  '§10 / P30: una salida por cada regla que se activó (DTI y canon/ingreso)',
+);
+assert.ok(!/co-arrendatario/i.test(motivoProspecto), 'P30: la regla dura anula al co-arrendatario (§5), no se le ofrece');
 assert.notStrictEqual(motivoProspecto, motivoGestor, 'gestor y prospecto NO leen lo mismo');
 
 // ============================================================
@@ -554,7 +558,7 @@ fila(true, 'motivo prospecto', '3 variantes, todas §10 + §13 + §2');
 assert.ok(real.veredicto.rechaza);
 const nota = notaObservacionesReglasDuras(real.veredicto.reglas, real.veredicto.detalle);
 console.log(`  nota (observaciones): ${nota}`);
-assert.ok(/80\.11%/.test(nota) && /max 65%/.test(nota));
+assert.ok(/81\.89%/.test(nota) && /max 65%/.test(nota), 'el DTI de la nota lleva la cuota de la fianza (§4.2)');
 assert.ok(/74\.6%/.test(nota) && /max 40%/.test(nota));
 assert.ok(nota.length < 200, 'la nota se anexa a observaciones: tiene que ser corta');
 
@@ -662,7 +666,7 @@ assert.strictEqual(
   'al prospecto le llega exactamente el texto §10',
 );
 assert.ok(motivoProspectoRedactado !== null);
-for (const filtrado of ['80.11', '74.6', '65%', '40%', 'DTI', 'v4.1', 'datacredito', '773']) {
+for (const filtrado of ['81.89', '74.6', '65%', '40%', 'DTI', 'v4.1', 'datacredito', '773']) {
   assert.ok(
     !motivoProspectoRedactado.toLowerCase().includes(filtrado.toLowerCase()),
     `el texto del prospecto no revela "${filtrado}" (Politica §2 y §11)`,

@@ -92,13 +92,13 @@ check('zona gris + coarrendatario >= 80 se comunica como aprobado con acompanant
   for (const p of [70, 79, 84]) {
     const r = resolverRuta(e({ puntaje: p, coarrendatarioVinculado: true, puntajeCoarrendatario: UMBRAL_COARRENDATARIO }));
     assert.strictEqual(r.ruta, 'coarrendatario_requerido');
-    assert.ok(r.titulo.toLowerCase().includes('aprobada'), `titular ${p} + coarrendatario 80: aprobacion automatica condicionada`);
+    assert.ok(r.titulo.toLowerCase().includes('aprobado'), `titular ${p} + coarrendatario 80: aprobacion automatica condicionada`);
   }
 });
 
 check('zona gris + coarrendatario 79 NO se comunica como aprobado (revision manual)', () => {
   const r = resolverRuta(e({ puntaje: 75, coarrendatarioVinculado: true, puntajeCoarrendatario: 79 }));
-  assert.ok(!r.titulo.toLowerCase().includes('aprobada'));
+  assert.ok(!r.titulo.toLowerCase().includes('aprobado'));
   assert.ok(r.etiquetaGestor.includes('revision manual'));
 });
 
@@ -107,7 +107,7 @@ check('los umbrales del panel de calibracion mandan sobre los defaults', () => {
   assert.strictEqual(resolverRuta(e({ puntaje: 88, umbrales: u })).ruta, 'coarrendatario_requerido', '88 < 90 ya no es fuerte');
   assert.strictEqual(resolverRuta(e({ puntaje: 62, umbrales: u })).ruta, 'coarrendatario_requerido', '62 >= 60 entra a la zona gris');
   const conCoa = resolverRuta(e({ puntaje: 75, umbrales: u, coarrendatarioVinculado: true, puntajeCoarrendatario: 84 }));
-  assert.ok(!conCoa.titulo.toLowerCase().includes('aprobada'), 'coarrendatario 84 < 85 no aprueba');
+  assert.ok(!conCoa.titulo.toLowerCase().includes('aprobado'), 'coarrendatario 84 < 85 no aprueba');
 });
 
 console.log('\nJerarquia — el orden de los casos NO se puede reordenar');

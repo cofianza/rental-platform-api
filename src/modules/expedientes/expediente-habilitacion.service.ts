@@ -466,33 +466,71 @@ const THIN_FILE_CANON_INGRESO_MAX_PCT = 30;
  * (traza sin centrales consultadas) es el §14, no esto. Lanza el 400 accionable.
  */
 async function assertRequisitosThinFile(expedienteId: string, revision: DecisionRevisionManual | undefined): Promise<void> {
+  type FilaEstudio = {
+    id: string;
+    score: number | null;
+    cascada: { score_secundaria?: number | null; centrales_consultadas?: unknown } | null;
+    canon_evaluado: number | string | null;
+    estudio_padre_id: string | null;
+  };
+  const noVerificable = (err: { message: string }) => {
+    logger.error({ error: err.message, expedienteId }, 'Thin-file: no se pudo leer la evaluación del titular');
+    return new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del titular. Intenta de nuevo en un momento.');
+  };
+  const columnas = 'id, score, cascada, canon_evaluado, estudio_padre_id';
   const { data, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, score, cascada')
+    .select(columnas)
     .eq('expediente_id', expedienteId)
     .neq('tipo', 'con_coarrendatario')
     .eq('estado', 'completado')
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) {
-    logger.error({ error: error.message, expedienteId }, 'Thin-file: no se pudo leer la evaluación del titular');
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del titular. Intenta de nuevo en un momento.');
-  }
-  const est = data as { id: string; score: number | null; cascada: { score_secundaria?: number | null; centrales_consultadas?: unknown } | null } | null;
-  if (!est || est.score != null || est.cascada?.score_secundaria != null) return;
-  if (Array.isArray(est.cascada?.centrales_consultadas) && est.cascada.centrales_consultadas.length === 0) return;
+  if (error) throw noVerificable(error);
+  const est = data as FilaEstudio | null;
+  if (!est) return;
 
-  const [{ getCalibracion }, { coarrendatarioVinculadoVerificado }, { leerSombraDelEstudio }] = await Promise.all([
+  // Re-evaluación (estudio hijo): no consulta el buró —el analista la registra
+  // sobre el reporte del padre, con score opcional—, así que sin score ni traza
+  // propios la historia en centrales es la del padre (cadena de 2 como mucho).
+  let reporte = est;
+  for (let saltos = 0; saltos < 2 && reporte.score == null && reporte.cascada == null && reporte.estudio_padre_id; saltos++) {
+    const { data: padre, error: padreError } = await (supabase
+      .from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .select(columnas)
+      .eq('id', reporte.estudio_padre_id)
+      .maybeSingle();
+    if (padreError) throw noVerificable(padreError);
+    if (!padre) break;
+    reporte = padre as FilaEstudio;
+  }
+  if (reporte.score != null || reporte.cascada?.score_secundaria != null) return;
+  if (Array.isArray(reporte.cascada?.centrales_consultadas) && reporte.cascada.centrales_consultadas.length === 0) return;
+
+  const [{ getCalibracion }, { coarrendatarioVinculadoVerificado }, { leerSombraDelEstudio }, { leerIngresoInferidoOriginal }, { porcentaje, porcentajeParaMostrar }] = await Promise.all([
     import('@/lib/calibracion'),
     import('../estudios/coarrendatario-vinculado'),
     import('../estudios/certificado.service'),
+    import('../estudios/reasignacion.service'),
+    import('../estudios/motor/scorecard'),
   ]);
   const [cal, coa, sombra] = await Promise.all([
     getCalibracion(),
     coarrendatarioVinculadoVerificado(expedienteId),
     leerSombraDelEstudio(est.id),
   ]);
+  // Como el CRC (datosDelCrc): el hijo no tiene corrida propia y una corrida
+  // anterior al factor no trae el % ajustado; en ambos casos se recalcula con el
+  // canon evaluado (el hijo hereda el del padre) y el ingreso de la cadena.
+  const canonEvaluado = Number(est.canon_evaluado) > 0 ? Number(est.canon_evaluado) : null;
+  const canonIngreso =
+    sombra?.canonIngresoPct ??
+    (canonEvaluado === null
+      ? null
+      : porcentajeParaMostrar(
+          porcentaje(canonEvaluado, await leerIngresoInferidoOriginal(est.id, { estricto: true, padreId: est.estudio_padre_id })),
+        ));
 
   const umbral = cal.UMBRAL_COARRENDATARIO;
   if (!coa || coa.puntaje === null || coa.puntaje < umbral) {
@@ -506,7 +544,6 @@ async function assertRequisitosThinFile(expedienteId: string, revision: Decision
       { umbral, puntaje_coarrendatario: coa?.puntaje ?? null },
     );
   }
-  const canonIngreso = sombra?.canonIngresoPct ?? null;
   if (canonIngreso !== null && canonIngreso > THIN_FILE_CANON_INGRESO_MAX_PCT) {
     throw AppError.badRequest(
       `El solicitante no tiene historial en ninguna central de riesgo y el canon es el ${canonIngreso.toLocaleString('es-CO')}% ` +

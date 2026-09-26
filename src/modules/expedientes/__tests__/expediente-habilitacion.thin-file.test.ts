@@ -5,10 +5,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockTitular, mockCoa, mockSombra, ops } = vi.hoisted(() => ({
+const { mockTitular, mockColaEstudios, mockCoa, mockSombra, mockIngreso, ops } = vi.hoisted(() => ({
   mockTitular: { value: null as unknown },
+  /** Lecturas de `estudios` en orden (titular, padre…); vacía = mockTitular. */
+  mockColaEstudios: [] as unknown[],
   mockCoa: vi.fn(),
   mockSombra: vi.fn(),
+  mockIngreso: vi.fn(),
   ops: [] as Array<{ table: string; method: string }>,
 }));
 
@@ -21,7 +24,10 @@ vi.mock('@/lib/supabase', () => {
         return chain;
       };
     }
-    chain.maybeSingle = async () => ({ data: table === 'estudios' ? mockTitular.value : null, error: null });
+    chain.maybeSingle = async () => ({
+      data: table === 'estudios' ? (mockColaEstudios.length ? mockColaEstudios.shift() : mockTitular.value) : null,
+      error: null,
+    });
     // El UPDATE condicionado -> aprobado responde 0 filas: basta para saber que el gate dejó pasar.
     chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve);
     return chain;
@@ -47,6 +53,7 @@ vi.mock('../../pago-estudio/pago-estudio.service', () => ({ enviarLinkPago: vi.f
 vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(), findPerfilIdByEmail: vi.fn() }));
 vi.mock('../../estudios/coarrendatario-vinculado', () => ({ coarrendatarioVinculadoVerificado: mockCoa }));
 vi.mock('../../estudios/certificado.service', () => ({ leerSombraDelEstudio: mockSombra }));
+vi.mock('../../estudios/reasignacion.service', () => ({ leerIngresoInferidoOriginal: mockIngreso }));
 
 import { aprobarCondicionado } from '../expediente-habilitacion.service';
 
@@ -66,6 +73,7 @@ describe('aprobarCondicionado — thin-file (Política §15)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ops.length = 0;
+    mockColaEstudios.length = 0;
   });
 
   it('con score de alguna central no aplica', async () => {
@@ -109,5 +117,28 @@ describe('aprobarCondicionado — thin-file (Política §15)', () => {
     mockSombra.mockResolvedValue({ canonIngresoPct: null });
     await expect(aprobar()).rejects.toMatchObject({ errorCode: 'THIN_FILE_FUENTE_CAPACIDAD' });
     await expect(aprobar({ fuente_capacidad_verificada: true })).rejects.toMatchObject(PASO);
+  });
+
+  // Re-evaluación: el hijo no consulta el buró; lo registra el analista sobre el reporte del padre.
+  const HIJO = { id: 'hijo', score: null, cascada: null, canon_evaluado: 2_000_000, estudio_padre_id: 'padre' };
+
+  it('re-evaluación sin score propio: si el padre tenía score, no es thin-file', async () => {
+    mockColaEstudios.push(HIJO, { ...SIN_SCORE, id: 'padre', score: 640, estudio_padre_id: null });
+    await expect(aprobar()).rejects.toMatchObject(PASO);
+    expect(mockCoa).not.toHaveBeenCalled();
+  });
+
+  it('re-evaluación thin-file: canon/ingreso con el ingreso heredado del padre', async () => {
+    mockCoa.mockResolvedValue(COA_85);
+    mockSombra.mockResolvedValue(null); // el hijo no tiene corrida propia
+    mockIngreso.mockResolvedValueOnce(5_000_000); // 2.000.000 / 5.000.000 = 40 %
+    mockColaEstudios.push(HIJO, { ...SIN_SCORE, id: 'padre', estudio_padre_id: null });
+    await expect(aprobar()).rejects.toMatchObject({ errorCode: 'THIN_FILE_CANON_INGRESO', details: { canon_ingreso_pct: 40 } });
+    expect(mockIngreso).toHaveBeenCalledWith('hijo', { estricto: true, padreId: 'padre' });
+
+    // Con ingreso suficiente pasa sin la casilla de fuente de capacidad.
+    mockIngreso.mockResolvedValueOnce(8_000_000); // 25 %
+    mockColaEstudios.push(HIJO, { ...SIN_SCORE, id: 'padre', estudio_padre_id: null });
+    await expect(aprobar()).rejects.toMatchObject(PASO);
   });
 });

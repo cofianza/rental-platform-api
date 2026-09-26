@@ -418,7 +418,7 @@ console.log('regla canonica de vitrina: preservada (disponible+flag publica; ocu
 // boton que no existe.
 assert.strictEqual(referenciaInmueble('Apt-013', 'Calle 1 #2-3'), 'Apt-013', 'manda el codigo');
 assert.strictEqual(referenciaInmueble(null, 'Calle 1 #2-3'), 'Calle 1 #2-3', 'la direccion es el respaldo');
-assert.strictEqual(referenciaInmueble('  ', null), 'que estabas evaluando', 'sin datos, algo legible');
+assert.strictEqual(referenciaInmueble('  ', null), 'que se estaba evaluando', 'sin datos, algo legible');
 
 const avisoMsg = mensajeInmuebleReservado('Apt-013');
 console.log('aviso:', avisoMsg);

@@ -461,6 +461,54 @@ describe('aceptarInvitacion — fallo al crear el estudio', () => {
   });
 });
 
+describe('aceptarInvitacion — avisos', () => {
+  const aceptar = async (titularId: string | null) => {
+    vi.mocked(estudioYaCobrado).mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    mockFindPerfilIdByEmail.mockResolvedValueOnce(titularId as never);
+    enqueue(
+      'expediente_coarrendatarios',
+      {
+        data: {
+          id: COA_ID,
+          expediente_id: EXPEDIENTE_ID,
+          estado: 'pendiente_aceptacion',
+          token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+          nombre: 'Luis',
+          apellido: 'Gómez',
+          tipo_documento: 'cc',
+          numero_documento: '7654321',
+          email: 'luis@correo.co',
+        },
+        error: null,
+      },
+      { data: [{ id: COA_ID }], error: null }, // claim
+    );
+    enqueue('expedientes', ctxRow(), ctxRow());
+    enqueue('autorizaciones_habeas_data', { data: { id: 'aut-1' }, error: null });
+    enqueue('estudios', { data: null, error: null }, { data: { id: COA_ESTUDIO_ID }, error: null });
+    await expect(aceptarInvitacion('t'.repeat(64), '1.1.1.1', 'ua', {} as never)).resolves.toMatchObject({ ok: true });
+    await vi.waitFor(() => expect(mockNotificarResponsable).toHaveBeenCalled());
+  };
+
+  it('avisa al prospecto, al dueño y al responsable (sin repetir al dueño)', async () => {
+    await aceptar('titular-1');
+    const destinatarios = mockNotificarUsuario.mock.calls.map((c) => (c[0] as { userId: string }).userId);
+    expect(destinatarios).toEqual(['titular-1', PROPIETARIO_ID]);
+    expect(mockNotificarUsuario.mock.calls[1][0]).toMatchObject({
+      tipo: 'coarrendatario.acepto',
+      mensaje: expect.stringContaining('EXP-2026-00042'),
+    });
+    expect(mockNotificarResponsable).toHaveBeenCalledWith(
+      expect.objectContaining({ expedienteId: EXPEDIENTE_ID, excluirPerfilId: PROPIETARIO_ID, tipo: 'coarrendatario.acepto' }),
+    );
+  });
+
+  it('si el prospecto es el mismo dueño, no recibe dos avisos', async () => {
+    await aceptar(PROPIETARIO_ID);
+    expect(mockNotificarUsuario).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ============================================================
 // Carrera aceptar vs. reenviar/decidir: el claim exige el mismo token y, tras
 // él, el estudio todavía en revisión.

@@ -58,7 +58,7 @@ for (const [clave, valor] of Object.entries(ESPERADO)) {
   ok(CALIBRACION_DEFAULT[clave as keyof typeof CALIBRACION_DEFAULT] === valor, `${clave} = ${valor} (Adenda §11)`);
 }
 ok(CALIBRACION_DEFAULT.CANON_MAX_TRANSITORIO === 3_000_000, 'CANON_MAX_TRANSITORIO arranca con lo que corre en produccion (3.000.000, Flujo §4.4)');
-ok(PARAMETROS.length === 20, 'veinte parametros en el panel (10 de la Adenda 1 + 3 de la Adenda 2 + 2 de contratos comercial + 5 de contratos V3)');
+ok(PARAMETROS.length === 21, 'veintiun parametros en el panel (10 de la Adenda 1 + 3 de la Adenda 2 + 2 de contratos comercial + 6 de contratos V3, con la reserva del inmueble)');
 ok(validarParametro('DIAS_EXPIRACION_FIRMA', 3)?.error !== null, 'Auco exige mas de 3 dias de plazo para firmar');
 ok(validarParametro('MAX_CLAUSULAS_ADICIONALES', 26)?.error !== null, 'no mas de 25 adicionales: la numeracion llega a QUINCUAGESIMA OCTAVA');
 ok(validarParametro('VIGENCIA_MESES_DEFECTO', 12.5)?.error !== null, 'la vigencia por defecto es en meses enteros');

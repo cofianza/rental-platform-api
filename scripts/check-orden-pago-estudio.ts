@@ -157,7 +157,7 @@ caso('lectura fallida: FAIL-CLOSED con 503 reintentable, nunca "seguro estaba pa
 
 caso('el mensaje del gate es accionable y no acusa al prospecto', () => {
   const err = gate('no_pagado')!;
-  assert.match(err.message, /no figura como pagado/i);
+  assert.match(err.message, /no figura como pagada/i); // «la evaluación» (Flujo §13)
   assert.match(err.message, /se ejecuta solo apenas se confirme el pago/i);
 });
 

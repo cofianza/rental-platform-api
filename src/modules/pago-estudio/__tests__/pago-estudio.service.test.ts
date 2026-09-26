@@ -66,8 +66,9 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
+vi.mock('@/modules/autorizaciones/autorizaciones.service', () => ({ enviarEnlaceAutorizacion: vi.fn(async () => undefined) }));
 
-import { pagarGestor, cancelarYLiberarCredito, getEstadoPagoEstudio, reenviarLink } from '../pago-estudio.service';
+import { pagarGestor, cancelarYLiberarCredito, getEstadoPagoEstudio, reenviarLink, enviarLinkPago } from '../pago-estudio.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
@@ -104,6 +105,8 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     const insert = ops.find((o) => o.table === 'pagos' && o.method === 'insert');
     expect(insert?.args[0]).toMatchObject({ metodo: 'pasarela', estado: 'pendiente', email_pagador: 'gestor@inmo.co', nombre_pagador: 'Inmo SAS' });
     expect(mockCreateLink).toHaveBeenCalledOnce();
+    // Gana la última decisión: si antes eligió «enviar link» (C), ya no le toca al prospecto.
+    expect(ops.find((o) => o.table === 'estudios' && o.method === 'update')?.args[0]).toEqual({ pago_por: 'inmobiliaria' });
   });
 
   it('con un cobro anterior FALLIDO lo cancela y expira su link antes de abrir el nuevo', async () => {
@@ -332,5 +335,29 @@ describe('A10 — quien paga el cobro pendiente', () => {
     });
     expect(enviarTemplate).not.toHaveBeenCalled();
     expect(sendPaymentLinkEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('B fallida → «Mejor que pague el arrendatario»', () => {
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('cierra el checkout fallido de la agencia y queda esperando la autorización del prospecto', async () => {
+    vi.mocked(findPerfilIdByEmail).mockResolvedValue('titular');
+    enqueue('pagos', {
+      data: [{ id: 'p-b', estado: 'fallido', metodo: 'pasarela', email_pagador: 'titular@inmo.co', creado_por: 'titular', external_id: 'pref-b' }],
+      error: null,
+    });
+
+    const r = await enviarLinkPago(EXP, { email_pagador: 'prospecto@x.co', nombre_pagador: 'Pedro' }, 'titular', undefined, 'inmobiliaria');
+
+    expect(r).toMatchObject({ estado: 'esperando_autorizacion', pago: null });
+    expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: 'p-b', targetEstado: 'cancelado' }));
+    expect(mockCancelLink).toHaveBeenCalledWith('pref-b');
+    expect(ops.find((o) => o.table === 'estudios' && o.method === 'update')?.args[0]).toEqual({ pago_por: 'arrendatario' });
+    expect(mockCreateLink).not.toHaveBeenCalled();
   });
 });

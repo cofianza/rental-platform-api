@@ -660,16 +660,16 @@ async function cerrarPorVencimiento(s: Sobre, firmantes: FirmanteSobre[]): Promi
   return cerrarIncompleto({ ...actual, firmantes, ...cambio });
 }
 
-// ── EN FIRMA sin proceso en Auco (biometría de firma) ──
+// ── EN FIRMA sin proceso en Auco ──
 
 /**
  * Con la biometría de firma el proceso de Auco sale cuando todos verificaron su
- * identidad (verificacion-identidad.service). Si alguien no abre su enlace (o
- * Auco falló después y nadie reintentó), el contrato quedaba EN FIRMA sin
- * proceso ni vencimiento, con el inmueble reservado. Vencido el plazo de firma
- * contado desde el envío, o el CRC, pasa a FIRMA INCOMPLETA con el mismo aviso:
- * lo lleva un sobre 'incompleto' sin código de Auco, así el acuse y el reenvío
- * funcionan igual que con un proceso vencido.
+ * identidad (verificacion-identidad.service); sin ella sale al enviar. Si alguien
+ * no abre su enlace, o Auco falló al crear el proceso y nadie reintentó, el
+ * contrato quedaba EN FIRMA sin proceso ni vencimiento, con el inmueble
+ * reservado. Vencido el plazo de firma contado desde el envío, o el CRC, pasa a
+ * FIRMA INCOMPLETA con el mismo aviso: lo lleva un sobre 'incompleto' sin código
+ * de Auco, así el acuse y el reenvío funcionan igual que con un proceso vencido.
  */
 export async function cerrarSinProceso(contratoId: string, ahora = Date.now()): Promise<void> {
   const ultimo = await ultimoSobre(contratoId);
@@ -681,8 +681,6 @@ export async function cerrarSinProceso(contratoId: string, ahora = Date.now()): 
     .eq('contrato_id', contratoId);
   if (vErr) falla('no se pudo leer la verificación de identidad', vErr);
   const verificaciones = (vs as { nombre: string; estado: string; enviado_por: string | null }[] | null) ?? [];
-  // ponytail: solo contratos que pasaron por la verificación de identidad; sin ella, un EN FIRMA sin proceso tiene "Reintentar".
-  if (!verificaciones.length) return;
   const c = await leerContrato(contratoId);
   if (c?.estado !== 'pendiente_firma') return;
   const { data: h, error: hErr } = await db('contrato_historial_estados')
@@ -695,6 +693,11 @@ export async function cerrarSinProceso(contratoId: string, ahora = Date.now()): 
   if (hErr) falla('no se pudo leer cuándo se envió a firma', hErr);
   const enviadoEn = Date.parse((h as { created_at?: string } | null)?.created_at ?? '');
   if (!Number.isFinite(enviadoEn)) return;
+  // Un envío, reintento o cancelación en curso (el sobre nace segundos después
+  // del cambio de estado): lo retoma el próximo barrido. La carrera que quede
+  // con un sobre nuevo la corta el 23505 de (contrato_id, intento) del insert.
+  const recien = (ms: number) => ahora - ms < 30 * 60_000;
+  if (recien(enviadoEn) || recien(Date.parse(ultimo?.updated_at ?? ''))) return;
   const [vig, cal] = await Promise.all([vigenciaEstudio(c), getCalibracion()]);
   const limite = identidadVencida(enviadoEn, cal.DIAS_EXPIRACION_FIRMA, vig?.fin ?? null, ahora);
   if (limite === null) return;
@@ -710,7 +713,7 @@ export async function cerrarSinProceso(contratoId: string, ahora = Date.now()): 
       motivo: pendientes.length ? 'IDENTIDAD' : 'EXPIRED',
       motivo_detalle: pendientes.length ? pendientes.join(', ').slice(0, 500) : null,
       cerrado_en: new Date(ahora).toISOString(),
-      enviado_por: verificaciones.find((v) => v.enviado_por)?.enviado_por ?? null,
+      enviado_por: verificaciones.find((v) => v.enviado_por)?.enviado_por ?? ultimo?.enviado_por ?? null,
     } as never)
     .select('id')
     .single();
@@ -804,7 +807,8 @@ function programarReconciliacion(id: string, evento: { code?: string; message?: 
  * Cada 15 min (server.ts): recupera webhooks perdidos (vencimientos, rechazos,
  * firmas), procesos que un redeploy cortó a medias, avisos sin entregar,
  * cancelaciones sin confirmar en Auco, contratos EN FIRMA que vencieron sin
- * proceso (verificación de identidad sin terminar) y PDFs firmados sin archivar.
+ * proceso (verificación de identidad sin terminar o envío a Auco fallido) y PDFs
+ * firmados sin archivar.
  */
 export async function barrerFirmasV3(): Promise<void> {
   const { data, error } = await db('contrato_v3_sobres')
