@@ -47,7 +47,7 @@ import {
   VERSION_TERMINOS_COARRENDATARIO,
 } from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
-import { ponderarConCoarrendatario } from './ponderacion';
+import { ponderarConCoarrendatario, veredictoScorecard, type FilaScorecard, type VeredictoScorecard } from './ponderacion';
 import { evaluacionCuenta, contratoFijoSinCoarrendatario } from '@/modules/estudios/coarrendatario-vinculado';
 import { esNombrePersona } from '@/lib/textoSinEnlaces';
 import type {
@@ -1256,38 +1256,30 @@ export async function aceptarInvitacion(
 
 /**
  * Adenda 1 §3 sobre el par titular/coarrendatario, leyendo los puntajes del
- * scorecard de cada estudio. Devuelve null si falta cualquiera de los dos
- * puntajes (y entonces manda la ponderacion por resultado del buro).
+ * scorecard de cada estudio (la regla vive en ponderacion.ts, veredictoScorecard).
+ * Devuelve null si falta cualquiera de los dos puntajes (y entonces manda la
+ * ponderacion por resultado del buro).
  */
 async function ponderarConScorecard(
   titularEstudioId: string,
   coaEstudioId: string,
   coaConReglaDura: boolean,
-): Promise<{ resultado: 'aprobado' | 'sin_evaluar'; puntajeTitular: number; puntajeCoa: number; umbral: number } | null> {
+): Promise<(VeredictoScorecard & { umbral: number }) | null> {
   const [cal, filas] = await Promise.all([
     getCalibracion(),
     (supabase.from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-      .select('estudio_id, puntaje_normalizado, fecha_calculo')
+      .select('estudio_id, puntaje_normalizado, fecha_calculo, features_crudas')
       .in('estudio_id', [titularEstudioId, coaEstudioId])
       .order('fecha_calculo', { ascending: false }),
   ]);
-  const puntaje = (id: string): number | null => {
-    const row = ((filas.data ?? []) as Array<{ estudio_id: string; puntaje_normalizado: number | string | null }>).find((r) => r.estudio_id === id);
-    const n = row?.puntaje_normalizado == null ? null : Number(row.puntaje_normalizado);
-    return n !== null && Number.isFinite(n) ? n : null;
-  };
-  const pT = puntaje(titularEstudioId);
-  const pC = puntaje(coaEstudioId);
-  if (pT === null || pC === null) return null;
-
-  const enZonaGris = pT >= cal.UMBRAL_ZONA_GRIS && pT < cal.UMBRAL_APROBACION_AUTOMATICA;
-  const coaAprueba = !coaConReglaDura && pC >= cal.UMBRAL_COARRENDATARIO;
-  return {
-    resultado: enZonaGris && coaAprueba ? 'aprobado' : 'sin_evaluar',
-    puntajeTitular: pT,
-    puntajeCoa: pC,
-    umbral: cal.UMBRAL_COARRENDATARIO,
-  };
+  const fila = (id: string) => ((filas.data ?? []) as Array<FilaScorecard & { estudio_id: string }>).find((r) => r.estudio_id === id);
+  const veredicto = veredictoScorecard({
+    titular: fila(titularEstudioId),
+    coa: fila(coaEstudioId),
+    coaConReglaDura,
+    u: { zonaGris: cal.UMBRAL_ZONA_GRIS, aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA, coarrendatario: cal.UMBRAL_COARRENDATARIO },
+  });
+  return veredicto ? { ...veredicto, umbral: cal.UMBRAL_COARRENDATARIO } : null;
 }
 
 export async function onCoarrendatarioEstudioCompletado(
@@ -1394,12 +1386,14 @@ export async function onCoarrendatarioEstudioCompletado(
       'Politica §5: regla dura del coarrendatario — rechazo automatico del conjunto',
     );
   }
-  let scorecard: 'aprobado' | 'sin_evaluar' | null = null;
+  let scorecard: VeredictoScorecard['resultado'] | null = null;
+  let conflictoReglas: string | null = null;
   if (!coaConReglaDura && env.MOTOR_DECIDE_ENABLED && titular.resultado === 'condicionado') {
     const ponderado = await ponderarConScorecard(titular.id, est.id, false);
     if (ponderado) {
       logger.info({ expedienteId: est.expediente_id, ...ponderado }, 'Adenda §3: ponderacion titular/coarrendatario con el scorecard');
       scorecard = ponderado.resultado;
+      conflictoReglas = ponderado.conflicto;
     }
   }
   const resultadoCombinado = ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura, scorecard });
@@ -1428,6 +1422,7 @@ export async function onCoarrendatarioEstudioCompletado(
         titularScore: titular.score,
         coaResultado: est.resultado,
         coaScore: est.score,
+        conflictoReglas,
       },
       'Ponderación coarrendatario: queda en revisión manual para un analista de Cofianza (Adenda 2 §5)',
     );
@@ -1448,6 +1443,8 @@ export async function onCoarrendatarioEstudioCompletado(
           titular_score: titular.score,
           coarrendatario_resultado: est.resultado,
           coarrendatario_score: est.score,
+          // Matriz QA V2, R2: revision manual por conflicto de reglas sin definir.
+          ...(conflictoReglas ? { conflicto_reglas: conflictoReglas } : {}),
         },
       } as never);
 

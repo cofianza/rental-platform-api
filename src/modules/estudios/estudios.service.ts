@@ -48,7 +48,14 @@ import {
 import type { VeredictoReglasDuras, ResolucionEstudio } from './reglas-duras';
 // Adenda 1 §2/§3: con MOTOR_DECIDE_ENABLED el scorecard decide y la consulta
 // va en cascada (Datacredito primaria; la segunda central solo en 40-89).
-import { decidirCascada, decidirResultado, type UmbralesDecision, type ResultadoDecidido } from './decision';
+import {
+  construirTrazaCascada,
+  decidirCascada,
+  decidirResultado,
+  decidirSinCentrales,
+  type UmbralesDecision,
+  type ResultadoDecidido,
+} from './decision';
 import { evaluarSombra, type SalidaSombra } from './motor';
 // Background check de Auco (listas restrictivas §6, antecedentes §16.5,
 // FOSYGA §4.4). Apagado por AUCO_BACKGROUND_CHECK_ENABLED devuelve
@@ -2925,7 +2932,7 @@ async function procesarEstudioAsync(args: {
     // umbrales de cascada". Solo con el motor decisor encendido (sin el, el
     // gestor elige buro y reintenta a mano) y una sola vez: si TransUnion
     // tampoco responde, aplica el protocolo de fallo de API del §14 (abajo,
-    // 'fallido' con la causa). El background check ya lanzado se reutiliza.
+    // revision manual: caso L). El background check ya lanzado se reutiliza.
     if (proveedorNoDisponible && env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' && !args.centralCaida) {
       logger.warn({ estudioId, error: errorMsg }, 'Adenda §2.3: DataCredito no respondio — TransUnion pasa a ser la central primaria');
       const { error: swErr } = await (supabase
@@ -2970,26 +2977,49 @@ async function procesarEstudioAsync(args: {
     // referencia, vuelve lo que el lock pisó (la prueba de la consulta anterior
     // o, en una re-consulta, el resultado que el estudio ya tenía).
     const restaurar = !referenciaNueva ? args.restaurarSiFalla : undefined;
-    const { data: marcados, error: failError } = await (supabase
-      .from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .update((restaurar?.estado ? restaurar : { ...restaurar, estado: 'fallido', observaciones }) as never)
-      .eq('id', estudioId)
-      .eq('estado', 'en_proceso')
-      .select('id');
 
-    if (failError) {
-      logger.error({ error: failError, estudioId }, 'Error al marcar estudio como fallido');
-    }
-
-    // Politica §14: que alguien se entere (timeline + responsable + internos).
-    if (failError || (marcados && marcados.length > 0)) {
-      await avisarEstudioFallido({
+    // Politica §14 / matriz QA V2, caso L: tampoco respondio la central de
+    // respaldo (Adenda §2.3), asi que no respondio NINGUNA. Revision manual
+    // obligatoria ('condicionado'), no 'fallido'. Una sola central caida sigue
+    // siendo 'fallido' reintentable, y una re-consulta (restaurar con estado)
+    // conserva su resultado. Si no se pudo registrar, cae al 'fallido' de abajo.
+    const sinCentrales =
+      proveedorNoDisponible &&
+      !!args.centralCaida &&
+      !bloqueadoPorAutorizacion &&
+      !restaurar?.estado &&
+      (await registrarRevisionSinCentrales({
         estudioId,
         expedienteId,
-        observaciones,
-        ...(restaurar?.estado ? { titulo: 'La consulta al otro buró falló: el estudio conserva su resultado' } : {}),
-        detalleTecnico: observaciones === errorMsg ? undefined : errorMsg,
-      });
+        primaria: proveedor,
+        centralCaida: args.centralCaida as string,
+        restaurar,
+        sessionId,
+        inicioMs,
+      }));
+
+    if (!sinCentrales) {
+      const { data: marcados, error: failError } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update((restaurar?.estado ? restaurar : { ...restaurar, estado: 'fallido', observaciones }) as never)
+        .eq('id', estudioId)
+        .eq('estado', 'en_proceso')
+        .select('id');
+
+      if (failError) {
+        logger.error({ error: failError, estudioId }, 'Error al marcar estudio como fallido');
+      }
+
+      // Politica §14: que alguien se entere (timeline + responsable + internos).
+      if (failError || (marcados && marcados.length > 0)) {
+        await avisarEstudioFallido({
+          estudioId,
+          expedienteId,
+          observaciones,
+          ...(restaurar?.estado ? { titulo: 'La consulta al otro buró falló: el estudio conserva su resultado' } : {}),
+          detalleTecnico: observaciones === errorMsg ? undefined : errorMsg,
+        });
+      }
     }
 
     logAudit({
@@ -3008,6 +3038,7 @@ async function procesarEstudioAsync(args: {
         documento_no_encontrado: documentoNoEncontrado,
         // Adenda 2 §8: separa la caida real de la central de los errores del
         // dato (documento, apellido) para medir la tasa de falla de DataCredito.
+        ...(sinCentrales ? { sin_centrales: true, resultado: 'condicionado' } : {}),
         tipo_fallo: proveedorNoDisponible
           ? 'no_disponible'
           : documentoNoEncontrado
@@ -3026,8 +3057,98 @@ async function procesarEstudioAsync(args: {
       { estudioId, provider: proveedor, error: errorMsg, documentoNoEncontrado, bloqueadoPorAutorizacion },
       bloqueadoPorAutorizacion
         ? 'procesarEstudioAsync: gate 8.4 bloqueó la consulta al buró — estudio marcado como fallido (NO es un fallo del proveedor)'
-        : 'procesarEstudioAsync: provider falló — estudio marcado como fallido',
+        : sinCentrales
+          ? 'procesarEstudioAsync: ninguna central respondió — estudio en revisión manual (Política §14)'
+          : 'procesarEstudioAsync: provider falló — estudio marcado como fallido',
     );
+  }
+}
+
+/**
+ * Politica §14 / matriz QA V2, caso L: ni la primaria ni su respaldo (Adenda
+ * §2.3) respondieron en esta ejecucion. Registra 'condicionado' por el mismo
+ * RPC y el mismo hook que un resultado del buro: el orquestador pasa el
+ * expediente a revision manual y avisa a los analistas (SLA §3.1). No consulta
+ * nada (ningun cobro nuevo). Queda completado, condicionado y sin score, asi
+ * que la re-consulta al otro buro de ejecutarEstudio sigue abierta para el
+ * reintento manual. Nunca lanza: false = no se registro, y el llamador lo
+ * marca 'fallido' como siempre (no queda en en_proceso).
+ */
+async function registrarRevisionSinCentrales(a: {
+  estudioId: string;
+  expedienteId: string;
+  primaria: string;
+  centralCaida: string;
+  /** Lo que el lock piso (prueba de una consulta anterior): vuelve igual que en el 'fallido'. */
+  restaurar?: Record<string, unknown>;
+  sessionId?: string;
+  inicioMs?: number;
+}): Promise<boolean> {
+  const { estudioId, expedienteId } = a;
+  try {
+    const cal = await getCalibracion();
+    const { salida, decision, apisFallidas, traza } = decidirSinCentrales({
+      primaria: a.primaria,
+      centralCaida: a.centralCaida,
+      u: {
+        cascadaRechazo: cal.UMBRAL_CASCADA_RECHAZO,
+        cascadaAprobacion: cal.UMBRAL_CASCADA_APROBACION,
+        aprobacion: cal.UMBRAL_APROBACION_AUTOMATICA,
+        zonaGris: cal.UMBRAL_ZONA_GRIS,
+        coarrendatario: cal.UMBRAL_COARRENDATARIO,
+      },
+      decididoEn: new Date().toISOString(),
+    });
+    const observaciones =
+      `Ninguna central de riesgo respondió (${apisFallidas.map((c) => BURO_LABELS[c] ?? c).join(' y ')} no disponibles, Adenda 1 §2.3). ` +
+      'Política §14: revisión manual obligatoria, no se aprueba de forma automática. ' +
+      'No es un rechazo de crédito: un analista de Cofianza revisa el caso y puede volver a consultar las centrales.';
+
+    if (a.restaurar) {
+      await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update(a.restaurar as never)
+        .eq('id', estudioId)
+        .eq('estado', 'en_proceso');
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).rpc('fn_registrar_resultado_estudio', {
+      p_estudio_id: estudioId,
+      p_resultado: decision.resultado,
+      p_observaciones: observaciones,
+      p_score: null,
+      p_motivo_rechazo: null,
+      p_condiciones: null,
+      p_certificado_url: null,
+      p_usuario_id: null,
+    });
+    if (error) {
+      logger.error({ estudioId, error: error.message }, 'Politica §14: no se pudo registrar la revision manual sin centrales — queda fallido');
+      return false;
+    }
+
+    const { error: trazaErr } = await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({ cascada: traza as never } as never)
+      .eq('id', estudioId);
+    if (trazaErr) logger.warn({ estudioId, error: trazaErr.message }, 'Politica §14: no se pudo persistir la traza sin centrales');
+
+    void dispararHookPostResultado(estudioId, expedienteId, decision.resultado, null);
+    void registrarScorecardSombra({
+      estudioId,
+      expedienteId,
+      proveedor: a.primaria,
+      salidaPrecalculada: salida,
+      contexto: {
+        apis_fallidas: apisFallidas,
+        tiempo_procesamiento_ms: a.inicioMs ? Date.now() - a.inicioMs : null,
+        session_id: a.sessionId ?? null,
+        analista_responsable: 'AUTOMATICO',
+      },
+    }).catch(() => undefined);
+    return true;
+  } catch (err) {
+    logger.error({ estudioId, err: err instanceof Error ? err.message : String(err) }, 'Politica §14: excepcion registrando la revision manual sin centrales — queda fallido');
+    return false;
   }
 }
 
@@ -4181,7 +4302,7 @@ async function aplicarMotorSiAplica(args: {
  * Nunca lanza por la segunda central: si no responde, se decide con la
  * primaria como fuente unica y queda dicho en la nota (§2.3 / §14).
  */
-async function decidirConCascada(args: {
+export async function decidirConCascada(args: {
   estudioId: string;
   expedienteId: string;
   proveedorPrimario: string;
@@ -4273,28 +4394,19 @@ async function decidirConCascada(args: {
     motivosRevision: args.revisionManual ? [args.revisionManual] : [],
   });
 
-  const traza = {
-    modelo_version: salida.modelo_version,
+  const traza = construirTrazaCascada({
     primaria: proveedorPrimario,
-    primaria_original: args.centralCaida ?? proveedorPrimario,
-    fallback_2_3: !!args.centralCaida,
-    puntaje_primaria: args.salidaPrimaria.puntaje_normalizado,
-    decision_cascada: cascada.motivo,
-    secundaria_consultada: secundario !== null,
+    centralCaida: args.centralCaida ?? null,
+    salidaPrimaria: args.salidaPrimaria,
+    decisionCascada: cascada.motivo,
     secundaria: secundario,
-    score_secundaria: scoreSecundario,
-    puntaje_final: salida.puntaje_normalizado,
-    // Adenda 2 §4.3: denominador aplicado y variables que participaron.
-    denominador: salida.denominador_normalizacion,
-    variables_participantes: salida.variables_participantes,
-    fuente_score: salida.fuente_score_externo,
-    scores_individuales: salida.scores_individuales,
-    resultado: d.resultado,
-    via: d.via,
-    decision: d.motivo,
-    umbrales: u,
-    decidido_en: new Date().toISOString(),
-  };
+    scoreSecundaria: scoreSecundario,
+    apisFallidas,
+    salida,
+    decision: d,
+    u,
+    decididoEn: new Date().toISOString(),
+  });
   const { error: trazaErr } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .update({ cascada: traza as never } as never)

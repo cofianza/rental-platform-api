@@ -654,10 +654,11 @@ export function totalizar(puntajes: readonly PuntajeVariable[]): TotalesScorecar
   const reglas: CodigoReglaDura[] = [];
 
   for (const p of puntajes) {
-    // ponytail: un dato faltante de la persona cuenta 0 (criterio de
-    // desarrollo, 2026-09-11, pendiente de confirmar con Gerencia). Sacarlo
-    // del denominador premiaria la falta de datos: un historial de 7 meses
-    // daria 100 igual que uno de 24.
+    // Un dato faltante de la persona cuenta 0 DENTRO del denominador:
+    // confirmado por la matriz QA V2 de Gerencia (QA_MOTOR_COFIANZA_V2.xlsx),
+    // casos D (experiencia y antiguedad 0, 40/96), H (antiguedad 0, 31/96) y
+    // R (experiencia y antiguedad 0, 50/96). Sacarlo del denominador premiaria
+    // la falta de datos: un historial de 7 meses daria 100 igual que uno de 24.
     if (p.estado !== 'fuera_de_alcance') {
       denominador += p.puntos_maximos;
       participantes.push(p.variable);

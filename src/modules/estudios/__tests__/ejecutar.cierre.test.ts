@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 // deshace el lock (nadie consultó el buró) y se revisa la devolución. Mismo
 // mock de Supabase que estudios.enlace-cancelar.test.ts: colas por tabla + `ops`.
 
-const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar, mockObtener, mockSinEfecto } = vi.hoisted(() => {
+const { mockEnv, mockFlags, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar, mockObtener, mockSinEfecto } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -28,9 +28,16 @@ const { mockEnv, ops, queues, enqueue, mockFrom, mockDevolver, mockSolicitar, mo
       Promise.resolve(next(table)).then(resolve, reject);
     return chain;
   };
+  const mockFlags: Record<string, boolean> = {};
   return {
+    mockFlags,
     mockEnv: new Proxy({} as Record<string, unknown>, {
-      get: (_t, k) => (typeof k === 'string' && (k.endsWith('_ENABLED') || k.startsWith('MOTOR_')) ? false : 'x'),
+      get: (_t, k) =>
+        typeof k === 'string' && k in mockFlags
+          ? mockFlags[k]
+          : typeof k === 'string' && (k.endsWith('_ENABLED') || k.startsWith('MOTOR_'))
+            ? false
+            : 'x',
     }),
     ops,
     queues,
@@ -97,6 +104,7 @@ beforeEach(() => {
   queues.clear();
   ops.length = 0;
   vi.clearAllMocks();
+  for (const k of Object.keys(mockFlags)) delete mockFlags[k];
 });
 
 describe('ejecutarEstudio y el cierre del estudio', () => {
@@ -249,6 +257,50 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     const args = (supabase.rpc as unknown as Mock).mock.calls.find((c) => c[0] === 'fn_registrar_resultado_estudio')![1];
     expect(args.p_resultado).toBe('condicionado');
     expect(args.p_observaciones).toMatch(/Para el analista/);
+  });
+
+  describe('Política §14 / matriz QA V2, caso L: ninguna central responde (motor encendido)', () => {
+    const dosCaidas = () => {
+      mockFlags.MOTOR_DECIDE_ENABLED = true;
+      mockSolicitar.mockRejectedValueOnce(new Error('HTTP 503')).mockRejectedValueOnce(new Error('HTTP 503'));
+      enqueue('estudios', estudio({ proveedor: 'datacredito' }), { data: [{ id: 'est-1' }], error: null });
+      enqueue('expedientes', expediente('en_revision'), { data: { estado: 'en_revision' }, error: null });
+    };
+
+    it('queda condicionado (revisión manual), no fallido, con la traza NO_DISPONIBLE y las dos centrales caídas', async () => {
+      dosCaidas();
+      (supabase.rpc as unknown as Mock).mockResolvedValue({ error: null });
+
+      await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador').catch(() => undefined);
+
+      await vi.waitFor(() => expect(supabase.rpc).toHaveBeenCalledWith('fn_registrar_resultado_estudio', expect.anything()));
+      const args = (supabase.rpc as unknown as Mock).mock.calls.find((c) => c[0] === 'fn_registrar_resultado_estudio')![1];
+      expect(args).toMatchObject({ p_resultado: 'condicionado', p_score: null, p_motivo_rechazo: null });
+      expect(args.p_observaciones).toMatch(/Ninguna central/);
+      await vi.waitFor(() => expect(actualizaciones().some((u) => 'cascada' in u)).toBe(true));
+      expect(actualizaciones().find((u) => 'cascada' in u)!.cascada).toMatchObject({
+        primaria: 'transunion',
+        primaria_original: 'datacredito',
+        fallback_2_3: true,
+        centrales_consultadas: [],
+        apis_fallidas: ['datacredito', 'transunion'],
+        fuente_score: 'NO_DISPONIBLE',
+        resultado: 'condicionado',
+        via: 'revision_manual',
+      });
+      expect(actualizaciones().some((u) => u.estado === 'fallido')).toBe(false);
+      // Una consulta a cada central, ninguna más: nada que se cobre dos veces.
+      expect(mockSolicitar).toHaveBeenCalledTimes(2);
+    });
+
+    it('si no se puede registrar el resultado, queda fallido (reintentable), nunca en en_proceso', async () => {
+      dosCaidas();
+      (supabase.rpc as unknown as Mock).mockResolvedValue({ error: { message: 'boom' } });
+
+      await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador').catch(() => undefined);
+
+      await vi.waitFor(() => expect(actualizaciones().some((u) => u.estado === 'fallido')).toBe(true));
+    });
   });
 
   it('Q5c-5: la evaluación del co-arrendatario con el estudio rechazado se cancela y se le avisa (P3), no solo 409', async () => {

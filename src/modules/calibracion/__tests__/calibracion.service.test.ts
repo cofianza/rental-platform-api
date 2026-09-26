@@ -52,6 +52,12 @@ describe('clasificarCascada (pura)', () => {
     expect(clasificarCascada({ cascada: null, proveedor_secundario: null })).toBe('sin_dato');
     expect(clasificarCascada({})).toBe('sin_dato');
   });
+
+  it('sin dato cuando ninguna central respondio (Politica §14, caso L): no cuenta como una', () => {
+    expect(
+      clasificarCascada({ cascada: { secundaria_consultada: false, centrales_consultadas: [] }, proveedor_secundario: null }),
+    ).toBe('sin_dato');
+  });
 });
 
 describe('resumenCascada', () => {

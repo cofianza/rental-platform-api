@@ -23,7 +23,8 @@
 // ── Adenda §3, las bandas, literal ────────────────────────────
 //   85 a 100                                    APROBADO AUTOMATICO
 //   70 a 84 con coarrendatario >= 80            APROBACION AUTOMATICA CONDICIONADA
-//   70 a 84 sin coarrendatario (o con < 80)     REVISION MANUAL
+//   70 a 84 sin coarrendatario (o con 70-79)    REVISION MANUAL
+//   70 a 84 con coarrendatario < 70             RECHAZADO (matriz QA V2, caso O)
 //   < 70                                        RECHAZADO
 //
 // ── Politica §3.1, jerarquia ──────────────────────────────────
@@ -36,9 +37,19 @@
 // en_revision para el prospecto): el analista lo aprueba o lo rechaza.
 // ============================================================
 
-import type { SalidaSombra } from './motor';
+import { evaluarSombra, type SalidaSombra } from './motor';
 
 export type ResultadoDecidido = 'aprobado' | 'condicionado' | 'rechazado';
+
+/**
+ * Matriz QA V2, caso R2 (sin definir): la Politica (tabla de reglas duras:
+ * afianzado < 70 con coarrendatario alto = rechazo) y la Adenda 2 §2 (score
+ * 450-599 = revision manual con prioridad sobre el < 70) chocan. Mientras la
+ * Gerencia no defina, la salida es la conservadora —revision manual— y la
+ * traza lo dice con este texto.
+ */
+export const CONFLICTO_REGLAS_R2 =
+  'Conflicto de reglas pendiente de definición de la Gerencia (Política tabla reglas duras vs Adenda 2 punto 2).';
 
 export interface UmbralesDecision {
   cascadaRechazo: number;
@@ -152,8 +163,26 @@ export function decidirResultado(e: EntradaDecision): Decision {
   // 3. Jerarquia §3.1 (score 450-599) y Caso G: revision obligatoria que
   //    ningun coarrendatario levanta. La revision "por banda" (70-84) NO es
   //    esta: esa se resuelve abajo, donde el coarrendatario si cuenta.
+  //    Matriz QA V2, F1/F2: el motivo lleva tambien los demas motivos de
+  //    revision (p. ej. ingreso no inferible), sin repetir el de la banda, que
+  //    ya viene dentro de motivosRevision (resolverResultadoEstudio lo junta).
   if (salida.revision_obligatoria) {
-    return { resultado: 'condicionado', motivo: salida.revision_obligatoria, via: 'revision_manual' };
+    const ro = salida.revision_obligatoria;
+    const otros = e.motivosRevision.map((m) => m.replace(ro, '').trim()).filter(Boolean);
+    const coa = e.coarrendatario ?? null;
+    // R2: banda de score (no Caso G) + puntaje < 70 + coarrendatario >= 80.
+    const conflictoR2 =
+      !salida.inconsistencia_score_buros &&
+      p < u.zonaGris &&
+      !!coa &&
+      !coa.reglaDura &&
+      coa.puntaje !== null &&
+      coa.puntaje >= u.coarrendatario;
+    return {
+      resultado: 'condicionado',
+      motivo: [ro, ...otros, conflictoR2 ? CONFLICTO_REGLAS_R2 : null].filter(Boolean).join(' '),
+      via: 'revision_manual',
+    };
   }
 
   // 4. < 70: rechazado. "Ningun coarrendatario compensa" (§5).
@@ -180,6 +209,15 @@ export function decidirResultado(e: EntradaDecision): Decision {
       via: 'condicionada_coarrendatario',
     };
   }
+  // Matriz QA V2, caso O: coarrendatario < 70 no compensa y el caso se rechaza.
+  // Entre 70 y el umbral del coarrendatario sigue en revision manual (abajo).
+  if (coa && !coa.reglaDura && coa.puntaje !== null && coa.puntaje < u.zonaGris) {
+    return {
+      resultado: 'rechazado',
+      motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris}: el coarrendatario no compensa (matriz QA V2, caso O)`,
+      via: null,
+    };
+  }
   return {
     resultado: 'condicionado',
     motivo: coa
@@ -187,4 +225,84 @@ export function decidirResultado(e: EntradaDecision): Decision {
       : `Puntaje ${p} en zona gris (${u.zonaGris}-${u.aprobacion - 1}) sin coarrendatario: revision manual, o coarrendatario >= ${u.coarrendatario}`,
     via: 'revision_manual',
   };
+}
+
+// ============================================================
+// Traza de la cascada (estudios.cascada) — Adenda §2.4, Politica §9 y
+// matriz QA V2 §2.5 ("en los casos de cascada debe verificarse cuantas
+// centrales se consultaron").
+// ============================================================
+
+export interface EntradaTrazaCascada {
+  /** Central que actuo como primaria en esta ejecucion. */
+  primaria: string;
+  /** Adenda §2.3: central que no respondio y le cedio la primaria. */
+  centralCaida: string | null;
+  salidaPrimaria: SalidaSombra;
+  /** decidirCascada(...).motivo */
+  decisionCascada: string;
+  /** Segunda central que RESPONDIO, o null. */
+  secundaria: string | null;
+  scoreSecundaria: number | null;
+  /** Centrales que no respondieron en esta ejecucion. */
+  apisFallidas: readonly string[];
+  /** Corrida final (la combinada si respondio la segunda). */
+  salida: SalidaSombra;
+  decision: Decision;
+  u: UmbralesDecision;
+  decididoEn: string;
+}
+
+/** Lo que se guarda en `estudios.cascada`. Pura. */
+export function construirTrazaCascada(t: EntradaTrazaCascada) {
+  return {
+    modelo_version: t.salida.modelo_version,
+    primaria: t.primaria,
+    primaria_original: t.centralCaida ?? t.primaria,
+    fallback_2_3: !!t.centralCaida,
+    // Las que respondieron y entraron a la decision (0, 1 o 2).
+    centrales_consultadas: [t.primaria, t.secundaria].filter((c): c is string => !!c && !t.apisFallidas.includes(c)),
+    apis_fallidas: [...new Set(t.apisFallidas)],
+    puntaje_primaria: t.salidaPrimaria.puntaje_normalizado,
+    decision_cascada: t.decisionCascada,
+    secundaria_consultada: t.secundaria !== null,
+    secundaria: t.secundaria,
+    score_secundaria: t.scoreSecundaria,
+    puntaje_final: t.salida.puntaje_normalizado,
+    // Adenda 2 §4.3: denominador aplicado y variables que participaron.
+    denominador: t.salida.denominador_normalizacion,
+    variables_participantes: t.salida.variables_participantes,
+    fuente_score: t.salida.fuente_score_externo,
+    scores_individuales: t.salida.scores_individuales,
+    resultado: t.decision.resultado,
+    via: t.decision.via,
+    decision: t.decision.motivo,
+    umbrales: t.u,
+    decidido_en: t.decididoEn,
+  };
+}
+
+/**
+ * Politica §14 / matriz QA V2, caso L: ni la primaria ni la central de
+ * respaldo (Adenda §2.3) respondieron. Revision manual obligatoria, nunca
+ * aprobacion automatica; fuente_score_externo = NO_DISPONIBLE.
+ */
+export function decidirSinCentrales(a: { primaria: string; centralCaida: string; u: UmbralesDecision; decididoEn: string }) {
+  const salida = evaluarSombra({ proveedor: a.primaria, payload: null, fecha_evaluacion: a.decididoEn });
+  const decision = decidirResultado({ salida, reglasDurasActivas: [], u: a.u, coarrendatario: null, motivosRevision: [] });
+  const apisFallidas = [a.centralCaida, a.primaria];
+  const traza = construirTrazaCascada({
+    primaria: a.primaria,
+    centralCaida: a.centralCaida,
+    salidaPrimaria: salida,
+    decisionCascada: 'ninguna central respondio: no hay cascada (Politica §14)',
+    secundaria: null,
+    scoreSecundaria: null,
+    apisFallidas,
+    salida,
+    decision,
+    u: a.u,
+    decididoEn: a.decididoEn,
+  });
+  return { salida, decision, apisFallidas, traza };
 }

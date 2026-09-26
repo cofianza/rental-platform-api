@@ -936,6 +936,33 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
       mockEnv.MOTOR_DECIDE_ENABLED = false;
     }
   });
+
+  it('con el motor: 70-84 + coarrendatario < 70 se rechaza por el mismo camino que la regla dura (matriz QA V2, caso O)', async () => {
+    mockEnv.MOTOR_DECIDE_ENABLED = true;
+    try {
+      enqueue('estudios', coaEstudio('rechazado'), titularRows('condicionado'));
+      enqueue('expediente_coarrendatarios', coaRow);
+      enqueue('estudios_scorecard_sombra', {
+        data: [
+          { estudio_id: TITULAR_ESTUDIO_ID, puntaje_normalizado: 78.1 },
+          { estudio_id: COA_ESTUDIO_ID, puntaje_normalizado: 65 },
+        ],
+        error: null,
+      });
+      enqueue('expedientes', { data: [{ id: EXPEDIENTE_ID }], error: null }, ctxRow());
+
+      await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+      const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
+      const payload = update!.args[0] as { estado: string; motivo_rechazo?: string };
+      expect(payload.estado).toBe('rechazado');
+      expect(payload.motivo_rechazo).toContain('co-arrendatario invitado fue rechazada');
+      expect(mockLiberarReserva).toHaveBeenCalledWith(EXPEDIENTE_ID);
+      expect(mockEmitirCrc).not.toHaveBeenCalled();
+    } finally {
+      mockEnv.MOTOR_DECIDE_ENABLED = false;
+    }
+  });
 });
 
 // ============================================================

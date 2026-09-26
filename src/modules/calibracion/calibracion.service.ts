@@ -26,7 +26,7 @@ export interface ResumenCascada {
 export type ClaseCascada = 'una_central' | 'dos_centrales' | 'sin_dato';
 
 export interface FilaCascada {
-  cascada?: { secundaria_consultada?: unknown } | null;
+  cascada?: { secundaria_consultada?: unknown; centrales_consultadas?: unknown } | null;
   proveedor_secundario?: string | null;
 }
 
@@ -37,6 +37,8 @@ export function clasificarCascada(fila: FilaCascada): ClaseCascada {
   // best-effort e independientes en decidirConCascada.
   if (fila.proveedor_secundario || fila.cascada?.secundaria_consultada === true)
     return 'dos_centrales';
+  // Politica §14 (caso L): ninguna central respondio; no es "una".
+  if (Array.isArray(fila.cascada?.centrales_consultadas) && fila.cascada.centrales_consultadas.length === 0) return 'sin_dato';
   if (fila.cascada && typeof fila.cascada === 'object') return 'una_central';
   return 'sin_dato';
 }
