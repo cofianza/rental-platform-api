@@ -902,10 +902,26 @@ export async function onEstudioCompletado(params: {
         );
         return;
       }
-      await registrarTimeline(expedienteId, 'estudio', `Estudio condicionado (Score: ${score}). Se requieren documentos adicionales.`);
+      // Caso L (Politica §14): ninguna central respondio. No es "condicionado por
+      // riesgo": no hay score que certificar ni documentos que pedir por eso.
+      const { data: trazaRow } = (await db('estudios').select('cascada').eq('id', estudioId).maybeSingle()) as {
+        data: { cascada?: unknown } | null;
+      };
+      const { esSinCentrales } = await import('@/modules/estudios/decision');
+      const sinCentrales = esSinCentrales(trazaRow?.cascada);
+
+      await registrarTimeline(
+        expedienteId,
+        'estudio',
+        sinCentrales
+          ? 'Ninguna central de riesgo respondió: el estudio pasó a revisión manual (Política §14). Un analista de Cofianza puede volver a consultar las centrales.'
+          : `Estudio condicionado (Score: ${score}). Se requieren documentos adicionales.`,
+      );
 
       // Flujo §10/§11: el CRC (condicionado) sale CON el resultado. No bloquea.
-      emitirCrcAutomatico(estudioId, actorCrc, expedienteId);
+      // Sin centrales no hay evaluacion que certificar: sale cuando el analista
+      // apruebe (la aprobacion desde condicionado lo regenera).
+      if (!sinCentrales) emitirCrcAutomatico(estudioId, actorCrc, expedienteId);
 
       // Politica §3.1/§8: SLA de 2 horas habiles para un analista de Cofianza.
       // Fire-and-forget: el aviso interno no puede frenar los del prospecto.
@@ -940,7 +956,9 @@ export async function onEstudioCompletado(params: {
           userId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
           titulo: 'Estudio condicionado',
-          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
+          mensaje: sinCentrales
+            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
@@ -951,7 +969,9 @@ export async function onEstudioCompletado(params: {
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
           titulo: 'Estudio condicionado',
-          mensaje: `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
+          mensaje: sinCentrales
+            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
           whatsapp: {

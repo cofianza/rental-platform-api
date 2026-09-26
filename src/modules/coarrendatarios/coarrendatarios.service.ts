@@ -42,6 +42,7 @@ import {
   etiquetaReglaDura,
 } from '@/modules/estudios/reglas-duras';
 import type { ReglaDuraActiva } from '@/modules/estudios/reglas-duras';
+import { esSinCentrales } from '@/modules/estudios/decision';
 import {
   TEXTO_LEGAL_COARRENDATARIO,
   VERSION_TERMINOS_COARRENDATARIO,
@@ -1449,6 +1450,8 @@ export async function onCoarrendatarioEstudioCompletado(
     // Ninguno de los dos pudo ser evaluado por el buro (sin historial): se
     // explica distinto que "el coarrendatario ya tiene resultado".
     const sinInfo = !fueEvaluadoPorElBuro(titular) || !fueEvaluadoPorElBuro(est);
+    // Caso L: no es falta de historial, es que las centrales no respondieron.
+    const sinCentrales = esSinCentrales(titular.cascada) || esSinCentrales(est.cascada);
     logger.info(
       {
         expedienteId: est.expediente_id,
@@ -1467,7 +1470,9 @@ export async function onCoarrendatarioEstudioCompletado(
       .insert({
         expediente_id: est.expediente_id,
         tipo: 'estudio',
-        descripcion: sinInfo
+        descripcion: sinCentrales
+          ? 'Las centrales de riesgo no respondieron en una de las dos evaluaciones, así que no se puede ponderar. El estudio sigue en revisión manual de Cofianza (Política §14).'
+          : sinInfo
           ? 'La evaluación del co-arrendatario se completó, pero el buró no tiene información crediticia suficiente para ponderar. El estudio sigue en revisión manual de Cofianza.'
           : `La evaluación del co-arrendatario se completó (resultado: ${est.resultado}). El estudio sigue en revisión manual: lo decide un analista de Cofianza con los dos resultados (Adenda 2 §5).`,
         metadata: {
@@ -1550,7 +1555,9 @@ export async function onCoarrendatarioEstudioCompletado(
         userId: titularId,
         tipo: 'estudio.condicionado',
         titulo: 'Tu co-arrendatario completó su evaluación',
-        mensaje: sinInfo
+        mensaje: sinCentrales
+          ? 'Las centrales de riesgo no respondieron cuando consultamos. No es un rechazo: un analista de Cofianza revisará tu caso y puede volver a consultarlas.'
+          : sinInfo
           ? 'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: un analista de Cofianza revisará tu caso con los documentos de soporte.'
           : 'Un analista de Cofianza revisará tu caso con los resultados de los dos. Te avisamos cuando decida.',
         link: `/expedientes/${est.expediente_id}`,

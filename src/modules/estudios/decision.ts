@@ -314,6 +314,15 @@ export function construirTrazaCascada(t: EntradaTrazaCascada) {
   };
 }
 
+/** Traza de `estudios.cascada` del caso L: no respondio ninguna central (lo lee quien escribe los avisos). */
+export function esSinCentrales(cascada: unknown): boolean {
+  const c = cascada as { centrales_consultadas?: unknown; apis_fallidas?: unknown } | null;
+  return (
+    Array.isArray(c?.centrales_consultadas) && c.centrales_consultadas.length === 0 &&
+    Array.isArray(c?.apis_fallidas) && c.apis_fallidas.length > 0
+  );
+}
+
 /**
  * Politica §14 / matriz QA V2, caso L: ni la primaria ni la central de
  * respaldo (Adenda §2.3) respondieron. Revision manual obligatoria, nunca
