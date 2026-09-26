@@ -1443,7 +1443,7 @@ export async function onCoarrendatarioEstudioCompletado(
           titular_score: titular.score,
           coarrendatario_resultado: est.resultado,
           coarrendatario_score: est.score,
-          // Matriz QA V2, R2: revision manual por conflicto de reglas sin definir.
+          // Matriz QA V2, R2 (o su espejo del coarrendatario): revision manual por conflicto de reglas sin definir.
           ...(conflictoReglas ? { conflicto_reglas: conflictoReglas } : {}),
         },
       } as never);

@@ -10,10 +10,11 @@
 // por flujo automatico —, que exige los puntajes del motor
 // (ponderarConScorecard, solo con MOTOR_DECIDE_ENABLED). Y el unico rechazo
 // automatico por puntaje es el de la matriz QA V2, caso O: titular 70-84 con
-// coarrendatario < 70.
+// coarrendatario < 70 — salvo que el coarrendatario tenga score 450-599:
+// entonces revision manual con la marca de conflicto (nota §5, como R2).
 // ============================================================
 
-import { CONFLICTO_REGLAS_R2, type UmbralesDecision } from '@/modules/estudios/decision';
+import { CONFLICTO_REGLAS_COARRENDATARIO, CONFLICTO_REGLAS_R2, type UmbralesDecision } from '@/modules/estudios/decision';
 
 export type Resultado = 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente';
 
@@ -21,7 +22,7 @@ export type ResultadoPonderacion = 'aprobado' | 'rechazado' | 'revision_manual';
 
 export interface VeredictoScorecard {
   resultado: 'aprobado' | 'rechazado' | 'sin_evaluar';
-  /** R2 (matriz QA V2): conflicto sin definir; la salida es la conservadora. */
+  /** R2 (matriz QA V2), o su espejo del coarrendatario: conflicto sin definir; la salida es la conservadora. */
   conflicto: string | null;
   puntajeTitular: number;
   puntajeCoa: number;
@@ -39,7 +40,7 @@ const puntajeDe = (f?: FilaScorecard): number | null => {
 };
 
 /**
- * Adenda 1 §3 + matriz QA V2 (N, O, R2) sobre las filas del motor de cada
+ * Adenda 1 §3 + matriz QA V2 (N, O, R2 y su espejo del coarrendatario) sobre las filas del motor de cada
  * estudio. Mismo criterio que decidirResultado (decision.ts, pasos 3 y 7) con
  * el coarrendatario en la mano. null si falta cualquiera de los dos puntajes
  * (y entonces manda la ponderacion por resultado del buro). Lo usa
@@ -72,7 +73,14 @@ export function veredictoScorecard(e: {
   const enZonaGris = pT >= u.zonaGris && pT < u.aprobacion;
   if (enZonaGris && coaAprueba) return v('aprobado');
   // Caso O: < 70 no compensa. Entre 70 y el umbral sigue en revision manual.
-  if (enZonaGris && !e.coaConReglaDura && pC < u.zonaGris) return v('rechazado');
+  // Coarrendatario con score 450-599 (su revision obligatoria, sin Caso G):
+  // conflicto sin definir -> revision manual marcada, como R2.
+  if (enZonaGris && !e.coaConReglaDura && pC < u.zonaGris) {
+    const fcCoa = e.coa?.features_crudas;
+    return fcCoa?.revision_obligatoria && !fcCoa.inconsistencia_score_buros
+      ? v('sin_evaluar', CONFLICTO_REGLAS_COARRENDATARIO)
+      : v('rechazado');
+  }
   return v('sin_evaluar');
 }
 

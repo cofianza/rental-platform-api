@@ -1,6 +1,30 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+const { mockUpserts } = vi.hoisted(() => ({
+  mockUpserts: [] as Array<{ fila: Record<string, unknown>; error: { code: string; message: string } | null }>,
+}));
+vi.mock('@/lib/supabase', () => ({
+  supabase: {
+    from: () => ({
+      upsert: async (fila: Record<string, unknown>) => {
+        // El CHECK viejo (sin la migracion 20261001000010): 'rechazado' sin puntaje rebota.
+        const error = fila.decision_sombra === 'rechazado' && fila.puntaje_normalizado === null
+          ? { code: '23514', message: 'violates check constraint "chk_scorecard_sombra_no_calculable"' }
+          : null;
+        mockUpserts.push({ fila, error });
+        return { error };
+      },
+    }),
+  },
+}));
+vi.mock('@/config', () => ({ env: {} }));
+vi.mock('@/config/env', () => ({ env: {} }));
+vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
+
 import { evaluarSombra } from '../motor';
 import { construirFilaSombra } from '../motor/fila';
+import { registrarScorecardSombra } from '../motor/sombra.service';
+import { aplicarReglasDuras } from '../reglas-duras';
 
 // ============================================================
 // Politica §9: una corrida SIN puntaje (no-hit, thin file, buro degradado)
@@ -39,19 +63,47 @@ describe('construirFilaSombra — corrida sin puntaje (Politica §9)', () => {
     expect(fila.fuente_ingreso_inferido).toBe('NO_DISPONIBLE');
   });
 
-  it('encuadra como no_calculable un rechazo por regla dura global sin puntaje (CHECK de la tabla)', () => {
-    // decidirSombra puede rechazar por listas restrictivas ANTES de tener
-    // puntaje. Esa fila, tal cual, violaria el CHECK.
-    const rechazoSinPuntaje = {
-      ...degradada,
-      decision_sombra: 'rechazado' as const,
-      decision_motivo: 'Regla dura global activada: listas_restrictivas',
-      motivo_no_calculable: null,
-    };
+  // Nota QA V2 §2.4: la regla dura no calcula puntaje. La migracion
+  // 20261001000010 admite 'rechazado' sin puntaje si hay regla dura.
+  const rechazoSinPuntaje = {
+    ...degradada,
+    decision_sombra: 'rechazado' as const,
+    decision_motivo: 'Regla dura global activada: listas_restrictivas',
+    motivo_no_calculable: null,
+    reglas_duras: [{ codigo: 'listas_restrictivas' as const, variable: 'global' as const, detalle: 'OFAC' }],
+  };
+
+  it('un rechazo por regla dura sin puntaje queda rechazado, con la regla como motivo', () => {
     const fila = construirFilaSombra('est-2', rechazoSinPuntaje);
-    expect(fila.decision_sombra).toBe('no_calculable');
+    expect(fila.decision_sombra).toBe('rechazado');
+    expect(fila.puntaje_normalizado).toBeNull();
+    expect(fila.reglas_duras_activadas).toEqual(['listas_restrictivas']);
     expect(fila.motivo_no_calculable).toBe('Regla dura global activada: listas_restrictivas');
+  });
+
+  it('un rechazo sin puntaje y SIN regla dura sigue encuadrado como no_calculable', () => {
+    const fila = construirFilaSombra('est-2b', { ...rechazoSinPuntaje, reglas_duras: [] });
+    expect(fila.decision_sombra).toBe('no_calculable');
     expect((fila.features_crudas as Record<string, unknown>).decision_sombra_motor).toBe('rechazado');
+  });
+
+  it('antes de correr la migracion, el CHECK viejo no pierde la fila: se reintenta como no_calculable', async () => {
+    mockUpserts.length = 0;
+    await registrarScorecardSombra({ estudioId: 'est-4', expedienteId: 'exp-4', salidaPrecalculada: rechazoSinPuntaje });
+    expect(mockUpserts.map((u) => [u.fila.decision_sombra, u.error?.code ?? null])).toEqual([
+      ['rechazado', '23514'],
+      ['no_calculable', null],
+    ]);
+    expect(mockUpserts[1].fila.reglas_duras_activadas).toEqual(['listas_restrictivas']);
+    expect(mockUpserts[1].fila.motivo_no_calculable).toBe('Regla dura global activada: listas_restrictivas');
+  });
+
+  it('un score capturado a mano (PERSISTIDO) bajo 450 no dispara la regla dura ni anula el puntaje', () => {
+    const manual = evaluarSombra({ proveedor: 'manual', payload: null, score_persistido: 420, canon_mensual_cop: 1_000_000, fecha_evaluacion: '2026-09-08T12:00:00.000Z' });
+    expect(manual.features.score_modelo).toBe('PERSISTIDO');
+    expect(manual.reglas_duras).toEqual([]);
+    expect(manual.puntaje_normalizado).not.toBeNull();
+    expect(aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida: manual }).rechaza).toBe(false);
   });
 
   it('no toca la decision cuando SI hay puntaje', () => {

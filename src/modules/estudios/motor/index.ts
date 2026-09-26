@@ -144,9 +144,11 @@ export interface SalidaSombra {
   proveedor: string;
 
   features: FeaturesBuro;
+  /** Con regla dura, solo las variables que la dispararon (nota QA V2 §2.4). */
   puntajes: PuntajeVariable[];
 
-  puntaje_bruto: number;
+  /** null con regla dura: "las reglas duras no calculan puntaje" (nota QA V2 §2.4). */
+  puntaje_bruto: number | null;
   puntaje_bruto_maximo_modelo: number;
   puntaje_bruto_alcanzable: number;
   /** Adenda 2 §4.3: denominador de ESTA corrida y las variables que lo forman. */
@@ -369,6 +371,11 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       { variable: 'V8', puntos_maximos: PUNTOS_MAXIMOS.V8, ...puntajeV8Antiguedad(antiguedadMeses) },
       { variable: 'V9', puntos_maximos: PUNTOS_MAXIMOS.V9, ...puntajeV9ArrendamientoPrevio() },
     ];
+    // Un score capturado a mano (PERSISTIDO) no tiene la escala del buro: no
+    // dispara el corte de 450, lo decide el analista que lo registro. Se corta
+    // aqui (no en reglas-duras.ts) porque una regla dura en la salida anula el
+    // puntaje: solo puede salir la que de verdad rechaza.
+    if (features.score_modelo === 'PERSISTIDO') puntajes[0].reglaDura = null;
 
     const totales: TotalesScorecard = totalizar(puntajes);
 
@@ -422,8 +429,13 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
         })),
     ];
 
+    // Nota QA V2 §2.4: "Las reglas duras no calculan puntaje. [...] el motor
+    // debe rechazar sin calcular las variables restantes. Si el motor devuelve
+    // un puntaje en esos casos, la prueba falla aunque la decision sea correcta."
+    const porReglaDura = reglasDuras.length > 0;
+
     // ── Advertencias: lo que hace interpretable el numero ────
-    if (totales.puntaje_topado) {
+    if (totales.puntaje_topado && !porReglaDura) {
       advertencias.push(
         `Puntaje topado: a la persona le faltan datos de variables que participan (cuentan 0): solo ${totales.puntaje_bruto_alcanzable} de ${totales.denominador} puntos eran alcanzables. La banda solo se puede leer junto a puntaje_maximo_alcanzable.`,
       );
@@ -476,7 +488,7 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
     }
     if (antecedentes) features.crudas.antecedentes = antecedentes;
 
-    return {
+    const salida: SalidaSombra = {
       modelo_version: MODELO_VERSION,
       modo: 'sombra',
       fecha_evaluacion: fecha,
@@ -514,6 +526,22 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       inconsistencia_score_buros: inconsistenciaBuros,
       revision_obligatoria: revisionObligatoria,
     };
+    // §2.4: rechazo sin puntaje. Queda la evidencia (features, ratios, las
+    // variables que dispararon la regla, reglas_duras) y el motivo es la regla
+    // (decision_motivo), no un numero.
+    return porReglaDura
+      ? {
+          ...salida,
+          puntajes: puntajes.filter((p) => p.reglaDura !== null),
+          puntaje_bruto: null,
+          puntaje_bruto_alcanzable: 0,
+          denominador_normalizacion: 0,
+          variables_participantes: [],
+          puntaje_normalizado: null,
+          puntaje_maximo_alcanzable: null,
+          puntaje_topado: false,
+        }
+      : salida;
   } catch (err) {
     // Ultimo blindaje. Los extractores ya son a prueba de payloads raros, asi
     // que llegar aqui significa un bug del motor — se degrada en vez de

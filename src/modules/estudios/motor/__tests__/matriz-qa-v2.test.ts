@@ -13,8 +13,9 @@
  * registra procesarEstudioAsync (su flujo: ejecutar.cierre.test.ts).
  *
  * Criterios de la nota (§2): decision vinculante; normalizado ±0,5; bruto y
- * desglose EXACTOS; las reglas duras no calculan puntaje; traza (centrales
- * consultadas, ingreso bruto y ajustado, motivo, fuente, denominador).
+ * desglose EXACTOS; las reglas duras no calculan puntaje (§2.4, sinPuntaje en
+ * C, P, Q, S y M); traza (centrales consultadas, ingreso bruto y ajustado,
+ * motivo, fuente, denominador).
  * Cada fila es un `it` con expect.soft: un criterio que falla no oculta los demas.
  * Lo que depende de Mario queda como it.todo o comentado en la fila.
  */
@@ -85,7 +86,7 @@ vi.mock('@/modules/autorizaciones/biometria', () => ({
 
 import type { EntradaSombra, SalidaSombra, CodigoVariable } from '../index';
 import { construirFilaSombra } from '../fila';
-import { CONFLICTO_REGLAS_R2, decidirCascada, decidirResultado, decidirSinCentrales, type UmbralesDecision } from '../../decision';
+import { CONFLICTO_REGLAS_COARRENDATARIO, CONFLICTO_REGLAS_R2, decidirCascada, decidirResultado, decidirSinCentrales, type UmbralesDecision } from '../../decision';
 import { resolverResultadoEstudio } from '../../reglas-duras';
 import { decidirConCascada } from '../../estudios.service';
 import type { ProviderSolicitudInput } from '../../providers/types';
@@ -267,12 +268,13 @@ const conCoarrendatario = (r: Awaited<ReturnType<typeof decidir>>, coa: { puntaj
 /**
  * Camino real de la ponderacion (onCoarrendatarioEstudioCompletado): el
  * titular se decide solo y, al llegar el coarrendatario, veredictoScorecard
- * sobre las filas sombra de cada uno -> ponderarConCoarrendatario.
+ * sobre las filas sombra de cada uno -> ponderarConCoarrendatario. El
+ * coarrendatario va como puntaje suelto o como su corrida real del motor.
  */
-function ponderar(r: Awaited<ReturnType<typeof decidir>>, puntajeCoa: number) {
+function ponderar(r: Awaited<ReturnType<typeof decidir>>, coa: number | SalidaSombra) {
   const v = veredictoScorecard({
     titular: construirFilaSombra('est-titular', r.salida, {}) as unknown as FilaScorecard,
-    coa: { puntaje_normalizado: puntajeCoa },
+    coa: typeof coa === 'number' ? { puntaje_normalizado: coa } : (construirFilaSombra('est-coa', coa, {}) as unknown as FilaScorecard),
     coaConReglaDura: false,
     u: U,
   });
@@ -295,6 +297,27 @@ function normalizacion(s: SalidaSombra, bruto: number, normalizado: number, espe
   expect.soft(s.variables_participantes, 'variables que participaron').toEqual(['V1', 'V2', 'V3', 'V5', 'V6', 'V8']);
   const fila = construirFilaSombra('est-qa', s, {});
   expect.soft((fila.features_crudas as Record<string, unknown>).denominador_normalizacion, 'denominador en la fila sombra').toBe(96);
+}
+
+/**
+ * §2.4: "Las reglas duras no calculan puntaje [...] el motor debe rechazar sin
+ * calcular las variables restantes. Si el motor devuelve un puntaje en esos
+ * casos, la prueba falla aunque la decision sea correcta." Salida del motor,
+ * fila sombra y traza de la cascada, sin puntaje y con la regla como motivo.
+ */
+function sinPuntaje(r: Awaited<ReturnType<typeof decidir>>, regla: string) {
+  const s = r.salida;
+  expect.soft([s.puntaje_normalizado, s.puntaje_bruto, s.puntaje_maximo_alcanzable], 'salida del motor sin puntaje').toEqual([null, null, null]);
+  expect.soft(s.puntajes.filter((p) => p.reglaDura === null).map((p) => p.variable), 'sin las variables restantes').toEqual([]);
+  expect.soft(s.decision_sombra, 'decision del motor').toBe('rechazado');
+  expect.soft(s.decision_motivo, 'motivo del motor = la regla dura').toContain(regla);
+  expect.soft(r.d.motivo, 'motivo de la decision = la regla dura').toContain(regla);
+  const fila = construirFilaSombra('est-qa', s, {});
+  expect.soft([fila.decision_sombra, fila.puntaje_normalizado, fila.puntaje_bruto], 'fila sombra: rechazado sin puntaje').toEqual(['rechazado', null, null]);
+  expect.soft(fila.reglas_duras_activadas, 'fila sombra: la regla').toContain(regla);
+  expect.soft(fila.motivo_no_calculable, 'fila sombra: por que no hay puntaje').toContain(regla);
+  expect.soft(Object.values(fila.puntaje_por_variable as Record<string, { regla_dura: string | null }>).every((p) => p.regla_dura), 'fila sombra: solo la variable de la regla').toBe(true);
+  if (r.traza) expect.soft([r.traza.puntaje_primaria, r.traza.puntaje_final], 'traza de la cascada sin puntaje').toEqual([null, null]);
 }
 
 /** §2.5: traza de una sola central (la primaria), sin segunda consulta. */
@@ -326,41 +349,40 @@ const PERFIL_R: PerfilDC = { score: 600, cuotaCop: pctAjustado(60), sectores: ['
 // ============================================================================
 // 7.1 Reglas duras: C, P, Q, S
 // ============================================================================
-describe('7.1 Reglas duras', () => {
-  it('C — mora VIGENTE: RECHAZADO (RECHAZO_MORA_VIGENTE)', async () => {
+describe('7.1 Reglas duras (§2.4: sin puntaje)', () => {
+  it('C — mora VIGENTE: RECHAZADO (RECHAZO_MORA_VIGENTE), sin puntaje', async () => {
     const r = await decidir(dc({ score: 750, cuotaCop: pctAjustado(30), sectores: ['1'], mesesObservados: 24, maturationSince: MAS_8_ANIOS, moraVigente: true }, 25), { insumo: true });
     expect.soft(r.d.resultado, 'decision').toBe('rechazado');
     expect.soft(r.veredicto.reglas, 'regla').toContain('mora_vigente');
     unaCentral(r);
     expect.soft(r.salida.features.mora_vigente_desde, 'fecha de ocurrencia registrada').toBe('2026-07-17');
+    sinPuntaje(r, 'mora_vigente');
   });
 
-  it('P — DTI 70% con score 800: RECHAZADO (RECHAZO_DTI_MAYOR_65)', async () => {
+  it('P — DTI 70% con score 800: RECHAZADO (RECHAZO_DTI_MAYOR_65), sin puntaje', async () => {
     const r = await decidir(dc({ score: 800, cuotaCop: pctAjustado(70), sectores: ['1'], mesesObservados: 24, maturationSince: MAS_8_ANIOS }, 25), { insumo: true });
     expect.soft(r.d.resultado, 'decision').toBe('rechazado');
     expect.soft(r.veredicto.reglas, 'regla').toEqual(['dti_mayor_65']);
     unaCentral(r);
+    sinPuntaje(r, 'dti_mayor_65');
   });
 
-  it('Q — canon 45% del ingreso AJUSTADO: RECHAZADO (RECHAZO_CANON_MAYOR_40)', async () => {
+  it('Q — canon 45% del ingreso AJUSTADO: RECHAZADO (RECHAZO_CANON_MAYOR_40), sin puntaje', async () => {
     const r = await decidir(dc({ score: 800, cuotaCop: pctAjustado(20), sectores: ['1'], mesesObservados: 24, maturationSince: MAS_8_ANIOS }, 45), { insumo: true });
     expect.soft(r.salida.canon_ingreso_pct, 'canon/ingreso sobre el ajustado').toBe(45);
     expect.soft(r.d.resultado, 'decision').toBe('rechazado');
     expect.soft(r.veredicto.reglas, 'regla').toEqual(['canon_ingreso_mayor_40']);
+    sinPuntaje(r, 'canon_ingreso_mayor_40');
   });
 
-  it('S — score 440: RECHAZADO sin segunda consulta (RECHAZO_SCORE_MENOR_450)', async () => {
+  it('S — score 440: RECHAZADO sin segunda consulta (RECHAZO_SCORE_MENOR_450), sin puntaje', async () => {
     const r = await decidir(dc({ score: 440, cuotaCop: pctAjustado(20), sectores: ['1'], mesesObservados: 24, maturationSince: MAS_8_ANIOS }, 25), { insumo: true });
     expect.soft(r.d.resultado, 'decision').toBe('rechazado');
     expect.soft(r.veredicto.reglas, 'regla').toEqual(['score_menor_450']);
     expect.soft(r.cascada.consultarSecundaria, 'sin segunda consulta').toBe(false);
     unaCentral(r);
+    sinPuntaje(r, 'score_menor_450');
   });
-
-  // Nota §2.4: "Si el motor devuelve un puntaje en esos casos, la prueba falla".
-  // Hoy el motor SI calcula el puntaje (se guarda en la fila sombra) aunque la
-  // regla dura decida.
-  it.todo('C/P/Q/S — §2.4 la regla dura no calcula puntaje: pendiente de Mario: ¿puntaje solo interno para calibrar?');
 });
 
 // ============================================================================
@@ -507,6 +529,23 @@ describe('7.4 Coarrendatario', () => {
     expect.soft(ponderar(r, 75).combinado, 'coarrendatario 75 (ponderacion)').toBe('revision_manual');
   });
 
+  // Nota §5 (R2) del lado del coarrendatario: su score 450-599 (Adenda 2 §2,
+  // revision manual con prioridad sobre el < 70) choca con el caso O. Sin
+  // definicion de la Gerencia: revision manual con la marca de conflicto.
+  it('O con coarrendatario de score 520 (47,9 < 70): REVISION MANUAL y traza de conflicto, no rechazo', async () => {
+    const r = await decidir(dc(PERFIL_B, 30));
+    const coa = (await decidir(dc(PERFIL_F, 30))).salida;
+    expect.soft(coa.puntaje_normalizado, 'precondicion: coarrendatario < 70').toBe(47.9);
+    expect.soft(coa.revision_obligatoria, 'precondicion: score del coarrendatario en la banda 450-599').toMatch(/520/);
+    const d = conCoarrendatario(r, { puntaje: coa.puntaje_normalizado, reglaDura: false, scoreEnBandaRevision: true });
+    expect.soft(d.resultado, 'decision (decidirResultado)').toBe('condicionado');
+    expect.soft(d.via, 'via').toBe('revision_manual');
+    expect.soft(d.motivo, 'traza: conflicto de reglas del coarrendatario').toContain(CONFLICTO_REGLAS_COARRENDATARIO);
+    const { v, combinado } = ponderar(r, coa);
+    expect.soft(combinado, 'decision (ponderacion)').toBe('revision_manual');
+    expect.soft(v?.conflicto, 'ponderacion: conflicto de reglas del coarrendatario').toBe(CONFLICTO_REGLAS_COARRENDATARIO);
+  });
+
   it('R — afianzado 52,1 (< 70) + coarrendatario 95: RECHAZADO', async () => {
     const r = await decidir(dc(PERFIL_R, 35));
     normalizacion(r.salida, 50, 52.1, { score: 34, dti: 2, canon: 4, exp: 0, comp: 10, ant: 0 });
@@ -557,7 +596,7 @@ describe('7.5 Motivos y traza', () => {
     expect.soft(r.d.motivo, 'motivo Caso G').toMatch(/Caso G/);
   });
 
-  it('M — ingreso 3.000.000 x 1,15 = 3.450.000, canon 1.400.000: RECHAZADO sobre el AJUSTADO (40,6%), traza con ambos', async () => {
+  it('M — ingreso 3.000.000 x 1,15 = 3.450.000, canon 1.400.000: RECHAZADO sobre el AJUSTADO (40,6%), traza con ambos, sin puntaje', async () => {
     const perfil: PerfilDC = { score: 750, ingresoCop: 3_000_000, cuotaCop: 690_000, sectores: ['1'], mesesObservados: 24, maturationSince: MAS_8_ANIOS };
     const r = await decidir({ proveedor: 'datacredito', payload: reporteDC(perfil), canon_mensual_cop: 1_400_000 }, { insumo: true });
     expect.soft(r.d.resultado, 'decision').toBe('rechazado');
@@ -572,6 +611,7 @@ describe('7.5 Motivos y traza', () => {
     }
     const fila = construirFilaSombra('est-qa', r.salida, {});
     expect.soft([fila.ingreso_inferido_cop, fila.ingreso_inferido_ajustado_cop], 'fila sombra: ambos valores').toEqual([3_000_000, 3_450_000]);
+    sinPuntaje(r, 'canon_ingreso_mayor_40');
     // Discriminante: 1.380.000 es 46% del bruto pero 40,0% exacto del ajustado -> no rechaza.
     const borde = await decidir({ proveedor: 'datacredito', payload: reporteDC(perfil), canon_mensual_cop: 1_380_000 });
     expect.soft(borde.veredicto.reglas, 'la regla se evalua sobre el ajustado, no sobre el bruto').not.toContain('canon_ingreso_mayor_40');

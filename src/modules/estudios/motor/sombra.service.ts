@@ -258,18 +258,27 @@ export async function recalcularEnRevisionManual(
  * §9. construirFilaSombra la encuadra como 'no_calculable' con su motivo.
  */
 async function persistirFila(estudioId: string, salida: SalidaSombra, contexto: ContextoEjecucion = {}): Promise<void> {
-  if (salida.puntaje_normalizado === null) {
+  if (salida.puntaje_normalizado === null && salida.reglas_duras.length === 0) {
     logger.debug(
       { estudioId, proveedor: salida.proveedor, motivo: salida.motivo_no_calculable ?? salida.decision_motivo },
       'scorecard sombra: sin variables calculables — se persiste solo la traza (§9)',
     );
   }
 
-  const { error } = await (supabase
-    .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
-    .upsert(construirFilaSombra(estudioId, salida, contexto) as never, {
-      onConflict: 'estudio_id,modelo_version',
-    });
+  const upsert = (fila: Record<string, unknown>) =>
+    (supabase
+      .from('estudios_scorecard_sombra' as string) as ReturnType<typeof supabase.from>)
+      .upsert(fila as never, { onConflict: 'estudio_id,modelo_version' });
+
+  const fila = construirFilaSombra(estudioId, salida, contexto);
+  let { error } = await upsert(fila);
+  // Rechazo por regla dura SIN puntaje (nota QA V2 §2.4): hasta que corra la
+  // migracion 20261001000010 el CHECK viejo lo rebota (23514). Se guarda como
+  // antes, 'no_calculable', con la regla en motivo_no_calculable y en
+  // reglas_duras_activadas: la fila (y su traza §9) no se pierde.
+  if (error?.code === '23514' && fila.decision_sombra === 'rechazado' && fila.puntaje_normalizado === null) {
+    ({ error } = await upsert({ ...fila, decision_sombra: 'no_calculable' }));
+  }
 
   if (error) {
     logger.warn(

@@ -86,13 +86,15 @@ export function construirFilaSombra(
 ): Record<string, unknown> {
   const f = salida.features;
 
-  // Coherencia con chk_scorecard_sombra_no_calculable: sin puntaje, la unica
-  // decision que la tabla admite es 'no_calculable'. decidirSombra puede
-  // devolver 'rechazado' SIN puntaje (regla dura global de listas, §6), y esa
-  // fila fallaria entera por el CHECK. La decision que el motor habria tomado
-  // no se pierde: queda en motivo_no_calculable, en reglas_duras_activadas y
-  // en features_crudas.decision_sombra_motor.
+  // Coherencia con chk_scorecard_sombra_no_calculable: sin puntaje, la tabla
+  // admite 'no_calculable' y —desde la migracion 20261001000010— 'rechazado'
+  // con alguna regla dura (nota QA V2 §2.4: la regla dura no calcula puntaje).
+  // Cualquier otra decision sin puntaje se encuadra como 'no_calculable'. El
+  // motivo de la falta de puntaje (la regla, si la hay) va en
+  // motivo_no_calculable. Mientras la migracion no corra, sombra.service
+  // reintenta el rechazo como 'no_calculable' (el CHECK viejo).
   const sinPuntaje = salida.puntaje_normalizado === null;
+  const rechazoPorReglaDura = sinPuntaje && salida.decision_sombra === 'rechazado' && salida.reglas_duras.length > 0;
 
   const puntajePorVariable: Record<string, unknown> = {};
   for (const p of salida.puntajes) {
@@ -155,7 +157,7 @@ export function construirFilaSombra(
     umbral_aprobado: salida.umbral_aprobado,
     umbral_revision: salida.umbral_revision,
 
-    decision_sombra: sinPuntaje ? 'no_calculable' : salida.decision_sombra,
+    decision_sombra: sinPuntaje && !rechazoPorReglaDura ? 'no_calculable' : salida.decision_sombra,
     motivo_no_calculable: sinPuntaje
       ? (salida.motivo_no_calculable ?? salida.decision_motivo)
       : salida.motivo_no_calculable,

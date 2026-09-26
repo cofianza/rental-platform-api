@@ -183,6 +183,10 @@ assert.strictEqual(pts(dc1500, 'V3').puntos, 0, 'la regla dura puntua 0, NO deja
 assert.strictEqual(pts(dc1500, 'V3').estado, 'calculada', 'la variable se evaluo: no debe salir del denominador');
 assert.deepStrictEqual(dc1500.reglas_duras.map((r) => r.codigo), ['canon_ingreso_mayor_40']);
 assert.strictEqual(dc1500.decision_sombra, 'rechazado', 'una regla dura manda sobre el puntaje');
+// Nota QA V2 §2.4: la regla dura no calcula puntaje ni las variables restantes.
+assert.strictEqual(dc1500.puntaje_normalizado, null, 'regla dura: sin puntaje normalizado');
+assert.strictEqual(dc1500.puntaje_bruto, null, 'regla dura: sin puntaje bruto');
+assert.deepStrictEqual(dc1500.puntajes.map((p) => p.variable), ['V3'], 'regla dura: solo la variable que la disparo');
 fila(true, 'canon 1.500.000 dispara regla dura', `canon/ing=${dc1500.canon_ingreso_pct}% decision=${dc1500.decision_sombra}`);
 
 // ── sin canon: V3 no calculable, y BAJA el techo (no suma 0) ──
@@ -681,9 +685,11 @@ function validarContraSchema(s: SalidaSombra): string[] {
   const DECISIONES = ['aprobado', 'revision_manual', 'rechazado', 'no_calculable'];
   if (!DECISIONES.includes(String(row.decision_sombra))) e.push(`decision_sombra invalida: ${row.decision_sombra}`);
 
-  // chk_scorecard_sombra_no_calculable
+  // chk_scorecard_sombra_no_calculable (migracion 20261001000010: sin puntaje
+  // tambien vale 'rechazado' con alguna regla dura, nota QA V2 §2.4)
   const esNoCalculable = row.decision_sombra === 'no_calculable';
-  if (esNoCalculable !== (row.puntaje_normalizado === null)) {
+  const rechazoSinPuntaje = row.decision_sombra === 'rechazado' && (row.reglas_duras_activadas as string[]).length > 0;
+  if (esNoCalculable !== (row.puntaje_normalizado === null) && !(rechazoSinPuntaje && row.puntaje_normalizado === null)) {
     e.push(`coherencia decision/puntaje rota: ${row.decision_sombra} con puntaje ${row.puntaje_normalizado}`);
   }
 
@@ -828,8 +834,9 @@ for (const s of [dc, dc900, dc1500, tu, piso, mora6, moraVigente, sinHistorial])
   );
   assert.notStrictEqual(s.decision_sombra as string, 'condicionado', 'el vocabulario sombra NO comparte valores con resultado_estudio');
 }
-// La suma tiene que cuadrar con el detalle por variable en todos los casos.
-for (const s of [dc, dc900, dc1500, tu, piso, sinHistorial]) {
+// La suma tiene que cuadrar con el detalle por variable en todos los casos
+// (salvo los de regla dura, que no tienen suma: nota QA V2 §2.4).
+for (const s of [dc, dc900, tu, piso, sinHistorial]) {
   const suma = s.puntajes.reduce((acc, p) => acc + (p.estado === 'calculada' && p.puntos !== null ? p.puntos : 0), 0);
   assert.strictEqual(s.puntaje_bruto, Math.max(0, suma), 'puntaje_bruto debe ser la suma de las variables calculadas (con piso 0)');
   const techo = s.puntajes.reduce((acc, p) => acc + (p.estado === 'calculada' ? p.puntos_maximos : 0), 0);

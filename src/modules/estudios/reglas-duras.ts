@@ -467,12 +467,11 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
   // ORDEN sea el de la politica —DTI §4.2, luego canon/ingreso §4.3— y no el
   // orden en que el motor recorrio las variables: el motivo del gestor y la
   // columna de trazabilidad no deberian cambiar de forma por eso.
+  // Un score capturado a mano (PERSISTIDO) ya no trae 'score_menor_450': el
+  // motor no lo emite (su escala no es la del buro, lo decide el analista).
   const activadas = new Set<ReglaDuraActiva>(
     salida.reglas_duras.map((r) => r.codigo).filter(esReglaActiva),
   );
-  // Un score capturado a mano (PERSISTIDO) no tiene la escala del buro (el
-  // motor lo advierte): no dispara el corte de 450, lo decide el analista.
-  if (salida.features.score_modelo === 'PERSISTIDO') activadas.delete('score_menor_450');
   const reglas = REGLAS_DURAS_ACTIVAS.filter((codigo) => activadas.has(codigo));
 
   if (reglas.length === 0) return sinRechazo;

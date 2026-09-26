@@ -25,6 +25,7 @@
 //   70 a 84 con coarrendatario >= 80            APROBACION AUTOMATICA CONDICIONADA
 //   70 a 84 sin coarrendatario (o con 70-79)    REVISION MANUAL
 //   70 a 84 con coarrendatario < 70             RECHAZADO (matriz QA V2, caso O)
+//     ...salvo coarrendatario con score 450-599 REVISION MANUAL + conflicto (nota §5)
 //   < 70                                        RECHAZADO
 //
 // ── Politica §3.1, jerarquia ──────────────────────────────────
@@ -48,8 +49,16 @@ export type ResultadoDecidido = 'aprobado' | 'condicionado' | 'rechazado';
  * Gerencia no defina, la salida es la conservadora —revision manual— y la
  * traza lo dice con este texto.
  */
-export const CONFLICTO_REGLAS_R2 =
-  'Conflicto de reglas pendiente de definición de la Gerencia (Política tabla reglas duras vs Adenda 2 punto 2).';
+const CONFLICTO_PENDIENTE = 'Conflicto de reglas pendiente de definición de la Gerencia';
+export const CONFLICTO_REGLAS_R2 = `${CONFLICTO_PENDIENTE} (Política tabla reglas duras vs Adenda 2 punto 2).`;
+
+/**
+ * R2 del lado del coarrendatario: titular 70-84 con coarrendatario < 70 es el
+ * caso O (rechazo), pero si el coarrendatario tiene score 450-599 la Adenda 2
+ * §2 lo manda a revision manual con prioridad sobre el < 70. Sin definicion de
+ * la Gerencia, misma salida conservadora que R2 (nota §5).
+ */
+export const CONFLICTO_REGLAS_COARRENDATARIO = `${CONFLICTO_PENDIENTE} (coarrendatario: matriz QA V2 caso O vs Adenda 2 punto 2).`;
 
 export interface UmbralesDecision {
   cascadaRechazo: number;
@@ -129,8 +138,11 @@ export interface EntradaDecision {
   /** Reglas duras que YA decidieron (lista blanca). */
   reglasDurasActivas: readonly string[];
   u: UmbralesDecision;
-  /** Coarrendatario evaluado, si lo hay. */
-  coarrendatario?: { puntaje: number | null; reglaDura: boolean } | null;
+  /**
+   * Coarrendatario evaluado, si lo hay. `scoreEnBandaRevision`: su score cae
+   * en la banda 450-599 (revision_obligatoria de su corrida, sin Caso G).
+   */
+  coarrendatario?: { puntaje: number | null; reglaDura: boolean; scoreEnBandaRevision?: boolean } | null;
   /** §14 / §16.5 / §8: motivos que impiden la aprobacion automatica. */
   motivosRevision: readonly string[];
 }
@@ -212,6 +224,13 @@ export function decidirResultado(e: EntradaDecision): Decision {
   // Matriz QA V2, caso O: coarrendatario < 70 no compensa y el caso se rechaza.
   // Entre 70 y el umbral del coarrendatario sigue en revision manual (abajo).
   if (coa && !coa.reglaDura && coa.puntaje !== null && coa.puntaje < u.zonaGris) {
+    if (coa.scoreEnBandaRevision) {
+      return {
+        resultado: 'condicionado',
+        motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris} con score en la banda de revision obligatoria: revision manual. ${CONFLICTO_REGLAS_COARRENDATARIO}`,
+        via: 'revision_manual',
+      };
+    }
     return {
       resultado: 'rechazado',
       motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris}: el coarrendatario no compensa (matriz QA V2, caso O)`,

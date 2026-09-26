@@ -699,8 +699,9 @@ export interface DecisionCalculada {
  * Jerarquia (politica V4.1 §3.1 + §5 + §6):
  *   0. Regla dura GLOBAL (listas restrictivas) -> rechazado, haya o no puntaje:
  *      el §6 las verifica "antes de calcular cualquier variable".
- *   1. Sin ninguna variable calculable -> no_calculable (sin puntaje que comparar).
- *   2. Alguna regla dura activada      -> rechazado.
+ *   1. Alguna regla dura activada      -> rechazado. Antes que el paso 2: con
+ *      regla dura evaluarSombra entrega la corrida SIN puntaje (nota QA V2 §2.4).
+ *   2. Sin ninguna variable calculable -> no_calculable (sin puntaje que comparar).
  *   3. Score externo en [450, 599]     -> revision manual obligatoria, prevalece
  *                                         sobre el puntaje (§3.1).
  *   4. Comparacion con los umbrales    -> 85 / 70.
@@ -729,16 +730,16 @@ export function decidirSombra(
       motivo: `Regla dura global activada: ${reglasGlobales.join(', ')}`,
     };
   }
-  if (totales.puntaje_normalizado === null) {
-    return {
-      decision: 'no_calculable',
-      motivo: 'Ninguna variable del scorecard resulto calculable con este payload',
-    };
-  }
   if (totales.reglas_duras.length > 0) {
     return {
       decision: 'rechazado',
       motivo: `Regla dura activada: ${totales.reglas_duras.join(', ')}`,
+    };
+  }
+  if (totales.puntaje_normalizado === null) {
+    return {
+      decision: 'no_calculable',
+      motivo: 'Ninguna variable del scorecard resulto calculable con este payload',
     };
   }
   if (
