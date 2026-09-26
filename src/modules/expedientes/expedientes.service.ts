@@ -25,6 +25,7 @@ import type {
   UpdateExpedienteInput,
   ListExpedientesQuery,
 } from './expedientes.schema';
+import { formatNumeroEstudio, limpiarBusquedaNumeroEstudio } from '@/lib/numeroEstudio';
 
 // ============================================================
 // Types
@@ -106,7 +107,7 @@ export async function listExpedientes(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rpcParams: Record<string, any> = {
-    p_search: search || null,
+    p_search: (search && limpiarBusquedaNumeroEstudio(search)) || null,
     p_estados: estados,
     p_analista_id: analista_id || null,
     p_inmueble_id: inmueble_id || null,
@@ -380,7 +381,7 @@ async function enviarWhatsAppResponsable(responsableId: string, numero: string, 
     await enviarTemplateWhatsApp({
       to: p?.telefono ?? null,
       template: 'RESPONSABLE_EXPEDIENTE',
-      variables: [p?.nombre || 'Hola', numero],
+      variables: [p?.nombre || 'Hola', formatNumeroEstudio(numero)],
       context: { expediente_id: expedienteId },
     });
   } catch (err) {
@@ -564,7 +565,7 @@ export async function createExpediente(
       userId: responsableAsignado,
       tipo: 'expediente_asignado',
       titulo: 'Estudio asignado',
-      mensaje: `Eres responsable del estudio ${created.numero}.`,
+      mensaje: `Eres responsable del estudio ${formatNumeroEstudio(created.numero)}.`,
       link: `/expedientes/${created.id}`,
     });
     // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.
@@ -762,7 +763,7 @@ export async function asignarMiembroResponsableExpediente(
       userId: miembroId,
       tipo: 'expediente_asignado',
       titulo: 'Estudio asignado',
-      mensaje: `Eres responsable del estudio ${exp.numero}.`,
+      mensaje: `Eres responsable del estudio ${formatNumeroEstudio(exp.numero)}.`,
       link: `/expedientes/${expedienteId}`,
     });
     // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.

@@ -96,6 +96,12 @@ export interface EntradaRuta {
   puntajeCoarrendatario: number | null;
   /** Umbrales vigentes (panel de calibracion). Sin ellos, los de la Politica. */
   umbrales?: Partial<UmbralesRuta> | null;
+  /**
+   * Decision 4 (2026-09-25): false en el canal del propietario directo, que no
+   * admite coarrendatario hasta el Convenio: no se le ofrece la prima menor.
+   * Sin el dato se asume que si (la web lo contrasta con la ventana de invitacion).
+   */
+  canalAdmiteCoarrendatario?: boolean;
 }
 
 export interface Ruta {
@@ -108,7 +114,11 @@ export interface Ruta {
   puedeContinuarSolo: boolean;
   /** ¿El acompañante es obligatorio para que esto avance? */
   coarrendatarioObligatorio: boolean;
-  /** ¿Sumar un coarrendatario le abarata la prima? (Adenda §5.2: 20% -> 10%). */
+  /**
+   * ¿Sumar un coarrendatario le abarata la prima? (Adenda §5.2: 20% -> 10%).
+   * Decision 2: es la oferta del aprobado; el texto y el boton para invitar los
+   * pone la pantalla, solo si la invitacion es posible (canal, contrato).
+   */
   coarrendatarioAbarataPrima: boolean;
   /** Etiqueta interna para el gestor. Aqui SI se puede ser tecnico. */
   etiquetaGestor: string;
@@ -145,6 +155,10 @@ const NO_APROBABLE = {
  */
 export function resolverRuta(e: EntradaRuta): Ruta {
   const u: UmbralesRuta = { ...UMBRALES_RUTA_DEFAULT, ...(e.umbrales ?? {}) };
+  // Decision 2: el aprobado puede sumar coarrendatario antes del contrato para
+  // bajar la prima (Politica §5, Flujo §10). No si ya lo tiene, ni en el canal
+  // del propietario directo (Decision 4).
+  const abarata = e.canalAdmiteCoarrendatario !== false && !e.coarrendatarioVinculado;
 
   // 1. Regla dura: §6 de la Politica. Ni el mejor puntaje la compensa, y el
   //    coarrendatario tampoco ("Regla dura del coarrendatario contamina el
@@ -180,11 +194,10 @@ export function resolverRuta(e: EntradaRuta): Ruta {
     return {
       ruta: 'perfil_medio',
       titulo: 'Tu estudio fue aprobado',
-      mensaje:
-        'Puedes continuar solo. Si prefieres, tambien puedes sumar un coarrendatario y obtener una prima mas baja: no necesita finca raiz.',
+      mensaje: 'Puedes continuar solo con el contrato.',
       puedeContinuarSolo: true,
       coarrendatarioObligatorio: false,
-      coarrendatarioAbarataPrima: true,
+      coarrendatarioAbarataPrima: abarata,
       etiquetaGestor: 'Aprobado sin puntaje del modelo',
     };
   }
@@ -194,11 +207,10 @@ export function resolverRuta(e: EntradaRuta): Ruta {
     return {
       ruta: 'perfil_fuerte',
       titulo: 'Tu estudio fue aprobado',
-      mensaje:
-        'Puedes firmar el contrato tu solo, sin acompañante. Si quieres, un coarrendatario te baja la prima de vinculacion: no necesita finca raiz.',
+      mensaje: 'Puedes firmar el contrato tu solo, sin acompañante.',
       puedeContinuarSolo: true,
       coarrendatarioObligatorio: false,
-      coarrendatarioAbarataPrima: true,
+      coarrendatarioAbarataPrima: abarata,
       etiquetaGestor: `Aprobado automatico (${e.puntaje} pts)`,
     };
   }

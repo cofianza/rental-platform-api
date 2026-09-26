@@ -201,8 +201,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 50,
     max: 100,
     entero: true,
-    seccion: 'Adenda 2 §9',
-    descripcion: 'Similitud minima (%) entre la selfie y la cedula para dar por verificada la identidad al firmar el contrato. Por debajo, un analista de Cofianza verifica por otro medio: nunca rechaza.',
+    seccion: 'Adenda 2 §9 y §10',
+    descripcion: 'Similitud minima (%) entre la selfie y la cedula para dar por verificada la identidad, en la autorizacion del estudio y en la firma del contrato. Por debajo, un analista de Cofianza verifica por otro medio: nunca rechaza.',
     advertencia: 'Revisar a los tres meses cuantas verificaciones legitimas caen al analista; si son pocas, puede evaluarse bajarlo.',
   },
   {

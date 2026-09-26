@@ -16,6 +16,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { AppError } from '@/lib/errors';
+import { estudioYaCobrado } from './pago.guard';
 
 export interface CoarrendatarioVinculado {
   /** Fila de expediente_coarrendatarios. */
@@ -100,6 +101,81 @@ export async function contratoFijoSinCoarrendatario(expedienteId: string): Promi
   if (partesError) throw new Error(partesError.message);
   const conCoa = new Set(((partes ?? []) as Array<{ contrato_id: string }>).map((x) => x.contrato_id));
   return v3.some((id) => !conCoa.has(id));
+}
+
+/**
+ * Decision 2 (2026-09-25; Politica §5 «>= 70 si se vincula -> APROBADO», Flujo
+ * §8.3 y §10, Adenda 1 §5.2): la invitacion del coarrendatario tiene efecto con
+ * el estudio en revision (condicionado) o ya aprobado mientras ningun contrato
+ * fijo vaya sin el: el aprobado lo suma antes del contrato para pagar la prima
+ * del 10 %. Fuera de eso (P3) su evaluacion no tiene finalidad (Ley 1581).
+ * La usan la invitacion, su aceptacion y ejecutarEstudio. 503 si no puede leer
+ * los contratos: no se consulta el buro de un tercero a ciegas.
+ */
+export async function coarrendatarioVigente(estado: string, expedienteId: string): Promise<boolean> {
+  if (estado === 'condicionado') return true;
+  if (estado !== 'aprobado') return false;
+  try {
+    return !(await contratoFijoSinCoarrendatario(expedienteId));
+  } catch (err) {
+    logger.error(
+      { expedienteId, err: err instanceof Error ? err.message : String(err) },
+      'No se pudo verificar el contrato del estudio — no se admite el co-arrendatario',
+    );
+    throw new AppError(
+      503,
+      'LECTURA_NO_VERIFICABLE',
+      'No pudimos verificar el contrato del estudio. Intenta de nuevo en un momento.',
+    );
+  }
+}
+
+/**
+ * Decision 4 (2026-09-25): el canal del propietario directo (inmueble sin
+ * inmobiliaria) espera el Convenio; mientras tanto no se invita co-arrendatario.
+ */
+export const MOTIVO_CANAL_SIN_COARRENDATARIO =
+  'Por ahora el co-arrendatario solo está disponible en inmuebles que gestiona una inmobiliaria. Este estudio continúa con el solicitante solo.';
+
+export type VentanaCoarrendatario =
+  | { vigente: boolean; puede_invitar: true; motivo: null; codigo: null }
+  | { vigente: boolean; puede_invitar: false; motivo: string; codigo: string };
+
+/**
+ * ¿Se puede invitar co-arrendatario ahora? (Decisiones 2 y 4.) `vigente` es la
+ * regla de coarrendatarioVigente (una invitacion ya enviada sigue en pie); para
+ * invitar ademas hace falta el canal de inmobiliaria y, sobre un aprobado, el
+ * pago del estudio: su evaluacion se ampara en el del titular (pago.guard) y
+ * sin el quedaria aparcada para siempre. No mira si ya hay una invitacion viva
+ * (lo dice el indice unico). Una sola regla para el panel, el enlace del
+ * prospecto y los correos.
+ */
+export async function ventanaCoarrendatario(e: {
+  expedienteId: string;
+  estado: string;
+  inmobiliariaId: string | null;
+}): Promise<VentanaCoarrendatario> {
+  const vigente = await coarrendatarioVigente(e.estado, e.expedienteId);
+  const no = (codigo: string, motivo: string): VentanaCoarrendatario => ({ vigente, puede_invitar: false, motivo, codigo });
+  if (!e.inmobiliariaId) return no('COARRENDATARIO_CANAL_PROPIETARIO', MOTIVO_CANAL_SIN_COARRENDATARIO);
+  if (!vigente) {
+    return e.estado === 'aprobado'
+      ? no(
+          'CONTRATO_SIN_COARRENDATARIO',
+          'El contrato de este estudio ya se generó sin co-arrendatario. Para sumarlo hay que cancelar ese contrato y generar otro.',
+        )
+      : no(
+          'EXPEDIENTE_NO_CONDICIONADO',
+          `Solo se puede invitar co-arrendatario con el estudio en revisión o aprobado, antes del contrato. Estado actual: ${e.estado}.`,
+        );
+  }
+  if (e.estado === 'aprobado' && !(await estudioYaCobrado(e.expedienteId))) {
+    return no(
+      'PAGO_ESTUDIO_REQUERIDO',
+      'El estudio no tiene un pago registrado, y la evaluación del co-arrendatario se ampara en ese pago. Escríbenos para revisarlo.',
+    );
+  }
+  return { vigente, puede_invitar: true, motivo: null, codigo: null };
 }
 
 /**

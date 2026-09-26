@@ -38,7 +38,8 @@ export async function autorizarExceso(req: Request, res: Response) {
 // ── Entrega 5 ──
 
 export async function cargarPropio(req: Request, res: Response) {
-  sendSuccess(res, await asistente.cargarPropio(expedienteId(req), req.file, req.user!.id, req.user!.rol));
+  const { numero_contrato } = req.body as { numero_contrato?: string };
+  sendSuccess(res, await asistente.cargarPropio(expedienteId(req), req.file, req.user!.id, req.user!.rol, numero_contrato));
 }
 
 export async function guardarFirmasPropio(req: Request, res: Response) {

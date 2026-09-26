@@ -158,4 +158,4 @@ Para consultar el historial crediticio de un solicitante en centrales de riesgo 
 - No se puede iniciar un estudio de riesgo sin autorización Habeas Data vigente del solicitante
 - La autorización queda vinculada al solicitante (no al expediente), pudiendo cubrir múltiples estudios
 - El sistema almacena el texto exacto autorizado, IP, user agent y timestamp como evidencia legal
-- El solicitante tiene derecho a revocar su autorización en cualquier momento (solo Admin puede ejecutar)
+- El solicitante tiene derecho a revocar su autorización en cualquier momento, ante Cofianza (Ley 1581 art. 8): Admin u Operador registran su solicitud con fecha, canal y soporte; la inmobiliaria o el propietario no revocan, cancelan el estudio

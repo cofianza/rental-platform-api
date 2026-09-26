@@ -58,6 +58,7 @@ import { logger } from '@/lib/logger';
 import { validarBiometria } from '@/lib/auco';
 import type { AucoVerifaceResponse } from '@/lib/auco';
 import { mapearTipoDocumentoAuco } from '@/modules/estudios/antecedentes';
+import { getCalibracion } from '@/lib/calibracion';
 
 // ── Vocabulario ─────────────────────────────────────────────
 
@@ -330,11 +331,12 @@ export interface EntradaValidacion {
 }
 
 /**
- * Autorizacion del prospecto: AucoFace con el umbral del env, si el
- * interruptor AUCO_BIOMETRIA_ENABLED esta encendido.
+ * Autorizacion del prospecto: AucoFace, si el interruptor AUCO_BIOMETRIA_ENABLED
+ * esta encendido, con UMBRAL_SIMILITUD_BIOMETRICA del panel (80 %): Adenda 2
+ * §9 y §10 fijan un solo parametro, el mismo de la firma del contrato.
  */
 export async function validarIdentidadProspecto(input: EntradaValidacion): Promise<ResumenBiometria> {
-  const umbral = env.AUCO_BIOMETRIA_UMBRAL_SIMILITUD;
+  const umbral = (await getCalibracion()).UMBRAL_SIMILITUD_BIOMETRICA;
   if (!env.AUCO_BIOMETRIA_ENABLED) return biometriaDesactivada(new Date().toISOString(), umbral);
   return cotejarConAuco(input.autorizacionId, input, umbral);
 }

@@ -104,6 +104,7 @@ import {
   assertEstudioPagado as assertEstudioPagadoGuard,
   PAGO_NO_VERIFICABLE_ERROR_CODE as PAGO_NO_VERIFICABLE,
 } from './pago.guard';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 /** El estudio no esta en condiciones de portarse (estado, pago o expediente). */
 export const ESTUDIO_NO_REASIGNABLE_ERROR_CODE = 'ESTUDIO_NO_REASIGNABLE';
@@ -385,7 +386,7 @@ async function assertExpedienteSinContratos(
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El estudio ${expedienteNumero ?? ''} ya genero el contrato ${contrato.numero ?? contrato.id} ` +
+      `El estudio ${formatNumeroEstudio(expedienteNumero)} ya genero el contrato ${contrato.numero ?? contrato.id} ` +
         `(${contrato.estado}) sobre la propiedad actual, y ese contrato no puede quedar hablando de otra. ` +
         'Crea un estudio nuevo para la otra propiedad — la evaluación de este ya esta pagada y su ' +
         'resultado sigue disponible.',
@@ -435,7 +436,7 @@ async function assertExpedienteSinCitasVivas(
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El estudio ${expedienteNumero ?? ''} tiene una visita ${cita.estado} para la propiedad actual. ` +
+      `El estudio ${formatNumeroEstudio(expedienteNumero)} tiene una visita ${cita.estado} para la propiedad actual. ` +
         'Si la reasignas, esa visita pasaria a mostrar la direccion de la propiedad nueva sin que nadie ' +
         // Reprogramar no la saca de 'solicitada'/'confirmada': seguiria bloqueando.
         'lo haya acordado. Cancélala primero y vuelve a intentarlo.',
@@ -749,7 +750,7 @@ export async function reasignarEstudio(args: {
     throw new AppError(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
-      `El estudio ${expediente.numero ?? ''} está ${expediente.estado} y ya no se traslada a otra propiedad.`,
+      `El estudio ${formatNumeroEstudio(expediente.numero)} está ${expediente.estado} y ya no se traslada a otra propiedad.`,
       { motivo: 'expediente_terminal', estado: expediente.estado },
     );
   }
@@ -1061,7 +1062,7 @@ async function avisarReasignacionAlSolicitante(
       tipo: 'estudio.reasignado',
       titulo: 'Su estudio se trasladó a otra propiedad',
       mensaje:
-        `Su estudio${expediente.numero ? ` ${expediente.numero}` : ''} se trasladó a la propiedad ${referenciaInmueble(destino.codigo, destino.direccion)} ` +
+        `Su estudio${expediente.numero ? ` ${formatNumeroEstudio(expediente.numero)}` : ''} se trasladó a la propiedad ${referenciaInmueble(destino.codigo, destino.direccion)} ` +
         `sin costo adicional. Conserva su vigencia original${vigencia}.`,
       link: `/expedientes/${expediente.id}`,
       payload: { expediente_id: expediente.id },

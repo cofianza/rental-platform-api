@@ -18,6 +18,7 @@ import { notificarYCorreo } from '@/modules/notificaciones/notificaciones.servic
 import { cancelarBorradorV3PorSistema } from '../contrato-workflow.service';
 import { reservaHasta } from './asistente.reglas';
 import { fechaBogota } from './formato';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
 const ddmmaaaa = (iso: string) => iso.split('-').reverse().join('/');
@@ -100,7 +101,7 @@ async function avisar(c: Borrador, hasta: string, plazo: string): Promise<void> 
         tipo: 'contrato.reserva_vencida',
         titulo: `Se venció la reserva del inmueble — contrato ${c.numero}`,
         mensaje:
-          `El contrato ${c.numero} del estudio ${e.numero} no se envió a firma en ${plazo} (la reserva iba hasta el ${ddmmaaaa(hasta)}). ` +
+          `El contrato ${c.numero} del estudio ${formatNumeroEstudio(e.numero)} no se envió a firma en ${plazo} (la reserva iba hasta el ${ddmmaaaa(hasta)}). ` +
           (libre ? 'El borrador se canceló y el inmueble quedó libre, fuera de la vitrina. ' : 'El borrador se canceló. ') +
           'Si el arriendo sigue, inicia el contrato de nuevo: el asistente trae lo que ya llenaste.',
         link: `/expedientes/${c.expediente_id}/contrato`,

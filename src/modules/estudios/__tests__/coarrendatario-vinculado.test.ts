@@ -26,12 +26,23 @@ const { mockFrom, enqueue, queues } = vi.hoisted(() => {
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 
-import { coarrendatarioVinculado, coarrendatarioVinculadoVerificado } from '../coarrendatario-vinculado';
+const mockCobrado = vi.hoisted(() => vi.fn(async (_: string) => true));
+vi.mock('../pago.guard', () => ({ estudioYaCobrado: (id: string) => mockCobrado(id) }));
+
+import {
+  coarrendatarioVinculado,
+  coarrendatarioVinculadoVerificado,
+  coarrendatarioVigente,
+  ventanaCoarrendatario,
+} from '../coarrendatario-vinculado';
 
 const EXP = 'exp-1';
 const fila = { data: { id: 'coa-1', nombre: 'Luis', estudio_id: 'est-coa' }, error: null };
 
-beforeEach(() => queues.clear());
+beforeEach(() => {
+  queues.clear();
+  mockFrom.mockClear();
+});
 
 describe('coarrendatarioVinculado — P2', () => {
   it.each([
@@ -99,5 +110,48 @@ describe('coarrendatarioVinculado — P2', () => {
 
     expect(await coarrendatarioVinculado(EXP)).toBeNull();
     await expect(coarrendatarioVinculado(EXP, { estricto: true })).rejects.toThrow('timeout');
+  });
+});
+
+// Decisiones 2 y 4 (2026-09-25): la ventana del co-arrendatario.
+describe('coarrendatarioVigente / ventanaCoarrendatario — Decisiones 2 y 4', () => {
+  const sinEl = { data: [{ id: 'c1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null };
+  const ventana = (estado: string, inmobiliariaId: string | null = 'org-1') =>
+    ventanaCoarrendatario({ expedienteId: EXP, estado, inmobiliariaId });
+
+  it('en revisión sí, sin leer contratos; resuelto o cerrado no', async () => {
+    expect(await coarrendatarioVigente('condicionado', EXP)).toBe(true);
+    for (const estado of ['rechazado', 'cerrado', 'en_revision', 'borrador']) expect(await coarrendatarioVigente(estado, EXP)).toBe(false);
+    expect(mockFrom).not.toHaveBeenCalledWith('contratos');
+  });
+
+  it('aprobado: sí mientras ningún contrato fijo vaya sin él', async () => {
+    expect(await coarrendatarioVigente('aprobado', EXP)).toBe(true);
+    enqueue('contratos', sinEl);
+    expect(await coarrendatarioVigente('aprobado', EXP)).toBe(false);
+  });
+
+  it('aprobado sin poder leer los contratos: 503, no se consulta el buró a ciegas', async () => {
+    enqueue('contratos', { data: null, error: { message: 'boom' } });
+    await expect(coarrendatarioVigente('aprobado', EXP)).rejects.toMatchObject({ statusCode: 503 });
+  });
+
+  it('aprobado y pagado, canal de inmobiliaria: se puede invitar', async () => {
+    expect(await ventana('aprobado')).toEqual({ vigente: true, puede_invitar: true, motivo: null, codigo: null });
+  });
+
+  it('propietario directo: nunca, ni en revisión (espera el Convenio); la invitación viva sigue en pie', async () => {
+    expect(await ventana('condicionado', null)).toMatchObject({ vigente: true, puede_invitar: false, codigo: 'COARRENDATARIO_CANAL_PROPIETARIO' });
+  });
+
+  it('aprobado con un contrato fijo sin él, o sin el pago del estudio: no', async () => {
+    enqueue('contratos', sinEl);
+    expect(await ventana('aprobado')).toMatchObject({ vigente: false, puede_invitar: false, codigo: 'CONTRATO_SIN_COARRENDATARIO' });
+    mockCobrado.mockResolvedValueOnce(false);
+    expect(await ventana('aprobado')).toMatchObject({ vigente: true, puede_invitar: false, codigo: 'PAGO_ESTUDIO_REQUERIDO' });
+  });
+
+  it('rechazado: no, con el código de siempre', async () => {
+    expect(await ventana('rechazado')).toMatchObject({ vigente: false, puede_invitar: false, codigo: 'EXPEDIENTE_NO_CONDICIONADO' });
   });
 });

@@ -46,6 +46,12 @@ export interface Persona {
 
 export interface DatosVivienda {
   numero: string; // contratos.numero; 'BORRADOR' en modo revisión
+  /**
+   * Ruta B: el número que la inmobiliaria le puso a SU contrato, si lo tiene.
+   * El Anexo lo imprime en «Contrato asociado N°» y en la página divisoria; sin
+   * él, va `numero` (el consecutivo de Cofianza). Solo el Anexo lo usa.
+   */
+  numeroContratoPropio?: string;
   ciudadFirma: string;
   fechaDocumento: string; // fechas ISO AAAA-MM-DD
   arrendador: Persona;
@@ -234,7 +240,7 @@ export function contexto(d: DatosVivienda): Contexto {
     valores: {
       // solo lo imprime el Anexo (su cuadro trae el "Contrato asociado N°"); la
       // plantilla de vivienda no declara `numero` y el motor ignora lo que sobra
-      numero: d.numero,
+      numero: d.numeroContratoPropio || d.numero,
       ciudadFirma: d.ciudadFirma,
       fechaDocumento: d.fechaDocumento,
       fechaInicio: d.fechaInicio,
@@ -347,7 +353,7 @@ export function paginaDivisoria(d: DatosVivienda): string {
   return (
     '<section class="divisoria">' +
     '<p class="k-titulo">PÁGINA DIVISORIA</p>' +
-    `<p class="k-nota">Contrato de arrendamiento N° ${esc(d.numero)}</p>` +
+    `<p class="k-nota">Contrato de arrendamiento N° ${esc(d.numeroContratoPropio || d.numero)}</p>` +
     `<p class="k-p">Aquí termina el contrato de arrendamiento aportado por EL ARRENDADOR, ${esc(d.arrendador.nombre)}, ` +
     'que ocupa las páginas anteriores tal como lo cargó, sin modificaciones de COFIANZA S.A.S.</p>' +
     '<p class="k-p">En la página siguiente empieza el ANEXO DE CONDICIONES DE AFIANZAMIENTO COFIANZA de este contrato.</p>' +

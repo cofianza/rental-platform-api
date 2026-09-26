@@ -111,6 +111,9 @@ export const firmarSchema = z.object({
 export const perfilProspectoSchema = z.object({
   // §8.2 — AUTORREPORTADO. No alimenta el scorecard (Politica V4.1 §4.2).
   situacion_laboral: z.enum(['empleado', 'independiente', 'pensionado', 'otro']).optional().catch(undefined),
+  // Politica Anexo A.3/A.4: solo si eligio 'independiente'. Sin RUT = informal
+  // = revision manual (reglas-duras.ts).
+  tiene_rut: z.boolean().optional().catch(undefined),
   donde_labora: z.string().max(200).optional().catch(undefined),
   ingreso_declarado_cop: z.coerce.number().nonnegative().max(1_000_000_000).optional().catch(undefined),
   // §8.3 — INTENCION, no invitacion. No se piden tipo ni numero de documento
@@ -175,10 +178,24 @@ export const reportarIdentidadSchema = z.object({
 // PATCH /expedientes/:expedienteId/autorizacion-riesgo/revocar
 // ============================================================
 
+// Ley 1581 art. 8 + Decreto 1377 art. 9 y 20: Cofianza registra la solicitud
+// de revocacion que el TITULAR le hizo, con la fecha y el canal por el que
+// llego y el soporte (numero de radicado, correo, nota de la llamada...).
+export const CANALES_REVOCACION = ['correo', 'whatsapp', 'llamada', 'escrito'] as const;
+
 export const revocarSchema = z.object({
+  canal: z.enum(CANALES_REVOCACION, { message: 'Canal inválido. Valores permitidos: correo, whatsapp, llamada, escrito' }),
+  // Fecha en que el titular hizo la solicitud (AAAA-MM-DD, hora de Colombia).
+  fecha_solicitud: z.iso
+    .date('Fecha de la solicitud inválida (AAAA-MM-DD)')
+    .refine(
+      (f) => f <= new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' }),
+      'La fecha de la solicitud no puede ser futura',
+    ),
+  // Soporte o nota de la solicitud.
   motivo: z.string()
-    .min(10, 'El motivo debe tener al menos 10 caracteres')
-    .max(1000, 'El motivo no debe exceder 1000 caracteres'),
+    .min(10, 'El soporte debe tener al menos 10 caracteres')
+    .max(1000, 'El soporte no debe exceder 1000 caracteres'),
   // Sujeto a revocar. Sin este campo se revoca la del TITULAR (comportamiento
   // historico). Con el, la del co-arrendatario invitado indicado: desde
   // 2026-09-03 el co-arrendatario tiene su propia autorizacion habeas data y

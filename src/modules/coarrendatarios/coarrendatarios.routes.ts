@@ -54,6 +54,16 @@ expedienteCoarrendatariosRouter.get(
   controller.getDelExpediente,
 );
 
+// GET /api/v1/expedientes/:id/coarrendatario/ventana — si se puede invitar
+// ahora (en revisión, o aprobado antes del contrato; canal de inmobiliaria).
+expedienteCoarrendatariosRouter.get(
+  '/:id/coarrendatario/ventana',
+  authMiddleware,
+  roleGuard(['solicitante', 'propietario', 'inmobiliaria', 'administrador', 'operador_analista']),
+  validate({ params: expedienteIdParamsSchema }),
+  controller.getVentana,
+);
+
 // ── Público: el invitado abre /coarrendatario/[token] ─────────────
 // Montado bajo /api/v1/public/coarrendatario
 export const publicCoarrendatarioRouter = Router();

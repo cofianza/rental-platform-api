@@ -63,6 +63,7 @@ interface InmuebleRow {
   codigo: string | null;
   visible_vitrina: boolean;
   estado: string;
+  miembro_responsable_id: string | null;
 }
 
 // ── Público: registrar interés (sin auth) ────────────────────────────
@@ -74,7 +75,7 @@ export async function registrarInteresPublico(
 ): Promise<void> {
   // 1. El inmueble debe existir y estar publicado/disponible (igual que la vitrina).
   const { data: inmRow } = await db('inmuebles')
-    .select('id, propietario_id, inmobiliaria_id, tipo, ciudad, barrio, direccion, codigo, visible_vitrina, estado')
+    .select('id, propietario_id, inmobiliaria_id, tipo, ciudad, barrio, direccion, codigo, visible_vitrina, estado, miembro_responsable_id')
     .eq('id', inmuebleId)
     .maybeSingle();
   const inm = inmRow as InmuebleRow | null;
@@ -138,6 +139,31 @@ export async function registrarInteresPublico(
   });
 }
 
+/** P37: titular y responsable asignado, sin repetir a nadie. */
+export function destinatariosInApp(titularId: string, responsableId: string | null | undefined): string[] {
+  return [...new Set([titularId, responsableId].filter((id): id is string => !!id))];
+}
+
+/**
+ * Correo para avisarle al dueño: el de recaudo o, si no tiene, el de su cuenta
+ * (perfiles no guarda el email). `emailRecaudo` undefined = leerlo aquí.
+ * Nunca lanza: sin correo, null.
+ */
+export async function correoDelDueno(perfilId: string, emailRecaudo?: string | null): Promise<string | null> {
+  try {
+    let email = emailRecaudo;
+    if (email === undefined) {
+      const { data } = await db('perfiles').select('email_recaudo').eq('id', perfilId).maybeSingle();
+      email = (data as { email_recaudo?: string | null } | null)?.email_recaudo ?? null;
+    }
+    if (email) return email;
+    const { data } = await supabase.rpc('get_user_with_email' as never, { user_id: perfilId } as never);
+    return (data as unknown as Array<{ email: string }> | null)?.[0]?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): Promise<void> {
   if (!inm.propietario_id) return;
   const label = inmuebleLabel(inm);
@@ -157,25 +183,21 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
   // Nombre del dueño: razón social → nombre de la inmobiliaria → nombre+apellido.
   const duenoNombre = await resolveNombreDueno(inm.propietario_id);
   const duenoWhatsapp = p?.whatsapp_recaudo || p?.telefono || null;
-  let duenoEmail = p?.email_recaudo || null;
-  if (!duenoEmail) {
-    try {
-      const { data } = await supabase.rpc('get_user_with_email' as never, { user_id: canonicalId } as never);
-      duenoEmail = (data as unknown as Array<{ email: string }> | null)?.[0]?.email ?? null;
-    } catch {
-      /* perfiles no guarda email; si el RPC falla, seguimos sin correo */
-    }
-  }
+  const duenoEmail = await correoDelDueno(canonicalId, p?.email_recaudo ?? null);
 
-  // In-app: al dueño del inmueble (propietario_id) — lo ve en su panel.
-  await notificarUsuario({
-    userId: inm.propietario_id,
-    tipo: 'interesado.vitrina',
-    titulo: 'Nuevo interesado en tu inmueble',
-    mensaje: `${input.nombre} está interesado en ${label}. WhatsApp: ${input.telefono}.${input.mensaje?.trim() ? ` Mensaje: ${input.mensaje.trim()}` : ''}`,
-    link: '/interesados',
-    payload: { inmueble: label, nombre: input.nombre, telefono: input.telefono, email: input.email },
-  });
+  // In-app (P37): al titular de la organización y al responsable asignado del
+  // inmueble, una sola vez si son la misma persona. WhatsApp y correo van solo
+  // a la organización (su titular), abajo.
+  for (const userId of destinatariosInApp(canonicalId, inm.miembro_responsable_id)) {
+    await notificarUsuario({
+      userId,
+      tipo: 'interesado.vitrina',
+      titulo: 'Nuevo interesado en tu inmueble',
+      mensaje: `${input.nombre} está interesado en ${label}. WhatsApp: ${input.telefono}.${input.mensaje?.trim() ? ` Mensaje: ${input.mensaje.trim()}` : ''}`,
+      link: '/interesados',
+      payload: { inmueble: label, nombre: input.nombre, telefono: input.telefono, email: input.email },
+    });
+  }
 
   // WhatsApp al dueño (si tiene número).
   if (duenoWhatsapp) {

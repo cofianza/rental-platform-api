@@ -1980,6 +1980,22 @@ describe('enviar a firma y Ruta B (Entrega 5)', () => {
     expect(mockLogAudit).toHaveBeenCalledWith(expect.objectContaining({ detalle: expect.objectContaining({ fase: 'contrato_propio', firmas_descartadas: 1 }) }));
   });
 
+  it('cargarPropio guarda el número propio de la inmobiliaria (P10) y el estado lo devuelve', async () => {
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B } })] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+    await cargarPropio(EXP, { buffer: await pdfReal(1), originalname: 'c.pdf' }, USER, ROL, '  INM-2026/077 ');
+    const upd = opsDe('contratos', 'update')[0].args[0] as { datos_variables: { propio: Record<string, unknown> } };
+    expect(upd.datos_variables.propio).toMatchObject({ numeroContrato: 'INM-2026/077' });
+
+    // Sin número: la clave ni aparece (el Anexo lleva el consecutivo de Cofianza).
+    encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B } })] });
+    enqueue('contratos', { data: [{ id: CTO }], error: null });
+    encolarCarga({ contratos: [fila()] });
+    await cargarPropio(EXP, { buffer: await pdfReal(1), originalname: 'c.pdf' }, USER, ROL, '');
+    expect((opsDe('contratos', 'update')[1].args[0] as { datos_variables: { propio: object } }).datos_variables.propio).not.toHaveProperty('numeroContrato');
+  });
+
   it('cargarPropio con el CAS perdido borra lo que subió', async () => {
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: PASOS_B } })] });
     enqueue('contratos', { data: [], error: null });

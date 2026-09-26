@@ -92,9 +92,11 @@ beforeEach(() => {
 });
 
 describe('ejecutarEstudio — evaluación del co-arrendatario', () => {
-  it.each(['aprobado', 'rechazado', 'cerrado'])('con el estudio %s: 409, lo cancela, le avisa y no sigue al tope ni al buró', async (estado) => {
+  it.each(['aprobado', 'rechazado', 'cerrado'])('con el estudio %s (aprobado: con un contrato fijo sin él): 409, lo cancela, le avisa y no sigue al tope ni al buró', async (estado) => {
     enqueue('estudios', estudioCoa, { data: [{ id: 'est-coa' }], error: null });
     enqueue('expedientes', expedienteHabilitado, { data: { estado }, error: null });
+    // Contrato del flujo anterior ya generado sin coarrendatario: fija el contrato (P2).
+    if (estado === 'aprobado') enqueue('contratos', { data: [{ id: 'c1', estado: 'generado', destinacion: null, coa_anidado: null, coa_plano: null }], error: null });
 
     await expect(ejecutarEstudio('est-coa', 'admin-1', '1.1.1.1', 'administrador')).rejects.toMatchObject({
       statusCode: 409,
@@ -110,12 +112,22 @@ describe('ejecutarEstudio — evaluación del co-arrendatario', () => {
 
   it('si ya estaba en consulta o completado, no lo cancela ni avisa', async () => {
     enqueue('estudios', estudioCoa, { data: [], error: null });
-    enqueue('expedientes', expedienteHabilitado, { data: { estado: 'aprobado' }, error: null });
+    enqueue('expedientes', expedienteHabilitado, { data: { estado: 'rechazado' }, error: null });
 
     await expect(ejecutarEstudio('est-coa', 'admin-1', '1.1.1.1', 'administrador')).rejects.toMatchObject({
       errorCode: 'COARRENDATARIO_ESTUDIO_NO_VIGENTE',
     });
     expect(mockAvisarSinEfecto).not.toHaveBeenCalled();
+  });
+
+  it('con el estudio aprobado y sin contrato fijo, este guard lo deja seguir (Decisión 2)', async () => {
+    enqueue('estudios', estudioCoa);
+    enqueue('expedientes', expedienteHabilitado, { data: { estado: 'aprobado' }, error: null });
+    enqueue('contratos', { data: [], error: null });
+
+    const e = await ejecutarEstudio('est-coa', 'admin-1', '1.1.1.1', 'administrador').catch((x: unknown) => x);
+
+    expect((e as { errorCode?: string } | undefined)?.errorCode).not.toBe('COARRENDATARIO_ESTUDIO_NO_VIGENTE');
   });
 
   it('con el estudio condicionado este guard lo deja seguir', async () => {

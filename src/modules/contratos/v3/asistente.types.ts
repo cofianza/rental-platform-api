@@ -86,6 +86,8 @@ export interface EstadoAsistente {
 
 export interface PdfPropio {
   nombre: string; paginas: number; bytes: number; sha256: string; subidoEn: string;
+  /** El número que la inmobiliaria le puso a su contrato; null = el Anexo lleva el de Cofianza. */
+  numeroContrato: string | null;
   /** Dónde firma cada parte sobre este PDF (Adenda 1 contratos, respuesta 6). Cargar otro PDF las borra. */
   firmas: MarcaFirma[];
   /** Cada parte que firma tiene al menos una marca: sin eso la Ruta B no sale a firma. */

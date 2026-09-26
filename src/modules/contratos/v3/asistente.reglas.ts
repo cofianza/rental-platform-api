@@ -112,6 +112,8 @@ export interface PropioGuardado {
   sha256: string;
   subidoEn: string;
   subidoPor: string;
+  /** El número que la inmobiliaria le puso a su contrato (opcional): va en el Anexo. */
+  numeroContrato?: string;
   /** Dónde firma cada parte sobre ESTE PDF: cargar otro las borra. */
   firmas?: MarcaFirma[];
 }
@@ -823,8 +825,12 @@ export function armarDatosVivienda(
   const nit = partirNit(p.nit) ?? { numero: '', dv: '' };
   const t = f.tarifas;
   const contactos = a.paso5.contactos;
+  // Ruta B: «Contrato asociado N°» del Anexo = el número propio de la inmobiliaria, si lo dio.
+  // Solo si existe: una clave de más haría ver desactualizada toda vista previa ya generada.
+  const numeroPropio = a.paso1.ruta === 'B' ? f.v3?.datos_variables?.propio?.numeroContrato : undefined;
   return {
     numero,
+    ...(numeroPropio && { numeroContratoPropio: numeroPropio }),
     ciudadFirma: a.paso5.ciudadFirma,
     fechaDocumento: hoy,
     arrendador: {

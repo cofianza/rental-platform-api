@@ -55,6 +55,7 @@ import {
   notificarResponsableExpediente,
   findPerfilIdByEmail,
 } from '../notificaciones/notificaciones.service';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 /** Una fila de `afectados` tal como la devuelve fn_reservar_inmueble_para_contrato. */
 export interface CandidatoAfectado {
@@ -96,7 +97,7 @@ export function mensajeReservaParaGestor(
   nombre: string,
   completado: boolean,
 ): string {
-  const estudio = `El estudio${numero ? ` ${numero}` : ''}${nombre ? ` de ${nombre}` : ''}`;
+  const estudio = `El estudio${numero ? ` ${formatNumeroEstudio(numero)}` : ''}${nombre ? ` de ${nombre}` : ''}`;
   return (
     `El inmueble ${referencia} quedó reservado para otro candidato aprobado. ` +
     (completado

@@ -49,13 +49,20 @@ import {
 } from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
 import { ponderarConCoarrendatario, veredictoScorecard, type FilaScorecard, type VeredictoScorecard } from './ponderacion';
-import { evaluacionCuenta, contratoFijoSinCoarrendatario } from '@/modules/estudios/coarrendatario-vinculado';
+import {
+  evaluacionCuenta,
+  contratoFijoSinCoarrendatario,
+  coarrendatarioVigente,
+  ventanaCoarrendatario,
+  type VentanaCoarrendatario,
+} from '@/modules/estudios/coarrendatario-vinculado';
 import { esNombrePersona } from '@/lib/textoSinEnlaces';
 import type {
   InvitarCoarrendatarioInput,
   AceptarCoarrendatarioInput,
   ReenviarCoarrendatarioInput,
 } from './coarrendatarios.schema';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 // El nombre que Cofianza le reenvía a un tercero: sin enlaces, o null (el genérico).
 const nombreSinEnlaces = (n: string): string | null => (n && esNombrePersona(n) ? n : null);
@@ -239,19 +246,25 @@ function tokenExpiracion(): string {
   return new Date(Date.now() + TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
+const invitacionNoVigente = () =>
+  AppError.badRequest(
+    'Esta invitación ya no está vigente: el estudio ya se resolvió sin co-arrendatario.',
+    'COARRENDATARIO_INVITACION_NO_VIGENTE',
+  );
+
 /**
- * P3 (2026-09-24): fuera de 'condicionado' la invitación pendiente queda sin
- * efecto. Sin esto se aceptaba y se consultaba el buró de un tercero sobre un
- * estudio ya decidido (cobro y datos sin finalidad, Ley 1581).
+ * P3 (2026-09-24), acotada por la Decisión 2 (2026-09-25): la invitación
+ * pendiente tiene efecto con el estudio en revisión, o aprobado mientras ningún
+ * contrato fijo vaya sin él (coarrendatarioVigente). Fuera de eso se aceptaba y
+ * se consultaba el buró de un tercero sin finalidad (cobro y datos, Ley 1581).
  */
-function assertInvitacionVigente(estadoExpediente: string): void {
-  if (estadoExpediente !== 'condicionado') {
-    throw AppError.badRequest(
-      'Esta invitación ya no está vigente: el estudio ya se resolvió.',
-      'COARRENDATARIO_INVITACION_NO_VIGENTE',
-    );
-  }
+async function assertInvitacionVigente(ctx: { id: string; estado: string }): Promise<void> {
+  if (!(await coarrendatarioVigente(ctx.estado, ctx.id))) throw invitacionNoVigente();
 }
+
+/** La ventana para invitar (Decisiones 2 y 4) sobre el contexto ya leído. */
+const ventanaDe = (ctx: ExpedienteCtx): Promise<VentanaCoarrendatario> =>
+  ventanaCoarrendatario({ expedienteId: ctx.id, estado: ctx.estado, inmobiliariaId: ctx.inmueble_inmobiliaria_id });
 
 /**
  * Acceso al coarrendatario de un expediente: admin/operador siempre; el
@@ -434,15 +447,13 @@ async function crearInvitacion(
 ): Promise<Coarrendatario> {
   const expedienteId = ctx.id;
 
-  // 2. Estado del expediente debe ser 'condicionado' — única ventana donde
-  //    tiene sentido invitar. En otros estados o ya está aprobado o el
-  //    estudio aún no se ejecutó.
-  if (ctx.estado !== 'condicionado') {
-    throw AppError.badRequest(
-      `Solo se puede invitar co-arrendatario cuando el estudio está condicionado. Estado actual: ${ctx.estado}.`,
-      'EXPEDIENTE_NO_CONDICIONADO',
-    );
-  }
+  // 2. La ventana (Decisiones 2 y 4, 2026-09-25): en revisión, o aprobado
+  //    antes de un contrato fijo sin él —el aprobado lo suma para pagar la
+  //    prima del 10 %—, y solo en el canal de inmobiliaria: el del propietario
+  //    directo espera el Convenio. Sobre un aprobado, además, con el estudio
+  //    pagado: la evaluación del co-arrendatario se ampara en ese pago.
+  const ventana = await ventanaDe(ctx);
+  if (!ventana.puede_invitar) throw AppError.badRequest(ventana.motivo, ventana.codigo);
 
   // 2b. TOPE DE CANON — flujo §4.4. Se valida al EMITIR la invitación, que es
   //     el único momento en que el gestor todavía puede actuar. Si el inmueble
@@ -618,6 +629,68 @@ export async function getCoarrendatarioPorExpediente(
   return coa;
 }
 
+/**
+ * Para las tarjetas: si la invitación sigue en pie y si se puede invitar ahora
+ * (Decisiones 2 y 4). Con una invitación viva, no: se admite una por estudio.
+ */
+export async function getVentanaCoarrendatario(
+  expedienteId: string,
+  userId: string,
+  userRol: string,
+): Promise<VentanaCoarrendatario> {
+  const ctx = await fetchExpedienteCtx(expedienteId);
+  if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
+    throw AppError.forbidden('No tienes permisos para ver este estudio', 'EXPEDIENTE_FORBIDDEN');
+  }
+  const [ventana, activa] = await Promise.all([ventanaDe(ctx), invitacionActiva(expedienteId)]);
+  return ventana.puede_invitar && activa
+    ? { vigente: ventana.vigente, puede_invitar: false, motivo: 'Ya hay un co-arrendatario invitado en este estudio.', codigo: 'COARRENDATARIO_DUPLICADO' }
+    : ventana;
+}
+
+/** ¿Hay una invitación viva (pendiente, aceptada o evaluada)? */
+async function invitacionActiva(expedienteId: string): Promise<boolean> {
+  const { data, error } = await (supabase.from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .neq('estado', 'rechazado_invitacion')
+    .limit(1)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  return !!data;
+}
+
+/**
+ * Decisión 2: quien marcó «con alguien más» al autorizar (Flujo §8.3) recibe,
+ * con el aprobado, su enlace personal (P18) para invitar a su co-arrendatario y
+ * pagar la prima del 10 %. null si no lo marcó, ya invitó a alguien o no se
+ * puede invitar (canal, contrato, pago). Best-effort: nunca lanza.
+ */
+export async function enlaceInvitarCoarrendatario(expedienteId: string): Promise<string | null> {
+  try {
+    const ctx = await fetchExpedienteCtx(expedienteId);
+    const [ventana, { data: perfil }, activa] = await Promise.all([
+      ventanaDe(ctx),
+      (supabase.from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+        .select('presentacion, coarrendatario_intencion')
+        .eq('expediente_id', expedienteId)
+        .maybeSingle(),
+      invitacionActiva(expedienteId),
+    ]);
+    const p = perfil as { presentacion?: string | null; coarrendatario_intencion?: unknown } | null;
+    const marco = p?.presentacion === 'acompanado' || (!p?.presentacion && !!p?.coarrendatario_intencion);
+    if (!marco || !ventana.puede_invitar || activa) return null;
+    const { emitirTokenDocumentos } = await import('@/modules/expedientes/expediente-soportes.service');
+    return `${env.FRONTEND_URL}/cargar-documentos/${await emitirTokenDocumentos(expedienteId)}`;
+  } catch (err) {
+    logger.warn(
+      { expedienteId, err: err instanceof Error ? err.message : String(err) },
+      'Sin enlace para invitar al co-arrendatario en el correo del aprobado',
+    );
+    return null;
+  }
+}
+
 // ============================================================
 // 2b. Reenviar la invitación (corrigiendo email/teléfono si venían mal)
 // ============================================================
@@ -640,7 +713,7 @@ export async function reenviarInvitacionCoarrendatario(
       'COARRENDATARIO_FORBIDDEN',
     );
   }
-  assertInvitacionVigente(ctx.estado);
+  await assertInvitacionVigente(ctx);
 
   // La invitación debe existir y seguir pendiente de aceptación.
   const { data: coaRow } = await (supabase
@@ -845,7 +918,7 @@ export async function getPublicByToken(token: string): Promise<CoarrendatarioPub
   // Cargar contexto del expediente para mostrar al invitado de qué se trata.
   const ctx = await fetchExpedienteCtx(coa.expediente_id);
   // P3: una invitación pendiente de un estudio ya resuelto no se muestra para aceptar.
-  if (coa.estado === 'pendiente_aceptacion') assertInvitacionVigente(ctx.estado);
+  if (coa.estado === 'pendiente_aceptacion') await assertInvitacionVigente(ctx);
 
   return {
     nombre: coa.nombre,
@@ -945,7 +1018,7 @@ export async function aceptarInvitacion(
 
   // P3: antes del tope, del claim y de la consulta al buró.
   const ctx = await fetchExpedienteCtx(coa.expediente_id);
-  assertInvitacionVigente(ctx.estado);
+  await assertInvitacionVigente(ctx);
 
   // 1b. TOPE DE CANON — flujo §4.4. Va ANTES del claim y ANTES del INSERT del
   //     estudio. Sin esto, el único control era el ejecutarEstudio
@@ -1008,18 +1081,18 @@ export async function aceptarInvitacion(
     throw AppError.badRequest('Esta invitación ya fue procesada', 'COARRENDATARIO_YA_PROCESADA');
   }
 
-  // P3: el estudio pudo resolverse entre la lectura y el claim. Se devuelve la
-  // invitación y no se consulta el buró.
-  let estadoTrasClaim: string;
+  // P3: el estudio pudo resolverse (o su contrato fijarse sin él) entre la
+  // lectura y el claim. Se devuelve la invitación y no se consulta el buró.
+  let vigente: boolean;
   try {
-    estadoTrasClaim = (await fetchExpedienteCtx(coa.expediente_id)).estado;
+    vigente = await coarrendatarioVigente((await fetchExpedienteCtx(coa.expediente_id)).estado, coa.expediente_id);
   } catch (e) {
     await revertirClaim(coa.id);
     throw e;
   }
-  if (estadoTrasClaim !== 'condicionado') {
+  if (!vigente) {
     await revertirClaim(coa.id);
-    assertInvitacionVigente(estadoTrasClaim);
+    throw invitacionNoVigente();
   }
 
   // 2b. Autorización habeas data PROPIA del co-arrendatario.
@@ -1231,7 +1304,7 @@ export async function aceptarInvitacion(
     tipo: 'coarrendatario.acepto',
     titulo: 'Co-arrendatario confirmado',
     mensaje:
-      `${coa.nombre} aceptó ser co-arrendatario del estudio ${ctx.numero}. ` +
+      `${coa.nombre} aceptó ser co-arrendatario del estudio ${formatNumeroEstudio(ctx.numero)}. ` +
       (titularYaPago
         ? 'Su evaluación crediticia está en proceso; te avisaremos con el resultado.'
         : 'Su evaluación crediticia se hará cuando se confirme el pago del estudio.'),
@@ -1504,7 +1577,7 @@ export async function onCoarrendatarioEstudioCompletado(
           notificarUsuario({
             userId: a.id,
             tipo: 'estudio.revision_manual',
-            titulo: `Co-arrendatario evaluado — ${ctxSin.numero}`,
+            titulo: `Co-arrendatario evaluado — Estudio ${formatNumeroEstudio(ctxSin.numero)}`,
             mensaje: `El co-arrendatario completó su evaluación (${est.resultado}). El caso sigue en revisión manual y lo decide un analista de Cofianza.`,
             link: `/expedientes/${est.expediente_id}`,
             payload: { expediente_id: est.expediente_id, via, coarrendatario_id: coa?.id },
@@ -1748,13 +1821,17 @@ export async function onCoarrendatarioEstudioCompletado(
 /**
  * P3 (2026-09-24): el estudio se decidió por otra vía (el analista, un cierre)
  * mientras se evaluaba al co-arrendatario. La decisión se mantiene y el
- * co-arrendatario recibe la real (también el cierre). Sobre un estudio aprobado:
+ * co-arrendatario recibe la real (también el cierre). Sobre un estudio aprobado
+ * —también el que lo sumó después de aprobarse (Decisión 2)— el titular
+ * conserva su aprobación y su ruta (la tarifa no cambia):
  *  - con regla dura (p. ej. listas) queda fuera (P2: ni CRC ni contrato, prima
  *    20 %) y se avisa a los analistas, que la revierten con «Cambiar estado»
  *    antes de la firma si hace falta;
- *  - si su evaluación cuenta, el CRC se regenera con el acompañante, salvo que
- *    ya haya un contrato generado sin él: ese manda (plata) y se le avisa al
- *    gestor que, si debe entrar, cancele el contrato y genere otro.
+ *  - si su evaluación cuenta, el CRC se regenera con el acompañante (prima del
+ *    10 %), salvo que ya haya un contrato generado sin él: ese manda (plata) y
+ *    se le avisa al gestor que, si debe entrar, cancele el contrato y genere otro;
+ *  - si no cuenta, sigue solo con la prima del 20 %.
+ * En los tres se avisa al titular y al gestor (avisarCoarrendatarioSobreAprobado).
  * Fire-and-forget: nunca lanza.
  */
 function decisionYaTomada(
@@ -1778,7 +1855,7 @@ function decisionYaTomada(
           notificarUsuario({
             userId: a.id,
             tipo: 'estudio.revision_manual',
-            titulo: `Co-arrendatario con regla dura en un estudio aprobado — ${ctx.numero}`,
+            titulo: `Co-arrendatario con regla dura en un estudio aprobado — ${formatNumeroEstudio(ctx.numero)}`,
             mensaje:
               `El co-arrendatario salió con una regla dura (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}) después de que se aprobó el estudio. ` +
               'La aprobación se mantiene y el co-arrendatario queda fuera: no va al CRC ni al contrato y la prima es del 20 %. ' +
@@ -1789,6 +1866,7 @@ function decisionYaTomada(
         ),
       );
     })().catch((e) => logger.warn({ error: e, expedienteId: ctx.id }, 'Error avisando a analistas: regla dura del co-arrendatario tras aprobar'));
+    void avisarCoarrendatarioSobreAprobado(ctx, coa, false);
     void avisarCoa();
     return;
   }
@@ -1797,7 +1875,10 @@ function decisionYaTomada(
     void contratoFijoSinCoarrendatario(ctx.id)
       .then(async (sinEl) => {
         if (sinEl) await avisarContratoSinCoarrendatario(ctx, coa);
-        else await emitirCertificadoAutomatico(titularEstudioId, ctx.creado_por, { regenerar: true });
+        else {
+          await emitirCertificadoAutomatico(titularEstudioId, ctx.creado_por, { regenerar: true });
+          await avisarCoarrendatarioSobreAprobado(ctx, coa, true);
+        }
         await avisarCoa(sinEl);
       })
       .catch((e) =>
@@ -1806,7 +1887,85 @@ function decisionYaTomada(
     return;
   }
 
+  if (ctx.estado === 'aprobado') void avisarCoarrendatarioSobreAprobado(ctx, coa, false);
   void avisarCoa();
+}
+
+/**
+ * Decisión 2: el co-arrendatario terminó su evaluación sobre un estudio
+ * aprobado. Rastro en el timeline (sin estado nuevo: la vía de la tarifa sale
+ * del evento de la ponderación, y aquí la ruta sigue siendo la del titular) y
+ * aviso al gestor y al titular — a este sin nada del buró del otro (Ley 1266):
+ * solo si quedó vinculado y qué prima paga. Best-effort: nunca lanza.
+ */
+async function avisarCoarrendatarioSobreAprobado(
+  ctx: ExpedienteCtx,
+  coa: { id: string; nombre: string } | null,
+  vinculado: boolean,
+): Promise<void> {
+  const nombre = coa?.nombre || 'El co-arrendatario';
+  const link = `/expedientes/${ctx.id}`;
+  const payload = {
+    expediente_id: ctx.id,
+    via: vinculado ? 'coarrendatario_vinculado_tras_aprobacion' : 'coarrendatario_no_vinculado_tras_aprobacion',
+    coarrendatario_id: coa?.id,
+  };
+  const descripcion = vinculado
+    ? `${nombre} quedó vinculado como co-arrendatario del estudio aprobado: la prima de vinculación baja al 10 % y el certificado se regeneró.`
+    : `${nombre} no quedó vinculado como co-arrendatario: el estudio sigue aprobado con el solicitante solo (prima del 20 %).`;
+  const aviso = {
+    tipo: vinculado ? 'estudio.aprobado' : 'coarrendatario.rechazo',
+    titulo: vinculado ? 'Co-arrendatario vinculado' : 'El co-arrendatario no quedó vinculado',
+    mensaje: `Estudio ${formatNumeroEstudio(ctx.numero)}: ${descripcion}`,
+    link,
+    payload,
+  };
+  const titular = {
+    titulo: vinculado ? 'Tu co-arrendatario quedó vinculado' : 'Tu estudio sigue aprobado',
+    mensaje: vinculado
+      ? `${nombre} quedó vinculado como tu co-arrendatario. La prima de vinculación baja del 20 % al 10 % del canon.`
+      : `${nombre} no quedó vinculado a tu estudio. Tu estudio sigue aprobado y continúas solo, con la prima de vinculación del 20 % del canon.`,
+  };
+
+  try {
+    await (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+      .insert({
+        expediente_id: ctx.id,
+        tipo: 'estudio',
+        descripcion,
+        metadata: { automatico: true, origen: 'coarrendatario_tras_aprobacion', vinculado, coarrendatario_id: coa?.id },
+      } as never)
+      .then(() => undefined, () => undefined);
+
+    if (ctx.inmueble_propietario_id) {
+      notificarUsuario({ userId: ctx.inmueble_propietario_id, ...aviso }).catch((e) =>
+        logger.warn({ error: e, expedienteId: ctx.id }, 'Error avisando al dueño: co-arrendatario tras aprobar'),
+      );
+    }
+    notificarResponsableExpediente({ expedienteId: ctx.id, excluirPerfilId: ctx.inmueble_propietario_id, ...aviso }).catch((e) =>
+      logger.warn({ error: e, expedienteId: ctx.id }, 'Error avisando al responsable: co-arrendatario tras aprobar'),
+    );
+
+    const email = ctx.solicitante_email;
+    if (!email) return;
+    const titularId = await findPerfilIdByEmail(email);
+    if (titularId && titularId !== ctx.inmueble_propietario_id) {
+      await notificarUsuario({ userId: titularId, tipo: aviso.tipo, ...titular, link, payload });
+    }
+    const { emitirTokenDocumentos } = await import('@/modules/expedientes/expediente-soportes.service');
+    await sendResponsableAsignadoEmail({
+      email,
+      nombre: ctx.solicitante_nombre,
+      ...titular,
+      link: `/cargar-documentos/${await emitirTokenDocumentos(ctx.id)}`,
+      frontend_url: env.FRONTEND_URL,
+    });
+  } catch (e) {
+    logger.warn(
+      { error: e instanceof Error ? e.message : String(e), expedienteId: ctx.id },
+      'No se pudo avisar el resultado del co-arrendatario sobre el estudio aprobado',
+    );
+  }
 }
 
 /**
@@ -1823,7 +1982,7 @@ async function avisarContratoSinCoarrendatario(ctx: ExpedienteCtx, coa: { id: st
     tipo: 'coarrendatario.rechazo',
     titulo: 'Co-arrendatario evaluado después del contrato',
     mensaje:
-      `La evaluación de ${coa?.nombre || 'el co-arrendatario'} terminó después de generar el contrato del estudio ${ctx.numero}, que va sin él (prima del 20 %). ` +
+      `La evaluación de ${coa?.nombre || 'el co-arrendatario'} terminó después de generar el contrato del estudio ${formatNumeroEstudio(ctx.numero)}, que va sin él (prima del 20 %). ` +
       salida,
     link: `/expedientes/${ctx.id}`,
     payload: { expediente_id: ctx.id, via: 'coarrendatario_fuera_del_contrato', coarrendatario_id: coa?.id },
@@ -2203,7 +2362,7 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
   // (mismo patron que la invitacion y el resultado de la ponderacion).
   const tituloGestor = 'Co-arrendatario declinó la invitación';
   const mensajeGestor =
-    `${coa.nombre} declinó ser coarrendatario del estudio ${ctx.numero}. ` +
+    `${coa.nombre} declinó ser coarrendatario del estudio ${formatNumeroEstudio(ctx.numero)}. ` +
     'Puedes invitar a otra persona o continuar solo si la ruta lo permite.';
   if (ctx.inmueble_propietario_id) {
     notificarYCorreo({
@@ -2227,10 +2386,11 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
 
   // Al solicitante (prospecto). NO por solicitantes.creado_por: es quien creó
   // la ficha (casi siempre el gestor, avisado arriba). En la app si tiene cuenta
-  // con su correo y, mientras el estudio siga en revisión, por correo con su
-  // enlace personal (P18, el mismo de sus soportes) para invitar a otra persona.
+  // con su correo y, mientras pueda invitar a otra persona (en revisión, o
+  // aprobado antes del contrato: Decisión 2), por correo con su enlace personal
+  // (P18, el mismo de sus soportes).
   const emailProspecto = ctx.solicitante_email;
-  const puedeInvitar = ctx.estado === 'condicionado';
+  const puedeInvitar = (await ventanaDe(ctx).catch(() => null))?.puede_invitar === true;
   if (emailProspecto) {
     findPerfilIdByEmail(emailProspecto)
       .then((solicitanteUserId) => {
@@ -2255,8 +2415,10 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
           nombre: ctx.solicitante_nombre,
           titulo: 'Tu co-arrendatario no aceptó la invitación',
           mensaje:
-            `${coa.nombre} no aceptó ser tu co-arrendatario. Tu estudio sigue en revisión: si quieres, ` +
-            'desde tu enlace personal puedes invitar a otra persona.',
+            `${coa.nombre} no aceptó ser tu co-arrendatario. ` +
+            (ctx.estado === 'aprobado'
+              ? 'Tu estudio sigue aprobado y puedes continuar solo; si quieres, desde tu enlace personal puedes invitar a otra persona y la prima de vinculación baja al 10 % del canon.'
+              : 'Tu estudio sigue en revisión: si quieres, desde tu enlace personal puedes invitar a otra persona.'),
           link: `/cargar-documentos/${token}`,
           frontend_url: env.FRONTEND_URL,
         });

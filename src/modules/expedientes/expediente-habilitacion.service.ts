@@ -23,6 +23,7 @@ import {
 } from '../notificaciones/notificaciones.service';
 import type { UserRole } from '@/types/auth';
 import type { EvaluacionRevisionManual, RecalculoRevisionManual } from '../estudios/motor/sombra.service';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 export interface HabilitarEstudioResult {
   expediente: {
@@ -807,6 +808,7 @@ async function aprobarYGenerarContrato(params: {
       inmueble: ctx.inmuebleDireccion,
       ciudad: ctx.inmuebleCiudad,
       score: null,
+      expedienteId,
     }).catch((e) => logger.warn({ error: e, expedienteId }, 'Error email aprobado tras condicionado'));
 
     findPerfilIdByEmail(ctx.solicitanteEmail).then((solicitanteUserId) => {
@@ -850,6 +852,7 @@ export async function avisarDuenoDecisionRevisionManual(
     const e = data as { numero: string; inmuebles: { propietario_id: string | null; direccion: string | null } | null } | null;
     if (!e) return;
     const donde = e.inmuebles?.direccion ? ` (${e.inmuebles.direccion})` : '';
+    const numero = formatNumeroEstudio(e.numero);
     const aviso = {
       tipo: 'estudio.revision_manual',
       titulo: {
@@ -858,9 +861,9 @@ export async function avisarDuenoDecisionRevisionManual(
         cancelado: 'Cofianza canceló el estudio condicionado',
       }[decision],
       mensaje: {
-        aprobado: `El estudio ${e.numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puedes crear el contrato.`,
-        rechazado: `El estudio ${e.numero}${donde} fue rechazado tras la revisión de Cofianza.${motivoGestor ? ` Motivo: ${motivoGestor}` : ''}`,
-        cancelado: `Cofianza canceló el estudio condicionado ${e.numero}${donde}. Sale del flujo y no se puede reabrir.`,
+        aprobado: `El estudio ${numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puedes crear el contrato.`,
+        rechazado: `El estudio ${numero}${donde} fue rechazado tras la revisión de Cofianza.${motivoGestor ? ` Motivo: ${motivoGestor}` : ''}`,
+        cancelado: `Cofianza canceló el estudio condicionado ${numero}${donde}. Sale del flujo y no se puede reabrir.`,
       }[decision],
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, decision },
@@ -905,6 +908,7 @@ export async function avisarSolicitanteDecision(
           inmueble: e?.inmuebles?.direccion ?? '',
           ciudad: e?.inmuebles?.ciudad ?? '',
           score: null,
+          expedienteId,
         })
       // Sin motivo lo decidió un analista (P34): texto neutro, no el de «tu evaluación crediticia no cumplió».
       : sendEstudioRechazadoEmail({

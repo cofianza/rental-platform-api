@@ -150,6 +150,15 @@ describe('el cuadro inicial', () => {
     expect(celdas).toContain('doce ( 12 ) meses, del 01/10/2026 al 01/10/2027');
   });
 
+  it('con el número propio de la inmobiliaria, ese es el contrato asociado (Ruta B, P10); también en modo final', () => {
+    const d = { ...datos(), numeroContratoPropio: 'INM-2026/077' };
+    const propias = textos(revision(d)).slice(3, 29);
+    expect(propias).toContain('INM-2026/077');
+    expect(propias).not.toContain('CTO-2026-0001');
+    expect(renderizarAnexo(d, { modo: 'final', logoInmobiliaria: null }).pendientes).toEqual([]);
+    expect(paginaDivisoria(d)).toContain('Contrato de arrendamiento N° INM-2026/077');
+  });
+
   it('identifica a las partes con su documento', () => {
     expect(celdas).toContain('INMOBILIARIA EJEMPLO S.A.S. · NIT 900.123.456-7');
     expect(celdas).toContain('Juan Carlos Pérez Mejía · C.C. 1020304050');

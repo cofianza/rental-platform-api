@@ -66,6 +66,7 @@
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 /** El estudio no figura pagado — no se consulta el buro. */
 export const PAGO_ESTUDIO_REQUERIDO_ERROR_CODE = 'PAGO_ESTUDIO_REQUERIDO';
@@ -145,7 +146,7 @@ export function assertPagoEstudio(
     throw new AppError(
       409,
       'ESTUDIO_NO_REASIGNABLE',
-      `La evaluación del estudio ${ctx.expedienteNumero ?? ''} no figura como pagada, y la reasignacion sin costo ` +
+      `La evaluación del estudio ${formatNumeroEstudio(ctx.expedienteNumero)} no figura como pagada, y la reasignacion sin costo ` +
         'del §4.3 aplica solo a estudios ya pagados y ejecutados. Completa el pago y vuelve a intentarlo.',
       { motivo: 'estudio_no_pagado' },
     );

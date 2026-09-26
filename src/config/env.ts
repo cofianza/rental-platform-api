@@ -56,11 +56,9 @@ const envSchema = z.object({
   // sensible) y agrega un paso con camara. Nunca rechaza: lo peor que hace es
   // mandar el caso a revision manual.
   AUCO_BIOMETRIA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
-  // Similitud minima (0-100) para dar la identidad por validada. Auco publica
-  // 89.47 como ejemplo de exito y 49.42 de fallo; 70 es un corte conservador
-  // en el medio. NO es un umbral de rechazo — por debajo solo se pierde la
-  // aprobacion automatica. Gerencia lo mueve sin tocar codigo.
-  AUCO_BIOMETRIA_UMBRAL_SIMILITUD: z.coerce.number().min(0).max(100).default(70),
+  // El umbral de similitud ya no vive aqui: es UMBRAL_SIMILITUD_BIOMETRICA del
+  // panel de calibracion (Adenda 2 §9 y §10, 80 %), el mismo para la
+  // autorizacion y para la firma del contrato.
   // El cotejo es sincrono y el prospecto espera mirando la pantalla: mas de
   // ~20 s se lee como app colgada.
   AUCO_BIOMETRIA_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),

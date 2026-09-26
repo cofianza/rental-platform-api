@@ -85,7 +85,7 @@ describe('escalarTopeCanon', () => {
       link: '/expedientes/exp-1',
       payload: { expediente_id: 'exp-1', canon_cop: 3_100_000, tope_cop: 3_000_000, ambito: 'contrato' },
     });
-    expect(String(avisos[0].mensaje)).toContain('El contrato del estudio EXP-2026-0100 pacta un canon de $3.100.000');
+    expect(String(avisos[0].mensaje)).toContain('El contrato del estudio N.° 2026-0100 pacta un canon de $3.100.000');
     // Correo, como los demás avisos internos.
     expect(mockCorreo.mock.calls.map((c) => (c[0] as { userId: string }).userId)).toEqual(['admin-1', 'admin-2']);
     expect(mockCorreo.mock.calls[0][0]).toMatchObject({ tipo: 'contrato.tope_canon', link: '/expedientes/exp-1' });
@@ -96,7 +96,7 @@ describe('escalarTopeCanon', () => {
     intento();
     await escalarTopeCanon('exp-1', 3_100_000, 3_000_000, 'estudio');
     const [aviso] = de('notificaciones', 'insert')[0].args[0] as Array<{ mensaje: string }>;
-    expect(aviso.mensaje).toContain('La evaluación del estudio EXP-2026-0100 es sobre un inmueble con canon de $3.100.000');
+    expect(aviso.mensaje).toContain('La evaluación del estudio N.° 2026-0100 es sobre un inmueble con canon de $3.100.000');
   });
 
   it('ya escalado (hay marca): true sin escribir ni avisar', async () => {

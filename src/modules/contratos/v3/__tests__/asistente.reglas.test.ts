@@ -594,6 +594,16 @@ describe('armarDatosVivienda → renderizarVivienda (revisión, sin Chromium)', 
     expect(d.crc).toEqual({ numero: 'CRC-2026-0042', fecha: '2026-09-01' });
     expect(d.fechaDocumento).toBe(HOY);
   });
+
+  it('Ruta B: el número propio de la inmobiliaria va al Anexo; en la A ni aparece (P10)', () => {
+    const v3 = { datos_variables: { propio: { numeroContrato: 'INM-2026/077' } } } as unknown as Fuentes['v3'];
+    const b = armarDatosVivienda(fuentes({ v3 }), { ...PASOS, paso1: { ...PASOS.paso1, ruta: 'B' } }, HOY, 'CTO-2026-0007');
+    expect(b).toMatchObject({ numero: 'CTO-2026-0007', numeroContratoPropio: 'INM-2026/077' });
+    const a = armarDatosVivienda(fuentes({ v3 }), { ...PASOS, paso1: { ...PASOS.paso1, ruta: 'A' } }, HOY, 'CTO-2026-0007');
+    expect(a).not.toHaveProperty('numeroContratoPropio');
+    // Sin número propio, la clave no aparece: no desactualiza las vistas previas ya generadas.
+    expect(armarDatosVivienda(fuentes(), { ...PASOS, paso1: { ...PASOS.paso1, ruta: 'B' } }, HOY, 'X')).not.toHaveProperty('numeroContratoPropio');
+  });
 });
 
 // 10. noImprimibles

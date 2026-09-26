@@ -104,6 +104,29 @@ describe('registrarInteresPublico', () => {
   });
 });
 
+describe('aviso de interesado nuevo (P37)', () => {
+  const conResponsable = (responsable: string | null) => {
+    resetQueues();
+    enqueue('inmuebles', { data: { ...INMUEBLE, miembro_responsable_id: responsable }, error: null });
+    enqueue('perfiles', { data: { whatsapp_recaudo: '3015556677', telefono: null, email_recaudo: 'dueno@inmo.co' }, error: null });
+    enqueue('inmueble_interesados', { data: [], error: null }, { error: null });
+  };
+
+  it('en la app, al titular y al responsable asignado; WhatsApp y correo solo a la organización', async () => {
+    conResponsable('m1');
+    await registrarInteresPublico('inm1', INPUT, META);
+    expect(mocks.inApp.mock.calls.map((c) => (c[0] as { userId: string }).userId)).toEqual(['p1', 'm1']);
+    expect(mocks.whatsapp.mock.calls.map((c) => (c[0] as { to: string }).to)).toEqual(['3015556677']);
+    expect(mocks.avisoDueno.mock.calls.map((c) => c[0])).toEqual(['dueno@inmo.co']);
+  });
+
+  it('si el responsable es el titular, un solo aviso en la app', async () => {
+    conResponsable('p1');
+    await registrarInteresPublico('inm1', INPUT, META);
+    expect(mocks.inApp).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('registrarInteresSchema', () => {
   it('rechaza etiquetas, enlaces y dominios con cualquier terminación; el teléfono solo con dígitos', () => {
     const ok = (campos: Record<string, string>) => registrarInteresSchema.safeParse({ ...INPUT, ...campos }).success;

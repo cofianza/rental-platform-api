@@ -24,6 +24,7 @@ import { env } from '@/config';
 import { notificarUsuario, notificarResponsableExpediente } from '../notificaciones/notificaciones.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { firmarUrlsVista } from '../documentos/documentos.service';
+import { ventanaCoarrendatario } from '../estudios/coarrendatario-vinculado';
 
 const BUCKET_NAME = 'documentos-expedientes';
 const MAX_SOPORTE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -452,6 +453,8 @@ interface TokenDocsCtx {
   estudioActivoId: string;
   estado: string;
   propietarioId: string | null;
+  /** null = inmueble del propietario directo (Decisión 4: sin co-arrendatario). */
+  inmobiliariaId: string | null;
   solicitanteNombre: string;
   inmuebleDireccion: string;
   inmuebleCiudad: string;
@@ -464,7 +467,7 @@ interface TokenDocsCtx {
 export async function resolveExpedientePorTokenDocumentos(token: string): Promise<TokenDocsCtx> {
   const { data } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_documentos_expiracion, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at, tipo)')
+    .select('id, estado, token_documentos_expiracion, inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, direccion, ciudad), solicitantes(nombre, apellido), estudios(id, created_at, tipo)')
     .eq('token_documentos', token)
     .maybeSingle();
 
@@ -472,7 +475,7 @@ export async function resolveExpedientePorTokenDocumentos(token: string): Promis
     id: string;
     estado: string;
     token_documentos_expiracion: string | null;
-    inmuebles: { propietario_id: string | null; direccion: string | null; ciudad: string | null } | null;
+    inmuebles: { propietario_id: string | null; inmobiliaria_id?: string | null; direccion: string | null; ciudad: string | null } | null;
     solicitantes: { nombre: string | null; apellido: string | null } | null;
     estudios: EstudioEmbed[] | null;
   } | null;
@@ -489,6 +492,7 @@ export async function resolveExpedientePorTokenDocumentos(token: string): Promis
     estudioActivoId: estudioActivo.id,
     estado: row.estado,
     propietarioId: row.inmuebles?.propietario_id ?? null,
+    inmobiliariaId: row.inmuebles?.inmobiliaria_id ?? null,
     solicitanteNombre: `${row.solicitantes?.nombre ?? ''} ${row.solicitantes?.apellido ?? ''}`.trim() || 'Solicitante',
     inmuebleDireccion: row.inmuebles?.direccion ?? '',
     inmuebleCiudad: row.inmuebles?.ciudad ?? '',
@@ -604,7 +608,10 @@ export async function enviarEnlaceDocumentos(
  * sugerido es lo que él mismo declaró al autorizar (§8.3), para no repetirlo.
  */
 interface CoarrendatarioDelProspecto {
+  /** Decisiones 2 y 4: en revisión o aprobado antes del contrato, y canal de inmobiliaria. */
   puede_invitar: boolean;
+  /** Su invitación sigue en pie (en revisión, o aprobado sin contrato fijo sin él). */
+  vigente: boolean;
   /** `vencida`: la invitación pendiente pasó su plazo sin respuesta. */
   invitado: { nombre: string; estado: string; vencida: boolean } | null;
   /** Solo nombre y apellido: nunca el correo ni el WhatsApp del tercero. */
@@ -623,7 +630,7 @@ export async function getContextoDocumentosPublico(token: string): Promise<{
   const ctx = await resolveExpedientePorTokenDocumentos(token);
   const condicionado = ctx.estado === 'condicionado';
 
-  const [{ data: docs }, { data: coa }, { data: perfil }] = await Promise.all([
+  const [{ data: docs }, { data: coa }, { data: perfil }, ventana] = await Promise.all([
     (supabase.from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
       .select('id, proposito, nombre_original, created_at')
       .eq('estudio_id', ctx.estudioActivoId)
@@ -634,12 +641,16 @@ export async function getContextoDocumentosPublico(token: string): Promise<{
       .eq('expediente_id', ctx.expedienteId)
       .in('estado', ['pendiente_aceptacion', 'aceptado', 'estudio_completado'])
       .maybeSingle(),
-    condicionado
+    condicionado || ctx.estado === 'aprobado'
       ? (supabase.from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
           .select('coarrendatario_intencion')
           .eq('expediente_id', ctx.expedienteId)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    // Sin poder leerla no se ofrece invitar (la invitación lo volvería a validar).
+    ventanaCoarrendatario({ expedienteId: ctx.expedienteId, estado: ctx.estado, inmobiliariaId: ctx.inmobiliariaId }).catch(
+      () => null,
+    ),
   ]);
   const fila = coa as { nombre: string; estado: string; token_expiracion: string | null } | null;
   const invitado = fila
@@ -649,7 +660,7 @@ export async function getContextoDocumentosPublico(token: string): Promise<{
         vencida: fila.estado === 'pendiente_aceptacion' && !!fila.token_expiracion && new Date(fila.token_expiracion) < new Date(),
       }
     : null;
-  const puedeInvitar = condicionado && !invitado;
+  const puedeInvitar = !!ventana?.puede_invitar && !invitado;
   const intencion = (perfil as { coarrendatario_intencion?: { nombre?: string; apellido?: string } | null } | null)
     ?.coarrendatario_intencion;
 
@@ -661,6 +672,7 @@ export async function getContextoDocumentosPublico(token: string): Promise<{
     soportes: (docs as Array<{ id: string; proposito: Proposito; nombre_original: string; created_at: string }> | null) ?? [],
     coarrendatario: {
       puede_invitar: puedeInvitar,
+      vigente: ventana?.vigente ?? condicionado,
       invitado,
       sugerido:
         puedeInvitar && intencion?.nombre

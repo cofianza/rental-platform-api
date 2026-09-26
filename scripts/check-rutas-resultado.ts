@@ -144,6 +144,16 @@ check('sin puntaje se aprueba con la opcion abierta, no se inventa un perfil fue
   assert.strictEqual(r.puedeContinuarSolo, true);
 });
 
+check('Decision 2: el aprobado puede sumar coarrendatario (prima 10 %), salvo si ya lo tiene o es el propietario directo (Decision 4)', () => {
+  for (const puntaje of [null, 90]) {
+    assert.strictEqual(resolverRuta(e({ puntaje })).coarrendatarioAbarataPrima, true);
+    assert.strictEqual(resolverRuta(e({ puntaje, coarrendatarioVinculado: true })).coarrendatarioAbarataPrima, false);
+    const directo = resolverRuta(e({ puntaje, canalAdmiteCoarrendatario: false }));
+    assert.strictEqual(directo.coarrendatarioAbarataPrima, false);
+    assert.ok(!/coarrendatario/i.test(directo.mensaje), 'el texto no ofrece coarrendatario');
+  }
+});
+
 check('sin puntaje pero rechazado sigue siendo no aprobable', () => {
   assert.strictEqual(resolverRuta(e({ puntaje: null, resultadoVigente: 'rechazado' })).ruta, 'no_aprobable');
 });

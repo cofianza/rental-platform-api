@@ -154,32 +154,31 @@ describe('firmarSchema', () => {
 // ============================================================
 
 describe('revocarSchema', () => {
-  it('debe aceptar un motivo de 10+ caracteres', () => {
-    const result = revocarSchema.safeParse({
-      motivo: 'Revocacion por solicitud del titular de datos',
-    });
-    expect(result.success).toBe(true);
+  // Ley 1581 art. 8: Cofianza registra la solicitud del titular con fecha, canal y soporte.
+  const base = { canal: 'correo', fecha_solicitud: '2026-09-20', motivo: 'Correo del titular del 20/09 pidiendo revocar' };
+
+  it('acepta la solicitud completa', () => {
+    expect(revocarSchema.safeParse(base).success).toBe(true);
+    for (const canal of ['correo', 'whatsapp', 'llamada', 'escrito']) {
+      expect(revocarSchema.safeParse({ ...base, canal }).success).toBe(true);
+    }
   });
 
-  it('debe rechazar un motivo menor a 10 caracteres', () => {
-    const result = revocarSchema.safeParse({
-      motivo: 'corto',
-    });
-    expect(result.success).toBe(false);
+  it('exige canal y fecha de la solicitud', () => {
+    expect(revocarSchema.safeParse({ ...base, canal: undefined }).success).toBe(false);
+    expect(revocarSchema.safeParse({ ...base, canal: 'fax' }).success).toBe(false);
+    expect(revocarSchema.safeParse({ ...base, fecha_solicitud: undefined }).success).toBe(false);
+    expect(revocarSchema.safeParse({ ...base, fecha_solicitud: '20/09/2026' }).success).toBe(false);
   });
 
-  it('debe rechazar un motivo mayor a 1000 caracteres', () => {
-    const result = revocarSchema.safeParse({
-      motivo: 'x'.repeat(1001),
-    });
-    expect(result.success).toBe(false);
+  it('rechaza una fecha futura', () => {
+    expect(revocarSchema.safeParse({ ...base, fecha_solicitud: '2999-01-01' }).success).toBe(false);
   });
 
-  it('debe aceptar un motivo de exactamente 1000 caracteres', () => {
-    const result = revocarSchema.safeParse({
-      motivo: 'x'.repeat(1000),
-    });
-    expect(result.success).toBe(true);
+  it('el soporte va de 10 a 1000 caracteres', () => {
+    expect(revocarSchema.safeParse({ ...base, motivo: 'corto' }).success).toBe(false);
+    expect(revocarSchema.safeParse({ ...base, motivo: 'x'.repeat(1001) }).success).toBe(false);
+    expect(revocarSchema.safeParse({ ...base, motivo: 'x'.repeat(1000) }).success).toBe(true);
   });
 });
 

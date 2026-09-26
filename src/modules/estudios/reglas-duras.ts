@@ -541,6 +541,48 @@ export function motivoRevisionCanonIngreso(salida: SalidaSombra | null): string 
   return `Revisión manual obligatoria (Política §4.3): la relación canon / ingreso es ${pct}% (entre ${CANON_INGRESO_REVISION_DESDE}% y ${V3_CANON_INGRESO_MAXIMO}%, sobre el ingreso ajustado).`;
 }
 
+/**
+ * Politica Anexo A (A.4 independiente informal, y la nota "NO puede recibir
+ * aprobacion automatica" de A.4/A.5): lo que el prospecto declaro en el §8.2.
+ * «otro» no cae en ninguna categoria del Anexo; «independiente» con un «No» a
+ * «¿Tienes RUT activo?» es el informal. Solo motivo de revision: no puntua.
+ * Sin respuesta al RUT no se afirma nada (el paso 2 es opcional).
+ */
+export function motivoRevisionSituacionLaboral(
+  perfil: { situacion_laboral?: string | null; tiene_rut?: boolean | null } | null,
+): string | null {
+  if (perfil?.situacion_laboral === 'otro')
+    return 'Revisión manual obligatoria (Política Anexo A): el prospecto declaró su situación laboral como «otro», fuera de las categorías del Anexo A; el analista define la categoría y los documentos.';
+  if (perfil?.situacion_laboral === 'independiente' && perfil.tiene_rut === false)
+    return 'Revisión manual obligatoria (Política Anexo A.4): independiente sin RUT activo (informal); el analista verifica extractos con ingresos recurrentes de al menos 3 veces el canon en 4 de los últimos 6 meses.';
+  return null;
+}
+
+/**
+ * §8.2 del titular (autorizacion_perfil_prospecto). `*` y no columnas con
+ * nombre: `tiene_rut` puede no existir todavia y nombrarla tumbaria la lectura.
+ * Nunca lanza: sin dato no hay motivo.
+ */
+async function leerSituacionLaboral(
+  expedienteId: string,
+): Promise<{ situacion_laboral?: string | null; tiene_rut?: boolean | null } | null> {
+  try {
+    const { data, error } = await (supabase
+      .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+      .select('*')
+      .eq('expediente_id', expedienteId)
+      .maybeSingle();
+    if (error) {
+      logger.warn({ expedienteId, error: error.message }, 'Reglas duras: no se pudo leer la situacion laboral declarada');
+      return null;
+    }
+    return data as { situacion_laboral?: string | null; tiene_rut?: boolean | null } | null;
+  } catch (err) {
+    logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'Reglas duras: excepcion leyendo la situacion laboral');
+    return null;
+  }
+}
+
 /** Linea corta para anexar a `observaciones`, que es factual (score, saldos). */
 export function notaObservacionesReglasDuras(
   reglas: readonly ReglaDuraActiva[],
@@ -804,6 +846,9 @@ export async function resolverResultadoEstudio(
         motivoRevisionIngresoNoInferible(salida),
         // Politica §4.3: canon/ingreso en la banda 35-40% -> revision manual.
         motivoRevisionCanonIngreso(salida),
+        // Politica Anexo A.4/A.5: «otro» o independiente sin RUT. Lo declaro el
+        // titular: no aplica al estudio del co-arrendatario.
+        esCoarrendatario ? null : motivoRevisionSituacionLaboral(await leerSituacionLaboral(args.expedienteId)),
       ].filter((m): m is string => !!m);
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
       if (!motivoRevision) return { ...base, veredicto, salida, apisFallidas };

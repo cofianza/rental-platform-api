@@ -120,7 +120,7 @@ vi.mock('@/modules/users/users.service', () => ({ listOperators: vi.fn(async () 
 vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ getMontoEstudio: vi.fn(async () => 150000) }));
 // Flujo §14 / Adenda §9: el enlace vive DIAS_EXPIRACION_ESTUDIO dias.
 vi.mock('@/lib/calibracion', () => ({
-  getCalibracion: vi.fn(async () => ({ DIAS_EXPIRACION_ESTUDIO: 15, UMBRAL_DIFERENCIA_INGRESO: 50 })),
+  getCalibracion: vi.fn(async () => ({ DIAS_EXPIRACION_ESTUDIO: 15, UMBRAL_DIFERENCIA_INGRESO: 50, UMBRAL_SIMILITUD_BIOMETRICA: 80 })),
 }));
 
 // Import AFTER mocks
@@ -136,6 +136,9 @@ import {
   confirmarIdentidadProspecto,
   reportarIdentidadProspecto,
   documentoCoincide,
+  verificarBiometriaProspecto,
+  omitirBiometriaProspecto,
+  guardarPerfilProspecto,
 } from '../autorizaciones.service';
 import { TEXTO_LEGAL, TEXTO_LEGAL_BIOMETRIA, VERSION_TERMINOS, VERSION_TERMINOS_BIOMETRIA } from '../autorizaciones.texto';
 // Precargados a proposito: el servicio los importa en segundo plano y, con dos
@@ -449,7 +452,7 @@ describe('autorizaciones.service', () => {
         version_terminos: '2.0',
         biometria: { requerida: false, estado: null },
         solicitante: { nombre: 'Juan', apellido: 'Perez', tipo_documento: 'cc', telefono_masked: '••• ••33' },
-        expediente: { numero_expediente: 'EXP-2026-0001', inmueble: { ciudad: 'Bogota' } },
+        expediente: { numero_expediente: 'N.° 2026-0001', inmueble: { ciudad: 'Bogota' } },
       });
       // Ni el email ni el documento (tampoco enmascarado: lo escribe el prospecto, §8.1).
       expect(JSON.stringify(result)).not.toContain('123456789');
@@ -776,6 +779,62 @@ describe('autorizaciones.service', () => {
   // confirmarIdentidadProspecto — §8.1: el prospecto escribe su documento
   // ============================================================
 
+  describe('biometria de la autorizacion: umbral del panel (Adenda 2 §9 y §10)', () => {
+    const pendiente = {
+      id: AUTORIZACION_ID,
+      estado: 'pendiente',
+      token_expiracion: FUTURE_DATE,
+      expediente_id: EXPEDIENTE_ID,
+      solicitante_id: 'sol-uuid',
+      version_terminos: '3.0-biometria',
+      solicitantes: { numero_documento: '123456789' },
+      expedientes: { estado: 'en_revision' },
+    };
+
+    it('omitirla guarda el 80 % del panel, no el 70 % del env', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      await omitirBiometriaProspecto(TOKEN);
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({
+        biometria: { estado: 'omitida', umbral: 80 },
+      });
+    });
+
+    it('el cotejo responde con el mismo umbral', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      const r = await verificarBiometriaProspecto(TOKEN, { documentImage: 'x', photo: 'y' });
+      expect(r.umbral).toBe(80);
+    });
+  });
+
+  describe('guardarPerfilProspecto: ¿RUT activo? (Politica Anexo A.3/A.4)', () => {
+    const pendiente = {
+      id: AUTORIZACION_ID,
+      estado: 'pendiente',
+      token_expiracion: FUTURE_DATE,
+      expediente_id: EXPEDIENTE_ID,
+      solicitante_id: 'sol-uuid',
+      version_terminos: '3.0',
+      solicitantes: { numero_documento: '123456789' },
+      expedientes: { estado: 'en_revision' },
+    };
+
+    it('va en un UPDATE aparte: si la columna no existe, lo demas del perfil ya quedo guardado', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_perfil_prospecto', { error: null }, { error: { message: 'column "tiene_rut" does not exist' } });
+      const r = await guardarPerfilProspecto(TOKEN, { situacion_laboral: 'independiente', tiene_rut: false });
+      expect(r).toEqual({ guardado: true });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({ situacion_laboral: 'independiente' });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).not.toHaveProperty('tiene_rut');
+      expect(opsDe('autorizacion_perfil_prospecto', 'update')[0].args[0]).toEqual({ tiene_rut: false });
+    });
+
+    it('sin independiente no se guarda la respuesta del RUT', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      await guardarPerfilProspecto(TOKEN, { situacion_laboral: 'empleado', tiene_rut: true });
+      expect(opsDe('autorizacion_perfil_prospecto', 'update')).toHaveLength(0);
+    });
+  });
+
   describe('confirmarIdentidadProspecto', () => {
     const pendiente = {
       id: AUTORIZACION_ID,
@@ -957,7 +1016,7 @@ describe('autorizaciones.service', () => {
   // ============================================================
 
   describe('revocarAutorizacion', () => {
-    const motivo = { motivo: 'Revocacion por solicitud del titular' };
+    const motivo = { canal: 'correo' as const, fecha_solicitud: '2026-09-20', motivo: 'Correo del titular pidiendo revocar' };
 
     it('debe revocar la autorizacion activa DEL TITULAR', async () => {
       enqueue('autorizaciones_habeas_data', { data: { id: AUTORIZACION_ID, estado: 'autorizado' } }, { error: null });
@@ -967,7 +1026,11 @@ describe('autorizaciones.service', () => {
       expect(result).toMatchObject({ estado: 'revocado' });
       expect(result.fecha_revocacion).toBeDefined();
       expect(mockAssertAccess).toHaveBeenCalledWith(EXPEDIENTE_ID, USER_ID, 'administrador');
-      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toMatchObject({ estado: 'revocado', motivo_revocacion: motivo.motivo });
+      // Fecha, canal y soporte de la solicitud del titular quedan en la fila (Ley 1581 art. 8).
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toMatchObject({
+        estado: 'revocado',
+        motivo_revocacion: 'Solicitud del titular recibida por correo electrónico el 20/09/2026. Soporte: Correo del titular pidiendo revocar',
+      });
       // Sujeto: el titular (coarrendatario_id IS NULL), nunca "la mas reciente".
       expect(opsDe('autorizaciones_habeas_data', 'is').some((o) => o.args[0] === 'coarrendatario_id' && o.args[1] === null)).toBe(true);
     });

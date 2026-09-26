@@ -18,6 +18,12 @@ export async function getDelExpediente(req: Request, res: Response) {
   sendSuccess(res, result);
 }
 
+export async function getVentana(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const result = await service.getVentanaCoarrendatario(id, req.user!.id, req.user!.rol);
+  sendSuccess(res, result);
+}
+
 export async function reenviar(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
   const result = await service.reenviarInvitacionCoarrendatario(

@@ -3,6 +3,8 @@ import { assertStorageKeyPropia } from '@/lib/storageKey';
 import { supabase } from '@/lib/supabase';
 import { AppError, fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
+import { sumarDiasHabiles } from '@/lib/diasHabiles';
+import { fechaBogota } from '@/modules/contratos/v3/formato';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
@@ -20,7 +22,7 @@ import { notificarUsuario, findPerfilIdByEmail, notificarResponsableExpediente }
 import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
 import { resolveAllowedExpedienteIds, assertExpedienteAccess, assertInmuebleAccess } from '@/lib/tenantScope';
-import { assertNoEsEstudioDeOtraPersona } from './coarrendatario-vinculado';
+import { assertNoEsEstudioDeOtraPersona, coarrendatarioVigente } from './coarrendatario-vinculado';
 import {
   decisionDeCofianza,
   descargarCertificado,
@@ -77,6 +79,7 @@ import {
 // Estudios simultaneos por inmueble (Flujo §4.2). De aqui salen la definicion
 // canonica de "estudio en curso" y el unico bloqueo que queda: la reserva.
 import { errorNoAdmision, ESTADOS_ESTUDIO_FINALES } from './estudios-simultaneos.guard';
+import { formatNumeroEstudio, limpiarBusquedaNumeroEstudio } from '@/lib/numeroEstudio';
 
 // ============================================================
 // Constants
@@ -347,7 +350,7 @@ export async function listAllEstudios(
   // Ahora se resuelven los expediente_id que hacen match y se filtra en SQL.
   let searchExpedienteIds: string[] | null = null;
   if (query.search) {
-    const termino = query.search.replace(/[,()]/g, '').trim();
+    const termino = limpiarBusquedaNumeroEstudio(query.search.replace(/[,()]/g, '')).trim();
     if (termino) {
       const { data: sols } = await (supabase
         .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
@@ -2107,7 +2110,7 @@ async function notificarSolicitanteResultadoEstudio(
 
   const aprobado = resultado === 'aprobado';
   const condicionado = resultado === 'condicionado';
-  const numeroExpediente = exp.numero ?? '';
+  const numeroExpediente = formatNumeroEstudio(exp.numero);
 
   // 1) Notificacion in-app (campanario + badges en tiempo real)
   const userId = await findPerfilIdByEmail(sol?.email);
@@ -2115,11 +2118,11 @@ async function notificarSolicitanteResultadoEstudio(
     await notificarUsuario({
       userId,
       tipo: aprobado ? 'estudio.aprobado' : condicionado ? 'estudio.condicionado' : 'estudio.rechazado',
-      titulo: aprobado ? 'Estudio aprobado' : condicionado ? 'Estudio condicionado' : 'Resultado de tu estudio',
+      titulo: aprobado ? 'Estudio aprobado' : condicionado ? 'Estudio en revisión' : 'Resultado de tu estudio',
       mensaje: aprobado
         ? `Tu estudio ${numeroExpediente} avanzó. Ya puedes continuar con el contrato.`
         : condicionado
-          ? `Tu estudio ${numeroExpediente} quedó condicionado. Invita a un co-arrendatario para continuar.`
+          ? `Tu estudio ${numeroExpediente} quedó en revisión: un analista de Cofianza lo revisa y te avisamos el resultado.`
           : `Tu estudio ${numeroExpediente} no fue aprobado. Revisa los detalles.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, resultado },
@@ -2389,15 +2392,17 @@ export async function ejecutarEstudio(
   }
 
   // 1.5b. P3: la evaluación del co-arrendatario solo corre con el estudio en
-  //       revisión (condicionado). Decidido el caso, reintentarla consultaría el
-  //       buró de un tercero sin finalidad (Ley 1581).
+  //       revisión (condicionado) o aprobado sin contrato fijo que lo excluya
+  //       (Decisión 2). Fuera de eso consultaría el buró de un tercero sin
+  //       finalidad (Ley 1581).
   if (est.tipo === 'con_coarrendatario') {
     const { data: expEstado } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('estado')
       .eq('id', est.expediente_id)
       .maybeSingle();
-    if ((expEstado as { estado?: string } | null)?.estado !== 'condicionado') {
+    // Decisión 2 (2026-09-25): también con el estudio aprobado mientras ningún contrato fijo vaya sin él.
+    if (!(await coarrendatarioVigente((expEstado as { estado?: string } | null)?.estado ?? '', est.expediente_id))) {
       // Se cancela (estado final: no queda en formulario_completado o
       // pago_pendiente bloqueando otros estudios) y se le avisa que su
       // invitación quedó sin efecto. Una consulta en curso no se toca.
@@ -3476,36 +3481,79 @@ async function esReevaluable(est: { estado: string; resultado: string; tipo?: st
   return (await decisionDeCofianza(exp as ExpedienteDecision | null)) === 'negado';
 }
 const MAX_REEVALUACIONES = 2;
-/** Politica §8: "plazo para reevaluar si el solicitante subsana inconsistencias: 15 dias habiles". */
+/**
+ * Política §11 (decisión 7, 2026-09-25): la apelación se radica «dentro de los
+ * 15 días hábiles siguientes a la notificación del rechazo» y Cofianza «tiene
+ * 10 días hábiles para responder».
+ */
 const PLAZO_REEVALUACION_DIAS_HABILES = 15;
-const MS_POR_DIA = 24 * 60 * 60 * 1000;
-/** Colombia no tiene horario de verano: UTC-5 fijo basta para saber "que dia es". */
-const OFFSET_BOGOTA_MS = -5 * 60 * 60 * 1000;
+const PLAZO_RESPUESTA_DIAS_HABILES = 10;
 
 /**
- * Dias habiles (lunes a viernes) transcurridos entre dos instantes, contados
- * por fecha calendario de Bogota: el dia de `desde` no cuenta, el de `hasta` si.
- *
- * ponytail: ignora los festivos colombianos (18 al año, varios moviles). Un
- * festivo cuenta como habil, asi que la ventana queda un poco MAS estricta que
- * la del calendario oficial — nunca mas laxa. Si algun dia hace falta el
- * calendario exacto, es una tabla de fechas, no una dependencia.
+ * Pura. Días hábiles de Colombia (con festivos), por fecha de Bogotá. Sin
+ * radicación cuenta la que se haría hoy. Radicada a tiempo no vence: el
+ * analista registra la re-evaluación aunque ya haya pasado el día 15. Sin fecha
+ * de notificación no se puede medir y no vence.
  */
-export function diasHabilesTranscurridos(desde: Date, hasta: Date): number {
-  const diaLocal = (d: Date) => Math.floor((d.getTime() + OFFSET_BOGOTA_MS) / MS_POR_DIA);
-  let dias = 0;
-  for (let dia = diaLocal(desde) + 1; dia <= diaLocal(hasta); dia++) {
-    // El dia 0 de la epoch (1970-01-01) fue jueves: (dia + 4) % 7 = 0 es domingo.
-    const diaSemana = (((dia + 4) % 7) + 7) % 7;
-    if (diaSemana !== 0 && diaSemana !== 6) dias++;
-  }
-  return dias;
+export function plazoApelacion(notificacion: string | null, radicacion: string | null, ahora: Date = new Date()) {
+  const apelarHasta = notificacion ? sumarDiasHabiles(fechaBogota(notificacion), PLAZO_REEVALUACION_DIAS_HABILES) : null;
+  return {
+    apelar_hasta: apelarHasta,
+    responder_hasta: radicacion ? sumarDiasHabiles(fechaBogota(radicacion), PLAZO_RESPUESTA_DIAS_HABILES) : null,
+    vencido: !!apelarHasta && fechaBogota(radicacion ?? ahora) > apelarHasta,
+  };
 }
 
-/** Politica §8: pasaron mas de 15 dias habiles desde que se completo. Sin fecha no se puede medir y no vence. */
-function plazoReevaluacionVencido(fechaCompletado: string | null | undefined): boolean {
-  return !!fechaCompletado &&
-    diasHabilesTranscurridos(new Date(fechaCompletado), new Date()) > PLAZO_REEVALUACION_DIAS_HABILES;
+/**
+ * Cuándo se le notificó el no aprobado al prospecto:
+ *  - rechazo (del buró o de una re-evaluación): cuando se registró el
+ *    resultado, el evento que escribe fn_registrar_resultado_estudio.
+ *    `fecha_completado` no sirve en la re-evaluación: queda anclada en la
+ *    consulta al buró del padre.
+ *  - condicionado que Cofianza negó después: cuando el expediente pasó a
+ *    'rechazado' (transicionar_expediente escribe el evento en la misma transacción).
+ * Sin evento, fecha_completado.
+ */
+async function fechaNotificacionNoAprobado(
+  est: { id: string; resultado: string; expediente_id: string; fecha_completado?: string | null },
+): Promise<string | null> {
+  const base = (supabase
+    .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .select('created_at')
+    .eq('expediente_id', est.expediente_id);
+  const filtrada = est.resultado === 'rechazado'
+    ? base.eq('tipo', 'estudio').eq('metadata->>estudio_id', est.id).eq('metadata->>resultado', 'rechazado')
+    : base.eq('tipo', 'estado').eq('estado_nuevo', 'rechazado');
+  const { data } = await filtrada.order('created_at', { ascending: false }).limit(1).maybeSingle();
+  return (data as { created_at?: string } | null)?.created_at ?? est.fecha_completado ?? null;
+}
+
+/** La radicación de la apelación: no hay campo propio, vale el primer soporte subido. */
+async function fechaPrimerSoporte(estudioId: string): Promise<string | null> {
+  const { data } = await (supabase
+    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
+    .select('created_at')
+    .eq('estudio_id', estudioId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return (data as { created_at?: string } | null)?.created_at ?? null;
+}
+
+/** Fuera del plazo no se firman soportes ni se crea la re-evaluación. */
+async function assertPlazoApelacion(
+  est: { id: string; resultado: string; expediente_id: string; fecha_completado?: string | null },
+  radicacion: string | null,
+): Promise<void> {
+  const plazo = plazoApelacion(await fechaNotificacionNoAprobado(est), radicacion);
+  if (!plazo.vencido) return;
+  const hasta = new Date(`${plazo.apelar_hasta}T12:00:00Z`)
+    .toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  throw AppError.badRequest(
+    `El plazo para apelar venció el ${hasta}: la Política (§11) da ${PLAZO_REEVALUACION_DIAS_HABILES} días hábiles desde la notificación del no aprobado para radicar la apelación. Para volver a evaluar al solicitante hay que habilitar una evaluación nueva.`,
+    'REEVALUACION_FUERA_DE_PLAZO',
+    { apelar_hasta: plazo.apelar_hasta, plazo_dias_habiles: PLAZO_REEVALUACION_DIAS_HABILES },
+  );
 }
 
 function getExtensionFromMime(mimeType: string): string {
@@ -3548,13 +3596,9 @@ export async function getSoportePresignedUrl(
   }
 
   // Los soportes solo sirven para re-evaluar: fuera del plazo no se firma la
-  // subida (antes el gestor subia archivos y el 400 llegaba al final).
-  if (plazoReevaluacionVencido(est.fecha_completado)) {
-    throw AppError.badRequest(
-      `El plazo de ${PLAZO_REEVALUACION_DIAS_HABILES} días hábiles para re-evaluar ya venció. Para volver a evaluar al solicitante hay que habilitar una evaluación nueva.`,
-      'REEVALUACION_FUERA_DE_PLAZO',
-    );
-  }
+  // subida (antes el gestor subia archivos y el 400 llegaba al final). Con la
+  // apelación ya radicada a tiempo se puede seguir completando.
+  await assertPlazoApelacion(est, await fechaPrimerSoporte(est.id));
 
   // 2. Generate storage key
   const ext = getExtensionFromMime(input.tipo_mime);
@@ -3727,31 +3771,15 @@ export async function solicitarReEvaluacion(
     throw AppError.badRequest(MENSAJE_NO_REEVALUABLE, 'ESTUDIO_NO_REEVALUABLE');
   }
 
-  // Politica §8: pasados 15 dias habiles desde que se completo, ya no es una
-  // re-evaluacion del resultado viejo: hay que habilitar una evaluacion nueva.
-  // Sin fecha_completado no se puede medir y no se bloquea.
-  if (est.fecha_completado) {
-    const diasHabiles = diasHabilesTranscurridos(new Date(est.fecha_completado), new Date());
-    if (diasHabiles > PLAZO_REEVALUACION_DIAS_HABILES) {
-      throw AppError.badRequest(
-        `El plazo para re-evaluar ya venció: pasaron ${diasHabiles} días hábiles desde que la evaluación se completó y la Política (§8) da ${PLAZO_REEVALUACION_DIAS_HABILES} días hábiles para subsanar inconsistencias. Para volver a evaluar al solicitante hay que habilitar una evaluación nueva.`,
-        'REEVALUACION_FUERA_DE_PLAZO',
-        {
-          dias_habiles_transcurridos: diasHabiles,
-          plazo_dias_habiles: PLAZO_REEVALUACION_DIAS_HABILES,
-          fecha_completado: est.fecha_completado,
-        },
-      );
-    }
-  }
+  // Politica §11: la apelacion se radica en 15 dias habiles desde la
+  // notificacion del no aprobado. Radicada a tiempo (primer soporte), el
+  // analista la registra aunque ya haya pasado el dia 15; pasado el plazo sin
+  // radicar hay que habilitar una evaluacion nueva.
+  const radicacion = await fechaPrimerSoporte(estudioId);
+  await assertPlazoApelacion(est, radicacion);
 
   // 2. Verify at least 1 soporte doc exists
-  const { count: soporteCount } = await (supabase
-    .from('estudios_documentos_soporte' as string) as ReturnType<typeof supabase.from>)
-    .select('id', { count: 'exact', head: true })
-    .eq('estudio_id', estudioId);
-
-  if (!soporteCount || soporteCount === 0) {
+  if (!radicacion) {
     throw AppError.badRequest(
       'Debe subir al menos un documento soporte antes de solicitar re-evaluacion',
       'SOPORTE_REQUERIDO',
@@ -3988,21 +4016,27 @@ export async function getHistorialReEvaluacion(estudioId: string, userId?: strin
 
   // 5. Determine if can re-evaluate
   const lastEstudio = estudiosChain[estudiosChain.length - 1] as unknown as
-    { estado: string; resultado: string; tipo: string | null; expediente_id: string; fecha_completado: string | null } | undefined;
+    { id: string; estado: string; resultado: string; tipo: string | null; expediente_id: string; fecha_completado: string | null } | undefined;
   const totalEnCadena = estudiosChain.length;
   // Mismo plazo que valida solicitarReEvaluacion: sin esto la UI dejaba subir
   // soportes y el 400 REEVALUACION_FUERA_DE_PLAZO llegaba al final.
-  const plazoVencido = plazoReevaluacionVencido(lastEstudio?.fecha_completado);
-  const puedeReevaluar =
-    totalEnCadena <= MAX_REEVALUACIONES &&
-    !!lastEstudio &&
-    !plazoVencido &&
-    (await esReevaluable(lastEstudio));
+  const reevaluable = !!lastEstudio && (await esReevaluable(lastEstudio));
+  const plazo = lastEstudio && reevaluable
+    ? plazoApelacion(
+        await fechaNotificacionNoAprobado(lastEstudio),
+        (docsByEstudio.get(lastEstudio.id)?.[0]?.created_at as string | undefined) ?? null,
+      )
+    : { apelar_hasta: null, responder_hasta: null, vencido: false };
+  const puedeReevaluar = totalEnCadena <= MAX_REEVALUACIONES && reevaluable && !plazo.vencido;
 
   return {
     total_en_cadena: totalEnCadena,
     puede_reevaluar: puedeReevaluar,
-    plazo_vencido: plazoVencido,
+    plazo_vencido: plazo.vencido,
+    /** 'AAAA-MM-DD': último día para radicar la apelación (Política §11). */
+    apelar_hasta: plazo.apelar_hasta,
+    /** 'AAAA-MM-DD': ya radicada, último día para que Cofianza responda. */
+    responder_hasta: plazo.responder_hasta,
     // Mismas reglas que el detalle: al prospecto no le viajan score ni motivo.
     historial: redactarEstudiosSegunRol(historial as Record<string, unknown>[], userRol),
   };

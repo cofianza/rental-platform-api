@@ -117,7 +117,7 @@ describe('barrerReservasV3', () => {
       payload: { contrato_id: 'cto-1', expediente_id: 'exp-1' },
     });
     const { mensaje } = mockAvisar.mock.calls[0][0] as { mensaje: string };
-    expect(mensaje).toContain('EXP-2026-0100');
+    expect(mensaje).toContain('del estudio N.° 2026-0100');
     expect(mensaje).toContain('21/09/2026');
     expect(mensaje).toContain('el inmueble quedó libre');
     expect(mensaje).toContain('el asistente trae lo que ya llenaste');

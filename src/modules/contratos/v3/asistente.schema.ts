@@ -170,6 +170,20 @@ export const autorizarExcesoSchema = z
   .object({ huella: z.string({ error: 'Falta la huella' }).regex(/^[0-9a-f]{64}$/, 'Huella inválida') })
   .strict();
 
+/**
+ * Ruta B: campo de texto del multipart con el PDF propio. El número que la
+ * inmobiliaria le puso a su contrato; el Anexo lo imprime en «Contrato asociado
+ * N°» (vacío = el consecutivo de Cofianza).
+ */
+export const cargarPropioSchema = z.object({
+  numero_contrato: z
+    .string()
+    .trim()
+    .max(40, 'El número del contrato admite hasta 40 caracteres')
+    .regex(/^[\p{L}\p{N} .\-_/#°]*$/u, 'El número del contrato solo admite letras, números, espacios y . - _ / # °')
+    .optional(),
+});
+
 /** Tope de marcas de firma sobre el PDF propio (firma e iniciales en varias páginas caben de sobra). */
 export const MAX_MARCAS_FIRMA = 30;
 

@@ -5,8 +5,8 @@
  * Festivos: los fijos, los que la Ley 51 de 1983 («Ley Emiliani») pasa al lunes
  * siguiente y los que dependen de la Pascua (Jueves y Viernes Santo, Ascensión,
  * Corpus Christi y Sagrado Corazón, estos tres ya trasladados al lunes).
- * Los de estudios.service y calibracion.service (diasHabilesTranscurridos,
- * horasHabilesEntre) siguen contando los festivos como hábiles.
+ * El de calibracion.service (horasHabilesEntre) sigue contando los festivos
+ * como hábiles.
  */
 
 const DIA_MS = 86_400_000;

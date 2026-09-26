@@ -117,6 +117,7 @@ import {
   reintentar,
 } from './firma/firma.service';
 import { ultimoSobre } from './firma/reconciliar';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 const BUCKET = 'documentos-expedientes';
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
@@ -606,6 +607,7 @@ function propioVisible(p: PropioGuardado | undefined, f: Fuentes): NonNullable<E
     bytes,
     sha256,
     subidoEn,
+    numeroContrato: p.numeroContrato ?? null,
     firmas,
     firmasCompletas: !partesSinFirma.length,
     partesSinFirma,
@@ -1380,7 +1382,7 @@ async function avisarExcesoAutorizado(expedienteId: string, contratoId: string, 
           userId,
           tipo: 'contrato.clausulas_autorizadas',
           titulo: 'Cofianza autorizó tus cláusulas adicionales',
-          mensaje: `Ya puedes continuar el contrato del estudio ${numero}.`,
+          mensaje: `Ya puedes continuar el contrato del estudio ${formatNumeroEstudio(numero)}.`,
           link: `/expedientes/${expedienteId}/contrato`,
           payload: { expediente_id: expedienteId, contrato_id: contratoId },
         }),
@@ -1430,6 +1432,8 @@ export async function cargarPropio(
   archivo: { buffer: Buffer; originalname: string } | undefined,
   userId: string,
   userRol: string,
+  /** El número que la inmobiliaria le puso a su contrato (opcional): el Anexo lo imprime. */
+  numeroContrato?: string,
 ): Promise<EstadoAsistente> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   await assertExpedienteAccess(expedienteId, userId, userRol);
@@ -1464,6 +1468,7 @@ export async function cargarPropio(
     sha256: sha256(archivo.buffer),
     subidoEn: new Date().toISOString(),
     subidoPor: userId,
+    ...(numeroContrato?.trim() && { numeroContrato: numeroContrato.trim() }),
   };
   const { data, error } = await db('contratos')
     .update({ datos_variables: { ...dv, propio } } as never)
@@ -1492,6 +1497,7 @@ export async function cargarPropio(
       sha256: propio.sha256,
       bytes: propio.bytes,
       paginas: propio.paginas,
+      numero_contrato: propio.numeroContrato ?? null,
       reemplaza: dv.propio?.sha256 ?? null,
       // Las marcas de firma eran de ese PDF: con el nuevo se ubican otra vez.
       firmas_descartadas: dv.propio?.firmas?.length ?? 0,

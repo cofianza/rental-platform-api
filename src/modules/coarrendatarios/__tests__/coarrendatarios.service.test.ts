@@ -134,6 +134,10 @@ vi.mock('@/modules/expedientes/expediente-soportes.service', () => ({
   emitirTokenDocumentos: (...args: unknown[]) => mockEmitirTokenDocumentos(...args),
 }));
 
+// La evaluación del co-arrendatario arranca en ejecutarEstudio (import dinámico).
+const mockEjecutar = vi.fn(async (..._args: unknown[]) => undefined);
+vi.mock('@/modules/estudios/estudios.service', () => ({ ejecutarEstudio: (...args: unknown[]) => mockEjecutar(...args) }));
+
 // Import AFTER mocks
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { getCalibracion } from '@/lib/calibracion';
@@ -151,6 +155,8 @@ import {
   avisarCoarrendatarioDecision,
   invitarCoarrendatarioPorToken,
   avisarInvitacionSinEfecto,
+  getVentanaCoarrendatario,
+  enlaceInvitarCoarrendatario,
 } from '../coarrendatarios.service';
 
 // ============================================================
@@ -171,7 +177,8 @@ const ctxRow = (estado = 'condicionado') => ({
     estado,
     creado_por: GESTOR_ID,
     solicitantes: { creado_por: null, email: 'ana@correo.co', nombre: 'Ana', apellido: 'Pérez', numero_documento: '1.234.567' },
-    inmuebles: { propietario_id: PROPIETARIO_ID, inmobiliaria_id: null, direccion: 'Calle 1 # 2-3', ciudad: 'Medellín' },
+    // Canal de inmobiliaria: el del propietario directo no admite co-arrendatario (Decisión 4).
+    inmuebles: { propietario_id: PROPIETARIO_ID, inmobiliaria_id: 'org-1' as string | null, direccion: 'Calle 1 # 2-3', ciudad: 'Medellín' },
   },
   error: null,
 });
@@ -186,6 +193,13 @@ const invitacion = (numeroDocumento: string) => ({
   numero_documento: numeroDocumento,
   email: 'luis@correo.co',
 });
+
+/** El correo enviado a esa dirección (lanza si no hay). */
+const correoA = (to: string) => {
+  const c = (mockResendSend.mock.calls as unknown as Array<[{ to: string; subject: string; html: string }]>).find(([m]) => m.to === to);
+  if (!c) throw new Error(`sin correo a ${to}`);
+  return c[0];
+};
 
 beforeEach(() => {
   queues.clear();
@@ -496,7 +510,7 @@ describe('aceptarInvitacion — avisos', () => {
     expect(destinatarios).toEqual(['titular-1', PROPIETARIO_ID]);
     expect(mockNotificarUsuario.mock.calls[1][0]).toMatchObject({
       tipo: 'coarrendatario.acepto',
-      mensaje: expect.stringContaining('EXP-2026-00042'),
+      mensaje: expect.stringContaining('del estudio N.° 2026-00042'),
     });
     expect(mockNotificarResponsable).toHaveBeenCalledWith(
       expect.objectContaining({ expedienteId: EXPEDIENTE_ID, excluirPerfilId: PROPIETARIO_ID, tipo: 'coarrendatario.acepto' }),
@@ -542,7 +556,7 @@ describe('aceptarInvitacion — carrera del claim', () => {
 
   it('si el estudio se resolvió entre la lectura y el claim, devuelve la invitación y no consulta el buró', async () => {
     enqueue('expediente_coarrendatarios', pendiente, { data: [{ id: COA_ID }], error: null });
-    enqueue('expedientes', ctxRow(), ctxRow('aprobado'));
+    enqueue('expedientes', ctxRow(), ctxRow('rechazado'));
 
     await expect(aceptarInvitacion(TOKEN, '1.1.1.1', 'ua', {} as never)).rejects.toMatchObject({
       errorCode: 'COARRENDATARIO_INVITACION_NO_VIGENTE',
@@ -727,8 +741,8 @@ describe('invitar desde el enlace del prospecto — P18', () => {
     expect(mockResendSend).not.toHaveBeenCalled();
   });
 
-  it('mismos guards que el panel: solo con el estudio condicionado', async () => {
-    enqueue('expedientes', ctxRow('aprobado'));
+  it('mismos guards que el panel: no con el estudio ya rechazado', async () => {
+    enqueue('expedientes', ctxRow('rechazado'));
 
     await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('7654321'))).rejects.toMatchObject({
       errorCode: 'EXPEDIENTE_NO_CONDICIONADO',
@@ -757,7 +771,7 @@ describe('invitación fuera de condicionado — P3', () => {
 
   it('aceptar: no reclama la invitación ni crea la evaluación', async () => {
     enqueue('expediente_coarrendatarios', pendiente);
-    enqueue('expedientes', ctxRow('aprobado'));
+    enqueue('expedientes', ctxRow('rechazado'));
 
     await expect(aceptarInvitacion('t'.repeat(64), '1.1.1.1', 'ua', {} as never)).rejects.toMatchObject(noVigente);
 
@@ -772,7 +786,7 @@ describe('invitación fuera de condicionado — P3', () => {
   });
 
   it('reenviar tampoco', async () => {
-    enqueue('expedientes', ctxRow('aprobado'));
+    enqueue('expedientes', ctxRow('cerrado'));
 
     await expect(reenviarInvitacionCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', {})).rejects.toMatchObject(noVigente);
     expect(ops.some((o) => o.table === 'expediente_coarrendatarios')).toBe(false);
@@ -803,12 +817,19 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
 
     await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-    expect(ops.some((o) => o.table === 'eventos_timeline')).toBe(false);
-    expect(mockNotificarUsuario).not.toHaveBeenCalled();
     // Sin contrato generado todavía: el CRC se regenera con el acompañante.
     await vi.waitFor(() => expect(mockEmitirCrc).toHaveBeenCalledWith(TITULAR_ESTUDIO_ID, GESTOR_ID, { regenerar: true }));
-    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
-    expect((mockResendSend.mock.calls[0] as unknown as [{ subject: string }])[0].subject).toContain('se aprobó');
+    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(2));
+    expect(correoA('luis@correo.co').subject).toContain('se aprobó');
+    // Decisión 2: el titular y el gestor saben que quedó vinculado (prima del 10 %)…
+    expect(correoA('ana@correo.co').html).toContain('10 %');
+    expect(mockNotificarUsuario).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'Co-arrendatario vinculado' }),
+    );
+    // …con rastro, pero sin estado nuevo: la vía de la tarifa sigue siendo la del titular.
+    const evento = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert')!.args[0] as Record<string, unknown>;
+    expect(evento.estado_nuevo).toBeUndefined();
+    expect(evento.metadata).toMatchObject({ origen: 'coarrendatario_tras_aprobacion', vinculado: true });
   });
 
   // Con el asistente de contratos (flag + inmueble de inmobiliaria) se puede rehacer
@@ -867,6 +888,9 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
     encolarAvisoCoa('rechazado', 'aprobado');
 
     await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: ['listas_restrictivas' as never] });
+    // Decisión 2: el titular sigue con prima del 20 % y se le avisa, sin nada del buró del otro.
+    await vi.waitFor(() => expect(correoA('ana@correo.co').html).toContain('20 %'));
+    expect(correoA('ana@correo.co').html).not.toMatch(/listas|regla/i);
 
     await vi.waitFor(() =>
       expect(mockNotificarUsuario).toHaveBeenCalledWith(
@@ -880,7 +904,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
     expect(mockLiberarReserva).not.toHaveBeenCalled();
     expect(mockAvisarSolicitante).not.toHaveBeenCalled();
     expect(mockEmitirCrc).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mockResendSend).toHaveBeenCalledTimes(2));
   });
 });
 
@@ -1095,7 +1119,7 @@ describe('rechazarInvitacion — Flujo §12', () => {
       expect.objectContaining({
         userId: PROPIETARIO_ID,
         tipo: 'coarrendatario.rechazo',
-        mensaje: expect.stringContaining('Luis declinó ser coarrendatario del estudio EXP-2026-00042'),
+        mensaje: expect.stringContaining('Luis declinó ser coarrendatario del estudio N.° 2026-00042'),
         link: `/expedientes/${EXPEDIENTE_ID}`,
       }),
     );
@@ -1118,7 +1142,7 @@ describe('rechazarInvitacion — Flujo §12', () => {
       data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' },
       error: null,
     });
-    enqueue('expedientes', ctxRow('aprobado'));
+    enqueue('expedientes', ctxRow('rechazado'));
 
     await rechazarInvitacion('t'.repeat(64));
 
@@ -1292,5 +1316,167 @@ describe('correo de contacto de la empresa', () => {
     await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('7654321'))).rejects.toMatchObject({
       message: expect.stringContaining('soporte@cofianza.co'),
     });
+  });
+});
+
+// ============================================================
+// Decisión 2 (2026-09-25; Política §5, Flujo §8.3 y §10, Adenda 1 §5.2): un
+// estudio APROBADO suma co-arrendatario antes del contrato para pagar la prima
+// del 10 %, sin cobro extra; el titular conserva su aprobación y su ruta.
+// ============================================================
+
+describe('Decisión 2 — el aprobado suma co-arrendatario antes del contrato', () => {
+  const sinEl = { data: [{ id: 'cto-1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null };
+  const pendiente = {
+    data: {
+      id: COA_ID,
+      expediente_id: EXPEDIENTE_ID,
+      estado: 'pendiente_aceptacion',
+      token_expiracion: new Date(Date.now() + 86_400_000).toISOString(),
+      nombre: 'Luis',
+      apellido: 'Gómez',
+      tipo_documento: 'cc',
+      numero_documento: '7654321',
+      email: 'luis@correo.co',
+    },
+    error: null,
+  };
+
+  it('invitar sobre un aprobado sin contrato: crea la invitación', async () => {
+    enqueue('expedientes', ctxRow('aprobado'));
+    enqueue('expediente_coarrendatarios', cupo, { data: { id: COA_ID }, error: null });
+
+    await expect(invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'inmobiliaria', invitacion('7654321'))).resolves.toMatchObject({ id: COA_ID });
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(true);
+  });
+
+  it('con un contrato ya fijado sin él, o sin el pago del estudio: no invita', async () => {
+    enqueue('expedientes', ctxRow('aprobado'), ctxRow('aprobado'));
+    enqueue('contratos', sinEl);
+    await expect(invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'inmobiliaria', invitacion('7654321'))).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'CONTRATO_SIN_COARRENDATARIO',
+    });
+    vi.mocked(estudioYaCobrado).mockResolvedValueOnce(false);
+    await expect(invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'inmobiliaria', invitacion('7654321'))).rejects.toMatchObject({
+      errorCode: 'PAGO_ESTUDIO_REQUERIDO',
+    });
+    expect(ops.some((o) => o.method === 'insert')).toBe(false);
+  });
+
+  it('aceptar sobre un aprobado: su evaluación corre amparada en el pago del titular (sin cobro nuevo)', async () => {
+    enqueue('expediente_coarrendatarios', pendiente, { data: [{ id: COA_ID }], error: null });
+    enqueue('expedientes', ctxRow('aprobado'), ctxRow('aprobado'));
+    enqueue('autorizaciones_habeas_data', { data: { id: 'aut-1' }, error: null });
+    enqueue('estudios', { data: null, error: null }, { data: { id: COA_ESTUDIO_ID }, error: null });
+
+    await expect(aceptarInvitacion('t'.repeat(64), '1.1.1.1', 'ua', {} as never)).resolves.toMatchObject({ estudio_id: COA_ESTUDIO_ID });
+
+    const estudio = ops.find((o) => o.table === 'estudios' && o.method === 'insert')!.args[0] as { tipo: string; estado: string };
+    expect(estudio).toMatchObject({ tipo: 'con_coarrendatario', estado: 'formulario_completado' });
+    await vi.waitFor(() => expect(mockEjecutar).toHaveBeenCalledWith(COA_ESTUDIO_ID, '', '1.1.1.1', undefined));
+    expect(ops.some((o) => o.table === 'pagos')).toBe(false);
+  });
+
+  it('aceptar cuando el contrato ya se fijó sin él: la invitación quedó sin efecto y no se reclama', async () => {
+    enqueue('expediente_coarrendatarios', pendiente);
+    enqueue('expedientes', ctxRow('aprobado'));
+    enqueue('contratos', sinEl);
+
+    await expect(aceptarInvitacion('t'.repeat(64), '1.1.1.1', 'ua', {} as never)).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_INVITACION_NO_VIGENTE',
+    });
+    expect(ops.some((o) => o.method === 'update' || o.method === 'insert')).toBe(false);
+  });
+
+  it('la ventana de las tarjetas: con una invitación viva ya no ofrece invitar', async () => {
+    enqueue('expedientes', ctxRow('aprobado'), ctxRow('aprobado'));
+    enqueue('expediente_coarrendatarios', { data: null, error: null }, { data: { id: COA_ID }, error: null });
+
+    expect(await getVentanaCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador')).toMatchObject({ vigente: true, puede_invitar: true });
+    expect(await getVentanaCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador')).toMatchObject({ vigente: true, puede_invitar: false });
+  });
+
+  it('el correo del aprobado le ofrece su enlace solo a quien marcó «con alguien más»', async () => {
+    enqueue('expedientes', ctxRow('aprobado'), ctxRow('aprobado'));
+    enqueue(
+      'autorizacion_perfil_prospecto',
+      { data: { presentacion: 'acompanado', coarrendatario_intencion: { nombre: 'Luis', apellido: 'Gómez' } }, error: null },
+      { data: { presentacion: 'solo', coarrendatario_intencion: null }, error: null },
+    );
+
+    expect(await enlaceInvitarCoarrendatario(EXPEDIENTE_ID)).toBe('http://localhost:3000/cargar-documentos/tok-docs');
+    expect(await enlaceInvitarCoarrendatario(EXPEDIENTE_ID)).toBeNull();
+  });
+
+  it('su evaluación no favorable: el titular sigue aprobado con la prima del 20 % y se le avisa', async () => {
+    enqueue(
+      'estudios',
+      { data: { id: COA_ESTUDIO_ID, expediente_id: EXPEDIENTE_ID, tipo: 'con_coarrendatario', estado: 'completado', resultado: 'rechazado', score: 500, motivo_rechazo: null }, error: null },
+      { data: [{ id: TITULAR_ESTUDIO_ID, resultado: 'aprobado', score: 800 }], error: null },
+      { data: { resultado: 'rechazado', score: 500, motivo_rechazo: null }, error: null },
+    );
+    enqueue(
+      'expediente_coarrendatarios',
+      { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' }, error: null },
+      { data: null, error: null },
+      { data: { id: COA_ID, nombre: 'Luis', email: 'luis@correo.co', estudio_id: COA_ESTUDIO_ID }, error: null },
+    );
+    // El UPDATE race-safe no encuentra el estudio en revisión: sigue aprobado.
+    enqueue('expedientes', { data: [], error: null }, ctxRow('aprobado'), ctxRow('aprobado'));
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+    await vi.waitFor(() => expect(correoA('ana@correo.co').html).toContain('20 %'));
+    expect(correoA('ana@correo.co').html).not.toContain('500');
+    expect(mockNotificarUsuario).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'El co-arrendatario no quedó vinculado' }),
+    );
+    await vi.waitFor(() => expect(correoA('luis@correo.co')).toBeDefined());
+    expect(mockEmitirCrc).not.toHaveBeenCalled();
+    expect(mockLiberarReserva).not.toHaveBeenCalled();
+  });
+
+  it('declinó sobre un aprobado: se le ofrece invitar a otra persona sin decirle que sigue en revisión', async () => {
+    enqueue('expediente_coarrendatarios', { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' }, error: null });
+    enqueue('expedientes', ctxRow('aprobado'));
+
+    await rechazarInvitacion('t'.repeat(64));
+
+    await vi.waitFor(() => expect(correoA('ana@correo.co').html).toContain('/cargar-documentos/tok-docs'));
+    expect(correoA('ana@correo.co').html).toContain('sigue aprobado');
+  });
+});
+
+// ============================================================
+// Decisión 4 (2026-09-25): el canal del propietario directo espera el Convenio.
+// ============================================================
+
+describe('Decisión 4 — propietario directo sin co-arrendatario', () => {
+  const directo = (estado = 'condicionado') => {
+    const r = ctxRow(estado);
+    r.data.inmuebles.inmobiliaria_id = null;
+    return r;
+  };
+
+  it('ni el gestor ni el prospecto desde su enlace pueden invitar, con un mensaje claro', async () => {
+    enqueue('expedientes', directo(), directo());
+
+    await expect(invitarCoarrendatario(EXPEDIENTE_ID, PROPIETARIO_ID, 'propietario', invitacion('7654321'))).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'COARRENDATARIO_CANAL_PROPIETARIO',
+      message: expect.stringContaining('inmobiliaria'),
+    });
+    await expect(invitarCoarrendatarioPorToken('t'.repeat(64), invitacion('7654321'))).rejects.toMatchObject({
+      errorCode: 'COARRENDATARIO_CANAL_PROPIETARIO',
+    });
+    expect(ops.some((o) => o.method === 'insert')).toBe(false);
+  });
+
+  it('el correo del aprobado no le ofrece el enlace', async () => {
+    enqueue('expedientes', directo('aprobado'));
+    enqueue('autorizacion_perfil_prospecto', { data: { presentacion: 'acompanado', coarrendatario_intencion: null }, error: null });
+
+    expect(await enlaceInvitarCoarrendatario(EXPEDIENTE_ID)).toBeNull();
   });
 });

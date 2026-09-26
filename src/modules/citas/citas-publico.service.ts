@@ -39,7 +39,8 @@ interface CitaPublicaRow {
   expediente_id: string;
   expediente: {
     inmueble: {
-      id: string; direccion: string; ciudad: string; propietario_id: string; inmobiliaria_id: string | null;
+      id: string; direccion: string; ciudad: string; tipo: string | null; barrio: string | null;
+      propietario_id: string; inmobiliaria_id: string | null;
       estado: string | null; reservado_por_expediente_id: string | null;
     } | null;
     solicitante: { nombre: string; apellido: string } | null;
@@ -51,7 +52,7 @@ async function fetchCitaByToken(token: string): Promise<CitaPublicaRow> {
     .select(`
       id, estado, fecha_propuesta, fecha_confirmada, acuse_solicitante_at, expediente_id,
       expediente:expedientes (
-        inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad, propietario_id, inmobiliaria_id, estado, reservado_por_expediente_id),
+        inmueble:inmuebles!expedientes_inmueble_id_fkey (id, direccion, ciudad, tipo, barrio, propietario_id, inmobiliaria_id, estado, reservado_por_expediente_id),
         solicitante:solicitantes (nombre, apellido)
       )
     `)
@@ -72,7 +73,11 @@ export interface CitaPublicaDTO {
   estado: string;
   accionable: boolean;
   fecha: string | null;
-  inmueble: { direccion: string; ciudad: string } | null;
+  /**
+   * P9: la dirección exacta solo con la visita confirmada (direccion null si
+   * no); antes, tipo, barrio y ciudad. Cancelada: null, nada del inmueble.
+   */
+  inmueble: { direccion: string | null; tipo: string | null; barrio: string | null; ciudad: string } | null;
   nombre: string;
   /** Solo aplica a citas 'confirmada': true si el solicitante ya confirmó que asistirá. */
   confirmada_asistencia: boolean;
@@ -87,7 +92,15 @@ function toDTO(c: CitaPublicaRow): CitaPublicaDTO {
     estado: c.estado,
     accionable: ACCIONABLES.includes(c.estado),
     fecha: c.fecha_confirmada || c.fecha_propuesta,
-    inmueble: inm ? { direccion: inm.direccion, ciudad: inm.ciudad } : null,
+    inmueble:
+      inm && c.estado !== 'cancelada'
+        ? {
+            direccion: c.estado === 'confirmada' ? inm.direccion : null,
+            tipo: inm.tipo ?? null,
+            barrio: inm.barrio ?? null,
+            ciudad: inm.ciudad,
+          }
+        : null,
     nombre: primerNombre,
     confirmada_asistencia: c.estado === 'confirmada' && !!c.acuse_solicitante_at,
   };

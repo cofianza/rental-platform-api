@@ -24,6 +24,7 @@ import {
   ESTADO_ESPERANDO_PAGO,
   type SenalPagoEstudio,
 } from '@/modules/estudios/pago.guard';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 /**
  * Un rechazo por REGLA DURA de la Politica V4.1 (DTI > 65% §4.2, canon/ingreso
@@ -665,9 +666,12 @@ export async function onEstudioCompletado(params: {
       .single() as { data: { nombre: string; apellido: string; email: string; telefono: string | null } | null };
 
     const { data: inm } = await db('inmuebles')
-      .select('id, direccion, ciudad, valor_arriendo, propietario_id')
+      .select('id, direccion, ciudad, valor_arriendo, propietario_id, inmobiliaria_id')
       .eq('id', expediente.inmueble_id)
-      .single() as { data: { id: string; direccion: string; ciudad: string; valor_arriendo: number; propietario_id: string } | null };
+      .single() as { data: { id: string; direccion: string; ciudad: string; valor_arriendo: number; propietario_id: string; inmobiliaria_id?: string | null } | null };
+    // Decisión 4 (2026-09-25): el canal del propietario directo no admite
+    // co-arrendatario hasta el Convenio; no se le ofrece en correos ni avisos.
+    const conCoarrendatario = !!inm?.inmobiliaria_id;
 
     if (resultado === 'aprobado') {
       // ── APROBADO ──
@@ -705,6 +709,8 @@ export async function onEstudioCompletado(params: {
           inmueble: inm?.direccion || '',
           ciudad: inm?.ciudad || '',
           score,
+          // Decisión 2: a quien marcó «con alguien más» le ofrece sumar al co-arrendatario.
+          expedienteId,
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email aprobado'));
       }
 
@@ -927,7 +933,7 @@ export async function onEstudioCompletado(params: {
       // Fire-and-forget: el aviso interno no puede frenar los del prospecto.
       avisarRevisionManualAnalistas({
         expedienteId,
-        numero: (expediente.numero as string) || expedienteId,
+        numero: expediente.numero ? `Estudio ${formatNumeroEstudio(expediente.numero as string)}` : expedienteId,
         estudioId,
         score,
         solicitante: sol ? `${sol.nombre} ${sol.apellido}` : 'el solicitante',
@@ -944,7 +950,13 @@ export async function onEstudioCompletado(params: {
             logger.warn({ error: e, expedienteId }, 'Orchestrator: sin enlace del prospecto para el correo del condicionado');
             return null;
           });
-        sendDocumentosRequeridosEmail({ email: sol.email, nombre: `${sol.nombre} ${sol.apellido}`, score, tokenDocumentos })
+        sendDocumentosRequeridosEmail({
+          email: sol.email,
+          nombre: `${sol.nombre} ${sol.apellido}`,
+          score,
+          tokenDocumentos,
+          ofrecerCoarrendatario: conCoarrendatario,
+        })
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error email condicionado'));
       }
 
@@ -958,7 +970,7 @@ export async function onEstudioCompletado(params: {
           titulo: 'Estudio condicionado',
           mensaje: sinCentrales
             ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
-            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
@@ -971,7 +983,7 @@ export async function onEstudioCompletado(params: {
           titulo: 'Estudio condicionado',
           mensaje: sinCentrales
             ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
-            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante o sumar un co-arrendatario.`,
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
           whatsapp: {

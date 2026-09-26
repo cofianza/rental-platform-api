@@ -18,6 +18,7 @@ import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { sobreCanon } from '@/modules/estudios/tarifas';
 import { coarrendatarioVinculado } from '@/modules/estudios/coarrendatario-vinculado';
 import { destinacionDeUso } from '@/modules/inmuebles/destinacion';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 // ============================================================
 // Helpers
@@ -403,7 +404,7 @@ export async function createPaymentLink(
   try {
     linkResult = await gateway.createPaymentLink({
       amount: monto,
-      concept: `${conceptLabel} - Estudio ${expNumero}`,
+      concept: `${conceptLabel} - Estudio ${formatNumeroEstudio(expNumero)}`,
       description: input.descripcion,
       metadata: {
         expediente_id: expedienteId,

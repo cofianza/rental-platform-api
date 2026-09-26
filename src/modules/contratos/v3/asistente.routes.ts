@@ -3,7 +3,7 @@ import { validate } from '@/middleware/validate';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { uploadPdf } from '@/middleware/upload';
 import { expedienteIdParamsSchema } from '../contratos.schema';
-import { autorizarExcesoSchema, enviarSchema, firmasPropioSchema, guardarPasoSchema } from './asistente.schema';
+import { autorizarExcesoSchema, cargarPropioSchema, enviarSchema, firmasPropioSchema, guardarPasoSchema } from './asistente.schema';
 import * as asistenteController from './asistente.controller';
 
 // ============================================================
@@ -59,12 +59,14 @@ asistenteV3Router.post(
 
 // ── Entrega 5: Ruta B y firma ──
 
-// POST /propio — Ruta B: carga (o reemplaza) el contrato propio de la inmobiliaria (multipart "archivo").
+// POST /propio — Ruta B: carga (o reemplaza) el contrato propio de la inmobiliaria (multipart "archivo"
+// y, opcional, "numero_contrato": el número que la inmobiliaria le puso, para el Anexo).
 asistenteV3Router.post(
   '/propio',
   authorize('contratos', 'create'),
   validate({ params: expedienteIdParamsSchema }),
   uploadPdf,
+  validate({ body: cargarPropioSchema }),
   asistenteController.cargarPropio,
 );
 

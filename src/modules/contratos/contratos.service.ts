@@ -25,6 +25,7 @@ import type {
   ListContratosQuery,
   ListAllContratosQuery,
 } from './contratos.schema';
+import { limpiarBusquedaNumeroEstudio } from '@/lib/numeroEstudio';
 
 // ============================================================
 // Constants
@@ -1016,7 +1017,7 @@ const CONTRATO_LIST_WITH_RELATIONS = `
  * término con esos caracteres rompería el filtro (o filtraría de más).
  */
 function escaparBusqueda(termino: string): string {
-  return termino.replace(/[%,()\\]/g, ' ').trim();
+  return limpiarBusquedaNumeroEstudio(termino.replace(/[%,()\\]/g, ' ')).trim();
 }
 
 /**

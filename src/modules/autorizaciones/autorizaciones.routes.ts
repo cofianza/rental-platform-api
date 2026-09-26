@@ -51,9 +51,13 @@ expedienteAutorizacionRouter.post(
 );
 
 // PATCH /expedientes/:expedienteId/autorizacion-riesgo/revocar
+// Solo el TITULAR revoca, y lo hace ante Cofianza (Ley 1581 art. 8, Decreto
+// 1377 art. 9 y 20). Aqui Cofianza REGISTRA la solicitud que recibio (fecha,
+// canal y soporte). La inmobiliaria o el propietario no revocan por el
+// titular: si ya no quieren seguir, cancelan el estudio.
 expedienteAutorizacionRouter.patch(
   '/revocar',
-  authorize('expedientes', 'update'),
+  roleGuard(['administrador', 'operador_analista']),
   validate({ params: expedienteIdParamsSchema, body: revocarSchema }),
   autorizacionesController.revocarAutorizacion,
 );

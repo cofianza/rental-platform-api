@@ -54,3 +54,36 @@ describe('getCitaPublica — contacto (P17)', () => {
     expect(v.contacto).toEqual({ nombre: 'Cofianza', whatsapp: null, email: 'hola@cofianza.co' });
   });
 });
+
+describe('getCitaPublica — dirección (P9)', () => {
+  const conEstado = (estado: string) =>
+    mockCita.mockReturnValue({
+      id: 'c1', estado, fecha_propuesta: null, fecha_confirmada: null, acuse_solicitante_at: null, expediente_id: 'exp1',
+      expediente: {
+        inmueble: {
+          id: 'i1', direccion: 'Cra 7 # 45-10 apto 301', ciudad: 'Bogotá', tipo: 'apartamento', barrio: 'Chapinero',
+          propietario_id: 'asesor1', inmobiliaria_id: 'org1', estado: 'disponible', reservado_por_expediente_id: null,
+        },
+        solicitante: { nombre: 'Ana', apellido: 'Pérez' },
+      },
+    });
+
+  beforeEach(() => mockContacto.mockResolvedValue({ nombre: 'Inmobiliaria Norte', whatsapp: '+573015556677' }));
+
+  it('confirmada: la dirección exacta', async () => {
+    conEstado('confirmada');
+    expect((await getCitaPublica('tok')).inmueble).toEqual({
+      direccion: 'Cra 7 # 45-10 apto 301', tipo: 'apartamento', barrio: 'Chapinero', ciudad: 'Bogotá',
+    });
+  });
+
+  it('sin confirmar: tipo, barrio y ciudad, sin la dirección', async () => {
+    conEstado('solicitada');
+    expect((await getCitaPublica('tok')).inmueble).toEqual({ direccion: null, tipo: 'apartamento', barrio: 'Chapinero', ciudad: 'Bogotá' });
+  });
+
+  it('cancelada: nada del inmueble', async () => {
+    conEstado('cancelada');
+    expect((await getCitaPublica('tok')).inmueble).toBeNull();
+  });
+});

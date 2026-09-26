@@ -13,6 +13,7 @@ import type {
   ReemplazarDocumentoInput,
   ConfirmarReemplazoInput,
 } from './documentos.schema';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 // ============================================================
 // Constants
@@ -899,7 +900,7 @@ async function avisarRechazoDocumento(doc: DocumentoRow, motivo: string, revisor
       tipo: 'documento.rechazado',
       titulo: 'Cofianza rechazó un documento del estudio',
       mensaje:
-        `El documento «${doc.nombre_original}»${e?.numero ? ` del estudio ${e.numero}` : ''} fue rechazado. ` +
+        `El documento «${doc.nombre_original}»${e?.numero ? ` del estudio ${formatNumeroEstudio(e.numero)}` : ''} fue rechazado. ` +
         `Motivo: ${motivo}. Sube uno nuevo desde la pestaña Documentos del estudio.`,
       link: `/expedientes/${doc.expediente_id}`,
       payload: { expediente_id: doc.expediente_id, documento_id: doc.id },

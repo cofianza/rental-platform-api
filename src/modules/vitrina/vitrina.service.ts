@@ -9,6 +9,7 @@ import { logger } from '@/lib/logger';
 import { recordTermsAcceptance } from '../registration/registration.service';
 import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { enviarTemplate } from '../whatsapp';
+import { resolveContactoDueno, resolvePerfilCanonicoDeInmueble } from '@/lib/tenantScope';
 import type { RegisterSolicitanteInput } from './vitrina.schema';
 
 // ------------------------------------------------------------------
@@ -355,54 +356,71 @@ export async function createInterest(
 }
 
 /**
- * Notifica al dueño del inmueble (propietario/inmobiliaria — ambos viven en
- * inmuebles.propietario_id) que entró una nueva solicitud desde la vitrina:
- * notificación in-app siempre + WhatsApp si tiene teléfono. Best-effort.
+ * Avisa del nuevo estudio que entró por la vitrina (P37): WhatsApp y correo a
+ * la organización (su titular: si fuera a quien registró el inmueble, un asesor
+ * sin teléfono dejaba el lead sin aviso) y, en la app, al titular y al
+ * responsable asignado del inmueble, sin repetir. Best-effort.
  */
-async function notificarPropietarioNuevaSolicitud(
+export async function notificarPropietarioNuevaSolicitud(
   expedienteId: string,
   propertyId: string,
   solicitanteId: string,
 ): Promise<void> {
   const { data: inm } = await (supabase
     .from('inmuebles' as string) as ReturnType<typeof supabase.from>)
-    .select('propietario_id, direccion')
+    .select('propietario_id, inmobiliaria_id, miembro_responsable_id, direccion')
     .eq('id', propertyId)
     .maybeSingle();
-  const propietarioId = (inm as { propietario_id?: string | null } | null)?.propietario_id;
-  const direccion = (inm as { direccion?: string | null } | null)?.direccion || 'tu inmueble';
-  if (!propietarioId) return;
+  const row = inm as {
+    propietario_id: string | null; inmobiliaria_id: string | null;
+    miembro_responsable_id: string | null; direccion: string | null;
+  } | null;
+  if (!row?.propietario_id) return;
+  const direccion = row.direccion || 'tu inmueble';
 
-  const { data: prop } = await (supabase
-    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('telefono')
-    .eq('id', propietarioId)
-    .maybeSingle();
-  const telefonoPropietario = (prop as { telefono?: string | null } | null)?.telefono ?? null;
-
-  const { data: sol } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('nombre, apellido')
-    .eq('id', solicitanteId)
-    .maybeSingle();
-  const solRow = sol as { nombre?: string | null; apellido?: string | null } | null;
+  // Import diferido: interesados.service carga la config (y el correo) al importarse.
+  const { correoDelDueno, destinatariosInApp } = await import('../interesados/interesados.service');
+  const titularId = await resolvePerfilCanonicoDeInmueble({ propietario_id: row.propietario_id, inmobiliaria_id: row.inmobiliaria_id });
+  const [contacto, correo, { data: sol }] = await Promise.all([
+    resolveContactoDueno(titularId),
+    correoDelDueno(titularId),
+    (supabase.from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .select('nombre, apellido, email, telefono')
+      .eq('id', solicitanteId)
+      .maybeSingle(),
+  ]);
+  const solRow = sol as { nombre?: string | null; apellido?: string | null; email?: string | null; telefono?: string | null } | null;
   const nombreInteresado = `${solRow?.nombre ?? ''} ${solRow?.apellido ?? ''}`.trim() || 'Un interesado';
 
-  await notificarUsuario({
-    userId: propietarioId,
-    tipo: 'solicitud.vitrina',
-    titulo: 'Nuevo estudio de arriendo',
-    mensaje: `${nombreInteresado} está interesado en ${direccion}.`,
-    link: `/expedientes/${expedienteId}`,
-    payload: { expediente_id: expedienteId, inmueble_id: propertyId },
-  });
+  for (const userId of destinatariosInApp(titularId, row.miembro_responsable_id)) {
+    await notificarUsuario({
+      userId,
+      tipo: 'solicitud.vitrina',
+      titulo: 'Nuevo estudio de arriendo',
+      mensaje: `${nombreInteresado} está interesado en ${direccion}.`,
+      link: `/expedientes/${expedienteId}`,
+      payload: { expediente_id: expedienteId, inmueble_id: propertyId },
+    });
+  }
 
   await enviarTemplate({
-    to: telefonoPropietario,
+    to: contacto.whatsapp,
     template: 'NUEVA_SOLICITUD_VITRINA',
     variables: [nombreInteresado, direccion],
     context: { expediente_id: expedienteId },
   });
+
+  if (correo) {
+    const [{ sendNuevoInteresadoEmail }, { env }] = await Promise.all([import('@/lib/email'), import('@/config')]);
+    await sendNuevoInteresadoEmail(correo, {
+      duenoNombre: contacto.nombre || 'equipo',
+      interesadoNombre: nombreInteresado,
+      interesadoTelefono: solRow?.telefono || '—',
+      interesadoEmail: solRow?.email || '—',
+      inmuebleLabel: direccion,
+      panelUrl: `${env.FRONTEND_URL}/expedientes/${expedienteId}`,
+    });
+  }
 }
 
 // ------------------------------------------------------------------

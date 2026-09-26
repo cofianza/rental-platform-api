@@ -23,6 +23,7 @@ import { enviarTemplate } from '@/modules/whatsapp';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type { EnviarLinkInput, ReenviarLinkInput } from './pago-estudio.schema';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 /**
  * WhatsApp con el link de pago al solicitante del expediente (refuerzo del
@@ -381,7 +382,7 @@ async function crearCobroPasarela(args: {
   }
 
   const monto = await getMontoEstudio();
-  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || exp.numero}${args.sufijoConcepto ?? ''}`;
+  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || formatNumeroEstudio(exp.numero)}${args.sufijoConcepto ?? ''}`;
 
   // El id va PRE-generado y viaja en las URLs de retorno: el arrendatario que
   // cancela o al que le rechazan el pago no tiene sesión, así que sin el

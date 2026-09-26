@@ -1,19 +1,20 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 
 // ============================================================
-// Politica §8: 15 dias habiles para re-evaluar. solicitarReEvaluacion ya lo
-// validaba, pero el historial seguia diciendo `puede_reevaluar: true` y la
-// URL de subida de soportes se firmaba igual: el gestor subia documentos y el
-// 400 llegaba al final. Mock de Supabase con colas por tabla.
+// Politica §11 (decision 7): 15 dias habiles para radicar la apelacion desde
+// la notificacion del no aprobado, y Cofianza responde en 10. El plazo lo
+// valida solicitarReEvaluacion, el historial (`puede_reevaluar`) y la URL de
+// subida de soportes. Mock de Supabase con colas por tabla.
 //
 // P33: la re-evaluacion es solo del no aprobado y exige fundamento; el
 // condicionado se resuelve con la revision manual.
 // ============================================================
 
-const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockOnEstudio, inserts } = vi.hoisted(() => {
+const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockOnEstudio, inserts, filtros } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const inserts: Array<{ table: string; fila: Res }> = [];
+  const filtros: Array<{ table: string; col: string; val: unknown }> = [];
   const next = (table: string): Res => {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null, count: null };
@@ -26,6 +27,10 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockO
       inserts.push({ table, fila });
       return chain;
     };
+    chain.eq = (col: string, val: unknown) => {
+      filtros.push({ table, col, val });
+      return chain;
+    };
     chain.maybeSingle = async () => next(table);
     chain.single = async () => next(table);
     chain.then = (resolve: (v: Res) => unknown, reject?: (e: unknown) => unknown) =>
@@ -34,6 +39,7 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockO
   };
   return {
     inserts,
+    filtros,
     mockEnv: new Proxy({} as Record<string, unknown>, {
       get: (_t, k) => (typeof k === 'string' && (k.endsWith('_ENABLED') || k.startsWith('MOTOR_')) ? false : 'x'),
     }),
@@ -97,7 +103,7 @@ vi.mock('../reglas-duras', async (importOriginal) => ({
 
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/auditLog';
-import { getHistorialReEvaluacion, getSoportePresignedUrl, registrarResultado, solicitarReEvaluacion } from '../estudios.service';
+import { getHistorialReEvaluacion, getSoportePresignedUrl, plazoApelacion, registrarResultado, solicitarReEvaluacion } from '../estudios.service';
 import { reEvaluarSchema, registrarResultadoSchema } from '../estudios.schema';
 
 const hace = (dias: number) => new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
@@ -125,11 +131,12 @@ function encolarHistorial(fechaCompletado: string) {
 beforeEach(() => {
   queues.clear();
   inserts.length = 0;
+  filtros.length = 0;
   mockStorageFrom.mockClear();
   (supabase.rpc as unknown as Mock).mockReset();
 });
 
-describe('plazo de re-evaluacion (Politica §8)', () => {
+describe('plazo de re-evaluacion (Politica §11)', () => {
   it('rechazado hace 40 dias corridos: el historial ya no ofrece re-evaluar', async () => {
     encolarHistorial(hace(40));
     const h = await getHistorialReEvaluacion('est-1', 'u-1', 'operador_analista');
@@ -291,7 +298,7 @@ describe('fundamento de la re-evaluación', () => {
       { data: null, error: null }, // sin re-evaluación previa
       { data: { id: 'est-2' }, error: null }, // hijo creado
     );
-    enqueue('estudios_documentos_soporte', { data: null, error: null, count: 1 });
+    enqueue('estudios_documentos_soporte', { data: { created_at: hace(1) }, error: null });
 
     await solicitarReEvaluacion('est-1', { observaciones: 'Certificado laboral nuevo' }, 'u-1', undefined, 'operador_analista').catch(() => undefined);
 
@@ -308,5 +315,91 @@ describe('fundamento de la re-evaluación', () => {
       fila: expect.objectContaining({ metadata: expect.objectContaining({ fundamento: 'Certificado laboral nuevo' }) }),
     });
     expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ detalle: expect.objectContaining({ fundamento: 'Certificado laboral nuevo' }) }));
+  });
+});
+
+// Decision 7 (Politica §11): el plazo corre desde la NOTIFICACION del no
+// aprobado, en dias habiles de Colombia (con festivos). 2026-10-12 es festivo.
+describe('plazo de la apelacion: notificacion, festivos y radicacion (decision 7)', () => {
+  const NOTIFICACION = '2026-10-01T15:00:00Z'; // jueves
+  const soporte = { nombre_original: 'a.pdf', tipo_mime: 'application/pdf', tamano_bytes: 10, proposito: 'otros_soportes' };
+  const hoyEs = (iso: string) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(iso));
+  };
+  afterEach(() => vi.useRealTimers());
+
+  it('con festivo: el dia 15 habil cae un dia despues (23-oct, no 22-oct)', () => {
+    expect(plazoApelacion(NOTIFICACION, null, new Date('2026-10-23T20:00:00Z'))).toEqual({
+      apelar_hasta: '2026-10-23', responder_hasta: null, vencido: false,
+    });
+    expect(plazoApelacion(NOTIFICACION, null, new Date('2026-10-26T15:00:00Z')).vencido).toBe(true);
+    // Por fecha de Bogota: las 22:00 del 1-oct en Bogota siguen siendo el 1-oct.
+    expect(plazoApelacion('2026-10-02T03:00:00Z', null, new Date('2026-10-23T20:00:00Z')).apelar_hasta).toBe('2026-10-23');
+    // Cofianza responde en 10 dias habiles desde la radicacion (2-nov es festivo).
+    expect(plazoApelacion(NOTIFICACION, '2026-10-22T15:00:00Z').responder_hasta).toBe('2026-11-06');
+  });
+
+  it('rechazo: cuenta desde el registro del resultado, no desde fecha_completado', async () => {
+    hoyEs('2026-10-30T15:00:00Z');
+    // Re-evaluacion rechazada: fecha_completado anclada en la consulta del padre.
+    enqueue('estudios', { data: rechazado('2026-08-01T15:00:00Z'), error: null });
+    enqueue('eventos_timeline', { data: { created_at: '2026-10-20T15:00:00Z' }, error: null });
+    await getSoportePresignedUrl('est-1', soporte as never, 'u-1', 'operador_analista');
+    expect(mockStorageFrom).toHaveBeenCalled();
+    expect(filtros).toEqual(expect.arrayContaining([
+      { table: 'eventos_timeline', col: 'metadata->>estudio_id', val: 'est-1' },
+      { table: 'eventos_timeline', col: 'metadata->>resultado', val: 'rechazado' },
+    ]));
+  });
+
+  it('condicionado negado tarde: el plazo corre desde que Cofianza lo nego', async () => {
+    hoyEs('2026-10-30T15:00:00Z');
+    const condicionado = { ...rechazado('2026-09-01T15:00:00Z'), resultado: 'condicionado' };
+    enqueue(
+      'estudios',
+      { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null },
+      { data: { id: 'est-1', estudio_padre_id: null }, error: null },
+      { data: [condicionado], error: null },
+    );
+    enqueue('estudios_documentos_soporte', { data: [], error: null });
+    enqueue('expedientes', { data: { id: 'exp-1', estado: 'rechazado', estado_pre_cancelacion: null }, error: null });
+    enqueue('eventos_timeline', { data: { created_at: '2026-10-20T15:00:00Z' }, error: null });
+
+    const h = await getHistorialReEvaluacion('est-1', 'u-1', 'operador_analista');
+    expect(h).toMatchObject({ puede_reevaluar: true, plazo_vencido: false, apelar_hasta: '2026-11-11', responder_hasta: null });
+    expect(filtros).toEqual(expect.arrayContaining([
+      { table: 'eventos_timeline', col: 'tipo', val: 'estado' },
+      { table: 'eventos_timeline', col: 'estado_nuevo', val: 'rechazado' },
+    ]));
+  });
+
+  const solicitarElDia20 = (primerSoporte: string | null) => {
+    hoyEs('2026-10-30T15:00:00Z'); // dia habil 20 desde la notificacion
+    enqueue(
+      'estudios',
+      {
+        data: { ...rechazado(NOTIFICACION), proveedor: 'manual', duracion_contrato_meses: 12, pago_por: 'inmobiliaria' },
+        error: null,
+      },
+      { data: null, error: null }, // sin re-evaluacion previa
+      { data: { id: 'est-2' }, error: null }, // hijo creado
+    );
+    enqueue('estudios_documentos_soporte', { data: primerSoporte ? { created_at: primerSoporte } : null, error: null });
+    enqueue('eventos_timeline', { data: { created_at: NOTIFICACION }, error: null });
+    return solicitarReEvaluacion('est-1', { observaciones: 'Certificado laboral nuevo' }, 'u-1', undefined, 'operador_analista');
+  };
+
+  it('radicada a tiempo (dia 14) y re-evaluada el dia 20: se registra', async () => {
+    await solicitarElDia20('2026-10-22T15:00:00Z').catch(() => undefined);
+    expect(inserts.find((i) => i.table === 'estudios')?.fila).toMatchObject({ estudio_padre_id: 'est-1' });
+  });
+
+  it('radicada el dia 16, o sin soportes el dia 20: fuera de plazo', async () => {
+    await expect(solicitarElDia20('2026-10-26T15:00:00Z'))
+      .rejects.toMatchObject({ statusCode: 400, errorCode: 'REEVALUACION_FUERA_DE_PLAZO', details: { apelar_hasta: '2026-10-23' } });
+    queues.clear();
+    await expect(solicitarElDia20(null)).rejects.toMatchObject({ errorCode: 'REEVALUACION_FUERA_DE_PLAZO' });
+    expect(inserts.some((i) => i.table === 'estudios')).toBe(false);
   });
 });

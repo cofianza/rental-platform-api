@@ -18,6 +18,7 @@ import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
 import { enviarCorreoNotificacion } from '@/modules/notificaciones/notificaciones.service';
 import { formatearCOP } from '@/modules/estudios/tope-canon.guard';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
 
@@ -75,7 +76,7 @@ async function escalar(expedienteId: string, canonCop: number, topeCop: number, 
         db('perfiles').select('id').eq('rol', 'administrador').eq('estado', 'activo'),
       ]);
       if (adminsR.error) throw new Error(adminsR.error.message);
-      const numero = (expR.data as { numero?: string } | null)?.numero ?? '';
+      const numero = formatNumeroEstudio((expR.data as { numero?: string } | null)?.numero);
       const que =
         ambito === 'contrato'
           ? `El contrato del estudio ${numero} pacta un canon de ${cifras}.`

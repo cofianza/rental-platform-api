@@ -41,6 +41,7 @@ import {
 import type { ResumenBiometria } from '@/modules/autorizaciones/biometria';
 import type { AuthUser } from '@/types/auth';
 import { derivarFirmantes, evaluarFirmantes, crearSolicitudFirmaMultiparte } from './firma-multiparte.service';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 const TABLA = 'firma_verificacion_identidad';
 const TOKEN_EXPIRY_HOURS = 72;
@@ -413,7 +414,7 @@ async function finalizar(v: VerificacionRow, resumen: ResumenBiometria): Promise
         notificarUsuario({
           userId: a.id,
           tipo: 'firma.identidad_revision',
-          titulo: `Verificar identidad para la firma — ${ctx.numero}`,
+          titulo: `Verificar identidad para la firma — Estudio ${formatNumeroEstudio(ctx.numero)}`,
           mensaje: `${v.nombre}: ${resumen.motivo ?? 'sin cotejo biométrico'}. El contrato sigue su curso; verifica su identidad por otro medio y registra el resultado en el contrato.`,
           link: `/contratos/${v.contrato_id}`,
           payload: { contrato_id: v.contrato_id, verificacion_id: v.id },
@@ -440,7 +441,7 @@ async function finalizar(v: VerificacionRow, resumen: ResumenBiometria): Promise
       await notificarUsuario({
         userId: v.enviado_por,
         tipo: 'contrato.firma_error',
-        titulo: `No se pudo enviar el contrato a firma — ${ctx.numero}`,
+        titulo: `No se pudo enviar el contrato a firma — Estudio ${formatNumeroEstudio(ctx.numero)}`,
         mensaje: `El arrendatario ya confirmó su identidad, pero el envío a Auco falló: ${detalle}. Vuelve a enviarlo desde el contrato.`,
         link: `/contratos/${v.contrato_id}`,
       });

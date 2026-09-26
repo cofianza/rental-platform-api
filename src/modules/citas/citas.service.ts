@@ -24,6 +24,7 @@ import type {
   CancelarCitaInput,
   ListCitasQuery,
 } from './citas.schema';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 // ============================================================
 // Helpers
@@ -700,8 +701,8 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
 
   const created = data as unknown as { id: string };
   const descripcion = autoConfirm
-    ? `Cita confirmada para el estudio ${expediente.expedienteNumero}`
-    : `Cita solicitada para el estudio ${expediente.expedienteNumero}`;
+    ? `Cita confirmada para el estudio ${formatNumeroEstudio(expediente.expedienteNumero)}`
+    : `Cita solicitada para el estudio ${formatNumeroEstudio(expediente.expedienteNumero)}`;
 
   await registrarTimelineCita(
     input.expediente_id,

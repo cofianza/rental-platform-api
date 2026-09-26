@@ -35,7 +35,13 @@ vi.mock('@/modules/autorizaciones/biometria', () => ({
   requiereRevisionManualPorBiometria: () => null,
 }));
 
-import { resolverResultadoEstudio, motivoProspectoReglasDuras, REGLAS_DURAS_ACTIVAS, motivoRevisionCanonIngreso } from '../reglas-duras';
+import {
+  resolverResultadoEstudio,
+  motivoProspectoReglasDuras,
+  REGLAS_DURAS_ACTIVAS,
+  motivoRevisionCanonIngreso,
+  motivoRevisionSituacionLaboral,
+} from '../reglas-duras';
 import type { SalidaSombra } from '../motor';
 
 const base = { estudioId: 'est-1', expedienteId: 'exp-1', resultadoPropuesto: 'aprobado', antecedentes: null };
@@ -118,5 +124,33 @@ describe('Politica §4.3: canon/ingreso entre 35 % y 40 % va a revision manual (
     expect(motivoRevisionCanonIngreso(salida(40.01))).toBeNull();
     expect(motivoRevisionCanonIngreso(salida(null))).toBeNull();
     expect(motivoRevisionCanonIngreso(null)).toBeNull();
+  });
+});
+
+describe('Politica Anexo A.4/A.5: situacion laboral declarada (P9)', () => {
+  it('«otro» e independiente con un «No» al RUT van a revision; lo demas no', () => {
+    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'otro' })).toMatch(/Anexo A/);
+    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'independiente', tiene_rut: false })).toMatch(/A\.4.*sin RUT/);
+    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'independiente', tiene_rut: true })).toBeNull();
+    // Sin respuesta (paso opcional o columna sin migrar) no se afirma nada.
+    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'independiente' })).toBeNull();
+    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'empleado', tiene_rut: false })).toBeNull();
+    expect(motivoRevisionSituacionLaboral(null)).toBeNull();
+  });
+
+  // El mock de Supabase devuelve la misma fila a toda lectura: sirve de estudio y de perfil §8.2.
+  const fila = { proveedor: 'transunion', respuesta_proveedor: null, score: 780, datos_formulario: { tipo_documento: 'cc' } };
+
+  it('el aprobado automatico del titular baja a condicionado con el motivo', async () => {
+    filaEstudio.current = { ...fila, tipo: 'individual', situacion_laboral: 'independiente', tiene_rut: false };
+    const r = await resolverResultadoEstudio(base);
+    expect(r.resultado).toBe('condicionado');
+    expect(r.revisionManual).toMatch(/sin RUT/);
+  });
+
+  it('en el estudio del co-arrendatario no se usa lo que declaro el titular', async () => {
+    filaEstudio.current = { ...fila, tipo: 'con_coarrendatario', situacion_laboral: 'otro' };
+    const r = await resolverResultadoEstudio(base);
+    expect(r.revisionManual ?? '').not.toMatch(/Anexo A/);
   });
 });

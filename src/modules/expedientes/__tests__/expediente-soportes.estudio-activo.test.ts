@@ -17,7 +17,7 @@ const { ops, queues, mockFrom } = vi.hoisted(() => {
   };
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'insert', 'update', 'eq', 'is', 'in', 'order']) {
+    for (const m of ['select', 'insert', 'update', 'eq', 'is', 'in', 'order', 'not', 'limit']) {
       chain[m] = (...args: unknown[]) => {
         ops.push({ table, method: m, args });
         return chain;
@@ -121,8 +121,16 @@ describe('soportes del condicionado con co-arrendatario', () => {
 // ============================================================
 
 describe('enlace del prospecto — co-arrendatario (P18)', () => {
-  const expediente = (estado = 'condicionado') => ({
-    data: { id: EXP, estado, token_documentos_expiracion: null, inmuebles: null, solicitantes: null, estudios },
+  // Canal de inmobiliaria: el del propietario directo no admite co-arrendatario (Decisión 4).
+  const expediente = (estado = 'condicionado', inmobiliaria_id: string | null = 'org-1') => ({
+    data: {
+      id: EXP,
+      estado,
+      token_documentos_expiracion: null,
+      inmuebles: { propietario_id: 'p-1', inmobiliaria_id, direccion: 'Calle 1', ciudad: 'Medellín' },
+      solicitantes: null,
+      estudios,
+    },
     error: null,
   });
   const intencion = { nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' };
@@ -134,7 +142,7 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
     const ctx = await getContextoDocumentosPublico('tok');
 
     // Solo nombre y apellido: nunca el correo ni el WhatsApp del tercero.
-    expect(ctx.coarrendatario).toEqual({ puede_invitar: true, invitado: null, sugerido: { nombre: 'Luis', apellido: 'Gómez' } });
+    expect(ctx.coarrendatario).toEqual({ puede_invitar: true, vigente: true, invitado: null, sugerido: { nombre: 'Luis', apellido: 'Gómez' } });
   });
 
   it('con una invitación activa: solo su nombre y en qué va, sin prellenado', async () => {
@@ -146,6 +154,7 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
 
     expect(ctx.coarrendatario).toEqual({
       puede_invitar: false,
+      vigente: true,
       invitado: { nombre: 'Luis', estado: 'aceptado', vencida: false },
       sugerido: null,
     });
@@ -164,10 +173,36 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
     });
   });
 
-  it('fuera de condicionado no se puede invitar', async () => {
-    queues.set('expedientes', [expediente('aprobado')]);
+  it('resuelto no se puede invitar', async () => {
+    queues.set('expedientes', [expediente('rechazado')]);
 
-    expect((await getContextoDocumentosPublico('tok')).coarrendatario.puede_invitar).toBe(false);
+    expect((await getContextoDocumentosPublico('tok')).coarrendatario).toMatchObject({ puede_invitar: false, vigente: false });
+  });
+
+  // Decisión 2: el aprobado suma co-arrendatario antes del contrato (prima del 10 %).
+  it('aprobado y pagado, sin contrato: puede invitar, prellenado', async () => {
+    queues.set('expedientes', [expediente('aprobado')]);
+    queues.set('pagos', [{ data: { id: 'pago-1' }, error: null }]);
+    queues.set('autorizacion_perfil_prospecto', [{ data: { coarrendatario_intencion: intencion }, error: null }]);
+
+    const ctx = await getContextoDocumentosPublico('tok');
+
+    expect(ctx.puede_subir).toBe(false);
+    expect(ctx.coarrendatario).toEqual({ puede_invitar: true, vigente: true, invitado: null, sugerido: { nombre: 'Luis', apellido: 'Gómez' } });
+  });
+
+  it('aprobado con un contrato fijado sin él: ya no', async () => {
+    queues.set('expedientes', [expediente('aprobado')]);
+    queues.set('contratos', [{ data: [{ id: 'c1', estado: 'vigente', destinacion: null }], error: null }]);
+
+    expect((await getContextoDocumentosPublico('tok')).coarrendatario).toMatchObject({ puede_invitar: false, vigente: false });
+  });
+
+  // Decisión 4: el propietario directo espera el Convenio.
+  it('inmueble del propietario directo: no se ofrece, ni en revisión', async () => {
+    queues.set('expedientes', [expediente('condicionado', null)]);
+
+    expect((await getContextoDocumentosPublico('tok')).coarrendatario).toMatchObject({ puede_invitar: false, sugerido: null });
   });
 
   it('el correo automático del condicionado reutiliza el enlace vigente (no deja muerto el que mandó el gestor)', async () => {

@@ -16,9 +16,14 @@ vi.mock('@/config/env', () => ({
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/lib/companyConfig', () => ({ getCompany: vi.fn(async () => ({ phone: '300', email: 'hola@cofianza.co' })) }));
 vi.mock('@/modules/estudios/rutas-resultado', () => ({ resolverRuta: vi.fn() }));
+const mockEnlaceCoa = vi.hoisted(() => vi.fn(async (_: string): Promise<string | null> => null));
+vi.mock('@/modules/coarrendatarios/coarrendatarios.service', () => ({
+  enlaceInvitarCoarrendatario: (id: string) => mockEnlaceCoa(id),
+}));
 
 import { resolverRuta } from '@/modules/estudios/rutas-resultado';
 import {
+  sendEstudioAprobadoEmail,
   sendDocumentosRequeridosEmail,
   sendEstudioRechazadoEmail,
   sendCitaCanceladaEmail,
@@ -51,6 +56,38 @@ describe('correo del condicionado', () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640 });
     expect(html()).toContain('Pídele a quien te pidió el estudio');
     expect(html()).not.toContain('cargar-documentos');
+  });
+
+  // Decisión 4: el propietario directo no admite co-arrendatario hasta el Convenio.
+  it('canal del propietario directo: el enlace es para sus soportes, sin co-arrendatario', async () => {
+    await sendDocumentosRequeridosEmail({
+      email: 'p@correo.co', nombre: 'Ana', score: 640, tokenDocumentos: 'a'.repeat(64), ofrecerCoarrendatario: false,
+    });
+    expect(html()).toContain(`href="https://cofianza.co/cargar-documentos/${'a'.repeat(64)}"`);
+    expect(html()).toContain('Subir mis documentos');
+    expect(html()).not.toMatch(/co-arrendatario/i);
+  });
+});
+
+// Decisión 2: a quien marcó «con alguien más», el aprobado le ofrece sumar al
+// co-arrendatario antes del contrato (prima del 10 %).
+describe('correo del aprobado', () => {
+  const base = { email: 'ana@correo.co', nombre: 'Ana', inmueble: 'Calle 1', ciudad: 'Medellín', score: null };
+
+  it('con enlace: el botón para invitar y la prima del 10 %', async () => {
+    mockEnlaceCoa.mockResolvedValueOnce('https://cofianza.co/cargar-documentos/tok');
+    await sendEstudioAprobadoEmail({ ...base, expedienteId: 'exp-1' });
+    expect(mockEnlaceCoa).toHaveBeenCalledWith('exp-1');
+    expect(html()).toContain('href="https://cofianza.co/cargar-documentos/tok"');
+    expect(html()).toContain('10 %');
+  });
+
+  it('sin enlace (no lo marcó, ya invitó o no se puede), ni sin estudio: nada del co-arrendatario', async () => {
+    await sendEstudioAprobadoEmail({ ...base, expedienteId: 'exp-1' });
+    expect(html()).not.toMatch(/co-arrendatario/i);
+    mockEnlaceCoa.mockClear();
+    await sendEstudioAprobadoEmail(base);
+    expect(mockEnlaceCoa).not.toHaveBeenCalled();
   });
 });
 

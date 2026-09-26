@@ -28,6 +28,7 @@ import {
   leerResumenBiometria,
 } from './biometria';
 import type { ResumenBiometria } from './biometria';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 
 // ============================================================
 // Constants
@@ -199,6 +200,8 @@ async function leerPerfilProspecto(
     ...publico,
     identidad_reporte_detalle: p.identidad_reporte_detalle ?? null,
     situacion_laboral: p.situacion_laboral ?? null,
+    // Anexo A.3/A.4: solo lo responde el independiente (undefined sin la columna).
+    tiene_rut: p.tiene_rut ?? null,
     donde_labora: p.donde_labora ?? null,
     ingreso_declarado_cop: declarado,
     discrepancia_ingreso: senalDiscrepanciaIngreso(
@@ -655,7 +658,8 @@ export async function getAutorizacionByToken(token: string) {
       tipo_documento: auth.solicitantes.tipo_documento,
     },
     expediente: {
-      numero_expediente: auth.expedientes.numero,
+      // Flujo §13: la pantalla lo muestra tal cual («N.° 2026-0005»).
+      numero_expediente: formatNumeroEstudio(auth.expedientes.numero),
       inmueble: {
         direccion: auth.expedientes.inmuebles.direccion,
         ciudad: auth.expedientes.inmuebles.ciudad,
@@ -858,6 +862,24 @@ export async function guardarPerfilProspecto(token: string, input: PerfilProspec
     );
     return { guardado: false };
   }
+
+  // Politica Anexo A.3/A.4: «¿Tienes RUT activo?» distingue al independiente
+  // formal del informal (este nunca se aprueba solo). UPDATE aparte a
+  // proposito: la columna `tiene_rut` necesita migracion y, mientras no
+  // exista, nombrarla en el upsert tiraria el perfil entero. Aqui solo se
+  // pierde la respuesta del RUT (queda en el log).
+  if (input.situacion_laboral === 'independiente' && input.tiene_rut !== undefined) {
+    const { error: rutError } = await (supabase
+      .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+      .update({ tiene_rut: input.tiene_rut } as never)
+      .eq('expediente_id', auth.expediente_id);
+    if (rutError) {
+      logger.warn(
+        { error: rutError.message, expedienteId: auth.expediente_id },
+        'PASO 5: no se pudo guardar la respuesta del RUT (¿falta la columna tiene_rut?)',
+      );
+    }
+  }
   return { guardado: true };
 }
 
@@ -931,7 +953,8 @@ export async function verificarBiometriaProspecto(
   input: { documentImage: string; photo: string },
 ) {
   const auth = await autorizacionPendientePorToken(token);
-  const umbral = env.AUCO_BIOMETRIA_UMBRAL_SIMILITUD;
+  // Adenda 2 §9 y §10: el mismo umbral del panel que la firma del contrato.
+  const umbral = (await getCalibracion()).UMBRAL_SIMILITUD_BIOMETRICA;
 
   if (!biometriaAplica(auth.version_terminos)) {
     // No es un error del cliente: el front puede tener el paso cacheado de
@@ -1006,7 +1029,7 @@ function mensajeProspectoBiometria(estado: ResumenBiometria['estado']): string {
  */
 export async function omitirBiometriaProspecto(token: string) {
   const auth = await autorizacionPendientePorToken(token);
-  const resumen = biometriaOmitida(new Date().toISOString(), env.AUCO_BIOMETRIA_UMBRAL_SIMILITUD);
+  const resumen = biometriaOmitida(new Date().toISOString(), (await getCalibracion()).UMBRAL_SIMILITUD_BIOMETRICA);
 
   const guardado = auth.expediente_id
     ? await persistirBiometria(auth.expediente_id, auth.id, resumen)
@@ -1183,7 +1206,7 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
   const motivoLabel =
     input.origen === 'documento_no_coincide' ? LABEL_DOCUMENTO_NO_COINCIDE : MOTIVO_REPORTE_LABEL[input.motivo];
   const mensaje =
-    `En el estudio ${exp?.numero || expedienteId}, ${motivoLabel}. ` +
+    `En el estudio ${exp?.numero ? formatNumeroEstudio(exp.numero) : expedienteId}, ${motivoLabel}. ` +
     'Detuvimos el enlace de autorizacion y no se consultara ninguna central de riesgo. ' +
     'Revisa los datos del solicitante y, si corresponde, envia un enlace nuevo.' +
     (input.detalle ? ' Quien reporto dejo una nota: la ve el equipo de Cofianza en el estudio.' : '');
@@ -1261,7 +1284,7 @@ async function avisarAutorizacionFirmada(expedienteId: string, solicitanteId: st
 
   const nombre = `${exp?.solicitantes?.nombre ?? ''} ${exp?.solicitantes?.apellido ?? ''}`.trim() || 'El prospecto';
   const titulo = 'El prospecto ya autorizo';
-  const mensaje = `${nombre} autorizo la consulta en centrales de riesgo para el estudio ${exp?.numero ?? ''}${exp?.inmuebles?.direccion ? ` (${exp.inmuebles.direccion})` : ''}. El estudio continua segun la forma de pago elegida.`;
+  const mensaje = `${nombre} autorizo la consulta en centrales de riesgo para el estudio ${formatNumeroEstudio(exp?.numero)}${exp?.inmuebles?.direccion ? ` (${exp.inmuebles.direccion})` : ''}. El estudio continua segun la forma de pago elegida.`;
   const link = `/expedientes/${expedienteId}`;
   const payload = { expediente_id: expedienteId, solicitante_id: solicitanteId };
 
@@ -1839,6 +1862,19 @@ export async function verificarOtpCode(token: string, codigo: string) {
 // 7. Revocar autorizacion (auth)
 // ============================================================
 
+const CANAL_REVOCACION_LABEL: Record<RevocarInput['canal'], string> = {
+  correo: 'correo electrónico',
+  whatsapp: 'WhatsApp',
+  llamada: 'llamada telefónica',
+  escrito: 'escrito',
+};
+
+/** Lo que queda en motivo_revocacion: quien, cuando y por donde lo pidio, y el soporte. */
+export function textoRevocacion(input: Pick<RevocarInput, 'canal' | 'fecha_solicitud' | 'motivo'>): string {
+  const [a, m, d] = input.fecha_solicitud.split('-');
+  return `Solicitud del titular recibida por ${CANAL_REVOCACION_LABEL[input.canal]} el ${d}/${m}/${a}. Soporte: ${input.motivo.trim()}`;
+}
+
 export async function revocarAutorizacion(
   expedienteId: string,
   input: RevocarInput,
@@ -1891,13 +1927,17 @@ export async function revocarAutorizacion(
 
   const auth = autorizacion as unknown as { id: string; estado: string };
 
-  // 2. Update to revocado
+  // 2. Update to revocado. El trigger de inalterabilidad solo deja escribir
+  //    estado, fecha_revocacion y motivo_revocacion: la fecha y el canal de la
+  //    solicitud del titular van en el texto del motivo (y estructurados en la
+  //    bitacora). fecha_revocacion = cuando Cofianza la registro.
+  const motivoRevocacion = textoRevocacion(input);
   const { error: updateError } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .update({
       estado: 'revocado',
       fecha_revocacion: new Date().toISOString(),
-      motivo_revocacion: input.motivo,
+      motivo_revocacion: motivoRevocacion,
     } as never)
     .eq('id', auth.id);
 
@@ -1914,7 +1954,10 @@ export async function revocarAutorizacion(
     entidadId: auth.id,
     detalle: {
       expediente_id: expedienteId,
-      motivo: input.motivo,
+      motivo: motivoRevocacion,
+      canal_solicitud: input.canal,
+      fecha_solicitud: input.fecha_solicitud,
+      soporte: input.motivo,
       sujeto: input.coarrendatario_id ? 'coarrendatario' : 'solicitante',
       ...(input.coarrendatario_id ? { coarrendatario_id: input.coarrendatario_id } : {}),
     },
