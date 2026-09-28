@@ -10,12 +10,8 @@
 -- (función, event trigger, política) y el ENABLE solo toca tablas sin RLS.
 -- No endurece nada: eso va aparte (supabase/propuestas-endurecimiento/).
 --
--- OJO: los cuerpos de get_my_role() y rls_auto_enable() son RECONSTRUIDOS
--- (mismo comportamiento). Para que sean idénticos a producción, reemplazarlos
--- por el resultado de:
---   SELECT pg_get_functiondef('public.get_my_role()'::regprocedure);
---   SELECT pg_get_functiondef('public.rls_auto_enable()'::regprocedure);
--- En producción da igual: ya existen y este archivo no las toca.
+-- Los cuerpos de get_my_role() y rls_auto_enable() son los de producción
+-- (pg_get_functiondef, 2026-09-28). En producción ya existen y no se tocan.
 --
 -- Verificación (debe dar 0 filas / los mismos números que antes):
 --   SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -25,38 +21,54 @@
 -- ============================================================
 
 -- 1. get_my_role(): rol de quien llama (lo usan las políticas de abajo).
+--    Cuerpo idéntico a pg_get_functiondef de producción (2026-09-28).
 DO $$
 BEGIN
   IF to_regprocedure('public.get_my_role()') IS NULL THEN
     CREATE FUNCTION public.get_my_role()
-      RETURNS public.rol_usuario
-      LANGUAGE sql STABLE SECURITY DEFINER
-    AS $f$ SELECT rol FROM public.perfiles WHERE id = auth.uid() $f$;
+     RETURNS rol_usuario
+     LANGUAGE sql
+     STABLE SECURITY DEFINER
+    AS $function$
+      SELECT rol FROM public.perfiles WHERE id = auth.uid();
+    $function$;
   END IF;
 END $$;
 
 -- 2. rls_auto_enable(): activa RLS en toda tabla nueva de public.
+--    Cuerpo idéntico a pg_get_functiondef de producción (2026-09-28).
 DO $$
 BEGIN
   IF to_regprocedure('public.rls_auto_enable()') IS NULL THEN
     CREATE FUNCTION public.rls_auto_enable()
-      RETURNS event_trigger
-      LANGUAGE plpgsql SECURITY DEFINER
-      SET search_path = pg_catalog
-    AS $f$
+     RETURNS event_trigger
+     LANGUAGE plpgsql
+     SECURITY DEFINER
+     SET search_path TO 'pg_catalog'
+    AS $function$
     DECLARE
       cmd record;
     BEGIN
       FOR cmd IN
-        SELECT * FROM pg_event_trigger_ddl_commands()
+        SELECT *
+        FROM pg_event_trigger_ddl_commands()
         WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
-          AND object_type IN ('table', 'partitioned table')
-          AND schema_name = 'public'
+          AND object_type IN ('table','partitioned table')
       LOOP
-        EXECUTE format('ALTER TABLE IF EXISTS %s ENABLE ROW LEVEL SECURITY', cmd.object_identity);
+         IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') AND cmd.schema_name NOT IN ('pg_catalog','information_schema') AND cmd.schema_name NOT LIKE 'pg_toast%' AND cmd.schema_name NOT LIKE 'pg_temp%' THEN
+          BEGIN
+            EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);
+            RAISE LOG 'rls_auto_enable: enabled RLS on %', cmd.object_identity;
+          EXCEPTION
+            WHEN OTHERS THEN
+              RAISE LOG 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
+          END;
+         ELSE
+            RAISE LOG 'rls_auto_enable: skip % (either system schema or not in enforced list: %.)', cmd.object_identity, cmd.schema_name;
+         END IF;
       END LOOP;
-    END
-    $f$;
+    END;
+    $function$;
   END IF;
 END $$;
 
