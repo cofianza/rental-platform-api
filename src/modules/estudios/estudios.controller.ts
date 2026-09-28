@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
+import { MOTIVOS_DECISION } from './motivos-decision';
 import * as estudiosService from './estudios.service';
 import * as certificadoService from './certificado.service';
 import { reasignarEstudio } from './reasignacion.service';
@@ -284,4 +285,8 @@ export async function setTarifaOverride(req: Request, res: Response) {
 export async function quitarTarifaOverride(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   sendSuccess(res, await tarifaOverrideService.quitarTarifaOverride(estudioId, req.user!.id, req.user!.rol, req.user!.email, req.ip));
+}
+
+export function getMotivosDecision(_req: Request, res: Response) {
+  sendSuccess(res, MOTIVOS_DECISION);
 }

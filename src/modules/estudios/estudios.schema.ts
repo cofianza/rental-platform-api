@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { camposMotivos, refinarMotivos, rellenarDesdeMotivos, type TipoDecision } from './motivos-decision';
 
 // ============================================================
 // Enums matching DB
@@ -97,7 +98,27 @@ export const submitFormularioSchema = z.object({
 
 const RESULTADOS_FINALES = ['aprobado', 'rechazado', 'condicionado'] as const;
 
-export const registrarResultadoSchema = z.object({
+// H58/H103: con `motivos` (de la lista) se llenan motivo_rechazo/fundamento/
+// condiciones/observaciones; el texto libre sigue valiendo (web anterior).
+const tipoDeResultado = (r: unknown): TipoDecision | null =>
+  r === 'rechazado' ? 'rechazar' : r === 'condicionado' ? 'condicionar' : null;
+
+export const registrarResultadoSchema = z.preprocess(
+  rellenarDesdeMotivos(
+    (b) => tipoDeResultado(b.resultado),
+    (b, t) => {
+      if (b.resultado === 'rechazado') {
+        b.motivo_rechazo ||= t.visible;
+        b.fundamento ||= t.interno;
+      } else {
+        // Las condiciones las lee la inmobiliaria: van con el detalle del analista.
+        b.condiciones ||= [t.visible, t.detalle].filter(Boolean).join('. ');
+      }
+      b.observaciones ||= t.interno;
+    },
+  ),
+  z.object({
+  ...camposMotivos,
   resultado: z.enum(RESULTADOS_FINALES, {
     message: `Resultado inválido. Valores permitidos: ${RESULTADOS_FINALES.join(', ')}`,
   }),
@@ -139,7 +160,9 @@ export const registrarResultadoSchema = z.object({
       message: 'Las condiciones son requeridas cuando el resultado es condicionado',
     });
   }
-});
+  refinarMotivos(tipoDeResultado(data.resultado), data, ctx);
+}),
+);
 
 // ============================================================
 // POST /estudios/:estudioId/certificado/presigned-url
