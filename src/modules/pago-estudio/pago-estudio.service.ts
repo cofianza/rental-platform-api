@@ -46,7 +46,8 @@ async function enviarLinkPagoWhatsApp(
   await enviarTemplate({
     to: telefonoOverride ?? sol?.telefono ?? null,
     template: 'PAGO_ESTUDIO_LINK',
-    variables: [sol?.nombre || 'Hola', montoFormateado, linkUrl],
+    // La plantilla v2 ya escribe el «$»: aquí va solo el número (80.000).
+    variables: [sol?.nombre || 'Hola', montoFormateado.replace(/^\$\s*/, ''), linkUrl],
     context: { expediente_id: expedienteId },
   });
 }

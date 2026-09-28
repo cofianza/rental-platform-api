@@ -266,6 +266,21 @@ async function leerIngresoInferidoDelExpediente(
 // 2. Enviar enlace de autorizacion
 // ============================================================
 
+/**
+ * {{2}} de la plantilla de autorización: la inmobiliaria por su nombre; sin
+ * inmobiliaria (propietario directo) no se expone el nombre de una persona.
+ */
+async function quienSolicitaElEstudio(inmobiliariaId: string | null): Promise<string> {
+  const generico = 'El propietario del inmueble';
+  if (!inmobiliariaId) return generico;
+  const { data } = await (supabase
+    .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
+    .select('nombre')
+    .eq('id', inmobiliariaId)
+    .maybeSingle();
+  return ((data as { nombre?: string | null } | null)?.nombre || '').trim() || generico;
+}
+
 export async function enviarEnlaceAutorizacion(
   expedienteId: string,
   userId: string,
@@ -481,11 +496,19 @@ export async function enviarEnlaceAutorizacion(
   // 5b. Enviar también el link por WhatsApp si hay celular (best-effort; el
   // email queda como respaldo). WhatsApp directo vía Meta (no Auco).
   if (exp.solicitantes.telefono) {
+    const inm = exp.inmuebles;
+    const direccion = [inm?.direccion, inm?.ciudad].filter((v) => v?.trim()).join(', ') || 'el inmueble';
     const res = await enviarMensaje({
       to: exp.solicitantes.telefono,
       template_id: WHATSAPP_TEMPLATES.AUTORIZACION_LINK.id,
       language: WHATSAPP_TEMPLATES.AUTORIZACION_LINK.language,
-      variables: [exp.solicitantes.nombre, autorizacionUrl],
+      variables: [
+        exp.solicitantes.nombre,
+        await quienSolicitaElEstudio(inm?.inmobiliaria_id ?? null),
+        direccion,
+        autorizacionUrl,
+        String(Math.round(expiryHours / 24)),
+      ],
       context: { expediente_id: expedienteId },
     });
     if (res.estado === 'fallido') {

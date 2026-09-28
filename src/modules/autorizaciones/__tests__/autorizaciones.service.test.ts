@@ -97,7 +97,7 @@ vi.mock('@/modules/whatsapp/whatsapp.service', () => ({
 }));
 vi.mock('@/modules/whatsapp/templates', () => ({
   WHATSAPP_TEMPLATES: {
-    AUTORIZACION_LINK: { id: 'cofianza_autorizacion_link', language: 'es_CO' },
+    AUTORIZACION_LINK: { id: 'cofianza_autorizacion_link_v2', language: 'es_CO' },
     AUTORIZACION_OTP: { id: 'cofianza_otp_autorizacion', language: 'es_CO' },
   },
 }));
@@ -330,10 +330,30 @@ describe('autorizaciones.service', () => {
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
 
+      // Plantilla v2: nombre, quién pide (sin inmobiliaria: genérico, nunca el
+      // nombre de una persona), dirección, enlace y días de vigencia.
       expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
         to: '+573001112233',
-        template_id: 'cofianza_autorizacion_link',
-        variables: ['Juan', expect.stringContaining('/autorizar/')],
+        template_id: 'cofianza_autorizacion_link_v2',
+        variables: ['Juan', 'El propietario del inmueble', 'Calle 1 #2-3, Bogota', expect.stringContaining('/autorizar/'), '15'],
+      }));
+    });
+
+    it('con inmobiliaria, la plantilla dice su nombre como quien pide el estudio', async () => {
+      enqueue('expedientes', {
+        data: {
+          ...expedienteConSolicitante,
+          solicitantes: { ...expedienteConSolicitante.solicitantes, telefono: '+573001112233' },
+          inmuebles: { ...expedienteConSolicitante.inmuebles, inmobiliaria_id: 'org-1' },
+        },
+      });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Norte' } });
+
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+
+      expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
+        variables: ['Juan', 'Inmobiliaria Norte', 'Calle 1 #2-3, Bogota', expect.stringContaining('/autorizar/'), '15'],
       }));
     });
 
