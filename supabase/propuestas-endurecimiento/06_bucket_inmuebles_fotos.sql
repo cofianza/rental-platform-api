@@ -1,0 +1,8 @@
+-- E6 · Bucket público `inmuebles-fotos`: el código ya no lo usa (sube a
+-- `inmuebles`). Riesgo de romper: MEDIO-ALTO (fotos rotas si alguna fila
+-- guarda URLs de este bucket). NO escribir el cambio hasta ver estos conteos:
+--   SELECT count(*) FROM storage.objects WHERE bucket_id = 'inmuebles-fotos';
+--   SELECT count(*) FROM public.fotos_inmueble
+--   WHERE url LIKE '%/inmuebles-fotos/%' OR url_thumbnail LIKE '%/inmuebles-fotos/%';
+-- Si ambos dan 0:
+--   UPDATE storage.buckets SET public = false WHERE id = 'inmuebles-fotos';
