@@ -3,8 +3,10 @@
 --
 -- ANTES de aplicar la 01, guardar el ACL exacto (para comparar después):
 --   SELECT proacl, proconfig FROM pg_proc WHERE oid = 'public.get_my_role()'::regprocedure;
--- Si el proacl guardado NO tenía una entrada para anon (solo PUBLIC, "=X/…"),
--- quitar "anon" del GRANT de abajo para dejarlo idéntico.
+-- Guardado en producción el 2026-09-28, justo antes de aplicar la 01:
+--   proacl = {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+--   proconfig = NULL
+-- (PUBLIC y anon explícitos: el GRANT de abajo lo deja idéntico).
 BEGIN;
 ALTER FUNCTION public.get_my_role() RESET search_path;
 GRANT EXECUTE ON FUNCTION public.get_my_role() TO PUBLIC, anon;
