@@ -1,0 +1,19 @@
+-- ============================================================
+-- La vista de sombra respeta los permisos de quien consulta
+-- (security_invoker), en vez de los de su dueño.
+-- Riesgo de romper: NULO. Ni anon ni authenticated tienen GRANT sobre ella
+-- y la API no la usa; solo la lee service_role / el SQL Editor.
+-- Idempotente.
+--
+-- ANTES (guardar el resultado):
+--   SELECT reloptions FROM pg_class WHERE oid = 'public.v_estudios_sombra_vs_real'::regclass;
+-- DESPUÉS, esperado {security_invoker=on} y la vista sigue respondiendo:
+--   SELECT reloptions FROM pg_class WHERE oid = 'public.v_estudios_sombra_vs_real'::regclass;
+--   SELECT count(*) FROM public.v_estudios_sombra_vs_real;
+-- Rollback:
+--   ALTER VIEW public.v_estudios_sombra_vs_real RESET (security_invoker);
+--
+-- OJO: si una migración futura recrea la vista (CREATE OR REPLACE VIEW),
+-- debe llevar WITH (security_invoker = on).
+-- ============================================================
+ALTER VIEW public.v_estudios_sombra_vs_real SET (security_invoker = on);
