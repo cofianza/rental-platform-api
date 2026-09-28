@@ -139,13 +139,16 @@ export const WHATSAPP_TEMPLATES = {
   },
   /**
    * Link de autorización de tratamiento de datos (categoría UTILITY en Meta).
-   * Se envía al inquilino para que abra la pantalla y firme con OTP al final.
+   * v2 (aprobada 2026-09-28): usted, dice quién pide el estudio, el inmueble y
+   * el vencimiento (M1 de revisiones/ux-autorizacion-2026-09-28.md).
    */
   AUTORIZACION_LINK: {
-    id: 'cofianza_autorizacion_link',
+    id: 'cofianza_autorizacion_link_v2',
     language: 'es_CO',
-    // {{1}} nombre, {{2}} enlace de autorización
-    description: 'Hola {{1}}, Cofianza necesita tu autorización para estudiar tu solicitud de arriendo. Abre este enlace para revisarla y firmarla: {{2}}',
+    // {{1}} nombre, {{2}} quién pide el estudio (inmobiliaria o «El propietario del
+    // inmueble»), {{3}} dirección, {{4}} enlace, {{5}} días de vigencia del enlace
+    description:
+      'Buen día, *{{1}}*. *{{2}}* inició un estudio para el arriendo del inmueble ubicado en *{{3}}* y le solicita autorizar la consulta de su información en centrales de riesgo.\n\nCofianza S.A.S. es la empresa fiadora del arriendo. Puede revisar y autorizar aquí:\n\n{{4}}\n\nEl enlace es personal y vence en {{5}} días. Si usted no reconoce esta solicitud, puede ignorar este mensaje.',
   },
   /**
    * Invitación a ser co-arrendatario (categoría UTILITY en Meta).
@@ -163,15 +166,17 @@ export const WHATSAPP_TEMPLATES = {
    * sufijo es el token (mismo patrón que CITA_CONFIRMADA).
    */
   COARRENDATARIO_INVITACION: {
-    id: 'cofianza_coarrendatario_invitacion_v1',
+    id: 'cofianza_coarrendatario_invitacion_v2',
     language: 'es_CO',
     // {{1}} nombre del invitado, {{2}} nombre del titular, {{3}} días de vigencia
     // Botón 0: sufijo URL = token de la invitación.
+    // v2 (aprobada 2026-09-28): usted y tono de trámite en curso (Meta clasificaba
+    // la v1 como Marketing). Botón «Ver solicitud», mismo sufijo URL = token.
     description:
-      'Hola {{1}}. {{2}} te invitó a acompañarlo como co-arrendatario en su solicitud de arriendo respaldada por Cofianza. ' +
-      'Tu perfil se evalúa junto con el suyo y ambos quedan respaldados como un solo arrendatario: no eres fiador ni codeudor. ' +
-      'Para continuar necesitamos tu autorización para consultar tu información en centrales de riesgo. Toma menos de 3 minutos. ' +
-      'La invitación vence en {{3}} días.',
+      'Buen día, *{{1}}*. {{2}} lo registró como co-arrendatario en su solicitud de arriendo en curso.\n\n' +
+      'Para continuar con esa solicitud se requiere su autorización para consultar su información en centrales de riesgo. ' +
+      'Como co-arrendatario, su perfil se evalúa junto con el del arrendatario; usted no queda como fiador ni codeudor.\n\n' +
+      'La solicitud vence en {{3}} días.',
   },
   /**
    * Código OTP de la autorización (categoría AUTHENTICATION en Meta). La validación
@@ -185,10 +190,11 @@ export const WHATSAPP_TEMPLATES = {
   },
   /** Link de pago del estudio al arrendatario (refuerzo del correo). */
   PAGO_ESTUDIO_LINK: {
-    id: 'cofianza_pago_estudio_link',
+    id: 'cofianza_pago_estudio_link_v2',
     language: 'es_CO',
-    // {{1}} nombre, {{2}} monto formateado, {{3}} link de pago
-    description: 'Hola {{1}}, para avanzar con tu solicitud de arriendo debes pagar el estudio ({{2}} COP). Puedes pagar aquí: {{3}} — también te lo enviamos por correo.',
+    // {{1}} nombre, {{2}} monto SIN signo (la plantilla ya trae «$»: 80.000), {{3}} link de pago
+    description:
+      'Buen día, *{{1}}*. Para avanzar con su estudio de arriendo, le pedimos realizar el pago del estudio por *${{2}}*. Puede pagar en este enlace:\n\n{{3}}\n\nTambién se lo enviamos por correo.',
   },
   /** Confirmación de pago recibido (status para el solicitante). */
   PAGO_CONFIRMADO: {
@@ -234,10 +240,11 @@ export const WHATSAPP_TEMPLATES = {
   },
   /** Nueva solicitud desde la vitrina — aviso al propietario/inmobiliaria. */
   NUEVA_SOLICITUD_VITRINA: {
-    id: 'cofianza_nueva_solicitud_vitrina',
+    id: 'cofianza_nuevo_interesado_vitrina_v2',
     language: 'es_CO',
     // {{1}} nombre del interesado, {{2}} dirección del inmueble
-    description: 'Hola, recibiste una nueva solicitud de arriendo: {{1}} está interesado en tu inmueble {{2}}. Ingresa a Cofianza para revisar el estudio y agendar la visita.',
+    description:
+      'Buen día. *{{1}}* está interesado en su inmueble ubicado en *{{2}}* y ya inició su estudio de arriendo.\n\nIngrese a Cofianza para revisar el estudio y agendar la visita.',
   },
   /** Estudio aprobado — aviso al dueño para que genere el contrato. */
   ESTUDIO_APROBADO_DUENO: {
@@ -248,10 +255,12 @@ export const WHATSAPP_TEMPLATES = {
   },
   /** Estudio condicionado — aviso al dueño de que requiere su revisión. */
   ESTUDIO_CONDICIONADO_DUENO: {
-    id: 'cofianza_estudio_condicionado_dueno',
+    id: 'cofianza_estudio_condicionado_dueno_v2',
     language: 'es_CO',
     // {{1}} nombre del dueño, {{2}} nombre del arrendatario, {{3}} dirección
-    description: 'Hola {{1}}, el estudio de {{2}} para tu inmueble {{3}} quedó condicionado y requiere tu revisión. Ingresa a Cofianza para revisar y decidir si continúas.',
+    // v2: la v1 decía que el dueño decide, y lo revisa un analista de Cofianza.
+    description:
+      'Buen día, *{{1}}*. El estudio de *{{2}}* para su inmueble ubicado en *{{3}}* quedó en revisión manual. Un analista de Cofianza lo está revisando y le avisaremos el resultado.\n\nSi desea aportar documentos que ayuden a la revisión, puede hacerlo desde Cofianza.',
   },
   /**
    * Aviso al dueño/inmobiliaria de que el solicitante pidió una visita (PRIMERA
