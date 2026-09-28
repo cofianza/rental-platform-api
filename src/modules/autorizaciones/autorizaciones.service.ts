@@ -579,9 +579,9 @@ export async function getAutorizacionByToken(token: string) {
   const { data: autorizacion, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma,
+      id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma, expediente_id,
       solicitantes(nombre, apellido, telefono, tipo_documento),
-      expedientes(numero, estado, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, barrio))
+      expedientes(numero, estado, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, barrio, inmobiliaria_id))
     `)
     .eq('token', token)
     .maybeSingle();
@@ -601,6 +601,7 @@ export async function getAutorizacionByToken(token: string) {
     texto_autorizado: string;
     version_terminos: string;
     metodo_firma: string | null;
+    expediente_id?: string | null;
     solicitantes: {
       nombre: string;
       apellido: string;
@@ -610,7 +611,7 @@ export async function getAutorizacionByToken(token: string) {
     expedientes: {
       numero: string;
       estado: string;
-      inmuebles: { direccion: string; ciudad: string; barrio: string | null };
+      inmuebles: { direccion: string; ciudad: string; barrio: string | null; inmobiliaria_id?: string | null };
     };
   };
 
@@ -657,6 +658,16 @@ export async function getAutorizacionByToken(token: string) {
     ? await leerBiometriaPorAutorizacion(auth.id)
     : null;
 
+  // A1 / A2 (revisiones/ux-autorizacion-2026-09-28.md): quién pide el estudio y
+  // si al prospecto le toca pagarlo, ANTES de pedirle el documento y de firmar.
+  // Best-effort: si fallan, la pantalla funciona como antes (sin esos avisos).
+  const [solicitadoPor, pago] = await Promise.all([
+    quienSolicitaElEstudio(auth.expedientes?.inmuebles?.inmobiliaria_id ?? null).catch(() => null),
+    auth.expediente_id
+      ? cobroAnticipado(auth.expediente_id).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
   return {
     id: auth.id,
     estado: auth.estado,
@@ -670,6 +681,10 @@ export async function getAutorizacionByToken(token: string) {
       requerida: biometriaRequerida,
       estado: biometriaPrevia?.estado ?? null,
     },
+    // Nombre de la inmobiliaria o «El propietario del inmueble» (nunca el de una persona).
+    solicitado_por: solicitadoPor,
+    // requerido=false también cuando ya está pagado o lo paga la inmobiliaria.
+    pago,
     solicitante: {
       nombre: auth.solicitantes.nombre,
       apellido: auth.solicitantes.apellido,
@@ -1643,6 +1658,34 @@ export async function getPagoProspectoPorToken(token: string): Promise<{
       : pago.estado === 'pendiente' && !listo ? 'preparando' : (pago.estado as 'pendiente' | 'procesando' | 'completado'),
     monto_formateado: montoFormateado,
     payment_link_url: listo ? (pago!.payment_link_url as string) : null,
+  };
+}
+
+/**
+ * Aviso de cobro ANTES de firmar (A2). Mismo monto que la pantalla de «ya
+ * firmaste» (getPagoProspectoPorToken): el del pago si ya existe; si no, el
+ * configurado (configuracion_sistema.monto_estudio, getMontoEstudio).
+ */
+async function cobroAnticipado(
+  expedienteId: string,
+): Promise<{ requerido: boolean; monto_formateado: string | null }> {
+  if ((await estudioPagado(expedienteId)) || !(await cobroLeTocaAlProspecto(expedienteId))) {
+    return { requerido: false, monto_formateado: null };
+  }
+  const { data: pagoRow } = await (supabase
+    .from('pagos' as string) as ReturnType<typeof supabase.from>)
+    .select('monto')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', 'estudio')
+    .in('estado', ['pendiente', 'procesando'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
+  const monto = (pagoRow as { monto?: number } | null)?.monto ?? (await getMontoEstudio().catch(() => null));
+  return {
+    requerido: true,
+    monto_formateado: typeof monto === 'number' ? `$${Math.round(monto).toLocaleString('es-CO')}` : null,
   };
 }
 
