@@ -1,5 +1,7 @@
 -- ============================================================
--- La vista de sombra respeta los permisos de quien consulta
+-- La vista de sombra respeta los permisos de quien consulta.
+-- APLICADA EN PRODUCCIÓN el 2026-09-28 (por el usuario, SQL Editor): antes
+-- reloptions = NULL, después {security_invoker=on}; la vista responde (6 filas).
 -- (security_invoker), en vez de los de su dueño.
 -- Riesgo de romper: NULO. Ni anon ni authenticated tienen GRANT sobre ella
 -- y la API no la usa; solo la lee service_role / el SQL Editor.
