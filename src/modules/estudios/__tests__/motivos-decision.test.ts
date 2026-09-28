@@ -2,8 +2,15 @@
  * H58/H103 (decisión 2026-09-28): motivos de lista + texto opcional, con un
  * texto visible (inmobiliaria) y otro interno (Cofianza).
  */
-import { describe, it, expect } from 'vitest';
-import { componerMotivos, MOTIVOS_DECISION } from '../motivos-decision';
+import { describe, it, expect, vi } from 'vitest';
+import { componerMotivos, guardarCodigosMotivo, MOTIVOS_DECISION } from '../motivos-decision';
+
+const { mockUpdate, mockEq } = vi.hoisted(() => {
+  const mockEq = vi.fn(async () => ({ error: { message: 'column "motivos_decision" does not exist' } }));
+  return { mockEq, mockUpdate: vi.fn(() => ({ eq: mockEq })) };
+});
+vi.mock('@/lib/supabase', () => ({ supabase: { from: vi.fn(() => ({ update: mockUpdate })) } }));
+vi.mock('@/lib/logger', () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 import { registrarResultadoSchema } from '../estudios.schema';
 import { transitionBodySchema } from '@/modules/expedientes/expediente-workflow.schema';
 
@@ -74,5 +81,20 @@ describe('schemas', () => {
     const d = r.data as Record<string, string>;
     expect(d.motivo).toBe('No cumple la Política de riesgo');
     expect(d.comentario).toMatch(/^R4 · Proceso de restitución/);
+  });
+});
+
+describe('guardarCodigosMotivo', () => {
+  it('guarda los códigos y, si la columna aún no existe, no lanza', async () => {
+    await expect(guardarCodigosMotivo('estudios', 'est-1', ['R1', 'R3'])).resolves.toBeUndefined();
+    expect(mockUpdate).toHaveBeenCalledWith({ motivos_decision: ['R1', 'R3'] });
+    expect(mockEq).toHaveBeenCalledWith('id', 'est-1');
+  });
+
+  it('sin códigos o sin id no escribe', async () => {
+    mockUpdate.mockClear();
+    await guardarCodigosMotivo('eventos_timeline', null, ['A1']);
+    await guardarCodigosMotivo('eventos_timeline', 'ev-1', []);
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });

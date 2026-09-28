@@ -121,6 +121,25 @@ export function rellenarDesdeMotivos(
 }
 
 /**
+ * Guarda los códigos en la columna `motivos_decision` (migración
+ * 20261001000018). Best-effort y en un UPDATE aparte: si la columna aún no
+ * existe, la decisión ya quedó guardada con sus textos y solo se avisa.
+ */
+export async function guardarCodigosMotivo(
+  tabla: 'estudios' | 'eventos_timeline',
+  id: string | null | undefined,
+  codigos: readonly string[] | undefined,
+): Promise<void> {
+  if (!id || !codigos?.length) return;
+  const { supabase } = await import('@/lib/supabase');
+  const { logger } = await import('@/lib/logger');
+  const { error } = await (supabase.from(tabla as string) as ReturnType<typeof supabase.from>)
+    .update({ motivos_decision: [...codigos] } as never)
+    .eq('id', id);
+  if (error) logger.warn({ tabla, id, err: error.message }, 'No se guardaron los códigos de motivo (¿falta la migración 20261001000018?)');
+}
+
+/**
  * Textos compuestos. `visible` sin repetir (varios rechazos pueden decir
  * «No cumple la Política de riesgo»); `interno` una línea por motivo con su
  * código, más el texto del analista.
