@@ -29,7 +29,7 @@ El servidor corre en [http://localhost:4000](http://localhost:4000).
 
 ## Migraciones de base de datos
 
-**Nunca `supabase db push` (ni `npm run db:push`) contra producción.**
+**Nunca `supabase db push` contra producción.** (El script `npm run db:push` se quitó el 2026-09-28: nadie lo usaba.)
 
 - En producción, `supabase_migrations.schema_migrations` NO refleja el historial: tiene 4 filas sueltas de mayo de 2026 y el repo tiene ~186 migraciones (revisado el 2026-09-28). Un `db push` intentaría aplicarlas todas otra vez.
 - Además, dos archivos comparten la versión `20260219000002`, así que `db push` falla con "duplicate key".
