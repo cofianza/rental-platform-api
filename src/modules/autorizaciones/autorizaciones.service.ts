@@ -30,6 +30,7 @@ import {
 import type { ResumenBiometria } from './biometria';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 import { existeOtraCuentaConDocumento, MSG_DOC_DE_OTRA_CUENTA_GESTOR } from '@/modules/solicitantes/solicitantes.service';
+import { errorNoAfianzable, motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 
 // ============================================================
 // Constants
@@ -340,6 +341,14 @@ export async function enviarEnlaceAutorizacion(
   // 0c. Un estudio cerrado o rechazado ya no le pide nada al prospecto: el
   // enlace llegaria a una pantalla que no deja firmar (assertEstudioActivo).
   assertEstudioActivo(exp.estado);
+
+  // 0d. Adenda de precios §6.1: un arrendatario con NIT no se estudia. H43 deja
+  // escribir el documento aquí, después del registro; sin esto el NIT se
+  // guardaba, el enlace salía y el bloqueo llegaba recién al cobrar.
+  const motivoDoc = motivoNoAfianzable(undefined, {
+    tipo_documento: contacto?.tipo_documento || exp.solicitantes?.tipo_documento,
+  });
+  if (motivoDoc) throw errorNoAfianzable(motivoDoc);
 
   // 1a. Aplicar la corrección de contacto si vino en el body. El teléfono
   // solo cuenta si trae dígitos reales (el PhoneInput de la web deja '+57 '

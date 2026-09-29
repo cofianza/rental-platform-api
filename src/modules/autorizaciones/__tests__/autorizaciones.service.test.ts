@@ -493,6 +493,15 @@ describe('autorizaciones.service', () => {
       expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
     });
 
+    it('Adenda §6.1: el gestor escribe un NIT -> 409 ESTUDIO_NO_AFIANZABLE sin guardar ni emitir', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      await expect(
+        enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'nit', numero_documento: '900123456' }),
+      ).rejects.toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
     it('H43: ficha de agencia con el documento de una cuenta: no aplica la regla y el enlace sale', async () => {
       enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '', creado_por: 'asesor', inmobiliaria_id: 'inmo-1' } } });
       enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });

@@ -25,7 +25,7 @@ vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_E
 vi.mock('@/lib/email', () => ({ sendPasswordResetEmail: vi.fn() }));
 vi.mock('@/lib/tenantScope', () => ({ resolveRolMiembro: vi.fn(async () => null) }));
 
-import { getProfile } from '../auth.service';
+import { getProfile, updateMyProfile } from '../auth.service';
 
 const perfil = (rol: string, numero_documento: string | null) => ({
   data: {
@@ -63,5 +63,16 @@ describe('getProfile · documento_pendiente', () => {
     const r = await getProfile('u1', 'a@b.co', 'propietario');
     expect(r).not.toHaveProperty('documento_pendiente');
     expect(mockFicha).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateMyProfile · Adenda de precios §6.1', () => {
+  it('el solicitante completa su documento como NIT → 409 ESTUDIO_NO_AFIANZABLE', async () => {
+    mockPerfil.mockResolvedValue({ data: { rol: 'solicitante', tipo_documento: null, numero_documento: null }, error: null });
+    mockFicha.mockResolvedValue(ficha(''));
+    await expect(updateMyProfile('u1', { tipo_documento: 'nit', numero_documento: '900123456' })).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'ESTUDIO_NO_AFIANZABLE',
+    });
   });
 });

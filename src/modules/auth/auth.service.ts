@@ -10,6 +10,7 @@ import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { invalidateAuthCache, cerrarSesionesDe, primeAuthCache } from '@/middleware/auth';
 import { getPermissionsForRole } from '@/config/permissions';
 import { existeOtraCuentaConDocumento } from '@/modules/solicitantes/solicitantes.service';
+import { errorNoAfianzable, motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 import type { UserRole } from '@/types/auth';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
 
@@ -329,6 +330,10 @@ export async function updateMyProfile(userId: string, input: UpdateMyProfileInpu
       ? (wantsTipoDoc !== null && wantsTipoDoc !== sol.tipo_documento) ||
         (wantsNumDoc !== null && wantsNumDoc !== sol.numero_documento)
       : (wantsTipoDoc !== null || wantsNumDoc !== null);
+    // Adenda de precios §6.1: el solicitante que completa su documento en «Mi
+    // cuenta» (H43) no puede quedar como NIT (mismo bloqueo que el estudio).
+    const motivoDoc = docCambia ? motivoNoAfianzable(undefined, { tipo_documento: wantsTipoDoc }) : null;
+    if (motivoDoc) throw errorNoAfianzable(motivoDoc);
     if (docCambia && sol) {
       const { data: exps } = await (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
