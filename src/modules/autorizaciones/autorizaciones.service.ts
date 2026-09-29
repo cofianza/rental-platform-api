@@ -29,6 +29,8 @@ import {
 } from './biometria';
 import type { ResumenBiometria } from './biometria';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
+import { existeOtraCuentaConDocumento, MSG_DOC_DE_OTRA_CUENTA_GESTOR } from '@/modules/solicitantes/solicitantes.service';
+import { errorNoAfianzable, motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 
 // ============================================================
 // Constants
@@ -76,6 +78,9 @@ interface ExpedienteInfo {
     telefono: string | null;
     tipo_documento: string;
     numero_documento: string;
+    tipo_persona?: string | null;
+    creado_por?: string | null;
+    inmobiliaria_id?: string | null;
   };
   inmuebles: {
     id: string;
@@ -317,7 +322,7 @@ export async function enviarEnlaceAutorizacion(
   // 1. Get expediente with solicitante + inmueble
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento), inmuebles!expedientes_inmueble_id_fkey(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento, tipo_persona, creado_por, inmobiliaria_id), inmuebles!expedientes_inmueble_id_fkey(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
     .eq('id', expedienteId)
     .single();
 
@@ -348,6 +353,15 @@ export async function enviarEnlaceAutorizacion(
   // 0c. Un estudio cerrado o rechazado ya no le pide nada al prospecto: el
   // enlace llegaria a una pantalla que no deja firmar (assertEstudioActivo).
   assertEstudioActivo(exp.estado);
+
+  // 0d. Adenda de precios §6.1: un arrendatario con NIT no se estudia. H43 deja
+  // escribir el documento aquí, después del registro; sin esto el NIT se
+  // guardaba, el enlace salía y el bloqueo llegaba recién al cobrar.
+  const motivoDoc = motivoNoAfianzable(undefined, {
+    tipo_persona: exp.solicitantes?.tipo_persona,
+    tipo_documento: contacto?.tipo_documento || exp.solicitantes?.tipo_documento,
+  });
+  if (motivoDoc) throw errorNoAfianzable(motivoDoc);
 
   // 1a. Aplicar la corrección de contacto si vino en el body. El teléfono
   // solo cuenta si trae dígitos reales (el PhoneInput de la web deja '+57 '
@@ -386,6 +400,15 @@ export async function enviarEnlaceAutorizacion(
   const cambiaNumero = !!numeroNuevo && numeroNuevo !== (exp.solicitantes?.numero_documento ?? '');
   const cambiaTipo = !!tipoNuevo && tipoNuevo !== (exp.solicitantes?.tipo_documento ?? '');
   if ((cambiaNumero || cambiaTipo) && exp.solicitante_id && exp.solicitantes) {
+    // H43: si la ficha es la de una cuenta, la regla del registro (una cuenta
+    // por documento). Las fichas de agencia no aplican.
+    const numFinal = numeroNuevo || exp.solicitantes.numero_documento;
+    if (
+      numFinal &&
+      (await existeOtraCuentaConDocumento(tipoNuevo || exp.solicitantes.tipo_documento || 'cc', numFinal, exp.solicitantes))
+    ) {
+      throw AppError.conflict(MSG_DOC_DE_OTRA_CUENTA_GESTOR, 'DOCUMENT_ALREADY_EXISTS');
+    }
     const { error: docError } = await (supabase
       .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
       .update({
@@ -406,6 +429,16 @@ export async function enviarEnlaceAutorizacion(
 
   if (!exp.solicitantes?.email) {
     throw AppError.badRequest('El solicitante no tiene email registrado', 'SOLICITANTE_SIN_EMAIL');
+  }
+
+  // H43: el auto-registro ya no pide el documento (la ficha nace con ''). Sin
+  // número, §8.1 (documentoCoincide) mataría el enlace como "datos
+  // incorrectos" apenas el prospecto lo abriera: mejor no emitirlo.
+  if (!exp.solicitantes?.numero_documento?.trim()) {
+    throw AppError.badRequest(
+      'Falta el número de documento del prospecto. Agrégalo (o pídele que lo complete en «Mi cuenta») antes de enviarle la solicitud de autorización.',
+      'SOLICITANTE_SIN_DOCUMENTO',
+    );
   }
 
   // 1b. No re-crear un enlace si el inquilino YA firmó (estado autorizado, no

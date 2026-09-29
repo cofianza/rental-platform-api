@@ -5,9 +5,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockCreateUser, inserts } = vi.hoisted(() => ({
+const { mockCreateUser, inserts, payloads, consultas } = vi.hoisted(() => ({
   mockCreateUser: vi.fn(),
   inserts: [] as string[],
+  payloads: {} as Record<string, unknown[]>,
+  consultas: [] as string[],
 }));
 
 vi.mock('@/lib/supabase', () => {
@@ -16,13 +18,22 @@ vi.mock('@/lib/supabase', () => {
   const chainFor = (tabla: string) => {
     let porEmail = false;
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'in', 'limit', 'update']) chain[m] = () => chain;
+    for (const m of ['in', 'limit']) chain[m] = () => chain;
+    chain.select = () => {
+      consultas.push(tabla);
+      return chain;
+    };
+    chain.update = (p: unknown) => {
+      (payloads[`${tabla}.update`] ??= []).push(p);
+      return chain;
+    };
     chain.eq = (col: string) => {
       if (col === 'email') porEmail = true;
       return chain;
     };
-    chain.insert = () => {
+    chain.insert = (p: unknown) => {
       inserts.push(tabla);
+      (payloads[`${tabla}.insert`] ??= []).push(p);
       return chain;
     };
     chain.then = (ok: (v: unknown) => unknown) =>
@@ -70,6 +81,8 @@ describe('registerSolicitante — correo ya usado en una ficha de agencia', () =
   beforeEach(() => {
     vi.clearAllMocks();
     inserts.length = 0;
+    consultas.length = 0;
+    for (const k of Object.keys(payloads)) delete payloads[k];
   });
 
   it('crea la cuenta: la ficha de la agencia no es una cuenta', async () => {
@@ -89,5 +102,37 @@ describe('registerSolicitante — correo ya usado en una ficha de agencia', () =
       errorCode: 'EMAIL_ALREADY_EXISTS',
     });
     expect(inserts).toEqual([]);
+  });
+});
+
+describe('registerSolicitante — registro liviano (H43)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    inserts.length = 0;
+    consultas.length = 0;
+    for (const k of Object.keys(payloads)) delete payloads[k];
+  });
+
+  it('sin documento: crea la cuenta, la ficha nace con numero_documento vacío y no se deduplica por documento', async () => {
+    mockCreateUser.mockResolvedValueOnce({ data: { user: { id: 'u-2' } }, error: null });
+    const sinDoc = { ...(input as Record<string, unknown>) };
+    delete sinDoc.tipo_documento;
+    delete sinDoc.numero_documento;
+    const res = await registerSolicitante(sinDoc as never, '1.1.1.1', 'ua');
+    expect(res.user.id).toBe('u-2');
+    expect(consultas).not.toContain('solicitantes');
+    const ficha = payloads['solicitantes.insert'][0] as Record<string, unknown>;
+    expect(ficha.numero_documento).toBe('');
+    expect(ficha).not.toHaveProperty('tipo_documento');
+    const perfil = payloads['perfiles.update'][0] as Record<string, unknown>;
+    expect(perfil).not.toHaveProperty('numero_documento');
+    expect(perfil).toMatchObject({ rol: 'solicitante', telefono: '3001234567' });
+  });
+
+  it('con documento: se guarda como antes', async () => {
+    mockCreateUser.mockResolvedValueOnce({ data: { user: { id: 'u-3' } }, error: null });
+    await registerSolicitante(input, '1.1.1.1', 'ua');
+    expect(consultas).toContain('solicitantes');
+    expect(payloads['solicitantes.insert'][0]).toMatchObject({ tipo_documento: 'cc', numero_documento: '123456' });
   });
 });
