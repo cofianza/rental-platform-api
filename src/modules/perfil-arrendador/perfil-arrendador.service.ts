@@ -286,7 +286,7 @@ export async function uploadLogo(
   const allowedMimes = ['image/png', 'image/jpeg', 'image/webp'];
   if (!allowedMimes.includes(file.mimetype)) {
     throw AppError.badRequest(
-      'Formato de imagen invalido. Usa PNG, JPG o WebP.',
+      'Formato de imagen invalido. Use PNG, JPG o WebP.',
       'LOGO_FORMAT_INVALID',
     );
   }

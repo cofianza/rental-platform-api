@@ -150,7 +150,7 @@ async function enviarEnlace(
     `${env.FRONTEND_URL}/verificar-identidad/${campos.token}`,
     TOKEN_EXPIRY_HOURS,
     { direccion_inmueble: ctx.direccion || 'N/A', ciudad_inmueble: ctx.ciudad, nombre_arrendatario: persona.nombre },
-    { asunto: 'Confirma tu identidad para firmar tu contrato - Cofianza', intro, boton: 'Confirmar mi identidad' },
+    { asunto: 'Confirme su identidad para firmar su contrato - Cofianza', intro, boton: 'Confirmar mi identidad' },
   );
 }
 
@@ -185,7 +185,7 @@ export async function iniciarVerificacionIdentidad(
   const firmantes = await derivarFirmantes(contratoId);
   if (!evaluarFirmantes(firmantes).puede_enviar) {
     throw AppError.badRequest(
-      'A un firmante le falta teléfono o correo, o dos firmantes comparten teléfono. Corrígelo antes de enviar a firma.',
+      'A un firmante le falta teléfono o correo, o dos firmantes comparten teléfono. Corríjalo antes de enviar a firma.',
       'FIRMANTE_DATOS_INCOMPLETOS',
     );
   }
@@ -196,7 +196,7 @@ export async function iniciarVerificacionIdentidad(
     'arrendatario',
     arrendatario,
     prev?.id ?? null,
-    'antes de firmar tu contrato de arrendamiento necesitamos confirmar que eres tú. Toma menos de dos minutos; al terminar te llega por WhatsApp el enlace para firmar.',
+    'antes de firmar su contrato de arrendamiento necesitamos confirmar que es usted. Toma menos de dos minutos; al terminar le llega por WhatsApp el enlace para firmar.',
     ctx,
   );
 
@@ -239,7 +239,7 @@ async function iniciarVerificacionesV3(
       rol,
       p,
       prev?.id ?? null,
-      'antes de firmar tu contrato de arrendamiento necesitamos confirmar que eres tú. Toma menos de dos minutos; te llega por WhatsApp cuando sea tu turno de firmar.',
+      'antes de firmar su contrato de arrendamiento necesitamos confirmar que es usted. Toma menos de dos minutos; le llega por WhatsApp cuando sea su turno de firmar.',
       ctx,
     );
     escritos++;
@@ -265,7 +265,7 @@ async function porToken(token: string): Promise<VerificacionRow> {
   if (!data) throw AppError.notFound('Este enlace no es válido.', 'VERIFICACION_NO_ENCONTRADA');
   const v = data as VerificacionRow;
   if (v.estado === 'pendiente' && new Date(v.token_expiracion) < new Date()) {
-    throw new AppError(410, 'ENLACE_EXPIRADO', 'El enlace venció. Pídele a quien te arrienda que te envíe uno nuevo.');
+    throw new AppError(410, 'ENLACE_EXPIRADO', 'El enlace venció. Pídale a quien le arrienda que le envíe uno nuevo.');
   }
   return v;
 }
@@ -273,7 +273,7 @@ async function porToken(token: string): Promise<VerificacionRow> {
 async function pendientePorToken(token: string): Promise<VerificacionRow> {
   const v = await porToken(token);
   if (v.estado !== 'pendiente') {
-    throw AppError.conflict('Ya confirmaste tu identidad. El enlace para firmar te llega por WhatsApp.', 'VERIFICACION_COMPLETADA');
+    throw AppError.conflict('Ya confirmó su identidad. El enlace para firmar le llega por WhatsApp.', 'VERIFICACION_COMPLETADA');
   }
   return v;
 }
@@ -308,7 +308,7 @@ export async function registrarConsentimiento(
       updated_at: ahora,
     } as never)
     .eq('id', v.id);
-  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar tu elección. Intenta de nuevo.');
+  if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar su elección. Intente de nuevo.');
 
   logAudit({
     usuarioId: null,
@@ -330,8 +330,8 @@ export async function registrarConsentimiento(
 /** Copy para la persona. Sin cifras (son el parametro antifraude) ni dramatismo. */
 function mensajePersona(r: ResumenBiometria): string {
   return r.estado === 'no_coincide'
-    ? 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puedes intentarlo de nuevo con mejor luz, o continuar: un analista de Cofianza verificará tu identidad por otro medio.'
-    : 'No pudimos completar la verificación. Puedes intentarlo de nuevo o continuar: un analista de Cofianza verificará tu identidad por otro medio.';
+    ? 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puede intentarlo de nuevo con mejor luz, o continuar: un analista de Cofianza verificará su identidad por otro medio.'
+    : 'No pudimos completar la verificación. Puede intentarlo de nuevo o continuar: un analista de Cofianza verificará su identidad por otro medio.';
 }
 
 /**
@@ -345,7 +345,7 @@ export async function verificarBiometriaFirma(
 ): Promise<{ completada: boolean; motivo: string | null }> {
   const v = await pendientePorToken(token);
   if (v.opcion !== 'autoriza') {
-    throw AppError.badRequest('Primero marca que autorizas la verificación con foto.', 'SIN_CONSENTIMIENTO');
+    throw AppError.badRequest('Primero marque que autoriza la verificación con foto.', 'SIN_CONSENTIMIENTO');
   }
 
   const { UMBRAL_SIMILITUD_BIOMETRICA } = await getCalibracion();
@@ -415,7 +415,7 @@ async function finalizar(v: VerificacionRow, resumen: ResumenBiometria): Promise
           userId: a.id,
           tipo: 'firma.identidad_revision',
           titulo: `Verificar identidad para la firma — Estudio ${formatNumeroEstudio(ctx.numero)}`,
-          mensaje: `${v.nombre}: ${resumen.motivo ?? 'sin cotejo biométrico'}. El contrato sigue su curso; verifica su identidad por otro medio y registra el resultado en el contrato.`,
+          mensaje: `${v.nombre}: ${resumen.motivo ?? 'sin cotejo biométrico'}. El contrato sigue su curso; verifique su identidad por otro medio y registre el resultado en el contrato.`,
           link: `/contratos/${v.contrato_id}`,
           payload: { contrato_id: v.contrato_id, verificacion_id: v.id },
         }),
@@ -442,7 +442,7 @@ async function finalizar(v: VerificacionRow, resumen: ResumenBiometria): Promise
         userId: v.enviado_por,
         tipo: 'contrato.firma_error',
         titulo: `No se pudo enviar el contrato a firma — Estudio ${formatNumeroEstudio(ctx.numero)}`,
-        mensaje: `El arrendatario ya confirmó su identidad, pero el envío a Auco falló: ${detalle}. Vuelve a enviarlo desde el contrato.`,
+        mensaje: `El arrendatario ya confirmó su identidad, pero el envío a Auco falló: ${detalle}. Vuelva a enviarlo desde el contrato.`,
         link: `/contratos/${v.contrato_id}`,
       });
     }
@@ -513,7 +513,7 @@ export async function revisarVerificacion(
             userId: a.id,
             tipo: 'firma.suplantacion_fianza_activa',
             titulo: `Suplantación detectada en un contrato con fianza activa — ${contrato.numero}`,
-            mensaje: `Un analista registró suplantación de identidad en ${v.nombre}, pero la fianza ya está activa y el contrato no se canceló. Revísalo. Nota: ${input.nota}`,
+            mensaje: `Un analista registró suplantación de identidad en ${v.nombre}, pero la fianza ya está activa y el contrato no se canceló. Revíselo. Nota: ${input.nota}`,
             link: `/contratos/${contratoId}`,
             payload: { contrato_id: contratoId, verificacion_id: v.id },
           }),

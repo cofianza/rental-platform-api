@@ -145,14 +145,14 @@ export const registrarResultadoSchema = z.preprocess(
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['motivo_rechazo'],
-      message: 'Escribe el motivo para la inmobiliaria o el propietario',
+      message: 'Escriba el motivo para la inmobiliaria o el propietario',
     });
   }
   if (data.resultado === 'rechazado' && !data.fundamento) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['fundamento'],
-      message: 'Escribe el fundamento interno del rechazo',
+      message: 'Escriba el fundamento interno del rechazo',
     });
   }
   if (data.resultado === 'condicionado' && !data.condiciones) {
@@ -256,7 +256,7 @@ export const reEvaluarSchema = z.object({
   observaciones: z
     .string()
     .trim()
-    .min(10, 'Escribe el fundamento de la reevaluación (mínimo 10 caracteres).')
+    .min(10, 'Escriba el fundamento de la reevaluación (mínimo 10 caracteres).')
     .max(2000, 'El fundamento no debe exceder 2000 caracteres'),
 });
 
@@ -354,7 +354,7 @@ export const tarifaOverrideSchema = z
   })
   .refine(
     (b) => b.tarifa_mensual_pct != null || b.prima_vinculacion_pct != null || b.cashback_pct != null,
-    { message: 'Indica al menos un porcentaje a sobrescribir' },
+    { message: 'Indique al menos un porcentaje a sobrescribir' },
   );
 
 export type TarifaOverrideInput = z.infer<typeof tarifaOverrideSchema>;

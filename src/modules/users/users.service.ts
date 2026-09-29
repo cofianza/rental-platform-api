@@ -219,11 +219,11 @@ export async function updateUser(userId: string, input: UpdateUserInput, solicit
   if (cambiaRol && userId === updatedBy) {
     // El único administrador que se quita el rol pierde el panel y solo se
     // recupera por base de datos.
-    throw AppError.badRequest('No puedes cambiar tu propio rol', 'SELF_ROLE_CHANGE');
+    throw AppError.badRequest('No puede cambiar su propio rol', 'SELF_ROLE_CHANGE');
   }
   if (cambiaRol && (await tieneEquipo(await resolveMembershipInmobiliariaIds(userId), userId))) {
     throw AppError.conflict(
-      'Pertenece al equipo de una inmobiliaria: primero sácalo del equipo (o pasa la titularidad a otra persona) desde Miembros de inmobiliarias.',
+      'Pertenece al equipo de una inmobiliaria: primero sáquelo del equipo (o pase la titularidad a otra persona) desde Miembros de inmobiliarias.',
       'MIEMBRO_CON_EQUIPO',
     );
   }
@@ -275,7 +275,7 @@ export async function updateUser(userId: string, input: UpdateUserInput, solicit
 export async function deactivateUser(userId: string, solicitante: Solicitante, ip?: string) {
   const requestingUserId = solicitante.id;
   if (userId === requestingUserId) {
-    throw AppError.badRequest('No puedes desactivar tu propia cuenta', 'SELF_DEACTIVATION');
+    throw AppError.badRequest('No puede desactivar su propia cuenta', 'SELF_DEACTIVATION');
   }
 
   // Verificar que el usuario existe
@@ -509,7 +509,7 @@ export async function deleteUser(
 ): Promise<DeleteUserResult> {
   const requestingUserId = solicitante.id;
   if (userId === requestingUserId) {
-    throw AppError.badRequest('No puedes eliminar tu propia cuenta', 'SELF_DELETION');
+    throw AppError.badRequest('No puede eliminar su propia cuenta', 'SELF_DELETION');
   }
 
   // 1. Capturar email para audit / response. Soportamos dos casos:
@@ -540,7 +540,7 @@ export async function deleteUser(
   // El panel de huérfanos solo debe poder borrar huérfanos: si la lista se
   // equivocó (o quedó vieja), una cuenta real no se borra desde ahí.
   if (options.soloHuerfano && !esHuerfano) {
-    throw AppError.conflict('Esta cuenta sí tiene perfil; no es huérfana. Gestiónala desde Usuarios.', 'USER_NOT_ORPHAN');
+    throw AppError.conflict('Esta cuenta sí tiene perfil; no es huérfana. Gestiónela desde Usuarios.', 'USER_NOT_ORPHAN');
   }
 
   // Titular principal con equipo: owner_perfil_id es ON DELETE CASCADE, así
@@ -558,7 +558,7 @@ export async function deleteUser(
     const orgIds = ((orgs as unknown as Array<{ id: string }>) ?? []).map((o) => o.id);
     if (await tieneEquipo(orgIds, userId)) {
       throw AppError.conflict(
-        'Es titular principal de una inmobiliaria con equipo: borrarlo borraría la inmobiliaria. Primero pasa la titularidad a otra persona desde Miembros de inmobiliarias.',
+        'Es titular principal de una inmobiliaria con equipo: borrarlo borraría la inmobiliaria. Primero pase la titularidad a otra persona desde Miembros de inmobiliarias.',
         'USER_IS_ORG_OWNER',
       );
     }
@@ -571,7 +571,7 @@ export async function deleteUser(
     : await checkDeleteBlockers(userId);
   if (!check.safe && !options.force) {
     throw AppError.badRequest(
-      'El usuario tiene datos asociados que bloquean el borrado. Usa force=true para intentar de todos modos.',
+      'El usuario tiene datos asociados que bloquean el borrado. Use force=true para intentar de todos modos.',
       'USER_HAS_DEPENDENCIES',
       { blockers: check.blockers },
     );
@@ -587,7 +587,7 @@ export async function deleteUser(
       'Error al borrar auth.user — probablemente FK de tabla con datos contables',
     );
     throw AppError.conflict(
-      `No se pudo eliminar el usuario: ${authError.message}. Tiene datos vinculados que no se pueden borrar (probablemente pagos, créditos o historial). Considera desactivar en lugar de borrar.`,
+      `No se pudo eliminar el usuario: ${authError.message}. Tiene datos vinculados que no se pueden borrar (probablemente pagos, créditos o historial). Considere desactivar en lugar de borrar.`,
       'DELETE_BLOCKED_BY_FK',
     );
   }

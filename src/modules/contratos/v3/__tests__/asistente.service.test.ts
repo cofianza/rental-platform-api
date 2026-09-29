@@ -867,13 +867,13 @@ describe('tope de canon: bloqueo y escalamiento a la Gerencia General (Adenda 1 
 
     const e = await guardarPaso(EXP, { paso: 1, datos: PASO1_ALTO }, USER, ROL);
 
-    expect(tope(e)).toContain('genera la vista previa y el caso pasará a la Gerencia General');
+    expect(tope(e)).toContain('genere la vista previa y el caso pasará a la Gerencia General');
     expect(mockEscalar).not.toHaveBeenCalled();
   });
 
   it('el GET no escala: solo dice si el caso ya está en la Gerencia', async () => {
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: PASO1_ALTO } } })] });
-    expect(tope(await obtener())).toContain('genera la vista previa');
+    expect(tope(await obtener())).toContain('genere la vista previa');
     mockYaEscalado.mockResolvedValueOnce(true);
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: { paso1: PASO1_ALTO } } })] });
     expect(tope(await obtener())).toContain('El caso se envió a la Gerencia General de Cofianza');
@@ -900,7 +900,7 @@ describe('tope de canon: bloqueo y escalamiento a la Gerencia General (Adenda 1 
     mockEscalar.mockResolvedValueOnce(false);
     encolarCarga({ contratos: [fila({ datos_variables: { asistente: ALTO } })] });
     const e = await error(enviarAFirma(EXP, { generacion: 1 }, USER, ROL));
-    expect(e.message).toContain('Escríbele a Cofianza para evaluar un coafianzamiento');
+    expect(e.message).toContain('Escríbale a Cofianza para evaluar un coafianzamiento');
     expect(e.message).not.toContain('se envió');
     expect(mockEscalar).toHaveBeenCalledTimes(1);
   });
@@ -1189,7 +1189,7 @@ describe('paso 4: validación al guardar', () => {
     expect(guardarPasoSchema.safeParse({ paso: 4, datos: lista }).success).toBe(true);
     const enFalse = guardarPasoSchema.safeParse({ paso: 4, datos: { ...lista, aceptoResponsabilidad: false } });
     expect(enFalse.success).toBe(false);
-    expect(enFalse.error!.issues[0].message).toMatch(/Acepta el aviso de responsabilidad/);
+    expect(enFalse.error!.issues[0].message).toMatch(/Acepte el aviso de responsabilidad/);
     const repetidas = guardarPasoSchema.safeParse(entrada([{ clausulaId: UUID }, { clausulaId: UUID }]));
     expect(repetidas.error!.issues[0].message).toBe('Una cláusula está repetida');
     const valor = guardarPasoSchema.safeParse(entrada([{ clausulaId: UUID, valores: { puesto: '  12\n B ' } }]));
@@ -1292,7 +1292,7 @@ describe('paso 4: validación al guardar', () => {
     enqueue('clausulas_adicionales', { data: [BIBLIO], error: null });
     const e = await error(guardarPaso(EXP, entrada([{ clausulaId: 'bib-1' }]), USER, ROL));
     expect(e).toMatchObject({ statusCode: 422, errorCode: 'CLAUSULA_CAMPOS', details: { indice: 0 } });
-    expect(e.message).toBe('Completa los datos de la cláusula «Parqueadero asignado»: número del parqueadero.');
+    expect(e.message).toBe('Complete los datos de la cláusula «Parqueadero asignado»: número del parqueadero.');
 
     encolarCarga({ contratos: [fila()] });
     enqueue('clausulas_adicionales', { data: [PROPIA], error: null });
@@ -1408,12 +1408,12 @@ describe('paso 4: estado (GET) y bloqueos', () => {
     expect(e.bloqueos).toEqual([
       {
         codigo: 'CLAUSULA_INHABILITADA',
-        mensaje: 'Cofianza inhabilitó la cláusula «Cuidado del jardín»: Cita una norma derogada. Quítala del contrato para continuar.',
+        mensaje: 'Cofianza inhabilitó la cláusula «Cuidado del jardín»: Cita una norma derogada. Quítela del contrato para continuar.',
         paso: 4,
       },
     ]);
     expect(e.avisos).toEqual([
-      'Hay una versión más reciente de «Parqueadero asignado». Si vuelves a guardar el paso 4, el contrato usará la nueva.',
+      'Hay una versión más reciente de «Parqueadero asignado». Si vuelve a guardar el paso 4, el contrato usará la nueva.',
     ]);
   });
 
@@ -2107,7 +2107,7 @@ describe('Ruta B: dónde firma cada parte sobre el PDF propio (Adenda 1 contrato
     expect(await error(enviarAFirma(EXP, { generacion: 1, propioSha256: SHA }, USER, ROL))).toMatchObject({
       statusCode: 409,
       errorCode: 'RUTA_B_FIRMA_NO_HABILITADA',
-      message: 'La firma de la Ruta B se habilita después de la prueba con Auco. Por ahora usa la Ruta A.',
+      message: 'La firma de la Ruta B se habilita después de la prueba con Auco. Por ahora use la Ruta A.',
     });
     expect(vi.mocked(generarAnexoVivienda)).not.toHaveBeenCalled();
     expect(storageApi.upload).not.toHaveBeenCalled();

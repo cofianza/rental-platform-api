@@ -194,7 +194,7 @@ describe('aviso a la inmobiliaria cuando Cofianza gasta su crédito', () => {
       expect.objectContaining({
         userId: 'cotitular',
         link: '/expedientes/exp-1',
-        mensaje: expect.stringMatching(/N\.° 2026-0005 \(Cra 1, Bogotá\).*1 crédito.*Te quedan 3 créditos/),
+        mensaje: expect.stringMatching(/N\.° 2026-0005 \(Cra 1, Bogotá\).*1 crédito.*Le quedan 3 créditos/),
       }),
     );
     expect(ops).toContainEqual({ table: 'inmobiliaria_miembros', method: 'eq', args: ['rol_miembro', 'owner'] });
@@ -219,7 +219,7 @@ describe('aviso a la inmobiliaria cuando Cofianza gasta su crédito', () => {
     await avisarCreditoUsadoPorCofianza('exp-1', 1, 'owner-legado');
     expect(mockNotificar).toHaveBeenCalledTimes(1);
     expect(mockNotificar).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'owner-legado', mensaje: expect.stringContaining('Te queda 1 crédito.') }),
+      expect.objectContaining({ userId: 'owner-legado', mensaje: expect.stringContaining('Le queda 1 crédito.') }),
     );
   });
 

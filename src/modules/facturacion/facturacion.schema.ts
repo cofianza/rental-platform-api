@@ -28,7 +28,7 @@ export const updateTarifasIvaSchema = z.object({
         tasa: z.number().min(0, 'No puede ser negativa').max(100, 'Máximo 100'),
       }),
     )
-    .min(1, 'Envia al menos una tarifa'),
+    .min(1, 'Envíe al menos una tarifa'),
 });
 
 // Override opcional al facturar un pago: si vienen estos campos, se

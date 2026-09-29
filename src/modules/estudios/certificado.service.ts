@@ -602,7 +602,7 @@ export async function leerSombraDelEstudio(
     .maybeSingle();
   if (error) {
     logger.error({ estudioId, error: error.message }, 'CRC: no se pudo leer la corrida del motor');
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del estudio. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del estudio. Inténtelo de nuevo en un momento.');
   }
   const row = data as { puntaje_normalizado?: number | string | null; factor_ajuste_ingreso?: number | string | null; modelo_version?: string | null; features_crudas?: Record<string, unknown> | null; canon_ingreso_ajustado_pct?: number | string | null } | null;
   if (!row) return null;
@@ -937,7 +937,7 @@ async function estadoAntesDelCierre(expedienteId: string): Promise<string | null
   const error = contrato.error ?? cierre.error;
   if (error) {
     logger.error({ expedienteId, error: error.message }, 'CRC: no se pudo leer desde donde se cerro el estudio');
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el estado del estudio. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el estado del estudio. Inténtelo de nuevo en un momento.');
   }
   if ((contrato.data as unknown[] | null)?.length) return 'aprobado';
   return (cierre.data as { estado_anterior: string | null }[] | null)?.[0]?.estado_anterior ?? null;
@@ -1009,7 +1009,7 @@ async function leerEstudioCrc(estudioId: string): Promise<Record<string, unknown
   // Un error de la base no es «no existe»: con 404 el gestor buscaría otro estudio.
   if (estudioErr) {
     logger.error({ estudioId, error: estudioErr.message }, 'CRC: no se pudo leer el estudio');
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el estudio. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el estudio. Inténtelo de nuevo en un momento.');
   }
   if (!estudio) {
     throw AppError.notFound('Estudio no encontrado', 'ESTUDIO_NOT_FOUND');
@@ -1288,7 +1288,7 @@ async function crcReducido(cert: CertGuardado, version: VersionReducida): Promis
   const { error } = await supabase.storage.from(BUCKET_NAME).upload(key, pdf, { contentType: 'application/pdf', upsert: false });
   if (error) {
     logger.error({ error, key }, `CRC: no se pudo guardar la versión ${version}`);
-    throw new AppError(503, 'CRC_NO_DISPONIBLE', 'No pudimos preparar el certificado. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'CRC_NO_DISPONIBLE', 'No pudimos preparar el certificado. Inténtelo de nuevo en un momento.');
   }
   return { key, pdf };
 }

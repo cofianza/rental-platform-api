@@ -212,7 +212,7 @@ export function mensajeNoAdmision(motivo: MotivoNoAdmision): string {
     case 'reservado':
       return (
         'Esta propiedad quedo reservada para un candidato aprobado y su contrato ya esta en proceso, ' +
-        'asi que no admite estudios nuevos. Puedes iniciar el estudio sobre otra propiedad.'
+        'asi que no admite estudios nuevos. Puede iniciar el estudio sobre otra propiedad.'
       );
     case 'ocupado':
       return (
@@ -220,7 +220,7 @@ export function mensajeNoAdmision(motivo: MotivoNoAdmision): string {
         'el contrato vigente desde el detalle del inmueble.'
       );
     case 'inactivo':
-      return 'Esta propiedad esta inactiva. Reactivala desde el detalle del inmueble para poder estudiarla.';
+      return 'Esta propiedad esta inactiva. Reactívela desde el detalle del inmueble para poder estudiarla.';
   }
 }
 
@@ -317,7 +317,7 @@ export function errorReservaPerdida(
     INMUEBLE_YA_RESERVADO_ERROR_CODE,
     resultado.motivo === 'reservado'
       ? 'Otro candidato fue aprobado primero y esta propiedad ya quedo reservada para su contrato. ' +
-          'Este estudio sigue vigente: puedes usarlo para otra propiedad.'
+          'Este estudio sigue vigente: puede usarlo para otra propiedad.'
       : mensajeNoAdmision(resultado.motivo),
     { motivo: resultado.motivo, reservado_por_expediente_id: resultado.titular },
   );

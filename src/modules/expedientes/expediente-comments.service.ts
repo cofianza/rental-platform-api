@@ -101,7 +101,7 @@ export async function updateComment(
   const existing = await getCommentOrFail(commentId, expedienteId);
 
   if (existing.usuario_id !== userId) {
-    throw AppError.forbidden('Solo puedes editar tus propios comentarios');
+    throw AppError.forbidden('Solo puede editar sus propios comentarios');
   }
 
   const { data, error } = await (supabase
@@ -143,7 +143,7 @@ export async function deleteComment(
 
   const isAdmin = userRole === 'administrador';
   if (!isAdmin && existing.usuario_id !== userId) {
-    throw AppError.forbidden('Solo puedes eliminar tus propios comentarios');
+    throw AppError.forbidden('Solo puede eliminar sus propios comentarios');
   }
 
   const { error } = await (supabase

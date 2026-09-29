@@ -173,7 +173,7 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     const e = await error(generar());
 
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
-    expect(e.message).toContain('Hazlo con el contrato nuevo');
+    expect(e.message).toContain('Hágalo con el contrato nuevo');
     expect(mockCoa).toHaveBeenCalledWith(EXP);
     expect(mockCompletitud).not.toHaveBeenCalled();
     expect(escrituras()).toEqual([]);
@@ -218,7 +218,7 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     enqueue('plantillas_contrato', { data: { id: 'pl-1', nombre: 'V4', contenido: null, contenido_html: '<p></p>', variables: [], version: 1 }, error: null });
     const e = await error(regenerarContrato(CTO, {}, ADMIN.id, undefined, ADMIN.rol));
     expect(e).toMatchObject({ statusCode: 400, errorCode: 'MODALIDAD_NO_DISPONIBLE' });
-    expect(e.message).toContain('Cancélalo y genera uno nuevo eligiendo Plena o Plus');
+    expect(e.message).toContain('Cancélelo y genere uno nuevo eligiendo Plena o Plus');
     expect(escrituras()).toEqual([]);
   });
 

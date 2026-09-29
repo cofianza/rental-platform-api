@@ -24,7 +24,7 @@ describe('evaluarExpiracion', () => {
     for (const autorizacionEstado of ['expirado', 'revocado']) {
       const v = evaluarExpiracion({ ...base, autorizacionEstado });
       expect(v).toMatchObject({ expirado: true, detenida: true, diasRestantes: null });
-      expect(v.motivo).toContain('reenvia');
+      expect(v.motivo).toContain('reenvíe');
     }
   });
 

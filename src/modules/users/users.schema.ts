@@ -15,7 +15,7 @@ export const listUsersQuerySchema = z.object({
 });
 
 export const buscarUsuariosQuerySchema = z.object({
-  search: z.string().trim().min(2, 'Escribe al menos 2 letras').max(60),
+  search: z.string().trim().min(2, 'Escriba al menos 2 letras').max(60),
 });
 
 export const userIdParamsSchema = z.object({

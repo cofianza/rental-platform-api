@@ -299,7 +299,7 @@ export async function leerIngresoInferidoOriginal(
     const detalle = (err as { message?: string } | null)?.message ?? String(err);
     if (opts.estricto) {
       logger.error({ estudioId, error: detalle }, 'No se pudo leer el ingreso inferido del estudio');
-      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del estudio. Intenta de nuevo en un momento.');
+      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del estudio. Inténtelo de nuevo en un momento.');
     }
     logger.warn(
       { estudioId, error: detalle },
@@ -375,7 +375,7 @@ async function assertExpedienteSinContratos(
       503,
       PAGO_NO_VERIFICABLE_ERROR_CODE,
       'No pudimos verificar si este estudio ya genero un contrato, asi que no lo reasignamos. ' +
-        'Intenta de nuevo en un momento.',
+        'Inténtelo de nuevo en un momento.',
     );
   }
 
@@ -388,7 +388,7 @@ async function assertExpedienteSinContratos(
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       `El estudio ${formatNumeroEstudio(expedienteNumero)} ya genero el contrato ${contrato.numero ?? contrato.id} ` +
         `(${contrato.estado}) sobre la propiedad actual, y ese contrato no puede quedar hablando de otra. ` +
-        'Crea un estudio nuevo para la otra propiedad — la evaluación de este ya esta pagada y su ' +
+        'Cree un estudio nuevo para la otra propiedad — la evaluación de este ya esta pagada y su ' +
         'resultado sigue disponible.',
       { motivo: 'expediente_con_contrato', contrato_id: contrato.id, estado: contrato.estado },
     );
@@ -427,7 +427,7 @@ async function assertExpedienteSinCitasVivas(
       503,
       PAGO_NO_VERIFICABLE_ERROR_CODE,
       'No pudimos verificar las visitas agendadas de este estudio, asi que no lo reasignamos. ' +
-        'Intenta de nuevo en un momento.',
+        'Inténtelo de nuevo en un momento.',
     );
   }
 
@@ -437,9 +437,9 @@ async function assertExpedienteSinCitasVivas(
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       `El estudio ${formatNumeroEstudio(expedienteNumero)} tiene una visita ${cita.estado} para la propiedad actual. ` +
-        'Si la reasignas, esa visita pasaria a mostrar la direccion de la propiedad nueva sin que nadie ' +
+        'Si lo reasigna, esa visita pasaria a mostrar la direccion de la propiedad nueva sin que nadie ' +
         // Reprogramar no la saca de 'solicitada'/'confirmada': seguiria bloqueando.
-        'lo haya acordado. Cancélala primero y vuelve a intentarlo.',
+        'lo haya acordado. Cancélela primero y vuelva a intentarlo.',
       { motivo: 'cita_viva', cita_id: cita.id, estado: cita.estado },
     );
   }
@@ -577,7 +577,7 @@ export function motivoNoReutilizable(i: InsumosReutilizacion): string | null {
     return 'Ese estudio tiene reservada su propiedad para su contrato: no se traslada mientras ese contrato siga en curso.';
   }
   if (!i.destino) return null;
-  if (i.destino.mismaPropiedad) return 'Ese estudio ya es de esta misma propiedad: ábrelo en vez de crear uno nuevo.';
+  if (i.destino.mismaPropiedad) return 'Ese estudio ya es de esta misma propiedad: ábralo en vez de crear uno nuevo.';
   if (!i.destino.mismaCartera) {
     return `Ese estudio es de otra cartera y solo se reutiliza dentro de la misma agencia o del mismo propietario. ${CIERRE_ESTUDIO_NUEVO}`;
   }
@@ -800,7 +800,7 @@ export async function reasignarEstudio(args: {
       409,
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
       `Este estudio tiene reservada la propiedad ${origen.codigo ?? origen.direccion ?? ''} para su contrato. ` +
-        'Termina o cancela ese contrato desde el detalle del inmueble y luego reasigna el estudio.',
+        'Termine o cancele ese contrato desde el detalle del inmueble y luego reasigne el estudio.',
       { motivo: 'expediente_titular_de_reserva' },
     );
   }
@@ -887,7 +887,7 @@ export async function reasignarEstudio(args: {
       `La propiedad ${destino.codigo ?? destino.direccion ?? 'de destino'} pertenece a otra cartera. ` +
         'Un estudio solo se reutiliza dentro de la misma agencia o del mismo propietario: trasladarlo ' +
         'movería el estudio completo —con los datos del solicitante y el resultado del buró— a una ' +
-        'cartera distinta. Elige una propiedad de esta misma cartera.',
+        'cartera distinta. Elija una propiedad de esta misma cartera.',
       { motivo: 'cambio_de_cartera' },
     );
   }
@@ -971,7 +971,7 @@ export async function reasignarEstudio(args: {
 
   if (!movidas || (movidas as unknown[]).length === 0) {
     throw AppError.conflict(
-      'El estudio cambio de propiedad mientras se procesaba la reasignacion — refresca para ver el estado actual.',
+      'El estudio cambio de propiedad mientras se procesaba la reasignacion — refresque para ver el estado actual.',
       ESTUDIO_NO_REASIGNABLE_ERROR_CODE,
     );
   }

@@ -122,7 +122,7 @@ async function resolveAuth(token: string): Promise<AuthResolved> {
 
   const promise = (async (): Promise<AuthResolved> => {
     const sub = subSinVerificar(token);
-    if (!sub) throw AppError.unauthorized('Tu sesión venció. Vuelve a iniciar sesión.');
+    if (!sub) throw AppError.unauthorized('Su sesión venció. Vuelva a iniciar sesión.');
     // En paralelo: una sola espera a Supabase en vez de dos seguidas.
     const [{ data: { user }, error }, { data: perfil, error: perfilError }] = await Promise.all([
       supabaseAuth.auth.getUser(token),
@@ -130,7 +130,7 @@ async function resolveAuth(token: string): Promise<AuthResolved> {
     ]);
     if (error || !user || user.id !== sub) {
       logger.warn({ error }, 'Token invalido o expirado');
-      throw AppError.unauthorized('Tu sesión venció. Vuelve a iniciar sesión.');
+      throw AppError.unauthorized('Su sesión venció. Vuelva a iniciar sesión.');
     }
 
     if (perfilError || !perfil) {
@@ -201,7 +201,7 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
       if (rolMiembro === 'solo_lectura') {
         logger.warn({ userId: user.id, method: req.method, path }, 'Escritura bloqueada para miembro solo_lectura');
         throw AppError.forbidden(
-          'Tu rol en la inmobiliaria es de sólo lectura: no puedes crear ni modificar datos.',
+          'Su rol en la inmobiliaria es de sólo lectura: no puede crear ni modificar datos.',
           'MIEMBRO_SOLO_LECTURA',
         );
       }
@@ -211,7 +211,7 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
       if (rolMiembro === 'miembro' && (await perfilPersonalIncompleto(user.id))) {
         logger.warn({ userId: user.id, method: req.method, path }, 'Escritura bloqueada para miembro con perfil incompleto');
         throw AppError.forbidden(
-          'Completa tus datos personales (nombre, apellido, teléfono y documento) en tu perfil antes de administrar estudios.',
+          'Complete sus datos personales (nombre, apellido, teléfono y documento) en su perfil antes de administrar estudios.',
           'PERFIL_PERSONAL_INCOMPLETO',
         );
       }

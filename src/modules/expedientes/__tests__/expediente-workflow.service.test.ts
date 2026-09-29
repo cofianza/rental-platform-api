@@ -634,7 +634,7 @@ describe('expediente-workflow.service', () => {
 
     // Adenda 1 contratos (respuesta 21): Cofianza no carga el acta; la inmobiliaria sí.
     it.each([
-      ['administrador', adminUser, 'la carga la inmobiliaria. Si no la va a cargar, puedes cerrar el estudio sin acta, con motivo.'],
+      ['administrador', adminUser, 'la carga la inmobiliaria. Si no la va a cargar, puede cerrar el estudio sin acta, con motivo.'],
       ['operador_analista', analistaUser, 'la carga la inmobiliaria. Si no la va a cargar, un administrador de Cofianza puede cerrar el estudio sin acta'],
     ] as const)('a %s no le dice «Carga el acta»: la carga la inmobiliaria y un administrador puede cerrar sin ella', async (_rol, user, texto) => {
       setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });

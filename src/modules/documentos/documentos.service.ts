@@ -170,10 +170,10 @@ async function assertStorageKeyLibre(storageKey: string): Promise<void> {
     .select('id', { count: 'exact', head: true })
     .eq('storage_key', storageKey);
   if (error) {
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el archivo subido. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el archivo subido. Intente de nuevo en un momento.');
   }
   if (count) {
-    throw AppError.conflict('Ese archivo ya está registrado en otro documento. Súbelo de nuevo.', 'STORAGE_KEY_EN_USO');
+    throw AppError.conflict('Ese archivo ya está registrado en otro documento. Súbalo de nuevo.', 'STORAGE_KEY_EN_USO');
   }
 }
 
@@ -341,7 +341,7 @@ export async function confirmarSubida(
       .eq('estado', 'aprobado');
     // Sin poder contarlos no se sube: podría reemplazar uno aprobado.
     if (aprobadosError) {
-      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los documentos del estudio. Intenta de nuevo en un momento.');
+      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los documentos del estudio. Intente de nuevo en un momento.');
     }
     if (aprobados) {
       throw AppError.conflict(
@@ -365,7 +365,7 @@ export async function confirmarSubida(
       'Archivo no encontrado en storage',
     );
     throw AppError.badRequest(
-      'No encontramos el archivo subido. Verifica que la carga se haya completado.',
+      'No encontramos el archivo subido. Verifique que la carga se haya completado.',
       'FILE_NOT_FOUND_IN_STORAGE',
     );
   }
@@ -402,7 +402,7 @@ export async function confirmarSubida(
     logger.error({ error: insertError.message }, 'Error al registrar documento');
     if (insertError.code === '23503') {
       throw AppError.badRequest(
-        'Referencia inválida. Verifica los datos enviados.',
+        'Referencia inválida. Verifique los datos enviados.',
         'FK_VIOLATION',
       );
     }
@@ -901,7 +901,7 @@ async function avisarRechazoDocumento(doc: DocumentoRow, motivo: string, revisor
       titulo: 'Cofianza rechazó un documento del estudio',
       mensaje:
         `El documento «${doc.nombre_original}»${e?.numero ? ` del estudio ${formatNumeroEstudio(e.numero)}` : ''} fue rechazado. ` +
-        `Motivo: ${motivo}. Sube uno nuevo desde la pestaña Documentos del estudio.`,
+        `Motivo: ${motivo}. Suba uno nuevo desde la pestaña Documentos del estudio.`,
       link: `/expedientes/${doc.expediente_id}`,
       payload: { expediente_id: doc.expediente_id, documento_id: doc.id },
     };
@@ -1316,7 +1316,7 @@ export async function confirmarReemplazo(
       'Archivo de reemplazo no encontrado en storage',
     );
     throw AppError.badRequest(
-      'No encontramos el archivo subido. Verifica que la carga se haya completado.',
+      'No encontramos el archivo subido. Verifique que la carga se haya completado.',
       'FILE_NOT_FOUND_IN_STORAGE',
     );
   }

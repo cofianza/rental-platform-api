@@ -460,7 +460,7 @@ export async function crearSolicitudFirmaMultiparte(
   // verificacion-identidad.service vuelve a llamar aquí.
   if (env.FIRMA_BIOMETRIA_ENABLED && (await identidadPendiente(contratoId))) {
     throw AppError.conflict(
-      'El arrendatario todavía no confirma su identidad. El contrato sale a firma apenas lo haga; desde "Enviar a firma" puedes reenviarle el enlace.',
+      'El arrendatario todavía no confirma su identidad. El contrato sale a firma apenas lo haga; desde "Enviar a firma" puede reenviarle el enlace.',
       'VERIFICACION_IDENTIDAD_PENDIENTE',
     );
   }
@@ -483,7 +483,7 @@ export async function crearSolicitudFirmaMultiparte(
   if (sinDatos.length > 0) {
     const faltan = sinDatos.map((x) => x.f.rol_firmante).join(', ');
     throw AppError.badRequest(
-      `Faltan teléfono válido o email para firmar por WhatsApp: ${faltan}. Completa esos datos antes de enviar a firma.`,
+      `Faltan teléfono válido o email para firmar por WhatsApp: ${faltan}. Complete esos datos antes de enviar a firma.`,
       'FIRMANTE_DATOS_INCOMPLETOS',
     );
   }
@@ -501,7 +501,7 @@ export async function crearSolicitudFirmaMultiparte(
   if (duplicados.length > 0) {
     const partes = duplicados.map((roles) => roles.join(' y ')).join('; ');
     throw AppError.badRequest(
-      `Hay firmantes con el mismo teléfono (${partes}). Cada parte necesita un número distinto para recibir su OTP por WhatsApp. Revisa el teléfono de Cofianza en Configuración o el del arrendador.`,
+      `Hay firmantes con el mismo teléfono (${partes}). Cada parte necesita un número distinto para recibir su OTP por WhatsApp. Revise el teléfono de Cofianza en Configuración o el del arrendador.`,
       'FIRMANTES_TELEFONO_DUPLICADO',
     );
   }
@@ -797,7 +797,7 @@ export async function avisarFirmanteBloqueado(contratoId: string, code: string |
       userId: o.id,
       tipo: 'firma.bloqueada',
       titulo: 'Firmante bloqueado en Auco',
-      mensaje: `Un firmante del proceso ${code ?? ''} quedó bloqueado tras varios intentos fallidos. Desbloquéalo en el panel de Auco para que la firma siga.`,
+      mensaje: `Un firmante del proceso ${code ?? ''} quedó bloqueado tras varios intentos fallidos. Desbloquéelo en el panel de Auco para que la firma siga.`,
       link: `/contratos/${contratoId}`,
       payload: { contrato_id: contratoId },
     });

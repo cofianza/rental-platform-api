@@ -156,7 +156,7 @@ export async function reprogramarCitaPublica(token: string, fechaIso: string): P
     const disponible = await slotEstaDisponible(inm, fechaIso);
     if (!disponible) {
       throw AppError.badRequest(
-        'El horario seleccionado ya no está disponible. Elige otro.',
+        'El horario seleccionado ya no está disponible. Elija otro.',
         'SLOT_NO_DISPONIBLE',
       );
     }
@@ -250,7 +250,7 @@ export async function confirmarAsistenciaPublica(token: string): Promise<CitaPub
 
   if (error) {
     logger.error({ error: error.message, citaId: c.id }, 'Error al confirmar asistencia (público)');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo confirmar tu asistencia');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo confirmar su asistencia');
   }
 
   // Avisa al propietario/inmobiliaria (in-app) que el solicitante asistirá. Fire-and-forget.

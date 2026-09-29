@@ -151,13 +151,13 @@ async function assertTarifaEditable(e: FilaEstudio): Promise<void> {
   const estados = ((data as Array<{ estado: string }> | null) ?? []).map((c) => c.estado);
   if (estados.some((x) => CONTRATO_FIRMADO.includes(x))) {
     throw AppError.conflict(
-      'El contrato ya está firmado: la tarifa especial no se cambia aquí. Formalízala con un otrosí firmado por las partes.',
+      'El contrato ya está firmado: la tarifa especial no se cambia aquí. Formalícela con un otrosí firmado por las partes.',
       'TARIFA_CONTRATO_FIRMADO',
     );
   }
   if (estados.length > 0) {
     throw AppError.conflict(
-      'El contrato está en firma con la tarifa anterior: cancela el envío a firma, cambia la tarifa y regenera el contrato.',
+      'El contrato está en firma con la tarifa anterior: cancele el envío a firma, cambie la tarifa y regenere el contrato.',
       'TARIFA_CONTRATO_EN_FIRMA',
     );
   }

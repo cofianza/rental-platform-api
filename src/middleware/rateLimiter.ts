@@ -32,7 +32,7 @@ export const generalLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiadas solicitudes desde tu red. Espera un minuto e inténtalo de nuevo.',
+    message: 'Demasiadas solicitudes desde su red. Espere un minuto e inténtelo de nuevo.',
   },
 });
 
@@ -44,7 +44,7 @@ export const authLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiados intentos de ingreso. Espera un minuto e inténtalo de nuevo.',
+    message: 'Demasiados intentos de ingreso. Espere un minuto e inténtelo de nuevo.',
   },
 });
 
@@ -56,7 +56,7 @@ export const registrationLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiados registros desde tu red. Inténtalo de nuevo en una hora.',
+    message: 'Demasiados registros desde su red. Inténtelo de nuevo en una hora.',
   },
 });
 
@@ -68,7 +68,7 @@ export const resendVerificationLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Ya te enviamos varios correos de verificación. Revisa tu bandeja de entrada (y el spam) o inténtalo de nuevo en una hora.',
+    message: 'Ya le enviamos varios correos de verificación. Revise su bandeja de entrada (y el spam) o inténtelo de nuevo en una hora.',
   },
 });
 
@@ -85,7 +85,7 @@ export const passwordResetLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Ya pediste varios enlaces para restablecer la contraseña. Revisa tu correo (y el spam) o inténtalo de nuevo en una hora.',
+    message: 'Ya pidió varios enlaces para restablecer la contraseña. Revise su correo (y el spam) o inténtelo de nuevo en una hora.',
   },
 });
 
@@ -105,7 +105,7 @@ export const interesLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Ya registraste varios intereses desde tu red. Inténtalo de nuevo en una hora.',
+    message: 'Ya registró varios intereses desde su red. Inténtelo de nuevo en una hora.',
   },
 });
 
@@ -124,7 +124,7 @@ export const invitarMiembroLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Enviaste muchas invitaciones en poco tiempo. Inténtalo de nuevo en una hora.',
+    message: 'Envió muchas invitaciones en poco tiempo. Inténtelo de nuevo en una hora.',
   },
 });
 
@@ -136,7 +136,7 @@ export const publicFormLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiadas solicitudes desde tu red. Espera un minuto e inténtalo de nuevo.',
+    message: 'Demasiadas solicitudes desde su red. Espere un minuto e inténtelo de nuevo.',
   },
 });
 
@@ -158,7 +158,7 @@ export const otpSendByTokenLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiadas solicitudes de código para este enlace. Inténtalo más tarde.',
+    message: 'Demasiadas solicitudes de código para este enlace. Inténtelo más tarde.',
   },
 });
 
@@ -177,7 +177,7 @@ export const invitacionPorTokenLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Ya enviaste varias invitaciones desde este enlace. Inténtalo de nuevo mañana.',
+    message: 'Ya envió varias invitaciones desde este enlace. Inténtelo de nuevo mañana.',
   },
 });
 
@@ -199,7 +199,7 @@ export const reenvioCoarrendatarioLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Ya reenviaste varias veces esta invitación hoy. Inténtalo de nuevo mañana.',
+    message: 'Ya reenvió varias veces esta invitación hoy. Inténtelo de nuevo mañana.',
   },
 });
 
@@ -214,7 +214,7 @@ export const otpVerifyByTokenLimiter = rateLimit({
   message: {
     success: false,
     errorCode: 'RATE_LIMIT_EXCEEDED',
-    message: 'Demasiados intentos de verificación para este enlace. Solicita un código nuevo.',
+    message: 'Demasiados intentos de verificación para este enlace. Solicite un código nuevo.',
   },
 });
 

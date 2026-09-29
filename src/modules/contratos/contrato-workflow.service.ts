@@ -51,7 +51,7 @@ export async function executeContratoTransition(
   const currentState = contrato.estado;
   const targetState = input.nuevo_estado;
   if (input.estado_esperado && input.estado_esperado !== currentState)
-    throw AppError.conflict('El contrato cambió de estado mientras tanto. Recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
+    throw AppError.conflict('El contrato cambió de estado mientras tanto. Recargue la página.', 'CONTRATO_ESTADO_CAMBIADO');
 
   // Contratos V3: el workflow legacy (revisión, aprobación, envío a firma) no
   // aplica —el asistente envía, reenvía y activa—. Aquí solo se cancela antes
@@ -152,7 +152,7 @@ export async function executeContratoTransition(
       throw new AppError(
         409,
         'CONTRATO_ESTADO_CAMBIADO',
-        'El contrato ya fue actualizado por otro usuario o proceso. Refresca para ver el estado actual.',
+        'El contrato ya fue actualizado por otro usuario o proceso. Refresque para ver el estado actual.',
         { estado_actual: actual?.estado ?? null },
       );
     }
@@ -411,20 +411,20 @@ async function checkTransitionPermissions(
   if (user.rol === 'inmobiliaria' || user.rol === 'propietario') {
     if (!OWNER_TERMINATE_STATES.includes(targetState)) {
       throw AppError.forbidden(
-        'Solo puedes terminar o cancelar el contrato; el resto del flujo lo gestiona Cofianza.',
+        'Solo puede terminar o cancelar el contrato; el resto del flujo lo gestiona Cofianza.',
         'FORBIDDEN',
       );
     }
     if (!(await ownerAdministraContrato(user, contrato))) {
       throw AppError.forbidden(
-        'No puedes modificar un contrato de un inmueble que no administras',
+        'No puede modificar un contrato de un inmueble que no administra',
         'FORBIDDEN',
       );
     }
     return;
   }
 
-  throw AppError.forbidden('No tienes permisos para transicionar contratos', 'FORBIDDEN');
+  throw AppError.forbidden('No tiene permisos para transicionar contratos', 'FORBIDDEN');
 }
 
 /**

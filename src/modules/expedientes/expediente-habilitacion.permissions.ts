@@ -104,7 +104,7 @@ export async function assertHabilitacionPermission(params: {
         'Habilitación denegada',
       );
       throw AppError.forbidden(
-        'No tienes permisos para habilitar este estudio',
+        'No tiene permisos para habilitar este estudio',
         'EXPEDIENTE_FORBIDDEN',
       );
     }

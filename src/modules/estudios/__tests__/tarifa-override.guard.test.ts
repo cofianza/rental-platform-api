@@ -104,7 +104,7 @@ describe('tarifa especial (P35)', () => {
 
     await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador', 'gg@cofianza.co')).rejects.toMatchObject({
       errorCode: 'TARIFA_CONTRATO_EN_FIRMA',
-      message: expect.stringContaining('cancela el envío a firma'),
+      message: expect.stringContaining('cancele el envío a firma'),
     });
   });
 

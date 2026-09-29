@@ -193,8 +193,8 @@ export function mensajeTopeExcedido(canonCop: number, topeCop: number, escalado 
     'No se genero ningun cobro ni se descuento ningun credito. ' +
     // Adenda 1 contratos §2.4: solo si el aviso a la Gerencia quedó registrado.
     (escalado
-      ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes continuar con un inmueble dentro del tope.'
-      : 'Puedes continuar con un inmueble dentro del tope, o escribirnos para revisar el caso.')
+      ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puede continuar con un inmueble dentro del tope.'
+      : 'Puede continuar con un inmueble dentro del tope, o escribirnos para revisar el caso.')
   );
 }
 
@@ -309,7 +309,7 @@ function errorCanonNoLegible(
     503,
     CANON_NO_VERIFICABLE_ERROR_CODE,
     'No pudimos verificar el canon del inmueble en este momento, asi que no continuamos. ' +
-      'No se genero ningun cobro ni se descuento ningun credito. Intenta de nuevo en un momento.',
+      'No se genero ningun cobro ni se descuento ningun credito. Inténtelo de nuevo en un momento.',
   );
 }
 

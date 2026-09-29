@@ -151,7 +151,7 @@ export function evaluarExpiracion(ctx: ContextoExpiracion): VeredictoExpiracion 
       detenida: true,
       diasRestantes: null,
       expiraEn: null,
-      motivo: 'El enlace de autorizacion se detuvo y el prospecto ya no puede firmarlo. Corrige los datos del solicitante si hace falta y reenvia la solicitud.',
+      motivo: 'El enlace de autorizacion se detuvo y el prospecto ya no puede firmarlo. Corrija los datos del solicitante si hace falta y reenvíe la solicitud.',
     };
   }
 
@@ -161,7 +161,7 @@ export function evaluarExpiracion(ctx: ContextoExpiracion): VeredictoExpiracion 
     expiraEn: new Date(venceMs).toISOString(),
     motivo:
       restantesMs <= 0
-        ? `El prospecto no autorizo dentro de los ${plazoDias} dias. Puedes reenviarle la solicitud sin costo adicional.`
+        ? `El prospecto no autorizo dentro de los ${plazoDias} dias. Puede reenviarle la solicitud sin costo adicional.`
         : `Esperando la autorizacion del prospecto. Vence en ${Math.ceil(restantesMs / MS_POR_DIA)} dia(s).`,
   };
 }

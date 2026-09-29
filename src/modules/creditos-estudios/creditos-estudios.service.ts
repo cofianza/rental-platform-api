@@ -262,8 +262,8 @@ export async function creditosEnContra(perfilCanonico: string): Promise<number> 
 export function errorCreditosEnContra(enContra: number): AppError {
   const uno = enContra === 1;
   return AppError.conflict(
-    `Tu organización tiene ${enContra} ${uno ? 'crédito' : 'créditos'} en contra por el contracargo de una compra y no le queda saldo para pagar con créditos: ` +
-      `se ${uno ? 'descuenta' : 'descuentan'} de tu próxima compra. Mientras tanto paga la evaluación de inmediato o envía el enlace al prospecto.`,
+    `Su organización tiene ${enContra} ${uno ? 'crédito' : 'créditos'} en contra por el contracargo de una compra y no le queda saldo para pagar con créditos: ` +
+      `se ${uno ? 'descuenta' : 'descuentan'} de su próxima compra. Mientras tanto pague la evaluación de inmediato o envíe el enlace al prospecto.`,
     'CREDITOS_EN_CONTRA',
   );
 }
@@ -1164,7 +1164,7 @@ export async function liberarEstudioConCredito(
     }
 
     if (rpcErr?.message?.includes('SIN_SALDO_CREDITOS')) {
-      throw AppError.badRequest('No tienes créditos disponibles. Compra un paquete primero.', 'SIN_SALDO_CREDITOS');
+      throw AppError.badRequest('No tiene créditos disponibles. Compre un paquete primero.', 'SIN_SALDO_CREDITOS');
     }
 
     logger.error({ rpcErr }, 'Error consumiendo credito');
@@ -1343,7 +1343,7 @@ export async function avisarCreditoUsadoPorCofianza(
 
     const inm = exp.inmueble!;
     const lugar = inm.direccion ? ` (${inm.direccion}${inm.ciudad ? `, ${inm.ciudad}` : ''})` : '';
-    const quedan = saldoRestante === 1 ? 'Te queda 1 crédito' : `Te quedan ${saldoRestante} créditos`;
+    const quedan = saldoRestante === 1 ? 'Le queda 1 crédito' : `Le quedan ${saldoRestante} créditos`;
     // Import dinámico, como el orchestrator: notificaciones arrastra config y correos.
     const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
     await Promise.all(
@@ -1351,8 +1351,8 @@ export async function avisarCreditoUsadoPorCofianza(
         notificarYCorreo({
           userId,
           tipo: 'credito.usado_por_cofianza',
-          titulo: 'Cofianza reservó 1 crédito de tu paquete',
-          mensaje: `Cofianza pagó la evaluación crediticia del estudio ${formatNumeroEstudio(exp.numero)}${lugar} con 1 crédito de tu paquete. Se gasta solo si la consulta a centrales da resultado; si no, vuelve a tu saldo. ${quedan}.`,
+          titulo: 'Cofianza reservó 1 crédito de su paquete',
+          mensaje: `Cofianza pagó la evaluación crediticia del estudio ${formatNumeroEstudio(exp.numero)}${lugar} con 1 crédito de su paquete. Se gasta solo si la consulta a centrales da resultado; si no, vuelve a su saldo. ${quedan}.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, saldo_restante: saldoRestante },
         }),

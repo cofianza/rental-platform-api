@@ -283,7 +283,7 @@ export function decidir(
  * la sonda confirme cómo ubica Auco las firmas por coordenadas. Mismo texto en la web.
  */
 export const RUTA_B_FIRMA_NO_HABILITADA =
-  'La firma de la Ruta B se habilita después de la prueba con Auco. Por ahora usa la Ruta A.';
+  'La firma de la Ruta B se habilita después de la prueba con Auco. Por ahora use la Ruta A.';
 
 export function exigirFirmaRutaB(ruta: 'A' | 'B' | undefined, habilitada: boolean): void {
   if (ruta === 'B' && !habilitada) throw AppError.conflict(RUTA_B_FIRMA_NO_HABILITADA, 'RUTA_B_FIRMA_NO_HABILITADA');

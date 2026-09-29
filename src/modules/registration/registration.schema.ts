@@ -51,10 +51,10 @@ export const registerPropietarioSchema = z.object({
   password: passwordSchema,
   confirm_password: z.string().min(1, 'Confirmacion de contraseña requerida'),
   accept_terms: z.literal(true, {
-    error: 'Debes aceptar los terminos y condiciones',
+    error: 'Debe aceptar los terminos y condiciones',
   }),
   accept_data_treatment: z.literal(true, {
-    error: 'Debes autorizar el tratamiento de datos personales',
+    error: 'Debe autorizar el tratamiento de datos personales',
   }),
 }).refine((data) => data.password === data.confirm_password, {
   error: 'Las contraseñas no coinciden',
@@ -82,10 +82,10 @@ export const registerInmobiliariaSchema = z.object({
   password: passwordSchema,
   confirm_password: z.string().min(1, 'Confirmacion de contraseña requerida'),
   accept_terms: z.literal(true, {
-    error: 'Debes aceptar los terminos y condiciones',
+    error: 'Debe aceptar los terminos y condiciones',
   }),
   accept_data_treatment: z.literal(true, {
-    error: 'Debes autorizar el tratamiento de datos personales',
+    error: 'Debe autorizar el tratamiento de datos personales',
   }),
 }).refine((data) => data.password === data.confirm_password, {
   error: 'Las contraseñas no coinciden',

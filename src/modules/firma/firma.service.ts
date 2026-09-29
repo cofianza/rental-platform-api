@@ -47,7 +47,7 @@ async function buildDebugPdf(params: {
   page.drawText(`Fecha: ${new Date().toISOString()}`, {
     x: 50, y: 620, size: 11, font,
   });
-  page.drawText('Al firmar, declaras que aceptas los terminos del arrendamiento.', {
+  page.drawText('Al firmar, usted declara que acepta los terminos del arrendamiento.', {
     x: 50, y: 580, size: 11, font,
   });
   const bytes = await pdf.save();
@@ -457,7 +457,7 @@ export async function crearSolicitudFirma(
     // alterno — propagamos el error para que el propietario lo vea y decida.
     const detalle = aucoError instanceof Error ? aucoError.message : String(aucoError);
     throw AppError.badRequest(
-      `No fue posible enviar el contrato a firma por WhatsApp. Verifica el estado de la cuenta de Auco y reintenta. Detalle: ${detalle}`,
+      `No fue posible enviar el contrato a firma por WhatsApp. Verifique el estado de la cuenta de Auco y reintente. Detalle: ${detalle}`,
       'AUCO_UPLOAD_FAILED',
     );
   }
@@ -527,7 +527,7 @@ export async function crearSolicitudFirma(
       userId: firmanteUserId,
       tipo: 'contrato.pendiente_firma',
       titulo: 'Contrato listo para firmar',
-      mensaje: `El contrato de ${direccionInmueble || 'tu inmueble'} está listo. Te enviamos el link de firma por WhatsApp.`,
+      mensaje: `El contrato de ${direccionInmueble || 'su inmueble'} está listo. Le enviamos el enlace de firma por WhatsApp.`,
       link: `/expedientes/${c.expediente_id}`,
       payload: { contrato_id: input.contrato_id, expediente_id: c.expediente_id, solicitud_id: row.id },
     });
@@ -589,7 +589,7 @@ export async function reenviarSolicitudFirma(
   // contratos-firma-2: un recordatorio no revive un proceso vencido en Auco.
   if (row.estado === 'expirado' || Date.parse(row.token_expiracion) <= Date.now()) {
     throw AppError.conflict(
-      'Venció el plazo para firmar este contrato. Reenvíalo a firma para abrir un plazo nuevo.',
+      'Venció el plazo para firmar este contrato. Reenvíelo a firma para abrir un plazo nuevo.',
       'FIRMA_VENCIDA',
     );
   }
@@ -625,13 +625,13 @@ export async function reenviarSolicitudFirma(
     // multi-parte con un re-upload de un solo firmante.
     if (fmError) {
       logger.error({ error: fmError.message, contratoId: row.contrato_id }, 'No se pudo verificar si el contrato es multi-parte');
-      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el tipo de firma del contrato. Intenta de nuevo.');
+      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el tipo de firma del contrato. Intente de nuevo.');
     }
     if ((firmantesMultiparte ?? 0) > 0) {
       // Lo lee sobre todo el arrendatario (su tarjeta): sin jerga interna.
       throw AppError.badRequest(
-        'No se puede cambiar el correo de firma desde aquí. Pide a la inmobiliaria o al propietario ' +
-          'que actualice tus datos y vuelva a enviar el contrato a firma.',
+        'No se puede cambiar el correo de firma desde aquí. Pida a la inmobiliaria o al propietario ' +
+          'que actualice sus datos y vuelva a enviar el contrato a firma.',
         'FIRMA_MULTIPARTE_NO_EMAIL_OVERRIDE',
       );
     }
@@ -730,7 +730,7 @@ export async function reenviarSolicitudFirma(
       }
       const detalle = aucoError instanceof Error ? aucoError.message : String(aucoError);
       throw AppError.badRequest(
-        `No fue posible reenviar el contrato a firma por WhatsApp con el nuevo correo. Verifica el estado de la cuenta de Auco y reintenta. Detalle: ${detalle}`,
+        `No fue posible reenviar el contrato a firma por WhatsApp con el nuevo correo. Verifique el estado de la cuenta de Auco y reintente. Detalle: ${detalle}`,
         'AUCO_UPLOAD_FAILED',
       );
     }
@@ -741,7 +741,7 @@ export async function reenviarSolicitudFirma(
       await aucoClient.sendReminder(row.auco_document_code);
     } catch (aucoError) {
       logger.error({ error: aucoError, solicitudId }, 'Error al enviar recordatorio via Auco');
-      throw new AppError(502, 'AUCO_RECORDATORIO_FALLIDO', 'No se pudo enviar el recordatorio. Intenta de nuevo en unos minutos.');
+      throw new AppError(502, 'AUCO_RECORDATORIO_FALLIDO', 'No se pudo enviar el recordatorio. Intente de nuevo en unos minutos.');
     }
   }
 
@@ -777,7 +777,7 @@ export async function reenviarSolicitudFirma(
   if (updateError || !updated) {
     if (cambiaEmail && nuevoAucoDocumentCode) await anularDocumentoHuerfano(nuevoAucoDocumentCode, row.contrato_id);
     if (!updateError && cambiaEmail) {
-      throw AppError.conflict('Otro reenvío cambió esta solicitud mientras tanto. Actualiza la página.', 'FIRMA_YA_EN_CURSO');
+      throw AppError.conflict('Otro reenvío cambió esta solicitud mientras tanto. Actualice la página.', 'FIRMA_YA_EN_CURSO');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al reenviar la solicitud');
   }
@@ -862,7 +862,7 @@ export async function reenviarSolicitudFirmaSelf(
   const owner = (solicitante as { creado_por?: string | null } | null)?.creado_por;
   if (owner !== userId) {
     throw AppError.forbidden(
-      'No tienes permisos para reenviar esta solicitud de firma',
+      'No tiene permisos para reenviar esta solicitud de firma',
       'NOT_OWNER',
     );
   }
@@ -872,7 +872,7 @@ export async function reenviarSolicitudFirmaSelf(
   //      propietario, que si no se quedaban sin su botón de recordatorio.
   if (sol.envios_realizados >= sol.max_envios - 1) {
     throw AppError.badRequest(
-      'Ya pediste el reenvío varias veces. Si todavía no te llega, pide a la inmobiliaria o al propietario que te lo reenvíe.',
+      'Ya pidió el reenvío varias veces. Si todavía no le llega, pida a la inmobiliaria o al propietario que se lo reenvíe.',
       'MAX_ENVIOS_SELF',
     );
   }
@@ -1079,7 +1079,7 @@ export async function anularDocumentoHuerfano(code: string, contratoId: string):
 // ============================================================
 
 const auco503 = () =>
-  new AppError(503, 'AUCO_NO_VERIFICABLE', 'No pudimos confirmar en Auco qué pasó con el envío anterior. Intenta de nuevo en unos minutos.');
+  new AppError(503, 'AUCO_NO_VERIFICABLE', 'No pudimos confirmar en Auco qué pasó con el envío anterior. Intente de nuevo en unos minutos.');
 
 /**
  * Cómo se lee una firma completa según quién pregunta. `mensaje`: el del 409.
@@ -1097,7 +1097,7 @@ async function yaFirmado(contratoId: string, expedienteId: string, mensaje?: str
   await maybeAutoTransicionarFirmado(contratoId);
   await maybeAutoActivarVigente(contratoId, expedienteId);
   throw AppError.conflict(
-    mensaje ?? 'Este contrato ya estaba firmado: todas las partes firmaron el envío anterior. Actualiza la página.',
+    mensaje ?? 'Este contrato ya estaba firmado: todas las partes firmaron el envío anterior. Actualice la página.',
     'CONTRATO_YA_FIRMADO',
   );
 }
@@ -1169,7 +1169,7 @@ async function sobresSinCerrar(contratoId: string, expedienteId: string, mensaje
     .eq('contrato_id', contratoId)
     .not('estado', 'in', '("cancelado","expirado")');
   if (error) {
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma anterior. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma anterior. Intente de nuevo en un momento.');
   }
   const sobres = (data as Array<{ id: string; estado: string; auco_document_code: string | null }> | null) ?? [];
   if (sobres.some((s) => s.estado === 'firmado')) await yaFirmado(contratoId, expedienteId, mensaje);
@@ -1190,7 +1190,7 @@ export async function exigirSinFirmaCompleta(contratoId: string, expedienteId: s
 }
 
 /** El 409 de las cancelaciones manuales (contrato o envío) cuando todas las partes ya firmaron. */
-export const YA_FIRMADO_NO_SE_CANCELA = 'Todas las partes ya firmaron este contrato: quedó firmado y no se puede cancelar. Actualiza la página.';
+export const YA_FIRMADO_NO_SE_CANCELA = 'Todas las partes ya firmaron este contrato: quedó firmado y no se puede cancelar. Actualice la página.';
 
 /**
  * Antes de abrir un sobre nuevo (reenvío a firma): cada envío anterior sin
@@ -1208,7 +1208,7 @@ export async function anularSobresAnteriores(contratoId: string, expedienteId: s
       .eq('id', s.id);
     if (updError) {
       logger.error({ contratoId, solicitudId: s.id, error: updError.message }, 'Reenvío a firma: no se pudo cerrar el envío anterior');
-      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo cerrar el envío a firma anterior. Intenta de nuevo.');
+      throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo cerrar el envío a firma anterior. Intente de nuevo.');
     }
   }
 }

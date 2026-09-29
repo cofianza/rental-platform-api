@@ -259,7 +259,7 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
 
   if (propError || !propietario) {
     throw AppError.badRequest(
-      'Propietario no encontrado. Verifica el propietario seleccionado.',
+      'Propietario no encontrado. Verifique el propietario seleccionado.',
       'PROPIETARIO_NOT_FOUND',
     );
   }
@@ -299,13 +299,13 @@ export async function createInmueble(input: CreateInmuebleInput, createdBy: stri
   if (error) {
     logger.error({ error: error.message }, 'Error al crear inmueble');
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifique los datos enviados.', 'FK_VIOLATION');
     }
     // 23505 = unique_violation. El unico unique es (propietario_id, codigo),
     // asi que sabemos que el codigo ya esta en uso para ese propietario.
     if (error.code === '23505') {
       throw AppError.conflict(
-        `Ya tienes un inmueble con el codigo "${input.codigo}". Usa un codigo diferente.`,
+        `Ya tiene un inmueble con el codigo "${input.codigo}". Use un codigo diferente.`,
         'CODIGO_DUPLICADO',
       );
     }
@@ -348,7 +348,7 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
   if (updatedByRol === 'inmobiliaria' || updatedByRol === 'propietario') {
     const prevPropietarioId = (previous as unknown as { propietario_id?: string | null }).propietario_id;
     if (input.propietario_id && input.propietario_id !== prevPropietarioId) {
-      throw AppError.forbidden('No puedes cambiar el propietario del inmueble', 'PROPIETARIO_CHANGE_FORBIDDEN');
+      throw AppError.forbidden('No puede cambiar el propietario del inmueble', 'PROPIETARIO_CHANGE_FORBIDDEN');
     }
   }
 
@@ -362,7 +362,7 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
 
     if (propError || !propietario) {
       throw AppError.badRequest(
-        'Propietario no encontrado. Verifica el propietario seleccionado.',
+        'Propietario no encontrado. Verifique el propietario seleccionado.',
         'PROPIETARIO_NOT_FOUND',
       );
     }
@@ -402,14 +402,14 @@ export async function updateInmueble(id: string, input: UpdateInmuebleInput, upd
     if (reservadoPorExpedienteId) {
       throw AppError.conflict(
         'El inmueble está reservado para un candidato aprobado y su contrato está en proceso. ' +
-          'Para liberarlo, termina o cancela ese contrato.',
+          'Para liberarlo, termine o cancele ese contrato.',
         'INMUEBLE_RESERVADO',
       );
     }
     const contratoVigente = await getContratoVigenteDeInmueble(id);
     if (contratoVigente) {
       throw AppError.conflict(
-        'El inmueble tiene un contrato vigente. Para liberarlo, termina o cancela el contrato.',
+        'El inmueble tiene un contrato vigente. Para liberarlo, termine o cancele el contrato.',
         'INMUEBLE_CON_CONTRATO_VIGENTE',
       );
     }
@@ -790,7 +790,7 @@ export async function reservarInmuebleParaContrato(
     throw new AppError(
       503,
       'RESERVA_NO_VERIFICABLE',
-      'No pudimos confirmar la reserva de la propiedad en este momento, asi que no generamos el contrato. Intenta de nuevo en un momento.',
+      'No pudimos confirmar la reserva de la propiedad en este momento, asi que no generamos el contrato. Intente de nuevo en un momento.',
     );
   }
 
@@ -1056,12 +1056,12 @@ export async function asignarMiembroResponsable(
   if (miembroId) {
     const memberIds = await resolveOrgMemberPerfilIds(inm.inmobiliaria_id);
     if (!memberIds.includes(miembroId)) {
-      throw AppError.badRequest('La persona seleccionada no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+      throw AppError.badRequest('La persona seleccionada no es miembro activo de su inmobiliaria', 'MIEMBRO_INVALIDO');
     }
     // Un miembro «Sólo lectura» no puede gestionar lo que se le asigna.
     if (await esMiembroSoloLectura(miembroId)) {
       throw AppError.badRequest(
-        'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Cámbiale el rol en Equipo o elige a otra.',
+        'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Cámbiele el rol en Equipo o elija a otra.',
         'MIEMBRO_SOLO_LECTURA',
       );
     }
@@ -1082,7 +1082,7 @@ export async function asignarMiembroResponsable(
       userId: miembroId,
       tipo: 'inmueble_asignado',
       titulo: 'Inmueble asignado',
-      mensaje: `Eres responsable del inmueble ${inm.codigo ?? ''} — ${inm.direccion}, ${inm.ciudad}.`.replace('  ', ' '),
+      mensaje: `Usted es responsable del inmueble ${inm.codigo ?? ''} — ${inm.direccion}, ${inm.ciudad}.`.replace('  ', ' '),
       link: `/inmuebles/${inmuebleId}`,
     });
   }

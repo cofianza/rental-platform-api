@@ -81,7 +81,7 @@ export async function registerPropietario(
 
   logger.info({ userId, email, rol: 'propietario' }, 'Propietario registrado exitosamente');
 
-  return { message: 'Registro exitoso. Revisa tu correo para verificar tu cuenta.' };
+  return { message: 'Registro exitoso. Revise su correo para verificar su cuenta.' };
 }
 
 export async function registerInmobiliaria(
@@ -108,7 +108,7 @@ export async function registerInmobiliaria(
     .maybeSingle();
   if (nitExistente) {
     throw AppError.conflict(
-      'Ya hay una inmobiliaria registrada con este NIT. Pídele al titular de la cuenta que te invite a su equipo.',
+      'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.',
       'NIT_ALREADY_EXISTS',
     );
   }
@@ -164,7 +164,7 @@ export async function registerInmobiliaria(
     if ((updateError as { code?: string }).code === '23505') {
       await supabaseAuth.auth.admin.deleteUser(userId).catch(() => undefined);
       throw AppError.conflict(
-        'Ya hay una inmobiliaria registrada con este NIT. Pídele al titular de la cuenta que te invite a su equipo.',
+        'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.',
         'NIT_ALREADY_EXISTS',
       );
     }
@@ -176,7 +176,7 @@ export async function registerInmobiliaria(
     await supabaseAuth.auth.admin.deleteUser(userId).catch((e) =>
       logger.error({ err: e, userId }, 'No se pudo limpiar el usuario tras fallar el perfil'),
     );
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar el registro. Inténtalo de nuevo.');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar el registro. Inténtelo de nuevo.');
   }
 
   // Multi-tenant: crear la organización con esta inmobiliaria como owner, para
@@ -193,7 +193,7 @@ export async function registerInmobiliaria(
 
   logger.info({ userId, email, rol: 'inmobiliaria' }, 'Inmobiliaria registrada exitosamente');
 
-  return { message: 'Registro exitoso. Revisa tu correo para verificar tu cuenta.' };
+  return { message: 'Registro exitoso. Revise su correo para verificar su cuenta.' };
 }
 
 export async function verifyEmail(token: string): Promise<{ message: string }> {
@@ -220,7 +220,7 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
       .maybeSingle();
     const perfilVerificado = perfilRow as { email_verified_at: string | null } | null;
     if (perfilVerificado?.email_verified_at) {
-      return { message: 'Tu correo ya estaba verificado. Ya puedes iniciar sesion.' };
+      return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesion.' };
     }
     throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
   }
@@ -255,11 +255,11 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
 
   logger.info({ userId: tokenData.user_id }, 'Email verificado y cuenta activada');
 
-  return { message: 'Email verificado. Tu cuenta esta activa, ya puedes iniciar sesion.' };
+  return { message: 'Email verificado. Su cuenta esta activa, ya puede iniciar sesion.' };
 }
 
 export async function resendVerification({ email }: ResendVerificationInput): Promise<{ message: string }> {
-  const genericMessage = 'Si el email existe en nuestro sistema, recibiras un nuevo enlace de verificacion.';
+  const genericMessage = 'Si el email existe en nuestro sistema, recibirá un nuevo enlace de verificacion.';
 
   const { data: userResult, error: rpcError } = await supabase
     .rpc('find_user_by_email' as never, { user_email: email } as never)

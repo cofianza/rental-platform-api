@@ -285,12 +285,12 @@ export function problemaNit(nit: string | null | undefined): string | null {
   const escrito = (nit ?? '').trim();
   const m = /^(\d{1,15})(?:-(\d))?$/.exec(escrito.replace(/[.\s]/g, ''));
   if (!escrito) return 'NIT con dígito de verificación (ej. 900.123.456-8)';
-  if (!m) return `NIT «${escrito}»: escríbelo con números y el dígito de verificación (ej. 900.123.456-8)`;
+  if (!m) return `NIT «${escrito}»: escríbalo con números y el dígito de verificación (ej. 900.123.456-8)`;
   const dv = digitoVerificacionNit(m[1]);
   // Puede estar mal el número y no el dígito: se pide revisar ambos en el RUT, no copiar el dígito.
   return m[2] === undefined
-    ? `NIT ${escrito}: falta el dígito de verificación (con ese número sería ${dv}; confírmalo en el RUT)`
-    : `NIT ${escrito}: el dígito de verificación no corresponde al número (con ese número sería ${dv}); revisa ambos en el RUT`;
+    ? `NIT ${escrito}: falta el dígito de verificación (con ese número sería ${dv}; confírmelo en el RUT)`
+    : `NIT ${escrito}: el dígito de verificación no corresponde al número (con ese número sería ${dv}); revise ambos en el RUT`;
 }
 
 const mismoDocumento = (
@@ -326,19 +326,19 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora
     if (f.arrendadoPorOtro)
       b(
         'INMUEBLE_ARRENDADO',
-        'El inmueble ya está arrendado: el contrato de otro estudio está firmado. Para usar esta evaluación, reasígnala a otro inmueble desde el estudio.',
+        'El inmueble ya está arrendado: el contrato de otro estudio está firmado. Para usar esta evaluación, reasígnela a otro inmueble desde el estudio.',
         { accion: 'estudio', ...(est && { estudioId: est.id }) },
       );
     else
       b(
         'INMUEBLE_RESERVADO',
-        'El inmueble está reservado para el contrato de otro estudio. Si ese contrato se cancela, el inmueble vuelve a quedar disponible y podrás crear este.',
+        'El inmueble está reservado para el contrato de otro estudio. Si ese contrato se cancela, el inmueble vuelve a quedar disponible y podrá crear este.',
       );
   // Un 'ocupado' sin titular está arrendado por fuera del flujo.
   if (inm.estado === 'ocupado' && !inm.reservado_por_expediente_id)
     b(
       'INMUEBLE_OCUPADO',
-      'El inmueble figura como arrendado. Los inmuebles ya arrendados se incorporan por migración de cartera, que todavía no está disponible: escríbenos para revisar el caso.',
+      'El inmueble figura como arrendado. Los inmuebles ya arrendados se incorporan por migración de cartera, que todavía no está disponible: escríbanos para revisar el caso.',
     );
   // Reactivarlo es del administrador de Cofianza (detalle del inmueble): la web dice a quién pedírselo.
   if (inm.estado === 'inactivo')
@@ -348,7 +348,7 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora
   if (f.legacyVivos > 0)
     b(
       'CONTRATO_YA_EXISTE',
-      'Este estudio ya tiene un contrato creado con el flujo anterior. Cancélalo en la pestaña Contratos para usar el asistente.',
+      'Este estudio ya tiene un contrato creado con el flujo anterior. Cancélelo en la pestaña Contratos para usar el asistente.',
     );
   if (!est || !FAVORABLES.includes(est.resultado ?? ''))
     b(
@@ -388,7 +388,7 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora
     if (!crc)
       b(
         'CRC_NO_EMITIDO',
-        'La evaluación no tiene Certificado de Riesgo (CRC) emitido. Emítelo para continuar.',
+        'La evaluación no tiene Certificado de Riesgo (CRC) emitido. Emítalo para continuar.',
         { accion: 'estudio', estudioId: est.id },
       );
   }
@@ -397,19 +397,19 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora
   if (crc && autorizadoEn && Date.parse(autorizadoEn) > Date.parse(crc.fecha_emision))
     b(
       'CRC_DESACTUALIZADO',
-      'La tarifa negociada se autorizó después de emitir el CRC y el certificado no la refleja. Regenera el CRC para continuar.',
+      'La tarifa negociada se autorizó después de emitir el CRC y el certificado no la refleja. Regenere el CRC para continuar.',
       { accion: 'estudio', ...(est && { estudioId: est.id }) },
     );
   if (t) {
     if (t.cashback_pct !== CASHBACK_DEL_CONTRATO)
       b(
         'TARIFA_NO_SOPORTADA',
-        `La tarifa negociada tiene cashback de ${pctTexto(t.cashback_pct)} % y el contrato de vivienda lo fija en ${CASHBACK_DEL_CONTRATO} %. Escríbenos para revisarla.`,
+        `La tarifa negociada tiene cashback de ${pctTexto(t.cashback_pct)} % y el contrato de vivienda lo fija en ${CASHBACK_DEL_CONTRATO} %. Escríbanos para revisarla.`,
       );
     if (![t.prima_vinculacion_pct, t.tarifa_mensual_pct, t.cashback_pct].every(dosDecimales))
       b(
         'TARIFA_NO_SOPORTADA',
-        'La tarifa tiene porcentajes con más de dos decimales; el contrato no los puede imprimir. Escríbenos para revisarla.',
+        'La tarifa tiene porcentajes con más de dos decimales; el contrato no los puede imprimir. Escríbanos para revisarla.',
       );
   }
 
@@ -424,12 +424,12 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora
     if (coa.estado !== 'estudio_completado' || coa.estudio?.estado !== 'completado')
       b(
         'COARRENDATARIO_SIN_EVALUAR',
-        'El coarrendatario vinculado todavía no tiene su evaluación completada. Espera el resultado para crear el contrato.',
+        'El coarrendatario vinculado todavía no tiene su evaluación completada. Espere el resultado para crear el contrato.',
       );
     else if (!FAVORABLES.includes(coa.estudio.resultado ?? ''))
       b(
         'COARRENDATARIO_RECHAZADO',
-        'La evaluación del coarrendatario no fue favorable, pero el CRC se calculó con coarrendatario. Escríbenos para revisar el caso.',
+        'La evaluación del coarrendatario no fue favorable, pero el CRC se calculó con coarrendatario. Escríbanos para revisar el caso.',
       );
     if (mismoDocumento(coa, sol) || noAdmitido(coa.tipo_documento))
       b(
@@ -456,7 +456,7 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora
     b(
       'PERFIL_ARRENDADOR_INCOMPLETO',
       // La lista va en `detalle` (la web la pinta en viñetas): repetirla aquí la duplicaba en pantalla.
-      'Completa o corrige los datos del arrendador en Configuración › Datos para contrato.',
+      'Complete o corrija los datos del arrendador en Configuración › Datos para contrato.',
       { accion: 'datos_contrato', detalle: faltan },
     );
 
@@ -500,11 +500,11 @@ export function maximoSinNuevaEvaluacionCop(f: Fuentes, cal: Calibracion): numbe
  * (Fuentes.topeEscalado). Solo dice «se envió» si el aviso a la Gerencia quedó registrado.
  */
 const TOPE_PENDIENTE =
-  ' Pacta un canon dentro del tope; si necesitas este canon, genera la vista previa y el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.';
+  ' Pacte un canon dentro del tope; si necesita este canon, genere la vista previa y el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.';
 const TOPE_SEGUN_ESCALAMIENTO = {
   enviado:
-    ' El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.',
-  fallido: ' Escríbele a Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.',
+    ' El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puede pactar un canon dentro del tope.',
+  fallido: ' Escríbale a Cofianza para evaluar un coafianzamiento; mientras tanto, puede pactar un canon dentro del tope.',
 };
 
 /** B2 sobre el canon del contrato. null si no hay canon evaluado (CANON_SIN_EVALUADO ya bloquea). */
@@ -569,9 +569,9 @@ export const avisoCanon = (bloqueo: Bloqueo) =>
   bloqueo.codigo === 'CANON_EXCEDE_TOPE'
     ? bloqueo.mensaje.replace(
         TOPE_PENDIENTE,
-        ' Puedes pactar un canon menor en el paso 1; si necesitas este canon, al generar la vista previa el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
+        ' Puede pactar un canon menor en el paso 1; si necesita este canon, al generar la vista previa el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
       )
-    : `${bloqueo.mensaje.replace(/ Se requiere nueva evaluación\.$/, '')} Puedes pactar un canon menor en el paso 1; si no, se requerirá nueva evaluación.`;
+    : `${bloqueo.mensaje.replace(/ Se requiere nueva evaluación\.$/, '')} Puede pactar un canon menor en el paso 1; si no, se requerirá nueva evaluación.`;
 
 // ── §5.4 Prefill, faltantes, imprimibles, avisos ──
 
@@ -732,12 +732,12 @@ export function faltantes(a: Asistente, f: Fuentes, hoy: string): { paso: Numero
   if (paso2 && paso3 && paso2.propiedadHorizontal !== (paso3.administracion !== null))
     out.push({
       paso: 3,
-      mensaje: 'Con propiedad horizontal completa la cuota de administración; sin ella, quítala.',
+      mensaje: 'Con propiedad horizontal complete la cuota de administración; sin ella, quítela.',
     });
   if (paso5 && (f.coarrendatario !== null) !== (paso5.contactos.coarrendatario !== null))
-    out.push({ paso: 5, mensaje: 'Revisa los datos de notificación del coarrendatario.' });
+    out.push({ paso: 5, mensaje: 'Revise los datos de notificación del coarrendatario.' });
   if (paso3 && (paso3.fechaInicio < hoy || paso3.fechaEntrega < hoy))
-    out.push({ paso: 3, mensaje: 'La fecha de iniciación o de entrega ya pasó; actualízala.' });
+    out.push({ paso: 3, mensaje: 'La fecha de iniciación o de entrega ya pasó; actualícela.' });
   return out;
 }
 
@@ -761,7 +761,7 @@ export function noImprimibles(d: DatosVivienda): string[] {
 
 export const bloqueoNoImprimible = (rutas: string[]): Bloqueo => ({
   codigo: 'DATO_NO_IMPRIMIBLE',
-  mensaje: `Estos datos no se pueden imprimir en el contrato: ${rutas.join(', ')}. Corrígelos donde se registran.`,
+  mensaje: `Estos datos no se pueden imprimir en el contrato: ${rutas.join(', ')}. Corríjalos donde se registran.`,
   detalle: rutas,
 });
 
@@ -924,18 +924,18 @@ export function bloqueosAdicionales(
     const fila = catalogo.find((x) => x.id === c.clausulaId);
     // Eliminada = ausente: guardar el paso 4 ya la rechaza (prepararPaso4 exige 'activa').
     if (!fila || fila.estado === 'eliminada')
-      b('CLAUSULA_INHABILITADA', `La cláusula «${c.titulo}» ya no está disponible. Quítala del contrato para continuar.`);
+      b('CLAUSULA_INHABILITADA', `La cláusula «${c.titulo}» ya no está disponible. Quítela del contrato para continuar.`);
     else if (fila.estado === 'inhabilitada')
       b(
         'CLAUSULA_INHABILITADA',
-        `Cofianza inhabilitó la cláusula «${c.titulo}»: ${fila.inhabilitada_motivo ?? 'sin motivo registrado'}. Quítala del contrato para continuar.`,
+        `Cofianza inhabilitó la cláusula «${c.titulo}»: ${fila.inhabilitada_motivo ?? 'sin motivo registrado'}. Quítela del contrato para continuar.`,
       );
     else if (fila.version > c.version)
-      avisos.push(`Hay una versión más reciente de «${c.titulo}». Si vuelves a guardar el paso 4, el contrato usará la nueva.`);
+      avisos.push(`Hay una versión más reciente de «${c.titulo}». Si vuelve a guardar el paso 4, el contrato usará la nueva.`);
     // Resp. 13: un modelo sin cambios es texto de Cofianza y queda fuera de la aceptación. Con la
     // misma versión se vuelve a comparar con el modelo: si ya no coincide, la aceptación no lo cubre.
     else if (c.origen === 'biblioteca' && categoriaClausula(c, fila) !== 'biblioteca')
-      b('CLAUSULA_MODELO_ALTERADO', `«${c.titulo}» ya no coincide con el modelo sugerido por Cofianza: vuelve a guardar el paso 4.`);
+      b('CLAUSULA_MODELO_ALTERADO', `«${c.titulo}» ya no coincide con el modelo sugerido por Cofianza: vuelva a guardar el paso 4.`);
 
     const h = validarClausula(c, { destinacion: 'vivienda', sinCoarrendatario: o.sinCoarrendatario }).hallazgos[0];
     if (h) b('CLAUSULA_NO_PERMITIDA', `«${c.titulo}»: ${h.mensaje}`, h.norma ? [h.norma] : undefined);
@@ -950,14 +950,14 @@ export function bloqueosAdicionales(
   )
     b(
       'ACEPTACION_PENDIENTE',
-      'Acepta el aviso de responsabilidad vigente para tus cláusulas propias y los datos que completaste en los modelos: vuelve a guardar el paso 4.',
+      'Acepte el aviso de responsabilidad vigente para sus cláusulas propias y los datos que completó en los modelos: vuelva a guardar el paso 4.',
     );
 
   const n = p4.clausulas.length;
   if (n > o.maximo && a.excesoAutorizado?.huella !== p4.huella)
     b(
       'ADICIONALES_EXCEDEN_LIMITE',
-      `Este contrato tiene ${n} cláusulas adicionales y el máximo es ${o.maximo}. Para incorporar más, Cofianza debe revisarlas: solicita la revisión o reduce el número.`,
+      `Este contrato tiene ${n} cláusulas adicionales y el máximo es ${o.maximo}. Para incorporar más, Cofianza debe revisarlas: solicite la revisión o reduzca el número.`,
     );
   return { bloqueos, avisos };
 }

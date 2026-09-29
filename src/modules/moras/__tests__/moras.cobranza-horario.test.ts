@@ -163,7 +163,7 @@ describe('reportarMora — horario de cobranza', () => {
 
     expect(mockEnviarTemplate).not.toHaveBeenCalled();
     expect(r).toMatchObject({ whatsapp_estado: 'fallido' });
-    expect(mensajes()[0].mensaje).toContain('avísale por otro medio');
+    expect(mensajes()[0].mensaje).toContain('avísele por otro medio');
   });
 
   it('con el envío automático apagado no promete la hora: queda en espera y lo dice', async () => {

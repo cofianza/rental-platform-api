@@ -64,7 +64,7 @@ export async function subirArchivo(
   // El propietario entra a esta ruta solo por el acta (A9); el resto de
   // archivos los siguen cargando Cofianza y la inmobiliaria.
   if (userRol === 'propietario' && tipoArchivo !== 'acta_entrega') {
-    throw AppError.forbidden('Como propietario solo puedes cargar el acta de entrega de tu contrato.', 'ARCHIVO_NO_PERMITIDO');
+    throw AppError.forbidden('Como propietario solo puede cargar el acta de entrega de su contrato.', 'ARCHIVO_NO_PERMITIDO');
   }
 
   // Adenda 1 contratos (respuesta 21) y A9: el acta la carga el arrendador (la
@@ -278,7 +278,7 @@ async function exigirOtraActa(contratoId: string): Promise<void> {
   if (error) throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo verificar el acta de entrega');
   if ((count ?? 0) <= 1)
     throw AppError.conflict(
-      'Es la única acta de entrega de este contrato y sin ella no se puede cerrar el estudio. Sube la nueva antes de borrar esta.',
+      'Es la única acta de entrega de este contrato y sin ella no se puede cerrar el estudio. Suba la nueva antes de borrar esta.',
       'ACTA_ENTREGA_UNICA',
     );
 }

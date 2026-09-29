@@ -15,10 +15,10 @@ export const expedienteIdParamsSchema = z.object({
  *  puntuados por el analista al aprobar una revisión manual. */
 export const evaluacionRevisionManualSchema = z.object({
   estabilidad_laboral: z.enum(Object.keys(OPCIONES_V7) as [OpcionV7, ...OpcionV7[]], {
-    error: 'Elige la estabilidad laboral del solicitante',
+    error: 'Elija la estabilidad laboral del solicitante',
   }),
   arrendamiento_previo: z.enum(Object.keys(OPCIONES_V9) as [OpcionV9, ...OpcionV9[]], {
-    error: 'Elige el historial de arrendamiento del solicitante',
+    error: 'Elija el historial de arrendamiento del solicitante',
   }),
 });
 
@@ -41,7 +41,7 @@ export const transitionBodySchema = z.preprocess(
   // (expediente-habilitacion.routes.ts) y es la misma decision de la Adenda 2
   // §5.1. Un solo caracter no es un fundamento escrito.
   // M6: MAX_INTERNO (3000) y no 1000: con motivos se arma con todas las líneas + el detalle.
-  comentario: z.string().trim().min(10, { error: 'Escribe el motivo (mínimo 10 caracteres).' }).max(MAX_INTERNO),
+  comentario: z.string().trim().min(10, { error: 'Escriba el motivo (mínimo 10 caracteres).' }).max(MAX_INTERNO),
   /** P34: al rechazar, el motivo corto para la inmobiliaria o el propietario
    *  (el comentario es el fundamento interno). Obligatorio para 'rechazado'. */
   motivo: z.string().trim().max(500).optional(),
@@ -61,7 +61,7 @@ export const transitionBodySchema = z.preprocess(
     ctx.addIssue({
       code: 'custom',
       path: ['motivo'],
-      message: 'Escribe el motivo para la inmobiliaria o el propietario (mínimo 10 caracteres).',
+      message: 'Escriba el motivo para la inmobiliaria o el propietario (mínimo 10 caracteres).',
     });
   }
   refinarMotivos(tipoDeTransicion(d.nuevo_estado), d, ctx);
@@ -82,7 +82,7 @@ export const aprobarCondicionadoBody = z.preprocess(
   fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)').optional(),
   // Adenda 2 §5.1: "toda decision manual debe registrar [...] el fundamento
   // escrito y los documentos que consulto".
-  fundamento: z.string().trim().min(10, 'Escribe el fundamento de la decisión (mínimo 10 caracteres).').max(MAX_INTERNO),
+  fundamento: z.string().trim().min(10, 'Escriba el fundamento de la decisión (mínimo 10 caracteres).').max(MAX_INTERNO),
   documentos_consultados: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
   // Adenda 2 §4.3: el puntaje se recalcula con V7 y V9 que puntúa el analista.
   evaluacion: evaluacionRevisionManualSchema,
@@ -93,7 +93,7 @@ export const aprobarCondicionadoBody = z.preprocess(
 
 /** Adenda 1 contratos (respuesta 21): el motivo del cierre sin acta queda registrado. */
 export const cerrarSinActaBodySchema = z.object({
-  motivo: z.string().trim().min(10, { error: 'Escribe el motivo (mínimo 10 caracteres).' }).max(1000),
+  motivo: z.string().trim().min(10, { error: 'Escriba el motivo (mínimo 10 caracteres).' }).max(1000),
 });
 
 export type TransitionInput = z.infer<typeof transitionBodySchema>;

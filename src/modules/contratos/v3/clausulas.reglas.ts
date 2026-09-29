@@ -69,7 +69,7 @@ export const CATALOGO: Record<CodigoHallazgo, Entrada> = {
     codigo: 'mascotas',
     etiqueta: 'Animales de compañía',
     mensaje:
-      'La cláusula prohíbe, condiciona (autorización previa, número máximo, raza o tamaño, cobro adicional) o sanciona con la terminación la tenencia de animales de compañía, y eso no se puede pactar. Sí puedes pactar tenencia responsable: que el arrendatario responda por daños, aseo, desinfección, plagas, multas y el reglamento de propiedad horizontal.',
+      'La cláusula prohíbe, condiciona (autorización previa, número máximo, raza o tamaño, cobro adicional) o sanciona con la terminación la tenencia de animales de compañía, y eso no se puede pactar. Sí puede pactar tenencia responsable: que el arrendatario responda por daños, aseo, desinfección, plagas, multas y el reglamento de propiedad horizontal.',
     norma:
       'Ley 1801 de 2016, art. 117, y jurisprudencia constitucional; Leyes 1774 de 2016 y 746 de 2002 (tenencia responsable); cláusula «Ocupantes y tenencia responsable de animales de compañía».',
   },
@@ -100,7 +100,7 @@ export const CATALOGO: Record<CodigoHallazgo, Entrada> = {
     codigo: 'terminacion',
     etiqueta: 'Terminación, prórroga y preavisos',
     mensaje:
-      'La cláusula cambia la vigencia, la prórroga, los preavisos, las causales o las indemnizaciones de terminación. Ese régimen lo fija la Ley 820 de 2003 y ya está en el contrato. Si buscas que el incumplimiento de una obligación nueva permita terminar el contrato, no hace falta pactarlo: el incumplimiento de cualquier obligación del contrato ya es causal.',
+      'La cláusula cambia la vigencia, la prórroga, los preavisos, las causales o las indemnizaciones de terminación. Ese régimen lo fija la Ley 820 de 2003 y ya está en el contrato. Si busca que el incumplimiento de una obligación nueva permita terminar el contrato, no hace falta pactarlo: el incumplimiento de cualquier obligación del contrato ya es causal.',
     norma:
       'Ley 820 de 2003, Capítulo VII; cláusulas «Vigencia del contrato» (parágrafo «Prórrogas»), «Causales de terminación» y «Preavisos y terminación unilateral».',
   },
@@ -115,7 +115,7 @@ export const CATALOGO: Record<CodigoHallazgo, Entrada> = {
     codigo: 'modifica_contrato',
     etiqueta: 'Modificación del contrato',
     mensaje:
-      'Las cláusulas adicionales solo agregan: no pueden modificar, reemplazar, dejar sin efecto ni prevalecer sobre las cláusulas del contrato. Si necesitas cambiar el texto del contrato, escribe a Cofianza: requiere autorización de su Gerencia General.',
+      'Las cláusulas adicionales solo agregan: no pueden modificar, reemplazar, dejar sin efecto ni prevalecer sobre las cláusulas del contrato. Si necesita cambiar el texto del contrato, escriba a Cofianza: requiere autorización de su Gerencia General.',
     norma:
       'Regla de uso de la plantilla de Cofianza (solo se agregan cláusulas); cláusula «Totalidad del acuerdo y cláusulas adicionales».',
   },
@@ -123,34 +123,34 @@ export const CATALOGO: Record<CodigoHallazgo, Entrada> = {
     codigo: 'no_imprimible',
     etiqueta: 'Texto que no se puede imprimir',
     mensaje:
-      'Quita XXX, líneas ___, llaves { }, corchetes [[ ]], «NO APLICA», «null», emojis o caracteres invisibles o de otro alfabeto: el contrato no puede imprimirlos.',
+      'Quite XXX, líneas ___, llaves { }, corchetes [[ ]], «NO APLICA», «null», emojis o caracteres invisibles o de otro alfabeto: el contrato no puede imprimirlos.',
     norma: null,
   },
   coarrendatario: {
     codigo: 'coarrendatario',
     etiqueta: 'Menciona al coarrendatario',
-    mensaje: 'Este contrato no tiene coarrendatario y la cláusula lo menciona. Edítala o no la uses en este contrato.',
+    mensaje: 'Este contrato no tiene coarrendatario y la cláusula lo menciona. Edítela o no la use en este contrato.',
     norma: null,
   },
   instrucciones: {
     codigo: 'instrucciones',
     etiqueta: 'Instrucciones al sistema',
     mensaje:
-      'El texto incluye instrucciones dirigidas al sistema de revisión y no a las partes del contrato. Quítalas.',
+      'El texto incluye instrucciones dirigidas al sistema de revisión y no a las partes del contrato. Quítelas.',
     norma: null,
   },
   revision_automatica: {
     codigo: 'revision_automatica',
     etiqueta: 'Sin validación automática',
     mensaje:
-      'La revisión automática no pudo procesar este texto. Reformúlalo con lenguaje contractual; si crees que es un error, escríbenos por Soporte.',
+      'La revisión automática no pudo procesar este texto. Reformúlelo con lenguaje contractual; si cree que es un error, escríbanos por Soporte.',
     norma: null,
   },
   cita_numero: {
     codigo: 'cita_numero',
     etiqueta: 'Cita por número',
     mensaje:
-      'Mencionas una cláusula por su número. La numeración cambia según los datos de cada contrato: nómbrala por su título.',
+      'Menciona una cláusula por su número. La numeración cambia según los datos de cada contrato: nómbrela por su título.',
     norma: null,
   },
 };

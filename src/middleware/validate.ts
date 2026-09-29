@@ -29,7 +29,7 @@ const MENSAJE_POR_DEFECTO_DE_ZOD = /^(Invalid|Too (small|big)|Expected|Required|
 export function mensajeDeValidacion(errors: ValidationError[]): string {
   const [primero] = errors;
   const base = MENSAJE_POR_DEFECTO_DE_ZOD.test(primero.message)
-    ? 'Revisa los datos: hay un campo con un valor no válido.'
+    ? 'Revise los datos: hay un campo con un valor no válido.'
     : primero.message;
   const resto = errors.length - 1;
   return resto > 0 ? `${base} (y ${resto} ${resto === 1 ? 'error' : 'errores'} más)` : base;

@@ -401,7 +401,7 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
     return (
       'No aprobable por ahora. Con la información disponible hoy, no pudimos completar las verificaciones ' +
       'de identidad y cumplimiento que la ley nos exige para respaldar un contrato. ' +
-      'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante o escribirnos para revisar tu caso.'
+      'No es una decisión definitiva sobre usted: puede volver a solicitarlo más adelante o escribirnos para revisar su caso.'
     );
   }
 
@@ -415,22 +415,22 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
   // Mora (§11 «Mora vigente detectada») sin entidad, fechas ni montos; score
   // sin nombrar el score ni el corte (§2).
   const causas = [
-    mora && 'las centrales de riesgo reportan obligaciones en mora recientes o vigentes a tu nombre',
-    score && 'tu historial en las centrales de riesgo no alcanza el mínimo que exige nuestra política para respaldar un contrato',
+    mora && 'las centrales de riesgo reportan obligaciones en mora recientes o vigentes a su nombre',
+    score && 'su historial en las centrales de riesgo no alcanza el mínimo que exige nuestra política para respaldar un contrato',
     canon && !dti && 'el canon de este inmueble representa una parte demasiado alta de los ingresos que pudimos verificar',
-    canon && dti && 'el canon de este inmueble y los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar',
-    dti && !canon && 'los compromisos financieros que ya tienes representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar',
+    canon && dti && 'el canon de este inmueble y los compromisos financieros que ya tiene representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar',
+    dti && !canon && 'los compromisos financieros que ya tiene representan una carga mensual demasiado alta frente a los ingresos que pudimos verificar',
   ].filter((c): c is string => !!c);
   const salidas = [
-    mora && 'ponerte al día en tus obligaciones',
-    dti && 'reducir tus compromisos financieros actuales',
+    mora && 'ponerse al día en sus obligaciones',
+    dti && 'reducir sus compromisos financieros actuales',
     canon && 'buscar un inmueble de canon menor',
     score ? 'volver a solicitarlo más adelante' : 'volver a solicitarlo',
   ].filter((c): c is string => !!c);
 
   return (
     `No aprobable por ahora. Con la información disponible hoy, ${enumerar(causas)}. ` +
-    `No es una decisión definitiva sobre ti: puedes ${enumerar(salidas)}, o escribirnos para revisar tu caso.`
+    `No es una decisión definitiva sobre usted: puede ${enumerar(salidas)}, o escribirnos para revisar su caso.`
   );
 }
 

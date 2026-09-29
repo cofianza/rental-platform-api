@@ -82,7 +82,7 @@ describe('assertCanonContratable', () => {
     resultado.data = { canon_evaluado: 2_800_000 };
     mockEscalar.mockResolvedValueOnce(false);
     const e = await assertCanonContratable('e1', 3_000_001, 'vivienda').catch((x: unknown) => x);
-    expect((e as Error).message).toContain('Escríbele a Cofianza para evaluar un coafianzamiento');
+    expect((e as Error).message).toContain('Escríbale a Cofianza para evaluar un coafianzamiento');
     expect((e as Error).message).not.toContain('se envió');
   });
 

@@ -136,9 +136,9 @@ export function assertPagoEstudio(
       PAGO_NO_VERIFICABLE_ERROR_CODE,
       ctx.origen === 'reasignacion'
         ? 'No pudimos verificar el pago de este estudio en este momento, asi que no lo reasignamos. ' +
-            'Intenta de nuevo en un momento.'
+            'Inténtelo de nuevo en un momento.'
         : 'No pudimos verificar el pago de este estudio en este momento, asi que no lo ejecutamos. ' +
-            'Intenta de nuevo en un momento.',
+            'Inténtelo de nuevo en un momento.',
     );
   }
 
@@ -147,7 +147,7 @@ export function assertPagoEstudio(
       409,
       'ESTUDIO_NO_REASIGNABLE',
       `La evaluación del estudio ${formatNumeroEstudio(ctx.expedienteNumero)} no figura como pagada, y la reasignacion sin costo ` +
-        'del §4.3 aplica solo a estudios ya pagados y ejecutados. Completa el pago y vuelve a intentarlo.',
+        'del §4.3 aplica solo a estudios ya pagados y ejecutados. Complete el pago y vuelva a intentarlo.',
       { motivo: 'estudio_no_pagado' },
     );
   }

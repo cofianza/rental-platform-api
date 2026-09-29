@@ -500,7 +500,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   // condicionado→aprobado y luego llama aquí) o invitar a un co-arrendatario.
   if (exp.estado !== 'aprobado') {
     throw AppError.badRequest(
-      'El contrato solo puede generarse cuando el estudio está aprobado. Si el estudio quedó condicionado, primero apruébalo (o invita a un co-arrendatario).',
+      'El contrato solo puede generarse cuando el estudio está aprobado. Si el estudio quedó condicionado, primero apruébelo (o invite a un co-arrendatario).',
       'EXPEDIENTE_NO_APROBADO',
     );
   }
@@ -613,7 +613,7 @@ async function fetchCoarrendatarioParaContrato(
 function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: boolean): void {
   if (!conCoarrendatario && !conCotitular) return;
   throw AppError.conflict(
-    `Este estudio tiene ${conCoarrendatario ? 'co-arrendatario' : 'co-titular de la fianza'} y este contrato no lo incluye como parte que firma. Hazlo con el contrato nuevo de Cofianza.`,
+    `Este estudio tiene ${conCoarrendatario ? 'co-arrendatario' : 'co-titular de la fianza'} y este contrato no lo incluye como parte que firma. Hágalo con el contrato nuevo de Cofianza.`,
     'CONTRATO_REQUIERE_COARRENDATARIO',
   );
 }
@@ -621,7 +621,7 @@ function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: bo
 /** Sin «Cofianza Compartida» en este contrato: su co-titular no firma (P6). */
 function assertModalidadDisponible(
   modalidad: unknown,
-  mensaje = '«Cofianza Compartida» necesita un co-titular que este contrato no incluye como parte que firma. Elige Plena o Plus, o hazlo con el contrato nuevo.',
+  mensaje = '«Cofianza Compartida» necesita un co-titular que este contrato no incluye como parte que firma. Elija Plena o Plus, o hágalo con el contrato nuevo.',
 ): void {
   if (modalidad === 'compartida') throw AppError.badRequest(mensaje, 'MODALIDAD_NO_DISPONIBLE');
 }
@@ -643,7 +643,7 @@ async function haySobreVivo(contratoId: string, excepto?: string): Promise<boole
   if (excepto) q = q.neq('id', excepto);
   const { data, error } = await q;
   if (error) {
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el envío a firma. Intente de nuevo en un momento.');
   }
   return ((data as Array<{ token_expiracion: string | null }> | null) ?? []).some(
     (s) => !(Date.parse(s.token_expiracion ?? '') <= Date.now()),
@@ -685,7 +685,7 @@ async function evaluacionCompletadaEn(expedienteId: string): Promise<string | nu
     .maybeSingle();
   if (error) {
     logger.error({ expedienteId, error: error.message }, 'No se pudo leer la evaluación del estudio');
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar la evaluación del estudio. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar la evaluación del estudio. Intente de nuevo en un momento.');
   }
   return (data as { fecha_completado?: string | null } | null)?.fecha_completado ?? null;
 }
@@ -1460,8 +1460,8 @@ async function notificarPartesContratoVigente(
       await notificarUsuario({
         userId: solicitanteUserId,
         tipo: 'contrato.vigente',
-        titulo: 'Tu contrato está vigente',
-        mensaje: `Tu contrato de ${direccion} quedó firmado y vigente.`,
+        titulo: 'Su contrato está vigente',
+        mensaje: `Su contrato de ${direccion} quedó firmado y vigente.`,
         link,
         payload: { contrato_id: contratoId, expediente_id: expedienteId },
       });
@@ -1530,8 +1530,8 @@ export async function notificarPartesContratoTerminado(
       await notificarUsuario({
         userId: solicitanteUserId,
         tipo: esCancelacion ? 'contrato.cancelado' : 'contrato.finalizado',
-        titulo: esCancelacion ? 'Tu contrato fue cancelado' : 'Tu contrato finalizó',
-        mensaje: `Tu contrato de ${direccion} ${causa}.`,
+        titulo: esCancelacion ? 'Su contrato fue cancelado' : 'Su contrato finalizó',
+        mensaje: `Su contrato de ${direccion} ${causa}.`,
         link,
         payload: { contrato_id: contratoId, expediente_id: expedienteId, automatico },
       });
@@ -1601,7 +1601,7 @@ export async function enviarContratoAFirma(
   await exigirSinFirmaCompleta(contratoId, c.expediente_id);
   for (const hermano of await hermanosEnFirma(c.expediente_id, contratoId)) {
     await exigirSinFirmaCompleta(hermano, c.expediente_id, {
-      mensaje: 'Otro contrato de este estudio ya lo firmaron todas las partes: quedó firmado. Actualiza la página.',
+      mensaje: 'Otro contrato de este estudio ya lo firmaron todas las partes: quedó firmado. Actualice la página.',
     });
   }
 
@@ -1619,8 +1619,8 @@ export async function enviarContratoAFirma(
     if (c.estado !== 'borrador') {
       throw AppError.conflict(
         c.estado === 'pendiente_firma'
-          ? 'Los datos de contacto o de pago cambiaron desde que se generó este contrato. Cancélalo y genera uno nuevo para enviarlo a firma.'
-          : 'Los datos de contacto o de pago cambiaron desde que se generó este contrato. Devuélvelo a borrador para actualizarlo antes de enviarlo a firma.',
+          ? 'Los datos de contacto o de pago cambiaron desde que se generó este contrato. Cancélelo y genere uno nuevo para enviarlo a firma.'
+          : 'Los datos de contacto o de pago cambiaron desde que se generó este contrato. Devuélvalo a borrador para actualizarlo antes de enviarlo a firma.',
         'CONTRATO_DATOS_DESACTUALIZADOS',
       );
     }
@@ -1772,7 +1772,7 @@ async function hermanosEnFirma(expedienteId: string, exceptContratoId: string): 
     // Un V3 en firma no se toca: este UPDATE directo se saltaría la RPC y su sobre V3.
     .is('destinacion', null);
   if (error) {
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los otros contratos del estudio. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los otros contratos del estudio. Intente de nuevo en un momento.');
   }
   return ((data as Array<{ id: string }> | null) ?? []).map((h) => h.id);
 }
@@ -2020,8 +2020,8 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
     throw AppError.conflict(
       `El canon del contrato (${cop(canonCop)}) supera el tope de ${cop(tope)} que Cofianza afianza sin coafianzamiento. ` +
         (enviado
-          ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'
-          : 'Escríbele a Cofianza para evaluar un coafianzamiento; mientras tanto, ajusta el canon dentro del tope.'),
+          ? 'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, ajuste el canon dentro del tope.'
+          : 'Escríbale a Cofianza para evaluar un coafianzamiento; mientras tanto, ajuste el canon dentro del tope.'),
       'CANON_EXCEDE_TOPE',
     );
   }
@@ -2029,7 +2029,7 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
   if (canonCop > maximo) {
     throw AppError.conflict(
       `El canon del contrato (${cop(canonCop)}) supera lo evaluado (${cop(evaluado)}); el máximo sin una nueva evaluación es ${cop(maximo)}. ` +
-        'Ajusta el canon del inmueble o habilita una nueva evaluación desde el estudio.',
+        'Ajuste el canon del inmueble o habilite una nueva evaluación desde el estudio.',
       'CANON_REQUIERE_NUEVA_EVALUACION',
     );
   }
@@ -2054,7 +2054,7 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
   if (v.veredictoCanonIngreso === 'no_cumple') {
     throw AppError.conflict(
       `Con el canon del contrato, la relación canon/ingreso quedaría por encima del ${cal.TOPE_CANON_INGRESO_RECALCULO} %. ` +
-        'Ajusta el canon del inmueble o habilita una nueva evaluación desde el estudio.',
+        'Ajuste el canon del inmueble o habilite una nueva evaluación desde el estudio.',
       'CANON_INGRESO_EXCEDE',
     );
   }
@@ -2169,13 +2169,13 @@ export async function generarContrato(
     if (v3Err) {
       // Sin poder descartar un borrador V3 no se crea otro contrato (fail-closed).
       logger.error({ error: v3Err, expedienteId }, 'No se pudo verificar si el estudio tiene contrato V3');
-      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los datos del estudio. Intenta de nuevo en un momento.');
+      throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar los datos del estudio. Intente de nuevo en un momento.');
     }
     usaAsistente = (v3Vivo ?? []).length > 0;
   }
   if (usaAsistente) {
     throw AppError.conflict(
-      'Este estudio usa el asistente de contratos. Crea o continúa el contrato desde allí.',
+      'Este estudio usa el asistente de contratos. Cree o continúe el contrato desde allí.',
       'CONTRATO_USA_ASISTENTE',
     );
   }
@@ -2201,7 +2201,7 @@ export async function generarContrato(
     const faltantes = completitud.faltantes.map((f) => f.etiqueta).join(', ');
     throw AppError.badRequest(
       `No se puede generar el contrato: faltan datos del arrendador (${faltantes}). ` +
-        'Completalos en Configuracion → Datos para contrato.',
+        'Complételos en Configuracion → Datos para contrato.',
       'PERFIL_ARRENDADOR_INCOMPLETO',
     );
   }
@@ -2209,7 +2209,7 @@ export async function generarContrato(
   // completitud; «expedida por» solo este contrato; la fecha no (sale si existe).
   if (expData.arrendador?.rol === 'inmobiliaria' && !expData.arrendador.matricula_expedida_por?.trim()) {
     throw AppError.badRequest(
-      'No se puede generar el contrato: falta «Matrícula expedida por» del arrendador. Complétala en Configuración → Datos para contrato.',
+      'No se puede generar el contrato: falta «Matrícula expedida por» del arrendador. Complétela en Configuración → Datos para contrato.',
       'PERFIL_ARRENDADOR_INCOMPLETO',
     );
   }
@@ -2720,7 +2720,7 @@ export async function renovarContrato(contratoId: string, userId: string, userRo
     throw AppError.badRequest('Los contratos del asistente no se renuevan desde aquí.', 'CONTRATO_V3_NO_RENOVABLE');
   }
   throw AppError.conflict(
-    'Este contrato no se renueva: al vencer se prorroga automáticamente por el mismo término. Si no debe continuar, finalízalo indicando el motivo.',
+    'Este contrato no se renueva: al vencer se prorroga automáticamente por el mismo término. Si no debe continuar, finalícelo indicando el motivo.',
     'CONTRATO_SE_PRORROGA',
   );
 }
@@ -2806,7 +2806,7 @@ export async function regenerarContrato(
       const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
       throw AppError.badRequest(
         `El canon ${cop(input.valor_arriendo)} supera el tope permitido de ${cop(topeMax)} ` +
-          `(10% sobre el valor del inmueble ${cop(baseValorArriendo)}). Ajusta el canon dentro del límite.`,
+          `(10% sobre el valor del inmueble ${cop(baseValorArriendo)}). Ajuste el canon dentro del límite.`,
         'CANON_EXCEDE_TOPE',
       );
     }
@@ -2827,7 +2827,7 @@ export async function regenerarContrato(
 
   assertModalidadDisponible(
     expRecordRegen.modalidad_fianza,
-    'Este borrador quedó con «Cofianza Compartida», que este contrato ya no admite. Cancélalo y genera uno nuevo eligiendo Plena o Plus.',
+    'Este borrador quedó con «Cofianza Compartida», que este contrato ya no admite. Cancélelo y genere uno nuevo eligiendo Plena o Plus.',
   );
 
   // 4.1e — Distribución de obligaciones (servicios_reparto): MERGE — solo

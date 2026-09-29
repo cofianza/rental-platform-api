@@ -107,7 +107,7 @@ export async function validarTexto(c: { titulo: string; texto: string },
   if (o.iaPrevia?.sha256 === sha256) return { ...r, ia: o.iaPrevia };
   const v = await revisarConIA(c);
   if (!v.ok) throw new AppError(503, 'REVISION_AUTOMATICA_NO_DISPONIBLE',
-    'No pudimos completar la revisión automática de la cláusula. Tu texto no se perdió: intenta de nuevo en unos minutos.');
+    'No pudimos completar la revisión automática de la cláusula. Su texto no se perdió: intente de nuevo en unos minutos.');
   return { hallazgos: v.hallazgos, avisos: r.avisos,
     ia: v.hallazgos.length ? null : { sha256, modelo: v.modelo, en: new Date().toISOString() } };
 }
