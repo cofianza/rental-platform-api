@@ -62,7 +62,6 @@ import {
 } from '../creditos-estudios.service';
 
 const updates = (table: string) => ops.filter((o) => o.table === table && o.method === 'update').map((o) => o.args[0]);
-const lote = (compraId: string | null) => ({ id: 'lote-1', compra_id: compraId, vence_en: null, created_at: '2026-09-01T00:00:00Z' });
 const inserts = (table: string) => ops.filter((o) => o.table === table && o.method === 'insert').map((o) => o.args[0]);
 
 beforeEach(() => {
@@ -72,78 +71,61 @@ beforeEach(() => {
   mockTransition.mockResolvedValue({ pago: null, transitioned: true });
 });
 
-describe('P1: devolver el crédito de una evaluación sin consulta al buró', () => {
-  const consumo = () =>
-    enqueue('movimientos_creditos_estudios', {
-      data: { perfil_id: 'owner-1', lote_id: 'lote-1', expediente_id: 'exp-1', solicitante_id: 'sol-1' },
-      error: null,
-    });
+describe('P1 / Adenda §2.5: devolver el cupo de una evaluación sin consulta al buró', () => {
+  const ultimo = (tipo: string, literal: string | null = null) =>
+    enqueue('movimientos_creditos_estudios', { data: { tipo, cantidad: tipo === 'reserva' ? -1 : 0, literal, expediente_id: 'exp-1' }, error: null });
+  const sinResultado = () => enqueue('estudios', { data: [], error: null });
 
-  it('vuelve al lote de donde salió, con un movimiento de ajuste, y el pago queda reembolsado', async () => {
-    consumo();
-    enqueue('lotes_creditos_estudios', { data: lote('compra-1'), error: null });
-    enqueue('compras_creditos_estudios', { data: { id: 'compra-1', estado: 'completado', creditos_en_contra: 0 }, error: null });
-    enqueue(
-      'lotes_creditos_estudios',
-      { data: { cantidad_disponible: 4, cantidad_inicial: 10 }, error: null }, // lectura para el CAS
-      { data: [{ id: 'lote-1' }], error: null }, // CAS
-      { data: [{ cantidad_disponible: 5 }], error: null }, // saldo vigente
-    );
+  it('libera la reserva con literal 2.5 (vuelve al mismo lote, en la RPC) y el pago queda reembolsado', async () => {
+    ultimo('reserva');
+    sinResultado();
+    mockRpc.mockResolvedValueOnce({ data: 'liberado', error: null });
 
     expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('devuelto');
 
+    expect(mockRpc).toHaveBeenCalledWith('liberar_reserva_credito', expect.objectContaining({ p_pago_id: 'pago-1', p_literal: '2.5' }));
     expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: 'pago-1', targetEstado: 'reembolsado' }));
-    expect(updates('lotes_creditos_estudios')).toEqual([{ cantidad_disponible: 5 }]);
-    expect(ops.some((o) => o.table === 'lotes_creditos_estudios' && o.method === 'eq' && o.args[0] === 'cantidad_disponible' && o.args[1] === 4)).toBe(true);
-    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ tipo: 'ajuste', cantidad: 1, pago_id: 'pago-1', saldo_resultante: 5 });
   });
 
   it('un pago que no fue con crédito no se toca', async () => {
     expect(await devolverCreditoDePago('pago-mp', 'Estudio cerrado', 'user-1')).toBe('no_es_credito');
     expect(mockTransition).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it('si otra llamada ya lo devolvió (CAS del pago), no se devuelve dos veces', async () => {
-    consumo();
-    enqueue('lotes_creditos_estudios', { data: lote(null), error: null });
+  it('si otra llamada ya lo devolvió (CAS del pago), responde «ya devuelto»', async () => {
+    ultimo('liberacion', '2.5');
+    sinResultado();
+    mockRpc.mockResolvedValueOnce({ data: 'ya_liberado', error: null });
     mockTransition.mockResolvedValueOnce({ pago: null, transitioned: false });
 
     expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('ya_devuelto');
-    expect(updates('lotes_creditos_estudios')).toEqual([]);
-    expect(inserts('movimientos_creditos_estudios')).toEqual([]);
   });
 
-  it('si la compra del lote se contracargó y todavía debe créditos, la devolución baja esa deuda', async () => {
-    consumo();
-    enqueue('lotes_creditos_estudios', { data: lote('compra-cb'), error: null });
-    enqueue(
-      'compras_creditos_estudios',
-      { data: { id: 'compra-cb', estado: 'cancelado', creditos_en_contra: 2 }, error: null },
-      { data: [{ id: 'compra-cb' }], error: null }, // CAS de la deuda
-    );
+  it('§2.4: un cupo consumido con resultado (c) no se devuelve por ningún motivo', async () => {
+    ultimo('consumo', 'c');
 
-    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('devuelto');
-
-    expect(updates('compras_creditos_estudios')).toEqual([{ creditos_en_contra: 1 }]);
-    expect(updates('lotes_creditos_estudios')).toEqual([]);
-    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ tipo: 'ajuste', notas: expect.stringContaining('Bajó el saldo en contra') });
+    await expect(devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).rejects.toMatchObject({ errorCode: 'CUPO_CONSUMIDO' });
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockTransition).not.toHaveBeenCalled();
   });
 
-  it('P11: si el lote ya venció, vuelve en un lote de 1 con la vigencia que tenía el original, desde hoy', async () => {
-    consumo();
-    const hace = (dias: number) => new Date(Date.now() - dias * 86_400_000).toISOString();
-    enqueue('lotes_creditos_estudios', { data: { ...lote(null), created_at: hace(100), vence_en: hace(10) }, error: null }); // 90 días de vigencia
-    enqueue('lotes_creditos_estudios', { data: { id: 'lote-nuevo' }, error: null }); // insert
+  it('§2.4: tampoco si algún estudio del expediente tiene desenlace c_resultado', async () => {
+    ultimo('reserva');
+    enqueue('estudios', { data: [{ id: 'est-1' }], error: null });
 
-    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('devuelto');
+    await expect(devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).rejects.toMatchObject({ errorCode: 'CUPO_CONSUMIDO' });
+    expect(ops.some((o) => o.table === 'estudios' && o.method === 'eq' && o.args[0] === 'desenlace_consulta' && o.args[1] === 'c_resultado')).toBe(true);
+    expect(mockTransition).not.toHaveBeenCalled();
+  });
 
-    const nuevo = inserts('lotes_creditos_estudios')[0] as { cantidad_inicial: number; cantidad_disponible: number; vence_en: string; origen: string };
-    expect(nuevo).toMatchObject({ cantidad_inicial: 1, cantidad_disponible: 1, origen: 'ajuste_admin' });
-    const dias = (Date.parse(nuevo.vence_en) - Date.now()) / 86_400_000;
-    expect(dias).toBeGreaterThan(89);
-    expect(dias).toBeLessThan(91);
-    expect(updates('lotes_creditos_estudios')).toEqual([]);
-    expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ lote_id: 'lote-nuevo', notas: expect.stringContaining('vigencia nueva') });
+  it('si la RPC falla, el pago no cambia', async () => {
+    ultimo('reserva');
+    sinResultado();
+    mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'boom' } });
+
+    await expect(devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).rejects.toMatchObject({ errorCode: 'CUPO_RPC_ERROR' });
+    expect(mockTransition).not.toHaveBeenCalled();
   });
 });
 

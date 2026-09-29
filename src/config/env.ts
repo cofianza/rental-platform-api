@@ -300,6 +300,10 @@ const envSchema = z.object({
   // Estudios colgados en 'en_proceso' (al arrancar y cada 15 min): los marca
   // fallidos o registra el resultado. Mismo criterio: false en una API LOCAL.
   ESTUDIOS_COLGADOS_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  // Adenda de precios §2.5: libera la reserva del cupo de los estudios con
+  // paquete cuya autorización venció sin llegar a la consulta (cada 15 min).
+  // Escribe en la base: apagado por defecto; false en una API LOCAL.
+  CUPO_LIBERAR_ABANDONOS_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). SIN EFECTO: la Adenda 1 del
   // módulo de contratos (respuesta 13 bis) no la habilita y ningún camino de la

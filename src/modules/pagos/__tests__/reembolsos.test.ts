@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockFrom, ops, queues, enqueue, mockStatus, mockRefund, mockTransitionChecked, mockTransition,
   mockOnPagoConfirmado, mockNotificarYCorreo, mockDevolverCredito, mockEsCredito,
+  mockCupoLiberado, mockCupoReservado, mockLiberarReserva, mockAbandonado,
 } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
@@ -45,6 +46,10 @@ const {
     mockNotificarYCorreo: vi.fn(async () => undefined),
     mockDevolverCredito: vi.fn(async () => 'no_es_credito'),
     mockEsCredito: vi.fn(async () => false),
+    mockCupoLiberado: vi.fn(async () => false),
+    mockCupoReservado: vi.fn(async () => true),
+    mockLiberarReserva: vi.fn(async () => 'liberado'),
+    mockAbandonado: vi.fn(async () => true),
   };
 });
 
@@ -65,7 +70,11 @@ vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onPagoConfirmado
 vi.mock('@/modules/creditos-estudios/creditos-estudios.service', () => ({
   devolverCreditoDePago: mockDevolverCredito,
   esPagoConCredito: mockEsCredito,
+  cupoLiberado: mockCupoLiberado,
+  cupoReservado: mockCupoReservado,
+  liberarReservaCupo: mockLiberarReserva,
 }));
+vi.mock('@/modules/estudios/estudios.service', () => ({ abandonadoAntesDeLaConsulta: mockAbandonado }));
 vi.mock('../gateway', () => ({
   getPaymentGateway: () => ({
     provider: 'mercadopago',
@@ -88,6 +97,7 @@ import {
   resolverReembolso,
   revisarReembolsosEnProceso,
   barrerDevolucionesPendientes,
+  liberarCuposAbandonados,
 } from '../reembolsos.service';
 
 const EXP = '11111111-1111-1111-1111-111111111111';
@@ -112,6 +122,10 @@ beforeEach(() => {
   mockTransitionChecked.mockResolvedValue({ pago: null, transitioned: true });
   mockDevolverCredito.mockResolvedValue('no_es_credito');
   mockEsCredito.mockResolvedValue(false);
+  mockCupoLiberado.mockResolvedValue(false);
+  mockCupoReservado.mockResolvedValue(true);
+  mockLiberarReserva.mockResolvedValue('liberado');
+  mockAbandonado.mockResolvedValue(true);
 });
 
 describe('al cerrar o rechazar el estudio', () => {
@@ -730,3 +744,45 @@ describe('P10: red de seguridad', () => {
 });
 
 
+
+describe('Adenda de precios §2: el cupo en el cierre y en el abandono', () => {
+  it('cierre con la consulta fallida (a o b) y el cupo ya liberado: solo se cierra el pago, sin cola manual', async () => {
+    sinCobrosVivos();
+    enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
+    enqueue('pagos_no_conciliados', { data: null, error: null });
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null });
+    mockCupoLiberado.mockResolvedValueOnce(true);
+    mockDevolverCredito.mockResolvedValueOnce('devuelto');
+
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
+
+    expect(mockDevolverCredito).toHaveBeenCalledWith(PAGO, 'Estudio cerrado', 'user-1');
+    expect(upsertNoConciliado()).toBeUndefined();
+  });
+
+  it('§2.5: la reserva de un estudio cuya autorización venció sin consulta vuelve al mismo lote (literal 2.5)', async () => {
+    enqueue('movimientos_creditos_estudios', {
+      data: [
+        { pago_id: 'pago-a', expediente_id: 'exp-a' },
+        { pago_id: 'pago-a', expediente_id: 'exp-a' }, // repetido: una sola vez
+        { pago_id: 'pago-b', expediente_id: 'exp-b' },
+      ],
+      error: null,
+    });
+    mockAbandonado.mockImplementation(async (id: string) => id === 'exp-a');
+
+    expect(await liberarCuposAbandonados()).toBe(1);
+
+    expect(mockLiberarReserva).toHaveBeenCalledTimes(1);
+    expect(mockLiberarReserva).toHaveBeenCalledWith('pago-a', '2.5', expect.objectContaining({ notas: expect.stringContaining('§2.5') }));
+    expect(ops.some((o) => o.table === 'eventos_timeline' && o.method === 'insert')).toBe(true);
+  });
+
+  it('§2.5: una reserva ya consumida o liberada no se toca', async () => {
+    enqueue('movimientos_creditos_estudios', { data: [{ pago_id: 'pago-a', expediente_id: 'exp-a' }], error: null });
+    mockCupoReservado.mockResolvedValueOnce(false);
+
+    expect(await liberarCuposAbandonados()).toBe(0);
+    expect(mockLiberarReserva).not.toHaveBeenCalled();
+  });
+});
