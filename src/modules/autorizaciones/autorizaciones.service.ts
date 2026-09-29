@@ -78,6 +78,7 @@ interface ExpedienteInfo {
     telefono: string | null;
     tipo_documento: string;
     numero_documento: string;
+    tipo_persona?: string | null;
     creado_por?: string | null;
     inmobiliaria_id?: string | null;
   };
@@ -310,7 +311,7 @@ export async function enviarEnlaceAutorizacion(
   // 1. Get expediente with solicitante + inmueble
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento, creado_por, inmobiliaria_id), inmuebles!expedientes_inmueble_id_fkey(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento, tipo_persona, creado_por, inmobiliaria_id), inmuebles!expedientes_inmueble_id_fkey(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
     .eq('id', expedienteId)
     .single();
 
@@ -346,6 +347,7 @@ export async function enviarEnlaceAutorizacion(
   // escribir el documento aquí, después del registro; sin esto el NIT se
   // guardaba, el enlace salía y el bloqueo llegaba recién al cobrar.
   const motivoDoc = motivoNoAfianzable(undefined, {
+    tipo_persona: exp.solicitantes?.tipo_persona,
     tipo_documento: contacto?.tipo_documento || exp.solicitantes?.tipo_documento,
   });
   if (motivoDoc) throw errorNoAfianzable(motivoDoc);

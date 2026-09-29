@@ -502,6 +502,15 @@ describe('autorizaciones.service', () => {
       expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
     });
 
+    it('Adenda §6.1: ficha de persona jurídica (aunque tenga cédula) -> 409 ESTUDIO_NO_AFIANZABLE sin emitir', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, tipo_persona: 'juridica' } } });
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'ESTUDIO_NO_AFIANZABLE',
+      });
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
     it('H43: ficha de agencia con el documento de una cuenta: no aplica la regla y el enlace sale', async () => {
       enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '', creado_por: 'asesor', inmobiliaria_id: 'inmo-1' } } });
       enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
