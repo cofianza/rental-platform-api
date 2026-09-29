@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ESTADOS_EXPEDIENTE } from './expediente-state-machine';
 import { OPCIONES_V7, OPCIONES_V9, type OpcionV7, type OpcionV9 } from '@/modules/estudios/motor/scorecard';
-import { camposMotivos, refinarMotivos, rellenarDesdeMotivos, type TipoDecision } from '@/modules/estudios/motivos-decision';
+import { camposMotivos, internoConEscrito, MAX_INTERNO, refinarMotivos, rellenarDesdeMotivos, type TipoDecision } from '@/modules/estudios/motivos-decision';
 
 // H58/H103: la decisión según el destino de la transición.
 const tipoDeTransicion = (e: unknown): TipoDecision | null =>
@@ -28,7 +28,8 @@ export const transitionBodySchema = z.preprocess(
     (b, t) => {
       // P34: `motivo` es el que ve la inmobiliaria; `comentario`, el fundamento interno.
       if (b.nuevo_estado === 'rechazado') b.motivo ||= t.visible;
-      b.comentario ||= t.interno;
+      // M4: con motivos el comentario siempre los lleva (lo escrito va al final).
+      b.comentario = internoConEscrito(t.interno, b.comentario);
     },
   ),
   z.object({
@@ -39,7 +40,8 @@ export const transitionBodySchema = z.preprocess(
   // 10 y no 1: por la tarjeta de revision manual el fundamento ya exige 10
   // (expediente-habilitacion.routes.ts) y es la misma decision de la Adenda 2
   // §5.1. Un solo caracter no es un fundamento escrito.
-  comentario: z.string().trim().min(10, { error: 'Escribe el motivo (mínimo 10 caracteres).' }).max(1000),
+  // M6: MAX_INTERNO (3000) y no 1000: con motivos se arma con todas las líneas + el detalle.
+  comentario: z.string().trim().min(10, { error: 'Escribe el motivo (mínimo 10 caracteres).' }).max(MAX_INTERNO),
   /** P34: al rechazar, el motivo corto para la inmobiliaria o el propietario
    *  (el comentario es el fundamento interno). Obligatorio para 'rechazado'. */
   motivo: z.string().trim().max(500).optional(),
@@ -64,6 +66,29 @@ export const transitionBodySchema = z.preprocess(
   }
   refinarMotivos(tipoDeTransicion(d.nuevo_estado), d, ctx);
 }),
+);
+
+// H58: el fundamento sale de los motivos de la lista (+ texto opcional) si vienen.
+export const aprobarCondicionadoBody = z.preprocess(
+  rellenarDesdeMotivos(
+    () => 'aprobar',
+    (b, t) => {
+      b.fundamento = internoConEscrito(t.interno, b.fundamento);
+    },
+  ),
+  z.object({
+  ...camposMotivos,
+  duracion_contrato_meses: z.coerce.number().int().min(1).max(120).optional(),
+  fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)').optional(),
+  // Adenda 2 §5.1: "toda decision manual debe registrar [...] el fundamento
+  // escrito y los documentos que consulto".
+  fundamento: z.string().trim().min(10, 'Escribe el fundamento de la decisión (mínimo 10 caracteres).').max(MAX_INTERNO),
+  documentos_consultados: z.array(z.string().trim().min(1).max(200)).max(30).default([]),
+  // Adenda 2 §4.3: el puntaje se recalcula con V7 y V9 que puntúa el analista.
+  evaluacion: evaluacionRevisionManualSchema,
+  // Política §15 (thin-file sin ingreso de la central): el analista verificó una fuente de capacidad.
+  fuente_capacidad_verificada: z.boolean().optional(),
+}).superRefine((d, ctx) => refinarMotivos('aprobar', d, ctx)),
 );
 
 /** Adenda 1 contratos (respuesta 21): el motivo del cierre sin acta queda registrado. */

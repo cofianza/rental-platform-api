@@ -141,6 +141,23 @@ export async function guardarCodigosMotivo(
 }
 
 /**
+ * M4 (revisión 2026-09-28): con `motivos`, el fundamento interno SIEMPRE lleva
+ * las líneas de los motivos; si además vino un texto escrito (p. ej. uno que
+ * quedó de otra transición en el mismo modal), se agrega al final en vez de
+ * reemplazarlas.
+ */
+export function internoConEscrito(interno: string, escrito: unknown): string {
+  const e = typeof escrito === 'string' ? escrito.trim() : '';
+  return e && e !== interno ? `${interno}\nTexto adicional: ${e}` : interno;
+}
+
+/**
+ * Tope de los campos internos armados con motivos: todos los motivos de una
+ * decisión + detalle de 1000 + un texto adicional de 1000 caben (M6).
+ */
+export const MAX_INTERNO = 3000;
+
+/**
  * Textos compuestos. `visible` sin repetir (varios rechazos pueden decir
  * «No cumple la Política de riesgo»); `interno` una línea por motivo con su
  * código, más el texto del analista.

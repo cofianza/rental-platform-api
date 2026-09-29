@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { camposMotivos, refinarMotivos, rellenarDesdeMotivos, type TipoDecision } from './motivos-decision';
+import { camposMotivos, internoConEscrito, MAX_INTERNO, refinarMotivos, rellenarDesdeMotivos, type TipoDecision } from './motivos-decision';
 
 // ============================================================
 // Enums matching DB
@@ -109,12 +109,14 @@ export const registrarResultadoSchema = z.preprocess(
     (b, t) => {
       if (b.resultado === 'rechazado') {
         b.motivo_rechazo ||= t.visible;
-        b.fundamento ||= t.interno;
       } else {
         // Las condiciones las lee la inmobiliaria: van con el detalle del analista.
         b.condiciones ||= [t.visible, t.detalle].filter(Boolean).join('. ');
       }
-      b.observaciones ||= t.interno;
+      // B21: también al condicionar queda el fundamento interno (timeline de Cofianza).
+      b.fundamento = internoConEscrito(t.interno, b.fundamento);
+      // B20: las observaciones las lee la inmobiliaria: nunca el texto interno.
+      b.observaciones ||= b.resultado === 'rechazado' ? t.visible : b.condiciones;
     },
   ),
   z.object({
@@ -135,7 +137,7 @@ export const registrarResultadoSchema = z.preprocess(
   // P34: al rechazar, `motivo_rechazo` es el motivo corto que ven la
   // inmobiliaria o el propietario; `fundamento`, el interno (solo Cofianza).
   motivo_rechazo: z.string().trim().min(10, 'El motivo debe tener al menos 10 caracteres').max(500).optional(),
-  fundamento: z.string().trim().min(10, 'El fundamento debe tener al menos 10 caracteres').max(2000).optional(),
+  fundamento: z.string().trim().min(10, 'El fundamento debe tener al menos 10 caracteres').max(MAX_INTERNO).optional(),
   condiciones: z.string().min(10, 'Las condiciones deben tener al menos 10 caracteres').max(2000).optional(),
   certificado_storage_key: z.string().max(500).optional(),
 }).superRefine((data, ctx) => {
