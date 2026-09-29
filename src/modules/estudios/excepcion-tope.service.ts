@@ -136,12 +136,19 @@ export async function assertAprobacionDentroDelTope(
 ): Promise<void> {
   const t = await leerTopeDelExpediente(expedienteId);
   if (!requiereGerencia(t)) return;
-  if (!esGerenciaGeneral(user))
+  if (!esGerenciaGeneral(user)) {
+    // §7.3 «exigir escalamiento»: un caso que el motor dejó condicionado por
+    // otra razón no pasó por retenerAprobadoSobreTope, así que la Gerencia no
+    // se había enterado. Una vez por estudio (escalarTopeCanon deduplica).
+    const enviado = await (await import('@/modules/contratos/tope-coafianzamiento'))
+      .escalarTopeCanon(expedienteId, t.canonCop!, t.topeCop, 'estudio');
     throw AppError.forbidden(
       `El canon (${formatearCOP(t.canonCop!)}) supera el tope de ${formatearCOP(t.topeCop)}: ` +
-        'la aprobación requiere la autorización de la Gerencia General.',
+        'la aprobación requiere la autorización de la Gerencia General.' +
+        (enviado ? ' El caso ya está en la Gerencia General.' : ''),
       SOLO_GERENCIA_GENERAL,
     );
+  }
   await guardarExcepcion(expedienteId, t.canonCop!, 'Aprobación directa de la Gerencia General.', user.id, t, ip);
 }
 

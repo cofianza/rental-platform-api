@@ -89,6 +89,8 @@ describe('§7.3 — aprobar por encima del tope', () => {
       });
     }
     expect(ops).toHaveLength(0);
+    // §7.3: el 403 también escala el caso a la Gerencia (deduplicado en escalarTopeCanon).
+    expect(mockEscalar).toHaveBeenCalledWith('exp-1', 3_500_000, 3_000_000, 'estudio');
   });
 
   it('dentro del tope, o con la excepción registrada, aprueba cualquiera', async () => {
