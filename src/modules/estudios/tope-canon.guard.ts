@@ -315,8 +315,8 @@ function errorCanonNoLegible(
 // comercial §1.3 y nota QA V2 §6.4: mientras el contrato comercial y el de
 // persona juridica no existan en la plataforma, no se estudia (ni se cobra):
 //   - un inmueble comercial o mixto (la destinacion sale de inmuebles.uso,
-//     destinacion.ts). Mixto bloquea siempre (§1.3); comercial, hasta que
-//     DESTINOS.comercial se habilite (Fase 2).
+//     destinacion.ts). Comercial y mixto bloquean hasta que la Gerencia
+//     General encienda ESTUDIOS_COMERCIAL_PJ_HABILITADOS (Adenda de precios §6.2).
 //   - un arrendatario persona juridica o identificado con NIT.
 // Aplica igual a inmobiliaria y a propietario directo (los dos canales usan el
 // contrato de vivienda). Vive aqui porque assertCanonDentroDelTope ya es el

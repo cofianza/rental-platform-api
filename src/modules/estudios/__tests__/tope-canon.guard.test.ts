@@ -161,28 +161,52 @@ describe('motivoNoAfianzable — regla pura', () => {
   it('uso desconocido no bloquea (la regla es comercial o mixto)', () => {
     expect(motivoNoAfianzable(null, null)).toBeNull();
   });
+
+  // Adenda de precios §6.2: interruptor propio, no DESTINOS.comercial.
+  it('bandera ESTUDIOS_COMERCIAL_PJ_HABILITADOS apagada bloquea; encendida no bloquea', () => {
+    const nit = { tipo_persona: 'juridica', tipo_documento: 'nit' };
+    for (const uso of ['comercial', 'local_comercial', 'mixto']) {
+      expect(motivoNoAfianzable(uso, null, false)).toBe('destinacion');
+      expect(motivoNoAfianzable(uso, nit, true)).toBeNull();
+    }
+    expect(motivoNoAfianzable('vivienda', nit, false)).toBe('persona_juridica');
+    expect(motivoNoAfianzable('vivienda', nit, true)).toBeNull();
+  });
 });
 
 describe('assertCanonDentroDelTope — estudio no afianzable', () => {
-  it('mixto: 409 antes del tope, sin escalar, y el mensaje dice que no se cobra', async () => {
+  it('mixto: 409 antes del tope, sin escalar, y el mensaje dice en desarrollo y sin cobro (Adenda de precios §6.4)', async () => {
     mockEscalar.mockClear();
     fila.current = { valor_arriendo: 3_500_000, uso: 'mixto' };
     const e = await assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'habilitarEstudio' }).catch((x: unknown) => x);
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE', details: { motivo: 'destinacion' } });
     expect((e as Error).message).toContain('uso comercial o mixto');
-    expect((e as Error).message).toContain('no se cobra el estudio');
-    expect((e as Error).message).toContain('hola@cofianza.co');
+    expect((e as Error).message).toContain('están en desarrollo');
+    expect((e as Error).message).toContain('todavía no se pueden solicitar por la plataforma');
+    expect((e as Error).message).toContain('No se generó ningún cobro');
+    expect((e as Error).message).not.toMatch(/rechaz|revisar el caso/i);
     expect(mockEscalar).not.toHaveBeenCalled();
   });
 
-  it('NIT del expediente: 409 persona_juridica', async () => {
+  it('NIT del expediente: 409 persona_juridica, en desarrollo y sin cobro', async () => {
     fila.current = { valor_arriendo: 2_000_000, uso: 'vivienda' };
     arrendatario.current = { tipo_persona: 'natural', tipo_documento: 'nit' };
-    await expect(assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'pagarGestor' })).rejects.toMatchObject({
-      statusCode: 409,
-      errorCode: 'ESTUDIO_NO_AFIANZABLE',
-      details: { motivo: 'persona_juridica' },
-    });
+    const e = await assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'pagarGestor' }).catch((x: unknown) => x);
+    expect(e).toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE', details: { motivo: 'persona_juridica' } });
+    expect((e as Error).message).toContain('persona jurídica o identificados con NIT están en desarrollo');
+    expect((e as Error).message).toContain('No se generó ningún cobro');
+    expect((e as Error).message).not.toMatch(/rechaz|revisar el caso/i);
+  });
+
+  it('comercial con la bandera de la Gerencia encendida: pasa al tope (Adenda de precios §6.2)', async () => {
+    process.env.ESTUDIOS_COMERCIAL_PJ_HABILITADOS = 'true';
+    try {
+      fila.current = { valor_arriendo: 2_000_000, uso: 'comercial' };
+      arrendatario.current = { tipo_persona: 'juridica', tipo_documento: 'nit' };
+      await expect(assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'pagarGestor' })).resolves.toMatchObject({ canonCop: 2_000_000 });
+    } finally {
+      delete process.env.ESTUDIOS_COMERCIAL_PJ_HABILITADOS;
+    }
   });
 
   it('crear desde el inmueble: lee el solicitante que le pasan', async () => {

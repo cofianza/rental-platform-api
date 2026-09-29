@@ -11,10 +11,10 @@
 // (ponderarConScorecard, solo con MOTOR_DECIDE_ENABLED). Y el unico rechazo
 // automatico por puntaje es el de la matriz QA V2, caso O: titular 70-84 con
 // coarrendatario < 70 — salvo que el coarrendatario tenga score 450-599:
-// entonces revision manual con la marca de conflicto (nota §5, como R2).
+// entonces revision manual (Adenda de precios §8.4, como R2).
 // ============================================================
 
-import { CONFLICTO_REGLAS_COARRENDATARIO, CONFLICTO_REGLAS_R2, type UmbralesDecision } from '@/modules/estudios/decision';
+import { REGLA_BANDA_COARRENDATARIO, REGLA_R2, type UmbralesDecision } from '@/modules/estudios/decision';
 
 export type Resultado = 'aprobado' | 'rechazado' | 'condicionado' | 'pendiente';
 
@@ -22,8 +22,8 @@ export type ResultadoPonderacion = 'aprobado' | 'rechazado' | 'revision_manual';
 
 export interface VeredictoScorecard {
   resultado: 'aprobado' | 'rechazado' | 'sin_evaluar';
-  /** R2 (matriz QA V2), o su espejo del coarrendatario: conflicto sin definir; la salida es la conservadora. */
-  conflicto: string | null;
+  /** R2 (matriz QA V2) o su espejo del coarrendatario: la regla de la Adenda de precios §8 que dejo el caso en revision. */
+  regla: string | null;
   puntajeTitular: number;
   puntajeCoa: number;
   /**
@@ -72,9 +72,9 @@ export function veredictoScorecard(e: {
   const pC = puntajeDe(e.coa);
   if (pT === null || pC === null) return null;
   const { u } = e;
-  const v = (resultado: VeredictoScorecard['resultado'], conflicto: string | null = null): VeredictoScorecard => ({
+  const v = (resultado: VeredictoScorecard['resultado'], regla: string | null = null): VeredictoScorecard => ({
     resultado,
-    conflicto,
+    regla,
     puntajeTitular: pT,
     puntajeCoa: pC,
   });
@@ -84,7 +84,7 @@ export function veredictoScorecard(e: {
   const fc = e.titular?.features_crudas;
   if (fc?.revision_obligatoria) {
     const r2 = !fc.inconsistencia_score_buros && pT < u.zonaGris && coaAprueba;
-    return v('sin_evaluar', r2 ? CONFLICTO_REGLAS_R2 : null);
+    return v('sin_evaluar', r2 ? REGLA_R2 : null);
   }
   const enZonaGris = pT >= u.zonaGris && pT < u.aprobacion;
   if (enZonaGris && coaAprueba) {
@@ -95,11 +95,11 @@ export function veredictoScorecard(e: {
   }
   // Caso O: < 70 no compensa. Entre 70 y el umbral sigue en revision manual.
   // Coarrendatario con score 450-599 (su revision obligatoria, sin Caso G):
-  // conflicto sin definir -> revision manual marcada, como R2.
+  // la banda prevalece (Adenda de precios §8.4) -> revision manual, como R2.
   if (enZonaGris && !e.coaConReglaDura && pC < u.zonaGris) {
     const fcCoa = e.coa?.features_crudas;
     return fcCoa?.revision_obligatoria && !fcCoa.inconsistencia_score_buros
-      ? v('sin_evaluar', CONFLICTO_REGLAS_COARRENDATARIO)
+      ? v('sin_evaluar', REGLA_BANDA_COARRENDATARIO)
       : v('rechazado');
   }
   return v('sin_evaluar');

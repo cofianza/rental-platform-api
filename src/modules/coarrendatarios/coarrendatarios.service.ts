@@ -1493,7 +1493,7 @@ export async function onCoarrendatarioEstudioCompletado(
     );
   }
   let scorecard: VeredictoScorecard['resultado'] | null = null;
-  let conflictoReglas: string | null = null;
+  let reglaAplicada: string | null = null;
   if (!coaConReglaDura && env.MOTOR_DECIDE_ENABLED && titular.resultado === 'condicionado') {
     const ponderado = await ponderarConScorecard(titular.id, est.id, false, {
       titularCascada: titular.cascada,
@@ -1503,7 +1503,7 @@ export async function onCoarrendatarioEstudioCompletado(
     if (ponderado) {
       logger.info({ expedienteId: est.expediente_id, ...ponderado }, 'Adenda §3: ponderacion titular/coarrendatario con el scorecard');
       scorecard = ponderado.resultado;
-      conflictoReglas = ponderado.conflicto;
+      reglaAplicada = ponderado.regla;
       // Adenda 2 §9.3: sin el motivo de identidad se habria aprobado solo. Sigue
       // al analista, pero la tarifa (viaDelEstudio) queda en la de esta via.
       // ponytail: no se revierte si luego cambia el co-arrendatario (igual que el evento de ponderacion).
@@ -1543,7 +1543,7 @@ export async function onCoarrendatarioEstudioCompletado(
         titularScore: titular.score,
         coaResultado: est.resultado,
         coaScore: est.score,
-        conflictoReglas,
+        reglaAplicada,
       },
       'Ponderación coarrendatario: queda en revisión manual para un analista de Cofianza (Adenda 2 §5)',
     );
@@ -1566,8 +1566,8 @@ export async function onCoarrendatarioEstudioCompletado(
           titular_score: titular.score,
           coarrendatario_resultado: est.resultado,
           coarrendatario_score: est.score,
-          // Matriz QA V2, R2 (o su espejo del coarrendatario): revision manual por conflicto de reglas sin definir.
-          ...(conflictoReglas ? { conflicto_reglas: conflictoReglas } : {}),
+          // Matriz QA V2, R2 (o su espejo del coarrendatario): la regla definida de la Adenda de precios §8.
+          ...(reglaAplicada ? { regla_aplicada: reglaAplicada } : {}),
         },
       } as never);
 
