@@ -765,12 +765,12 @@ export async function onEstudioCompletado(params: {
           whatsapp: {
             // variables[0] (nombre del dueño) lo sustituye el helper por el nombre del miembro.
             template: 'ESTUDIO_APROBADO_DUENO',
-            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble'],
+            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada'],
           },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable aprobado'));
 
         // WhatsApp al dueño: "el estudio fue aprobado, genera el contrato".
-        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_APROBADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble', expedienteId)
+        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_APROBADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada', expedienteId)
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño aprobado'));
       }
 
