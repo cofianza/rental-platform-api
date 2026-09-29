@@ -919,6 +919,46 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
   });
   const coaRow = { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' }, error: null };
   const titularRows = (resultado: string, cascada: unknown = null) => ({ data: [{ id: TITULAR_ESTUDIO_ID, resultado, score: 720, cascada }], error: null });
+  // La prioridad de la cola (§8.2) tambien es un UPDATE del expediente: aqui solo interesa el de estado.
+  const updateDeEstado = () =>
+    ops.find((o) => o.table === 'expedientes' && o.method === 'update' && 'estado' in (o.args[0] as object));
+  const prioridadEscrita = () =>
+    (ops.find((o) => o.table === 'expedientes' && o.method === 'update' && 'prioridad_revision' in (o.args[0] as object))
+      ?.args[0] as { prioridad_revision?: string } | undefined)?.prioridad_revision;
+
+  it('Adenda de precios §8.2: el caso R2 entra a la cola del analista con prioridad BAJA', async () => {
+    mockEnv.MOTOR_DECIDE_ENABLED = true;
+    try {
+      enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado'));
+      enqueue('expediente_coarrendatarios', coaRow);
+      enqueue('estudios_scorecard_sombra', {
+        data: [
+          { estudio_id: TITULAR_ESTUDIO_ID, puntaje_normalizado: 27.1, features_crudas: { revision_obligatoria: 'Score 520 en la banda 450-599' } },
+          { estudio_id: COA_ESTUDIO_ID, puntaje_normalizado: 95 },
+        ],
+        error: null,
+      });
+      enqueue('expedientes', ctxRow());
+
+      await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+      expect(updateDeEstado()).toBeUndefined();
+      expect(prioridadEscrita()).toBe('baja');
+    } finally {
+      mockEnv.MOTOR_DECIDE_ENABLED = false;
+    }
+  });
+
+  it('Adenda de precios §8.2: cualquier otra revision manual queda con prioridad normal', async () => {
+    enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado'));
+    enqueue('expediente_coarrendatarios', coaRow);
+    enqueue('expedientes', ctxRow());
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+    expect(prioridadEscrita()).toBe('normal');
+  });
+
 
   it('regla dura del coarrendatario contamina el conjunto aunque el titular este aprobado', async () => {
     enqueue('estudios', coaEstudio('rechazado'), titularRows('aprobado'));
@@ -977,7 +1017,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
     await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-    expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+    expect(updateDeEstado()).toBeUndefined();
     const timeline = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert');
     expect((timeline!.args[0] as { metadata: { resultado: string } }).metadata.resultado).toBe('revision_manual');
     await vi.waitFor(() => expect(mockListOperators).toHaveBeenCalled());
@@ -1032,7 +1072,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
         await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-        expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+        expect(updateDeEstado()).toBeUndefined();
         const timeline = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert');
         expect((timeline!.args[0] as { metadata: { resultado: string } }).metadata.resultado).toBe('revision_manual');
       }
@@ -1059,7 +1099,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
       await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-      expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+      expect(updateDeEstado()).toBeUndefined();
       const marca = ops.find((o) => o.table === 'estudios' && o.method === 'update');
       expect(marca?.args[0]).toEqual({ cascada: { ...cascada, via_sin_identidad: 'condicionada_coarrendatario' } });
     } finally {
@@ -1086,7 +1126,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
         await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-        const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
+        const update = updateDeEstado();
         expect(update ? (update.args[0] as { estado: string }).estado : null).toBe(aprueba ? 'aprobado' : null);
       }
     } finally {

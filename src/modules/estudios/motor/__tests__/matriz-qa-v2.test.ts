@@ -91,7 +91,7 @@ import { REGLA_BANDA_COARRENDATARIO, REGLA_R2, decidirCascada, decidirResultado,
 import { resolverResultadoEstudio } from '../../reglas-duras';
 import { decidirConCascada } from '../../estudios.service';
 import type { ProviderSolicitudInput } from '../../providers/types';
-import { ponderarConCoarrendatario, veredictoScorecard, type FilaScorecard } from '../../../coarrendatarios/ponderacion';
+import { ponderarConCoarrendatario, prioridadRevision, veredictoScorecard, type FilaScorecard } from '../../../coarrendatarios/ponderacion';
 import { calcularTarifas, masIva, pctDe, TARIFA_MENSUAL_PCT, viaPorRutaDeAprobacion } from '../../tarifas';
 import { CALIBRACION_DEFAULT as CAL } from '@/lib/calibracion';
 import { leerBiometriaDeExpediente, type ResumenBiometria } from '@/modules/autorizaciones/biometria';
@@ -565,6 +565,7 @@ describe('7.4 Coarrendatario', () => {
     const { v, combinado } = ponderar(r, coa);
     expect.soft(combinado, 'decision (ponderacion)').toBe('revision_manual');
     expect.soft(v?.regla, 'ponderacion: regla de la banda del coarrendatario').toBe(REGLA_BANDA_COARRENDATARIO);
+    expect.soft(prioridadRevision(v?.regla ?? null), 'no es R2: prioridad normal (§8.2 solo define R2)').toBe('normal');
   });
 
   it('R — afianzado 52,1 (< 70) + coarrendatario 95: RECHAZADO', async () => {
@@ -643,7 +644,7 @@ describe('7.5 Motivos y traza', () => {
 // ============================================================================
 // R2 — definido por la Adenda de precios §8: la banda 450-599 prevalece sobre
 // el puntaje < 70 (Adenda 2 §2). Revision manual y la traza cita la regla.
-// La prioridad BAJA de la cola (§8.2) no se programa aqui.
+// §8.2: entra a la cola del analista con prioridad BAJA; el resto, normal.
 // ============================================================================
 it('R2 — score 520, normalizado 27,1, coarrendatario 95: REVISION MANUAL, la banda prevalece (Adenda de precios §8)', async () => {
   const r = await decidir(dc({ ...PERFIL_R, score: 520 }, 35));
@@ -659,8 +660,10 @@ it('R2 — score 520, normalizado 27,1, coarrendatario 95: REVISION MANUAL, la b
   const { v, combinado } = ponderar(r, 95);
   expect.soft(combinado, 'decision (ponderacion)').toBe('revision_manual');
   expect.soft(v?.regla, 'ponderacion: regla R2').toBe(REGLA_R2);
+  expect.soft(prioridadRevision(v?.regla ?? null), 'cola del analista: prioridad baja (§8.2)').toBe('baja');
   // Sin coarrendatario alto no es el caso R2.
   expect.soft(conCoarrendatario(r, { puntaje: 75, reglaDura: false }).motivo, 'coarrendatario 75: no es R2').not.toContain(REGLA_R2);
+  expect.soft(prioridadRevision(ponderar(r, 75).v?.regla ?? null), 'coarrendatario 75: prioridad normal').toBe('normal');
 });
 
 // ============================================================================
