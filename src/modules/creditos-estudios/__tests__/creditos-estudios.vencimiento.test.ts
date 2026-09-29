@@ -42,6 +42,7 @@ vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_E
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: vi.fn() }));
 vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => ({ ALERTA_SALDO_MINIMO_CUPOS: 3 })) }));
+vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ cerrarCobroEstudioFallido: vi.fn(), getMontoEstudio: async () => 95_200 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioPagado: vi.fn(async () => undefined) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarYCorreo: mockNotificar }));
@@ -156,7 +157,6 @@ describe('§3.7: alerta de saldo bajo', () => {
     enqueue('inmuebles', { data: { propietario_id: 'owner-1', inmobiliaria_id: 'org-1', direccion: 'Calle 1', ciudad: 'Bogotá' }, error: null });
     enqueue('compras_creditos_estudios', { data: [], error: null });
     enqueue('pagos', { data: [], error: null }, { data: { id: 'pago-1' }, error: null });
-    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
     mockRpc.mockResolvedValueOnce({ data: [{ lote_id: 'lote-1', saldo_restante: 2 }], error: null });
 
     await liberarEstudioConCredito('exp-1', 'owner-1', 'gestor-1');

@@ -117,4 +117,22 @@ router.post(
   controller.iniciarEstudio,
 );
 
+// POST /api/v1/expedientes/:id/excepcion-tope — Adenda de precios §7.3-7.4:
+// la Gerencia General autoriza el canon por encima del tope (techo del
+// contrato), con motivo. La ruta pide administrador; el 403
+// SOLO_GERENCIA_GENERAL sale del servicio (esGerenciaGeneral).
+router.post(
+  '/:id/excepcion-tope',
+  authMiddleware,
+  roleGuard(['administrador']),
+  validate({
+    params: expedienteIdParamsSchema,
+    body: z.object({
+      canon_autorizado_cop: z.coerce.number().int().positive().max(1_000_000_000),
+      motivo: z.string().trim().min(10, 'Escribe el motivo de la excepción (mínimo 10 caracteres).').max(2000),
+    }),
+  }),
+  controller.autorizarExcepcion,
+);
+
 export default router;

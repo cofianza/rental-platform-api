@@ -47,10 +47,18 @@ beforeEach(() => {
 });
 
 describe('clasificación riesgo / operativo', () => {
-  it('solo los plazos operativos quedan fuera de la Gerencia General; en la duda, riesgo', () => {
+  it('solo los plazos operativos y las alertas quedan fuera de la Gerencia General; en la duda, riesgo', () => {
     const operativos = PARAMETROS.filter((p) => nivelDe(p.clave) === 'operativo').map((p) => p.clave);
-    expect(operativos).toEqual(['DIAS_EXPIRACION_ESTUDIO', 'VIGENCIA_MESES_DEFECTO', 'DIAS_EXPIRACION_FIRMA', 'DIAS_RESERVA_INMUEBLE', 'ALERTA_SALDO_MINIMO_CUPOS']);
-    for (const clave of ['CANON_MAX_TRANSITORIO', 'TOPE_CANON_COMERCIAL', 'UMBRAL_SCORE_RECHAZO', 'VIGENCIA_CRC_DIAS', 'VIGENCIA_PAQUETE_MESES'])
+    // Adenda de precios §9.14: las alertas (saldo y mezcla), cualquier administrador con traza.
+    expect(operativos).toEqual([
+      'DIAS_EXPIRACION_ESTUDIO',
+      'VIGENCIA_MESES_DEFECTO',
+      'DIAS_EXPIRACION_FIRMA',
+      'DIAS_RESERVA_INMUEBLE',
+      'ALERTA_SALDO_MINIMO_CUPOS',
+      'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25',
+    ]);
+    for (const clave of ['CANON_MAX_TRANSITORIO', 'TOPE_CANON_COMERCIAL', 'UMBRAL_SCORE_RECHAZO', 'VIGENCIA_CRC_DIAS', 'VIGENCIA_PAQUETE_MESES', 'PORCENTAJE_BENEFICIO_TRADICIONAL'])
       expect(nivelDe(clave)).toBe('riesgo');
     expect(nivelDe('NO_EXISTE')).toBe('riesgo');
   });

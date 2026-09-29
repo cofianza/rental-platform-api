@@ -253,6 +253,12 @@ const envSchema = z.object({
   // decidiendo y el motor sigue en sombra. La Adenda §11 exige correr la
   // matriz de casos (scripts/check-decision-adenda.ts) antes de encenderlo.
   MOTOR_DECIDE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Adenda de precios §6.1-6.3: estudios de inmuebles comerciales o mixtos y de
+  // arrendatarios persona juridica/NIT. OFF = bloqueados antes de crear o cobrar.
+  // Se enciende SOLO por decision expresa de la Gerencia General (§6.2), no al
+  // terminar el desarrollo: no hay modelo de evaluacion para persona juridica
+  // (§6.3). El contrato comercial sigue con DESTINOS.comercial (destinacion.ts).
+  ESTUDIOS_COMERCIAL_PJ_HABILITADOS: z.string().default('false').transform((v) => v === 'true'),
   FIRMA_MULTIPARTE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Adenda 2 §9: biometria en la FIRMA del contrato (solo con multi-parte).
   // ON = antes del sobre de Auco, el arrendatario confirma su identidad en
@@ -308,6 +314,11 @@ const envSchema = z.object({
   // paquetes vencidos (movimiento 'expiracion') y avisa el saldo bajo (§3.7).
   // Escribe en la base y manda avisos: apagado por defecto; false en una API LOCAL.
   CUPOS_VENCIMIENTO_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Adenda de precios §5.3: el último día de cada mes manda a los titulares de
+  // cada inmobiliaria las primas Trasladada por remitir el día 10 siguiente
+  // (correo + aviso in-app). Escribe en la base y envía correos: apagado por
+  // defecto, y en una API LOCAL (su .env.local apunta a producción) en false.
+  PRIMA_REPORTE_REMISION_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). SIN EFECTO: la Adenda 1 del
   // módulo de contratos (respuesta 13 bis) no la habilita y ningún camino de la

@@ -71,6 +71,7 @@ import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './aut
 // Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
 // de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
 import { assertCanonDentroDelTope, leerCanonDelInmueble } from './tope-canon.guard';
+import { assertAprobacionDentroDelTope, retenerAprobadoSobreTope } from './excepcion-tope.service';
 // Gate de PAGO (§6.3) + la señal canonica de "este estudio ya se cobro".
 import {
   leerSenalPagoEstudio,
@@ -1831,6 +1832,7 @@ export async function registrarResultado(
   userId: string,
   ip?: string,
   userRol?: string,
+  userEmail?: string,
 ) {
   // 1. Get estudio — verify exists, estado, and resultado still pendiente
   const { data: estudio, error: getError } = await (supabase
@@ -1946,6 +1948,9 @@ export async function registrarResultado(
         'EVALUACION_REQUERIDA',
       );
     }
+    // 2.56. Adenda de precios §7.3: por encima del tope solo aprueba la
+    //       Gerencia General (o con la excepción ya registrada).
+    await assertAprobacionDentroDelTope(est.expediente_id, { id: userId, rol: userRol ?? '', email: userEmail ?? '' }, ip);
   }
 
   // 2.6. CANON CONGELADO — el otro camino que llega a 'completado'.
@@ -4545,6 +4550,9 @@ async function retenerAprobadoEnRevisionManual(
   final: DecisionFinalEstudio,
 ): Promise<DecisionFinalEstudio> {
   if (final.resultado !== 'aprobado' || tipoEstudio === 'con_coarrendatario') return final;
+  // Adenda de precios §7.1: sobre el tope, a revisión (nunca aprobado automático).
+  const trasTope = await retenerAprobadoSobreTope(expedienteId, final);
+  if (trasTope.resultado !== 'aprobado') return trasTope;
   const { data: exp } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('estado')
