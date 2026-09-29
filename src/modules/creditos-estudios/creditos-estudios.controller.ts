@@ -104,7 +104,7 @@ export async function liberarEstudio(req: Request, res: Response) {
   const result = await service.liberarEstudioConCredito(expedienteId, perfilCreditos, req.user!.id, req.ip, notas);
   // Si lo gastó Cofianza, la inmobiliaria se entera (best-effort, sin esperar).
   if (pagaCofianza) {
-    void service.avisarCreditoUsadoPorCofianza(expedienteId, result.saldo_restante);
+    void service.avisarCreditoUsadoPorCofianza(expedienteId, result.saldo_restante, perfilCreditos);
   }
   sendCreated(res, result);
 }

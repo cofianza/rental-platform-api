@@ -189,7 +189,8 @@ describe('aviso a la inmobiliaria cuando Cofianza gasta su crédito', () => {
   it('avisa a cada titular activo con el estudio y el saldo que queda', async () => {
     enqueue('expedientes', expAviso);
     enqueue('inmobiliaria_miembros', { data: [{ perfil_id: 'titular-org' }, { perfil_id: 'cotitular' }], error: null });
-    await avisarCreditoUsadoPorCofianza('exp-1', 3);
+    await avisarCreditoUsadoPorCofianza('exp-1', 3, 'titular-org');
+    // El titular descontado viene también en la lista: no se le avisa dos veces.
     expect(mockNotificar).toHaveBeenCalledTimes(2);
     expect(mockNotificar).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -203,7 +204,7 @@ describe('aviso a la inmobiliaria cuando Cofianza gasta su crédito', () => {
 
   it('sin inmobiliaria no avisa a nadie', async () => {
     enqueue('expedientes', { data: { numero: 'EXP-1', inmueble: { direccion: null, ciudad: null, inmobiliaria_id: null } }, error: null });
-    await avisarCreditoUsadoPorCofianza('exp-1', 3);
+    await avisarCreditoUsadoPorCofianza('exp-1', 3, 'titular-org');
     expect(mockNotificar).not.toHaveBeenCalled();
   });
 
@@ -211,6 +212,22 @@ describe('aviso a la inmobiliaria cuando Cofianza gasta su crédito', () => {
     enqueue('expedientes', expAviso);
     enqueue('inmobiliaria_miembros', { data: [{ perfil_id: 'titular-org' }], error: null });
     mockNotificar.mockRejectedValueOnce(new Error('Resend caído'));
-    await expect(avisarCreditoUsadoPorCofianza('exp-1', 0)).resolves.toBeUndefined();
+    await expect(avisarCreditoUsadoPorCofianza('exp-1', 0, 'titular-org')).resolves.toBeUndefined();
+  });
+
+  it('org sin filas de titular: avisa igual al perfil al que se le descontó', async () => {
+    enqueue('expedientes', expAviso);
+    enqueue('inmobiliaria_miembros', { data: [], error: null });
+    await avisarCreditoUsadoPorCofianza('exp-1', 1, 'owner-legado');
+    expect(mockNotificar).toHaveBeenCalledTimes(1);
+    expect(mockNotificar).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'owner-legado', mensaje: expect.stringContaining('Te queda 1 crédito.') }),
+    );
+  });
+
+  it('error de base al leer el estudio: no avisa y no lanza', async () => {
+    enqueue('expedientes', { data: null, error: { message: 'boom', code: 'XX000' } });
+    await expect(avisarCreditoUsadoPorCofianza('exp-1', 1, 'titular-org')).resolves.toBeUndefined();
+    expect(mockNotificar).not.toHaveBeenCalled();
   });
 });

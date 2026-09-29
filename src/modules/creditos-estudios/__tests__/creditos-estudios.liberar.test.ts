@@ -69,7 +69,7 @@ describe('liberar con crédito desde Cofianza (admin/operador)', () => {
       'Liberado por Cofianza con crédito del paquete de la inmobiliaria',
     );
     // La inmobiliaria se entera del crédito que gastó Cofianza, con el saldo que queda.
-    expect(mockAvisar).toHaveBeenCalledWith('exp-1', 2);
+    expect(mockAvisar).toHaveBeenCalledWith('exp-1', 2, 'titular-org');
   });
 
   it('la respuesta no espera al aviso a la inmobiliaria', async () => {

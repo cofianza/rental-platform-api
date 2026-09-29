@@ -964,12 +964,14 @@ export async function saldoCreditosDeExpediente(expedienteId: string): Promise<{
 export async function avisarCreditoUsadoPorCofianza(
   expedienteId: string,
   saldoRestante: number,
+  perfilCreditos: string,
 ): Promise<void> {
   try {
-    const { data } = await db('expedientes')
+    const { data, error } = await db('expedientes')
       .select('numero, inmueble:inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, inmobiliaria_id)')
       .eq('id', expedienteId)
       .maybeSingle();
+    if (error) throw fromSupabaseError(error);
     const exp = data as {
       numero: string | null;
       inmueble: { direccion: string | null; ciudad: string | null; inmobiliaria_id: string | null } | null;
@@ -977,15 +979,23 @@ export async function avisarCreditoUsadoPorCofianza(
     const orgId = exp?.inmueble?.inmobiliaria_id;
     if (!orgId) return;
 
-    const { data: owners } = await db('inmobiliaria_miembros')
+    const { data: owners, error: errOwners } = await db('inmobiliaria_miembros')
       .select('perfil_id')
       .eq('inmobiliaria_id', orgId)
       .eq('rol_miembro', 'owner')
       .eq('estado', 'activo')
       .not('perfil_id', 'is', null);
-    const titulares = ((owners as Array<{ perfil_id: string | null }> | null) ?? [])
-      .map((o) => o.perfil_id)
-      .filter((id): id is string => !!id);
+    if (errOwners) throw fromSupabaseError(errOwners);
+    // Siempre incluye el perfil al que se le descontó el crédito, aunque la org
+    // no tenga filas de titular (legado: owner_perfil_id / propietario_id).
+    const titulares = [
+      ...new Set([
+        perfilCreditos,
+        ...((owners as Array<{ perfil_id: string | null }> | null) ?? [])
+          .map((o) => o.perfil_id)
+          .filter((id): id is string => !!id),
+      ]),
+    ];
 
     const inm = exp.inmueble!;
     const lugar = inm.direccion ? ` (${inm.direccion}${inm.ciudad ? `, ${inm.ciudad}` : ''})` : '';
