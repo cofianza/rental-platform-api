@@ -72,13 +72,31 @@ BEGIN
   END IF;
 END $$;
 
--- 3. Event trigger (requiere el rol postgres de Supabase).
+-- 3. Event trigger. En un proyecto NUEVO (staging) depende de que el rol que
+--    corre la migración (postgres) pueda crear event triggers: en Supabase lo
+--    permite supautils; en un Postgres sin superusuario, no. Si no puede, la
+--    migración se detiene con un mensaje claro (no se salta: sin el trigger,
+--    las tablas que creen migraciones futuras nacerían sin RLS).
+--    Además, si el proyecto nuevo ya trae su propio rls_auto_enable() con otro
+--    cuerpo, el paso 2 no lo reemplaza: sale un WARNING para compararlo.
+--    En producción no hace nada: el trigger y la función ya existen con el
+--    cuerpo de arriba (este bloque se endureció el 2026-09-28, después de
+--    aplicada la 015; ahí no cambia ningún efecto).
 DO $$
 BEGIN
+  IF (SELECT prosrc FROM pg_proc WHERE oid = to_regprocedure('public.rls_auto_enable()'))
+     NOT LIKE '%rls_auto_enable: enabled RLS on %' THEN
+    RAISE WARNING 'public.rls_auto_enable() ya existía con un cuerpo distinto al de producción; compárelo con pg_get_functiondef(''public.rls_auto_enable()''::regprocedure).';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_event_trigger WHERE evtname = 'ensure_rls') THEN
-    CREATE EVENT TRIGGER ensure_rls ON ddl_command_end
-      WHEN TAG IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
-      EXECUTE FUNCTION public.rls_auto_enable();
+    BEGIN
+      CREATE EVENT TRIGGER ensure_rls ON ddl_command_end
+        WHEN TAG IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+        EXECUTE FUNCTION public.rls_auto_enable();
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE EXCEPTION 'La 015 no pudo crear el event trigger ensure_rls: el rol % no tiene permiso para crear event triggers.', current_user
+        USING HINT = 'Créelo con un rol que tenga ese permiso (en Supabase, desde el SQL Editor del dashboard; si también falla ahí, con soporte de Supabase) y vuelva a correr esta migración; es idempotente. Sin el trigger, las tablas nuevas de public nacen sin RLS.';
+    END;
   END IF;
 END $$;
 
