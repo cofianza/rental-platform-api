@@ -16,9 +16,14 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
-import { perfilEsDuenoDeInmueble, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
+import {
+  perfilEsDuenoDeInmueble,
+  resolveOrgCanonicalPerfilId,
+  resolvePerfilCanonicoDeInmueble,
+} from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 import { getCalibracion } from '@/lib/calibracion';
 import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { masIva } from '@/modules/estudios/tarifas';
@@ -1088,6 +1093,126 @@ export async function liberarEstudioConCredito(
     );
 
   return { pago_id: pago.id, saldo_restante, lote_id };
+}
+
+// ============================================================
+// H99: Cofianza (admin/operador) paga la evaluación con un crédito de la
+// inmobiliaria dueña del estudio, desde el modal interno «Nueva evaluación».
+// ============================================================
+
+/**
+ * Titular (perfil canónico) de la inmobiliaria dueña del inmueble del estudio:
+ * de su saldo sale el crédito. null si el inmueble no es de una inmobiliaria
+ * (H2: los créditos son de las inmobiliarias; el propietario individual paga
+ * con enlace). 404 si el estudio no existe.
+ */
+export async function duenoCreditosDeExpediente(expedienteId: string): Promise<string | null> {
+  const { data, error } = await db('expedientes')
+    .select('id, inmueble:inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  if (!data) throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  const inm = (data as { inmueble: { propietario_id: string; inmobiliaria_id: string | null } | null }).inmueble;
+  if (!inm?.inmobiliaria_id) return null;
+  return resolvePerfilCanonicoDeInmueble(inm);
+}
+
+/**
+ * Saldo usable de la inmobiliaria dueña del estudio, para que el modal interno
+ * ofrezca el crédito solo cuando se puede gastar: saldo efectivo (P22, lo en
+ * contra ya restado) y si ya hay un cobro de la evaluación vivo (entonces
+ * liberar daría 409 y no se ofrece).
+ */
+export async function saldoCreditosDeExpediente(expedienteId: string): Promise<{
+  con_inmobiliaria: boolean;
+  saldo_efectivo: number;
+  creditos_en_contra: number;
+  pago_estudio_existente: boolean;
+}> {
+  const dueno = await duenoCreditosDeExpediente(expedienteId);
+  const { data: pagos, error } = await db('pagos')
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', 'estudio')
+    .in('estado', ['completado', 'pendiente', 'procesando'])
+    .limit(1);
+  if (error) throw fromSupabaseError(error);
+  const pago_estudio_existente = ((pagos as unknown[] | null) ?? []).length > 0;
+  if (!dueno) return { con_inmobiliaria: false, saldo_efectivo: 0, creditos_en_contra: 0, pago_estudio_existente };
+  const saldo = await getSaldoCreditos(dueno);
+  return {
+    con_inmobiliaria: true,
+    saldo_efectivo: saldo.saldo_efectivo,
+    creditos_en_contra: saldo.creditos_en_contra,
+    pago_estudio_existente,
+  };
+}
+
+/**
+ * H99: aviso (in-app + correo) a los titulares activos de la inmobiliaria
+ * cuando Cofianza gastó uno de sus créditos en la evaluación de un estudio.
+ * Best-effort: nunca lanza (el consumo ya quedó y no se revierte).
+ */
+export async function avisarCreditoUsadoPorCofianza(
+  expedienteId: string,
+  saldoRestante: number,
+  perfilCreditos: string,
+): Promise<void> {
+  try {
+    const { data, error } = await db('expedientes')
+      .select('numero, inmueble:inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, inmobiliaria_id)')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    if (error) throw fromSupabaseError(error);
+    const exp = data as {
+      numero: string | null;
+      inmueble: { direccion: string | null; ciudad: string | null; inmobiliaria_id: string | null } | null;
+    } | null;
+    const orgId = exp?.inmueble?.inmobiliaria_id;
+    if (!orgId) return;
+
+    const { data: owners, error: errOwners } = await db('inmobiliaria_miembros')
+      .select('perfil_id')
+      .eq('inmobiliaria_id', orgId)
+      .eq('rol_miembro', 'owner')
+      .eq('estado', 'activo')
+      .not('perfil_id', 'is', null);
+    if (errOwners) throw fromSupabaseError(errOwners);
+    // Siempre incluye el perfil al que se le descontó el crédito, aunque la org
+    // no tenga filas de titular (legado: owner_perfil_id / propietario_id).
+    const titulares = [
+      ...new Set([
+        perfilCreditos,
+        ...((owners as Array<{ perfil_id: string | null }> | null) ?? [])
+          .map((o) => o.perfil_id)
+          .filter((id): id is string => !!id),
+      ]),
+    ];
+
+    const inm = exp.inmueble!;
+    const lugar = inm.direccion ? ` (${inm.direccion}${inm.ciudad ? `, ${inm.ciudad}` : ''})` : '';
+    const quedan = saldoRestante === 1 ? 'Te queda 1 crédito' : `Te quedan ${saldoRestante} créditos`;
+    // Import dinámico, como el orchestrator: notificaciones arrastra config y correos.
+    const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
+    await Promise.all(
+      titulares.map((userId) =>
+        notificarYCorreo({
+          userId,
+          tipo: 'credito.usado_por_cofianza',
+          titulo: 'Cofianza usó 1 crédito de tu paquete',
+          mensaje: `Cofianza pagó la evaluación crediticia del estudio ${formatNumeroEstudio(exp.numero)}${lugar} con 1 crédito de tu paquete. ${quedan}.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, saldo_restante: saldoRestante },
+        }),
+      ),
+    );
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), expedienteId },
+      'No se pudo avisar a la inmobiliaria del crédito usado por Cofianza',
+    );
+  }
 }
 
 // ============================================================
