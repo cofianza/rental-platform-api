@@ -397,6 +397,16 @@ export async function enviarEnlaceAutorizacion(
     throw AppError.badRequest('El solicitante no tiene email registrado', 'SOLICITANTE_SIN_EMAIL');
   }
 
+  // H43: el auto-registro ya no pide el documento (la ficha nace con ''). Sin
+  // número, §8.1 (documentoCoincide) mataría el enlace como "datos
+  // incorrectos" apenas el prospecto lo abriera: mejor no emitirlo.
+  if (!exp.solicitantes?.numero_documento?.trim()) {
+    throw AppError.badRequest(
+      'Falta el número de documento del prospecto. Agrégalo (o pídele que lo complete en «Mi cuenta») antes de enviarle la solicitud de autorización.',
+      'SOLICITANTE_SIN_DOCUMENTO',
+    );
+  }
+
   // 1b. No re-crear un enlace si el inquilino YA firmó (estado autorizado, no
   // revocado Y VIGENTE). Un nuevo enlace pendiente podría re-firmarse y
   // re-disparar el estudio de crédito. Esto hace idempotente el auto-envío del

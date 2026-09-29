@@ -465,6 +465,23 @@ describe('autorizaciones.service', () => {
       });
     });
 
+    it('H43: ficha sin documento (auto-registro liviano) -> SOLICITANTE_SIN_DOCUMENTO sin crear enlace', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
+        statusCode: 400,
+        errorCode: 'SOLICITANTE_SIN_DOCUMENTO',
+      });
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    it('H43: el gestor escribe el documento que faltaba y el enlace sale', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      const result = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' });
+      expect(result).toMatchObject({ id: AUTORIZACION_ID, estado: 'pendiente' });
+      expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '123456789' });
+    });
+
     it('estudio cerrado o rechazado: no se le pide la autorizacion al prospecto', async () => {
       for (const estado of ['cerrado', 'rechazado']) {
         enqueue('expedientes', { data: { ...expedienteConSolicitante, estado } });

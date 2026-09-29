@@ -42,6 +42,8 @@ export async function registerSolicitante(
   } = input;
 
   const registrationSource = from_invitation ? 'invitacion_externa' : 'vitrina_publica';
+  // Documento opcional (H43). Sin número no hay nada que deduplicar ni guardar.
+  const tipoDoc = numero_documento ? (tipo_documento ?? 'cc') : undefined;
 
   // 0. Pre-flight: validar duplicados ANTES de crear el auth.user, para no dejar
   //    un auth.user huérfano que bloquee reintentos con "EMAIL_ALREADY_EXISTS".
@@ -57,11 +59,13 @@ export async function registerSolicitante(
   //    es que la MISMA persona se cree DOS cuentas de auto-servicio: buscamos
   //    una ficha con ese documento cuyo creador sea un perfil rol='solicitante'
   //    (= ficha auto-propiedad). Las fichas de agencia/propietario no bloquean.
-  const { data: fichasMismoDoc } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, creado_por, inmobiliaria_id')
-    .eq('tipo_documento', tipo_documento)
-    .eq('numero_documento', numero_documento);
+  const { data: fichasMismoDoc } = numero_documento
+    ? await (supabase
+        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+        .select('id, creado_por, inmobiliaria_id')
+        .eq('tipo_documento', tipoDoc)
+        .eq('numero_documento', numero_documento)
+    : { data: [] };
 
   const candidatasAutoServicio = ((fichasMismoDoc as Array<{
     id: string; creado_por: string | null; inmobiliaria_id: string | null;
@@ -113,8 +117,7 @@ export async function registerSolicitante(
       rol: 'solicitante',
       estado: 'activo',
       telefono,
-      tipo_documento,
-      numero_documento,
+      ...(numero_documento ? { tipo_documento: tipoDoc, numero_documento } : {}),
       registration_source: registrationSource,
     } as never)
     .eq('id', userId);
@@ -131,8 +134,10 @@ export async function registerSolicitante(
       apellido,
       email,
       telefono,
-      tipo_documento,
-      numero_documento,
+      // NOT NULL en la BD: sin documento va '' (mismo valor que usa
+      // selfHealSolicitante); tipo_documento cae al DEFAULT 'cc'.
+      ...(tipoDoc ? { tipo_documento: tipoDoc } : {}),
+      numero_documento: numero_documento ?? '',
       municipio_id,
       municipio_nombre,
       creado_por: userId,
