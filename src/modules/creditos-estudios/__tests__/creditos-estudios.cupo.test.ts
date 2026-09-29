@@ -219,6 +219,28 @@ describe('decisión 5: falla y reintento con resultado = un solo cupo', () => {
     await expect(asegurarReservaParaConsulta('exp-1', 'u-1')).rejects.toMatchObject({ errorCode: 'SIN_SALDO_CREDITOS' });
   });
 
+  it('ejecución del sistema (userId vacío): la RPC recibe p_usuario_id null, no \'\' (uuid)', async () => {
+    pagoCompletado();
+    mockRpc.mockResolvedValueOnce({ data: 'no_aplica', error: null });
+
+    await asegurarReservaParaConsulta('exp-1', '');
+
+    expect(rpcs('reactivar_reserva_credito')).toEqual([{ p_pago_id: 'pago-1', p_usuario_id: null }]);
+  });
+
+  it('ejecución del sistema: confirmar y liberar el cupo tampoco mandan \'\' como usuario', async () => {
+    pagoCompletado();
+    mockRpc.mockResolvedValueOnce({ data: 'consumido', error: null });
+    await registrarDesenlaceConsulta({ estudioId: 'est-1', expedienteId: 'exp-1', desenlace: 'c_resultado', referencia: 'TU-1', usuarioId: '' });
+    expect(rpcs('confirmar_consumo_credito')[0]).toMatchObject({ p_usuario_id: null });
+
+    pagoCompletado();
+    enqueue('estudios', { data: [], error: null });
+    mockRpc.mockResolvedValueOnce({ data: 'liberado', error: null });
+    await registrarDesenlaceConsulta({ estudioId: 'est-1', expedienteId: 'exp-1', desenlace: 'b_falla', usuarioId: '' });
+    expect(rpcs('liberar_reserva_credito')[0]).toMatchObject({ p_usuario_id: null });
+  });
+
   it('un pago de pasarela no toca cupos', async () => {
     pagoCompletado(null);
     await asegurarReservaParaConsulta('exp-1', 'u-1');
