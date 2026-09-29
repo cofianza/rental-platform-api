@@ -14,9 +14,13 @@
 INSERT INTO public.parametros_calibracion (clave, valor, descripcion)
 SELECT
   'PRECIO_ESTUDIO_INDIVIDUAL',
+  -- Se lee como lo leía la API (parseInt): '80000.00' es 80000, no 8000000.
+  -- Fuera del rango de calibración (1.000-10.000.000), el default.
   COALESCE(
-    (SELECT NULLIF(regexp_replace(valor::text, '[^0-9]', '', 'g'), '')::numeric
-       FROM public.configuracion_sistema WHERE clave = 'monto_estudio'),
+    (SELECT v FROM (
+       SELECT substring(valor FROM '^\s*(\d+)')::numeric AS v
+         FROM public.configuracion_sistema WHERE clave = 'monto_estudio'
+     ) s WHERE v BETWEEN 1000 AND 10000000),
     80000
   ),
   'Adenda de precios §1.1 / §9.1 — precio base del estudio individual (COP, sin IVA). Se cobra más TARIFA_IVA.'
