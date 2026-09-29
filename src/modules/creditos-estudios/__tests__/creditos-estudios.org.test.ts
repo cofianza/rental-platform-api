@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Los créditos de estudios son de la ORGANIZACIÓN (perfil canónico del
 // titular), no de quien los compró. Mock de Supabase con colas por tabla.
 
-const { mockFrom, mockRpc, ops, queues, enqueue, mockEsDueno, mockFactura } = vi.hoisted(() => {
+const { mockFrom, mockRpc, ops, queues, enqueue, mockEsDueno, mockFactura, mockCreateLink, calibracion } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -34,6 +34,8 @@ const { mockFrom, mockRpc, ops, queues, enqueue, mockEsDueno, mockFactura } = vi
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     mockEsDueno: vi.fn(async () => true),
     mockFactura: vi.fn(async () => ({ id: 'f-1' })),
+    mockCreateLink: vi.fn(async () => ({ url: 'https://mp.test/checkout/c', externalId: 'pref-c' })),
+    calibracion: { TARIFA_IVA: 19 },
   };
 });
 
@@ -41,7 +43,9 @@ vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t),
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
-vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: vi.fn() }));
+vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: () => ({ createPaymentLink: mockCreateLink }) }));
+vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ getMontoEstudio: vi.fn(async () => 95_200) }));
+vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => calibracion) }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioPagado: vi.fn(async () => undefined) }));
 vi.mock('@/modules/facturacion/facturacion.service', () => ({ crearFacturaDesdeCompraCreditos: mockFactura }));
@@ -51,12 +55,19 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => (id === 'miembro-1' ? 'owner-1' : id)),
 }));
 
-import { getSaldoCreditos, liberarEstudioConCredito, acreditarCompraDesdeWebhook } from '../creditos-estudios.service';
+import {
+  getSaldoCreditos,
+  liberarEstudioConCredito,
+  acreditarCompraDesdeWebhook,
+  comprarPaquete,
+  listPaquetesActivos,
+} from '../creditos-estudios.service';
 
 beforeEach(() => {
   queues.clear();
   ops.length = 0;
   vi.clearAllMocks();
+  calibracion.TARIFA_IVA = 19;
 });
 
 describe('créditos de la organización', () => {
@@ -76,7 +87,6 @@ describe('créditos de la organización', () => {
     enqueue('expedientes', { data: { id: 'exp-1', numero: 'EXP-1', inmueble_id: 'inm-1', solicitante_id: 'sol-1' }, error: null });
     enqueue('inmuebles', { data: { propietario_id: 'owner-1', inmobiliaria_id: 'org-1', direccion: 'Calle 1', ciudad: 'Bogotá' }, error: null });
     enqueue('pagos', { data: [], error: null }); // sin pago de estudio previo
-    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
     enqueue('pagos', { data: { id: 'pago-1' }, error: null }); // insert
 
     const r = await liberarEstudioConCredito('exp-1', 'miembro-1', 'miembro-1');
@@ -113,5 +123,28 @@ describe('créditos de la organización', () => {
     expect(await acreditarCompraDesdeWebhook('pref-1', 'mp-1', {})).toEqual({ ok: true, ya_acreditado: true });
     await new Promise((r) => setTimeout(r, 0));
     expect(mockFactura).not.toHaveBeenCalled();
+  });
+});
+
+// Adenda de precios §1.1 / §3.5: el paquete se cobra base + TARIFA_IVA.
+describe('paquetes con IVA', () => {
+  const paquete5 = { id: 'pq-5', nombre: 'Paquete 5', descripcion: null, cantidad_estudios: 5, precio_cop: 350_000, vence_en_dias: null };
+
+  it('la compra cobra 350.000 + 19 % = 416.500 y guarda la instantánea', async () => {
+    enqueue('paquetes_creditos_estudios', { data: paquete5, error: null });
+    enqueue('compras_creditos_estudios', { data: { id: 'compra-1' }, error: null }, { data: null, error: null });
+
+    await comprarPaquete('miembro-1', 'pq-5', 'miembro-1');
+
+    const insert = ops.find((o) => o.table === 'compras_creditos_estudios' && o.method === 'insert');
+    expect(insert?.args[0]).toMatchObject({ perfil_id: 'owner-1', precio_cop: 350_000, iva_cop: 66_500, total_cop: 416_500, tarifa_iva: 19 });
+    expect(mockCreateLink).toHaveBeenCalledWith(expect.objectContaining({ amount: 416_500 }));
+  });
+
+  it('el catálogo trae el total con la TARIFA_IVA vigente (no un 19 fijo)', async () => {
+    calibracion.TARIFA_IVA = 5;
+    enqueue('paquetes_creditos_estudios', { data: [paquete5], error: null });
+
+    expect((await listPaquetesActivos())[0]).toMatchObject({ precio_cop: 350_000, tarifa_iva: 5, iva_cop: 17_500, total_cop: 367_500 });
   });
 });

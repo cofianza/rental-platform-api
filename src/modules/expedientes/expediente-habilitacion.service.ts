@@ -1106,6 +1106,13 @@ export async function iniciarEstudio(
     expedienteId,
   });
 
+  // Adenda de precios §1.4: antes de habilitar, para no dejar el estudio a
+  // medias por una forma de pago que la inmobiliaria no tiene.
+  if (input.forma_pago === 'inmobiliaria') {
+    const { assertPagoSueltoPermitido } = await import('@/modules/pago-estudio/pago-estudio.service');
+    assertPagoSueltoPermitido(userRol);
+  }
+
   // 1. Habilitar. autoPago=false: quién paga lo dijo el gestor en el paso 3.
   let citaOmitida = false;
   let habilitado: HabilitarEstudioResult;

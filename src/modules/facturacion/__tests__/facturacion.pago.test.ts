@@ -186,16 +186,35 @@ describe('IVA por concepto', () => {
     expect(intento.error_mensaje).toContain('TARIFA_IVA');
   });
 
-  it('el estudio sigue excluido de IVA', async () => {
+  it('estudio SIN instantánea (cobro anterior a la Adenda de precios): exento, como se cobró', async () => {
     facturaEmitida();
     enqueue('pagos', pago('completado'));
-    tasa('0');
 
     await crearFacturaDesdePago('pago-1', null);
 
     expect(payload().items[0].price).toBe('80000.00');
     expect(payload().items[0].taxes).toEqual([{ is_excluded: true }]);
     expect(payload().cash_rounding_amount).toBeUndefined();
+  });
+
+  // Adenda de precios §1.1: la base gravada con la tasa del cobro, no la de hoy.
+  it.each([
+    [95_200, 80_000, 19, '80000.00', [{ code: '01', rate: '19.00' }]],
+    [84_000, 80_000, 5, '80000.00', [{ code: '01', rate: '5.00' }]],
+    [80_000, 80_000, 0, '80000.00', [{ is_excluded: true }]],
+  ])('estudio CON instantánea: total %i = base %i + IVA al %i %%', async (monto, base, tarifa, price, taxes) => {
+    calibracion.TARIFA_IVA = 16; // la de hoy no manda: manda la del cobro
+    facturaEmitida();
+    const p = pago('completado', 'estudio', monto);
+    enqueue('pagos', { ...p, data: { ...p.data, base_cop: `${base}.00`, tarifa_iva: `${tarifa}.00` } });
+
+    await crearFacturaDesdePago('pago-1', null);
+
+    expect(payload().items[0].price).toBe(price);
+    expect(payload().items[0].taxes).toEqual(taxes);
+    expect(payload().payment_details[0].amount).toBe(`${monto}.00`);
+    expect(payload().cash_rounding_amount).toBeUndefined();
+    expect(ops.some((o) => o.table === 'configuracion_sistema')).toBe(false);
   });
 });
 
@@ -259,16 +278,25 @@ describe('medio de pago DIAN', () => {
 
 // P44 (parte resuelta): el paquete de créditos es el pago anticipado de
 // evaluaciones y lleva el IVA de la evaluación; se muestra así, sin editarse aparte.
-describe('Tarifas de IVA: paquetes de créditos', () => {
-  it('se listan con la tasa de la evaluación, como derivada', async () => {
-    enqueue('configuracion_sistema', { data: [{ clave: 'iva_concepto_estudio', valor: '19' }], error: null });
+describe('Tarifas de IVA: estudio y paquetes de créditos (Adenda de precios §1.3)', () => {
+  it('el estudio y los paquetes se listan con TARIFA_IVA, como derivados', async () => {
+    enqueue('configuracion_sistema', { data: [{ clave: 'iva_concepto_estudio', valor: '0' }], error: null });
 
-    expect((await listTarifasIva()).find((t) => t.concepto === 'creditos_estudios')).toEqual({
+    const tarifas = await listTarifasIva();
+    expect(tarifas.find((t) => t.concepto === 'estudio')).toEqual({ concepto: 'estudio', tasa: 19, derivada: true });
+    expect(tarifas.find((t) => t.concepto === 'creditos_estudios')).toEqual({
       concepto: 'creditos_estudios',
       tasa: 19,
       derivada: true,
       derivada_de: 'estudio',
     });
+  });
+
+  it('el IVA del estudio ya no se edita aquí', async () => {
+    await expect(updateTarifasIva([{ concepto: 'estudio', tasa: 0 }], 'admin-1')).rejects.toMatchObject({
+      errorCode: 'CONCEPTO_GRAVADO',
+    });
+    expect(ops.some((o) => o.method === 'upsert')).toBe(false);
   });
 });
 

@@ -30,7 +30,7 @@ const PAGO_SELECT = `
   comprobante_url, comprobante_storage_key, comprobante_nombre_original,
   comprobante_tipo_mime, comprobante_tamano_bytes, referencia_bancaria,
   notas, fecha_pago, created_at, updated_at, creado_por,
-  email_pagador, nombre_pagador
+  email_pagador, nombre_pagador, base_cop, iva_cop, tarifa_iva
 `;
 
 /**
@@ -313,12 +313,16 @@ export async function createPaymentLink(
   //     /pago-estudio/enviar-link. Import dinamico: pago-estudio.service ya
   //     importa de aqui (attachFacturas) y un import estatico cerraria el ciclo.
   let monto = input.monto;
+  // Adenda de precios §1.1: el cobro del estudio lleva su instantánea de IVA.
+  let ivaEstudio: Record<string, number> = {};
   if (input.concepto === 'estudio') {
     await assertCanonDentroDelTope({ expedienteId, origen: 'createPaymentLink' });
-    const { getMontoEstudio, cerrarCobroEstudioFallido } = await import(
+    const { getPrecioEstudio, instantaneaIva, cerrarCobroEstudioFallido } = await import(
       '@/modules/pago-estudio/pago-estudio.service'
     );
-    monto = await getMontoEstudio();
+    const precio = await getPrecioEstudio();
+    monto = precio.total;
+    ivaEstudio = instantaneaIva(precio);
 
     // Esta es la TERCERA puerta que abre un cobro de estudio, y tenia el mismo
     // hueco que crearCobroPasarela: el chequeo de duplicados de abajo solo mira
@@ -380,6 +384,7 @@ export async function createPaymentLink(
       concepto: input.concepto,
       descripcion: input.descripcion,
       monto,
+      ...ivaEstudio,
       metodo: 'pasarela',
       estado: 'pendiente',
       email_pagador: input.email_pagador,
@@ -480,7 +485,8 @@ export async function createPaymentLink(
         linkResult.url,
         {
           concepto: conceptLabel,
-          monto: formatCOP(monto),
+          // Adenda de precios §1.2: al prospecto, el total con el IVA incluido.
+          monto: `${formatCOP(monto)}${ivaEstudio.tarifa_iva > 0 ? ' (IVA incluido)' : ''}`,
           expediente_numero: expNumero,
         },
       );
@@ -684,6 +690,7 @@ export async function resendPaymentLink(pagoId: string, userId: string, userRol?
     nombre_pagador: string | null;
     concepto: string;
     monto: number;
+    tarifa_iva: number | null;
     expediente_id: string;
   };
 
@@ -724,7 +731,7 @@ export async function resendPaymentLink(pagoId: string, userId: string, userRol?
     pago.payment_link_url,
     {
       concepto: conceptLabel,
-      monto: formatCOP(pago.monto),
+      monto: `${formatCOP(pago.monto)}${Number(pago.tarifa_iva) > 0 ? ' (IVA incluido)' : ''}`,
       expediente_numero: expNumero,
     },
   );
@@ -885,6 +892,16 @@ export async function registerManualPayment(
     }
   }
 
+  // Adenda de precios §1.1: un pago manual del estudio por el precio vigente
+  // (base + IVA) se factura gravado. Otro valor (p. ej. un acuerdo anterior a
+  // la adenda) queda sin instantánea y se factura como antes.
+  let ivaEstudio: Record<string, number> = {};
+  if (input.concepto === 'estudio') {
+    const { getPrecioEstudio, instantaneaIva } = await import('@/modules/pago-estudio/pago-estudio.service');
+    const precio = await getPrecioEstudio();
+    if (Number(input.monto) === precio.total) ivaEstudio = instantaneaIva(precio);
+  }
+
   const { data: pago, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .insert({
@@ -892,6 +909,7 @@ export async function registerManualPayment(
       concepto: input.concepto,
       descripcion: input.descripcion || null,
       monto: input.monto,
+      ...ivaEstudio,
       metodo: input.metodo,
       estado: 'completado',
       referencia_bancaria: input.referencia_bancaria || null,
