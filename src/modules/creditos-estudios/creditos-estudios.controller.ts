@@ -89,7 +89,8 @@ export async function liberarEstudio(req: Request, res: Response) {
   const rol = req.user!.rol;
   let perfilCreditos = req.user!.id;
   let notas = input.notas;
-  if (rol === 'administrador' || rol === 'operador_analista') {
+  const pagaCofianza = rol === 'administrador' || rol === 'operador_analista';
+  if (pagaCofianza) {
     const dueno = await service.duenoCreditosDeExpediente(expedienteId);
     if (!dueno) {
       throw AppError.conflict(
@@ -101,6 +102,10 @@ export async function liberarEstudio(req: Request, res: Response) {
     notas = notas || 'Liberado por Cofianza con crédito del paquete de la inmobiliaria';
   }
   const result = await service.liberarEstudioConCredito(expedienteId, perfilCreditos, req.user!.id, req.ip, notas);
+  // Si lo gastó Cofianza, la inmobiliaria se entera (best-effort, sin esperar).
+  if (pagaCofianza) {
+    void service.avisarCreditoUsadoPorCofianza(expedienteId, result.saldo_restante);
+  }
   sendCreated(res, result);
 }
 

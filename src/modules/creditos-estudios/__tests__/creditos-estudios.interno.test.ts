@@ -14,7 +14,7 @@ const { mockFrom, mockRpc, ops, queues, enqueue, mockCanon } = vi.hoisted(() => 
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'is', 'gt', 'or', 'order', 'limit'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'is', 'gt', 'or', 'order', 'limit', 'not'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -48,6 +48,8 @@ vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: vi.fn() }));
 vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ cerrarCobroEstudioFallido: vi.fn() }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
+const { mockNotificar } = vi.hoisted(() => ({ mockNotificar: vi.fn(async () => undefined) }));
+vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarYCorreo: mockNotificar }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioPagado: vi.fn(async () => undefined) }));
 // perfilEsDuenoDeInmueble real en su regla: el titular es miembro de la org del inmueble.
 vi.mock('@/lib/tenantScope', () => ({
@@ -60,6 +62,7 @@ import {
   duenoCreditosDeExpediente,
   saldoCreditosDeExpediente,
   liberarEstudioConCredito,
+  avisarCreditoUsadoPorCofianza,
 } from '../creditos-estudios.service';
 
 const expDeOrg = { data: { id: 'exp-1', inmueble: { propietario_id: 'asesor', inmobiliaria_id: 'org-1' } }, error: null };
@@ -174,5 +177,40 @@ describe('liberar con el crédito del titular', () => {
       errorCode: 'SIN_SALDO_CREDITOS',
     });
     expect(ops.some((o) => o.table === 'pagos' && o.method === 'delete')).toBe(true);
+  });
+});
+
+describe('aviso a la inmobiliaria cuando Cofianza gasta su crédito', () => {
+  const expAviso = {
+    data: { numero: 'EXP-2026-0005', inmueble: { direccion: 'Cra 1', ciudad: 'Bogotá', inmobiliaria_id: 'org-1' } },
+    error: null,
+  };
+
+  it('avisa a cada titular activo con el estudio y el saldo que queda', async () => {
+    enqueue('expedientes', expAviso);
+    enqueue('inmobiliaria_miembros', { data: [{ perfil_id: 'titular-org' }, { perfil_id: 'cotitular' }], error: null });
+    await avisarCreditoUsadoPorCofianza('exp-1', 3);
+    expect(mockNotificar).toHaveBeenCalledTimes(2);
+    expect(mockNotificar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'cotitular',
+        link: '/expedientes/exp-1',
+        mensaje: expect.stringMatching(/N\.° 2026-0005 \(Cra 1, Bogotá\).*1 crédito.*Te quedan 3 créditos/),
+      }),
+    );
+    expect(ops).toContainEqual({ table: 'inmobiliaria_miembros', method: 'eq', args: ['rol_miembro', 'owner'] });
+  });
+
+  it('sin inmobiliaria no avisa a nadie', async () => {
+    enqueue('expedientes', { data: { numero: 'EXP-1', inmueble: { direccion: null, ciudad: null, inmobiliaria_id: null } }, error: null });
+    await avisarCreditoUsadoPorCofianza('exp-1', 3);
+    expect(mockNotificar).not.toHaveBeenCalled();
+  });
+
+  it('si el aviso falla no lanza (el consumo no se revierte)', async () => {
+    enqueue('expedientes', expAviso);
+    enqueue('inmobiliaria_miembros', { data: [{ perfil_id: 'titular-org' }], error: null });
+    mockNotificar.mockRejectedValueOnce(new Error('Resend caído'));
+    await expect(avisarCreditoUsadoPorCofianza('exp-1', 0)).resolves.toBeUndefined();
   });
 });

@@ -7,17 +7,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { mockAssert, mockLiberar, mockDueno } = vi.hoisted(() => ({
+const { mockAssert, mockLiberar, mockDueno, mockAvisar, mockSendCreated } = vi.hoisted(() => ({
   mockAssert: vi.fn(),
   mockLiberar: vi.fn(),
   mockDueno: vi.fn(),
+  mockAvisar: vi.fn(async () => undefined),
+  mockSendCreated: vi.fn(),
 }));
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: mockAssert }));
 vi.mock('../creditos-estudios.service', () => ({
   liberarEstudioConCredito: mockLiberar,
   duenoCreditosDeExpediente: mockDueno,
+  avisarCreditoUsadoPorCofianza: mockAvisar,
 }));
-vi.mock('@/lib/response', () => ({ sendSuccess: vi.fn(), sendCreated: vi.fn() }));
+vi.mock('@/lib/response', () => ({ sendSuccess: vi.fn(), sendCreated: mockSendCreated }));
 
 import { liberarEstudio } from '../creditos-estudios.controller';
 
@@ -65,6 +68,25 @@ describe('liberar con crédito desde Cofianza (admin/operador)', () => {
       '203.0.113.7',
       'Liberado por Cofianza con crédito del paquete de la inmobiliaria',
     );
+    // La inmobiliaria se entera del crédito que gastó Cofianza, con el saldo que queda.
+    expect(mockAvisar).toHaveBeenCalledWith('exp-1', 2);
+  });
+
+  it('la respuesta no espera al aviso a la inmobiliaria', async () => {
+    mockAssert.mockResolvedValueOnce(undefined);
+    mockDueno.mockResolvedValueOnce('titular-org');
+    mockLiberar.mockResolvedValueOnce({ pago_id: 'p-1', saldo_restante: 2, lote_id: 'l-1' });
+    mockAvisar.mockReturnValueOnce(new Promise(() => undefined));
+    await liberarEstudio(reqInterno('administrador'), res);
+    expect(mockSendCreated).toHaveBeenCalledWith(res, expect.objectContaining({ saldo_restante: 2 }));
+  });
+
+  it('si el consumo falla no se avisa', async () => {
+    mockAssert.mockResolvedValueOnce(undefined);
+    mockDueno.mockResolvedValueOnce('titular-org');
+    mockLiberar.mockRejectedValueOnce(new Error('SIN_SALDO_CREDITOS'));
+    await expect(liberarEstudio(reqInterno('operador_analista'), res)).rejects.toThrow('SIN_SALDO_CREDITOS');
+    expect(mockAvisar).not.toHaveBeenCalled();
   });
 
   it('estudio sin inmobiliaria (propietario individual): 409 sin tocar créditos', async () => {
@@ -82,5 +104,7 @@ describe('liberar con crédito desde Cofianza (admin/operador)', () => {
     mockLiberar.mockResolvedValueOnce({ pago_id: 'p-1', saldo_restante: 3, lote_id: 'l-1' });
     await liberarEstudio(req, res);
     expect(mockDueno).not.toHaveBeenCalled();
+    // Gasta su propio crédito: no hay aviso.
+    expect(mockAvisar).not.toHaveBeenCalled();
   });
 });

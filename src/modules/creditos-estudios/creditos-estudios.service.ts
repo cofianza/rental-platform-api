@@ -23,6 +23,7 @@ import {
 } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
+import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
 
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
@@ -953,6 +954,62 @@ export async function saldoCreditosDeExpediente(expedienteId: string): Promise<{
     creditos_en_contra: saldo.creditos_en_contra,
     pago_estudio_existente,
   };
+}
+
+/**
+ * H99: aviso (in-app + correo) a los titulares activos de la inmobiliaria
+ * cuando Cofianza gastó uno de sus créditos en la evaluación de un estudio.
+ * Best-effort: nunca lanza (el consumo ya quedó y no se revierte).
+ */
+export async function avisarCreditoUsadoPorCofianza(
+  expedienteId: string,
+  saldoRestante: number,
+): Promise<void> {
+  try {
+    const { data } = await db('expedientes')
+      .select('numero, inmueble:inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, inmobiliaria_id)')
+      .eq('id', expedienteId)
+      .maybeSingle();
+    const exp = data as {
+      numero: string | null;
+      inmueble: { direccion: string | null; ciudad: string | null; inmobiliaria_id: string | null } | null;
+    } | null;
+    const orgId = exp?.inmueble?.inmobiliaria_id;
+    if (!orgId) return;
+
+    const { data: owners } = await db('inmobiliaria_miembros')
+      .select('perfil_id')
+      .eq('inmobiliaria_id', orgId)
+      .eq('rol_miembro', 'owner')
+      .eq('estado', 'activo')
+      .not('perfil_id', 'is', null);
+    const titulares = ((owners as Array<{ perfil_id: string | null }> | null) ?? [])
+      .map((o) => o.perfil_id)
+      .filter((id): id is string => !!id);
+
+    const inm = exp.inmueble!;
+    const lugar = inm.direccion ? ` (${inm.direccion}${inm.ciudad ? `, ${inm.ciudad}` : ''})` : '';
+    const quedan = saldoRestante === 1 ? 'Te queda 1 crédito' : `Te quedan ${saldoRestante} créditos`;
+    // Import dinámico, como el orchestrator: notificaciones arrastra config y correos.
+    const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
+    await Promise.all(
+      titulares.map((userId) =>
+        notificarYCorreo({
+          userId,
+          tipo: 'credito.usado_por_cofianza',
+          titulo: 'Cofianza usó 1 crédito de tu paquete',
+          mensaje: `Cofianza pagó la evaluación crediticia del estudio ${formatNumeroEstudio(exp.numero)}${lugar} con 1 crédito de tu paquete. ${quedan}.`,
+          link: `/expedientes/${expedienteId}`,
+          payload: { expediente_id: expedienteId, saldo_restante: saldoRestante },
+        }),
+      ),
+    );
+  } catch (err) {
+    logger.warn(
+      { error: err instanceof Error ? err.message : String(err), expedienteId },
+      'No se pudo avisar a la inmobiliaria del crédito usado por Cofianza',
+    );
+  }
 }
 
 // ============================================================
