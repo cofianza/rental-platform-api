@@ -136,3 +136,23 @@ describe('aprobado', () => {
     await vi.waitFor(() => expect(mockEmitirCrc).toHaveBeenCalledWith('est-1', 'gestor-1', { regenerar: false }));
   });
 });
+
+// Adenda de precios §8.2: al entrar a la cola del analista la prioridad parte
+// de 'normal' (no hereda la 'baja' de una vuelta R2 anterior).
+describe('condicionado', () => {
+  const prioridad = () =>
+    (ops.find((o) => o.table === 'expedientes' && o.method === 'update' && 'prioridad_revision' in (o.args[0] as object))
+      ?.args[0] as { prioridad_revision?: string } | undefined)?.prioridad_revision;
+
+  it('al entrar a condicionado reinicia la prioridad a normal', async () => {
+    encolarRechazo(); // mismas filas: en_revision → condicionado
+    await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'condicionado', score: 560, solicitanteId: '' });
+    expect(prioridad()).toBe('normal');
+  });
+
+  it('un rechazo no toca la prioridad', async () => {
+    encolarRechazo();
+    await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'rechazado', score: 380, solicitanteId: '' });
+    expect(prioridad()).toBeUndefined();
+  });
+});

@@ -105,6 +105,15 @@ export function veredictoScorecard(e: {
   return v('sin_evaluar');
 }
 
+export type PrioridadRevision = 'baja' | 'normal' | 'alta';
+
+/**
+ * Adenda de precios §8.2: el caso R2 entra a la cola del analista con
+ * prioridad BAJA. La adenda no define otras prioridades: el resto es 'normal'
+ * (incluido el espejo del coarrendatario, §8.4, que no es R2).
+ */
+export const prioridadRevision = (regla: string | null): PrioridadRevision => (regla === REGLA_R2 ? 'baja' : 'normal');
+
 export function ponderarConCoarrendatario(e: {
   titular: Resultado;
   /** Regla dura del coarrendatario: contamina el conjunto (Politica §5, ultima fila). */

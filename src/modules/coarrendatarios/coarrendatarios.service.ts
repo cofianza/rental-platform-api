@@ -48,7 +48,7 @@ import {
   VERSION_TERMINOS_COARRENDATARIO,
 } from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
-import { ponderarConCoarrendatario, veredictoScorecard, type FilaScorecard, type VeredictoScorecard } from './ponderacion';
+import { ponderarConCoarrendatario, prioridadRevision, veredictoScorecard, type FilaScorecard, type VeredictoScorecard } from './ponderacion';
 import {
   evaluacionCuenta,
   contratoFijoSinCoarrendatario,
@@ -1528,6 +1528,17 @@ export async function onCoarrendatarioEstudioCompletado(
     if (ctxSin.estado !== 'condicionado') {
       decisionYaTomada(ctxSin, titular.id, est, coa, reglasDurasCoa);
       return;
+    }
+
+    // Adenda de precios §8.2: prioridad en la cola del analista (R2 = baja, el
+    // resto normal; se reescribe para no heredar la de un co-arrendatario anterior).
+    // ponytail: una re-evaluacion del titular no la toca; si deja de ser R2 sin
+    // pasar por aqui, queda 'baja' hasta la proxima ponderacion.
+    {
+      const { error } = await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .update({ prioridad_revision: prioridadRevision(reglaAplicada) } as never)
+        .eq('id', est.expediente_id);
+      if (error) logger.warn({ expedienteId: est.expediente_id, error: error.message }, 'Adenda de precios §8.2: no se pudo fijar la prioridad de revision');
     }
 
     // Ninguno de los dos pudo ser evaluado por el buro (sin historial): se

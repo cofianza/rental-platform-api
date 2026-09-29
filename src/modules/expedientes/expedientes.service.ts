@@ -36,6 +36,8 @@ interface ExpedienteListRow {
   requiere_accion?: boolean;
   /** De quién depende ahora: 'gestor' | 'prospecto' | 'cofianza' | null. */
   depende_de?: string | null;
+  /** Adenda de precios §8.2: prioridad en la cola del analista (el caso R2 va 'baja'). */
+  prioridad_revision?: 'baja' | 'normal' | 'alta';
   id: string;
   numero: string;
   estado: string;
