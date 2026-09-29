@@ -148,7 +148,7 @@ export async function getProfile(userId: string, email: string, rolSesion?: stri
   // administrar un expediente asignado).
   // rol_miembro: solo aplica a inmobiliaria (owner/miembro/solo_lectura);
   // null para roles internos, propietario o solicitante.
-  const [{ data: perfil, error: perfilError }, rolMiembroSesion] = await Promise.all([
+  const [{ data: perfil, error: perfilError }, rolMiembroSesion, solicitanteSesion] = await Promise.all([
     supabase
       .from('perfiles' as string)
       .select('id, nombre, apellido, rol, estado, telefono, tipo_documento, numero_documento, created_at, updated_at')
@@ -159,6 +159,7 @@ export async function getProfile(userId: string, email: string, rolSesion?: stri
         created_at: string; updated_at: string;
       }>(),
     !rolSesion || rolSesion === 'inmobiliaria' ? resolveRolMiembro(userId) : Promise.resolve(null),
+    rolSesion === 'solicitante' ? getSolicitanteByUser(userId) : Promise.resolve(null),
   ]);
 
   if (perfilError || !perfil) {
@@ -177,6 +178,16 @@ export async function getProfile(userId: string, email: string, rolSesion?: stri
     perfil.numero_documento,
   ].every((v) => v != null && String(v).trim().length > 0);
 
+  // Solicitante: ¿le falta el documento? (H43, registro liviano: la ficha nace
+  // con numero_documento='' y perfiles sin documento). Misma fuente que «Mi
+  // cuenta»: la ficha en `solicitantes` manda sobre `perfiles`.
+  let documentoPendiente: boolean | undefined;
+  if (perfil.rol === 'solicitante') {
+    const sol = solicitanteSesion ?? (rolSesion ? null : await getSolicitanteByUser(userId));
+    const numero = sol ? sol.numero_documento : perfil.numero_documento;
+    documentoPendiente = !numero || numero.trim().length === 0;
+  }
+
   // Construir respuesta con datos combinados
   return {
     id: perfil.id,
@@ -188,6 +199,7 @@ export async function getProfile(userId: string, email: string, rolSesion?: stri
     // exceso de cláusulas); el API igual responde 403 SOLO_GERENCIA_GENERAL.
     es_gerencia_general: esGerenciaGeneral({ rol: perfil.rol, email }),
     perfil_completo: perfilCompleto,
+    ...(documentoPendiente !== undefined ? { documento_pendiente: documentoPendiente } : {}),
     activo: perfil.estado === 'activo',
     created_at: perfil.created_at,
     updated_at: perfil.updated_at,
