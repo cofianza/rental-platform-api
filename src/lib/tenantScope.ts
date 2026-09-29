@@ -271,6 +271,20 @@ export async function resolveOrgMemberPerfilIds(orgId: string): Promise<string[]
     .filter((id): id is string => !!id);
 }
 
+/** perfil_ids de los titulares (owner) ACTIVOS de una organización. */
+export async function resolveOrgOwnerPerfilIds(orgId: string): Promise<string[]> {
+  const { data } = await (supabase
+    .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+    .select('perfil_id')
+    .eq('inmobiliaria_id', orgId)
+    .eq('rol_miembro', 'owner')
+    .eq('estado', 'activo')
+    .not('perfil_id', 'is', null);
+  return ((data as Array<{ perfil_id: string | null }> | null) || [])
+    .map((m) => m.perfil_id)
+    .filter((id): id is string => !!id);
+}
+
 /**
  * La cartera de un perfil como CONDICIÓN (no como lista de ids), para decidir
  * en una sola consulta. Es la misma regla de siempre:

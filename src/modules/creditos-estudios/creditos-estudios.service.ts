@@ -16,7 +16,12 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
-import { perfilEsDuenoDeInmueble, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
+import {
+  perfilEsDuenoDeInmueble,
+  resolveInmobiliariaIdForPerfil,
+  resolveOrgCanonicalPerfilId,
+  resolveOrgOwnerPerfilIds,
+} from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
 import { getCalibracion } from '@/lib/calibracion';
@@ -280,6 +285,97 @@ async function moverDisponible(loteId: string, delta: number): Promise<boolean> 
 }
 
 // ============================================================
+// Alerta de saldo bajo (Adenda de precios §3.7 / §9.8)
+// ============================================================
+
+/** Pura: ¿el saldo disponible cruzó el umbral hacia abajo (de ≥N a <N)? */
+export function cruzaUmbralSaldo(antes: number, despues: number, umbral: number): boolean {
+  return antes >= umbral && despues < umbral;
+}
+
+/**
+ * Aviso (in-app + correo) a los titulares activos de la organización cuando su
+ * saldo disponible baja de ALERTA_SALDO_MINIMO_CUPOS: solo al cruzar el umbral,
+ * así cada reserva por debajo no repite el aviso. Distinto del aviso «Cofianza
+ * usó un crédito» (H99), que sale por cada uso de Cofianza. Nunca lanza.
+ */
+export async function avisarSiSaldoBajo(perfilCanonico: string, antes: number, despues: number): Promise<void> {
+  try {
+    const { ALERTA_SALDO_MINIMO_CUPOS: umbral } = await getCalibracion();
+    if (!cruzaUmbralSaldo(antes, despues, umbral)) return;
+
+    const orgId = await resolveInmobiliariaIdForPerfil(perfilCanonico);
+    // Siempre incluye al perfil que guarda el saldo (legado: org sin filas de titular).
+    const titulares = [...new Set([perfilCanonico, ...(orgId ? await resolveOrgOwnerPerfilIds(orgId) : [])])];
+    const mensaje =
+      despues === 0
+        ? 'Su organización ya no tiene cupos disponibles en sus paquetes prepagados de estudios.'
+        : `A su organización le ${despues === 1 ? 'queda 1 cupo disponible' : `quedan ${despues} cupos disponibles`} en sus paquetes prepagados de estudios.`;
+    // Import dinámico, como el orchestrator: notificaciones arrastra config y correos.
+    const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
+    await Promise.all(
+      titulares.map((userId) =>
+        notificarYCorreo({
+          userId,
+          tipo: 'creditos.saldo_bajo',
+          titulo: 'Saldo bajo de cupos de estudio',
+          mensaje: `${mensaje} Cuando se agoten, cada evaluación se paga al precio individual o con un paquete nuevo.`,
+          link: '/configuracion/creditos-estudios',
+          payload: { saldo_disponible: despues, umbral },
+        }),
+      ),
+    );
+  } catch (err) {
+    logger.warn({ err, perfilCanonico }, 'No se pudo avisar el saldo bajo de cupos');
+  }
+}
+
+// ============================================================
+// Extinción de cupos vencidos (Adenda de precios §3.1)
+// ============================================================
+
+/**
+ * Barrido diario (CUPOS_VENCIMIENTO_ENABLED): los lotes vencidos que aún
+ * tienen saldo quedan en 0 con un movimiento 'expiracion' por lo que tenían
+ * (RPC extinguir_lote_vencido, idempotente con el lote bloqueado). Las
+ * reservas abiertas no se tocan: ya salieron del lote, y si se liberan después
+ * la RPC de liberación las extingue en el acto. Luego avisa el saldo bajo por
+ * organización. Devuelve los cupos extinguidos.
+ */
+export async function extinguirCuposVencidos(): Promise<number> {
+  // ponytail: 500 lotes por ciclo; el que sobre lo toma el ciclo siguiente.
+  const { data, error } = await db('lotes_creditos_estudios')
+    .select('id')
+    .gt('cantidad_disponible', 0)
+    .lte('vence_en', new Date().toISOString())
+    .order('vence_en', { ascending: true })
+    .limit(500);
+  if (error) throw fromSupabaseError(error);
+
+  const porPerfil = new Map<string, { extinguidos: number; saldo: number }>();
+  let total = 0;
+  for (const { id } of (data ?? []) as Array<{ id: string }>) {
+    const { data: r, error: rErr } = await rpc('extinguir_lote_vencido', { p_lote_id: id });
+    if (rErr) {
+      logger.warn({ loteId: id, error: rErr.message }, 'No se pudo extinguir el lote vencido');
+      continue;
+    }
+    const fila = ((r ?? []) as Array<{ lote_perfil_id: string; extinguidos: number; saldo_restante: number }>)[0];
+    if (!fila?.extinguidos) continue; // otro ciclo ya lo extinguió
+    total += fila.extinguidos;
+    const acc = porPerfil.get(fila.lote_perfil_id) ?? { extinguidos: 0, saldo: 0 };
+    porPerfil.set(fila.lote_perfil_id, { extinguidos: acc.extinguidos + fila.extinguidos, saldo: fila.saldo_restante });
+  }
+
+  // ponytail: el saldo ya había dejado de contar el lote al vencer; se toma
+  // «antes» como si siguiera vigente, así que una reserva hecha entre el
+  // vencimiento y el barrido puede dar un segundo aviso.
+  for (const [perfil, { extinguidos, saldo }] of porPerfil) await avisarSiSaldoBajo(perfil, saldo + extinguidos, saldo);
+  if (total > 0) logger.info({ total, organizaciones: porPerfil.size }, 'Cupos vencidos extinguidos (Adenda de precios §3.1)');
+  return total;
+}
+
+// ============================================================
 // Movimientos (historial)
 // ============================================================
 
@@ -467,11 +563,13 @@ export function armarDetallePaquetes(
   const salidas = new Map<string, number>();
   const sumar = (lote: string, n: number) => salidas.set(lote, (salidas.get(lote) ?? 0) + n);
   const ultimo = new Map<string, MovimientoDetalle>();
+  const extinguidos = new Set<string>();
   for (const m of movimientos) {
     if (!m.lote_id) continue;
     if ((m.tipo === 'reserva' || m.tipo === 'consumo') && m.cantidad < 0) sumar(m.lote_id, -m.cantidad);
     else if (m.tipo === 'liberacion') sumar(m.lote_id, -1);
     else if (m.tipo === 'ajuste' && m.cantidad > 0 && !!m.pago_id) sumar(m.lote_id, -m.cantidad);
+    else if (m.tipo === 'expiracion') extinguidos.add(m.lote_id);
     if (m.pago_id && m.tipo !== 'compra' && m.tipo !== 'expiracion') ultimo.set(m.pago_id, m);
   }
   const reservados = new Map<string, number>();
@@ -481,8 +579,10 @@ export function armarDetallePaquetes(
   const filas: DetallePaquete[] = [];
   for (const l of lotes) {
     const vencido = !!l.vence_en && Date.parse(l.vence_en) <= ahora.getTime();
-    // Agotado antes de vencer cuenta como agotado: no se extinguió nada.
-    const estado: EstadoPaquete = l.cantidad_disponible === 0 ? 'agotado' : vencido ? 'vencido' : 'vigente';
+    // Agotado antes de vencer cuenta como agotado: no se extinguió nada. Con
+    // cupos extinguidos (§3.1: el barrido lo dejó en 0) es vencido.
+    const estado: EstadoPaquete =
+      vencido && (l.cantidad_disponible > 0 || extinguidos.has(l.id)) ? 'vencido' : l.cantidad_disponible === 0 ? 'agotado' : 'vigente';
     if (estado === 'vencido' && Date.parse(l.vence_en!) < limite) continue;
     if (estado === 'agotado' && Date.parse(l.updated_at) < limite) continue;
     filas.push({
@@ -535,7 +635,7 @@ export async function listDetallePaquetes(perfilId: string): Promise<DetallePaqu
     const { data: movs, error: mErr } = await db('movimientos_creditos_estudios')
       .select('lote_id, tipo, cantidad, pago_id')
       .in('lote_id', lotes.map((l) => l.id))
-      .in('tipo', TIPOS_CUPO)
+      .in('tipo', [...TIPOS_CUPO, 'expiracion'])
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(offset, offset + 999);
@@ -1047,6 +1147,7 @@ export async function liberarEstudioConCredito(
   }
 
   const { lote_id, saldo_restante } = rpcData[0];
+  await avisarSiSaldoBajo(dueno, saldo_restante + 1, saldo_restante);
 
   // 7. Evento + timeline
   await (supabase
@@ -1356,6 +1457,18 @@ export async function asegurarReservaParaConsulta(expedienteId: string, usuarioI
   const pagoId = await pagoEstudioCompletado(expedienteId);
   if (!pagoId) return;
   const r = await rpcTexto('reactivar_reserva_credito', { p_pago_id: pagoId, p_usuario_id: usuarioId });
+  if (r === 'reservado') {
+    // La reserva nueva guarda el saldo que dejó (§3.7).
+    const { data } = await db('movimientos_creditos_estudios')
+      .select('perfil_id, saldo_resultante')
+      .eq('pago_id', pagoId)
+      .eq('tipo', 'reserva')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const res = data as { perfil_id: string; saldo_resultante: number } | null;
+    if (res) await avisarSiSaldoBajo(res.perfil_id, res.saldo_resultante + 1, res.saldo_resultante);
+  }
   if (r === 'sin_saldo') {
     throw AppError.conflict(
       'El cupo de este estudio volvió al saldo de su organización porque la consulta anterior no produjo resultado, y ya no quedan cupos disponibles. Compre un paquete para volver a consultar.',

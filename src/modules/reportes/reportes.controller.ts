@@ -5,7 +5,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/utils/response';
 import * as reportesService from './reportes.service';
-import type { VolumenQuery, AprobacionQuery, IngresosQuery, TiemposQuery } from './reportes.schema';
+import type { VolumenQuery, AprobacionQuery, IngresosQuery, TiemposQuery, CuposVencidosQuery } from './reportes.schema';
 
 // El navegador pregunta siempre: con max-age=300 reusaba la respuesta 5
 // minutos y no se veían altas, desactivaciones ni "Actualizar". private:
@@ -50,6 +50,15 @@ export async function getTiemposPorEtapa(req: Request, res: Response) {
   const { dateFrom, dateTo } = query as TiemposQuery;
 
   const data = await reportesService.getTiemposPorEtapa(dateFrom, dateTo);
+
+  res.set('Cache-Control', CACHE_CONTROL_HEADER);
+  sendSuccess(res, data);
+}
+
+// Adenda de precios §3.9
+export async function getCuposVencidos(req: Request, res: Response) {
+  const query = (req as Request & { validatedQuery: CuposVencidosQuery }).validatedQuery || req.query;
+  const data = await reportesService.getCuposVencidos((query as CuposVencidosQuery).mes);
 
   res.set('Cache-Control', CACHE_CONTROL_HEADER);
   sendSuccess(res, data);

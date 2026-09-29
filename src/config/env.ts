@@ -304,6 +304,10 @@ const envSchema = z.object({
   // paquete cuya autorización venció sin llegar a la consulta (cada 15 min).
   // Escribe en la base: apagado por defecto; false en una API LOCAL.
   CUPO_LIBERAR_ABANDONOS_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Adenda de precios §3.1: barrido diario que extingue los cupos de los
+  // paquetes vencidos (movimiento 'expiracion') y avisa el saldo bajo (§3.7).
+  // Escribe en la base y manda avisos: apagado por defecto; false en una API LOCAL.
+  CUPOS_VENCIMIENTO_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). SIN EFECTO: la Adenda 1 del
   // módulo de contratos (respuesta 13 bis) no la habilita y ningún camino de la

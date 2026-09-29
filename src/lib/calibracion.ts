@@ -44,7 +44,8 @@ export type ClaveCalibracion =
   | 'MAX_CLAUSULAS_ADICIONALES'
   | 'DIAS_EXPIRACION_FIRMA'
   | 'DIAS_RESERVA_INMUEBLE'
-  | 'VIGENCIA_PAQUETE_MESES';
+  | 'VIGENCIA_PAQUETE_MESES'
+  | 'ALERTA_SALDO_MINIMO_CUPOS';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -292,6 +293,17 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     descripcion: 'Meses de calendario de vigencia de un paquete prepagado de estudios, contados desde la aprobación del pago. Vencido el plazo, los cupos no usados se extinguen.',
     advertencia: 'Aplica a las compras cuyo pago se apruebe desde el cambio; los paquetes ya acreditados conservan su vencimiento.',
   },
+  // Adenda de precios §9.14: las alertas de saldo las cambia cualquier
+  // administrador (con traza), por eso va en OPERATIVOS.
+  {
+    clave: 'ALERTA_SALDO_MINIMO_CUPOS',
+    valorDefault: 3,
+    min: 1,
+    max: 50,
+    entero: true,
+    seccion: 'Adenda de precios §3.7 / §9.8',
+    descripcion: 'Se avisa a los titulares de la inmobiliaria (en la plataforma y por correo) cuando su saldo disponible de cupos de estudio baja de este número.',
+  },
 ];
 
 export const CALIBRACION_DEFAULT: Calibracion = Object.fromEntries(
@@ -311,6 +323,7 @@ const OPERATIVOS: ReadonlySet<ClaveCalibracion> = new Set<ClaveCalibracion>([
   'VIGENCIA_MESES_DEFECTO', // solo precarga el asistente; cada contrato fija la suya
   'DIAS_EXPIRACION_FIRMA',
   'DIAS_RESERVA_INMUEBLE', // respuesta 15: plazo del borrador para enviar a firma
+  'ALERTA_SALDO_MINIMO_CUPOS', // Adenda de precios §9.14: alertas, cualquier administrador
 ]);
 
 export type NivelParametro = 'riesgo' | 'operativo';

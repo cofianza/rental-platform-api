@@ -5,7 +5,13 @@
 import { Router } from 'express';
 import { authMiddleware, authorize, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
-import { volumenQuerySchema, aprobacionQuerySchema, ingresosQuerySchema, tiemposQuerySchema } from './reportes.schema';
+import {
+  volumenQuerySchema,
+  aprobacionQuerySchema,
+  ingresosQuerySchema,
+  tiemposQuerySchema,
+  cuposVencidosQuerySchema,
+} from './reportes.schema';
 import * as controller from './reportes.controller';
 
 const router = Router();
@@ -40,6 +46,14 @@ router.get(
   '/tiempos-por-etapa',
   validate({ query: tiemposQuerySchema }),
   controller.getTiemposPorEtapa,
+);
+
+// Adenda de precios §3.9: cupos vencidos del mes (registro contable)
+router.get(
+  '/cupos-vencidos',
+  roleGuard(['administrador', 'gerencia_consulta']),
+  validate({ query: cuposVencidosQuerySchema }),
+  controller.getCuposVencidos,
 );
 
 export default router;

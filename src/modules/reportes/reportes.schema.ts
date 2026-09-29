@@ -38,3 +38,10 @@ export const tiemposQuerySchema = z.object({
 });
 
 export type TiemposQuery = z.infer<typeof tiemposQuerySchema>;
+
+// Adenda de precios §3.9: cupos vencidos del mes
+export const cuposVencidosQuerySchema = z.object({
+  mes: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Formato de mes inválido (YYYY-MM)').optional(),
+});
+
+export type CuposVencidosQuery = z.infer<typeof cuposVencidosQuerySchema>;
