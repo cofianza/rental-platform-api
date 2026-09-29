@@ -35,6 +35,8 @@ export const AUDIT_ACTIONS = {
   REVISION_MANUAL_DECIDIDA: 'revision_manual_decidida',
   // Adenda 1 contratos (respuesta 21): un administrador cierra el estudio sin acta de entrega.
   EXPEDIENTE_CERRADO_SIN_ACTA: 'expediente_cerrado_sin_acta',
+  // Adenda de precios §5.1: un operador registra que la inmobiliaria remitió la prima Trasladada.
+  PRIMA_REMITIDA: 'prima_remitida',
   // Comentarios
   COMMENT_CREATED: 'comment_created',
   COMMENT_UPDATED: 'comment_updated',
