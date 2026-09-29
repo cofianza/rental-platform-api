@@ -153,7 +153,8 @@ export async function notificarResponsableExpediente(params: {
   mensaje: string;
   link?: string;
   payload?: Record<string, unknown>;
-  whatsapp?: { template: WhatsappTemplateKey; variables: string[] };
+  /** `reservaNombre`: saludo si el miembro no tiene nombre («Hola» por defecto; las v2 en usted, «señor(a)»). */
+  whatsapp?: { template: WhatsappTemplateKey; variables: string[]; reservaNombre?: string };
 }): Promise<void> {
   try {
     let miembroId = params.miembroId;
@@ -173,7 +174,9 @@ export async function notificarResponsableExpediente(params: {
     const p = perfilRow as {
       nombre?: string | null; apellido?: string | null; razon_social?: string | null; telefono?: string | null;
     } | null;
-    const nombreMiembro = p?.razon_social || `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || 'Hola';
+    // B19: sin nombre, «Hola» en las plantillas en tú; las v2 en usted pasan «señor(a)».
+    const nombreMiembro =
+      p?.razon_social || `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || params.whatsapp?.reservaNombre || 'Hola';
 
     await notificarUsuario({
       userId: miembroId,

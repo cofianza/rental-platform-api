@@ -38,6 +38,11 @@ export async function getMisCompras(req: Request, res: Response) {
   sendSuccess(res, data);
 }
 
+export async function getMisPaquetes(req: Request, res: Response) {
+  const data = await service.listDetallePaquetes(req.user!.id);
+  sendSuccess(res, data);
+}
+
 export async function comprarPaquete(req: Request, res: Response) {
   const input = req.body as ComprarPaqueteInput;
   const result = await service.comprarPaquete(req.user!.id, input.paquete_id, req.user!.id, req.ip);
@@ -102,19 +107,19 @@ export async function adminListPaquetes(_req: Request, res: Response) {
 
 export async function adminCreatePaquete(req: Request, res: Response) {
   const input = req.body as CreatePaqueteInput;
-  const data = await service.createPaquete(input, req.user!.id);
+  const data = await service.createPaquete(input, req.user!);
   sendCreated(res, data);
 }
 
 export async function adminUpdatePaquete(req: Request, res: Response) {
   const { id } = req.params as unknown as PaqueteIdParams;
   const input = req.body as UpdatePaqueteInput;
-  const data = await service.updatePaquete(id, input, req.user!.id);
+  const data = await service.updatePaquete(id, input, req.user!);
   sendSuccess(res, data);
 }
 
 export async function adminDeletePaquete(req: Request, res: Response) {
   const { id } = req.params as unknown as PaqueteIdParams;
-  await service.deletePaquete(id, req.user!.id);
+  await service.deletePaquete(id, req.user!);
   sendSuccess(res, { ok: true });
 }

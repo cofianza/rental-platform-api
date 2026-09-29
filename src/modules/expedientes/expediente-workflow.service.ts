@@ -108,7 +108,7 @@ export async function executeTransition(
       documentos_consultados: input.documentos_consultados ?? [],
       evaluacion: input.evaluacion!,
       motivos: input.motivos,
-    });
+    }, undefined, user.email);
     return {
       ...(await getExpedienteById(expedienteId)),
       estado_anterior: currentState,
@@ -116,6 +116,10 @@ export async function executeTransition(
       puntaje_revision_manual: r.puntaje_revision_manual,
     };
   }
+
+  // Adenda de precios §7.3: aprobar por encima del tope es solo de la Gerencia General.
+  if (targetState === 'aprobado')
+    await (await import('@/modules/estudios/excepcion-tope.service')).assertAprobacionDentroDelTope(expedienteId, user);
 
   // Si la transicion es "Cancelar expediente" (cualquier estado activo →
   // cerrado con esa etiqueta), despues de la RPC se persisten las columnas de

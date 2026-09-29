@@ -18,7 +18,7 @@ const { mockEnv, ops, queues, enqueue, mockRpc, chainFor, download, auco, efecto
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null, count: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'or', 'order', 'limit', 'gt'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'is', 'not', 'in', 'or', 'order', 'limit', 'gt'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH)
@@ -103,6 +103,14 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: efectos.listOperators }));
 vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: efectos.cancelarPagos }));
+const { mockCausar, mockMezcla } = vi.hoisted(() => ({
+  mockCausar: vi.fn(async () => true),
+  mockMezcla: vi.fn(async () => 'nada'),
+}));
+vi.mock('@/modules/beneficios/beneficios.service', () => ({
+  causarBeneficioTradicional: mockCausar,
+  evaluarAlertaMezcla: mockMezcla,
+}));
 const { mockIniciarVerificacion } = vi.hoisted(() => ({ mockIniciarVerificacion: vi.fn(async () => ({ pendiente: true, message: '' })) }));
 vi.mock('@/modules/firma/verificacion-identidad.service', () => ({ iniciarVerificacionIdentidad: mockIniciarVerificacion }));
 
@@ -953,11 +961,48 @@ describe('activación: prima de vinculación por cobrar (punto 6, 2026-09-25)', 
     expect(efectos.cancelarPagos).not.toHaveBeenCalled();
   });
 
+  it('Adenda de precios §4.2: al quedar vigente causa el beneficio con la modalidad del contrato y evalúa la mezcla', async () => {
+    await activar('tradicional');
+    expect(mockCausar).toHaveBeenCalledWith({ contratoId: 'c1', expedienteId: expect.any(String), orgId: 'org1', modalidad: 'tradicional' });
+    expect(mockMezcla).toHaveBeenCalledWith('org1');
+  });
+
+  it('Adenda de precios §4.2: si el beneficio falla, la activación y sus avisos siguen', async () => {
+    mockCausar.mockRejectedValueOnce(new Error('pagos caído'));
+    await activar('tradicional');
+    expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(1);
+    expect(inmo()[0].tipo).toBe('contrato.prima_por_cobrar');
+  });
+
+  it('Adenda de precios §5.1: Trasladada deja la cuenta por cobrar a la inmobiliaria y el aviso trae la fecha límite', async () => {
+    await activar('trasladada'); // última firma 21/09 (últimos 10 días del mes) → día 10 de noviembre
+    const [up] = tabla('cuentas_por_cobrar_inmobiliaria', 'upsert');
+    expect(up.args[0]).toEqual({ inmobiliaria_id: 'org1', contrato_id: 'c1', concepto: 'prima_trasladada', monto_cop: 71400, vence_en: '2026-11-10' });
+    expect(up.args[1]).toMatchObject({ onConflict: 'contrato_id,concepto', ignoreDuplicates: true });
+    // antes de la constancia: si el registro falla, el barrido reintenta la activación
+    const iUp = ops.indexOf(up);
+    const iConstancia = ops.findIndex((o) => o.table === 'contrato_v3_sobres' && o.method === 'update' && 'aviso_entregado_en' in (o.args[0] as object));
+    expect(iUp).toBeLessThan(iConstancia);
+    expect(inmo()[0].mensaje).toContain('recáudela del arrendatario y remítala a Cofianza a más tardar el 10/11/2026.');
+    expect(cofianza()[0].mensaje).toContain('la remite a más tardar el 10/11/2026.');
+  });
+
+  it('Adenda de precios §5.1: si la base no registra la cuenta, no deja la constancia (el barrido reintenta)', async () => {
+    enqueue('cuentas_por_cobrar_inmobiliaria', { data: null, error: { code: '08006', message: 'caída' } });
+    await activar('trasladada').catch(() => undefined);
+    expect(ops.some((o) => o.table === 'contrato_v3_sobres' && o.method === 'update' && 'aviso_entregado_en' in (o.args[0] as object))).toBe(false);
+    expect(inmo()).toEqual([]);
+    // ni el aviso de fianza activa ni la línea de tiempo: el reintento no los repite
+    expect(tabla('notificaciones', 'insert')).toEqual([]);
+    expect(tabla('eventos_timeline', 'insert')).toEqual([]);
+  });
+
   it('Tradicional: dice que está a cargo de la inmobiliaria', async () => {
     await activar('tradicional');
     expect(inmo()[0].mensaje).toContain('En la modalidad Tradicional está a cargo de la inmobiliaria.');
     expect(inmo()[0].mensaje).not.toContain('recáudela');
     expect(cofianza()[0].mensaje).toContain('Modalidad Tradicional: la asume la inmobiliaria.');
+    expect(tabla('cuentas_por_cobrar_inmobiliaria', 'upsert')).toEqual([]);
   });
 
   it('si otro proceso ya dejó la constancia de la activación, no repite el aviso de la prima', async () => {

@@ -18,6 +18,7 @@ import { enviarTemplate as enviarTemplateWhatsApp } from '../whatsapp';
 import { motivoParaProspectoDesdeMotivoGestor } from '@/modules/estudios/reglas-duras';
 import { errorNoAdmision } from '@/modules/estudios/estudios-simultaneos.guard';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { topeParaDetalle } from '@/modules/estudios/excepcion-tope.service';
 import { getApplicantById } from '../solicitantes/solicitantes.service';
 import { leerCierreSinActa } from './cierre-sin-acta';
 import type {
@@ -36,6 +37,8 @@ interface ExpedienteListRow {
   requiere_accion?: boolean;
   /** De quién depende ahora: 'gestor' | 'prospecto' | 'cofianza' | null. */
   depende_de?: string | null;
+  /** Adenda de precios §8.2: prioridad en la cola del analista (el caso R2 va 'baja'). */
+  prioridad_revision?: 'baja' | 'normal' | 'alta';
   id: string;
   numero: string;
   estado: string;
@@ -70,6 +73,9 @@ const ESTADOS_TERMINALES = ['cerrado', 'rechazado'];
 // ============================================================
 // Select con relaciones para detalle
 // ============================================================
+
+/** Roles de Cofianza que ven el tope y la excepción en el detalle. */
+const ROLES_INTERNOS_TOPE = ['administrador', 'operador_analista', 'gerencia_consulta'];
 
 const EXPEDIENTE_DETAIL_SELECT = `
   id, numero, estado, notas,
@@ -295,7 +301,7 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
   // solicitante (vía solicitantes.creado_por) — única fuente de verdad del scope.
   // En paralelo con la lectura (antes 2 idas en serie): si el guard falla,
   // Promise.all rechaza con su 404 y la fila leída se descarta sin salir.
-  const [, { data, error }, cierreSinActa] = await Promise.all([
+  const [, { data, error }, cierreSinActa, topeCanon] = await Promise.all([
     assertExpedienteAccess(id, userId, userRol),
     (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -305,6 +311,8 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
     // Aparte y sin fallar (no en EXPEDIENTE_DETAIL_SELECT): si el API sale antes que la
     // migración 20260930000002, el detalle no se cae. Al prospecto no le toca.
     userRol === 'solicitante' ? null : leerCierreSinActa(id),
+    // Adenda de precios §7.3: aviso al analista y botón de la Gerencia General.
+    userRol && ROLES_INTERNOS_TOPE.includes(userRol) ? topeParaDetalle(id) : null,
   ]);
 
   // Auto-heal de firmas (FALLBACK): si hay un contrato en `pendiente_firma`,
@@ -362,6 +370,7 @@ export async function getExpedienteById(id: string, userId?: string, userRol?: s
       env.CONTRATOS_V3_ENABLED && !!(inmuebles as { inmobiliaria_id?: string | null } | null)?.inmobiliaria_id,
     // Adenda 1 contratos (respuesta 21): un administrador lo cerró sin acta de entrega.
     cierre_sin_acta: cierreSinActa,
+    tope_canon: topeCanon,
   };
 }
 

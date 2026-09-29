@@ -37,6 +37,8 @@ export const AUDIT_ACTIONS = {
   REVISION_MANUAL_DECIDIDA: 'revision_manual_decidida',
   // Adenda 1 contratos (respuesta 21): un administrador cierra el estudio sin acta de entrega.
   EXPEDIENTE_CERRADO_SIN_ACTA: 'expediente_cerrado_sin_acta',
+  // Adenda de precios §5.1: un operador registra que la inmobiliaria remitió la prima Trasladada.
+  PRIMA_REMITIDA: 'prima_remitida',
   // Comentarios
   COMMENT_CREATED: 'comment_created',
   COMMENT_UPDATED: 'comment_updated',
@@ -91,6 +93,8 @@ export const AUDIT_ACTIONS = {
   CALIBRACION_PARAMETRO_CAMBIADO: 'calibracion_parametro_cambiado',
   // Tarifa negociada caso por caso (Adenda 1 §5).
   ESTUDIO_TARIFA_OVERRIDE: 'estudio_tarifa_override',
+  // Excepción de tope de canon que autoriza la Gerencia General (Adenda de precios §7.4).
+  EXPEDIENTE_EXCEPCION_TOPE: 'expediente_excepcion_tope',
   // Plantillas de contrato
   PLANTILLA_CREATED: 'plantilla_created',
   PLANTILLA_UPDATED: 'plantilla_updated',

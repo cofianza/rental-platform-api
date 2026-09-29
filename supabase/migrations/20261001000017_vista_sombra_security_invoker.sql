@@ -1,8 +1,8 @@
 -- ============================================================
--- La vista de sombra respeta los permisos de quien consulta.
+-- La vista de sombra respeta los permisos de quien consulta
+-- (security_invoker), en vez de los de su dueño.
 -- APLICADA EN PRODUCCIÓN el 2026-09-28 (por el usuario, SQL Editor): antes
 -- reloptions = NULL, después {security_invoker=on}; la vista responde (6 filas).
--- (security_invoker), en vez de los de su dueño.
 -- Riesgo de romper: NULO. Ni anon ni authenticated tienen GRANT sobre ella
 -- y la API no la usa; solo la lee service_role / el SQL Editor.
 -- Idempotente.
@@ -16,6 +16,18 @@
 --   ALTER VIEW public.v_estudios_sombra_vs_real RESET (security_invoker);
 --
 -- OJO: si una migración futura recrea la vista (CREATE OR REPLACE VIEW),
--- debe llevar WITH (security_invoker = on).
+-- debe llevar WITH (security_invoker = on); nada lo impone solo. Para
+-- detectarlo después de cualquier migración (debe dar 0 filas: toda vista de
+-- public con security_invoker y sin permisos para anon/authenticated):
+--   SELECT c.relname, c.reloptions,
+--          has_table_privilege('anon', c.oid, 'SELECT') AS anon,
+--          has_table_privilege('authenticated', c.oid, 'SELECT') AS authenticated
+--   FROM pg_class c
+--   WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('v', 'm')
+--     AND (NOT coalesce('security_invoker=on' = ANY (c.reloptions), false)
+--          OR has_table_privilege('anon', c.oid, 'SELECT')
+--          OR has_table_privilege('authenticated', c.oid, 'SELECT'));
+-- (Cambio solo de comentarios del 2026-09-28, después de aplicada: el ALTER
+--  de abajo es el mismo.)
 -- ============================================================
 ALTER VIEW public.v_estudios_sombra_vs_real SET (security_invoker = on);

@@ -94,4 +94,10 @@ describe('resolveContactoDueno', () => {
     enqueue('inmobiliaria_miembros', { data: [] });
     await expect(resolveNombreDueno('prop1')).resolves.toBe('Hola');
   });
+
+  it('B19: las plantillas v2 en usted piden su propia reserva («señor(a)»)', async () => {
+    enqueue('perfiles', { data: { nombre: null, apellido: null, razon_social: null } });
+    enqueue('inmobiliaria_miembros', { data: [] });
+    await expect(resolveNombreDueno('prop1', 'señor(a)')).resolves.toBe('señor(a)');
+  });
 });

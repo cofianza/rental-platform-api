@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { componerMotivos, guardarCodigosMotivo, MOTIVOS_DECISION } from '../motivos-decision';
 
 const { mockUpdate, mockEq } = vi.hoisted(() => {
-  const mockEq = vi.fn(async () => ({ error: { message: 'column "motivos_decision" does not exist' } }));
+  const mockEq = vi.fn(async () => ({ error: { message: 'fallo de red' } }));
   return { mockEq, mockUpdate: vi.fn(() => ({ eq: mockEq })) };
 });
 vi.mock('@/lib/supabase', () => ({ supabase: { from: vi.fn(() => ({ update: mockUpdate })) } }));

@@ -115,7 +115,8 @@ async function enviarWhatsAppDueno(
     .maybeSingle();
   const p = prop as { telefono?: string | null } | null;
   // Nombre del dueño: razón social → nombre de la inmobiliaria → nombre+apellido.
-  const nombreDueno = await resolveNombreDueno(propietarioId);
+  // La v2 del condicionado va en usted: sin nombre, «Buen día, *señor(a)*» (B19).
+  const nombreDueno = await resolveNombreDueno(propietarioId, template === 'ESTUDIO_CONDICIONADO_DUENO' ? 'señor(a)' : 'Hola');
   await enviarTemplate({
     to: p?.telefono ?? null,
     template,
@@ -988,13 +989,15 @@ export async function onEstudioCompletado(params: {
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
           whatsapp: {
             // variables[0] (nombre del dueño) lo sustituye el helper por el nombre del miembro.
+            // v2 en usted: reservas neutras, nunca «Hola» ni «tu inmueble» (B19).
             template: 'ESTUDIO_CONDICIONADO_DUENO',
-            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble'],
+            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada'],
+            reservaNombre: 'señor(a)',
           },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable condicionado'));
 
         // WhatsApp al dueño: "el estudio quedó condicionado, requiere tu revisión".
-        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_CONDICIONADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble', expedienteId)
+        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_CONDICIONADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada', expedienteId)
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño condicionado'));
       }
     }
@@ -1220,6 +1223,17 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
   await db('expedientes')
     .update({ estado: estadoDestino, updated_at: new Date().toISOString() } as never)
     .eq('id', expedienteId);
+
+  // Adenda de precios §8.2: al (re)entrar a la cola del analista se parte de
+  // 'normal'; solo la ponderacion del coarrendatario la vuelve a marcar 'baja'
+  // (R2). Sin esto, un estudio rechazado y re-evaluado heredaba la 'baja' de
+  // la vuelta anterior. Aparte del UPDATE de estado para no romperlo si falta la columna.
+  if (estadoDestino === 'condicionado') {
+    const { error } = await db('expedientes')
+      .update({ prioridad_revision: 'normal' } as never)
+      .eq('id', expedienteId);
+    if (error) logger.warn({ expedienteId, error: error.message }, 'Adenda de precios §8.2: no se pudo reiniciar la prioridad de revision');
+  }
 
   await db('eventos_timeline').insert({
     expediente_id: expedienteId,
