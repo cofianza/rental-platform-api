@@ -103,6 +103,14 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: efectos.listOperators }));
 vi.mock('@/modules/pagos/pagos.service', () => ({ cancelarPagosPendientesDeExpediente: efectos.cancelarPagos }));
+const { mockCausar, mockMezcla } = vi.hoisted(() => ({
+  mockCausar: vi.fn(async () => true),
+  mockMezcla: vi.fn(async () => 'nada'),
+}));
+vi.mock('@/modules/beneficios/beneficios.service', () => ({
+  causarBeneficioTradicional: mockCausar,
+  evaluarAlertaMezcla: mockMezcla,
+}));
 const { mockIniciarVerificacion } = vi.hoisted(() => ({ mockIniciarVerificacion: vi.fn(async () => ({ pendiente: true, message: '' })) }));
 vi.mock('@/modules/firma/verificacion-identidad.service', () => ({ iniciarVerificacionIdentidad: mockIniciarVerificacion }));
 
@@ -951,6 +959,19 @@ describe('activación: prima de vinculación por cobrar (punto 6, 2026-09-25)', 
     // Solo avisa: ni cobros, ni enlaces, ni facturas.
     expect(ops.some((o) => ['pagos', 'facturas'].includes(o.table))).toBe(false);
     expect(efectos.cancelarPagos).not.toHaveBeenCalled();
+  });
+
+  it('Adenda de precios §4.2: al quedar vigente causa el beneficio con la modalidad del contrato y evalúa la mezcla', async () => {
+    await activar('tradicional');
+    expect(mockCausar).toHaveBeenCalledWith({ contratoId: 'c1', expedienteId: expect.any(String), orgId: 'org1', modalidad: 'tradicional' });
+    expect(mockMezcla).toHaveBeenCalledWith('org1');
+  });
+
+  it('Adenda de precios §4.2: si el beneficio falla, la activación y sus avisos siguen', async () => {
+    mockCausar.mockRejectedValueOnce(new Error('pagos caído'));
+    await activar('tradicional');
+    expect(tabla('rpc:transicionar_contrato', 'vigente')).toHaveLength(1);
+    expect(inmo()[0].tipo).toBe('contrato.prima_por_cobrar');
   });
 
   it('Tradicional: dice que está a cargo de la inmobiliaria', async () => {
