@@ -310,6 +310,10 @@ const envSchema = z.object({
   // paquete cuya autorización venció sin llegar a la consulta (cada 15 min).
   // Escribe en la base: apagado por defecto; false en una API LOCAL.
   CUPO_LIBERAR_ABANDONOS_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Adenda de precios §3.1: barrido diario que extingue los cupos de los
+  // paquetes vencidos (movimiento 'expiracion') y avisa el saldo bajo (§3.7).
+  // Escribe en la base y manda avisos: apagado por defecto; false en una API LOCAL.
+  CUPOS_VENCIMIENTO_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Adenda de precios §5.3: el último día de cada mes manda a los titulares de
   // cada inmobiliaria las primas Trasladada por remitir el día 10 siguiente
   // (correo + aviso in-app). Escribe en la base y envía correos: apagado por

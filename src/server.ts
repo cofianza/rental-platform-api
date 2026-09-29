@@ -43,6 +43,19 @@ if (env.CUPO_LIBERAR_ABANDONOS_ENABLED) {
   }, RECONCILE_INTERVAL_MS).unref();
 }
 
+// Adenda de precios §3.1: extinción de los cupos de paquetes vencidos, al
+// arrancar y cada 24 h (idempotente). Escribe en la base y avisa:
+// CUPOS_VENCIMIENTO_ENABLED=false (por defecto) en una API local.
+const CUPOS_VENCIMIENTO_INTERVAL_MS = 24 * 60 * 60 * 1000;
+if (env.CUPOS_VENCIMIENTO_ENABLED) {
+  const runCuposVencidos = () =>
+    import('@/modules/creditos-estudios/creditos-estudios.service')
+      .then(({ extinguirCuposVencidos }) => extinguirCuposVencidos())
+      .catch((err) => logger.warn({ err }, 'extinguirCuposVencidos: ciclo fallido'));
+  runCuposVencidos();
+  setInterval(runCuposVencidos, CUPOS_VENCIMIENTO_INTERVAL_MS).unref();
+}
+
 // Vencimiento de contratos del flujo anterior: los vigentes cuya fecha_fin ya
 // pasó se prorrogan por el mismo término (P11/P20). Corre al arrancar (atrapa
 // los que vencieron mientras el server estuvo caído) y cada 6 h.

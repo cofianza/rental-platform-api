@@ -9,6 +9,7 @@ import { fetchAll } from '@/lib/fetchAll';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { desdeBogota, hastaBogota, mesBogota } from '@/lib/fechaBogota';
 import { viaPorRutaDeAprobacion, type ViaAprobacion } from '@/modules/estudios/tarifas';
+import { resolveNombreDueno } from '@/lib/tenantScope';
 import { decisionEfectiva, resumirDecisiones, ultimasDecisiones, type UltimaDecision } from '@/modules/dashboard/dashboard.service';
 
 // ── Types ───────────────────────────────────────────────────
@@ -632,6 +633,95 @@ export async function getTiemposPorEtapa(
       etapa_mas_lenta: etapaMasLenta,
       etapa_mas_rapida: etapaMasRapida,
       total_expedientes_analizados: byExpediente.size,
+    },
+  };
+}
+
+// ============================================================
+// Adenda de precios §3.9: cupos vencidos del mes (registro contable)
+// ============================================================
+
+export interface MovimientoExpiracion {
+  perfil_id: string;
+  cantidad: number;
+  lote: {
+    compra_id: string | null;
+    compra: { cantidad_estudios: number; precio_cop: number; completed_at: string | null; created_at: string } | null;
+  } | null;
+}
+
+export interface FilaCuposVencidos {
+  perfil_id: string;
+  organizacion: string;
+  /** null = lote sin compra (ajuste de un administrador): sin valor. */
+  compra_id: string | null;
+  fecha_compra: string | null;
+  cupos_paquete: number | null;
+  cupos_vencidos: number;
+  /** Precio base (sin IVA) de la compra dividido entre sus cupos. */
+  valor_unitario: number;
+  valor_total: number;
+}
+
+/** 'YYYY-MM' → [desde, hasta) del mes en hora Colombia. */
+export function rangoMesBogota(mes: string): { desde: string; hasta: string } {
+  const [y, m] = mes.split('-').map(Number);
+  const sig = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  return { desde: `${mes}-01T00:00:00-05:00`, hasta: `${sig}-01T00:00:00-05:00` };
+}
+
+/** Pura: agrupa los 'expiracion' por organización y compra, con el valor base de la compra. */
+export function agruparCuposVencidos(
+  movs: readonly MovimientoExpiracion[],
+  nombres: ReadonlyMap<string, string>,
+): FilaCuposVencidos[] {
+  const filas = new Map<string, FilaCuposVencidos>();
+  for (const m of movs) {
+    const compraId = m.lote?.compra_id ?? null;
+    const compra = m.lote?.compra ?? null;
+    const clave = `${m.perfil_id}|${compraId ?? ''}`;
+    const unitario = compra ? Math.round(compra.precio_cop / compra.cantidad_estudios) : 0;
+    const f = filas.get(clave) ?? {
+      perfil_id: m.perfil_id,
+      organizacion: nombres.get(m.perfil_id) ?? m.perfil_id,
+      compra_id: compraId,
+      fecha_compra: compra ? compra.completed_at ?? compra.created_at : null,
+      cupos_paquete: compra?.cantidad_estudios ?? null,
+      cupos_vencidos: 0,
+      valor_unitario: unitario,
+      valor_total: 0,
+    };
+    f.cupos_vencidos += -m.cantidad;
+    f.valor_total = f.cupos_vencidos * f.valor_unitario;
+    filas.set(clave, f);
+  }
+  return [...filas.values()].sort(
+    (a, b) => a.organizacion.localeCompare(b.organizacion, 'es') || (a.fecha_compra ?? '').localeCompare(b.fecha_compra ?? ''),
+  );
+}
+
+export async function getCuposVencidos(mes = mesBogota(new Date())) {
+  const { desde, hasta } = rangoMesBogota(mes);
+  const { data, error } = await fetchAll<MovimientoExpiracion>((d, h) =>
+    (supabase.from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('id, perfil_id, cantidad, lote:lotes_creditos_estudios(compra_id, compra:compras_creditos_estudios(cantidad_estudios, precio_cop, completed_at, created_at))')
+      .eq('tipo', 'expiracion')
+      .gte('created_at', desde)
+      .lt('created_at', hasta)
+      .order('id', { ascending: true })
+      .range(d, h) as unknown as PromiseLike<{ data: MovimientoExpiracion[] | null; error: PostgrestError | null }>,
+  );
+  if (error) throw fromSupabaseError(error);
+
+  const perfiles = [...new Set(data.map((m) => m.perfil_id))];
+  const nombres = new Map(await Promise.all(perfiles.map(async (p) => [p, await resolveNombreDueno(p, '')] as const)));
+  const filas = agruparCuposVencidos(data, nombres);
+  return {
+    mes,
+    filas,
+    totales: {
+      cupos_vencidos: filas.reduce((s, f) => s + f.cupos_vencidos, 0),
+      valor_total: filas.reduce((s, f) => s + f.valor_total, 0),
     },
   };
 }

@@ -148,7 +148,12 @@ describe('P22: contracargo de una compra de créditos', () => {
       { data: [{ id: 'lote-9' }], error: null }, // CAS a 0
       { data: [{ cantidad_disponible: 3 }], error: null }, // saldo vigente
     );
-    enqueue('movimientos_creditos_estudios', { data: null, error: null }, { data: [{ expediente_id: 'e1' }, { expediente_id: 'e2' }, { expediente_id: 'e1' }], error: null });
+    enqueue(
+      'movimientos_creditos_estudios',
+      { data: [], error: null }, // sin cupos extinguidos
+      { data: null, error: null },
+      { data: [{ expediente_id: 'e1' }, { expediente_id: 'e2' }, { expediente_id: 'e1' }], error: null },
+    );
     enqueue('expedientes', { data: [{ numero: 'EXP-1' }, { numero: 'EXP-2' }], error: null });
 
     const r = await revertirCompraCreditos('compra-1');
@@ -164,6 +169,22 @@ describe('P22: contracargo de una compra de créditos', () => {
     expect(updates('compras_creditos_estudios')).toEqual([{ estado: 'cancelado' }, { creditos_en_contra: 6 }]);
     expect(updates('lotes_creditos_estudios')).toEqual([{ cantidad_disponible: 0 }]);
     expect(inserts('movimientos_creditos_estudios')[0]).toMatchObject({ tipo: 'ajuste', cantidad: -4, saldo_resultante: 3 });
+  });
+
+  it('§3.1: los cupos extinguidos por vencimiento no quedan como saldo en contra', async () => {
+    compraCompletada();
+    enqueue(
+      'lotes_creditos_estudios',
+      { data: { id: 'lote-9', cantidad_inicial: 10, cantidad_disponible: 0 }, error: null }, // el barrido lo dejó en 0
+      { data: [{ id: 'lote-9' }], error: null },
+    );
+    // 3 extinguidos por el barrido + 1 reserva que volvió al lote vencido: 6 usados.
+    enqueue('movimientos_creditos_estudios', { data: [{ cantidad: -3 }, { cantidad: -1 }], error: null });
+
+    const r = await revertirCompraCreditos('compra-1');
+
+    expect(r).toMatchObject({ retirados: 0, en_contra: 6 });
+    expect(updates('compras_creditos_estudios')).toEqual([{ estado: 'cancelado' }, { creditos_en_contra: 6 }]);
   });
 
   it('un reintento sobre una compra ya revertida no hace nada', async () => {
