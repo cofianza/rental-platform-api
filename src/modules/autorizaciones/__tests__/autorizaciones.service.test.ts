@@ -107,6 +107,8 @@ vi.mock('@/lib/tenantScope', () => ({
 }));
 vi.mock('@/modules/estudios/pago.guard', () => ({
   estudioYaCobrado: (...args: unknown[]) => mockEstudioYaCobrado(...args),
+  // Misma fuente que estudioYaCobrado en los tests; 'no_verificable' se prueba aparte.
+  leerSenalPagoEstudio: async (...args: unknown[]) => ((await mockEstudioYaCobrado(...args)) ? 'pagado' : 'no_pagado'),
 }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({
   onHabeasDataAutorizado: (...args: unknown[]) => mockOnHabeas(...args),
@@ -339,6 +341,24 @@ describe('autorizaciones.service', () => {
       }));
     });
 
+    it('B15: si no se puede leer la inmobiliaria, el WhatsApp dice un sujeto neutro (nunca «El propietario»)', async () => {
+      enqueue('expedientes', {
+        data: {
+          ...expedienteConSolicitante,
+          solicitantes: { ...expedienteConSolicitante.solicitantes, telefono: '+573001112233' },
+          inmuebles: { ...expedienteConSolicitante.inmuebles, inmobiliaria_id: 'org-1' },
+        },
+      });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('inmobiliarias', { data: null, error: { message: 'timeout' } });
+
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+
+      expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
+        variables: ['Juan', 'Quien tramita su arriendo', 'Calle 1 #2-3, Bogota', expect.stringContaining('/autorizar/'), '15'],
+      }));
+    });
+
     it('con inmobiliaria, la plantilla dice su nombre como quien pide el estudio', async () => {
       enqueue('expedientes', {
         data: {
@@ -514,6 +534,24 @@ describe('autorizaciones.service', () => {
 
       expect(result.solicitado_por).toBe('Inmobiliaria Norte');
       expect(result.pago).toEqual({ requerido: true, monto_formateado: '$150.000' });
+    });
+
+    it('B15: si falla la lectura, null («no sé») y no «El propietario» ni «sin cobro»', async () => {
+      enqueue('autorizaciones_habeas_data', {
+        data: {
+          ...autorizacionPendiente,
+          expediente_id: 'exp-1',
+          expedientes: { ...autorizacionPendiente.expedientes, inmuebles: { ...autorizacionPendiente.expedientes.inmuebles, inmobiliaria_id: 'org-1' } },
+        },
+      });
+      enqueue('inmobiliarias', { data: null, error: { message: 'timeout' } });
+      mockEstudioYaCobrado.mockResolvedValueOnce(false);
+      enqueue('estudios', { data: null, error: { message: 'timeout' } });
+
+      const result = await getAutorizacionByToken(TOKEN);
+
+      expect(result.solicitado_por).toBeNull();
+      expect(result.pago).toBeNull();
     });
 
     it('A2: si lo paga la inmobiliaria no hay aviso de cobro; sin inmobiliaria, nombre genérico', async () => {
@@ -932,6 +970,23 @@ describe('autorizaciones.service', () => {
       expect(await reportarIdentidadProspecto(TOKEN, { motivo: 'no_soy_yo' })).toEqual({ reportado: true });
       expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({ identidad_reporte: 'no_soy_yo' });
       expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
+    });
+
+    it('M1: reintento de un reporte que sí entró (enlace ya detenido por él) = éxito, sin escribir de nuevo', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...pendiente, estado: 'expirado' } }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizacion_perfil_prospecto', { data: { identidad_reporte: 'no_soy_yo' } });
+      expect(await reportarIdentidadProspecto(TOKEN, { motivo: 'no_soy_yo' })).toEqual({ reportado: true });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+    });
+
+    it('M1: enlace ya no pendiente y SIN reporte (vencido, firmado en otra pestaña) = sigue el error', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...pendiente, estado: 'autorizado' } }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizacion_perfil_prospecto', { data: null });
+      await expect(reportarIdentidadProspecto(TOKEN, { motivo: 'datos_incorrectos' })).rejects.toMatchObject({
+        errorCode: 'AUTORIZACION_NO_VIGENTE',
+      });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
     });
 
     it('documentoCoincide: sin numero en la ficha no hay nada que confirmar', () => {

@@ -7,7 +7,7 @@ import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
-import { estudioYaCobrado as estudioPagado } from '@/modules/estudios/pago.guard';
+import { estudioYaCobrado as estudioPagado, leerSenalPagoEstudio } from '@/modules/estudios/pago.guard';
 import { normalizarDocumento, normalizarTipoDocumento } from '@/modules/estudios/autorizacion.guard';
 import { env } from '@/config';
 import { getCalibracion } from '@/lib/calibracion';
@@ -273,12 +273,25 @@ async function leerIngresoInferidoDelExpediente(
 async function quienSolicitaElEstudio(inmobiliariaId: string | null): Promise<string> {
   const generico = 'El propietario del inmueble';
   if (!inmobiliariaId) return generico;
-  const { data } = await (supabase
+  const { data, error } = await (supabase
     .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
     .select('nombre')
     .eq('id', inmobiliariaId)
     .maybeSingle();
+  // B15: supabase-js no lanza. Sin esto, un fallo de lectura decía «El
+  // propietario del inmueble» aunque el estudio lo pidiera una inmobiliaria.
+  if (error) throw error;
   return ((data as { nombre?: string | null } | null)?.nombre || '').trim() || generico;
+}
+
+/** {{2}} del WhatsApp: si no se pudo leer quién pide, un sujeto neutro (nunca uno falso). */
+async function quienSolicitaParaMensaje(inmobiliariaId: string | null, expedienteId: string): Promise<string> {
+  try {
+    return await quienSolicitaElEstudio(inmobiliariaId);
+  } catch (err) {
+    logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'No se pudo leer quién pide el estudio para el WhatsApp de autorización');
+    return 'Quien tramita su arriendo';
+  }
 }
 
 export async function enviarEnlaceAutorizacion(
@@ -504,7 +517,7 @@ export async function enviarEnlaceAutorizacion(
       language: WHATSAPP_TEMPLATES.AUTORIZACION_LINK.language,
       variables: [
         exp.solicitantes.nombre,
-        await quienSolicitaElEstudio(inm?.inmobiliaria_id ?? null),
+        await quienSolicitaParaMensaje(inm?.inmobiliaria_id ?? null, expedienteId),
         direccion,
         autorizacionUrl,
         String(Math.round(expiryHours / 24)),
@@ -660,11 +673,16 @@ export async function getAutorizacionByToken(token: string) {
 
   // A1 / A2 (revisiones/ux-autorizacion-2026-09-28.md): quién pide el estudio y
   // si al prospecto le toca pagarlo, ANTES de pedirle el documento y de firmar.
-  // Best-effort: si fallan, la pantalla funciona como antes (sin esos avisos).
+  // Best-effort: si fallan, la pantalla funciona como antes (sin esos avisos),
+  // pero queda en el log (B15): null = «no sé», nunca «no hay cobro».
+  const sinDato = (campo: string) => (err: unknown) => {
+    logger.warn({ autorizacionId: auth.id, campo, err: err instanceof Error ? err.message : String(err) }, 'Autorización pública: dato no disponible');
+    return null;
+  };
   const [solicitadoPor, pago] = await Promise.all([
-    quienSolicitaElEstudio(auth.expedientes?.inmuebles?.inmobiliaria_id ?? null).catch(() => null),
+    quienSolicitaElEstudio(auth.expedientes?.inmuebles?.inmobiliaria_id ?? null).catch(sinDato('solicitado_por')),
     auth.expediente_id
-      ? cobroAnticipado(auth.expediente_id).catch(() => null)
+      ? cobroAnticipado(auth.expediente_id).catch(sinDato('pago'))
       : Promise.resolve(null),
   ]);
 
@@ -1100,9 +1118,40 @@ export async function reportarIdentidadProspecto(
   ip?: string,
   userAgent?: string,
 ) {
-  const auth = await autorizacionPendientePorToken(token);
+  let auth: AutorizacionPendiente;
+  try {
+    auth = await autorizacionPendientePorToken(token);
+  } catch (err) {
+    // M1 (revisión 2026-09-28): el enlace ya no está pendiente. Solo es éxito si
+    // fue ESTE reporte el que lo detuvo (un reintento tras un corte de datos).
+    // Si no (vencido, firmado en otra pestaña, detenido por otra cosa), el error
+    // sigue: la pantalla no puede decir «detuvimos el proceso» sin reporte.
+    if (err instanceof AppError && err.errorCode === 'AUTORIZACION_NO_VIGENTE' && (await yaReportadoPorToken(token))) {
+      return { reportado: true };
+    }
+    throw err;
+  }
   await detenerAutorizacion(auth, { ...input, origen: 'reporte_identidad_prospecto' }, ip, userAgent);
   return { reportado: true };
+}
+
+/** ¿Ya hay un reporte de identidad guardado para la autorización de este token? */
+async function yaReportadoPorToken(token: string): Promise<boolean> {
+  const { data: aut, error } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('token', token)
+    .maybeSingle();
+  const autorizacionId = (aut as { id?: string } | null)?.id;
+  if (error || !autorizacionId) return false;
+  const { data: rep, error: repError } = await (supabase
+    .from('autorizacion_perfil_prospecto' as string) as ReturnType<typeof supabase.from>)
+    .select('identidad_reporte')
+    .eq('autorizacion_id', autorizacionId)
+    .not('identidad_reporte', 'is', null)
+    .limit(1)
+    .maybeSingle();
+  return !repError && !!rep;
 }
 
 /** Por que se detiene el enlace: el reporte del prospecto o el documento que no coincide. */
@@ -1586,9 +1635,17 @@ export async function firmarAutorizacion(
   // esperando un correo que no existe, y encima le pedía plata a quien no le
   // toca pagar. Solo la opción C (estudios.pago_por='arrendatario', que escribe
   // marcarPagoArrendatario) le genera el link al firmar.
-  const pagoRequerido = auth.expediente_id
-    ? !(await estudioPagado(auth.expediente_id)) && (await cobroLeTocaAlProspecto(auth.expediente_id))
-    : false;
+  // La firma ya quedó guardada: un fallo leyendo el pagador no la puede tumbar
+  // (antes daba false en silencio; ahora queda en el log). La pantalla de «ya
+  // firmaste» vuelve a preguntar por el pago con getPagoProspectoPorToken.
+  let pagoRequerido = false;
+  if (auth.expediente_id) {
+    try {
+      pagoRequerido = !(await estudioPagado(auth.expediente_id)) && (await cobroLeTocaAlProspecto(auth.expediente_id));
+    } catch (err) {
+      logger.warn({ autorizacionId: auth.id, err: err instanceof Error ? err.message : String(err) }, 'Firma: no se pudo saber si al prospecto le toca pagar');
+    }
+  }
 
   return {
     estado: 'autorizado',
@@ -1669,10 +1726,13 @@ export async function getPagoProspectoPorToken(token: string): Promise<{
 async function cobroAnticipado(
   expedienteId: string,
 ): Promise<{ requerido: boolean; monto_formateado: string | null }> {
-  if ((await estudioPagado(expedienteId)) || !(await cobroLeTocaAlProspecto(expedienteId))) {
+  // B15: 'no_verificable' no es «no pagado»: sin saberlo, no se afirma nada.
+  const senal = await leerSenalPagoEstudio(expedienteId);
+  if (senal === 'no_verificable') throw new Error('No se pudo verificar el pago del estudio');
+  if (senal === 'pagado' || !(await cobroLeTocaAlProspecto(expedienteId))) {
     return { requerido: false, monto_formateado: null };
   }
-  const { data: pagoRow } = await (supabase
+  const { data: pagoRow, error: pagoError } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select('monto')
     .eq('expediente_id', expedienteId)
@@ -1681,6 +1741,7 @@ async function cobroAnticipado(
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (pagoError) throw pagoError;
   const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
   const monto = (pagoRow as { monto?: number } | null)?.monto ?? (await getMontoEstudio().catch(() => null));
   return {
@@ -1696,7 +1757,7 @@ async function cobroAnticipado(
  * backend no va a emitir.
  */
 async function cobroLeTocaAlProspecto(expedienteId: string): Promise<boolean> {
-  const { data } = await (supabase
+  const { data, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select('pago_por')
     .eq('expediente_id', expedienteId)
@@ -1704,6 +1765,8 @@ async function cobroLeTocaAlProspecto(expedienteId: string): Promise<boolean> {
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  // B15: un fallo de lectura no es «no le toca pagar».
+  if (error) throw error;
   return (data as { pago_por?: string | null } | null)?.pago_por === 'arrendatario';
 }
 
