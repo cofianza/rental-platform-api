@@ -14,9 +14,8 @@ REST API for **Cofianza 2.0**, a rental guarantee platform in Colombia. Built wi
 - `npm run lint` / `npm run lint:fix` — run ESLint on `src/`
 - `npm run format` — run Prettier on all `.ts` files
 - `npm run typecheck` — type-check without emitting (`tsc --noEmit`)
-- `npm run db:types` — regenerate TypeScript types from Supabase schema into `src/types/database.types.ts`
+- `npm run db:types` — regenerate TypeScript types from Supabase schema into `src/types/database.types.ts` (`--local`: needs a local Supabase stack, which today can't be built from the migrations — two files share version `20260219000002`. There is no `db:reset` for the same reason; see README "Migraciones".)
 - `npm run db:migrate` — create a new Supabase migration
-- `npm run db:reset` — reset local database
 - `npm run db:seed` — run seed script (`src/lib/seed.ts`)
 - `npm run db:studio` — open Supabase Studio (data explorer)
 

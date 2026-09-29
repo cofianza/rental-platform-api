@@ -27,4 +27,5 @@ DROP POLICY IF EXISTS solicitantes_update ON public.solicitantes;
 DROP POLICY IF EXISTS users_update_own_notificaciones ON public.notificaciones;
 -- Verificación: 0
 --   SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND cmd <> 'SELECT';
--- Rollback: recrear desde 20261001000015_rls_copia_de_produccion.sql (sección 5).
+-- Rollback: 03_rollback.sql (las 21 de escritura de la sección 5 de la 015
+--   + users_update_own_notificaciones, que vive en 20260429000003).
