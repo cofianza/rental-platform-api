@@ -87,7 +87,7 @@ vi.mock('@/modules/autorizaciones/biometria', async (importOriginal) => ({
 
 import type { EntradaSombra, SalidaSombra, CodigoVariable } from '../index';
 import { construirFilaSombra } from '../fila';
-import { CONFLICTO_REGLAS_COARRENDATARIO, CONFLICTO_REGLAS_R2, decidirCascada, decidirResultado, decidirSinCentrales, type UmbralesDecision } from '../../decision';
+import { REGLA_BANDA_COARRENDATARIO, REGLA_R2, decidirCascada, decidirResultado, decidirSinCentrales, type UmbralesDecision } from '../../decision';
 import { resolverResultadoEstudio } from '../../reglas-duras';
 import { decidirConCascada } from '../../estudios.service';
 import type { ProviderSolicitudInput } from '../../providers/types';
@@ -550,10 +550,9 @@ describe('7.4 Coarrendatario', () => {
     expect.soft(ponderar(r, 75).combinado, 'coarrendatario 75 (ponderacion)').toBe('revision_manual');
   });
 
-  // Nota §5 (R2) del lado del coarrendatario: su score 450-599 (Adenda 2 §2,
-  // revision manual con prioridad sobre el < 70) choca con el caso O. Sin
-  // definicion de la Gerencia: revision manual con la marca de conflicto.
-  it('O con coarrendatario de score 520 (47,9 < 70): REVISION MANUAL y traza de conflicto, no rechazo', async () => {
+  // R2 del lado del coarrendatario: su score 450-599 prevalece sobre el caso O
+  // (Adenda de precios §8.4 y Adenda 2 §2): revision manual con la regla en la traza.
+  it('O con coarrendatario de score 520 (47,9 < 70): REVISION MANUAL por la banda (Adenda de precios §8.4), no rechazo', async () => {
     const r = await decidir(dc(PERFIL_B, 30));
     const coa = (await decidir(dc(PERFIL_F, 30))).salida;
     expect.soft(coa.puntaje_normalizado, 'precondicion: coarrendatario < 70').toBe(47.9);
@@ -561,10 +560,11 @@ describe('7.4 Coarrendatario', () => {
     const d = conCoarrendatario(r, { puntaje: coa.puntaje_normalizado, reglaDura: false, scoreEnBandaRevision: true });
     expect.soft(d.resultado, 'decision (decidirResultado)').toBe('condicionado');
     expect.soft(d.via, 'via').toBe('revision_manual');
-    expect.soft(d.motivo, 'traza: conflicto de reglas del coarrendatario').toContain(CONFLICTO_REGLAS_COARRENDATARIO);
+    expect.soft(d.motivo, 'traza: regla de la banda del coarrendatario').toContain(REGLA_BANDA_COARRENDATARIO);
+    expect.soft(d.motivo, 'sin la marca de conflicto pendiente').not.toMatch(/pendiente de definici/);
     const { v, combinado } = ponderar(r, coa);
     expect.soft(combinado, 'decision (ponderacion)').toBe('revision_manual');
-    expect.soft(v?.conflicto, 'ponderacion: conflicto de reglas del coarrendatario').toBe(CONFLICTO_REGLAS_COARRENDATARIO);
+    expect.soft(v?.regla, 'ponderacion: regla de la banda del coarrendatario').toBe(REGLA_BANDA_COARRENDATARIO);
   });
 
   it('R — afianzado 52,1 (< 70) + coarrendatario 95: RECHAZADO', async () => {
@@ -641,11 +641,11 @@ describe('7.5 Motivos y traza', () => {
 });
 
 // ============================================================================
-// R2 — conflicto de reglas SIN DEFINIR por la Gerencia: no se programa ninguna
-// de las dos interpretaciones. Salida conservadora (nota §5): revision manual
-// con la traza marcada como conflicto pendiente.
+// R2 — definido por la Adenda de precios §8: la banda 450-599 prevalece sobre
+// el puntaje < 70 (Adenda 2 §2). Revision manual y la traza cita la regla.
+// La prioridad BAJA de la cola (§8.2) no se programa aqui.
 // ============================================================================
-it('R2 — score 520, normalizado 27,1, coarrendatario 95: REVISION MANUAL y traza de conflicto pendiente de la Gerencia', async () => {
+it('R2 — score 520, normalizado 27,1, coarrendatario 95: REVISION MANUAL, la banda prevalece (Adenda de precios §8)', async () => {
   const r = await decidir(dc({ ...PERFIL_R, score: 520 }, 35));
   normalizacion(r.salida, 26, 27.1, { score: 10, dti: 2, canon: 4, exp: 0, comp: 10, ant: 0 });
   expect.soft(r.d.resultado, 'el titular solo: revision manual por la banda').toBe('condicionado');
@@ -653,13 +653,14 @@ it('R2 — score 520, normalizado 27,1, coarrendatario 95: REVISION MANUAL y tra
   const d = conCoarrendatario(r, { puntaje: 95, reglaDura: false });
   expect.soft(d.resultado, 'decision (decidirResultado)').toBe('condicionado');
   expect.soft(d.via, 'via').toBe('revision_manual');
-  expect.soft(d.motivo, 'traza: conflicto de reglas').toContain(CONFLICTO_REGLAS_R2);
-  // Camino real: la ponderacion deja el caso en revision y registra el conflicto.
+  expect.soft(d.motivo, 'traza: regla R2 definida').toContain(REGLA_R2);
+  expect.soft(d.motivo, 'sin la marca de conflicto pendiente').not.toMatch(/pendiente de definici/);
+  // Camino real: la ponderacion deja el caso en revision y registra la regla.
   const { v, combinado } = ponderar(r, 95);
   expect.soft(combinado, 'decision (ponderacion)').toBe('revision_manual');
-  expect.soft(v?.conflicto, 'ponderacion: conflicto de reglas').toBe(CONFLICTO_REGLAS_R2);
-  // Sin coarrendatario alto no hay conflicto que registrar.
-  expect.soft(conCoarrendatario(r, { puntaje: 75, reglaDura: false }).motivo, 'coarrendatario 75: sin conflicto').not.toContain(CONFLICTO_REGLAS_R2);
+  expect.soft(v?.regla, 'ponderacion: regla R2').toBe(REGLA_R2);
+  // Sin coarrendatario alto no es el caso R2.
+  expect.soft(conCoarrendatario(r, { puntaje: 75, reglaDura: false }).motivo, 'coarrendatario 75: no es R2').not.toContain(REGLA_R2);
 });
 
 // ============================================================================

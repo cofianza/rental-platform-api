@@ -253,6 +253,12 @@ const envSchema = z.object({
   // decidiendo y el motor sigue en sombra. La Adenda §11 exige correr la
   // matriz de casos (scripts/check-decision-adenda.ts) antes de encenderlo.
   MOTOR_DECIDE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Adenda de precios §6.1-6.3: estudios de inmuebles comerciales o mixtos y de
+  // arrendatarios persona juridica/NIT. OFF = bloqueados antes de crear o cobrar.
+  // Se enciende SOLO por decision expresa de la Gerencia General (§6.2), no al
+  // terminar el desarrollo: no hay modelo de evaluacion para persona juridica
+  // (§6.3). El contrato comercial sigue con DESTINOS.comercial (destinacion.ts).
+  ESTUDIOS_COMERCIAL_PJ_HABILITADOS: z.string().default('false').transform((v) => v === 'true'),
   FIRMA_MULTIPARTE_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Adenda 2 §9: biometria en la FIRMA del contrato (solo con multi-parte).
   // ON = antes del sobre de Auco, el arrendatario confirma su identidad en
