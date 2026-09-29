@@ -391,7 +391,7 @@ describe('expediente-workflow.service', () => {
         fundamento: 'Soportes revisados',
         documentos_consultados: ['PILA'],
         evaluacion,
-      });
+      }, undefined, 'admin@test.com');
       expect(mockRpc).not.toHaveBeenCalled();
       expect(r.puntaje_revision_manual).toBe(recalculo);
     });
@@ -457,6 +457,51 @@ describe('expediente-workflow.service', () => {
       // Y al dueño le llega en el aviso.
       await vi.waitFor(() =>
         expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'rechazado', 'El caso no cumple la política de Cofianza.'),
+      );
+    });
+
+    // B23 (revisión 2026-09-28): los códigos llegan al evento del cambio de estado.
+    it('rechazar con motivos: los códigos se guardan en el evento de la RPC', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      const codigos: Array<{ valores: unknown; eq: unknown[] }> = [];
+      mockFrom.mockImplementation((t?: string) =>
+        t === 'eventos_timeline' || t === 'expedientes'
+          ? {
+              update: (v: Record<string, unknown>) => ({
+                eq: vi.fn(async (...a: unknown[]) => {
+                  if (t === 'eventos_timeline' && 'motivos_decision' in v) codigos.push({ valores: v, eq: a });
+                  return { error: null };
+                }),
+              }),
+            }
+          : fromPorDefecto(t),
+      );
+      mockRpc.mockResolvedValueOnce({
+        data: { expediente_id: 'exp-uuid', estado_anterior: 'condicionado', evento_timeline_id: 'evt-uuid', updated_at: '2026-09-28T10:00:00Z' },
+        error: null,
+      });
+
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'rechazado', comentario: 'R1 · Score externo promedio menor a 450', motivo: 'El historial crediticio no cumple la Política', motivos: ['R1'] },
+        adminUser,
+      );
+
+      expect(codigos).toEqual([{ valores: { motivos_decision: ['R1'] }, eq: ['id', 'evt-uuid'] }]);
+    });
+
+    it('aprobar con motivos: los códigos viajan a aprobarCondicionado', async () => {
+      setupFetchExpediente({ ...mockExpediente, estado: 'condicionado' });
+      mockAprobarCondicionado.mockResolvedValueOnce({ puntaje_revision_manual: null });
+
+      await executeTransition(
+        'exp-uuid',
+        { nuevo_estado: 'aprobado', comentario: 'A1 · Documentos de ingreso verificados', evaluacion, motivos: ['A1'] },
+        adminUser,
+      );
+
+      expect(mockAprobarCondicionado).toHaveBeenCalledWith(
+        'exp-uuid', 'admin-uuid', 'administrador', undefined, expect.objectContaining({ motivos: ['A1'] }), undefined, 'admin@test.com',
       );
     });
 

@@ -70,6 +70,7 @@ import { assertAutorizacionVigente, AUTORIZACION_PREVIA_ERROR_CODE } from './aut
 // Tope de canon (flujo §4.4). Va ANTES del gate de autorizacion previa y antes
 // de cualquier cobro: ver la nota de ORDEN en tope-canon.guard.ts.
 import { assertCanonDentroDelTope, leerCanonDelInmueble } from './tope-canon.guard';
+import { assertAprobacionDentroDelTope, retenerAprobadoSobreTope } from './excepcion-tope.service';
 // Gate de PAGO (§6.3) + la señal canonica de "este estudio ya se cobro".
 import {
   leerSenalPagoEstudio,
@@ -1806,6 +1807,7 @@ export async function registrarResultado(
   userId: string,
   ip?: string,
   userRol?: string,
+  userEmail?: string,
 ) {
   // 1. Get estudio — verify exists, estado, and resultado still pendiente
   const { data: estudio, error: getError } = await (supabase
@@ -1921,6 +1923,9 @@ export async function registrarResultado(
         'EVALUACION_REQUERIDA',
       );
     }
+    // 2.56. Adenda de precios §7.3: por encima del tope solo aprueba la
+    //       Gerencia General (o con la excepción ya registrada).
+    await assertAprobacionDentroDelTope(est.expediente_id, { id: userId, rol: userRol ?? '', email: userEmail ?? '' }, ip);
   }
 
   // 2.6. CANON CONGELADO — el otro camino que llega a 'completado'.
@@ -2000,7 +2005,18 @@ export async function registrarResultado(
     }
     throw AppError.badRequest('Error al registrar el resultado', 'RESULTADO_UPDATE_ERROR');
   }
-  await guardarCodigosMotivo('estudios', estudioId, input.motivos);
+  // B22: los códigos explican la decisión del analista. Si la regla dura o el
+  // motor la cambiaron (p. ej. un condicionado C1 que termina en rechazo), los
+  // códigos ya no explican el resultado guardado: no se escriben. Sus textos
+  // siguen en el timeline (fundamento) y el resultado pedido en la bitácora.
+  if (final.resultado === input.resultado) {
+    await guardarCodigosMotivo('estudios', estudioId, input.motivos);
+  } else if (input.motivos?.length) {
+    logger.info(
+      { estudioId, resultado_solicitado: input.resultado, resultado_final: final.resultado, motivos: input.motivos },
+      'registrarResultado: el resultado final difiere del elegido por el analista; no se guardan los códigos de motivo',
+    );
+  }
 
   // 3.1. VIGENCIA ANCLADA EN LA CONSULTA AL BURO. El RPC pone fecha_completado =
   //      NOW(), y todo lo que mide la vigencia (CRC, §5.2, reasignacion,
@@ -4476,6 +4492,9 @@ async function retenerAprobadoEnRevisionManual(
   final: DecisionFinalEstudio,
 ): Promise<DecisionFinalEstudio> {
   if (final.resultado !== 'aprobado' || tipoEstudio === 'con_coarrendatario') return final;
+  // Adenda de precios §7.1: sobre el tope, a revisión (nunca aprobado automático).
+  const trasTope = await retenerAprobadoSobreTope(expedienteId, final);
+  if (trasTope.resultado !== 'aprobado') return trasTope;
   const { data: exp } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
     .select('estado')

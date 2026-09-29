@@ -13,7 +13,6 @@
     "typecheck": "tsc --noEmit",
     "db:types": "supabase gen types typescript --local > src/types/database.types.ts",
     "db:migrate": "supabase migration new",
-    "db:reset": "supabase db reset",
     "db:seed": "ts-node -r tsconfig-paths/register src/lib/seed.ts",
     "db:studio": "supabase studio",
     "test": "vitest run",

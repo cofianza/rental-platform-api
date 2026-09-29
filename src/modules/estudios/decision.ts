@@ -25,7 +25,7 @@
 //   70 a 84 con coarrendatario >= 80            APROBACION AUTOMATICA CONDICIONADA
 //   70 a 84 sin coarrendatario (o con 70-79)    REVISION MANUAL
 //   70 a 84 con coarrendatario < 70             RECHAZADO (matriz QA V2, caso O)
-//     ...salvo coarrendatario con score 450-599 REVISION MANUAL + conflicto (nota §5)
+//     ...salvo coarrendatario con score 450-599 REVISION MANUAL (Adenda de precios §8.4)
 //   < 70                                        RECHAZADO
 //
 // ── Politica §3.1, jerarquia ──────────────────────────────────
@@ -43,22 +43,20 @@ import { evaluarSombra, type SalidaSombra } from './motor';
 export type ResultadoDecidido = 'aprobado' | 'condicionado' | 'rechazado';
 
 /**
- * Matriz QA V2, caso R2 (sin definir): la Politica (tabla de reglas duras:
- * afianzado < 70 con coarrendatario alto = rechazo) y la Adenda 2 §2 (score
- * 450-599 = revision manual con prioridad sobre el < 70) chocan. Mientras la
- * Gerencia no defina, la salida es la conservadora —revision manual— y la
- * traza lo dice con este texto.
+ * Matriz QA V2, caso R2 (definido por la Adenda de precios §8): score externo
+ * 450-599 con puntaje < 70 y coarrendatario alto. La banda prevalece sobre el
+ * rechazo por < 70 (Adenda 2 §2): revision manual, y la traza cita la regla.
  */
-const CONFLICTO_PENDIENTE = 'Conflicto de reglas pendiente de definición de la Gerencia';
-export const CONFLICTO_REGLAS_R2 = `${CONFLICTO_PENDIENTE} (Política tabla reglas duras vs Adenda 2 punto 2).`;
+export const REGLA_R2 =
+  'Caso R2: la banda 450-599 prevalece sobre el puntaje menor a 70 (Adenda de precios §8 y Adenda 2 §2): revisión manual, prioridad baja';
 
 /**
- * R2 del lado del coarrendatario: titular 70-84 con coarrendatario < 70 es el
- * caso O (rechazo), pero si el coarrendatario tiene score 450-599 la Adenda 2
- * §2 lo manda a revision manual con prioridad sobre el < 70. Sin definicion de
- * la Gerencia, misma salida conservadora que R2 (nota §5).
+ * Misma regla del lado del coarrendatario (Adenda de precios §8.4, aplicable a
+ * cualquier caso): titular 70-84 con coarrendatario < 70 es el caso O (rechazo),
+ * pero si el coarrendatario tiene score 450-599 la banda prevalece: revision manual.
  */
-export const CONFLICTO_REGLAS_COARRENDATARIO = `${CONFLICTO_PENDIENTE} (coarrendatario: matriz QA V2 caso O vs Adenda 2 punto 2).`;
+export const REGLA_BANDA_COARRENDATARIO =
+  'Coarrendatario: la banda 450-599 prevalece sobre el puntaje menor a 70 (Adenda de precios §8.4 y Adenda 2 §2): revisión manual';
 
 export interface UmbralesDecision {
   cascadaRechazo: number;
@@ -223,7 +221,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
     const otros = e.motivosRevision.map((m) => m.replace(ro, '').trim()).filter(Boolean);
     const coa = e.coarrendatario ?? null;
     // R2: banda de score (no Caso G) + puntaje < 70 + coarrendatario >= 80.
-    const conflictoR2 =
+    const casoR2 =
       !salida.inconsistencia_score_buros &&
       p < u.zonaGris &&
       !!coa &&
@@ -232,7 +230,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
       coa.puntaje >= u.coarrendatario;
     return {
       resultado: 'condicionado',
-      motivo: [ro, ...otros, conflictoR2 ? CONFLICTO_REGLAS_R2 : null].filter(Boolean).join(' '),
+      motivo: [ro, ...otros, casoR2 ? REGLA_R2 : null].filter(Boolean).join(' '),
       via: 'revision_manual',
     };
   }
@@ -268,7 +266,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
     if (coa.scoreEnBandaRevision) {
       return {
         resultado: 'condicionado',
-        motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris} con score en la banda de revision obligatoria: revision manual. ${CONFLICTO_REGLAS_COARRENDATARIO}`,
+        motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris} con score en la banda de revision obligatoria: revision manual. ${REGLA_BANDA_COARRENDATARIO}`,
         via: 'revision_manual',
         sinFlags: true,
       };

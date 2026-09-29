@@ -8,8 +8,9 @@
 // «Otro» exige el texto.
 //
 // Los textos compuestos llenan los campos que ya existían (motivo_rechazo,
-// fundamento, condiciones, comentario), así que ni el RPC ni la base cambian;
-// el código del motivo queda al inicio de cada línea interna.
+// fundamento, condiciones, comentario), así que el RPC no cambia; el código del
+// motivo queda al inicio de cada línea interna. Los códigos además van a la
+// columna `motivos_decision` (migración 20261001000018): ver guardarCodigosMotivo.
 // ============================================================
 
 import { z } from 'zod';
@@ -68,8 +69,8 @@ export const MOTIVOS_DECISION = {
     C3: { visible: 'Requiere referencia de arrendamiento anterior', interno: 'Requiere referencia de arrendamiento anterior (V9)' },
     C4: { visible: 'Requiere verificar la identidad por otro medio', interno: 'Requiere verificar la identidad por otro medio (Adenda 2 §9)' },
     C5: {
-      visible: 'Canon por encima del tope: requiere autorización escrita de la Dirección de Riesgo',
-      interno: 'Canon por encima del tope transitorio (CANON_MAX_TRANSITORIO): requiere autorización escrita de la Dirección de Riesgo',
+      visible: 'Canon por encima del tope: requiere autorización escrita de la Gerencia General',
+      interno: 'Canon por encima del tope transitorio (CANON_MAX_TRANSITORIO): requiere autorización escrita de la Gerencia General',
     },
     C6: { visible: 'Otro', interno: 'Otro' },
   },
@@ -124,7 +125,7 @@ export function rellenarDesdeMotivos(
  * Guarda los códigos en la columna `motivos_decision` (migración
  * 20261001000018, aplicada en prod el 2026-09-28). En un UPDATE aparte y sin
  * lanzar: la decisión ya quedó guardada con sus textos y devolver 500 haría
- * creer que no. Pero un fallo ya no es esperable: se registra como ERROR.
+ * creer que no. Si el UPDATE falla (p. ej. se revirtió la 018), logger.error.
  */
 export async function guardarCodigosMotivo(
   tabla: 'estudios' | 'eventos_timeline',

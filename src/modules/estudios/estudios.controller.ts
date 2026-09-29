@@ -102,7 +102,7 @@ export async function sendLink(req: Request, res: Response) {
 export async function registrarResultado(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
   const input = req.body as RegistrarResultadoInput;
-  const estudio = await estudiosService.registrarResultado(estudioId, input, req.user!.id, req.ip, req.user!.rol);
+  const estudio = await estudiosService.registrarResultado(estudioId, input, req.user!.id, req.ip, req.user!.rol, req.user!.email);
   sendSuccess(res, estudio);
 }
 

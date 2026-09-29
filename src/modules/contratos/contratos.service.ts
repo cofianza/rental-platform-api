@@ -14,6 +14,7 @@ import { checkPerfilCompletitud, usuarioPuedeEditarDatosContrato } from '../perf
 import { calcularTarifas, textosTarifaContrato, type Tarifas } from '../estudios/tarifas';
 import { coarrendatarioVinculadoVerificado } from '../estudios/coarrendatario-vinculado';
 import { destinacionParaContrato, topeCanonPara } from '../inmuebles/destinacion';
+import { calConExcepcion } from '../estudios/excepcion-tope.service';
 import { canonMaximoTolerado, evaluarPortabilidad } from '../estudios/portabilidad';
 import { escalarTopeCanon } from './tope-coafianzamiento';
 import { diasCalendario } from './v3/asistente.reglas';
@@ -1987,7 +1988,7 @@ export async function tarifasParaContrato(expedienteId: string): Promise<Tarifas
  * congelado (canon_evaluado NULL): no hay con qué comparar y no se bloquean.
  */
 export async function assertCanonContratable(expedienteId: string, canonCop: number, uso: string | null | undefined): Promise<void> {
-  const [{ data }, cal] = await Promise.all([
+  const [{ data }, calBase, { data: expTope }] = await Promise.all([
     (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
       .select('id, canon_evaluado, estudio_padre_id')
       .eq('expediente_id', expedienteId)
@@ -1997,7 +1998,13 @@ export async function assertCanonContratable(expedienteId: string, canonCop: num
       .limit(1)
       .maybeSingle(),
     getCalibracion(),
+    (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+      .select('excepcion_tope_canon_cop')
+      .eq('id', expedienteId)
+      .maybeSingle(),
   ]);
+  // Adenda de precios §7.4: con excepción de la Gerencia General, el tope es el canon autorizado (techo).
+  const cal = calConExcepcion(calBase, (expTope as { excepcion_tope_canon_cop?: unknown } | null)?.excepcion_tope_canon_cop);
   const estudioId = (data as { id?: string } | null)?.id ?? null;
   const evaluado = Number((data as { canon_evaluado?: unknown } | null)?.canon_evaluado) || 0;
   if (evaluado <= 0) return;

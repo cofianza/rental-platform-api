@@ -85,7 +85,10 @@ async function escalar(expedienteId: string, canonCop: number, topeCop: number, 
         user_id: id,
         tipo: 'contrato.tope_canon',
         titulo: `Canon por encima del tope — estudio ${numero}`,
-        mensaje: `${que} Quedó bloqueado: la Gerencia General debe evaluar un coafianzamiento.`,
+        mensaje:
+          ambito === 'contrato'
+            ? `${que} Quedó bloqueado: la Gerencia General debe evaluar un coafianzamiento.`
+            : `${que} Pasó a revisión: su aprobación requiere la autorización de la Gerencia General (Adenda de precios §7).`,
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, canon_cop: canonCop, tope_cop: topeCop, ambito },
       }));

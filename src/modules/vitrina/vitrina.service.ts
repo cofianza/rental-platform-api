@@ -11,6 +11,7 @@ import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { enviarTemplate } from '../whatsapp';
 import { resolveContactoDueno, resolvePerfilCanonicoDeInmueble } from '@/lib/tenantScope';
 import type { RegisterSolicitanteInput } from './vitrina.schema';
+import { existeOtraCuentaConDocumento } from '../solicitantes/solicitantes.service';
 import { errorNoAfianzable, motivoNoAfianzable, type ArrendatarioDelTope } from '../inmuebles/destinacion';
 
 /** Fila minima del solicitante: el id y lo que decide si el estudio puede nacer. */
@@ -42,6 +43,8 @@ export async function registerSolicitante(
   } = input;
 
   const registrationSource = from_invitation ? 'invitacion_externa' : 'vitrina_publica';
+  // Documento opcional (H43). Sin número no hay nada que deduplicar ni guardar.
+  const tipoDoc = numero_documento ? (tipo_documento ?? 'cc') : undefined;
 
   // 0. Pre-flight: validar duplicados ANTES de crear el auth.user, para no dejar
   //    un auth.user huérfano que bloquee reintentos con "EMAIL_ALREADY_EXISTS".
@@ -57,29 +60,12 @@ export async function registerSolicitante(
   //    es que la MISMA persona se cree DOS cuentas de auto-servicio: buscamos
   //    una ficha con ese documento cuyo creador sea un perfil rol='solicitante'
   //    (= ficha auto-propiedad). Las fichas de agencia/propietario no bloquean.
-  const { data: fichasMismoDoc } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, creado_por, inmobiliaria_id')
-    .eq('tipo_documento', tipo_documento)
-    .eq('numero_documento', numero_documento);
-
-  const candidatasAutoServicio = ((fichasMismoDoc as Array<{
-    id: string; creado_por: string | null; inmobiliaria_id: string | null;
-  }> | null) ?? []).filter((f) => !f.inmobiliaria_id && f.creado_por);
-
-  if (candidatasAutoServicio.length > 0) {
-    const { data: creadores } = await (supabase
-      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-      .select('id, rol')
-      .in('id', candidatasAutoServicio.map((f) => f.creado_por as string));
-    const yaTieneCuentaPropia = ((creadores as Array<{ id: string; rol: string }> | null) ?? [])
-      .some((p) => p.rol === 'solicitante');
-    if (yaTieneCuentaPropia) {
-      throw AppError.conflict(
-        'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
-        'DOCUMENT_ALREADY_EXISTS',
-      );
-    }
+  //    La misma regla corre cuando el documento se escribe DESPUÉS (H43).
+  if (numero_documento && tipoDoc && (await existeOtraCuentaConDocumento(tipoDoc, numero_documento))) {
+    throw AppError.conflict(
+      'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
+      'DOCUMENT_ALREADY_EXISTS',
+    );
   }
 
   // El correo NO se valida contra `solicitantes`: las fichas que arman las
@@ -113,8 +99,7 @@ export async function registerSolicitante(
       rol: 'solicitante',
       estado: 'activo',
       telefono,
-      tipo_documento,
-      numero_documento,
+      ...(numero_documento ? { tipo_documento: tipoDoc, numero_documento } : {}),
       registration_source: registrationSource,
     } as never)
     .eq('id', userId);
@@ -131,8 +116,10 @@ export async function registerSolicitante(
       apellido,
       email,
       telefono,
-      tipo_documento,
-      numero_documento,
+      // NOT NULL en la BD: sin documento va '' (mismo valor que usa
+      // selfHealSolicitante); tipo_documento cae al DEFAULT 'cc'.
+      ...(tipoDoc ? { tipo_documento: tipoDoc } : {}),
+      numero_documento: numero_documento ?? '',
       municipio_id,
       municipio_nombre,
       creado_por: userId,
@@ -417,7 +404,8 @@ export async function notificarPropietarioNuevaSolicitud(
   await enviarTemplate({
     to: contacto.whatsapp,
     template: 'NUEVA_SOLICITUD_VITRINA',
-    variables: [nombreInteresado, direccion],
+    // v2 en usted («su inmueble ubicado en *{{2}}*»): nunca «tu inmueble» (B19).
+    variables: [nombreInteresado, row.direccion || 'la dirección registrada'],
     context: { expediente_id: expedienteId },
   });
 

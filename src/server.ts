@@ -113,3 +113,17 @@ if (env.MORAS_AUTOESCALAR_ENABLED) {
   runMoras();
   setInterval(runMoras, MORAS_INTERVAL_MS).unref();
 }
+
+// Adenda de precios §5.3: el último día de cada mes (Bogotá), el reporte a las
+// inmobiliarias de las primas Trasladada que vencen el día 10 siguiente. Corre
+// al arrancar y cada 6 h; reporte_enviado_en evita repetirlo. Envía correos y
+// escribe en la base: PRIMA_REPORTE_REMISION_ENABLED=false en una API local.
+const PRIMA_REPORTE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+if (env.PRIMA_REPORTE_REMISION_ENABLED) {
+  const runPrimaReporte = () =>
+    import('@/modules/facturacion/primas-remision.service')
+      .then(({ barrerReporteRemision }) => barrerReporteRemision())
+      .catch((err) => logger.warn({ err }, 'barrerReporteRemision: ciclo fallido'));
+  runPrimaReporte();
+  setInterval(runPrimaReporte, PRIMA_REPORTE_INTERVAL_MS).unref();
+}

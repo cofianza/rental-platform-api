@@ -11,7 +11,7 @@ vi.mock('@/middleware/auth', () => ({
 vi.mock('@/middleware/validate', () => ({ validate: () => vi.fn() }));
 vi.mock('../creditos-estudios.controller', () =>
   Object.fromEntries(
-    ['listPaquetes', 'getMiSaldo', 'getMisMovimientos', 'getMisCompras', 'comprarPaquete', 'facturarCompra', 'liberarEstudio', 'getSaldoInmobiliariaDeExpediente', 'adminListPaquetes', 'adminCreatePaquete', 'adminUpdatePaquete', 'adminDeletePaquete'].map((n) => [n, vi.fn()]),
+    ['listPaquetes', 'getMiSaldo', 'getMisMovimientos', 'getMisCompras', 'getMisPaquetes', 'comprarPaquete', 'facturarCompra', 'liberarEstudio', 'getSaldoInmobiliariaDeExpediente', 'adminListPaquetes', 'adminCreatePaquete', 'adminUpdatePaquete', 'adminDeletePaquete'].map((n) => [n, vi.fn()]),
   ),
 );
 

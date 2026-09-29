@@ -7,8 +7,9 @@
 --   eventos_timeline.motivos_decision  → rechazar o aprobar una revisión manual
 --                                        (cambio de estado y «Aprobar estudio»)
 --
--- El API las llena en un UPDATE aparte y tolera que aún no existan (solo
--- registra un aviso), así que el orden migración/deploy no rompe nada.
+-- El API las llena en un UPDATE aparte que no lanza: si la columna falta, la
+-- decisión queda guardada con sus textos y se registra un logger.error.
+-- (Nota 2026-09-28: aplicada en prod; este comentario no exige volver a correrla.)
 -- Idempotente. RLS: las tablas ya lo tienen; una columna nueva no cambia nada.
 --
 -- Verificación:

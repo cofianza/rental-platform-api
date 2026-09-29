@@ -24,6 +24,8 @@ import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import type { EnviarLinkInput, ReenviarLinkInput } from './pago-estudio.schema';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
+import { getCalibracion } from '@/lib/calibracion';
+import { masIva } from '@/modules/estudios/tarifas';
 
 /**
  * WhatsApp con el link de pago al solicitante del expediente (refuerzo del
@@ -47,7 +49,8 @@ async function enviarLinkPagoWhatsApp(
     to: telefonoOverride ?? sol?.telefono ?? null,
     template: 'PAGO_ESTUDIO_LINK',
     // La plantilla v2 ya escribe el «$»: aquí va solo el número (80.000).
-    variables: [sol?.nombre || 'Hola', montoFormateado.replace(/^\$\s*/, ''), linkUrl],
+    // v2 en usted: sin nombre, «Buen día, *señor(a)*» (B19).
+    variables: [sol?.nombre || 'señor(a)', montoFormateado.replace(/^\$\s*/, ''), linkUrl],
     context: { expediente_id: expedienteId },
   });
 }
@@ -70,29 +73,57 @@ function telefonoOverrideValido(telefono?: string): string | undefined {
 const PAGO_SELECT = `
   id, expediente_id, concepto, descripcion, monto, moneda, metodo, estado,
   payment_link_url, external_id, email_pagador, nombre_pagador,
-  fecha_pago, created_at, updated_at, creado_por
+  fecha_pago, created_at, updated_at, creado_por, base_cop, iva_cop, tarifa_iva
 `;
 
+export interface PrecioEstudio {
+  /** PRECIO_ESTUDIO_INDIVIDUAL, sin IVA. */
+  base: number;
+  iva: number;
+  /** Lo que se cobra: base + IVA (Adenda de precios §1.1). */
+  total: number;
+  /** TARIFA_IVA (%), un parámetro: nunca un 19 fijo (§1.3). */
+  tarifaIva: number;
+}
+
+/** Adenda de precios §1.1-1.3 / §9.1: base de calibración + TARIFA_IVA. */
+export async function getPrecioEstudio(): Promise<PrecioEstudio> {
+  const { PRECIO_ESTUDIO_INDIVIDUAL: base, TARIFA_IVA: tarifaIva } = await getCalibracion();
+  const total = masIva(base, tarifaIva);
+  return { base, iva: total - base, total, tarifaIva };
+}
+
 /**
- * Precio canonico del estudio. Exportado porque la ruta generica
- * POST /expedientes/:id/pagos tambien puede cobrar concepto='estudio' y NO
- * puede aceptar el monto que mande el cliente: el gate de ejecucion solo mira
- * que exista la fila 'completado', asi que un link de $1.000 compraba una
+ * Precio canonico del estudio: el TOTAL con IVA. Exportado porque la ruta
+ * generica POST /expedientes/:id/pagos tambien puede cobrar concepto='estudio'
+ * y NO puede aceptar el monto que mande el cliente: el gate de ejecucion solo
+ * mira que exista la fila 'completado', asi que un link de $1.000 compraba una
  * consulta al buro entera.
  */
 export async function getMontoEstudio(): Promise<number> {
-  const { data, error } = await (supabase
-    .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
-    .select('valor')
-    .eq('clave', 'monto_estudio')
-    .single();
+  return (await getPrecioEstudio()).total;
+}
 
-  if (error || !data) {
-    logger.warn('monto_estudio not found in configuracion_sistema — using default 80000');
-    return 80000;
+/** Columnas de la instantánea de IVA de un cobro de estudio (la factura la usa). */
+export const instantaneaIva = (p: PrecioEstudio) => ({ base_cop: p.base, iva_cop: p.iva, tarifa_iva: p.tarifaIva });
+
+/**
+ * Adenda de precios §1.4: el estudio lo paga el prospecto o sale del paquete;
+ * no se le factura a la inmobiliaria por fuera del paquete. Administrador,
+ * operador y propietario siguen como estaban.
+ */
+export function assertPagoSueltoPermitido(userRol?: string): void {
+  if (userRol === 'inmobiliaria') {
+    throw AppError.forbidden(
+      'La inmobiliaria no paga estudios sueltos: use un crédito de su paquete prepagado (o compre uno) o envíe el enlace de pago al prospecto.',
+      'PAGO_SUELTO_INMOBILIARIA_NO_PERMITIDO',
+    );
   }
+}
 
-  return parseInt((data as { valor: string }).valor, 10) || 80000;
+/** Adenda de precios §1.2: al prospecto, el total con «(IVA incluido)» si el cobro lo lleva. */
+export function montoProspecto(monto: number, tarifaIva: number | null | undefined): string {
+  return `${formatCOP(monto)}${tarifaIva && Number(tarifaIva) > 0 ? ' (IVA incluido)' : ''}`;
 }
 
 async function getExpedienteWithInmueble(expedienteId: string) {
@@ -212,9 +243,9 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
   // §6.3, tambien `autorizado`, o sea si un tercero ya firmo su habeas data.
   // Las lecturas van en paralelo con el guard (antes 5 idas en serie): si el
   // guard da 404, Promise.all rechaza y lo leido se descarta.
-  const [, monto, pago, autorizado, { data: estRow }] = await Promise.all([
+  const [, precio, pago, autorizado, { data: estRow }] = await Promise.all([
     assertExpedienteAccess(expedienteId, userId, userRol),
-    getMontoEstudio(),
+    getPrecioEstudio(),
     findPagoEstudio(expedienteId),
     // `autorizado` es lo unico que le permite al panel (y a la vista del
     // prospecto) distinguir "esperando que autorice" de "autorizado, falta
@@ -243,9 +274,13 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
       estado: esperandoAutorizacion ? 'esperando_autorizacion' : 'sin_definir',
       puede_avanzar: false,
       autorizado,
-      monto,
+      monto: precio.total,
+      // Adenda de precios §1.2: el gestor ve base + IVA = total.
+      base: precio.base,
+      iva: precio.iva,
+      tarifa_iva: precio.tarifaIva,
       moneda: 'COP',
-      monto_formateado: formatCOP(monto),
+      monto_formateado: formatCOP(precio.total),
       paga: esperandoAutorizacion ? ('arrendatario' as const) : null,
       pago: null,
     };
@@ -272,6 +307,10 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
     puede_avanzar: estado === 'completado',
     autorizado,
     monto: pago.monto as number,
+    // Sin instantánea (cobro anterior a la Adenda de precios): todo es base, IVA 0.
+    base: pago.tarifa_iva == null ? (pago.monto as number) : Number(pago.base_cop),
+    iva: pago.tarifa_iva == null ? 0 : Number(pago.iva_cop),
+    tarifa_iva: pago.tarifa_iva == null ? 0 : Number(pago.tarifa_iva),
     moneda: 'COP',
     monto_formateado: formatCOP(pago.monto as number),
     paga,
@@ -382,7 +421,8 @@ async function crearCobroPasarela(args: {
     }
   }
 
-  const monto = await getMontoEstudio();
+  const precio = await getPrecioEstudio();
+  const monto = precio.total;
   const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || formatNumeroEstudio(exp.numero)}${args.sufijoConcepto ?? ''}`;
 
   // El id va PRE-generado y viaja en las URLs de retorno: el arrendatario que
@@ -412,6 +452,7 @@ async function crearCobroPasarela(args: {
       concepto: 'estudio',
       descripcion: conceptLabel,
       monto,
+      ...instantaneaIva(precio),
       metodo: 'pasarela',
       estado: 'pendiente',
       email_pagador: emailPagador,
@@ -500,7 +541,7 @@ async function crearCobroPasarela(args: {
       detalles: { gateway: gateway.provider, external_id: linkResult.externalId },
     } as never);
 
-  return { pago: pago as Record<string, unknown> & { id: string }, linkUrl: linkResult.url, exp, monto };
+  return { pago: pago as Record<string, unknown> & { id: string }, linkUrl: linkResult.url, exp, monto, tarifaIva: precio.tarifaIva };
 }
 
 // ============================================================
@@ -533,6 +574,7 @@ export async function pagarGestor(
   // Tenant guard (404 fuera de scope): este cobro, una vez confirmado, dispara
   // la consulta FACTURABLE al buro del prospecto.
   await assertExpedienteAccess(expedienteId, userId, userRol);
+  assertPagoSueltoPermitido(userRol);
 
   // TOPE DE CANON — flujo §4.4: "no se cobra el estudio". Antes de tocar el
   // pago vivo: cancelarlo y luego chocar con el tope dejaria el expediente sin
@@ -682,7 +724,7 @@ export async function enviarLinkPago(
     };
   }
 
-  const { pago, linkUrl, exp, monto } = await crearCobroPasarela({
+  const { pago, linkUrl, exp, monto, tarifaIva } = await crearCobroPasarela({
     expedienteId,
     userId,
     emailPagador: input.email_pagador,
@@ -697,7 +739,7 @@ export async function enviarLinkPago(
       linkUrl,
       {
         concepto: 'Estudio de arrendamiento',
-        monto: formatCOP(monto),
+        monto: montoProspecto(monto, tarifaIva),
         expediente_numero: exp.numero,
       },
     );
@@ -739,7 +781,7 @@ export async function enviarLinkPago(
       userId: solicitanteUserId,
       tipo: 'pago.disponible',
       titulo: 'Pago de la evaluación disponible',
-      mensaje: `Ya autorizaste el tratamiento de datos. Paga la evaluación crediticia (${formatCOP(monto)}) y ejecutamos la consulta en centrales automáticamente.`,
+      mensaje: `Ya autorizaste el tratamiento de datos. Paga la evaluación crediticia (${montoProspecto(monto, tarifaIva)}) y ejecutamos la consulta en centrales automáticamente.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, pago_id: pago.id },
     });
@@ -828,7 +870,7 @@ export async function reenviarLink(
     pago.payment_link_url as string,
     {
       concepto: 'Estudio de arrendamiento',
-      monto: formatCOP(monto),
+      monto: montoProspecto(monto, pago.tarifa_iva as number | null),
       expediente_numero: exp.numero,
     },
   );
@@ -935,7 +977,7 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
 export async function getResultadoPagoPublico(pagoId: string) {
   const { data, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, concepto, monto, moneda, fecha_pago, expediente_id, payment_link_url')
+    .select('id, estado, concepto, monto, tarifa_iva, moneda, fecha_pago, expediente_id, payment_link_url')
     .eq('id', pagoId)
     .single();
 
@@ -943,7 +985,7 @@ export async function getResultadoPagoPublico(pagoId: string) {
     throw AppError.notFound('Pago no encontrado');
   }
 
-  const pago = data as { id: string; estado: string; concepto: string; monto: number; moneda: string; fecha_pago: string | null; expediente_id: string; payment_link_url: string | null };
+  const pago = data as { id: string; estado: string; concepto: string; monto: number; tarifa_iva: number | null; moneda: string; fecha_pago: string | null; expediente_id: string; payment_link_url: string | null };
 
   // Get expediente numero (minimal, no sensitive data)
   const { data: exp } = await (supabase
@@ -958,7 +1000,8 @@ export async function getResultadoPagoPublico(pagoId: string) {
     concepto: pago.concepto,
     monto: pago.monto,
     moneda: pago.moneda,
-    monto_formateado: formatCOP(pago.monto),
+    // Adenda de precios §1.2: quien paga ve el total con el IVA incluido.
+    monto_formateado: montoProspecto(pago.monto, pago.tarifa_iva),
     fecha_pago: pago.fecha_pago,
     expediente_numero: (exp as { numero: string } | null)?.numero || null,
     // Para que la pantalla de resultado pueda ofrecer "Volver a intentar" a

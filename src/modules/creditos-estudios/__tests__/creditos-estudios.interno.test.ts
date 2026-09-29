@@ -46,7 +46,7 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/lib/auditLog', () => ({ logAudit: vi.fn(), AUDIT_ACTIONS: {}, AUDIT_ENTITIES: {} }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: vi.fn() }));
-vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ cerrarCobroEstudioFallido: vi.fn() }));
+vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ cerrarCobroEstudioFallido: vi.fn(), getMontoEstudio: async () => 95_200 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 const { mockNotificar } = vi.hoisted(() => ({ mockNotificar: vi.fn(async () => undefined) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarYCorreo: mockNotificar }));
@@ -138,7 +138,6 @@ describe('liberar con el crédito del titular', () => {
     enqueue('inmuebles', inmueble);
     enqueue('compras_creditos_estudios', { data: [], error: null }); // sin saldo en contra
     enqueue('pagos', { data: [], error: null }, { data: { id: 'pago-1' }, error: null });
-    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
     mockRpc.mockResolvedValueOnce({ data: [{ lote_id: 'l-1', saldo_restante: 4 }], error: null });
 
     await expect(liberarEstudioConCredito('exp-1', 'titular-org', 'operador-1')).resolves.toEqual({
@@ -171,7 +170,6 @@ describe('liberar con el crédito del titular', () => {
     enqueue('inmuebles', inmueble);
     enqueue('compras_creditos_estudios', { data: [], error: null });
     enqueue('pagos', { data: [], error: null }, { data: { id: 'pago-1' }, error: null });
-    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
     mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'SIN_SALDO_CREDITOS' } });
     await expect(liberarEstudioConCredito('exp-1', 'titular-org', 'operador-1')).rejects.toMatchObject({
       errorCode: 'SIN_SALDO_CREDITOS',

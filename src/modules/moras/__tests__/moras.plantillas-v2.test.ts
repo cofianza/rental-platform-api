@@ -104,7 +104,7 @@ describe('plantillas de mora v2 (P28)', () => {
     mockContacto.mockResolvedValueOnce({ nombre: null, whatsapp: '3015556677' });
     prepararEscalado('fase_1');
     await escalarMora('m1', {}, 'op', 'operador_analista');
-    expect(envio().variables[4]).toBe('tu arrendador');
+    expect(envio().variables[4]).toBe('su arrendador');
 
     mockEnviarTemplate.mockClear();
     mockEnv.WHATSAPP_MORA_PLANTILLAS_V2 = false;
@@ -112,5 +112,20 @@ describe('plantillas de mora v2 (P28)', () => {
     await escalarMora('m1', {}, 'op', 'operador_analista');
     expect(envio()).toMatchObject({ template: 'MORA_FASE_2' });
     expect(mockContacto).toHaveBeenCalledTimes(1); // apagada, ni lo busca
+  });
+
+  it('B19: sin nombre del inquilino ni dirección, la v2 (en usted) no dice «Hola» ni «tu inmueble»', async () => {
+    enqueue('moras_tickets', {
+      data: {
+        id: 'm1', ticket_numero: 'MOR-1', estado: 'fase_1', expediente_id: 'exp1', reportado_por: 'u1',
+        reportado_at: '2026-09-01T12:00:00Z', fecha_vencimiento_canon: '2026-09-05',
+        inquilino_telefono: '3001112233', inquilino_nombre: '', inmueble_direccion: null, monto_mora: 1_500_000,
+      },
+      error: null,
+    }, { data: [{ id: 'm1' }], error: null }, { data: null, error: null }, { data: { id: 'm1' }, error: null });
+    enqueue('expedientes', { data: { inmuebles: { propietario_id: 'p1', inmobiliaria_id: 'org1' } }, error: null });
+    await escalarMora('m1', {}, 'op', 'operador_analista');
+    expect(envio().template).toBe('MORA_FASE_2_V2');
+    expect(envio().variables.slice(0, 2)).toEqual(['señor(a)', 'la dirección registrada']);
   });
 });

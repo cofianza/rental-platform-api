@@ -67,8 +67,17 @@ vi.mock('@/lib/tenantScope', () => ({
 }));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 vi.mock('@/modules/autorizaciones/autorizaciones.service', () => ({ enviarEnlaceAutorizacion: vi.fn(async () => undefined) }));
+const calibracion = vi.hoisted(() => ({ PRECIO_ESTUDIO_INDIVIDUAL: 80_000, TARIFA_IVA: 19 }));
+vi.mock('@/lib/calibracion', () => ({ getCalibracion: vi.fn(async () => calibracion) }));
 
-import { pagarGestor, cancelarYLiberarCredito, getEstadoPagoEstudio, reenviarLink, enviarLinkPago } from '../pago-estudio.service';
+import {
+  pagarGestor,
+  cancelarYLiberarCredito,
+  getEstadoPagoEstudio,
+  reenviarLink,
+  enviarLinkPago,
+  getPrecioEstudio,
+} from '../pago-estudio.service';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { findPerfilIdByEmail } from '@/modules/notificaciones/notificaciones.service';
 import { enviarTemplate } from '@/modules/whatsapp';
@@ -81,7 +90,6 @@ function datosComunes() {
 }
 function cobroNuevo() {
   enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado: 'en_revision', inmueble_id: null }, error: null });
-  enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
   enqueue('pagos', { data: null, error: null }); // insert pendiente
   enqueue('pagos', { data: { id: 'pago-nuevo', estado: 'pendiente', metodo: 'pasarela', payment_link_url: 'https://mp.test/checkout/1' }, error: null }); // CAS update
 }
@@ -99,7 +107,7 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     enqueue('pagos', { data: [], error: null }); // crearCobroPasarela: tampoco
     cobroNuevo();
 
-    const pago = await pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria');
+    const pago = await pagarGestor(EXP, 'user-1', undefined, 'propietario');
 
     expect(pago.payment_link_url).toBe('https://mp.test/checkout/1');
     const insert = ops.find((o) => o.table === 'pagos' && o.method === 'insert');
@@ -130,7 +138,7 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     enqueue('pagos', { data: [fallido], error: null }); // crearCobroPasarela
     cobroNuevo();
 
-    const pago = await pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria');
+    const pago = await pagarGestor(EXP, 'user-1', undefined, 'propietario');
 
     expect(mockTransition).toHaveBeenCalledWith(
       expect.objectContaining({ pagoId: 'p-fallido', targetEstado: 'cancelado' }),
@@ -145,7 +153,7 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     const suyo = { id: 'p1', estado: 'pendiente', metodo: 'pasarela', email_pagador: 'GESTOR@inmo.co', payment_link_url: 'https://mp.test/viejo' };
     enqueue('pagos', { data: [suyo], error: null });
 
-    const pago = await pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria');
+    const pago = await pagarGestor(EXP, 'user-1', undefined, 'propietario');
 
     expect(pago).toEqual(suyo);
     expect(mockCreateLink).not.toHaveBeenCalled();
@@ -156,14 +164,14 @@ describe('pagarGestor (opcion B por pasarela)', () => {
 
     datosComunes();
     enqueue('pagos', { data: [delProspecto], error: null });
-    await expect(pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria')).rejects.toMatchObject({ errorCode: 'PAGO_ESTUDIO_PENDIENTE' });
+    await expect(pagarGestor(EXP, 'user-1', undefined, 'propietario')).rejects.toMatchObject({ errorCode: 'PAGO_ESTUDIO_PENDIENTE' });
     expect(mockTransition).not.toHaveBeenCalled();
 
     datosComunes();
     enqueue('pagos', { data: [delProspecto], error: null }); // pagarGestor lo ve
     enqueue('pagos', { data: [], error: null }); // crearCobroPasarela: ya no hay activo
     cobroNuevo();
-    const pago = await pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria', { reemplazarPendiente: true });
+    const pago = await pagarGestor(EXP, 'user-1', undefined, 'propietario', { reemplazarPendiente: true });
 
     expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: 'p-pros', targetEstado: 'cancelado' }));
     expect(mockCancelLink).toHaveBeenCalledWith('pref-pros');
@@ -175,7 +183,7 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     enqueue('pagos', { data: [], error: null });
     enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado, inmueble_id: null }, error: null });
 
-    await expect(pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria')).rejects.toMatchObject({
+    await expect(pagarGestor(EXP, 'user-1', undefined, 'propietario')).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'EXPEDIENTE_CERRADO',
     });
@@ -192,7 +200,7 @@ describe('pagarGestor (opcion B por pasarela)', () => {
     datosComunes();
     enqueue('pagos', { data: [enCurso], error: null });
     await expect(
-      pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria', { reemplazarPendiente: true }),
+      pagarGestor(EXP, 'user-1', undefined, 'propietario', { reemplazarPendiente: true }),
     ).rejects.toMatchObject({ errorCode: 'PAGO_EN_PROCESO', statusCode: 409 });
 
     expect(mockTransition).not.toHaveBeenCalled();
@@ -246,19 +254,25 @@ describe('getEstadoPagoEstudio', () => {
   it('lanza las lecturas sin esperar al guard (antes 5 idas en serie)', async () => {
     let soltarGuard!: () => void;
     vi.mocked(assertExpedienteAccess).mockReturnValueOnce(new Promise<void>((r) => (soltarGuard = r)));
-    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
     enqueue('pagos', { data: [], error: null });
     enqueue('estudios', { data: { pago_por: 'arrendatario' }, error: null });
 
     const estado = getEstadoPagoEstudio(EXP, 'user-1', 'inmobiliaria');
     // Con el guard aun pendiente, las cuatro consultas ya salieron.
     const tablas = new Set(ops.map((o) => o.table));
-    for (const t of ['configuracion_sistema', 'pagos', 'autorizaciones_habeas_data', 'estudios']) {
+    for (const t of ['pagos', 'autorizaciones_habeas_data', 'estudios']) {
       expect(tablas.has(t)).toBe(true);
     }
     soltarGuard();
 
-    await expect(estado).resolves.toMatchObject({ estado: 'esperando_autorizacion', autorizado: false, monto: 80000 });
+    await expect(estado).resolves.toMatchObject({
+      estado: 'esperando_autorizacion',
+      autorizado: false,
+      monto: 95_200,
+      base: 80_000,
+      iva: 15_200,
+      tarifa_iva: 19,
+    });
   });
 
   it('si el guard da 404 no devuelve nada de lo leido', async () => {
@@ -358,6 +372,51 @@ describe('B fallida → «Mejor que pague el arrendatario»', () => {
     expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: 'p-b', targetEstado: 'cancelado' }));
     expect(mockCancelLink).toHaveBeenCalledWith('pref-b');
     expect(ops.find((o) => o.table === 'estudios' && o.method === 'update')?.args[0]).toEqual({ pago_por: 'arrendatario' });
+    expect(mockCreateLink).not.toHaveBeenCalled();
+  });
+});
+
+// Adenda de precios §1.1-1.4.
+describe('precio del estudio con IVA (Adenda de precios)', () => {
+  beforeEach(() => {
+    queues.clear();
+    ops.length = 0;
+    vi.clearAllMocks();
+    calibracion.PRECIO_ESTUDIO_INDIVIDUAL = 80_000;
+    calibracion.TARIFA_IVA = 19;
+  });
+
+  it('80.000 + 19 % = 95.200 (§1.1-1.2)', async () => {
+    expect(await getPrecioEstudio()).toEqual({ base: 80_000, iva: 15_200, total: 95_200, tarifaIva: 19 });
+  });
+
+  it.each([
+    [0, 80_000],
+    [5, 84_000],
+  ])('TARIFA_IVA es un parámetro (§1.3): con %s %% el total es %s', async (tarifa, total) => {
+    calibracion.TARIFA_IVA = tarifa;
+    expect(await getPrecioEstudio()).toMatchObject({ base: 80_000, iva: total - 80_000, total, tarifaIva: tarifa });
+  });
+
+  it('el cobro guarda el total y la instantánea del IVA, y la pasarela cobra el total', async () => {
+    datosComunes();
+    enqueue('pagos', { data: [], error: null });
+    enqueue('pagos', { data: [], error: null });
+    cobroNuevo();
+
+    await pagarGestor(EXP, 'user-1', undefined, 'propietario');
+
+    const insert = ops.find((o) => o.table === 'pagos' && o.method === 'insert');
+    expect(insert?.args[0]).toMatchObject({ monto: 95_200, base_cop: 80_000, iva_cop: 15_200, tarifa_iva: 19 });
+    expect(mockCreateLink).toHaveBeenCalledWith(expect.objectContaining({ amount: 95_200 }));
+  });
+
+  it('§1.4: la inmobiliaria no paga un estudio suelto por la pasarela: 403 sin tocar pagos', async () => {
+    await expect(pagarGestor(EXP, 'user-1', undefined, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 403,
+      errorCode: 'PAGO_SUELTO_INMOBILIARIA_NO_PERMITIDO',
+    });
+    expect(ops.some((o) => o.table === 'pagos')).toBe(false);
     expect(mockCreateLink).not.toHaveBeenCalled();
   });
 });

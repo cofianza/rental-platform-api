@@ -7,6 +7,9 @@ import {
   listFacturasQuerySchema,
   updateTarifasIvaSchema,
   facturarPagoSchema,
+  listPrimasQuerySchema,
+  cuentaIdParamsSchema,
+  marcarRemitidaSchema,
 } from './facturacion.schema';
 import * as controller from './facturacion.controller';
 
@@ -42,6 +45,23 @@ facturasRouter.get(
   '/pendientes-facturar',
   authorize('facturas', 'read'),
   controller.listPendientesFacturar,
+);
+
+// Adenda de precios §5.1: primas de vinculación Trasladada que las inmobiliarias
+// recaudan y remiten a Cofianza el día 10. Solo Cofianza (admin/operador).
+// Antes de /:id por la misma razón que configuracion-iva.
+facturasRouter.get(
+  '/primas-por-remitir',
+  roleGuard(['administrador', 'operador_analista']),
+  validate({ query: listPrimasQuerySchema }),
+  controller.listPrimasPorRemitir,
+);
+
+facturasRouter.patch(
+  '/primas-por-remitir/:id/remitida',
+  roleGuard(['administrador', 'operador_analista']),
+  validate({ params: cuentaIdParamsSchema, body: marcarRemitidaSchema }),
+  controller.marcarPrimaRemitida,
 );
 
 // PUT /facturas/configuracion-iva — actualizar tasas (solo admin)

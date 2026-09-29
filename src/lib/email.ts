@@ -612,18 +612,29 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
 </html>`;
 }
 
+/**
+ * Quién pide el estudio y el inmueble, con el mismo cálculo que la plantilla
+ * de WhatsApp `cofianza_autorizacion_link_v2`: el nombre de la inmobiliaria o
+ * «El propietario del inmueble» (nunca el nombre de una persona natural).
+ */
+export interface SolicitudAutorizacion {
+  quienSolicita: string;
+  direccion: string;
+}
+
 export async function sendAutorizacionEmail(
   to: string,
   nombre: string,
   autorizacionUrl: string,
   expiryHours: number,
+  solicitud: SolicitudAutorizacion,
 ): Promise<void> {
   try {
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
       subject: 'Autorización consulta centrales de riesgo - Cofianza',
-      html: buildAutorizacionHtml(nombre, autorizacionUrl, expiryHours, await soporte()),
+      html: buildAutorizacionHtml(nombre, autorizacionUrl, expiryHours, await soporte(), solicitud),
     });
 
     logger.info({ to }, 'Email de autorizacion habeas data enviado');
@@ -649,7 +660,35 @@ export async function sendOtpEmail(to: string, nombre: string, codigo: string): 
   }
 }
 
-function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHours: number, sop: Soporte): string {
+/**
+ * Encabezado con la marca actual (wordmark «cofianza» en los verdes del logo,
+ * #10B981 / #047857). Texto y no imagen: Gmail y Outlook no pintan SVG y la
+ * web no publica el logo como PNG. Por ahora solo lo usa el correo de
+ * autorización; las demás plantillas conservan la «C» teal hasta migrarlas.
+ */
+function encabezadoMarcaHtml(): string {
+  return `
+          <tr>
+            <td align="center" style="padding-bottom: 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-size: 28px; font-weight: 800; letter-spacing: -0.5px; color: #047857; line-height: 1;">cofianza</td>
+                </tr>
+                <tr>
+                  <td style="padding-top: 6px;"><div style="height: 4px; width: 40px; border-radius: 2px; background-color: #10b981; font-size: 0; line-height: 0;">&nbsp;</div></td>
+                </tr>
+              </table>
+            </td>
+          </tr>`;
+}
+
+function buildAutorizacionHtml(
+  nombre: string,
+  autorizacionUrl: string,
+  expiryHours: number,
+  sop: Soporte,
+  solicitud: SolicitudAutorizacion,
+): string {
   return `
 <!DOCTYPE html>
 <html lang="es">
@@ -663,21 +702,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
     <tr>
       <td align="center">
         <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%;">
-          <!-- Header -->
-          <tr>
-            <td align="center" style="padding-bottom: 32px;">
-              <table role="presentation" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td style="background-color: #0f766e; border-radius: 12px; width: 48px; height: 48px; text-align: center; vertical-align: middle;">
-                    <span style="color: #ffffff; font-weight: bold; font-size: 24px; line-height: 48px;">C</span>
-                  </td>
-                  <td style="padding-left: 12px;">
-                    <span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+          <!-- Header -->${encabezadoMarcaHtml()}
 
           <!-- Body -->
           <tr>
@@ -685,8 +710,14 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
                 Autorización de consulta en centrales de riesgo
               </h1>
+              <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                Hola ${escapeHtml(nombre)}:
+              </p>
+              <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+                <strong>${escapeHtml(solicitud.quienSolicita)}</strong> inició un estudio para el arriendo del inmueble ubicado en <strong>${escapeHtml(solicitud.direccion)}</strong>. Cofianza S.A.S. es la empresa fiadora del arriendo.
+              </p>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, como parte del proceso de arrendamiento necesitamos tu autorización para consultar tu información en centrales de riesgo crediticio (Ley 1581/2012 y Ley 1266/2008).
+                Como parte del proceso de arrendamiento necesitamos tu autorización para consultar tu información en centrales de riesgo crediticio (Ley 1581/2012 y Ley 1266/2008).
               </p>
 
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
@@ -699,9 +730,9 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${autorizacionUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
-                            Firmar autorización
+                            Revisar y autorizar
                           </a>
                         </td>
                       </tr>
@@ -719,7 +750,7 @@ function buildAutorizacionHtml(nombre: string, autorizacionUrl: string, expiryHo
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
                 Si el botón no funciona, copia y pega este enlace en tu navegador:
               </p>
-              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
+              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">
                 ${autorizacionUrl}
               </p>
             </td>

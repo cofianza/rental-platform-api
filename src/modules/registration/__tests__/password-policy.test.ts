@@ -30,6 +30,13 @@ describe('política de contraseña', () => {
     expect(registerSolicitanteSchema.safeParse({ ...solicitante, password, confirm_password: password }).success).toBe(true);
   });
 
+  it('H43: el solicitante se registra solo con nombre, correo, celular y contraseña', () => {
+    const liviano: Partial<typeof solicitante> = { ...solicitante };
+    delete liviano.tipo_documento;
+    delete liviano.numero_documento;
+    expect(registerSolicitanteSchema.safeParse({ ...liviano, password: 'Secreta123', confirm_password: 'Secreta123' }).success).toBe(true);
+  });
+
   it('el miembro conserva el tope de 72 (bcrypt)', () => {
     expect(registrarMiembroSchema.safeParse({ ...miembro, password: 'Aa1' + 'x'.repeat(70) }).success).toBe(false);
   });

@@ -204,6 +204,9 @@ async function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
   // lo manda al arrendador por su WhatsApp de recaudo y, en Fase 3, al correo
   // de soporte de Cofianza. Sin WhatsApp del arrendador se queda en la v1.
   if (env.WHATSAPP_MORA_PLANTILLAS_V2) {
+    // Las v2 van en usted: reservas neutras en vez de «Hola» y «tu inmueble» (B19).
+    variables[0] = m.inquilino_nombre.split(' ')[0] || 'señor(a)';
+    variables[1] = m.inmueble_direccion ?? 'la dirección registrada';
     if (m.estado === 'fase_3') {
       template = 'MORA_FASE_3_V2';
       variables.push((await getCompany()).email);
@@ -213,7 +216,7 @@ async function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
       template = m.estado === 'fase_1' ? 'MORA_FASE_1_V2' : 'MORA_FASE_2_V2';
       variables.push(
         ...(arrendador?.whatsapp
-          ? [arrendador.nombre ?? 'tu arrendador', `WhatsApp ${arrendador.whatsapp}`]
+          ? [arrendador.nombre ?? 'su arrendador', `WhatsApp ${arrendador.whatsapp}`]
           : ['Cofianza', `correo ${(await getCompany()).email}`]),
       );
     }

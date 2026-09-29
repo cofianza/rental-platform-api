@@ -27,7 +27,8 @@ export const createPaqueteSchema = z.object({
     .transform((v) => (v === '' ? null : v)),
   cantidad_estudios: z.coerce.number().int().min(1, 'Cantidad mínima es 1').max(1000, 'Máximo 1000'),
   precio_cop: z.coerce.number().int().min(1000, 'Precio mínimo es $1.000').max(99999999, 'Precio muy alto'),
-  vence_en_dias: z.coerce.number().int().positive().nullable().optional(),
+  // Sin vence_en_dias: la vigencia es VIGENCIA_PAQUETE_MESES de calibración
+  // (Adenda de precios §9.6); zod descarta la clave si alguien la manda.
   activo: z.boolean().default(true),
   orden: z.coerce.number().int().min(0).default(0),
 });
