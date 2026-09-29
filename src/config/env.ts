@@ -300,6 +300,11 @@ const envSchema = z.object({
   // Estudios colgados en 'en_proceso' (al arrancar y cada 15 min): los marca
   // fallidos o registra el resultado. Mismo criterio: false en una API LOCAL.
   ESTUDIOS_COLGADOS_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  // Adenda de precios §5.3: el último día de cada mes manda a los titulares de
+  // cada inmobiliaria las primas Trasladada por remitir el día 10 siguiente
+  // (correo + aviso in-app). Escribe en la base y envía correos: apagado por
+  // defecto, y en una API LOCAL (su .env.local apunta a producción) en false.
+  PRIMA_REPORTE_REMISION_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). SIN EFECTO: la Adenda 1 del
   // módulo de contratos (respuesta 13 bis) no la habilita y ningún camino de la
