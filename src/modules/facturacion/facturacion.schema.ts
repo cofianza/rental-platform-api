@@ -49,3 +49,16 @@ export type PagoIdParams = z.infer<typeof pagoIdParamsSchema>;
 export type ListFacturasQuery = z.infer<typeof listFacturasQuerySchema>;
 export type UpdateTarifasIvaInput = z.infer<typeof updateTarifasIvaSchema>;
 export type FacturarPagoInput = z.infer<typeof facturarPagoSchema>;
+
+// Adenda de precios §5.1: primas Trasladada por remitir (panel de Cofianza).
+export const listPrimasQuerySchema = z.object({
+  estado: z.enum(['pendiente', 'remitida', 'anulada']).optional(),
+});
+
+export const cuentaIdParamsSchema = z.object({
+  id: z.string().uuid('ID de cuenta inválido'),
+});
+
+export const marcarRemitidaSchema = z.object({
+  notas: z.string().trim().max(500).optional().nullable(),
+});

@@ -122,7 +122,10 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarYCorreo: vi.fn(async () => undefined),
 }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: vi.fn(async () => []) }));
-vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ getMontoEstudio: vi.fn(async () => 150000) }));
+vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({
+  getPrecioEstudio: vi.fn(async () => ({ base: 150000, iva: 28500, total: 178500, tarifaIva: 19 })),
+  montoProspecto: (m: number, t?: number | null) => `$${m.toLocaleString('es-CO')}${t && t > 0 ? ' (IVA incluido)' : ''}`,
+}));
 // Flujo §14 / Adenda §9: el enlace vive DIAS_EXPIRACION_ESTUDIO dias.
 vi.mock('@/lib/calibracion', () => ({
   getCalibracion: vi.fn(async () => ({ DIAS_EXPIRACION_ESTUDIO: 15, UMBRAL_DIFERENCIA_INGRESO: 50, UMBRAL_SIMILITUD_BIOMETRICA: 80 })),
@@ -589,7 +592,8 @@ describe('autorizaciones.service', () => {
       const result = await getAutorizacionByToken(TOKEN);
 
       expect(result.solicitado_por).toBe('Inmobiliaria Norte');
-      expect(result.pago).toEqual({ requerido: true, monto_formateado: '$150.000' });
+      // Adenda de precios §1.2: al prospecto, el total con el IVA incluido.
+      expect(result.pago).toEqual({ requerido: true, monto_formateado: '$178.500 (IVA incluido)' });
     });
 
     it('B15: si falla la lectura, null («no sé») y no «El propietario» ni «sin cobro»', async () => {

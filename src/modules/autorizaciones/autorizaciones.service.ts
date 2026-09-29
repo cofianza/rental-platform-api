@@ -1706,7 +1706,7 @@ export async function getPagoProspectoPorToken(token: string): Promise<{
     cobroLeTocaAlProspecto(a.expediente_id),
     (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
-      .select('estado, monto, payment_link_url')
+      .select('estado, monto, tarifa_iva, payment_link_url')
       .eq('expediente_id', a.expediente_id)
       .eq('concepto', 'estudio')
       .in('estado', ['pendiente', 'procesando', 'completado'])
@@ -1717,12 +1717,9 @@ export async function getPagoProspectoPorToken(token: string): Promise<{
   if (!leTocaPagar) {
     return { estado: 'no_aplica', monto_formateado: null, payment_link_url: null };
   }
-  const pago = pagoRow as { estado?: string; monto?: number; payment_link_url?: string | null } | null;
+  const pago = pagoRow as { estado?: string; monto?: number; tarifa_iva?: number | null; payment_link_url?: string | null } | null;
 
-  const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
-  const monto = pago?.monto ?? (await getMontoEstudio().catch(() => null));
-  const montoFormateado =
-    typeof monto === 'number' ? `$${Math.round(monto).toLocaleString('es-CO')}` : null;
+  const montoFormateado = await montoAlProspecto(pago);
 
   // Una fila 'pendiente' sin URL significa que el link todavia se esta creando
   // en la pasarela: el front sigue esperando en vez de mostrar un boton muerto.
@@ -1768,7 +1765,7 @@ async function cobroAnticipado(
     ),
     (supabase
       .from('pagos' as string) as ReturnType<typeof supabase.from>)
-      .select('monto')
+      .select('monto, tarifa_iva')
       .eq('expediente_id', expedienteId)
       .eq('concepto', 'estudio')
       .in('estado', ['pendiente', 'procesando'])
@@ -1783,12 +1780,21 @@ async function cobroAnticipado(
   if (pagoPor.valor === null) return { requerido: null, monto_formateado: null };
   if (pagoPor.valor !== 'arrendatario') return { requerido: false, monto_formateado: null };
   if (pagoError) throw pagoError;
-  const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
-  const monto = (pagoRow as { monto?: number } | null)?.monto ?? (await getMontoEstudio().catch(() => null));
   return {
     requerido: true,
-    monto_formateado: typeof monto === 'number' ? `$${Math.round(monto).toLocaleString('es-CO')}` : null,
+    monto_formateado: await montoAlProspecto(pagoRow as { monto?: number; tarifa_iva?: number | null } | null),
   };
+}
+
+/**
+ * Lo que ve el prospecto: el del pago si ya existe; si no, el precio vigente.
+ * Adenda de precios §1.2 (Ley 1480 art. 26): el total con «(IVA incluido)».
+ */
+async function montoAlProspecto(pago: { monto?: number; tarifa_iva?: number | null } | null): Promise<string | null> {
+  const { getPrecioEstudio, montoProspecto } = await import('@/modules/pago-estudio/pago-estudio.service');
+  if (typeof pago?.monto === 'number') return montoProspecto(Math.round(pago.monto), pago.tarifa_iva);
+  const precio = await getPrecioEstudio().catch(() => null);
+  return precio ? montoProspecto(precio.total, precio.tarifaIva) : null;
 }
 
 /**

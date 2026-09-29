@@ -391,7 +391,7 @@ describe('expediente-workflow.service', () => {
         fundamento: 'Soportes revisados',
         documentos_consultados: ['PILA'],
         evaluacion,
-      });
+      }, undefined, 'admin@test.com');
       expect(mockRpc).not.toHaveBeenCalled();
       expect(r.puntaje_revision_manual).toBe(recalculo);
     });
@@ -501,7 +501,7 @@ describe('expediente-workflow.service', () => {
       );
 
       expect(mockAprobarCondicionado).toHaveBeenCalledWith(
-        'exp-uuid', 'admin-uuid', 'administrador', undefined, expect.objectContaining({ motivos: ['A1'] }),
+        'exp-uuid', 'admin-uuid', 'administrador', undefined, expect.objectContaining({ motivos: ['A1'] }), undefined, 'admin@test.com',
       );
     });
 

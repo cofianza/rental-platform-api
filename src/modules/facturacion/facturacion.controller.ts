@@ -4,6 +4,7 @@ import { AppError } from '@/lib/errors';
 import { supabase } from '@/lib/supabase';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import * as service from './facturacion.service';
+import * as primas from './primas-remision.service';
 import * as factus from '@/lib/factus';
 import type { ListFacturasQuery } from './facturacion.schema';
 
@@ -89,6 +90,17 @@ export async function searchMunicipalities(req: Request, res: Response) {
   }
   const result = await factus.searchMunicipalities(name);
   sendSuccess(res, result);
+}
+
+export async function listPrimasPorRemitir(req: Request, res: Response) {
+  const { estado } = req.query as { estado?: 'pendiente' | 'remitida' | 'anulada' };
+  sendSuccess(res, await primas.listarPrimasPorRemitir(estado));
+}
+
+export async function marcarPrimaRemitida(req: Request, res: Response) {
+  const { id } = req.params as { id: string };
+  const { notas } = req.body as { notas?: string | null };
+  sendSuccess(res, await primas.marcarRemitida(id, req.user!.id, notas || null, req.ip));
 }
 
 export async function getTarifasIva(_req: Request, res: Response) {

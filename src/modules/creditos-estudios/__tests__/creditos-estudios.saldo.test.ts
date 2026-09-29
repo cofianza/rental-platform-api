@@ -45,7 +45,10 @@ vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/modules/pagos/gateway', () => ({ getPaymentGateway: vi.fn() }));
 vi.mock('@/modules/pagos/pago-state-machine', () => ({ transitionPagoStateChecked: mockTransition }));
 const { mockCerrarFallido } = vi.hoisted(() => ({ mockCerrarFallido: vi.fn(async () => undefined) }));
-vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({ cerrarCobroEstudioFallido: mockCerrarFallido }));
+vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({
+  cerrarCobroEstudioFallido: mockCerrarFallido,
+  getMontoEstudio: vi.fn(async () => 95_200),
+}));
 vi.mock('@/modules/estudios/tope-canon.guard', () => ({ assertCanonDentroDelTope: vi.fn(async () => undefined) }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onEstudioPagado: vi.fn(async () => undefined) }));
 vi.mock('@/modules/facturacion/facturacion.service', () => ({ crearFacturaDesdeCompraCreditos: vi.fn(async () => ({})) }));
@@ -213,7 +216,6 @@ describe('P22: contracargo de una compra de créditos', () => {
     enqueue('compras_creditos_estudios', { data: [{ creditos_en_contra: 2 }], error: null });
     enqueue('lotes_creditos_estudios', { data: [{ cantidad_disponible: 5 }], error: null });
     enqueue('pagos', { data: [], error: null }, { data: { id: 'pago-1' }, error: null });
-    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
     mockRpc.mockResolvedValueOnce({ data: [{ lote_id: 'lote-1', saldo_restante: 4 }], error: null });
 
     expect(await liberarEstudioConCredito('exp-1', 'owner-1', 'owner-1')).toMatchObject({ pago_id: 'pago-1' });
@@ -226,7 +228,6 @@ describe('P22: contracargo de una compra de créditos', () => {
     enqueue('compras_creditos_estudios', { data: [], error: null });
     const fallido = { id: 'pago-viejo', estado: 'fallido', external_id: 'pref-1', metodo: 'mercadopago' };
     enqueue('pagos', { data: [fallido], error: null }, { data: { id: 'pago-1' }, error: null });
-    enqueue('configuracion_sistema', { data: { valor: '80000' }, error: null });
     mockRpc.mockResolvedValueOnce({ data: [{ lote_id: 'lote-1', saldo_restante: 4 }], error: null });
 
     expect(await liberarEstudioConCredito('exp-1', 'owner-1', 'gestor-1')).toMatchObject({ pago_id: 'pago-1' });
