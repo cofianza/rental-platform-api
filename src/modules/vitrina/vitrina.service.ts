@@ -417,7 +417,8 @@ export async function notificarPropietarioNuevaSolicitud(
   await enviarTemplate({
     to: contacto.whatsapp,
     template: 'NUEVA_SOLICITUD_VITRINA',
-    variables: [nombreInteresado, direccion],
+    // v2 en usted («su inmueble ubicado en *{{2}}*»): nunca «tu inmueble» (B19).
+    variables: [nombreInteresado, row.direccion || 'la dirección registrada'],
     context: { expediente_id: expedienteId },
   });
 

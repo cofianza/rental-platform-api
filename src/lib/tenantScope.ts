@@ -118,8 +118,11 @@ export async function resolveOrgCanonicalPerfilId(perfilId: string): Promise<str
  * Para un propietario individual (sin organización) devuelve su nombre+apellido,
  * que es lo correcto (es una persona, no una empresa).
  */
-export async function resolveNombreDueno(perfilId: string): Promise<string> {
-  return (await nombreDelDueno(perfilId)) || 'Hola';
+export async function resolveNombreDueno(perfilId: string, reserva = 'Hola'): Promise<string> {
+  // `reserva`: «Hola» para las plantillas en tú («Hola {{1}}» → «Hola Hola» es
+  // el mal menor histórico); las v2 en usted («Buen día, *{{1}}*») pasan
+  // «señor(a)» (B19).
+  return (await nombreDelDueno(perfilId)) || reserva;
 }
 
 /** El nombre de resolveNombreDueno, o '' si el perfil no tiene ninguno. */
