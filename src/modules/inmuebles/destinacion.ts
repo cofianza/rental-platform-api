@@ -11,7 +11,6 @@
 // ============================================================
 
 import { AppError } from '@/lib/errors';
-import { COMPANY } from '@/config/company';
 import type { Calibracion } from '@/lib/calibracion';
 
 export type Destinacion = 'vivienda' | 'comercial';
@@ -80,26 +79,40 @@ export interface ArrendatarioDelTope {
   tipo_documento?: string | null;
 }
 
-/** Regla pura. null = el estudio puede nacer. */
+/**
+ * Regla pura. null = el estudio puede nacer.
+ *
+ * Adenda de precios §6.2: el bloqueo lo levanta solo la Gerencia General por
+ * decision expresa, no al terminar el desarrollo. Por eso NO lee
+ * DESTINOS.comercial (esa constante sigue gobernando solo el contrato
+ * comercial): tiene su propio interruptor, ESTUDIOS_COMERCIAL_PJ_HABILITADOS,
+ * apagado por defecto, que cubre comercial, mixto y persona juridica/NIT.
+ * §6.3: la Politica esta redactada para persona natural; no hay modelo para
+ * persona juridica, asi que no se resuelve por otra via.
+ * La bandera se declara en config/env.ts (misma lectura 'true'); aqui se lee de
+ * process.env para que el modulo siga puro (sin cargar el esquema de env).
+ */
 export function motivoNoAfianzable(
   uso: string | null | undefined,
   arrendatario?: ArrendatarioDelTope | null,
+  habilitados: boolean = process.env.ESTUDIOS_COMERCIAL_PJ_HABILITADOS === 'true',
 ): MotivoNoAfianzable | null {
-  const d = destinacionDeUso(uso);
-  if (uso === 'mixto' || (d !== null && !DESTINOS[d].habilitado)) return 'destinacion';
+  if (habilitados) return null;
+  if (uso === 'mixto' || destinacionDeUso(uso) === 'comercial') return 'destinacion';
   if (arrendatario?.tipo_persona === 'juridica' || arrendatario?.tipo_documento?.toLowerCase() === 'nit') {
     return 'persona_juridica';
   }
   return null;
 }
 
+// Adenda de precios §6.4: en desarrollo, no rechazado; sin cobro.
 const MENSAJES_NO_AFIANZABLE: Readonly<Record<MotivoNoAfianzable, string>> = {
   destinacion:
-    'Este inmueble es de uso comercial o mixto: por ahora Cofianza no afianza ese contrato por la plataforma, ' +
-    `así que no se cobra el estudio. Escríbanos a ${COMPANY.email} para revisar el caso.`,
+    'Los estudios de inmuebles de uso comercial o mixto están en desarrollo y todavía no se pueden solicitar ' +
+    'por la plataforma. No se generó ningún cobro.',
   persona_juridica:
-    'El arrendatario es una persona jurídica o se identifica con NIT: por ahora Cofianza no afianza ese contrato ' +
-    `por la plataforma, así que no se cobra el estudio. Escríbanos a ${COMPANY.email} para revisar el caso.`,
+    'Los estudios de arrendatarios persona jurídica o identificados con NIT están en desarrollo y todavía no se ' +
+    'pueden solicitar por la plataforma. No se generó ningún cobro.',
 };
 
 export function errorNoAfianzable(motivo: MotivoNoAfianzable): AppError {

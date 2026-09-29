@@ -69,8 +69,8 @@ export const MOTIVOS_DECISION = {
     C3: { visible: 'Requiere referencia de arrendamiento anterior', interno: 'Requiere referencia de arrendamiento anterior (V9)' },
     C4: { visible: 'Requiere verificar la identidad por otro medio', interno: 'Requiere verificar la identidad por otro medio (Adenda 2 §9)' },
     C5: {
-      visible: 'Canon por encima del tope: requiere autorización escrita de la Dirección de Riesgo',
-      interno: 'Canon por encima del tope transitorio (CANON_MAX_TRANSITORIO): requiere autorización escrita de la Dirección de Riesgo',
+      visible: 'Canon por encima del tope: requiere autorización escrita de la Gerencia General',
+      interno: 'Canon por encima del tope transitorio (CANON_MAX_TRANSITORIO): requiere autorización escrita de la Gerencia General',
     },
     C6: { visible: 'Otro', interno: 'Otro' },
   },

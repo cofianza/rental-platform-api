@@ -72,6 +72,8 @@ const {
   };
 });
 
+// Adenda de precios §7: el tope se prueba en excepcion-tope.service.test.ts.
+vi.mock('@/modules/estudios/excepcion-tope.service', () => ({ retenerAprobadoSobreTope: vi.fn(async (_id: string, f: unknown) => f) }));
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/config', () => ({ env: mockEnv }));
@@ -270,9 +272,10 @@ describe('tope de canon — P36', () => {
   });
 
   // El guard real, no solo la llamada: canon 3.500.000 sobre un tope de 3.000.000.
+  // Adenda de precios §7.1: sobre el tope ya no se bloquea antes del cobro (pasa al analista).
   it.each([
     [true, 'invita (solo advierte)'],
-    [false, 'bloquea con CANON_EXCEDE_TOPE'],
+    [false, 'invita (Adenda de precios §7.1: ya no bloquea)'],
   ])('con el tope real: estudio cobrado = %s → %s', async (cobrado) => {
     const real = await vi.importActual<typeof import('@/modules/estudios/tope-canon.guard')>('@/modules/estudios/tope-canon.guard');
     vi.mocked(assertCanonDentroDelTope).mockImplementationOnce(real.assertCanonDentroDelTope);
@@ -285,9 +288,8 @@ describe('tope de canon — P36', () => {
 
     const r = invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
 
-    if (cobrado) await expect(r).resolves.toMatchObject({ id: COA_ID });
-    else await expect(r).rejects.toMatchObject({ statusCode: 400, errorCode: 'CANON_EXCEDE_TOPE' });
-    expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(cobrado);
+    await expect(r).resolves.toMatchObject({ id: COA_ID });
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(true);
   });
 
   it('aceptar: con el estudio cobrado solo advierte', async () => {
@@ -919,6 +921,46 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
   });
   const coaRow = { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' }, error: null };
   const titularRows = (resultado: string, cascada: unknown = null) => ({ data: [{ id: TITULAR_ESTUDIO_ID, resultado, score: 720, cascada }], error: null });
+  // La prioridad de la cola (§8.2) tambien es un UPDATE del expediente: aqui solo interesa el de estado.
+  const updateDeEstado = () =>
+    ops.find((o) => o.table === 'expedientes' && o.method === 'update' && 'estado' in (o.args[0] as object));
+  const prioridadEscrita = () =>
+    (ops.find((o) => o.table === 'expedientes' && o.method === 'update' && 'prioridad_revision' in (o.args[0] as object))
+      ?.args[0] as { prioridad_revision?: string } | undefined)?.prioridad_revision;
+
+  it('Adenda de precios §8.2: el caso R2 entra a la cola del analista con prioridad BAJA', async () => {
+    mockEnv.MOTOR_DECIDE_ENABLED = true;
+    try {
+      enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado'));
+      enqueue('expediente_coarrendatarios', coaRow);
+      enqueue('estudios_scorecard_sombra', {
+        data: [
+          { estudio_id: TITULAR_ESTUDIO_ID, puntaje_normalizado: 27.1, features_crudas: { revision_obligatoria: 'Score 520 en la banda 450-599' } },
+          { estudio_id: COA_ESTUDIO_ID, puntaje_normalizado: 95 },
+        ],
+        error: null,
+      });
+      enqueue('expedientes', ctxRow());
+
+      await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+      expect(updateDeEstado()).toBeUndefined();
+      expect(prioridadEscrita()).toBe('baja');
+    } finally {
+      mockEnv.MOTOR_DECIDE_ENABLED = false;
+    }
+  });
+
+  it('Adenda de precios §8.2: cualquier otra revision manual queda con prioridad normal', async () => {
+    enqueue('estudios', coaEstudio('aprobado'), titularRows('condicionado'));
+    enqueue('expediente_coarrendatarios', coaRow);
+    enqueue('expedientes', ctxRow());
+
+    await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
+
+    expect(prioridadEscrita()).toBe('normal');
+  });
+
 
   it('regla dura del coarrendatario contamina el conjunto aunque el titular este aprobado', async () => {
     enqueue('estudios', coaEstudio('rechazado'), titularRows('aprobado'));
@@ -977,7 +1019,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
     await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-    expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+    expect(updateDeEstado()).toBeUndefined();
     const timeline = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert');
     expect((timeline!.args[0] as { metadata: { resultado: string } }).metadata.resultado).toBe('revision_manual');
     await vi.waitFor(() => expect(mockListOperators).toHaveBeenCalled());
@@ -1032,7 +1074,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
         await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-        expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+        expect(updateDeEstado()).toBeUndefined();
         const timeline = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert');
         expect((timeline!.args[0] as { metadata: { resultado: string } }).metadata.resultado).toBe('revision_manual');
       }
@@ -1059,7 +1101,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
       await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-      expect(ops.some((o) => o.table === 'expedientes' && o.method === 'update')).toBe(false);
+      expect(updateDeEstado()).toBeUndefined();
       const marca = ops.find((o) => o.table === 'estudios' && o.method === 'update');
       expect(marca?.args[0]).toEqual({ cascada: { ...cascada, via_sin_identidad: 'condicionada_coarrendatario' } });
     } finally {
@@ -1086,7 +1128,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
 
         await onCoarrendatarioEstudioCompletado(COA_ESTUDIO_ID, { reglasDuras: [] });
 
-        const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
+        const update = updateDeEstado();
         expect(update ? (update.args[0] as { estado: string }).estado : null).toBe(aprueba ? 'aprobado' : null);
       }
     } finally {

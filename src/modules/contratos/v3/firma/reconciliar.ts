@@ -28,6 +28,7 @@ import { supabase } from '@/lib/supabase';
 import { causarBeneficioTradicional, evaluarAlertaMezcla } from '@/modules/beneficios/beneficios.service';
 import { archivarPdfFirmadoEnStorage } from '@/modules/firma/firma.service';
 import { bloquearInmuebleOcupado } from '@/modules/inmuebles/inmuebles.service';
+import { ddmmaaaa as fechaCorta, registrarPrimaTrasladada, venceRemision } from '@/modules/facturacion/primas-remision.service';
 import { enviarCorreoNotificacion, notificarUsuario } from '@/modules/notificaciones/notificaciones.service';
 import { listOperators } from '@/modules/users/users.service';
 import type { EstadoSobreV3 } from '../asistente.types';
@@ -368,6 +369,16 @@ export async function activarContrato(s: Sobre): Promise<void> {
     logger.warn({ contratoId: c.id, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: PDF firmado sin archivar todavía'),
   );
 
+  // Adenda de precios §5.1: la prima Trasladada queda como cuenta por cobrar a la
+  // inmobiliaria ANTES de avisar y de la constancia: si la base falla, lanza y el
+  // barrido reintenta la activación sin haber repetido el aviso de fianza activa
+  // (el registro es idempotente).
+  const venceEn = venceRemision(fechaBogota(s.cerrado_en ?? new Date()));
+  const doc = c.datos_variables?.documento;
+  const prima = doc?.snapshot?.cop?.primaIvaCop;
+  if (doc?.entrada?.modalidad === 'trasladada' && c.orgId && typeof prima === 'number')
+    await registrarPrimaTrasladada({ inmobiliariaId: c.orgId, contratoId: c.id, montoCop: prima, venceEn });
+
   const fecha = s.cerrado_en ? ddmmaaaa(fechaBogota(s.cerrado_en)) : null;
   const destinatarios = await destinatariosDe(c, s);
   const titulo = `Fianza activa — contrato ${c.numero}`;
@@ -401,7 +412,7 @@ export async function activarContrato(s: Sobre): Promise<void> {
     .select('id');
   // Solo quien dejó la constancia avisa la prima: una curación en paralelo no la repite.
   if ((marcado as unknown[] | null)?.length)
-    await avisarPrimaPorCobrar(c).catch((e) =>
+    await avisarPrimaPorCobrar(c, venceEn).catch((e) =>
       logger.warn({ contratoId: c.id, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: aviso de prima por cobrar fallido'),
     );
 }
@@ -444,20 +455,27 @@ async function titularesYResponsable(c: ContratoCtx): Promise<string[]> {
  * Décima Primera); Tradicional: la asume la inmobiliaria. Solo avisa: no crea
  * cobros, enlaces ni facturas. El monto es el del contrato firmado.
  */
-async function avisarPrimaPorCobrar(c: ContratoCtx): Promise<void> {
+async function avisarPrimaPorCobrar(c: ContratoCtx, venceEn: string): Promise<void> {
   const doc = c.datos_variables?.documento;
   const prima = doc?.snapshot?.cop?.primaIvaCop;
   const tradicional = doc?.entrada?.modalidad === 'tradicional';
   const monto = typeof prima === 'number' ? `$${formatearPesos(prima)} (IVA incluido)` : 'el valor pactado en el contrato';
   const causada = `Con la firma completa del contrato ${c.numero} quedó causada la prima de vinculación: ${monto}.`;
+  // Adenda de precios §5.1: en Trasladada se remite a más tardar el día 10 (venceRemision).
+  const limite = `a más tardar el ${fechaCorta(venceEn)}`;
   const quien = tradicional
     ? 'Modalidad Tradicional: la asume la inmobiliaria.'
-    : 'Modalidad Trasladada: la paga el arrendatario y la recauda la inmobiliaria por cuenta de Cofianza.';
-  const payload = { contrato_id: c.id, prima_iva_cop: prima ?? null, modalidad: tradicional ? 'tradicional' : 'trasladada' };
+    : `Modalidad Trasladada: la paga el arrendatario y la recauda la inmobiliaria por cuenta de Cofianza; la remite ${limite}.`;
+  const payload = {
+    contrato_id: c.id,
+    prima_iva_cop: prima ?? null,
+    modalidad: tradicional ? 'tradicional' : 'trasladada',
+    ...(tradicional ? {} : { remitir_a_mas_tardar: venceEn }),
+  };
   const aviso = (titulo: string, mensaje: string) => ({ tipo: 'contrato.prima_por_cobrar', titulo, mensaje, link: linkAsistente(c), payload });
   const avisoInmo = aviso(
     `Prima de vinculación por cobrar — contrato ${c.numero}`,
-    `${causada} ${tradicional ? 'En la modalidad Tradicional está a cargo de la inmobiliaria.' : 'En la modalidad Trasladada la paga el arrendatario: recáudela del arrendatario y remítala a Cofianza.'}`,
+    `${causada} ${tradicional ? 'En la modalidad Tradicional está a cargo de la inmobiliaria.' : `En la modalidad Trasladada la paga el arrendatario: recáudela del arrendatario y remítala a Cofianza ${limite}.`}`,
   );
   const fallo = (a: string) => (e: unknown) =>
     logger.warn({ contratoId: c.id, error: e instanceof Error ? e.message : String(e) }, `Firma V3: prima por cobrar sin avisar a ${a}`);

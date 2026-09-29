@@ -13,6 +13,7 @@ import {
 } from '../orchestrator/orchestrator.emails';
 import { assertHabilitacionPermission } from './expediente-habilitacion.permissions';
 import { assertCanonDentroDelTope } from '../estudios/tope-canon.guard';
+import { assertAprobacionDentroDelTope } from '../estudios/excepcion-tope.service';
 import { DESTINACION_NO_HABILITADA } from '../inmuebles/destinacion';
 import { MOTIVO_PROSPECTO_DECISION_COFIANZA } from '../estudios/rutas-resultado';
 import { enviarLinkPago } from '../pago-estudio/pago-estudio.service';
@@ -572,6 +573,8 @@ export async function aprobarCondicionado(
   datosContrato: { duracion_contrato_meses: number; fecha_inicio_contrato: string } | undefined,
   revision: DecisionRevisionManual,
   ip?: string,
+  /** Adenda de precios §7.3: decide si es la Gerencia General. */
+  userEmail = '',
 ): Promise<{
   expediente: { id: string; numero: string; estado: 'aprobado' };
   contrato_id: string | null;
@@ -581,6 +584,7 @@ export async function aprobarCondicionado(
     expedienteId,
     userId,
     userRol,
+    userEmail,
     datosContrato,
     fromState: 'condicionado',
     revision,
@@ -628,6 +632,7 @@ async function aprobarYGenerarContrato(params: {
   expedienteId: string;
   userId: string;
   userRol: string;
+  userEmail?: string;
   datosContrato?: { duracion_contrato_meses: number; fecha_inicio_contrato: string };
   fromState: 'condicionado' | 'aprobado';
   revision?: DecisionRevisionManual;
@@ -659,7 +664,11 @@ async function aprobarYGenerarContrato(params: {
 
   // Politica §15: un titular sin historia en ninguna central no se aprueba sin
   // los requisitos del carril thin-file. Antes de escribir nada.
-  if (fromState === 'condicionado') await assertRequisitosThinFile(expedienteId, params.revision);
+  if (fromState === 'condicionado') {
+    await assertRequisitosThinFile(expedienteId, params.revision);
+    // Adenda de precios §7.3: por encima del tope solo aprueba la Gerencia General.
+    await assertAprobacionDentroDelTope(expedienteId, { id: userId, rol: userRol, email: params.userEmail ?? '' }, params.ip);
+  }
 
   const nowIso = new Date().toISOString();
 

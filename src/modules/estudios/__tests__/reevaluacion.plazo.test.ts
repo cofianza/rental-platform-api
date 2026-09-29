@@ -69,6 +69,11 @@ const { mockEnv, queues, enqueue, mockFrom, mockStorageFrom, mockResolver, mockO
   };
 });
 
+// Adenda de precios §7: el tope se prueba en excepcion-tope.service.test.ts.
+vi.mock('../excepcion-tope.service', () => ({
+  assertAprobacionDentroDelTope: vi.fn(async () => undefined),
+  retenerAprobadoSobreTope: vi.fn(async (_id: string, f: unknown) => f),
+}));
 vi.mock('@/config', () => ({ env: mockEnv }));
 vi.mock('@/config/env', () => ({ env: mockEnv }));
 vi.mock('@/lib/supabase', () => ({
