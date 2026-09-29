@@ -44,7 +44,9 @@ export type ClaveCalibracion =
   | 'MAX_CLAUSULAS_ADICIONALES'
   | 'DIAS_EXPIRACION_FIRMA'
   | 'DIAS_RESERVA_INMUEBLE'
-  | 'PRECIO_ESTUDIO_INDIVIDUAL';
+  | 'PRECIO_ESTUDIO_INDIVIDUAL'
+  | 'PORCENTAJE_BENEFICIO_TRADICIONAL'
+  | 'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -290,6 +292,27 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     descripcion: 'Precio base del estudio individual (COP, SIN IVA). Se cobra más TARIFA_IVA: con 80.000 y 19 % el prospecto paga $95.200 (IVA incluido).',
     advertencia: 'Aplica a los cobros que se creen desde el cambio; un enlace de pago ya enviado conserva su valor.',
   },
+  // §9.9 (BASE_BENEFICIO_TRADICIONAL = lo efectivamente pagado sin IVA) es una
+  // regla, no un número: vive en baseBeneficioEstudio (beneficios.service).
+  {
+    clave: 'PORCENTAJE_BENEFICIO_TRADICIONAL',
+    valorDefault: 50,
+    min: 0,
+    max: 100,
+    entero: false,
+    seccion: 'Adenda de precios §4 / §9.10',
+    descripcion: 'Beneficio (%) de la inmobiliaria sobre lo efectivamente pagado por el estudio, sin IVA, cuando el contrato en modalidad Tradicional queda vigente. Se acumula sin liquidar.',
+    advertencia: 'Aplica a los beneficios que se causen desde el cambio; los ya causados conservan su porcentaje.',
+  },
+  {
+    clave: 'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25',
+    valorDefault: 80,
+    min: 0,
+    max: 100,
+    entero: false,
+    seccion: 'Adenda de precios §4.4 / §9.11',
+    descripcion: 'Si una inmobiliaria con paquete de 25 vigente supera este % de contratos en modalidad Tradicional (últimos 6 meses, mínimo 5 contratos), se avisa a la Gerencia General. No bloquea nada.',
+  },
 ];
 
 export const CALIBRACION_DEFAULT: Calibracion = Object.fromEntries(
@@ -309,6 +332,7 @@ const OPERATIVOS: ReadonlySet<ClaveCalibracion> = new Set<ClaveCalibracion>([
   'VIGENCIA_MESES_DEFECTO', // solo precarga el asistente; cada contrato fija la suya
   'DIAS_EXPIRACION_FIRMA',
   'DIAS_RESERVA_INMUEBLE', // respuesta 15: plazo del borrador para enviar a firma
+  'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25', // Adenda de precios §9.14: alertas, cualquier administrador
 ]);
 
 export type NivelParametro = 'riesgo' | 'operativo';

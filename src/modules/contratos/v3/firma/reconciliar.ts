@@ -25,6 +25,7 @@ import { getCalibracion } from '@/lib/calibracion';
 import { logger } from '@/lib/logger';
 import { formatearPesos } from '@/lib/numerosEnLetras';
 import { supabase } from '@/lib/supabase';
+import { causarBeneficioTradicional, evaluarAlertaMezcla } from '@/modules/beneficios/beneficios.service';
 import { archivarPdfFirmadoEnStorage } from '@/modules/firma/firma.service';
 import { bloquearInmuebleOcupado } from '@/modules/inmuebles/inmuebles.service';
 import { ddmmaaaa as fechaCorta, registrarPrimaTrasladada, venceRemision } from '@/modules/facturacion/primas-remision.service';
@@ -401,6 +402,9 @@ export async function activarContrato(s: Sobre): Promise<void> {
     entidadId: c.id,
     detalle: { v3: true, auco_code: s.auco_code, fecha_activacion: s.cerrado_en, intento: s.intento },
   });
+  // Adenda de precios §4.2 y §4.4: best-effort e idempotente (UNIQUE por
+  // estudio); cada curación lo reintenta sin repetir avisos.
+  await causarYEvaluarMezcla(c);
   const { data: marcado } = await db('contrato_v3_sobres')
     .update({ aviso_entregado_en: new Date().toISOString(), aviso_detalle: { destinatarios } } as never)
     .eq('id', s.id)
@@ -411,6 +415,22 @@ export async function activarContrato(s: Sobre): Promise<void> {
     await avisarPrimaPorCobrar(c, venceEn).catch((e) =>
       logger.warn({ contratoId: c.id, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: aviso de prima por cobrar fallido'),
     );
+}
+
+/** Beneficio Tradicional (§4.2) y alerta de mezcla (§4.4). Nunca lanza: no frena la activación. */
+async function causarYEvaluarMezcla(c: ContratoCtx): Promise<void> {
+  const fallo = (que: string) => (e: unknown) =>
+    logger.error(
+      { contratoId: c.id, expedienteId: c.expediente_id, error: e instanceof Error ? e.message : String(e) },
+      `Firma V3: ${que} — revisar a mano`,
+    );
+  await causarBeneficioTradicional({
+    contratoId: c.id,
+    expedienteId: c.expediente_id,
+    orgId: c.orgId,
+    modalidad: c.datos_variables?.documento?.entrada?.modalidad,
+  }).catch(fallo('beneficio Tradicional sin causar'));
+  if (c.orgId) await evaluarAlertaMezcla(c.orgId).catch(fallo('alerta de mezcla sin evaluar'));
 }
 
 // ── Prima de vinculación por cobrar ──
