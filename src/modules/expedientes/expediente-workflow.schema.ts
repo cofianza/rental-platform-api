@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { ESTADOS_EXPEDIENTE } from './expediente-state-machine';
 import { OPCIONES_V7, OPCIONES_V9, type OpcionV7, type OpcionV9 } from '@/modules/estudios/motor/scorecard';
+import { camposMotivos, refinarMotivos, rellenarDesdeMotivos, type TipoDecision } from '@/modules/estudios/motivos-decision';
+
+// H58/H103: la decisión según el destino de la transición.
+const tipoDeTransicion = (e: unknown): TipoDecision | null =>
+  e === 'rechazado' ? 'rechazar' : e === 'aprobado' ? 'aprobar' : e === 'condicionado' ? 'condicionar' : null;
 
 export const expedienteIdParamsSchema = z.object({
   id: z.uuid({ error: 'ID de estudio inválido' }),
@@ -17,7 +22,17 @@ export const evaluacionRevisionManualSchema = z.object({
   }),
 });
 
-export const transitionBodySchema = z.object({
+export const transitionBodySchema = z.preprocess(
+  rellenarDesdeMotivos(
+    (b) => tipoDeTransicion(b.nuevo_estado),
+    (b, t) => {
+      // P34: `motivo` es el que ve la inmobiliaria; `comentario`, el fundamento interno.
+      if (b.nuevo_estado === 'rechazado') b.motivo ||= t.visible;
+      b.comentario ||= t.interno;
+    },
+  ),
+  z.object({
+  ...camposMotivos,
   nuevo_estado: z.enum(ESTADOS_EXPEDIENTE, {
     error: `Estado inválido. Valores permitidos: ${ESTADOS_EXPEDIENTE.join(', ')}`,
   }),
@@ -47,7 +62,9 @@ export const transitionBodySchema = z.object({
       message: 'Escribe el motivo para la inmobiliaria o el propietario (mínimo 10 caracteres).',
     });
   }
-});
+  refinarMotivos(tipoDeTransicion(d.nuevo_estado), d, ctx);
+}),
+);
 
 /** Adenda 1 contratos (respuesta 21): el motivo del cierre sin acta queda registrado. */
 export const cerrarSinActaBodySchema = z.object({

@@ -15,6 +15,7 @@ import { resolverRuta, type Ruta, type EntradaRuta } from './rutas-resultado';
 import { evaluarExpiracion, type VeredictoExpiracion } from './expiracion';
 // Adenda 1 §11: umbrales, vigencia y plazos vienen del panel de calibracion.
 import { getCalibracion } from '@/lib/calibracion';
+import { guardarCodigosMotivo } from './motivos-decision';
 import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
 import { maskDocumento } from './providers/mock.provider';
@@ -1999,6 +2000,7 @@ export async function registrarResultado(
     }
     throw AppError.badRequest('Error al registrar el resultado', 'RESULTADO_UPDATE_ERROR');
   }
+  await guardarCodigosMotivo('estudios', estudioId, input.motivos);
 
   // 3.1. VIGENCIA ANCLADA EN LA CONSULTA AL BURO. El RPC pone fecha_completado =
   //      NOW(), y todo lo que mide la vigencia (CRC, §5.2, reasignacion,

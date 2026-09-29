@@ -1,3 +1,4 @@
+import { guardarCodigosMotivo } from '@/modules/estudios/motivos-decision';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -106,6 +107,7 @@ export async function executeTransition(
       fundamento: input.comentario,
       documentos_consultados: input.documentos_consultados ?? [],
       evaluacion: input.evaluacion!,
+      motivos: input.motivos,
     });
     return {
       ...(await getExpedienteById(expedienteId)),
@@ -303,6 +305,9 @@ export async function executeTransition(
       )
       .catch((e) => logger.warn({ e, expedienteId }, 'No se pudo revisar la devolución de la evaluación'));
   }
+
+  // H58/H103: los códigos de motivo del cambio de estado, en su evento.
+  await guardarCodigosMotivo('eventos_timeline', result.evento_timeline_id, input.motivos);
 
   // Adenda 2 §5.1: salir de 'condicionado' es resolver una revision manual.
   // Queda en el timeline (usuario y fecha los pone el RPC; el comentario es el

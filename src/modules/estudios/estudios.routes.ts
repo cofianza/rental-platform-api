@@ -67,6 +67,15 @@ estudiosRouter.use(authMiddleware);
 // para no dejar elegir un inmueble que el sistema no puede afianzar.
 estudiosRouter.get('/tope-canon', estudiosController.getTopeCanon);
 
+// GET /estudios/motivos-decision — H58/H103: la lista de motivos de aprobar,
+// rechazar y condicionar (texto visible + interno). Solo Cofianza: los internos
+// citan las reglas de la Política.
+estudiosRouter.get(
+  '/motivos-decision',
+  roleGuard(['administrador', 'operador_analista']),
+  estudiosController.getMotivosDecision,
+);
+
 estudiosRouter.get(
   '/vigente',
   authorize('expedientes', 'read'),

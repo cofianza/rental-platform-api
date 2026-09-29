@@ -1,3 +1,4 @@
+import { guardarCodigosMotivo } from '@/modules/estudios/motivos-decision';
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
@@ -454,6 +455,8 @@ export interface DecisionRevisionManual {
   evaluacion: EvaluacionRevisionManual;
   /** Politica §15 (thin-file sin ingreso de la central): el analista verifico una fuente de capacidad. */
   fuente_capacidad_verificada?: boolean;
+  /** H58: códigos de la lista de motivos (el fundamento ya viene armado con ellos). */
+  motivos?: string[];
 }
 
 /** Politica §15, ultima fila: relacion canon/ingreso maxima del carril thin-file. */
@@ -711,7 +714,7 @@ async function aprobarYGenerarContrato(params: {
     // el log lleve el puntaje, el denominador y las variables.
     puntajeRevisionManual = await ratificarRevisionManual(expedienteId, userId, params.revision?.evaluacion);
 
-    await (supabase
+    const { data: eventoAprobacion } = await (supabase
       .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
       .insert({
         expediente_id: expedienteId,
@@ -730,7 +733,10 @@ async function aprobarYGenerarContrato(params: {
           puntaje_revision_manual: puntajeRevisionManual,
           ...(params.revision?.fuente_capacidad_verificada ? { fuente_capacidad_verificada: true } : {}),
         },
-      } as never);
+      } as never)
+      .select('id')
+      .maybeSingle();
+    await guardarCodigosMotivo('eventos_timeline', (eventoAprobacion as { id?: string } | null)?.id, params.revision?.motivos);
 
     // El coarrendatario no tiene cuenta: su unico canal es el correo.
     void import('@/modules/coarrendatarios/coarrendatarios.service')

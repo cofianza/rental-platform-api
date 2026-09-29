@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { camposMotivos, refinarMotivos, rellenarDesdeMotivos } from '@/modules/estudios/motivos-decision';
 import { authMiddleware, roleGuard } from '@/middleware/auth';
 import { validate } from '@/middleware/validate';
 import { expedienteIdParamsSchema } from './expedientes.schema';
@@ -70,7 +71,16 @@ const datosContratoBody = z.object({
 // se aprueba (transición condicionado→aprobado) y el contrato se genera luego
 // desde la pestaña Contratos con el formulario completo (modalidad de fianza +
 // servicios públicos). Con ellos, se aprueba y genera en un paso.
-const aprobarCondicionadoBody = z.object({
+// H58: el fundamento sale de los motivos de la lista (+ texto opcional) si vienen.
+const aprobarCondicionadoBody = z.preprocess(
+  rellenarDesdeMotivos(
+    () => 'aprobar',
+    (b, t) => {
+      b.fundamento ||= t.interno;
+    },
+  ),
+  z.object({
+  ...camposMotivos,
   duracion_contrato_meses: z.coerce.number().int().min(1).max(120).optional(),
   fecha_inicio_contrato: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato fecha invalido (YYYY-MM-DD)').optional(),
   // Adenda 2 §5.1: "toda decision manual debe registrar [...] el fundamento
@@ -81,7 +91,8 @@ const aprobarCondicionadoBody = z.object({
   evaluacion: evaluacionRevisionManualSchema,
   // Política §15 (thin-file sin ingreso de la central): el analista verificó una fuente de capacidad.
   fuente_capacidad_verificada: z.boolean().optional(),
-});
+}).superRefine((d, ctx) => refinarMotivos('aprobar', d, ctx)),
+);
 
 // POST /api/v1/expedientes/:id/aprobar-condicionado — Tras revisar la
 // documentación adicional pedida (codeudor, póliza, etc.) un analista de
