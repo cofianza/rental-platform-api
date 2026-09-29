@@ -35,8 +35,52 @@ export async function registerSolicitante(
   ipAddress: string,
   userAgent: string,
 ): Promise<RegisterSolicitanteResult> {
+  const { email, password } = input;
+  const userId = await crearCuentaSolicitante(input, ipAddress, userAgent, password);
+
+  // 4. Sign in to get session tokens for auto-login
+  const { data: signInData, error: signInError } = await supabaseAuth.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (signInError || !signInData.session) {
+    logger.error({ error: signInError?.message, userId }, 'Error al iniciar sesion de solicitante');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Usuario creado pero error al iniciar sesion');
+  }
+
+  logger.info({ userId, email, rol: 'solicitante' }, 'Solicitante registrado exitosamente via vitrina');
+
+  return {
+    user: { id: userId, email, rol: 'solicitante' },
+    session: {
+      access_token: signInData.session.access_token,
+      refresh_token: signInData.session.refresh_token,
+      expires_at: signInData.session.expires_at ?? 0,
+    },
+  };
+}
+
+/** Datos de la cuenta del arrendatario (los del registro, sin contraseña). */
+export type DatosCuentaSolicitante = Pick<
+  RegisterSolicitanteInput,
+  'email' | 'nombre' | 'apellido' | 'telefono' | 'tipo_documento' | 'numero_documento' |
+  'from_invitation' | 'municipio_id' | 'municipio_nombre'
+>;
+
+/**
+ * Crea la cuenta del arrendatario (auth.user + perfil rol='solicitante' +
+ * ficha + aceptación de términos) y devuelve su id. Sin `password` la cuenta
+ * nace sin contraseña: la usa el enlace mágico de la invitación (H44).
+ */
+export async function crearCuentaSolicitante(
+  input: DatosCuentaSolicitante,
+  ipAddress: string,
+  userAgent: string,
+  password?: string,
+): Promise<string> {
   const {
-    email, password, nombre, apellido, telefono,
+    email, nombre, apellido, telefono,
     tipo_documento, numero_documento, from_invitation,
     municipio_id, municipio_nombre,
   } = input;
@@ -90,7 +134,7 @@ export async function registerSolicitante(
   // 1. Create Supabase Auth user (auto-confirmed, no email verification for solicitante)
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
-    password,
+    ...(password ? { password } : {}),
     email_confirm: true,
     app_metadata: { role: 'solicitante' },
     user_metadata: { nombre, apellido, rol: 'solicitante' },
@@ -179,28 +223,7 @@ export async function registerSolicitante(
   //      Evidencia legal: user_id + timestamps + IP + user-agent. Reutiliza
   //      la misma función que propietario/inmobiliaria. Log-only en error.
   await recordTermsAcceptance(userId, ipAddress, userAgent);
-
-  // 4. Sign in to get session tokens for auto-login
-  const { data: signInData, error: signInError } = await supabaseAuth.auth.signInWithPassword({
-    email,
-    password,
-  });
-
-  if (signInError || !signInData.session) {
-    logger.error({ error: signInError?.message, userId }, 'Error al iniciar sesion de solicitante');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Usuario creado pero error al iniciar sesion');
-  }
-
-  logger.info({ userId, email, rol: 'solicitante' }, 'Solicitante registrado exitosamente via vitrina');
-
-  return {
-    user: { id: userId, email, rol: 'solicitante' },
-    session: {
-      access_token: signInData.session.access_token,
-      refresh_token: signInData.session.refresh_token,
-      expires_at: signInData.session.expires_at ?? 0,
-    },
-  };
+  return userId;
 }
 
 // ------------------------------------------------------------------

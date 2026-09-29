@@ -6,6 +6,8 @@ export const AUDIT_ACTIONS = {
   LOGIN_FAILED: 'login_failed',
   LOGOUT: 'logout',
   PASSWORD_RESET_REQUEST: 'password_reset_request',
+  // H44: enlace de ingreso sin contraseña enviado a un arrendatario invitado.
+  ENLACE_MAGICO_ENVIADO: 'enlace_magico_enviado',
   PASSWORD_RESET_COMPLETE: 'password_reset_complete',
   PASSWORD_RESET_BY_ADMIN: 'password_reset_by_admin',
   USER_CREATED: 'user_created',

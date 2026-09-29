@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { registerSolicitanteBase } from '../vitrina/vitrina.schema';
 
 export const loginSchema = z.object({
   email: z.email({ error: 'Email inválido' }),
@@ -22,6 +23,23 @@ export const resetPasswordSchema = z.object({
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
       'La contraseña debe contener al menos 1 mayúscula, 1 minúscula y 1 número',
     ),
+});
+
+// Enlace mágico (H44). `datos` solo se usa si el invitado aún no tiene cuenta
+// (se le crea como arrendatario, sin contraseña); si ya la tiene, se ignora.
+export const enlaceMagicoSchema = z.object({
+  email: z.email({ error: 'Email inválido' }).max(255),
+  datos: registerSolicitanteBase
+    .pick({
+      nombre: true, apellido: true, telefono: true, tipo_documento: true, numero_documento: true,
+      municipio_id: true, municipio_nombre: true, accept_terms: true, accept_data_treatment: true,
+    })
+    .optional(),
+});
+
+// token_hash de Supabase (hex). Solo llega por POST, nunca en la URL de la API.
+export const verificarEnlaceMagicoSchema = z.object({
+  token_hash: z.string().regex(/^[A-Za-z0-9_-]{16,256}$/, 'Enlace inválido'),
 });
 
 export const resetTokenParamsSchema = z.object({
@@ -63,5 +81,7 @@ export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export type EnlaceMagicoInput = z.infer<typeof enlaceMagicoSchema>;
+export type VerificarEnlaceMagicoInput = z.infer<typeof verificarEnlaceMagicoSchema>;
 export type ResetTokenParams = z.infer<typeof resetTokenParamsSchema>;
 export type UpdateMyProfileInput = z.infer<typeof updateMyProfileSchema>;

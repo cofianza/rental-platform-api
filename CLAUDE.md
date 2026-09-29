@@ -50,6 +50,8 @@ REST API for **Cofianza 2.0**, a rental guarantee platform in Colombia. Built wi
 
 **Authentication:** JWT tokens verified via Supabase Auth (`supabase.auth.getUser(token)`). Role and active status come from the user's `perfiles` row (`src/middleware/auth.ts`), never from token claims. No manual bcrypt/jsonwebtoken — everything through Supabase.
 
+**Magic link (H44, `src/modules/auth/enlace-magico.service.ts`):** `POST /auth/enlace-magico {email, datos?}` always answers the same generic 200 (it responds first and works after, so timing leaks nothing) and only acts for emails with a non-cancelled study invitation (`expedientes.email_invitacion`): an active `solicitante` account gets the link; no account + a pending invitation + `datos` creates one without password via `crearCuentaSolicitante` (vitrina); any other role/inactive account gets nothing and its role is never touched. The link is `admin.generateLink({type:'magiclink'})` (Supabase sends nothing) mailed with our Resend template as `${FRONTEND_URL}/auth/confirmar#token_hash=…` (fragment: never reaches a server log); the web consumes it only on the «Entrar» click via `POST /auth/enlace-magico/verificar` (`verifyOtp`), which returns the login shape plus `redirect` (the pending invitation, if any). Limits: 3/h per email + 10/h per IP; verify uses `authLimiter`. Never log the token or the link.
+
 **Roles:** administrador (Administrador), operador_analista (Operador/Analista), gerencia_consulta (Gerencia/Consulta), propietario (Propietario), inmobiliaria (Inmobiliaria), solicitante (arrendatario/prospecto).
 
 ## Module Pattern

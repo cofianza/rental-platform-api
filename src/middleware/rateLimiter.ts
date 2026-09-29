@@ -217,3 +217,33 @@ export const otpVerifyByTokenLimiter = rateLimit({
     message: 'Demasiados intentos de verificación para este enlace. Solicita un código nuevo.',
   },
 });
+
+// ── Enlace mágico del arrendatario invitado (H44) ──
+// Cada pedido puede mandar un correo de Cofianza: tope por correo (no se le
+// llena la bandeja a nadie) y por IP (no se tantean correos en serie). Los dos
+// van DESPUÉS de validate: un cuerpo inválido no gasta cupo.
+const mensajeEnlace = {
+  success: false,
+  errorCode: 'RATE_LIMIT_EXCEEDED',
+  message: 'Ya pidió varios enlaces. Revise su correo (y la carpeta de spam) o inténtelo de nuevo en una hora.',
+};
+
+/** Máx 3 enlaces por hora a un mismo correo. */
+export const enlaceMagicoPorCorreoLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 3,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => `enlace-magico:${String((req.body as { email?: string })?.email ?? '').trim().toLowerCase()}`,
+  validate: false,
+  message: mensajeEnlace,
+});
+
+/** Máx 10 pedidos de enlace por hora desde una misma IP. */
+export const enlaceMagicoPorIpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: mensajeEnlace,
+});

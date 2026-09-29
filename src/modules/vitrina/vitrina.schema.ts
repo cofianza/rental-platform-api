@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { passwordSchema } from '../registration/registration.schema';
 
-export const registerSolicitanteSchema = z.object({
+export const registerSolicitanteBase = z.object({
   nombre: z.string().min(1, 'Nombre es requerido').max(100),
   apellido: z.string().min(1, 'Apellido es requerido').max(100),
   email: z.string().email('Email inválido'),
@@ -34,7 +34,9 @@ export const registerSolicitanteSchema = z.object({
   // Setea registration_source='invitacion_externa' para distinguir estadísticas
   // de origen (vitrina pública vs invitación directa de inmobiliaria).
   from_invitation: z.boolean().optional(),
-}).refine((data) => data.password === data.confirm_password, {
+});
+
+export const registerSolicitanteSchema = registerSolicitanteBase.refine((data) => data.password === data.confirm_password, {
   message: 'Las contraseñas no coinciden',
   path: ['confirm_password'],
 });
