@@ -35,7 +35,7 @@ const { mockFrom, mockRpc, ops, queues, enqueue, mockEsDueno, mockFactura, mockC
     mockEsDueno: vi.fn(async () => true),
     mockFactura: vi.fn(async () => ({ id: 'f-1' })),
     mockCreateLink: vi.fn(async () => ({ url: 'https://mp.test/checkout/c', externalId: 'pref-c' })),
-    calibracion: { TARIFA_IVA: 19 },
+    calibracion: { TARIFA_IVA: 19, VIGENCIA_PAQUETE_MESES: 6 },
   };
 });
 

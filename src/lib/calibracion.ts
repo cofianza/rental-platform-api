@@ -44,6 +44,7 @@ export type ClaveCalibracion =
   | 'MAX_CLAUSULAS_ADICIONALES'
   | 'DIAS_EXPIRACION_FIRMA'
   | 'DIAS_RESERVA_INMUEBLE'
+  | 'VIGENCIA_PAQUETE_MESES'
   | 'PRECIO_ESTUDIO_INDIVIDUAL'
   | 'PORCENTAJE_BENEFICIO_TRADICIONAL'
   | 'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25';
@@ -281,6 +282,18 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     seccion: 'Adenda 1 contratos §5.6 / respuesta 15',
     descripcion: 'Días hábiles (sin sábados, domingos ni festivos de Colombia) que el inmueble queda reservado mientras se elabora el contrato, contados desde el día siguiente a «Iniciar contrato». Si en ese plazo el borrador no se envía a firma, se cancela solo, el inmueble se libera y se avisa a la inmobiliaria.',
     advertencia: 'Aplica también a los borradores en curso: acortarlo puede cancelar de inmediato los que ya superen el plazo nuevo.',
+  },
+  // Adenda de precios §9.6 / §9.14: la vigencia del paquete es de riesgo
+  // (solo Gerencia General), por eso no va en OPERATIVOS.
+  {
+    clave: 'VIGENCIA_PAQUETE_MESES',
+    valorDefault: 6,
+    min: 1,
+    max: 36,
+    entero: true,
+    seccion: 'Adenda de precios §3.1 / §9.6',
+    descripcion: 'Meses de calendario de vigencia de un paquete prepagado de estudios, contados desde la aprobación del pago. Vencido el plazo, los cupos no usados se extinguen.',
+    advertencia: 'Aplica a las compras cuyo pago se apruebe desde el cambio; los paquetes ya acreditados conservan su vencimiento.',
   },
   {
     clave: 'PRECIO_ESTUDIO_INDIVIDUAL',
