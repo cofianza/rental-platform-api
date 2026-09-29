@@ -295,7 +295,7 @@ describe('textoAvisoFirmaIncompleta', () => {
     expect(rechazo).toContain('rechazó la firma');
     expect(rechazo).toContain('el arrendatario no está de acuerdo');
     // Sin fecha de vigencia el estudio ya venció: no se promete un reenvío que da CRC_VENCIDO.
-    expect(rechazo).not.toContain('Puedes reenviarlo');
+    expect(rechazo).not.toContain('Puede reenviarlo');
     expect(rechazo).toContain('se requiere una nueva evaluación');
   });
 
@@ -309,7 +309,7 @@ describe('textoAvisoFirmaIncompleta', () => {
     });
     expect(t).toContain('después del plazo para firmar (la última firma fue el 09/10/2026 a las 00:20) y no cuentan');
     expect(t).toContain('más de tres días de vigencia (vence el 30/10/2026 a las 10:00)');
-    expect(t).toContain('primero acepta este aviso en la plataforma');
+    expect(t).toContain('primero acepte este aviso en la plataforma');
   });
 });
 

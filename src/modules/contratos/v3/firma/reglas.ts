@@ -578,8 +578,9 @@ export function sobreIdDeCustom(custom: unknown): string | null {
  * constancia guarda la versión y el texto exacto que se entregó.
  * v3 (Adenda 1 del módulo de contratos): firmas fuera del plazo, el margen de
  * CRC para reenviar y que el aviso se acepta en la plataforma (respuesta 11).
+ * v4 (2026-09-29): mismo contenido, en usted (toda la plataforma trata de usted).
  */
-export const AVISO_FIRMA_INCOMPLETA_VERSION = 'e5-11.7.4-v3';
+export const AVISO_FIRMA_INCOMPLETA_VERSION = 'e5-11.7.4-v4';
 
 export function textoAvisoFirmaIncompleta(x: {
   numero: string;
@@ -600,13 +601,13 @@ export function textoAvisoFirmaIncompleta(x: {
         : `una de las partes rechazó la firma${detalle}`;
   // Sin fecha: al CRC no le queda vigencia para un proceso nuevo (reenviar da 409).
   const reenvio = x.crcVigenteHasta
-    ? ` Puedes reenviarlo a firma mientras al certificado de riesgo le queden más de tres días de vigencia (vence el ${x.crcVigenteHasta}).`
+    ? ` Puede reenviarlo a firma mientras al certificado de riesgo le queden más de tres días de vigencia (vence el ${x.crcVigenteHasta}).`
     : ' Al certificado de riesgo no le queda vigencia suficiente: para volver a enviarlo a firma se requiere una nueva evaluación.';
   return (
     `El proceso de firma del contrato ${x.numero} (${x.direccion}) terminó sin que firmaran todas las partes: ${causa}. ` +
     'La fianza de COFIANZA S.A.S. NO está operando y COFIANZA S.A.S. no responde por este inmueble mientras la firma esté incompleta. ' +
     'Entregar el inmueble en estas condiciones es decisión y responsabilidad exclusiva de la inmobiliaria.' +
     reenvio +
-    ' Para reenviarlo a firma o cancelarlo, primero acepta este aviso en la plataforma de COFIANZA S.A.S.: queda registrado quién lo aceptó y cuándo.'
+    ' Para reenviarlo a firma o cancelarlo, primero acepte este aviso en la plataforma de COFIANZA S.A.S.: queda registrado quién lo aceptó y cuándo.'
   );
 }

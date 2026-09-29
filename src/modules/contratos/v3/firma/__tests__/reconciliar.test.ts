@@ -268,7 +268,7 @@ describe('reconciliarSobre: EXPIRED / REJECTED', () => {
     const constancia = tabla('contrato_v3_sobres', 'update').at(-1)!.args[0] as Record<string, unknown>;
     expect(constancia).toMatchObject({ aviso_detalle: { texto_version: AVISO_FIRMA_INCOMPLETA_VERSION } });
     // Adenda 1, respuesta 11: el aviso (app y correo) dice que hay que aceptarlo para reenviar o cancelar.
-    expect(fila.mensaje).toContain('primero acepta este aviso en la plataforma');
+    expect(fila.mensaje).toContain('primero acepte este aviso en la plataforma');
     expect(tabla('efecto', 'correo')[0].args[0]).toMatchObject({ mensaje: fila.mensaje });
     // §11.7.3: los links de garantía y primer canon creados EN FIRMA se anulan.
     expect(tabla('efecto', 'cancelar-pagos')[0].args).toEqual(['e1', expect.any(String), ['garantia', 'primer_canon']]);

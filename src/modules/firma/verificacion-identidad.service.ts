@@ -53,11 +53,14 @@ const db = (table: string) => supabase.from(table as string) as ReturnType<typeo
  * palabra, cambia la version: cada fila guarda la version y el texto que vio.
  */
 export const CONSENTIMIENTO_FIRMA = {
-  version: 'adenda2-9.2-v1',
+  // v2 (2026-09-29): mismo contenido del literal de la Adenda 2 §9.2, en usted
+  // (decisión del usuario: toda la plataforma trata de usted). v1 queda en las
+  // filas que ya la guardaron.
+  version: 'adenda2-9.2-v2',
   parrafos: [
-    'Para confirmar que eres tú quien está firmando este contrato, necesitamos comparar una fotografía tuya con la de tu documento de identidad. Esta comparación se hace de forma automática y solo para verificar tu identidad.',
-    'Tu fotografía es un dato biométrico, que la ley clasifica como dato sensible. Por eso te informamos que no estás obligado a autorizar su tratamiento. Si prefieres no hacerlo, puedes continuar y un analista verificará tu identidad por otro medio, sin que eso afecte tu trámite.',
-    'Si autorizas, COFIANZA S.A.S., NIT 902.038.122, tratará tu fotografía únicamente para verificar tu identidad en este proceso. No se comparte con la inmobiliaria ni con terceros, y se conserva por el tiempo necesario para el trámite y su respaldo probatorio. Puedes consultar, actualizar o solicitar la supresión de tus datos escribiendo a nuestro canal de atención.',
+    'Para confirmar que es usted quien está firmando este contrato, necesitamos comparar una fotografía suya con la de su documento de identidad. Esta comparación se hace de forma automática y solo para verificar su identidad.',
+    'Su fotografía es un dato biométrico, que la ley clasifica como dato sensible. Por eso le informamos que no está obligado a autorizar su tratamiento. Si prefiere no hacerlo, puede continuar y un analista verificará su identidad por otro medio, sin que eso afecte su trámite.',
+    'Si autoriza, COFIANZA S.A.S., NIT 902.038.122, tratará su fotografía únicamente para verificar su identidad en este proceso. No se comparte con la inmobiliaria ni con terceros, y se conserva por el tiempo necesario para el trámite y su respaldo probatorio. Puede consultar, actualizar o solicitar la supresión de sus datos escribiendo a nuestro canal de atención.',
   ],
   opciones: {
     autoriza: 'Autorizo la verificación de mi identidad mediante comparación facial.',
