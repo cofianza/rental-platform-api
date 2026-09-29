@@ -1,0 +1,24 @@
+-- ============================================================
+-- Quita la política inmuebles_select_vitrina (hallazgo A1 de
+-- revisiones/revision-general-2026-09-28.md).
+--
+-- APLICADA EN PRODUCCIÓN el 2026-09-28 por el usuario en el SQL Editor y
+-- verificada (count = 0 en pg_policies).
+--
+-- Por qué: `FOR SELECT TO authenticated USING (visible_vitrina = true)` filtra
+-- filas, no columnas. Cualquier cuenta con sesión (el registro es abierto)
+-- podía pedir a PostgREST las columnas internas de los inmuebles publicados
+-- (notas internas, matrícula, coordenadas, valor, propietario_id). Nadie la
+-- usa: la vitrina y el panel leen inmuebles por la API (service_role).
+--
+-- Idempotente. La 015 ya no la crea, así que en staging esto no hace nada.
+--
+-- Verificación (debe dar 0):
+--   SELECT count(*) FROM pg_policies
+--   WHERE schemaname = 'public' AND tablename = 'inmuebles' AND policyname = 'inmuebles_select_vitrina';
+--
+-- Rollback (solo si algo de la vitrina falla por esto):
+--   CREATE POLICY inmuebles_select_vitrina ON public.inmuebles
+--     AS PERMISSIVE FOR SELECT TO authenticated USING (visible_vitrina = true);
+-- ============================================================
+DROP POLICY IF EXISTS inmuebles_select_vitrina ON public.inmuebles;
