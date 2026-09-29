@@ -99,38 +99,21 @@ describe('assertCanonDentroDelTope — tope por destinacion', () => {
 });
 
 // ============================================================
-// Adenda 1 contratos §2.4: al bloquear la evaluación (habilitar o pagar) por el
-// tope, el caso se escala a la Gerencia General, una vez por estudio.
+// Adenda de precios v1.0 §7.1 (prevalece sobre el Flujo §4.4): el canon sobre
+// el tope ya no detiene el estudio ni el cobro; pasa al analista. El
+// escalamiento a la Gerencia sale al decidir (excepcion-tope.service.ts).
 // ============================================================
 
-describe('assertCanonDentroDelTope — escalamiento a la Gerencia General', () => {
-  it('con estudio: escala y el mensaje dice que se envió', async () => {
+describe('assertCanonDentroDelTope — Adenda de precios §7.1', () => {
+  it('canon sobre el tope: no bloquea el cobro ni escala, y devuelve el canon', async () => {
     mockEscalar.mockClear();
     fila.current = { valor_arriendo: 3_500_000, uso: 'vivienda' };
-    const e = await assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'habilitarEstudio' }).catch((x: unknown) => x);
-    expect(e).toMatchObject({ errorCode: 'CANON_EXCEDE_TOPE' });
-    expect((e as Error).message).toContain('El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento');
-    expect((e as Error).message).toMatch(/no se genero ningun cobro/i);
-    expect(mockEscalar).toHaveBeenCalledWith('exp-1', 3_500_000, 3_000_000, 'estudio');
-  });
-
-  it('si no quedó registrado, el mensaje de siempre', async () => {
-    mockEscalar.mockClear().mockResolvedValueOnce(false);
-    fila.current = { valor_arriendo: 3_500_000, uso: 'vivienda' };
-    const e = await assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'pagarGestor' }).catch((x: unknown) => x);
-    expect((e as Error).message).toContain('escribirnos para revisar el caso');
-    expect((e as Error).message).not.toContain('se envió');
-  });
-
-  it('sin estudio todavía, o ya cobrado (solo advierte), no escala', async () => {
-    mockEscalar.mockClear();
-    fila.current = { valor_arriendo: 3_500_000, uso: 'vivienda' };
-    await expect(assertCanonDentroDelTope({ inmuebleId: 'inm-1', origen: 'createExpediente' })).rejects.toMatchObject({
-      errorCode: 'CANON_EXCEDE_TOPE',
+    for (const origen of ['habilitarEstudio', 'pagarGestor', 'liberarEstudioConCredito']) {
+      await expect(assertCanonDentroDelTope({ expedienteId: 'exp-1', origen })).resolves.toEqual({ canonCop: 3_500_000 });
+    }
+    await expect(assertCanonDentroDelTope({ inmuebleId: 'inm-1', origen: 'createExpediente' })).resolves.toEqual({
+      canonCop: 3_500_000,
     });
-    await expect(
-      assertCanonDentroDelTope({ expedienteId: 'exp-1', origen: 'solicitarReEvaluacion', soloAdvertir: true }),
-    ).resolves.toEqual({ canonCop: 3_500_000 });
     expect(mockEscalar).not.toHaveBeenCalled();
   });
 });

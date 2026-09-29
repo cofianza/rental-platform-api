@@ -19,6 +19,7 @@ import { mergePdfs, PdfInvalidoError, validarPdfPropio, type MotivoPdfInvalido }
 import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
+import { calConExcepcion } from '@/modules/estudios/excepcion-tope.service';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { assertExpedienteAccess, resolveMembershipInmobiliariaIds, resolveRolMiembro } from '@/lib/tenantScope';
@@ -186,6 +187,8 @@ interface FilaExpediente {
   estado: string;
   duracion_contrato_meses: number | null;
   fecha_inicio_contrato: string | null;
+  /** Adenda de precios §7.4: techo autorizado por la Gerencia General. */
+  excepcion_tope_canon_cop: number | string | null;
   inmuebles: (Omit<Fuentes['inmueble'], 'valorArriendoCop' | 'inmobiliaria_id' | 'administracionCop'> & {
     inmobiliaria_id: string | null;
     valor_arriendo: number | string;
@@ -209,7 +212,7 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
   const exp = dato<FilaExpediente | null>(
     await db('expedientes')
       .select(
-        `id, numero, estado, duracion_contrato_meses, fecha_inicio_contrato,
+        `id, numero, estado, duracion_contrato_meses, fecha_inicio_contrato, excepcion_tope_canon_cop,
         inmuebles!expedientes_inmueble_id_fkey(
           id, codigo, direccion, ciudad, uso, estado, reservado_por_expediente_id,
           inmobiliaria_id, valor_arriendo, propiedad_horizontal, parqueadero, cuarto_util,
@@ -395,7 +398,8 @@ export async function cargarFuentes(expedienteId: string): Promise<Cargadas | nu
     arrendadoPorOtro,
   };
   const catalogo = dato<FilaCatalogoAdicional[] | null>(catalogoR, expedienteId, 'cláusulas adicionales') ?? [];
-  return { f, cal, catalogo };
+  // Adenda de precios §7.4: con excepción, el tope del contrato es el canon autorizado.
+  return { f, cal: calConExcepcion(cal, exp.excepcion_tope_canon_cop), catalogo };
 }
 
 // ── Estado (GET y respuesta de toda acción) ──
