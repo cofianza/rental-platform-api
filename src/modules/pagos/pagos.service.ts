@@ -244,9 +244,9 @@ export async function getPrimaSugerida(expedienteId: string, userId?: string, us
   // Con la prima negociada por Gerencia el coarrendatario ya no cambia la cifra.
   const coaConfirmado = t.override?.prima_vinculacion_pct != null || coa === t.con_coarrendatario;
   const sinSugerencia = !coaConfirmado
-    ? 'No se pudo confirmar si el estudio tiene coarrendatario, y con él la prima baja del 20 % al 10 %: escribe el monto a mano.'
+    ? 'No se pudo confirmar si el estudio tiene coarrendatario, y con él la prima baja del 20 % al 10 %: escriba el monto a mano.'
     : t.prima_vinculacion_con_iva_cop === null
-      ? 'No hay canon ni en el contrato ni en el estudio: escribe el monto a mano.'
+      ? 'No hay canon ni en el contrato ni en el estudio: escriba el monto a mano.'
       : null;
   return {
     canon: canonContrato ? ('contrato' as const) : ('estudio' as const),
@@ -670,7 +670,7 @@ async function assertFianzaOperando(expedienteId: string, concepto: string): Pro
   if (sinFirma) {
     throw AppError.conflict(
       sinFirma.estado === 'firma_incompleta'
-        ? 'La firma del contrato está incompleta: la fianza no está operando. Reenvíalo a firma antes de cobrar la prima de vinculación o el primer canon.'
+        ? 'La firma del contrato está incompleta: la fianza no está operando. Reenvíelo a firma antes de cobrar la prima de vinculación o el primer canon.'
         : 'El contrato todavía no está firmado por todas las partes: la prima de vinculación y el primer canon se cobran cuando firmen todos.',
       'FIANZA_NO_OPERANDO',
     );
@@ -864,13 +864,13 @@ export async function registerManualPayment(
   const estadosVivos = ((vivos as Array<{ estado: string }> | null) ?? []).map((p) => p.estado);
   if (estadosVivos.includes('procesando')) {
     throw AppError.conflict(
-      'Hay un pago por PSE o en efectivo en proceso para este concepto. Espera a que se confirme o venza antes de registrar el pago manual.',
+      'Hay un pago por PSE o en efectivo en proceso para este concepto. Espere a que se confirme o venza antes de registrar el pago manual.',
       'PAGO_EN_PROCESO',
     );
   }
   if (estadosVivos.length > 0) {
     throw AppError.conflict(
-      'Hay un enlace de pago vivo para este concepto. Cancélalo en la lista de pagos antes de registrar el pago manual.',
+      'Hay un enlace de pago vivo para este concepto. Cancélelo en la lista de pagos antes de registrar el pago manual.',
       'PAGO_DUPLICADO',
     );
   }
@@ -1704,8 +1704,8 @@ async function avisarContracargoGanado(paymentId: string, externalReference: str
     mensaje:
       `Mercado Pago le devolvió a Cofianza el pago ${paymentId}${typeof monto === 'number' ? ` (${formatCOP(monto)})` : ''}, que se había contracargado. ` +
       (esCompra
-        ? 'Revisa la compra de créditos: si quedó revertida, restitúyela a mano (créditos retirados y saldo en contra).'
-        : 'Revisa el cobro: si quedó reembolsado, restitúyelo a mano.') +
+        ? 'Revise la compra de créditos: si quedó revertida, restitúyala a mano (créditos retirados y saldo en contra).'
+        : 'Revise el cobro: si quedó reembolsado, restitúyalo a mano.') +
       ` Referencia: ${externalReference || 'sin referencia'}.`,
     link: !esCompra && refId ? `/expedientes/${refId}` : undefined,
     payload: { provider_payment_id: paymentId, external_reference: externalReference || null },
@@ -1749,8 +1749,8 @@ async function avisarPagoNoConciliado(args: {
     contracargo_ganado: 'Contracargo ganado: restituir a mano',
   };
   const accion = MOTIVOS_SIN_REEMBOLSO.includes(args.motivo) || !enMp
-    ? 'Resuélvelo a mano y márcalo resuelto en Pagos a Cofianza › Reembolsos.'
-    : 'Reembólsalo con «Reembolsar en Mercado Pago» en Pagos a Cofianza › Reembolsos, o márcalo resuelto con una nota.';
+    ? 'Resuélvalo a mano y márquelo resuelto en Pagos a Cofianza › Reembolsos.'
+    : 'Reembólselo con «Reembolsar en Mercado Pago» en Pagos a Cofianza › Reembolsos, o márquelo resuelto con una nota.';
   const mensaje =
     `${enMp ? `Pago de ${monto} en Mercado Pago (${ESTADO_MP[args.estado] ?? args.estado})` : `Pago de ${monto}`}: ${porque}. ` +
     (enMp ? `ID del pago en Mercado Pago: ${args.paymentId}; referencia: ${args.externalReference || 'sin referencia'}. ` : '') +
@@ -1804,7 +1804,7 @@ async function contracargoDeCompra(compraId: string, paymentId: string, estadoMp
       `Se retiraron ${r.retirados} créditos sin usar.`,
       r.en_contra > 0
         ? r.en_contra_error
-          ? `${r.en_contra} ya usados NO quedaron como saldo en contra (${r.en_contra_error}): descuéntalos a mano.`
+          ? `${r.en_contra} ya usados NO quedaron como saldo en contra (${r.en_contra_error}): descuéntelos a mano.`
           : `${r.en_contra} ya usados quedan como saldo en contra: se restan del saldo para pagar con créditos y la próxima compra los descuenta.`
         : null,
       r.consumos.length > 0 ? `Se usaron en los estudios ${r.consumos.join(', ')}: es el registro para disputarlo en Mercado Pago.` : null,
@@ -1822,7 +1822,7 @@ async function contracargoDeCompra(compraId: string, paymentId: string, estadoMp
     await avisarAdministradores({
       tipo: 'creditos.contracargo',
       titulo: 'Revisar un contracargo de créditos',
-      mensaje: `Mercado Pago reportó ${que} de la compra de créditos ${compraId} (pago ${paymentId}) y no se pudo terminar de revertir la compra: ${msg}. Revisa a mano sus créditos y su estado.`,
+      mensaje: `Mercado Pago reportó ${que} de la compra de créditos ${compraId} (pago ${paymentId}) y no se pudo terminar de revertir la compra: ${msg}. Revise a mano sus créditos y su estado.`,
       payload: { compra_id: compraId, provider_payment_id: paymentId },
     }).catch((e) => logger.warn({ e, compraId }, 'No se pudo avisar del contracargo'));
   }

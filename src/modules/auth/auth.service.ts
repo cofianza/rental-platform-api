@@ -33,7 +33,7 @@ export async function loginWithEmail({ email, password }: LoginInput, ip?: strin
     const msg = (error.message || '').toLowerCase();
     if (msg.includes('not confirmed') || msg.includes('not_confirmed')) {
       throw AppError.unauthorized(
-        'Aún no has verificado tu correo. Revisa tu bandeja de entrada (y la carpeta de spam).',
+        'Aún no ha verificado su correo. Revise su bandeja de entrada (y la carpeta de spam).',
         'EMAIL_NOT_CONFIRMED',
       );
     }
@@ -349,7 +349,7 @@ export async function updateMyProfile(userId: string, input: UpdateMyProfileInpu
           .in('estado', ['en_proceso', 'completado']);
         if ((estCount ?? 0) > 0) {
           throw AppError.badRequest(
-            'No puedes cambiar tu documento porque ya tienes un estudio crediticio en curso o completado. Contacta soporte si necesitas corregirlo.',
+            'No puede cambiar su documento porque ya tiene un estudio crediticio en curso o completado. Contacte a soporte si necesita corregirlo.',
             'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
           );
         }
@@ -362,7 +362,7 @@ export async function updateMyProfile(userId: string, input: UpdateMyProfileInpu
       const tipoDoc = wantsTipoDoc ?? sol?.tipo_documento ?? 'cc';
       if (await existeOtraCuentaConDocumento(tipoDoc, numDoc, { creado_por: userId })) {
         throw AppError.conflict(
-          'Ya existe otra cuenta de solicitante con este documento. Si es tuya, inicia sesión con esa cuenta.',
+          'Ya existe otra cuenta de solicitante con este documento. Si es suya, inicie sesión con esa cuenta.',
           'DOCUMENT_ALREADY_EXISTS',
         );
       }

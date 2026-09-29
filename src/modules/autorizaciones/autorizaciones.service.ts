@@ -344,7 +344,7 @@ export async function enviarEnlaceAutorizacion(
     );
     if (!esDueno) {
       throw AppError.forbidden(
-        'No tienes permisos para enviar la autorización de este estudio',
+        'No tiene permisos para enviar la autorización de este estudio',
         'AUTORIZACION_FORBIDDEN',
       );
     }
@@ -419,7 +419,7 @@ export async function enviarEnlaceAutorizacion(
     if (docError) {
       logger.warn({ error: docError.message, expedienteId }, 'No se pudo corregir el documento del solicitante');
       throw AppError.badRequest(
-        'No se pudo corregir el documento del solicitante. Revísalo en su ficha y vuelve a intentarlo.',
+        'No se pudo corregir el documento del solicitante. Revíselo en su ficha y vuelva a intentarlo.',
         'DOCUMENTO_NO_ACTUALIZADO',
       );
     }
@@ -436,7 +436,7 @@ export async function enviarEnlaceAutorizacion(
   // incorrectos" apenas el prospecto lo abriera: mejor no emitirlo.
   if (!exp.solicitantes?.numero_documento?.trim()) {
     throw AppError.badRequest(
-      'Falta el número de documento del prospecto. Agrégalo (o pídele que lo complete en «Mi cuenta») antes de enviarle la solicitud de autorización.',
+      'Falta el número de documento del prospecto. Agréguelo (o pídale que lo complete en «Mi cuenta») antes de enviarle la solicitud de autorización.',
       'SOLICITANTE_SIN_DOCUMENTO',
     );
   }
@@ -1122,11 +1122,11 @@ export async function verificarBiometriaProspecto(
 function mensajeProspectoBiometria(estado: ResumenBiometria['estado']): string {
   switch (estado) {
     case 'no_coincide':
-      return 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puedes intentarlo de nuevo con mejor luz, o continuar: alguien de nuestro equipo revisará tu caso.';
+      return 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puede intentarlo de nuevo con mejor luz, o continuar: alguien de nuestro equipo revisará su caso.';
     case 'omitida':
-      return 'Continuamos sin la verificación con foto. Tu estudio sigue: lo revisará una persona de nuestro equipo.';
+      return 'Continuamos sin la verificación con foto. Su estudio sigue: lo revisará una persona de nuestro equipo.';
     default:
-      return 'No pudimos completar la verificación en este momento. Puedes continuar: alguien de nuestro equipo revisará tu caso.';
+      return 'No pudimos completar la verificación en este momento. Puede continuar: alguien de nuestro equipo revisará su caso.';
   }
 }
 
@@ -1348,7 +1348,7 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
   const mensaje =
     `En el estudio ${exp?.numero ? formatNumeroEstudio(exp.numero) : expedienteId}, ${motivoLabel}. ` +
     'Detuvimos el enlace de autorización y no se consultará ninguna central de riesgo. ' +
-    'Revisa los datos del solicitante y, si corresponde, envía un enlace nuevo.' +
+    'Revise los datos del solicitante y, si corresponde, envíe un enlace nuevo.' +
     (input.detalle ? ' Quien reportó dejó una nota: la ve el equipo de Cofianza en el estudio.' : '');
   const link = `/expedientes/${expedienteId}`;
   const payload = { expediente_id: expedienteId, motivo: input.motivo };
@@ -1988,7 +1988,7 @@ export async function enviarOtpCode(token: string) {
       .eq('id', otpId);
     logger.error({ autorizacionId: auth.id }, 'OTP no entregado por ningún canal (email y WhatsApp fallaron)');
     throw AppError.badRequest(
-      'No pudimos enviarte el código en este momento. Intenta de nuevo en unos segundos.',
+      'No pudimos enviarle el código en este momento. Intente de nuevo en unos segundos.',
       'OTP_DELIVERY_FAILED',
     );
   }

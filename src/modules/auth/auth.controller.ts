@@ -44,7 +44,7 @@ export async function updateMyProfile(req: Request, res: Response) {
 export async function forgotPassword(req: Request, res: Response) {
   await authService.forgotPassword(req.body as ForgotPasswordInput, req.ip);
   sendSuccess(res, {
-    message: 'Si el email existe en nuestro sistema, recibiras un enlace de recuperacion',
+    message: 'Si el email existe en nuestro sistema, recibirá un enlace de recuperacion',
   });
 }
 

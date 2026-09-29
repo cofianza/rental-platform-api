@@ -321,7 +321,7 @@ export async function getEstadoPagoEstudio(expedienteId: string, userId?: string
 /** 409 para no cancelar un pago que ya salio (PSE o recibo de efectivo en curso). */
 function errorPagoEnProceso(despues: string): AppError {
   return AppError.conflict(
-    `Ya se inició un pago por PSE o en efectivo. Espera a que se confirme o venza; si vence, podrás ${despues}.`,
+    `Ya se inició un pago por PSE o en efectivo. Espere a que se confirme o venza; si vence, podrá ${despues}.`,
     'PAGO_EN_PROCESO',
   );
 }
@@ -592,7 +592,7 @@ export async function pagarGestor(
   const perfil = perfilRow as { nombre?: string | null; apellido?: string | null; razon_social?: string | null } | null;
   const nombre = perfil?.razon_social?.trim() || `${perfil?.nombre ?? ''} ${perfil?.apellido ?? ''}`.trim();
   if (!email || !nombre) {
-    throw AppError.badRequest('Tu cuenta no tiene correo o nombre para emitir el cobro.', 'GESTOR_SIN_CONTACTO');
+    throw AppError.badRequest('Su cuenta no tiene correo o nombre para emitir el cobro.', 'GESTOR_SIN_CONTACTO');
   }
 
   const existing = await findPagoEstudio(expedienteId);
@@ -609,10 +609,10 @@ export async function pagarGestor(
     // Expirar la preference no detiene ese pago: si se aprueba despues, cae
     // sobre un pago cancelado (pagos_no_conciliados) y el estudio se cobra dos
     // veces. Se espera a que se confirme o venza (el webhook lo cancela).
-    if (existing.estado === 'procesando') throw errorPagoEnProceso('pagarlo tú');
+    if (existing.estado === 'procesando') throw errorPagoEnProceso('pagarlo usted');
     if (!opts.reemplazarPendiente) {
       throw AppError.conflict(
-        'Hay un enlace de pago vivo del prospecto. Cancélalo y paga tú desde el estudio.',
+        'Hay un enlace de pago vivo del prospecto. Cancélelo y pague usted desde el estudio.',
         'PAGO_ESTUDIO_PENDIENTE',
       );
     }
@@ -781,7 +781,7 @@ export async function enviarLinkPago(
       userId: solicitanteUserId,
       tipo: 'pago.disponible',
       titulo: 'Pago de la evaluación disponible',
-      mensaje: `Ya autorizaste el tratamiento de datos. Paga la evaluación crediticia (${montoProspecto(monto, tarifaIva)}) y ejecutamos la consulta en centrales automáticamente.`,
+      mensaje: `Ya autorizó el tratamiento de datos. Pague la evaluación crediticia (${montoProspecto(monto, tarifaIva)}) y ejecutamos la consulta en centrales automáticamente.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, pago_id: pago.id },
     });
@@ -812,7 +812,7 @@ export async function reenviarLink(
     );
     if (!esDueno) {
       throw AppError.forbidden(
-        'No tienes permisos para reenviar el link de pago de este estudio',
+        'No tiene permisos para reenviar el link de pago de este estudio',
         'PAGO_ESTUDIO_FORBIDDEN',
       );
     }
@@ -830,7 +830,7 @@ export async function reenviarLink(
   // (WhatsApp al telefono del solicitante) el cobro de la inmobiliaria.
   if ((await quienPaga(pago)) === 'gestor') {
     throw AppError.badRequest(
-      'Este cobro lo paga la inmobiliaria, no el arrendatario: ábrelo desde el estudio para pagarlo.',
+      'Este cobro lo paga la inmobiliaria, no el arrendatario: ábralo desde el estudio para pagarlo.',
       'PAGO_ES_DEL_GESTOR',
     );
   }
@@ -948,7 +948,7 @@ export async function cancelarYLiberarCredito(expedienteId: string, userId: stri
   const saldo = await getSaldoCreditos(userId);
   if (saldo.saldo_total < 1) {
     throw AppError.conflict(
-      'No tienes créditos disponibles. Compra un paquete o deja que el arrendatario pague el link actual.',
+      'No tiene créditos disponibles. Compre un paquete o deje que el arrendatario pague el link actual.',
       'SIN_CREDITOS',
     );
   }

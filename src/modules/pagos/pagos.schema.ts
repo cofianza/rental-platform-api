@@ -25,7 +25,7 @@ export const reembolsoIdParamsSchema = z.object({
 });
 
 export const resolverReembolsoSchema = z.object({
-  nota: z.string().trim().min(3, 'Escribe qué se hizo con el pago').max(500, 'Nota muy larga'),
+  nota: z.string().trim().min(3, 'Escriba qué se hizo con el pago').max(500, 'Nota muy larga'),
 });
 
 // ============================================================

@@ -41,7 +41,7 @@ export async function sendPasswordResetEmail(to: string, resetUrl: string): Prom
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Recupera tu contraseña - Cofianza',
+      subject: 'Recupere su contraseña - Cofianza',
       html: buildPasswordResetHtml(resetUrl),
     });
 
@@ -107,7 +107,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
                 Bienvenido, ${escapeHtml(nombre)}
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Se ha creado tu cuenta en Cofianza. A continuación encontrarás tus credenciales de acceso:
+                Se ha creado su cuenta en Cofianza. A continuación encontrará sus credenciales de acceso:
               </p>
 
               <!-- Credentials box -->
@@ -140,7 +140,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
               </table>
 
               <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #ef4444; font-weight: 500;">
-                Por seguridad, te recomendamos cambiar tu contraseña después de iniciar sesión por primera vez.
+                Por seguridad, le recomendamos cambiar su contraseña después de iniciar sesión por primera vez.
               </p>
             </td>
           </tr>
@@ -152,7 +152,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
                 © ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automático, por favor no respondas a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -226,7 +226,7 @@ export async function sendVerificationEmail(to: string, nombre: string, verifyUr
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Verifica tu correo - Cofianza',
+      subject: 'Verifique su correo - Cofianza',
       html: buildVerificationHtml(nombre, verifyUrl),
     });
 
@@ -244,7 +244,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Verifica tu correo</title>
+  <title>Verifique su correo</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
@@ -271,10 +271,10 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
           <tr>
             <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
-                Verifica tu correo electronico
+                Verifique su correo electronico
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, gracias por registrarte en Cofianza. Para completar tu registro, verifica tu correo electronico haciendo clic en el siguiente boton:
+                Hola ${escapeHtml(nombre)}, gracias por registrarse en Cofianza. Para completar su registro, verifique su correo electronico haciendo clic en el siguiente boton:
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -295,13 +295,13 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expira en <strong>24 horas</strong>. Al verificar tu correo, tu cuenta queda activa y ya puedes iniciar sesión.
+                Este enlace expira en <strong>24 horas</strong>. Al verificar su correo, su cuenta queda activa y ya puede iniciar sesión.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el boton no funciona, copia y pega este enlace en tu navegador:
+                Si el boton no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${verifyUrl}
@@ -316,7 +316,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no respondas a este mensaje.
+                Este es un correo automatico, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -338,7 +338,7 @@ export async function sendEstudioFormEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Completa tu evaluación crediticia - Cofianza',
+      subject: 'Complete su evaluación crediticia - Cofianza',
       html: buildEstudioFormHtml(nombre, formUrl, expiryHours, await soporte()),
     });
 
@@ -386,7 +386,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                 Evaluación crediticia
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, como parte del proceso de arrendamiento necesitamos que completes un formulario con tu informacion personal para realizar la evaluación crediticia.
+                Hola ${escapeHtml(nombre)}, como parte del proceso de arrendamiento necesitamos que complete un formulario con su informacion personal para realizar la evaluación crediticia.
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -407,13 +407,13 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirara en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
+                Este enlace expirara en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesita un nuevo enlace, escríbanos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el boton no funciona, copia y pega este enlace en tu navegador:
+                Si el boton no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${formUrl}
@@ -428,7 +428,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no respondas a este mensaje.
+                Este es un correo automatico, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -460,7 +460,7 @@ export async function sendInteresadoConfirmacionEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: 'Recibimos tu interés — Cofianza',
+      subject: 'Recibimos su interés — Cofianza',
       html: buildInteresadoConfirmacionHtml(params),
     });
     logger.info({ to }, 'Email de confirmación al interesado enviado');
@@ -476,7 +476,7 @@ function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): strin
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Recibimos tu interés</title>
+  <title>Recibimos su interés</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
@@ -503,19 +503,19 @@ function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): strin
           <tr>
             <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
-                Recibimos tu interés
+                Recibimos su interés
               </h1>
               <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola, gracias por tu interés en <strong>${escapeHtml(p.inmuebleLabel)}</strong>.
+                Hola, gracias por su interés en <strong>${escapeHtml(p.inmuebleLabel)}</strong>.
               </p>
               <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                El anunciante (propietario o inmobiliaria) te contactará pronto por WhatsApp o correo
-                para coordinar una visita; la dirección exacta te llega cuando la visita quede
-                confirmada. Por ahora no necesitas hacer nada más.
+                El anunciante (propietario o inmobiliaria) le contactará pronto por WhatsApp o correo
+                para coordinar una visita; la dirección exacta le llega cuando la visita quede
+                confirmada. Por ahora no necesita hacer nada más.
               </p>
               <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #6b7280;">
-                Si el inmueble te convence tras la visita, podrás continuar con Cofianza como tu fiador
-                — solo en ese momento te pediremos los datos para el estudio.
+                Si el inmueble le convence tras la visita, podrá continuar con Cofianza como su fiador
+                — solo en ese momento le pediremos los datos para el estudio.
               </p>
             </td>
           </tr>
@@ -527,7 +527,7 @@ function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): strin
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no respondas a este mensaje.
+                Este es un correo automatico, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -562,7 +562,7 @@ export async function sendNuevoInteresadoEmail(
     await resend.emails.send({
       from: FROM_EMAIL,
       to,
-      subject: `Nuevo interesado en tu inmueble — ${params.inmuebleLabel}`,
+      subject: `Nuevo interesado en su inmueble — ${params.inmuebleLabel}`,
       html: buildNuevoInteresadoHtml(params),
     });
     logger.info({ to }, 'Email de nuevo interesado enviado al dueño');
@@ -605,10 +605,10 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
           <tr>
             <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
-                Tienes un nuevo interesado
+                Tiene un nuevo interesado
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(p.duenoNombre)}, una persona mostró interés en tu inmueble
+                Hola ${escapeHtml(p.duenoNombre)}, una persona mostró interés en su inmueble
                 <strong>${escapeHtml(p.inmuebleLabel)}</strong> desde la vitrina de Cofianza. Estos son sus datos de contacto:
               </p>
 
@@ -645,7 +645,7 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
               </table>
 
               <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Escríbele por WhatsApp o correo para coordinar la visita. Cuando avancen, podrás iniciar el estudio con Cofianza como fiador.
+                Escríbale por WhatsApp o correo para coordinar la visita. Cuando avancen, podrá iniciar el estudio con Cofianza como fiador.
               </p>
             </td>
           </tr>
@@ -657,7 +657,7 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no respondas a este mensaje.
+                Este es un correo automatico, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -774,11 +774,11 @@ function buildAutorizacionHtml(
                 <strong>${escapeHtml(solicitud.quienSolicita)}</strong> inició un estudio para el arriendo del inmueble ubicado en <strong>${escapeHtml(solicitud.direccion)}</strong>. Cofianza S.A.S. es la empresa fiadora del arriendo.
               </p>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Como parte del proceso de arrendamiento necesitamos tu autorización para consultar tu información en centrales de riesgo crediticio (Ley 1581/2012 y Ley 1266/2008).
+                Como parte del proceso de arrendamiento necesitamos su autorización para consultar su información en centrales de riesgo crediticio (Ley 1581/2012 y Ley 1266/2008).
               </p>
 
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Haz clic en el siguiente botón para revisar y firmar la autorización:
+                Haga clic en el siguiente botón para revisar y firmar la autorización:
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -799,13 +799,13 @@ function buildAutorizacionHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
+                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesita un nuevo enlace, escríbanos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el botón no funciona, copia y pega este enlace en tu navegador:
+                Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">
                 ${autorizacionUrl}
@@ -820,7 +820,7 @@ function buildAutorizacionHtml(
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automático, por favor no respondas a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -869,7 +869,7 @@ function buildOtpHtml(nombre: string, codigo: string): string {
                 Código de verificación
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, tu código de verificación para el proceso de firma electrónica es:
+                Hola ${escapeHtml(nombre)}, su código de verificación para el proceso de firma electrónica es:
               </p>
 
               <!-- Code box -->
@@ -884,11 +884,11 @@ function buildOtpHtml(nombre: string, codigo: string): string {
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #ef4444; font-weight: 500;">
-                Este código expira en 10 minutos. No compartas este código con nadie.
+                Este código expira en 10 minutos. No comparta este código con nadie.
               </p>
 
               <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Si no solicitaste este código, puedes ignorar este mensaje.
+                Si no solicitó este código, puede ignorar este mensaje.
               </p>
             </td>
           </tr>
@@ -900,7 +900,7 @@ function buildOtpHtml(nombre: string, codigo: string): string {
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automático, por favor no respondas a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -987,7 +987,7 @@ function buildFirmaHtml(
                 Firma de contrato de arrendamiento
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, ${copy?.intro ?? 'tienes un contrato de arrendamiento pendiente de firma. Haz clic en el siguiente botón para revisar y firmar el documento.'}
+                Hola ${escapeHtml(nombre)}, ${copy?.intro ?? 'tiene un contrato de arrendamiento pendiente de firma. Haga clic en el siguiente botón para revisar y firmar el documento.'}
               </p>
 
               <!-- Contract info -->
@@ -1022,13 +1022,13 @@ function buildFirmaHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesitas un nuevo enlace, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
+                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesita un nuevo enlace, escríbanos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el botón no funciona, copia y pega este enlace en tu navegador:
+                Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${firmaUrl}
@@ -1043,7 +1043,7 @@ function buildFirmaHtml(
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automático, por favor no respondas a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -1118,7 +1118,7 @@ function buildPaymentLinkHtml(
                 Link de pago
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, tienes un pago pendiente asociado a tu proceso de arrendamiento. A continuacion encontraras los detalles:
+                Hola ${escapeHtml(nombre)}, tiene un pago pendiente asociado a su proceso de arrendamiento. A continuacion encontrará los detalles:
               </p>
 
               <!-- Payment details box -->
@@ -1153,13 +1153,13 @@ function buildPaymentLinkHtml(
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Si tienes cualquier problema con el pago, escríbenos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
+                Si tiene cualquier problema con el pago, escríbanos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el boton no funciona, copia y pega este enlace en tu navegador:
+                Si el boton no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${paymentUrl}
@@ -1174,7 +1174,7 @@ function buildPaymentLinkHtml(
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no respondas a este mensaje.
+                Este es un correo automatico, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -1220,10 +1220,10 @@ function buildPasswordResetHtml(resetUrl: string): string {
           <tr>
             <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
-                Recupera tu contraseña
+                Recupere su contraseña
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Recibimos una solicitud para restablecer la contraseña de tu cuenta. Haz clic en el siguiente botón para crear una nueva contraseña:
+                Recibimos una solicitud para restablecer la contraseña de su cuenta. Haga clic en el siguiente botón para crear una nueva contraseña:
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -1244,13 +1244,13 @@ function buildPasswordResetHtml(resetUrl: string): string {
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirará en <strong>1 hora</strong>. Si no solicitaste un cambio de contraseña, puedes ignorar este correo de forma segura.
+                Este enlace expirará en <strong>1 hora</strong>. Si no solicitó un cambio de contraseña, puede ignorar este correo de forma segura.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el botón no funciona, copia y pega este enlace en tu navegador:
+                Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${resetUrl}
@@ -1265,7 +1265,7 @@ function buildPasswordResetHtml(resetUrl: string): string {
                 © ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automático, por favor no respondas a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>

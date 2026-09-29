@@ -125,7 +125,7 @@ describe('webhook de Mercado Pago: contracargo de una compra de créditos', () =
     await processWebhookEvent(Buffer.from('{}'), {});
 
     expect(mockNotificarYCorreo).toHaveBeenCalledWith(
-      expect.objectContaining({ mensaje: expect.stringContaining('3 ya usados NO quedaron como saldo en contra (timeout): descuéntalos a mano') }),
+      expect.objectContaining({ mensaje: expect.stringContaining('3 ya usados NO quedaron como saldo en contra (timeout): descuéntelos a mano') }),
     );
   });
 
@@ -188,7 +188,7 @@ describe('webhook de Mercado Pago: contracargo de una compra de créditos', () =
 
     expect(mockRevertirCompra).not.toHaveBeenCalled();
     expect(mockNotificarYCorreo).toHaveBeenCalledWith(
-      expect.objectContaining({ tipo: 'pago.contracargo_ganado', mensaje: expect.stringContaining('restitúyela a mano') }),
+      expect.objectContaining({ tipo: 'pago.contracargo_ganado', mensaje: expect.stringContaining('restitúyala a mano') }),
     );
   });
 
@@ -221,7 +221,7 @@ describe('webhook de Mercado Pago: contracargo de una compra de créditos', () =
 
     await expect(processWebhookEvent(Buffer.from('{}'), {})).resolves.toEqual({ received: true });
     expect(mockNotificarYCorreo).toHaveBeenCalledWith(
-      expect.objectContaining({ tipo: 'creditos.contracargo', mensaje: expect.stringContaining('Revisa a mano') }),
+      expect.objectContaining({ tipo: 'creditos.contracargo', mensaje: expect.stringContaining('Revise a mano') }),
     );
   });
 });
