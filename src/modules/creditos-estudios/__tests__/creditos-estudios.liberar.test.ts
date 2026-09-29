@@ -7,9 +7,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Request, Response } from 'express';
 
-const { mockAssert, mockLiberar } = vi.hoisted(() => ({ mockAssert: vi.fn(), mockLiberar: vi.fn() }));
+const { mockAssert, mockLiberar, mockDueno } = vi.hoisted(() => ({
+  mockAssert: vi.fn(),
+  mockLiberar: vi.fn(),
+  mockDueno: vi.fn(),
+}));
 vi.mock('@/lib/tenantScope', () => ({ assertExpedienteAccess: mockAssert }));
-vi.mock('../creditos-estudios.service', () => ({ liberarEstudioConCredito: mockLiberar }));
+vi.mock('../creditos-estudios.service', () => ({
+  liberarEstudioConCredito: mockLiberar,
+  duenoCreditosDeExpediente: mockDueno,
+}));
 vi.mock('@/lib/response', () => ({ sendSuccess: vi.fn(), sendCreated: vi.fn() }));
 
 import { liberarEstudio } from '../creditos-estudios.controller';
@@ -37,5 +44,43 @@ describe('liberar un estudio con créditos', () => {
     mockLiberar.mockResolvedValueOnce({ pago_id: 'p-1', saldo_restante: 3, lote_id: 'l-1' });
     await liberarEstudio(req, res);
     expect(mockLiberar).toHaveBeenCalledWith('exp-1', 'asesor', 'asesor', '203.0.113.7', undefined);
+  });
+});
+
+// H99: Cofianza paga la evaluación con un crédito de la inmobiliaria dueña.
+describe('liberar con crédito desde Cofianza (admin/operador)', () => {
+  const reqInterno = (rol: string) =>
+    ({ ...req, user: { id: 'operador-1', rol }, body: {} }) as unknown as Request;
+
+  it.each(['administrador', 'operador_analista'])('%s: gasta el saldo del titular de la org y firma el movimiento', async (rol) => {
+    mockAssert.mockResolvedValueOnce(undefined);
+    mockDueno.mockResolvedValueOnce('titular-org');
+    mockLiberar.mockResolvedValueOnce({ pago_id: 'p-1', saldo_restante: 2, lote_id: 'l-1' });
+    await liberarEstudio(reqInterno(rol), res);
+    expect(mockDueno).toHaveBeenCalledWith('exp-1');
+    expect(mockLiberar).toHaveBeenCalledWith(
+      'exp-1',
+      'titular-org',
+      'operador-1',
+      '203.0.113.7',
+      'Liberado por Cofianza con crédito del paquete de la inmobiliaria',
+    );
+  });
+
+  it('estudio sin inmobiliaria (propietario individual): 409 sin tocar créditos', async () => {
+    mockAssert.mockResolvedValueOnce(undefined);
+    mockDueno.mockResolvedValueOnce(null);
+    await expect(liberarEstudio(reqInterno('administrador'), res)).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'SIN_INMOBILIARIA',
+    });
+    expect(mockLiberar).not.toHaveBeenCalled();
+  });
+
+  it('la inmobiliaria no pasa por la resolución del dueño (comportamiento igual)', async () => {
+    mockAssert.mockResolvedValueOnce(undefined);
+    mockLiberar.mockResolvedValueOnce({ pago_id: 'p-1', saldo_restante: 3, lote_id: 'l-1' });
+    await liberarEstudio(req, res);
+    expect(mockDueno).not.toHaveBeenCalled();
   });
 });

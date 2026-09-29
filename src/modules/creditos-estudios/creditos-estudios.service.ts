@@ -16,7 +16,11 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { env } from '@/config';
 import { getPaymentGateway } from '@/modules/pagos/gateway';
-import { perfilEsDuenoDeInmueble, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
+import {
+  perfilEsDuenoDeInmueble,
+  resolveOrgCanonicalPerfilId,
+  resolvePerfilCanonicoDeInmueble,
+} from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
@@ -895,6 +899,60 @@ export async function liberarEstudioConCredito(
     );
 
   return { pago_id: pago.id, saldo_restante, lote_id };
+}
+
+// ============================================================
+// H99: Cofianza (admin/operador) paga la evaluación con un crédito de la
+// inmobiliaria dueña del estudio, desde el modal interno «Nueva evaluación».
+// ============================================================
+
+/**
+ * Titular (perfil canónico) de la inmobiliaria dueña del inmueble del estudio:
+ * de su saldo sale el crédito. null si el inmueble no es de una inmobiliaria
+ * (H2: los créditos son de las inmobiliarias; el propietario individual paga
+ * con enlace). 404 si el estudio no existe.
+ */
+export async function duenoCreditosDeExpediente(expedienteId: string): Promise<string | null> {
+  const { data, error } = await db('expedientes')
+    .select('id, inmueble:inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  if (!data) throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  const inm = (data as { inmueble: { propietario_id: string; inmobiliaria_id: string | null } | null }).inmueble;
+  if (!inm?.inmobiliaria_id) return null;
+  return resolvePerfilCanonicoDeInmueble(inm);
+}
+
+/**
+ * Saldo usable de la inmobiliaria dueña del estudio, para que el modal interno
+ * ofrezca el crédito solo cuando se puede gastar: saldo efectivo (P22, lo en
+ * contra ya restado) y si ya hay un cobro de la evaluación vivo (entonces
+ * liberar daría 409 y no se ofrece).
+ */
+export async function saldoCreditosDeExpediente(expedienteId: string): Promise<{
+  con_inmobiliaria: boolean;
+  saldo_efectivo: number;
+  creditos_en_contra: number;
+  pago_estudio_existente: boolean;
+}> {
+  const dueno = await duenoCreditosDeExpediente(expedienteId);
+  const { data: pagos, error } = await db('pagos')
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', 'estudio')
+    .in('estado', ['completado', 'pendiente', 'procesando'])
+    .limit(1);
+  if (error) throw fromSupabaseError(error);
+  const pago_estudio_existente = ((pagos as unknown[] | null) ?? []).length > 0;
+  if (!dueno) return { con_inmobiliaria: false, saldo_efectivo: 0, creditos_en_contra: 0, pago_estudio_existente };
+  const saldo = await getSaldoCreditos(dueno);
+  return {
+    con_inmobiliaria: true,
+    saldo_efectivo: saldo.saldo_efectivo,
+    creditos_en_contra: saldo.creditos_en_contra,
+    pago_estudio_existente,
+  };
 }
 
 // ============================================================

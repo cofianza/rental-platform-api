@@ -73,9 +73,17 @@ creditosEstudiosRouter.post(
 const expedienteLiberarRouter = Router({ mergeParams: true });
 expedienteLiberarRouter.use(authMiddleware);
 
+// H99: admin/operador también, con el crédito de la inmobiliaria dueña del
+// estudio (el controller lo resuelve). gerencia_consulta no: es solo lectura.
+expedienteLiberarRouter.get(
+  '/saldo',
+  roleGuard(['administrador', 'operador_analista']),
+  controller.getSaldoInmobiliariaDeExpediente,
+);
+
 expedienteLiberarRouter.post(
   '/',
-  roleGuard(['inmobiliaria']),
+  roleGuard(['inmobiliaria', 'administrador', 'operador_analista']),
   validate({ body: liberarEstudioCreditoSchema }),
   controller.liberarEstudio,
 );
