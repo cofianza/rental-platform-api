@@ -2000,7 +2000,18 @@ export async function registrarResultado(
     }
     throw AppError.badRequest('Error al registrar el resultado', 'RESULTADO_UPDATE_ERROR');
   }
-  await guardarCodigosMotivo('estudios', estudioId, input.motivos);
+  // B22: los códigos explican la decisión del analista. Si la regla dura o el
+  // motor la cambiaron (p. ej. un condicionado C1 que termina en rechazo), los
+  // códigos ya no explican el resultado guardado: no se escriben. Sus textos
+  // siguen en el timeline (fundamento) y el resultado pedido en la bitácora.
+  if (final.resultado === input.resultado) {
+    await guardarCodigosMotivo('estudios', estudioId, input.motivos);
+  } else if (input.motivos?.length) {
+    logger.info(
+      { estudioId, resultado_solicitado: input.resultado, resultado_final: final.resultado, motivos: input.motivos },
+      'registrarResultado: el resultado final difiere del elegido por el analista; no se guardan los códigos de motivo',
+    );
+  }
 
   // 3.1. VIGENCIA ANCLADA EN LA CONSULTA AL BURO. El RPC pone fecha_completado =
   //      NOW(), y todo lo que mide la vigencia (CRC, §5.2, reasignacion,

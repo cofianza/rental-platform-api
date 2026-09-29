@@ -8,8 +8,9 @@
 // «Otro» exige el texto.
 //
 // Los textos compuestos llenan los campos que ya existían (motivo_rechazo,
-// fundamento, condiciones, comentario), así que ni el RPC ni la base cambian;
-// el código del motivo queda al inicio de cada línea interna.
+// fundamento, condiciones, comentario), así que el RPC no cambia; el código del
+// motivo queda al inicio de cada línea interna. Los códigos además van a la
+// columna `motivos_decision` (migración 20261001000018): ver guardarCodigosMotivo.
 // ============================================================
 
 import { z } from 'zod';
@@ -124,7 +125,7 @@ export function rellenarDesdeMotivos(
  * Guarda los códigos en la columna `motivos_decision` (migración
  * 20261001000018, aplicada en prod el 2026-09-28). En un UPDATE aparte y sin
  * lanzar: la decisión ya quedó guardada con sus textos y devolver 500 haría
- * creer que no. Pero un fallo ya no es esperable: se registra como ERROR.
+ * creer que no. Si el UPDATE falla (p. ej. se revirtió la 018), logger.error.
  */
 export async function guardarCodigosMotivo(
   tabla: 'estudios' | 'eventos_timeline',
