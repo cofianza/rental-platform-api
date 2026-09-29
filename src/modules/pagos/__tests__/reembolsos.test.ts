@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const {
   mockFrom, ops, queues, enqueue, mockStatus, mockRefund, mockTransitionChecked, mockTransition,
   mockOnPagoConfirmado, mockNotificarYCorreo, mockDevolverCredito, mockEsCredito,
-  mockCupoLiberado, mockCupoReservado, mockLiberarReserva, mockAbandonado,
+  mockCupoLiberado, mockLiberarReserva, mockAbandonado,
 } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
@@ -18,7 +18,7 @@ const {
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit', 'gte', 'lte'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq', 'in', 'order', 'limit', 'gte', 'lte', 'not', 'range'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -47,7 +47,6 @@ const {
     mockDevolverCredito: vi.fn(async () => 'no_es_credito'),
     mockEsCredito: vi.fn(async () => false),
     mockCupoLiberado: vi.fn(async () => false),
-    mockCupoReservado: vi.fn(async () => true),
     mockLiberarReserva: vi.fn(async () => 'liberado'),
     mockAbandonado: vi.fn(async () => true),
   };
@@ -71,7 +70,6 @@ vi.mock('@/modules/creditos-estudios/creditos-estudios.service', () => ({
   devolverCreditoDePago: mockDevolverCredito,
   esPagoConCredito: mockEsCredito,
   cupoLiberado: mockCupoLiberado,
-  cupoReservado: mockCupoReservado,
   liberarReservaCupo: mockLiberarReserva,
 }));
 vi.mock('@/modules/estudios/estudios.service', () => ({ abandonadoAntesDeLaConsulta: mockAbandonado }));
@@ -123,7 +121,6 @@ beforeEach(() => {
   mockDevolverCredito.mockResolvedValue('no_es_credito');
   mockEsCredito.mockResolvedValue(false);
   mockCupoLiberado.mockResolvedValue(false);
-  mockCupoReservado.mockResolvedValue(true);
   mockLiberarReserva.mockResolvedValue('liberado');
   mockAbandonado.mockResolvedValue(true);
 });
@@ -763,9 +760,8 @@ describe('Adenda de precios §2: el cupo en el cierre y en el abandono', () => {
   it('§2.5: la reserva de un estudio cuya autorización venció sin consulta vuelve al mismo lote (literal 2.5)', async () => {
     enqueue('movimientos_creditos_estudios', {
       data: [
-        { pago_id: 'pago-a', expediente_id: 'exp-a' },
-        { pago_id: 'pago-a', expediente_id: 'exp-a' }, // repetido: una sola vez
-        { pago_id: 'pago-b', expediente_id: 'exp-b' },
+        { pago_id: 'pago-a', expediente_id: 'exp-a', tipo: 'reserva' },
+        { pago_id: 'pago-b', expediente_id: 'exp-b', tipo: 'reserva' },
       ],
       error: null,
     });
@@ -778,11 +774,31 @@ describe('Adenda de precios §2: el cupo en el cierre y en el abandono', () => {
     expect(ops.some((o) => o.table === 'eventos_timeline' && o.method === 'insert')).toBe(true);
   });
 
-  it('§2.5: una reserva ya consumida o liberada no se toca', async () => {
-    enqueue('movimientos_creditos_estudios', { data: [{ pago_id: 'pago-a', expediente_id: 'exp-a' }], error: null });
-    mockCupoReservado.mockResolvedValueOnce(false);
+  it('§2.5: una reserva ya consumida o liberada no se toca (manda el último movimiento del pago)', async () => {
+    enqueue('movimientos_creditos_estudios', {
+      data: [
+        { pago_id: 'pago-a', expediente_id: 'exp-a', tipo: 'reserva' },
+        { pago_id: 'pago-a', expediente_id: 'exp-a', tipo: 'consumo' },
+        { pago_id: 'pago-b', expediente_id: 'exp-b', tipo: 'reserva' },
+        { pago_id: 'pago-b', expediente_id: 'exp-b', tipo: 'liberacion' },
+      ],
+      error: null,
+    });
 
     expect(await liberarCuposAbandonados()).toBe(0);
+    expect(mockAbandonado).not.toHaveBeenCalled();
     expect(mockLiberarReserva).not.toHaveBeenCalled();
+  });
+
+  it('§2.5: las reservas cerradas más viejas no tapan a las nuevas (lee por páginas)', async () => {
+    const viejas = Array.from({ length: 1000 }, (_, i) => ({ pago_id: `viejo-${i}`, expediente_id: `exp-v${i}`, tipo: 'consumo' }));
+    enqueue(
+      'movimientos_creditos_estudios',
+      { data: viejas, error: null },
+      { data: [{ pago_id: 'pago-nuevo', expediente_id: 'exp-n', tipo: 'reserva' }], error: null },
+    );
+
+    expect(await liberarCuposAbandonados()).toBe(1);
+    expect(mockLiberarReserva).toHaveBeenCalledWith('pago-nuevo', '2.5', expect.anything());
   });
 });

@@ -1233,11 +1233,6 @@ export async function esPagoConCredito(pagoId: string): Promise<boolean> {
   return ((data as unknown[] | null) ?? []).length > 0;
 }
 
-/** ¿La reserva del pago sigue abierta (sin resultado ni liberación)? */
-export async function cupoReservado(pagoId: string): Promise<boolean> {
-  return estadoCupo(await ultimoMovimientoCupo(pagoId)) === 'reservado';
-}
-
 /** ¿La reserva del pago ya se liberó en (a), (b) o §2.5? */
 export async function cupoLiberado(pagoId: string): Promise<boolean> {
   return estadoCupo(await ultimoMovimientoCupo(pagoId)) === 'liberado';

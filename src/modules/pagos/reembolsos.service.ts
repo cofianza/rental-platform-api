@@ -676,29 +676,40 @@ export async function barrerDevolucionesPendientes(): Promise<number> {
  * después (reenvío sin costo, Flujo §12), la consulta vuelve a reservar un
  * cupo. La RPC liberar_reserva_credito es el compare-and-set (lock por pago y
  * estado por su último movimiento): repetirla no devuelve dos veces.
- * ponytail: revisa hasta 200 reservas de los últimos 90 días por vuelta.
+ * Las candidatas son los pagos cuyo ÚLTIMO movimiento de cupo es 'reserva'
+ * (las reservas ya consumidas o liberadas siguen en la tabla: leer solo las
+ * filas 'reserva' con límite dejaba las nuevas detrás de las viejas).
+ * ponytail: lee los movimientos de cupo de los últimos 90 días (la
+ * autorización vence a los 15) por páginas de 1000.
  */
 export async function liberarCuposAbandonados(): Promise<number> {
   const desde = new Date(Date.now() - 90 * 86_400_000).toISOString();
-  const { data, error } = await db('movimientos_creditos_estudios')
-    .select('pago_id, expediente_id')
-    .eq('tipo', 'reserva')
-    .gte('created_at', desde)
-    .order('created_at', { ascending: true })
-    .limit(200);
-  if (error) {
-    logger.error({ error: error.message }, 'liberarCuposAbandonados: no se pudieron leer las reservas');
-    return 0;
+  const ultimo = new Map<string, { tipo: string; expediente_id: string | null }>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await db('movimientos_creditos_estudios')
+      .select('pago_id, expediente_id, tipo')
+      .in('tipo', ['reserva', 'consumo', 'liberacion', 'ajuste'])
+      .not('pago_id', 'is', null)
+      .gte('created_at', desde)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + 999);
+    if (error) {
+      logger.error({ error: error.message }, 'liberarCuposAbandonados: no se pudieron leer las reservas');
+      return 0;
+    }
+    const filas = (data ?? []) as Array<{ pago_id: string | null; expediente_id: string | null; tipo: string }>;
+    for (const m of filas) if (m.pago_id) ultimo.set(m.pago_id, m); // orden cronológico: queda el último
+    if (filas.length < 1000) break;
   }
   const { abandonadoAntesDeLaConsulta } = await import('@/modules/estudios/estudios.service');
-  const { cupoReservado, liberarReservaCupo } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+  const { liberarReservaCupo } = await import('@/modules/creditos-estudios/creditos-estudios.service');
   let liberados = 0;
-  const vistos = new Set<string>();
-  for (const r of (data ?? []) as Array<{ pago_id: string | null; expediente_id: string | null }>) {
-    if (!r.pago_id || !r.expediente_id || vistos.has(r.pago_id)) continue;
-    vistos.add(r.pago_id);
+  for (const [pagoId, m] of ultimo) {
+    if (m.tipo !== 'reserva' || !m.expediente_id) continue;
+    const r = { pago_id: pagoId, expediente_id: m.expediente_id };
     try {
-      if (!(await cupoReservado(r.pago_id)) || !(await abandonadoAntesDeLaConsulta(r.expediente_id))) continue;
+      if (!(await abandonadoAntesDeLaConsulta(r.expediente_id))) continue;
       const res = await liberarReservaCupo(r.pago_id, '2.5', {
         notas: 'El prospecto no autorizó dentro del plazo (Adenda de precios §2.5; Flujo §14: 15 días).',
       });

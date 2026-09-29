@@ -2674,10 +2674,6 @@ export async function ejecutarEstudio(
   //      del lock y del proveedor: un estudio bloqueado aquí no consume
   //      consulta ni queda colgado en 'en_proceso'.
   assertPagoEstudio(senalPago, { origen: 'ejecutar', expedienteNumero: expediente.numero });
-  // Adenda de precios §2: si el pago es con cupo y su reserva se liberó (la
-  // consulta anterior no dio resultado), se vuelve a reservar antes de
-  // consultar. Sin cupo, no se consulta.
-  await asegurarReservaParaConsulta(est.expediente_id, userId);
 
   // Si el override trajo cambios respecto a datos_formulario, persistir.
   const cambioNumeroDatos = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
@@ -2767,6 +2763,13 @@ export async function ejecutarEstudio(
       'PROVEEDOR_NO_EJECUTABLE',
     );
   }
+
+  // Adenda de precios §2: si el pago es con cupo y su reserva se liberó (la
+  // consulta anterior no dio resultado), se vuelve a reservar antes de
+  // consultar. Sin cupo, no se consulta. Va después de los guards que pueden
+  // rechazar la ejecución y justo antes del lock: una reserva tomada para un
+  // intento que nunca consulta quedaría abierta sin nadie que la libere.
+  await asegurarReservaParaConsulta(est.expediente_id, userId);
 
   if (cambioProveedor) {
     logger.info(
