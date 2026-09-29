@@ -85,10 +85,15 @@ describe('schemas', () => {
 });
 
 describe('guardarCodigosMotivo', () => {
-  it('guarda los códigos y, si la columna aún no existe, no lanza', async () => {
+  it('guarda los códigos y, si el UPDATE falla, lo registra como error sin lanzar', async () => {
     await expect(guardarCodigosMotivo('estudios', 'est-1', ['R1', 'R3'])).resolves.toBeUndefined();
     expect(mockUpdate).toHaveBeenCalledWith({ motivos_decision: ['R1', 'R3'] });
     expect(mockEq).toHaveBeenCalledWith('id', 'est-1');
+    const { logger } = await import('@/lib/logger');
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ tabla: 'estudios', id: 'est-1', codigos: ['R1', 'R3'] }),
+      'No se guardaron los códigos de motivo de la decisión',
+    );
   });
 
   it('sin códigos o sin id no escribe', async () => {

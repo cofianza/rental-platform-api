@@ -122,8 +122,9 @@ export function rellenarDesdeMotivos(
 
 /**
  * Guarda los códigos en la columna `motivos_decision` (migración
- * 20261001000018). Best-effort y en un UPDATE aparte: si la columna aún no
- * existe, la decisión ya quedó guardada con sus textos y solo se avisa.
+ * 20261001000018, aplicada en prod el 2026-09-28). En un UPDATE aparte y sin
+ * lanzar: la decisión ya quedó guardada con sus textos y devolver 500 haría
+ * creer que no. Pero un fallo ya no es esperable: se registra como ERROR.
  */
 export async function guardarCodigosMotivo(
   tabla: 'estudios' | 'eventos_timeline',
@@ -136,7 +137,7 @@ export async function guardarCodigosMotivo(
   const { error } = await (supabase.from(tabla as string) as ReturnType<typeof supabase.from>)
     .update({ motivos_decision: [...codigos] } as never)
     .eq('id', id);
-  if (error) logger.warn({ tabla, id, err: error.message }, 'No se guardaron los códigos de motivo (¿falta la migración 20261001000018?)');
+  if (error) logger.error({ tabla, id, codigos, err: error.message }, 'No se guardaron los códigos de motivo de la decisión');
 }
 
 /**
