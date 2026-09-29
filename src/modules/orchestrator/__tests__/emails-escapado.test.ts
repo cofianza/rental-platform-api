@@ -54,7 +54,7 @@ describe('correo del condicionado', () => {
 
   it('sin enlace le dice a quién pedírselo', async () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640 });
-    expect(html()).toContain('Pídele a quien te pidió el estudio');
+    expect(html()).toContain('Pídale a quien le pidió el estudio');
     expect(html()).not.toContain('cargar-documentos');
   });
 
@@ -163,15 +163,15 @@ describe('correos de visita con enlaces', () => {
 describe('correo de no aprobable', () => {
   const asunto = () => (mockSend.mock.calls.at(-1)![0] as { subject: string }).subject;
 
-  it('decisión de un analista: «Resultado de tu estudio»', async () => {
+  it('decisión de un analista: «Resultado de su estudio»', async () => {
     await sendEstudioRechazadoEmail({ email: 'ana@correo.co', nombre: 'Ana', motivoGeneral: 'No aprobable por ahora.', decisionDeCofianza: true });
-    expect(asunto()).toBe('Resultado de tu estudio - Cofianza');
+    expect(asunto()).toBe('Resultado de su estudio - Cofianza');
     expect(html()).not.toContain('Resultado de la evaluación');
   });
 
   it('la evaluación del buró conserva su asunto', async () => {
     await sendEstudioRechazadoEmail({ email: 'ana@correo.co', nombre: 'Ana' });
-    expect(asunto()).toBe('Resultado de tu evaluación crediticia - Cofianza');
+    expect(asunto()).toBe('Resultado de su evaluación crediticia - Cofianza');
   });
 });
 

@@ -40,7 +40,7 @@ export const enviarEnlaceAutorizacionSchema = z
 const numeroDocumentoEscrito = z
   .string()
   .trim()
-  .min(1, 'Escribe tu número de documento')
+  .min(1, 'Escriba su número de documento')
   .max(30, 'Número de documento demasiado largo');
 
 // ============================================================
@@ -152,7 +152,7 @@ export const perfilProspectoSchema = z.object({
 const imagenBase64 = z
   .string()
   .min(100, 'Imagen vacía o incompleta')
-  .max(1_400_000, 'La imagen es demasiado grande: vuelve a tomarla')
+  .max(1_400_000, 'La imagen es demasiado grande: vuelva a tomarla')
   .refine(
     (v) => /^data:image\/(jpeg|jpg|png);base64,[A-Za-z0-9+/=\s]+$/.test(v) || /^[A-Za-z0-9+/=\s]+$/.test(v),
     { message: 'Formato de imagen inválido (se espera JPEG o PNG en base64)' },

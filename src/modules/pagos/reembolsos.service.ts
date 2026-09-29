@@ -268,7 +268,7 @@ export async function retenerPagoTardio(pagoId: string, expedienteId: string): P
     await avisarAdministradores({
       tipo: 'pago.reembolso_pendiente',
       titulo: 'Revisar un pago tardío de evaluación',
-      mensaje: 'Entró el pago de la evaluación de un estudio ya terminado y no quedó en la cola de reembolsos. Revísalo en Mercado Pago y devuélvelo si el buró no se consultó.',
+      mensaje: 'Entró el pago de la evaluación de un estudio ya terminado y no quedó en la cola de reembolsos. Revíselo en Mercado Pago y devuélvalo si el buró no se consultó.',
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, pago_id: pagoId },
     }).catch((e) => logger.warn({ e, pagoId }, 'No se pudo avisar del pago tardío'));
@@ -402,7 +402,7 @@ export async function reembolsarEnMercadoPago(filaId: string, user: { id: string
   const fila = await leerFila(filaId);
   const gateway = getPaymentGateway();
   if (gateway.provider !== 'mercadopago' || !puedeReembolsar(fila)) {
-    throw AppError.conflict('Este pago no se reembolsa por Mercado Pago: resuélvelo a mano y márcalo resuelto.', 'REEMBOLSO_NO_APLICA');
+    throw AppError.conflict('Este pago no se reembolsa por Mercado Pago: resuélvalo a mano y márquelo resuelto.', 'REEMBOLSO_NO_APLICA');
   }
   const pago = await pagoDeLaFila(fila);
   // Si la evaluación llegó al buró después de encolarse, ya no se devuelve. La
@@ -411,7 +411,7 @@ export async function reembolsarEnMercadoPago(filaId: string, user: { id: string
     const consulta = await consultaDeLaFila(fila, pago);
     if (consulta === 'si' || (fila.motivo === 'estudio_cerrado_sin_consulta' && consulta !== 'no')) {
       throw AppError.conflict(
-        'La evaluación de este estudio llegó al buró: no se devuelve. Revísalo y márcalo resuelto con una nota.',
+        'La evaluación de este estudio llegó al buró: no se devuelve. Revíselo y márquelo resuelto con una nota.',
         'CONSULTA_AL_BURO',
       );
     }

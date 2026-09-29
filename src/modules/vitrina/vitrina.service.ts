@@ -107,7 +107,7 @@ export async function crearCuentaSolicitante(
   //    La misma regla corre cuando el documento se escribe DESPUÉS (H43).
   if (numero_documento && tipoDoc && (await existeOtraCuentaConDocumento(tipoDoc, numero_documento))) {
     throw AppError.conflict(
-      'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
+      'Ya existe una cuenta de solicitante con este documento. Si es suya, inicie sesión.',
       'DOCUMENT_ALREADY_EXISTS',
     );
   }
@@ -129,7 +129,7 @@ export async function crearCuentaSolicitante(
   if (authError) {
     logger.error({ error: authError.message, email }, 'Error al crear usuario solicitante');
     if (authError.message.includes('already') || authError.message.includes('duplicate')) {
-      throw AppError.conflict('Ya existe una cuenta con este correo. Inicia sesión.', 'EMAIL_ALREADY_EXISTS');
+      throw AppError.conflict('Ya existe una cuenta con este correo. Inicie sesión.', 'EMAIL_ALREADY_EXISTS');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el usuario');
   }
@@ -202,7 +202,7 @@ export async function crearCuentaSolicitante(
     throw new AppError(
       500,
       'SOLICITANTE_INSERT_FAILED',
-      'No se pudo completar el registro del solicitante. Contacta a soporte.',
+      'No se pudo completar el registro del solicitante. Contacte a soporte.',
     );
   }
 
@@ -301,7 +301,7 @@ export async function createInterest(
 
   if (existingExpedientes && existingExpedientes.length > 0) {
     throw AppError.conflict(
-      'Ya tienes un estudio activo sobre este inmueble',
+      'Ya tiene un estudio activo sobre este inmueble',
       'EXPEDIENTE_ALREADY_EXISTS',
     );
   }
@@ -397,7 +397,7 @@ export async function notificarPropietarioNuevaSolicitud(
     miembro_responsable_id: string | null; direccion: string | null;
   } | null;
   if (!row?.propietario_id) return;
-  const direccion = row.direccion || 'tu inmueble';
+  const direccion = row.direccion || 'su inmueble';
 
   // Import diferido: interesados.service carga la config (y el correo) al importarse.
   const { correoDelDueno, destinatariosInApp } = await import('../interesados/interesados.service');

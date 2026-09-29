@@ -9,7 +9,7 @@ describe('fromSupabaseError', () => {
     const crudo = pg('PGRST200', "Could not find a relationship between 'citas' and 'inmuebles'");
     const e = fromSupabaseError(crudo);
     expect(e).toMatchObject({ statusCode: 500, errorCode: 'DATABASE_ERROR' });
-    expect(e.message).toBe('No pudimos completar la operación. Intenta de nuevo.');
+    expect(e.message).toBe('No pudimos completar la operación. Intente de nuevo.');
     expect(e.cause).toBe(crudo);
   });
 

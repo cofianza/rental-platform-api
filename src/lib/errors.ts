@@ -61,7 +61,7 @@ export function fromSupabaseError(error: PostgrestError): AppError {
   const appError = new AppError(
     500,
     'DATABASE_ERROR',
-    error.code?.startsWith('P0') ? error.message : 'No pudimos completar la operación. Intenta de nuevo.',
+    error.code?.startsWith('P0') ? error.message : 'No pudimos completar la operación. Intente de nuevo.',
   );
   appError.cause = error;
   return appError;

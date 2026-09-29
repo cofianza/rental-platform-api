@@ -19,7 +19,7 @@ const FROM = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 // correo": cerraba la puerta sin dejar ninguna abierta. Ahora ofrece WhatsApp
 // y correo reales, tomados de la configuracion de la empresa.
 const footerHtml = (c: CompanyInfo) =>
-  `<p style="color:#9ca3af;font-size:12px;margin-top:24px;">Correo automático de Cofianza. ¿Dudas? Escríbenos por WhatsApp al ${c.phone} o a ${c.email}.</p>`;
+  `<p style="color:#9ca3af;font-size:12px;margin-top:24px;">Correo automático de Cofianza. ¿Dudas? Escríbanos por WhatsApp al ${c.phone} o a ${c.email}.</p>`;
 
 // Botón de los correos de visita (mismo estilo que «Ver en Cofianza»).
 const botonHtml = (url: string, texto: string, color = '#0d9488') =>
@@ -68,7 +68,7 @@ export async function sendEstudioAprobadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Tu evaluación crediticia fue aprobada - Cofianza',
+    subject: 'Su evaluación crediticia fue aprobada - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -76,13 +76,13 @@ export async function sendEstudioAprobadoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre)}</strong>,</p>
-          <p style="color: #6b7280;">Tu evaluación crediticia para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> fue <span style="color: #059669; font-weight: bold;">aprobada</span>.</p>
+          <p style="color: #6b7280;">Su evaluación crediticia para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> fue <span style="color: #059669; font-weight: bold;">aprobada</span>.</p>
           ${score ? `<p style="color: #6b7280;">Score crediticio: <strong>${score}</strong></p>` : ''}
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: tu contrato</p>
-            <p style="color: #065f46; margin: 4px 0 0;">El propietario o la inmobiliaria preparará tu contrato (fecha de inicio y duración). Cuando esté listo para firmar, te llegará el enlace por WhatsApp al número que registraste. No necesitas hacer nada por ahora.</p>
+            <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: su contrato</p>
+            <p style="color: #065f46; margin: 4px 0 0;">El propietario o la inmobiliaria preparará su contrato (fecha de inicio y duración). Cuando esté listo para firmar, le llegará el enlace por WhatsApp al número que registró. No necesita hacer nada por ahora.</p>
           </div>
-          ${enlaceCoa ? `<p style="color: #6b7280;">Nos contaste que vas a vivir con alguien más. Si lo sumas como <strong>co-arrendatario</strong> antes de que se genere el contrato, la prima de vinculación baja del 20 % al 10 % del canon. No es un fiador ni codeudor, y no necesita finca raíz.</p>
+          ${enlaceCoa ? `<p style="color: #6b7280;">Nos contó que va a vivir con alguien más. Si lo suma como <strong>co-arrendatario</strong> antes de que se genere el contrato, la prima de vinculación baja del 20 % al 10 % del canon. No es un fiador ni codeudor, y no necesita finca raíz.</p>
           <div style="text-align: center; margin: 24px 0;">${botonHtml(enlaceCoa, 'Invitar a mi co-arrendatario')}</div>` : ''}
           ${footerHtml(company)}
         </div>
@@ -101,8 +101,8 @@ export async function sendEstudioAprobadoEmail(params: {
  */
 export const apelacionHtml = (email: string) =>
   `<div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #374151; margin: 0; font-weight: bold;">¿No estás de acuerdo con esta decisión?</p>
-            <p style="color: #4b5563; margin: 4px 0 0;">Puedes presentar una apelación escribiendo a <a href="mailto:${email}" style="color: #0d9488;">${email}</a> dentro de los <strong>15 días hábiles</strong> siguientes a esta notificación. Cofianza te responde en un máximo de <strong>10 días hábiles</strong>. La apelación no suspende el proceso de arrendamiento del inmueble.</p>
+            <p style="color: #374151; margin: 0; font-weight: bold;">¿No está de acuerdo con esta decisión?</p>
+            <p style="color: #4b5563; margin: 4px 0 0;">Puede presentar una apelación escribiendo a <a href="mailto:${email}" style="color: #0d9488;">${email}</a> dentro de los <strong>15 días hábiles</strong> siguientes a esta notificación. Cofianza le responde en un máximo de <strong>10 días hábiles</strong>. La apelación no suspende el proceso de arrendamiento del inmueble.</p>
           </div>`;
 
 export async function sendEstudioRechazadoEmail(params: {
@@ -121,7 +121,7 @@ export async function sendEstudioRechazadoEmail(params: {
   decisionDeCofianza?: boolean;
 }) {
   const { email, nombre, motivoGeneral, decisionDeCofianza } = params;
-  const titulo = decisionDeCofianza ? 'Resultado de tu estudio' : 'Resultado de tu evaluación crediticia';
+  const titulo = decisionDeCofianza ? 'Resultado de su estudio' : 'Resultado de su evaluación crediticia';
 
   const company = await getCompany();
 
@@ -139,15 +139,15 @@ export async function sendEstudioRechazadoEmail(params: {
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #111827; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">${decisionDeCofianza ? 'Resultado de tu estudio' : 'Resultado de la evaluación'}</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">${decisionDeCofianza ? 'Resultado de su estudio' : 'Resultado de la evaluación'}</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre)}</strong>,</p>
-          <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, tu evaluación crediticia no cumplió con los requisitos mínimos para el arrendamiento en esta oportunidad.'}</p>
+          <p style="color: #6b7280;">${motivoGeneral || 'Lamentablemente, su evaluación crediticia no cumplió con los requisitos mínimos para el arrendamiento en esta oportunidad.'}</p>
           <div style="background: #fef2f2; border: 1px solid #fecaca; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #991b1b; margin: 0;">${motivoGeneral
-              ? 'Si quieres, escríbenos y revisamos juntos tu caso.'
-              : 'Puedes mejorar tu perfil crediticio y volver a intentarlo. Te recomendamos revisar tus obligaciones financieras y mantener tus pagos al día.'}</p>
+              ? 'Si quiere, escríbanos y revisamos juntos su caso.'
+              : 'Puede mejorar su perfil crediticio y volver a intentarlo. Le recomendamos revisar sus obligaciones financieras y mantener sus pagos al día.'}</p>
           </div>
           ${apelacionHtml(company.email)}
           ${footerHtml(company)}
@@ -203,21 +203,21 @@ export async function sendDocumentosRequeridosEmail(params: {
   });
 
   const opcion = ofrecerCoarrendatario
-    ? `<p style="color: #6b7280;">Mientras tanto, puedes sumar un co-arrendatario. En Cofianza <strong>no pedimos fiador</strong>: invita a la persona con quien vas a vivir y evaluamos a los dos como un solo arrendatario.</p>
+    ? `<p style="color: #6b7280;">Mientras tanto, puede sumar un co-arrendatario. En Cofianza <strong>no pedimos fiador</strong>: invite a la persona con quien va a vivir y evaluamos a los dos como un solo arrendatario.</p>
           ${enlace ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(enlace, 'Invitar a mi co-arrendatario')}</div>` : ''}
           <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #92400e; margin: 0; font-weight: bold;">¿Cómo funciona?</p>
             <ul style="color: #92400e; margin: 8px 0 0; padding-left: 20px;">
               <li>${enlace
-                ? 'Abre tu enlace personal (el botón de arriba) y escribe los datos de la persona con quien vas a vivir. Desde ahí también puedes subir documentos que respalden tus ingresos.'
-                : 'Pídele a quien te pidió el estudio (tu inmobiliaria o el propietario) que le envíe la invitación desde su panel.'}</li>
+                ? 'Abra su enlace personal (el botón de arriba) y escriba los datos de la persona con quien va a vivir. Desde ahí también puede subir documentos que respalden sus ingresos.'
+                : 'Pídale a quien le pidió el estudio (su inmobiliaria o el propietario) que le envíe la invitación desde su panel.'}</li>
               <li>Le enviamos una invitación por correo.</li>
-              <li>Cuando acepte, evaluamos su perfil y lo combinamos con el tuyo.</li>
+              <li>Cuando acepte, evaluamos su perfil y lo combinamos con el suyo.</li>
               <li>Si juntos cumplen, los respaldamos como un solo arrendatario.</li>
             </ul>
           </div>
-          <p style="color: #6b7280;">No es un fiador ni codeudor — es la persona con quien vas a compartir el arriendo.</p>`
-    : `<p style="color: #6b7280;">Si quieres, mientras tanto puedes subir documentos que respalden tus ingresos (certificación laboral, extractos o declaración de renta).</p>
+          <p style="color: #6b7280;">No es un fiador ni codeudor — es la persona con quien va a compartir el arriendo.</p>`
+    : `<p style="color: #6b7280;">Si quiere, mientras tanto puede subir documentos que respalden sus ingresos (certificación laboral, extractos o declaración de renta).</p>
           ${enlace ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(enlace, 'Subir mis documentos')}</div>` : ''}`;
 
   await resend.emails.send({
@@ -257,7 +257,7 @@ export async function sendContratoListoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Tu contrato está listo para firmar - Cofianza',
+    subject: 'Su contrato está listo para firmar - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -265,9 +265,9 @@ export async function sendContratoListoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre)}</strong>,</p>
-          <p style="color: #6b7280;">Tu contrato de arrendamiento para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> está listo para firmar.</p>
+          <p style="color: #6b7280;">Su contrato de arrendamiento para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> está listo para firmar.</p>
           <div style="background: #f0fdfa; border: 1px solid #99f6e4; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #115e59; margin: 0;">Recibirás un enlace de firma electrónica en tu correo. El proceso toma menos de 5 minutos.</p>
+            <p style="color: #115e59; margin: 0;">Recibirá un enlace de firma electrónica en su correo. El proceso toma menos de 5 minutos.</p>
           </div>
           ${footerHtml(company)}
         </div>
@@ -296,7 +296,7 @@ export async function sendArrendatarioAprobadoNotificacionEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Arrendatario aprobado para tu inmueble - Cofianza',
+    subject: 'Arrendatario aprobado para su inmueble - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -304,7 +304,7 @@ export async function sendArrendatarioAprobadoNotificacionEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_propietario)}</strong>,</p>
-          <p style="color: #6b7280;">El arrendatario <strong>${escapeHtml(nombre_arrendatario)}</strong> ha sido <span style="color: #059669; font-weight: bold;">aprobado</span> para tu inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
+          <p style="color: #6b7280;">El arrendatario <strong>${escapeHtml(nombre_arrendatario)}</strong> ha sido <span style="color: #059669; font-weight: bold;">aprobado</span> para su inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #065f46; margin: 0; font-weight: bold;">Datos de contacto del arrendatario:</p>
             <ul style="color: #065f46; margin: 8px 0 0; padding-left: 20px; list-style: none;">
@@ -314,9 +314,9 @@ export async function sendArrendatarioAprobadoNotificacionEmail(params: {
             </ul>
           </div>
           <div style="text-align: center; margin: 24px 0;">
-            <a href="mailto:${escapeHtml(email_arrendatario)}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Contacta al arrendatario lo antes posible</a>
+            <a href="mailto:${escapeHtml(email_arrendatario)}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Contacte al arrendatario lo antes posible</a>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">Te recomendamos comunicarte con el arrendatario a la brevedad para coordinar los siguientes pasos del proceso de arrendamiento.</p>
+          <p style="color: #6b7280; font-size: 14px;">Le recomendamos comunicarse con el arrendatario a la brevedad para coordinar los siguientes pasos del proceso de arrendamiento.</p>
           ${footerHtml(company)}
         </div>
       </div>
@@ -344,7 +344,7 @@ export async function sendExpedienteInvitacionEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Te han invitado a un proceso de arrendamiento - Cofianza',
+    subject: 'Le han invitado a un proceso de arrendamiento - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -352,14 +352,14 @@ export async function sendExpedienteInvitacionEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola,</p>
-          <p style="color: #6b7280;"><strong>${escapeHtml(nombre_invitador)}</strong> te ha invitado a completar un estudio de arrendamiento para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
+          <p style="color: #6b7280;"><strong>${escapeHtml(nombre_invitador)}</strong> le ha invitado a completar un estudio de arrendamiento para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
           <div style="background: #f0fdfa; border: 1px solid #99f6e4; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #115e59; margin: 0;">Para continuar con el proceso, necesitas registrarte en la plataforma Cofianza y completar tu evaluación crediticia.</p>
+            <p style="color: #115e59; margin: 0;">Para continuar con el proceso, necesita registrarse en la plataforma Cofianza y completar su evaluación crediticia.</p>
           </div>
           <div style="text-align: center; margin: 24px 0;">
             <a href="${registroUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Registrarme y continuar</a>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">Si no esperabas esta invitacion, puedes ignorar este correo.</p>
+          <p style="color: #6b7280; font-size: 14px;">Si no esperaba esta invitacion, puede ignorar este correo.</p>
           ${footerHtml(company)}
         </div>
       </div>
@@ -386,19 +386,19 @@ export async function sendInvitacionMiembroEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: `Te invitaron a unirte a ${nombre_organizacion} en Cofianza`,
+    subject: `Le invitaron a unirse a ${nombre_organizacion} en Cofianza`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
-          <h1 style="color: white; margin: 0; font-size: 24px;">Invitacion a tu equipo</h1>
+          <h1 style="color: white; margin: 0; font-size: 24px;">Invitacion a su equipo</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola,</p>
-          <p style="color: #6b7280;"><strong>${escapeHtml(nombre_invitador)}</strong> te invitó a unirte a <strong>${escapeHtml(nombre_organizacion)}</strong> en la plataforma Cofianza para gestionar inmuebles y estudios en equipo.</p>
+          <p style="color: #6b7280;"><strong>${escapeHtml(nombre_invitador)}</strong> le invitó a unirse a <strong>${escapeHtml(nombre_organizacion)}</strong> en la plataforma Cofianza para gestionar inmuebles y estudios en equipo.</p>
           <div style="text-align: center; margin: 24px 0;">
             <a href="${aceptarUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Aceptar invitacion</a>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">Este enlace vence en 7 días. Si no esperabas esta invitación, puedes ignorar este correo.</p>
+          <p style="color: #6b7280; font-size: 14px;">Este enlace vence en 7 días. Si no esperaba esta invitación, puede ignorar este correo.</p>
           ${footerHtml(company)}
         </div>
       </div>
@@ -481,12 +481,12 @@ export async function sendCitaSolicitadaPropietarioEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_propietario)}</strong>,</p>
-          <p style="color: #6b7280;"><strong>${escapeHtml(nombre_solicitante)}</strong> ha solicitado una visita a tu inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
+          <p style="color: #6b7280;"><strong>${escapeHtml(nombre_solicitante)}</strong> ha solicitado una visita a su inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
           <div style="background: #ecfeff; border: 1px solid #a5f3fc; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #155e75; margin: 0; font-weight: bold;">Fecha propuesta:</p>
             <p style="color: #155e75; margin: 4px 0 0;">${fechaFormateada}</p>
           </div>
-          <p style="color: #6b7280;">Ingresa a la plataforma para confirmar o ajustar la fecha de la visita.</p>
+          <p style="color: #6b7280;">Ingrese a la plataforma para confirmar o ajustar la fecha de la visita.</p>
           ${url_visita ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(url_visita, 'Ver la visita')}</div>` : ''}
           ${footerHtml(company)}
         </div>
@@ -516,7 +516,7 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'Tu visita ha sido confirmada - Cofianza',
+    subject: 'Su visita ha sido confirmada - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -524,14 +524,14 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_solicitante)}</strong>,</p>
-          <p style="color: #6b7280;">Tu visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> ha sido <span style="color: #059669; font-weight: bold;">confirmada</span>.</p>
+          <p style="color: #6b7280;">Su visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> ha sido <span style="color: #059669; font-weight: bold;">confirmada</span>.</p>
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #065f46; margin: 0; font-weight: bold;">Fecha confirmada:</p>
             <p style="color: #065f46; margin: 4px 0 0;">${fechaFormateada}</p>
             ${notas_propietario ? `<p style="color: #065f46; margin: 8px 0 0;"><strong>Notas:</strong> ${escapeHtml(notas_propietario)}</p>` : ''}
           </div>
-          <p style="color: #6b7280;">Después de la visita, se habilitará tu evaluación crediticia.</p>
-          ${enlaces ? `<p style="color: #6b7280;">¿No puedes ir? Reprograma o cancela la visita aquí:</p>${enlacesVisitaHtml(enlaces)}` : ''}
+          <p style="color: #6b7280;">Después de la visita, se habilitará su evaluación crediticia.</p>
+          ${enlaces ? `<p style="color: #6b7280;">¿No puede ir? Reprograme o cancele la visita aquí:</p>${enlacesVisitaHtml(enlaces)}` : ''}
           ${footerHtml(company)}
         </div>
       </div>
@@ -562,7 +562,7 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: 'El propietario ajustó la fecha de tu visita - Cofianza',
+    subject: 'El propietario ajustó la fecha de su visita - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #d97706; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -570,17 +570,17 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_solicitante)}</strong>,</p>
-          <p style="color: #6b7280;">El propietario confirmó tu visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>, pero ajustó la fecha y/u hora. Revisa el nuevo horario a continuación.</p>
+          <p style="color: #6b7280;">El propietario confirmó su visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>, pero ajustó la fecha y/u hora. Revise el nuevo horario a continuación.</p>
           <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #92400e; margin: 0; font-size: 13px;">Fecha que habías propuesto:</p>
+            <p style="color: #92400e; margin: 0; font-size: 13px;">Fecha que había propuesto:</p>
             <p style="color: #92400e; margin: 2px 0 12px; text-decoration: line-through;">${fechaOriginal}</p>
             <p style="color: #92400e; margin: 0; font-weight: bold;">Nueva fecha confirmada:</p>
             <p style="color: #92400e; margin: 4px 0 0; font-weight: bold; font-size: 16px;">${fechaNueva}</p>
             ${notas_propietario ? `<p style="color: #92400e; margin: 12px 0 0;"><strong>Notas del propietario:</strong> ${escapeHtml(notas_propietario)}</p>` : ''}
           </div>
           ${enlaces
-            ? `<p style="color: #6b7280;">Si el nuevo horario no te sirve, reprograma o cancela la visita aquí:</p>${enlacesVisitaHtml(enlaces)}`
-            : '<p style="color: #6b7280;">Si el nuevo horario no te sirve, comunícate con quien publicó el inmueble para reagendar.</p>'}
+            ? `<p style="color: #6b7280;">Si el nuevo horario no le sirve, reprograme o cancele la visita aquí:</p>${enlacesVisitaHtml(enlaces)}`
+            : '<p style="color: #6b7280;">Si el nuevo horario no le sirve, comuníquese con quien publicó el inmueble para reagendar.</p>'}
           ${footerHtml(company)}
         </div>
       </div>
@@ -635,8 +635,8 @@ export async function sendCitaCanceladaEmail(params: {
             <p style="color: #991b1b; margin: 4px 0 0;">${escapeHtml(motivo)}</p>
           </div>
           ${cancelado_por === 'solicitante'
-            ? `<p style="color: #6b7280;">Si agenda una nueva fecha, te llegará el aviso para confirmarla.</p>${url_citas ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(url_citas, 'Ver mis visitas')}</div>` : ''}`
-            : '<p style="color: #6b7280;">Si todavía te interesa el inmueble, comunícate con quien lo publicó para coordinar una nueva fecha.</p>'}
+            ? `<p style="color: #6b7280;">Si agenda una nueva fecha, le llegará el aviso para confirmarla.</p>${url_citas ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(url_citas, 'Ver mis visitas')}</div>` : ''}`
+            : '<p style="color: #6b7280;">Si todavía le interesa el inmueble, comuníquese con quien lo publicó para coordinar una nueva fecha.</p>'}
           ${footerHtml(company)}
         </div>
       </div>
@@ -664,7 +664,7 @@ export async function sendEstudioHabilitadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: `Tu estudio ${numero} fue autorizado`,
+    subject: `Su estudio ${numero} fue autorizado`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -672,11 +672,11 @@ export async function sendEstudioHabilitadoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_solicitante)}</strong>,</p>
-          <p style="color: #6b7280;">Tu estudio para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> fue <span style="color: #059669; font-weight: bold;">autorizado</span> por el propietario.</p>
+          <p style="color: #6b7280;">Su estudio para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> fue <span style="color: #059669; font-weight: bold;">autorizado</span> por el propietario.</p>
           <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: firmar la autorización de datos</p>
             <p style="color: #065f46; margin: 8px 0 0;">Estudio <strong>${numero}</strong></p>
-            <p style="color: #065f46; margin: 4px 0 0;">Te enviamos por correo y WhatsApp el enlace para autorizar la consulta en centrales de riesgo. El cobro del estudio llega después de que autorices.</p>
+            <p style="color: #065f46; margin: 4px 0 0;">Le enviamos por correo y WhatsApp el enlace para autorizar la consulta en centrales de riesgo. El cobro del estudio llega después de que autorice.</p>
           </div>
           <p style="text-align: center; margin: 24px 0;">
             <a href="${url_panel}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">Ir al panel</a>
@@ -708,7 +708,7 @@ export async function sendEstudioNoHabilitadoEmail(params: {
   await resend.emails.send({
     from: FROM,
     to: email,
-    subject: `Actualización sobre tu estudio ${numero}`,
+    subject: `Actualización sobre su estudio ${numero}`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
         <div style="background: #6b7280; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -716,14 +716,14 @@ export async function sendEstudioNoHabilitadoEmail(params: {
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre_solicitante)}</strong>,</p>
-          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>, el propietario decidió no continuar con la evaluación crediticia de tu estudio (<strong>${numero}</strong>).</p>
+          <p style="color: #6b7280;">Tras la visita al inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>, el propietario decidió no continuar con la evaluación crediticia de su estudio (<strong>${numero}</strong>).</p>
           ${motivo ? `
           <div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #374151; margin: 0; font-weight: bold;">Motivo del propietario:</p>
             <p style="color: #4b5563; margin: 8px 0 0;">${escapeHtml(motivo)}</p>
           </div>
           ` : ''}
-          <p style="color: #6b7280;">Puedes seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar tu fiador para el que prefieras.</p>
+          <p style="color: #6b7280;">Puede seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar su fiador para el que prefieras.</p>
           ${footerHtml(company)}
         </div>
       </div>

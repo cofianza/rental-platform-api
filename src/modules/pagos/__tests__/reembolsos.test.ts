@@ -366,7 +366,7 @@ describe('P1: webhook de un reembolso', () => {
     expect(mockTransitionChecked).not.toHaveBeenCalled();
     expect(ops.some((o) => o.table === 'pagos' || o.table === 'pagos_no_conciliados')).toBe(false);
     expect(mockNotificarYCorreo).toHaveBeenCalledWith(
-      expect.objectContaining({ tipo: 'pago.contracargo_ganado', link: `/expedientes/${EXP}`, mensaje: expect.stringContaining('restitúyelo a mano') }),
+      expect.objectContaining({ tipo: 'pago.contracargo_ganado', link: `/expedientes/${EXP}`, mensaje: expect.stringContaining('restitúyalo a mano') }),
     );
   });
 

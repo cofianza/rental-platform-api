@@ -27,7 +27,7 @@ describe('correos del interesado de la vitrina (ruta anónima)', () => {
     // Va a una dirección sin verificar: solo el inmueble (de la base), escapado.
     await sendInteresadoConfirmacionEmail('victima@correo.co', { inmuebleLabel: PHISHING });
     expect(html()).not.toContain('<a href="https://evil.co"');
-    expect(html()).toContain('Hola, gracias por tu interés');
+    expect(html()).toContain('Hola, gracias por su interés');
   });
 
   it('el aviso al dueño escapa nombre y mensaje', async () => {

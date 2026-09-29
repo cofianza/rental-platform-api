@@ -423,8 +423,8 @@ async function notifyPagoConfirmado(pagoId: string, expedienteId: string, concep
         tipo: 'pago.confirmado',
         titulo: 'Pago confirmado',
         mensaje: pagoPropio
-          ? `Recibimos tu pago de ${concepto}.`
-          : `Se confirmó el pago de ${concepto} de tu estudio.`,
+          ? `Recibimos su pago de ${concepto}.`
+          : `Se confirmó el pago de ${concepto} de su estudio.`,
         link,
         payload,
       });

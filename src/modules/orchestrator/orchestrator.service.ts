@@ -488,7 +488,7 @@ async function pedirPagoTrasAutorizacion(params: {
     await registrarTimeline(
       expedienteId,
       'estudio',
-      'El arrendatario ya autorizó, pero no pudimos generarle el cobro (falta su correo). Define el pago desde el estudio.',
+      'El arrendatario ya autorizó, pero no pudimos generarle el cobro (falta su correo). Defina el pago desde el estudio.',
     ).catch(() => {});
     return;
   }
@@ -528,7 +528,7 @@ async function pedirPagoTrasAutorizacion(params: {
       // El tope de canon (§4.4) puede rechazar el cobro DESPUÉS de la firma: es
       // el modo de falla nuevo que trae la inversión. Sin este rastro el
       // expediente quedaba en espera sin causa visible para el gestor.
-      `No se pudo generar el cobro del estudio tras la autorización (${err instanceof Error ? err.message : 'error'}). Revísalo desde el estudio.`,
+      `No se pudo generar el cobro del estudio tras la autorización (${err instanceof Error ? err.message : 'error'}). Revíselo desde el estudio.`,
     ).catch(() => {});
   }
 }
@@ -573,7 +573,7 @@ export async function onEstudioPagado(expedienteId: string, userId?: string | nu
       await registrarTimeline(
         expedienteId,
         'pago',
-        'No se pudo enviar automáticamente el link de autorización al inquilino. Reenvíalo manualmente desde el estudio.',
+        'No se pudo enviar automáticamente el link de autorización al inquilino. Reenvíelo manualmente desde el estudio.',
       ).catch(() => {});
     }
     return false;
@@ -748,7 +748,7 @@ export async function onEstudioCompletado(params: {
           userId: inm.propietario_id,
           tipo: 'estudio.aprobado.propietario',
           titulo: 'Estudio del arrendatario aprobado',
-          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el estudio para continuar.`,
+          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'su inmueble'}. Genere el contrato desde el estudio para continuar.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario aprobado'));
@@ -759,18 +759,18 @@ export async function onEstudioCompletado(params: {
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.aprobado.propietario',
           titulo: 'Estudio del arrendatario aprobado',
-          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'tu inmueble'}. Genera el contrato desde el estudio para continuar.`,
+          mensaje: `${sol.nombre} ${sol.apellido} fue aprobado para ${inm.direccion || 'su inmueble'}. Genere el contrato desde el estudio para continuar.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
           whatsapp: {
             // variables[0] (nombre del dueño) lo sustituye el helper por el nombre del miembro.
             template: 'ESTUDIO_APROBADO_DUENO',
-            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble'],
+            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada'],
           },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable aprobado'));
 
         // WhatsApp al dueño: "el estudio fue aprobado, genera el contrato".
-        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_APROBADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'tu inmueble', expedienteId)
+        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_APROBADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada', expedienteId)
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño aprobado'));
       }
 
@@ -864,8 +864,8 @@ export async function onEstudioCompletado(params: {
       // el motivo que escribió para el gestor.
       if (inm?.propietario_id && sol) {
         const mensajeDueno = params.motivoAnalista
-          ? `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazado. Motivo: ${params.motivoAnalista}`
-          : `La evaluación crediticia de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} fue rechazada. El estudio no avanza al contrato.`;
+          ? `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} fue rechazado. Motivo: ${params.motivoAnalista}`
+          : `La evaluación crediticia de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} fue rechazada. El estudio no avanza al contrato.`;
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.rechazado.propietario',
@@ -970,8 +970,8 @@ export async function onEstudioCompletado(params: {
           tipo: 'estudio.condicionado.propietario',
           titulo: 'Estudio condicionado',
           mensaje: sinCentrales
-            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
-            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
+            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puede pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
@@ -983,8 +983,8 @@ export async function onEstudioCompletado(params: {
           tipo: 'estudio.condicionado.propietario',
           titulo: 'Estudio condicionado',
           mensaje: sinCentrales
-            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
-            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'tu inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puedes pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
+            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puede pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
           whatsapp: {

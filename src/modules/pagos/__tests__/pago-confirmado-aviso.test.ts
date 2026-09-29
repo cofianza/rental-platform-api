@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Aviso de pago confirmado: "recibimos tu pago" solo si pagó el solicitante.
+// Aviso de pago confirmado: "recibimos su pago" solo si pagó el solicitante.
 // En la opción B paga el gestor con su propio correo. Mock de Supabase con
 // colas por tabla, como mp-webhook-cancelled.
 
@@ -71,19 +71,19 @@ describe('aviso de pago confirmado según quién pagó', () => {
     vi.clearAllMocks();
   });
 
-  it('opción B (pagó la inmobiliaria): al arrendatario no le dice "recibimos tu pago"', async () => {
+  it('opción B (pagó la inmobiliaria): al arrendatario no le dice "recibimos su pago"', async () => {
     await completarPagoDe('gestor@inmo.co', 'Inmobiliaria Sol SAS');
 
     await vi.waitFor(() => expect(mockNotificar).toHaveBeenCalledTimes(2));
-    expect(mensajeA('sol-user')).toBe('Se confirmó el pago de evaluación crediticia de tu estudio.');
+    expect(mensajeA('sol-user')).toBe('Se confirmó el pago de evaluación crediticia de su estudio.');
     expect(mensajeA('inmo-owner')).toBe('Pago de evaluación crediticia de Calle 1 # 2-3 confirmado (pagó Inmobiliaria Sol SAS).');
   });
 
-  it('opción C (pagó el arrendatario): "recibimos tu pago" y el dueño ve su nombre', async () => {
+  it('opción C (pagó el arrendatario): "recibimos su pago" y el dueño ve su nombre', async () => {
     await completarPagoDe('Juan@Correo.co', 'Juan Pérez');
 
     await vi.waitFor(() => expect(mockNotificar).toHaveBeenCalledTimes(2));
-    expect(mensajeA('sol-user')).toBe('Recibimos tu pago de evaluación crediticia.');
+    expect(mensajeA('sol-user')).toBe('Recibimos su pago de evaluación crediticia.');
     expect(mensajeA('inmo-owner')).toContain('(pagó Juan Pérez)');
   });
 });
