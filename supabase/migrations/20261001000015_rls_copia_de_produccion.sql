@@ -16,7 +16,7 @@
 -- Verificación (debe dar 0 filas / los mismos números que antes):
 --   SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 --   WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND NOT c.relrowsecurity;
---   SELECT count(*) FROM pg_policies WHERE schemaname = 'public';  -- 38
+--   SELECT count(*) FROM pg_policies WHERE schemaname = 'public';  -- 37 (38 menos inmuebles_select_vitrina)
 --   SELECT evtname, evtenabled FROM pg_event_trigger WHERE evtname = 'ensure_rls';
 -- ============================================================
 
@@ -142,7 +142,9 @@ BEGIN
       ('inmuebles', 'inmuebles_select_internal', 'SELECT', interno, NULL),
       ('inmuebles', 'inmuebles_select_owner', 'SELECT',
         $x$((get_my_role() = ANY (ARRAY['propietario'::rol_usuario, 'inmobiliaria'::rol_usuario])) AND (propietario_id = auth.uid()))$x$, NULL),
-      ('inmuebles', 'inmuebles_select_vitrina', 'SELECT', $x$(visible_vitrina = true)$x$, NULL),
+      -- inmuebles_select_vitrina: ya NO se crea. Se quitó de producción el 2026-09-28
+      -- (migración 20261001000019): dejaba leer todas las columnas de los inmuebles
+      -- publicados a cualquier cuenta con sesión. La vitrina se sirve desde la API.
       ('inmuebles', 'inmuebles_update', 'UPDATE', escribe, escribe),
       ('plantillas_contrato', 'plantillas_contrato_insert', 'INSERT', NULL, admin),
       ('plantillas_contrato', 'plantillas_contrato_select', 'SELECT', interno, NULL),

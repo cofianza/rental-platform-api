@@ -14,6 +14,7 @@ DROP POLICY IF EXISTS expedientes_select_owner ON public.expedientes;
 DROP POLICY IF EXISTS facturas_select ON public.facturas;
 DROP POLICY IF EXISTS inmuebles_select_internal ON public.inmuebles;
 DROP POLICY IF EXISTS inmuebles_select_owner ON public.inmuebles;
+-- inmuebles_select_vitrina: YA APLICADO el 2026-09-28 (migración 20261001000019).
 DROP POLICY IF EXISTS inmuebles_select_vitrina ON public.inmuebles;
 DROP POLICY IF EXISTS plantillas_contrato_select ON public.plantillas_contrato;
 DROP POLICY IF EXISTS solicitantes_select ON public.solicitantes;
