@@ -368,6 +368,16 @@ export async function activarContrato(s: Sobre): Promise<void> {
     logger.warn({ contratoId: c.id, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: PDF firmado sin archivar todavía'),
   );
 
+  // Adenda de precios §5.1: la prima Trasladada queda como cuenta por cobrar a la
+  // inmobiliaria ANTES de avisar y de la constancia: si la base falla, lanza y el
+  // barrido reintenta la activación sin haber repetido el aviso de fianza activa
+  // (el registro es idempotente).
+  const venceEn = venceRemision(fechaBogota(s.cerrado_en ?? new Date()));
+  const doc = c.datos_variables?.documento;
+  const prima = doc?.snapshot?.cop?.primaIvaCop;
+  if (doc?.entrada?.modalidad === 'trasladada' && c.orgId && typeof prima === 'number')
+    await registrarPrimaTrasladada({ inmobiliariaId: c.orgId, contratoId: c.id, montoCop: prima, venceEn });
+
   const fecha = s.cerrado_en ? ddmmaaaa(fechaBogota(s.cerrado_en)) : null;
   const destinatarios = await destinatariosDe(c, s);
   const titulo = `Fianza activa — contrato ${c.numero}`;
@@ -391,14 +401,6 @@ export async function activarContrato(s: Sobre): Promise<void> {
     entidadId: c.id,
     detalle: { v3: true, auco_code: s.auco_code, fecha_activacion: s.cerrado_en, intento: s.intento },
   });
-  // Adenda de precios §5.1: la prima Trasladada queda como cuenta por cobrar a la
-  // inmobiliaria ANTES de la constancia: si la base falla, lanza y el barrido
-  // reintenta la activación (el registro es idempotente).
-  const venceEn = venceRemision(fechaBogota(s.cerrado_en ?? new Date()));
-  const doc = c.datos_variables?.documento;
-  const prima = doc?.snapshot?.cop?.primaIvaCop;
-  if (doc?.entrada?.modalidad === 'trasladada' && c.orgId && typeof prima === 'number')
-    await registrarPrimaTrasladada({ inmobiliariaId: c.orgId, contratoId: c.id, montoCop: prima, venceEn });
   const { data: marcado } = await db('contrato_v3_sobres')
     .update({ aviso_entregado_en: new Date().toISOString(), aviso_detalle: { destinatarios } } as never)
     .eq('id', s.id)

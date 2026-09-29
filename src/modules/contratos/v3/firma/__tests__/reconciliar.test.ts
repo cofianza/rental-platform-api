@@ -971,13 +971,17 @@ describe('activación: prima de vinculación por cobrar (punto 6, 2026-09-25)', 
     await activar('trasladada').catch(() => undefined);
     expect(ops.some((o) => o.table === 'contrato_v3_sobres' && o.method === 'update' && 'aviso_entregado_en' in (o.args[0] as object))).toBe(false);
     expect(inmo()).toEqual([]);
+    // ni el aviso de fianza activa ni la línea de tiempo: el reintento no los repite
+    expect(tabla('notificaciones', 'insert')).toEqual([]);
+    expect(tabla('eventos_timeline', 'insert')).toEqual([]);
   });
 
   it('Tradicional: dice que está a cargo de la inmobiliaria', async () => {
     await activar('tradicional');
     expect(inmo()[0].mensaje).toContain('En la modalidad Tradicional está a cargo de la inmobiliaria.');
     expect(inmo()[0].mensaje).not.toContain('recáudela');
-    expect(cofianza()[0].mensaje).toContain('Modalidad Tradicional: la asume la inmobiliaria.');    expect(tabla('cuentas_por_cobrar_inmobiliaria', 'upsert')).toEqual([]);
+    expect(cofianza()[0].mensaje).toContain('Modalidad Tradicional: la asume la inmobiliaria.');
+    expect(tabla('cuentas_por_cobrar_inmobiliaria', 'upsert')).toEqual([]);
   });
 
   it('si otro proceso ya dejó la constancia de la activación, no repite el aviso de la prima', async () => {
