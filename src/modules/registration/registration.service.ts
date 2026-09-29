@@ -259,7 +259,7 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
 }
 
 export async function resendVerification({ email }: ResendVerificationInput): Promise<{ message: string }> {
-  const genericMessage = 'Si el email existe en nuestro sistema, recibira un nuevo enlace de verificacion.';
+  const genericMessage = 'Si el email existe en nuestro sistema, recibirá un nuevo enlace de verificacion.';
 
   const { data: userResult, error: rpcError } = await supabase
     .rpc('find_user_by_email' as never, { user_email: email } as never)
