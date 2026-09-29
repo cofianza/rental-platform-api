@@ -306,6 +306,10 @@ const envSchema = z.object({
   // Estudios colgados en 'en_proceso' (al arrancar y cada 15 min): los marca
   // fallidos o registra el resultado. Mismo criterio: false en una API LOCAL.
   ESTUDIOS_COLGADOS_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  // Adenda de precios §2.5: libera la reserva del cupo de los estudios con
+  // paquete cuya autorización venció sin llegar a la consulta (cada 15 min).
+  // Escribe en la base: apagado por defecto; false en una API LOCAL.
+  CUPO_LIBERAR_ABANDONOS_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Adenda de precios §5.3: el último día de cada mes manda a los titulares de
   // cada inmobiliaria las primas Trasladada por remitir el día 10 siguiente
   // (correo + aviso in-app). Escribe en la base y envía correos: apagado por

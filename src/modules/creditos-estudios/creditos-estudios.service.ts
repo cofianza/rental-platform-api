@@ -133,6 +133,12 @@ export interface SaldoCreditos {
   creditos_en_contra: number;
   /** P22: lo que se puede gastar (saldo_total menos creditos_en_contra). */
   saldo_efectivo: number;
+  /**
+   * Adenda de precios §2: cupos reservados por estudios liberados que todavía
+   * no llegan a resultado. Ya están fuera de saldo_total (salieron del lote);
+   * vuelven si la consulta no da resultado.
+   */
+  saldo_reservado: number;
   lotes: Array<{
     id: string;
     cantidad_disponible: number;
@@ -147,7 +153,7 @@ export async function getSaldoCreditos(perfilId: string): Promise<SaldoCreditos>
   const nowIso = new Date().toISOString();
   const dueno = await resolveOrgCanonicalPerfilId(perfilId);
 
-  const [{ data, error }, enContra] = await Promise.all([
+  const [{ data, error }, enContra, reservado] = await Promise.all([
     (supabase
       .from('lotes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
       .select('id, cantidad_disponible, cantidad_inicial, vence_en, origen, created_at')
@@ -158,6 +164,11 @@ export async function getSaldoCreditos(perfilId: string): Promise<SaldoCreditos>
     // Solo se muestra: pagar con créditos lo vuelve a leer y ahí sí bloquea.
     creditosEnContra(dueno).catch((err) => {
       logger.warn({ err, dueno }, 'No se pudo leer el saldo en contra de créditos');
+      return 0;
+    }),
+    // Solo se muestra, como el saldo en contra.
+    cuposReservados(dueno).catch((err) => {
+      logger.warn({ err, dueno }, 'No se pudieron leer los cupos reservados');
       return 0;
     }),
   ]);
@@ -195,8 +206,34 @@ export async function getSaldoCreditos(perfilId: string): Promise<SaldoCreditos>
     proximo_vencimiento: proximoVencimiento,
     creditos_en_contra: enContra,
     saldo_efectivo: saldoEfectivo(saldoPerpetuo + saldoConVencimiento, enContra),
+    saldo_reservado: reservado,
     lotes,
   };
+}
+
+/** Pura: cuántos pagos tienen la reserva abierta (su último movimiento es 'reserva'). */
+export function contarReservasAbiertas(movs: ReadonlyArray<{ pago_id: string | null; tipo: string }>): number {
+  const ultimo = new Map<string, string>();
+  for (const m of movs) if (m.pago_id) ultimo.set(m.pago_id, m.tipo); // vienen en orden cronológico
+  return [...ultimo.values()].filter((t) => estadoCupo({ tipo: t }) === 'reservado').length;
+}
+
+/**
+ * Cupos reservados de la organización. ponytail: mira los movimientos de los
+ * últimos 180 días (una reserva se consume o se libera en días); ampliar si
+ * alguna llega a durar más.
+ */
+async function cuposReservados(perfilCanonico: string): Promise<number> {
+  const desde = new Date(Date.now() - 180 * 86_400_000).toISOString();
+  const { data, error } = await db('movimientos_creditos_estudios')
+    .select('pago_id, tipo')
+    .eq('perfil_id', perfilCanonico)
+    .in('tipo', TIPOS_CUPO)
+    .gte('created_at', desde)
+    .order('created_at', { ascending: true })
+    .limit(5000);
+  if (error) throw fromSupabaseError(error);
+  return contarReservasAbiertas((data ?? []) as Array<{ pago_id: string | null; tipo: string }>);
 }
 
 /**
@@ -281,7 +318,7 @@ export async function listMovimientos(perfilId: string, query: ListMovimientosQu
   let q = (supabase
     .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .select(
-      'id, tipo, cantidad, saldo_resultante, expediente_id, solicitante_id, lote_id, notas, created_at',
+      'id, tipo, cantidad, saldo_resultante, expediente_id, solicitante_id, lote_id, notas, created_at, literal, estudio_id, referencia_proveedor',
       { count: 'exact' },
     )
     .eq('perfil_id', dueno);
@@ -394,7 +431,10 @@ export interface DetallePaquete {
   /** Fecha de la compra (aprobación del pago; si no hay compra, la del lote). */
   fecha_compra: string;
   comprados: number;
+  /** Cupos consumidos con resultado de la consulta (§2.1). */
   consumidos: number;
+  /** Cupos reservados por estudios que todavía no llegan a resultado (§2). */
+  reservados: number;
   disponibles: number;
   vence_en: string | null;
   estado: EstadoPaquete;
@@ -436,9 +476,12 @@ export function compararOrdenConsumo(
 }
 
 /**
- * Pura: arma el detalle. Consumidos = consumos del lote menos las
- * devoluciones de crédito a ese lote (ajuste positivo con pago). Un lote
- * vencido no tiene disponibles: sus cupos se extinguieron (§3.1).
+ * Pura: arma el detalle. Salidas del lote = reservas y consumos de antes de la
+ * Adenda (-1) menos lo que volvió (liberaciones y devoluciones con pago); de
+ * esas, las reservas todavía abiertas son «reservados» y el resto,
+ * «consumidos». Una liberación que se extinguió (lote vencido) también cuenta
+ * como vuelta: ese cupo no se consumió. Un lote vencido no tiene disponibles:
+ * sus cupos se extinguieron (§3.1). Los movimientos llegan en orden cronológico.
  */
 export function armarDetallePaquetes(
   lotes: readonly LoteDetalle[],
@@ -447,13 +490,19 @@ export function armarDetallePaquetes(
   ahora: Date,
 ): DetallePaquete[] {
   const limite = ahora.getTime() - DIAS_RECIENTES_PAQUETES * 86_400_000;
-  const consumidos = new Map<string, number>();
+  const salidas = new Map<string, number>();
+  const sumar = (lote: string, n: number) => salidas.set(lote, (salidas.get(lote) ?? 0) + n);
+  const ultimo = new Map<string, MovimientoDetalle>();
   for (const m of movimientos) {
     if (!m.lote_id) continue;
-    const esConsumo = m.tipo === 'consumo';
-    const esDevolucion = m.tipo === 'ajuste' && m.cantidad > 0 && !!m.pago_id;
-    if (esConsumo || esDevolucion) consumidos.set(m.lote_id, (consumidos.get(m.lote_id) ?? 0) - m.cantidad);
+    if ((m.tipo === 'reserva' || m.tipo === 'consumo') && m.cantidad < 0) sumar(m.lote_id, -m.cantidad);
+    else if (m.tipo === 'liberacion') sumar(m.lote_id, -1);
+    else if (m.tipo === 'ajuste' && m.cantidad > 0 && !!m.pago_id) sumar(m.lote_id, -m.cantidad);
+    if (m.pago_id && m.tipo !== 'compra' && m.tipo !== 'expiracion') ultimo.set(m.pago_id, m);
   }
+  const reservados = new Map<string, number>();
+  for (const m of ultimo.values())
+    if (m.tipo === 'reserva' && m.lote_id) reservados.set(m.lote_id, (reservados.get(m.lote_id) ?? 0) + 1);
 
   const filas: DetallePaquete[] = [];
   for (const l of lotes) {
@@ -468,7 +517,8 @@ export function armarDetallePaquetes(
       origen: l.origen,
       fecha_compra: (l.compra_id && fechaCompra.get(l.compra_id)) || l.created_at,
       comprados: l.cantidad_inicial,
-      consumidos: Math.max(0, consumidos.get(l.id) ?? 0),
+      consumidos: Math.max(0, (salidas.get(l.id) ?? 0) - (reservados.get(l.id) ?? 0)),
+      reservados: reservados.get(l.id) ?? 0,
       disponibles: estado === 'vencido' ? 0 : l.cantidad_disponible,
       vence_en: l.vence_en,
       estado,
@@ -511,7 +561,8 @@ export async function listDetallePaquetes(perfilId: string): Promise<DetallePaqu
     const { data: movs, error: mErr } = await db('movimientos_creditos_estudios')
       .select('lote_id, tipo, cantidad, pago_id')
       .in('lote_id', lotes.map((l) => l.id))
-      .in('tipo', ['consumo', 'ajuste'])
+      .in('tipo', TIPOS_CUPO)
+      .order('created_at', { ascending: true })
       .order('id', { ascending: true })
       .range(offset, offset + 999);
     if (mErr) throw fromSupabaseError(mErr);
@@ -969,7 +1020,7 @@ export async function liberarEstudioConCredito(
       estado: 'completado',
       fecha_pago: new Date().toISOString(),
       creado_por: userId,
-      notas: notas || 'Liberado consumiendo credito pre-comprado',
+      notas: notas || 'Liberado con un cupo reservado del paquete',
     } as never)
     .select('id')
     .single();
@@ -985,7 +1036,8 @@ export async function liberarEstudioConCredito(
   }
   const pago = pagoData as { id: string };
 
-  // 6. Consumir el credito via RPC (atomico, FIFO, con lock)
+  // 6. Reservar el cupo via RPC (atomico, vence antes primero, con lock).
+  //    Adenda de precios §2: se consume solo con resultado de la consulta.
   const { data: rpcData, error: rpcErr } = await (supabase as unknown as {
     rpc: (fn: string, args: Record<string, unknown>) => Promise<{
       data: Array<{ lote_id: string; saldo_restante: number }> | null;
@@ -1044,7 +1096,7 @@ export async function liberarEstudioConCredito(
     .insert({
       expediente_id: expedienteId,
       tipo: 'pago',
-      descripcion: 'Estudio liberado consumiendo credito pre-comprado',
+      descripcion: 'Estudio liberado con un cupo reservado del paquete: se consume cuando la consulta a centrales dé resultado',
       usuario_id: userId,
       metadata: {
         pago_id: pago.id,
@@ -1250,143 +1302,262 @@ async function cubrirSaldoEnContra(perfilId: string, cantidad: number): Promise<
   return cubiertos;
 }
 
-/**
- * ¿La compra del lote se contracargó y todavía debe créditos? Entonces un
- * crédito devuelto baja esa deuda en vez de volver a un lote que no se pagó.
- */
-async function compraConDeuda(compraId: string | null): Promise<{ id: string; creditos_en_contra: number } | null> {
-  if (!compraId) return null;
-  const { data, error: cErr } = await db('compras_creditos_estudios')
-    .select('id, estado, creditos_en_contra')
-    .eq('id', compraId)
-    .maybeSingle();
-  if (cErr) {
-    if (faltaColumna(cErr)) return null;
-    throw fromSupabaseError(cErr);
-  }
-  const c = data as { id: string; estado: string; creditos_en_contra: number } | null;
-  return c && c.estado === 'cancelado' && c.creditos_en_contra > 0 ? c : null;
-}
-
 export type DevolucionCredito = 'no_es_credito' | 'devuelto' | 'ya_devuelto';
 
-/** ¿El pago de la evaluación salió de un crédito prepagado? (su consumo guarda el pago_id). */
+// ============================================================
+// Adenda de precios §2: reserva → consumo
+//
+// Al liberar el estudio con crédito el cupo se RESERVA (sale del lote). Con
+// resultado de la consulta (c) la reserva se confirma como consumo; en (a), (b)
+// o si el estudio nunca llega a la consulta (§2.5) se libera y vuelve al mismo
+// lote. Las tres operaciones son RPC atómicas por pago (migración
+// 20261003000001): el último movimiento del pago decide su estado.
+// ============================================================
+
+/** Literal por el que una reserva no se consumió (§2.6). */
+export type LiteralNoConsumo = 'a' | 'b' | '2.5';
+export type DesenlaceConsulta = 'a_no_existe' | 'b_falla' | 'c_resultado';
+
+/**
+ * Pura: el desenlace de una consulta que falló (§2.2, decisiones 3 y 4 del
+ * PR): sin autorización no se llegó a consultar (null = §2.5); el apellido que
+ * no coincide es una respuesta no utilizable (b); el documento inexistente o
+ * mal formado (DC 05/09, TU 23/37) es (a); lo demás (caída, error, config) es (b).
+ */
+export function desenlaceDeFalla(f: {
+  bloqueadoPorAutorizacion: boolean;
+  apellidoNoCoincide: boolean;
+  documentoNoEncontrado: boolean;
+}): DesenlaceConsulta | null {
+  if (f.bloqueadoPorAutorizacion) return null;
+  if (f.apellidoNoCoincide) return 'b_falla';
+  return f.documentoNoEncontrado ? 'a_no_existe' : 'b_falla';
+}
+
+export type EstadoCupo = 'reservado' | 'consumido' | 'liberado';
+
+interface UltimoMovimiento {
+  tipo: string;
+  cantidad: number;
+  literal: string | null;
+  expediente_id: string | null;
+}
+
+/**
+ * Pura: el estado del cupo de un pago según su último movimiento. Un 'consumo'
+ * de antes de la Adenda (cantidad -1, sin literal) cuenta como consumido para
+ * mostrarlo; las RPC lo tratan como una reserva que todavía se puede liberar.
+ */
+export function estadoCupo(ult: Pick<UltimoMovimiento, 'tipo'> | null): EstadoCupo | null {
+  if (!ult) return null;
+  if (ult.tipo === 'reserva') return 'reservado';
+  if (ult.tipo === 'consumo') return 'consumido';
+  if (ult.tipo === 'liberacion' || ult.tipo === 'ajuste') return 'liberado';
+  return null;
+}
+
+const TIPOS_CUPO = ['reserva', 'consumo', 'liberacion', 'ajuste'];
+
+async function ultimoMovimientoCupo(pagoId: string): Promise<UltimoMovimiento | null> {
+  const { data, error } = await db('movimientos_creditos_estudios')
+    .select('tipo, cantidad, literal, expediente_id')
+    .eq('pago_id', pagoId)
+    .in('tipo', TIPOS_CUPO)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  return data as UltimoMovimiento | null;
+}
+
+/** ¿El pago de la evaluación salió de un crédito prepagado? (su reserva o consumo guarda el pago_id). */
 export async function esPagoConCredito(pagoId: string): Promise<boolean> {
   const { data, error } = await db('movimientos_creditos_estudios')
     .select('id')
     .eq('pago_id', pagoId)
-    .eq('tipo', 'consumo')
+    .in('tipo', ['reserva', 'consumo'])
     .limit(1);
   if (error) throw fromSupabaseError(error);
   return ((data as unknown[] | null) ?? []).length > 0;
 }
 
+/** ¿La reserva del pago ya se liberó en (a), (b) o §2.5? */
+export async function cupoLiberado(pagoId: string): Promise<boolean> {
+  return estadoCupo(await ultimoMovimientoCupo(pagoId)) === 'liberado';
+}
+
+type RpcResult = { data: unknown; error: { message?: string } | null };
+const rpc = (fn: string, args: Record<string, unknown>): Promise<RpcResult> =>
+  (supabase as unknown as { rpc: (f: string, a: Record<string, unknown>) => Promise<RpcResult> }).rpc(fn, args);
+
+async function rpcTexto(fn: string, args: Record<string, unknown>): Promise<string> {
+  const { data, error } = await rpc(fn, args);
+  if (error) throw new AppError(500, 'CUPO_RPC_ERROR', `${fn}: ${error.message ?? 'error desconocido'}`);
+  return String(data);
+}
+
+/** Libera la reserva del pago (§2.2 a/b, §2.5). Ver liberar_reserva_credito. */
+export function liberarReservaCupo(
+  pagoId: string,
+  literal: LiteralNoConsumo,
+  opts: { estudioId?: string | null; usuarioId?: string | null; notas?: string } = {},
+): Promise<string> {
+  return rpcTexto('liberar_reserva_credito', {
+    p_pago_id: pagoId,
+    p_literal: literal,
+    p_estudio_id: opts.estudioId ?? null,
+    p_usuario_id: opts.usuarioId ?? null,
+    p_notas: opts.notas ?? null,
+  });
+}
+
+/** Pago de la evaluación del expediente (completado), o null. */
+async function pagoEstudioCompletado(expedienteId: string): Promise<string | null> {
+  const { data, error } = await db('pagos')
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .eq('concepto', 'estudio')
+    .eq('estado', 'completado')
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+const MENSAJE_LIBERACION: Record<LiteralNoConsumo, string> = {
+  a: 'La persona no existe en la central consultada (Adenda de precios §2.2 a): el cupo no se consume.',
+  b: 'La central no respondió o su respuesta no fue utilizable (Adenda de precios §2.2 b): el cupo no se consume.',
+  '2.5': 'El estudio no llegó a la consulta a centrales (Adenda de precios §2.5): el cupo no se consume.',
+};
+
 /**
- * P1: el crédito con que se pagó una evaluación que no llegó al buró vuelve al
- * saldo de la organización, con un movimiento de ajuste, al lote de donde
- * salió (devolverlo es deshacer el consumo). Si ese lote ya venció, vuelve en
- * un lote de 1 con la misma vigencia que tenía el original, contada desde hoy.
- * El pago pasa a 'reembolsado' con compare-and-set: solo una llamada devuelve.
+ * Registra el desenlace de la consulta de un estudio y mueve el cupo del pago
+ * del expediente: (c) confirma el consumo con el estudio y la referencia; (a),
+ * (b) o §2.5 liberan la reserva, salvo que otro estudio del expediente ya haya
+ * dado resultado con ese mismo pago (un cupo ampara el estudio completo). Los
+ * pagos de pasarela no tienen cupo: no cambian. Nunca lanza.
+ */
+export async function registrarDesenlaceConsulta(a: {
+  estudioId: string;
+  expedienteId: string;
+  /** null = no llegó a la consulta (§2.5). */
+  desenlace: DesenlaceConsulta | null;
+  referencia?: string | null;
+  usuarioId?: string | null;
+}): Promise<void> {
+  try {
+    if (a.desenlace) {
+      const { error } = await db('estudios').update({ desenlace_consulta: a.desenlace } as never).eq('id', a.estudioId);
+      if (error) logger.warn({ estudioId: a.estudioId, error: error.message }, 'No se pudo guardar el desenlace de la consulta');
+    }
+    const pagoId = await pagoEstudioCompletado(a.expedienteId);
+    if (!pagoId) return;
+
+    if (a.desenlace === 'c_resultado') {
+      const r = await rpcTexto('confirmar_consumo_credito', {
+        p_pago_id: pagoId,
+        p_estudio_id: a.estudioId,
+        p_referencia: a.referencia ?? null,
+        p_usuario_id: a.usuarioId ?? null,
+      });
+      if (r === 'sin_saldo') {
+        logger.error(
+          { pagoId, estudioId: a.estudioId },
+          'Adenda §2: la consulta dio resultado con la reserva liberada y sin cupo para volver a tomarla: revisar el cobro a mano',
+        );
+      }
+      return;
+    }
+
+    const { data: otros, error } = await db('estudios')
+      .select('id, estado, referencia_proveedor, desenlace_consulta')
+      .eq('expediente_id', a.expedienteId);
+    if (error) throw fromSupabaseError(error);
+    const conResultado = ((otros ?? []) as Array<{ id: string; estado: string; referencia_proveedor: string | null; desenlace_consulta: string | null }>)
+      .some((e) => e.id !== a.estudioId && (e.desenlace_consulta === 'c_resultado' || e.estado === 'completado' || !!e.referencia_proveedor));
+    if (conResultado) return;
+
+    const literal: LiteralNoConsumo = a.desenlace === 'a_no_existe' ? 'a' : a.desenlace === 'b_falla' ? 'b' : '2.5';
+    const r = await liberarReservaCupo(pagoId, literal, { estudioId: a.estudioId, usuarioId: a.usuarioId, notas: MENSAJE_LIBERACION[literal] });
+    if (r === 'liberado' || r === 'extinguido' || r === 'a_deuda') {
+      const { error: tlErr } = await db('eventos_timeline').insert({
+        expediente_id: a.expedienteId,
+        tipo: 'pago',
+        descripcion:
+          r === 'extinguido'
+            ? `${MENSAJE_LIBERACION[literal]} El paquete del que salió ya venció, así que el cupo se extingue.`
+            : `${MENSAJE_LIBERACION[literal]} El cupo reservado volvió al saldo de la inmobiliaria.`,
+        metadata: { pago_id: pagoId, estudio_id: a.estudioId, evento: 'cupo_liberado', literal, resultado: r, origen: 'system' },
+      } as never);
+      if (tlErr) logger.warn({ pagoId, error: tlErr.message }, 'No se pudo dejar la liberación del cupo en el timeline');
+    }
+  } catch (err) {
+    logger.error({ err, estudioId: a.estudioId, expedienteId: a.expedienteId }, 'Adenda §2: no se pudo mover el cupo del estudio');
+  }
+}
+
+/**
+ * Antes de volver a consultar (reintento de un 'fallido', re-consulta): si la
+ * reserva del pago se liberó, se vuelve a tomar un cupo. Falla y reintento con
+ * resultado = un solo cupo. Sin saldo, no se consulta.
+ */
+export async function asegurarReservaParaConsulta(expedienteId: string, usuarioId: string | null): Promise<void> {
+  const pagoId = await pagoEstudioCompletado(expedienteId);
+  if (!pagoId) return;
+  const r = await rpcTexto('reactivar_reserva_credito', { p_pago_id: pagoId, p_usuario_id: usuarioId });
+  if (r === 'sin_saldo') {
+    throw AppError.conflict(
+      'El cupo de este estudio volvió al saldo de su organización porque la consulta anterior no produjo resultado, y ya no quedan cupos disponibles. Compre un paquete para volver a consultar.',
+      'SIN_SALDO_CREDITOS',
+    );
+  }
+}
+
+/**
+ * P1 / §2.5: el estudio se cerró o se rechazó sin consulta al buró. Se libera
+ * la reserva (literal 2.5) al mismo lote —si el lote venció, el cupo se
+ * extingue; si su compra se contracargó, baja la deuda— y el pago pasa a
+ * 'reembolsado' con compare-and-set: solo una llamada devuelve. §2.4: un pago
+ * cuyo cupo se consumió con resultado (c) no se devuelve por ningún motivo.
  */
 export async function devolverCreditoDePago(
   pagoId: string,
   motivo: string,
   usuarioId: string | null,
 ): Promise<DevolucionCredito> {
-  const { data, error } = await db('movimientos_creditos_estudios')
-    .select('perfil_id, lote_id, expediente_id, solicitante_id')
-    .eq('pago_id', pagoId)
-    .eq('tipo', 'consumo')
-    .maybeSingle();
-  if (error) throw fromSupabaseError(error);
-  const consumo = data as {
-    perfil_id: string;
-    lote_id: string | null;
-    expediente_id: string | null;
-    solicitante_id: string | null;
-  } | null;
-  if (!consumo) return 'no_es_credito';
-  if (!consumo.lote_id) {
-    throw new AppError(500, 'CREDITO_NO_DEVUELTO', 'El consumo del crédito no conserva su lote: hay que devolverlo a mano.');
+  const ult = await ultimoMovimientoCupo(pagoId);
+  if (!ult) return 'no_es_credito';
+  let consumido = ult.tipo === 'consumo' && ult.literal === 'c';
+  if (!consumido && ult.expediente_id) {
+    const { data, error } = await db('estudios')
+      .select('id')
+      .eq('expediente_id', ult.expediente_id)
+      .eq('desenlace_consulta', 'c_resultado')
+      .limit(1);
+    if (error && !faltaColumna(error)) throw fromSupabaseError(error);
+    consumido = ((data as unknown[] | null) ?? []).length > 0;
   }
-  // Se decide antes de escribir nada: si una lectura falla, el pago no cambia.
-  const { data: loteRow, error: loteErr } = await db('lotes_creditos_estudios')
-    .select('id, compra_id, vence_en, created_at')
-    .eq('id', consumo.lote_id)
-    .maybeSingle();
-  if (loteErr) throw fromSupabaseError(loteErr);
-  const lote = loteRow as { id: string; compra_id: string | null; vence_en: string | null; created_at: string } | null;
-  if (!lote) throw new AppError(500, 'CREDITO_NO_DEVUELTO', 'El lote del crédito ya no existe: hay que devolverlo a mano.');
-  const deuda = await compraConDeuda(lote.compra_id);
+  if (consumido) {
+    throw AppError.conflict(
+      'El cupo se consumió con el resultado de la consulta a centrales: no se devuelve (Adenda de precios §2.4).',
+      'CUPO_CONSUMIDO',
+    );
+  }
 
-  // ponytail: sin transacción. Si la API se reinicia entre pasar el pago a
-  // reembolsado (abajo) y devolver el crédito, el crédito no vuelve y el
-  // reintento responde «ya devuelto»; se corrige a mano en la base. Pasarlo a
-  // una RPC transaccional si ocurre.
+  const r = await liberarReservaCupo(pagoId, '2.5', { usuarioId, notas: `Devolución: ${motivo}.` });
+  if (r === 'consumido') {
+    throw AppError.conflict('El cupo se consumió con el resultado de la consulta a centrales: no se devuelve (Adenda de precios §2.4).', 'CUPO_CONSUMIDO');
+  }
+
   // Import dinámico: la máquina de estados arrastra las notificaciones.
   const { transitionPagoStateChecked } = await import('@/modules/pagos/pago-state-machine');
   const { transitioned } = await transitionPagoStateChecked({
     pagoId,
     targetEstado: 'reembolsado',
     origen: 'system',
-    detalles: { motivo, devolucion: 'credito' },
+    detalles: { motivo, devolucion: 'credito', cupo: r },
     userId: usuarioId,
   });
-  if (!transitioned) return 'ya_devuelto';
-
-  let aDeuda = false;
-  if (deuda) {
-    const { data: ok } = await db('compras_creditos_estudios')
-      .update({ creditos_en_contra: deuda.creditos_en_contra - 1 } as never)
-      .eq('id', deuda.id)
-      .eq('creditos_en_contra', deuda.creditos_en_contra)
-      .select('id');
-    aDeuda = !!(ok as unknown[] | null)?.length;
-  }
-
-  let loteDestino = lote.id;
-  let devuelto = aDeuda;
-  const vencido = !!lote.vence_en && Date.parse(lote.vence_en) <= Date.now();
-  if (!devuelto && vencido) {
-    const vigenciaMs = Date.parse(lote.vence_en!) - Date.parse(lote.created_at);
-    const { data: nuevo } = await db('lotes_creditos_estudios')
-      .insert({
-        perfil_id: consumo.perfil_id,
-        cantidad_inicial: 1,
-        cantidad_disponible: 1,
-        vence_en: new Date(Date.now() + Math.max(vigenciaMs, 0)).toISOString(),
-        origen: 'ajuste_admin',
-        notas: `Crédito devuelto (${motivo}): el lote original ya había vencido`,
-      } as never)
-      .select('id')
-      .maybeSingle();
-    loteDestino = (nuevo as { id: string } | null)?.id ?? lote.id;
-    devuelto = !!nuevo;
-  } else if (!devuelto) {
-    devuelto = await moverDisponible(lote.id, 1);
-  }
-  if (!devuelto) {
-    logger.error({ pagoId, loteId: lote.id }, 'CRITICO: el pago quedó reembolsado pero el crédito no volvió al saldo');
-    throw new AppError(500, 'CREDITO_NO_DEVUELTO', 'El pago quedó reembolsado pero el crédito no volvió al saldo: hay que devolverlo a mano.');
-  }
-
-  await db('movimientos_creditos_estudios').insert({
-    perfil_id: consumo.perfil_id,
-    lote_id: loteDestino,
-    tipo: 'ajuste',
-    cantidad: 1,
-    saldo_resultante: await saldoVigente(consumo.perfil_id),
-    expediente_id: consumo.expediente_id,
-    solicitante_id: consumo.solicitante_id,
-    pago_id: pagoId,
-    usuario_id: usuarioId,
-    notas: aDeuda
-      ? `Devolución: ${motivo}. Bajó el saldo en contra.`
-      : vencido
-        ? `Devolución: ${motivo}. El lote había vencido: el crédito vuelve con vigencia nueva.`
-        : `Devolución: ${motivo}.`,
-  } as never);
-  return 'devuelto';
+  return transitioned ? 'devuelto' : 'ya_devuelto';
 }
 
 export interface CompraRevertida {
@@ -1486,7 +1657,7 @@ export async function revertirCompraCreditos(compraId: string): Promise<CompraRe
   const { data: movs } = await db('movimientos_creditos_estudios')
     .select('expediente_id')
     .eq('lote_id', lote.id)
-    .eq('tipo', 'consumo');
+    .in('tipo', ['reserva', 'consumo']);
   const ids = [...new Set(((movs ?? []) as Array<{ expediente_id: string | null }>).map((m) => m.expediente_id))].filter(
     (id): id is string => !!id,
   );

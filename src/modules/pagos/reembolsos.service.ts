@@ -185,7 +185,19 @@ export async function devolverEvaluacionSinConsulta(
     const consulta = await cancelarEvaluacionesSinConsulta(expedienteId);
     if (consulta === 'si') return;
 
-    const { devolverCreditoDePago, esPagoConCredito } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+    const { devolverCreditoDePago, esPagoConCredito, cupoLiberado } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+    // Adenda de precios §2.2: la consulta fallida ya liberó el cupo (a o b);
+    // solo falta cerrar el pago. Lo dudoso queda para el dinero de pasarela.
+    if (consulta === 'dudosa' && (await cupoLiberado(pago.id))) {
+      if ((await devolverCreditoDePago(pago.id, motivo, usuarioId)) === 'devuelto') {
+        await timeline(
+          expedienteId,
+          'El estudio terminó sin resultado de la consulta a centrales: el cupo reservado ya había vuelto al saldo de la inmobiliaria.',
+          { pago_id: pago.id, evento: 'evaluacion_devuelta', medio: 'credito' },
+        );
+      }
+      return;
+    }
     if (consulta === 'dudosa') {
       await encolar(pago, expedienteId, 'estudio_fallido_revisar', await esPagoConCredito(pago.id));
       await timeline(
@@ -654,4 +666,65 @@ export async function barrerDevolucionesPendientes(): Promise<number> {
     revisados++;
   }
   return revisados;
+}
+
+/**
+ * Adenda de precios §2.5 (decisión: al vencer la autorización o al cerrar el
+ * estudio, lo que ocurra primero): libera la reserva del cupo de los estudios
+ * pagados con paquete que nunca llegaron a la consulta porque la autorización
+ * del prospecto venció. El pago sigue completado: si el prospecto autoriza
+ * después (reenvío sin costo, Flujo §12), la consulta vuelve a reservar un
+ * cupo. La RPC liberar_reserva_credito es el compare-and-set (lock por pago y
+ * estado por su último movimiento): repetirla no devuelve dos veces.
+ * Las candidatas son los pagos cuyo ÚLTIMO movimiento de cupo es 'reserva'
+ * (las reservas ya consumidas o liberadas siguen en la tabla: leer solo las
+ * filas 'reserva' con límite dejaba las nuevas detrás de las viejas).
+ * ponytail: lee los movimientos de cupo de los últimos 90 días (la
+ * autorización vence a los 15) por páginas de 1000.
+ */
+export async function liberarCuposAbandonados(): Promise<number> {
+  const desde = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  const ultimo = new Map<string, { tipo: string; expediente_id: string | null }>();
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await db('movimientos_creditos_estudios')
+      .select('pago_id, expediente_id, tipo')
+      .in('tipo', ['reserva', 'consumo', 'liberacion', 'ajuste'])
+      .not('pago_id', 'is', null)
+      .gte('created_at', desde)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + 999);
+    if (error) {
+      logger.error({ error: error.message }, 'liberarCuposAbandonados: no se pudieron leer las reservas');
+      return 0;
+    }
+    const filas = (data ?? []) as Array<{ pago_id: string | null; expediente_id: string | null; tipo: string }>;
+    for (const m of filas) if (m.pago_id) ultimo.set(m.pago_id, m); // orden cronológico: queda el último
+    if (filas.length < 1000) break;
+  }
+  const { abandonadoAntesDeLaConsulta } = await import('@/modules/estudios/estudios.service');
+  const { liberarReservaCupo } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+  let liberados = 0;
+  for (const [pagoId, m] of ultimo) {
+    if (m.tipo !== 'reserva' || !m.expediente_id) continue;
+    const r = { pago_id: pagoId, expediente_id: m.expediente_id };
+    try {
+      if (!(await abandonadoAntesDeLaConsulta(r.expediente_id))) continue;
+      const res = await liberarReservaCupo(r.pago_id, '2.5', {
+        notas: 'El prospecto no autorizó dentro del plazo (Adenda de precios §2.5; Flujo §14: 15 días).',
+      });
+      if (res !== 'liberado' && res !== 'extinguido' && res !== 'a_deuda') continue;
+      liberados++;
+      await timeline(
+        r.expediente_id,
+        res === 'extinguido'
+          ? 'El prospecto no autorizó dentro del plazo: el cupo reservado no se consume, pero su paquete ya venció y se extingue.'
+          : 'El prospecto no autorizó dentro del plazo: el cupo reservado volvió al saldo de la inmobiliaria. Si el prospecto autoriza después, la consulta toma un cupo de nuevo.',
+        { pago_id: r.pago_id, evento: 'cupo_liberado', literal: '2.5', resultado: res },
+      );
+    } catch (err) {
+      logger.error({ err, pagoId: r.pago_id }, 'liberarCuposAbandonados: no se pudo revisar la reserva');
+    }
+  }
+  return liberados;
 }

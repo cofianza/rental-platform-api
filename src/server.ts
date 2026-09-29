@@ -32,6 +32,17 @@ if (env.REEMBOLSOS_BARRIDO_ENABLED) {
   }, RECONCILE_INTERVAL_MS).unref();
 }
 
+// Adenda de precios §2.5: la reserva del cupo de un estudio con paquete cuya
+// autorización venció sin consulta vuelve al saldo. Cada 15 min. Escribe en la
+// base: CUPO_LIBERAR_ABANDONOS_ENABLED=false (por defecto) en una API local.
+if (env.CUPO_LIBERAR_ABANDONOS_ENABLED) {
+  setInterval(() => {
+    import('@/modules/pagos/reembolsos.service')
+      .then(({ liberarCuposAbandonados }) => liberarCuposAbandonados())
+      .catch((err) => logger.warn({ err }, 'liberarCuposAbandonados: ciclo fallido'));
+  }, RECONCILE_INTERVAL_MS).unref();
+}
+
 // Vencimiento de contratos del flujo anterior: los vigentes cuya fecha_fin ya
 // pasó se prorrogan por el mismo término (P11/P20). Corre al arrancar (atrapa
 // los que vencieron mientras el server estuvo caído) y cada 6 h.

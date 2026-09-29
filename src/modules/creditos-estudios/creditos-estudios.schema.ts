@@ -46,7 +46,7 @@ export const paqueteIdParamsSchema = z.object({
 export const listMovimientosQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  tipo: z.enum(['compra', 'consumo', 'expiracion', 'ajuste']).optional(),
+  tipo: z.enum(['compra', 'reserva', 'consumo', 'liberacion', 'expiracion', 'ajuste']).optional(),
 });
 
 export const compraIdParamsSchema = z.object({

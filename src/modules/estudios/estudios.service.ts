@@ -15,6 +15,7 @@ import { resolverRuta, type Ruta, type EntradaRuta } from './rutas-resultado';
 import { evaluarExpiracion, type VeredictoExpiracion } from './expiracion';
 // Adenda 1 §11: umbrales, vigencia y plazos vienen del panel de calibracion.
 import { getCalibracion } from '@/lib/calibracion';
+import { asegurarReservaParaConsulta, desenlaceDeFalla, registrarDesenlaceConsulta } from '@/modules/creditos-estudios/creditos-estudios.service';
 import { guardarCodigosMotivo } from './motivos-decision';
 import type { CreateEstudioInput, CreateEstudioFromInmuebleInput, ListEstudiosQuery, ListAllEstudiosQuery, SubmitFormularioInput, RegistrarResultadoInput, CertificadoPresignedUrlInput, SoportePresignedUrlInput, ConfirmarSoporteInput, ReEvaluarInput } from './estudios.schema';
 import { getProvider, getAllProviderIds } from './providers/factory';
@@ -646,6 +647,30 @@ async function adjuntarExpiracionALista<T extends Record<string, unknown>>(
 }
 
 type AutorizacionTitular = { created_at: string; estado: string; token_expiracion?: string | null } | null;
+
+/**
+ * Adenda de precios §2.5: ¿el estudio se abandonó antes de la consulta? Sí
+ * cuando ninguna evaluación del expediente llegó al buró y la autorización del
+ * titular venció por el reloj (Flujo §12/§14: 15 días, o el plazo guardado en
+ * el enlace). Un enlace DETENIDO no cuenta: le toca al gestor corregir y
+ * reenviar. Mismo veredicto que ve el gestor en el detalle.
+ */
+export async function abandonadoAntesDeLaConsulta(expedienteId: string): Promise<boolean> {
+  const { data, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('estado, tipo, referencia_proveedor')
+    .eq('expediente_id', expedienteId);
+  if (error) throw fromSupabaseError(error);
+  const filas = (data ?? []) as Array<{ estado: string; tipo: string | null; referencia_proveedor: string | null }>;
+  if (filas.some((f) => !!f.referencia_proveedor || ['en_proceso', 'completado', 'fallido'].includes(f.estado))) return false;
+  const titulares = filas.filter((f) => f.tipo !== 'con_coarrendatario');
+  if (titulares.length === 0) return false;
+  const [aut, cal] = await Promise.all([leerAutorizacionTitular(expedienteId), getCalibracion()]);
+  return titulares.some((f) => {
+    const v = veredictoExpiracion(f, aut, cal.DIAS_EXPIRACION_ESTUDIO);
+    return v.expirado && !v.detenida;
+  });
+}
 
 /** Ultima autorizacion del TITULAR del expediente (el coarrendatario tiene la suya). */
 async function leerAutorizacionTitular(expedienteId: string): Promise<AutorizacionTitular> {
@@ -2744,6 +2769,13 @@ export async function ejecutarEstudio(
     );
   }
 
+  // Adenda de precios §2: si el pago es con cupo y su reserva se liberó (la
+  // consulta anterior no dio resultado), se vuelve a reservar antes de
+  // consultar. Sin cupo, no se consulta. Va después de los guards que pueden
+  // rechazar la ejecución y justo antes del lock: una reserva tomada para un
+  // intento que nunca consulta quedaría abierta sin nadie que la libere.
+  await asegurarReservaParaConsulta(est.expediente_id, userId);
+
   if (cambioProveedor) {
     logger.info(
       { estudioId, proveedorAnterior, proveedorFinal, userId },
@@ -3013,6 +3045,18 @@ async function procesarEstudioAsync(args: {
 
     // Proveedores síncronos (TransUnion) devuelven status='completed'.
     if (response.status === 'completed') {
+      // Adenda de precios §2.2 (c): la central entregó información utilizable
+      // (aprobado, rechazado o revisión manual consumen igual): se confirma el
+      // consumo del cupo con esta consulta. ponytail: un proveedor asíncrono
+      // (solo el mock) no confirma aquí; su reserva queda abierta.
+      await registrarDesenlaceConsulta({
+        estudioId,
+        expedienteId,
+        desenlace: 'c_resultado',
+        referencia: response.referencia_proveedor,
+        usuarioId: userId,
+      });
+
       // Obtener el resultado UNA vez y persistir el crudo ANTES del RPC: el
       // resultado vive solo en el cache en memoria del provider — si el RPC
       // falla y el proceso se reinicia, sin esta persistencia la consulta
@@ -3189,6 +3233,20 @@ async function procesarEstudioAsync(args: {
           detalleTecnico: observaciones === errorMsg ? undefined : errorMsg,
         });
       }
+    }
+
+    // Adenda de precios §2.2 / §2.5: la consulta no dio resultado, así que la
+    // reserva del cupo se libera con su literal. Apellido que no coincide =
+    // respuesta no utilizable (b); documento inexistente o mal formado = (a);
+    // sin autorización no se llegó a consultar (§2.5). Una re-consulta que
+    // falla conserva el resultado anterior: su cupo ya se consumió.
+    if (!restaurar?.estado && !referenciaNueva) {
+      await registrarDesenlaceConsulta({
+        estudioId,
+        expedienteId,
+        desenlace: desenlaceDeFalla({ bloqueadoPorAutorizacion, apellidoNoCoincide, documentoNoEncontrado }),
+        usuarioId: userId,
+      });
     }
 
     logAudit({
