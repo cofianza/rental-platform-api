@@ -196,6 +196,17 @@ describe('alerta de mezcla (§4.4)', () => {
     expect(tabla('inmobiliarias', 'update')).toEqual([]);
   });
 
+  it('ventana de 6 meses sin desborde de mes: 31-ago cuenta desde el 28-feb', async () => {
+    vi.useFakeTimers({ now: new Date('2026-08-31T15:00:00.000Z'), toFake: ['Date'] });
+    try {
+      escenario('2026-09-01T00:00:00Z');
+      await evaluarAlertaMezcla('org1');
+      expect(tabla('contratos', 'gte')[0].args).toEqual(['fecha_firma', '2026-02-28T15:00:00.000Z']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('si otra activación ganó la marca, no avisa dos veces', async () => {
     escenario(null, []);
     expect(await evaluarAlertaMezcla('org1')).toBe('nada');

@@ -16,6 +16,7 @@ import { fromSupabaseError } from '@/lib/errors';
 import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { logger } from '@/lib/logger';
 import { supabase } from '@/lib/supabase';
+import { sumarMeses } from '@/modules/contratos/v3/formato';
 import { notificarYCorreo } from '@/modules/notificaciones/notificaciones.service';
 import { getUserById, listOperators } from '@/modules/users/users.service';
 
@@ -195,8 +196,9 @@ export async function evaluarAlertaMezcla(orgId: string): Promise<AccionMezcla> 
   const org = orgRow as { nombre: string; owner_perfil_id: string | null; alerta_mezcla_tradicional_en: string | null } | null;
   if (!org) return 'nada';
 
-  const desde = new Date();
-  desde.setMonth(desde.getMonth() - VENTANA_MEZCLA_MESES);
+  // sumarMeses y no setMonth: 31-ago − 6 daría 3-mar (desborde), no 28-feb.
+  const ahora = new Date().toISOString();
+  const desde = `${sumarMeses(ahora.slice(0, 10), -VENTANA_MEZCLA_MESES)}${ahora.slice(10)}`;
   const [paquete, contratosR, cal] = await Promise.all([
     org.owner_perfil_id ? tienePaquete25Vigente(org.owner_perfil_id) : Promise.resolve(false),
     // V3 (destinacion) activados (fecha_firma) en la ventana, de esta org.
@@ -204,7 +206,7 @@ export async function evaluarAlertaMezcla(orgId: string): Promise<AccionMezcla> 
       .select('modalidad:datos_variables->documento->entrada->>modalidad, expedientes!inner(inmobiliaria_id)')
       .eq('expedientes.inmobiliaria_id', orgId)
       .not('destinacion', 'is', null)
-      .gte('fecha_firma', desde.toISOString()),
+      .gte('fecha_firma', desde),
     getCalibracion(),
   ]);
   if (contratosR.error) throw fromSupabaseError(contratosR.error);
