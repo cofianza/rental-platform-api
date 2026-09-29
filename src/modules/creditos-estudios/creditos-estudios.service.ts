@@ -19,6 +19,8 @@ import { getPaymentGateway } from '@/modules/pagos/gateway';
 import { perfilEsDuenoDeInmueble, resolveOrgCanonicalPerfilId } from '@/lib/tenantScope';
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
+import { getCalibracion } from '@/lib/calibracion';
+import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
 
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
@@ -342,6 +344,156 @@ export async function listCompras(perfilId: string) {
 }
 
 // ============================================================
+// Detalle por paquete — Adenda de precios §3.8
+//
+// «Vista de saldo en la Oficina Virtual. Detalle por paquete: cupos
+// comprados, consumidos, disponibles y fecha de vencimiento.» Un paquete es
+// un lote de la organización. Van los vigentes con saldo y, para que la
+// inmobiliaria vea qué pasó con lo que compró, los agotados y vencidos de los
+// últimos DIAS_RECIENTES días.
+// ============================================================
+
+export const DIAS_RECIENTES_PAQUETES = 90;
+
+export type EstadoPaquete = 'vigente' | 'agotado' | 'vencido';
+
+export interface DetallePaquete {
+  lote_id: string;
+  compra_id: string | null;
+  origen: string;
+  /** Fecha de la compra (aprobación del pago; si no hay compra, la del lote). */
+  fecha_compra: string;
+  comprados: number;
+  consumidos: number;
+  disponibles: number;
+  vence_en: string | null;
+  estado: EstadoPaquete;
+}
+
+interface LoteDetalle {
+  id: string;
+  compra_id: string | null;
+  cantidad_inicial: number;
+  cantidad_disponible: number;
+  vence_en: string | null;
+  origen: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MovimientoDetalle {
+  lote_id: string | null;
+  tipo: string;
+  cantidad: number;
+  pago_id: string | null;
+}
+
+/**
+ * Pura: el orden en que se gastan los lotes (Adenda §3.4 / §9.7), el mismo
+ * ORDER BY de la RPC consume_credito_estudio (migración 20261002000101): vence
+ * antes primero, sin vencimiento al final; si empatan, la compra más antigua.
+ */
+export function compararOrdenConsumo(
+  a: { id: string; vence_en: string | null; fecha_compra: string },
+  b: { id: string; vence_en: string | null; fecha_compra: string },
+): number {
+  if (a.vence_en !== b.vence_en) {
+    if (a.vence_en === null) return 1;
+    if (b.vence_en === null) return -1;
+    return Date.parse(a.vence_en) - Date.parse(b.vence_en);
+  }
+  return Date.parse(a.fecha_compra) - Date.parse(b.fecha_compra) || a.id.localeCompare(b.id);
+}
+
+/**
+ * Pura: arma el detalle. Consumidos = consumos del lote menos las
+ * devoluciones de crédito a ese lote (ajuste positivo con pago). Un lote
+ * vencido no tiene disponibles: sus cupos se extinguieron (§3.1).
+ */
+export function armarDetallePaquetes(
+  lotes: readonly LoteDetalle[],
+  fechaCompra: ReadonlyMap<string, string>,
+  movimientos: readonly MovimientoDetalle[],
+  ahora: Date,
+): DetallePaquete[] {
+  const limite = ahora.getTime() - DIAS_RECIENTES_PAQUETES * 86_400_000;
+  const consumidos = new Map<string, number>();
+  for (const m of movimientos) {
+    if (!m.lote_id) continue;
+    const esConsumo = m.tipo === 'consumo';
+    const esDevolucion = m.tipo === 'ajuste' && m.cantidad > 0 && !!m.pago_id;
+    if (esConsumo || esDevolucion) consumidos.set(m.lote_id, (consumidos.get(m.lote_id) ?? 0) - m.cantidad);
+  }
+
+  const filas: DetallePaquete[] = [];
+  for (const l of lotes) {
+    const vencido = !!l.vence_en && Date.parse(l.vence_en) <= ahora.getTime();
+    // Agotado antes de vencer cuenta como agotado: no se extinguió nada.
+    const estado: EstadoPaquete = l.cantidad_disponible === 0 ? 'agotado' : vencido ? 'vencido' : 'vigente';
+    if (estado === 'vencido' && Date.parse(l.vence_en!) < limite) continue;
+    if (estado === 'agotado' && Date.parse(l.updated_at) < limite) continue;
+    filas.push({
+      lote_id: l.id,
+      compra_id: l.compra_id,
+      origen: l.origen,
+      fecha_compra: (l.compra_id && fechaCompra.get(l.compra_id)) || l.created_at,
+      comprados: l.cantidad_inicial,
+      consumidos: Math.max(0, consumidos.get(l.id) ?? 0),
+      disponibles: estado === 'vencido' ? 0 : l.cantidad_disponible,
+      vence_en: l.vence_en,
+      estado,
+    });
+  }
+  // Vigentes en el orden en que se gastan; después agotados y vencidos, el más reciente primero.
+  const rango = { vigente: 0, agotado: 1, vencido: 1 } as const;
+  return filas.sort((a, b) =>
+    rango[a.estado] - rango[b.estado] ||
+    (a.estado === 'vigente' ? compararOrdenConsumo({ ...a, id: a.lote_id }, { ...b, id: b.lote_id }) : Date.parse(b.fecha_compra) - Date.parse(a.fecha_compra)),
+  );
+}
+
+export async function listDetallePaquetes(perfilId: string): Promise<DetallePaquete[]> {
+  const dueno = await resolveOrgCanonicalPerfilId(perfilId);
+  // ponytail: 200 lotes alcanzan para años de compras de una organización; paginar si alguna se acerca.
+  const { data, error } = await db('lotes_creditos_estudios')
+    .select('id, compra_id, cantidad_inicial, cantidad_disponible, vence_en, origen, created_at, updated_at')
+    .eq('perfil_id', dueno)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) throw fromSupabaseError(error);
+  const lotes = (data ?? []) as LoteDetalle[];
+  if (lotes.length === 0) return [];
+
+  const compraIds = [...new Set(lotes.map((l) => l.compra_id).filter((id): id is string => !!id))];
+  const fechaCompra = new Map<string, string>();
+  if (compraIds.length > 0) {
+    const { data: compras, error: cErr } = await db('compras_creditos_estudios')
+      .select('id, completed_at, created_at')
+      .in('id', compraIds);
+    if (cErr) throw fromSupabaseError(cErr);
+    for (const c of (compras ?? []) as Array<{ id: string; completed_at: string | null; created_at: string }>)
+      fechaCompra.set(c.id, c.completed_at ?? c.created_at);
+  }
+
+  // PostgREST corta en 1000 filas por respuesta: se pagina.
+  const movimientos: MovimientoDetalle[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data: movs, error: mErr } = await db('movimientos_creditos_estudios')
+      .select('lote_id, tipo, cantidad, pago_id')
+      .in('lote_id', lotes.map((l) => l.id))
+      .in('tipo', ['consumo', 'ajuste'])
+      .order('id', { ascending: true })
+      .range(offset, offset + 999);
+    if (mErr) throw fromSupabaseError(mErr);
+    const pagina = (movs ?? []) as MovimientoDetalle[];
+    movimientos.push(...pagina);
+    if (pagina.length < 1000) break;
+  }
+
+  return armarDetallePaquetes(lotes, fechaCompra, movimientos, new Date());
+}
+
+// ============================================================
 // Comprar paquete (crea Stripe Checkout)
 // ============================================================
 
@@ -376,7 +528,8 @@ export async function comprarPaquete(
       paquete_id: paquete.id,
       cantidad_estudios: paquete.cantidad_estudios,
       precio_cop: paquete.precio_cop,
-      vence_en_dias: paquete.vence_en_dias,
+      // La vigencia ya no es del paquete (Adenda de precios §9.6): se fija al
+      // acreditar con VIGENCIA_PAQUETE_MESES.
       estado: 'pendiente',
       creado_por: userId,
     } as never)
@@ -458,6 +611,20 @@ export async function comprarPaquete(
       .eq('id', compra.id);
     throw err;
   }
+}
+
+/**
+ * Pura: suma meses de calendario. Si el día no existe en el mes destino, cae
+ * en el último día de ese mes (31 de agosto + 6 meses = 28 o 29 de febrero).
+ */
+export function sumarMesesCalendario(desde: Date, meses: number): Date {
+  const d = new Date(desde.getTime());
+  const dia = d.getUTCDate();
+  d.setUTCDate(1);
+  d.setUTCMonth(d.getUTCMonth() + meses);
+  const ultimo = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(dia, ultimo));
+  return d;
 }
 
 // ============================================================
@@ -551,11 +718,10 @@ export async function acreditarCompraDesdeWebhook(
     }
   }
 
-  // 3. Calcular vencimiento del lote
-  const venceEn =
-    compra.vence_en_dias && compra.vence_en_dias > 0
-      ? new Date(Date.now() + compra.vence_en_dias * 24 * 60 * 60 * 1000).toISOString()
-      : null;
+  // 3. Vencimiento del lote — Adenda de precios §3.1 / §9.6: VIGENCIA_PAQUETE_MESES
+  //    meses de calendario desde la aprobación del pago (ahora, cuando se acredita).
+  const { VIGENCIA_PAQUETE_MESES } = await getCalibracion();
+  const venceEn = sumarMesesCalendario(new Date(), VIGENCIA_PAQUETE_MESES).toISOString();
 
   // 3.5. P22: el saldo en contra (créditos usados de una compra contracargada)
   //      se descuenta de esta compra. El lote nace ya descontado y la deuda se
@@ -1193,7 +1359,34 @@ export async function listAllPaquetes(): Promise<PaqueteRow[]> {
   return (data || []) as PaqueteRow[];
 }
 
-export async function createPaquete(input: Record<string, unknown>, userId: string): Promise<PaqueteRow> {
+/** Quien cambia el catálogo: el API lo exige aquí, no solo en la ruta. */
+export interface UsuarioCatalogo {
+  id: string;
+  email: string;
+  rol: string;
+}
+
+/**
+ * Adenda de precios §9.14: los precios (y cantidades) del catálogo solo los
+ * cambia la Gerencia General, como los parámetros de riesgo de calibración.
+ */
+function assertGerenciaCatalogo(usuario: UsuarioCatalogo): void {
+  if (!esGerenciaGeneral(usuario))
+    throw AppError.forbidden(
+      'Los paquetes de estudios (precio y cantidad) solo los cambia la Gerencia General.',
+      'SOLO_GERENCIA_GENERAL',
+    );
+}
+
+async function leerPaquete(paqueteId: string): Promise<PaqueteRow> {
+  const { data, error } = await db('paquetes_creditos_estudios').select('*').eq('id', paqueteId).maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  if (!data) throw AppError.notFound('Paquete no encontrado');
+  return data as PaqueteRow;
+}
+
+export async function createPaquete(input: Record<string, unknown>, usuario: UsuarioCatalogo): Promise<PaqueteRow> {
+  assertGerenciaCatalogo(usuario);
   const { data, error } = await (supabase
     .from('paquetes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .insert(input as never)
@@ -1203,7 +1396,7 @@ export async function createPaquete(input: Record<string, unknown>, userId: stri
   if (error) throw fromSupabaseError(error);
 
   logAudit({
-    usuarioId: userId,
+    usuarioId: usuario.id,
     accion: AUDIT_ACTIONS.CONFIG_CHANGED,
     entidad: AUDIT_ENTITIES.CONFIG,
     entidadId: (data as PaqueteRow).id,
@@ -1216,8 +1409,10 @@ export async function createPaquete(input: Record<string, unknown>, userId: stri
 export async function updatePaquete(
   paqueteId: string,
   input: Record<string, unknown>,
-  userId: string,
+  usuario: UsuarioCatalogo,
 ): Promise<PaqueteRow> {
+  assertGerenciaCatalogo(usuario);
+  const anterior = await leerPaquete(paqueteId);
   const { data, error } = await (supabase
     .from('paquetes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .update(input as never)
@@ -1229,17 +1424,24 @@ export async function updatePaquete(
   if (!data) throw AppError.notFound('Paquete no encontrado');
 
   logAudit({
-    usuarioId: userId,
+    usuarioId: usuario.id,
     accion: AUDIT_ACTIONS.CONFIG_CHANGED,
     entidad: AUDIT_ENTITIES.CONFIG,
     entidadId: paqueteId,
-    detalle: { tipo: 'paquete_creditos_actualizado', ...input },
+    // §9.14: el valor anterior queda en la traza, al lado del nuevo.
+    detalle: {
+      tipo: 'paquete_creditos_actualizado',
+      ...input,
+      anterior: Object.fromEntries(Object.keys(input).map((k) => [k, (anterior as unknown as Record<string, unknown>)[k] ?? null])),
+    },
   });
 
   return data as PaqueteRow;
 }
 
-export async function deletePaquete(paqueteId: string, userId: string): Promise<void> {
+export async function deletePaquete(paqueteId: string, usuario: UsuarioCatalogo): Promise<void> {
+  assertGerenciaCatalogo(usuario);
+  const anterior = await leerPaquete(paqueteId);
   // Soft delete: marcar inactivo (no borrar — hay FKs en compras)
   const { error } = await (supabase
     .from('paquetes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
@@ -1249,10 +1451,18 @@ export async function deletePaquete(paqueteId: string, userId: string): Promise<
   if (error) throw fromSupabaseError(error);
 
   logAudit({
-    usuarioId: userId,
+    usuarioId: usuario.id,
     accion: AUDIT_ACTIONS.CONFIG_CHANGED,
     entidad: AUDIT_ENTITIES.CONFIG,
     entidadId: paqueteId,
-    detalle: { tipo: 'paquete_creditos_desactivado' },
+    detalle: {
+      tipo: 'paquete_creditos_desactivado',
+      anterior: {
+        nombre: anterior.nombre,
+        cantidad_estudios: anterior.cantidad_estudios,
+        precio_cop: anterior.precio_cop,
+        activo: anterior.activo,
+      },
+    },
   });
 }

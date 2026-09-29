@@ -49,6 +49,13 @@ creditosEstudiosRouter.get(
   controller.getMisCompras,
 );
 
+// Detalle por paquete de la organización (Adenda de precios §3.8)
+creditosEstudiosRouter.get(
+  '/me/paquetes',
+  roleGuard(['inmobiliaria', 'administrador']),
+  controller.getMisPaquetes,
+);
+
 // Comprar paquete (crea Stripe Checkout)
 creditosEstudiosRouter.post(
   '/me/comprar',
@@ -82,6 +89,8 @@ expedienteLiberarRouter.post(
 
 // ============================================================
 // Super admin — /api/v1/admin/paquetes-creditos-estudios
+// Leer: cualquier administrador. Crear, editar y desactivar: solo la Gerencia
+// General (Adenda de precios §9.14), exigido en el servicio (403).
 // ============================================================
 
 const adminPaquetesRouter = Router();
