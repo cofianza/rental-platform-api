@@ -60,6 +60,7 @@ import { publicVisitaRouter } from '@/modules/citas/citas-publico.routes';
 import expedienteExternoRouter from '@/modules/expedientes/expediente-externo.routes';
 import { publicInvitacionRouter } from '@/modules/invitacion/invitacion.routes';
 import { miembrosRouter, publicInvitacionMiembroRouter, adminInmobiliariasRouter } from '@/modules/inmobiliaria-miembros/inmobiliaria-miembros.routes';
+import { adminBeneficiosRouter } from '@/modules/beneficios/beneficios.routes';
 import { empresaRouter } from '@/modules/empresa/empresa.routes';
 import disponibilidadRouter from '@/modules/disponibilidad/disponibilidad.routes';
 import { facturasRouter, pagoFacturarRouter, factusHelpersRouter, factusPublicHelpersRouter } from '@/modules/facturacion/facturacion.routes';
@@ -142,6 +143,8 @@ app.use('/api/v1/public/invitacion', publicInvitacionRouter);
 app.use('/api/v1/inmobiliaria/miembros', miembrosRouter);
 app.use('/api/v1/public/invitacion-miembro', publicInvitacionMiembroRouter);
 app.use('/api/v1/admin/inmobiliarias', adminInmobiliariasRouter);
+// Adenda de precios §4.3: beneficio del 50 % acumulado (solo lectura).
+app.use('/api/v1/admin/beneficios-intermediacion', adminBeneficiosRouter);
 app.use('/api/v1/empresa', empresaRouter);
 app.use('/api/v1/plantillas-contrato', plantillasRouter);
 app.use('/api/v1/expedientes/:expedienteId/contratos', expedienteContratosRouter);

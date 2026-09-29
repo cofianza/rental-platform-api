@@ -29,6 +29,7 @@ import { apelacionHtml, sendResponsableAsignadoEmail } from '@/modules/orchestra
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { retenerAprobadoSobreTope } from '@/modules/estudios/excepcion-tope.service';
 import { estudioYaCobrado, ESTADO_ESPERANDO_PAGO } from '@/modules/estudios/pago.guard';
 // Flujo §10/§11: el CRC se produce con el resultado — tambien cuando el
 // resultado lo pone la ponderacion con coarrendatario.
@@ -48,7 +49,7 @@ import {
   VERSION_TERMINOS_COARRENDATARIO,
 } from '../autorizaciones/autorizaciones.texto';
 import { enviarTemplate } from '../whatsapp';
-import { ponderarConCoarrendatario, veredictoScorecard, type FilaScorecard, type VeredictoScorecard } from './ponderacion';
+import { ponderarConCoarrendatario, prioridadRevision, veredictoScorecard, type FilaScorecard, type VeredictoScorecard } from './ponderacion';
 import {
   evaluacionCuenta,
   contratoFijoSinCoarrendatario,
@@ -1493,7 +1494,7 @@ export async function onCoarrendatarioEstudioCompletado(
     );
   }
   let scorecard: VeredictoScorecard['resultado'] | null = null;
-  let conflictoReglas: string | null = null;
+  let reglaAplicada: string | null = null;
   if (!coaConReglaDura && env.MOTOR_DECIDE_ENABLED && titular.resultado === 'condicionado') {
     const ponderado = await ponderarConScorecard(titular.id, est.id, false, {
       titularCascada: titular.cascada,
@@ -1503,7 +1504,7 @@ export async function onCoarrendatarioEstudioCompletado(
     if (ponderado) {
       logger.info({ expedienteId: est.expediente_id, ...ponderado }, 'Adenda §3: ponderacion titular/coarrendatario con el scorecard');
       scorecard = ponderado.resultado;
-      conflictoReglas = ponderado.conflicto;
+      reglaAplicada = ponderado.regla;
       // Adenda 2 §9.3: sin el motivo de identidad se habria aprobado solo. Sigue
       // al analista, pero la tarifa (viaDelEstudio) queda en la de esta via.
       // ponytail: no se revierte si luego cambia el co-arrendatario (igual que el evento de ponderacion).
@@ -1515,7 +1516,13 @@ export async function onCoarrendatarioEstudioCompletado(
       }
     }
   }
-  const resultadoCombinado = ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura, scorecard });
+  const ponderadoCrudo = ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura, scorecard });
+  // Adenda de precios §7.1: sobre el tope no se aprueba solo; lo decide el analista y lo aprueba la Gerencia General.
+  const resultadoCombinado =
+    ponderadoCrudo === 'aprobado' &&
+    (await retenerAprobadoSobreTope(est.expediente_id, { resultado: 'aprobado', observaciones: null })).resultado !== 'aprobado'
+      ? 'revision_manual'
+      : ponderadoCrudo;
 
   // 4.5. Revision manual: el expediente SE QUEDA en 'condicionado' y lo decide
   //      un analista de Cofianza con los dos resultados. Se registra en el
@@ -1528,6 +1535,17 @@ export async function onCoarrendatarioEstudioCompletado(
     if (ctxSin.estado !== 'condicionado') {
       decisionYaTomada(ctxSin, titular.id, est, coa, reglasDurasCoa);
       return;
+    }
+
+    // Adenda de precios §8.2: prioridad en la cola del analista (R2 = baja, el
+    // resto normal; se reescribe para no heredar la de un co-arrendatario anterior).
+    // ponytail: una re-evaluacion del titular no la toca; si deja de ser R2 sin
+    // pasar por aqui, queda 'baja' hasta la proxima ponderacion.
+    {
+      const { error } = await (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
+        .update({ prioridad_revision: prioridadRevision(reglaAplicada) } as never)
+        .eq('id', est.expediente_id);
+      if (error) logger.warn({ expedienteId: est.expediente_id, error: error.message }, 'Adenda de precios §8.2: no se pudo fijar la prioridad de revision');
     }
 
     // Ninguno de los dos pudo ser evaluado por el buro (sin historial): se
@@ -1543,7 +1561,7 @@ export async function onCoarrendatarioEstudioCompletado(
         titularScore: titular.score,
         coaResultado: est.resultado,
         coaScore: est.score,
-        conflictoReglas,
+        reglaAplicada,
       },
       'Ponderación coarrendatario: queda en revisión manual para un analista de Cofianza (Adenda 2 §5)',
     );
@@ -1566,8 +1584,8 @@ export async function onCoarrendatarioEstudioCompletado(
           titular_score: titular.score,
           coarrendatario_resultado: est.resultado,
           coarrendatario_score: est.score,
-          // Matriz QA V2, R2 (o su espejo del coarrendatario): revision manual por conflicto de reglas sin definir.
-          ...(conflictoReglas ? { conflicto_reglas: conflictoReglas } : {}),
+          // Matriz QA V2, R2 (o su espejo del coarrendatario): la regla definida de la Adenda de precios §8.
+          ...(reglaAplicada ? { regla_aplicada: reglaAplicada } : {}),
         },
       } as never);
 

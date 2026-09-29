@@ -43,21 +43,36 @@ export type { DatosFiscalesPagoOverride } from './cliente-fiscal';
 
 // ── Constants ──────────────────────────────────────────────────────
 
-const VALOR_ESTUDIO_DEFAULT = 80_000; // COP, sin IVA
-
 const ITEM_DEFAULTS = {
   unit_measure_code: '94', // unidad
   standard_code: '999', // Estándar adoptado contribuyente
-  // Estudio crediticio = servicio financiero exento de IVA. V2 exige al menos
-  // un tax; usamos { is_excluded: true } para indicar servicio excluido.
-  taxes: [{ is_excluded: true }] as { is_excluded: boolean }[],
 };
 
 // Adenda 1 del modulo de contratos §1.6: la prima (el cobro 'garantia') y la
 // tarifa se facturan GRAVADAS, con TARIFA_IVA: la misma tasa con la que se
 // cobraron (§1.1). Su fila iva_concepto_garantia es solo reflejo. En 0 no se
 // emite: una factura DIAN emitida como excluida solo se corrige con nota credito.
-const CONCEPTOS_GRAVADOS = new Set(['garantia']);
+// Adenda de precios §1.1-1.3: el estudio (y el paquete, que es su anticipo)
+// también causa IVA con TARIFA_IVA, la única perilla; su fila
+// iva_concepto_estudio ya no se edita. El estudio se factura con la
+// instantánea que guardó el cobro (pagos.base_cop / tarifa_iva).
+const CONCEPTOS_GRAVADOS = new Set(['garantia', 'estudio']);
+
+/**
+ * Tasa y base con que se factura un pago. El estudio usa la instantánea del
+ * cobro (Adenda de precios §1.1): sin ella, el cobro es anterior a la adenda
+ * (80.000 sin IVA) y se factura exento — partirlo al 19 % sería declarar un
+ * IVA que no se cobró.
+ */
+async function tasaYBaseDelPago(ctx: PagoConContexto): Promise<{ tasaIva: number; base: number | null }> {
+  if (ctx.concepto === 'estudio') {
+    return ctx.tarifa_iva == null || ctx.base_cop == null
+      ? { tasaIva: 0, base: null }
+      : { tasaIva: Number(ctx.tarifa_iva), base: Number(ctx.base_cop) };
+  }
+  if (CONCEPTOS_GRAVADOS.has(ctx.concepto)) return { tasaIva: await tarifaIvaGravados(), base: null };
+  return { tasaIva: await getTarifaIvaPorConcepto(ctx.concepto), base: null };
+}
 
 async function tarifaIvaGravados(): Promise<number> {
   const { getCalibracion } = await import('@/lib/calibracion');
@@ -73,9 +88,14 @@ async function tarifaIvaGravados(): Promise<number> {
  * en payment_details y el total" (en la DIAN, PayableRoundingAmount).
  * OJO: probarlo en el sandbox de Factus antes del primer cobro real de la prima.
  */
-export function partirTotalConIva(monto: number, tasaIva: number): { price: string; cashRounding: string | null } {
+export function partirTotalConIva(
+  monto: number,
+  tasaIva: number,
+  /** Base guardada en el cobro (Adenda de precios): el price es ella, no una división del total. */
+  base?: number | null,
+): { price: string; cashRounding: string | null } {
   const totalCent = Math.round(monto * 100);
-  const priceCent = Math.round(totalCent / (1 + tasaIva / 100));
+  const priceCent = base != null ? Math.round(base * 100) : Math.round(totalCent / (1 + tasaIva / 100));
   const ajusteCent = totalCent - priceCent - Math.round((priceCent * tasaIva) / 100);
   return { price: (priceCent / 100).toFixed(2), cashRounding: ajusteCent === 0 ? null : (ajusteCent / 100).toFixed(2) };
 }
@@ -87,6 +107,9 @@ interface PagoConContexto {
   expediente_id: string;
   concepto: string;
   monto: number;
+  /** Instantánea del IVA del cobro (Adenda de precios §1.1). NULL = cobro anterior. */
+  base_cop: number | string | null;
+  tarifa_iva: number | string | null;
   estado: string;
   email_pagador: string | null;
   nombre_pagador: string | null;
@@ -145,7 +168,7 @@ async function fetchPagoContext(pagoId: string): Promise<PagoConContexto> {
   const { data, error } = await (supabase
     .from('pagos' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, expediente_id, concepto, monto, estado, email_pagador, nombre_pagador, creado_por,
+      id, expediente_id, concepto, monto, base_cop, tarifa_iva, estado, email_pagador, nombre_pagador, creado_por,
       metodo, gateway_response, transaction_ref,
       expediente:expedientes(
         numero,
@@ -372,8 +395,9 @@ async function getTarifaIvaPorConcepto(concepto: string): Promise<number> {
 }
 
 /**
- * `derivada`: la tasa no se edita aquí. La prima sale de TARIFA_IVA; los
- * paquetes de créditos (`derivada_de: 'estudio'`) llevan la de la evaluación.
+ * `derivada`: la tasa no se edita aquí. La prima y el estudio salen de
+ * TARIFA_IVA; los paquetes de créditos (`derivada_de: 'estudio'`) llevan la de
+ * la evaluación.
  */
 export async function listTarifasIva(): Promise<
   { concepto: string; tasa: number; derivada?: boolean; derivada_de?: 'estudio' }[]
@@ -395,8 +419,7 @@ export async function listTarifasIva(): Promise<
     const n = Number(raw);
     return { concepto: c, tasa: Number.isFinite(n) ? n : 0 };
   });
-  const estudio = tarifas.find((t) => t.concepto === 'estudio')?.tasa ?? 0;
-  return [...tarifas, { concepto: 'creditos_estudios', tasa: estudio, derivada: true, derivada_de: 'estudio' as const }];
+  return [...tarifas, { concepto: 'creditos_estudios', tasa: tasaGravados, derivada: true, derivada_de: 'estudio' as const }];
 }
 
 export async function updateTarifasIva(
@@ -419,7 +442,7 @@ export async function updateTarifasIva(
     }
     if (tasaGravados !== null && CONCEPTOS_GRAVADOS.has(item.concepto) && item.tasa !== tasaGravados) {
       throw AppError.badRequest(
-        `La prima de vinculación se factura con TARIFA_IVA (hoy ${tasaGravados} %), la misma tasa con la que se cobra: cámbiala en Calibración, no aquí.`,
+        `${item.concepto === 'estudio' ? 'El estudio' : 'La prima de vinculación'} se factura con TARIFA_IVA (hoy ${tasaGravados} %), la misma tasa con la que se cobra: cámbiala en Calibración, no aquí.`,
         'CONCEPTO_GRAVADO',
       );
     }
@@ -433,9 +456,12 @@ export async function updateTarifasIva(
         {
           clave,
           valor: String(item.tasa),
-          descripcion: CONCEPTOS_GRAVADOS.has(item.concepto)
-            ? 'Tasa de IVA (%) de la prima de vinculación (concepto garantia): gravada, la fija TARIFA_IVA (Adenda 1 de contratos §1.6).'
-            : `Tasa de IVA (%) para ${item.concepto}. 0 = exento.`,
+          descripcion:
+            item.concepto === 'estudio'
+              ? 'Tasa de IVA (%) del estudio: gravado, la fija TARIFA_IVA (Adenda de precios §1.3). Solo reflejo: la factura usa la instantánea del cobro.'
+              : CONCEPTOS_GRAVADOS.has(item.concepto)
+                ? 'Tasa de IVA (%) de la prima de vinculación (concepto garantia): gravada, la fija TARIFA_IVA (Adenda 1 de contratos §1.6).'
+                : `Tasa de IVA (%) para ${item.concepto}. 0 = exento.`,
         } as never,
         { onConflict: 'clave' },
       );
@@ -582,14 +608,14 @@ export async function crearFacturaDesdePago(
   // 5. Construir payload Factus.
   const referenceCode = existente?.factus_reference_code || buildReferenceCode(pagoId);
   const conceptoLabel = inferConceptoLabel(ctx.concepto);
-  const monto = Number(ctx.monto) || VALOR_ESTUDIO_DEFAULT;
+  const monto = Number(ctx.monto);
 
-  // La tasa: la prima, TARIFA_IVA; lo demás, la de su concepto (admin la edita
-  // en /facturacion). Si tasa>0, monto del pago es total con IVA incluido y
-  // calculamos el price (base) para Factus. Si tasa=0, price = monto.
-  const gravado = CONCEPTOS_GRAVADOS.has(ctx.concepto);
-  const tasaIva = gravado ? await tarifaIvaGravados() : await getTarifaIvaPorConcepto(ctx.concepto);
-  if (tasaIva === 0 && gravado) {
+  // La tasa: la prima, TARIFA_IVA; el estudio, la de su instantánea (sin ella,
+  // un cobro anterior a la Adenda de precios: exento, como se cobró); lo demás,
+  // la de su concepto (admin la edita en /facturacion). Si tasa>0, monto del
+  // pago es total con IVA incluido y calculamos el price (base) para Factus.
+  const { tasaIva, base } = await tasaYBaseDelPago(ctx);
+  if (tasaIva === 0 && ctx.concepto === 'garantia') {
     // Queda el intento con el motivo, para que «Pendientes de facturar» lo muestre.
     const error =
       'La prima de vinculación se factura con IVA (Adenda 1 de contratos §1.6) y TARIFA_IVA está en 0 %. Corrígela en Calibración y vuelve a facturar.';
@@ -604,7 +630,7 @@ export async function crearFacturaDesdePago(
     });
     throw AppError.conflict(error, 'IVA_CONCEPTO_GRAVADO_EN_CERO');
   }
-  const { price: priceStr, cashRounding } = partirTotalConIva(monto, tasaIva);
+  const { price: priceStr, cashRounding } = partirTotalConIva(monto, tasaIva, base);
 
   const payload: factus.CreateBillInput = {
     reference_code: referenceCode,
@@ -896,7 +922,7 @@ export async function crearFacturaDesdeCompraCreditos(
   // 2. Cargar la compra y validar pertenencia + estado.
   const { data: compraRow, error: compraErr } = await (supabase
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, perfil_id, cantidad_estudios, precio_cop, estado, stripe_session_id, stripe_payment_intent_id, completed_at, paquete_id, gateway_response')
+    .select('id, perfil_id, cantidad_estudios, precio_cop, total_cop, tarifa_iva, estado, stripe_session_id, stripe_payment_intent_id, completed_at, paquete_id, gateway_response')
     .eq('id', compraId)
     .single();
 
@@ -909,6 +935,8 @@ export async function crearFacturaDesdeCompraCreditos(
     perfil_id: string;
     cantidad_estudios: number;
     precio_cop: number;
+    total_cop: number | string | null;
+    tarifa_iva: number | string | null;
     estado: string;
     stripe_session_id: string | null;
     stripe_payment_intent_id: string | null;
@@ -1010,13 +1038,15 @@ export async function crearFacturaDesdeCompraCreditos(
   // 6. Construir payload Factus.
   const numberingRangeId = await factus.discoverNumberingRangeId();
   const referenceCode = existente?.factus_reference_code || `CR-${compraId.replace(/-/g, '').slice(0, 12).toUpperCase()}`;
-  const monto = Number(compra.precio_cop);
-
   // El paquete es el pago anticipado de evaluaciones: lleva el IVA de la
-  // evaluación (ET art. 429, el anticipo causa el IVA del servicio), así que
-  // lee la tasa del estudio y no una propia.
-  const tasaIva = await getTarifaIvaPorConcepto('estudio');
-  const { price: priceStr, cashRounding } = partirTotalConIva(monto, tasaIva);
+  // evaluación (ET art. 429, el anticipo causa el IVA del servicio). Adenda de
+  // precios §1.1 / §3.5: se cobró precio_cop + IVA y se factura la base
+  // gravada con la tasa de la instantánea. Una compra anterior (sin ella) se
+  // cobró a precio_cop sin IVA: se factura como entonces, exenta.
+  const conIva = compra.total_cop != null && compra.tarifa_iva != null;
+  const monto = Number(conIva ? compra.total_cop : compra.precio_cop);
+  const tasaIva = conIva ? Number(compra.tarifa_iva) : 0;
+  const { price: priceStr, cashRounding } = partirTotalConIva(monto, tasaIva, conIva ? Number(compra.precio_cop) : null);
 
   // legal_organization_code: si tipo_documento es NIT (31) -> juridica (1).
   const isJuridica = datos.tipo_documento === '31';
@@ -1512,13 +1542,13 @@ export async function listPendientesFacturar(
 async function comprasPendientesFacturar(): Promise<PagoPendienteFacturar[]> {
   const { data: comprasRows, error } = await (supabase
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('id, perfil_id, precio_cop, completed_at')
+    .select('id, perfil_id, precio_cop, total_cop, completed_at')
     .eq('estado', 'completado');
   if (error) {
     logger.error({ error: error.message }, 'Error listando compras de créditos pendientes de facturar');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar pagos pendientes de facturacion');
   }
-  const compras = (comprasRows || []) as Array<{ id: string; perfil_id: string; precio_cop: number | string; completed_at: string | null }>;
+  const compras = (comprasRows || []) as Array<{ id: string; perfil_id: string; precio_cop: number | string; total_cop: number | string | null; completed_at: string | null }>;
   if (compras.length === 0) return [];
 
   const [facturasRows, { data: perfilesRows }] = await Promise.all([
@@ -1548,7 +1578,7 @@ async function comprasPendientesFacturar(): Promise<PagoPendienteFacturar[]> {
         expediente_id: null,
         expediente_numero: '',
         concepto: 'creditos_estudios',
-        monto: Number(c.precio_cop) || 0,
+        monto: Number(c.total_cop ?? c.precio_cop) || 0,
         fecha_pago: c.completed_at,
         factura_estado: f?.estado ?? null,
         factura_error: f?.error_mensaje ?? null,

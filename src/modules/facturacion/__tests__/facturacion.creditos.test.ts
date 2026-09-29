@@ -204,34 +204,48 @@ describe('crearFacturaDesdeCompraCreditos: la compra es de la organización', ()
   });
 });
 
-// P39: la factura del paquete lleva el medio de pago de Mercado Pago; P44: y el
-// IVA de la evaluación (iva_concepto_estudio), no una fila propia.
+// P39: la factura del paquete lleva el medio de pago de Mercado Pago. Adenda de
+// precios §1.1 / §3.5: la base gravada con la tasa de la instantánea de la
+// compra; una compra anterior (sin instantánea) se factura exenta, como se cobró.
 describe('crearFacturaDesdeCompraCreditos: medio de pago e IVA', () => {
-  it('PSE: medio 47, y la tasa sale de iva_concepto_estudio', async () => {
+  const perfilOrg = {
+    id: 'owner-1', nombre: 'Ana', apellido: 'Titular', rol: 'inmobiliaria', tipo_documento: 'NIT', numero_documento: null,
+    razon_social: 'Inmo SAS', nit: '900123456', direccion: 'Calle 1', direccion_comercial: null, ciudad: 'Bogotá',
+    nombre_representante: null, telefono: '3000000000', email_recaudo: null, municipio_codigo: '11001', municipio_nombre: 'Bogotá',
+  };
+  const facturar = async (extra: Record<string, unknown>) => {
     enqueue('facturas', { data: null, error: null }, { data: null, error: null }, { data: { id: 'fac-1' }, error: null });
     enqueue('compras_creditos_estudios', {
       data: {
-        id: 'compra-1', perfil_id: 'owner-1', cantidad_estudios: 25, precio_cop: 1400000, estado: 'completado',
-        stripe_session_id: 'pref-1', stripe_payment_intent_id: 'mp-1', completed_at: '2026-09-02', paquete_id: 'paq-25',
-        gateway_response: { payment_type_id: 'bank_transfer' },
+        id: 'compra-1', perfil_id: 'owner-1', cantidad_estudios: 5, precio_cop: 350000, estado: 'completado',
+        stripe_session_id: 'pref-1', stripe_payment_intent_id: 'mp-1', completed_at: '2026-09-02', paquete_id: 'paq-5',
+        gateway_response: { payment_type_id: 'bank_transfer' }, total_cop: null, tarifa_iva: null,
+        ...extra,
       },
       error: null,
     });
-    enqueue('perfiles', {
-      data: {
-        id: 'owner-1', nombre: 'Ana', apellido: 'Titular', rol: 'inmobiliaria', tipo_documento: 'NIT', numero_documento: null,
-        razon_social: 'Inmo SAS', nit: '900123456', direccion: 'Calle 1', direccion_comercial: null, ciudad: 'Bogotá',
-        nombre_representante: null, telefono: '3000000000', email_recaudo: null, municipio_codigo: '11001', municipio_nombre: 'Bogotá',
-      },
-      error: null,
-    });
-    enqueue('configuracion_sistema', { data: { valor: '0' }, error: null });
-    mockCreateBill.mockResolvedValueOnce({ data: { bill: { id: 1, number: 'FE9', cufe: 'c', total: '1400000.00', tax_amount: '0' } } });
-
+    enqueue('perfiles', { data: perfilOrg, error: null });
+    mockCreateBill.mockResolvedValueOnce({ data: { bill: { id: 1, number: 'FE9', cufe: 'c', total: '416500.00', tax_amount: '66500' } } });
     await crearFacturaDesdeCompraCreditos('compra-1', null, undefined, null);
+    return mockCreateBill.mock.calls[0][0];
+  };
 
-    const payload = mockCreateBill.mock.calls[0][0];
+  it('con instantánea: base 350.000 gravada al 19 %, total 416.500, medio PSE 47', async () => {
+    const payload = await facturar({ total_cop: '416500.00', tarifa_iva: '19.00' });
+
     expect(payload.payment_details[0].payment_method_code).toBe('47');
-    expect(ops.find((o) => o.table === 'configuracion_sistema' && o.method === 'eq')?.args).toEqual(['clave', 'iva_concepto_estudio']);
+    expect(payload.payment_details[0].amount).toBe('416500.00');
+    expect(payload.items[0].price).toBe('350000.00');
+    expect(payload.items[0].taxes).toEqual([{ code: '01', rate: '19.00' }]);
+    expect(payload.cash_rounding_amount).toBeUndefined();
+    expect(ops.some((o) => o.table === 'configuracion_sistema')).toBe(false);
+  });
+
+  it('sin instantánea (compra anterior): se factura lo cobrado, exento', async () => {
+    const payload = await facturar({});
+
+    expect(payload.payment_details[0].amount).toBe('350000.00');
+    expect(payload.items[0].price).toBe('350000.00');
+    expect(payload.items[0].taxes).toEqual([{ is_excluded: true }]);
   });
 });

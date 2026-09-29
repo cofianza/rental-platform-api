@@ -21,6 +21,7 @@ import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
 import { faltaColumna } from '@/modules/expedientes/cierre-sin-acta';
 import { getCalibracion } from '@/lib/calibracion';
 import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
+import { masIva } from '@/modules/estudios/tarifas';
 import type { ListMovimientosQuery } from './creditos-estudios.schema';
 
 const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
@@ -70,11 +71,31 @@ interface LoteRow {
   created_at: string;
 }
 
+/**
+ * Adenda de precios §1.1-1.3: precio_cop es la BASE sin IVA; se cobra más
+ * TARIFA_IVA. La web muestra «base + IVA = total» con estos campos.
+ */
+export interface PaqueteConIva extends PaqueteRow {
+  tarifa_iva: number;
+  iva_cop: number;
+  total_cop: number;
+}
+
+export function precioConIva(precioCop: number, tarifaIva: number) {
+  const total = masIva(Number(precioCop), tarifaIva);
+  return { tarifa_iva: tarifaIva, iva_cop: total - Number(precioCop), total_cop: total };
+}
+
+async function conIva(rows: PaqueteRow[]): Promise<PaqueteConIva[]> {
+  const { TARIFA_IVA } = await getCalibracion();
+  return rows.map((p) => ({ ...p, ...precioConIva(p.precio_cop, TARIFA_IVA) }));
+}
+
 // ============================================================
 // Public: list active paquetes
 // ============================================================
 
-export async function listPaquetesActivos(): Promise<Array<PaqueteRow & { vigencia_meses: number }>> {
+export async function listPaquetesActivos(): Promise<Array<PaqueteConIva & { vigencia_meses: number }>> {
   const [{ data, error }, { VIGENCIA_PAQUETE_MESES }] = await Promise.all([
     (supabase
       .from('paquetes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
@@ -86,7 +107,7 @@ export async function listPaquetesActivos(): Promise<Array<PaqueteRow & { vigenc
 
   if (error) throw fromSupabaseError(error);
   // La vigencia que tendrá el paquete al comprarlo (Adenda de precios §3.1 / §9.6).
-  return ((data || []) as PaqueteRow[]).map((p) => ({ ...p, vigencia_meses: VIGENCIA_PAQUETE_MESES }));
+  return (await conIva((data || []) as PaqueteRow[])).map((p) => ({ ...p, vigencia_meses: VIGENCIA_PAQUETE_MESES }));
 }
 
 // ============================================================
@@ -336,7 +357,7 @@ export async function listCompras(perfilId: string) {
   const { data, error } = await (supabase
     .from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .select(`
-      id, paquete_id, cantidad_estudios, precio_cop, vence_en_dias,
+      id, paquete_id, cantidad_estudios, precio_cop, iva_cop, total_cop, tarifa_iva, vence_en_dias,
       estado, stripe_session_id, payment_link_url, completed_at, created_at
     `)
     .eq('perfil_id', dueno)
@@ -523,6 +544,9 @@ export async function comprarPaquete(
   // La compra (y el lote que acredita el webhook) queda a nombre de la
   // organización; creado_por guarda quién la hizo.
   const dueno = await resolveOrgCanonicalPerfilId(perfilId);
+  // Adenda de precios §1.1 / §3.5: se cobra base + TARIFA_IVA y la compra
+  // guarda la instantánea con la que se factura (la factura sale asíncrona).
+  const iva = precioConIva(paquete.precio_cop, (await getCalibracion()).TARIFA_IVA);
 
   // 2. Crear registro de compra (estado pendiente)
   const { data: compraData, error: compraErr } = await (supabase
@@ -532,6 +556,7 @@ export async function comprarPaquete(
       paquete_id: paquete.id,
       cantidad_estudios: paquete.cantidad_estudios,
       precio_cop: paquete.precio_cop,
+      ...iva,
       // La vigencia ya no es del paquete (Adenda de precios §9.6): se fija al
       // acreditar con VIGENCIA_PAQUETE_MESES.
       estado: 'pendiente',
@@ -558,7 +583,7 @@ export async function comprarPaquete(
   try {
     const gateway = getPaymentGateway();
     const linkResult = await gateway.createPaymentLink({
-      amount: paquete.precio_cop,
+      amount: iva.total_cop,
       concept: paquete.nombre,
       description: paquete.descripcion || `Compra de ${paquete.cantidad_estudios} estudios de arrendamiento`,
       metadata: {
@@ -599,6 +624,7 @@ export async function comprarPaquete(
         paquete_id: paquete.id,
         cantidad: paquete.cantidad_estudios,
         precio_cop: paquete.precio_cop,
+        total_cop: iva.total_cop,
       },
       ip,
     });
@@ -919,13 +945,10 @@ export async function liberarEstudioConCredito(
     for (const fallido of vivos) await cerrarCobroEstudioFallido(fallido, userId);
   }
 
-  // 4. Obtener monto del estudio
-  const { data: cfgData } = await (supabase
-    .from('configuracion_sistema' as string) as ReturnType<typeof supabase.from>)
-    .select('valor')
-    .eq('clave', 'monto_estudio')
-    .single();
-  const monto = parseInt(((cfgData as { valor: string } | null)?.valor) || '80000', 10);
+  // 4. Monto del estudio: el mismo precio (con IVA) que cualquier otro cobro.
+  //    Informativo: el consumo no se factura (se facturó la compra del paquete).
+  const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
+  const monto = await getMontoEstudio();
 
   const direccion = `${inm.direccion}${inm.ciudad ? `, ${inm.ciudad}` : ''}`;
 
@@ -1353,14 +1376,14 @@ export async function revertirCompraCreditos(compraId: string): Promise<CompraRe
 // Super admin — CRUD paquetes
 // ============================================================
 
-export async function listAllPaquetes(): Promise<PaqueteRow[]> {
+export async function listAllPaquetes(): Promise<PaqueteConIva[]> {
   const { data, error } = await (supabase
     .from('paquetes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
     .select('*')
     .order('orden', { ascending: true });
 
   if (error) throw fromSupabaseError(error);
-  return (data || []) as PaqueteRow[];
+  return conIva((data || []) as PaqueteRow[]);
 }
 
 /** Quien cambia el catálogo: el API lo exige aquí, no solo en la ruta. */

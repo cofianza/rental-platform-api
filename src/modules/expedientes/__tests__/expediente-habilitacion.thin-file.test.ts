@@ -18,6 +18,9 @@ const { mockTitular, mockColaEstudios, mockCoa, mockSombra, mockIngreso, ops, fi
   mockGuardarCodigos: vi.fn(async (..._a: unknown[]) => undefined),
 }));
 
+// Adenda de precios §7: el tope se prueba en excepcion-tope.service.test.ts.
+const mockTope = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined as unknown));
+vi.mock('../../estudios/excepcion-tope.service', () => ({ assertAprobacionDentroDelTope: mockTope }));
 vi.mock('@/lib/supabase', () => {
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
@@ -95,6 +98,14 @@ describe('aprobarCondicionado — thin-file (Política §15)', () => {
     mockTitular.value = { ...SIN_SCORE, score: 640 };
     await expect(aprobar()).rejects.toMatchObject(PASO);
     expect(mockCoa).not.toHaveBeenCalled();
+  });
+
+  it('Adenda de precios §7.3: sobre el tope sin la Gerencia, 403 antes de escribir', async () => {
+    mockTitular.value = { ...SIN_SCORE, score: 640 };
+    mockTope.mockRejectedValueOnce(Object.assign(new Error('Gerencia'), { statusCode: 403, errorCode: 'SOLO_GERENCIA_GENERAL' }));
+    await expect(aprobar()).rejects.toMatchObject({ errorCode: 'SOLO_GERENCIA_GENERAL' });
+    expect(mockTope).toHaveBeenCalledWith('exp-1', { id: 'analista-1', rol: 'operador_analista', email: '' }, undefined);
+    expect(ops.some((o) => o.method === 'update')).toBe(false);
   });
 
   it('ninguna central respondió (§14) no es thin-file', async () => {

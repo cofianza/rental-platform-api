@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import * as service from './expediente-habilitacion.service';
 import type { ExpedienteIdParams } from './expedientes.schema';
+import { autorizarExcepcionTope } from '@/modules/estudios/excepcion-tope.service';
 
 export async function habilitarEstudio(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
@@ -46,7 +47,7 @@ export async function aprobarCondicionado(req: Request, res: Response) {
     evaluacion: body.evaluacion,
     fuente_capacidad_verificada: body.fuente_capacidad_verificada,
     motivos: body.motivos,
-  }, req.ip);
+  }, req.ip, req.user!.email);
   sendSuccess(res, result);
 }
 
@@ -69,4 +70,10 @@ export async function iniciarEstudio(req: Request, res: Response) {
   };
   const result = await service.iniciarEstudio(id, req.user!.id, req.user!.rol, body, req.ip);
   sendCreated(res, result);
+}
+
+export async function autorizarExcepcion(req: Request, res: Response) {
+  const { id } = req.params as unknown as ExpedienteIdParams;
+  const body = req.body as { canon_autorizado_cop: number; motivo: string };
+  sendSuccess(res, await autorizarExcepcionTope(id, body, req.user!, req.ip));
 }

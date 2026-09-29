@@ -1224,6 +1224,17 @@ async function transicionarExpediente(expedienteId: string, estadoDestino: strin
     .update({ estado: estadoDestino, updated_at: new Date().toISOString() } as never)
     .eq('id', expedienteId);
 
+  // Adenda de precios §8.2: al (re)entrar a la cola del analista se parte de
+  // 'normal'; solo la ponderacion del coarrendatario la vuelve a marcar 'baja'
+  // (R2). Sin esto, un estudio rechazado y re-evaluado heredaba la 'baja' de
+  // la vuelta anterior. Aparte del UPDATE de estado para no romperlo si falta la columna.
+  if (estadoDestino === 'condicionado') {
+    const { error } = await db('expedientes')
+      .update({ prioridad_revision: 'normal' } as never)
+      .eq('id', expedienteId);
+    if (error) logger.warn({ expedienteId, error: error.message }, 'Adenda de precios §8.2: no se pudo reiniciar la prioridad de revision');
+  }
+
   await db('eventos_timeline').insert({
     expediente_id: expedienteId,
     tipo: 'estado',
