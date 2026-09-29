@@ -497,6 +497,36 @@ describe('autorizaciones.service', () => {
       expect((await getAutorizacionByToken(TOKEN)).biometria.requerida).toBe(false);
     });
 
+    it('A1/A2: dice quién pide el estudio y avisa el cobro antes de firmar', async () => {
+      enqueue('autorizaciones_habeas_data', {
+        data: {
+          ...autorizacionPendiente,
+          expediente_id: 'exp-1',
+          expedientes: { ...autorizacionPendiente.expedientes, inmuebles: { ...autorizacionPendiente.expedientes.inmuebles, inmobiliaria_id: 'org-1' } },
+        },
+      });
+      enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Norte' } });
+      mockEstudioYaCobrado.mockResolvedValueOnce(false);
+      enqueue('estudios', { data: { pago_por: 'arrendatario' } });
+      enqueue('pagos', { data: null });
+
+      const result = await getAutorizacionByToken(TOKEN);
+
+      expect(result.solicitado_por).toBe('Inmobiliaria Norte');
+      expect(result.pago).toEqual({ requerido: true, monto_formateado: '$150.000' });
+    });
+
+    it('A2: si lo paga la inmobiliaria no hay aviso de cobro; sin inmobiliaria, nombre genérico', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, expediente_id: 'exp-1' } });
+      mockEstudioYaCobrado.mockResolvedValueOnce(false);
+      enqueue('estudios', { data: { pago_por: 'inmobiliaria' } });
+
+      const result = await getAutorizacionByToken(TOKEN);
+
+      expect(result.solicitado_por).toBe('El propietario del inmueble');
+      expect(result.pago).toEqual({ requerido: false, monto_formateado: null });
+    });
+
     it('debe lanzar error si token no existe', async () => {
       enqueue('autorizaciones_habeas_data', { data: null });
       await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({
