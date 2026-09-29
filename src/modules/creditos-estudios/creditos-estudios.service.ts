@@ -1561,6 +1561,18 @@ export async function revertirCompraCreditos(compraId: string): Promise<CompraRe
     .maybeSingle();
   if (loteErr) throw fromSupabaseError(loteErr);
   const lote = loteRow as { id: string; cantidad_inicial: number; cantidad_disponible: number } | null;
+  // §3.1: los cupos que se extinguieron por vencimiento (barrido o reserva que
+  // volvió a un lote vencido) no se usaron: no son saldo en contra. También se
+  // lee antes de cancelar.
+  let extinguidos = 0;
+  if (lote) {
+    const { data: expiraciones, error: eErr } = await db('movimientos_creditos_estudios')
+      .select('cantidad')
+      .eq('lote_id', lote.id)
+      .eq('tipo', 'expiracion');
+    if (eErr) throw fromSupabaseError(eErr);
+    extinguidos = ((expiraciones ?? []) as Array<{ cantidad: number }>).reduce((acc, m) => acc - m.cantidad, 0);
+  }
   const { data: cancelada, error: cErr } = await db('compras_creditos_estudios')
     .update({ estado: 'cancelado' } as never)
     .eq('id', compraId)
@@ -1597,7 +1609,7 @@ export async function revertirCompraCreditos(compraId: string): Promise<CompraRe
     retirados = (fresco as { cantidad_disponible: number } | null)?.cantidad_disponible ?? 0;
   }
   resultado.retirados = retirados;
-  resultado.en_contra = lote.cantidad_inicial - retirados;
+  resultado.en_contra = Math.max(0, lote.cantidad_inicial - retirados - extinguidos);
 
   if (resultado.en_contra > 0) {
     const { error: dErr } = await db('compras_creditos_estudios')
