@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // QUE se escribio, no solo que no exploto.
 // ============================================================
 
-const { mockEnv, mockFrom, ops, queues, enqueue, mockEnviarMensaje, mockAssertAccess, mockEstudioYaCobrado, mockOnHabeas, mockNotificarUsuario, mockNotificarResponsable } = vi.hoisted(() => {
+const { mockEnv, mockFrom, ops, queues, enqueue, mockEnviarMensaje, mockAssertAccess, mockEstudioYaCobrado, mockOnHabeas, mockNotificarUsuario, mockNotificarResponsable, mockOrgDelPerfil } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -69,6 +69,8 @@ const { mockEnv, mockFrom, ops, queues, enqueue, mockEnviarMensaje, mockAssertAc
     mockOnHabeas: vi.fn(async () => undefined),
     mockNotificarUsuario: vi.fn(async () => undefined),
     mockNotificarResponsable: vi.fn(async () => undefined),
+    // B18: organización activa del dueño del inmueble (null = propietario individual).
+    mockOrgDelPerfil: vi.fn(async (..._a: unknown[]): Promise<string | null> => null),
   };
 });
 
@@ -104,6 +106,7 @@ vi.mock('@/modules/whatsapp/templates', () => ({
 vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: (...args: unknown[]) => mockAssertAccess(...args),
   perfilEsDuenoDeInmueble: vi.fn(async () => true),
+  resolveInmobiliariaIdForPerfil: (...args: unknown[]) => mockOrgDelPerfil(...args),
 }));
 vi.mock('@/modules/estudios/pago.guard', () => ({
   estudioYaCobrado: (...args: unknown[]) => mockEstudioYaCobrado(...args),
@@ -310,6 +313,8 @@ describe('autorizaciones.service', () => {
         'Juan Perez',
         expect.stringContaining('http://localhost:3000/autorizar/'),
         15 * 24, // Flujo §14 "Plazo de expiracion: 15 dias", no 48 h
+        // M5: el correo dice lo mismo que el WhatsApp v2 (quién pide y dónde).
+        { quienSolicita: 'El propietario del inmueble', direccion: 'Calle 1 #2-3, Bogota' },
       );
       // Sin celular no hay WhatsApp.
       expect(mockEnviarMensaje).not.toHaveBeenCalled();
@@ -375,6 +380,57 @@ describe('autorizaciones.service', () => {
       expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
         variables: ['Juan', 'Inmobiliaria Norte', 'Calle 1 #2-3, Bogota', expect.stringContaining('/autorizar/'), '15'],
       }));
+    });
+
+    it('M5: el correo nombra a la inmobiliaria aunque el prospecto no tenga celular', async () => {
+      enqueue('expedientes', {
+        data: { ...expedienteConSolicitante, inmuebles: { ...expedienteConSolicitante.inmuebles, inmobiliaria_id: 'org-1' } },
+      });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Norte' } });
+
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+
+      expect(mockSendAutorizacionEmail.mock.calls[0][4]).toEqual({
+        quienSolicita: 'Inmobiliaria Norte',
+        direccion: 'Calle 1 #2-3, Bogota',
+      });
+      expect(mockEnviarMensaje).not.toHaveBeenCalled();
+    });
+
+    it('B18: inmueble de inmobiliaria con inmobiliaria_id null → la organización de su dueño', async () => {
+      mockOrgDelPerfil.mockResolvedValueOnce('org-9');
+      enqueue('expedientes', {
+        data: {
+          ...expedienteConSolicitante,
+          solicitantes: { ...expedienteConSolicitante.solicitantes, telefono: '+573001112233' },
+          inmuebles: { ...expedienteConSolicitante.inmuebles, propietario_id: 'titular-1', inmobiliaria_id: null },
+        },
+      });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Sur' } });
+
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+
+      expect(mockOrgDelPerfil).toHaveBeenCalledWith('titular-1');
+      expect(opsDe('inmobiliarias', 'eq')[0].args).toEqual(['id', 'org-9']);
+      expect(mockSendAutorizacionEmail.mock.calls[0][4]).toMatchObject({ quienSolicita: 'Inmobiliaria Sur' });
+      expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
+        variables: ['Juan', 'Inmobiliaria Sur', 'Calle 1 #2-3, Bogota', expect.stringContaining('/autorizar/'), '15'],
+      }));
+    });
+
+    it('B18: propietario individual (sin organización) sigue siendo «El propietario del inmueble»', async () => {
+      enqueue('expedientes', {
+        data: { ...expedienteConSolicitante, inmuebles: { ...expedienteConSolicitante.inmuebles, propietario_id: 'prop-1' } },
+      });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+
+      expect(mockOrgDelPerfil).toHaveBeenCalledWith('prop-1');
+      expect(mockFrom).not.toHaveBeenCalledWith('inmobiliarias');
+      expect(mockSendAutorizacionEmail.mock.calls[0][4]).toMatchObject({ quienSolicita: 'El propietario del inmueble' });
     });
 
     it('con la biometria encendida presenta y congela el texto 3.0-biometria', async () => {
@@ -565,6 +621,54 @@ describe('autorizaciones.service', () => {
       expect(result.pago).toEqual({ requerido: false, monto_formateado: null });
     });
 
+    it('B17: sin pagador elegido (pago_por null) no afirma «sin costo»: requerido null', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, expediente_id: 'exp-1' } });
+      enqueue('estudios', { data: { pago_por: null } });
+
+      const result = await getAutorizacionByToken(TOKEN);
+
+      expect(result.pago).toEqual({ requerido: null, monto_formateado: null });
+    });
+
+    it('B17: ya pagado manda sobre el pagador sin elegir (requerido false)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, expediente_id: 'exp-1' } });
+      mockEstudioYaCobrado.mockResolvedValueOnce(true);
+      enqueue('estudios', { data: { pago_por: null } });
+
+      expect((await getAutorizacionByToken(TOKEN)).pago).toEqual({ requerido: false, monto_formateado: null });
+    });
+
+    it('B16: pagado, pagador y fila de pago se leen a la vez; un fallo que no hacía falta no cuenta', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...autorizacionPendiente, expediente_id: 'exp-1' } });
+      let soltar!: (v: boolean) => void;
+      mockEstudioYaCobrado.mockImplementationOnce(() => new Promise<boolean>((r) => { soltar = r; }));
+      // Si ya está pagado, el error leyendo el pagador no importa (igual que antes).
+      enqueue('estudios', { data: null, error: { message: 'timeout' } });
+
+      const pendiente = getAutorizacionByToken(TOKEN);
+      await vi.waitFor(() => expect(mockFrom).toHaveBeenCalledWith('pagos'));
+      expect(mockFrom).toHaveBeenCalledWith('estudios');
+      soltar(true);
+
+      expect((await pendiente).pago).toEqual({ requerido: false, monto_formateado: null });
+    });
+
+    it('B18: la pantalla pública también resuelve la inmobiliaria por el dueño del inmueble', async () => {
+      mockOrgDelPerfil.mockResolvedValueOnce('org-9');
+      enqueue('autorizaciones_habeas_data', {
+        data: {
+          ...autorizacionPendiente,
+          expedientes: {
+            ...autorizacionPendiente.expedientes,
+            inmuebles: { ...autorizacionPendiente.expedientes.inmuebles, inmobiliaria_id: null, propietario_id: 'titular-1' },
+          },
+        },
+      });
+      enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Sur' } });
+
+      expect((await getAutorizacionByToken(TOKEN)).solicitado_por).toBe('Inmobiliaria Sur');
+    });
+
     it('debe lanzar error si token no existe', async () => {
       enqueue('autorizaciones_habeas_data', { data: null });
       await expect(getAutorizacionByToken(TOKEN)).rejects.toMatchObject({
@@ -646,6 +750,14 @@ describe('autorizaciones.service', () => {
       enqueue('autorizaciones_habeas_data', firmadaHace(3 * 60_000));
       enqueue('estudios', { data: { pago_por: 'arrendatario' } });
       expect(await getPagoProspectoPorToken(TOKEN)).toMatchObject({ estado: 'sin_enlace', payment_link_url: null });
+    });
+
+    it('B16: el pagador y la fila de pago se piden a la vez; si no le toca pagar, no_aplica', async () => {
+      enqueue('autorizaciones_habeas_data', firmadaHace(10_000));
+      enqueue('estudios', { data: { pago_por: 'inmobiliaria' } });
+      enqueue('pagos', { data: { estado: 'pendiente', monto: 150000, payment_link_url: 'https://mp/x' } });
+      expect(await getPagoProspectoPorToken(TOKEN)).toEqual({ estado: 'no_aplica', monto_formateado: null, payment_link_url: null });
+      expect(mockFrom).toHaveBeenCalledWith('pagos');
     });
 
     it('con el cobro creado: el enlace, aunque la firma sea vieja', async () => {
@@ -1021,7 +1133,7 @@ describe('autorizaciones.service', () => {
 
       const result = await enviarOtpCode(TOKEN);
 
-      expect(result.mensaje).toBe('Codigo OTP enviado al correo del solicitante');
+      expect(result.mensaje).toBe('Código OTP enviado al correo del solicitante');
       expect(result.expira_en).toBeDefined();
       expect(mockSendOtpEmail).toHaveBeenCalledWith('juan@test.com', 'Juan Perez', expect.stringMatching(/^\d{6}$/));
       expect(mockEnviarMensaje).not.toHaveBeenCalled();
@@ -1036,7 +1148,7 @@ describe('autorizaciones.service', () => {
 
       const result = await enviarOtpCode(TOKEN);
 
-      expect(result.mensaje).toBe('Codigo OTP enviado por WhatsApp y correo');
+      expect(result.mensaje).toBe('Código OTP enviado por WhatsApp y correo');
       expect(mockEnviarMensaje).toHaveBeenCalledWith(expect.objectContaining({
         to: '+573001112233',
         template_id: 'cofianza_otp_autorizacion',
@@ -1087,7 +1199,7 @@ describe('autorizaciones.service', () => {
 
       const result = await verificarOtpCode(TOKEN, '123456');
 
-      expect(result).toEqual({ verificado: true, mensaje: 'Codigo OTP verificado correctamente' });
+      expect(result).toEqual({ verificado: true, mensaje: 'Código OTP verificado correctamente' });
       expect(opsDe('autorizacion_otps', 'update')[0].args[0]).toEqual({ verificado: true });
     });
 

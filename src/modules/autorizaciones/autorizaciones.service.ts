@@ -6,7 +6,7 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
-import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { assertExpedienteAccess, resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
 import { estudioYaCobrado as estudioPagado, leerSenalPagoEstudio } from '@/modules/estudios/pago.guard';
 import { normalizarDocumento, normalizarTipoDocumento } from '@/modules/estudios/autorizacion.guard';
 import { env } from '@/config';
@@ -270,8 +270,16 @@ async function leerIngresoInferidoDelExpediente(
  * {{2}} de la plantilla de autorización: la inmobiliaria por su nombre; sin
  * inmobiliaria (propietario directo) no se expone el nombre de una persona.
  */
-async function quienSolicitaElEstudio(inmobiliariaId: string | null): Promise<string> {
+async function quienSolicitaElEstudio(
+  inm: { inmobiliaria_id?: string | null; propietario_id?: string | null } | null | undefined,
+): Promise<string> {
   const generico = 'El propietario del inmueble';
+  // B18: inmuebles de una inmobiliaria cargados antes de que tuviera
+  // organización (migración 20260929000016) quedaron con inmobiliaria_id null.
+  // Se resuelve por la organización de su dueño; un propietario individual no
+  // tiene ninguna y sigue siendo «El propietario del inmueble».
+  const inmobiliariaId =
+    inm?.inmobiliaria_id || (inm?.propietario_id ? await resolveInmobiliariaIdForPerfil(inm.propietario_id) : null);
   if (!inmobiliariaId) return generico;
   const { data, error } = await (supabase
     .from('inmobiliarias' as string) as ReturnType<typeof supabase.from>)
@@ -284,12 +292,15 @@ async function quienSolicitaElEstudio(inmobiliariaId: string | null): Promise<st
   return ((data as { nombre?: string | null } | null)?.nombre || '').trim() || generico;
 }
 
-/** {{2}} del WhatsApp: si no se pudo leer quién pide, un sujeto neutro (nunca uno falso). */
-async function quienSolicitaParaMensaje(inmobiliariaId: string | null, expedienteId: string): Promise<string> {
+/** {{2}} del WhatsApp (y quién pide, en el correo): si no se pudo leer quién pide, un sujeto neutro (nunca uno falso). */
+async function quienSolicitaParaMensaje(
+  inm: { inmobiliaria_id?: string | null; propietario_id?: string | null } | null | undefined,
+  expedienteId: string,
+): Promise<string> {
   try {
-    return await quienSolicitaElEstudio(inmobiliariaId);
+    return await quienSolicitaElEstudio(inm);
   } catch (err) {
-    logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'No se pudo leer quién pide el estudio para el WhatsApp de autorización');
+    logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'No se pudo leer quién pide el estudio para el aviso de autorización');
     return 'Quien tramita su arriendo';
   }
 }
@@ -441,7 +452,7 @@ export async function enviarEnlaceAutorizacion(
         normalizarTipoDocumento(firmada.tipo_documento_aceptante) !== normalizarTipoDocumento(exp.solicitantes.tipo_documento)));
   if (firmada && !firmoOtroDocumento) {
     throw AppError.badRequest(
-      'Este estudio ya tiene una autorizacion firmada vigente.',
+      'Este estudio ya tiene una autorización firmada vigente.',
       'AUTORIZACION_YA_FIRMADA',
     );
   }
@@ -486,7 +497,7 @@ export async function enviarEnlaceAutorizacion(
 
   if (insertError || !autorizacion) {
     logger.error({ error: insertError, expedienteId }, 'Error al crear autorizacion');
-    throw AppError.badRequest('Error al crear la autorizacion', 'AUTORIZACION_CREATE_ERROR');
+    throw AppError.badRequest('Error al crear la autorización', 'AUTORIZACION_CREATE_ERROR');
   }
 
   const autorizacionId = (autorizacion as unknown as { id: string }).id;
@@ -494,11 +505,19 @@ export async function enviarEnlaceAutorizacion(
   // 5. Send email
   const autorizacionUrl = `${env.FRONTEND_URL}/autorizar/${token}`;
   const nombreCompleto = `${exp.solicitantes.nombre} ${exp.solicitantes.apellido}`;
+  // M5: el correo y el WhatsApp nombran a quien pide el estudio y el inmueble
+  // (mismo cálculo para los dos, una sola lectura).
+  const inm = exp.inmuebles;
+  const direccion = [inm?.direccion, inm?.ciudad].filter((v) => v?.trim()).join(', ') || 'el inmueble';
+  const quienSolicita = await quienSolicitaParaMensaje(inm, expedienteId);
 
   // Email best-effort: si Resend falla (p.ej. dirección no verificada en dev),
   // NO debe bloquear el envío del link por WhatsApp que viene abajo.
   try {
-    await sendAutorizacionEmail(exp.solicitantes.email, nombreCompleto, autorizacionUrl, expiryHours);
+    await sendAutorizacionEmail(exp.solicitantes.email, nombreCompleto, autorizacionUrl, expiryHours, {
+      quienSolicita,
+      direccion,
+    });
   } catch (err) {
     logger.warn(
       { error: err instanceof Error ? err.message : String(err), expedienteId },
@@ -509,15 +528,13 @@ export async function enviarEnlaceAutorizacion(
   // 5b. Enviar también el link por WhatsApp si hay celular (best-effort; el
   // email queda como respaldo). WhatsApp directo vía Meta (no Auco).
   if (exp.solicitantes.telefono) {
-    const inm = exp.inmuebles;
-    const direccion = [inm?.direccion, inm?.ciudad].filter((v) => v?.trim()).join(', ') || 'el inmueble';
     const res = await enviarMensaje({
       to: exp.solicitantes.telefono,
       template_id: WHATSAPP_TEMPLATES.AUTORIZACION_LINK.id,
       language: WHATSAPP_TEMPLATES.AUTORIZACION_LINK.language,
       variables: [
         exp.solicitantes.nombre,
-        await quienSolicitaParaMensaje(inm?.inmobiliaria_id ?? null, expedienteId),
+        quienSolicita,
         direccion,
         autorizacionUrl,
         String(Math.round(expiryHours / 24)),
@@ -594,7 +611,7 @@ export async function getAutorizacionByToken(token: string) {
     .select(`
       id, estado, token_expiracion, texto_autorizado, version_terminos, metodo_firma, expediente_id,
       solicitantes(nombre, apellido, telefono, tipo_documento),
-      expedientes(numero, estado, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, barrio, inmobiliaria_id))
+      expedientes(numero, estado, inmuebles!expedientes_inmueble_id_fkey(direccion, ciudad, barrio, inmobiliaria_id, propietario_id))
     `)
     .eq('token', token)
     .maybeSingle();
@@ -604,7 +621,7 @@ export async function getAutorizacionByToken(token: string) {
     throw fromSupabaseError(error);
   }
   if (!autorizacion) {
-    throw AppError.notFound('Autorizacion no encontrada o enlace invalido', 'AUTORIZACION_NOT_FOUND');
+    throw AppError.notFound('Autorización no encontrada o enlace inválido', 'AUTORIZACION_NOT_FOUND');
   }
 
   const auth = autorizacion as unknown as {
@@ -624,14 +641,17 @@ export async function getAutorizacionByToken(token: string) {
     expedientes: {
       numero: string;
       estado: string;
-      inmuebles: { direccion: string; ciudad: string; barrio: string | null; inmobiliaria_id?: string | null };
+      inmuebles: {
+        direccion: string; ciudad: string; barrio: string | null;
+        inmobiliaria_id?: string | null; propietario_id?: string | null;
+      };
     };
   };
 
   // El trámite antes que la fecha: reabrir DESPUÉS del vencimiento un enlace
   // que ya se firmó es la pantalla de éxito (y la del pago), no "pide otro".
   if (auth.estado === 'autorizado') {
-    throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+    throw AppError.badRequest('Esta autorización ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
   }
 
   // Antes que el vencimiento y el estado: con el estudio cancelado, "pide otro
@@ -647,7 +667,7 @@ export async function getAutorizacionByToken(token: string) {
         .update({ estado: 'expirado' } as never)
         .eq('id', auth.id);
     }
-    throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
+    throw AppError.badRequest('El enlace de autorización ha expirado', 'AUTORIZACION_EXPIRADA');
   }
 
   if (auth.estado !== 'pendiente') {
@@ -658,7 +678,7 @@ export async function getAutorizacionByToken(token: string) {
     // asi que el nombre interno del enum se queda aqui, para los logs. (El
     // 'autorizado' ya salio arriba, antes del chequeo de vencimiento.)
     throw AppError.badRequest(
-      `Esta autorizacion tiene estado: ${auth.estado}`,
+      `Esta autorización tiene estado: ${auth.estado}`,
       'AUTORIZACION_ESTADO_INVALIDO',
     );
   }
@@ -680,7 +700,7 @@ export async function getAutorizacionByToken(token: string) {
     return null;
   };
   const [solicitadoPor, pago] = await Promise.all([
-    quienSolicitaElEstudio(auth.expedientes?.inmuebles?.inmobiliaria_id ?? null).catch(sinDato('solicitado_por')),
+    quienSolicitaElEstudio(auth.expedientes?.inmuebles).catch(sinDato('solicitado_por')),
     auth.expediente_id
       ? cobroAnticipado(auth.expediente_id).catch(sinDato('pago'))
       : Promise.resolve(null),
@@ -763,7 +783,7 @@ async function autorizacionPendientePorToken(token: string): Promise<Autorizacio
     throw fromSupabaseError(error);
   }
   if (!data) {
-    throw AppError.notFound('Autorizacion no encontrada o enlace invalido', 'AUTORIZACION_NOT_FOUND');
+    throw AppError.notFound('Autorización no encontrada o enlace inválido', 'AUTORIZACION_NOT_FOUND');
   }
   const auth = data as unknown as {
     id: string;
@@ -778,10 +798,10 @@ async function autorizacionPendientePorToken(token: string): Promise<Autorizacio
   // Primero: la biometria que cuelga de aqui es una consulta FACTURABLE a Auco.
   assertEstudioActivo(auth.expedientes?.estado);
   if (new Date(auth.token_expiracion) < new Date()) {
-    throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
+    throw AppError.badRequest('El enlace de autorización ha expirado', 'AUTORIZACION_EXPIRADA');
   }
   if (auth.estado !== 'pendiente') {
-    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
+    throw AppError.badRequest('Este enlace de autorización ya no está vigente', 'AUTORIZACION_NO_VIGENTE');
   }
   return {
     id: auth.id,
@@ -1069,11 +1089,11 @@ export async function verificarBiometriaProspecto(
 function mensajeProspectoBiometria(estado: ResumenBiometria['estado']): string {
   switch (estado) {
     case 'no_coincide':
-      return 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puedes intentarlo de nuevo con mejor luz, o continuar: alguien de nuestro equipo revisara tu caso.';
+      return 'No pudimos confirmar que la foto y el documento sean de la misma persona. Puedes intentarlo de nuevo con mejor luz, o continuar: alguien de nuestro equipo revisará tu caso.';
     case 'omitida':
-      return 'Continuamos sin la verificacion con foto. Tu estudio sigue: lo revisara una persona de nuestro equipo.';
+      return 'Continuamos sin la verificación con foto. Tu estudio sigue: lo revisará una persona de nuestro equipo.';
     default:
-      return 'No pudimos completar la verificacion en este momento. Puedes continuar: alguien de nuestro equipo revisara tu caso.';
+      return 'No pudimos completar la verificación en este momento. Puedes continuar: alguien de nuestro equipo revisará tu caso.';
   }
 }
 
@@ -1239,13 +1259,13 @@ async function detenerAutorizacion(
 }
 
 const MOTIVO_REPORTE_LABEL: Record<string, string> = {
-  no_soy_yo: 'la persona que abrio el enlace dice que NO es el titular de esos datos',
+  no_soy_yo: 'la persona que abrió el enlace dice que NO es el titular de esos datos',
   datos_incorrectos: 'los datos registrados no corresponden a esa persona',
 };
 
 /** El §8.1 nunca revela el numero: el aviso dice que no coincidio, no cual escribio. */
 const LABEL_DOCUMENTO_NO_COINCIDE =
-  'el numero de documento que escribio quien abrio el enlace no coincide con el registrado';
+  'el número de documento que escribió quien abrió el enlace no coincide con el registrado';
 
 /**
  * Evento de timeline + notificaciones del §12. Tipo 'estudio' a proposito: la
@@ -1294,9 +1314,9 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
     input.origen === 'documento_no_coincide' ? LABEL_DOCUMENTO_NO_COINCIDE : MOTIVO_REPORTE_LABEL[input.motivo];
   const mensaje =
     `En el estudio ${exp?.numero ? formatNumeroEstudio(exp.numero) : expedienteId}, ${motivoLabel}. ` +
-    'Detuvimos el enlace de autorizacion y no se consultara ninguna central de riesgo. ' +
-    'Revisa los datos del solicitante y, si corresponde, envia un enlace nuevo.' +
-    (input.detalle ? ' Quien reporto dejo una nota: la ve el equipo de Cofianza en el estudio.' : '');
+    'Detuvimos el enlace de autorización y no se consultará ninguna central de riesgo. ' +
+    'Revisa los datos del solicitante y, si corresponde, envía un enlace nuevo.' +
+    (input.detalle ? ' Quien reportó dejó una nota: la ve el equipo de Cofianza en el estudio.' : '');
   const link = `/expedientes/${expedienteId}`;
   const payload = { expediente_id: expedienteId, motivo: input.motivo };
 
@@ -1370,8 +1390,8 @@ async function avisarAutorizacionFirmada(expedienteId: string, solicitanteId: st
   } | null;
 
   const nombre = `${exp?.solicitantes?.nombre ?? ''} ${exp?.solicitantes?.apellido ?? ''}`.trim() || 'El prospecto';
-  const titulo = 'El prospecto ya autorizo';
-  const mensaje = `${nombre} autorizo la consulta en centrales de riesgo para el estudio ${formatNumeroEstudio(exp?.numero)}${exp?.inmuebles?.direccion ? ` (${exp.inmuebles.direccion})` : ''}. El estudio continua segun la forma de pago elegida.`;
+  const titulo = 'El prospecto ya autorizó';
+  const mensaje = `${nombre} autorizó la consulta en centrales de riesgo para el estudio ${formatNumeroEstudio(exp?.numero)}${exp?.inmuebles?.direccion ? ` (${exp.inmuebles.direccion})` : ''}. El estudio continúa según la forma de pago elegida.`;
   const link = `/expedientes/${expedienteId}`;
   const payload = { expediente_id: expedienteId, solicitante_id: solicitanteId };
 
@@ -1414,7 +1434,7 @@ export async function firmarAutorizacion(
     throw fromSupabaseError(error);
   }
   if (!autorizacion) {
-    throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
+    throw AppError.notFound('Autorización no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 
   const auth = autorizacion as unknown as AutorizacionRow & {
@@ -1432,13 +1452,13 @@ export async function firmarAutorizacion(
     // idempotente); expirado/revocado = el enlace ya NO sirve — mostrar éxito
     // aquí haría creer al solicitante que terminó cuando nada va a correr.
     if (auth.estado === 'autorizado') {
-      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+      throw AppError.badRequest('Esta autorización ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
     }
-    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
+    throw AppError.badRequest('Este enlace de autorización ya no está vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   if (new Date(auth.token_expiracion) < new Date()) {
-    throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
+    throw AppError.badRequest('El enlace de autorización ha expirado', 'AUTORIZACION_EXPIRADA');
   }
 
   // 1b. §8.1: la firma lleva el documento que escribio el prospecto y se
@@ -1487,7 +1507,7 @@ export async function firmarAutorizacion(
 
     if (!otp) {
       throw AppError.badRequest(
-        'Debe verificar el codigo OTP antes de firmar',
+        'Debe verificar el código OTP antes de firmar',
         'OTP_NO_VERIFICADO',
       );
     }
@@ -1496,7 +1516,7 @@ export async function firmarAutorizacion(
     // reciente: hay que pedir y verificar uno nuevo.
     if (new Date((otp as unknown as OtpRow).expira_en) < new Date()) {
       throw AppError.badRequest(
-        'El codigo OTP expiro. Solicite uno nuevo y verifiquelo antes de firmar.',
+        'El código OTP expiró. Solicite uno nuevo y verifíquelo antes de firmar.',
         'OTP_EXPIRADO',
       );
     }
@@ -1561,7 +1581,7 @@ export async function firmarAutorizacion(
 
   if (updateError) {
     logger.error({ error: updateError, autorizacionId: auth.id }, 'Error al firmar autorizacion');
-    throw AppError.badRequest('Error al firmar la autorizacion', 'AUTORIZACION_FIRMA_ERROR');
+    throw AppError.badRequest('Error al firmar la autorización', 'AUTORIZACION_FIRMA_ERROR');
   }
 
   if (!updatedRows || (updatedRows as unknown[]).length === 0) {
@@ -1575,9 +1595,9 @@ export async function firmarAutorizacion(
       .maybeSingle();
     const estadoActual = (actual as { estado?: string } | null)?.estado;
     if (estadoActual === 'autorizado') {
-      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+      throw AppError.badRequest('Esta autorización ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
     }
-    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
+    throw AppError.badRequest('Este enlace de autorización ya no está vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   // 4b. Flujo §8.1: el documento ya coincidio arriba, asi que la identidad
@@ -1681,19 +1701,22 @@ export async function getPagoProspectoPorToken(token: string): Promise<{
   if (a.estado !== 'autorizado' || !a.expediente_id) {
     return { estado: 'no_aplica', monto_formateado: null, payment_link_url: null };
   }
-  if (!(await cobroLeTocaAlProspecto(a.expediente_id))) {
+  // B16: el pagador y la fila de pago se leen a la vez (~200 ms por consulta).
+  const [leTocaPagar, { data: pagoRow }] = await Promise.all([
+    cobroLeTocaAlProspecto(a.expediente_id),
+    (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('estado, monto, payment_link_url')
+      .eq('expediente_id', a.expediente_id)
+      .eq('concepto', 'estudio')
+      .in('estado', ['pendiente', 'procesando', 'completado'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  if (!leTocaPagar) {
     return { estado: 'no_aplica', monto_formateado: null, payment_link_url: null };
   }
-
-  const { data: pagoRow } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('estado, monto, payment_link_url')
-    .eq('expediente_id', a.expediente_id)
-    .eq('concepto', 'estudio')
-    .in('estado', ['pendiente', 'procesando', 'completado'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
   const pago = pagoRow as { estado?: string; monto?: number; payment_link_url?: string | null } | null;
 
   const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
@@ -1722,25 +1745,43 @@ export async function getPagoProspectoPorToken(token: string): Promise<{
  * Aviso de cobro ANTES de firmar (A2). Mismo monto que la pantalla de «ya
  * firmaste» (getPagoProspectoPorToken): el del pago si ya existe; si no, el
  * configurado (configuracion_sistema.monto_estudio, getMontoEstudio).
+ *
+ * `requerido`:
+ *   - true  → el pagador es el arrendatario (opción C) y aún no pagó.
+ *   - false → ya está pagado o lo paga la inmobiliaria / el propietario.
+ *   - null  → B17: el gestor todavía no eligió quién paga (`estudios.pago_por`
+ *     null; el enlace directo y el orquestador lo envían sin marcarlo). No se
+ *     afirma «sin costo»: si después elige al arrendatario, le llegará un cobro.
+ *     La pantalla debe decir que quien tramita el estudio le indicará si tiene
+ *     costo (la web actual lo trata como false: no muestra aviso).
  */
 async function cobroAnticipado(
   expedienteId: string,
-): Promise<{ requerido: boolean; monto_formateado: string | null }> {
+): Promise<{ requerido: boolean | null; monto_formateado: string | null }> {
+  // B16: las tres lecturas van en paralelo; el orden de las decisiones de
+  // abajo es el de antes (un fallo solo cuenta si su dato hacía falta).
+  const [senal, pagoPor, { data: pagoRow, error: pagoError }] = await Promise.all([
+    leerSenalPagoEstudio(expedienteId),
+    leerPagoPor(expedienteId).then(
+      (valor) => ({ valor, error: null as unknown }),
+      (error: unknown) => ({ valor: null, error }),
+    ),
+    (supabase
+      .from('pagos' as string) as ReturnType<typeof supabase.from>)
+      .select('monto')
+      .eq('expediente_id', expedienteId)
+      .eq('concepto', 'estudio')
+      .in('estado', ['pendiente', 'procesando'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
   // B15: 'no_verificable' no es «no pagado»: sin saberlo, no se afirma nada.
-  const senal = await leerSenalPagoEstudio(expedienteId);
   if (senal === 'no_verificable') throw new Error('No se pudo verificar el pago del estudio');
-  if (senal === 'pagado' || !(await cobroLeTocaAlProspecto(expedienteId))) {
-    return { requerido: false, monto_formateado: null };
-  }
-  const { data: pagoRow, error: pagoError } = await (supabase
-    .from('pagos' as string) as ReturnType<typeof supabase.from>)
-    .select('monto')
-    .eq('expediente_id', expedienteId)
-    .eq('concepto', 'estudio')
-    .in('estado', ['pendiente', 'procesando'])
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  if (senal === 'pagado') return { requerido: false, monto_formateado: null };
+  if (pagoPor.error) throw pagoPor.error;
+  if (pagoPor.valor === null) return { requerido: null, monto_formateado: null };
+  if (pagoPor.valor !== 'arrendatario') return { requerido: false, monto_formateado: null };
   if (pagoError) throw pagoError;
   const { getMontoEstudio } = await import('@/modules/pago-estudio/pago-estudio.service');
   const monto = (pagoRow as { monto?: number } | null)?.monto ?? (await getMontoEstudio().catch(() => null));
@@ -1757,6 +1798,11 @@ async function cobroAnticipado(
  * backend no va a emitir.
  */
 async function cobroLeTocaAlProspecto(expedienteId: string): Promise<boolean> {
+  return (await leerPagoPor(expedienteId)) === 'arrendatario';
+}
+
+/** `estudios.pago_por` del estudio del titular (null = aún no se eligió quién paga). */
+async function leerPagoPor(expedienteId: string): Promise<string | null> {
   const { data, error } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select('pago_por')
@@ -1767,7 +1813,7 @@ async function cobroLeTocaAlProspecto(expedienteId: string): Promise<boolean> {
     .maybeSingle();
   // B15: un fallo de lectura no es «no le toca pagar».
   if (error) throw error;
-  return (data as { pago_por?: string | null } | null)?.pago_por === 'arrendatario';
+  return (data as { pago_por?: string | null } | null)?.pago_por ?? null;
 }
 
 // ============================================================
@@ -1787,7 +1833,7 @@ export async function enviarOtpCode(token: string) {
     throw fromSupabaseError(error);
   }
   if (!autorizacion) {
-    throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
+    throw AppError.notFound('Autorización no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 
   const auth = autorizacion as unknown as {
@@ -1802,13 +1848,13 @@ export async function enviarOtpCode(token: string) {
     // idempotente); expirado/revocado = el enlace ya NO sirve — mostrar éxito
     // aquí haría creer al solicitante que terminó cuando nada va a correr.
     if (auth.estado === 'autorizado') {
-      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+      throw AppError.badRequest('Esta autorización ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
     }
-    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
+    throw AppError.badRequest('Este enlace de autorización ya no está vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   if (new Date(auth.token_expiracion) < new Date()) {
-    throw AppError.badRequest('El enlace de autorizacion ha expirado', 'AUTORIZACION_EXPIRADA');
+    throw AppError.badRequest('El enlace de autorización ha expirado', 'AUTORIZACION_EXPIRADA');
   }
 
   // 2. Check cooldown — last OTP must be older than 60 seconds
@@ -1826,7 +1872,7 @@ export async function enviarOtpCode(token: string) {
     if (elapsed < OTP_COOLDOWN_SECONDS) {
       const remaining = Math.ceil(OTP_COOLDOWN_SECONDS - elapsed);
       throw AppError.tooMany(
-        `Debe esperar ${remaining} segundos antes de solicitar otro codigo`,
+        `Debe esperar ${remaining} segundos antes de solicitar otro código`,
         'OTP_COOLDOWN',
       );
     }
@@ -1857,7 +1903,7 @@ export async function enviarOtpCode(token: string) {
 
   if (insertError || !nuevoOtp) {
     logger.error({ error: insertError, autorizacionId: auth.id }, 'Error al crear OTP');
-    throw AppError.badRequest('Error al generar el codigo OTP', 'OTP_CREATE_ERROR');
+    throw AppError.badRequest('Error al generar el código OTP', 'OTP_CREATE_ERROR');
   }
 
   const otpId = (nuevoOtp as unknown as { id: string }).id;
@@ -1903,15 +1949,15 @@ export async function enviarOtpCode(token: string) {
       .eq('id', otpId);
     logger.error({ autorizacionId: auth.id }, 'OTP no entregado por ningún canal (email y WhatsApp fallaron)');
     throw AppError.badRequest(
-      'No pudimos enviarte el codigo en este momento. Intenta de nuevo en unos segundos.',
+      'No pudimos enviarte el código en este momento. Intenta de nuevo en unos segundos.',
       'OTP_DELIVERY_FAILED',
     );
   }
 
   return {
     mensaje: auth.solicitantes.telefono
-      ? 'Codigo OTP enviado por WhatsApp y correo'
-      : 'Codigo OTP enviado al correo del solicitante',
+      ? 'Código OTP enviado por WhatsApp y correo'
+      : 'Código OTP enviado al correo del solicitante',
     expira_en: expiraEn,
   };
 }
@@ -1933,7 +1979,7 @@ export async function verificarOtpCode(token: string, codigo: string) {
     throw fromSupabaseError(error);
   }
   if (!autorizacion) {
-    throw AppError.notFound('Autorizacion no encontrada', 'AUTORIZACION_NOT_FOUND');
+    throw AppError.notFound('Autorización no encontrada', 'AUTORIZACION_NOT_FOUND');
   }
 
   const auth = autorizacion as unknown as { id: string; estado: string; token_expiracion: string };
@@ -1943,9 +1989,9 @@ export async function verificarOtpCode(token: string, codigo: string) {
     // idempotente); expirado/revocado = el enlace ya NO sirve — mostrar éxito
     // aquí haría creer al solicitante que terminó cuando nada va a correr.
     if (auth.estado === 'autorizado') {
-      throw AppError.badRequest('Esta autorizacion ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
+      throw AppError.badRequest('Esta autorización ya fue firmada', 'AUTORIZACION_YA_FIRMADA');
     }
-    throw AppError.badRequest('Este enlace de autorizacion ya no esta vigente', 'AUTORIZACION_NO_VIGENTE');
+    throw AppError.badRequest('Este enlace de autorización ya no está vigente', 'AUTORIZACION_NO_VIGENTE');
   }
 
   // 2. Find matching OTP (not expired, not verified)
@@ -1959,20 +2005,20 @@ export async function verificarOtpCode(token: string, codigo: string) {
     .maybeSingle();
 
   if (!otp) {
-    throw AppError.badRequest('No hay codigo OTP pendiente. Solicite uno nuevo.', 'OTP_NOT_FOUND');
+    throw AppError.badRequest('No hay código OTP pendiente. Solicite uno nuevo.', 'OTP_NOT_FOUND');
   }
 
   const otpRow = otp as unknown as OtpRow;
 
   if (new Date(otpRow.expira_en) < new Date()) {
     throw AppError.badRequest(
-      'El codigo OTP ha expirado. Solicite uno nuevo.',
+      'El código OTP ha expirado. Solicite uno nuevo.',
       'OTP_EXPIRADO',
     );
   }
 
   if (otpRow.codigo !== codigo) {
-    throw AppError.badRequest('Codigo OTP incorrecto', 'OTP_INCORRECTO');
+    throw AppError.badRequest('Código OTP incorrecto', 'OTP_INCORRECTO');
   }
 
   // 3. Mark OTP as verified
@@ -1983,7 +2029,7 @@ export async function verificarOtpCode(token: string, codigo: string) {
 
   return {
     verificado: true,
-    mensaje: 'Codigo OTP verificado correctamente',
+    mensaje: 'Código OTP verificado correctamente',
   };
 }
 
@@ -2048,8 +2094,8 @@ export async function revocarAutorizacion(
   if (error || !autorizacion) {
     throw AppError.notFound(
       input.coarrendatario_id
-        ? 'No se encontro autorizacion activa de ese co-arrendatario en este estudio'
-        : 'No se encontro autorizacion activa para este estudio',
+        ? 'No se encontró autorización activa de ese co-arrendatario en este estudio'
+        : 'No se encontró autorización activa para este estudio',
       'AUTORIZACION_NOT_FOUND',
     );
   }
@@ -2072,7 +2118,7 @@ export async function revocarAutorizacion(
 
   if (updateError) {
     logger.error({ error: updateError, autorizacionId: auth.id }, 'Error al revocar autorizacion');
-    throw AppError.badRequest('Error al revocar la autorizacion', 'AUTORIZACION_REVOKE_ERROR');
+    throw AppError.badRequest('Error al revocar la autorización', 'AUTORIZACION_REVOKE_ERROR');
   }
 
   // 3. Audit

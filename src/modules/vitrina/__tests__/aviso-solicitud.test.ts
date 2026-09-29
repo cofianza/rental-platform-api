@@ -53,4 +53,12 @@ describe('aviso de estudio nuevo desde la vitrina', () => {
       expect.objectContaining({ duenoNombre: 'Inmobiliaria Norte', interesadoNombre: 'Ana Pérez', panelUrl: 'https://app/expedientes/exp1' }),
     );
   });
+
+  it('B19: sin dirección, la plantilla v2 (en usted) no dice «tu inmueble»', async () => {
+    const direccion = filas.inmuebles.direccion;
+    filas.inmuebles.direccion = null;
+    await notificarPropietarioNuevaSolicitud('exp1', 'inm1', 'sol1');
+    expect(mocks.whatsapp).toHaveBeenCalledWith(expect.objectContaining({ variables: ['Ana Pérez', 'la dirección registrada'] }));
+    filas.inmuebles.direccion = direccion;
+  });
 });
