@@ -13,18 +13,18 @@ export const registrarInteresSchema = z.object({
   nombre: z
     .string()
     .trim()
-    .min(2, 'Ingresa tu nombre')
+    .min(2, 'Ingrese su nombre')
     .max(150)
-    .refine(esNombrePersona, 'Escribe solo tu nombre, sin enlaces ni números'),
+    .refine(esNombrePersona, 'Escriba solo su nombre, sin enlaces ni números'),
   // Mismo patrón que whatsapp.schema.ts: dígitos, espacios o guiones y '+' inicial.
-  telefono: z.string().trim().min(7, 'Ingresa un teléfono válido').max(30).regex(/^\+?[\d\s-]+$/, 'Ingresa un teléfono válido'),
+  telefono: z.string().trim().min(7, 'Ingrese un teléfono válido').max(30).regex(/^\+?[\d\s-]+$/, 'Ingrese un teléfono válido'),
   email: z.string().trim().email('Correo inválido').max(255),
   // Mensaje opcional del interesado (contexto para el dueño). No sensible.
-  mensaje: z.string().trim().max(500, 'Mensaje muy largo').refine(sinEnlaces, 'Quita los enlaces del mensaje').optional(),
+  mensaje: z.string().trim().max(500, 'Mensaje muy largo').refine(sinEnlaces, 'Quite los enlaces del mensaje').optional(),
   // Debe venir true: es la autorización para compartir el contacto con el
   // anunciante + aceptación de la política de tratamiento de datos.
   acepta: z.boolean().refine((v) => v === true, {
-    message: 'Debes autorizar el tratamiento de tus datos para continuar',
+    message: 'Debe autorizar el tratamiento de sus datos para continuar',
   }),
 });
 

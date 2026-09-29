@@ -329,7 +329,7 @@ describe('evaluarCanon — canon pactado (B2)', () => {
     // Adenda 1 contratos §2.4: una evaluación nueva no lo resuelve (sin acción al estudio).
     // Nadie ha intentado generar con ese canon: todavía no se escaló.
     expect(v.bloqueo!.mensaje).toBe(
-      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. Pacta un canon dentro del tope; si necesitas este canon, genera la vista previa y el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
+      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. Pacte un canon dentro del tope; si necesita este canon, genere la vista previa y el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
     );
     expect(v.bloqueo!.accion).toBeUndefined();
     expect(v.topeCop).toBe(3_000_000);
@@ -339,9 +339,9 @@ describe('evaluarCanon — canon pactado (B2)', () => {
     const conEscalamiento = (topeEscalado: 'enviado' | 'fallido') =>
       evaluarCanon({ ...f(2_900_000), topeEscalado }, 3_100_000, cal)!.bloqueo!.mensaje;
     expect(conEscalamiento('enviado')).toContain(
-      'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puedes pactar un canon dentro del tope.',
+      'El caso se envió a la Gerencia General de Cofianza para evaluar un coafianzamiento; mientras tanto, puede pactar un canon dentro del tope.',
     );
-    expect(conEscalamiento('fallido')).toContain('Escríbele a Cofianza para evaluar un coafianzamiento');
+    expect(conEscalamiento('fallido')).toContain('Escríbale a Cofianza para evaluar un coafianzamiento');
     expect(conEscalamiento('fallido')).not.toContain('se envió');
   });
 
@@ -349,7 +349,7 @@ describe('evaluarCanon — canon pactado (B2)', () => {
     const aviso = avisoCanon(evaluarCanon(f(2_900_000), 3_100_000, cal)!.bloqueo!);
     expect(aviso).not.toContain('se envió');
     expect(aviso).toBe(
-      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. Puedes pactar un canon menor en el paso 1; si necesitas este canon, al generar la vista previa el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
+      'El canon pactado ($3.100.000) supera el tope de $3.000.000 que Cofianza afianza para vivienda sin coafianzamiento. Puede pactar un canon menor en el paso 1; si necesita este canon, al generar la vista previa el caso pasará a la Gerencia General de Cofianza para evaluar un coafianzamiento.',
     );
   });
 
@@ -361,7 +361,7 @@ describe('evaluarCanon — canon pactado (B2)', () => {
     const b = evaluarCanon(f(2_000_000), 2_300_001, cal)!.bloqueo!;
     const aviso = avisoCanon(b);
     expect(aviso).not.toContain('Se requiere nueva evaluación.');
-    expect(aviso.endsWith('Puedes pactar un canon menor en el paso 1; si no, se requerirá nueva evaluación.')).toBe(true);
+    expect(aviso.endsWith('Puede pactar un canon menor en el paso 1; si no, se requerirá nueva evaluación.')).toBe(true);
   });
 });
 
@@ -454,7 +454,7 @@ describe('G4 / G2b — tarifa imprimible y CRC al día', () => {
     expect(b).toEqual([
       expect.objectContaining({
         codigo: 'TARIFA_NO_SOPORTADA',
-        mensaje: 'La tarifa tiene porcentajes con más de dos decimales; el contrato no los puede imprimir. Escríbenos para revisarla.',
+        mensaje: 'La tarifa tiene porcentajes con más de dos decimales; el contrato no los puede imprimir. Escríbanos para revisarla.',
       }),
     ]);
   });
@@ -505,7 +505,7 @@ describe('G1 — perfil del arrendador', () => {
         detalle: [
           'Razón social',
           'Matrícula expedida por',
-          'NIT 900123456: falta el dígito de verificación (con ese número sería 8; confírmalo en el RUT)',
+          'NIT 900123456: falta el dígito de verificación (con ese número sería 8; confírmelo en el RUT)',
           'Tipo y número de documento del representante legal',
         ],
       }),
@@ -517,7 +517,7 @@ describe('G1 — perfil del arrendador', () => {
       expect.objectContaining({
         codigo: 'PERFIL_ARRENDADOR_INCOMPLETO',
         detalle: [
-          'NIT 901.234.567-8: el dígito de verificación no corresponde al número (con ese número sería 7); revisa ambos en el RUT',
+          'NIT 901.234.567-8: el dígito de verificación no corresponde al número (con ese número sería 7); revise ambos en el RUT',
         ],
       }),
     ]);
@@ -528,7 +528,7 @@ describe('G1 — perfil del arrendador', () => {
     expect(problemaNit(null)).toBe('NIT con dígito de verificación (ej. 900.123.456-8)');
     expect(problemaNit('  ')).toBe('NIT con dígito de verificación (ej. 900.123.456-8)');
     expect(problemaNit('90012345A-1')).toBe(
-      'NIT «90012345A-1»: escríbelo con números y el dígito de verificación (ej. 900.123.456-8)',
+      'NIT «90012345A-1»: escríbalo con números y el dígito de verificación (ej. 900.123.456-8)',
     );
     expect(problemaNit('900 123 456-8')).toBeNull();
   });
@@ -637,21 +637,21 @@ describe('faltantes', () => {
 
   it('PH sin administración → paso 3', () => {
     expect(faltantes({ ...PASOS, paso3: { ...PASOS.paso3, administracion: null } }, fuentes(), HOY)).toEqual([
-      { paso: 3, mensaje: 'Con propiedad horizontal completa la cuota de administración; sin ella, quítala.' },
+      { paso: 3, mensaje: 'Con propiedad horizontal complete la cuota de administración; sin ella, quítela.' },
     ]);
   });
 
   it('coarrendatario sin contacto → paso 5', () => {
     const a = { ...PASOS, paso5: { ...PASOS.paso5, contactos: { ...PASOS.paso5.contactos, coarrendatario: null } } };
     expect(faltantes(a, fuentes(), HOY)).toEqual([
-      { paso: 5, mensaje: 'Revisa los datos de notificación del coarrendatario.' },
+      { paso: 5, mensaje: 'Revise los datos de notificación del coarrendatario.' },
     ]);
   });
 
   it('fecha de iniciación de ayer → paso 3', () => {
     const a = { ...PASOS, paso3: { ...PASOS.paso3, fechaInicio: '2026-09-14' } };
     expect(faltantes(a, fuentes(), HOY)).toEqual([
-      { paso: 3, mensaje: 'La fecha de iniciación o de entrega ya pasó; actualízala.' },
+      { paso: 3, mensaje: 'La fecha de iniciación o de entrega ya pasó; actualícela.' },
     ]);
   });
 });
@@ -708,7 +708,7 @@ describe('schema de los pasos', () => {
     expect(paso1Schema.safeParse({ ...PASOS.paso1, ruta: 'B' }).success).toBe(true);
     const r = paso1Schema.safeParse({ ...PASOS.paso1, ruta: 'C' });
     expect(r.success).toBe(false);
-    expect(r.error!.issues[0].message).toBe('Elige la ruta del contrato');
+    expect(r.error!.issues[0].message).toBe('Elija la ruta del contrato');
   });
 
   it('comisión: 2,555 no, 2,55 sí', () => {

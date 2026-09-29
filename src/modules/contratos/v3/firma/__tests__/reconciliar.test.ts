@@ -646,7 +646,7 @@ describe('crearSobre', () => {
     expect(insertado.expira_en).toBe(finDeDiaEn(15));
     expect(input.expiredDate).toBe(finDeDiaEn(30));
     expect(insertado.auco_expira_en).toBe(finDeDiaEn(30));
-    expect(input.message).toContain(`Tienes hasta el ${fechaBogota(finDeDiaEn(15)).split('-').reverse().join('/')}`);
+    expect(input.message).toContain(`Tiene hasta el ${fechaBogota(finDeDiaEn(15)).split('-').reverse().join('/')}`);
     expect(tabla('contrato_v3_sobres', 'update')[0].args[0]).toEqual({ auco_code: 'AUCO9', estado: 'en_firma' });
   });
 
@@ -1307,7 +1307,7 @@ describe('Adenda 1 (respuesta 10): una firma fuera del plazo no activa la fianza
     enqueue('contrato_partes', ok(PARTES));
     expect((await estadoEnviado('c1'))!.reenvio).toEqual({
       puede: false,
-      motivo: expect.stringMatching(/menos de tres días.*cancela el contrato/),
+      motivo: expect.stringMatching(/menos de tres días.*cancele el contrato/),
     });
   });
 });
@@ -1639,7 +1639,7 @@ describe('reenvío con la biometría de firma', () => {
     await continuarTrasIdentidad('c1', 'u1');
     const aviso = efectos.notificarUsuario.mock.calls[0][0] as unknown as { mensaje: string };
     expect(aviso.mensaje).toContain('certificado de riesgo ya no está vigente');
-    expect(aviso.mensaje).toContain('cancela el contrato');
+    expect(aviso.mensaje).toContain('cancele el contrato');
     expect(aviso.mensaje).not.toContain('reintenta');
   });
 });

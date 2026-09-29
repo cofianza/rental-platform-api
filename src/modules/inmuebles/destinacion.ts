@@ -29,11 +29,11 @@ type MotivoNoHabilitada = 'no_habilitada' | 'mixto' | 'uso_desconocido';
 /** Cada mensaje nombra el flujo que le corresponde (Complemento §1.4). */
 const MENSAJES: Readonly<Record<MotivoNoHabilitada, string>> = {
   no_habilitada:
-    'Este inmueble está registrado con destinación comercial. Le corresponde el contrato de arrendamiento comercial, que todavía no está habilitado en la plataforma, y el contrato de vivienda urbana no se puede usar para un inmueble comercial. Escríbenos para revisar el caso.',
+    'Este inmueble está registrado con destinación comercial. Le corresponde el contrato de arrendamiento comercial, que todavía no está habilitado en la plataforma, y el contrato de vivienda urbana no se puede usar para un inmueble comercial. Escríbanos para revisar el caso.',
   mixto:
-    'Este inmueble está registrado con destinación mixta (vivienda y comercio). Los inmuebles de destinación mixta no se contratan por la plataforma, ni con el contrato de vivienda ni con el comercial: el caso lo revisa la Gerencia General de Cofianza. Escríbenos para revisarlo.',
+    'Este inmueble está registrado con destinación mixta (vivienda y comercio). Los inmuebles de destinación mixta no se contratan por la plataforma, ni con el contrato de vivienda ni con el comercial: el caso lo revisa la Gerencia General de Cofianza. Escríbanos para revisarlo.',
   uso_desconocido:
-    'No pudimos determinar la destinación de este inmueble, así que no se puede generar su contrato. Escríbenos para revisar el caso.',
+    'No pudimos determinar la destinación de este inmueble, así que no se puede generar su contrato. Escríbanos para revisar el caso.',
 };
 
 export function destinacionDeUso(uso: string | null | undefined): Destinacion | null {

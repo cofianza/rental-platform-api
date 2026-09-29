@@ -70,7 +70,7 @@ export async function leerTopeDelExpediente(expedienteId: string): Promise<TopeD
     .select('inmueble_id, estado, excepcion_tope_canon_cop')
     .eq('id', expedienteId)
     .maybeSingle();
-  if (error) throw new AppError(503, 'CANON_NO_VERIFICABLE', 'No pudimos verificar el canon del estudio. Intenta de nuevo en un momento.');
+  if (error) throw new AppError(503, 'CANON_NO_VERIFICABLE', 'No pudimos verificar el canon del estudio. Inténtelo de nuevo en un momento.');
   if (!data) throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   const exp = data as { inmueble_id: string | null; estado: string | null; excepcion_tope_canon_cop: unknown };
   const [inm, cal] = await Promise.all([leerInmuebleDelTope({ inmuebleId: exp.inmueble_id }), getCalibracion()]);
@@ -102,7 +102,7 @@ async function guardarExcepcion(
     .eq('id', expedienteId);
   if (error) {
     logger.error({ expedienteId, error: error.message }, 'Excepción de tope: no se pudo guardar');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la excepción de tope. Intenta de nuevo.');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la excepción de tope. Inténtelo de nuevo.');
   }
   const { error: tlError } = await db('eventos_timeline').insert({
     expediente_id: expedienteId,

@@ -124,7 +124,7 @@ async function leerAdenda(sobreId: string): Promise<Adenda | null> {
     .eq('id', sobreId)
     .maybeSingle();
   if (sinMigracion(error)) return null;
-  if (error) throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el proceso de firma. Intenta de nuevo en un momento.');
+  if (error) throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el proceso de firma. Intente de nuevo en un momento.');
   return (data as Adenda | null) ?? null;
 }
 
@@ -159,7 +159,7 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
   const coarrendatarios = partes.filter((p) => p.rol === 'coarrendatario').length;
   // Un generar concurrente pudo borrar las partes entre la escritura y el cambio de estado.
   if (!partesCompletas(partes, coarrendatarios))
-    throw new AppError(500, 'CONTRATO_PARTES_INCOMPLETAS', 'Las partes del contrato quedaron incompletas. Genera de nuevo la vista previa.');
+    throw new AppError(500, 'CONTRATO_PARTES_INCOMPLETAS', 'Las partes del contrato quedaron incompletas. Genere de nuevo la vista previa.');
   const fallas = validarFirmantes(partes);
   if (fallas.length)
     throw new AppError(422, 'FIRMANTES_INVALIDOS', 'Hay datos de los firmantes que Auco no acepta.', { fallas });
@@ -191,7 +191,7 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
     if ((errIns as { code?: string }).code === '23505')
       throw AppError.conflict('Ya hay un envío a firma en curso para este contrato.', 'FIRMA_YA_EN_CURSO');
     logger.error({ contratoId, error: errIns.message }, 'Firma V3: no se pudo registrar el sobre');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar el envío a firma. Intenta de nuevo.');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar el envío a firma. Intente de nuevo.');
   }
   const sobre = (await leerSobre((creado as { id: string }).id))!;
 
@@ -237,7 +237,7 @@ export async function crearSobre(contratoId: string, userId: string | null): Pro
             : `${c.numero} · Contrato de arrendamiento y CRC`,
         subject: `Firma del contrato de arrendamiento ${c.numero}`,
         // Auco vence después (el máximo con la prórroga): el plazo que cuenta se dice aquí.
-        message: `Te invitamos a firmar electrónicamente el contrato de arrendamiento. Tienes hasta el ${ddmmaaaa(plazo.expiraEn)} para firmar. Recibirás un código por WhatsApp.`,
+        message: `Lo invitamos a firmar electrónicamente el contrato de arrendamiento. Tiene hasta el ${ddmmaaaa(plazo.expiraEn)} para firmar. Recibirá un código por WhatsApp.`,
         file: Buffer.from(await pdf.arrayBuffer()).toString('base64'),
         signProfile: construirSignProfile(partes, posiciones),
         expiredDate: new Date(plazo.aucoExpira).toISOString(),
@@ -334,7 +334,7 @@ export async function reenviar(contratoId: string, userId: string, rol?: string)
     p_comentario: null,
     p_motivo: null,
   });
-  if (error) throw AppError.conflict('El contrato cambió; recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
+  if (error) throw AppError.conflict('El contrato cambió; recargue la página.', 'CONTRATO_ESTADO_CAMBIADO');
   try {
     // Con la biometría de firma, quien no verificó su identidad recibe un enlace nuevo
     // (el sobre sale al terminar); si ya verificaron todos, sale el sobre aquí mismo.
@@ -360,7 +360,7 @@ export async function reintentar(contratoId: string, userId: string): Promise<vo
   if (c.estado !== 'pendiente_firma') throw AppError.conflict('El contrato no está en firma.', 'CONTRATO_ESTADO_CAMBIADO');
   await exigirSinFirmaCompleta(contratoId);
   if (!reintentable(await ultimoSobre(contratoId)))
-    throw AppError.conflict('El proceso de firma sigue su curso; actualiza el estado.', 'FIRMA_YA_EN_CURSO');
+    throw AppError.conflict('El proceso de firma sigue su curso; actualice el estado.', 'FIRMA_YA_EN_CURSO');
   await crearSobre(contratoId, userId);
 }
 
@@ -406,8 +406,8 @@ export async function continuarTrasIdentidad(contratoId: string, userId: string 
         tipo: 'firma.envio_fallido',
         titulo: 'No se pudo enviar el contrato a firma',
         mensaje: sinCrc
-          ? `La verificación de identidad terminó, pero el contrato no puede salir a firma: ${e.message} Si no la vas a renovar, cancela el contrato para liberar el inmueble.`
-          : 'La verificación de identidad terminó, pero Auco no aceptó el envío. Revísalo y reintenta desde el contrato.',
+          ? `La verificación de identidad terminó, pero el contrato no puede salir a firma: ${e.message} Si no la va a renovar, cancele el contrato para liberar el inmueble.`
+          : 'La verificación de identidad terminó, pero Auco no aceptó el envío. Revíselo y reintente desde el contrato.',
         link: `/expedientes/${c.expediente_id}/contrato`,
         payload: { contrato_id: contratoId },
       });
@@ -433,7 +433,7 @@ export async function cancelarFirmaV3(contratoId: string): Promise<void> {
     .in('estado', ['creando', 'en_firma'])
     .select('id');
   if (!(marcado as unknown[] | null)?.length)
-    throw AppError.conflict('El proceso de firma cambió; recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
+    throw AppError.conflict('El proceso de firma cambió; recargue la página.', 'CONTRATO_ESTADO_CAMBIADO');
   if (!ultimo.auco_code) return; // 'creando': crearSobre ve el CAS perdido y cancela en Auco al volver
 
   const marcarCancelado = () =>
@@ -459,7 +459,7 @@ export async function cancelarFirmaV3(contratoId: string): Promise<void> {
       throw AppError.conflict('Todas las partes ya firmaron: la fianza quedó activa.', 'CONTRATO_YA_FIRMADO');
     }
     logger.warn({ contratoId, error: e instanceof Error ? e.message : String(e) }, 'Firma V3: Auco no anuló el proceso');
-    throw new AppError(502, 'AUCO_NO_DISPONIBLE', 'No pudimos anular el proceso en Auco; intenta en unos minutos.');
+    throw new AppError(502, 'AUCO_NO_DISPONIBLE', 'No pudimos anular el proceso en Auco; intente en unos minutos.');
   }
 }
 
@@ -490,7 +490,7 @@ export async function prorrogarPlazo(contratoId: string, userId: string): Promis
     throw AppError.conflict('Solo se prorroga el plazo de un proceso de firma en curso.', 'SIN_SOBRE_ACTIVO');
   const adenda = await leerAdenda(s.id);
   if (!adenda)
-    throw new AppError(503, 'PRORROGA_NO_DISPONIBLE', 'La prórroga del plazo todavía no está disponible. Intenta más tarde.');
+    throw new AppError(503, 'PRORROGA_NO_DISPONIBLE', 'La prórroga del plazo todavía no está disponible. Intente más tarde.');
   if (adenda.plazo_prorrogado_en)
     throw AppError.conflict('El plazo de este proceso de firma ya se prorrogó: solo se permite una vez.', 'PRORROGA_YA_USADA');
   const [cal, vig] = await Promise.all([getCalibracion(), vigenciaEstudio(c)]);
@@ -509,10 +509,10 @@ export async function prorrogarPlazo(contratoId: string, userId: string): Promis
     .select('id');
   if (error) {
     logger.error({ contratoId, error: error.message }, 'Firma V3: no se pudo prorrogar el plazo');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo prorrogar el plazo. Intenta de nuevo.');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo prorrogar el plazo. Intente de nuevo.');
   }
   if (!(data as unknown[] | null)?.length)
-    throw AppError.conflict('El proceso de firma cambió; recarga la página.', 'CONTRATO_ESTADO_CAMBIADO');
+    throw AppError.conflict('El proceso de firma cambió; recargue la página.', 'CONTRATO_ESTADO_CAMBIADO');
 
   await Promise.resolve(
     db('eventos_timeline').insert({
@@ -567,7 +567,7 @@ export async function aceptarAviso(
   const s = await ultimoIncompleto(contratoId);
   if (!s || !avisoEntregado(s))
     throw AppError.conflict(
-      'El aviso de firma incompleta todavía se está entregando. Intenta de nuevo en unos minutos.',
+      'El aviso de firma incompleta todavía se está entregando. Intente de nuevo en unos minutos.',
       'AVISO_NO_ENTREGADO',
     );
   const miembro =
@@ -593,10 +593,10 @@ export async function aceptarAviso(
     .is('aviso_aceptado_en', null)
     .select('id');
   if (sinMigracion(error))
-    throw new AppError(503, 'ACUSE_NO_DISPONIBLE', 'El registro del acuse todavía no está disponible. Intenta más tarde.');
+    throw new AppError(503, 'ACUSE_NO_DISPONIBLE', 'El registro del acuse todavía no está disponible. Intente más tarde.');
   if (error) {
     logger.error({ contratoId, error: error.message }, 'Firma V3: no se pudo registrar el acuse del aviso');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la aceptación. Intenta de nuevo.');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la aceptación. Intente de nuevo.');
   }
   if (!(data as unknown[] | null)?.length) return; // ya lo aceptó otro miembro: queda el primero
 
@@ -635,13 +635,13 @@ export async function exigirAcuseAviso(contratoId: string, rol: string): Promise
   if (!avisoEntregado(s)) {
     if (s.aviso_entregado_en) return; // constancia de "omitido": no hubo aviso que aceptar
     throw AppError.conflict(
-      'El aviso de firma incompleta todavía se está entregando. En unos minutos podrás leerlo y aceptarlo en el contrato.',
+      'El aviso de firma incompleta todavía se está entregando. En unos minutos podrá leerlo y aceptarlo en el contrato.',
       'AVISO_NO_ENTREGADO',
     );
   }
   if (!adenda.aviso_aceptado_en)
     throw AppError.conflict(
-      'Antes de seguir, lee y acepta el aviso de firma incompleta en el contrato: la fianza no está operando.',
+      'Antes de seguir, lea y acepte el aviso de firma incompleta en el contrato: la fianza no está operando.',
       'AVISO_SIN_ACUSE',
     );
 }
@@ -654,7 +654,7 @@ export async function exigirAcuseDelEstudio(expedienteId: string, rol: string): 
     .eq('expediente_id', expedienteId)
     .not('destinacion', 'is', null);
   if (error)
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el contrato del estudio. Intenta de nuevo en un momento.');
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar el contrato del estudio. Intente de nuevo en un momento.');
   for (const c of (data as { id: string; estado: string }[] | null) ?? [])
     if (c.estado === 'firma_incompleta') await exigirAcuseAviso(c.id, rol);
 }
@@ -766,7 +766,7 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
       c.estado !== 'firma_incompleta'
         ? { puede: false, motivo: null }
         : !env.CONTRATOS_V3_ENABLED
-          ? { puede: false, motivo: 'El envío a firma está desactivado por ahora. Escríbenos si necesitas reenviarlo.' }
+          ? { puede: false, motivo: 'El envío a firma está desactivado por ahora. Escríbanos si necesita reenviarlo.' }
           : ruta === 'B' && !env.RUTA_B_FIRMA_ENABLED
             ? { puede: false, motivo: RUTA_B_FIRMA_NO_HABILITADA }
             : sinMarcas.length
@@ -780,7 +780,7 @@ export async function estadoEnviado(contratoId: string): Promise<EnvioV3 | null>
               ? { puede: true, motivo: null }
               : {
                   puede: false,
-                  motivo: `${motivoSinPlazo(sinPlazo.motivo, vig?.fin)} Si no la vas a renovar, cancela el contrato para liberar el inmueble.`,
+                  motivo: `${motivoSinPlazo(sinPlazo.motivo, vig?.fin)} Si no la va a renovar, cancele el contrato para liberar el inmueble.`,
                 },
     reintento:
       env.CONTRATOS_V3_ENABLED &&
@@ -813,7 +813,7 @@ async function ultimoIncompleto(contratoId: string): Promise<Sobre | null> {
     .order('intento', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el proceso de firma. Intenta de nuevo en un momento.');
+  if (error) throw new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer el proceso de firma. Intente de nuevo en un momento.');
   const fila = data as { id: string } | null;
   return fila ? leerSobre(fila.id) : null;
 }

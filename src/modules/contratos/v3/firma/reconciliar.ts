@@ -352,7 +352,7 @@ export async function activarContrato(s: Sobre): Promise<void> {
     await notificar(admins, {
       tipo: 'firma.conflicto',
       titulo: `Firma completa en un contrato ${ETIQUETA_ESTADO[c.estado] ?? c.estado}`,
-      mensaje: `Auco reporta firmado el contrato ${c.numero}, que en la plataforma está «${ETIQUETA_ESTADO[c.estado] ?? c.estado}». Revísalo.`,
+      mensaje: `Auco reporta firmado el contrato ${c.numero}, que en la plataforma está «${ETIQUETA_ESTADO[c.estado] ?? c.estado}». Revíselo.`,
       link: linkAsistente(c),
       payload: { contrato_id: c.id, sobre_id: s.id },
     }).catch((e) => logger.warn({ e }, 'Firma V3: no se pudo avisar el conflicto'));
@@ -610,7 +610,7 @@ export async function cancelarEnAuco(
       await notificar(admins, {
         tipo: 'firma.conflicto',
         titulo: 'Proceso de firma completo que se debía anular',
-        mensaje: `Auco reporta firmado por todas las partes el proceso ${code}, que Cofianza había anulado. Revísalo.`,
+        mensaje: `Auco reporta firmado por todas las partes el proceso ${code}, que Cofianza había anulado. Revíselo.`,
         link: `/contratos/${s.contrato_id}`,
         payload: { contrato_id: s.contrato_id, sobre_id: s.id },
       }).catch((err) => logger.warn({ err }, 'Firma V3: no se pudo avisar el conflicto'));
@@ -631,7 +631,7 @@ async function avisarBloqueados(antes: FirmanteSobre[], despues: FirmanteSobre[]
   await notificar(operadores, {
     tipo: 'firma.bloqueada',
     titulo: 'Firmante bloqueado en Auco',
-    mensaje: `Un firmante del proceso ${s.auco_code} quedó bloqueado tras varios intentos fallidos. Desbloquéalo en el panel de Auco para que la firma siga.`,
+    mensaje: `Un firmante del proceso ${s.auco_code} quedó bloqueado tras varios intentos fallidos. Desbloquéelo en el panel de Auco para que la firma siga.`,
     link: `/contratos/${s.contrato_id}`,
     payload: { contrato_id: s.contrato_id, sobre_id: s.id },
   }).catch((e) => logger.warn({ e }, 'Firma V3: no se pudo avisar el bloqueo'));

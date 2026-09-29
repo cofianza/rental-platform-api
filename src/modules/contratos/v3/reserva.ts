@@ -103,7 +103,7 @@ async function avisar(c: Borrador, hasta: string, plazo: string): Promise<void> 
         mensaje:
           `El contrato ${c.numero} del estudio ${formatNumeroEstudio(e.numero)} no se envió a firma en ${plazo} (la reserva iba hasta el ${ddmmaaaa(hasta)}). ` +
           (libre ? 'El borrador se canceló y el inmueble quedó libre, fuera de la vitrina. ' : 'El borrador se canceló. ') +
-          'Si el arriendo sigue, inicia el contrato de nuevo: el asistente trae lo que ya llenaste.',
+          'Si el arriendo sigue, inicie el contrato de nuevo: el asistente trae lo que ya llenó.',
         link: `/expedientes/${c.expediente_id}/contrato`,
         payload: { contrato_id: c.id, expediente_id: c.expediente_id },
       });

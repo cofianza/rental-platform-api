@@ -125,7 +125,7 @@ export async function coarrendatarioVigente(estado: string, expedienteId: string
     throw new AppError(
       503,
       'LECTURA_NO_VERIFICABLE',
-      'No pudimos verificar el contrato del estudio. Intenta de nuevo en un momento.',
+      'No pudimos verificar el contrato del estudio. Inténtelo de nuevo en un momento.',
     );
   }
 }
@@ -172,7 +172,7 @@ export async function ventanaCoarrendatario(e: {
   if (e.estado === 'aprobado' && !(await estudioYaCobrado(e.expedienteId))) {
     return no(
       'PAGO_ESTUDIO_REQUERIDO',
-      'El estudio no tiene un pago registrado, y la evaluación del co-arrendatario se ampara en ese pago. Escríbenos para revisarlo.',
+      'El estudio no tiene un pago registrado, y la evaluación del co-arrendatario se ampara en ese pago. Escríbanos para revisarlo.',
     );
   }
   return { vigente, puede_invitar: true, motivo: null, codigo: null };
@@ -247,7 +247,7 @@ export async function coarrendatarioVinculadoVerificado(expedienteId: string): P
     throw new AppError(
       503,
       'LECTURA_NO_VERIFICABLE',
-      'No pudimos verificar si el estudio tiene co-arrendatario, y con él cambia la prima. Intenta de nuevo en un momento.',
+      'No pudimos verificar si el estudio tiene co-arrendatario, y con él cambia la prima. Inténtelo de nuevo en un momento.',
     );
   }
 }

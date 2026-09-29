@@ -253,8 +253,8 @@ export async function canjearInvitacion(token: string, user: AuthUser): Promise<
       'Intento de canje con email mismatch',
     );
     throw AppError.forbidden(
-      'El email de tu cuenta no coincide con el de la invitación. ' +
-        'Debes iniciar sesión con el email al que se envió la invitación.',
+      'El email de su cuenta no coincide con el de la invitación. ' +
+        'Debe iniciar sesión con el email al que se envió la invitación.',
       'INVITACION_EMAIL_MISMATCH',
     );
   }

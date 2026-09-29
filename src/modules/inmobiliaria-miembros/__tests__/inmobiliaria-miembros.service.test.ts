@@ -139,7 +139,7 @@ describe('salirDeOrg — protección del último titular', () => {
     enqueue(ownerMembership, ...r);
     await expect(salirDeOrg('p-self')).rejects.toMatchObject({
       errorCode: 'TITULAR_NO_PUEDE_SALIR',
-      message: 'Eres el titular de la inmobiliaria y tiene equipo o cartera: traspasa la titularidad a otro miembro o pide a Cofianza que la cierre.',
+      message: 'Usted es el titular de la inmobiliaria y tiene equipo o cartera: traspase la titularidad a otro miembro o pida a Cofianza que la cierre.',
     });
     expect(chain.update).not.toHaveBeenCalled();
   });
@@ -150,7 +150,7 @@ describe('salirDeOrg — protección del último titular', () => {
     enqueue(ownerMembership, ...r);
     await expect(salirDeOrg('p-self')).rejects.toMatchObject({
       errorCode: 'TITULAR_NO_PUEDE_SALIR',
-      message: 'Eres cotitular de la inmobiliaria: primero cambia tu rol a miembro y luego sal.',
+      message: 'Usted es cotitular de la inmobiliaria: primero cambie su rol a miembro y luego salga.',
     });
     expect(chain.update).not.toHaveBeenCalled();
   });
@@ -164,7 +164,7 @@ describe('salirDeOrg — protección del último titular', () => {
       { data: [] }, // notificarOwnersOrg select (async)
     );
     const r = await salirDeOrg('p-x');
-    expect(r.message).toMatch(/saliste/i);
+    expect(r.message).toMatch(/salió/i);
   });
 
   it('rechaza salir si no perteneces a ninguna org', async () => {
@@ -299,7 +299,7 @@ describe('una persona, una inmobiliaria (aceptar la invitación)', () => {
     await expect(aceptarInvitacionMiembro('tok', asesora)).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'YA_PERTENECE_A_OTRA_INMOBILIARIA',
-      message: 'Ya perteneces a otra inmobiliaria. Sal de ella antes de aceptar esta invitación.',
+      message: 'Ya pertenece a otra inmobiliaria. Salga de ella antes de aceptar esta invitación.',
     });
     expect(chain.update).not.toHaveBeenCalled();
     expect(chain.neq).toHaveBeenCalledWith('inmobiliaria_id', 'org-b');
@@ -379,7 +379,7 @@ describe('titular de otra inmobiliaria que acepta una invitación: 409 según su
     await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'TITULAR_DE_OTRA_INMOBILIARIA',
-      message: 'Eres titular de Inmobiliaria A, que no tiene equipo ni cartera. Ciérrala para aceptar esta invitación.',
+      message: 'Usted es titular de Inmobiliaria A, que no tiene equipo ni cartera. Ciérrela para aceptar esta invitación.',
       details: { puede_cerrar: true, inmobiliaria: 'Inmobiliaria A' },
     });
     expect(chain.update).not.toHaveBeenCalled();
@@ -401,7 +401,7 @@ describe('titular de otra inmobiliaria que acepta una invitación: 409 según su
       statusCode: 409,
       errorCode: 'TITULAR_DE_OTRA_INMOBILIARIA',
       message:
-        'Eres titular de otra inmobiliaria con equipo o cartera activa. Traspasa la titularidad o pide a Cofianza que la cierre antes de aceptar esta invitación.',
+        'Usted es titular de otra inmobiliaria con equipo o cartera activa. Traspase la titularidad o pida a Cofianza que la cierre antes de aceptar esta invitación.',
     });
     expect(e.details).toBeUndefined();
     expect(chain.update).not.toHaveBeenCalled();
@@ -414,7 +414,7 @@ describe('titular de otra inmobiliaria que acepta una invitación: 409 según su
     await expect(aceptarInvitacionMiembro('tok', titular)).rejects.toMatchObject({
       statusCode: 409,
       errorCode: 'TITULAR_DE_OTRA_INMOBILIARIA',
-      message: 'Eres cotitular de otra inmobiliaria. Cambia tu rol a miembro en su equipo y sal de ella antes de aceptar esta invitación.',
+      message: 'Usted es cotitular de otra inmobiliaria. Cambie su rol a miembro en su equipo y salga de ella antes de aceptar esta invitación.',
     });
   });
 
@@ -428,7 +428,7 @@ describe('titular de otra inmobiliaria que acepta una invitación: 409 según su
 
 describe('un correo con una cuenta que no es de inmobiliaria no se une a un equipo', () => {
   const MENSAJE =
-    'Ese correo ya tiene una cuenta en Cofianza que no es de inmobiliaria y no puede unirse a un equipo. Invita otro correo.';
+    'Ese correo ya tiene una cuenta en Cofianza que no es de inmobiliaria y no puede unirse a un equipo. Invite otro correo.';
 
   it.each(['propietario', 'solicitante', 'operador_analista'])(
     'invitar un correo con cuenta de %s: 409 con el mismo mensaje (no dice qué cuenta es) y no sale la invitación',
@@ -510,7 +510,7 @@ describe('un correo con una cuenta que no es de inmobiliaria no se une a un equi
 describe('el titular único de una inmobiliaria vacía la cierra al salir', () => {
   it('revoca su membresía y las invitaciones pendientes, la marca cerrada (sin borrar nada) y queda en la bitácora', async () => {
     enqueue(ownerMembership, ...inmobiliariaVacia(), { error: null }, { error: null }, { count: 0 });
-    await expect(salirDeOrg('p-self')).resolves.toEqual({ message: 'Cerraste tu inmobiliaria' });
+    await expect(salirDeOrg('p-self')).resolves.toEqual({ message: 'Cerró su inmobiliaria' });
     expect(updates()).toEqual([{ estado: 'revocado', token: null, token_expiracion: null }, { estado: 'cerrada' }]);
     expect(chain.or).toHaveBeenCalledWith('id.eq.m-self,estado.eq.invitado');
     expect(chain.eq).toHaveBeenCalledWith('estado', 'activa'); // solo cierra una activa

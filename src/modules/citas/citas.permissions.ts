@@ -118,7 +118,7 @@ function denyAndThrow(
     { userId, userRol, expedienteId, action, reason },
     'Acceso a cita denegado',
   );
-  throw AppError.forbidden('No tienes permisos sobre esta cita', 'CITA_FORBIDDEN');
+  throw AppError.forbidden('No tiene permisos sobre esta cita', 'CITA_FORBIDDEN');
 }
 
 /**

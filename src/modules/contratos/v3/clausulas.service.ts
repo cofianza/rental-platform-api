@@ -71,7 +71,7 @@ const noHabilitado = () =>
   AppError.notFound('Las cláusulas adicionales aún no están habilitadas.', 'CONTRATOS_V3_NO_HABILITADO');
 const cambiada = () =>
   AppError.conflict(
-    'La cláusula cambió, fue inhabilitada o ya no existe. Recarga para ver la versión actual.',
+    'La cláusula cambió, fue inhabilitada o ya no existe. Recargue para ver la versión actual.',
     'CLAUSULA_CAMBIADA',
   );
 const noEncontrada = () => AppError.notFound('La cláusula no existe o ya fue eliminada.', 'CLAUSULA_NO_ENCONTRADA');
@@ -79,7 +79,7 @@ const noEncontrada = () => AppError.notFound('La cláusula no existe o ya fue el
 function dato<T>(r: { data: unknown; error: { message: string } | null }, que: string): T {
   if (r.error) {
     logger.error({ que, error: r.error.message }, 'Cláusulas adicionales: error de base de datos');
-    throw new AppError(500, 'CLAUSULAS_ERROR', 'No pudimos procesar las cláusulas adicionales. Intenta de nuevo.');
+    throw new AppError(500, 'CLAUSULAS_ERROR', 'No pudimos procesar las cláusulas adicionales. Intente de nuevo.');
   }
   return r.data as T;
 }
@@ -206,7 +206,7 @@ async function editarEn(
 async function orgDe(userId: string): Promise<string> {
   if (!env.CONTRATOS_V3_ENABLED) throw noHabilitado();
   const org = await resolveInmobiliariaIdForPerfil(userId);
-  if (!org) throw AppError.forbidden('Tu usuario no pertenece a una inmobiliaria.', 'SIN_INMOBILIARIA');
+  if (!org) throw AppError.forbidden('Su usuario no pertenece a una inmobiliaria.', 'SIN_INMOBILIARIA');
   return org;
 }
 

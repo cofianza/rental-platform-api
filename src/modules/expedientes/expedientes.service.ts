@@ -425,7 +425,7 @@ export async function createExpediente(
     .single();
 
   if (inmuebleError || !inmueble) {
-    throw AppError.badRequest('Inmueble no encontrado. Verifica el inmueble seleccionado.', 'INMUEBLE_NOT_FOUND');
+    throw AppError.badRequest('Inmueble no encontrado. Verifique el inmueble seleccionado.', 'INMUEBLE_NOT_FOUND');
   }
 
   // 1b. Flujo §4.2/§4.3: un inmueble RESERVADO para un candidato aprobado
@@ -447,8 +447,8 @@ export async function createExpediente(
   if (estadoInmueble === 'ocupado' || estadoInmueble === 'inactivo') {
     throw AppError.badRequest(
       estadoInmueble === 'ocupado'
-        ? 'El inmueble ya está arrendado (contrato vigente). Termina el contrato actual para volver a arrendarlo.'
-        : 'El inmueble está inactivo. Actívalo antes de crear un estudio.',
+        ? 'El inmueble ya está arrendado (contrato vigente). Termine el contrato actual para volver a arrendarlo.'
+        : 'El inmueble está inactivo. Actívelo antes de crear un estudio.',
       'INMUEBLE_NO_DISPONIBLE',
     );
   }
@@ -482,7 +482,7 @@ export async function createExpediente(
       .single();
 
     if (analistaError || !analista) {
-      throw AppError.badRequest('Analista no encontrado. Verifica el analista seleccionado.', 'ANALISTA_NOT_FOUND');
+      throw AppError.badRequest('Analista no encontrado. Verifique el analista seleccionado.', 'ANALISTA_NOT_FOUND');
     }
 
     const rol = (analista as unknown as { rol: string }).rol;
@@ -508,11 +508,11 @@ export async function createExpediente(
       if (input.miembro_responsable_id) {
         const memberIds = await resolveOrgMemberPerfilIds(inmuebleInmobiliariaId);
         if (!memberIds.includes(input.miembro_responsable_id)) {
-          throw AppError.badRequest('El responsable seleccionado no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+          throw AppError.badRequest('El responsable seleccionado no es miembro activo de su inmobiliaria', 'MIEMBRO_INVALIDO');
         }
         if (await esMiembroSoloLectura(input.miembro_responsable_id)) {
           throw AppError.badRequest(
-            'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Elige a otra.',
+            'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Elija a otra.',
             'MIEMBRO_SOLO_LECTURA',
           );
         }
@@ -559,14 +559,14 @@ export async function createExpediente(
         throw new AppError(
           409,
           'EXPEDIENTE_ACTIVO_DUPLICADO',
-          'Este solicitante ya tiene un estudio activo para este inmueble. Continúa con el existente o ciérralo antes de crear otro.',
+          'Este solicitante ya tiene un estudio activo para este inmueble. Continúe con el existente o ciérrelo antes de crear otro.',
           ex?.id ? { expediente_id: ex.id, expediente_numero: ex.numero ?? null } : undefined,
         );
       }
       throw AppError.conflict('Ya existe un estudio con esos datos.', 'EXPEDIENTE_DUPLICADO');
     }
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifique los datos enviados.', 'FK_VIOLATION');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el estudio');
   }
@@ -581,7 +581,7 @@ export async function createExpediente(
       userId: responsableAsignado,
       tipo: 'expediente_asignado',
       titulo: 'Estudio asignado',
-      mensaje: `Eres responsable del estudio ${formatNumeroEstudio(created.numero)}.`,
+      mensaje: `Usted es responsable del estudio ${formatNumeroEstudio(created.numero)}.`,
       link: `/expedientes/${created.id}`,
     });
     // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.
@@ -647,7 +647,7 @@ export async function updateExpediente(
       .single();
 
     if (analistaError || !analista) {
-      throw AppError.badRequest('Analista no encontrado. Verifica el analista seleccionado.', 'ANALISTA_NOT_FOUND');
+      throw AppError.badRequest('Analista no encontrado. Verifique el analista seleccionado.', 'ANALISTA_NOT_FOUND');
     }
 
     const rol = (analista as unknown as { rol: string }).rol;
@@ -754,12 +754,12 @@ export async function asignarMiembroResponsableExpediente(
   if (miembroId) {
     const memberIds = await resolveOrgMemberPerfilIds(exp.inmobiliaria_id);
     if (!memberIds.includes(miembroId)) {
-      throw AppError.badRequest('La persona seleccionada no es miembro activo de tu inmobiliaria', 'MIEMBRO_INVALIDO');
+      throw AppError.badRequest('La persona seleccionada no es miembro activo de su inmobiliaria', 'MIEMBRO_INVALIDO');
     }
     // Un miembro «Sólo lectura» no puede gestionar lo que se le asigna.
     if (await esMiembroSoloLectura(miembroId)) {
       throw AppError.badRequest(
-        'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Cámbiale el rol en Equipo o elige a otra.',
+        'Esa persona tiene rol «Sólo lectura»: no puede ser responsable. Cámbiele el rol en Equipo o elija a otra.',
         'MIEMBRO_SOLO_LECTURA',
       );
     }
@@ -779,7 +779,7 @@ export async function asignarMiembroResponsableExpediente(
       userId: miembroId,
       tipo: 'expediente_asignado',
       titulo: 'Estudio asignado',
-      mensaje: `Eres responsable del estudio ${formatNumeroEstudio(exp.numero)}.`,
+      mensaje: `Usted es responsable del estudio ${formatNumeroEstudio(exp.numero)}.`,
       link: `/expedientes/${expedienteId}`,
     });
     // WhatsApp al responsable (además del in-app + correo). Fire-and-forget.

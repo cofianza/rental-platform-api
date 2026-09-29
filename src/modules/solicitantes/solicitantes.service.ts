@@ -51,7 +51,7 @@ const APPLICANT_FIELDS = `id, tipo_persona, nombre, apellido, tipo_documento, nu
 
 /** Mensaje para el gestor (el registro y «Mi cuenta» le hablan a la persona). */
 export const MSG_DOC_DE_OTRA_CUENTA_GESTOR =
-  'Ese documento ya está en otra cuenta de solicitante. Verifica el número; si es correcto, pídele a la persona que use la cuenta que ya tiene.';
+  'Ese documento ya está en otra cuenta de solicitante. Verifique el número; si es correcto, pídale a la persona que use la cuenta que ya tiene.';
 
 /**
  * Regla del registro (vitrina): la MISMA persona no puede tener dos cuentas
@@ -299,7 +299,7 @@ export async function createApplicant(input: CreateApplicantInput, createdBy: st
       );
     }
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifique los datos enviados.', 'FK_VIOLATION');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear el solicitante');
   }
@@ -348,7 +348,7 @@ export async function updateApplicant(id: string, input: UpdateApplicantInput, u
             .in('id', permitidos)
         : { count: 0 };
       if (!count) {
-        throw AppError.forbidden('Solo puedes editar las fichas que registraste o las de tus estudios.', 'FICHA_DE_OTRO_MIEMBRO');
+        throw AppError.forbidden('Solo puede editar las fichas que registró o las de sus estudios.', 'FICHA_DE_OTRO_MIEMBRO');
       }
     }
   }
@@ -606,7 +606,7 @@ export async function getMisDatosFiscales(userId: string): Promise<DatosFiscales
 
   if (error) {
     logger.error({ error: error.message, userId }, 'Error al cargar datos fiscales del solicitante');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos cargar tus datos fiscales');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos cargar sus datos fiscales');
   }
 
   if (!data) {
@@ -683,11 +683,11 @@ export async function updateMisDatosFiscales(
 
   if (findErr) {
     logger.error({ error: findErr.message, userId }, 'Error al localizar solicitante para update fiscal');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar tus datos fiscales');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al actualizar sus datos fiscales');
   }
   if (!existente) {
     throw AppError.notFound(
-      'No encontramos un solicitante asociado a tu cuenta',
+      'No encontramos un solicitante asociado a su cuenta',
       'SOLICITANTE_NOT_FOUND',
     );
   }
@@ -704,7 +704,7 @@ export async function updateMisDatosFiscales(
     (await existeOtraCuentaConDocumento(tipoDoc, numDoc, { creado_por: userId }))
   ) {
     throw AppError.conflict(
-      'Ya existe otra cuenta de solicitante con este documento. Si es tuya, inicia sesión con esa cuenta.',
+      'Ya existe otra cuenta de solicitante con este documento. Si es suya, inicie sesión con esa cuenta.',
       'DOCUMENT_ALREADY_EXISTS',
     );
   }
@@ -735,7 +735,7 @@ export async function updateMisDatosFiscales(
 
   if (updErr) {
     logger.error({ error: updErr.message, id, userId }, 'Error al actualizar datos fiscales');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos guardar tus datos fiscales');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos guardar sus datos fiscales');
   }
 
   logAudit({

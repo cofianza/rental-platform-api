@@ -131,13 +131,13 @@ export interface Ruta {
  * el derecho de apelación (Política §11).
  */
 export const MOTIVO_PROSPECTO_DECISION_COFIANZA =
-  'No aprobable por ahora. Cofianza revisó tu estudio y en este momento no podemos respaldarlo. ' +
-  'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante.';
+  'No aprobable por ahora. Cofianza revisó su estudio y en este momento no podemos respaldarlo. ' +
+  'No es una decisión definitiva sobre usted: puede volver a solicitarlo más adelante.';
 
 const NO_APROBABLE = {
   titulo: 'Por ahora no podemos activar la fianza',
   mensaje:
-    'Revisamos tu estudio y en este momento no podemos respaldarlo. Esto puede cambiar: abajo te contamos que ayuda a que si podamos.',
+    'Revisamos su estudio y en este momento no podemos respaldarlo. Esto puede cambiar: abajo le contamos que ayuda a que si podamos.',
   puedeContinuarSolo: false,
   coarrendatarioObligatorio: false,
   coarrendatarioAbarataPrima: false,
@@ -172,9 +172,9 @@ export function resolverRuta(e: EntradaRuta): Ruta {
   if (e.resultadoVigente === 'condicionado' || e.resultadoVigente === 'pendiente') {
     return {
       ruta: 'en_revision',
-      titulo: 'Estamos revisando tu estudio',
+      titulo: 'Estamos revisando su estudio',
       mensaje:
-        'Una persona de nuestro equipo esta revisando tu caso. Te escribimos apenas tengamos la respuesta.',
+        'Una persona de nuestro equipo esta revisando su caso. Le escribimos apenas tengamos la respuesta.',
       puedeContinuarSolo: false,
       coarrendatarioObligatorio: false,
       coarrendatarioAbarataPrima: false,
@@ -193,8 +193,8 @@ export function resolverRuta(e: EntradaRuta): Ruta {
   if (e.puntaje === null) {
     return {
       ruta: 'perfil_medio',
-      titulo: 'Tu estudio fue aprobado',
-      mensaje: 'Puedes continuar solo con el contrato.',
+      titulo: 'Su estudio fue aprobado',
+      mensaje: 'Puede continuar solo con el contrato.',
       puedeContinuarSolo: true,
       coarrendatarioObligatorio: false,
       coarrendatarioAbarataPrima: abarata,
@@ -206,8 +206,8 @@ export function resolverRuta(e: EntradaRuta): Ruta {
   if (e.puntaje >= u.aprobacion) {
     return {
       ruta: 'perfil_fuerte',
-      titulo: 'Tu estudio fue aprobado',
-      mensaje: 'Puedes firmar el contrato tu solo, sin acompañante.',
+      titulo: 'Su estudio fue aprobado',
+      mensaje: 'Puede firmar el contrato usted solo, sin acompañante.',
       puedeContinuarSolo: true,
       coarrendatarioObligatorio: false,
       coarrendatarioAbarataPrima: abarata,
@@ -226,10 +226,10 @@ export function resolverRuta(e: EntradaRuta): Ruta {
 
     return {
       ruta: 'coarrendatario_requerido',
-      titulo: yaLoTiene ? 'Tu estudio fue aprobado con acompañante' : 'Casi listo: necesitas un acompañante',
+      titulo: yaLoTiene ? 'Su estudio fue aprobado con acompañante' : 'Casi listo: necesita un acompañante',
       mensaje: yaLoTiene
-        ? 'Tu coarrendatario ya quedo vinculado y podemos respaldar el contrato.'
-        : 'Podemos respaldar tu contrato si lo presentas junto a un coarrendatario. No necesita finca raiz: basta con que tenga ingresos propios.',
+        ? 'Su coarrendatario ya quedo vinculado y podemos respaldar el contrato.'
+        : 'Podemos respaldar su contrato si lo presenta junto a un coarrendatario. No necesita finca raiz: basta con que tenga ingresos propios.',
       puedeContinuarSolo: false,
       coarrendatarioObligatorio: true,
       coarrendatarioAbarataPrima: false,

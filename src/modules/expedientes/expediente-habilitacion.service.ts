@@ -214,7 +214,7 @@ export async function habilitarEstudio(
         userId: solicitanteUserId,
         tipo: 'estudio.habilitado',
         titulo: 'Evaluación habilitada',
-        mensaje: 'El propietario habilitó tu evaluación crediticia. Firma la autorización de datos para continuar; el cobro llega después de que autorices.',
+        mensaje: 'El propietario habilitó su evaluación crediticia. Firme la autorización de datos para continuar; el cobro llega después de que autorice.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, estudio_id: rpcResult.estudio_id },
       });
@@ -480,7 +480,7 @@ async function assertRequisitosThinFile(expedienteId: string, revision: Decision
   };
   const noVerificable = (err: { message: string }) => {
     logger.error({ error: err.message, expedienteId }, 'Thin-file: no se pudo leer la evaluación del titular');
-    return new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del titular. Intenta de nuevo en un momento.');
+    return new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos leer la evaluación del titular. Intente de nuevo en un momento.');
   };
   const columnas = 'id, score, cascada, canon_evaluado, estudio_padre_id';
   const { data, error } = await (supabase
@@ -559,8 +559,8 @@ async function assertRequisitosThinFile(expedienteId: string, revision: Decision
   }
   if (canonIngreso === null && !revision?.fuente_capacidad_verificada) {
     throw AppError.badRequest(
-      'El solicitante no tiene historial en ninguna central y la central no dio su ingreso. Para aprobarlo, verifica al menos ' +
-        'una fuente de capacidad de pago (certificado laboral, extractos, declaración de renta…) y márcalo en «Aprobar estudio».',
+      'El solicitante no tiene historial en ninguna central y la central no dio su ingreso. Para aprobarlo, verifique al menos ' +
+        'una fuente de capacidad de pago (certificado laboral, extractos, declaración de renta…) y márquelo en «Aprobar estudio».',
       'THIN_FILE_FUENTE_CAPACIDAD',
     );
   }
@@ -713,7 +713,7 @@ async function aprobarYGenerarContrato(params: {
     // RECHAZADO por la ponderación.
     if (!updRows || updRows.length === 0) {
       throw AppError.conflict(
-        'El estudio cambió de estado mientras decidías (p. ej. completó la evaluación del co-arrendatario). Refresca para ver el estado actual.',
+        'El estudio cambió de estado mientras decidía (p. ej. completó la evaluación del co-arrendatario). Refresque para ver el estado actual.',
         'EXPEDIENTE_ESTADO_CAMBIADO',
       );
     }
@@ -832,7 +832,7 @@ async function aprobarYGenerarContrato(params: {
         userId: solicitanteUserId,
         tipo: 'estudio.aprobado',
         titulo: 'Estudio aprobado',
-        mensaje: 'Cofianza revisó tu estudio y lo aprobó. Te avisaremos cuando el contrato esté listo para firmar.',
+        mensaje: 'Cofianza revisó su estudio y lo aprobó. Le avisaremos cuando el contrato esté listo para firmar.',
         link: `/expedientes/${expedienteId}`,
         payload: { expediente_id: expedienteId, contrato_id: contratoId, via: 'aprobacion_condicionado' },
       });
@@ -876,7 +876,7 @@ export async function avisarDuenoDecisionRevisionManual(
         cancelado: 'Cofianza canceló el estudio condicionado',
       }[decision],
       mensaje: {
-        aprobado: `El estudio ${numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puedes crear el contrato.`,
+        aprobado: `El estudio ${numero}${donde} quedó aprobado tras la revisión de Cofianza. Ya puede crear el contrato.`,
         rechazado: `El estudio ${numero}${donde} fue rechazado tras la revisión de Cofianza.${motivoGestor ? ` Motivo: ${motivoGestor}` : ''}`,
         cancelado: `Cofianza canceló el estudio condicionado ${numero}${donde}. Sale del flujo y no se puede reabrir.`,
       }[decision],
@@ -942,8 +942,8 @@ export async function avisarSolicitanteDecision(
       titulo: decision === 'aprobado' ? 'Estudio aprobado' : 'Estudio no aprobado',
       mensaje:
         decision === 'aprobado'
-          ? 'Cofianza revisó tu estudio y lo aprobó. Te avisaremos cuando el contrato esté listo para firmar.'
-          : 'Cofianza revisó tu estudio y no lo aprobó. Te escribimos al correo el motivo y cómo presentar una apelación.',
+          ? 'Cofianza revisó su estudio y lo aprobó. Le avisaremos cuando el contrato esté listo para firmar.'
+          : 'Cofianza revisó su estudio y no lo aprobó. Le escribimos al correo el motivo y cómo presentar una apelación.',
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, decision },
     });

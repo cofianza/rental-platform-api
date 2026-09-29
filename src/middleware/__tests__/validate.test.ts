@@ -8,7 +8,7 @@ describe('mensajeDeValidacion', () => {
 
   it('cambia el mensaje por defecto de zod (en inglés) por uno genérico', () => {
     expect(mensajeDeValidacion([{ field: 'id', message: 'Invalid input: expected string, received undefined' }])).toBe(
-      'Revisa los datos: hay un campo con un valor no válido.',
+      'Revise los datos: hay un campo con un valor no válido.',
     );
   });
 

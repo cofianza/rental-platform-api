@@ -334,7 +334,7 @@ export function mensajeNoPortable(
 ): string {
   const cierre =
     'No se genero ningun cobro ni se descuento ningun credito. ' +
-    'Puedes elegir otra propiedad, o solicitar una evaluacion nueva para esta.';
+    'Puede elegir otra propiedad, o solicitar una evaluacion nueva para esta.';
 
   switch (veredicto.motivo) {
     case 'sin_canon_original':
@@ -354,7 +354,7 @@ export function mensajeNoPortable(
     case 'sin_canon_destino':
       return (
         'La propiedad de destino no tiene un canon registrado, asi que no podemos ' +
-        'compararlo con el del estudio. Completa el canon del inmueble e intenta de nuevo.'
+        'compararlo con el del estudio. Complete el canon del inmueble e inténtelo de nuevo.'
       );
     case 'excede_tope_canon':
       return (

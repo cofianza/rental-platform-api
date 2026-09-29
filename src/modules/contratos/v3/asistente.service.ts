@@ -147,12 +147,12 @@ const PERFIL_SELECT = `
 
 const noHabilitado = () =>
   AppError.notFound('El asistente de contratos no está habilitado para este estudio.', 'CONTRATOS_V3_NO_HABILITADO');
-const noIniciado = () => AppError.notFound('Primero inicia el contrato.', 'CONTRATO_V3_NO_INICIADO');
+const noIniciado = () => AppError.notFound('Primero inicie el contrato.', 'CONTRATO_V3_NO_INICIADO');
 const noEditable = () =>
   AppError.conflict('El contrato ya no está en borrador; no se puede editar.', 'CONTRATO_NO_EDITABLE');
 const borradorCambiado = () =>
   AppError.conflict(
-    'El borrador cambió en otra sesión. Recarga la página para continuar.',
+    'El borrador cambió en otra sesión. Recargue la página para continuar.',
     'CONTRATO_BORRADOR_CAMBIADO',
   );
 const bloqueado = (bloqueos: EstadoAsistente['bloqueos']) =>
@@ -163,7 +163,7 @@ function noVerificable(expedienteId: string, que: string, detalle?: unknown): Ap
   return new AppError(
     503,
     'LECTURA_NO_VERIFICABLE',
-    'No pudimos verificar los datos del estudio. Intenta de nuevo en un momento.',
+    'No pudimos verificar los datos del estudio. Intente de nuevo en un momento.',
   );
 }
 
@@ -752,7 +752,7 @@ export async function iniciarContrato(
     }
     logger.error({ expedienteId, error: error?.message }, 'Asistente V3: no se pudo crear el borrador');
     if (reserva.reservado) await liberarReservaDeExpediente(expedienteId);
-    throw new AppError(500, 'CONTRATO_CREATE_ERROR', 'No se pudo iniciar el contrato. Intenta de nuevo.');
+    throw new AppError(500, 'CONTRATO_CREATE_ERROR', 'No se pudo iniciar el contrato. Intente de nuevo.');
   }
 
   // Después del INSERT: nadie recibe el aviso por un contrato que no llegó a existir.
@@ -852,7 +852,7 @@ async function prepararPaso4(
       throw new AppError(
         422,
         'CLAUSULA_NO_DISPONIBLE',
-        'Una de las cláusulas elegidas ya no está disponible. Quítala del contrato.',
+        'Una de las cláusulas elegidas ya no está disponible. Quítela del contrato.',
         { indice },
       );
     // Solo los modelos sugeridos llevan [[campos]]; una propia no puede traer valores.
@@ -865,13 +865,13 @@ async function prepararPaso4(
         422,
         'CLAUSULA_CAMPOS',
         faltan.length
-          ? `Completa los datos de la cláusula «${fila.titulo}»: ${faltan.join(', ')}.`
+          ? `Complete los datos de la cláusula «${fila.titulo}»: ${faltan.join(', ')}.`
           : `La cláusula «${fila.titulo}» no lleva estos datos: ${sobran.join(', ')}.`,
         { indice },
       );
     const c = { titulo: fila.titulo, texto: llenar(fila.texto, valores) };
     if (c.texto.length > 4000)
-      throw new AppError(422, 'CLAUSULA_CAMPOS', 'Con los datos, el texto supera 4.000 caracteres; acórtalos.', {
+      throw new AppError(422, 'CLAUSULA_CAMPOS', 'Con los datos, el texto supera 4.000 caracteres; acórtelos.', {
         indice,
       });
 
@@ -907,11 +907,11 @@ async function prepararPaso4(
   if (!cubiertas.length) return { clausulas, huella: huella(clausulas), aceptacion: null };
   if (!e.aceptoResponsabilidad)
     throw AppError.badRequest(
-      'Acepta el aviso de responsabilidad para incorporar tus cláusulas propias y los datos que completaste en los modelos.',
+      'Acepte el aviso de responsabilidad para incorporar sus cláusulas propias y los datos que completó en los modelos.',
       'ACEPTACION_REQUERIDA',
     );
   if (e.avisoVersion !== AVISO_VERSION)
-    throw AppError.conflict('El aviso de responsabilidad cambió. Léelo de nuevo y acéptalo.', 'AVISO_CAMBIADO');
+    throw AppError.conflict('El aviso de responsabilidad cambió. Léalo de nuevo y acéptelo.', 'AVISO_CAMBIADO');
   if (!perfil) throw noVerificable(exp, 'perfil de quien acepta');
   const aceptacion: AceptacionClausulas = {
     usuarioId: u.id,
@@ -972,7 +972,7 @@ export async function guardarPaso(
     .select('id');
   if (error) {
     logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo guardar el paso');
-    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar el paso. Intenta de nuevo.');
+    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar el paso. Intente de nuevo.');
   }
   if (!(data as unknown[] | null)?.length) throw borradorCambiado();
 
@@ -1004,7 +1004,7 @@ export async function guardarPaso(
       throw new AppError(
         503,
         'INMUEBLE_NO_ACTUALIZADO',
-        'Guardamos el paso, pero no pudimos actualizar la ficha del inmueble. Vuelve a guardar.',
+        'Guardamos el paso, pero no pudimos actualizar la ficha del inmueble. Vuelva a guardar.',
       );
     }
   }
@@ -1250,7 +1250,7 @@ export async function generarVistaPrevia(
     await supabase.storage.from(BUCKET).remove([key]);
     if (error) {
       logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo guardar la vista previa');
-      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la vista previa. Intenta de nuevo.');
+      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la vista previa. Intente de nuevo.');
     }
     throw borradorCambiado();
   }
@@ -1270,7 +1270,7 @@ export async function generarVistaPrevia(
     throw new AppError(
       500,
       'CONTRATO_PARTES_NO_GUARDADAS',
-      'La vista previa quedó generada, pero no se guardaron las partes o el registro de cláusulas. Vuelve a generarla.',
+      'La vista previa quedó generada, pero no se guardaron las partes o el registro de cláusulas. Vuelva a generarla.',
     );
   }
 
@@ -1345,7 +1345,7 @@ export async function autorizarExceso(
     .select('id');
   if (error) {
     logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo autorizar el exceso de cláusulas');
-    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la autorización. Intenta de nuevo.');
+    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la autorización. Intente de nuevo.');
   }
   if (!(data as unknown[] | null)?.length) throw borradorCambiado();
 
@@ -1386,8 +1386,8 @@ async function avisarExcesoAutorizado(expedienteId: string, contratoId: string, 
         notificarUsuario({
           userId,
           tipo: 'contrato.clausulas_autorizadas',
-          titulo: 'Cofianza autorizó tus cláusulas adicionales',
-          mensaje: `Ya puedes continuar el contrato del estudio ${formatNumeroEstudio(numero)}.`,
+          titulo: 'Cofianza autorizó sus cláusulas adicionales',
+          mensaje: `Ya puede continuar el contrato del estudio ${formatNumeroEstudio(numero)}.`,
           link: `/expedientes/${expedienteId}/contrato`,
           payload: { expediente_id: expedienteId, contrato_id: contratoId },
         }),
@@ -1407,13 +1407,13 @@ const MAX_PAGINAS_PROPIO = 60;
 const MAX_BYTES_SOBRE = 8 * 1024 * 1024;
 
 const MOTIVO_PDF: Record<MotivoPdfInvalido, string> = {
-  peso: 'El PDF pesa más de 6 MB. Redúcelo (por ejemplo, imprimiéndolo de nuevo a PDF) y súbelo otra vez.',
+  peso: 'El PDF pesa más de 6 MB. Redúzcalo (por ejemplo, imprimiéndolo de nuevo a PDF) y súbalo otra vez.',
   no_es_pdf: 'El archivo no es un PDF.',
-  protegido: 'El PDF está protegido con contraseña. Súbelo sin contraseña.',
-  danado: 'El PDF está dañado o no se puede leer. Genéralo de nuevo y vuelve a subirlo.',
+  protegido: 'El PDF está protegido con contraseña. Súbalo sin contraseña.',
+  danado: 'El PDF está dañado o no se puede leer. Genérelo de nuevo y vuelva a subirlo.',
   paginas: `El PDF debe tener entre 1 y ${MAX_PAGINAS_PROPIO} páginas.`,
-  formulario: 'El PDF tiene campos de formulario editables. Imprímelo a PDF (sin campos) y súbelo de nuevo.',
-  activo: 'El PDF tiene contenido activo (JavaScript o acciones automáticas). Imprímelo a PDF y súbelo de nuevo.',
+  formulario: 'El PDF tiene campos de formulario editables. Imprímalo a PDF (sin campos) y súbalo de nuevo.',
+  activo: 'El PDF tiene contenido activo (JavaScript o acciones automáticas). Imprímalo a PDF y súbalo de nuevo.',
 };
 
 const sha256 = (b: Buffer) => createHash('sha256').update(b).digest('hex');
@@ -1422,7 +1422,7 @@ async function bajar(key: string, que: string): Promise<Buffer> {
   const { data, error } = await supabase.storage.from(BUCKET).download(key);
   if (error || !data) {
     logger.error({ key, error: error?.message }, `Asistente V3: no se pudo leer ${que}`);
-    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', `No pudimos leer ${que}. Intenta de nuevo en un momento.`);
+    throw new AppError(503, 'LECTURA_NO_VERIFICABLE', `No pudimos leer ${que}. Intente de nuevo en un momento.`);
   }
   return Buffer.from(await data.arrayBuffer());
 }
@@ -1447,7 +1447,7 @@ export async function cargarPropio(
   const dv = v3.datos_variables ?? {};
   if (dv.asistente?.paso1?.ruta !== 'B')
     throw AppError.conflict('El contrato propio solo se carga en la Ruta B.', 'RUTA_NO_ES_B');
-  if (!archivo?.buffer?.length) throw AppError.badRequest('Adjunta el PDF del contrato.', 'ARCHIVO_REQUERIDO');
+  if (!archivo?.buffer?.length) throw AppError.badRequest('Adjunte el PDF del contrato.', 'ARCHIVO_REQUERIDO');
 
   let info: { paginas: number; bytes: number };
   try {
@@ -1485,7 +1485,7 @@ export async function cargarPropio(
     await supabase.storage.from(BUCKET).remove([key]);
     if (error) {
       logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo guardar el contrato propio');
-      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar el PDF. Intenta de nuevo.');
+      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar el PDF. Intente de nuevo.');
     }
     throw borradorCambiado();
   }
@@ -1534,9 +1534,9 @@ export async function guardarFirmasPropio(
   if (dv.asistente?.paso1?.ruta !== 'B')
     throw AppError.conflict('El contrato propio solo se carga en la Ruta B.', 'RUTA_NO_ES_B');
   const propio = dv.propio;
-  if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
+  if (!propio) throw AppError.conflict('Cargue el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
   if (body.propioSha256 !== propio.sha256)
-    throw AppError.conflict('El contrato de la inmobiliaria cambió. Ubica las firmas sobre el PDF actual.', 'PDF_PROPIO_ALTERADO');
+    throw AppError.conflict('El contrato de la inmobiliaria cambió. Ubique las firmas sobre el PDF actual.', 'PDF_PROPIO_ALTERADO');
   const fuera = body.firmas.find((m) => m.pagina > propio.paginas);
   if (fuera)
     throw AppError.badRequest(
@@ -1554,7 +1554,7 @@ export async function guardarFirmasPropio(
     .select('id');
   if (error) {
     logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se guardaron las firmas del contrato propio');
-    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la ubicación de las firmas. Intenta de nuevo.');
+    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo guardar la ubicación de las firmas. Intente de nuevo.');
   }
   if (!(data as unknown[] | null)?.length) throw borradorCambiado();
   logAudit({
@@ -1676,10 +1676,10 @@ export async function enviarAFirma(
   if (rutas.length) throw bloqueado([bloqueoNoImprimible(rutas)]);
 
   const doc = dv.documento;
-  if (!doc) throw AppError.conflict('Genera la vista previa antes de enviar a firma.', 'VISTA_PREVIA_REQUERIDA');
+  if (!doc) throw AppError.conflict('Genere la vista previa antes de enviar a firma.', 'VISTA_PREVIA_REQUERIDA');
   const desactualizada = () =>
     AppError.conflict(
-      'Cambiaron datos del contrato, del perfil, del estudio o del CRC, o el texto del contrato, después de la vista previa. Genérala de nuevo y revísala.',
+      'Cambiaron datos del contrato, del perfil, del estudio o del CRC, o el texto del contrato, después de la vista previa. Genérela de nuevo y revísela.',
       'VISTA_PREVIA_DESACTUALIZADA',
     );
   // Antes que los pendientes: una vista previa vieja puede listar un texto que ya se aprobó.
@@ -1702,15 +1702,15 @@ export async function enviarAFirma(
   exigirPlazoDeFirma(finDelCrc(f.crc?.fecha_vencimiento, f.estudio?.fecha_completado, cal.VIGENCIA_CRC_DIAS), cal.DIAS_EXPIRACION_FIRMA);
   const propio = dv.propio;
   if (ruta === 'B') {
-    if (!propio) throw AppError.conflict('Carga el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
+    if (!propio) throw AppError.conflict('Cargue el contrato de la inmobiliaria en PDF.', 'CONTRATO_PROPIO_REQUERIDO');
     if (body.propioSha256 !== propio.sha256)
-      throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
+      throw AppError.conflict('El contrato cargado cambió. Revíselo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
     // Adenda 1 contratos, respuesta 6: cada parte firma también sobre las rayas del PDF propio (crearSobre lo repite),
     // y en las que se revisaron: otra sesión pudo moverlas.
     const marcas = marcasVigentes(propio, f);
     exigirMarcas(firmantesDe(f), marcas);
     if (body.firmasHuella !== huellaMarcas(marcas))
-      throw AppError.conflict('La ubicación de las firmas cambió. Revísala de nuevo antes de enviar.', 'FIRMAS_CAMBIARON');
+      throw AppError.conflict('La ubicación de las firmas cambió. Revísela de nuevo antes de enviar.', 'FIRMAS_CAMBIARON');
   }
 
   // 2. Render final y PDF unido.
@@ -1735,7 +1735,7 @@ export async function enviarAFirma(
   if (ruta === 'B') {
     const propioPdf = await bajar(propio!.key, 'el contrato de la inmobiliaria');
     if (sha256(propioPdf) !== propio!.sha256)
-      throw AppError.conflict('El contrato cargado cambió. Revísalo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
+      throw AppError.conflict('El contrato cargado cambió. Revíselo de nuevo antes de enviar.', 'PDF_PROPIO_ALTERADO');
     piezas = [propioPdf, final.pdf, crcPdf];
   }
   // Cada pieza se lee una sola vez con pdf-lib: para unir, contar páginas y, en la B, congelar la geometría.
@@ -1744,7 +1744,7 @@ export async function enviarAFirma(
   const firmasPropio: FirmasPropio | undefined = ruta === 'B' ? congelarFirmas(docs[0], marcasVigentes(propio!, f)) : undefined;
   const unido = await mergePdfs(docs, { estricto: true });
   if (unido.length > MAX_BYTES_SOBRE)
-    throw new AppError(413, 'PDF_SOBRE_DEMASIADO_GRANDE', 'El documento para firmar supera 8 MB. Reduce el PDF de la inmobiliaria.');
+    throw new AppError(413, 'PDF_SOBRE_DEMASIADO_GRANDE', 'El documento para firmar supera 8 MB. Reduzca el PDF de la inmobiliaria.');
   const paginas = docs.map((d) => d.getPageCount());
   const keyFinal = `contratos/${expedienteId}/${v3.id}/final-${Date.now()}.pdf`;
   const { error: upError } = await supabase.storage
@@ -1762,7 +1762,7 @@ export async function enviarAFirma(
   if (partesError) {
     await quitarFinal();
     logger.error({ expedienteId, error: partesError.message }, 'Asistente V3: no se guardaron las partes al enviar');
-    throw new AppError(500, 'CONTRATO_PARTES_NO_GUARDADAS', 'No se guardaron las partes del contrato. Intenta de nuevo.');
+    throw new AppError(500, 'CONTRATO_PARTES_NO_GUARDADAS', 'No se guardaron las partes del contrato. Intente de nuevo.');
   }
 
   // 4. Fuera de borrador, en un solo UPDATE con CAS.
@@ -1796,7 +1796,7 @@ export async function enviarAFirma(
     await quitarFinal();
     if (error) {
       logger.error({ expedienteId, error: error.message }, 'Asistente V3: no se pudo sacar el contrato de borrador');
-      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo enviar a firma. Intenta de nuevo.');
+      throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', 'No se pudo enviar a firma. Intente de nuevo.');
     }
     throw borradorCambiado();
   }

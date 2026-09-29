@@ -891,7 +891,7 @@ export async function createEstudio(
       409,
       'ESTUDIO_ACTIVO_EXISTENTE',
       expiracion.expirado
-        ? 'La evaluación anterior expiró sin autorización del prospecto. No se crea otra: reenvíale la solicitud desde esa evaluación (sin costo adicional) o cancélala antes de crear una nueva.'
+        ? 'La evaluación anterior expiró sin autorización del prospecto. No se crea otra: reenvíele la solicitud desde esa evaluación (sin costo adicional) o cancélela antes de crear una nueva.'
         : 'Ya existe una evaluación activa para este estudio',
       { estudio_id: activa.id, expirado: expiracion.expirado },
     );
@@ -1107,7 +1107,7 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
   // respuesta sin poder registrarse.
   if (estado === 'en_proceso') {
     throw AppError.conflict(
-      'La evaluación se está consultando con el buró. Espera el resultado antes de cancelarla.',
+      'La evaluación se está consultando con el buró. Espere el resultado antes de cancelarla.',
       'ESTUDIO_EN_PROCESO',
     );
   }
@@ -1124,7 +1124,7 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
       .limit(1);
     if (enCurso && enCurso.length > 0) {
       throw AppError.conflict(
-        'El prospecto ya inició el pago por PSE o en efectivo. Espera a que se confirme o venza para cancelar la evaluación.',
+        'El prospecto ya inició el pago por PSE o en efectivo. Espere a que se confirme o venza para cancelar la evaluación.',
         'PAGO_EN_PROCESO',
       );
     }
@@ -1227,7 +1227,7 @@ export async function sendSelfServiceLink(
   if (est.estado === 'pago_pendiente' || est.estado === 'en_proceso') {
     throw AppError.conflict(
       est.estado === 'en_proceso'
-        ? 'La evaluación ya se está consultando con el buró. Espera el resultado.'
+        ? 'La evaluación ya se está consultando con el buró. Espere el resultado.'
         : 'La evaluación está esperando el pago. Se ejecuta sola cuando se confirme.',
       'ESTUDIO_ESTADO_INVALIDO',
     );
@@ -1260,7 +1260,7 @@ export async function sendSelfServiceLink(
     );
     if (!esDueno) {
       throw AppError.forbidden(
-        'No tienes permisos para enviar el enlace de este estudio',
+        'No tiene permisos para enviar el enlace de este estudio',
         'ESTUDIO_FORBIDDEN',
       );
     }
@@ -1320,7 +1320,7 @@ export async function sendSelfServiceLink(
     throw AppError.badRequest('Error al generar enlace', 'TOKEN_GENERATION_ERROR');
   }
   if (!actualizados || actualizados.length === 0) {
-    throw AppError.conflict('La evaluación cambió de estado. Actualiza la página y vuelve a intentarlo.', 'ESTUDIO_ESTADO_CAMBIO');
+    throw AppError.conflict('La evaluación cambió de estado. Actualice la página y vuelva a intentarlo.', 'ESTUDIO_ESTADO_CAMBIO');
   }
 
   // 5. Build URL and send email
@@ -2168,12 +2168,12 @@ async function notificarSolicitanteResultadoEstudio(
     await notificarUsuario({
       userId,
       tipo: aprobado ? 'estudio.aprobado' : condicionado ? 'estudio.condicionado' : 'estudio.rechazado',
-      titulo: aprobado ? 'Estudio aprobado' : condicionado ? 'Estudio en revisión' : 'Resultado de tu estudio',
+      titulo: aprobado ? 'Estudio aprobado' : condicionado ? 'Estudio en revisión' : 'Resultado de su estudio',
       mensaje: aprobado
-        ? `Tu estudio ${numeroExpediente} avanzó. Ya puedes continuar con el contrato.`
+        ? `Su estudio ${numeroExpediente} avanzó. Ya puede continuar con el contrato.`
         : condicionado
-          ? `Tu estudio ${numeroExpediente} quedó en revisión: un analista de Cofianza lo revisa y te avisamos el resultado.`
-          : `Tu estudio ${numeroExpediente} no fue aprobado. Revisa los detalles.`,
+          ? `Su estudio ${numeroExpediente} quedó en revisión: un analista de Cofianza lo revisa y le avisamos el resultado.`
+          : `Su estudio ${numeroExpediente} no fue aprobado. Revise los detalles.`,
       link: `/expedientes/${expedienteId}`,
       payload: { expediente_id: expedienteId, resultado },
     });
@@ -2365,7 +2365,7 @@ export async function ejecutarEstudio(
     } | null;
     if (!solOwn?.solicitante || solOwn.solicitante.creado_por !== userId) {
       throw AppError.forbidden(
-        'No tienes permisos para ejecutar este estudio',
+        'No tiene permisos para ejecutar este estudio',
         'ESTUDIO_FORBIDDEN',
       );
     }
@@ -2383,7 +2383,7 @@ export async function ejecutarEstudio(
       () => false,
     );
     if (!esDueno) {
-      throw AppError.forbidden('No tienes permisos para ejecutar este estudio', 'ESTUDIO_FORBIDDEN');
+      throw AppError.forbidden('No tiene permisos para ejecutar este estudio', 'ESTUDIO_FORBIDDEN');
     }
   }
 
@@ -2606,7 +2606,7 @@ export async function ejecutarEstudio(
   if (!estadosPermitidos.includes(est.estado)) {
     // El estado crudo va en details: el mensaje termina en un toast.
     throw AppError.badRequest(
-      'Esta evaluación no se puede ejecutar en su estado actual. Recarga la página para ver en qué va.',
+      'Esta evaluación no se puede ejecutar en su estado actual. Recargue la página para ver en qué va.',
       'ESTUDIO_ESTADO_INVALIDO',
       { estado: est.estado, permitidos: estadosPermitidos },
     );
@@ -2764,7 +2764,7 @@ export async function ejecutarEstudio(
   //      siempre (el throw ocurre fuera del try de procesarEstudioAsync).
   if (proveedorFinal !== 'transunion' && proveedorFinal !== 'datacredito') {
     throw AppError.badRequest(
-      `El estudio tiene proveedor "${proveedorFinal}", que no se consulta automáticamente. Elige TransUnion o DataCrédito para ejecutarlo.`,
+      `El estudio tiene proveedor "${proveedorFinal}", que no se consulta automáticamente. Elija TransUnion o DataCrédito para ejecutarlo.`,
       'PROVEEDOR_NO_EJECUTABLE',
     );
   }
@@ -2856,7 +2856,7 @@ export async function ejecutarEstudio(
   }
   if (!lockRows || lockRows.length === 0) {
     throw AppError.conflict(
-      'El estudio ya está siendo procesado o cambió de estado — refresca para ver el estado actual',
+      'El estudio ya está siendo procesado o cambió de estado — refresque para ver el estado actual',
       'ESTUDIO_EN_PROCESO',
     );
   }
@@ -3176,14 +3176,14 @@ async function procesarEstudioAsync(args: {
       : apellidoNoCoincide
       ? `${buroLabel} encontró la cédula, pero el PRIMER APELLIDO registrado no coincide con el que enviamos. El documento está bien: hay que corregir el apellido del solicitante para que sea igual al de la Registraduría (solo el primero, sin el segundo) y reintentar.`
       : documentoNoEncontrado
-      ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifica que tu número y tipo de documento sean correctos, o reintenta con el otro buró.`
+      ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifique que su número y tipo de documento sean correctos, o reintente con el otro buró.`
       : proveedorNoDisponible
-        ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió (Adenda §2.3 → Política §14: sin centrales no hay decisión automática). ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos, o usa el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintenta eligiendo TransUnion.' : ''}`
+        ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió (Adenda §2.3 → Política §14: sin centrales no hay decisión automática). ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelva a intentar la consulta en unos minutos, o use el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintente eligiendo TransUnion.' : ''}`
         : errorDeConfiguracion
-        ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito: puedes intentar con el otro buró.`
+        ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito: puede intentar con el otro buró.`
         // Sin el mensaje crudo del proveedor (códigos, combos, variables de
         // entorno): va al log, a la auditoría y al aviso de los internos.
-        : `${buroLabel} no pudo completar la consulta. No es un rechazo de crédito: vuelve a intentarlo o escribe a soporte.`;
+        : `${buroLabel} no pudo completar la consulta. No es un rechazo de crédito: vuelva a intentarlo o escriba a soporte.`;
 
     // CAS: si lo cancelaron mientras se consultaba, no se resucita como 'fallido'
     // (reintentable) ni se avisa de un fallo. Si el buró nuevo no dejó
@@ -3478,7 +3478,7 @@ async function avisarEstudioFallido(args: {
 /** Sin movimiento en este tiempo, una consulta 'en_proceso' se da por cortada (el buró tarda segundos). */
 const MINUTOS_EN_PROCESO_COLGADO = 10;
 const OBS_CONSULTA_INTERRUMPIDA =
-  'La consulta al buró se interrumpió. No es un rechazo de crédito: vuelve a intentarla.';
+  'La consulta al buró se interrumpió. No es un rechazo de crédito: vuelva a intentarla.';
 const OBS_RESULTADO_SIN_REGISTRAR =
   'El buró respondió, pero el resultado no se registró solo. Un analista de Cofianza lo registra con «Registrar resultado».';
 
@@ -3868,11 +3868,11 @@ export async function registrarRadicacionApelacion(
     .update({ fecha_radicacion_apelacion: fecha } as never)
     .eq('id', estudioId);
   if (faltaColumna(updErr)) {
-    throw new AppError(503, 'RADICACION_NO_DISPONIBLE', 'El registro de la fecha de apelación todavía no está disponible. Intenta más tarde.');
+    throw new AppError(503, 'RADICACION_NO_DISPONIBLE', 'El registro de la fecha de apelación todavía no está disponible. Inténtelo más tarde.');
   }
   if (updErr) {
     logger.error({ estudioId, error: updErr.message }, 'No se pudo registrar la radicación de la apelación');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la fecha de la apelación. Intenta de nuevo.');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo registrar la fecha de la apelación. Inténtelo de nuevo.');
   }
 
   logAudit({
@@ -5001,7 +5001,7 @@ export async function consultarEstadoProveedor(estudioId: string, userId?: strin
   if (statusResponse.status === 'failed' && est.estado !== 'fallido') {
     const observaciones =
       `${BURO_LABELS[est.proveedor] ?? est.proveedor} no está disponible en este momento (posible mantenimiento o caída temporal). ` +
-      'No es un rechazo de crédito: vuelve a intentar la consulta en unos minutos.';
+      'No es un rechazo de crédito: vuelva a intentar la consulta en unos minutos.';
     const { error: failError } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({ estado: 'fallido', observaciones } as never)

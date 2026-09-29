@@ -59,7 +59,7 @@ export const updatePerfilArrendadorSchema = z.object({
   // Tipo y número van juntos (la BD tiene el mismo CHECK): los dos o ninguno.
   (d) => !d.representante_legal_tipo_documento === !d.representante_legal_documento,
   {
-    message: 'Completa el tipo y el número de documento del representante legal, o deja ambos vacíos',
+    message: 'Complete el tipo y el número de documento del representante legal, o deje ambos vacíos',
     path: ['representante_legal_documento'],
   },
 );

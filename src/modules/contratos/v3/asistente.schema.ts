@@ -18,18 +18,18 @@ const texto = (max: number) =>
     .max(max, `Máximo ${max} caracteres`)
     .refine(
       (s) => !noImprimible(s, true),
-      'Este texto no se puede imprimir en el contrato: quita XXX, ___, llaves, «NO APLICA», «null» o la palabra «coarrendatario».',
+      'Este texto no se puede imprimir en el contrato: quite XXX, ___, llaves, «NO APLICA», «null» o la palabra «coarrendatario».',
     );
 
 const entero = (min: number, max: number, campo: string) =>
   z
-    .number({ error: `${campo}: escribe un número` })
+    .number({ error: `${campo}: escriba un número` })
     .int(`${campo}: debe ser un número entero`)
     .min(min, `${campo}: mínimo ${min.toLocaleString('es-CO')}`)
     .max(max, `${campo}: máximo ${max.toLocaleString('es-CO')}`);
 
 const pct = z
-  .number({ error: 'Escribe un porcentaje' })
+  .number({ error: 'Escriba un porcentaje' })
   .min(0, 'El porcentaje no puede ser negativo')
   .max(100, 'El porcentaje no puede pasar de 100')
   .refine(dosDecimales, 'Máximo dos decimales');
@@ -56,8 +56,8 @@ const contacto = z
 
 export const paso1Schema = z
   .object({
-    ruta: z.enum(['A', 'B'], { error: 'Elige la ruta del contrato' }),
-    modalidad: z.enum(['trasladada', 'tradicional'], { error: 'Elige la modalidad de la fianza' }),
+    ruta: z.enum(['A', 'B'], { error: 'Elija la ruta del contrato' }),
+    modalidad: z.enum(['trasladada', 'tradicional'], { error: 'Elija la modalidad de la fianza' }),
     canonCop: entero(1, 100_000_000, 'Canon'),
   })
   .strict();
@@ -67,14 +67,14 @@ export const paso2Schema = z
     usos: z
       .object({ carro: texto(40).nullable(), moto: texto(40).nullable(), util: texto(40).nullable() })
       .strict(),
-    amoblado: z.boolean({ error: 'Indica si el inmueble está amoblado' }),
+    amoblado: z.boolean({ error: 'Indique si el inmueble está amoblado' }),
     ocupantes: entero(1, 30, 'Ocupantes'),
-    propiedadHorizontal: z.boolean({ error: 'Indica si el inmueble es de propiedad horizontal' }),
+    propiedadHorizontal: z.boolean({ error: 'Indique si el inmueble es de propiedad horizontal' }),
     nombreCopropiedad: texto(150).nullable(),
   })
   .strict()
   .refine((d) => !d.propiedadHorizontal || d.nombreCopropiedad !== null, {
-    message: 'Escribe el nombre de la copropiedad',
+    message: 'Escriba el nombre de la copropiedad',
     path: ['nombreCopropiedad'],
   })
   .refine((d) => d.propiedadHorizontal || d.nombreCopropiedad === null, {
@@ -91,10 +91,10 @@ export const paso3Schema = z
     administracion: z
       .object({
         aCargoDe: z.enum(['arrendador', 'arrendatario'], {
-          error: 'Indica a cargo de quién está la administración',
+          error: 'Indique a cargo de quién está la administración',
         }),
         valorCop: entero(0, 100_000_000, 'Administración'),
-        incluidaEnCanon: z.boolean({ error: 'Indica si la administración está incluida en el canon' }),
+        incluidaEnCanon: z.boolean({ error: 'Indique si la administración está incluida en el canon' }),
       })
       .strict()
       .nullable(),
@@ -105,9 +105,9 @@ export const paso3Schema = z
 // Lo que dicen las cláusulas lo juzga el service con las reglas; aquí solo forma.
 // El valor de un [[campo]] es un solo párrafo, como la cláusula (D11).
 const valorCampo = z
-  .string({ error: 'Completa los datos de la cláusula' })
+  .string({ error: 'Complete los datos de la cláusula' })
   .transform((s) => s.replace(/\s+/g, ' ').trim())
-  .pipe(z.string().min(1, 'Completa los datos de la cláusula').max(200, 'Cada dato de la cláusula admite máximo 200 caracteres'));
+  .pipe(z.string().min(1, 'Complete los datos de la cláusula').max(200, 'Cada dato de la cláusula admite máximo 200 caracteres'));
 
 const clausulasPaso4 = z
   .object({
@@ -123,15 +123,15 @@ const clausulasPaso4 = z
               .optional(),
           })
           .strict(),
-        { error: 'Elige las cláusulas adicionales' },
+        { error: 'Elija las cláusulas adicionales' },
       )
-      .min(1, 'Agrega al menos una cláusula o continúa sin ellas')
+      .min(1, 'Agregue al menos una cláusula o continúe sin ellas')
       .max(25, 'Máximo 25 cláusulas adicionales por contrato')
       .refine((cs) => new Set(cs.map((c) => c.clausulaId)).size === cs.length, 'Una cláusula está repetida'),
     // Solo se exige con propias o con datos en los modelos (Adenda 1 contratos, resp. 13): lo decide el service.
     aceptoResponsabilidad: z
       .literal(true, {
-        error: 'Acepta el aviso de responsabilidad para incorporar tus cláusulas propias y los datos que completaste',
+        error: 'Acepte el aviso de responsabilidad para incorporar sus cláusulas propias y los datos que completó',
       })
       .optional(),
     avisoVersion: z.string({ error: 'Falta la versión del aviso de responsabilidad' }).min(1).max(40),

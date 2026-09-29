@@ -127,7 +127,7 @@ async function avisarProrroga(c: ContratoVencido, fecha: string): Promise<void> 
       ...aviso,
       userId: i.propietario_id,
       titulo: 'Contrato prorrogado',
-      mensaje: `El contrato de ${direccion} llegó a su vencimiento y se prorrogó automáticamente por el mismo término, hasta el ${fecha}. Si no debe continuar, termínalo indicando el motivo.`,
+      mensaje: `El contrato de ${direccion} llegó a su vencimiento y se prorrogó automáticamente por el mismo término, hasta el ${fecha}. Si no debe continuar, termínelo indicando el motivo.`,
     });
   }
   if (e.solicitante_id) {
@@ -137,8 +137,8 @@ async function avisarProrroga(c: ContratoVencido, fecha: string): Promise<void> 
       await notificarUsuario({
         ...aviso,
         userId,
-        titulo: 'Tu contrato se prorrogó',
-        mensaje: `Tu contrato de ${direccion} se prorrogó automáticamente por el mismo término, hasta el ${fecha}.`,
+        titulo: 'Su contrato se prorrogó',
+        mensaje: `Su contrato de ${direccion} se prorrogó automáticamente por el mismo término, hasta el ${fecha}.`,
       });
     }
   }

@@ -159,7 +159,7 @@ async function assertSoporteAccess(
 
   if (!allowed) {
     throw AppError.forbidden(
-      'No tienes permisos para acceder a los soportes de este estudio',
+      'No tiene permisos para acceder a los soportes de este estudio',
       'EXPEDIENTE_FORBIDDEN',
     );
   }
@@ -275,7 +275,7 @@ export async function confirmarSoporte(
 
   if (existsErr) {
     throw AppError.badRequest(
-      'El archivo no se encontró en storage. Súbelo primero antes de confirmar.',
+      'El archivo no se encontró en storage. Súbalo primero antes de confirmar.',
       'ARCHIVO_NOT_FOUND',
     );
   }
@@ -482,7 +482,7 @@ export async function resolveExpedientePorTokenDocumentos(token: string): Promis
 
   if (!row) throw AppError.notFound('Enlace de carga no válido', 'TOKEN_INVALIDO');
   if (row.token_documentos_expiracion && new Date(row.token_documentos_expiracion) < new Date()) {
-    throw AppError.badRequest('El enlace de carga ha expirado. Pide uno nuevo a la inmobiliaria.', 'TOKEN_EXPIRADO');
+    throw AppError.badRequest('El enlace de carga ha expirado. Pida uno nuevo a la inmobiliaria.', 'TOKEN_EXPIRADO');
   }
   const estudioActivo = estudioActivoDelTitular(row.estudios);
   if (!estudioActivo) throw AppError.badRequest('El estudio aún no tiene evaluación.', 'SIN_ESTUDIO');
@@ -573,7 +573,7 @@ export async function enviarEnlaceDocumentos(
     throw AppError.badRequest('El solicitante no tiene email registrado para enviarle el enlace.', 'SIN_EMAIL_SOLICITANTE');
   }
   const nombre = `${e?.solicitantes?.nombre ?? ''} ${e?.solicitantes?.apellido ?? ''}`.trim() || 'Solicitante';
-  const direccion = e?.inmuebles?.direccion ?? 'tu inmueble';
+  const direccion = e?.inmuebles?.direccion ?? 'la dirección registrada';
 
   // Envío explícito: enlace nuevo; el anterior (si llegó a otra persona) deja de servir.
   const link = `/cargar-documentos/${await emitirTokenDocumentos(expedienteId, { rotar: true })}`;
@@ -582,8 +582,8 @@ export async function enviarEnlaceDocumentos(
     await sendResponsableAsignadoEmail({
       email,
       nombre,
-      titulo: 'Carga tus documentos',
-      mensaje: `Para continuar con tu estudio de arriendo del inmueble en ${direccion}, sube los documentos solicitados desde el siguiente enlace personal. Desde ahí también puedes invitar a tu co-arrendatario.`,
+      titulo: 'Cargue sus documentos',
+      mensaje: `Para continuar con su estudio de arriendo del inmueble en ${direccion}, suba los documentos solicitados desde el siguiente enlace personal. Desde ahí también puede invitar a su co-arrendatario.`,
       link,
       frontend_url: env.FRONTEND_URL,
     });
@@ -594,7 +594,7 @@ export async function enviarEnlaceDocumentos(
     throw new AppError(
       502,
       'CORREO_NO_ENVIADO',
-      'No pudimos enviar el correo; el enlace anterior ya no sirve. Reintenta.',
+      'No pudimos enviar el correo; el enlace anterior ya no sirve. Reintente.',
     );
   }
 
@@ -720,7 +720,7 @@ export async function confirmarSoportePublico(
   assertStorageKeyPropia(input.storage_key, `expedientes/${ctx.expedienteId}/soportes/`);
   const { error: existsErr } = await supabase.storage.from(BUCKET_NAME).createSignedUrl(input.storage_key, 60);
   if (existsErr) {
-    throw AppError.badRequest('El archivo no se encontró en storage. Súbelo primero antes de confirmar.', 'ARCHIVO_NOT_FOUND');
+    throw AppError.badRequest('El archivo no se encontró en storage. Súbalo primero antes de confirmar.', 'ARCHIVO_NOT_FOUND');
   }
 
   const { data: doc, error: insertErr } = await (supabase

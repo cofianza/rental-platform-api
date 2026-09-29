@@ -17,7 +17,7 @@ export async function registerAucoWebhook(req: Request, res: Response) {
     res.status(400).json({
       success: false,
       errorCode: 'INVALID_URL',
-      message: 'Pasa el URL completo del webhook en body.url (debe ser HTTPS)',
+      message: 'Pase el URL completo del webhook en body.url (debe ser HTTPS)',
     });
     return;
   }

@@ -81,7 +81,7 @@ const OTRO: Record<TipoDecision, string> = { aprobar: 'A9', rechazar: 'R9', cond
 
 /** Campos que agrega cada body: la lista (códigos) y el texto opcional. */
 export const camposMotivos = {
-  motivos: z.array(z.string().trim().max(5)).min(1, 'Elige al menos un motivo').max(10).optional(),
+  motivos: z.array(z.string().trim().max(5)).min(1, 'Elija al menos un motivo').max(10).optional(),
   motivo_detalle: z.string().trim().max(1000).optional(),
 };
 
@@ -98,7 +98,7 @@ export function refinarMotivos(
     ctx.addIssue({ code: 'custom', path: ['motivos'], message: `Motivos no válidos para esta decisión: ${ajenos.join(', ')}` });
   }
   if (tipo && d.motivos.includes(OTRO[tipo]) && (d.motivo_detalle ?? '').length < 10) {
-    ctx.addIssue({ code: 'custom', path: ['motivo_detalle'], message: 'Con «Otro», escribe el motivo (mínimo 10 caracteres).' });
+    ctx.addIssue({ code: 'custom', path: ['motivo_detalle'], message: 'Con «Otro», escriba el motivo (mínimo 10 caracteres).' });
   }
 }
 

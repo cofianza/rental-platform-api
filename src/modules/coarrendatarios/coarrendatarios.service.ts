@@ -79,8 +79,8 @@ const MAX_INVITACIONES_POR_ESTUDIO = 5;
 
 /** Correo al titular cuando la ponderación rechaza el conjunto (Flujo §10, sin cifras). */
 const MOTIVO_TITULAR_RECHAZO_CONJUNTO =
-  'No aprobable por ahora. La evaluación conjunta con tu co-arrendatario no cumplió los requisitos que exige nuestra política para respaldar este contrato. ' +
-  'No es una decisión definitiva sobre ti: puedes volver a solicitarlo más adelante o escribirnos para revisar tu caso.';
+  'No aprobable por ahora. La evaluación conjunta con su co-arrendatario no cumplió los requisitos que exige nuestra política para respaldar este contrato. ' +
+  'No es una decisión definitiva sobre usted: puede volver a solicitarlo más adelante o escribirnos para revisar su caso.';
 
 // Columnas que SÍ pueden llegar al cliente (las de `Coarrendatario`). Nunca
 // '*': el token de la invitación en la respuesta dejaba al titular o al gestor
@@ -307,7 +307,7 @@ function enviarEmailInvitacionCoarrendatario(opts: {
     .send({
       from: FROM,
       to: opts.to,
-      subject: `${opts.titularNombre} te invita a ser su co-arrendatario en Cofianza`,
+      subject: `${opts.titularNombre} lo invita a ser su co-arrendatario en Cofianza`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
           <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -315,12 +315,12 @@ function enviarEmailInvitacionCoarrendatario(opts: {
           </div>
           <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
             <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-            <p style="color: #6b7280;"><strong>${titular}</strong> te invita a ser su co-arrendatario para el inmueble en <strong>${inmueble}</strong>.</p>
-            <p style="color: #6b7280;">En Cofianza renta sin fiador. Si aceptas la invitación, evaluaremos tu perfil junto con el de ${titular} y respaldamos a los dos como un solo arrendatario.</p>
+            <p style="color: #6b7280;"><strong>${titular}</strong> lo invita a ser su co-arrendatario para el inmueble en <strong>${inmueble}</strong>.</p>
+            <p style="color: #6b7280;">En Cofianza renta sin fiador. Si acepta la invitación, evaluaremos su perfil junto con el de ${titular} y respaldamos a los dos como un solo arrendatario.</p>
             <div style="text-align: center; margin: 24px 0;">
               <a href="${link}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Revisar invitación</a>
             </div>
-            <p style="color: #9ca3af; font-size: 12px;">Si no esperabas esta invitación, puedes ignorar este correo. El enlace expira en ${TOKEN_EXPIRY_DAYS} días.</p>
+            <p style="color: #9ca3af; font-size: 12px;">Si no esperaba esta invitación, puede ignorar este correo. El enlace expira en ${TOKEN_EXPIRY_DAYS} días.</p>
           </div>
         </div>
       `,
@@ -398,7 +398,7 @@ export async function invitarCoarrendatario(
 
   if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
     throw AppError.forbidden(
-      'No tienes permisos para invitar a un co-arrendatario en este estudio',
+      'No tiene permisos para invitar a un co-arrendatario en este estudio',
       'COARRENDATARIO_FORBIDDEN',
     );
   }
@@ -430,7 +430,7 @@ export async function invitarCoarrendatarioPorToken(
     // documento o el correo del titular, ni que ya hay otra invitación.
     if (e instanceof AppError && CODIGOS_NO_REVELAR.includes(e.errorCode)) {
       throw AppError.badRequest(
-        'No pudimos enviar la invitación con esos datos. Revisa que sean los de la persona con quien vas a vivir.',
+        'No pudimos enviar la invitación con esos datos. Revise que sean los de la persona con quien va a vivir.',
         'COARRENDATARIO_NO_INVITABLE',
       );
     }
@@ -483,7 +483,7 @@ async function crearInvitacion(
   if (countError) throw fromSupabaseError(countError);
   if (!opts.sinTope && (count ?? 0) >= MAX_INVITACIONES_POR_ESTUDIO) {
     throw AppError.conflict(
-      `Este estudio ya tuvo ${MAX_INVITACIONES_POR_ESTUDIO} invitaciones de co-arrendatario. Escríbenos a ${(await getCompany()).email} si necesitas invitar a alguien más.`,
+      `Este estudio ya tuvo ${MAX_INVITACIONES_POR_ESTUDIO} invitaciones de co-arrendatario. Escríbanos a ${(await getCompany()).email} si necesita invitar a alguien más.`,
       'COARRENDATARIO_TOPE_INVITACIONES',
     );
   }
@@ -516,7 +516,7 @@ async function crearInvitacion(
     if ((error as { code?: string }).code === '23505') {
       // P4: antes de aceptar se cancela y se invita a otra; después, uno por estudio.
       throw AppError.conflict(
-        'Ya hay un co-arrendatario invitado para este estudio. Si su invitación sigue pendiente, cancélala para invitar a otra persona; si ya la aceptó, no se puede reemplazar: se admite uno por estudio.',
+        'Ya hay un co-arrendatario invitado para este estudio. Si su invitación sigue pendiente, cancélela para invitar a otra persona; si ya la aceptó, no se puede reemplazar: se admite uno por estudio.',
         'COARRENDATARIO_DUPLICADO',
       );
     }
@@ -562,7 +562,7 @@ async function crearInvitacion(
     titulo: porElProspecto ? 'El solicitante invitó a su co-arrendatario' : 'Invitación enviada',
     mensaje: porElProspecto
       ? `${ctx.solicitante_nombre || 'El solicitante'} invitó a ${input.nombre} como co-arrendatario desde su enlace.`
-      : `Enviamos a ${input.nombre} la invitación como co-arrendatario. Te avisaremos cuando responda.`,
+      : `Enviamos a ${input.nombre} la invitación como co-arrendatario. Le avisaremos cuando responda.`,
     link: `/expedientes/${expedienteId}`,
     payload: { expediente_id: expedienteId, coarrendatario_id: coa.id },
   };
@@ -597,7 +597,7 @@ export async function getCoarrendatarioPorExpediente(
   const ctx = await fetchExpedienteCtx(expedienteId);
 
   if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
-    throw AppError.forbidden('No tienes permisos para ver este estudio', 'EXPEDIENTE_FORBIDDEN');
+    throw AppError.forbidden('No tiene permisos para ver este estudio', 'EXPEDIENTE_FORBIDDEN');
   }
 
   const { data } = await (supabase
@@ -641,7 +641,7 @@ export async function getVentanaCoarrendatario(
 ): Promise<VentanaCoarrendatario> {
   const ctx = await fetchExpedienteCtx(expedienteId);
   if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
-    throw AppError.forbidden('No tienes permisos para ver este estudio', 'EXPEDIENTE_FORBIDDEN');
+    throw AppError.forbidden('No tiene permisos para ver este estudio', 'EXPEDIENTE_FORBIDDEN');
   }
   const [ventana, activa] = await Promise.all([ventanaDe(ctx), invitacionActiva(expedienteId)]);
   return ventana.puede_invitar && activa
@@ -710,7 +710,7 @@ export async function reenviarInvitacionCoarrendatario(
 
   if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
     throw AppError.forbidden(
-      'No tienes permisos para reenviar esta invitación',
+      'No tiene permisos para reenviar esta invitación',
       'COARRENDATARIO_FORBIDDEN',
     );
   }
@@ -819,7 +819,7 @@ export async function cancelarInvitacionCoarrendatario(
   const ctx = await fetchExpedienteCtx(expedienteId);
 
   if (!(await tieneAccesoExpediente(ctx, userId, userRol))) {
-    throw AppError.forbidden('No tienes permisos para cancelar esta invitación', 'COARRENDATARIO_FORBIDDEN');
+    throw AppError.forbidden('No tiene permisos para cancelar esta invitación', 'COARRENDATARIO_FORBIDDEN');
   }
 
   // Solo la pendiente. Rotar el token deja muerto el enlace que ya recibió, y
@@ -1162,7 +1162,7 @@ export async function aceptarInvitacion(
     throw new AppError(
       500,
       'AUTORIZACION_CREATE_ERROR',
-      'No se pudo registrar tu autorización de tratamiento de datos. Intenta de nuevo.',
+      'No se pudo registrar su autorización de tratamiento de datos. Intente de nuevo.',
     );
   }
 
@@ -1307,7 +1307,7 @@ export async function aceptarInvitacion(
     mensaje:
       `${coa.nombre} aceptó ser co-arrendatario del estudio ${formatNumeroEstudio(ctx.numero)}. ` +
       (titularYaPago
-        ? 'Su evaluación crediticia está en proceso; te avisaremos con el resultado.'
+        ? 'Su evaluación crediticia está en proceso; le avisaremos con el resultado.'
         : 'Su evaluación crediticia se hará cuando se confirme el pago del estudio.'),
     link,
     payload,
@@ -1319,7 +1319,7 @@ export async function aceptarInvitacion(
         userId: titularId,
         tipo: 'coarrendatario.acepto',
         titulo: 'Co-arrendatario confirmado',
-        mensaje: `${coa.nombre} aceptó la invitación. Estamos procesando su evaluación crediticia; te avisaremos cuando esté listo.`,
+        mensaje: `${coa.nombre} aceptó la invitación. Estamos procesando su evaluación crediticia; le avisaremos cuando esté listo.`,
         link,
         payload,
       });
@@ -1339,7 +1339,7 @@ export async function aceptarInvitacion(
     ok: true,
     estudio_id: estudioId,
     mensaje:
-      'Aceptación registrada. Estamos procesando tu evaluación crediticia — te avisaremos por correo cuando termine.',
+      'Aceptación registrada. Estamos procesando su evaluación crediticia — le avisaremos por correo cuando termine.',
   };
 }
 
@@ -1655,12 +1655,12 @@ export async function onCoarrendatarioEstudioCompletado(
       return notificarUsuario({
         userId: titularId,
         tipo: 'estudio.condicionado',
-        titulo: 'Tu co-arrendatario completó su evaluación',
+        titulo: 'Su co-arrendatario completó su evaluación',
         mensaje: sinCentrales
-          ? 'Las centrales de riesgo no respondieron cuando consultamos. No es un rechazo: un analista de Cofianza revisará tu caso y puede volver a consultarlas.'
+          ? 'Las centrales de riesgo no respondieron cuando consultamos. No es un rechazo: un analista de Cofianza revisará su caso y puede volver a consultarlas.'
           : sinInfo
-          ? 'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: un analista de Cofianza revisará tu caso con los documentos de soporte.'
-          : 'Un analista de Cofianza revisará tu caso con los resultados de los dos. Te avisamos cuando decida.',
+          ? 'Ninguno de los dos tiene historial crediticio en las centrales, así que el buró no pudo evaluarlos. No es un rechazo: un analista de Cofianza revisará su caso con los documentos de soporte.'
+          : 'Un analista de Cofianza revisará su caso con los resultados de los dos. Le avisamos cuando decida.',
         link: `/expedientes/${est.expediente_id}`,
         payload: {
           expediente_id: est.expediente_id,
@@ -1783,8 +1783,8 @@ export async function onCoarrendatarioEstudioCompletado(
       nuevoEstadoExpediente !== 'aprobado'
         ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario no aprobaron la evaluación combinada. El inmueble vuelve a estar disponible.`
         : coaCuenta
-          ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario ${coa?.nombre ?? ''} aprobaron la evaluación combinada. Genera el contrato para continuar.`
-          : `${ctx.solicitante_nombre || 'El solicitante'} quedó aprobado. La evaluación de su co-arrendatario no fue favorable, así que el contrato va sin él (prima del 20 %). Genera el contrato para continuar.`;
+          ? `${ctx.solicitante_nombre || 'El solicitante'} y su co-arrendatario ${coa?.nombre ?? ''} aprobaron la evaluación combinada. Genere el contrato para continuar.`
+          : `${ctx.solicitante_nombre || 'El solicitante'} quedó aprobado. La evaluación de su co-arrendatario no fue favorable, así que el contrato va sin él (prima del 20 %). Genere el contrato para continuar.`;
     notificarUsuario({
       userId: ctx.inmueble_propietario_id,
       tipo: nuevoEstadoExpediente === 'aprobado' ? 'estudio.aprobado' : 'estudio.rechazado',
@@ -1887,7 +1887,7 @@ function decisionYaTomada(
             mensaje:
               `El co-arrendatario salió con una regla dura (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}) después de que se aprobó el estudio. ` +
               'La aprobación se mantiene y el co-arrendatario queda fuera: no va al CRC ni al contrato y la prima es del 20 %. ' +
-              'Si hay que revertirla, usa «Cambiar estado» antes de la firma.',
+              'Si hay que revertirla, use «Cambiar estado» antes de la firma.',
             link: `/expedientes/${ctx.id}`,
             payload: { expediente_id: ctx.id, via: 'coarrendatario_regla_dura_tras_aprobacion', coarrendatario_id: coa?.id },
           }),
@@ -1949,10 +1949,10 @@ async function avisarCoarrendatarioSobreAprobado(
     payload,
   };
   const titular = {
-    titulo: vinculado ? 'Tu co-arrendatario quedó vinculado' : 'Tu estudio sigue aprobado',
+    titulo: vinculado ? 'Su co-arrendatario quedó vinculado' : 'Su estudio sigue aprobado',
     mensaje: vinculado
-      ? `${nombre} quedó vinculado como tu co-arrendatario. La prima de vinculación baja del 20 % al 10 % del canon.`
-      : `${nombre} no quedó vinculado a tu estudio. Tu estudio sigue aprobado y continúas solo, con la prima de vinculación del 20 % del canon.`,
+      ? `${nombre} quedó vinculado como su co-arrendatario. La prima de vinculación baja del 20 % al 10 % del canon.`
+      : `${nombre} no quedó vinculado a su estudio. Su estudio sigue aprobado y continúa solo, con la prima de vinculación del 20 % del canon.`,
   };
 
   try {
@@ -2005,7 +2005,7 @@ async function avisarContratoSinCoarrendatario(ctx: ExpedienteCtx, coa: { id: st
   const conAsistente = env.CONTRATOS_V3_ENABLED && !!ctx.inmueble_inmobiliaria_id;
   const salida = conAsistente
     ? 'Si debe entrar, cancela el contrato y genera uno nuevo desde el asistente de contratos.'
-    : `El contrato actual se mantiene sin él. Si debe entrar, escríbenos a ${(await getCompany()).email}.`;
+    : `El contrato actual se mantiene sin él. Si debe entrar, escríbanos a ${(await getCompany()).email}.`;
   const aviso = {
     tipo: 'coarrendatario.rechazo',
     titulo: 'Co-arrendatario evaluado después del contrato',
@@ -2184,72 +2184,72 @@ export function construirCorreoCoarrendatario(
   let subject: string;
   let cuerpoPrincipal: string;
   let badgeColor = '#0d9488'; // teal Cofianza por defecto
-  let encabezado = 'Resultado de tu evaluación';
+  let encabezado = 'Resultado de su evaluación';
 
   if (input.decisionExpediente === 'sin_efecto') {
-    subject = `Tu invitación como co-arrendatario quedó sin efecto — ${titular} (Cofianza)`;
-    encabezado = 'Tu invitación quedó sin efecto';
+    subject = `Su invitación como co-arrendatario quedó sin efecto — ${titular} (Cofianza)`;
+    encabezado = 'Su invitación quedó sin efecto';
     cuerpoPrincipal = `
       <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
       <p style="color: #6b7280;">El estudio de arrendamiento del inmueble en <strong>${inmuebleStr}</strong> se resolvió antes de
-      terminar tu evaluación, así que tu invitación como co-arrendatario quedó sin efecto y no seguimos con ella.</p>
-      <p style="color: #6b7280;">No tienes que hacer nada más.</p>
+      terminar su evaluación, así que su invitación como co-arrendatario quedó sin efecto y no seguimos con ella.</p>
+      <p style="color: #6b7280;">No tiene que hacer nada más.</p>
     `;
     badgeColor = '#6b7280'; // gris
   } else if (input.decisionExpediente === 'en_revision') {
     // Adenda 2 §5: la decision es de un analista de Cofianza y puede tardar.
     // Sin este correo el coarrendatario se quedaba sin respuesta despues de
     // haber hecho su parte.
-    subject = `Tu evaluación ya está lista — arrendamiento con ${titular} (Cofianza)`;
+    subject = `Su evaluación ya está lista — arrendamiento con ${titular} (Cofianza)`;
     cuerpoPrincipal = `
       <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-      <p style="color: #6b7280;">Ya terminamos tu evaluación crediticia para el inmueble en <strong>${inmuebleStr}</strong>.
+      <p style="color: #6b7280;">Ya terminamos su evaluación crediticia para el inmueble en <strong>${inmuebleStr}</strong>.
       No es un rechazo: un analista de Cofianza está revisando el caso junto con el de ${titularHtml} y es quien toma la decisión.</p>
-      <p style="color: #6b7280;">Te escribimos a este mismo correo en cuanto haya respuesta. No tienes que hacer nada más.</p>
+      <p style="color: #6b7280;">Le escribimos a este mismo correo en cuanto haya respuesta. No tiene que hacer nada más.</p>
     `;
   } else if (input.decisionExpediente === 'aprobado' && input.contratoSinEl) {
-    subject = `Tu evaluación ya está lista — arrendamiento con ${titular} (Cofianza)`;
+    subject = `Su evaluación ya está lista — arrendamiento con ${titular} (Cofianza)`;
     cuerpoPrincipal = `
       <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-      <p style="color: #6b7280;">Ya terminamos tu evaluación crediticia, pero el contrato del arrendamiento del inmueble en
-      <strong>${inmuebleStr}</strong> ya se había generado sin co-arrendatario, así que por ahora no haces parte de él.</p>
-      <p style="color: #6b7280;">Si deciden incluirte, te escribimos a este mismo correo. No tienes que hacer nada más.</p>
+      <p style="color: #6b7280;">Ya terminamos su evaluación crediticia, pero el contrato del arrendamiento del inmueble en
+      <strong>${inmuebleStr}</strong> ya se había generado sin co-arrendatario, así que por ahora no hace parte de él.</p>
+      <p style="color: #6b7280;">Si deciden incluirlo, le escribimos a este mismo correo. No tiene que hacer nada más.</p>
     `;
   } else if (input.decisionExpediente === 'cerrado' && input.coarrendatarioResultado !== 'rechazado') {
     subject = `Se cerró el estudio de arrendamiento con ${titular} (Cofianza)`;
     cuerpoPrincipal = `
       <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
       <p style="color: #6b7280;">El estudio de arrendamiento del inmueble en <strong>${inmuebleStr}</strong> se cerró sin continuar,
-      así que tu evaluación como co-arrendatario no sigue. No es una decisión sobre ti.</p>
-      <p style="color: #6b7280;">El proceso queda cerrado. Si en el futuro hay otra oportunidad con Cofianza, con gusto te evaluamos de nuevo.</p>
+      así que su evaluación como co-arrendatario no sigue. No es una decisión sobre usted.</p>
+      <p style="color: #6b7280;">El proceso queda cerrado. Si en el futuro hay otra oportunidad con Cofianza, con gusto lo evaluamos de nuevo.</p>
     `;
     badgeColor = '#6b7280'; // gris
   } else if (input.decisionExpediente === 'aprobado' && cuenta) {
     // Tras revision manual (Adenda 2 §5) su evaluacion pudo quedar condicionada
     // o sin informacion: lo aprobado es el arrendamiento, no su evaluacion.
     subject = input.coarrendatarioResultado === 'aprobado'
-      ? `Tu evaluación se aprobó — arrendamiento con ${titular} (Cofianza)`
+      ? `Su evaluación se aprobó — arrendamiento con ${titular} (Cofianza)`
       : `Se aprobó el arrendamiento con ${titular} (Cofianza)`;
     cuerpoPrincipal = `
       <p style="color: #374151; font-size: 16px;">¡Buenas noticias, <strong>${nombre}</strong>!</p>
       <p style="color: #6b7280;">${input.coarrendatarioResultado === 'aprobado'
-        ? `Tu evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong> y junto con ${titularHtml}\n      pasaron la evaluación combinada`
-        : `Cofianza <strong style="color: #047857;">aprobó</strong> el arrendamiento tuyo y de ${titularHtml}`} para el inmueble en <strong>${inmuebleStr}</strong>.</p>
+        ? `Su evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong> y junto con ${titularHtml}\n      pasaron la evaluación combinada`
+        : `Cofianza <strong style="color: #047857;">aprobó</strong> el arrendamiento suyo y de ${titularHtml}`} para el inmueble en <strong>${inmuebleStr}</strong>.</p>
       <p style="color: #6b7280;">El siguiente paso lo coordinamos con ${titularHtml} (firma del contrato y entrega del inmueble).
-      No tienes que hacer nada más por ahora — si necesitamos un dato adicional, te escribimos a este mismo correo.</p>
+      No tiene que hacer nada más por ahora — si necesitamos un dato adicional, le escribimos a este mismo correo.</p>
     `;
     badgeColor = '#047857'; // green
   } else {
     // No aprobado para él: el estudio se rechazó o, aprobado, él quedó fuera
     // (su evaluación no cuenta, P2). Distinguimos la causa para que entienda
     // si fue su parte o la del titular, sin contarle nada del titular.
-    subject = `Resultado de tu evaluación — ${titular} (Cofianza)`;
+    subject = `Resultado de su evaluación — ${titular} (Cofianza)`;
     if (input.coarrendatarioResultado === 'aprobado') {
       cuerpoPrincipal = `
         <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-        <p style="color: #6b7280;">Tu evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong>. Sin embargo,
+        <p style="color: #6b7280;">Su evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong>. Sin embargo,
         la evaluación combinada con ${titularHtml} no permite que respaldemos este arrendamiento en este momento.</p>
-        <p style="color: #6b7280;">El proceso queda cerrado. Si en el futuro hay otra oportunidad con Cofianza, con gusto te
+        <p style="color: #6b7280;">El proceso queda cerrado. Si en el futuro hay otra oportunidad con Cofianza, con gusto lo
         evaluamos de nuevo.</p>
       `;
       badgeColor = '#b45309'; // amber
@@ -2262,20 +2262,20 @@ export function construirCorreoCoarrendatario(
         ? `
         <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
         <p style="color: #6b7280;">${motivoProspectoReglasDuras(input.reglasDurasCoarrendatario ?? [])}</p>
-        <p style="color: #6b7280;">Por esta razón no podemos respaldarte como co-arrendatario del inmueble en <strong>${inmuebleStr}</strong>.</p>
+        <p style="color: #6b7280;">Por esta razón no podemos respaldarlo como co-arrendatario del inmueble en <strong>${inmuebleStr}</strong>.</p>
       `
         : `
         <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-        <p style="color: #6b7280;">Tu evaluación crediticia quedó <strong style="color: #b91c1c;">no aprobada</strong>.
-        Por esta razón no podemos respaldarte como co-arrendatario del inmueble en <strong>${inmuebleStr}</strong>.</p>
-        <p style="color: #6b7280;">Si tienes dudas sobre tu reporte, puedes consultarlo directamente con la central de riesgo.</p>
+        <p style="color: #6b7280;">Su evaluación crediticia quedó <strong style="color: #b91c1c;">no aprobada</strong>.
+        Por esta razón no podemos respaldarlo como co-arrendatario del inmueble en <strong>${inmuebleStr}</strong>.</p>
+        <p style="color: #6b7280;">Si tiene dudas sobre su reporte, puede consultarlo directamente con la central de riesgo.</p>
       `;
       badgeColor = '#b91c1c'; // red
     } else {
       // condicionado o cualquier otro estado: rechazo combinado.
       cuerpoPrincipal = `
         <p style="color: #374151; font-size: 16px;">Hola <strong>${nombre}</strong>,</p>
-        <p style="color: #6b7280;">Tu evaluación crediticia quedó <strong style="color: #b45309;">condicionada</strong>.
+        <p style="color: #6b7280;">Su evaluación crediticia quedó <strong style="color: #b45309;">condicionada</strong>.
         Combinada con la de ${titularHtml}, no alcanza el perfil que necesitamos para respaldar el arrendamiento del
         inmueble en <strong>${inmuebleStr}</strong>.</p>
         <p style="color: #6b7280;">El proceso queda cerrado.</p>
@@ -2308,8 +2308,8 @@ export function construirCorreoCoarrendatario(
           ${apelacion}
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
           <p style="color: #9ca3af; font-size: 12px;">
-            Recibiste este correo porque ${titularHtml} te invitó a ser su co-arrendatario en Cofianza y autorizaste la evaluación crediticia.
-            Cofianza no almacena tu reporte de centrales de riesgo — solo usamos el resultado para esta evaluación puntual.
+            Recibió este correo porque ${titularHtml} lo invitó a ser su co-arrendatario en Cofianza y autorizó la evaluación crediticia.
+            Cofianza no almacena su reporte de centrales de riesgo — solo usamos el resultado para esta evaluación puntual.
           </p>
         </div>
       </div>
@@ -2391,7 +2391,7 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
   const tituloGestor = 'Co-arrendatario declinó la invitación';
   const mensajeGestor =
     `${coa.nombre} declinó ser coarrendatario del estudio ${formatNumeroEstudio(ctx.numero)}. ` +
-    'Puedes invitar a otra persona o continuar solo si la ruta lo permite.';
+    'Puede invitar a otra persona o continuar solo si la ruta lo permite.';
   if (ctx.inmueble_propietario_id) {
     notificarYCorreo({
       userId: ctx.inmueble_propietario_id,
@@ -2427,7 +2427,7 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
           userId: solicitanteUserId,
           tipo: 'coarrendatario.rechazo',
           titulo: 'Invitación declinada',
-          mensaje: `${coa.nombre} no aceptó la invitación de co-arrendatario.${puedeInvitar ? ' Puedes invitar a otra persona.' : ''}`,
+          mensaje: `${coa.nombre} no aceptó la invitación de co-arrendatario.${puedeInvitar ? ' Puede invitar a otra persona.' : ''}`,
           link,
           payload,
         });
@@ -2441,12 +2441,12 @@ export async function rechazarInvitacion(token: string): Promise<{ ok: true }> {
         await sendResponsableAsignadoEmail({
           email: emailProspecto,
           nombre: ctx.solicitante_nombre,
-          titulo: 'Tu co-arrendatario no aceptó la invitación',
+          titulo: 'Su co-arrendatario no aceptó la invitación',
           mensaje:
-            `${coa.nombre} no aceptó ser tu co-arrendatario. ` +
+            `${coa.nombre} no aceptó ser su co-arrendatario. ` +
             (ctx.estado === 'aprobado'
-              ? 'Tu estudio sigue aprobado y puedes continuar solo; si quieres, desde tu enlace personal puedes invitar a otra persona y la prima de vinculación baja al 10 % del canon.'
-              : 'Tu estudio sigue en revisión: si quieres, desde tu enlace personal puedes invitar a otra persona.'),
+              ? 'Su estudio sigue aprobado y puede continuar solo; si quiere, desde su enlace personal puede invitar a otra persona y la prima de vinculación baja al 10 % del canon.'
+              : 'Su estudio sigue en revisión: si quiere, desde su enlace personal puede invitar a otra persona.'),
           link: `/cargar-documentos/${token}`,
           frontend_url: env.FRONTEND_URL,
         });

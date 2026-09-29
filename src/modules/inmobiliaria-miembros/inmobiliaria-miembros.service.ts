@@ -65,7 +65,7 @@ async function resolveMembership(userId: string): Promise<OrgMembership | null> 
     miembro_id: row.id,
     inmobiliaria_id: row.inmobiliaria_id,
     rol_miembro: row.rol_miembro,
-    nombre_organizacion: row.inmobiliarias?.nombre ?? 'Tu organización',
+    nombre_organizacion: row.inmobiliarias?.nombre ?? 'Su organización',
     miembros_ven_todo: row.inmobiliarias?.miembros_ven_todo ?? true,
   };
 }
@@ -205,7 +205,7 @@ async function reapuntarInmueblesDeMiembroSaliente(orgId: string, perfilId: stri
     new AppError(
       500,
       'INMUEBLES_NO_REASIGNADOS',
-      'La persona quedó fuera del equipo, pero no se pudieron pasar sus inmuebles a la titular. Intenta de nuevo.',
+      'La persona quedó fuera del equipo, pero no se pudieron pasar sus inmuebles a la titular. Inténtelo de nuevo.',
     );
   const [suyosR, titularR] = await Promise.all([
     db('inmuebles').select('id, codigo').eq('inmobiliaria_id', orgId).eq('propietario_id', perfilId),
@@ -382,7 +382,7 @@ export async function listMiembros(userId: string, opts: { conCierre?: boolean }
     : false;
 
   return {
-    organizacion: { id: m.orgId, nombre: m.nombreOrg ?? 'Tu organización' },
+    organizacion: { id: m.orgId, nombre: m.nombreOrg ?? 'Su organización' },
     soy_owner: m.rolMiembro === 'owner',
     miembros_ven_todo: m.venTodo,
     puede_cerrar: puedeCerrar,
@@ -442,7 +442,7 @@ export async function invitarMiembro(
 
   const ex = existing as { id: string; estado: string; perfil_id: string | null } | null;
   if (ex && ex.estado === 'activo') {
-    throw AppError.conflict('Esa persona ya es miembro de tu inmobiliaria', 'MIEMBRO_YA_ACTIVO');
+    throw AppError.conflict('Esa persona ya es miembro de su inmobiliaria', 'MIEMBRO_YA_ACTIVO');
   }
   await assertCorreoPuedeUnirse(email);
 
@@ -591,7 +591,7 @@ export async function revocarMiembro(userId: string, miembroId: string): Promise
   // último: la organización no puede quedarse sin titular.
   if (row.rol_miembro === 'owner' && (await contarOwnersActivos(org.inmobiliaria_id)) <= 1) {
     throw AppError.badRequest(
-      'No puedes revocar al único titular. Promueve antes a otro miembro como titular.',
+      'No puede revocar al único titular. Promueva antes a otro miembro como titular.',
       'ULTIMO_OWNER',
     );
   }
@@ -650,7 +650,7 @@ export async function cambiarRolMiembro(
     throw AppError.notFound('Miembro no encontrado', 'MIEMBRO_NOT_FOUND');
   }
   if (row.estado !== 'activo' || !row.perfil_id) {
-    throw AppError.badRequest('Sólo puedes cambiar el rol de un miembro activo', 'MIEMBRO_NO_ACTIVO');
+    throw AppError.badRequest('Sólo puede cambiar el rol de un miembro activo', 'MIEMBRO_NO_ACTIVO');
   }
   if (row.rol_miembro === nuevoRol) {
     return { message: 'El rol no cambió' };
@@ -658,7 +658,7 @@ export async function cambiarRolMiembro(
   // Degradar a un owner (incluido uno mismo) sólo si queda otro titular activo.
   if (row.rol_miembro === 'owner' && nuevoRol !== 'owner' && (await contarOwnersActivos(org.inmobiliaria_id)) <= 1) {
     throw AppError.badRequest(
-      'No puedes quitar la titularidad al único titular. Promueve antes a otro miembro como titular.',
+      'No puede quitar la titularidad al único titular. Promueva antes a otro miembro como titular.',
       'ULTIMO_OWNER',
     );
   }
@@ -691,10 +691,10 @@ export async function cambiarRolMiembro(
   notificarUsuario({
     userId: row.perfil_id,
     tipo: 'inmobiliaria.rol_cambiado',
-    titulo: promovido ? 'Ahora eres titular' : 'Tu rol cambió',
+    titulo: promovido ? 'Ahora es titular' : 'Su rol cambió',
     mensaje: promovido
-      ? `Ahora eres co-titular de ${org.nombre_organizacion}.`
-      : `Tu rol en ${org.nombre_organizacion} ahora es ${nuevoRol === 'solo_lectura' ? 'sólo lectura' : 'miembro'}.`,
+      ? `Ahora es co-titular de ${org.nombre_organizacion}.`
+      : `Su rol en ${org.nombre_organizacion} ahora es ${nuevoRol === 'solo_lectura' ? 'sólo lectura' : 'miembro'}.`,
     link: '/configuracion/equipo',
   }).catch((e) => logger.warn({ error: e, miembroId }, 'Error notificando cambio de rol'));
 
@@ -709,7 +709,7 @@ export async function cambiarRolMiembro(
 export async function salirDeOrg(userId: string): Promise<{ message: string }> {
   const m = await resolveMembership(userId);
   if (!m) {
-    throw AppError.badRequest('No perteneces a ninguna inmobiliaria', 'SIN_ORGANIZACION');
+    throw AppError.badRequest('No pertenece a ninguna inmobiliaria', 'SIN_ORGANIZACION');
   }
   // Un titular no "renuncia" a una inmobiliaria con equipo o cartera: primero
   // deja de ser titular. Si es el único y está vacía, salir la cierra.
@@ -737,11 +737,11 @@ export async function salirDeOrg(userId: string): Promise<{ message: string }> {
   });
 
   // Avisar a los titulares restantes que alguien salió del equipo.
-  notificarOwnersOrg(m.inmobiliaria_id, userId, `Un miembro salió de tu equipo en ${m.nombre_organizacion}.`)
+  notificarOwnersOrg(m.inmobiliaria_id, userId, `Un miembro salió de su equipo en ${m.nombre_organizacion}.`)
     .catch((e) => logger.warn({ error: e }, 'Error notificando salida de miembro'));
 
   logger.info({ inmobiliariaId: m.inmobiliaria_id, userId }, 'Miembro salió de la organización');
-  return { message: 'Saliste de la inmobiliaria' };
+  return { message: 'Salió de la inmobiliaria' };
 }
 
 /**
@@ -757,13 +757,13 @@ async function cerrarInmobiliariaPropia(m: OrgMembership, userId: string): Promi
   const r = await revisarInmobiliariaDelTitular({ id: m.miembro_id, inmobiliaria_id: orgId }, userId);
   if (r.otrosTitulares > 0) {
     throw AppError.badRequest(
-      'Eres cotitular de la inmobiliaria: primero cambia tu rol a miembro y luego sal.',
+      'Usted es cotitular de la inmobiliaria: primero cambie su rol a miembro y luego salga.',
       'TITULAR_NO_PUEDE_SALIR',
     );
   }
   if (!r.vacia) {
     throw AppError.badRequest(
-      'Eres el titular de la inmobiliaria y tiene equipo o cartera: traspasa la titularidad a otro miembro o pide a Cofianza que la cierre.',
+      'Usted es el titular de la inmobiliaria y tiene equipo o cartera: traspase la titularidad a otro miembro o pida a Cofianza que la cierre.',
       'TITULAR_NO_PUEDE_SALIR',
     );
   }
@@ -792,7 +792,7 @@ async function cerrarInmobiliariaPropia(m: OrgMembership, userId: string): Promi
   if (errRecuento || (count ?? 0) > 0) {
     await reabrirInmobiliaria(m.miembro_id, orgId, userId);
     throw AppError.conflict(
-      'Alguien se unió a tu inmobiliaria mientras la cerrabas, así que sigue abierta. Traspasa la titularidad o pide a Cofianza que la cierre.',
+      'Alguien se unió a su inmobiliaria mientras usted la cerraba, así que sigue abierta. Traspase la titularidad o pida a Cofianza que la cierre.',
       'INMOBILIARIA_CON_EQUIPO',
     );
   }
@@ -805,7 +805,7 @@ async function cerrarInmobiliariaPropia(m: OrgMembership, userId: string): Promi
     detalle: { motivo: 'su titular única la cerró al salir', perfil_id: userId },
   });
   logger.info({ inmobiliariaId: orgId, userId }, 'Inmobiliaria vacía cerrada por su titular');
-  return { message: 'Cerraste tu inmobiliaria' };
+  return { message: 'Cerró su inmobiliaria' };
 }
 
 /**
@@ -851,7 +851,7 @@ async function notificarOwnersOrg(orgId: string, exceptoPerfilId: string, mensaj
     notificarUsuario({
       userId: ownerId,
       tipo: 'inmobiliaria.miembro_salio',
-      titulo: 'Cambio en tu equipo',
+      titulo: 'Cambio en su equipo',
       mensaje,
       link: '/configuracion/equipo',
     }).catch(() => {});
@@ -935,7 +935,7 @@ const esCuentaDeOtroRol = (c: { rol: string | null } | null): boolean => !!c && 
 async function assertCorreoPuedeUnirse(email: string): Promise<void> {
   if (esCuentaDeOtroRol(await cuentaDelCorreo(email))) {
     throw AppError.conflict(
-      'Ese correo ya tiene una cuenta en Cofianza que no es de inmobiliaria y no puede unirse a un equipo. Invita otro correo.',
+      'Ese correo ya tiene una cuenta en Cofianza que no es de inmobiliaria y no puede unirse a un equipo. Invite otro correo.',
       'EMAIL_OTRO_ROL',
     );
   }
@@ -988,7 +988,7 @@ export async function aceptarInvitacionMiembro(
       'Intento de aceptar invitación de miembro con email mismatch',
     );
     throw AppError.forbidden(
-      'El email de tu cuenta no coincide con el de la invitación. Inicia sesión con el correo invitado.',
+      'El email de su cuenta no coincide con el de la invitación. Inicie sesión con el correo invitado.',
       'INVITACION_EMAIL_MISMATCH',
     );
   }
@@ -1005,12 +1005,12 @@ export async function aceptarInvitacionMiembro(
   });
 
   logger.info({ inmobiliariaId: inv.inmobiliaria_id, userId: user.id }, 'Invitación de miembro aceptada');
-  return { message: 'Te uniste a la inmobiliaria', redirect: '/dashboard' };
+  return { message: 'Se unió a la inmobiliaria', redirect: '/dashboard' };
 }
 
 const yaEnOtra = () =>
   AppError.conflict(
-    'Ya perteneces a otra inmobiliaria. Sal de ella antes de aceptar esta invitación.',
+    'Ya pertenece a otra inmobiliaria. Salga de ella antes de aceptar esta invitación.',
     'YA_PERTENECE_A_OTRA_INMOBILIARIA',
   );
 
@@ -1062,7 +1062,7 @@ async function vincularMiembro(miembroId: string, perfilId: string, inmobiliaria
   const { data: fila } = await db('inmobiliaria_miembros').select('estado, perfil_id').eq('id', miembroId).maybeSingle();
   const f = fila as { estado: string; perfil_id: string | null } | null;
   if (f?.estado === 'activo' && f.perfil_id === perfilId) return;
-  throw AppError.conflict('Esta invitación ya no está vigente. Pide que te la envíen de nuevo.', 'INVITACION_NO_VIGENTE');
+  throw AppError.conflict('Esta invitación ya no está vigente. Pida que se la envíen de nuevo.', 'INVITACION_NO_VIGENTE');
 }
 
 interface MembresiaPrevia {
@@ -1073,7 +1073,7 @@ interface MembresiaPrevia {
 }
 
 const noVerificable = () =>
-  new AppError(503, 'MEMBRESIA_NO_VERIFICABLE', 'No pudimos revisar tu inmobiliaria actual. Intenta de nuevo en un momento.');
+  new AppError(503, 'MEMBRESIA_NO_VERIFICABLE', 'No pudimos revisar su inmobiliaria actual. Inténtelo de nuevo en un momento.');
 
 /**
  * La inmobiliaria del titular que quiere irse: ¿hay otros titulares? ¿está
@@ -1115,21 +1115,21 @@ async function errorTitularDeOtra(previa: MembresiaPrevia, perfilId: string): Pr
   const r = await revisarInmobiliariaDelTitular(previa, perfilId);
   if (r.otrosTitulares > 0) {
     return AppError.conflict(
-      'Eres cotitular de otra inmobiliaria. Cambia tu rol a miembro en su equipo y sal de ella antes de aceptar esta invitación.',
+      'Usted es cotitular de otra inmobiliaria. Cambie su rol a miembro en su equipo y salga de ella antes de aceptar esta invitación.',
       'TITULAR_DE_OTRA_INMOBILIARIA',
     );
   }
   if (!r.vacia) {
     return AppError.conflict(
-      'Eres titular de otra inmobiliaria con equipo o cartera activa. Traspasa la titularidad o pide a Cofianza que la cierre antes de aceptar esta invitación.',
+      'Usted es titular de otra inmobiliaria con equipo o cartera activa. Traspase la titularidad o pida a Cofianza que la cierre antes de aceptar esta invitación.',
       'TITULAR_DE_OTRA_INMOBILIARIA',
     );
   }
-  const nombre = previa.inmobiliarias?.nombre?.trim() || 'tu inmobiliaria';
+  const nombre = previa.inmobiliarias?.nombre?.trim() || 'su inmobiliaria';
   return new AppError(
     409,
     'TITULAR_DE_OTRA_INMOBILIARIA',
-    `Eres titular de ${nombre}, que no tiene equipo ni cartera. Ciérrala para aceptar esta invitación.`,
+    `Usted es titular de ${nombre}, que no tiene equipo ni cartera. Ciérrela para aceptar esta invitación.`,
     { puede_cerrar: true, inmobiliaria: nombre },
   );
 }
@@ -1140,12 +1140,12 @@ async function errorTitularDeOtra(previa: MembresiaPrevia, perfilId: string): Pr
  */
 function notificarOwnerNuevoMiembro(inv: InvitacionRow, nombreMiembro: string): void {
   if (!inv.invitado_por) return;
-  const org = inv.inmobiliarias?.nombre ?? 'tu inmobiliaria';
+  const org = inv.inmobiliarias?.nombre ?? 'su inmobiliaria';
   notificarUsuario({
     userId: inv.invitado_por,
     tipo: 'inmobiliaria.miembro_acepto',
-    titulo: 'Nuevo miembro en tu equipo',
-    mensaje: `${nombreMiembro} aceptó tu invitación y ya forma parte de ${org}.`,
+    titulo: 'Nuevo miembro en su equipo',
+    mensaje: `${nombreMiembro} aceptó su invitación y ya forma parte de ${org}.`,
     link: '/configuracion/equipo',
   }).catch((e) => logger.warn({ error: e, miembroId: inv.id }, 'Error notificando owner de nuevo miembro'));
 }
@@ -1178,7 +1178,7 @@ export async function registrarMiembro(
   if (authError || !authData?.user) {
     if (authError && (authError.message.includes('already') || authError.message.includes('registered') || authError.message.includes('duplicate'))) {
       throw AppError.conflict(
-        'Ya tienes una cuenta con este correo. Inicia sesión y acepta la invitación.',
+        'Ya tiene una cuenta con este correo. Inicie sesión y acepte la invitación.',
         'EMAIL_ALREADY_EXISTS',
       );
     }
@@ -1216,7 +1216,7 @@ export async function registrarMiembro(
   });
 
   logger.info({ inmobiliariaId: inv.inmobiliaria_id, userId }, 'Miembro registrado y vinculado');
-  return { message: 'Cuenta creada. Ya puedes iniciar sesión.', email: inv.email };
+  return { message: 'Cuenta creada. Ya puede iniciar sesión.', email: inv.email };
 }
 
 // ============================================================
@@ -1427,14 +1427,14 @@ export async function adminCambiarRolMiembro(
   const row = await cargarMiembroDeOrg(orgId, miembroId);
 
   if (row.estado !== 'activo' || !row.perfil_id) {
-    throw AppError.badRequest('Sólo puedes cambiar el rol de un miembro activo', 'MIEMBRO_NO_ACTIVO');
+    throw AppError.badRequest('Sólo puede cambiar el rol de un miembro activo', 'MIEMBRO_NO_ACTIVO');
   }
   if (row.rol_miembro === nuevoRol) {
     return { message: 'El rol no cambió' };
   }
   if (row.rol_miembro === 'owner' && nuevoRol !== 'owner' && (await contarOwnersActivos(orgId)) <= 1) {
     throw AppError.badRequest(
-      'No puedes quitar la titularidad al único titular. Promueve antes a otro miembro.',
+      'No puede quitar la titularidad al único titular. Promueva antes a otro miembro.',
       'ULTIMO_OWNER',
     );
   }
@@ -1474,7 +1474,7 @@ export async function adminRevocarMiembro(
 
   if (row.rol_miembro === 'owner' && (await contarOwnersActivos(orgId)) <= 1) {
     throw AppError.badRequest(
-      'No puedes revocar al único titular. Promueve antes a otro miembro como titular.',
+      'No puede revocar al único titular. Promueva antes a otro miembro como titular.',
       'ULTIMO_OWNER',
     );
   }

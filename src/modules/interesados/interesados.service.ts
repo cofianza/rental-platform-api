@@ -192,7 +192,7 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
     await notificarUsuario({
       userId,
       tipo: 'interesado.vitrina',
-      titulo: 'Nuevo interesado en tu inmueble',
+      titulo: 'Nuevo interesado en su inmueble',
       mensaje: `${input.nombre} está interesado en ${label}. WhatsApp: ${input.telefono}.${input.mensaje?.trim() ? ` Mensaje: ${input.mensaje.trim()}` : ''}`,
       link: '/interesados',
       payload: { inmueble: label, nombre: input.nombre, telefono: input.telefono, email: input.email },
@@ -286,7 +286,7 @@ export async function updateEstadoInteresado(
 
   const allowed = await resolveAllowedInmuebleIds(userId, rol);
   if (allowed && !allowed.includes(lead.inmueble_id)) {
-    throw AppError.forbidden('No tienes acceso a este interesado', 'FORBIDDEN');
+    throw AppError.forbidden('No tiene acceso a este interesado', 'FORBIDDEN');
   }
 
   const { error } = await db('inmueble_interesados')

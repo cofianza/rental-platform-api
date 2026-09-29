@@ -442,7 +442,7 @@ export async function updateTarifasIva(
     }
     if (tasaGravados !== null && CONCEPTOS_GRAVADOS.has(item.concepto) && item.tasa !== tasaGravados) {
       throw AppError.badRequest(
-        `${item.concepto === 'estudio' ? 'El estudio' : 'La prima de vinculación'} se factura con TARIFA_IVA (hoy ${tasaGravados} %), la misma tasa con la que se cobra: cámbiala en Calibración, no aquí.`,
+        `${item.concepto === 'estudio' ? 'El estudio' : 'La prima de vinculación'} se factura con TARIFA_IVA (hoy ${tasaGravados} %), la misma tasa con la que se cobra: cámbiela en Calibración, no aquí.`,
         'CONCEPTO_GRAVADO',
       );
     }
@@ -594,8 +594,8 @@ export async function crearFacturaDesdePago(
       400,
       'CLIENTE_DATOS_INCOMPLETOS',
       pagador
-        ? 'Faltan datos fiscales de quien pagó para emitir la factura. Complétalos en Configuración → Datos para contrato.'
-        : 'Faltan datos fiscales para emitir la factura. Completalos en Facturacion → Datos Fiscales.',
+        ? 'Faltan datos fiscales de quien pagó para emitir la factura. Complételos en Configuración → Datos para contrato.'
+        : 'Faltan datos fiscales para emitir la factura. Complételos en Facturacion → Datos Fiscales.',
       { faltantes },
     );
   }
@@ -618,7 +618,7 @@ export async function crearFacturaDesdePago(
   if (tasaIva === 0 && ctx.concepto === 'garantia') {
     // Queda el intento con el motivo, para que «Pendientes de facturar» lo muestre.
     const error =
-      'La prima de vinculación se factura con IVA (Adenda 1 de contratos §1.6) y TARIFA_IVA está en 0 %. Corrígela en Calibración y vuelve a facturar.';
+      'La prima de vinculación se factura con IVA (Adenda 1 de contratos §1.6) y TARIFA_IVA está en 0 %. Corríjala en Calibración y vuelva a facturar.';
     await persistFailedAttempt({
       pagoId,
       expedienteId: ctx.expediente_id,
@@ -749,7 +749,7 @@ export async function crearFacturaDesdePago(
     throw new AppError(
       502,
       'FACTUS_UNEXPECTED_RESPONSE',
-      'Factus respondió 200 pero el formato es inesperado. Revisa el log y respuesta_proveedor.',
+      'Factus respondió 200 pero el formato es inesperado. Revise el log y respuesta_proveedor.',
     );
   }
 

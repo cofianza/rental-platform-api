@@ -191,15 +191,15 @@ export async function executeTransition(
       throw AppError.conflict(
         deCofianza
           ? `El contrato no tiene el acta de entrega e inventario: la carga la inmobiliaria. Si no la va a cargar, ${
-              user.rol === 'administrador' ? 'puedes' : 'un administrador de Cofianza puede'
+              user.rol === 'administrador' ? 'puede' : 'un administrador de Cofianza puede'
             } cerrar el estudio sin acta, con motivo.`
-          : 'Carga el acta de entrega e inventario del contrato antes de cerrar el estudio.',
+          : 'Cargue el acta de entrega e inventario del contrato antes de cerrar el estudio.',
         'ACTA_ENTREGA_REQUERIDA',
       );
     }
     if (msg.includes('CONTRATO_EN_FIRMA')) {
       throw AppError.conflict(
-        'El contrato de este estudio está en firma. Cancélalo antes de cerrar el estudio.',
+        'El contrato de este estudio está en firma. Cancélelo antes de cerrar el estudio.',
         'CONTRATO_EN_FIRMA',
       );
     }
@@ -409,7 +409,7 @@ export async function cerrarSinActa(expedienteId: string, motivo: string, user: 
     throw AppError.conflict('El estudio ya está cerrado.', 'EXPEDIENTE_ESTADO_CAMBIADO');
   if (!(await faltaActaV3(expedienteId)))
     throw AppError.conflict(
-      'Este estudio no tiene un contrato esperando el acta de entrega: ciérralo con «Cambiar estado».',
+      'Este estudio no tiene un contrato esperando el acta de entrega: ciérrelo con «Cambiar estado».',
       'CIERRE_SIN_ACTA_NO_APLICA',
     );
 
@@ -426,7 +426,7 @@ export async function cerrarSinActa(expedienteId: string, motivo: string, user: 
     .select('id');
   if (error) {
     if (String(error.message ?? '').includes('CONTRATO_EN_FIRMA'))
-      throw AppError.conflict('El contrato de este estudio está en firma. Cancélalo antes de cerrar el estudio.', 'CONTRATO_EN_FIRMA');
+      throw AppError.conflict('El contrato de este estudio está en firma. Cancélelo antes de cerrar el estudio.', 'CONTRATO_EN_FIRMA');
     if (faltaColumna(error)) {
       logger.error({ expedienteId, error: error.message }, 'Cierre sin acta: falta correr la migración 20260930000002');
       throw new AppError(
@@ -436,10 +436,10 @@ export async function cerrarSinActa(expedienteId: string, motivo: string, user: 
       );
     }
     logger.error({ expedienteId, error: error.message }, 'No se pudo cerrar el estudio sin acta');
-    throw new AppError(500, 'CIERRE_SIN_ACTA_ERROR', 'No se pudo cerrar el estudio. Intenta de nuevo.');
+    throw new AppError(500, 'CIERRE_SIN_ACTA_ERROR', 'No se pudo cerrar el estudio. Intente de nuevo.');
   }
   if (!(data as unknown[] | null)?.length)
-    throw AppError.conflict('El estudio cambió de estado mientras tanto. Recarga la página.', 'EXPEDIENTE_ESTADO_CAMBIADO');
+    throw AppError.conflict('El estudio cambió de estado mientras tanto. Recargue la página.', 'EXPEDIENTE_ESTADO_CAMBIADO');
 
   // Lo que transicionar_expediente deja en el timeline, con la marca del cierre sin acta.
   const { error: tlError } = await (supabase
@@ -816,7 +816,7 @@ async function checkPermissions(
     );
     if (!allowed) {
       throw AppError.forbidden(
-        `Como ${user.rol} solo puedes cerrar estudios ya aprobados o rechazados. La transicion ${fromState} → ${toState} requiere un administrador.`,
+        `Como ${user.rol} solo puede cerrar estudios ya aprobados o rechazados. La transicion ${fromState} → ${toState} requiere un administrador.`,
         'TRANSITION_NOT_ALLOWED_FOR_ROLE',
       );
     }

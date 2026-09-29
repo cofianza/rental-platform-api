@@ -641,7 +641,7 @@ describe('reemplazar al co-arrendatario — P4', () => {
 
     await expect(invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'))).rejects.toMatchObject({
       statusCode: 409,
-      message: expect.stringContaining('cancélala para invitar a otra persona'),
+      message: expect.stringContaining('cancélela para invitar a otra persona'),
     });
   });
 
@@ -838,7 +838,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
   // con él; sin él, el contrato anterior no admite co-arrendatario (P6): se mantiene.
   it.each([
     ['con el asistente de contratos', true, 'org-1', 'cancela el contrato y genera uno nuevo desde el asistente'],
-    ['sin el asistente (propietario directo)', true, null, 'El contrato actual se mantiene sin él. Si debe entrar, escríbenos a soporte@cofianza.co'],
+    ['sin el asistente (propietario directo)', true, null, 'El contrato actual se mantiene sin él. Si debe entrar, escríbanos a soporte@cofianza.co'],
     ['sin el asistente (flag apagado)', false, 'org-1', 'El contrato actual se mantiene sin él'],
   ])('con un contrato ya generado sin él, %s: no regenera el CRC, avisa al gestor la salida que aplica', async (_, flag, inmobiliaria, salida) => {
     mockEnv.CONTRATOS_V3_ENABLED = flag as never;
@@ -861,7 +861,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
         expect.objectContaining({ userId: PROPIETARIO_ID, mensaje: expect.stringContaining(salida) }),
       );
       const { html } = (mockResendSend.mock.calls[0] as unknown as [{ html: string }])[0];
-      expect(html).toContain('no haces parte');
+      expect(html).toContain('no hace parte');
       expect(html).not.toContain('Buenas noticias');
     } finally {
       delete (mockEnv as Record<string, unknown>).CONTRATOS_V3_ENABLED;
@@ -1241,7 +1241,7 @@ describe('construirCorreoCoarrendatario', () => {
       coarrendatarioResultado: 'aprobado',
       decisionExpediente: 'en_revision',
     });
-    expect(subject).toContain('Tu evaluación ya está lista');
+    expect(subject).toContain('Su evaluación ya está lista');
     expect(html).toContain('analista de Cofianza');
     // El score solo va con una decision final.
     expect(html).not.toContain('720');
@@ -1254,9 +1254,9 @@ describe('construirCorreoCoarrendatario', () => {
       decisionExpediente: 'aprobado',
     });
     expect(subject).toContain('Se aprobó el arrendamiento');
-    expect(subject).not.toContain('Tu evaluación se aprobó');
+    expect(subject).not.toContain('Su evaluación se aprobó');
     expect(html).toContain('aprobó');
-    expect(html).not.toContain('Tu evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong>');
+    expect(html).not.toContain('Su evaluación crediticia quedó <strong style="color: #047857;">aprobada</strong>');
   });
 
   it('el nombre y el titular no inyectan HTML en el cuerpo; el asunto va en texto plano', () => {
@@ -1303,7 +1303,7 @@ describe('construirCorreoCoarrendatario', () => {
       decisionExpediente: 'aprobado',
     });
     expect(subject).not.toMatch(/aprob/i);
-    expect(html).toContain('no podemos respaldarte como co-arrendatario');
+    expect(html).toContain('no podemos respaldarlo como co-arrendatario');
     expect(html).not.toContain('720');
     expect(html).toMatch(APELACION);
   });
@@ -1311,7 +1311,7 @@ describe('construirCorreoCoarrendatario', () => {
   it('cierre sin decidir: no es una decisión sobre él (sin apelación); con su evaluación aprobada ve su score', () => {
     const { subject, html } = construirCorreoCoarrendatario({ ...base, coarrendatarioResultado: 'aprobado', decisionExpediente: 'cerrado' });
     expect(subject).toContain('Se cerró el estudio');
-    expect(html).toContain('No es una decisión sobre ti');
+    expect(html).toContain('No es una decisión sobre usted');
     expect(html).toContain('720');
     expect(html).not.toMatch(APELACION);
   });
@@ -1330,7 +1330,7 @@ describe('construirCorreoCoarrendatario', () => {
       contratoSinEl: true,
     });
     expect(subject).not.toMatch(/aprob/i);
-    expect(html).toContain('no haces parte');
+    expect(html).toContain('no hace parte');
     expect(html).not.toContain('720');
     expect(html).not.toMatch(APELACION);
   });

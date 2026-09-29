@@ -395,7 +395,7 @@ describe('contratos V3', () => {
     expect(mockSendFirmaEmail.mock.calls.map((c) => c[0])).toEqual(['ana@correo.co', 'beto@correo.co']);
     expect(mockSendFirmaEmail).toHaveBeenCalledWith(
       'beto@correo.co', 'Beto Ruiz', expect.stringContaining('/verificar-identidad/'), 72, expect.anything(),
-      expect.objectContaining({ intro: expect.stringContaining('cuando sea tu turno de firmar') }),
+      expect.objectContaining({ intro: expect.stringContaining('cuando sea su turno de firmar') }),
     );
     expect(mockDerivar).not.toHaveBeenCalled();
     expect(mockUpload).not.toHaveBeenCalled();

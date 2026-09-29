@@ -120,7 +120,7 @@ describe('barrerReservasV3', () => {
     expect(mensaje).toContain('del estudio N.° 2026-0100');
     expect(mensaje).toContain('21/09/2026');
     expect(mensaje).toContain('el inmueble quedó libre');
-    expect(mensaje).toContain('el asistente trae lo que ya llenaste');
+    expect(mensaje).toContain('el asistente trae lo que ya llenó');
     // El inmueble se lee con la pista de la FK (dos relaciones expedientes↔inmuebles).
     expect(String(ops.find((o) => o.table === 'expedientes' && o.method === 'select')?.args[0])).toContain(
       'inmuebles!expedientes_inmueble_id_fkey(estado, reservado_por_expediente_id)',

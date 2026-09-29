@@ -59,7 +59,7 @@ const esInterno = (rol: string) => rol === 'administrador' || rol === 'operador_
 // P27: en Fase 3 el caso es de Cofianza (CUARTA, Parágrafos Quinto y Sexto).
 const casoDeCofianza = () =>
   AppError.forbidden(
-    'El caso ya lo gestiona Cofianza. Si el inquilino te pagó, anótalo en el historial del caso.',
+    'El caso ya lo gestiona Cofianza. Si el inquilino le pagó, anótelo en el historial del caso.',
     'MORA_EN_FASE_3',
   );
 
@@ -94,12 +94,12 @@ function avisoWhatsApp(r: ResultadoCobro): string {
     return `El WhatsApp al inquilino sale el ${fechaHoraBogota(r.programado_para!)}: fuera del horario de cobranza o sin ${DIAS_ENTRE_COBROS_WHATSAPP} días desde su último WhatsApp de cobro (Ley 2300 de 2023).`;
   }
   if (r.estado === 'retenido') {
-    return 'El WhatsApp al inquilino quedó en espera por el horario de cobranza (Ley 2300 de 2023), pero el envío automático está apagado: no sale hasta que lo enciendan. Si es urgente, avísale por otro medio dentro del horario.';
+    return 'El WhatsApp al inquilino quedó en espera por el horario de cobranza (Ley 2300 de 2023), pero el envío automático está apagado: no sale hasta que lo enciendan. Si es urgente, avísele por otro medio dentro del horario.';
   }
   if (r.estado === 'aceptado') return 'Se envió el WhatsApp al inquilino.';
   if (r.estado === 'sin_telefono') return 'No se pudo avisar por WhatsApp: el inquilino no tiene teléfono registrado.';
   if (r.estado === 'mock') return 'WhatsApp en modo de prueba: no se envió al inquilino.';
-  return 'El WhatsApp al inquilino falló; avísale por otro medio.';
+  return 'El WhatsApp al inquilino falló; avísele por otro medio.';
 }
 
 /** El WhatsApp de cobro salió de verdad (así queda marcado en el historial). */
@@ -190,7 +190,7 @@ async function enviarCobro(m: MoraCobro): Promise<EstadoEnvioWhatsApp> {
   let template: WhatsappTemplateKey = m.estado === 'fase_1' ? 'MORA_FASE_1' : m.estado === 'fase_2' ? 'MORA_FASE_2' : 'MORA_FASE_3';
   const variables = [
     m.inquilino_nombre.split(' ')[0] || 'Hola',
-    m.inmueble_direccion ?? 'tu inmueble',
+    m.inmueble_direccion ?? 'la dirección registrada',
     formatCOP(m.monto_mora),
     m.estado === 'fase_1'
       // La fecha llega sin hora (medianoche UTC): formatearla en UTC evita que
@@ -525,7 +525,7 @@ export async function obtenerMora(id: string, userId: string, rol: string) {
 
 function moraDuplicada(ticket?: string) {
   return AppError.conflict(
-    `Ya hay una mora activa para este canon${ticket ? ` (${ticket})` : ''}. Gestiónala desde la lista.`,
+    `Ya hay una mora activa para este canon${ticket ? ` (${ticket})` : ''}. Gestiónela desde la lista.`,
     'MORA_DUPLICADA',
   );
 }
@@ -707,7 +707,7 @@ export async function getMoraById(id: string) {
 // ============================================================
 
 const moraYaCambio = () =>
-  AppError.conflict('La mora ya cambió de fase. Revisa el detalle actualizado.', 'MORA_ESTADO_CAMBIO');
+  AppError.conflict('La mora ya cambió de fase. Revise el detalle actualizado.', 'MORA_ESTADO_CAMBIO');
 
 export async function escalarMora(id: string, input: EscalarMoraInput, userId: string, rol: string) {
   const mora = await assertMoraAccess(id, userId, rol);
@@ -723,7 +723,7 @@ export async function escalarMora(id: string, input: EscalarMoraInput, userId: s
     }
     if (mora.estado === 'fase_1' && diasDesde(mora.reportado_at) < DIAS_FASE_2) {
       throw AppError.badRequest(
-        `Podrás escalar a Fase 2 a los ${DIAS_FASE_2} días del reporte.`,
+        `Podrá escalar a Fase 2 a los ${DIAS_FASE_2} días del reporte.`,
         'MORA_FASE_2_ANTICIPADA',
       );
     }
@@ -943,7 +943,7 @@ export async function agregarMensaje(
       tipo: input.reporta_pago ? 'mora.pago_reportado' : 'mora.nota_dueno',
       titulo: `${input.reporta_pago ? 'Pago reportado por el dueño' : 'Nota del dueño'} — ${mora.ticket_numero}`,
       mensaje: `${mora.inquilino_nombre} · ${mora.inmueble_direccion ?? 'inmueble'}: «${input.mensaje}»${
-        pausado ? ' El WhatsApp de Fase 3 quedó en pausa hasta que lo revises.' : ''
+        pausado ? ' El WhatsApp de Fase 3 quedó en pausa hasta que lo revise.' : ''
       }`,
     });
   }

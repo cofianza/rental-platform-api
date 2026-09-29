@@ -129,7 +129,7 @@ router.post(
     params: expedienteIdParamsSchema,
     body: z.object({
       canon_autorizado_cop: z.coerce.number().int().positive().max(1_000_000_000),
-      motivo: z.string().trim().min(10, 'Escribe el motivo de la excepción (mínimo 10 caracteres).').max(2000),
+      motivo: z.string().trim().min(10, 'Escriba el motivo de la excepción (mínimo 10 caracteres).').max(2000),
     }),
   }),
   controller.autorizarExcepcion,

@@ -321,7 +321,7 @@ export async function notificarCitaCreada(
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.confirmada',
       titulo: 'Visita confirmada',
-      mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.${notaSuffix}`,
+      mensaje: `Su visita a ${ctx.inmuebleDireccion} quedó confirmada.${notaSuffix}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaPropuesta },
     });
@@ -352,8 +352,8 @@ export async function notificarCitaCreada(
       tipo: esReprogramacion ? 'cita.reprogramada' : 'cita.solicitada',
       titulo: esReprogramacion ? 'Visita reprogramada' : 'Nueva solicitud de visita',
       mensaje: esReprogramacion
-        ? `${ctx.solicitanteNombre || 'El solicitante'} propuso una nueva fecha para visitar ${ctx.inmuebleDireccion}. Confírmala.`
-        : `${ctx.solicitanteNombre || 'Un solicitante'} solicitó visitar ${ctx.inmuebleDireccion}. Confirma la fecha.`,
+        ? `${ctx.solicitanteNombre || 'El solicitante'} propuso una nueva fecha para visitar ${ctx.inmuebleDireccion}. Confírmela.`
+        : `${ctx.solicitanteNombre || 'Un solicitante'} solicitó visitar ${ctx.inmuebleDireccion}. Confirme la fecha.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_propuesta: fechaPropuesta },
     });
@@ -374,8 +374,8 @@ export async function notificarCitaCreada(
       tipo: esReprogramacion ? 'cita.reprogramada' : 'cita.solicitada',
       titulo: esReprogramacion ? 'Visita reprogramada' : 'Nueva solicitud de visita',
       mensaje: esReprogramacion
-        ? `${ctx.solicitanteNombre || 'El solicitante'} propuso una nueva fecha para visitar ${ctx.inmuebleDireccion}. Confírmala.`
-        : `${ctx.solicitanteNombre || 'Un solicitante'} solicitó visitar ${ctx.inmuebleDireccion}. Confirma la fecha.`,
+        ? `${ctx.solicitanteNombre || 'El solicitante'} propuso una nueva fecha para visitar ${ctx.inmuebleDireccion}. Confírmela.`
+        : `${ctx.solicitanteNombre || 'Un solicitante'} solicitó visitar ${ctx.inmuebleDireccion}. Confirme la fecha.`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_propuesta: fechaPropuesta },
       whatsapp: {
@@ -448,7 +448,7 @@ async function notificarCitaConfirmada(
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.reprogramada',
       titulo: 'Visita reprogramada',
-      mensaje: `El propietario ajustó la fecha de tu visita a ${ctx.inmuebleDireccion}. Revisa el nuevo horario.${notaSuffix}`,
+      mensaje: `El propietario ajustó la fecha de su visita a ${ctx.inmuebleDireccion}. Revise el nuevo horario.${notaSuffix}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
     });
@@ -478,7 +478,7 @@ async function notificarCitaConfirmada(
     userId: ctx.solicitanteUserId ?? '',
     tipo: 'cita.confirmada',
     titulo: 'Visita confirmada',
-    mensaje: `Tu visita a ${ctx.inmuebleDireccion} quedó confirmada.${notaSuffix}`,
+    mensaje: `Su visita a ${ctx.inmuebleDireccion} quedó confirmada.${notaSuffix}`,
     link: linkExpediente,
     payload: { expediente_id: ctx.expedienteId, fecha_confirmada: fechaConfirmada },
   });
@@ -543,7 +543,7 @@ export async function notificarCitaCancelada(
       userId: ctx.solicitanteUserId ?? '',
       tipo: 'cita.cancelada',
       titulo: 'Visita cancelada',
-      mensaje: `El propietario canceló tu visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
+      mensaje: `El propietario canceló su visita a ${ctx.inmuebleDireccion}. Motivo: ${motivo}`,
       link: linkExpediente,
       payload: { expediente_id: ctx.expedienteId, motivo },
     });
@@ -636,7 +636,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
       'Intento de crear cita con una activa ya existente',
     );
     throw AppError.conflict(
-      `Ya existe una cita ${existentes[0].estado} para este estudio. Cancélala antes de agendar otra.`,
+      `Ya existe una cita ${existentes[0].estado} para este estudio. Cancélela antes de agendar otra.`,
       'CITA_ACTIVA_EXISTE',
     );
   }
@@ -663,7 +663,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
         'Intento de agendar slot no disponible',
       );
       throw AppError.badRequest(
-        'El slot seleccionado ya no está disponible. Refresca y elige otro horario.',
+        'El slot seleccionado ya no está disponible. Refresque y elija otro horario.',
         'SLOT_NO_DISPONIBLE',
       );
     }
@@ -694,7 +694,7 @@ export async function createCita(input: CreateCitaInput, userId: string, userRol
   if (error) {
     logger.error({ error: error.message }, 'Error al crear cita');
     if (error.code === '23503') {
-      throw AppError.badRequest('Referencia inválida. Verifica los datos enviados.', 'FK_VIOLATION');
+      throw AppError.badRequest('Referencia inválida. Verifique los datos enviados.', 'FK_VIOLATION');
     }
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al crear la cita');
   }
@@ -755,7 +755,7 @@ export async function getCitasByExpediente(query: ListCitasQuery, userId: string
       { userId, userRol, expedienteId: query.expediente_id },
       'Intento de listar citas de estudio ajeno',
     );
-    throw AppError.forbidden('No tienes permisos sobre este estudio', 'CITA_FORBIDDEN');
+    throw AppError.forbidden('No tiene permisos sobre este estudio', 'CITA_FORBIDDEN');
   }
 
   let qb = db('citas')
@@ -936,7 +936,7 @@ export async function reprogramarCita(
     );
     if (!disponible) {
       throw AppError.badRequest(
-        'El horario seleccionado no esta dentro de la disponibilidad del propietario. Refresca y elige otro.',
+        'El horario seleccionado no esta dentro de la disponibilidad del propietario. Refresque y elija otro.',
         'SLOT_NO_DISPONIBLE',
       );
     }

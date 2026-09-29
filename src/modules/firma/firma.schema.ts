@@ -32,7 +32,7 @@ export const verificacionIdentidadParamsSchema = z.object({
 
 export const revisarIdentidadSchema = z.object({
   resultado: z.enum(['confirmada', 'suplantacion']),
-  nota: z.string().trim().min(10, 'Escribe cómo verificaste la identidad (mínimo 10 caracteres)').max(1000),
+  nota: z.string().trim().min(10, 'Escriba cómo verificó la identidad (mínimo 10 caracteres)').max(1000),
 });
 
 export const reenviarFirmaSchema = z.object({
