@@ -13,6 +13,10 @@ vi.mock('@/lib/supabase', () => ({ supabase: { from: vi.fn(() => ({ update: mock
 vi.mock('@/lib/logger', () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 import { registrarResultadoSchema } from '../estudios.schema';
 import { transitionBodySchema } from '@/modules/expedientes/expediente-workflow.schema';
+import { aprobarCondicionadoBody } from '@/modules/expedientes/expediente-workflow.schema';
+import { OPCIONES_V7, OPCIONES_V9 } from '../motor/scorecard';
+
+const EVALUACION = { estabilidad_laboral: Object.keys(OPCIONES_V7)[0], arrendamiento_previo: Object.keys(OPCIONES_V9)[0] };
 
 describe('catálogo', () => {
   it('lo visible no lleva umbrales ni perfiles (secreto industrial, decisión del usuario)', () => {
@@ -50,7 +54,16 @@ describe('schemas', () => {
     const d = r.data as Record<string, string>;
     expect(d.motivo_rechazo).toBe('El historial crediticio no cumple la Política');
     expect(d.fundamento).toMatch(/^R1 · Score externo/);
-    expect(d.observaciones).toBe(d.fundamento);
+    // B20: las observaciones las ve la inmobiliaria: nunca el texto interno.
+    expect(d.observaciones).toBe('El historial crediticio no cumple la Política');
+  });
+
+  it('B21: condicionar también deja el fundamento interno; las observaciones no lo llevan', () => {
+    const r = registrarResultadoSchema.safeParse({ resultado: 'condicionado', motivos: ['C1'] });
+    const d = r.data as Record<string, string>;
+    expect(d.fundamento).toMatch(/^C1 · Requiere coarrendatario con puntaje ≥ 80/);
+    expect(d.observaciones).toBe('Requiere coarrendatario');
+    expect(d.observaciones).not.toMatch(/≥|§/);
   });
 
   it('condicionar: las condiciones que ve la inmobiliaria llevan el detalle', () => {
@@ -101,5 +114,45 @@ describe('guardarCodigosMotivo', () => {
     await guardarCodigosMotivo('eventos_timeline', null, ['A1']);
     await guardarCodigosMotivo('eventos_timeline', 'ev-1', []);
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('M4 y M6: fundamento interno completo y sin 400 por largo', () => {
+  const detalleMax = 'd'.repeat(1000);
+  const todos = (t: keyof typeof MOTIVOS_DECISION) => Object.keys(MOTIVOS_DECISION[t]);
+
+  it('transición: todos los motivos + detalle de 1000 + un comentario viejo de 1000 caben', () => {
+    for (const nuevo_estado of ['rechazado', 'aprobado'] as const) {
+      const r = transitionBodySchema.safeParse({
+        nuevo_estado,
+        motivos: todos(nuevo_estado === 'rechazado' ? 'rechazar' : 'aprobar'),
+        motivo_detalle: detalleMax,
+        comentario: 'c'.repeat(1000),
+      });
+      expect(r.success, JSON.stringify(r.error?.issues)).toBe(true);
+    }
+  });
+
+  it('M4: un comentario que quedó de otra transición no reemplaza los motivos: va al final', () => {
+    const r = transitionBodySchema.safeParse({ nuevo_estado: 'rechazado', motivos: ['R3'], comentario: 'Texto de la cancelación' });
+    const d = r.data as Record<string, string>;
+    expect(d.comentario.split('\n')).toEqual([expect.stringMatching(/^R3 · Endeudamiento/), 'Texto adicional: Texto de la cancelación']);
+  });
+
+  it('registrar resultado: todos los motivos + detalle al máximo, en rechazo y en condicionado', () => {
+    expect(registrarResultadoSchema.safeParse({ resultado: 'rechazado', motivos: todos('rechazar'), motivo_detalle: detalleMax }).success).toBe(true);
+    expect(registrarResultadoSchema.safeParse({ resultado: 'condicionado', motivos: todos('condicionar'), motivo_detalle: detalleMax }).success).toBe(true);
+  });
+
+  it('aprobar-condicionado: todos los motivos + detalle al máximo + fundamento escrito', () => {
+    const r = aprobarCondicionadoBody.safeParse({
+      motivos: todos('aprobar'),
+      motivo_detalle: detalleMax,
+      fundamento: 'f'.repeat(1000),
+      documentos_consultados: [],
+      evaluacion: EVALUACION,
+    });
+    expect(r.success, JSON.stringify(r.error?.issues)).toBe(true);
+    expect((r.data as { fundamento: string }).fundamento).toMatch(/^A1 · /);
   });
 });
