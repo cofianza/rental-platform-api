@@ -74,15 +74,19 @@ interface LoteRow {
 // Public: list active paquetes
 // ============================================================
 
-export async function listPaquetesActivos(): Promise<PaqueteRow[]> {
-  const { data, error } = await (supabase
-    .from('paquetes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
-    .select('*')
-    .eq('activo', true)
-    .order('orden', { ascending: true });
+export async function listPaquetesActivos(): Promise<Array<PaqueteRow & { vigencia_meses: number }>> {
+  const [{ data, error }, { VIGENCIA_PAQUETE_MESES }] = await Promise.all([
+    (supabase
+      .from('paquetes_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+      .select('*')
+      .eq('activo', true)
+      .order('orden', { ascending: true }),
+    getCalibracion(),
+  ]);
 
   if (error) throw fromSupabaseError(error);
-  return (data || []) as PaqueteRow[];
+  // La vigencia que tendrá el paquete al comprarlo (Adenda de precios §3.1 / §9.6).
+  return ((data || []) as PaqueteRow[]).map((p) => ({ ...p, vigencia_meses: VIGENCIA_PAQUETE_MESES }));
 }
 
 // ============================================================
