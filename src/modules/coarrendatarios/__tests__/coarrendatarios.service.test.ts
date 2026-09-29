@@ -72,6 +72,8 @@ const {
   };
 });
 
+// Adenda de precios §7: el tope se prueba en excepcion-tope.service.test.ts.
+vi.mock('@/modules/estudios/excepcion-tope.service', () => ({ retenerAprobadoSobreTope: vi.fn(async (_id: string, f: unknown) => f) }));
 vi.mock('@/lib/supabase', () => ({ supabase: { from: (t: string) => mockFrom(t) } }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/config', () => ({ env: mockEnv }));
@@ -270,9 +272,10 @@ describe('tope de canon — P36', () => {
   });
 
   // El guard real, no solo la llamada: canon 3.500.000 sobre un tope de 3.000.000.
+  // Adenda de precios §7.1: sobre el tope ya no se bloquea antes del cobro (pasa al analista).
   it.each([
     [true, 'invita (solo advierte)'],
-    [false, 'bloquea con CANON_EXCEDE_TOPE'],
+    [false, 'invita (Adenda de precios §7.1: ya no bloquea)'],
   ])('con el tope real: estudio cobrado = %s → %s', async (cobrado) => {
     const real = await vi.importActual<typeof import('@/modules/estudios/tope-canon.guard')>('@/modules/estudios/tope-canon.guard');
     vi.mocked(assertCanonDentroDelTope).mockImplementationOnce(real.assertCanonDentroDelTope);
@@ -285,9 +288,8 @@ describe('tope de canon — P36', () => {
 
     const r = invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', invitacion('7654321'));
 
-    if (cobrado) await expect(r).resolves.toMatchObject({ id: COA_ID });
-    else await expect(r).rejects.toMatchObject({ statusCode: 400, errorCode: 'CANON_EXCEDE_TOPE' });
-    expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(cobrado);
+    await expect(r).resolves.toMatchObject({ id: COA_ID });
+    expect(ops.some((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert')).toBe(true);
   });
 
   it('aceptar: con el estudio cobrado solo advierte', async () => {

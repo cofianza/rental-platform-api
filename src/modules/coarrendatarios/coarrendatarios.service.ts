@@ -29,6 +29,7 @@ import { apelacionHtml, sendResponsableAsignadoEmail } from '@/modules/orchestra
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
 import { assertCanonDentroDelTope } from '@/modules/estudios/tope-canon.guard';
+import { retenerAprobadoSobreTope } from '@/modules/estudios/excepcion-tope.service';
 import { estudioYaCobrado, ESTADO_ESPERANDO_PAGO } from '@/modules/estudios/pago.guard';
 // Flujo §10/§11: el CRC se produce con el resultado — tambien cuando el
 // resultado lo pone la ponderacion con coarrendatario.
@@ -1515,7 +1516,13 @@ export async function onCoarrendatarioEstudioCompletado(
       }
     }
   }
-  const resultadoCombinado = ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura, scorecard });
+  const ponderadoCrudo = ponderarConCoarrendatario({ titular: titular.resultado, coaConReglaDura, scorecard });
+  // Adenda de precios §7.1: sobre el tope no se aprueba solo; lo decide el analista y lo aprueba la Gerencia General.
+  const resultadoCombinado =
+    ponderadoCrudo === 'aprobado' &&
+    (await retenerAprobadoSobreTope(est.expediente_id, { resultado: 'aprobado', observaciones: null })).resultado !== 'aprobado'
+      ? 'revision_manual'
+      : ponderadoCrudo;
 
   // 4.5. Revision manual: el expediente SE QUEDA en 'condicionado' y lo decide
   //      un analista de Cofianza con los dos resultados. Se registra en el

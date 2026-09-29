@@ -67,6 +67,17 @@ describe('assertCanonContratable', () => {
     await expect(assertCanonContratable('e1', 3_000_000, 'vivienda')).resolves.toBeUndefined();
   });
 
+  it('Adenda de precios §7.4: con excepción de la Gerencia, el canon autorizado es el techo', async () => {
+    // El mock devuelve la misma fila para estudios y expedientes.
+    resultado.data = { canon_evaluado: 3_500_000, excepcion_tope_canon_cop: '3500000.00' };
+    await expect(assertCanonContratable('e1', 3_500_000, 'vivienda')).resolves.toBeUndefined();
+    mockEscalar.mockResolvedValueOnce(true);
+    await expect(assertCanonContratable('e1', 3_500_001, 'vivienda')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'CANON_EXCEDE_TOPE',
+    });
+  });
+
   it('si el aviso a la Gerencia no quedó registrado, el mensaje no dice que se envió', async () => {
     resultado.data = { canon_evaluado: 2_800_000 };
     mockEscalar.mockResolvedValueOnce(false);

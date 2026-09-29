@@ -89,6 +89,8 @@ export const AUDIT_ACTIONS = {
   CALIBRACION_PARAMETRO_CAMBIADO: 'calibracion_parametro_cambiado',
   // Tarifa negociada caso por caso (Adenda 1 §5).
   ESTUDIO_TARIFA_OVERRIDE: 'estudio_tarifa_override',
+  // Excepción de tope de canon que autoriza la Gerencia General (Adenda de precios §7.4).
+  EXPEDIENTE_EXCEPCION_TOPE: 'expediente_excepcion_tope',
   // Plantillas de contrato
   PLANTILLA_CREATED: 'plantilla_created',
   PLANTILLA_UPDATED: 'plantilla_updated',

@@ -8,6 +8,12 @@
 // estudio. Hasta 3.000.000". La seccion 12 lo repite como caso borde: "Canon
 // superior al tope. El flujo se detiene en el Paso 1, antes de cualquier cobro".
 //
+// DEROGADO en parte por la Adenda de precios v1.0 §7.1 (prevalece): el canon
+// sobre el tope ya NO detiene el estudio ni el cobro; pasa al analista y la
+// aprobacion la da solo la Gerencia General (excepcion-tope.service.ts). Lo
+// que sigue deteniendo el estudio antes del cobro es motivoNoAfianzable
+// (comercial, mixto, persona juridica o NIT).
+//
 // Gerencia (Direccion de Riesgo) fijo el valor en 3.000.000 el 2026-09-03,
 // resolviendo la contradiccion con la Politica de Evaluacion V4.1 §6, que decia
 // 2.000.000. Manda el Flujo §4.4.
@@ -255,7 +261,7 @@ export async function leerCanonDelInmueble(args: {
  * Canon + uso del inmueble (el uso decide que tope aplica, ver
  * inmuebles/destinacion.ts). Mismo fail-closed que leerCanonDelInmueble.
  */
-async function leerInmuebleDelTope(args: {
+export async function leerInmuebleDelTope(args: {
   expedienteId?: string | null;
   inmuebleId?: string | null;
 }): Promise<{ valor_arriendo?: number | string | null; uso?: string | null } | undefined> {
@@ -407,6 +413,10 @@ export async function assertCanonDentroDelTope(
   const veredicto = evaluarTopeCanon({ canonCop: inm?.valor_arriendo, topeCop });
 
   if (!veredicto.ok) {
+    // Adenda de precios v1.0 §7.1 (prevalece sobre el Flujo §4.4): por encima
+    // del tope el estudio NO se detiene antes del cobro; pasa al analista y
+    // solo la Gerencia General lo aprueba (excepcion-tope.service.ts). Aquí
+    // solo queda en el log.
     logger.warn(
       {
         origen: args.origen,
@@ -414,25 +424,10 @@ export async function assertCanonDentroDelTope(
         inmuebleId: args.inmuebleId,
         canonCop: veredicto.canonCop,
         topeCop: veredicto.topeCop,
-        soloAdvertir: args.soloAdvertir === true,
+        clave,
       },
-      args.soloAdvertir
-        ? 'Tope 4.4: el canon supera el tope, pero el estudio YA fue cobrado — se deja continuar (grandfathering)'
-        : 'Tope 4.4: estudio bloqueado — el canon del inmueble supera el maximo afianzable sin coafianzamiento',
+      'Tope: el canon supera el tope — el estudio sigue y pasará a revisión (Adenda de precios §7.1)',
     );
-    if (!args.soloAdvertir) {
-      // Adenda 1 contratos §2.4: bloquear y escalar a la Gerencia General, una vez por estudio.
-      // Sin estudio todavía (se crea desde el inmueble) no hay caso que escalar.
-      const escalado = args.expedienteId
-        ? await (await import('@/modules/contratos/tope-coafianzamiento')).escalarTopeCanon(
-            args.expedienteId,
-            veredicto.canonCop,
-            veredicto.topeCop,
-            'estudio',
-          )
-        : false;
-      throw errorTopeExcedido(veredicto, clave, escalado);
-    }
     return { canonCop: veredicto.canonCop };
   }
 
