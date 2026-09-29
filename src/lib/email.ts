@@ -164,6 +164,63 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
 </html>`;
 }
 
+/**
+ * Enlace para entrar sin contraseña (H44). Va a un tercero: usted, formal. El
+ * enlace no se registra en los logs (es una credencial).
+ */
+export async function sendEnlaceMagicoEmail(to: string, url: string): Promise<void> {
+  const { whatsapp, email } = await soporte();
+  try {
+    await resend.emails.send({
+      from: FROM_EMAIL,
+      to,
+      subject: 'Su enlace para entrar a Cofianza',
+      html: `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Su enlace para entrar</title></head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%;">
+        <tr><td align="center" style="padding-bottom: 32px;"><span style="font-size: 20px; font-weight: 600; color: #0f766e;">Cofianza</span></td></tr>
+        <tr><td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+          <h1 style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: #111827;">Entre a su estudio</h1>
+          <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
+            Recibimos una solicitud para entrar a Cofianza con este correo. Para continuar con su estudio de arrendamiento, toque el botón y luego «Entrar». No necesita contraseña.
+          </p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;"><tr><td align="center">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+              <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                <a href="${url}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">Entrar a Cofianza</a>
+              </td>
+            </tr></table>
+          </td></tr></table>
+          <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
+            El enlace vence en <strong>1 hora</strong> y sirve una sola vez. Si usted no lo pidió, ignore este correo: nadie puede entrar sin abrirlo.
+          </p>
+          <p style="margin: 0; font-size: 14px; line-height: 1.5; color: #6b7280;">
+            ¿Necesita ayuda? Escríbanos por WhatsApp al ${whatsapp} o a ${email}.
+          </p>
+          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
+          <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">Si el botón no funciona, copie y pegue este enlace en su navegador:</p>
+          <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">${url}</p>
+        </td></tr>
+        <tr><td align="center" style="padding-top: 32px;">
+          <p style="margin: 0; font-size: 12px; color: #9ca3af;">Este es un correo automático, por favor no lo responda.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`,
+    });
+    logger.info({ to }, 'Email de enlace mágico enviado');
+  } catch (error) {
+    logger.error({ to, error: (error as Error)?.message }, 'Error al enviar email de enlace mágico');
+    throw error;
+  }
+}
+
 export async function sendVerificationEmail(to: string, nombre: string, verifyUrl: string): Promise<void> {
   try {
     await resend.emails.send({

@@ -1,9 +1,11 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '@/lib/response';
 import { AppError } from '@/lib/errors';
+import { logger } from '@/lib/logger';
 import { getPermissionsForRole, INTERNAL_ROLES, type InternalRole } from '@/config/permissions';
 import * as authService from './auth.service';
-import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, ResetTokenParams, UpdateMyProfileInput } from './auth.schema';
+import * as enlaceMagico from './enlace-magico.service';
+import type { EnlaceMagicoInput, VerificarEnlaceMagicoInput, LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, ResetTokenParams, UpdateMyProfileInput } from './auth.schema';
 
 export async function login(req: Request, res: Response) {
   const result = await authService.loginWithEmail(req.body as LoginInput, req.ip);
@@ -66,4 +68,18 @@ export async function permissions(req: Request, res: Response) {
 
   const rolePermissions = getPermissionsForRole(userRole);
   sendSuccess(res, { rol: userRole, permissions: rolePermissions });
+}
+
+export async function solicitarEnlaceMagico(req: Request, res: Response) {
+  // Se responde antes de trabajar: el tiempo de respuesta tampoco dice si el
+  // correo tiene invitación o cuenta.
+  sendSuccess(res, { message: enlaceMagico.MENSAJE_ENLACE_GENERICO });
+  enlaceMagico
+    .solicitarEnlaceMagico(req.body as EnlaceMagicoInput, req.ip, req.get('user-agent') ?? '')
+    .catch((err: unknown) => logger.error({ err }, 'Enlace mágico: error inesperado'));
+}
+
+export async function verificarEnlaceMagico(req: Request, res: Response) {
+  const result = await enlaceMagico.verificarEnlaceMagico(req.body as VerificarEnlaceMagicoInput, req.ip);
+  sendSuccess(res, result);
 }
