@@ -9,6 +9,7 @@ import { resolveRolMiembro } from '@/lib/tenantScope';
 import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { invalidateAuthCache, cerrarSesionesDe, primeAuthCache } from '@/middleware/auth';
 import { getPermissionsForRole } from '@/config/permissions';
+import { existeOtraCuentaConDocumento } from '@/modules/solicitantes/solicitantes.service';
 import type { UserRole } from '@/types/auth';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
 
@@ -335,6 +336,18 @@ export async function updateMyProfile(userId: string, input: UpdateMyProfileInpu
             'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
           );
         }
+      }
+    }
+    // H43: el registro ya no pide el documento; la regla de "una cuenta por
+    // documento" del registro corre aquí cuando se escribe después.
+    const numDoc = (wantsNumDoc ?? sol?.numero_documento ?? '').trim();
+    if (docCambia && numDoc) {
+      const tipoDoc = wantsTipoDoc ?? sol?.tipo_documento ?? 'cc';
+      if (await existeOtraCuentaConDocumento(tipoDoc, numDoc, { creado_por: userId })) {
+        throw AppError.conflict(
+          'Ya existe otra cuenta de solicitante con este documento. Si es tuya, inicia sesión con esa cuenta.',
+          'DOCUMENT_ALREADY_EXISTS',
+        );
       }
     }
   }

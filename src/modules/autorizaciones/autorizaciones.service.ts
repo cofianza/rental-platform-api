@@ -29,6 +29,7 @@ import {
 } from './biometria';
 import type { ResumenBiometria } from './biometria';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
+import { existeOtraCuentaConDocumento, MSG_DOC_DE_OTRA_CUENTA_GESTOR } from '@/modules/solicitantes/solicitantes.service';
 
 // ============================================================
 // Constants
@@ -76,6 +77,8 @@ interface ExpedienteInfo {
     telefono: string | null;
     tipo_documento: string;
     numero_documento: string;
+    creado_por?: string | null;
+    inmobiliaria_id?: string | null;
   };
   inmuebles: {
     id: string;
@@ -306,7 +309,7 @@ export async function enviarEnlaceAutorizacion(
   // 1. Get expediente with solicitante + inmueble
   const { data: expediente, error: expError } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento), inmuebles!expedientes_inmueble_id_fkey(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento, creado_por, inmobiliaria_id), inmuebles!expedientes_inmueble_id_fkey(id, direccion, ciudad, barrio, propietario_id, inmobiliaria_id)')
     .eq('id', expedienteId)
     .single();
 
@@ -375,6 +378,15 @@ export async function enviarEnlaceAutorizacion(
   const cambiaNumero = !!numeroNuevo && numeroNuevo !== (exp.solicitantes?.numero_documento ?? '');
   const cambiaTipo = !!tipoNuevo && tipoNuevo !== (exp.solicitantes?.tipo_documento ?? '');
   if ((cambiaNumero || cambiaTipo) && exp.solicitante_id && exp.solicitantes) {
+    // H43: si la ficha es la de una cuenta, la regla del registro (una cuenta
+    // por documento). Las fichas de agencia no aplican.
+    const numFinal = numeroNuevo || exp.solicitantes.numero_documento;
+    if (
+      numFinal &&
+      (await existeOtraCuentaConDocumento(tipoNuevo || exp.solicitantes.tipo_documento || 'cc', numFinal, exp.solicitantes))
+    ) {
+      throw AppError.conflict(MSG_DOC_DE_OTRA_CUENTA_GESTOR, 'DOCUMENT_ALREADY_EXISTS');
+    }
     const { error: docError } = await (supabase
       .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
       .update({

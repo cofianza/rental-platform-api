@@ -11,6 +11,7 @@ import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { enviarTemplate } from '../whatsapp';
 import { resolveContactoDueno, resolvePerfilCanonicoDeInmueble } from '@/lib/tenantScope';
 import type { RegisterSolicitanteInput } from './vitrina.schema';
+import { existeOtraCuentaConDocumento } from '../solicitantes/solicitantes.service';
 import { errorNoAfianzable, motivoNoAfianzable, type ArrendatarioDelTope } from '../inmuebles/destinacion';
 
 /** Fila minima del solicitante: el id y lo que decide si el estudio puede nacer. */
@@ -59,31 +60,12 @@ export async function registerSolicitante(
   //    es que la MISMA persona se cree DOS cuentas de auto-servicio: buscamos
   //    una ficha con ese documento cuyo creador sea un perfil rol='solicitante'
   //    (= ficha auto-propiedad). Las fichas de agencia/propietario no bloquean.
-  const { data: fichasMismoDoc } = numero_documento
-    ? await (supabase
-        .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-        .select('id, creado_por, inmobiliaria_id')
-        .eq('tipo_documento', tipoDoc)
-        .eq('numero_documento', numero_documento)
-    : { data: [] };
-
-  const candidatasAutoServicio = ((fichasMismoDoc as Array<{
-    id: string; creado_por: string | null; inmobiliaria_id: string | null;
-  }> | null) ?? []).filter((f) => !f.inmobiliaria_id && f.creado_por);
-
-  if (candidatasAutoServicio.length > 0) {
-    const { data: creadores } = await (supabase
-      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-      .select('id, rol')
-      .in('id', candidatasAutoServicio.map((f) => f.creado_por as string));
-    const yaTieneCuentaPropia = ((creadores as Array<{ id: string; rol: string }> | null) ?? [])
-      .some((p) => p.rol === 'solicitante');
-    if (yaTieneCuentaPropia) {
-      throw AppError.conflict(
-        'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
-        'DOCUMENT_ALREADY_EXISTS',
-      );
-    }
+  //    La misma regla corre cuando el documento se escribe DESPUÉS (H43).
+  if (numero_documento && tipoDoc && (await existeOtraCuentaConDocumento(tipoDoc, numero_documento))) {
+    throw AppError.conflict(
+      'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
+      'DOCUMENT_ALREADY_EXISTS',
+    );
   }
 
   // El correo NO se valida contra `solicitantes`: las fichas que arman las

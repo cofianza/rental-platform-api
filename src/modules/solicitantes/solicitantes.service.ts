@@ -46,6 +46,61 @@ interface ApplicantRow {
 const APPLICANT_FIELDS = `id, tipo_persona, nombre, apellido, tipo_documento, numero_documento, email, telefono, direccion, departamento, ciudad, ocupacion, actividad_economica, empresa, ingresos_mensuales, nivel_educativo, parentesco, habitara_inmueble, estado, creado_por, inmobiliaria_id, created_at, updated_at`;
 
 // ============================================================
+// Cuenta propia duplicada por documento
+// ============================================================
+
+/** Mensaje para el gestor (el registro y «Mi cuenta» le hablan a la persona). */
+export const MSG_DOC_DE_OTRA_CUENTA_GESTOR =
+  'Ese documento ya está en otra cuenta de solicitante. Verifica el número; si es correcto, pídele a la persona que use la cuenta que ya tiene.';
+
+/**
+ * Regla del registro (vitrina): la MISMA persona no puede tener dos cuentas
+ * propias de solicitante con el mismo documento. Una ficha "de cuenta" es la
+ * que no tiene inmobiliaria y cuyo creador es un perfil rol='solicitante'; las
+ * fichas de agencia/propietario nunca cuentan (el documento es único por
+ * agencia, no global).
+ *
+ * `ficha` = la ficha a la que se le está fijando el documento DESPUÉS del
+ * registro (H43: «Mi cuenta», datos fiscales, el gestor). Si es de agencia o de
+ * propietario no aplica la regla; si es de una cuenta, esa cuenta no choca
+ * consigo misma. Sin `ficha` (el registro) se busca cualquier cuenta.
+ */
+export async function existeOtraCuentaConDocumento(
+  tipoDocumento: string,
+  numeroDocumento: string,
+  ficha?: { creado_por?: string | null; inmobiliaria_id?: string | null },
+): Promise<boolean> {
+  if (ficha && (ficha.inmobiliaria_id || !ficha.creado_por)) return false;
+  const propia = ficha?.creado_por ?? null;
+
+  const { data: fichasMismoDoc } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, creado_por, inmobiliaria_id')
+    .eq('tipo_documento', tipoDocumento)
+    .eq('numero_documento', numeroDocumento);
+
+  const creadoresAjenos = ((fichasMismoDoc as Array<{
+    id: string; creado_por: string | null; inmobiliaria_id: string | null;
+  }> | null) ?? [])
+    .filter((f) => !f.inmobiliaria_id && f.creado_por && f.creado_por !== propia)
+    .map((f) => f.creado_por as string);
+  if (creadoresAjenos.length === 0) return false;
+
+  const { data: creadores } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('id, rol')
+    .in('id', propia ? [...creadoresAjenos, propia] : creadoresAjenos);
+  const esSolicitante = new Set(
+    ((creadores as Array<{ id: string; rol: string }> | null) ?? [])
+      .filter((p) => p.rol === 'solicitante')
+      .map((p) => p.id),
+  );
+  // La ficha que se edita tiene que ser de una cuenta (no de un propietario).
+  if (propia && !esSolicitante.has(propia)) return false;
+  return creadoresAjenos.some((id) => esSolicitante.has(id));
+}
+
+// ============================================================
 // List
 // ============================================================
 
@@ -336,6 +391,12 @@ export async function updateApplicant(id: string, input: UpdateApplicantInput, u
         'DOCUMENTO_DUPLICADO',
       );
     }
+
+    // H43: si la ficha es la de una cuenta, la regla del registro (una
+    // cuenta por documento). Las fichas de agencia no aplican.
+    if (newNumDoc && (await existeOtraCuentaConDocumento(newTipoDoc, newNumDoc, previous))) {
+      throw AppError.conflict(MSG_DOC_DE_OTRA_CUENTA_GESTOR, 'DOCUMENT_ALREADY_EXISTS');
+    }
   }
 
   const { error } = await (supabase
@@ -614,7 +675,7 @@ export async function updateMisDatosFiscales(
   // Encontrar el solicitante del usuario (validacion de pertenencia implicita).
   const { data: existente, error: findErr } = await (supabase
     .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, tipo_documento, numero_documento')
     .eq('creado_por', userId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -631,7 +692,22 @@ export async function updateMisDatosFiscales(
     );
   }
 
-  const id = (existente as { id: string }).id;
+  const actual = existente as { id: string; tipo_documento: string | null; numero_documento: string | null };
+  const id = actual.id;
+
+  // H43: misma regla de "una cuenta por documento" que el registro.
+  const numDoc = (input.numero_documento ?? actual.numero_documento ?? '').trim();
+  const tipoDoc = input.tipo_documento ?? actual.tipo_documento ?? 'cc';
+  if (
+    numDoc &&
+    (numDoc !== (actual.numero_documento ?? '') || tipoDoc !== (actual.tipo_documento ?? 'cc')) &&
+    (await existeOtraCuentaConDocumento(tipoDoc, numDoc, { creado_por: userId }))
+  ) {
+    throw AppError.conflict(
+      'Ya existe otra cuenta de solicitante con este documento. Si es tuya, inicia sesión con esa cuenta.',
+      'DOCUMENT_ALREADY_EXISTS',
+    );
+  }
 
   // Whitelist de campos: el solicitante NO puede cambiar nombre/apellido
   // (vienen de auth.users) ni ocupacion. SI puede cambiar tipo_persona y

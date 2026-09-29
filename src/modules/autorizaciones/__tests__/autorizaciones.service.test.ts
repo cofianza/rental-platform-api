@@ -482,6 +482,25 @@ describe('autorizaciones.service', () => {
       expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '123456789' });
     });
 
+    it('H43: el gestor escribe un documento que ya es de OTRA cuenta de solicitante -> 409 sin guardar ni emitir', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '', creado_por: 'cuenta-a', inmobiliaria_id: null } } });
+      enqueue('solicitantes', { data: [{ id: 'ficha-b', creado_por: 'cuenta-b', inmobiliaria_id: null }] });
+      enqueue('perfiles', { data: [{ id: 'cuenta-a', rol: 'solicitante' }, { id: 'cuenta-b', rol: 'solicitante' }] });
+      await expect(
+        enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' }),
+      ).rejects.toMatchObject({ statusCode: 409, errorCode: 'DOCUMENT_ALREADY_EXISTS' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    it('H43: ficha de agencia con el documento de una cuenta: no aplica la regla y el enlace sale', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '', creado_por: 'asesor', inmobiliaria_id: 'inmo-1' } } });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' });
+      expect(opsDe('perfiles', 'select')).toEqual([]);
+      expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '123456789' });
+    });
+
     it('estudio cerrado o rechazado: no se le pide la autorizacion al prospecto', async () => {
       for (const estado of ['cerrado', 'rechazado']) {
         enqueue('expedientes', { data: { ...expedienteConSolicitante, estado } });
