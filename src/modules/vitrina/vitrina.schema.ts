@@ -6,13 +6,18 @@
 import { z } from 'zod';
 import { passwordSchema } from '../registration/registration.schema';
 
-export const registerSolicitanteSchema = z.object({
+export const registerSolicitanteBase = z.object({
   nombre: z.string().min(1, 'Nombre es requerido').max(100),
   apellido: z.string().min(1, 'Apellido es requerido').max(100),
   email: z.string().email('Email inválido'),
   telefono: z.string().min(10, 'Teléfono debe tener al menos 10 dígitos').max(20, 'Teléfono muy largo'),
-  tipo_documento: z.enum(['cc', 'ce', 'ppt', 'pep', 'pasaporte', 'nit']),
-  numero_documento: z.string().min(1, 'Número de documento es requerido').max(20),
+  // Opcionales desde H43 (2026-09-28): el registro pide solo nombre, correo,
+  // celular y contraseña. Sin documento la ficha nace con numero_documento=''
+  // (la columna es NOT NULL) y el documento se captura antes de la autorización
+  // (enviarEnlaceAutorizacion lo exige; el gestor lo escribe ahí o el
+  // solicitante en «Mi cuenta»). Si llega, se valida y guarda como antes.
+  tipo_documento: z.enum(['cc', 'ce', 'ppt', 'pep', 'pasaporte', 'nit']).optional(),
+  numero_documento: z.string().trim().min(1, 'Número de documento es requerido').max(20).optional(),
   // Municipio (código DANE 5 dígitos). Opcional en el registro: se pide
   // al momento de facturar el estudio crediticio (form de pago) para no
   // alargar el formulario de alta. Cuando se envía debe respetar el formato.
@@ -34,7 +39,9 @@ export const registerSolicitanteSchema = z.object({
   // Setea registration_source='invitacion_externa' para distinguir estadísticas
   // de origen (vitrina pública vs invitación directa de inmobiliaria).
   from_invitation: z.boolean().optional(),
-}).refine((data) => data.password === data.confirm_password, {
+});
+
+export const registerSolicitanteSchema = registerSolicitanteBase.refine((data) => data.password === data.confirm_password, {
   message: 'Las contraseñas no coinciden',
   path: ['confirm_password'],
 });

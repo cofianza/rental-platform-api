@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { sendSuccess, sendCreated } from '@/lib/response';
 import { assertExpedienteAccess } from '@/lib/tenantScope';
+import { AppError } from '@/lib/errors';
 import * as service from './creditos-estudios.service';
 import type {
   ComprarPaqueteInput,
@@ -86,14 +87,38 @@ export async function liberarEstudio(req: Request, res: Response) {
   // (404 fuera de ella): el asesor restringido no gasta créditos en estudios de
   // sus compañeros. El servicio solo mira la organización del inmueble.
   await assertExpedienteAccess(expedienteId, req.user!.id, req.user!.rol);
-  const result = await service.liberarEstudioConCredito(
-    expedienteId,
-    req.user!.id,
-    req.user!.id,
-    req.ip,
-    input.notas,
-  );
+  // H99: Cofianza (admin/operador) paga con un crédito de la inmobiliaria dueña
+  // del estudio. Mismo servicio (saldo, P22, cobro vivo, tope, pago + consumo
+  // atómico, bitácora, gate de pago): el saldo es el del titular de la org y
+  // el movimiento/auditoría guardan a quien lo liberó.
+  const rol = req.user!.rol;
+  let perfilCreditos = req.user!.id;
+  let notas = input.notas;
+  const pagaCofianza = rol === 'administrador' || rol === 'operador_analista';
+  if (pagaCofianza) {
+    const dueno = await service.duenoCreditosDeExpediente(expedienteId);
+    if (!dueno) {
+      throw AppError.conflict(
+        'Este estudio no es de una inmobiliaria: no hay créditos de paquete para pagar la evaluación.',
+        'SIN_INMOBILIARIA',
+      );
+    }
+    perfilCreditos = dueno;
+    notas = notas || 'Liberado por Cofianza con crédito del paquete de la inmobiliaria';
+  }
+  const result = await service.liberarEstudioConCredito(expedienteId, perfilCreditos, req.user!.id, req.ip, notas);
+  // Si lo gastó Cofianza, la inmobiliaria se entera (best-effort, sin esperar).
+  if (pagaCofianza) {
+    void service.avisarCreditoUsadoPorCofianza(expedienteId, result.saldo_restante, perfilCreditos);
+  }
   sendCreated(res, result);
+}
+
+// H99: saldo usable de la inmobiliaria dueña del estudio (modal interno).
+// GET /expedientes/:id/liberar-estudio-credito/saldo — solo admin/operador.
+export async function getSaldoInmobiliariaDeExpediente(req: Request, res: Response) {
+  const expedienteId = (req.params as { expedienteId: string }).expedienteId;
+  sendSuccess(res, await service.saldoCreditosDeExpediente(expedienteId));
 }
 
 // ============================================================

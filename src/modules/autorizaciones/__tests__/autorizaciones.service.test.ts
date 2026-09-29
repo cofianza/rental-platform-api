@@ -524,6 +524,60 @@ describe('autorizaciones.service', () => {
       });
     });
 
+    it('H43: ficha sin documento (auto-registro liviano) -> SOLICITANTE_SIN_DOCUMENTO sin crear enlace', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
+        statusCode: 400,
+        errorCode: 'SOLICITANTE_SIN_DOCUMENTO',
+      });
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    it('H43: el gestor escribe el documento que faltaba y el enlace sale', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      const result = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' });
+      expect(result).toMatchObject({ id: AUTORIZACION_ID, estado: 'pendiente' });
+      expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '123456789' });
+    });
+
+    it('H43: el gestor escribe un documento que ya es de OTRA cuenta de solicitante -> 409 sin guardar ni emitir', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '', creado_por: 'cuenta-a', inmobiliaria_id: null } } });
+      enqueue('solicitantes', { data: [{ id: 'ficha-b', creado_por: 'cuenta-b', inmobiliaria_id: null }] });
+      enqueue('perfiles', { data: [{ id: 'cuenta-a', rol: 'solicitante' }, { id: 'cuenta-b', rol: 'solicitante' }] });
+      await expect(
+        enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' }),
+      ).rejects.toMatchObject({ statusCode: 409, errorCode: 'DOCUMENT_ALREADY_EXISTS' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    it('Adenda §6.1: el gestor escribe un NIT -> 409 ESTUDIO_NO_AFIANZABLE sin guardar ni emitir', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      await expect(
+        enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'nit', numero_documento: '900123456' }),
+      ).rejects.toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    it('Adenda §6.1: ficha de persona jurídica (aunque tenga cédula) -> 409 ESTUDIO_NO_AFIANZABLE sin emitir', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, tipo_persona: 'juridica' } } });
+      await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'ESTUDIO_NO_AFIANZABLE',
+      });
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    it('H43: ficha de agencia con el documento de una cuenta: no aplica la regla y el enlace sale', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '', creado_por: 'asesor', inmobiliaria_id: 'inmo-1' } } });
+      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' });
+      expect(opsDe('perfiles', 'select')).toEqual([]);
+      expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '123456789' });
+    });
+
     it('estudio cerrado o rechazado: no se le pide la autorizacion al prospecto', async () => {
       for (const estado of ['cerrado', 'rechazado']) {
         enqueue('expedientes', { data: { ...expedienteConSolicitante, estado } });

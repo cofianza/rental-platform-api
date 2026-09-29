@@ -11,6 +11,7 @@ import { notificarUsuario } from '../notificaciones/notificaciones.service';
 import { enviarTemplate } from '../whatsapp';
 import { resolveContactoDueno, resolvePerfilCanonicoDeInmueble } from '@/lib/tenantScope';
 import type { RegisterSolicitanteInput } from './vitrina.schema';
+import { existeOtraCuentaConDocumento } from '../solicitantes/solicitantes.service';
 import { errorNoAfianzable, motivoNoAfianzable, type ArrendatarioDelTope } from '../inmuebles/destinacion';
 
 /** Fila minima del solicitante: el id y lo que decide si el estudio puede nacer. */
@@ -35,13 +36,59 @@ export async function registerSolicitante(
   ipAddress: string,
   userAgent: string,
 ): Promise<RegisterSolicitanteResult> {
+  const { email, password } = input;
+  const userId = await crearCuentaSolicitante(input, ipAddress, userAgent, password);
+
+  // 4. Sign in to get session tokens for auto-login
+  const { data: signInData, error: signInError } = await supabaseAuth.auth.signInWithPassword({
+    email,
+    password,
+  });
+
+  if (signInError || !signInData.session) {
+    logger.error({ error: signInError?.message, userId }, 'Error al iniciar sesion de solicitante');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Usuario creado pero error al iniciar sesion');
+  }
+
+  logger.info({ userId, email, rol: 'solicitante' }, 'Solicitante registrado exitosamente via vitrina');
+
+  return {
+    user: { id: userId, email, rol: 'solicitante' },
+    session: {
+      access_token: signInData.session.access_token,
+      refresh_token: signInData.session.refresh_token,
+      expires_at: signInData.session.expires_at ?? 0,
+    },
+  };
+}
+
+/** Datos de la cuenta del arrendatario (los del registro, sin contraseña). */
+export type DatosCuentaSolicitante = Pick<
+  RegisterSolicitanteInput,
+  'email' | 'nombre' | 'apellido' | 'telefono' | 'tipo_documento' | 'numero_documento' |
+  'from_invitation' | 'municipio_id' | 'municipio_nombre'
+>;
+
+/**
+ * Crea la cuenta del arrendatario (auth.user + perfil rol='solicitante' +
+ * ficha + aceptación de términos) y devuelve su id. Sin `password` la cuenta
+ * nace sin contraseña: la usa el enlace mágico de la invitación (H44).
+ */
+export async function crearCuentaSolicitante(
+  input: DatosCuentaSolicitante,
+  ipAddress: string,
+  userAgent: string,
+  password?: string,
+): Promise<string> {
   const {
-    email, password, nombre, apellido, telefono,
+    email, nombre, apellido, telefono,
     tipo_documento, numero_documento, from_invitation,
     municipio_id, municipio_nombre,
   } = input;
 
   const registrationSource = from_invitation ? 'invitacion_externa' : 'vitrina_publica';
+  // Documento opcional (H43). Sin número no hay nada que deduplicar ni guardar.
+  const tipoDoc = numero_documento ? (tipo_documento ?? 'cc') : undefined;
 
   // 0. Pre-flight: validar duplicados ANTES de crear el auth.user, para no dejar
   //    un auth.user huérfano que bloquee reintentos con "EMAIL_ALREADY_EXISTS".
@@ -57,29 +104,12 @@ export async function registerSolicitante(
   //    es que la MISMA persona se cree DOS cuentas de auto-servicio: buscamos
   //    una ficha con ese documento cuyo creador sea un perfil rol='solicitante'
   //    (= ficha auto-propiedad). Las fichas de agencia/propietario no bloquean.
-  const { data: fichasMismoDoc } = await (supabase
-    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-    .select('id, creado_por, inmobiliaria_id')
-    .eq('tipo_documento', tipo_documento)
-    .eq('numero_documento', numero_documento);
-
-  const candidatasAutoServicio = ((fichasMismoDoc as Array<{
-    id: string; creado_por: string | null; inmobiliaria_id: string | null;
-  }> | null) ?? []).filter((f) => !f.inmobiliaria_id && f.creado_por);
-
-  if (candidatasAutoServicio.length > 0) {
-    const { data: creadores } = await (supabase
-      .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-      .select('id, rol')
-      .in('id', candidatasAutoServicio.map((f) => f.creado_por as string));
-    const yaTieneCuentaPropia = ((creadores as Array<{ id: string; rol: string }> | null) ?? [])
-      .some((p) => p.rol === 'solicitante');
-    if (yaTieneCuentaPropia) {
-      throw AppError.conflict(
-        'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
-        'DOCUMENT_ALREADY_EXISTS',
-      );
-    }
+  //    La misma regla corre cuando el documento se escribe DESPUÉS (H43).
+  if (numero_documento && tipoDoc && (await existeOtraCuentaConDocumento(tipoDoc, numero_documento))) {
+    throw AppError.conflict(
+      'Ya existe una cuenta de solicitante con este documento. Si es tuya, inicia sesión.',
+      'DOCUMENT_ALREADY_EXISTS',
+    );
   }
 
   // El correo NO se valida contra `solicitantes`: las fichas que arman las
@@ -90,7 +120,7 @@ export async function registerSolicitante(
   // 1. Create Supabase Auth user (auto-confirmed, no email verification for solicitante)
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
-    password,
+    ...(password ? { password } : {}),
     email_confirm: true,
     app_metadata: { role: 'solicitante' },
     user_metadata: { nombre, apellido, rol: 'solicitante' },
@@ -113,8 +143,7 @@ export async function registerSolicitante(
       rol: 'solicitante',
       estado: 'activo',
       telefono,
-      tipo_documento,
-      numero_documento,
+      ...(numero_documento ? { tipo_documento: tipoDoc, numero_documento } : {}),
       registration_source: registrationSource,
     } as never)
     .eq('id', userId);
@@ -131,8 +160,10 @@ export async function registerSolicitante(
       apellido,
       email,
       telefono,
-      tipo_documento,
-      numero_documento,
+      // NOT NULL en la BD: sin documento va '' (mismo valor que usa
+      // selfHealSolicitante); tipo_documento cae al DEFAULT 'cc'.
+      ...(tipoDoc ? { tipo_documento: tipoDoc } : {}),
+      numero_documento: numero_documento ?? '',
       municipio_id,
       municipio_nombre,
       creado_por: userId,
@@ -179,28 +210,7 @@ export async function registerSolicitante(
   //      Evidencia legal: user_id + timestamps + IP + user-agent. Reutiliza
   //      la misma función que propietario/inmobiliaria. Log-only en error.
   await recordTermsAcceptance(userId, ipAddress, userAgent);
-
-  // 4. Sign in to get session tokens for auto-login
-  const { data: signInData, error: signInError } = await supabaseAuth.auth.signInWithPassword({
-    email,
-    password,
-  });
-
-  if (signInError || !signInData.session) {
-    logger.error({ error: signInError?.message, userId }, 'Error al iniciar sesion de solicitante');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Usuario creado pero error al iniciar sesion');
-  }
-
-  logger.info({ userId, email, rol: 'solicitante' }, 'Solicitante registrado exitosamente via vitrina');
-
-  return {
-    user: { id: userId, email, rol: 'solicitante' },
-    session: {
-      access_token: signInData.session.access_token,
-      refresh_token: signInData.session.refresh_token,
-      expires_at: signInData.session.expires_at ?? 0,
-    },
-  };
+  return userId;
 }
 
 // ------------------------------------------------------------------
