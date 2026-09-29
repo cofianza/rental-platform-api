@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockTitular, mockColaEstudios, mockCoa, mockSombra, mockIngreso, ops } = vi.hoisted(() => ({
+const { mockTitular, mockColaEstudios, mockCoa, mockSombra, mockIngreso, ops, filasUpdate, mockGuardarCodigos } = vi.hoisted(() => ({
   mockTitular: { value: null as unknown },
   /** Lecturas de `estudios` en orden (titular, padre…); vacía = mockTitular. */
   mockColaEstudios: [] as unknown[],
@@ -13,6 +13,9 @@ const { mockTitular, mockColaEstudios, mockCoa, mockSombra, mockIngreso, ops } =
   mockSombra: vi.fn(),
   mockIngreso: vi.fn(),
   ops: [] as Array<{ table: string; method: string }>,
+  /** Filas que devuelve el UPDATE condicionado -> aprobado (vacío = 409). */
+  filasUpdate: { value: [] as unknown[] },
+  mockGuardarCodigos: vi.fn(async (..._a: unknown[]) => undefined),
 }));
 
 vi.mock('@/lib/supabase', () => {
@@ -25,11 +28,16 @@ vi.mock('@/lib/supabase', () => {
       };
     }
     chain.maybeSingle = async () => ({
-      data: table === 'estudios' ? (mockColaEstudios.length ? mockColaEstudios.shift() : mockTitular.value) : null,
+      data:
+        table === 'estudios'
+          ? (mockColaEstudios.length ? mockColaEstudios.shift() : mockTitular.value)
+          : table === 'eventos_timeline'
+            ? { id: 'evt-1' }
+            : null,
       error: null,
     });
     // El UPDATE condicionado -> aprobado responde 0 filas: basta para saber que el gate dejó pasar.
-    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(resolve);
+    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve({ data: filasUpdate.value, error: null }).then(resolve);
     return chain;
   };
   return { supabase: { from: (t: string) => chainFor(t) } };
@@ -54,6 +62,12 @@ vi.mock('../../notificaciones/notificaciones.service', () => ({ notificarUsuario
 vi.mock('../../estudios/coarrendatario-vinculado', () => ({ coarrendatarioVinculadoVerificado: mockCoa }));
 vi.mock('../../estudios/certificado.service', () => ({ leerSombraDelEstudio: mockSombra }));
 vi.mock('../../estudios/reasignacion.service', () => ({ leerIngresoInferidoOriginal: mockIngreso }));
+vi.mock('@/modules/estudios/motor/sombra.service', () => ({ recalcularEnRevisionManual: vi.fn(async () => null) }));
+vi.mock('@/modules/coarrendatarios/coarrendatarios.service', () => ({ avisarCoarrendatarioDecision: vi.fn(async () => undefined) }));
+vi.mock('@/modules/estudios/motivos-decision', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/modules/estudios/motivos-decision')>()),
+  guardarCodigosMotivo: mockGuardarCodigos,
+}));
 
 import { aprobarCondicionado } from '../expediente-habilitacion.service';
 
@@ -74,6 +88,7 @@ describe('aprobarCondicionado — thin-file (Política §15)', () => {
     vi.clearAllMocks();
     ops.length = 0;
     mockColaEstudios.length = 0;
+    filasUpdate.value = [];
   });
 
   it('con score de alguna central no aplica', async () => {
@@ -140,5 +155,20 @@ describe('aprobarCondicionado — thin-file (Política §15)', () => {
     mockIngreso.mockResolvedValueOnce(8_000_000); // 25 %
     mockColaEstudios.push(HIJO, { ...SIN_SCORE, id: 'padre', estudio_padre_id: null });
     await expect(aprobar()).rejects.toMatchObject(PASO);
+  });
+});
+
+// B23 (revisión 2026-09-28): los códigos de «Aprobar estudio» van al evento de la aprobación.
+describe('aprobarCondicionado — códigos de motivo', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockColaEstudios.length = 0;
+    filasUpdate.value = [{ id: 'exp-1' }];
+  });
+
+  it('guarda los códigos en el evento de timeline recién insertado', async () => {
+    mockTitular.value = { ...SIN_SCORE, score: 640 };
+    await expect(aprobar({ motivos: ['A1', 'A3'] })).resolves.toMatchObject({ expediente: { estado: 'aprobado' } });
+    expect(mockGuardarCodigos).toHaveBeenCalledWith('eventos_timeline', 'evt-1', ['A1', 'A3']);
   });
 });

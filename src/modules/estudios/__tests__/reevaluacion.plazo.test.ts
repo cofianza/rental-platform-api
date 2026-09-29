@@ -493,3 +493,41 @@ describe('registrar la fecha de radicacion (Politica §11)', () => {
     expect(radicacionApelacionSchema.safeParse({ fecha_radicacion_apelacion: null }).success).toBe(true);
   });
 });
+
+// B22/B23 (revisión 2026-09-28): los códigos de motivo llegan a
+// estudios.motivos_decision con el id del estudio, solo si el resultado final
+// es el que eligió el analista.
+describe('registrarResultado: códigos de motivo', () => {
+  const pendiente = { id: 'est-2', estado: 'en_proceso', resultado: 'pendiente', expediente_id: 'exp-1', canon_evaluado: 2_000_000, proveedor: 'manual', tipo: 'individual' };
+  const input = { resultado: 'condicionado', motivos: ['C1'], condiciones: 'Requiere coarrendatario' };
+  const codigos = () => updates.filter((u) => u.table === 'estudios' && 'motivos_decision' in u.fila);
+
+  it('mismo resultado: UPDATE de estudios con los códigos, por el id del estudio', async () => {
+    (supabase.rpc as unknown as Mock).mockResolvedValue({ error: null });
+    enqueue('estudios', { data: pendiente, error: null });
+    // Falla al final (getEstudioById sin datos en la cola); lo que importa ya se escribió.
+    await registrarResultado('est-2', input as never, 'u-1', undefined, 'operador_analista').catch(() => undefined);
+
+    expect(codigos()).toEqual([{ table: 'estudios', fila: { motivos_decision: ['C1'] } }]);
+    expect(filtros).toContainEqual({ table: 'estudios', col: 'id', val: 'est-2' });
+  });
+
+  it('la regla dura lo cambia (condicionado → rechazado): no se guardan los códigos', async () => {
+    (supabase.rpc as unknown as Mock).mockResolvedValue({ error: null });
+    mockResolver.mockImplementationOnce(async () => ({
+      resultado: 'rechazado',
+      observaciones: null,
+      motivoRechazo: 'No cumple la Política de riesgo',
+      salida: null,
+      veredicto: { rechaza: true, reglas: ['score_minimo'] },
+      apisFallidas: [],
+      revisionManual: null,
+    }) as never);
+    enqueue('estudios', { data: pendiente, error: null });
+    // Falla al final (getEstudioById sin datos en la cola); lo que importa ya se escribió.
+    await registrarResultado('est-2', input as never, 'u-1', undefined, 'operador_analista').catch(() => undefined);
+
+    expect((supabase.rpc as unknown as Mock).mock.calls[0][1]).toMatchObject({ p_resultado: 'rechazado' });
+    expect(codigos()).toEqual([]);
+  });
+});
