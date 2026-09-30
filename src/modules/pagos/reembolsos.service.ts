@@ -185,14 +185,15 @@ export async function devolverEvaluacionSinConsulta(
     const consulta = await cancelarEvaluacionesSinConsulta(expedienteId);
     if (consulta === 'si') return;
 
-    const { devolverCreditoDePago, esPagoConCredito, cupoLiberado } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+    const { devolverCreditoDePago, esPagoConCredito, cupoLiberado, destinoCupoNoConsumido } = await import('@/modules/creditos-estudios/creditos-estudios.service');
     // Adenda de precios §2.2: la consulta fallida ya liberó el cupo (a o b);
     // solo falta cerrar el pago. Lo dudoso queda para el dinero de pasarela.
     if (consulta === 'dudosa' && (await cupoLiberado(pago.id))) {
-      if ((await devolverCreditoDePago(pago.id, motivo, usuarioId)) === 'devuelto') {
+      const devuelto = await devolverCreditoDePago(pago.id, motivo, usuarioId);
+      if (devuelto.estado === 'devuelto') {
         await timeline(
           expedienteId,
-          'El estudio terminó sin resultado de la consulta a centrales: el cupo reservado ya había vuelto al saldo de la inmobiliaria.',
+          `El estudio terminó sin resultado de la consulta a centrales: ${destinoCupoNoConsumido(devuelto.cupo)}.`,
           { pago_id: pago.id, evento: 'evaluacion_devuelta', medio: 'credito' },
         );
       }
@@ -209,11 +210,11 @@ export async function devolverEvaluacionSinConsulta(
     }
 
     const credito = await devolverCreditoDePago(pago.id, motivo, usuarioId);
-    if (credito === 'ya_devuelto') return;
-    if (credito === 'devuelto') {
+    if (credito.estado === 'ya_devuelto') return;
+    if (credito.estado === 'devuelto') {
       await timeline(
         expedienteId,
-        'El crédito con que se pagó la evaluación volvió al saldo de la inmobiliaria: el estudio terminó sin consultar el buró.',
+        `La evaluación se pagó con un cupo y el estudio terminó sin consultar el buró: ${destinoCupoNoConsumido(credito.cupo)}.`,
         { pago_id: pago.id, evento: 'evaluacion_devuelta', medio: 'credito' },
       );
       return;
@@ -703,7 +704,7 @@ export async function liberarCuposAbandonados(): Promise<number> {
     if (filas.length < 1000) break;
   }
   const { abandonadoAntesDeLaConsulta } = await import('@/modules/estudios/estudios.service');
-  const { liberarReservaCupo } = await import('@/modules/creditos-estudios/creditos-estudios.service');
+  const { liberarReservaCupo, destinoCupoNoConsumido } = await import('@/modules/creditos-estudios/creditos-estudios.service');
   let liberados = 0;
   for (const [pagoId, m] of ultimo) {
     if (m.tipo !== 'reserva' || !m.expediente_id) continue;
@@ -719,7 +720,7 @@ export async function liberarCuposAbandonados(): Promise<number> {
         r.expediente_id,
         res === 'extinguido'
           ? 'El prospecto no autorizó dentro del plazo: el cupo reservado no se consume, pero su paquete ya venció y se extingue.'
-          : 'El prospecto no autorizó dentro del plazo: el cupo reservado volvió al saldo de la inmobiliaria. Si el prospecto autoriza después, la consulta toma un cupo de nuevo.',
+          : `El prospecto no autorizó dentro del plazo: ${destinoCupoNoConsumido(res)}. Si el prospecto autoriza después, la consulta toma un cupo de nuevo.`,
         { pago_id: r.pago_id, evento: 'cupo_liberado', literal: '2.5', resultado: res },
       );
     } catch (err) {

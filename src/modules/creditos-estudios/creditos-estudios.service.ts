@@ -1401,7 +1401,10 @@ async function cubrirSaldoEnContra(perfilId: string, cantidad: number): Promise<
   return cubiertos;
 }
 
-export type DevolucionCredito = 'no_es_credito' | 'devuelto' | 'ya_devuelto';
+/** 'devuelto' trae el resultado de liberar_reserva_credito (adónde fue el cupo). */
+export type DevolucionCredito =
+  | { estado: 'no_es_credito' | 'ya_devuelto' }
+  | { estado: 'devuelto'; cupo: string };
 
 // ============================================================
 // Adenda de precios §2: reserva → consumo
@@ -1528,6 +1531,18 @@ async function pagoEstudioCompletado(expedienteId: string): Promise<string | nul
   return (data as { id: string } | null)?.id ?? null;
 }
 
+/**
+ * Pura: adónde fue un cupo que no se consumió, según lo que devolvió
+ * liberar_reserva_credito (para el timeline). 'a_deuda' no vuelve al saldo:
+ * cubre el saldo en contra que dejó el contracargo de una compra de cupos.
+ */
+export function destinoCupoNoConsumido(resultado: string): string {
+  if (resultado === 'a_deuda') return 'el cupo reservado se aplicó al saldo en contra de la inmobiliaria por un contracargo';
+  if (resultado === 'extinguido') return 'el paquete del que salió el cupo ya venció, así que el cupo se extingue';
+  if (resultado === 'liberado') return 'el cupo reservado volvió al saldo de la inmobiliaria';
+  return 'el cupo reservado no se consumió';
+}
+
 const MENSAJE_LIBERACION: Record<LiteralNoConsumo, string> = {
   a: 'La persona no existe en la central consultada (Adenda de precios §2.2 a): el cupo no se consume.',
   b: 'La central no respondió o su respuesta no fue utilizable (Adenda de precios §2.2 b): el cupo no se consume.',
@@ -1584,13 +1599,11 @@ export async function registrarDesenlaceConsulta(a: {
     const literal: LiteralNoConsumo = a.desenlace === 'a_no_existe' ? 'a' : a.desenlace === 'b_falla' ? 'b' : '2.5';
     const r = await liberarReservaCupo(pagoId, literal, { estudioId: a.estudioId, usuarioId: a.usuarioId, notas: MENSAJE_LIBERACION[literal] });
     if (r === 'liberado' || r === 'extinguido' || r === 'a_deuda') {
+      const destino = destinoCupoNoConsumido(r);
       const { error: tlErr } = await db('eventos_timeline').insert({
         expediente_id: a.expedienteId,
         tipo: 'pago',
-        descripcion:
-          r === 'extinguido'
-            ? `${MENSAJE_LIBERACION[literal]} El paquete del que salió ya venció, así que el cupo se extingue.`
-            : `${MENSAJE_LIBERACION[literal]} El cupo reservado volvió al saldo de la inmobiliaria.`,
+        descripcion: `${MENSAJE_LIBERACION[literal]} ${destino.charAt(0).toUpperCase()}${destino.slice(1)}.`,
         metadata: { pago_id: pagoId, estudio_id: a.estudioId, evento: 'cupo_liberado', literal, resultado: r, origen: 'system' },
       } as never);
       if (tlErr) logger.warn({ pagoId, error: tlErr.message }, 'No se pudo dejar la liberación del cupo en el timeline');
@@ -1623,7 +1636,7 @@ export async function asegurarReservaParaConsulta(expedienteId: string, usuarioI
   }
   if (r === 'sin_saldo') {
     throw AppError.conflict(
-      'El cupo de este estudio volvió al saldo de su organización porque la consulta anterior no produjo resultado, y ya no quedan cupos disponibles. Compre un paquete para volver a consultar.',
+      'El cupo de este estudio no se consumió porque la consulta anterior no produjo resultado, y ya no quedan cupos disponibles. Compre un paquete para volver a consultar.',
       'SIN_SALDO_CREDITOS',
     );
   }
@@ -1642,7 +1655,7 @@ export async function devolverCreditoDePago(
   usuarioId: string | null,
 ): Promise<DevolucionCredito> {
   const ult = await ultimoMovimientoCupo(pagoId);
-  if (!ult) return 'no_es_credito';
+  if (!ult) return { estado: 'no_es_credito' };
   let consumido = ult.tipo === 'consumo' && ult.literal === 'c';
   if (!consumido && ult.expediente_id) {
     const { data, error } = await db('estudios')
@@ -1674,7 +1687,7 @@ export async function devolverCreditoDePago(
     detalles: { motivo, devolucion: 'credito', cupo: r },
     userId: usuarioId,
   });
-  return transitioned ? 'devuelto' : 'ya_devuelto';
+  return transitioned ? { estado: 'devuelto', cupo: r } : { estado: 'ya_devuelto' };
 }
 
 export interface CompraRevertida {

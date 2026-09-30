@@ -110,7 +110,7 @@ describe('causarBeneficioTradicional (§4.2)', () => {
 
   it('Tradicional pagado con crédito del paquete de 25: causa 28.000 con su origen', async () => {
     enqueue('pagos', ok([{ id: 'p1', monto: 95_200, base_cop: null }]));
-    enqueue('movimientos_creditos_estudios', ok([{ lote_id: 'l1' }]));
+    enqueue('movimientos_creditos_estudios', ok([{ tipo: 'consumo', lote_id: 'l1' }, { tipo: 'reserva', lote_id: 'l1' }]));
     enqueue('lotes_creditos_estudios', ok({ compra_id: 'c1' }));
     enqueue('compras_creditos_estudios', ok({ id: 'c1', precio_cop: 1_400_000, cantidad_estudios: 25 }));
     enqueue('beneficios_intermediacion', ok([{ id: 'b1' }]));
@@ -145,6 +145,30 @@ describe('causarBeneficioTradicional (§4.2)', () => {
 
     expect(await causarBeneficioTradicional({ ...ctx, modalidad: 'tradicional' })).toBe(false);
     expect(tabla('beneficios_intermediacion', 'upsert')[0].args[0]).toMatchObject({ base_cop: 80_000, valor_cop: 40_000 });
+  });
+
+  it('M3: pagado con cupo aún en reserva: base del lote, nunca pagos.monto (95.200 con IVA)', async () => {
+    enqueue('pagos', ok([{ id: 'p1', monto: 95_200, base_cop: null }]));
+    enqueue('movimientos_creditos_estudios', ok([{ tipo: 'reserva', lote_id: 'l1' }]));
+    enqueue('lotes_creditos_estudios', ok({ compra_id: 'c1' }));
+    enqueue('compras_creditos_estudios', ok({ id: 'c1', precio_cop: 1_400_000, cantidad_estudios: 25 }));
+    enqueue('beneficios_intermediacion', ok([{ id: 'b1' }]));
+
+    expect(await causarBeneficioTradicional({ ...ctx, modalidad: 'tradicional' })).toBe(true);
+    expect(tabla('beneficios_intermediacion', 'upsert')[0].args[0]).toMatchObject({ base_cop: 56_000, lote_id: 'l1', compra_id: 'c1' });
+    // Reconoce el pago con cupo por cualquier movimiento, no solo por 'consumo'.
+    expect(tabla('movimientos_creditos_estudios', 'eq').map((o) => o.args)).toEqual([['pago_id', 'p1']]);
+    expect(tabla('movimientos_creditos_estudios', 'in')[0].args).toEqual(['tipo', ['reserva', 'consumo', 'liberacion', 'ajuste']]);
+  });
+
+  it('M3: pagado con cupo que se liberó (último movimiento liberación o ajuste): no causa', async () => {
+    for (const tipo of ['liberacion', 'ajuste']) {
+      enqueue('pagos', ok([{ id: 'p1', monto: 95_200, base_cop: null }]));
+      enqueue('movimientos_creditos_estudios', ok([{ tipo, lote_id: 'l1' }, { tipo: 'reserva', lote_id: 'l1' }]));
+      expect(await causarBeneficioTradicional({ ...ctx, modalidad: 'tradicional' })).toBe(false);
+    }
+    expect(tabla('lotes_creditos_estudios', 'select')).toEqual([]);
+    expect(tabla('beneficios_intermediacion', 'upsert')).toEqual([]);
   });
 
   it('estudio sin pago propio (portabilidad): no causa', async () => {

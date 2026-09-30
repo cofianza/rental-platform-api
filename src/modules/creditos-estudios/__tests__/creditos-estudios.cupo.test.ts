@@ -151,6 +151,18 @@ describe('§2.2: tres desenlaces, solo (c) consume', () => {
     expect((inserts('eventos_timeline')[0] as { descripcion: string }).descripcion).toContain('se extingue');
   });
 
+  it('M2: si el cupo cubrió saldo en contra de un contracargo (a_deuda), no dice que volvió al saldo', async () => {
+    pagoCompletado();
+    enqueue('estudios', { data: null, error: null }, { data: [], error: null });
+    mockRpc.mockResolvedValueOnce({ data: 'a_deuda', error: null });
+
+    await registrarDesenlaceConsulta({ estudioId: 'est-1', expedienteId: 'exp-1', desenlace: 'b_falla' });
+
+    const { descripcion } = inserts('eventos_timeline')[0] as { descripcion: string };
+    expect(descripcion).toContain('saldo en contra');
+    expect(descripcion).not.toContain('volvió al saldo');
+  });
+
   it('sin pago completado de la evaluación: solo guarda el desenlace', async () => {
     pagoCompletado(null);
 

@@ -42,8 +42,9 @@ export interface BaseBeneficio {
 }
 
 /**
- * §4.1/§9.9, pura. Sin pago propio (estudio reutilizado por portabilidad) o
- * con un lote sin compra (ajuste administrativo): base 0 = no se causa.
+ * §4.1/§9.9, pura. Sin pago propio (estudio reutilizado por portabilidad),
+ * con un lote sin compra (ajuste administrativo) o con el cupo liberado
+ * (consumo sin compra): base 0 = no se causa.
  * compras.precio_cop es la base sin IVA del paquete (el IVA va en iva_cop);
  * pagos.base_cop es la instantánea sin IVA; sin ella el cobro es anterior a la
  * adenda y fue exento: monto es la base.
@@ -73,15 +74,20 @@ export async function cargarOrigenPago(expedienteId: string): Promise<OrigenPago
   const pago = ((pagos as OrigenPagoEstudio['pago'][] | null) ?? [])[0] ?? null;
   if (!pago) return { pago: null, consumo: null };
 
+  // Pagado con cupo = cualquier movimiento de cupo con este pago (Adenda §2:
+  // reserva → consumo, o liberación). Nunca se usa pagos.monto (lista con IVA).
   const { data: movs, error: mErr } = await db('movimientos_creditos_estudios')
-    .select('lote_id')
+    .select('tipo, lote_id')
     .eq('pago_id', pago.id)
-    .eq('tipo', 'consumo')
-    .limit(1);
+    .in('tipo', ['reserva', 'consumo', 'liberacion', 'ajuste'])
+    .order('created_at', { ascending: false });
   if (mErr) throw fromSupabaseError(mErr);
-  const mov = ((movs as Array<{ lote_id: string | null }> | null) ?? [])[0];
-  if (!mov) return { pago, consumo: null };
-  if (!mov.lote_id) return { pago, consumo: { lote_id: null, compra: null } };
+  const lista = (movs as Array<{ tipo: string; lote_id: string | null }> | null) ?? [];
+  if (!lista.length) return { pago, consumo: null };
+  // El cupo volvió (o se ajustó): no se pagó nada por este estudio.
+  if (lista[0].tipo === 'liberacion' || lista[0].tipo === 'ajuste') return { pago, consumo: { lote_id: null, compra: null } };
+  const mov = lista.find((m) => (m.tipo === 'reserva' || m.tipo === 'consumo') && m.lote_id);
+  if (!mov?.lote_id) return { pago, consumo: { lote_id: null, compra: null } };
 
   const { data: lote, error: lErr } = await db('lotes_creditos_estudios').select('compra_id').eq('id', mov.lote_id).maybeSingle();
   if (lErr) throw fromSupabaseError(lErr);
