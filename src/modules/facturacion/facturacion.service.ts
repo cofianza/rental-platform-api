@@ -618,7 +618,8 @@ export async function crearFacturaDesdePago(
   if (tasaIva === 0 && ctx.concepto === 'garantia') {
     // Queda el intento con el motivo, para que «Pendientes de facturar» lo muestre.
     const error =
-      'La prima de vinculación se factura con IVA (Adenda 1 de contratos §1.6) y TARIFA_IVA está en 0 %. Corríjala en Calibración y vuelva a facturar.';
+      // Adenda 1 de contratos §1.6.
+      'La prima de vinculación se factura con IVA y la tarifa de IVA está en 0 %. Corríjala en Calibración y vuelva a facturar.';
     await persistFailedAttempt({
       pagoId,
       expedienteId: ctx.expediente_id,

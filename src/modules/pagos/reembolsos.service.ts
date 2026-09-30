@@ -712,7 +712,8 @@ export async function liberarCuposAbandonados(): Promise<number> {
     try {
       if (!(await abandonadoAntesDeLaConsulta(r.expediente_id))) continue;
       const res = await liberarReservaCupo(r.pago_id, '2.5', {
-        notas: 'El prospecto no autorizó dentro del plazo (Adenda de precios §2.5; Flujo §14: 15 días).',
+        // Adenda de precios §2.5; Flujo §14 (plazo de 15 días).
+        notas: 'El prospecto no autorizó la consulta dentro del plazo: el cupo no se consume.',
       });
       if (res !== 'liberado' && res !== 'extinguido' && res !== 'a_deuda') continue;
       liberados++;

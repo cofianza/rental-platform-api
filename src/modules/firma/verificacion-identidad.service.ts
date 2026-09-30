@@ -529,7 +529,8 @@ export async function revisarVerificacion(
         {
           nuevo_estado: 'cancelado',
           comentario: input.nota,
-          motivo: 'Suplantación de identidad detectada por Cofianza al verificar la firma (Adenda 2 §9).',
+          // Adenda 2 §9.
+          motivo: 'Suplantación de identidad detectada por Cofianza al verificar la firma.',
         },
         user,
       );

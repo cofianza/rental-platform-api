@@ -60,7 +60,8 @@ export interface DefinicionParametro {
   max: number;
   /** true = solo enteros. */
   entero: boolean;
-  seccion: string;
+  // La sección del documento fuente va como comentario en cada parámetro: el
+  // panel lo ve Gerencia y no muestra referencias a documentos.
   descripcion: string;
   /** Lo que la Adenda pide dejar registrado al lado del valor. */
   advertencia?: string;
@@ -79,10 +80,10 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1,
     max: 2,
     entero: false,
-    seccion: 'Adenda §1.1',
+    // Adenda §1.1
     descripcion: 'Multiplica el ingreso estimado por la central antes de calcular DTI y canon/ingreso.',
     advertencia:
-      'Amplia de hecho las reglas duras: con 1,15 el canon maximo del 40% admite hasta el 46% del ingreso real, y el DTI del 65% hasta el 74,7%. Decision deliberada de apetito de riesgo de la Gerencia General.',
+      'Amplía de hecho las condiciones obligatorias: con 1,15 el canon máximo del 40 % admite hasta el 46 % del ingreso real, y el endeudamiento máximo del 65 % hasta el 74,7 %. Decisión deliberada de apetito de riesgo de la Gerencia General.',
   },
   {
     clave: 'UMBRAL_CASCADA_RECHAZO',
@@ -90,7 +91,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 100,
     entero: true,
-    seccion: 'Adenda §2.1',
+    // Adenda §2.1
     descripcion: 'Puntaje de la central primaria por debajo del cual se rechaza sin consultar la segunda.',
   },
   {
@@ -99,10 +100,10 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 100,
     entero: true,
-    seccion: 'Adenda §2.1',
+    // Adenda §2.1
     descripcion: 'Puntaje de la central primaria desde el cual se aprueba sin consultar la segunda.',
     advertencia:
-      'Es una asuncion de riesgo, no una certeza matematica: un 90 en Datacredito podria tener 60 en TransUnion. Monitorear los primeros seis meses con una muestra consultada a posteriori.',
+      'Es una asunción de riesgo, no una certeza matemática: un 90 en DataCrédito podría tener 60 en TransUnion. Monitorear los primeros seis meses con una muestra consultada a posteriori.',
   },
   {
     clave: 'UMBRAL_DIFERENCIA_INGRESO',
@@ -110,8 +111,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 500,
     entero: false,
-    seccion: 'Adenda §8',
-    descripcion: 'Diferencia (%) entre ingreso declarado y estimado que levanta bandera de revision manual. No rechaza.',
+    // Adenda §8
+    descripcion: 'Diferencia (%) entre el ingreso declarado y el estimado a partir de la cual el estudio pasa a revisión manual. No rechaza.',
   },
   {
     clave: 'VIGENCIA_CRC_DIAS',
@@ -119,8 +120,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1,
     max: 365,
     entero: true,
-    seccion: 'Adenda §6',
-    descripcion: 'Vigencia del CRC en dias calendario desde la fecha de evaluacion.',
+    // Adenda §6
+    descripcion: 'Vigencia del CRC en días calendario desde la fecha de evaluación.',
   },
   {
     clave: 'DIAS_EXPIRACION_ESTUDIO',
@@ -128,8 +129,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1,
     max: 90,
     entero: true,
-    seccion: 'Adenda §9',
-    descripcion: 'Dias desde el envio de la solicitud al prospecto para que el estudio expire sin autorizar. Aplica a las solicitudes enviadas desde el cambio: las ya enviadas conservan el vencimiento de su enlace.',
+    // Adenda §9
+    descripcion: 'Días desde el envío de la solicitud al prospecto para que el estudio expire sin autorizar. Aplica a las solicitudes enviadas desde el cambio: las ya enviadas conservan el vencimiento de su enlace.',
   },
   {
     clave: 'UMBRAL_COARRENDATARIO',
@@ -137,8 +138,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 100,
     entero: true,
-    seccion: 'Adenda §3',
-    descripcion: 'Puntaje minimo del COARRENDATARIO para aprobar automaticamente a un titular en zona gris (70-84).',
+    // Adenda §3
+    descripcion: 'Puntaje mínimo del co-arrendatario para aprobar automáticamente a un titular en zona gris (70-84).',
   },
   {
     clave: 'CANON_MAX_TRANSITORIO',
@@ -146,9 +147,12 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 100_000,
     max: 100_000_000,
     entero: true,
-    seccion: 'Política §6 / Flujo §4.4 / Adenda contratos §2.1',
+    // Política §6 / Flujo §4.4 / Adenda contratos §2.1
     descripcion: 'Canon máximo sin coafianzamiento para destinación VIVIENDA (COP), evaluado sobre el canon SIN IVA. Mientras el comercial no esté habilitado, también aplica a inmuebles comerciales y mixtos. Se deroga al entrar en vigencia el coafianzamiento.',
-    advertencia: 'La Política §6 dice 2.000.000 y el Flujo §4.4 dice 3.000.000. Gerencia (Mario, 2026-09-09) resolvió 3.000.000 y la Adenda 1 del módulo de contratos (§2.1) lo confirma para vivienda, corrigiendo los 2.000.000 de la nota de envío; falta actualizar el texto de la Política §6.',
+    // Política §6 dice 2.000.000 y Flujo §4.4 dice 3.000.000; Gerencia resolvió
+    // 3.000.000 (2026-09-09) y la Adenda 1 de contratos §2.1 lo confirma para
+    // vivienda. Falta actualizar el texto de la Política §6.
+    advertencia: 'Para vivienda, la Gerencia General fijó $3.000.000.',
   },
   {
     clave: 'TOPE_CANON_COMERCIAL',
@@ -156,8 +160,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 100_000,
     max: 100_000_000,
     entero: true,
-    seccion: 'Contratos comercial §2.1 / §12.1 / Adenda contratos §2.2',
-    descripcion: 'Canon maximo sin coafianzamiento para destinacion COMERCIAL (COP), evaluado sobre el canon SIN IVA.',
+    // Contratos comercial §2.1 / §12.1 / Adenda contratos §2.2
+    descripcion: 'Canon máximo sin coafianzamiento para destinación COMERCIAL (COP), evaluado sobre el canon SIN IVA.',
     advertencia: 'Sin efecto hasta habilitar el arrendamiento comercial (Fase 2); mientras tanto los inmuebles comerciales y mixtos usan el tope de vivienda.',
   },
   {
@@ -166,8 +170,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 100,
     entero: true,
-    seccion: 'Politica §3.1',
-    descripcion: 'Puntaje normalizado desde el cual se aprueba automaticamente (firma solo).',
+    // Politica §3.1
+    descripcion: 'Puntaje normalizado desde el cual se aprueba automáticamente (firma solo).',
   },
   {
     clave: 'UMBRAL_ZONA_GRIS',
@@ -175,8 +179,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 100,
     entero: true,
-    seccion: 'Politica §3.1',
-    descripcion: 'Puntaje normalizado desde el cual empieza la zona gris (hasta el umbral de aprobacion). Por debajo, rechazo.',
+    // Politica §3.1
+    descripcion: 'Puntaje normalizado desde el cual empieza la zona gris (hasta el umbral de aprobación). Por debajo, rechazo.',
   },
   {
     clave: 'UMBRAL_SCORE_RECHAZO',
@@ -186,7 +190,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 450,
     max: 700,
     entero: true,
-    seccion: 'Adenda 2 §2',
+    // Adenda 2 §2
     descripcion: 'Score externo de la central por debajo del cual se rechaza de inmediato, sin calcular el resto del modelo.',
   },
   {
@@ -195,10 +199,10 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 450,
     max: 900,
     entero: true,
-    seccion: 'Adenda 2 §2',
-    descripcion: 'Score externo hasta el cual el caso va a revision manual obligatoria (desde el umbral de rechazo). Prevalece sobre el rechazo por puntaje normalizado.',
+    // Adenda 2 §2
+    descripcion: 'Score externo hasta el cual el caso va a revisión manual obligatoria (desde el umbral de rechazo). Prevalece sobre el rechazo por puntaje normalizado.',
     advertencia:
-      'Subirlo manda mas casos a revision manual. Bajarlo de 599 no aprueba solos los scores de 600 hacia abajo: con el motor apagado, las centrales siguen marcando condicionado por debajo de 600.',
+      'Subirlo manda más casos a revisión manual. Bajarlo de 599 no aprueba solos los scores de 600 hacia abajo: con el motor apagado, las centrales siguen marcando condicionado por debajo de 600.',
   },
   {
     clave: 'UMBRAL_SIMILITUD_BIOMETRICA',
@@ -206,9 +210,9 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 50,
     max: 100,
     entero: true,
-    seccion: 'Adenda 2 §9 y §10',
-    descripcion: 'Similitud minima (%) entre la selfie y la cedula para dar por verificada la identidad, en la autorizacion del estudio y en la firma del contrato. Por debajo, un analista de Cofianza verifica por otro medio: nunca rechaza.',
-    advertencia: 'Revisar a los tres meses cuantas verificaciones legitimas caen al analista; si son pocas, puede evaluarse bajarlo.',
+    // Adenda 2 §9 y §10
+    descripcion: 'Similitud mínima (%) entre la selfie y la cédula para dar por verificada la identidad, en la autorización del estudio y en la firma del contrato. Por debajo, un analista de Cofianza verifica por otro medio: nunca rechaza.',
+    advertencia: 'Revisar a los tres meses cuántas verificaciones legítimas caen al analista; si son pocas, puede evaluarse bajarlo.',
   },
   {
     clave: 'TARIFA_IVA',
@@ -216,8 +220,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 50,
     entero: false,
-    seccion: 'Contratos comercial §3.3.2 / §12.2',
-    descripcion: 'Tarifa general de IVA (%). Se suma al estudio individual, a los paquetes prepagados (Adenda de precios §1.1-1.3), a la prima de vinculación y a la tarifa mensual de la fianza (Adenda 1 de contratos §1.1) y, en arrendamiento comercial, al canon. Es la única tasa: las facturas del estudio, del paquete y de la prima la toman de aquí.',
+    // Contratos comercial §3.3.2 / §12.2
+    descripcion: 'Tarifa general de IVA (%). Se suma al estudio individual, a los paquetes prepagados, a la prima de vinculación y a la tarifa mensual de la fianza y, en arrendamiento comercial, al canon. Es la única tasa: las facturas del estudio, del paquete y de la prima la toman de aquí.',
     advertencia: 'Es la tarifa legal: cambiarla solo si cambia la ley. Aplica a los cobros que se creen desde el cambio (hasta 60 s de cache); un cobro ya creado se factura con la tasa con la que se cobró.',
   },
   // Contratos V3 §14. Rigen SOLO para el asistente de contratos: el motor sigue
@@ -231,9 +235,9 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 50,
     entero: false,
-    seccion: 'Contratos V3 §14 / §2.2',
-    descripcion: 'Maximo (%) en que el canon pactado en el contrato puede superar el canon evaluado sin exigir una nueva evaluacion. Inclusivo.',
-    advertencia: 'Solo el contrato; la reasignacion conserva su 15 %.',
+    // Contratos V3 §14 / §2.2
+    descripcion: 'Máximo (%) en que el canon pactado en el contrato puede superar el canon evaluado sin exigir una nueva evaluación. Inclusivo.',
+    advertencia: 'Solo el contrato; la reasignación conserva su 15 %.',
   },
   {
     clave: 'TOPE_CANON_INGRESO_RECALCULO',
@@ -241,9 +245,9 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 10,
     max: 100,
     entero: false,
-    seccion: 'Contratos V3 §14 / §2.2',
-    descripcion: 'Relacion canon/ingreso maxima (%) al recalcular con un canon pactado mayor que el evaluado. Si el ingreso no se conoce, no bloquea.',
-    advertencia: 'No cambia la regla dura del motor (40 %).',
+    // Contratos V3 §14 / §2.2
+    descripcion: 'Relación canon/ingreso máxima (%) al recalcular con un canon pactado mayor que el evaluado. Si el ingreso no se conoce, no bloquea.',
+    advertencia: 'No cambia la condición obligatoria del motor (40 %).',
   },
   {
     clave: 'VIGENCIA_MESES_DEFECTO',
@@ -251,8 +255,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 2,
     max: 120,
     entero: true,
-    seccion: 'Contratos V3 §14',
-    descripcion: 'Vigencia (meses) con la que el asistente precarga el contrato cuando el estudio no trae una duracion.',
+    // Contratos V3 §14
+    descripcion: 'Vigencia (meses) con la que el asistente precarga el contrato cuando el estudio no trae una duración.',
   },
   {
     clave: 'MAX_CLAUSULAS_ADICIONALES',
@@ -260,7 +264,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1,
     max: 25,
     entero: true,
-    seccion: 'Contratos V3 §14.5 / §5.1.6',
+    // Contratos V3 §14.5 / §5.1.6
     descripcion: 'Cláusulas adicionales por contrato sin revisión de Cofianza. Por encima, el contrato queda bloqueado hasta que un administrador autorice ese conjunto exacto.',
     advertencia: 'El tope técnico es 25 (la numeración llega a QUINCUAGÉSIMA OCTAVA).',
   },
@@ -270,8 +274,8 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 4,
     max: 60,
     entero: true,
-    seccion: 'Contratos V3 §14.8 / §15.1',
-    descripcion: 'Días calendario para firmar desde el envío, hasta la medianoche del último día. Admite una sola prórroga de otros tantos y el proceso nunca pasa la vigencia del CRC (Adenda 1 de contratos, respuesta 10). Al vencer, el contrato pasa a FIRMA INCOMPLETA: la fianza no opera y hay que reenviarlo.',
+    // Contratos V3 §14.8 / §15.1
+    descripcion: 'Días calendario para firmar desde el envío, hasta la medianoche del último día. Admite una sola prórroga de otros tantos y el proceso nunca pasa la vigencia del CRC. Al vencer, el contrato pasa a FIRMA INCOMPLETA: la fianza no opera y hay que reenviarlo.',
     advertencia: 'Auco exige más de 3 días. Un plazo largo no amplía la vigencia del estudio: para reenviar, el CRC debe seguir vigente.',
   },
   {
@@ -280,7 +284,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1,
     max: 30,
     entero: true,
-    seccion: 'Adenda 1 contratos §5.6 / respuesta 15',
+    // Adenda 1 contratos §5.6 / respuesta 15
     descripcion: 'Días hábiles (sin sábados, domingos ni festivos de Colombia) que el inmueble queda reservado mientras se elabora el contrato, contados desde el día siguiente a «Iniciar contrato». Si en ese plazo el borrador no se envía a firma, se cancela solo, el inmueble se libera y se avisa a la inmobiliaria.',
     advertencia: 'Aplica también a los borradores en curso: acortarlo puede cancelar de inmediato los que ya superen el plazo nuevo.',
   },
@@ -292,7 +296,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1,
     max: 36,
     entero: true,
-    seccion: 'Adenda de precios §3.1 / §9.6',
+    // Adenda de precios §3.1 / §9.6
     descripcion: 'Meses de calendario de vigencia de un paquete prepagado de estudios, contados desde la aprobación del pago. Vencido el plazo, los cupos no usados se extinguen.',
     advertencia: 'Aplica a las compras cuyo pago se apruebe desde el cambio; los paquetes ya acreditados conservan su vencimiento.',
   },
@@ -304,7 +308,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1,
     max: 50,
     entero: true,
-    seccion: 'Adenda de precios §3.7 / §9.8',
+    // Adenda de precios §3.7 / §9.8
     descripcion: 'Se avisa a los titulares de la inmobiliaria (en la plataforma y por correo) cuando su saldo disponible de cupos de estudio baja de este número.',
   },
   {
@@ -313,7 +317,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 1_000,
     max: 10_000_000,
     entero: true,
-    seccion: 'Adenda de precios §1.1 / §9.1',
+    // Adenda de precios §1.1 / §9.1
     descripcion: 'Precio base del estudio individual (COP, SIN IVA). Se cobra más TARIFA_IVA: con 80.000 y 19 % el prospecto paga $95.200 (IVA incluido).',
     advertencia: 'Aplica a los cobros que se creen desde el cambio; un enlace de pago ya enviado conserva su valor.',
   },
@@ -325,7 +329,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 100,
     entero: false,
-    seccion: 'Adenda de precios §4 / §9.10',
+    // Adenda de precios §4 / §9.10
     descripcion: 'Beneficio (%) de la inmobiliaria sobre lo efectivamente pagado por el estudio, sin IVA, cuando el contrato en modalidad Tradicional queda vigente. Se acumula sin liquidar.',
     advertencia: 'Aplica a los beneficios que se causen desde el cambio; los ya causados conservan su porcentaje.',
   },
@@ -335,7 +339,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     min: 0,
     max: 100,
     entero: false,
-    seccion: 'Adenda de precios §4.4 / §9.11',
+    // Adenda de precios §4.4 / §9.11
     descripcion: 'Si una inmobiliaria con paquete de 25 vigente supera este % de contratos en modalidad Tradicional (últimos 6 meses, mínimo 5 contratos), se avisa a la Gerencia General. No bloquea nada.',
   },
 ];
@@ -389,7 +393,7 @@ export function invalidateCalibracionCache(): void {
 export function validarParametro(clave: string, valor: unknown): { def: DefinicionParametro; error: string | null } | null {
   const def = PARAMETROS.find((p) => p.clave === clave);
   if (!def) return null;
-  if (typeof valor !== 'number' || !Number.isFinite(valor)) return { def, error: 'El valor debe ser numerico' };
+  if (typeof valor !== 'number' || !Number.isFinite(valor)) return { def, error: 'El valor debe ser numérico' };
   if (def.entero && !Number.isInteger(valor)) return { def, error: 'El valor debe ser entero' };
   if (valor < def.min || valor > def.max) return { def, error: `Fuera de rango (${def.min} a ${def.max})` };
   return { def, error: null };
@@ -446,7 +450,7 @@ async function leerCalibracion(): Promise<Calibracion> {
 // rechaza sin consultar la segunda central lo que debía aprobarse.
 const PAREJAS_ORDENADAS: Array<[bajo: ClaveCalibracion, alto: ClaveCalibracion, nombreBajo: string, nombreAlto: string]> = [
   ['UMBRAL_ZONA_GRIS', 'UMBRAL_APROBACION_AUTOMATICA', 'La zona gris', 'la aprobación automática'],
-  ['UMBRAL_CASCADA_RECHAZO', 'UMBRAL_CASCADA_APROBACION', 'El rechazo en cascada', 'la aprobación en cascada'],
+  ['UMBRAL_CASCADA_RECHAZO', 'UMBRAL_CASCADA_APROBACION', 'El rechazo con la primera central', 'la aprobación con la primera central'],
 ];
 
 /** Pura: revisa que el cambio de `clave` no cruce su pareja. Devuelve el motivo o null. */
@@ -501,7 +505,7 @@ export async function setParametro(
 ): Promise<FilaParametro & { valor_anterior: number }> {
   const usuarioId = usuario.id;
   const v = validarParametro(clave, valor);
-  if (!v) throw AppError.notFound(`Parametro desconocido: ${clave}`, 'PARAMETRO_NOT_FOUND');
+  if (!v) throw AppError.notFound(`Parámetro desconocido: ${clave}`, 'PARAMETRO_NOT_FOUND');
   if (!puedeEditarParametro(clave, usuario))
     throw AppError.forbidden(
       'Este parámetro afecta el riesgo: solo la Gerencia General puede cambiarlo.',
@@ -547,7 +551,7 @@ export async function setParametro(
     throw new AppError(
       500,
       'CALIBRACION_HISTORIAL_ERROR',
-      `No se pudo registrar el historial del cambio de ${clave}; el valor no se modifico. ${histError?.message ?? ''}`.trim(),
+      `No se pudo registrar el historial del cambio de ${clave}; el valor no se modificó. ${histError?.message ?? ''}`.trim(),
     );
   }
   const histId = (hist as { id?: string }).id;

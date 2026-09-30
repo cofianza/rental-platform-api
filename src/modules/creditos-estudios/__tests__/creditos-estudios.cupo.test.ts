@@ -12,7 +12,7 @@ const { mockFrom, mockRpc, ops, queues, enqueue, mockTransition } = vi.hoisted((
     const q = queues.get(table);
     return q && q.length ? q.shift()! : { data: null, error: null };
   };
-  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'is', 'gt', 'or', 'order', 'limit', 'gte'];
+  const PASSTHROUGH = ['select', 'insert', 'update', 'delete', 'eq', 'neq', 'in', 'is', 'gt', 'or', 'order', 'limit', 'gte', 'range'];
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
     for (const m of PASSTHROUGH) {
@@ -63,6 +63,8 @@ import {
   armarDetallePaquetes,
   contarReservasAbiertas,
   desenlaceDeFalla,
+  listMovimientos,
+  NOTA_CONSUMO_CONFIRMADO,
 } from '../creditos-estudios.service';
 
 const updates = (table: string) => ops.filter((o) => o.table === table && o.method === 'update').map((o) => o.args[0]);
@@ -312,5 +314,35 @@ describe('saldo: el disponible excluye las reservas', () => {
       ahora,
     );
     expect(detalle[0]).toMatchObject({ comprados: 5, consumidos: 1, reservados: 1, disponibles: 3 });
+  });
+});
+
+describe('historial de créditos: notas que ve la inmobiliaria', () => {
+  it('sin referencias internas y con la confirmación del consumo explicada (cantidad 0)', async () => {
+    enqueue('movimientos_creditos_estudios', {
+      data: [
+        // Escritas por las RPC en SQL y por filas de antes del cambio.
+        { id: 'm1', tipo: 'consumo', cantidad: 0, literal: 'c', notas: 'Consumo: la consulta a centrales produjo resultado (Adenda de precios §2.2 c)' },
+        { id: 'm2', tipo: 'liberacion', cantidad: 1, literal: 'a', notas: 'La persona no existe en la central consultada (Adenda de precios §2.2 a): el cupo no se consume.' },
+        { id: 'm3', tipo: 'liberacion', cantidad: 1, literal: '2.5', notas: 'El prospecto no autorizó dentro del plazo (Adenda de precios §2.5; Flujo §14: 15 días).' },
+        { id: 'm4', tipo: 'ajuste', cantidad: -2, notas: 'Vencimiento del paquete: los cupos no usados se extinguen (Adenda de precios §3.1).' },
+        { id: 'm5', tipo: 'compra', cantidad: 5, notas: 'Compra de 5 estudios — sesion cs_test_123' },
+        { id: 'm6', tipo: 'reserva', cantidad: -1, notas: null },
+      ],
+      error: null,
+      count: 6,
+    });
+
+    const { movimientos } = await listMovimientos('perfil-1', {});
+
+    expect(movimientos.map((m) => m.notas)).toEqual([
+      NOTA_CONSUMO_CONFIRMADO,
+      'La persona no existe en la central consultada: el cupo no se consume.',
+      'El prospecto no autorizó dentro del plazo.',
+      'Vencimiento del paquete: los cupos no usados se extinguen.',
+      'Compra de 5 estudios.',
+      null,
+    ]);
+    expect(NOTA_CONSUMO_CONFIRMADO).toBe('Consumo confirmado: la consulta dio resultado (el cupo ya estaba reservado).');
   });
 });

@@ -402,6 +402,22 @@ export async function extinguirCuposVencidos(): Promise<number> {
 // Movimientos (historial)
 // ============================================================
 
+/** Nota de la confirmación del consumo (cantidad 0: el cupo ya salió con la reserva). */
+export const NOTA_CONSUMO_CONFIRMADO = 'Consumo confirmado: la consulta dio resultado (el cupo ya estaba reservado).';
+
+/**
+ * Pura: la nota que ve la inmobiliaria en su historial. Las RPC de cupos (SQL)
+ * y las filas viejas escriben referencias internas como «(Adenda de precios
+ * §2.2 a)»; se quitan al leer para no depender de una migración.
+ */
+export function notaVisibleMovimiento(m: { tipo?: unknown; literal?: unknown; notas?: unknown }): string | null {
+  if (m.tipo === 'consumo' && m.literal === 'c') return NOTA_CONSUMO_CONFIRMADO;
+  if (typeof m.notas !== 'string') return null;
+  return m.notas
+    .replace(/\s*\((?:Adenda|Pol[ií]tica|Flujo)[^)]*\)/g, '')
+    .replace(/ — sesion \S+$/, '.');
+}
+
 export async function listMovimientos(perfilId: string, query: ListMovimientosQuery) {
   const page = query.page ?? 1;
   const limit = query.limit ?? 20;
@@ -462,6 +478,7 @@ export async function listMovimientos(perfilId: string, query: ListMovimientosQu
   }
 
   for (const m of movimientos) {
+    m.notas = notaVisibleMovimiento(m);
     if (m.tipo === 'compra' && m.lote_id) {
       const compraId = compraByLote.get(m.lote_id as string);
       if (compraId) {
@@ -966,7 +983,7 @@ export async function acreditarCompraDesdeWebhook(
       tipo: 'compra',
       cantidad: compra.cantidad_estudios,
       saldo_resultante: saldoTotal + descontados,
-      notas: `Compra de ${compra.cantidad_estudios} estudios — sesion ${stripeSessionId}`,
+      notas: `Compra de ${compra.cantidad_estudios} estudios.`,
     } as never);
   if (descontados > 0) {
     await db('movimientos_creditos_estudios').insert({
@@ -1544,9 +1561,11 @@ export function destinoCupoNoConsumido(resultado: string): string {
 }
 
 const MENSAJE_LIBERACION: Record<LiteralNoConsumo, string> = {
-  a: 'La persona no existe en la central consultada (Adenda de precios §2.2 a): el cupo no se consume.',
-  b: 'La central no respondió o su respuesta no fue utilizable (Adenda de precios §2.2 b): el cupo no se consume.',
-  '2.5': 'El estudio no llegó a la consulta a centrales (Adenda de precios §2.5): el cupo no se consume.',
+  // Adenda de precios §2.2 a / §2.2 b / §2.5 (la referencia no va en el texto:
+  // lo ve la inmobiliaria en su historial de créditos).
+  a: 'La persona no está registrada en la central consultada: el cupo no se consume.',
+  b: 'La central no respondió o su respuesta no fue utilizable: el cupo no se consume.',
+  '2.5': 'El estudio no llegó a la consulta a centrales: el cupo no se consume.',
 };
 
 /**
@@ -1642,6 +1661,9 @@ export async function asegurarReservaParaConsulta(expedienteId: string, usuarioI
   }
 }
 
+// Adenda de precios §2.4.
+const MSG_CUPO_CONSUMIDO = 'El cupo ya se consumió con el resultado de la consulta a centrales, así que no se puede devolver.';
+
 /**
  * P1 / §2.5: el estudio se cerró o se rechazó sin consulta al buró. Se libera
  * la reserva (literal 2.5) al mismo lote —si el lote venció, el cupo se
@@ -1668,14 +1690,14 @@ export async function devolverCreditoDePago(
   }
   if (consumido) {
     throw AppError.conflict(
-      'El cupo se consumió con el resultado de la consulta a centrales: no se devuelve (Adenda de precios §2.4).',
+      MSG_CUPO_CONSUMIDO,
       'CUPO_CONSUMIDO',
     );
   }
 
   const r = await liberarReservaCupo(pagoId, '2.5', { usuarioId, notas: `Devolución: ${motivo}.` });
   if (r === 'consumido') {
-    throw AppError.conflict('El cupo se consumió con el resultado de la consulta a centrales: no se devuelve (Adenda de precios §2.4).', 'CUPO_CONSUMIDO');
+    throw AppError.conflict(MSG_CUPO_CONSUMIDO, 'CUPO_CONSUMIDO');
   }
 
   // Import dinámico: la máquina de estados arrastra las notificaciones.

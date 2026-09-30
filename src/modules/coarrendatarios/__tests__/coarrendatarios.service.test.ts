@@ -898,7 +898,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
       expect(mockNotificarUsuario).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'analista-1',
-          titulo: expect.stringContaining('regla dura'),
+          titulo: expect.stringContaining('no cumple una condición obligatoria'),
           mensaje: expect.stringContaining('«Cambiar estado»'),
         }),
       ),
@@ -974,8 +974,10 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     expect(update).toBeDefined();
     const payload = update!.args[0] as { estado: string; motivo_rechazo?: string };
     expect(payload.estado).toBe('rechazado');
-    expect(payload.motivo_rechazo).toContain('regla dura');
+    expect(payload.motivo_rechazo).toContain('no cumple una condición obligatoria');
     expect(payload.motivo_rechazo).toContain('DTI > 65%');
+    // Lo ven la inmobiliaria y el propietario: sin referencias internas ni jerga.
+    expect(payload.motivo_rechazo).not.toMatch(/§|Política V4|regla dura|contamina/i);
     expect(mockLiberarReserva).toHaveBeenCalledWith(EXPEDIENTE_ID);
     expect(mockEmitirCrc).not.toHaveBeenCalled();
   });

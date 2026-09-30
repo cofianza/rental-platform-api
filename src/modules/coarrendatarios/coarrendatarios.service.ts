@@ -364,9 +364,8 @@ function buildMotivoRechazoCoarrendatario(
     // Politica §5: la regla dura del coarrendatario contamina el conjunto,
     // gane lo que gane el titular. Este banner es gestor-only.
     return (
-      `La evaluación del co-arrendatario activó una regla dura de la Política V4.1 ` +
-      `(${reglasDurasCoarrendatario.map(etiquetaReglaDura).join(', ')}). ` +
-      'La regla dura del co-arrendatario contamina el conjunto (Política §5): el estudio no procede.'
+      'La evaluación del co-arrendatario no cumple una condición obligatoria de la política de riesgo ' +
+      `(${reglasDurasCoarrendatario.map(etiquetaReglaDura).join(', ')}). Por eso el estudio no puede continuar.`
     );
   }
   if (titularResultado === 'condicionado' && coarrendatarioResultado === 'condicionado') {
@@ -1572,10 +1571,10 @@ export async function onCoarrendatarioEstudioCompletado(
         expediente_id: est.expediente_id,
         tipo: 'estudio',
         descripcion: sinCentrales
-          ? 'Las centrales de riesgo no respondieron en una de las dos evaluaciones, así que no se puede ponderar. El estudio sigue en revisión manual de Cofianza (Política §14).'
+          ? 'Las centrales de riesgo no respondieron en una de las dos evaluaciones, así que no se puede ponderar. El estudio sigue en revisión manual de Cofianza.'
           : sinInfo
           ? 'La evaluación del co-arrendatario se completó, pero el buró no tiene información crediticia suficiente para ponderar. El estudio sigue en revisión manual de Cofianza.'
-          : `La evaluación del co-arrendatario se completó (resultado: ${est.resultado}). El estudio sigue en revisión manual: lo decide un analista de Cofianza con los dos resultados (Adenda 2 §5).`,
+          : 'La evaluación del co-arrendatario se completó. El estudio sigue en revisión manual: lo decide un analista de Cofianza con los dos resultados.',
         metadata: {
           automatico: true,
           origen: 'ponderacion_coarrendatario',
@@ -1720,7 +1719,7 @@ export async function onCoarrendatarioEstudioCompletado(
       descripcion:
         `Resultado combinado con la evaluación del co-arrendatario: ${resultadoCombinado}. Titular ${titular.resultado} + coarrendatario ${est.resultado}.` +
         (reglasDurasCoa.length > 0
-          ? ` Regla dura del co-arrendatario (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}): contamina el conjunto (Política §5).`
+          ? ` El co-arrendatario no cumple una condición obligatoria de la política de riesgo (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}), así que el estudio no puede continuar.`
           : ''),
       estado_anterior: 'condicionado',
       estado_nuevo: nuevoEstadoExpediente,
@@ -1883,9 +1882,9 @@ function decisionYaTomada(
           notificarUsuario({
             userId: a.id,
             tipo: 'estudio.revision_manual',
-            titulo: `Co-arrendatario con regla dura en un estudio aprobado — ${formatNumeroEstudio(ctx.numero)}`,
+            titulo: `Co-arrendatario que no cumple una condición obligatoria en un estudio aprobado — ${formatNumeroEstudio(ctx.numero)}`,
             mensaje:
-              `El co-arrendatario salió con una regla dura (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}) después de que se aprobó el estudio. ` +
+              `El co-arrendatario no cumple una condición obligatoria de la política de riesgo (${reglasDurasCoa.map(etiquetaReglaDura).join(', ')}) y el estudio ya estaba aprobado. ` +
               'La aprobación se mantiene y el co-arrendatario queda fuera: no va al CRC ni al contrato y la prima es del 20 %. ' +
               'Si hay que revertirla, use «Cambiar estado» antes de la firma.',
             link: `/expedientes/${ctx.id}`,
