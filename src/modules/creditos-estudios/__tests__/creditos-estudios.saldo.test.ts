@@ -84,14 +84,22 @@ describe('P1 / Adenda §2.5: devolver el cupo de una evaluación sin consulta al
     sinResultado();
     mockRpc.mockResolvedValueOnce({ data: 'liberado', error: null });
 
-    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('devuelto');
+    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toEqual({ estado: 'devuelto', cupo: 'liberado' });
 
     expect(mockRpc).toHaveBeenCalledWith('liberar_reserva_credito', expect.objectContaining({ p_pago_id: 'pago-1', p_literal: '2.5' }));
     expect(mockTransition).toHaveBeenCalledWith(expect.objectContaining({ pagoId: 'pago-1', targetEstado: 'reembolsado' }));
   });
 
+  it('M2: devuelve adónde fue el cupo (a_deuda: cubrió saldo en contra)', async () => {
+    ultimo('reserva');
+    sinResultado();
+    mockRpc.mockResolvedValueOnce({ data: 'a_deuda', error: null });
+
+    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toEqual({ estado: 'devuelto', cupo: 'a_deuda' });
+  });
+
   it('un pago que no fue con crédito no se toca', async () => {
-    expect(await devolverCreditoDePago('pago-mp', 'Estudio cerrado', 'user-1')).toBe('no_es_credito');
+    expect(await devolverCreditoDePago('pago-mp', 'Estudio cerrado', 'user-1')).toEqual({ estado: 'no_es_credito' });
     expect(mockTransition).not.toHaveBeenCalled();
     expect(mockRpc).not.toHaveBeenCalled();
   });
@@ -102,7 +110,7 @@ describe('P1 / Adenda §2.5: devolver el cupo de una evaluación sin consulta al
     mockRpc.mockResolvedValueOnce({ data: 'ya_liberado', error: null });
     mockTransition.mockResolvedValueOnce({ pago: null, transitioned: false });
 
-    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toBe('ya_devuelto');
+    expect(await devolverCreditoDePago('pago-1', 'Estudio cerrado', 'user-1')).toEqual({ estado: 'ya_devuelto' });
   });
 
   it('§2.4: un cupo consumido con resultado (c) no se devuelve por ningún motivo', async () => {

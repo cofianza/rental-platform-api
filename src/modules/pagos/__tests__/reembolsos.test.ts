@@ -44,7 +44,7 @@ const {
     mockTransition: vi.fn(async () => undefined),
     mockOnPagoConfirmado: vi.fn(async () => undefined),
     mockNotificarYCorreo: vi.fn(async () => undefined),
-    mockDevolverCredito: vi.fn(async () => 'no_es_credito'),
+    mockDevolverCredito: vi.fn(async (): Promise<{ estado: string; cupo?: string }> => ({ estado: 'no_es_credito' })),
     mockEsCredito: vi.fn(async () => false),
     mockCupoLiberado: vi.fn(async () => false),
     mockLiberarReserva: vi.fn(async () => 'liberado'),
@@ -66,7 +66,8 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarResponsableExpediente: vi.fn(async () => undefined),
 }));
 vi.mock('@/modules/orchestrator/orchestrator.service', () => ({ onPagoConfirmado: mockOnPagoConfirmado }));
-vi.mock('@/modules/creditos-estudios/creditos-estudios.service', () => ({
+vi.mock('@/modules/creditos-estudios/creditos-estudios.service', async (importOriginal) => ({
+  destinoCupoNoConsumido: (await importOriginal<typeof import('@/modules/creditos-estudios/creditos-estudios.service')>()).destinoCupoNoConsumido,
   devolverCreditoDePago: mockDevolverCredito,
   esPagoConCredito: mockEsCredito,
   cupoLiberado: mockCupoLiberado,
@@ -118,7 +119,7 @@ beforeEach(() => {
   ops.length = 0;
   vi.clearAllMocks();
   mockTransitionChecked.mockResolvedValue({ pago: null, transitioned: true });
-  mockDevolverCredito.mockResolvedValue('no_es_credito');
+  mockDevolverCredito.mockResolvedValue({ estado: 'no_es_credito' });
   mockEsCredito.mockResolvedValue(false);
   mockCupoLiberado.mockResolvedValue(false);
   mockLiberarReserva.mockResolvedValue('liberado');
@@ -145,7 +146,7 @@ describe('al cerrar o rechazar el estudio', () => {
       { data: [{ id: 'est-1', estado: 'formulario_completado', referencia_proveedor: null }], error: null },
       { data: [{ id: 'est-1' }], error: null }, // CAS a cancelado
     );
-    mockDevolverCredito.mockResolvedValueOnce('devuelto');
+    mockDevolverCredito.mockResolvedValueOnce({ estado: 'devuelto', cupo: 'liberado' });
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
 
@@ -233,7 +234,7 @@ describe('al cerrar o rechazar el estudio', () => {
     sinCobrosVivos();
     enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
     enqueue('pagos_no_conciliados', { data: { id: FILA }, error: null }); // la fila dudosa de la primera pasada
-    mockDevolverCredito.mockResolvedValue('devuelto'); // lo que haría si se volviera a decidir
+    mockDevolverCredito.mockResolvedValue({ estado: 'devuelto', cupo: 'liberado' }); // lo que haría si se volviera a decidir
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
 
@@ -749,7 +750,7 @@ describe('Adenda de precios §2: el cupo en el cierre y en el abandono', () => {
     enqueue('pagos_no_conciliados', { data: null, error: null });
     enqueue('estudios', { data: [{ id: 'est-1', estado: 'fallido', referencia_proveedor: null }], error: null });
     mockCupoLiberado.mockResolvedValueOnce(true);
-    mockDevolverCredito.mockResolvedValueOnce('devuelto');
+    mockDevolverCredito.mockResolvedValueOnce({ estado: 'devuelto', cupo: 'liberado' });
 
     await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
 
@@ -772,6 +773,31 @@ describe('Adenda de precios §2: el cupo en el cierre y en el abandono', () => {
     expect(mockLiberarReserva).toHaveBeenCalledTimes(1);
     expect(mockLiberarReserva).toHaveBeenCalledWith('pago-a', '2.5', expect.objectContaining({ notas: expect.stringContaining('§2.5') }));
     expect(ops.some((o) => o.table === 'eventos_timeline' && o.method === 'insert')).toBe(true);
+  });
+
+  it('M2: si el cupo cubrió saldo en contra (a_deuda), el timeline no dice que volvió al saldo', async () => {
+    enqueue('movimientos_creditos_estudios', { data: [{ pago_id: 'pago-a', expediente_id: 'exp-a', tipo: 'reserva' }], error: null });
+    mockLiberarReserva.mockResolvedValueOnce('a_deuda');
+
+    expect(await liberarCuposAbandonados()).toBe(1);
+
+    const tl = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert')?.args[0] as { descripcion: string };
+    expect(tl.descripcion).toContain('saldo en contra');
+    expect(tl.descripcion).not.toContain('volvió al saldo');
+  });
+
+  it('M2: cierre sin consulta con el cupo aplicado a saldo en contra: el timeline lo dice', async () => {
+    sinCobrosVivos();
+    enqueue('pagos', { data: { ...pagoMp, metodo: 'transferencia', transaction_ref: null }, error: null });
+    enqueue('pagos_no_conciliados', { data: null, error: null });
+    enqueue('estudios', { data: [{ id: 'est-1', estado: 'formulario_completado', referencia_proveedor: null }], error: null }, { data: [{ id: 'est-1' }], error: null });
+    mockDevolverCredito.mockResolvedValueOnce({ estado: 'devuelto', cupo: 'a_deuda' });
+
+    await devolverEvaluacionSinConsulta(EXP, 'Estudio cerrado', 'user-1');
+
+    const tl = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert')?.args[0] as { descripcion: string };
+    expect(tl.descripcion).toContain('saldo en contra');
+    expect(tl.descripcion).not.toContain('volvió al saldo');
   });
 
   it('§2.5: una reserva ya consumida o liberada no se toca (manda el último movimiento del pago)', async () => {
