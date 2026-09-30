@@ -109,12 +109,22 @@ export function motivoNoAfianzable(
 const MENSAJES_NO_AFIANZABLE: Readonly<Record<MotivoNoAfianzable, string>> = {
   destinacion:
     'Los estudios de inmuebles de uso comercial o mixto están en desarrollo y todavía no se pueden solicitar ' +
-    'por la plataforma. No se generó ningún cobro.',
+    'por la plataforma.',
   persona_juridica:
     'Los estudios de arrendatarios persona jurídica o identificados con NIT están en desarrollo y todavía no se ' +
-    'pueden solicitar por la plataforma. No se generó ningún cobro.',
+    'pueden solicitar por la plataforma.',
 };
 
-export function errorNoAfianzable(motivo: MotivoNoAfianzable): AppError {
-  return new AppError(409, ESTUDIO_NO_AFIANZABLE_ERROR_CODE, MENSAJES_NO_AFIANZABLE[motivo], { motivo });
+/**
+ * `yaCobrado`: el bloqueo llegó después del pago (el NIT se escribió al enviar
+ * la autorización o en «Mi cuenta», H43). Ver errorNoAfianzableSegunCobro.
+ */
+export function errorNoAfianzable(motivo: MotivoNoAfianzable, opts: { yaCobrado?: boolean } = {}): AppError {
+  const cobro = opts.yaCobrado
+    ? ' La evaluación de este estudio ya estaba pagada: Cofianza revisará la devolución con quien hizo el pago.'
+    : ' No se generó ningún cobro.';
+  return new AppError(409, ESTUDIO_NO_AFIANZABLE_ERROR_CODE, MENSAJES_NO_AFIANZABLE[motivo] + cobro, {
+    motivo,
+    ...(opts.yaCobrado ? { ya_cobrado: true } : {}),
+  });
 }

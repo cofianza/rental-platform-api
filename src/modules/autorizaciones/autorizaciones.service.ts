@@ -7,7 +7,7 @@ import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
 import { assertExpedienteAccess, resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
-import { estudioYaCobrado as estudioPagado, leerSenalPagoEstudio } from '@/modules/estudios/pago.guard';
+import { errorNoAfianzableSegunCobro, estudioYaCobrado as estudioPagado, leerSenalPagoEstudio } from '@/modules/estudios/pago.guard';
 import { normalizarDocumento, normalizarTipoDocumento } from '@/modules/estudios/autorizacion.guard';
 import { env } from '@/config';
 import { getCalibracion } from '@/lib/calibracion';
@@ -30,7 +30,7 @@ import {
 import type { ResumenBiometria } from './biometria';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 import { existeOtraCuentaConDocumento, MSG_DOC_DE_OTRA_CUENTA_GESTOR } from '@/modules/solicitantes/solicitantes.service';
-import { errorNoAfianzable, motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
+import { motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 
 // ============================================================
 // Constants
@@ -361,7 +361,8 @@ export async function enviarEnlaceAutorizacion(
     tipo_persona: exp.solicitantes?.tipo_persona,
     tipo_documento: contacto?.tipo_documento || exp.solicitantes?.tipo_documento,
   });
-  if (motivoDoc) throw errorNoAfianzable(motivoDoc);
+  // Si ya se pagó (gestor o cupo), el mensaje no dice «sin cobro» y Cofianza revisa la devolución.
+  if (motivoDoc) throw await errorNoAfianzableSegunCobro(motivoDoc, [expedienteId]);
 
   // 1a. Aplicar la corrección de contacto si vino en el body. El teléfono
   // solo cuenta si trae dígitos reales (el PhoneInput de la web deja '+57 '

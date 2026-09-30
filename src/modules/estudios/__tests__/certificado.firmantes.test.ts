@@ -328,6 +328,26 @@ describe('tolerancia de canon del CRC', () => {
     expect(t).toMatch(/ni el canon máximo sin coafianzamiento vigente para este inmueble \(\$\s3\.000\.000\)/);
   });
 
+  // Adenda de precios §7.4 (revisión 2026-09-29, M4): con la excepción de la
+  // Gerencia General el techo es el canon autorizado, no el tope de 3.000.000.
+  it('con excepción de tope, ampara hasta el canon autorizado por la Gerencia General', async () => {
+    enqueue('estudios', {
+      data: {
+        ...ESTUDIO,
+        canon_evaluado: '3500000',
+        expedientes: { ...ESTUDIO.expedientes, excepcion_tope_canon_cop: '3800000' },
+      },
+      error: null,
+    });
+    enqueue('estudios_certificados', { data: null, error: null }, { data: { id: 'cert-9' }, error: null });
+    await generarCertificado('est-1', 'u-1', undefined, 'operador_analista');
+    const t = impreso();
+    // 3.500.000 + 15% = 4.025.000 > canon autorizado (3.800.000).
+    expect(t).toMatch(/\$\s3\.800\.000/);
+    expect(t).not.toMatch(/\$\s3\.000\.000/);
+    expect(t).toMatch(/ni el canon autorizado por la Gerencia General de Cofianza para este inmueble \(\$\s3\.800\.000\)/);
+  });
+
   it('la tolerancia y el tope canon/ingreso salen del panel, no fijos', async () => {
     await generateCertificatePdf({ ...DATOS, canonIngresoPct: 28.57, toleranciaCanonPct: 10, canonIngresoRecalculoPct: 35 }, QR);
     const t = impreso();

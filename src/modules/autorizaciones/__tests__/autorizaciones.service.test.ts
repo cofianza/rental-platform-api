@@ -108,7 +108,9 @@ vi.mock('@/lib/tenantScope', () => ({
   perfilEsDuenoDeInmueble: vi.fn(async () => true),
   resolveInmobiliariaIdForPerfil: (...args: unknown[]) => mockOrgDelPerfil(...args),
 }));
-vi.mock('@/modules/estudios/pago.guard', () => ({
+vi.mock('@/modules/estudios/pago.guard', async (importOriginal) => ({
+  // errorNoAfianzableSegunCobro, real: lee la tabla `pagos` de la cola.
+  ...(await importOriginal<typeof import('@/modules/estudios/pago.guard')>()),
   estudioYaCobrado: (...args: unknown[]) => mockEstudioYaCobrado(...args),
   // Misma fuente que estudioYaCobrado en los tests; 'no_verificable' se prueba aparte.
   leerSenalPagoEstudio: async (...args: unknown[]) => ((await mockEstudioYaCobrado(...args)) ? 'pagado' : 'no_pagado'),
@@ -558,6 +560,21 @@ describe('autorizaciones.service', () => {
         enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'nit', numero_documento: '900123456' }),
       ).rejects.toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE' });
       expect(opsDe('solicitantes', 'update')).toEqual([]);
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    // Revisión 2026-09-29, M6: el gestor ya pagó (o reservó el cupo) y luego escribe el NIT.
+    it('M6: NIT con la evaluación ya pagada -> 409 sin «sin cobro» y aviso a Cofianza', async () => {
+      const { listOperators } = await import('@/modules/users/users.service');
+      const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
+      vi.mocked(listOperators).mockResolvedValueOnce([{ id: 'op-1' }] as never);
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      enqueue('pagos', { data: { id: 'pago-1' }, error: null });
+      const err = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'nit', numero_documento: '900123456' }).catch((e) => e);
+      expect(err).toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_NO_AFIANZABLE', details: { ya_cobrado: true } });
+      expect(err.message).not.toContain('No se generó ningún cobro');
+      expect(err.message).toContain('Cofianza revisará la devolución');
+      expect(notificarYCorreo).toHaveBeenCalledWith(expect.objectContaining({ userId: 'op-1', link: `/expedientes/${EXPEDIENTE_ID}` }));
       expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
     });
 
