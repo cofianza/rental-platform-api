@@ -51,6 +51,7 @@ vi.mock('../../whatsapp', () => ({ enviarTemplate: vi.fn() }));
 
 import { solicitarEnlaceMagico, verificarEnlaceMagico } from '../enlace-magico.service';
 import { enlaceMagicoPorCorreoLimiter, enlaceMagicoPorIpLimiter } from '@/middleware/rateLimiter';
+import { recordTermsAcceptance } from '../../registration/registration.service';
 
 const EMAIL = 'Ana_R@Correo.co';
 const datos = {
@@ -78,7 +79,7 @@ describe('solicitarEnlaceMagico', () => {
   });
 
   it('invitado sin cuenta y con sus datos: crea la cuenta sin contraseña como arrendatario y le manda el enlace', async () => {
-    h.resp.expedientes = { data: [{ solicitante_id: null }], error: null };
+    h.resp.expedientes = { data: [{ solicitante_id: null, token_invitacion: 't'.repeat(64) }], error: null };
     h.resp.rpc = { data: null, error: null };
     h.resp.solicitantes = { data: [], error: null };
     h.createUser.mockResolvedValue({ data: { user: { id: 'u-nuevo' } }, error: null });
@@ -94,15 +95,40 @@ describe('solicitarEnlaceMagico', () => {
     expect(h.sendEmail).toHaveBeenCalledWith('ana_r@correo.co', 'https://web.test/auth/confirmar#token_hash=abc123def456abc123');
   });
 
+  it('M7: al crear la cuenta no toma el documento ni registra la aceptación (aún no probó el correo)', async () => {
+    h.resp.expedientes = { data: [{ solicitante_id: null, token_invitacion: 't'.repeat(64) }], error: null };
+    h.resp.rpc = { data: null, error: null };
+    h.createUser.mockResolvedValue({ data: { user: { id: 'u-nuevo' } }, error: null });
+
+    await solicitarEnlaceMagico({ email: EMAIL, datos }, '1.1.1.1', 'ua');
+
+    expect(h.createUser).toHaveBeenCalledOnce();
+    const updPerfil = h.ops.find((o) => o.tabla === 'perfiles' && o.op === 'update');
+    expect(updPerfil?.args[0]).not.toHaveProperty('numero_documento');
+    const ficha = h.ops.find((o) => o.tabla === 'solicitantes' && o.op === 'insert');
+    expect(ficha?.args[0]).toMatchObject({ numero_documento: '' });
+    expect(ficha?.args[0]).not.toHaveProperty('tipo_documento');
+    expect(recordTermsAcceptance).not.toHaveBeenCalled();
+    expect(h.sendEmail).toHaveBeenCalledOnce();
+  });
+
+  it('sin cuenta y con la invitación ya aceptada o sin token: no crea cuenta', async () => {
+    h.resp.expedientes = { data: [{ solicitante_id: null, token_invitacion: null }], error: null };
+    h.resp.rpc = { data: null, error: null };
+    await solicitarEnlaceMagico({ email: EMAIL, datos });
+    expect(h.createUser).not.toHaveBeenCalled();
+    expect(h.generateLink).not.toHaveBeenCalled();
+  });
+
   it('invitado sin cuenta y sin datos: no crea cuenta ni manda enlace', async () => {
-    h.resp.expedientes = { data: [{ solicitante_id: null }], error: null };
+    h.resp.expedientes = { data: [{ solicitante_id: null, token_invitacion: 't'.repeat(64) }], error: null };
     await solicitarEnlaceMagico({ email: EMAIL });
     expect(h.createUser).not.toHaveBeenCalled();
     expect(h.generateLink).not.toHaveBeenCalled();
   });
 
   it('invitado con cuenta de otro rol: no le cambia el rol ni le manda enlace', async () => {
-    h.resp.expedientes = { data: [{ solicitante_id: null }], error: null };
+    h.resp.expedientes = { data: [{ solicitante_id: null, token_invitacion: 't'.repeat(64) }], error: null };
     h.resp.rpc = { data: { id: 'u-prop' }, error: null };
     h.resp.perfiles = { data: { rol: 'propietario', estado: 'activo' }, error: null };
 
@@ -115,12 +141,26 @@ describe('solicitarEnlaceMagico', () => {
   });
 
   it('invitado con cuenta de arrendatario activa: solo le manda el enlace', async () => {
-    h.resp.expedientes = { data: [{ solicitante_id: 's-1' }], error: null };
+    h.resp.expedientes = { data: [{ solicitante_id: 's-1', token_invitacion: 't'.repeat(64) }], error: null };
     h.resp.rpc = { data: { id: 'u-sol' }, error: null };
     h.resp.perfiles = { data: { rol: 'solicitante', estado: 'activo' }, error: null };
 
     await solicitarEnlaceMagico({ email: EMAIL, datos });
 
+    expect(h.createUser).not.toHaveBeenCalled();
+    expect(h.sendEmail).toHaveBeenCalledOnce();
+  });
+
+  it('A1: arrendatario que ya aceptó la invitación (token en null) también recibe el enlace', async () => {
+    h.resp.expedientes = { data: [{ solicitante_id: 's-1', token_invitacion: null }], error: null };
+    h.resp.rpc = { data: { id: 'u-sol' }, error: null };
+    h.resp.perfiles = { data: { rol: 'solicitante', estado: 'activo' }, error: null };
+
+    await solicitarEnlaceMagico({ email: EMAIL });
+
+    // La búsqueda de invitaciones no exige una pendiente.
+    const filtros = h.ops.filter((o) => o.tabla === 'expedientes').map((o) => o.args[0]);
+    expect(filtros).not.toContain('token_invitacion');
     expect(h.createUser).not.toHaveBeenCalled();
     expect(h.sendEmail).toHaveBeenCalledOnce();
   });
@@ -156,6 +196,41 @@ describe('verificarEnlaceMagico', () => {
     h.resp.expedientes = { data: { token_invitacion: 'f'.repeat(64) }, error: null };
     const r = await verificarEnlaceMagico({ token_hash: 'abc123def456abc123' });
     expect(r.redirect).toBe(`/invitacion/${'f'.repeat(64)}`);
+  });
+
+  it('M7: primer ingreso sin aceptación registrada: la registra con la IP y el navegador de quien verifica', async () => {
+    h.verifyOtp.mockResolvedValue({
+      data: { user: { id: 'u-nuevo', email: 'ana@correo.co' }, session: { access_token: 'at', refresh_token: 'rt', expires_at: 1 } },
+      error: null,
+    });
+    h.resp.perfiles = { data: { rol: 'solicitante', estado: 'activo' }, error: null };
+    await verificarEnlaceMagico({ token_hash: 'abc123def456abc123' }, '2.2.2.2', 'ua-buzon');
+    expect(recordTermsAcceptance).toHaveBeenCalledWith('u-nuevo', '2.2.2.2', 'ua-buzon');
+  });
+
+  it('M7: si la aceptación ya estaba registrada, no la duplica', async () => {
+    h.verifyOtp.mockResolvedValue({
+      data: { user: { id: 'u-sol', email: 'ana@correo.co' }, session: { access_token: 'at', refresh_token: 'rt', expires_at: 1 } },
+      error: null,
+    });
+    h.resp.perfiles = { data: { rol: 'solicitante', estado: 'activo' }, error: null };
+    h.resp.terminos_aceptaciones = { data: { id: 'ta-1' }, error: null };
+    await verificarEnlaceMagico({ token_hash: 'abc123def456abc123' }, '2.2.2.2', 'ua');
+    expect(recordTermsAcceptance).not.toHaveBeenCalled();
+  });
+
+  it('cuenta que no es de arrendatario: cierra la sesión y responde el mismo 401 genérico', async () => {
+    h.verifyOtp.mockResolvedValue({
+      data: { user: { id: 'u-prop', email: 'p@b.co' }, session: { access_token: 'at', refresh_token: 'rt', expires_at: 1 } },
+      error: null,
+    });
+    h.resp.perfiles = { data: { rol: 'propietario', estado: 'activo' }, error: null };
+    await expect(verificarEnlaceMagico({ token_hash: 'abc123def456abc123' })).rejects.toMatchObject({
+      statusCode: 401,
+      errorCode: 'ENLACE_INVALIDO',
+    });
+    expect(h.signOut).toHaveBeenCalledWith('at');
+    expect(recordTermsAcceptance).not.toHaveBeenCalled();
   });
 
   it('enlace usado, vencido o inválido: 401 ENLACE_INVALIDO', async () => {

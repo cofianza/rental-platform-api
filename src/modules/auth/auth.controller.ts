@@ -80,6 +80,10 @@ export async function solicitarEnlaceMagico(req: Request, res: Response) {
 }
 
 export async function verificarEnlaceMagico(req: Request, res: Response) {
-  const result = await enlaceMagico.verificarEnlaceMagico(req.body as VerificarEnlaceMagicoInput, req.ip);
+  const result = await enlaceMagico.verificarEnlaceMagico(
+    req.body as VerificarEnlaceMagicoInput,
+    req.ip,
+    req.get('user-agent') ?? '',
+  );
   sendSuccess(res, result);
 }

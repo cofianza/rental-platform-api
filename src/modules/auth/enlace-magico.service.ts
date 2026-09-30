@@ -10,12 +10,17 @@
  *   servidor, y se canjea aquí por POST (verifyOtp). Vence según la
  *   configuración de Supabase (se recomienda 1 hora) y es de un solo uso.
  * - Solo a correos invitados a un estudio (expedientes.email_invitacion, lo
- *   envíe un propietario o una inmobiliaria). A cualquier otro correo, a una
+ *   envíe un propietario o una inmobiliaria). A una cuenta de arrendatario
+ *   que ya existe le basta con estar invitada (aunque ya aceptó: aceptar
+ *   borra token_invitacion); crear una cuenta exige una invitación pendiente. A cualquier otro correo, a una
  *   cuenta de otro rol o inactiva, la respuesta es la misma genérica y no se
  *   genera nada: no se revela si el correo tiene cuenta ni de qué tipo.
  * - Si el invitado aún no tiene cuenta y manda sus datos, se le crea sin
  *   contraseña y como arrendatario (rol 'solicitante': el mismo alta del
  *   registro de la vitrina). Nunca se le cambia el rol a una cuenta existente.
+ *   Quien pide el enlace aún no probó que el correo es suyo (M7): no se toma
+ *   su documento y la aceptación de términos y datos se registra al verificar
+ *   el enlace, con la IP y el navegador de quien lo abre.
  * - El token nunca va a los logs.
  */
 import { supabase, supabaseAuth } from '@/lib/supabase';
@@ -25,6 +30,7 @@ import { env } from '@/config';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEnlaceMagicoEmail } from '@/lib/email';
 import { crearCuentaSolicitante } from '../vitrina/vitrina.service';
+import { recordTermsAcceptance } from '../registration/registration.service';
 import type { EnlaceMagicoInput, VerificarEnlaceMagicoInput } from './auth.schema';
 
 const db = (table: string) => supabase.from(table as string) as ReturnType<typeof supabase.from>;
@@ -35,19 +41,23 @@ export const MENSAJE_ENLACE_GENERICO =
 /** `%`, `_` y `\` son comodines de ILIKE: sin escaparlos, «a_b@x.co» casaría «axb@x.co». */
 const literalIlike = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-/** Invitaciones a estudios (no canceladas) enviadas a ese correo. */
-async function invitacionesDe(email: string): Promise<Array<{ solicitante_id: string | null }> | null> {
+type Invitacion = { solicitante_id: string | null; token_invitacion: string | null };
+
+/**
+ * Invitaciones a estudios (no canceladas) enviadas a ese correo, pendientes o
+ * ya aceptadas (aceptar pone token_invitacion en null, A1).
+ */
+async function invitacionesDe(email: string): Promise<Invitacion[] | null> {
   const { data, error } = await db('expedientes')
-    .select('solicitante_id')
+    .select('solicitante_id, token_invitacion')
     .ilike('email_invitacion', literalIlike(email))
-    .not('token_invitacion', 'is', null)
     .is('cancelado_at', null)
     .limit(20);
   if (error) {
     logger.error({ error: error.message }, 'Enlace mágico: no se pudieron leer las invitaciones');
     return null;
   }
-  return (data as Array<{ solicitante_id: string | null }> | null) ?? [];
+  return (data as Invitacion[] | null) ?? [];
 }
 
 /**
@@ -84,16 +94,20 @@ export async function solicitarEnlaceMagico(input: EnlaceMagicoInput, ip?: strin
     userId = cuenta.id;
   } else {
     // Sin cuenta: solo se crea con una invitación pendiente y los datos del alta.
-    const pendiente = invitaciones.some((i) => !i.solicitante_id);
+    const pendiente = invitaciones.some((i) => !i.solicitante_id && i.token_invitacion);
     if (!pendiente || !input.datos) {
       logger.info({ email, pendiente }, 'Enlace mágico sin cuenta: faltan datos o no hay invitación pendiente');
       return;
     }
+    // Solo estos campos: ni documento ni aceptación de términos (M7).
+    const { nombre, apellido, telefono, municipio_id, municipio_nombre } = input.datos;
     try {
       userId = await crearCuentaSolicitante(
-        { ...input.datos, email, from_invitation: true },
+        { nombre, apellido, telefono, municipio_id, municipio_nombre, email, from_invitation: true },
         ip ?? '',
         userAgent,
+        undefined,
+        false,
       );
     } catch (err) {
       // Documento repetido, carrera con otro alta…: la respuesta sigue siendo la genérica.
@@ -124,23 +138,38 @@ export async function solicitarEnlaceMagico(input: EnlaceMagicoInput, ip?: strin
   });
 }
 
+const enlaceInvalido = () =>
+  AppError.unauthorized('Este enlace ya se usó o venció. Pida uno nuevo desde su invitación.', 'ENLACE_INVALIDO');
+
 /** POST /auth/enlace-magico/verificar: canjea el token_hash por la sesión, como el login. */
-export async function verificarEnlaceMagico({ token_hash }: VerificarEnlaceMagicoInput, ip?: string) {
+export async function verificarEnlaceMagico({ token_hash }: VerificarEnlaceMagicoInput, ip?: string, userAgent = '') {
   const { data, error } = await supabaseAuth.auth.verifyOtp({ token_hash, type: 'magiclink' });
   if (error || !data.session || !data.user) {
     logger.warn({ error: error?.message }, 'Enlace mágico inválido o vencido');
-    throw AppError.unauthorized(
-      'Este enlace ya se usó o venció. Pida uno nuevo desde su invitación.',
-      'ENLACE_INVALIDO',
-    );
+    throw enlaceInvalido();
   }
 
   const { data: perfil } = await db('perfiles').select('estado, rol').eq('id', data.user.id).maybeSingle();
   const p = perfil as { estado: string; rol: string } | null;
-  if (!p || p.estado !== 'activo') {
+  // Solo arrendatarios entran por aquí; a otro rol, el mismo 401 de un enlace malo.
+  if (p?.rol !== 'solicitante') {
+    await supabaseAuth.auth.admin.signOut(data.session.access_token);
+    logger.warn({ userId: data.user.id, rol: p?.rol }, 'Enlace mágico canjeado por una cuenta que no es de arrendatario');
+    throw enlaceInvalido();
+  }
+  if (p.estado !== 'activo') {
     await supabaseAuth.auth.admin.signOut(data.session.access_token);
     throw AppError.forbidden('Cuenta desactivada', 'ACCOUNT_INACTIVE');
   }
+
+  // M7: la cuenta creada por el enlace mágico registra la aceptación ahora que
+  // se probó el correo. Si ya estaba (registro con contraseña), no se duplica.
+  const { data: aceptacion } = await db('terminos_aceptaciones')
+    .select('id')
+    .eq('user_id', data.user.id)
+    .limit(1)
+    .maybeSingle();
+  if (!aceptacion) await recordTermsAcceptance(data.user.id, ip ?? '', userAgent);
 
   logAudit({
     usuarioId: data.user.id,
