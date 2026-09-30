@@ -285,6 +285,26 @@ describe('las demas rutas por id que el titular alcanza', () => {
     expect(r.url).toBe('https://storage.test/estudios/est-1/certificado/uuid-1-arrendatario.pdf');
   });
 
+  // El completo lleva la decisión entre centrales y la versión del modelo: la
+  // inmobiliaria no lo baja por /certificado/url (antes le llegaba el completo).
+  it('/certificado/url de la inmobiliaria: la versión de la agencia, no el completo', async () => {
+    const completo = 'estudios/est-1/certificado/uuid-1.pdf';
+    const cert = { id: 'c-1', codigo: 'CERT-2026-00001', version: 1, pdf_storage_key: completo, fecha_emision: '2026-09-01', fecha_vencimiento: '2026-10-31' };
+    enqueue('estudios', { data: { ...fila('individual'), certificado_url: completo }, error: null });
+    enqueue('estudios', { data: fila('individual'), error: null }, { data: fila('individual'), error: null });
+    enqueue('estudios_certificados', { data: { pdf_storage_key: completo }, error: null }, { data: cert, error: null });
+    const r = await getCertificadoViewUrl('est-1', 'u-2', 'inmobiliaria');
+    expect(r.url).toBe('https://storage.test/estudios/est-1/certificado/uuid-1-agencia.pdf');
+  });
+
+  it('/certificado/url de la inmobiliaria con un reporte adjunto (no el CRC): ese reporte', async () => {
+    const adjunto = 'estudios/est-1/certificado/reporte-buro.pdf';
+    enqueue('estudios', { data: { ...fila('individual'), certificado_url: adjunto }, error: null });
+    enqueue('estudios_certificados', { data: null, error: null });
+    const r = await getCertificadoViewUrl('est-1', 'u-2', 'inmobiliaria');
+    expect(r.url).toBe(`https://storage.test/${adjunto}`);
+  });
+
   it('el gestor si baja el certificado del co-arrendatario', async () => {
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     // Pasa el guard y llega a buscar el certificado (no hay: 404 de certificado).

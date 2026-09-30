@@ -2321,6 +2321,20 @@ export async function getCertificadoViewUrl(estudioId: string, userId?: string, 
     throw AppError.notFound('Este estudio no tiene certificado adjunto', 'CERTIFICADO_NOT_FOUND');
   }
 
+  // La inmobiliaria y el propietario: si certificado_url es el CRC, su versión
+  // sin lo interno (paraAgencia); el completo queda para Cofianza. Un reporte
+  // del buró adjuntado por el analista se entrega tal cual.
+  if (userRol === 'inmobiliaria' || userRol === 'propietario') {
+    const { data: crc } = await (supabase
+      .from('estudios_certificados' as string) as ReturnType<typeof supabase.from>)
+      .select('pdf_storage_key')
+      .eq('estudio_id', estudioId)
+      .maybeSingle();
+    if ((crc as { pdf_storage_key?: string } | null)?.pdf_storage_key === est.certificado_url) {
+      return descargarCertificado(estudioId, userId, userRol);
+    }
+  }
+
   const { data: urlData, error: urlError } = await supabase.storage
     .from(BUCKET_NAME)
     .createSignedUrl(est.certificado_url, 3600);
