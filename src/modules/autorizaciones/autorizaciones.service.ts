@@ -419,6 +419,16 @@ export async function enviarEnlaceAutorizacion(
       .eq('id', exp.solicitante_id);
     if (docError) {
       logger.warn({ error: docError.message, expedienteId }, 'No se pudo corregir el documento del solicitante');
+      // 23505 = idx_solicitantes_documento_por_agencia: otra ficha de la misma
+      // agencia (o del mismo propietario) ya tiene ese documento.
+      if ((docError as { code?: string }).code === '23505') {
+        const esCedula = (tipoNuevo || exp.solicitantes.tipo_documento) === 'cc';
+        throw AppError.conflict(
+          `${esCedula ? 'Esa cédula ya está registrada' : 'Ese documento ya está registrado'} para otro solicitante` +
+            `${userRol === 'inmobiliaria' ? ' de su inmobiliaria' : ''}. Verifique el número o continúe con el estudio de ese solicitante.`,
+          'DOCUMENTO_DUPLICADO',
+        );
+      }
       throw AppError.badRequest(
         'No se pudo corregir el documento del solicitante. Revíselo en su ficha y vuelva a intentarlo.',
         'DOCUMENTO_NO_ACTUALIZADO',

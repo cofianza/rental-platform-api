@@ -106,3 +106,12 @@ describe('GET /admin/calibracion', () => {
     expect((await filas(GERENTE)).every((f) => f.editable)).toBe(true);
   });
 });
+
+describe('textos del panel', () => {
+  it('sin referencias a documentos internos (el panel no muestra «§», Adenda ni Política)', () => {
+    for (const p of PARAMETROS) {
+      expect(p).not.toHaveProperty('seccion');
+      expect(`${p.descripcion} ${p.advertencia ?? ''}`).not.toMatch(/§|Adenda|Pol[ií]tica|Flujo|respuesta \d/);
+    }
+  });
+});

@@ -247,23 +247,23 @@ export function evaluarAutorizacionPrevia(
 /** Mensaje accionable para el gestor, por motivo. */
 const MENSAJE_POR_MOTIVO: Record<MotivoRechazoAutorizacion, string> = {
   sin_autorizacion:
-    'El solicitante aun no ha autorizado la consulta en centrales de riesgo. Envie la solicitud de autorizacion antes de ejecutar el estudio.',
+    'El solicitante aún no ha autorizado la consulta en centrales de riesgo. Envíe la solicitud de autorización antes de ejecutar el estudio.',
   no_firmada:
-    'La solicitud de autorizacion fue enviada pero el solicitante todavia no la ha firmado. Espere la firma o reenvie el enlace antes de ejecutar el estudio.',
+    'La solicitud de autorización fue enviada, pero el solicitante todavía no la ha firmado. Espere la firma o reenvíe el enlace antes de ejecutar el estudio.',
   revocada:
-    'El solicitante revoco su autorizacion de tratamiento de datos. No se puede consultar centrales de riesgo: solicite una nueva autorizacion.',
+    'El solicitante revocó su autorización de tratamiento de datos. No se pueden consultar las centrales de riesgo: solicite una nueva autorización.',
   caducada:
-    'La autorizacion de tratamiento de datos ya caduco. Envie una nueva solicitud de autorizacion antes de ejecutar el estudio.',
+    'La autorización de tratamiento de datos ya caducó. Envíe una nueva solicitud de autorización antes de ejecutar el estudio.',
   posterior_a_la_consulta:
-    'La autorizacion es posterior al momento de la consulta. La autorizacion debe ser previa (Ley 1266 de 2008): vuelva a ejecutar el estudio.',
+    'La autorización es posterior al momento de la consulta. La autorización debe ser previa (Ley 1266 de 2008): vuelva a ejecutar el estudio.',
   otro_titular:
-    'La autorizacion registrada no corresponde a la persona que se va a consultar. Envie la solicitud de autorizacion a esa persona antes de ejecutar el estudio.',
+    'La autorización registrada no corresponde a la persona que se va a consultar. Envíe la solicitud de autorización a esa persona antes de ejecutar el estudio.',
   documento_distinto:
-    'El documento que se va a consultar no coincide con el de quien firmo la autorizacion. Corrija el documento o solicite una nueva autorizacion a esa persona.',
+    'El documento que se va a consultar no coincide con el de quien firmó la autorización. Corrija el documento o solicite una nueva autorización a esa persona.',
 };
 
 const MENSAJE_COARRENDATARIO_SIN_AUTORIZACION =
-  'El co-arrendatario invitado aun no ha autorizado la consulta en centrales de riesgo. Reenvie la invitacion para que acepte la autorizacion antes de ejecutar su estudio.';
+  'El co-arrendatario invitado aún no ha autorizado la consulta en centrales de riesgo. Reenvíe la invitación para que acepte la autorización antes de ejecutar su estudio.';
 
 /** Columnas de la fila que necesita el gate. */
 const COLUMNAS_EVIDENCIA =

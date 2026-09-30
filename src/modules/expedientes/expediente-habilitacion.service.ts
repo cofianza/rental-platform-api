@@ -540,7 +540,7 @@ async function assertRequisitosThinFile(expedienteId: string, revision: Decision
   const umbral = cal.UMBRAL_COARRENDATARIO;
   if (!coa || coa.puntaje === null || coa.puntaje < umbral) {
     throw AppError.badRequest(
-      'El solicitante no tiene historial en ninguna central de riesgo. Para aprobarlo, la Política exige un co-arrendatario ' +
+      'El solicitante no tiene historial en ninguna central de riesgo. Para aprobarlo, la política de riesgo exige un co-arrendatario ' +
         `evaluado con puntaje de ${umbral} o más` +
         (coa
           ? ` (el co-arrendatario vinculado tiene ${coa.puntaje === null ? 'una evaluación sin puntaje' : `${coa.puntaje} puntos`}).`
@@ -552,7 +552,7 @@ async function assertRequisitosThinFile(expedienteId: string, revision: Decision
   if (canonIngreso !== null && canonIngreso > THIN_FILE_CANON_INGRESO_MAX_PCT) {
     throw AppError.badRequest(
       `El solicitante no tiene historial en ninguna central de riesgo y el canon es el ${canonIngreso.toLocaleString('es-CO')}% ` +
-        `de su ingreso: para aprobarlo, la Política exige que no pase del ${THIN_FILE_CANON_INGRESO_MAX_PCT}%.`,
+        `de su ingreso: para aprobarlo, la política de riesgo exige que no pase del ${THIN_FILE_CANON_INGRESO_MAX_PCT}%.`,
       'THIN_FILE_CANON_INGRESO',
       { canon_ingreso_pct: canonIngreso, maximo_pct: THIN_FILE_CANON_INGRESO_MAX_PCT },
     );

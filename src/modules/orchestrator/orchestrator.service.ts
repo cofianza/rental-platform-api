@@ -14,6 +14,7 @@ import { MOTIVO_PROSPECTO_DECISION_COFIANZA } from '@/modules/estudios/rutas-res
 import {
   motivoProspectoReglasDuras,
   inferirReglasDurasDesdeMotivo,
+  etiquetaReglaDura,
 } from '@/modules/estudios/reglas-duras';
 import type { ReglaDuraActiva } from '@/modules/estudios/reglas-duras';
 // §6.3: la señal canonica de pago y la decision de orden (pura).
@@ -200,7 +201,7 @@ async function avisarRevisionManualAnalistas(params: {
     const titulo = `Revisión manual requerida — ${numero}`;
     const mensaje =
       `El estudio de ${solicitante} para ${direccion || 'el inmueble'} quedó condicionado. ` +
-      `Motivo: ${motivo}. SLA: 2 horas hábiles (Política V4.1 §3.1).`;
+      `Motivo: ${motivo}. Plazo de respuesta: 2 horas hábiles.`;
     await Promise.all(
       analistas.map((a) =>
         notificarUsuario({
@@ -809,8 +810,9 @@ export async function onEstudioCompletado(params: {
         expedienteId,
         'estudio',
         porReglaDura
-          ? `Estudio rechazado por regla dura de la Politica V4.1 (${reglaDura.reglas.join(', ')}). ` +
-              `Las reglas duras anulan el puntaje total${score !== null ? `: el score del buro fue ${score}` : ''}.`
+          ? 'Evaluación crediticia no aprobada: no cumple una condición obligatoria de la política de riesgo ' +
+              `(${reglaDura.reglas.map(etiquetaReglaDura).join(', ')}).` +
+              `${score !== null ? ` Puntaje de la central: ${score}.` : ''}`
           : `Evaluación crediticia rechazada (Score: ${score}).`,
       );
 
@@ -925,9 +927,9 @@ export async function onEstudioCompletado(params: {
         expedienteId,
         'estudio',
         sinCentrales
-          ? 'Ninguna central de riesgo respondió: el estudio pasó a revisión manual (Política §14). Un analista de Cofianza puede volver a consultar las centrales.'
+          ? 'Ninguna central de riesgo respondió: el estudio pasó a revisión manual. Un analista de Cofianza puede volver a consultar las centrales.'
           : porTope
-            ? `Evaluación favorable (Score: ${score ?? 's/d'}), pero el canon supera el tope vigente: el estudio queda pendiente de autorización de la Gerencia General (Adenda de precios §7). No se requieren documentos adicionales.`
+            ? `Evaluación favorable (puntaje: ${score ?? 'sin dato'}), pero el canon supera el tope vigente: el estudio queda pendiente de autorización de la Gerencia General. No se requieren documentos adicionales.`
             : `Estudio condicionado (Score: ${score}). Se requieren documentos adicionales.`,
       );
 

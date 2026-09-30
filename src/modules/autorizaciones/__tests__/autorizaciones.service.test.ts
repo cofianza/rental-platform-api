@@ -151,6 +151,7 @@ import {
   guardarPerfilProspecto,
 } from '../autorizaciones.service';
 import { TEXTO_LEGAL, TEXTO_LEGAL_BIOMETRIA, VERSION_TERMINOS, VERSION_TERMINOS_BIOMETRIA } from '../autorizaciones.texto';
+import { firmarSchema } from '../autorizaciones.schema';
 // Precargados a proposito: el servicio los importa en segundo plano y, con dos
 // import() concurrentes del mismo mock, vitest puede saltarse el mock y cargar
 // el modulo real (mismo limite que en expediente-workflow.service.test).
@@ -492,6 +493,20 @@ describe('autorizaciones.service', () => {
       expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '923456789' });
       // La firma vieja no se toca (solo se expiran las pendientes).
       expect(opsDe('autorizaciones_habeas_data', 'update').map((o) => o.args[0])).toEqual([{ estado: 'expirado' }]);
+    });
+
+    it('cédula corregida que ya tiene otro solicitante de la inmobiliaria: 409 que dice la causa, sin emitir', async () => {
+      // Copia: el servicio escribe el documento corregido sobre la fila leída.
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '111' } } });
+      enqueue('solicitantes', { error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_solicitantes_documento_por_agencia"' } });
+
+      const err = await enviarEnlaceAutorizacion(
+        EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '923456789' }, 'inmobiliaria',
+      ).catch((e) => e);
+
+      expect(err).toMatchObject({ statusCode: 409, errorCode: 'DOCUMENTO_DUPLICADO' });
+      expect(err.message).toMatch(/^Esa cédula ya está registrada para otro solicitante de su inmobiliaria\./);
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
     });
 
     // Con «cada miembro ve solo lo suyo»: el estudio NO asignado de un compañero.
@@ -871,6 +886,24 @@ describe('autorizaciones.service', () => {
       });
       // Sin estudio no hay fila del perfil del prospecto donde marcar la identidad.
       expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
+    });
+
+    it('guarda «Analítica de su perfil» tal como la marcó el prospecto (el body pasa por el schema)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: paraFirmar }, { data: [{ id: AUTORIZACION_ID }] });
+      // Lo mismo que manda /autorizar al confirmar (paso 4).
+      const body = firmarSchema.parse({
+        metodo_firma: 'casilla',
+        numero_documento: '123456789',
+        consentimientos_opcionales: { analitica: true, comercial: false, historial_referencia: false },
+      });
+
+      await firmarAutorizacion(TOKEN, body, '1.1.1.1', 'UA');
+
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toMatchObject({
+        consent_analitica: true,
+        consent_comercial: false,
+        consent_historial_referencia: false,
+      });
     });
 
     it('el documento escrito coincide (con puntos y espacios): la identidad queda confirmada en el perfil (§8.1)', async () => {

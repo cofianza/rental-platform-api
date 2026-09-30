@@ -183,7 +183,7 @@ describe('IVA por concepto', () => {
     expect(mockCreateBill).not.toHaveBeenCalled();
     const intento = ops.find((o) => o.table === 'facturas' && o.method === 'insert')?.args[0] as Record<string, unknown>;
     expect(intento).toMatchObject({ pago_id: 'pago-1', estado: 'solicitada' });
-    expect(intento.error_mensaje).toContain('TARIFA_IVA');
+    expect(intento.error_mensaje).toContain('la tarifa de IVA está en 0 %');
   });
 
   it('estudio SIN instantánea (cobro anterior a la Adenda de precios): exento, como se cobró', async () => {

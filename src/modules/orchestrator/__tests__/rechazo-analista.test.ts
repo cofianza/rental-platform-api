@@ -180,6 +180,8 @@ describe('condicionado solo por el tope', () => {
 
     expect(timeline()).toMatch(/pendiente de autorización de la Gerencia General/);
     expect(timeline()).not.toMatch(/Se requieren documentos/);
+    // El historial lo lee el equipo de Cofianza: sin referencias a documentos.
+    expect(timeline()).not.toMatch(/§|Adenda/);
     await vi.waitFor(() => expect(mockDocs).toHaveBeenCalledWith(expect.objectContaining({ pedirSoportes: false })));
     const alDueno = mockNotificar.mock.calls.map((c) => c[0] as { userId: string; mensaje: string }).find((n) => n.userId === 'dueno-1');
     expect(alDueno?.mensaje).toMatch(/pendiente de autorización de la Gerencia General/);

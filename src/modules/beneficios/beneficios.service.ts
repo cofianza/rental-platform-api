@@ -249,7 +249,7 @@ export async function evaluarAlertaMezcla(orgId: string): Promise<AccionMezcla> 
     mensaje:
       `La inmobiliaria ${org.nombre}, con paquete de 25 estudios vigente, tiene ${tradicionales} de ${contratos.length} ` +
       `contratos en modalidad Tradicional (${pct} %) en los últimos ${VENTANA_MEZCLA_MESES} meses, por encima del ${umbralPct} % ` +
-      'definido en la Adenda de precios §4.4. Es una señal de revisión: no se bloqueó nada.',
+      'permitido para el paquete. Es una señal de revisión: no se bloqueó nada.',
     link: '/admin/inmobiliarias',
     payload: { inmobiliaria_id: orgId, tradicionales, total: contratos.length, umbral_pct: umbralPct },
   };

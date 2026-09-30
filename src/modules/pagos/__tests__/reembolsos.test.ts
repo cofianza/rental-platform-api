@@ -771,7 +771,7 @@ describe('Adenda de precios §2: el cupo en el cierre y en el abandono', () => {
     expect(await liberarCuposAbandonados()).toBe(1);
 
     expect(mockLiberarReserva).toHaveBeenCalledTimes(1);
-    expect(mockLiberarReserva).toHaveBeenCalledWith('pago-a', '2.5', expect.objectContaining({ notas: expect.stringContaining('§2.5') }));
+    expect(mockLiberarReserva).toHaveBeenCalledWith('pago-a', '2.5', expect.objectContaining({ notas: expect.stringContaining('no autorizó la consulta dentro del plazo') }));
     expect(ops.some((o) => o.table === 'eventos_timeline' && o.method === 'insert')).toBe(true);
   });
 
