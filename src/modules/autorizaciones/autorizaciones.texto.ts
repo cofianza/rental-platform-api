@@ -25,7 +25,7 @@
  * flujo de autorizacion del estudio"). La '2.0' describia la aceptacion por
  * OTP y sigue congelada byte a byte en las filas historicas.
  */
-export const VERSION_TERMINOS = '3.0';
+export const VERSION_TERMINOS = '3.1';
 /** La version anterior, por OTP. Solo para verificar que no se altero. */
 export const VERSION_TERMINOS_V2_OTP = '2.0';
 
@@ -36,19 +36,27 @@ export const VERSION_TERMINOS_V2_OTP = '2.0';
  * estaria pidiendo. Presentar el 2.0 con una camara en pantalla viciaria el
  * consentimiento — de ahi que sean dos versiones y no un parrafo opcional.
  */
-export const VERSION_TERMINOS_BIOMETRIA = '3.0-biometria';
+export const VERSION_TERMINOS_BIOMETRIA = '3.1-biometria';
+/** Filas pendientes firmadas antes del cambio de correo: siguen pidiendo la biometria. */
+export const VERSIONES_BIOMETRIA: readonly string[] = [VERSION_TERMINOS_BIOMETRIA, '3.0-biometria'];
 
 /**
  * Version del texto que se presenta al CO-ARRENDATARIO invitado (aceptacion
  * por casilla, sin OTP). Es un texto materialmente distinto: cambia el
  * parrafo 2 y suma la clausula 7.
  */
-export const VERSION_TERMINOS_COARRENDATARIO = '2.0-coarrendatario';
+export const VERSION_TERMINOS_COARRENDATARIO = '2.1-coarrendatario';
 
-const ENCABEZADO = `AUTORIZACIÓN PARA EL TRATAMIENTO DE DATOS PERSONALES
+const TITULO = `AUTORIZACIÓN PARA EL TRATAMIENTO DE DATOS PERSONALES
 
 1. Responsable del tratamiento
-COFIANZA S.A.S., NIT 902.038.122, domicilio en Itagüí, Antioquia, Colombia. Canal de atención: hola@cofianza.co · Sitio web: www.cofianza.co · Oficial de protección de datos: datospersonales@cofianza.co`;
+COFIANZA S.A.S., NIT 902.038.122, domicilio en Itagüí, Antioquia, Colombia.`;
+
+// 3.1 / 3.1-biometria / 2.1-coarrendatario: hola@ y datospersonales@ no
+// existen como buzones (2026-09-30); el canal real es gerencia@. El 2.0 (OTP)
+// conserva los correos viejos porque debe seguir siendo byte a byte.
+const ENCABEZADO = `${TITULO} Canal de atención y oficial de protección de datos: gerencia@cofianza.co · Sitio web: www.cofianza.co`;
+const ENCABEZADO_V2_OTP = `${TITULO} Canal de atención: hola@cofianza.co · Sitio web: www.cofianza.co · Oficial de protección de datos: datospersonales@cofianza.co`;
 
 // Mecanismo de aceptacion del flujo del solicitante: enlace + OTP.
 const NATURALEZA_OTP = `2. Naturaleza y alcance
@@ -93,7 +101,7 @@ Identificación, contacto, financieros y crediticios (historial, score, obligaci
 4.1. Datos biométricos — autorización separada y voluntaria
 Para confirmar que quien autoriza es el titular del documento, Cofianza captura una fotografía de mi rostro y una de mi documento de identidad, y las coteja a través de AUCO S.A.S. La imagen del rostro es un DATO SENSIBLE (Ley 1581 de 2012, artículo 5).
 Fui informado de que NO ESTOY OBLIGADO a autorizar el tratamiento de datos sensibles (artículo 6, literal a) y de que puedo negarme sin perder el acceso al servicio: si me niego, mi solicitud continúa y la revisa un analista.
-Finalidad única: verificar mi identidad y prevenir la suplantación. No se usa para perfilamiento, publicidad ni ninguna otra finalidad, ni se comparte con la inmobiliaria ni con el propietario. Las imágenes NO se almacenan en las bases de datos de Cofianza: se transmiten a AUCO S.A.S. como encargado del tratamiento, y Cofianza conserva únicamente el resultado del cotejo (si coincide, el porcentaje de similitud y el código del proceso). Puedo solicitar su supresión en datospersonales@cofianza.co.`;
+Finalidad única: verificar mi identidad y prevenir la suplantación. No se usa para perfilamiento, publicidad ni ninguna otra finalidad, ni se comparte con la inmobiliaria ni con el propietario. Las imágenes NO se almacenan en las bases de datos de Cofianza: se transmiten a AUCO S.A.S. como encargado del tratamiento, y Cofianza conserva únicamente el resultado del cotejo (si coincide, el porcentaje de similitud y el código del proceso). Puedo solicitar su supresión en gerencia@cofianza.co.`;
 
 const FINALIDADES = `5.1. Finalidades obligatorias
 - Evaluar perfil de riesgo y capacidad de pago para aprobar o rechazar la fianza.
@@ -123,7 +131,7 @@ Acepto la invitación a figurar como CO-ARRENDATARIO del contrato de arrendamien
 
 // El 2.0 (OTP) tiene que seguir siendo byte a byte el texto congelado en las
 // filas historicas; se conserva para poder verificarlo, no para presentarlo.
-export const TEXTO_LEGAL_V2_OTP = [ENCABEZADO, NATURALEZA_OTP, CUERPO].join('\n\n');
+export const TEXTO_LEGAL_V2_OTP = [ENCABEZADO_V2_OTP, NATURALEZA_OTP, CUERPO].join('\n\n');
 
 // Lo que se presenta HOY al solicitante: aceptacion por casilla (Adenda §7).
 // Es el mismo parrafo 2 que ya usaba el co-arrendatario invitado: la evidencia
