@@ -151,6 +151,9 @@ describe('§7.1 — el motor manda a revisión', () => {
     // M5: el orquestador reconoce la retención por la nota (no pide soportes).
     expect(retenidoSoloPorTope(r.observaciones)).toBe(true);
     expect(retenidoSoloPorTope('Puntaje 90')).toBe(false);
+    // Texto visible para la agencia, sin referencias; las filas anteriores se siguen reconociendo.
+    expect(r.observaciones).not.toMatch(/§|Adenda|Para el analista/);
+    expect(retenidoSoloPorTope('Para el analista: el canon supera el tope (Adenda de precios §7): el estudio pasa a revisión.')).toBe(true);
     await vi.waitFor(() => expect(mockEscalar).toHaveBeenCalledWith('exp-1', 3_500_000, 3_000_000, 'estudio'));
   });
 

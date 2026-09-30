@@ -122,7 +122,7 @@ ok(veredicto(respuestaAuco(95, { error: true })).estado === 'no_coincide', 'erro
 for (const r of [malo, veredicto(respuestaAuco(20)), veredicto(null), veredicto('x')]) {
   ok(r.estado !== ('rechazado' as string), 'no existe un estado de rechazo en el vocabulario');
   const motivo = requiereRevisionManualPorBiometria(r);
-  ok(!!motivo && /revision manual/i.test(motivo), 'todo fallo produce revision manual, no rechazo');
+  ok(!!motivo, 'todo fallo produce un motivo de revision manual, no rechazo');
   ok(!/rechaz/i.test(motivo ?? ''), 'el motivo del gestor no habla de rechazo');
 }
 
@@ -142,7 +142,7 @@ const otroDoc = veredicto(respuestaAuco(92, {
 ok(otroDoc.estado === 'verificada', 'el cotejo facial paso: el estado lo refleja con honestidad');
 ok(otroDoc.documento_coincide === false, 'pero el documento fotografiado es otro');
 const motivo7 = requiereRevisionManualPorBiometria(otroDoc);
-ok(!!motivo7 && motivo7.includes('§7'), 'documento distinto -> revision manual por §7');
+ok(!!motivo7 && motivo7.includes('no se pudo confirmar el documento'), 'documento distinto -> revision manual por §7');
 ok(!/rechaz/i.test(motivo7 ?? ''), '§7 aqui es REVISION, no rechazo: AucoFace no reporta perdida/suplantacion en RNEC');
 
 const ocrIlegible = veredicto(respuestaAuco(92, {
@@ -162,7 +162,7 @@ const omitida = biometriaOmitida(HOY, UMBRAL);
 ok(omitida.estado === 'omitida', 'negarse es un estado de primera clase, no un error');
 ok((omitida.motivo ?? '').includes('art. 6'), 'el motivo cita el derecho que se ejercio');
 const motivoOmitida = requiereRevisionManualPorBiometria(omitida);
-ok(!!motivoOmitida && motivoOmitida.includes('§14') && motivoOmitida.includes('derecho'), 'negarse manda a revision manual, no a rechazo, y se dice por que');
+ok(!!motivoOmitida && motivoOmitida.includes('no autorizó') && motivoOmitida.includes('derecho'), 'negarse manda a revision manual, no a rechazo, y se dice por que');
 
 // ── 7. El interruptor apagado no cambia NADA ────────────────
 const off = biometriaDesactivada(HOY, UMBRAL);
@@ -174,7 +174,7 @@ ok(requiereRevisionManualPorBiometria(undefined) === null, 'undefined tampoco');
 // ── 8. Roundtrip por la columna JSONB ───────────────────────
 const releido = leerResumenBiometria(JSON.parse(JSON.stringify(otroDoc)));
 ok(releido?.estado === 'verificada' && releido.documento_coincide === false && releido.similitud === 92, 'leerResumenBiometria reconstruye el veredicto');
-ok(requiereRevisionManualPorBiometria(releido)?.includes('§7') === true, 'y el veredicto releido decide igual que el original');
+ok(requiereRevisionManualPorBiometria(releido) === motivo7, 'y el veredicto releido decide igual que el original');
 for (const basura of [null, undefined, 'x', 42, [], {}, { estado: 42 }]) {
   ok(leerResumenBiometria(basura) === null, `columna ${JSON.stringify(basura)} -> null`);
 }

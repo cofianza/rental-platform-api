@@ -10,7 +10,7 @@ import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendEstudioFormEmail } from '@/lib/email';
 import { env } from '@/config';
-import { resolverRuta, type Ruta, type EntradaRuta } from './rutas-resultado';
+import { resolverRuta, etiquetaSinPuntaje, type Ruta, type EntradaRuta } from './rutas-resultado';
 // §12 + §14: expiracion del estudio por falta de autorizacion. Derivada, no persistida.
 import { evaluarExpiracion, type VeredictoExpiracion } from './expiracion';
 // Adenda 1 §11: umbrales, vigencia y plazos vienen del panel de calibracion.
@@ -47,6 +47,9 @@ import {
   resolverResultadoEstudio,
   registrarReglaDuraActivada,
   motivoParaProspectoDesdeMotivoGestor,
+  motivoVisibleDesdeMotivoGestor,
+  observacionesVisibles,
+  observacionesParaAgencia,
   aplicarReglasDuras,
   canonParaLaRegla,
 } from './reglas-duras';
@@ -58,6 +61,7 @@ import {
   decidirCascada,
   decidirResultado,
   decidirSinCentrales,
+  MOTIVO_VISIBLE_NO_ALCANZA,
   type UmbralesDecision,
   type ResultadoDecidido,
 } from './decision';
@@ -171,8 +175,31 @@ function redactarEstudioParaProspecto<T extends Record<string, unknown>>(row: T)
     // del enlace del formulario, no de la sesion del prospecto.
     respuesta_proveedor: null,
     token_self_service: null,
+    nota_interna: undefined,
   };
 }
+
+/**
+ * Inmobiliaria y propietario: solo texto VISIBLE. El modelo es secreto
+ * industrial (Politica §2 y §11): sin el motivo del gestor con cifras y
+ * umbrales, sin el puntaje del modelo en la etiqueta y sin la nota interna.
+ * Las observaciones guardadas antes de 2026-10 se limpian al leer
+ * (observacionesParaAgencia); las nuevas ya son visibles. La nota interna
+ * (`estudios.cascada.nota_interna`) solo la reciben los roles de Cofianza.
+ */
+function redactarEstudioParaAgencia<T extends Record<string, unknown>>(row: T, userRol: string): T {
+  const ruta = row.ruta as Record<string, unknown> | undefined;
+  return {
+    ...redactarIngresoDeclarado(row, userRol),
+    motivo_rechazo: motivoVisibleDesdeMotivoGestor(row.motivo_rechazo as string | null | undefined),
+    observaciones: observacionesParaAgencia(row.observaciones as string | null | undefined, row.resultado as string | null),
+    ...(ruta ? { ruta: { ...ruta, etiquetaGestor: etiquetaSinPuntaje(ruta.etiquetaGestor as string | null) } } : {}),
+    nota_interna: undefined,
+  };
+}
+
+/** Roles sin acceso a la nota interna (lo de Cofianza lo ven administrador, operador y gerencia). */
+const ROLES_EXTERNOS: readonly string[] = ['inmobiliaria', 'propietario', 'solicitante'];
 
 /**
  * Flujo §8.2: el ingreso que declara el PROSPECTO no se le muestra a la
@@ -202,6 +229,7 @@ function redactarEstudiosSegunRol<T extends Record<string, unknown>>(
   userRol?: string,
 ): T[] {
   if (userRol === 'solicitante') return rows.map(redactarEstudioParaProspecto);
+  if (userRol && ROLES_EXTERNOS.includes(userRol)) return rows.map((r) => redactarEstudioParaAgencia(r, userRol));
   return rows.map((r) => redactarIngresoDeclarado(r, userRol));
 }
 
@@ -232,6 +260,7 @@ export async function listEstudios(
       referencia_proveedor, certificado_url, datos_formulario,
       created_at, updated_at,
       canon_evaluado, canon_evaluado_origen, regla_dura_activada,
+      nota_interna:cascada->>nota_interna,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `,
       { count: 'exact' },
@@ -390,7 +419,7 @@ export async function listAllEstudios(
       motivo_rechazo, condiciones,
       duracion_contrato_meses, pago_por, fecha_solicitud, fecha_completado,
       referencia_proveedor, certificado_url, created_at, updated_at,
-      expediente_id,
+      expediente_id, nota_interna:cascada->>nota_interna,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido),
       expedientes!estudios_expediente_id_fkey(
         numero,
@@ -564,6 +593,7 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
       token_self_service,
       expiracion_token, created_at, updated_at,
       canon_evaluado, canon_evaluado_origen, regla_dura_activada, antecedentes,
+      nota_interna:cascada->>nota_interna,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `)
     .eq('id', estudioId)
@@ -605,8 +635,9 @@ export async function getEstudioById(estudioId: string, userId?: string, userRol
     return redactarEstudioParaProspecto(conDerivados);
   }
 
-  // §8.2: a la agencia no le viaja el ingreso declarado por el prospecto.
-  return redactarIngresoDeclarado(conDerivados, userRol);
+  // §8.2 y textos visibles: a la agencia no le viaja el ingreso declarado por
+  // el prospecto ni el texto interno del estudio.
+  return redactarEstudiosSegunRol([conDerivados], userRol)[0];
 }
 
 /**
@@ -1820,8 +1851,8 @@ export function assertScoreExternoVigente(consultaIso: string | null, ahoraMs = 
     409,
     DATOS_BURO_VENCIDOS_ERROR_CODE,
     `El reporte del buró de esta evaluación es del ${new Date(t).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })} ` +
-      `(hace ${dias} días) y la Política (§8) solo permite usar el score externo ${VIGENCIA_SCORE_EXTERNO_DIAS} días desde la consulta. ` +
-      'Hace falta reconsultar el buró con una evaluación nueva antes de registrar un resultado.',
+      `(hace ${dias} días), y el resultado de las centrales solo se puede usar durante ${VIGENCIA_SCORE_EXTERNO_DIAS} días desde la consulta. ` +
+      'Hace falta volver a consultar el buró con una evaluación nueva antes de registrar un resultado.',
     { fecha_consulta: consultaIso, dias, vigencia_dias: VIGENCIA_SCORE_EXTERNO_DIAS },
   );
 }
@@ -3178,7 +3209,7 @@ async function procesarEstudioAsync(args: {
       : documentoNoEncontrado
       ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifique que su número y tipo de documento sean correctos, o reintente con el otro buró.`
       : proveedorNoDisponible
-        ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió (Adenda §2.3 → Política §14: sin centrales no hay decisión automática). ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelva a intentar la consulta en unos minutos, o use el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Adenda 1 §2.3: si DataCrédito no responde, TransUnion pasa a ser la central primaria — reintente eligiendo TransUnion.' : ''}`
+        ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió. ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelva a intentar la consulta en unos minutos, o use el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Si DataCrédito no responde, puede reintentar eligiendo TransUnion.' : ''}`
         : errorDeConfiguracion
         ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito: puede intentar con el otro buró.`
         // Sin el mensaje crudo del proveedor (códigos, combos, variables de
@@ -3327,9 +3358,8 @@ async function registrarRevisionSinCentrales(a: {
       decididoEn: new Date().toISOString(),
     });
     const observaciones =
-      `Ninguna central de riesgo respondió (${apisFallidas.map((c) => BURO_LABELS[c] ?? c).join(' y ')} no disponibles, Adenda 1 §2.3). ` +
-      'Política §14: revisión manual obligatoria, no se aprueba de forma automática. ' +
-      'No es un rechazo de crédito: un analista de Cofianza revisa el caso y puede volver a consultar las centrales.';
+      `Ninguna central de riesgo respondió (${apisFallidas.map((c) => BURO_LABELS[c] ?? c).join(' y ')} no disponibles). ` +
+      'No es un rechazo de crédito: el caso pasa a revisión de un analista de Cofianza, que puede volver a consultar las centrales.';
 
     if (a.restaurar) {
       await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -3654,7 +3684,7 @@ async function assertPlazoApelacion(
   const hasta = new Date(`${plazo.apelar_hasta}T12:00:00Z`)
     .toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   throw AppError.badRequest(
-    `El plazo para apelar venció el ${hasta}: la Política (§11) da ${PLAZO_REEVALUACION_DIAS_HABILES} días hábiles desde la notificación del no aprobado para radicar la apelación. Para volver a evaluar al solicitante hay que habilitar una evaluación nueva.`,
+    `El plazo para apelar venció el ${hasta}: la apelación se radica dentro de los ${PLAZO_REEVALUACION_DIAS_HABILES} días hábiles siguientes a la notificación del no aprobado. Para volver a evaluar al solicitante debe habilitar una evaluación nueva.`,
     'REEVALUACION_FUERA_DE_PLAZO',
     { apelar_hasta: plazo.apelar_hasta, plazo_dias_habiles: PLAZO_REEVALUACION_DIAS_HABILES },
   );
@@ -4560,7 +4590,7 @@ async function retenerAprobadoEnRevisionManual(
     .maybeSingle();
   if ((exp as { estado?: string } | null)?.estado !== 'condicionado') return final;
   const nota =
-    'Para el analista: la nueva consulta dio APROBADO, pero el caso está en revisión manual (P33): se aprueba con «Aprobar estudio».';
+    'La nueva consulta dio un resultado favorable, pero el caso sigue en revisión: lo aprueba un analista de Cofianza.';
   return { ...final, resultado: 'condicionado', observaciones: [final.observaciones, nota].filter(Boolean).join(' ') };
 }
 
@@ -4642,18 +4672,23 @@ async function aplicarMotorSiAplica(args: {
     antecedentes: args.antecedentes ?? null,
     centralCaida: args.ejecucion?.centralCaida ?? null,
   });
-  // El motivo de banda de la primaria ya no aplica (ver decidirConCascada):
-  // tampoco puede quedar en las observaciones que lee el gestor.
-  const obsBase = c.bandaDescartada && decision.observaciones
-    ? decision.observaciones.replace(c.bandaDescartada, '').replace(/\s{2,}/g, ' ').trim()
-    : decision.observaciones;
+  // Observaciones VISIBLES recompuestas con la decision final (los motivos ya
+  // sin la banda de la primaria, si se descarto). La traza con cifras queda en
+  // estudios.cascada.nota_interna, solo para Cofianza.
   return {
     resultado: c.resultado,
-    observaciones: [obsBase, c.nota].filter(Boolean).join(' '),
+    observaciones: observacionesVisibles({
+      resumen: decision.resumen,
+      resultado: c.resultado,
+      reglas: c.veredicto.rechaza ? c.veredicto.reglas : [],
+      motivosRevision: c.revisionManual,
+      motivoModelo: c.visible,
+      decidePersona: decision.decidePersona,
+    }),
     motivoRechazo: c.veredicto.rechaza
       ? c.veredicto.motivoGestor
       : c.resultado === 'rechazado'
-        ? `Decision del modelo (Adenda 1): ${c.motivo}`
+        ? (c.visible ?? MOTIVO_VISIBLE_NO_ALCANZA)
         : decision.motivoRechazo,
     salida: c.salida,
     veredicto: c.veredicto,
@@ -4685,7 +4720,21 @@ export async function decidirConCascada(args: {
   antecedentes: ResumenAntecedentes | null;
   /** Adenda §2.3: central que ya no respondio en esta ejecucion; no se reconsulta. */
   centralCaida?: string | null;
-}): Promise<{ resultado: ResultadoDecidido; motivo: string; via: string | null; nota: string; salida: SalidaSombra; veredicto: VeredictoReglasDuras; apisFallidas: string[]; bandaDescartada: string | null }> {
+}): Promise<{
+  resultado: ResultadoDecidido;
+  motivo: string;
+  /** Motivo para las observaciones visibles (Decision.visible). */
+  visible: string | null;
+  /** Motivos de revision tras la cascada (sin la banda descartada). */
+  revisionManual: string | null;
+  via: string | null;
+  /** Nota interna (cifras, umbrales, centrales). Tambien en estudios.cascada.nota_interna. */
+  nota: string;
+  salida: SalidaSombra;
+  veredicto: VeredictoReglasDuras;
+  apisFallidas: string[];
+  bandaDescartada: string | null;
+}> {
   const { estudioId, expedienteId, proveedorPrimario } = args;
   const cal = await getCalibracion();
   const u: UmbralesDecision = {
@@ -4703,7 +4752,7 @@ export async function decidirConCascada(args: {
 
   let secundario: string | null = null;
   let scoreSecundario: number | null = null;
-  let nota = `Cascada (Adenda §2): ${cascada.motivo}.`;
+  let nota = cascada.motivo;
   const apisFallidas: string[] = args.centralCaida ? [args.centralCaida] : [];
 
   const candidato = proveedorPrimario === 'datacredito' ? 'transunion' : 'datacredito';
@@ -4711,7 +4760,7 @@ export async function decidirConCascada(args: {
   if (cascada.consultarSecundaria && candidato === args.centralCaida) {
     // Adenda §2.3: la central que ya no respondio en esta ejecucion no se
     // vuelve a consultar; se decide con la que actuo como primaria (§14).
-    nota = `Cascada (Adenda §2): ${cascada.motivo}, pero ${etiqueta(candidato)} no respondio en esta ejecucion (Adenda §2.3: ${etiqueta(proveedorPrimario)} actuo como primaria): se decide con ${etiqueta(proveedorPrimario)} como fuente unica (Politica §14).`;
+    nota = `${cascada.motivo} ${etiqueta(candidato)} no respondió en esta ejecución, así que ${etiqueta(proveedorPrimario)} actuó como central primaria y se decidió solo con ella.`;
   } else if (cascada.consultarSecundaria && args.providerInput) {
     try {
       const prov = getProvider(candidato as 'transunion' | 'datacredito');
@@ -4744,15 +4793,15 @@ export async function decidirConCascada(args: {
         iva_pct: cal.TARIFA_IVA,
       });
       veredicto = aplicarReglasDuras({ resultadoPropuesto: args.resultadoBuro, salida, umbralScoreRechazo: cal.UMBRAL_SCORE_RECHAZO });
-      nota = `Cascada (Adenda §2): ${cascada.motivo}. ${BURO_LABELS[secundario] ?? secundario} respondio score ${scoreSecundario ?? 's/d'}; V1 = promedio de las dos centrales.`;
+      nota = `${cascada.motivo} ${etiqueta(secundario)} respondió con puntaje ${scoreSecundario ?? 'sin dato'}; el puntaje de las centrales es el promedio de las dos.`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ estudioId, secundario: candidato, err: msg }, 'Cascada: la segunda central no respondio — se decide con la primaria');
       apisFallidas.push(candidato);
-      nota = `Cascada (Adenda §2): ${cascada.motivo}, pero ${BURO_LABELS[candidato] ?? candidato} no respondio (${msg.slice(0, 120)}): se decide con ${BURO_LABELS[proveedorPrimario] ?? proveedorPrimario} como fuente unica (Adenda §2.3 / Politica §14).`;
+      nota = `${cascada.motivo} ${etiqueta(candidato)} no respondió (${msg.slice(0, 160)}); se decidió solo con ${etiqueta(proveedorPrimario)}.`;
     }
   } else if (cascada.consultarSecundaria) {
-    nota = `Cascada (Adenda §2): ${cascada.motivo}, pero no habia insumo para consultar la segunda central: se decide con la primaria como fuente unica.`;
+    nota = `${cascada.motivo} No había datos para consultar la segunda central; se decidió solo con la primaria.`;
   }
 
   // Con la segunda central, V1 es el promedio: la banda 450-599 de la primaria
@@ -4786,9 +4835,12 @@ export async function decidirConCascada(args: {
     u,
     decididoEn: new Date().toISOString(),
   });
+  // La nota interna viaja en la traza (sin columna nueva): la API la entrega
+  // solo a los roles de Cofianza (nota_interna en las lecturas del estudio).
+  const notaInterna = `${nota} Resultado del modelo: ${d.motivo}`;
   const { error: trazaErr } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
-    .update({ cascada: traza as never } as never)
+    .update({ cascada: { ...traza, nota_interna: notaInterna } as never } as never)
     .eq('id', estudioId);
   if (trazaErr) logger.warn({ estudioId, error: trazaErr.message }, 'Cascada: no se pudo persistir la traza');
 
@@ -4800,8 +4852,10 @@ export async function decidirConCascada(args: {
   return {
     resultado: d.resultado,
     motivo: d.motivo,
+    visible: d.visible ?? null,
+    revisionManual,
     via: d.via,
-    nota: `${nota} Decision del modelo: ${d.motivo}.`,
+    nota: notaInterna,
     salida,
     veredicto,
     apisFallidas,

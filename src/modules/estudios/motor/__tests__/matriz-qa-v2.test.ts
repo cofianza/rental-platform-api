@@ -87,7 +87,7 @@ vi.mock('@/modules/autorizaciones/biometria', async (importOriginal) => ({
 
 import type { EntradaSombra, SalidaSombra, CodigoVariable } from '../index';
 import { construirFilaSombra } from '../fila';
-import { REGLA_BANDA_COARRENDATARIO, REGLA_R2, decidirCascada, decidirResultado, decidirSinCentrales, type UmbralesDecision } from '../../decision';
+import { ETIQUETA_REGLA, REGLA_BANDA_COARRENDATARIO, REGLA_R2, decidirCascada, decidirResultado, decidirSinCentrales, type UmbralesDecision } from '../../decision';
 import { resolverResultadoEstudio } from '../../reglas-duras';
 import { decidirConCascada } from '../../estudios.service';
 import type { ProviderSolicitudInput } from '../../providers/types';
@@ -266,7 +266,7 @@ async function decidir(primaria: EntradaSombra, o: { scoreSecundario?: number; i
     salida: c.salida,
     veredicto: c.veredicto,
     cascada: decidirCascada(salidaPrimaria, res.veredicto.rechaza ? res.veredicto.reglas : [], U),
-    d: { resultado: c.resultado, motivo: c.motivo, via: c.via },
+    d: { resultado: c.resultado, motivo: c.motivo, via: c.via, visible: c.visible },
     traza,
   };
 }
@@ -332,7 +332,7 @@ function sinPuntaje(r: Awaited<ReturnType<typeof decidir>>, regla: string) {
   expect.soft(s.puntajes.filter((p) => p.reglaDura === null).map((p) => p.variable), 'sin las variables restantes').toEqual([]);
   expect.soft(s.decision_sombra, 'decision del motor').toBe('rechazado');
   expect.soft(s.decision_motivo, 'motivo del motor = la regla dura').toContain(regla);
-  expect.soft(r.d.motivo, 'motivo de la decision = la regla dura').toContain(regla);
+  expect.soft(r.d.motivo, 'motivo de la decision = la regla dura').toContain(ETIQUETA_REGLA[regla as keyof typeof ETIQUETA_REGLA]);
   const fila = construirFilaSombra('est-qa', s, {});
   expect.soft([fila.decision_sombra, fila.puntaje_normalizado, fila.puntaje_bruto], 'fila sombra: rechazado sin puntaje').toEqual(['rechazado', null, null]);
   expect.soft(fila.reglas_duras_activadas, 'fila sombra: la regla').toContain(regla);
@@ -556,7 +556,7 @@ describe('7.4 Coarrendatario', () => {
     const r = await decidir(dc(PERFIL_B, 30));
     const coa = (await decidir(dc(PERFIL_F, 30))).salida;
     expect.soft(coa.puntaje_normalizado, 'precondicion: coarrendatario < 70').toBe(47.9);
-    expect.soft(coa.revision_obligatoria, 'precondicion: score del coarrendatario en la banda 450-599').toMatch(/520/);
+    expect.soft(coa.revision_obligatoria, 'precondicion: score del coarrendatario en la banda 450-599').toMatch(/rango que siempre revisa un analista/);
     const d = conCoarrendatario(r, { puntaje: coa.puntaje_normalizado, reglaDura: false, scoreEnBandaRevision: true });
     expect.soft(d.resultado, 'decision (decidirResultado)').toBe('condicionado');
     expect.soft(d.via, 'via').toBe('revision_manual');
@@ -596,6 +596,9 @@ describe('7.5 Motivos y traza', () => {
     expect.soft(r.d.motivo, 'motivo registrado: score').toMatch(/520/);
     expect.soft(r.d.motivo.match(/520/g), 'la banda de score no se repite').toHaveLength(1);
     expect.soft(r.traza?.decision, 'traza: el motivo queda en estudios.cascada').toBe(r.d.motivo);
+    const nota = (r.traza as { nota_interna?: string } | undefined)?.nota_interna ?? '';
+    expect.soft(nota, 'nota interna para el analista: la decisión entre centrales y la del modelo').toContain(`Resultado del modelo: ${r.d.motivo}`);
+    expect.soft(nota, 'nota interna sin referencias a documentos').not.toMatch(/§|Adenda|Pol[ií]tica|Cascada/);
     expect.soft(r.d.motivo, 'F1 y F2 deben registrar motivos distintos').not.toBe(f2.d.motivo);
   });
 
@@ -615,7 +618,9 @@ describe('7.5 Motivos y traza', () => {
     expect.soft(r.salida.inconsistencia_score_buros, 'inconsistencia').toBe(true);
     expect.soft(r.d.resultado, 'decision').toBe('condicionado');
     expect.soft(r.d.via, 'via').toBe('revision_manual');
-    expect.soft(r.d.motivo, 'motivo Caso G').toMatch(/Caso G/);
+    expect.soft(r.d.motivo, 'motivo: las centrales difieren').toMatch(/difieren demasiado/);
+    expect.soft(r.d.motivo, 'nota interna: los dos puntajes').toMatch(/DataCrédito 680, TransUnion 590/);
+    expect.soft(r.d.visible, 'visible: sin puntajes').not.toMatch(/\d{3}/);
   });
 
   it('M — ingreso 3.000.000 x 1,15 = 3.450.000, canon 1.400.000: RECHAZADO sobre el AJUSTADO (40,6%), traza con ambos, sin puntaje', async () => {

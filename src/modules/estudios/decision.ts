@@ -39,6 +39,28 @@
 // ============================================================
 
 import { evaluarSombra, type SalidaSombra } from './motor';
+import type { ReglaDuraActiva } from './reglas-duras';
+
+/** Nombre legible de cada regla dura (notas, motivos y textos visibles). */
+export const ETIQUETA_REGLA: Record<ReglaDuraActiva, string> = {
+  score_menor_450: 'puntaje de las centrales de riesgo por debajo del mínimo',
+  mora_vigente: 'mora vigente',
+  mora_mayor_30d_6m: 'mora de más de 30 días en los últimos 6 meses',
+  dti_mayor_65: 'capacidad de endeudamiento insuficiente',
+  canon_ingreso_mayor_40: 'canon demasiado alto frente al ingreso',
+  listas_restrictivas: 'reporte en listas restrictivas',
+};
+const etiquetas = (codigos: readonly string[]) =>
+  codigos.map((c) => ETIQUETA_REGLA[c as ReglaDuraActiva] ?? c).join(', ');
+
+const NOMBRE_CENTRAL: Record<string, string> = { DATACREDITO: 'DataCrédito', TRANSUNION: 'TransUnion' };
+
+/** Motivo visible cuando el modelo (no una regla dura) no alcanza para aprobar. */
+export const MOTIVO_VISIBLE_NO_ALCANZA = 'El resultado de la evaluación no alcanza el mínimo para aprobar.';
+
+/** Puntaje con coma decimal (es-CO) para las notas internas del analista. */
+const pts = (p: number | null | undefined) =>
+  p === null || p === undefined ? 'sin dato' : new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 }).format(p);
 
 export type ResultadoDecidido = 'aprobado' | 'condicionado' | 'rechazado';
 
@@ -48,7 +70,7 @@ export type ResultadoDecidido = 'aprobado' | 'condicionado' | 'rechazado';
  * rechazo por < 70 (Adenda 2 §2): revision manual, y la traza cita la regla.
  */
 export const REGLA_R2 =
-  'Caso R2: la banda 450-599 prevalece sobre el puntaje menor a 70 (Adenda de precios §8 y Adenda 2 §2): revisión manual, prioridad baja';
+  'El puntaje de las centrales en el rango de revisión obligatoria prevalece sobre el resultado menor a 70 del modelo: revisión manual con prioridad baja.';
 
 /**
  * Misma regla del lado del coarrendatario (Adenda de precios §8.4, aplicable a
@@ -56,7 +78,7 @@ export const REGLA_R2 =
  * pero si el coarrendatario tiene score 450-599 la banda prevalece: revision manual.
  */
 export const REGLA_BANDA_COARRENDATARIO =
-  'Coarrendatario: la banda 450-599 prevalece sobre el puntaje menor a 70 (Adenda de precios §8.4 y Adenda 2 §2): revisión manual';
+  'El puntaje de las centrales del co-arrendatario en el rango de revisión obligatoria prevalece sobre su resultado menor a 70: revisión manual.';
 
 export interface UmbralesDecision {
   cascadaRechazo: number;
@@ -90,14 +112,14 @@ export function decidirCascada(
     return {
       consultarSecundaria: false,
       resultadoAnticipado: 'rechazado',
-      motivo: `regla dura con la primaria (${reglasDurasActivas.join(', ')}): rechazado sin consultar la segunda central`,
+      motivo: `Con la central primaria no se cumple una condición obligatoria (${etiquetas(reglasDurasActivas)}): se rechaza sin consultar la segunda central.`,
     };
   }
   const p = primaria.puntaje_normalizado;
   if (p === null) {
     // Politica §4.1: la ausencia de score en una central no rechaza; se busca
     // en la otra ("si una sola central reporta score, se usa ese score").
-    return { consultarSecundaria: true, resultadoAnticipado: null, motivo: 'la primaria no produjo puntaje: se consulta la segunda central' };
+    return { consultarSecundaria: true, resultadoAnticipado: null, motivo: 'La central primaria no produjo puntaje: se consulta la segunda central.' };
   }
   // Adenda 2 §2: score 450-599 = revision manual con prioridad sobre el
   // rechazo por puntaje. Ni el < 40 ni el >= 90 se anticipan: se consulta la
@@ -106,27 +128,27 @@ export function decidirCascada(
     return {
       consultarSecundaria: true,
       resultadoAnticipado: null,
-      motivo: `${primaria.revision_obligatoria}: prevalece sobre el puntaje ${p}; se consulta la segunda central`,
+      motivo: `${primaria.revision_obligatoria} Esto prevalece sobre el puntaje ${pts(p)} de la central primaria: se consulta la segunda central.`,
     };
   }
   if (p < u.cascadaRechazo) {
     return {
       consultarSecundaria: false,
       resultadoAnticipado: 'rechazado',
-      motivo: `puntaje ${p} < ${u.cascadaRechazo} con la primaria: ni 100 en la segunda alcanzaria el umbral de revision`,
+      motivo: `Puntaje ${pts(p)} con la central primaria, menor que ${u.cascadaRechazo}: ni el máximo en la segunda alcanzaría el umbral de revisión; se rechaza.`,
     };
   }
   if (p >= u.cascadaAprobacion) {
     return {
       consultarSecundaria: false,
       resultadoAnticipado: 'aprobado',
-      motivo: `puntaje ${p} >= ${u.cascadaAprobacion} con la primaria: aprobado sin consultar la segunda central (asuncion de riesgo, Adenda §2.2)`,
+      motivo: `Puntaje ${pts(p)} con la central primaria, igual o mayor que ${u.cascadaAprobacion}: se aprueba sin consultar la segunda central.`,
     };
   }
   return {
     consultarSecundaria: true,
     resultadoAnticipado: null,
-    motivo: `puntaje ${p} entre ${u.cascadaRechazo} y ${u.cascadaAprobacion - 1}: se consulta la segunda central y se promedian los scores`,
+    motivo: `Puntaje ${pts(p)} con la central primaria, entre ${u.cascadaRechazo} y ${u.cascadaAprobacion - 1}: se consulta la segunda central y se promedian los puntajes.`,
   };
 }
 
@@ -151,12 +173,22 @@ export interface EntradaDecision {
   motivoIdentidad?: string | null;
 }
 
+/** Franja 70-84 (Adenda §3), en palabras para la inmobiliaria. */
+export const MOTIVO_VISIBLE_FRANJA_INTERMEDIA =
+  'El perfil queda en un rango intermedio: puede fortalecerse con un co-arrendatario o lo decide un analista de Cofianza.';
+
 type Via = 'automatica' | 'condicionada_coarrendatario' | 'revision_manual';
 
 export interface Decision {
   resultado: ResultadoDecidido;
-  /** Para el gestor: la regla que decidio, con cifras. */
+  /** Para el gestor: la regla que decidio, con cifras (nota interna). */
   motivo: string;
+  /**
+   * Para las observaciones VISIBLES, sin cifras ni umbrales, cuando el motivo
+   * no sale ya de los motivos de revision ni de una regla dura. Ver
+   * observacionesVisibles (reglas-duras.ts).
+   */
+  visible?: string | null;
   /** Fila de la tabla de tarifas (Adenda §5). */
   via: Via | null;
   /**
@@ -202,12 +234,17 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
 
   // 1. Reglas duras (§6): anulan todo, incluido el coarrendatario (§5).
   if (e.reglasDurasActivas.length > 0) {
-    return { resultado: 'rechazado', motivo: `Regla dura: ${e.reglasDurasActivas.join(', ')}`, via: null };
+    return { resultado: 'rechazado', motivo: `No se cumple una condición obligatoria: ${etiquetas(e.reglasDurasActivas)}.`, via: null };
   }
 
   // 2. Sin puntaje: ninguna central pudo evaluar. §14: revision manual, nunca rechazo.
   if (p === null || salida.decision_sombra === 'no_calculable') {
-    return { resultado: 'condicionado', motivo: `Sin puntaje calculable (${salida.motivo_no_calculable ?? 'ninguna variable calculable'}): revision manual (Politica §14)`, via: 'revision_manual' };
+    return {
+      resultado: 'condicionado',
+      motivo: `Sin puntaje calculable (${salida.motivo_no_calculable ?? 'ninguna variable calculable'}): revisión manual.`,
+      visible: 'No fue posible calcular el resultado con la información disponible.',
+      via: 'revision_manual',
+    };
   }
 
   // 3. Jerarquia §3.1 (score 450-599) y Caso G: revision obligatoria que
@@ -228,16 +265,21 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
       !coa.reglaDura &&
       coa.puntaje !== null &&
       coa.puntaje >= u.coarrendatario;
+    // La nota interna lleva los puntajes; el texto visible (ro) no.
+    const detalle = salida.inconsistencia_score_buros
+      ? `Puntajes por central: ${Object.entries(salida.scores_individuales ?? {}).map(([k, v]) => `${NOMBRE_CENTRAL[k] ?? k} ${v}`).join(', ')}.`
+      : `Puntaje de las centrales: ${salida.features?.score_externo ?? 'sin dato'}.`;
     return {
       resultado: 'condicionado',
-      motivo: [ro, ...otros, casoR2 ? REGLA_R2 : null].filter(Boolean).join(' '),
+      motivo: [detalle, ro, ...otros, casoR2 ? REGLA_R2 : null].filter(Boolean).join(' '),
+      visible: ro,
       via: 'revision_manual',
     };
   }
 
   // 4. < 70: rechazado. "Ningun coarrendatario compensa" (§5).
   if (p < u.zonaGris) {
-    return { resultado: 'rechazado', motivo: `Puntaje ${p} < ${u.zonaGris}`, via: null };
+    return { resultado: 'rechazado', motivo: `Puntaje ${pts(p)}, menor que ${u.zonaGris}: no alcanza para aprobar.`, visible: MOTIVO_VISIBLE_NO_ALCANZA, via: null };
   }
 
   // 5. Flags que impiden aprobar en automatico (§14 listas/identidad, §16.5, §8).
@@ -247,7 +289,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
 
   // 6. >= 85: aprobado automatico.
   if (p >= u.aprobacion) {
-    return { resultado: 'aprobado', motivo: `Puntaje ${p} >= ${u.aprobacion}: aprobacion automatica`, via: 'automatica', sinFlags: true };
+    return { resultado: 'aprobado', motivo: `Puntaje ${pts(p)}, igual o mayor que ${u.aprobacion}: aprobación automática.`, via: 'automatica', sinFlags: true };
   }
 
   // 7. Zona gris 70-84: el coarrendatario es la palanca (Adenda §3).
@@ -255,7 +297,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
   if (coa && !coa.reglaDura && coa.puntaje !== null && coa.puntaje >= u.coarrendatario) {
     return {
       resultado: 'aprobado',
-      motivo: `Puntaje ${p} en zona gris con coarrendatario ${coa.puntaje} >= ${u.coarrendatario}: aprobacion automatica condicionada (Adenda §3)`,
+      motivo: `Puntaje ${pts(p)} en la franja intermedia con co-arrendatario ${pts(coa.puntaje)} (mínimo ${u.coarrendatario}): aprobación automática condicionada.`,
       via: 'condicionada_coarrendatario',
       sinFlags: true,
     };
@@ -266,14 +308,16 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
     if (coa.scoreEnBandaRevision) {
       return {
         resultado: 'condicionado',
-        motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris} con score en la banda de revision obligatoria: revision manual. ${REGLA_BANDA_COARRENDATARIO}`,
+        motivo: `Puntaje ${pts(p)} en la franja intermedia y co-arrendatario ${pts(coa.puntaje)}, menor que ${u.zonaGris}. ${REGLA_BANDA_COARRENDATARIO}`,
+        visible: MOTIVO_VISIBLE_FRANJA_INTERMEDIA,
         via: 'revision_manual',
         sinFlags: true,
       };
     }
     return {
       resultado: 'rechazado',
-      motivo: `Puntaje ${p} en zona gris y coarrendatario ${coa.puntaje} < ${u.zonaGris}: el coarrendatario no compensa (matriz QA V2, caso O)`,
+      motivo: `Puntaje ${pts(p)} en la franja intermedia y co-arrendatario ${pts(coa.puntaje)}, menor que ${u.zonaGris}: el co-arrendatario no compensa.`,
+      visible: MOTIVO_VISIBLE_NO_ALCANZA,
       via: null,
       sinFlags: true,
     };
@@ -281,8 +325,9 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
   return {
     resultado: 'condicionado',
     motivo: coa
-      ? `Puntaje ${p} en zona gris y coarrendatario ${coa.reglaDura ? 'con regla dura' : `${coa.puntaje ?? 's/p'} < ${u.coarrendatario}`}: revision manual`
-      : `Puntaje ${p} en zona gris (${u.zonaGris}-${u.aprobacion - 1}) sin coarrendatario: revision manual, o coarrendatario >= ${u.coarrendatario}`,
+      ? `Puntaje ${pts(p)} en la franja intermedia y co-arrendatario ${coa.reglaDura ? 'que no cumple una condición obligatoria' : `${pts(coa.puntaje)}, menor que ${u.coarrendatario}`}: revisión manual.`
+      : `Puntaje ${pts(p)} en la franja intermedia (${u.zonaGris} a ${u.aprobacion - 1}) sin co-arrendatario: revisión manual, o co-arrendatario con ${u.coarrendatario} o más.`,
+    visible: MOTIVO_VISIBLE_FRANJA_INTERMEDIA,
     via: 'revision_manual',
     sinFlags: true,
   };
@@ -371,7 +416,7 @@ export function decidirSinCentrales(a: { primaria: string; centralCaida: string;
     primaria: a.primaria,
     centralCaida: a.centralCaida,
     salidaPrimaria: salida,
-    decisionCascada: 'ninguna central respondio: no hay cascada (Politica §14)',
+    decisionCascada: 'Ninguna central de riesgo respondió.',
     secundaria: null,
     scoreSecundaria: null,
     apisFallidas,

@@ -736,7 +736,7 @@ export function decidirSombra(
   if (totales.puntaje_normalizado === null) {
     return {
       decision: 'no_calculable',
-      motivo: 'Ninguna variable del scorecard resulto calculable con este payload',
+      motivo: 'ninguna variable del modelo se pudo calcular con la respuesta de la central',
     };
   }
   if (

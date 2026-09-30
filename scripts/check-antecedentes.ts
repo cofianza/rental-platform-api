@@ -123,7 +123,7 @@ ok(noVigente.estado === 'verificado' && noVigente.fuentes_con_error.join() === '
 // el estudio NO sigue solo — queda pendiente de revision manual.
 const sinRegistraduria = interpretarBackgroundCheck(respuestaAuco({ registraduria: {} }), 'C4b', HOY);
 ok(sinRegistraduria.flags_revision.includes('registraduria_sin_informacion'), 'Registraduria sin estado -> flag de revision');
-ok((requiereRevisionManual(sinRegistraduria) ?? '').includes('Registraduria'), 'Registraduria sin dato -> revision manual con motivo propio');
+ok((requiereRevisionManual(sinRegistraduria) ?? '').includes('Registraduría'), 'Registraduria sin dato -> revision manual con motivo propio');
 ok(requiereRevisionManual(limpio) === null, 'Registraduria VIGENTE -> sigue sin revision manual');
 
 const pendiente = interpretarBackgroundCheck(respuestaAuco({}, false), 'C5', HOY);
@@ -209,7 +209,7 @@ const v = aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida: conHit })
 ok(v.rechaza && v.resultadoFinal === 'rechazado' && v.cambiaResultado, 'aprobado del buro + OFAC -> rechazado');
 if (v.rechaza) {
   ok(v.reglas.includes('listas_restrictivas'), 'la regla que decidio');
-  ok(v.motivoGestor.includes('OFAC') && v.motivoGestor.includes('C1') && v.motivoGestor.includes('§6'), 'el gestor ve la lista, el proceso y la seccion');
+  ok(v.motivoGestor.includes('OFAC') && v.motivoGestor.includes('C1') && v.motivoGestor.includes('Listas restrictivas:'), 'el gestor ve la lista, el proceso y la condicion');
   const p = v.motivoProspecto.toLowerCase();
   for (const prohibida of ['ofac', 'onu', 'lista', 'auco', 'rechaz', 'clinton', 'sarlaft']) {
     ok(!p.includes(prohibida), `el prospecto no lee "${prohibida}"`);
@@ -224,8 +224,8 @@ ok(!aplicarReglasDuras({ resultadoPropuesto: 'aprobado', salida: v4(noVigente).s
 
 // ── 4. §14 / §16.5 ──────────────────────────────────────────
 ok(requiereRevisionManual(null) === null && requiereRevisionManual(antecedentesDesactivados(HOY)) === null, 'apagado -> no cambia nada');
-ok((requiereRevisionManual(antecedentesNoVerificados('Auco no respondio', 'C', HOY)) ?? '').includes('§14'), 'no_verificado -> revision obligatoria §14');
-ok((requiereRevisionManual(policia) ?? '').includes('§16.5') && (requiereRevisionManual(policia) ?? '').includes('policia'), 'flags -> revision §16.5 con los flags');
+ok((requiereRevisionManual(antecedentesNoVerificados('Auco no respondio', 'C', HOY)) ?? '').includes('listas restrictivas'), 'no_verificado -> revision obligatoria §14');
+ok((requiereRevisionManual(policia) ?? '').includes('registros que debe revisar un analista') && !(requiereRevisionManual(policia) ?? '').includes('policia'), 'flags -> revision §16.5, sin nombres de banderas en el texto visible');
 ok(requiereRevisionManual(limpio) === null, 'verificado y limpio -> aprobacion automatica posible');
 ok(requiereRevisionManual(ofac) !== null, 'un hit tambien lleva flags (nivel alto): la regla dura manda antes');
 

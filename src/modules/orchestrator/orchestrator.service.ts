@@ -13,6 +13,7 @@ import { resolveNombreDueno } from '@/lib/tenantScope';
 import { MOTIVO_PROSPECTO_DECISION_COFIANZA } from '@/modules/estudios/rutas-resultado';
 import {
   motivoProspectoReglasDuras,
+  motivoVisibleReglasDuras,
   inferirReglasDurasDesdeMotivo,
 } from '@/modules/estudios/reglas-duras';
 import type { ReglaDuraActiva } from '@/modules/estudios/reglas-duras';
@@ -183,12 +184,13 @@ async function avisarRevisionManualAnalistas(params: {
       .eq('id', estudioId)
       .maybeSingle();
     const est = data as { observaciones?: string | null; motivo_rechazo?: string | null } | null;
-    const motivoCrudo = est?.motivo_rechazo || est?.observaciones || null;
+    // Sin el punto final: la plantilla pone uno (antes quedaba «..» o «....»).
+    const motivoCrudo = (est?.motivo_rechazo || est?.observaciones || '').trim().replace(/\.+$/, '');
     const motivo = motivoCrudo
       ? motivoCrudo.length > 280
-        ? `${motivoCrudo.slice(0, 277)}...`
+        ? `${motivoCrudo.slice(0, 279).trimEnd()}…`
         : motivoCrudo
-      : `resultado condicionado del buró${score !== null ? ` (score ${score})` : ''}`;
+      : `resultado condicionado del buró${score !== null ? ` (puntaje ${score})` : ''}`;
 
     const { listOperators } = await import('@/modules/users/users.service');
     const analistas = await listOperators().catch(() => []);
@@ -200,7 +202,7 @@ async function avisarRevisionManualAnalistas(params: {
     const titulo = `Revisión manual requerida — ${numero}`;
     const mensaje =
       `El estudio de ${solicitante} para ${direccion || 'el inmueble'} quedó condicionado. ` +
-      `Motivo: ${motivo}. SLA: 2 horas hábiles (Política V4.1 §3.1).`;
+      `Motivo: ${motivo}. Plazo de respuesta: 2 horas hábiles.`;
     await Promise.all(
       analistas.map((a) =>
         notificarUsuario({
@@ -818,15 +820,16 @@ export async function onEstudioCompletado(params: {
       // anterior no ocurrió (estado no era 'condicionado'), el .eq lo dejará
       // sin cambios — no rompe.
       //
-      // Con regla dura se copia el motivo del estudio, que trae las cifras y
-      // los umbrales (Politica §2 "trazabilidad"). Ese banner es gestor-only:
-      // el prospecto ve el texto §10 de ExpedienteRechazadoBanner, que no lee
-      // este campo.
+      // Con regla dura va el texto VISIBLE (qué condición no se cumple): este
+      // banner lo ven la inmobiliaria y el propietario, y el modelo es secreto
+      // industrial. Las cifras y los umbrales siguen en estudios.motivo_rechazo,
+      // que la API solo entrega completo a Cofianza. El prospecto ve el texto
+      // §10 de ExpedienteRechazadoBanner, que no lee este campo.
       await db('expedientes')
         .update({
           motivo_rechazo:
-            porReglaDura && reglaDura.motivoGestor
-              ? reglaDura.motivoGestor
+            porReglaDura
+              ? motivoVisibleReglasDuras(reglaDura.reglas)
               : params.motivoAnalista ?? 'La evaluación crediticia del titular fue rechazada. El estudio no procede.',
         } as never)
         .eq('id', expedienteId)

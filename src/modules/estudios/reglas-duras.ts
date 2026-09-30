@@ -81,6 +81,7 @@
 import { supabase } from '@/lib/supabase';
 import { logger } from '@/lib/logger';
 import { evaluarSombra } from './motor';
+import { ETIQUETA_REGLA, MOTIVO_VISIBLE_NO_ALCANZA } from './decision';
 import type { CodigoReglaDura, SalidaSombra } from './motor';
 import { V1_RECHAZO_DURO, V2_DTI_MAXIMO, V3_CANON_INGRESO_MAXIMO } from './motor/scorecard';
 // §14 / §16.5: lo que NO rechaza pero tampoco deja aprobar en automatico.
@@ -134,14 +135,6 @@ function esReglaActiva(codigo: CodigoReglaDura): codigo is ReglaDuraActiva {
 }
 
 /** Etiqueta legible por codigo, para el mensaje del gestor. */
-const ETIQUETA_REGLA: Record<ReglaDuraActiva, string> = {
-  score_menor_450: 'score externo por debajo del minimo',
-  mora_vigente: 'mora vigente',
-  mora_mayor_30d_6m: 'mora mayor a 30 dias en los ultimos 6 meses',
-  dti_mayor_65: 'capacidad de endeudamiento (DTI)',
-  canon_ingreso_mayor_40: 'relacion canon / ingreso',
-  listas_restrictivas: 'listas restrictivas (OFAC / ONU)',
-};
 
 // ============================================================
 // Veredicto
@@ -221,9 +214,14 @@ export interface EntradaReglasDuras {
 // Mensajes
 // ============================================================
 
-/** Porcentaje con dos decimales, o 's/d'. */
+/** Número en formato colombiano (coma decimal), o 'sin dato'. */
+export function numeroCO(valor: number | null | undefined): string {
+  return valor === null || valor === undefined ? 'sin dato' : new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 }).format(valor);
+}
+
+/** Porcentaje con dos decimales y coma decimal, o 'sin dato'. */
 function pct(valor: number | null): string {
-  return valor === null ? 's/d' : `${valor}%`;
+  return valor === null ? 'sin dato' : `${numeroCO(valor)}%`;
 }
 
 /**
@@ -233,11 +231,11 @@ function pct(valor: number | null): string {
  */
 function textoIngreso(d: DetalleReglasDuras): string {
   const crudo = d.ingreso_mensual_inferido_cop;
-  if (crudo === null) return 'ingreso mensual estimado s/d';
+  if (crudo === null) return 'ingreso mensual estimado sin dato';
   if (d.factor_ajuste_ingreso === 1 || d.ingreso_mensual_ajustado_cop === null) {
     return `ingreso mensual estimado ${formatearCOP(crudo)}`;
   }
-  return `ingreso estimado ${formatearCOP(crudo)} x factor ${d.factor_ajuste_ingreso} = ${formatearCOP(d.ingreso_mensual_ajustado_cop)} (Adenda §1.1)`;
+  return `ingreso estimado ${formatearCOP(crudo)} por el factor de ajuste ${numeroCO(d.factor_ajuste_ingreso)} = ${formatearCOP(d.ingreso_mensual_ajustado_cop)}`;
 }
 
 /**
@@ -248,10 +246,25 @@ function textoIngreso(d: DetalleReglasDuras): string {
  * best-effort fallo. No cambiarlo sin actualizar inferirReglasDurasDesdeMotivo.
  */
 export const PREFIJO_MOTIVO_REGLA_DURA =
-  'Rechazo automatico por regla dura de la Politica de Evaluacion V4.1.';
+  'Rechazo automático: no cumple una condición obligatoria de la política de riesgo.';
 
 /** Marcadores de seccion del motivo del gestor, uno por regla activa. */
 const MARCADOR_SECCION: Record<ReglaDuraActiva, string> = {
+  score_menor_450: 'Puntaje de las centrales de riesgo:',
+  mora_vigente: 'Mora vigente:',
+  mora_mayor_30d_6m: 'Mora de más de 30 días en los últimos 6 meses:',
+  dti_mayor_65: 'Capacidad de endeudamiento:',
+  canon_ingreso_mayor_40: 'Relación canon / ingreso:',
+  listas_restrictivas: 'Listas restrictivas:',
+};
+
+/**
+ * Prefijo y marcadores de los motivos escritos antes del 2026-10 (con
+ * referencias a la Política). Las filas guardadas no se reescriben: se siguen
+ * reconociendo para inferir las reglas y redactar el texto visible.
+ */
+const PREFIJO_MOTIVO_REGLA_DURA_ANTERIOR = 'Rechazo automatico por regla dura de la Politica de Evaluacion V4.1.';
+const MARCADOR_SECCION_ANTERIOR: Record<ReglaDuraActiva, string> = {
   score_menor_450: 'Score externo (§6, Adenda 2 §2):',
   mora_vigente: 'Mora vigente (§6, Adenda 2 §1):',
   mora_mayor_30d_6m: 'Mora mayor a 30 dias en los ultimos 6 meses (§6):',
@@ -275,8 +288,43 @@ const MARCADOR_SECCION: Record<ReglaDuraActiva, string> = {
 export function inferirReglasDurasDesdeMotivo(
   motivo: string | null | undefined,
 ): ReglaDuraActiva[] {
-  if (!motivo || !motivo.startsWith(PREFIJO_MOTIVO_REGLA_DURA)) return [];
-  return REGLAS_DURAS_ACTIVAS.filter((codigo) => motivo.includes(MARCADOR_SECCION[codigo]));
+  if (!motivo) return [];
+  const marcadores = motivo.startsWith(PREFIJO_MOTIVO_REGLA_DURA)
+    ? MARCADOR_SECCION
+    : motivo.startsWith(PREFIJO_MOTIVO_REGLA_DURA_ANTERIOR)
+      ? MARCADOR_SECCION_ANTERIOR
+      : null;
+  if (!marcadores) return [];
+  return REGLAS_DURAS_ACTIVAS.filter((codigo) => motivo.includes(marcadores[codigo]));
+}
+
+/**
+ * Texto VISIBLE del rechazo por regla dura (inmobiliaria, propietario,
+ * observaciones y banner del expediente): qué condición no se cumple, sin
+ * cifras, umbrales ni versión del modelo. El detalle queda en el motivo del
+ * gestor, que solo ve Cofianza.
+ */
+export function motivoVisibleReglasDuras(reglas: readonly ReglaDuraActiva[]): string {
+  const cuales = reglas.map((r) => ETIQUETA_REGLA[r]);
+  return cuales.length > 0
+    ? `No cumple una condición obligatoria de la política de riesgo: ${enumerar(cuales)}.`
+    : 'No cumple una condición obligatoria de la política de riesgo.';
+}
+
+
+/**
+ * `motivo_rechazo` tal como lo ve la inmobiliaria o el propietario. El de una
+ * regla dura trae cifras y umbrales (es del gestor): se cambia por el visible.
+ * Uno escrito con referencias internas antes de 2026-10 («Decision del modelo
+ * (Adenda 1): Puntaje 65 < 70») se cambia por el genérico. Cualquier otro (el
+ * que escribe el analista para la agencia) pasa igual.
+ */
+export function motivoVisibleDesdeMotivoGestor(motivo: string | null | undefined): string | null {
+  if (!motivo) return null;
+  const reglas = inferirReglasDurasDesdeMotivo(motivo);
+  if (reglas.length > 0) return motivoVisibleReglasDuras(reglas);
+  if (motivo.includes('§') || motivo.startsWith('Decision del modelo')) return MOTIVO_VISIBLE_NO_ALCANZA;
+  return motivo;
 }
 
 /**
@@ -330,29 +378,29 @@ export function motivoGestorReglasDuras(
 
   if (reglas.includes('score_menor_450')) {
     partes.push(
-      `Score externo (§6, Adenda 2 §2): ${d.score_externo ?? 's/d'} es menor que el minimo de ${d.score_umbral_rechazo}; ` +
-        'rechazo inmediato sin calcular el resto del modelo.',
+      `${MARCADOR_SECCION.score_menor_450} ${d.score_externo ?? 'sin dato'} es menor que el mínimo de ${d.score_umbral_rechazo}; ` +
+        'se rechaza sin calcular el resto del modelo.',
     );
   }
 
   if (reglas.includes('mora_vigente')) {
     partes.push(
-      `Mora vigente (§6, Adenda 2 §1): ${d.mora_vigente_detalle ?? 'obligacion en atraso a la fecha de corte'}; ` +
-        `fecha de ocurrencia ${d.mora_vigente_desde ?? 's/d (la central no la fecha)'}.`,
+      `${MARCADOR_SECCION.mora_vigente} ${d.mora_vigente_detalle ?? 'obligación en atraso a la fecha de corte'}; ` +
+        `fecha de ocurrencia ${d.mora_vigente_desde ?? 'sin dato (la central no la informa)'}.`,
     );
   }
 
   if (reglas.includes('mora_mayor_30d_6m')) {
     partes.push(
-      `Mora mayor a 30 dias en los ultimos 6 meses (§6): mora de ${d.mora_30d_6m_dias ?? 's/d'} dias ` +
-        `con fecha de ocurrencia ${d.mora_30d_6m_fecha ?? 's/d'}.`,
+      `${MARCADOR_SECCION.mora_mayor_30d_6m} mora de ${d.mora_30d_6m_dias ?? 'sin dato'} días ` +
+        `con fecha de ocurrencia ${d.mora_30d_6m_fecha ?? 'sin dato'}.`,
     );
   }
 
   if (reglas.includes('dti_mayor_65')) {
     partes.push(
-      `Capacidad de endeudamiento (DTI, §4.2): ${pct(d.dti_pct)} supera el maximo de ${d.dti_umbral}% ` +
-        `(cuota mensual comprometida ${d.cuota_mensual_vigente_cop === null ? 's/d' : formatearCOP(d.cuota_mensual_vigente_cop)} ` +
+      `${MARCADOR_SECCION.dti_mayor_65} ${pct(d.dti_pct)} supera el máximo de ${pct(d.dti_umbral)} ` +
+        `(cuota mensual comprometida ${d.cuota_mensual_vigente_cop === null ? 'sin dato' : formatearCOP(d.cuota_mensual_vigente_cop)} ` +
         (d.cuota_fianza_cop ? `+ cuota de la fianza con IVA ${formatearCOP(d.cuota_fianza_cop)} ` : '') +
         `sobre ${textoIngreso(d)}).`,
     );
@@ -360,8 +408,8 @@ export function motivoGestorReglasDuras(
 
   if (reglas.includes('canon_ingreso_mayor_40')) {
     partes.push(
-      `Relacion canon / ingreso (§4.3): ${pct(d.canon_ingreso_pct)} supera el maximo de ${d.canon_ingreso_umbral}% ` +
-        `(canon ${d.canon_evaluado_cop === null ? 's/d' : formatearCOP(d.canon_evaluado_cop)} ` +
+      `${MARCADOR_SECCION.canon_ingreso_mayor_40} ${pct(d.canon_ingreso_pct)} supera el máximo de ${pct(d.canon_ingreso_umbral)} ` +
+        `(canon ${d.canon_evaluado_cop === null ? 'sin dato' : formatearCOP(d.canon_evaluado_cop)} ` +
         `sobre ${textoIngreso(d)}).`,
     );
   }
@@ -372,18 +420,18 @@ export function motivoGestorReglasDuras(
       d.listas_vinculantes?.onu ? 'ONU' : null,
     ].filter(Boolean).join(' y ') || 'listas vinculantes';
     partes.push(
-      `Listas restrictivas (§6): reportado en ${cuales} segun el background check de Auco` +
+      `${MARCADOR_SECCION.listas_restrictivas} reportado en ${cuales} según la verificación de antecedentes` +
         `${d.antecedentes_code ? ` (proceso ${d.antecedentes_code})` : ''}.`,
     );
   }
 
   partes.push(
     d.score_externo === null || reglas.includes('score_menor_450')
-      ? 'Las reglas duras anulan el puntaje total (Politica §3).'
-      : `Las reglas duras anulan el puntaje total (Politica §3): el score del buro (${d.score_externo}) no cambia esta decision.`,
+      ? 'Estas condiciones prevalecen sobre el puntaje total.'
+      : `Estas condiciones prevalecen sobre el puntaje total: el puntaje de la central (${d.score_externo}) no cambia esta decisión.`,
   );
 
-  partes.push(`Fuente: ${d.proveedor}, modelo ${d.modelo_version}.`);
+  partes.push(`Fuente: ${ETIQUETA_CENTRAL[d.proveedor] ?? d.proveedor}, versión del modelo ${d.modelo_version}.`);
 
   return partes.join(' ');
 }
@@ -433,6 +481,8 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
     `No es una decisión definitiva sobre usted: puede ${enumerar(salidas)}, o escribirnos para revisar su caso.`
   );
 }
+
+const ETIQUETA_CENTRAL: Record<string, string> = { datacredito: 'DataCrédito', transunion: 'TransUnion', manual: 'registro manual' };
 
 /** «a», «a y b», «a, b y c». */
 function enumerar(partes: readonly string[]): string {
@@ -526,10 +576,13 @@ export function aplicarReglasDuras(entrada: EntradaReglasDuras): VeredictoReglas
  * Solo aplica si se leyo el reporte de una central (la ausencia tiene motivo):
  * el registro manual del analista no trae reporte y no se frena por esto.
  */
+/** Texto estable: lo cuenta la métrica «Escaladas sin ingreso» del panel de calibración. */
+export const MOTIVO_INGRESO_NO_VERIFICABLE = 'No fue posible verificar el ingreso con las fuentes disponibles.';
+
 export function motivoRevisionIngresoNoInferible(salida: SalidaSombra | null): string | null {
   if (!salida || salida.features.ingreso_mensual_inferido_cop !== null) return null;
   if (!salida.features.ausencias.ingreso_mensual_inferido_cop) return null;
-  return 'Revisión manual obligatoria (Política §6/§14, Adenda 2 §3): no se pudo inferir el ingreso de ninguna fuente de esta evaluación.';
+  return MOTIVO_INGRESO_NO_VERIFICABLE;
 }
 
 /** Politica §4.3: canon/ingreso (sobre el ingreso ajustado) entre 35% y 40% va a revision manual. */
@@ -542,7 +595,7 @@ export const CANON_INGRESO_REVISION_DESDE = 35;
 export function motivoRevisionCanonIngreso(salida: SalidaSombra | null): string | null {
   const pct = salida?.canon_ingreso_pct ?? null;
   if (pct === null || pct <= CANON_INGRESO_REVISION_DESDE || pct > V3_CANON_INGRESO_MAXIMO) return null;
-  return `Revisión manual obligatoria (Política §4.3): la relación canon / ingreso es ${pct}% (entre ${CANON_INGRESO_REVISION_DESDE}% y ${V3_CANON_INGRESO_MAXIMO}%, sobre el ingreso ajustado).`;
+  return 'El canon representa una parte alta del ingreso del solicitante.';
 }
 
 /**
@@ -556,9 +609,9 @@ export function motivoRevisionSituacionLaboral(
   perfil: { situacion_laboral?: string | null; tiene_rut?: boolean | null } | null,
 ): string | null {
   if (perfil?.situacion_laboral === 'otro')
-    return 'Revisión manual obligatoria (Política Anexo A): el prospecto declaró su situación laboral como «otro», fuera de las categorías del Anexo A; el analista define la categoría y los documentos.';
+    return 'El solicitante declaró su situación laboral como «otro»: hay que definir qué soportes de ingreso se requieren.';
   if (perfil?.situacion_laboral === 'independiente' && perfil.tiene_rut === false)
-    return 'Revisión manual obligatoria (Política Anexo A.4): independiente sin RUT activo (informal); el analista verifica extractos con ingresos recurrentes de al menos 3 veces el canon en 4 de los últimos 6 meses.';
+    return 'El solicitante es independiente sin RUT activo: se verifican sus extractos bancarios.';
   return null;
 }
 
@@ -585,27 +638,6 @@ async function leerSituacionLaboral(
     logger.warn({ expedienteId, err: err instanceof Error ? err.message : String(err) }, 'Reglas duras: excepcion leyendo la situacion laboral');
     return null;
   }
-}
-
-/** Linea corta para anexar a `observaciones`, que es factual (score, saldos). */
-export function notaObservacionesReglasDuras(
-  reglas: readonly ReglaDuraActiva[],
-  d: DetalleReglasDuras,
-): string {
-  const trozos = reglas.map((r) =>
-    r === 'score_menor_450'
-      ? `score externo ${d.score_externo ?? 's/d'} (min ${d.score_umbral_rechazo})`
-      : r === 'mora_vigente'
-        ? `mora vigente desde ${d.mora_vigente_desde ?? 's/d'}`
-        : r === 'mora_mayor_30d_6m'
-          ? `mora de ${d.mora_30d_6m_dias ?? 's/d'} dias en ${d.mora_30d_6m_fecha ?? 's/d'}`
-          : r === 'dti_mayor_65'
-        ? `DTI ${pct(d.dti_pct)} (max ${d.dti_umbral}%)`
-        : r === 'canon_ingreso_mayor_40'
-          ? `canon/ingreso ${pct(d.canon_ingreso_pct)} (max ${d.canon_ingreso_umbral}%)`
-          : `listas restrictivas: reportado (${[d.listas_vinculantes?.ofac ? 'OFAC' : null, d.listas_vinculantes?.onu ? 'ONU' : null].filter(Boolean).join('/') || 's/d'})`,
-  );
-  return `Regla dura V4.1 activada — ${trozos.join('; ')}. Anula el puntaje total (§3).`;
 }
 
 // ============================================================
@@ -656,7 +688,12 @@ export interface ArgsResolverResultado {
 export interface ResolucionEstudio {
   /** Lo que hay que mandarle a fn_registrar_resultado_estudio. */
   resultado: string;
+  /** Texto VISIBLE (observacionesVisibles): lo leen la inmobiliaria, el propietario y el CRC. */
   observaciones: string | null;
+  /** Lo que trajo el call site (resumen del buró o texto del analista), para recomponer tras el motor. */
+  resumen: string | null;
+  /** Registro manual: las observaciones son las del analista, sin motivos agregados. */
+  decidePersona: boolean;
   motivoRechazo: string | null;
   veredicto: VeredictoReglasDuras;
   /**
@@ -732,6 +769,62 @@ export async function canonParaLaRegla(expedienteId: string): Promise<number | n
   }
 }
 
+/** Frase que abre los motivos cuando el estudio queda en revisión manual. */
+export const AVISO_REVISION_ANALISTA = 'El caso pasa a revisión de un analista de Cofianza.';
+
+/**
+ * `estudios.observaciones`: SOLO texto visible (inmobiliaria, propietario,
+ * CRC). El resumen de la central, y según el resultado:
+ *   - regla dura   -> qué condición no se cumple, sin cifras.
+ *   - condicionado -> el aviso de revisión y los motivos, en lenguaje claro.
+ *   - rechazado    -> por qué no alcanza (motivoModelo), si lo hay.
+ * Registro manual (B20): solo lo que escribió el analista. Las cifras, los
+ * umbrales y la traza de las centrales van a la nota interna
+ * (`estudios.cascada.nota_interna`), que solo ve Cofianza. Pura.
+ */
+export function observacionesVisibles(a: {
+  resumen: string | null;
+  resultado: string;
+  reglas: readonly ReglaDuraActiva[];
+  motivosRevision: string | null;
+  motivoModelo?: string | null;
+  decidePersona?: boolean;
+}): string | null {
+  const resumen = a.resumen?.trim() || null;
+  if (a.decidePersona) return resumen;
+  const partes: Array<string | null | undefined> = [resumen];
+  if (a.reglas.length > 0) partes.push(motivoVisibleReglasDuras(a.reglas));
+  else if (a.resultado === 'condicionado') {
+    partes.push(AVISO_REVISION_ANALISTA);
+    if (a.motivoModelo && !a.motivosRevision?.includes(a.motivoModelo)) partes.push(a.motivoModelo);
+    partes.push(a.motivosRevision);
+  } else if (a.resultado === 'rechazado') partes.push(a.motivoModelo);
+  return partes.filter((p): p is string => !!p).join(' ') || null;
+}
+
+/** Textos que solo escribia la version anterior (con referencias y jerga internas). */
+const TEXTO_INTERNO_ANTERIOR = /§|Cascada \(|Regla dura V4\.1|Para el analista|Decision del modelo|Caso G:|background check/;
+const INICIO_MOTIVOS_ANTERIOR = /\s*(?:Revisi[oó]n manual|Cascada \(|Regla dura V4\.1|Para el analista|Decision del modelo|Caso G:|Score externo \d|Ninguna central de riesgo)/;
+
+/**
+ * `observaciones` de un estudio guardado antes de separar el texto interno
+ * (2026-10), tal como la ven la inmobiliaria y el propietario: el resumen de
+ * la central, sin los motivos internos ni las frases con referencias, y el
+ * aviso de revision si el caso esta condicionado. Un texto nuevo pasa igual:
+ * ya es solo visible. No reescribe la fila.
+ */
+export function observacionesParaAgencia(obs: string | null | undefined, resultado?: string | null): string | null {
+  if (!obs || !TEXTO_INTERNO_ANTERIOR.test(obs)) return obs ?? null;
+  const resumen = obs
+    .split(INICIO_MOTIVOS_ANTERIOR)[0]
+    .split(/(?<=\.)\s+/)
+    .filter((frase) => !frase.includes('§'))
+    .join(' ')
+    .trim()
+    .replace(/([^.])$/, '$1.');
+  return [resumen, resultado === 'condicionado' ? AVISO_REVISION_ANALISTA : null].filter(Boolean).join(' ') || null;
+}
+
 /**
  * Punto UNICO de decision. Los tres caminos que llaman a
  * fn_registrar_resultado_estudio pasan por aqui ANTES del RPC:
@@ -744,9 +837,13 @@ export async function canonParaLaRegla(expedienteId: string): Promise<number | n
 export async function resolverResultadoEstudio(
   args: ArgsResolverResultado,
 ): Promise<ResolucionEstudio> {
+  const resumen = args.observaciones?.trim() || null;
+  const decidePersona = args.decidePersona === true;
   const base: ResolucionEstudio = {
     resultado: args.resultadoPropuesto,
-    observaciones: args.observaciones ?? null,
+    observaciones: observacionesVisibles({ resumen, resultado: args.resultadoPropuesto, reglas: [], motivosRevision: null, decidePersona }),
+    resumen,
+    decidePersona,
     motivoRechazo: args.motivoRechazo ?? null,
     veredicto: aplicarReglasDuras({ resultadoPropuesto: args.resultadoPropuesto, salida: null }),
     salida: null,
@@ -870,9 +967,8 @@ export async function resolverResultadoEstudio(
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;
       if (!motivoRevision) return { ...base, veredicto, salida, apisFallidas };
 
-      const obs = (args.observaciones ?? '').trim();
-      const observaciones = obs ? `${obs} ${motivoRevision}` : motivoRevision;
       const baja = args.resultadoPropuesto === 'aprobado' && !args.decidePersona;
+      const resultado = baja ? 'condicionado' : args.resultadoPropuesto;
       if (baja) {
         logger.warn(
           {
@@ -888,8 +984,8 @@ export async function resolverResultadoEstudio(
       }
       return {
         ...base,
-        resultado: baja ? 'condicionado' : args.resultadoPropuesto,
-        observaciones,
+        resultado,
+        observaciones: observacionesVisibles({ resumen, resultado, reglas: [], motivosRevision: motivoRevision, decidePersona }),
         veredicto,
         salida,
         revisionManual: motivoRevision,
@@ -898,8 +994,6 @@ export async function resolverResultadoEstudio(
       };
     }
 
-    const nota = notaObservacionesReglasDuras(veredicto.reglas, veredicto.detalle);
-    const observacionesBase = (args.observaciones ?? '').trim();
 
     logger.warn(
       {
@@ -920,8 +1014,9 @@ export async function resolverResultadoEstudio(
     );
 
     return {
+      ...base,
       resultado: 'rechazado',
-      observaciones: observacionesBase ? `${observacionesBase} ${nota}` : nota,
+      observaciones: observacionesVisibles({ resumen, resultado: 'rechazado', reglas: veredicto.reglas, motivosRevision: null, decidePersona }),
       // La regla dura manda sobre cualquier motivo que trajera el call site:
       // es la causa real del rechazo.
       motivoRechazo: veredicto.motivoGestor,

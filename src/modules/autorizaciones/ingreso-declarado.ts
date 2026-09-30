@@ -65,8 +65,7 @@ export function senalDiscrepanciaIngreso(
  * desviacion en la autorizacion (leerPerfilProspecto, solo roles internos).
  */
 export const MOTIVO_CONTRASTE_INGRESO =
-  'Revision manual (Adenda §8): el ingreso declarado por el prospecto difiere del estimado por la central mas de lo permitido. ' +
-  'La bandera no rechaza: un analista de Cofianza contrasta las dos cifras en la autorizacion.';
+  'El ingreso declarado por el solicitante difiere del estimado por las centrales de riesgo: un analista de Cofianza contrasta las dos cifras.';
 
 /**
  * Adenda §8 en produccion: lee el declarado del expediente y lo contrasta con

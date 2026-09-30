@@ -54,9 +54,9 @@ assert.strictEqual(r.score, 655, 'debe tomar el scoreValue del modelCode DF, no 
 assert.strictEqual(r.resultado, 'aprobado', '655 >= 600 => aprobado');
 assert.ok(r.observaciones.includes('6.932.000'), 'ingreso DW en miles -> pesos');
 assert.ok(!r.observaciones.includes('-1'), '-1 debe normalizarse a null y no imprimirse');
-assert.ok(!/Reclamos vigentes/.test(r.observaciones), 'currentDisputes=-1 no debe reportarse');
+assert.ok(!/reclamos vigentes/.test(r.observaciones), 'currentDisputes=-1 no debe reportarse');
 assert.ok(r.observaciones.includes('en mora'), 'debe reportar la mora maxima');
-assert.ok(/Saldo total: .*12\.500\.000/.test(r.observaciones), `la grafia del manual tambien va en miles: ${r.observaciones}`);
+assert.ok(/saldo total .*12\.500\.000/.test(r.observaciones), `la grafia del manual tambien va en miles: ${r.observaciones}`);
 
 // Sin score DF -> revision manual
 const sinScore = p.parseResult({ ...report, models: [{ modelCode: 47, scoreValue: 700 }] }, '13');
@@ -85,14 +85,14 @@ console.log('\n[codigo 14] resultado:', rNB.resultado, '| score:', rNB.score);
 console.log('[codigo 14] observaciones:', rNB.observaciones);
 assert.strictEqual(rNB.resultado, 'condicionado', 'sin informacion NO es rechazo');
 assert.strictEqual(rNB.score, null, 'scoreValue 0 = ausencia de score, no score cero');
-assert.ok(!rNB.observaciones.includes('$ 0'), 'no debe reportar ingreso de $0 con codigo de exclusion');
+assert.ok(!rNB.observaciones.includes('$0'), 'no debe reportar ingreso de $0 con codigo de exclusion');
 
 // Ingreso con exclusion 51 no se usa aunque el codigo sea 13
 const conExclusion = p.parseResult(
   { ...report, productValueList: [{ productCode: 'DW', reason: '0051', value: 0 }] },
   '13',
 );
-assert.ok(!/Ingreso estimado/.test(conExclusion.observaciones), 'reason 50-54 => ingreso no estimable');
+assert.ok(!/ingreso estimado/.test(conExclusion.observaciones), 'reason 50-54 => ingreso no estimable');
 
 // ── Forma REAL del servicio (verificada contra DEMO el 2026-08-21) ──────────
 // El manual documenta 'AgregatedInfo.overview.{Principals,Balances}AgregatedInfo'
@@ -113,8 +113,8 @@ const rReal = p.parseResult(formaReal, '13');
 console.log('\n[forma real] score:', rReal.score, '| resultado:', rReal.resultado);
 console.log('[forma real] observaciones:', rReal.observaciones);
 assert.strictEqual(rReal.score, 972);
-assert.ok(/Creditos vigentes: 6/.test(rReal.observaciones), 'debe leer principals en minuscula');
-assert.ok(/Saldo total/.test(rReal.observaciones), 'debe leer balances en minuscula');
+assert.ok(/6 créditos vigentes/.test(rReal.observaciones), 'debe leer principals en minuscula');
+assert.ok(/saldo total/.test(rReal.observaciones), 'debe leer balances en minuscula');
 // x1000: 1545 miles = $1.545.000, no $1.545.
 assert.ok(/1\.545\.000/.test(rReal.observaciones), `saldo en miles sin convertir: ${rReal.observaciones}`);
 assert.ok(/460\.000/.test(rReal.observaciones), 'cuota mensual vive en balances y va en miles');
@@ -127,6 +127,6 @@ const conMora = p.parseResult(
     balances: { ...formaReal.agregatedInfo.overview.balances, totalValueBalanceOverdue: 820 } } } },
   '13',
 );
-assert.ok(/en mora: .*820\.000/.test(conMora.observaciones), `mora no reportada: ${conMora.observaciones}`);
+assert.ok(/en mora .*820\.000/.test(conMora.observaciones), `mora no reportada: ${conMora.observaciones}`);
 
 console.log('\nOK — todas las aserciones pasaron');

@@ -28,12 +28,12 @@ const DOCUMENTOS_NACIONALES: readonly string[] = ['cc'];
 
 /** Etiqueta del §15 por tipo, para que el gestor sepa que fila aplica. */
 const ETIQUETA: Record<string, string> = {
-  ce: 'cedula de extranjeria',
-  ppt: 'Permiso por Proteccion Temporal (PPT)',
+  ce: 'cédula de extranjería',
+  ppt: 'Permiso por Protección Temporal (PPT)',
   pep: 'Permiso Especial de Permanencia (PEP)',
   pasaporte: 'pasaporte',
   pp: 'pasaporte',
-  nit: 'NIT (persona juridica)',
+  nit: 'NIT (persona jurídica)',
   ti: 'tarjeta de identidad',
 };
 
@@ -50,10 +50,9 @@ export function esPerfilExtranjero(tipoDocumento: string | null | undefined): bo
 export function motivoRevisionPerfilExtranjero(tipoDocumento: string | null | undefined): string | null {
   if (!esPerfilExtranjero(tipoDocumento)) return null;
   const t = String(tipoDocumento ?? '').trim().toLowerCase();
-  const etiqueta = ETIQUETA[t] ?? `documento '${t}'`;
+  const etiqueta = ETIQUETA[t] ?? `otro documento (${t})`;
   return (
-    `Revision manual obligatoria (Politica §15): perfil con ${etiqueta}. ` +
-    'Ningun perfil sin cedula colombiana recibe aprobacion automatica; el analista revisa con los documentos del Anexo A ' +
-    '(extractos 6 meses + soporte de ingresos + identidad valida, o tarjeta internacional con cupo >= 1,5x canon si no hay historia en Colombia).'
+    `El solicitante no tiene cédula colombiana (presentó ${etiqueta}): se revisa con extractos bancarios de 6 meses, ` +
+    'soportes de ingresos y un documento de identidad vigente.'
   );
 }

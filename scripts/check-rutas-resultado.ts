@@ -99,7 +99,7 @@ check('zona gris + coarrendatario >= 80 se comunica como aprobado con acompanant
 check('zona gris + coarrendatario 79 NO se comunica como aprobado (revision manual)', () => {
   const r = resolverRuta(e({ puntaje: 75, coarrendatarioVinculado: true, puntajeCoarrendatario: 79 }));
   assert.ok(!r.titulo.toLowerCase().includes('aprobado'));
-  assert.ok(r.etiquetaGestor.includes('revision manual'));
+  assert.ok(r.etiquetaGestor.includes('revisión manual'));
 });
 
 check('los umbrales del panel de calibracion mandan sobre los defaults', () => {

@@ -246,21 +246,21 @@ export function interpretarBiometria(entrada: EntradaInterpretacion): ResumenBio
 export function requiereRevisionManualPorBiometria(b: ResumenBiometria | null | undefined): string | null {
   if (!b || b.estado === 'desactivada') return null;
 
-  const cola = 'No se aprueba automaticamente sin validacion de identidad (Politica §14 y Anexo A).';
-
+  // Texto VISIBLE (llega a la inmobiliaria por las observaciones): sin la
+  // similitud ni el error del proveedor; el analista los ve en la autorización.
   switch (b.estado) {
     case 'omitida':
-      return `Revision manual obligatoria (Politica §14): el titular no autorizo la validacion biometrica, que es su derecho (Ley 1581, art. 6). ${cola}`;
+      return 'El solicitante no autorizó la validación biométrica, que es su derecho: su identidad se verifica por otro medio.';
     case 'no_verificada':
-      return `Revision manual obligatoria (Politica §14): identidad SIN VERIFICAR — ${b.motivo ?? 'Auco no respondio'}. ${cola}`;
+      return 'No se pudo completar la validación de identidad: se verifica por otro medio.';
     case 'no_coincide':
-      return `Revision manual obligatoria (Politica §14): ${b.motivo ?? 'la foto no coincide con el documento'}. ${cola}`;
+      return 'La foto no coincide con el documento de identidad.';
     case 'verificada':
       // Cotejo bueno pero documento distinto o ilegible: §7 (inconsistencia
       // documental objetiva) — "RECHAZO o REVISION segun criterio". Revision.
       return b.documento_coincide === true
         ? null
-        : `Revision manual (Politica §7): la cara coincide (similitud ${b.similitud ?? 's/d'}%), pero ${b.motivo ?? 'el documento no se pudo confirmar'}. ${cola}`;
+        : 'El rostro coincide, pero no se pudo confirmar el documento de identidad.';
   }
 }
 
