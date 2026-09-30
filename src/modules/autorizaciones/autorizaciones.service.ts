@@ -19,7 +19,7 @@ import type {
   ConfirmarIdentidadInput,
 } from './autorizaciones.schema';
 import { senalDiscrepanciaIngreso } from './ingreso-declarado';
-import { textoLegalSolicitante, VERSION_TERMINOS_BIOMETRIA } from './autorizaciones.texto';
+import { textoLegalSolicitante, VERSIONES_BIOMETRIA } from './autorizaciones.texto';
 // Cotejo biometrico AucoFace (Politica Anexo A + §14). Apagado por
 // AUCO_BIOMETRIA_ENABLED no se pide nada y el texto legal no cambia.
 import {
@@ -803,7 +803,7 @@ export async function getAutorizacionByToken(token: string) {
  */
 /** Biometria del prospecto: interruptor encendido Y texto firmado con la clausula. */
 function biometriaAplica(versionTerminos: string | null | undefined): boolean {
-  return env.AUCO_BIOMETRIA_ENABLED && versionTerminos === VERSION_TERMINOS_BIOMETRIA;
+  return env.AUCO_BIOMETRIA_ENABLED && VERSIONES_BIOMETRIA.includes(versionTerminos ?? '');
 }
 
 interface AutorizacionPendiente {
