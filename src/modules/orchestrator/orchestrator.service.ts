@@ -911,18 +911,24 @@ export async function onEstudioCompletado(params: {
       }
       // Caso L (Politica §14): ninguna central respondio. No es "condicionado por
       // riesgo": no hay score que certificar ni documentos que pedir por eso.
-      const { data: trazaRow } = (await db('estudios').select('cascada').eq('id', estudioId).maybeSingle()) as {
-        data: { cascada?: unknown } | null;
+      const { data: trazaRow } = (await db('estudios').select('cascada, observaciones').eq('id', estudioId).maybeSingle()) as {
+        data: { cascada?: unknown; observaciones?: string | null } | null;
       };
       const { esSinCentrales } = await import('@/modules/estudios/decision');
       const sinCentrales = esSinCentrales(trazaRow?.cascada);
+      // Adenda de precios §7.1: el buró o el motor lo aprobaban y solo el tope
+      // lo retuvo. Falta la Gerencia General: no se piden soportes ni co-arrendatario.
+      const { retenidoSoloPorTope } = await import('@/modules/estudios/excepcion-tope.service');
+      const porTope = !sinCentrales && retenidoSoloPorTope(trazaRow?.observaciones);
 
       await registrarTimeline(
         expedienteId,
         'estudio',
         sinCentrales
           ? 'Ninguna central de riesgo respondió: el estudio pasó a revisión manual (Política §14). Un analista de Cofianza puede volver a consultar las centrales.'
-          : `Estudio condicionado (Score: ${score}). Se requieren documentos adicionales.`,
+          : porTope
+            ? `Evaluación favorable (Score: ${score ?? 's/d'}), pero el canon supera el tope vigente: el estudio queda pendiente de autorización de la Gerencia General (Adenda de precios §7). No se requieren documentos adicionales.`
+            : `Estudio condicionado (Score: ${score}). Se requieren documentos adicionales.`,
       );
 
       // Flujo §10/§11: el CRC (condicionado) sale CON el resultado. No bloquea.
@@ -941,7 +947,11 @@ export async function onEstudioCompletado(params: {
         direccion: inm?.direccion || '',
       }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error aviso revisión manual a analistas'));
 
-      if (sol?.email) {
+      if (sol?.email && porTope) {
+        // Solo el aviso de que está en revisión: nada que aportar.
+        sendDocumentosRequeridosEmail({ email: sol.email, nombre: `${sol.nombre} ${sol.apellido}`, score, pedirSoportes: false })
+          .catch((e) => logger.warn({ error: e }, 'Orchestrator: error email condicionado por tope'));
+      } else if (sol?.email) {
         // P18: el correo lleva el enlace personal del prospecto para invitar a su
         // co-arrendatario sin cuenta (el mismo de sus soportes). Si no se pudo
         // generar, el correo le dice a quién pedírselo.
@@ -965,13 +975,17 @@ export async function onEstudioCompletado(params: {
       // Decide un analista de Cofianza (Adenda 2 §5); el dueño puede aportar
       // soportes o sumar co-arrendatario. Fire-and-forget.
       if (inm?.propietario_id && sol) {
+        const tituloDueno = porTope ? 'Estudio pendiente de autorización' : 'Estudio condicionado';
+        const mensajeDueno = sinCentrales
+          ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
+          : porTope
+            ? `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} tuvo una evaluación favorable, pero el canon supera el tope vigente: queda pendiente de autorización de la Gerencia General de Cofianza. No necesita pedir soportes al solicitante; le avisaremos el resultado.`
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puede pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`;
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
-          titulo: 'Estudio condicionado',
-          mensaje: sinCentrales
-            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
-            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puede pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
+          titulo: tituloDueno,
+          mensaje: mensajeDueno,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif in-app propietario condicionado'));
@@ -981,24 +995,27 @@ export async function onEstudioCompletado(params: {
           expedienteId,
           excluirPerfilId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',
-          titulo: 'Estudio condicionado',
-          mensaje: sinCentrales
-            ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
-            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puede pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`,
+          titulo: tituloDueno,
+          mensaje: mensajeDueno,
           link: `/expedientes/${expedienteId}`,
           payload: { expediente_id: expedienteId, score, solicitante_email: sol.email },
-          whatsapp: {
-            // variables[0] (nombre del dueño) lo sustituye el helper por el nombre del miembro.
-            // v2 en usted: reservas neutras, nunca «Hola» ni «tu inmueble» (B19).
-            template: 'ESTUDIO_CONDICIONADO_DUENO',
-            variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada'],
-            reservaNombre: 'señor(a)',
-          },
+          // La plantilla de Meta invita a aportar documentos: por el tope no va.
+          whatsapp: porTope
+            ? undefined
+            : {
+                // variables[0] (nombre del dueño) lo sustituye el helper por el nombre del miembro.
+                // v2 en usted: reservas neutras, nunca «Hola» ni «tu inmueble» (B19).
+                template: 'ESTUDIO_CONDICIONADO_DUENO',
+                variables: ['Hola', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada'],
+                reservaNombre: 'señor(a)',
+              },
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error notif responsable condicionado'));
 
         // WhatsApp al dueño: "el estudio quedó condicionado, requiere tu revisión".
-        enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_CONDICIONADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada', expedienteId)
-          .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño condicionado'));
+        if (!porTope) {
+          enviarWhatsAppDueno(inm.propietario_id, 'ESTUDIO_CONDICIONADO_DUENO', `${sol.nombre} ${sol.apellido}`, inm.direccion || 'la dirección registrada', expedienteId)
+            .catch((e) => logger.warn({ error: e }, 'Orchestrator: error WhatsApp dueño condicionado'));
+        }
       }
     }
 

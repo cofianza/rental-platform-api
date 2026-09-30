@@ -182,8 +182,14 @@ export async function sendDocumentosRequeridosEmail(params: {
    * queda solo para sus soportes.
    */
   ofrecerCoarrendatario?: boolean;
+  /**
+   * Adenda de precios §7.1: false cuando el caso espera solo la autorización de
+   * la Gerencia General (canon sobre el tope): el correo avisa que está en
+   * revisión y no pide soportes ni co-arrendatario.
+   */
+  pedirSoportes?: boolean;
 }) {
-  const { email, nombre, tokenDocumentos, ofrecerCoarrendatario = true } = params;
+  const { email, nombre, tokenDocumentos, ofrecerCoarrendatario = true, pedirSoportes = true } = params;
   const enlace = tokenDocumentos ? `${env.FRONTEND_URL}/cargar-documentos/${tokenDocumentos}` : null;
 
   const company = await getCompany();
@@ -202,7 +208,9 @@ export async function sendDocumentosRequeridosEmail(params: {
     puntajeCoarrendatario: null,
   });
 
-  const opcion = ofrecerCoarrendatario
+  const opcion = !pedirSoportes
+    ? ''
+    : ofrecerCoarrendatario
     ? `<p style="color: #6b7280;">Mientras tanto, puede sumar un co-arrendatario. En Cofianza <strong>no pedimos fiador</strong>: invite a la persona con quien va a vivir y evaluamos a los dos como un solo arrendatario.</p>
           ${enlace ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(enlace, 'Invitar a mi co-arrendatario')}</div>` : ''}
           <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">

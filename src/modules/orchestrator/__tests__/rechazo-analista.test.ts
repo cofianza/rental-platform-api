@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // crediticia del titular fue rechazada…») y al prospecto le llega el texto
 // neutro, no el de «mejora tu perfil crediticio». Colas de Supabase por tabla.
 
-const { ops, queues, enqueue, mockRechazado, mockNotificar, mockEmitirCrc } = vi.hoisted(() => {
+const { ops, queues, enqueue, mockRechazado, mockNotificar, mockEmitirCrc, mockDocs, mockResponsable, mockWa } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -16,6 +16,9 @@ const { ops, queues, enqueue, mockRechazado, mockNotificar, mockEmitirCrc } = vi
     mockRechazado: vi.fn(async (..._a: unknown[]) => undefined),
     mockNotificar: vi.fn(async (..._a: unknown[]) => undefined),
     mockEmitirCrc: vi.fn(async (..._a: unknown[]) => true),
+    mockDocs: vi.fn(async (..._a: unknown[]) => undefined),
+    mockResponsable: vi.fn(async (..._a: unknown[]) => undefined),
+    mockWa: vi.fn(async (..._a: unknown[]) => undefined),
   };
 });
 
@@ -42,13 +45,15 @@ vi.mock('@/config/env', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } 
 vi.mock('../orchestrator.emails', () => ({
   sendEstudioRechazadoEmail: mockRechazado,
   sendEstudioAprobadoEmail: vi.fn(async () => undefined),
+  sendDocumentosRequeridosEmail: mockDocs,
 }));
 vi.mock('@/modules/estudios/certificado.service', () => ({ emitirCertificadoAutomatico: mockEmitirCrc }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
   notificarUsuario: mockNotificar,
-  notificarResponsableExpediente: vi.fn(async () => undefined),
+  notificarResponsableExpediente: mockResponsable,
 }));
-vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: vi.fn() }));
+vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: mockWa }));
+vi.mock('@/modules/expedientes/expediente-soportes.service', () => ({ emitirTokenDocumentos: vi.fn(async () => 'tok-1') }));
 vi.mock('@/lib/tenantScope', () => ({ resolveNombreDueno: vi.fn() }));
 vi.mock('@/modules/estudios/reglas-duras', () => ({
   inferirReglasDurasDesdeMotivo: () => [],
@@ -154,5 +159,44 @@ describe('condicionado', () => {
     encolarRechazo();
     await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'rechazado', score: 380, solicitanteId: '' });
     expect(prioridad()).toBeUndefined();
+  });
+});
+
+// Revisión 2026-09-29, M5 (Adenda de precios §7.1): un «aprobado» retenido
+// SOLO por el tope espera a la Gerencia General; no se piden documentos.
+describe('condicionado solo por el tope', () => {
+  const NOTA_TOPE =
+    'Para el analista: el canon ($ 3.500.000) supera el tope de $ 3.000.000 (Adenda de precios §7): el estudio pasa a revisión y su aprobación requiere la autorización de la Gerencia General.';
+  const timeline = () =>
+    ops
+      .filter((o) => o.table === 'eventos_timeline' && o.method === 'insert')
+      .map((o) => (o.args[0] as { descripcion: string }).descripcion)
+      .join('\n');
+
+  it('queda pendiente de la Gerencia General sin pedir soportes ni co-arrendatario', async () => {
+    encolarRechazo();
+    enqueue('estudios', { data: { cascada: null, observaciones: NOTA_TOPE }, error: null });
+    await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'condicionado', score: 780, solicitanteId: '' });
+
+    expect(timeline()).toMatch(/pendiente de autorización de la Gerencia General/);
+    expect(timeline()).not.toMatch(/Se requieren documentos/);
+    await vi.waitFor(() => expect(mockDocs).toHaveBeenCalledWith(expect.objectContaining({ pedirSoportes: false })));
+    const alDueno = mockNotificar.mock.calls.map((c) => c[0] as { userId: string; mensaje: string }).find((n) => n.userId === 'dueno-1');
+    expect(alDueno?.mensaje).toMatch(/pendiente de autorización de la Gerencia General/);
+    expect(alDueno?.mensaje).not.toMatch(/puede pedir soportes|co-arrendatario/);
+    expect((mockResponsable.mock.calls[0][0] as { whatsapp?: unknown }).whatsapp).toBeUndefined();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockWa).not.toHaveBeenCalled();
+  });
+
+  it('un condicionado del buró sigue pidiendo soportes', async () => {
+    encolarRechazo();
+    enqueue('estudios', { data: { cascada: null, observaciones: 'Score en zona gris' }, error: null });
+    await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'condicionado', score: 560, solicitanteId: '' });
+
+    expect(timeline()).toMatch(/Se requieren documentos adicionales/);
+    await vi.waitFor(() => expect(mockDocs).toHaveBeenCalledWith(expect.not.objectContaining({ pedirSoportes: false })));
+    const alDueno = mockNotificar.mock.calls.map((c) => c[0] as { userId: string; mensaje: string }).find((n) => n.userId === 'dueno-1');
+    expect(alDueno?.mensaje).toMatch(/puede pedir soportes/);
   });
 });

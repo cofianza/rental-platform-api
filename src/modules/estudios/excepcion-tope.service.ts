@@ -175,6 +175,19 @@ export async function autorizarExcepcionTope(
   return { ...t, excepcionCop: input.canon_autorizado_cop };
 }
 
+/** Cierra las dos notas de retenerAprobadoSobreTope; la lee retenidoSoloPorTope. */
+const MARCA_RETENIDO_POR_TOPE = '(Adenda de precios §7): el estudio pasa a revisión';
+
+/**
+ * Pura: el estudio quedó condicionado SOLO por el tope. La nota de
+ * retenerAprobadoSobreTope se pone únicamente sobre un «aprobado», así que su
+ * presencia en las observaciones dice que el buró o el motor lo aprobaban: no
+ * hay documentos ni co-arrendatario que pedir, falta la Gerencia General.
+ */
+export function retenidoSoloPorTope(observaciones: string | null | undefined): boolean {
+  return !!observaciones?.includes(MARCA_RETENIDO_POR_TOPE);
+}
+
 /**
  * §7.1 en los caminos automáticos: un «aprobado» sobre el tope sin excepción
  * no aprueba solo; queda en revisión (condicionado) con la nota para el
@@ -199,8 +212,8 @@ export async function retenerAprobadoSobreTope<T extends { resultado: string; ob
       .catch(() => undefined);
   }
   const nota = t?.canonCop
-    ? `Para el analista: el canon (${formatearCOP(t.canonCop)}) supera el tope de ${formatearCOP(t.topeCop)} (Adenda de precios §7): el estudio pasa a revisión y su aprobación requiere la autorización de la Gerencia General.`
-    : 'Para el analista: no se pudo verificar el canon contra el tope (Adenda de precios §7): el estudio pasa a revisión.';
+    ? `Para el analista: el canon (${formatearCOP(t.canonCop)}) supera el tope de ${formatearCOP(t.topeCop)} ${MARCA_RETENIDO_POR_TOPE} y su aprobación requiere la autorización de la Gerencia General.`
+    : `Para el analista: no se pudo verificar el canon contra el tope ${MARCA_RETENIDO_POR_TOPE}.`;
   return { ...final, resultado: 'condicionado', observaciones: [final.observaciones, nota].filter(Boolean).join(' ') };
 }
 

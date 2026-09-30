@@ -67,6 +67,13 @@ describe('correo del condicionado', () => {
     expect(html()).toContain('Subir mis documentos');
     expect(html()).not.toMatch(/co-arrendatario/i);
   });
+
+  // M5: retenido solo por el tope, el correo avisa la revisión y no pide nada.
+  it('sin pedir soportes: solo el aviso de revisión', async () => {
+    await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 780, pedirSoportes: false });
+    expect(html()).toContain('Un analista revisa'); // texto de resolverRuta (mock)
+    expect(html()).not.toMatch(/co-arrendatario|documentos|cargar-documentos/i);
+  });
 });
 
 // Decisión 2: a quien marcó «con alguien más», el aprobado le ofrece sumar al

@@ -47,6 +47,7 @@ import {
   calConExcepcion,
   requiereGerencia,
   retenerAprobadoSobreTope,
+  retenidoSoloPorTope,
 } from '../excepcion-tope.service';
 
 const GERENCIA = { id: 'ger-1', rol: 'administrador', email: 'gerencia@cofianza.co' };
@@ -147,6 +148,9 @@ describe('§7.1 — el motor manda a revisión', () => {
     const r = await retenerAprobadoSobreTope('exp-1', { resultado: 'aprobado', observaciones: 'Puntaje 90' });
     expect(r.resultado).toBe('condicionado');
     expect(r.observaciones).toContain('Gerencia General');
+    // M5: el orquestador reconoce la retención por la nota (no pide soportes).
+    expect(retenidoSoloPorTope(r.observaciones)).toBe(true);
+    expect(retenidoSoloPorTope('Puntaje 90')).toBe(false);
     await vi.waitFor(() => expect(mockEscalar).toHaveBeenCalledWith('exp-1', 3_500_000, 3_000_000, 'estudio'));
   });
 
