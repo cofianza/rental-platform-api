@@ -31,6 +31,7 @@ import {
   sendCitaConfirmadaSolicitanteEmail,
   sendCitaReprogramadaSolicitanteEmail,
   sendCitaSolicitadaPropietarioEmail,
+  sendEstudioNoHabilitadoEmail,
 } from '../orchestrator.emails';
 
 const PHISHING = '<a href="https://evil.co">Paga aquí</a>';
@@ -49,12 +50,17 @@ describe('correo del condicionado', () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640, tokenDocumentos: 'a'.repeat(64) });
     expect(html()).toContain(`href="https://cofianza.co/cargar-documentos/${'a'.repeat(64)}"`);
     expect(html()).toContain('Invitar a mi co-arrendatario');
-    expect(html()).not.toContain('Ingresa a tu panel');
+    // Con enlace propio no se le manda a ningún panel (el texto sin enlace sí lo nombra).
+    expect(html()).not.toMatch(/panel/i);
+    // M8 (revisión 2026-09-29): el perfil que se evalúa es el del co-arrendatario.
+    expect(html()).toContain('Cuando su co-arrendatario acepte, evaluamos el perfil de esa persona y lo combinamos con el de usted.');
   });
 
   it('sin enlace le dice a quién pedírselo', async () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640 });
     expect(html()).toContain('Pídale a quien le pidió el estudio');
+    // M8: la invitación es para el co-arrendatario, no para el prospecto.
+    expect(html()).toContain('que invite desde su panel a la persona con quien va a vivir.');
     expect(html()).not.toContain('cargar-documentos');
   });
 
@@ -87,6 +93,7 @@ describe('correo del aprobado', () => {
     expect(mockEnlaceCoa).toHaveBeenCalledWith('exp-1');
     expect(html()).toContain('href="https://cofianza.co/cargar-documentos/tok"');
     expect(html()).toContain('10 %');
+    expect(html()).toContain('Su co-arrendatario no es un fiador ni un codeudor, y no necesita tener finca raíz.');
   });
 
   it('sin enlace (no lo marcó, ya invitó o no se puede), ni sin estudio: nada del co-arrendatario', async () => {
@@ -162,6 +169,15 @@ describe('correos de visita con enlaces', () => {
       ciudad: 'Medellín', fecha_propuesta: '2026-09-30T15:00:00Z', url_visita: 'https://cofianza.co/citas#cita-c1',
     });
     expect(html()).toContain('href="https://cofianza.co/citas#cita-c1"');
+  });
+});
+
+describe('correo de estudio no habilitado', () => {
+  it('trata de usted («prefiera», no «prefieras»)', async () => {
+    await sendEstudioNoHabilitadoEmail({
+      email: 'ana@correo.co', nombre_solicitante: 'Ana', expediente_numero: 'EXP-1', inmueble: 'Calle 1', ciudad: 'Medellín', motivo: null,
+    });
+    expect(html()).toContain('solicitar su fiador para el que prefiera.');
   });
 });
 

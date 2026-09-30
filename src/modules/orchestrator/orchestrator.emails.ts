@@ -82,7 +82,7 @@ export async function sendEstudioAprobadoEmail(params: {
             <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: su contrato</p>
             <p style="color: #065f46; margin: 4px 0 0;">El propietario o la inmobiliaria preparará su contrato (fecha de inicio y duración). Cuando esté listo para firmar, le llegará el enlace por WhatsApp al número que registró. No necesita hacer nada por ahora.</p>
           </div>
-          ${enlaceCoa ? `<p style="color: #6b7280;">Nos contó que va a vivir con alguien más. Si lo suma como <strong>co-arrendatario</strong> antes de que se genere el contrato, la prima de vinculación baja del 20 % al 10 % del canon. No es un fiador ni codeudor, y no necesita finca raíz.</p>
+          ${enlaceCoa ? `<p style="color: #6b7280;">Nos contó que va a vivir con alguien más. Si lo suma como <strong>co-arrendatario</strong> antes de que se genere el contrato, la prima de vinculación baja del 20 % al 10 % del canon. Su co-arrendatario no es un fiador ni un codeudor, y no necesita tener finca raíz.</p>
           <div style="text-align: center; margin: 24px 0;">${botonHtml(enlaceCoa, 'Invitar a mi co-arrendatario')}</div>` : ''}
           ${footerHtml(company)}
         </div>
@@ -218,9 +218,9 @@ export async function sendDocumentosRequeridosEmail(params: {
             <ul style="color: #92400e; margin: 8px 0 0; padding-left: 20px;">
               <li>${enlace
                 ? 'Abra su enlace personal (el botón de arriba) y escriba los datos de la persona con quien va a vivir. Desde ahí también puede subir documentos que respalden sus ingresos.'
-                : 'Pídale a quien le pidió el estudio (su inmobiliaria o el propietario) que le envíe la invitación desde su panel.'}</li>
-              <li>Le enviamos una invitación por correo.</li>
-              <li>Cuando acepte, evaluamos su perfil y lo combinamos con el suyo.</li>
+                : 'Pídale a quien le pidió el estudio (su inmobiliaria o el propietario) que invite desde su panel a la persona con quien va a vivir.'}</li>
+              <li>Le enviamos la invitación por correo a esa persona.</li>
+              <li>Cuando su co-arrendatario acepte, evaluamos el perfil de esa persona y lo combinamos con el de usted.</li>
               <li>Si juntos cumplen, los respaldamos como un solo arrendatario.</li>
             </ul>
           </div>
@@ -731,7 +731,7 @@ export async function sendEstudioNoHabilitadoEmail(params: {
             <p style="color: #4b5563; margin: 8px 0 0;">${escapeHtml(motivo)}</p>
           </div>
           ` : ''}
-          <p style="color: #6b7280;">Puede seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar su fiador para el que prefieras.</p>
+          <p style="color: #6b7280;">Puede seguir explorando otros inmuebles en la vitrina de Cofianza y solicitar su fiador para el que prefiera.</p>
           ${footerHtml(company)}
         </div>
       </div>

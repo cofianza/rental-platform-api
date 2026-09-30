@@ -228,8 +228,8 @@ export function resolverRuta(e: EntradaRuta): Ruta {
       ruta: 'coarrendatario_requerido',
       titulo: yaLoTiene ? 'Su estudio fue aprobado con acompañante' : 'Casi listo: necesita un acompañante',
       mensaje: yaLoTiene
-        ? 'Su coarrendatario ya quedo vinculado y podemos respaldar el contrato.'
-        : 'Podemos respaldar su contrato si lo presenta junto a un coarrendatario. No necesita finca raiz: basta con que tenga ingresos propios.',
+        ? 'Su coarrendatario ya quedó vinculado y podemos respaldar el contrato.'
+        : 'Podemos respaldar su contrato si lo presenta junto a un coarrendatario. Su coarrendatario no necesita finca raíz: basta con que tenga ingresos propios.',
       puedeContinuarSolo: false,
       coarrendatarioObligatorio: true,
       coarrendatarioAbarataPrima: false,
