@@ -79,6 +79,8 @@ export async function crearCuentaSolicitante(
   ipAddress: string,
   userAgent: string,
   password?: string,
+  /** false: la aceptación se registra después (enlace mágico: al verificar el correo, M7). */
+  registrarTerminos = true,
 ): Promise<string> {
   const {
     email, nombre, apellido, telefono,
@@ -209,7 +211,7 @@ export async function crearCuentaSolicitante(
   // 3.5. Persistir aceptación de términos + tratamiento de datos.
   //      Evidencia legal: user_id + timestamps + IP + user-agent. Reutiliza
   //      la misma función que propietario/inmobiliaria. Log-only en error.
-  await recordTermsAcceptance(userId, ipAddress, userAgent);
+  if (registrarTerminos) await recordTermsAcceptance(userId, ipAddress, userAgent);
   return userId;
 }
 

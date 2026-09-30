@@ -27,11 +27,14 @@ export const resetPasswordSchema = z.object({
 
 // Enlace mágico (H44). `datos` solo se usa si el invitado aún no tiene cuenta
 // (se le crea como arrendatario, sin contraseña); si ya la tiene, se ignora.
+// Sin documento (M7): quien pide el enlace aún no probó que el correo es suyo;
+// el documento se pide después, como en el registro liviano (H43). Si llega,
+// zod lo descarta.
 export const enlaceMagicoSchema = z.object({
   email: z.email({ error: 'Email inválido' }).max(255),
   datos: registerSolicitanteBase
     .pick({
-      nombre: true, apellido: true, telefono: true, tipo_documento: true, numero_documento: true,
+      nombre: true, apellido: true, telefono: true,
       municipio_id: true, municipio_nombre: true, accept_terms: true, accept_data_treatment: true,
     })
     .optional(),
