@@ -185,7 +185,9 @@ export async function resumenRevisionManual(dias: number): Promise<ResumenRevisi
       .select('id', { count: 'exact', head: true })
       .eq('estado', 'completado')
       .gte('fecha_completado', desde)
-      .ilike('observaciones', '%Adenda 2 §3%'),
+      // Filas viejas citan «Adenda 2 §3»; las nuevas llevan el texto visible
+      // MOTIVO_INGRESO_NO_VERIFICABLE (sin referencias internas).
+      .or('observaciones.ilike.%Adenda 2 §3%,observaciones.ilike.%No fue posible verificar el ingreso%'),
     db('bitacora')
       .select('accion, tipo_fallo:detalle->>tipo_fallo')
       .in('accion', ['estudio_provider_executed', 'estudio_provider_failed'])
