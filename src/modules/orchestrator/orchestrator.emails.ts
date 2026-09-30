@@ -210,7 +210,7 @@ export async function sendDocumentosRequeridosEmail(params: {
             <ul style="color: #92400e; margin: 8px 0 0; padding-left: 20px;">
               <li>${enlace
                 ? 'Abra su enlace personal (el botón de arriba) y escriba los datos de la persona con quien va a vivir. Desde ahí también puede subir documentos que respalden sus ingresos.'
-                : 'Pídale a quien le pidió el estudio (su inmobiliaria o el propietario) que le envíe la invitación desde su panel.'}</li>
+                : 'Pídale a quien le pidió el estudio (su inmobiliaria o el propietario) que invite desde su panel a la persona con quien va a vivir.'}</li>
               <li>Le enviamos la invitación por correo a esa persona.</li>
               <li>Cuando su co-arrendatario acepte, evaluamos el perfil de esa persona y lo combinamos con el de usted.</li>
               <li>Si juntos cumplen, los respaldamos como un solo arrendatario.</li>

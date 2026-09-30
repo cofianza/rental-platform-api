@@ -59,6 +59,8 @@ describe('correo del condicionado', () => {
   it('sin enlace le dice a quién pedírselo', async () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640 });
     expect(html()).toContain('Pídale a quien le pidió el estudio');
+    // M8: la invitación es para el co-arrendatario, no para el prospecto.
+    expect(html()).toContain('que invite desde su panel a la persona con quien va a vivir.');
     expect(html()).not.toContain('cargar-documentos');
   });
 
