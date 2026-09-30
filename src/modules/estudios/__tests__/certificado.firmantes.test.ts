@@ -104,6 +104,7 @@ import {
   generateQrCode,
   leerSombraDelEstudio,
   llaveDeVersion,
+  paraAgencia,
   paraArrendatario,
   sinPuntaje,
   verificarCertificado,
@@ -263,6 +264,40 @@ describe('el PDF sin puntaje', () => {
     await generateCertificatePdf(paraArrendatario({ ...DATOS, score: null }), QR);
     expect(impreso()).toContain('Esta versión no incluye las observaciones de la evaluación.');
     expect(impreso()).not.toContain(NOTA);
+  });
+});
+
+// Inmobiliaria y propietario: el completo sin lo interno (modelo = secreto
+// industrial) y sin referencias a documentos, también en filas guardadas antes.
+describe('el CRC de la agencia', () => {
+  const LEGADO =
+    'Score CreditVision: 741. Obligaciones totales: 4. Saldo total: $ 25.756 Revision manual: la Registraduria no entrego informacion. ' +
+    'Cascada (Adenda §2): puntaje 77.5 entre 40 y 89. Decision del modelo: Revision manual..';
+
+  it('lleva score, observaciones visibles y condiciones; no la traza interna, el factor, la versión ni el puntaje del modelo', async () => {
+    const datos = { ...DATOS, resultado: 'condicionado', observaciones: LEGADO, rutaEtiqueta: 'Aprobado automático (87,5 puntos)' };
+    await generateCertificatePdf(paraAgencia(datos), QR);
+    const t = impreso();
+    for (const s of ['773', 'Observaciones', 'Presentar el contrato laboral', 'Aprobado automático', 'Score CreditVision: 741']) expect(t).toContain(s);
+    for (const s of ['§', 'Adenda', 'Cascada', '77.5', 'Decisión entre centrales', 'Denominador', 'Factor de ajuste', 'Versión del modelo', 'puntos)', NOTA]) {
+      expect(t).not.toContain(s);
+    }
+    expect(t).toContain('El caso pasa a revisión de un analista de Cofianza.');
+  });
+
+  it('el completo (Cofianza) conserva la traza, sin referencias a documentos', async () => {
+    await generateCertificatePdf(DATOS, QR);
+    const t = impreso();
+    for (const s of ['Decisión entre centrales', 'Denominador del puntaje', 'x1,15', 'Versión del modelo']) expect(t).toContain(s);
+    expect(t).not.toMatch(/§|Adenda \d/);
+  });
+
+  it('las versiones reducidas ya no imprimen el factor de ajuste', async () => {
+    for (const d of [sinPuntaje(DATOS), paraArrendatario(DATOS)]) {
+      textos.mockClear();
+      await generateCertificatePdf(d, QR);
+      expect(impreso()).not.toContain('Factor de ajuste');
+    }
   });
 });
 
@@ -463,6 +498,7 @@ describe('cashback', () => {
 describe('quién recibe cuál', () => {
   const FIRMANTES = llaveDeVersion(CERT.pdf_storage_key, 'firmantes');
   const ARRENDATARIO = llaveDeVersion(CERT.pdf_storage_key, 'arrendatario');
+  const AGENCIA = llaveDeVersion(CERT.pdf_storage_key, 'agencia');
 
   it('las llaves de firmantes y del arrendatario viven al lado de la del completo', () => {
     expect(FIRMANTES).toBe('estudios/est-1/certificado/uuid-1-firmantes.pdf');
@@ -470,9 +506,10 @@ describe('quién recibe cuál', () => {
   });
 
   // P13 (Ley 1266): el arrendatario conoce su puntaje.
-  it('el arrendatario (solicitante) baja su versión, con su puntaje; la inmobiliaria, la completa', async () => {
+  it('el arrendatario (solicitante) baja su versión, con su puntaje; la inmobiliaria, la de la agencia; Cofianza, la completa', async () => {
     archivos.set(FIRMANTES, Buffer.from('%PDF firmantes'));
     archivos.set(ARRENDATARIO, Buffer.from('%PDF arrendatario'));
+    archivos.set(AGENCIA, Buffer.from('%PDF agencia'));
 
     // La guardada también pasa las compuertas: se lee el estudio de hoy.
     enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null }, { data: ESTUDIO, error: null });
@@ -480,10 +517,15 @@ describe('quién recibe cuál', () => {
     const delSolicitante = await descargarCertificado('est-1', 'u-1', 'solicitante');
     expect(delSolicitante.url).toBe(`https://storage.test/${ARRENDATARIO}`);
 
-    enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null });
+    enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null }, { data: ESTUDIO, error: null });
     enqueue('estudios_certificados', { data: CERT, error: null });
     const deLaInmobiliaria = await descargarCertificado('est-1', 'u-2', 'inmobiliaria');
-    expect(deLaInmobiliaria.url).toBe(`https://storage.test/${CERT.pdf_storage_key}`);
+    expect(deLaInmobiliaria.url).toBe(`https://storage.test/${AGENCIA}`);
+
+    enqueue('estudios', { data: { expediente_id: 'exp-1', tipo: 'individual' }, error: null });
+    enqueue('estudios_certificados', { data: CERT, error: null });
+    const delAnalista = await descargarCertificado('est-1', 'u-3', 'operador_analista');
+    expect(delAnalista.url).toBe(`https://storage.test/${CERT.pdf_storage_key}`);
   });
 
   it('un CRC emitido antes sin versión para firmantes: se genera una vez, con su número y sus fechas', async () => {
@@ -617,6 +659,7 @@ describe('quién recibe cuál', () => {
       cert.pdf_storage_key,
       llaveDeVersion(cert.pdf_storage_key, 'firmantes'),
       llaveDeVersion(cert.pdf_storage_key, 'arrendatario'),
+      llaveDeVersion(cert.pdf_storage_key, 'agencia'),
     ]);
     // Con los mismos datos: la del arrendatario lleva su score y su nota.
     const texto = impreso();
@@ -664,10 +707,10 @@ describe('emisión que no se registra', () => {
     const cert = await emitir();
 
     const subidas = storage.upload.mock.calls.map((c) => c[0] as string);
-    expect(subidas).toHaveLength(6);
-    expect(storage.remove).toHaveBeenCalledWith(subidas.slice(0, 3));
-    expect([...archivos.keys()]).toEqual(subidas.slice(3));
-    expect(cert.pdf_storage_key).toBe(subidas[3]);
+    expect(subidas).toHaveLength(8);
+    expect(storage.remove).toHaveBeenCalledWith(subidas.slice(0, 4));
+    expect([...archivos.keys()]).toEqual(subidas.slice(4));
+    expect(cert.pdf_storage_key).toBe(subidas[4]);
     // Cada intento imprime su código; el registrado es el segundo.
     const codigos = codigosImpresos();
     expect(codigos.size).toBe(2);
@@ -684,7 +727,7 @@ describe('emisión que no se registra', () => {
       { data: null, error: CHOQUE_CODIGO },
     );
     await expect(emitir()).rejects.toMatchObject({ statusCode: 500 });
-    expect(storage.upload).toHaveBeenCalledTimes(6);
+    expect(storage.upload).toHaveBeenCalledTimes(8);
     expect(archivos.size).toBe(0);
 
     // Otra emisión en paralelo del mismo estudio: otro código no lo arregla.
@@ -692,7 +735,7 @@ describe('emisión que no se registra', () => {
     enqueue('estudios', { data: ESTUDIO, error: null });
     enqueue('estudios_certificados', { data: null, error: null }, { data: null, error: choque('uq_estudios_certificados_estudio', 'estudio_id') });
     await expect(emitir()).rejects.toMatchObject({ statusCode: 500 });
-    expect(storage.upload).toHaveBeenCalledTimes(3);
+    expect(storage.upload).toHaveBeenCalledTimes(4);
     expect(archivos.size).toBe(0);
 
     // Regenerar y que falle el registro.

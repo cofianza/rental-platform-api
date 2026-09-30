@@ -428,10 +428,12 @@ export function evaluarSombra(entrada?: EntradaSombra | null): SalidaSombra {
       features.score_externo !== null &&
       features.score_externo >= scoreRechazo &&
       features.score_externo <= scoreRevisionMax;
+    // Texto VISIBLE (va a las observaciones): sin puntajes ni cortes. Los
+    // puntajes de cada central quedan en la nota interna de la decisión.
     const revisionObligatoria = inconsistenciaBuros
-      ? `Caso G: diferencia entre centrales mayor a ${DIFERENCIA_BUROS_REVISION} puntos (${Object.entries(scoresIndividuales).map(([k, v]) => `${k} ${v}`).join(' vs ')})`
+      ? 'Los puntajes de las dos centrales de riesgo difieren demasiado entre sí.'
       : scoreEnBandaRevision
-        ? `Score externo ${features.score_externo} en la banda de revision manual obligatoria (${scoreRechazo}-${scoreRevisionMax}, Politica §3.1 / Adenda 2 §2)`
+        ? 'El puntaje de las centrales de riesgo está en un rango que siempre revisa un analista.'
         : null;
     const decision = decidirSombra(
       totales,

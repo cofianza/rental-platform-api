@@ -256,7 +256,8 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     await vi.waitFor(() => expect(supabase.rpc).toHaveBeenCalledWith('fn_registrar_resultado_estudio', expect.anything()));
     const args = (supabase.rpc as unknown as Mock).mock.calls.find((c) => c[0] === 'fn_registrar_resultado_estudio')![1];
     expect(args.p_resultado).toBe('condicionado');
-    expect(args.p_observaciones).toMatch(/Para el analista/);
+    expect(args.p_observaciones).toMatch(/(pasa a|sigue en) revisión/);
+    expect(args.p_observaciones).not.toMatch(/Para el analista|§/);
   });
 
   describe('Política §14 / matriz QA V2, caso L: ninguna central responde (motor encendido)', () => {

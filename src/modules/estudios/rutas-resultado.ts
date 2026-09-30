@@ -143,6 +143,18 @@ const NO_APROBABLE = {
   coarrendatarioAbarataPrima: false,
 } as const;
 
+/** « (77,5 puntos)»: el puntaje del modelo en la etiqueta del gestor. */
+const puntos = (p: number | null) =>
+  p === null ? '' : ` (${new Intl.NumberFormat('es-CO', { maximumFractionDigits: 2 }).format(p)} puntos)`;
+
+/**
+ * La etiqueta del gestor sin el puntaje del modelo, para la inmobiliaria y el
+ * propietario (el modelo es secreto industrial). Quita lo que agrega `puntos`.
+ */
+export function etiquetaSinPuntaje(etiqueta: string | null | undefined): string | null {
+  return etiqueta ? etiqueta.replace(/ \([\d.,]+ puntos\)/g, '') : null;
+}
+
 /**
  * Traduce una decision ya tomada a la ruta del §10.
  *
@@ -164,7 +176,7 @@ export function resolverRuta(e: EntradaRuta): Ruta {
   //    coarrendatario tampoco ("Regla dura del coarrendatario contamina el
   //    conjunto", §5).
   if (e.reglaDuraActivada) {
-    return { ruta: 'no_aprobable', ...NO_APROBABLE, etiquetaGestor: 'No aprobable — regla dura activada' };
+    return { ruta: 'no_aprobable', ...NO_APROBABLE, etiquetaGestor: 'No aprobable: no cumple una condición obligatoria' };
   }
 
   // 2. Revision manual en curso. NO es una de las cuatro rutas: es el estado
@@ -174,17 +186,17 @@ export function resolverRuta(e: EntradaRuta): Ruta {
       ruta: 'en_revision',
       titulo: 'Estamos revisando su estudio',
       mensaje:
-        'Una persona de nuestro equipo esta revisando su caso. Le escribimos apenas tengamos la respuesta.',
+        'Una persona de nuestro equipo está revisando su caso. Le escribimos apenas tengamos la respuesta.',
       puedeContinuarSolo: false,
       coarrendatarioObligatorio: false,
       coarrendatarioAbarataPrima: false,
-      etiquetaGestor: 'En revision manual',
+      etiquetaGestor: 'En revisión manual',
     };
   }
 
   // 3. Rechazado (por el buro, o por el motor cuando decide).
   if (e.resultadoVigente === 'rechazado') {
-    return { ruta: 'no_aprobable', ...NO_APROBABLE, etiquetaGestor: 'No aprobable — resultado registrado' };
+    return { ruta: 'no_aprobable', ...NO_APROBABLE, etiquetaGestor: 'No aprobable: resultado registrado' };
   }
 
   // 4. Aprobado sin puntaje del scorecard: el buro aprobo y el modelo no pudo
@@ -211,7 +223,7 @@ export function resolverRuta(e: EntradaRuta): Ruta {
       puedeContinuarSolo: true,
       coarrendatarioObligatorio: false,
       coarrendatarioAbarataPrima: abarata,
-      etiquetaGestor: `Aprobado automatico (${e.puntaje} pts)`,
+      etiquetaGestor: `Aprobado automático${puntos(e.puntaje)}`,
     };
   }
 
@@ -234,12 +246,12 @@ export function resolverRuta(e: EntradaRuta): Ruta {
       coarrendatarioObligatorio: true,
       coarrendatarioAbarataPrima: false,
       etiquetaGestor: yaLoTiene
-        ? `Zona gris (${e.puntaje} pts) — aprobado con coarrendatario (${e.puntajeCoarrendatario} pts)`
-        : `Zona gris (${e.puntaje} pts) — coarrendatario >= ${u.coarrendatario} o revision manual`,
+        ? `Perfil intermedio${puntos(e.puntaje)}: aprobado con co-arrendatario${puntos(e.puntajeCoarrendatario)}`
+        : `Perfil intermedio${puntos(e.puntaje)}: requiere co-arrendatario o revisión manual`,
     };
   }
 
   // < 70: el §5 es explicito — "ningun coarrendatario compensa" porque "el
   // afianzado es quien ocupa el inmueble".
-  return { ruta: 'no_aprobable', ...NO_APROBABLE, etiquetaGestor: `No aprobable (${e.puntaje} pts)` };
+  return { ruta: 'no_aprobable', ...NO_APROBABLE, etiquetaGestor: `No aprobable${puntos(e.puntaje)}` };
 }

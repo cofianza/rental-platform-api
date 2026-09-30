@@ -57,7 +57,7 @@ describe('estudio del co-arrendatario', () => {
     const r = await resolverResultadoEstudio(base);
     expect(mockContraste).not.toHaveBeenCalled();
     expect(mockBiometria).not.toHaveBeenCalled();
-    expect(r.observaciones ?? '').not.toMatch(/Adenda §8/);
+    expect(r.observaciones ?? '').not.toMatch(/ingreso declarado/);
   });
 
   it('el del titular si pasa por el contraste (tipo leido de la fila)', async () => {
@@ -72,12 +72,12 @@ describe('resultado registrado a mano por un analista', () => {
   // Cedula de extranjeria (§15) y score digitado en la banda 450-599 (Adenda 2 §2).
   const manual = { proveedor: 'manual', respuesta_proveedor: null, score: null, datos_formulario: { tipo_documento: 'ce' }, tipo: 'individual' };
 
-  it('su aprobado queda aprobado; los motivos van como nota', async () => {
+  it('su aprobado queda aprobado; los motivos no se pegan a sus observaciones (B20)', async () => {
     filaEstudio.current = manual;
-    const r = await resolverResultadoEstudio({ ...base, score: 520, decidePersona: true });
+    const r = await resolverResultadoEstudio({ ...base, score: 520, decidePersona: true, observaciones: 'Soportes revisados.' });
     expect(r.resultado).toBe('aprobado');
-    expect(r.revisionManual).toBeTruthy();
-    expect(r.observaciones).toMatch(/§15/);
+    expect(r.revisionManual).toMatch(/no tiene cédula colombiana/);
+    expect(r.observaciones).toBe('Soportes revisados.');
   });
 
   it('el mismo caso por un camino automatico sigue bajando a condicionado', async () => {
@@ -118,8 +118,9 @@ describe('Politica §4.3: canon/ingreso entre 35 % y 40 % va a revision manual (
   const salida = (pct: number | null) => ({ canon_ingreso_pct: pct }) as unknown as SalidaSombra;
   it('solo la banda >35 y <=40 da motivo', () => {
     expect(motivoRevisionCanonIngreso(salida(35))).toBeNull();
-    expect(motivoRevisionCanonIngreso(salida(35.01))).toMatch(/§4\.3/);
-    expect(motivoRevisionCanonIngreso(salida(40))).toMatch(/40%/);
+    expect(motivoRevisionCanonIngreso(salida(35.01))).toMatch(/parte alta del ingreso/);
+    // Visible para la inmobiliaria: sin el porcentaje ni los cortes.
+    expect(motivoRevisionCanonIngreso(salida(40))).not.toMatch(/\d|§/);
     // Por encima del 40 % ya es regla dura (rechazo), no revision.
     expect(motivoRevisionCanonIngreso(salida(40.01))).toBeNull();
     expect(motivoRevisionCanonIngreso(salida(null))).toBeNull();
@@ -129,8 +130,8 @@ describe('Politica §4.3: canon/ingreso entre 35 % y 40 % va a revision manual (
 
 describe('Politica Anexo A.4/A.5: situacion laboral declarada (P9)', () => {
   it('«otro» e independiente con un «No» al RUT van a revision; lo demas no', () => {
-    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'otro' })).toMatch(/Anexo A/);
-    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'independiente', tiene_rut: false })).toMatch(/A\.4.*sin RUT/);
+    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'otro' })).toMatch(/«otro»/);
+    expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'independiente', tiene_rut: false })).toMatch(/independiente sin RUT/);
     expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'independiente', tiene_rut: true })).toBeNull();
     // Sin respuesta (paso opcional o columna sin migrar) no se afirma nada.
     expect(motivoRevisionSituacionLaboral({ situacion_laboral: 'independiente' })).toBeNull();

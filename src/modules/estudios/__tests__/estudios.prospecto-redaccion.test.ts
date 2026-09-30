@@ -135,6 +135,40 @@ describe('estudios del expediente vistos por el titular', () => {
   });
 });
 
+// Inmobiliaria y propietario: solo el texto visible; la nota interna, solo Cofianza.
+describe('estudio visto por la agencia y por Cofianza', () => {
+  const rechazado = {
+    ...fila('individual'),
+    resultado: 'rechazado',
+    motivo_rechazo:
+      'Rechazo automatico por regla dura de la Politica de Evaluacion V4.1. Capacidad de endeudamiento (DTI, §4.2): 70% supera el maximo de 65%.',
+    observaciones: 'Score CreditVision: 700. Regla dura V4.1 activada — DTI 70% (max 65%). Anula el puntaje total (§3).',
+    nota_interna: 'Puntaje 65, menor que 70: no alcanza para aprobar.',
+  };
+
+  it('la inmobiliaria recibe el motivo y las observaciones visibles, sin la nota interna', async () => {
+    enqueue('estudios', { data: rechazado, error: null });
+    const e = (await getEstudioById('est-1', 'u-2', 'inmobiliaria')) as Record<string, unknown>;
+    expect(e.motivo_rechazo).toBe('No cumple una condición obligatoria de la política de riesgo: capacidad de endeudamiento insuficiente.');
+    expect(e.observaciones).toBe('Score CreditVision: 700.');
+    expect(e).not.toHaveProperty('nota_interna', expect.anything());
+  });
+
+  it('el analista recibe el motivo con cifras y la nota interna', async () => {
+    enqueue('estudios', { data: rechazado, error: null });
+    const e = (await getEstudioById('est-1', 'u-3', 'operador_analista')) as Record<string, unknown>;
+    expect(e.motivo_rechazo).toBe(rechazado.motivo_rechazo);
+    expect(e.nota_interna).toBe(rechazado.nota_interna);
+  });
+
+  it('el listado pide la nota interna de la traza', async () => {
+    enqueue('expedientes', { data: { id: 'exp-1' }, error: null });
+    await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-3', 'operador_analista');
+    const select = ops.find((o) => o.table === 'estudios' && o.method === 'select');
+    expect(String(select?.args[0])).toContain('nota_interna:cascada->>nota_interna');
+  });
+});
+
 // La tarjeta y el CRC leen la decisión de Cofianza con la misma regla
 // (decisionDeCofianza): no se contradicen.
 describe('la decisión de Cofianza en la tarjeta', () => {
@@ -251,6 +285,26 @@ describe('las demas rutas por id que el titular alcanza', () => {
     expect(r.url).toBe('https://storage.test/estudios/est-1/certificado/uuid-1-arrendatario.pdf');
   });
 
+  // El completo lleva la decisión entre centrales y la versión del modelo: la
+  // inmobiliaria no lo baja por /certificado/url (antes le llegaba el completo).
+  it('/certificado/url de la inmobiliaria: la versión de la agencia, no el completo', async () => {
+    const completo = 'estudios/est-1/certificado/uuid-1.pdf';
+    const cert = { id: 'c-1', codigo: 'CERT-2026-00001', version: 1, pdf_storage_key: completo, fecha_emision: '2026-09-01', fecha_vencimiento: '2026-10-31' };
+    enqueue('estudios', { data: { ...fila('individual'), certificado_url: completo }, error: null });
+    enqueue('estudios', { data: fila('individual'), error: null }, { data: fila('individual'), error: null });
+    enqueue('estudios_certificados', { data: { pdf_storage_key: completo }, error: null }, { data: cert, error: null });
+    const r = await getCertificadoViewUrl('est-1', 'u-2', 'inmobiliaria');
+    expect(r.url).toBe('https://storage.test/estudios/est-1/certificado/uuid-1-agencia.pdf');
+  });
+
+  it('/certificado/url de la inmobiliaria con un reporte adjunto (no el CRC): ese reporte', async () => {
+    const adjunto = 'estudios/est-1/certificado/reporte-buro.pdf';
+    enqueue('estudios', { data: { ...fila('individual'), certificado_url: adjunto }, error: null });
+    enqueue('estudios_certificados', { data: null, error: null });
+    const r = await getCertificadoViewUrl('est-1', 'u-2', 'inmobiliaria');
+    expect(r.url).toBe(`https://storage.test/${adjunto}`);
+  });
+
   it('el gestor si baja el certificado del co-arrendatario', async () => {
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     // Pasa el guard y llega a buscar el certificado (no hay: 404 de certificado).
@@ -347,7 +401,8 @@ describe('contraste de ingreso (Adenda §8) sin cifras', () => {
   it('el motivo que va a observaciones no lleva el declarado, el estimado ni el umbral', async () => {
     enqueue('autorizacion_perfil_prospecto', { data: { ingreso_declarado_cop: 9_000_000 }, error: null });
     const motivo = await contrasteIngresoProspecto('exp-1', 3_000_000, 50);
-    expect(motivo).toMatch(/Revision manual \(Adenda §8\)/);
+    expect(motivo).toMatch(/ingreso declarado por el solicitante difiere/);
+    expect(motivo).not.toMatch(/§/);
     expect(motivo).not.toMatch(/\d{3}|%/);
   });
 });
@@ -359,7 +414,7 @@ describe('Politica §8: vigencia del score externo en el registro manual', () =>
   it('hasta 30 dias desde la consulta se registra; despues pide reconsultar', () => {
     expect(() => assertScoreExternoVigente(null, ahora)).not.toThrow();
     expect(() => assertScoreExternoVigente(new Date(ahora - 30 * DIA).toISOString(), ahora)).not.toThrow();
-    expect(() => assertScoreExternoVigente(new Date(ahora - 31 * DIA).toISOString(), ahora)).toThrow(/reconsultar el buró/);
+    expect(() => assertScoreExternoVigente(new Date(ahora - 31 * DIA).toISOString(), ahora)).toThrow(/volver a consultar el buró/);
   });
 
   it('la re-evaluacion se mide contra la consulta del padre, no contra hoy', async () => {

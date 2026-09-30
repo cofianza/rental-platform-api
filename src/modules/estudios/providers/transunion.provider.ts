@@ -30,10 +30,10 @@ const TIPO_DOCUMENTO_MAP: Record<string, string> = {
 
 // ── Exclusiones CreditVision (no son errores) ───────────────
 const EXCLUSION_MESSAGES: Record<number, string> = {
-  '-7': 'Titular fallecido o documento no elegible para scoring',
-  '-6': 'Tipo de documento no elegible para scoring',
-  '-5': 'Titular sin informacion crediticia en activo ni pasivo',
-  '-4': 'Titular solo con informacion en el pasivo',
+  '-7': 'titular fallecido o documento no elegible para el cálculo del puntaje',
+  '-6': 'tipo de documento no elegible para el cálculo del puntaje',
+  '-5': 'la persona no tiene información crediticia',
+  '-4': 'la persona solo tiene información de obligaciones a su cargo',
 };
 
 // ── Errores conocidos de TransUnion ─────────────────────────
@@ -122,13 +122,6 @@ type TransUnionResponse = TransUnionSuccessResponse | TransUnionErrorResponse;
 // ── Cache de resultados (TransUnion es síncrono) ────────────
 const resultCache = new Map<string, ProviderResult>();
 
-// ── Helper: formato moneda COP ──────────────────────────────
-function formatCOP(value: string | number | undefined): string {
-  const num = typeof value === 'string' ? parseInt(value, 10) : (value ?? 0);
-  if (isNaN(num)) return '$0';
-  return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(num);
-}
-
 // ── Helper: determinar resultado según score ────────────────
 function scoreToResultado(score: number): 'aprobado' | 'rechazado' | 'condicionado' {
   if (score >= 600) return 'aprobado';
@@ -157,27 +150,16 @@ function buildObservaciones(
   exclusionCode?: number,
 ): string {
   if (exclusionCode !== undefined) {
-    const msg = EXCLUSION_MESSAGES[exclusionCode] ?? `Exclusion CreditVision (codigo ${exclusionCode})`;
-    return `Score no disponible (codigo ${exclusionCode}): ${msg}`;
+    const msg = EXCLUSION_MESSAGES[exclusionCode] ?? 'la central no calculó el puntaje para esta persona';
+    return `TransUnion no entregó puntaje: ${msg}.`;
   }
 
-  const parts: string[] = [`Score CreditVision: ${score}`];
-
+  // Sin saldos en pesos: el consolidado de TransUnion no dice su unidad (puede
+  // venir en miles, ver motor/features.ts) y una cifra mil veces menor engaña.
   const registro = infoComercial?.Consolidado?.Registro;
-  if (registro) {
-    const obligaciones = registro.NumeroObligaciones ?? '0';
-    const saldoMora = registro.SaldoObligacionesMora ?? '0';
-    const totalSaldo = registro.TotalSaldo ?? '0';
-    const enMora = parseInt(saldoMora, 10) > 0;
-
-    parts.push(`Obligaciones totales: ${obligaciones}`);
-    if (enMora) {
-      parts.push(`en mora: ${formatCOP(saldoMora)}`);
-    }
-    parts.push(`Saldo total: ${formatCOP(totalSaldo)}`);
-  }
-
-  return parts.join('. ');
+  const obligaciones = registro ? `; ${registro.NumeroObligaciones ?? '0'} obligaciones registradas` : '';
+  const enMora = registro && parseInt(registro.SaldoObligacionesMora ?? '0', 10) > 0 ? ', con saldo en mora' : '';
+  return `Resultado de TransUnion: puntaje ${score}${obligaciones}${enMora}.`;
 }
 
 // ── Provider ────────────────────────────────────────────────
@@ -487,7 +469,7 @@ export class TransUnionProvider implements CreditRiskProvider {
       return {
         score: null,
         resultado: 'condicionado',
-        observaciones: 'Score CreditVision no disponible en la respuesta. Requiere revision manual.',
+        observaciones: 'TransUnion no entregó puntaje en la respuesta.',
         referencia,
       };
     }

@@ -157,8 +157,7 @@ describe('TransUnionProvider', () => {
       const cached = await provider.obtenerResultado(result.referencia_proveedor);
       expect(cached.score).toBeNull();
       expect(cached.resultado).toBe('condicionado');
-      expect(cached.observaciones).toContain('codigo -5');
-      expect(cached.observaciones).toContain('sin informacion crediticia');
+      expect(cached.observaciones).toBe('TransUnion no entregó puntaje: la persona no tiene información crediticia.');
     });
 
     it('deberia lanzar error para tercero no encontrado (codigo 23)', async () => {

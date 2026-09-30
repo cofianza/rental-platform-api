@@ -217,11 +217,7 @@ function num(value: unknown): number | null {
 }
 
 function formatCOP(value: number): string {
-  return new Intl.NumberFormat('es-CO', {
-    style: 'currency',
-    currency: 'COP',
-    maximumFractionDigits: 0,
-  }).format(value);
+  return `$${new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(value)}`;
 }
 
 /** El catalogo usa dos digitos; el servicio devuelve number (13) o string ('09'). */
@@ -327,7 +323,7 @@ function milesAPesos(v: unknown): number | null {
 function buildObservaciones(report: DcReport, score: number | null, ingreso: number | null): string {
   const parts: string[] = [];
 
-  parts.push(score !== null ? `Score Advance 1.1: ${score}` : 'Score Advance 1.1 no disponible');
+  // Visible para la inmobiliaria: sin nombres de producto.
 
   const overview = (report.agregatedInfo ?? report.AgregatedInfo)?.overview;
   const p = overview?.principals ?? overview?.PrincipalsAgregatedInfo;
@@ -336,15 +332,15 @@ function buildObservaciones(report: DcReport, score: number | null, ingreso: num
   const vigentes = num(p?.currentCredits);
   const negativos = num(p?.currentNegativeCredits);
   const negHist12 = num(p?.negativeHistoricalLast12Months);
-  if (vigentes !== null) parts.push(`Creditos vigentes: ${vigentes}`);
-  if (negativos !== null && negativos > 0) parts.push(`negativos actuales: ${negativos}`);
-  if (negHist12 !== null && negHist12 > 0) parts.push(`negativos ult. 12 meses: ${negHist12}`);
+  if (vigentes !== null) parts.push(`${vigentes} créditos vigentes`);
+  if (negativos !== null && negativos > 0) parts.push(`${negativos} con reporte negativo actual`);
+  if (negHist12 !== null && negHist12 > 0) parts.push(`${negHist12} reportes negativos en los últimos 12 meses`);
 
   // Los agregados vienen en MILES de pesos: totaldebtBalance 1545 corresponde al
   // totalBalance 1545000 del detalle mensual. Sin el x1000 la card reporta
   // saldos y moras mil veces menores de lo real.
   const saldoTotal = milesAPesos(b?.totaldebtBalance);
-  if (saldoTotal !== null) parts.push(`Saldo total: ${formatCOP(saldoTotal)}`);
+  if (saldoTotal !== null) parts.push(`saldo total ${formatCOP(saldoTotal)}`);
 
   const moraMax = Math.max(
     milesAPesos(b?.debtBalanceD30) ?? 0,
@@ -352,21 +348,22 @@ function buildObservaciones(report: DcReport, score: number | null, ingreso: num
     milesAPesos(b?.debtBalanceD90) ?? 0,
     milesAPesos(b?.totalValueBalanceOverdue) ?? 0,
   );
-  if (moraMax > 0) parts.push(`en mora: ${formatCOP(moraMax)}`);
+  if (moraMax > 0) parts.push(`en mora ${formatCOP(moraMax)}`);
 
   // valueMonthlyPayment vive en 'balances', no en 'principals'.
   const cuota = milesAPesos(b?.valueMonthlyPayment);
-  if (cuota !== null && cuota > 0) parts.push(`Cuota mensual comprometida: ${formatCOP(cuota)}`);
+  if (cuota !== null && cuota > 0) parts.push(`cuota mensual comprometida ${formatCOP(cuota)}`);
 
-  if (ingreso !== null) parts.push(`Ingreso estimado (Advance Income): ${formatCOP(ingreso)}`);
+  if (ingreso !== null) parts.push(`ingreso estimado por la central ${formatCOP(ingreso)}`);
 
   const reclamos = num(p?.currentDisputes);
-  if (reclamos !== null && reclamos > 0) parts.push(`Reclamos vigentes: ${reclamos}`);
+  if (reclamos !== null && reclamos > 0) parts.push(`${reclamos} reclamos vigentes`);
 
   const alertas = (report.alerts ?? []).map((a) => a.textAlert).filter(Boolean);
-  if (alertas.length > 0) parts.push(`Alertas: ${alertas.slice(0, 3).join('; ')}`);
+  if (alertas.length > 0) parts.push(`alertas: ${alertas.slice(0, 3).join('; ')}`);
 
-  return parts.join('. ');
+  const inicio = score !== null ? `Resultado de DataCrédito: puntaje ${score}` : 'DataCrédito no entregó puntaje';
+  return `${[inicio, ...parts].join('; ')}.`;
 }
 
 // ── Provider ────────────────────────────────────────────────
@@ -804,7 +801,7 @@ export class DatacreditoProvider implements CreditRiskProvider {
       return {
         score: null,
         resultado: 'condicionado',
-        observaciones: `${observaciones}. Requiere revision manual: no se recibio el score Advance 1.1.`,
+        observaciones,
       };
     }
 

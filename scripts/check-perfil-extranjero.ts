@@ -23,9 +23,9 @@ ok(esPerfilExtranjero(null) === false && esPerfilExtranjero(undefined) === false
 
 ok(motivoRevisionPerfilExtranjero('cc') === null, 'CC no genera motivo');
 const m = motivoRevisionPerfilExtranjero('ce') ?? '';
-ok(m.includes('§15') && m.includes('cedula de extranjeria'), 'el motivo cita el §15 y el tipo de documento');
-ok(/revision manual/i.test(m) && !/rechaz/i.test(m), 'es REVISION, nunca rechazo');
+ok(m.includes('no tiene cédula colombiana') && m.includes('cédula de extranjería') && !m.includes('§'), 'el motivo dice el tipo de documento, sin referencias');
+ok(!/rechaz/i.test(m), 'es REVISION, nunca rechazo');
 ok((motivoRevisionPerfilExtranjero('ppt') ?? '').includes('PPT'), 'PPT se nombra como tal');
-ok((motivoRevisionPerfilExtranjero('xyz') ?? '').includes("documento 'xyz'"), 'un tipo desconocido tambien va a revision, con su codigo');
+ok((motivoRevisionPerfilExtranjero('xyz') ?? '').includes('otro documento (xyz)'), 'un tipo desconocido tambien va a revision, con su codigo');
 
 console.log(`\nOK — ${pasos} aserciones: el §15 manda a revision a todo lo que no sea cedula colombiana, sin rechazar.`);

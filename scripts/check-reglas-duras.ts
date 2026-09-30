@@ -55,7 +55,8 @@ import {
   motivoParaProspectoDesdeMotivoGestor,
   motivoProspectoReglasDuras,
   motivoRevisionIngresoNoInferible,
-  notaObservacionesReglasDuras,
+  MOTIVO_INGRESO_NO_VERIFICABLE,
+  motivoVisibleReglasDuras,
 } from '@/modules/estudios/reglas-duras';
 import type { VeredictoReglasDuras } from '@/modules/estudios/reglas-duras';
 
@@ -195,15 +196,15 @@ assert.ok(real.veredicto.rechaza);
 const motivoGestor = real.veredicto.motivoGestor;
 console.log(`\n  motivo (gestor): ${motivoGestor}\n`);
 for (const [etiqueta, patron] of [
-  ['DTI real', /81\.89%/],
+  ['DTI real', /81,89%/],
   ['cuota de la fianza', /\$90\.440/],
-  ['umbral DTI', /maximo de 65%/],
-  ['canon/ingreso real', /74\.6%/],
-  ['umbral canon/ingreso', /maximo de 40%/],
+  ['umbral DTI', /máximo de 65%/],
+  ['canon/ingreso real', /74,6%/],
+  ['umbral canon/ingreso', /máximo de 40%/],
   ['cuota en pesos', /\$4\.081\.000/],
   ['ingreso en pesos', /\$5\.094\.000/],
   ['canon en pesos', /\$3\.800\.000/],
-  ['el score no salva', /score del buro \(773\)/],
+  ['el score no salva', /puntaje de la central \(773\)/],
   ['version del modelo', /v4\.1-adenda2/],
 ] as const) {
   assert.ok(patron.test(motivoGestor), `el motivo del gestor debe decir ${etiqueta}`);
@@ -330,7 +331,7 @@ for (const [etiqueta, resultadoPropuesto] of [
   assert.strictEqual(v.cambiaResultado, false);
   assert.deepStrictEqual([...v.reglas], []);
   // Adenda 2 §3: pero sin ingreso de ninguna fuente NO se aprueba solo.
-  assert.ok(motivoRevisionIngresoNoInferible(salidaTU)?.includes('Adenda 2 §3'), 'TransUnion sin ingreso -> revision manual');
+  assert.ok(motivoRevisionIngresoNoInferible(salidaTU) === MOTIVO_INGRESO_NO_VERIFICABLE, 'TransUnion sin ingreso -> revision manual');
 }
 fila(true, 'TransUnion (sin ingreso)', 'no rechaza, pero va a revision manual (Adenda 2 §3)');
 
@@ -417,7 +418,7 @@ assert.strictEqual(scoreAltisimo.salida.dti_pct, 80.48, 'DTI = (4.000.000 + fian
 assert.strictEqual(scoreAltisimo.salida.canon_ingreso_pct, 20);
 assert.strictEqual(scoreAltisimo.veredicto.rechaza, true, 'score 900 con DTI 80% se rechaza igual');
 assert.deepStrictEqual([...scoreAltisimo.veredicto.reglas], ['dti_mayor_65']);
-assert.ok(scoreAltisimo.veredicto.rechaza && /score del buro \(900\)/.test(scoreAltisimo.veredicto.motivoGestor));
+assert.ok(scoreAltisimo.veredicto.rechaza && /puntaje de la central \(900\)/.test(scoreAltisimo.veredicto.motivoGestor));
 fila(true, 'score 900 + DTI 80%', 'rechaza: el puntaje no salva');
 
 // ============================================================
@@ -438,7 +439,7 @@ const scoreBajo = decidir({
 });
 assert.strictEqual(scoreBajo.veredicto.rechaza, true, 'score 300: la regla dura confirma el rechazo');
 assert.strictEqual(scoreBajo.veredicto.cambiaResultado, false, 'el provider ya habia rechazado: confirma, no cambia');
-assert.ok(scoreBajo.veredicto.rechaza && scoreBajo.veredicto.motivoGestor.includes('Score externo (§6, Adenda 2 §2): 300'));
+assert.ok(scoreBajo.veredicto.rechaza && scoreBajo.veredicto.motivoGestor.includes('Puntaje de las centrales de riesgo: 300'));
 fila(true, 'score 300', 'rechazado, ahora con la regla y su motivo');
 
 // Caso N de la matriz (Adenda 2 §2): un 430 era 'condicionado' con el corte
@@ -554,13 +555,12 @@ assert.ok(/canon de este inmueble/.test(soloCanon) && !/compromisos financieros/
 assert.ok(/compromisos financieros/.test(soloDti) && !/canon de este inmueble/.test(soloDti));
 fila(true, 'motivo prospecto', '3 variantes, todas §10 + §13 + §2');
 
-// La nota que se anexa a `observaciones` es corta y trae las dos cifras.
+// Lo que va a `observaciones` (visible para la agencia): la condicion, sin cifras.
 assert.ok(real.veredicto.rechaza);
-const nota = notaObservacionesReglasDuras(real.veredicto.reglas, real.veredicto.detalle);
+const nota = motivoVisibleReglasDuras(real.veredicto.reglas);
 console.log(`  nota (observaciones): ${nota}`);
-assert.ok(/81\.89%/.test(nota) && /max 65%/.test(nota), 'el DTI de la nota lleva la cuota de la fianza (§4.2)');
-assert.ok(/74\.6%/.test(nota) && /max 40%/.test(nota));
-assert.ok(nota.length < 200, 'la nota se anexa a observaciones: tiene que ser corta');
+assert.ok(!/\d/.test(nota), 'sin cifras ni umbrales: el modelo es secreto industrial');
+assert.ok(/capacidad de endeudamiento/.test(nota) && /canon demasiado alto/.test(nota));
 
 // motivoGestorReglasDuras es pura: mismo detalle, mismo texto.
 assert.strictEqual(

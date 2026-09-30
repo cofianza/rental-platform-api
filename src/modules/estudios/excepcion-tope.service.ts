@@ -176,7 +176,9 @@ export async function autorizarExcepcionTope(
 }
 
 /** Cierra las dos notas de retenerAprobadoSobreTope; la lee retenidoSoloPorTope. */
-const MARCA_RETENIDO_POR_TOPE = '(Adenda de precios §7): el estudio pasa a revisión';
+const MARCA_RETENIDO_POR_TOPE = 'el estudio pasa a revisión y su aprobación requiere la autorización de la Gerencia General';
+/** La de las notas escritas antes de 2026-10 (las filas guardadas no se reescriben). */
+const MARCA_RETENIDO_POR_TOPE_ANTERIOR = '(Adenda de precios §7): el estudio pasa a revisión';
 
 /**
  * Pura: el estudio quedó condicionado SOLO por el tope. La nota de
@@ -185,7 +187,7 @@ const MARCA_RETENIDO_POR_TOPE = '(Adenda de precios §7): el estudio pasa a revi
  * hay documentos ni co-arrendatario que pedir, falta la Gerencia General.
  */
 export function retenidoSoloPorTope(observaciones: string | null | undefined): boolean {
-  return !!observaciones?.includes(MARCA_RETENIDO_POR_TOPE);
+  return !!observaciones && (observaciones.includes(MARCA_RETENIDO_POR_TOPE) || observaciones.includes(MARCA_RETENIDO_POR_TOPE_ANTERIOR));
 }
 
 /**
@@ -212,8 +214,8 @@ export async function retenerAprobadoSobreTope<T extends { resultado: string; ob
       .catch(() => undefined);
   }
   const nota = t?.canonCop
-    ? `Para el analista: el canon (${formatearCOP(t.canonCop)}) supera el tope de ${formatearCOP(t.topeCop)} ${MARCA_RETENIDO_POR_TOPE} y su aprobación requiere la autorización de la Gerencia General.`
-    : `Para el analista: no se pudo verificar el canon contra el tope ${MARCA_RETENIDO_POR_TOPE}.`;
+    ? `El canon (${formatearCOP(t.canonCop)}) supera el tope de ${formatearCOP(t.topeCop)}: ${MARCA_RETENIDO_POR_TOPE} de Cofianza.`
+    : `No se pudo verificar el canon contra el tope: ${MARCA_RETENIDO_POR_TOPE} de Cofianza.`;
   return { ...final, resultado: 'condicionado', observaciones: [final.observaciones, nota].filter(Boolean).join(' ') };
 }
 

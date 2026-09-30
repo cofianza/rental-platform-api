@@ -269,29 +269,19 @@ export function interpretarBackgroundCheck(
  */
 export function requiereRevisionManual(a: ResumenAntecedentes | null | undefined): string | null {
   if (!a || a.estado === 'desactivado') return null;
-  if (a.estado === 'no_verificado') {
-    return (
-      `Revision manual obligatoria (Politica §14): listas restrictivas SIN VERIFICAR — ${a.motivo ?? 'Auco no respondio'}. ` +
-      'No se aprueba automaticamente sin chequeo de listas.'
-    );
-  }
-  if (a.flags_revision.includes('registraduria_sin_informacion')) {
-    return (
-      'Revision manual: la Registraduria no entrego informacion de la cedula, asi que no se pudo ' +
-      'confirmar que el documento exista y este vigente. Decision de Gerencia (2026-09-09): el estudio ' +
-      'queda pendiente hasta que un analista lo revise.' +
-      (a.flags_revision.length > 1
-        ? ` El background check reporta ademas: ${a.flags_revision.filter((f) => f !== 'registraduria_sin_informacion').join(', ')}.`
-        : '')
-    );
-  }
-  if (a.flags_revision.length > 0) {
-    return (
-      `Revision manual (Politica §16.5): el background check de Auco reporta ${a.flags_revision.join(', ')}. ` +
-      'No es causal de rechazo automatico: un analista debe revisar el reporte.'
-    );
-  }
-  return null;
+  // Texto VISIBLE (llega a la inmobiliaria): sin nombres de banderas ni el
+  // error del proveedor. El detalle lo ve el analista en la tarjeta de antecedentes.
+  if (a.estado === 'no_verificado') return 'No fue posible consultar las listas restrictivas.';
+  const f = a.flags_revision;
+  const conocidas = ['registraduria_sin_informacion', 'documento_no_vigente', 'fuentes_con_error'];
+  const partes = [
+    // Decision de Gerencia (2026-09-09): sin Registraduria el estudio queda pendiente.
+    f.includes('registraduria_sin_informacion') && 'No fue posible confirmar la vigencia del documento con la Registraduría.',
+    f.includes('documento_no_vigente') && 'La Registraduría no reporta el documento como vigente.',
+    f.includes('fuentes_con_error') && 'Algunas fuentes de antecedentes no respondieron.',
+    f.some((x) => !conocidas.includes(x)) && 'La verificación de antecedentes encontró registros que debe revisar un analista.',
+  ].filter((p): p is string => !!p);
+  return partes.length > 0 ? partes.join(' ') : null;
 }
 
 /** Lee lo que quedo en `estudios.antecedentes`. Tolera null, JSON viejo o basura. */

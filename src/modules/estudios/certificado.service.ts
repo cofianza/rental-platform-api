@@ -11,7 +11,8 @@ import { env } from '@/config';
 import { canonMaximoTolerado } from './portabilidad';
 import { topeCanonPara } from '../inmuebles/destinacion';
 import { calConExcepcion } from './excepcion-tope.service';
-import { resolverRuta } from './rutas-resultado';
+import { resolverRuta, etiquetaSinPuntaje } from './rutas-resultado';
+import { observacionesParaAgencia } from './reglas-duras';
 import { MODELO_VERSION, porcentaje, porcentajeParaMostrar } from './motor';
 // Adenda 1: tarifas por ruta (§5), factor de ajuste del ingreso (§1.1),
 // fuentes consultadas (§2.4) y vigencia del panel (§6, §11).
@@ -190,7 +191,8 @@ export interface CertificatePdfData {
   // da y el declarado nunca la alimenta).
   canonIngresoPct: number | null;
   /**
-   * Versión reducida; sin ella, el completo. firmantes: sin puntaje ni
+   * Versión reducida; sin ella, el completo (solo Cofianza). agencia: el
+   * completo sin lo interno (ver paraAgencia). firmantes: sin puntaje ni
    * observaciones (Adenda 1 contratos, respuesta 5; ver sinPuntaje).
    * arrendatario: la misma con su score (P13; ver paraArrendatario).
    */
@@ -214,7 +216,28 @@ export function sinPuntaje(data: CertificatePdfData): CertificatePdfData {
     rutaEtiqueta: null,
     decisionCascada: null,
     denominadorPuntaje: null,
+    factorAjusteIngreso: null,
     version: 'firmantes',
+  };
+}
+
+/**
+ * El CRC de la inmobiliaria y del propietario: el completo sin lo interno
+ * (el modelo es secreto industrial). Sin la decisión entre centrales, el
+ * denominador, el factor de ajuste, la versión del modelo ni el puntaje del
+ * modelo en el perfil; las observaciones, solo el texto visible (las
+ * guardadas antes de 2026-10 se limpian aquí). Conserva el score del buró,
+ * las condiciones y la vía de la tarifa.
+ */
+export function paraAgencia(data: CertificatePdfData): CertificatePdfData {
+  return {
+    ...data,
+    observaciones: observacionesParaAgencia(data.observaciones, data.resultado),
+    rutaEtiqueta: etiquetaSinPuntaje(data.rutaEtiqueta),
+    decisionCascada: null,
+    denominadorPuntaje: null,
+    factorAjusteIngreso: null,
+    version: 'agencia',
   };
 }
 
@@ -306,7 +329,10 @@ export async function generateCertificatePdf(
 
     y += 20;
 
-    if (data.version) {
+    // Firmantes y arrendatario: versiones reducidas que lo dicen. La de la
+    // agencia es el completo sin lo interno: no avisa nada.
+    const reducida = data.version === 'firmantes' || data.version === 'arrendatario';
+    if (reducida) {
       doc.fontSize(8).font('Helvetica-Oblique').fillColor('#6b7280');
       // La del arrendatario lleva su score (P13): no se dice que falta.
       doc.text(
@@ -400,7 +426,7 @@ export async function generateCertificatePdf(
       if (data.tarifas) {
         const t = data.tarifas;
         // La via deja inferir la banda del puntaje: las versiones reducidas no la llevan.
-        const via = data.version
+        const via = reducida
           ? ''
           : data.tarifaPorIdentidad
             ? ` (${data.resultado === 'aprobado' ? 'aprobado por el analista' : 'si el analista lo aprueba'}; la verificación de identidad no cambia la tarifa)`
@@ -467,20 +493,21 @@ export async function generateCertificatePdf(
     // CRC emitido". Ahora imprime siempre.
     const trazaRows: string[][] = [];
     if (data.fuentesConsultadas) trazaRows.push(['Fuentes consultadas', data.fuentesConsultadas]);
-    if (data.decisionCascada) trazaRows.push(['Decisión de cascada', data.decisionCascada]);
-    if (data.denominadorPuntaje) trazaRows.push(['Denominador del puntaje', `${data.denominadorPuntaje} (Adenda 2 §4.3)`]);
+    if (data.decisionCascada) trazaRows.push(['Decisión entre centrales', data.decisionCascada]);
+    if (data.denominadorPuntaje) trazaRows.push(['Denominador del puntaje', data.denominadorPuntaje]);
     // Adenda 1 contratos, respuesta 19: que la decision quede trazada tambien
     // sin ingreso verificado. La cifra deja ver el ingreso del arrendatario:
     // las versiones reducidas no la llevan.
     if (data.canonIngresoPct == null) {
       trazaRows.push(['Relación canon/ingreso', 'No verificable (no se contó con ingreso verificado)']);
-    } else if (!data.version) {
+    } else if (!reducida) {
       trazaRows.push(['Relación canon/ingreso', formatPct(data.canonIngresoPct)]);
     }
     if (data.factorAjusteIngreso != null && data.factorAjusteIngreso !== 1) {
-      trazaRows.push(['Factor de ajuste de ingreso', `x${data.factorAjusteIngreso} (Adenda 1 §1.1)`]);
+      trazaRows.push(['Factor de ajuste de ingreso', `x${String(data.factorAjusteIngreso).replace('.', ',')}`]);
     }
-    trazaRows.push(['Versión del modelo', data.modeloVersion]);
+    // Solo en el completo (Cofianza): a los externos no se les muestra la versión del modelo.
+    if (!data.version) trazaRows.push(['Versión del modelo', data.modeloVersion]);
     y = asegurarEspacio(doc, y, 22 + trazaRows.length * 22);
     y = drawSectionTitle(doc, 'TRAZABILIDAD DE LA EVALUACIÓN', y, contentWidth);
     y = drawTable(doc, trazaRows, y, contentWidth);
@@ -1253,12 +1280,12 @@ export async function emitirCertificadoAutomatico(
 // arrendatario (P13)
 // ============================================================
 
-type VersionReducida = 'firmantes' | 'arrendatario';
+type VersionReducida = 'firmantes' | 'arrendatario' | 'agencia';
 
-const VERSIONES_REDUCIDAS: readonly VersionReducida[] = ['firmantes', 'arrendatario'];
+const VERSIONES_REDUCIDAS: readonly VersionReducida[] = ['firmantes', 'arrendatario', 'agencia'];
 
 function reducir(datos: CertificatePdfData, version: VersionReducida): CertificatePdfData {
-  return version === 'firmantes' ? sinPuntaje(datos) : paraArrendatario(datos);
+  return version === 'firmantes' ? sinPuntaje(datos) : version === 'agencia' ? paraAgencia(datos) : paraArrendatario(datos);
 }
 
 type CertGuardado = {
@@ -1310,6 +1337,10 @@ export function crcParaArrendatario(cert: CertGuardado) {
   return crcReducido(cert, 'arrendatario');
 }
 
+export function crcParaAgencia(cert: CertGuardado) {
+  return crcReducido(cert, 'agencia');
+}
+
 // ============================================================
 // descargarCertificado
 // ============================================================
@@ -1343,9 +1374,15 @@ export async function descargarCertificado(estudioId: string, userId?: string, u
   }
 
   const c = cert as { id: string; codigo: string; pdf_storage_key: string; version: number; fecha_emision: string; fecha_vencimiento: string };
-  // P13 (Ley 1266): el arrendatario baja la version para firmantes con SU puntaje.
+  // P13 (Ley 1266): el arrendatario baja la version para firmantes con SU
+  // puntaje. La inmobiliaria y el propietario, el completo sin lo interno. El
+  // completo queda para Cofianza.
   const key =
-    userRol === 'solicitante' ? (await crcParaArrendatario({ ...c, estudio_id: estudioId })).key : c.pdf_storage_key;
+    userRol === 'solicitante'
+      ? (await crcParaArrendatario({ ...c, estudio_id: estudioId })).key
+      : userRol === 'inmobiliaria' || userRol === 'propietario'
+        ? (await crcParaAgencia({ ...c, estudio_id: estudioId })).key
+        : c.pdf_storage_key;
 
   const { data: signedData, error: signErr } = await supabase.storage
     .from(BUCKET_NAME)
