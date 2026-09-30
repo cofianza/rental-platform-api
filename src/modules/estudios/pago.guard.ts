@@ -67,6 +67,7 @@ import { supabase } from '@/lib/supabase';
 import { AppError } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
+import { errorNoAfianzable, type MotivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 
 /** El estudio no figura pagado — no se consulta el buro. */
 export const PAGO_ESTUDIO_REQUERIDO_ERROR_CODE = 'PAGO_ESTUDIO_REQUERIDO';
@@ -114,6 +115,58 @@ export function senalIndicaPagado(senal: SenalPagoEstudio): boolean {
  */
 export async function estudioYaCobrado(expedienteId: string): Promise<boolean> {
   return senalIndicaPagado(await leerSenalPagoEstudio(expedienteId));
+}
+
+/**
+ * Revisión 2026-09-29 (M6): el NIT puede llegar DESPUÉS del cobro (H43: el
+ * registro no pide el documento; se escribe al enviar la autorización o en «Mi
+ * cuenta»). Si alguno de esos estudios ya está pagado —pago completado, que
+ * incluye el cupo del paquete— el 409 no puede decir «No se generó ningún
+ * cobro»: dice que Cofianza revisará la devolución, y se avisa a los
+ * operadores. «No pude verificar» cuenta como pagado: no se afirma que no
+ * hubo cobro sin saberlo.
+ */
+export async function errorNoAfianzableSegunCobro(
+  motivo: MotivoNoAfianzable,
+  expedienteIds: readonly string[],
+): Promise<AppError> {
+  const senales = await Promise.all(expedienteIds.map((id) => leerSenalPagoEstudio(id)));
+  const cobrados = expedienteIds.filter((_, i) => senales[i] !== 'no_pagado');
+  if (cobrados.length === 0) return errorNoAfianzable(motivo);
+
+  logger.warn({ expedienteIds: cobrados, motivo }, 'Estudio no afianzable detectado después del cobro: devolución por revisar');
+  // Mismo canal que el §12 de autorizaciones: no hay un buzón interno único.
+  // ponytail: sin deduplicar; cada reintento del usuario vuelve a avisar.
+  try {
+    const [{ listOperators }, { notificarYCorreo }] = await Promise.all([
+      import('@/modules/users/users.service'),
+      import('@/modules/notificaciones/notificaciones.service'),
+    ]);
+    const operadores = await listOperators().catch(() => []);
+    const causa =
+      motivo === 'persona_juridica'
+        ? 'el arrendatario quedó identificado con NIT o como persona jurídica'
+        : 'el inmueble es de uso comercial o mixto';
+    await Promise.all(
+      cobrados.flatMap((expedienteId) =>
+        operadores.map((op) =>
+          notificarYCorreo({
+            userId: op.id,
+            tipo: 'estudio.devolucion_por_revisar',
+            titulo: 'Devolución por revisar',
+            mensaje:
+              `Un estudio con la evaluación ya pagada no puede continuar: ${causa} después del pago ` +
+              '(Adenda de precios §6). Revise la devolución con quien hizo el pago.',
+            link: `/expedientes/${expedienteId}`,
+            payload: { expediente_id: expedienteId, motivo },
+          }).catch((e) => logger.warn({ error: e, expedienteId }, 'M6: no se pudo avisar la devolución a un operador')),
+        ),
+      ),
+    );
+  } catch (e) {
+    logger.warn({ error: e instanceof Error ? e.message : String(e) }, 'M6: no se pudo avisar la devolución a Cofianza');
+  }
+  return errorNoAfianzable(motivo, { yaCobrado: true });
 }
 
 /**
