@@ -10,6 +10,7 @@ import { env } from '@/config';
 // §10.1 — el CRC lleva "su numero, vigencia y condiciones economicas".
 import { canonMaximoTolerado } from './portabilidad';
 import { topeCanonPara } from '../inmuebles/destinacion';
+import { calConExcepcion } from './excepcion-tope.service';
 import { resolverRuta } from './rutas-resultado';
 import { MODELO_VERSION, porcentaje, porcentajeParaMostrar } from './motor';
 // Adenda 1: tarifas por ruta (§5), factor de ajuste del ingreso (§1.1),
@@ -157,8 +158,10 @@ export interface CertificatePdfData {
   canonEvaluado: number | null;
   /** min(canon evaluado + tolerancia, tope vigente del uso del inmueble). */
   canonMaximoTolerado: number | null;
-  /** Canon maximo sin coafianzamiento vigente para el uso del inmueble (topeCanonPara). */
+  /** Canon maximo sin coafianzamiento vigente para el uso del inmueble (topeCanonPara), o el autorizado por la Gerencia General. */
   topeCanonCop: number;
+  /** Adenda de precios §7.4: el tope es el canon que autorizó la Gerencia General. */
+  topeEsExcepcion?: boolean;
   /** Panel de calibracion (Contratos V3 §14): lo que aplica el contrato al que se presenta el CRC. */
   toleranciaCanonPct: number;
   canonIngresoRecalculoPct: number;
@@ -443,7 +446,9 @@ export async function generateCertificatePdf(
       doc.fontSize(7).font('Helvetica').fillColor('#6b7280');
       const tolerancia =
         `Este certificado ampara contratos cuyo canon no supere en más de ${formatPct(data.toleranciaCanonPct)} el canon evaluado ` +
-        `ni el canon máximo sin coafianzamiento vigente para este inmueble (${formatCurrency(data.topeCanonCop)})` +
+        (data.topeEsExcepcion
+          ? `ni el canon autorizado por la Gerencia General de Cofianza para este inmueble (${formatCurrency(data.topeCanonCop)})`
+          : `ni el canon máximo sin coafianzamiento vigente para este inmueble (${formatCurrency(data.topeCanonCop)})`) +
         (data.canonIngresoPct == null
           ? '. La relación canon/ingreso no se recalcula porque no fue verificable. '
           : `, siempre que la relación canon/ingreso recalculada se mantenga en o por debajo del ${formatPct(data.canonIngresoRecalculoPct)}. `) +
@@ -994,7 +999,7 @@ async function leerEstudioCrc(estudioId: string): Promise<Record<string, unknown
     .select(`
       *,
       expedientes!estudios_expediente_id_fkey(
-        numero, estado, estado_pre_cancelacion, duracion_contrato_meses,
+        numero, estado, estado_pre_cancelacion, duracion_contrato_meses, excepcion_tope_canon_cop,
         solicitantes!expedientes_solicitante_id_fkey(
           nombre, apellido, tipo_documento, numero_documento, email, telefono
         ),
@@ -1095,7 +1100,10 @@ async function datosDelCrc(
         ? cascada.decision
         : null;
 
-  const topeCanonCop = topeCanonPara(inmueble.uso as string | null, cal).topeCop;
+  // Adenda de precios §7.4: con excepción de la Gerencia General el techo es el
+  // canon autorizado (mismo cálculo que assertCanonContratable del contrato).
+  const topeBase = topeCanonPara(inmueble.uso as string | null, cal).topeCop;
+  const topeCanonCop = topeCanonPara(inmueble.uso as string | null, calConExcepcion(cal, expediente.excepcion_tope_canon_cop)).topeCop;
   const canonEvaluadoRaw = e.canon_evaluado;
   const canonEvaluadoCop =
     canonEvaluadoRaw === null || canonEvaluadoRaw === undefined
@@ -1156,6 +1164,7 @@ async function datosDelCrc(
         ? null
         : Math.floor(Math.min(canonMaximoTolerado(canonEvaluadoCop, cal.TOLERANCIA_CANON), topeCanonCop)),
     topeCanonCop,
+    topeEsExcepcion: topeCanonCop > topeBase,
     toleranciaCanonPct: cal.TOLERANCIA_CANON,
     canonIngresoRecalculoPct: cal.TOPE_CANON_INGRESO_RECALCULO,
     requiereAcompanante: rutaCrc.coarrendatarioObligatorio || conCoarrendatario,
