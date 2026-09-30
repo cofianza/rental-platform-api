@@ -6,24 +6,27 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // que «Mi cuenta»), y sin ficha cae a perfiles.
 // ============================================================
 
-const { mockPerfil, mockFicha, mockPago, mockNotificar } = vi.hoisted(() => ({
+const { mockPerfil, mockFicha, mockPago, mockNotificar, mockEstudiosCount } = vi.hoisted(() => ({
   mockPerfil: vi.fn(),
   mockFicha: vi.fn(),
   // Señal de pago del estudio (pago.guard): null = sin pago completado.
   mockPago: vi.fn(async (): Promise<{ data: unknown; error: unknown }> => ({ data: null, error: null })),
   mockNotificar: vi.fn(async (..._a: unknown[]) => undefined),
+  // Estudios en curso o completados de sus expedientes (DOCUMENTO_BLOQUEADO_POR_ESTUDIO).
+  mockEstudiosCount: vi.fn(async (): Promise<{ count: number; error: unknown }> => ({ count: 0, error: null })),
 }));
 
 vi.mock('@/lib/supabase', () => {
   const ficha = { eq: () => ficha, order: () => ficha, limit: () => ficha, maybeSingle: () => mockFicha() };
   const exps = { eq: () => exps, is: async () => ({ data: [{ id: 'exp-1' }], error: null }) };
   const pagos = { eq: () => pagos, limit: () => pagos, maybeSingle: () => mockPago() };
+  const estudios: { in: (c: string) => unknown } = { in: (c: string) => (c === 'estado' ? mockEstudiosCount() : estudios) };
   return {
     supabaseAuth: { auth: {} },
     supabase: {
       from: (t: string) => ({
         select: () =>
-          t === 'solicitantes' ? ficha : t === 'expedientes' ? exps : t === 'pagos' ? pagos : { eq: () => ({ single: () => mockPerfil() }) },
+          t === 'solicitantes' ? ficha : t === 'expedientes' ? exps : t === 'pagos' ? pagos : t === 'estudios' ? estudios : { eq: () => ({ single: () => mockPerfil() }) },
       }),
     },
   };
@@ -101,5 +104,23 @@ describe('updateMyProfile · Adenda de precios §6.1', () => {
     expect(mockNotificar).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'op-1', tipo: 'estudio.devolucion_por_revisar', link: '/expedientes/exp-1' }),
     );
+    // El reintento repite el mensaje, pero no vuelve a escribir a los operadores.
+    mockPago.mockResolvedValueOnce({ data: { id: 'pago-1' }, error: null });
+    const otra = await updateMyProfile('u1', { tipo_documento: 'nit', numero_documento: '900123456' }).catch((e) => e);
+    expect(otra.message).toContain('Cofianza revisará la devolución');
+    expect(mockNotificar).toHaveBeenCalledTimes(1);
+  });
+
+  // Con la evaluación ya consultada el pago se consumió: no hay devolución que avisar.
+  it('con un estudio en curso o completado bloquea el cambio sin hablar de devolución', async () => {
+    mockPerfil.mockResolvedValue({ data: { rol: 'solicitante', tipo_documento: null, numero_documento: null }, error: null });
+    mockFicha.mockResolvedValue(ficha(''));
+    mockPago.mockResolvedValueOnce({ data: { id: 'pago-1' }, error: null });
+    mockEstudiosCount.mockResolvedValueOnce({ count: 1, error: null });
+    await expect(updateMyProfile('u1', { tipo_documento: 'nit', numero_documento: '900123456' })).rejects.toMatchObject({
+      statusCode: 400,
+      errorCode: 'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
+    });
+    expect(mockNotificar).not.toHaveBeenCalled();
   });
 });
