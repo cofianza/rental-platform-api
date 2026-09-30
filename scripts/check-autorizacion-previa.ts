@@ -306,7 +306,7 @@ assert.strictEqual(
 // fijar el contrato que ve el gestor: 400 (accionable), codigo propio y un
 // mensaje que dice QUE hacer, no solo que fallo.
 const errorDelGate = AppError.badRequest(
-  'El solicitante aun no ha autorizado la consulta en centrales de riesgo. Envie la solicitud de autorizacion antes de ejecutar el estudio.',
+  'El solicitante aún no ha autorizado la consulta en centrales de riesgo. Envíe la solicitud de autorización antes de ejecutar el estudio.',
   AUTORIZACION_PREVIA_ERROR_CODE,
   { motivo: 'sin_autorizacion', sujeto: 'solicitante' },
 );
