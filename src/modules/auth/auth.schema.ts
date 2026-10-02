@@ -10,8 +10,11 @@ export const refreshSchema = z.object({
   refresh_token: z.string().min(1, 'Refresh token requerido'),
 });
 
+// Recorte + minúsculas: Supabase Auth guarda los correos en minúsculas y
+// find_user_by_email compara exacto. Con «Maria@Gmail.com» no se encontraba la
+// cuenta, no salía ningún correo y la pantalla decía «Revise su correo».
 export const forgotPasswordSchema = z.object({
-  email: z.email({ error: 'Email inválido' }),
+  email: z.string({ error: 'Email inválido' }).trim().toLowerCase().email({ error: 'Email inválido' }),
 });
 
 export const resetPasswordSchema = z.object({

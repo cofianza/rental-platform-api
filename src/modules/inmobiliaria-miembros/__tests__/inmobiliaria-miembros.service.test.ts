@@ -41,8 +41,8 @@ vi.mock('@/lib/supabase', () => ({
   // rpc (find_user_by_email) también consume la cola con su maybeSingle.
   supabase: {
     from: (t: string) => mockFrom(t),
-    rpc: (fn: string) => {
-      consulta = { tabla: `rpc:${fn}`, filtros: [] };
+    rpc: (fn: string, args?: unknown) => {
+      consulta = { tabla: `rpc:${fn}`, filtros: [['args', args]] };
       return chain;
     },
   },
@@ -504,6 +504,22 @@ describe('un correo con una cuenta que no es de inmobiliaria no se une a un equi
     await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: false });
     enqueue(invitacion, { data: null });
     await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: false, cuenta_otro_rol: false });
+  });
+
+  // find_user_by_email compara exacto y Supabase Auth guarda en minúsculas: una
+  // invitación guardada como se tecleó no encontraba la cuenta del invitado.
+  it('busca la cuenta del correo en minúsculas y sin espacios', async () => {
+    let buscado: Consulta | undefined;
+    enqueue(
+      { ...invitacion, data: { ...invitacion.data, email: ' Maria.Perez@Gmail.COM ' } },
+      (c) => {
+        buscado = c;
+        return { data: { id: 'p-otro' } };
+      },
+      { data: { rol: 'propietario' } },
+    );
+    await expect(getInvitacionMiembroPublic('tok')).resolves.toMatchObject({ tiene_cuenta: true, cuenta_otro_rol: true });
+    expect(buscado).toEqual({ tabla: 'rpc:find_user_by_email', filtros: [['args', { user_email: 'maria.perez@gmail.com' }]] });
   });
 });
 

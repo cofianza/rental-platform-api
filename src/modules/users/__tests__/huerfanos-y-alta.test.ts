@@ -84,6 +84,17 @@ describe('alta desde el panel', () => {
     expect(mockEnsureOrg).toHaveBeenCalledWith('nuevo', 'Casa Sur');
   });
 
+  // find_user_by_email compara exacto y Supabase Auth guarda en minúsculas: con el
+  // correo tal como se tecleó, el chequeo de «ya existe» no encontraba la cuenta.
+  it('busca la cuenta existente con el correo en minúsculas', async () => {
+    rpc.mockReturnValueOnce({ single: async () => ({ data: { id: 'ya-existe' } }) });
+    await expect(
+      createUser({ email: 'Maria.Perez@Gmail.COM', nombre: 'María', apellido: 'Pérez', rol: 'operador_analista' } as never, ADMIN),
+    ).rejects.toMatchObject({ statusCode: 409, errorCode: 'EMAIL_ALREADY_EXISTS' });
+    expect(rpc).toHaveBeenCalledWith('find_user_by_email', { user_email: 'maria.perez@gmail.com' });
+    expect(auth.createUser).not.toHaveBeenCalled();
+  });
+
   it('un propietario que pasa a inmobiliaria se lleva sus fichas sin organización', async () => {
     const antes = { data: [{ id: 'p1', rol: 'propietario', nombre: 'Ana', apellido: 'Ruiz' }], error: null };
     rpc.mockResolvedValueOnce(antes).mockResolvedValueOnce(antes); // get_user_with_email antes y después

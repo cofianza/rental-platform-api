@@ -918,8 +918,10 @@ function assertInvitacionVigente(inv: InvitacionRow): void {
  * registrar vs iniciar sesión, y si puede unirse a un equipo.
  */
 async function cuentaDelCorreo(email: string): Promise<{ rol: string | null } | null> {
+  // Normalizado: la función compara exacto y Supabase Auth guarda los correos en
+  // minúsculas (una invitación vieja pudo guardarse como se tecleó).
   const { data } = await supabase
-    .rpc('find_user_by_email' as never, { user_email: email } as never)
+    .rpc('find_user_by_email' as never, { user_email: email.trim().toLowerCase() } as never)
     .maybeSingle<{ id: string }>();
   if (!data) return null;
   const { data: perfil } = await db('perfiles').select('rol').eq('id', data.id).maybeSingle();

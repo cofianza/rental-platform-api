@@ -89,8 +89,11 @@ export const passwordResetLimiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => {
-    const email = (req.body as { email?: string })?.email;
-    return email ? email.toLowerCase() : (req.ip ?? 'unknown');
+    // Misma normalización que forgotPasswordSchema (recorte + minúsculas): va antes
+    // de validate, y sin el recorte cada variante con espacios del mismo correo
+    // tendría su propio cupo (y el buzón recibiría más de 3 enlaces por hora).
+    const email = String((req.body as { email?: unknown })?.email ?? '').trim().toLowerCase();
+    return email || (req.ip ?? 'unknown');
   },
   validate: false,
   message: {

@@ -121,8 +121,10 @@ export const verifyEmailParamsSchema = z.object({
   token: z.string().min(1, 'Token requerido'),
 });
 
+// Recorte + minúsculas, igual que forgotPasswordSchema: find_user_by_email
+// compara exacto contra el correo que Supabase Auth guarda en minúsculas.
 export const resendVerificationSchema = z.object({
-  email: z.email({ error: 'Email inválido' }),
+  email: z.string({ error: 'Email inválido' }).trim().toLowerCase().email({ error: 'Email inválido' }),
 });
 
 export type RegisterPropietarioInput = z.infer<typeof registerPropietarioSchema>;
