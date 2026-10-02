@@ -72,6 +72,8 @@ describe('schemas de registro', () => {
     const p = prop({ numero_documento: '71.234.567' });
     expect(p.success && p.data.numero_documento).toBe('71234567');
     expect(prop({ numero_documento: ' . ' }).success).toBe(false);
+    const pasaporte = prop({ tipo_documento: 'pasaporte', numero_documento: 'AB-12 3' });
+    expect(pasaporte.success && pasaporte.data.numero_documento).toBe('AB123');
 
     const i = inmo({ representante_tipo_documento: 'cc', representante_documento: '71.234.567' });
     expect(i.success && i.data.representante_documento).toBe('71234567');

@@ -49,11 +49,12 @@ export const registerPropietarioSchema = z.object({
   tipo_documento: z.enum(['cc', 'ce', 'pasaporte'], {
     error: 'Tipo de documento inválido',
   }),
-  // Se guarda sin puntos ni espacios («1.040.567.890» → «1040567890»).
+  // Se guarda sin puntos, espacios ni guiones («1.040.567.890» → «1040567890»),
+  // igual que el documento del representante legal.
   numero_documento: z
     .string()
     .max(20, 'Número muy largo')
-    .transform((s) => s.replace(/[.\s]/g, ''))
+    .transform((s) => s.replace(/[.\s-]/g, ''))
     .refine((s) => s.length > 0, 'Número de documento requerido'),
   // Opcional: el contrato usa domicilio_direccion, que se pide en «Datos para contrato».
   direccion: z.string().min(1, 'Dirección requerida').max(300, 'Dirección muy larga').optional(),

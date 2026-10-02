@@ -173,4 +173,13 @@ describe('registrarInteresSchema', () => {
     }
     expect(ok({ telefono: '+57 300-111-2233' })).toBe(true);
   });
+
+  it('el correo vacío, de solo espacios, null u omitido cuenta como sin correo', () => {
+    for (const email of ['', '   ', null, undefined]) {
+      const r = registrarInteresSchema.safeParse({ ...INPUT, email });
+      expect(r.success && r.data.email, JSON.stringify(email)).toBeUndefined();
+      expect(r.success, JSON.stringify(email)).toBe(true);
+    }
+    expect(registrarInteresSchema.safeParse({ ...INPUT, email: 'no-es-correo' }).success).toBe(false);
+  });
 });
