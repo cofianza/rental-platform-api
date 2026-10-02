@@ -16,7 +16,7 @@ export const COMPANY = {
   nit: '902.038.122-7',
   address: 'Calle 75ab sur 52d 336',
   phone: '+573169724813',
-  email: 'gerencia@cofianza.co',
+  email: 'hola@cofianza.co',
   website: 'www.cofianza.co',
   /**
    * Vigencia del Certificado de Riesgo Cofianza (CRC), en días.
