@@ -83,7 +83,8 @@ export async function registrarInteresPublico(
     throw AppError.notFound('Inmueble no encontrado o no disponible', 'INMUEBLE_NOT_FOUND');
   }
 
-  const emailNorm = input.email.trim().toLowerCase();
+  // '' = no dejó correo (la columna es NOT NULL).
+  const emailNorm = (input.email ?? '').trim().toLowerCase();
   const telefono = input.telefono.trim();
 
   // 2. ¿Ya dejó sus datos para este inmueble en las últimas 24 h (mismo correo o
@@ -101,7 +102,8 @@ export async function registrarInteresPublico(
     .limit(200);
   const telNorm = telefonoNormalizado(telefono);
   const repetido = ((recientes as Array<{ email: string | null; telefono: string | null }> | null) ?? []).some(
-    (r) => r.email === emailNorm || (!!r.telefono && telefonoNormalizado(r.telefono) === telNorm),
+    // El correo solo cuenta si lo dejó: dos leads sin correo no son el mismo.
+    (r) => (!!emailNorm && r.email === emailNorm) || (!!r.telefono && telefonoNormalizado(r.telefono) === telNorm),
   );
 
   // 3. Guardar el lead: cada interés queda registrado, aunque se repita.
@@ -134,9 +136,11 @@ export async function registrarInteresPublico(
   // 5. Confirmación al interesado (best-effort; cierra el loop y da confianza).
   // Sin la dirección (P9): tipo, barrio, ciudad y código; la dirección exacta
   // llega con la visita confirmada. Los avisos al dueño sí la llevan.
-  await sendInteresadoConfirmacionEmail(emailNorm, {
-    inmuebleLabel: inmuebleLabel({ ...inm, direccion: null }),
-  });
+  if (emailNorm) {
+    await sendInteresadoConfirmacionEmail(emailNorm, {
+      inmuebleLabel: inmuebleLabel({ ...inm, direccion: null }),
+    });
+  }
 }
 
 /** P37: titular y responsable asignado, sin repetir a nadie. */
@@ -167,6 +171,8 @@ export async function correoDelDueno(perfilId: string, emailRecaudo?: string | n
 async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): Promise<void> {
   if (!inm.propietario_id) return;
   const label = inmuebleLabel(inm);
+  // Meta rechaza variables vacías en la plantilla.
+  const email = input.email?.trim() || 'No indicó';
 
   // Contacto del dueño = perfil canónico de la org (titular) para inmobiliaria;
   // el propio propietario para individual.
@@ -195,7 +201,7 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
       titulo: 'Nuevo interesado en su inmueble',
       mensaje: `${input.nombre} está interesado en ${label}. WhatsApp: ${input.telefono}.${input.mensaje?.trim() ? ` Mensaje: ${input.mensaje.trim()}` : ''}`,
       link: '/interesados',
-      payload: { inmueble: label, nombre: input.nombre, telefono: input.telefono, email: input.email },
+      payload: { inmueble: label, nombre: input.nombre, telefono: input.telefono, email },
     });
   }
 
@@ -205,7 +211,7 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
     await enviarTemplate({
       to: duenoWhatsapp,
       template: 'INTERESADO_VITRINA_DUENO',
-      variables: [duenoNombre, label, input.nombre, input.telefono, input.email],
+      variables: [duenoNombre, label, input.nombre, input.telefono, email],
     });
     // 2º mensaje con el mensaje del interesado (solo si lo escribió). Saneado
     // para Meta (sin saltos de línea / espacios múltiples), truncado a 500.
@@ -225,7 +231,7 @@ async function notificarDueno(inm: InmuebleRow, input: RegistrarInteresInput): P
       duenoNombre,
       interesadoNombre: input.nombre,
       interesadoTelefono: input.telefono,
-      interesadoEmail: input.email,
+      interesadoEmail: email,
       inmuebleLabel: label,
       mensaje: input.mensaje?.trim() || undefined,
       panelUrl: `${env.FRONTEND_URL}/interesados`,

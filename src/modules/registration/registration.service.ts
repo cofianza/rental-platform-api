@@ -32,13 +32,26 @@ function esEmailDuplicado(err: { message?: string; code?: string; status?: numbe
   );
 }
 
+/**
+ * UPDATE de perfil que no puede tumbar el alta: si falla (p. ej. la migración
+ * 20261003001001 aún no corrió y la columna no existe) solo queda en el log.
+ */
+async function actualizarPerfilSinAbortar(userId: string, datos: Record<string, unknown>, que: string): Promise<void> {
+  if (Object.keys(datos).length === 0) return;
+  const { error } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .update(datos as never)
+    .eq('id', userId);
+  if (error) logger.error({ error: error.message, userId }, `Registro: no se pudo guardar ${que}`);
+}
+
 export async function registerPropietario(
   input: RegisterPropietarioInput,
   ipAddress: string,
   userAgent: string,
 ): Promise<{ message: string }> {
   const { email, password, nombre, apellido, telefono, tipo_documento,
-          numero_documento, direccion } = input;
+          numero_documento, direccion, origen } = input;
 
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
     email,
@@ -67,14 +80,23 @@ export async function registerPropietario(
       telefono,
       tipo_documento,
       numero_documento,
-      direccion,
+      ...(direccion ? { direccion } : {}),
       registration_source: 'email',
     } as never)
     .eq('id', userId);
 
   if (updateError) {
+    // Antes solo se logueaba: la cuenta quedaba como solicitante activo, sin
+    // registration_source, y ni siquiera podía pedir el reenvío de verificación.
+    // Se borra el usuario de auth para que pueda reintentar con el mismo correo.
     logger.error({ error: updateError.message, userId }, 'Error al actualizar perfil de propietario');
+    await supabaseAuth.auth.admin.deleteUser(userId).catch((e) =>
+      logger.error({ err: e, userId }, 'No se pudo limpiar el usuario tras fallar el perfil'),
+    );
+    throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar el registro. Inténtelo de nuevo.');
   }
+
+  await actualizarPerfilSinAbortar(userId, origen ? { origen_registro: origen } : {}, 'el origen del registro');
 
   await recordTermsAcceptance(userId, ipAddress, userAgent);
   await generateAndSendVerificationEmail(userId, email, nombre);
@@ -91,7 +113,9 @@ export async function registerInmobiliaria(
 ): Promise<{ message: string }> {
   const { email, password, razon_social, nit, direccion_comercial, ciudad,
           nombre_representante_nombre, nombre_representante_apellido, telefono,
-          cargo_representante, afianzadora_actual, afianzadora_tipo } = input;
+          cargo_representante, afianzadora_actual, afianzadora_tipo,
+          inmuebles_gestionados, sitio_web, representante_tipo_documento,
+          representante_documento, origen } = input;
 
   // NIT duplicado. La web ya tenia una rama para `NIT_ALREADY_EXISTS` y ese
   // codigo no existia en todo el API: el registro escribia el NIT sin consultar
@@ -178,6 +202,29 @@ export async function registerInmobiliaria(
     );
     throw new AppError(500, 'INTERNAL_ERROR', 'No se pudo completar el registro. Inténtelo de nuevo.');
   }
+
+  // Precarga de «Datos para contrato» con lo que el registro ya capturó, para
+  // que el titular no lo vuelva a teclear (queda editable). Aparte del UPDATE
+  // principal: un fallo aquí no puede borrar la cuenta.
+  await actualizarPerfilSinAbortar(userId, {
+    domicilio_direccion: direccion_comercial,
+    domicilio_ciudad: ciudad,
+    representante_legal: nombre_representante,
+    ...(representante_tipo_documento && representante_documento
+      ? {
+          representante_legal_tipo_documento: representante_tipo_documento,
+          representante_legal_documento: representante_documento,
+        }
+      : {}),
+  }, 'la precarga de datos para contrato');
+
+  // Columnas de la migración 20261003001001, en su propio UPDATE: si aún no
+  // corrió, PostgREST rechaza el UPDATE entero y no debe llevarse la precarga.
+  await actualizarPerfilSinAbortar(userId, {
+    ...(origen ? { origen_registro: origen } : {}),
+    ...(inmuebles_gestionados ? { inmuebles_gestionados } : {}),
+    ...(sitio_web ? { sitio_web } : {}),
+  }, 'los datos comerciales del registro');
 
   // Multi-tenant: crear la organización con esta inmobiliaria como owner, para
   // que pueda invitar miembros. Idempotente. Log-only: si falla, el registro

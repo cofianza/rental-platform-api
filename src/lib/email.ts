@@ -621,7 +621,7 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">WhatsApp:</p>
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0f766e;">${escapeHtml(p.interesadoTelefono)}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Correo:</p>
-                    <p style="margin: 0 0 ${p.mensaje ? '16px' : '0'}; font-size: 16px; font-weight: 600; color: #0f766e;">${escapeHtml(p.interesadoEmail)}</p>
+                    <p style="margin: 0 0 ${p.mensaje ? '16px' : '0'}; font-size: 16px; font-weight: 600; color: #0f766e;">${escapeHtml(p.interesadoEmail || 'No indicó')}</p>
                     ${p.mensaje ? `<p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Mensaje:</p><p style="margin: 0; font-size: 15px; color: #111827;">${escapeHtml(p.mensaje)}</p>` : ''}
                   </td>
                 </tr>

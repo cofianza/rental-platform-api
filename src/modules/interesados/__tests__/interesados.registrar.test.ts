@@ -102,6 +102,30 @@ describe('registrarInteresPublico', () => {
     expect(mocks.avisoDueno).not.toHaveBeenCalled();
     expect(mocks.confirmacion).not.toHaveBeenCalled();
   });
+
+  it('sin correo: guarda el lead, avisa al dueño con «No indicó» y no manda confirmación', async () => {
+    enqueue('inmueble_interesados', { data: [], error: null }, { error: null });
+    const sinCorreo = registrarInteresSchema.parse({ nombre: INPUT.nombre, telefono: INPUT.telefono, acepta: true });
+
+    await registrarInteresPublico('inm1', sinCorreo, META);
+
+    const insert = ops.find((o) => o.table === 'inmueble_interesados' && o.method === 'insert');
+    expect(insert?.args[0]).toMatchObject({ email: '', telefono: '3001112233' }); // la columna es NOT NULL
+    expect((mocks.whatsapp.mock.calls[0][0] as { variables: string[] }).variables[4]).toBe('No indicó');
+    expect(mocks.avisoDueno.mock.calls[0][1].interesadoEmail).toBe('No indicó');
+    expect(mocks.confirmacion).not.toHaveBeenCalled();
+  });
+
+  it('dos leads sin correo y con teléfonos distintos avisan los dos', async () => {
+    // El primero ya quedó guardado con email '' en las últimas 24 h.
+    enqueue('inmueble_interesados', { data: [{ email: '', telefono: '3009998877' }], error: null }, { error: null });
+
+    await registrarInteresPublico('inm1', { ...INPUT, email: '' }, META);
+
+    expect(mocks.inApp).toHaveBeenCalledTimes(1);
+    expect(mocks.whatsapp).toHaveBeenCalledTimes(1);
+    expect(mocks.avisoDueno).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('aviso de interesado nuevo (P37)', () => {
@@ -148,5 +172,14 @@ describe('registrarInteresSchema', () => {
       expect(ok({ mensaje }), mensaje).toBe(true);
     }
     expect(ok({ telefono: '+57 300-111-2233' })).toBe(true);
+  });
+
+  it('el correo vacío, de solo espacios, null u omitido cuenta como sin correo', () => {
+    for (const email of ['', '   ', null, undefined]) {
+      const r = registrarInteresSchema.safeParse({ ...INPUT, email });
+      expect(r.success && r.data.email, JSON.stringify(email)).toBeUndefined();
+      expect(r.success, JSON.stringify(email)).toBe(true);
+    }
+    expect(registrarInteresSchema.safeParse({ ...INPUT, email: 'no-es-correo' }).success).toBe(false);
   });
 });
