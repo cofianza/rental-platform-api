@@ -6,7 +6,7 @@ import pinoHttp from 'pino-http';
 import { env } from '@/config';
 import { logger, httpLogSerializers } from '@/lib/logger';
 import { errorHandler } from '@/middleware/errorHandler';
-import { generalLimiter } from '@/middleware/rateLimiter';
+import { generalLimiter, TRUST_PROXY_HOPS } from '@/middleware/rateLimiter';
 import healthRouter from '@/modules/health/health.routes';
 import authRouter from '@/modules/auth/auth.routes';
 import expedientesRouter from '@/modules/expedientes/expedientes.routes';
@@ -70,10 +70,10 @@ import soporteRouter from '@/modules/soporte/soporte.routes';
 
 const app = express();
 
-// Trust proxy: Railway pone el request detras de su edge y añade
-// X-Forwarded-For. Confiar en 1 hop le permite a express-rate-limit
-// identificar al cliente real sin emitir el warning "ERR_ERL_UNEXPECTED_X_FORWARDED_FOR".
-app.set('trust proxy', 1);
+// Trust proxy: Railway pone el request detrás de su proxy interno y del borde
+// de su red, y añade X-Forwarded-For. Ver TRUST_PROXY_HOPS: con ese número de
+// saltos `req.ip` es la IP del cliente (límites por IP y evidencia de auditoría).
+app.set('trust proxy', TRUST_PROXY_HOPS);
 
 // Security
 app.use(helmet());
