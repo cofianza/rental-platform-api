@@ -123,12 +123,26 @@ async function liberarNitDeRegistroVencido(
     throw AppError.conflict(MENSAJE_NIT_REGISTRADO, 'NIT_ALREADY_EXISTS');
   }
 
+  // bitacora.usuario_id no tiene ON DELETE: con solo haber pedido «recuperar
+  // contraseña» la cuenta no se podía borrar (tampoco desde Usuarios) y el NIT
+  // quedaba retenido hasta que alguien entrara a la base. Auth ya dijo que nunca
+  // entró: lo suyo en la bitácora son, a lo sumo, esos pedidos. Las filas se
+  // quedan (entidad_id y detalle.email dicen de quién eran); solo pierden el
+  // vínculo, como haría un ON DELETE SET NULL. Si alguno de esos enlaces de
+  // recuperación seguía vigente, se va con la cuenta.
+  const { error: bitacoraError } = await (supabase
+    .from('bitacora' as string) as ReturnType<typeof supabase.from>)
+    .update({ usuario_id: null } as never)
+    .eq('usuario_id', dueno.id);
+  if (bitacoraError) {
+    logger.warn({ error: bitacoraError.message, userId: dueno.id }, 'No se pudo desvincular la bitácora del registro sin verificar');
+  }
+
   const { error: deleteError } = await supabaseAuth.auth.admin.deleteUser(dueno.id);
   if (deleteError) {
-    // ponytail: la cascada no cubre todo. bitacora.usuario_id no tiene ON DELETE,
-    // así que una cuenta que pidió recuperar la contraseña no se puede borrar: no
-    // se fuerza y lo resuelve una persona. Salida: una migración que deje esa
-    // llave en ON DELETE SET NULL.
+    // ponytail: la cascada no cubre todo: otras llaves a perfiles tampoco tienen
+    // ON DELETE (p. ej. un inmueble que un administrador dejó a su nombre). No se
+    // fuerza y lo resuelve una persona.
     logger.error({ error: deleteError.message, userId: dueno.id }, 'No se pudo borrar el registro sin verificar que retiene el NIT');
     throw AppError.conflict(
       `Ya hay un registro con este NIT que quedó sin verificar y no pudimos liberarlo. Escríbanos a ${contacto} y lo resolvemos.`,

@@ -32,7 +32,11 @@ const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser, moc
     ops,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     resetQueues: () => queues.clear(),
-    mockDeleteUser: vi.fn(async (..._args: unknown[]): Promise<{ error: { message: string } | null }> => ({ error: null })),
+    // Queda en `ops`, para ver qué se hizo antes de borrar.
+    mockDeleteUser: vi.fn(async (...args: unknown[]): Promise<{ error: { message: string } | null }> => {
+      ops.push({ table: 'auth', method: 'deleteUser', args });
+      return { error: null };
+    }),
     mockCreateUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
     // Como responde Auth por una cuenta que nunca confirmó el correo ni entró.
     mockGetUserById: vi.fn(
@@ -209,6 +213,13 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
     expect(Math.abs(Date.parse(sinVencer.args[1] as string) - Date.now())).toBeLessThan(5000);
 
     expect(mockGetUserById).toHaveBeenCalledWith('viejo');
+    // Primero suelta sus filas de bitácora (las deja quien pide «recuperar
+    // contraseña») y después borra: esa llave no tiene ON DELETE y bloqueaba el
+    // borrado, con lo que el NIT seguía retenido.
+    const pasos = ops.filter((o) => o.table === 'bitacora' || o.table === 'auth');
+    expect(pasos.map((o) => `${o.table}.${o.method}`)).toEqual(['bitacora.update', 'bitacora.eq', 'auth.deleteUser']);
+    expect(pasos[0].args).toEqual([{ usuario_id: null }]);
+    expect(pasos[1].args).toEqual(['usuario_id', 'viejo']);
     expect(mockDeleteUser).toHaveBeenCalledTimes(1);
     expect(mockDeleteUser).toHaveBeenCalledWith('viejo');
     expect(mockCreateUser).toHaveBeenCalledTimes(1);
@@ -298,6 +309,7 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
       errorCode: 'NIT_ALREADY_EXISTS',
       message: 'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.',
     });
+    expect(ops.some((o) => o.table === 'bitacora')).toBe(false);
     expect(mockDeleteUser).not.toHaveBeenCalled();
     expect(mockCreateUser).not.toHaveBeenCalled();
   });
@@ -311,6 +323,7 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
       errorCode: 'NIT_ALREADY_EXISTS',
       message: expect.stringContaining('pendiente de verificar el correo'),
     });
+    expect(ops.some((o) => o.table === 'bitacora')).toBe(false);
     expect(mockDeleteUser).not.toHaveBeenCalled();
     expect(mockCreateUser).not.toHaveBeenCalled();
   });
