@@ -11,18 +11,20 @@ import * as registrationController from './registration.controller';
 
 const router = Router();
 
-// Registro publico (sin autenticacion)
+// Registro publico (sin autenticacion). Primero la validación y después el tope
+// (como en «Me interesa»): un formulario mal llenado no gasta uno de los 5
+// registros por hora; los válidos cuentan todos, también los que terminan en 409.
 router.post(
   '/propietario',
-  registrationLimiter,
   validate({ body: registerPropietarioSchema }),
+  registrationLimiter,
   registrationController.registerPropietario,
 );
 
 router.post(
   '/inmobiliaria',
-  registrationLimiter,
   validate({ body: registerInmobiliariaSchema }),
+  registrationLimiter,
   registrationController.registerInmobiliaria,
 );
 
