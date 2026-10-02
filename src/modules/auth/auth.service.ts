@@ -570,7 +570,9 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
   // una cuenta ya verificada o creada por otro medio, que pudo desactivar un
   // administrador. Va antes de gastar el token: si falla, el mismo enlace sirve
   // para reintentar.
-  await activarAutorregistroPendiente(tokenData.user_id);
+  if (await activarAutorregistroPendiente(tokenData.user_id)) {
+    logger.info({ userId: tokenData.user_id }, 'Cuenta verificada al restablecer la contraseña');
+  }
 
   // Marcar token como usado
   await (supabase

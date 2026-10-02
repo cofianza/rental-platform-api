@@ -151,6 +151,7 @@ describe('resetPassword', () => {
     const perfil = ops.find((o) => o.table === 'perfiles' && o.method === 'update')!.args[0];
     expect(perfil).toMatchObject({ estado: 'activo', email_verified_at: expect.any(String) });
     expect(cerrarSesionesDe).toHaveBeenCalledWith('user-1');
+    expect(logger.info).toHaveBeenCalledWith({ userId: 'user-1' }, 'Cuenta verificada al restablecer la contraseña');
   });
 
   it.each([
@@ -164,6 +165,7 @@ describe('resetPassword', () => {
     await expect(restablecer()).resolves.toMatchObject({ message: expect.any(String) });
 
     expect(escrituras()).toEqual(['auth:password', TOKENS]);
+    expect(logger.info).not.toHaveBeenCalledWith(expect.anything(), 'Cuenta verificada al restablecer la contraseña');
   });
 
   it('si la activación falla: error, y el enlace queda sin gastar para reintentar', async () => {
