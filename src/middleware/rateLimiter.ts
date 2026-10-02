@@ -2,6 +2,17 @@ import rateLimit from 'express-rate-limit';
 import type { Request } from 'express';
 import { env } from '@/config';
 
+/**
+ * Saltos de proxy delante de la API en Railway: su proxy interno (100.64.x.x) y
+ * el borde de su red (CDN). La API recibe `X-Forwarded-For: <cliente>, <borde>`
+ * (comprobado en los logs el 2026-10-02; Railway descarta el X-Forwarded-For que
+ * mande el cliente). Con 1 salto, `req.ip` era la IP del BORDE: todos los
+ * visitantes compartían el mismo cupo (5 registros por hora entre todos) y la
+ * IP que se guarda como evidencia de las autorizaciones era la de Railway.
+ * Con 2, `req.ip` es la del cliente, y un X-Forwarded-For falso no la cambia.
+ */
+export const TRUST_PROXY_HOPS = 2;
+
 // Direcciones loopback (mismo host). En desarrollo local TODO el tráfico sale
 // de 127.0.0.1/::1, compartiendo un único cupo por IP.
 const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
@@ -12,8 +23,8 @@ const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 // fan-out de muchas peticiones por página de detalle y, sumado a StrictMode +
 // Fast Refresh, agota el cupo y devuelve 429 espurios (peor aún si el
 // .env.local quedó con NODE_ENV=production). Un atacante real nunca llega por
-// loopback (detrás del proxy de Railway trae su IP real vía X-Forwarded-For con
-// trust proxy=1), así que saltarse loopback no debilita la protección.
+// loopback (detrás de Railway trae su IP real vía X-Forwarded-For, ver
+// TRUST_PROXY_HOPS), así que saltarse loopback no debilita la protección.
 function skipRateLimit(req: Request): boolean {
   if (env.NODE_ENV !== 'production') return true;
   return LOOPBACK_IPS.has(req.ip ?? '');
@@ -78,8 +89,15 @@ export const passwordResetLimiter = rateLimit({
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   keyGenerator: (req) => {
-    const email = (req.body as { email?: string })?.email;
-    return email ? email.toLowerCase() : (req.ip ?? 'unknown');
+    // Misma normalización que forgotPasswordSchema (recorte + minúsculas): va antes
+    // de validate, y sin el recorte cada variante con espacios del mismo correo
+    // tendría su propio cupo (y el buzón recibiría más de 3 enlaces por hora).
+    // Solo un texto forma la clave: String(['ana@correo.co']) da «ana@correo.co»,
+    // y un cuerpo así (que validate rechaza, sin enviar nada) le gastaba el cupo
+    // a la dueña de ese correo. Lo que no es texto cuenta contra la IP.
+    const crudo = (req.body as { email?: unknown })?.email;
+    const email = typeof crudo === 'string' ? crudo.trim().toLowerCase() : '';
+    return email || (req.ip ?? 'unknown');
   },
   validate: false,
   message: {

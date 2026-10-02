@@ -86,6 +86,26 @@ describe('schemas de registro', () => {
     expect(inmo({ representante_tipo_documento: 'cc', representante_documento: '7' }).success).toBe(false);
   });
 
+  // El teclado del celular deja un espacio tras el nombre («Roberto »): se
+  // guardaba así y el correo saludaba «Hola Roberto , gracias…».
+  it('los nombres se guardan sin espacios sobrantes, y uno solo de espacios no cuenta', () => {
+    const p = prop({ nombre: 'Roberto ', apellido: ' Díaz ' });
+    expect(p.success && [p.data.nombre, p.data.apellido]).toEqual(['Roberto', 'Díaz']);
+    expect(prop({ nombre: '   ' }).success).toBe(false);
+
+    const i = inmo({ nombre_representante_nombre: 'Luis ', nombre_representante_apellido: ' Gómez' });
+    expect(i.success && [i.data.nombre_representante_nombre, i.data.nombre_representante_apellido]).toEqual(['Luis', 'Gómez']);
+    expect(inmo({ nombre_representante_apellido: ' ' }).success).toBe(false);
+  });
+
+  it('el celular sin indicativo dice «indicativo del país» (no «lada», que es de México)', () => {
+    const r = prop({ telefono: '3001112233' });
+    expect(r.success).toBe(false);
+    expect(!r.success && r.error.issues[0].message).toBe(
+      'Teléfono inválido. Debe incluir el indicativo del país (ej: +57 3001234567)',
+    );
+  });
+
   it('origen, rango de inmuebles y sitio web: solo valores de la lista', () => {
     expect(prop({ origen: 'redes' }).success).toBe(true);
     expect(prop({ origen: 'volante' }).success).toBe(false);

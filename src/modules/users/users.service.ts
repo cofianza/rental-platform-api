@@ -91,9 +91,10 @@ export async function createUser(input: CreateUserInput, solicitante: Solicitant
   const { email, nombre, apellido, telefono, rol } = input;
   assertCuentaDeGerencia(email, solicitante, 'crearla');
 
-  // Verificar que el email no exista
+  // Verificar que el email no exista. Normalizado: la función compara exacto y
+  // Supabase Auth guarda los correos en minúsculas.
   const { data: existing } = await supabase
-    .rpc('find_user_by_email' as never, { user_email: email } as never)
+    .rpc('find_user_by_email' as never, { user_email: email.trim().toLowerCase() } as never)
     .single<{ id: string }>();
 
   if (existing) {

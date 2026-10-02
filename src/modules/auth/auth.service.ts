@@ -10,6 +10,7 @@ import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { invalidateAuthCache, cerrarSesionesDe, primeAuthCache } from '@/middleware/auth';
 import { getPermissionsForRole } from '@/config/permissions';
 import { existeOtraCuentaConDocumento } from '@/modules/solicitantes/solicitantes.service';
+import { activarAutorregistroPendiente } from '@/modules/registration/registration.service';
 import { motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 import { errorNoAfianzableSegunCobro } from '@/modules/estudios/pago.guard';
 import type { UserRole } from '@/types/auth';
@@ -450,6 +451,8 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+const MENSAJE_ENLACE_INVALIDO = 'El enlace para restablecer la contraseña no es válido o ya venció. Solicite uno nuevo.';
+
 export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string) {
   // Buscar usuario por email en auth.users via RPC (perfiles no tiene columna email)
   const { data: userResult, error: rpcError } = await supabase
@@ -489,9 +492,16 @@ export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string
     throw new AppError(500, 'INTERNAL_ERROR', 'Error interno del servidor');
   }
 
-  // Enviar email
+  // Enviar email. Si el proveedor lo rechaza no se lanza: un 500 solo para los
+  // correos que sí tienen cuenta revelaría cuáles existen. La respuesta sigue
+  // siendo la genérica y el motivo queda en el log.
   const resetUrl = `${env.FRONTEND_URL}/restablecer-contrasena?token=${rawToken}`;
-  await sendPasswordResetEmail(email, resetUrl);
+  try {
+    await sendPasswordResetEmail(email, resetUrl);
+    logger.info({ email, userId }, 'Token de reset generado y email enviado');
+  } catch (emailError) {
+    logger.error({ email, userId, error: (emailError as Error)?.message }, 'No se pudo enviar el email de recuperación');
+  }
 
   logAudit({
     usuarioId: userId,
@@ -501,8 +511,6 @@ export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string
     detalle: { email },
     ip,
   });
-
-  logger.info({ email, userId }, 'Token de reset generado y email enviado');
 }
 
 export async function validateResetToken(token: string) {
@@ -516,11 +524,11 @@ export async function validateResetToken(token: string) {
     .single<{ id: string; expires_at: string; used_at: string | null }>();
 
   if (error || !data) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   if (new Date(data.expires_at) < new Date()) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   return { valid: true };
@@ -538,11 +546,11 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
     .single<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
 
   if (tokenError || !tokenData) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   if (new Date(tokenData.expires_at) < new Date()) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   // Actualizar contrasena en Supabase Auth
@@ -552,7 +560,18 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
 
   if (updateError) {
     logger.error({ error: updateError.message }, 'Error al actualizar contrasena');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al restablecer la contrasena');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al restablecer la contraseña');
+  }
+
+  // Cuenta recién registrada que aún no verificó el correo: el enlace de
+  // recuperación llegó a ese mismo correo, así que abrirlo prueba lo mismo que
+  // el de verificación. Antes cambiaba la clave y seguía sin poder entrar («Aún
+  // no ha verificado su correo»). Solo activa un autorregistro pendiente: nunca
+  // una cuenta ya verificada o creada por otro medio, que pudo desactivar un
+  // administrador. Va antes de gastar el token: si falla, el mismo enlace sirve
+  // para reintentar.
+  if (await activarAutorregistroPendiente(tokenData.user_id)) {
+    logger.info({ userId: tokenData.user_id }, 'Cuenta verificada al restablecer la contraseña');
   }
 
   // Marcar token como usado
@@ -574,5 +593,5 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
 
   logger.info({ userId: tokenData.user_id }, 'Contrasena restablecida exitosamente');
 
-  return { message: 'Contrasena restablecida exitosamente' };
+  return { message: 'Contraseña restablecida exitosamente' };
 }

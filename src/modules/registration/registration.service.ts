@@ -5,14 +5,38 @@ import { logger } from '@/lib/logger';
 import { env } from '@/config';
 import { sendVerificationEmail } from '@/lib/email';
 import { ensureOrgConOwner } from '@/lib/tenantScope';
+import { getCompany } from '@/lib/companyConfig';
+import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import type {
   RegisterPropietarioInput,
   RegisterInmobiliariaInput,
   ResendVerificationInput,
 } from './registration.schema';
 
+// Vigencia del enlace de verificación. La misma cifra decide cuándo un alta sin
+// verificar deja de retener su NIT, y sale en el mensaje de quien lo encuentra
+// retenido.
+const HORAS_ENLACE_VERIFICACION = 24;
+
+const MENSAJE_NIT_REGISTRADO =
+  'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.';
+
+const MENSAJE_ENLACE_INVALIDO = 'El enlace de verificación no es válido o ya venció. Solicite uno nuevo.';
+
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+type EstadoVerificacion = { registration_source: string | null; email_verified_at: string | null };
+
+/**
+ * Autorregistro por correo que aún no verificó. Es la única cuenta que un
+ * enlace puede activar, y la única que se borra para liberar su NIT: las ya
+ * verificadas y las creadas por otro medio (administrador, vitrina, invitación)
+ * no entran aquí.
+ */
+function esAutorregistroSinVerificar(perfil: EstadoVerificacion): boolean {
+  return perfil.registration_source === 'email' && !perfil.email_verified_at;
 }
 
 /**
@@ -43,6 +67,156 @@ async function actualizarPerfilSinAbortar(userId: string, datos: Record<string, 
     .update(datos as never)
     .eq('id', userId);
   if (error) logger.error({ error: error.message, userId }, `Registro: no se pudo guardar ${que}`);
+}
+
+/**
+ * El NIT ya lo tiene otro perfil. Solo deja seguir con el alta cuando ese perfil
+ * es un autorregistro que nunca verificó el correo (ni según el perfil ni según
+ * Auth) y cuyo enlace de verificación ya venció: entonces se borra esa cuenta (la
+ * cascada de auth.users se lleva perfil, organización, membresía, aceptación de
+ * términos y tokens).
+ * Antes el NIT quedaba retenido para siempre: quien tecleó mal su correo no
+ * podía volver a registrarse y leía «pídale al titular que lo invite» — el
+ * titular era él mismo. En cualquier otro caso responde 409.
+ */
+async function liberarNitDeRegistroVencido(
+  dueno: { id: string; created_at: string } & EstadoVerificacion,
+  nit: string,
+  ipAddress: string,
+): Promise<void> {
+  if (!esAutorregistroSinVerificar(dueno)) {
+    throw AppError.conflict(MENSAJE_NIT_REGISTRADO, 'NIT_ALREADY_EXISTS');
+  }
+  const contacto = (await getCompany()).email;
+  const pendiente = () =>
+    AppError.conflict(
+      'Ya hay un registro con este NIT pendiente de verificar el correo. Revise su bandeja de entrada (y el spam). ' +
+        `Si escribió mal el correo, podrá registrarse de nuevo en ${HORAS_ENLACE_VERIFICACION} horas o escribirnos a ${contacto}.`,
+      'NIT_ALREADY_EXISTS',
+    );
+
+  // Vencido = pasó la vigencia del enlace desde el alta Y no le queda ningún
+  // enlace vigente (un reenvío lo renueva). Lo primero también protege a un alta
+  // en curso, que tiene el NIT un par de segundos antes de emitir su enlace: un
+  // segundo envío del mismo formulario la habría borrado a medio camino.
+  // Ante la duda (fecha ilegible, consulta fallida) no se borra.
+  const edadMs = Date.now() - new Date(dueno.created_at).getTime();
+  if (!(edadMs > HORAS_ENLACE_VERIFICACION * 60 * 60 * 1000)) throw pendiente();
+
+  const { data: enlaceVigente, error: tokenError } = await (supabase
+    .from('email_verification_tokens' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('user_id', dueno.id)
+    .is('used_at', null)
+    .gt('expires_at', new Date().toISOString())
+    .limit(1)
+    .maybeSingle();
+  if (tokenError || enlaceVigente) throw pendiente();
+
+  // Antes de borrar, lo que diga Auth: con el correo confirmado o algún ingreso
+  // la cuenta está en uso aunque al perfil le falte email_verified_at (la
+  // verificación de antes podía confirmar en Auth y fallar al marcar el perfil,
+  // y después un administrador la activaba a mano). Esa no se borra nunca.
+  const { data: enAuth, error: authError } = await supabaseAuth.auth.admin.getUserById(dueno.id);
+  if (authError || !enAuth.user) throw pendiente();
+  if (enAuth.user.email_confirmed_at || enAuth.user.last_sign_in_at) {
+    throw AppError.conflict(MENSAJE_NIT_REGISTRADO, 'NIT_ALREADY_EXISTS');
+  }
+
+  // bitacora.usuario_id no tiene ON DELETE: con solo haber pedido «recuperar
+  // contraseña» la cuenta no se podía borrar (tampoco desde Usuarios) y el NIT
+  // quedaba retenido hasta que alguien entrara a la base. Auth ya dijo que nunca
+  // entró: lo suyo en la bitácora son, a lo sumo, esos pedidos. Las filas se
+  // quedan (entidad_id y detalle.email dicen de quién eran); solo pierden el
+  // vínculo, como haría un ON DELETE SET NULL. Si alguno de esos enlaces de
+  // recuperación seguía vigente, se va con la cuenta.
+  const { error: bitacoraError } = await (supabase
+    .from('bitacora' as string) as ReturnType<typeof supabase.from>)
+    .update({ usuario_id: null } as never)
+    .eq('usuario_id', dueno.id);
+  if (bitacoraError) {
+    logger.warn({ error: bitacoraError.message, userId: dueno.id }, 'No se pudo desvincular la bitácora del registro sin verificar');
+  }
+
+  const { error: deleteError } = await supabaseAuth.auth.admin.deleteUser(dueno.id);
+  if (deleteError) {
+    // ponytail: la cascada no cubre todo: otras llaves a perfiles tampoco tienen
+    // ON DELETE (p. ej. un inmueble que un administrador dejó a su nombre). No se
+    // fuerza y lo resuelve una persona.
+    logger.error({ error: deleteError.message, userId: dueno.id }, 'No se pudo borrar el registro sin verificar que retiene el NIT');
+    throw AppError.conflict(
+      `Ya hay un registro con este NIT que quedó sin verificar y no pudimos liberarlo. Escríbanos a ${contacto} y lo resolvemos.`,
+      'NIT_ALREADY_EXISTS',
+    );
+  }
+
+  logAudit({
+    usuarioId: null,
+    accion: AUDIT_ACTIONS.USER_DELETED,
+    entidad: AUDIT_ENTITIES.USER,
+    entidadId: dueno.id,
+    detalle: { motivo: 'registro_sin_verificar_vencido', nit },
+    ip: ipAddress,
+  });
+  logger.info({ userId: dueno.id }, 'Registro sin verificar con el enlace vencido: se borró para liberar su NIT');
+}
+
+// «¿Cómo nos conoció?», como lo lee la persona en el formulario.
+const ORIGEN_LEGIBLE: Record<string, string> = {
+  inmobiliaria: 'una inmobiliaria',
+  redes: 'redes sociales',
+  recomendacion: 'recomendación',
+  google: 'Google o internet',
+  evento: 'evento o feria',
+  otro: 'otro',
+};
+
+/**
+ * Aviso interno (en la plataforma y por correo) a los administradores activos:
+ * el formulario le promete a la inmobiliaria contacto en menos de 24 horas y
+ * nadie en Cofianza se enteraba del alta. Nunca lanza: para entonces el
+ * registro ya terminó bien.
+ * El mensaje va en texto plano y sin escapar: el correo lo escapa al armar el
+ * HTML (sendResponsableAsignadoEmail) y el panel lo pinta como texto.
+ */
+async function avisarInmobiliariaRegistrada(userId: string, input: RegisterInmobiliariaInput): Promise<void> {
+  try {
+    const dato = (valor?: string) => valor?.trim() || 'no indicó';
+    const tipoRespaldo = input.afianzadora_tipo === 'ninguna' ? 'ninguno' : input.afianzadora_tipo;
+    const respaldo =
+      tipoRespaldo && input.afianzadora_actual ? `${tipoRespaldo} (${input.afianzadora_actual})` : tipoRespaldo || input.afianzadora_actual;
+    const representante = [
+      `${input.nombre_representante_nombre} ${input.nombre_representante_apellido}`.trim(),
+      input.cargo_representante,
+    ].filter(Boolean).join(', ');
+
+    // Import dinámico: el aviso a los administradores vive en pagos.service, que
+    // arrastra la pasarela; no hace falta cargarlo para registrar.
+    // ponytail: ese helper les escribe a todos los administradores a la vez. Si
+    // algún día son tantos que Resend limita la ráfaga, el correo de alguno se
+    // pierde (queda el aviso en la plataforma y el motivo en el log); la salida
+    // es enviar en serie dentro del helper.
+    const { avisarAdministradores } = await import('@/modules/pagos/pagos.service');
+    await avisarAdministradores({
+      tipo: 'inmobiliaria.registrada',
+      titulo: 'Nueva inmobiliaria registrada',
+      mensaje:
+        `${input.razon_social} (NIT ${input.nit}), de ${input.ciudad}, se registró en Cofianza y espera que la contactemos ` +
+        'en menos de 24 horas para firmar el contrato marco. ' +
+        [
+          `Inmuebles gestionados: ${dato(input.inmuebles_gestionados)}`,
+          `Cómo nos conoció: ${dato(input.origen && ORIGEN_LEGIBLE[input.origen])}`,
+          `Página web: ${dato(input.sitio_web)}`,
+          `Respaldo actual: ${dato(respaldo)}`,
+          `Representante: ${representante}`,
+          `Contacto: ${input.email}, ${input.telefono}`,
+        ].join(' · '),
+      link: '/admin/inmobiliarias',
+      payload: { perfil_id: userId, nit: input.nit },
+    });
+  } catch (err) {
+    logger.error({ error: (err as Error)?.message, userId }, 'No se pudo avisar a los administradores del registro de la inmobiliaria');
+  }
 }
 
 export async function registerPropietario(
@@ -126,14 +300,15 @@ export async function registerInmobiliaria(
   // ademas da un mensaje que dice que hacer.
   const { data: nitExistente } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('id')
+    .select('id, registration_source, email_verified_at, created_at')
     .eq('nit', nit)
     .limit(1)
     .maybeSingle();
   if (nitExistente) {
-    throw AppError.conflict(
-      'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.',
-      'NIT_ALREADY_EXISTS',
+    await liberarNitDeRegistroVencido(
+      nitExistente as { id: string; created_at: string } & EstadoVerificacion,
+      nit,
+      ipAddress,
     );
   }
 
@@ -187,10 +362,7 @@ export async function registerInmobiliaria(
     // carrera que el pre-chequeo de arriba no puede cerrar.
     if ((updateError as { code?: string }).code === '23505') {
       await supabaseAuth.auth.admin.deleteUser(userId).catch(() => undefined);
-      throw AppError.conflict(
-        'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.',
-        'NIT_ALREADY_EXISTS',
-      );
+      throw AppError.conflict(MENSAJE_NIT_REGISTRADO, 'NIT_ALREADY_EXISTS');
     }
     // Antes solo se logueaba y el usuario leia "Registro exitoso" sobre un
     // perfil sin razon social, sin NIT y sin rol de inmobiliaria — una cuenta
@@ -238,75 +410,121 @@ export async function registerInmobiliaria(
   await recordTermsAcceptance(userId, ipAddress, userAgent);
   await generateAndSendVerificationEmail(userId, email, nombre_representante_nombre);
 
+  // Al final y sin esperarlo: primero sale el correo de verificación (el que la
+  // persona necesita) y el aviso interno no demora ni tumba la respuesta.
+  void avisarInmobiliariaRegistrada(userId, input);
+
   logger.info({ userId, email, rol: 'inmobiliaria' }, 'Inmobiliaria registrada exitosamente');
 
   return { message: 'Registro exitoso. Revise su correo para verificar su cuenta.' };
 }
 
 export async function verifyEmail(token: string): Promise<{ message: string }> {
+  // Una consulta que falla no es un enlace inválido: responde 500 y el mismo
+  // enlace sirve para reintentar. Con el 400 de antes la persona leía «el enlace
+  // no es válido o ya venció» de un enlace que sí servía.
+  function fallo(que: string, error: { message: string }, userId?: string): never {
+    logger.error({ error: error.message, userId }, `Verificación de correo: no se pudo ${que}`);
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos completar la verificación. Inténtelo de nuevo.');
+  }
   const tokenHash = hashToken(token);
 
-  const { data: tokenData } = await supabase
+  const { data: tokenData, error: lecturaError } = await supabase
     .from('email_verification_tokens' as string)
     .select('id, user_id, expires_at, used_at')
     .eq('token_hash', tokenHash)
     .maybeSingle<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
+  if (lecturaError) fallo('leer el enlace', lecturaError);
 
   if (!tokenData) {
-    throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_VERIFICATION_TOKEN');
   }
 
   // Idempotencia: si el enlace ya se usó (doble click en el correo, o el
   // usuario lo reabre) y la cuenta ya quedó verificada, respondemos éxito en
   // vez de un "enlace inválido" alarmante — la cuenta ya está activa.
   if (tokenData.used_at) {
-    const { data: perfilRow } = await (supabase
+    const { data: perfilRow, error: perfilError } = await (supabase
       .from('perfiles' as string) as ReturnType<typeof supabase.from>)
       .select('email_verified_at')
       .eq('id', tokenData.user_id)
       .maybeSingle();
+    if (perfilError) fallo('leer el perfil', perfilError, tokenData.user_id);
     const perfilVerificado = perfilRow as { email_verified_at: string | null } | null;
     if (perfilVerificado?.email_verified_at) {
-      return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesion.' };
+      return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesión.' };
     }
-    throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_VERIFICATION_TOKEN');
   }
 
   if (new Date(tokenData.expires_at) < new Date()) {
-    throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_VERIFICATION_TOKEN');
   }
 
-  // Marcar token como usado
-  await (supabase
+  // Primero se activa la cuenta y solo después se gasta el enlace. Antes se
+  // marcaba usado de entrada y no se revisaba ninguna escritura: un fallo a
+  // medias respondía «verificado» y dejaba a la persona sin cuenta activa y sin
+  // enlace. Si algo falla responde 500 y el mismo enlace sirve para reintentar
+  // (las tres escrituras se pueden repetir sin daño).
+  const activada = await activarAutorregistroPendiente(tokenData.user_id);
+
+  const { error: tokenError } = await (supabase
     .from('email_verification_tokens' as string) as ReturnType<typeof supabase.from>)
     .update({ used_at: new Date().toISOString() } as never)
     .eq('id', tokenData.id);
+  if (tokenError) fallo('marcar el enlace como usado', tokenError, tokenData.user_id);
 
-  // Marcar email como verificado y activar la cuenta. El registro arranca
-  // en estado='inactivo' como medida anti-bot/anti-spam; al verificar el
-  // email (prueba de control sobre la casilla) consideramos legitimo el
-  // alta y activamos el perfil para que pueda iniciar sesion.
-  const nowIso = new Date().toISOString();
-  await (supabase
-    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      email_verified_at: nowIso,
-      estado: 'activo',
-    } as never)
-    .eq('id', tokenData.user_id);
-
-  // Confirmar email en Supabase Auth
-  await supabaseAuth.auth.admin.updateUserById(tokenData.user_id, {
-    email_confirm: true,
-  });
+  // La cuenta ya no estaba pendiente (se verificó por otro enlace): no se tocó.
+  if (!activada) {
+    return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesión.' };
+  }
 
   logger.info({ userId: tokenData.user_id }, 'Email verificado y cuenta activada');
 
-  return { message: 'Email verificado. Su cuenta esta activa, ya puede iniciar sesion.' };
+  return { message: 'Correo verificado. Su cuenta está activa y ya puede iniciar sesión.' };
+}
+
+/**
+ * Da por verificado el correo de un autorregistro pendiente y activa su cuenta.
+ * El registro arranca en estado='inactivo' como medida anti-bot/anti-spam; abrir
+ * un enlace que llegó a ese correo prueba el control de la casilla.
+ *
+ * Devuelve false, sin tocar nada, si la cuenta no es un autorregistro pendiente:
+ * una ya verificada pudo desactivarla un administrador y un enlace que siga
+ * vigente no la reactiva.
+ *
+ * Revisa cada escritura y lanza si alguna falla: quien llama no gasta su enlace
+ * hasta que esto termine bien. Primero Auth y después el perfil: si falla el
+ * segundo, el reenvío de verificación todavía sirve (mira el perfil); al revés,
+ * la cuenta quedaba verificada en el perfil, sin poder entrar y sin reenvío.
+ */
+export async function activarAutorregistroPendiente(userId: string): Promise<boolean> {
+  function fallo(paso: string, error: { message: string }): never {
+    logger.error({ error: error.message, userId }, `Activación de la cuenta: falló ${paso}`);
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos activar su cuenta. Inténtelo de nuevo.');
+  }
+  const perfiles = () => supabase.from('perfiles' as string) as ReturnType<typeof supabase.from>;
+
+  const { data: perfil, error: lecturaError } = await perfiles()
+    .select('registration_source, email_verified_at')
+    .eq('id', userId)
+    .maybeSingle();
+  if (lecturaError) fallo('la lectura del perfil', lecturaError);
+  if (!perfil || !esAutorregistroSinVerificar(perfil as EstadoVerificacion)) return false;
+
+  const { error: authError } = await supabaseAuth.auth.admin.updateUserById(userId, { email_confirm: true });
+  if (authError) fallo('la confirmación del correo en Auth', authError);
+
+  const { error: perfilError } = await perfiles()
+    .update({ email_verified_at: new Date().toISOString(), estado: 'activo' } as never)
+    .eq('id', userId);
+  if (perfilError) fallo('la activación del perfil', perfilError);
+
+  return true;
 }
 
 export async function resendVerification({ email }: ResendVerificationInput): Promise<{ message: string }> {
-  const genericMessage = 'Si el email existe en nuestro sistema, recibirá un nuevo enlace de verificacion.';
+  const genericMessage = 'Si el email existe en nuestro sistema, recibirá un nuevo enlace de verificación.';
 
   const { data: userResult, error: rpcError } = await supabase
     .rpc('find_user_by_email' as never, { user_email: email } as never)
@@ -326,7 +544,7 @@ export async function resendVerification({ email }: ResendVerificationInput): Pr
     .eq('id', userResult.id)
     .single<{ email_verified_at: string | null; nombre: string; registration_source: string | null }>();
 
-  if (!perfil || perfil.email_verified_at || perfil.registration_source !== 'email') {
+  if (!perfil || !esAutorregistroSinVerificar(perfil)) {
     return { message: genericMessage };
   }
 
@@ -383,7 +601,7 @@ async function generateAndSendVerificationEmail(
 
   const rawToken = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashToken(rawToken);
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + HORAS_ENLACE_VERIFICACION * 60 * 60 * 1000).toISOString();
 
   const { error: insertError } = await (supabase
     .from('email_verification_tokens' as string) as ReturnType<typeof supabase.from>)
@@ -402,10 +620,11 @@ async function generateAndSendVerificationEmail(
 
   try {
     await sendVerificationEmail(email, nombre, verifyUrl);
+    // Dentro del try: antes quedaba «enviado» aunque el correo no hubiera salido.
+    logger.info({ email, userId }, 'Email de verificacion enviado');
   } catch (emailError) {
-    logger.error({ error: emailError, email }, 'Error al enviar email de verificacion');
-    // No fallar el registro por error de email
+    // No fallar el registro por error de email: la cuenta ya existe y la
+    // persona puede pedir el reenvío.
+    logger.error({ error: (emailError as Error)?.message, email, userId }, 'Error al enviar email de verificacion');
   }
-
-  logger.info({ email, userId }, 'Email de verificacion enviado');
 }
