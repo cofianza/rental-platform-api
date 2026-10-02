@@ -38,6 +38,9 @@ const phoneSchema = z
   .max(20, 'Teléfono muy largo')
   .regex(/^\+\d{1,4}\s?\d{7,15}$/, 'Teléfono inválido. Debe incluir lada internacional (ej: +57 3001234567)');
 
+// ¿Cómo nos conoció? Una sola lista para los dos registros.
+const ORIGENES = ['inmobiliaria', 'redes', 'recomendacion', 'google', 'evento', 'otro'] as const;
+
 export const registerPropietarioSchema = z.object({
   nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
   apellido: z.string().min(1, 'Apellido requerido').max(100, 'Apellido muy largo'),
@@ -46,8 +49,15 @@ export const registerPropietarioSchema = z.object({
   tipo_documento: z.enum(['cc', 'ce', 'pasaporte'], {
     error: 'Tipo de documento inválido',
   }),
-  numero_documento: z.string().min(1, 'Número de documento requerido').max(20, 'Número muy largo'),
-  direccion: z.string().min(1, 'Dirección requerida').max(300, 'Dirección muy larga'),
+  // Se guarda sin puntos ni espacios («1.040.567.890» → «1040567890»).
+  numero_documento: z
+    .string()
+    .max(20, 'Número muy largo')
+    .transform((s) => s.replace(/[.\s]/g, ''))
+    .refine((s) => s.length > 0, 'Número de documento requerido'),
+  // Opcional: el contrato usa domicilio_direccion, que se pide en «Datos para contrato».
+  direccion: z.string().min(1, 'Dirección requerida').max(300, 'Dirección muy larga').optional(),
+  origen: z.enum(ORIGENES, { error: 'Opción inválida' }).optional(),
   password: passwordSchema,
   confirm_password: z.string().min(1, 'Confirmacion de contraseña requerida'),
   accept_terms: z.literal(true, {
@@ -77,6 +87,17 @@ export const registerInmobiliariaSchema = z.object({
   // ¿Qué afianzadora/aseguradora usan hoy? (opcional, tarea 1.6)
   afianzadora_actual: z.string().max(200, 'Nombre muy largo').optional(),
   afianzadora_tipo: z.enum(['afianzadora', 'aseguradora', 'ninguna']).optional(),
+  // Registro v2: opcionales para no romper la web anterior; la web nueva los exige en cliente.
+  inmuebles_gestionados: z.enum(['1-20', '21-50', '51-100', '101-300', '300+'], { error: 'Opción inválida' }).optional(),
+  sitio_web: z.url({ protocol: /^https?$/, error: 'Sitio web inválido. Incluya https://' }).max(300, 'Sitio web muy largo').optional(),
+  representante_tipo_documento: z.enum(['cc', 'ce', 'pasaporte'], { error: 'Tipo de documento inválido' }).optional(),
+  // Mismo saneo y formato que perfil-arrendador.schema.ts (CHECK perfiles_rep_legal_doc_chk).
+  representante_documento: z
+    .string()
+    .transform((s) => s.replace(/[.\s-]/g, ''))
+    .refine((s) => /^[A-Za-z0-9]{3,30}$/.test(s), 'Número de documento inválido')
+    .optional(),
+  origen: z.enum(ORIGENES, { error: 'Opción inválida' }).optional(),
   email: z.email({ error: 'Email inválido' }),
   telefono: phoneSchema,
   password: passwordSchema,
@@ -90,6 +111,9 @@ export const registerInmobiliariaSchema = z.object({
 }).refine((data) => data.password === data.confirm_password, {
   error: 'Las contraseñas no coinciden',
   path: ['confirm_password'],
+}).refine((data) => !data.representante_tipo_documento === !data.representante_documento, {
+  error: 'Indique el tipo y el número de documento del representante',
+  path: ['representante_documento'],
 });
 
 export const verifyEmailParamsSchema = z.object({

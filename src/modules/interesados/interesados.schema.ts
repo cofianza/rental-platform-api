@@ -18,7 +18,8 @@ export const registrarInteresSchema = z.object({
     .refine(esNombrePersona, 'Escriba solo su nombre, sin enlaces ni números'),
   // Mismo patrón que whatsapp.schema.ts: dígitos, espacios o guiones y '+' inicial.
   telefono: z.string().trim().min(7, 'Ingrese un teléfono válido').max(30).regex(/^\+?[\d\s-]+$/, 'Ingrese un teléfono válido'),
-  email: z.string().trim().email('Correo inválido').max(255),
+  // Opcional: el celular basta para que el dueño contacte al interesado.
+  email: z.string().trim().email('Correo inválido').max(255).optional().or(z.literal('')),
   // Mensaje opcional del interesado (contexto para el dueño). No sensible.
   mensaje: z.string().trim().max(500, 'Mensaje muy largo').refine(sinEnlaces, 'Quite los enlaces del mensaje').optional(),
   // Debe venir true: es la autorización para compartir el contacto con el
