@@ -71,9 +71,10 @@ async function actualizarPerfilSinAbortar(userId: string, datos: Record<string, 
 
 /**
  * El NIT ya lo tiene otro perfil. Solo deja seguir con el alta cuando ese perfil
- * es un autorregistro que nunca verificó el correo y cuyo enlace de verificación
- * ya venció: entonces se borra esa cuenta (la cascada de auth.users se lleva
- * perfil, organización, membresía, aceptación de términos y tokens).
+ * es un autorregistro que nunca verificó el correo (ni según el perfil ni según
+ * Auth) y cuyo enlace de verificación ya venció: entonces se borra esa cuenta (la
+ * cascada de auth.users se lleva perfil, organización, membresía, aceptación de
+ * términos y tokens).
  * Antes el NIT quedaba retenido para siempre: quien tecleó mal su correo no
  * podía volver a registrarse y leía «pídale al titular que lo invite» — el
  * titular era él mismo. En cualquier otro caso responde 409.
@@ -111,6 +112,16 @@ async function liberarNitDeRegistroVencido(
     .limit(1)
     .maybeSingle();
   if (tokenError || enlaceVigente) throw pendiente();
+
+  // Antes de borrar, lo que diga Auth: con el correo confirmado o algún ingreso
+  // la cuenta está en uso aunque al perfil le falte email_verified_at (la
+  // verificación de antes podía confirmar en Auth y fallar al marcar el perfil,
+  // y después un administrador la activaba a mano). Esa no se borra nunca.
+  const { data: enAuth, error: authError } = await supabaseAuth.auth.admin.getUserById(dueno.id);
+  if (authError || !enAuth.user) throw pendiente();
+  if (enAuth.user.email_confirmed_at || enAuth.user.last_sign_in_at) {
+    throw AppError.conflict(MENSAJE_NIT_REGISTRADO, 'NIT_ALREADY_EXISTS');
+  }
 
   const { error: deleteError } = await supabaseAuth.auth.admin.deleteUser(dueno.id);
   if (deleteError) {

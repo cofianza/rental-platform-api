@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // principal sí la revierte. Mismo mock de Supabase con colas por tabla.
 // ============================================================
 
-const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser, mockAvisarAdmins } = vi.hoisted(() => {
+const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser, mockGetUserById, mockAvisarAdmins } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -34,13 +34,20 @@ const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser, moc
     resetQueues: () => queues.clear(),
     mockDeleteUser: vi.fn(async (..._args: unknown[]): Promise<{ error: { message: string } | null }> => ({ error: null })),
     mockCreateUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
+    // Como responde Auth por una cuenta que nunca confirmó el correo ni entró.
+    mockGetUserById: vi.fn(
+      async (id: string): Promise<{ data: { user: Record<string, unknown> | null }; error: { message: string } | null }> => ({
+        data: { user: { id } },
+        error: null,
+      }),
+    ),
     mockAvisarAdmins: vi.fn(async (_aviso: Record<string, unknown>) => undefined),
   };
 });
 
 vi.mock('@/lib/supabase', () => ({
   supabase: { from: (t: string) => mockFrom(t) },
-  supabaseAuth: { auth: { admin: { createUser: mockCreateUser, deleteUser: mockDeleteUser } } },
+  supabaseAuth: { auth: { admin: { createUser: mockCreateUser, deleteUser: mockDeleteUser, getUserById: mockGetUserById } } },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
@@ -101,6 +108,7 @@ beforeEach(() => {
   ops.length = 0;
   mockDeleteUser.mockClear();
   mockCreateUser.mockClear();
+  mockGetUserById.mockClear();
   vi.mocked(logger.info).mockClear();
   vi.mocked(logger.error).mockClear();
   vi.mocked(logAudit).mockClear();
@@ -200,6 +208,7 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
     expect(sinVencer).toMatchObject({ method: 'gt', args: ['expires_at', expect.any(String)] });
     expect(Math.abs(Date.parse(sinVencer.args[1] as string) - Date.now())).toBeLessThan(5000);
 
+    expect(mockGetUserById).toHaveBeenCalledWith('viejo');
     expect(mockDeleteUser).toHaveBeenCalledTimes(1);
     expect(mockDeleteUser).toHaveBeenCalledWith('viejo');
     expect(mockCreateUser).toHaveBeenCalledTimes(1);
@@ -263,6 +272,39 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
   it('si no se puede saber si el enlace sigue vigente, no borra', async () => {
     enqueue('perfiles', SIN_VERIFICAR);
     enqueue('email_verification_tokens', { data: null, error: { message: 'connection reset' } });
+
+    await expect(registrar()).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'NIT_ALREADY_EXISTS',
+      message: expect.stringContaining('pendiente de verificar el correo'),
+    });
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  // El perfil puede decir «sin verificar» de una cuenta que está en uso: la
+  // verificación de antes confirmaba en Auth y podía fallar al marcar el perfil,
+  // y después un administrador la activaba a mano. Borrarla se llevaba la
+  // organización y a su equipo.
+  it.each([
+    ['con el correo confirmado en Auth', { email_confirmed_at: '2026-09-10T15:00:00Z' }],
+    ['que ya entró alguna vez', { last_sign_in_at: '2026-09-28T09:30:00Z' }],
+  ])('perfil sin verificar y vencido de una cuenta %s: el 409 de siempre, y no se borra', async (_caso, enAuth) => {
+    enqueue('perfiles', SIN_VERIFICAR);
+    mockGetUserById.mockResolvedValueOnce({ data: { user: { id: 'viejo', ...enAuth } }, error: null });
+
+    await expect(registrar()).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'NIT_ALREADY_EXISTS',
+      message: 'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.',
+    });
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('si Auth no dice si la cuenta está en uso, no borra', async () => {
+    enqueue('perfiles', SIN_VERIFICAR);
+    mockGetUserById.mockResolvedValueOnce({ data: { user: null }, error: { message: 'upstream connect error' } });
 
     await expect(registrar()).rejects.toMatchObject({
       statusCode: 409,
