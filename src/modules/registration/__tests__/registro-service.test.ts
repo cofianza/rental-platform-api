@@ -178,7 +178,12 @@ describe('registerInmobiliaria', () => {
 // «pídale al titular que lo invite». Solo ese caso libera el NIT, y solo cuando
 // su enlace de verificación ya venció.
 describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
-  const SIN_VERIFICAR = { data: { id: 'viejo', registration_source: 'email', email_verified_at: null }, error: null };
+  const haceHoras = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+  // Alta de hace más de 24 horas (la vigencia del enlace) que nunca verificó.
+  const SIN_VERIFICAR = {
+    data: { id: 'viejo', registration_source: 'email', email_verified_at: null, created_at: haceHoras(30) },
+    error: null,
+  };
   const registrar = () => registerInmobiliaria(INMOBILIARIA, '1.2.3.4', 'test');
   const consultaDeTokens = () => ops.filter((o) => o.table === 'email_verification_tokens');
 
@@ -203,7 +208,7 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
     );
   });
 
-  it('autorregistro sin verificar con el enlace vigente: 409 que dice qué hacer, y no borra nada', async () => {
+  it('autorregistro sin verificar con un enlace reenviado que sigue vigente: 409 que dice qué hacer, y no borra nada', async () => {
     enqueue('perfiles', SIN_VERIFICAR);
     enqueue('email_verification_tokens', { data: { id: 'token-vigente' }, error: null });
 
@@ -218,13 +223,32 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
     expect(mockCreateUser).not.toHaveBeenCalled();
   });
 
+  // Un alta en curso tiene el NIT un par de segundos antes de emitir su enlace:
+  // un segundo envío del mismo formulario no puede borrarla a medio camino.
+  it.each([
+    ['de hace unos segundos (alta en curso, aún sin enlace)', haceHoras(0)],
+    ['de hace 23 horas', haceHoras(23)],
+    ['con la fecha ilegible', 'no-es-fecha'],
+  ])('autorregistro sin verificar %s: 409 sin mirar tokens ni borrar', async (_caso, created_at) => {
+    enqueue('perfiles', { data: { ...SIN_VERIFICAR.data, created_at }, error: null });
+
+    await expect(registrar()).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'NIT_ALREADY_EXISTS',
+      message: expect.stringContaining('pendiente de verificar el correo'),
+    });
+    expect(consultaDeTokens()).toHaveLength(0);
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['verificada', { registration_source: 'email', email_verified_at: '2026-09-01T00:00:00Z' }],
     ['creada por un administrador', { registration_source: 'admin', email_verified_at: null }],
     ['de un miembro invitado', { registration_source: 'invitacion_miembro', email_verified_at: '2026-09-01T00:00:00Z' }],
     ['sin origen registrado', { registration_source: null, email_verified_at: null }],
   ])('cuenta %s: el 409 de siempre, y nunca se borra', async (_caso, estado) => {
-    enqueue('perfiles', { data: { id: 'viejo', ...estado }, error: null });
+    enqueue('perfiles', { data: { id: 'viejo', created_at: haceHoras(30), ...estado }, error: null });
 
     await expect(registrar()).rejects.toMatchObject({
       statusCode: 409,

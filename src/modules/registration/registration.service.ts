@@ -13,8 +13,9 @@ import type {
   ResendVerificationInput,
 } from './registration.schema';
 
-// Vigencia del enlace de verificación. La misma cifra sale en el mensaje del
-// registro que encuentra su NIT retenido por un alta sin verificar.
+// Vigencia del enlace de verificación. La misma cifra decide cuándo un alta sin
+// verificar deja de retener su NIT, y sale en el mensaje de quien lo encuentra
+// retenido.
 const HORAS_ENLACE_VERIFICACION = 24;
 
 const MENSAJE_NIT_REGISTRADO =
@@ -70,15 +71,15 @@ async function actualizarPerfilSinAbortar(userId: string, datos: Record<string, 
 
 /**
  * El NIT ya lo tiene otro perfil. Solo deja seguir con el alta cuando ese perfil
- * es un autorregistro que nunca verificó el correo y ya no tiene un enlace de
- * verificación vigente: entonces se borra esa cuenta (la cascada de auth.users
- * se lleva perfil, organización, membresía, aceptación de términos y tokens).
+ * es un autorregistro que nunca verificó el correo y cuyo enlace de verificación
+ * ya venció: entonces se borra esa cuenta (la cascada de auth.users se lleva
+ * perfil, organización, membresía, aceptación de términos y tokens).
  * Antes el NIT quedaba retenido para siempre: quien tecleó mal su correo no
  * podía volver a registrarse y leía «pídale al titular que lo invite» — el
  * titular era él mismo. En cualquier otro caso responde 409.
  */
 async function liberarNitDeRegistroVencido(
-  dueno: { id: string } & EstadoVerificacion,
+  dueno: { id: string; created_at: string } & EstadoVerificacion,
   nit: string,
   ipAddress: string,
 ): Promise<void> {
@@ -86,9 +87,21 @@ async function liberarNitDeRegistroVencido(
     throw AppError.conflict(MENSAJE_NIT_REGISTRADO, 'NIT_ALREADY_EXISTS');
   }
   const contacto = (await getCompany()).email;
+  const pendiente = () =>
+    AppError.conflict(
+      'Ya hay un registro con este NIT pendiente de verificar el correo. Revise su bandeja de entrada (y el spam). ' +
+        `Si escribió mal el correo, podrá registrarse de nuevo en ${HORAS_ENLACE_VERIFICACION} horas o escribirnos a ${contacto}.`,
+      'NIT_ALREADY_EXISTS',
+    );
 
-  // «Vencido» lo dice el propio token (un reenvío lo renueva), no la fecha del
-  // alta. Si la consulta falla se trata como vigente: ante la duda no se borra.
+  // Vencido = pasó la vigencia del enlace desde el alta Y no le queda ningún
+  // enlace vigente (un reenvío lo renueva). Lo primero también protege a un alta
+  // en curso, que tiene el NIT un par de segundos antes de emitir su enlace: un
+  // segundo envío del mismo formulario la habría borrado a medio camino.
+  // Ante la duda (fecha ilegible, consulta fallida) no se borra.
+  const edadMs = Date.now() - new Date(dueno.created_at).getTime();
+  if (!(edadMs > HORAS_ENLACE_VERIFICACION * 60 * 60 * 1000)) throw pendiente();
+
   const { data: enlaceVigente, error: tokenError } = await (supabase
     .from('email_verification_tokens' as string) as ReturnType<typeof supabase.from>)
     .select('id')
@@ -97,13 +110,7 @@ async function liberarNitDeRegistroVencido(
     .gt('expires_at', new Date().toISOString())
     .limit(1)
     .maybeSingle();
-  if (tokenError || enlaceVigente) {
-    throw AppError.conflict(
-      'Ya hay un registro con este NIT pendiente de verificar el correo. Revise su bandeja de entrada (y el spam). ' +
-        `Si escribió mal el correo, podrá registrarse de nuevo en ${HORAS_ENLACE_VERIFICACION} horas o escribirnos a ${contacto}.`,
-      'NIT_ALREADY_EXISTS',
-    );
-  }
+  if (tokenError || enlaceVigente) throw pendiente();
 
   const { error: deleteError } = await supabaseAuth.auth.admin.deleteUser(dueno.id);
   if (deleteError) {
@@ -262,12 +269,16 @@ export async function registerInmobiliaria(
   // ademas da un mensaje que dice que hacer.
   const { data: nitExistente } = await (supabase
     .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .select('id, registration_source, email_verified_at')
+    .select('id, registration_source, email_verified_at, created_at')
     .eq('nit', nit)
     .limit(1)
     .maybeSingle();
   if (nitExistente) {
-    await liberarNitDeRegistroVencido(nitExistente as { id: string } & EstadoVerificacion, nit, ipAddress);
+    await liberarNitDeRegistroVencido(
+      nitExistente as { id: string; created_at: string } & EstadoVerificacion,
+      nit,
+      ipAddress,
+    );
   }
 
   const { data: authData, error: authError } = await supabaseAuth.auth.admin.createUser({
