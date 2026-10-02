@@ -189,7 +189,7 @@ for (const r of [off, omitida, veredicto(null)]) {
 // ── 9. El texto legal ───────────────────────────────────────
 // Adenda 1 §7: sin OTP en la autorizacion. El 3.0 acepta por casilla; el 2.0
 // (OTP) queda congelado para las filas historicas.
-ok(VERSION_TERMINOS === '3.1' && VERSION_TERMINOS_V2_OTP === '2.0', 'el texto vigente es el 3.1 (casilla); el 2.0 (OTP) queda historico');
+ok(VERSION_TERMINOS === '3.2' && VERSION_TERMINOS_V2_OTP === '2.0', 'el texto vigente es el 3.2 (casilla); el 2.0 (OTP) queda historico');
 ok(TEXTO_LEGAL.includes('Al marcar las casillas de aceptación') && !TEXTO_LEGAL.includes('código OTP'), 'el 3.0 describe la aceptacion por casilla, no por OTP');
 ok(TEXTO_LEGAL_V2_OTP.includes('código OTP') && !TEXTO_LEGAL_V2_OTP.includes('Al marcar las casillas'), 'el 2.0 sigue describiendo el OTP, byte a byte');
 ok(TEXTO_LEGAL.includes('No se recolectan datos sensibles'), 'el 3.0 sin biometria sigue afirmando que no hay datos sensibles');
@@ -200,8 +200,8 @@ ok(TEXTO_LEGAL_BIOMETRIA.includes('DATO SENSIBLE') && TEXTO_LEGAL_BIOMETRIA.incl
 ok(TEXTO_LEGAL_BIOMETRIA.includes('NO ESTOY OBLIGADO'), 'y avisa que no esta obligado (art. 6-a)');
 ok(TEXTO_LEGAL_BIOMETRIA.includes('sin perder el acceso al servicio'), 'y que negarse no le cuesta el servicio');
 ok(TEXTO_LEGAL_BIOMETRIA.includes('NO se almacenan en las bases de datos de Cofianza'), 'y que las imagenes no se guardan (minimizacion)');
-ok(VERSION_TERMINOS === '3.1' && VERSION_TERMINOS_BIOMETRIA === '3.1-biometria', 'versiones distintas para textos distintos (§8.4)');
-ok(TEXTO_LEGAL_V2_OTP.includes('Canal de atención: hola@cofianza.co · Sitio web: www.cofianza.co · Oficial de protección de datos: datospersonales@cofianza.co') && !TEXTO_LEGAL.includes('hola@') && !TEXTO_LEGAL_BIOMETRIA.includes('datospersonales@'), 'el 2.0 conserva sus correos; el 3.1 solo nombra gerencia@');
+ok(VERSION_TERMINOS === '3.2' && VERSION_TERMINOS_BIOMETRIA === '3.2-biometria', 'versiones distintas para textos distintos (§8.4)');
+ok(TEXTO_LEGAL_V2_OTP.includes('Canal de atención: hola@cofianza.co · Sitio web: www.cofianza.co · Oficial de protección de datos: datospersonales@cofianza.co') && !TEXTO_LEGAL.includes('gerencia@') && !TEXTO_LEGAL_BIOMETRIA.includes('datospersonales@'), 'el 2.0 conserva sus correos; el 3.2 no nombra gerencia@');
 // Los dos textos comparten encabezado y marco normativo: la unica diferencia
 // es la clausula 4. Si divergiera algo mas, alguien reescribio de mas.
 ok(TEXTO_LEGAL_BIOMETRIA.startsWith(TEXTO_LEGAL.slice(0, TEXTO_LEGAL.indexOf('4. Datos objeto'))), 'los dos textos son identicos hasta la clausula 4');
