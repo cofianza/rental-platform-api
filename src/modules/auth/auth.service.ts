@@ -451,6 +451,8 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+const MENSAJE_ENLACE_INVALIDO = 'El enlace para restablecer la contraseña no es válido o ya venció. Solicite uno nuevo.';
+
 export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string) {
   // Buscar usuario por email en auth.users via RPC (perfiles no tiene columna email)
   const { data: userResult, error: rpcError } = await supabase
@@ -522,11 +524,11 @@ export async function validateResetToken(token: string) {
     .single<{ id: string; expires_at: string; used_at: string | null }>();
 
   if (error || !data) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   if (new Date(data.expires_at) < new Date()) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   return { valid: true };
@@ -544,11 +546,11 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
     .single<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
 
   if (tokenError || !tokenData) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   if (new Date(tokenData.expires_at) < new Date()) {
-    throw AppError.badRequest('Token invalido o expirado', 'INVALID_RESET_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_RESET_TOKEN');
   }
 
   // Actualizar contrasena en Supabase Auth
@@ -558,7 +560,7 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
 
   if (updateError) {
     logger.error({ error: updateError.message }, 'Error al actualizar contrasena');
-    throw new AppError(500, 'INTERNAL_ERROR', 'Error al restablecer la contrasena');
+    throw new AppError(500, 'INTERNAL_ERROR', 'Error al restablecer la contraseña');
   }
 
   // Cuenta recién registrada que aún no verificó el correo: el enlace de
@@ -589,5 +591,5 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
 
   logger.info({ userId: tokenData.user_id }, 'Contrasena restablecida exitosamente');
 
-  return { message: 'Contrasena restablecida exitosamente' };
+  return { message: 'Contraseña restablecida exitosamente' };
 }

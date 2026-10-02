@@ -36,14 +36,16 @@ const phoneSchema = z
   .string()
   .min(10, 'Teléfono muy corto')
   .max(20, 'Teléfono muy largo')
-  .regex(/^\+\d{1,4}\s?\d{7,15}$/, 'Teléfono inválido. Debe incluir lada internacional (ej: +57 3001234567)');
+  .regex(/^\+\d{1,4}\s?\d{7,15}$/, 'Teléfono inválido. Debe incluir el indicativo del país (ej: +57 3001234567)');
 
 // ¿Cómo nos conoció? Una sola lista para los dos registros.
 const ORIGENES = ['inmobiliaria', 'redes', 'recomendacion', 'google', 'evento', 'otro'] as const;
 
 export const registerPropietarioSchema = z.object({
-  nombre: z.string().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
-  apellido: z.string().min(1, 'Apellido requerido').max(100, 'Apellido muy largo'),
+  // Recortados: el teclado del celular deja un espacio al final («Roberto ») que
+  // se guardaba en el perfil y salía en el correo como «Hola Roberto , …».
+  nombre: z.string().trim().min(1, 'Nombre requerido').max(100, 'Nombre muy largo'),
+  apellido: z.string().trim().min(1, 'Apellido requerido').max(100, 'Apellido muy largo'),
   email: z.email({ error: 'Email inválido' }),
   telefono: phoneSchema,
   tipo_documento: z.enum(['cc', 'ce', 'pasaporte'], {
@@ -60,9 +62,9 @@ export const registerPropietarioSchema = z.object({
   direccion: z.string().min(1, 'Dirección requerida').max(300, 'Dirección muy larga').optional(),
   origen: z.enum(ORIGENES, { error: 'Opción inválida' }).optional(),
   password: passwordSchema,
-  confirm_password: z.string().min(1, 'Confirmacion de contraseña requerida'),
+  confirm_password: z.string().min(1, 'Confirmación de contraseña requerida'),
   accept_terms: z.literal(true, {
-    error: 'Debe aceptar los terminos y condiciones',
+    error: 'Debe aceptar los términos y condiciones',
   }),
   accept_data_treatment: z.literal(true, {
     error: 'Debe autorizar el tratamiento de datos personales',
@@ -82,8 +84,8 @@ export const registerInmobiliariaSchema = z.object({
     .refine(validateNitModulo11, 'Dígito de verificación del NIT inválido'),
   direccion_comercial: z.string().min(1, 'Dirección comercial requerida').max(300, 'Dirección muy larga'),
   ciudad: z.string().min(1, 'Ciudad requerida').max(100, 'Ciudad muy larga'),
-  nombre_representante_nombre: z.string().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
-  nombre_representante_apellido: z.string().min(1, 'Apellido del representante requerido').max(100, 'Apellido muy largo'),
+  nombre_representante_nombre: z.string().trim().min(1, 'Nombre del representante requerido').max(100, 'Nombre muy largo'),
+  nombre_representante_apellido: z.string().trim().min(1, 'Apellido del representante requerido').max(100, 'Apellido muy largo'),
   cargo_representante: z.string().max(100, 'Cargo muy largo').optional(),
   // ¿Qué afianzadora/aseguradora usan hoy? (opcional, tarea 1.6)
   afianzadora_actual: z.string().max(200, 'Nombre muy largo').optional(),
@@ -102,9 +104,9 @@ export const registerInmobiliariaSchema = z.object({
   email: z.email({ error: 'Email inválido' }),
   telefono: phoneSchema,
   password: passwordSchema,
-  confirm_password: z.string().min(1, 'Confirmacion de contraseña requerida'),
+  confirm_password: z.string().min(1, 'Confirmación de contraseña requerida'),
   accept_terms: z.literal(true, {
-    error: 'Debe aceptar los terminos y condiciones',
+    error: 'Debe aceptar los términos y condiciones',
   }),
   accept_data_treatment: z.literal(true, {
     error: 'Debe autorizar el tratamiento de datos personales',

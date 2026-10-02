@@ -286,10 +286,10 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
           <tr>
             <td style="background-color: #ffffff; border-radius: 12px; padding: 40px 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
               <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #111827;">
-                Verifique su correo electronico
+                Verifique su correo electrónico
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, gracias por registrarse en Cofianza. Para completar su registro, verifique su correo electronico haciendo clic en el siguiente boton:
+                Hola ${escapeHtml(nombre.trim())}, gracias por registrarse en Cofianza. Para completar su registro, verifique su correo electrónico haciendo clic en el siguiente botón:
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -316,7 +316,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el boton no funciona, copie y pegue este enlace en su navegador:
+                Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${verifyUrl}
@@ -331,7 +331,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no responda a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -401,7 +401,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                 Evaluación crediticia
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, como parte del proceso de arrendamiento necesitamos que complete un formulario con su informacion personal para realizar la evaluación crediticia.
+                Hola ${escapeHtml(nombre)}, como parte del proceso de arrendamiento necesitamos que complete un formulario con su información personal para realizar la evaluación crediticia.
               </p>
 
               <!-- Button (bulletproof: bgcolor en <td>, padding en <a>, mso-padding-alt para Outlook) -->
@@ -422,13 +422,13 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
               </table>
 
               <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: #6b7280;">
-                Este enlace expirara en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesita un nuevo enlace, escríbanos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
+                Este enlace expirará en <strong>${formatearPlazoEnlace(expiryHours)}</strong>. Si necesita un nuevo enlace, escríbanos por WhatsApp al ${sop.whatsapp} o a ${sop.email}.
               </p>
 
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el boton no funciona, copie y pegue este enlace en su navegador:
+                Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${formUrl}
@@ -443,7 +443,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no responda a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -542,7 +542,7 @@ function buildInteresadoConfirmacionHtml(p: InteresadoConfirmacionParams): strin
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no responda a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -672,7 +672,7 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no responda a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>
@@ -1133,7 +1133,7 @@ function buildPaymentLinkHtml(
                 Link de pago
               </h1>
               <p style="margin: 0 0 24px; font-size: 16px; line-height: 1.6; color: #4b5563;">
-                Hola ${escapeHtml(nombre)}, tiene un pago pendiente asociado a su proceso de arrendamiento. A continuacion encontrará los detalles:
+                Hola ${escapeHtml(nombre)}, tiene un pago pendiente asociado a su proceso de arrendamiento. A continuación encontrará los detalles:
               </p>
 
               <!-- Payment details box -->
@@ -1174,7 +1174,7 @@ function buildPaymentLinkHtml(
               <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
 
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
-                Si el boton no funciona, copie y pegue este enlace en su navegador:
+                Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
               <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
                 ${paymentUrl}
@@ -1189,7 +1189,7 @@ function buildPaymentLinkHtml(
                 &copy; ${new Date().getFullYear()} Cofianza. Todos los derechos reservados.
               </p>
               <p style="margin: 8px 0 0; font-size: 12px; color: #d1d5db;">
-                Este es un correo automatico, por favor no responda a este mensaje.
+                Este es un correo automático, por favor no responda a este mensaje.
               </p>
             </td>
           </tr>

@@ -20,6 +20,8 @@ const HORAS_ENLACE_VERIFICACION = 24;
 const MENSAJE_NIT_REGISTRADO =
   'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.';
 
+const MENSAJE_ENLACE_INVALIDO = 'El enlace de verificación no es válido o ya venció. Solicite uno nuevo.';
+
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -385,7 +387,7 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
     .maybeSingle<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
 
   if (!tokenData) {
-    throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_VERIFICATION_TOKEN');
   }
 
   // Idempotencia: si el enlace ya se usó (doble click en el correo, o el
@@ -399,13 +401,13 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
       .maybeSingle();
     const perfilVerificado = perfilRow as { email_verified_at: string | null } | null;
     if (perfilVerificado?.email_verified_at) {
-      return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesion.' };
+      return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesión.' };
     }
-    throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_VERIFICATION_TOKEN');
   }
 
   if (new Date(tokenData.expires_at) < new Date()) {
-    throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
+    throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_VERIFICATION_TOKEN');
   }
 
   // Primero se activa la cuenta y solo después se gasta el enlace. Antes se
@@ -426,12 +428,12 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
 
   // La cuenta ya no estaba pendiente (se verificó por otro enlace): no se tocó.
   if (!activada) {
-    return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesion.' };
+    return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesión.' };
   }
 
   logger.info({ userId: tokenData.user_id }, 'Email verificado y cuenta activada');
 
-  return { message: 'Email verificado. Su cuenta esta activa, ya puede iniciar sesion.' };
+  return { message: 'Correo verificado. Su cuenta está activa y ya puede iniciar sesión.' };
 }
 
 /**
@@ -474,7 +476,7 @@ export async function activarAutorregistroPendiente(userId: string): Promise<boo
 }
 
 export async function resendVerification({ email }: ResendVerificationInput): Promise<{ message: string }> {
-  const genericMessage = 'Si el email existe en nuestro sistema, recibirá un nuevo enlace de verificacion.';
+  const genericMessage = 'Si el email existe en nuestro sistema, recibirá un nuevo enlace de verificación.';
 
   const { data: userResult, error: rpcError } = await supabase
     .rpc('find_user_by_email' as never, { user_email: email } as never)

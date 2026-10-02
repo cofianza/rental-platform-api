@@ -59,11 +59,11 @@ export const resetTokenParamsSchema = z.object({
 export const updateMyProfileSchema = z.object({
   nombre: z.string().trim().min(2, 'Mínimo 2 caracteres').max(100, 'Máximo 100 caracteres'),
   apellido: z.string().trim().min(2, 'Mínimo 2 caracteres').max(100, 'Máximo 100 caracteres'),
-  // E.164 simple: opcional `+`, 7-15 digitos. La UI compone +<lada><numero>.
+  // E.164 simple: opcional `+`, 7-15 digitos. La UI compone +<indicativo><numero>.
   telefono: z
     .string()
     .trim()
-    .regex(/^\+?\d{7,15}$/, 'Teléfono inválido (incluye lada, ej: +573001234567)')
+    .regex(/^\+?\d{7,15}$/, 'Teléfono inválido (incluya el indicativo del país, ej: +573001234567)')
     .nullish()
     .transform((v) => (v == null || v === '' ? null : v)),
   tipo_documento: z.enum(['cc', 'ce', 'ppt', 'pep', 'ti', 'nit', 'pasaporte']).nullish(),
