@@ -6,6 +6,8 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import http from 'node:http';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 
@@ -51,5 +53,13 @@ describe('trust proxy en Railway', () => {
 
   it('sin borde (solo el cliente) sigue siendo el cliente', async () => {
     expect(await ipVista('189.237.25.152')).toBe('189.237.25.152');
+  });
+
+  // Los casos de arriba arman su propio Express con la constante: si app.ts
+  // volviera a `app.set('trust proxy', 1)`, ninguno fallaba.
+  it('app.ts configura el proxy con esa constante, y una sola vez', () => {
+    const appTs = readFileSync(path.resolve(__dirname, '../../app.ts'), 'utf8');
+    expect(appTs).toContain("app.set('trust proxy', TRUST_PROXY_HOPS);");
+    expect(appTs.match(/['"]trust proxy['"]/g)).toHaveLength(1);
   });
 });

@@ -74,10 +74,10 @@ describe('resendVerification — no reactiva cuentas desactivadas', () => {
     expect(mockSendEmail).toHaveBeenCalledOnce();
   });
 
-  it('con el correo escrito con mayúsculas encuentra la cuenta y reenvía', async () => {
+  it('con el correo escrito con mayúsculas y espacios alrededor encuentra la cuenta y reenvía', async () => {
     perfil.current = { email_verified_at: null, nombre: 'María', registration_source: 'email' };
     // Tal como llega del formulario: lo normaliza el schema de la ruta.
-    await resendVerification(resendVerificationSchema.parse({ email: 'Maria.Perez@Gmail.COM' }));
+    await resendVerification(resendVerificationSchema.parse({ email: ' Maria.Perez@Gmail.COM ' }));
     expect(mockRpc).toHaveBeenLastCalledWith('find_user_by_email', { user_email: 'maria.perez@gmail.com' });
     expect(tokensInsertados()).toBe(1);
     expect(mockSendEmail).toHaveBeenCalledOnce();

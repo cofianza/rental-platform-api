@@ -78,9 +78,9 @@ beforeEach(() => {
 });
 
 describe('forgotPassword', () => {
-  it('con el correo escrito con mayúsculas encuentra la cuenta y envía el enlace', async () => {
+  it('con el correo escrito con mayúsculas y espacios alrededor encuentra la cuenta y envía el enlace', async () => {
     // Tal como llega del formulario: lo normaliza el schema de la ruta.
-    await forgotPassword(forgotPasswordSchema.parse({ email: 'Maria.Perez@Gmail.COM' }), '1.2.3.4');
+    await forgotPassword(forgotPasswordSchema.parse({ email: ' Maria.Perez@Gmail.COM ' }), '1.2.3.4');
 
     expect(mockRpc).toHaveBeenCalledWith('find_user_by_email', { user_email: 'maria.perez@gmail.com' });
     expect(ops.some((o) => o.table === 'password_reset_tokens' && o.method === 'insert')).toBe(true);
