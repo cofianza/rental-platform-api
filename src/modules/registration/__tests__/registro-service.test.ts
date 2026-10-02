@@ -16,7 +16,7 @@ const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser } = 
   };
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'insert', 'update', 'eq', 'is', 'limit']) {
+    for (const m of ['select', 'insert', 'update', 'eq', 'is', 'gt', 'limit']) {
       chain[m] = (...args: unknown[]) => {
         ops.push({ table, method: m, args });
         return chain;
@@ -32,7 +32,7 @@ const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser } = 
     ops,
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     resetQueues: () => queues.clear(),
-    mockDeleteUser: vi.fn(async () => ({ error: null })),
+    mockDeleteUser: vi.fn(async (..._args: unknown[]): Promise<{ error: { message: string } | null }> => ({ error: null })),
     mockCreateUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
   };
 });
@@ -45,11 +45,18 @@ vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: 
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'http://localhost:3000' } }));
 vi.mock('@/lib/email', () => ({ sendVerificationEmail: vi.fn(async () => undefined) }));
 vi.mock('@/lib/tenantScope', () => ({ ensureOrgConOwner: vi.fn() }));
+vi.mock('@/lib/companyConfig', () => ({ getCompany: async () => ({ email: 'contacto@cofianza.co' }) }));
+vi.mock('@/lib/auditLog', () => ({
+  logAudit: vi.fn(),
+  AUDIT_ACTIONS: { USER_DELETED: 'user_deleted' },
+  AUDIT_ENTITIES: { USER: 'user' },
+}));
 
 import { registerInmobiliaria, registerPropietario } from '../registration.service';
 import type { RegisterInmobiliariaInput, RegisterPropietarioInput } from '../registration.schema';
 import { sendVerificationEmail } from '@/lib/email';
 import { logger } from '@/lib/logger';
+import { logAudit } from '@/lib/auditLog';
 
 const comunes = {
   email: 'ana@ejemplo.co',
@@ -94,6 +101,7 @@ beforeEach(() => {
   mockCreateUser.mockClear();
   vi.mocked(logger.info).mockClear();
   vi.mocked(logger.error).mockClear();
+  vi.mocked(logAudit).mockClear();
 });
 
 describe('registerInmobiliaria', () => {
@@ -156,6 +164,96 @@ describe('registerInmobiliaria', () => {
     });
     expect(mockDeleteUser).toHaveBeenCalledWith('user-1');
     expect(updatesDePerfil()).toHaveLength(1);
+  });
+});
+
+// Un registro de inmobiliaria que nunca verificó el correo retenía su NIT para
+// siempre: quien tecleó mal el correo no podía volver a registrarse y leía
+// «pídale al titular que lo invite». Solo ese caso libera el NIT, y solo cuando
+// su enlace de verificación ya venció.
+describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
+  const SIN_VERIFICAR = { data: { id: 'viejo', registration_source: 'email', email_verified_at: null }, error: null };
+  const registrar = () => registerInmobiliaria(INMOBILIARIA, '1.2.3.4', 'test');
+  const consultaDeTokens = () => ops.filter((o) => o.table === 'email_verification_tokens');
+
+  it('autorregistro sin verificar con el enlace vencido: borra esa cuenta y sigue con el alta', async () => {
+    enqueue('perfiles', SIN_VERIFICAR);
+    enqueue('email_verification_tokens', { data: null, error: null }); // no le queda enlace vigente
+
+    await expect(registrar()).resolves.toMatchObject({ message: expect.stringContaining('Registro exitoso') });
+
+    // Pregunta por un enlace sin usar y sin vencer de ESA cuenta.
+    const [, porCuenta, sinUsar, sinVencer] = consultaDeTokens();
+    expect(porCuenta).toMatchObject({ method: 'eq', args: ['user_id', 'viejo'] });
+    expect(sinUsar).toMatchObject({ method: 'is', args: ['used_at', null] });
+    expect(sinVencer).toMatchObject({ method: 'gt', args: ['expires_at', expect.any(String)] });
+    expect(Math.abs(Date.parse(sinVencer.args[1] as string) - Date.now())).toBeLessThan(5000);
+
+    expect(mockDeleteUser).toHaveBeenCalledTimes(1);
+    expect(mockDeleteUser).toHaveBeenCalledWith('viejo');
+    expect(mockCreateUser).toHaveBeenCalledTimes(1);
+    expect(logAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ usuarioId: null, accion: 'user_deleted', entidadId: 'viejo' }),
+    );
+  });
+
+  it('autorregistro sin verificar con el enlace vigente: 409 que dice qué hacer, y no borra nada', async () => {
+    enqueue('perfiles', SIN_VERIFICAR);
+    enqueue('email_verification_tokens', { data: { id: 'token-vigente' }, error: null });
+
+    const error = await registrar().catch((e) => e);
+
+    expect(error).toMatchObject({ statusCode: 409, errorCode: 'NIT_ALREADY_EXISTS' });
+    expect(error.message).toBe(
+      'Ya hay un registro con este NIT pendiente de verificar el correo. Revise su bandeja de entrada (y el spam). ' +
+        'Si escribió mal el correo, podrá registrarse de nuevo en 24 horas o escribirnos a contacto@cofianza.co.',
+    );
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['verificada', { registration_source: 'email', email_verified_at: '2026-09-01T00:00:00Z' }],
+    ['creada por un administrador', { registration_source: 'admin', email_verified_at: null }],
+    ['de un miembro invitado', { registration_source: 'invitacion_miembro', email_verified_at: '2026-09-01T00:00:00Z' }],
+    ['sin origen registrado', { registration_source: null, email_verified_at: null }],
+  ])('cuenta %s: el 409 de siempre, y nunca se borra', async (_caso, estado) => {
+    enqueue('perfiles', { data: { id: 'viejo', ...estado }, error: null });
+
+    await expect(registrar()).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'NIT_ALREADY_EXISTS',
+      message: 'Ya hay una inmobiliaria registrada con este NIT. Pídale al titular de la cuenta que lo invite a su equipo.',
+    });
+    expect(consultaDeTokens()).toHaveLength(0);
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('si no se puede saber si el enlace sigue vigente, no borra', async () => {
+    enqueue('perfiles', SIN_VERIFICAR);
+    enqueue('email_verification_tokens', { data: null, error: { message: 'connection reset' } });
+
+    await expect(registrar()).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'NIT_ALREADY_EXISTS',
+      message: expect.stringContaining('pendiente de verificar el correo'),
+    });
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
+  });
+
+  it('si la cuenta vencida no se puede borrar, responde 409 con el contacto y no crea otra', async () => {
+    enqueue('perfiles', SIN_VERIFICAR);
+    mockDeleteUser.mockResolvedValueOnce({ error: { message: 'Database error deleting user' } });
+
+    await expect(registrar()).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'NIT_ALREADY_EXISTS',
+      message: 'Ya hay un registro con este NIT que quedó sin verificar y no pudimos liberarlo. Escríbanos a contacto@cofianza.co y lo resolvemos.',
+    });
+    expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(logAudit).not.toHaveBeenCalled();
   });
 });
 
