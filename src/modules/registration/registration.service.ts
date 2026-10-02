@@ -408,33 +408,69 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
     throw AppError.badRequest('Token de verificacion invalido o expirado', 'INVALID_VERIFICATION_TOKEN');
   }
 
-  // Marcar token como usado
-  await (supabase
+  // Primero se activa la cuenta y solo después se gasta el enlace. Antes se
+  // marcaba usado de entrada y no se revisaba ninguna escritura: un fallo a
+  // medias respondía «verificado» y dejaba a la persona sin cuenta activa y sin
+  // enlace. Si algo falla responde 500 y el mismo enlace sirve para reintentar
+  // (las tres escrituras se pueden repetir sin daño).
+  const activada = await activarAutorregistroPendiente(tokenData.user_id);
+
+  const { error: tokenError } = await (supabase
     .from('email_verification_tokens' as string) as ReturnType<typeof supabase.from>)
     .update({ used_at: new Date().toISOString() } as never)
     .eq('id', tokenData.id);
+  if (tokenError) {
+    logger.error({ error: tokenError.message, userId: tokenData.user_id }, 'Verificación de correo: no se pudo marcar el enlace como usado');
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos completar la verificación. Inténtelo de nuevo.');
+  }
 
-  // Marcar email como verificado y activar la cuenta. El registro arranca
-  // en estado='inactivo' como medida anti-bot/anti-spam; al verificar el
-  // email (prueba de control sobre la casilla) consideramos legitimo el
-  // alta y activamos el perfil para que pueda iniciar sesion.
-  const nowIso = new Date().toISOString();
-  await (supabase
-    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
-    .update({
-      email_verified_at: nowIso,
-      estado: 'activo',
-    } as never)
-    .eq('id', tokenData.user_id);
-
-  // Confirmar email en Supabase Auth
-  await supabaseAuth.auth.admin.updateUserById(tokenData.user_id, {
-    email_confirm: true,
-  });
+  // La cuenta ya no estaba pendiente (se verificó por otro enlace): no se tocó.
+  if (!activada) {
+    return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesion.' };
+  }
 
   logger.info({ userId: tokenData.user_id }, 'Email verificado y cuenta activada');
 
   return { message: 'Email verificado. Su cuenta esta activa, ya puede iniciar sesion.' };
+}
+
+/**
+ * Da por verificado el correo de un autorregistro pendiente y activa su cuenta.
+ * El registro arranca en estado='inactivo' como medida anti-bot/anti-spam; abrir
+ * un enlace que llegó a ese correo prueba el control de la casilla.
+ *
+ * Devuelve false, sin tocar nada, si la cuenta no es un autorregistro pendiente:
+ * una ya verificada pudo desactivarla un administrador y un enlace que siga
+ * vigente no la reactiva.
+ *
+ * Revisa cada escritura y lanza si alguna falla: quien llama no gasta su enlace
+ * hasta que esto termine bien. Primero Auth y después el perfil: si falla el
+ * segundo, el reenvío de verificación todavía sirve (mira el perfil); al revés,
+ * la cuenta quedaba verificada en el perfil, sin poder entrar y sin reenvío.
+ */
+export async function activarAutorregistroPendiente(userId: string): Promise<boolean> {
+  function fallo(paso: string, error: { message: string }): never {
+    logger.error({ error: error.message, userId }, `Activación de la cuenta: falló ${paso}`);
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos activar su cuenta. Inténtelo de nuevo.');
+  }
+  const perfiles = () => supabase.from('perfiles' as string) as ReturnType<typeof supabase.from>;
+
+  const { data: perfil, error: lecturaError } = await perfiles()
+    .select('registration_source, email_verified_at')
+    .eq('id', userId)
+    .maybeSingle();
+  if (lecturaError) fallo('la lectura del perfil', lecturaError);
+  if (!perfil || !esAutorregistroSinVerificar(perfil as EstadoVerificacion)) return false;
+
+  const { error: authError } = await supabaseAuth.auth.admin.updateUserById(userId, { email_confirm: true });
+  if (authError) fallo('la confirmación del correo en Auth', authError);
+
+  const { error: perfilError } = await perfiles()
+    .update({ email_verified_at: new Date().toISOString(), estado: 'activo' } as never)
+    .eq('id', userId);
+  if (perfilError) fallo('la activación del perfil', perfilError);
+
+  return true;
 }
 
 export async function resendVerification({ email }: ResendVerificationInput): Promise<{ message: string }> {
