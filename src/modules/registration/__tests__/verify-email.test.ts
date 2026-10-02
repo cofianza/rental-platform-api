@@ -116,6 +116,23 @@ describe('verifyEmail', () => {
     expect(escrituras()).toEqual([]);
   });
 
+  // Un fallo de la base al leer no es un enlace inválido: con 400 la persona
+  // leía «no es válido o ya venció» de un enlace que sí servía.
+  it('si no se puede leer el enlace: 500, no «enlace inválido», y nada escrito', async () => {
+    enqueue(TOKENS, { data: null, error: { message: 'connection reset' } });
+
+    await expect(verifyEmail('a'.repeat(64))).rejects.toMatchObject({ statusCode: 500, errorCode: 'INTERNAL_ERROR' });
+    expect(escrituras()).toEqual([]);
+  });
+
+  it('enlace ya usado y no se puede leer el perfil: 500, no «enlace inválido»', async () => {
+    enqueue(TOKENS, enlace({ used_at: '2026-09-30T10:00:00Z' }));
+    enqueue('perfiles', { data: null, error: { message: 'connection reset' } });
+
+    await expect(verifyEmail('a'.repeat(64))).rejects.toMatchObject({ statusCode: 500, errorCode: 'INTERNAL_ERROR' });
+    expect(escrituras()).toEqual([]);
+  });
+
   // Un segundo enlace que siga vigente no reactiva una cuenta ya verificada
   // (pudo desactivarla un administrador), ni una que no sea un autorregistro.
   it.each([

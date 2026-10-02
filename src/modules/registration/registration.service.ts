@@ -420,13 +420,21 @@ export async function registerInmobiliaria(
 }
 
 export async function verifyEmail(token: string): Promise<{ message: string }> {
+  // Una consulta que falla no es un enlace inválido: responde 500 y el mismo
+  // enlace sirve para reintentar. Con el 400 de antes la persona leía «el enlace
+  // no es válido o ya venció» de un enlace que sí servía.
+  function fallo(que: string, error: { message: string }, userId?: string): never {
+    logger.error({ error: error.message, userId }, `Verificación de correo: no se pudo ${que}`);
+    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos completar la verificación. Inténtelo de nuevo.');
+  }
   const tokenHash = hashToken(token);
 
-  const { data: tokenData } = await supabase
+  const { data: tokenData, error: lecturaError } = await supabase
     .from('email_verification_tokens' as string)
     .select('id, user_id, expires_at, used_at')
     .eq('token_hash', tokenHash)
     .maybeSingle<{ id: string; user_id: string; expires_at: string; used_at: string | null }>();
+  if (lecturaError) fallo('leer el enlace', lecturaError);
 
   if (!tokenData) {
     throw AppError.badRequest(MENSAJE_ENLACE_INVALIDO, 'INVALID_VERIFICATION_TOKEN');
@@ -436,11 +444,12 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
   // usuario lo reabre) y la cuenta ya quedó verificada, respondemos éxito en
   // vez de un "enlace inválido" alarmante — la cuenta ya está activa.
   if (tokenData.used_at) {
-    const { data: perfilRow } = await (supabase
+    const { data: perfilRow, error: perfilError } = await (supabase
       .from('perfiles' as string) as ReturnType<typeof supabase.from>)
       .select('email_verified_at')
       .eq('id', tokenData.user_id)
       .maybeSingle();
+    if (perfilError) fallo('leer el perfil', perfilError, tokenData.user_id);
     const perfilVerificado = perfilRow as { email_verified_at: string | null } | null;
     if (perfilVerificado?.email_verified_at) {
       return { message: 'Su correo ya estaba verificado. Ya puede iniciar sesión.' };
@@ -463,10 +472,7 @@ export async function verifyEmail(token: string): Promise<{ message: string }> {
     .from('email_verification_tokens' as string) as ReturnType<typeof supabase.from>)
     .update({ used_at: new Date().toISOString() } as never)
     .eq('id', tokenData.id);
-  if (tokenError) {
-    logger.error({ error: tokenError.message, userId: tokenData.user_id }, 'Verificación de correo: no se pudo marcar el enlace como usado');
-    throw new AppError(500, 'INTERNAL_ERROR', 'No pudimos completar la verificación. Inténtelo de nuevo.');
-  }
+  if (tokenError) fallo('marcar el enlace como usado', tokenError, tokenData.user_id);
 
   // La cuenta ya no estaba pendiente (se verificó por otro enlace): no se tocó.
   if (!activada) {
