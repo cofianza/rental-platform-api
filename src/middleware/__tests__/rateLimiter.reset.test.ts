@@ -50,4 +50,12 @@ describe('passwordResetLimiter', () => {
     expect(await pedir({ email: 12345 })).toBe(200);
     expect(await pedir({ email: { a: 1 } })).toBe(200);
   });
+
+  // String(['ana@correo.co']) es «ana@correo.co»: ese cuerpo, que validate rechaza
+  // sin enviar ningún correo, le gastaba el cupo a la dueña del correo.
+  it('un correo que no llega como texto cuenta contra la IP, no contra ese correo', async () => {
+    for (let i = 0; i < 3; i++) expect(await pedir({ email: ['victima@correo.co'] }, '198.51.100.9')).toBe(200);
+    expect(await pedir({ email: ['victima@correo.co'] }, '198.51.100.9')).toBe(429);
+    expect(await pedir({ email: 'victima@correo.co' }, '203.0.113.50')).toBe(200);
+  });
 });

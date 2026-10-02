@@ -92,7 +92,11 @@ export const passwordResetLimiter = rateLimit({
     // Misma normalización que forgotPasswordSchema (recorte + minúsculas): va antes
     // de validate, y sin el recorte cada variante con espacios del mismo correo
     // tendría su propio cupo (y el buzón recibiría más de 3 enlaces por hora).
-    const email = String((req.body as { email?: unknown })?.email ?? '').trim().toLowerCase();
+    // Solo un texto forma la clave: String(['ana@correo.co']) da «ana@correo.co»,
+    // y un cuerpo así (que validate rechaza, sin enviar nada) le gastaba el cupo
+    // a la dueña de ese correo. Lo que no es texto cuenta contra la IP.
+    const crudo = (req.body as { email?: unknown })?.email;
+    const email = typeof crudo === 'string' ? crudo.trim().toLowerCase() : '';
     return email || (req.ip ?? 'unknown');
   },
   validate: false,
