@@ -201,6 +201,22 @@ describe('correo de no aprobable', () => {
 // Resend no lanza: devuelve { error }. Quien rota el enlace del prospecto
 // (expediente-soportes) necesita el error para no responder «enviado».
 describe('correo del responsable / enlace del prospecto', () => {
+  // Es también el correo de los avisos internos (p. ej. inmobiliaria recién
+  // registrada), cuyo mensaje lleva datos que escribió quien se registra.
+  it('el título y el mensaje salen escapados', async () => {
+    await sendResponsableAsignadoEmail({
+      email: 'admin@cofianza.co',
+      nombre: 'Admin',
+      titulo: 'Nueva inmobiliaria registrada',
+      mensaje: `Inmobiliaria ${PHISHING} (NIT 900123456-8), de Medellín, se registró en Cofianza.`,
+      link: '/admin/inmobiliarias',
+      frontend_url: 'https://cofianza.co',
+    });
+    expect(html()).not.toContain('<a href="https://evil.co"');
+    expect(html()).toContain('Inmobiliaria &lt;a href=&quot;https://evil.co&quot;&gt;Paga aquí&lt;/a&gt; (NIT 900123456-8)');
+    expect(html()).toContain('href="https://cofianza.co/admin/inmobiliarias"');
+  });
+
   it('si Resend devuelve error, el helper lanza', async () => {
     mockSend.mockResolvedValueOnce({ data: null, error: { message: 'domain not verified' } } as never);
     await expect(

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ============================================================
 // Registro v2: los UPDATE secundarios (precarga de «Datos para contrato» y
@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // principal sí la revierte. Mismo mock de Supabase con colas por tabla.
 // ============================================================
 
-const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser } = vi.hoisted(() => {
+const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser, mockAvisarAdmins } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -34,6 +34,7 @@ const { mockFrom, ops, enqueue, resetQueues, mockDeleteUser, mockCreateUser } = 
     resetQueues: () => queues.clear(),
     mockDeleteUser: vi.fn(async (..._args: unknown[]): Promise<{ error: { message: string } | null }> => ({ error: null })),
     mockCreateUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } }, error: null })),
+    mockAvisarAdmins: vi.fn(async (_aviso: Record<string, unknown>) => undefined),
   };
 });
 
@@ -51,6 +52,7 @@ vi.mock('@/lib/auditLog', () => ({
   AUDIT_ACTIONS: { USER_DELETED: 'user_deleted' },
   AUDIT_ENTITIES: { USER: 'user' },
 }));
+vi.mock('@/modules/pagos/pagos.service', () => ({ avisarAdministradores: mockAvisarAdmins }));
 
 import { registerInmobiliaria, registerPropietario } from '../registration.service';
 import type { RegisterInmobiliariaInput, RegisterPropietarioInput } from '../registration.schema';
@@ -102,7 +104,11 @@ beforeEach(() => {
   vi.mocked(logger.info).mockClear();
   vi.mocked(logger.error).mockClear();
   vi.mocked(logAudit).mockClear();
+  mockAvisarAdmins.mockClear();
 });
+// El aviso a los administradores sale sin esperarlo (import dinámico): se deja
+// terminar antes del siguiente test para que no cuente en el que no es.
+afterEach(() => vi.dynamicImportSettled());
 
 describe('registerInmobiliaria', () => {
   it('precarga los datos para contrato y guarda los datos comerciales en UPDATE separados', async () => {
@@ -254,6 +260,81 @@ describe('registerInmobiliaria — el NIT ya lo tiene otra cuenta', () => {
     });
     expect(mockCreateUser).not.toHaveBeenCalled();
     expect(logAudit).not.toHaveBeenCalled();
+  });
+});
+
+// El formulario le promete a la inmobiliaria contacto «en menos de 24 horas» y
+// nadie en Cofianza se enteraba del alta.
+describe('registerInmobiliaria — aviso a los administradores', () => {
+  const avisoEnviado = async () => {
+    await vi.dynamicImportSettled();
+    expect(mockAvisarAdmins).toHaveBeenCalledTimes(1);
+    return mockAvisarAdmins.mock.calls[0][0] as { tipo: string; titulo: string; mensaje: string; link: string };
+  };
+
+  it('avisa una vez, con los datos del registro y el enlace al panel', async () => {
+    await registerInmobiliaria(
+      { ...INMOBILIARIA, afianzadora_tipo: 'afianzadora', afianzadora_actual: 'Fianzas del Norte' },
+      '1.2.3.4',
+      'test',
+    );
+
+    const aviso = await avisoEnviado();
+    expect(aviso).toMatchObject({
+      tipo: 'inmobiliaria.registrada',
+      titulo: 'Nueva inmobiliaria registrada',
+      link: '/admin/inmobiliarias',
+    });
+    expect(aviso.mensaje).toBe(
+      'Inmobiliaria Norte S.A.S. (NIT 900123456-8), de Medellín, se registró en Cofianza y espera que la contactemos ' +
+        'en menos de 24 horas para firmar el contrato marco. ' +
+        'Inmuebles gestionados: 21-50 · Cómo nos conoció: evento o feria · Página web: https://inmonorte.co · ' +
+        'Respaldo actual: afianzadora (Fianzas del Norte) · Representante: Luis Gómez, Director comercial · ' +
+        'Contacto: ana@ejemplo.co, +57 3001112233',
+    );
+  });
+
+  it('lo que la inmobiliaria no llenó sale como «no indicó»', async () => {
+    await registerInmobiliaria(
+      { ...INMOBILIARIA, inmuebles_gestionados: undefined, sitio_web: undefined, origen: undefined, cargo_representante: undefined },
+      '1.2.3.4',
+      'test',
+    );
+
+    const { mensaje } = await avisoEnviado();
+    expect(mensaje).toContain(
+      'Inmuebles gestionados: no indicó · Cómo nos conoció: no indicó · Página web: no indicó · Respaldo actual: no indicó · Representante: Luis Gómez · Contacto:',
+    );
+  });
+
+  it('el mensaje va en texto plano: lo escapa el correo al armar el HTML, no el registro', async () => {
+    await registerInmobiliaria({ ...INMOBILIARIA, razon_social: 'Inmobiliaria <b>Norte</b> & Cía' }, '1.2.3.4', 'test');
+
+    const { mensaje } = await avisoEnviado();
+    expect(mensaje).toContain('Inmobiliaria <b>Norte</b> & Cía (NIT 900123456-8)');
+  });
+
+  it('si el aviso falla, el registro termina bien igual', async () => {
+    mockAvisarAdmins.mockRejectedValueOnce(new Error('sin conexión'));
+
+    await expect(registerInmobiliaria(INMOBILIARIA, '1.2.3.4', 'test')).resolves.toMatchObject({
+      message: expect.stringContaining('Registro exitoso'),
+    });
+    await avisoEnviado();
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'sin conexión', userId: 'user-1' }),
+      'No se pudo avisar a los administradores del registro de la inmobiliaria',
+    );
+  });
+
+  it('no avisa de un alta que no terminó, ni del registro de un propietario', async () => {
+    enqueue('perfiles', { data: null, error: null }, { error: { message: 'duplicate key', code: '23505' } });
+    await expect(registerInmobiliaria(INMOBILIARIA, '1.2.3.4', 'test')).rejects.toMatchObject({ statusCode: 409 });
+    await registerPropietario(PROPIETARIO, '1.2.3.4', 'test');
+
+    await vi.dynamicImportSettled();
+    expect(mockAvisarAdmins).not.toHaveBeenCalled();
   });
 });
 

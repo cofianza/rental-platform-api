@@ -125,6 +125,60 @@ async function liberarNitDeRegistroVencido(
   logger.info({ userId: dueno.id }, 'Registro sin verificar con el enlace vencido: se borró para liberar su NIT');
 }
 
+// «¿Cómo nos conoció?», como lo lee la persona en el formulario.
+const ORIGEN_LEGIBLE: Record<string, string> = {
+  inmobiliaria: 'una inmobiliaria',
+  redes: 'redes sociales',
+  recomendacion: 'recomendación',
+  google: 'Google o internet',
+  evento: 'evento o feria',
+  otro: 'otro',
+};
+
+/**
+ * Aviso interno (en la plataforma y por correo) a los administradores activos:
+ * el formulario le promete a la inmobiliaria contacto en menos de 24 horas y
+ * nadie en Cofianza se enteraba del alta. Nunca lanza: para entonces el
+ * registro ya terminó bien.
+ * El mensaje va en texto plano y sin escapar: el correo lo escapa al armar el
+ * HTML (sendResponsableAsignadoEmail) y el panel lo pinta como texto.
+ */
+async function avisarInmobiliariaRegistrada(userId: string, input: RegisterInmobiliariaInput): Promise<void> {
+  try {
+    const dato = (valor?: string) => valor?.trim() || 'no indicó';
+    const tipoRespaldo = input.afianzadora_tipo === 'ninguna' ? 'ninguno' : input.afianzadora_tipo;
+    const respaldo =
+      tipoRespaldo && input.afianzadora_actual ? `${tipoRespaldo} (${input.afianzadora_actual})` : tipoRespaldo || input.afianzadora_actual;
+    const representante = [
+      `${input.nombre_representante_nombre} ${input.nombre_representante_apellido}`.trim(),
+      input.cargo_representante,
+    ].filter(Boolean).join(', ');
+
+    // Import dinámico: el aviso a los administradores vive en pagos.service, que
+    // arrastra la pasarela; no hace falta cargarlo para registrar.
+    const { avisarAdministradores } = await import('@/modules/pagos/pagos.service');
+    await avisarAdministradores({
+      tipo: 'inmobiliaria.registrada',
+      titulo: 'Nueva inmobiliaria registrada',
+      mensaje:
+        `${input.razon_social} (NIT ${input.nit}), de ${input.ciudad}, se registró en Cofianza y espera que la contactemos ` +
+        'en menos de 24 horas para firmar el contrato marco. ' +
+        [
+          `Inmuebles gestionados: ${dato(input.inmuebles_gestionados)}`,
+          `Cómo nos conoció: ${dato(input.origen && ORIGEN_LEGIBLE[input.origen])}`,
+          `Página web: ${dato(input.sitio_web)}`,
+          `Respaldo actual: ${dato(respaldo)}`,
+          `Representante: ${representante}`,
+          `Contacto: ${input.email}, ${input.telefono}`,
+        ].join(' · '),
+      link: '/admin/inmobiliarias',
+      payload: { perfil_id: userId, nit: input.nit },
+    });
+  } catch (err) {
+    logger.error({ error: (err as Error)?.message, userId }, 'No se pudo avisar a los administradores del registro de la inmobiliaria');
+  }
+}
+
 export async function registerPropietario(
   input: RegisterPropietarioInput,
   ipAddress: string,
@@ -311,6 +365,10 @@ export async function registerInmobiliaria(
 
   await recordTermsAcceptance(userId, ipAddress, userAgent);
   await generateAndSendVerificationEmail(userId, email, nombre_representante_nombre);
+
+  // Al final y sin esperarlo: primero sale el correo de verificación (el que la
+  // persona necesita) y el aviso interno no demora ni tumba la respuesta.
+  void avisarInmobiliariaRegistrada(userId, input);
 
   logger.info({ userId, email, rol: 'inmobiliaria' }, 'Inmobiliaria registrada exitosamente');
 
