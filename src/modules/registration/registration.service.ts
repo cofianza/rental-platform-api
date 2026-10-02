@@ -114,8 +114,10 @@ async function liberarNitDeRegistroVencido(
 
   const { error: deleteError } = await supabaseAuth.auth.admin.deleteUser(dueno.id);
   if (deleteError) {
-    // La cascada no cubre todo: p. ej. la bitácora referencia a quien pidió
-    // recuperar la contraseña. No se fuerza; lo resuelve una persona.
+    // ponytail: la cascada no cubre todo. bitacora.usuario_id no tiene ON DELETE,
+    // así que una cuenta que pidió recuperar la contraseña no se puede borrar: no
+    // se fuerza y lo resuelve una persona. Salida: una migración que deje esa
+    // llave en ON DELETE SET NULL.
     logger.error({ error: deleteError.message, userId: dueno.id }, 'No se pudo borrar el registro sin verificar que retiene el NIT');
     throw AppError.conflict(
       `Ya hay un registro con este NIT que quedó sin verificar y no pudimos liberarlo. Escríbanos a ${contacto} y lo resolvemos.`,
@@ -165,6 +167,10 @@ async function avisarInmobiliariaRegistrada(userId: string, input: RegisterInmob
 
     // Import dinámico: el aviso a los administradores vive en pagos.service, que
     // arrastra la pasarela; no hace falta cargarlo para registrar.
+    // ponytail: ese helper les escribe a todos los administradores a la vez. Si
+    // algún día son tantos que Resend limita la ráfaga, el correo de alguno se
+    // pierde (queda el aviso en la plataforma y el motivo en el log); la salida
+    // es enviar en serie dentro del helper.
     const { avisarAdministradores } = await import('@/modules/pagos/pagos.service');
     await avisarAdministradores({
       tipo: 'inmobiliaria.registrada',
