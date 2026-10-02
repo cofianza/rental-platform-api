@@ -10,6 +10,7 @@ import { esGerenciaGeneral } from '@/lib/gerenciaGeneral';
 import { invalidateAuthCache, cerrarSesionesDe, primeAuthCache } from '@/middleware/auth';
 import { getPermissionsForRole } from '@/config/permissions';
 import { existeOtraCuentaConDocumento } from '@/modules/solicitantes/solicitantes.service';
+import { activarAutorregistroPendiente } from '@/modules/registration/registration.service';
 import { motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 import { errorNoAfianzableSegunCobro } from '@/modules/estudios/pago.guard';
 import type { UserRole } from '@/types/auth';
@@ -559,6 +560,15 @@ export async function resetPassword({ token, password }: ResetPasswordInput, ip?
     logger.error({ error: updateError.message }, 'Error al actualizar contrasena');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al restablecer la contrasena');
   }
+
+  // Cuenta recién registrada que aún no verificó el correo: el enlace de
+  // recuperación llegó a ese mismo correo, así que abrirlo prueba lo mismo que
+  // el de verificación. Antes cambiaba la clave y seguía sin poder entrar («Aún
+  // no ha verificado su correo»). Solo activa un autorregistro pendiente: nunca
+  // una cuenta ya verificada o creada por otro medio, que pudo desactivar un
+  // administrador. Va antes de gastar el token: si falla, el mismo enlace sirve
+  // para reintentar.
+  await activarAutorregistroPendiente(tokenData.user_id);
 
   // Marcar token como usado
   await (supabase

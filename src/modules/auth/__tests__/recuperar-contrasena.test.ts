@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ============================================================
-// «Recuperar contraseña» (forgotPassword) con Supabase simulado: colas de
-// resultados por tabla y `ops` con cada operación. La RPC find_user_by_email
-// compara EXACTO, como la de producción, y la cuenta está en minúsculas, que
-// es como Supabase Auth guarda los correos.
+// «Recuperar contraseña» (forgotPassword) y «restablecer» (resetPassword) con
+// Supabase simulado: colas de resultados por tabla y `ops` con cada operación,
+// también las llamadas a Auth. La RPC find_user_by_email compara EXACTO, como
+// la de producción, y la cuenta está en minúsculas, que es como Supabase Auth
+// guarda los correos.
 // ============================================================
 
-const { mockFrom, mockRpc, ops, resetQueues, mockSendReset } = vi.hoisted(() => {
+const { mockFrom, mockRpc, ops, enqueue, resetQueues, mockSendReset, mockUpdateUserById } = vi.hoisted(() => {
   type Res = Record<string, unknown>;
   const queues = new Map<string, Res[]>();
   const ops: Array<{ table: string; method: string; args: unknown[] }> = [];
@@ -42,12 +43,16 @@ const { mockFrom, mockRpc, ops, resetQueues, mockSendReset } = vi.hoisted(() => 
     enqueue: (table: string, ...items: Res[]) => queues.set(table, [...(queues.get(table) ?? []), ...items]),
     resetQueues: () => queues.clear(),
     mockSendReset: vi.fn(async (..._args: unknown[]) => undefined),
+    mockUpdateUserById: vi.fn(async (...args: unknown[]): Promise<{ error: { message: string } | null }> => {
+      ops.push({ table: 'auth', method: 'updateUserById', args });
+      return { error: null };
+    }),
   };
 });
 
 vi.mock('@/lib/supabase', () => ({
   supabase: { from: (t: string) => mockFrom(t), rpc: (fn: string, args: { user_email: string }) => mockRpc(fn, args) },
-  supabaseAuth: { auth: { admin: {} } },
+  supabaseAuth: { auth: { admin: { updateUserById: mockUpdateUserById } } },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }));
 vi.mock('@/config', () => ({ env: { FRONTEND_URL: 'https://www.cofianza.co' } }));
@@ -60,10 +65,11 @@ vi.mock('@/lib/email', () => ({ sendPasswordResetEmail: mockSendReset }));
 vi.mock('@/lib/tenantScope', () => ({ resolveRolMiembro: vi.fn() }));
 vi.mock('@/middleware/auth', () => ({ cerrarSesionesDe: vi.fn(), invalidateAuthCache: vi.fn(), primeAuthCache: vi.fn() }));
 
-import { forgotPassword } from '../auth.service';
+import { forgotPassword, resetPassword } from '../auth.service';
 import { forgotPasswordSchema } from '../auth.schema';
 import { logger } from '@/lib/logger';
 import { logAudit } from '@/lib/auditLog';
+import { cerrarSesionesDe } from '@/middleware/auth';
 
 beforeEach(() => {
   resetQueues();
@@ -114,5 +120,69 @@ describe('forgotPassword', () => {
     await forgotPassword({ email: 'maria.perez@gmail.com' }, '1.2.3.4');
     expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'Token de reset generado y email enviado');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
+// Una cuenta recién registrada que aún no verificó el correo podía restablecer
+// la clave y seguía sin poder entrar. El enlace de recuperación llegó a ese
+// mismo correo: completarlo la deja verificada, igual que el enlace de
+// verificación (misma función). Nunca reactiva otra clase de cuenta.
+describe('resetPassword', () => {
+  const TOKENS = 'password_reset_tokens';
+  const enlace = () => ({
+    data: { id: 'reset-1', user_id: 'user-1', expires_at: new Date(Date.now() + 3_600_000).toISOString(), used_at: null },
+    error: null,
+  });
+  const restablecer = () => resetPassword({ token: 'a'.repeat(64), password: 'NuevaClave123' }, '1.2.3.4');
+  /** Escrituras en orden: lo que recibió Auth y los UPDATE de cada tabla. */
+  const escrituras = () =>
+    ops
+      .filter((o) => o.method === 'update' || o.method === 'updateUserById')
+      .map((o) => (o.table === 'auth' ? `auth:${Object.keys(o.args[1] as object).join()}` : o.table));
+
+  it('autorregistro sin verificar: cambia la clave, deja la cuenta verificada y activa, y gasta el enlace', async () => {
+    enqueue(TOKENS, enlace());
+    enqueue('perfiles', { data: { registration_source: 'email', email_verified_at: null }, error: null });
+
+    await expect(restablecer()).resolves.toMatchObject({ message: expect.any(String) });
+
+    expect(escrituras()).toEqual(['auth:password', 'auth:email_confirm', 'perfiles', TOKENS]);
+    expect(mockUpdateUserById).toHaveBeenCalledWith('user-1', { email_confirm: true });
+    const perfil = ops.find((o) => o.table === 'perfiles' && o.method === 'update')!.args[0];
+    expect(perfil).toMatchObject({ estado: 'activo', email_verified_at: expect.any(String) });
+    expect(cerrarSesionesDe).toHaveBeenCalledWith('user-1');
+  });
+
+  it.each([
+    ['ya verificada (la pudo desactivar un administrador)', { registration_source: 'email', email_verified_at: '2026-09-01T00:00:00Z' }],
+    ['creada por un administrador', { registration_source: 'admin', email_verified_at: null }],
+    ['de la vitrina', { registration_source: 'vitrina_publica', email_verified_at: null }],
+  ])('cuenta %s: solo cambia la clave, no la activa', async (_caso, estado) => {
+    enqueue(TOKENS, enlace());
+    enqueue('perfiles', { data: estado, error: null });
+
+    await expect(restablecer()).resolves.toMatchObject({ message: expect.any(String) });
+
+    expect(escrituras()).toEqual(['auth:password', TOKENS]);
+  });
+
+  it('si la activación falla: error, y el enlace queda sin gastar para reintentar', async () => {
+    enqueue(TOKENS, enlace());
+    enqueue('perfiles', { data: { registration_source: 'email', email_verified_at: null }, error: null }, { error: { message: 'connection reset' } });
+
+    await expect(restablecer()).rejects.toMatchObject({ statusCode: 500 });
+
+    expect(escrituras()).toEqual(['auth:password', 'auth:email_confirm', 'perfiles']);
+    expect(cerrarSesionesDe).not.toHaveBeenCalled();
+  });
+
+  it('enlace desconocido, usado o vencido: 400 y no cambia nada', async () => {
+    enqueue(TOKENS, { data: null, error: { code: 'PGRST116', message: '0 rows' } });
+    await expect(restablecer()).rejects.toMatchObject({ statusCode: 400, errorCode: 'INVALID_RESET_TOKEN' });
+
+    enqueue(TOKENS, { data: { id: 'reset-1', user_id: 'user-1', expires_at: new Date(Date.now() - 1000).toISOString(), used_at: null }, error: null });
+    await expect(restablecer()).rejects.toMatchObject({ statusCode: 400, errorCode: 'INVALID_RESET_TOKEN' });
+
+    expect(escrituras()).toEqual([]);
   });
 });
