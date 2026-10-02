@@ -62,6 +62,8 @@ vi.mock('@/middleware/auth', () => ({ cerrarSesionesDe: vi.fn(), invalidateAuthC
 
 import { forgotPassword } from '../auth.service';
 import { forgotPasswordSchema } from '../auth.schema';
+import { logger } from '@/lib/logger';
+import { logAudit } from '@/lib/auditLog';
 
 beforeEach(() => {
   resetQueues();
@@ -87,5 +89,30 @@ describe('forgotPassword', () => {
 
     expect(ops).toHaveLength(0);
     expect(mockSendReset).not.toHaveBeenCalled();
+  });
+
+  // Resend no lanza cuando rechaza un correo; email.ts ahora sí. Si forgotPassword
+  // dejara pasar ese error, el 500 saldría solo con los correos que tienen cuenta.
+  it('si el proveedor rechaza el correo, responde igual que siempre y queda el motivo en el log', async () => {
+    mockSendReset.mockRejectedValueOnce(new Error('Resend validation_error: The notify.cofianza.co domain is not verified'));
+
+    await expect(forgotPassword({ email: 'maria.perez@gmail.com' }, '1.2.3.4')).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'maria.perez@gmail.com',
+        error: 'Resend validation_error: The notify.cofianza.co domain is not verified',
+      }),
+      'No se pudo enviar el email de recuperación',
+    );
+    expect(vi.mocked(logger.info).mock.calls.some(([, msg]) => String(msg).includes('enviado'))).toBe(false);
+    // El pedido sí queda en la bitácora: ocurrió, aunque el correo no saliera.
+    expect(logAudit).toHaveBeenCalledWith(expect.objectContaining({ accion: 'password_reset_request', usuarioId: 'user-1' }));
+  });
+
+  it('si sale, queda como enviado', async () => {
+    await forgotPassword({ email: 'maria.perez@gmail.com' }, '1.2.3.4');
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'Token de reset generado y email enviado');
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

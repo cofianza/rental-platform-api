@@ -402,10 +402,11 @@ async function generateAndSendVerificationEmail(
 
   try {
     await sendVerificationEmail(email, nombre, verifyUrl);
+    // Dentro del try: antes quedaba «enviado» aunque el correo no hubiera salido.
+    logger.info({ email, userId }, 'Email de verificacion enviado');
   } catch (emailError) {
-    logger.error({ error: emailError, email }, 'Error al enviar email de verificacion');
-    // No fallar el registro por error de email
+    // No fallar el registro por error de email: la cuenta ya existe y la
+    // persona puede pedir el reenvío.
+    logger.error({ error: (emailError as Error)?.message, email, userId }, 'Error al enviar email de verificacion');
   }
-
-  logger.info({ email, userId }, 'Email de verificacion enviado');
 }

@@ -48,6 +48,8 @@ vi.mock('@/lib/tenantScope', () => ({ ensureOrgConOwner: vi.fn() }));
 
 import { registerInmobiliaria, registerPropietario } from '../registration.service';
 import type { RegisterInmobiliariaInput, RegisterPropietarioInput } from '../registration.schema';
+import { sendVerificationEmail } from '@/lib/email';
+import { logger } from '@/lib/logger';
 
 const comunes = {
   email: 'ana@ejemplo.co',
@@ -90,6 +92,8 @@ beforeEach(() => {
   ops.length = 0;
   mockDeleteUser.mockClear();
   mockCreateUser.mockClear();
+  vi.mocked(logger.info).mockClear();
+  vi.mocked(logger.error).mockClear();
 });
 
 describe('registerInmobiliaria', () => {
@@ -179,5 +183,31 @@ describe('registerPropietario', () => {
     await expect(registerPropietario(PROPIETARIO, '1.2.3.4', 'test')).rejects.toMatchObject({ statusCode: 500 });
     expect(mockDeleteUser).toHaveBeenCalledWith('user-1');
     expect(ops.some((o) => o.table === 'email_verification_tokens')).toBe(false);
+  });
+});
+
+// Resend no lanza cuando rechaza un correo; email.ts ahora sí. El alta no se cae
+// por eso (la persona puede pedir el reenvío), pero ya no queda como «enviado».
+describe('correo de verificación', () => {
+  const enviado = () => vi.mocked(logger.info).mock.calls.some(([, msg]) => msg === 'Email de verificacion enviado');
+
+  it('si el proveedor lo rechaza, el registro termina bien y queda el motivo en el log', async () => {
+    vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('Resend rate_limit_exceeded: Too many requests'));
+
+    await expect(registerPropietario(PROPIETARIO, '1.2.3.4', 'test')).resolves.toMatchObject({
+      message: expect.stringContaining('Registro exitoso'),
+    });
+    expect(mockDeleteUser).not.toHaveBeenCalled();
+    expect(enviado()).toBe(false);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Resend rate_limit_exceeded: Too many requests', email: 'ana@ejemplo.co' }),
+      'Error al enviar email de verificacion',
+    );
+  });
+
+  it('si sale, queda como enviado', async () => {
+    await registerPropietario(PROPIETARIO, '1.2.3.4', 'test');
+    expect(enviado()).toBe(true);
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

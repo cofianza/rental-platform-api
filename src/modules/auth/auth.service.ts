@@ -489,9 +489,16 @@ export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string
     throw new AppError(500, 'INTERNAL_ERROR', 'Error interno del servidor');
   }
 
-  // Enviar email
+  // Enviar email. Si el proveedor lo rechaza no se lanza: un 500 solo para los
+  // correos que sí tienen cuenta revelaría cuáles existen. La respuesta sigue
+  // siendo la genérica y el motivo queda en el log.
   const resetUrl = `${env.FRONTEND_URL}/restablecer-contrasena?token=${rawToken}`;
-  await sendPasswordResetEmail(email, resetUrl);
+  try {
+    await sendPasswordResetEmail(email, resetUrl);
+    logger.info({ email, userId }, 'Token de reset generado y email enviado');
+  } catch (emailError) {
+    logger.error({ email, userId, error: (emailError as Error)?.message }, 'No se pudo enviar el email de recuperación');
+  }
 
   logAudit({
     usuarioId: userId,
@@ -501,8 +508,6 @@ export async function forgotPassword({ email }: ForgotPasswordInput, ip?: string
     detalle: { email },
     ip,
   });
-
-  logger.info({ email, userId }, 'Token de reset generado y email enviado');
 }
 
 export async function validateResetToken(token: string) {

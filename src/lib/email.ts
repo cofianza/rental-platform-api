@@ -1,4 +1,4 @@
-import { Resend } from 'resend';
+import { Resend, type CreateEmailOptions } from 'resend';
 import { env } from '@/config';
 import { logger } from '@/lib/logger';
 import { COMPANY } from '@/config/company';
@@ -26,6 +26,21 @@ const resend = new Resend(env.RESEND_API_KEY);
 const FROM_EMAIL = `Cofianza <${env.RESEND_FROM_EMAIL}>`;
 
 /**
+ * Único punto de envío de este archivo. Resend no lanza cuando rechaza un
+ * correo (cuota agotada, dominio sin verificar, destinatario inválido, corte de
+ * red): devuelve { data: null, error }. Sin mirarlo, el rechazo quedaba
+ * registrado como «enviado» y no había rastro de por qué el correo no llegó.
+ */
+async function enviar(correo: CreateEmailOptions): Promise<void> {
+  const { error } = await resend.emails.send(correo);
+  if (!error) return;
+  // El motivo se registra aquí: varios catch de más abajo pasan el Error como
+  // objeto y pino lo deja en {}.
+  logger.error({ to: correo.to, motivo: error.name, status: error.statusCode, error: error.message }, 'Resend rechazó el correo');
+  throw new Error(`Resend ${error.name}: ${error.message}`);
+}
+
+/**
  * Plazo del enlace tal como lo lee la persona. Los plazos largos —el de
  * autorizacion es DIAS_EXPIRACION_ESTUDIO * 24 (Flujo §14: 15 dias)— se dicen
  * en dias: "360 horas" no le dice nada a nadie. Menos de dos dias, o un numero
@@ -38,7 +53,7 @@ export function formatearPlazoEnlace(expiryHours: number): string {
 
 export async function sendPasswordResetEmail(to: string, resetUrl: string): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Recupere su contraseña - Cofianza',
@@ -56,7 +71,7 @@ export async function sendWelcomeEmail(to: string, nombre: string, tempPassword:
   const loginUrl = `${env.FRONTEND_URL}/login`;
 
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Bienvenido a Cofianza',
@@ -171,7 +186,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
 export async function sendEnlaceMagicoEmail(to: string, url: string): Promise<void> {
   const { whatsapp, email } = await soporte();
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Su enlace para entrar a Cofianza',
@@ -223,7 +238,7 @@ export async function sendEnlaceMagicoEmail(to: string, url: string): Promise<vo
 
 export async function sendVerificationEmail(to: string, nombre: string, verifyUrl: string): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Verifique su correo - Cofianza',
@@ -335,7 +350,7 @@ export async function sendEstudioFormEmail(
   expiryHours: number,
 ): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Complete su evaluación crediticia - Cofianza',
@@ -457,7 +472,7 @@ export async function sendInteresadoConfirmacionEmail(
   params: InteresadoConfirmacionParams,
 ): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Recibimos su interés — Cofianza',
@@ -559,7 +574,7 @@ export async function sendNuevoInteresadoEmail(
   params: NuevoInteresadoEmailParams,
 ): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: `Nuevo interesado en su inmueble — ${params.inmuebleLabel}`,
@@ -687,7 +702,7 @@ export async function sendAutorizacionEmail(
   solicitud: SolicitudAutorizacion,
 ): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Autorización consulta centrales de riesgo - Cofianza',
@@ -703,7 +718,7 @@ export async function sendAutorizacionEmail(
 
 export async function sendOtpEmail(to: string, nombre: string, codigo: string): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: 'Código de verificación - Cofianza',
@@ -929,7 +944,7 @@ export async function sendFirmaEmail(
   copy?: CopyFirmaEmail,
 ): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: copy?.asunto ?? 'Firma de contrato de arrendamiento - Cofianza',
@@ -1062,7 +1077,7 @@ export async function sendPaymentLinkEmail(
   context: { concepto: string; monto: string; expediente_numero: string },
 ): Promise<void> {
   try {
-    await resend.emails.send({
+    await enviar({
       from: FROM_EMAIL,
       to,
       subject: `Link de pago - ${context.concepto} - Cofianza`,
