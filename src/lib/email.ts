@@ -112,13 +112,13 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
               </p>
 
               <!-- Credentials box -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px;">
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Correo electrónico:</p>
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${escapeHtml(email)}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Contraseña temporal:</p>
-                    <p style="margin: 0; font-size: 18px; font-weight: 700; color: #0f766e; letter-spacing: 1px; font-family: monospace;">${tempPassword}</p>
+                    <p style="margin: 0; font-size: 18px; font-weight: 700; color: #047857; letter-spacing: 1px; font-family: monospace;">${tempPassword}</p>
                   </td>
                 </tr>
               </table>
@@ -129,7 +129,7 @@ function buildWelcomeHtml(nombre: string, email: string, tempPassword: string, l
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${loginUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
                             Iniciar sesión
                           </a>
@@ -191,7 +191,7 @@ export async function sendEnlaceMagicoEmail(to: string, url: string): Promise<vo
           </p>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 24px;"><tr><td align="center">
             <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-              <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+              <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                 <a href="${url}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">Entrar a Cofianza</a>
               </td>
             </tr></table>
@@ -204,7 +204,7 @@ export async function sendEnlaceMagicoEmail(to: string, url: string): Promise<vo
           </p>
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;" />
           <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">Si el botón no funciona, copie y pegue este enlace en su navegador:</p>
-          <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">${url}</p>
+          <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">${url}</p>
         </td></tr>
         <tr><td align="center" style="padding-top: 32px;">
           <p style="margin: 0; font-size: 12px; color: #9ca3af;">Este es un correo automático, por favor no lo responda.</p>
@@ -270,7 +270,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${verifyUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
                             Verificar correo
                           </a>
@@ -290,7 +290,7 @@ function buildVerificationHtml(nombre: string, verifyUrl: string): string {
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
                 Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
-              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
+              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">
                 ${verifyUrl}
               </p>
             </td>
@@ -368,7 +368,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${formUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
                             Completar formulario
                           </a>
@@ -388,7 +388,7 @@ function buildEstudioFormHtml(nombre: string, formUrl: string, expiryHours: numb
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
                 Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
-              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
+              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">
                 ${formUrl}
               </p>
             </td>
@@ -558,15 +558,15 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
               </p>
 
               <!-- Datos del interesado -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px;">
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Nombre:</p>
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${escapeHtml(p.interesadoNombre)}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">WhatsApp:</p>
-                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0f766e;">${escapeHtml(p.interesadoTelefono)}</p>
+                    <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #047857;">${escapeHtml(p.interesadoTelefono)}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Correo:</p>
-                    <p style="margin: 0 0 ${p.mensaje ? '16px' : '0'}; font-size: 16px; font-weight: 600; color: #0f766e;">${escapeHtml(p.interesadoEmail || 'No indicó')}</p>
+                    <p style="margin: 0 0 ${p.mensaje ? '16px' : '0'}; font-size: 16px; font-weight: 600; color: #047857;">${escapeHtml(p.interesadoEmail || 'No indicó')}</p>
                     ${p.mensaje ? `<p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Mensaje:</p><p style="margin: 0; font-size: 15px; color: #111827;">${escapeHtml(p.mensaje)}</p>` : ''}
                   </td>
                 </tr>
@@ -578,7 +578,7 @@ function buildNuevoInteresadoHtml(p: NuevoInteresadoEmailParams): string {
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${p.panelUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
                             Ver en mi panel
                           </a>
@@ -799,8 +799,8 @@ function buildOtpHtml(nombre: string, codigo: string): string {
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
                 <tr>
                   <td align="center">
-                    <div style="display: inline-block; background-color: #f0fdfa; border: 2px solid #99f6e4; border-radius: 12px; padding: 20px 40px;">
-                      <span style="font-size: 36px; font-weight: 700; color: #0f766e; letter-spacing: 8px; font-family: monospace;">${codigo}</span>
+                    <div style="display: inline-block; background-color: #ecfdf5; border: 2px solid #a7f3d0; border-radius: 12px; padding: 20px 40px;">
+                      <span style="font-size: 36px; font-weight: 700; color: #047857; letter-spacing: 8px; font-family: monospace;">${codigo}</span>
                     </div>
                   </td>
                 </tr>
@@ -900,7 +900,7 @@ function buildFirmaHtml(
               </p>
 
               <!-- Contract info -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px;">
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Inmueble:</p>
@@ -919,7 +919,7 @@ function buildFirmaHtml(
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${firmaUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
                             ${copy?.boton ?? 'Firmar contrato'}
                           </a>
@@ -939,7 +939,7 @@ function buildFirmaHtml(
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
                 Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
-              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
+              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">
                 ${firmaUrl}
               </p>
             </td>
@@ -1017,13 +1017,13 @@ function buildPaymentLinkHtml(
               </p>
 
               <!-- Payment details box -->
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px;">
                 <tr>
                   <td style="padding: 20px;">
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Concepto:</p>
                     <p style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #111827;">${context.concepto}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Monto:</p>
-                    <p style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: #0f766e;">${context.monto}</p>
+                    <p style="margin: 0 0 16px; font-size: 22px; font-weight: 700; color: #047857;">${context.monto}</p>
                     <p style="margin: 0 0 8px; font-size: 14px; color: #6b7280;">Estudio:</p>
                     <p style="margin: 0; font-size: 16px; font-weight: 600; color: #111827;">${formatNumeroEstudio(context.expediente_numero)}</p>
                   </td>
@@ -1036,7 +1036,7 @@ function buildPaymentLinkHtml(
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${paymentUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
                             Realizar pago
                           </a>
@@ -1056,7 +1056,7 @@ function buildPaymentLinkHtml(
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
                 Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
-              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
+              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">
                 ${paymentUrl}
               </p>
             </td>
@@ -1113,7 +1113,7 @@ function buildPasswordResetHtml(resetUrl: string): string {
                   <td align="center">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                       <tr>
-                        <td align="center" bgcolor="#0d9488" style="background-color: #0d9488; border-radius: 8px; mso-padding-alt: 14px 32px;">
+                        <td align="center" bgcolor="#047857" style="background-color: #047857; border-radius: 8px; mso-padding-alt: 14px 32px;">
                           <a href="${resetUrl}" target="_blank" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px; line-height: 1;">
                             Restablecer contraseña
                           </a>
@@ -1133,7 +1133,7 @@ function buildPasswordResetHtml(resetUrl: string): string {
               <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #9ca3af;">
                 Si el botón no funciona, copie y pegue este enlace en su navegador:
               </p>
-              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #0d9488; word-break: break-all;">
+              <p style="margin: 8px 0 0; font-size: 13px; line-height: 1.5; color: #047857; word-break: break-all;">
                 ${resetUrl}
               </p>
             </td>
