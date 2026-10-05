@@ -24,7 +24,7 @@ import {
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { escapeHtml } from '@/lib/escapeHtml';
 import { getCompany } from '@/lib/companyConfig';
-import { apelacionHtml, sendResponsableAsignadoEmail } from '@/modules/orchestrator/orchestrator.emails';
+import { apelacionHtml, logoCorreoHtml, sendResponsableAsignadoEmail } from '@/modules/orchestrator/orchestrator.emails';
 // Tope de canon (flujo del modulo de estudios §4.4). El estudio del
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
@@ -310,6 +310,7 @@ function enviarEmailInvitacionCoarrendatario(opts: {
       subject: `${opts.titularNombre} lo invita a ser su co-arrendatario en Cofianza`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
           <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
             <h1 style="color: white; margin: 0; font-size: 24px;">Invitación a co-arrendar</h1>
           </div>
@@ -2298,6 +2299,7 @@ export function construirCorreoCoarrendatario(
     subject,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
         <div style="background: ${badgeColor}; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 22px;">${encabezado}</h1>
         </div>
