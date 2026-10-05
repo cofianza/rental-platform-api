@@ -22,7 +22,7 @@ const footerHtml = (c: CompanyInfo) =>
   `<p style="color:#9ca3af;font-size:12px;margin-top:24px;">Correo automático de Cofianza. ¿Dudas? Escríbanos por WhatsApp al ${c.phone} o a ${c.email}.</p>`;
 
 // Botón de los correos de visita (mismo estilo que «Ver en Cofianza»).
-const botonHtml = (url: string, texto: string, color = '#0d9488') =>
+const botonHtml = (url: string, texto: string, color = '#047857') =>
   `<a href="${url}" style="background: ${color}; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block; margin: 4px;">${texto}</a>`;
 
 // Enlaces públicos de la visita (/visita/<accion>/<token>), los mismos de los
@@ -41,6 +41,10 @@ const formatFechaColombia = (iso: string): string =>
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
+
+/** Logo de Cofianza arriba de cada correo (PNG publicado en la web; ver encabezadoMarcaHtml en lib/email). */
+export const logoCorreoHtml = () =>
+  `<div style="text-align: center; padding: 0 0 20px;"><img src="${env.FRONTEND_URL}/email/logo-cofianza.png" width="180" height="43" alt="Cofianza" style="display: inline-block; border: 0; width: 180px; height: 43px; font-size: 24px; font-weight: 700; color: #047857;"></div>`;
 
 // ── Estudio Aprobado ────────────────────────────────────────
 
@@ -71,7 +75,8 @@ export async function sendEstudioAprobadoEmail(params: {
     subject: 'Su evaluación crediticia fue aprobada - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Evaluación aprobada</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
@@ -102,7 +107,7 @@ export async function sendEstudioAprobadoEmail(params: {
 export const apelacionHtml = (email: string) =>
   `<div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #374151; margin: 0; font-weight: bold;">¿No está de acuerdo con esta decisión?</p>
-            <p style="color: #4b5563; margin: 4px 0 0;">Puede presentar una apelación escribiendo a <a href="mailto:${email}" style="color: #0d9488;">${email}</a> dentro de los <strong>15 días hábiles</strong> siguientes a esta notificación. Cofianza le responde en un máximo de <strong>10 días hábiles</strong>. La apelación no suspende el proceso de arrendamiento del inmueble.</p>
+            <p style="color: #4b5563; margin: 4px 0 0;">Puede presentar una apelación escribiendo a <a href="mailto:${email}" style="color: #047857;">${email}</a> dentro de los <strong>15 días hábiles</strong> siguientes a esta notificación. Cofianza le responde en un máximo de <strong>10 días hábiles</strong>. La apelación no suspende el proceso de arrendamiento del inmueble.</p>
           </div>`;
 
 export async function sendEstudioRechazadoEmail(params: {
@@ -138,6 +143,7 @@ export async function sendEstudioRechazadoEmail(params: {
     subject: `${titulo} - Cofianza`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
         <div style="background: #111827; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">${decisionDeCofianza ? 'Resultado de su estudio' : 'Resultado de la evaluación'}</h1>
         </div>
@@ -234,6 +240,7 @@ export async function sendDocumentosRequeridosEmail(params: {
     subject: `${ruta.titulo} - Cofianza`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
         <div style="background: #d97706; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">${ruta.titulo}</h1>
         </div>
@@ -268,14 +275,15 @@ export async function sendContratoListoEmail(params: {
     subject: 'Su contrato está listo para firmar - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Contrato Listo</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola <strong>${escapeHtml(nombre)}</strong>,</p>
           <p style="color: #6b7280;">Su contrato de arrendamiento para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong> está listo para firmar.</p>
-          <div style="background: #f0fdfa; border: 1px solid #99f6e4; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #115e59; margin: 0;">Recibirá un enlace de firma electrónica en su correo. El proceso toma menos de 5 minutos.</p>
+          <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="color: #065f46; margin: 0;">Recibirá un enlace de firma electrónica en su correo. El proceso toma menos de 5 minutos.</p>
           </div>
           ${footerHtml(company)}
         </div>
@@ -307,7 +315,8 @@ export async function sendArrendatarioAprobadoNotificacionEmail(params: {
     subject: 'Arrendatario aprobado para su inmueble - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Arrendatario Aprobado</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
@@ -322,7 +331,7 @@ export async function sendArrendatarioAprobadoNotificacionEmail(params: {
             </ul>
           </div>
           <div style="text-align: center; margin: 24px 0;">
-            <a href="mailto:${escapeHtml(email_arrendatario)}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Contacte al arrendatario lo antes posible</a>
+            <a href="mailto:${escapeHtml(email_arrendatario)}" style="background: #047857; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Contacte al arrendatario lo antes posible</a>
           </div>
           <p style="color: #6b7280; font-size: 14px;">Le recomendamos comunicarse con el arrendatario a la brevedad para coordinar los siguientes pasos del proceso de arrendamiento.</p>
           ${footerHtml(company)}
@@ -355,17 +364,18 @@ export async function sendExpedienteInvitacionEmail(params: {
     subject: 'Le han invitado a un proceso de arrendamiento - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Invitacion de Arrendamiento</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola,</p>
           <p style="color: #6b7280;"><strong>${escapeHtml(nombre_invitador)}</strong> le ha invitado a completar un estudio de arrendamiento para el inmueble en <strong>${escapeHtml(inmueble)}, ${escapeHtml(ciudad)}</strong>.</p>
-          <div style="background: #f0fdfa; border: 1px solid #99f6e4; padding: 16px; border-radius: 8px; margin: 16px 0;">
-            <p style="color: #115e59; margin: 0;">Para continuar con el proceso, necesita registrarse en la plataforma Cofianza y completar su evaluación crediticia.</p>
+          <div style="background: #ecfdf5; border: 1px solid #a7f3d0; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <p style="color: #065f46; margin: 0;">Para continuar con el proceso, necesita registrarse en la plataforma Cofianza y completar su evaluación crediticia.</p>
           </div>
           <div style="text-align: center; margin: 24px 0;">
-            <a href="${registroUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Registrarme y continuar</a>
+            <a href="${registroUrl}" style="background: #047857; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Registrarme y continuar</a>
           </div>
           <p style="color: #6b7280; font-size: 14px;">Si no esperaba esta invitacion, puede ignorar este correo.</p>
           ${footerHtml(company)}
@@ -397,14 +407,15 @@ export async function sendInvitacionMiembroEmail(params: {
     subject: `Le invitaron a unirse a ${nombre_organizacion} en Cofianza`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Invitacion a su equipo</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">Hola,</p>
           <p style="color: #6b7280;"><strong>${escapeHtml(nombre_invitador)}</strong> le invitó a unirse a <strong>${escapeHtml(nombre_organizacion)}</strong> en la plataforma Cofianza para gestionar inmuebles y estudios en equipo.</p>
           <div style="text-align: center; margin: 24px 0;">
-            <a href="${aceptarUrl}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Aceptar invitacion</a>
+            <a href="${aceptarUrl}" style="background: #047857; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Aceptar invitacion</a>
           </div>
           <p style="color: #6b7280; font-size: 14px;">Este enlace vence en 7 días. Si no esperaba esta invitación, puede ignorar este correo.</p>
           ${footerHtml(company)}
@@ -442,14 +453,15 @@ export async function sendResponsableAsignadoEmail(params: {
     subject: params.titulo,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 22px;">${titulo}</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
           <p style="color: #374151; font-size: 16px;">${saludo}</p>
           <p style="color: #6b7280;">${mensaje}</p>
           <div style="text-align: center; margin: 24px 0;">
-            <a href="${url}" style="background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Ver en Cofianza</a>
+            <a href="${url}" style="background: #047857; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Ver en Cofianza</a>
           </div>
           ${footerHtml(company)}
         </div>
@@ -484,7 +496,8 @@ export async function sendCitaSolicitadaPropietarioEmail(params: {
     subject: 'Nueva solicitud de visita - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Nueva Solicitud de Cita</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
@@ -527,7 +540,8 @@ export async function sendCitaConfirmadaSolicitanteEmail(params: {
     subject: 'Su visita ha sido confirmada - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Visita Confirmada</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
@@ -573,6 +587,7 @@ export async function sendCitaReprogramadaSolicitanteEmail(params: {
     subject: 'El propietario ajustó la fecha de su visita - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
         <div style="background: #d97706; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Visita Reprogramada</h1>
         </div>
@@ -630,6 +645,7 @@ export async function sendCitaCanceladaEmail(params: {
     subject: 'Visita cancelada - Cofianza',
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
         <div style="background: #dc2626; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Visita Cancelada</h1>
         </div>
@@ -675,7 +691,8 @@ export async function sendEstudioHabilitadoEmail(params: {
     subject: `Su estudio ${numero} fue autorizado`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-        <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+        <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Estudio autorizado</h1>
         </div>
         <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
@@ -687,7 +704,7 @@ export async function sendEstudioHabilitadoEmail(params: {
             <p style="color: #065f46; margin: 4px 0 0;">Le enviamos por correo y WhatsApp el enlace para autorizar la consulta en centrales de riesgo. El cobro del estudio llega después de que autorice.</p>
           </div>
           <p style="text-align: center; margin: 24px 0;">
-            <a href="${url_panel}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">Ir al panel</a>
+            <a href="${url_panel}" style="display: inline-block; background: #047857; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold;">Ir al panel</a>
           </p>
           ${footerHtml(company)}
         </div>
@@ -719,6 +736,7 @@ export async function sendEstudioNoHabilitadoEmail(params: {
     subject: `Actualización sobre su estudio ${numero}`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
         <div style="background: #6b7280; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 24px;">Estudio no continuará</h1>
         </div>

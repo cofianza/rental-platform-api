@@ -24,7 +24,7 @@ import {
 import { assertExpedienteAccess } from '@/lib/tenantScope';
 import { escapeHtml } from '@/lib/escapeHtml';
 import { getCompany } from '@/lib/companyConfig';
-import { apelacionHtml, sendResponsableAsignadoEmail } from '@/modules/orchestrator/orchestrator.emails';
+import { apelacionHtml, logoCorreoHtml, sendResponsableAsignadoEmail } from '@/modules/orchestrator/orchestrator.emails';
 // Tope de canon (flujo del modulo de estudios §4.4). El estudio del
 // co-arrendatario es una consulta al buro mas, y esa consulta no puede
 // depender del fire-and-forget del final: ver los dos call sites de abajo.
@@ -310,7 +310,8 @@ function enviarEmailInvitacionCoarrendatario(opts: {
       subject: `${opts.titularNombre} lo invita a ser su co-arrendatario en Cofianza`,
       html: `
         <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-          <div style="background: #0d9488; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        ${logoCorreoHtml()}
+          <div style="background: #047857; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
             <h1 style="color: white; margin: 0; font-size: 24px;">Invitación a co-arrendar</h1>
           </div>
           <div style="background: #f9fafb; padding: 24px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
@@ -318,7 +319,7 @@ function enviarEmailInvitacionCoarrendatario(opts: {
             <p style="color: #6b7280;"><strong>${titular}</strong> lo invita a ser su co-arrendatario para el inmueble en <strong>${inmueble}</strong>.</p>
             <p style="color: #6b7280;">En Cofianza renta sin fiador. Si acepta la invitación, evaluaremos su perfil junto con el de ${titular} y respaldamos a los dos como un solo arrendatario.</p>
             <div style="text-align: center; margin: 24px 0;">
-              <a href="${link}" style="display: inline-block; background: #0d9488; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Revisar invitación</a>
+              <a href="${link}" style="display: inline-block; background: #047857; color: white; padding: 12px 32px; border-radius: 8px; text-decoration: none; font-weight: bold;">Revisar invitación</a>
             </div>
             <p style="color: #9ca3af; font-size: 12px;">Si no esperaba esta invitación, puede ignorar este correo. El enlace expira en ${TOKEN_EXPIRY_DAYS} días.</p>
           </div>
@@ -2182,7 +2183,7 @@ export function construirCorreoCoarrendatario(
   // resolución final.
   let subject: string;
   let cuerpoPrincipal: string;
-  let badgeColor = '#0d9488'; // teal Cofianza por defecto
+  let badgeColor = '#047857'; // teal Cofianza por defecto
   let encabezado = 'Resultado de su evaluación';
 
   if (input.decisionExpediente === 'sin_efecto') {
@@ -2298,6 +2299,7 @@ export function construirCorreoCoarrendatario(
     subject,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
+        ${logoCorreoHtml()}
         <div style="background: ${badgeColor}; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
           <h1 style="color: white; margin: 0; font-size: 22px;">${encabezado}</h1>
         </div>

@@ -30,9 +30,10 @@ describe('correo de autorización (M5)', () => {
     expect(html()).toContain('<strong>Inmobiliaria Norte</strong> inició un estudio para el arriendo del inmueble ubicado en <strong>Cra 7 # 1-2, Bogotá</strong>');
     expect(html()).toContain('Revisar y autorizar');
     expect(html()).not.toContain('Firmar autorización');
-    // Sin el logo viejo: la «C» sobre #0f766e.
+    // Sin el logo viejo (la «C» sobre #0f766e): el logo en PNG publicado en la web.
     expect(html()).not.toContain('#0f766e');
-    expect(html()).toContain('>cofianza</td>');
+    expect(html()).toContain('/email/logo-cofianza.png');
+    expect(html()).toContain('alt="Cofianza"');
   });
 
   it('escapa quién pide y la dirección (vienen de datos que escribe el gestor)', async () => {
