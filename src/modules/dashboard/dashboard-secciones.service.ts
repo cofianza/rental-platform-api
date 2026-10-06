@@ -83,6 +83,114 @@ function agregarPorPerfil(
   return out;
 }
 
+// ── Estudios comprados por aliado ───────────────────────────
+//
+// Créditos de estudio de cada organización (van a nombre del titular principal,
+// el mismo id de la fila): comprados = compras completadas; disponibles = lotes
+// vigentes; usados = pagos cuyo último movimiento de cupo es un consumo (hubo
+// resultado). Al propietario se le cuentan los estudios pagados (concepto
+// estudio, completados) de sus inmuebles sin inmobiliaria.
+
+export interface ResumenEstudios {
+  comprados: number;
+  usados: number;
+  disponibles: number;
+  ultimaCompra: string | null;
+}
+
+// Los mismos tipos de cupo de creditos-estudios.service (importarlo arrastra la config).
+const TIPOS_CUPO = ['reserva', 'consumo', 'liberacion', 'ajuste'];
+
+const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
+
+/** Pura: suma compras, lotes vigentes y consumos por perfil. */
+export function resumirCreditos(
+  compras: ReadonlyArray<{ perfil_id: string; cantidad_estudios: number; fecha: string }>,
+  lotes: ReadonlyArray<{ perfil_id: string; cantidad_disponible: number }>,
+  movs: ReadonlyArray<{ perfil_id: string; pago_id: string | null; tipo: string }>,
+): Map<string, ResumenEstudios> {
+  const out = new Map<string, ResumenEstudios>();
+  const de = (id: string) => {
+    let r = out.get(id);
+    if (!r) out.set(id, (r = { comprados: 0, usados: 0, disponibles: 0, ultimaCompra: null }));
+    return r;
+  };
+  for (const c of compras) {
+    const r = de(c.perfil_id);
+    r.comprados += c.cantidad_estudios;
+    if (!r.ultimaCompra || c.fecha > r.ultimaCompra) r.ultimaCompra = c.fecha;
+  }
+  for (const l of lotes) de(l.perfil_id).disponibles += l.cantidad_disponible;
+  // Movimientos en orden cronológico: el último de cada pago dice si se consumió.
+  const ultimo = new Map<string, { perfil_id: string; tipo: string }>();
+  for (const m of movs) {
+    if (m.pago_id) ultimo.set(m.pago_id, m);
+    else if (m.tipo === 'consumo') de(m.perfil_id).usados += 1; // consumos viejos sin pago
+  }
+  for (const m of ultimo.values()) if (m.tipo === 'consumo') de(m.perfil_id).usados += 1;
+  return out;
+}
+
+async function resumenCreditosPorPerfil(): Promise<Map<string, ResumenEstudios>> {
+  const nowIso = new Date().toISOString();
+  // ponytail: tope de 5000 compras/lotes de toda la plataforma; paginar como los movimientos si se acerca.
+  const [compras, lotes] = await Promise.all([
+    db('compras_creditos_estudios')
+      .select('perfil_id, cantidad_estudios, completed_at, created_at')
+      .eq('estado', 'completado')
+      .limit(5000),
+    db('lotes_creditos_estudios')
+      .select('perfil_id, cantidad_disponible')
+      .gt('cantidad_disponible', 0)
+      .or(`vence_en.is.null,vence_en.gt.${nowIso}`)
+      .limit(5000),
+  ]);
+  if (compras.error) throw fromSupabaseError(compras.error);
+  if (lotes.error) throw fromSupabaseError(lotes.error);
+
+  const movs: Array<{ perfil_id: string; pago_id: string | null; tipo: string }> = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await db('movimientos_creditos_estudios')
+      .select('perfil_id, pago_id, tipo')
+      .in('tipo', TIPOS_CUPO)
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + 999);
+    if (error) throw fromSupabaseError(error);
+    const pagina = (data ?? []) as typeof movs;
+    movs.push(...pagina);
+    if (pagina.length < 1000) break;
+  }
+
+  return resumirCreditos(
+    ((compras.data ?? []) as Array<{ perfil_id: string; cantidad_estudios: number; completed_at: string | null; created_at: string }>).map(
+      (c) => ({ perfil_id: c.perfil_id, cantidad_estudios: c.cantidad_estudios, fecha: c.completed_at ?? c.created_at }),
+    ),
+    (lotes.data ?? []) as Array<{ perfil_id: string; cantidad_disponible: number }>,
+    movs,
+  );
+}
+
+async function estudiosPagadosPorPropietario(): Promise<Map<string, { pagados: number; ultimoPago: string | null }>> {
+  // ponytail: tope de 5000 pagos de estudio; paginar si se acerca.
+  const { data, error } = await db('pagos')
+    .select('created_at, expedientes(inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id))')
+    .eq('concepto', 'estudio')
+    .eq('estado', 'completado')
+    .limit(5000);
+  if (error) throw fromSupabaseError(error);
+  const out = new Map<string, { pagados: number; ultimoPago: string | null }>();
+  for (const p of (data ?? []) as unknown as Array<{ created_at: string; expedientes: { inmuebles: InmuebleDueno | null } | null }>) {
+    const inm = p.expedientes?.inmuebles;
+    if (!inm || inm.inmobiliaria_id) continue;
+    const r = out.get(inm.propietario_id) ?? { pagados: 0, ultimoPago: null };
+    r.pagados += 1;
+    if (!r.ultimoPago || p.created_at > r.ultimoPago) r.ultimoPago = p.created_at;
+    out.set(inm.propietario_id, r);
+  }
+  return out;
+}
+
 // ── INMOBILIARIAS ───────────────────────────────────────────
 
 export interface InmobiliariaRow {
@@ -98,15 +206,17 @@ export interface InmobiliariaRow {
   contratosActivos: number;
   canonTotal: number;
   moraActivaCount: number;
+  estudios: ResumenEstudios;
 }
 
 // Una fila por ORGANIZACIÓN, no por persona (fetchPerfilesInmobiliaria, la
 // misma lista que cuenta el KPI), con la cartera de la organización
 // (inmuebles.inmobiliaria_id): antes se partía según quién cargó cada inmueble.
 export async function listInmobiliarias(): Promise<InmobiliariaRow[]> {
-  const [{ rows, titularDeOrg }, contratos] = await Promise.all([
+  const [{ rows, titularDeOrg }, contratos, creditos] = await Promise.all([
     fetchPerfilesInmobiliaria(),
     fetchContratosActivosConDueno(),
+    resumenCreditosPorPerfil(),
   ]);
 
   // Inmueble sin organización (legado) → a quien lo registró.
@@ -132,6 +242,7 @@ export async function listInmobiliarias(): Promise<InmobiliariaRow[]> {
       contratosActivos: a.contratosActivos,
       canonTotal: a.canonTotal,
       moraActivaCount: a.moraActivaCount,
+      estudios: creditos.get(r.id as string) ?? { comprados: 0, usados: 0, disponibles: 0, ultimaCompra: null },
     };
   });
 }
@@ -149,16 +260,19 @@ export interface PropietarioRow {
   contratosActivos: number;
   canonTotal: number;
   moraActivaCount: number;
+  estudiosPagados: number;
+  ultimoPagoEstudio: string | null;
 }
 
 export async function listPropietarios(): Promise<PropietarioRow[]> {
-  const [{ data, error }, contratos] = await Promise.all([
+  const [{ data, error }, contratos, pagados] = await Promise.all([
     supabase
       .from('perfiles')
       .select('id, nombre, apellido, numero_documento, telefono, ciudad, estado, created_at')
       .eq('rol', 'propietario')
       .order('created_at', { ascending: false }),
     fetchContratosActivosConDueno(),
+    estudiosPagadosPorPropietario(),
   ]);
   if (error) throw fromSupabaseError(error);
 
@@ -178,6 +292,8 @@ export async function listPropietarios(): Promise<PropietarioRow[]> {
       contratosActivos: a.contratosActivos,
       canonTotal: a.canonTotal,
       moraActivaCount: a.moraActivaCount,
+      estudiosPagados: pagados.get(r.id as string)?.pagados ?? 0,
+      ultimoPagoEstudio: pagados.get(r.id as string)?.ultimoPago ?? null,
     };
   });
 }
