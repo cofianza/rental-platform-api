@@ -17,7 +17,7 @@ interface ChainResult {
 
 function createChain(result: ChainResult) {
   const chain: Record<string, unknown> = {};
-  const methods = ['select', 'eq', 'neq', 'gte', 'lte', 'in', 'order', 'range', 'limit', 'is', 'not', 'or'];
+  const methods = ['select', 'eq', 'neq', 'gt', 'gte', 'lte', 'in', 'order', 'range', 'limit', 'is', 'not', 'or'];
   for (const m of methods) chain[m] = vi.fn(() => chain);
   chain.single = vi.fn(() => chain);
   chain.maybeSingle = vi.fn(() => chain);
