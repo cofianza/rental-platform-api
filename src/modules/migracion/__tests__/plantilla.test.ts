@@ -53,6 +53,13 @@ describe('plantilla de migración (ida y vuelta)', () => {
     const dest = hoja.getCell(2, COLUMNAS.findIndex((c) => c.clave === 'destinacion') + 1).dataValidation;
     expect(dest).toMatchObject({ type: 'list', formulae: ['"Vivienda,Comercial"'] });
     expect(wb.getWorksheet('Instrucciones')).toBeDefined();
+    expect(wb.worksheets[0].name).toBe('Instrucciones'); // lo primero que se ve
+    expect(wb.getWorksheet('Ejemplo')).toBeDefined();
+    // Cada columna trae su nota de ayuda y su mensaje al escribir.
+    COLUMNAS.forEach((c, i) => {
+      expect(hoja.getCell(1, i + 1).note).toBeDefined();
+      expect(hoja.getCell(2, i + 1).dataValidation?.prompt).toBeTruthy();
+    });
   });
 
   it('lo diligenciado se lee igual, omite filas vacías y valida de punta a punta', async () => {

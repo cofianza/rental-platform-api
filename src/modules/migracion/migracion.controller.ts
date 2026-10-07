@@ -24,7 +24,12 @@ function archivoDe(req: Request): Buffer {
 
 export async function descargarPlantilla(_req: Request, res: Response) {
   const cal = await getCalibracion();
-  const buffer = await generarPlantilla({ meses: cal.MESES_SIN_MORA_REQUERIDOS, maxFilas: cal.MAX_FILAS_POR_CARGA });
+  const buffer = await generarPlantilla({
+    meses: cal.MESES_SIN_MORA_REQUERIDOS,
+    maxFilas: cal.MAX_FILAS_POR_CARGA,
+    topeVivienda: cal.CANON_MAX_TRANSITORIO,
+    topeComercial: cal.TOPE_CANON_COMERCIAL,
+  });
   enviarXlsx(res, buffer, 'plantilla-migracion-cartera.xlsx');
 }
 

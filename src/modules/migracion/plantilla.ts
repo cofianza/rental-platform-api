@@ -85,61 +85,255 @@ const encabezado = (c: Columna, meses: number) => c.encabezado.replace('{meses}'
 const normEncabezado = (s: string) =>
   s.normalize('NFD').replace(/[̀-ͯ\d]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-/** Plantilla descargable (§2.1) con listas desplegables en las columnas cerradas. */
-export async function generarPlantilla(opts: { meses: number; maxFilas: number }): Promise<Buffer> {
+// ── Ayuda de cada columna (solo presentación: no cambia encabezados ni lectura) ──
+
+type Seccion = 'inmueble' | 'arrendatario' | 'coarrendatarios' | 'contrato' | 'declaraciones' | 'notas';
+type Obligatoria = 'Sí' | 'No' | 'Condicional';
+interface Ayuda {
+  seccion: Seccion;
+  obligatoria: Obligatoria;
+  /** Qué escribir, en una o dos frases (va en la nota del encabezado y en el mensaje al escribir). */
+  ayuda: string;
+  ejemplo: string;
+}
+
+// Colores por sección: fuerte para el encabezado obligatorio, suave para el opcional.
+const SECCIONES: Record<Seccion, { nombre: string; fuerte: string; suave: string }> = {
+  inmueble: { nombre: 'Inmueble', fuerte: 'FF1D4ED8', suave: 'FFDBEAFE' },
+  arrendatario: { nombre: 'Arrendatario', fuerte: 'FF047857', suave: 'FFD1FAE5' },
+  coarrendatarios: { nombre: 'Coarrendatarios (si los hay)', fuerte: 'FF6D28D9', suave: 'FFEDE9FE' },
+  contrato: { nombre: 'Contrato y valores', fuerte: 'FFB45309', suave: 'FFFEF3C7' },
+  declaraciones: { nombre: 'Declaraciones', fuerte: 'FFB91C1C', suave: 'FFFEE2E2' },
+  notas: { nombre: 'Observaciones', fuerte: 'FF374151', suave: 'FFF3F4F6' },
+};
+
+const coa = (n: 1 | 2): Record<string, Ayuda> => ({
+  [`coarrendatario${n}_nombre`]: { seccion: 'coarrendatarios', obligatoria: 'Condicional', ayuda: 'Solo si el contrato tiene coarrendatario. Nombre y apellidos completos.', ejemplo: n === 1 ? 'Carlos Gómez Ruiz' : '' },
+  [`coarrendatario${n}_tipo_documento`]: { seccion: 'coarrendatarios', obligatoria: 'Condicional', ayuda: 'Obligatorio si escribió el nombre. Elija de la lista.', ejemplo: n === 1 ? 'CC' : '' },
+  [`coarrendatario${n}_numero_documento`]: { seccion: 'coarrendatarios', obligatoria: 'Condicional', ayuda: 'Obligatorio si escribió el nombre. Sin puntos ni espacios.', ejemplo: n === 1 ? '71234567' : '' },
+  [`coarrendatario${n}_celular`]: { seccion: 'coarrendatarios', obligatoria: 'Condicional', ayuda: 'Celular o correo: al menos uno de los dos. 10 dígitos, sin +57.', ejemplo: n === 1 ? '3109876543' : '' },
+  [`coarrendatario${n}_email`]: { seccion: 'coarrendatarios', obligatoria: 'Condicional', ayuda: 'Celular o correo: al menos uno de los dos.', ejemplo: n === 1 ? 'carlos@correo.com' : '' },
+});
+
+const AYUDA: Record<string, Ayuda> = {
+  direccion: { seccion: 'inmueble', obligatoria: 'Sí', ayuda: 'Dirección completa, con apartamento o local si aplica.', ejemplo: 'Calle 10 # 43A-30, apto 501' },
+  municipio: { seccion: 'inmueble', obligatoria: 'Sí', ayuda: 'Municipio del inmueble. Si el nombre existe en varios departamentos, escriba «Municipio, Departamento».', ejemplo: 'Medellín' },
+  codigo_interno: { seccion: 'inmueble', obligatoria: 'No', ayuda: 'El código con el que usted identifica el inmueble, si tiene uno.', ejemplo: 'APT-501' },
+  destinacion: { seccion: 'inmueble', obligatoria: 'Sí', ayuda: 'Elija de la lista: Vivienda o Comercial.', ejemplo: 'Vivienda' },
+  tipo_inmueble: { seccion: 'inmueble', obligatoria: 'Sí', ayuda: 'Elija de la lista.', ejemplo: 'Apartamento' },
+  estrato: { seccion: 'inmueble', obligatoria: 'Sí', ayuda: 'Número del 1 al 6 (7 si aplica).', ejemplo: '4' },
+  arrendatario_tipo_persona: { seccion: 'arrendatario', obligatoria: 'Sí', ayuda: 'Natural (una persona) o Jurídica (una empresa).', ejemplo: 'Natural' },
+  arrendatario_nombre: { seccion: 'arrendatario', obligatoria: 'Sí', ayuda: 'Persona: sus nombres. Empresa: la razón social completa.', ejemplo: 'Ana María' },
+  arrendatario_apellido: { seccion: 'arrendatario', obligatoria: 'Condicional', ayuda: 'Obligatorio para persona natural. Para empresa déjelo vacío.', ejemplo: 'Pérez López' },
+  arrendatario_tipo_documento: { seccion: 'arrendatario', obligatoria: 'Sí', ayuda: 'Elija de la lista. Una empresa se identifica con NIT.', ejemplo: 'CC' },
+  arrendatario_numero_documento: { seccion: 'arrendatario', obligatoria: 'Sí', ayuda: 'Sin puntos ni espacios. NIT con o sin dígito de verificación.', ejemplo: '1020304050' },
+  arrendatario_celular: { seccion: 'arrendatario', obligatoria: 'Sí', ayuda: 'Celular de Colombia de 10 dígitos, sin +57.', ejemplo: '3001234567' },
+  arrendatario_email: { seccion: 'arrendatario', obligatoria: 'Sí', ayuda: 'Correo electrónico del arrendatario.', ejemplo: 'ana.perez@correo.com' },
+  ...coa(1),
+  ...coa(2),
+  canon: { seccion: 'contrato', obligatoria: 'Sí', ayuda: 'Canon mensual que paga hoy, en pesos, SIN IVA y sin puntos. {topes}.', ejemplo: '1800000' },
+  iva_canon_pct: { seccion: 'contrato', obligatoria: 'Condicional', ayuda: 'Solo para comercial: porcentaje de IVA del canon (por ejemplo 19). En vivienda déjelo vacío.', ejemplo: '' },
+  fecha_inicio: { seccion: 'contrato', obligatoria: 'Sí', ayuda: 'Fecha en que empezó el contrato (DD/MM/AAAA).', ejemplo: '01/06/2025' },
+  fecha_vencimiento: { seccion: 'contrato', obligatoria: 'Sí', ayuda: 'Fecha en que vence el período actual del contrato (DD/MM/AAAA). Si ya se prorrogó, la del período en curso.', ejemplo: '31/05/2026' },
+  paga_servicios: { seccion: 'contrato', obligatoria: 'Sí', ayuda: 'Quién paga agua, luz y gas: elija de la lista.', ejemplo: 'Arrendatario' },
+  paga_administracion: { seccion: 'contrato', obligatoria: 'Sí', ayuda: 'Quién paga la cuota de administración. «No aplica» si el inmueble no tiene.', ejemplo: 'Arrendador' },
+  cuota_administracion: { seccion: 'contrato', obligatoria: 'Condicional', ayuda: 'Valor mensual de la administración en pesos, si aplica.', ejemplo: '250000' },
+  al_dia: { seccion: 'declaraciones', obligatoria: 'Sí', ayuda: '¿El arrendatario está al día en el canon hoy? Sí o No. Si es No, el contrato no se puede migrar.', ejemplo: 'Sí' },
+  mora_reciente: { seccion: 'declaraciones', obligatoria: 'Sí', ayuda: '¿Se atrasó en algún pago en los últimos meses indicados? Sí o No. Si es Sí, no se puede migrar.', ejemplo: 'No' },
+  plantilla_entregada: { seccion: 'declaraciones', obligatoria: 'Sí', ayuda: '¿El contrato se firmó con la misma plantilla que entregó a Cofianza? Si es No, queda NO REPORTABLE (tarifa +0,5 puntos).', ejemplo: 'Sí' },
+  observaciones: { seccion: 'notas', obligatoria: 'No', ayuda: 'Cualquier dato que debamos saber de este contrato (por ejemplo, un tercer coarrendatario).', ejemplo: '' },
+};
+
+/** Columnas que se escriben como texto: sin esto Excel quita ceros o las pasa a notación científica. */
+const COMO_TEXTO = /numero_documento|celular|codigo_interno/;
+
+// Ejemplos completos (hoja «Ejemplo»): una persona natural en vivienda y una empresa en comercial.
+const EJEMPLO_COMERCIAL: Record<string, string> = {
+  direccion: 'Carrera 50 # 52-30, local 102', municipio: 'Itagüí', codigo_interno: 'LOC-102', destinacion: 'Comercial',
+  tipo_inmueble: 'Local', estrato: '4', arrendatario_tipo_persona: 'Jurídica', arrendatario_nombre: 'Panadería La Esquina S.A.S.',
+  arrendatario_apellido: '', arrendatario_tipo_documento: 'NIT', arrendatario_numero_documento: '901234567-8',
+  arrendatario_celular: '3157654321', arrendatario_email: 'gerencia@laesquina.com', canon: '3500000', iva_canon_pct: '19',
+  fecha_inicio: '15/01/2024', fecha_vencimiento: '14/01/2027', paga_servicios: 'Arrendatario', paga_administracion: 'No aplica',
+  cuota_administracion: '', al_dia: 'Sí', mora_reciente: 'No', plantilla_entregada: 'No', observaciones: 'Contrato firmado con un formato anterior.',
+};
+
+const blanco = { argb: 'FFFFFFFF' };
+const borde: Partial<ExcelJS.Borders> = {
+  top: { style: 'thin', color: { argb: 'FFD1D5DB' } }, bottom: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+  left: { style: 'thin', color: { argb: 'FFD1D5DB' } }, right: { style: 'thin', color: { argb: 'FFD1D5DB' } },
+};
+
+function pintarEncabezados(hoja: ExcelJS.Worksheet, meses: number, conNotas: boolean, conTopes: (t: string) => string = (t) => t): void {
+  const fila = hoja.getRow(1);
+  fila.height = 64;
+  COLUMNAS.forEach((c, i) => {
+    const a = AYUDA[c.clave];
+    const sec = SECCIONES[a.seccion];
+    const celda = fila.getCell(i + 1);
+    const fuerte = a.obligatoria === 'Sí';
+    celda.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fuerte ? sec.fuerte : sec.suave } };
+    celda.font = { bold: true, color: fuerte ? blanco : { argb: sec.fuerte }, size: 10 };
+    celda.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
+    celda.border = borde;
+    if (conNotas)
+      celda.note = {
+        texts: [
+          { font: { bold: true }, text: `${sec.nombre} · ${a.obligatoria === 'Sí' ? 'Obligatoria' : a.obligatoria === 'No' ? 'Opcional' : 'Obligatoria según el caso'}\n` },
+          { text: `${conTopes(a.ayuda.replace('los últimos meses indicados', `los últimos ${meses} meses`))}${a.ejemplo ? `\nEjemplo: ${a.ejemplo}` : ''}` },
+        ],
+      };
+  });
+}
+
+function formatoColumnas(hoja: ExcelJS.Worksheet): void {
+  COLUMNAS.forEach((c, i) => {
+    const col = hoja.getColumn(i + 1);
+    if (c.tipo === 'fecha') col.numFmt = 'dd/mm/yyyy';
+    else if (c.tipo === 'numero') col.numFmt = '#,##0';
+    else if (COMO_TEXTO.test(c.clave)) col.numFmt = '@';
+  });
+}
+
+/** Plantilla descargable (§2.1): instrucciones, la hoja para diligenciar con ayudas y un ejemplo. */
+export async function generarPlantilla(opts: {
+  meses: number;
+  maxFilas: number;
+  /** Topes de canon sin IVA (calibración); sin ellos el texto no menciona cifras. */
+  topeVivienda?: number;
+  topeComercial?: number;
+}): Promise<Buffer> {
+  const pesos = (n: number) => `$${n.toLocaleString('es-CO')}`;
+  const topes =
+    opts.topeVivienda && opts.topeComercial
+      ? `Tope: vivienda ${pesos(opts.topeVivienda)} y comercial ${pesos(opts.topeComercial)} al mes`
+      : 'Hay un tope de canon por destinación';
+  const conTopes = (t: string) => t.replace('{topes}', topes);
   const wb = new ExcelJS.Workbook();
-  const hoja = wb.addWorksheet(HOJA, { views: [{ state: 'frozen', ySplit: 1 }] });
-  hoja.columns = COLUMNAS.map((c) => ({ header: encabezado(c, opts.meses), key: c.clave, width: c.ancho }));
-  const cab = hoja.getRow(1);
-  cab.font = { bold: true };
-  cab.alignment = { wrapText: true, vertical: 'middle' };
-  cab.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } };
+  wb.creator = 'Cofianza';
+
+  // 1. Instrucciones (primera hoja: es lo primero que ve quien abre el archivo).
+  const ayuda = wb.addWorksheet('Instrucciones', { properties: { tabColor: { argb: 'FF047857' } }, views: [{ showGridLines: false }] });
+  ayuda.columns = [{ width: 4 }, { width: 38 }, { width: 16 }, { width: 70 }, { width: 30 }];
+  // Para imprimir: todo el ancho en una página.
+  ayuda.pageSetup = { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } };
+  let r = 1;
+  const linea = (texto: string, estilo: Partial<ExcelJS.Font> = {}, alto?: number) => {
+    ayuda.mergeCells(r, 2, r, 5);
+    const c = ayuda.getCell(r, 2);
+    c.value = texto;
+    c.font = { size: 11, ...estilo };
+    c.alignment = { wrapText: true, vertical: 'top' };
+    if (alto) ayuda.getRow(r).height = alto;
+    r++;
+  };
+  linea('Plantilla de migración de cartera — Cofianza', { bold: true, size: 18, color: { argb: 'FF047857' } }, 30);
+  linea('Con este archivo usted le pasa a Cofianza sus contratos de arrendamiento que ya están firmados y vigentes, para que Cofianza sea su fiador desde la firma del Acta de Migración.', { color: { argb: 'FF4B5563' } }, 32);
+  r++;
+  linea('Cómo diligenciarla', { bold: true, size: 13 });
+  [
+    '1. Vaya a la hoja «Contratos» y escriba UN contrato por fila, empezando en la fila 2.',
+    '2. No cambie, mueva ni borre columnas, ni el nombre de las hojas. Si lo hace, el archivo no se podrá cargar.',
+    '3. Al pararse en el título de una columna verá una nota con lo que debe escribir y un ejemplo. Al escribir en una celda también aparece una ayuda.',
+    '4. Las columnas con listas (Sí/No, Vivienda/Comercial, tipo de documento…) tienen una flecha: elija el valor de la lista.',
+    '5. Revise la hoja «Ejemplo»: tiene dos contratos llenos como guía (no la llene; no se carga).',
+    `6. Máximo ${opts.maxFilas} contratos por archivo. Si tiene más, divídalos en varios archivos.`,
+    '7. Guarde el archivo en formato Excel (.xlsx) y envíelo a Cofianza.',
+  ].forEach((t) => linea(t, {}, 30));
+  r++;
+  linea('Colores de los títulos', { bold: true, size: 13 });
+  for (const s of Object.values(SECCIONES)) {
+    const c = ayuda.getCell(r, 2);
+    c.value = s.nombre;
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: s.fuerte } };
+    c.font = { bold: true, color: blanco };
+    c.border = borde;
+    ayuda.getCell(r, 3).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: s.suave } };
+    ayuda.getCell(r, 3).border = borde;
+    r++;
+  }
+  linea('Color fuerte = columna obligatoria. Color suave = opcional u obligatoria solo en algunos casos.', { italic: true, color: { argb: 'FF4B5563' } });
+  r++;
+  linea('Antes de enviarla, tenga en cuenta', { bold: true, size: 13 });
+  [
+    'Solo se migran contratos vigentes, al día en el canon y SIN atrasos en los últimos ' + opts.meses + ' meses.',
+    'El canon va SIN IVA. {topes}; los que lo superen se rechazan.',
+    'No se aceptan inmuebles de destinación mixta, contratos ya vencidos ni inmuebles que ya tengan fianza de Cofianza.',
+    'Las tres declaraciones (al día, sin mora y plantilla) se imprimen en el Acta de Migración que firma el representante legal. Declarar algo falso deja ese contrato sin cobertura.',
+    'Si un contrato se firmó con un formato distinto al que entregó a Cofianza, márquelo «No» en la última declaración: queda NO REPORTABLE y su tarifa sube 0,5 puntos.',
+  ].forEach((t) => linea(`• ${conTopes(t)}`, {}, 30));
+  r++;
+  linea('Qué va en cada columna', { bold: true, size: 13 });
+  ['Columna', 'Obligatoria', 'Qué escribir', 'Ejemplo'].forEach((t, i) => {
+    const c = ayuda.getCell(r, i + 2);
+    c.value = t;
+    c.font = { bold: true, color: blanco };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } };
+    c.border = borde;
+  });
+  r++;
+  COLUMNAS.forEach((col) => {
+    const a = AYUDA[col.clave];
+    const sec = SECCIONES[a.seccion];
+    const vals = [
+      encabezado(col, opts.meses),
+      a.obligatoria === 'Condicional' ? 'Según el caso' : a.obligatoria,
+      conTopes(a.ayuda.replace('los últimos meses indicados', `los últimos ${opts.meses} meses`)) + (col.lista ? `\nOpciones: ${col.lista.join(', ')}.` : ''),
+      a.ejemplo,
+    ];
+    vals.forEach((v, i) => {
+      const c = ayuda.getCell(r, i + 2);
+      c.value = v;
+      c.alignment = { wrapText: true, vertical: 'top' };
+      c.border = borde;
+      if (i === 0) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sec.suave } };
+    });
+    ayuda.getRow(r).height = col.lista ? 44 : 32;
+    r++;
+  });
+
+  // 2. Contratos: la hoja que se carga (§2.1). Encabezados en la fila 1, datos desde la 2.
+  const hoja = wb.addWorksheet(HOJA, { properties: { tabColor: { argb: 'FFF97316' } }, views: [{ state: 'frozen', ySplit: 1, xSplit: 1 }] });
+  hoja.columns = COLUMNAS.map((c) => ({ header: encabezado(c, opts.meses), key: c.clave, width: Math.max(c.ancho, 18) }));
+  pintarEncabezados(hoja, opts.meses, true, conTopes);
+  formatoColumnas(hoja);
 
   COLUMNAS.forEach((c, i) => {
-    let validacion: ExcelJS.DataValidation | null = null;
+    const a = AYUDA[c.clave];
+    // Mensaje al pararse en la celda (Excel lo corta en 255 caracteres).
+    const prompt = `${conTopes(a.ayuda.replace('los últimos meses indicados', `los últimos ${opts.meses} meses`))}${a.ejemplo ? ` Ej.: ${a.ejemplo}` : ''}`.slice(0, 250);
+    let validacion: ExcelJS.DataValidation;
     if (c.lista) {
       validacion = {
-        type: 'list',
-        allowBlank: true,
-        formulae: [`"${c.lista.join(',')}"`],
-        showErrorMessage: true,
-        errorTitle: 'Valor no permitido',
-        error: `Elija un valor de la lista: ${c.lista.join(', ')}.`,
+        type: 'list', allowBlank: true, formulae: [`"${c.lista.join(',')}"`],
+        showErrorMessage: true, errorTitle: 'Valor no permitido', error: `Elija un valor de la lista: ${c.lista.join(', ')}.`,
       };
     } else if (c.tipo === 'fecha') {
       validacion = {
-        type: 'date',
-        operator: 'greaterThan',
-        allowBlank: true,
-        formulae: [new Date(Date.UTC(1990, 0, 1))],
-        showErrorMessage: true,
-        error: 'Escriba una fecha válida (AAAA-MM-DD o DD/MM/AAAA).',
+        type: 'date', operator: 'greaterThan', allowBlank: true, formulae: [new Date(Date.UTC(1990, 0, 1))],
+        showErrorMessage: true, errorTitle: 'Fecha no válida', error: 'Escriba una fecha válida en formato DD/MM/AAAA.',
       };
+    } else {
+      validacion = { type: 'any', allowBlank: true } as unknown as ExcelJS.DataValidation;
     }
-    const col = hoja.getColumn(i + 1);
-    if (c.tipo === 'fecha') col.numFmt = 'yyyy-mm-dd';
-    if (c.tipo === 'numero') col.numFmt = '#,##0';
-    if (!validacion) return;
-    for (let r = 2; r <= opts.maxFilas + 1; r++) hoja.getCell(r, i + 1).dataValidation = validacion;
+    validacion.showInputMessage = true;
+    validacion.promptTitle = c.encabezado.replace('{meses}', String(opts.meses)).slice(0, 32);
+    validacion.prompt = prompt;
+    for (let f = 2; f <= opts.maxFilas + 1; f++) hoja.getCell(f, i + 1).dataValidation = validacion;
   });
 
-  const ayuda = wb.addWorksheet('Instrucciones');
-  ayuda.getColumn(1).width = 120;
-  [
-    'Plantilla de migración de cartera — Cofianza',
-    'Diligencie una fila por contrato en la hoja «Contratos». No cambie el orden ni el nombre de las columnas.',
-    `Máximo ${opts.maxFilas} contratos por archivo. Si su cartera es mayor, divídala en varios archivos.`,
-    'Fechas en formato AAAA-MM-DD o DD/MM/AAAA. Valores en pesos, sin decimales; el canon va SIN IVA.',
-    'Municipio: si el nombre se repite en varios departamentos, escríbalo como «Municipio, Departamento».',
-    'Persona jurídica: escriba la razón social en «nombres o razón social», deje vacíos los apellidos y use NIT.',
-    'IVA del canon: solo aplica a destinación comercial. Si lo deja vacío se toma 0 %.',
-    'Coarrendatarios: diligencie nombre, documento y al menos un dato de contacto de cada uno, si existen.',
-    'Las tres declaraciones (al día, mora y plantilla) son obligatorias y se imprimen en el Acta de Migración que firma el representante legal.',
-  ].forEach((t, i) => {
-    ayuda.getCell(i + 1, 1).value = t;
-    if (i === 0) ayuda.getCell(1, 1).font = { bold: true, size: 13 };
+  // 3. Ejemplo: misma estructura con dos contratos llenos (no se lee al cargar).
+  const ej = wb.addWorksheet('Ejemplo', { properties: { tabColor: { argb: 'FF9CA3AF' } }, views: [{ state: 'frozen', ySplit: 1, xSplit: 1 }] });
+  ej.columns = COLUMNAS.map((c) => ({ header: encabezado(c, opts.meses), key: c.clave, width: Math.max(c.ancho, 18) }));
+  pintarEncabezados(ej, opts.meses, false);
+  [Object.fromEntries(COLUMNAS.map((c) => [c.clave, AYUDA[c.clave].ejemplo])), EJEMPLO_COMERCIAL].forEach((datos) => {
+    const fila = ej.addRow(datos);
+    fila.eachCell((celda) => {
+      celda.font = { color: { argb: 'FF6B7280' }, italic: true };
+      celda.border = borde;
+    });
   });
 
+  wb.views = [{ x: 0, y: 0, width: 20000, height: 12000, firstSheet: 0, activeTab: 0, visibility: 'visible' }];
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
