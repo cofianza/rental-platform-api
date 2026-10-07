@@ -660,6 +660,12 @@ async function aplicarEfectosTerminacion(
       logger.warn({ error: e, contratoId }, 'Error notificando terminación del contrato'),
     );
 
+  // Tarifa mensual (plan cobro-tarifa-mensual, B5): las líneas de meses
+  // posteriores al de la terminación se anulan (las facturadas, con aviso de nota crédito).
+  import('@/modules/tarifa-cobro/tarifa-cobro.gestion.service')
+    .then((t) => t.revisarLineasPorTerminacion(contratoId, usuarioId))
+    .catch((e) => logger.warn({ error: e, contratoId }, 'Error revisando la tarifa mensual por terminación'));
+
   // MORAS: NO se cancelan — una mora sobrevive al contrato por diseño (el cobro
   // de la fianza continúa tras un impago). Solo dejamos rastro interno para que
   // el asesor revise; la UI ya advierte antes de terminar si hay moras activas.

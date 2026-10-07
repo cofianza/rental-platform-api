@@ -39,6 +39,13 @@ export const AUDIT_ACTIONS = {
   EXPEDIENTE_CERRADO_SIN_ACTA: 'expediente_cerrado_sin_acta',
   // Adenda de precios §5.1: un operador registra que la inmobiliaria remitió la prima Trasladada.
   PRIMA_REMITIDA: 'prima_remitida',
+  // Cobro de la tarifa mensual (plan cobro-tarifa-mensual, B5/B9).
+  TARIFA_LINEA_PAGADA: 'tarifa_linea_pagada',
+  TARIFA_CUENTA_PAGADA: 'tarifa_cuenta_pagada',
+  TARIFA_LINEA_NO_RECAUDADA: 'tarifa_linea_no_recaudada',
+  TARIFA_LINEA_ANULADA: 'tarifa_linea_anulada',
+  TARIFA_TERMINACION_EFECTIVA: 'tarifa_terminacion_efectiva',
+  TARIFA_CONDICION_REGISTRADA: 'tarifa_condicion_registrada',
   // Comentarios
   COMMENT_CREATED: 'comment_created',
   COMMENT_UPDATED: 'comment_updated',

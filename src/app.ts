@@ -51,6 +51,7 @@ import reportesRouter from '@/modules/reportes/reportes.routes';
 import adminToolsRouter from '@/modules/admin-tools/admin-tools.routes';
 import calibracionRouter from '@/modules/calibracion/calibracion.routes';
 import migracionRouter from '@/modules/migracion/migracion.routes';
+import tarifaCobroRouter from '@/modules/tarifa-cobro/tarifa-cobro.routes';
 import documentosLegalesRouter from '@/modules/documentos-legales/documentos-legales.routes';
 import morasRouter, { morasCronRouter } from '@/modules/moras/moras.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
@@ -182,6 +183,8 @@ app.use('/api/v1/admin-tools', adminToolsRouter);
 app.use('/api/v1/admin/calibracion', calibracionRouter);
 // Migración de cartera (fase 1: carga asistida por un analista) — administrador y operador/analista.
 app.use('/api/v1/admin/migracion', migracionRouter);
+// Cobro de la tarifa mensual a las inmobiliarias (plan cobro-tarifa-mensual).
+app.use('/api/v1/tarifa-cobro', tarifaCobroRouter);
 app.use('/api/v1/public/properties', publicPropertiesRouter);
 app.use('/api/v1/interesados', interesadosRouter);
 app.use('/api/v1/vitrina', vitrinaRouter);

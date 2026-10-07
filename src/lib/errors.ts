@@ -43,6 +43,8 @@ const PG_ERROR_MAP: Record<string, { statusCode: number; errorCode: string; mess
   '23505': { statusCode: 409, errorCode: 'DUPLICATE_ENTRY', message: 'El registro ya existe' },
   '23503': { statusCode: 400, errorCode: 'FK_VIOLATION', message: 'Referencia a registro inexistente' },
   '23502': { statusCode: 400, errorCode: 'NOT_NULL_VIOLATION', message: 'Campo requerido faltante' },
+  // Trigger cuentas_cobro_tarifa_lineas_congeladas (tarifa mensual).
+  P0T01: { statusCode: 409, errorCode: 'CUENTA_COBRO_CONGELADA', message: 'La cuenta de cobro ya se está emitiendo o fue emitida: sus líneas no se pueden cambiar.' },
   PGRST116: { statusCode: 404, errorCode: 'NOT_FOUND', message: 'Recurso no encontrado' },
   '42501': { statusCode: 403, errorCode: 'INSUFFICIENT_PRIVILEGE', message: 'Privilegios insuficientes' },
 };

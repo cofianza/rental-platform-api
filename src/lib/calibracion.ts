@@ -55,7 +55,9 @@ export type ClaveCalibracion =
   | 'MAX_FILAS_POR_CARGA'
   | 'UMBRAL_ALERTA_EXPOSICION_LOTE'
   | 'DIAS_RESPUESTA_AUDITORIA'
-  | 'DIAS_VIGENCIA_LOTE_SIN_FIRMA';
+  | 'DIAS_VIGENCIA_LOTE_SIN_FIRMA'
+  | 'TARIFA_COBRO_DESDE'
+  | 'IPC_ANUAL';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -417,6 +419,31 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     // Migración §3.6 / §10.9
     descripcion: 'Días calendario que tiene un lote de migración para que se firme su acta. Vencido el plazo, el lote expira y nada se activa.',
   },
+  // Cobro de la tarifa mensual (plan cobro-tarifa-mensual §5). El primer mes es
+  // de riesgo (D16: lo anterior ya se facturó a mano; un mes de más es un doble
+  // cobro). El IPC solo PROPONE el canon del aniversario: operativo.
+  {
+    clave: 'TARIFA_COBRO_DESDE',
+    // Sin fijar = 209912: no se liquida ningún mes aunque el barrido esté encendido.
+    valorDefault: 209912,
+    min: 202601,
+    max: 209912,
+    entero: true,
+    // Adenda de precios §5.3 / plan D16
+    descripcion: 'Primer mes (AAAAMM, p. ej. 202611) cuya tarifa mensual de la fianza cobra la plataforma. Los meses anteriores no se liquidan porque ya se facturaron a mano.',
+    advertencia: 'Fijarlo el mismo mes en que se deja de facturar a mano: un mes anterior se cobraría dos veces. Mientras diga 209912, la plataforma no cobra ningún mes.',
+  },
+  {
+    clave: 'IPC_ANUAL',
+    // ponytail: variación anual del IPC a dic-2025 según DANE; confirmar el dato oficial y actualizarlo cada enero.
+    valorDefault: 5.1,
+    min: 0,
+    max: 30,
+    entero: false,
+    // Contrato de vivienda, reajuste anual del canon / plan B9
+    descripcion: 'Variación anual del IPC (%) con la que se propone el canon reajustado en el aniversario de cada contrato. Es solo una propuesta: la inmobiliaria confirma o corrige el canon.',
+    advertencia: 'Actualizarlo cada enero con la cifra que publica el DANE.',
+  },
 ];
 
 export const CALIBRACION_DEFAULT: Calibracion = Object.fromEntries(
@@ -443,6 +470,7 @@ const OPERATIVOS: ReadonlySet<ClaveCalibracion> = new Set<ClaveCalibracion>([
   'UMBRAL_ALERTA_EXPOSICION_LOTE',
   'DIAS_RESPUESTA_AUDITORIA',
   'DIAS_VIGENCIA_LOTE_SIN_FIRMA',
+  'IPC_ANUAL', // solo propone el canon del aniversario; lo confirma la inmobiliaria
 ]);
 
 export type NivelParametro = 'riesgo' | 'operativo';
@@ -476,8 +504,14 @@ export function validarParametro(clave: string, valor: unknown): { def: Definici
   if (typeof valor !== 'number' || !Number.isFinite(valor)) return { def, error: 'El valor debe ser numérico' };
   if (def.entero && !Number.isInteger(valor)) return { def, error: 'El valor debe ser entero' };
   if (valor < def.min || valor > def.max) return { def, error: `Fuera de rango (${def.min} a ${def.max})` };
+  if (def.clave === 'TARIFA_COBRO_DESDE' && (valor % 100 < 1 || valor % 100 > 12))
+    return { def, error: 'Use el formato AAAAMM, con el mes entre 01 y 12' };
   return { def, error: null };
 }
+
+/** Pura: TARIFA_COBRO_DESDE (AAAAMM) como día 1 del mes, 'AAAA-MM-01'. */
+export const mesCobroDesde = (aaaamm: number): string =>
+  `${Math.floor(aaaamm / 100)}-${String(aaaamm % 100).padStart(2, '0')}-01`;
 
 /**
  * Parametros vigentes: defaults + lo guardado. Nunca lanza.

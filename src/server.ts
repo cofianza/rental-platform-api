@@ -164,3 +164,30 @@ if (env.PRIMA_REPORTE_REMISION_ENABLED) {
   runPrimaReporte();
   setInterval(runPrimaReporte, PRIMA_REPORTE_INTERVAL_MS).unref();
 }
+
+// Cobro de la tarifa mensual (plan cobro-tarifa-mensual, B3): cuentas de cobro y
+// líneas en borrador por inmobiliaria, corte el último día del mes (Bogotá).
+// Al arrancar y cada 6 h; idempotente. Escribe en la base:
+// TARIFA_LIQUIDACION_ENABLED=false en una API local. Con TARIFA_EMISION_ENABLED
+// (B4), después de liquidar emite las cuentas cuyo corte ya pasó; luego el aviso
+// de aniversario del canon (B9). TARIFA_RECORDATORIOS_ENABLED (B6): los
+// recordatorios de atraso, dentro de la franja de cobranza.
+const TARIFA_LIQUIDACION_INTERVAL_MS = 6 * 60 * 60 * 1000;
+if (env.TARIFA_LIQUIDACION_ENABLED || env.TARIFA_RECORDATORIOS_ENABLED) {
+  const runTarifa = () =>
+    Promise.all([import('@/modules/tarifa-cobro/tarifa-cobro.service'), import('@/modules/tarifa-cobro/tarifa-cobro.gestion.service')])
+      .then(async ([{ liquidarPendientes, emitirPendientes }, { avisarAniversarios, recordarAtrasos }]) => {
+        // Cada paso con su catch: si falla uno, los demás corren igual en este ciclo.
+        const paso = (nombre: string, f: () => Promise<unknown>) =>
+          f().catch((err) => logger.warn({ err }, `tarifa mensual: ${nombre} fallido`));
+        if (env.TARIFA_LIQUIDACION_ENABLED) {
+          await paso('liquidarPendientes', liquidarPendientes);
+          if (env.TARIFA_EMISION_ENABLED) await paso('emitirPendientes', emitirPendientes);
+          await paso('avisarAniversarios', avisarAniversarios);
+        }
+        if (env.TARIFA_RECORDATORIOS_ENABLED) await paso('recordarAtrasos', recordarAtrasos);
+      })
+      .catch((err) => logger.warn({ err }, 'tarifa mensual: ciclo fallido'));
+  runTarifa();
+  setInterval(runTarifa, TARIFA_LIQUIDACION_INTERVAL_MS).unref();
+}
