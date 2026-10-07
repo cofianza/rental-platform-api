@@ -323,6 +323,17 @@ const envSchema = z.object({
   // (correo + aviso in-app). Escribe en la base y envía correos: apagado por
   // defecto, y en una API LOCAL (su .env.local apunta a producción) en false.
   PRIMA_REPORTE_REMISION_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Cobro de la tarifa mensual (plan cobro-tarifa-mensual §5). Se encienden por
+  // etapas y TODOS en false en una API LOCAL (su .env.local apunta a producción).
+  // Barrido que crea cuentas de cobro y líneas en borrador (al arrancar y cada 6 h).
+  TARIFA_LIQUIDACION_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Emitir una cuenta pasa por Factus. Apagado: la emisión deja la cuenta
+  // 'emitida' sin factura (mes de sombra y sandbox).
+  TARIFA_FACTURA_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // El barrido emite solo las cuentas en borrador; el botón «Emitir» funciona siempre.
+  TARIFA_EMISION_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Recordatorios de atraso (+1, +7 y +15 días del vencimiento).
+  TARIFA_RECORDATORIOS_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Contratos V3 · Entrega 4: clasificador IA de cláusulas adicionales
   // (src/modules/contratos/v3/clausulas.ia.ts). SIN EFECTO: la Adenda 1 del
   // módulo de contratos (respuesta 13 bis) no la habilita y ningún camino de la

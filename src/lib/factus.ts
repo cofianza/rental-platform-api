@@ -366,6 +366,24 @@ export async function createBill(input: CreateBillInput): Promise<CreateBillResp
 }
 
 /**
+ * La factura emitida con nuestro reference_code, o null si Factus no la tiene.
+ * Recupera la que Factus emitió cuando su respuesta se perdió (plan
+ * cobro-tarifa-mensual R3): reintentar con el mismo código choca con el
+ * duplicado. El filtro del listado no es exacto, por eso se compara el código.
+ * OJO: confirmar en el sandbox la forma del listado V2 antes de encender
+ * TARIFA_FACTURA_ENABLED.
+ */
+export async function getBillByReference(referenceCode: string): Promise<CreateBillResponse | null> {
+  const params = new URLSearchParams({ 'filter[reference_code]': referenceCode });
+  const lista = await factusRequest<{ data: unknown }>(`/v2/bills?${params.toString()}`);
+  const d = lista.data as { data?: unknown } | unknown[] | null;
+  const filas = (Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : []) as Array<{ number?: string; reference_code?: string }>;
+  const hallada = filas.find((b) => b.reference_code === referenceCode && b.number);
+  if (!hallada) return null;
+  return factusRequest<CreateBillResponse>(`/v2/bills/${encodeURIComponent(hallada.number!)}`);
+}
+
+/**
  * Descarga el PDF de una factura ya emitida en Factus.
  * El número aquí es el `bill.number` que devuelve `createBill` (ej. "SETP990001347").
  * La respuesta trae el archivo en base64 y el nombre original sugerido.

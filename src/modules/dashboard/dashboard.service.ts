@@ -912,6 +912,37 @@ export function totalesPorOrigen(
   return out;
 }
 
+/**
+ * El % de la tarifa del último estudio individual completado del expediente
+ * (el mismo que usa el contrato); null si no hay ninguno. Lo usan el tablero y
+ * el cobro de la tarifa (D2: V3 sin tarifa congelada).
+ */
+export async function pctDeEstudio(
+  expedienteId: string,
+  ivaPct: number,
+  // Lo carga quien llama (import dinámico, como el resto del módulo), una sola vez.
+  viaDelEstudio: typeof import('@/modules/estudios/certificado.service').viaDelEstudio,
+): Promise<number | null> {
+  const { data, error } = await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('expediente_id, resultado, referencia_proveedor, cascada, tarifa_override')
+    .eq('expediente_id', expedienteId)
+    .eq('tipo', 'individual')
+    .eq('estado', 'completado')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  if (!data) return null;
+  const e = data as { expediente_id: string; resultado: string | null; referencia_proveedor: string | null; cascada: unknown; tarifa_override: unknown };
+  return calcularTarifas({
+    via: await viaDelEstudio(e),
+    conCoarrendatario: false, // solo mueve la prima
+    canonCop: null,
+    ivaPct,
+    override: leerTarifaOverride(e.tarifa_override),
+  }).tarifa_mensual_pct;
+}
+
 export async function tarifasMensualesDeContratos(contratos: ContratoParaIngreso[]): Promise<{
   ivaPct: number;
   porContrato: Map<string, { tarifa: number; iva: number }>;
@@ -923,29 +954,7 @@ export async function tarifasMensualesDeContratos(contratos: ContratoParaIngreso
   ]);
   const { TARIFA_IVA: ivaPct } = await getCalibracion();
   const hoy = fechaBogota(new Date());
-
-  // El % del último estudio individual completado (el mismo que usa el contrato);
-  // null si no hay ninguno.
-  const pctDelEstudio = async (expedienteId: string): Promise<number | null> => {
-    const { data, error } = await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
-      .select('expediente_id, resultado, referencia_proveedor, cascada, tarifa_override')
-      .eq('expediente_id', expedienteId)
-      .eq('tipo', 'individual')
-      .eq('estado', 'completado')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw fromSupabaseError(error);
-    if (!data) return null;
-    const e = data as { expediente_id: string; resultado: string | null; referencia_proveedor: string | null; cascada: unknown; tarifa_override: unknown };
-    return calcularTarifas({
-      via: await viaDelEstudio(e),
-      conCoarrendatario: false, // solo mueve la prima
-      canonCop: null,
-      ivaPct,
-      override: leerTarifaOverride(e.tarifa_override),
-    }).tarifa_mensual_pct;
-  };
+  const pctDelEstudio = (expedienteId: string) => pctDeEstudio(expedienteId, ivaPct, viaDelEstudio);
 
   const migrados = await tarifasDeMigrados(
     contratos.filter((c) => c.origen === 'migracion').map((c) => c.id),

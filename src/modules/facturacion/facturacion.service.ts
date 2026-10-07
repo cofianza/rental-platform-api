@@ -27,6 +27,7 @@ import {
   resolveMembershipInmobiliariaIds,
   resolveOrgMemberPerfilIds,
   resolveOrgCanonicalPerfilId,
+  getActiveMembership,
 } from '@/lib/tenantScope';
 import {
   aplicarOverride,
@@ -38,6 +39,7 @@ import {
   type PerfilFiscal,
   type SolicitanteFiscal,
 } from './cliente-fiscal';
+import { totalesDe } from '@/modules/tarifa-cobro/tarifa-cobro.reglas';
 
 export type { DatosFiscalesPagoOverride } from './cliente-fiscal';
 
@@ -56,7 +58,9 @@ const ITEM_DEFAULTS = {
 // también causa IVA con TARIFA_IVA, la única perilla; su fila
 // iva_concepto_estudio ya no se edita. El estudio se factura con la
 // instantánea que guardó el cobro (pagos.base_cop / tarifa_iva).
-const CONCEPTOS_GRAVADOS = new Set(['garantia', 'estudio']);
+// La tarifa mensual (plan cobro-tarifa-mensual) también: con el IVA que
+// guardó cada línea de la cuenta de cobro.
+const CONCEPTOS_GRAVADOS = new Set(['garantia', 'estudio', 'tarifa_mensual']);
 
 /**
  * Tasa y base con que se factura un pago. El estudio usa la instantánea del
@@ -325,6 +329,44 @@ async function assertNoEsConsumoDeCredito(pagoId: string): Promise<void> {
   }
 }
 
+/** El cliente como lo pide Factus V2 (cliente-fiscal ya lo validó con faltantesFiscales). */
+function clienteFactus(cliente: ClienteFiscal): factus.FactusCustomer {
+  return {
+    identification: cliente.numero_documento,
+    // Persona juridica: company + trade_name + dv (DV del NIT). Persona
+    // natural: names. legal_organization_code 1=Jurídica, 2=Natural.
+    ...(cliente.tipo_persona === 'juridica'
+      ? {
+          company: cliente.razon_social,
+          trade_name: cliente.razon_social,
+          ...(cliente.digito_verificacion ? { dv: cliente.digito_verificacion } : {}),
+        }
+      : { names: cliente.nombre_completo }),
+    address: cliente.direccion || undefined,
+    email: cliente.email || undefined,
+    phone: cliente.telefono || undefined,
+    legal_organization_code: cliente.tipo_persona === 'juridica' ? '1' : '2',
+    tribute_code: cliente.tribute_code,
+    identification_document_code: mapTipoDocumentoToFactus(cliente.tipo_documento),
+    // V2: code DANE = 5 dígitos (faltantesFiscales ya lo exige).
+    municipality_code: cliente.municipio_codigo,
+  };
+}
+
+/** Razón social y NIT que guarda la fila de `facturas`. */
+function identidadFactura(cliente: ClienteFiscal): { razon_social: string; nit: string; direccion_fiscal: string } {
+  return {
+    // Persona juridica: la razon social real (no el nombre del representante).
+    razon_social: cliente.tipo_persona === 'juridica' && cliente.razon_social ? cliente.razon_social : cliente.nombre_completo,
+    // NIT con DV con el sufijo ("900123456-7"), para que el listado y el PDF muestren el documento completo.
+    nit:
+      cliente.digito_verificacion && cliente.tipo_documento.toLowerCase() === 'nit'
+        ? `${cliente.numero_documento}-${cliente.digito_verificacion}`
+        : cliente.numero_documento,
+    direccion_fiscal: cliente.direccion,
+  };
+}
+
 async function findFacturaExistente(pagoId: string) {
   const { data } = await (supabase
     .from('facturas' as string) as ReturnType<typeof supabase.from>)
@@ -419,7 +461,11 @@ export async function listTarifasIva(): Promise<
     const n = Number(raw);
     return { concepto: c, tasa: Number.isFinite(n) ? n : 0 };
   });
-  return [...tarifas, { concepto: 'creditos_estudios', tasa: tasaGravados, derivada: true, derivada_de: 'estudio' as const }];
+  return [
+    ...tarifas,
+    { concepto: 'creditos_estudios', tasa: tasaGravados, derivada: true, derivada_de: 'estudio' as const },
+    { concepto: 'tarifa_mensual', tasa: tasaGravados, derivada: true },
+  ];
 }
 
 export async function updateTarifasIva(
@@ -648,26 +694,7 @@ export async function crearFacturaDesdePago(
       },
     ],
     ...(cashRounding ? { cash_rounding_amount: cashRounding } : {}),
-    customer: {
-      identification: cliente.numero_documento,
-      // Persona juridica: company + trade_name + dv (DV del NIT). Persona
-      // natural: names. legal_organization_code 1=Jurídica, 2=Natural.
-      ...(cliente.tipo_persona === 'juridica'
-        ? {
-            company: cliente.razon_social,
-            trade_name: cliente.razon_social,
-            ...(cliente.digito_verificacion ? { dv: cliente.digito_verificacion } : {}),
-          }
-        : { names: cliente.nombre_completo }),
-      address: cliente.direccion || undefined,
-      email: cliente.email || undefined,
-      phone: cliente.telefono || undefined,
-      legal_organization_code: cliente.tipo_persona === 'juridica' ? '1' : '2',
-      tribute_code: cliente.tribute_code,
-      identification_document_code: mapTipoDocumentoToFactus(cliente.tipo_documento),
-      // V2: code DANE = 5 dígitos (faltantesFiscales ya lo exige).
-      municipality_code: cliente.municipio_codigo,
-    },
+    customer: clienteFactus(cliente),
     items: [
       {
         code_reference: ctx.concepto,
@@ -804,26 +831,11 @@ async function persistFacturaEmitida(params: {
   // Si ya hay un intento previo (fallido), actualizamos en vez de insertar.
   const existente = await findFacturaExistente(pagoId);
 
-  // Para persona juridica el campo razon_social en `facturas` guarda la
-  // razon social real (no el nombre del representante). Para natural usa
-  // nombre completo.
-  const facturaRazonSocial =
-    cliente.tipo_persona === 'juridica' && cliente.razon_social ? cliente.razon_social : cliente.nombre_completo;
-
-  // Si es NIT con DV, lo persistimos con el sufijo (eg. "900123456-7") para
-  // que el listado de facturas y el PDF muestren el documento completo.
-  const facturaNit =
-    cliente.digito_verificacion && cliente.tipo_documento.toLowerCase() === 'nit'
-      ? `${cliente.numero_documento}-${cliente.digito_verificacion}`
-      : cliente.numero_documento;
-
   const data = {
     pago_id: pagoId,
     expediente_id: expedienteId,
     numero_factura: bill.number,
-    razon_social: facturaRazonSocial,
-    nit: facturaNit,
-    direccion_fiscal: cliente.direccion,
+    ...identidadFactura(cliente),
     estado: 'emitida' as const,
     factus_bill_id: bill.id,
     factus_reference_code: referenceCode,
@@ -1302,6 +1314,175 @@ async function persistFailedAttempt(params: {
     .insert(data as never);
 }
 
+// ============================================================
+// crearFacturaDesdeCuentaCobro (plan cobro-tarifa-mensual, B4)
+//
+// Una factura por cuenta de cobro de la tarifa mensual, a nombre de la
+// inmobiliaria, con una línea por contrato y mes (solo las facturables: D13).
+// A crédito (payment_form 2) con vencimiento el día de la cuenta. Factus
+// calcula el IVA de cada ítem con centavos; el peso de diferencia con lo que
+// se cobra va una sola vez en cash_rounding_amount (totalesDe). Idempotente:
+// el reference_code sale fijo de la cuenta, y si Factus ya la emitió (la
+// respuesta se perdió) se recupera con getBillByReference en vez de chocar
+// con el duplicado.
+// ============================================================
+
+export interface LineaFacturaTarifa {
+  contrato_numero: string;
+  periodo: string;
+  dias: number;
+  dias_mes: number;
+  base_cop: number;
+  iva_pct: number;
+  iva_cop: number;
+}
+
+async function findFacturaPorCuenta(cuentaId: string) {
+  const { data, error } = await (supabase.from('facturas' as string) as ReturnType<typeof supabase.from>)
+    .select('id, estado, factus_number, cufe')
+    .eq('cuenta_cobro_id', cuentaId)
+    .maybeSingle();
+  // Sin saber si ya hubo un intento, no se llama a Factus (se saltaría la recuperación).
+  if (error) throw fromSupabaseError(error);
+  return data as { id: string; estado: string; factus_number: string | null; cufe: string | null } | null;
+}
+
+/** Inserta o actualiza la fila de la cuenta; un intento fallido nunca pisa una emitida. */
+async function guardarFacturaCuenta(existenteId: string | null, data: Record<string, unknown>): Promise<string> {
+  const tabla = () => supabase.from('facturas' as string) as ReturnType<typeof supabase.from>;
+  let q = existenteId ? tabla().update(data as never).eq('id', existenteId) : tabla().insert(data as never);
+  if (existenteId && data.estado !== 'emitida') q = q.neq('estado', 'emitida');
+  const { data: fila, error } = await q.select('id').maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  return (fila as { id: string } | null)?.id ?? existenteId!;
+}
+
+export async function crearFacturaDesdeCuentaCobro(
+  input: { cuentaId: string; venceEn: string; cliente: ClienteFiscal; lineas: LineaFacturaTarifa[] },
+  userId: string | null,
+): Promise<{ id: string; factus_number: string | null; cufe: string | null }> {
+  const { cuentaId, venceEn, cliente, lineas } = input;
+  const existente = await findFacturaPorCuenta(cuentaId);
+  if (existente?.estado === 'emitida') return { id: existente.id, factus_number: existente.factus_number, cufe: existente.cufe };
+  if (lineas.some((l) => !(Number(l.iva_pct) > 0))) {
+    // Adenda 1 de contratos §1.6: como la prima, la tarifa se factura gravada.
+    throw AppError.conflict('La tarifa mensual se factura con IVA y una línea quedó con IVA en 0 %. Revise TARIFA_IVA en Calibración.', 'IVA_CONCEPTO_GRAVADO_EN_CERO');
+  }
+
+  const totales = totalesDe(lineas);
+  const referenceCode = `TM-${cuentaId.replace(/-/g, '').slice(0, 12).toUpperCase()}`;
+  const recuperar = () =>
+    factus.getBillByReference(referenceCode).catch((e) => {
+      logger.warn({ cuentaId, error: e instanceof Error ? e.message : String(e) }, 'Factus: no se pudo buscar la factura por referencia');
+      return null;
+    });
+  const fallo = (error: string, respuestaProveedor: unknown) =>
+    guardarFacturaCuenta(existente?.id ?? null, {
+      cuenta_cobro_id: cuentaId,
+      estado: 'solicitada',
+      factus_reference_code: referenceCode,
+      concepto: 'tarifa_mensual',
+      total: totales.total_cop,
+      error_mensaje: error,
+      respuesta_proveedor: respuestaProveedor,
+    });
+
+  // Un intento anterior pudo quedar emitido en Factus sin que lo supiéramos.
+  let factusRes = existente ? await recuperar() : null;
+  let recuperada = !!factusRes;
+  if (!factusRes) {
+    const numberingRangeId = await factus.discoverNumberingRangeId();
+    const payload: factus.CreateBillInput = {
+      reference_code: referenceCode,
+      document: '01',
+      ...(numberingRangeId !== null ? { numbering_range_id: numberingRangeId } : {}),
+      operation_type: '10',
+      send_email: true,
+      payment_details: [
+        {
+          payment_form: 2, // crédito: la inmobiliaria paga por transferencia hasta el día 10
+          payment_method_code: medioPagoDian('transferencia', null),
+          amount: totales.total_cop.toFixed(2),
+          due_date: venceEn,
+        },
+      ],
+      ...(totales.cash_rounding_cop ? { cash_rounding_amount: totales.cash_rounding_cop.toFixed(2) } : {}),
+      customer: clienteFactus(cliente),
+      items: lineas.map((l) => ({
+        code_reference: 'tarifa_mensual',
+        name: `Tarifa mensual fianza – Contrato ${l.contrato_numero} – ${l.periodo.slice(0, 7)} (${l.dias}/${l.dias_mes} días)`,
+        quantity: '1.00',
+        discount_rate: '0.00',
+        price: Number(l.base_cop).toFixed(2),
+        unit_measure_code: ITEM_DEFAULTS.unit_measure_code,
+        standard_code: ITEM_DEFAULTS.standard_code,
+        taxes: [{ code: '01', rate: Number(l.iva_pct).toFixed(2) }],
+      })),
+    };
+    logger.info({ cuentaId, referenceCode, lineas: lineas.length }, 'Factus: enviando factura de la tarifa mensual');
+    try {
+      factusRes = await factus.createBill(payload);
+    } catch (err) {
+      // R3: Factus pudo emitirla aunque la respuesta no llegó.
+      factusRes = await recuperar();
+      recuperada = !!factusRes;
+      if (!factusRes) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error({ cuentaId, error: msg }, 'Factus: error al crear la factura de la tarifa mensual');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await fallo(msg, (err as any).factusBody ?? { error: msg });
+        throw err;
+      }
+    }
+  }
+
+  const bill = extractBill(factusRes);
+  if (!bill) {
+    await fallo('Factus respondió 200 pero la estructura no es la esperada', factusRes);
+    throw new AppError(502, 'FACTUS_UNEXPECTED_RESPONSE', 'Factus respondió 200 pero el formato es inesperado.');
+  }
+  // La factura recuperada salió de un intento anterior: si sus líneas eran otras, no se da por emitida esta cuenta.
+  if (recuperada && bill.total != null && Math.abs(Math.round(Number(bill.total)) - totales.total_cop) > 1)
+    throw new AppError(
+      409,
+      'FACTURA_RECUPERADA_NO_CUADRA',
+      `Factus ya tiene la factura ${bill.number ?? referenceCode} de esta cuenta por $${Number(bill.total)}, pero la cuenta suma $${totales.total_cop}. ` +
+        'Revise la cuenta y emita la nota crédito o el ajuste antes de reintentar.',
+      { factus_number: bill.number, total_factura: Number(bill.total), total_cuenta: totales.total_cop },
+    );
+
+  const id = await guardarFacturaCuenta(existente?.id ?? null, {
+    cuenta_cobro_id: cuentaId,
+    pago_id: null,
+    expediente_id: null,
+    numero_factura: bill.number,
+    ...identidadFactura(cliente),
+    estado: 'emitida',
+    factus_bill_id: bill.id,
+    factus_reference_code: referenceCode,
+    factus_number: bill.number,
+    cufe: bill.cufe,
+    qr_url: bill.qr,
+    qr_image_base64: bill.qr_image,
+    respuesta_proveedor: factusRes,
+    concepto: 'tarifa_mensual',
+    total: bill.total != null ? Number(bill.total) : totales.total_cop,
+    tax_amount: bill.tax_amount != null ? Number(bill.tax_amount) : totales.iva_cop,
+    error_mensaje: null,
+    validada_en: new Date().toISOString(),
+  });
+
+  logAudit({
+    usuarioId: userId,
+    accion: AUDIT_ACTIONS.PAGO_CREATED, // reuso hasta tener accion FACTURA_CREATED
+    entidad: AUDIT_ENTITIES.PAGO,
+    entidadId: id,
+    detalle: { tipo: 'factura_tarifa_mensual', cuenta_cobro_id: cuentaId, factus_number: bill.number, cufe: bill.cufe, total: bill.total },
+  });
+
+  return { id, factus_number: bill.number ?? null, cufe: bill.cufe ?? null };
+}
+
 // ── Listar / ver ───────────────────────────────────────────────────
 
 /**
@@ -1313,21 +1494,26 @@ async function persistFailedAttempt(params: {
  * Si crecen a cientos, pasarlo a una vista o RPC.
  */
 async function filtroNotaCreditoPendiente(): Promise<string | null> {
-  const [pagos, compras] = await Promise.all([
+  const [pagos, compras, lineas] = await Promise.all([
     (supabase.from('pagos' as string) as ReturnType<typeof supabase.from>).select('id').eq('estado', 'reembolsado'),
     (supabase.from('compras_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
       .select('id')
       .eq('estado', 'cancelado'),
+    // Tarifa mensual: líneas anuladas o recalculadas después de facturadas.
+    (supabase.from('cuentas_cobro_tarifa_lineas' as string) as ReturnType<typeof supabase.from>)
+      .select('id:cuenta_id')
+      .eq('requiere_nota_credito', true),
   ]);
-  const conError = pagos.error ?? compras.error;
+  const conError = pagos.error ?? compras.error ?? lineas.error;
   if (conError) {
     logger.error({ error: conError.message }, 'Error leyendo los cobros reembolsados para las notas crédito');
     throw new AppError(500, 'INTERNAL_ERROR', 'Error al listar facturas');
   }
-  const ids = (r: { data: unknown }) => ((r.data ?? []) as Array<{ id: string }>).map((x) => x.id);
+  const ids = (r: { data: unknown }) => [...new Set(((r.data ?? []) as Array<{ id: string }>).map((x) => x.id))];
   const partes = [
     ids(pagos).length ? `pago_id.in.(${ids(pagos).join(',')})` : null,
     ids(compras).length ? `compra_creditos_id.in.(${ids(compras).join(',')})` : null,
+    ids(lineas).length ? `cuenta_cobro_id.in.(${ids(lineas).join(',')})` : null,
   ].filter(Boolean);
   return partes.length ? partes.join(',') : null;
 }
@@ -1374,13 +1560,22 @@ export async function listFacturas(query: ListFacturasQuery, userId: string, use
     qb = qb.in('expediente_id', expedienteIds);
   } else if (userRol === 'propietario' || userRol === 'inmobiliaria') {
     // Org-aware: facturas de los expedientes de su cartera/organización
-    // (resolveAllowedExpedienteIds: inmuebles propios + de sus organizaciones).
-    const expedienteIds = await resolveAllowedExpedienteIds(userId, userRol);
-    if (expedienteIds !== null && expedienteIds.length === 0) {
+    // (resolveAllowedExpedienteIds: inmuebles propios + de sus organizaciones),
+    // y a los titulares, las de las cuentas de cobro de la tarifa de su organización.
+    const [expedienteIds, cuentaIds] = await Promise.all([
+      resolveAllowedExpedienteIds(userId, userRol),
+      userRol === 'inmobiliaria' ? cuentasCobroDeTitular(userId) : Promise.resolve([]),
+    ]);
+    if (expedienteIds !== null && expedienteIds.length === 0 && cuentaIds.length === 0) {
       return { facturas: [], pagination: { total: 0, page: query.page, limit: query.limit, totalPages: 0 } };
     }
     if (expedienteIds !== null) {
-      qb = qb.in('expediente_id', expedienteIds);
+      // Ids leídos por el servidor (UUID), nunca valores del usuario.
+      const partes = [
+        expedienteIds.length ? `expediente_id.in.(${expedienteIds.join(',')})` : null,
+        cuentaIds.length ? `cuenta_cobro_id.in.(${cuentaIds.join(',')})` : null,
+      ].filter(Boolean);
+      qb = qb.or(partes.join(','));
     }
   }
 
@@ -1609,9 +1804,21 @@ async function resolveFacturaExpedienteId(
   return null;
 }
 
+/** Las cuentas de cobro de la tarifa de la organización de la que el usuario es titular (owner); [] si no lo es. */
+async function cuentasCobroDeTitular(userId: string): Promise<string[]> {
+  const m = await getActiveMembership(userId);
+  if (!m || m.rolMiembro !== 'owner') return [];
+  const { data, error } = await (supabase.from('cuentas_cobro_tarifa' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('inmobiliaria_id', m.orgId);
+  if (error) throw fromSupabaseError(error);
+  return ((data as { id: string }[] | null) ?? []).map((c) => c.id);
+}
+
 /**
  * Guard de pertenencia para facturas SIN expediente (compra de créditos de
- * estudios). El "cliente" de la factura es la inmobiliaria compradora, no un
+ * estudios, o cuenta de cobro de la tarifa: solo los titulares de esa
+ * organización). El "cliente" de la factura es la inmobiliaria compradora, no un
  * solicitante. No-op para roles internos y llamadas sin identidad; 404 para
  * cualquier otro rol que no sea el comprador (o miembro activo de su
  * organización, en el caso de una inmobiliaria).
@@ -1645,6 +1852,8 @@ async function assertCompraFacturaAccess(
       }
     }
   }
+  const cuentaId = (factura.cuenta_cobro_id as string | null) ?? null;
+  if (cuentaId && userRol === 'inmobiliaria' && (await cuentasCobroDeTitular(userId)).includes(cuentaId)) return;
   throw AppError.notFound('Factura no encontrada', 'FACTURA_NOT_FOUND');
 }
 

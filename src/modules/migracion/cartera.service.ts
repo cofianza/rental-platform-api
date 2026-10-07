@@ -248,6 +248,13 @@ export async function excluirContrato(filaId: string, motivo: MotivoExclusion, n
     }
   }
 
+  // Tarifa mensual (B5): los meses posteriores a la exclusión no se cobran; lo ya cobrado no se devuelve.
+  // Al vigente ya lo revisa la cancelación (aplicarEfectosTerminacion): dos revisiones a la vez repetirían los avisos.
+  if (contrato.estado !== 'vigente')
+    import('@/modules/tarifa-cobro/tarifa-cobro.gestion.service')
+      .then((t) => t.revisarLineasPorTerminacion(contrato.id, usuarioId))
+      .catch((e) => logger.warn({ contratoId: contrato.id, error: e instanceof Error ? e.message : String(e) }, 'Migración: tarifa mensual del excluido sin revisar'));
+
   // §7.2.1: nunca estuvo cubierto, así que sus moras activas no siguen escalando.
   const moras = await cancelarMorasSinCobertura(
     contrato.id,
@@ -667,7 +674,7 @@ interface Hoja {
   filas: Record<string, unknown>[];
 }
 
-async function libro(hojas: Hoja[]): Promise<{ buffer: Buffer; contentType: string }> {
+export async function libro(hojas: Hoja[]): Promise<{ buffer: Buffer; contentType: string }> {
   const wb = new ExcelJS.Workbook();
   for (const h of hojas) {
     const ws = wb.addWorksheet(h.nombre, { views: [{ state: 'frozen', ySplit: 1 }] });

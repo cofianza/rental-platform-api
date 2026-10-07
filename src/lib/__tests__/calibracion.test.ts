@@ -47,6 +47,8 @@ import {
   invalidateCalibracionCache,
   getCalibracion,
   validarCoherencia,
+  validarParametro,
+  mesCobroDesde,
   CALIBRACION_DEFAULT,
 } from '@/lib/calibracion';
 
@@ -267,5 +269,24 @@ describe('setParametro — riesgo solo la Gerencia General', () => {
     enqueue('parametros_calibracion', { error: null });
     await setParametro('CANON_MAX_TRANSITORIO', 3_500_000, USER);
     expect(opsDe('parametros_calibracion', 'upsert')).toHaveLength(1);
+  });
+});
+
+describe('TARIFA_COBRO_DESDE — primer mes que cobra la plataforma (D16)', () => {
+  it('sin fijar no cobra ningún mes', () => {
+    expect(mesCobroDesde(CALIBRACION_DEFAULT.TARIFA_COBRO_DESDE)).toBe('2099-12-01');
+  });
+
+  it('acepta AAAAMM y rechaza un mes imposible', () => {
+    expect(validarParametro('TARIFA_COBRO_DESDE', 202611)?.error).toBeNull();
+    expect(validarParametro('TARIFA_COBRO_DESDE', 202612)?.error).toBeNull();
+    expect(validarParametro('TARIFA_COBRO_DESDE', 202613)?.error).toMatch(/AAAAMM/);
+    expect(validarParametro('TARIFA_COBRO_DESDE', 202700)?.error).toMatch(/AAAAMM/);
+    expect(validarParametro('TARIFA_COBRO_DESDE', 2026)?.error).toMatch(/rango/);
+  });
+
+  it('se lee como el día 1 del mes', () => {
+    expect(mesCobroDesde(202611)).toBe('2026-11-01');
+    expect(mesCobroDesde(202701)).toBe('2027-01-01');
   });
 });
