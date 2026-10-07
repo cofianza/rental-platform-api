@@ -28,6 +28,10 @@ export async function descargarPlantilla(_req: Request, res: Response) {
   enviarXlsx(res, buffer, 'plantilla-migracion-cartera.xlsx');
 }
 
+export async function listarInmobiliarias(_req: Request, res: Response) {
+  sendSuccess(res, await habilitacion.listarInmobiliarias());
+}
+
 export async function estadoOrg(req: Request, res: Response) {
   sendSuccess(res, await habilitacion.estadoMigracionOrg(req.params.inmobiliariaId as string));
 }
@@ -127,6 +131,10 @@ export async function enviarActa(req: Request, res: Response) {
 
 export async function estadoActa(req: Request, res: Response) {
   sendSuccess(res, await actaFirma.estadoActa(req.params.loteId as string));
+}
+
+export async function actaPdf(req: Request, res: Response) {
+  sendSuccess(res, await actaFirma.urlActaPdf(req.params.loteId as string));
 }
 
 export async function actualizarActa(req: Request, res: Response) {

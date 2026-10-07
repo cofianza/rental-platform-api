@@ -96,6 +96,42 @@ export async function estadoMigracionOrg(inmobiliariaId: string) {
   };
 }
 
+/**
+ * Listado del backoffice: inmobiliarias no cerradas con su titular, sus
+ * habilitaciones por destinación y la suspensión. Una sola consulta (embeds).
+ */
+export async function listarInmobiliarias() {
+  const { data, error } = await db('inmobiliarias')
+    .select(
+      'id, nombre, estado, migracion_suspendida_en, migracion_suspendida_motivo, ' +
+        'owner:perfiles!inmobiliarias_owner_perfil_id_fkey(id, nombre, apellido, razon_social, ciudad, estado), ' +
+        'migracion_habilitaciones(*)',
+    )
+    .neq('estado', 'cerrada')
+    .order('nombre');
+  if (error) throw fromSupabaseError(error);
+  type Owner = { id: string; nombre: string | null; apellido: string | null; razon_social: string | null; ciudad: string | null; estado: string | null };
+  const filas = (data ?? []) as unknown as (OrgMigracion & { owner: Owner | null; migracion_habilitaciones: Habilitacion[] | null })[];
+  return filas.map((o) => ({
+    id: o.id,
+    nombre: o.owner?.razon_social || o.nombre,
+    estado: o.estado,
+    titular: o.owner
+      ? { id: o.owner.id, nombre: `${o.owner.nombre ?? ''} ${o.owner.apellido ?? ''}`.trim() || null }
+      : null,
+    ciudad: o.owner?.ciudad ?? null,
+    estado_cuenta: o.owner?.estado ?? null,
+    habilitaciones: (o.migracion_habilitaciones ?? []).map((h) => ({
+      destinacion: h.destinacion,
+      estado: h.estado,
+      faltantes: faltantesHabilitacion(h),
+    })),
+    suspension: o.migracion_suspendida_en
+      ? { desde: o.migracion_suspendida_en, motivo: o.migracion_suspendida_motivo }
+      : null,
+  }));
+}
+
 /** Registra (o corrige) el resultado de la revisión manual §1.1.4-§1.1.5. */
 export async function guardarHabilitacion(
   inmobiliariaId: string,

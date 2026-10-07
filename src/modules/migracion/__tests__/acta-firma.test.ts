@@ -59,7 +59,9 @@ vi.mock('@/lib/supabase', () => ({
   supabase: {
     from: (t: string) => chainFor(t),
     rpc: (fn: string, args: Record<string, unknown>) => mockRpc(fn, args),
-    storage: { from: () => ({ upload: async () => ({ error: null }), download: async () => ({ data: null, error: null }) }) },
+    storage: { from: () => ({ upload: async () => ({ error: null }), download: async () => ({ data: null, error: null }),
+      createSignedUrl: async (key: string) => ({ data: { signedUrl: `https://firmada/${key}` }, error: null }),
+    }) },
   },
 }));
 vi.mock('@/lib/logger', () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -82,7 +84,7 @@ vi.mock('@/modules/notificaciones/notificaciones.service', () => ({
 vi.mock('@/modules/users/users.service', () => ({ listOperators: efectos.listOperators }));
 vi.mock('../habilitacion.service', () => ({ BUCKET: 'documentos-expedientes' }));
 
-import { cancelarLote, reconciliarActa, vencerLote, webhookAucoMigracion, actaIdDeCustom } from '../acta-firma';
+import { cancelarLote, reconciliarActa, vencerLote, webhookAucoMigracion, actaIdDeCustom, urlActaPdf } from '../acta-firma';
 
 const ACTA_ID = '11111111-1111-4111-8111-111111111111';
 const LOTE_ID = '22222222-2222-4222-8222-222222222222';
@@ -273,5 +275,27 @@ describe('vencerLote / cancelarLote', () => {
     enqueue('migracion_actas', { data: acta({ estado: 'completo', cerrado_en: '2026-10-07T15:30:00.000Z' }), error: null });
     await expect(cancelarLote(LOTE_ID, 'u1')).rejects.toMatchObject({ statusCode: 409 });
     expect(updatesLote()).toEqual([]);
+  });
+});
+
+describe('urlActaPdf', () => {
+  beforeEach(() => queues.clear());
+
+  it('404 si el lote no tiene acta generada', async () => {
+    enqueue('migracion_lotes', { data: lote({ acta_storage_key: null }), error: null });
+    enqueue('migracion_actas', { data: null, error: null });
+    await expect(urlActaPdf(LOTE_ID)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('sin firmar: enlaza el acta generada del lote', async () => {
+    enqueue('migracion_lotes', { data: lote(), error: null });
+    enqueue('migracion_actas', { data: acta({ storage_key_firmado: null }), error: null });
+    await expect(urlActaPdf(LOTE_ID)).resolves.toEqual({ url: 'https://firmada/migracion/org/lotes/l/acta.pdf', firmada: false });
+  });
+
+  it('firmada: enlaza la versión firmada', async () => {
+    enqueue('migracion_lotes', { data: lote(), error: null });
+    enqueue('migracion_actas', { data: acta(), error: null });
+    await expect(urlActaPdf(LOTE_ID)).resolves.toEqual({ url: 'https://firmada/migracion/org/lotes/l/acta-firmada.pdf', firmada: true });
   });
 });

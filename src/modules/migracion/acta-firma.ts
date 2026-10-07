@@ -603,6 +603,16 @@ export async function estadoActa(loteId: string) {
   };
 }
 
+/** Enlace temporal (10 min) al PDF del acta: la firmada si ya existe, si no la generada sin firmar. */
+export async function urlActaPdf(loteId: string) {
+  const [l, a] = await Promise.all([leerLote(loteId), ultimaActa(loteId)]);
+  const key = a?.storage_key_firmado ?? l.acta_storage_key;
+  if (!key) throw AppError.notFound('El lote no tiene Acta de Migración generada.', 'MIGRACION_SIN_ACTA');
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(key, 600);
+  if (error || !data?.signedUrl) throw new AppError(500, 'STORAGE_ERROR', 'No se pudo obtener el acta. Intente de nuevo.');
+  return { url: data.signedUrl, firmada: !!a?.storage_key_firmado };
+}
+
 /** Botón «Actualizar»: reconcilia la última acta del lote y devuelve el estado. */
 export async function actualizarActa(loteId: string) {
   const a = await ultimaActa(loteId);

@@ -83,6 +83,8 @@ app.use(
   cors({
     origin: env.CORS_ORIGIN,
     credentials: true,
+    // Para que el navegador lea el nombre de los archivos descargados (xlsx/pdf).
+    exposedHeaders: ['Content-Disposition'],
   }),
 );
 

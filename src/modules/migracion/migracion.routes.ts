@@ -59,6 +59,7 @@ router.use(authMiddleware, roleGuard(['administrador', 'operador_analista']));
 
 router.get('/plantilla', controller.descargarPlantilla);
 
+router.get('/inmobiliarias', controller.listarInmobiliarias);
 router.get('/inmobiliarias/:inmobiliariaId', validate({ params: orgParams }), controller.estadoOrg);
 router.put(
   '/inmobiliarias/:inmobiliariaId/habilitaciones/:destinacion',
@@ -95,6 +96,7 @@ router.post(
 // Acta de Migración (§3.3): envío a firma por Auco y estado.
 router.post('/lotes/:loteId/acta/enviar', validate({ params: loteParams }), controller.enviarActa);
 router.get('/lotes/:loteId/acta', validate({ params: loteParams }), controller.estadoActa);
+router.get('/lotes/:loteId/acta/pdf', validate({ params: loteParams }), controller.actaPdf);
 router.post('/lotes/:loteId/acta/actualizar', validate({ params: loteParams }), controller.actualizarActa);
 // Cancelación antes de la firma: anula el acta en Auco y libera los inmuebles del lote.
 router.post('/lotes/:loteId/cancelar', validate({ params: loteParams }), controller.cancelarLote);
