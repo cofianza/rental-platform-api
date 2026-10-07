@@ -315,3 +315,53 @@ describe('rastro de quién gestionó la mora', () => {
     expect(select?.args[0]).toContain('perfiles!moras_mensajes_autor_id_fkey(nombre, apellido)');
   });
 });
+
+describe('reportarMora — contrato migrado (sin retroactividad, §4.5)', () => {
+  // Activado el 10-sep a las 21:00 de Bogotá (02:00Z del 11): el día que cuenta es el 10.
+  const migrado = (fecha_vencimiento_canon: string) => {
+    enqueue('contratos', {
+      data: { id: 'c1', expediente_id: 'exp1', estado: 'vigente', origen: 'migracion', fecha_firma: '2026-09-11T02:00:00Z' },
+      error: null,
+    });
+    enqueue('expedientes', { data: { id: 'exp1', solicitante_id: null, inmueble_id: 'i1' }, error: null });
+    enqueue('inmuebles', { data: { codigo: 'A1', direccion: 'Cra 7 # 45-10', propietario_id: 'p1' }, error: null });
+    return reportarMora({ ...INPUT, fecha_vencimiento_canon } as never, 'u1', 'inmobiliaria');
+  };
+
+  it('rechaza con 422 un canon que vencía antes del día de activación', async () => {
+    await expect(migrado('2026-09-09')).rejects.toMatchObject({
+      statusCode: 422,
+      errorCode: 'MORA_ANTERIOR_A_ACTIVACION',
+    });
+    expect(ops.some((o) => o.table === 'moras_tickets' && o.method === 'insert')).toBe(false);
+  });
+
+  it('sin acceso al contrato responde 404, no el 422 que revelaría la migración', async () => {
+    mockAssertAccess.mockRejectedValueOnce(Object.assign(new Error('no'), { statusCode: 404, errorCode: 'NOT_FOUND' }));
+    await expect(migrado('2026-09-09')).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('acepta el canon que vence el mismo día de la activación', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    enqueue('contratos', {
+      data: { id: 'c1', expediente_id: 'exp1', estado: 'vigente', origen: 'migracion', fecha_firma: '2026-09-11T02:00:00Z' },
+      error: null,
+    });
+    enqueue('expedientes', { data: { id: 'exp1', solicitante_id: null, inmueble_id: 'i1' }, error: null });
+    enqueue('inmuebles', { data: { codigo: 'A1', direccion: 'Cra 7 # 45-10', propietario_id: 'p1' }, error: null });
+    enqueue('moras_tickets',
+      { data: null, error: null },
+      { data: { id: 'm1', ticket_numero: 'MOR-2026-001', inquilino_telefono: null, inquilino_nombre: 'Ana', inmueble_direccion: 'Cra 7', monto_mora: 1 }, error: null },
+      { data: { id: 'm1' }, error: null },
+    );
+    await expect(reportarMora({ ...INPUT, fecha_vencimiento_canon: '2026-09-10' } as never, 'u1', 'inmobiliaria'))
+      .resolves.toMatchObject({ whatsapp_estado: 'aceptado' });
+  });
+
+  it('a un contrato de la plataforma no le aplica', async () => {
+    mockEnviarTemplate.mockResolvedValue('aceptado');
+    prepararReporte();
+    await expect(reportarMora({ ...INPUT, fecha_vencimiento_canon: '2020-01-05' } as never, 'u1', 'inmobiliaria'))
+      .resolves.toBeDefined();
+  });
+});

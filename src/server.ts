@@ -111,6 +111,19 @@ if (env.RESERVA_V3_BARRIDO_ENABLED) {
   setInterval(runReservaV3, RESERVA_V3_INTERVAL_MS).unref();
 }
 
+// Migración de cartera: respaldo del webhook del Acta de Migración (firmas,
+// rechazos, activaciones a medias) y vencimiento de lotes sin firma (§3.6).
+// Escribe en la base: MIGRACION_BARRIDO_ENABLED=false (por defecto) en una API local.
+const MIGRACION_INTERVAL_MS = 15 * 60 * 1000;
+if (env.MIGRACION_BARRIDO_ENABLED) {
+  const runMigracion = () =>
+    import('@/modules/migracion/acta-firma')
+      .then(({ barrerActasMigracion }) => barrerActasMigracion())
+      .catch((err) => logger.warn({ err }, 'barrerActasMigracion: ciclo fallido'));
+  runMigracion();
+  setInterval(runMigracion, MIGRACION_INTERVAL_MS).unref();
+}
+
 // Ley 2300: los WhatsApp de cobro que quedaron para el horario permitido. Aparte
 // del autoescalado: apagar el escalado no apaga esta cola. En una API LOCAL
 // (apunta a la base de producción) MORAS_COBROS_PROGRAMADOS_ENABLED=false.

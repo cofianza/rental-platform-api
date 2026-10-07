@@ -845,7 +845,7 @@ export async function sobreDelEvento(body: { code?: unknown; custom?: unknown } 
   return (data as { id: string } | null) ?? null;
 }
 
-function secretoValido(req: Request): boolean {
+export function secretoValido(req: Request): boolean {
   const secreto = env.AUCO_WEBHOOK_SECRET;
   if (!secreto) return true; // misma semántica que el webhook anterior (firma.controller)
   const recibido = Buffer.from(String(req.headers.authorization ?? req.headers['x-webhook-secret'] ?? ''));

@@ -261,7 +261,7 @@ describe('Dashboard Service', () => {
         table === 'contratos'
           ? createChain([
               { valor_arriendo: 1000000, moras_tickets: [{ reportado_at: hace10Dias }] },
-              { valor_arriendo: '3000000', moras_tickets: [] },
+              { valor_arriendo: '3000000', origen: 'migracion', moras_tickets: [] },
             ])
           : createChain([]),
       );
@@ -276,6 +276,9 @@ describe('Dashboard Service', () => {
         moraActiva: 1,
         diasPromedioMora: 10,
         canonGestionado: 4000000,
+        // El migrado cuenta en el total y además aparte (spec migración §4.1).
+        contratosMigrados: 1,
+        canonMigrado: 3000000,
       });
     });
   });
@@ -384,6 +387,32 @@ describe('Dashboard Service', () => {
       expect(r.kpis.ivaRecaudado).toBe(5_700);
       expect(r.kpis.contratosSinTarifa).toBe(1);
       expect(r.config).toEqual({ valorAfianzamientoMensual: 30_000, ivaGarantiaPorcentaje: 19 });
+    });
+
+    it('migración de cartera: el migrado toma su tarifa de migracion_filas (no «sin estudio») y va aparte', async () => {
+      const contrato = (id: string, exp: string, origen: string) => ({ id, expediente_id: exp, estado: 'vigente', origen, valor_arriendo: '1500000', fecha_inicio: null, fecha_fin: null, expedientes: null });
+      mockFrom.mockImplementation((table: string) => {
+        if (table === 'contratos') return createChain([contrato('c1', 'e1', 'plataforma'), contrato('c3', 'e3', 'migracion')]);
+        // Pasó a REPORTABLE (2,0 %) desde un mes que aún no llega: este mes rige la del acta (2,5 %).
+        if (table === 'migracion_filas') return createChain([{ contrato_id: 'c3', tarifa_pct: '2.00', tarifa_acta_pct: '2.50', tarifa_desde: '2999-01-01' }]);
+        if (table === 'estudios') {
+          const chain = createChain({ expediente_id: 'e1', resultado: 'aprobado' });
+          chain.maybeSingle = () => chain;
+          return chain;
+        }
+        return createChain([]);
+      });
+      const ahora = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 20 * 60_000);
+
+      const r = await dashboardService.getAdminOverview();
+      ahora.mockRestore();
+
+      expect(r.kpis.contratosSinTarifa).toBe(0);
+      expect(r.kpis.ingresosFianzas).toBe(30_000 + 37_500);
+      expect(r.kpis.porOrigen).toEqual({
+        plataforma: { contratos: 1, canon: 1_500_000, tarifa: 30_000, iva: 5_700 },
+        migracion: { contratos: 1, canon: 1_500_000, tarifa: 37_500, iva: 7_125 },
+      });
     });
   });
 

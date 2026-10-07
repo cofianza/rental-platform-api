@@ -338,7 +338,7 @@ export function evaluarBloqueos(f: Fuentes, hoy: string, cal: Calibracion, ahora
   if (inm.estado === 'ocupado' && !inm.reservado_por_expediente_id)
     b(
       'INMUEBLE_OCUPADO',
-      'El inmueble figura como arrendado. Los inmuebles ya arrendados se incorporan por migración de cartera, que todavía no está disponible: escríbanos para revisar el caso.',
+      'El inmueble figura como arrendado. Si su contrato ya está en curso, se incorpora por migración de cartera: solicítela a Cofianza, que hace la carga del archivo y le envía el acta para firma.',
     );
   // Reactivarlo es del administrador de Cofianza (detalle del inmueble): la web dice a quién pedírselo.
   if (inm.estado === 'inactivo')

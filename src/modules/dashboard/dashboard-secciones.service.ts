@@ -19,8 +19,12 @@ import {
   countVitrinaVisitasMes,
   fetchPerfilesInmobiliaria,
   tarifasMensualesDeContratos,
+  totalesPorOrigen,
+  origenDe,
   SELECT_TARIFA_CONGELADA,
   type MotivoSinIngreso,
+  type OrigenContrato,
+  type TotalesPorOrigen,
 } from './dashboard.service';
 
 // Estados de contrato considerados "activos" (firmado = listo, vigente = corriendo).
@@ -37,6 +41,8 @@ const POR_VENCER_DIAS = 60;
 
 interface PerfilAgregado {
   contratosActivos: number;
+  /** De los activos, los migrados (spec migración §4.1). */
+  contratosMigrados: number;
   canonTotal: number;
   moraActivaCount: number;
 }
@@ -48,6 +54,7 @@ interface InmuebleDueno {
 
 interface ContratoConDueno {
   valor_arriendo: number | string | null;
+  origen?: string | null;
   expedientes: { inmuebles: InmuebleDueno | null } | null;
   moras_tickets: Array<{ estado: string }> | null;
 }
@@ -58,7 +65,7 @@ async function fetchContratosActivosConDueno(): Promise<ContratoConDueno[]> {
   const { data, error } = await (
     supabase.from('contratos' as string) as ReturnType<typeof supabase.from>
   )
-    .select('valor_arriendo, expedientes(inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)), moras_tickets(estado)')
+    .select('valor_arriendo, origen, expedientes(inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id)), moras_tickets(estado)')
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[])
     .in('moras_tickets.estado', ESTADOS_MORA_ACTIVA as unknown as string[]);
   if (error) throw fromSupabaseError(error);
@@ -71,12 +78,13 @@ function agregarPorPerfil(
   duenoDe: (i: InmuebleDueno) => string,
 ): Map<string, PerfilAgregado> {
   const out = new Map<string, PerfilAgregado>();
-  for (const id of perfilIds) out.set(id, { contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 });
+  for (const id of perfilIds) out.set(id, { contratosActivos: 0, contratosMigrados: 0, canonTotal: 0, moraActivaCount: 0 });
   for (const c of contratos) {
     const inm = c.expedientes?.inmuebles;
     const agg = inm ? out.get(duenoDe(inm)) : undefined;
     if (!agg) continue;
     agg.contratosActivos += 1;
+    if (c.origen === 'migracion') agg.contratosMigrados += 1;
     agg.canonTotal += Number(c.valor_arriendo ?? 0);
     agg.moraActivaCount += c.moras_tickets?.length ?? 0;
   }
@@ -204,6 +212,7 @@ export interface InmobiliariaRow {
   estado: string; // activo | inactivo
   desde: string; // created_at
   contratosActivos: number;
+  contratosMigrados: number;
   canonTotal: number;
   moraActivaCount: number;
   estudios: ResumenEstudios;
@@ -227,7 +236,7 @@ export async function listInmobiliarias(): Promise<InmobiliariaRow[]> {
   );
 
   return rows.map((r) => {
-    const a = agg.get(r.id as string) ?? { contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 };
+    const a = agg.get(r.id as string) ?? { contratosActivos: 0, contratosMigrados: 0, canonTotal: 0, moraActivaCount: 0 };
     const razon = (r.razon_social as string) || `${r.nombre ?? ''} ${r.apellido ?? ''}`.trim() || '—';
     return {
       id: r.id as string,
@@ -240,6 +249,7 @@ export async function listInmobiliarias(): Promise<InmobiliariaRow[]> {
       estado: (r.estado as string) ?? 'activo',
       desde: r.created_at as string,
       contratosActivos: a.contratosActivos,
+      contratosMigrados: a.contratosMigrados,
       canonTotal: a.canonTotal,
       moraActivaCount: a.moraActivaCount,
       estudios: creditos.get(r.id as string) ?? { comprados: 0, usados: 0, disponibles: 0, ultimaCompra: null },
@@ -280,7 +290,7 @@ export async function listPropietarios(): Promise<PropietarioRow[]> {
   const agg = agregarPorPerfil(rows.map((r) => r.id as string), contratos, (i) => i.propietario_id);
 
   return rows.map((r) => {
-    const a = agg.get(r.id as string) ?? { contratosActivos: 0, canonTotal: 0, moraActivaCount: 0 };
+    const a = agg.get(r.id as string) ?? { contratosActivos: 0, contratosMigrados: 0, canonTotal: 0, moraActivaCount: 0 };
     return {
       id: r.id as string,
       nombre: `${r.nombre ?? ''} ${r.apellido ?? ''}`.trim() || '—',
@@ -303,6 +313,8 @@ export async function listPropietarios(): Promise<PropietarioRow[]> {
 interface ContratoRowDB {
   id: string;
   estado: string;
+  /** plataforma | migracion (spec migración §4.1). */
+  origen?: string | null;
   valor_arriendo: number | string | null;
   fecha_inicio: string | null;
   fecha_fin: string | null;
@@ -461,12 +473,12 @@ async function fetchPropietarioPorExpediente(expedienteIds: string[]): Promise<M
 }
 
 const CONTRATO_SELECT =
-  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, motivo_cancelacion, expediente_id, ' +
+  'id, estado, origen, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, motivo_cancelacion, expediente_id, ' +
   'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(nombre, apellido, numero_documento, telefono))';
 
 // Variante con datos extra del solicitante (ficha de detalle en Inquilinos).
 const INQUILINO_SELECT =
-  'id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, motivo_cancelacion, expediente_id, ' +
+  'id, estado, origen, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, motivo_cancelacion, expediente_id, ' +
   'coa_anidado:datos_variables->coarrendatario, coa_plano:datos_variables->>coarrendatario_nombre, ' +
   'expedientes(id, inmuebles!expedientes_inmueble_id_fkey(codigo, direccion, ciudad), solicitantes(' +
   'nombre, apellido, numero_documento, telefono, email, ocupacion, actividad_economica, ingresos_mensuales, empresa, tipo_persona))';
@@ -475,6 +487,7 @@ const INQUILINO_SELECT =
 
 export interface InquilinoRow {
   contratoId: string;
+  origen: OrigenContrato;
   expedienteId: string;
   inquilino: string;
   cedula: string | null;
@@ -523,6 +536,7 @@ export async function listInquilinos(): Promise<InquilinoRow[]> {
     const coa = coarr.get(r.id);
     return {
       contratoId: r.id,
+      origen: origenDe(r),
       expedienteId: r.expediente_id,
       inquilino: sol ? `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || '—' : '—',
       cedula: sol?.numero_documento ?? null,
@@ -550,6 +564,7 @@ export async function listInquilinos(): Promise<InquilinoRow[]> {
 
 export interface ContratoAdminRow {
   id: string;
+  origen: OrigenContrato;
   inmueble: string;
   inquilino: string;
   propietario: string;
@@ -586,6 +601,7 @@ export async function listContratosAdmin(): Promise<ContratoAdminRow[]> {
     const inm = r.expedientes?.inmuebles ?? null;
     return {
       id: r.id,
+      origen: origenDe(r),
       inmueble: fmtInmueble(inm),
       inquilino: sol ? `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || '—' : '—',
       propietario: propietarios.get(r.expediente_id) ?? '—',
@@ -699,6 +715,7 @@ export async function getVitrinaAdmin(): Promise<VitrinaData> {
 
 export interface IngresoContratoRow {
   contratoId: string;
+  origen: OrigenContrato;
   inquilino: string;
   inmueble: string;
   canon: number;
@@ -710,6 +727,7 @@ export interface IngresoContratoRow {
 /** Contrato activo que no entra en el mes, con el porqué. */
 export interface IngresoExcluidoRow {
   contratoId: string;
+  origen: OrigenContrato;
   inquilino: string;
   inmueble: string;
   canon: number;
@@ -727,6 +745,8 @@ export interface IngresosData {
   totalBruto: number;
   porContrato: IngresoContratoRow[];
   excluidos: IngresoExcluidoRow[];
+  /** Spec migración §4.1: originada y migrada por separado. */
+  porOrigen: TotalesPorOrigen;
 }
 
 export async function getIngresosAdmin(): Promise<IngresosData> {
@@ -743,6 +763,7 @@ export async function getIngresosAdmin(): Promise<IngresosData> {
     const sol = r.expedientes?.solicitantes ?? null;
     return {
       contratoId: r.id,
+      origen: origenDe(r),
       inquilino: sol ? `${sol.nombre ?? ''} ${sol.apellido ?? ''}`.trim() || '—' : '—',
       inmueble: fmtInmueble(r.expedientes?.inmuebles ?? null),
       canon: Number(r.valor_arriendo ?? 0),
@@ -769,6 +790,7 @@ export async function getIngresosAdmin(): Promise<IngresosData> {
     totalBruto: totalAfianzamiento + totalIva,
     porContrato,
     excluidos,
+    porOrigen: totalesPorOrigen(rows, tarifas.porContrato),
   };
 }
 

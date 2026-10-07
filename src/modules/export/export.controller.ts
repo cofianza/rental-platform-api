@@ -55,7 +55,8 @@ export async function exportExpedientes(req: Request, res: Response) {
   const pagina = (desde: number, hasta: number) => {
     let qb = supabase
       .from('expedientes')
-      .select('numero, estado, created_at, solicitantes(nombre, apellido), inmuebles!expedientes_inmueble_id_fkey(direccion), perfiles!expedientes_analista_id_fkey(nombre, apellido)');
+      .select('numero, estado, created_at, solicitantes(nombre, apellido), inmuebles!expedientes_inmueble_id_fkey(direccion), perfiles!expedientes_analista_id_fkey(nombre, apellido)')
+      .eq('origen', 'estudio'); // los de migración de cartera no son estudios
     if (q.estado) qb = qb.eq('estado', q.estado);
     if (q.fecha_desde) qb = qb.gte('created_at', q.fecha_desde);
     if (q.fecha_hasta) qb = qb.lte('created_at', q.fecha_hasta);

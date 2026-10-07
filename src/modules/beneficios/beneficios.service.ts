@@ -182,7 +182,7 @@ async function tienePaquete25Vigente(perfilCanonico: string): Promise<boolean> {
 }
 
 /** La Gerencia General: administradores activos con el correo en GERENCIA_GENERAL_EMAILS. */
-async function gerenciaGeneralIds(): Promise<string[]> {
+export async function gerenciaGeneralIds(): Promise<string[]> {
   const admins = (await listOperators()).filter((o) => o.rol === 'administrador');
   const ids: string[] = [];
   for (const a of admins) {
@@ -207,10 +207,12 @@ export async function evaluarAlertaMezcla(orgId: string): Promise<AccionMezcla> 
   const desde = `${sumarMeses(ahora.slice(0, 10), -VENTANA_MEZCLA_MESES)}${ahora.slice(10)}`;
   const [paquete, contratosR, cal] = await Promise.all([
     org.owner_perfil_id ? tienePaquete25Vigente(org.owner_perfil_id) : Promise.resolve(false),
-    // V3 (destinacion) activados (fecha_firma) en la ventana, de esta org.
+    // V3 (destinacion) activados (fecha_firma) en la ventana, de esta org. Los
+    // migrados no cuentan: no tienen modalidad y no son producto del paquete.
     db('contratos')
       .select('modalidad:datos_variables->documento->entrada->>modalidad, expedientes!inner(inmobiliaria_id)')
       .eq('expedientes.inmobiliaria_id', orgId)
+      .eq('origen', 'plataforma')
       .not('destinacion', 'is', null)
       .gte('fecha_firma', desde),
     getCalibracion(),

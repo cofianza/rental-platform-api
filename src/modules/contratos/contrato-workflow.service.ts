@@ -253,6 +253,46 @@ export async function cancelarBorradorV3PorSistema(contratoId: string, motivo: s
   return true;
 }
 
+/**
+ * Exclusión de cobertura de un contrato migrado (spec migración §7.2.1,
+ * §7.3.3): vigente → cancelado, que la matriz SQL solo permite con
+ * origen='migracion' (A5; la matriz TS de V3 no se toca). Mismos efectos que
+ * una cancelación desde vigente (libera el inmueble, timeline, moras anotadas)
+ * sin el aviso genérico: quien llama avisa con su motivo. true = lo canceló
+ * esta llamada; false = ya no estaba vigente.
+ */
+export async function cancelarContratoMigradoPorSistema(
+  contratoId: string,
+  motivo: string,
+  usuarioId: string,
+): Promise<boolean> {
+  const contrato = await fetchContrato(contratoId);
+  if (contrato.estado !== 'vigente') return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any).rpc('transicionar_contrato', {
+    p_contrato_id: contratoId,
+    p_nuevo_estado: 'cancelado',
+    p_descripcion: `Exclusión de cobertura (migración de cartera). Motivo: ${motivo}`,
+    p_usuario_id: usuarioId,
+    p_comentario: motivo,
+    p_motivo: motivo,
+  });
+  if (error) {
+    if (((error as { message?: string }).message ?? '').includes('Transicion no permitida')) return false;
+    throw new AppError(500, 'CONTRATO_GUARDAR_ERROR', `No se pudo cancelar el contrato migrado: ${(error as { message?: string }).message}`);
+  }
+  const input: ContratoTransitionInput = { nuevo_estado: 'cancelado', comentario: motivo, motivo };
+  await applySideEffects(contratoId, contrato.expediente_id, 'cancelado', input, 'vigente', usuarioId, false);
+  logAudit({
+    usuarioId,
+    accion: AUDIT_ACTIONS.CONTRATO_TRANSITIONED,
+    entidad: AUDIT_ENTITIES.CONTRATO,
+    entidadId: contratoId,
+    detalle: { estado_anterior: 'vigente', estado_nuevo: 'cancelado', motivo, exclusion_migracion: true },
+  });
+  return true;
+}
+
 // ============================================================
 // Obtener transiciones disponibles
 // ============================================================
@@ -601,6 +641,19 @@ async function aplicarEfectosTerminacion(
   fianzaActivada = false,
 ): Promise<void> {
   const automatico = usuarioId === null;
+
+  // Migración de cartera: la fila deja de bloquear su inmueble para una nueva
+  // migración (migracion_filas_inmueble_vivo_uq). No-op para contratos de la plataforma.
+  try {
+    const { error: filaErr } = await (supabase
+      .from('migracion_filas' as string) as ReturnType<typeof supabase.from>)
+      .update({ liberada_en: new Date().toISOString() } as never)
+      .eq('contrato_id', contratoId)
+      .is('liberada_en', null);
+    if (filaErr) throw new Error(filaErr.message);
+  } catch (err) {
+    logger.warn({ contratoId, err }, 'No se liberó la fila de migración del contrato terminado');
+  }
 
   if (avisar)
     notificarPartesContratoTerminado(contratoId, expedienteId, targetState, automatico).catch((e) =>

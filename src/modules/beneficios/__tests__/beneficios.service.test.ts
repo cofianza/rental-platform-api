@@ -213,6 +213,12 @@ describe('alerta de mezcla (§4.4)', () => {
     expect(tabla('inmobiliarias', 'is')[0].args).toEqual(['alerta_mezcla_tradicional_en', null]);
   });
 
+  it('los contratos migrados no entran en la mezcla (spec migración §4.1)', async () => {
+    escenario(null);
+    await evaluarAlertaMezcla('org1');
+    expect(tabla('contratos', 'eq').map((o) => o.args)).toContainEqual(['origen', 'plataforma']);
+  });
+
   it('ya alertada: no repite el aviso', async () => {
     escenario('2026-09-01T00:00:00Z');
     expect(await evaluarAlertaMezcla('org1')).toBe('nada');

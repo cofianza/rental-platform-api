@@ -149,6 +149,7 @@ export async function listExpedientes(
   if (query.sin_analista === 'true') {
     let q = (supabase.from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('id')
+      .eq('origen', 'estudio')
       .is('analista_id', null);
     if (estados) q = q.in('estado', estados);
     const { data: sinAnalista, error: saError } = await q;
@@ -704,6 +705,7 @@ export async function getExpedienteStats(allowedIds: string[] | null = null) {
       let q = (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
         .select('id', { count: 'exact', head: true })
+        .eq('origen', 'estudio') // como el listado (RPC): sin los de migración de cartera
         .eq('estado', estado);
       if (allowedIds) q = q.in('id', allowedIds);
       const { count, error } = await q;

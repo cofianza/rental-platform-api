@@ -105,6 +105,7 @@ export async function getVolumenExpedientes(
     let q = supabase
       .from('expedientes')
       .select('id, estado, created_at')
+      .eq('origen', 'estudio') // sin los expedientes de migración de cartera
       .gte('created_at', range.dateFrom)
       .lte('created_at', range.dateTo);
     if (estado) q = q.eq('estado', estado);

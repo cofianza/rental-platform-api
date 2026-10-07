@@ -299,6 +299,10 @@ const envSchema = z.object({
   // firma), libera el inmueble y avisa. Mismo criterio que el de firma: false en
   // una API LOCAL (su .env.local apunta a la base de producción).
   RESERVA_V3_BARRIDO_ENABLED: z.string().default('true').transform((v) => v === 'true'),
+  // Migración de cartera: barrido del Acta de Migración (server.ts, cada 15 min):
+  // reconcilia actas con Auco, activa lotes firmados y vence los que pasaron su
+  // plazo. Escribe en la base: apagado por defecto (la API local apunta a producción).
+  MIGRACION_BARRIDO_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // P1: barrido de reembolsos cada 15 min (reembolsos en proceso en Mercado
   // Pago y red de seguridad de la devolución de la evaluación). Escribe en la
   // base y avisa: false en una API LOCAL (su .env.local apunta a producción).
