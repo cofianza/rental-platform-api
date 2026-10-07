@@ -9,6 +9,7 @@ import { fetchAll } from '@/lib/fetchAll';
 import { resolvePortfolioInmuebleIds } from '@/lib/tenantScope';
 import { conFinVigente, fechaBogota } from '@/modules/contratos/v3/formato';
 import { calcularTarifas, leerTarifaOverride, masIva, pctDe } from '@/modules/estudios/tarifas';
+import { tarifaVigenteMigracion } from '@/modules/migracion/validacion';
 
 // ── Constantes para vista admin ─────────────────────────────
 //
@@ -162,6 +163,7 @@ async function queryExpedientesPorEstado(
     supabase
       .from('expedientes')
       .select('estado')
+      .eq('origen', 'estudio') // los expedientes de migración nacen cerrados y no son estudios
       .gte('created_at', dateFrom)
       .lte('created_at', dateTo)
       .order('id')
@@ -413,6 +415,8 @@ export interface MiInmuebleRow {
   contratoId: string | null;
   venceContrato: string | null;
   garantiaActiva: boolean;
+  /** Fianza activa por migración de cartera (no originada en la plataforma). */
+  migrado: boolean;
   pago: 'al_dia' | 'mora' | null; // null cuando no hay inquilino
   historial: HistorialInquilino[];
   /**
@@ -451,7 +455,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
     // el primer firmado/vigente es el más reciente.
     (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
       .select(
-        'id, expediente_id, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, estado, ' +
+        'id, expediente_id, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, estado, origen, ' +
           'expedientes!inner(inmueble_id, solicitantes(nombre, apellido)), moras_tickets(estado)',
       )
       .in('expedientes.inmueble_id', ids)
@@ -470,7 +474,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
   // inmueble_id → datos del contrato activo (1 por inmueble)
   const activoPorInmueble = new Map<
     string,
-    { inquilino: string | null; expedienteId: string; contratoId: string; venceContrato: string | null; mora: boolean }
+    { inquilino: string | null; expedienteId: string; contratoId: string; venceContrato: string | null; mora: boolean; migrado: boolean }
   >();
   const historialPorInmueble = new Map<string, HistorialInquilino[]>();
   const activos = ESTADOS_CONTRATO_ACTIVO as unknown as string[];
@@ -503,6 +507,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
         contratoId: c.id as string,
         venceContrato: (c.fecha_fin as string) ?? null,
         mora: ((c.moras_tickets as unknown[] | null) ?? []).length > 0,
+        migrado: c.origen === 'migracion',
       });
     }
   }
@@ -538,6 +543,7 @@ export async function getMisInmuebles(perfilId: string): Promise<MisInmueblesDat
       contratoId: activo?.contratoId ?? null,
       venceContrato: activo?.venceContrato ?? null,
       garantiaActiva: !!activo,
+      migrado: activo?.migrado ?? false,
       pago: activo ? (activo.mora ? 'mora' : 'al_dia') : null,
       historial: historialPorInmueble.get(id) ?? [],
       estudiosActivos: agregado?.estudios_activos ?? 0,
@@ -575,6 +581,9 @@ export interface MiCarteraAnalitica {
     moraActiva: number;
     diasPromedioMora: number;
     canonGestionado: number;
+    /** De los activos, los que llegaron por migración de cartera (§4.1: aparte). */
+    contratosMigrados: number;
+    canonMigrado: number;
   };
   estudios: {
     total: number;
@@ -597,13 +606,13 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
 
   // Contratos activos (con sus moras activas) y evaluaciones del portafolio, en
   // paralelo y con el expediente embebido: antes eran 4 idas en serie.
-  let conts: Array<{ valor_arriendo: number | string | null; moras_tickets: Array<{ reportado_at: string }> | null }> = [];
+  let conts: Array<{ valor_arriendo: number | string | null; origen?: string | null; moras_tickets: Array<{ reportado_at: string }> | null }> = [];
   let ests: Array<{ expediente_id: string; resultado: string | null; score: number | null; created_at: string; fecha_completado: string | null }> = [];
   let decisiones: UltimaDecision[] = [];
   if (inmuebleIds.length) {
     const [contRes, estRes, ultimas] = await Promise.all([
       (supabase.from('contratos' as string) as ReturnType<typeof supabase.from>)
-        .select('valor_arriendo, expedientes!inner(inmueble_id), moras_tickets(reportado_at, estado)')
+        .select('valor_arriendo, origen, expedientes!inner(inmueble_id), moras_tickets(reportado_at, estado)')
         .in('expedientes.inmueble_id', inmuebleIds)
         .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[])
         .in('moras_tickets.estado', ESTADOS_MORA_ACTIVA as unknown as string[]),
@@ -626,10 +635,16 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
   // Contratos activos + canon
   let contratosActivos = 0;
   let canonGestionado = 0;
+  let contratosMigrados = 0;
+  let canonMigrado = 0;
   const moras: Array<{ reportado_at: string }> = [];
   for (const c of conts) {
     contratosActivos += 1;
     canonGestionado += Number(c.valor_arriendo ?? 0);
+    if (c.origen === 'migracion') {
+      contratosMigrados += 1;
+      canonMigrado += Number(c.valor_arriendo ?? 0);
+    }
     moras.push(...(c.moras_tickets ?? []));
   }
 
@@ -661,7 +676,7 @@ export async function getMiCarteraAnalitica(perfilId: string): Promise<MiCartera
   const d30 = resumirDecisiones(decisiones.filter((d) => Date.parse(d.ultimaEn) >= treintaDias));
 
   return {
-    salud: { contratosActivos, morosidadPct, moraActiva, diasPromedioMora, canonGestionado },
+    salud: { contratosActivos, morosidadPct, moraActiva, diasPromedioMora, canonGestionado, contratosMigrados, canonMigrado },
     estudios: {
       // Estudios, no evaluaciones: la que se repitió (p. ej. tras fallar) cuenta
       // una vez, en la misma unidad que los aprobados.
@@ -718,6 +733,8 @@ export interface AdminOverviewKpis {
   desembolsado: number;
   ticketsAbiertos: number;
   vitrinaVisitasMes: number;
+  /** Spec migración §4.1: originada (plataforma) y migrada nunca se mezclan en la analítica. */
+  porOrigen: TotalesPorOrigen;
 }
 
 export interface AdminOverviewConfig {
@@ -730,6 +747,7 @@ export interface AdminOverviewConfig {
 
 export interface AdminOverviewContratoItem {
   id: string;
+  origen: OrigenContrato;
   inquilino: string;
   inmueble: string;
   mes: number;
@@ -781,6 +799,7 @@ interface ContratoActivoRow {
   id: string;
   expediente_id: string;
   estado: string;
+  origen?: string | null;
   valor_arriendo: number | string | null;
   tarifa_congelada?: number | string | null;
   fecha_inicio: string | null;
@@ -840,10 +859,58 @@ export interface ContratoParaIngreso {
   fecha_inicio: string | null;
   /** V3: datos_variables->documento->entrada->tarifaPct, el % que imprimió. */
   tarifa_congelada?: number | string | null;
+  /** 'migracion': su % vive en migracion_filas (no tiene estudio). */
+  origen?: string | null;
 }
 
 /** Para el select de contratos: el % congelado del V3, sin traer todo datos_variables. */
 export const SELECT_TARIFA_CONGELADA = 'tarifa_congelada:datos_variables->documento->entrada->tarifaPct';
+
+/** % vigente de los contratos migrados, de su fila (no tienen estudio). */
+async function tarifasDeMigrados(contratoIds: string[], hoy: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!contratoIds.length) return out;
+  const { data, error } = await (supabase.from('migracion_filas' as string) as ReturnType<typeof supabase.from>)
+    .select('contrato_id, tarifa_pct, tarifa_acta_pct, tarifa_desde')
+    .in('contrato_id', contratoIds);
+  if (error) throw fromSupabaseError(error);
+  for (const f of (data ?? []) as Array<{ contrato_id: string; tarifa_pct: number | string | null; tarifa_acta_pct: number | string | null; tarifa_desde: string | null }>) {
+    const pct = tarifaVigenteMigracion(f, hoy);
+    if (pct !== null) out.set(f.contrato_id, pct);
+  }
+  return out;
+}
+
+export type OrigenContrato = 'plataforma' | 'migracion';
+export interface TotalesOrigen {
+  contratos: number;
+  canon: number;
+  /** Tarifa mensual causada (sin IVA) de los que entran en el mes. */
+  tarifa: number;
+  iva: number;
+}
+export type TotalesPorOrigen = Record<OrigenContrato, TotalesOrigen>;
+
+export const origenDe = (c: { origen?: string | null }): OrigenContrato =>
+  c.origen === 'migracion' ? 'migracion' : 'plataforma';
+
+/** Totales de contratos activos separados por origen (spec migración §4.1). */
+export function totalesPorOrigen(
+  contratos: Array<{ id: string; origen?: string | null; valor_arriendo: number | string | null }>,
+  porContrato: Map<string, { tarifa: number; iva: number }>,
+): TotalesPorOrigen {
+  const vacio = (): TotalesOrigen => ({ contratos: 0, canon: 0, tarifa: 0, iva: 0 });
+  const out: TotalesPorOrigen = { plataforma: vacio(), migracion: vacio() };
+  for (const c of contratos) {
+    const t = out[origenDe(c)];
+    const ingreso = porContrato.get(c.id);
+    t.contratos += 1;
+    t.canon += Number(c.valor_arriendo ?? 0);
+    t.tarifa += ingreso?.tarifa ?? 0;
+    t.iva += ingreso?.iva ?? 0;
+  }
+  return out;
+}
 
 export async function tarifasMensualesDeContratos(contratos: ContratoParaIngreso[]): Promise<{
   ivaPct: number;
@@ -880,6 +947,14 @@ export async function tarifasMensualesDeContratos(contratos: ContratoParaIngreso
     }).tarifa_mensual_pct;
   };
 
+  const migrados = await tarifasDeMigrados(
+    contratos.filter((c) => c.origen === 'migracion').map((c) => c.id),
+    hoy,
+  ).catch((err) => {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Ingresos: no se pudo leer la tarifa de los migrados');
+    return null;
+  });
+
   const porContrato = new Map<string, { tarifa: number; iva: number }>();
   const excluidos: Array<{ id: string; motivo: MotivoSinIngreso }> = [];
   // ponytail: dos lecturas por contrato, en paralelo; con cientos de contratos, cargarlas en lote.
@@ -890,8 +965,12 @@ export async function tarifasMensualesDeContratos(contratos: ContratoParaIngreso
       else {
         try {
           const congelada = Number(c.tarifa_congelada);
-          const pct = congelada > 0 ? congelada : await pctDelEstudio(c.expediente_id);
-          if (pct === null) motivo = 'sin_estudio';
+          // Un migrado no tiene estudio: sin su fila es falta de dato, no 'sin_estudio'.
+          const pct = c.origen === 'migracion'
+            ? migrados?.get(c.id) ?? undefined
+            : congelada > 0 ? congelada : await pctDelEstudio(c.expediente_id);
+          if (pct === undefined) motivo = 'sin_dato';
+          else if (pct === null) motivo = 'sin_estudio';
           else {
             const tarifa = pctDe(Number(c.valor_arriendo) || 0, pct) ?? 0;
             porContrato.set(c.id, { tarifa, iva: masIva(tarifa, ivaPct) - tarifa });
@@ -1028,6 +1107,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
       desembolsado,
       ticketsAbiertos,
       vitrinaVisitasMes,
+      porOrigen: totalesPorOrigen(contratosActivos, tarifas.porContrato),
     },
     config: {
       valorAfianzamientoMensual: tarifas.porContrato.size ? Math.round(ingresosFianzas / tarifas.porContrato.size) : 0,
@@ -1038,6 +1118,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
       .sort((a, b) => (a.row.fecha_fin ?? '').localeCompare(b.row.fecha_fin ?? ''))
       .map((c) => ({
         id: c.row.id,
+        origen: origenDe(c.row),
         inquilino: c.inq,
         inmueble: c.inm,
         mes: c.mes,
@@ -1048,6 +1129,7 @@ export async function getAdminOverview(): Promise<AdminOverview> {
       .sort((a, b) => a.mes - b.mes)
       .map((c) => ({
         id: c.row.id,
+        origen: origenDe(c.row),
         inquilino: c.inq,
         inmueble: c.inm,
         mes: c.mes,
@@ -1094,7 +1176,7 @@ async function fetchContratosActivos(): Promise<ContratoActivoRow[]> {
   const { data, error } = await supabase
     .from('contratos')
     .select(
-      'id, expediente_id, estado, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, ' +
+      'id, expediente_id, estado, origen, valor_arriendo, fecha_inicio, fecha_fin, destinacion, duracion_meses, fecha_terminacion, ' +
         `${SELECT_TARIFA_CONGELADA}, expedientes(inmuebles!expedientes_inmueble_id_fkey(codigo, direccion), solicitantes(nombre, apellido))`,
     )
     .in('estado', ESTADOS_CONTRATO_ACTIVO as unknown as string[]);

@@ -40,6 +40,7 @@ import contratoWorkflowRouter from '@/modules/contratos/contrato-workflow.routes
 import contratoFirmadoRouter from '@/modules/contratos/contrato-firmado.routes';
 import contratoArchivosRouter from '@/modules/contratos/contrato-archivos.routes';
 import { webhookAucoV3 } from '@/modules/contratos/v3/firma/reconciliar';
+import { webhookAucoMigracion } from '@/modules/migracion/acta-firma';
 import { firmaRouter, contratoFirmaSolicitudesRouter, contratoFirmantesRouter, publicVerificacionIdentidadRouter, aucoWebhookRouter } from '@/modules/firma/firma.routes';
 import { expedientePagosRouter, pagosRouter, pagosWebhookRouter, devWebhookRouter } from '@/modules/pagos/pagos.routes';
 import { pagoEstudioRouter, publicPagoResultadoRouter } from '@/modules/pago-estudio/pago-estudio.routes';
@@ -49,6 +50,7 @@ import reportesRouter from '@/modules/reportes/reportes.routes';
 // Eliminar antes de produccion junto con la migracion 20260507000005.
 import adminToolsRouter from '@/modules/admin-tools/admin-tools.routes';
 import calibracionRouter from '@/modules/calibracion/calibracion.routes';
+import migracionRouter from '@/modules/migracion/migracion.routes';
 import documentosLegalesRouter from '@/modules/documentos-legales/documentos-legales.routes';
 import morasRouter, { morasCronRouter } from '@/modules/moras/moras.routes';
 import { publicPropertiesRouter } from '@/modules/inmuebles/public-properties.routes';
@@ -164,7 +166,8 @@ app.use('/api/v1/contratos/:contratoId/firma/solicitudes', contratoFirmaSolicitu
 app.use('/api/v1/contratos/:contratoId/firma/firmantes', contratoFirmantesRouter);
 app.use('/api/v1/public/verificacion-identidad', publicVerificacionIdentidadRouter);
 // Contratos V3: webhookAucoV3 atiende los eventos de sus sobres y pasa (next) el resto al flujo anterior, intacto.
-app.use('/api/v1/webhooks/auco/firma', webhookAucoV3, aucoWebhookRouter);
+// Migración de cartera va antes: atiende solo los eventos de sus actas.
+app.use('/api/v1/webhooks/auco/firma', webhookAucoMigracion, webhookAucoV3, aucoWebhookRouter);
 app.use('/api/v1/expedientes/:expedienteId/pagos', expedientePagosRouter);
 app.use('/api/v1/expedientes/:expedienteId/pago-estudio', pagoEstudioRouter);
 app.use('/api/v1/pagos', pagosRouter);
@@ -175,6 +178,8 @@ app.use('/api/v1/reportes', reportesRouter);
 app.use('/api/v1/admin-tools', adminToolsRouter);
 // Panel de calibracion del modelo (Adenda 1 §11) — solo administrador.
 app.use('/api/v1/admin/calibracion', calibracionRouter);
+// Migración de cartera (fase 1: carga asistida por un analista) — administrador y operador/analista.
+app.use('/api/v1/admin/migracion', migracionRouter);
 app.use('/api/v1/public/properties', publicPropertiesRouter);
 app.use('/api/v1/interesados', interesadosRouter);
 app.use('/api/v1/vitrina', vitrinaRouter);

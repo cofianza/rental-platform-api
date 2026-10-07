@@ -86,7 +86,7 @@ function titleCase(s: string): string {
     .join(' ');
 }
 
-function normalize(s: string): string {
+export function normalize(s: string): string {
   // U+0300 a U+036F = "Combining Diacritical Marks" (tildes, dieresis, etc).
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
@@ -122,7 +122,7 @@ async function fetchFromDatosGov(): Promise<MunicipioCO[]> {
   return out;
 }
 
-async function getCatalog(): Promise<MunicipioCO[]> {
+export async function getCatalog(): Promise<MunicipioCO[]> {
   const now = Date.now();
   if (cache && now - cache.cachedAt < TTL_MS) {
     return cache.data;

@@ -377,6 +377,8 @@ export async function enviarCobrosProgramados(ahora = new Date()): Promise<numbe
 
 interface ContratoSnapshot {
   contrato_id: string;
+  /** Para assertMoraPosteriorAActivacion, que corre después del control de acceso. */
+  contrato: { origen?: string | null; fecha_firma?: string | null };
   expediente_id: string;
   solicitante_id: string | null;
   inquilino_nombre: string;
@@ -388,15 +390,41 @@ interface ContratoSnapshot {
 }
 
 /**
+ * Migración de cartera §4.5/§9.3: la fianza de un contrato migrado cubre solo
+ * lo causado desde la activación (fecha_firma = firma del acta). Un canon que
+ * vencía antes de ese día (Bogotá) sigue siendo del arrendador.
+ */
+export function assertMoraPosteriorAActivacion(
+  contrato: { origen?: string | null; fecha_firma?: string | null },
+  fechaVencimientoCanon: string,
+): void {
+  if (contrato.origen !== 'migracion' || !contrato.fecha_firma) return;
+  const activacion = diaBogota(new Date(contrato.fecha_firma));
+  if (fechaVencimientoCanon.slice(0, 10) < activacion) {
+    throw new AppError(
+      422,
+      'MORA_ANTERIOR_A_ACTIVACION',
+      `Este contrato llegó por migración de cartera y su fianza cubre solo los cánones que vencen desde el ${activacion.split('-').reverse().join('/')}, fecha de activación. Una mora anterior no tiene cobertura.`,
+    );
+  }
+}
+
+/**
  * Construye un snapshot del contrato — usado al reportar la mora para
  * que el ticket sobreviva aunque luego se modifique el contrato.
  */
 async function snapshotContrato(contratoId: string): Promise<ContratoSnapshot> {
   const { data: contrato, error: contratoError } = (await db('contratos')
-    .select('id, expediente_id, estado')
+    .select('id, expediente_id, estado, origen, fecha_firma')
     .eq('id', contratoId)
     .single()) as {
-      data: { id: string; expediente_id: string | null; estado: string } | null;
+      data: {
+        id: string;
+        expediente_id: string | null;
+        estado: string;
+        origen?: string | null;
+        fecha_firma?: string | null;
+      } | null;
       error: { message: string } | null;
     };
 
@@ -456,6 +484,7 @@ async function snapshotContrato(contratoId: string): Promise<ContratoSnapshot> {
 
   return {
     contrato_id: contrato.id,
+    contrato: { origen: contrato.origen, fecha_firma: contrato.fecha_firma },
     expediente_id: expediente.id,
     solicitante_id: expediente.solicitante_id,
     inquilino_nombre,
@@ -535,6 +564,8 @@ export async function reportarMora(input: ReportarMoraInput, userId: string, rol
   // Solo sobre contratos de la cartera propia: sin esto se reportaba (y se le
   // escribía por WhatsApp al inquilino) sobre el contrato de otra agencia por UUID.
   await assertExpedienteAccess(snap.expediente_id, userId, rol);
+  // Después del control de acceso: el 422 revela que el contrato vino por migración y su fecha.
+  assertMoraPosteriorAActivacion(snap.contrato, input.fecha_vencimiento_canon);
 
   // Un canon, una mora activa: dos reportes del mismo canon (dos miembros, el
   // dueño y el operador) mandaban dos cobros al inquilino e inflaban los KPI.
@@ -699,7 +730,23 @@ export async function getMoraById(id: string) {
     .eq('mora_id', id)
     .order('created_at', { ascending: true });
 
-  return { ...(mora as object), mensajes: mensajes ?? [] };
+  // §5.1.4 de la migración: si el reporte a centrales está disponible para este
+  // contrato. Se lee en vivo (pasarAReportable la cambia después del reporte).
+  let reportable_centrales: { reportable: boolean | null; motivo: string | null } | null = null;
+  const contratoId = (mora as { contrato_id: string | null }).contrato_id;
+  if (contratoId) {
+    const { data: c } = await db('contratos').select('origen').eq('id', contratoId).maybeSingle();
+    if ((c as { origen?: string } | null)?.origen === 'migracion') {
+      const { data: fila } = await db('migracion_filas')
+        .select('reportable, reportable_motivo')
+        .eq('contrato_id', contratoId)
+        .maybeSingle();
+      const f = fila as { reportable: boolean | null; reportable_motivo: string | null } | null;
+      if (f) reportable_centrales = { reportable: f.reportable, motivo: f.reportable_motivo };
+    }
+  }
+
+  return { ...(mora as object), mensajes: mensajes ?? [], reportable_centrales };
 }
 
 // ============================================================
@@ -988,6 +1035,47 @@ async function agregarMensajeInterno(
   if (error) {
     logger.warn({ error: error.message, moraId }, 'Error al insertar mensaje sistema en mora');
   }
+}
+
+/**
+ * Migración de cartera §7.2.1: un contrato excluido nunca estuvo cubierto, así
+ * que sus moras activas se cancelan (si no, el cron las seguiría escalando).
+ * Devuelve los tickets con desembolso de Cofianza, para la compensación (§7.2.3).
+ */
+export async function cancelarMorasSinCobertura(
+  contratoId: string,
+  motivo: string,
+  userId: string,
+): Promise<{ canceladas: number; pagadasPorCofianza: { ticket_numero: string; monto: number | null }[] }> {
+  const { data, error } = await db('moras_tickets')
+    .update({ estado: 'cancelada', cancelada_at: new Date().toISOString(), cancelado_motivo: motivo } as never)
+    .eq('contrato_id', contratoId)
+    .in('estado', ESTADOS_ACTIVOS as unknown as string[])
+    .select('id, expediente_id, estado');
+  if (error) throw fromSupabaseError(error);
+  const canceladas = (data as { id: string; expediente_id: string | null }[] | null) ?? [];
+  for (const m of canceladas) {
+    await agregarMensajeInterno(m.id, 'sistema', userId, `Mora cancelada. Motivo: ${motivo}`);
+    logAudit({
+      usuarioId: userId,
+      accion: AUDIT_ACTIONS.MORA_CANCELADA,
+      entidad: AUDIT_ENTITIES.MORA,
+      entidadId: m.id,
+      detalle: { expediente_id: m.expediente_id, contrato_id: contratoId, motivo, sin_cobertura: true },
+    });
+  }
+  const { data: pagadas, error: pErr } = await db('moras_tickets')
+    .select('ticket_numero, cofianza_pago_monto')
+    .eq('contrato_id', contratoId)
+    .eq('cofianza_pago_realizado', true);
+  if (pErr) throw fromSupabaseError(pErr);
+  return {
+    canceladas: canceladas.length,
+    pagadasPorCofianza: ((pagadas as { ticket_numero: string; cofianza_pago_monto: number | null }[] | null) ?? []).map((p) => ({
+      ticket_numero: p.ticket_numero,
+      monto: p.cofianza_pago_monto,
+    })),
+  };
 }
 
 /**

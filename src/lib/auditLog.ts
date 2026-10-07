@@ -170,6 +170,24 @@ export const AUDIT_ACTIONS = {
   MORA_ESCALADA: 'mora_escalada',
   MORA_PAGADA: 'mora_pagada',
   MORA_CANCELADA: 'mora_cancelada',
+  // Migración de cartera (spec §1.1.5, §2.4, §7.2.2).
+  MIGRACION_HABILITACION_GUARDADA: 'migracion_habilitacion_guardada',
+  MIGRACION_DOCUMENTO_CARGADO: 'migracion_documento_cargado',
+  MIGRACION_SUSPENDIDA: 'migracion_suspendida',
+  MIGRACION_REACTIVADA: 'migracion_reactivada',
+  MIGRACION_LOTE_PROCESADO: 'migracion_lote_procesado',
+  // Acta de Migración (§3.3-§4.1): envío a Auco, activación del lote al firmarse y vencimiento sin firma (§3.6).
+  MIGRACION_ACTA_ENVIADA: 'migracion_acta_enviada',
+  MIGRACION_LOTE_ACTIVADO: 'migracion_lote_activado',
+  MIGRACION_LOTE_EXPIRADO: 'migracion_lote_expirado',
+  MIGRACION_LOTE_CANCELADO: 'migracion_lote_cancelado',
+  // Cartera migrada (§5.1.3, §5.2.5, §6, §7): revisión, exclusión, auditorías y paso a REPORTABLE.
+  MIGRACION_CONTRATO_REVISION: 'migracion_contrato_revision',
+  MIGRACION_CONTRATO_EXCLUIDO: 'migracion_contrato_excluido',
+  MIGRACION_AUDITORIA_REQUERIDA: 'migracion_auditoria_requerida',
+  MIGRACION_AUDITORIA_RESPUESTA: 'migracion_auditoria_respuesta',
+  MIGRACION_AUDITORIA_DECIDIDA: 'migracion_auditoria_decidida',
+  MIGRACION_CONTRATO_REPORTABLE: 'migracion_contrato_reportable',
 } as const;
 
 export const AUDIT_ENTITIES = {
@@ -197,6 +215,9 @@ export const AUDIT_ENTITIES = {
   INMOBILIARIA: 'inmobiliaria',
   CLAUSULA_ADICIONAL: 'clausula_adicional',
   MORA: 'mora',
+  MIGRACION_HABILITACION: 'migracion_habilitacion',
+  MIGRACION_LOTE: 'migracion_lote',
+  MIGRACION_FILA: 'migracion_fila',
 } as const;
 
 interface AuditLogParams {

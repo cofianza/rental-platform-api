@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { AppError } from '@/lib/errors';
+import { AppError, fromSupabaseError } from '@/lib/errors';
 import { fetchAll } from '@/lib/fetchAll';
 import { logger } from '@/lib/logger';
 import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
@@ -20,6 +20,7 @@ import { escalarTopeCanon } from './tope-coafianzamiento';
 import { diasCalendario } from './v3/asistente.reglas';
 import { fechaBogota } from './v3/formato';
 import { getCalibracion } from '@/lib/calibracion';
+import { tarifaVigenteMigracion } from '../migracion/validacion';
 import type {
   GenerarContratoInput,
   ReGenerarContratoInput,
@@ -43,7 +44,7 @@ const CONTRATO_SELECT = `
   storage_key, nombre_archivo, plantilla_version,
   storage_key_firmado, nombre_archivo_firmado,
   firmado_storage_key, firmado_nombre_archivo,
-  destinacion, numero,
+  destinacion, numero, origen, fecha_firma,
   created_at, updated_at
 `;
 
@@ -51,7 +52,7 @@ const CONTRATO_LIST_SELECT = `
   id, expediente_id, plantilla_id, version, estado,
   fecha_inicio, duracion_meses, valor_arriendo,
   nombre_archivo, fecha_generacion, plantilla_version,
-  storage_key, destinacion, numero, created_at, updated_at
+  storage_key, destinacion, numero, origen, created_at, updated_at
 `;
 
 const VERSION_SELECT = `
@@ -1932,7 +1933,55 @@ export async function getContratoById(id: string, userId?: string, userRol?: str
     throw AppError.notFound('Contrato no encontrado', 'CONTRATO_NOT_FOUND');
   }
 
-  return contrato;
+  return contrato.origen === 'migracion'
+    ? { ...contrato, migracion: await bloqueMigracion(id, contrato) }
+    : { ...contrato, migracion: null };
+}
+
+/**
+ * Fianza activa por migración de cartera (spec migración §4): lo que el
+ * detalle muestra en lugar del asistente V3. La activación es fecha_firma (A6)
+ * y el acta firmada es storage_key_firmado del contrato.
+ */
+async function bloqueMigracion(contratoId: string, contrato: Record<string, unknown>) {
+  const actaId = (contrato.datos_variables as { migracion?: { acta_id?: string } } | null)?.migracion?.acta_id ?? null;
+  const [filaR, actaR] = await Promise.all([
+    (supabase.from('migracion_filas' as string) as ReturnType<typeof supabase.from>)
+      .select('id, n_fila, reportable, reportable_motivo, tarifa_acta_pct, tarifa_pct, tarifa_desde, en_revision, en_revision_motivo, excluido_en, excluido_motivo, lote:migracion_lotes(id, numero, activado_en)')
+      .eq('contrato_id', contratoId)
+      .maybeSingle(),
+    actaId
+      ? (supabase.from('migracion_actas' as string) as ReturnType<typeof supabase.from>)
+          .select('id, estado, cerrado_en')
+          .eq('id', actaId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  if (filaR.error) throw fromSupabaseError(filaR.error);
+  if (actaR.error) throw fromSupabaseError(actaR.error);
+  const fila = filaR.data as {
+    id: string; n_fila: number; reportable: boolean | null; reportable_motivo: string | null;
+    tarifa_acta_pct: number | string | null; tarifa_pct: number | string | null; tarifa_desde: string | null;
+    en_revision: boolean; en_revision_motivo: string | null; excluido_en: string | null; excluido_motivo: string | null;
+    lote: { id: string; numero: string; activado_en: string | null } | null;
+  } | null;
+  return {
+    fecha_activacion: (contrato.fecha_firma as string | null) ?? null,
+    fila_id: fila?.id ?? null,
+    n_fila: fila?.n_fila ?? null,
+    reportable: fila?.reportable ?? null,
+    reportable_motivo: fila?.reportable_motivo ?? null,
+    tarifa_vigente_pct: fila ? tarifaVigenteMigracion(fila, fechaBogota(new Date())) : null,
+    tarifa_acta_pct: fila?.tarifa_acta_pct != null ? Number(fila.tarifa_acta_pct) : null,
+    tarifa_pct: fila?.tarifa_pct != null ? Number(fila.tarifa_pct) : null,
+    tarifa_desde: fila?.tarifa_desde ?? null,
+    en_revision: fila?.en_revision ?? false,
+    en_revision_motivo: fila?.en_revision_motivo ?? null,
+    excluido_en: fila?.excluido_en ?? null,
+    excluido_motivo: fila?.excluido_motivo ?? null,
+    lote: fila?.lote ?? null,
+    acta: actaR.data as { id: string; estado: string; cerrado_en: string | null } | null,
+  };
 }
 
 // ============================================================

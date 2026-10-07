@@ -48,7 +48,14 @@ export type ClaveCalibracion =
   | 'ALERTA_SALDO_MINIMO_CUPOS'
   | 'PRECIO_ESTUDIO_INDIVIDUAL'
   | 'PORCENTAJE_BENEFICIO_TRADICIONAL'
-  | 'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25';
+  | 'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25'
+  | 'MESES_SIN_MORA_REQUERIDOS'
+  | 'TARIFA_MIGRACION_REPORTABLE'
+  | 'RECARGO_NO_REPORTABLE'
+  | 'MAX_FILAS_POR_CARGA'
+  | 'UMBRAL_ALERTA_EXPOSICION_LOTE'
+  | 'DIAS_RESPUESTA_AUDITORIA'
+  | 'DIAS_VIGENCIA_LOTE_SIN_FIRMA';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -342,6 +349,74 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     // Adenda de precios §4.4 / §9.11
     descripcion: 'Si una inmobiliaria con paquete de 25 vigente supera este % de contratos en modalidad Tradicional (últimos 6 meses, mínimo 5 contratos), se avisa a la Gerencia General. No bloquea nada.',
   },
+  // Migración de cartera §10. Riesgo (§10.12): meses sin mora, tarifa y recargo.
+  // Los topes de canon son CANON_MAX_TRANSITORIO y TOPE_CANON_COMERCIAL (§10.5).
+  {
+    clave: 'MESES_SIN_MORA_REQUERIDOS',
+    valorDefault: 6,
+    min: 1,
+    max: 24,
+    entero: true,
+    // Migración §1.2.3 / §10.1
+    descripcion: 'Meses sin mora que la inmobiliaria declara por cada contrato que migra. Se imprime en el Acta de Migración.',
+  },
+  {
+    clave: 'TARIFA_MIGRACION_REPORTABLE',
+    valorDefault: 2,
+    min: 0,
+    max: 20,
+    entero: false,
+    // Migración §5.2.1 / §10.7
+    descripcion: 'Tarifa mensual (% del canon sin IVA, más IVA) de un contrato migrado REPORTABLE. Igual a la de un contrato originado en la plataforma.',
+    advertencia: 'Aplica a los lotes que se procesen desde el cambio; los contratos ya cargados conservan la tarifa de su acta.',
+  },
+  {
+    clave: 'RECARGO_NO_REPORTABLE',
+    valorDefault: 0.5,
+    min: 0,
+    max: 10,
+    entero: false,
+    // Migración §5.2.2 / §10.8
+    descripcion: 'Puntos porcentuales que se suman a la tarifa de un contrato migrado NO REPORTABLE (Cofianza no puede reportarlo a centrales).',
+    advertencia: 'Aplica a los lotes que se procesen desde el cambio; los contratos ya cargados conservan la tarifa de su acta.',
+  },
+  {
+    clave: 'MAX_FILAS_POR_CARGA',
+    valorDefault: 500,
+    min: 1,
+    max: 5_000,
+    entero: true,
+    // Migración §2.4.6 / §10.2
+    descripcion: 'Máximo de contratos por archivo de migración. Una cartera mayor se carga en varios lotes.',
+  },
+  {
+    clave: 'UMBRAL_ALERTA_EXPOSICION_LOTE',
+    // ponytail: la spec no fija valor; 500 millones (~9 contratos al tope de vivienda × 18 cánones) hasta que Gerencia lo ajuste.
+    valorDefault: 500_000_000,
+    min: 1_000_000,
+    max: 100_000_000_000,
+    entero: true,
+    // Migración §8.4 / §10.3
+    descripcion: 'Exposición acumulada de un lote (COP, 18 cánones por contrato) desde la cual se avisa a la Gerencia General. No bloquea la carga.',
+  },
+  {
+    clave: 'DIAS_RESPUESTA_AUDITORIA',
+    valorDefault: 5,
+    min: 1,
+    max: 30,
+    entero: true,
+    // Migración §7.3.2 / §10.4
+    descripcion: 'Días hábiles que tiene la inmobiliaria para entregar los soportes de recaudo de un contrato migrado en auditoría.',
+  },
+  {
+    clave: 'DIAS_VIGENCIA_LOTE_SIN_FIRMA',
+    valorDefault: 15,
+    min: 1,
+    max: 90,
+    entero: true,
+    // Migración §3.6 / §10.9
+    descripcion: 'Días calendario que tiene un lote de migración para que se firme su acta. Vencido el plazo, el lote expira y nada se activa.',
+  },
 ];
 
 export const CALIBRACION_DEFAULT: Calibracion = Object.fromEntries(
@@ -363,6 +438,11 @@ const OPERATIVOS: ReadonlySet<ClaveCalibracion> = new Set<ClaveCalibracion>([
   'DIAS_RESERVA_INMUEBLE', // respuesta 15: plazo del borrador para enviar a firma
   'ALERTA_SALDO_MINIMO_CUPOS', // Adenda de precios §9.14: alertas, cualquier administrador
   'ALERTA_MEZCLA_TRADICIONAL_PAQUETE_25', // Adenda de precios §9.14: alertas, cualquier administrador
+  // Migración de cartera §10.12: lo de riesgo es meses sin mora, topes, tarifas y recargo.
+  'MAX_FILAS_POR_CARGA',
+  'UMBRAL_ALERTA_EXPOSICION_LOTE',
+  'DIAS_RESPUESTA_AUDITORIA',
+  'DIAS_VIGENCIA_LOTE_SIN_FIRMA',
 ]);
 
 export type NivelParametro = 'riesgo' | 'operativo';
