@@ -27,6 +27,7 @@ import {
   type SenalPagoEstudio,
 } from '@/modules/estudios/pago.guard';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
+import { leerBloqueo } from '@/modules/autorizaciones/bloqueo-documento';
 
 /**
  * Un rechazo por REGLA DURA de la Politica V4.1 (DTI > 65% §4.2, canon/ingreso
@@ -562,6 +563,22 @@ export async function onEstudioPagado(expedienteId: string, userId?: string | nu
   if (!autorizacion) {
     if (!userId) {
       logger.warn({ expedienteId }, 'Orchestrator: pago de estudio sin autorización y sin usuario para enviar el enlace');
+      return false;
+    }
+    // BLQ §8.2 y §4.5: si el último enlace se cerró por documento que no
+    // coincide o por «no soy yo» (o ya se corrigió y espera el reenvío), el
+    // pago no reenvía solo. Este envío no lleva rol y se saltaría el tope de
+    // reenvíos y el bloqueo de «no soy yo»: el reenvío va por el botón.
+    const bloqueo = await leerBloqueo(expedienteId);
+    if (bloqueo.estado || bloqueo.motivo === 'no_soy_yo') {
+      logger.info({ expedienteId, estado: bloqueo.estado }, 'Orchestrator: pago registrado; el enlace bloqueado no se reenvía solo');
+      await registrarTimeline(
+        expedienteId,
+        'pago',
+        bloqueo.motivo === 'no_soy_yo'
+          ? 'El pago quedó registrado. El enlace de autorización no se reenvía porque la persona respondió que no es ella: Cofianza revisará el caso.'
+          : 'El pago quedó registrado. Reenvíe el enlace de autorización desde el estudio cuando los datos estén corregidos.',
+      ).catch(() => {});
       return false;
     }
     try {

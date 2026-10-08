@@ -61,6 +61,10 @@ import {
   decidirCascada,
   decidirResultado,
   decidirSinCentrales,
+  esSinCentrales,
+  transUnionNoConsulta,
+  debePasarATransUnion,
+  admiteReconsultaSinCentrales,
   MOTIVO_VISIBLE_NO_ALCANZA,
   type UmbralesDecision,
   type ResultadoDecidido,
@@ -260,6 +264,7 @@ export async function listEstudios(
       created_at, updated_at,
       canon_evaluado, canon_evaluado_origen, regla_dura_activada,
       nota_interna:cascada->>nota_interna,
+      centrales_consultadas:cascada->centrales_consultadas, apis_fallidas:cascada->apis_fallidas,
       solicitado_por:perfiles!estudios_solicitado_por_fkey(id, nombre, apellido)
     `,
       { count: 'exact' },
@@ -304,6 +309,10 @@ export async function listEstudios(
     ...e,
     // Flujo §11 "Reasignado": etiqueta derivada (ver reasignacion.service.ts).
     reasignado_desde: reasignaciones.get(e.id as string) ?? null,
+    // Política §14 caso L: ninguna central respondió (no es «el buró no tiene información»).
+    sin_centrales: esSinCentrales(e),
+    centrales_consultadas: undefined,
+    apis_fallidas: undefined,
   }));
 
   return {
@@ -2379,7 +2388,7 @@ export async function ejecutarEstudio(
   const { data: estudio, error: getError } = await (supabase
     .from('estudios' as string) as ReturnType<typeof supabase.from>)
     .select(
-      'id, estado, resultado, score, proveedor, tipo, datos_formulario, expediente_id, estudio_padre_id, referencia_proveedor, respuesta_proveedor, observaciones, autorizacion_habeas_data_id, canon_evaluado, canon_evaluado_origen',
+      'id, estado, resultado, score, proveedor, tipo, datos_formulario, expediente_id, estudio_padre_id, referencia_proveedor, respuesta_proveedor, observaciones, autorizacion_habeas_data_id, canon_evaluado, canon_evaluado_origen, cascada',
     )
     .eq('id', estudioId)
     .single();
@@ -2404,6 +2413,7 @@ export async function ejecutarEstudio(
     autorizacion_habeas_data_id?: string | null;
     canon_evaluado?: number | null;
     canon_evaluado_origen?: string | null;
+    cascada?: unknown;
   };
 
   // 1.2. Ownership guard para solicitante: solo puede ejecutar estudios
@@ -2621,7 +2631,23 @@ export async function ejecutarEstudio(
   // 2. Validate estado
   // CORR §2: nadie elige la central (ni se re-consulta «el otro buró» a mano).
   // La decide la cascada del motor; la central consultada queda en la traza.
-  const estadosPermitidos = ESTADOS_PERMITIDOS_EJECUCION;
+  //
+  // Única excepción, Política §14 caso L: ninguna central respondió y el caso
+  // quedó en revisión manual sin ningún dato. Un analista de Cofianza puede
+  // volver a consultar cuando las centrales vuelvan (misma cascada, DataCrédito
+  // primaria; nadie elige central). Solo con el expediente aún en revisión: si
+  // ya se decidió, otra consulta contradiría la decisión.
+  const reconsultaSinCentrales = admiteReconsultaSinCentrales({
+    userRol,
+    estado: est.estado,
+    resultado: est.resultado,
+    score: est.score,
+    expedienteEstado: expediente.estado,
+    cascada: est.cascada,
+  });
+  const estadosPermitidos = reconsultaSinCentrales
+    ? [...ESTADOS_PERMITIDOS_EJECUCION, 'completado']
+    : ESTADOS_PERMITIDOS_EJECUCION;
 
   if (!estadosPermitidos.includes(est.estado)) {
     // El estado crudo va en details: el mensaje termina en un toast.
@@ -2765,7 +2791,7 @@ export async function ejecutarEstudio(
   //      (Adenda §2.3, en procesarEstudioAsync).
   const proveedorAnterior = est.proveedor;
   // TransUnion no consulta PPT ni PEP: se van a DataCrédito (antes fallaba ya cobrado).
-  const sinTransUnion = ['ppt', 'pep'].includes(datos.tipo_documento ?? '');
+  const sinTransUnion = transUnionNoConsulta(datos.tipo_documento);
   const proveedorFinal: string =
     (env.MOTOR_DECIDE_ENABLED || sinTransUnion) && est.proveedor === 'transunion' ? 'datacredito' : est.proveedor;
   const cambioProveedor = proveedorFinal !== proveedorAnterior;
@@ -2823,6 +2849,9 @@ export async function ejecutarEstudio(
       // se consultó el buró.
       autorizacion_habeas_data_id: autorizacionId,
       ...(cambioProveedor ? { referencia_proveedor: null, respuesta_proveedor: null } : {}),
+      // Caso L: fn_registrar_resultado_estudio no registra sobre un resultado
+      // existente, así que la reconsulta vuelve a 'pendiente'.
+      ...(reconsultaSinCentrales ? { resultado: 'pendiente', score: null, observaciones: null } : {}),
       // CANON CONGELADO — prerequisito de la portabilidad del §4.3.
       //
       // `inmuebles.valor_arriendo` es EDITABLE: el gestor puede moverlo
@@ -2868,8 +2897,9 @@ export async function ejecutarEstudio(
 
   // P1: el cierre o el rechazo pudo llegar entre el guard de arriba y el lock.
   // Con el estudio ya terminado se deshace el lock (nadie consultó) y la
-  // evaluación pagada se devuelve.
-  {
+  // evaluación pagada se devuelve. No aplica a la reconsulta del caso L: su
+  // pago ya se usó en la primera ejecución.
+  if (!reconsultaSinCentrales) {
     const { data: expAhora } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('estado')
@@ -2908,9 +2938,20 @@ export async function ejecutarEstudio(
     proveedorAnterior: cambioProveedor ? proveedorAnterior : undefined,
     // Si el buró nuevo falla sin dejar referencia, vuelve lo que el lock pisó:
     // la prueba de la consulta anterior.
-    restaurarSiFalla: cambioProveedor
-      ? { proveedor: est.proveedor, referencia_proveedor: est.referencia_proveedor ?? null, respuesta_proveedor: est.respuesta_proveedor ?? null }
-      : undefined,
+    // En la reconsulta del caso L vuelve todo el resultado anterior.
+    restaurarSiFalla: reconsultaSinCentrales
+      ? {
+          estado: est.estado,
+          resultado: est.resultado,
+          score: est.score,
+          observaciones: est.observaciones ?? null,
+          proveedor: est.proveedor,
+          referencia_proveedor: est.referencia_proveedor ?? null,
+          respuesta_proveedor: est.respuesta_proveedor ?? null,
+        }
+      : cambioProveedor
+        ? { proveedor: est.proveedor, referencia_proveedor: est.referencia_proveedor ?? null, respuesta_proveedor: est.respuesta_proveedor ?? null }
+        : undefined,
     expedienteId: est.expediente_id,
     providerInput,
     userId,
@@ -3127,13 +3168,22 @@ async function procesarEstudioAsync(args: {
       || /http 5\d\d/.test(lowerErr)
       || lowerErr.includes('timeout');
 
-    // Adenda 1 §2.3 (literal): "Si Datacredito no responde o devuelve error,
-    // TransUnion pasa a ser la central primaria y se le aplican los mismos
-    // umbrales de cascada". Solo con el motor decisor encendido (sin el, el
-    // gestor elige buro y reintenta a mano) y una sola vez: si TransUnion
-    // tampoco responde, aplica el protocolo de fallo de API del §14 (abajo,
-    // revision manual: caso L). El background check ya lanzado se reutiliza.
-    if (proveedorNoDisponible && env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' && !args.centralCaida) {
+    // Adenda 1 §2.3: DataCrédito no respondió o devolvió error (ver
+    // debePasarATransUnion). Reintentar DataCrédito no arregla credenciales ni
+    // IP y ya no hay elección manual de central (CORR §2). Si TransUnion
+    // tampoco responde, aplica el §14 (abajo, revision manual: caso L). El
+    // background check ya lanzado se reutiliza.
+    if (
+      debePasarATransUnion({
+        motorDecide: env.MOTOR_DECIDE_ENABLED,
+        proveedor,
+        centralCaida: args.centralCaida,
+        tipoDocumento: providerInput.tipo_documento,
+        proveedorNoDisponible,
+        errorDelDato: documentoNoEncontrado || apellidoNoCoincide || bloqueadoPorAutorizacion,
+        dejoReferencia: !!referenciaNueva,
+      })
+    ) {
       logger.warn({ estudioId, error: errorMsg }, 'Adenda §2.3: DataCredito no respondio — TransUnion pasa a ser la central primaria');
       const { error: swErr } = await (supabase
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -3167,7 +3217,7 @@ async function procesarEstudioAsync(args: {
       : proveedorNoDisponible
         ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió. ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelva a intentar la consulta en unos minutos.`
         : errorDeConfiguracion
-        ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito: vuelva a intentar la consulta.`
+        ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito. Un reintento no lo resuelve hasta que el equipo lo corrija: espere el aviso de Cofianza o escriba a soporte.`
         // Sin el mensaje crudo del proveedor (códigos, combos, variables de
         // entorno): va al log, a la auditoría y al aviso de los internos.
         : `${buroLabel} no pudo completar la consulta. No es un rechazo de crédito: vuelva a intentarlo o escriba a soporte.`;
@@ -3176,6 +3226,28 @@ async function procesarEstudioAsync(args: {
     // (reintentable) ni se avisa de un fallo. Si el buró nuevo no dejó
     // referencia, vuelve lo que el lock pisó (la prueba de la consulta anterior).
     const restaurar = !referenciaNueva ? args.restaurarSiFalla : undefined;
+
+    // Reconsulta del caso L (ejecutarEstudio) que tampoco obtuvo respuesta: el
+    // estudio vuelve tal cual a la revisión manual, no a 'fallido'.
+    if (restaurar?.estado === 'completado') {
+      const { error: restErr } = await (supabase
+        .from('estudios' as string) as ReturnType<typeof supabase.from>)
+        .update({
+          ...restaurar,
+          observaciones: `La nueva consulta tampoco obtuvo respuesta: ${observaciones} ${restaurar.observaciones ?? ''}`.trim(),
+        } as never)
+        .eq('id', estudioId)
+        .eq('estado', 'en_proceso');
+      if (restErr) logger.error({ estudioId, error: restErr.message }, 'Caso L: no se pudo restaurar el estudio tras la reconsulta');
+      await registrarDesenlaceConsulta({
+        estudioId,
+        expedienteId,
+        desenlace: desenlaceDeFalla({ bloqueadoPorAutorizacion, apellidoNoCoincide, documentoNoEncontrado }),
+        usuarioId: userId,
+      });
+      logger.warn({ estudioId, error: errorMsg }, 'Caso L: la reconsulta tampoco obtuvo respuesta — el estudio sigue en revisión manual');
+      return;
+    }
 
     // Politica §14 / matriz QA V2, caso L: tampoco respondio la central de
     // respaldo (Adenda §2.3), asi que no respondio NINGUNA. Revision manual
@@ -4711,6 +4783,9 @@ export async function decidirConCascada(args: {
     // Adenda §2.3: la central que ya no respondio en esta ejecucion no se
     // vuelve a consultar; se decide con la que actuo como primaria (§14).
     nota = `${cascada.motivo} ${etiqueta(candidato)} no respondió en esta ejecución, así que ${etiqueta(proveedorPrimario)} actuó como central primaria y se decidió solo con ella.`;
+  } else if (cascada.consultarSecundaria && candidato === 'transunion' && transUnionNoConsulta(args.providerInput?.tipo_documento)) {
+    // No es una falla: para PPT y PEP TransUnion no aplica.
+    nota = `${cascada.motivo} TransUnion no consulta ${(args.providerInput?.tipo_documento ?? '').toUpperCase()} (no aplica); se decidió solo con ${etiqueta(proveedorPrimario)}.`;
   } else if (cascada.consultarSecundaria && args.providerInput) {
     try {
       const prov = getProvider(candidato as 'transunion' | 'datacredito');

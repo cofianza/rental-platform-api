@@ -427,3 +427,51 @@ export function decidirSinCentrales(a: { primaria: string; centralCaida: string;
   });
   return { salida, decision, apisFallidas, traza };
 }
+
+/** TransUnion no consulta PPT ni PEP: para ellos solo existe DataCrédito. */
+export function transUnionNoConsulta(tipoDocumento?: string | null): boolean {
+  return ['ppt', 'pep'].includes((tipoDocumento ?? '').toLowerCase());
+}
+
+/**
+ * Adenda 1 §2.3 (literal): «Si Datacredito no responde o devuelve error,
+ * TransUnion pasa a ser la central primaria». Error = caída, credenciales, IP o
+ * cualquiera que no sea del dato (documento, apellido) ni de la autorización.
+ * Si DataCrédito alcanzó a dejar referencia (consulta cobrada), solo una caída
+ * real pasa a TransUnion. Una sola vez por ejecución; PPT y PEP no van a TransUnion.
+ */
+export function debePasarATransUnion(a: {
+  motorDecide: boolean;
+  proveedor: string;
+  centralCaida?: string | null;
+  tipoDocumento?: string | null;
+  proveedorNoDisponible: boolean;
+  errorDelDato: boolean;
+  dejoReferencia: boolean;
+}): boolean {
+  const devolvioError = a.proveedorNoDisponible || (!a.dejoReferencia && !a.errorDelDato);
+  return devolvioError && a.motorDecide && a.proveedor === 'datacredito' && !a.centralCaida && !transUnionNoConsulta(a.tipoDocumento);
+}
+
+/**
+ * Política §14 caso L: ninguna central respondió y el caso quedó en revisión
+ * manual sin datos. Solo un analista de Cofianza vuelve a consultar, y solo
+ * mientras el expediente siga en revisión (después contradiría la decisión).
+ */
+export function admiteReconsultaSinCentrales(a: {
+  userRol?: string;
+  estado: string;
+  resultado: string | null;
+  score: number | null;
+  expedienteEstado: string;
+  cascada: unknown;
+}): boolean {
+  return (
+    (a.userRol === 'administrador' || a.userRol === 'operador_analista') &&
+    a.estado === 'completado' &&
+    a.resultado === 'condicionado' &&
+    a.score === null &&
+    a.expedienteEstado === 'condicionado' &&
+    esSinCentrales(a.cascada)
+  );
+}
