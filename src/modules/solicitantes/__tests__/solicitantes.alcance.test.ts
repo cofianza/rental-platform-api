@@ -17,7 +17,7 @@ const { ops, enqueue, queues, mockOrg, mockScope, mockPermitidos, chainFor } = v
   };
   const chainFor = (table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ['select', 'insert', 'update', 'eq', 'neq', 'is', 'in', 'or', 'order', 'range']) {
+    for (const m of ['select', 'insert', 'update', 'eq', 'neq', 'is', 'not', 'in', 'or', 'order', 'range']) {
       chain[m] = (...args: unknown[]) => {
         ops.push({ table, method: m, args });
         return chain;
@@ -129,5 +129,50 @@ describe('getApplicantById', () => {
     enqueue('solicitantes', { data: null, error: { code: 'PGRST116', message: 'no rows' } });
     enqueue('expedientes', { count: 3, error: null });
     await expect(getApplicantById('sol-ajena', 'm-1', 'inmobiliaria')).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+// BLQ §3.5: con el enlace de autorización emitido, la identidad solo se corrige
+// por «Corregir documento» (ciego y con fuente); otro nombre es otro estudio.
+describe('identidad de una ficha con enlace emitido', () => {
+  const ficha = (extra: Record<string, unknown> = {}) => ({
+    data: { id: 's-1', creado_por: 'titular', inmobiliaria_id: 'org-A', nombre: 'Juan', apellido: 'Pérez', tipo_documento: 'cc', numero_documento: '1023456789', ...extra },
+    error: null,
+  });
+
+  it.each([
+    [{ numero_documento: '1023456780' }],
+    [{ nombre: 'Pedro' }],
+  ])('con enlace en un estudio vivo: 409 sin escribir (%o)', async (cambio) => {
+    mockOrg.mockResolvedValue('org-A');
+    enqueue('solicitantes', ficha());
+    enqueue('autorizaciones_habeas_data', { data: [{ id: 'a1', expedientes: { estado: 'en_revision' } }], error: null });
+    await expect(updateApplicant('s-1', cambio as never, 'titular', undefined, 'inmobiliaria')).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'IDENTIDAD_CON_ENLACE',
+    });
+    expect(ops.some((o) => o.table === 'solicitantes' && o.method === 'update')).toBe(false);
+  });
+
+  it('el enlace de un estudio cerrado no bloquea; el teléfono nunca', async () => {
+    mockOrg.mockResolvedValue('org-A');
+    // lectura previa, UPDATE, re-lectura
+    enqueue('solicitantes', ficha(), { data: null, error: null }, ficha());
+    enqueue('autorizaciones_habeas_data', { data: [{ id: 'a1', expedientes: { estado: 'cerrado' } }], error: null });
+    await updateApplicant('s-1', { nombre: 'Pedro' } as never, 'titular', undefined, 'inmobiliaria');
+    expect(ops.some((o) => o.table === 'solicitantes' && o.method === 'update')).toBe(true);
+
+    ops.length = 0;
+    enqueue('solicitantes', ficha(), { data: null, error: null }, ficha());
+    await updateApplicant('s-1', { telefono: '3000000000' } as never, 'titular', undefined, 'inmobiliaria');
+    expect(ops.some((o) => o.table === 'autorizaciones_habeas_data')).toBe(false);
+  });
+
+  it('ficha sin documento (H43): se puede completar aunque tenga enlace', async () => {
+    mockOrg.mockResolvedValue('org-A');
+    enqueue('solicitantes', ficha({ numero_documento: '' }), { data: null, error: null }, { data: null, error: null }, ficha());
+    await updateApplicant('s-1', { numero_documento: '1023456789' } as never, 'titular', undefined, 'inmobiliaria');
+    expect(ops.some((o) => o.table === 'autorizaciones_habeas_data')).toBe(false);
+    expect(ops.some((o) => o.table === 'solicitantes' && o.method === 'update')).toBe(true);
   });
 });

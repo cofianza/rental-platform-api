@@ -148,7 +148,7 @@ export interface ContextoAdmisionEstudio {
   /**
    * Expediente para el que se quiere el estudio. Si coincide con el titular de
    * la reserva NO se bloquea: el candidato reservado puede seguir moviendo su
-   * propio caso (p. ej. el estudio del co-arrendatario).
+   * propio caso (p. ej. el estudio del coarrendatario).
    */
   expedienteId?: string | null;
   /**

@@ -78,7 +78,7 @@ export const REGLA_R2 =
  * pero si el coarrendatario tiene score 450-599 la banda prevalece: revision manual.
  */
 export const REGLA_BANDA_COARRENDATARIO =
-  'El puntaje de las centrales del co-arrendatario en el rango de revisión obligatoria prevalece sobre su resultado menor a 70: revisión manual.';
+  'El puntaje de las centrales del coarrendatario en el rango de revisión obligatoria prevalece sobre su resultado menor a 70: revisión manual.';
 
 export interface UmbralesDecision {
   cascadaRechazo: number;
@@ -175,7 +175,7 @@ export interface EntradaDecision {
 
 /** Franja 70-84 (Adenda §3), en palabras para la inmobiliaria. */
 export const MOTIVO_VISIBLE_FRANJA_INTERMEDIA =
-  'El perfil queda en un rango intermedio: puede fortalecerse con un co-arrendatario o lo decide un analista de Cofianza.';
+  'El perfil queda en un rango intermedio: puede fortalecerse con un coarrendatario o lo decide un analista de Cofianza.';
 
 type Via = 'automatica' | 'condicionada_coarrendatario' | 'revision_manual';
 
@@ -297,7 +297,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
   if (coa && !coa.reglaDura && coa.puntaje !== null && coa.puntaje >= u.coarrendatario) {
     return {
       resultado: 'aprobado',
-      motivo: `Puntaje ${pts(p)} en la franja intermedia con co-arrendatario ${pts(coa.puntaje)} (mínimo ${u.coarrendatario}): aprobación automática condicionada.`,
+      motivo: `Puntaje ${pts(p)} en la franja intermedia con coarrendatario ${pts(coa.puntaje)} (mínimo ${u.coarrendatario}): aprobación automática condicionada.`,
       via: 'condicionada_coarrendatario',
       sinFlags: true,
     };
@@ -308,7 +308,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
     if (coa.scoreEnBandaRevision) {
       return {
         resultado: 'condicionado',
-        motivo: `Puntaje ${pts(p)} en la franja intermedia y co-arrendatario ${pts(coa.puntaje)}, menor que ${u.zonaGris}. ${REGLA_BANDA_COARRENDATARIO}`,
+        motivo: `Puntaje ${pts(p)} en la franja intermedia y coarrendatario ${pts(coa.puntaje)}, menor que ${u.zonaGris}. ${REGLA_BANDA_COARRENDATARIO}`,
         visible: MOTIVO_VISIBLE_FRANJA_INTERMEDIA,
         via: 'revision_manual',
         sinFlags: true,
@@ -316,7 +316,7 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
     }
     return {
       resultado: 'rechazado',
-      motivo: `Puntaje ${pts(p)} en la franja intermedia y co-arrendatario ${pts(coa.puntaje)}, menor que ${u.zonaGris}: el co-arrendatario no compensa.`,
+      motivo: `Puntaje ${pts(p)} en la franja intermedia y coarrendatario ${pts(coa.puntaje)}, menor que ${u.zonaGris}: el coarrendatario no compensa.`,
       visible: MOTIVO_VISIBLE_NO_ALCANZA,
       via: null,
       sinFlags: true,
@@ -325,8 +325,8 @@ function decidirPorJerarquia(e: EntradaDecision): Decision {
   return {
     resultado: 'condicionado',
     motivo: coa
-      ? `Puntaje ${pts(p)} en la franja intermedia y co-arrendatario ${coa.reglaDura ? 'que no cumple una condición obligatoria' : `${pts(coa.puntaje)}, menor que ${u.coarrendatario}`}: revisión manual.`
-      : `Puntaje ${pts(p)} en la franja intermedia (${u.zonaGris} a ${u.aprobacion - 1}) sin co-arrendatario: revisión manual, o co-arrendatario con ${u.coarrendatario} o más.`,
+      ? `Puntaje ${pts(p)} en la franja intermedia y coarrendatario ${coa.reglaDura ? 'que no cumple una condición obligatoria' : `${pts(coa.puntaje)}, menor que ${u.coarrendatario}`}: revisión manual.`
+      : `Puntaje ${pts(p)} en la franja intermedia (${u.zonaGris} a ${u.aprobacion - 1}) sin coarrendatario: revisión manual, o coarrendatario con ${u.coarrendatario} o más.`,
     visible: MOTIVO_VISIBLE_FRANJA_INTERMEDIA,
     via: 'revision_manual',
     sinFlags: true,

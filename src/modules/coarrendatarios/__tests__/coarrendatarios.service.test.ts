@@ -56,6 +56,7 @@ const {
       AUTORIZACION_VIGENCIA_MESES: 12,
       MOTOR_DECIDE_ENABLED: false,
       MOTOR_RUTA_USA_SCORECARD: false,
+      WHATSAPP_COARRENDATARIO_V3: false,
     },
     mockFrom,
     ops,
@@ -136,7 +137,7 @@ vi.mock('@/modules/expedientes/expediente-soportes.service', () => ({
   emitirTokenDocumentos: (...args: unknown[]) => mockEmitirTokenDocumentos(...args),
 }));
 
-// La evaluación del co-arrendatario arranca en ejecutarEstudio (import dinámico).
+// La evaluación del coarrendatario arranca en ejecutarEstudio (import dinámico).
 const mockEjecutar = vi.fn(async (..._args: unknown[]) => undefined);
 vi.mock('@/modules/estudios/estudios.service', () => ({ ejecutarEstudio: (...args: unknown[]) => mockEjecutar(...args) }));
 
@@ -179,7 +180,7 @@ const ctxRow = (estado = 'condicionado') => ({
     estado,
     creado_por: GESTOR_ID,
     solicitantes: { creado_por: null, email: 'ana@correo.co', nombre: 'Ana', apellido: 'Pérez', numero_documento: '1.234.567' },
-    // Canal de inmobiliaria: el del propietario directo no admite co-arrendatario (Decisión 4).
+    // Canal de inmobiliaria: el del propietario directo no admite coarrendatario (Decisión 4).
     inmuebles: { propietario_id: PROPIETARIO_ID, inmobiliaria_id: 'org-1' as string | null, direccion: 'Calle 1 # 2-3', ciudad: 'Medellín' },
   },
   error: null,
@@ -250,6 +251,22 @@ describe('invitación: el nombre del titular que se reenvía al invitado', () =>
     const vars = (mockEnviarTemplate.mock.calls.at(-1)?.[0] as { variables: string[] }).variables;
     expect(vars[1]).toBe('El solicitante');
     expect(JSON.stringify(mockEnviarTemplate.mock.calls)).not.toContain('pagos-cofianza');
+  });
+});
+
+describe('invitación: plantilla de WhatsApp (v3 solo con Meta aprobada)', () => {
+  it.each([
+    [false, 'COARRENDATARIO_INVITACION'],
+    [true, 'COARRENDATARIO_INVITACION_V3'],
+  ])('WHATSAPP_COARRENDATARIO_V3=%s envía %s', async (flag, plantilla) => {
+    mockEnv.WHATSAPP_COARRENDATARIO_V3 = flag;
+    enqueue('expedientes', ctxRow());
+    enqueue('expediente_coarrendatarios', cupo, { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', estado: 'pendiente_aceptacion' }, error: null });
+
+    await invitarCoarrendatario(EXPEDIENTE_ID, GESTOR_ID, 'administrador', { ...invitacion('7654321'), telefono: '+573001112233' });
+
+    expect((mockEnviarTemplate.mock.calls.at(-1)?.[0] as { template: string }).template).toBe(plantilla);
+    mockEnv.WHATSAPP_COARRENDATARIO_V3 = false;
   });
 });
 
@@ -365,7 +382,7 @@ describe('respuestas al cliente sin el token de la invitacion', () => {
 // Ley 1266: lo que el titular (o la agencia) ve de la otra persona
 // ============================================================
 
-describe('getCoarrendatarioPorExpediente / invitar — datos del co-arrendatario', () => {
+describe('getCoarrendatarioPorExpediente / invitar — datos del coarrendatario', () => {
   const TITULAR_ID = 'bb0e8400-e29b-41d4-a716-446655440000';
   const ctxTitular = () => {
     const r = ctxRow();
@@ -410,14 +427,14 @@ describe('getCoarrendatarioPorExpediente / invitar — datos del co-arrendatario
 });
 
 // ============================================================
-// Cartera: un miembro restringido de la inmobiliaria no ve el co-arrendatario
+// Cartera: un miembro restringido de la inmobiliaria no ve el coarrendatario
 // de un estudio ajeno solo por ser de la misma organizacion.
 // ============================================================
 
 describe('acceso de la inmobiliaria por cartera', () => {
   const MIEMBRO_ID = 'cc0e8400-e29b-41d4-a716-446655440000';
 
-  it('fuera de su cartera: 403 y no lee la fila del co-arrendatario', async () => {
+  it('fuera de su cartera: 403 y no lee la fila del coarrendatario', async () => {
     mockAssertExpedienteAccess.mockRejectedValueOnce(new Error('404'));
     enqueue('expedientes', ctxRow());
 
@@ -573,7 +590,7 @@ describe('aceptarInvitacion — carrera del claim', () => {
 // P4: antes de aceptar se cancela o se corrige y reenvía; después, uno por estudio
 // ============================================================
 
-describe('reemplazar al co-arrendatario — P4', () => {
+describe('reemplazar al coarrendatario — P4', () => {
   it('cancelar: solo la pendiente, rota el token (el enlace viejo muere) y deja rastro', async () => {
     enqueue('expedientes', ctxRow());
     enqueue('expediente_coarrendatarios', { data: [{ id: COA_ID, nombre: 'Luis' }], error: null });
@@ -670,7 +687,7 @@ describe('reemplazar al co-arrendatario — P4', () => {
 });
 
 // ============================================================
-// P18: el prospecto invita a su co-arrendatario desde su enlace personal
+// P18: el prospecto invita a su coarrendatario desde su enlace personal
 // ============================================================
 
 describe('invitar desde el enlace del prospecto — P18', () => {
@@ -688,7 +705,7 @@ describe('invitar desde el enlace del prospecto — P18', () => {
     const insert = ops.find((o) => o.table === 'expediente_coarrendatarios' && o.method === 'insert');
     expect(insert!.args[0]).toMatchObject({ expediente_id: EXPEDIENTE_ID, invitado_por: null });
     expect(mockNotificarResponsable).toHaveBeenCalledWith(
-      expect.objectContaining({ expedienteId: EXPEDIENTE_ID, titulo: 'El solicitante invitó a su co-arrendatario' }),
+      expect.objectContaining({ expedienteId: EXPEDIENTE_ID, titulo: 'El solicitante invitó a su coarrendatario' }),
     );
   });
 
@@ -795,7 +812,7 @@ describe('invitación fuera de condicionado — P3', () => {
   });
 });
 
-describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
+describe('coarrendatario evaluado sobre un estudio ya decidido — P3', () => {
   const coaEstudio = (resultado: string) => ({
     data: { id: COA_ESTUDIO_ID, expediente_id: EXPEDIENTE_ID, tipo: 'con_coarrendatario', estado: 'completado', resultado, score: 700, motivo_rechazo: null },
     error: null,
@@ -804,14 +821,14 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
   const coaRow = { data: { id: COA_ID, expediente_id: EXPEDIENTE_ID, nombre: 'Luis', apellido: 'Gómez', email: 'luis@correo.co' }, error: null };
   const marcaCompletado = { data: null, error: null };
   const titularCondicionado = { data: [{ id: TITULAR_ESTUDIO_ID, resultado: 'condicionado', score: 720 }], error: null };
-  // Lecturas del aviso final al co-arrendatario (avisarCoarrendatarioDecision).
+  // Lecturas del aviso final al coarrendatario (avisarCoarrendatarioDecision).
   const encolarAvisoCoa = (resultado: string, estado: string) => {
     enqueue('expediente_coarrendatarios', { data: { id: COA_ID, nombre: 'Luis', email: 'luis@correo.co', estudio_id: COA_ESTUDIO_ID }, error: null });
     enqueue('estudios', { data: { resultado, score: 700, motivo_rechazo: null }, error: null });
     enqueue('expedientes', ctxRow(estado));
   };
 
-  it('ya aprobado por el analista: sin «sigue en revisión», CRC regenerado y el co-arrendatario recibe la decisión real', async () => {
+  it('ya aprobado por el analista: sin «sigue en revisión», CRC regenerado y el coarrendatario recibe la decisión real', async () => {
     enqueue('estudios', coaEstudio('aprobado'), titularCondicionado);
     enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
     enqueue('expedientes', ctxRow('aprobado'));
@@ -826,7 +843,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
     // Decisión 2: el titular y el gestor saben que quedó vinculado (prima del 10 %)…
     expect(correoA('ana@correo.co').html).toContain('10 %');
     expect(mockNotificarUsuario).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'Co-arrendatario vinculado' }),
+      expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'Coarrendatario vinculado' }),
     );
     // …con rastro, pero sin estado nuevo: la vía de la tarifa sigue siendo la del titular.
     const evento = ops.find((o) => o.table === 'eventos_timeline' && o.method === 'insert')!.args[0] as Record<string, unknown>;
@@ -835,7 +852,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
   });
 
   // Con el asistente de contratos (flag + inmueble de inmobiliaria) se puede rehacer
-  // con él; sin él, el contrato anterior no admite co-arrendatario (P6): se mantiene.
+  // con él; sin él, el contrato anterior no admite coarrendatario (P6): se mantiene.
   it.each([
     ['con el asistente de contratos', true, 'org-1', 'cancela el contrato y genera uno nuevo desde el asistente'],
     ['sin el asistente (propietario directo)', true, null, 'El contrato actual se mantiene sin él. Si debe entrar, escríbanos a soporte@cofianza.co'],
@@ -868,7 +885,7 @@ describe('co-arrendatario evaluado sobre un estudio ya decidido — P3', () => {
     }
   });
 
-  it('estudio cerrado mientras se evaluaba: el co-arrendatario recibe el correo de cierre', async () => {
+  it('estudio cerrado mientras se evaluaba: el coarrendatario recibe el correo de cierre', async () => {
     enqueue('estudios', coaEstudio('aprobado'), titularCondicionado);
     enqueue('expediente_coarrendatarios', coaRow, marcaCompletado);
     enqueue('expedientes', ctxRow('cerrado'));
@@ -982,7 +999,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     expect(mockEmitirCrc).not.toHaveBeenCalled();
   });
 
-  it('Politica §11: el rechazo le llega al prospecto (no al gestor) sin las reglas del co-arrendatario', async () => {
+  it('Politica §11: el rechazo le llega al prospecto (no al gestor) sin las reglas del coarrendatario', async () => {
     enqueue('estudios', coaEstudio('rechazado'), titularRows('aprobado'));
     enqueue('expediente_coarrendatarios', coaRow);
     const ctxGestor = ctxRow();
@@ -1008,7 +1025,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
     const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
     expect((update!.args[0] as { estado: string }).estado).toBe('aprobado');
     expect(mockLiberarReserva).not.toHaveBeenCalled();
-    // P2: con la evaluación rechazada no entra al contrato; el dueño no lee «con co-arrendatario».
+    // P2: con la evaluación rechazada no entra al contrato; el dueño no lee «con coarrendatario».
     expect(mockNotificarUsuario).toHaveBeenCalledWith(
       expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'Solicitante aprobado', mensaje: expect.stringContaining('va sin él') }),
     );
@@ -1157,7 +1174,7 @@ describe('onCoarrendatarioEstudioCompletado — ponderacion', () => {
       const update = ops.find((o) => o.table === 'expedientes' && o.method === 'update');
       const payload = update!.args[0] as { estado: string; motivo_rechazo?: string };
       expect(payload.estado).toBe('rechazado');
-      expect(payload.motivo_rechazo).toContain('co-arrendatario invitado fue rechazada');
+      expect(payload.motivo_rechazo).toContain('coarrendatario invitado fue rechazada');
       expect(mockLiberarReserva).toHaveBeenCalledWith(EXPEDIENTE_ID);
       expect(mockEmitirCrc).not.toHaveBeenCalled();
     } finally {
@@ -1305,7 +1322,7 @@ describe('construirCorreoCoarrendatario', () => {
       decisionExpediente: 'aprobado',
     });
     expect(subject).not.toMatch(/aprob/i);
-    expect(html).toContain('no podemos respaldarlo como co-arrendatario');
+    expect(html).toContain('no podemos respaldarlo como coarrendatario');
     expect(html).not.toContain('720');
     expect(html).toMatch(APELACION);
   });
@@ -1391,11 +1408,11 @@ describe('correo de contacto de la empresa', () => {
 
 // ============================================================
 // Decisión 2 (2026-09-25; Política §5, Flujo §8.3 y §10, Adenda 1 §5.2): un
-// estudio APROBADO suma co-arrendatario antes del contrato para pagar la prima
+// estudio APROBADO suma coarrendatario antes del contrato para pagar la prima
 // del 10 %, sin cobro extra; el titular conserva su aprobación y su ruta.
 // ============================================================
 
-describe('Decisión 2 — el aprobado suma co-arrendatario antes del contrato', () => {
+describe('Decisión 2 — el aprobado suma coarrendatario antes del contrato', () => {
   const sinEl = { data: [{ id: 'cto-1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null };
   const pendiente = {
     data: {
@@ -1500,7 +1517,7 @@ describe('Decisión 2 — el aprobado suma co-arrendatario antes del contrato', 
     await vi.waitFor(() => expect(correoA('ana@correo.co').html).toContain('20 %'));
     expect(correoA('ana@correo.co').html).not.toContain('500');
     expect(mockNotificarUsuario).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'El co-arrendatario no quedó vinculado' }),
+      expect.objectContaining({ userId: PROPIETARIO_ID, titulo: 'El coarrendatario no quedó vinculado' }),
     );
     await vi.waitFor(() => expect(correoA('luis@correo.co')).toBeDefined());
     expect(mockEmitirCrc).not.toHaveBeenCalled();
@@ -1522,7 +1539,7 @@ describe('Decisión 2 — el aprobado suma co-arrendatario antes del contrato', 
 // Decisión 4 (2026-09-25): el canal del propietario directo espera el Convenio.
 // ============================================================
 
-describe('Decisión 4 — propietario directo sin co-arrendatario', () => {
+describe('Decisión 4 — propietario directo sin coarrendatario', () => {
   const directo = (estado = 'condicionado') => {
     const r = ctxRow(estado);
     r.data.inmuebles.inmobiliaria_id = null;

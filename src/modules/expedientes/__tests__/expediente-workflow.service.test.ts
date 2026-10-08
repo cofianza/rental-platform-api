@@ -439,7 +439,7 @@ describe('expediente-workflow.service', () => {
 
       await executeTransition(
         'exp-uuid',
-        { nuevo_estado: 'rechazado', comentario: 'DTI del co-arrendatario 71 %', motivo: 'El caso no cumple la política de Cofianza.' },
+        { nuevo_estado: 'rechazado', comentario: 'DTI del coarrendatario 71 %', motivo: 'El caso no cumple la política de Cofianza.' },
         adminUser,
       );
 
@@ -448,7 +448,7 @@ describe('expediente-workflow.service', () => {
       expect(JSON.stringify(aExpedientes)).not.toContain('DTI');
       // El fundamento va a `comentario` (interno), nunca a la descripción.
       const rpc = mockRpc.mock.calls[0][1] as { p_descripcion: string; p_comentario: string };
-      expect(rpc.p_comentario).toBe('DTI del co-arrendatario 71 %');
+      expect(rpc.p_comentario).toBe('DTI del coarrendatario 71 %');
       expect(rpc.p_descripcion).not.toContain('DTI');
       expect(rpc.p_descripcion).toContain('El caso no cumple la política de Cofianza.');
       // El evento guarda el motivo para el gestor junto al resto de la revisión manual.
@@ -524,7 +524,7 @@ describe('expediente-workflow.service', () => {
       );
       await vi.waitFor(() => expect(mockAvisarDueno).toHaveBeenCalledWith('exp-uuid', 'cancelado'));
       expect(mockAvisarSolicitante).not.toHaveBeenCalled();
-      // El co-arrendatario ya evaluado recibe su correo de cierre.
+      // El coarrendatario ya evaluado recibe su correo de cierre.
       await vi.waitFor(() => expect(avisarCoarrendatarioDecision).toHaveBeenCalledWith('exp-uuid', 'cerrado'));
     });
 
@@ -621,6 +621,17 @@ describe('expediente-workflow.service', () => {
       });
       expect(mockExigirAcuse).toHaveBeenCalledWith('exp-uuid', 'inmobiliaria');
       expect(mockRpc).not.toHaveBeenCalled();
+    });
+
+    it('BLQ §3.6: el cierre por el límite de correcciones del documento no pide el acuse del contrato', async () => {
+      const inmobiliaria: AuthUser = { id: 'inmo-uuid', email: 'inmo@test.com', rol: 'inmobiliaria', activo: true };
+      setupFetchExpediente({ ...mockExpediente, estado: 'aprobado' });
+      mockRpc.mockResolvedValueOnce({ data: null, error: { message: 'detenido aquí' } });
+      await expect(executeTransition('exp-uuid', cierre('Cancelar estudio'), inmobiliaria, { sinAcuse: true })).rejects.toMatchObject({
+        errorCode: 'TRANSITION_FAILED',
+      });
+      expect(mockExigirAcuse).not.toHaveBeenCalled();
+      expect(mockRpc).toHaveBeenCalled();
     });
 
     it('"Cerrar estudio" sin acta: el trigger de la BD rechaza y se responde 409 con el motivo', async () => {
@@ -803,7 +814,7 @@ describe('expediente-workflow.service', () => {
       });
     });
 
-    it('al titular no le cuenta el resultado ni las reglas duras de su co-arrendatario', async () => {
+    it('al titular no le cuenta el resultado ni las reglas duras de su coarrendatario', async () => {
       setupFetchExpediente(mockExpediente);
       const fila = (origen: string | null, descripcion: string) => ({
         id: `evt-${origen}`,
@@ -821,7 +832,7 @@ describe('expediente-workflow.service', () => {
             eq: vi.fn().mockReturnValue({
               order: vi.fn().mockResolvedValue({
                 data: [
-                  fila('ponderacion_coarrendatario', 'Titular condicionado + coarrendatario rechazado. Regla dura del co-arrendatario (listas restrictivas)'),
+                  fila('ponderacion_coarrendatario', 'Titular condicionado + coarrendatario rechazado. Regla dura del coarrendatario (listas restrictivas)'),
                   fila(null, 'Cambio manual'),
                 ],
                 error: null,
@@ -833,7 +844,7 @@ describe('expediente-workflow.service', () => {
 
       const r = await getTransitionHistory('exp-uuid', 'titular', 'solicitante');
 
-      expect(r.historial[0].descripcion).toBe('Resultado combinado con el co-arrendatario: rechazado.');
+      expect(r.historial[0].descripcion).toBe('Resultado combinado con el coarrendatario: rechazado.');
       expect(r.historial[1].descripcion).toBe("Estado cambiado de 'condicionado' a 'rechazado'.");
       expect(JSON.stringify(r.historial)).not.toContain('listas restrictivas');
     });
@@ -843,11 +854,11 @@ describe('expediente-workflow.service', () => {
         id: 'evt-r',
         estado_anterior: 'condicionado',
         estado_nuevo: 'rechazado',
-        comentario: 'Fundamento: DTI del co-arrendatario 71 %',
+        comentario: 'Fundamento: DTI del coarrendatario 71 %',
         // Fila vieja: la descripción traía el correo del analista y el comentario.
-        descripcion: "Estado cambiado de 'condicionado' a 'rechazado' por ana@cofianza.co. Comentario: Fundamento: DTI del co-arrendatario 71 %",
+        descripcion: "Estado cambiado de 'condicionado' a 'rechazado' por ana@cofianza.co. Comentario: Fundamento: DTI del coarrendatario 71 %",
         created_at: '2026-09-24T10:00:00Z',
-        metadata: { origen: 'analista_revision_manual', fundamento: 'Fundamento: DTI del co-arrendatario 71 %', motivo_gestor: 'No cumple la política de Cofianza.' },
+        metadata: { origen: 'analista_revision_manual', fundamento: 'Fundamento: DTI del coarrendatario 71 %', motivo_gestor: 'No cumple la política de Cofianza.' },
         usuario: { id: 'analista-uuid', nombre: 'Ana', apellido: 'López' },
       };
       const historial = async (userId: string, rol: string) => {

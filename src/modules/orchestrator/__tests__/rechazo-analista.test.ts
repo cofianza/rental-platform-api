@@ -173,7 +173,7 @@ describe('condicionado solo por el tope', () => {
       .map((o) => (o.args[0] as { descripcion: string }).descripcion)
       .join('\n');
 
-  it('queda pendiente de la Gerencia General sin pedir soportes ni co-arrendatario', async () => {
+  it('queda pendiente de la Gerencia General sin pedir soportes ni coarrendatario', async () => {
     encolarRechazo();
     enqueue('estudios', { data: { cascada: null, observaciones: NOTA_TOPE }, error: null });
     await onEstudioCompletado({ estudioId: 'est-1', expedienteId: 'exp-1', resultado: 'condicionado', score: 780, solicitanteId: '' });
@@ -185,7 +185,7 @@ describe('condicionado solo por el tope', () => {
     await vi.waitFor(() => expect(mockDocs).toHaveBeenCalledWith(expect.objectContaining({ pedirSoportes: false })));
     const alDueno = mockNotificar.mock.calls.map((c) => c[0] as { userId: string; mensaje: string }).find((n) => n.userId === 'dueno-1');
     expect(alDueno?.mensaje).toMatch(/pendiente de autorización de la Gerencia General/);
-    expect(alDueno?.mensaje).not.toMatch(/puede pedir soportes|co-arrendatario/);
+    expect(alDueno?.mensaje).not.toMatch(/puede pedir soportes|coarrendatario/);
     expect((mockResponsable.mock.calls[0][0] as { whatsapp?: unknown }).whatsapp).toBeUndefined();
     await new Promise((r) => setTimeout(r, 10));
     expect(mockWa).not.toHaveBeenCalled();

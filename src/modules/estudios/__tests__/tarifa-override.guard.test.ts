@@ -76,7 +76,7 @@ beforeEach(() => {
 });
 
 describe('tarifa especial (P35)', () => {
-  it('en el estudio del co-arrendatario: 409 TARIFA_SOLO_TITULAR', async () => {
+  it('en el estudio del coarrendatario: 409 TARIFA_SOLO_TITULAR', async () => {
     enqueue('estudios', fila('con_coarrendatario'));
 
     await expect(setTarifaOverride('est-1', input, 'admin-1', 'administrador', 'gg@cofianza.co')).rejects.toMatchObject({

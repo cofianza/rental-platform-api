@@ -1507,7 +1507,7 @@ export async function cupoLiberado(pagoId: string): Promise<boolean> {
 
 type RpcResult = { data: unknown; error: { message?: string } | null };
 // Las ejecuciones del sistema (el prospecto autoriza, se confirma el pago, entra
-// el co-arrendatario) llegan con userId '' y p_usuario_id es uuid: '' hacía
+// el coarrendatario) llegan con userId '' y p_usuario_id es uuid: '' hacía
 // fallar la RPC y la consulta no arrancaba. Sin usuario = NULL.
 const rpc = (fn: string, args: Record<string, unknown>): Promise<RpcResult> =>
   (supabase as unknown as { rpc: (f: string, a: Record<string, unknown>) => Promise<RpcResult> }).rpc(

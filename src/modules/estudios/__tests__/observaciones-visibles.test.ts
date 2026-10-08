@@ -112,8 +112,8 @@ describe('observaciones guardadas antes de separar el texto interno', () => {
 
 describe('etiqueta del gestor', () => {
   it('sin el puntaje del modelo para la agencia', () => {
-    expect(etiquetaSinPuntaje('Perfil intermedio (77,5 puntos): aprobado con co-arrendatario (82 puntos)')).toBe(
-      'Perfil intermedio: aprobado con co-arrendatario',
+    expect(etiquetaSinPuntaje('Perfil intermedio (77,5 puntos): aprobado con coarrendatario (82 puntos)')).toBe(
+      'Perfil intermedio: aprobado con coarrendatario',
     );
   });
 });

@@ -6,7 +6,9 @@ import { logAudit, AUDIT_ACTIONS, AUDIT_ENTITIES } from '@/lib/auditLog';
 import { sendAutorizacionEmail, sendOtpEmail } from '@/lib/email';
 import { enviarMensaje } from '@/modules/whatsapp/whatsapp.service';
 import { WHATSAPP_TEMPLATES } from '@/modules/whatsapp/templates';
-import { assertExpedienteAccess, resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
+import { assertExpedienteAccess, resolveAllowedExpedienteIds, resolveInmobiliariaIdForPerfil } from '@/lib/tenantScope';
+import type { AuthUser } from '@/types/auth';
+import type { TransitionInput } from '@/modules/expedientes/expediente-workflow.schema';
 import { errorNoAfianzableSegunCobro, estudioYaCobrado as estudioPagado, leerSenalPagoEstudio } from '@/modules/estudios/pago.guard';
 import { normalizarDocumento, normalizarTipoDocumento } from '@/modules/estudios/autorizacion.guard';
 import { env } from '@/config';
@@ -31,6 +33,19 @@ import type { ResumenBiometria } from './biometria';
 import { formatNumeroEstudio } from '@/lib/numeroEstudio';
 import { existeOtraCuentaConDocumento, MSG_DOC_DE_OTRA_CUENTA_GESTOR } from '@/modules/solicitantes/solicitantes.service';
 import { motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
+import {
+  cerrarEnvios,
+  contarCorrecciones,
+  contarEnlacesTitular,
+  contarIntentosFallidos,
+  enmascararEmail,
+  identidadRechazada,
+  leerBloqueo,
+  registrarEnvio,
+  registrarIntentoDocumento,
+  type MotivoCierre,
+  type ResultadoCanal,
+} from './bloqueo-documento';
 
 // ============================================================
 // Constants
@@ -131,7 +146,7 @@ export async function getAutorizacionForExpediente(
     // el panel admin los muestra como soporte legal de la autorización.
     //
     // `coarrendatario_id IS NULL` NO es opcional: desde 2026-09-03 el
-    // co-arrendatario invitado tiene su PROPIA fila con el MISMO expediente_id, y
+    // coarrendatario invitado tiene su PROPIA fila con el MISMO expediente_id, y
     // como se inserta después, era la que devolvía el `order by created_at desc`.
     // El panel habría mostrado la IP, el dispositivo y el texto de OTRO titular
     // de datos como si fueran los del solicitante: exactamente la evidencia que
@@ -161,7 +176,24 @@ export async function getAutorizacionForExpediente(
 
   if (!autorizacion) return null;
 
-  return { ...(autorizacion as Record<string, unknown>), perfil_prospecto: perfil };
+  // BLQ §8: estado derivado y lo que le queda al gestor (corregir y reenviar).
+  const aut = autorizacion as Record<string, unknown> & { id: string; estado: string; created_at: string };
+  const [bloqueo, enlaces, correcciones, cal] = await Promise.all([
+    leerBloqueo(expedienteId, aut),
+    contarEnlacesTitular(expedienteId).catch(() => null),
+    contarCorrecciones(expedienteId).catch(() => null),
+    getCalibracion(),
+  ]);
+  return {
+    ...aut,
+    perfil_prospecto: perfil,
+    estado_bloqueo: bloqueo.estado,
+    // 'intentos' o 'datos_incorrectos' («soy yo, pero los datos están mal»): la web dice qué pasó.
+    motivo_bloqueo: bloqueo.estado === 'bloqueado_documento' ? bloqueo.motivo : null,
+    correcciones_restantes: correcciones == null ? null : Math.max(0, cal.MAX_CORRECCIONES_DOCUMENTO - correcciones),
+    // Para la inmobiliaria y el propietario; Cofianza no tiene límite.
+    reenvios_restantes: enlaces == null ? null : Math.max(0, cal.MAX_REENVIOS_ENLACE - Math.max(0, enlaces - 1)),
+  };
 }
 
 /** Roles internos de Cofianza: los unicos que ven el bloque §8.2. */
@@ -227,10 +259,10 @@ async function leerPerfilProspecto(
  * declarado. Rellenarla taparia la brecha de fuentes en vez de arreglarla.
  *
  * OJO: un expediente contiene estudios de MAS DE UN titular de datos. El
- * co-arrendatario invitado comparte `expediente_id` (coarrendatarios.service
+ * coarrendatario invitado comparte `expediente_id` (coarrendatarios.service
  * lo inserta con tipo='con_coarrendatario') y produce su propia fila en
  * estudios_scorecard_sombra. Sin el `.neq` de abajo, el declarado del TITULAR
- * se contrastaba contra el inferido del CO-ARRENDATARIO: una discrepancia
+ * se contrastaba contra el inferido del COARRENDATARIO: una discrepancia
  * fabricada entre dos personas distintas que ademas TAPABA la ausencia real
  * del titular, que es justo la brecha que este diseno quiere dejar visible.
  * Mismo filtro y misma razon que orchestrator.service.ts.
@@ -310,6 +342,58 @@ async function quienSolicitaParaMensaje(
   }
 }
 
+
+/**
+ * Escribe el tipo/número de documento en la ficha con las reglas de siempre:
+ * una cuenta por documento (H43) y el índice por agencia (23505). Lo usan el
+ * documento que faltaba (enviar enlace) y «Corregir documento» (BLQ §3). Muta
+ * `sol` con lo guardado.
+ */
+async function escribirDocumentoFicha(
+  solicitanteId: string,
+  sol: ExpedienteInfo['solicitantes'],
+  tipoNuevo: string | undefined,
+  numeroNuevo: string | undefined,
+  expedienteId: string,
+  userRol?: string,
+): Promise<void> {
+  const cambiaNumero = !!numeroNuevo && numeroNuevo !== (sol.numero_documento ?? '');
+  const cambiaTipo = !!tipoNuevo && tipoNuevo !== (sol.tipo_documento ?? '');
+  if (!cambiaNumero && !cambiaTipo) return;
+  // H43: si la ficha es la de una cuenta, la regla del registro (una cuenta
+  // por documento). Las fichas de agencia no aplican.
+  const numFinal = numeroNuevo || sol.numero_documento;
+  if (numFinal && (await existeOtraCuentaConDocumento(tipoNuevo || sol.tipo_documento || 'cc', numFinal, sol))) {
+    throw AppError.conflict(MSG_DOC_DE_OTRA_CUENTA_GESTOR, 'DOCUMENT_ALREADY_EXISTS');
+  }
+  const { error: docError } = await (supabase
+    .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+    .update({
+      ...(cambiaNumero ? { numero_documento: numeroNuevo } : {}),
+      ...(cambiaTipo ? { tipo_documento: tipoNuevo } : {}),
+    } as never)
+    .eq('id', solicitanteId);
+  if (docError) {
+    logger.warn({ error: docError.message, expedienteId }, 'No se pudo corregir el documento del solicitante');
+    // 23505 = idx_solicitantes_documento_por_agencia: otra ficha de la misma
+    // agencia (o del mismo propietario) ya tiene ese documento.
+    if ((docError as { code?: string }).code === '23505') {
+      const esCedula = (tipoNuevo || sol.tipo_documento) === 'cc';
+      throw AppError.conflict(
+        `${esCedula ? 'Esa cédula ya está registrada' : 'Ese documento ya está registrado'} para otro solicitante` +
+          `${userRol === 'inmobiliaria' ? ' de su inmobiliaria' : ''}. Verifique el número o continúe con el estudio de ese solicitante.`,
+        'DOCUMENTO_DUPLICADO',
+      );
+    }
+    throw AppError.badRequest(
+      'No se pudo corregir el documento del solicitante. Revíselo en su ficha y vuelva a intentarlo.',
+      'DOCUMENTO_NO_ACTUALIZADO',
+    );
+  }
+  if (cambiaNumero) sol.numero_documento = numeroNuevo!;
+  if (cambiaTipo) sol.tipo_documento = tipoNuevo!;
+}
+
 export async function enviarEnlaceAutorizacion(
   expedienteId: string,
   userId: string,
@@ -354,6 +438,28 @@ export async function enviarEnlaceAutorizacion(
   // enlace llegaria a una pantalla que no deja firmar (assertEstudioActivo).
   assertEstudioActivo(exp.estado);
 
+  // 0c-bis. BLQ §4.5 y §8.2: todo envío después del primero es un reenvío
+  // (manual, tras vencer o con el contacto corregido). La inmobiliaria y el
+  // propietario tienen MAX_REENVIOS_ENLACE y no reenvían tras «no soy yo»;
+  // Cofianza queda exenta, con traza. Antes de tocar el contacto o el documento.
+  const enlacesPrevios = await contarEnlacesTitular(expedienteId);
+  const esReenvio = enlacesPrevios > 0;
+  const esGestorExterno = userRol === 'propietario' || userRol === 'inmobiliaria';
+  if (esReenvio && esGestorExterno) {
+    if (await identidadRechazada(expedienteId)) {
+      throw AppError.conflict(
+        'El titular de los datos respondió que no es él. Comuníquese con Cofianza para revisar el caso.',
+        'IDENTIDAD_RECHAZADA',
+      );
+    }
+    if (enlacesPrevios - 1 >= (await getCalibracion()).MAX_REENVIOS_ENLACE) {
+      throw AppError.conflict(
+        'Alcanzó el máximo de reenvíos de este estudio. Comuníquese con Cofianza.',
+        'MAX_REENVIOS_ENLACE',
+      );
+    }
+  }
+
   // 0d. Adenda de precios §6.1: un arrendatario con NIT no se estudia. H43 deja
   // escribir el documento aquí, después del registro; sin esto el NIT se
   // guardaba, el enlace salía y el bloqueo llegaba recién al cobrar.
@@ -392,50 +498,21 @@ export async function enviarEnlaceAutorizacion(
     if (cambiaTel && exp.solicitantes) exp.solicitantes.telefono = telNuevo!;
   }
 
-  // 1a-bis. Documento corregido desde "Reintentar consulta". La firma congela
-  // el documento de la ficha, así que se corrige ahí ANTES del enlace: si no,
-  // la nueva firma volvía a guardar el documento mal digitado. Aquí sí se
-  // lanza si falla: emitir el enlace con el documento viejo sería el mismo bucle.
+  // 1a-bis. Documento escrito con el enlace: solo el que FALTA (H43, ficha
+  // sin documento). Con documento, cambiarlo es «Corregir documento» (BLQ §3):
+  // ciego, con fuente y con límite; por aquí cambiaba el cotejo en silencio.
   const numeroNuevo = contacto?.numero_documento?.trim();
   const tipoNuevo = contacto?.tipo_documento;
   const cambiaNumero = !!numeroNuevo && numeroNuevo !== (exp.solicitantes?.numero_documento ?? '');
   const cambiaTipo = !!tipoNuevo && tipoNuevo !== (exp.solicitantes?.tipo_documento ?? '');
   if ((cambiaNumero || cambiaTipo) && exp.solicitante_id && exp.solicitantes) {
-    // H43: si la ficha es la de una cuenta, la regla del registro (una cuenta
-    // por documento). Las fichas de agencia no aplican.
-    const numFinal = numeroNuevo || exp.solicitantes.numero_documento;
-    if (
-      numFinal &&
-      (await existeOtraCuentaConDocumento(tipoNuevo || exp.solicitantes.tipo_documento || 'cc', numFinal, exp.solicitantes))
-    ) {
-      throw AppError.conflict(MSG_DOC_DE_OTRA_CUENTA_GESTOR, 'DOCUMENT_ALREADY_EXISTS');
-    }
-    const { error: docError } = await (supabase
-      .from('solicitantes' as string) as ReturnType<typeof supabase.from>)
-      .update({
-        ...(cambiaNumero ? { numero_documento: numeroNuevo } : {}),
-        ...(cambiaTipo ? { tipo_documento: tipoNuevo } : {}),
-      } as never)
-      .eq('id', exp.solicitante_id);
-    if (docError) {
-      logger.warn({ error: docError.message, expedienteId }, 'No se pudo corregir el documento del solicitante');
-      // 23505 = idx_solicitantes_documento_por_agencia: otra ficha de la misma
-      // agencia (o del mismo propietario) ya tiene ese documento.
-      if ((docError as { code?: string }).code === '23505') {
-        const esCedula = (tipoNuevo || exp.solicitantes.tipo_documento) === 'cc';
-        throw AppError.conflict(
-          `${esCedula ? 'Esa cédula ya está registrada' : 'Ese documento ya está registrado'} para otro solicitante` +
-            `${userRol === 'inmobiliaria' ? ' de su inmobiliaria' : ''}. Verifique el número o continúe con el estudio de ese solicitante.`,
-          'DOCUMENTO_DUPLICADO',
-        );
-      }
-      throw AppError.badRequest(
-        'No se pudo corregir el documento del solicitante. Revíselo en su ficha y vuelva a intentarlo.',
-        'DOCUMENTO_NO_ACTUALIZADO',
+    if (exp.solicitantes.numero_documento?.trim()) {
+      throw AppError.conflict(
+        'El prospecto ya tiene un documento registrado. Para cambiarlo use «Corregir documento» en el estudio y luego reenvíe el enlace.',
+        'DOCUMENTO_REQUIERE_CORRECCION',
       );
     }
-    if (cambiaNumero) exp.solicitantes.numero_documento = numeroNuevo!;
-    if (cambiaTipo) exp.solicitantes.tipo_documento = tipoNuevo!;
+    await escribirDocumentoFicha(exp.solicitante_id, exp.solicitantes, tipoNuevo, numeroNuevo, expedienteId, userRol);
   }
 
   if (!exp.solicitantes?.email) {
@@ -464,7 +541,7 @@ export async function enviarEnlaceAutorizacion(
   //     "envíe una nueva solicitud" — bloqueaba justo esa nueva solicitud, y la
   //     única salida era revocar, es decir fabricar en la evidencia legal una
   //     revocación del titular que nunca ocurrió.
-  //   - sin `coarrendatario_id IS NULL`: la fila del co-arrendatario (mismo
+  //   - sin `coarrendatario_id IS NULL`: la fila del coarrendatario (mismo
   //     expediente_id) bloqueaba el enlace del titular de inmediato.
   const { data: yaAutorizada } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
@@ -502,13 +579,16 @@ export async function enviarEnlaceAutorizacion(
   }
 
   // 2. Invalidate any existing pending autorizacion DEL TITULAR for this
-  //    expediente (mismo filtro de sujeto que el resto del módulo).
-  await (supabase
+  //    expediente (mismo filtro de sujeto que el resto del módulo). BLQ §4.2:
+  //    nunca dos enlaces activos; el anterior queda «reemplazado».
+  const { data: reemplazadas } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .update({ estado: 'expirado' } as never)
     .eq('expediente_id', expedienteId)
     .is('coarrendatario_id', null)
-    .eq('estado', 'pendiente');
+    .eq('estado', 'pendiente')
+    .select('id');
+  await cerrarEnvios(idsDe(reemplazadas), 'reemplazado');
 
   // 3. Generate secure token. El enlace vive lo mismo que el estudio (Flujo
   //    §14 "Plazo de expiracion: 15 dias"; Adenda §9 lo hace calibrable como
@@ -555,6 +635,9 @@ export async function enviarEnlaceAutorizacion(
   const direccion = [inm?.direccion, inm?.ciudad].filter((v) => v?.trim()).join(', ') || 'el inmueble';
   const quienSolicita = await quienSolicitaParaMensaje(inm, expedienteId);
 
+  // BLQ §7: resultado por canal, con el destino enmascarado.
+  const envios: ResultadoCanal[] = [];
+
   // Email best-effort: si Resend falla (p.ej. dirección no verificada en dev),
   // NO debe bloquear el envío del link por WhatsApp que viene abajo.
   try {
@@ -562,7 +645,10 @@ export async function enviarEnlaceAutorizacion(
       quienSolicita,
       direccion,
     });
+    envios.push({ canal: 'correo', destino_enmascarado: enmascararEmail(exp.solicitantes.email), estado: 'enviado' });
   } catch (err) {
+    // Sin el texto del error: puede traer la dirección completa.
+    envios.push({ canal: 'correo', destino_enmascarado: enmascararEmail(exp.solicitantes.email), estado: 'fallido' });
     logger.warn(
       { error: err instanceof Error ? err.message : String(err), expedienteId },
       'No se pudo enviar el email de autorización (se continúa con WhatsApp)',
@@ -585,10 +671,18 @@ export async function enviarEnlaceAutorizacion(
       ],
       context: { expediente_id: expedienteId },
     });
+    envios.push({
+      canal: 'whatsapp',
+      destino_enmascarado: maskTelefono(exp.solicitantes.telefono),
+      estado: res.estado,
+      ...(res.estado === 'fallido' && res.error ? { error: String(res.error).slice(0, 200) } : {}),
+    });
     if (res.estado === 'fallido') {
       logger.warn({ error: res.error, expedienteId }, 'No se pudo enviar el link de autorización por WhatsApp');
     }
   }
+
+  await registrarEnvio({ autorizacionId, expedienteId, generadoPor: userId, esReenvio, envios });
 
   // 6. Audit
   logAudit({
@@ -600,6 +694,9 @@ export async function enviarEnlaceAutorizacion(
       expediente_id: expedienteId,
       solicitante_id: exp.solicitante_id,
       email: exp.solicitantes.email,
+      es_reenvio: esReenvio,
+      // Cofianza pasada del límite de reenvíos (exenta, con traza).
+      ...(esReenvio && !esGestorExterno ? { reenvio_numero: enlacesPrevios } : {}),
     },
     ip,
   });
@@ -614,6 +711,11 @@ export async function enviarEnlaceAutorizacion(
 // ============================================================
 // 3. Get autorizacion by token (public)
 // ============================================================
+
+/** Ids de un `.update(...).select('id')`. */
+function idsDe(data: unknown): string[] {
+  return Array.isArray(data) ? (data as Array<{ id: string }>).map((r) => r.id) : [];
+}
 
 /** Enmascara un teléfono dejando visibles solo los 2 últimos dígitos. */
 function maskTelefono(tel: string | null): string | null {
@@ -813,12 +915,13 @@ interface AutorizacionPendiente {
   version_terminos: string | null;
   /** Documento de la ficha: solo para compararlo, nunca sale del servidor. */
   numero_documento: string | null;
+  tipo_documento: string | null;
 }
 
 async function autorizacionPendientePorToken(token: string): Promise<AutorizacionPendiente> {
   const { data, error } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
-    .select('id, estado, token_expiracion, expediente_id, solicitante_id, version_terminos, solicitantes(numero_documento), expedientes(estado)')
+    .select('id, estado, token_expiracion, expediente_id, solicitante_id, version_terminos, solicitantes(numero_documento, tipo_documento), expedientes(estado)')
     .eq('token', token)
     .maybeSingle();
 
@@ -836,7 +939,7 @@ async function autorizacionPendientePorToken(token: string): Promise<Autorizacio
     expediente_id: string | null;
     solicitante_id: string;
     version_terminos: string | null;
-    solicitantes: { numero_documento: string | null } | null;
+    solicitantes: { numero_documento: string | null; tipo_documento?: string | null } | null;
     expedientes: { estado: string } | null;
   };
   // Primero: la biometria que cuelga de aqui es una consulta FACTURABLE a Auco.
@@ -853,6 +956,7 @@ async function autorizacionPendientePorToken(token: string): Promise<Autorizacio
     solicitante_id: auth.solicitante_id,
     version_terminos: auth.version_terminos ?? null,
     numero_documento: auth.solicitantes?.numero_documento ?? null,
+    tipo_documento: auth.solicitantes?.tipo_documento ?? null,
   };
 }
 
@@ -909,23 +1013,61 @@ async function registrarIdentidadConfirmada(expedienteId: string, autorizacionId
 }
 
 /**
+ * BLQ §1: registra el número digitado y, si no coincide, cuenta los fallidos
+ * del enlace. Con intentos restantes el enlace sigue vivo; agotados, se detiene
+ * (mismo camino que «los datos están mal», §12) y se alerta al asesor. Devuelve
+ * los intentos que quedan; nunca el número registrado (§1.4). Son pocos
+ * intentos por enlace: no hay oráculo para adivinar el número de otra persona.
+ */
+async function cotejarDocumento(
+  auth: Pick<AutorizacionPendiente, 'id' | 'expediente_id' | 'solicitante_id' | 'numero_documento' | 'tipo_documento'>,
+  escrito: string,
+  origen: 'confirmacion' | 'firma',
+  ip?: string,
+  userAgent?: string,
+): Promise<{ coincide: boolean; intentos_restantes: number }> {
+  const coincide = documentoCoincide(escrito, auth.numero_documento);
+  const { MAX_INTENTOS_DOCUMENTO } = await getCalibracion();
+  // En la firma solo se registra el que no coincide: el acierto ya quedó al
+  // confirmar. Pero no vale si los fallidos ya se agotaron (ráfaga en paralelo).
+  if (coincide && origen === 'firma') {
+    const fallidos = await contarIntentosFallidos(auth.id);
+    return { coincide: fallidos == null || fallidos < MAX_INTENTOS_DOCUMENTO, intentos_restantes: 0 };
+  }
+  const intentos_restantes = await registrarIntentoDocumento({
+    autorizacionId: auth.id,
+    expedienteId: auth.expediente_id,
+    tipoDigitado: auth.tipo_documento,
+    valorDigitado: escrito,
+    coincide,
+    origen,
+    ip,
+    userAgent,
+    maxIntentos: MAX_INTENTOS_DOCUMENTO,
+  });
+  if (!coincide && intentos_restantes === 0) {
+    await detenerAutorizacion(auth, { motivo: 'datos_incorrectos', origen: 'documento_no_coincide' }, ip, userAgent);
+  }
+  // Acierto con los intentos ya agotados (ráfaga): no vale. Los fallidos ya detienen el enlace.
+  if (coincide && intentos_restantes === 0) return { coincide: false, intentos_restantes: 0 };
+  return { coincide, intentos_restantes: coincide ? MAX_INTENTOS_DOCUMENTO : intentos_restantes };
+}
+
+/**
  * §8.1: el prospecto escribe su numero de documento y se compara con la
- * ficha. Si coincide, queda confirmada su identidad; si no, es el MISMO
- * camino que "los datos estan mal" (§12): el enlace muere, no se consulta
- * ninguna central y el gestor corrige y reenvia. Un solo intento por enlace:
- * no hay oraculo para adivinar el numero de otra persona.
+ * ficha. Si coincide, queda confirmada su identidad; si no, le quedan
+ * MAX_INTENTOS_DOCUMENTO en el mismo enlace (BLQ §1) y al agotarlos el enlace
+ * se detiene y el gestor corrige y reenvía.
  */
 export async function confirmarIdentidadProspecto(
   token: string,
   input: ConfirmarIdentidadInput,
   ip?: string,
   userAgent?: string,
-): Promise<{ coincide: boolean }> {
+): Promise<{ coincide: boolean; intentos_restantes?: number }> {
   const auth = await autorizacionPendientePorToken(token);
-  if (!documentoCoincide(input.numero_documento, auth.numero_documento)) {
-    await detenerAutorizacion(auth, { motivo: 'datos_incorrectos', origen: 'documento_no_coincide' }, ip, userAgent);
-    return { coincide: false };
-  }
+  const r = await cotejarDocumento(auth, input.numero_documento, 'confirmacion', ip, userAgent);
+  if (!r.coincide) return { coincide: false, intentos_restantes: r.intentos_restantes };
   if (auth.expediente_id) {
     await registrarIdentidadConfirmada(auth.expediente_id, auth.id, new Date().toISOString());
   }
@@ -1273,11 +1415,18 @@ async function detenerAutorizacion(
   //    el gate fail-closed assertAutorizacionVigente impide toda consulta
   //    FACTURABLE al buro. Por eso no se inventa ningun estado nuevo de
   //    estudio ni de expediente.
-  await (supabase
+  const { data: detenida, error: detErr } = await (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
     .update({ estado: 'expirado' } as never)
     .eq('id', auth.id)
-    .eq('estado', 'pendiente');
+    .eq('estado', 'pendiente')
+    .select('id');
+  // Otra petición ya lo detuvo (ráfaga de fallidos): un solo aviso. Si no se
+  // sabe (error), se avisa: mejor repetido que perdido.
+  if (!detErr && Array.isArray(detenida) && detenida.length === 0) return;
+  // BLQ §7: el motivo de cierre del enlace (intentos agotados o el reporte).
+  const motivoCierre: MotivoCierre = input.origen === 'documento_no_coincide' ? 'intentos' : input.motivo;
+  await cerrarEnvios([auth.id], motivoCierre);
 
   logAudit({
     usuarioId: null,
@@ -1316,11 +1465,13 @@ const LABEL_DOCUMENTO_NO_COINCIDE =
  * UI del timeline filtra por una lista CERRADA de tipos, asi que un tipo nuevo
  * se escribiria pero seria invisible (ya paso con citas y contratos).
  *
- * Canales: in-app + correo. SIN WhatsApp — ninguna plantilla aprobada en Meta
- * corresponde a este mensaje, y WHATSAPP_PROVIDER cae a 'mock' por defecto, o
- * sea el aviso critico podria no salir nunca y fallar en silencio.
+ * Canales: in-app + correo a Cofianza. BLQ §2: el documento que no coincide
+ * (intentos agotados) es una alerta PRIORITARIA (tipo propio, que la web
+ * destaca) con el texto del §2.2, y además WhatsApp al asesor, solo para ese
+ * evento y solo con ALERTA_BLOQUEO_WHATSAPP=1 (se enciende cuando Meta apruebe
+ * la plantilla).
  *
- * Tampoco se le escribe al contacto del solicitante: si acaban de reportar que
+ * No se le escribe al contacto del solicitante: si acaban de reportar que
  * esos datos no son de esa persona, ese correo y ese telefono son justamente
  * los que estan en duda.
  */
@@ -1333,15 +1484,18 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
 
   const { data: expRow } = await (supabase
     .from('expedientes' as string) as ReturnType<typeof supabase.from>)
-    .select('numero, inmuebles!expedientes_inmueble_id_fkey(propietario_id, direccion)')
+    .select('numero, miembro_responsable_id, solicitantes(nombre, apellido), inmuebles!expedientes_inmueble_id_fkey(propietario_id, inmobiliaria_id, direccion)')
     .eq('id', expedienteId)
     .maybeSingle();
   const exp = expRow as unknown as {
     numero?: string;
-    inmuebles?: { propietario_id?: string | null; direccion?: string | null } | null;
+    miembro_responsable_id?: string | null;
+    solicitantes?: { nombre?: string | null; apellido?: string | null } | null;
+    inmuebles?: { propietario_id?: string | null; inmobiliaria_id?: string | null; direccion?: string | null } | null;
   } | null;
 
-  const titulo = 'Verificacion de identidad detenida';
+  const titulo = 'Verificación de identidad detenida';
+  const porDocumento = input.origen === 'documento_no_coincide';
   // `input.detalle` NO entra aqui, y no es un olvido. Es texto libre de un
   // endpoint PUBLICO sin sesion (500 chars, cualquier charset) y este mensaje
   // va a la campanita del propietario y del miembro responsable de la
@@ -1356,13 +1510,27 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
   // renderiza escapado por JSX y solo para roles internos.
   const motivoLabel =
     input.origen === 'documento_no_coincide' ? LABEL_DOCUMENTO_NO_COINCIDE : MOTIVO_REPORTE_LABEL[input.motivo];
-  const mensaje =
-    `En el estudio ${exp?.numero ? formatNumeroEstudio(exp.numero) : expedienteId}, ${motivoLabel}. ` +
-    'Detuvimos el enlace de autorización y no se consultará ninguna central de riesgo. ' +
-    'Revise los datos del solicitante y, si corresponde, envíe un enlace nuevo.' +
-    (input.detalle ? ' Quien reportó dejó una nota: la ve el equipo de Cofianza en el estudio.' : '');
+  const nombreProspecto = `${exp?.solicitantes?.nombre ?? ''} ${exp?.solicitantes?.apellido ?? ''}`.trim() || 'su prospecto';
+  const mensaje = porDocumento
+    ? // BLQ §2.2: qué pasó, qué hacer y qué NO pasó con el cupo (§2.3).
+      `El estudio de ${nombreProspecto} no pudo continuar: el número de documento no coincide con el registrado. ` +
+      'Verifique el documento del prospecto, corrija el dato y reenvíe el enlace. ' +
+      ((await pagadoConCupo(expedienteId)) ? 'No se consumió ningún cupo de su paquete.' : 'No se generó ningún cobro adicional.')
+    : `En el estudio ${exp?.numero ? formatNumeroEstudio(exp.numero) : expedienteId}, ${motivoLabel}. ` +
+      'Detuvimos el enlace de autorización y no se consultará ninguna central de riesgo. ' +
+      'Revise los datos del solicitante y, si corresponde, envíe un enlace nuevo.' +
+      (input.detalle ? ' Quien reportó dejó una nota: la ve el equipo de Cofianza en el estudio.' : '');
   const link = `/expedientes/${expedienteId}`;
-  const payload = { expediente_id: expedienteId, motivo: input.motivo };
+  // La web destaca este tipo como alerta prioritaria (BLQ §2.1).
+  const tipo = porDocumento ? 'autorizacion.bloqueo_documento' : 'autorizacion.identidad_reportada';
+  const payload = { expediente_id: expedienteId, motivo: input.motivo, ...(porDocumento ? { prioridad: 'alta' } : {}) };
+  const whatsappOn = porDocumento && (await getCalibracion()).ALERTA_BLOQUEO_WHATSAPP === 1;
+  // La plantilla ya dice «n.º {{3}}»: el número sin el «N.°» de formatNumeroEstudio.
+  const numero = formatNumeroEstudio(exp?.numero).replace(/^N\.° /, '');
+  // {{1}} asesor (lo pone notificarResponsableExpediente), {{2}} prospecto, {{3}} n.º; botón = id del estudio.
+  const whatsapp = whatsappOn
+    ? { template: 'ESTUDIO_BLOQUEADO_DOCUMENTO' as const, variables: ['', nombreProspecto, numero], reservaNombre: 'señor(a)', urlButtons: [expedienteId] }
+    : undefined;
 
   await (supabase
     .from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
@@ -1374,10 +1542,11 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
     } as never);
 
   const propietarioId = exp?.inmuebles?.propietario_id ?? null;
+  const responsableId = exp?.miembro_responsable_id ?? null;
   if (propietarioId) {
     await notificarUsuario({
       userId: propietarioId,
-      tipo: 'autorizacion.identidad_reportada',
+      tipo,
       titulo,
       mensaje,
       link,
@@ -1386,13 +1555,22 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
   }
   await notificarResponsableExpediente({
     expedienteId,
+    miembroId: responsableId,
     excluirPerfilId: propietarioId,
-    tipo: 'autorizacion.identidad_reportada',
+    tipo,
     titulo,
     mensaje,
     link,
     payload,
+    whatsapp,
   }).catch((e) => logger.warn({ error: e }, '§12: notif responsable'));
+  // BLQ §2.4: sin responsable distinto del dueño, el WhatsApp va a los titulares
+  // de la organización o, sin organización, al propietario.
+  if (whatsapp && (!responsableId || responsableId === propietarioId)) {
+    await avisarTitularesPorWhatsapp(expedienteId, exp?.inmuebles ?? null, whatsapp).catch((e) =>
+      logger.warn({ error: e }, 'BLQ: WhatsApp a los titulares'),
+    );
+  }
 
   // "y a Cofianza": no existe un canal interno unico, asi que se avisa a los
   // operadores activos (in-app + correo con la cascara generica).
@@ -1401,7 +1579,7 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
     operadores.map((op) =>
       notificarYCorreo({
         userId: op.id,
-        tipo: 'autorizacion.identidad_reportada',
+        tipo,
         titulo,
         mensaje,
         link,
@@ -1409,6 +1587,56 @@ async function avisarReporteIdentidad(expedienteId: string, input: Detencion) {
       }).catch((e) => logger.warn({ error: e }, '§12: notif operador Cofianza')),
     ),
   );
+}
+
+/** BLQ §2.3: ¿la evaluación se pagó con un cupo del paquete? (reserva o consumo del expediente). */
+async function pagadoConCupo(expedienteId: string): Promise<boolean> {
+  const { data, error } = await (supabase
+    .from('movimientos_creditos_estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id')
+    .eq('expediente_id', expedienteId)
+    .in('tipo', ['reserva', 'consumo'])
+    .limit(1);
+  return !error && ((data as unknown[] | null) ?? []).length > 0;
+}
+
+/** BLQ §2.4: WhatsApp a los titulares de la organización del inmueble o, si no hay, al propietario. */
+async function avisarTitularesPorWhatsapp(
+  expedienteId: string,
+  inm: { propietario_id?: string | null; inmobiliaria_id?: string | null } | null,
+  whatsapp: { variables: string[]; urlButtons: string[] },
+): Promise<void> {
+  const inmobiliariaId =
+    inm?.inmobiliaria_id || (inm?.propietario_id ? await resolveInmobiliariaIdForPerfil(inm.propietario_id) : null);
+  let ids: string[] = [];
+  if (inmobiliariaId) {
+    const { data } = await (supabase
+      .from('inmobiliaria_miembros' as string) as ReturnType<typeof supabase.from>)
+      .select('perfil_id')
+      .eq('inmobiliaria_id', inmobiliariaId)
+      .eq('estado', 'activo')
+      .eq('rol_miembro', 'owner')
+      .not('perfil_id', 'is', null);
+    ids = ((data as Array<{ perfil_id: string }> | null) ?? []).map((m) => m.perfil_id);
+  }
+  if (ids.length === 0 && inm?.propietario_id) ids = [inm.propietario_id];
+  if (ids.length === 0) return;
+  const { data: perfiles } = await (supabase
+    .from('perfiles' as string) as ReturnType<typeof supabase.from>)
+    .select('nombre, apellido, razon_social, telefono')
+    .in('id', ids);
+  const { enviarTemplate } = await import('@/modules/whatsapp');
+  for (const p of (perfiles as Array<{ nombre?: string | null; apellido?: string | null; razon_social?: string | null; telefono?: string | null }> | null) ?? []) {
+    if (!p.telefono) continue;
+    const nombre = p.razon_social || `${p.nombre ?? ''} ${p.apellido ?? ''}`.trim() || 'señor(a)';
+    await enviarTemplate({
+      to: p.telefono,
+      template: 'ESTUDIO_BLOQUEADO_DOCUMENTO',
+      variables: [nombre, ...whatsapp.variables.slice(1)],
+      urlButtons: whatsapp.urlButtons,
+      context: { expediente_id: expedienteId },
+    });
+  }
 }
 
 /**
@@ -1507,17 +1735,26 @@ export async function firmarAutorizacion(
 
   // 1b. §8.1: la firma lleva el documento que escribio el prospecto y se
   // compara otra vez con la ficha (el paso de confirmar-identidad lo hace la
-  // web, pero un POST directo lo saltaria). Si no coincide: mismo camino que
-  // el reporte — el enlace muere y el gestor corrige. Sin esto, un digito mal
-  // puesto en la ficha terminaba en la consulta de un tercero.
-  if (!documentoCoincide(input.numero_documento, auth.solicitantes?.numero_documento)) {
-    await detenerAutorizacion(
-      { id: auth.id, expediente_id: auth.expediente_id ?? null, solicitante_id: auth.solicitante_id },
-      { motivo: 'datos_incorrectos', origen: 'documento_no_coincide' },
-      ip,
-      userAgent,
-    );
-    throw AppError.badRequest('El documento no coincide con el registrado', 'DOCUMENTO_NO_COINCIDE');
+  // web, pero un POST directo lo saltaria). Si no coincide cuenta como un
+  // intento más (BLQ §1); agotados, el enlace muere y el gestor corrige. Sin
+  // esto, un digito mal puesto en la ficha terminaba en la consulta de un tercero.
+  const cotejo = await cotejarDocumento(
+    {
+      id: auth.id,
+      expediente_id: auth.expediente_id ?? null,
+      solicitante_id: auth.solicitante_id,
+      numero_documento: auth.solicitantes?.numero_documento ?? null,
+      tipo_documento: auth.solicitantes?.tipo_documento ?? null,
+    },
+    input.numero_documento,
+    'firma',
+    ip,
+    userAgent,
+  );
+  if (!cotejo.coincide) {
+    throw AppError.badRequest('El documento no coincide con el registrado', 'DOCUMENTO_NO_COINCIDE', {
+      intentos_restantes: cotejo.intentos_restantes,
+    });
   }
 
   // 2. OTP — SOLO si el metodo declarado es 'otp' (Adenda 1 §7).
@@ -2115,9 +2352,9 @@ export async function revocarAutorizacion(
   // 1. Find active autorizacion DEL TITULAR for this expediente.
   //
   //    `coarrendatario_id IS NULL` + ORDER BY determinista: desde 2026-09-03 un
-  //    expediente puede tener DOS filas 'autorizado' (titular y co-arrendatario
+  //    expediente puede tener DOS filas 'autorizado' (titular y coarrendatario
   //    invitado). Sin filtrar por sujeto, Postgres podía devolver la del
-  //    co-arrendatario: la API respondía 200 'revocado' al titular, revocaba a
+  //    coarrendatario: la API respondía 200 'revocado' al titular, revocaba a
   //    quien no lo pidió y dejaba viva la firma del titular — que el gate seguía
   //    aceptando, así que el buró se podía volver a consultar sobre alguien que
   //    acababa de revocar. Y el trigger de la migración hace la revocación
@@ -2125,7 +2362,7 @@ export async function revocarAutorizacion(
   //    de consultar; aquí se hace igual.
   //
   //    `input.coarrendatario_id` selecciona el otro sujeto: es la única vía por
-  //    la que se puede revocar la autorización del co-arrendatario invitado
+  //    la que se puede revocar la autorización del coarrendatario invitado
   //    (Ley 1581 de 2012, art. 8) sin tocar la del titular.
   const base = (supabase
     .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
@@ -2144,7 +2381,7 @@ export async function revocarAutorizacion(
   if (error || !autorizacion) {
     throw AppError.notFound(
       input.coarrendatario_id
-        ? 'No se encontró autorización activa de ese co-arrendatario en este estudio'
+        ? 'No se encontró autorización activa de ese coarrendatario en este estudio'
         : 'No se encontró autorización activa para este estudio',
       'AUTORIZACION_NOT_FOUND',
     );
@@ -2193,4 +2430,350 @@ export async function revocarAutorizacion(
     estado: 'revocado',
     fecha_revocacion: new Date().toISOString(),
   };
+}
+
+// ============================================================
+// 9. Bloqueo por documento (BLQ 07/10/2026): corrección ciega, traza y banner
+// ============================================================
+
+export interface CorregirDocumentoInput {
+  tipo_documento: string;
+  numero_documento: string;
+  fuente_verificacion: 'documento_fisico' | 'copia_documento' | 'confirmacion_telefonica';
+}
+
+const ESTADOS_CON_CONSULTA = ['en_proceso', 'completado'];
+
+/** ¿Alguna evaluación (no del coarrendatario) de estos expedientes ya llegó a las centrales? */
+async function hayConsulta(expedienteIds: string[]): Promise<boolean> {
+  if (expedienteIds.length === 0) return false;
+  const { data, error } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('estado, referencia_proveedor')
+    .in('expediente_id', expedienteIds)
+    .neq('tipo', 'con_coarrendatario');
+  if (error) throw fromSupabaseError(error);
+  return ((data ?? []) as Array<{ estado: string; referencia_proveedor: string | null }>).some(
+    (e) => !!e.referencia_proveedor || ESTADOS_CON_CONSULTA.includes(e.estado),
+  );
+}
+
+/**
+ * BLQ §3.6: la ficha del solicitante es compartida. Si OTRO expediente vivo ya
+ * tiene con ella una autorización firmada, una consulta o un contrato, corregir
+ * el documento cambiaría a la persona evaluada allá también.
+ */
+async function fichaUsadaEnOtroEstudio(solicitanteId: string, expedienteId: string): Promise<boolean> {
+  const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
+  const { data, error } = await db('expedientes')
+    .select('id')
+    .eq('solicitante_id', solicitanteId)
+    .neq('id', expedienteId)
+    .not('estado', 'in', '(cerrado,rechazado)');
+  if (error) throw fromSupabaseError(error);
+  const ids = ((data ?? []) as Array<{ id: string }>).map((e) => e.id);
+  if (ids.length === 0) return false;
+  const [firmadas, contratos] = await Promise.all([
+    db('autorizaciones_habeas_data').select('id', { count: 'exact', head: true }).in('expediente_id', ids).is('coarrendatario_id', null).eq('estado', 'autorizado'),
+    db('contratos').select('id', { count: 'exact', head: true }).in('expediente_id', ids),
+  ]);
+  if (firmadas.error) throw fromSupabaseError(firmadas.error);
+  if (contratos.error) throw fromSupabaseError(contratos.error);
+  return (firmadas.count ?? 0) > 0 || (contratos.count ?? 0) > 0 || (await hayConsulta(ids));
+}
+
+const ETIQUETA_FUENTE: Record<CorregirDocumentoInput['fuente_verificacion'], string> = {
+  documento_fisico: 'documento físico',
+  copia_documento: 'copia del documento',
+  confirmacion_telefonica: 'confirmación telefónica con el prospecto',
+};
+
+/**
+ * BLQ §3: corrección CIEGA del tipo y número de documento del titular. El
+ * gestor nunca ve lo que digitó el prospecto; declara contra qué verificó.
+ * No reenvía el enlace (§4.4): el pendiente se expira y el estudio queda
+ * «pendiente de reenvío». Pasado MAX_CORRECCIONES_DOCUMENTO el estudio se
+ * cierra y se avisa a la Gerencia General (§3.6).
+ */
+export async function corregirDocumentoProspecto(
+  expedienteId: string,
+  input: CorregirDocumentoInput,
+  user: AuthUser,
+  ip?: string,
+): Promise<{ correcciones_restantes: number; estado_bloqueo: 'pendiente_reenvio' }> {
+  await assertExpedienteAccess(expedienteId, user.id, user.rol);
+  const { data, error } = await (supabase
+    .from('expedientes' as string) as ReturnType<typeof supabase.from>)
+    .select('id, numero, estado, solicitante_id, solicitantes(id, nombre, apellido, email, telefono, tipo_documento, numero_documento, tipo_persona, creado_por, inmobiliaria_id)')
+    .eq('id', expedienteId)
+    .maybeSingle();
+  if (error) throw fromSupabaseError(error);
+  const exp = data as unknown as Pick<ExpedienteInfo, 'id' | 'numero' | 'estado' | 'solicitante_id' | 'solicitantes'> | null;
+  if (!exp || !exp.solicitante_id || !exp.solicitantes) throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
+  assertEstudioActivo(exp.estado);
+
+  const sol = exp.solicitantes;
+  const anterior = { tipo: sol.tipo_documento ?? null, numero: sol.numero_documento ?? null };
+  const numeroNuevo = input.numero_documento.trim();
+  if (
+    normalizarDocumento(numeroNuevo) === normalizarDocumento(anterior.numero) &&
+    normalizarTipoDocumento(input.tipo_documento) === normalizarTipoDocumento(anterior.tipo)
+  ) {
+    throw AppError.badRequest('El documento es igual al registrado. Si el registro está bien, solo reenvíe el enlace.', 'DOCUMENTO_SIN_CAMBIOS');
+  }
+  const motivoDoc = motivoNoAfianzable(undefined, { tipo_persona: sol.tipo_persona, tipo_documento: input.tipo_documento });
+  if (motivoDoc) throw await errorNoAfianzableSegunCobro(motivoDoc, [expedienteId]);
+
+  if (await hayConsulta([expedienteId])) {
+    throw AppError.conflict(
+      'Este estudio ya consultó las centrales de riesgo con el documento registrado. Para evaluar a otra persona cree un estudio nuevo.',
+      'ESTUDIO_CON_CONSULTA',
+    );
+  }
+  if (await fichaUsadaEnOtroEstudio(exp.solicitante_id, expedienteId)) {
+    throw AppError.conflict(
+      'Este prospecto tiene otro estudio en curso con autorización firmada, evaluación o contrato. Para corregir su documento comuníquese con Cofianza.',
+      'FICHA_COMPARTIDA',
+    );
+  }
+
+  // BLQ §8.2: tras «no soy yo» solo Cofianza corrige y reenvía; si no, la
+  // corrección dejaba el estado en «pendiente de reenvío» y el reenvío pasaba.
+  if ((user.rol === 'inmobiliaria' || user.rol === 'propietario') && (await identidadRechazada(expedienteId))) {
+    throw AppError.conflict(
+      'El titular de los datos respondió que no es él. Comuníquese con Cofianza para revisar el caso.',
+      'IDENTIDAD_RECHAZADA',
+    );
+  }
+
+  const cal = await getCalibracion();
+  const hechas = await contarCorrecciones(expedienteId);
+  if (hechas >= cal.MAX_CORRECCIONES_DOCUMENTO) {
+    await cerrarPorLimiteCorrecciones(expedienteId, exp.numero, user);
+    throw AppError.conflict(
+      'Se superó el límite de correcciones del documento: el estudio se cerró. Cree un estudio nuevo.',
+      'LIMITE_CORRECCIONES_DOCUMENTO',
+    );
+  }
+
+  // Primero la ficha (con sus validaciones); la corrección se registra después
+  // y, si eso falla, la ficha vuelve a lo anterior: no hay corrección sin traza.
+  await escribirDocumentoFicha(exp.solicitante_id, sol, input.tipo_documento, numeroNuevo, expedienteId, user.rol);
+  const { error: insErr } = await (supabase
+    .from('correcciones_documento' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      solicitante_id: exp.solicitante_id,
+      tipo_anterior: anterior.tipo,
+      numero_anterior: anterior.numero,
+      tipo_nuevo: input.tipo_documento,
+      numero_nuevo: numeroNuevo,
+      fuente_verificacion: input.fuente_verificacion,
+      usuario_id: user.id,
+    } as never);
+  if (insErr) {
+    await (supabase.from('solicitantes' as string) as ReturnType<typeof supabase.from>)
+      .update({ tipo_documento: anterior.tipo, numero_documento: anterior.numero } as never)
+      .eq('id', exp.solicitante_id);
+    logger.error({ expedienteId, err: insErr.message }, 'BLQ: no se pudo registrar la corrección; ficha restaurada');
+    throw new AppError(503, 'CORRECCION_NO_REGISTRADA', 'No pudimos registrar la corrección. Intente de nuevo en unos minutos.');
+  }
+
+  // La evaluación sin consulta toma el documento corregido (el gate 8.4 compara el par).
+  const { data: ests } = await (supabase
+    .from('estudios' as string) as ReturnType<typeof supabase.from>)
+    .select('id, datos_formulario')
+    .eq('expediente_id', expedienteId)
+    .neq('tipo', 'con_coarrendatario');
+  for (const e of (ests ?? []) as Array<{ id: string; datos_formulario: Record<string, unknown> | null }>) {
+    if (!e.datos_formulario) continue;
+    await (supabase.from('estudios' as string) as ReturnType<typeof supabase.from>)
+      .update({ datos_formulario: { ...e.datos_formulario, tipo_documento: input.tipo_documento, numero_documento: numeroNuevo } } as never)
+      .eq('id', e.id);
+  }
+
+  // El enlace vivo muere: el cotejo no puede cambiar en silencio (§3, §4.4).
+  const { data: vivas } = await (supabase
+    .from('autorizaciones_habeas_data' as string) as ReturnType<typeof supabase.from>)
+    .update({ estado: 'expirado' } as never)
+    .eq('expediente_id', expedienteId)
+    .is('coarrendatario_id', null)
+    .eq('estado', 'pendiente')
+    .select('id');
+  await cerrarEnvios(idsDe(vivas), 'correccion');
+
+  // Registro de la inmobiliaria, antes y después. Lo digitado por el prospecto nunca.
+  logAudit({
+    usuarioId: user.id,
+    accion: AUDIT_ACTIONS.SOLICITANTE_UPDATED,
+    entidad: AUDIT_ENTITIES.SOLICITANTE,
+    entidadId: exp.solicitante_id,
+    detalle: {
+      origen: 'correccion_documento',
+      expediente_id: expedienteId,
+      fuente_verificacion: input.fuente_verificacion,
+      before: { tipo_documento: anterior.tipo, numero_documento: anterior.numero },
+      after: { tipo_documento: input.tipo_documento, numero_documento: numeroNuevo },
+    },
+    ip,
+  });
+  const { error: tlErr } = await (supabase.from('eventos_timeline' as string) as ReturnType<typeof supabase.from>)
+    .insert({
+      expediente_id: expedienteId,
+      tipo: 'estudio',
+      descripcion: `Se corrigió el documento del prospecto (verificado con ${ETIQUETA_FUENTE[input.fuente_verificacion]}). Falta reenviar el enlace de autorización.`,
+      usuario_id: user.id,
+      metadata: { origen: 'correccion_documento', fuente_verificacion: input.fuente_verificacion },
+    } as never);
+  if (tlErr) logger.warn({ expedienteId, err: tlErr.message }, 'BLQ: timeline de la corrección');
+
+  return { correcciones_restantes: Math.max(0, cal.MAX_CORRECCIONES_DOCUMENTO - hechas - 1), estado_bloqueo: 'pendiente_reenvio' };
+}
+
+/** BLQ §3.6: cierra el estudio (con devolución si aplica) y avisa a la Gerencia General. */
+async function cerrarPorLimiteCorrecciones(expedienteId: string, numero: string, user: AuthUser): Promise<void> {
+  const { executeTransition } = await import('@/modules/expedientes/expediente-workflow.service');
+  await executeTransition(
+    expedienteId,
+    {
+      nuevo_estado: 'cerrado',
+      etiqueta: 'Cancelar estudio',
+      comentario: 'Se superó el límite de correcciones del documento (LIMITE_CORRECCIONES_DOCUMENTO). Debe crearse un estudio nuevo.',
+    } as TransitionInput,
+    user,
+    { sinAcuse: true },
+  );
+  const [{ gerenciaGeneralIds }, { notificarYCorreo }] = await Promise.all([
+    import('@/modules/beneficios/beneficios.service'),
+    import('@/modules/notificaciones/notificaciones.service'),
+  ]);
+  const ids = await gerenciaGeneralIds().catch(() => [] as string[]);
+  await Promise.all(
+    ids.map((userId) =>
+      notificarYCorreo({
+        userId,
+        tipo: 'estudio.limite_correcciones_documento',
+        titulo: 'Estudio cerrado por correcciones del documento',
+        mensaje: `El estudio ${formatNumeroEstudio(numero)} se cerró por superar el límite de correcciones del documento. Debe crearse un estudio nuevo.`,
+        link: `/expedientes/${expedienteId}`,
+        payload: { expediente_id: expedienteId },
+      }).catch((e) => logger.warn({ error: e }, 'BLQ: aviso a la Gerencia General')),
+    ),
+  );
+}
+
+/**
+ * BLQ §7: traza completa, SOLO para Cofianza (la ruta ya lo exige; se repite
+ * aquí porque lleva `valor_digitado`). El «vencido» se deriva de la fecha.
+ */
+export async function getTrazaAutorizacion(expedienteId: string, userRol?: string) {
+  if (!esRolInternoCofianza(userRol)) throw AppError.forbidden('Solo Cofianza ve la traza de la autorización', 'TRAZA_SOLO_COFIANZA');
+  const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
+  const [intentos, correcciones, envios, enlaces, cupo] = await Promise.all([
+    db('autorizacion_intentos_documento')
+      .select('autorizacion_id, tipo_digitado, valor_digitado, coincide, origen, ip, user_agent, created_at')
+      .eq('expediente_id', expedienteId)
+      .order('created_at', { ascending: true }),
+    db('correcciones_documento')
+      .select('tipo_anterior, numero_anterior, tipo_nuevo, numero_nuevo, fuente_verificacion, usuario_id, created_at')
+      .eq('expediente_id', expedienteId)
+      .order('created_at', { ascending: true }),
+    db('autorizacion_envios').select('autorizacion_id, generado_por, es_reenvio, envios, motivo_cierre, cerrado_at').eq('expediente_id', expedienteId),
+    db('autorizaciones_habeas_data')
+      .select('id, estado, token_expiracion, created_at')
+      .eq('expediente_id', expedienteId)
+      .is('coarrendatario_id', null)
+      .order('created_at', { ascending: true }),
+    db('movimientos_creditos_estudios')
+      .select('tipo, literal, notas, created_at')
+      .eq('expediente_id', expedienteId)
+      .in('tipo', ['reserva', 'consumo', 'liberacion', 'ajuste'])
+      .order('created_at', { ascending: true }),
+  ]);
+  for (const r of [intentos, correcciones, envios, enlaces, cupo]) if (r.error) throw fromSupabaseError(r.error);
+
+  const porAut = new Map(((envios.data ?? []) as Array<Record<string, unknown>>).map((e) => [e.autorizacion_id as string, e]));
+  const ahora = Date.now();
+  return {
+    intentos: intentos.data ?? [],
+    correcciones: correcciones.data ?? [],
+    enlaces: ((enlaces.data ?? []) as Array<{ id: string; estado: string; token_expiracion: string; created_at: string }>).map((a) => {
+      const e = porAut.get(a.id);
+      const vencido = a.estado !== 'autorizado' && !e?.motivo_cierre && Date.parse(a.token_expiracion) < ahora;
+      return {
+        autorizacion_id: a.id,
+        creado_en: a.created_at,
+        estado: a.estado,
+        generado_por: e?.generado_por ?? null,
+        es_reenvio: e?.es_reenvio ?? null,
+        envios: e?.envios ?? [],
+        motivo_cierre: (e?.motivo_cierre as string | undefined) ?? (vencido ? 'vencido' : null),
+        cerrado_en: (e?.cerrado_at as string | undefined) ?? (vencido ? a.token_expiracion : null),
+      };
+    }),
+    // §7: si el evento consumió cupo o no, con el motivo.
+    cupo: cupo.data ?? [],
+  };
+}
+
+/**
+ * BLQ §2.1 y §2.6: estudios bloqueados por documento que nadie ha atendido
+ * (sin corrección ni reenvío después). Liviano y con el alcance de tenantScope.
+ */
+export async function listBloqueosPendientes(userId: string, userRol: string) {
+  const permitidos = await resolveAllowedExpedienteIds(userId, userRol);
+  if (permitidos && permitidos.length === 0) return [];
+  const db = (t: string) => supabase.from(t as string) as ReturnType<typeof supabase.from>;
+  let q = db('autorizacion_envios')
+    .select('autorizacion_id, expediente_id, cerrado_at, motivo_cierre')
+    .in('motivo_cierre', ['intentos', 'datos_incorrectos'])
+    .is('coarrendatario_id', null)
+    .order('cerrado_at', { ascending: false })
+    .limit(50);
+  if (permitidos) q = q.in('expediente_id', permitidos);
+  const { data: cerrados, error } = await q;
+  if (error) throw fromSupabaseError(error);
+  const filas = (cerrados ?? []) as Array<{ autorizacion_id: string; expediente_id: string; cerrado_at: string; motivo_cierre: string }>;
+  const ids = [...new Set(filas.map((f) => f.expediente_id))];
+  if (ids.length === 0) return [];
+
+  const [ultimas, corr, exps] = await Promise.all([
+    db('autorizaciones_habeas_data').select('id, expediente_id, created_at').in('expediente_id', ids).is('coarrendatario_id', null).order('created_at', { ascending: false }),
+    db('correcciones_documento').select('expediente_id, created_at').in('expediente_id', ids).is('coarrendatario_id', null),
+    db('expedientes').select('id, numero, estado, solicitantes(nombre, apellido)').in('id', ids),
+  ]);
+  for (const r of [ultimas, corr, exps]) if (r.error) throw fromSupabaseError(r.error);
+
+  const ultimaPorExp = new Map<string, { id: string; created_at: string }>();
+  for (const a of (ultimas.data ?? []) as Array<{ id: string; expediente_id: string; created_at: string }>) {
+    if (!ultimaPorExp.has(a.expediente_id)) ultimaPorExp.set(a.expediente_id, a);
+  }
+  const corrPorExp = new Map<string, number>();
+  for (const c of (corr.data ?? []) as Array<{ expediente_id: string; created_at: string }>) {
+    corrPorExp.set(c.expediente_id, Math.max(corrPorExp.get(c.expediente_id) ?? 0, Date.parse(c.created_at)));
+  }
+  const expPorId = new Map(
+    ((exps.data ?? []) as Array<{ id: string; numero: string; estado: string; solicitantes?: { nombre?: string; apellido?: string } | null }>).map((e) => [e.id, e]),
+  );
+  return filas
+    .filter((f, i) => filas.findIndex((g) => g.expediente_id === f.expediente_id) === i)
+    .filter((f) => {
+      const ultima = ultimaPorExp.get(f.expediente_id);
+      const e = expPorId.get(f.expediente_id);
+      return (
+        ultima?.id === f.autorizacion_id &&
+        (corrPorExp.get(f.expediente_id) ?? 0) <= Date.parse(ultima.created_at) &&
+        !!e && !['cerrado', 'rechazado'].includes(e.estado)
+      );
+    })
+    .map((f) => {
+      const e = expPorId.get(f.expediente_id)!;
+      return {
+        expediente_id: f.expediente_id,
+        numero: formatNumeroEstudio(e.numero),
+        prospecto: `${e.solicitantes?.nombre ?? ''} ${e.solicitantes?.apellido ?? ''}`.trim(),
+        bloqueado_en: f.cerrado_at,
+        motivo: f.motivo_cierre,
+      };
+    });
 }

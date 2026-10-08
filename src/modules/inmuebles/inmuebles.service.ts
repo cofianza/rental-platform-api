@@ -809,7 +809,7 @@ export async function reservarInmuebleParaContrato(
  * El criterio del titular es ORTOGONAL al de la migración 20260817000002 ("no
  * liberar si el expediente ya está aprobado"), NO lo subsume: protege de que el
  * rechazo del candidato B suelte la reserva de A, pero no de que un rechazo
- * tardío del PROPIO titular (típicamente el estudio del co-arrendatario, que
+ * tardío del PROPIO titular (típicamente el estudio del coarrendatario, que
  * comparte expediente_id) suelte una reserva con contrato ya en curso. Ese
  * segundo guard vive donde le corresponde, en cada caller:
  *   - fn_registrar_resultado_estudio lo aplica en SQL (estado del expediente +

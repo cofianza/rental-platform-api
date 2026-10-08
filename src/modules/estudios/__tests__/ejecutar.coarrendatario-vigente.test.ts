@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ============================================================
-// P3 (revisión 2026-09-24): la evaluación del co-arrendatario solo se ejecuta
+// P3 (revisión 2026-09-24): la evaluación del coarrendatario solo se ejecuta
 // con el estudio en revisión (condicionado). Decidido el caso, reintentarla
 // consultaría el buró de un tercero sin finalidad. Mock de Supabase con colas
 // por tabla (patrón de reevaluacion.plazo.test).
@@ -91,7 +91,7 @@ beforeEach(() => {
   mockAvisarSinEfecto.mockClear();
 });
 
-describe('ejecutarEstudio — evaluación del co-arrendatario', () => {
+describe('ejecutarEstudio — evaluación del coarrendatario', () => {
   it.each(['aprobado', 'rechazado', 'cerrado'])('con el estudio %s (aprobado: con un contrato fijo sin él): 409, lo cancela, le avisa y no sigue al tope ni al buró', async (estado) => {
     enqueue('estudios', estudioCoa, { data: [{ id: 'est-coa' }], error: null });
     enqueue('expedientes', expedienteHabilitado, { data: { estado }, error: null });

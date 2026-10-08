@@ -498,10 +498,10 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
   // El contrato es el paso posterior a la aprobación: solo se genera cuando el
   // expediente está APROBADO. En 'condicionado' NO se genera directo: primero
   // hay que aprobar explícito vía aprobarCondicionado (que transiciona
-  // condicionado→aprobado y luego llama aquí) o invitar a un co-arrendatario.
+  // condicionado→aprobado y luego llama aquí) o invitar a un coarrendatario.
   if (exp.estado !== 'aprobado') {
     throw AppError.badRequest(
-      'El contrato solo puede generarse cuando el estudio está aprobado. Si el estudio quedó condicionado, primero apruébelo (o invite a un co-arrendatario).',
+      'El contrato solo puede generarse cuando el estudio está aprobado. Si el estudio quedó condicionado, primero apruébelo (o invite a un coarrendatario).',
       'EXPEDIENTE_NO_APROBADO',
     );
   }
@@ -549,7 +549,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
     cuenta_recaudo_titular_nit: string | null;
   };
 
-  // 3. Co-arrendatario: solo el que decide la función compartida (P2). Sin el
+  // 3. Coarrendatario: solo el que decide la función compartida (P2). Sin el
   //    respaldo a expedientes.coarrendatario_*: esas columnas se llenan al
   //    aceptar la invitación y metían también al que después salió rechazado.
   const coarrendatarioFinal = await fetchCoarrendatarioParaContrato(expedienteId);
@@ -571,7 +571,7 @@ async function fetchExpedienteData(expedienteId: string): Promise<{
 }
 
 /**
- * El co-arrendatario del contrato lo decide la misma función que la prima del
+ * El coarrendatario del contrato lo decide la misma función que la prima del
  * CRC y el asistente V3 (coarrendatario-vinculado.ts, P2); de su fila salen los
  * datos. Si su fila no se puede leer queda el nombre: igual cuenta como parte.
  */
@@ -600,7 +600,7 @@ async function fetchCoarrendatarioParaContrato(
     nombre: coa ? `${coa.nombre} ${coa.apellido}`.trim() : vinculado.nombre,
     tipo_documento: coa?.tipo_documento ?? null,
     numero_documento: coa?.numero_documento ?? null,
-    parentesco: 'Co-arrendatario',
+    parentesco: 'Coarrendatario',
     email: coa?.email ?? null,
     telefono: coa?.telefono ?? null,
   };
@@ -608,13 +608,13 @@ async function fetchCoarrendatarioParaContrato(
 
 /**
  * P6 (plantilla vigente, Décima Quinta Parágrafo Primero; V3 §6.3): este
- * contrato no incluye co-arrendatario ni co-titular como partes que firman.
+ * contrato no incluye coarrendatario ni co-titular como partes que firman.
  * Esos estudios se contratan con el contrato nuevo.
  */
 function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: boolean): void {
   if (!conCoarrendatario && !conCotitular) return;
   throw AppError.conflict(
-    `Este estudio tiene ${conCoarrendatario ? 'co-arrendatario' : 'co-titular de la fianza'} y este contrato no lo incluye como parte que firma. Hágalo con el contrato nuevo de Cofianza.`,
+    'Este estudio tiene coarrendatario y este contrato no lo incluye como parte que firma. Hágalo con el contrato nuevo de Cofianza.',
     'CONTRATO_REQUIERE_COARRENDATARIO',
   );
 }
@@ -622,7 +622,7 @@ function assertSinPartesAdicionales(conCoarrendatario: boolean, conCotitular: bo
 /** Sin «Cofianza Compartida» en este contrato: su co-titular no firma (P6). */
 function assertModalidadDisponible(
   modalidad: unknown,
-  mensaje = '«Cofianza Compartida» necesita un co-titular que este contrato no incluye como parte que firma. Elija Plena o Plus, o hágalo con el contrato nuevo.',
+  mensaje = '«Cofianza Compartida» necesita un coarrendatario que este contrato no incluye como parte que firma. Elija Plena o Plus, o hágalo con el contrato nuevo.',
 ): void {
   if (modalidad === 'compartida') throw AppError.badRequest(mensaje, 'MODALIDAD_NO_DISPONIBLE');
 }
@@ -654,7 +654,7 @@ async function haySobreVivo(contratoId: string, excepto?: string): Promise<boole
 /**
  * Antes de abrir un sobre de firma del contrato viejo, lo abra quien lo abra
  * (enviar a firma, POST /firma/solicitudes, la continuación tras verificar la
- * identidad): sin co-arrendatario ni co-titular (P6) y sin otro sobre vivo.
+ * identidad): sin coarrendatario ni co-titular (P6) y sin otro sobre vivo.
  * `excepto`: el sobre que se reenvía a otro correo (un firmante), que sí sigue vivo.
  */
 export async function assertPuedeAbrirSobre(
@@ -1606,7 +1606,7 @@ export async function enviarContratoAFirma(
     });
   }
 
-  // P6: tampoco sale a firma con co-arrendatario o con el co-titular impreso.
+  // P6: tampoco sale a firma con coarrendatario o con el co-titular impreso.
   // Aquí también porque la verificación de identidad arranca antes del sobre.
   assertSinPartesAdicionales((await coarrendatarioVinculadoVerificado(c.expediente_id)) !== null, tieneCotitular(c.datos_variables));
   await assertEvaluacionVigente(c.expediente_id);
@@ -2229,7 +2229,7 @@ export async function generarContrato(
     );
   }
 
-  // P6: con co-arrendatario, o con co-titular en el formulario, no se genera. El
+  // P6: con coarrendatario, o con co-titular en el formulario, no se genera. El
   // co-titular que haya quedado guardado era de una «Compartida» que ya no se
   // admite: no bloquea y se borra al guardar la modalidad (más abajo).
   assertSinPartesAdicionales(!!expData.coarrendatario, !!input.cotitular?.nombre?.trim());

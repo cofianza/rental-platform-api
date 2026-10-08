@@ -98,7 +98,7 @@ vi.mock('../pago.guard', () => ({
 }));
 
 import { supabase } from '@/lib/supabase';
-import { ejecutarEstudio } from '../estudios.service';
+import { ejecutarEstudio, centralDeCreacion } from '../estudios.service';
 
 beforeEach(() => {
   queues.clear();
@@ -173,7 +173,10 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     expect(mockDevolver).not.toHaveBeenCalled();
   });
 
-  it('Q5b-2: al deshacer el lock de un reintento con otro buró, vuelven la referencia y la respuesta del anterior', async () => {
+  // El cambio de buró ya no lo pide nadie (CORR §2): lo hace el motor al
+  // volver de TransUnion a DataCrédito, la primaria.
+  it('Q5b-2: al deshacer el lock de un reintento que volvió a la primaria, vuelven la referencia y la respuesta del anterior', async () => {
+    mockFlags.MOTOR_DECIDE_ENABLED = true;
     enqueue(
       'estudios',
       estudio({ estado: 'fallido', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } }),
@@ -182,7 +185,7 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     enqueue('expedientes', expediente('condicionado'), { data: { estado: 'rechazado' }, error: null });
 
     await expect(
-      ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }),
+      ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador'),
     ).rejects.toMatchObject({ errorCode: 'EXPEDIENTE_CERRADO' });
 
     const [lock, deshacer] = ops.filter((o) => o.table === 'estudios' && o.method === 'update').map((o) => o.args[0]);
@@ -193,8 +196,9 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
 
   const actualizaciones = () => ops.filter((o) => o.table === 'estudios' && o.method === 'update').map((o) => o.args[0] as Record<string, unknown>);
 
-  it('Q5c-2: si el reintento con otro buró falla sin dejar referencia, vuelve la prueba de la consulta anterior', async () => {
-    mockSolicitar.mockRejectedValueOnce(new Error('HTTP 503'));
+  it('Q5c-2: si el reintento en la primaria falla sin dejar referencia, vuelve la prueba de la consulta anterior', async () => {
+    mockFlags.MOTOR_DECIDE_ENABLED = true;
+    mockSolicitar.mockRejectedValueOnce(new Error('boom'));
     enqueue(
       'estudios',
       estudio({ estado: 'fallido', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } }),
@@ -202,7 +206,7 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     );
     enqueue('expedientes', expediente('en_revision'), { data: { estado: 'en_revision' }, error: null });
 
-    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }).catch(() => undefined);
+    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador').catch(() => undefined);
 
     await vi.waitFor(() => expect(actualizaciones()).toHaveLength(2));
     const [lock, fallo] = actualizaciones();
@@ -210,48 +214,46 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     expect(fallo).toMatchObject({ estado: 'fallido', proveedor: 'transunion', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } });
   });
 
-  it('Q5c-2: la re-consulta de un condicionado sin score que falla conserva el resultado del estudio', async () => {
-    mockSolicitar.mockRejectedValueOnce(new Error('HTTP 503'));
-    const previo = {
-      estado: 'completado', resultado: 'condicionado', score: null, proveedor: 'transunion', referencia_proveedor: 'TU-5',
-      respuesta_proveedor: { codigo: 14 }, observaciones: 'El buró no pudo evaluar', autorizacion_habeas_data_id: 'aut-0',
-      canon_evaluado: 1_400_000, canon_evaluado_origen: 'inmueble',
-    };
-    enqueue('estudios', estudio(previo), { data: [{ id: 'est-1' }], error: null });
-    enqueue('expedientes', expediente('condicionado'));
+  // CORR §2.1: «la inmobiliaria no decide esto en ningún caso».
+  it('CORR §2: un proveedor en el cuerpo se ignora; se consulta DataCrédito como primaria', async () => {
+    const { getProvider } = await import('../providers/factory');
+    enqueue('estudios', estudio({ proveedor: 'datacredito' }), { data: [{ id: 'est-1' }], error: null });
+    enqueue('expedientes', expediente('en_revision'), { data: { estado: 'en_revision' }, error: null });
 
-    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }).catch(() => undefined);
+    await ejecutarEstudio('est-1', 'inmo-1', undefined, 'inmobiliaria', { proveedor: 'transunion' } as never).catch(() => undefined);
 
-    await vi.waitFor(() => expect(actualizaciones()).toHaveLength(2));
-    const [lock, fallo] = actualizaciones();
-    expect(lock).toMatchObject({ estado: 'en_proceso', resultado: 'pendiente', referencia_proveedor: null });
-    expect(fallo).toEqual(previo);
+    expect(actualizaciones()[0]).toMatchObject({ estado: 'en_proceso', proveedor: 'datacredito' });
+    await vi.waitFor(() => expect(getProvider).toHaveBeenCalledWith('datacredito'));
+    expect(getProvider).not.toHaveBeenCalledWith('transunion');
   });
 
-  const condicionadoSinInfo = {
-    estado: 'completado', resultado: 'condicionado', score: null, proveedor: 'transunion', referencia_proveedor: 'TU-5',
-  };
+  it('CORR §2: al crear un estudio a mano, solo Cofianza elige la central', () => {
+    expect(centralDeCreacion('transunion', 'inmobiliaria')).toBe('datacredito');
+    expect(centralDeCreacion('manual', 'propietario')).toBe('datacredito');
+    expect(centralDeCreacion('manual', 'operador_analista')).toBe('manual');
+    expect(centralDeCreacion('transunion', 'administrador')).toBe('transunion');
+  });
 
-  it('A1: con el caso ya decidido (expediente aprobado) no se consulta el otro buró', async () => {
-    enqueue('estudios', estudio(condicionadoSinInfo));
-    enqueue('expedientes', expediente('aprobado'));
+  it('CORR §2: ya no hay re-consulta al «otro buró» de un condicionado sin score', async () => {
+    enqueue('estudios', estudio({ estado: 'completado', resultado: 'condicionado', score: null, proveedor: 'transunion' }));
+    enqueue('expedientes', expediente('condicionado'));
 
     await expect(
-      ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }),
+      ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' } as never),
     ).rejects.toMatchObject({ errorCode: 'ESTUDIO_ESTADO_INVALIDO' });
     expect(actualizaciones()).toHaveLength(0);
     expect(mockSolicitar).not.toHaveBeenCalled();
   });
 
-  it('A1: el «aprobado» del otro buró sobre un caso en revisión manual queda condicionado, con nota al analista', async () => {
+  it('A1: un «aprobado» del reintento sobre un caso en revisión manual queda condicionado, con nota al analista', async () => {
     mockSolicitar.mockResolvedValueOnce({ referencia_proveedor: 'DC-1', status: 'completed' });
     mockObtener.mockResolvedValueOnce({ resultado: 'aprobado', score: 780, observaciones: 'ok', datos_crudos: null });
     (supabase.rpc as unknown as Mock).mockResolvedValue({ error: null });
-    enqueue('estudios', estudio(condicionadoSinInfo), { data: [{ id: 'est-1' }], error: null });
+    enqueue('estudios', estudio({ estado: 'fallido', proveedor: 'datacredito' }), { data: [{ id: 'est-1' }], error: null });
     // Cualquier lectura del expediente lo ve en revisión manual.
     for (let i = 0; i < 10; i++) enqueue('expedientes', expediente('condicionado'));
 
-    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador', { proveedor: 'datacredito' }).catch(() => undefined);
+    await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador').catch(() => undefined);
 
     await vi.waitFor(() => expect(supabase.rpc).toHaveBeenCalledWith('fn_registrar_resultado_estudio', expect.anything()));
     const args = (supabase.rpc as unknown as Mock).mock.calls.find((c) => c[0] === 'fn_registrar_resultado_estudio')![1];
@@ -304,7 +306,7 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
     });
   });
 
-  it('Q5c-5: la evaluación del co-arrendatario con el estudio rechazado se cancela y se le avisa (P3), no solo 409', async () => {
+  it('Q5c-5: la evaluación del coarrendatario con el estudio rechazado se cancela y se le avisa (P3), no solo 409', async () => {
     enqueue(
       'estudios',
       estudio({ tipo: 'con_coarrendatario', estado: 'formulario_completado' }),

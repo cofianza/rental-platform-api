@@ -40,50 +40,50 @@ const html = () => (mockSend.mock.calls.at(-1)![0] as { html: string }).html;
 beforeEach(() => mockSend.mockClear());
 
 // P18: el prospecto casi nunca tiene panel; el correo del condicionado lleva su
-// enlace personal para invitar al co-arrendatario sin cuenta.
+// enlace personal para invitar al coarrendatario sin cuenta.
 describe('correo del condicionado', () => {
   beforeEach(() => {
     vi.mocked(resolverRuta).mockReturnValue({ titulo: 'Tu estudio está en revisión', mensaje: 'Un analista revisa tu caso.' } as never);
   });
 
-  it('lleva el enlace personal para invitar al co-arrendatario, sin mandarlo a un panel', async () => {
+  it('lleva el enlace personal para invitar al coarrendatario, sin mandarlo a un panel', async () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640, tokenDocumentos: 'a'.repeat(64) });
     expect(html()).toContain(`href="https://cofianza.co/cargar-documentos/${'a'.repeat(64)}"`);
-    expect(html()).toContain('Invitar a mi co-arrendatario');
+    expect(html()).toContain('Invitar a mi coarrendatario');
     // Con enlace propio no se le manda a ningún panel (el texto sin enlace sí lo nombra).
     expect(html()).not.toMatch(/panel/i);
-    // M8 (revisión 2026-09-29): el perfil que se evalúa es el del co-arrendatario.
-    expect(html()).toContain('Cuando su co-arrendatario acepte, evaluamos el perfil de esa persona y lo combinamos con el de usted.');
+    // M8 (revisión 2026-09-29): el perfil que se evalúa es el del coarrendatario.
+    expect(html()).toContain('Cuando su coarrendatario acepte, evaluamos el perfil de esa persona y lo combinamos con el de usted.');
   });
 
   it('sin enlace le dice a quién pedírselo', async () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 640 });
     expect(html()).toContain('Pídale a quien le pidió el estudio');
-    // M8: la invitación es para el co-arrendatario, no para el prospecto.
+    // M8: la invitación es para el coarrendatario, no para el prospecto.
     expect(html()).toContain('que invite desde su panel a la persona con quien va a vivir.');
     expect(html()).not.toContain('cargar-documentos');
   });
 
-  // Decisión 4: el propietario directo no admite co-arrendatario hasta el Convenio.
-  it('canal del propietario directo: el enlace es para sus soportes, sin co-arrendatario', async () => {
+  // Decisión 4: el propietario directo no admite coarrendatario hasta el Convenio.
+  it('canal del propietario directo: el enlace es para sus soportes, sin coarrendatario', async () => {
     await sendDocumentosRequeridosEmail({
       email: 'p@correo.co', nombre: 'Ana', score: 640, tokenDocumentos: 'a'.repeat(64), ofrecerCoarrendatario: false,
     });
     expect(html()).toContain(`href="https://cofianza.co/cargar-documentos/${'a'.repeat(64)}"`);
     expect(html()).toContain('Subir mis documentos');
-    expect(html()).not.toMatch(/co-arrendatario/i);
+    expect(html()).not.toMatch(/coarrendatario/i);
   });
 
   // M5: retenido solo por el tope, el correo avisa la revisión y no pide nada.
   it('sin pedir soportes: solo el aviso de revisión', async () => {
     await sendDocumentosRequeridosEmail({ email: 'p@correo.co', nombre: 'Ana', score: 780, pedirSoportes: false });
     expect(html()).toContain('Un analista revisa'); // texto de resolverRuta (mock)
-    expect(html()).not.toMatch(/co-arrendatario|documentos|cargar-documentos/i);
+    expect(html()).not.toMatch(/coarrendatario|documentos|cargar-documentos/i);
   });
 });
 
 // Decisión 2: a quien marcó «con alguien más», el aprobado le ofrece sumar al
-// co-arrendatario antes del contrato (prima del 10 %).
+// coarrendatario antes del contrato (prima del 10 %).
 describe('correo del aprobado', () => {
   const base = { email: 'ana@correo.co', nombre: 'Ana', inmueble: 'Calle 1', ciudad: 'Medellín', score: null };
 
@@ -93,12 +93,12 @@ describe('correo del aprobado', () => {
     expect(mockEnlaceCoa).toHaveBeenCalledWith('exp-1');
     expect(html()).toContain('href="https://cofianza.co/cargar-documentos/tok"');
     expect(html()).toContain('10 %');
-    expect(html()).toContain('Su co-arrendatario no es un fiador ni un codeudor, y no necesita tener finca raíz.');
+    expect(html()).toContain('Su coarrendatario no necesita tener finca raíz. No es fiador: firma el contrato como arrendatario, junto con el titular, y responde solidariamente.');
   });
 
-  it('sin enlace (no lo marcó, ya invitó o no se puede), ni sin estudio: nada del co-arrendatario', async () => {
+  it('sin enlace (no lo marcó, ya invitó o no se puede), ni sin estudio: nada del coarrendatario', async () => {
     await sendEstudioAprobadoEmail({ ...base, expedienteId: 'exp-1' });
-    expect(html()).not.toMatch(/co-arrendatario/i);
+    expect(html()).not.toMatch(/coarrendatario/i);
     mockEnlaceCoa.mockClear();
     await sendEstudioAprobadoEmail(base);
     expect(mockEnlaceCoa).not.toHaveBeenCalled();

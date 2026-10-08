@@ -330,7 +330,7 @@ export async function crearSolicitudFirma(
     solicitantes: { tipo_documento: string | null; numero_documento: string | null } | null;
   } | null;
 
-  // 3. Generate secure token. Sin co-arrendatario ni co-titular (P6), sin otro
+  // 3. Generate secure token. Sin coarrendatario ni co-titular (P6), sin otro
   // sobre vivo, y el plazo de firma de 15 días sin pasar el CRC (P5).
   const token = crypto.randomBytes(32).toString('hex');
   const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');

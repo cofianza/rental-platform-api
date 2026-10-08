@@ -57,7 +57,11 @@ export type ClaveCalibracion =
   | 'DIAS_RESPUESTA_AUDITORIA'
   | 'DIAS_VIGENCIA_LOTE_SIN_FIRMA'
   | 'TARIFA_COBRO_DESDE'
-  | 'IPC_ANUAL';
+  | 'IPC_ANUAL'
+  | 'MAX_INTENTOS_DOCUMENTO'
+  | 'MAX_CORRECCIONES_DOCUMENTO'
+  | 'MAX_REENVIOS_ENLACE'
+  | 'ALERTA_BLOQUEO_WHATSAPP';
 
 export type Calibracion = Record<ClaveCalibracion, number>;
 
@@ -148,7 +152,7 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     max: 100,
     entero: true,
     // Adenda §3
-    descripcion: 'Puntaje mínimo del co-arrendatario para aprobar automáticamente a un titular en zona gris (70-84).',
+    descripcion: 'Puntaje mínimo del coarrendatario para aprobar automáticamente a un titular en zona gris (70-84).',
   },
   {
     clave: 'CANON_MAX_TRANSITORIO',
@@ -444,6 +448,44 @@ export const PARAMETROS: readonly DefinicionParametro[] = [
     descripcion: 'Variación anual del IPC (%) con la que se propone el canon reajustado en el aniversario de cada contrato. Es solo una propuesta: la inmobiliaria confirma o corrige el canon.',
     advertencia: 'Actualizarlo cada enero con la cifra que publica el DANE.',
   },
+  // Bloqueo por documento (BLQ §9.5): los tres límites, solo la Gerencia
+  // General; el canal de alerta, cualquier administrador (OPERATIVOS).
+  {
+    clave: 'MAX_INTENTOS_DOCUMENTO',
+    valorDefault: 3,
+    min: 1,
+    max: 10,
+    entero: true,
+    // BLQ §1.5 / §9.1
+    descripcion: 'Intentos que tiene el prospecto, en un mismo enlace de autorización, para digitar su número de documento. Agotados, el enlace se bloquea y se alerta al asesor.',
+  },
+  {
+    clave: 'MAX_CORRECCIONES_DOCUMENTO',
+    valorDefault: 2,
+    min: 1,
+    max: 10,
+    entero: true,
+    // BLQ §3.6 / §9.2
+    descripcion: 'Correcciones del tipo o número de documento permitidas por estudio. Si se pide una más, el estudio se cierra, debe crearse uno nuevo y se avisa a la Gerencia General.',
+  },
+  {
+    clave: 'MAX_REENVIOS_ENLACE',
+    valorDefault: 3,
+    min: 1,
+    max: 20,
+    entero: true,
+    // BLQ §4.5 / §9.3
+    descripcion: 'Reenvíos del enlace de autorización permitidos por estudio a la inmobiliaria o al propietario. Pasado el límite, solo Cofianza puede reenviarlo.',
+  },
+  {
+    clave: 'ALERTA_BLOQUEO_WHATSAPP',
+    valorDefault: 0,
+    min: 0,
+    max: 1,
+    entero: true,
+    // BLQ §2.4 / §9.4
+    descripcion: 'Con 1, además de la alerta en la oficina virtual se avisa por WhatsApp al asesor cuando un estudio queda bloqueado por documento. Encenderlo solo cuando Meta apruebe la plantilla cofianza_estudio_bloqueado_documento_v1.',
+  },
 ];
 
 export const CALIBRACION_DEFAULT: Calibracion = Object.fromEntries(
@@ -471,6 +513,7 @@ const OPERATIVOS: ReadonlySet<ClaveCalibracion> = new Set<ClaveCalibracion>([
   'DIAS_RESPUESTA_AUDITORIA',
   'DIAS_VIGENCIA_LOTE_SIN_FIRMA',
   'IPC_ANUAL', // solo propone el canon del aniversario; lo confirma la inmobiliaria
+  'ALERTA_BLOQUEO_WHATSAPP', // BLQ §9.5: el canal de alerta, cualquier administrador
 ]);
 
 export type NivelParametro = 'riesgo' | 'operativo';

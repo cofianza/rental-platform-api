@@ -221,7 +221,7 @@ describe('condicionado: se resuelve con la revision manual (P33)', () => {
     expect((await getHistorialReEvaluacion('est-1', 'u-1', 'operador_analista')).puede_reevaluar).toBe(true);
   });
 
-  it('A4: el condicionado del co-arrendatario no se re-evalua aunque el caso se haya negado', async () => {
+  it('A4: el condicionado del coarrendatario no se re-evalua aunque el caso se haya negado', async () => {
     enqueue('estudios', { data: { ...condicionado, tipo: 'con_coarrendatario' }, error: null });
     enqueue('expedientes', { data: { id: 'exp-1', estado: 'rechazado', estado_pre_cancelacion: null }, error: null });
     await expect(getSoportePresignedUrl('est-1', soporte as never, 'u-1', 'operador_analista'))
@@ -251,7 +251,7 @@ describe('condicionado: se resuelve con la revision manual (P33)', () => {
     expect(supabase.rpc).not.toHaveBeenCalled();
   });
 
-  it('la apelacion de un rechazado y el estudio del co-arrendatario si se registran', async () => {
+  it('la apelacion de un rechazado y el estudio del coarrendatario si se registran', async () => {
     rpcLlega();
     enqueue('estudios', { data: hija('individual'), error: null });
     enqueue('expedientes', { data: { estado: 'rechazado' }, error: null });

@@ -986,11 +986,11 @@ async function assertCertificable(
   emitido = !!e.certificado_url,
 ): Promise<DecisionCofianza> {
   // Los datos de la persona salen del expediente (el titular): con la fila del
-  // co-arrendatario salia un CRC a nombre del titular con el resultado y el
+  // coarrendatario salia un CRC a nombre del titular con el resultado y el
   // score de otra persona, verificable por QR.
   if (e.tipo === 'con_coarrendatario') {
     throw AppError.conflict(
-      'El certificado se emite sobre el estudio del titular; la evaluación del co-arrendatario ya se refleja en él.',
+      'El certificado se emite sobre el estudio del titular; la evaluación del coarrendatario ya se refleja en él.',
       'ESTUDIO_COARRENDATARIO_NO_CERTIFICABLE',
     );
   }

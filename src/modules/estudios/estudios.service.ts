@@ -114,8 +114,7 @@ const ESTADOS_PERMITIDOS_EJECUCION = ['formulario_completado', 'documentos_carga
  * `estudioYaCobrado` sigue siendo el interruptor entre BLOQUEAR y ADVERTIR en
  * el tope de canon: la regla de Gerencia prohibe COBRAR un estudio sobre un
  * inmueble fuera de tope, no dejar sin entregar uno ya pagado. Los caminos
- * post-cobro (reintento de un 'fallido', re-consulta al otro buro,
- * re-evaluacion con soportes) tienen que poder terminar. NO es el gate de
+ * post-cobro (reintento de un 'fallido', re-evaluacion con soportes) tienen que poder terminar. NO es el gate de
  * pago: ese es `assertPagoEstudio`, que falla CERRADO.
  */
 
@@ -266,7 +265,7 @@ export async function listEstudios(
       { count: 'exact' },
     )
     .eq('expediente_id', expedienteId);
-  // Ver assertNoEsEstudioDeOtraPersona: el titular no lista el del co-arrendatario.
+  // Ver assertNoEsEstudioDeOtraPersona: el titular no lista el del coarrendatario.
   if (userRol === 'solicitante') estudiosQuery = estudiosQuery.neq('tipo', 'con_coarrendatario');
 
   const [{ data: expediente, error: expError }, , { data, error, count }, autorizacion, reasignaciones] = await Promise.all([
@@ -683,8 +682,10 @@ type AutorizacionTitular = { created_at: string; estado: string; token_expiracio
  * Adenda de precios §2.5: ¿el estudio se abandonó antes de la consulta? Sí
  * cuando ninguna evaluación del expediente llegó al buró y la autorización del
  * titular venció por el reloj (Flujo §12/§14: 15 días, o el plazo guardado en
- * el enlace). Un enlace DETENIDO no cuenta: le toca al gestor corregir y
- * reenviar. Mismo veredicto que ve el gestor en el detalle.
+ * el enlace). Un enlace DETENIDO (bloqueado por documento, «no soy yo») no
+ * cuenta mientras corre su plazo: le toca al gestor corregir y reenviar. Si
+ * nadie lo atiende dentro del plazo, manda el reloj y el cupo se libera (BLQ,
+ * plan bloque 2 §8). Mismo veredicto que ve el gestor en el detalle.
  */
 export async function abandonadoAntesDeLaConsulta(expedienteId: string): Promise<boolean> {
   const { data, error } = await (supabase
@@ -864,6 +865,15 @@ async function adjuntarRuta<T extends Record<string, unknown>>(
 // Documentos minimos requeridos para crear un estudio (codigos de tipos_documento)
 const DOCUMENTOS_MINIMOS_REQUERIDOS = ['id_frontal', 'comprobante_ingresos'];
 
+/**
+ * CORR §2: solo Cofianza (admin/operador) elige la central al crear a mano
+ * —incluido 'manual'—. Para cualquier otro rol la decide el motor: DataCrédito
+ * primaria y la cascada consulta TransUnion sola.
+ */
+export function centralDeCreacion<P extends string>(pedido: P, userRol?: string): P | 'datacredito' {
+  return userRol === 'administrador' || userRol === 'operador_analista' ? pedido : 'datacredito';
+}
+
 export async function createEstudio(
   expedienteId: string,
   input: CreateEstudioInput,
@@ -881,6 +891,8 @@ export async function createEstudio(
   if (expError || !expediente) {
     throw AppError.notFound('Estudio no encontrado', 'EXPEDIENTE_NOT_FOUND');
   }
+
+  const proveedor = centralDeCreacion(input.proveedor, userRol);
 
   // Tenant guard: la inmobiliaria (único rol externo con expedientes:update) solo
   // crea estudios sobre expedientes de su cartera — sin esto podría adjuntar un
@@ -929,7 +941,7 @@ export async function createEstudio(
   }
 
   // 3. Verify autorizacion habeas data exists and is active.
-  //    Filtrada POR SUJETO: desde 2026-09-03 el co-arrendatario tiene su propia
+  //    Filtrada POR SUJETO: desde 2026-09-03 el coarrendatario tiene su propia
   //    fila con el MISMO expediente_id, asi que buscar solo por expediente
   //    podia enlazar el estudio del TITULAR a la autorizacion de otra persona —
   //    justo el vinculo "evidencia asociada al estudio" que exige el 8.4.
@@ -979,7 +991,7 @@ export async function createEstudio(
     p_expediente_id: expedienteId,
     p_inmueble_id: exp.inmueble_id,
     p_tipo: input.tipo,
-    p_proveedor: input.proveedor,
+    p_proveedor: proveedor,
     p_duracion_contrato_meses: input.duracion_contrato_meses,
     p_pago_por: input.pago_por,
     p_observaciones: input.observaciones || null,
@@ -1012,7 +1024,7 @@ export async function createEstudio(
     detalle: {
       expediente_id: expedienteId,
       tipo: input.tipo,
-      proveedor: input.proveedor,
+      proveedor: proveedor,
       duracion_contrato_meses: input.duracion_contrato_meses,
       pago_por: input.pago_por,
     },
@@ -1040,6 +1052,7 @@ export async function createEstudioFromInmueble(
   // inmueble de OTRA agencia por UUID (write-IDOR). 404 para no filtrar
   // existencia cross-tenant. Roles internos pasan sin chequeo.
   await assertInmuebleAccess(inmuebleId, userId, userRol);
+  const proveedor = centralDeCreacion(input.proveedor, userRol);
 
   // El solicitante tambien tiene que ser de SU cartera: el RPC solo comprueba
   // que exista (mismo hueco que createExpediente). 404 si es de otra agencia.
@@ -1062,7 +1075,7 @@ export async function createEstudioFromInmueble(
     p_inmueble_id: inmuebleId,
     p_solicitante_id: input.solicitante_id,
     p_tipo: input.tipo,
-    p_proveedor: input.proveedor,
+    p_proveedor: proveedor,
     p_duracion_contrato_meses: input.duracion_contrato_meses,
     p_pago_por: input.pago_por,
     p_observaciones: input.observaciones || null,
@@ -1101,7 +1114,7 @@ export async function createEstudioFromInmueble(
       inmueble_id: inmuebleId,
       expediente_id: result.expediente_id,
       tipo: input.tipo,
-      proveedor: input.proveedor,
+      proveedor: proveedor,
       duracion_contrato_meses: input.duracion_contrato_meses,
       pago_por: input.pago_por,
       auto_expediente: true,
@@ -1184,7 +1197,7 @@ export async function cancelEstudio(estudioId: string, userId: string, ip?: stri
 
   // El enlace de pago de la evaluación cancelada no debe quedar cobrable. El
   // pago es por expediente: solo se cancela si no queda otra evaluación viva
-  // (la del co-arrendatario comparte expediente y pago).
+  // (la del coarrendatario comparte expediente y pago).
   if (estado === ESTADO_ESPERANDO_PAGO) {
     const { data: vivos } = await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
@@ -1965,7 +1978,7 @@ export async function registrarResultado(
   //       revisión manual, que pide V7/V9, fundamento y documentos consultados.
   //       Sin esto, una re-evaluación hija (o cualquier registro a mano)
   //       aprobada lo sacaba de condicionado por la puerta lateral. El estudio
-  //       del co-arrendatario no cuenta: su resultado no aprueba el caso, lo
+  //       del coarrendatario no cuenta: su resultado no aprueba el caso, lo
   //       pondera la revisión.
   if (final.resultado === 'aprobado' && est.tipo !== 'con_coarrendatario') {
     const { data: exp } = await (supabase
@@ -2310,7 +2323,7 @@ export async function getCertificadoViewUrl(estudioId: string, userId?: string, 
   // agencia por UUID (IDOR de lectura).
   await assertExpedienteAccess(est.expediente_id, userId, userRol);
   // El PDF que un analista adjunta al registrar el resultado es el reporte de
-  // buro de esa persona: el titular no baja el de su co-arrendatario.
+  // buro de esa persona: el titular no baja el de su coarrendatario.
   assertNoEsEstudioDeOtraPersona(est.tipo, userRol);
   // certificado_url es el CRC completo o el reporte del buró que adjuntó el
   // analista: los dos traen observaciones y datos del modelo. El titular baja
@@ -2358,12 +2371,9 @@ export async function ejecutarEstudio(
   userId: string,
   ip?: string,
   userRol?: string,
-  documentoOverride?: {
-    tipo_documento?: string;
-    numero_documento?: string;
-    proveedor?: 'transunion' | 'datacredito';
-    primer_apellido?: string;
-  },
+  // Solo el primer apellido (DataCrédito lo pide con CC): completa la consulta,
+  // no cambia la identidad. El documento se corrige con «Corregir documento» (BLQ §3.5).
+  documentoOverride?: { primer_apellido?: string },
 ) {
   // 1. Get estudio
   const { data: estudio, error: getError } = await (supabase
@@ -2468,7 +2478,7 @@ export async function ejecutarEstudio(
   // rechazado: es su apelación, y el resultado lo reabre.
   const estudioTerminado = (estado: string | undefined) =>
     estado === 'cerrado' || (estado === 'rechazado' && !est.estudio_padre_id);
-  // La del co-arrendatario sigue al paso 1.5b: con el estudio resuelto se
+  // La del coarrendatario sigue al paso 1.5b: con el estudio resuelto se
   // cancela y se le avisa que su invitación quedó sin efecto (P3).
   if (est.tipo !== 'con_coarrendatario' && estudioTerminado(expediente.estado)) {
     throw AppError.conflict(`El estudio está ${expediente.estado}: no se consulta el buró.`, 'EXPEDIENTE_CERRADO');
@@ -2486,7 +2496,7 @@ export async function ejecutarEstudio(
     );
   }
 
-  // 1.5b. P3: la evaluación del co-arrendatario solo corre con el estudio en
+  // 1.5b. P3: la evaluación del coarrendatario solo corre con el estudio en
   //       revisión (condicionado) o aprobado sin contrato fijo que lo excluya
   //       (Decisión 2). Fuera de eso consultaría el buró de un tercero sin
   //       finalidad (Ley 1581).
@@ -2505,7 +2515,7 @@ export async function ejecutarEstudio(
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
         .update({
           estado: 'cancelado',
-          observaciones: 'El estudio se resolvió antes de terminar la evaluación del co-arrendatario: su invitación quedó sin efecto.',
+          observaciones: 'El estudio se resolvió antes de terminar la evaluación del coarrendatario: su invitación quedó sin efecto.',
         } as never)
         .eq('id', estudioId)
         .not('estado', 'in', '(completado,cancelado,en_proceso)')
@@ -2513,10 +2523,10 @@ export async function ejecutarEstudio(
       if ((cancelado as unknown[] | null)?.length) {
         void import('@/modules/coarrendatarios/coarrendatarios.service')
           .then((m) => m.avisarInvitacionSinEfecto(estudioId))
-          .catch((e) => logger.warn({ error: e, estudioId }, 'No se pudo avisar al co-arrendatario que su invitación quedó sin efecto'));
+          .catch((e) => logger.warn({ error: e, estudioId }, 'No se pudo avisar al coarrendatario que su invitación quedó sin efecto'));
       }
       throw AppError.conflict(
-        'El estudio ya se resolvió: la evaluación del co-arrendatario ya no se ejecuta.',
+        'El estudio ya se resolvió: la evaluación del coarrendatario ya no se ejecuta.',
         'COARRENDATARIO_ESTUDIO_NO_VIGENTE',
       );
     }
@@ -2526,9 +2536,9 @@ export async function ejecutarEstudio(
   //
   //      Última barrera antes del buró, y la que cubre los caminos que no
   //      pasan por createEstudio ni por habilitarEstudio: el estudio del
-  //      co-arrendatario (coarrendatarios.service lo dispara aquí), el
+  //      coarrendatario (coarrendatarios.service lo dispara aquí), el
   //      onboarding de vitrina/invitación (orchestrator → este mismo punto),
-  //      el reintento de un 'fallido' y la re-consulta al otro buró. Todos
+  //      y el reintento de un 'fallido'. Todos
   //      terminan en ejecutarEstudio, así que cerrar aquí cierra todos.
   //
   //      HASTA 2026-09-04 aquí NUNCA se estaba antes del cobro: a
@@ -2543,9 +2553,8 @@ export async function ejecutarEstudio(
   //      deja al cliente cobrado y sin servicio —y con un mensaje que le
   //      afirma que "no se generó ningún cobro", que sería falso—, así que el
   //      guard sólo advierte. Casos reales: el reintento de un 'fallido' (que
-  //      en este sistema aparece de forma espuria cuando se reinicia la API) y
-  //      la re-consulta al otro buró de un condicionado sin score, que es justo
-  //      el remedio documentado 70 líneas más abajo. Y si NO se cobró, el tope
+  //      en este sistema aparece de forma espuria cuando se reinicia la API).
+  //      Y si NO se cobró, el tope
   //      bloquea y su mensaje sigue siendo literalmente cierto. El bloqueo real
   //      del tope vive, como siempre, en los sitios previos al cobro
   //      (habilitarEstudio, enviarLinkPago, asumirCosto, liberarEstudioConCredito).
@@ -2610,43 +2619,9 @@ export async function ejecutarEstudio(
   }
 
   // 2. Validate estado
-  // El override de proveedor es una decisión FACTURABLE, reservada al gestor:
-  // si lo manda un solicitante se ignora (la UI no se lo ofrece, pero la ruta
-  // admite ese rol). Se resuelve aquí porque el guard de estado depende de él.
-  const overrideProveedor = userRol === 'solicitante' ? undefined : documentoOverride?.proveedor;
-  if (documentoOverride?.proveedor && userRol === 'solicitante') {
-    logger.warn(
-      { estudioId, userId, intento: documentoOverride.proveedor },
-      'ejecutarEstudio: un solicitante intentó cambiar de buró — override ignorado',
-    );
-  }
-
-  // Re-consulta al OTRO buró de un estudio ya completado.
-  //
-  // Un 'completado' + 'condicionado' + score null significa que el buró no
-  // pudo evaluar a la persona (código 14 de DataCrédito, exclusiones -4..-7 de
-  // CreditVision). Preguntarle al otro buró es la salida natural, pero no
-  // existía ninguna: el reintento solo aparece en 'fallido', la re-evaluación
-  // es admin/operador, exige documentos y hereda el mismo proveedor.
-  //
-  // Se abre SOLO para ese caso y SOLO si además se cambia de buró: re-ejecutar
-  // un estudio aprobado o uno condicionado CON score (el buró sí evaluó y dio
-  // banda media) seguiría prohibido.
-  //
-  // Y SOLO con el caso todavía en revisión manual (expediente 'condicionado'):
-  // si el analista ya decidió (aprobado/rechazado), otra consulta se cobra y,
-  // si sale rechazada, deja el estudio contradiciendo al expediente.
-  const esCondicionadoSinInfo =
-    est.estado === 'completado' &&
-    est.resultado === 'condicionado' &&
-    est.score === null &&
-    expediente.estado === 'condicionado';
-  const reconsultaOtroBuro =
-    esCondicionadoSinInfo && !!overrideProveedor && overrideProveedor !== est.proveedor;
-
-  const estadosPermitidos = reconsultaOtroBuro
-    ? [...ESTADOS_PERMITIDOS_EJECUCION, 'completado']
-    : ESTADOS_PERMITIDOS_EJECUCION;
+  // CORR §2: nadie elige la central (ni se re-consulta «el otro buró» a mano).
+  // La decide la cascada del motor; la central consultada queda en la traza.
+  const estadosPermitidos = ESTADOS_PERMITIDOS_EJECUCION;
 
   if (!estadosPermitidos.includes(est.estado)) {
     // El estado crudo va en details: el mensaje termina en un toast.
@@ -2660,15 +2635,9 @@ export async function ejecutarEstudio(
   // 3. Validate datos_formulario exists (o construirlo desde el override).
   const datosBase = (est.datos_formulario as Record<string, string> | null) ?? {};
 
-  // Aplicar override del documento si viene en el body (el solicitante
-  // confirmó/corrigió su CC en la card). Persistimos el cambio para que el
-  // historial refleje qué documento se consultó.
+  // Primer apellido corregido en el reintento (se persiste abajo).
   const datos: Record<string, string> = { ...datosBase };
-  const overrideNumero = documentoOverride?.numero_documento?.trim();
-  const overrideTipo = documentoOverride?.tipo_documento?.trim().toLowerCase();
   const overrideApellido = documentoOverride?.primer_apellido?.trim();
-  if (overrideNumero) datos.numero_documento = overrideNumero;
-  if (overrideTipo) datos.tipo_documento = overrideTipo;
   if (overrideApellido) datos.apellido = overrideApellido;
 
   if (!datos.numero_documento) {
@@ -2704,14 +2673,13 @@ export async function ejecutarEstudio(
   //      estudio permanece en estado de espera y no consume consultas a
   //      centrales").
   //
-  //      Este es el ÚNICO cuello por el que pasan los seis caminos que llegan
+  //      Este es el ÚNICO cuello por el que pasan los caminos que llegan
   //      al buró: POST /estudios/:id/ejecutar (panel del gestor Y del
   //      solicitante), el orquestador tras la firma, la aceptación del
-  //      co-arrendatario, el reintento de un 'fallido' y la re-consulta al
-  //      otro buró. Ponerlo en el hook de autorización dejaría los otros cinco
-  //      abiertos.
+  //      coarrendatario y el reintento de un 'fallido'. Ponerlo en el hook
+  //      de autorización dejaría los otros abiertos.
   //
-  //      Es por EXPEDIENTE, no por estudio: el estudio del co-arrendatario y el
+  //      Es por EXPEDIENTE, no por estudio: el estudio del coarrendatario y el
   //      hijo de re-evaluación no tienen pago propio y se amparan en el del
   //      titular (uq_pagos_estudio_activo garantiza como máximo uno). Eso es
   //      también lo que hace que los expedientes ya pagados pasen sin backfill.
@@ -2725,15 +2693,20 @@ export async function ejecutarEstudio(
   //      consulta ni queda colgado en 'en_proceso'.
   assertPagoEstudio(senalPago, { origen: 'ejecutar', expedienteNumero: expediente.numero });
 
-  // Si el override trajo cambios respecto a datos_formulario, persistir.
-  const cambioNumeroDatos = !!(overrideNumero && overrideNumero !== datosBase.numero_documento);
-  const cambioTipoDatos = !!(overrideTipo && overrideTipo !== datosBase.tipo_documento);
-  const cambioApellidoDatos = !!(overrideApellido && overrideApellido !== datosBase.apellido);
-  if (cambioNumeroDatos || cambioTipoDatos || cambioApellidoDatos) {
+  // Si el reintento corrigió el apellido, persistir y dejarlo en la bitácora.
+  if (overrideApellido && overrideApellido !== datosBase.apellido) {
     await (supabase
       .from('estudios' as string) as ReturnType<typeof supabase.from>)
       .update({ datos_formulario: datos } as never)
       .eq('id', est.id);
+    logAudit({
+      usuarioId: userId || null,
+      accion: AUDIT_ACTIONS.ESTUDIO_APELLIDO_CORREGIDO,
+      entidad: AUDIT_ENTITIES.ESTUDIO,
+      entidadId: est.id,
+      detalle: { origen: 'reintento_primer_apellido', before: datosBase.apellido ?? null, after: overrideApellido },
+      ip,
+    });
   }
 
   // Sincronizar `solicitantes.numero_documento` + tipo_documento con el
@@ -2741,8 +2714,8 @@ export async function ejecutarEstudio(
   // extraido para llamarse ademas desde registrarResultadoInline (red de
   // seguridad post-completado).
   // OJO: NO sincronizar para estudios 'con_coarrendatario' — el documento del
-  // formulario es del CO-ARRENDATARIO, no del titular; sincronizarlo
-  // sobreescribiría la cédula del solicitante titular con la del co-arrendatario.
+  // formulario es del COARRENDATARIO, no del titular; sincronizarlo
+  // sobreescribiría la cédula del solicitante titular con la del coarrendatario.
   if (est.tipo !== 'con_coarrendatario') {
     await sincronizarDocumentoSolicitante({
       estudioId,
@@ -2786,20 +2759,15 @@ export async function ejecutarEstudio(
   //        click, o reintento contra un estudio que otro flujo ya tomó) solo
   //        dejan pasar a UNA. Sin esto, cada ejecución duplicada consumía una
   //        consulta TransUnion facturada.
-  // 4.5. Cambio manual de buró (reintento con el otro proveedor).
-  //
-  //      El override es una decisión FACTURABLE, así que se reserva a los
-  //      gestores: si lo manda un solicitante se ignora en silencio (la UI no
-  //      se lo ofrece, pero la ruta sí admite ese rol).
+  // 4.5. Central de la ejecución. Nadie la elige (CORR §2): con el motor
+  //      decidiendo, DataCrédito es SIEMPRE la primaria; TransUnion solo entra
+  //      por la cascada o como respaldo automático si DataCrédito no responde
+  //      (Adenda §2.3, en procesarEstudioAsync).
   const proveedorAnterior = est.proveedor;
-  // Adenda §2: con el motor decidiendo, Datacredito es SIEMPRE la central
-  // primaria; TransUnion solo entra en cascada (o si el gestor la fuerza con
-  // el override, p. ej. porque Datacredito esta caido — Adenda §2.3).
-  // TransUnion no consulta PPT ni PEP: sin override se van a DataCrédito (antes fallaba ya cobrado).
+  // TransUnion no consulta PPT ni PEP: se van a DataCrédito (antes fallaba ya cobrado).
   const sinTransUnion = ['ppt', 'pep'].includes(datos.tipo_documento ?? '');
   const proveedorFinal: string =
-    overrideProveedor ??
-    ((env.MOTOR_DECIDE_ENABLED || sinTransUnion) && est.proveedor === 'transunion' ? 'datacredito' : est.proveedor);
+    (env.MOTOR_DECIDE_ENABLED || sinTransUnion) && est.proveedor === 'transunion' ? 'datacredito' : est.proveedor;
   const cambioProveedor = proveedorFinal !== proveedorAnterior;
 
   //      Guard: solo los burós reales son ejecutables. Sin esto, (a) un
@@ -2809,7 +2777,7 @@ export async function ejecutarEstudio(
   //      siempre (el throw ocurre fuera del try de procesarEstudioAsync).
   if (proveedorFinal !== 'transunion' && proveedorFinal !== 'datacredito') {
     throw AppError.badRequest(
-      `El estudio tiene proveedor "${proveedorFinal}", que no se consulta automáticamente. Elija TransUnion o DataCrédito para ejecutarlo.`,
+      `El estudio tiene proveedor "${proveedorFinal}", que no se consulta automáticamente. Escriba a soporte.`,
       'PROVEEDOR_NO_EJECUTABLE',
     );
   }
@@ -2824,7 +2792,7 @@ export async function ejecutarEstudio(
   if (cambioProveedor) {
     logger.info(
       { estudioId, proveedorAnterior, proveedorFinal, userId },
-      'ejecutarEstudio: cambio manual de proveedor para el reintento',
+      'ejecutarEstudio: el reintento vuelve a la central primaria',
     );
   }
 
@@ -2851,18 +2819,10 @@ export async function ejecutarEstudio(
       proveedor: proveedorFinal,
       // Deja el estudio atado a la evidencia concreta que lo habilitó. Antes
       // quedaba null en los caminos de habilitación, onboarding y
-      // co-arrendatario, así que no había forma de reconstruir con qué firma
+      // coarrendatario, así que no había forma de reconstruir con qué firma
       // se consultó el buró.
       autorizacion_habeas_data_id: autorizacionId,
       ...(cambioProveedor ? { referencia_proveedor: null, respuesta_proveedor: null } : {}),
-      // Re-consulta de un estudio ya completado: hay que devolverlo a
-      // 'pendiente'. fn_registrar_resultado_estudio rechaza registrar sobre un
-      // estudio que ya tiene resultado ("ya tiene un resultado registrado"),
-      // así que sin este reset la consulta al otro buró se ejecutaría —
-      // facturada — y su respuesta no podría guardarse.
-      ...(reconsultaOtroBuro
-        ? { resultado: 'pendiente', score: null, observaciones: null }
-        : {}),
       // CANON CONGELADO — prerequisito de la portabilidad del §4.3.
       //
       // `inmuebles.valor_arriendo` es EDITABLE: el gestor puede moverlo
@@ -2880,7 +2840,7 @@ export async function ejecutarEstudio(
       // como pide el comentario de la migracion.
       //
       // Se SOBRESCRIBE en cada toma de lock (no es write-once): el reintento de
-      // un 'fallido' y la re-consulta al otro buro reescriben `resultado`, y el
+      // un 'fallido' reescribe `resultado`, y el
       // estudio debe llevar el canon de la corrida que produjo el resultado
       // vigente, no el de un intento abortado.
       //
@@ -2908,9 +2868,8 @@ export async function ejecutarEstudio(
 
   // P1: el cierre o el rechazo pudo llegar entre el guard de arriba y el lock.
   // Con el estudio ya terminado se deshace el lock (nadie consultó) y la
-  // evaluación pagada se devuelve. No aplica a la re-consulta al otro buró: ese
-  // estudio ya se consultó.
-  if (!reconsultaOtroBuro) {
+  // evaluación pagada se devuelve.
+  {
     const { data: expAhora } = await (supabase
       .from('expedientes' as string) as ReturnType<typeof supabase.from>)
       .select('estado')
@@ -2948,24 +2907,10 @@ export async function ejecutarEstudio(
     proveedor: proveedorFinal,
     proveedorAnterior: cambioProveedor ? proveedorAnterior : undefined,
     // Si el buró nuevo falla sin dejar referencia, vuelve lo que el lock pisó:
-    // la prueba de la consulta anterior y, en la re-consulta de un condicionado
-    // sin score, su resultado.
-    restaurarSiFalla: reconsultaOtroBuro
-      ? {
-          estado: est.estado,
-          resultado: est.resultado,
-          score: est.score,
-          observaciones: est.observaciones ?? null,
-          proveedor: est.proveedor,
-          referencia_proveedor: est.referencia_proveedor ?? null,
-          respuesta_proveedor: est.respuesta_proveedor ?? null,
-          autorizacion_habeas_data_id: est.autorizacion_habeas_data_id ?? null,
-          canon_evaluado: est.canon_evaluado ?? null,
-          canon_evaluado_origen: est.canon_evaluado_origen ?? null,
-        }
-      : cambioProveedor
-        ? { proveedor: est.proveedor, referencia_proveedor: est.referencia_proveedor ?? null, respuesta_proveedor: est.respuesta_proveedor ?? null }
-        : undefined,
+    // la prueba de la consulta anterior.
+    restaurarSiFalla: cambioProveedor
+      ? { proveedor: est.proveedor, referencia_proveedor: est.referencia_proveedor ?? null, respuesta_proveedor: est.respuesta_proveedor ?? null }
+      : undefined,
     expedienteId: est.expediente_id,
     providerInput,
     userId,
@@ -3006,11 +2951,8 @@ async function procesarEstudioAsync(args: {
   centralCaida?: string;
   /** Background check ya lanzado en el intento anterior: no se vuelve a pedir a Auco. */
   antecedentesPrevios?: Promise<ResumenAntecedentes> | null;
-  /**
-   * Lo que el lock pisó y vuelve si el buró falla sin dejar referencia. Con
-   * `estado`, es una re-consulta: el estudio vuelve entero a su resultado.
-   */
-  restaurarSiFalla?: Record<string, unknown> & { estado?: string };
+  /** Lo que el lock pisó y vuelve si el buró falla sin dejar referencia. */
+  restaurarSiFalla?: Record<string, unknown>;
 }): Promise<void> {
   const { estudioId, proveedor, proveedorAnterior, expedienteId, providerInput, userId, ip, sessionId, inicioMs } = args;
   let referenciaNueva: string | null = null;
@@ -3221,31 +3163,28 @@ async function procesarEstudioAsync(args: {
       : apellidoNoCoincide
       ? `${buroLabel} encontró la cédula, pero el PRIMER APELLIDO registrado no coincide con el que enviamos. El documento está bien: hay que corregir el apellido del solicitante para que sea igual al de la Registraduría (solo el primero, sin el segundo) y reintentar.`
       : documentoNoEncontrado
-      ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifique que su número y tipo de documento sean correctos, o reintente con el otro buró.`
+      ? `No encontramos antecedentes con este documento en ${buroLabel}. Cofianza solo puede consultar documentos colombianos: Cédula de Ciudadanía (CC), Cédula de Extranjería (CE), Tarjeta de Identidad (TI) o NIT. Verifique que su número y tipo de documento sean correctos y vuelva a intentar la consulta.`
       : proveedorNoDisponible
-        ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió. ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelva a intentar la consulta en unos minutos, o use el otro buró.${env.MOTOR_DECIDE_ENABLED && proveedor === 'datacredito' ? ' Si DataCrédito no responde, puede reintentar eligiendo TransUnion.' : ''}`
+        ? `${args.centralCaida ? `${BURO_LABELS[args.centralCaida] ?? args.centralCaida} tampoco respondió. ` : ''}${buroLabel} no está disponible en este momento (posible mantenimiento o caída temporal del servicio). No es un rechazo de crédito: vuelva a intentar la consulta en unos minutos.`
         : errorDeConfiguracion
-        ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito: puede intentar con el otro buró.`
+        ? `No pudimos consultar ${buroLabel} por un problema de configuración de Cofianza; ya avisamos al equipo. No es un rechazo de crédito: vuelva a intentar la consulta.`
         // Sin el mensaje crudo del proveedor (códigos, combos, variables de
         // entorno): va al log, a la auditoría y al aviso de los internos.
         : `${buroLabel} no pudo completar la consulta. No es un rechazo de crédito: vuelva a intentarlo o escriba a soporte.`;
 
     // CAS: si lo cancelaron mientras se consultaba, no se resucita como 'fallido'
     // (reintentable) ni se avisa de un fallo. Si el buró nuevo no dejó
-    // referencia, vuelve lo que el lock pisó (la prueba de la consulta anterior
-    // o, en una re-consulta, el resultado que el estudio ya tenía).
+    // referencia, vuelve lo que el lock pisó (la prueba de la consulta anterior).
     const restaurar = !referenciaNueva ? args.restaurarSiFalla : undefined;
 
     // Politica §14 / matriz QA V2, caso L: tampoco respondio la central de
     // respaldo (Adenda §2.3), asi que no respondio NINGUNA. Revision manual
     // obligatoria ('condicionado'), no 'fallido'. Una sola central caida sigue
-    // siendo 'fallido' reintentable, y una re-consulta (restaurar con estado)
-    // conserva su resultado. Si no se pudo registrar, cae al 'fallido' de abajo.
+    // siendo 'fallido' reintentable. Si no se pudo registrar, cae al 'fallido' de abajo.
     const sinCentrales =
       proveedorNoDisponible &&
       !!args.centralCaida &&
       !bloqueadoPorAutorizacion &&
-      !restaurar?.estado &&
       (await registrarRevisionSinCentrales({
         estudioId,
         expedienteId,
@@ -3259,7 +3198,7 @@ async function procesarEstudioAsync(args: {
     if (!sinCentrales) {
       const { data: marcados, error: failError } = await (supabase
         .from('estudios' as string) as ReturnType<typeof supabase.from>)
-        .update((restaurar?.estado ? restaurar : { ...restaurar, estado: 'fallido', observaciones }) as never)
+        .update({ ...restaurar, estado: 'fallido', observaciones } as never)
         .eq('id', estudioId)
         .eq('estado', 'en_proceso')
         .select('id');
@@ -3274,7 +3213,6 @@ async function procesarEstudioAsync(args: {
           estudioId,
           expedienteId,
           observaciones,
-          ...(restaurar?.estado ? { titulo: 'La consulta al otro buró falló: el estudio conserva su resultado' } : {}),
           detalleTecnico: observaciones === errorMsg ? undefined : errorMsg,
         });
       }
@@ -3283,9 +3221,8 @@ async function procesarEstudioAsync(args: {
     // Adenda de precios §2.2 / §2.5: la consulta no dio resultado, así que la
     // reserva del cupo se libera con su literal. Apellido que no coincide =
     // respuesta no utilizable (b); documento inexistente o mal formado = (a);
-    // sin autorización no se llegó a consultar (§2.5). Una re-consulta que
-    // falla conserva el resultado anterior: su cupo ya se consumió.
-    if (!restaurar?.estado && !referenciaNueva) {
+    // sin autorización no se llegó a consultar (§2.5).
+    if (!referenciaNueva) {
       await registrarDesenlaceConsulta({
         estudioId,
         expedienteId,
@@ -3342,8 +3279,7 @@ async function procesarEstudioAsync(args: {
  * RPC y el mismo hook que un resultado del buro: el orquestador pasa el
  * expediente a revision manual y avisa a los analistas (SLA §3.1). No consulta
  * nada (ningun cobro nuevo). Queda completado, condicionado y sin score, asi
- * que la re-consulta al otro buro de ejecutarEstudio sigue abierta para el
- * reintento manual. Nunca lanza: false = no se registro, y el llamador lo
+ * que lo resuelve el analista en la revisión manual. Nunca lanza: false = no se registro, y el llamador lo
  * marca 'fallido' como siempre (no queda en en_proceso).
  */
 async function registrarRevisionSinCentrales(a: {
@@ -4527,7 +4463,7 @@ async function registrarResultadoInline(
     const estData = estRow as { datos_formulario: Record<string, string> | null; expediente_id: string; tipo: string | null } | null;
 
     // No sincronizar para 'con_coarrendatario': el documento del formulario es
-    // del co-arrendatario y sobreescribiría la cédula del titular.
+    // del coarrendatario y sobreescribiría la cédula del titular.
     if (estData?.tipo !== 'con_coarrendatario' && estData?.expediente_id && estData?.datos_formulario) {
       const { data: expRow } = await (supabase
         .from('expedientes' as string) as ReturnType<typeof supabase.from>)
@@ -4586,7 +4522,7 @@ async function registrarResultadoInline(
  * manual (expediente 'condicionado'), un «aprobado» del buró —la re-consulta
  * al otro buró— no aprueba solo. Queda condicionado, con la nota para el
  * analista, que lo aprueba con «Aprobar estudio». Mismo guard que
- * registrarResultado; el co-arrendatario no cuenta (lo pondera la revisión).
+ * registrarResultado; el coarrendatario no cuenta (lo pondera la revisión).
  */
 async function retenerAprobadoEnRevisionManual(
   expedienteId: string,
@@ -5177,7 +5113,7 @@ export async function buscarEstudioVigentePorDocumento(
     .limit(25);
 
   if (allowed !== null) query = query.in('expediente_id', allowed);
-  // Con la cedula del co-arrendatario el titular leeria su resultado.
+  // Con la cedula del coarrendatario el titular leeria su resultado.
   if (userRol === 'solicitante') query = query.neq('tipo', 'con_coarrendatario');
 
   const { data, error } = await query as {

@@ -37,7 +37,7 @@ vi.mock('@/lib/tenantScope', () => ({
   resolveOrgCanonicalPerfilId: vi.fn(async (id: string) => id),
 }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarUsuario: vi.fn(), findPerfilIdByEmail: vi.fn() }));
-// El co-arrendatario lo decide la función compartida (P2/P6), probada aparte:
+// El coarrendatario lo decide la función compartida (P2/P6), probada aparte:
 // aquí sus lecturas no deben consumir las respuestas encoladas de `contratos`.
 vi.mock('@/modules/estudios/coarrendatario-vinculado', async (orig) => ({
   ...(await orig<typeof import('@/modules/estudios/coarrendatario-vinculado')>()),

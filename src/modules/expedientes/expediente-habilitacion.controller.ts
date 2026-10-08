@@ -6,8 +6,7 @@ import { autorizarExcepcionTope } from '@/modules/estudios/excepcion-tope.servic
 
 export async function habilitarEstudio(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
-  const { proveedor } = (req.body || {}) as { proveedor?: 'transunion' | 'datacredito' };
-  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol, proveedor);
+  const result = await service.habilitarEstudio(id, req.user!.id, req.user!.rol);
   sendSuccess(res, result);
 }
 
@@ -65,7 +64,6 @@ export async function iniciarEstudio(req: Request, res: Response) {
   const { id } = req.params as unknown as ExpedienteIdParams;
   const body = (req.body || {}) as {
     forma_pago: 'credito' | 'inmobiliaria' | 'prospecto';
-    proveedor?: 'transunion' | 'datacredito';
     notas?: string;
   };
   const result = await service.iniciarEstudio(id, req.user!.id, req.user!.rol, body, req.ip);

@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Soportes del condicionado: el estudio 'con_coarrendatario' (se crea cuando
 // el invitado acepta, despues del del titular) no puede pasar a ser el
 // "activo". Si pasaba, los soportes del titular dejaban de listarse y las
-// cargas nuevas quedaban colgadas del estudio del co-arrendatario.
+// cargas nuevas quedaban colgadas del estudio del coarrendatario.
 // ============================================================
 
 const { ops, queues, mockFrom } = vi.hoisted(() => {
@@ -68,7 +68,7 @@ const EXP = '550e8400-e29b-41d4-a716-446655440000';
 const TITULAR = '880e8400-e29b-41d4-a716-446655440000';
 const COA = '990e8400-e29b-41d4-a716-446655440000';
 
-// El del co-arrendatario es el mas reciente: es justo el caso que fallaba.
+// El del coarrendatario es el mas reciente: es justo el caso que fallaba.
 const estudios = [
   { id: TITULAR, created_at: '2026-09-01T10:00:00Z', tipo: 'individual' },
   { id: COA, created_at: '2026-09-05T10:00:00Z', tipo: 'con_coarrendatario' },
@@ -84,7 +84,7 @@ beforeEach(() => {
   mockNotificarResponsable.mockClear();
 });
 
-describe('soportes del condicionado con co-arrendatario', () => {
+describe('soportes del condicionado con coarrendatario', () => {
   it('el panel lista los soportes del estudio del titular', async () => {
     queues.set('expedientes', [
       { data: { id: EXP, estado: 'condicionado', creado_por: null, inmuebles: null, solicitantes: null, estudios }, error: null },
@@ -107,7 +107,7 @@ describe('soportes del condicionado con co-arrendatario', () => {
     expect(estudioListado()).toBe(TITULAR);
   });
 
-  it('solo con el estudio del co-arrendatario no hay evaluacion del titular', async () => {
+  it('solo con el estudio del coarrendatario no hay evaluacion del titular', async () => {
     queues.set('expedientes', [
       { data: { id: EXP, estado: 'condicionado', creado_por: null, inmuebles: null, solicitantes: null, estudios: [estudios[1]] }, error: null },
     ]);
@@ -117,11 +117,11 @@ describe('soportes del condicionado con co-arrendatario', () => {
 });
 
 // ============================================================
-// P18: el enlace del prospecto también sirve para invitar a su co-arrendatario
+// P18: el enlace del prospecto también sirve para invitar a su coarrendatario
 // ============================================================
 
-describe('enlace del prospecto — co-arrendatario (P18)', () => {
-  // Canal de inmobiliaria: el del propietario directo no admite co-arrendatario (Decisión 4).
+describe('enlace del prospecto — coarrendatario (P18)', () => {
+  // Canal de inmobiliaria: el del propietario directo no admite coarrendatario (Decisión 4).
   const expediente = (estado = 'condicionado', inmobiliaria_id: string | null = 'org-1') => ({
     data: {
       id: EXP,
@@ -179,7 +179,7 @@ describe('enlace del prospecto — co-arrendatario (P18)', () => {
     expect((await getContextoDocumentosPublico('tok')).coarrendatario).toMatchObject({ puede_invitar: false, vigente: false });
   });
 
-  // Decisión 2: el aprobado suma co-arrendatario antes del contrato (prima del 10 %).
+  // Decisión 2: el aprobado suma coarrendatario antes del contrato (prima del 10 %).
   it('aprobado y pagado, sin contrato: puede invitar, prellenado', async () => {
     queues.set('expedientes', [expediente('aprobado')]);
     queues.set('pagos', [{ data: { id: 'pago-1' }, error: null }]);

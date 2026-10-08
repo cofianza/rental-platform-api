@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ============================================================
 // Lo que el TITULAR (rol solicitante) recibe de los estudios de su expediente:
-// ni el estudio de su co-arrendatario (otra persona, Ley 1266) ni el crudo del
+// ni el estudio de su coarrendatario (otra persona, Ley 1266) ni el crudo del
 // buro de su propio estudio (trae el score que la Politica §11 le oculta).
 // Mismo mock de Supabase que coarrendatarios: builder encadenable + colas POR
 // TABLA y `ops` para afirmar el filtro de la consulta.
@@ -103,7 +103,7 @@ beforeEach(() => {
 });
 
 describe('estudios del expediente vistos por el titular', () => {
-  it('el estudio del co-arrendatario le da 404 por id', async () => {
+  it('el estudio del coarrendatario le da 404 por id', async () => {
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     await expect(getEstudioById('est-1', 'u-1', 'solicitante')).rejects.toMatchObject({ statusCode: 404 });
   });
@@ -117,13 +117,13 @@ describe('estudios del expediente vistos por el titular', () => {
     expect(e.datos_formulario).toEqual({ numero_documento: '123' });
   });
 
-  it('el gestor sigue viendo el estudio del co-arrendatario completo', async () => {
+  it('el gestor sigue viendo el estudio del coarrendatario completo', async () => {
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     const e = (await getEstudioById('est-1', 'u-1', 'operador_analista')) as Record<string, unknown>;
     expect(e.respuesta_proveedor).toEqual({ score: 780, obligaciones: [] });
   });
 
-  it('el listado del titular excluye el del co-arrendatario en la consulta (el total sale bien)', async () => {
+  it('el listado del titular excluye el del coarrendatario en la consulta (el total sale bien)', async () => {
     enqueue('expedientes', { data: { id: 'exp-1' }, error: null });
     await listEstudios('exp-1', { page: 1, limit: 10 } as never, 'u-1', 'solicitante');
     expect(ops).toContainEqual({ table: 'estudios', method: 'neq', args: ['tipo', 'con_coarrendatario'] });
@@ -257,7 +257,7 @@ describe('las demas rutas por id que el titular alcanza', () => {
   // El 404 del guard, no el de "no hay certificado".
   const OCULTO = { statusCode: 404, errorCode: 'ESTUDIO_NOT_FOUND' };
   // El id le llega por GET /expedientes/:id/coarrendatario y por la notificacion.
-  it('certificado (url y descarga) y tarifa del estudio del co-arrendatario: 404', async () => {
+  it('certificado (url y descarga) y tarifa del estudio del coarrendatario: 404', async () => {
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     await expect(getCertificadoViewUrl('est-1', 'u-1', 'solicitante')).rejects.toMatchObject(OCULTO);
 
@@ -305,7 +305,7 @@ describe('las demas rutas por id que el titular alcanza', () => {
     expect(r.url).toBe(`https://storage.test/${adjunto}`);
   });
 
-  it('el gestor si baja el certificado del co-arrendatario', async () => {
+  it('el gestor si baja el certificado del coarrendatario', async () => {
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     // Pasa el guard y llega a buscar el certificado (no hay: 404 de certificado).
     await expect(descargarCertificado('est-1', 'u-1', 'operador_analista')).rejects.toMatchObject({
@@ -313,7 +313,7 @@ describe('las demas rutas por id que el titular alcanza', () => {
     });
   });
 
-  it('/vigente con la cedula del co-arrendatario no le trae su estudio', async () => {
+  it('/vigente con la cedula del coarrendatario no le trae su estudio', async () => {
     vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(['exp-1']);
     vi.mocked(getCalibracion).mockResolvedValueOnce({ VIGENCIA_CRC_DIAS: 60 } as never);
     await buscarEstudioVigentePorDocumento('cc', '123', 'u-1', 'solicitante');
@@ -348,7 +348,7 @@ describe('ruta del §10 cuando el analista ya decidio el condicionado', () => {
   });
 });
 
-describe('CRC del estudio del co-arrendatario', () => {
+describe('CRC del estudio del coarrendatario', () => {
   it('no se emite, ni siquiera por un operador: saldria a nombre del titular con el resultado de otra persona', async () => {
     enqueue('estudios', { data: fila('con_coarrendatario'), error: null });
     await expect(generarCertificado('est-1', 'u-1', undefined, 'operador_analista')).rejects.toMatchObject({
@@ -375,7 +375,7 @@ describe('§5.2 solo promete reutilizar lo reutilizable', () => {
     datos_formulario: { tipo_documento: 'cc', numero_documento: '123' }, expedientes: { numero: 'EXP-9' },
   });
 
-  it('la evaluacion como co-arrendatario existe pero no se ofrece como reutilizable', async () => {
+  it('la evaluacion como coarrendatario existe pero no se ofrece como reutilizable', async () => {
     vi.mocked(resolveAllowedExpedienteIds).mockResolvedValueOnce(null);
     vi.mocked(getCalibracion).mockResolvedValueOnce({ VIGENCIA_CRC_DIAS: 60 } as never);
     enqueue('estudios', { data: [vigente('con_coarrendatario')], error: null });
@@ -383,7 +383,7 @@ describe('§5.2 solo promete reutilizar lo reutilizable', () => {
     enqueue('contratos', { data: [], error: null });
     const r = await buscarEstudioVigentePorDocumento('cc', '123', 'u-1', 'operador_analista');
     expect(r).toMatchObject({ id: 'est-v', expediente_numero: 'EXP-9', reutilizable: false });
-    expect(r?.motivo_no_reutilizable).toMatch(/co-arrendatario/);
+    expect(r?.motivo_no_reutilizable).toMatch(/coarrendatario/);
   });
 
   it('aprobado, sin contrato: reutilizable', async () => {

@@ -161,8 +161,8 @@ beforeEach(() => {
   mockCompletitud.mockResolvedValue({ completo: false, faltantes: [{ campo: 'x', etiqueta: 'X' }], rol: 'propietario' });
 });
 
-describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
-  it('con co-arrendatario (según la función compartida) → 409 antes de reservar o escribir', async () => {
+describe('P6 y P2: coarrendatario o co-titular en el contrato viejo', () => {
+  it('con coarrendatario (según la función compartida) → 409 antes de reservar o escribir', async () => {
     mockCoa.mockResolvedValue(COA);
     prepararGenerar();
     enqueue('expediente_coarrendatarios', {
@@ -179,9 +179,9 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     expect(escrituras()).toEqual([]);
   });
 
-  it('si no se puede leer el co-arrendatario → 503, sin generar ni abrir el sobre (no es «sin co-arrendatario»)', async () => {
+  it('si no se puede leer el coarrendatario → 503, sin generar ni abrir el sobre (no es «sin coarrendatario»)', async () => {
     // Lo que responde coarrendatarioVinculadoVerificado cuando la lectura falla.
-    mockCoa.mockRejectedValue(new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar si el estudio tiene co-arrendatario.'));
+    mockCoa.mockRejectedValue(new AppError(503, 'LECTURA_NO_VERIFICABLE', 'No pudimos verificar si el estudio tiene coarrendatario.'));
     prepararGenerar();
     expect(await error(generar())).toMatchObject({ statusCode: 503, errorCode: 'LECTURA_NO_VERIFICABLE' });
     expect(mockCompletitud).not.toHaveBeenCalled();
@@ -193,7 +193,7 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     prepararGenerar();
     const e = await error(generar({ modalidad_fianza: 'compartida', cotitular: { nombre: 'Lucía Díaz' } }));
     expect(e).toMatchObject({ statusCode: 409, errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
-    expect(e.message).toContain('co-titular');
+    expect(e.message).toContain('Este estudio tiene coarrendatario');
     expect(escrituras()).toEqual([]);
   });
 
@@ -248,7 +248,7 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     expect((insert?.args[0] as { datos_variables: { cotitular: unknown } }).datos_variables.cotitular).toEqual({});
   });
 
-  it('sin co-arrendatario para la función compartida, las columnas viejas del estudio no lo reviven', async () => {
+  it('sin coarrendatario para la función compartida, las columnas viejas del estudio no lo reviven', async () => {
     prepararGenerar({ coarrendatario_nombre: 'Rechazado Pérez' });
     // Pasa el guard y cae en el paso siguiente.
     expect((await error(generar())).errorCode).toBe('PERFIL_ARRENDADOR_INCOMPLETO');
@@ -258,7 +258,7 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
   describe('al abrir el sobre, por cualquier camino (POST /firma/solicitudes, tras verificar la identidad)', () => {
     const vivo = { token_expiracion: new Date(Date.now() + 86_400_000).toISOString() };
 
-    it('con co-arrendatario o con el co-titular impreso → 409', async () => {
+    it('con coarrendatario o con el co-titular impreso → 409', async () => {
       mockCoa.mockResolvedValueOnce(COA);
       await expect(assertPuedeAbrirSobre(CTO, EXP, {})).rejects.toMatchObject({ errorCode: 'CONTRATO_REQUIERE_COARRENDATARIO' });
       await expect(assertPuedeAbrirSobre(CTO, EXP, { cotitular: { nombre_completo: 'Lucía Díaz' } })).rejects.toMatchObject({
@@ -285,7 +285,7 @@ describe('P6 y P2: co-arrendatario o co-titular en el contrato viejo', () => {
     });
   });
 
-  it('enviar a firma: con co-arrendatario o con el co-titular impreso → 409 sin tocar el contrato', async () => {
+  it('enviar a firma: con coarrendatario o con el co-titular impreso → 409 sin tocar el contrato', async () => {
     const borrador = (datos_variables: Record<string, unknown>) => ({
       data: { id: CTO, estado: 'borrador', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables },
       error: null,
@@ -645,7 +645,7 @@ describe('Enviar a firma: si falla, solo revierte lo que sigue en «pendiente_fi
 });
 
 describe('Enviar a firma: una firma completa sin aviso se descubre antes de las guardas (revisión 3, M1)', () => {
-  it('con co-arrendatario (P6), si Auco dice que ya firmaron todos → 409 CONTRATO_YA_FIRMADO, sin escribir', async () => {
+  it('con coarrendatario (P6), si Auco dice que ya firmaron todos → 409 CONTRATO_YA_FIRMADO, sin escribir', async () => {
     mockCoa.mockResolvedValue(COA);
     enqueue('contratos', {
       data: { id: CTO, estado: 'pendiente_firma', expediente_id: EXP, storage_key: 'k.pdf', destinacion: null, datos_variables: {} },

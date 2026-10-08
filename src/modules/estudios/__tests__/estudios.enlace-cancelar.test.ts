@@ -128,7 +128,7 @@ describe('cancelar la evaluacion', () => {
     expect(mockCancelarPagos).toHaveBeenCalledWith('exp-1', 'Evaluación cancelada', ['estudio']);
   });
 
-  it('si el co-arrendatario sigue vivo en el expediente, el pago compartido no se toca', async () => {
+  it('si el coarrendatario sigue vivo en el expediente, el pago compartido no se toca', async () => {
     enqueue('estudios', { data: fila('pago_pendiente'), error: null }, { data: [{ id: 'est-coa' }], error: null }, { data: fila('cancelado'), error: null });
     enqueue('pagos', { data: [], error: null });
     await cancelEstudio('est-1', 'u-1', undefined, 'administrador');

@@ -23,13 +23,26 @@ export const enviarEnlaceAutorizacionSchema = z
   .object({
     email: z.string().email('Email inválido').optional(),
     telefono: z.string().max(20).optional(),
-    // Documento corregido (Reintentar consulta): la firma nueva congela el de
-    // la ficha, así que se corrige ahí antes de emitir el enlace.
-    // Mismos valores que el body de /estudios/:id/ejecutar (Reintentar consulta).
+    // Documento que FALTA en la ficha (H43). Con documento, el servicio
+    // responde 409 y se corrige por PATCH .../documento (BLQ §3).
     tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte', 'ppt', 'pep']).optional(),
     numero_documento: z.string().trim().min(5).max(20).optional(),
   })
   .optional();
+
+// ============================================================
+// PATCH /expedientes/:expedienteId/autorizacion-riesgo/documento (BLQ §3)
+// ============================================================
+
+// Corrección ciega: solo tipo y número (§3.5), con la fuente contra la que se
+// verificó (§3.4). Mismos tipos que el enlace.
+export const corregirDocumentoSchema = z.object({
+  tipo_documento: z.enum(['cc', 'nit', 'ce', 'ti', 'pasaporte', 'ppt', 'pep'], { message: 'Elija el tipo de documento' }),
+  numero_documento: z.string().trim().min(5, 'Número de documento inválido').max(20, 'Número de documento inválido'),
+  fuente_verificacion: z.enum(['documento_fisico', 'copia_documento', 'confirmacion_telefonica'], {
+    message: 'Indique contra qué verificó el documento',
+  }),
+});
 
 // ============================================================
 // POST /public/autorizar/:token/firmar
@@ -103,7 +116,7 @@ export const firmarSchema = z.object({
 //
 // TOLERANCIA POR CAMPO (`.catch(undefined)`): los tres bloques del §8 viajan en
 // UN solo POST y `validate` rechaza el body ENTERO ante cualquier issue. Sin
-// esto, un correo del co-arrendatario tecleado en un celular sin el TLD
+// esto, un correo del coarrendatario tecleado en un celular sin el TLD
 // ("maria@gmail") o un par de ceros de mas en el ingreso tiraban a la basura
 // tambien la confirmacion de identidad, la situacion laboral y el resto — todo
 // el PASO 5 perdido por el campo opcional de un tercero. Un campo malo se cae
@@ -117,7 +130,7 @@ export const perfilProspectoSchema = z.object({
   donde_labora: z.string().max(200).optional().catch(undefined),
   ingreso_declarado_cop: z.coerce.number().nonnegative().max(1_000_000_000).optional().catch(undefined),
   // §8.3 — INTENCION, no invitacion. No se piden tipo ni numero de documento
-  // del co-arrendatario: es el dato de un tercero tecleado de memoria por un
+  // del coarrendatario: es el dato de un tercero tecleado de memoria por un
   // cuarto en un celular (calidad pesima) y es friccion justo donde la gente
   // abandona. El gestor los completa en el formulario que ya existe.
   presentacion: z.enum(['solo', 'acompanado']).optional(),
@@ -197,12 +210,12 @@ export const revocarSchema = z.object({
     .min(10, 'El soporte debe tener al menos 10 caracteres')
     .max(1000, 'El soporte no debe exceder 1000 caracteres'),
   // Sujeto a revocar. Sin este campo se revoca la del TITULAR (comportamiento
-  // historico). Con el, la del co-arrendatario invitado indicado: desde
-  // 2026-09-03 el co-arrendatario tiene su propia autorizacion habeas data y
+  // historico). Con el, la del coarrendatario invitado indicado: desde
+  // 2026-09-03 el coarrendatario tiene su propia autorizacion habeas data y
   // sin esta via no tendria forma de ejercer su derecho de revocacion
   // (Ley 1581 de 2012, art. 8), porque la fila del titular y la suya comparten
   // expediente_id.
-  coarrendatario_id: z.uuid({ error: 'ID de co-arrendatario inválido' }).optional(),
+  coarrendatario_id: z.uuid({ error: 'ID de coarrendatario inválido' }).optional(),
 });
 
 // ============================================================
@@ -227,3 +240,4 @@ export type PerfilProspectoInput = z.infer<typeof perfilProspectoSchema>;
 export type ReportarIdentidadInput = z.infer<typeof reportarIdentidadSchema>;
 export type BiometriaInput = z.infer<typeof biometriaSchema>;
 export type ConfirmarIdentidadInput = z.infer<typeof confirmarIdentidadSchema>;
+export type CorregirDocumentoBody = z.infer<typeof corregirDocumentoSchema>;

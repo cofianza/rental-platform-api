@@ -179,6 +179,39 @@ export const WHATSAPP_TEMPLATES = {
       'La solicitud vence en {{3}} días.',
   },
   /**
+   * v3 (CORR §6, pendiente de aprobación en Meta): «coarrendatario» sin guion y
+   * sin «ni codeudor»; dice que firma como arrendatario solidario. Misma
+   * estructura que la v2: encabezado, pie y botón «Ver solicitud» con sufijo
+   * URL = token. Se envía solo con WHATSAPP_COARRENDATARIO_V3=true.
+   */
+  COARRENDATARIO_INVITACION_V3: {
+    id: 'cofianza_coarrendatario_invitacion_v3',
+    language: 'es_CO',
+    // {{1}} nombre del invitado, {{2}} nombre del titular, {{3}} días de vigencia
+    description:
+      'Buen día, *{{1}}*. {{2}} lo registró como coarrendatario en su solicitud de arriendo en curso.\n\n' +
+      'Para continuar se requiere su autorización para consultar su información en centrales de riesgo. ' +
+      'Como coarrendatario, su perfil se evalúa junto con el del arrendatario y, si el estudio se aprueba, ' +
+      'usted firma el contrato como arrendatario, de forma solidaria.\n\n' +
+      'La solicitud vence en {{3}} días.',
+  },
+  /**
+   * BLQ §2.4: aviso al asesor de que el estudio quedó bloqueado por documento
+   * (el prospecto agotó los intentos). Único evento con WhatsApp al asesor
+   * (BLQ §2.5). Pendiente de aprobación en Meta: sale solo con la calibración
+   * ALERTA_BLOQUEO_WHATSAPP=1 (0 por defecto).
+   * Encabezado y pie estándar; botón «Ver estudio» con sufijo URL = id del expediente.
+   */
+  ESTUDIO_BLOQUEADO_DOCUMENTO: {
+    id: 'cofianza_estudio_bloqueado_documento_v1',
+    language: 'es_CO',
+    // {{1}} asesor, {{2}} prospecto, {{3}} número del estudio
+    description:
+      'Buen día, {{1}}. El estudio de {{2}} (n.º {{3}}) no pudo continuar: el número de documento no coincide con el registrado.\n\n' +
+      'Le solicitamos verificar el documento del prospecto, corregir el dato si es necesario y reenviar el enlace desde su oficina virtual.\n\n' +
+      'Este evento no consume cupos de su paquete ni genera cobros adicionales.',
+  },
+  /**
    * Código OTP de la autorización (categoría AUTHENTICATION en Meta). La validación
    * del código constituye la firma electrónica de la autorización (Ley 527/1999).
    */

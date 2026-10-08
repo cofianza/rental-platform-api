@@ -409,6 +409,25 @@ describe('precio del estudio con IVA (Adenda de precios)', () => {
     const insert = ops.find((o) => o.table === 'pagos' && o.method === 'insert');
     expect(insert?.args[0]).toMatchObject({ monto: 95_200, base_cop: 80_000, iva_cop: 15_200, tarifa_iva: 19 });
     expect(mockCreateLink).toHaveBeenCalledWith(expect.objectContaining({ amount: 95_200 }));
+    // CORR §5: el concepto de Mercado Pago dice que el total lleva el IVA.
+    expect(mockCreateLink).toHaveBeenCalledWith(expect.objectContaining({ concept: expect.stringMatching(/\(IVA incluido\)$/) }));
+  });
+
+  it('CORR §5.3: el WhatsApp del enlace de pago lleva el total con «(IVA incluido)»', async () => {
+    enqueue('pagos', {
+      data: [{ id: 'p1', estado: 'pendiente', metodo: 'pasarela', monto: 95_200, tarifa_iva: 19, email_pagador: 'prospecto@x.co', creado_por: 'admin', payment_link_url: 'https://mp.test/1' }],
+      error: null,
+    });
+    enqueue('expedientes', { data: { id: EXP, numero: 'EXP-1', estado: 'en_revision', inmueble_id: null }, error: null });
+    enqueue('expedientes', { data: { solicitante_id: 's1', solicitantes: { nombre: 'Pedro', telefono: '+573001112233' } }, error: null });
+
+    await reenviarLink(EXP, 'admin', undefined, undefined, 'administrador');
+
+    await vi.waitFor(() => expect(enviarTemplate).toHaveBeenCalled());
+    expect(vi.mocked(enviarTemplate).mock.calls[0][0]).toMatchObject({
+      template: 'PAGO_ESTUDIO_LINK',
+      variables: ['Pedro', '95.200 (IVA incluido)', 'https://mp.test/1'],
+    });
   });
 
   it('§1.4: la inmobiliaria no paga un estudio suelto por la pasarela: 403 sin tocar pagos', async () => {

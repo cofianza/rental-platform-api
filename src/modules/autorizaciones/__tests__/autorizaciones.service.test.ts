@@ -83,8 +83,9 @@ vi.mock('@/lib/auditLog', () => ({
     AUTORIZACION_FIRMADA: 'autorizacion_firmada',
     AUTORIZACION_REVOCADA: 'autorizacion_revocada',
     AUTORIZACION_BIOMETRIA: 'autorizacion_biometria',
+    SOLICITANTE_UPDATED: 'solicitante_updated',
   },
-  AUDIT_ENTITIES: { AUTORIZACION: 'autorizacion' },
+  AUDIT_ENTITIES: { AUTORIZACION: 'autorizacion', SOLICITANTE: 'solicitante' },
 }));
 vi.mock('@/config', () => ({ env: mockEnv }));
 
@@ -107,7 +108,20 @@ vi.mock('@/lib/tenantScope', () => ({
   assertExpedienteAccess: (...args: unknown[]) => mockAssertAccess(...args),
   perfilEsDuenoDeInmueble: vi.fn(async () => true),
   resolveInmobiliariaIdForPerfil: (...args: unknown[]) => mockOrgDelPerfil(...args),
+  resolveAllowedExpedienteIds: (...args: unknown[]) => mockBlq.allowed(...args),
 }));
+// BLQ: cierre por límite de correcciones, Gerencia General y WhatsApp a titulares.
+const mockBlq = vi.hoisted(() => ({
+  allowed: vi.fn(async (..._a: unknown[]): Promise<string[] | null> => null),
+  executeTransition: vi.fn(async (..._a: unknown[]) => ({})),
+  gerenciaIds: vi.fn(async () => ['gg-1']),
+  enviarTemplate: vi.fn(async (..._a: unknown[]) => 'enviado'),
+}));
+vi.mock('@/modules/expedientes/expediente-workflow.service', () => ({
+  executeTransition: (...a: unknown[]) => mockBlq.executeTransition(...a),
+}));
+vi.mock('@/modules/beneficios/beneficios.service', () => ({ gerenciaGeneralIds: () => mockBlq.gerenciaIds() }));
+vi.mock('@/modules/whatsapp', () => ({ enviarTemplate: (...a: unknown[]) => mockBlq.enviarTemplate(...a) }));
 vi.mock('@/modules/estudios/pago.guard', async (importOriginal) => ({
   // errorNoAfianzableSegunCobro, real: lee la tabla `pagos` de la cola.
   ...(await importOriginal<typeof import('@/modules/estudios/pago.guard')>()),
@@ -129,8 +143,18 @@ vi.mock('@/modules/pago-estudio/pago-estudio.service', () => ({
   montoProspecto: (m: number, t?: number | null) => `$${m.toLocaleString('es-CO')}${t && t > 0 ? ' (IVA incluido)' : ''}`,
 }));
 // Flujo §14 / Adenda §9: el enlace vive DIAS_EXPIRACION_ESTUDIO dias.
+// BLQ §9: límites del bloqueo por documento (ALERTA_BLOQUEO_WHATSAPP se cambia por test).
+const mockCal = vi.hoisted(() => ({
+  DIAS_EXPIRACION_ESTUDIO: 15,
+  UMBRAL_DIFERENCIA_INGRESO: 50,
+  UMBRAL_SIMILITUD_BIOMETRICA: 80,
+  MAX_INTENTOS_DOCUMENTO: 3,
+  MAX_CORRECCIONES_DOCUMENTO: 2,
+  MAX_REENVIOS_ENLACE: 3,
+  ALERTA_BLOQUEO_WHATSAPP: 0,
+}));
 vi.mock('@/lib/calibracion', () => ({
-  getCalibracion: vi.fn(async () => ({ DIAS_EXPIRACION_ESTUDIO: 15, UMBRAL_DIFERENCIA_INGRESO: 50, UMBRAL_SIMILITUD_BIOMETRICA: 80 })),
+  getCalibracion: vi.fn(async () => mockCal),
 }));
 
 // Import AFTER mocks
@@ -149,7 +173,13 @@ import {
   verificarBiometriaProspecto,
   omitirBiometriaProspecto,
   guardarPerfilProspecto,
+  corregirDocumentoProspecto,
+  getTrazaAutorizacion,
+  listBloqueosPendientes,
 } from '../autorizaciones.service';
+import { derivarEstadoBloqueo } from '../bloqueo-documento';
+import { logAudit } from '@/lib/auditLog';
+import { logger } from '@/lib/logger';
 import { TEXTO_LEGAL, TEXTO_LEGAL_BIOMETRIA, VERSION_TERMINOS, VERSION_TERMINOS_BIOMETRIA } from '../autorizaciones.texto';
 import { firmarSchema } from '../autorizaciones.schema';
 // Precargados a proposito: el servicio los importa en segundo plano y, con dos
@@ -157,6 +187,9 @@ import { firmarSchema } from '../autorizaciones.schema';
 // el modulo real (mismo limite que en expediente-workflow.service.test).
 import '@/modules/notificaciones/notificaciones.service';
 import '@/modules/users/users.service';
+import '@/modules/expedientes/expediente-workflow.service';
+import '@/modules/beneficios/beneficios.service';
+import '@/modules/whatsapp';
 
 // ============================================================
 // Fixtures
@@ -224,6 +257,7 @@ describe('autorizaciones.service', () => {
     ops.length = 0;
     vi.clearAllMocks();
     mockEnv.AUCO_BIOMETRIA_ENABLED = false;
+    mockCal.ALERTA_BLOQUEO_WHATSAPP = 0;
     mockEnviarMensaje.mockResolvedValue({ estado: 'enviado' });
     mockEstudioYaCobrado.mockResolvedValue(false);
     mockSendOtpEmail.mockResolvedValue(undefined);
@@ -243,7 +277,7 @@ describe('autorizaciones.service', () => {
       expect(mockAssertAccess).toHaveBeenCalledWith(EXPEDIENTE_ID, USER_ID, 'administrador');
       expect(mockFrom).toHaveBeenCalledWith('expedientes');
       expect(mockFrom).toHaveBeenCalledWith('autorizaciones_habeas_data');
-      // Solo la fila del TITULAR: la del co-arrendatario comparte expediente_id.
+      // Solo la fila del TITULAR: la del coarrendatario comparte expediente_id.
       expect(opsDe('autorizaciones_habeas_data', 'is')[0].args).toEqual(['coarrendatario_id', null]);
     });
 
@@ -305,6 +339,7 @@ describe('autorizaciones.service', () => {
       enqueue('expedientes', { data: expedienteConSolicitante });
       enqueue(
         'autorizaciones_habeas_data',
+        { count: 0 },                        // BLQ §4: enlaces previos (primer envío)
         { data: null },                      // ¿ya hay una firmada vigente? no
         { error: null },                     // expirar pendientes anteriores
         { data: { id: AUTORIZACION_ID } },   // insert
@@ -332,14 +367,14 @@ describe('autorizaciones.service', () => {
       expect(expira).toBeLessThanOrEqual(Date.now() + 15 * 24 * 60 * 60 * 1000 + 1000);
       expect(insert).toMatchObject({ estado: 'pendiente', texto_autorizado: TEXTO_LEGAL, version_terminos: VERSION_TERMINOS });
       expect(String(insert.token)).toHaveLength(64);
-      // Las pendientes anteriores DEL TITULAR se expiran (no las del co-arrendatario).
+      // Las pendientes anteriores DEL TITULAR se expiran (no las del coarrendatario).
       expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
       expect(opsDe('autorizaciones_habeas_data', 'is').some((o) => o.args[0] === 'coarrendatario_id')).toBe(true);
     });
 
     it('manda tambien el enlace por WhatsApp cuando hay celular', async () => {
       enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, telefono: '+573001112233' } } });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
 
@@ -360,7 +395,7 @@ describe('autorizaciones.service', () => {
           inmuebles: { ...expedienteConSolicitante.inmuebles, inmobiliaria_id: 'org-1' },
         },
       });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
       enqueue('inmobiliarias', { data: null, error: { message: 'timeout' } });
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
@@ -378,7 +413,7 @@ describe('autorizaciones.service', () => {
           inmuebles: { ...expedienteConSolicitante.inmuebles, inmobiliaria_id: 'org-1' },
         },
       });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
       enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Norte' } });
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
@@ -392,7 +427,7 @@ describe('autorizaciones.service', () => {
       enqueue('expedientes', {
         data: { ...expedienteConSolicitante, inmuebles: { ...expedienteConSolicitante.inmuebles, inmobiliaria_id: 'org-1' } },
       });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
       enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Norte' } });
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
@@ -413,7 +448,7 @@ describe('autorizaciones.service', () => {
           inmuebles: { ...expedienteConSolicitante.inmuebles, propietario_id: 'titular-1', inmobiliaria_id: null },
         },
       });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
       enqueue('inmobiliarias', { data: { nombre: 'Inmobiliaria Sur' } });
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
@@ -430,7 +465,7 @@ describe('autorizaciones.service', () => {
       enqueue('expedientes', {
         data: { ...expedienteConSolicitante, inmuebles: { ...expedienteConSolicitante.inmuebles, propietario_id: 'prop-1' } },
       });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
 
@@ -442,7 +477,7 @@ describe('autorizaciones.service', () => {
     it('con la biometria encendida presenta y congela el texto 3.0-biometria', async () => {
       mockEnv.AUCO_BIOMETRIA_ENABLED = true;
       enqueue('expedientes', { data: expedienteConSolicitante });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
 
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
 
@@ -453,7 +488,7 @@ describe('autorizaciones.service', () => {
 
     it('no re-crea el enlace si ya hay una firma vigente (AUTORIZACION_YA_FIRMADA)', async () => {
       enqueue('expedientes', { data: expedienteConSolicitante });
-      enqueue('autorizaciones_habeas_data', { data: { id: 'firmada-uuid' } });
+      enqueue('autorizaciones_habeas_data', { count: 1 }, { data: { id: 'firmada-uuid' } });
 
       await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID)).rejects.toMatchObject({
         statusCode: 400,
@@ -465,7 +500,7 @@ describe('autorizaciones.service', () => {
 
     it('firma vigente con el MISMO documento de la ficha: sigue sin re-crear el enlace', async () => {
       enqueue('expedientes', { data: expedienteConSolicitante });
-      enqueue('autorizaciones_habeas_data', {
+      enqueue('autorizaciones_habeas_data', { count: 1 }, {
         data: { id: 'firmada-uuid', numero_documento_aceptante: '123.456.789', tipo_documento_aceptante: 'cc' },
       });
 
@@ -474,30 +509,40 @@ describe('autorizaciones.service', () => {
       });
     });
 
-    it('cédula mal digitada y corregida: corrige la ficha y emite un enlace nuevo sin tocar la firma vieja', async () => {
-      enqueue('expedientes', { data: expedienteConSolicitante });
+    it('cédula corregida (por «Corregir documento») con una firma vieja del documento errado: emite un enlace nuevo sin tocar la firma', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '923456789' } } });
       enqueue(
         'autorizaciones_habeas_data',
+        { count: 1 },
         // Firmó con la cédula errada que tenía la ficha.
         { data: { id: 'firmada-uuid', numero_documento_aceptante: '123456789', tipo_documento_aceptante: 'cc' } },
-        { error: null },
+        { data: [] },
         { data: { id: AUTORIZACION_ID } },
       );
 
-      const result = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, {
-        tipo_documento: 'cc',
-        numero_documento: '923456789',
-      });
+      const result = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
 
       expect(result).toMatchObject({ id: AUTORIZACION_ID, estado: 'pendiente' });
-      expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '923456789' });
       // La firma vieja no se toca (solo se expiran las pendientes).
       expect(opsDe('autorizaciones_habeas_data', 'update').map((o) => o.args[0])).toEqual([{ estado: 'expirado' }]);
+      // Es un reenvío: queda en la traza.
+      expect(opsDe('autorizacion_envios', 'insert')[0].args[0]).toMatchObject({ autorizacion_id: AUTORIZACION_ID, es_reenvio: true });
     });
 
-    it('cédula corregida que ya tiene otro solicitante de la inmobiliaria: 409 que dice la causa, sin emitir', async () => {
-      // Copia: el servicio escribe el documento corregido sobre la fila leída.
-      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '111' } } });
+    it('BLQ §3.5: la ficha ya tiene documento y el enlace trae otro → 409 hacia «Corregir documento», sin tocar nada', async () => {
+      enqueue('expedientes', { data: expedienteConSolicitante });
+      enqueue('autorizaciones_habeas_data', { count: 0 });
+      const err = await enviarEnlaceAutorizacion(
+        EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '923456789' }, 'inmobiliaria',
+      ).catch((e) => e);
+      expect(err).toMatchObject({ statusCode: 409, errorCode: 'DOCUMENTO_REQUIERE_CORRECCION' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+    });
+
+    it('documento que faltaba y ya lo tiene otro solicitante de la inmobiliaria: 409 que dice la causa, sin emitir', async () => {
+      enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
+      enqueue('autorizaciones_habeas_data', { count: 0 });
       enqueue('solicitantes', { error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_solicitantes_documento_por_agencia"' } });
 
       const err = await enviarEnlaceAutorizacion(
@@ -509,12 +554,65 @@ describe('autorizaciones.service', () => {
       expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
     });
 
+    describe('BLQ §4: reenvíos', () => {
+      it('la inmobiliaria recibe 409 en el cuarto reenvío; nada se escribe', async () => {
+        enqueue('expedientes', { data: expedienteConSolicitante });
+        enqueue('autorizaciones_habeas_data', { count: 4 }, { data: { id: 'aut-4', estado: 'expirado', created_at: '2026-10-01T00:00:00Z' } });
+        const err = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { email: 'otro@correo.co' }, 'inmobiliaria').catch((e) => e);
+        expect(err).toMatchObject({ statusCode: 409, errorCode: 'MAX_REENVIOS_ENLACE' });
+        expect(err.message).toContain('Comuníquese con Cofianza');
+        expect(opsDe('solicitantes', 'update')).toEqual([]);
+        expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+      });
+
+      it('el tercer reenvío de la inmobiliaria todavía sale', async () => {
+        enqueue('expedientes', { data: expedienteConSolicitante });
+        enqueue('autorizaciones_habeas_data', { count: 3 }, { data: { id: 'aut-3', estado: 'expirado', created_at: '2026-10-01T00:00:00Z' } }, { data: null }, { data: [{ id: 'aut-3' }] }, { data: { id: AUTORIZACION_ID } });
+        await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, undefined, 'inmobiliaria')).resolves.toMatchObject({ id: AUTORIZACION_ID });
+      });
+
+      it('el administrador queda exento del límite, con traza', async () => {
+        const { logAudit } = await import('@/lib/auditLog');
+        enqueue('expedientes', { data: expedienteConSolicitante });
+        enqueue('autorizaciones_habeas_data', { count: 9 }, { data: null }, { data: [{ id: 'aut-9' }] }, { data: { id: AUTORIZACION_ID } });
+        await expect(enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, undefined, 'administrador')).resolves.toMatchObject({ id: AUTORIZACION_ID });
+        expect(vi.mocked(logAudit).mock.calls.at(-1)![0].detalle).toMatchObject({ es_reenvio: true, reenvio_numero: 9 });
+        // El enlace anterior queda «reemplazado» (§4.2).
+        const cierre = opsDe('autorizacion_envios', 'update')[0];
+        expect(cierre.args[0]).toMatchObject({ motivo_cierre: 'reemplazado' });
+        expect(opsDe('autorizacion_envios', 'in')[0].args).toEqual(['autorizacion_id', ['aut-9']]);
+      });
+
+      it('después de «no soy yo» la inmobiliaria recibe 409 «Comuníquese con Cofianza»', async () => {
+        enqueue('expedientes', { data: expedienteConSolicitante });
+        enqueue('autorizaciones_habeas_data', { count: 1 }, { data: { id: 'aut-1', estado: 'expirado', created_at: '2026-10-01T00:00:00Z' } });
+        enqueue('autorizacion_envios', { data: { motivo_cierre: 'no_soy_yo' } });
+        const err = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, undefined, 'propietario').catch((e) => e);
+        expect(err).toMatchObject({ statusCode: 409, errorCode: 'IDENTIDAD_RECHAZADA' });
+        expect(err.message).toContain('Comuníquese con Cofianza');
+        expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+      });
+
+      it('guarda el resultado por canal con el destino enmascarado', async () => {
+        enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, telefono: '+573001112233' } } });
+        enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { data: [] }, { data: { id: AUTORIZACION_ID } });
+        await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID);
+        const fila = opsDe('autorizacion_envios', 'insert')[0].args[0] as { es_reenvio: boolean; envios: unknown[] };
+        expect(fila.es_reenvio).toBe(false);
+        expect(fila.envios).toEqual([
+          { canal: 'correo', destino_enmascarado: 'ju***@test.com', estado: 'enviado' },
+          { canal: 'whatsapp', destino_enmascarado: '••• ••33', estado: 'enviado' },
+        ]);
+        expect(JSON.stringify(fila)).not.toContain('juan@test.com');
+      });
+    });
+
     // Con «cada miembro ve solo lo suyo»: el estudio NO asignado de un compañero.
     // Antes bastaba ser de la organización (perfilEsDuenoDeInmueble en true).
     it('el asesor restringido no envía la autorización de un estudio de un compañero: 403 sin crear nada', async () => {
       mockAssertAccess.mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404, errorCode: 'EXPEDIENTE_NOT_FOUND' }));
       enqueue('expedientes', { data: expedienteConSolicitante });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
 
       await expect(
         enviarEnlaceAutorizacion(EXPEDIENTE_ID, 'asesor', undefined, { email: 'desvio@correo.co' }, 'inmobiliaria'),
@@ -552,7 +650,7 @@ describe('autorizaciones.service', () => {
 
     it('H43: el gestor escribe el documento que faltaba y el enlace sale', async () => {
       enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '' } } });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
       const result = await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' });
       expect(result).toMatchObject({ id: AUTORIZACION_ID, estado: 'pendiente' });
       expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '123456789' });
@@ -604,7 +702,7 @@ describe('autorizaciones.service', () => {
 
     it('H43: ficha de agencia con el documento de una cuenta: no aplica la regla y el enlace sale', async () => {
       enqueue('expedientes', { data: { ...expedienteConSolicitante, solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '', creado_por: 'asesor', inmobiliaria_id: 'inmo-1' } } });
-      enqueue('autorizaciones_habeas_data', { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
+      enqueue('autorizaciones_habeas_data', { count: 0 }, { data: null }, { error: null }, { data: { id: AUTORIZACION_ID } });
       await enviarEnlaceAutorizacion(EXPEDIENTE_ID, USER_ID, undefined, { tipo_documento: 'cc', numero_documento: '123456789' });
       expect(opsDe('perfiles', 'select')).toEqual([]);
       expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '123456789' });
@@ -926,12 +1024,24 @@ describe('autorizaciones.service', () => {
       expect(mockFrom).not.toHaveBeenCalledWith('autorizacion_otps');
     });
 
-    it('el documento escrito NO coincide: no firma, detiene el enlace y avisa como el reporte (§8.1/§12)', async () => {
+    it('firma con el documento correcto pero con los fallidos ya agotados (ráfaga): no firma', async () => {
       enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID } });
+      enqueue('autorizacion_intentos_documento', { count: 3 });
+      await expect(
+        firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', numero_documento: paraFirmar.solicitantes.numero_documento }, '1.1.1.1', 'UA'),
+      ).rejects.toMatchObject({ statusCode: 400, errorCode: 'DOCUMENTO_NO_COINCIDE' });
+      expect(mockOnHabeas).not.toHaveBeenCalled();
+    });
+
+    it('el documento escrito NO coincide y agota los intentos: no firma, detiene el enlace y alerta (§8.1/§12, BLQ §1)', async () => {
+      enqueue('autorizaciones_habeas_data', { data: { ...paraFirmar, expediente_id: EXPEDIENTE_ID } });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 3 });
 
       await expect(
         firmarAutorizacion(TOKEN, { metodo_firma: 'casilla', numero_documento: '123456780' }, '1.1.1.1', 'UA'),
-      ).rejects.toMatchObject({ statusCode: 400, errorCode: 'DOCUMENTO_NO_COINCIDE' });
+      ).rejects.toMatchObject({ statusCode: 400, errorCode: 'DOCUMENTO_NO_COINCIDE', details: { intentos_restantes: 0 } });
+      // El intento queda con origen 'firma'.
+      expect(opsDe('autorizacion_intentos_documento', 'insert')[0].args[0]).toMatchObject({ origen: 'firma', coincide: false });
 
       // Ni firma ni orquestador: la unica escritura sobre la autorizacion es expirarla.
       const updates = opsDe('autorizaciones_habeas_data', 'update');
@@ -947,7 +1057,7 @@ describe('autorizaciones.service', () => {
       const avisoReporte = () =>
         (mockNotificarResponsable.mock.calls as unknown as Array<[{ tipo: string; mensaje: string }]>)
           .map((c) => c[0])
-          .find((a) => a.tipo === 'autorizacion.identidad_reportada');
+          .find((a) => a.tipo === 'autorizacion.bloqueo_documento');
       await vi.waitFor(() => expect(avisoReporte()).toBeDefined());
       const aviso = avisoReporte()!;
       expect(aviso.mensaje).toContain('no coincide con el registrado');
@@ -1157,6 +1267,7 @@ describe('autorizaciones.service', () => {
 
     it('coincide (normalizando puntos y espacios): confirma la identidad y no revela nada', async () => {
       enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 0 });
       const r = await confirmarIdentidadProspecto(TOKEN, { numero_documento: ' 1023 456789' });
       expect(r).toEqual({ coincide: true });
       expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({
@@ -1168,10 +1279,13 @@ describe('autorizaciones.service', () => {
       expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
     });
 
-    it('no coincide: mismo camino que "los datos estan mal" — detiene el enlace y avisa al gestor', async () => {
+    it('no coincide y agota los intentos: mismo camino que "los datos estan mal" — detiene el enlace y avisa al gestor', async () => {
       enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 3 });
       const r = await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456788' }, '1.1.1.1', 'UA');
-      expect(r).toEqual({ coincide: false });
+      expect(r).toEqual({ coincide: false, intentos_restantes: 0 });
+      // BLQ §7: el enlace se cierra por intentos.
+      expect(opsDe('autorizacion_envios', 'update')[0].args[0]).toMatchObject({ motivo_cierre: 'intentos' });
       expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({ identidad_reporte: 'datos_incorrectos' });
       expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
       await vi.waitFor(() => expect(mockNotificarResponsable).toHaveBeenCalled());
@@ -1360,7 +1474,7 @@ describe('autorizaciones.service', () => {
       expect(opsDe('autorizaciones_habeas_data', 'is').some((o) => o.args[0] === 'coarrendatario_id' && o.args[1] === null)).toBe(true);
     });
 
-    it('con coarrendatario_id revoca la del co-arrendatario, no la del titular', async () => {
+    it('con coarrendatario_id revoca la del coarrendatario, no la del titular', async () => {
       enqueue('autorizaciones_habeas_data', { data: { id: 'coa-auth', estado: 'autorizado' } }, { error: null });
 
       await revocarAutorizacion(EXPEDIENTE_ID, { ...motivo, coarrendatario_id: 'coa-1' }, USER_ID);
@@ -1376,6 +1490,378 @@ describe('autorizaciones.service', () => {
         errorCode: 'AUTORIZACION_NOT_FOUND',
       });
       expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+    });
+  });
+
+  // ============================================================
+  // BLQ: bloqueo por documento (07/10/2026)
+  // ============================================================
+
+  describe('BLQ §1: intentos en el mismo enlace', () => {
+    const pendiente = {
+      id: AUTORIZACION_ID,
+      estado: 'pendiente',
+      token_expiracion: FUTURE_DATE,
+      expediente_id: EXPEDIENTE_ID,
+      solicitante_id: 'sol-uuid',
+      version_terminos: '3.0',
+      solicitantes: { numero_documento: '1023456789', tipo_documento: 'cc' },
+      expedientes: { estado: 'en_revision' },
+    };
+
+    it('primer fallo: le quedan 2, el enlace sigue vivo y nada revela el número', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 1 });
+      const r = await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456788' }, '1.1.1.1', 'UA');
+      expect(r).toEqual({ coincide: false, intentos_restantes: 2 });
+      expect(JSON.stringify(r)).not.toContain('1023456789');
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+      expect(opsDe('autorizacion_intentos_documento', 'insert')[0].args[0]).toMatchObject({
+        autorizacion_id: AUTORIZACION_ID,
+        expediente_id: EXPEDIENTE_ID,
+        tipo_digitado: 'cc',
+        valor_digitado: '1023456788',
+        coincide: false,
+        origen: 'confirmacion',
+        ip: '1.1.1.1',
+        user_agent: 'UA',
+      });
+      // El conteo es por enlace: un enlace nuevo reinicia el contador.
+      expect(opsDe('autorizacion_intentos_documento', 'eq')[0].args).toEqual(['autorizacion_id', AUTORIZACION_ID]);
+    });
+
+    it('un acierto después de un fallo confirma la identidad', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 1 });
+      expect(await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1.023.456.789' })).toEqual({ coincide: true });
+      expect(opsDe('autorizacion_intentos_documento', 'insert')[0].args[0]).toMatchObject({ coincide: true });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')[0].args[0]).toMatchObject({ identidad_confirmada: true });
+      expect(opsDe('autorizaciones_habeas_data', 'update')).toHaveLength(0);
+    });
+
+    it('ráfaga en paralelo: un acierto con los fallidos ya agotados no vale ni confirma la identidad', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 3 });
+      expect(await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456789' })).toEqual({ coincide: false, intentos_restantes: 0 });
+      expect(opsDe('autorizacion_perfil_prospecto', 'upsert')).toHaveLength(0);
+    });
+
+    it('detener es idempotente: si otra petición ya expiró el enlace, no se repite el aviso', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente }, { data: [] });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 3 });
+      await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456788' });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(opsDe('autorizacion_envios', 'update')).toHaveLength(0);
+      expect(opsDe('eventos_timeline', 'insert')).toHaveLength(0);
+      expect(mockNotificarResponsable).not.toHaveBeenCalled();
+    });
+
+    it('falla cerrado: si no se puede registrar el intento, se detiene al primer fallo', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: { message: 'relation does not exist', code: '42P01' } });
+      const r = await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456788' });
+      expect(r).toEqual({ coincide: false, intentos_restantes: 0 });
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
+    });
+
+    it('lo digitado no va al logger, a la bitácora ni al timeline', async () => {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: { message: 'x' } });
+      await confirmarIdentidadProspecto(TOKEN, { numero_documento: '5550001112' });
+      await vi.waitFor(() => expect(opsDe('eventos_timeline', 'insert')).toHaveLength(1));
+      const visto = JSON.stringify([
+        vi.mocked(logAudit).mock.calls,
+        vi.mocked(logger.warn).mock.calls,
+        opsDe('eventos_timeline', 'insert'),
+        mockNotificarResponsable.mock.calls,
+      ]);
+      expect(visto).not.toContain('5550001112');
+    });
+  });
+
+  describe('BLQ §2: alerta prioritaria y WhatsApp', () => {
+    const pendiente = {
+      id: AUTORIZACION_ID,
+      estado: 'pendiente',
+      token_expiracion: FUTURE_DATE,
+      expediente_id: EXPEDIENTE_ID,
+      solicitante_id: 'sol-uuid',
+      version_terminos: '3.0',
+      solicitantes: { numero_documento: '1023456789', tipo_documento: 'cc' },
+      expedientes: { estado: 'en_revision' },
+    };
+    const expAviso = (responsable: string | null) => ({
+      data: {
+        numero: '2026-0042',
+        miembro_responsable_id: responsable,
+        solicitantes: { nombre: 'Juan', apellido: 'Pérez' },
+        inmuebles: { propietario_id: 'prop-1', inmobiliaria_id: 'inmo-1', direccion: 'Calle 1' },
+      },
+    });
+    const avisoResponsable = () =>
+      (mockNotificarResponsable.mock.calls as unknown as Array<[Record<string, unknown>]>).map((c) => c[0]).find((a) => a.tipo === 'autorizacion.bloqueo_documento');
+
+    async function agotar(conCupo: boolean) {
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('autorizacion_intentos_documento', { error: null }, { count: 3 });
+      if (conCupo) enqueue('movimientos_creditos_estudios', { data: [{ id: 'mov-1' }] });
+      await confirmarIdentidadProspecto(TOKEN, { numero_documento: '1023456788' });
+      await vi.waitFor(() => expect(avisoResponsable()).toBeDefined());
+      return avisoResponsable()!;
+    }
+
+    it('texto del §2.2 con el nombre y la mención del cupo; sin WhatsApp con el interruptor apagado', async () => {
+      enqueue('expedientes', expAviso('miembro-1'));
+      const aviso = await agotar(true);
+      expect(aviso).toMatchObject({ titulo: 'Verificación de identidad detenida', miembroId: 'miembro-1', payload: { prioridad: 'alta' } });
+      expect(aviso.mensaje).toBe(
+        'El estudio de Juan Pérez no pudo continuar: el número de documento no coincide con el registrado. ' +
+          'Verifique el documento del prospecto, corrija el dato y reenvíe el enlace. No se consumió ningún cupo de su paquete.',
+      );
+      expect(aviso.whatsapp).toBeUndefined();
+      expect(mockBlq.enviarTemplate).not.toHaveBeenCalled();
+    });
+
+    it('sin cupo dice que no hubo cobro adicional', async () => {
+      enqueue('expedientes', expAviso('miembro-1'));
+      expect((await agotar(false)).mensaje).toContain('No se generó ningún cobro adicional.');
+    });
+
+    it('con ALERTA_BLOQUEO_WHATSAPP=1 el responsable recibe la plantilla con el botón al estudio', async () => {
+      mockCal.ALERTA_BLOQUEO_WHATSAPP = 1;
+      enqueue('expedientes', expAviso('miembro-1'));
+      const aviso = await agotar(false);
+      expect(aviso.whatsapp).toEqual({
+        template: 'ESTUDIO_BLOQUEADO_DOCUMENTO',
+        variables: ['', 'Juan Pérez', '2026-0042'],
+        reservaNombre: 'señor(a)',
+        urlButtons: [EXPEDIENTE_ID],
+      });
+      expect(mockBlq.enviarTemplate).not.toHaveBeenCalled();
+    });
+
+    it('sin responsable, el WhatsApp va a los titulares de la organización', async () => {
+      mockCal.ALERTA_BLOQUEO_WHATSAPP = 1;
+      enqueue('expedientes', expAviso(null));
+      enqueue('inmobiliaria_miembros', { data: [{ perfil_id: 'owner-1' }] });
+      enqueue('perfiles', { data: [{ nombre: 'Ana', apellido: 'Gómez', telefono: '+573001234567' }] });
+      await agotar(false);
+      await vi.waitFor(() => expect(mockBlq.enviarTemplate).toHaveBeenCalled());
+      expect(mockBlq.enviarTemplate.mock.calls[0][0]).toMatchObject({
+        to: '+573001234567',
+        template: 'ESTUDIO_BLOQUEADO_DOCUMENTO',
+        variables: ['Ana Gómez', 'Juan Pérez', '2026-0042'],
+        urlButtons: [EXPEDIENTE_ID],
+      });
+    });
+
+    it('«no soy yo» no manda WhatsApp aunque el interruptor esté encendido', async () => {
+      mockCal.ALERTA_BLOQUEO_WHATSAPP = 1;
+      enqueue('autorizaciones_habeas_data', { data: pendiente });
+      enqueue('expedientes', expAviso('miembro-1'));
+      await reportarIdentidadProspecto(TOKEN, { motivo: 'no_soy_yo' });
+      const aviso = () =>
+        (mockNotificarResponsable.mock.calls as unknown as Array<[Record<string, unknown>]>).map((c) => c[0]).find((a) => a.tipo === 'autorizacion.identidad_reportada');
+      await vi.waitFor(() => expect(aviso()).toBeDefined());
+      expect(aviso()!.whatsapp).toBeUndefined();
+      expect(opsDe('autorizacion_envios', 'update')[0].args[0]).toMatchObject({ motivo_cierre: 'no_soy_yo' });
+    });
+  });
+
+  describe('BLQ §3: corrección ciega del documento', () => {
+    const USER = { id: USER_ID, rol: 'inmobiliaria', email: 'asesor@inmo.co' } as never;
+    const BODY = { tipo_documento: 'cc', numero_documento: '1023456780', fuente_verificacion: 'documento_fisico' as const };
+    // Copia por test: el servicio escribe el documento corregido sobre la fila leída.
+    const expRow = () => ({
+      data: {
+        id: EXPEDIENTE_ID,
+        numero: '2026-0042',
+        estado: 'en_revision',
+        solicitante_id: 'sol-uuid',
+        solicitantes: { ...expedienteConSolicitante.solicitantes, numero_documento: '1023456789', inmobiliaria_id: 'inmo-1', creado_por: 'asesor' },
+      },
+    });
+
+    it('con la consulta hecha o en proceso: 409, sin tocar la ficha', async () => {
+      enqueue('expedientes', expRow());
+      enqueue('estudios', { data: [{ estado: 'completado', referencia_proveedor: 'DC-1' }] });
+      await expect(corregirDocumentoProspecto(EXPEDIENTE_ID, BODY, USER)).rejects.toMatchObject({ statusCode: 409, errorCode: 'ESTUDIO_CON_CONSULTA' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+    });
+
+    it('con la ficha usada en otro estudio vivo: 409', async () => {
+      enqueue('expedientes', expRow(), { data: [{ id: 'otro-exp' }] });
+      enqueue('estudios', { data: [] }, { data: [] });
+      enqueue('autorizaciones_habeas_data', { count: 1 });
+      enqueue('contratos', { count: 0 });
+      await expect(corregirDocumentoProspecto(EXPEDIENTE_ID, BODY, USER)).rejects.toMatchObject({ statusCode: 409, errorCode: 'FICHA_COMPARTIDA' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+    });
+
+    it('el mismo documento: 400 (si el registro está bien, solo se reenvía)', async () => {
+      enqueue('expedientes', expRow());
+      await expect(
+        corregirDocumentoProspecto(EXPEDIENTE_ID, { ...BODY, numero_documento: '1.023.456.789' }, USER),
+      ).rejects.toMatchObject({ statusCode: 400, errorCode: 'DOCUMENTO_SIN_CAMBIOS' });
+    });
+
+    it('con el enlace vivo: corrige la ficha y la evaluación, expira el enlace y no lo reenvía', async () => {
+      enqueue('expedientes', expRow(), { data: [] });
+      enqueue('estudios', { data: [] }, { data: [{ id: 'est-1', datos_formulario: { numero_documento: '1023456789', tipo_documento: 'cc', nombre_completo: 'Juan Perez' } }] });
+      enqueue('correcciones_documento', { count: 0 }, { error: null });
+      // Último enlace (sin «no soy yo») y luego el enlace vivo que se expira.
+      enqueue('autorizaciones_habeas_data', { data: null }, { data: [{ id: 'aut-viva' }] });
+
+      const r = await corregirDocumentoProspecto(EXPEDIENTE_ID, BODY, USER, '1.1.1.1');
+
+      expect(r).toEqual({ correcciones_restantes: 1, estado_bloqueo: 'pendiente_reenvio' });
+      expect(mockAssertAccess).toHaveBeenCalledWith(EXPEDIENTE_ID, USER_ID, 'inmobiliaria');
+      expect(opsDe('solicitantes', 'update')[0].args[0]).toEqual({ numero_documento: '1023456780' });
+      expect(opsDe('correcciones_documento', 'insert')[0].args[0]).toMatchObject({
+        numero_anterior: '1023456789',
+        numero_nuevo: '1023456780',
+        fuente_verificacion: 'documento_fisico',
+        usuario_id: USER_ID,
+      });
+      expect(opsDe('estudios', 'update')[0].args[0]).toEqual({
+        datos_formulario: { numero_documento: '1023456780', tipo_documento: 'cc', nombre_completo: 'Juan Perez' },
+      });
+      expect(opsDe('autorizaciones_habeas_data', 'update')[0].args[0]).toEqual({ estado: 'expirado' });
+      expect(opsDe('autorizacion_envios', 'update')[0].args[0]).toMatchObject({ motivo_cierre: 'correccion' });
+      expect(opsDe('autorizaciones_habeas_data', 'insert')).toEqual([]);
+      expect(mockSendAutorizacionEmail).not.toHaveBeenCalled();
+      expect(vi.mocked(logAudit).mock.calls.at(-1)![0].detalle).toMatchObject({
+        before: { numero_documento: '1023456789' },
+        after: { numero_documento: '1023456780' },
+        fuente_verificacion: 'documento_fisico',
+      });
+    });
+
+    it('si no se puede registrar la corrección, la ficha vuelve a lo anterior (503)', async () => {
+      enqueue('expedientes', expRow(), { data: [] });
+      enqueue('estudios', { data: [] });
+      enqueue('correcciones_documento', { count: 0 }, { error: { message: 'boom' } });
+      await expect(corregirDocumentoProspecto(EXPEDIENTE_ID, BODY, USER)).rejects.toMatchObject({ statusCode: 503 });
+      expect(opsDe('solicitantes', 'update').map((o) => o.args[0])).toEqual([
+        { numero_documento: '1023456780' },
+        { tipo_documento: 'cc', numero_documento: '1023456789' },
+      ]);
+    });
+
+    it('la que pasa el límite cierra el estudio sin acuse, avisa a la Gerencia General y responde 409', async () => {
+      const { notificarYCorreo } = await import('@/modules/notificaciones/notificaciones.service');
+      enqueue('expedientes', expRow(), { data: [] });
+      enqueue('estudios', { data: [] });
+      enqueue('correcciones_documento', { count: 2 });
+      await expect(corregirDocumentoProspecto(EXPEDIENTE_ID, BODY, USER)).rejects.toMatchObject({
+        statusCode: 409,
+        errorCode: 'LIMITE_CORRECCIONES_DOCUMENTO',
+      });
+      expect(mockBlq.executeTransition).toHaveBeenCalledWith(
+        EXPEDIENTE_ID,
+        expect.objectContaining({ nuevo_estado: 'cerrado', etiqueta: 'Cancelar estudio' }),
+        USER,
+        { sinAcuse: true },
+      );
+      expect(notificarYCorreo).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'gg-1',
+          mensaje: 'El estudio N.° 2026-0042 se cerró por superar el límite de correcciones del documento. Debe crearse un estudio nuevo.',
+        }),
+      );
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+    });
+
+    it('después de «no soy yo» la inmobiliaria no corrige (409): solo Cofianza', async () => {
+      enqueue('expedientes', expRow(), { data: [] });
+      enqueue('estudios', { data: [] });
+      enqueue('autorizaciones_habeas_data', { data: { id: 'aut-1', estado: 'expirado', created_at: '2026-10-01T00:00:00Z' } });
+      enqueue('autorizacion_envios', { data: { motivo_cierre: 'no_soy_yo' } });
+      const err = await corregirDocumentoProspecto(EXPEDIENTE_ID, BODY, USER).catch((e) => e);
+      expect(err).toMatchObject({ statusCode: 409, errorCode: 'IDENTIDAD_RECHAZADA' });
+      expect(opsDe('solicitantes', 'update')).toEqual([]);
+      expect(opsDe('correcciones_documento', 'insert')).toEqual([]);
+    });
+
+    it('fuera de su cartera: el guard de tenantScope corta antes de leer', async () => {
+      mockAssertAccess.mockRejectedValueOnce(Object.assign(new Error('Estudio no encontrado'), { statusCode: 404 }));
+      await expect(corregirDocumentoProspecto(EXPEDIENTE_ID, BODY, USER)).rejects.toMatchObject({ statusCode: 404 });
+      expect(mockFrom).not.toHaveBeenCalledWith('expedientes');
+    });
+  });
+
+  describe('BLQ §7: traza interna', () => {
+    it('a la inmobiliaria nunca: 403 sin leer nada', async () => {
+      await expect(getTrazaAutorizacion(EXPEDIENTE_ID, 'inmobiliaria')).rejects.toMatchObject({ statusCode: 403 });
+      expect(mockFrom).not.toHaveBeenCalledWith('autorizacion_intentos_documento');
+    });
+
+    it('a Cofianza: lo digitado, el cierre de cada enlace (vencido derivado) y el cupo', async () => {
+      enqueue('autorizacion_intentos_documento', { data: [{ autorizacion_id: 'a1', valor_digitado: '1023456788', coincide: false }] });
+      enqueue('autorizacion_envios', { data: [{ autorizacion_id: 'a1', motivo_cierre: 'intentos', cerrado_at: '2026-10-02T00:00:00Z', envios: [] }] });
+      enqueue('autorizaciones_habeas_data', {
+        data: [
+          { id: 'a1', estado: 'expirado', token_expiracion: FUTURE_DATE, created_at: '2026-10-01T00:00:00Z' },
+          { id: 'a2', estado: 'pendiente', token_expiracion: PAST_DATE, created_at: '2026-10-03T00:00:00Z' },
+        ],
+      });
+      enqueue('movimientos_creditos_estudios', { data: [{ tipo: 'reserva' }, { tipo: 'liberacion', literal: '2.5' }] });
+      const t = await getTrazaAutorizacion(EXPEDIENTE_ID, 'administrador');
+      expect(t.intentos[0]).toMatchObject({ valor_digitado: '1023456788' });
+      expect(t.enlaces.map((e) => e.motivo_cierre)).toEqual(['intentos', 'vencido']);
+      expect(t.cupo).toHaveLength(2);
+    });
+  });
+
+  describe('BLQ §2.1: banner de bloqueos pendientes', () => {
+    it('sin cartera visible: lista vacía sin consultar', async () => {
+      mockBlq.allowed.mockResolvedValueOnce([]);
+      expect(await listBloqueosPendientes(USER_ID, 'inmobiliaria')).toEqual([]);
+      expect(mockFrom).not.toHaveBeenCalledWith('autorizacion_envios');
+    });
+
+    it('solo los de su cartera, sin corrección ni reenvío posterior', async () => {
+      mockBlq.allowed.mockResolvedValueOnce(['e1', 'e2', 'e3']);
+      enqueue('autorizacion_envios', {
+        data: [
+          { autorizacion_id: 'a1', expediente_id: 'e1', cerrado_at: '2026-10-05T00:00:00Z', motivo_cierre: 'datos_incorrectos' },
+          { autorizacion_id: 'a2', expediente_id: 'e2', cerrado_at: '2026-10-04T00:00:00Z' },
+          { autorizacion_id: 'a3', expediente_id: 'e3', cerrado_at: '2026-10-03T00:00:00Z' },
+        ],
+      });
+      enqueue('autorizaciones_habeas_data', {
+        data: [
+          { id: 'a1', expediente_id: 'e1', created_at: '2026-10-01T00:00:00Z' },
+          { id: 'a2-nuevo', expediente_id: 'e2', created_at: '2026-10-06T00:00:00Z' }, // ya se reenvió
+          { id: 'a3', expediente_id: 'e3', created_at: '2026-10-01T00:00:00Z' },
+        ],
+      });
+      enqueue('correcciones_documento', { data: [{ expediente_id: 'e3', created_at: '2026-10-04T00:00:00Z' }] }); // ya se corrigió
+      enqueue('expedientes', {
+        data: [
+          { id: 'e1', numero: '2026-0001', estado: 'en_revision', solicitantes: { nombre: 'Ana', apellido: 'Ruiz' } },
+          { id: 'e2', numero: '2026-0002', estado: 'en_revision' },
+          { id: 'e3', numero: '2026-0003', estado: 'en_revision' },
+        ],
+      });
+      const r = await listBloqueosPendientes(USER_ID, 'inmobiliaria');
+      expect(r).toEqual([{ expediente_id: 'e1', numero: 'N.° 2026-0001', prospecto: 'Ana Ruiz', bloqueado_en: '2026-10-05T00:00:00Z', motivo: 'datos_incorrectos' }]);
+      expect(opsDe('autorizacion_envios', 'in').some((o) => o.args[0] === 'expediente_id')).toBe(true);
+    });
+  });
+
+  describe('BLQ §8: estado derivado', () => {
+    const base = { autorizacionEstado: 'expirado', autorizacionCreadaEn: '2026-10-01T00:00:00Z', ultimaCorreccionEn: null };
+    it('intentos o datos incorrectos = bloqueado; no soy yo = identidad rechazada', () => {
+      expect(derivarEstadoBloqueo({ ...base, motivo: 'intentos' })).toBe('bloqueado_documento');
+      expect(derivarEstadoBloqueo({ ...base, motivo: 'datos_incorrectos' })).toBe('bloqueado_documento');
+      expect(derivarEstadoBloqueo({ ...base, motivo: 'no_soy_yo' })).toBe('identidad_rechazada');
+      expect(derivarEstadoBloqueo({ ...base, motivo: 'reemplazado' })).toBeNull();
+    });
+    it('una corrección posterior deja «pendiente de reenvío»; firmado, nada', () => {
+      expect(derivarEstadoBloqueo({ ...base, motivo: 'intentos', ultimaCorreccionEn: '2026-10-02T00:00:00Z' })).toBe('pendiente_reenvio');
+      expect(derivarEstadoBloqueo({ ...base, motivo: 'intentos', ultimaCorreccionEn: '2026-09-30T00:00:00Z' })).toBe('bloqueado_documento');
+      expect(derivarEstadoBloqueo({ ...base, autorizacionEstado: 'autorizado', motivo: null })).toBeNull();
     });
   });
 });

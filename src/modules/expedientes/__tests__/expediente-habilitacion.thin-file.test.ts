@@ -1,7 +1,7 @@
 /**
  * Política §15, última fila (thin-file): sin historia en ninguna central, el
  * analista no aprueba sin (i) una fuente de capacidad verificable, (ii) un
- * co-arrendatario con puntaje >= UMBRAL_COARRENDATARIO y (iii) canon/ingreso <= 30 %.
+ * coarrendatario con puntaje >= UMBRAL_COARRENDATARIO y (iii) canon/ingreso <= 30 %.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -113,7 +113,7 @@ describe('aprobarCondicionado — thin-file (Política §15)', () => {
     await expect(aprobar()).rejects.toMatchObject(PASO);
   });
 
-  it('sin co-arrendatario, o por debajo del umbral: no se aprueba ni se escribe nada', async () => {
+  it('sin coarrendatario, o por debajo del umbral: no se aprueba ni se escribe nada', async () => {
     mockTitular.value = SIN_SCORE;
     for (const coa of [null, { ...COA_85, puntaje: 75 }, { ...COA_85, puntaje: null }]) {
       mockCoa.mockResolvedValueOnce(coa);

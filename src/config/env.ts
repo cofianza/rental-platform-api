@@ -236,6 +236,9 @@ const envSchema = z.object({
   // OFF = siguen las v1 («envíanos el comprobante por aquí»). Encender solo
   // cuando Meta haya aprobado las tres.
   WHATSAPP_MORA_PLANTILLAS_V2: z.string().default('false').transform((v) => v === 'true'),
+  // Bloque 0: invitación al coarrendatario v3 (CORR §6). OFF = sigue la v2.
+  // Encender solo cuando Meta haya aprobado cofianza_coarrendatario_invitacion_v3.
+  WHATSAPP_COARRENDATARIO_V3: z.string().default('false').transform((v) => v === 'true'),
 
   // Firma multi-parte (arrendatario + arrendador + Cofianza) en un solo sobre Auco.
   // OFF por defecto: mientras siga en false, la firma usa el flujo de un solo

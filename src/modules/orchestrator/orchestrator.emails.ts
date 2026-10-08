@@ -56,7 +56,7 @@ export async function sendEstudioAprobadoEmail(params: {
   score: number | null;
   /**
    * Decisión 2: con él, a quien marcó «con alguien más» al autorizar se le
-   * ofrece su enlace para sumar al co-arrendatario (prima del 10 %).
+   * ofrece su enlace para sumar al coarrendatario (prima del 10 %).
    */
   expedienteId?: string;
 }) {
@@ -87,8 +87,8 @@ export async function sendEstudioAprobadoEmail(params: {
             <p style="color: #065f46; margin: 0; font-weight: bold;">Siguiente paso: su contrato</p>
             <p style="color: #065f46; margin: 4px 0 0;">El propietario o la inmobiliaria preparará su contrato (fecha de inicio y duración). Cuando esté listo para firmar, le llegará el enlace por WhatsApp al número que registró. No necesita hacer nada por ahora.</p>
           </div>
-          ${enlaceCoa ? `<p style="color: #6b7280;">Nos contó que va a vivir con alguien más. Si lo suma como <strong>co-arrendatario</strong> antes de que se genere el contrato, la prima de vinculación baja del 20 % al 10 % del canon. Su co-arrendatario no es un fiador ni un codeudor, y no necesita tener finca raíz.</p>
-          <div style="text-align: center; margin: 24px 0;">${botonHtml(enlaceCoa, 'Invitar a mi co-arrendatario')}</div>` : ''}
+          ${enlaceCoa ? `<p style="color: #6b7280;">Nos contó que va a vivir con alguien más. Si lo suma como <strong>coarrendatario</strong> antes de que se genere el contrato, la prima de vinculación baja del 20 % al 10 % del canon. Su coarrendatario no necesita tener finca raíz. No es fiador: firma el contrato como arrendatario, junto con el titular, y responde solidariamente.</p>
+          <div style="text-align: center; margin: 24px 0;">${botonHtml(enlaceCoa, 'Invitar a mi coarrendatario')}</div>` : ''}
           ${footerHtml(company)}
         </div>
       </div>
@@ -102,7 +102,7 @@ export async function sendEstudioAprobadoEmail(params: {
 
 /**
  * Politica §11: derecho de apelacion del evaluado no aprobado. Lo usan el
- * correo del titular y el del co-arrendatario (P38).
+ * correo del titular y el del coarrendatario (P38).
  */
 export const apelacionHtml = (email: string) =>
   `<div style="background: #f3f4f6; border: 1px solid #e5e7eb; padding: 16px; border-radius: 8px; margin: 16px 0;">
@@ -136,7 +136,7 @@ export async function sendEstudioRechazadoEmail(params: {
   // apelacion: 15 dias habiles para presentarla, respuesta de Cofianza en 10
   // dias habiles, y la apelacion no suspende el proceso de arrendamiento.
   // Con motivoGeneral no se sugiere nada mas (P30): el motivo ya trae la salida
-  // de su causa, y un co-arrendatario no cambia un rechazo por regla dura (§5).
+  // de su causa, y un coarrendatario no cambia un rechazo por regla dura (§5).
   await resend.emails.send({
     from: FROM,
     to: email,
@@ -165,12 +165,12 @@ export async function sendEstudioRechazadoEmail(params: {
   logger.info({ email }, 'Orchestrator email: estudio rechazado enviado');
 }
 
-// ── Estudio Condicionado — Invitar co-arrendatario ──────────
+// ── Estudio Condicionado — Invitar coarrendatario ──────────
 //
 // Mario (5-may-2026): cambio de paradigma. La promesa de Cofianza es
 // "rentar sin fiador". Cuando el estudio queda condicionado ya NO le
 // pedimos al solicitante que suba documentación — le pedimos que invite
-// a un co-arrendatario y respaldamos a los dos como un solo arrendatario.
+// a un coarrendatario y respaldamos a los dos como un solo arrendatario.
 // Este email reemplaza el viejo "Documentos Requeridos".
 
 export async function sendDocumentosRequeridosEmail(params: {
@@ -179,19 +179,19 @@ export async function sendDocumentosRequeridosEmail(params: {
   score: number | null;
   /**
    * P18: token del enlace personal del prospecto (/cargar-documentos): desde ahí
-   * invita a su co-arrendatario sin cuenta. Sin él, se le dice a quién pedírselo.
+   * invita a su coarrendatario sin cuenta. Sin él, se le dice a quién pedírselo.
    */
   tokenDocumentos?: string | null;
   /**
    * Decisión 4: false en el canal del propietario directo (inmueble sin
-   * inmobiliaria), que no admite co-arrendatario hasta el Convenio: el enlace
+   * inmobiliaria), que no admite coarrendatario hasta el Convenio: el enlace
    * queda solo para sus soportes.
    */
   ofrecerCoarrendatario?: boolean;
   /**
    * Adenda de precios §7.1: false cuando el caso espera solo la autorización de
    * la Gerencia General (canon sobre el tope): el correo avisa que está en
-   * revisión y no pide soportes ni co-arrendatario.
+   * revisión y no pide soportes ni coarrendatario.
    */
   pedirSoportes?: boolean;
 }) {
@@ -217,8 +217,8 @@ export async function sendDocumentosRequeridosEmail(params: {
   const opcion = !pedirSoportes
     ? ''
     : ofrecerCoarrendatario
-    ? `<p style="color: #6b7280;">Mientras tanto, puede sumar un co-arrendatario. En Cofianza <strong>no pedimos fiador</strong>: invite a la persona con quien va a vivir y evaluamos a los dos como un solo arrendatario.</p>
-          ${enlace ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(enlace, 'Invitar a mi co-arrendatario')}</div>` : ''}
+    ? `<p style="color: #6b7280;">Mientras tanto, puede sumar un coarrendatario. En Cofianza <strong>no pedimos fiador</strong>: invite a la persona con quien va a vivir y evaluamos a los dos como un solo arrendatario.</p>
+          ${enlace ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(enlace, 'Invitar a mi coarrendatario')}</div>` : ''}
           <div style="background: #fffbeb; border: 1px solid #fde68a; padding: 16px; border-radius: 8px; margin: 16px 0;">
             <p style="color: #92400e; margin: 0; font-weight: bold;">¿Cómo funciona?</p>
             <ul style="color: #92400e; margin: 8px 0 0; padding-left: 20px;">
@@ -226,11 +226,11 @@ export async function sendDocumentosRequeridosEmail(params: {
                 ? 'Abra su enlace personal (el botón de arriba) y escriba los datos de la persona con quien va a vivir. Desde ahí también puede subir documentos que respalden sus ingresos.'
                 : 'Pídale a quien le pidió el estudio (su inmobiliaria o el propietario) que invite desde su panel a la persona con quien va a vivir.'}</li>
               <li>Le enviamos la invitación por correo a esa persona.</li>
-              <li>Cuando su co-arrendatario acepte, evaluamos el perfil de esa persona y lo combinamos con el de usted.</li>
+              <li>Cuando su coarrendatario acepte, evaluamos el perfil de esa persona y lo combinamos con el de usted.</li>
               <li>Si juntos cumplen, los respaldamos como un solo arrendatario.</li>
             </ul>
           </div>
-          <p style="color: #6b7280;">No es un fiador ni codeudor — es la persona con quien va a compartir el arriendo.</p>`
+          <p style="color: #6b7280;">Es la persona con quien va a compartir el arriendo. No es fiador: firma el contrato como arrendatario, junto con el titular, y responde solidariamente.</p>`
     : `<p style="color: #6b7280;">Si quiere, mientras tanto puede subir documentos que respalden sus ingresos (certificación laboral, extractos o declaración de renta).</p>
           ${enlace ? `<div style="text-align: center; margin: 24px 0;">${botonHtml(enlace, 'Subir mis documentos')}</div>` : ''}`;
 
@@ -254,7 +254,7 @@ export async function sendDocumentosRequeridosEmail(params: {
     `,
   });
 
-  logger.info({ email }, 'Orchestrator email: condicionado/co-arrendatario enviado');
+  logger.info({ email }, 'Orchestrator email: condicionado/coarrendatario enviado');
 }
 
 // ── Contrato Listo para Firma ───────────────────────────────

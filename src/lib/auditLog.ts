@@ -100,6 +100,8 @@ export const AUDIT_ACTIONS = {
   CALIBRACION_PARAMETRO_CAMBIADO: 'calibracion_parametro_cambiado',
   // Tarifa negociada caso por caso (Adenda 1 §5).
   ESTUDIO_TARIFA_OVERRIDE: 'estudio_tarifa_override',
+  // BLQ §3.5: el reintento solo completa el primer apellido (DataCrédito).
+  ESTUDIO_APELLIDO_CORREGIDO: 'estudio_apellido_corregido',
   // Excepción de tope de canon que autoriza la Gerencia General (Adenda de precios §7.4).
   EXPEDIENTE_EXCEPCION_TOPE: 'expediente_excepcion_tope',
   // Plantillas de contrato

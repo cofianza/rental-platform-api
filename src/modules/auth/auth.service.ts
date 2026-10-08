@@ -15,6 +15,7 @@ import { motivoNoAfianzable } from '@/modules/inmuebles/destinacion';
 import { errorNoAfianzableSegunCobro } from '@/modules/estudios/pago.guard';
 import type { UserRole } from '@/types/auth';
 import type { LoginInput, RefreshInput, ForgotPasswordInput, ResetPasswordInput, UpdateMyProfileInput } from './auth.schema';
+import { fichaConEnlaceVivo } from '@/modules/autorizaciones/bloqueo-documento';
 
 export async function loginWithEmail({ email, password }: LoginInput, ip?: string) {
   const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
@@ -353,6 +354,15 @@ export async function updateMyProfile(userId: string, input: UpdateMyProfileInpu
           'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
         );
       }
+    }
+    // BLQ §3.5: desde que se le emite el enlace de autorización, el documento
+    // que ya tenía solo lo corrige quien gestiona el estudio (ciego y con
+    // fuente). Sin documento todavía (H43) puede completarlo aquí.
+    if (docCambia && sol?.numero_documento?.trim() && (await fichaConEnlaceVivo(sol.id))) {
+      throw AppError.conflict(
+        'No puede cambiar su documento porque ya recibió la solicitud de autorización de un estudio. Si está mal, pídale a quien tramita su arriendo que lo corrija.',
+        'DOCUMENTO_BLOQUEADO_POR_ENLACE',
+      );
     }
     // Adenda de precios §6.1: el solicitante que completa su documento en «Mi
     // cuenta» (H43) no puede quedar como NIT (mismo bloqueo que el estudio).
