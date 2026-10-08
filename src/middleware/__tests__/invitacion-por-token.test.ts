@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 
-// P18 (revisión 2026-09-24): invitar al co-arrendatario desde el enlace del
+// P18 (revisión 2026-09-24): invitar al coarrendatario desde el enlace del
 // prospecto manda correo y WhatsApp a un tercero. Límite por enlace (no por IP)
 // y esquema estricto: solo cédula de ciudadanía o de extranjería y nombres sin
 // enlaces.

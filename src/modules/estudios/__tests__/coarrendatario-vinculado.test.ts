@@ -113,7 +113,7 @@ describe('coarrendatarioVinculado — P2', () => {
   });
 });
 
-// Decisiones 2 y 4 (2026-09-25): la ventana del co-arrendatario.
+// Decisiones 2 y 4 (2026-09-25): la ventana del coarrendatario.
 describe('coarrendatarioVigente / ventanaCoarrendatario — Decisiones 2 y 4', () => {
   const sinEl = { data: [{ id: 'c1', estado: 'vigente', destinacion: null, coa_anidado: null, coa_plano: '' }], error: null };
   const ventana = (estado: string, inmobiliariaId: string | null = 'org-1') =>

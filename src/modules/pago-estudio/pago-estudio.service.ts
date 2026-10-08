@@ -48,7 +48,8 @@ async function enviarLinkPagoWhatsApp(
   await enviarTemplate({
     to: telefonoOverride ?? sol?.telefono ?? null,
     template: 'PAGO_ESTUDIO_LINK',
-    // La plantilla v2 ya escribe el «$»: aquí va solo el número (80.000).
+    // La plantilla v2 ya escribe el «$»: aquí va el número sin signo, con
+    // «(IVA incluido)» (CORR §5.3): «95.200 (IVA incluido)».
     // v2 en usted: sin nombre, «Buen día, *señor(a)*» (B19).
     variables: [sol?.nombre || 'señor(a)', montoFormateado.replace(/^\$\s*/, ''), linkUrl],
     context: { expediente_id: expedienteId },
@@ -423,7 +424,8 @@ async function crearCobroPasarela(args: {
 
   const precio = await getPrecioEstudio();
   const monto = precio.total;
-  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || formatNumeroEstudio(exp.numero)}${args.sufijoConcepto ?? ''}`;
+  // CORR §5 (Ley 1480 art. 26): el concepto de Mercado Pago dice que el total lleva el IVA.
+  const conceptLabel = `Estudio de arrendamiento - ${exp.inmueble_direccion || formatNumeroEstudio(exp.numero)}${args.sufijoConcepto ?? ''}${precio.tarifaIva > 0 ? ' (IVA incluido)' : ''}`;
 
   // El id va PRE-generado y viaja en las URLs de retorno: el arrendatario que
   // cancela o al que le rechazan el pago no tiene sesión, así que sin el
@@ -759,7 +761,7 @@ export async function enviarLinkPago(
   // WhatsApp con el link al solicitante (refuerzo del correo) — fire-and-forget.
   // El teléfono escrito en el form tiene prioridad sobre el registrado (antes
   // se aceptaba en el schema pero se ignoraba — dato muerto).
-  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), linkUrl, telefonoOverrideValido(input.telefono)).catch((err) =>
+  enviarLinkPagoWhatsApp(expedienteId, montoProspecto(monto, tarifaIva), linkUrl, telefonoOverrideValido(input.telefono)).catch((err) =>
     logger.warn({ err, expedienteId }, 'No se pudo enviar el WhatsApp del link de pago'),
   );
 
@@ -889,7 +891,7 @@ export async function reenviarLink(
     } as never);
 
   // WhatsApp con el link al solicitante (refuerzo del correo) — fire-and-forget.
-  enviarLinkPagoWhatsApp(expedienteId, formatCOP(monto), pago.payment_link_url as string).catch((err) =>
+  enviarLinkPagoWhatsApp(expedienteId, montoProspecto(monto, pago.tarifa_iva as number | null), pago.payment_link_url as string).catch((err) =>
     logger.warn({ err, expedienteId }, 'No se pudo reenviar el WhatsApp del link de pago'),
   );
 

@@ -38,6 +38,9 @@ vi.mock('@/lib/email', () => ({ sendPasswordResetEmail: vi.fn() }));
 vi.mock('@/lib/tenantScope', () => ({ resolveRolMiembro: vi.fn(async () => null) }));
 vi.mock('@/modules/users/users.service', () => ({ listOperators: vi.fn(async () => [{ id: 'op-1' }]) }));
 vi.mock('@/modules/notificaciones/notificaciones.service', () => ({ notificarYCorreo: mockNotificar }));
+// BLQ §3.5: ¿la ficha ya tiene un enlace de autorización en un estudio vivo?
+const mockConEnlace = vi.hoisted(() => vi.fn(async (_id: string) => false));
+vi.mock('@/modules/autorizaciones/bloqueo-documento', () => ({ fichaConEnlaceVivo: (id: string) => mockConEnlace(id) }));
 
 import { getProfile, updateMyProfile } from '../auth.service';
 
@@ -122,5 +125,25 @@ describe('updateMyProfile · Adenda de precios §6.1', () => {
       errorCode: 'DOCUMENTO_BLOQUEADO_POR_ESTUDIO',
     });
     expect(mockNotificar).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateMyProfile · BLQ §3.5 (enlace emitido)', () => {
+  it('con documento y enlace emitido: 409 y no se escribe', async () => {
+    mockPerfil.mockResolvedValue({ data: { rol: 'solicitante', tipo_documento: 'cc', numero_documento: '1020304050' }, error: null });
+    mockFicha.mockResolvedValue(ficha('1020304050'));
+    mockConEnlace.mockResolvedValueOnce(true);
+    await expect(updateMyProfile('u1', { tipo_documento: 'cc', numero_documento: '1020304051' })).rejects.toMatchObject({
+      statusCode: 409,
+      errorCode: 'DOCUMENTO_BLOQUEADO_POR_ENLACE',
+    });
+    expect(mockConEnlace).toHaveBeenCalledWith('s1');
+  });
+
+  it('sin documento todavía (H43): no consulta el enlace, lo puede completar', async () => {
+    mockPerfil.mockResolvedValue({ data: { rol: 'solicitante', tipo_documento: null, numero_documento: null }, error: null });
+    mockFicha.mockResolvedValue(ficha(''));
+    await updateMyProfile('u1', { tipo_documento: 'nit', numero_documento: '900123456' }).catch(() => undefined);
+    expect(mockConEnlace).not.toHaveBeenCalled();
   });
 });

@@ -184,7 +184,7 @@ const MARCA_RETENIDO_POR_TOPE_ANTERIOR = '(Adenda de precios §7): el estudio pa
  * Pura: el estudio quedó condicionado SOLO por el tope. La nota de
  * retenerAprobadoSobreTope se pone únicamente sobre un «aprobado», así que su
  * presencia en las observaciones dice que el buró o el motor lo aprobaban: no
- * hay documentos ni co-arrendatario que pedir, falta la Gerencia General.
+ * hay documentos ni coarrendatario que pedir, falta la Gerencia General.
  */
 export function retenidoSoloPorTope(observaciones: string | null | undefined): boolean {
   return !!observaciones && (observaciones.includes(MARCA_RETENIDO_POR_TOPE) || observaciones.includes(MARCA_RETENIDO_POR_TOPE_ANTERIOR));

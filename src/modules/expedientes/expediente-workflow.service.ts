@@ -66,6 +66,9 @@ export async function executeTransition(
   expedienteId: string,
   input: TransitionInput,
   user: AuthUser,
+  // BLQ §3.6: el cierre por el límite de correcciones del documento ocurre
+  // antes de la consulta (sin contrato), así que no lleva el acuse del contrato.
+  opciones?: { sinAcuse?: boolean },
 ) {
   const expediente = await fetchExpediente(expedienteId);
   const currentState = expediente.estado;
@@ -164,7 +167,7 @@ export async function executeTransition(
 
   // Cerrar el estudio cancela su contrato V3 con la firma incompleta: la
   // inmobiliaria acepta antes el aviso (Adenda 1 del módulo de contratos, respuesta 11).
-  if (targetState === 'cerrado' && user.rol === 'inmobiliaria') {
+  if (targetState === 'cerrado' && user.rol === 'inmobiliaria' && !opciones?.sinAcuse) {
     const { exigirAcuseDelEstudio } = await import('@/modules/contratos/v3/firma/firma.service');
     await exigirAcuseDelEstudio(expedienteId, user.rol);
   }
@@ -211,7 +214,7 @@ export async function executeTransition(
 
   // P34 (Política §9/§11/§13, Adenda 2 §5.1): al rechazar, el gestor ve en el
   // banner el motivo corto que el analista escribió para él, sin cifras del
-  // buró ni datos del co-arrendatario; el comentario queda como fundamento
+  // buró ni datos del coarrendatario; el comentario queda como fundamento
   // interno (timeline y bitácora). Al prospecto no le llega: se lo redacta
   // getExpedienteById. Best-effort, como los vecinos: la transición ya quedó.
   if (targetState === 'rechazado' && input.motivo) {
@@ -332,7 +335,7 @@ export async function executeTransition(
       } as never)
       .eq('id', result.evento_timeline_id);
     if (metaErr) logger.warn({ expedienteId, err: metaErr.message }, 'No se pudieron guardar los documentos consultados en el timeline');
-    // Rechazo: avisan al co-arrendatario, al dueño y al prospecto (Política §11:
+    // Rechazo: avisan al coarrendatario, al dueño y al prospecto (Política §11:
     // motivo general y derecho de apelación). Cancelación: al dueño, a quien la
     // guía del condicionado le promete que se enterará. (Aprobar ya salió arriba
     // por aprobarCondicionado, con sus avisos.)
@@ -352,7 +355,7 @@ export async function executeTransition(
       void import('./expediente-habilitacion.service')
         .then((m) => m.avisarDuenoDecisionRevisionManual(expedienteId, 'cancelado'))
         .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al dueño'));
-      // El co-arrendatario ya evaluado también se entera del cierre.
+      // El coarrendatario ya evaluado también se entera del cierre.
       void import('@/modules/coarrendatarios/coarrendatarios.service')
         .then((m) => m.avisarCoarrendatarioDecision(expedienteId, 'cerrado'))
         .catch((e) => logger.warn({ error: e, expedienteId }, 'No se pudo avisar al coarrendatario'));
@@ -728,7 +731,7 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
   // mismo comentario) ni el usuario que lo cambió: solo los estados. El gestor
   // ve además el motivo que el analista escribió para él; el prospecto,
   // ninguno. Tampoco la ponderación cuenta el resultado ni las reglas duras del
-  // co-arrendatario (Ley 1266). Cierra por defecto: sin rol no es de Cofianza.
+  // coarrendatario (Ley 1266). Cierra por defecto: sin rol no es de Cofianza.
   const deCofianza = !!userRol && ROLES_COFIANZA.includes(userRol);
   const esGestor = userRol === 'inmobiliaria' || userRol === 'propietario';
 
@@ -742,7 +745,7 @@ export async function getTransitionHistory(expedienteId: string, userId?: string
             ...r,
             descripcion:
               metadata?.origen === 'ponderacion_coarrendatario'
-                ? `Resultado combinado con el co-arrendatario: ${r.estado_nuevo ?? 'sin cambio'}.`
+                ? `Resultado combinado con el coarrendatario: ${r.estado_nuevo ?? 'sin cambio'}.`
                 : `Estado cambiado de '${r.estado_anterior ?? 'sin estado'}' a '${r.estado_nuevo ?? 'sin estado'}'.`,
             comentario: esGestor ? (metadata?.motivo_gestor ?? null) : null,
             usuario: null,

@@ -243,7 +243,7 @@ export async function onHabeasDataAutorizado(params: {
     // (reenvio del enlace), y dejarlo fuera lo volvia invisible para siempre.
     // El .neq del tipo es un bug preexistente que la inversion vuelve
     // frecuente: sin el, la firma del TITULAR tomaba el estudio del
-    // co-arrendatario (mismo expediente_id, creado despues) y le pisaba
+    // coarrendatario (mismo expediente_id, creado despues) y le pisaba
     // `datos_formulario` con el documento del titular.
     const { data: estudio, error: estudioError } = await db('estudios')
       .select('id, estado, proveedor, expediente_id, datos_formulario, pago_por')
@@ -401,7 +401,7 @@ export async function onHabeasDataAutorizado(params: {
 /**
  * Autorizacion del TITULAR del expediente. Mismo predicado que
  * `enviarEnlaceAutorizacion` y que el gate 8.4 — si se desincronizan, las capas
- * se contradicen: `coarrendatario_id IS NULL` (el co-arrendatario tiene su
+ * se contradicen: `coarrendatario_id IS NULL` (el coarrendatario tiene su
  * propia fila con el mismo expediente_id), no revocada y VIGENTE.
  */
 async function leerAutorizacionTitular(
@@ -588,7 +588,7 @@ export async function onEstudioPagado(expedienteId: string, userId?: string | nu
   }
 
   // CAS: solo despierta a los que estaban EN ESPERA DE PAGO. Multi-fila a
-  // propósito — el estudio del co-arrendatario se aparca igual y arranca junto
+  // propósito — el estudio del coarrendatario se aparca igual y arranca junto
   // con el del titular.
   const { data: despertados, error: casErr } = (await db('estudios')
     .update({ estado: 'formulario_completado', updated_at: new Date().toISOString() } as never)
@@ -674,7 +674,7 @@ export async function onEstudioCompletado(params: {
       .eq('id', expediente.inmueble_id)
       .single() as { data: { id: string; direccion: string; ciudad: string; valor_arriendo: number; propietario_id: string; inmobiliaria_id?: string | null } | null };
     // Decisión 4 (2026-09-25): el canal del propietario directo no admite
-    // co-arrendatario hasta el Convenio; no se le ofrece en correos ni avisos.
+    // coarrendatario hasta el Convenio; no se le ofrece en correos ni avisos.
     const conCoarrendatario = !!inm?.inmobiliaria_id;
 
     if (resultado === 'aprobado') {
@@ -713,7 +713,7 @@ export async function onEstudioCompletado(params: {
           inmueble: inm?.direccion || '',
           ciudad: inm?.ciudad || '',
           score,
-          // Decisión 2: a quien marcó «con alguien más» le ofrece sumar al co-arrendatario.
+          // Decisión 2: a quien marcó «con alguien más» le ofrece sumar al coarrendatario.
           expedienteId,
         }).catch((e) => logger.warn({ error: e }, 'Orchestrator: error email aprobado'));
       }
@@ -922,7 +922,7 @@ export async function onEstudioCompletado(params: {
       const { esSinCentrales } = await import('@/modules/estudios/decision');
       const sinCentrales = esSinCentrales(trazaRow?.cascada);
       // Adenda de precios §7.1: el buró o el motor lo aprobaban y solo el tope
-      // lo retuvo. Falta la Gerencia General: no se piden soportes ni co-arrendatario.
+      // lo retuvo. Falta la Gerencia General: no se piden soportes ni coarrendatario.
       const { retenidoSoloPorTope } = await import('@/modules/estudios/excepcion-tope.service');
       const porTope = !sinCentrales && retenidoSoloPorTope(trazaRow?.observaciones);
 
@@ -958,7 +958,7 @@ export async function onEstudioCompletado(params: {
           .catch((e) => logger.warn({ error: e }, 'Orchestrator: error email condicionado por tope'));
       } else if (sol?.email) {
         // P18: el correo lleva el enlace personal del prospecto para invitar a su
-        // co-arrendatario sin cuenta (el mismo de sus soportes). Si no se pudo
+        // coarrendatario sin cuenta (el mismo de sus soportes). Si no se pudo
         // generar, el correo le dice a quién pedírselo.
         const tokenDocumentos = await import('@/modules/expedientes/expediente-soportes.service')
           .then((m) => m.emitirTokenDocumentos(expedienteId))
@@ -978,14 +978,14 @@ export async function onEstudioCompletado(params: {
 
       // Notificacion in-app al propietario: el estudio salio condicionado.
       // Decide un analista de Cofianza (Adenda 2 §5); el dueño puede aportar
-      // soportes o sumar co-arrendatario. Fire-and-forget.
+      // soportes o sumar coarrendatario. Fire-and-forget.
       if (inm?.propietario_id && sol) {
         const tituloDueno = porTope ? 'Estudio pendiente de autorización' : 'Estudio condicionado';
         const mensajeDueno = sinCentrales
           ? `Las centrales de riesgo no respondieron al consultar el estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'}. Pasó a revisión manual y lo revisa un analista de Cofianza; no es un rechazo.`
           : porTope
             ? `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} tuvo una evaluación favorable, pero el canon supera el tope vigente: queda pendiente de autorización de la Gerencia General de Cofianza. No necesita pedir soportes al solicitante; le avisaremos el resultado.`
-            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puede pedir soportes al solicitante${conCoarrendatario ? ' o sumar un co-arrendatario' : ''}.`;
+            : `El estudio de ${sol.nombre} ${sol.apellido} para ${inm.direccion || 'su inmueble'} quedó condicionado y lo revisa un analista de Cofianza. Mientras tanto puede pedir soportes al solicitante${conCoarrendatario ? ' o sumar un coarrendatario' : ''}.`;
         notificarUsuario({
           userId: inm.propietario_id,
           tipo: 'estudio.condicionado.propietario',

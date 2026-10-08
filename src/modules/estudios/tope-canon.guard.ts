@@ -381,7 +381,7 @@ export interface AssertTopeArgs {
    * El bloqueo real vive en los sitios que PRECEDEN al cobro (habilitarEstudio,
    * createEstudio, createEstudioFromInmueble, liberarEstudioConCredito,
    * pagarGestor, enviarLinkPago, createPaymentLink y la invitacion del
-   * co-arrendatario), que son los que el §4.4 pide.
+   * coarrendatario), que son los que el §4.4 pide.
    */
   soloAdvertir?: boolean;
 }

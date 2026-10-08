@@ -56,8 +56,11 @@ export async function stats(req: Request, res: Response) {
  */
 export async function getTopeCanon(_req: Request, res: Response) {
   const { getTopeCanonVigente } = await import('./tope-canon.guard');
-  const tope_cop = await getTopeCanonVigente();
-  sendSuccess(res, { tope_cop });
+  const { getPrecioEstudio, montoProspecto } = await import('@/modules/pago-estudio/pago-estudio.service');
+  const [tope_cop, precio] = await Promise.all([getTopeCanonVigente(), getPrecioEstudio()]);
+  // CORR §5.2: el asistente muestra lo que se le cobrará al prospecto, con IVA
+  // incluido, sacado de la calibración (nunca un $95.200 escrito en la web).
+  sendSuccess(res, { tope_cop, precio_estudio: montoProspecto(precio.total, precio.tarifaIva) });
 }
 
 export async function getById(req: Request, res: Response) {
@@ -205,23 +208,13 @@ export async function verificarCertificadoPublic(req: Request, res: Response) {
 
 export async function ejecutarEstudio(req: Request, res: Response) {
   const { estudioId } = req.params as unknown as { estudioId: string };
-  const body = (req.body || {}) as {
-    tipo_documento?: string;
-    numero_documento?: string;
-    proveedor?: 'transunion' | 'datacredito';
-    primer_apellido?: string;
-  };
+  const body = (req.body || {}) as { primer_apellido?: string };
   const result = await estudiosService.ejecutarEstudio(
     estudioId,
     req.user!.id,
     req.ip,
     req.user!.rol,
-    {
-      tipo_documento: body.tipo_documento,
-      numero_documento: body.numero_documento,
-      proveedor: body.proveedor,
-      primer_apellido: body.primer_apellido,
-    },
+    { primer_apellido: body.primer_apellido },
   );
   sendSuccess(res, result);
 }

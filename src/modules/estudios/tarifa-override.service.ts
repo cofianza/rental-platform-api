@@ -115,7 +115,7 @@ async function armar(e: FilaEstudio): Promise<TarifaEstudio> {
 export async function tarifasDelEstudio(estudioId: string, userId?: string, userRol?: string): Promise<TarifaEstudio> {
   const e = await leerFila(estudioId);
   await assertExpedienteAccess(e.expediente_id, userId, userRol);
-  // Resultado y via de aprobacion del co-arrendatario: no son del titular.
+  // Resultado y via de aprobacion del coarrendatario: no son del titular.
   assertNoEsEstudioDeOtraPersona(e.tipo, userRol);
   return armar(e);
 }
@@ -134,7 +134,7 @@ const CONTRATO_FIRMADO = ['firmado', 'vigente', 'finalizado'];
 
 /**
  * P35: la tarifa especial se pacta en el estudio del TITULAR (la del
- * co-arrendatario no se aplica a nada) y antes de firmar. Firmado el contrato,
+ * coarrendatario no se aplica a nada) y antes de firmar. Firmado el contrato,
  * rige lo que firmaron las partes (C. Civil 1602): el cambio va en un otrosí.
  * En firma, el documento ya salió con la tarifa anterior: se cancela el envío
  * y se regenera.

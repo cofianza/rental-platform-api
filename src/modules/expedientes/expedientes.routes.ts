@@ -9,6 +9,7 @@ import {
   asignarResponsableExpedienteSchema,
 } from './expedientes.schema';
 import * as expedientesController from './expedientes.controller';
+import { bloqueosPendientes } from '@/modules/autorizaciones/autorizaciones.controller';
 
 const router = Router();
 
@@ -20,6 +21,14 @@ router.get(
   '/stats',
   authorize('expedientes', 'read'),
   expedientesController.stats,
+);
+
+// GET /bloqueos-pendientes — BLQ §2.1: banner de estudios bloqueados por
+// documento sin atender (ANTES de /:id). Filtrado con tenantScope.
+router.get(
+  '/bloqueos-pendientes',
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
+  bloqueosPendientes,
 );
 
 // GET / — Listar con paginacion, filtros y busqueda

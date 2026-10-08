@@ -56,13 +56,6 @@ export async function habilitarEstudio(
   userId: string,
   userRol: string,
   /**
-   * Buró con el que se creará el estudio. Solo los ejecutables por provider;
-   * el RPC valida de nuevo y rechaza cualquier otro. Por defecto DataCrédito:
-   * es la central primaria (Adenda 1 §2) y la que trae el ingreso con el que
-   * corren las reglas de DTI y canon/ingreso.
-   */
-  proveedor: 'transunion' | 'datacredito' = 'datacredito',
-  /**
    * Si el llamador ya sabe quién paga, apaga el auto-cobro del propietario.
    * Lo usa `iniciarEstudio` (paso 3 del asistente, §6): ahí la forma de pago
    * es una decisión EXPLÍCITA del gestor, así que dejar que esta función
@@ -95,7 +88,9 @@ export async function habilitarEstudio(
   const { data, error } = await (supabase as any).rpc('fn_habilitar_estudio_expediente', {
     p_expediente_id: expedienteId,
     p_user_id: userId,
-    p_proveedor: proveedor,
+    // CORR §2: la central no la elige nadie. El estudio nace con DataCrédito,
+    // la primaria de la Adenda 1 §2; la cascada consulta TransUnion sola.
+    p_proveedor: 'datacredito',
   });
 
   if (error) {
@@ -540,10 +535,10 @@ async function assertRequisitosThinFile(expedienteId: string, revision: Decision
   const umbral = cal.UMBRAL_COARRENDATARIO;
   if (!coa || coa.puntaje === null || coa.puntaje < umbral) {
     throw AppError.badRequest(
-      'El solicitante no tiene historial en ninguna central de riesgo. Para aprobarlo, la política de riesgo exige un co-arrendatario ' +
+      'El solicitante no tiene historial en ninguna central de riesgo. Para aprobarlo, la política de riesgo exige un coarrendatario ' +
         `evaluado con puntaje de ${umbral} o más` +
         (coa
-          ? ` (el co-arrendatario vinculado tiene ${coa.puntaje === null ? 'una evaluación sin puntaje' : `${coa.puntaje} puntos`}).`
+          ? ` (el coarrendatario vinculado tiene ${coa.puntaje === null ? 'una evaluación sin puntaje' : `${coa.puntaje} puntos`}).`
           : ', y este estudio no tiene uno con la evaluación terminada.'),
       'THIN_FILE_COARRENDATARIO_REQUERIDO',
       { umbral, puntaje_coarrendatario: coa?.puntaje ?? null },
@@ -713,7 +708,7 @@ async function aprobarYGenerarContrato(params: {
     // RECHAZADO por la ponderación.
     if (!updRows || updRows.length === 0) {
       throw AppError.conflict(
-        'El estudio cambió de estado mientras decidía (p. ej. completó la evaluación del co-arrendatario). Refresque para ver el estado actual.',
+        'El estudio cambió de estado mientras decidía (p. ej. completó la evaluación del coarrendatario). Refresque para ver el estado actual.',
         'EXPEDIENTE_ESTADO_CAMBIADO',
       );
     }
@@ -792,7 +787,7 @@ async function aprobarYGenerarContrato(params: {
       // qué — y volviendo a pulsar el botón para siempre. El expediente queda
       // aprobado (correcto: el candidato sigue siendo apto) y el mensaje le
       // dice que puede usarlo para otra propiedad. Igual con la destinación no
-      // habilitada (Contratos V3), con co-arrendatario (P6) y con la evaluación
+      // habilitada (Contratos V3), con coarrendatario (P6) y con la evaluación
       // vencida (P21): saltan antes de la reserva, sin efectos.
       if (
         err instanceof AppError &&
@@ -893,7 +888,7 @@ export async function avisarDuenoDecisionRevisionManual(
 
 /**
  * Al prospecto también se le cuenta cómo terminó su estudio condicionado, por
- * "Cambiar estado" o por la ponderación con el co-arrendatario. Antes solo se
+ * "Cambiar estado" o por la ponderación con el coarrendatario. Antes solo se
  * avisaba (en la app) a quien creó la ficha, que casi siempre es el gestor: el
  * prospecto no se enteraba ni recibía el derecho de apelación (Política §11),
  * que viaja en sendEstudioRechazadoEmail. Best-effort.
@@ -963,7 +958,7 @@ export async function avisarSolicitanteDecision(
  * - Regenera el CRC, DESPUÉS del recálculo para que imprima el puntaje nuevo.
  *
  * Best-effort: es trazabilidad, no puede tumbar una aprobación ya escrita.
- * El estudio del co-arrendatario comparte expediente_id (tipo
+ * El estudio del coarrendatario comparte expediente_id (tipo
  * 'con_coarrendatario'), por eso se excluye: la decisión ratificada es la del
  * titular. Devuelve el recálculo (null si no hubo corrida con puntaje).
  */
@@ -1088,7 +1083,6 @@ export async function iniciarEstudio(
   userRol: string,
   input: {
     forma_pago: FormaPagoEstudio;
-    proveedor?: 'transunion' | 'datacredito';
     notas?: string;
   },
   ip?: string,
@@ -1117,7 +1111,7 @@ export async function iniciarEstudio(
   let citaOmitida = false;
   let habilitado: HabilitarEstudioResult;
   try {
-    habilitado = await habilitarEstudio(expedienteId, userId, userRol, input.proveedor, false);
+    habilitado = await habilitarEstudio(expedienteId, userId, userRol, false);
   } catch (err) {
     if (!(err instanceof AppError) || err.errorCode !== 'CITA_REQUERIDA') throw err;
     // El flujo del §3 no tiene visita: va de la selección del inmueble a la
@@ -1130,7 +1124,7 @@ export async function iniciarEstudio(
       userRol,
     );
     citaOmitida = true;
-    habilitado = await habilitarEstudio(expedienteId, userId, userRol, input.proveedor, false);
+    habilitado = await habilitarEstudio(expedienteId, userId, userRol, false);
   }
 
   let paymentLinkUrl: string | null = null;

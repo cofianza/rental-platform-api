@@ -246,8 +246,8 @@ export function resolverRuta(e: EntradaRuta): Ruta {
       coarrendatarioObligatorio: true,
       coarrendatarioAbarataPrima: false,
       etiquetaGestor: yaLoTiene
-        ? `Perfil intermedio${puntos(e.puntaje)}: aprobado con co-arrendatario${puntos(e.puntajeCoarrendatario)}`
-        : `Perfil intermedio${puntos(e.puntaje)}: requiere co-arrendatario o revisión manual`,
+        ? `Perfil intermedio${puntos(e.puntaje)}: aprobado con coarrendatario${puntos(e.puntajeCoarrendatario)}`
+        : `Perfil intermedio${puntos(e.puntaje)}: requiere coarrendatario o revisión manual`,
     };
   }
 

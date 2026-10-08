@@ -154,7 +154,7 @@ export async function notificarResponsableExpediente(params: {
   link?: string;
   payload?: Record<string, unknown>;
   /** `reservaNombre`: saludo si el miembro no tiene nombre («Hola» por defecto; las v2 en usted, «señor(a)»). */
-  whatsapp?: { template: WhatsappTemplateKey; variables: string[]; reservaNombre?: string };
+  whatsapp?: { template: WhatsappTemplateKey; variables: string[]; reservaNombre?: string; urlButtons?: string[] };
 }): Promise<void> {
   try {
     let miembroId = params.miembroId;
@@ -194,6 +194,7 @@ export async function notificarResponsableExpediente(params: {
         to: p.telefono,
         template: params.whatsapp.template,
         variables,
+        urlButtons: params.whatsapp.urlButtons,
         context: { expediente_id: params.expedienteId },
       });
     }

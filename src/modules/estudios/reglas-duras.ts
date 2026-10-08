@@ -459,7 +459,7 @@ export function motivoProspectoReglasDuras(reglas: readonly ReglaDuraActiva[]): 
   const canon = reglas.includes('canon_ingreso_mayor_40');
 
   // P30: una causa y una salida por cada regla que se activó, en el orden de
-  // la Política, y nunca un co-arrendatario (la regla dura lo anula, §5).
+  // la Política, y nunca un coarrendatario (la regla dura lo anula, §5).
   // Mora (§11 «Mora vigente detectada») sin entidad, fechas ni montos; score
   // sin nombrar el score ni el corte (§2).
   const causas = [
@@ -942,7 +942,7 @@ export async function resolverResultadoEstudio(
         requiereRevisionManual(antecedentes),
         motivoBiometria,
         // Adenda §8: declarado vs estimado CRUDO de la central. El declarado es
-        // del titular: contra el co-arrendatario seria comparar dos personas.
+        // del titular: contra el coarrendatario seria comparar dos personas.
         esCoarrendatario
           ? null
           : await contrasteIngresoProspecto(
@@ -961,7 +961,7 @@ export async function resolverResultadoEstudio(
         // Politica §4.3: canon/ingreso en la banda 35-40% -> revision manual.
         motivoRevisionCanonIngreso(salida),
         // Politica Anexo A.4/A.5: «otro» o independiente sin RUT. Lo declaro el
-        // titular: no aplica al estudio del co-arrendatario.
+        // titular: no aplica al estudio del coarrendatario.
         esCoarrendatario ? null : motivoRevisionSituacionLaboral(await leerSituacionLaboral(args.expedienteId)),
       ].filter((m): m is string => !!m);
       const motivoRevision = motivos.length > 0 ? motivos.join(' ') : null;

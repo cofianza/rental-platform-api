@@ -113,8 +113,8 @@ describe('§5.2: solo se promete reutilizar lo que la reasignacion acepta', () =
     expect(motivoNoReutilizable({ ...base, resultado: 'condicionado' })).toBeNull();
   });
 
-  it('no se promete: co-arrendatario, rechazado, cerrado, con contrato o titular de la reserva', () => {
-    expect(motivoNoReutilizable({ ...base, tipo: 'con_coarrendatario' })).toMatch(/co-arrendatario/);
+  it('no se promete: coarrendatario, rechazado, cerrado, con contrato o titular de la reserva', () => {
+    expect(motivoNoReutilizable({ ...base, tipo: 'con_coarrendatario' })).toMatch(/coarrendatario/);
     expect(motivoNoReutilizable({ ...base, resultado: 'rechazado' })).toMatch(/no quedó aprobado/);
     expect(motivoNoReutilizable({ ...base, expedienteEstado: 'cerrado' })).toMatch(/cerrado/);
     expect(motivoNoReutilizable({ ...base, contratos: [{ numero: 'CT-1', estado: 'firmado', fecha_firma: '2026-09-01' }] })).toMatch(/CT-1/);

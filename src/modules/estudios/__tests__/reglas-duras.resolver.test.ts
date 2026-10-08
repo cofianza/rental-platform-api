@@ -51,7 +51,7 @@ beforeEach(() => {
   filaEstudio.current = null;
 });
 
-describe('estudio del co-arrendatario', () => {
+describe('estudio del coarrendatario', () => {
   it('no se contrasta con el ingreso que declaro el titular ni se usa su biometria', async () => {
     filaEstudio.current = { proveedor: 'transunion', respuesta_proveedor: null, score: 780, datos_formulario: { tipo_documento: 'cc' }, tipo: 'con_coarrendatario' };
     const r = await resolverResultadoEstudio(base);
@@ -88,7 +88,7 @@ describe('resultado registrado a mano por un analista', () => {
 });
 
 describe('motivo para el prospecto (P30)', () => {
-  it('ninguna regla dura le sugiere un co-arrendatario: no cambia el resultado (§5)', () => {
+  it('ninguna regla dura le sugiere un coarrendatario: no cambia el resultado (§5)', () => {
     for (const regla of REGLAS_DURAS_ACTIVAS) {
       expect(motivoProspectoReglasDuras([regla])).not.toMatch(/co-?arrendatario/i);
     }
@@ -149,7 +149,7 @@ describe('Politica Anexo A.4/A.5: situacion laboral declarada (P9)', () => {
     expect(r.revisionManual).toMatch(/sin RUT/);
   });
 
-  it('en el estudio del co-arrendatario no se usa lo que declaro el titular', async () => {
+  it('en el estudio del coarrendatario no se usa lo que declaro el titular', async () => {
     filaEstudio.current = { ...fila, tipo: 'con_coarrendatario', situacion_laboral: 'otro' };
     const r = await resolverResultadoEstudio(base);
     expect(r.revisionManual ?? '').not.toMatch(/Anexo A/);

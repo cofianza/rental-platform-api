@@ -560,7 +560,7 @@ export interface InsumosReutilizacion {
  */
 export function motivoNoReutilizable(i: InsumosReutilizacion): string | null {
   if (i.tipo !== 'individual') {
-    return 'Es la evaluación de esta persona como co-arrendatario en el estudio de otra, así que no se traslada como estudio propio. ' + CIERRE_ESTUDIO_NUEVO;
+    return 'Es la evaluación de esta persona como coarrendatario en el estudio de otra, así que no se traslada como estudio propio. ' + CIERRE_ESTUDIO_NUEVO;
   }
   if (i.resultado !== 'aprobado' && i.resultado !== 'condicionado') {
     return `Ese estudio no quedó aprobado, así que no se reutiliza. ${CIERRE_ESTUDIO_NUEVO}`;

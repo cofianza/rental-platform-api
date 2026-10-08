@@ -24,7 +24,7 @@
  * Ahi terminan los TRES caminos de cobro (credito prepago = opcion A, la
  * inmobiliaria asume = opcion B, link al prospecto = opcion C), y el indice
  * `uq_pagos_estudio_activo` garantiza que hay como maximo una. Por eso el gate
- * es por EXPEDIENTE y no por estudio: el estudio del co-arrendatario y el hijo
+ * es por EXPEDIENTE y no por estudio: el estudio del coarrendatario y el hijo
  * de re-evaluacion no tienen ni pueden tener pago propio, y se amparan en el
  * del titular. Y por eso los expedientes historicos ya pagados pasan sin
  * migracion ni backfill: su fila ya existe.

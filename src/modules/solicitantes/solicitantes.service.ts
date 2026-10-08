@@ -9,6 +9,7 @@ import type {
   ListApplicantsQuery,
   SearchByDocumentQuery,
 } from './solicitantes.schema';
+import { fichaConEnlaceVivo, MSG_DOCUMENTO_CON_ENLACE } from '@/modules/autorizaciones/bloqueo-documento';
 
 // ============================================================
 // Types
@@ -363,6 +364,18 @@ export async function updateApplicant(id: string, input: UpdateApplicantInput, u
 
   if (Object.keys(updateData).length === 0) {
     throw AppError.badRequest('No se proporcionaron campos para actualizar');
+  }
+
+  // BLQ §3.5: con el enlace de autorización emitido, la identidad (nombre,
+  // apellido, tipo y número) ya no se edita aquí: el documento se corrige con
+  // «Corregir documento» (ciego y con fuente) y otro nombre es otro estudio.
+  // Sin documento todavía (H43) se puede completar.
+  const IDENTIDAD = ['nombre', 'apellido', 'tipo_documento', 'numero_documento'];
+  const cambiaIdentidad = IDENTIDAD.some(
+    (k) => updateData[k] !== undefined && String(updateData[k] ?? '') !== String(previous[k] ?? ''),
+  );
+  if (cambiaIdentidad && String(previous.numero_documento ?? '').trim() && (await fichaConEnlaceVivo(id))) {
+    throw AppError.conflict(MSG_DOCUMENTO_CON_ENLACE, 'IDENTIDAD_CON_ENLACE');
   }
 
   // Si cambia tipo_documento o numero_documento, validar unicidad

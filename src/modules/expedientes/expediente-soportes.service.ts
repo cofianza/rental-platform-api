@@ -60,7 +60,7 @@ type EstudioEmbed = { id: string; created_at: string; tipo: string | null };
  * Estudio activo = el más reciente DEL TITULAR. El 'con_coarrendatario' se crea
  * después, cuando el invitado acepta: si contara, los soportes del titular
  * dejaban de listarse y las cargas nuevas quedaban colgadas del estudio del
- * co-arrendatario.
+ * coarrendatario.
  */
 export function estudioActivoDelTitular(estudios: EstudioEmbed[] | null): EstudioEmbed | null {
   const delTitular = (estudios ?? []).filter((e) => e.tipo !== 'con_coarrendatario');
@@ -453,7 +453,7 @@ interface TokenDocsCtx {
   estudioActivoId: string;
   estado: string;
   propietarioId: string | null;
-  /** null = inmueble del propietario directo (Decisión 4: sin co-arrendatario). */
+  /** null = inmueble del propietario directo (Decisión 4: sin coarrendatario). */
   inmobiliariaId: string | null;
   solicitanteNombre: string;
   inmuebleDireccion: string;
@@ -462,7 +462,7 @@ interface TokenDocsCtx {
 
 /**
  * Resuelve el expediente a partir del token público de carga (valida vigencia).
- * También lo usa la invitación del co-arrendatario desde el enlace (P18).
+ * También lo usa la invitación del coarrendatario desde el enlace (P18).
  */
 export async function resolveExpedientePorTokenDocumentos(token: string): Promise<TokenDocsCtx> {
   const { data } = await (supabase
@@ -501,7 +501,7 @@ export async function resolveExpedientePorTokenDocumentos(token: string): Promis
 
 /**
  * Token del enlace público del prospecto: sus soportes y, desde P18, su
- * co-arrendatario. El envío explícito del gestor lo ROTA (`rotar`): así se
+ * coarrendatario. El envío explícito del gestor lo ROTA (`rotar`): así se
  * revoca un enlace que llegó a quien no era. El correo automático del
  * condicionado reutiliza el vigente (con el plazo renovado) para no dejar muerto
  * el que el gestor ya mandó. Cambiar el correo del solicitante lo invalida
@@ -583,7 +583,7 @@ export async function enviarEnlaceDocumentos(
       email,
       nombre,
       titulo: 'Cargue sus documentos',
-      mensaje: `Para continuar con su estudio de arriendo del inmueble en ${direccion}, suba los documentos solicitados desde el siguiente enlace personal. Desde ahí también puede invitar a su co-arrendatario.`,
+      mensaje: `Para continuar con su estudio de arriendo del inmueble en ${direccion}, suba los documentos solicitados desde el siguiente enlace personal. Desde ahí también puede invitar a su coarrendatario.`,
       link,
       frontend_url: env.FRONTEND_URL,
     });
@@ -603,7 +603,7 @@ export async function enviarEnlaceDocumentos(
 }
 
 /**
- * P18: lo que el prospecto ve de su co-arrendatario en su enlace. De la persona
+ * P18: lo que el prospecto ve de su coarrendatario en su enlace. De la persona
  * invitada, solo el nombre y en qué va (Ley 1266: su resultado no es suyo); lo
  * sugerido es lo que él mismo declaró al autorizar (§8.3), para no repetirlo.
  */
@@ -618,7 +618,7 @@ interface CoarrendatarioDelProspecto {
   sugerido: { nombre: string; apellido: string } | null;
 }
 
-/** Contexto público (sin auth): qué inmueble/solicitante, qué ya subió y su co-arrendatario. */
+/** Contexto público (sin auth): qué inmueble/solicitante, qué ya subió y su coarrendatario. */
 export async function getContextoDocumentosPublico(token: string): Promise<{
   solicitante: string;
   inmueble: { direccion: string; ciudad: string };

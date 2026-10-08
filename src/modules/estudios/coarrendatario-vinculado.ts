@@ -120,7 +120,7 @@ export async function coarrendatarioVigente(estado: string, expedienteId: string
   } catch (err) {
     logger.error(
       { expedienteId, err: err instanceof Error ? err.message : String(err) },
-      'No se pudo verificar el contrato del estudio — no se admite el co-arrendatario',
+      'No se pudo verificar el contrato del estudio — no se admite el coarrendatario',
     );
     throw new AppError(
       503,
@@ -132,17 +132,17 @@ export async function coarrendatarioVigente(estado: string, expedienteId: string
 
 /**
  * Decision 4 (2026-09-25): el canal del propietario directo (inmueble sin
- * inmobiliaria) espera el Convenio; mientras tanto no se invita co-arrendatario.
+ * inmobiliaria) espera el Convenio; mientras tanto no se invita coarrendatario.
  */
 export const MOTIVO_CANAL_SIN_COARRENDATARIO =
-  'Por ahora el co-arrendatario solo está disponible en inmuebles que gestiona una inmobiliaria. Este estudio continúa con el solicitante solo.';
+  'Por ahora el coarrendatario solo está disponible en inmuebles que gestiona una inmobiliaria. Este estudio continúa con el solicitante solo.';
 
 export type VentanaCoarrendatario =
   | { vigente: boolean; puede_invitar: true; motivo: null; codigo: null }
   | { vigente: boolean; puede_invitar: false; motivo: string; codigo: string };
 
 /**
- * ¿Se puede invitar co-arrendatario ahora? (Decisiones 2 y 4.) `vigente` es la
+ * ¿Se puede invitar coarrendatario ahora? (Decisiones 2 y 4.) `vigente` es la
  * regla de coarrendatarioVigente (una invitacion ya enviada sigue en pie); para
  * invitar ademas hace falta el canal de inmobiliaria y, sobre un aprobado, el
  * pago del estudio: su evaluacion se ampara en el del titular (pago.guard) y
@@ -162,17 +162,17 @@ export async function ventanaCoarrendatario(e: {
     return e.estado === 'aprobado'
       ? no(
           'CONTRATO_SIN_COARRENDATARIO',
-          'El contrato de este estudio ya se generó sin co-arrendatario. Para sumarlo hay que cancelar ese contrato y generar otro.',
+          'El contrato de este estudio ya se generó sin coarrendatario. Para sumarlo hay que cancelar ese contrato y generar otro.',
         )
       : no(
           'EXPEDIENTE_NO_CONDICIONADO',
-          `Solo se puede invitar co-arrendatario con el estudio en revisión o aprobado, antes del contrato. Estado actual: ${e.estado}.`,
+          `Solo se puede invitar coarrendatario con el estudio en revisión o aprobado, antes del contrato. Estado actual: ${e.estado}.`,
         );
   }
   if (e.estado === 'aprobado' && !(await estudioYaCobrado(e.expedienteId))) {
     return no(
       'PAGO_ESTUDIO_REQUERIDO',
-      'El estudio no tiene un pago registrado, y la evaluación del co-arrendatario se ampara en ese pago. Escríbanos para revisarlo.',
+      'El estudio no tiene un pago registrado, y la evaluación del coarrendatario se ampara en ese pago. Escríbanos para revisarlo.',
     );
   }
   return { vigente, puede_invitar: true, motivo: null, codigo: null };
@@ -247,7 +247,7 @@ export async function coarrendatarioVinculadoVerificado(expedienteId: string): P
     throw new AppError(
       503,
       'LECTURA_NO_VERIFICABLE',
-      'No pudimos verificar si el estudio tiene co-arrendatario, y con él cambia la prima. Inténtelo de nuevo en un momento.',
+      'No pudimos verificar si el estudio tiene coarrendatario, y con él cambia la prima. Inténtelo de nuevo en un momento.',
     );
   }
 }

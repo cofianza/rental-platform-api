@@ -181,7 +181,7 @@ export const otpSendByTokenLimiter = rateLimit({
 });
 
 /**
- * Invitar al co-arrendatario desde el enlace del prospecto (P18): máx 3 por día
+ * Invitar al coarrendatario desde el enlace del prospecto (P18): máx 3 por día
  * para un mismo enlace. Cada intento manda correo y WhatsApp a un tercero, y
  * los fallidos cuentan: así no se tantea el documento del titular.
  */
@@ -200,7 +200,7 @@ export const invitacionPorTokenLimiter = rateLimit({
 });
 
 /**
- * Reenviar la invitación del co-arrendatario desde el panel: máx 5 al día por
+ * Reenviar la invitación del coarrendatario desde el panel: máx 5 al día por
  * estudio. Cada reenvío manda correo y WhatsApp y puede cambiar a quién (correo,
  * teléfono o nombre), así que tiene su propio tope, aparte del de invitaciones.
  */

@@ -243,7 +243,7 @@ export interface AprobacionResult {
  * Vía de aprobación de cada estudio aprobado, con los insumos de
  * viaPorRutaDeAprobacion (el mismo criterio del CRC): la última evaluación del
  * titular (la re-evaluación crea una nueva) y si lo aprobó la ponderación con
- * co-arrendatario. En lotes: la lista de ids va en la URL.
+ * coarrendatario. En lotes: la lista de ids va en la URL.
  */
 async function viasDeAprobacion(
   aprobados: Array<{ id: string; ponderacion: boolean }>,

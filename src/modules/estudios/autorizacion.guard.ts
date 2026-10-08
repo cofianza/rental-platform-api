@@ -58,7 +58,7 @@ export type MotivoRechazoAutorizacion =
 export interface SujetoAutorizacion {
   /** Titular del expediente. Excluyente con coarrendatarioId. */
   solicitanteId?: string | null;
-  /** Co-arrendatario invitado: exige SU propia autorizacion, no la del titular. */
+  /** Coarrendatario invitado: exige SU propia autorizacion, no la del titular. */
   coarrendatarioId?: string | null;
 }
 
@@ -125,7 +125,7 @@ export function evaluarAutorizacionPrevia(
     };
   }
 
-  // 1. El sujeto. Un co-arrendatario NO queda cubierto por la firma del
+  // 1. El sujeto. Un coarrendatario NO queda cubierto por la firma del
   //    titular: es otro titular de datos y su consulta al buro es propia.
   const esperaCoarrendatario = !!contexto.sujeto.coarrendatarioId;
   if (esperaCoarrendatario) {
@@ -133,7 +133,7 @@ export function evaluarAutorizacionPrevia(
       return {
         ok: false,
         motivo: 'otro_titular',
-        detalle: 'La autorizacion encontrada no es la del co-arrendatario que se va a consultar.',
+        detalle: 'La autorizacion encontrada no es la del coarrendatario que se va a consultar.',
       };
     }
   } else if (
@@ -263,7 +263,7 @@ const MENSAJE_POR_MOTIVO: Record<MotivoRechazoAutorizacion, string> = {
 };
 
 const MENSAJE_COARRENDATARIO_SIN_AUTORIZACION =
-  'El co-arrendatario invitado aún no ha autorizado la consulta en centrales de riesgo. Reenvíe la invitación para que acepte la autorización antes de ejecutar su estudio.';
+  'El coarrendatario invitado aún no ha autorizado la consulta en centrales de riesgo. Reenvíe la invitación para que acepte la autorización antes de ejecutar su estudio.';
 
 /** Columnas de la fila que necesita el gate. */
 const COLUMNAS_EVIDENCIA =
@@ -322,7 +322,7 @@ export async function assertAutorizacionVigente(args: AssertArgs): Promise<{ aut
 
     if (!coa?.id) {
       // El vinculo estudio_id se escribe justo despues de crear el estudio;
-      // si aun no esta, caemos al co-arrendatario activo del expediente.
+      // si aun no esta, caemos al coarrendatario activo del expediente.
       const { data: activoRow } = await (supabase
         .from('expediente_coarrendatarios' as string) as ReturnType<typeof supabase.from>)
         .select(COLUMNAS_COA)
@@ -370,7 +370,7 @@ export async function assertAutorizacionVigente(args: AssertArgs): Promise<{ aut
   }
 
   // Se buscan las autorizaciones DEL SUJETO (no del expediente): asi una
-  // autorizacion del titular nunca puede cubrir al co-arrendatario ni al reves.
+  // autorizacion del titular nunca puede cubrir al coarrendatario ni al reves.
   //
   // Se traen las ultimas, no solo la firmada: si la unica que hay esta
   // pendiente o revocada, el gestor tiene que leer ESO y no un generico "no ha

@@ -185,7 +185,7 @@ describe('decisiones 2-4: cómo se clasifica una consulta fallida', () => {
   it('sin autorización no se llegó a consultar → §2.5 (null)', () => expect(f({ bloqueadoPorAutorizacion: true })).toBeNull());
 });
 
-describe('decisión 1: un cupo ampara el estudio completo (cascada, re-consulta, co-arrendatario)', () => {
+describe('decisión 1: un cupo ampara el estudio completo (cascada, re-consulta, coarrendatario)', () => {
   it('la segunda confirmación del mismo pago no consume otro cupo (la RPC responde ya_consumido)', async () => {
     pagoCompletado();
     pagoCompletado();
@@ -200,7 +200,7 @@ describe('decisión 1: un cupo ampara el estudio completo (cascada, re-consulta,
     expect(sql).toMatch(/UNIQUE INDEX IF NOT EXISTS uq_movimientos_creditos_consumo_pago\s+ON movimientos_creditos_estudios\(pago_id\) WHERE literal = 'c'/);
   });
 
-  it('si otro estudio del expediente ya dio resultado, la falla del co-arrendatario no libera el cupo', async () => {
+  it('si otro estudio del expediente ya dio resultado, la falla del coarrendatario no libera el cupo', async () => {
     pagoCompletado();
     enqueue('estudios', { data: null, error: null }, {
       data: [

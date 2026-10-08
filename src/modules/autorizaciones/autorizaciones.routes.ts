@@ -17,6 +17,7 @@ import {
   reportarIdentidadSchema,
   biometriaSchema,
   confirmarIdentidadSchema,
+  corregirDocumentoSchema,
 } from './autorizaciones.schema';
 import * as autorizacionesController from './autorizaciones.controller';
 
@@ -41,8 +42,10 @@ expedienteAutorizacionRouter.get(
 // estudio de su candidato y su UI ofrece "Enviar/Reenviar enlace", pero darle
 // expedientes:update abriría una docena de rutas que no le corresponden.
 // Body opcional { email?, telefono?, tipo_documento?, numero_documento? }:
-// corrige el contacto o el documento del solicitante si estaba mal escrito (se
-// persiste server-side y el enlace va al corregido).
+// corrige el contacto (se persiste server-side y el enlace va al corregido). El
+// documento solo se acepta si la ficha no tiene (H43); si tiene, 409 hacia
+// PATCH /documento (BLQ §3). Todo envío después del primero es un reenvío:
+// MAX_REENVIOS_ENLACE para la inmobiliaria y el propietario (BLQ §4.5).
 expedienteAutorizacionRouter.post(
   '/enviar-enlace',
   roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
@@ -60,6 +63,25 @@ expedienteAutorizacionRouter.patch(
   roleGuard(['administrador', 'operador_analista']),
   validate({ params: expedienteIdParamsSchema, body: revocarSchema }),
   autorizacionesController.revocarAutorizacion,
+);
+
+// PATCH /expedientes/:expedienteId/autorizacion-riesgo/documento — BLQ §3:
+// corrección ciega del tipo/número con la fuente de verificación. El servicio
+// aplica assertExpedienteAccess; el middleware ya bloquea a solo_lectura.
+expedienteAutorizacionRouter.patch(
+  '/documento',
+  roleGuard(['administrador', 'operador_analista', 'inmobiliaria', 'propietario']),
+  validate({ params: expedienteIdParamsSchema, body: corregirDocumentoSchema }),
+  autorizacionesController.corregirDocumento,
+);
+
+// GET /expedientes/:expedienteId/autorizacion-riesgo/traza — BLQ §7: intentos
+// (con lo digitado), correcciones, envíos y cupo. Solo Cofianza.
+expedienteAutorizacionRouter.get(
+  '/traza',
+  roleGuard(['administrador', 'operador_analista', 'gerencia_consulta']),
+  validate({ params: expedienteIdParamsSchema }),
+  autorizacionesController.getTraza,
 );
 
 // ============================================================
@@ -114,7 +136,8 @@ publicAutorizacionRouter.post(
 
 // POST /public/autorizar/:token/confirmar-identidad — §8.1: el prospecto
 // escribe su documento y se compara con la ficha sin revelarlo. No hace falta
-// un limitador por token: el primer numero que no coincide detiene el enlace.
+// un limitador por token: el enlace se detiene al agotar MAX_INTENTOS_DOCUMENTO
+// (BLQ §1), contados en la base por enlace.
 publicAutorizacionRouter.post(
   '/:token/confirmar-identidad',
   publicFormLimiter,

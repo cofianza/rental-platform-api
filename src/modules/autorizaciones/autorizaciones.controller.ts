@@ -10,6 +10,7 @@ import type {
   ReportarIdentidadInput,
   BiometriaInput,
   ConfirmarIdentidadInput,
+  CorregirDocumentoBody,
 } from './autorizaciones.schema';
 
 // ============================================================
@@ -50,6 +51,29 @@ export async function revocarAutorizacion(req: Request, res: Response) {
     req.ip,
   );
   sendSuccess(res, result);
+}
+
+// BLQ §3: corrección ciega del documento del prospecto.
+export async function corregirDocumento(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as { expedienteId: string };
+  const result = await autorizacionesService.corregirDocumentoProspecto(
+    expedienteId,
+    req.body as CorregirDocumentoBody,
+    req.user!,
+    req.ip,
+  );
+  sendSuccess(res, result);
+}
+
+// BLQ §7: traza interna (solo Cofianza).
+export async function getTraza(req: Request, res: Response) {
+  const { expedienteId } = req.params as unknown as { expedienteId: string };
+  sendSuccess(res, await autorizacionesService.getTrazaAutorizacion(expedienteId, req.user?.rol));
+}
+
+// BLQ §2.1: estudios bloqueados por documento sin atender (banner).
+export async function bloqueosPendientes(req: Request, res: Response) {
+  sendSuccess(res, await autorizacionesService.listBloqueosPendientes(req.user!.id, req.user!.rol));
 }
 
 // ============================================================

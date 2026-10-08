@@ -274,22 +274,13 @@ export const enviarEnlaceBodySchema = z
   })
   .optional();
 
-// Body opcional para POST /estudios/:id/ejecutar — permite al solicitante
-// enviar/corregir su documento justo antes de ejecutar el estudio.
+// Body opcional para POST /estudios/:id/ejecutar (Reintentar consulta).
+// Sin tipo ni número de documento (BLQ §3.5): se corrigen con «Corregir
+// documento» (PATCH /expedientes/:id/autorizacion-riesgo/documento), ciego y
+// con fuente. Si llegan, zod los descarta.
 export const ejecutarEstudioBodySchema = z.object({
-  // Alineado con los TIPO_DOCUMENTO_MAP de los providers. ppt/pep (A13) solo
-  // los consulta DataCrédito (6/9); TransUnion no los tiene (ver refine abajo).
-  tipo_documento: z.enum(['cc', 'nit', 'ce', 'ppt', 'pep', 'ti', 'pasaporte']).optional(),
-  numero_documento: z
-    .string()
-    .trim()
-    .min(5, 'El número de documento debe tener al menos 5 caracteres')
-    .max(20, 'El número de documento no debe exceder 20 caracteres')
-    .optional(),
-  // Cambio MANUAL de buró para el reintento: si TransUnion falla, el gestor
-  // puede relanzar la consulta por DataCrédito (o viceversa) sin crear otro
-  // expediente. Solo burós reales — manual/sifin no son ejecutables.
-  proveedor: z.enum(['transunion', 'datacredito']).optional(),
+  // Sin `proveedor`: la central la decide la cascada (CORR §2). Si llega, zod
+  // lo descarta.
   // Primer apellido. DataCrédito lo contrasta contra la Registraduría cuando
   // el documento es CC y responde código 10 si no coincide; TransUnion no lo
   // pide. Corregible en el reintento para no obligar a salir a editar los
@@ -300,10 +291,7 @@ export const ejecutarEstudioBodySchema = z.object({
     .min(2, 'El apellido debe tener al menos 2 caracteres')
     .max(80, 'El apellido no debe exceder 80 caracteres')
     .optional(),
-}).refine(
-  (b) => !(b.proveedor === 'transunion' && (b.tipo_documento === 'ppt' || b.tipo_documento === 'pep')),
-  { message: 'TransUnion no consulta PPT ni PEP: relance la evaluación por DataCrédito.', path: ['proveedor'] },
-).optional();
+}).optional();
 
 // ============================================================
 // Type exports

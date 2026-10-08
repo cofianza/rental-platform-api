@@ -507,7 +507,7 @@ export async function crearSolicitudFirmaMultiparte(
   }
 
   // Antes de gastar un documento de Auco, por cualquier camino (también POST
-  // /firma/solicitudes y tras verificar la identidad): sin co-arrendatario ni
+  // /firma/solicitudes y tras verificar la identidad): sin coarrendatario ni
   // co-titular (P6), sin otro sobre vivo, y el plazo de firma (P5).
   const { assertPuedeAbrirSobre, plazoFirmaContrato } = await import('@/modules/contratos/contratos.service');
   await assertPuedeAbrirSobre(contratoId, c.expediente_id, c.datos_variables);
