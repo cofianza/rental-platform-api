@@ -36,7 +36,8 @@ export const FUENTES_VERIFICACION = ['documento_fisico', 'copia_documento', 'con
  * oráculo para adivinar el documento de otra persona).
  *
  * Falla cerrado: si la escritura de un fallido o el conteo fallan, 0 (se
- * detiene al primer fallo, como antes). Nunca intentos ilimitados.
+ * detiene al primer fallo, como antes). Nunca intentos ilimitados. Un acierto
+ * que no se pudo contar lanza 503 (reintentable), nunca «no coincide».
  */
 export async function registrarIntentoDocumento(a: {
   autorizacionId: string;
@@ -65,7 +66,15 @@ export async function registrarIntentoDocumento(a: {
     if (!a.coincide) return 0;
   }
   const fallidos = await contarIntentosFallidos(a.autorizacionId);
-  return fallidos == null ? 0 : Math.max(0, a.maxIntentos - fallidos);
+  if (fallidos == null) {
+    // Un acierto que no se pudo contar no es «no coincide»: si devolviera 0 la
+    // página mostraría el proceso detenido con el enlace vivo y sin alerta.
+    if (a.coincide) {
+      throw new AppError(503, 'INTENTOS_NO_VERIFICABLES', 'No pudimos verificar su documento en este momento. Intente de nuevo en unos minutos.');
+    }
+    return 0;
+  }
+  return Math.max(0, a.maxIntentos - fallidos);
 }
 
 /** Fallidos del enlace. null = no se pudo contar. */
@@ -168,6 +177,18 @@ export function derivarEstadoBloqueo(e: {
   if (e.motivo === 'intentos' || e.motivo === 'datos_incorrectos') return 'bloqueado_documento';
   if (e.motivo === 'no_soy_yo') return 'identidad_rechazada';
   return null;
+}
+
+/**
+ * BLQ §8.2: tras «no soy yo» solo Cofianza corrige y reenvía. Una corrección de
+ * Cofianza deja el estado en «pendiente de reenvío», pero para la inmobiliaria
+ * y el propietario sigue rechazada (la API les responde IDENTIDAD_RECHAZADA).
+ */
+export function estadoBloqueoParaRol(
+  b: { estado: EstadoBloqueo | null; motivo: string | null },
+  esCofianza: boolean,
+): EstadoBloqueo | null {
+  return b.estado === 'pendiente_reenvio' && b.motivo === 'no_soy_yo' && !esCofianza ? 'identidad_rechazada' : b.estado;
 }
 
 /** Último enlace del titular en el expediente. */

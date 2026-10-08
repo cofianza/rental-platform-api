@@ -43,6 +43,7 @@ import {
   leerBloqueo,
   registrarEnvio,
   registrarIntentoDocumento,
+  estadoBloqueoParaRol,
   type MotivoCierre,
   type ResultadoCanal,
 } from './bloqueo-documento';
@@ -184,10 +185,12 @@ export async function getAutorizacionForExpediente(
     contarCorrecciones(expedienteId).catch(() => null),
     getCalibracion(),
   ]);
+  // BLQ §8.2: que la web no le ofrezca reenviar ni corregir a quien la API se lo niega.
+  const estadoBloqueoVisible = estadoBloqueoParaRol(bloqueo, esRolInternoCofianza(userRol));
   return {
     ...aut,
     perfil_prospecto: perfil,
-    estado_bloqueo: bloqueo.estado,
+    estado_bloqueo: estadoBloqueoVisible,
     // 'intentos' o 'datos_incorrectos' («soy yo, pero los datos están mal»): la web dice qué pasó.
     motivo_bloqueo: bloqueo.estado === 'bloqueado_documento' ? bloqueo.motivo : null,
     correcciones_restantes: correcciones == null ? null : Math.max(0, cal.MAX_CORRECCIONES_DOCUMENTO - correcciones),
@@ -2728,8 +2731,11 @@ export async function listBloqueosPendientes(userId: string, userRol: string) {
     .select('autorizacion_id, expediente_id, cerrado_at, motivo_cierre')
     .in('motivo_cierre', ['intentos', 'datos_incorrectos'])
     .is('coarrendatario_id', null)
-    .order('cerrado_at', { ascending: false })
-    .limit(50);
+    .order('cerrado_at', { ascending: false });
+  // Sin límite antes de filtrar: los cierres ya atendidos no se borran y un
+  // corte aquí escondía el bloqueo más viejo sin atender (BLQ §2.6).
+  // ponytail: trae todos los cierres históricos; con miles, marcar el envío
+  // como atendido (columna) y filtrar en SQL.
   if (permitidos) q = q.in('expediente_id', permitidos);
   const { data: cerrados, error } = await q;
   if (error) throw fromSupabaseError(error);

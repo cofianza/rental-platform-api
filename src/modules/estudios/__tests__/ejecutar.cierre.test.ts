@@ -198,7 +198,9 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
 
   it('Q5c-2: si el reintento en la primaria falla sin dejar referencia, vuelve la prueba de la consulta anterior', async () => {
     mockFlags.MOTOR_DECIDE_ENABLED = true;
-    mockSolicitar.mockRejectedValueOnce(new Error('boom'));
+    // DataCrédito devuelve un error genérico: pasa a TransUnion (Adenda §2.3,
+    // «no responde o devuelve error»), que también falla.
+    mockSolicitar.mockRejectedValueOnce(new Error('boom')).mockRejectedValueOnce(new Error('boom'));
     enqueue(
       'estudios',
       estudio({ estado: 'fallido', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } }),
@@ -208,9 +210,10 @@ describe('ejecutarEstudio y el cierre del estudio', () => {
 
     await ejecutarEstudio('est-1', 'admin-1', undefined, 'administrador').catch(() => undefined);
 
-    await vi.waitFor(() => expect(actualizaciones()).toHaveLength(2));
-    const [lock, fallo] = actualizaciones();
+    await vi.waitFor(() => expect(actualizaciones().length).toBeGreaterThanOrEqual(3));
+    const [lock, respaldo, fallo] = actualizaciones();
     expect(lock).toMatchObject({ estado: 'en_proceso', proveedor: 'datacredito', referencia_proveedor: null });
+    expect(respaldo).toEqual({ proveedor: 'transunion' });
     expect(fallo).toMatchObject({ estado: 'fallido', proveedor: 'transunion', referencia_proveedor: 'TU-9', respuesta_proveedor: { codigo: 'x' } });
   });
 
